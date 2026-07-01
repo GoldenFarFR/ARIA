@@ -92,7 +92,9 @@ Telegram / API chat
 | `repertoire_db.py` | Ventures holding (≠ cognitive) |
 
 > **Phase C (2026-06)** : Chroma local opt-in — `pip install -e ".[dev,vector]"` + `aria_vector_memory=true`.  
-> **Phase D (2026-06)** : `llm_context.py` injecte le rappel sémantique dans `build_llm_context` (flag off en prod par défaut).
+> **Phase D (2026-06)** : `llm_context.py` injecte le rappel sémantique dans `build_llm_context` (flag off en prod par défaut).  
+> **Phase E (2026-07)** : `memory/values.py` + `knowledge/aria_values.yaml` — valeurs opérationnelles injectées dans le contexte LLM.  
+> **DDG cache (2026-07)** : `knowledge/ddg_cache.py` — cache fichier opt-in (`aria_ddg_search_cache=false` défaut).
 
 ### `skills/` — capacités exécutables
 

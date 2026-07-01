@@ -129,6 +129,11 @@ async def build_llm_context(
             x_identity_prompt(),
             get_persona_text()[:2000],
         ]
+        from aria_core.memory.values import get_values_text
+
+        values_block = get_values_text()
+        if values_block:
+            parts.append(f"\n{values_block}")
         directives = get_directives_text()
         if directives:
             parts.append("\n# Directives opérateur (priorité haute)")
