@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_paths.ps1")
 
-$bridgePath = Join-Path $env:USERPROFILE "projets\collegue-memoire\sessions\aria-cursor-bridge.jsonl"
+$bridgePath = Join-Path $script:AriaCollegueRoot "sessions\aria-cursor-bridge.jsonl"
 if (-not (Test-Path $bridgePath)) {
     throw "Bridge introuvable: $bridgePath"
 }

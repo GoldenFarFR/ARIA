@@ -17,13 +17,14 @@ if (-not (Test-Path $Src)) {
 $merged = Read-EnvFile -Path $Src
 if (Test-Path $Prod) {
     $prod = Read-EnvFile -Path $Prod
+    # LLM local : local.env garde ollama ; production.env fournit la cle si groq/xai
     $overlay = @(
         "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_IDS", "TELEGRAM_WEBHOOK_SECRET",
         "GITHUB_TOKEN", "GITHUB_READ_REPOS", "GITHUB_WRITE_REPOS",
         "GITHUB_EXCLUDED_REPOS", "GITHUB_PROTECTED_REPOS",
         "X_BEARER_TOKEN", "X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET",
         "X_ALLOW_LIKES", "X_ALLOW_REPLIES", "X_CURIOSITY_ENABLED", "X_MENTIONS_LEARN_ENABLED",
-        "LLM_API_KEY", "LLM_PROVIDER", "LLM_MODEL", "PRIVY_APP_ID"
+        "LLM_API_KEY", "PRIVY_APP_ID"
     )
     foreach ($key in $overlay) {
         if ($prod[$key]) { $merged[$key] = $prod[$key] }
