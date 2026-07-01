@@ -18,9 +18,10 @@ Derniere regeneration : 2026-07-01T22:54 (session PC-SYLVAIN — handoff tout)
 | D injection LLM | **done** | `e9de6856` (`llm_context.py`) |
 | E values | **done** | `d91c33e` (`aria_values.yaml` + `memory/values.py`) |
 | F goals | **done** | local (`aria_goals.yaml` + `memory/goals.py`) |
+| G reflection | **done** | `a970bd7` (`reflection.py` + `reflections.jsonl`) |
 
 Prod : `aria_vector_memory=false`, `aria_ddg_search_cache=false` (defaut safe).  
-**Suite** : Phase G (reflection) ; push local (Gem Crush removal + Phase F) quand Sylvain valide.
+**Suite** : push local (Gem Crush `844795c` + Phases F `28c5b6d` + G `a970bd7`) quand Sylvain dit « push » ; deploy Render si quota OK.
 
 SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
@@ -48,10 +49,11 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ### Prochaines actions agent (priorite)
 
-1. **Phase F goals** — objectifs operationnels injectes (apres E values)
-2. **Deploy Render** — `deploy-render.ps1` quand quota pipeline OK (apres validation push suppression Gem Crush)
-4. **Operateur** : `IMAGE_API_KEY` Render si banniere xAI ; corriger TOTP vault handoff
-5. **Activer local** : `aria_ddg_search_cache=true` + `aria_vector_memory=true` si besoin
+1. **Push GitHub** — `git push origin main` quand Sylvain valide (3 commits locaux : Gem Crush + F + G)
+2. **Deploy Render** — `deploy-render.ps1` quand quota pipeline OK
+3. **Operateur** : `IMAGE_API_KEY` Render si banniere xAI ; corriger TOTP vault handoff
+4. **Activer local** : `aria_ddg_search_cache=true` + `aria_vector_memory=true` (smoke OK post-G)
+5. **Post-push** : flag vector prod off jusqu'a validation explicite Sylvain
 
 ### Pins / commits cles
 
