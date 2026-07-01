@@ -3,15 +3,17 @@
 
 $ErrorActionPreference = "Stop"
 
+. (Resolve-Path (Join-Path $PSScriptRoot "..\..\scripts\aria-paths.ps1"))
+
 $machine = $env:COMPUTERNAME
-$projets = Join-Path $env:USERPROFILE "projets"
-$collegue = Join-Path $projets "collegue-memoire"
+$ariaRepo = $script:AriaRepoRoot
+$collegue = $script:AriaCollegueRoot
 $sessionsRoot = Join-Path $collegue "sessions"
 $machineDir = Join-Path $sessionsRoot $machine
 $grokSessions = Join-Path $env:USERPROFILE ".grok\sessions"
 
 if (-not (Test-Path $collegue)) {
-    throw "Clone collegue-memoire : git clone https://github.com/GoldenFarFR/collegue-memoire.git"
+    throw "Clone monorepo ARIA : git clone https://github.com/GoldenFarFR/ARIA.git"
 }
 
 function Get-LatestGrokSessionDir {
@@ -27,10 +29,10 @@ function Get-LatestGrokSessionDir {
     return $best
 }
 
-function Get-RelProjetsPath {
+function Get-RelAriaPath {
     param([string]$FullPath)
     $norm = $FullPath -replace '\\', '/'
-    $root = ($projets -replace '\\', '/')
+    $root = ($ariaRepo -replace '\\', '/')
     if ($norm -like "$root/*") {
         return $norm.Substring($root.Length + 1)
     }
@@ -49,9 +51,9 @@ if ($sessionDir) {
             try {
                 $o = $_ | ConvertFrom-Json
                 if ($o.filePath) {
-                    [void]$filesTouched.Add((Get-RelProjetsPath $o.filePath))
-                    if ($o.filePath -match '\\projets\\([^\\]+)\\') {
-                        $reposTouched[$Matches[1]] = $true
+                    [void]$filesTouched.Add((Get-RelAriaPath $o.filePath))
+                    if ($o.filePath -match [regex]::Escape($ariaRepo) -or $o.filePath -like "*GitHub-Repos\ARIA*") {
+                        $reposTouched["ARIA"] = $true
                     }
                 }
             } catch { }
@@ -62,7 +64,7 @@ if ($sessionDir) {
 $reposStatus = @()
 $reposToScan = if ($reposTouched.Count -gt 0) { @($reposTouched.Keys) } else { @() }
 foreach ($repoName in $reposToScan) {
-    $rp = Join-Path $projets $repoName
+    $rp = if ($repoName -eq "ARIA") { $ariaRepo } else { Join-Path (Split-Path $ariaRepo -Parent) $repoName }
     if (-not (Test-Path (Join-Path $rp ".git"))) { continue }
     Push-Location $rp
     try {
@@ -198,4 +200,4 @@ if ($touchesAriaCore.Count -gt 0) {
 
 Write-Host "Etape suivante (TOTP 12h si session expiree) :" -ForegroundColor Yellow
 Write-Host "  .\push-session-manifest.ps1 [-TotpCode <code>]"
-Write-Host "  # ou manuel: cd $collegue ; git add sessions/ ; git commit ; git push"
+Write-Host "  # ou manuel: cd $ariaRepo ; git add collegue-memoire/sessions/ ; git commit ; git push"

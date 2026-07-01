@@ -1,4 +1,4 @@
-# Push sessions/ + HANDOFF.md avec gate TOTP 12h (IDE — pas Telegram)
+# Push sessions/ + HANDOFF.md — monorepo ARIA
 # Usage: .\push-session-manifest.ps1 [-TotpCode 123456]
 
 param(
@@ -7,12 +7,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "git-operator-session.ps1")
+. (Resolve-Path (Join-Path $PSScriptRoot "..\..\scripts\aria-paths.ps1"))
 
-$collegue = Join-Path $env:USERPROFILE "projets\collegue-memoire"
+$ariaRepo = $script:AriaRepoRoot
 $machine = $env:COMPUTERNAME
 $msg = "session: $machine $(Get-Date -Format yyyy-MM-ddTHHmmss)"
 
-$r = Invoke-GoldenFarGitPush -Path $collegue -Message $msg -Add @("sessions/") -TotpCode $TotpCode
+$r = Invoke-GoldenFarGitPush -Path $ariaRepo -Message $msg -Add @("collegue-memoire/sessions/") -TotpCode $TotpCode
 if ($r.pushed) {
     Write-Host "[OK] Manifeste pousse ($($r.commit))" -ForegroundColor Green
 } elseif ($r.reason) {

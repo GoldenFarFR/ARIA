@@ -234,3 +234,4 @@
 
 ## 2026-07-01
 22h20 — 22h20 — Mise a jour COLLEGUE.md + regles Grok monorepo ARIA
+22h44 — 22h44 — fin session monorepo ARIA + collect/push handoff
