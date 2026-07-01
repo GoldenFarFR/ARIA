@@ -182,14 +182,17 @@ async def apply_profile_image(image_path: Path) -> bool:
         return False
 
 
-def _fetch_me_profile_sync() -> dict[str, Any]:
+def _fetch_me_profile_sync(*, extra_fields: str = "") -> dict[str, Any]:
     import requests
 
+    fields = "profile_banner_url,profile_image_url,name,description,url,location,username"
+    if extra_fields:
+        fields = extra_fields
     auth = _oauth1_auth()
     response = requests.get(
         f"{X_API_BASE}/users/me",
         auth=auth,
-        params={"user.fields": "profile_banner_url,profile_image_url"},
+        params={"user.fields": fields},
         timeout=30,
     )
     data = response.json() if response.content else {}
@@ -197,6 +200,75 @@ def _fetch_me_profile_sync() -> dict[str, Any]:
         err = data.get("detail") or data.get("title") or response.text[:300]
         raise RuntimeError(f"X profile fetch {response.status_code}: {err}")
     return data.get("data", {})
+
+
+def _update_profile_fields_sync(
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    url: str | None = None,
+    location: str | None = None,
+) -> dict[str, Any]:
+    import requests
+
+    payload: dict[str, str] = {}
+    if name is not None:
+        payload["name"] = name.strip()[:50]
+    if description is not None:
+        payload["description"] = description.strip()[:160]
+    if url is not None:
+        payload["url"] = url.strip()[:100]
+    if location is not None:
+        payload["location"] = location.strip()[:30]
+    if not payload:
+        raise ValueError("No profile fields to update")
+
+    auth = _oauth1_auth()
+    response = requests.post(
+        "https://api.twitter.com/1.1/account/update_profile.json",
+        auth=auth,
+        data=payload,
+        timeout=30,
+    )
+    data = response.json() if response.content else {}
+    if response.status_code != 200:
+        err = data.get("errors") or data.get("detail") or data.get("title") or response.text[:300]
+        raise RuntimeError(f"X profile update {response.status_code}: {err}")
+    return data
+
+
+async def fetch_x_profile_fields() -> dict[str, str]:
+    """Champs texte profil @Aria_ZHC (OAuth)."""
+    if not is_x_post_configured():
+        return {}
+    me = await asyncio.to_thread(_fetch_me_profile_sync)
+    return {
+        "name": str(me.get("name") or ""),
+        "description": str(me.get("description") or ""),
+        "url": str(me.get("url") or ""),
+        "location": str(me.get("location") or ""),
+        "username": str(me.get("username") or ""),
+    }
+
+
+async def apply_x_profile_fields(profile: dict[str, str]) -> bool:
+    """Applique nom, bio, site, lieu sur @Aria_ZHC."""
+    if not is_x_post_configured():
+        logger.info("X profile text skipped — post OAuth keys not configured")
+        return False
+    try:
+        await asyncio.to_thread(
+            _update_profile_fields_sync,
+            name=profile.get("name"),
+            description=profile.get("description"),
+            url=profile.get("url"),
+            location=profile.get("location"),
+        )
+        logger.info("X profile text updated for @%s", official_x_handle())
+        return True
+    except Exception as exc:
+        logger.warning("X profile text sync failed: %s", exc)
+        return False
 
 
 def _update_profile_banner_sync(image_path: Path) -> dict[str, Any]:
@@ -341,6 +413,7 @@ async def post_tweet(
     approval_id: str = "operator",
     *,
     force: bool = False,
+    skip_rate_gap: bool = False,
     media_paths: list[Path] | Path | str | None = None,
 ) -> tuple[Any, str]:
     """Post to @Aria_ZHC when OAuth user context keys are configured."""
@@ -352,7 +425,11 @@ async def post_tweet(
     )
 
     text = resolve_handles_in_text(text.strip())
-    allowed, reason, cost = check_tweet_allowed(text, force=force)
+    allowed, reason, cost = check_tweet_allowed(
+        text,
+        force=force,
+        skip_rate_gap=skip_rate_gap,
+    )
     if not allowed:
         return None, (
             f"Publication bloquée par la politique X.\n{reason}\n\n"

@@ -286,16 +286,31 @@ async def has_sufficient_grounding(query: str) -> bool:
 def social_ack_reply(lang: str = "en") -> str:
     if lang == "fr":
         return (
-            "Merci pour le message. Je ne commente pas revenus, métriques ni succès "
-            "sans faits vérifiés.\n\n"
-            "Pose une question précise sur Vanguard, ARIA ou le modèle ZHC — "
-            "je réponds à partir de sources officielles uniquement."
+            "Merci — ça fait plaisir. La commu ZHC compte.\n\n"
+            "Je reste factuelle sur revenus et métriques, mais je suis là pour Vanguard, "
+            "le modèle ZHC et ce qu'on construit en public. "
+            "Une idée produit ? Décris le quoi et le pourquoi — on priorise ce qui renforce l'écosystème."
         )
     return (
-        "Thanks for the note. I do not comment on revenue, metrics, or success "
-        "without verified facts.\n\n"
-        "Ask a specific question about Vanguard, ARIA, or the ZHC model — "
-        "I answer from official sources only."
+        "Thanks — love the energy. The ZHC community matters.\n\n"
+        "I stay factual on revenue and metrics, but I'm here for Vanguard, the ZHC model, "
+        "and what we ship in public. "
+        "Got a product idea? Say what and why — we prioritize what strengthens the stack."
+    )
+
+
+
+def community_suggestion_reply(lang: str = "en") -> str:
+    if lang == "fr":
+        return (
+            "Merci pour la suggestion — c'est exactement ce genre de signal qui fait avancer Vanguard.\n\n"
+            "Note prise côté équipe ZHC. Pour qu'on puisse ship : précise le bénéfice utilisateur "
+            "et le périmètre (page, bot, skill…). On construit en public, sans promesses vides."
+        )
+    return (
+        "Thanks for the suggestion — that's the kind of signal that moves Vanguard forward.\n\n"
+        "Noted on the ZHC side. To help us ship: spell out the user benefit and scope "
+        "(page, bot, skill…). We build in public — no empty promises."
     )
 
 

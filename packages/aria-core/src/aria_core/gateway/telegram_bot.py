@@ -449,6 +449,7 @@ async def _handle_x(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         status_block += (
             "Commandes:\n"
             "/handles — alias @holding @veille\n"
+            "/x profile — bio + site profil\n"
             "/x compose — workflow tweet\n"
             "/x post <texte> — publie (alias expand auto)"
         )
@@ -499,7 +500,64 @@ async def _handle_x(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _reply(message, note)
         return
 
-    await _reply(message, "Usage: /x status | /x handles | /x compose | /x post <texte>")
+    if sub == "profile":
+        from aria_core.x_profile import (
+            canonical_x_profile,
+            fetch_live_x_profile,
+            format_profile_summary,
+            profile_fields_differ,
+            sync_x_profile,
+        )
+
+        action = (args[1].lower() if len(args) > 1 else "status").strip()
+        if action in ("preview", "cible", "target"):
+            await _reply(message, f"Profil cible @Aria_ZHC\n\n{format_profile_summary(lang='fr')}")
+            return
+        if action in ("sync", "apply", "force"):
+            force = action == "force" or "force" in text.lower()
+            result = await sync_x_profile(force=force)
+            if result.get("synced"):
+                drift = ", ".join(result.get("drift") or []) or "complet"
+                await _reply(message, f"Profil X synchronisé — champs : {drift}")
+                return
+            if result.get("skipped"):
+                reason = result.get("reason", "?")
+                await _reply(message, f"Profil X — rien à faire ({reason}).\n\n{format_profile_summary()}")
+                return
+            err = result.get("error") or result.get("reason") or "échec"
+            await _reply(message, f"Sync profil X : {err}")
+            return
+
+        target = canonical_x_profile()
+        try:
+            live = await fetch_live_x_profile()
+            drift = profile_fields_differ(live, target)
+            lines = [
+                "Profil X — état",
+                "",
+                "Cible :",
+                format_profile_summary(lang="fr"),
+                "",
+                "Live :",
+                f"Nom : {live.get('name', '—')}",
+                f"Bio : {live.get('description', '—')}",
+                f"Site : {live.get('url', '—')}",
+                f"Lieu : {live.get('location', '—')}",
+            ]
+            if drift:
+                lines.append(f"\nDérive : {', '.join(drift)}")
+                lines.append("→ /x profile sync")
+            else:
+                lines.append("\nAligné sur la narrative Vanguard.")
+            await _reply(message, "\n".join(lines))
+        except Exception as exc:
+            await _reply(
+                message,
+                f"Profil cible :\n{format_profile_summary()}\n\nLive indisponible : {exc}",
+            )
+        return
+
+    await _reply(message, "Usage: /x status | /x profile | /x handles | /x compose | /x post <texte>")
 
 
 async def _handle_github(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

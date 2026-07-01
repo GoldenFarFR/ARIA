@@ -28,6 +28,8 @@ class SkillName(str, Enum):
     ENTREPRENEUR_CULTIVATION = "entrepreneur_cultivation"
     CAPABILITY_QI = "capability_qi"
     EPISTEMIC_CHECK = "epistemic_check"
+    ACP_MARKETPLACE = "acp_marketplace"
+    WORKER_DELEGATE = "worker_delegate"
 
 
 class RepertoireItemStatus(str, Enum):
