@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
-MEMORY_DIR = Path(r"C:\Users\Studi\GitHub-Repos\aria-skills\core\memory")
+MEMORY_DIR = Path(__file__).resolve().parents[2] / "memory"
 ALLOWED = {"short", "medium", "long"}
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 

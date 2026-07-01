@@ -65,7 +65,8 @@ Get-ChildItem -Path $SkillsSrc -Directory | ForEach-Object {
     Write-Host "Linked: $($_.Name)"
 }
 
-$CollegueRules = Join-Path $env:USERPROFILE "projets\collegue-memoire\.cursor\rules"
+$AriaRoot = if ($env:ARIA_REPO_ROOT) { $env:ARIA_REPO_ROOT } else { Join-Path $env:USERPROFILE "GitHub-Repos\ARIA" }
+$CollegueRules = Join-Path $AriaRoot "collegue-memoire\.cursor\rules"
 Write-Host "=== Rules Cursor (collegue-memoire) ==="
 foreach ($ruleName in @("journal-de-bord.md", "session-handoff.md", "collegue-memoire.md", "consommation-grok.md")) {
     $src = Join-Path $CollegueRules $ruleName

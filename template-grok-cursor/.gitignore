@@ -1,0 +1,22 @@
+# Secrets — ne jamais committer
+.grok/config.toml
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Éditeurs
+.idea/
+.vscode/
+*.swp
+*~
+
+# Build scaffold (test local uniquement)
+node_modules/
+dist/

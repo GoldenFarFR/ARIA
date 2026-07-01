@@ -1,0 +1,13 @@
+.git
+.env
+**/.env
+**/__pycache__
+**/*.pyc
+backend/data/
+backend/app/agent/data/
+product-frontend/node_modules/
+node_modules/
+dist/
+.cursor
+.grok
+*.db

@@ -1,0 +1,19 @@
+# Operator-curated X accounts — passive curiosity (read tweets, no @ spam).
+# Edit here when adding analysis agents. Sync: curiosity cycle + fetch_curiosity_feed.
+
+operator_handles:
+  - handle: GoldenFarFR
+    role: holding_operator
+  - handle: solvrbot
+    role: autonomous_analysis
+  - handle: grok
+    role: autonomous_analysis
+  - handle: aixbt_agent
+    role: autonomous_analysis
+    note: "operator alias aixbt_agen"
+
+default_handles:
+  - Aria_ZHC
+  - Dexscreener
+  - base
+  - tomosman
