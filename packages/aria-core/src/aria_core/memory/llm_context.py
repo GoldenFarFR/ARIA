@@ -120,6 +120,7 @@ async def build_llm_context(
     from aria_core.narrative import public_llm_system_block
 
     messages = await _fetch_recent_messages(public=public, visitor_id=visitor_id)
+    vector_query = (query_hint or "").strip() or _query_hint_for_vector(messages, public=public)
 
     if public:
         parts = ["# Identité ARIA (mode public)", public_llm_system_block("en")]
@@ -129,6 +130,12 @@ async def build_llm_context(
             x_identity_prompt(),
             get_persona_text()[:2000],
         ]
+        from aria_core.memory.arbitrator import get_arbitration_text, run_memory_arbitration
+
+        arbitration = await run_memory_arbitration(messages=messages, query_hint=vector_query)
+        arbitration_block = get_arbitration_text(arbitration)
+        if arbitration_block:
+            parts.append(f"\n{arbitration_block}")
         from aria_core.memory.values import get_values_text
 
         values_block = get_values_text()
@@ -163,8 +170,12 @@ async def build_llm_context(
         except Exception:
             pass
 
-        vector_query = (query_hint or "").strip() or _query_hint_for_vector(messages, public=False)
         recall = await fetch_vector_recall(vector_query)
+        if arbitration.conflicts:
+            suppressed_vector = {s.content[:80] for s in arbitration.suppressed if s.layer == "vector"}
+            if suppressed_vector and recall:
+                recall_lines = [ln for ln in recall.splitlines() if not any(p in ln for p in suppressed_vector)]
+                recall = "\n".join(recall_lines)
         if recall:
             parts.append("\n# Rappel sémantique (mémoire vectorielle — opt-in)")
             parts.append(recall)

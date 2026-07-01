@@ -93,6 +93,8 @@ class AriaRuntimeSettings(BaseSettings):
     aria_vector_memory: bool = False
     # Cache DDG — opt-in, évite requêtes répétées (gratuit, fichier local)
     aria_ddg_search_cache: bool = False
+    # Arbitre mémoire — résolution conflits court/moyen/long (Phase H, défaut on)
+    aria_memory_arbitrator: bool = True
 
     github_token: str = ""
     github_owner: str = "GoldenFarFR"
