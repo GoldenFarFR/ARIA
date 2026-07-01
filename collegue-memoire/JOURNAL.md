@@ -247,3 +247,4 @@
 23h32 — fin session — collect/push handoff 92bf562
 23h41 — Phase I deploy prod 20864ae aria_core 92bf562 repoint monorepo ARIA
 23h41 — sync-render 60 vars ARIA_VECTOR_MEMORY=false prod safe
+23h44 — activer ARIA_VECTOR_MEMORY=true prod — sync-render + redeploy dep-d92ojsc live

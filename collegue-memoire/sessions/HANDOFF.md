@@ -21,8 +21,8 @@ Derniere regeneration : 2026-07-01T23:45 (Phase I deploy prod — commit 20864ae
 | G reflection | **done** | `a970bd7` (`reflection.py` + `reflections.jsonl`) |
 | H arbitrator | **done** | local (`arbitrator.py` + `aria_arbitrator.yaml`) |
 
-Prod : **deploye** `20864ae` — `aria_core_build=92bf562` (memoire E-H). Flags safe : `aria_vector_memory=false`, `aria_ddg_search_cache=false`.  
-**Suite Phase I** : activer flags prod un par un apres smoke. **Phase J** : Kelly App Factory.
+Prod : **deploye** `c3d7c9d` — `aria_core_build=92bf562` (memoire E-H). `ARIA_VECTOR_MEMORY=true` actif prod (2026-07-01). `ARIA_DDG_SEARCH_CACHE=false`.  
+**Suite** : activer DDG cache prod apres smoke vector. **Phase J** : Kelly App Factory.
 
 SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
