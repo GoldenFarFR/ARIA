@@ -99,6 +99,7 @@ class Settings(BaseSettings):
     aria_image_style_use_llm: bool = False  # presets locaux = 0 token Groq
     aria_visual_autonomy_interval_minutes: int = 1440  # vérif quotidienne, style 7j
     ollama_base_url: str = "http://127.0.0.1:11434"
+    aria_ollama_num_ctx: int = 8192
 
     # Telegram production (Render) — webhook évite conflit avec instance locale
     telegram_webhook_secret: str = ""

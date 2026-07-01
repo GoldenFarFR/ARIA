@@ -115,6 +115,18 @@ pitfalls:
     verify: "Aucune notif Telegram 'Code GoldenFar Vault requis' ; push < 5 s"
     never: "push-session-manifest -ViaAria ni reponse TOTP sur Telegram."
 
+  - id: ollama-30b-on-8gb-vram
+    severity: high
+    lesson: >
+      LLM 30B+ (qwen3-coder:30b, qwen2.5:32b) sur GPU laptop 8 Go VRAM sature RAM/CPU —
+      freeze PC, OOM, ARIA inutilisable en local.
+    fix: >
+      local.env : LLM_MODEL=qwen2.5:14b, ARIA_OLLAMA_NUM_CTX=8192. Variables user :
+      OLLAMA_FLASH_ATTENTION=1, OLLAMA_KV_CACHE_TYPE=q8_0. Script optimize-ollama-local.ps1.
+      Réserver 30B aux sessions code Cursor/Grok ponctuelles (ollama run manuel).
+    verify: "ollama ps montre qwen2.5:14b, GPU < 8 Go, chat ARIA < 30 s"
+    never: "LLM_MODEL=*30b* ou *32b* dans local.env sur PC 8 Go VRAM."
+
   - id: chroma-vector-prod-premature
     severity: medium
     lesson: >
