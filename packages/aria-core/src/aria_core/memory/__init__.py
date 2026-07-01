@@ -30,6 +30,12 @@ from aria_core.memory.journal import (
 )
 from aria_core.memory.llm_context import fetch_vector_recall, sanitize_recall_text
 from aria_core.memory.goals import get_goals_text, goals_count
+from aria_core.memory.reflection import (
+    append_reflection,
+    get_reflections_text,
+    read_explicit_reflections,
+    reflections_count,
+)
 from aria_core.memory.values import get_values_text, values_count
 from aria_core.memory.vector import is_vector_enabled, vector_store_status
 from aria_core.memory.vector.health import vector_health_report
@@ -46,6 +52,7 @@ __all__ = [
     "add_knowledge",
     "append",
     "append_memory",
+    "append_reflection",
     "approve_knowledge",
     "build_context_summary",
     "build_llm_context",
@@ -61,8 +68,11 @@ __all__ = [
     "get_pending",
     "get_persona_text",
     "get_goals_text",
+    "get_reflections_text",
     "get_values_text",
     "goals_count",
+    "read_explicit_reflections",
+    "reflections_count",
     "is_vector_enabled",
     "values_count",
     "vector_health_report",

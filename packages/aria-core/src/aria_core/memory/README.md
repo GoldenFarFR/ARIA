@@ -11,6 +11,7 @@ Point d'entrée cible pour la mémoire ARIA. **Désactivé par défaut** pour le
 | `llm_context.py` | `build_llm_context` + rappel vectoriel | Phase D |
 | `values.py` | Valeurs opérationnelles (`aria_values.yaml`) | Phase E |
 | `goals.py` | Objectifs opérationnels (`aria_goals.yaml` + état dynamique) | Phase F |
+| `reflection.py` | Réflexion (`reflections.jsonl` + synthèse journal/QI) | Phase G |
 | `vector/chroma_store.py` | Embeddings Chroma embedded | Phase C |
 | `vector/health.py` | Diagnostic Chroma (Phase 2 prep) | Phase 2 prep |
 | `vector/schema.yaml` | Types `insight`, `lesson`, `reflection`, `decision` | — |
@@ -58,6 +59,15 @@ SSOT : `knowledge/aria_goals.yaml` — injecté dans `build_llm_context` (opéra
 
 ```python
 from aria_core.memory import get_goals_text, goals_count
+```
+
+## Phase G — réflexion opérationnelle
+
+SSOT : `knowledge/aria_reflection.yaml` — `reflections.jsonl` + synthèse journal/QI.
+
+```python
+from aria_core.memory import append_reflection, get_reflections_text
+append_reflection("Leçon : ...", context="deploy", outcome="blocked")
 ```
 
 ## Phase D — injection LLM

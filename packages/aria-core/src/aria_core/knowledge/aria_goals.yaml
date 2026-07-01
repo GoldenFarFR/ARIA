@@ -56,11 +56,11 @@ goals:
       Premier dollar Stripe / abonnement Aria Market Pro — ledger `revenue_ledger.json`,
       pas de métrique inventée.
 
-  - id: memory_phases_fg
-    title: Mémoire Phases F→G
+  - id: memory_phases_g
+    title: Mémoire Phase G reflection
     horizon: 2026-07
     priority: 65
-    status: in_progress
+    status: done
     text: >
-      Phase F goals injectés ; Phase G reflection ensuite — prod flag vector off
+      Réflexions explicites + synthèse journal/QI injectées — prod flag vector off
       jusqu'à validation operateur.
