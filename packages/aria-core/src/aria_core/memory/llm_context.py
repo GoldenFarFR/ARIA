@@ -134,6 +134,11 @@ async def build_llm_context(
         values_block = get_values_text()
         if values_block:
             parts.append(f"\n{values_block}")
+        from aria_core.memory.goals import get_goals_text
+
+        goals_block = get_goals_text()
+        if goals_block:
+            parts.append(f"\n{goals_block}")
         directives = get_directives_text()
         if directives:
             parts.append("\n# Directives opérateur (priorité haute)")
@@ -193,14 +198,6 @@ async def build_llm_context(
                 parts.append(ent[:1000])
         except Exception:
             pass
-        try:
-            from aria_core.revenue_goals import progress_summary
-
-            parts.append("\n# Objectif revenu réel (ledger)")
-            parts.append(progress_summary("fr")[:800])
-        except Exception:
-            pass
-
     if messages:
         parts.append("\n# Conversations récentes")
         for msg in messages:
