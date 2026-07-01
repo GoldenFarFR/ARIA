@@ -1,0 +1,29 @@
+# Schéma mémoire vectorielle ARIA — Phase B (documentation + validation future)
+# chromadb non activé ; types cibles pour indexation Phase C
+
+version: 1
+
+entry_types:
+  insight:
+    description: Observation externe validée (X, marché, concurrence)
+    required_metadata: [source, topic]
+    retention_days: 365
+
+  lesson:
+    description: Leçon opérationnelle durable (runbook, incident, pattern ship)
+    required_metadata: [topic, confidence]
+    retention_days: null
+
+  reflection:
+    description: Raisonnement interne ARIA (arbitrage, priorisation, QI)
+    required_metadata: [context]
+    retention_days: 90
+
+  decision:
+    description: Décision prise avec justification (marketing, produit, deploy)
+    required_metadata: [outcome, at]
+    retention_days: null
+
+collection:
+  name: aria_cognitive_vectors
+  distance: cosine

@@ -1,0 +1,6395 @@
+/* aria-gem-crush-improve: 84 — visuel branché: gemmes saturées, flash invalide, combos paliers */
+
+:root {
+  --gold: #c9a962;
+  --gold-light: #e8d5a8;
+  --surface: #0c0c10;
+  --panel: #14141c;
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+}
+
+.gem-crush {
+  background: linear-gradient(160deg, rgba(201, 169, 98, 0.08), rgba(20, 20, 28, 0.95));
+  border: 1px solid rgba(201, 169, 98, 0.22);
+  border-radius: 4px;
+  padding: 1rem;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.gem-crush--compact {
+  padding: 0.75rem;
+}
+
+.gem-crush__hud {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.gem-crush__stat {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(201, 169, 98, 0.12);
+  border-radius: 3px;
+  padding: 0.4rem 0.5rem;
+  text-align: center;
+}
+
+.gem-crush__label {
+  display: block;
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8a8478;
+}
+
+.gem-crush__stat strong {
+  font-size: 1.1rem;
+  color: var(--gold-light);
+}
+
+.gem-crush__warn {
+  color: #f0a060 !important;
+}
+
+.gem-crush__progress-wrap {
+  grid-column: 1 / -1;
+}
+
+.gem-crush__progress {
+  height: 6px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 0.25rem;
+}
+
+.gem-crush__progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #8a7344, var(--gold), var(--gold-light));
+  transition: width 0.35s ease;
+}
+
+.gem-crush__combo {
+  text-align: center;
+  font-weight: 600;
+  color: var(--gold);
+  font-size: 0.95rem;
+  margin-bottom: 0.5rem;
+  animation: combo-pop 0.5s ease;
+}
+
+@keyframes combo-pop {
+  0% {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.gem-crush__board-wrap {
+  position: relative;
+  padding: 0.5rem;
+  background: linear-gradient(145deg, rgba(30, 28, 38, 0.9), rgba(8, 8, 14, 0.95));
+  border-radius: 8px;
+  border: 1px solid rgba(201, 169, 98, 0.2);
+  box-shadow: inset 0 0 40px rgba(201, 169, 98, 0.06);
+  overflow: hidden;
+}
+
+.gem-crush__sparkles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, rgba(232, 213, 168, 0.5), transparent),
+    radial-gradient(1px 1px at 70% 60%, rgba(201, 169, 98, 0.35), transparent),
+    radial-gradient(1.5px 1.5px at 45% 80%, rgba(255, 255, 255, 0.25), transparent);
+  animation: sparkle-drift 12s linear infinite;
+  opacity: 0.6;
+}
+
+@keyframes sparkle-drift {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-8px); }
+}
+
+.gem-crush__score-pops {
+  position: absolute;
+  top: 12%;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.gem-crush__score-pop {
+  display: block;
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--gold-light);
+  text-shadow: 0 0 12px rgba(201, 169, 98, 0.8);
+  animation: score-float 0.85s ease-out forwards;
+}
+
+@keyframes score-float {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-36px) scale(1.15); }
+}
+
+.gem-crush--shake {
+  animation: board-shake 0.42s ease;
+}
+
+@keyframes board-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+
+.gem-crush__board {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  aspect-ratio: 1;
+  max-width: 100%;
+}
+
+.gem-crush__cell {
+  border: none;
+  border-radius: 42% 42% 38% 38% / 48% 48% 36% 36%;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.2s ease;
+  box-shadow:
+    inset 0 -4px 8px rgba(0, 0, 0, 0.4),
+    inset 0 2px 4px rgba(255, 255, 255, 0.12),
+    0 3px 6px rgba(0, 0, 0, 0.35);
+  animation: gem-idle 3.5s ease-in-out infinite;
+  animation-delay: calc(var(--gem-delay, 0) * 0.08s);
+}
+
+.gem-crush__cell:nth-child(odd) { --gem-delay: 1; }
+.gem-crush__cell:nth-child(3n) { --gem-delay: 2; }
+.gem-crush__cell:nth-child(5n) { --gem-delay: 3; }
+
+@keyframes gem-idle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+
+.gem-crush__cell--swap-a {
+  animation: swap-toward-b 0.18s ease forwards !important;
+}
+
+.gem-crush__cell--swap-b {
+  animation: swap-toward-a 0.18s ease forwards !important;
+}
+
+@keyframes swap-toward-b {
+  50% { transform: scale(1.12); filter: brightness(1.2); }
+}
+
+@keyframes swap-toward-a {
+  50% { transform: scale(1.12); filter: brightness(1.2); }
+}
+
+.gem-crush__cell::after {
+  content: "";
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.55), transparent 55%);
+  pointer-events: none;
+}
+
+.gem-crush__cell--selected {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 2px var(--gold), 0 0 16px rgba(201, 169, 98, 0.45);
+  z-index: 2;
+}
+
+.gem-crush__cell--pop {
+  animation: gem-pop 0.28s ease forwards;
+}
+
+@keyframes gem-pop {
+  0% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  40% {
+    transform: scale(1.2);
+    filter: brightness(1.6);
+  }
+  100% {
+    transform: scale(0);
+    opacity: 0;
+  }
+}
+
+.gem-crush__gem-0 {
+  background: radial-gradient(circle at 30% 25%, #ff8a9a, #c41e3a 55%, #6b0f1f);
+}
+.gem-crush__gem-1 {
+  background: radial-gradient(circle at 30% 25%, #7ec8ff, #1e6fd4 55%, #0d3a6e);
+}
+.gem-crush__gem-2 {
+  background: radial-gradient(circle at 30% 25%, #7dffb0, #1faa55 55%, #0d5c30);
+}
+.gem-crush__gem-3 {
+  background: radial-gradient(circle at 30% 25%, #ffe07a, #e6a817 55%, #8a5f08);
+}
+.gem-crush__gem-4 {
+  background: radial-gradient(circle at 30% 25%, #d4a8ff, #8b3fd4 55%, #4a1f7a);
+}
+.gem-crush__gem-5 {
+  background: radial-gradient(circle at 30% 25%, #f0f8ff, #b8d4e8 40%, #6a8fa8 70%, #3d5a6e);
+}
+
+.gem-crush__special-line-h::before,
+.gem-crush__special-line-v::before {
+  content: "";
+  position: absolute;
+  inset: 20%;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.75);
+  pointer-events: none;
+}
+
+.gem-crush__special-line-h::before {
+  height: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  inset-inline: 12%;
+}
+
+.gem-crush__special-line-v::before {
+  width: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  inset-block: 12%;
+}
+
+.gem-crush__special-bomb::before {
+  content: "★";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  color: #fff8e0;
+  text-shadow: 0 0 6px rgba(255, 220, 100, 0.9);
+}
+
+.gem-crush__overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 8, 12, 0.82);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 6px;
+  z-index: 5;
+}
+
+.gem-crush__board-wrap {
+  position: relative;
+}
+
+.gem-crush__overlay-title {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  color: var(--gold-light);
+  margin: 0;
+}
+
+.gem-crush__overlay-sub {
+  color: #9a958a;
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.gem-crush__btn {
+  background: linear-gradient(135deg, #8a7344, var(--gold));
+  border: none;
+  color: #1a1408;
+  font-weight: 600;
+  padding: 0.6rem 1.4rem;
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+
+.gem-crush__hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.72rem;
+  color: #6b665c;
+  text-align: center;
+}
+
+.gem-crush__version-badge {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  z-index: 6;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #e8d5a8;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(201, 169, 98, 0.35);
+  border-radius: 3px;
+  cursor: help;
+}
+
+.gem-crush__aria-credit {
+  margin: 0.35rem 0 0;
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(201, 169, 98, 0.45);
+  text-align: center;
+}
+
+.gem-crush__cell--hint {
+  animation: hint-pulse 1s ease-in-out infinite !important;
+  z-index: 3;
+}
+
+@keyframes hint-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px #fff8e0, 0 0 20px rgba(255, 240, 180, 0.7); }
+  50% { box-shadow: 0 0 0 3px #fff, 0 0 32px rgba(255, 255, 255, 0.85); }
+}
+
+.gem-crush__cell--shuffle {
+  animation: shuffle-spin 0.65s ease-in-out;
+}
+
+@keyframes shuffle-spin {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(8deg) scale(0.92); opacity: 0.6; }
+  100% { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+
+.gem-crush__mascot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+}
+
+.gem-crush__mascot-face {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #e8d5a8, #c9a962);
+  color: #1a1408;
+  font-weight: 700;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.gem-crush__mascot-bubble {
+  font-size: 0.72rem;
+  color: #b8b2a6;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(201, 169, 98, 0.15);
+  padding: 0.35rem 0.6rem;
+  border-radius: 12px 12px 12px 2px;
+  max-width: 70%;
+}
+
+.gem-crush__actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+.gem-crush__btn--ghost {
+  background: transparent;
+  border: 1px solid rgba(201, 169, 98, 0.35);
+  color: var(--gold-light);
+  font-size: 0.78rem;
+  padding: 0.4rem 1rem;
+}
+
+.gem-crush__tutorial {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  background: rgba(8, 8, 14, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.25rem;
+  text-align: center;
+  border-radius: 6px;
+}
+
+.gem-crush__tutorial-title {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  color: var(--gold-light);
+  margin: 0;
+}
+
+.gem-crush__tutorial p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #9a958a;
+  max-width: 280px;
+}
+
+.gem-crush__confetti {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.gem-crush__gem-0,
+.gem-crush__gem-1,
+.gem-crush__gem-2,
+.gem-crush__gem-3,
+.gem-crush__gem-4,
+.gem-crush__gem-5 {
+  border: 2px solid rgba(255, 255, 255, 0.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gem-crush__cell,
+  .gem-crush__sparkles,
+  .gem-crush--shake,
+  .gem-crush__cell--hint {
+    animation: none !important;
+  }
+}
+/* aria-gem-crush-improve: 8 — rebond chute */
+.gem-crush__cell--pop {
+  animation: gem-pop 0.32s cubic-bezier(0.34, 1.4, 0.64, 1) forwards;
+}
+/* aria-gem-crush-improve: 9 — motif bonbons */
+.gem-crush__board-wrap {
+  background-image:
+    linear-gradient(145deg, rgba(30, 28, 38, 0.92), rgba(8, 8, 14, 0.95)),
+    radial-gradient(circle at 25% 25%, rgba(201, 169, 98, 0.06) 0 2px, transparent 3px);
+  background-size: auto, 18px 18px;
+}
+/* v10 */ .gem-crush__stat { border-color: rgba(201,169,98,0.28); }
+/* v11 */ .gem-crush__combo { color: #e8d5a8; }
+/* v12 */ .gem-crush__board-wrap { box-shadow: inset 0 4px 24px rgba(0,0,0,0.5); }
+/* v13 */ .gem-crush__cell::after { inset: 14%; opacity: 0.85; }
+/* v14 */ .gem-crush__progress { height: 8px; }
+/* v15 */ .gem-crush__mascot-bubble { border-color: rgba(201,169,98,0.35); }
+/* v16 */ .gem-crush__btn--ghost:hover { box-shadow: 0 0 12px rgba(201,169,98,0.35); }
+/* v17 */ .gem-crush__board { gap: 6px; }
+/* v18 */ .gem-crush__overlay { backdrop-filter: blur(4px); }
+/* v19 */ .gem-crush__score-pop { font-size: 1.25rem; }
+/* v20 */ .gem-crush__aria-credit { color: rgba(201,169,98,0.65); }
+/* aria-gem-crush-release: v21 — Pack juice visuel — animations, glow, profondeur */
+
+/* v21.1 — rebond chute */
+.gem-crush__cell--fall {
+  animation: gem-fall-bounce 0.42s cubic-bezier(0.34, 1.45, 0.64, 1) forwards;
+}
+@keyframes gem-fall-bounce {
+  0% { transform: translateY(calc(var(--fall-rows, 1) * -100%)); opacity: 0.85; }
+  70% { transform: translateY(4px); }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+/* v21.2 — flash match */
+.gem-crush__cell--pop {
+  animation: gem-pop 0.32s cubic-bezier(0.34, 1.4, 0.64, 1) forwards,
+    gem-match-flash 0.5s ease-out forwards;
+}
+@keyframes gem-match-flash {
+  0% { box-shadow: 0 0 0 0 rgba(232, 213, 168, 0.9); }
+  100% { box-shadow: 0 0 24px 6px rgba(201, 169, 98, 0); }
+}
+
+/* v21.3 — motif plateau */
+.gem-crush__board-wrap {
+  background-image:
+    linear-gradient(145deg, rgba(30, 28, 38, 0.92), rgba(8, 8, 14, 0.95)),
+    radial-gradient(circle at 25% 25%, rgba(201, 169, 98, 0.07) 0 2px, transparent 3px);
+  background-size: auto, 18px 18px;
+  box-shadow: inset 0 4px 28px rgba(0, 0, 0, 0.45);
+}
+
+/* v21.4 — HUD contrast */
+.gem-crush__stat {
+  border-color: rgba(201, 169, 98, 0.32);
+  background: rgba(0, 0, 0, 0.45);
+}
+.gem-crush__label {
+  color: rgba(201, 169, 98, 0.55);
+}
+
+/* v21.5 — combo champagne */
+.gem-crush__combo {
+  color: #e8d5a8;
+  font-size: 1.08rem;
+  text-shadow: 0 2px 12px rgba(201, 169, 98, 0.65), 0 0 24px rgba(232, 213, 168, 0.4);
+  letter-spacing: 0.05em;
+}
+
+/* v21.6 — cadre shimmer */
+.gem-crush {
+  background-size: 220% 220%;
+  animation: gem-frame-shimmer 10s ease infinite;
+}
+@keyframes gem-frame-shimmer {
+  0%, 100% { background-position: 0% 40%; }
+  50% { background-position: 100% 60%; }
+}
+/* aria-gem-crush-release: v22 — Pack feedback jeu — sélection, erreurs, objectif, indices */
+
+/* v22.1 — halo sélection */
+.gem-crush__cell--selected {
+  animation: gem-selected-pulse 0.85s ease-in-out infinite !important;
+}
+@keyframes gem-selected-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--gold), 0 0 20px rgba(201, 169, 98, 0.55); transform: scale(1.08); }
+  50% { box-shadow: 0 0 0 3px var(--gold-light), 0 0 32px rgba(232, 213, 168, 0.7); transform: scale(1.1); }
+}
+
+/* v22.2 — invalide flash */
+.gem-crush--invalid-flash .gem-crush__board-wrap {
+  animation: invalid-flash 0.35s ease;
+}
+@keyframes invalid-flash {
+  0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
+  50% { box-shadow: inset 0 0 0 3px rgba(220, 80, 80, 0.75); }
+}
+
+/* v22.3 — objectif pulse */
+.gem-crush__progress-bar {
+  box-shadow: 0 0 16px rgba(201, 169, 98, 0.5);
+}
+.gem-crush__progress[data-near="1"] .gem-crush__progress-bar {
+  animation: target-pulse 1s ease-in-out infinite;
+}
+@keyframes target-pulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.3); }
+}
+
+/* v22.4 — indice pulse */
+.gem-crush__btn--ghost[data-hint="1"] {
+  animation: hint-pulse 1.6s ease-in-out infinite;
+}
+@keyframes hint-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(201, 169, 98, 0); }
+  50% { box-shadow: 0 0 14px 2px rgba(201, 169, 98, 0.45); }
+}
+.gem-crush__btn--ghost:hover {
+  box-shadow: 0 0 16px rgba(201, 169, 98, 0.4);
+}
+
+/* v22.5 — score pop */
+.gem-crush__score-pop {
+  font-size: 1.28rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+/* aria-gem-crush-release: v23 — Pack victoire & mascotte — célébration, crédit ARIA */
+
+/* v23.1 — overlay victoire */
+.gem-crush__overlay {
+  backdrop-filter: blur(6px);
+  background: rgba(4, 4, 8, 0.72);
+}
+
+/* v23.2 — mascotte */
+.gem-crush__mascot-bubble {
+  border-color: rgba(201, 169, 98, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.gem-crush__mascot {
+  animation: mascot-float 3s ease-in-out infinite;
+}
+@keyframes mascot-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+/* v23.3 — grille gap */
+.gem-crush__board {
+  gap: 6px;
+  padding: 6px;
+}
+
+/* v23.4 — reflet gemmes */
+.gem-crush__cell::after {
+  inset: 12%;
+  opacity: 0.9;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.65), transparent 58%);
+}
+
+/* v23.5 — crédit ARIA */
+.gem-crush__aria-credit {
+  color: rgba(201, 169, 98, 0.72);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+/* aria-gem-crush-release: v24 — Pack spéciaux & rayures — bombes, lignes, sparkles */
+
+/* v24.1 — rayures glow */
+.gem-crush__special-line-h::before,
+.gem-crush__special-line-v::before {
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+  animation: stripe-glow 1.2s ease-in-out infinite;
+}
+@keyframes stripe-glow {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; filter: brightness(1.4); }
+}
+
+/* v24.2 — bombe halo */
+.gem-crush__special-bomb {
+  box-shadow: 0 0 18px rgba(232, 213, 168, 0.65), inset 0 0 12px rgba(255, 255, 255, 0.25);
+}
+
+/* v24.3 — sparkles */
+.gem-crush__sparkles {
+  opacity: 0.75;
+  animation: sparkle-drift 8s linear infinite;
+}
+
+/* v24.4 — progress */
+.gem-crush__progress {
+  height: 8px;
+  border-radius: 4px;
+}
+.gem-crush__progress-bar {
+  border-radius: 4px;
+}
+/* aria-gem-crush-release: v25 — Pack scoring & combos — gameplay engine */
+
+/* v25 */
+.gem-crush__score-pop { font-size: 1.35rem; font-weight: 900; }
+/* aria-gem-crush-release: v26 — Pack rythme & niveaux — coups, objectifs, cascades */
+
+/* aria-gem-crush-v26 — gameplay marker */
+/* aria-gem-crush-release: v27 — Pack audio — sons plus riches, victoire prolongée */
+
+/* aria-gem-crush-v27 — gameplay marker */
+/* aria-gem-crush-release: v28 — Combos paliers + animation visible */
+.gem-crush__combo {
+  animation: combo-pop 0.5s ease, combo-tier-pulse 0.6s ease;
+  text-shadow: 0 0 24px rgba(232, 213, 168, 0.75), 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+@keyframes combo-tier-pulse {
+  0% { transform: scale(0.9); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+/* aria-gem-crush-release: v29 — Pack visuel branché (CSS + TS) */
+.gem-crush__gem-0,
+.gem-crush__gem-1,
+.gem-crush__gem-2,
+.gem-crush__gem-3,
+.gem-crush__gem-4,
+.gem-crush__gem-5 {
+  filter: saturate(1.4) brightness(1.1);
+}
+
+.gem-crush__board-wrap {
+  animation: board-glow-pulse 3.2s ease-in-out infinite;
+  box-shadow:
+    0 0 0 2px rgba(201, 169, 98, 0.4),
+    inset 0 4px 28px rgba(0, 0, 0, 0.45),
+    0 0 36px rgba(201, 169, 98, 0.18);
+}
+
+@keyframes board-glow-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px rgba(201, 169, 98, 0.35),
+      inset 0 4px 28px rgba(0, 0, 0, 0.45),
+      0 0 28px rgba(201, 169, 98, 0.12);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(232, 213, 168, 0.55),
+      inset 0 4px 28px rgba(0, 0, 0, 0.45),
+      0 0 48px rgba(201, 169, 98, 0.28);
+  }
+}
+
+.gem-crush__sparkles {
+  opacity: 0.9;
+  animation: sparkle-drift 6s linear infinite;
+}
+/* aria-gem-crush-release: v30 — Pack objectif proche — vignette dorée + gemmes plus grosses */
+
+/* v30 near-win */
+.gem-crush--near-win .gem-crush__board-wrap {
+  outline: 3px solid rgba(232, 213, 168, 0.55);
+  outline-offset: 2px;
+}
+.gem-crush--near-win .gem-crush__cell {
+  transform: scale(1.02);
+}
+.gem-crush--near-win .gem-crush__progress-bar {
+  background: linear-gradient(90deg, #c9a962, #fff8e0, #c9a962);
+  background-size: 200% 100%;
+  animation: progress-shine 1.5s linear infinite;
+}
+@keyframes progress-shine {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+/* aria-gem-crush-release: v31 — Prestige Chapitre I — narrative Royal Match, objectif doré, juice premium */
+
+/* v31 prestige */
+.gem-crush--near-win .gem-crush__board-wrap {
+  outline: 3px solid rgba(232, 213, 168, 0.6);
+  outline-offset: 2px;
+}
+.gem-crush--near-win .gem-crush__progress-bar {
+  background: linear-gradient(90deg, #8a7344, #fff8e0, #c9a962);
+  background-size: 200% 100%;
+  animation: progress-shine 1.4s linear infinite;
+}
+@keyframes progress-shine {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.gem-crush__chapter {
+  display: block;
+  font-size: 0.55rem;
+  color: rgba(201, 169, 98, 0.7);
+  letter-spacing: 0.06em;
+  margin-top: 0.15rem;
+}
+.gem-crush__cell {
+  box-shadow:
+    inset 0 -5px 10px rgba(0, 0, 0, 0.45),
+    inset 0 3px 6px rgba(255, 255, 255, 0.15),
+    0 4px 10px rgba(0, 0, 0, 0.4);
+}
+
+/* v31 mascot */
+.gem-crush__mascot-bubble {
+  border: 1px solid rgba(232, 213, 168, 0.45);
+  background: linear-gradient(145deg, rgba(20, 18, 28, 0.95), rgba(8, 8, 14, 0.98));
+}
+.gem-crush__hud .gem-crush__label {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.58rem;
+}
+/* aria-gem-crush-release: v32 — Récompenses Royal Match — étoiles, streak ARIA, coffre visuel */
+
+/* v32 rewards */
+.gem-crush__overlay-title {
+  text-shadow: 0 0 28px rgba(232, 213, 168, 0.8);
+  letter-spacing: 0.04em;
+}
+.gem-crush__hud::after {
+  content: "Série ARIA · jour 1";
+  grid-column: 1 / -1;
+  text-align: center;
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(201, 169, 98, 0.55);
+  margin-top: 0.25rem;
+}
+.gem-crush__board-wrap::after {
+  content: "◆";
+  position: absolute;
+  bottom: 0.35rem;
+  right: 0.5rem;
+  font-size: 0.75rem;
+  color: rgba(201, 169, 98, 0.45);
+  pointer-events: none;
+}
+
+/* v32 stars */
+.gem-crush__overlay {
+  background: radial-gradient(ellipse at 50% 30%, rgba(201, 169, 98, 0.12), rgba(4, 4, 8, 0.85));
+}
+.gem-crush__overlay-title::after {
+  content: " ★★★";
+  color: #fff8e0;
+  animation: stars-twinkle 1.2s ease-in-out infinite;
+}
+@keyframes stars-twinkle {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; filter: brightness(1.4); }
+}
+/* aria-gem-crush-release: v33 — Campagne Vanguard — narration mascotte, partage, finition luxe */
+
+/* v33 campaign */
+.gem-crush {
+  border: 1px solid rgba(232, 213, 168, 0.35);
+  box-shadow:
+    0 28px 70px rgba(0, 0, 0, 0.55),
+    0 0 60px rgba(201, 169, 98, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.gem-crush__mascot-face {
+  background: linear-gradient(145deg, #e8d5a8, #c9a962);
+  color: #1a1810;
+  font-weight: 800;
+}
+.gem-crush__aria-credit {
+  color: rgba(201, 169, 98, 0.82);
+  font-size: 0.68rem;
+}
+.gem-crush__confetti {
+  opacity: 0.95;
+  mix-blend-mode: screen;
+}
+
+/* v33 tutorial */
+.gem-crush__tutorial {
+  border: 1px solid rgba(201, 169, 98, 0.35);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+.gem-crush__hint {
+  color: rgba(201, 169, 98, 0.55);
+  letter-spacing: 0.04em;
+}
+/* aria-gem-crush-release: v34 — Pack Candy Crush — sugar rush, cascades rapides, sweet juice */
+
+/* v34 candy */
+.gem-crush__cell--pop {
+  transform: scale(1.15);
+  z-index: 2;
+}
+.gem-crush__gem-0, .gem-crush__gem-1, .gem-crush__gem-2,
+.gem-crush__gem-3, .gem-crush__gem-4, .gem-crush__gem-5 {
+  filter: saturate(1.55) brightness(1.12) contrast(1.05);
+}
+.gem-crush__combo {
+  font-size: 1.12rem;
+  background: linear-gradient(90deg, #fff8e0, #ffb8d0, #fff8e0);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* v34 board candy */
+.gem-crush__board {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.02) 0 4px,
+    transparent 4px 8px
+  );
+}
+.gem-crush__board-wrap {
+  box-shadow: 0 0 40px rgba(255, 180, 200, 0.08), inset 0 0 30px rgba(201, 169, 98, 0.06);
+}
+/* aria-gem-crush-release: v35 — Pack Clash Royale — trophées, tension compétitive, fanfare */
+
+/* v35 clash */
+.gem-crush__stat strong {
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 8px rgba(201, 169, 98, 0.35);
+}
+.gem-crush__hud::before {
+  content: "ARIA Arena";
+  grid-column: 1 / -1;
+  text-align: center;
+  font-size: 0.52rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(201, 169, 98, 0.4);
+  margin-bottom: 0.15rem;
+}
+.gem-crush__btn {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* v35 victory */
+.gem-crush--shake .gem-crush__board-wrap {
+  animation: board-shake 0.42s ease;
+}
+.gem-crush__overlay-sub {
+  color: rgba(232, 213, 168, 0.75);
+}
+/* aria-gem-crush-release: v36 — Pack Homescapes — quêtes cosy, maison ARIA, récompenses douces */
+
+/* v36 homescapes */
+.gem-crush {
+  background: linear-gradient(165deg, #1a1818 0%, #12101a 45%, #0a0a12 100%);
+}
+.gem-crush__board-wrap {
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(40, 36, 48, 0.9), rgba(16, 14, 22, 0.95));
+}
+.gem-crush__tutorial-title {
+  color: #e8d5a8;
+}
+
+/* v36 buttons */
+.gem-crush__btn--ghost {
+  border-color: rgba(201, 169, 98, 0.35);
+  background: rgba(201, 169, 98, 0.06);
+}
+.gem-crush__cell--hint {
+  box-shadow: 0 0 0 2px rgba(232, 213, 168, 0.7), 0 0 20px rgba(201, 169, 98, 0.45);
+}
+
+/* v36 score */
+.gem-crush__score-pop {
+  color: #fff8e0;
+  text-shadow: 0 2px 8px rgba(201, 169, 98, 0.5);
+}
+/* aria-gem-crush-release: v37 — Pack Toon Blast — explosifs, rythme blast, célébrations courtes */
+
+/* v37 toon blast */
+.gem-crush__special-bomb {
+  animation: bomb-pulse 0.9s ease-in-out infinite;
+  box-shadow: 0 0 24px rgba(255, 200, 80, 0.7);
+}
+@keyframes bomb-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+.gem-crush__special-line-h::before,
+.gem-crush__special-line-v::before {
+  box-shadow: 0 0 16px rgba(255, 255, 255, 0.95);
+}
+
+/* v37 blast board */
+.gem-crush__cell--pop {
+  animation: gem-pop 0.28s cubic-bezier(0.34, 1.6, 0.64, 1) forwards,
+    blast-flash 0.4s ease-out;
+}
+@keyframes blast-flash {
+  0% { filter: brightness(2); }
+  100% { filter: brightness(1); }
+}
+
+/* v37 combo blast */
+.gem-crush__combo {
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+/* aria-gem-crush-release: v38 — Pack Gardenscapes — events, mascotte vivante, saison ARIA */
+
+/* v38 gardenscapes */
+.gem-crush__sparkles {
+  opacity: 0.85;
+  background: radial-gradient(circle, rgba(180, 220, 140, 0.15) 0%, transparent 70%);
+}
+.gem-crush__mascot-face {
+  box-shadow: 0 0 16px rgba(180, 220, 140, 0.35);
+}
+
+/* v38 event */
+.gem-crush__version-badge {
+  background: linear-gradient(135deg, rgba(201, 169, 98, 0.25), rgba(140, 200, 120, 0.2));
+  border-color: rgba(180, 220, 140, 0.35);
+  opacity: 0.55;
+  font-size: 0.52rem;
+  pointer-events: none;
+}
+.gem-crush__aria-credit::before {
+  content: "🌿 ";
+}
+.gem-crush__hud::after {
+  content: none;
+}
+
+/* v38 progress garden */
+.gem-crush__progress-bar {
+  background: linear-gradient(90deg, #6a8f4e, #c9a962, #8fbc6a);
+}
+
+/* v39 candy frame — cadre bonbons, gemmes rondes */
+.gem-crush__board-wrap {
+  padding: 10px;
+  border-radius: 14px;
+  background: linear-gradient(160deg, #4a3020 0%, #2a1810 45%, #1a1008 100%);
+  border: 3px solid rgba(201, 169, 98, 0.55);
+  box-shadow:
+    inset 0 2px 12px rgba(255, 220, 160, 0.08),
+    inset 0 -8px 20px rgba(0, 0, 0, 0.55),
+    0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.gem-crush__board {
+  gap: 5px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.gem-crush__cell {
+  border-radius: 50%;
+  box-shadow:
+    inset 0 -7px 14px rgba(0, 0, 0, 0.38),
+    inset 0 5px 10px rgba(255, 255, 255, 0.38),
+    0 4px 10px rgba(0, 0, 0, 0.28);
+}
+
+.gem-crush__cell::after {
+  inset: 14%;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.72), transparent 58%);
+}
+
+.gem-crush__mascot-bubble {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  max-width: 14rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 12px;
+  background: rgba(12, 12, 16, 0.92);
+  border: 1px solid rgba(201, 169, 98, 0.28);
+}
+
+.gem-crush__chapter {
+  display: block;
+  font-size: 0.62rem;
+  color: #8a8478;
+  margin-top: 0.1rem;
+}
+
+/* v40 assets — sprites SVG candy */
+.gem-crush__cell--sprite {
+  background: rgba(0, 0, 0, 0.15) !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.gem-crush__cell--sprite[class*='gem-crush__gem-'] {
+  background: rgba(0, 0, 0, 0.12) !important;
+}
+
+.gem-crush__sprite {
+  width: 92%;
+  height: 92%;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.35));
+  pointer-events: none;
+}
+
+.gem-crush__cell--sprite.gem-crush__cell--selected .gem-crush__sprite {
+  filter: drop-shadow(0 0 8px rgba(201, 169, 98, 0.8));
+}
+
+.gem-crush__cell--falling {
+  animation: gem-fall-in calc(0.07s * var(--fall-rows, 1) + 0.12s) cubic-bezier(0.34, 1.25, 0.64, 1);
+}
+
+@keyframes gem-fall-in {
+  from {
+    transform: translateY(calc(-100% * var(--fall-rows, 1) - 4px));
+    opacity: 0.85;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* v41 assets — carte chapitres */
+.gem-crush__map {
+  margin-bottom: 0.65rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(201, 169, 98, 0.15);
+}
+
+.gem-crush__map-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8a8478;
+}
+
+.gem-crush__map-track {
+  display: flex;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.gem-crush__map-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  min-width: 2.6rem;
+  opacity: 0.45;
+}
+
+.gem-crush__map-node--active,
+.gem-crush__map-node--done {
+  opacity: 1;
+}
+
+.gem-crush__map-dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--ch-accent, var(--gold));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ch-accent, var(--gold)) 55%, transparent);
+}
+
+.gem-crush__map-node--active .gem-crush__map-dot {
+  transform: scale(1.35);
+  box-shadow: 0 0 14px var(--ch-accent, var(--gold));
+}
+
+.gem-crush__map-node--done .gem-crush__map-dot {
+  background: var(--gold-light);
+}
+
+.gem-crush__map-node--locked .gem-crush__map-dot {
+  background: #4a4840;
+  box-shadow: none;
+}
+
+.gem-crush__map-label {
+  font-size: 0.52rem;
+  letter-spacing: 0.06em;
+  color: #9a958a;
+}
+
+.gem-crush__map-sub {
+  margin: 0.35rem 0 0;
+  font-size: 0.68rem;
+  color: var(--gold-light);
+}
+/* aria-gem-crush-release: v39 — Pack Candy polish — cadre bonbons, gemmes rondes, zéro code visible */
+
+/* v39 candy frame */
+.gem-crush__board-wrap {
+  padding: 10px;
+  border-radius: 14px;
+  background: linear-gradient(160deg, #4a3020 0%, #2a1810 45%, #1a1008 100%);
+  border: 3px solid rgba(201, 169, 98, 0.55);
+  box-shadow:
+    inset 0 2px 12px rgba(255, 220, 160, 0.08),
+    inset 0 -8px 20px rgba(0, 0, 0, 0.55),
+    0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.gem-crush__board {
+  gap: 5px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* v39 candy gems */
+.gem-crush__cell {
+  border-radius: 50%;
+  box-shadow:
+    inset 0 -7px 14px rgba(0, 0, 0, 0.38),
+    inset 0 5px 10px rgba(255, 255, 255, 0.38),
+    0 4px 10px rgba(0, 0, 0, 0.28);
+}
+.gem-crush__cell::after {
+  inset: 14%;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.72), transparent 58%);
+}
+
+/* v39 hud candy */
+.gem-crush__chapter {
+  display: block;
+  font-size: 0.62rem;
+  color: #8a8478;
+  margin-top: 0.1rem;
+}
+.gem-crush__version-badge {
+  opacity: 0.5;
+  font-size: 0.52rem;
+  pointer-events: none;
+}
+.gem-crush__mascot-bubble {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  max-width: 14rem;
+  border-radius: 12px;
+}
+/* aria-gem-crush-release: v40 — Pack Assets v1 — sprites SVG + carte chapitres (voir docs/gem-crush-assets-sprint.md) */
+
+/* v40 sprites */
+.gem-crush__cell--sprite {
+  background: rgba(0, 0, 0, 0.15) !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gem-crush__sprite {
+  width: 92%;
+  height: 92%;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.35));
+}
+
+/* v40 map */
+.gem-crush__map {
+  margin-bottom: 0.65rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(201, 169, 98, 0.15);
+}
+.gem-crush__map-node--active .gem-crush__map-dot {
+  transform: scale(1.35);
+}
+
+/* v40 fall */
+.gem-crush__cell--falling {
+  animation: gem-fall-in calc(0.07s * var(--fall-rows, 1) + 0.12s) cubic-bezier(0.34, 1.25, 0.64, 1);
+}
+@keyframes gem-fall-in {
+  from { transform: translateY(calc(-100% * var(--fall-rows, 1) - 4px)); opacity: 0.85; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* v40 map labels */
+.gem-crush__map-label { font-size: 0.52rem; color: #9a958a; }
+.gem-crush__map-sub { font-size: 0.68rem; color: var(--gold-light); }
+
+/* v40 select glow */
+.gem-crush__cell--sprite.gem-crush__cell--selected .gem-crush__sprite {
+  filter: drop-shadow(0 0 8px rgba(201, 169, 98, 0.8));
+}
+
+/* v40 map track */
+.gem-crush__map-track { display: flex; gap: 0.35rem; flex-wrap: wrap; list-style: none; margin: 0; padding: 0; }
+.gem-crush__map-node { min-width: 2.6rem; opacity: 0.45; }
+.gem-crush__map-node--active, .gem-crush__map-node--done { opacity: 1; }
+/* aria-gem-crush-release: v41 — Pack Juice v2 — éclats match, traînée combo */
+
+/* v41 burst */
+.gem-crush__cell--pop .gem-crush__sprite {
+  animation: gem-burst 0.32s ease-out forwards;
+}
+@keyframes gem-burst {
+  40% { transform: scale(1.25); filter: brightness(1.8) drop-shadow(0 0 12px #fff8e0); }
+  100% { transform: scale(0); opacity: 0; }
+}
+
+/* v41 combo trail */
+.gem-crush__board-wrap[data-combo='1'] .gem-crush__sparkles {
+  animation: sparkle-burst 0.6s ease-out;
+}
+@keyframes sparkle-burst {
+  0% { opacity: 0.3; transform: scale(0.95); }
+  50% { opacity: 1; transform: scale(1.02); }
+  100% { opacity: 0.85; transform: scale(1); }
+}
+
+/* v41 combo glow */
+.gem-crush__combo {
+  text-shadow: 0 0 12px rgba(255, 240, 180, 0.45);
+}
+
+/* v41 score pop */
+.gem-crush__score-pop {
+  animation: score-float 0.9s ease-out forwards;
+}
+@keyframes score-float {
+  0% { transform: translateY(0) scale(0.8); opacity: 0; }
+  20% { opacity: 1; transform: scale(1.1); }
+  100% { transform: translateY(-28px) scale(1); opacity: 0; }
+}
+
+/* v41 map locked */
+.gem-crush__map-node--locked .gem-crush__map-dot { background: #4a4840; box-shadow: none; }
+.gem-crush__map-node--done .gem-crush__map-dot { background: var(--gold-light); }
+
+/* v41 mascot */
+.gem-crush__mascot-bubble {
+  border-radius: 12px;
+  background: rgba(12, 12, 16, 0.92);
+}
+/* aria-gem-crush-release: v42 — Pack Audio v2 — layers match (WebAudio) */
+
+/* v42 near pulse */
+.gem-crush--near-win .gem-crush__board {
+  animation: board-pulse 1.2s ease-in-out infinite;
+}
+@keyframes board-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 rgba(232, 213, 168, 0); }
+  50% { box-shadow: inset 0 0 24px rgba(232, 213, 168, 0.12); }
+}
+
+/* v42 swap marker */
+.gem-crush__cell--swap-a .gem-crush__sprite,
+.gem-crush__cell--swap-b .gem-crush__sprite {
+  transform: scale(1.08);
+}
+
+/* v42 hint */
+.gem-crush__cell--hint .gem-crush__sprite {
+  filter: drop-shadow(0 0 10px rgba(255, 248, 224, 0.9));
+}
+
+/* v42 shuffle */
+.gem-crush__cell--shuffle .gem-crush__sprite {
+  animation: shuffle-wobble 0.35s ease-in-out infinite;
+}
+@keyframes shuffle-wobble {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: rotate(4deg); }
+}
+/* aria-gem-crush-release: v43 — Map monde scrollable — micro */
+
+/* v43 frozen ice */
+.gem-crush__board-wrap[data-ice='1'] .gem-crush__cell:nth-child(5n) {
+  position: relative;
+}
+.gem-crush__board-wrap[data-ice='1'] .gem-crush__cell:nth-child(5n)::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgba(180, 220, 255, 0.55), rgba(80, 140, 220, 0.35));
+  box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+}
+.gem-crush__cell--frozen .gem-crush__sprite {
+  filter: hue-rotate(180deg) brightness(1.1);
+}
+/* aria-gem-crush-release: v44 — Map monde scroll v44 — suite */
+
+/* v44 map-world scroll */
+.gem-crush__map--world {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.35rem;
+  scroll-snap-type: x proximity;
+}
+.gem-crush__map--world .gem-crush__map-track {
+  flex-wrap: nowrap;
+  min-width: max-content;
+  gap: 0.5rem;
+}
+.gem-crush__map--world .gem-crush__map-node {
+  scroll-snap-align: center;
+}
+/* aria-gem-crush-release: v45 — Tutoriel animé v45 — suite */
+
+/* v45 tutorial ghost-swap */
+.gem-crush__tutorial--animated {
+  animation: tutorial-fade-in 0.5s ease-out;
+}
+.gem-crush__tutorial--animated::after {
+  content: '⇄';
+  display: block;
+  font-size: 1.6rem;
+  margin: 0.5rem auto;
+  animation: ghost-swap 1.4s ease-in-out infinite;
+  opacity: 0.85;
+}
+@keyframes ghost-swap {
+  0%, 100% { transform: translateX(-8px); opacity: 0.5; }
+  50% { transform: translateX(8px); opacity: 1; }
+}
+@keyframes tutorial-fade-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+/* aria-gem-crush-release: v46 — Niveaux scriptés v46 — suite */
+
+/* aria-gem-crush-v46 — gameplay marker */
+/* aria-gem-crush-release: v47 — Juice burst renfort v47 — suite */
+
+/* v47 gem-burst renfort */
+.gem-crush__cell--pop .gem-crush__sprite {
+  animation-duration: 0.38s;
+}
+@keyframes gem-burst {
+  55% { filter: brightness(2) drop-shadow(0 0 16px #fff); }
+}
+/* aria-gem-crush-release: v48 — Combo trail v48 — suite */
+
+/* v48 sparkle-burst */
+.gem-crush__board-wrap[data-combo='1'] .gem-crush__sparkles {
+  opacity: 1;
+  background: radial-gradient(circle, rgba(255, 240, 180, 0.2) 0%, transparent 70%);
+}
+/* aria-gem-crush-release: v49 — Exploration ARIA v49 — Parallax doux — suite */
+
+/* v49 aria explore parallax */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(13, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v49 theme accent */
+.gem-crush__mascot-face {
+  animation: aria-explore-v49 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v49 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(13deg); }
+}
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(13, 80%, 70%, 0.45);
+}
+/* aria-gem-crush-release: v50 — Exploration ARIA v50 — Confetti XL — suite */
+
+/* v50 aria explore confetti-xl */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(50, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v50 theme accent */
+.gem-crush__mascot-face {
+  animation: aria-explore-v50 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v50 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(10deg); }
+}
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(50, 80%, 70%, 0.45);
+}
+/* aria-gem-crush-release: v51 — Exploration ARIA v51 — HUD doré — suite */
+
+/* v51 aria explore gold-hud */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(87, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v51 theme accent */
+.gem-crush__mascot-face {
+  animation: aria-explore-v51 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v51 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(7deg); }
+}
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(87, 80%, 70%, 0.45);
+}
+/* aria-gem-crush-release: v52 — Exploration ARIA v52 — Plateau profondeur */
+
+/* v52 aria explore depth-board */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(124, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v52 mascot depth-board */
+.gem-crush__mascot-face {
+  animation: aria-explore-v52 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v52 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(4deg); }
+}
+
+/* v52 explore depth-board layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(170, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(170, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(170, 80%, 65%, 0.35);
+}
+
+/* v52 explore mascot-live layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(193, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(193, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(193, 80%, 65%, 0.35);
+}
+
+/* v52 explore win-cine layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(216, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(216, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(216, 80%, 65%, 0.35);
+}
+
+/* v52 explore shuffle-show layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(239, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(239, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(239, 80%, 65%, 0.35);
+}
+
+/* v52 explore hint-laser layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(262, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(262, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(262, 80%, 65%, 0.35);
+}
+
+/* v52 explore progress-pulse layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(285, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(285, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(285, 80%, 65%, 0.35);
+}
+
+/* v52 explore aurora layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(308, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(308, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(308, 80%, 65%, 0.35);
+}
+
+/* v52 explore neon layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(331, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(331, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(331, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v53 — Exploration ARIA v53 — Mascotte vivante */
+
+/* v53 aria explore mascot-live */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(161, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v53 mascot mascot-live */
+.gem-crush__mascot-face {
+  animation: aria-explore-v53 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v53 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(1deg); }
+}
+
+/* v53 explore mascot-live layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(207, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(207, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(207, 80%, 65%, 0.35);
+}
+
+/* v53 explore win-cine layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(230, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(230, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(230, 80%, 65%, 0.35);
+}
+
+/* v53 explore shuffle-show layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(253, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(253, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(253, 80%, 65%, 0.35);
+}
+
+/* v53 explore hint-laser layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(276, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(276, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(276, 80%, 65%, 0.35);
+}
+
+/* v53 explore progress-pulse layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(299, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(299, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(299, 80%, 65%, 0.35);
+}
+
+/* v53 explore aurora layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(322, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(322, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(322, 80%, 65%, 0.35);
+}
+
+/* v53 explore neon layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(345, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(345, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(345, 80%, 65%, 0.35);
+}
+
+/* v53 explore spring layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(8, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(8, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(8, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v54 — Exploration ARIA v54 — Victoire ciné */
+
+/* v54 aria explore win-cine */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(198, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v54 mascot win-cine */
+.gem-crush__mascot-face {
+  animation: aria-explore-v54 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v54 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(38deg); }
+}
+
+/* v54 explore win-cine layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(244, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(244, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(244, 80%, 65%, 0.35);
+}
+
+/* v54 explore shuffle-show layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(267, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(267, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(267, 80%, 65%, 0.35);
+}
+
+/* v54 explore hint-laser layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(290, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(290, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(290, 80%, 65%, 0.35);
+}
+
+/* v54 explore progress-pulse layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(313, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(313, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(313, 80%, 65%, 0.35);
+}
+
+/* v54 explore aurora layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(336, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(336, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(336, 80%, 65%, 0.35);
+}
+
+/* v54 explore neon layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(359, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(359, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(359, 80%, 65%, 0.35);
+}
+
+/* v54 explore spring layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(22, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(22, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(22, 80%, 65%, 0.35);
+}
+
+/* v54 explore winter layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(45, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(45, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(45, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v55 — Exploration ARIA v55 — Shuffle spectaculaire */
+
+/* v55 aria explore shuffle-show */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(235, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v55 mascot shuffle-show */
+.gem-crush__mascot-face {
+  animation: aria-explore-v55 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v55 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(35deg); }
+}
+
+/* v55 explore shuffle-show layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(281, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(281, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(281, 80%, 65%, 0.35);
+}
+
+/* v55 explore hint-laser layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(304, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(304, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(304, 80%, 65%, 0.35);
+}
+
+/* v55 explore progress-pulse layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(327, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(327, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(327, 80%, 65%, 0.35);
+}
+
+/* v55 explore aurora layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(350, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(350, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(350, 80%, 65%, 0.35);
+}
+
+/* v55 explore neon layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(13, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(13, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(13, 80%, 65%, 0.35);
+}
+
+/* v55 explore spring layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(36, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(36, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(36, 80%, 65%, 0.35);
+}
+
+/* v55 explore winter layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(59, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(59, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(59, 80%, 65%, 0.35);
+}
+
+/* v55 explore stripe-booster layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(82, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(82, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(82, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v56 — Exploration ARIA v56 — Indice laser */
+
+/* v56 aria explore hint-laser */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(272, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v56 mascot hint-laser */
+.gem-crush__mascot-face {
+  animation: aria-explore-v56 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v56 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(32deg); }
+}
+
+/* v56 explore hint-laser layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(318, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(318, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(318, 80%, 65%, 0.35);
+}
+
+/* v56 explore progress-pulse layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(341, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(341, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(341, 80%, 65%, 0.35);
+}
+
+/* v56 explore aurora layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(4, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(4, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(4, 80%, 65%, 0.35);
+}
+
+/* v56 explore neon layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(27, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(27, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(27, 80%, 65%, 0.35);
+}
+
+/* v56 explore spring layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(50, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(50, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(50, 80%, 65%, 0.35);
+}
+
+/* v56 explore winter layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(73, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(73, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(73, 80%, 65%, 0.35);
+}
+
+/* v56 explore stripe-booster layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(96, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(96, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(96, 80%, 65%, 0.35);
+}
+
+/* v56 explore bomb-booster layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(119, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(119, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(119, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v57 — Exploration ARIA v57 — Progression pulse */
+
+/* v57 aria explore progress-pulse */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(309, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v57 mascot progress-pulse */
+.gem-crush__mascot-face {
+  animation: aria-explore-v57 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v57 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(29deg); }
+}
+
+/* v57 explore progress-pulse layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(355, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(355, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(355, 80%, 65%, 0.35);
+}
+
+/* v57 explore aurora layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(18, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(18, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(18, 80%, 65%, 0.35);
+}
+
+/* v57 explore neon layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(41, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(41, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(41, 80%, 65%, 0.35);
+}
+
+/* v57 explore spring layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(64, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(64, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(64, 80%, 65%, 0.35);
+}
+
+/* v57 explore winter layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(87, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(87, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(87, 80%, 65%, 0.35);
+}
+
+/* v57 explore stripe-booster layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(110, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(110, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(110, 80%, 65%, 0.35);
+}
+
+/* v57 explore bomb-booster layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(133, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(133, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(133, 80%, 65%, 0.35);
+}
+
+/* v57 explore parallax layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(156, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(156, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(156, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v58 — Exploration ARIA v58 — Aurore candy */
+
+/* v58 aria explore aurora */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(346, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v58 mascot aurora */
+.gem-crush__mascot-face {
+  animation: aria-explore-v58 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v58 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(26deg); }
+}
+
+/* v58 explore aurora layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(32, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(32, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(32, 80%, 65%, 0.35);
+}
+
+/* v58 explore neon layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(55, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(55, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(55, 80%, 65%, 0.35);
+}
+
+/* v58 explore spring layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(78, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(78, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(78, 80%, 65%, 0.35);
+}
+
+/* v58 explore winter layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(101, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(101, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(101, 80%, 65%, 0.35);
+}
+
+/* v58 explore stripe-booster layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(124, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(124, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(124, 80%, 65%, 0.35);
+}
+
+/* v58 explore bomb-booster layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(147, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(147, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(147, 80%, 65%, 0.35);
+}
+
+/* v58 explore parallax layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(170, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(170, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(170, 80%, 65%, 0.35);
+}
+
+/* v58 explore confetti-xl layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(193, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(193, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(193, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v59 — Exploration ARIA v59 — Nuit néon */
+
+/* v59 aria explore neon */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(23, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v59 mascot neon */
+.gem-crush__mascot-face {
+  animation: aria-explore-v59 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v59 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(23deg); }
+}
+
+/* v59 explore neon layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(69, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(69, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(69, 80%, 65%, 0.35);
+}
+
+/* v59 explore spring layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(92, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(92, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(92, 80%, 65%, 0.35);
+}
+
+/* v59 explore winter layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(115, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(115, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(115, 80%, 65%, 0.35);
+}
+
+/* v59 explore stripe-booster layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(138, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(138, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(138, 80%, 65%, 0.35);
+}
+
+/* v59 explore bomb-booster layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(161, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(161, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(161, 80%, 65%, 0.35);
+}
+
+/* v59 explore parallax layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(184, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(184, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(184, 80%, 65%, 0.35);
+}
+
+/* v59 explore confetti-xl layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(207, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(207, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(207, 80%, 65%, 0.35);
+}
+
+/* v59 explore gold-hud layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(230, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(230, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(230, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v60 — Exploration ARIA v60 — Saison printemps */
+
+/* v60 aria explore spring */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(60, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v60 mascot spring */
+.gem-crush__mascot-face {
+  animation: aria-explore-v60 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v60 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(20deg); }
+}
+
+/* v60 explore spring layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(106, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(106, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(106, 80%, 65%, 0.35);
+}
+
+/* v60 explore winter layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(129, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(129, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(129, 80%, 65%, 0.35);
+}
+
+/* v60 explore stripe-booster layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(152, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(152, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(152, 80%, 65%, 0.35);
+}
+
+/* v60 explore bomb-booster layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(175, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(175, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(175, 80%, 65%, 0.35);
+}
+
+/* v60 explore parallax layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(198, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(198, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(198, 80%, 65%, 0.35);
+}
+
+/* v60 explore confetti-xl layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(221, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(221, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(221, 80%, 65%, 0.35);
+}
+
+/* v60 explore gold-hud layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(244, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(244, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(244, 80%, 65%, 0.35);
+}
+
+/* v60 explore depth-board layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(267, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(267, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(267, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v61 — Exploration ARIA v61 — Saison hiver */
+
+/* v61 aria explore winter */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(97, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v61 mascot winter */
+.gem-crush__mascot-face {
+  animation: aria-explore-v61 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v61 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(17deg); }
+}
+
+/* v61 explore winter layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(143, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(143, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(143, 80%, 65%, 0.35);
+}
+
+/* v61 explore stripe-booster layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(166, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(166, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(166, 80%, 65%, 0.35);
+}
+
+/* v61 explore bomb-booster layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(189, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(189, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(189, 80%, 65%, 0.35);
+}
+
+/* v61 explore parallax layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(212, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(212, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(212, 80%, 65%, 0.35);
+}
+
+/* v61 explore confetti-xl layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(235, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(235, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(235, 80%, 65%, 0.35);
+}
+
+/* v61 explore gold-hud layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(258, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(258, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(258, 80%, 65%, 0.35);
+}
+
+/* v61 explore depth-board layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(281, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(281, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(281, 80%, 65%, 0.35);
+}
+
+/* v61 explore mascot-live layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(304, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(304, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(304, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v62 — Exploration ARIA v62 — Booster rayure */
+
+/* v62 aria explore stripe-booster */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(134, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v62 mascot stripe-booster */
+.gem-crush__mascot-face {
+  animation: aria-explore-v62 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v62 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(14deg); }
+}
+
+/* v62 explore stripe-booster layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(180, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(180, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(180, 80%, 65%, 0.35);
+}
+
+/* v62 explore bomb-booster layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(203, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(203, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(203, 80%, 65%, 0.35);
+}
+
+/* v62 explore parallax layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(226, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(226, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(226, 80%, 65%, 0.35);
+}
+
+/* v62 explore confetti-xl layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(249, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(249, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(249, 80%, 65%, 0.35);
+}
+
+/* v62 explore gold-hud layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(272, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(272, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(272, 80%, 65%, 0.35);
+}
+
+/* v62 explore depth-board layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(295, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(295, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(295, 80%, 65%, 0.35);
+}
+
+/* v62 explore mascot-live layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(318, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(318, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(318, 80%, 65%, 0.35);
+}
+
+/* v62 explore win-cine layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(341, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(341, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(341, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v63 — Exploration ARIA v63 — Booster bombe */
+
+/* v63 aria explore bomb-booster */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(171, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v63 mascot bomb-booster */
+.gem-crush__mascot-face {
+  animation: aria-explore-v63 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v63 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(11deg); }
+}
+
+/* v63 explore bomb-booster layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(217, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(217, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(217, 80%, 65%, 0.35);
+}
+
+/* v63 explore parallax layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(240, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(240, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(240, 80%, 65%, 0.35);
+}
+
+/* v63 explore confetti-xl layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(263, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(263, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(263, 80%, 65%, 0.35);
+}
+
+/* v63 explore gold-hud layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(286, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(286, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(286, 80%, 65%, 0.35);
+}
+
+/* v63 explore depth-board layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(309, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(309, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(309, 80%, 65%, 0.35);
+}
+
+/* v63 explore mascot-live layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(332, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(332, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(332, 80%, 65%, 0.35);
+}
+
+/* v63 explore win-cine layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(355, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(355, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(355, 80%, 65%, 0.35);
+}
+
+/* v63 explore shuffle-show layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(18, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(18, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(18, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v64 — Exploration ARIA v64 — Parallax doux */
+
+/* v64 aria explore parallax */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(208, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v64 mascot parallax */
+.gem-crush__mascot-face {
+  animation: aria-explore-v64 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v64 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(8deg); }
+}
+
+/* v64 explore parallax layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(254, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(254, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(254, 80%, 65%, 0.35);
+}
+
+/* v64 explore confetti-xl layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(277, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(277, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(277, 80%, 65%, 0.35);
+}
+
+/* v64 explore gold-hud layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(300, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(300, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(300, 80%, 65%, 0.35);
+}
+
+/* v64 explore depth-board layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(323, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(323, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(323, 80%, 65%, 0.35);
+}
+
+/* v64 explore mascot-live layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(346, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(346, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(346, 80%, 65%, 0.35);
+}
+
+/* v64 explore win-cine layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(9, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(9, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(9, 80%, 65%, 0.35);
+}
+
+/* v64 explore shuffle-show layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(32, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(32, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(32, 80%, 65%, 0.35);
+}
+
+/* v64 explore hint-laser layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(55, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(55, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(55, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v65 — Exploration ARIA v65 — Confetti XL */
+
+/* v65 aria explore confetti-xl */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(245, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v65 mascot confetti-xl */
+.gem-crush__mascot-face {
+  animation: aria-explore-v65 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v65 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(5deg); }
+}
+
+/* v65 explore confetti-xl layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(291, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(291, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(291, 80%, 65%, 0.35);
+}
+
+/* v65 explore gold-hud layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(314, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(314, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(314, 80%, 65%, 0.35);
+}
+
+/* v65 explore depth-board layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(337, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(337, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(337, 80%, 65%, 0.35);
+}
+
+/* v65 explore mascot-live layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(0, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(0, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(0, 80%, 65%, 0.35);
+}
+
+/* v65 explore win-cine layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(23, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(23, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(23, 80%, 65%, 0.35);
+}
+
+/* v65 explore shuffle-show layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(46, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(46, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(46, 80%, 65%, 0.35);
+}
+
+/* v65 explore hint-laser layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(69, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(69, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(69, 80%, 65%, 0.35);
+}
+
+/* v65 explore progress-pulse layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(92, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(92, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(92, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v66 — Exploration ARIA v66 — HUD doré */
+
+/* v66 aria explore gold-hud */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(282, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v66 mascot gold-hud */
+.gem-crush__mascot-face {
+  animation: aria-explore-v66 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v66 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(2deg); }
+}
+
+/* v66 explore gold-hud layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(328, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(328, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(328, 80%, 65%, 0.35);
+}
+
+/* v66 explore depth-board layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(351, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(351, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(351, 80%, 65%, 0.35);
+}
+
+/* v66 explore mascot-live layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(14, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(14, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(14, 80%, 65%, 0.35);
+}
+
+/* v66 explore win-cine layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(37, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(37, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(37, 80%, 65%, 0.35);
+}
+
+/* v66 explore shuffle-show layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(60, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(60, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(60, 80%, 65%, 0.35);
+}
+
+/* v66 explore hint-laser layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(83, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(83, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(83, 80%, 65%, 0.35);
+}
+
+/* v66 explore progress-pulse layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(106, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(106, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(106, 80%, 65%, 0.35);
+}
+
+/* v66 explore aurora layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(129, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(129, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(129, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v67 — Exploration ARIA v67 — Plateau profondeur */
+
+/* v67 aria explore depth-board */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(319, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v67 mascot depth-board */
+.gem-crush__mascot-face {
+  animation: aria-explore-v67 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v67 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(39deg); }
+}
+
+/* v67 explore depth-board layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(5, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(5, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(5, 80%, 65%, 0.35);
+}
+
+/* v67 explore mascot-live layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(28, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(28, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(28, 80%, 65%, 0.35);
+}
+
+/* v67 explore win-cine layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(51, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(51, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(51, 80%, 65%, 0.35);
+}
+
+/* v67 explore shuffle-show layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(74, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(74, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(74, 80%, 65%, 0.35);
+}
+
+/* v67 explore hint-laser layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(97, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(97, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(97, 80%, 65%, 0.35);
+}
+
+/* v67 explore progress-pulse layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(120, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(120, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(120, 80%, 65%, 0.35);
+}
+
+/* v67 explore aurora layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(143, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(143, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(143, 80%, 65%, 0.35);
+}
+
+/* v67 explore neon layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(166, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(166, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(166, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v68 — Exploration ARIA v68 — Mascotte vivante */
+
+/* v68 aria explore mascot-live */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(356, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v68 mascot mascot-live */
+.gem-crush__mascot-face {
+  animation: aria-explore-v68 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v68 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(36deg); }
+}
+
+/* v68 explore mascot-live layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(42, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(42, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(42, 80%, 65%, 0.35);
+}
+
+/* v68 explore win-cine layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(65, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(65, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(65, 80%, 65%, 0.35);
+}
+
+/* v68 explore shuffle-show layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(88, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(88, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(88, 80%, 65%, 0.35);
+}
+
+/* v68 explore hint-laser layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(111, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(111, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(111, 80%, 65%, 0.35);
+}
+
+/* v68 explore progress-pulse layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(134, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(134, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(134, 80%, 65%, 0.35);
+}
+
+/* v68 explore aurora layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(157, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(157, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(157, 80%, 65%, 0.35);
+}
+
+/* v68 explore neon layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(180, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(180, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(180, 80%, 65%, 0.35);
+}
+
+/* v68 explore spring layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(203, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(203, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(203, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v69 — Exploration ARIA v69 — Victoire ciné */
+
+/* v69 aria explore win-cine */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(33, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v69 mascot win-cine */
+.gem-crush__mascot-face {
+  animation: aria-explore-v69 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v69 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(33deg); }
+}
+
+/* v69 explore win-cine layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(79, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(79, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(79, 80%, 65%, 0.35);
+}
+
+/* v69 explore shuffle-show layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(102, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(102, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(102, 80%, 65%, 0.35);
+}
+
+/* v69 explore hint-laser layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(125, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(125, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(125, 80%, 65%, 0.35);
+}
+
+/* v69 explore progress-pulse layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(148, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(148, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(148, 80%, 65%, 0.35);
+}
+
+/* v69 explore aurora layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(171, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(171, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(171, 80%, 65%, 0.35);
+}
+
+/* v69 explore neon layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(194, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(194, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(194, 80%, 65%, 0.35);
+}
+
+/* v69 explore spring layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(217, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(217, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(217, 80%, 65%, 0.35);
+}
+
+/* v69 explore winter layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(240, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(240, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(240, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v70 — Exploration ARIA v70 — Shuffle spectaculaire */
+
+/* v70 aria explore shuffle-show */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(70, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v70 mascot shuffle-show */
+.gem-crush__mascot-face {
+  animation: aria-explore-v70 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v70 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(30deg); }
+}
+
+/* v70 explore shuffle-show layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(116, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(116, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(116, 80%, 65%, 0.35);
+}
+
+/* v70 explore hint-laser layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(139, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(139, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(139, 80%, 65%, 0.35);
+}
+
+/* v70 explore progress-pulse layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(162, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(162, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(162, 80%, 65%, 0.35);
+}
+
+/* v70 explore aurora layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(185, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(185, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(185, 80%, 65%, 0.35);
+}
+
+/* v70 explore neon layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(208, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(208, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(208, 80%, 65%, 0.35);
+}
+
+/* v70 explore spring layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(231, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(231, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(231, 80%, 65%, 0.35);
+}
+
+/* v70 explore winter layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(254, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(254, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(254, 80%, 65%, 0.35);
+}
+
+/* v70 explore stripe-booster layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(277, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(277, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(277, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v71 — Exploration ARIA v71 — Indice laser */
+
+/* v71 aria explore hint-laser */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(107, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v71 mascot hint-laser */
+.gem-crush__mascot-face {
+  animation: aria-explore-v71 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v71 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(27deg); }
+}
+
+/* v71 explore hint-laser layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(153, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(153, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(153, 80%, 65%, 0.35);
+}
+
+/* v71 explore progress-pulse layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(176, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(176, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(176, 80%, 65%, 0.35);
+}
+
+/* v71 explore aurora layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(199, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(199, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(199, 80%, 65%, 0.35);
+}
+
+/* v71 explore neon layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(222, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(222, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(222, 80%, 65%, 0.35);
+}
+
+/* v71 explore spring layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(245, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(245, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(245, 80%, 65%, 0.35);
+}
+
+/* v71 explore winter layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(268, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(268, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(268, 80%, 65%, 0.35);
+}
+
+/* v71 explore stripe-booster layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(291, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(291, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(291, 80%, 65%, 0.35);
+}
+
+/* v71 explore bomb-booster layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(314, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(314, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(314, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v72 — Exploration ARIA v72 — Progression pulse */
+
+/* v72 aria explore progress-pulse */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(144, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v72 mascot progress-pulse */
+.gem-crush__mascot-face {
+  animation: aria-explore-v72 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v72 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(24deg); }
+}
+
+/* v72 explore progress-pulse layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(190, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(190, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(190, 80%, 65%, 0.35);
+}
+
+/* v72 explore aurora layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(213, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(213, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(213, 80%, 65%, 0.35);
+}
+
+/* v72 explore neon layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(236, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(236, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(236, 80%, 65%, 0.35);
+}
+
+/* v72 explore spring layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(259, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(259, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(259, 80%, 65%, 0.35);
+}
+
+/* v72 explore winter layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(282, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(282, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(282, 80%, 65%, 0.35);
+}
+
+/* v72 explore stripe-booster layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(305, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(305, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(305, 80%, 65%, 0.35);
+}
+
+/* v72 explore bomb-booster layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(328, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(328, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(328, 80%, 65%, 0.35);
+}
+
+/* v72 explore parallax layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(351, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(351, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(351, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v73 — Exploration ARIA v73 — Aurore candy */
+
+/* v73 aria explore aurora */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(181, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v73 mascot aurora */
+.gem-crush__mascot-face {
+  animation: aria-explore-v73 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v73 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(21deg); }
+}
+
+/* v73 explore aurora layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(227, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(227, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(227, 80%, 65%, 0.35);
+}
+
+/* v73 explore neon layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(250, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(250, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(250, 80%, 65%, 0.35);
+}
+
+/* v73 explore spring layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(273, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(273, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(273, 80%, 65%, 0.35);
+}
+
+/* v73 explore winter layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(296, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(296, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(296, 80%, 65%, 0.35);
+}
+
+/* v73 explore stripe-booster layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(319, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(319, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(319, 80%, 65%, 0.35);
+}
+
+/* v73 explore bomb-booster layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(342, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(342, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(342, 80%, 65%, 0.35);
+}
+
+/* v73 explore parallax layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(5, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(5, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(5, 80%, 65%, 0.35);
+}
+
+/* v73 explore confetti-xl layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(28, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(28, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(28, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v74 — Exploration ARIA v74 — Nuit néon */
+
+/* v74 aria explore neon */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(218, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v74 mascot neon */
+.gem-crush__mascot-face {
+  animation: aria-explore-v74 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v74 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(18deg); }
+}
+
+/* v74 explore neon layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(264, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(264, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(264, 80%, 65%, 0.35);
+}
+
+/* v74 explore spring layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(287, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(287, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(287, 80%, 65%, 0.35);
+}
+
+/* v74 explore winter layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(310, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(310, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(310, 80%, 65%, 0.35);
+}
+
+/* v74 explore stripe-booster layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(333, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(333, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(333, 80%, 65%, 0.35);
+}
+
+/* v74 explore bomb-booster layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(356, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(356, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(356, 80%, 65%, 0.35);
+}
+
+/* v74 explore parallax layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(19, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(19, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(19, 80%, 65%, 0.35);
+}
+
+/* v74 explore confetti-xl layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(42, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(42, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(42, 80%, 65%, 0.35);
+}
+
+/* v74 explore gold-hud layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(65, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(65, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(65, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v75 — Exploration ARIA v75 — Saison printemps */
+
+/* v75 aria explore spring */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(255, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v75 mascot spring */
+.gem-crush__mascot-face {
+  animation: aria-explore-v75 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v75 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(15deg); }
+}
+
+/* v75 explore spring layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(301, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(301, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(301, 80%, 65%, 0.35);
+}
+
+/* v75 explore winter layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(324, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(324, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(324, 80%, 65%, 0.35);
+}
+
+/* v75 explore stripe-booster layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(347, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(347, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(347, 80%, 65%, 0.35);
+}
+
+/* v75 explore bomb-booster layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(10, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(10, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(10, 80%, 65%, 0.35);
+}
+
+/* v75 explore parallax layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(33, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(33, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(33, 80%, 65%, 0.35);
+}
+
+/* v75 explore confetti-xl layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(56, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(56, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(56, 80%, 65%, 0.35);
+}
+
+/* v75 explore gold-hud layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(79, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(79, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(79, 80%, 65%, 0.35);
+}
+
+/* v75 explore depth-board layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(102, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(102, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(102, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v76 — Exploration ARIA v76 — Saison hiver */
+
+/* v76 aria explore winter */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(292, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v76 mascot winter */
+.gem-crush__mascot-face {
+  animation: aria-explore-v76 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v76 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(12deg); }
+}
+
+/* v76 explore winter layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(338, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(338, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(338, 80%, 65%, 0.35);
+}
+
+/* v76 explore stripe-booster layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(1, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(1, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(1, 80%, 65%, 0.35);
+}
+
+/* v76 explore bomb-booster layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(24, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(24, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(24, 80%, 65%, 0.35);
+}
+
+/* v76 explore parallax layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(47, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(47, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(47, 80%, 65%, 0.35);
+}
+
+/* v76 explore confetti-xl layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(70, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(70, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(70, 80%, 65%, 0.35);
+}
+
+/* v76 explore gold-hud layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(93, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(93, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(93, 80%, 65%, 0.35);
+}
+
+/* v76 explore depth-board layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(116, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(116, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(116, 80%, 65%, 0.35);
+}
+
+/* v76 explore mascot-live layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(139, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(139, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(139, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v77 — Exploration ARIA v77 — Booster rayure */
+
+/* v77 aria explore stripe-booster */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(329, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v77 mascot stripe-booster */
+.gem-crush__mascot-face {
+  animation: aria-explore-v77 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v77 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(9deg); }
+}
+
+/* v77 explore stripe-booster layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(15, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(15, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(15, 80%, 65%, 0.35);
+}
+
+/* v77 explore bomb-booster layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(38, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(38, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(38, 80%, 65%, 0.35);
+}
+
+/* v77 explore parallax layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(61, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(61, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(61, 80%, 65%, 0.35);
+}
+
+/* v77 explore confetti-xl layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(84, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(84, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(84, 80%, 65%, 0.35);
+}
+
+/* v77 explore gold-hud layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(107, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(107, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(107, 80%, 65%, 0.35);
+}
+
+/* v77 explore depth-board layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(130, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(130, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(130, 80%, 65%, 0.35);
+}
+
+/* v77 explore mascot-live layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(153, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(153, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(153, 80%, 65%, 0.35);
+}
+
+/* v77 explore win-cine layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(176, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(176, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(176, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v78 — Exploration ARIA v78 — Booster bombe */
+
+/* v78 aria explore bomb-booster */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(6, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v78 mascot bomb-booster */
+.gem-crush__mascot-face {
+  animation: aria-explore-v78 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v78 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(6deg); }
+}
+
+/* v78 explore bomb-booster layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(52, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(52, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(52, 80%, 65%, 0.35);
+}
+
+/* v78 explore parallax layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(75, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(75, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(75, 80%, 65%, 0.35);
+}
+
+/* v78 explore confetti-xl layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(98, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(98, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(98, 80%, 65%, 0.35);
+}
+
+/* v78 explore gold-hud layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(121, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(121, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(121, 80%, 65%, 0.35);
+}
+
+/* v78 explore depth-board layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(144, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(144, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(144, 80%, 65%, 0.35);
+}
+
+/* v78 explore mascot-live layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(167, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(167, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(167, 80%, 65%, 0.35);
+}
+
+/* v78 explore win-cine layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(190, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(190, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(190, 80%, 65%, 0.35);
+}
+
+/* v78 explore shuffle-show layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(213, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(213, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(213, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v79 — Exploration ARIA v79 — Parallax doux */
+
+/* v79 aria explore parallax */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(43, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v79 mascot parallax */
+.gem-crush__mascot-face {
+  animation: aria-explore-v79 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v79 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(3deg); }
+}
+
+/* v79 explore parallax layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(89, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(89, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(89, 80%, 65%, 0.35);
+}
+
+/* v79 explore confetti-xl layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(112, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(112, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(112, 80%, 65%, 0.35);
+}
+
+/* v79 explore gold-hud layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(135, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(135, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(135, 80%, 65%, 0.35);
+}
+
+/* v79 explore depth-board layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(158, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(158, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(158, 80%, 65%, 0.35);
+}
+
+/* v79 explore mascot-live layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(181, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(181, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(181, 80%, 65%, 0.35);
+}
+
+/* v79 explore win-cine layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(204, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(204, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(204, 80%, 65%, 0.35);
+}
+
+/* v79 explore shuffle-show layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(227, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(227, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(227, 80%, 65%, 0.35);
+}
+
+/* v79 explore hint-laser layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(250, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(250, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(250, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v80 — Exploration ARIA v80 — Confetti XL */
+
+/* v80 aria explore confetti-xl */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(80, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v80 mascot confetti-xl */
+.gem-crush__mascot-face {
+  animation: aria-explore-v80 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v80 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(0deg); }
+}
+
+/* v80 explore confetti-xl layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(126, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(126, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(126, 80%, 65%, 0.35);
+}
+
+/* v80 explore gold-hud layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(149, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(149, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(149, 80%, 65%, 0.35);
+}
+
+/* v80 explore depth-board layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(172, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(172, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(172, 80%, 65%, 0.35);
+}
+
+/* v80 explore mascot-live layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(195, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(195, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(195, 80%, 65%, 0.35);
+}
+
+/* v80 explore win-cine layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(218, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(218, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(218, 80%, 65%, 0.35);
+}
+
+/* v80 explore shuffle-show layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(241, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(241, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(241, 80%, 65%, 0.35);
+}
+
+/* v80 explore hint-laser layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(264, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(264, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(264, 80%, 65%, 0.35);
+}
+
+/* v80 explore progress-pulse layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(287, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(287, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(287, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v81 — Exploration ARIA v81 — HUD doré */
+
+/* v81 aria explore gold-hud */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(117, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v81 mascot gold-hud */
+.gem-crush__mascot-face {
+  animation: aria-explore-v81 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v81 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(37deg); }
+}
+
+/* v81 explore gold-hud layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(163, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(163, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(163, 80%, 65%, 0.35);
+}
+
+/* v81 explore depth-board layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(186, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(186, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(186, 80%, 65%, 0.35);
+}
+
+/* v81 explore mascot-live layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(209, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(209, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(209, 80%, 65%, 0.35);
+}
+
+/* v81 explore win-cine layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(232, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(232, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(232, 80%, 65%, 0.35);
+}
+
+/* v81 explore shuffle-show layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(255, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(255, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(255, 80%, 65%, 0.35);
+}
+
+/* v81 explore hint-laser layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(278, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(278, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(278, 80%, 65%, 0.35);
+}
+
+/* v81 explore progress-pulse layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(301, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(301, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(301, 80%, 65%, 0.35);
+}
+
+/* v81 explore aurora layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(324, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(324, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(324, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v82 — Exploration ARIA v82 — Plateau profondeur */
+
+/* v82 aria explore depth-board */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(154, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v82 mascot depth-board */
+.gem-crush__mascot-face {
+  animation: aria-explore-v82 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v82 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(34deg); }
+}
+
+/* v82 explore depth-board layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(200, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(200, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(200, 80%, 65%, 0.35);
+}
+
+/* v82 explore mascot-live layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(223, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(223, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(223, 80%, 65%, 0.35);
+}
+
+/* v82 explore win-cine layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(246, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(246, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(246, 80%, 65%, 0.35);
+}
+
+/* v82 explore shuffle-show layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(269, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(269, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(269, 80%, 65%, 0.35);
+}
+
+/* v82 explore hint-laser layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(292, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(292, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(292, 80%, 65%, 0.35);
+}
+
+/* v82 explore progress-pulse layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(315, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(315, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(315, 80%, 65%, 0.35);
+}
+
+/* v82 explore aurora layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(338, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(338, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(338, 80%, 65%, 0.35);
+}
+
+/* v82 explore neon layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(1, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(1, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(1, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v83 — Exploration ARIA v83 — Mascotte vivante */
+
+/* v83 aria explore mascot-live */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(191, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v83 mascot mascot-live */
+.gem-crush__mascot-face {
+  animation: aria-explore-v83 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v83 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(31deg); }
+}
+
+/* v83 explore mascot-live layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(237, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(237, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(237, 80%, 65%, 0.35);
+}
+
+/* v83 explore win-cine layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(260, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(260, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(260, 80%, 65%, 0.35);
+}
+
+/* v83 explore shuffle-show layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(283, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(283, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(283, 80%, 65%, 0.35);
+}
+
+/* v83 explore hint-laser layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(306, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(306, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(306, 80%, 65%, 0.35);
+}
+
+/* v83 explore progress-pulse layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(329, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(329, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(329, 80%, 65%, 0.35);
+}
+
+/* v83 explore aurora layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(352, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(352, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(352, 80%, 65%, 0.35);
+}
+
+/* v83 explore neon layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(15, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(15, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(15, 80%, 65%, 0.35);
+}
+
+/* v83 explore spring layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(38, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(38, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(38, 80%, 65%, 0.35);
+}
+/* aria-gem-crush-release: v84 — Exploration ARIA v84 — Victoire ciné */
+
+/* v84 aria explore win-cine */
+.gem-crush__board {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px hsla(228, 55%, 72%, 0.12);
+}
+.gem-crush__hud {
+  backdrop-filter: blur(4px);
+}
+
+/* v84 mascot win-cine */
+.gem-crush__mascot-face {
+  animation: aria-explore-v84 2.4s ease-in-out infinite;
+}
+@keyframes aria-explore-v84 {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.05) rotate(3deg); filter: hue-rotate(28deg); }
+}
+
+/* v84 explore win-cine layer 2 */
+.gem-crush__combo {
+  text-shadow: 0 0 10px hsla(274, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.056;
+  background: radial-gradient(circle at 34% 20%, hsla(274, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 8px hsla(274, 80%, 65%, 0.35);
+}
+
+/* v84 explore shuffle-show layer 3 */
+.gem-crush__combo {
+  text-shadow: 0 0 11px hsla(297, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.064;
+  background: radial-gradient(circle at 41% 25%, hsla(297, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 9px hsla(297, 80%, 65%, 0.35);
+}
+
+/* v84 explore hint-laser layer 4 */
+.gem-crush__combo {
+  text-shadow: 0 0 12px hsla(320, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.072;
+  background: radial-gradient(circle at 48% 30%, hsla(320, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 10px hsla(320, 80%, 65%, 0.35);
+}
+
+/* v84 explore progress-pulse layer 5 */
+.gem-crush__combo {
+  text-shadow: 0 0 13px hsla(343, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.080;
+  background: radial-gradient(circle at 55% 35%, hsla(343, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(1) .gem-crush__map-dot {
+  box-shadow: 0 0 11px hsla(343, 80%, 65%, 0.35);
+}
+
+/* v84 explore aurora layer 6 */
+.gem-crush__combo {
+  text-shadow: 0 0 14px hsla(6, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.088;
+  background: radial-gradient(circle at 62% 40%, hsla(6, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(2) .gem-crush__map-dot {
+  box-shadow: 0 0 12px hsla(6, 80%, 65%, 0.35);
+}
+
+/* v84 explore neon layer 7 */
+.gem-crush__combo {
+  text-shadow: 0 0 15px hsla(29, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.096;
+  background: radial-gradient(circle at 69% 45%, hsla(29, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(3) .gem-crush__map-dot {
+  box-shadow: 0 0 13px hsla(29, 80%, 65%, 0.35);
+}
+
+/* v84 explore spring layer 8 */
+.gem-crush__combo {
+  text-shadow: 0 0 16px hsla(52, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.104;
+  background: radial-gradient(circle at 76% 50%, hsla(52, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(4) .gem-crush__map-dot {
+  box-shadow: 0 0 14px hsla(52, 80%, 65%, 0.35);
+}
+
+/* v84 explore winter layer 9 */
+.gem-crush__combo {
+  text-shadow: 0 0 17px hsla(75, 80%, 70%, 0.4);
+}
+.gem-crush__board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.112;
+  background: radial-gradient(circle at 83% 55%, hsla(75, 70%, 70%, 0.2), transparent 50%);
+}
+.gem-crush__map-node:nth-child(5) .gem-crush__map-dot {
+  box-shadow: 0 0 15px hsla(75, 80%, 65%, 0.35);
+}

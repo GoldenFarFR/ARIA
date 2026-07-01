@@ -1,0 +1,50 @@
+# Regles de confiance audit GitHub local (session-handoff)
+# Ajuster si tu changes de compte Git / email
+
+# Machines GoldenFar connues (autre PC = alerte critical si touche vault)
+# Apres 1er session-handoff sur le 2e PC : ajouter son $env:COMPUTERNAME ici
+known_machines:
+  - PC-SYLVAIN
+
+# Logins GitHub autorises (API events)
+trusted_github_logins:
+  - GoldenFarFR
+
+# CRITICAL Telegram uniquement pour ces regles (origine / IP / acteur)
+critical_alert_rules:
+  - ip_changed_vault
+  - unknown_machine_vault
+  - github_foreign_actor
+  - vault_untrusted_origin
+
+trusted_author_substrings:
+  - GoldenFar
+  - Sylvain
+  - Rio
+
+# Rotation nocturne .gfv — fenetre UTC attendue (heures 0-23)
+vault_rotation_hours_utc: [2, 3, 4, 5]
+
+# Repos analyses en priorite
+sensitive_repos:
+  - aria-local-sync
+  - collegue-memoire
+  - aria-vanguard
+  - aria-skills
+
+# Motifs de commit legitimes pour goldenfar-vault.gfv
+vault_commit_patterns:
+  - "rotation quotidienne"
+  - "sync: rotation"
+  - "collect-local"
+
+# Motifs interdits dans les diffs (alerte critique)
+secret_patterns:
+  - "rnd_"
+  - "ghp_"
+  - "github_pat_"
+  - "sk-"
+  - "xai-"
+  - "ADMIN_API_SECRET="
+  - ".vault-master-secret"
+  - ".vault-totp-secret"

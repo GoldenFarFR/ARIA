@@ -1,0 +1,75 @@
+﻿{
+    "machine":  "PC-SYLVAIN",
+    "user":  "Studi",
+    "public_ip":  "89.85.240.85",
+    "session_id":  "019ee5b8-3404-7b20-80a1-1da4af2fb5a6",
+    "collected_at":  "2026-06-20T18:53:58",
+    "files_touched":  [
+                          "aria-local-sync/scripts/audit-github-security.ps1",
+                          "aria-local-sync/security/github-trust.yaml",
+                          "aria-sandbox/docs/aria-worker-queue/QUEUE.md",
+                          "aria-sandbox/packages/aria-core/src/aria_core/directives.md",
+                          "aria-sandbox/packages/aria-core/src/aria_core/knowledge/gem_crush_backlog.py",
+                          "aria-sandbox/packages/aria-core/src/aria_core/knowledge/gem_crush_backlog.yaml",
+                          "aria-sandbox/packages/aria-core/src/aria_core/knowledge/tavily_client.py",
+                          "aria-sandbox/packages/aria-core/src/aria_core/knowledge/web_verify.py",
+                          "aria-sandbox/packages/aria-core/src/aria_core/skills/gem_crush_critic.py",
+                          "aria-sandbox/packages/aria-core/src/aria_core/skills/gem_crush_premium.py",
+                          "aria-sandbox/packages/aria-core/src/aria_core/skills/gem_crush_research.py",
+                          "aria-sandbox/packages/aria-core/src/aria_core/skills/gem_crush_skill.py",
+                          "aria-sandbox/packages/aria-core/src/aria_core/skills/tavily_skill.py",
+                          "aria-sandbox/packages/aria-core/src/aria_core/testing.py",
+                          "aria-sandbox/packages/aria-core/tests/test_gem_crush_critic.py",
+                          "aria-sandbox/packages/aria-core/tests/test_gem_crush_research.py",
+                          "aria-sandbox/packages/aria-core/tests/test_gem_crush_skill.py",
+                          "aria-sandbox/packages/aria-core/tests/test_tavily_search.py",
+                          "collegue-memoire/COLLEGUE.md",
+                          "collegue-memoire/JOURNAL.md",
+                          "collegue-memoire/sessions/ARIA-WORKER.md",
+                          "collegue-memoire/sessions/HANDOFF.md",
+                          "collegue-memoire/sessions/README.md"
+                      ],
+    "files_touched_total":  23,
+    "repos_in_session":  [
+                             "aria-local-sync",
+                             "aria-sandbox",
+                             "collegue-memoire"
+                         ],
+    "repos_status":  [
+                         {
+                             "repo":  "collegue-memoire",
+                             "commit":  "b949420",
+                             "message":  "chore: retire sessions PCDESS9 (mono PC)",
+                             "dirty":  true
+                         },
+                         {
+                             "repo":  "aria-local-sync",
+                             "commit":  "2129203",
+                             "message":  "chore: retire PCDESS9 known_machines (mono PC-SYLVAIN)",
+                             "dirty":  true
+                         },
+                         {
+                             "repo":  "aria-sandbox",
+                             "commit":  "5a78c1c1",
+                             "message":  "revert: retire Tavily Phase 1 ÔÇö DuckDuckGo seul (gratuit)",
+                             "dirty":  true
+                         }
+                     ],
+    "journal_tail":  [
+                         "17h41 — CONSOMMATION-GROK.md + regles handoff GitHub (collegue-memoire, aria-skills, aria-local-sync)",
+                         "17h52 — fix ancre v41 gem_crush_premium.py + test (ad73fe1e)",
+                         "17h52 — pin aria-core v41 fix aria-vanguard (7319f06)",
+                         "17h52 — ARIA-WORKER gem-crush-error-v41 done",
+                         "18h00 — aria-sandbox public temporaire 5min (gh repo edit)",
+                         "18h10 — Phase A gem-crush: backlog + critic + dry-run + micro-ship aria-core",
+                         "18h10 — aria-sandbox repasse PRIVATE (job 5min echoue)",
+                         "18h17 — fix audit: parser yaml known_machines + registry PCDESS9 IP",
+                         "18h20 — retire PCDESS9 trust + sessions + registry",
+                         "18h31 — Phase 1 Tavily skill aria-core + tests",
+                         "18h35 — revert Tavily Phase 1 aria-core (DDG seul)",
+                         "18h37 — tous repos GoldenFarFR passes PUBLIC (analyse Grok)",
+                         "18h44 — tous repos GoldenFarFR repasses PRIVATE",
+                         "19h05 — maj HANDOFF.md contexte session + prochaines actions PC-SYLVAIN",
+                         "19h05 — maj COLLEGUE.md decisions ARIA 2026-06-20 (mono-PC, Gem Crush, DDG)"
+                     ]
+}

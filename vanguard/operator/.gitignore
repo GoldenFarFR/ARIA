@@ -1,0 +1,21 @@
+.render-api-key
+.ionos-api-key
+stripe/recovery-codes.txt
+*.log
+deploy-log.jsonl
+production.env
+local.env
+vanguard.env
+
+# Belt-and-suspenders for secrets
+.env
+.env.*
+!.env.example
+!*.env.example
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

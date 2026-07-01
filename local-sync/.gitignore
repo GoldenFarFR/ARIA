@@ -1,0 +1,28 @@
+# Secrets — JAMAIS dans ce repo (coffre Syncthing / .gfv)
+**/*.env
+**/.env
+**/vault/**
+!sync/vault/
+!sync/vault/README.md
+**/keys/**
+**/*api-key*
+**/*api_key*
+**/auth.json
+**/auth.json.lock
+**/stripe/**
+*.gfv
+!sync/vault/*.gfv
+*.pem
+*.key
+.vault-sync-passphrase.txt
+.vault-totp-secret
+.vault-master-secret
+
+# Binaires / caches
+**/__pycache__/**
+**/*.pyc
+**/.DS_Store
+Thumbs.db
+
+# Gros fichiers métier (optionnel — décommenter si Excel trop lourd)
+# sync/metier/**/*.xlsx

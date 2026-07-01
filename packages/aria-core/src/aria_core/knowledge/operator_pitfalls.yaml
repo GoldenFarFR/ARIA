@@ -1,0 +1,169 @@
+# Operator pitfalls — lessons from real incidents. SSOT for ARIA + IDE agents.
+# Sync to canonical_facts on material changes. Curator: IDE assistant.
+
+pitfalls:
+  - id: env-sync-no-redeploy
+    severity: critical
+    lesson: >
+      Mettre a jour une variable sur Render (sync-render) ne recharge PAS le process Python
+      deja en marche. /x status ou /github status peuvent afficher "non" alors que Render
+      a les bonnes valeurs.
+    fix: >
+      Toujours redeploy apres sync env. sync-render.ps1 et sync-vanguard.ps1 forcent
+      le redeploy depuis 2026-06-19. Sinon dashboard Render > Manual Deploy.
+    verify: "GET /api/health → aria_x.post_configured et aria_github.configured"
+    never: "Dire a l'operateur que c'est bon sans health check ou redeploy."
+
+  - id: x-keys-never-in-vault
+    severity: high
+    lesson: >
+      Les cles X OAuth ont longtemps ete vides dans production.env alors qu'un tweet
+      existait sur @Aria_ZHC (post manuel ou automation compte, pas API backend).
+    fix: >
+      4 cles OAuth + optionnel Bearer dans production.env → sync-render.ps1.
+      /x status doit afficher Publication oui + verification @Aria_ZHC.
+    verify: "/x status sur Telegram ou check-aria-status.ps1"
+    never: "Confondre tweet visible sur X avec API connectee au backend."
+
+  - id: comms-posted-false-positive
+    severity: medium
+    lesson: >
+      comms_skill renvoyait posted:true pour un brouillon X (pas d'URL status).
+    fix: "posted:true seulement si reponse contient x.com/.../status/"
+    verify: "test_comms_skill_x.py"
+    never: "Annoncer publication X sans URL de tweet ou preuve skill."
+
+  - id: llm-fake-deploy
+    severity: critical
+    lesson: >
+      LLM libre inventait commits et deploys sans action GitHub reelle.
+    fix: >
+      holding_site skill execute + technical_claims reject_fake_technical_success.
+      Phrases type « lancer le site holding » ou patch Vanguard = skill GitHub verifie.
+    verify: "Lien commit GitHub dans reponse skill, pas projection LLM."
+    never: "Succes commit/deploy sans github_commit_sha ou audit_complete dans data skill."
+
+  - id: local-bot-stale-env
+    severity: medium
+    lesson: >
+      backend/.env local sans X/GITHUB repondait avec de faux « cles manquantes »
+      si un bot Telegram local tournait en parallele du webhook Render.
+    fix: "sync-local.ps1 fusionne les secrets operateur depuis production.env"
+    verify: "Ne pas lancer uvicorn local avec le meme bot token que prod sans les memes secrets."
+    never: "Polling Telegram local + webhook prod sur le meme token."
+
+  - id: telegram-webhook-empty-ssl-api
+    severity: critical
+    lesson: >
+      SITE_BASE_URL=api.ariavanguardzhc.com avec SSL casse → webhook Telegram vide ou
+      livraison impossible. getWebhookInfo.url vide, ARIA ne repond plus.
+    fix: >
+      Fallback SITE_BASE_URL sur URL Render (test-1-nwf2.onrender.com), setWebhook manuel
+      ou redeploy, puis sync-render.ps1. Repasser sur api.* quand DNS+SSL verifies.
+    verify: "getWebhookInfo.url non vide + POST /api/telegram/webhook → 200"
+    never: "Laisser SITE_BASE_URL sur un domaine dont /api/health echoue en SSL."
+
+  - id: telegram-webhook-redeploy-race
+    severity: critical
+    lesson: >
+      Au redeploy Render, l'ancienne instance appelait delete_webhook au shutdown — apres que la
+      nouvelle ait setWebhook → getWebhookInfo.url vide, ARIA muette malgre health OK.
+    fix: >
+      aria-core: ne plus delete_webhook dans stop_telegram_bot ; setWebhook manuel si besoin ;
+      pin aria-core + redeploy aria-vanguard.
+    verify: "getWebhookInfo.url = test-1-nwf2.onrender.com/... + pending_update_count = 0"
+    never: "Redeployer sans verifier getWebhookInfo apres — health aria_telegram ne suffit pas."
+
+  - id: telegram-avatar-flood-control
+    severity: medium
+    lesson: >
+      setMyProfilePhoto Telegram a un flood control strict — X peut reussir pendant que
+      Telegram echoue (RetryAfter). L'ancien code affichait toujours ✅.
+    fix: >
+      Attendre le delai indique puis /avatar apply. Messages honnetes Telegram ✅/— + erreur.
+    verify: "/avatar apply affiche statut reel ; X ✅ et Telegram — si flood actif"
+    never: "Annoncer sync Telegram OK sans verifier le retour apply_avatar_sync."
+
+  - id: secrets-not-in-git
+    severity: high
+    lesson: >
+      production.env et local.env ne doivent jamais etre commites. Coffre = %LOCALAPPDATA%\\GoldenFar\\vault.
+    fix: "aria-vanguard/operator sur chaque PC + cle Render dans coffre + git pull avant session"
+    verify: "check-aria-status.ps1 aligne Render vs production.env"
+    never: "Coller des tokens dans un repo public ou dans le chat sans rotation apres."
+
+  - id: render-pipeline-minutes-exhausted
+    severity: high
+    lesson: >
+      Chaque redeploy Render consomme ~2 min de quota pipeline (plan free). Plusieurs sync-render
+      d'affilee epuisent le mois — build_failed instantane (pipeline_minutes_exhausted), prod reste
+      sur l'ancien commit.
+    fix: >
+      build-local.ps1 apres chaque changement code ; deploy-render.ps1 -Reason "..." une seule fois
+      quand le lot est pret. Ne pas relancer sync-render si le dernier deploy a echoue sur quota.
+    verify: "Render events pipeline_minutes_exhausted absent ; health commit = pin attendu"
+    never: "sync-render en rafale apres chaque petit commit ou pin."
+
+  - id: totp-telegram-disabled
+    severity: high
+    lesson: >
+      push-session-manifest -ViaAria ou GOLDENFAR_VAULT_TOTP_VIA_ARIA=1 attend 2 min Telegram
+      puis expire — inutile depuis TOTP IDE (chat Grok/Cursor).
+    fix: >
+      GOLDENFAR_VAULT_TOTP_VIA_ARIA=0 (defaut). Jamais -ViaAria. Code dans le chat → -TotpCode
+      ou $env:GOLDENFAR_VAULT_TOTP_CODE. totp_relay RELAY_ENABLED=false en aria-core.
+    verify: "Aucune notif Telegram 'Code GoldenFar Vault requis' ; push < 5 s"
+    never: "push-session-manifest -ViaAria ni reponse TOTP sur Telegram."
+
+  - id: chroma-vector-prod-premature
+    severity: medium
+    lesson: >
+      Activer aria_vector_memory sur Render sans tests locaux ni extra pip [vector] consomme
+      disque (~150 Mo modèle) et peut échouer silencieusement (ingest no-op).
+    fix: >
+      Local : pip install -e ".[dev,vector]", test-vector-memory.ps1 -EnableVector, puis
+      build-local avant deploy. Prod : flag false au premier deploy code-only.
+    verify: "vector_store_status available=true seulement en local testé"
+    never: "ARIA_VECTOR_MEMORY=true sur Render avant validation Phase C locale."
+
+  - id: local-build-before-deploy
+    severity: medium
+    lesson: >
+      Deploy Render sans validation locale gaspille les minutes pipeline et bloque la prod sur un
+      vieux SHA alors que GitHub a deja le nouveau code.
+    fix: >
+      operator/build-local.ps1 (pip + import + npm) puis deploy-render.ps1. CI GitHub = PR/manuel
+      seulement (pas push main) pour economiser Actions.
+    verify: "build-local OK + deploy-log.jsonl entree avec raison"
+    never: "Deployer sans build-local ni raison documentee dans deploy-render."
+
+new_pc_checklist:
+  - "git clone GoldenFarFR/collegue-memoire → %USERPROFILE%\\projets\\collegue-memoire"
+
+  - "git clone GoldenFarFR/aria-skills → projets\\aria-skills puis scripts\\install.ps1"
+  - "git clone GoldenFarFR/aria-sandbox, aria-vanguard, collegue-memoire"
+  - "Render API key dans coffre keys\\render.api-key"
+  - "pull-render.ps1 ou production.env deja rempli → check-aria-status.ps1"
+  - "Apres modif code prod : build-local.ps1 puis deploy-render.ps1 -Reason (1 redeploy groupe)"
+  - "Apres modif secret seule : deploy-render.ps1 -Reason ou sync-render -SkipRedeploy si quota epuise"
+
+  - id: stripe-webhook-whsec-not-api-key
+    severity: high
+    lesson: >
+      STRIPE_WEBHOOK_SECRET (whsec_) n'est pas une cle API. Il est genere par endpoint
+      dans Dashboard > Developers > Webhooks > Signing secret. Sans whsec_, le checkout
+      Stripe peut reussir mais l'abonnement DEXPulse Pro ne s'active pas (webhook 400).
+    fix: >
+      Creer endpoint HTTPS /api/billing/webhook avec les 4 events subscription/checkout.
+      Copier whsec_ dans coffre production.env → operator/sync-render.ps1.
+      Doc: aria-vanguard/operator/stripe/README.md.
+    verify: "GET /api/health → billing.stripe_webhook_configured=true"
+    never: "Confondre sk_test_ avec whsec_ ou melanger mode test et live."
+
+repos_ssot:
+  brain: GoldenFarFR/aria-sandbox/packages/aria-core
+  deploy_host: GoldenFarFR/aria-vanguard
+  operator_scripts: GoldenFarFR/aria-vanguard/operator
+  skills: GoldenFarFR/aria-skills
+  holding_site: GoldenFarFR/aria-vanguard
+  operator_memory: GoldenFarFR/collegue-memoire

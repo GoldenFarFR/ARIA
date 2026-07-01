@@ -1,0 +1,4 @@
+# Genere localement par session-handoff.ps1 (racine repo seulement)
+/HANDOFF.md
+/SESSION-START.md
+sessions/*/handoff-state.json

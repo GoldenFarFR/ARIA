@@ -1,0 +1,63 @@
+# aria-local-sync — ce qui vit hors les repos code GoldenFar
+# SSOT multi-PC : git pull / collect-local / apply-local
+
+version: 1
+
+# Coffre : export CHIFFRE uniquement (sync/vault/goldenfar-vault.gfv)
+vault_encrypted:
+  root: sync/vault
+  file: goldenfar-vault.gfv
+  contains:
+    - production.env
+    - local.env
+    - vanguard.env
+    - keys/render.api-key
+    - keys/ionos.api-key
+    - stripe/recovery-codes.txt
+  passphrase: Bitwarden ou GOLDENFAR_VAULT_SYNC_PASS
+
+never_sync_plaintext:
+  - production.env
+  - local.env
+  - vanguard.env
+  - keys/render.api-key
+  - keys/ionos.api-key
+  - stripe/recovery-codes.txt
+  - X_* tokens
+  - LLM_API_KEY
+  - GITHUB_TOKEN
+  - TELEGRAM_BOT_TOKEN
+
+# Mémoire ARIA (DATA_DIR) — safe pour Git privé
+aria_data:
+  root: sync/aria-data
+  targets:
+    - aria.db
+    - tweet_compose_intel.json
+    - tweet_compose_workflow.json
+    - x_handle_registry.json
+    - calibration_ledger.json
+    - qi_judge_calibration.json
+    - canonical_promotions.json
+    - curriculum_state.json
+    - cultivation_curriculum_state.json
+    - app_idea_poll_state.json
+    - directives/operator.md
+    - memory/
+    - truth-ledger/
+    - aria/avatar/
+
+# Config IDE (pas de tokens)
+ide:
+  cursor_rules: sync/ide/cursor-rules
+  grok_rules: sync/ide/grok-rules
+
+# Fichiers métier Sylvain (hors GitHub produit)
+metier:
+  ddc_excel: sync/metier/ddc
+
+# Prod Render : DATA_DIR=/app/backend/data — pas sur le PC sauf export manuel
+prod_note: >
+  La mémoire cognitive prod tourne sur Render (aria-api).
+  Ce repo synchronise les PC locaux entre eux.
+  Après collect sur le PC le plus à jour, git push ; autre PC git pull + apply-local.

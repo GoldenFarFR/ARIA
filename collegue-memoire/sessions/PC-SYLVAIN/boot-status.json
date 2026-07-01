@@ -1,0 +1,11 @@
+{
+  "machine": "PC-SYLVAIN",
+  "at": "2026-06-20T21:08:26",
+  "is_new_pc": false,
+  "cloned_repos": [],
+  "has_vault_secrets": true,
+  "has_local_vault": true,
+  "bootstrap_ran": false,
+  "bootstrap_error": null,
+  "agent_next": "Lire HANDOFF.md + COLLEGUE.md — continuer la demande Sylvain"
+}

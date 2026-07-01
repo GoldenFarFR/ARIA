@@ -1,0 +1,83 @@
+{
+  "machine": "PC-SYLVAIN",
+  "user": "Studi",
+  "public_ip": "87.88.186.179",
+  "session_id": "019ee66e-8af6-72e2-a6b7-ae2804150bf4",
+  "collected_at": "2026-06-20T22:27:20",
+  "files_touched": [
+    "aria-local-sync/scripts/aria-cursor-bridge.ps1",
+    "aria-sandbox/packages/aria-core/src/aria_core/gateway/telegram_bot.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/gateway/x_engagement.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/gateway/x_twitter.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/heartbeat.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/skills/capability_skill.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/skills/comms_skill.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/skills/github_skill.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/testing.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/tweet_compose_workflow.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/x_publication_policy.py",
+    "aria-sandbox/packages/aria-core/src/aria_core/x_voice.py",
+    "aria-sandbox/packages/aria-core/tests/test_truth_ledger.py",
+    "aria-sandbox/packages/aria-core/tests/test_tweet_compose_workflow.py",
+    "aria-sandbox/packages/aria-core/tests/test_x_engagement.py",
+    "aria-sandbox/packages/aria-core/tests/test_x_voice.py",
+    "aria-vanguard/backend/app/config.py",
+    "aria-vanguard/backend/requirements.txt",
+    "aria-vanguard/operator/deploy-vector-memory.ps1",
+    "aria-vanguard/operator/production.env.example",
+    "aria-vanguard/operator/sync-local.ps1",
+    "C:\\Users\\Studi\\.cursor\\rules\\aria-cursor-bridge.md",
+    "C:\\Users\\Studi\\.grok\\skills\\aria-cursor-bridge\\SKILL.md",
+    "collegue-memoire/sessions/aria-cursor-bridge.jsonl"
+  ],
+  "files_touched_total": 24,
+  "repos_in_session": [
+    "aria-local-sync",
+    "aria-sandbox",
+    "aria-vanguard",
+    "collegue-memoire"
+  ],
+  "repos_status": [
+    {
+      "repo": "aria-vanguard",
+      "commit": "1793eab",
+      "message": "ops(x): Option A env flags ÔÇö likes off, X read loops disabled",
+      "dirty": true
+    },
+    {
+      "repo": "aria-sandbox",
+      "commit": "5f618262",
+      "message": "feat(x): human voice profile ÔÇö no AI agent character tropes",
+      "dirty": true
+    },
+    {
+      "repo": "collegue-memoire",
+      "commit": "df615d0",
+      "message": "journal: desactive TOTP Telegram",
+      "dirty": true
+    },
+    {
+      "repo": "aria-local-sync",
+      "commit": "f08f3e3",
+      "message": "feat(bridge): pont ARIA-Cursor 3 voix vers API locale",
+      "dirty": true
+    }
+  ],
+  "journal_tail": [
+    "21h05 — desactive TOTP Telegram bbfc827c d7ff2fc f06c0ca",
+    "21h09 — handoff OK TOTP session Git 12h PC-SYLVAIN",
+    "21h13 — test vector memory local OK + bump pin bbfc827 chromadb requirements",
+    "21h18 — fix test_truth_ledger isolation + build-local 337 pass deploy bloque quota Render",
+    "21h19 — active ARIA_VECTOR_MEMORY=true local.env vault + sync-local",
+    "21h21 — lance uvicorn local 127.0.0.1:8000 ARIA_VECTOR_MEMORY=true",
+    "21h29 — local ARIA mode operateur ARIA_PUBLIC_MODE=false ACCESS_CODE_ENABLED=false",
+    "21h34 — impl pont aria-cursor-bridge skill + script + jsonl",
+    "21h40 — deploy-vector-memory.ps1 pret — deploy Render bloque quota pipeline",
+    "21h48 — bridge tweet EN anglais Ollama OK + fix pont message seul",
+    "21h56 — valide tweet X EN + bridge ARIA (x compose bloque)",
+    "21h59 — fix x-compose prevalidated + media X aria-core",
+    "22h15 — Option A X prod env sync (likes/curiosity/mentions off)",
+    "22h16 — publie tweet X built-in-public + capture GitHub",
+    "22h25 — feat x_voice humain sans tics IA aria-core"
+  ]
+}

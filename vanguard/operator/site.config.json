@@ -1,0 +1,27 @@
+{
+    "renderServiceId": "srv-d8pbu6ok1i2s73f1ckv0",
+    "renderServiceName": "aria-api",
+    "vanguardRepoPath": "..",
+    "siteBaseUrl": "https://test-1-nwf2.onrender.com",
+    "vanguardRepo": "GoldenFarFR/aria-vanguard",
+    "vanguardRenderServiceName": "aria-vanguard",
+    "vanguardRenderBaseUrl": "https://aria-vanguard.onrender.com",
+    "renderBaseUrl": "https://test-1-nwf2.onrender.com",
+    "privyAppId": "cmqidekpm006u0ckzp2zuq7dd",
+    "sandboxRepo": "GoldenFarFR/aria-sandbox",
+    "tokenRepo": "GoldenFarFR/aria-token-base",
+    "holdingSites": {
+        "kikou": {
+            "repo": "GoldenFarFR/kikou",
+            "branch": "master",
+            "renderServiceId": "srv-d8pu4fernols73bo75m0",
+            "renderServiceName": "kikou",
+            "renderBaseUrl": "https://kikou-9z7a.onrender.com"
+        }
+    },
+    "holdingApiDomain": "api.ariavanguardzhc.com",
+    "holdingApiUrl": "https://test-1-nwf2.onrender.com",
+    "holdingDomain": "ariavanguardzhc.com",
+    "holdingSiteUrl": "https://ariavanguardzhc.com",
+    "vanguardRenderServiceId": "srv-d8petr6gvqtc7394u5ig"
+}

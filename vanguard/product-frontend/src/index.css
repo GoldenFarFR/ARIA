@@ -1,0 +1,261 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "VT323", "Courier New", monospace;
+  --font-display: "Press Start 2P", monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-surface: #0a0a0c;
+  --color-surface-raised: #121214;
+  --color-panel: #141416;
+  --color-panel-elevated: #1c1c1f;
+  --color-panel-hover: #222226;
+  --color-border: #2e2e34;
+  --color-border-bright: #4a4a52;
+
+  --color-accent: #5bffa8;
+  --color-accent-dim: #2dd47e;
+  --color-terminal: #c8f0d8;
+  --color-violet: #a78bfa;
+  --color-violet-dim: #7c3aed;
+  --color-buy: #5bffa8;
+  --color-sell: #ff6b6b;
+  --color-watch: #ffd166;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+html,
+body,
+#root {
+  min-height: 100vh;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 20px;
+  line-height: 1.35;
+  background: var(--color-surface);
+  color: #d8d4cc;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: unset;
+  text-rendering: geometricPrecision;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  line-height: 1.5;
+}
+
+.font-terminal {
+  font-family: var(--font-sans);
+}
+
+/* ── Pixel canvas (Bankr-inspired terminal) ── */
+.pixel-canvas {
+  position: relative;
+  background-color: #0a0a0c;
+  background-image:
+    linear-gradient(rgba(91, 255, 168, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(91, 255, 168, 0.03) 1px, transparent 1px);
+  background-size: 8px 8px;
+  image-rendering: pixelated;
+}
+
+.pixel-canvas::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.04;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.4) 2px,
+    rgba(0, 0, 0, 0.4) 4px
+  );
+}
+
+.pixel-canvas img {
+  image-rendering: pixelated;
+}
+
+.pixel-header {
+  background: #0e0e10;
+  border-bottom: 2px solid var(--color-border-bright);
+  box-shadow: 0 4px 0 #000;
+}
+
+.pixel-panel {
+  background: var(--color-panel);
+  border: 2px solid var(--color-border-bright);
+  box-shadow: 4px 4px 0 #000;
+  border-radius: 0;
+}
+
+.pixel-panel-inset {
+  background: #0c0c0e;
+  border: 2px solid var(--color-border);
+  box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.5);
+  border-radius: 0;
+}
+
+.pixel-btn {
+  font-family: var(--font-sans);
+  font-size: 18px;
+  background: var(--color-panel-elevated);
+  border: 2px solid var(--color-border-bright);
+  color: #c8c4bc;
+  box-shadow: 3px 3px 0 #000;
+  border-radius: 0;
+  transition: transform 0.05s ease, box-shadow 0.05s ease, background 0.1s;
+}
+
+.pixel-btn:hover {
+  background: var(--color-panel-hover);
+  color: var(--color-terminal);
+}
+
+.pixel-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #000;
+}
+
+.pixel-btn-active {
+  background: rgba(91, 255, 168, 0.12);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  box-shadow: 3px 3px 0 #000, inset 0 0 12px rgba(91, 255, 168, 0.08);
+}
+
+.pixel-btn-primary {
+  background: rgba(91, 255, 168, 0.15);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.pixel-input {
+  font-family: var(--font-sans);
+  font-size: 20px;
+  background: #0c0c0e;
+  border: 2px solid var(--color-border-bright);
+  color: var(--color-terminal);
+  border-radius: 0;
+  box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.4);
+}
+
+.pixel-input::placeholder {
+  color: #5a5a62;
+}
+
+.pixel-input:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.4), 0 0 0 1px var(--color-accent);
+}
+
+.pixel-label {
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  color: var(--color-accent);
+  text-transform: uppercase;
+}
+
+.pixel-blink::after {
+  content: "▌";
+  animation: pixel-blink 1s step-end infinite;
+  color: var(--color-accent);
+  margin-left: 2px;
+}
+
+@keyframes pixel-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes star-waiting-spin {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.12); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+.star-waiting {
+  animation: star-waiting-spin 5s ease-in-out infinite;
+  filter: drop-shadow(0 0 8px rgba(255, 209, 102, 0.55));
+}
+
+.star-watched {
+  filter: drop-shadow(0 0 10px rgba(255, 209, 102, 0.75));
+}
+
+.text-gradient-brand {
+  color: var(--color-accent);
+  text-shadow: 0 0 20px rgba(91, 255, 168, 0.35);
+}
+
+.shadow-panel {
+  box-shadow: 4px 4px 0 #000;
+}
+
+.focus-ring {
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5bffa8]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c];
+}
+
+.skeleton {
+  background: repeating-linear-gradient(
+    90deg,
+    #1c1c1f 0px,
+    #1c1c1f 4px,
+    #242428 4px,
+    #242428 8px
+  );
+  animation: skeleton-blink 0.8s steps(2) infinite;
+}
+
+@keyframes skeleton-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Force pixel corners inside app shell */
+.pixel-canvas .rounded-xl,
+.pixel-canvas .rounded-2xl,
+.pixel-canvas .rounded-3xl,
+.pixel-canvas .rounded-lg {
+  border-radius: 0 !important;
+}
+
+.pixel-canvas .rounded-full {
+  border-radius: 0 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .skeleton,
+  .pixel-blink::after { animation: none; }
+  .pixel-canvas::after { display: none; }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-bright);
+  border: 2px solid #0a0a0c;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0c;
+}
