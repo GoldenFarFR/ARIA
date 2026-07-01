@@ -172,6 +172,43 @@ new_pc_checklist:
     verify: "GET /api/health → billing.stripe_webhook_configured=true"
     never: "Confondre sk_test_ avec whsec_ ou melanger mode test et live."
 
+  - id: acp-keychain-local-only
+    severity: high
+    lesson: >
+      acp-cli stocke OAuth + signers dans le keychain OS (Windows Credential Manager).
+      Render/prod n'a pas acces a ce keychain — ARIA prod ne peut pas executer acp directement.
+    fix: >
+      Sidecar local : vanguard/operator/acp-events-listener.ps1 + heartbeat acp_provider_poll.
+      Env : ARIA_ACP_PROVIDER_ENABLED=true, ARIA_ACP_EVENTS_FILE=%LOCALAPPDATA%\GoldenFar\acp-events.jsonl.
+      Ne pas utiliser openclaw-acp (deprecie) — @virtuals-protocol/acp-cli uniquement.
+    verify: "Telegram « acp status » → agent + offerings ; health aria_acp.cli_available"
+    never: "Annoncer marketplace ACP actif sans listener + test job submit."
+
+  - id: acp-events-listen-v2-500
+    severity: medium
+    lesson: >
+      acp events listen (v2 seul) peut crasher avec Server error 500 (viem) cote Virtuals.
+      acp job list peut echouer pareil. Legacy socket connecte souvent.
+    fix: >
+      vanguard/operator/acp-events-listener.ps1 -Mode legacy (defaut).
+      Si v2 revient : -Mode v2 ou all. Verifier acp-listener.log.err.
+    verify: "acp events listen --legacy → Listening for events... connected."
+    never: "Laisser le listener v2 en boucle de crash sans basculer legacy."
+
+  - id: secrets-via-vault-not-inline
+    severity: critical
+    lesson: >
+      Ne jamais ecrire de secrets en clair dans backend/.env, le chat Cursor, ou le code.
+      SSOT = coffre (%LOCALAPPDATA%\GoldenFar\vault\production.env) et notes perso
+      (secure-keys\config\secure\*.txt). Propagation via scripts (sync-local, sync-render).
+    fix: >
+      import-secure-x-keys.ps1 pour X ; puis sync-local.ps1 (dev) et sync-render.ps1 (prod).
+      Variables: GOLDENFAR_VAULT, SECURE_KEYS_ROOT.
+    verify: "check-aria-status.ps1 — cles presentes, valeurs non affichees"
+    never: >
+      Copier-coller bearerToken/apiKey dans .env ou dans le chat ; dupliquer manuellement
+      les memes secrets dans plusieurs fichiers.
+
 repos_ssot:
   brain: GoldenFarFR/aria-sandbox/packages/aria-core
   deploy_host: GoldenFarFR/aria-vanguard
