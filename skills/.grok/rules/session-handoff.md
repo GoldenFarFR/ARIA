@@ -1,16 +1,12 @@
 # Mandatory — session handoff multi-PC (always on)
 
-Skill SSOT : `aria-skills/.grok/skills/session-handoff/SKILL.md`
+Skill SSOT : `skills/.grok/skills/session-handoff/SKILL.md`
 
-**operateur ne dit rien au demarrage** — handoff 100 % agent.
+**Avant toute réponse** :
 
-**Avant toute reponse** :
+1. `%ARIA_REPO_ROOT%\local-sync\scripts\session-handoff.ps1`
+2. Lire `collegue-memoire/sessions/HANDOFF.md` + `SESSION-START.md` + `boot-status.json`
+3. Lire `collegue-memoire/COLLEGUE.md` + `JOURNAL.md` + `CONSOMMATION-GROK.md`
+4. Lire `sessions/ARIA-WORKER.md` — traiter `[pending]`
 
-1. `projets\aria-local-sync\scripts\session-handoff.ps1` (ensure-pc-ready inclus)
-2. Lire `HANDOFF.md` + `SESSION-START.md` + `boot-status.json` + `COLLEGUE.md` + `JOURNAL.md`
-3. Nouveau PC : Bitwarden x2 si manquant, sinon bootstrap auto
-4. Resumer delta puis repondre
-
-Triggers optionnels : « lis le github », « met toi a jour », « autre PC ».
-
-Fin session : `collect-session.ps1` + `push-session-manifest.ps1`.
+Fin session : `collect-session.ps1` + `push-session-manifest.ps1`
