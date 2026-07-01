@@ -2,7 +2,7 @@
 
 > Mis a jour par collect-session.ps1 + resume session. Grok Build lit ce fichier au demarrage.
 
-Derniere regeneration : 2026-07-01T23:32 (fin session PC-SYLVAIN — push main 975d69a)
+Derniere regeneration : 2026-07-01T23:45 (Phase I deploy prod — commit 20864ae)
 
 **Mono-PC** : **PC-SYLVAIN seul** — plus d'autre machine (Sylvain 2026-06-20). Handoff = sync GitHub + journal, pas de delta « autre PC ».
 
@@ -21,8 +21,8 @@ Derniere regeneration : 2026-07-01T23:32 (fin session PC-SYLVAIN — push main 9
 | G reflection | **done** | `a970bd7` (`reflection.py` + `reflections.jsonl`) |
 | H arbitrator | **done** | local (`arbitrator.py` + `aria_arbitrator.yaml`) |
 
-Prod : `aria_vector_memory=false`, `aria_ddg_search_cache=false` (defaut safe).  
-**Suite** : deploy Render si quota OK (Gem Crush live encore sur ancien pin). Local : Ollama qwen2.5:14b + super memoire ON.
+Prod : **deploye** `20864ae` — `aria_core_build=92bf562` (memoire E-H). Flags safe : `aria_vector_memory=false`, `aria_ddg_search_cache=false`.  
+**Suite Phase I** : activer flags prod un par un apres smoke. **Phase J** : Kelly App Factory.
 
 SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
@@ -35,7 +35,7 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 | **Machine** | **PC-SYLVAIN seul** — plus d'autre PC (confirmé Sylvain 2026-06-20) |
 | **IP PC-SYLVAIN** | 87.88.186.179 (etait 89.85.240.85) |
 | **Repos** | 6 actifs, **tous PRIVATE** : aria-vanguard, aria-sandbox, collegue-memoire, aria-local-sync, aria-skills, template-grok-cursor |
-| **aria-core pin prod** | `5a78c1c1` — revert Tavily, **DuckDuckGo seul** (cerveau 100 % gratuit) |
+| **aria-api Render** | Repo **GoldenFarFR/ARIA** monorepo (`vanguard/Dockerfile`) — commit prod `20864ae` |
 | **Gem Crush** | **Retiré** (2026-07-01) — supprimé du monorepo local, pas de push sans validation |
 | **ARIA-WORKER** | Aucun `[pending]` — v37, v41, triage issues, assets sprint = `[done]` |
 | **Handoff TOTP** | `.vault-totp-secret` invalide sur PC-SYLVAIN — utiliser `-SkipGitGate` ou corriger depuis Bitwarden |

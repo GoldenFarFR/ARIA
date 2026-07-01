@@ -244,3 +244,6 @@
 23h23 — vector local active — 33 docs Chroma, recall LLM OK
 23h28 — optimize Ollama local qwen2.5:14b — PC 8Go VRAM
 23h30 — git push origin main 5a52b07 — 10 commits (Gem Crush + memoire F-H + Ollama)
+23h32 — fin session — collect/push handoff 92bf562
+23h41 — Phase I deploy prod 20864ae aria_core 92bf562 repoint monorepo ARIA
+23h41 — sync-render 60 vars ARIA_VECTOR_MEMORY=false prod safe
