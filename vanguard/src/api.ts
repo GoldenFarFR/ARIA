@@ -73,6 +73,38 @@ export async function agentChat(message: string) {
   return res.json()
 }
 
+export interface CommunityFeedbackResult {
+  ok: boolean
+  reply: string
+  queued?: boolean
+  score?: number
+  verdict?: string
+}
+
+export async function submitCommunityFeedback(
+  message: string,
+  handle?: string,
+): Promise<CommunityFeedbackResult> {
+  let res: Response
+  try {
+    res = await apiFetch('/aria/community-feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, handle: handle ?? '', lang: 'en' }),
+      signal: AbortSignal.timeout(20_000),
+    })
+  } catch {
+    throw new Error('API unavailable — please try again in a moment.')
+  }
+  const data = (await res.json().catch(() => ({}))) as CommunityFeedbackResult & {
+    detail?: string
+  }
+  if (!res.ok) {
+    throw new Error(data.detail || 'Could not send — please try again later.')
+  }
+  return data
+}
+
 export async function getHoldingStructure(): Promise<HoldingStructure> {
   const res = await apiFetch('/aria/holding')
   if (!res.ok) throw new Error('Holding structure unavailable')

@@ -10,6 +10,9 @@ export function setMemberProfile(profile: MemberProfile): void {
   try {
     sessionStorage.setItem(PROFILE_KEY, JSON.stringify(profile))
     sessionStorage.removeItem(WELCOME_DISMISSED_KEY)
+    if (profile.handle) {
+      localStorage.setItem('aria:member-handle', profile.handle.replace(/^@/, ''))
+    }
   } catch {
     /* ignore */
   }
