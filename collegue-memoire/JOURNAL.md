@@ -240,3 +240,4 @@
 23h05 — Phase F goals aria_goals.yaml + memory/goals.py local
 23h11 — commit Phase G reflection a970bd7 — 318 tests OK
 23h11 — smoke test-vector-memory.ps1 vector=true OK post-G
+23h18 — feat Phase H memory arbitrator — 326 tests OK

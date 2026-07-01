@@ -19,9 +19,10 @@ Derniere regeneration : 2026-07-01T22:54 (session PC-SYLVAIN — handoff tout)
 | E values | **done** | `d91c33e` (`aria_values.yaml` + `memory/values.py`) |
 | F goals | **done** | local (`aria_goals.yaml` + `memory/goals.py`) |
 | G reflection | **done** | `a970bd7` (`reflection.py` + `reflections.jsonl`) |
+| H arbitrator | **done** | local (`arbitrator.py` + `aria_arbitrator.yaml`) |
 
 Prod : `aria_vector_memory=false`, `aria_ddg_search_cache=false` (defaut safe).  
-**Suite** : push local (Gem Crush `844795c` + Phases F `28c5b6d` + G `a970bd7`) quand Sylvain dit « push » ; deploy Render si quota OK.
+**Suite** : push local (Gem Crush + Phases F–H) quand Sylvain dit « push » ; deploy Render si quota OK.
 
 SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
