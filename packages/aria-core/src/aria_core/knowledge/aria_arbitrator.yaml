@@ -1,0 +1,49 @@
+# Arbitre mémoire ARIA — Phase H (SSOT)
+version: 1
+
+# Priorité décroissante : le plus haut gagne en cas de conflit
+layers:
+  - id: directive
+    label: Directives opérateur
+    tier: short
+    priority: 100
+  - id: truth_ledger
+    label: Truth ledger / faits canoniques
+    tier: long
+    priority: 90
+  - id: cognitive
+    label: Connaissances approuvées
+    tier: long
+    priority: 80
+  - id: values
+    label: Valeurs opérationnelles
+    tier: medium
+    priority: 70
+  - id: goals
+    label: Objectifs opérationnels
+    tier: medium
+    priority: 65
+  - id: reflection
+    label: Réflexions
+    tier: medium
+    priority: 60
+  - id: journal
+    label: Journal épisodique
+    tier: medium
+    priority: 50
+  - id: vector
+    label: Rappel vectoriel
+    tier: long
+    priority: 40
+  - id: conversation
+    label: Messages récents
+    tier: short
+    priority: 30
+
+max_snippets_per_layer: 6
+log_decisions: true
+budget_chars: 1200
+
+ruling_fr: >
+  En cas de contradiction, l'arbitre applique la hiérarchie ci-dessus.
+  Les snippets de priorité basse sont supprimés du contexte injecté.

@@ -29,6 +29,14 @@ from aria_core.memory.journal import (
     read_recent,
 )
 from aria_core.memory.llm_context import fetch_vector_recall, sanitize_recall_text
+from aria_core.memory.arbitrator import (
+    ArbitrationResult,
+    MemorySnippet,
+    clear_arbitrator_cache,
+    get_arbitration_text,
+    is_arbitrator_enabled,
+    run_memory_arbitration,
+)
 from aria_core.memory.goals import get_goals_text, goals_count
 from aria_core.memory.reflection import (
     append_reflection,
@@ -50,9 +58,12 @@ __all__ = [
     "MEMORY_DIR",
     "KnowledgeItem",
     "add_knowledge",
+    "ArbitrationResult",
+    "MemorySnippet",
     "append",
     "append_memory",
     "append_reflection",
+    "clear_arbitrator_cache",
     "approve_knowledge",
     "build_context_summary",
     "build_llm_context",
@@ -67,8 +78,11 @@ __all__ = [
     "get_launchpad_doctrine_text",
     "get_pending",
     "get_persona_text",
+    "get_arbitration_text",
     "get_goals_text",
     "get_reflections_text",
+    "is_arbitrator_enabled",
+    "run_memory_arbitration",
     "get_values_text",
     "goals_count",
     "read_explicit_reflections",
