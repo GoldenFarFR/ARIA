@@ -42,6 +42,12 @@ class KnowledgeCreateRequest(BaseModel):
     approved: bool = True
 
 
+class CommunityFeedbackRequest(BaseModel):
+    message: str = Field(..., min_length=8, max_length=2000)
+    handle: str = Field(default="", max_length=64)
+    lang: str = Field(default="en", max_length=8)
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(body: ChatRequest, request: Request):
     if not body.message.strip():
@@ -64,6 +70,30 @@ async def chat(body: ChatRequest, request: Request):
         body.message.strip(),
         visitor_id=visitor_id,
         public_mode=is_public_mode(),
+    )
+
+
+@router.post("/community-feedback")
+async def community_feedback(body: CommunityFeedbackRequest, request: Request):
+    """Avis communauté site — ARIA trie et file l'ouvrier si l'idée vaut le coup."""
+    from aria_core.community_feedback import submit_community_feedback
+
+    visitor_id = resolve_visitor_id(request)
+    allowed = check_rate_limit(
+        f"community_fb:{visitor_id}",
+        max_attempts=8,
+        window_seconds=3600,
+    )
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Rate limit — réessaie dans une heure.")
+
+    lang = "fr" if body.lang.lower().startswith("fr") else "en"
+    return await submit_community_feedback(
+        body.message.strip(),
+        handle=body.handle.strip(),
+        visitor_id=visitor_id,
+        source="vanguard_site",
+        lang=lang,
     )
 
 

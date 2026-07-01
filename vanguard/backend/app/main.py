@@ -183,6 +183,11 @@ async def health():
             "enabled": settings.aria_llm_enabled,
             "provider_configured": bool(settings.llm_api_key.strip()),
         },
+        "aria_acp": {
+            "cli_available": __import__("shutil").which("acp") is not None,
+            "provider_enabled": settings.aria_acp_provider_enabled,
+            "events_file_configured": bool((settings.aria_acp_events_file or "").strip()),
+        },
         "billing": {
             "stripe_configured": bool(
                 settings.stripe_secret_key.strip() and settings.stripe_price_id.strip()
