@@ -35,33 +35,30 @@ export function FaqSection() {
 
   if (!loading && !items.length) return null
 
+  const visible = items.slice(0, 4)
+
   return (
-    <section id="faq" className="relative py-24 md:py-28 border-t border-[#c9a962]/10">
-      <div className="max-w-3xl mx-auto px-5">
-        <div className="text-center mb-12">
-          <p className="section-label mb-4 flex items-center justify-center gap-2">
-            <HelpCircle className="w-4 h-4 text-[#c9a962]" />
-            FAQ
-          </p>
-          <h2 className="font-display font-semibold text-3xl md:text-4xl text-[#f4efe6] mb-4 tracking-wide">
-            Answers from ARIA
-          </h2>
-          <p className="text-[#6b665c] text-sm max-w-md mx-auto font-light">
-            Structured knowledge maintained by the project&apos;s autonomous intelligence.
-          </p>
-        </div>
+    <section id="faq" className="page-shell py-16 md:py-20 border-t border-[#c9a962]/8">
+      <div>
+        <p className="section-label mb-3 flex items-center gap-2">
+          <HelpCircle className="w-3.5 h-3.5 text-[#c9a962]" />
+          FAQ
+        </p>
+        <h2 className="font-display text-2xl text-[#f4efe6] mb-8 tracking-wide">
+          Essentials
+        </h2>
 
         {loading ? (
           <FaqSkeleton />
         ) : (
           <div className="space-y-2">
-            {items.map((item) => {
+            {visible.map((item) => {
               const open = openId === item.id
               const panelId = `faq-panel-${item.id}`
               return (
                 <div
                   key={item.id}
-                  className="glass-vanguard rounded-sm overflow-hidden card-vanguard-hover"
+                  className="minimal-card overflow-hidden"
                 >
                   <button
                     type="button"

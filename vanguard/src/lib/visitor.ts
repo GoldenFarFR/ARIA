@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'aria_market_visitor_id'
+const STORAGE_KEY = 'aria_vanguard_visitor_id'
 
 function randomId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {

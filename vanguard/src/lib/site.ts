@@ -2,8 +2,7 @@ export const HOLDING_DOMAIN = 'ariavanguardzhc.com'
 export const HOLDING_SITE_URL = `https://${HOLDING_DOMAIN}`
 export const HOLDING_NAME = 'Aria Vanguard ZHC'
 
-/** Aria Market product URL — hosted under the holding API */
-/** API + app produit â€” hÃ©bergÃ© sous la holding (api.ariavanguardzhc.com) */
+/** API holding (chat, FAQ, feedback communauté) */
 export const PRODUCT_URL =
   import.meta.env.VITE_PRODUCT_URL ?? 'https://api.ariavanguardzhc.com'
 
