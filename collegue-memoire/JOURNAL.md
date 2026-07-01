@@ -241,3 +241,5 @@
 23h11 — commit Phase G reflection a970bd7 — 318 tests OK
 23h11 — smoke test-vector-memory.ps1 vector=true OK post-G
 23h18 — feat Phase H memory arbitrator — 326 tests OK
+23h23 — vector local active — 33 docs Chroma, recall LLM OK
+23h28 — optimize Ollama local qwen2.5:14b — PC 8Go VRAM
