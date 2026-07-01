@@ -41,6 +41,7 @@ class AriaRuntimeSettings(BaseSettings):
     image_api_key: str = ""
     image_api_model: str = "grok-imagine-image"
     ollama_base_url: str = "http://127.0.0.1:11434"
+    aria_ollama_num_ctx: int = 8192
 
     aria_email: str = ""
     aria_holding_name: str = "Aria Vanguard ZHC"
