@@ -103,6 +103,10 @@ async def run_visual_autonomy_cycle(
         if notify and out["banner"].get("uploaded"):
             await _notify_visual_update(out, lang=lang)
 
+    from aria_core.x_profile import sync_x_profile
+
+    out["profile"] = await sync_x_profile()
+
     return out
 
 

@@ -127,6 +127,20 @@ HEARTBEAT_TASKS = [
         enabled=True,
     ),
     HeartbeatTask(
+        id="x_profile_sync",
+        name="X profile sync",
+        description="Bio, site web et nom @Aria_ZHC alignés sur narrative Vanguard",
+        interval_minutes=1440,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="acp_provider_poll",
+        name="ACP provider poll",
+        description="Drain ACP events file and fulfill marketplace jobs (local acp-cli)",
+        interval_minutes=5,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="health_watch",
         name="Health regression watch",
         description="Ping /api/health — issue apres 3 echecs",
@@ -180,6 +194,18 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.visual_autonomy import visual_autonomy_enabled
 
             task.enabled = not visual_autonomy_enabled()
+        if task.id == "x_profile_sync":
+            from aria_core.gateway.x_twitter import is_x_post_configured
+
+            task.enabled = is_x_post_configured()
+        if task.id == "acp_provider_poll":
+            from aria_core.skills.acp_cli import is_acp_available
+
+            task.enabled = (
+                bool(getattr(settings, "aria_acp_provider_enabled", False))
+                and is_acp_available()
+                and bool((getattr(settings, "aria_acp_events_file", None) or "").strip())
+            )
 
 class AriaHeartbeat:
     def __init__(self) -> None:
@@ -378,6 +404,16 @@ class AriaHeartbeat:
             elif result.get("reason") == "no_identity_anchor":
                 append_memory("avatar", "[visual_autonomy] en attente ancre — photo /avatar")
 
+        elif task_id == "x_profile_sync":
+            from aria_core.x_profile import sync_x_profile
+
+            result = await sync_x_profile()
+            if result.get("synced"):
+                append_memory(
+                    "comms",
+                    f"[x_profile] heartbeat sync drift={result.get('drift')}",
+                )
+
         elif task_id == "self_banner_curiosity":
             from aria_core.self_maintenance import run_curiosity_x_banner_cycle
 
@@ -386,6 +422,26 @@ class AriaHeartbeat:
             notify_markers = ("Action bloquee", "Echec", "publiee", "bloquee")
             if any(m in summary for m in notify_markers):
                 await self._notify_telegram(f"Banniere X (curiosite 6h)\n\n{summary[:1500]}")
+
+        elif task_id == "acp_provider_poll":
+            from aria_core.skills.acp_provider_skill import run_provider_cycle
+            from aria_core.skills.acp_cli import is_acp_available
+
+            if not is_acp_available():
+                return
+            if not bool(getattr(settings, "aria_acp_provider_enabled", False)):
+                return
+            events_file = (getattr(settings, "aria_acp_events_file", None) or "").strip()
+            result = await run_provider_cycle(events_file or None)
+            if result.get("processed", 0) > 0:
+                append_memory(
+                    "acp",
+                    f"[heartbeat] provider poll — {result.get('processed')} events",
+                )
+                await self._notify_telegram(
+                    f"ACP provider — {result.get('processed')} job(s) traité(s)\n"
+                    f"Actions : {', '.join(result.get('actions') or [])}"
+                )
 
         elif task_id == "health_watch":
             from aria_core.health_watch import check_health_regression

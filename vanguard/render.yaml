@@ -54,7 +54,7 @@ services:
       - key: ARIA_X_HANDLE
         value: Aria_ZHC
       - key: SITE_BASE_URL
-        value: https://api.ariavanguardzhc.com
+        value: https://test-1-nwf2.onrender.com
       - key: HOLDING_DOMAIN
         value: ariavanguardzhc.com
       - key: CORS_ORIGINS

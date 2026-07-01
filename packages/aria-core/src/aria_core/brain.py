@@ -20,6 +20,7 @@ from aria_core.grounding import (
     has_sufficient_grounding,
     is_greeting,
     is_help_request,
+    community_suggestion_reply,
     is_social_chitchat,
     should_skip_llm_enhance,
     social_ack_reply,
@@ -40,6 +41,11 @@ from aria_core.skills.repertoire_skill import (
     wants_manage_repertoire,
 )
 from aria_core.skills.builder_skill import execute_build_optimize
+from aria_core.skills.community_worker_skill import (
+    execute_worker_delegate,
+    is_community_suggestion,
+    wants_worker_delegate,
+)
 from aria_core.skills.github_skill import (
     execute_github_sandbox,
     looks_like_repo_create,
@@ -54,6 +60,7 @@ from aria_core.skills.training_skill import execute_training, wants_training
 from aria_core.skills.entrepreneur_skill import execute_entrepreneur, wants_entrepreneur
 from aria_core.skills.capability_skill import execute_capability, wants_capability
 from aria_core.skills.zhc_bridge import execute_zhc_bridge
+from aria_core.skills.acp_client_skill import execute_acp_marketplace, wants_acp_marketplace
 from aria_core.identity import fix_handle_in_text, official_x_at, official_x_url, x_identity_prompt
 from aria_core.runtime import settings
 
@@ -163,7 +170,21 @@ def _is_strategic_conversation(message: str) -> bool:
     return bool(opinion and topic)
 
 
+def _routing_message(message: str) -> str:
+    """Pont Cursor : router sur le message actuel, pas tout le contexte jsonl."""
+    m = re.search(
+        r"Message actuel de (?:Sylvain|Grok):\s*(.+?)(?:\n|$)",
+        message,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        return m.group(1).strip()
+    return message
+
+
 def detect_intent(message: str) -> SkillName | None:
+    if wants_acp_marketplace(message):
+        return SkillName.ACP_MARKETPLACE
     if wants_capability(message):
         return SkillName.CAPABILITY_QI
     if _is_strategic_conversation(message):
@@ -198,12 +219,23 @@ class AriaBrain:
     ) -> ChatResponse:
         public = is_public_mode() if public_mode is None else public_mode
         vid = visitor_id if public else ""
+        route_msg = _routing_message(user_message)
         await repertoire_db.save_message("user", user_message, visitor_id=vid)
 
         if not public:
             from aria_core.tweet_compose_workflow import handle_workflow_message
 
-            wf_reply = await handle_workflow_message(user_message)
+            skip_self_maint = wants_worker_delegate(route_msg) or bool(
+                re.search(
+                    r"\b(ship(?:ped)?|worker_delegate|aria-worker|communitywelcomebanner|"
+                    r"file\s+done|tache\s+done|ship\s+confirm)\b",
+                    route_msg,
+                    re.IGNORECASE,
+                ),
+            )
+            wf_reply = None
+            if not wants_worker_delegate(route_msg) and not skip_self_maint:
+                wf_reply = await handle_workflow_message(route_msg)
             if wf_reply is not None:
                 await repertoire_db.save_message("agent", wf_reply, visitor_id=vid)
                 return ChatResponse(
@@ -215,7 +247,9 @@ class AriaBrain:
 
             from aria_core.self_maintenance import handle_operator_self_message
 
-            sm_reply = await handle_operator_self_message(user_message, lang=lang)
+            sm_reply = None
+            if not skip_self_maint:
+                sm_reply = await handle_operator_self_message(route_msg, lang=lang)
             if sm_reply is not None:
                 await repertoire_db.save_message("agent", sm_reply, visitor_id=vid)
                 append_memory("identity", f"Self-maintenance: {user_message[:80]}\n{sm_reply[:200]}")
@@ -227,8 +261,8 @@ class AriaBrain:
                 )
 
         lang_key = "fr" if lang == LANG_FR else "en"
-        if is_greeting(user_message):
-            welcome = format_greeting_reply(user_message, lang_key, public=public)
+        if is_greeting(route_msg):
+            welcome = format_greeting_reply(route_msg, lang_key, public=public)
             await repertoire_db.save_message("agent", welcome, visitor_id=vid)
             if not public:
                 append_memory("chat", f"User: {user_message[:100]}\nARIA: {welcome[:200]}")
@@ -239,14 +273,16 @@ class AriaBrain:
                 data={"greeting": True},
             )
 
-        intent = detect_intent(user_message)
-        if looks_like_repo_delete(user_message):
+        intent = detect_intent(route_msg)
+        if not public and wants_worker_delegate(route_msg):
+            intent = SkillName.WORKER_DELEGATE
+        if looks_like_repo_delete(route_msg):
             intent = SkillName.GITHUB_SANDBOX
-        elif looks_like_repo_create(user_message):
+        elif looks_like_repo_create(route_msg):
             intent = SkillName.GITHUB_SANDBOX
-        if wants_training(user_message):
+        if wants_training(route_msg):
             intent = SkillName.TRAINING_PORTFOLIO
-        if wants_holding_site(user_message):
+        if wants_holding_site(route_msg):
             intent = SkillName.HOLDING_SITE
         actions: list[str] = []
         zhc_msg = None
@@ -359,6 +395,16 @@ class AriaBrain:
             actions.append("Capability index — levels 0→1000")
             skill = SkillName.CAPABILITY_QI
 
+        elif intent == SkillName.ACP_MARKETPLACE:
+            skill_output, data = await execute_acp_marketplace(user_message, lang)
+            actions.append("ACP v2 marketplace — status/browse/provider")
+            skill = SkillName.ACP_MARKETPLACE
+
+        elif intent == SkillName.WORKER_DELEGATE:
+            skill_output, data = await execute_worker_delegate(route_msg, lang)
+            actions.append("Community improvement → Cursor worker queue")
+            skill = SkillName.WORKER_DELEGATE
+
         if skill_output is not None:
             skill_key = skill.value if skill else None
             skip_enhance = skill_key in {
@@ -367,6 +413,8 @@ class AriaBrain:
                 SkillName.ENTREPRENEUR_CULTIVATION.value,
                 SkillName.CAPABILITY_QI.value,
                 SkillName.MANAGE_REPERTOIRE.value,
+                SkillName.ACP_MARKETPLACE.value,
+                SkillName.WORKER_DELEGATE.value,
             } or (
                 grounded_for_audience(public)
                 and (
@@ -493,6 +541,14 @@ class AriaBrain:
             return welcome, None, ["Greeting (template)"], {"greeting": True}, None
         if is_social_chitchat(message):
             return social_ack_reply(lang_key), None, ["Social ack (no LLM)"], {}, None
+        if public and is_community_suggestion(message):
+            return (
+                community_suggestion_reply(lang_key),
+                None,
+                ["Community suggestion (warm ack)"],
+                {"community_suggestion": True},
+                None,
+            )
         if is_help_request(message):
             help_text = help_commands_public(lang_key) if public else help_commands(lang_key)
             return help_text, None, ["Help (template)"], {}, None
