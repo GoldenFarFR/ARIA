@@ -2,7 +2,7 @@
 
 > Mis a jour par collect-session.ps1 + resume session. Grok Build lit ce fichier au demarrage.
 
-Derniere regeneration : 2026-06-20T22:27 (session PC-SYLVAIN — tweet X, Option A, x_voice)
+Derniere regeneration : 2026-07-01T22:54 (session PC-SYLVAIN — handoff tout)
 
 **Mono-PC** : **PC-SYLVAIN seul** — plus d'autre machine (Sylvain 2026-06-20). Handoff = sync GitHub + journal, pas de delta « autre PC ».
 
@@ -16,9 +16,10 @@ Derniere regeneration : 2026-06-20T22:27 (session PC-SYLVAIN — tweet X, Option
 | B memory package | done | `74a5bea3` |
 | C Chroma opt-in | done | `67b28c3a` |
 | D injection LLM | **done** | `e9de6856` (`llm_context.py`) |
+| E values | **done** | `d91c33e` (`aria_values.yaml` + `memory/values.py`) |
 
-Prod : `aria_vector_memory=false`, pin Render ancien (quota pipeline epuise).  
-**Suite** : Phase E (values) ou deploy groupe quand quota Render OK.
+Prod : `aria_vector_memory=false`, `aria_ddg_search_cache=false` (defaut safe).  
+**Suite** : Phase F (goals) ou deploy groupe quand quota Render OK.
 
 SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
@@ -32,7 +33,7 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 | **IP PC-SYLVAIN** | 87.88.186.179 (etait 89.85.240.85) |
 | **Repos** | 6 actifs, **tous PRIVATE** : aria-vanguard, aria-sandbox, collegue-memoire, aria-local-sync, aria-skills, template-grok-cursor |
 | **aria-core pin prod** | `5a78c1c1` — revert Tavily, **DuckDuckGo seul** (cerveau 100 % gratuit) |
-| **Gem Crush prod** | Catalogue premium finit a **v42** — heartbeat retourne `queue_empty` pour v43+ |
+| **Gem Crush prod** | Catalogue **v43–v55+** via synthesizer — wave2 done, wave3 in_progress |
 | **ARIA-WORKER** | Aucun `[pending]` — v37, v41, triage issues, assets sprint = `[done]` |
 | **Handoff TOTP** | `.vault-totp-secret` invalide sur PC-SYLVAIN — utiliser `-SkipGitGate` ou corriger depuis Bitwarden |
 
@@ -46,11 +47,11 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ### Prochaines actions agent (priorite)
 
-1. **Gem Crush v43–v45** dans `gem_crush_premium.py` — axe presentation Candy Crush (pre-level, etoiles, world map, obstacles) ; ref video `osaKvQY-xxk`
-2. **Phase A doc-only** aria-core : `ARCHITECTURE.md`, `WHERE-TO-PUT.md` — **pas de moves Python** (risque Render)
-3. **DDG search cache** (gratuit, opt-in) — propose, non implemente
-4. **Operateur** : `IMAGE_API_KEY` Render si banniere xAI ; corriger TOTP vault pour handoff git auto
-5. **Chroma local stub** Phase 2 prep — opt-in, dep optionnelle
+1. **Phase F goals** — objectifs operationnels injectes (apres E values)
+2. **Gem Crush wave3** — map monde scroll, 20 niveaux scriptes (v44–v46)
+3. **Deploy Render** — `deploy-render.ps1` quand quota pipeline OK (`89be8b3`)
+4. **Operateur** : `IMAGE_API_KEY` Render si banniere xAI ; corriger TOTP vault handoff
+5. **Activer local** : `aria_ddg_search_cache=true` + `aria_vector_memory=true` si besoin
 
 ### Pins / commits cles
 
