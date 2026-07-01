@@ -95,6 +95,7 @@ Telegram / API chat
 > **Phase D (2026-06)** : `llm_context.py` injecte le rappel sémantique dans `build_llm_context` (flag off en prod par défaut).  
 > **Phase E (2026-07)** : `memory/values.py` + `knowledge/aria_values.yaml` — valeurs opérationnelles injectées dans le contexte LLM.  
 > **Phase F (2026-07)** : `memory/goals.py` + `knowledge/aria_goals.yaml` — objectifs + état dynamique (QI, revenu).  
+> **Phase G (2026-07)** : `memory/reflection.py` + `reflections.jsonl` — synthèse journal/QI injectée dans le contexte LLM.
 > **DDG cache (2026-07)** : `knowledge/ddg_cache.py` — cache fichier opt-in (`aria_ddg_search_cache=false` défaut).
 
 ### `skills/` — capacités exécutables

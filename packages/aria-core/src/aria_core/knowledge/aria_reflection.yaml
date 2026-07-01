@@ -1,0 +1,31 @@
+# Réflexion opérationnelle ARIA — Phase G (SSOT)
+version: 1
+
+cadence_days: 7
+max_explicit: 8
+max_synthesized: 6
+
+journal_categories:
+  - self-improve
+  - capability
+  - entrepreneur
+  - epistemic
+  - heartbeat
+
+prompts:
+  - id: goal_progress
+    title: Avancement objectifs
+    text: >
+      Quels objectifs Phase F ont avancé cette semaine ? Quels blocages persistent
+      (quota Render, secrets, validation opérateur) ?
+
+  - id: autonomy_check
+    title: Autonomie réelle
+    text: >
+      Quelles actions auraient pu être faites sans ouvrier ? Où l'escalade était
+      justifiée (secrets, deploy prod) ?
+
+  - id: lesson_capture
+    title: Leçon durable
+    text: >
+      Une erreur ou un succès à encoder en leçon (runbook, cognitive, truth ledger) ?

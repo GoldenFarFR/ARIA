@@ -139,6 +139,11 @@ async def build_llm_context(
         goals_block = get_goals_text()
         if goals_block:
             parts.append(f"\n{goals_block}")
+        from aria_core.memory.reflection import get_reflections_text
+
+        reflection_block = get_reflections_text()
+        if reflection_block:
+            parts.append(f"\n{reflection_block}")
         directives = get_directives_text()
         if directives:
             parts.append("\n# Directives opérateur (priorité haute)")

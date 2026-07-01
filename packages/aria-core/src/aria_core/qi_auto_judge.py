@@ -230,6 +230,16 @@ async def run_qi_auto_judge(
             f"{e.get('category')}→{e.get('new_level')}" for e in events[:8]
         )
         append_memory("capability", f"[qi-judge/{source}] {summary} | indice {idx}")
+        try:
+            from aria_core.memory.reflection import append_reflection
+
+            append_reflection(
+                f"QI {summary} — indice {idx}/1000",
+                context="qi-judge",
+                outcome="level-up",
+            )
+        except Exception:
+            pass
 
     message = ""
     if events and lang == "fr":
