@@ -18,6 +18,16 @@ PUBLIC_PREFIXES = (
     "/icons.svg",
 )
 
+# Vanguard vitrine — visiteurs anonymes (sans session Privy)
+VANGUARD_PUBLIC_ROUTES: tuple[tuple[str, str], ...] = (
+    ("POST", "/api/aria/community-feedback"),
+    ("POST", "/api/aria/chat"),
+    ("GET", "/api/aria/content/site"),
+    ("GET", "/api/aria/content/faq"),
+    ("GET", "/api/aria/holding"),
+    ("GET", "/api/aria/zhc/message/intro"),
+)
+
 
 def _is_public(path: str, method: str = "GET") -> bool:
     if path == "/" or path == "/ws":
@@ -26,6 +36,10 @@ def _is_public(path: str, method: str = "GET") -> bool:
         return True
     if method == "GET" and path.startswith("/api/games/pot/") and path.endswith("/current"):
         return True
+    upper = method.upper()
+    for route_method, route_path in VANGUARD_PUBLIC_ROUTES:
+        if upper == route_method and path == route_path:
+            return True
     return any(path.startswith(p) for p in PUBLIC_PREFIXES)
 
 
