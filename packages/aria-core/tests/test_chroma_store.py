@@ -40,11 +40,11 @@ async def test_store_search_when_enabled(vector_on):
     assert is_available() is True
     doc_id = await store(
         "lesson",
-        "Cooldown Gem Crush 30 min sur GitHub",
-        metadata={"topic": "gem_crush", "confidence": "0.9"},
+        "Cooldown deploy Render 2 min par pipeline",
+        metadata={"topic": "ops", "confidence": "0.9"},
     )
     assert doc_id
-    hits = await search("cooldown gem crush", entry_type="lesson", limit=3)
+    hits = await search("cooldown deploy render", entry_type="lesson", limit=3)
     assert len(hits) >= 1
     assert any("cooldown" in (h.get("content") or "").lower() for h in hits)
 

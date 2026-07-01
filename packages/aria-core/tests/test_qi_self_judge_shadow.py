@@ -22,7 +22,7 @@ def isolated_data(tmp_path, monkeypatch):
 
 def test_parse_shadow_json():
     raw = json.dumps({
-        "codage": {"level": 10, "reason": "Gem Crush v50"},
+        "codage": {"level": 10, "reason": "gaps résolus"},
         "business": {"level": 5, "reason": "ignored"},
         "autonomie": {"level": 7, "reason": "ship autonome"},
     })
@@ -33,7 +33,7 @@ def test_parse_shadow_json():
 
 
 def test_record_shadow_run_agreement():
-    ev = JudgeEvidence(gem_crush_version=50, health_ok=True)
+    ev = JudgeEvidence(resolved_gaps_7d=5, health_ok=True, github_write=True)
     official = {cat: earned_level(cat, ev) for cat in (
         "codage", "social", "intelligence", "fiabilite", "autonomie", "business"
     )}
@@ -45,7 +45,7 @@ def test_record_shadow_run_agreement():
 
 
 def test_promotion_requires_min_runs():
-    ev = JudgeEvidence(gem_crush_version=50, health_ok=True)
+    ev = JudgeEvidence(resolved_gaps_7d=5, health_ok=True)
     official = {cat: earned_level(cat, ev) for cat in (
         "codage", "social", "intelligence", "fiabilite", "autonomie", "business"
     )}
@@ -58,7 +58,7 @@ def test_promotion_when_threshold_met(monkeypatch):
     from aria_core import qi_judge_calibration as cal
 
     monkeypatch.setattr(cal, "PROMOTION_MIN_RUNS", 3)
-    ev = JudgeEvidence(gem_crush_version=50, health_ok=True)
+    ev = JudgeEvidence(resolved_gaps_7d=5, health_ok=True)
     official = {cat: earned_level(cat, ev) for cat in (
         "codage", "social", "intelligence", "fiabilite", "autonomie", "business"
     )}
@@ -73,14 +73,14 @@ async def test_shadow_calibration_skips_without_llm(monkeypatch):
         "aria_core.qi_self_judge_shadow.shadow_enabled",
         lambda: False,
     )
-    ev = JudgeEvidence(gem_crush_version=40)
+    ev = JudgeEvidence(resolved_gaps_7d=2)
     result = await run_shadow_calibration(ev)
     assert result["skipped"] is True
 
 
 @pytest.mark.asyncio
 async def test_shadow_calibration_records_match(monkeypatch):
-    ev = JudgeEvidence(gem_crush_version=50, health_ok=True, telegram_configured=True)
+    ev = JudgeEvidence(resolved_gaps_7d=5, health_ok=True, telegram_configured=True)
     official = {cat: earned_level(cat, ev) for cat in (
         "codage", "social", "intelligence", "fiabilite", "autonomie", "business"
     )}

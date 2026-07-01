@@ -65,10 +65,11 @@ def is_live_info_question(query: str) -> bool:
 
 
 def is_ecosystem_product_query(query: str) -> bool:
-    """Produits ARIA — jamais de recherche web (évite APK/clones hors écosystème)."""
-    from aria_core.skills.gem_crush_status_skill import is_gem_crush_ecosystem_question
-
-    return is_gem_crush_ecosystem_question(query)
+    """Produits ARIA — pas de recherche web (évite APK/clones hors écosystème)."""
+    lower = (query or "").lower()
+    if not re.search(r"aria\s+market|aria\s+vanguard|goldenfar|ariavanguardzhc", lower):
+        return False
+    return bool(re.search(r"apk|télécharger|telecharger|download|play\s*store|app\s*store", lower))
 
 
 def _query_variants(query: str) -> list[str]:

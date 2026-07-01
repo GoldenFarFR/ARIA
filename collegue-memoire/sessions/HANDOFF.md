@@ -33,7 +33,7 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 | **IP PC-SYLVAIN** | 87.88.186.179 (etait 89.85.240.85) |
 | **Repos** | 6 actifs, **tous PRIVATE** : aria-vanguard, aria-sandbox, collegue-memoire, aria-local-sync, aria-skills, template-grok-cursor |
 | **aria-core pin prod** | `5a78c1c1` — revert Tavily, **DuckDuckGo seul** (cerveau 100 % gratuit) |
-| **Gem Crush prod** | Catalogue **v43–v55+** via synthesizer — wave2 done, wave3 in_progress |
+| **Gem Crush** | **Retiré** (2026-07-01) — supprimé du monorepo local, pas de push sans validation |
 | **ARIA-WORKER** | Aucun `[pending]` — v37, v41, triage issues, assets sprint = `[done]` |
 | **Handoff TOTP** | `.vault-totp-secret` invalide sur PC-SYLVAIN — utiliser `-SkipGitGate` ou corriger depuis Bitwarden |
 
@@ -48,8 +48,7 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 ### Prochaines actions agent (priorite)
 
 1. **Phase F goals** — objectifs operationnels injectes (apres E values)
-2. **Gem Crush wave3** — map monde scroll, 20 niveaux scriptes (v44–v46)
-3. **Deploy Render** — `deploy-render.ps1` quand quota pipeline OK (`89be8b3`)
+2. **Deploy Render** — `deploy-render.ps1` quand quota pipeline OK (apres validation push suppression Gem Crush)
 4. **Operateur** : `IMAGE_API_KEY` Render si banniere xAI ; corriger TOTP vault handoff
 5. **Activer local** : `aria_ddg_search_cache=true` + `aria_vector_memory=true` si besoin
 

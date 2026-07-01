@@ -32,11 +32,11 @@ async def test_approve_triggers_vector_ingest(monkeypatch):
     item = await add_knowledge(
         "curiosity",
         "ship",
-        "Les releases Gem Crush groupent 10 items minimum",
+        "Les deploys Render groupent un seul redeploy par session",
         approved=False,
     )
     assert await approve_knowledge(item.id) is True
-    hits = await search("gem crush releases", entry_type="insight", limit=3)
+    hits = await search("deploy render groupé", entry_type="insight", limit=3)
     assert len(hits) >= 1
 
 

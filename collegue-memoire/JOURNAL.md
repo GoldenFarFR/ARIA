@@ -236,3 +236,4 @@
 22h20 — 22h20 — Mise a jour COLLEGUE.md + regles Grok monorepo ARIA
 22h44 — 22h44 — fin session monorepo ARIA + collect/push handoff
 22h54 — feat handoff tout — Phase E values + DDG cache + Gem Crush v43-45 d91c33e
+23h03 — suppression Gem Crush monorepo local — pas de push

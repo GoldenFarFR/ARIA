@@ -250,5 +250,6 @@ Distinct du tableau ci-dessus (décisions métier).
 ---
 
 | 2026-07-01 | **Monorepo ARIA** : tout l'écosystème dans `GoldenFarFR/ARIA` ; `collegue-memoire/` = ce dossier ; `ARIA_REPO_ROOT` sur chaque PC |
+| 2026-07-01 | **Gem Crush retiré** — supprimé du monorepo (skills, POC vanguard, heartbeat, QI juge) ; **pas de push GitHub** sans validation Sylvain |
 
-*Dernière mise à jour : 2026-07-01 (monorepo ARIA)*
+*Dernière mise à jour : 2026-07-01 (Gem Crush retiré)*
