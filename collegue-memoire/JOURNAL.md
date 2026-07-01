@@ -243,3 +243,4 @@
 23h18 — feat Phase H memory arbitrator — 326 tests OK
 23h23 — vector local active — 33 docs Chroma, recall LLM OK
 23h28 — optimize Ollama local qwen2.5:14b — PC 8Go VRAM
+23h30 — git push origin main 5a52b07 — 10 commits (Gem Crush + memoire F-H + Ollama)
