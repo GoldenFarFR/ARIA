@@ -87,3 +87,23 @@ services:
         value: ""
       - key: GITHUB_PROTECTED_REPOS
         value: ARIA
+
+  # Site holding statique (ariavanguardzhc.com) — sources dans vanguard/
+  - type: web
+    name: aria-vanguard-zhc
+    runtime: static
+    rootDir: vanguard
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: false
+    envVars:
+      - key: VITE_PRODUCT_URL
+        value: https://api.ariavanguardzhc.com
+      - key: VITE_PRODUCT_API_URL
+        value: https://api.ariavanguardzhc.com/api
+      - key: VITE_PRIVY_APP_ID
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
