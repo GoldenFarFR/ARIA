@@ -23,7 +23,7 @@ Write-Host "Politique: build local a chaque changement code ; deploy Render seul
 
 Write-Step "aria-core — pip install (monorepo packages/aria-core)"
 if (-not (Test-Path $CorePackage)) { throw "aria-core introuvable: $CorePackage" }
-python -m pip install -q $CorePackage
+python -m pip install -q -e $CorePackage
 if ($LASTEXITCODE -ne 0) { throw "pip install aria-core a echoue" }
 
 Write-Step "Backend — pip install requirements.txt"
