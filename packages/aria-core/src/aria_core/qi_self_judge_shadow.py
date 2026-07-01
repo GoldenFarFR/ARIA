@@ -38,14 +38,13 @@ def shadow_enabled() -> bool:
 
 def evidence_to_dict(ev: JudgeEvidence) -> dict[str, Any]:
     return {
-        "gem_crush_version": ev.gem_crush_version,
-        "gem_crush_title": ev.gem_crush_title,
         "resolved_gaps_7d": ev.resolved_gaps_7d,
         "health_ok": ev.health_ok,
         "health_commit": ev.health_commit,
         "memory_entries": ev.memory_entries,
         "telegram_configured": ev.telegram_configured,
         "github_write": ev.github_write,
+        "aria_core_build": ev.aria_core_build,
     }
 
 
@@ -57,7 +56,7 @@ def format_evidence_prompt(ev: JudgeEvidence) -> str:
     d = evidence_to_dict(ev)
     lines = [
         "Métriques actuelles (preuves objectives) :",
-        f"- Gem Crush prod : v{d['gem_crush_version']} ({ev.gem_crush_title or 'sans titre'})",
+        f"- Build aria-core : {d.get('aria_core_build') or 'n/a'}",
         f"- Health : {'OK' if d['health_ok'] else 'KO'} commit={d['health_commit'][:12] or 'n/a'}",
         f"- Gaps capability résolus (7j) : {d['resolved_gaps_7d']}",
         f"- Entrées mémoire ARIA : {d['memory_entries']}",
@@ -243,7 +242,7 @@ async def run_qi_judge_with_shadow(
         lines = [
             f"⚖️ Juge QI ({mode})",
             f"Indice global : {idx} / 1000",
-            f"Gem Crush prod : v{ev.gem_crush_version}",
+            f"Gaps résolus 7j : {ev.resolved_gaps_7d}",
             "",
         ]
         for e in events:

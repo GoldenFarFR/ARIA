@@ -99,13 +99,6 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
-        id="gem_crush_daily",
-        name="Gem Crush premium improve",
-        description="Recherche Candy Crush / Clash Royale / Royal Match → brief → release massive (30 min)",
-        interval_minutes=30,
-        enabled=True,
-    ),
-    HeartbeatTask(
         id="tweet_schedule",
         name="Scheduled X posts",
         description="Publish /x compose tweets at operator local time",
@@ -187,11 +180,6 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.visual_autonomy import visual_autonomy_enabled
 
             task.enabled = not visual_autonomy_enabled()
-        if task.id == "gem_crush_daily":
-            from aria_core.skills.gem_crush_skill import improve_interval_minutes
-
-            task.interval_minutes = improve_interval_minutes()
-
 
 class AriaHeartbeat:
     def __init__(self) -> None:
@@ -356,18 +344,6 @@ class AriaHeartbeat:
             result = await run_app_idea_poll_cycle(lang="fr")
             await self._notify_telegram(result["message"])
             append_memory("entrepreneur", "[app_poll] weekly 3-app poll sent")
-
-        elif task_id == "gem_crush_daily":
-            from aria_core.skills.gem_crush_skill import run_daily_gem_crush_improve
-
-            result = await run_daily_gem_crush_improve(lang="fr")
-            status = result.get("status")
-            # applied → notify_gem_crush_ship() dans gem_crush_skill (1 msg / version)
-            if status in ("queue_empty", "write_denied", "local_only", "error"):
-                await self._notify_telegram(
-                    f"🎮 ARIA Gem Crush — {status}\n\n{result.get('message', '')[:1200]}"
-                )
-            append_memory("entrepreneur", f"[gem_crush_daily] {status} v={result.get('version')}")
 
         elif task_id == "tweet_schedule":
             from aria_core.tweet_compose_workflow import process_scheduled_tweets

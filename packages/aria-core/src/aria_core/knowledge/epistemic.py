@@ -363,11 +363,6 @@ async def resolve_calibrated_answer(
 ) -> tuple[str | None, dict]:
     """Politique/holding YAML si match, sinon Groq + vérif web si incertain."""
     from aria_core.knowledge.web_verify import is_ecosystem_product_query, is_live_info_question, web_first_answer
-    from aria_core.skills.gem_crush_status_skill import answer_gem_crush_status, is_gem_crush_ecosystem_question
-
-    if is_gem_crush_ecosystem_question(query):
-        grounded = await answer_gem_crush_status(query, lang=lang)
-        return grounded, {"gem_crush_grounded": True, "source": "aria-vanguard-github"}
 
     static, static_data = epistemic_static_answer(query, lang)
     if static:

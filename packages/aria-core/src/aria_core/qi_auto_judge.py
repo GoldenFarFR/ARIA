@@ -27,8 +27,6 @@ JUDGE_HEARTBEAT = "auto_judge_heartbeat"
 
 @dataclass(frozen=True)
 class JudgeEvidence:
-    gem_crush_version: int = 0
-    gem_crush_title: str = ""
     resolved_gaps_7d: int = 0
     health_ok: bool = False
     health_commit: str = ""
@@ -47,24 +45,19 @@ def _tier(value: int, table: tuple[tuple[int, int], ...]) -> tuple[int, str]:
 
 
 def judge_codage(ev: JudgeEvidence) -> tuple[int, str]:
+    score = ev.resolved_gaps_7d + (2 if ev.github_write else 0)
     table = (
-        (60, 12),
-        (55, 11),
-        (50, 10),
-        (40, 9),
-        (30, 8),
-        (25, 7),
-        (20, 6),
-        (15, 5),
-        (10, 4),
-        (5, 3),
-        (3, 2),
-        (1, 1),
+        (8, 12),
+        (6, 10),
+        (4, 8),
+        (3, 6),
+        (2, 4),
+        (1, 2),
     )
-    lvl, detail = _tier(ev.gem_crush_version, table)
+    lvl, detail = _tier(score, table)
     if lvl:
-        return lvl, f"Codage — Gem Crush v{ev.gem_crush_version} prod ({detail})"
-    return 0, "Codage — pas de release Gem Crush détectée"
+        return lvl, f"Codage — gaps résolus + GitHub write ({detail})"
+    return 0, "Codage — peu de preuves ship récentes"
 
 
 def judge_autonomie(ev: JudgeEvidence) -> tuple[int, str]:
@@ -73,18 +66,15 @@ def judge_autonomie(ev: JudgeEvidence) -> tuple[int, str]:
     if ev.resolved_gaps_7d >= 1:
         lvl = max(lvl, 1)
         parts.append(f"{ev.resolved_gaps_7d} gap(s) capability résolu(s) (7j)")
-    if ev.gem_crush_version >= 15:
+    if ev.resolved_gaps_7d >= 3:
         lvl = max(lvl, 3)
-        parts.append(f"heartbeat Gem Crush autonome v{ev.gem_crush_version}")
-    if ev.gem_crush_version >= 43:
+        parts.append("boucle self-improve active")
+    if ev.github_write and ev.resolved_gaps_7d >= 2:
         lvl = max(lvl, 5)
-        parts.append("synthèse backlog + releases illimitées")
-    if ev.gem_crush_version >= 55 and ev.github_write:
+        parts.append("écriture GitHub + gaps résolus")
+    if ev.github_write and ev.resolved_gaps_7d >= 5:
         lvl = max(lvl, 7)
-        parts.append("écriture GitHub prod sans ouvrier")
-    if ev.gem_crush_version >= 65:
-        lvl = max(lvl, 9)
-        parts.append("65+ cycles ship autonome")
+        parts.append("autonomie ship sans ouvrier")
     if not parts:
         return 0, "Autonomie — initiatives autonomes insuffisantes"
     return lvl, "Autonomie — " + "; ".join(parts)
@@ -96,12 +86,9 @@ def judge_fiabilite(ev: JudgeEvidence) -> tuple[int, str]:
     if ev.health_ok:
         lvl = max(lvl, 2)
         parts.append(f"health OK ({ev.health_commit[:12] or 'live'})")
-    if ev.gem_crush_version >= 20:
+    if ev.health_ok and ev.aria_core_build:
         lvl = max(lvl, 4)
-        parts.append("pipeline Gem Crush stable")
-    if ev.gem_crush_version >= 42:
-        lvl = max(lvl, 6)
-        parts.append("cooldown + lots ≥10 items")
+        parts.append(f"build aria-core {ev.aria_core_build}")
     if not parts:
         return 0, "Fiabilité — health ou historique insuffisant"
     return lvl, "Fiabilité — " + "; ".join(parts)
@@ -110,18 +97,15 @@ def judge_fiabilite(ev: JudgeEvidence) -> tuple[int, str]:
 def judge_intelligence(ev: JudgeEvidence) -> tuple[int, str]:
     lvl = 0
     parts: list[str] = []
-    if ev.gem_crush_version >= 8:
-        lvl = max(lvl, 2)
-        parts.append("roadmap Gem Crush + critic")
-    if ev.gem_crush_version >= 30:
-        lvl = max(lvl, 4)
-        parts.append("priorisation premium / recherche concurrence")
-    if ev.gem_crush_version >= 50:
-        lvl = max(lvl, 6)
-        parts.append("exploration ouverte + backlog SSOT")
     if ev.resolved_gaps_7d >= 2:
-        lvl = max(lvl, min(3, 2 + ev.resolved_gaps_7d // 2))
+        lvl = max(lvl, 2)
         parts.append("arbitrage self-improve gaps")
+    if ev.memory_entries >= 50:
+        lvl = max(lvl, 4)
+        parts.append(f"{ev.memory_entries} entrées mémoire")
+    if ev.resolved_gaps_7d >= 4:
+        lvl = max(lvl, min(6, 3 + ev.resolved_gaps_7d // 2))
+        parts.append("priorisation capability gaps")
     if not parts:
         return 0, "Intelligence — signaux stratégiques faibles"
     return lvl, "Intelligence — " + "; ".join(parts)
@@ -140,16 +124,12 @@ def judge_social(ev: JudgeEvidence) -> tuple[int, str]:
     if mem >= 100:
         lvl = max(lvl, 4)
         parts.append("journal mémoire riche")
-    if ev.gem_crush_version >= 25:
-        lvl = max(lvl, 3)
-        parts.append("notifications ship Gem Crush (building in public)")
     if not parts:
         return 0, "Social — présence publique limitée"
     return lvl, "Social — " + "; ".join(parts)
 
 
 def judge_business(ev: JudgeEvidence) -> tuple[int, str]:
-    # business reste sur métriques revenu (check_auto_completions) — juge ne force pas
     return 0, "Business — métriques revenu uniquement (Stripe)"
 
 
@@ -173,7 +153,6 @@ def earned_level(category: str, ev: JudgeEvidence) -> tuple[int, str]:
 
 async def collect_judge_evidence() -> JudgeEvidence:
     from aria_core.runtime import settings
-    from aria_core.skills.gem_crush_status_skill import _fetch_github_status
     from aria_core.skills.github_skill import github_configured, repo_write_allowed
 
     ev = JudgeEvidence(
@@ -187,20 +166,14 @@ async def collect_judge_evidence() -> JudgeEvidence:
         ev.github_write = repo_write_allowed(owner.strip(), "aria-vanguard")
 
     try:
-        gc = await _fetch_github_status()
-        if gc.get("ok"):
-            ev.gem_crush_version = int(gc.get("version") or 0)
-            ev.gem_crush_title = str(gc.get("title") or "")
-    except Exception as exc:
-        logger.debug("judge gem crush fetch: %s", exc)
-
-    try:
         from aria_core.health_watch import _probe_health
 
         ok, detail = await _probe_health()
         ev.health_ok = ok
         if "commit=" in detail:
             ev.health_commit = detail.split("commit=", 1)[-1].strip()
+        if "aria_core_build=" in detail:
+            ev.aria_core_build = detail.split("aria_core_build=", 1)[-1].strip().split()[0]
     except Exception as exc:
         logger.debug("judge health: %s", exc)
 
@@ -263,7 +236,7 @@ async def run_qi_auto_judge(
         lines = [
             "⚖️ Juge QI (métriques réelles — phase ouvrier/heartbeat)",
             f"Indice global : {idx} / 1000",
-            f"Gem Crush prod : v{ev.gem_crush_version}",
+            f"Gaps résolus 7j : {ev.resolved_gaps_7d}",
             "",
         ]
         for e in events:
@@ -291,8 +264,7 @@ def format_judge_report(result: dict[str, Any], *, lang: str = "fr") -> str:
         lines = [
             "⚖️ Rapport juge QI (ouvrier / heartbeat)",
             f"Indice : {result.get('global_index', 0)} / 1000",
-            f"Gem Crush : v{ev.gem_crush_version} | gaps 7j : {ev.resolved_gaps_7d}",
-            f"Health : {'OK' if ev.health_ok else 'KO'}",
+            f"Gaps 7j : {ev.resolved_gaps_7d} | Health : {'OK' if ev.health_ok else 'KO'}",
             "",
             "Niveaux mérités (sans appliquer) :",
         ]

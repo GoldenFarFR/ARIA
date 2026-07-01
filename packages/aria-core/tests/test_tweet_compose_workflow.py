@@ -49,7 +49,7 @@ def isolated_workflow(tmp_path, monkeypatch):
 def test_extract_operator_supplied_tweet_built_in_public():
     msg = (
         "/x compose — texte exact: Built in public: autonomous ARIA CAO, aria-core, "
-        "vector memory (Phases A-D), Gem Crush ship loop, multi-PC handoff, "
+        "vector memory (Phases A-D), skills moat ship loop, multi-PC handoff, "
         "Cursor-ARIA 3-voice bridge, truth ledger, DDG-only brain, QI shadow judge, "
         "Grok/Cursor skills moat. Operator in the loop. @GoldenFarFR"
     )
@@ -73,7 +73,7 @@ def test_tweet_context_blocks_false_github_create():
 async def test_start_compose_with_prevalidated_text(monkeypatch):
     msg = (
         "/x compose — texte exact: Built in public: autonomous ARIA CAO, aria-core, "
-        "vector memory (Phases A-D), Gem Crush ship loop, multi-PC handoff, "
+        "vector memory (Phases A-D), skills moat ship loop, multi-PC handoff, "
         "Cursor-ARIA 3-voice bridge, truth ledger, DDG-only brain, QI shadow judge, "
         "Grok/Cursor skills moat. Operator in the loop. @GoldenFarFR"
     )

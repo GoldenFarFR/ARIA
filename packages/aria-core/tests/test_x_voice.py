@@ -15,7 +15,7 @@ def test_human_voice_rules_mention_forbidden_phrases():
 def test_detects_ai_roster():
     text = (
         "Built in public: autonomous ARIA CAO, aria-core, vector memory (Phases A-D), "
-        "Gem Crush, multi-PC handoff, Cursor-ARIA 3-voice bridge, truth ledger."
+        "aria-core, multi-PC handoff, Cursor-ARIA 3-voice bridge, truth ledger."
     )
     assert looks_like_feature_roster(text) is True
     assert has_ai_voice_markers(text) is True
@@ -33,7 +33,7 @@ def test_strip_obvious_ai_phrases():
 
 def test_natural_sentence_not_roster():
     text = (
-        "Heavy week — we landed Gem Crush updates and a cleaner handoff flow. "
+        "Heavy week — we landed aria-core updates and a cleaner handoff flow. "
         "Commit graph in the image. @GoldenFarFR"
     )
     assert looks_like_feature_roster(text) is False

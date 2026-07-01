@@ -497,21 +497,6 @@ class AriaBrain:
             help_text = help_commands_public(lang_key) if public else help_commands(lang_key)
             return help_text, None, ["Help (template)"], {}, None
 
-        from aria_core.skills.gem_crush_status_skill import (
-            answer_gem_crush_status,
-            is_gem_crush_ecosystem_question,
-        )
-
-        if is_gem_crush_ecosystem_question(message):
-            grounded = await answer_gem_crush_status(message, lang=lang_key)
-            return (
-                grounded,
-                SkillName.FAQ_CONTENT,
-                ["Gem Crush POC — GitHub/Vanguard (no web APK)"],
-                {"gem_crush_grounded": True},
-                None,
-            )
-
         from aria_core.operator_self_directive import classify_operator_message, OperatorMessageKind
 
         if classify_operator_message(message) in (
