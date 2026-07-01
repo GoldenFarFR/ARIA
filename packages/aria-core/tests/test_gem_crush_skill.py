@@ -179,6 +179,19 @@ def test_premium_catalog_unlimited_v43_plus():
         assert len(release.items) >= MIN_RELEASE_ITEMS
 
 
+def test_premium_catalog_v43_v45_candy_crush_axes():
+    from aria_core.skills.gem_crush_synthesizer import ensure_min_release_items
+
+    titles = {}
+    for ver in (43, 44, 45):
+        release = ensure_min_release_items(PREMIUM_RELEASE_BUNDLES[ver], ver)
+        assert len(release.items) >= MIN_RELEASE_ITEMS
+        titles[ver] = release.title.lower()
+    assert "gel" in titles[43] or "obstacle" in titles[43] or "frozen" in titles[43]
+    assert "map" in titles[44] or "monde" in titles[44]
+    assert "tutoriel" in titles[45] or "script" in titles[45] or "niveau" in titles[45]
+
+
 def test_unlimited_releases_default_on(test_settings):
     test_settings.aria_gem_crush_premium_mode = True
     from aria_core.skills.gem_crush_skill import unlimited_releases_enabled

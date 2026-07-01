@@ -171,6 +171,7 @@ class Settings(BaseSettings):
     aria_qi_judge_force_aria: bool = False
     aria_qi_judge_force_ouvrier: bool = False
     aria_vector_memory: bool = False
+    aria_ddg_search_cache: bool = False
     # Épistémique Phase B — vérif web si incertain + gate anti-hallucination
     aria_epistemic_web_verify: bool = True
     aria_epistemic_critic: bool = True

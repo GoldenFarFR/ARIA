@@ -8,6 +8,7 @@ from aria_core.memory.vector.chroma_store import (
     store,
     vector_store_status,
 )
+from aria_core.memory.vector.health import vector_health_report
 
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "is_vector_enabled",
     "search",
     "store",
+    "vector_health_report",
     "vector_store_status",
 ]

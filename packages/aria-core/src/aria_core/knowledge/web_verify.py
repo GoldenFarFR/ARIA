@@ -196,6 +196,16 @@ async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: objec
     variants = _query_variants(query)
     if not variants:
         return []
+
+    from aria_core.knowledge.ddg_cache import get_cached, set_cached
+
+    cached = get_cached(query)
+    if cached:
+        return [
+            WebSource(text=c.text, url=c.url)
+            for c in cached[:max_snippets]
+        ]
+
     sources: list[WebSource] = []
     seen_text: set[str] = set()
     try:
@@ -219,7 +229,10 @@ async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: objec
                             return sources[:max_snippets]
     except Exception as exc:
         logger.warning("web_verify failed: %s", exc)
-    return sources[:max_snippets]
+    result = sources[:max_snippets]
+    if result:
+        set_cached(query, result)
+    return result
 
 
 def _web_verify_threshold(meta: dict) -> bool:

@@ -23,12 +23,12 @@ waves:
     versions: [42, 43]
     title: "Juice match, SFX layers, obstacles gelée"
     owner: aria
-    status: in_progress
+    status: done
   - id: wave3
     versions: [44, 46]
     title: "Map monde scroll, 20 niveaux scriptés, boosters"
     owner: shared
-    status: pending
+    status: in_progress
   - id: wave4
     versions: [47]
     title: "Assets illustrés PNG/WebP si budget génération"

@@ -96,6 +96,8 @@ class AriaRuntimeSettings(BaseSettings):
     aria_qi_judge_force_ouvrier: bool = False
     # Mémoire vectorielle Chroma — opt-in, désactivé par défaut (Phase B stub)
     aria_vector_memory: bool = False
+    # Cache DDG — opt-in, évite requêtes répétées (gratuit, fichier local)
+    aria_ddg_search_cache: bool = False
 
     github_token: str = ""
     github_owner: str = "GoldenFarFR"

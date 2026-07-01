@@ -9,7 +9,9 @@ Point d'entrée cible pour la mémoire ARIA. **Désactivé par défaut** pour le
 | `journal.py` | Journal épisodique markdown | `aria_core/memory.py` |
 | `cognitive_sql.py` | Leçons approuvées SQLite | `knowledge/cognitive.py` |
 | `llm_context.py` | `build_llm_context` + rappel vectoriel | Phase D |
+| `values.py` | Valeurs opérationnelles (`aria_values.yaml`) | Phase E |
 | `vector/chroma_store.py` | Embeddings Chroma embedded | Phase C |
+| `vector/health.py` | Diagnostic Chroma (Phase 2 prep) | Phase 2 prep |
 | `vector/schema.yaml` | Types `insight`, `lesson`, `reflection`, `decision` | — |
 
 ## Usage (nouveau code)
@@ -39,6 +41,14 @@ from aria_core.memory.vector.chroma_store import store, search
 
 Tant que `aria_vector_memory=false` (défaut) : `store()` et `search()` sont no-op.  
 Données : `DATA_DIR/chroma/` (embedded, embeddings locaux ONNX via Chroma).
+
+## Phase E — valeurs opérationnelles
+
+SSOT : `knowledge/aria_values.yaml` — injecté dans `build_llm_context` (opérateur uniquement).
+
+```python
+from aria_core.memory import get_values_text, values_count
+```
 
 ## Phase D — injection LLM
 
