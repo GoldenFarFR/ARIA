@@ -1,13 +1,13 @@
 # Mandatory — Journal de bord (always on)
 
-Skill SSOT : `.grok/skills/journal-de-bord/SKILL.md`
+Skill SSOT : `skills/.grok/skills/journal-de-bord/SKILL.md`
 
-Après **chaque action significative** (fichier créé/modifié/supprimé, commit, push, clone, install skill) :
+Après **chaque action significative** (fichier créé/modifié/supprimé, commit, push) :
 
-1. Append une ligne dans `%USERPROFILE%\projets\collegue-memoire\JOURNAL.md`
+1. Append une ligne dans `%ARIA_REPO_ROOT%\collegue-memoire\JOURNAL.md`
 2. Format : `HHhMM — <verbe> <cible>` (heure locale, français)
-3. Utiliser `journal-de-bord/scripts/append.ps1` si possible
+3. Script : `skills/.grok/skills/journal-de-bord/scripts/append.ps1`
 
-Ne pas confondre avec le § Journal de `COLLEGUE.md` (décisions métier, pas actions techniques).
+Distinct du § Journal de `COLLEGUE.md` (décisions métier).
 
-Fin de session utile : commit + push `collegue-memoire` si le journal a été mis à jour.
+Fin de session utile : commit + push `GoldenFarFR/ARIA`.

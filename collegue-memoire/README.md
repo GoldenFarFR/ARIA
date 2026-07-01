@@ -1,32 +1,32 @@
-# collegue-memoire
+# collegue-memoire (dans le monorepo ARIA)
 
-Mémoire partagée Sylvain × assistant IA — **un fichier** : [`COLLEGUE.md`](COLLEGUE.md)
+Mémoire Sylvain × assistant IA — **un fichier** `COLLEGUE.md` + journal + sessions handoff.
 
-## Nouveau PC (une fois)
+## Emplacement
 
-```bash
-git clone https://github.com/GoldenFarFR/collegue-memoire.git "%USERPROFILE%\projets\collegue-memoire"
+| Élément | Chemin |
+|---------|--------|
+| Repo GitHub | `GoldenFarFR/ARIA` (privé) |
+| Ce dossier | `%ARIA_REPO_ROOT%\collegue-memoire\` |
+| Mémoire métier | `COLLEGUE.md` |
+| Journal technique | `JOURNAL.md` |
+| Handoff | `sessions/HANDOFF.md` |
+
+## Nouveau PC
+
+```powershell
+git clone https://github.com/GoldenFarFR/ARIA.git "%USERPROFILE%\GitHub-Repos\ARIA"
+[System.Environment]::SetEnvironmentVariable("ARIA_REPO_ROOT", "%USERPROFILE%\GitHub-Repos\ARIA", "User")
+copy "%USERPROFILE%\GitHub-Repos\ARIA\collegue-memoire\.grok\rules\*.md" "%USERPROFILE%\.grok\rules\"
+cd "%USERPROFILE%\GitHub-Repos\ARIA\skills\scripts"
+.\install.ps1
 ```
 
-Puis copier la règle Cursor (si pas déjà en place) :
+## Session
 
-```
-copy "%USERPROFILE%\projets\collegue-memoire\.cursor\rules\collegue-memoire.md" "%USERPROFILE%\.cursor\rules\"
-```
-
-Pour Grok : même règle dans `%USERPROFILE%\.grok\rules\` (copier depuis ce repo).
-
-## Avant de travailler
-
-```bash
-cd "%USERPROFILE%\projets\collegue-memoire"
-git pull
+```powershell
+cd %ARIA_REPO_ROOT%\local-sync\scripts
+.\session-handoff.ps1
 ```
 
-## Après une session utile (l'assistant le fait)
-
-```bash
-git add COLLEGUE.md projets/
-git commit -m "Mise à jour mémoire collègue"
-git push
-```
+Puis lire `COLLEGUE.md` + `JOURNAL.md`.

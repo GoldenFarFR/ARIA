@@ -3,7 +3,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Message,
 
-    [string]$JournalPath = (Join-Path $env:USERPROFILE "projets\collegue-memoire\JOURNAL.md"),
+    [string]$JournalPath = $(if ($env:ARIA_REPO_ROOT) {
+        Join-Path $env:ARIA_REPO_ROOT "collegue-memoire\JOURNAL.md"
+    } else {
+        Join-Path $env:USERPROFILE "GitHub-Repos\ARIA\collegue-memoire\JOURNAL.md"
+    }),
 
     [string]$RepoJournal
 )

@@ -1,7 +1,8 @@
 # COLLEGUE — mémoire Sylvain × assistant IA
 
 > **Un seul fichier**, synchronisé via **GitHub** sur tous vos PC.  
-> Repo : `GoldenFarFR/collegue-memoire` (privé)
+> Monorepo : `GoldenFarFR/ARIA` (privé) — ce fichier vit dans `collegue-memoire/COLLEGUE.md`  
+> Chemin local : `%ARIA_REPO_ROOT%\collegue-memoire\COLLEGUE.md` (défaut : `GitHub-Repos\ARIA`)
 
 ---
 
@@ -18,8 +19,8 @@
 1. Besoin **métier** d'abord
 2. Outil **prêt à l'emploi** (Excel + script générateur)
 3. Tester (formules visibles, recalcul Excel)
-4. **Avant chaque session** : `git pull` puis lire ce fichier (règle automatique — pas de rappel de Sylvain)
-5. Mettre à jour **ce fichier** + `git commit` + `git push` après session utile
+4. **Avant chaque session** : `git pull` sur le repo **ARIA** puis lire ce fichier (règle automatique — pas de rappel de Sylvain)
+5. Mettre à jour **ce fichier** + `git commit` + `git push` sur `GoldenFarFR/ARIA` après session utile
 
 ### Consommation Grok / Cursor (mode concis)
 
@@ -50,7 +51,7 @@
 | Élément | Chemin |
 |---------|--------|
 | Excel | `Downloads\DDC - Calculateur v7b.xlsx` (local, par PC) |
-| Générateur | `projets/ddc/ddc_calculateur.py` (dans ce repo) |
+| Générateur | `collegue-memoire/projets/ddc/ddc_calculateur.py` (dans le monorepo ARIA) |
 
 **Règles DDC** : synthèse par famille ; mots-clés `Nom_cas` : `Vent G/D`, `Vent D/G`, `Neige`, `accidentel`, `Couverture`, `G :`.
 
@@ -60,9 +61,15 @@
 
 Si le clone n'est pas fait, l'assistant **rappelle tout seul** au début de session :
 
-```bash
-git clone https://github.com/GoldenFarFR/collegue-memoire.git "%USERPROFILE%\projets\collegue-memoire"
-copy "%USERPROFILE%\projets\collegue-memoire\.cursor\rules\collegue-memoire.md" "%USERPROFILE%\.cursor\rules\"
+```powershell
+git clone https://github.com/GoldenFarFR/ARIA.git "%USERPROFILE%\GitHub-Repos\ARIA"
+[System.Environment]::SetEnvironmentVariable("ARIA_REPO_ROOT", "%USERPROFILE%\GitHub-Repos\ARIA", "User")
+# Cursor (optionnel, plus tard) :
+copy "%USERPROFILE%\GitHub-Repos\ARIA\collegue-memoire\.cursor\rules\*.md" "%USERPROFILE%\.cursor\rules\"
+# Grok :
+copy "%USERPROFILE%\GitHub-Repos\ARIA\collegue-memoire\.grok\rules\*.md" "%USERPROFILE%\.grok\rules\"
+cd "%USERPROFILE%\GitHub-Repos\ARIA\skills\scripts"
+.\install.ps1
 ```
 
 ## Analyse installation GoldenFar / ARIA (multi-PC)
@@ -79,34 +86,36 @@ copy "%USERPROFILE%\projets\collegue-memoire\.cursor\rules\collegue-memoire.md" 
 | **BitLocker** | coffre + disque | Paramètres Windows |
 | **gh** (optionnel) | repos GitHub CLI | `winget install GitHub.cli` |
 
-### 2. IDE — Cursor / Grok
+### 2. IDE — Grok (Cursor optionnel plus tard)
 
 | Élément | Chemin / action |
 |---------|-----------------|
-| **collegue-memoire** | clone + `git pull` + lire ce fichier |
-| **Règles Cursor** | copier `collegue-memoire\.cursor\rules\` → `%USERPROFILE%\.cursor\rules\` |
-| **aria-skills** | clone + `aria-skills\scripts\install.ps1` (skills Grok/Cursor) |
+| **Monorepo ARIA** | clone + `git pull` + lire ce fichier |
+| **Variable** | `ARIA_REPO_ROOT` → racine du clone (ex. `GitHub-Repos\ARIA`) |
+| **Règles Grok** | `ARIA\collegue-memoire\.grok\rules\` → `%USERPROFILE%\.grok\rules\` |
+| **Skills** | `ARIA\skills\scripts\install.ps1` |
+| **Règles Cursor** (si utilisé) | `ARIA\collegue-memoire\.cursor\rules\` → `%USERPROFILE%\.cursor\rules\` |
 
-### 3. Repos GitHub (tous **privés** — ordre clone)
+### 3. Monorepo GitHub `GoldenFarFR/ARIA` (privé — un seul clone)
 
-| Repo | Rôle |
-|------|------|
-| `collegue-memoire` | Mémoire + règles |
-| `aria-skills` | Skills SSOT |
-| `aria-sandbox` | Cerveau aria-core |
-| `aria-vanguard` | **Holding** — vitrine + API + scripts `operator/` |
-| `aria-local-sync` | **État local hors code** — mémoire ARIA, IDE, Excel DDC (`collect-local` / `apply-local`) |
-| ~~`dexpulse`~~ / ~~`dexpulse-secrets`~~ | **Supprimés** (2026-06-19) — fusionnés dans `aria-vanguard` |
+| Dossier | Rôle (ex-repo) |
+|---------|----------------|
+| `collegue-memoire/` | **Ce fichier** + HANDOFF + JOURNAL |
+| `packages/aria-core/` | Cerveau Python ARIA |
+| `vanguard/` | API, holding, DEXPulse, `operator/` |
+| `local-sync/` | Sync multi-PC, coffre `.gfv` |
+| `skills/` | Skills Grok/Cursor |
+| `sandbox/`, `memory/`, `bot/` | Expériences et travail local |
 
-Script tout-en-un : `aria-vanguard\operator\new-pc.ps1`
+Script opérateur : `vanguard\operator\new-pc.ps1` — handoff : `local-sync\scripts\session-handoff.ps1`
 
-### 4. État local sync (`aria-local-sync`)
+### 4. État local sync (`local-sync/`)
 
 | Action | Commande |
 |--------|----------|
-| **PC source** (données à jour) | `projets\aria-local-sync\scripts\collect-local.ps1` puis `git push` |
-| **Autre PC** | **Rien à lancer** — Grok fait `session-handoff.ps1` seul. Secours : `CHANGEMENT-PC-MAINTENANT.md` |
-| Inventaire sans copie | `scripts\inventory.ps1` |
+| **PC source** (données à jour) | `%ARIA_REPO_ROOT%\local-sync\scripts\collect-local.ps1` puis `git push` sur ARIA |
+| **Autre PC** | **Rien à lancer** — Grok fait `session-handoff.ps1` seul. Secours : `local-sync\CHANGEMENT-PC-MAINTENANT.md` |
+| Inventaire sans copie | `local-sync\scripts\inventory.ps1` |
 
 Contenu : `sync/aria-data/`, règles IDE, Excel DDC, **`sync/vault/goldenfar-vault.gfv`** (coffre chiffré = toutes les clés). Mot de passe identique sur les 2 PC (Bitwarden).
 
@@ -118,8 +127,8 @@ Contenu : `sync/aria-data/`, règles IDE, Excel DDC, **`sync/vault/goldenfar-vau
 | **Variable** | `GOLDENFAR_VAULT` (profil utilisateur) |
 | **Contenu** | `production.env`, `vanguard.env`, `local.env`, `keys\render.api-key`, `keys\ionos.api-key`, `stripe\recovery-codes.txt` |
 
-Setup : `aria-vanguard\operator\setup-vault.ps1`  
-Guide : `aria-vanguard\operator\VAULT-SECURITY.md`
+Setup : `vanguard\operator\setup-vault.ps1`  
+Guide : `vanguard\operator\VAULT-SECURITY.md`
 
 ### 6. Multi-PC — sync des clés (gratuit)
 
@@ -129,7 +138,7 @@ Guide : `aria-vanguard\operator\VAULT-SECURITY.md`
 | **2 — Logins** | **Bitwarden** (gratuit) | Comptes GitHub, IONOS, Stripe, Render ; passphrase `.gfv` |
 | **3 — Secours** | Sauvegarde `.gfv` chiffrée | `export-vault-encrypted.ps1` / `import-vault-encrypted.ps1` |
 
-Guide : `aria-vanguard\operator\MULTI-PC-VAULT.md`
+Guide : `vanguard\operator\MULTI-PC-VAULT.md`
 
 ### 7. Cloud prod (déjà en ligne — pas sur le PC)
 
@@ -144,9 +153,8 @@ Clé API Render locale : `vault\keys\render.api-key` (`rnd_...`)
 ### 8. Dev local (optionnel)
 
 ```powershell
-cd projets\aria-sandbox
-.\scripts\setup-local.ps1
-cd ..\aria-vanguard\operator
+cd %ARIA_REPO_ROOT%\vanguard\operator
+.\build-local.ps1
 .\sync-local.ps1
 ```
 
@@ -154,13 +162,13 @@ cd ..\aria-vanguard\operator
 
 - **2FA / passkey** obligatoire sur github.com
 - PAT fine-grained pour `GITHUB_TOKEN` Render (droits minimaux)
-- Politique : `aria-vanguard\operator\REPO-SECURITY.md`
+- Politique : `vanguard\operator\REPO-SECURITY.md`
 - Ne jamais coller de secret dans Cursor / chat
 
 ### 10. Vérification finale (obligatoire)
 
 ```powershell
-cd projets\aria-vanguard\operator
+cd %ARIA_REPO_ROOT%\vanguard\operator
 .\check-aria-status.ps1
 ```
 
@@ -168,7 +176,7 @@ Attendu : secrets coffre = Render, health `https://api.ariavanguardzhc.com/api/h
 
 ### 11. Checklist assistant début de session
 
-1. `git pull` collegue-memoire → lire ce § + Journal
+1. `git pull` sur ARIA → lire ce § + `JOURNAL.md`
 2. Coffre présent ? Sinon Syncthing / import `.gfv`
 3. `check-aria-status.ps1` — lister manques
 4. Proposer et **exécuter** installs manquantes (winget, clone, scripts)
@@ -235,10 +243,12 @@ Fichier : **`JOURNAL.md`** (même repo). Une ligne par action :
 | **Cursor** | Règle `.cursor/rules/journal-de-bord.md` — demander « montre le journal » |
 | **Grok** | Skill `/journal-de-bord` + règle always-on |
 
-Setup : `aria-skills\scripts\install.ps1` puis copier `.cursor\rules\journal-de-bord.md` depuis ce repo.
+Setup : `skills\scripts\install.ps1` puis copier `.grok\rules\journal-de-bord.md` depuis `collegue-memoire\`.
 
 Distinct du tableau ci-dessus (décisions métier).
 
 ---
 
-*Dernière mise à jour : 2026-06-20 (pause mémoire Phase D → reprise 2026-07-02)*
+| 2026-07-01 | **Monorepo ARIA** : tout l'écosystème dans `GoldenFarFR/ARIA` ; `collegue-memoire/` = ce dossier ; `ARIA_REPO_ROOT` sur chaque PC |
+
+*Dernière mise à jour : 2026-07-01 (monorepo ARIA)*

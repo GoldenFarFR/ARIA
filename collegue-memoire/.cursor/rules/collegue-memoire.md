@@ -1,20 +1,17 @@
 ---
-description: Mémoire collègue — COLLEGUE.md via GitHub (multi-PC)
+description: Mémoire collègue — monorepo ARIA
 alwaysApply: true
 ---
 
-# Mémoire collègue (GitHub)
+# Mémoire collègue (monorepo ARIA)
 
 Avant **toute** tâche :
 
-1. Vérifier si `%USERPROFILE%\projets\collegue-memoire\COLLEGUE.md` existe
-2. **Si absent** → rappeler à l'utilisateur **une fois** au début de la session :
-   - `git clone https://github.com/GoldenFarFR/collegue-memoire.git "%USERPROFILE%\projets\collegue-memoire"`
-   - `copy "%USERPROFILE%\projets\collegue-memoire\.cursor\rules\collegue-memoire.md" "%USERPROFILE%\.cursor\rules\"`
-   - Puis continuer sans supposer les préférences métier (DDC, Aptos, etc.)
-3. **Si présent** → exécuter `aria-local-sync\scripts\session-handoff.ps1`, lire `sessions\HANDOFF.md` + `COLLEGUE.md`, puis travailler
-4. Si workspace = ce repo : lire `COLLEGUE.md` à la racine
+1. Lire `%ARIA_REPO_ROOT%\collegue-memoire\COLLEGUE.md`
+2. **Si absent** → proposer une fois :
+   ```powershell
+   git clone https://github.com/GoldenFarFR/ARIA.git "%USERPROFILE%\GitHub-Repos\ARIA"
+   ```
+3. **Si présent** → `local-sync\scripts\session-handoff.ps1`, puis `COLLEGUE.md` + `JOURNAL.md`
 
-Après session utile : mettre à jour `COLLEGUE.md`, `git commit` + `git push`.
-
-Ne jamais demander à l'utilisateur de rappeler la lecture — mais **si** le setup manque, **proposer** l'installation.
+Après session utile : mettre à jour `COLLEGUE.md`, commit + push `GoldenFarFR/ARIA`.

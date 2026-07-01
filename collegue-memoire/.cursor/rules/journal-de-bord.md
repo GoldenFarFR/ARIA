@@ -1,16 +1,9 @@
----
-description: Journal de bord Aria — horodate chaque action fichier/repo
-alwaysApply: true
----
-
 # Journal de bord (Cursor)
 
-Après **chaque action significative** (fichier créé/modifié/supprimé, commit, push) :
+Après chaque action significative :
 
-1. Append dans `%USERPROFILE%\projets\collegue-memoire\JOURNAL.md`
-2. Format : `HHhMM — <verbe> <cible>` (heure locale)
-3. Script : `projets\aria-skills\.grok\skills\journal-de-bord\scripts\append.ps1`
+1. Append dans `%ARIA_REPO_ROOT%\collegue-memoire\JOURNAL.md`
+2. Format : `HHhMM — <verbe> <cible>`
+3. Script : `skills\.grok\skills\journal-de-bord\scripts\append.ps1`
 
-**Consulter le journal** : ouvrir `JOURNAL.md`, ou demander « montre le journal de bord ».
-
-Distinct du § Journal de `COLLEGUE.md` (décisions métier).
+Fin de session : commit + push `GoldenFarFR/ARIA`.

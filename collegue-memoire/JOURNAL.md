@@ -231,3 +231,6 @@
 22h16 — publie tweet X built-in-public + capture GitHub
 22h25 — feat x_voice humain sans tics IA aria-core
 22h28 — COLLEGUE+HANDOFF mono-PC PC-SYLVAIN seul
+
+## 2026-07-01
+22h20 — 22h20 — Mise a jour COLLEGUE.md + regles Grok monorepo ARIA

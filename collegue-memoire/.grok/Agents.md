@@ -1,5 +1,6 @@
-# Préférences globales
+# Agents — collegue-memoire (monorepo ARIA)
 
-Toujours répondre en français.
+Mémoire collègue : lire `%ARIA_REPO_ROOT%\collegue-memoire\COLLEGUE.md`.  
+Mettre à jour + `git commit` + `git push` sur `GoldenFarFR/ARIA` après session utile.
 
-Mémoire collègue (GitHub) : lire `COLLEGUE.md` à la racine de ce repo — ou `%USERPROFILE%\projets\collegue-memoire\COLLEGUE.md`. Mettre à jour + git push après session utile.
+Journal technique : `collegue-memoire/JOURNAL.md` (distinct du § Journal de COLLEGUE.md).
