@@ -64,46 +64,38 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ## PC-SYLVAIN
 
-- **Derniere session** : 2026-06-20T22:27:20
-- **Session Grok** : `019ee66e-8af6-72e2-a6b7-ae2804150bf4`
-- **Repos** : aria-local-sync, aria-sandbox, aria-vanguard, collegue-memoire
-- **Fichiers modifies** : 24 (extrait ci-dessous)
+- **Derniere session** : 2026-07-01T22:44:06
+- **Session Grok** : `019f1f3e-095f-7971-bdc1-0ceb167e1342`
+- **Repos** : ARIA
+- **Fichiers modifies** : 30 (extrait ci-dessous)
 
 **Etat git** :
-- `aria-vanguard` @ 1793eab (dirty) - ops(x): Option A env flags ÔÇö likes off, X read loops disabled
-- `aria-sandbox` @ 5f618262 (dirty) - feat(x): human voice profile ÔÇö no AI agent character tropes
-- `collegue-memoire` @ df615d0 (dirty) - journal: desactive TOTP Telegram
-- `aria-local-sync` @ f08f3e3 (dirty) - feat(bridge): pont ARIA-Cursor 3 voix vers API locale
+- `ARIA` @ 71b5a2a (dirty) - fix(local): bridge monorepo paths + sync-local garde LLM ollama
 
 **Fichiers (extrait)** :
-- aria-local-sync/scripts/aria-cursor-bridge.ps1
-- aria-sandbox/packages/aria-core/src/aria_core/gateway/telegram_bot.py
-- aria-sandbox/packages/aria-core/src/aria_core/gateway/x_engagement.py
-- aria-sandbox/packages/aria-core/src/aria_core/gateway/x_twitter.py
-- aria-sandbox/packages/aria-core/src/aria_core/heartbeat.py
-- aria-sandbox/packages/aria-core/src/aria_core/skills/capability_skill.py
-- aria-sandbox/packages/aria-core/src/aria_core/skills/comms_skill.py
-- aria-sandbox/packages/aria-core/src/aria_core/skills/github_skill.py
-- aria-sandbox/packages/aria-core/src/aria_core/testing.py
-- aria-sandbox/packages/aria-core/src/aria_core/tweet_compose_workflow.py
-- aria-sandbox/packages/aria-core/src/aria_core/x_publication_policy.py
-- aria-sandbox/packages/aria-core/src/aria_core/x_voice.py
-- aria-sandbox/packages/aria-core/tests/test_truth_ledger.py
-- aria-sandbox/packages/aria-core/tests/test_tweet_compose_workflow.py
-- aria-sandbox/packages/aria-core/tests/test_x_engagement.py
-- aria-sandbox/packages/aria-core/tests/test_x_voice.py
-- aria-vanguard/backend/app/config.py
-- aria-vanguard/backend/requirements.txt
-- aria-vanguard/operator/deploy-vector-memory.ps1
-- aria-vanguard/operator/production.env.example
-- ... (+4 autres)
+- .gitignore
+- C:\Users\Studi\.grok\rules\collegue-memoire.md
+- C:\Users\Studi\.grok\rules\journal-de-bord.md
+- C:\Users\Studi\.grok\rules\session-handoff.md
+- collegue-memoire/.cursor/rules/collegue-memoire.md
+- collegue-memoire/.cursor/rules/journal-de-bord.md
+- collegue-memoire/.cursor/rules/session-handoff.md
+- collegue-memoire/.grok/Agents.md
+- collegue-memoire/.grok/rules/collegue-memoire.md
+- collegue-memoire/COLLEGUE.md
+- collegue-memoire/README.md
+- local-sync/scripts/_paths.ps1
+- local-sync/scripts/aria-cursor-bridge.ps1
+- local-sync/scripts/collect-session.ps1
+- local-sync/scripts/push-session-manifest.ps1
+- local-sync/scripts/session-handoff.ps1
+- README.md
+- render.yaml
+- scripts/aria-paths.ps1
+- skills/.grok/rules/journal-de-bord.md
+- ... (+10 autres)
 
 **Journal** :
-- 21h05 — desactive TOTP Telegram bbfc827c d7ff2fc f06c0ca
-- 21h09 — handoff OK TOTP session Git 12h PC-SYLVAIN
-- 21h13 — test vector memory local OK + bump pin bbfc827 chromadb requirements
-- 21h18 — fix test_truth_ledger isolation + build-local 337 pass deploy bloque quota Render
-- 21h19 — active ARIA_VECTOR_MEMORY=true local.env vault + sync-local
 - 21h21 — lance uvicorn local 127.0.0.1:8000 ARIA_VECTOR_MEMORY=true
 - 21h29 — local ARIA mode operateur ARIA_PUBLIC_MODE=false ACCESS_CODE_ENABLED=false
 - 21h34 — impl pont aria-cursor-bridge skill + script + jsonl
@@ -114,4 +106,9 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 - 22h15 — Option A X prod env sync (likes/curiosity/mentions off)
 - 22h16 — publie tweet X built-in-public + capture GitHub
 - 22h25 — feat x_voice humain sans tics IA aria-core
+- 22h28 — COLLEGUE+HANDOFF mono-PC PC-SYLVAIN seul
+- 
+- ## 2026-07-01
+- 22h20 — 22h20 — Mise a jour COLLEGUE.md + regles Grok monorepo ARIA
+- 22h44 — 22h44 — fin session monorepo ARIA + collect/push handoff
 
