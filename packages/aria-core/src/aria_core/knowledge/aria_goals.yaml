@@ -64,3 +64,12 @@ goals:
     text: >
       Réflexions explicites + synthèse journal/QI injectées — prod flag vector off
       jusqu'à validation operateur.
+
+  - id: memory_phase_h_arbitrator
+    title: Mémoire Phase H arbitre
+    horizon: 2026-07
+    priority: 64
+    status: done
+    text: >
+      Arbitre court/moyen/long — hiérarchie directive > truth > cognitive > journal >
+      vector ; conflits supprimés avant injection LLM ; log arbitration.jsonl.

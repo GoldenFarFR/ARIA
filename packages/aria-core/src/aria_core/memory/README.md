@@ -12,6 +12,7 @@ Point d'entrée cible pour la mémoire ARIA. **Désactivé par défaut** pour le
 | `values.py` | Valeurs opérationnelles (`aria_values.yaml`) | Phase E |
 | `goals.py` | Objectifs opérationnels (`aria_goals.yaml` + état dynamique) | Phase F |
 | `reflection.py` | Réflexion (`reflections.jsonl` + synthèse journal/QI) | Phase G |
+| `arbitrator.py` | Arbitre mémoire court/moyen/long + résolution conflits | Phase H |
 | `vector/chroma_store.py` | Embeddings Chroma embedded | Phase C |
 | `vector/health.py` | Diagnostic Chroma (Phase 2 prep) | Phase 2 prep |
 | `vector/schema.yaml` | Types `insight`, `lesson`, `reflection`, `decision` | — |
@@ -60,6 +61,18 @@ SSOT : `knowledge/aria_goals.yaml` — injecté dans `build_llm_context` (opéra
 ```python
 from aria_core.memory import get_goals_text, goals_count
 ```
+
+## Phase H — arbitre mémoire
+
+SSOT : `knowledge/aria_arbitrator.yaml` — hiérarchie directive > truth > cognitive > values > goals > reflection > journal > vector > conversation.
+
+```python
+from aria_core.memory import run_memory_arbitration, get_arbitration_text
+result = await run_memory_arbitration(messages=msgs, query_hint="...")
+block = get_arbitration_text(result)
+```
+
+Flag : `aria_memory_arbitrator=true` (défaut). Log : `arbitration.jsonl`.
 
 ## Phase G — réflexion opérationnelle
 
