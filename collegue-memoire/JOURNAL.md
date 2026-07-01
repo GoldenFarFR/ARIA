@@ -1,4 +1,4 @@
-# Journal de bord Aria
+﻿# Journal de bord Aria
 
 > Actions techniques de l'assistant (fichiers, repos, commits).  
 > Décisions métier → `COLLEGUE.md` § Journal.
@@ -278,3 +278,4 @@
 01h33 — file X commu 4h fusion GoldenFarFR trusted + fix spam .com
 01h36 — retrait lien Telegram trusted handles + push deploy commu
 01h47 — deploy vitrine static rootDir vanguard + API test-1
+01h58 — feat(vitrine) Privy login + push monorepo GitHub
