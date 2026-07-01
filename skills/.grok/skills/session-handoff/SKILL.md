@@ -1,0 +1,59 @@
+---
+name: session-handoff
+description: >
+  Debut et fin de session Grok/Cursor multi-PC : handoff automatique via GitHub.
+  Toujours actif — premiere action de session, derniere action utile.
+  Triggers : session, handoff, autre PC, demarrage, lis le github, met toi a jour,
+  /session-handoff.
+metadata:
+  short-description: "Auto handoff multi-PC au demarrage Grok"
+  always-on: true
+---
+
+# Session handoff (multi-PC) — 100 % automatique
+
+## Regle d or
+
+**operateur ne lance rien et ne dit rien** au demarrage (pas meme « lis le github »).
+Toi (Grok/Cursor) tu executes le handoff **avant la premiere phrase de reponse**.
+
+## Premiere action — CHAQUE session
+
+Executer soi-meme, dans l'ordre :
+
+1. **Shell** : `%USERPROFILE%\projets\aria-local-sync\scripts\session-handoff.ps1`  
+   Si `aria-local-sync` absent : le script `ensure-pc-ready.ps1` (appele automatiquement) clone les repos.  
+   **TOTP** : si `[TOTP_REQUIRED]` ou session Git expiree → **demander a operateur dans le chat** les 6 chiffres Google Authenticator (GoldenFar Vault), puis relancer avec `-TotpCode` (pas Telegram/ARIA).
+2. **Lire** (obligatoire) :
+   - `collegue-memoire\sessions\HANDOFF.md` (SSOT GitHub)
+   - `collegue-memoire\SESSION-START.md` (genere local)
+   - `collegue-memoire\sessions\<MACHINE>\boot-status.json` (nouveau PC ?)
+   - `sessions/CONSOMMATION-GROK.md` (mode concis — moins de tokens)
+   - `COLLEGUE.md` + fin de `JOURNAL.md`
+3. **Nouveau PC** (`boot-status.json` → `is_new_pc: true`) :
+   - Si `has_vault_secrets: false` : demander a operateur **une seule fois** les 2 lignes Bitwarden (master + TOTP) — rien d autre.
+   - Si secrets OK : `bootstrap-autre-pc.ps1 -SkipHandoff` puis `check-aria-status.ps1`
+   - Ajouter la machine dans `aria-local-sync\security\github-trust.yaml` → `known_machines`
+4. **PC connu** : appliquer handoff (`git pull`, `apply-local.ps1 -TotpCode` si coffre change sur l autre PC).
+5. Resumer en 3-5 lignes (delta autre PC) **puis** repondre a la demande.
+6. Checklist : `SESSION-CHECKLIST.html` ou `open-checklist.ps1`
+
+Ne jamais dire « lance session-handoff » a operateur.
+
+## Phrases declencheurs (meme effet)
+
+- « lis le github et met toi a jour »
+- « autre PC » / « nouveau PC »
+- debut de session sans phrase
+
+Toujours executer le handoff — la phrase humaine est optionnelle.
+
+## Derniere action — fin de session utile
+
+1. `collect-session.ps1`
+2. `push-session-manifest.ps1` (jamais `-ViaAria` — TOTP Telegram desactive). `-TotpCode` si session Git expiree.
+3. `COLLEGUE.md` si decision metier
+
+## Fichier SSOT
+
+`GoldenFarFR/collegue-memoire` → `sessions/HANDOFF.md`

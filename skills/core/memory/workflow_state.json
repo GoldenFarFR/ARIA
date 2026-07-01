@@ -1,0 +1,1 @@
+Détection et mitigation d'une fuite de clé privée dans connect.ts. Le fichier original a été mis en quarantaine et une version sécurisée proposée, utilisant une variable d'environnement. Incident logué dans security_logs.json.**
