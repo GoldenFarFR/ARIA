@@ -10,6 +10,7 @@ Point d'entrée cible pour la mémoire ARIA. **Désactivé par défaut** pour le
 | `cognitive_sql.py` | Leçons approuvées SQLite | `knowledge/cognitive.py` |
 | `llm_context.py` | `build_llm_context` + rappel vectoriel | Phase D |
 | `values.py` | Valeurs opérationnelles (`aria_values.yaml`) | Phase E |
+| `goals.py` | Objectifs opérationnels (`aria_goals.yaml` + état dynamique) | Phase F |
 | `vector/chroma_store.py` | Embeddings Chroma embedded | Phase C |
 | `vector/health.py` | Diagnostic Chroma (Phase 2 prep) | Phase 2 prep |
 | `vector/schema.yaml` | Types `insight`, `lesson`, `reflection`, `decision` | — |
@@ -48,6 +49,15 @@ SSOT : `knowledge/aria_values.yaml` — injecté dans `build_llm_context` (opér
 
 ```python
 from aria_core.memory import get_values_text, values_count
+```
+
+## Phase F — objectifs opérationnels
+
+SSOT : `knowledge/aria_goals.yaml` — injecté dans `build_llm_context` (opérateur uniquement).  
+État dynamique : QI global, revenu mois, objectifs personnels (`revenue_ledger.json`).
+
+```python
+from aria_core.memory import get_goals_text, goals_count
 ```
 
 ## Phase D — injection LLM

@@ -17,9 +17,10 @@ Derniere regeneration : 2026-07-01T22:54 (session PC-SYLVAIN — handoff tout)
 | C Chroma opt-in | done | `67b28c3a` |
 | D injection LLM | **done** | `e9de6856` (`llm_context.py`) |
 | E values | **done** | `d91c33e` (`aria_values.yaml` + `memory/values.py`) |
+| F goals | **done** | local (`aria_goals.yaml` + `memory/goals.py`) |
 
 Prod : `aria_vector_memory=false`, `aria_ddg_search_cache=false` (defaut safe).  
-**Suite** : Phase F (goals) ou deploy groupe quand quota Render OK.
+**Suite** : Phase G (reflection) ; push local (Gem Crush removal + Phase F) quand Sylvain valide.
 
 SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
