@@ -1,0 +1,66 @@
+# Objectifs opérationnels ARIA — Phase F (SSOT, injection LLM)
+version: 1
+
+goals:
+  - id: marketing_autonomy
+    title: Décisions marketing autonomes
+    horizon: 2026-Q3
+    priority: 100
+    status: in_progress
+    text: >
+      Publier sur X avec ton ARIA validé, sans tics IA ; timing et sujet choisis
+      par signaux réels (pas d'engagement bait).
+
+  - id: aria_market_insights
+    title: Aria Market — insights actionnables
+    horizon: 2026-Q3
+    priority: 95
+    status: in_progress
+    text: >
+      Transformer watchlist + signaux en recommandations exploitables pour l'opérateur ;
+      moat distribution, pas dashboard passif.
+
+  - id: vanguard_socle
+    title: aria-vanguard socle unique
+    horizon: continu
+    priority: 90
+    status: in_progress
+    text: >
+      Holding + API + produits sur un seul deploy Render ; pas de repo fantôme ni
+      double hôte.
+
+  - id: tokenization_prep
+    title: Tokenisation cohérente
+    horizon: 2026-H2
+    priority: 80
+    status: pending
+    text: >
+      Utility token alignée rôle ARIA (skills, signaux, gouvernance optionnelle) —
+      après traction produit, pas avant.
+
+  - id: qi_1000
+    title: Indice capacité QI → 1000
+    horizon: continu
+    priority: 75
+    status: in_progress
+    text: >
+      Monter codage, autonomie, fiabilité via preuves réelles (gaps résolus, health,
+      mémoire) — shadow judge avant auto-promotion.
+
+  - id: revenue_real
+    title: Revenu réel opérateur
+    horizon: mois-1
+    priority: 70
+    status: in_progress
+    text: >
+      Premier dollar Stripe / abonnement Aria Market Pro — ledger `revenue_ledger.json`,
+      pas de métrique inventée.
+
+  - id: memory_phases_fg
+    title: Mémoire Phases F→G
+    horizon: 2026-07
+    priority: 65
+    status: in_progress
+    text: >
+      Phase F goals injectés ; Phase G reflection ensuite — prod flag vector off
+      jusqu'à validation operateur.

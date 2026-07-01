@@ -29,6 +29,7 @@ from aria_core.memory.journal import (
     read_recent,
 )
 from aria_core.memory.llm_context import fetch_vector_recall, sanitize_recall_text
+from aria_core.memory.goals import get_goals_text, goals_count
 from aria_core.memory.values import get_values_text, values_count
 from aria_core.memory.vector import is_vector_enabled, vector_store_status
 from aria_core.memory.vector.health import vector_health_report
@@ -59,7 +60,9 @@ __all__ = [
     "get_launchpad_doctrine_text",
     "get_pending",
     "get_persona_text",
+    "get_goals_text",
     "get_values_text",
+    "goals_count",
     "is_vector_enabled",
     "values_count",
     "vector_health_report",
