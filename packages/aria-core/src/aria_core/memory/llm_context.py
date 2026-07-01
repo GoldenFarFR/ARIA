@@ -151,6 +151,15 @@ async def build_llm_context(
         reflection_block = get_reflections_text()
         if reflection_block:
             parts.append(f"\n{reflection_block}")
+        recall = await fetch_vector_recall(vector_query)
+        if arbitration.conflicts:
+            suppressed_vector = {s.content[:80] for s in arbitration.suppressed if s.layer == "vector"}
+            if suppressed_vector and recall:
+                recall_lines = [ln for ln in recall.splitlines() if not any(p in ln for p in suppressed_vector)]
+                recall = "\n".join(recall_lines)
+        if recall:
+            parts.append("\n# Rappel sémantique (mémoire vectorielle — opt-in)")
+            parts.append(recall)
         directives = get_directives_text()
         if directives:
             parts.append("\n# Directives opérateur (priorité haute)")
@@ -169,16 +178,6 @@ async def build_llm_context(
                     parts.append(f"- [{item.topic}] {item.content[:200]}")
         except Exception:
             pass
-
-        recall = await fetch_vector_recall(vector_query)
-        if arbitration.conflicts:
-            suppressed_vector = {s.content[:80] for s in arbitration.suppressed if s.layer == "vector"}
-            if suppressed_vector and recall:
-                recall_lines = [ln for ln in recall.splitlines() if not any(p in ln for p in suppressed_vector)]
-                recall = "\n".join(recall_lines)
-        if recall:
-            parts.append("\n# Rappel sémantique (mémoire vectorielle — opt-in)")
-            parts.append(recall)
 
     doctrine = get_doctrine_text()
     if doctrine:
@@ -220,4 +219,41 @@ async def build_llm_context(
             role = "User" if msg["role"] == "user" else "ARIA"
             parts.append(f"{role}: {msg['content'][:150]}")
 
-    return "\n".join(parts)[:_CONTEXT_MAX_CHARS]
+    return _assemble_context(parts, max_chars=_CONTEXT_MAX_CHARS)
+
+
+def _assemble_context(parts: list[str], *, max_chars: int) -> str:
+    """Assemble le contexte en préservant les sections mémoire prioritaires."""
+    full = "\n".join(parts)
+    if len(full) <= max_chars:
+        return full
+    priority_markers = (
+        "# Rappel sémantique (mémoire vectorielle — opt-in)",
+        "Arbitre mémoire ARIA",
+        "# Connaissances approuvées (mémoire sémantique)",
+        "# Journal récent (mémoire épisodique)",
+    )
+    preserved: list[str] = []
+    for marker in priority_markers:
+        idx = full.find(marker)
+        if idx == -1:
+            continue
+        line_start = full.rfind("\n", 0, idx) + 1
+        if line_start > 0 and full[line_start:idx].strip().startswith("#"):
+            idx = line_start
+        next_idx = len(full)
+        for other in priority_markers:
+            if other == marker:
+                continue
+            pos = full.find(other, idx + len(marker))
+            if pos != -1:
+                next_idx = min(next_idx, pos)
+        preserved.append(full[idx:next_idx].strip())
+    head_budget = max(2000, max_chars // 2)
+    head = full[:head_budget].rstrip()
+    reserved = "\n\n".join(preserved)
+    if len(head) + len(reserved) + 2 <= max_chars:
+        return f"{head}\n\n{reserved}"[:max_chars]
+    if reserved and len(reserved) <= max_chars:
+        return reserved[:max_chars]
+    return full[:max_chars]
