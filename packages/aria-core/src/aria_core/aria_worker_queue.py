@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -142,6 +143,157 @@ def count_pending_tasks(content: str) -> int:
     return len(re.findall(r"^##\s+\[pending\]\s+", content, re.MULTILINE | re.IGNORECASE))
 
 
+def _local_worker_md_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    for env_key in ("ARIA_REPO_ROOT", "COLLEGUE_MEMOIRE_ROOT"):
+        raw = os.getenv(env_key, "").strip()
+        if not raw:
+            continue
+        root = Path(raw)
+        candidates.append(root / "collegue-memoire" / "sessions" / "ARIA-WORKER.md")
+        candidates.append(root / "sessions" / "ARIA-WORKER.md")
+    home = Path.home()
+    candidates.extend(
+        [
+            home / "GitHub-Repos" / "ARIA" / "collegue-memoire" / "sessions" / "ARIA-WORKER.md",
+            home / "projets" / "collegue-memoire" / "sessions" / "ARIA-WORKER.md",
+        ],
+    )
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in candidates:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
+def resolve_local_worker_md() -> Path | None:
+    """Chemin local monorepo / clone collegue-memoire pour l'ouvrier Cursor."""
+    for path in _local_worker_md_candidates():
+        if path.parent.is_dir():
+            return path
+    return None
+
+
+def _write_task_to_local_md(task: WorkerTask) -> Path | None:
+    path = resolve_local_worker_md()
+    if path is None:
+        return None
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if _has_pending_task(existing, task.task_id):
+        return path
+    new_content = _append_task_to_markdown(existing, task)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new_content, encoding="utf-8")
+    append_memory("self-improve", f"[aria-worker] {task.task_id} local md → {path}")
+    return path
+
+
+def _task_from_record(record: dict[str, Any]) -> WorkerTask:
+    return WorkerTask(
+        task_id=str(record.get("task_id") or "task"),
+        title=str(record.get("title") or ""),
+        source=str(record.get("source") or ""),
+        problem=str(record.get("problem") or ""),
+        action=str(record.get("action") or ""),
+        priority=str(record.get("priority") or "normal"),
+        repos=tuple(record.get("repos") or ()),
+        files=tuple(record.get("files") or ()),
+        acceptance=tuple(record.get("acceptance") or ()),
+        issue_url=str(record.get("issue_url") or ""),
+        pr_url=str(record.get("pr_url") or ""),
+        context=str(record.get("context") or ""),
+        created_at=str(record.get("created_at") or ""),
+    )
+
+
+def _backfill_task_from_feedback_jsonl(task_id: str) -> WorkerTask | None:
+    """Reconstruit une tâche community_feedback si le jsonl worker est incomplet."""
+    from aria_core.paths import data_dir
+
+    fb_path = data_dir() / "community-feedback.jsonl"
+    if not fb_path.is_file():
+        return None
+    for line in fb_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if str(rec.get("worker_task_id") or "") != task_id:
+            continue
+        text = str(rec.get("text") or "").strip()
+        if not text:
+            return None
+        handle = str(rec.get("handle") or "").strip().lstrip("@")
+        score = int(rec.get("score") or 0)
+        handle_bit = f" (@{handle})" if handle else ""
+        return WorkerTask(
+            task_id=task_id,
+            title=text[:120],
+            source="community_feedback",
+            problem=f"Feedback communauté site{handle_bit} — score {score}/100\n\n{text}",
+            action=(
+                "Évaluer l'idée communauté ; si alignée vision ZHC/Vanguard, préparer workflow "
+                "ouvrier (spec courte, fichiers cibles, critères d'acceptation) puis implémenter."
+            ),
+            priority="normal",
+            repos=("aria-vanguard", "aria-sandbox"),
+            acceptance=(
+                "Décision documentée (ship / defer / decline)",
+                "Si ship : PR ou commit + JOURNAL.md",
+            ),
+            context=f"visitor={rec.get('visitor_id') or 'anon'} source={rec.get('source') or 'vanguard_site'}",
+            created_at=str(rec.get("at") or "")[:19].replace("T", " ") + "Z" if rec.get("at") else "",
+        )
+    return None
+
+
+def sync_pending_local_tasks_to_md() -> list[str]:
+    """Rejoue les tâches pending du jsonl local vers ARIA-WORKER.md (session ouvrier)."""
+    jsonl = _local_jsonl()
+    if not jsonl.is_file():
+        return []
+    latest: dict[str, dict[str, Any]] = {}
+    for line in jsonl.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        tid = str(rec.get("task_id") or "")
+        if tid:
+            latest[tid] = rec
+
+    synced: list[str] = []
+    path = resolve_local_worker_md()
+    existing = path.read_text(encoding="utf-8") if path and path.is_file() else ""
+    for tid, rec in latest.items():
+        if str(rec.get("status") or "") != "pending":
+            continue
+        if path and _has_pending_task(existing, tid):
+            continue
+        if not rec.get("problem") and not rec.get("action"):
+            backfill = _backfill_task_from_feedback_jsonl(tid)
+            if not backfill:
+                continue
+            task = backfill
+        else:
+            task = _task_from_record(rec)
+        written = _write_task_to_local_md(task)
+        if written:
+            synced.append(tid)
+            if path:
+                existing = written.read_text(encoding="utf-8")
+    return synced
+
+
 def _append_local_record(task: WorkerTask, *, status: str, extra: dict[str, Any] | None = None) -> None:
     record = {
         "task_id": task.task_id,
@@ -149,6 +301,15 @@ def _append_local_record(task: WorkerTask, *, status: str, extra: dict[str, Any]
         "source": task.source,
         "status": status,
         "created_at": task.created_at,
+        "problem": task.problem,
+        "action": task.action,
+        "priority": task.priority,
+        "repos": list(task.repos),
+        "files": list(task.files),
+        "acceptance": list(task.acceptance),
+        "issue_url": task.issue_url,
+        "pr_url": task.pr_url,
+        "context": task.context,
         **(extra or {}),
     }
     with _local_jsonl().open("a", encoding="utf-8") as f:
@@ -228,10 +389,13 @@ async def enqueue_worker_task(
     }
 
     _append_local_record(task, status="pending")
+    local_md = _write_task_to_local_md(task)
+    if local_md:
+        result["local_worker_md"] = str(local_md)
 
     if not github_configured():
         append_memory("self-improve", f"[aria-worker] {task.task_id} local only (no GITHUB_TOKEN)")
-        result["status"] = "local_only"
+        result["status"] = "local_md" if local_md else "local_only"
         await _notify_worker_task(task, result, lang=lang)
         return result
 
@@ -278,6 +442,13 @@ async def enqueue_worker_task(
         append_memory(
             "self-improve",
             f"[aria-worker] {task.task_id} pushed → {pushed[0].get('repo')}:{pushed[0].get('path')}",
+        )
+    elif local_md:
+        result["status"] = "local_md"
+        result["errors"] = errors
+        append_memory(
+            "self-improve",
+            f"[aria-worker] {task.task_id} push failed — fallback local md",
         )
     else:
         result["status"] = "push_failed"
@@ -352,8 +523,10 @@ async def _notify_worker_task(task: WorkerTask, result: dict[str, Any], *, lang:
     if pushed:
         p = pushed[0]
         msg += f"File : {p.get('repo')}/{p.get('path')}\n"
-    elif result.get("status") == "local_only":
-        msg += f"Local : {result.get('local_jsonl')}\n"
+    elif result.get("status") in ("local_only", "local_md"):
+        if result.get("local_worker_md"):
+            msg += f"Local MD : {result.get('local_worker_md')}\n"
+        msg += f"Local jsonl : {result.get('local_jsonl')}\n"
         msg += "Ouvrier : lire sessions/ARIA-WORKER.md après pull collegue-memoire.\n"
 
     if result.get("status") == "dedup":
@@ -368,9 +541,12 @@ def format_worker_reply(result: dict[str, Any], *, lang: str = "fr") -> str:
     else:
         lines = ["Queued task for Cursor worker:"]
     lines.append(f"ID : {result.get('task_id')}")
-    if result.get("status") == "pushed":
+    status = result.get("status")
+    if status == "pushed":
         pushed = (result.get("pushed") or [{}])[0]
         lines.append(f"File : {pushed.get('repo')}/{pushed.get('path')}")
+    elif status == "local_md" and result.get("local_worker_md"):
+        lines.append(f"File locale : {result.get('local_worker_md')}")
     if lang == "fr":
         lines.append("L'ouvrier traitera `sessions/ARIA-WORKER.md` à la prochaine session.")
     else:

@@ -62,7 +62,10 @@ def classify_operator_message(message: str) -> OperatorMessageKind:
 
     lower = text.lower()
     has_self = bool(_SELF_PRONOUN_RE.search(lower))
-    has_banner = bool(_BANNER_RE.search(lower))
+    has_banner = bool(_BANNER_RE.search(lower)) and not re.search(
+        r"\b(?:ignore|sans|pas de|no|skip|zero)\b.{0,24}\b(?:banni|banner)\b",
+        lower,
+    )
     has_directive = bool(_DIRECTIVE_VERB_RE.search(lower))
 
     if _GENERAL_HOWTO_RE.search(text) and _IMPERSONAL_RE.search(lower):

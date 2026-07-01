@@ -249,3 +249,32 @@
 23h41 — sync-render 60 vars ARIA_VECTOR_MEMORY=false prod safe
 23h44 — activer ARIA_VECTOR_MEMORY=true prod — sync-render + redeploy dep-d92ojsc live
 23h47 — fin session Phase I deploy + vector memory prod — collect/push handoff 8d97e00
+23h49 — créé prompt ACP v2 + script prepare-acp-v2-integration.ps1
+23h49 — menu interactif prepare-acp-v2-integration.ps1 (afficher/copier/bridge)
+23h53 — intégration ACP v2 aria-core — provider/client skills + tests 7 OK
+23h56 — fix acp_cli Windows (.cmd) + drain vide provider + smoke test local OK
+23h57 — fix listener ACP legacy (v2 HTTP 500 Virtuals) + acp-events-listener.ps1
+
+## 2026-07-02
+00h01 — poll ACP activé bot local — health + chat acp status/cycle OK
+00h04 — fin session — REPRISE-ACP-2026-07-02 handoff ACP v2 local validé, commit+PR à faire
+00h15 — feat community_worker skill worker_delegate + ton commu chaleureux aria-core
+00h16 — impl CommunityWelcomeBanner Vanguard test worker_delegate
+00h32 — feat community-feedback form site + triage ARIA queue ouvrier
+00h34 — refonte Vanguard minimal stylé FR hero+produit+aria+faq
+00h36 — feat visitor-prefs bandeau commu memoire profil membre
+00h38 — purge holding site Aria Market Privy Activer acces
+00h43 — fix CORS 5174 + relance API feedback commu
+00h50 — feat feedback commu: remontée ARIA-WORKER local + tweet X merci
+00h52 — feat x_profile sync bio site nom @Aria_ZHC
+00h54 — vitrine EN full + widget Google Translate stylé
+00h55 — feat feedback X tweet toujours EN + traduction avis
+00h56 — fix langue site: picker EN + Google opt-in visiteur
+01h05 — sync tokens X Aria_ZHC vault + backend .env
+01h06 — ajout import-secure-x-keys.ps1 + pitfall secrets-via-vault
+01h14 — fix tweet commu skip_rate_gap + middleware feedback public
+01h20 — refonte tweet commu citation exacte + reponse ciblee
+01h21 — modération X avis commu + polish orthographe citation
+01h33 — file X commu 4h fusion GoldenFarFR trusted + fix spam .com
+01h36 — retrait lien Telegram trusted handles + push deploy commu
+01h47 — deploy vitrine static rootDir vanguard + API test-1

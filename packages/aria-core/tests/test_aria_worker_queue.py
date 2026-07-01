@@ -4,6 +4,7 @@ from aria_core.aria_worker_queue import (
     WorkerTask,
     _append_task_to_markdown,
     _has_pending_task,
+    _write_task_to_local_md,
     count_pending_tasks,
     mark_task_done_in_markdown,
 )
@@ -61,6 +62,7 @@ async def test_enqueue_local_only(monkeypatch, tmp_path):
 
     monkeypatch.setattr(mod, "_queue_dir", lambda: tmp_path)
     monkeypatch.setattr(mod, "_local_jsonl", lambda: tmp_path / "tasks.jsonl")
+    monkeypatch.setattr(mod, "resolve_local_worker_md", lambda: None)
     monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: False)
     monkeypatch.setattr(mod, "append_memory", lambda *a, **k: None)
 
@@ -78,3 +80,23 @@ async def test_enqueue_local_only(monkeypatch, tmp_path):
     )
     assert out["status"] == "local_only"
     assert (tmp_path / "tasks.jsonl").is_file()
+
+
+def test_write_task_to_local_md(tmp_path, monkeypatch):
+    from aria_core import aria_worker_queue as mod
+
+    worker_md = tmp_path / "sessions" / "ARIA-WORKER.md"
+    monkeypatch.setattr(mod, "resolve_local_worker_md", lambda: worker_md)
+    monkeypatch.setattr(mod, "append_memory", lambda *a, **k: None)
+
+    task = WorkerTask(
+        task_id="community-fb-test-20260702",
+        title="Lien Telegram bandeau",
+        source="community_feedback",
+        problem="Feedback score 60",
+        action="Évaluer et ship si aligné",
+    )
+    path = _write_task_to_local_md(task)
+    assert path == worker_md
+    body = worker_md.read_text(encoding="utf-8")
+    assert "[pending] community-fb-test-20260702" in body

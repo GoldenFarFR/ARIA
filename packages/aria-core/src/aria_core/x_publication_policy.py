@@ -264,7 +264,12 @@ def record_engagement(action: str, *, target: str = "", cost_usd: float | None =
     _save_ledger(ledger)
 
 
-def check_tweet_allowed(text: str, *, force: bool = False) -> tuple[bool, str, float]:
+def check_tweet_allowed(
+    text: str,
+    *,
+    force: bool = False,
+    skip_rate_gap: bool = False,
+) -> tuple[bool, str, float]:
     """Return (allowed, reason, estimated_cost_usd)."""
     if not settings.x_post_enabled and not force:
         return False, "Publication X désactivée (X_POST_ENABLED=false).", 0.0
@@ -297,7 +302,7 @@ def check_tweet_allowed(text: str, *, force: bool = False) -> tuple[bool, str, f
         )
 
     last = _last_post_at(ledger)
-    if last and not force:
+    if last and not force and not skip_rate_gap:
         gap = datetime.now(timezone.utc) - last
         need = timedelta(hours=settings.x_min_hours_between_posts)
         if gap < need:

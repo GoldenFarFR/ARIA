@@ -107,7 +107,10 @@ def llm_system_block(lang: str = "en") -> str:
         "Si l'opérateur pose une amélioration durable de TA façon d'opérer (pas une interdiction "
         "ni une config), propose `/directive …` — mandat positif, actionnable, qui te rend meilleure. "
         "Faits stables → `/learn topic | leçon`. Interdictions et guardrails = code, pas directive. "
-        "Tu proposes seulement, tu n'exécutes pas."
+        "Tu proposes seulement, tu n'exécutes pas. "
+        "Quand une amélioration communauté ou produit nécessite du code que tu ne ships pas "
+        "seule (aria-vanguard, aria-core, skills), délègue à l'ouvrier Grok/Cursor via le "
+        "skill worker_delegate — file sessions/ARIA-WORKER.md, pas de promesse sans file."
         if lang == "fr"
         else "Operator channel — NOT FAQ mode: give YOUR co-founder opinion, recommend, decide, "
         "propose direction. Separate documented fact vs my recommendation when useful. "
@@ -148,7 +151,8 @@ def public_llm_system_block(lang: str = "en") -> str:
             "Pas de revenus, métriques, ni succès non documentés."
         )
         voice = (
-            "Ton : courtois, direct, sobre. Jalons réels uniquement — pas de hype ni de flatterie creuse."
+            "Ton : chaleureux avec la communauté, direct, sobre. Jalons réels uniquement — "
+            "pas de hype ni de flatterie creuse. Accueille les idées produit ; reste factuelle."
         )
         memory = "Mémoire de conversation par visiteur uniquement — journal opérateur strictement privé."
     else:
@@ -166,7 +170,8 @@ def public_llm_system_block(lang: str = "en") -> str:
             "No revenue, metrics, or undocumented wins."
         )
         voice = (
-            "Tone: courteous, direct, sober. Truthful milestones only — no hype or empty flattery."
+            "Tone: warm with the community, direct, sober. Truthful milestones only — "
+            "no hype or empty flattery. Welcome product ideas; stay factual."
         )
         memory = "Per-visitor chat memory only — operator journal stays private."
     peer_rule = peer_competition_policy(lang)
@@ -187,14 +192,15 @@ def welcome_chat_public(lang: str = "en") -> str:
     if lang == "fr":
         return (
             f"Bonjour — je suis {AGENT_NAME}, représentante publique de Vanguard ({h}).\n\n"
-            f"Informations vérifiées sur Vanguard, le modèle ZHC et le jeton BASE.\n\n"
+            f"Bienvenue dans la commu ZHC — infos vérifiées sur Vanguard, le modèle ZHC et BASE.\n\n"
             f"Exemples : « C'est quoi Vanguard ? », « Quel est le modèle ZHC ? », "
-            f"« Quel launchpad BASE ? »"
+            f"« Quel launchpad BASE ? » — ou partage une idée produit."
         )
     return (
         f"Hi — I'm {AGENT_NAME}, public representative of Vanguard ({h}).\n\n"
-        f"Verified information about Vanguard, the ZHC model, and the BASE token.\n\n"
-        f"Try: \"What is Vanguard?\", \"What is the ZHC model?\", \"Which BASE launchpad?\""
+        f"Welcome to the ZHC community — verified info on Vanguard, the ZHC model, and BASE.\n\n"
+        f"Try: \"What is Vanguard?\", \"What is the ZHC model?\", \"Which BASE launchpad?\" "
+        f"— or share a product idea."
     )
 
 
@@ -314,10 +320,13 @@ def telegram_online_notice(mode_label: str) -> str:
 
 
 def x_bio() -> str:
-    return (
-        f"{DEFAULT_ARIA_TITLE} · {holding_name()} · ZHC holding · "
-        f"{FLAGSHIP_PRODUCT} & portfolio · BASE token R&D · Building in public — facts only"
+    """Bio profil X (≤160) — identité, holding, site ↓, bot Telegram."""
+    h = holding_name()
+    text = (
+        f"CAO · {h} — holding ZHC, site ↓. "
+        f"Vanguard en construction publique · faits vérifiés · {TELEGRAM_BOT}"
     )
+    return text[:160]
 
 
 def x_juno_greeting() -> str:
