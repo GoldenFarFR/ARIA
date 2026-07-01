@@ -99,16 +99,21 @@ async def chat_with_context(
 
     try:
         timeout = 120.0 if provider == "ollama" else 60.0
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else settings.aria_llm_temperature,
+            "max_tokens": max_tokens,
+        }
+        if provider == "ollama":
+            num_ctx = int(getattr(settings, "aria_ollama_num_ctx", 0) or 0)
+            if num_ctx > 0:
+                payload["options"] = {"num_ctx": num_ctx}
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 url,
                 headers=headers,
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature if temperature is not None else settings.aria_llm_temperature,
-                    "max_tokens": max_tokens,
-                },
+                json=payload,
             )
             if response.status_code != 200:
                 logger.warning("LLM error %s: %s", response.status_code, response.text[:300])
