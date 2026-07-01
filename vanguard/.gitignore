@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.env
+.env.local
+backend/.env
+backend/data/
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Vite / TypeScript
+.vite/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+__pycache__/
+*.pyc
+

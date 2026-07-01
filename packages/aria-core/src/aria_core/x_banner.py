@@ -1,0 +1,147 @@
+"""Bannière X ARIA — header profil 3:1 (≠ avatar carré).
+
+Pipeline visuel (3 actifs distincts) :
+- **Avatar** : `current.jpg` — photo de profil carrée (Telegram /avatar, sync X).
+- **Ancre identité** : `identity_anchor.jpg` — référence visage (même personnage).
+- **Bannière** : `x_banner.jpg` — image large 3:1, générée depuis l'ancre, upload X header.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+from aria_core.paths import aria_avatar_dir
+
+logger = logging.getLogger(__name__)
+
+BANNER_FILENAME = "x_banner.jpg"
+# X header recommandé 1500×500 (3:1) — API max 3 Mo
+BANNER_WIDTH = 1500
+BANNER_HEIGHT = 500
+BANNER_MAX_BYTES = 3 * 1024 * 1024
+
+
+def x_banner_path() -> Path:
+    return aria_avatar_dir() / BANNER_FILENAME
+
+
+def normalize_banner_jpeg(
+    data: bytes,
+    *,
+    width: int = BANNER_WIDTH,
+    height: int = BANNER_HEIGHT,
+    max_bytes: int = BANNER_MAX_BYTES,
+) -> bytes:
+    """Recadre centre 3:1 puis resize — jamais le carré avatar 640×640."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    target_ratio = width / height
+    img = Image.open(BytesIO(data))
+    img = img.convert("RGB")
+    w, h = img.size
+    current_ratio = w / h if h else target_ratio
+
+    if current_ratio > target_ratio:
+        new_w = int(h * target_ratio)
+        left = (w - new_w) // 2
+        img = img.crop((left, 0, left + new_w, h))
+    elif current_ratio < target_ratio:
+        new_h = int(w / target_ratio)
+        top = (h - new_h) // 2
+        img = img.crop((0, top, w, top + new_h))
+
+    img = img.resize((width, height), Image.Resampling.LANCZOS)
+
+    for quality in (90, 85, 80, 75, 70, 65):
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        if buf.tell() <= max_bytes:
+            return buf.getvalue()
+
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=65, optimize=True)
+    return buf.getvalue()
+
+
+async def generate_x_banner_jpeg() -> bytes | None:
+    from aria_core.avatar_identity import get_identity_status, has_identity_anchor, identity_anchor_path
+    from aria_core.portrait_scene import generate_banner_portrait
+
+    if not has_identity_anchor():
+        return None
+    anchor = identity_anchor_path().read_bytes()
+    brief = get_identity_status().get("brief") or "ARIA ZHC chief AI officer GoldenFar"
+    scene = (
+        "Wide cinematic X/Twitter header banner 3:1 aspect ratio, "
+        "premium dark crypto brand GoldenFar, subtle gold accents, "
+        "futuristic holding aesthetic, no text overlay, photorealistic atmosphere"
+    )
+    return await generate_banner_portrait(anchor, identity_brief=brief, scene=scene)
+
+
+async def ensure_x_banner_file() -> Path | None:
+    path = x_banner_path()
+    if path.is_file() and path.stat().st_size > 10_000:
+        return path
+    data = await generate_x_banner_jpeg()
+    if not data:
+        return None
+    normalized = normalize_banner_jpeg(data)
+    aria_avatar_dir().mkdir(parents=True, exist_ok=True)
+    path.write_bytes(normalized)
+    return path
+
+
+async def get_visual_assets_status() -> dict[str, Any]:
+    """Avatar, ancre identité et bannière — états séparés (ne pas confondre)."""
+    from aria_core.avatar import current_avatar_path
+    from aria_core.avatar_identity import has_identity_anchor
+
+    banner_local = x_banner_path().is_file()
+    x_status = await get_x_banner_status()
+    return {
+        "avatar_profile": current_avatar_path().is_file(),
+        "identity_anchor": has_identity_anchor(),
+        "banner_local": banner_local,
+        "banner_remote": bool(x_status.get("has_banner")),
+        "x_configured": bool(x_status.get("x_configured")),
+        "banner_url": x_status.get("banner_url"),
+    }
+
+
+def format_visual_assets_lines(*, lang: str = "fr") -> list[str]:
+    """Lignes HUD — avatar ≠ ancre ≠ bannière."""
+    from aria_core.avatar import current_avatar_path
+    from aria_core.avatar_identity import has_identity_anchor
+
+    av = current_avatar_path().is_file()
+    anc = has_identity_anchor()
+    loc = x_banner_path().is_file()
+    if lang == "fr":
+        return [
+            f"   Avatar profil (carré) : {'oui' if av else 'non'} — current.jpg",
+            f"   Ancre identité (réf. visage) : {'oui' if anc else 'non'} — identity_anchor.jpg",
+            f"   Bannière X (3:1, header) : fichier local {'oui' if loc else 'non'} — x_banner.jpg",
+        ]
+    return [
+        f"   Profile avatar (square): {'yes' if av else 'no'}",
+        f"   Identity anchor: {'yes' if anc else 'no'}",
+        f"   X banner file (3:1): {'yes' if loc else 'no'}",
+    ]
+
+
+async def get_x_banner_status() -> dict[str, Any]:
+    from aria_core.gateway.x_twitter import get_profile_banner_status, is_x_post_configured
+
+    local = x_banner_path().is_file()
+    remote = await get_profile_banner_status()
+    return {
+        "local_banner": local,
+        "local_path": str(x_banner_path()) if local else None,
+        "x_configured": is_x_post_configured(),
+        **remote,
+    }

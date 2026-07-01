@@ -23,3 +23,17 @@ vault/
 *.pem
 *.key
 production.env
+local.env
+vanguard.env
+local-sync/.vault-master-secret
+local-sync/.vault-totp-secret
+
+# Node / build
+node_modules/
+vanguard/dist/
+vanguard/product-frontend/dist/
+
+# Python / data locale
+vanguard/backend/data/
+*.sqlite
+__pycache__/

@@ -1,0 +1,435 @@
+# Indice ARIA — niveaux 0→1000 par catégorie (SSOT objectifs niveaux 1–12)
+# Au-delà : génération procédurale dans capability_levels.py
+
+max_level: 1000
+
+tiers:
+  - max: 10
+    fr: Initiation
+    en: Initiation
+  - max: 50
+    fr: Apprentissage
+    en: Apprenticeship
+  - max: 150
+    fr: Maîtrise
+    en: Mastery
+  - max: 400
+    fr: Expertise
+    en: Expertise
+  - max: 700
+    fr: Élite
+    en: Elite
+  - max: 1000
+    fr: Légende
+    en: Legend
+
+categories:
+  codage:
+    label_fr: Codage
+    label_en: Coding
+    icon: "⚙️"
+    levels:
+      1:
+        objective_fr: "1 commit documenté sur GoldenFarFR/aria-sandbox (message clair, scope minimal)."
+        objective_en: "1 documented commit on GoldenFarFR/aria-sandbox (clear message, minimal scope)."
+        days_fr: "< 1 jour"
+        days_en: "< 1 day"
+      2:
+        objective_fr: "3 commits sandbox sur une même initiative (fil cohérent)."
+        objective_en: "3 sandbox commits on one initiative (coherent thread)."
+        days_fr: "1 jour"
+        days_en: "1 day"
+      3:
+        objective_fr: "Ouvrir une PR sandbox avec description (quoi / pourquoi / risque)."
+        objective_en: "Open a sandbox PR with description (what / why / risk)."
+        days_fr: "1 jour"
+        days_en: "1 day"
+      4:
+        objective_fr: "Ajouter ou mettre à jour des tests sur le changement sandbox."
+        objective_en: "Add or update tests for the sandbox change."
+        days_fr: "1–2 jours"
+        days_en: "1–2 days"
+      5:
+        objective_fr: "10 commits sandbox cumulés avec journal de bord à jour."
+        objective_en: "10 cumulative sandbox commits with journal up to date."
+        days_fr: "2–3 jours"
+        days_en: "2–3 days"
+      6:
+        objective_fr: "Greffe vers prod (dexpulse ou aria-vanguard) validée par l'opérateur avec URL."
+        objective_en: "Prod graft (dexpulse or aria-vanguard) validated by operator with URL."
+        days_fr: "3–5 jours"
+        days_en: "3–5 days"
+      7:
+        objective_fr: "Deploy vérifié en prod (health OK + smoke test documenté)."
+        objective_en: "Verified prod deploy (health OK + documented smoke test)."
+        days_fr: "1 semaine"
+        days_en: "1 week"
+      8:
+        objective_fr: "25 commits sandbox + 1 refactor sans régression (tests verts)."
+        objective_en: "25 sandbox commits + 1 refactor without regression (green tests)."
+        days_fr: "2 semaines"
+        days_en: "2 weeks"
+      9:
+        objective_fr: "Feature filiale complète (holding ou DEXPulse) shippée avec go explicite."
+        objective_en: "Full subsidiary feature shipped with explicit operator go."
+        days_fr: "3 semaines"
+        days_en: "3 weeks"
+      10:
+        objective_fr: "50 commits qualité + 2 greffes prod réussies sur le trimestre."
+        objective_en: "50 quality commits + 2 successful prod grafts in the quarter."
+        days_fr: "1 mois"
+        days_en: "1 month"
+      11:
+        objective_fr: "Architecture modulaire documentée (1 ADR ou design doc dans sandbox)."
+        objective_en: "Documented modular architecture (1 ADR or design doc in sandbox)."
+        days_fr: "5 semaines"
+        days_en: "5 weeks"
+      12:
+        objective_fr: "Self-improvement : 1 skill ou module ARIA amélioré et mergé."
+        objective_en: "Self-improvement: 1 improved ARIA skill or module merged."
+        days_fr: "6 semaines"
+        days_en: "6 weeks"
+
+  social:
+    label_fr: Social
+    label_en: Social
+    icon: "💬"
+    levels:
+      1:
+        objective_fr: "5 réponses publiques courtoises sans fait inventé (grounding OK)."
+        objective_en: "5 courteous public replies with no invented facts (grounding OK)."
+        days_fr: "< 1 jour"
+        days_en: "< 1 day"
+      2:
+        objective_fr: "1 post X publié — faits vérifiés uniquement, ton holding."
+        objective_en: "1 published X post — verified facts only, holding tone."
+        days_fr: "1 jour"
+        days_en: "1 day"
+      3:
+        objective_fr: "5 posts X cumulés + bio holding cohérente."
+        objective_en: "5 cumulative X posts + coherent holding bio."
+        days_fr: "3 jours"
+        days_en: "3 days"
+      4:
+        objective_fr: "Thread X (3+ posts) sur un jalon réel du portefeuille."
+        objective_en: "X thread (3+ posts) on a real portfolio milestone."
+        days_fr: "1 semaine"
+        days_en: "1 week"
+      5:
+        objective_fr: "10 interactions Telegram visiteurs notées satisfaisantes par l'opérateur."
+        objective_en: "10 visitor Telegram interactions rated satisfactory by operator."
+        days_fr: "2 semaines"
+        days_en: "2 weeks"
+      6:
+        objective_fr: "Calendrier com 2 semaines (posts + Telegram) validé et exécuté à 80 %."
+        objective_en: "2-week comms calendar validated and 80% executed."
+        days_fr: "2 semaines"
+        days_en: "2 weeks"
+      7:
+        objective_fr: "1 campagne building-in-public (5 posts liés, même narrative)."
+        objective_en: "1 building-in-public campaign (5 linked posts, same narrative)."
+        days_fr: "3 semaines"
+        days_en: "3 weeks"
+      8:
+        objective_fr: "Copy site holding (aria-vanguard) rédigée et déployée."
+        objective_en: "Holding site copy (aria-vanguard) drafted and deployed."
+        days_fr: "1 mois"
+        days_en: "1 month"
+      9:
+        objective_fr: "25 posts X + engagement mesurable (pas vanity — réponses qualité)."
+        objective_en: "25 X posts + measurable engagement (quality replies, not vanity)."
+        days_fr: "6 semaines"
+        days_en: "6 weeks"
+      10:
+        objective_fr: "FAQ publique enrichie (3 entrées vérifiées ajoutées)."
+        objective_en: "Public FAQ enriched (3 verified entries added)."
+        days_fr: "2 mois"
+        days_en: "2 months"
+      11:
+        objective_fr: "Narrative token BASE (recherche) — doc sans hype, validée opérateur."
+        objective_en: "BASE token narrative (research) — no-hype doc, operator validated."
+        days_fr: "2 mois"
+        days_en: "2 months"
+      12:
+        objective_fr: "Présence multicanal stable 30j (X + Telegram + site alignés)."
+        objective_en: "Stable 30-day multi-channel presence (X + Telegram + site aligned)."
+        days_fr: "3 mois"
+        days_en: "3 months"
+
+  intelligence:
+    label_fr: Intelligence
+    label_en: Intelligence
+    icon: "🧠"
+    levels:
+      1:
+        objective_fr: "1 priorisation tranchée (verdict + 1 next action) validée par l'opérateur."
+        objective_en: "1 decisive prioritization (verdict + 1 next action) validated by operator."
+        days_fr: "< 1 jour"
+        days_en: "< 1 day"
+      2:
+        objective_fr: "3 recommandations fondateur correctes sur GitHub / infra / roadmap."
+        objective_en: "3 correct founder recommendations on GitHub / infra / roadmap."
+        days_fr: "2 jours"
+        days_en: "2 days"
+      3:
+        objective_fr: "Plan holding 5 étapes avec risques — exécution amorcée sans relance."
+        objective_en: "5-step holding plan with risks — execution started without nudging."
+        days_fr: "1 semaine"
+        days_en: "1 week"
+      4:
+        objective_fr: "Arbitrage filiale vs holding correct (DEXPulse jamais présenté comme holding)."
+        objective_en: "Correct subsidiary vs holding arbitration."
+        days_fr: "2 semaines"
+        days_en: "2 weeks"
+      5:
+        objective_fr: "1 décision marketing (timing + canal) suivie d'un livrable réel."
+        objective_en: "1 marketing decision (timing + channel) followed by real deliverable."
+        days_fr: "3 semaines"
+        days_en: "3 weeks"
+      6:
+        objective_fr: "Roadmap trimestrielle holding proposée et acceptée par l'opérateur."
+        objective_en: "Quarterly holding roadmap proposed and accepted by operator."
+        days_fr: "1 mois"
+        days_en: "1 month"
+      7:
+        objective_fr: "5 arbitrages stratégiques corrects consécutifs (journalisés)."
+        objective_en: "5 consecutive correct strategic arbitrations (logged)."
+        days_fr: "6 semaines"
+        days_en: "6 weeks"
+      8:
+        objective_fr: "Nouvelle filiale ou produit identifié avec business case chiffré (hypothèses)."
+        objective_en: "New subsidiary or product identified with business case (hypotheses)."
+        days_fr: "2 mois"
+        days_en: "2 months"
+      9:
+        objective_fr: "Réduction dette technique priorisée — plan exécuté à 50 %+."
+        objective_en: "Tech debt reduction prioritized — plan 50%+ executed."
+        days_fr: "2 mois"
+        days_en: "2 months"
+      10:
+        objective_fr: "Vision 12 mois holding alignée VISION.md — revue opérateur OK."
+        objective_en: "12-month holding vision aligned with VISION.md — operator review OK."
+        days_fr: "3 mois"
+        days_en: "3 months"
+      11:
+        objective_fr: "10 décisions stratégiques majeures correctes sur 90 jours."
+        objective_en: "10 major strategic decisions correct over 90 days."
+        days_fr: "4 mois"
+        days_en: "4 months"
+      12:
+        objective_fr: "Co-fondatrice crédible : l'opérateur délègue une priorité entière 2 semaines."
+        objective_en: "Credible co-founder: operator delegates full priority for 2 weeks."
+        days_fr: "6 mois"
+        days_en: "6 months"
+
+  fiabilite:
+    label_fr: Fiabilité
+    label_en: Reliability
+    icon: "🛡️"
+    levels:
+      1:
+        objective_fr: "1 journée sans hallucination publique (faits vérifiés ou refus clair)."
+        objective_en: "1 day without public hallucination (verified facts or clear refusal)."
+        days_fr: "< 1 jour"
+        days_en: "< 1 day"
+      2:
+        objective_fr: "7 jours consécutifs — zéro fait inventé en chat public."
+        objective_en: "7 consecutive days — zero invented facts in public chat."
+        days_fr: "1 semaine"
+        days_en: "1 week"
+      3:
+        objective_fr: "10 entrées truth ledger vérifiées ajoutées correctement."
+        objective_en: "10 verified truth ledger entries added correctly."
+        days_fr: "2 semaines"
+        days_en: "2 weeks"
+      4:
+        objective_fr: "30 jours sans correction opérateur sur un fait produit."
+        objective_en: "30 days without operator correction on a product fact."
+        days_fr: "1 mois"
+        days_en: "1 month"
+      5:
+        objective_fr: "Sync canonical_facts + FAQ sans dérive (revue opérateur OK)."
+        objective_en: "canonical_facts + FAQ sync without drift (operator review OK)."
+        days_fr: "6 semaines"
+        days_en: "6 weeks"
+      6:
+        objective_fr: "100 % réponses publiques sourcées ou « je n'ai pas l'info » sur échantillon 20."
+        objective_en: "100% public answers sourced or 'no info' on sample of 20."
+        days_fr: "2 mois"
+        days_en: "2 months"
+      7:
+        objective_fr: "Zéro faux succès technique (repo/deploy) sur 60 jours."
+        objective_en: "Zero fake technical success (repo/deploy) over 60 days."
+        days_fr: "3 mois"
+        days_en: "3 months"
+      8:
+        objective_fr: "Audit grounding trimestriel — note opérateur ≥ 8/10."
+        objective_en: "Quarterly grounding audit — operator score ≥ 8/10."
+        days_fr: "4 mois"
+        days_en: "4 months"
+      9:
+        objective_fr: "Mémoire long terme cohérente — 0 contradiction détectée sur revue."
+        objective_en: "Coherent long-term memory — 0 contradictions on review."
+        days_fr: "6 mois"
+        days_en: "6 months"
+      10:
+        objective_fr: "Référence fiabilité ZHC : 180 jours sans incident factuel public."
+        objective_en: "ZHC reliability reference: 180 days without public factual incident."
+        days_fr: "1 an"
+        days_en: "1 year"
+      11:
+        objective_fr: "Truth ledger 500+ entrées vérifiées, 0 supersedence erronée."
+        objective_en: "Truth ledger 500+ verified entries, 0 erroneous supersede."
+        days_fr: "18 mois"
+        days_en: "18 months"
+      12:
+        objective_fr: "Standard or — opérateur cite ARIA comme source de vérité produit."
+        objective_en: "Gold standard — operator cites ARIA as product truth source."
+        days_fr: "2 ans"
+        days_en: "2 years"
+
+  autonomie:
+    label_fr: Autonomie
+    label_en: Autonomy
+    icon: "🚀"
+    levels:
+      1:
+        objective_fr: "1 initiative spontanée utile (founder_ping ou proposition concrète)."
+        objective_en: "1 useful spontaneous initiative (founder_ping or concrete proposal)."
+        days_fr: "< 1 jour"
+        days_en: "< 1 day"
+      2:
+        objective_fr: "3 initiatives sans relance opérateur — chacune avec livrable nommé."
+        objective_en: "3 initiatives without operator nudge — each with named deliverable."
+        days_fr: "3 jours"
+        days_en: "3 days"
+      3:
+        objective_fr: "Livrable <24h après ping spontané (critère de succès explicite)."
+        objective_en: "<24h deliverable after spontaneous ping (explicit success criterion)."
+        days_fr: "1 semaine"
+        days_en: "1 week"
+      4:
+        objective_fr: "Heartbeat portfolio + répertoire exécutés 7j sans erreur."
+        objective_en: "Portfolio + repertoire heartbeats run 7d without error."
+        days_fr: "2 semaines"
+        days_en: "2 weeks"
+      5:
+        objective_fr: "Sandbox GitHub utilisé sans demander permission pour expériences."
+        objective_en: "GitHub sandbox used without asking permission for experiments."
+        days_fr: "3 semaines"
+        days_en: "3 weeks"
+      6:
+        objective_fr: "1 greffe prod préparée (PR + résumé 3 lignes) — go opérateur obtenu."
+        objective_en: "1 prod graft prepared (PR + 3-line summary) — operator go obtained."
+        days_fr: "1 mois"
+        days_en: "1 month"
+      7:
+        objective_fr: "30 jours — <3 questions opérateur de type « que dois-je faire ? »."
+        objective_en: "30 days — <3 operator questions of type 'what should I do?'."
+        days_fr: "6 semaines"
+        days_en: "6 weeks"
+      8:
+        objective_fr: "Priorité opérateur exécutée de bout en bout (ex. site holding MVP)."
+        objective_en: "Operator priority executed end-to-end (e.g. holding site MVP)."
+        days_fr: "2 mois"
+        days_en: "2 months"
+      9:
+        objective_fr: "Boucle self-improvement : 3 améliorations code ARIA shipées."
+        objective_en: "Self-improvement loop: 3 ARIA code improvements shipped."
+        days_fr: "3 mois"
+        days_en: "3 months"
+      10:
+        objective_fr: "90 jours d'opération ZHC crédible (FYI > demandes d'approbation)."
+        objective_en: "90 days credible ZHC operation (FYI > approval requests)."
+        days_fr: "4 mois"
+        days_en: "4 months"
+      11:
+        objective_fr: "Nouveau skill ou heartbeat déployé sans cahier des charges détaillé."
+        objective_en: "New skill or heartbeat deployed without detailed spec."
+        days_fr: "6 mois"
+        days_en: "6 months"
+      12:
+        objective_fr: "Co-PDG opérationnel : l'opérateur ne touche que veto et priorités."
+        objective_en: "Operational co-CEO: operator only touches veto and priorities."
+        days_fr: "1 an"
+        days_en: "1 year"
+
+  business:
+    label_fr: Business
+    label_en: Business
+    icon: "💰"
+    levels:
+      1:
+        objective_fr: "Hypothèse revenu #1 documentée (moat DEXPulse, pas hype token)."
+        objective_en: "Revenue hypothesis #1 documented (DEXPulse moat, no token hype)."
+        days_fr: "< 1 jour"
+        days_en: "< 1 day"
+      2:
+        objective_fr: "1 $ de revenu réel logué dans revenue_ledger."
+        objective_en: "$1 real revenue logged in revenue_ledger."
+        days_fr: "1 jour"
+        days_en: "1 day"
+        metric: revenue_usd_total
+        target: 1
+      3:
+        objective_fr: "10 $ cumulés revenu réel logué."
+        objective_en: "$10 cumulative real revenue logged."
+        days_fr: "1 semaine"
+        days_en: "1 week"
+        metric: revenue_usd_total
+        target: 10
+      4:
+        objective_fr: "Micro-produit v0 publié (page ou offre Telegram)."
+        objective_en: "Micro-product v0 published (page or Telegram offer)."
+        days_fr: "2 semaines"
+        days_en: "2 weeks"
+      5:
+        objective_fr: "25 $ revenu réel cumulé."
+        objective_en: "$25 cumulative real revenue."
+        days_fr: "3 semaines"
+        days_en: "3 weeks"
+        metric: revenue_usd_total
+        target: 25
+      6:
+        objective_fr: "Objectif 50 $/mois atteint (mandat mois 1)."
+        objective_en: "$50/mo goal reached (month-1 mandate)."
+        days_fr: "1 mois"
+        days_en: "1 month"
+        metric: revenue_usd_monthly
+        target: 50
+      7:
+        objective_fr: "2 sources de revenu distinctes loguées."
+        objective_en: "2 distinct revenue sources logged."
+        days_fr: "6 semaines"
+        days_en: "6 weeks"
+      8:
+        objective_fr: "100 $ cumulés revenu réel."
+        objective_en: "$100 cumulative real revenue."
+        days_fr: "2 mois"
+        days_en: "2 months"
+        metric: revenue_usd_total
+        target: 100
+      9:
+        objective_fr: "Produit payant avec 5 clients ou équivalent récurrent."
+        objective_en: "Paid product with 5 customers or recurring equivalent."
+        days_fr: "3 mois"
+        days_en: "3 months"
+      10:
+        objective_fr: "250 $/mois récurrent ou équivalent logué."
+        objective_en: "$250/mo recurring or equivalent logged."
+        days_fr: "6 mois"
+        days_en: "6 months"
+        metric: revenue_usd_monthly
+        target: 250
+      11:
+        objective_fr: "1 000 $ cumulés — portefeuille training reste fictif."
+        objective_en: "$1,000 cumulative — training portfolio stays fictional."
+        days_fr: "1 an"
+        days_en: "1 year"
+        metric: revenue_usd_total
+        target: 1000
+      12:
+        objective_fr: "Moat produit validé marché — croissance sans narrative token."
+        objective_en: "Product moat market-validated — growth without token narrative."
+        days_fr: "18 mois"
+        days_en: "18 months"
