@@ -2,7 +2,7 @@
 
 > Mis a jour par collect-session.ps1 + resume session. Grok Build lit ce fichier au demarrage.
 
-Derniere regeneration : 2026-07-01T22:54 (session PC-SYLVAIN — handoff tout)
+Derniere regeneration : 2026-07-01T23:32 (fin session PC-SYLVAIN — push main 975d69a)
 
 **Mono-PC** : **PC-SYLVAIN seul** — plus d'autre machine (Sylvain 2026-06-20). Handoff = sync GitHub + journal, pas de delta « autre PC ».
 
@@ -22,7 +22,7 @@ Derniere regeneration : 2026-07-01T22:54 (session PC-SYLVAIN — handoff tout)
 | H arbitrator | **done** | local (`arbitrator.py` + `aria_arbitrator.yaml`) |
 
 Prod : `aria_vector_memory=false`, `aria_ddg_search_cache=false` (defaut safe).  
-**Suite** : push local (Gem Crush + Phases F–H) quand Sylvain dit « push » ; deploy Render si quota OK.
+**Suite** : deploy Render si quota OK (Gem Crush live encore sur ancien pin). Local : Ollama qwen2.5:14b + super memoire ON.
 
 SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
@@ -50,8 +50,8 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ### Prochaines actions agent (priorite)
 
-1. **Push GitHub** — `git push origin main` quand Sylvain valide (3 commits locaux : Gem Crush + F + G)
-2. **Deploy Render** — `deploy-render.ps1` quand quota pipeline OK
+1. **Deploy Render** — `deploy-render.ps1` quand quota pipeline OK (push fait `975d69a`)
+2. **Redemarrer Ollama** si pas fait — variables FLASH_ATTENTION / KV q8_0
 3. **Operateur** : `IMAGE_API_KEY` Render si banniere xAI ; corriger TOTP vault handoff
 4. **Activer local** : `aria_ddg_search_cache=true` + `aria_vector_memory=true` (smoke OK post-G)
 5. **Post-push** : flag vector prod off jusqu'a validation explicite Sylvain
@@ -68,51 +68,51 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ## PC-SYLVAIN
 
-- **Derniere session** : 2026-07-01T22:44:06
-- **Session Grok** : `019f1f3e-095f-7971-bdc1-0ceb167e1342`
+- **Derniere session** : 2026-07-01T23:31:54
+- **Session Grok** : `019f1f6d-7c02-7883-bdd5-39e232268e81`
 - **Repos** : ARIA
-- **Fichiers modifies** : 30 (extrait ci-dessous)
+- **Fichiers modifies** : 57 (extrait ci-dessous)
 
 **Etat git** :
-- `ARIA` @ 71b5a2a (dirty) - fix(local): bridge monorepo paths + sync-local garde LLM ollama
+- `ARIA` @ 975d69a (dirty) - docs: journal post-push 5a52b07
 
 **Fichiers (extrait)** :
-- .gitignore
-- C:\Users\Studi\.grok\rules\collegue-memoire.md
-- C:\Users\Studi\.grok\rules\journal-de-bord.md
-- C:\Users\Studi\.grok\rules\session-handoff.md
-- collegue-memoire/.cursor/rules/collegue-memoire.md
-- collegue-memoire/.cursor/rules/journal-de-bord.md
-- collegue-memoire/.cursor/rules/session-handoff.md
-- collegue-memoire/.grok/Agents.md
-- collegue-memoire/.grok/rules/collegue-memoire.md
+- C:\Users\Studi\AppData\Local\GoldenFar\vault\local.env
 - collegue-memoire/COLLEGUE.md
-- collegue-memoire/README.md
-- local-sync/scripts/_paths.ps1
-- local-sync/scripts/aria-cursor-bridge.ps1
-- local-sync/scripts/collect-session.ps1
-- local-sync/scripts/push-session-manifest.ps1
-- local-sync/scripts/session-handoff.ps1
-- README.md
-- render.yaml
-- scripts/aria-paths.ps1
-- skills/.grok/rules/journal-de-bord.md
-- ... (+10 autres)
+- collegue-memoire/sessions/ARIA-WORKER.md
+- collegue-memoire/sessions/HANDOFF.md
+- packages/aria-core/docs/ARCHITECTURE.md
+- packages/aria-core/scripts/_activate_vector_local.py
+- packages/aria-core/scripts/activate-vector-local.ps1
+- packages/aria-core/src/aria_core/_build.py
+- packages/aria-core/src/aria_core/aria_worker_queue.py
+- packages/aria-core/src/aria_core/brain.py
+- packages/aria-core/src/aria_core/directives.md
+- packages/aria-core/src/aria_core/heartbeat.py
+- packages/aria-core/src/aria_core/holding.py
+- packages/aria-core/src/aria_core/knowledge/aria_arbitrator.yaml
+- packages/aria-core/src/aria_core/knowledge/aria_goals.yaml
+- packages/aria-core/src/aria_core/knowledge/aria_reflection.yaml
+- packages/aria-core/src/aria_core/knowledge/aria_values.yaml
+- packages/aria-core/src/aria_core/knowledge/ddg_cache.py
+- packages/aria-core/src/aria_core/knowledge/epistemic.py
+- packages/aria-core/src/aria_core/knowledge/gem_crush_backlog.yaml
+- ... (+37 autres)
 
 **Journal** :
-- 21h21 — lance uvicorn local 127.0.0.1:8000 ARIA_VECTOR_MEMORY=true
-- 21h29 — local ARIA mode operateur ARIA_PUBLIC_MODE=false ACCESS_CODE_ENABLED=false
-- 21h34 — impl pont aria-cursor-bridge skill + script + jsonl
-- 21h40 — deploy-vector-memory.ps1 pret — deploy Render bloque quota pipeline
-- 21h48 — bridge tweet EN anglais Ollama OK + fix pont message seul
-- 21h56 — valide tweet X EN + bridge ARIA (x compose bloque)
-- 21h59 — fix x-compose prevalidated + media X aria-core
-- 22h15 — Option A X prod env sync (likes/curiosity/mentions off)
-- 22h16 — publie tweet X built-in-public + capture GitHub
 - 22h25 — feat x_voice humain sans tics IA aria-core
 - 22h28 — COLLEGUE+HANDOFF mono-PC PC-SYLVAIN seul
 - 
 - ## 2026-07-01
 - 22h20 — 22h20 — Mise a jour COLLEGUE.md + regles Grok monorepo ARIA
 - 22h44 — 22h44 — fin session monorepo ARIA + collect/push handoff
+- 22h54 — feat handoff tout — Phase E values + DDG cache + Gem Crush v43-45 d91c33e
+- 23h03 — suppression Gem Crush monorepo local — pas de push
+- 23h05 — Phase F goals aria_goals.yaml + memory/goals.py local
+- 23h11 — commit Phase G reflection a970bd7 — 318 tests OK
+- 23h11 — smoke test-vector-memory.ps1 vector=true OK post-G
+- 23h18 — feat Phase H memory arbitrator — 326 tests OK
+- 23h23 — vector local active — 33 docs Chroma, recall LLM OK
+- 23h28 — optimize Ollama local qwen2.5:14b — PC 8Go VRAM
+- 23h30 — git push origin main 5a52b07 — 10 commits (Gem Crush + memoire F-H + Ollama)
 
