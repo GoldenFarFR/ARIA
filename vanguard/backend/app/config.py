@@ -32,7 +32,10 @@ class Settings(BaseSettings):
     auth_rate_limit_window_minutes: int = 15
     max_candles: int = 300
     # str | list — pydantic-settings JSON-decodes list[...] from env; Render uses comma-separated CORS_ORIGINS
-    cors_origins: str | list[str] = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_origins: str | list[str] = (
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174"
+    )
     serve_frontend: bool = False
     static_dir: Path = _DEFAULT_STATIC
 
@@ -163,6 +166,9 @@ class Settings(BaseSettings):
     aria_llm_enhance_skills: bool = False
     aria_proactive_ideas: bool = True
     aria_curriculum_notify_operator: bool = False
+    # ACP v2 — provider poll via acp-cli (local PC / sidecar with keychain)
+    aria_acp_provider_enabled: bool = False
+    aria_acp_events_file: str = ""
     aria_qi_shadow_judge_enabled: bool = True
     aria_qi_judge_force_aria: bool = False
     aria_qi_judge_force_ouvrier: bool = False
