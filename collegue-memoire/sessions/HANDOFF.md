@@ -2,7 +2,20 @@
 
 > Mis a jour par collect-session.ps1 + resume session. Grok Build lit ce fichier au demarrage.
 
-Derniere regeneration : 2026-07-01T23:45 (Phase I deploy prod — commit 20864ae)
+Derniere regeneration : 2026-07-02T00:02 (ACP v2 integration locale — **non commitée**)
+
+## Reprise prioritaire — ACP v2 (2026-07-02)
+
+**SSOT :** `sessions/REPRISE-ACP-2026-07-02.md`
+
+| État | Détail |
+|------|--------|
+| Code | Intégration aria-core **faite**, tests 7/7, **git dirty** (pas de PR) |
+| Local | Poll activé, bot `:8000`, listener **legacy** OK |
+| Prod | **Pas déployé** — volontaire |
+| Suite | Commit+PR → job test (feu vert) → deploy |
+
+Commandes reprise : voir REPRISE-ACP-2026-07-02.md § runtime.
 
 **Mono-PC** : **PC-SYLVAIN seul** — plus d'autre machine (Sylvain 2026-06-20). Handoff = sync GitHub + journal, pas de delta « autre PC ».
 
@@ -68,35 +81,50 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ## PC-SYLVAIN
 
-- **Derniere session** : 2026-07-01T23:45:11
-- **Session Grok** : `019f1f99-ee9c-7712-a202-8a7b405f4060`
+- **Derniere session** : 2026-07-02T00:04:21
+- **Session Grok** : `019f1fa5-0e2d-7b31-b25b-91e4ba19e19b`
 - **Repos** : ARIA
-- **Fichiers modifies** : 5 (extrait ci-dessous)
+- **Fichiers modifies** : 20 (extrait ci-dessous)
 
 **Etat git** :
-- `ARIA` @ 1663dc4 (dirty) - ops: activer ARIA_VECTOR_MEMORY prod ÔÇö example + handoff
+- `ARIA` @ 8a67596 (dirty) - docs: fin session 2026-07-01
 
 **Fichiers (extrait)** :
-- C:\Users\Studi\AppData\Local\GoldenFar\vault\production.env
+- collegue-memoire/ARIA_ACP_v2_Integration_Prompt.txt
 - collegue-memoire/sessions/HANDOFF.md
-- packages/aria-core/src/aria_core/_build.py
-- vanguard/operator/production.env.example
-- vanguard/operator/site.config.json
+- collegue-memoire/sessions/REPRISE-ACP-2026-07-02.md
+- packages/aria-core/src/aria_core/brain.py
+- packages/aria-core/src/aria_core/heartbeat.py
+- packages/aria-core/src/aria_core/knowledge/acp_config.yaml
+- packages/aria-core/src/aria_core/knowledge/acp_offerings.yaml
+- packages/aria-core/src/aria_core/knowledge/operator_pitfalls.yaml
+- packages/aria-core/src/aria_core/models.py
+- packages/aria-core/src/aria_core/public_mode.py
+- packages/aria-core/src/aria_core/skills/acp_cli.py
+- packages/aria-core/src/aria_core/skills/acp_client_skill.py
+- packages/aria-core/src/aria_core/skills/acp_provider_skill.py
+- packages/aria-core/src/aria_core/testing.py
+- packages/aria-core/tests/test_acp_skills.py
+- skills/scripts/prepare-acp-v2-integration.ps1
+- vanguard/backend/app/config.py
+- vanguard/backend/app/main.py
+- vanguard/operator/acp-events-listener.ps1
+- vanguard/operator/local.env.example
 
 **Journal** :
-- 22h20 — 22h20 — Mise a jour COLLEGUE.md + regles Grok monorepo ARIA
-- 22h44 — 22h44 — fin session monorepo ARIA + collect/push handoff
-- 22h54 — feat handoff tout — Phase E values + DDG cache + Gem Crush v43-45 d91c33e
-- 23h03 — suppression Gem Crush monorepo local — pas de push
-- 23h05 — Phase F goals aria_goals.yaml + memory/goals.py local
-- 23h11 — commit Phase G reflection a970bd7 — 318 tests OK
-- 23h11 — smoke test-vector-memory.ps1 vector=true OK post-G
-- 23h18 — feat Phase H memory arbitrator — 326 tests OK
-- 23h23 — vector local active — 33 docs Chroma, recall LLM OK
-- 23h28 — optimize Ollama local qwen2.5:14b — PC 8Go VRAM
 - 23h30 — git push origin main 5a52b07 — 10 commits (Gem Crush + memoire F-H + Ollama)
 - 23h32 — fin session — collect/push handoff 92bf562
 - 23h41 — Phase I deploy prod 20864ae aria_core 92bf562 repoint monorepo ARIA
 - 23h41 — sync-render 60 vars ARIA_VECTOR_MEMORY=false prod safe
 - 23h44 — activer ARIA_VECTOR_MEMORY=true prod — sync-render + redeploy dep-d92ojsc live
+- 23h47 — fin session Phase I deploy + vector memory prod — collect/push handoff 8d97e00
+- 23h49 — créé prompt ACP v2 + script prepare-acp-v2-integration.ps1
+- 23h49 — menu interactif prepare-acp-v2-integration.ps1 (afficher/copier/bridge)
+- 23h53 — intégration ACP v2 aria-core — provider/client skills + tests 7 OK
+- 23h56 — fix acp_cli Windows (.cmd) + drain vide provider + smoke test local OK
+- 23h57 — fix listener ACP legacy (v2 HTTP 500 Virtuals) + acp-events-listener.ps1
+- 
+- ## 2026-07-02
+- 00h01 — poll ACP activé bot local — health + chat acp status/cycle OK
+- 00h04 — fin session — REPRISE-ACP-2026-07-02 handoff ACP v2 local validé, commit+PR à faire
 
