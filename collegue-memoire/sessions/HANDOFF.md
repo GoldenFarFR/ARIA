@@ -68,42 +68,22 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ## PC-SYLVAIN
 
-- **Derniere session** : 2026-07-01T23:31:54
-- **Session Grok** : `019f1f6d-7c02-7883-bdd5-39e232268e81`
+- **Derniere session** : 2026-07-01T23:45:11
+- **Session Grok** : `019f1f99-ee9c-7712-a202-8a7b405f4060`
 - **Repos** : ARIA
-- **Fichiers modifies** : 57 (extrait ci-dessous)
+- **Fichiers modifies** : 5 (extrait ci-dessous)
 
 **Etat git** :
-- `ARIA` @ 975d69a (dirty) - docs: journal post-push 5a52b07
+- `ARIA` @ 1663dc4 (dirty) - ops: activer ARIA_VECTOR_MEMORY prod ÔÇö example + handoff
 
 **Fichiers (extrait)** :
-- C:\Users\Studi\AppData\Local\GoldenFar\vault\local.env
-- collegue-memoire/COLLEGUE.md
-- collegue-memoire/sessions/ARIA-WORKER.md
+- C:\Users\Studi\AppData\Local\GoldenFar\vault\production.env
 - collegue-memoire/sessions/HANDOFF.md
-- packages/aria-core/docs/ARCHITECTURE.md
-- packages/aria-core/scripts/_activate_vector_local.py
-- packages/aria-core/scripts/activate-vector-local.ps1
 - packages/aria-core/src/aria_core/_build.py
-- packages/aria-core/src/aria_core/aria_worker_queue.py
-- packages/aria-core/src/aria_core/brain.py
-- packages/aria-core/src/aria_core/directives.md
-- packages/aria-core/src/aria_core/heartbeat.py
-- packages/aria-core/src/aria_core/holding.py
-- packages/aria-core/src/aria_core/knowledge/aria_arbitrator.yaml
-- packages/aria-core/src/aria_core/knowledge/aria_goals.yaml
-- packages/aria-core/src/aria_core/knowledge/aria_reflection.yaml
-- packages/aria-core/src/aria_core/knowledge/aria_values.yaml
-- packages/aria-core/src/aria_core/knowledge/ddg_cache.py
-- packages/aria-core/src/aria_core/knowledge/epistemic.py
-- packages/aria-core/src/aria_core/knowledge/gem_crush_backlog.yaml
-- ... (+37 autres)
+- vanguard/operator/production.env.example
+- vanguard/operator/site.config.json
 
 **Journal** :
-- 22h25 — feat x_voice humain sans tics IA aria-core
-- 22h28 — COLLEGUE+HANDOFF mono-PC PC-SYLVAIN seul
-- 
-- ## 2026-07-01
 - 22h20 — 22h20 — Mise a jour COLLEGUE.md + regles Grok monorepo ARIA
 - 22h44 — 22h44 — fin session monorepo ARIA + collect/push handoff
 - 22h54 — feat handoff tout — Phase E values + DDG cache + Gem Crush v43-45 d91c33e
@@ -115,4 +95,8 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 - 23h23 — vector local active — 33 docs Chroma, recall LLM OK
 - 23h28 — optimize Ollama local qwen2.5:14b — PC 8Go VRAM
 - 23h30 — git push origin main 5a52b07 — 10 commits (Gem Crush + memoire F-H + Ollama)
+- 23h32 — fin session — collect/push handoff 92bf562
+- 23h41 — Phase I deploy prod 20864ae aria_core 92bf562 repoint monorepo ARIA
+- 23h41 — sync-render 60 vars ARIA_VECTOR_MEMORY=false prod safe
+- 23h44 — activer ARIA_VECTOR_MEMORY=true prod — sync-render + redeploy dep-d92ojsc live
 
