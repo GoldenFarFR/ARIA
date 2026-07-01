@@ -3,12 +3,12 @@
     "renderServiceName": "aria-api",
     "vanguardRepoPath": "..",
     "siteBaseUrl": "https://test-1-nwf2.onrender.com",
-    "vanguardRepo": "GoldenFarFR/aria-vanguard",
+    "vanguardRepo": "GoldenFarFR/ARIA",
     "vanguardRenderServiceName": "aria-vanguard",
     "vanguardRenderBaseUrl": "https://aria-vanguard.onrender.com",
     "renderBaseUrl": "https://test-1-nwf2.onrender.com",
     "privyAppId": "cmqidekpm006u0ckzp2zuq7dd",
-    "sandboxRepo": "GoldenFarFR/aria-sandbox",
+    "sandboxRepo": "GoldenFarFR/ARIA",
     "tokenRepo": "GoldenFarFR/aria-token-base",
     "holdingSites": {
         "kikou": {
