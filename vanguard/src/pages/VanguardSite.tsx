@@ -16,7 +16,6 @@ import { AriaChat } from '../components/AriaChat'
 import { FaqSection } from '../components/FaqSection'
 import { OrgChart } from '../components/OrgChart'
 import { PricingSection } from '../components/PricingSection'
-import { AriaGemCrushPoc } from '../components/AriaGemCrushPoc'
 import { VanguardNav } from '../components/VanguardNav'
 import type { AgentSetup, HoldingStructure, RepertoireItem } from '../types'
 
@@ -60,16 +59,7 @@ function PortfolioCard({
           <span className="luxury-badge shrink-0">{item.status}</span>
         </div>
         <p className="text-sm text-[#9a958a] leading-relaxed mb-6 font-light">{item.description}</p>
-        {featured && item.slug === 'gem-crush' && (
-          <a
-            href="#poc"
-            className="btn-vanguard-secondary w-full flex items-center justify-center gap-2 py-3.5 text-sm tracking-wide group focus-ring"
-          >
-            Play POC
-            <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform text-[#c9a962]" />
-          </a>
-        )}
-        {featured && item.slug !== 'gem-crush' && (
+        {featured && (
           <ProductLaunchLink className="btn-vanguard-secondary w-full flex items-center justify-center gap-2 py-3.5 text-sm tracking-wide group focus-ring">
             Launch product
             <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform text-[#c9a962]" />
@@ -129,10 +119,10 @@ export function VanguardSite() {
               <ArrowRight className="w-5 h-5" />
             </ProductLaunchLink>
             <a
-              href="#poc"
+              href="#portfolio"
               className="btn-vanguard-secondary px-10 py-4 font-display text-lg tracking-wide text-center focus-ring"
             >
-              Play ARIA Gem Crush
+              View portfolio
             </a>
           </div>
 
@@ -141,7 +131,7 @@ export function VanguardSite() {
               { label: 'Holding', value: 'Live' },
               { label: 'CAO', value: 'ARIA ZHC' },
               { label: 'Flagship', value: 'Aria Market' },
-              { label: 'POC Game', value: 'Gem Crush' },
+              { label: 'Ventures', value: structure ? String(portfolio.length) : '—' },
             ].map((stat) => (
               <div key={stat.label} className="glass-vanguard rounded-sm px-5 py-4 card-vanguard-hover">
                 <p className="section-label mb-2">{stat.label}</p>
@@ -165,8 +155,6 @@ export function VanguardSite() {
           <ChevronDown className="w-6 h-6" />
         </a>
       </section>
-
-      <AriaGemCrushPoc />
 
       <PricingSection />
 
@@ -210,7 +198,7 @@ export function VanguardSite() {
                 <PortfolioCard
                   key={item.id}
                   item={item}
-                  featured={item.slug === 'market' || item.slug === 'gem-crush'}
+                  featured={item.slug === 'market'}
                 />
               ))
             ) : (

@@ -6,7 +6,6 @@ import { MemberSignInButton } from './MemberSignInButton'
 import { ProductLaunchLink } from './ProductLaunchLink'
 
 const SECTIONS = [
-  { href: '#poc', label: 'Gem Crush' },
   { href: '#pricing', label: 'Pro' },
   { href: '#structure', label: 'Structure' },
   { href: '#portfolio', label: 'Portfolio' },

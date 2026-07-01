@@ -329,42 +329,7 @@ async def enqueue_from_capability_gap(
     )
 
 
-async def enqueue_from_gem_crush_block(
-    *,
-    status: str,
-    version: int | None = None,
-    message: str = "",
-    title: str = "",
-    lang: str = "fr",
-) -> dict[str, Any]:
-    """File ouvrier quand Gem Crush ne peut pas shipper."""
-    ver = version or 0
-    action_map = {
-        "error": "Corriger les ancres de patch ou le code source, puis laisser ARIA re-ship.",
-        "write_denied": "Ajouter aria-vanguard dans GITHUB_WRITE_REPOS sur Render, redeploy.",
-        "quality_gate": "Enrichir la release en file (≥10 items + patch TS) dans gem_crush_premium.py.",
-        "queue_empty": "Vérifier aria_gem_crush_unlimited_releases + gem_crush_synthesizer (exploration ouverte).",
-        "missing": "Pousser le POC Gem Crush sur aria-vanguard (fichiers manquants sur GitHub).",
-    }
-    return await enqueue_worker_task(
-        task_id=f"gem-crush-{status}-v{ver}" if ver else f"gem-crush-{status}",
-        title=title or f"Gem Crush bloqué — {status}",
-        source="gem_crush_skill",
-        problem=message.strip() or f"Heartbeat gem_crush_daily status={status}",
-        action=action_map.get(status, "Diagnostiquer et débloquer le pipeline Gem Crush."),
-        priority="high" if status in ("error", "write_denied") else "normal",
-        repos=("aria-vanguard", "aria-sandbox"),
-        files=(
-            "src/games/aria-gem-crush/components/GemCrushGame.tsx",
-            "packages/aria-core/src/aria_core/skills/gem_crush_premium.py",
-        ),
-        acceptance=(
-            "Prochain heartbeat gem_crush_daily → status=applied",
-            "Visible sur ariavanguardzhc.com #poc après redeploy",
-        ),
-        context=message[:2000],
-        lang=lang,
-    )
+
 
 
 async def _notify_worker_task(task: WorkerTask, result: dict[str, Any], *, lang: str) -> None:

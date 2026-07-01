@@ -62,19 +62,6 @@ DEFAULT_SUBSIDIARIES: tuple[SubsidiaryTemplate, ...] = (
         tags=("dex", "saas", "flagship"),
         zhc_aligned=True,
     ),
-    SubsidiaryTemplate(
-        slug="gem-crush",
-        name="ARIA Gem Crush",
-        description=(
-            "Subsidiary POC — match-3 game shipped autonomously by ARIA (Kelly app factory). "
-            "Live on holding homepage; Android Play Store path next."
-        ),
-        status="live",
-        category="game",
-        priority=4,
-        tags=("game", "poc", "app-factory"),
-        zhc_aligned=True,
-    ),
 )
 
 

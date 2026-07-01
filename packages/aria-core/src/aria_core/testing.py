@@ -84,11 +84,6 @@ class AriaRuntimeSettings(BaseSettings):
     aria_image_style_use_llm: bool = False
     aria_visual_autonomy_interval_minutes: int = 1440
 
-    # Gem Crush — premium : 30 min ; incrémental : Critic + micro-patch (1–2 items)
-    aria_gem_crush_improve_minutes: int = 30
-    aria_gem_crush_premium_mode: bool = True
-    aria_gem_crush_incremental_mode: bool = True
-    aria_gem_crush_unlimited_releases: bool = True
     # Curriculum épistémique / culture large — mémoire ARIA seulement (pas spam Telegram opérateur)
     aria_curriculum_notify_operator: bool = False
     aria_qi_shadow_judge_enabled: bool = True

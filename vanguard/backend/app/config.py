@@ -161,11 +161,6 @@ class Settings(BaseSettings):
     aria_llm_temperature: float = 0.2
     aria_llm_enhance_skills: bool = False
     aria_proactive_ideas: bool = True
-    # Gem Crush premium — recherche concurrence + release groupée (30 min si ARIA peut)
-    aria_gem_crush_improve_minutes: int = 30
-    aria_gem_crush_premium_mode: bool = True
-    aria_gem_crush_incremental_mode: bool = True
-    aria_gem_crush_unlimited_releases: bool = True
     aria_curriculum_notify_operator: bool = False
     aria_qi_shadow_judge_enabled: bool = True
     aria_qi_judge_force_aria: bool = False

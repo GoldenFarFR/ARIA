@@ -27,9 +27,9 @@ def test_worker_task_markdown():
 
 def test_append_and_dedup():
     task = WorkerTask(
-        task_id="gem-crush-error-v30",
+        task_id="cap-gap-test-v1",
         title="Patch fail",
-        source="gem_crush_skill",
+        source="capability_gap",
         problem="anchor missing",
         action="Fix anchor",
     )
@@ -37,7 +37,7 @@ def test_append_and_dedup():
     assert count_pending_tasks(body) == 1
     body2 = _append_task_to_markdown(body, task)
     assert body2.strip() == body.strip()
-    assert _has_pending_task(body, "gem-crush-error-v30")
+    assert _has_pending_task(body, "cap-gap-test-v1")
 
 
 def test_mark_done():

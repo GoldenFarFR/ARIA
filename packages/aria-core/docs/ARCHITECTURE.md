@@ -30,7 +30,7 @@ Telegram / API chat
   ChatResponse → gateway (telegram_bot, x_twitter)
 ```
 
-**Heartbeat** (`heartbeat.py`) : boucle autonome planifiée (portfolio, Gem Crush, QI promote, curriculum, health, …) — indépendante du chat.
+**Heartbeat** (`heartbeat.py`) : boucle autonome planifiée (portfolio, QI promote, curriculum, health, …) — indépendante du chat.
 
 ## Arborescence `src/aria_core/`
 
@@ -104,7 +104,7 @@ Chaque skill = `*_skill.py` avec `execute_*` + helpers. Routage dans `brain.py`.
 |-------|---------|
 | `github_skill` | Commits, PR, repos protégés |
 | `holding_site_skill` | Patch vitrine holding |
-| `gem_crush_*` | POC match-3 autonome (skill, premium, critic, synthesizer) |
+
 | `comms_skill` | Brouillons X/Telegram |
 | `portfolio_skill` | Analyse watchlist (hook hôte) |
 | `capability_skill` | `/level up`, statut QI |
@@ -117,7 +117,7 @@ Chaque skill = `*_skill.py` avec `execute_*` + helpers. Routage dans `brain.py`.
 
 | Fichier | Type |
 |---------|------|
-| `*.yaml` | Rubric QI, backlog Gem Crush, watchlist X, épistémique |
+| `*.yaml` | Rubric QI, watchlist X, épistémique |
 | `cognitive.py` | CRUD mémoire cognitive (SQLite) |
 | `epistemic*.py` | Pipeline vérif web, critic, replay |
 | `operator_pitfalls.yaml` | SSOT pièges opérateur (agents IDE) |

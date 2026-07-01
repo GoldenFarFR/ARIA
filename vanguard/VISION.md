@@ -75,7 +75,7 @@ Quand tu travailles avec Grok Build ou Cursor :
 - **Split aria-core (2026-06-19)** : cerveau = `aria-sandbox/packages/aria-core` ; hôte = plugins marché via `aria_host.py` uniquement ; pip pin SHA + `bump-aria-core-pin.ps1`.
 - **Fin repo `dexpulse` (2026-06-19)** : repo supprimé ; produit **Aria Market** + holding dans **`aria-vanguard`** (vitrine + `aria-api` Render). URL canonique API : `api.ariavanguardzhc.com`.
 - **App factory Kelly (2026-06-20)** : revenus prioritaires = micro-apps shipées en <7 jours (modèle Kelly Claude) ; poll hebdo Telegram ; Android Play Store possible (compte dev Google 25 $ — opérateur). Culture large obligatoire avant token.
-- **ARIA Gem Crush POC (2026-06-20)** : repo `aria-gem-crush`, match-3 jouable sur homepage holding (`#poc`) — preuve qu'ARIA shippe des apps ; filiale `gem-crush` dans le répertoire holding.
+
 
 ---
 
