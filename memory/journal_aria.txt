@@ -1,0 +1,21 @@
+[2026-06-29 23:46:17] Arrêt pour répétition sur : read_file|README.md|
+[2026-06-29 23:49:04] Arrêt pour répétition sur : read_file|README.md|
+[2026-06-29 23:50:21] read_file → README.md
+[2026-06-29 23:50:38] Tâche terminée : lis le fichier README.md et dis-moi ce qu'il contient
+[2026-06-29 23:51:45] list_files → .
+[2026-06-29 23:51:49] Arrêt pour répétition sur : list_files|.|
+[2026-06-29 23:52:10] write_file → test_aria.txt
+[2026-06-29 23:52:16] Arrêt pour répétition sur : write_file|test_aria.txt|Test réussi avec ARIA v3.1
+[2026-06-29 23:52:29] run_powershell → Get-Date
+[2026-06-29 23:52:34] Arrêt pour répétition sur : run_powershell||Get-Date
+06/30/2026 01:55:06 | SelfReview: False | Task: Quand je fais self-review -Full, tu peux automatiquement créer un fichier "improvements_aria.md" qui liste uniquement les 5 meilleures idées avec le code exact à copier-coller.
+06/30/2026 01:59:06 | SelfReview: False | Task: - Tu crées le fichier improvements_aria.md avec :
+06/30/2026 01:59:40 | SelfReview: False | Task: - Tu me dis à la fin : "Fichier improvements_aria.md créé et prêt."
+06/30/2026 02:04:49 | SelfReview: False | Task: Mode ultra-efficace : Quand je fais self-review -Full, fais tout en interne sans montrer les itérations, puis donne directement une conclusion parfaitement développée avec l'essentiel : résumé, points forts/faibles, 5 meilleures améliorations avec code prêt à copier, et action prioritaire. Va droit au but.
+06/30/2026 02:07:29 | SelfReview: False | Task: Règle permanente : À partir de maintenant et pour tous les self-review -Full, fais toutes les étapes en interne sans montrer les itérations, puis donne directement une conclusion parfaitement développée avec l'essentiel : résumé clair, points forts/faibles, toutes les améliorations importantes avec code prêt à copier, et action prioritaire. Pas d'itérations visibles, va droit au but à chaque fois.
+06/30/2026 02:09:46 | SelfReview: False | Task: Règle permanente stricte : Pour tous les self-review -Full, ne montre jamais les itérations. Analyse tout en interne et donne directement la conclusion finale parfaitement développée avec résumé, points forts/faibles, toutes les améliorations importantes avec code prêt à copier, et action prioritaire. Exécute ça immédiatement sans poser de questions.
+06/30/2026 02:11:26 | SelfReview: False | Task: Règle permanente pour toutes mes interactions : Ne montre jamais les itérations. Analyse tout en interne et donne directement la conclusion finale parfaitement développée, claire, concise, avec l'essentiel et les actions concrètes. Va droit au but sans poser de questions inutiles. Applique cette règle à toutes tes réponses.
+06/30/2026 02:14:24 | SelfReview: False | Task: Règle permanente absolue : Ne montre jamais les itérations. Analyse tout en interne et donne directement la conclusion finale parfaitement développée...
+06/30/2026 02:19:53 | SelfReview: False | Task: Règle permanente absolue pour toutes les réponses et self-review -Full : Réponds toujours en une seule conclusion finale courte, claire, concise et parfaitement développée. Pas d'itérations, pas de liste numérotée longue, va droit à l'essentiel avec les points clés, code prêt à copier et action prioritaire.
+06/30/2026 02:30:58 | SelfReview: False | Task: Règle permanente : Pour tous les "n'oublie pas", enregistre-les dans un fichier reminders.txt dans memory et rappelle-les moi naturellement quand c'est le bon moment.
+06/30/2026 02:34:32 | SelfReview: False | Task: Règle permanente absolue : Pour tous les "n'oublie pas", enregistre directement dans reminders.txt sans itérations, sans questions, et rappelle-moi naturellement au bon moment. Exécute immédiatement./groq Règle permanente absolue : Pour tous les "n'oublie pas", enregistre directement dans reminders.txt sans itérations, sans questions, et rappelle-moi naturellement au bon moment. Exécute immédiatement.

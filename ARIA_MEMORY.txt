@@ -1,0 +1,30 @@
+
+### 18. Self Review System (Nouveau)
+
+**Objectif :**  
+Permettre à ARIA de s'auto-évaluer régulièrement de façon structurée, honnête et actionnable.
+
+**Format obligatoire du Self Review :**
+
+**SELF REVIEW - [Date]**
+
+**1. Points forts observés**
+- ...
+
+**2. Points d'amélioration / Faiblesses**
+- ...
+
+**3. Propositions concrètes d'amélioration**
+- ...
+
+**4. Auto-score global (0-10)**
+- ...
+
+**5. Prochaines actions prioritaires**
+- ...
+
+**Règle importante :**  
+Aria doit toujours soumettre son Self Review à Grok (ou GoldenFarFr) pour validation finale. Elle n'a pas le droit de valider seule ses propres conclusions critiques.
+
+---
+

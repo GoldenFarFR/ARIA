@@ -1,0 +1,121 @@
+/* Gaming design system — coller dans src/index.css du site cible */
+
+:root {
+  --game-shell-bg: #12121a;
+  --game-canvas-bg: #0f0f14;
+  --game-border: rgba(255, 255, 255, 0.1);
+  --game-accent: #6366f1;
+  --game-accent-glow: rgba(99, 102, 241, 0.5);
+  --game-overlay-ready: rgba(0, 0, 0, 0.55);
+  --game-overlay-end: rgba(0, 0, 0, 0.65);
+  --game-hud-muted: #a3a3a3;
+  --game-hint: #fcd34d;
+}
+
+.game-stage {
+  min-height: min(72vh, 640px);
+  max-height: 80vh;
+}
+
+.game-shell {
+  border-radius: 1rem;
+  border: 1px solid var(--game-border);
+  background: var(--game-shell-bg);
+  overflow: hidden;
+  outline: none;
+}
+
+.game-shell:focus-visible {
+  box-shadow: 0 0 0 2px var(--game-accent-glow);
+}
+
+.game-hud {
+  font-size: 0.875rem;
+  color: var(--game-hud-muted);
+  z-index: 2;
+}
+
+.game-hud__slot :is(span, strong) {
+  color: #fff;
+  font-weight: 500;
+}
+
+.game-overlay {
+  z-index: 3;
+}
+
+.game-overlay--ready {
+  background: var(--game-overlay-ready);
+}
+
+.game-overlay--end {
+  background: var(--game-overlay-end);
+}
+
+.game-overlay__title {
+  color: #fff;
+  font-size: 1.125rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.game-overlay__subtitle {
+  color: #d4d4d4;
+  font-size: 0.875rem;
+  text-align: center;
+  padding: 0 1.5rem;
+  max-width: 28rem;
+  line-height: 1.5;
+}
+
+.game-hint {
+  font-size: 0.875rem;
+  color: color-mix(in srgb, var(--game-hint) 90%, transparent);
+  animation: game-pulse 1.5s ease-in-out infinite;
+  z-index: 2;
+}
+
+@keyframes game-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.game-desktop-hint {
+  font-size: 10px;
+  color: #737373;
+  z-index: 2;
+}
+
+.game-touch-btn {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.5rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 1.125rem;
+  cursor: pointer;
+  z-index: 4;
+}
+
+.game-touch-btn:active,
+.game-touch-btn--lg:active {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.game-touch-btn--lg {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.5rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 1.25rem;
+  cursor: pointer;
+  z-index: 4;
+}

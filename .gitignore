@@ -1,0 +1,25 @@
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+bot/venv/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*~
+
+# Secrets / local vault
+vault/
+*.pem
+*.key
+production.env

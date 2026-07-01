@@ -1,0 +1,28 @@
+TODO ARIA - Liste complète des améliorations (2026-06-30 01:34)
+
+=== VÉRIFICATIONS ACTUELLES ===
+✅ GROK_API_KEY OK
+✅ GROQ_API_KEY OK
+✅ Modèle Ollama 'qwen2.5:14b' détecté
+✅ Dossier ARIA trouvé
+✅ Dossier mémoire OK
+
+=== AMÉLIORATIONS PRIORITAIRES (à faire petit à petit avec Grok) ===
+1. Enrichir la regex agentTriggers avec plus de verbes (génère, analyse, crée fichier...)
+2. Ajouter une gestion robuste des erreurs (try/catch) dans Invoke-Grok, Invoke-Groq, Invoke-Ollama
+3. Ajouter des commentaires clairs dans le code (surtout pour la sécurité des clés API)
+4. Ajouter un système de limite de taille pour les contextes (pour éviter les problèmes de performance)
+5. Créer une commande /apply-fix pour appliquer automatiquement les petites corrections
+6. Ajouter Test-AriaHealth dans le dashboard
+7. Améliorer la documentation du système multi-agent (routage Ollama/Grok/Groq)
+8. Ajouter un mécanisme de retry sur les appels API
+9. Vérifier et documenter la gestion des gros contextes
+10. Ajouter des tests automatiques pour les fonctions critiques
+
+=== AUTRES IDÉES FUTURES ===
+- Sauvegarde automatique des rapports
+- Interface graphique simple
+- Support pour d'autres modèles locaux
+- Système de versioning des modifications du profil
+
+Mets à jour ce fichier au fur et à mesure que tu avances.

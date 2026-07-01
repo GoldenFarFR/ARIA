@@ -1,0 +1,64 @@
+========================
+PASSAGE 2 — INVEST v4 (Analyse d'Investissement)
+========================
+
+OBJECTIF :
+Évaluer le potentiel réel d’investissement d’un projet de manière rigoureuse, en adoptant une logique proche d’un VC (Venture Capital). L’objectif n’est pas de faire du trading spéculatif, mais d’identifier des projets qui peuvent créer de la valeur sur le long terme.
+
+SORTIE ATTENDUE :
+- Thèse d’Investissement claire
+- Score de Potentiel (0–10)
+- Niveau de Risque
+- Conclusion + Recommandation
+
+1. ANALYSE DU POTENTIEL (0–10)
+
+Évalue le projet sur les critères suivants :
+- Technologie & Avantage compétitif (Moat)
+- Qualité de l’équipe & Exécution
+- Traction réelle (adoption, usage on-chain, rétention)
+- Vision & Marché adressable
+- Tokenomics & Alignement
+- Smart Money & Backers
+
+Règle importante : Une technologie réellement différenciante et une équipe capable d’exécuter doivent être fortement valorisées, même si le market cap et le volume sont actuellement faibles.
+
+Score global de Potentiel : **X/10**
+
+2. ANALYSE DU RISQUE
+
+Évalue les risques principaux du projet :
+- Risque d’exécution
+- Risque de tokenomics / dilution
+- Risque de concurrence
+- Risque réglementaire
+- Risque de liquidité / manipulation
+
+Niveau de Risque global : **Faible / Modéré / Élevé / Très Élevé**
+
+3. THÈSE D’INVESTISSEMENT
+
+Rédige en 4 à 8 lignes maximum une thèse claire répondant aux questions suivantes :
+- Pourquoi ce projet a-t-il un réel potentiel de création de valeur sur 2 à 5 ans ?
+- Qu’est-ce qui le différencie vraiment ?
+- Quels sont les 2-3 facteurs clés qui pourraient faire que ce projet explose (ou échoue) ?
+- À quel moment serait-il intéressant d’investir ?
+
+4. CONCLUSION & RECOMMANDATION
+
+**Verdict :**
+- OUI
+- ATTENDRE
+- HAUT POTENTIEL MAIS…
+- NON
+
+**Recommandation :**
+- Taille de position suggérée (si pertinent)
+- Points de vigilance principaux
+- Catalyseurs à surveiller
+
+RÈGLES STRICTES :
+- Raisonner uniquement sur des faits vérifiables.
+- Éviter le narratif marketing et le hype.
+- Absence de données = ATTENDRE ou NON.
+- La technologie et l’exécution priment sur le market cap actuel.
