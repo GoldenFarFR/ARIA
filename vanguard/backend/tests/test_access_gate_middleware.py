@@ -58,3 +58,25 @@ async def test_auth_required_endpoint_when_gated(gated_client, monkeypatch):
     assert res.status_code == 200
     data = res.json()
     assert data["required"] is True
+
+
+@pytest.mark.asyncio
+async def test_community_feedback_public_when_gated(gated_client, monkeypatch):
+    from aria_core import community_feedback as mod
+
+    async def noop_x(*_a, **_k):
+        return {"status": "skipped", "reason": "test"}
+
+    monkeypatch.setattr(mod, "maybe_tweet_community_feedback", noop_x)
+    res = await gated_client.post(
+        "/api/aria/community-feedback",
+        json={
+            "message": "Please add a Telegram link on the Vanguard welcome banner",
+            "handle": "visitor1",
+            "lang": "en",
+        },
+        headers={"X-Visitor-Id": "visitor-test-12345678"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True

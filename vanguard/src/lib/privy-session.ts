@@ -2,6 +2,7 @@ import { loginWithPrivy } from '../api'
 import { setToken } from './auth'
 import { withFetchTimeout } from './fetch-timeout'
 import { setMemberProfile } from './member-profile'
+import { mergeAnonPrefsIntoMember, setStoredMemberHandle } from './visitor-prefs'
 
 type AccessTokenGetter = () => Promise<string | null>
 type IdentityGetter = () => Promise<string | null>
@@ -109,8 +110,13 @@ export async function exchangePrivyForAriaSession(
       try {
         const res = await loginWithPrivy(accessToken, identityToken)
         setToken(res.token)
+        const handle = res.twitter_username
+        if (handle) {
+          setStoredMemberHandle(handle)
+          mergeAnonPrefsIntoMember(handle)
+        }
         setMemberProfile({
-          handle: res.twitter_username,
+          handle,
           message:
             res.message ||
             'Bienvenue sur Aria Vanguard ZHC. Aria Market est la filiale flagship — ouvre le produit pour l’expérience complète.',
