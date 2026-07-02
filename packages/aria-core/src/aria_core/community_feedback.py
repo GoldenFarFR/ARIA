@@ -75,6 +75,15 @@ def is_trusted_feedback_handle(handle: str) -> bool:
     return bool(h) and h in trusted_feedback_handles()
 
 
+def trusted_instant_x_enabled() -> bool:
+    """Handles de confiance (opérateur) — tweet X immédiat, sans file 4 h."""
+    return os.getenv("COMMUNITY_FEEDBACK_TRUSTED_INSTANT_X", "true").lower() not in (
+        "false",
+        "0",
+        "no",
+    )
+
+
 def _feedback_has_spam_signal(text: str) -> bool:
     """Spam réel — pas les mentions du domaine holding."""
     t = (text or "").strip()
@@ -469,9 +478,10 @@ def _enqueue_x_feedback_item(
     visitor_id: str,
     feedback_id: str,
     text: str,
+    instant: bool = False,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
-    flush_at = now + timedelta(hours=x_cooldown_hours())
+    flush_at = now if instant else now + timedelta(hours=x_cooldown_hours())
     data = _load_x_queue()
     buckets = data.setdefault("buckets", {})
     key = _queue_bucket_key(handle, visitor_id)
@@ -673,11 +683,13 @@ async def maybe_tweet_community_feedback(
     # Publier d'abord les files arrivées à échéance (toute la queue).
     await flush_due_community_x_tweets()
 
+    instant_x = is_trusted_feedback_handle(handle) and trusted_instant_x_enabled()
     q = _enqueue_x_feedback_item(
         handle=handle,
         visitor_id=visitor_id,
         feedback_id=feedback_id,
         text=text,
+        instant=instant_x,
     )
     data = _load_x_queue()
     key = q["bucket_key"]
