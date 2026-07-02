@@ -302,3 +302,4 @@
 23h32 — vector memoire toujours actif profil + env User + DATA_DIR local.env
 23h35 — shell aria-core cerveau vector COLLEGUE remplace Letta par defaut
 23h38 — skill ingest-repo preuve cognitive+vector+rapport jsonl
+23h46 — fix routage ingest force cerveau + banniere
