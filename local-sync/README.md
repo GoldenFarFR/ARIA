@@ -8,7 +8,7 @@
 |---------|---------|
 | `sync/aria-data/` | Mémoire ARIA (`aria.db`, compose intel, ledgers X, directives…) |
 | `sync/ide/` | Règles Cursor + Grok (sans secrets) |
-| `sync/metier/` | Fichiers métier (ex. Excel DDC) |
+| `sync/metier/` | Réservé (vide — métier hors repo ARIA) |
 | `machines/` | Inventaire par PC (ce qui a été trouvé / manquant) |
 
 ## Cles et secrets (coffre chiffre)

@@ -11,7 +11,7 @@
 |---------|---------|
 | `sync/vault/goldenfar-vault.gfv` | **Toutes les clés** (Render, X, Telegram, Groq, GitHub, Stripe…) — fichier **chiffré** |
 | `sync/ide/` | Règles Cursor + Grok |
-| `sync/metier/ddc/` | Fichiers Excel DDC |
+
 | `sync/aria-data/` | Mémoire ARIA locale (souvent vide — la prod vit sur Render) |
 
 **Chiffrement du `.gfv`** : rotation **quotidienne** (clé dérivée de la date). Les 2 PC partagent le **même secret maître** (Bitwarden) — pas le mot de passe du jour à la main.  
@@ -25,7 +25,7 @@ Oui, via **3 canaux** :
 
 | Canal | Rôle | Qui initie |
 |-------|------|------------|
-| **GitHub** `aria-local-sync` | Coffre `.gfv`, règles IDE, Excel DDC | PCDESS9 pousse ; l'autre PC tire |
+| **GitHub** `aria-local-sync` | Coffre `.gfv`, règles IDE | PCDESS9 pousse ; l'autre PC tire |
 | **Bitwarden** (secrets locaux) | Secret maître + TOTP + lien API ARIA — **identiques** sur les 2 PC | Copie manuelle une fois |
 | **Telegram** (pont TOTP) | ARIA demande le code ; tu réponds sur ton téléphone | Les 2 PC (même compte) |
 | **Syncthing** (optionnel) | Coffre live `%LOCALAPPDATA%\GoldenFar\vault` | Les 2 PC |

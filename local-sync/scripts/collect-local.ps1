@@ -98,28 +98,6 @@ if (-not $SkipIde) {
     }
 }
 
-# --- Metier DDC (Excel local) ---
-if (-not $SkipMetier) {
-    $ddcCandidates = @(
-        (Join-Path $env:USERPROFILE "Downloads\DDC - Calculateur v7b.xlsx"),
-        (Join-Path $env:USERPROFILE "Downloads\DDC*.xlsx")
-    )
-    $found = $false
-    foreach ($c in $ddcCandidates) {
-        $items = Get-Item $c -ErrorAction SilentlyContinue
-        if (-not $items) { continue }
-        foreach ($item in @($items)) {
-            Copy-Item $item.FullName (Join-Path $script:SyncMetierDdc $item.Name) -Force
-            Write-Host "[METIER] $($item.Name) -> sync/metier/ddc" -ForegroundColor Green
-            $found = $true
-        }
-    }
-    if (-not $found) {
-        $inventory.missing += "ddc_excel"
-        Write-Host "[METIER] Excel DDC non trouve dans Downloads" -ForegroundColor DarkGray
-    }
-}
-
 # --- Repos clones (inventaire) ---
 $projets = Join-Path $env:USERPROFILE "projets"
 if (Test-Path $projets) {

@@ -32,12 +32,6 @@ suites:
   collegue:
     description: Mémoire opérateur COLLEGUE.md
     cases:
-      - id: collegue_excel
-        question: "que sais-tu de COLLEGUE.md et de mes préférences Excel ?"
-        expect_keywords: ["aptos", "excel", "fy"]
-        forbid_patterns: ["ACTU — sources web", "support.microsoft"]
-        expected_sources: [collegue]
-
       - id: collegue_operator
         question: "qui est l'opérateur GoldenFar selon ta mémoire collègue ?"
         expect_keywords: ["sylvain"]

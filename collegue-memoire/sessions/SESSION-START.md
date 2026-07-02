@@ -13,7 +13,7 @@
 
 ## Sinon (avant 2026-07-02)
 
-- Pas de Phase D — autres taches OK (DDC, Gem Crush, ops)
+- Pas de Phase D — autres taches OK (ops, ACP, etc.)
 - Rappeler la date cible si question memoire ARIA
 
 ---

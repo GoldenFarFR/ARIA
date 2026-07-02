@@ -94,17 +94,6 @@ if (-not $SkipIde) {
     }
 }
 
-if (-not $SkipMetier) {
-    $ddcSrc = $script:SyncMetierDdc
-    if (Test-Path $ddcSrc) {
-        $dl = Join-Path $env:USERPROFILE "Downloads"
-        Get-ChildItem $ddcSrc -File | ForEach-Object {
-            Copy-Item $_.FullName (Join-Path $dl $_.Name) -Force
-            Write-Host "[METIER] $($_.Name) -> Downloads" -ForegroundColor Green
-        }
-    }
-}
-
 Write-Host ""
 Write-Host "Verification finale :" -ForegroundColor Yellow
 Write-Host "  cd %USERPROFILE%\projets\aria-vanguard\operator"

@@ -5,7 +5,6 @@ $script:LocalSyncRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyC
 $script:SyncAriaData = Join-Path $script:LocalSyncRoot "sync\aria-data"
 $script:SyncIdeCursor = Join-Path $script:LocalSyncRoot "sync\ide\cursor-rules"
 $script:SyncIdeGrok = Join-Path $script:LocalSyncRoot "sync\ide\grok-rules"
-$script:SyncMetierDdc = Join-Path $script:LocalSyncRoot "sync\metier\ddc"
 $script:SyncVault = Join-Path $script:LocalSyncRoot "sync\vault"
 $script:VaultGfvName = "goldenfar-vault.gfv"
 $script:MachinesDir = Join-Path $script:LocalSyncRoot "machines"
@@ -66,7 +65,6 @@ function Ensure-SyncDirs {
         $script:SyncAriaData,
         $script:SyncIdeCursor,
         $script:SyncIdeGrok,
-        $script:SyncMetierDdc,
         $script:SyncVault,
         $script:MachinesDir
     )) {

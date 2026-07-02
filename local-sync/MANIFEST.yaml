@@ -52,10 +52,6 @@ ide:
   cursor_rules: sync/ide/cursor-rules
   grok_rules: sync/ide/grok-rules
 
-# Fichiers métier Sylvain (hors GitHub produit)
-metier:
-  ddc_excel: sync/metier/ddc
-
 # Prod Render : DATA_DIR=/app/backend/data — pas sur le PC sauf export manuel
 prod_note: >
   La mémoire cognitive prod tourne sur Render (aria-api).

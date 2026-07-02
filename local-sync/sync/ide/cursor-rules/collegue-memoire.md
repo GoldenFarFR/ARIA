@@ -11,7 +11,7 @@ Avant **toute** tâche :
 2. **Si absent** → rappeler à l'utilisateur **une fois** au début de la session :
    - `git clone https://github.com/GoldenFarFR/collegue-memoire.git "%USERPROFILE%\projets\collegue-memoire"`
    - `copy "%USERPROFILE%\projets\collegue-memoire\.cursor\rules\collegue-memoire.md" "%USERPROFILE%\.cursor\rules\"`
-   - Puis continuer sans supposer les préférences métier (DDC, Aptos, etc.)
+   - Puis continuer sans supposer de contexte métier hors ARIA
 3. **Si présent** → `git pull`, lire `COLLEGUE.md`, puis travailler
 4. Si workspace = ce repo : lire `COLLEGUE.md` à la racine
 

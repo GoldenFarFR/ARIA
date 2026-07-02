@@ -11,7 +11,7 @@
 - **Sylvain Rio** — opérateur **GoldenFar** / écosystème ARIA
 - Sujets : **ARIA** (cerveau, skills, deploy), **Aria Vanguard ZHC**, ACP, crypto / holding
 - Langue : **français** toujours
-- **Hors scope COLLEGUE** : ancien métier bureau (DDC Excel, Aptos, FX/FY) — autre PC, **ne pas mélanger** avec ARIA
+- **Hors scope COLLEGUE** : métier bureau / vie pro hors GoldenFar — **ne pas mélanger** avec ARIA
 
 ---
 
