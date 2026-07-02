@@ -152,10 +152,9 @@ def resolve_handles_in_text(text: str) -> str:
         else:
             out = body
 
-    while len(out) > 280:
-        out = out[:277] + "..."
-        break
-    return out
+    from aria_core.x_text import fit_x_tweet
+
+    return fit_x_tweet(out, ellipsis="...")
 
 
 def add_handle(handle: str, *, role: str = "custom") -> str:

@@ -10,6 +10,7 @@ from aria_core.community_feedback import (
     submit_community_feedback,
     translate_to_english_for_x,
 )
+from aria_core.x_text import tweet_fits
 
 
 def test_score_feedback_high_for_concrete_idea():
@@ -75,7 +76,22 @@ def test_build_feedback_thanks_tweet_quotes_exact_feedback():
     assert f'"{excerpt}"' in tweet
     assert tweet.startswith("@goldenfarfr · Vanguard site")
     assert "\n\n→ " in tweet
-    assert len(tweet) <= 280
+    assert tweet_fits(tweet)
+
+
+def test_build_feedback_tweet_long_french_with_emoji():
+    long_text = (
+        "Salut Aria c'est super de pouvoir te laisser un avis sur ton site web "
+        "ariavanguardzhc.com — on continue de construire ensemble la commu ZHC 🚀🔥 "
+        + "avec plus de features pour Vanguard et le modèle crypto-first " * 3
+    )
+    tweet = build_feedback_thanks_tweet(
+        long_text,
+        handle="GoldenFarFR",
+        personal=personal_take_on_feedback(long_text[:200], lang="en"),
+    )
+    assert tweet_fits(tweet)
+    assert "@GoldenFarFR" in tweet or "@goldenfarfr" in tweet.lower()
 
 
 def test_personal_take_feedback_widget():

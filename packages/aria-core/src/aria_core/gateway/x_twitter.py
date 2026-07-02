@@ -106,7 +106,9 @@ def _post_tweet_sync(
 ) -> dict[str, Any]:
     import requests
 
-    body = text.strip()[:280]
+    from aria_core.x_text import fit_x_tweet
+
+    body = fit_x_tweet(text.strip())
     if not body:
         raise ValueError("Empty tweet text")
     auth = _oauth1_auth()
@@ -424,7 +426,9 @@ async def post_tweet(
         record_tweet_posted,
     )
 
-    text = resolve_handles_in_text(text.strip())
+    from aria_core.x_text import fit_x_tweet
+
+    text = fit_x_tweet(resolve_handles_in_text(text.strip()))
     allowed, reason, cost = check_tweet_allowed(
         text,
         force=force,
@@ -441,7 +445,7 @@ async def post_tweet(
     exchange = await create_exchange(
         target_agent="X_public",
         channel="x_api",
-        message_body=text[:280],
+        message_body=text,
         message_json={"handle": official_x_at(), "approval_id": approval_id},
         approval_id=approval_id,
         status=ExchangeStatus.APPROVED,
@@ -463,12 +467,12 @@ async def post_tweet(
             media_ids.append(await asyncio.to_thread(_upload_media_sync, path))
         result = await asyncio.to_thread(
             _post_tweet_sync,
-            text[:280],
+            text,
             media_ids=media_ids or None,
         )
         tweet_id = result.get("data", {}).get("id", "")
         url = f"https://x.com/{official_x_handle()}/status/{tweet_id}" if tweet_id else ""
-        record_tweet_posted(text[:280], tweet_id=tweet_id, cost_usd=cost)
+        record_tweet_posted(text, tweet_id=tweet_id, cost_usd=cost)
         note = f"Publié sur X #{exchange.id} (~{cost:.3f} $)"
         if url:
             note += f"\n{url}"
