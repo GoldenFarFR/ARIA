@@ -1,4 +1,4 @@
-﻿# Journal de bord Aria
+# Journal de bord Aria
 
 > Actions techniques de l'assistant (fichiers, repos, commits).  
 > Décisions métier → `COLLEGUE.md` § Journal.
@@ -280,3 +280,6 @@
 01h47 — deploy vitrine static rootDir vanguard + API test-1
 01h58 — feat(vitrine) Privy login + push monorepo GitHub
 02h02 — deploy vitrine Render Privy login ariavanguardzhc.com
+02h06 — fix feedback cold-start Render warm health retry
+02h13 — fix SSL api.ariavanguardzhc.com + redeploy vitrine feedback
+02h20 — redeploy vitrine API canonique api.ariavanguardzhc.com (SSL OK)
