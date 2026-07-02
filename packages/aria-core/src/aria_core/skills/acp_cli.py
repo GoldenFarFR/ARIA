@@ -97,13 +97,24 @@ def _parse_json(stdout: str) -> Any:
         return None
 
 
+def _unwrap_list(data: Any) -> list[dict]:
+    if isinstance(data, list):
+        return [r for r in data if isinstance(r, dict)]
+    if isinstance(data, dict):
+        for key in ("data", "agents", "items", "results"):
+            block = data.get(key)
+            if isinstance(block, list):
+                return [r for r in block if isinstance(r, dict)]
+    return []
+
+
 def list_agents() -> tuple[list[dict], str | None]:
     code, out, err = run_acp("agent", "list")
     if code != 0:
         return [], err or out or f"exit {code}"
-    data = _parse_json(out)
-    if isinstance(data, list):
-        return [r for r in data if isinstance(r, dict)], None
+    rows = _unwrap_list(_parse_json(out))
+    if rows:
+        return rows, None
     return [], "réponse agent list invalide"
 
 
@@ -111,9 +122,9 @@ def list_offerings() -> tuple[list[dict], str | None]:
     code, out, err = run_acp("offering", "list")
     if code != 0:
         return [], err or out or f"exit {code}"
-    data = _parse_json(out)
-    if isinstance(data, list):
-        return [r for r in data if isinstance(r, dict)], None
+    rows = _unwrap_list(_parse_json(out))
+    if rows:
+        return rows, None
     return [], "réponse offering list invalide"
 
 
@@ -157,7 +168,4 @@ def browse_agents(query: str = "") -> tuple[list[dict], str | None]:
     code, out, err = run_acp(*args)
     if code != 0:
         return [], err or out or f"exit {code}"
-    data = _parse_json(out)
-    if isinstance(data, list):
-        return [r for r in data if isinstance(r, dict)], None
-    return [], None
+    return _unwrap_list(_parse_json(out)), None
