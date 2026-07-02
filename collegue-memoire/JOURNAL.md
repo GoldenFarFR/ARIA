@@ -305,3 +305,6 @@
 23h46 — fix routage ingest force cerveau + banniere
 23h52 — fix shell_chat init_repertoire_db agent_messages
 23h57 — fix recall COLLEGUE sans recherche web epistemique
+
+## 2026-07-03
+00h02 — retrait contexte bureau DDC/Aptos COLLEGUE + truth-ledger
