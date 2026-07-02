@@ -300,3 +300,4 @@
 23h16 — corrige letta-orchestrator routage identite + extraction Letta 0.6.7
 23h29 — retire mention Doursat de COLLEGUE.md (correction Sylvain)
 23h32 — vector memoire toujours actif profil + env User + DATA_DIR local.env
+23h35 — shell aria-core cerveau vector COLLEGUE remplace Letta par defaut

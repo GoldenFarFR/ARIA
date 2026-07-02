@@ -130,6 +130,12 @@ async def build_llm_context(
             x_identity_prompt(),
             get_persona_text()[:2000],
         ]
+        from aria_core.memory.collegue import get_collegue_text
+
+        collegue_block = get_collegue_text()
+        if collegue_block:
+            parts.append("\n# Mémoire collègue (COLLEGUE.md — SSOT opérateur Sylvain)")
+            parts.append(collegue_block)
         from aria_core.memory.arbitrator import get_arbitration_text, run_memory_arbitration
 
         arbitration = await run_memory_arbitration(messages=messages, query_hint=vector_query)
