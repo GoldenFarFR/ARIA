@@ -81,50 +81,41 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ## PC-SYLVAIN
 
-- **Derniere session** : 2026-07-02T00:04:21
-- **Session Grok** : `019f1fa5-0e2d-7b31-b25b-91e4ba19e19b`
+- **Derniere session** : 2026-07-02T07:55:37
+- **Session Grok** : `019f2028-e936-7c13-a3ba-4e3745f9a1c9`
 - **Repos** : ARIA
-- **Fichiers modifies** : 20 (extrait ci-dessous)
+- **Fichiers modifies** : 11 (extrait ci-dessous)
 
 **Etat git** :
-- `ARIA` @ 8a67596 (dirty) - docs: fin session 2026-07-01
+- `ARIA` @ bb6f8ca (dirty) - fix(x): limites poids X 280 pour avis commu + form 500 chars
 
 **Fichiers (extrait)** :
-- collegue-memoire/ARIA_ACP_v2_Integration_Prompt.txt
-- collegue-memoire/sessions/HANDOFF.md
-- collegue-memoire/sessions/REPRISE-ACP-2026-07-02.md
-- packages/aria-core/src/aria_core/brain.py
-- packages/aria-core/src/aria_core/heartbeat.py
-- packages/aria-core/src/aria_core/knowledge/acp_config.yaml
-- packages/aria-core/src/aria_core/knowledge/acp_offerings.yaml
-- packages/aria-core/src/aria_core/knowledge/operator_pitfalls.yaml
-- packages/aria-core/src/aria_core/models.py
-- packages/aria-core/src/aria_core/public_mode.py
-- packages/aria-core/src/aria_core/skills/acp_cli.py
+- packages/aria-core/src/aria_core/community_feedback.py
+- packages/aria-core/src/aria_core/gateway/x_twitter.py
+- packages/aria-core/src/aria_core/handle_registry.py
 - packages/aria-core/src/aria_core/skills/acp_client_skill.py
-- packages/aria-core/src/aria_core/skills/acp_provider_skill.py
-- packages/aria-core/src/aria_core/testing.py
-- packages/aria-core/tests/test_acp_skills.py
-- skills/scripts/prepare-acp-v2-integration.ps1
-- vanguard/backend/app/config.py
-- vanguard/backend/app/main.py
-- vanguard/operator/acp-events-listener.ps1
-- vanguard/operator/local.env.example
+- packages/aria-core/src/aria_core/skills/community_worker_skill.py
+- packages/aria-core/src/aria_core/x_publication_policy.py
+- packages/aria-core/src/aria_core/x_text.py
+- packages/aria-core/tests/test_community_feedback.py
+- packages/aria-core/tests/test_x_text.py
+- vanguard/backend/app/api/routes/aria.py
+- vanguard/src/components/CommunityWelcomeBanner.tsx
 
 **Journal** :
-- 23h30 — git push origin main 5a52b07 — 10 commits (Gem Crush + memoire F-H + Ollama)
-- 23h32 — fin session — collect/push handoff 92bf562
-- 23h41 — Phase I deploy prod 20864ae aria_core 92bf562 repoint monorepo ARIA
-- 23h41 — sync-render 60 vars ARIA_VECTOR_MEMORY=false prod safe
-- 23h44 — activer ARIA_VECTOR_MEMORY=true prod — sync-render + redeploy dep-d92ojsc live
-- 23h47 — fin session Phase I deploy + vector memory prod — collect/push handoff 8d97e00
-- 23h49 — créé prompt ACP v2 + script prepare-acp-v2-integration.ps1
-- 23h49 — menu interactif prepare-acp-v2-integration.ps1 (afficher/copier/bridge)
-- 23h53 — intégration ACP v2 aria-core — provider/client skills + tests 7 OK
-- 23h56 — fix acp_cli Windows (.cmd) + drain vide provider + smoke test local OK
-- 23h57 — fix listener ACP legacy (v2 HTTP 500 Virtuals) + acp-events-listener.ps1
-- 
-- ## 2026-07-02
-- 00h01 — poll ACP activé bot local — health + chat acp status/cycle OK
-- 00h04 — fin session — REPRISE-ACP-2026-07-02 handoff ACP v2 local validé, commit+PR à faire
+- 00h55 — feat feedback X tweet toujours EN + traduction avis
+- 00h56 — fix langue site: picker EN + Google opt-in visiteur
+- 01h05 — sync tokens X Aria_ZHC vault + backend .env
+- 01h06 — ajout import-secure-x-keys.ps1 + pitfall secrets-via-vault
+- 01h14 — fix tweet commu skip_rate_gap + middleware feedback public
+- 01h20 — refonte tweet commu citation exacte + reponse ciblee
+- 01h21 — modération X avis commu + polish orthographe citation
+- 01h33 — file X commu 4h fusion GoldenFarFR trusted + fix spam .com
+- 01h36 — retrait lien Telegram trusted handles + push deploy commu
+- 01h47 — deploy vitrine static rootDir vanguard + API test-1
+- 01h58 — feat(vitrine) Privy login + push monorepo GitHub
+- 02h02 — deploy vitrine Render Privy login ariavanguardzhc.com
+- 02h06 — fix feedback cold-start Render warm health retry
+- 02h13 — fix SSL api.ariavanguardzhc.com + redeploy vitrine feedback
+- 02h20 — redeploy vitrine API canonique api.ariavanguardzhc.com (SSL OK)
 
