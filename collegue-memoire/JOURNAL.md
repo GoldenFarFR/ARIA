@@ -312,3 +312,4 @@
 00h12 — fix routage self_context identite/objectifs + socratic_drill
 00h15 — retrait DDC/Excel du repo ARIA (socratic, local-sync, projets)
 00h18 — fix self_context sans vector (objectifs ARIA lisibles)
+00h29 — lot ACP v2 commit (acp_cli provider listener tests)
