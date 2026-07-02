@@ -1,0 +1,21 @@
+# ACP provider — Aria Vanguard ZHC (SSOT opérateur)
+version: 1
+
+agent_id: "019f0522-b57b-7e8e-a70a-aab2070e070e"
+agent_name: "Aria Vanguard ZHC"
+chain_id: "8453"
+
+offerings:
+  analyse_lite_x1:
+    price_usd: 1.99
+    sla_minutes: 5
+  analyse_full_x1:
+    price_usd: 4.99
+    sla_minutes: 5
+
+# Types d'events listener → traitement provider
+action_event_types:
+  - job.funded
+  - job.created
+  - budget.set
+  - provider.action_required
