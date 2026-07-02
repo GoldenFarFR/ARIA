@@ -8,7 +8,7 @@
 
 ## Qui
 
-- **Sylvain Rio** — ingénieur structure **Doursat**
+- **Sylvain Rio** — opérateur **GoldenFar** / écosystème ARIA
 - Sujets : **DDC** Robot, stabilité 3D, synthèses Excel, outils métier
 - Langue : **français** toujours
 

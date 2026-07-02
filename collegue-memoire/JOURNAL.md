@@ -298,3 +298,4 @@
 22h55 — mode rapide ARIA_LETTA_FAST + commande /fast shell aria
 22h57 — Letta perf: classif heuristique+, cascade intelligente, ctx 8k, Groq Grok/Core
 23h16 — corrige letta-orchestrator routage identite + extraction Letta 0.6.7
+23h29 — retire mention Doursat de COLLEGUE.md (correction Sylvain)
