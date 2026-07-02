@@ -94,6 +94,7 @@ INTENT_PATTERNS: list[tuple[SkillName, list[str]]] = [
     (SkillName.MEMORY_RECALL, [
         r"mémoire", r"memoire", r"memory", r"souviens", r"historique", r"journal",
         r"qu.as.?tu fait", r"what did you",
+        r"collegue\.md", r"mémoire collègue", r"préférences?\s+excel",
         r"runbook", r"nouveau\s+pc", r"new\s+pc", r"nouveau\s+github", r"nouvel\s+agent",
         r"check-aria", r"pitfalls?", r"lecons?", r"ne\s+pas\s+oublier",
     ]),
@@ -346,11 +347,19 @@ class AriaBrain:
                 skill_output = format_operator_runbook(lang)
                 data = {"runbook": True}
             else:
+                from aria_core.memory.collegue import get_collegue_text, is_collegue_recall_question
+
+                parts: list[str] = []
+                if is_collegue_recall_question(user_message):
+                    collegue = get_collegue_text()
+                    if collegue:
+                        parts.append(
+                            "COLLEGUE.md\n\n" + collegue if lang == LANG_FR else "COLLEGUE.md\n\n" + collegue
+                        )
                 journal = get_journal_summary()
-                skill_output = (
-                    f"Journal ARIA\n\n{journal}" if lang == LANG_FR else f"ARIA journal\n\n{journal}"
-                )
-                data = {}
+                parts.append(f"Journal ARIA\n\n{journal}" if lang == LANG_FR else f"ARIA journal\n\n{journal}")
+                skill_output = "\n\n---\n\n".join(parts)
+                data = {"collegue": bool(parts)}
             skill = SkillName.MEMORY_RECALL
 
         elif intent == SkillName.LAUNCHPAD_SELECT:
@@ -566,6 +575,26 @@ class AriaBrain:
             help_text = help_commands_public(lang_key) if public else help_commands(lang_key)
             return help_text, None, ["Help (template)"], {}, None
 
+        if not public:
+            from aria_core.memory.collegue import is_collegue_recall_question
+
+            if is_collegue_recall_question(message) and is_llm_configured():
+                llm_reply = await self._llm_response(
+                    message,
+                    lang,
+                    public=False,
+                    visitor_id=visitor_id,
+                    local_memory_only=True,
+                )
+                if llm_reply:
+                    return (
+                        llm_reply,
+                        SkillName.MEMORY_RECALL,
+                        ["COLLEGUE.md + mémoire locale (sans web)"],
+                        {"collegue_recall": True},
+                        None,
+                    )
+
         from aria_core.operator_self_directive import classify_operator_message, OperatorMessageKind
 
         if classify_operator_message(message) in (
@@ -697,6 +726,7 @@ class AriaBrain:
         *,
         public: bool = False,
         visitor_id: str = "",
+        local_memory_only: bool = False,
     ) -> str | None:
         from aria_core.gateway.telegram_bot import get_bot_username, get_channel_links_text
 
@@ -719,7 +749,11 @@ class AriaBrain:
                 message, system, None, temperature=0.1, max_tokens=350,
             )
 
-        context = await build_llm_context(public=public, visitor_id=visitor_id or None)
+        context = await build_llm_context(
+            public=public,
+            visitor_id=visitor_id or None,
+            query_hint=message if not public else None,
+        )
         if not public:
             try:
                 verified = await build_verified_facts_block(
@@ -755,8 +789,16 @@ class AriaBrain:
             "prendre des initiatives, pas demander approbation."
         )
         persona_block = public_llm_system_block(lang_key) if public else llm_system_block(lang_key)
+        local_rule = ""
+        if local_memory_only:
+            local_rule = (
+                "\nRÈGLE : réponds UNIQUEMENT depuis « Mémoire collègue », rappel vectoriel "
+                "et connaissances approuvées ci-dessus. Pas de recherche web. "
+                "Si une info manque, dis-le clairement.\n"
+            )
         system = (
             f"{context}\n\n"
+            f"{local_rule}"
             f"{persona_block}\n"
             f"{x_identity_prompt()}\n"
             f"{channel_rule}\n"
