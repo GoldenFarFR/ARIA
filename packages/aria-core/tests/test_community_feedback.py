@@ -175,10 +175,35 @@ def test_score_allows_holding_domain():
 
 
 def test_trusted_handle_goldenfarfr():
-    from aria_core.community_feedback import is_trusted_feedback_handle
+    from aria_core.community_feedback import (
+        is_trusted_feedback_handle,
+        is_trusted_operator_publish,
+    )
 
     assert is_trusted_feedback_handle("GoldenFarFR")
     assert is_trusted_feedback_handle("@goldenfarfr")
+    assert is_trusted_operator_publish("GoldenFarFR")
+
+
+def test_operator_bypasses_x_moderation():
+    ok, reason = assess_feedback_publishable_on_x("bravo", score=5, handle="GoldenFarFR")
+    assert ok
+    assert reason == "ok_operator"
+
+
+@pytest.mark.asyncio
+async def test_operator_short_message_accepted(monkeypatch, tmp_path):
+    from aria_core import community_feedback as mod
+
+    monkeypatch.setattr(mod, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(mod, "append_memory", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "maybe_tweet_community_feedback", lambda *a, **k: {"status": "posted"})
+
+    out = await submit_community_feedback("bravo site", handle="GoldenFarFR", lang="fr")
+    assert out["ok"] is True
+    assert out["verdict"] == "noted"
+    assert out["queued"] is False
+    assert out["score"] >= 80
 
 
 @pytest.mark.asyncio

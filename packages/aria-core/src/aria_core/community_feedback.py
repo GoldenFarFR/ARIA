@@ -84,6 +84,20 @@ def trusted_instant_x_enabled() -> bool:
     )
 
 
+def trusted_unrestricted_enabled() -> bool:
+    """Opérateur (GoldenFarFR…) — pas de modération score/spam/file X."""
+    return os.getenv("COMMUNITY_FEEDBACK_TRUSTED_UNRESTRICTED", "true").lower() not in (
+        "false",
+        "0",
+        "no",
+    )
+
+
+def is_trusted_operator_publish(handle: str) -> bool:
+    """Handle de confiance avec publication libre (site + @Aria_ZHC)."""
+    return is_trusted_feedback_handle(handle) and trusted_unrestricted_enabled()
+
+
 def _feedback_has_spam_signal(text: str) -> bool:
     """Spam réel — pas les mentions du domaine holding."""
     t = (text or "").strip()
@@ -145,6 +159,8 @@ def assess_feedback_publishable_on_x(
     Handle de confiance (ex. GoldenFarFR) : assouplissement si contenu Vanguard.
     """
     t = (text or "").strip()
+    if is_trusted_operator_publish(handle) and t:
+        return True, "ok_operator"
     trusted = is_trusted_feedback_handle(handle)
     min_score = 20 if trusted else x_tweet_min_score()
     if score < min_score and not (trusted and len(t) >= 40 and _PRODUCT_RE.search(t)):
@@ -594,10 +610,12 @@ async def _flush_x_queue_bucket(key: str, bucket: dict[str, Any]) -> dict[str, A
 
     from aria_core.gateway.x_twitter import post_tweet
 
+    operator_publish = is_trusted_operator_publish(str(bucket.get("handle") or ""))
     _exchange, note = await post_tweet(
         tweet,
         approval_id=f"community_fb_batch:{ids}",
         skip_rate_gap=True,
+        force=operator_publish,
     )
     posted = "Publié sur X" in note or "x.com/" in note
     _clear_x_bucket(key)
@@ -683,7 +701,9 @@ async def maybe_tweet_community_feedback(
     # Publier d'abord les files arrivées à échéance (toute la queue).
     await flush_due_community_x_tweets()
 
-    instant_x = is_trusted_feedback_handle(handle) and trusted_instant_x_enabled()
+    instant_x = is_trusted_operator_publish(handle) or (
+        is_trusted_feedback_handle(handle) and trusted_instant_x_enabled()
+    )
     q = _enqueue_x_feedback_item(
         handle=handle,
         visitor_id=visitor_id,
@@ -787,7 +807,15 @@ async def submit_community_feedback(
     Enregistre un avis public, trie, et file l'ouvrier si le score dépasse le seuil.
     """
     clean = (text or "").strip()[:2000]
-    if len(clean) < SPAM_MAX_LEN:
+    operator = is_trusted_operator_publish(handle)
+    if not clean:
+        return {
+            "ok": False,
+            "verdict": "spam",
+            "queued": False,
+            "reply": format_public_reply(verdict="spam", queued=False, lang=lang),
+        }
+    if not operator and len(clean) < SPAM_MAX_LEN:
         return {
             "ok": False,
             "verdict": "spam",
@@ -797,11 +825,15 @@ async def submit_community_feedback(
 
     score = score_feedback(clean)
     trusted = is_trusted_feedback_handle(handle)
-    if trusted and len(clean) >= 20 and _PRODUCT_RE.search(clean) and score < 20:
+    if operator:
+        score = max(score, 80)
+    elif trusted and len(clean) >= 20 and _PRODUCT_RE.search(clean) and score < 20:
         score = max(score, min(60, 25 + len(clean) // 8))
     threshold = queue_score_threshold()
     verdict = "noted"
-    if score < 20:
+    if operator:
+        verdict = "noted"
+    elif score < 20:
         verdict = "spam"
     elif score >= threshold:
         verdict = "queue"
@@ -812,7 +844,7 @@ async def submit_community_feedback(
     queued = False
     x_tweet: dict[str, Any] = {"status": "skipped"}
 
-    if auto_queue and verdict == "queue":
+    if auto_queue and verdict == "queue" and not operator:
         from aria_core.aria_worker_queue import enqueue_worker_task, sync_pending_local_tasks_to_md
 
         sync_pending_local_tasks_to_md()
