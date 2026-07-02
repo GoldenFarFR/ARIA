@@ -1,0 +1,23 @@
+---
+id: e28948ac-ffec-4d90-a4aa-af2c1597a03f
+created_at: 2026-07-02T15:09:08.410963+00:00
+canonical_id: contact-aria
+topic: contact
+skill: canonical_facts
+sources: [canonical_facts.yaml]
+tags: [contact, comms]
+supersedes: [none]
+answer_hash: b6d0af410de8
+status: verified
+---
+
+## Question
+How do I talk to ARIA?
+
+## Answer
+Chat on the DEXPulse dashboard or the aria-vanguard holding site. X: @Aria_ZHC.
+
+## Meta
+- Canonical fact — edit `canonical_facts.yaml` when this truth changes
+- Supersedes prior entry ids: `none`
+- Sandbox path: `truth-ledger/2026-07-02/150908-canonical-contact-aria.md`
