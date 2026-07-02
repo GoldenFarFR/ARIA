@@ -285,3 +285,5 @@
 02h20 — redeploy vitrine API canonique api.ariavanguardzhc.com (SSL OK)
 07h55 — fin session collect+push manifest 5fb4b9a
 20h56 — install letta-orchestrator ARIA v2.4 (Letta 0.6.7, agents OK, test orchestrate)
+20h58 — fix start-letta.ps1 port 8283 déjà utilisé
+21h24 — branche Letta profil PS + pont Cursor (aria-letta-integration)

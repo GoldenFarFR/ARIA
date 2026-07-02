@@ -3,6 +3,8 @@
 
 param(
     [string]$ApiUrl = "http://127.0.0.1:8000",
+    [ValidateSet("auto", "vanguard", "letta")]
+    [string]$Provider = "auto",
     [int]$TimeoutSec = 120
 )
 
@@ -68,18 +70,65 @@ if ($contextLines.Count -gt 1) {
     ) -join "`n"
 }
 
-$body = @{ message = $payloadText } | ConvertTo-Json -Compress
-$uri = "$($ApiUrl.TrimEnd('/'))/api/aria/chat"
-
-try {
-    $resp = Invoke-RestMethod -Uri $uri -Method POST -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) `
-        -ContentType "application/json; charset=utf-8" -TimeoutSec $TimeoutSec
-    $reply = [string]$resp.reply
-    $skill = $resp.skill_used
+function Test-LettaBridgeUp {
+    try {
+        Invoke-WebRequest -Uri "http://localhost:8283/v1/agents/" -UseBasicParsing -TimeoutSec 3 | Out-Null
+        return $true
+    } catch { return $false }
 }
-catch {
-    $reply = "[bridge-error] $($_.Exception.Message)"
-    $skill = $null
+
+function Invoke-LettaBridgeReply([string]$Text) {
+    $lettaRoot = Join-Path $script:AriaRepoRoot "letta-orchestrator"
+    $orch = Join-Path $lettaRoot "orchestrate.ps1"
+    if (-not (Test-Path $orch)) { throw "letta-orchestrator absent" }
+    $start = Join-Path $lettaRoot "start-letta.ps1"
+    if (-not (Test-LettaBridgeUp) -and (Test-Path $start)) { & $start | Out-Null }
+    if (-not (Test-LettaBridgeUp)) { throw "Letta :8283 injoignable" }
+
+    $raw = & $orch -Message $Text 2>&1 | Out-String
+    if ($raw -match '(?s)--- RÉPONSE ---\s*(.+?)\s*---------------') {
+        return $Matches[1].Trim()
+    }
+    if ($raw -match '\[Échec\]') { throw "tous les agents Letta ont echoue" }
+    return $raw.Trim()
+}
+
+$envProvider = $env:ARIA_BRIDGE_PROVIDER
+if ($Provider -eq "auto" -and $envProvider -in @("letta", "vanguard")) {
+    $Provider = $envProvider
+}
+
+$useLetta = ($Provider -eq "letta") -or ($Provider -eq "auto" -and (Test-LettaBridgeUp))
+$skill = $null
+$reply = ""
+
+if ($useLetta) {
+    try {
+        $reply = Invoke-LettaBridgeReply -Text $payloadText
+        $skill = "letta_orchestrator"
+    } catch {
+        if ($Provider -eq "letta") {
+            $reply = "[bridge-letta-error] $($_.Exception.Message)"
+        } else {
+            Write-Host "[bridge] Letta indisponible, fallback Vanguard API" -ForegroundColor DarkYellow
+            $useLetta = $false
+        }
+    }
+}
+
+if (-not $useLetta) {
+    $body = @{ message = $payloadText } | ConvertTo-Json -Compress
+    $uri = "$($ApiUrl.TrimEnd('/'))/api/aria/chat"
+    try {
+        $resp = Invoke-RestMethod -Uri $uri -Method POST -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) `
+            -ContentType "application/json; charset=utf-8" -TimeoutSec $TimeoutSec
+        $reply = [string]$resp.reply
+        $skill = $resp.skill_used
+    }
+    catch {
+        $reply = "[bridge-error] $($_.Exception.Message)"
+        $skill = $null
+    }
 }
 
 $ariaId = "aria-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
