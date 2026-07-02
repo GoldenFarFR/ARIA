@@ -317,3 +317,4 @@
 00h37 — fix start-acp-local.ps1 (logs, health, deps)
 00h39 — lance start-acp-local.ps1 + push fix operator c52dce8
 00h45 — sync nocturne GitHub: Telegram bandeau, IP monorepo, ARIA-WORKER 7 items, push main
+00h46 — fix ensure-pc-ready monorepo SSOT (plus de clone projets/)
