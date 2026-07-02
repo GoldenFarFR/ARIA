@@ -219,13 +219,14 @@ class AriaBrain:
     ) -> ChatResponse:
         public = is_public_mode() if public_mode is None else public_mode
         vid = visitor_id if public else ""
+        shell_mode = not public and str(visitor_id).startswith("shell")
         route_msg = _routing_message(user_message)
         await repertoire_db.save_message("user", user_message, visitor_id=vid)
 
         if not public:
             from aria_core.tweet_compose_workflow import handle_workflow_message
 
-            skip_self_maint = wants_worker_delegate(route_msg) or bool(
+            skip_self_maint = shell_mode or wants_worker_delegate(route_msg) or bool(
                 re.search(
                     r"\b(ship(?:ped)?|worker_delegate|aria-worker|communitywelcomebanner|"
                     r"file\s+done|tache\s+done|ship\s+confirm)\b",
@@ -234,7 +235,11 @@ class AriaBrain:
                 ),
             )
             wf_reply = None
-            if not wants_worker_delegate(route_msg) and not skip_self_maint:
+            if (
+                not shell_mode
+                and not wants_worker_delegate(route_msg)
+                and not skip_self_maint
+            ):
                 wf_reply = await handle_workflow_message(route_msg)
             if wf_reply is not None:
                 await repertoire_db.save_message("agent", wf_reply, visitor_id=vid)
