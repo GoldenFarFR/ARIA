@@ -8,3 +8,7 @@ export const PRODUCT_URL =
 
 export const PRODUCT_API_URL =
   import.meta.env.VITE_PRODUCT_API_URL ?? 'https://api.ariavanguardzhc.com/api'
+
+/** Bot Telegram communauté ZHC */
+export const TELEGRAM_COMMUNITY_URL =
+  import.meta.env.VITE_TELEGRAM_URL ?? 'https://t.me/Aria_ZHC_Bot'

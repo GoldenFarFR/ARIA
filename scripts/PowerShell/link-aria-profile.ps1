@@ -36,12 +36,16 @@ if ($content -notmatch [regex]::Escape($marker)) {
 $lettaHandler = @'
         elseif ($S.StartsWith("/letta")) {
             $rest = $S.Substring(6).Trim()
+            if ($rest -eq "" -or $rest -match '^(?i)status?$') {
+                Get-AriaLettaStatus
+                continue
+            }
             $lvl = $null
             if ($rest -match '^(simple|moyen|complexe)\s+(.+)$') {
                 $lvl = $Matches[1]; $rest = $Matches[2]
             }
             if ([string]::IsNullOrWhiteSpace($rest)) {
-                Write-Host "Usage: /letta [simple|moyen|complexe] <message>" -ForegroundColor Yellow
+                Write-Host "Usage: /letta status | /letta [simple|moyen|complexe] <message>" -ForegroundColor Yellow
             } else {
                 if ($lvl) { Invoke-AriaLetta -Niveau $lvl -Message $rest }
                 else { Invoke-AriaLetta -Message $rest }
