@@ -130,10 +130,13 @@ export function CommunityWelcomeBanner() {
               onChange={(e) => setMessage(e.target.value)}
               placeholder="e.g. add a Telegram link, improve the FAQ…"
               rows={3}
-              maxLength={2000}
+              maxLength={500}
               className="w-full rounded-sm bg-[#0c0c0e] border border-[#c9a962]/20 px-3 py-2 text-sm text-[#f4efe6] placeholder:text-[#6b665c] focus-ring resize-y min-h-[4.5rem]"
               required
             />
+            <p className="text-[11px] text-[#6b665c] leading-snug">
+              {message.length}/500 — full note saved; @Aria_ZHC quote auto-fits X limit (280)
+            </p>
             <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
               <input
                 type="text"

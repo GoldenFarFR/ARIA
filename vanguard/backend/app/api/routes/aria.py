@@ -43,7 +43,7 @@ class KnowledgeCreateRequest(BaseModel):
 
 
 class CommunityFeedbackRequest(BaseModel):
-    message: str = Field(..., min_length=8, max_length=2000)
+    message: str = Field(..., min_length=8, max_length=500)
     handle: str = Field(default="", max_length=64)
     lang: str = Field(default="en", max_length=8)
 
