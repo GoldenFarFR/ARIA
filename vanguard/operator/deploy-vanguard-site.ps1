@@ -59,4 +59,4 @@ $cfgObj | Add-Member -NotePropertyName vanguardRenderServiceId -NotePropertyValu
 
 $deploy = Start-RenderServiceDeploy -Headers $headers -ServiceId $serviceId
 Wait-RenderServiceDeploy -Headers $headers -ServiceId $serviceId -DeployId $deploy.id -TimeoutSeconds 600 | Out-Null
-Write-Host "Vitrine live — hard refresh (Ctrl+F5) sur https://ariavanguardzhc.com" -ForegroundColor Green
+Write-Host "Vitrine live - hard refresh (Ctrl+F5) sur https://ariavanguardzhc.com" -ForegroundColor Green

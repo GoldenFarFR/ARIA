@@ -181,7 +181,7 @@ function Test-RenderPipelineAvailable {
     if ($status.exhausted) {
         return @{
             available = $false
-            reason    = "pipeline_minutes_exhausted (quota build Render epuise ce mois-ci — ~2 min par deploy)"
+            reason    = "pipeline_minutes_exhausted (quota build Render epuise ce mois-ci, ~2 min par deploy)"
         }
     }
     return @{ available = $true }

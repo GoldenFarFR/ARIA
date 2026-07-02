@@ -1,15 +1,15 @@
-{
-  "renderServiceId": "srv-d8pbu6ok1i2s73f1ckv0",
-  "renderServiceName": "aria-api",
-  "dexpulseRepoPath": "..",
-  "siteBaseUrl": "https://test-1-nwf2.onrender.com",
-  "vanguardRepoPath": "..",
-  "vanguardRepo": "GoldenFarFR/ARIA",
-  "vanguardRenderServiceName": "aria-vanguard",
-  "holdingDomain": "ariavanguardzhc.com",
-  "holdingSiteUrl": "https://ariavanguardzhc.com",
-  "holdingApiUrl": "https://test-1-nwf2.onrender.com",
-  "holdingApiDomain": "api.ariavanguardzhc.com",
-  "renderBaseUrl": "https://test-1-nwf2.onrender.com",
-  "vanguardRenderServiceId": "srv-d8petr6gvqtc7394u5ig"
+﻿{
+    "renderServiceId":  "srv-d8pbu6ok1i2s73f1ckv0",
+    "renderServiceName":  "aria-api",
+    "dexpulseRepoPath":  "..",
+    "siteBaseUrl":  "https://test-1-nwf2.onrender.com",
+    "vanguardRepoPath":  "..",
+    "vanguardRepo":  "GoldenFarFR/ARIA",
+    "vanguardRenderServiceName":  "aria-vanguard",
+    "holdingDomain":  "ariavanguardzhc.com",
+    "holdingSiteUrl":  "https://ariavanguardzhc.com",
+    "holdingApiUrl":  "https://test-1-nwf2.onrender.com",
+    "holdingApiDomain":  "api.ariavanguardzhc.com",
+    "renderBaseUrl":  "https://test-1-nwf2.onrender.com",
+    "vanguardRenderServiceId":  "srv-d8petr6gvqtc7394u5ig"
 }
