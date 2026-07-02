@@ -311,3 +311,4 @@
 00h03 — supprime dossier A FAIRE (doublon letta-orchestrator)
 00h12 — fix routage self_context identite/objectifs + socratic_drill
 00h15 — retrait DDC/Excel du repo ARIA (socratic, local-sync, projets)
+00h18 — fix self_context sans vector (objectifs ARIA lisibles)

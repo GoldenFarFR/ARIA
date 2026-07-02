@@ -768,20 +768,27 @@ class AriaBrain:
                 message, system, None, temperature=0.1, max_tokens=350,
             )
 
-        context = await build_llm_context(
-            public=public,
-            visitor_id=visitor_id or None,
-            query_hint=message if not public else None,
-        )
-        if not public:
-            try:
-                verified = await build_verified_facts_block(
-                    message, public=False, lang=lang_key,
-                )
-                if verified.strip():
-                    context = f"{context}\n\n# Référence (faits vérifiés — avis autorisé au-delà)\n{verified}"
-            except Exception:
-                pass
+        if self_context_only:
+            from aria_core.memory.self_context import build_self_identity_context
+
+            context = build_self_identity_context(lang=lang_key)
+        else:
+            context = await build_llm_context(
+                public=public,
+                visitor_id=visitor_id or None,
+                query_hint=message if not public else None,
+            )
+            if not public:
+                try:
+                    verified = await build_verified_facts_block(
+                        message, public=False, lang=lang_key,
+                    )
+                    if verified.strip():
+                        context = (
+                            f"{context}\n\n# Référence (faits vérifiés — avis autorisé au-delà)\n{verified}"
+                        )
+                except Exception:
+                    pass
         bot_user = await get_bot_username()
         bot_note = (
             f"L'utilisateur est DÉJÀ sur le bot Telegram @{bot_user}."
@@ -819,15 +826,18 @@ class AriaBrain:
             from aria_core.memory.self_context import SELF_CONTEXT_LLM_RULE
 
             local_rule = f"\n{SELF_CONTEXT_LLM_RULE}"
-        system = (
-            f"{context}\n\n"
-            f"{local_rule}"
-            f"{persona_block}\n"
-            f"{x_identity_prompt()}\n"
-            f"{channel_rule}\n"
-            f"Public links:\n{get_channel_links_text()}\n"
-            f"{lang_hint}"
-        )
+        if self_context_only:
+            system = f"{context}\n\n{local_rule}{lang_hint}"
+        else:
+            system = (
+                f"{context}\n\n"
+                f"{local_rule}"
+                f"{persona_block}\n"
+                f"{x_identity_prompt()}\n"
+                f"{channel_rule}\n"
+                f"Public links:\n{get_channel_links_text()}\n"
+                f"{lang_hint}"
+            )
         history = []
         try:
             messages = await repertoire_db.get_messages(
@@ -840,8 +850,12 @@ class AriaBrain:
         except Exception:
             pass
 
-        temp = settings.aria_llm_temperature if public else max(settings.aria_llm_temperature, 0.35)
-        max_tok = 500 if public else 700
+        if self_context_only:
+            temp = 0.15
+            max_tok = 480
+        else:
+            temp = settings.aria_llm_temperature if public else max(settings.aria_llm_temperature, 0.35)
+            max_tok = 500 if public else 700
         return await chat_with_context(message, system, history, temperature=temp, max_tokens=max_tok)
 
 
