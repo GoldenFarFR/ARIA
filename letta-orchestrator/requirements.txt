@@ -1,0 +1,5 @@
+letta==0.6.7
+letta-client>=1.12
+requests>=2.31
+click<8.2
+asyncpg
