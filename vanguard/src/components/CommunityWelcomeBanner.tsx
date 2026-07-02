@@ -1,6 +1,6 @@
 import { Heart, MessageSquarePlus, Send, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { submitCommunityFeedback } from '../api'
+import { submitCommunityFeedback, warmProductApi } from '../api'
 import { getMemberProfile } from '../lib/member-profile'
 import { loadVisitorPrefs, purgeLegacyBannerDismiss, saveVisitorPrefs } from '../lib/visitor-prefs'
 
@@ -37,6 +37,10 @@ export function CommunityWelcomeBanner() {
       feedbackDraft: { message, handle },
     })
   }, [minimized, open, message, handle])
+
+  useEffect(() => {
+    if (open) void warmProductApi()
+  }, [open])
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()

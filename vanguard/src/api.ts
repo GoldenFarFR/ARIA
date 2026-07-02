@@ -81,20 +81,47 @@ export interface CommunityFeedbackResult {
   verdict?: string
 }
 
+const FEEDBACK_TIMEOUT_MS = 45_000
+
+async function postCommunityFeedback(message: string, handle?: string): Promise<Response> {
+  return apiFetch('/aria/community-feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, handle: handle ?? '', lang: 'en' }),
+    signal: AbortSignal.timeout(FEEDBACK_TIMEOUT_MS),
+  })
+}
+
+/** Wake Render free tier before the user submits (cold start ~30–60 s). */
+export async function warmProductApi(): Promise<void> {
+  try {
+    await fetch(`${PRODUCT_API_URL}/health`, { signal: AbortSignal.timeout(8_000) })
+  } catch {
+    /* best-effort */
+  }
+}
+
 export async function submitCommunityFeedback(
   message: string,
   handle?: string,
 ): Promise<CommunityFeedbackResult> {
   let res: Response
   try {
-    res = await apiFetch('/aria/community-feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, handle: handle ?? '', lang: 'en' }),
-      signal: AbortSignal.timeout(20_000),
-    })
-  } catch {
-    throw new Error('API unavailable — please try again in a moment.')
+    res = await postCommunityFeedback(message, handle)
+  } catch (firstErr) {
+    const isTimeout =
+      firstErr instanceof DOMException && firstErr.name === 'TimeoutError'
+    try {
+      await warmProductApi()
+      res = await postCommunityFeedback(message, handle)
+    } catch {
+      if (isTimeout) {
+        throw new Error(
+          'API is waking up (Render cold start) — wait ~30 s and tap Send again. Your text is saved.',
+        )
+      }
+      throw new Error('API unavailable — check your connection and try again in a moment.')
+    }
   }
   const data = (await res.json().catch(() => ({}))) as CommunityFeedbackResult & {
     detail?: string
