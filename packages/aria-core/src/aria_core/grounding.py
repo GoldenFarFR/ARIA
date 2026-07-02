@@ -211,6 +211,13 @@ def is_general_qa(message: str) -> bool:
         return False
     if is_greeting(text) or is_help_request(text) or is_social_chitchat(text):
         return False
+    try:
+        from aria_core.memory.collegue import is_collegue_recall_question
+
+        if is_collegue_recall_question(text):
+            return False
+    except Exception:
+        pass
     return True
 
 
