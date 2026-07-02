@@ -1,7 +1,8 @@
-import { Heart, MessageSquarePlus, Send, X } from 'lucide-react'
+import { ExternalLink, Heart, MessageSquarePlus, Send, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { submitCommunityFeedback, warmProductApi } from '../api'
 import { getMemberProfile } from '../lib/member-profile'
+import { TELEGRAM_COMMUNITY_URL } from '../lib/site'
 import { loadVisitorPrefs, purgeLegacyBannerDismiss, saveVisitorPrefs } from '../lib/visitor-prefs'
 
 export function CommunityWelcomeBanner() {
@@ -102,7 +103,16 @@ export function CommunityWelcomeBanner() {
           <Heart className="w-4 h-4 text-[#c9a962] shrink-0 mt-0.5 sm:mt-0" aria-hidden />
           <p className="text-sm text-[#9a958a] leading-relaxed flex-1 font-light">
             <span className="text-[#d4c4a0] notranslate">ZHC</span> community — got an idea? ARIA
-            notes it and may ship it if it strengthens Vanguard.
+            notes it and may ship it if it strengthens Vanguard.{' '}
+            <a
+              href={TELEGRAM_COMMUNITY_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[#c9a962] hover:text-[#e8d5a8] transition-colors focus-ring notranslate"
+            >
+              Telegram
+              <ExternalLink className="w-3 h-3" aria-hidden />
+            </a>
           </p>
           <button
             type="button"

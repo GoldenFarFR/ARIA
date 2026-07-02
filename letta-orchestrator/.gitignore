@@ -3,5 +3,6 @@ __pycache__/
 *.pyc
 .env
 agents_config.json
+smoke-results.jsonl
 models_config.json
 .letta/

@@ -3,8 +3,10 @@
 
 $ErrorActionPreference = "Stop"
 
+. (Resolve-Path (Join-Path $PSScriptRoot "..\..\scripts\aria-paths.ps1"))
+
 $machine = $env:COMPUTERNAME
-$collegue = Join-Path $env:USERPROFILE "projets\collegue-memoire"
+$collegue = $script:AriaCollegueRoot
 $machineDir = Join-Path (Join-Path $collegue "sessions") $machine
 $ipLatest = Join-Path $machineDir "ip-latest.json"
 $cacheLocal = Join-Path $env:LOCALAPPDATA "GoldenFar\machine-ip-cache.json"

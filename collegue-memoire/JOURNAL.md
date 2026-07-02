@@ -315,3 +315,5 @@
 00h29 — lot ACP v2 commit (acp_cli provider listener tests)
 00h29 — fix acp_cli unwrap data JSON agent list
 00h37 — fix start-acp-local.ps1 (logs, health, deps)
+00h39 — lance start-acp-local.ps1 + push fix operator c52dce8
+00h45 — sync nocturne GitHub: Telegram bandeau, IP monorepo, ARIA-WORKER 7 items, push main

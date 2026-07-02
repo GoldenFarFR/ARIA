@@ -30,6 +30,15 @@ if (-not $env:XAI_API_KEY) {
         if ($candidate) { $env:XAI_API_KEY = $candidate; break }
     }
 }
+if (-not $env:GROQ_API_KEY) {
+    foreach ($src in @("GROQ_API_KEY", "LLM_API_KEY")) {
+        $candidate = [Environment]::GetEnvironmentVariable($src, "Process")
+        if (-not $candidate) { $candidate = [Environment]::GetEnvironmentVariable($src, "User") }
+        if ($candidate) { $env:GROQ_API_KEY = $candidate; break }
+    }
+}
+if (-not $env:OLLAMA_KEEP_ALIVE) { $env:OLLAMA_KEEP_ALIVE = "30m" }
+if (-not $env:ARIA_OLLAMA_NUM_CTX) { $env:ARIA_OLLAMA_NUM_CTX = "8192" }
 
 $py = Join-Path $Here "venv\Scripts\python.exe"
 if (-not (Test-Path $py)) { throw "venv absent — lance .\install.ps1" }
