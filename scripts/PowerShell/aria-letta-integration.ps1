@@ -122,6 +122,47 @@ function Get-AriaLettaStatus {
     Write-Host "══════════════════════════`n" -ForegroundColor Cyan
 }
 
+function Get-AriaShellPython {
+    $candidates = @(
+        (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+        (Join-Path $script:AriaLettaDir "venv\Scripts\python.exe")
+    ) | Where-Object { $_ -and (Test-Path $_) }
+    foreach ($py in $candidates) {
+        try {
+            $ok = & $py -c "import aria_core" 2>$null
+            if ($LASTEXITCODE -eq 0) { return $py }
+        } catch { }
+    }
+    return $null
+}
+
+function Invoke-AriaBrain {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [string]$Message
+    )
+    Import-AriaVaultEnv
+    $py = Get-AriaShellPython
+    $script = Join-Path $script:AriaCorePackage "scripts\shell_chat.py"
+    if (-not $py) {
+        Write-Host "aria-core introuvable — pip install -e packages/aria-core[dev,vector]" -ForegroundColor Red
+        return
+    }
+    if (-not (Test-Path $script)) {
+        Write-Host "shell_chat.py absent" -ForegroundColor Red
+        return
+    }
+    $t0 = Get-Date
+    & $py $script --message $Message
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Cerveau ARIA en echec (code $LASTEXITCODE)" -ForegroundColor Red
+        return
+    }
+    $sec = ((Get-Date) - $t0).TotalSeconds
+    Write-Host "[ARIA-Brain | ${sec:N1}s | vector + COLLEGUE]" -ForegroundColor DarkGray
+}
+
 function Invoke-AriaLetta {
     [CmdletBinding()]
     param(
@@ -197,8 +238,8 @@ function Invoke-AriaAgent {
             return
         }
     }
-    Invoke-AriaLetta -Message $TaskPrompt
+    Invoke-AriaBrain -Message $TaskPrompt
 }
 
 Import-AriaVaultEnv
-Write-Host "ARIA Letta v2.4 (vector ON) — start-letta | aria-letta status" -ForegroundColor DarkCyan
+Write-Host "ARIA shell v2.5 (cerveau aria-core + vector + COLLEGUE) — /letta pour Letta seul" -ForegroundColor DarkCyan
