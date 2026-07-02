@@ -303,3 +303,4 @@
 23h35 — shell aria-core cerveau vector COLLEGUE remplace Letta par defaut
 23h38 — skill ingest-repo preuve cognitive+vector+rapport jsonl
 23h46 — fix routage ingest force cerveau + banniere
+23h52 — fix shell_chat init_repertoire_db agent_messages
