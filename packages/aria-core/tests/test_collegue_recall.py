@@ -3,7 +3,7 @@ from aria_core.memory.collegue import is_collegue_recall_question
 
 
 def test_collegue_recall_detected():
-    msg = "que sais-tu de COLLEGUE.md et de mes préférences Excel ?"
+    msg = "que sais-tu de COLLEGUE.md et du projet ARIA ?"
     assert is_collegue_recall_question(msg)
     assert not is_general_qa(msg)
 
