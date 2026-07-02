@@ -36,7 +36,7 @@ _PRIORITY_REL = (
 
 _INGEST_RE = re.compile(
     r"(?:"
-    r"ingest[- ]?repo|ingérer.*repo|ingest.*mémoire|ingest.*memoire|"
+    r"/ingest\b|ingest[- ]?repo|ingérer.*repo|ingest.*mémoire|ingest.*memoire|"
     r"alimente.*mémoire|alimente.*memoire|alimenter.*mémoire|"
     r"abord[eé].*données|lis(?:er)?\s+tout.*github|parcourir.*repo|"
     r"crée.*mémoire.*github|creer.*memoire.*github|"
