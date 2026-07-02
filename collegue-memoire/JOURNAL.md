@@ -308,3 +308,5 @@
 
 ## 2026-07-03
 00h02 — retrait contexte bureau DDC/Aptos COLLEGUE + truth-ledger
+00h03 — supprime dossier A FAIRE (doublon letta-orchestrator)
+00h12 — fix routage self_context identite/objectifs + socratic_drill

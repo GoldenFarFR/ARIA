@@ -363,6 +363,10 @@ async def resolve_calibrated_answer(
 ) -> tuple[str | None, dict]:
     """Politique/holding YAML si match, sinon Groq + vérif web si incertain."""
     from aria_core.knowledge.web_verify import is_ecosystem_product_query, is_live_info_question, web_first_answer
+    from aria_core.memory.self_context import is_self_context_question
+
+    if is_self_context_question(query):
+        return None, {"self_context": True, "skip_web": True}
 
     static, static_data = epistemic_static_answer(query, lang)
     if static:

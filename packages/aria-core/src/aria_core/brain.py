@@ -577,6 +577,7 @@ class AriaBrain:
 
         if not public:
             from aria_core.memory.collegue import is_collegue_recall_question
+            from aria_core.memory.self_context import is_self_context_question
 
             if is_collegue_recall_question(message) and is_llm_configured():
                 llm_reply = await self._llm_response(
@@ -592,6 +593,23 @@ class AriaBrain:
                         SkillName.MEMORY_RECALL,
                         ["COLLEGUE.md + mémoire locale (sans web)"],
                         {"collegue_recall": True},
+                        None,
+                    )
+
+            if is_self_context_question(message) and is_llm_configured():
+                llm_reply = await self._llm_response(
+                    message,
+                    lang,
+                    public=False,
+                    visitor_id=visitor_id,
+                    self_context_only=True,
+                )
+                if llm_reply:
+                    return (
+                        llm_reply,
+                        SkillName.MEMORY_RECALL,
+                        ["Identité + objectifs + valeurs (sans web)"],
+                        {"self_context": True},
                         None,
                     )
 
@@ -727,6 +745,7 @@ class AriaBrain:
         public: bool = False,
         visitor_id: str = "",
         local_memory_only: bool = False,
+        self_context_only: bool = False,
     ) -> str | None:
         from aria_core.gateway.telegram_bot import get_bot_username, get_channel_links_text
 
@@ -796,6 +815,10 @@ class AriaBrain:
                 "et connaissances approuvées ci-dessus. Pas de recherche web. "
                 "Si une info manque, dis-le clairement.\n"
             )
+        elif self_context_only:
+            from aria_core.memory.self_context import SELF_CONTEXT_LLM_RULE
+
+            local_rule = f"\n{SELF_CONTEXT_LLM_RULE}"
         system = (
             f"{context}\n\n"
             f"{local_rule}"
