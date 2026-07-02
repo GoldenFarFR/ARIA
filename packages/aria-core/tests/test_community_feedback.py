@@ -182,11 +182,43 @@ def test_trusted_handle_goldenfarfr():
 
 
 @pytest.mark.asyncio
-async def test_community_tweet_queues_4h_cooldown(monkeypatch, tmp_path):
+async def test_trusted_handle_posts_x_immediately(monkeypatch, tmp_path):
     from aria_core import community_feedback as mod
 
     monkeypatch.setattr(mod, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(mod, "append_memory", lambda *a, **k: None)
+
+    async def noop_flush():
+        return []
+
+    async def fake_post(tweet, **kwargs):
+        return None, "Publié sur X https://x.com/Aria_ZHC/status/1"
+
+    monkeypatch.setattr(mod, "flush_due_community_x_tweets", noop_flush)
+    monkeypatch.setattr("aria_core.gateway.x_twitter.post_tweet", fake_post)
+    async def fake_compose(text_en, **kwargs):
+        return mod.personal_take_on_feedback(text_en, lang="en")
+
+    monkeypatch.setattr(mod, "compose_personal_reply_to_feedback", fake_compose)
+
+    out = await mod.maybe_tweet_community_feedback(
+        "Love the Vanguard site feedback form — we keep building together",
+        handle="GoldenFarFR",
+        visitor_id="visitor-1",
+        feedback_id="fb-instant-test",
+        score=50,
+        lang="en",
+    )
+    assert out["status"] == "posted"
+
+
+@pytest.mark.asyncio
+async def test_community_tweet_queues_4h_cooldown_for_visitors(monkeypatch, tmp_path):
+    from aria_core import community_feedback as mod
+
+    monkeypatch.setattr(mod, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(mod, "append_memory", lambda *a, **k: None)
+
     async def noop_flush():
         return []
 
@@ -194,7 +226,7 @@ async def test_community_tweet_queues_4h_cooldown(monkeypatch, tmp_path):
 
     out = await mod.maybe_tweet_community_feedback(
         "Love the Vanguard site feedback form — we keep building together",
-        handle="GoldenFarFR",
+        handle="visitor42",
         visitor_id="visitor-1",
         feedback_id="fb-queue-test",
         score=50,
