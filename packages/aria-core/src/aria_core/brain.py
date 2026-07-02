@@ -61,6 +61,7 @@ from aria_core.skills.entrepreneur_skill import execute_entrepreneur, wants_entr
 from aria_core.skills.capability_skill import execute_capability, wants_capability
 from aria_core.skills.zhc_bridge import execute_zhc_bridge
 from aria_core.skills.acp_client_skill import execute_acp_marketplace, wants_acp_marketplace
+from aria_core.skills.ingest_repo_skill import execute_ingest_repo, wants_ingest_repo
 from aria_core.identity import fix_handle_in_text, official_x_at, official_x_url, x_identity_prompt
 from aria_core.runtime import settings
 
@@ -183,6 +184,8 @@ def _routing_message(message: str) -> str:
 
 
 def detect_intent(message: str) -> SkillName | None:
+    if wants_ingest_repo(message):
+        return SkillName.INGEST_REPO
     if wants_acp_marketplace(message):
         return SkillName.ACP_MARKETPLACE
     if wants_capability(message):
@@ -404,6 +407,11 @@ class AriaBrain:
             skill_output, data = await execute_acp_marketplace(user_message, lang)
             actions.append("ACP v2 marketplace — status/browse/provider")
             skill = SkillName.ACP_MARKETPLACE
+
+        elif intent == SkillName.INGEST_REPO:
+            skill_output, data = await execute_ingest_repo(user_message, lang)
+            actions.append(f"Ingest repo — {data.get('files_count', 0)} fichiers")
+            skill = SkillName.INGEST_REPO
 
         elif intent == SkillName.WORKER_DELEGATE:
             skill_output, data = await execute_worker_delegate(route_msg, lang)
