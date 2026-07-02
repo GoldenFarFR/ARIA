@@ -1,7 +1,9 @@
 """Questions identité / mission / objectifs ARIA — mémoire interne, pas de web."""
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
 
 _SELF_CONTEXT_RE = re.compile(
     r"(?:"
@@ -45,7 +47,48 @@ def is_self_context_question(message: str) -> bool:
 SELF_CONTEXT_LLM_RULE = (
     "RÈGLE IDENTITÉ : question sur qui tu es, pourquoi tu existes, ta mission ou tes "
     "objectifs en tant qu'ARIA ZHC / GoldenFar — réponds UNIQUEMENT depuis les blocs "
-    "identité, objectifs Phase F, valeurs, COLLEGUE et rappel vectoriel ci-dessus. "
-    "Interdit : recherche web, coaching carrière générique, objectifs personnels hors "
-    "écosystème ARIA. Si une nuance manque, dis-le — n'invente pas.\n"
+    "identité, objectifs Phase F, valeurs et vision ci-dessus. "
+    "Format : 3 à 8 phrases en français, structurées (qui / pourquoi / objectifs). "
+    "Interdit : recherche web, coaching carrière, code PowerShell, scripts, dumps de "
+    "fichiers repo, listes ingest-repo. Si une nuance manque, dis-le — n'invente pas.\n"
 )
+
+_VISION_BUDGET = 1200
+
+
+def _vision_excerpt() -> str:
+    root = Path(os.environ.get("ARIA_REPO_ROOT", Path.home() / "GitHub-Repos" / "ARIA"))
+    for candidate in (root / "VISION.md", root / "vanguard" / "VISION.md"):
+        if not candidate.is_file():
+            continue
+        try:
+            text = candidate.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if text:
+            return f"# Vision ARIA (extrait)\n{text[:_VISION_BUDGET]}"
+    return ""
+
+
+def build_self_identity_context(*, lang: str = "fr") -> str:
+    """Contexte minimal identité — sans vector ni journal (évite dump ingest-repo)."""
+    from aria_core.identity import x_identity_prompt
+    from aria_core.memory.goals import get_goals_text
+    from aria_core.memory.values import get_values_text
+    from aria_core.narrative import llm_system_block
+
+    parts = [
+        "# Identité ARIA (mémoire interne — opérateur GoldenFar)",
+        x_identity_prompt(),
+        llm_system_block(lang)[:1800],
+    ]
+    goals = get_goals_text(lang=lang)
+    if goals:
+        parts.append(goals)
+    values = get_values_text()
+    if values:
+        parts.append(values)
+    vision = _vision_excerpt()
+    if vision:
+        parts.append(vision)
+    return "\n\n".join(parts)
