@@ -17,9 +17,12 @@ LETTA_URL = os.environ.get("LETTA_URL", "http://localhost:8283")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"
 
-QWEN_SCOUT = os.environ.get("ARIA_SCOUT_MODEL", "qwen2.5:14b")
+# PC 8 Go VRAM — jamais de qwen 32b local (Sylvain 2026-07-02)
+QWEN_LOCAL = os.environ.get("ARIA_OLLAMA_MODEL", "qwen2.5:14b")
+QWEN_SCOUT = os.environ.get("ARIA_SCOUT_MODEL", QWEN_LOCAL)
 QWEN_CLASSIFIER = os.environ.get("ARIA_CLASSIFIER_MODEL", QWEN_SCOUT)
 EMBEDDING = os.environ.get("ARIA_EMBEDDING_MODEL", "ollama/nomic-embed-text:latest")
+OLLAMA_LOCAL = f"ollama/{QWEN_LOCAL}"
 
 DEFAULT_MEMORY_BLOCKS = [
     {
@@ -40,7 +43,23 @@ DEFAULT_MEMORY_BLOCKS = [
 COMPLEX_HINTS = (
     "architecture", "refactor", "plusieurs fichiers", "migration",
     "réécrire", "debug complexe", "performance", "sécurité", "redesign",
+    "plan en", "fusionner", "refactorise",
 )
+
+MOYEN_HINTS = (
+    "explique", "diagnostique", "pourquoi", "compare", "comment faire",
+    "décris", "analyse", "étapes", "problème",
+)
+
+SIMPLE_HINTS = (
+    "bonjour", "salut", "merci", "coucou", "hello", "ping",
+    "qui es-tu", "qui es tu", "comment vas", "quel est mon", "je m'appelle",
+    "dis bonjour", "en une phrase",
+    "presente toi", "présente toi", "présente-toi", "presente-toi",
+    "ton identité", "ton identite", "ta fonction", "ta identité", "ta identite",
+)
+
+OLLAMA_NUM_CTX = int(os.environ.get("ARIA_OLLAMA_NUM_CTX", "8192"))
 
 
 def bridge_api_keys() -> dict[str, bool]:
@@ -68,15 +87,18 @@ def _groq_key_ok() -> bool:
     key = os.environ.get("GROQ_API_KEY") or os.environ.get("LLM_API_KEY") or ""
     if len(key) < 20:
         return False
+    # Clé Groq valide en forme → pas d'appel réseau (évite timeout au démarrage)
+    if key.startswith("gsk_") and len(key) >= 40:
+        return True
     try:
         r = requests.get(
             "https://api.groq.com/openai/v1/models",
             headers={"Authorization": f"Bearer {key}"},
-            timeout=8,
+            timeout=5,
         )
         return r.status_code == 200
     except Exception:
-        return False
+        return key.startswith("gsk_")
 
 
 def resolve_models() -> dict[str, str]:
@@ -86,14 +108,14 @@ def resolve_models() -> dict[str, str]:
     has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
     scout = f"ollama/{QWEN_SCOUT}"
-    # Letta 0.6.7 : pas de provider xai natif — Groq si clé valide, sinon Ollama 32b
-    grok = "groq/llama-3.3-70b-versatile" if groq_ok else "ollama/qwen2.5:32b"
+    # Groq/Anthropic cloud si dispo ; sinon toujours qwen2.5:14b local (pas de 32b)
+    grok = "groq/llama-3.3-70b-versatile" if groq_ok else OLLAMA_LOCAL
 
     if has_anthropic:
         core = "anthropic/claude-3-5-sonnet-20241022"
     elif groq_ok:
         core = "groq/llama-3.3-70b-versatile"
     else:
-        core = "ollama/aria-qwen32b:latest"
+        core = OLLAMA_LOCAL
 
     return {"scout": scout, "grok": grok, "core": core, "embedding": EMBEDDING}

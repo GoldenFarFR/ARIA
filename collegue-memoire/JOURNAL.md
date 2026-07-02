@@ -287,3 +287,14 @@
 20h56 — install letta-orchestrator ARIA v2.4 (Letta 0.6.7, agents OK, test orchestrate)
 20h58 — fix start-letta.ps1 port 8283 déjà utilisé
 21h24 — branche Letta profil PS + pont Cursor (aria-letta-integration)
+22h26 — fix shell aria() détection questions Letta + /letta status
+22h28 — shell aria() chat par défaut via Letta (Ollama sur /ollama)
+22h31 — Letta sans 32b — tout qwen2.5:14b local + sync_models.py
+22h44 — fix sync_models llm_config — Grok/Core passés 14b (plus 19 Go)
+22h46 — fix start-letta.ps1 variable PID read-only → procId
+22h49 — start-letta.ps1 arrière-plan par défaut (flood logs ADE)
+22h50 — alias global start-letta depuis n'importe quel dossier PS
+22h52 — fix start-letta Start-Process logs stdout/stderr séparés
+22h55 — mode rapide ARIA_LETTA_FAST + commande /fast shell aria
+22h57 — Letta perf: classif heuristique+, cascade intelligente, ctx 8k, Groq Grok/Core
+23h16 — corrige letta-orchestrator routage identite + extraction Letta 0.6.7
