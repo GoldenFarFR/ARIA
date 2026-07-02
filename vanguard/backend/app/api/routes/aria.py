@@ -76,16 +76,20 @@ async def chat(body: ChatRequest, request: Request):
 @router.post("/community-feedback")
 async def community_feedback(body: CommunityFeedbackRequest, request: Request):
     """Avis communauté site — ARIA trie et file l'ouvrier si l'idée vaut le coup."""
-    from aria_core.community_feedback import submit_community_feedback
+    from aria_core.community_feedback import (
+        is_trusted_operator_publish,
+        submit_community_feedback,
+    )
 
     visitor_id = resolve_visitor_id(request)
-    allowed = check_rate_limit(
-        f"community_fb:{visitor_id}",
-        max_attempts=8,
-        window_seconds=3600,
-    )
-    if not allowed:
-        raise HTTPException(status_code=429, detail="Rate limit — réessaie dans une heure.")
+    if not is_trusted_operator_publish(body.handle.strip()):
+        allowed = check_rate_limit(
+            f"community_fb:{visitor_id}",
+            max_attempts=8,
+            window_seconds=3600,
+        )
+        if not allowed:
+            raise HTTPException(status_code=429, detail="Rate limit — réessaie dans une heure.")
 
     lang = "fr" if body.lang.lower().startswith("fr") else "en"
     return await submit_community_feedback(
