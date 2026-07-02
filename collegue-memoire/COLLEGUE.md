@@ -9,16 +9,17 @@
 ## Qui
 
 - **Sylvain Rio** — opérateur **GoldenFar** / écosystème ARIA
-- Sujets : **DDC** Robot, stabilité 3D, synthèses Excel, outils métier
+- Sujets : **ARIA** (cerveau, skills, deploy), **Aria Vanguard ZHC**, ACP, crypto / holding
 - Langue : **français** toujours
+- **Hors scope COLLEGUE** : ancien métier bureau (DDC Excel, Aptos, FX/FY) — autre PC, **ne pas mélanger** avec ARIA
 
 ---
 
 ## Comment on travaille
 
-1. Besoin **métier** d'abord
-2. Outil **prêt à l'emploi** (Excel + script générateur)
-3. Tester (formules visibles, recalcul Excel)
+1. Besoin **produit / ops** d'abord (vision ARIA, pas side-projects hors scope)
+2. Livrable **vérifiable** (health, commit, rapport ingest, tests)
+3. Tester avant d'annoncer « c'est fait »
 4. **Avant chaque session** : `git pull` sur le repo **ARIA** puis lire ce fichier (règle automatique — pas de rappel de Sylvain)
 5. Mettre à jour **ce fichier** + `git commit` + `git push` sur `GoldenFarFR/ARIA` après session utile
 
@@ -30,30 +31,6 @@
 - Tâche grosse ou floue → **Plan Mode** avant de coder
 - Contexte long → nouvelle session ou résumé d'état
 - Prompts types dans `CONSOMMATION-GROK.md` (copier-coller)
-
----
-
-## Préférences livrables
-
-- Police **Aptos 11** ; en-têtes `FX` / `FY` / `FZ` / `Nom_cas` → **gras**
-- Excel **natif** (MINIFS, MAXIFS)
-- **2 tableaux côte à côte** : gauche **avec FY** (A–F), droite **sans FY** (I–M), **G–H = espace**
-- Un seul tableau rempli selon l'export Robot
-- Synthèse par **nœud** ; FZ > 0 soulèvement, FZ < 0 compression
-- Pas de filtre nœud manuel, pas de colonne Famille, toggles non demandés
-
----
-
-## Produits
-
-### Calculateur DDC Excel
-
-| Élément | Chemin |
-|---------|--------|
-| Excel | `Downloads\DDC - Calculateur v7b.xlsx` (local, par PC) |
-| Générateur | `collegue-memoire/projets/ddc/ddc_calculateur.py` (dans le monorepo ARIA) |
-
-**Règles DDC** : synthèse par famille ; mots-clés `Nom_cas` : `Vent G/D`, `Vent D/G`, `Neige`, `accidentel`, `Couverture`, `G :`.
 
 ---
 
@@ -117,7 +94,7 @@ Script opérateur : `vanguard\operator\new-pc.ps1` — handoff : `local-sync\scr
 | **Autre PC** | **Rien à lancer** — Grok fait `session-handoff.ps1` seul. Secours : `local-sync\CHANGEMENT-PC-MAINTENANT.md` |
 | Inventaire sans copie | `local-sync\scripts\inventory.ps1` |
 
-Contenu : `sync/aria-data/`, règles IDE, Excel DDC, **`sync/vault/goldenfar-vault.gfv`** (coffre chiffré = toutes les clés). Mot de passe identique sur les 2 PC (Bitwarden).
+Contenu : `sync/aria-data/`, règles IDE, **`sync/vault/goldenfar-vault.gfv`** (coffre chiffré = toutes les clés). Mot de passe identique sur les 2 PC (Bitwarden).
 
 ### 5. Coffre secrets (hors Git, hors `projets/`)
 
@@ -186,7 +163,7 @@ Attendu : secrets coffre = Render, health `https://api.ariavanguardzhc.com/api/h
 
 | Date | Décision |
 |------|----------|
-| 2026-06-18 | DDC v7b : 2 tableaux côte à côte, notes FZ dynamiques |
+| 2026-07-02 | **Retrait DDC/Aptos/Excel** de COLLEGUE — contexte bureau autre PC, hors projet ARIA |
 | 2026-06-18 | Mémoire = **ce fichier sur GitHub** `GoldenFarFR/collegue-memoire` (pas OneDrive) |
 | 2026-06-18 | Si setup absent sur un PC → assistant rappelle le clone automatiquement |
 | 2026-06-19 | **Journal de bord** actions Aria → `JOURNAL.md` (horodaté, skill `journal-de-bord`) |
@@ -236,7 +213,7 @@ Attendu : secrets coffre = Render, health `https://api.ariavanguardzhc.com/api/h
 
 Fichier : **`JOURNAL.md`** (même repo). Une ligne par action :
 
-`14h32 — Ajout du fichier projets/ddc/ddc_calculateur.py`
+`14h32 — Ajout du fichier packages/aria-core/scripts/shell_chat.py`
 
 | Outil | Activation |
 |-------|------------|

@@ -94,7 +94,7 @@ INTENT_PATTERNS: list[tuple[SkillName, list[str]]] = [
     (SkillName.MEMORY_RECALL, [
         r"mémoire", r"memoire", r"memory", r"souviens", r"historique", r"journal",
         r"qu.as.?tu fait", r"what did you",
-        r"collegue\.md", r"mémoire collègue", r"préférences?\s+excel",
+        r"collegue\.md", r"mémoire collègue",
         r"runbook", r"nouveau\s+pc", r"new\s+pc", r"nouveau\s+github", r"nouvel\s+agent",
         r"check-aria", r"pitfalls?", r"lecons?", r"ne\s+pas\s+oublier",
     ]),

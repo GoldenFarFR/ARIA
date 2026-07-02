@@ -54,9 +54,9 @@ def get_collegue_text(*, max_chars: int = _COLLEGUE_BUDGET) -> str:
 _COLLEGUE_RECALL_RE = re.compile(
     r"(?:"
     r"collegue\.md|mémoire collègue|memoire collegue|"
-    r"pr[eé]f[eé]rences?\s+(?:excel|livrables)|preferences?\s+excel|"
+    r"pr[eé]f[eé]rences?\s+(?:aria|goldenfar|livrables)|"
     r"que sais[- ]?tu de|qu['']est[- ]?ce que tu sais|"
-    r"aptos|ddc|calculateur excel|synth[eè]se.*n[oœ]ud"
+    r"collegue\.md|mémoire collègue"
     r")",
     re.IGNORECASE,
 )
