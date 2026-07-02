@@ -13,6 +13,14 @@ from typing import Any
 
 from aria_core.memory import append_memory
 from aria_core.paths import data_dir
+from aria_core.x_text import (
+    FEEDBACK_SITE_MAX_CHARS,
+    FEEDBACK_X_QUOTE_MAX_WEIGHT,
+    X_TWEET_MAX_CHARS,
+    fit_x_tweet,
+    tweet_fits,
+    weighted_tweet_length,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -443,11 +451,11 @@ async def translate_to_english_for_x(text: str) -> tuple[str, bool]:
     return await prepare_feedback_quote_for_x(text)
 
 
-def _truncate_quote(text: str, max_len: int) -> str:
+def _truncate_quote(text: str, max_weight: int) -> str:
     clean = re.sub(r"\s+", " ", (text or "").strip())
-    if len(clean) <= max_len:
+    if weighted_tweet_length(clean) <= max_weight:
         return clean
-    return clean[: max_len - 1].rstrip() + "…"
+    return fit_x_tweet(clean, max_chars=max_weight)
 
 
 def _x_queue_path() -> Path:
@@ -510,7 +518,7 @@ def _enqueue_x_feedback_item(
     bucket["items"].append(
         {
             "id": feedback_id,
-            "text": text[:2000],
+            "text": text[:FEEDBACK_SITE_MAX_CHARS],
             "at": now.isoformat(),
         }
     )
@@ -575,10 +583,10 @@ def build_merged_feedback_tweet(
     merged = " / ".join(f'"{_truncate_quote(q, 90)}"' for q in quotes_en[:3])
     personal = re.sub(r"\s+", " ", (personal or "").strip())
     tweet = f"{header}\n\n{merged}\n\n→ {personal}"
-    if len(tweet) <= 280:
+    if tweet_fits(tweet):
         return tweet
     short = " / ".join(f'"{_truncate_quote(q, 50)}"' for q in quotes_en[:2])
-    return f"{header}\n\n{short}\n\n→ {_truncate_quote(personal, 55)}"[:280]
+    return fit_x_tweet(f"{header}\n\n{short}\n\n→ {_truncate_quote(personal, 55)}")
 
 
 async def _flush_x_queue_bucket(key: str, bucket: dict[str, Any]) -> dict[str, Any] | None:
@@ -659,17 +667,21 @@ def build_feedback_thanks_tweet(
     h = (handle or "").strip().lstrip("@")
     header = f"@{h} · Vanguard site" if h else "Vanguard site feedback"
 
-    for quote_len in range(len(quote_full), 48, -8):
-        quote = _truncate_quote(quote_full, quote_len)
-        for reply_len in range(len(personal), 40, -10):
-            reply = _truncate_quote(personal, reply_len)
+    quote_start = min(weighted_tweet_length(quote_full), FEEDBACK_X_QUOTE_MAX_WEIGHT)
+    quote_weights = list(range(max(quote_start, 48), 39, -8)) or [max(quote_start, 48)]
+    for quote_weight in quote_weights:
+        quote = _truncate_quote(quote_full, quote_weight)
+        reply_start = min(weighted_tweet_length(personal), 110)
+        reply_weights = list(range(max(reply_start, 40), 29, -10)) or [max(reply_start, 40)]
+        for reply_weight in reply_weights:
+            reply = _truncate_quote(personal, reply_weight)
             tweet = f'{header}\n\n"{quote}"\n\n→ {reply}'
-            if len(tweet) <= 280:
+            if tweet_fits(tweet):
                 return tweet
 
-    quote = _truncate_quote(quote_full, 80)
-    reply = _truncate_quote(personal, 60)
-    return f'{header}\n\n"{quote}"\n\n→ {reply}'[:280]
+    quote = _truncate_quote(quote_full, 72)
+    reply = _truncate_quote(personal, 48)
+    return fit_x_tweet(f'{header}\n\n"{quote}"\n\n→ {reply}')
 
 
 async def maybe_tweet_community_feedback(
@@ -806,7 +818,7 @@ async def submit_community_feedback(
     """
     Enregistre un avis public, trie, et file l'ouvrier si le score dépasse le seuil.
     """
-    clean = (text or "").strip()[:2000]
+    clean = (text or "").strip()[:FEEDBACK_SITE_MAX_CHARS]
     operator = is_trusted_operator_publish(handle)
     if not clean:
         return {

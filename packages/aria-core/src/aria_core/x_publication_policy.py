@@ -274,11 +274,14 @@ def check_tweet_allowed(
     if not settings.x_post_enabled and not force:
         return False, "Publication X désactivée (X_POST_ENABLED=false).", 0.0
 
+    from aria_core.x_text import X_TWEET_MAX_CHARS, weighted_tweet_length
+
     body = text.strip()
     if not body:
         return False, "Tweet vide.", 0.0
-    if len(body) > 280:
-        return False, f"Tweet trop long ({len(body)}/280).", 0.0
+    weight = weighted_tweet_length(body)
+    if weight > X_TWEET_MAX_CHARS:
+        return False, f"Tweet trop long ({weight}/{X_TWEET_MAX_CHARS} poids X).", 0.0
 
     cost = _estimate_tweet_cost(body)
     if settings.x_block_urls_in_posts and _contains_url(body):
