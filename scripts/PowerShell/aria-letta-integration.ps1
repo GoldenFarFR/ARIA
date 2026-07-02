@@ -153,6 +153,7 @@ function Invoke-AriaBrain {
         Write-Host "shell_chat.py absent" -ForegroundColor Red
         return
     }
+    Write-Host "`n[Cerveau aria-core] vector + COLLEGUE + skills…" -ForegroundColor Cyan
     $t0 = Get-Date
     & $py $script --message $Message
     if ($LASTEXITCODE -ne 0) {
