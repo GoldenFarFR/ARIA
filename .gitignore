@@ -37,3 +37,7 @@ vanguard/product-frontend/dist/
 vanguard/backend/data/
 *.sqlite
 __pycache__/
+
+# aria-core runtime / tests locaux
+packages/aria-core/.aria-test-data/
+packages/aria-core/acp_provider_state.json
