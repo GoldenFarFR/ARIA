@@ -1,0 +1,54 @@
+# Catalogue Socratic — drill batch identité / mémoire ARIA (SSOT)
+version: 1
+
+suites:
+  identity:
+    description: Identité, mission, objectifs — jamais de fallback web ACTU
+    cases:
+      - id: why_exist_objectifs
+        question: "pourquoi existes-tu et quels sont tes objectifs ?"
+        expect_keywords: ["objectif", "autonom", "goldenfar", "aria"]
+        forbid_patterns: ["ACTU — sources web", "careersidekick", "entretien"]
+        expected_sources: [goals, values, identity]
+
+      - id: parle_de_toi
+        question: "Salut aria, parle moi de toi que souhaite tu"
+        expect_keywords: ["aria", "vanguard", "goldenfar"]
+        forbid_patterns: ["ACTU — sources web"]
+        expected_sources: [identity, goals]
+
+      - id: programmed_by
+        question: "pourquoi as-tu été programmée par GoldenFarFR ?"
+        expect_keywords: ["goldenfar", "aria"]
+        forbid_patterns: ["ACTU — sources web", "coaching"]
+        expected_sources: [identity, values]
+
+      - id: mission
+        question: "quelle est ta mission en tant que CAO ?"
+        expect_keywords: ["vanguard", "autonom"]
+        forbid_patterns: ["ACTU — sources web"]
+        expected_sources: [identity, goals]
+
+  collegue:
+    description: Mémoire opérateur COLLEGUE.md
+    cases:
+      - id: collegue_excel
+        question: "que sais-tu de COLLEGUE.md et de mes préférences Excel ?"
+        expect_keywords: ["aptos", "excel", "fy"]
+        forbid_patterns: ["ACTU — sources web", "support.microsoft"]
+        expected_sources: [collegue]
+
+      - id: collegue_operator
+        question: "qui est l'opérateur GoldenFar selon ta mémoire collègue ?"
+        expect_keywords: ["operateur"]
+        forbid_patterns: ["ACTU — sources web"]
+        expected_sources: [collegue]
+
+  routing:
+    description: Ne doit pas partir en web générique
+    cases:
+      - id: valeurs_aria
+        question: "quelles sont tes valeurs opérationnelles ?"
+        expect_keywords: ["autonom", "vérité", "moat", "skills"]
+        forbid_patterns: ["ACTU — sources web"]
+        expected_sources: [values]
