@@ -29,6 +29,7 @@ class SkillName(str, Enum):
     CAPABILITY_QI = "capability_qi"
     EPISTEMIC_CHECK = "epistemic_check"
     ACP_MARKETPLACE = "acp_marketplace"
+    INGEST_REPO = "ingest_repo"
     WORKER_DELEGATE = "worker_delegate"
 
 
