@@ -304,3 +304,4 @@
 23h38 — skill ingest-repo preuve cognitive+vector+rapport jsonl
 23h46 — fix routage ingest force cerveau + banniere
 23h52 — fix shell_chat init_repertoire_db agent_messages
+23h57 — fix recall COLLEGUE sans recherche web epistemique

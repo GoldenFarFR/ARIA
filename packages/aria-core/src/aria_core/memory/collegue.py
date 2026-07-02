@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -48,3 +49,18 @@ def get_collegue_text(*, max_chars: int = _COLLEGUE_BUDGET) -> str:
             continue
         return sanitize_recall_text(raw)[:max_chars]
     return ""
+
+
+_COLLEGUE_RECALL_RE = re.compile(
+    r"(?:"
+    r"collegue\.md|mémoire collègue|memoire collegue|"
+    r"pr[eé]f[eé]rences?\s+(?:excel|livrables)|preferences?\s+excel|"
+    r"que sais[- ]?tu de|qu['']est[- ]?ce que tu sais|"
+    r"aptos|ddc|calculateur excel|synth[eè]se.*n[oœ]ud"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_collegue_recall_question(message: str) -> bool:
+    return bool(_COLLEGUE_RECALL_RE.search((message or "").strip()))
