@@ -1,0 +1,51 @@
+"""Questions identité / mission / objectifs ARIA — mémoire interne, pas de web."""
+from __future__ import annotations
+
+import re
+
+_SELF_CONTEXT_RE = re.compile(
+    r"(?:"
+    r"qui\s+es[- ]?tu\b|who\s+are\s+you\b|"
+    r"parle[- ]?(?:moi\s+)?de\s+toi|tell\s+me\s+about\s+yourself|"
+    r"pourquoi\s+exist|why\s+do\s+you\s+exist|"
+    r"existes?[- ]?tu\s+pour|"
+    r"(?:tes?|quels?|quelles?)\s+objectifs?\b|your\s+goals?\b|"
+    r"ta\s+mission\b|your\s+mission\b|"
+    r"(?:tes?|quels?)\s+valeurs?\b|your\s+values?\b|"
+    r"programm[ée]e?\s+par\s+goldenfar|goldenfarfr|"
+    r"que\s+souhaites?[- ]?tu|what\s+do\s+you\s+want|"
+    r"ton\s+identit[ée]|your\s+identity|"
+    r"pr[ée]sente[- ]?toi|presente[- ]?toi|"
+    r"ton\s+r[ôo]le|your\s+role|"
+    r"\bca[n']?o\b|chief\s+autonomous|"
+    r"pourquoi\s+as[- ]?tu\s+[ée]t[ée]|why\s+were\s+you\s+(?:made|created|built)"
+    r")",
+    re.IGNORECASE,
+)
+
+# Questions métier génériques — ne pas confondre avec l'identité ARIA
+_EXTERNAL_OBJECTIVES_RE = re.compile(
+    r"\b(?:carri[èe]re|entretien|recruteur|salaire|cv\b|linkedin)\b",
+    re.IGNORECASE,
+)
+
+
+def is_self_context_question(message: str) -> bool:
+    """True si la question porte sur l'identité, la mission ou les objectifs d'ARIA."""
+    text = (message or "").strip()
+    if len(text) < 6:
+        return False
+    if _EXTERNAL_OBJECTIVES_RE.search(text) and not re.search(
+        r"\b(?:aria|goldenfar|zhc|vanguard)\b", text, re.I
+    ):
+        return False
+    return bool(_SELF_CONTEXT_RE.search(text))
+
+
+SELF_CONTEXT_LLM_RULE = (
+    "RÈGLE IDENTITÉ : question sur qui tu es, pourquoi tu existes, ta mission ou tes "
+    "objectifs en tant qu'ARIA ZHC / GoldenFar — réponds UNIQUEMENT depuis les blocs "
+    "identité, objectifs Phase F, valeurs, COLLEGUE et rappel vectoriel ci-dessus. "
+    "Interdit : recherche web, coaching carrière générique, objectifs personnels hors "
+    "écosystème ARIA. Si une nuance manque, dis-le — n'invente pas.\n"
+)

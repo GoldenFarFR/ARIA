@@ -216,6 +216,10 @@ def is_general_qa(message: str) -> bool:
 
         if is_collegue_recall_question(text):
             return False
+        from aria_core.memory.self_context import is_self_context_question
+
+        if is_self_context_question(text):
+            return False
     except Exception:
         pass
     return True
