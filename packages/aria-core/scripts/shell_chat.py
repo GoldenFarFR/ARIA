@@ -66,8 +66,11 @@ def _bootstrap() -> Path:
 
 async def _run(message: str, *, json_out: bool) -> int:
     _bootstrap()
+    from aria_core import repertoire_db
     from aria_core.brain import aria_brain
     from aria_core.locale import LANG_FR
+
+    await repertoire_db.init_repertoire_db()
 
     result = await aria_brain.process(
         message.strip(),
