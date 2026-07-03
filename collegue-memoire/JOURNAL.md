@@ -1,4 +1,4 @@
-# Journal de bord Aria
+﻿# Journal de bord Aria
 
 > Actions techniques de l'assistant (fichiers, repos, commits).  
 > Décisions métier → `COLLEGUE.md` § Journal.
@@ -359,3 +359,7 @@
 19h39 — refonte tweet feedback commu format+reponses roadmap
 19h42 — confirme policy feedback X EN + correction typos visiteur
 19h47 — feat feedback X fil 2 tweets citation+reply developpee
+20h40 — fix feedback-x sans lien + citation fidele + deploy prod
+21h12 — feat aria-core llm_economy brief/standard/develop + brain integration
+21h26 — feat response_cost footer gratuit/payant + tokens
+21h38 — feat mode debranchement Grok coding KART (ouvrier_coding_mode + skip cerveau)

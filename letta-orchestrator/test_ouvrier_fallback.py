@@ -51,7 +51,7 @@ def test_cloud_mode_ollama_no_cloud(monkeypatch):
 def test_run_ouvrier_falls_back_grok_to_groq(monkeypatch):
     calls: list[str] = []
 
-    def fake_cloud(user_prompt, provider, url, api_key, model):
+    def fake_cloud(user_prompt, provider, url, api_key, model, **kwargs):
         calls.append(provider)
         if provider == "grok":
             raise RuntimeError("LLM cloud indisponible (403).")

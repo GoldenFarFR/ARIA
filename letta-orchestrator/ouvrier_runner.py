@@ -18,6 +18,20 @@ from ouvrier_trace import StepTimer, trace, trace_block
 PERSONA_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_persona.md"
 MAX_STEPS = 10
 
+_CODING_PURE_SYSTEM = """Tu es Grok en mode coding pur (débranchement ARIA).
+Aria a débranché son propre raisonnement pour cette tâche — tu contrôles le raisonnement.
+Raisonne exactement comme Grok Build : rigoureux, précis, propre, maintenable.
+Respecte strictement le contexte du projet fourni. Pas de suppositions inutiles.
+Si quelque chose n'est pas clair, dis-le avant d'agir.
+
+Tu as des outils repo — UTILISE-LES (lire/écrire fichiers, powershell, pytest, journal, vault).
+Ne demande pas à Sylvain de lancer des commandes.
+
+Réponse finale structurée :
+1. **Plan** : court (points)
+2. **Résultat** : fichiers modifiés, commandes exécutées, preuve concrète
+3. **Explications** : seulement si nécessaire"""
+
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -225,8 +239,12 @@ def _resolve_llm() -> tuple[str, str, str | None, str]:
     return _resolve_ollama()
 
 
-def _cloud_candidates() -> list[tuple[str, str, str | None, str]]:
+def _cloud_candidates(*, coding_pure: bool = False) -> list[tuple[str, str, str | None, str]]:
     """Chaîne cloud selon ARIA_OUVRIER_CLOUD."""
+    if coding_pure:
+        grok = _resolve_grok()
+        return [grok] if grok else []
+
     mode = _ouvrier_cloud_mode()
     if mode == "ollama":
         return []
@@ -256,6 +274,17 @@ def _cloud_candidates() -> list[tuple[str, str, str | None, str]]:
     return chain
 
 
+def _build_cloud_system(*, coding_pure: bool) -> str:
+    if coding_pure:
+        return _CODING_PURE_SYSTEM
+    persona = PERSONA_PATH.read_text(encoding="utf-8") if PERSONA_PATH.is_file() else ""
+    return (
+        f"{persona}\n\n"
+        "Tu as des outils — UTILISE-LES pour agir (lire repo, patch vault, powershell, journal). "
+        "Ne demande pas à Sylvain de lancer des commandes. Réponse finale courte en français."
+    )
+
+
 def _chat(
     url: str,
     api_key: str | None,
@@ -263,11 +292,12 @@ def _chat(
     messages: list[dict[str, Any]],
     *,
     tools: bool = True,
+    temperature: float = 0.2,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "temperature": 0.2,
+        "temperature": temperature,
     }
     if tools:
         body["tools"] = TOOL_SCHEMAS
@@ -390,9 +420,9 @@ def _cloud_exhausted_message(last_exc: Exception | None) -> str:
     )
 
 
-def run_ouvrier(user_prompt: str) -> str:
+def run_ouvrier(user_prompt: str, *, coding_pure: bool = False) -> str:
     """Boucle agentique : grok → groq ; Ollama seulement si mode ollama explicite."""
-    candidates = _cloud_candidates()
+    candidates = _cloud_candidates(coding_pure=coding_pure)
     if not candidates:
         if _allow_ollama_fallback():
             provider, _, _, model = _resolve_ollama()
@@ -405,7 +435,9 @@ def run_ouvrier(user_prompt: str) -> str:
         if index == 0:
             trace("moteur", f"Sélection → {provider}/{model}")
         try:
-            return _run_ouvrier_cloud(user_prompt, provider, url, api_key, model)
+            return _run_ouvrier_cloud(
+                user_prompt, provider, url, api_key, model, coding_pure=coding_pure
+            )
         except Exception as exc:
             last_exc = exc
             if index + 1 < len(candidates):
@@ -426,24 +458,27 @@ def run_ouvrier(user_prompt: str) -> str:
 
 
 def _run_ouvrier_cloud(
-    user_prompt: str, provider: str, url: str, api_key: str | None, model: str
+    user_prompt: str,
+    provider: str,
+    url: str,
+    api_key: str | None,
+    model: str,
+    *,
+    coding_pure: bool = False,
 ) -> str:
-    persona = PERSONA_PATH.read_text(encoding="utf-8") if PERSONA_PATH.is_file() else ""
-    system = (
-        f"{persona}\n\n"
-        "Tu as des outils — UTILISE-LES pour agir (lire repo, patch vault, powershell, journal). "
-        "Ne demande pas à Sylvain de lancer des commandes. Réponse finale courte en français."
-    )
+    system = _build_cloud_system(coding_pure=coding_pure)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system},
         {"role": "user", "content": user_prompt},
     ]
     fns = _load_tool_fns()
+    temperature = 0.3 if coding_pure else 0.2
+    mode_label = "coding-pur" if coding_pure else "outils"
 
-    trace("moteur", f"Cloud tools — {provider}/{model}")
+    trace("moteur", f"Cloud {mode_label} — {provider}/{model}")
     for step in range(1, MAX_STEPS + 1):
         with StepTimer(f"LLM cloud étape {step}/{MAX_STEPS}"):
-            data = _chat(url, api_key, model, messages, tools=True)
+            data = _chat(url, api_key, model, messages, tools=True, temperature=temperature)
         choice = data["choices"][0]["message"]
         tool_calls = choice.get("tool_calls") or []
         if choice.get("content"):

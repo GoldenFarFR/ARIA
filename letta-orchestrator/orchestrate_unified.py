@@ -12,6 +12,7 @@ from aria_config import ARIA_REPO_ROOT
 from ouvrier_acp_direct import try_acp_workflow_direct
 from ouvrier_instant import instant_reply, is_simple_exchange
 from ouvrier_memory import bootstrap_aria_core_runtime, memory_status_line, preflight_memory_context
+from ouvrier_coding_mode import should_debranch, strip_coding_triggers
 from ouvrier_runner import provider_label, run_ouvrier
 from ouvrier_session import enrich_continuation, is_continuation, load_session, save_session, wants_opinion
 from ouvrier_trace import is_verbose, set_verbose, trace
@@ -166,15 +167,26 @@ def main() -> None:
                 _complete_turn(user_msg, direct, image_path=image_path)
             return
 
-    trace("moteur", "Cerveau aria-core (skills + mémoire)")
-    trace("preflight", memory_status_line())
-    try:
-        brain_reply, brain_skill, brain_actions = asyncio.run(_run_brain(effective))
-    except Exception as exc:
-        trace("fallback", f"cerveau KO ({exc}) → ouvrier")
-        brain_reply, brain_skill, brain_actions = "", None, []
+    skip_brain, coding_pure = should_debranch(
+        effective, needs_bootstrap=_needs_bootstrap(user_msg)
+    )
+    brain_reply, brain_skill, brain_actions = "", None, []
 
-    if brain_reply and not _needs_ouvrier_execution(user_msg, brain_skill=brain_skill):
+    if not skip_brain:
+        trace("moteur", "Cerveau aria-core (skills + mémoire)")
+        trace("preflight", memory_status_line())
+        try:
+            brain_reply, brain_skill, brain_actions = asyncio.run(_run_brain(effective))
+        except Exception as exc:
+            trace("fallback", f"cerveau KO ({exc}) → ouvrier")
+    else:
+        trace("débranchement", "Cerveau sauté → ouvrier Grok coding pur")
+
+    if (
+        brain_reply
+        and not skip_brain
+        and not _needs_ouvrier_execution(user_msg, brain_skill=brain_skill)
+    ):
         tag = f"cerveau/{brain_skill}" if brain_skill else "cerveau"
         print(f"--- ARIA-UNIFIÉE ({tag}) ---", file=sys.stderr)
         if brain_actions:
@@ -182,12 +194,18 @@ def main() -> None:
         _complete_turn(user_msg, brain_reply, image_path=image_path)
         return
 
-    trace("fallback", "Ops code/repo → ouvrier outils")
-    prompt = effective
+    needs_ops = _needs_ouvrier_execution(user_msg, brain_skill=brain_skill)
+    if not skip_brain and not needs_ops:
+        _complete_turn(user_msg, brain_reply or "(pas de réponse)", image_path=image_path)
+        return
+
+    trace_label = "débranchement Grok" if coding_pure else "Ops code/repo → ouvrier"
+    trace("fallback", trace_label)
+    prompt = strip_coding_triggers(effective) if coding_pure else effective
     memory_block = preflight_memory_context(user_msg)
     if memory_block:
         prompt = f"{memory_block}\n\n{prompt}"
-    if brain_reply:
+    if brain_reply and not coding_pure:
         prompt = (
             f"[Contexte cerveau — skill={brain_skill or 'aucun'}]\n{brain_reply}\n\n"
             f"Exécute maintenant ce que Sylvain demande (outils repo).\n\n{prompt}"
@@ -201,9 +219,10 @@ def main() -> None:
         prompt = bootstrap(user_msg, memory_block or "")
 
     engine = provider_label()
-    print(f"--- ARIA-UNIFIÉE (ouvrier/{engine}) ---", file=sys.stderr)
+    tag = f"ouvrier-coding/{engine}" if coding_pure else f"ouvrier/{engine}"
+    print(f"--- ARIA-UNIFIÉE ({tag}) ---", file=sys.stderr)
     try:
-        reply = run_ouvrier(prompt)
+        reply = run_ouvrier(prompt, coding_pure=coding_pure)
         _complete_turn(user_msg, reply, image_path=image_path)
     except Exception as exc:
         if brain_reply:
