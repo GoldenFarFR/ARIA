@@ -1,10 +1,22 @@
 """Indicateur coût réponse — gratuit vs payant + tokens consommés."""
 from __future__ import annotations
 
+import re
 from html import escape
 from typing import Any
 
 from aria_core.runtime import settings
+
+_COST_META_RE = re.compile(
+    r"(?:"
+    r"pourquoi\s+(?:orange|payant|grok|l['']?api|api\s+cloud|tokens?|co[uû]t)"
+    r"|why\s+(?:orange|paid|grok|the\s+api|api\s+cloud|tokens?|cost)"
+    r"|c['']?est\s+quoi\s+(?:orange|payant|le\s+tok)"
+    r"|(?:orange|payant|🟠).*(?:pourquoi|signifie|veut\s+dire)"
+    r"|(?:pourquoi|why).*(?:orange|payant|🟠|grok\s+api)"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def is_cloud_billed_provider() -> bool:
@@ -73,6 +85,34 @@ def format_cost_footer(
 
     icon = "🟠" if billed else "🟢"
     return f"\n\n{icon} {label} ({tok_part})"
+
+
+def is_cost_meta_question(message: str) -> bool:
+    """Question sur l'indicateur 🟢/🟠 — réponse template sans LLM."""
+    text = (message or "").strip()
+    if len(text) < 8:
+        return False
+    return bool(_COST_META_RE.search(text))
+
+
+def cost_meta_reply(lang: str = "fr") -> str:
+    """Explique orange/gratuit — 0 appel API."""
+    from aria_core.llm_economy import provider_display_name
+
+    prov = provider_display_name()
+    if lang == "fr":
+        return (
+            f"🟠 orange = j'ai appelé le LLM cloud ({prov}) pour cette réponse "
+            f"(input + output facturés).\n"
+            f"🟢 vert = pas d'appel cloud (template, skill direct, ou ack).\n"
+            f"Cette explication est gratuite — pas de nouvel appel Grok."
+        )
+    return (
+        f"🟠 orange = I called the cloud LLM ({prov}) for that reply "
+        f"(input + output billed).\n"
+        f"🟢 green = no cloud call (template, direct skill, or ack).\n"
+        f"This explanation is free — no new Grok call."
+    )
 
 
 def append_cost_footer(
