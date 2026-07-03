@@ -43,7 +43,6 @@ async def test_drain_events_file(tmp_path, monkeypatch):
     from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
 
     data_dir = tmp_path / "data"
-    monkeypatch.setenv("DATA_DIR", str(data_dir))
     configure_test_runtime(
         data_dir=data_dir,
         settings=AriaRuntimeSettings(aria_acp_provider_enabled=True),
@@ -348,24 +347,44 @@ async def test_acp_conversational_status(monkeypatch):
 @pytest.mark.asyncio
 async def test_acp_market_intelligence(monkeypatch):
     from aria_core.skills import acp_market_intelligence as mi
-    from pathlib import Path
+
+    sample_agents = [
+        {
+            "id": "a1",
+            "name": "AuditBot",
+            "successfulJobCount": 42,
+            "uniqueBuyerCount": 12,
+            "offerings": [
+                {"name": "token_scan", "priceValue": 3.5, "description": "security audit scan"},
+            ],
+        },
+    ]
 
     def fake_browse(query, **kwargs):
         if "audit" in query or "security" in query:
-            return [{
-                "id": "a1", "name": "AuditBot", "successfulJobCount": 42,
-                "offerings": [{"name": "token_scan", "priceValue": 3.5, "description": "security audit"}],
-            }], None
-        return [], "500"
+            return sample_agents, None
+        return [], "Server error 500"
 
     monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
     monkeypatch.setattr(acp_cli, "browse_agents", fake_browse)
-    monkeypatch.setattr(acp_cli, "list_offerings", lambda: ([{"name": "analyse_lite_x1"}], None))
-    monkeypatch.setattr(mi, "_SCAN_CACHE", Path("/nonexistent/scan.json"))
+    monkeypatch.setattr(
+        acp_cli,
+        "list_offerings",
+        lambda: (
+            [{"name": "analyse_lite_x1"}, {"name": "analyse_full_x1"}],
+            None,
+        ),
+    )
+    monkeypatch.setattr(mi, "_SCAN_CACHE", Path("/nonexistent/acp_market_scan.json"))
 
-    reply, data = await execute_acp_marketplace("scan marché acp", lang="fr")
+    reply, data = await execute_acp_marketplace(
+        "étudie l'offre et la demande sur acp et analyse les agents pour trouver un workflow à créer",
+        lang="fr",
+    )
     assert data.get("acp") == "market_intelligence"
     assert "MARKET INTELLIGENCE" in reply
+    assert "audit_security" in reply or "audit" in reply.lower()
+    assert "analyse_lite_x1" in reply
 
 
 @pytest.mark.asyncio

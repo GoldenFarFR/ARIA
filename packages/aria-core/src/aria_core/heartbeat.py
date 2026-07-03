@@ -146,7 +146,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="acp_market_scan",
         name="ACP market intelligence",
-        description="Browse marketplace — offre/demande, gaps, workflow suggestions",
+        description="Browse marketplace — offre/demande, gaps, suggestions workflows",
         interval_minutes=1440,
         enabled=False,
     ),
@@ -505,13 +505,14 @@ class AriaHeartbeat:
             top_gap = max(gaps.items(), key=lambda kv: kv[1], default=(None, 0))
             append_memory(
                 "acp_market",
-                f"[heartbeat] scan source={scan.get('source')} agents={scan.get('agent_count')}",
+                f"[heartbeat] scan source={scan.get('source')} agents={scan.get('agent_count')} "
+                f"top_cat={top_gap[0]}",
             )
             if scan.get("ok") and top_gap[0]:
                 await self._notify_telegram(
                     f"ACP market scan — {scan.get('agent_count', 0)} agents\n"
                     f"Top demande : {top_gap[0]} (score {top_gap[1]})\n"
-                    f"Console : scan marché acp"
+                    f"Commande : scan marché acp"
                 )
 
         elif task_id == "health_watch":

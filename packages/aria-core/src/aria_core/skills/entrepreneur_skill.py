@@ -19,8 +19,22 @@ from aria_core.runtime import settings
 INITIATIVE_REL = "data/memory/entrepreneur_initiative.md"
 
 
+_ACTIVATION_RE = re.compile(
+    r"(?i)(?:"
+    r"commence(?:r)?\s+(?:à|a)\s+(?:agir|activer|travailler)|"
+    r"s['']?active|active[- ]toi|"
+    r"génér(?:e|er)\s+(?:des\s+)?revenus?|generer\s+(?:des\s+)?revenus?|"
+    r"prend(?:re|s)?\s+des?\s+initiatives?|"
+    r"premier\s+dollar|first\s+dollar|"
+    r"monétis|monetis|faire\s+de\s+l['']?argent"
+    r")",
+)
+
+
 def wants_entrepreneur(message: str) -> bool:
     lower = message.lower()
+    if _ACTIVATION_RE.search(lower):
+        return True
     return bool(
         re.search(
             r"entrepreneur|entrepreneuse|cultiv|se cultiver|culture entrepreneuse|"
@@ -77,12 +91,85 @@ def _default_personal_objectives(lang: str) -> list[str]:
     ]
 
 
+async def _format_activation_playbook(lang: str) -> tuple[str, dict]:
+    """Plan d'action concret quand l'opérateur demande d'activer les revenus."""
+    import os
+
+    from aria_core.revenue_goals import monthly_total_usd, total_revenue_usd
+
+    progress = goal_progress()
+    month_usd = monthly_total_usd()
+    total_usd = total_revenue_usd()
+    provider_on = os.environ.get("ARIA_ACP_PROVIDER_ENABLED", "").lower() in ("1", "true", "yes")
+    proactive_on = os.environ.get("ARIA_PROACTIVE_IDEAS", "").lower() in ("1", "true", "yes")
+
+    if lang == "en":
+        verdict = (
+            "Verdict: revenue mode ON — I ship and log, not wait for permission."
+            if total_usd <= 0
+            else f"Verdict: ${total_usd:.2f} logged — scale what works."
+        )
+        steps = [
+            "1. ACP marketplace — poll every 5m (traiter jobs acp); fulfill + log revenue.",
+            "2. Promo — lancer produit acp template analyse_lite_x1 et publier sur X.",
+            "3. Distribution — one building-in-public tweet/day within X budget cap.",
+            "4. App factory — weekly poll → ship paid v0 <7 days (Kelly model).",
+            "5. Ledger — log revenu <amount> source acp after every paid delivery.",
+        ]
+        flags = (
+            f"Flags: ARIA_ACP_PROVIDER_ENABLED={'ON' if provider_on else 'OFF'}, "
+            f"ARIA_PROACTIVE_IDEAS={'ON' if proactive_on else 'OFF'} "
+            "(founder_ping ~8h on Telegram when ON)."
+        )
+    else:
+        verdict = (
+            "Verdict : mode revenu ON — je livre et je logue, je n'attends pas la permission."
+            if total_usd <= 0
+            else f"Verdict : {total_usd:.2f} $ logués — on scale ce qui marche."
+        )
+        steps = [
+            "1. ACP marketplace — poll toutes les 5 min (traiter jobs acp) ; livrer + log revenu.",
+            "1b. scan marché acp — étudier offre/demande, gaps, créer workflow aligné.",
+            "2. Promo — lancer produit acp template analyse_lite_x1 et publier sur X.",
+            "3. Distribution — 1 tweet building-in-public/jour dans le cap budget X.",
+            "4. App factory — poll hebdo → app payante v0 <7 jours (modèle Kelly).",
+            "5. Ledger — log revenu <montant> source acp après chaque livraison payée.",
+        ]
+        flags = (
+            f"Flags : ARIA_ACP_PROVIDER_ENABLED={'ON' if provider_on else 'OFF'}, "
+            f"ARIA_PROACTIVE_IDEAS={'ON' if proactive_on else 'OFF'} "
+            "(founder_ping ~8h sur Telegram si ON)."
+        )
+
+    lines = [
+        verdict,
+        "",
+        f"Objectif mois 1 : {settings.aria_revenue_goal_monthly_usd:.0f} $/mois — "
+        f"logué ce mois : {month_usd:.2f} $ ({progress.get('progress_pct', 0)} %).",
+        "",
+        "Actions immédiates (autonomes, sans demander feu vert) :",
+        *steps,
+        "",
+        flags,
+        "",
+        "Commandes opérateur : acp status | traiter jobs acp | lancer produit acp template analyse_lite_x1",
+    ]
+    append_memory(
+        "entrepreneur",
+        f"[activation] revenue playbook — {month_usd:.2f}$/mo, proactive={proactive_on}",
+    )
+    return "\n".join(lines), {"action": "revenue_activation", "progress": progress}
+
+
 async def execute_entrepreneur(
     message: str,
     lang: str = LANG_FR,
 ) -> tuple[str, dict]:
     lower = message.lower()
     progress = goal_progress()
+
+    if _ACTIVATION_RE.search(lower):
+        return await _format_activation_playbook(lang)
 
     if re.search(r"log\s+revenu|log\s+revenue|record\s+revenue", lower):
         m = re.search(r"(\d+(?:\.\d+)?)\s*\$?", message)
