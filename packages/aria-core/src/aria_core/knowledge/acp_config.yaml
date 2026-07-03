@@ -5,6 +5,14 @@ agent_id: "019f0522-b57b-7e8e-a70a-aab2070e070e"
 agent_name: "Aria Vanguard ZHC"
 chain_id: "8453"
 
+# Abonnement full-access — toutes les offres y sont rattachées (dashboard Virtuals)
+subscriptions:
+  aria_full_access:
+    id: "019f0664-640c-7cdc-807a-b09547461ad7"
+    name: aria_full_access
+    price_usd: 19.99
+    duration_days: 30
+
 offerings:
   analyse_lite_x1:
     price_usd: 1.99
