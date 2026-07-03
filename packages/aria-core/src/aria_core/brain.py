@@ -133,7 +133,7 @@ INTENT_PATTERNS: list[tuple[SkillName, list[str]]] = [
         r"hallucination", r"faits vérifiés", r"verified facts",
     ]),
     (SkillName.MARKETING_COMMS, [
-        r"marketing", r"communication", r"comms?", r"communiqu",
+        r"marketing", r"communication", r"\bcomms?\b", r"\bcommuniqu",
         r"tweet", r"twitter", r"social", r"newsletter", r"announce",
         r"press", r"copy", r"landing", r"hero", r"draft.*post",
         r"rédig", r"write.*update", r"public message",
@@ -163,8 +163,12 @@ def _is_strategic_conversation(message: str) -> bool:
     if wants_role_coaching(message):
         return True
     lower = message.lower()
+    if re.search(r"tu\s+veu[xt]\s+faire\s+quoi", lower) and re.search(
+        r"am[eé]lioration|aider|aujourd", lower
+    ):
+        return True
     opinion = re.search(
-        r"souhait|veux|voudr|penses?|avis|ton avis|what do you think|should (i|we|you)|"
+        r"souhait|veu[xt]|voudr|penses?|avis|ton avis|what do you think|should (i|we|you)|"
         r"intéressant|interessant|préfères|prefer",
         lower,
     )
