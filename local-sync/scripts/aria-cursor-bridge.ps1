@@ -1,4 +1,4 @@
-# Pont ARIA <-> Cursor — envoie le dernier message humain/ouvrier a l'API locale, append reponse ARIA.
+# Pont ARIA <-> Cursor - envoie le dernier message humain/ouvrier a l'API locale, append reponse ARIA.
 # Usage: .\aria-cursor-bridge.ps1 [-ApiUrl "http://127.0.0.1:8000"] [-TimeoutSec 120]
 
 param(
@@ -41,11 +41,11 @@ if ($entries.Count -eq 0) {
 
 $last = $entries[-1]
 if ($last.speaker -eq "ARIA") {
-    Write-Host "[bridge] dernier message deja ARIA — rien a envoyer" -ForegroundColor DarkGray
+    Write-Host "[bridge] dernier message deja ARIA - rien a envoyer" -ForegroundColor DarkGray
     exit 0
 }
 if ($last.kind -eq "system") {
-    Write-Host "[bridge] dernier message systeme — attendre un humain/ouvrier" -ForegroundColor DarkGray
+    Write-Host "[bridge] dernier message systeme - attendre un humain/ouvrier" -ForegroundColor DarkGray
     exit 0
 }
 
@@ -94,6 +94,13 @@ function Invoke-LettaBridgeReply([string]$Text) {
 }
 
 $envProvider = $env:ARIA_BRIDGE_PROVIDER
+$flagPath = Join-Path $script:AriaCollegueRoot "sessions\.bridge-active"
+if ($Provider -eq "auto" -and (Test-Path $flagPath)) {
+    $flagProvider = (Get-Content $flagPath -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^provider=(.+)$' } |
+        ForEach-Object { $Matches[1].Trim() })
+    if ($flagProvider -in @("letta", "vanguard")) { $Provider = $flagProvider }
+}
 if ($Provider -eq "auto" -and $envProvider -in @("letta", "vanguard")) {
     $Provider = $envProvider
 }

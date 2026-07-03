@@ -380,3 +380,5 @@
 22h44 — feat autonomie revenu ACP + start-aria-autonomous.ps1
 23h11 — deploy lot autonomy b437e37 — prod live
 23h14 — fin session — collect-session, handoff, push manifest
+23h21 — dashboard KART indicateurs GROK BUILD + CURSOR
+23h27 — active pont ARIA-Cursor + fix provider vanguard
