@@ -378,3 +378,5 @@
 22h37 — fix bootstrap console: charge cles X vault pour promo ACP
 22h44 — push+deploy lot ACP entrepreneur — brain intent fix, prod live
 22h44 — feat autonomie revenu ACP + start-aria-autonomous.ps1
+23h11 — deploy lot autonomy b437e37 — prod live
+23h14 — fin session — collect-session, handoff, push manifest

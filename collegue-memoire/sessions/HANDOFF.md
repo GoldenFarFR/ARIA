@@ -2,18 +2,18 @@
 
 > Mis a jour par collect-session.ps1 + resume session. Grok Build lit ce fichier au demarrage.
 
-Derniere regeneration : 2026-07-02T00:02 (ACP v2 integration locale — **non commitée**)
+Derniere regeneration : 2026-07-03T23:14 (fin session — audit GitHub + lot ACP/autonomy deploye)
 
-## Reprise prioritaire — ACP v2 (2026-07-02)
+## Reprise prioritaire — ACP + autonomy (2026-07-03)
 
 **SSOT :** `sessions/REPRISE-ACP-2026-07-02.md`
 
 | État | Détail |
 |------|--------|
-| Code | Intégration aria-core **faite**, tests 7/7, **git dirty** (pas de PR) |
-| Local | Poll activé, bot `:8000`, listener **legacy** OK |
-| Prod | **Pas déployé** — volontaire |
-| Suite | Commit+PR → job test (feu vert) → deploy |
+| Code | ACP market intel + entrepreneur + autonomy revenue — **commit + push** |
+| Local | Poll ACP, `start-aria-autonomous.ps1`, IP `80.215.206.1` |
+| Prod | **Deploye** `b437e37` — health OK |
+| Suite | Job ACP payant test · smoke market intel · Letta si quota Groq |
 
 Commandes reprise : voir REPRISE-ACP-2026-07-02.md § runtime.
 
@@ -81,32 +81,36 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ## PC-SYLVAIN
 
-- **Derniere session** : 2026-07-03T22:03:15
-- **Session Grok** : `019f298c-0199-7500-a9f5-99c0c4ba0007`
+- **Derniere session** : 2026-07-03T23:14:14
+- **Session Grok** : `019f2988-504c-7302-8ea0-d18e8fb22bf3`
 - **Repos** : ARIA
-- **Fichiers modifies** : 2 (extrait ci-dessous)
+- **Fichiers modifies** : 6 (extrait ci-dessous)
 
 **Etat git** :
-- `ARIA` @ e043081 (dirty) - feat(acp): reponse conversationnelle revenus + routage client honnete
+- `ARIA` @ b437e37 (dirty) - fix(test): isole ARIA_VISUAL_AUTONOMY env operateur (deploy gate)
 
 **Fichiers (extrait)** :
-- packages/aria-core/src/aria_core/heartbeat.py
-- packages/aria-core/tests/test_heartbeat_state.py
+- collegue-memoire/sessions/ARIA-WORKER.md
+- local-sync/scripts/audit-github-security.ps1
+- packages/aria-core/src/aria_core/brain.py
+- packages/aria-core/tests/conftest.py
+- packages/aria-core/tests/test_acp_skills.py
+- packages/aria-core/tests/test_visual_autonomy.py
 
 **Journal** :
-- 19h17 — memoire: auto ApplyApproved collect-session + /apply-lessons KART + docs COLLEGUE
-- 19h39 — refonte tweet feedback commu format+reponses roadmap
-- 19h42 — confirme policy feedback X EN + correction typos visiteur
-- 19h47 — feat feedback X fil 2 tweets citation+reply developpee
-- 20h40 — fix feedback-x sans lien + citation fidele + deploy prod
-- 21h12 — feat aria-core llm_economy brief/standard/develop + brain integration
-- 21h26 — feat response_cost footer gratuit/payant + tokens
-- 21h38 — feat mode debranchement Grok coding KART (ouvrier_coding_mode + skip cerveau)
-- 21h45 — feat compteur tokens payants dashboard KART + ouvrier record usage
 - 21h47 — fix Get-AriaKartPaidTokens python sans aria_core import
 - 21h49 — fix profil PS hook ARIA avant dash compteur tokens
 - 21h54 — fix routage ACP question conversationnelle revenus (acp_client_skill)
 - 21h57 — coupe notifs Telegram repertoire_grow + entrepreneur_cultivate heartbeat
 - 21h58 — playbook activation revenu entrepreneur_skill + proactive ACP
 - 21h59 — heartbeat 24h + persist last_runs disque (anti-spam redeploy)
+- 22h05 — ACP market intelligence skill + proactive ON + heartbeat scan
+- 22h07 — audit GitHub local points 1-8 : ACP commit, audit monorepo, IP, stashes, legacy archive, session collect
+- 22h14 — commandes locales console + market intelligence ACP commit 48edb29
+- 22h23 — deploy prod audit GitHub — commit 2a7f715, test drain_events_file fix
+- 22h34 — push lot ACP market intel + entrepreneur + session
+- 22h37 — fix bootstrap console: charge cles X vault pour promo ACP
+- 22h44 — push+deploy lot ACP entrepreneur — brain intent fix, prod live
+- 22h44 — feat autonomie revenu ACP + start-aria-autonomous.ps1
+- 23h11 — deploy lot autonomy b437e37 — prod live
 

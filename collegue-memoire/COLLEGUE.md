@@ -248,4 +248,4 @@ Distinct du tableau ci-dessus (décisions métier).
 | 2026-07-01 | **Gem Crush retiré** — supprimé du monorepo (skills, POC vanguard, heartbeat, QI juge) |
 | 2026-07-01 | **Mémoire Phases E–G** : values + goals + reflection injectés LLM (`d91c33e`→`a970bd7`) |
 
-*Dernière mise à jour : 2026-07-03 (mémoire vivante Sprints 1–4 + push GitHub)*
+*Dernière mise à jour : 2026-07-03 (audit GitHub local, lot ACP/autonomy push+deploy `b437e37`, fix test `ARIA_VISUAL_AUTONOMY`)*
