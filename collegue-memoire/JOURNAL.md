@@ -371,3 +371,7 @@
 21h58 — playbook activation revenu entrepreneur_skill + proactive ACP
 21h59 — heartbeat 24h + persist last_runs disque (anti-spam redeploy)
 22h05 — ACP market intelligence skill + proactive ON + heartbeat scan
+22h07 — audit GitHub local points 1-8 : ACP commit, audit monorepo, IP, stashes, legacy archive, session collect
+22h14 — commandes locales console + market intelligence ACP commit 48edb29
+22h23 — deploy prod audit GitHub — commit 2a7f715, test drain_events_file fix
+22h34 — push lot ACP market intel + entrepreneur + session
