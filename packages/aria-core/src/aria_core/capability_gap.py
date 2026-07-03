@@ -47,7 +47,7 @@ CAPABILITY_SPECS: dict[str, dict[str, Any]] = {
         ],
         "acceptance": [
             "IMAGE_API_KEY configure sur Render (xai-...)",
-            "generate_banner_portrait retourne JPEG 3:1 (x_banner.jpg 1500x500, <=3 Mo)",
+            "generate_banner_creative (Imagine text-to-image) retourne JPEG 3:1 (x_banner.jpg 1500x500, <=3 Mo)",
             "Distinct de current.jpg (avatar profil carre)",
         ],
     },

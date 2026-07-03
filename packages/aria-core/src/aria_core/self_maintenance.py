@@ -24,7 +24,7 @@ def _log_step(step: str, detail: str = "") -> None:
     logger.info(line)
 
 
-async def run_curiosity_x_banner_cycle(*, lang: str = "fr") -> str:
+async def run_curiosity_x_banner_cycle(*, lang: str = "fr", force_regenerate: bool = False) -> str:
     """
     Boucle curiosite : observe -> gap -> capacite -> agit -> rapport.
     """
@@ -66,7 +66,7 @@ async def run_curiosity_x_banner_cycle(*, lang: str = "fr") -> str:
         _log_step("gap", "pas de banniere X — je peux en generer une")
         steps.append("2. Gap — pas de banniere sur mon profil X")
 
-    steps.append("3. Capacite — update_profile_banner + generate_banner_portrait")
+    steps.append("3. Capacite — update_profile_banner + generate_banner_creative (Imagine, sans photo profil)")
 
     if not x_ok:
         from aria_core.capability_gap import file_capability_gap, format_gap_reply
@@ -84,28 +84,7 @@ async def run_curiosity_x_banner_cycle(*, lang: str = "fr") -> str:
         )
         return msg
 
-    from aria_core.avatar_identity import ensure_identity_anchor_from_current, has_identity_anchor
     from aria_core.portrait_scene import _image_api_key
-
-    ensure_identity_anchor_from_current()
-
-    if not has_identity_anchor():
-        from aria_core.capability_gap import file_capability_gap, format_gap_reply
-
-        gap = await file_capability_gap(
-            "identity_anchor",
-            context="run_curiosity_x_banner_cycle: anchor identite absent",
-            lang=lang,
-        )
-        _log_step("blocked", "identity anchor — cap-gap filed")
-        msg = (
-            "\n".join(steps)
-            + "\n\n4. Action bloquee — ancre identite (reference visage) absente.\n"
-            + "   Ce n'est pas la banniere : l'avatar profil peut exister sans ancre.\n"
-            + "   Telegram : /avatar identity — puis ARIA genere x_banner.jpg (3:1) separement.\n"
-            + format_gap_reply(gap, lang=lang)
-        )
-        return msg
 
     if not _image_api_key():
         from aria_core.capability_gap import file_capability_gap, format_gap_reply
@@ -127,7 +106,7 @@ async def run_curiosity_x_banner_cycle(*, lang: str = "fr") -> str:
         )
         return msg
 
-    path = await ensure_x_banner_file()
+    path = await ensure_x_banner_file(force=force_regenerate)
     if not path:
         from aria_core.capability_gap import file_capability_gap, format_gap_reply
 
@@ -175,7 +154,8 @@ async def run_curiosity_x_banner_cycle(*, lang: str = "fr") -> str:
 
 async def execute_self_maintenance(action: SelfMaintenanceAction, *, lang: str = "fr") -> str:
     if action in (SelfMaintenanceAction.UPDATE_X_BANNER, SelfMaintenanceAction.CURIOSITY_X_BANNER):
-        return await run_curiosity_x_banner_cycle(lang=lang)
+        force = action == SelfMaintenanceAction.UPDATE_X_BANNER
+        return await run_curiosity_x_banner_cycle(lang=lang, force_regenerate=force)
 
     if action == SelfMaintenanceAction.UPDATE_X_AVATAR:
         from aria_core.avatar import aria_choose_avatar, apply_avatar_sync, format_avatar_sync_status, get_avatar_status
