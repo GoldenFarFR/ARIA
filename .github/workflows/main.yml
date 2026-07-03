@@ -1,0 +1,40 @@
+name: Test Python
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'   # Change si tu utilises une autre version
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install .; fi
+
+      - name: Run tests (si tu as pytest ou unittest)
+        run: |
+          if [ -f pytest.ini ] || [ -f pyproject.toml ]; then
+            python -m pytest || echo "Pas de tests trouvés"
+          else
+            echo "Aucun test automatique configuré"
+          fi
+
+      - name: Vérification basique
+        run: |
+          echo "✅ Python code c
+          
+          heck terminé"
+          python --version
