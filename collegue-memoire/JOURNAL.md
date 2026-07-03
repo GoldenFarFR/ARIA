@@ -356,3 +356,4 @@
 19h12 — commit Sprint 4 apply pending-lessons (13 tests, live apply OK)
 19h15 — 19h15 — ARIA v3.0 KART unifiee cerveau+ouvrier+ACP client trade/fund
 19h17 — memoire: auto ApplyApproved collect-session + /apply-lessons KART + docs COLLEGUE
+19h39 — refonte tweet feedback commu format+reponses roadmap
