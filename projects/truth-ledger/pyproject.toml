@@ -1,0 +1,28 @@
+[project]
+name = "ARIA"
+version = "0.1.0"
+description = "Projet ARIA - Truth Ledger"
+requires-python = ">=3.11"
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP", "RUF", "W", "C90", "S", "A", "COM", "ARG", "PTH", "SIM"]
+ignore = ["E501", "S101", "S311", "RUF012", "B008", "COM812"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "ARG001", "ARG002", "B018"]
+
+[tool.pytest.ini_options]
+addopts = "-ra -q --tb=short -n auto"
+testpaths = ["tests"]
+markers = ["slow", "integration", "unit", "ai", "ledger"]
