@@ -357,3 +357,4 @@
 19h15 — 19h15 — ARIA v3.0 KART unifiee cerveau+ouvrier+ACP client trade/fund
 19h17 — memoire: auto ApplyApproved collect-session + /apply-lessons KART + docs COLLEGUE
 19h39 — refonte tweet feedback commu format+reponses roadmap
+19h42 — confirme policy feedback X EN + correction typos visiteur
