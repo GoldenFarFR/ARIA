@@ -12,6 +12,7 @@ from letta_api import (
     add_tool_to_agent,
     create_ouvrier_agent,
     list_agents,
+    update_agent,
     update_agent_memory_block,
     upsert_tool,
 )
@@ -34,13 +35,16 @@ def main() -> None:
         print(f"tool {spec['name']} -> {tid}")
 
     known = {a["name"]: a["id"] for a in list_agents()}
+    llm = models.get("core") or models.get("grok") or models["scout"]
     if OUVRIER_NAME in known:
         agent_id = known[OUVRIER_NAME]
         print(f"Réutilise {OUVRIER_NAME} -> {agent_id}")
         update_agent_memory_block(agent_id, "persona", persona)
         print("Persona ouvrier mise à jour")
+        patched = update_agent(agent_id, llm)
+        got = (patched.get("llm_config") or {}).get("handle") or "?"
+        print(f"Modèle ouvrier -> {got}")
     else:
-        llm = models.get("core") or models.get("grok") or models["scout"]
         agent_id = create_ouvrier_agent(
             OUVRIER_NAME,
             llm,

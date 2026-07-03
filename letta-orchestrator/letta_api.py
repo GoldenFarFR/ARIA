@@ -34,6 +34,8 @@ def parse_llm_handle(handle: str) -> dict:
         from aria_config import OLLAMA_BASE_URL
 
         cfg["model_endpoint"] = OLLAMA_BASE_URL
+    elif endpoint == "groq":
+        cfg["model_endpoint"] = "https://api.groq.com/openai/v1"
     return cfg
 
 

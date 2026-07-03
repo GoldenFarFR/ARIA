@@ -62,18 +62,46 @@ SIMPLE_HINTS = (
 OLLAMA_NUM_CTX = int(os.environ.get("ARIA_OLLAMA_NUM_CTX", "8192"))
 
 
+def _read_vault_env() -> dict[str, str]:
+    vault = Path(os.environ.get("LOCALAPPDATA", "")) / "GoldenFar" / "vault"
+    out: dict[str, str] = {}
+    for name in ("local.env", "production.env"):
+        path = vault / name
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line or line.lstrip().startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip().strip('"')
+            if key and val and key not in out:
+                out[key] = val
+    return out
+
+
 def bridge_api_keys() -> dict[str, bool]:
     """Aligne les noms de clés Letta avec le coffre GoldenFar / profil PowerShell."""
     status: dict[str, bool] = {}
+    vault = _read_vault_env()
 
     if not os.environ.get("XAI_API_KEY"):
         for src in ("XAI_API_KEY", "GROK_API_KEY", "IMAGE_API_KEY"):
-            val = os.environ.get(src)
+            val = os.environ.get(src) or vault.get(src)
             if val:
                 os.environ["XAI_API_KEY"] = val
                 break
 
-    if not os.environ.get("GROQ_API_KEY") and os.environ.get("LLM_API_KEY"):
+    groq = os.environ.get("GROQ_API_KEY") or ""
+    if len(groq) < 20:
+        for src in ("LLM_API_KEY", "GROQ_API_KEY"):
+            candidate = vault.get(src) or os.environ.get(src) or ""
+            if len(candidate) >= 20:
+                os.environ["GROQ_API_KEY"] = candidate
+                break
+    elif not os.environ.get("GROQ_API_KEY") and os.environ.get("LLM_API_KEY"):
         os.environ["GROQ_API_KEY"] = os.environ["LLM_API_KEY"]
 
     for key in ("XAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY", "OLLAMA_BASE_URL"):
