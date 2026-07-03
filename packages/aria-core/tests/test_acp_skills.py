@@ -5,6 +5,7 @@ import pytest
 
 from aria_core.skills import acp_cli, acp_provider_skill
 from aria_core.skills import acp_offering_skill, acp_product_launch_skill, acp_schema
+from aria_core.skills import acp_client_actions
 from aria_core.skills.acp_client_skill import (
     execute_acp_marketplace,
     wants_acp_marketplace,
@@ -309,6 +310,38 @@ async def test_acp_offering_delete_not_found(monkeypatch):
     monkeypatch.setattr(acp_offering_skill, "list_offerings", lambda: ([], None))
     reply, data = await execute_acp_marketplace("supprime le workflow ghost_1", lang="fr")
     assert data.get("acp") == "offering_delete_not_found"
+
+
+def test_wants_acp_client_action_skips_conversational_earnings():
+    msg = (
+        "Comment se passe ta console acp, tu a gagner de l'argent "
+        "avec t'es workflow et t'es abonnement ?"
+    )
+    assert wants_acp_marketplace(msg)
+    assert not acp_client_actions.wants_acp_client_action(msg)
+
+
+@pytest.mark.asyncio
+async def test_acp_conversational_status(monkeypatch):
+    monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
+    monkeypatch.setattr(acp_cli, "list_agents", lambda: ([{"name": "Aria Vanguard ZHC", "role": "HYBRID"}], None))
+    monkeypatch.setattr(
+        acp_cli,
+        "list_offerings",
+        lambda: (
+            [{"name": "analyse_lite_x1", "priceValue": 1.99}],
+            None,
+        ),
+    )
+    msg = (
+        "Comment se passe ta console acp, tu a gagner de l'argent "
+        "avec t'es workflow et t'es abonnement ?"
+    )
+    reply, data = await execute_acp_marketplace(msg, lang="fr")
+    assert data.get("acp") == "conversational_status"
+    assert "Console ACP" in reply
+    assert "revenue_ledger" in reply
+    assert "Négociation / abonnement" not in reply
 
 
 @pytest.mark.asyncio
