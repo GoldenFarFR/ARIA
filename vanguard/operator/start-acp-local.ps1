@@ -91,11 +91,24 @@ Ensure-BackendPython -PythonExe $py
 $logBot = Join-Path $goldenFar "aria-bot-local.log"
 $logErr = Join-Path $goldenFar "aria-bot-local.err.log"
 Write-Host "Demarrage API :8000 (log $logBot)..." -ForegroundColor Green
-$procEnv = @{
-    PYTHONPATH = $Backend
+$procEnv = @{}
+foreach ($entry in [System.Environment]::GetEnvironmentVariables("Process").GetEnumerator()) {
+    $procEnv[$entry.Key] = [string]$entry.Value
+}
+$procEnv["PYTHONPATH"] = $Backend
+$backendEnv = Join-Path $Backend ".env"
+if (Test-Path $backendEnv) {
+    . (Join-Path $Root "_render-common.ps1")
+    $dotenv = Read-EnvFile -Path $backendEnv
+    foreach ($key in $dotenv.Keys) {
+        $procEnv[$key] = $dotenv[$key]
+    }
 }
 if ($env:ARIA_REPO_ROOT) { $procEnv["ARIA_REPO_ROOT"] = $env:ARIA_REPO_ROOT }
 if ($env:DATA_DIR) { $procEnv["DATA_DIR"] = $env:DATA_DIR }
+if ($procEnv["LLM_PROVIDER"]) {
+    Write-Host "LLM local: $($procEnv['LLM_PROVIDER']) / $($procEnv['LLM_MODEL'])" -ForegroundColor DarkGray
+}
 Start-Process -FilePath $py -ArgumentList @(
     "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"
 ) -WorkingDirectory $Backend -RedirectStandardOutput $logBot -RedirectStandardError $logErr `

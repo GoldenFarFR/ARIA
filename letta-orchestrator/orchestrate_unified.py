@@ -58,8 +58,8 @@ def _bootstrap_brain_runtime() -> None:
 
     bootstrap_aria_core_runtime()
     os.environ.setdefault("ARIA_LLM_ENABLED", "true")
-    os.environ.setdefault("LLM_PROVIDER", os.environ.get("LLM_PROVIDER", "groq"))
-    os.environ.setdefault("LLM_MODEL", os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile"))
+    os.environ.setdefault("LLM_PROVIDER", os.environ.get("LLM_PROVIDER", "grok"))
+    os.environ.setdefault("LLM_MODEL", os.environ.get("LLM_MODEL", "grok-4.3"))
     groq = os.environ.get("GROQ_API_KEY") or os.environ.get("LLM_API_KEY") or ""
     if groq:
         os.environ.setdefault("LLM_API_KEY", groq)
@@ -76,8 +76,8 @@ def _bootstrap_brain_runtime() -> None:
             aria_ddg_search_cache=True,
             aria_public_mode=False,
             aria_llm_enabled=True,
-            llm_provider=os.environ.get("LLM_PROVIDER", "groq"),
-            llm_model=os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile"),
+            llm_provider=os.environ.get("LLM_PROVIDER", "grok"),
+            llm_model=os.environ.get("LLM_MODEL", "grok-4.3"),
             llm_api_key=os.environ.get("LLM_API_KEY", ""),
             ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
             aria_autonomous=True,

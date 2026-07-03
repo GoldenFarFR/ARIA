@@ -29,6 +29,15 @@ if (Test-Path $Prod) {
     foreach ($key in $overlay) {
         if ($prod[$key]) { $merged[$key] = $prod[$key] }
     }
+    $provider = if ($merged["LLM_PROVIDER"]) { $merged["LLM_PROVIDER"].Trim().ToLower() } else { "" }
+    if ($provider -in @("grok", "xai")) {
+        foreach ($xaiKey in @("GROK_API_KEY", "XAI_API_KEY", "IMAGE_API_KEY")) {
+            if ($prod[$xaiKey]) {
+                $merged["LLM_API_KEY"] = $prod[$xaiKey]
+                break
+            }
+        }
+    }
     Write-Host "Secrets operateur fusionnes depuis production.env" -ForegroundColor DarkGray
 }
 

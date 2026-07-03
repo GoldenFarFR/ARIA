@@ -174,7 +174,12 @@ def _resolve_grok() -> tuple[str, str, str, str] | None:
         or ""
     )
     if len(xai) >= 20:
-        return "grok", "https://api.x.ai/v1/chat/completions", xai, "grok-3"
+        model = (
+            os.environ.get("LLM_MODEL")
+            or os.environ.get("GROK_MODEL")
+            or "grok-4.3"
+        )
+        return "grok", "https://api.x.ai/v1/chat/completions", xai, model
     return None
 
 
