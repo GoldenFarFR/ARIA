@@ -296,6 +296,127 @@ def provider_submit(
     return False, err or out or f"exit {code}"
 
 
+def client_create_job(
+    *,
+    offering_name: str,
+    requirements: str | dict[str, Any],
+    provider: str = "",
+    chain_id: str = "8453",
+    package_id: str = "",
+) -> tuple[dict | None, str | None]:
+    args = [
+        "client",
+        "create-job",
+        "--offering-name",
+        offering_name.strip(),
+        "--requirements",
+        _schema_arg(requirements),
+        "--chain-id",
+        chain_id,
+    ]
+    if provider.strip():
+        args.extend(["--provider", provider.strip()])
+    if package_id.strip():
+        args.extend(["--package-id", package_id.strip()])
+    code, out, err = run_acp(*args)
+    if code != 0:
+        return None, err or out or f"exit {code}"
+    data = _parse_json(out)
+    if isinstance(data, dict):
+        return data, None
+    return None, "réponse create-job invalide"
+
+
+def client_fund_job(
+    job_id: str,
+    *,
+    amount_usdc: float | None = None,
+    chain_id: str = "8453",
+) -> tuple[dict | None, str | None]:
+    args = ["client", "fund", "--job-id", job_id.strip(), "--chain-id", chain_id]
+    if amount_usdc is not None and amount_usdc > 0:
+        args.extend(["--amount", str(amount_usdc)])
+    code, out, err = run_acp(*args, json_mode=False)
+    if code != 0:
+        return None, err or out or f"exit {code}"
+    return {"job_id": job_id, "status": "funded", "detail": out or "OK"}, None
+
+
+def client_complete_job(
+    job_id: str,
+    *,
+    reason: str = "Approved",
+    chain_id: str = "8453",
+) -> tuple[dict | None, str | None]:
+    args = [
+        "client",
+        "complete",
+        "--job-id",
+        job_id.strip(),
+        "--chain-id",
+        chain_id,
+        "--reason",
+        reason[:200],
+    ]
+    code, out, err = run_acp(*args, json_mode=False)
+    if code != 0:
+        return None, err or out or f"exit {code}"
+    return {"job_id": job_id, "status": "completed", "detail": out or "OK"}, None
+
+
+def client_reject_job(
+    job_id: str,
+    *,
+    reason: str = "Rejected",
+    chain_id: str = "8453",
+) -> tuple[dict | None, str | None]:
+    args = [
+        "client",
+        "reject",
+        "--job-id",
+        job_id.strip(),
+        "--chain-id",
+        chain_id,
+        "--reason",
+        reason[:200],
+    ]
+    code, out, err = run_acp(*args, json_mode=False)
+    if code != 0:
+        return None, err or out or f"exit {code}"
+    return {"job_id": job_id, "status": "rejected", "detail": out or "OK"}, None
+
+
+def trade_tokens(
+    *,
+    token_in: str,
+    token_out: str,
+    amount_in: str,
+    chain_in: str = "8453",
+    chain_out: str = "8453",
+    slippage: str = "",
+) -> tuple[dict | None, str | None]:
+    args = [
+        "trade",
+        "--token-in",
+        token_in.strip(),
+        "--token-out",
+        token_out.strip(),
+        "--amount-in",
+        amount_in.strip(),
+        "--chain-in",
+        chain_in,
+        "--chain-out",
+        chain_out,
+    ]
+    if slippage.strip():
+        args.extend(["--slippage", slippage.strip()])
+    code, out, err = run_acp(*args, json_mode=False)
+    if code != 0:
+        return None, err or out or f"exit {code}"
+    data = _parse_json(out) if out.strip().startswith("{") else {"detail": out or "OK"}
+    return data if isinstance(data, dict) else {"detail": str(data)}, None
+
+
 def browse_agents(query: str = "") -> tuple[list[dict], str | None]:
     args = ["browse"]
     if query.strip():
