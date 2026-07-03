@@ -112,9 +112,10 @@ async def test_discard_pending(monkeypatch):
     assert get_refresh_status()["has_pending"] is False
 
 
-def test_compute_next_due_days():
+def test_compute_next_due_days(monkeypatch):
     from datetime import datetime, timezone
 
+    monkeypatch.delenv("ARIA_AVATAR_STYLE_INTERVAL_DAYS", raising=False)
     base = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
     update_config(interval_days=14)
     nxt = _compute_next_due(base)
