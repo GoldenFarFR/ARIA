@@ -799,7 +799,7 @@ async def _handle_avatar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "Commandes :\n"
             "/avatar identity — prochaine photo = visage de référence (identité verrouillée)\n"
             "/avatar scene <lieu> — même personnage, nouveau décor\n"
-            "/avatar style — cycle Grok Imagine (7 ou 14 jours)\n"
+            "/avatar style — cycle Grok Imagine (14 jours minimum)\n"
             "/avatar apply — resynchroniser Telegram + X\n"
             "Photo : légende /avatar (même visage que l'ancre ensuite)",
         )
@@ -953,7 +953,7 @@ async def _handle_avatar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 st = update_config(interval_days=days)
                 await _reply(message, f"Intervalle : {st['interval_days']} jours.")
             except (ValueError, TypeError) as exc:
-                await _reply(message, f"Intervalle : {exc} (7 ou 14)")
+                await _reply(message, f"Intervalle : {exc} (14 jours)")
             return
         if action in ("on", "off"):
             st = update_config(enabled=(action == "on"))
@@ -975,7 +975,7 @@ async def _handle_avatar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "/avatar style now — générer aperçu\n"
             "/avatar style apply — appliquer l'aperçu\n"
             "/avatar style skip — refuser\n"
-            "/avatar style interval 7|14 — fréquence\n"
+            "/avatar style interval 14 — fréquence (minimum 14 jours)\n"
             "/avatar style on|off",
         )
         return
