@@ -31,8 +31,9 @@ def trace(phase: str, message: str) -> None:
         return
     color = _PHASE_COLORS.get(phase, "")
     prefix = f"{color}[{phase}]{_RESET}" if color else f"[{phase}]"
+    # stdout : ordre stable dans KART PowerShell (stderr arrive souvent après)
     for line in message.splitlines() or [""]:
-        print(f"{prefix} {line}", file=sys.stderr, flush=True)
+        print(f"{prefix} {line}", flush=True)
 
 
 def trace_block(phase: str, title: str, body: str, *, max_lines: int = 12) -> None:

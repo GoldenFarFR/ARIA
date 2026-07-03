@@ -221,21 +221,22 @@ def main() -> None:
         if direct:
             trace_block("preflight", tag, direct, max_lines=10)
         if direct and not re.search(r"(?i)^\s*(oui|ok|yes)\s*$", args.message):
-            print(f"═══ ARIA-OUVRIER ({tag}) ═══", file=sys.stderr)
+            print(f"--- ARIA-OUVRIER ({tag}) ---", file=sys.stderr)
+            summaries = {
+                "mute": "C'est fait — notifications proactive Telegram coupées (ARIA_PROACTIVE_IDEAS=false).",
+                "enable": "C'est fait — notifications proactive Telegram activées (ARIA_PROACTIVE_IDEAS=true).",
+                "status": direct.splitlines()[0] if direct else "État notifications.",
+                "ping": direct.splitlines()[0] if direct else "Ping envoyé.",
+            }
+            summary = summaries.get(tag, direct.splitlines()[0] if direct else "OK")
             if is_verbose():
-                print("(trace verbose ci-dessus sur stderr)", file=sys.stderr)
-            if tag == "mute":
-                print(
-                    "C'est fait — notifications proactive Telegram coupées.\n\n"
-                    f"{direct}\n\n"
-                    "Si tu reçois encore des messages, redeploy Render (production.env)."
-                )
+                print(summary)
+                if tag in ("mute", "enable"):
+                    print("Détails : trace [preflight] ci-dessus. Redeploy Render pour la prod.")
+            elif tag == "mute":
+                print(f"{summary}\n\n{direct}\n\nRedeploy Render (production.env).")
             elif tag == "enable":
-                print(
-                    "C'est fait — notifications proactive Telegram activées (ARIA_PROACTIVE_IDEAS=true).\n\n"
-                    f"{direct}\n\n"
-                    "Redeploy Render pour la prod."
-                )
+                print(f"{summary}\n\n{direct}\n\nRedeploy Render pour la prod.")
             else:
                 print(direct)
             return
@@ -243,7 +244,7 @@ def main() -> None:
     preflight_block = "(aucun pré-traitement automatique)"
     prompt = bootstrap(args.message, preflight_block)
     engine = provider_label()
-    print(f"═══ ARIA-OUVRIER ({engine}) ═══", file=sys.stderr)
+    print(f"--- ARIA-OUVRIER ({engine}) ---", file=sys.stderr)
     try:
         reply = run_ouvrier(prompt)
         print(reply)

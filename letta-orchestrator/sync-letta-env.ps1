@@ -43,4 +43,6 @@ $lines += "ARIA_REPO_ROOT=$($env:ARIA_REPO_ROOT)"
 
 $out = Join-Path $Here ".env"
 [System.IO.File]::WriteAllLines($out, $lines)
-Write-Host "OK .env Letta ($($lines.Count) clés)" -ForegroundColor Green
+if ($env:ARIA_OUVRIER_SILENT -ne "1") {
+    Write-Host "OK .env Letta ($($lines.Count) clés)" -ForegroundColor Green
+}

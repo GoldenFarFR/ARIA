@@ -36,6 +36,7 @@ if (-not $env:XAI_API_KEY) {
 if (-not $env:OLLAMA_KEEP_ALIVE) { $env:OLLAMA_KEEP_ALIVE = "30m" }
 if ($ShowTrace) { $env:ARIA_OUVRIER_VERBOSE = "1" }
 if ($Quiet) { $env:ARIA_OUVRIER_VERBOSE = "" }
+$env:ARIA_OUVRIER_SILENT = "1"
 
 $py = Join-Path $Here "venv\Scripts\python.exe"
 if (-not (Test-Path $py)) { throw "venv absent — .\install.ps1 puis .\setup-ouvrier.py" }
@@ -45,4 +46,4 @@ if ($ShowTrace) { $pyArgs += "--verbose" }
 elseif ($Quiet) { $pyArgs += "--quiet" }
 elseif ($env:ARIA_OUVRIER_VERBOSE -eq "1") { $pyArgs += "--verbose" }
 
-& $py @pyArgs 2>&1
+& $py @pyArgs
