@@ -11,6 +11,7 @@ on:
     paths:
       - "projects/truth-ledger/**"
       - ".github/workflows/main.yml"
+  workflow_dispatch:
 
 defaults:
   run:
