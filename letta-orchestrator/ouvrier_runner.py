@@ -146,6 +146,25 @@ def _vault_key(*names: str) -> str:
     return ""
 
 
+def _resolve_groq() -> tuple[str, str, str, str] | None:
+    bridge_api_keys()
+    groq = os.environ.get("GROQ_API_KEY") or _vault_key("GROQ_API_KEY", "LLM_API_KEY") or ""
+    if len(groq) >= 40:
+        return (
+            "groq",
+            "https://api.groq.com/openai/v1/chat/completions",
+            groq,
+            "llama-3.3-70b-versatile",
+        )
+    return None
+
+
+def _resolve_ollama() -> tuple[str, str, None, str]:
+    base = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+    model = os.environ.get("ARIA_OLLAMA_MODEL", "qwen2.5:14b")
+    return "ollama", f"{base}/v1/chat/completions", None, model
+
+
 def _resolve_llm() -> tuple[str, str, str | None, str]:
     bridge_api_keys()
     xai = (
@@ -159,12 +178,23 @@ def _resolve_llm() -> tuple[str, str, str | None, str]:
         xai = ""
     if xai:
         return "grok", "https://api.x.ai/v1/chat/completions", xai, "grok-3"
-    groq = os.environ.get("GROQ_API_KEY") or _vault_key("GROQ_API_KEY", "LLM_API_KEY") or ""
-    if len(groq) >= 40:
-        return "groq", "https://api.groq.com/openai/v1/chat/completions", groq, "llama-3.3-70b-versatile"
-    base = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-    model = os.environ.get("ARIA_OLLAMA_MODEL", "qwen2.5:14b")
-    return "ollama", f"{base}/v1/chat/completions", None, model
+    groq = _resolve_groq()
+    if groq:
+        return groq
+    return _resolve_ollama()
+
+
+def _cloud_candidates() -> list[tuple[str, str, str | None, str]]:
+    """Chaîne cloud : grok → groq (si grok échoue) ; groq seul sinon."""
+    primary = _resolve_llm()
+    if primary[0] == "ollama":
+        return []
+    chain = [primary]
+    if primary[0] == "grok":
+        groq = _resolve_groq()
+        if groq and groq not in chain:
+            chain.append(groq)
+    return chain
 
 
 def _chat(
@@ -188,7 +218,7 @@ def _chat(
         headers["Authorization"] = f"Bearer {api_key}"
     r = requests.post(url, headers=headers, json=body, timeout=300)
     if r.status_code in (403, 429):
-        raise RuntimeError(f"LLM cloud indisponible ({r.status_code}) — fallback Ollama local.")
+        raise RuntimeError(f"LLM cloud indisponible ({r.status_code}).")
     r.raise_for_status()
     return r.json()
 
@@ -276,18 +306,31 @@ def run_ouvrier_ollama_react(user_prompt: str) -> str:
 
 
 def run_ouvrier(user_prompt: str) -> str:
-    """Boucle agentique : LLM cloud (tools) ou Ollama ReAct."""
-    provider, url, api_key, model = _resolve_llm()
-    trace("moteur", f"Sélection → {provider}/{model}")
-    if provider == "ollama":
+    """Boucle agentique : grok → groq → Ollama ReAct."""
+    candidates = _cloud_candidates()
+    if not candidates:
+        provider, _, _, model = _resolve_ollama()
+        trace("moteur", f"Sélection → {provider}/{model}")
         return run_ouvrier_ollama_react(user_prompt)
-    try:
-        return _run_ouvrier_cloud(user_prompt, provider, url, api_key, model)
-    except Exception as exc:
-        if provider != "ollama":
-            trace("fallback", f"Cloud KO ({exc}) → Ollama ReAct")
+
+    last_exc: Exception | None = None
+    for index, (provider, url, api_key, model) in enumerate(candidates):
+        if index == 0:
+            trace("moteur", f"Sélection → {provider}/{model}")
+        try:
+            return _run_ouvrier_cloud(user_prompt, provider, url, api_key, model)
+        except Exception as exc:
+            last_exc = exc
+            if index + 1 < len(candidates):
+                nxt = candidates[index + 1]
+                trace("fallback", f"{provider} KO ({exc}) → {nxt[0]}/{nxt[3]}")
+                continue
+            trace("fallback", f"{provider} KO ({exc}) → Ollama ReAct")
             return run_ouvrier_ollama_react(user_prompt)
-        raise
+
+    if last_exc:
+        trace("fallback", f"Cloud KO ({last_exc}) → Ollama ReAct")
+    return run_ouvrier_ollama_react(user_prompt)
 
 
 def _run_ouvrier_cloud(

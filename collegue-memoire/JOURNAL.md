@@ -337,3 +337,5 @@
 17h49 — feat ouvrier instant — salutations sans preflight/LLM (test_ouvrier_instant 6/6)
 17h52 — fix KART v2.8.2 reponse › distincte de traces et preuve
 17h57 — fix KART session continuation + preflight avis ACP workflow
+17h59 — feat ACP product launch (schemas enrichis, promo X/Telegram, tests 20/20)
+18h01 — feat ouvrier fallback grok KO vers groq puis ollama
