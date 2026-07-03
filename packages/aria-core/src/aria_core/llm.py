@@ -109,6 +109,17 @@ async def chat_with_context(
             num_ctx = int(getattr(settings, "aria_ollama_num_ctx", 0) or 0)
             if num_ctx > 0:
                 payload["options"] = {"num_ctx": num_ctx}
+        from aria_core.llm_usage import (
+            estimate_tokens_from_text,
+            parse_usage_from_response,
+            record_llm_usage,
+        )
+
+        prompt_est = estimate_tokens_from_text(
+            system_context,
+            user_message,
+            *(m.get("content", "") for m in (conversation_history or [])),
+        )
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 url,
@@ -117,9 +128,37 @@ async def chat_with_context(
             )
             if response.status_code != 200:
                 logger.warning("LLM error %s: %s", response.status_code, response.text[:300])
+                record_llm_usage(
+                    provider=provider,
+                    model=model,
+                    input_tokens=prompt_est,
+                    output_tokens=0,
+                    ok=False,
+                    status_code=response.status_code,
+                    kind="chat",
+                    estimated=True,
+                )
                 return None
             data: dict[str, Any] = response.json()
-            return data["choices"][0]["message"]["content"].strip()
+            reply = data["choices"][0]["message"]["content"].strip()
+            usage = parse_usage_from_response(data)
+            estimated = usage["total_tokens"] <= 0
+            if estimated:
+                usage = {
+                    "input_tokens": prompt_est,
+                    "output_tokens": estimate_tokens_from_text(reply),
+                    "total_tokens": prompt_est + estimate_tokens_from_text(reply),
+                }
+            record_llm_usage(
+                provider=provider,
+                model=model,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                ok=True,
+                kind="chat",
+                estimated=estimated,
+            )
+            return reply
     except Exception as exc:
         logger.error("LLM request failed: %s", exc)
         return None
