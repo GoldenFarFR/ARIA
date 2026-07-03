@@ -11,6 +11,20 @@ from aria_core.skills.acp_cli import (
     list_agents,
     list_offerings,
 )
+from aria_core.skills.acp_offering_skill import (
+    execute_adhoc_workflow_create,
+    execute_offering_create,
+    execute_offering_delete,
+    format_templates_help,
+    wants_acp_offering_create,
+    wants_acp_offering_delete,
+    wants_acp_offering_templates,
+    wants_adhoc_acp_workflow,
+)
+from aria_core.skills.acp_product_launch_skill import (
+    execute_product_launch,
+    wants_acp_product_launch,
+)
 from aria_core.skills.acp_provider_skill import default_events_file, run_provider_cycle
 
 _ACP_RE = re.compile(
@@ -28,7 +42,18 @@ _REVENUE_RE = re.compile(r"revenu|revenue|générer|generer|monétis|monetis|pla
 
 
 def wants_acp_marketplace(message: str) -> bool:
-    return bool(_ACP_RE.search((message or "").strip()))
+    text = (message or "").strip()
+    if wants_acp_offering_delete(text):
+        return True
+    if wants_adhoc_acp_workflow(text):
+        return True
+    if wants_acp_offering_create(text):
+        return True
+    if wants_acp_offering_templates(text):
+        return True
+    if wants_acp_product_launch(text):
+        return True
+    return bool(_ACP_RE.search(text))
 
 
 def _events_file_status() -> tuple[int, str]:
@@ -84,6 +109,8 @@ async def _format_status(lang: str) -> tuple[str, dict]:
                 f"Events file : {lines_count} lignes — {events_path}",
                 "",
                 "Commandes : acp status | traiter jobs acp | browse offerings | plan revenus acp",
+                "Workflows : templates offres acp | créer offre acp template <nom>",
+                "Lancement : lancer produit acp template <nom> et publier sur X",
                 "Démarrage local : vanguard\\operator\\start-acp-local.ps1",
             ]
         )
@@ -160,13 +187,32 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
     if _REVENUE_RE.search(text):
         return await _format_revenue_plan(lang_key)
 
+    if wants_acp_product_launch(text):
+        return await execute_product_launch(text, lang_key)
+
+    if wants_acp_offering_delete(text):
+        return await execute_offering_delete(text, lang_key)
+
+    if wants_adhoc_acp_workflow(text):
+        return await execute_adhoc_workflow_create(text, lang_key)
+
+    if wants_acp_offering_create(text):
+        return await execute_offering_create(text, lang_key)
+
+    if wants_acp_offering_templates(text):
+        return await format_templates_help(lang_key)
+
     if lang_key == "fr":
         return (
             "ACP marketplace ARIA\n\n"
             "• acp status — agent + offres + fichier events\n"
             "• traiter jobs acp — poll provider (livrer jobs en attente)\n"
             "• browse offerings — parcourir le marketplace\n"
-            "• plan revenus acp — stratégie monétisation\n\n"
+            "• plan revenus acp — stratégie monétisation\n"
+            "• templates offres acp — workflows disponibles\n"
+            "• créer offre acp template <nom> — publier sur marketplace\n"
+            "• lancer produit acp template <nom> et publier sur X — produit + promo\n"
+            "• supprime le workflow <nom> — retirer une offre du marketplace\n\n"
             "Lance : vanguard\\operator\\start-acp-local.ps1",
             {"acp": "help"},
         )

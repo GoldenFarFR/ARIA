@@ -340,3 +340,7 @@
 17h59 — feat ACP product launch (schemas enrichis, promo X/Telegram, tests 20/20)
 18h01 — feat ouvrier fallback grok KO vers groq puis ollama
 18h09 — fix ouvrier ACP adhoc direct (plus pavé LLM sur créer workflow)
+18h11 — feat ARIA_OUVRIER_CLOUD=groq vault local — ouvrier sans API xAI
+18h11 — Création du workflow Test_1 dans ACP avec un prix de 25$ et 99 centimes, proposant un service d'analyse sur la pertinence d'un compte X avec promotion
+18h21 — feat ACP adhoc premium + promo X auto (revenus)
+18h23 — fix ACP delete workflow direct (ouvrier+brain) + supprime test_1

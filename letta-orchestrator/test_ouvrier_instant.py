@@ -65,6 +65,61 @@ def test_preflight_acp_injects_repo():
     assert "TON avis" in block or "avis concret" in block
 
 
+def test_preflight_acp_skips_create():
+    from orchestrate_ouvrier import preflight_acp_context
+
+    block = preflight_acp_context(
+        "cree un workflow appeler test_1 a 25$ sur acp qui propose analyse quantitative"
+    )
+    assert block == ""
+
+
+def test_ouvrier_acp_direct_delete(monkeypatch):
+    from ouvrier_acp_direct import try_acp_workflow_direct
+
+    async def fake_delete(msg, lang):
+        return "C'est fait — workflow test_1 supprimé sur ACP (ID oid-del).", {"acp": "offering_delete"}
+
+    monkeypatch.setattr(
+        "aria_core.skills.acp_offering_skill.execute_offering_delete",
+        fake_delete,
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.acp_offering_skill.wants_acp_offering_delete",
+        lambda m: "workflow test" in m.lower(),
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.acp_offering_skill.wants_adhoc_acp_workflow",
+        lambda m: False,
+    )
+    reply = try_acp_workflow_direct("supprime le workflow test 1 maintenant")
+    assert reply
+    assert "test_1" in reply
+    assert "supprimé" in reply.lower()
+
+
+def test_ouvrier_acp_direct_short_reply(monkeypatch):
+    from ouvrier_acp_direct import try_acp_workflow_direct
+
+    async def fake_exec(msg, lang):
+        return "C'est fait — workflow test_1 créé sur ACP.\n25.99 USDC · SLA 60m · ID abc", {}
+
+    monkeypatch.setattr(
+        "aria_core.skills.acp_offering_skill.execute_adhoc_workflow_create",
+        fake_exec,
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.acp_offering_skill.wants_adhoc_acp_workflow",
+        lambda m: "appeler test_1" in m,
+    )
+    reply = try_acp_workflow_direct(
+        "cree un workflow appeler test_1 a 25$ et 99 centimes sur acp qui propose analyse"
+    )
+    assert reply
+    assert "test_1" in reply
+    assert len(reply) < 300
+
+
 def test_not_simple_worker():
     assert not is_simple_exchange("traite les pending aria-worker")
 
