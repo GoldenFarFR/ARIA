@@ -163,7 +163,8 @@ Attendu : secrets coffre = Render, health `https://api.ariavanguardzhc.com/api/h
 
 | Date | Décision |
 |------|----------|
-| 2026-07-03 | **ARIA KART v2.6** : défaut = Ouvrier Letta (Grok-like), plus pitch CAO ; `/cerveau` = aria-core ; `patch-aria-kart-ouvrier.ps1` |
+| 2026-07-03 | **Mémoire vivante Sprints 1–4** : Groq exécute · aria-core retient/arbitre · Letta archive · Letta-2 critique · `apply-pending-lessons` ship ; validation humaine (`approve`) puis auto `ApplyApproved` en fin `collect-session` ; KART `/apply-lessons` |
+| 2026-07-03 | **ARIA KART v3** : unifié cerveau+ouvrier+ACP client ; `/cerveau` = aria-core seul ; vault `ARIA_OUVRIER_CLOUD=groq`, `ARIA_VECTOR_MEMORY=true`, `ARIA_MEMORY_ARBITRATOR=true` |
 | 2026-07-03 | **Letta ARIA-Ouvrier** : intention naturelle, tout sujet (~90 % aligné), confirmation si doute |
 | 2026-07-03 | **build-local** : l'assistant lance `build-local.ps1 -Quick` après chaque modif code ; deploy Render reste **manuel** par Sylvain |
 | 2026-07-03 | **Download inbox** : `%ARIA_REPO_ROOT%\download\` — dépôt fichiers Sylvain, traitement auto ouvrier (règle `download-inbox`) |
@@ -204,14 +205,27 @@ Attendu : secrets coffre = Render, health `https://api.ariavanguardzhc.com/api/h
 | 2026-06-20 | **Mémoire Phase D** : `llm_context.py` — injection vectorielle dans `build_llm_context` (local, flag off prod) — avance anticipée avant 07-02 |
 | 2026-06-20 | **TOTP** : Telegram désactivé — code uniquement dans chat Grok/Cursor (`-TotpCode`), `GOLDENFAR_VAULT_TOTP_VIA_ARIA=0` |
 
-### Reprise programmée (ARIA mémoire)
+### Mémoire ARIA — état 2026-07-03 (combo vivant)
 
-> **Phases A–D** livrées en local (2026-06-20). Prod inchangée — deploy groupé quand quota Render OK.
+> Phases **A–G** livrées. Boucle auto-amélioration opérationnelle en local.
 
-| Fait (A–D) | À faire (E→G) |
-|------------|---------------|
-| Doc, package `memory/`, Chroma opt-in, `llm_context.py` + injection vector | **E** values → **F** goals → **G** reflection |
-| Prod : `aria_vector_memory=false`, pas de deploy (quota Render) | Tester vector local : `pip install -e ".[dev,vector]"` + flag true |
+| Couche | Rôle | Fichiers / commandes |
+|--------|------|----------------------|
+| **aria-core** | SSOT, arbitre court/moyen/long, reflections/pitfalls | `build_llm_context()`, `operator_pitfalls.yaml` |
+| **Ouvrier Groq** | Exécution + préflight mémoire avant tour | `orchestrate_ouvrier.py`, `ouvrier_memory.py`, `ouvrier_learn.py` |
+| **Vector** | Rappel sémantique opt-in | `ARIA_VECTOR_MEMORY=true` (local vault) |
+| **Letta archival** | Sync journal/reflections/pitfalls | `sync-core-to-letta.ps1` — fin `collect-session` |
+| **Letta-2 critique** | Leçons → `pending-lessons.md` | `run-letta2-critique.ps1` — fin `collect-session` |
+| **Apply lessons** | Ship validé → core | `apply-pending-lessons.ps1` — KART `/apply-lessons` ; auto `-ApplyApproved` fin session |
+
+**Workflow opérateur :** Letta-2 génère → Sylvain `-Approve N` → fin session ou `/apply-lessons approved` ship. Pas d'auto-approve des leçons `pending`.
+
+**Ollama :** fallback désactivé par défaut (quota Groq 429 = message clair, retry plus tard — pas de réponse hors-sujet).
+
+| Prod | Local |
+|------|-------|
+| `aria_vector_memory` selon vault Render | `ARIA_VECTOR_MEMORY=true` + `ARIA_MEMORY_ARBITRATOR=true` |
+| Deploy groupé via `deploy-render.ps1` quand quota OK | `collect-session.ps1` enchaîne sync + critique + apply approved |
 
 ### Journal de bord (actions techniques)
 
@@ -231,7 +245,7 @@ Distinct du tableau ci-dessus (décisions métier).
 ---
 
 | 2026-07-01 | **Monorepo ARIA** : tout l'écosystème dans `GoldenFarFR/ARIA` ; `collegue-memoire/` = ce dossier ; `ARIA_REPO_ROOT` sur chaque PC |
-| 2026-07-01 | **Gem Crush retiré** — supprimé du monorepo (skills, POC vanguard, heartbeat, QI juge) ; **pas de push GitHub** sans validation Sylvain |
-| 2026-07-01 | **Mémoire Phases E–G** : values + goals + reflection injectés LLM (`d91c33e`→`a970bd7`) — **4 commits locaux** en attente push |
+| 2026-07-01 | **Gem Crush retiré** — supprimé du monorepo (skills, POC vanguard, heartbeat, QI juge) |
+| 2026-07-01 | **Mémoire Phases E–G** : values + goals + reflection injectés LLM (`d91c33e`→`a970bd7`) |
 
-*Dernière mise à jour : 2026-07-01 (mémoire E–G complète)*
+*Dernière mise à jour : 2026-07-03 (mémoire vivante Sprints 1–4 + push GitHub)*

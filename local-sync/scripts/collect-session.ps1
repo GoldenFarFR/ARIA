@@ -218,6 +218,16 @@ if (Test-Path $letta2) {
     }
 }
 
+$applyLessons = Join-Path $ariaRepo "letta-orchestrator\apply-pending-lessons.ps1"
+if (Test-Path $applyLessons) {
+    try {
+        & $applyLessons -ApplyApproved
+        Write-Host "[Letta-2] apply approved -> aria-core (reflection/pitfall/COLLEGUE/skill_route)" -ForegroundColor DarkCyan
+    } catch {
+        Write-Host "[Letta-2] apply approved ignore : $($_.Exception.Message)" -ForegroundColor DarkGray
+    }
+}
+
 Write-Host "Etape suivante (TOTP 12h si session expiree) :" -ForegroundColor Yellow
 Write-Host "  .\push-session-manifest.ps1 [-TotpCode <code>]"
 Write-Host "  # ou manuel: cd $ariaRepo ; git add collegue-memoire/sessions/ ; git commit ; git push"

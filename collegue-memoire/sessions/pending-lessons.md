@@ -4,10 +4,10 @@
 
 ## Workflow
 
-1. `run-letta2-critique.ps1` — génère des leçons ci-dessous
-2. `apply-pending-lessons.ps1 -List` — liste
-3. `apply-pending-lessons.ps1 -Approve 1` — valider la leçon 1
-4. `apply-pending-lessons.ps1 -ApplyApproved` — ship vers aria-core
+1. `run-letta2-critique.ps1` — génère des leçons ci-dessous (auto en fin `collect-session`)
+2. `apply-pending-lessons.ps1 -List` ou KART `/apply-lessons list`
+3. `apply-pending-lessons.ps1 -Approve 1` ou `/apply-lessons approve 1` — **validation humaine obligatoire**
+4. `apply-pending-lessons.ps1 -ApplyApproved` — ship vers aria-core (auto en fin `collect-session` si leçons `approved`)
 
 Cibles **Ship core** : `reflection` · `pitfall` · `COLLEGUE` · `skill_route` · `defer`
 

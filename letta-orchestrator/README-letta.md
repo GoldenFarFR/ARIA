@@ -85,6 +85,23 @@ L'ouvrier **déduit** l'intention, **exécute** seul, et **demande confirmation*
 
 **Limite honnête :** modèle local/cloud Letta < Grok Cursor sur grosses refactors multi-fichiers — même outils, intelligence variable.
 
+## Mémoire vivante (Sprints 1–4)
+
+Boucle auto-amélioration : **Groq exécute · aria-core retient · Letta archive · Letta-2 critique · apply ship**.
+
+| Étape | Script | Quand |
+|-------|--------|-------|
+| Préflight mémoire ouvrier | `ouvrier_memory.py` | Chaque tour KART |
+| Sync core → archival | `sync-core-to-letta.ps1` | Fin `collect-session` |
+| Critique méta | `run-letta2-critique.ps1` | Fin `collect-session` |
+| Apply leçons validées | `apply-pending-lessons.ps1 -ApplyApproved` | Fin `collect-session` (si `approved`) |
+
+**KART :** `/apply-lessons list` · `/apply-lessons approve N` · `/apply-lessons apply N` · `/apply-lessons approved`
+
+Cibles **Ship core** : `reflection` · `pitfall` · `COLLEGUE` · `skill_route` · `defer`
+
+Vault local recommandé : `ARIA_OUVRIER_CLOUD=groq`, `ARIA_VECTOR_MEMORY=true`, `ARIA_MEMORY_ARBITRATOR=true`
+
 ## Dépannage
 
 | Symptôme | Action |
