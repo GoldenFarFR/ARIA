@@ -26,11 +26,11 @@ ALLOWED_INTERVALS = (14,)
 
 # Presets locaux — 0 token Groq avant chaque Imagine
 STYLE_PRESETS = (
-    "Lumière studio douce, accents or ZHC, fond sombre minimal — autorité calme.",
-    "Palette violet holding, rim light, élégance crypto-fondateur.",
-    "Cinématique or et noir, bokeh discret, tenue business moderne.",
-    "Lumière dorée latérale, contraste doux, premium dark brand.",
-    "Ambiance néon subtil violet-or, regard confiant, photo pro.",
+    "Tenue blazer sombre, coiffure lisse, fond studio or ZHC, lumière douce — autorité calme.",
+    "Robe-chemisier violet holding, cheveux ondulés, open space futuriste, rim light crypto.",
+    "Tailleur noir et or, chignon bas, skyline nocturne flou, cinématique fondateur.",
+    "Pull premium dark, cheveux libres, bureau minimal doré, lumière latérale chaude.",
+    "Veste structurée néon violet-or, brushing naturel, décor tech abstrait, photo pro.",
 )
 
 
@@ -210,9 +210,9 @@ async def propose_style(*, force_new: bool = False) -> str:
     system = (
         f"{llm_system_block('fr')}\n"
         f"{grounded_llm_identity('fr')}\n"
-        "Tu choisis UN nouveau style visuel pour ta photo de profil (Grok Imagine). "
-        "Même visage, nouveau mood : lumière, palette, tenue légère, ambiance. "
-        "Pas de lieu exotique — style photo pro. 2-3 phrases en français. "
+        "Tu choisis UN nouveau style visuel pour ta photo de profil (Grok Imagine, images/edits). "
+        "Même visage strictement identique ; change habits, coiffure, décor, lumière, ambiance. "
+        "Style photo pro — pas de lieu exotique. 2-3 phrases en français. "
         "Évite de répéter les styles récents."
     )
     user = "Propose le prochain style avatar ARIA."

@@ -159,7 +159,9 @@ async def generate_scene_portrait(
 ) -> bytes | None:
     brief = (identity_brief or "same woman, AI chief officer").strip()[:120]
     prompt = (
-        f"Same person — face unchanged. {brief}. Setting: {scene.strip()[:200]}. "
+        f"Same person — identical face and facial features unchanged. {brief}. "
+        f"New setting and environment: {scene.strip()[:200]}. "
+        "Change outfit, hairstyle, background, lighting as needed. "
         "Square profile photo, photorealistic."
     )
     return await _call_image_edit(prompt=prompt, anchor_jpeg=anchor_jpeg)
@@ -173,7 +175,9 @@ async def generate_style_portrait(
 ) -> bytes | None:
     brief = (identity_brief or "same woman, AI chief officer").strip()[:120]
     prompt = (
-        f"Same person — face unchanged. {brief}. Style only: {style.strip()[:280]}. "
+        f"Same person — identical face and facial features unchanged. {brief}. "
+        f"Transform everything else: {style.strip()[:280]}. "
+        "New outfit, hairstyle, background environment, lighting and mood. "
         "Square profile photo, photorealistic."
     )
     return await _call_image_edit(prompt=prompt, anchor_jpeg=anchor_jpeg)
