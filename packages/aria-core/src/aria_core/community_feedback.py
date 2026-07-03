@@ -19,6 +19,7 @@ from aria_core.x_text import (
     FEEDBACK_X_QUOTE_MAX_WEIGHT,
     FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT,
     X_TWEET_MAX_CHARS,
+    feedback_x_min_tweet_weight,
     fit_x_tweet,
     tweet_fits,
     weighted_tweet_length,
@@ -291,8 +292,14 @@ def personal_reply_pair_on_feedback(text: str, *, lang: str = "fr") -> FeedbackR
                 ),
             )
         return FeedbackReplyPair(
-            primary="ACP marketplace + ZHC signal products ship first.",
-            followup="Partnerships when traction proves the model — your note shapes the roadmap.",
+            primary=(
+                "ACP marketplace and ZHC signal products are what we ship first — "
+                "your roadmap ask is exactly the kind of signal we prioritize."
+            ),
+            followup=(
+                "Partnerships and revenue models follow once traction proves the model; "
+                "notes like yours steer the next Vanguard iteration."
+            ),
         )
     if _IDEAS_LIST_RE.search(t) or (_ACTION_RE.search(t) and len(t) > 120):
         if lang == "fr":
@@ -372,7 +379,7 @@ def personal_take_on_feedback(text: str, *, lang: str = "fr") -> str:
 
 def _feedback_tweet_header(handle: str) -> str:
     h = (handle or "").strip().lstrip("@")
-    return f"@{h} on ariavanguardzhc.com" if h else "On ariavanguardzhc.com"
+    return f"✦ @{h}" if h else "✦ Community note"
 
 
 def feedback_x_thread_reply_enabled() -> bool:
@@ -394,7 +401,7 @@ def _parse_reply_pair_llm(raw: str) -> FeedbackReplyPair | None:
         a, b = line.split(_REPLY_PAIR_SEP, 1)
         a, b = a.strip(), b.strip()
         if len(a) >= 12 and len(b) >= 12:
-            return FeedbackReplyPair(primary=a[:130], followup=b[:110])
+            return FeedbackReplyPair(primary=a[:150], followup=b[:130])
     return None
 
 
@@ -425,9 +432,10 @@ async def compose_feedback_reply_pair(
     if is_llm_configured():
         system = (
             "You reply on @Aria_ZHC in a THREAD under a site visitor quote (ariavanguardzhc.com).\n"
-            "Write TWO short English sentences.\n"
-            "Sentence 1 (max 130 chars): answer their question OR name the specific ideas they raised.\n"
-            "Sentence 2 (max 110 chars): concrete next step, roadmap hint, or warm close.\n"
+            "Write TWO warm, natural English sentences — conversational, not corporate.\n"
+            "Sentence 1 (max 150 chars): answer their question OR name 2–3 specific ideas they raised.\n"
+            "Sentence 2 (max 130 chars): concrete next step, roadmap hint, or human close.\n"
+            "Use as much of the character budget as fits naturally — avoid one-liners.\n"
             "If they ask roadmap/revenue/partnerships: ACP marketplace, ZHC signals, built-in-public.\n"
             "If they list numbered ideas: acknowledge 2–3 by name.\n"
             "No generic thank-you. Forbidden: 'thanks for sharing', 'love the energy', "
@@ -442,17 +450,20 @@ async def compose_feedback_reply_pair(
                 f"Community feedback to react to:\n{source[:600]}",
                 system,
                 temperature=0.45,
-                max_tokens=120,
+                max_tokens=180,
             )
             line = strip_obvious_ai_phrases((composed or "").strip())
             pair = _parse_reply_pair_llm(line)
             if pair and not _GENERIC_REPLY_RE.search(pair.primary):
-                return pair
+                return FeedbackReplyPair(
+                    primary=pair.primary[:150],
+                    followup=pair.followup[:130],
+                )
             if line and _REPLY_PAIR_SEP not in line:
                 one = line.strip('"').strip("'")
                 if len(one) >= 12 and not _GENERIC_REPLY_RE.search(one):
                     base = personal_reply_pair_on_feedback(original or text_en, lang="en")
-                    return FeedbackReplyPair(primary=one[:130], followup=base.followup)
+                    return FeedbackReplyPair(primary=one[:150], followup=base.followup)
         except Exception as exc:
             logger.warning("feedback reply pair LLM failed: %s", exc)
 
@@ -615,15 +626,16 @@ async def prepare_feedback_quote_for_x(text: str) -> tuple[str, bool]:
     if not clean:
         return "", False
 
-    polished = await _llm_polish_quote_for_x(clean)
-    if polished and len(polished) >= 3:
-        return polished[:800], polished.strip() != clean
-
+    # Anglais déjà lisible — corriger typos seulement (évite résumés LLM type « User praises… »).
     if _is_likely_english(clean):
         fixed = await _llm_fix_english_typos(clean)
         if fixed and len(fixed) >= 3:
             return fixed[:800], fixed.strip() != clean
         return clean, False
+
+    polished = await _llm_polish_quote_for_x(clean)
+    if polished and len(polished) >= 3:
+        return polished[:800], polished.strip() != clean
 
     for translator in (_google_translate_to_english,):
         try:
@@ -752,62 +764,90 @@ async def _polish_merged_quotes(texts: list[str]) -> list[str]:
         q = quote.strip()
         if not q:
             continue
-        if weighted_tweet_length(q) > FEEDBACK_X_QUOTE_MAX_WEIGHT:
-            summarized = await _llm_summarize_quote_for_x(q, FEEDBACK_X_QUOTE_MAX_WEIGHT)
-            q = summarized or _condense_quote_sync(q, FEEDBACK_X_QUOTE_MAX_WEIGHT)
+        if weighted_tweet_length(q) > FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT:
+            q = _condense_quote_sync(q, FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT)
         out.append(q)
     return out
 
 
-def build_feedback_quote_tweet(text: str, *, handle: str = "") -> str:
-    """Tweet 1 du fil — citation mise en forme (sans réponse ARIA)."""
-    quote_full = _condense_quote_sync(
-        re.sub(r"\s+", " ", (text or "").strip()),
-        FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT,
-    )
+def _quote_tweet_prefixes(handle: str) -> list[str]:
     h = (handle or "").strip().lstrip("@")
-    quote_start = min(weighted_tweet_length(quote_full), FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT)
-    quote_weights = list(range(max(quote_start, 56), 47, -8)) or [max(quote_start, 56)]
-    for quote_weight in quote_weights:
-        quote = _truncate_quote(quote_full, quote_weight)
-        if h:
-            candidates = (
-                f"✦ @{h}\nariavanguardzhc.com\n\n\"{quote}\"",
-                f"@{h} · ariavanguardzhc.com\n\n\"{quote}\"",
-            )
-        else:
-            candidates = (
-                f"✦ ariavanguardzhc.com\n\n\"{quote}\"",
-                f"Site note · ariavanguardzhc.com\n\n\"{quote}\"",
-            )
-        for tweet in candidates:
-            if tweet_fits(tweet):
-                return tweet
-    quote = _truncate_quote(quote_full, 80)
     if h:
-        return fit_x_tweet(f"@{h} · ariavanguardzhc.com\n\n\"{quote}\"")
-    return fit_x_tweet(f"ariavanguardzhc.com\n\n\"{quote}\"")
+        return [f"✦ @{h}\n\n", f"✦ @{h}\n"]
+    return ["✦\n\n", "✦ "]
+
+
+def _best_fill_tweet(candidates: list[str], *, min_weight: int | None = None) -> str:
+    """Choisit le tweet le plus long qui tient, idéalement ≥ min_weight (70 % de 280)."""
+    target = min_weight if min_weight is not None else feedback_x_min_tweet_weight()
+    best = ""
+    best_w = 0
+    for tweet in candidates:
+        if not tweet or not tweet_fits(tweet):
+            continue
+        w = weighted_tweet_length(tweet)
+        if w >= target:
+            return tweet
+        if w > best_w:
+            best = tweet
+            best_w = w
+    return best
+
+
+def build_feedback_quote_tweet(text: str, *, handle: str = "") -> str:
+    """Tweet 1 du fil — citation fidèle, sans lien site, remplissage ~70 %."""
+    quote_full = re.sub(r"\s+", " ", (text or "").strip())
+    if not quote_full:
+        return "✦"
+
+    min_w = feedback_x_min_tweet_weight()
+    candidates: list[str] = []
+    for prefix in _quote_tweet_prefixes(handle):
+        shell_w = weighted_tweet_length(prefix) + 2
+        max_quote_w = X_TWEET_MAX_CHARS - shell_w
+        for quote_w in range(
+            min(max_quote_w, FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT),
+            48,
+            -4,
+        ):
+            quote = _condense_quote_sync(quote_full, quote_w)
+            if not quote:
+                continue
+            candidates.append(f'{prefix}"{quote}"')
+
+    picked = _best_fill_tweet(candidates, min_weight=min_w)
+    if picked:
+        return picked
+
+    quote = _condense_quote_sync(quote_full, 80)
+    prefix = _quote_tweet_prefixes(handle)[0]
+    return fit_x_tweet(f'{prefix}"{quote}"')
 
 
 def build_feedback_followup_tweet(pair: FeedbackReplyPair) -> str:
-    """Tweet 2 du fil — 2 phrases ARIA, aéré."""
+    """Tweet 2 du fil — ton humain, 2 phrases aérées, ~70 % du budget."""
     primary = re.sub(r"\s+", " ", (pair.primary or "").strip())
     followup = re.sub(r"\s+", " ", (pair.followup or "").strip())
     if not primary:
-        return followup[:280]
+        return fit_x_tweet(followup)
+    min_w = feedback_x_min_tweet_weight()
     intros = (
-        "Appreciate the thoughtful note —",
-        "Thanks for the detail —",
+        "Really appreciate you taking the time to write this —",
+        "This is exactly the kind of note that helps us prioritize —",
+        "Love the detail here —",
         "Good signal —",
     )
+    candidates: list[str] = []
     for intro in intros:
-        body = f"{intro}\n\n{primary}\n\n{followup}"
-        if tweet_fits(body):
-            return body
-    compact = f"{primary}\n\n{followup}"
-    if tweet_fits(compact):
-        return compact
-    return fit_x_tweet(f"{primary}\n\n{_truncate_quote(followup, 90)}")
+        candidates.append(f"{intro}\n\n{primary}\n\n{followup}")
+    candidates.append(f"{primary}\n\n{followup}")
+    for intro in intros:
+        candidates.append(f"{intro} {primary} {followup}")
+
+    picked = _best_fill_tweet(candidates, min_weight=min_w)
+    if picked:
+        return picked
+    return fit_x_tweet(f"{primary}\n\n{_truncate_quote(followup, 110)}")
 
 
 def build_merged_feedback_tweet(
@@ -830,10 +870,8 @@ def build_merged_feedback_tweet(
             personal=personal or (reply_pair.primary if reply_pair else ""),
         )
     header = _feedback_tweet_header(handle)
-    if handle.strip():
-        header = f"✦ {header} ({len(quotes_en)} notes)"
-    else:
-        header = f"✦ ariavanguardzhc.com ({len(quotes_en)} notes)"
+    if quotes_en:
+        header = f"{header} ({len(quotes_en)} notes)"
     merged = " / ".join(f'"{_truncate_quote(q, 90)}"' for q in quotes_en[:3])
     tweet = f"{header}\n\n{merged}"
     if tweet_fits(tweet):
