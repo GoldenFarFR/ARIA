@@ -141,6 +141,24 @@ function Get-AriaLettaStatus {
     Write-Host "══════════════════════════`n" -ForegroundColor Cyan
 }
 
+function Get-AriaKartPaidTokens {
+    <#
+    .SYNOPSIS
+    Compteur tokens cloud payants — lecture JSONL locale, 0 appel API.
+    #>
+    Import-AriaVaultEnv
+    $py = Get-AriaShellPython
+    $report = Join-Path $script:AriaCorePackage "scripts\llm_usage_report.py"
+    if (-not $py -or -not (Test-Path $report)) {
+        return "payant: n/d"
+    }
+    try {
+        $line = & $py $report --compact 2>$null
+        if ($LASTEXITCODE -eq 0 -and $line) { return $line.Trim() }
+    } catch { }
+    return "payant: n/d"
+}
+
 function Get-AriaShellPython {
     $candidates = @(
         (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)

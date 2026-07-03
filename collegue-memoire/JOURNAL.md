@@ -363,3 +363,4 @@
 21h12 — feat aria-core llm_economy brief/standard/develop + brain integration
 21h26 — feat response_cost footer gratuit/payant + tokens
 21h38 — feat mode debranchement Grok coding KART (ouvrier_coding_mode + skip cerveau)
+21h45 — feat compteur tokens payants dashboard KART + ouvrier record usage

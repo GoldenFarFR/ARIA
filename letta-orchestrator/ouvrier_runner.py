@@ -285,12 +285,81 @@ def _build_cloud_system(*, coding_pure: bool) -> str:
     )
 
 
+def _record_ouvrier_llm_usage(
+    provider: str,
+    model: str,
+    data: dict[str, Any] | None,
+    messages: list[dict[str, Any]],
+    *,
+    ok: bool = True,
+    status_code: int | None = None,
+    kind: str = "ouvrier",
+) -> None:
+    if (provider or "").lower() == "ollama":
+        return
+    try:
+        from ouvrier_memory import bootstrap_aria_core_runtime
+        from aria_core.llm_usage import (
+            estimate_tokens_from_text,
+            parse_usage_from_response,
+            record_llm_usage,
+        )
+
+        bootstrap_aria_core_runtime()
+        if ok and data:
+            usage = parse_usage_from_response(data)
+            estimated = usage["total_tokens"] <= 0
+            if estimated:
+                parts = [
+                    str(m.get("content") or "")
+                    for m in messages
+                    if isinstance(m, dict)
+                ]
+                reply = ""
+                try:
+                    reply = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                except (IndexError, KeyError, TypeError):
+                    reply = ""
+                usage = {
+                    "input_tokens": estimate_tokens_from_text(*parts),
+                    "output_tokens": estimate_tokens_from_text(reply),
+                    "total_tokens": 0,
+                }
+                usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+            record_llm_usage(
+                provider=provider,
+                model=model,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                ok=True,
+                kind=kind,
+                estimated=estimated,
+            )
+            return
+        prompt_est = estimate_tokens_from_text(
+            *(str(m.get("content") or "") for m in messages if isinstance(m, dict))
+        )
+        record_llm_usage(
+            provider=provider,
+            model=model,
+            input_tokens=prompt_est,
+            output_tokens=0,
+            ok=False,
+            status_code=status_code,
+            kind=kind,
+            estimated=True,
+        )
+    except Exception:
+        return
+
+
 def _chat(
     url: str,
     api_key: str | None,
     model: str,
     messages: list[dict[str, Any]],
     *,
+    provider: str = "",
     tools: bool = True,
     temperature: float = 0.2,
 ) -> dict[str, Any]:
@@ -307,9 +376,15 @@ def _chat(
         headers["Authorization"] = f"Bearer {api_key}"
     r = requests.post(url, headers=headers, json=body, timeout=300)
     if r.status_code in (403, 429):
+        _record_ouvrier_llm_usage(
+            provider, model, None, messages, ok=False, status_code=r.status_code
+        )
         raise RuntimeError(f"LLM cloud indisponible ({r.status_code}).")
     r.raise_for_status()
-    return r.json()
+    data = r.json()
+    if provider:
+        _record_ouvrier_llm_usage(provider, model, data, messages, ok=True)
+    return data
 
 
 def _run_tool(fns: dict[str, Any], name: str, args: dict[str, Any]) -> str:
@@ -478,7 +553,15 @@ def _run_ouvrier_cloud(
     trace("moteur", f"Cloud {mode_label} — {provider}/{model}")
     for step in range(1, MAX_STEPS + 1):
         with StepTimer(f"LLM cloud étape {step}/{MAX_STEPS}"):
-            data = _chat(url, api_key, model, messages, tools=True, temperature=temperature)
+            data = _chat(
+                url,
+                api_key,
+                model,
+                messages,
+                provider=provider,
+                tools=True,
+                temperature=temperature,
+            )
         choice = data["choices"][0]["message"]
         tool_calls = choice.get("tool_calls") or []
         if choice.get("content"):
