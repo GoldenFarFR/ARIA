@@ -1,12 +1,15 @@
 import json
 from datetime import datetime, timezone
 
+from aria_core.cursor_usage import format_cursor_usage_dashboard, update_cursor_usage
 from aria_core.llm_usage import (
+    format_grok_build_dashboard,
     format_paid_usage_dashboard,
     is_paid_provider,
     parse_usage_from_response,
     paid_usage_snapshot,
     record_llm_usage,
+    summarize_grok_build_usage,
     summarize_paid_usage,
     summarize_usage,
 )
@@ -79,5 +82,38 @@ def test_paid_usage_excludes_ollama(tmp_path):
     assert snap["month_total_tokens"] == 1200
     assert snap["lifetime_total_tokens"] == 1200
     dash = format_paid_usage_dashboard(month="2026-07")
-    assert "payant 2026-07" in dash
+    assert "grok 2026-07" in dash
     assert "total:" in dash
+
+
+def test_grok_build_usage_excludes_groq(tmp_path):
+    configure_test_runtime(data_dir=tmp_path)
+    record_llm_usage(
+        provider="grok",
+        model="grok-4.3",
+        input_tokens=800,
+        output_tokens=200,
+        at=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
+    )
+    record_llm_usage(
+        provider="groq",
+        model="llama-3.3-70b",
+        input_tokens=4000,
+        output_tokens=400,
+        at=datetime(2026, 7, 3, 12, 1, tzinfo=timezone.utc),
+    )
+    grok = summarize_grok_build_usage(month="2026-07")
+    assert grok["totals"]["total_tokens"] == 1000
+    dash = format_grok_build_dashboard(month="2026-07")
+    assert dash.startswith("grok 2026-07:")
+
+
+def test_cursor_usage_dashboard(tmp_path, monkeypatch):
+    from aria_core import cursor_usage as cu
+
+    monkeypatch.setattr(cu, "cursor_usage_path", lambda: tmp_path / "cursor-usage.json")
+    update_cursor_usage(composer_pool_pct=4, api_pool_pct=2, plan="pro+")
+    dash = format_cursor_usage_dashboard()
+    assert "PRO+" in dash
+    assert "Composer 4%" in dash
+    assert "API 2%" in dash

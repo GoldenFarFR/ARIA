@@ -14,6 +14,7 @@ from aria_core.paths import data_dir
 logger = logging.getLogger(__name__)
 
 _FREE_PROVIDERS = frozenset({"", "none", "ollama", "local", "unknown"})
+_GROK_BUILD_PROVIDERS = frozenset({"grok", "xai", "grok-build"})
 
 _chat_usage_ctx: ContextVar[dict[str, int] | None] = ContextVar("chat_usage_ctx", default=None)
 
@@ -225,6 +226,53 @@ def _is_paid_row(row: dict[str, Any]) -> bool:
     return is_paid_provider(str(row.get("provider") or ""))
 
 
+def _is_grok_build_row(row: dict[str, Any]) -> bool:
+    return (str(row.get("provider") or "").strip().lower()) in _GROK_BUILD_PROVIDERS
+
+
+def summarize_grok_build_usage(*, month: str | None = None, lifetime: bool = False) -> dict[str, Any]:
+    """Tokens Grok Build / xAI uniquement (≠ Groq, ≠ Cursor)."""
+    if lifetime:
+        month_key = "lifetime"
+        rows = [r for r in _iter_rows() if _is_grok_build_row(r)]
+    else:
+        month_key = month or datetime.now(timezone.utc).strftime("%Y-%m")
+        rows = [r for r in _iter_rows(month_key) if _is_grok_build_row(r)]
+
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "calls_ok": 0,
+        "calls_failed": 0,
+    }
+    for row in rows:
+        if bool(row.get("ok")):
+            totals["calls_ok"] += 1
+        else:
+            totals["calls_failed"] += 1
+        if not row.get("ok"):
+            continue
+        inp = int(row.get("input_tokens") or 0)
+        out = int(row.get("output_tokens") or 0)
+        totals["input_tokens"] += inp
+        totals["output_tokens"] += out
+        totals["total_tokens"] += int(row.get("total_tokens") or (inp + out))
+
+    return {"month": month_key, "totals": totals, "rows": len(rows)}
+
+
+def format_grok_build_dashboard(*, month: str | None = None, lang: str = "fr") -> str:
+    month_key = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    month_sum = summarize_grok_build_usage(month=month_key)
+    life_sum = summarize_grok_build_usage(lifetime=True)
+    m_tok = _format_token_count(int(month_sum["totals"]["total_tokens"]))
+    l_tok = _format_token_count(int(life_sum["totals"]["total_tokens"]))
+    if lang == "fr":
+        return f"grok {month_key}: {m_tok} tok | total: {l_tok} tok"
+    return f"grok {month_key}: {m_tok} tok | total: {l_tok} tok"
+
+
 def paid_usage_snapshot(*, month: str | None = None) -> dict[str, Any]:
     """Mois courant + cumul lifetime — pour dashboard KART (0 appel API)."""
     month_key = month or datetime.now(timezone.utc).strftime("%Y-%m")
@@ -241,12 +289,8 @@ def paid_usage_snapshot(*, month: str | None = None) -> dict[str, Any]:
 
 
 def format_paid_usage_dashboard(*, month: str | None = None, lang: str = "fr") -> str:
-    snap = paid_usage_snapshot(month=month)
-    m_tok = _format_token_count(snap["month_total_tokens"])
-    l_tok = _format_token_count(snap["lifetime_total_tokens"])
-    if lang == "fr":
-        return f"payant {snap['month']}: {m_tok} tok | total: {l_tok} tok"
-    return f"paid {snap['month']}: {m_tok} tok | total: {l_tok} tok"
+    """Rétrocompat KART — alias Grok Build (xAI)."""
+    return format_grok_build_dashboard(month=month, lang=lang)
 
 
 def summarize_usage(*, month: str | None = None) -> dict[str, Any]:

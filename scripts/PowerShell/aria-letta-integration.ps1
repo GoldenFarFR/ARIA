@@ -141,10 +141,10 @@ function Get-AriaLettaStatus {
     Write-Host "══════════════════════════`n" -ForegroundColor Cyan
 }
 
-function Get-AriaKartPaidTokens {
+function Get-AriaKartGrokTokens {
     <#
     .SYNOPSIS
-    Compteur tokens cloud payants — lecture JSONL locale, 0 appel API.
+    Compteur tokens Grok Build / xAI — JSONL locale llm-usage, 0 appel API.
     #>
     Import-AriaVaultEnv
     if (-not $env:DATA_DIR -and $script:AriaDataDir -and (Test-Path $script:AriaDataDir)) {
@@ -152,7 +152,7 @@ function Get-AriaKartPaidTokens {
     }
     $report = Join-Path $script:AriaCorePackage "scripts\llm_usage_report.py"
     if (-not (Test-Path $report)) {
-        return "[TOKENS PAYANT] n/d (script absent)"
+        return "[GROK BUILD] n/d (script absent)"
     }
     $pys = @(
         (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
@@ -160,13 +160,66 @@ function Get-AriaKartPaidTokens {
     ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
     foreach ($py in $pys) {
         try {
-            $line = (& $py $report --compact 2>&1 | Out-String).Trim()
-            if ($LASTEXITCODE -eq 0 -and $line -match '^(payant|paid)\s') {
-                return "[TOKENS PAYANT] $line"
+            $line = (& $py $report --grok 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0 -and $line -match '^grok\s') {
+                return "[GROK BUILD] $line"
             }
         } catch { }
     }
-    return "[TOKENS PAYANT] n/d"
+    return "[GROK BUILD] n/d"
+}
+
+function Get-AriaKartPaidTokens {
+    return Get-AriaKartGrokTokens
+}
+
+function Get-AriaKartCursorUsage {
+    <#
+    .SYNOPSIS
+    Quota Cursor Pro — état local %LOCALAPPDATA%\GoldenFar\cursor-usage.json
+    #>
+    Import-AriaVaultEnv
+    if (-not $env:DATA_DIR -and $script:AriaDataDir -and (Test-Path $script:AriaDataDir)) {
+        $env:DATA_DIR = $script:AriaDataDir
+    }
+    $report = Join-Path $script:AriaCorePackage "scripts\llm_usage_report.py"
+    if (-not (Test-Path $report)) {
+        return "[CURSOR] n/d (script absent)"
+    }
+    $py = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+    if (-not $py) { return "[CURSOR] n/d (python)" }
+    try {
+        $line = (& $py $report --cursor 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and $line) {
+            return "[CURSOR] $line"
+        }
+    } catch { }
+    return "[CURSOR] n/d — /cursor-usage 4"
+}
+
+function Set-AriaCursorUsage {
+    param(
+        [double]$ComposerPct = -1,
+        [double]$ApiPct = -1,
+        [string]$Plan = ""
+    )
+    Import-AriaVaultEnv
+    $report = Join-Path $script:AriaCorePackage "scripts\llm_usage_report.py"
+    $py = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+    if (-not ($py -and (Test-Path $report))) {
+        Write-Host "cursor-usage: script absent" -ForegroundColor Red
+        return
+    }
+    $args = @($report, "--set-cursor")
+    if ($ComposerPct -ge 0) { $args += "composer_pct=$ComposerPct" }
+    if ($ApiPct -ge 0) { $args += "api_pct=$ApiPct" }
+    if ($Plan) { $args += "plan=$Plan" }
+    $line = (& $py @args 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[CURSOR] $line" -ForegroundColor Green
+    } else {
+        Write-Host "cursor-usage: echec" -ForegroundColor Red
+    }
 }
 
 function Get-AriaShellPython {
