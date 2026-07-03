@@ -315,4 +315,4 @@ function Invoke-AriaAgent {
 }
 
 Import-AriaVaultEnv
-Write-Host "ARIA shell v2.6 — defaut = Ouvrier Letta (Grok-like) | /cerveau = aria-core | /ollama /groq /grok" -ForegroundColor DarkCyan
+Write-Host "ARIA shell v2.7 — defaut = Ouvrier Grok direct (outils) | Letta fallback | /cerveau = aria-core" -ForegroundColor DarkCyan

@@ -23,6 +23,14 @@ function Import-DotEnv([string]$Path) {
 }
 Import-DotEnv (Join-Path $VaultDir "local.env")
 Import-DotEnv (Join-Path $VaultDir "production.env")
+if (-not $env:XAI_API_KEY) {
+    foreach ($src in @("GROK_API_KEY", "IMAGE_API_KEY", "XAI_API_KEY")) {
+        $c = [Environment]::GetEnvironmentVariable($src, "User")
+        if (-not $c) { $c = [Environment]::GetEnvironmentVariable($src, "Process") }
+        if (-not $c) { $c = (Get-Item "env:$src" -ErrorAction SilentlyContinue).Value }
+        if ($c -and $c.Length -ge 20) { $env:XAI_API_KEY = $c; break }
+    }
+}
 if (-not $env:OLLAMA_KEEP_ALIVE) { $env:OLLAMA_KEEP_ALIVE = "30m" }
 
 $py = Join-Path $Here "venv\Scripts\python.exe"

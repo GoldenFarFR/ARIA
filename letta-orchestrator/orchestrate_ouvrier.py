@@ -11,8 +11,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from aria_config import ARIA_REPO_ROOT
-from letta_api import send_message
+import requests
+
+from aria_config import ARIA_REPO_ROOT, bridge_api_keys
+from ouvrier_runner import provider_label, run_ouvrier
 
 CONFIG_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_config.json"
 WORKER_PATH = ARIA_REPO_ROOT / "collegue-memoire" / "sessions" / "ARIA-WORKER.md"
@@ -56,9 +58,11 @@ def _patch_env_file(path: Path, key: str, value: str) -> str:
 
 
 def preflight_telegram_notifications(message: str) -> str:
+    action = r"(?:supprim|couper|désactiv|desactiv|éteind|eteind|arrêt|arret|stop|moins|trop|spam)"
     if not re.search(
-        r"(?i)(notif|notification|spam|trop|couper|supprim|désactiv|desactiv|moins).{0,40}telegram"
-        r"|telegram.{0,40}(notif|spam|trop|couper|supprim|désactiv|desactiv|moins)",
+        rf"(?i){action}.{{0,50}}(?:notif|notification).{{0,50}}telegram"
+        rf"|telegram.{{0,50}}(?:notif|notification).{{0,50}}{action}"
+        rf"|(?:notif|notification).{{0,30}}{action}",
         message,
     ):
         return ""
@@ -75,6 +79,65 @@ def preflight_telegram_notifications(message: str) -> str:
     return "PRÉ-TRAITEMENT NOTIFS TELEGRAM (déjà exécuté — confirme à Sylvain, ne redemande pas):\n" + "\n".join(
         f"• {a}" for a in actions
     )
+
+
+def _read_vault_kv(key: str) -> str:
+    for name in ("local.env", "production.env"):
+        path = _VAULT_DIR / name
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip().startswith(f"{key}="):
+                return line.split("=", 1)[1].strip().strip('"')
+    return ""
+
+
+def preflight_notification_status(message: str) -> str:
+    if not re.search(
+        r"(?i)(quel|quoi|liste|état|etat|encore).{0,30}(notif|notification)"
+        r"|(notif|notification).{0,30}(active|actif|encore|reste)",
+        message,
+    ):
+        return ""
+    lines = ["État notifications Telegram ARIA (lu dans vault + code) :", ""]
+    for name in ("local.env", "production.env"):
+        val = ""
+        path = _VAULT_DIR / name
+        if path.is_file():
+            m = re.search(r"(?m)^\s*ARIA_PROACTIVE_IDEAS\s*=\s*(\S+)", path.read_text(encoding="utf-8", errors="replace"))
+            val = m.group(1) if m else "(absent)"
+        lines.append(f"• {name} → ARIA_PROACTIVE_IDEAS={val}")
+    lines.extend(
+        [
+            "• founder_ping (heartbeat) : actif seulement si ARIA_PROACTIVE_IDEAS=true + LLM + bot",
+            "• aria_worker_queue / capability_gap : notify_admin sur tâches worker (prod)",
+            "• portfolio_scan heartbeat : notif si items portfolio > 0",
+            "",
+            "Pour couper le spam proactive : ARIA_PROACTIVE_IDEAS=false (local + production) + redeploy Render.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def preflight_telegram_ping(message: str) -> str:
+    if not re.search(r"(?i)ping|confirmation|confirme", message):
+        return ""
+    if not re.search(r"(?i)telegram|bot|aria", message) and "ping" not in message.lower():
+        return ""
+    bridge_api_keys()
+    token = _read_vault_kv("TELEGRAM_BOT_TOKEN")
+    admin = _read_vault_kv("TELEGRAM_ADMIN_IDS") or _read_vault_kv("TELEGRAM_GROUP_ID")
+    if not token or not admin:
+        return "ERREUR: TELEGRAM_BOT_TOKEN ou TELEGRAM_ADMIN_IDS absent du vault."
+    text = "✅ Ping confirmation ARIA-Ouvrier — connexion Telegram OK."
+    r = requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": int(admin.split(",")[0].strip()), "text": text},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        return f"ERREUR Telegram API {r.status_code}: {r.text[:300]}"
+    return f"Ping envoyé sur Telegram (chat {admin.split(',')[0].strip()}).\n{text}"
 
 
 def _pending_worker_count() -> int:
@@ -113,26 +176,35 @@ def main() -> None:
         sys.exit(
             "[Erreur] ouvrier_config.json absent. Lance: .\\setup_ouvrier.py"
         )
-    cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    agent_id = cfg["agent_id"]
+    for handler in (
+        preflight_telegram_notifications,
+        preflight_notification_status,
+        preflight_telegram_ping,
+    ):
+        direct = handler(args.message)
+        if direct and not re.search(r"(?i)^\s*(oui|ok|yes)\s*$", args.message):
+            tag = "mute" if handler is preflight_telegram_notifications else "direct"
+            print(f"═══ ARIA-OUVRIER ({tag}) ═══", file=sys.stderr)
+            if handler is preflight_telegram_notifications:
+                print(
+                    "C'est fait — notifications proactive Telegram coupées.\n\n"
+                    f"{direct}\n\n"
+                    "Si tu reçois encore des messages, redeploy Render (production.env)."
+                )
+            else:
+                print(direct)
+            return
 
-    preflight = preflight_telegram_notifications(args.message)
-    if preflight and not re.search(r"(?i)^\s*(oui|ok|yes)\s*$", args.message):
-        print("═══ ARIA-OUVRIER (direct) ═══", file=sys.stderr)
-        print(
-            "C'est fait — notifications proactive Telegram coupées.\n\n"
-            f"{preflight}\n\n"
-            "Si tu reçois encore des messages, ils viennent du backend Render (prod) : "
-            "redeploy manuel après le changement production.env."
-        )
-        return
-    preflight_block = preflight if preflight else "(aucun pré-traitement automatique)"
+    preflight_block = "(aucun pré-traitement automatique)"
     prompt = bootstrap(args.message, preflight_block)
-    print("═══ ARIA-OUVRIER (Letta) ═══", file=sys.stderr)
-    reply = send_message(agent_id, prompt)
-    if not reply:
-        sys.exit("[Erreur] Aucune réponse Letta.")
-    print(reply)
+    engine = provider_label()
+    print(f"═══ ARIA-OUVRIER ({engine}) ═══", file=sys.stderr)
+    try:
+        reply = run_ouvrier(prompt)
+        print(reply)
+        return
+    except Exception as exc:
+        sys.exit(f"[Erreur] Ouvrier: {exc}")
 
 
 if __name__ == "__main__":

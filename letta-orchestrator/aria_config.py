@@ -87,10 +87,10 @@ def bridge_api_keys() -> dict[str, bool]:
     status: dict[str, bool] = {}
     vault = _read_vault_env()
 
-    if not os.environ.get("XAI_API_KEY"):
+    if not os.environ.get("XAI_API_KEY") or len(os.environ.get("XAI_API_KEY", "")) < 20:
         for src in ("XAI_API_KEY", "GROK_API_KEY", "IMAGE_API_KEY"):
-            val = os.environ.get(src) or vault.get(src)
-            if val:
+            val = os.environ.get(src) or vault.get(src) or ""
+            if len(val) >= 20:
                 os.environ["XAI_API_KEY"] = val
                 break
 
