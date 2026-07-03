@@ -4,6 +4,7 @@ __pycache__/
 .env
 agents_config.json
 ouvrier_config.json
+letta2_config.json
 smoke-results.jsonl
 models_config.json
 .letta/

@@ -350,3 +350,5 @@
 18h44 — feat ACP schema.examples auto demande/livrable Virtuals
 18h57 — Sprint 1 ouvrier : preflight build_llm_context+arbitre, anti-fallback Ollama, ouvrier_learn
 19h03 — Sprint 2 sync-core-to-letta archival + collect-session
+19h06 —  — ACP aria_full_access: 3 offres + subscription_ids + fix acp-cli node Windows
+19h06 — Sprint 3 Letta-2 critique pending-lessons + collect-session

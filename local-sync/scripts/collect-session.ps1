@@ -208,6 +208,16 @@ if (Test-Path $syncLetta) {
     }
 }
 
+$letta2 = Join-Path $ariaRepo "letta-orchestrator\run-letta2-critique.ps1"
+if (Test-Path $letta2) {
+    try {
+        & $letta2 -Quiet
+        Write-Host "[Letta-2] critique -> pending-lessons.md" -ForegroundColor DarkCyan
+    } catch {
+        Write-Host "[Letta-2] critique ignore : $($_.Exception.Message)" -ForegroundColor DarkGray
+    }
+}
+
 Write-Host "Etape suivante (TOTP 12h si session expiree) :" -ForegroundColor Yellow
 Write-Host "  .\push-session-manifest.ps1 [-TotpCode <code>]"
 Write-Host "  # ou manuel: cd $ariaRepo ; git add collegue-memoire/sessions/ ; git commit ; git push"
