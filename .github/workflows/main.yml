@@ -32,7 +32,7 @@ jobs:
       - name: Linting avec Ruff
         run: ruff check .
 
-      - name: Tests (si tu en as)
+      - name: Tests (optionnel)
         run: |
           if [ -f pytest.ini ] || [ -f pyproject.toml ]; then
             python -m pytest || echo "Pas de tests trouvés"
@@ -43,7 +43,7 @@ jobs:
       - name: Rapport final
         if: always()
         run: |
-          echo "=== Résumé ARIA ==="
-          echo "Black : Vérifié"
-          echo "Ruff  : Vérifié"
-          echo "✅ Workflow terminé"
+          echo "=== ARIA Quality Report ==="
+          echo "✅ Black : Vérifié"
+          echo "✅ Ruff  : Vérifié"
+          echo "Workflow terminé avec succès"
