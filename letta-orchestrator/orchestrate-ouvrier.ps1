@@ -1,4 +1,4 @@
-# ARIA-Ouvrier Letta — copie conforme Grok/Cursor (local, économie jetons)
+# ARIA-Ouvrier direct — copie conforme Grok/Cursor (local, économie jetons)
 param(
     [Parameter(Mandatory)]
     [string]$Message,
@@ -34,8 +34,15 @@ if (-not $env:XAI_API_KEY) {
     }
 }
 if (-not $env:OLLAMA_KEEP_ALIVE) { $env:OLLAMA_KEEP_ALIVE = "30m" }
+if ($ShowTrace) { $env:ARIA_OUVRIER_VERBOSE = "1" }
+if ($Quiet) { $env:ARIA_OUVRIER_VERBOSE = "" }
 
 $py = Join-Path $Here "venv\Scripts\python.exe"
-if (-not (Test-Path $py)) { throw "venv absent — .\install.ps1 puis .\setup_ouvrier.py" }
+if (-not (Test-Path $py)) { throw "venv absent — .\install.ps1 puis .\setup-ouvrier.py" }
 
-& $py (Join-Path $Here "orchestrate_ouvrier.py") --message $Message
+$pyArgs = @((Join-Path $Here "orchestrate_ouvrier.py"), "--message", $Message)
+if ($ShowTrace) { $pyArgs += "--verbose" }
+elseif ($Quiet) { $pyArgs += "--quiet" }
+elseif ($env:ARIA_OUVRIER_VERBOSE -eq "1") { $pyArgs += "--verbose" }
+
+& $py @pyArgs 2>&1
