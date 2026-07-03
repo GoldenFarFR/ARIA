@@ -111,6 +111,12 @@ def test_build_offering_payload():
     assert payload["price_value"] == 2.5
     assert payload["requirements"]["description"]
     assert payload["deliverable"]["properties"]["liteVerdict"]["description"]
+    assert payload.get("subscription_ids") == "019f0664-640c-7cdc-807a-b09547461ad7"
+
+
+def test_resolve_subscription_ids_env_override(monkeypatch):
+    monkeypatch.setenv("ARIA_ACP_SUBSCRIPTION_IDS", "sub-test-uuid")
+    assert acp_offering_skill.resolve_subscription_ids() == "sub-test-uuid"
 
 
 def test_enrich_json_schema():
@@ -193,6 +199,16 @@ async def test_adhoc_workflow_create(monkeypatch):
     assert data.get("sample_request")
 
 
+def test_build_offering_payload_injects_examples():
+    tpl = acp_offering_skill.resolve_template("analyse_lite_x1")
+    assert tpl is not None
+    payload = acp_offering_skill.build_offering_payload(tpl)
+    req = payload["requirements"]
+    deliv = payload["deliverable"]
+    assert req.get("examples") and req["examples"][0].get("contractAddress")
+    assert deliv.get("examples") and deliv["examples"][0].get("liteVerdict")
+
+
 def test_build_adhoc_payload_premium_x_account():
     spec = {
         "name": "test_1",
@@ -205,6 +221,8 @@ def test_build_adhoc_payload_premium_x_account():
     assert "Premium" in payload["description"]
     assert "xHandle" in json.dumps(payload["requirements"])
     assert "relevanceScore" in json.dumps(payload["deliverable"])
+    assert payload["requirements"].get("examples")
+    assert payload["deliverable"].get("examples")
 
 
 def test_wants_acp_offering_create():
@@ -218,6 +236,12 @@ def test_parse_delete_workflow_name():
     assert acp_offering_skill.parse_delete_workflow_name("delete offering test_1") == "test_1"
     assert acp_offering_skill.parse_delete_workflow_name("supprime workflow veille_zhc_x1 sur acp") == "veille_zhc_x1"
     assert acp_offering_skill.parse_delete_workflow_name("acp status") is None
+
+
+def test_wants_acp_offering_delete_all():
+    assert acp_offering_skill.wants_acp_offering_delete_all("supprime tous les workflow sur acp")
+    assert acp_offering_skill.wants_acp_offering_delete_all("delete all acp offerings")
+    assert not acp_offering_skill.wants_acp_offering_delete_all("supprime le workflow test_1")
 
 
 def test_wants_acp_marketplace_delete_without_acp_keyword():
@@ -242,6 +266,33 @@ async def test_acp_offering_delete(monkeypatch):
     assert data.get("offering_id") == "oid-del"
     assert "test_1" in reply
     assert "supprimé" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_acp_offering_delete_all(monkeypatch):
+    monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
+    monkeypatch.setattr(
+        acp_offering_skill,
+        "list_offerings",
+        lambda: (
+            [
+                {"id": "a1", "name": "test_1"},
+                {"id": "a2", "name": "veille_zhc_x1"},
+            ],
+            None,
+        ),
+    )
+    deleted: list[str] = []
+
+    def fake_delete(offering_id, **kwargs):
+        deleted.append(offering_id)
+        return offering_id in ("a1", "a2"), "ok"
+
+    monkeypatch.setattr(acp_offering_skill, "delete_offering", fake_delete)
+    reply, data = await execute_acp_marketplace("supprime tous les workflow sur acp", lang="fr")
+    assert data.get("acp") == "offering_delete_all"
+    assert set(deleted) == {"a1", "a2"}
+    assert "2 supprimé" in reply
 
 
 @pytest.mark.asyncio

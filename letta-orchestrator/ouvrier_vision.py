@@ -15,7 +15,7 @@ from ouvrier_trace import trace, trace_block
 
 IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 _PATH_RE = re.compile(
-    r'(?i)(?:[A-Za-z]:)?(?:\\|/)[^\s"\'<>|]+\.(?:png|jpe?g|webp|gif|bmp)'
+    r'(?i)(?:[A-Za-z]:)(?:\\|/)[^\s"\'<>|]+\.(?:png|jpe?g|webp|gif|bmp)'
 )
 _IMAGE_REF_RE = re.compile(
     r"(?i)\b(?:"
