@@ -2,8 +2,12 @@ import json
 from datetime import datetime, timezone
 
 from aria_core.llm_usage import (
+    format_paid_usage_dashboard,
+    is_paid_provider,
     parse_usage_from_response,
+    paid_usage_snapshot,
     record_llm_usage,
+    summarize_paid_usage,
     summarize_usage,
 )
 from aria_core.testing import configure_test_runtime
@@ -49,3 +53,31 @@ def test_record_and_summarize_usage(tmp_path):
     assert log.is_file()
     row = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
     assert row["provider"] == "grok"
+
+
+def test_paid_usage_excludes_ollama(tmp_path):
+    configure_test_runtime(data_dir=tmp_path)
+    record_llm_usage(
+        provider="grok",
+        model="grok-4.3",
+        input_tokens=1000,
+        output_tokens=200,
+        at=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
+    )
+    record_llm_usage(
+        provider="ollama",
+        model="qwen2.5:14b",
+        input_tokens=5000,
+        output_tokens=500,
+        at=datetime(2026, 7, 3, 12, 5, tzinfo=timezone.utc),
+    )
+    paid = summarize_paid_usage(month="2026-07")
+    assert paid["totals"]["total_tokens"] == 1200
+    assert is_paid_provider("grok")
+    assert not is_paid_provider("ollama")
+    snap = paid_usage_snapshot(month="2026-07")
+    assert snap["month_total_tokens"] == 1200
+    assert snap["lifetime_total_tokens"] == 1200
+    dash = format_paid_usage_dashboard(month="2026-07")
+    assert "payant 2026-07" in dash
+    assert "total:" in dash
