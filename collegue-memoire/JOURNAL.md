@@ -1,4 +1,4 @@
-﻿# Journal de bord Aria
+# Journal de bord Aria
 
 > Actions techniques de l'assistant (fichiers, repos, commits).  
 > Décisions métier → `COLLEGUE.md` § Journal.
@@ -364,3 +364,7 @@
 21h26 — feat response_cost footer gratuit/payant + tokens
 21h38 — feat mode debranchement Grok coding KART (ouvrier_coding_mode + skip cerveau)
 21h45 — feat compteur tokens payants dashboard KART + ouvrier record usage
+21h47 — fix Get-AriaKartPaidTokens python sans aria_core import
+21h49 — fix profil PS hook ARIA avant dash compteur tokens
+21h54 — fix routage ACP question conversationnelle revenus (acp_client_skill)
+21h57 — coupe notifs Telegram repertoire_grow + entrepreneur_cultivate heartbeat

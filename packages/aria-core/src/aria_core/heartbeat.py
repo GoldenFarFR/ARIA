@@ -298,9 +298,6 @@ class AriaHeartbeat:
             summary, data = await execute_develop_repertoire(lang="en")
             suggestions = data.get("suggestions", [])
             append_memory("heartbeat", f"[repertoire_grow] {suggestions[:1]}")
-            await self._notify_telegram(
-                f"📁 Repertoire\n{suggestions[0] if suggestions else 'No suggestions'}"
-            )
 
         elif task_id == "entrepreneur_cultivate":
             from aria_core.skills.entrepreneur_skill import execute_entrepreneur
@@ -309,11 +306,6 @@ class AriaHeartbeat:
             summary, data = await execute_entrepreneur("cultivation cycle", lang="en")
             prog = progress_summary("en")
             append_memory("entrepreneur", f"[heartbeat] {prog}")
-            if not data.get("progress", {}).get("on_track"):
-                await self._notify_telegram(
-                    f"🎯 Entrepreneur cultivation\n{prog}\n\n"
-                    f"Next: ship first paid app v0 (Kelly — web or Play Store)."
-                )
 
         elif task_id == "launchpad_watch":
             from aria_core.knowledge.seed import seed_launchpad_knowledge, seed_zhc_identity_knowledge
