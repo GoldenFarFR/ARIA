@@ -184,6 +184,7 @@ function Invoke-AriaBrain {
 }
 
 $script:AriaOuvrierOrchestrate = Join-Path $script:AriaLettaDir "orchestrate-ouvrier.ps1"
+$script:AriaUnifiedOrchestrate = Join-Path $script:AriaLettaDir "orchestrate-unified.ps1"
 $script:AriaOuvrierConfig = Join-Path $script:AriaLettaDir "ouvrier_config.json"
 
 function Test-AriaOuvrierReady {
@@ -213,6 +214,31 @@ function Invoke-AriaOuvrier {
     & $script:AriaOuvrierOrchestrate @ouvrierParams
 }
 
+function Test-AriaUnifiedReady {
+    return (Test-Path $script:AriaUnifiedOrchestrate) -and (Test-Path $script:AriaOuvrierConfig)
+}
+
+function Invoke-AriaUnified {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [string]$Message
+    )
+    if (-not (Test-Path $script:AriaUnifiedOrchestrate)) {
+        Write-Host "ARIA unifiee absente — fallback ouvrier" -ForegroundColor Yellow
+        Invoke-AriaOuvrier -Message $Message
+        return
+    }
+    if (-not (Test-Path $script:AriaOuvrierConfig)) {
+        Write-Host "ouvrier_config.json absent — .\setup-ouvrier.ps1" -ForegroundColor Red
+        return
+    }
+    Import-AriaVaultEnv
+    $params = @{ Message = $Message }
+    if ($env:ARIA_OUVRIER_VERBOSE -eq "1") { $params.ShowTrace = $true }
+    & $script:AriaUnifiedOrchestrate @params
+}
+
 function Invoke-AriaKartDefault {
     param(
         [Parameter(Mandatory)][string]$Message,
@@ -222,13 +248,24 @@ function Invoke-AriaKartDefault {
         "GROK" { Invoke-Grok -Prompt $Message; return }
         "GROQ" { Invoke-Groq -Prompt $Message; return }
         "CHAT" { Invoke-Ollama -Prompt $Message; return }
-        default {
+        "OUVRIER" {
             if (Test-AriaOuvrierReady) {
                 Invoke-AriaOuvrier -Message $Message
             } else {
-                Write-Host "Ouvrier non configure — fallback cerveau (lance setup-ouvrier.ps1)" -ForegroundColor Yellow
                 Invoke-AriaBrain -Message $Message
             }
+            return
+        }
+        default {
+            if (Test-AriaUnifiedReady) {
+                Invoke-AriaUnified -Message $Message
+            } elseif (Test-AriaOuvrierReady) {
+                Invoke-AriaOuvrier -Message $Message
+            } else {
+                Write-Host "ARIA non configure — lance setup-ouvrier.ps1" -ForegroundColor Yellow
+                Invoke-AriaBrain -Message $Message
+            }
+            return
         }
     }
 }
@@ -312,4 +349,4 @@ function Invoke-AriaAgent {
 }
 
 Import-AriaVaultEnv
-Write-Host "ARIA shell v2.8 — Ouvrier direct + trace /verbose | /cerveau = aria-core" -ForegroundColor DarkCyan
+Write-Host "ARIA shell v3.0 — Unifiee (cerveau+ouvrier+ACP) | /ouvrier = legacy | /cerveau = brain seul" -ForegroundColor DarkCyan

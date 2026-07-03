@@ -25,6 +25,10 @@ from aria_core.skills.acp_product_launch_skill import (
     execute_product_launch,
     wants_acp_product_launch,
 )
+from aria_core.skills.acp_client_actions import (
+    execute_acp_client_action,
+    wants_acp_client_action,
+)
 from aria_core.skills.acp_provider_skill import default_events_file, run_provider_cycle
 
 _ACP_RE = re.compile(
@@ -43,6 +47,8 @@ _REVENUE_RE = re.compile(r"revenu|revenue|générer|generer|monétis|monetis|pla
 
 def wants_acp_marketplace(message: str) -> bool:
     text = (message or "").strip()
+    if wants_acp_client_action(text):
+        return True
     if wants_acp_offering_delete(text):
         return True
     if wants_adhoc_acp_workflow(text):
@@ -187,6 +193,9 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
     if _REVENUE_RE.search(text):
         return await _format_revenue_plan(lang_key)
 
+    if wants_acp_client_action(text):
+        return await execute_acp_client_action(text, lang_key)
+
     if wants_acp_product_launch(text):
         return await execute_product_launch(text, lang_key)
 
@@ -212,7 +221,13 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
             "• templates offres acp — workflows disponibles\n"
             "• créer offre acp template <nom> — publier sur marketplace\n"
             "• lancer produit acp template <nom> et publier sur X — produit + promo\n"
-            "• supprime le workflow <nom> — retirer une offre du marketplace\n\n"
+            "• réparer offres acp — upgrade premium (schémas + exemples dashboard)\n"
+            "• supprime tous les workflows sur acp — vider le marketplace\n"
+            "• supprime le workflow <nom> — retirer une offre\n"
+            "• créer job acp offre <nom> — acheter un service\n"
+            "• financer / approuver / rejeter job acp <id>\n"
+            "• trade acp swap 10 USDC contre ETH — acp trade\n"
+            "• négocier abonnement acp — aria_full_access\n\n"
             "Lance : vanguard\\operator\\start-acp-local.ps1",
             {"acp": "help"},
         )

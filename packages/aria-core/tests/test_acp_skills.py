@@ -114,6 +114,14 @@ def test_build_offering_payload():
     assert payload.get("subscription_ids") == "019f0664-640c-7cdc-807a-b09547461ad7"
 
 
+def test_wants_acp_client_action():
+    from aria_core.skills.acp_client_actions import wants_acp_client_action
+
+    assert wants_acp_client_action("financer job acp 12345")
+    assert wants_acp_client_action("trade acp swap 10 USDC contre ETH")
+    assert not wants_acp_client_action("bonjour")
+
+
 def test_resolve_subscription_ids_env_override(monkeypatch):
     monkeypatch.setenv("ARIA_ACP_SUBSCRIPTION_IDS", "sub-test-uuid")
     assert acp_offering_skill.resolve_subscription_ids() == "sub-test-uuid"
