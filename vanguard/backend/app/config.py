@@ -96,11 +96,11 @@ class Settings(BaseSettings):
     image_api_model: str = "grok-imagine-image"  # 0.02$/img — quality = 0.05$/img
     aria_operator_tz: str = "Europe/Paris"  # GMT+2 — planification tweets (/x compose)
     aria_avatar_style_enabled: bool = True  # rafraîchissement style Grok Imagine 7/14j
-    aria_avatar_style_interval_days: int = 7  # 7 ou 14
+    aria_avatar_style_interval_days: int = 14  # minimum 14 jours
     aria_visual_auto_apply: bool = True  # Imagine → avatar sans validation manuelle
     aria_banner_auto_refresh: bool = True  # bannière X 3:1 après changement avatar
     aria_image_style_use_llm: bool = False  # presets locaux = 0 token Groq
-    aria_visual_autonomy_interval_minutes: int = 1440  # vérif quotidienne, style 7j
+    aria_visual_autonomy_interval_minutes: int = 1440  # vérif quotidienne, style 14j
     ollama_base_url: str = "http://127.0.0.1:11434"
     aria_ollama_num_ctx: int = 8192
 

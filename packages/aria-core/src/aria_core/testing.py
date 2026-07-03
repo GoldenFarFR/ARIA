@@ -88,7 +88,7 @@ class AriaRuntimeSettings(BaseSettings):
     aria_epistemic_critic: bool = True
     aria_operator_tz: str = "Europe/Paris"
     aria_avatar_style_enabled: bool = True
-    aria_avatar_style_interval_days: int = 7
+    aria_avatar_style_interval_days: int = 14
     aria_visual_auto_apply: bool = True
     aria_banner_auto_refresh: bool = True
     aria_image_style_use_llm: bool = False

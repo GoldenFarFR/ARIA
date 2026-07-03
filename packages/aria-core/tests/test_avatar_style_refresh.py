@@ -71,8 +71,8 @@ async def test_generate_and_apply_pending(monkeypatch):
 
 
 def test_interval_config_and_due():
-    st = update_config(enabled=True, interval_days=7)
-    assert st["interval_days"] == 7
+    st = update_config(enabled=True, interval_days=14)
+    assert st["interval_days"] == 14
     with pytest.raises(ValueError):
         update_config(interval_days=10)
 

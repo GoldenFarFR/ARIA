@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 STATE_NAME = "style_refresh.json"
 PENDING_PREVIEW = "style_pending.jpg"
-ALLOWED_INTERVALS = (7, 14)
+ALLOWED_INTERVALS = (14,)
 
 # Presets locaux — 0 token Groq avant chaque Imagine
 STYLE_PRESETS = (
@@ -132,7 +132,7 @@ def update_config(
         state["enabled"] = enabled
     if interval_days is not None:
         if interval_days not in ALLOWED_INTERVALS:
-            raise ValueError(f"interval_days doit être 7 ou 14 (reçu {interval_days})")
+            raise ValueError(f"interval_days doit être 14 (reçu {interval_days})")
         state["interval_days"] = interval_days
     _save_state(state)
     return get_refresh_status()

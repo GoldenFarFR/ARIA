@@ -112,14 +112,14 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="avatar_style_refresh",
         name="Avatar style refresh",
-        description="Grok Imagine — nouveau style depuis l'ancre (7/14 jours, validation opérateur)",
+        description="Grok Imagine — nouveau style depuis l'ancre (14 jours min, validation opérateur)",
         interval_minutes=720,
         enabled=True,
     ),
     HeartbeatTask(
         id="visual_autonomy",
         name="Visual identity autonomy",
-        description="Ancre opérateur → Imagine avatar + bannière X (vérif 24h, style 7j)",
+        description="Ancre opérateur → Imagine avatar + bannière X (vérif 24h, style 14j)",
         interval_minutes=1440,
         enabled=True,
     ),

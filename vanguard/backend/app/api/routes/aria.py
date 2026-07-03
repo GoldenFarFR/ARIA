@@ -369,7 +369,7 @@ async def apply_avatar(request: Request):
 
 class AvatarStyleConfigRequest(BaseModel):
     enabled: bool | None = None
-    interval_days: int | None = Field(default=None, description="7 ou 14 jours")
+    interval_days: int | None = Field(default=None, description="14 jours (minimum)")
 
 
 class AvatarStyleGenerateRequest(BaseModel):
