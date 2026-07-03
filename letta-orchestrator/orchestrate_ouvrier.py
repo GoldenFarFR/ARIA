@@ -96,7 +96,10 @@ def preflight_telegram_notifications(message: str) -> str:
         "Sources code: packages/aria-core/src/aria_core/proactive.py (founder_ping), "
         "heartbeat.py (founder_ping, portfolio_scan), aria_worker_queue.py, capability_gap.py"
     )
-    actions.append("Prod Render: redeploy manuel après changement production.env")
+    actions.append(
+        "Prod Render : sync env seulement (pas de commit Git) — "
+        r"vanguard\operator\sync-render.ps1 -SkipRedeploy ou deploy-render.ps1 -EnvOnly"
+    )
     actions.append(_verify_env_key("ARIA_PROACTIVE_IDEAS"))
     return "PRÉ-TRAITEMENT NOTIFS TELEGRAM (déjà exécuté — confirme à Sylvain, ne redemande pas):\n" + "\n".join(
         f"• {a}" if not a.startswith("PREUVE") else a for a in actions
@@ -118,7 +121,10 @@ def preflight_telegram_activate(message: str) -> str:
         if path.parent.is_dir():
             actions.append(_patch_env_file(path, "ARIA_PROACTIVE_IDEAS", "true"))
     actions.append("Clé SSOT : ARIA_PROACTIVE_IDEAS (pas ARIA_TELEGRAM_NOTIFICATIONS)")
-    actions.append("Prod Render : redeploy manuel pour appliquer production.env")
+    actions.append(
+        "Prod Render : sync env seulement (pas de commit Git) — "
+        r"vanguard\operator\sync-render.ps1 -SkipRedeploy ou deploy-render.ps1 -EnvOnly"
+    )
     actions.append(_verify_env_key("ARIA_PROACTIVE_IDEAS"))
     return "PRÉ-TRAITEMENT ACTIVATION NOTIFS (déjà exécuté):\n" + "\n".join(
         f"• {a}" if not a.startswith("PREUVE") else a for a in actions
@@ -157,7 +163,7 @@ def preflight_notification_status(message: str) -> str:
             "• aria_worker_queue / capability_gap : notify_admin sur tâches worker (prod)",
             "• portfolio_scan heartbeat : notif si items portfolio > 0",
             "",
-            "Pour couper le spam proactive : ARIA_PROACTIVE_IDEAS=false (local + production) + redeploy Render.",
+            "Local : effet si backend local tourne. Prod : sync-render (env), pas commit Git.",
             "",
             _verify_env_key("ARIA_PROACTIVE_IDEAS"),
         ]
@@ -272,11 +278,11 @@ def main() -> None:
             if is_verbose():
                 print(summary)
                 if tag in ("mute", "enable"):
-                    print("Détails : trace [preflight] ci-dessus. Redeploy Render pour la prod.")
+                    print("Détails : trace [preflight] ci-dessus. Prod : sync-render.ps1 (env), pas commit.")
             elif tag == "mute":
-                print(f"{summary}\n\n{direct}\n\nRedeploy Render (production.env).")
+                print(f"{summary}\n\n{direct}\n\nProd : .\\sync-render.ps1 -SkipRedeploy (pas de commit).")
             elif tag == "enable":
-                print(f"{summary}\n\n{direct}\n\nRedeploy Render pour la prod.")
+                print(f"{summary}\n\n{direct}\n\nProd : .\\sync-render.ps1 -SkipRedeploy (pas de commit).")
             else:
                 print(direct)
             return
