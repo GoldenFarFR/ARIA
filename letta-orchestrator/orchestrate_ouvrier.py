@@ -58,6 +58,26 @@ def _patch_env_file(path: Path, key: str, value: str) -> str:
     return f"{path.name}: {key}={value} ({action})"
 
 
+def _verify_env_key(key: str) -> str:
+    """Preuve disque — relit le vault après patch (pas de confiance aveugle)."""
+    lines = ["PREUVE (lecture disque vault) :"]
+    for name in ("local.env", "production.env"):
+        path = _VAULT_DIR / name
+        if not path.is_file():
+            lines.append(f"  ✗ {name} — fichier absent")
+            continue
+        found = ""
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if raw.strip().startswith(f"{key}="):
+                found = raw.strip()
+                break
+        if found:
+            lines.append(f"  ✓ {path} → {found}")
+        else:
+            lines.append(f"  ✗ {name} — {key} absent")
+    return "\n".join(lines)
+
+
 def preflight_telegram_notifications(message: str) -> str:
     action = r"(?:supprim|couper|désactiv|desactiv|éteind|eteind|arrêt|arret|stop|moins|trop|spam)"
     if not re.search(
@@ -77,8 +97,9 @@ def preflight_telegram_notifications(message: str) -> str:
         "heartbeat.py (founder_ping, portfolio_scan), aria_worker_queue.py, capability_gap.py"
     )
     actions.append("Prod Render: redeploy manuel après changement production.env")
+    actions.append(_verify_env_key("ARIA_PROACTIVE_IDEAS"))
     return "PRÉ-TRAITEMENT NOTIFS TELEGRAM (déjà exécuté — confirme à Sylvain, ne redemande pas):\n" + "\n".join(
-        f"• {a}" for a in actions
+        f"• {a}" if not a.startswith("PREUVE") else a for a in actions
     )
 
 
@@ -98,7 +119,10 @@ def preflight_telegram_activate(message: str) -> str:
             actions.append(_patch_env_file(path, "ARIA_PROACTIVE_IDEAS", "true"))
     actions.append("Clé SSOT : ARIA_PROACTIVE_IDEAS (pas ARIA_TELEGRAM_NOTIFICATIONS)")
     actions.append("Prod Render : redeploy manuel pour appliquer production.env")
-    return "PRÉ-TRAITEMENT ACTIVATION NOTIFS (déjà exécuté):\n" + "\n".join(f"• {a}" for a in actions)
+    actions.append(_verify_env_key("ARIA_PROACTIVE_IDEAS"))
+    return "PRÉ-TRAITEMENT ACTIVATION NOTIFS (déjà exécuté):\n" + "\n".join(
+        f"• {a}" if not a.startswith("PREUVE") else a for a in actions
+    )
 
 
 def _read_vault_kv(key: str) -> str:
@@ -134,9 +158,23 @@ def preflight_notification_status(message: str) -> str:
             "• portfolio_scan heartbeat : notif si items portfolio > 0",
             "",
             "Pour couper le spam proactive : ARIA_PROACTIVE_IDEAS=false (local + production) + redeploy Render.",
+            "",
+            _verify_env_key("ARIA_PROACTIVE_IDEAS"),
         ]
     )
     return "\n".join(lines)
+
+
+def preflight_preuve(message: str) -> str:
+    if not re.search(
+        r"(?i)(preuve|prouve|vérif|verif|confirme|sois?\s+sûr|sur\s+que|sans\s+preuve|lecture\s+disque)",
+        message,
+    ):
+        return ""
+    return _verify_env_key("ARIA_PROACTIVE_IDEAS") + (
+        "\n\nCommande manuelle :\n"
+        f'  Select-String -Path "{_VAULT_DIR}\\*.env" -Pattern ARIA_PROACTIVE_IDEAS'
+    )
 
 
 def preflight_telegram_ping(message: str) -> str:
@@ -210,6 +248,7 @@ def main() -> None:
         )
     trace("pensee", f"Message Sylvain : {args.message[:300]}")
     handlers = (
+        ("preuve", preflight_preuve),
         ("mute", preflight_telegram_notifications),
         ("enable", preflight_telegram_activate),
         ("status", preflight_notification_status),
@@ -227,6 +266,7 @@ def main() -> None:
                 "enable": "C'est fait — notifications proactive Telegram activées (ARIA_PROACTIVE_IDEAS=true).",
                 "status": direct.splitlines()[0] if direct else "État notifications.",
                 "ping": direct.splitlines()[0] if direct else "Ping envoyé.",
+                "preuve": "Preuve vault ci-dessous (lecture disque).",
             }
             summary = summaries.get(tag, direct.splitlines()[0] if direct else "OK")
             if is_verbose():
