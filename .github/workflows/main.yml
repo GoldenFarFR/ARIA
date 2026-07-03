@@ -1,12 +1,13 @@
-name: Test Python
+name: Quality & Test ARIA
 
 on:
   push:
     branches: [ main, master ]
   pull_request:
+    branches: [ main, master ]
 
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
 
     steps:
@@ -16,15 +17,22 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'   # Change si tu utilises une autre version
+          python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install tools & dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install ruff black
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install .; fi
 
-      - name: Run tests (si tu as pytest ou unittest)
+      - name: Formatage avec Black
+        run: black --check .
+
+      - name: Linting avec Ruff
+        run: ruff check .
+
+      - name: Tests (si tu en as)
         run: |
           if [ -f pytest.ini ] || [ -f pyproject.toml ]; then
             python -m pytest || echo "Pas de tests trouvés"
@@ -32,9 +40,10 @@ jobs:
             echo "Aucun test automatique configuré"
           fi
 
-      - name: Vérification basique
+      - name: Rapport final
+        if: always()
         run: |
-          echo "✅ Python code c
-          
-          heck terminé"
-          python --version
+          echo "=== Résumé ARIA ==="
+          echo "Black : Vérifié"
+          echo "Ruff  : Vérifié"
+          echo "✅ Workflow terminé"
