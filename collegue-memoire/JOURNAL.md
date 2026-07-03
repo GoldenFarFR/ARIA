@@ -348,3 +348,4 @@
 18h31 — fix ouvrier ACP direct + delete-all + repair premium YAML
 18h38 — 18h38 — fix KART v2.8.6 vision images ouvrier (groq scout + session last_image_path)
 18h44 — feat ACP schema.examples auto demande/livrable Virtuals
+18h57 — Sprint 1 ouvrier : preflight build_llm_context+arbitre, anti-fallback Ollama, ouvrier_learn

@@ -143,6 +143,41 @@ def update_agent_memory_block(agent_id: str, block_label: str, value: str) -> No
     r.raise_for_status()
 
 
+def is_letta_available() -> bool:
+    try:
+        r = SESSION.get(f"{LETTA_URL}/v1/agents/", timeout=5)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def insert_archival_memory(agent_id: str, text: str) -> list[dict]:
+    """Insère un passage dans la mémoire archival Letta (retry taille si 500 embedding)."""
+    body_text = (text or "").strip()
+    if not body_text:
+        return []
+    last_exc: Exception | None = None
+    for limit in (8000, 2400, 900):
+        chunk = body_text[:limit]
+        try:
+            r = SESSION.post(
+                f"{LETTA_URL}/v1/agents/{agent_id}/archival",
+                json={"text": chunk},
+                timeout=120,
+            )
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, list) else []
+        except Exception as exc:
+            last_exc = exc
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status != 500 and "500" not in str(exc):
+                raise
+    if last_exc:
+        raise last_exc
+    return []
+
+
 def create_ouvrier_agent(
     name: str,
     llm: str,

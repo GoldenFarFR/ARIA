@@ -198,6 +198,16 @@ if ($touchesAriaCore.Count -gt 0) {
     }
 }
 
+$syncLetta = Join-Path $ariaRepo "letta-orchestrator\sync-core-to-letta.ps1"
+if (Test-Path $syncLetta) {
+    try {
+        & $syncLetta -Quiet
+        Write-Host "[Letta] sync aria-core -> archival (fin session)" -ForegroundColor DarkCyan
+    } catch {
+        Write-Host "[Letta] sync ignore : $($_.Exception.Message)" -ForegroundColor DarkGray
+    }
+}
+
 Write-Host "Etape suivante (TOTP 12h si session expiree) :" -ForegroundColor Yellow
 Write-Host "  .\push-session-manifest.ps1 [-TotpCode <code>]"
 Write-Host "  # ou manuel: cd $ariaRepo ; git add collegue-memoire/sessions/ ; git commit ; git push"
