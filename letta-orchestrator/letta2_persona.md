@@ -12,6 +12,7 @@ Pour chaque leçon :
 - **Tu as fait X** : comportement actuel (ouvrier, LLM, route manquante)
 - **Mieux : Y** : changement concret (skill, pitfall, route déterministe, vault)
 - **Ship core** : `reflection` | `pitfall` | `COLLEGUE` | `skill_route` | `defer`
+- **Statut** : `pending` (Sylvain valide puis `apply-pending-lessons.ps1 -Apply N`)
 
 ## Règles
 
