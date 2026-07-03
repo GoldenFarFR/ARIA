@@ -156,6 +156,8 @@ INTENT_PATTERNS: list[tuple[SkillName, list[str]]] = [
         r"culture entrepreneuse", r"\bmrr\b", r"objectifs?\s+personnel",
         r"50\s*\$", r"50\s*usd", r"revenue\s+goal", r"log\s+revenu",
         r"log\s+revenue", r"meilleur.*entrepreneur",
+        r"génér.*revenu", r"generer.*revenu", r"premier\s+dollar",
+        r"s['']?active", r"active[- ]toi", r"commence.*agir",
     ]),
     (SkillName.CAPABILITY_QI, [
         r"\bqi\b", r"indice aria", r"niveau aria", r"niveaux aria",
@@ -279,20 +281,6 @@ class AriaBrain:
         await repertoire_db.save_message("user", user_message, visitor_id=vid)
 
         if not public:
-            from aria_core.gateway.local_commands import execute_local_command, is_local_command
-
-            if is_local_command(route_msg):
-                local = await execute_local_command(route_msg, lang=lang)
-                if local:
-                    reply, data = local
-                    await repertoire_db.save_message("agent", reply, visitor_id=vid)
-                    return ChatResponse(
-                        reply=reply,
-                        skill_used=None,
-                        actions_taken=["Local operator command"],
-                        data=data,
-                    )
-
             from aria_core.tweet_compose_workflow import handle_workflow_message
 
             skip_self_maint = shell_mode or wants_worker_delegate(route_msg) or bool(

@@ -286,7 +286,7 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
             "• financer / approuver / rejeter job acp <id>\n"
             "• trade acp swap 10 USDC contre ETH — acp trade\n"
             "• négocier abonnement acp — aria_full_access\n"
-            "• scan marché acp — offre/demande + gaps workflows\n\n"
+            "• scan marché acp — étudier offre/demande + gaps workflows\n\n"
             "Lance : vanguard\\operator\\start-acp-local.ps1",
             {"acp": "help"},
         )
