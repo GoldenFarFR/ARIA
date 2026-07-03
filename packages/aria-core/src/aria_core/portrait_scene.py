@@ -238,12 +238,13 @@ async def generate_banner_creative(
     brand = (brand_brief or "ARIA ZHC chief AI officer, GoldenFar Zero-Human Company").strip()[:160]
     setting = (scene or "").strip()[:280]
     prompt = (
-        f"Wide cinematic X/Twitter profile header background. Brand mood: {brand}. "
+        f"Wide cinematic X/Twitter profile header background only. Brand mood: {brand}. "
         f"{setting} "
         "Ultra-wide landscape, abstract futuristic fintech aesthetic, deep charcoal and black "
         "with subtle gold and amber light streaks, neural network motifs, holographic market "
         "textures, premium crypto holding atmosphere, editorial quality, "
-        "no people, no faces, no portraits, no human figures, no selfies, "
-        "no profile photo, no text, no logos, no watermarks."
+        "EMPTY SCENE: no people, no faces, no portraits, no human figures, no woman, no man, "
+        "no character, no selfies, no profile photo, no avatar, no uniform, no body, "
+        "no text, no logos, no watermarks, landscape and atmosphere only."
     )
     return await _call_image_generate(prompt=prompt)

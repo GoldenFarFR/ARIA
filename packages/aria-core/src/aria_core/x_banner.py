@@ -76,20 +76,13 @@ def default_banner_scene() -> str:
 
 
 def _banner_brand_brief() -> str:
+    """Brand abstrait uniquement — jamais le brief identite (evite visage sur banniere)."""
     from aria_core.runtime import settings
 
-    try:
-        from aria_core.avatar_identity import get_identity_status
-
-        brief = (get_identity_status().get("brief") or "").strip()
-        if brief:
-            return brief
-    except Exception:
-        pass
     holding = (getattr(settings, "aria_holding_name", "") or "").strip()
     if holding:
-        return f"{holding} — ARIA ZHC autonomous chief AI officer"
-    return "ARIA ZHC chief AI officer, GoldenFar Zero-Human Company holding"
+        return f"{holding} — Zero-Human Company, autonomous AI holding, GoldenFar Vanguard"
+    return "GoldenFar Vanguard ZHC — autonomous crypto holding, dark gold fintech brand"
 
 
 async def generate_x_banner_jpeg() -> bytes | None:

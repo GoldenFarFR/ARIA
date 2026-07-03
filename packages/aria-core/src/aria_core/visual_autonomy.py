@@ -54,7 +54,7 @@ async def refresh_x_banner_autonomous(*, force: bool = False) -> dict[str, Any]:
     path = x_banner_path()
     if force and path.is_file():
         path.unlink(missing_ok=True)
-    generated = await ensure_x_banner_file()
+    generated = await ensure_x_banner_file(force=force)
     if not generated:
         return {"ok": False, "reason": "generate_failed"}
     uploaded = await apply_profile_banner(generated)
@@ -88,18 +88,14 @@ async def run_visual_autonomy_cycle(
     )
     out["avatar"] = avatar
 
+    # Banniere = asset brand separe — pas de regen auto quand l'avatar change (evite visage sur header)
     banner_refresh = (
         bool(getattr(__import__("aria_core.runtime", fromlist=["settings"]).settings, "aria_banner_auto_refresh", True))
         and is_image_generation_available()
-        and (
-            force
-            or avatar.get("applied")
-            or not x_banner_path().is_file()
-            or _banner_stale_vs_avatar()
-        )
+        and (force or not x_banner_path().is_file())
     )
     if banner_refresh:
-        out["banner"] = await refresh_x_banner_autonomous(force=bool(avatar.get("applied")))
+        out["banner"] = await refresh_x_banner_autonomous(force=force)
         if notify and out["banner"].get("uploaded"):
             await _notify_visual_update(out, lang=lang)
 

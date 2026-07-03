@@ -43,4 +43,6 @@ async def test_generate_banner_creative_uses_generations_not_anchor(monkeypatch)
     prompt = calls[0]["json"]["prompt"]
     assert "no people" in prompt.lower()
     assert "no faces" in prompt.lower()
+    assert "no avatar" in prompt.lower()
+    assert "landscape" in prompt.lower()
     assert "GoldenFar ZHC" in prompt
