@@ -312,7 +312,7 @@ def _parse_groq_calibrated(raw: str, lang: str) -> tuple[str | None, dict]:
     if any(p in reponse.lower() for p in unknown_phrases) and p_vrai < THRESHOLD_UNCERTAIN:
         return None, {**meta, "abstain": True}
 
-    header = "Réponse calibrée (Groq)" if lang == "fr" else "Calibrated answer (Groq)"
+    header = "Réponse calibrée (LLM)" if lang == "fr" else "Calibrated answer (LLM)"
     truth_fr = {
         "VRAI": "fait vrai",
         "TRUE": "fait vrai",

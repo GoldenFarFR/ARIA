@@ -66,14 +66,17 @@ async def chat_with_context(
     conversation_history: list[dict[str, str]] | None = None,
     *,
     temperature: float | None = None,
-    max_tokens: int = 1200,
+    max_tokens: int = 400,
+    model: str | None = None,
+    depth: str | None = None,
 ) -> str | None:
     """Appel LLM avec mémoire injectée dans le system prompt."""
     resolved = _resolve_endpoint()
     if not resolved:
         return None
 
-    url, model = resolved
+    url, resolved_model = resolved
+    effective_model = (model or "").strip() or resolved_model
     messages: list[dict[str, str]] = [
         {"role": "system", "content": system_context},
     ]
@@ -100,7 +103,7 @@ async def chat_with_context(
     try:
         timeout = 120.0 if provider == "ollama" else 60.0
         payload: dict[str, Any] = {
-            "model": model,
+            "model": effective_model,
             "messages": messages,
             "temperature": temperature if temperature is not None else settings.aria_llm_temperature,
             "max_tokens": max_tokens,
@@ -130,13 +133,14 @@ async def chat_with_context(
                 logger.warning("LLM error %s: %s", response.status_code, response.text[:300])
                 record_llm_usage(
                     provider=provider,
-                    model=model,
+                    model=effective_model,
                     input_tokens=prompt_est,
                     output_tokens=0,
                     ok=False,
                     status_code=response.status_code,
                     kind="chat",
                     estimated=True,
+                    depth=depth,
                 )
                 return None
             data: dict[str, Any] = response.json()
@@ -151,12 +155,13 @@ async def chat_with_context(
                 }
             record_llm_usage(
                 provider=provider,
-                model=model,
+                model=effective_model,
                 input_tokens=usage["input_tokens"],
                 output_tokens=usage["output_tokens"],
                 ok=True,
                 kind="chat",
                 estimated=estimated,
+                depth=depth,
             )
             return reply
     except Exception as exc:
