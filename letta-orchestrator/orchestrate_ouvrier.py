@@ -195,31 +195,59 @@ def preflight_preuve(message: str) -> str:
         message,
     ):
         return ""
+    # Preuve Telegram live → handler ping (évite lecture disque seule)
+    if re.search(r"(?i)telegram|bot", message) and re.search(
+        r"(?i)ping|envoi|message|vraiment|joignable",
+        message,
+    ):
+        return ""
     return _verify_env_key("ARIA_PROACTIVE_IDEAS") + (
+        "\n\nPour preuve Telegram : « ping telegram » ou « preuve qui ping le bot »."
         "\n\nCommande manuelle :\n"
         f'  Select-String -Path "{_VAULT_DIR}\\local.env" -Pattern ARIA_PROACTIVE_IDEAS'
     )
 
 
 def preflight_telegram_ping(message: str) -> str:
-    if not re.search(r"(?i)ping|confirmation|confirme", message):
+    wants_ping = bool(re.search(r"(?i)ping|confirmation|confirme|envoi|message", message))
+    wants_preuve_tg = bool(
+        re.search(r"(?i)preuve|prouve", message) and re.search(r"(?i)telegram|bot", message)
+    )
+    if not wants_ping and not wants_preuve_tg:
         return ""
-    if not re.search(r"(?i)telegram|bot|aria", message) and "ping" not in message.lower():
+    if not wants_preuve_tg and not re.search(r"(?i)telegram|bot|aria", message) and "ping" not in message.lower():
         return ""
     bridge_api_keys()
     token = _read_vault_kv("TELEGRAM_BOT_TOKEN")
     admin = _read_vault_kv("TELEGRAM_ADMIN_IDS") or _read_vault_kv("TELEGRAM_GROUP_ID")
     if not token or not admin:
         return "ERREUR: TELEGRAM_BOT_TOKEN ou TELEGRAM_ADMIN_IDS absent du vault."
-    text = "✅ Ping confirmation ARIA-Ouvrier — connexion Telegram OK."
+    proactive = _read_vault_kv("ARIA_PROACTIVE_IDEAS") or "(absent)"
+    if proactive.lower() == "false":
+        notif_line = "notifs proactive OFF (ARIA_PROACTIVE_IDEAS=false)"
+    elif proactive.lower() == "true":
+        notif_line = "notifs proactive ON (ARIA_PROACTIVE_IDEAS=true)"
+    else:
+        notif_line = f"ARIA_PROACTIVE_IDEAS={proactive}"
+    text = (
+        "✅ Ping ARIA-Ouvrier — bot Telegram joignable.\n"
+        f"État vault : {notif_line}."
+    )
+    chat_id = int(admin.split(",")[0].strip())
     r = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": int(admin.split(",")[0].strip()), "text": text},
+        json={"chat_id": chat_id, "text": text},
         timeout=30,
     )
     if r.status_code != 200:
         return f"ERREUR Telegram API {r.status_code}: {r.text[:300]}"
-    return f"Ping envoyé sur Telegram (chat {admin.split(',')[0].strip()}).\n{text}"
+    lines = [
+        f"Ping envoyé sur Telegram (chat {chat_id}).",
+        text,
+        "",
+        _verify_env_key("ARIA_PROACTIVE_IDEAS"),
+    ]
+    return "\n".join(lines)
 
 
 def _pending_worker_count() -> int:
@@ -272,11 +300,11 @@ def main() -> None:
         )
     trace("pensee", f"Message Sylvain : {args.message[:300]}")
     handlers = (
-        ("preuve", preflight_preuve),
         ("mute", preflight_telegram_notifications),
         ("enable", preflight_telegram_activate),
         ("status", preflight_notification_status),
         ("ping", preflight_telegram_ping),
+        ("preuve", preflight_preuve),
     )
     for tag, handler in handlers:
         with StepTimer(f"preflight {tag}"):
@@ -289,7 +317,7 @@ def main() -> None:
                 "mute": "C'est fait — notifications proactive Telegram coupées (ARIA_PROACTIVE_IDEAS=false).",
                 "enable": "C'est fait — notifications proactive Telegram activées (ARIA_PROACTIVE_IDEAS=true).",
                 "status": direct.splitlines()[0] if direct else "État notifications.",
-                "ping": direct.splitlines()[0] if direct else "Ping envoyé.",
+                "ping": "Ping Telegram envoyé — vérifie ton chat ARIA.",
                 "preuve": "Preuve vault ci-dessous (lecture disque).",
             }
             summary = summaries.get(tag, direct.splitlines()[0] if direct else "OK")
