@@ -204,10 +204,22 @@ def is_factual_question(message: str) -> bool:
     return bool(_QUESTION_RE.search(message.strip()))
 
 
+_SHORT_ACK_RE = re.compile(
+    r"^ok\.?\s*(pr[eé]vu|dac|d'accord|go|merci)?\.?$",
+    re.IGNORECASE,
+)
+
+
+def is_short_ack(message: str) -> bool:
+    return bool(_SHORT_ACK_RE.match((message or "").strip()))
+
+
 def is_general_qa(message: str) -> bool:
     """Question ou demande d'info — route vers Groq calibré (pas YAML monde)."""
     text = message.strip()
     if len(text) < 8:
+        return False
+    if is_short_ack(text):
         return False
     if is_greeting(text) or is_help_request(text) or is_social_chitchat(text):
         return False
