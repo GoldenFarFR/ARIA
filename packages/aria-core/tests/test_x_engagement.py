@@ -26,8 +26,9 @@ def test_mentions_reply_enabled_without_learn(test_settings):
     assert mod.mentions_reply_enabled() is True
 
 
+@pytest.mark.asyncio
 async def test_mentions_cycle_disabled_without_oauth(monkeypatch):
-    monkeypatch.setattr("aria_core.gateway.x_twitter.is_x_post_configured", lambda: False)
+    monkeypatch.setattr("aria_core.gateway.x_engagement.is_x_post_configured", lambda: False)
     result = await x_engagement.run_mentions_learn_cycle()
     assert result["status"] == "disabled"
 

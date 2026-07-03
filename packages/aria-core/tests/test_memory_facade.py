@@ -28,7 +28,11 @@ def test_facade_append_alias(tmp_path, monkeypatch):
     assert count_memory_entries() >= 1
 
 
-def test_vector_disabled_by_default():
+def test_vector_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("ARIA_VECTOR_MEMORY", raising=False)
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "aria_vector_memory", False)
     assert is_vector_enabled() is False
     status = vector_store_status()
     assert status["enabled"] is False
@@ -44,9 +48,8 @@ async def test_vector_store_noop_when_disabled():
 
 def test_vector_flag_opt_in(monkeypatch):
     from aria_core.memory.vector.chroma_client import chromadb_installed, reset_client_cache
-    from aria_core.runtime import get_settings
+    from aria_core.runtime import settings
 
-    settings = get_settings()
     monkeypatch.setattr(settings, "aria_vector_memory", True)
     reset_client_cache()
     assert is_vector_enabled() is True
