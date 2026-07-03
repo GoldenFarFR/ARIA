@@ -198,6 +198,17 @@ def _pending_worker_count() -> int:
     return WORKER_PATH.read_text(encoding="utf-8").count("[pending]")
 
 
+def _needs_bootstrap(message: str) -> bool:
+    if os.environ.get("ARIA_OUVRIER_BOOTSTRAP", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return bool(
+        re.search(
+            r"(?i)worker|pending|handoff|download|inbox|aria-worker|file d'attente|triage",
+            message,
+        )
+    )
+
+
 def bootstrap(user_message: str, preflight_block: str) -> str:
     with StepTimer("session-handoff.ps1"):
         handoff = _run_ps(ARIA_REPO_ROOT / "local-sync" / "scripts" / "session-handoff.ps1")
@@ -275,8 +286,11 @@ def main() -> None:
                 print(attach_proof(direct, ""))
             return
 
-    preflight_block = "(aucun pré-traitement automatique)"
-    prompt = bootstrap(args.message, preflight_block)
+    if _needs_bootstrap(args.message):
+        preflight_block = "(aucun pré-traitement automatique)"
+        prompt = bootstrap(args.message, preflight_block)
+    else:
+        prompt = args.message
     engine = provider_label()
     print(f"--- ARIA-OUVRIER ({engine}) ---", file=sys.stderr)
     try:

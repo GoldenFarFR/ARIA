@@ -1,4 +1,4 @@
-# Journal de bord Aria
+﻿# Journal de bord Aria
 
 > Actions techniques de l'assistant (fichiers, repos, commits).  
 > Décisions métier → `COLLEGUE.md` § Journal.
@@ -328,3 +328,9 @@
 15h30 — regle build-local auto apres modif code (deploy Render manuel)
 15h37 — Letta ARIA-Ouvrier agent + 8 outils copie conforme
 15h41 — Letta ouvrier intention naturelle + confirmation si doute
+16h55 — push boot auto ARIA local fe3739f
+17h00 — suspend aria-api Render (runtime local PC)
+17h04 — fix ouvrier preflight ping Telegram (preuve live)
+17h09 — feat ouvrier preuve systematique vault+runtime (ouvrier_proof.py)
+17h40 — feat aria-core ACP offering workflows (templates YAML, create/update CLI, tests 17/17)
+17h47 — fix KART v2.8.1 trace silencieuse + bootstrap skip + condense quote tweet feedback

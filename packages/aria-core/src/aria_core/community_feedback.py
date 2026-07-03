@@ -342,6 +342,59 @@ def _short_excerpt(text: str, max_len: int = 72) -> str:
     return clean[: max_len - 1].rstrip() + "…"
 
 
+def _condense_quote_sync(text: str, max_weight: int) -> str:
+    """Réduit un avis long pour X — phrases complètes avant troncature aveugle."""
+    clean = re.sub(r"\s+", " ", (text or "").strip())
+    if not clean:
+        return ""
+    if weighted_tweet_length(clean) <= max_weight:
+        return clean
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?…])\s+", clean) if s.strip()]
+    if len(sentences) > 1:
+        acc = sentences[0]
+        for sentence in sentences[1:]:
+            trial = f"{acc} {sentence}"
+            if weighted_tweet_length(trial) <= max_weight:
+                acc = trial
+            else:
+                break
+        if weighted_tweet_length(acc) <= max_weight and len(acc) >= 16:
+            return acc
+
+    if weighted_tweet_length(clean) > max_weight + 24:
+        excerpt = _short_excerpt(clean, max_len=min(120, max_weight))
+        if weighted_tweet_length(excerpt) <= max_weight:
+            return excerpt
+
+    return fit_x_tweet(clean, max_chars=max_weight)
+
+
+async def _llm_summarize_quote_for_x(text: str, max_weight: int) -> str | None:
+    """Résumé LLM quand l'avis site (≤500 chars) dépasse le budget citation tweet."""
+    from aria_core.llm import chat_with_context, is_llm_configured
+
+    if not is_llm_configured():
+        return None
+    budget_chars = min(130, max(60, max_weight - 10))
+    system = (
+        f"Summarize this Vanguard site community feedback in ONE complete English sentence "
+        f"(max {budget_chars} characters).\n"
+        "Keep the author's main praise or request. No quotes, no @mentions, no ellipsis.\n"
+        "Output ONLY the summary sentence."
+    )
+    try:
+        out = await chat_with_context(text[:600], system, max_tokens=120, temperature=0.15)
+        line = (out or "").strip().strip('"').strip("'")
+        if line and len(line) >= 12 and weighted_tweet_length(line) <= max_weight:
+            return line
+        if line:
+            return _condense_quote_sync(line, max_weight)
+    except Exception as exc:
+        logger.warning("feedback quote summarize failed: %s", exc)
+    return None
+
+
 _FR_SURFACE_RE = re.compile(
     r"\b(?:salut|bonjour|merci|bravo|joli|jolie|beau|belle|génial|genial|"
     r"ajouter|améliorer|ameliorer|communaut|filiale|pourquoi|comment)\b|"
@@ -452,10 +505,7 @@ async def translate_to_english_for_x(text: str) -> tuple[str, bool]:
 
 
 def _truncate_quote(text: str, max_weight: int) -> str:
-    clean = re.sub(r"\s+", " ", (text or "").strip())
-    if weighted_tweet_length(clean) <= max_weight:
-        return clean
-    return fit_x_tweet(clean, max_chars=max_weight)
+    return _condense_quote_sync(text, max_weight)
 
 
 def _x_queue_path() -> Path:
@@ -560,8 +610,13 @@ async def _polish_merged_quotes(texts: list[str]) -> list[str]:
     out: list[str] = []
     for raw in texts:
         quote, _tr = await prepare_feedback_quote_for_x(raw)
-        if quote.strip():
-            out.append(quote.strip())
+        q = quote.strip()
+        if not q:
+            continue
+        if weighted_tweet_length(q) > FEEDBACK_X_QUOTE_MAX_WEIGHT:
+            summarized = await _llm_summarize_quote_for_x(q, FEEDBACK_X_QUOTE_MAX_WEIGHT)
+            q = summarized or _condense_quote_sync(q, FEEDBACK_X_QUOTE_MAX_WEIGHT)
+        out.append(q)
     return out
 
 
@@ -662,7 +717,10 @@ def build_feedback_thanks_tweet(
     personal: str = "",
 ) -> str:
     """Tweet commu — citation fidèle de l'avis + réponse ARIA ciblée."""
-    quote_full = re.sub(r"\s+", " ", (text or "").strip())
+    quote_full = _condense_quote_sync(
+        re.sub(r"\s+", " ", (text or "").strip()),
+        FEEDBACK_X_QUOTE_MAX_WEIGHT,
+    )
     personal = re.sub(r"\s+", " ", (personal or "").strip())
     h = (handle or "").strip().lstrip("@")
     header = f"@{h} · Vanguard site" if h else "Vanguard site feedback"

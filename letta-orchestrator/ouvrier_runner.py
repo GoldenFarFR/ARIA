@@ -237,7 +237,8 @@ def run_ouvrier_ollama_react(user_prompt: str) -> str:
         "ACTION: nom_outil\n"
         'ARGS: {"cle": "valeur"}\n\n'
         "Quand c'est fini :\n"
-        "FINAL: réponse courte à Sylvain en français.\n"
+        "FINAL: réponse courte à Sylvain en français avec le RÉSULTAT (pas un plan).\n"
+        "Si la demande implique du code ou un fichier : au moins un ACTION read/write avant FINAL.\n"
         "Ne demande pas à Sylvain de lancer des commandes."
     )
     messages: list[dict[str, str]] = [

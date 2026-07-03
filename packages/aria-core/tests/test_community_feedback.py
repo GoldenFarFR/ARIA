@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from aria_core.community_feedback import (
@@ -77,6 +79,21 @@ def test_build_feedback_thanks_tweet_quotes_exact_feedback():
     assert tweet.startswith("@goldenfarfr · Vanguard site")
     assert "\n\n→ " in tweet
     assert tweet_fits(tweet)
+
+
+def test_build_feedback_tweet_long_english_no_mid_sentence_cut():
+    long_text = (
+        "Aria is a fascinating and promising AI. I particularly appreciate her ability "
+        "to memorize and evaluate the relevance of interactions to continuously improve "
+        "— it's exactly what's needed for a community-driven product like Vanguard."
+    )
+    personal = "Glad you value memory and relevance scoring on Vanguard — that's the loop we optimize."
+    tweet = build_feedback_thanks_tweet(long_text, handle="GoldenFarFR", personal=personal)
+    assert tweet_fits(tweet)
+    assert "@GoldenFarFR" in tweet or "@goldenfarfr" in tweet.lower()
+    assert "…" not in tweet.split('"')[1] if '"' in tweet else True
+    assert not re.search(r"\bfor\.\.\.", tweet)
+    assert tweet.endswith(personal) or personal[:40] in tweet
 
 
 def test_build_feedback_tweet_long_french_with_emoji():

@@ -16,6 +16,7 @@ _PHASE_COLORS = {
     "final": "\033[97m",
 }
 _RESET = "\033[0m"
+_ALWAYS_PHASES = frozenset({"moteur", "outil", "final", "fallback", "resultat"})
 
 
 def is_verbose() -> bool:
@@ -27,7 +28,7 @@ def set_verbose(enabled: bool) -> None:
 
 
 def trace(phase: str, message: str) -> None:
-    if not is_verbose():
+    if not is_verbose() and phase not in _ALWAYS_PHASES:
         return
     color = _PHASE_COLORS.get(phase, "")
     prefix = f"{color}[{phase}]{_RESET}" if color else f"[{phase}]"
@@ -37,7 +38,7 @@ def trace(phase: str, message: str) -> None:
 
 
 def trace_block(phase: str, title: str, body: str, *, max_lines: int = 12) -> None:
-    if not is_verbose():
+    if not is_verbose() and phase not in _ALWAYS_PHASES:
         return
     lines = body.splitlines()
     if len(lines) > max_lines:
