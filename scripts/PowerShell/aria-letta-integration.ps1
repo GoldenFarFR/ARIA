@@ -147,16 +147,26 @@ function Get-AriaKartPaidTokens {
     Compteur tokens cloud payants — lecture JSONL locale, 0 appel API.
     #>
     Import-AriaVaultEnv
-    $py = Get-AriaShellPython
-    $report = Join-Path $script:AriaCorePackage "scripts\llm_usage_report.py"
-    if (-not $py -or -not (Test-Path $report)) {
-        return "payant: n/d"
+    if (-not $env:DATA_DIR -and $script:AriaDataDir -and (Test-Path $script:AriaDataDir)) {
+        $env:DATA_DIR = $script:AriaDataDir
     }
-    try {
-        $line = & $py $report --compact 2>$null
-        if ($LASTEXITCODE -eq 0 -and $line) { return $line.Trim() }
-    } catch { }
-    return "payant: n/d"
+    $report = Join-Path $script:AriaCorePackage "scripts\llm_usage_report.py"
+    if (-not (Test-Path $report)) {
+        return "[TOKENS PAYANT] n/d (script absent)"
+    }
+    $pys = @(
+        (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+        (Join-Path $script:AriaLettaDir "venv\Scripts\python.exe")
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+    foreach ($py in $pys) {
+        try {
+            $line = (& $py $report --compact 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0 -and $line -match '^(payant|paid)\s') {
+                return "[TOKENS PAYANT] $line"
+            }
+        } catch { }
+    }
+    return "[TOKENS PAYANT] n/d"
 }
 
 function Get-AriaShellPython {
