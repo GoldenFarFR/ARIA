@@ -144,6 +144,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="acp_market_scan",
+        name="ACP market intelligence",
+        description="Browse marketplace — offre/demande, gaps, workflow suggestions",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="health_watch",
         name="Health regression watch",
         description="Ping /api/health — issue apres 3 echecs",
@@ -209,6 +216,10 @@ def _sync_x_curiosity_enabled() -> None:
                 and is_acp_available()
                 and bool((getattr(settings, "aria_acp_events_file", None) or "").strip())
             )
+        if task.id == "acp_market_scan":
+            from aria_core.skills.acp_cli import is_acp_available
+
+            task.enabled = is_acp_available()
 
 _HEARTBEAT_STATE_PATH = data_dir() / "heartbeat_state.json"
 
@@ -484,6 +495,23 @@ class AriaHeartbeat:
                 await self._notify_telegram(
                     f"ACP provider — {result.get('processed')} job(s) traité(s)\n"
                     f"Actions : {', '.join(result.get('actions') or [])}"
+                )
+
+        elif task_id == "acp_market_scan":
+            from aria_core.skills.acp_market_intelligence import run_market_scan
+
+            scan = await run_market_scan()
+            gaps = (scan.get("market") or {}).get("categories") or {}
+            top_gap = max(gaps.items(), key=lambda kv: kv[1], default=(None, 0))
+            append_memory(
+                "acp_market",
+                f"[heartbeat] scan source={scan.get('source')} agents={scan.get('agent_count')}",
+            )
+            if scan.get("ok") and top_gap[0]:
+                await self._notify_telegram(
+                    f"ACP market scan — {scan.get('agent_count', 0)} agents\n"
+                    f"Top demande : {top_gap[0]} (score {top_gap[1]})\n"
+                    f"Console : scan marché acp"
                 )
 
         elif task_id == "health_watch":

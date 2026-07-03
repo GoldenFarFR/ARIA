@@ -29,6 +29,10 @@ from aria_core.skills.acp_client_actions import (
     execute_acp_client_action,
     wants_acp_client_action,
 )
+from aria_core.skills.acp_market_intelligence import (
+    execute_acp_market_research,
+    wants_acp_market_research,
+)
 from aria_core.skills.acp_provider_skill import default_events_file, run_provider_cycle
 
 _ACP_RE = re.compile(
@@ -59,6 +63,8 @@ _CONVERSATIONAL_ACP_RE = re.compile(
 
 def wants_acp_marketplace(message: str) -> bool:
     text = (message or "").strip()
+    if wants_acp_market_research(text):
+        return True
     if wants_acp_client_action(text):
         return True
     if wants_acp_offering_delete(text):
@@ -236,6 +242,9 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
             lines.append(f"• {name}")
         return "\n".join(lines), {"acp": "browse", "count": len(items)}
 
+    if wants_acp_market_research(text):
+        return await execute_acp_market_research(text, lang_key)
+
     if _CONVERSATIONAL_ACP_RE.search(text) and _ACP_RE.search(text):
         return await _format_conversational_status(lang_key)
 
@@ -276,7 +285,8 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
             "• créer job acp offre <nom> — acheter un service\n"
             "• financer / approuver / rejeter job acp <id>\n"
             "• trade acp swap 10 USDC contre ETH — acp trade\n"
-            "• négocier abonnement acp — aria_full_access\n\n"
+            "• négocier abonnement acp — aria_full_access\n"
+            "• scan marché acp — offre/demande + gaps workflows\n\n"
             "Lance : vanguard\\operator\\start-acp-local.ps1",
             {"acp": "help"},
         )

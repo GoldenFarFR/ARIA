@@ -417,10 +417,25 @@ def trade_tokens(
     return data if isinstance(data, dict) else {"detail": str(data)}, None
 
 
-def browse_agents(query: str = "") -> tuple[list[dict], str | None]:
+def browse_agents(
+    query: str = "",
+    *,
+    top_k: int = 12,
+    sort_by: str = "successfulJobCount",
+    mode: str = "mixed",
+    legacy: bool = False,
+) -> tuple[list[dict], str | None]:
     args = ["browse"]
     if query.strip():
         args.append(query.strip())
+    if top_k > 0:
+        args.extend(["--top-k", str(int(top_k))])
+    if sort_by.strip():
+        args.extend(["--sort-by", sort_by.strip()])
+    if mode.strip():
+        args.extend(["--mode", mode.strip()])
+    if legacy:
+        args.append("--legacy")
     code, out, err = run_acp(*args)
     if code != 0:
         return [], err or out or f"exit {code}"
