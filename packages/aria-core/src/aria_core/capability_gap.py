@@ -71,7 +71,7 @@ CAPABILITY_SPECS: dict[str, dict[str, Any]] = {
             "packages/aria-core/src/aria_core/portrait_scene.py",
         ],
         "acceptance": [
-            "x_banner.jpg present ou genere depuis ancre identite",
+            "x_banner.jpg present ou genere via generate_banner_creative (sans ancre)",
             "Upload X via apply_profile_banner (distinct de avatar profil)",
         ],
     },
