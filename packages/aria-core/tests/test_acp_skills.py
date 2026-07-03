@@ -43,6 +43,7 @@ async def test_drain_events_file(tmp_path, monkeypatch):
     from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
 
     data_dir = tmp_path / "data"
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
     configure_test_runtime(
         data_dir=data_dir,
         settings=AriaRuntimeSettings(aria_acp_provider_enabled=True),
