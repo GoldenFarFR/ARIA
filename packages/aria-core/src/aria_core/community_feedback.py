@@ -447,7 +447,8 @@ async def _llm_polish_quote_for_x(text: str) -> str | None:
         "Prepare ONE Vanguard site community feedback quote for @Aria_ZHC on X.\n"
         "Rules:\n"
         "- Output in English.\n"
-        "- Fix spelling and grammar only (e.g. enssemble→ensemble, typos).\n"
+        "- Fix visitor spelling and grammar in any language (e.g. enssemble→together, "
+        "generer→generate, partenariat→partnership) while translating to English.\n"
         "- Keep the EXACT meaning, tone, and details — do NOT summarize or genericize.\n"
         "- Do NOT add ideas, soften, or censor unless the input is already vulgar.\n"
         "- Keep first-person voice if present.\n"
@@ -493,7 +494,9 @@ async def _llm_fix_english_typos(text: str) -> str | None:
 
 async def prepare_feedback_quote_for_x(text: str) -> tuple[str, bool]:
     """
-    Citation tweet : sens exact, orthographe corrigée, anglais pour @Aria_ZHC.
+    Citation tweet @Aria_ZHC — politique fixe :
+    - toujours en anglais ;
+    - fautes d'orthographe/grammaire du visiteur corrigées (sens inchangé).
     Returns (quote_en, was_transformed).
     """
     clean = (text or "").strip()
@@ -514,7 +517,9 @@ async def prepare_feedback_quote_for_x(text: str) -> tuple[str, bool]:
         try:
             result = await translator(clean)
             if result and len(result) >= 3:
-                return result[:800], True
+                fixed = await _llm_fix_english_typos(result)
+                out = fixed if fixed and len(fixed) >= 3 else result
+                return out[:800], True
         except Exception as exc:
             logger.warning("feedback translate %s failed: %s", translator.__name__, exc)
 

@@ -149,6 +149,26 @@ def test_is_likely_english():
 
 
 @pytest.mark.asyncio
+async def test_prepare_quote_llm_polish_fixes_typos(monkeypatch):
+    async def fake_polish(text: str) -> str:
+        return (
+            "Hi Aria — great site, I'd like to see the ZHC roadmap and how "
+            "you'll generate revenue through partnerships"
+        )
+
+    monkeypatch.setattr("aria_core.community_feedback._llm_polish_quote_for_x", fake_polish)
+    raw = (
+        "Salut aria super site j'aimerais voir la roadmap zhc et comment "
+        "tu va generer des revenus avec des partenariats"
+    )
+    out, transformed = await translate_to_english_for_x(raw)
+    assert transformed is True
+    assert "generate" in out.lower()
+    assert "partnership" in out.lower()
+    assert "generer" not in out.lower()
+
+
+@pytest.mark.asyncio
 async def test_translate_to_english_for_x(monkeypatch):
     async def fake_google(text: str) -> str:
         return "Hi Aria — great to leave feedback on your site, let's keep building together"
