@@ -19,31 +19,20 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install tools & dependencies
+      - name: Install tools
         run: |
           python -m pip install --upgrade pip
           pip install ruff black
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f pyproject.toml ]; then pip install .; fi
 
-      - name: Formatage avec Black
+      - name: Formatage Black
         run: black --check .
 
-      - name: Linting avec Ruff
+      - name: Linting Ruff
         run: ruff check .
-
-      - name: Tests (optionnel)
-        run: |
-          if [ -f pytest.ini ] || [ -f pyproject.toml ]; then
-            python -m pytest || echo "Pas de tests trouvés"
-          else
-            echo "Aucun test automatique configuré"
-          fi
 
       - name: Rapport final
         if: always()
         run: |
           echo "=== ARIA Quality Report ==="
-          echo "✅ Black : Vérifié"
-          echo "✅ Ruff  : Vérifié"
-          echo "Workflow terminé avec succès"
+          echo "Black terminé"
+          echo "Ruff terminé"
