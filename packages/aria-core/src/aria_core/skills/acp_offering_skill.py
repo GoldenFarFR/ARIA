@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -14,11 +15,13 @@ from aria_core.skills.acp_cli import (
     delete_offering,
     is_acp_available,
     list_offerings,
+    list_subscriptions,
     update_offering,
 )
 from aria_core.skills.acp_schema import enrich_json_schema
 
 _TEMPLATES_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "acp_offerings.yaml"
+_CONFIG_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "acp_config.yaml"
 
 _CREATE_RE = re.compile(
     r"(?:"
@@ -39,6 +42,12 @@ _TEMPLATE_EXPLICIT_RE = re.compile(r"template\s+([a-z][a-z0-9_]+)", re.I)
 _RESERVED_KEYS = frozenset({"acp", "offre", "offering", "workflow", "template"})
 _PRICE_RE = re.compile(r"(?:prix|price)\s*[:=]?\s*(\d+(?:\.\d+)?)", re.I)
 
+_DELETE_ALL_RE = re.compile(
+    r"(?i)\b(?:supprim\w*|retir\w*|effac\w*|delete|remove)\b"
+    r".*\b(?:tous|toutes|all|every)\b"
+    r".*\b(?:workflow|offre|offering|workflows|offres|offerings)\b"
+    r"|\b(?:supprim\w*|delete)\b.*\b(?:workflow|offre|offering)s?\b.*\bacp\b"
+)
 _DELETE_HEAD_RE = re.compile(
     r"(?i)\b(?:supprim\w*|retir\w*|effac\w*|delete|remove)\b"
     r".{0,40}?\b(?:workflow|offre|offering)\b"
@@ -73,6 +82,49 @@ _DESC_RE = re.compile(
 
 
 @lru_cache(maxsize=1)
+def _load_acp_config() -> dict[str, Any]:
+    if not _CONFIG_PATH.is_file():
+        return {}
+    try:
+        return yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
+def _subscription_update_kw(payload: dict[str, Any]) -> dict[str, str]:
+    sid = str(payload.get("subscription_ids") or resolve_subscription_ids() or "").strip()
+    return {"subscription_ids": sid} if sid else {}
+
+
+def resolve_subscription_ids(*, attach_full_access: bool = True) -> str:
+    """
+    UUIDs d'abonnements à rattacher aux offres (virgule).
+    SSOT : ARIA_ACP_SUBSCRIPTION_IDS > acp_config.yaml > acp subscription list.
+    """
+    env = (os.environ.get("ARIA_ACP_SUBSCRIPTION_IDS") or "").strip()
+    if env:
+        return env
+    if not attach_full_access:
+        return ""
+    doc = _load_acp_config()
+    subs = doc.get("subscriptions") or {}
+    if isinstance(subs, dict):
+        full = subs.get("aria_full_access") or {}
+        if isinstance(full, dict):
+            sid = str(full.get("id") or "").strip()
+            if sid:
+                return sid
+    rows, _ = list_subscriptions()
+    for row in rows or []:
+        name = str(row.get("name") or "").strip().lower()
+        if name == "aria_full_access":
+            sid = str(row.get("id") or "").strip()
+            if sid:
+                return sid
+    return ""
+
+
+@lru_cache(maxsize=1)
 def _load_templates_doc() -> dict[str, Any]:
     if not _TEMPLATES_PATH.is_file():
         return {}
@@ -88,6 +140,73 @@ def load_offering_templates() -> dict[str, dict[str, Any]]:
     if not isinstance(raw, dict):
         return {}
     return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+
+
+def template_dashboard_examples(template: dict[str, Any]) -> tuple[str, str]:
+    """Texte lisible des exemples (logs / Telegram)."""
+    req = str(template.get("sample_request") or "").strip()
+    deliv = str(template.get("sample_deliverable") or "").strip()
+    name = str(template.get("name") or "offering")
+    if not req:
+        req = f"Premium scope request for {name} — include all context for a complete deliverable."
+    if not deliv:
+        deliv = f"Structured premium deliverable for {name} — summary first, full report attached."
+    return req, deliv
+
+
+def template_example_objects(template: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Objets JSON injectés dans requirements/deliverable.examples (API Virtuals)."""
+    req = template.get("requirement_example")
+    deliv = template.get("deliverable_example")
+    name = str(template.get("name") or "offering")
+    if isinstance(req, dict) and isinstance(deliv, dict):
+        return req, deliv
+    text_req, text_deliv = template_dashboard_examples(template)
+    return (
+        {"brief": text_req} if name else {"brief": text_req},
+        {"summary": text_deliv, "report": text_deliv},
+    )
+
+
+def premium_example_objects(kind: str, name: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Exemples structurés pour workflows adhoc."""
+    if kind == "x_account":
+        return (
+            {
+                "xHandle": "@ExampleBuilder",
+                "objective": "ZHC partnership fit — compare vs @GoldenFarFR",
+                "timeHorizonDays": 30,
+                "competitorHandles": "@GoldenFarFR",
+            },
+            {
+                "relevanceScore": "78/100 — consistent builder narrative",
+                "executiveSummary": "Strong thesis alignment; moderate engagement quality.",
+                "engagementAnalysis": "Steady cadence; replies skew builder/operator audience.",
+                "narrativeAlignment": "Aligns Vanguard ship-in-public + ACP marketplace thesis.",
+                "botRiskFlags": "No strong bot-farm pattern in sample window.",
+                "recommendation": "WATCH",
+                "fullReport": "Markdown report — revisit after next ship post.",
+            },
+        )
+    if kind == "quantitative":
+        return (
+            {
+                "brief": "Quant review BASE token — liquidity depth, holder concentration, 7d flow.",
+                "symbols": "0xabc…",
+                "dataSources": "on-chain Base",
+            },
+            {
+                "summary": "Elevated concentration risk; liquidity adequate for small size only.",
+                "metrics": "top10 holders 62%; 7d net flow -4.2%",
+                "assumptions": "Snapshot block N; no CEX flow included.",
+                "riskFlags": "Whale exit would thin book quickly.",
+                "report": "Full quantitative markdown report.",
+            },
+        )
+    return (
+        {"brief": f"Premium scope for {name.replace('_', ' ')}."},
+        {"summary": "Executive summary.", "report": "Full structured report.", "metrics": "Key scores."},
+    )
 
 
 def _normalize_offering_name(raw: str) -> str:
@@ -113,7 +232,16 @@ def parse_delete_workflow_name(message: str) -> str | None:
     return name or None
 
 
+def wants_acp_offering_delete_all(message: str) -> bool:
+    text = (message or "").strip()
+    if not text or not re.search(r"(?i)\bacp\b", text):
+        return False
+    return bool(_DELETE_ALL_RE.search(text))
+
+
 def wants_acp_offering_delete(message: str) -> bool:
+    if wants_acp_offering_delete_all(message):
+        return True
     return parse_delete_workflow_name(message) is not None
 
 
@@ -410,7 +538,8 @@ def build_adhoc_payload(spec: dict[str, Any]) -> dict[str, Any]:
     kind = _infer_service_kind(spec)
     desc = _premium_description(spec, kind)
     requirements, deliverable, req_desc, deliv_desc = _premium_schemas(name, kind)
-    return {
+    req_ex, deliv_ex = premium_example_objects(kind, name)
+    payload = {
         "name": name,
         "description": desc,
         "price_value": float(spec["price_usd"]),
@@ -420,13 +549,19 @@ def build_adhoc_payload(spec: dict[str, Any]) -> dict[str, Any]:
             requirements,
             title=f"{name} — requirements",
             description=req_desc,
+            examples=[req_ex],
         ),
         "deliverable": enrich_json_schema(
             deliverable,
             title=f"{name} — deliverable",
             description=deliv_desc,
+            examples=[deliv_ex],
         ),
     }
+    sub_ids = resolve_subscription_ids()
+    if sub_ids:
+        payload["subscription_ids"] = sub_ids
+    return payload
 
 
 def resolve_template(template_key: str) -> dict[str, Any] | None:
@@ -450,7 +585,8 @@ def build_offering_payload(
         raise ValueError("prix invalide")
     req_desc = str(template.get("requirements_description") or f"Inputs required for {name}.")
     deliv_desc = str(template.get("deliverable_description") or f"Deliverable returned for {name}.")
-    return {
+    req_ex, deliv_ex = template_example_objects(template)
+    payload = {
         "name": name,
         "description": str(template.get("description") or "").strip(),
         "price_value": price,
@@ -459,13 +595,19 @@ def build_offering_payload(
             template.get("requirements"),
             title=f"{name} — requirements",
             description=req_desc,
+            examples=[req_ex],
         ),
         "deliverable": enrich_json_schema(
             template.get("deliverable"),
             title=f"{name} — deliverable",
             description=deliv_desc,
+            examples=[deliv_ex],
         ),
     }
+    sub_ids = resolve_subscription_ids()
+    if sub_ids:
+        payload["subscription_ids"] = sub_ids
+    return payload
 
 
 def _offering_exists(name: str, existing: list[dict]) -> dict | None:
@@ -499,11 +641,60 @@ async def format_templates_help(lang: str) -> tuple[str, dict]:
     return "\n".join(lines), {"acp": "templates", "count": len(templates)}
 
 
+async def execute_offering_delete_all(message: str, lang: str) -> tuple[str, dict]:
+    """Supprime toutes les offres ACP de l'agent actif."""
+    lang_key = "fr" if lang == "fr" else "en"
+    if not is_acp_available():
+        return "ACP — acp-cli introuvable.", {"acp": "no_cli"}
+
+    existing, err_list = list_offerings()
+    if err_list:
+        return f"Liste offerings : {err_list[:200]}", {"acp": "offering_delete_all_list_error"}
+
+    rows = existing or []
+    if not rows:
+        msg = "Aucune offre ACP active." if lang_key == "fr" else "No ACP offerings."
+        return msg, {"acp": "offering_delete_all_empty", "deleted": []}
+
+    lines = ["Suppression offres ACP :", ""]
+    deleted: list[str] = []
+    errors: list[str] = []
+    for row in rows:
+        name = str(row.get("name") or "?")
+        oid = str(row.get("id") or "")
+        if not oid:
+            errors.append(f"• {name} — pas d'ID")
+            continue
+        ok, detail = delete_offering(oid)
+        if ok:
+            deleted.append(name)
+            lines.append(f"• {name} — supprimé")
+        else:
+            errors.append(f"• {name} — {str(detail)[:80]}")
+
+    if errors:
+        lines.extend(["", "Erreurs :", *errors])
+
+    if lang_key == "fr":
+        lines.append("")
+        lines.append(f"Total : {len(deleted)} supprimé(s) sur {len(rows)}.")
+    else:
+        lines.append(f"Deleted {len(deleted)}/{len(rows)}.")
+    return "\n".join(lines), {
+        "acp": "offering_delete_all",
+        "deleted": deleted,
+        "errors": errors,
+    }
+
+
 async def execute_offering_delete(message: str, lang: str) -> tuple[str, dict]:
     """Supprime une offre ACP par nom — appel acp-cli réel."""
     lang_key = "fr" if lang == "fr" else "en"
     if not is_acp_available():
         return "ACP — acp-cli introuvable.", {"acp": "no_cli"}
+
+    if wants_acp_offering_delete_all(message):
+        return await execute_offering_delete_all(message, lang)
 
     name = parse_delete_workflow_name(message)
     if not name:
@@ -569,6 +760,7 @@ async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, d
         return "Specify workflow name, price, and service.", {"acp": "adhoc_parse_failed"}
 
     payload = build_adhoc_payload(spec)
+    kind = str(payload.pop("service_kind", "generic"))
     existing, err_list = list_offerings()
     if err_list:
         return f"Erreur listings : {err_list[:120]}", {"acp": "adhoc_list_error"}
@@ -585,6 +777,7 @@ async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, d
             sla_minutes=payload["sla_minutes"],
             requirements=payload["requirements"],
             deliverable=payload["deliverable"],
+            **_subscription_update_kw(payload),
         )
         action = "mis à jour" if lang_key == "fr" else "updated"
     else:
@@ -596,7 +789,6 @@ async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, d
 
     from aria_core.skills.acp_product_launch_skill import _promote_product
 
-    kind = str(payload.get("service_kind") or "generic")
     sample_req, sample_deliv = premium_examples(kind, payload["name"])
     promo = await _promote_product(
         name=payload["name"],
@@ -614,9 +806,9 @@ async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, d
             f"C'est fait — workflow {payload['name']} {action} sur ACP (qualité premium).",
             f"{price} USDC · SLA {payload['sla_minutes']}m · ID {off_id}",
             "",
-            "Dashboard Virtuals — coller dans Exemples :",
-            f"• Demande : {sample_req}",
-            f"• Livrable : {sample_deliv[:200]}{'…' if len(sample_deliv) > 200 else ''}",
+            "Exemples demande/livrable : injectés dans schémas API (requirements.examples / deliverable.examples).",
+            f"• Demande : {sample_req[:120]}{'…' if len(sample_req) > 120 else ''}",
+            f"• Livrable : {sample_deliv[:120]}{'…' if len(sample_deliv) > 120 else ''}",
             "",
             "Promo revenus :",
             f"• X : {'publié' if promo.get('x_posted') else 'brouillon — valider ou configurer X'}",
@@ -705,6 +897,7 @@ async def execute_offering_create(message: str, lang: str) -> tuple[str, dict]:
             sla_minutes=payload["sla_minutes"],
             requirements=payload["requirements"],
             deliverable=payload["deliverable"],
+            **_subscription_update_kw(payload),
         )
         action = "update"
     else:
