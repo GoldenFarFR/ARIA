@@ -16,7 +16,7 @@ from aria_core.community_feedback import (
     submit_community_feedback,
     translate_to_english_for_x,
 )
-from aria_core.x_text import tweet_fits
+from aria_core.x_text import feedback_x_min_tweet_weight, tweet_fits, weighted_tweet_length
 
 
 def test_score_feedback_high_for_concrete_idea():
@@ -79,7 +79,7 @@ def test_build_feedback_thanks_tweet_quotes_exact_feedback():
         personal=personal_take_on_feedback(excerpt, lang="en"),
     )
     assert "@goldenfarfr" in tweet.lower()
-    assert "ariavanguardzhc.com" in tweet
+    assert "ariavanguardzhc.com" not in tweet
     assert f'"{excerpt}"' in tweet
     assert "→" not in tweet
     assert "Vanguard site" not in tweet
@@ -102,10 +102,12 @@ def test_build_feedback_quote_tweet_thread_format():
     )
     tweet = build_feedback_quote_tweet(text, handle="GoldenFarFR")
     assert tweet_fits(tweet)
-    assert "✦" in tweet or "ariavanguardzhc.com" in tweet
+    assert "✦" in tweet
+    assert "ariavanguardzhc.com" not in tweet
     assert "@GoldenFarFR" in tweet or "@goldenfarfr" in tweet.lower()
     assert '"' in tweet
     assert "→" not in tweet
+    assert weighted_tweet_length(tweet) >= feedback_x_min_tweet_weight() * 0.85
 
 
 def test_build_feedback_followup_two_sentences():
@@ -118,6 +120,7 @@ def test_build_feedback_followup_two_sentences():
     assert pair.primary.split()[0] in tweet
     assert pair.followup.split()[0] in tweet
     assert tweet.count("\n\n") >= 1
+    assert weighted_tweet_length(tweet) >= feedback_x_min_tweet_weight() * 0.75
 
 
 def test_build_feedback_tweet_roadmap_question():
@@ -127,7 +130,7 @@ def test_build_feedback_tweet_roadmap_question():
     personal = personal_take_on_feedback(text, lang="en")
     tweet = build_feedback_thanks_tweet(text, handle="GoldenFarFR", personal=personal)
     assert tweet_fits(tweet)
-    assert "ariavanguardzhc.com" in tweet
+    assert "ariavanguardzhc.com" not in tweet
     assert "ACP" in tweet or "marketplace" in tweet.lower()
     assert "→" not in tweet
 
@@ -215,6 +218,18 @@ async def test_translate_to_english_for_x(monkeypatch):
     )
     assert translated is True
     assert "feedback" in out.lower()
+
+
+def test_build_feedback_quote_no_site_link_preserves_voice():
+    text = (
+        "Hi Aria, the site looks great! I'd love a ZHC roadmap with partnerships "
+        "for revenue and crypto signals. Also a more visible Telegram link on the homepage."
+    )
+    tweet = build_feedback_quote_tweet(text, handle="GoldenFarFR")
+    assert "ariavanguardzhc.com" not in tweet
+    assert "User praises" not in tweet
+    assert "roadmap" in tweet.lower()
+    assert tweet_fits(tweet)
 
 
 @pytest.mark.asyncio
