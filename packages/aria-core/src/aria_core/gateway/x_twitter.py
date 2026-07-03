@@ -291,7 +291,7 @@ def _update_profile_banner_sync(image_path: Path) -> dict[str, Any]:
             timeout=90,
         )
     data = response.json() if response.content else {}
-    if response.status_code != 200:
+    if response.status_code not in (200, 201):
         err = data.get("errors") or data.get("detail") or data.get("title") or response.text[:300]
         raise RuntimeError(f"X profile banner {response.status_code}: {err}")
     return data
