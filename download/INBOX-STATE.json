@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "last_scan": "2026-07-03T14:55:00+02:00",
+  "last_scan": "2026-07-03T15:02:00+02:00",
   "items": [
     {
       "id": "2026-07-03-messenger-urls",
       "status": "rejected",
-      "reason": "Raccourcis .url Messenger (blob:) — pas de contenu fichier. Réexporter les vrais fichiers (ledger.py, main.py, config, etc.).",
+      "reason": "Raccourcis .url Messenger (blob:) — pas de contenu fichier.",
       "files": [
         "config.txt714 o.url",
         "exceptions.txt880 o.url",
@@ -15,6 +15,21 @@
         "requirements.txt300 o.url"
       ],
       "processed_at": "2026-07-03T14:55:00+02:00"
+    },
+    {
+      "id": "2026-07-03-truth-ledger-scaffold",
+      "status": "processed",
+      "reason": "Extensions corrigées (.txt → .py/.toml). Projet reconstitué dans processed/aria-truth-ledger-scaffold/. Smoke test main.py OK.",
+      "files": [
+        "config.txt → src/config.py",
+        "exceptions.txt → src/core/exceptions.py",
+        "ledger.py → src/ledger/ledger.py",
+        "logging_config.txt → logging_config.py",
+        "pyproject.txt → pyproject.toml",
+        "main.py",
+        "requirements.txt"
+      ],
+      "processed_at": "2026-07-03T15:02:00+02:00"
     }
   ]
 }
