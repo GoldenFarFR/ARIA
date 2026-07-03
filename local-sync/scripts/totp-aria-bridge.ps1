@@ -1,4 +1,4 @@
-# OBSOLETE (2026-06-20) — TOTP Telegram desactive.
+# OBSOLETE (2026-06-20) - TOTP Telegram desactive.
 # SSOT : code dans le chat Grok/Cursor → -TotpCode ou $env:GOLDENFAR_VAULT_TOTP_CODE
 
 function Request-TotpViaAria {

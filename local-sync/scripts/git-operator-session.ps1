@@ -1,4 +1,4 @@
-# Session operateur GitHub — TOTP une fois, valide 12h (pull/push scripts GoldenFar)
+# Session operateur GitHub - TOTP une fois, valide 12h (pull/push scripts GoldenFar)
 # Usage: . .\git-operator-session.ps1 ; Assert-GitOperatorSession
 
 $totpGatePath = Join-Path $PSScriptRoot "totp-gate.ps1"
@@ -64,7 +64,7 @@ function Assert-GitOperatorSession {
     }
     $secret = Get-TotpSecret
     if (-not $secret) {
-        Write-Host "[GIT-SESSION] TOTP non configure — gate desactive" -ForegroundColor Yellow
+        Write-Host "[GIT-SESSION] TOTP non configure - gate desactive" -ForegroundColor Yellow
         return
     }
 

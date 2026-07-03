@@ -1,4 +1,4 @@
-# Push sessions/ + HANDOFF.md — monorepo ARIA
+# Push sessions/ + HANDOFF.md - monorepo ARIA
 # Usage: .\push-session-manifest.ps1 [-TotpCode 123456]
 
 param(

@@ -1,4 +1,4 @@
-# Rassemble l'état local (hors secrets) dans sync/ — puis git push sur l'autre PC
+# Rassemble l'état local (hors secrets) dans sync/ - puis git push sur l'autre PC
 param(
     [switch]$SkipMetier,
     [switch]$SkipIde,

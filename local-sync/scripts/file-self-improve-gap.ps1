@@ -1,4 +1,4 @@
-# Ouvre issue/PR self-improve (Phase 3b) — API ARIA ou fallback GitHub direct
+# Ouvre issue/PR self-improve (Phase 3b) - API ARIA ou fallback GitHub direct
 # Usage: .\file-self-improve-gap.ps1 -CapabilityId security_ip_changed_vault -Context "detail..."
 
 param(

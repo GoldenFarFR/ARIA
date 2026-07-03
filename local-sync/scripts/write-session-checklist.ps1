@@ -1,13 +1,15 @@
-# Genere SESSION-CHECKLIST.html — liste visuelle debut/fin de session Grok
+# Genere SESSION-CHECKLIST.html - liste visuelle debut/fin de session Grok
 # Usage: .\write-session-checklist.ps1 [-Open]
 
 param([switch]$Open)
 
 $ErrorActionPreference = "Stop"
 
-$projets = Join-Path $env:USERPROFILE "projets"
-$collegue = Join-Path $projets "collegue-memoire"
-$localSync = Join-Path $projets "aria-local-sync"
+. (Resolve-Path (Join-Path $PSScriptRoot "..\..\scripts\aria-paths.ps1"))
+$ariaRepo = $script:AriaRepoRoot
+$collegue = $script:AriaCollegueRoot
+$localSync = $script:AriaLocalSyncRoot
+$projets = Split-Path $ariaRepo -Parent
 $sessionsRoot = Join-Path $collegue "sessions"
 $machine = $env:COMPUTERNAME
 $outHtml = Join-Path $collegue "SESSION-CHECKLIST.html"
@@ -53,9 +55,9 @@ $setupChecks = @(
     @{ label = "Git installe"; ok = [bool](Get-Command git -ErrorAction SilentlyContinue) }
     @{ label = "Python 3.12+"; ok = [bool](Get-Command python -ErrorAction SilentlyContinue) }
     @{ label = "Node.js LTS"; ok = [bool](Get-Command node -ErrorAction SilentlyContinue) }
-    @{ label = "Repo collegue-memoire"; ok = (Test-Path (Join-Path $collegue ".git")); detail = $collegue }
-    @{ label = "Repo aria-local-sync"; ok = (Test-Path (Join-Path $localSync ".git")); detail = $localSync }
-    @{ label = "Repo aria-skills"; ok = (Test-Path (Join-Path $projets "aria-skills\.git")) }
+    @{ label = "Monorepo ARIA"; ok = (Test-Path (Join-Path $ariaRepo ".git")); detail = $ariaRepo }
+    @{ label = "collegue-memoire"; ok = (Test-Path $collegue); detail = $collegue }
+    @{ label = "local-sync"; ok = (Test-Path $localSync); detail = $localSync }
     @{ label = "Secret maitre coffre"; ok = (Test-HasSecret ".vault-master-secret" "GOLDENFAR_VAULT_MASTER"); detail = "Bitwarden goldenfar-vault-master" }
     @{ label = "TOTP Google Authenticator"; ok = (Test-HasSecret ".vault-totp-secret" "GOLDENFAR_VAULT_TOTP_SECRET"); detail = "Bitwarden goldenfar-vault-totp" }
     @{ label = "Regles Grok (session-handoff)"; ok = (Test-Path (Join-Path $env:USERPROFILE ".grok\rules\session-handoff.md")) }
@@ -69,12 +71,8 @@ $setupRows = $setupChecks | ForEach-Object {
 $setupOk = ($setupChecks | Where-Object { -not $_.ok }).Count -eq 0
 
 # --- Debut session : script session-handoff.ps1 ---
-$repos = @("collegue-memoire", "aria-local-sync", "aria-skills", "aria-vanguard", "aria-sandbox")
 $pulled = @()
-foreach ($r in $repos) {
-    $p = Join-Path $projets $r
-    if (Test-Path (Join-Path $p ".git")) { $pulled += $r }
-}
+if (Test-Path (Join-Path $ariaRepo ".git")) { $pulled += "ARIA" }
 $handoffMd = Join-Path $sessionsRoot "HANDOFF.md"
 $sessionStart = Join-Path $collegue "SESSION-START.md"
 
@@ -86,7 +84,7 @@ $startRows += New-Row "Generer SESSION-START.md" (Test-Path $sessionStart) "" "a
 $startRows += New-Row "Lire HANDOFF.md (SSOT GitHub)" (Test-Path $handoffMd) "" "grok"
 $startRows += New-Row "Lire COLLEGUE.md" (Test-Path (Join-Path $collegue "COLLEGUE.md")) "" "grok"
 $startRows += New-Row "Lire fin JOURNAL.md" (Test-Path (Join-Path $collegue "JOURNAL.md")) "" "grok"
-$startRows += New-Row "Lire VISION.md (taches Aria)" (Test-Path (Join-Path $projets "aria-vanguard\VISION.md")) "" "grok"
+$startRows += New-Row "Lire VISION.md (taches Aria)" (Test-Path (Join-Path $ariaRepo "VISION.md")) "" "grok"
 $startRows += New-Row "Resumer delta autre PC (3-5 lignes)" $true "avant ta premiere reponse" "grok"
 
 $gitSessPath = Join-Path $env:LOCALAPPDATA "GoldenFar\git-operator-session.json"
@@ -294,6 +292,8 @@ $html = @"
 "@
 
 $utf8 = New-Object System.Text.UTF8Encoding $false
+$outDir = Split-Path $outHtml -Parent
+if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
 [System.IO.File]::WriteAllText($outHtml, $html, $utf8)
 Write-Host "Checklist visuelle : $outHtml" -ForegroundColor Green
 Write-Host "  $fileUri" -ForegroundColor DarkGray

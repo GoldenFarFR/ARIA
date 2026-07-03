@@ -1,4 +1,4 @@
-# Prepare le PC pour handoff Grok — clone monorepo ARIA, detecte nouveau PC
+# Prepare le PC pour handoff Grok - clone monorepo ARIA, detecte nouveau PC
 # Appele par session-handoff.ps1 (Sylvain ne lance rien manuellement)
 # Usage: .\ensure-pc-ready.ps1 [-SkipGitGate] [-TotpCode 123456]
 
@@ -10,11 +10,12 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "git-operator-session.ps1")
+. (Resolve-Path (Join-Path $PSScriptRoot "..\..\scripts\aria-paths.ps1"))
 
 $ariaDefault = Join-Path $env:USERPROFILE "GitHub-Repos\ARIA"
-$ariaRepo = if ($env:ARIA_REPO_ROOT -and (Test-Path $env:ARIA_REPO_ROOT)) {
+$ariaRepo = if (Test-AriaMonorepoRoot $env:ARIA_REPO_ROOT) {
     $env:ARIA_REPO_ROOT
-} elseif (Test-Path $ariaDefault) {
+} elseif (Test-AriaMonorepoRoot $ariaDefault) {
     $ariaDefault
 } else {
     $parent = Join-Path $env:USERPROFILE "GitHub-Repos"
@@ -27,7 +28,7 @@ $ariaRepo = if ($env:ARIA_REPO_ROOT -and (Test-Path $env:ARIA_REPO_ROOT)) {
     $ariaDefault
 }
 
-if (-not (Test-Path (Join-Path $ariaRepo ".git"))) {
+if (-not (Test-AriaMonorepoRoot $ariaRepo)) {
     throw "Monorepo ARIA introuvable. git clone https://github.com/GoldenFarFR/ARIA.git $ariaDefault"
 }
 
@@ -73,7 +74,7 @@ $bootstrapError = $null
 if ($isNewPc -and $hasMaster -and $hasTotp) {
     $bootstrap = Join-Path $PSScriptRoot "bootstrap-autre-pc.ps1"
     if (Test-Path $bootstrap) {
-        Write-Host "[BOOT] Nouveau PC + secrets OK — bootstrap-autre-pc..." -ForegroundColor Cyan
+        Write-Host "[BOOT] Nouveau PC + secrets OK - bootstrap-autre-pc..." -ForegroundColor Cyan
         try {
             & $bootstrap -SkipHandoff -ErrorAction Stop
             $bootstrapRan = $true
@@ -83,7 +84,7 @@ if ($isNewPc -and $hasMaster -and $hasTotp) {
         }
     }
 } elseif ($isNewPc) {
-    Write-Host "[BOOT] Nouveau PC — secrets Bitwarden manquants (Grok guide Sylvain)" -ForegroundColor Yellow
+    Write-Host "[BOOT] Nouveau PC - secrets Bitwarden manquants (Grok guide Sylvain)" -ForegroundColor Yellow
 }
 
 if (-not [Environment]::GetEnvironmentVariable("GOLDENFAR_VAULT_TOTP_VIA_ARIA", "User")) {
@@ -106,7 +107,7 @@ $status = [ordered]@{
     } elseif ($isNewPc -and -not $bootstrapRan) {
         "Executer bootstrap-autre-pc.ps1 puis check-aria-status.ps1"
     } else {
-        "Lire HANDOFF.md + COLLEGUE.md — continuer la demande Sylvain"
+        "Lire HANDOFF.md + COLLEGUE.md - continuer la demande Sylvain"
     }
 }
 

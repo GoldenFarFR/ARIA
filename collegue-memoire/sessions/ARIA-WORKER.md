@@ -396,14 +396,16 @@ no token
 Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin aria-vanguard si besoin, sync-render + preuve health.
 
 ### Critères d'acceptation
-- [ ] IMAGE_API_KEY configure sur Render (xai-...)
-- [ ] generate_banner_portrait retourne JPEG 3:1 (x_banner.jpg 1500x500, <=3 Mo)
+- [x] IMAGE_API_KEY configure sur Render — secrets Render OK (check-aria-status 2026-07-03)
+- [ ] generate_banner_portrait retourne JPEG 3:1 (x_banner.jpg 1500x500, <=3 Mo) — test manuel
 - [ ] Distinct de current.jpg (avatar profil carre)
 
 ### Contexte
 ```
 no token
 ```
+
+**Ouvrier 2026-07-03 23h30 :** secret prod OK ; generation banniere = test manuel si besoin.
 
 ---
 
@@ -422,14 +424,16 @@ IP A -> B
 Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin aria-vanguard si besoin, sync-render + preuve health.
 
 ### Critères d'acceptation
-- [ ] IP enregistree pour machine connue
-- [ ] Pas de critical ip_changed_vault
+- [x] IP enregistree pour machine connue — `80.215.206.1` PC-SYLVAIN
+- [x] Pas de critical ip_changed_vault — ip_changed=false
 
 ### Contexte
 ```
 repo=sessions rule=ip_changed_vault
 IP A -> B
 ```
+
+**Ouvrier 2026-07-03 23h30 :** report-machine-ip.ps1 OK.
 
 ---
 
@@ -449,8 +453,8 @@ Dernier OK: 2026-07-03T20:47:17.105287+00:00
 Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin aria-vanguard si besoin, sync-render + preuve health.
 
 ### Critères d'acceptation
-- [ ] GET /api/health status=ok
-- [ ] check-aria-status.ps1 exit 0
+- [x] GET /api/health status=ok — commit prod `b437e37`, aria_core_build `92bf562`
+- [x] check-aria-status.ps1 exit 0 — 2026-07-03 23h28
 
 ### Contexte
 ```
@@ -458,5 +462,7 @@ Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin
 Dernier: timeout
 Dernier OK: 2026-07-03T20:47:17.105287+00:00
 ```
+
+**Ouvrier 2026-07-03 23h30 :** health OK, aucun probleme critique.
 
 ---

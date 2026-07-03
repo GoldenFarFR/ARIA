@@ -1,4 +1,4 @@
-# Chemins communs collect / apply — aria-local-sync
+# Chemins communs collect / apply - aria-local-sync
 $ErrorActionPreference = "Stop"
 
 $script:LocalSyncRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)

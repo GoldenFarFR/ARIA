@@ -1,4 +1,4 @@
-# Journal de bord Aria
+﻿# Journal de bord Aria
 
 > Actions techniques de l'assistant (fichiers, repos, commits).  
 > Décisions métier → `COLLEGUE.md` § Journal.
@@ -382,3 +382,4 @@
 23h14 — fin session — collect-session, handoff, push manifest
 23h21 — dashboard KART indicateurs GROK BUILD + CURSOR
 23h27 — active pont ARIA-Cursor + fix provider vanguard
+23h32 — fix handoff PS5.1 em-dash + write-session-checklist monorepo paths

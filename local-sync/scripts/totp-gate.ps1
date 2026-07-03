@@ -1,4 +1,4 @@
-# Verification TOTP (Google Authenticator / Bitwarden) — RFC 6238
+# Verification TOTP (Google Authenticator / Bitwarden) - RFC 6238
 # Usage: . .\totp-gate.ps1 ; Assert-TotpGate
 
 function ConvertFrom-Base32 {
@@ -70,7 +70,7 @@ function Get-TotpSecret {
 function Assert-TotpGate {
     param(
         [string]$Code,
-        [switch]$ViaAria  # obsolete — ignore (TOTP IDE uniquement)
+        [switch]$ViaAria  # obsolete - ignore (TOTP IDE uniquement)
     )
     $secret = Get-TotpSecret
     if (-not $secret) { return }
@@ -78,7 +78,7 @@ function Assert-TotpGate {
         $Code = $env:GOLDENFAR_VAULT_TOTP_CODE.Trim()
     }
     if ($ViaAria -or $env:GOLDENFAR_VAULT_TOTP_VIA_ARIA -eq "1") {
-        Write-Warning "[TOTP] Telegram desactive — donne les 6 chiffres dans le chat Grok/Cursor (-TotpCode)."
+        Write-Warning "[TOTP] Telegram desactive - donne les 6 chiffres dans le chat Grok/Cursor (-TotpCode)."
     }
     if (-not $Code) {
         Write-Host "[TOTP] Code Google Authenticator requis (6 chiffres)" -ForegroundColor Cyan

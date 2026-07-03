@@ -1,4 +1,4 @@
-# Bootstrap 2e PC GoldenFar — guide interactif + verifications
+# Bootstrap 2e PC GoldenFar - guide interactif + verifications
 # Usage: .\bootstrap-autre-pc.ps1 [-SkipApply] [-SkipNewPc]
 
 param(

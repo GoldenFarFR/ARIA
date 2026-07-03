@@ -1,4 +1,4 @@
-# Simulation complete — l'utilisateur saisit le code Google Authenticator
+# Simulation complete - l'utilisateur saisit le code Google Authenticator
 # Lance via: Start-Process powershell -ArgumentList ... (fenetre interactive)
 
 $ErrorActionPreference = "Stop"
@@ -19,7 +19,7 @@ if (-not (Get-TotpSecret)) {
 }
 
 Write-Host "--- Etape 1/3 : Google Authenticator via Telegram (TOI) ---" -ForegroundColor Yellow
-Write-Host "ARIA va t'ecrire sur Telegram — reponds avec les 6 chiffres" -ForegroundColor DarkGray
+Write-Host "ARIA va t'ecrire sur Telegram - reponds avec les 6 chiffres" -ForegroundColor DarkGray
 Assert-TotpGate
 Write-Host ""
 

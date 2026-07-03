@@ -1,4 +1,4 @@
-# Audit Git local — detecte activite suspecte sur repos GoldenFar
+# Audit Git local - detecte activite suspecte sur repos GoldenFar
 # Usage: .\audit-github-security.ps1 [-DaysBack 14]
 
 param([int]$DaysBack = 14)

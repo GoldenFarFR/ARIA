@@ -1,4 +1,4 @@
-# Tache planifiee — rotation + push du coffre chiffre chaque nuit (03:00)
+# Tache planifiee - rotation + push du coffre chiffre chaque nuit (03:00)
 # Usage: .\setup-daily-vault-task.ps1
 
 $ErrorActionPreference = "Stop"

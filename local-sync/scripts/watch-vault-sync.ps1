@@ -1,4 +1,4 @@
-# Surveille le coffre — relance collect-local quand une cle change (PC source)
+# Surveille le coffre - relance collect-local quand une cle change (PC source)
 # Usage: .\watch-vault-sync.ps1
 # Prerequis: GOLDENFAR_VAULT_SYNC_PASS en variable utilisateur Windows
 
@@ -35,7 +35,7 @@ while ($true) {
     $now = Get-VaultFingerprint
     if ($now -eq $last) { continue }
     $last = $now
-    Write-Host "[$(Get-Date -Format HH:mm:ss)] Coffre modifie — collect..." -ForegroundColor Yellow
+    Write-Host "[$(Get-Date -Format HH:mm:ss)] Coffre modifie - collect..." -ForegroundColor Yellow
     & $collect -SkipMetier -SkipIde
     . (Join-Path $PSScriptRoot "git-operator-session.ps1")
     $msg = "sync: auto vault $(Get-Date -Format yyyy-MM-ddTHHmm)"

@@ -1,4 +1,4 @@
-# Cle de chiffrement quotidienne — derivee d'un secret maitre (change chaque jour UTC)
+# Cle de chiffrement quotidienne - derivee d'un secret maitre (change chaque jour UTC)
 # Un attaquant avec un .gfv d'hier ne peut pas le ouvrir avec la cle d'aujourd'hui.
 
 function Get-VaultMasterPath {
