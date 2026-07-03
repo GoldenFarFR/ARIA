@@ -207,7 +207,6 @@ function Invoke-AriaOuvrier {
     }
 
     Import-AriaVaultEnv
-    if (Test-Path $script:AriaLettaSyncEnv) { & $script:AriaLettaSyncEnv | Out-Null }
 
     $ouvrierParams = @{ Message = $Message }
     if ($env:ARIA_OUVRIER_VERBOSE -eq "1") { $ouvrierParams.ShowTrace = $true }

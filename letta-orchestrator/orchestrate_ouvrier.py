@@ -82,6 +82,25 @@ def preflight_telegram_notifications(message: str) -> str:
     )
 
 
+def preflight_telegram_activate(message: str) -> str:
+    enable = r"(?:activ|allum|réactiv|reactiv|remet|enable|on\b)"
+    if not re.search(
+        rf"(?i){enable}.{{0,50}}(?:notif|notification).{{0,50}}telegram"
+        rf"|telegram.{{0,50}}(?:notif|notification).{{0,50}}{enable}"
+        rf"|(?:notif|notification).{{0,30}}{enable}",
+        message,
+    ):
+        return ""
+    actions: list[str] = []
+    for name in ("local.env", "production.env"):
+        path = _VAULT_DIR / name
+        if path.parent.is_dir():
+            actions.append(_patch_env_file(path, "ARIA_PROACTIVE_IDEAS", "true"))
+    actions.append("Clé SSOT : ARIA_PROACTIVE_IDEAS (pas ARIA_TELEGRAM_NOTIFICATIONS)")
+    actions.append("Prod Render : redeploy manuel pour appliquer production.env")
+    return "PRÉ-TRAITEMENT ACTIVATION NOTIFS (déjà exécuté):\n" + "\n".join(f"• {a}" for a in actions)
+
+
 def _read_vault_kv(key: str) -> str:
     for name in ("local.env", "production.env"):
         path = _VAULT_DIR / name
@@ -192,6 +211,7 @@ def main() -> None:
     trace("pensee", f"Message Sylvain : {args.message[:300]}")
     handlers = (
         ("mute", preflight_telegram_notifications),
+        ("enable", preflight_telegram_activate),
         ("status", preflight_notification_status),
         ("ping", preflight_telegram_ping),
     )
@@ -209,6 +229,12 @@ def main() -> None:
                     "C'est fait — notifications proactive Telegram coupées.\n\n"
                     f"{direct}\n\n"
                     "Si tu reçois encore des messages, redeploy Render (production.env)."
+                )
+            elif tag == "enable":
+                print(
+                    "C'est fait — notifications proactive Telegram activées (ARIA_PROACTIVE_IDEAS=true).\n\n"
+                    f"{direct}\n\n"
+                    "Redeploy Render pour la prod."
                 )
             else:
                 print(direct)
