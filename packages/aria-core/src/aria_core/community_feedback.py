@@ -58,6 +58,16 @@ _CONTACT_RE = re.compile(
     r"\b(?:contact|reste en lien|message sur x|écris|ecris|dm|telegram|twitter)\b",
     re.IGNORECASE,
 )
+_ROADMAP_RE = re.compile(
+    r"\b(?:futur|future|roadmap|suite|next\s+step|what'?s\s+next|partenariat|partnership|"
+    r"partner|revenu|revenue|monétis|monetiz|business\s+model|generate|générer|"
+    r"earn|profit|plans?|strateg|stratég)\b",
+    re.IGNORECASE,
+)
+_INTERNAL_TEST_RE = re.compile(
+    r"\b(?:test\s+diagnostic|diagnostic\s+test|ping\s+from\s+diagnostic)\b",
+    re.IGNORECASE,
+)
 
 
 def _normalize_handle(handle: str) -> str:
@@ -167,6 +177,8 @@ def assess_feedback_publishable_on_x(
     Handle de confiance (ex. GoldenFarFR) : assouplissement si contenu Vanguard.
     """
     t = (text or "").strip()
+    if _INTERNAL_TEST_RE.search(t):
+        return False, "internal_test"
     if is_trusted_operator_publish(handle) and t:
         return True, "ok_operator"
     trusted = is_trusted_feedback_handle(handle)
@@ -257,35 +269,44 @@ _X_TWEET_MIN_LEN = 15
 def personal_take_on_feedback(text: str, *, lang: str = "fr") -> str:
     """Réponse courte à l'avis — heuristique locale, ancrée sur le contenu."""
     t = (text or "").strip()
-    if _FEEDBACK_WIDGET_RE.search(t) and _BUILD_TOGETHER_RE.search(t):
+    if _ROADMAP_RE.search(t) or t.count("?") >= 2:
         if lang == "fr":
             return (
-                "La boîte à avis sur le site sert exactement à ça — "
-                "on priorise Vanguard avec des retours comme le tien."
+                "Marketplace ACP + signaux ZHC d'abord — partenariats quand la traction "
+                "valide le modèle."
             )
         return (
-            "The on-site feedback box is for notes like this — "
-            "we'll keep shaping Vanguard from what you wrote."
+            "ACP marketplace + ZHC signal products ship first — partnerships once "
+            "traction proves the model."
         )
+    if _FEEDBACK_WIDGET_RE.search(t) and _BUILD_TOGETHER_RE.search(t):
+        if lang == "fr":
+            return "On ship Vanguard brique par brique — ton avis oriente la prochaine itération."
+        return "We ship Vanguard brick by brick — your note steers the next iteration."
     if _FEEDBACK_WIDGET_RE.search(t):
         if lang == "fr":
-            return "Content que tu utilises déjà le canal avis — ça guide la roadmap Vanguard."
-        return "Glad you're using the feedback lane on the site — it steers what we ship next."
+            return "Canal avis noté — ça priorise la roadmap ZHC."
+        return "Feedback lane noted — it prioritizes the ZHC roadmap."
     if _ACTION_RE.search(t) or (_PRODUCT_RE.search(t) and len(t) > 40):
         if lang == "fr":
-            return "Piste produit claire — je la garde pour le prochain cycle ZHC."
-        return "Clear product signal — queued for the next ZHC ship cycle."
+            return "Piste produit claire — prochain cycle ZHC."
+        return "Clear product signal — next ZHC ship cycle."
     if _CONTACT_RE.search(t):
         if lang == "fr":
             return "On reste en contact — la commu ZHC avance avec des retours comme celui-ci."
         return "We'll stay in touch — the ZHC community moves on notes like this."
-    if _COMPLIMENT_RE.search(t) and _PRODUCT_RE.search(t):
+    if _COMPLIMENT_RE.search(t):
         if lang == "fr":
-            return "Content du retour sur le site — on continue d'itérer Vanguard en public."
-        return "Good to hear on the site itself — we'll keep iterating Vanguard in public."
+            return "Merci — on continue d'itérer Vanguard en public."
+        return "Thanks — we keep shipping Vanguard in public."
     if lang == "fr":
-        return "Ton retour précis oriente ce qu'on ship sur Vanguard."
-    return "Your specific note steers what we ship on Vanguard."
+        return "Ton retour oriente ce qu'on ship sur Vanguard."
+    return "Your note steers what we ship on Vanguard."
+
+
+def _feedback_tweet_header(handle: str) -> str:
+    h = (handle or "").strip().lstrip("@")
+    return f"@{h} on ariavanguardzhc.com" if h else "On ariavanguardzhc.com"
 
 
 async def compose_personal_reply_to_feedback(
@@ -309,12 +330,13 @@ async def compose_personal_reply_to_feedback(
 
     if is_llm_configured():
         system = (
-            "You reply on @Aria_ZHC to ONE community feedback left on the Vanguard site.\n"
-            "Write ONE short sentence (max 110 chars) reacting to THEIR exact words.\n"
-            "Reference what they actually said (feedback form, site, building together, "
-            "feature idea, compliment, contact request).\n"
+            "You reply on @Aria_ZHC under a site visitor quote from ariavanguardzhc.com.\n"
+            "Write ONE short sentence (max 110 chars) that answers THEIR actual question or point.\n"
+            "If they ask about roadmap, revenue, or partnerships: mention ACP marketplace, "
+            "ZHC signal products, built-in-public — partnerships when traction proves the moat.\n"
+            "If they suggest a feature: acknowledge the specific idea.\n"
             "No generic thank-you. Forbidden: 'thanks for sharing', 'love the energy', "
-            "'thank you for your support', 'supporting our growth'.\n"
+            "'good to hear on the site itself', 'thank you for your support'.\n"
             f"{policy_rules_for_llm('en')}\n"
             f"{human_voice_rules_for_llm('en')}\n"
             "English only. No quotes. No @mentions."
@@ -633,15 +655,18 @@ def build_merged_feedback_tweet(
             handle=handle,
             personal=personal,
         )
-    h = (handle or "").strip().lstrip("@")
-    header = f"@{h} · Vanguard ({len(quotes_en)} notes)" if h else f"Vanguard feedback ({len(quotes_en)} notes)"
+    header = _feedback_tweet_header(handle)
+    if handle.strip():
+        header = f"{header} ({len(quotes_en)} notes)"
+    else:
+        header = f"ariavanguardzhc.com ({len(quotes_en)} notes)"
     merged = " / ".join(f'"{_truncate_quote(q, 90)}"' for q in quotes_en[:3])
     personal = re.sub(r"\s+", " ", (personal or "").strip())
-    tweet = f"{header}\n\n{merged}\n\n→ {personal}"
+    tweet = f"{header}:\n{merged}\n{personal}"
     if tweet_fits(tweet):
         return tweet
     short = " / ".join(f'"{_truncate_quote(q, 50)}"' for q in quotes_en[:2])
-    return fit_x_tweet(f"{header}\n\n{short}\n\n→ {_truncate_quote(personal, 55)}")
+    return fit_x_tweet(f"{header}:\n{short}\n{_truncate_quote(personal, 55)}")
 
 
 async def _flush_x_queue_bucket(key: str, bucket: dict[str, Any]) -> dict[str, Any] | None:
@@ -716,14 +741,13 @@ def build_feedback_thanks_tweet(
     handle: str = "",
     personal: str = "",
 ) -> str:
-    """Tweet commu — citation fidèle de l'avis + réponse ARIA ciblée."""
+    """Tweet commu — citation de l'avis + réponse concrète (sans template « → »)."""
     quote_full = _condense_quote_sync(
         re.sub(r"\s+", " ", (text or "").strip()),
         FEEDBACK_X_QUOTE_MAX_WEIGHT,
     )
     personal = re.sub(r"\s+", " ", (personal or "").strip())
-    h = (handle or "").strip().lstrip("@")
-    header = f"@{h} · Vanguard site" if h else "Vanguard site feedback"
+    header = _feedback_tweet_header(handle)
 
     quote_start = min(weighted_tweet_length(quote_full), FEEDBACK_X_QUOTE_MAX_WEIGHT)
     quote_weights = list(range(max(quote_start, 48), 39, -8)) or [max(quote_start, 48)]
@@ -733,13 +757,16 @@ def build_feedback_thanks_tweet(
         reply_weights = list(range(max(reply_start, 40), 29, -10)) or [max(reply_start, 40)]
         for reply_weight in reply_weights:
             reply = _truncate_quote(personal, reply_weight)
-            tweet = f'{header}\n\n"{quote}"\n\n→ {reply}'
-            if tweet_fits(tweet):
-                return tweet
+            for tweet in (
+                f'{header}:\n"{quote}"\n{reply}',
+                f'{header} — "{quote}" — {reply}',
+            ):
+                if tweet_fits(tweet):
+                    return tweet
 
     quote = _truncate_quote(quote_full, 72)
     reply = _truncate_quote(personal, 48)
-    return fit_x_tweet(f'{header}\n\n"{quote}"\n\n→ {reply}')
+    return fit_x_tweet(f'{header}:\n"{quote}"\n{reply}')
 
 
 async def maybe_tweet_community_feedback(

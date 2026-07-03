@@ -74,11 +74,33 @@ def test_build_feedback_thanks_tweet_quotes_exact_feedback():
         handle="goldenfarfr",
         personal=personal_take_on_feedback(excerpt, lang="en"),
     )
-    assert "@goldenfarfr" in tweet
+    assert "@goldenfarfr" in tweet.lower()
+    assert "ariavanguardzhc.com" in tweet
     assert f'"{excerpt}"' in tweet
-    assert tweet.startswith("@goldenfarfr · Vanguard site")
-    assert "\n\n→ " in tweet
+    assert "→" not in tweet
+    assert "Vanguard site" not in tweet
     assert tweet_fits(tweet)
+
+
+def test_personal_take_answers_roadmap_questions():
+    text = (
+        "Super site ARIA! What's next for ZHC — partnerships and how will you generate revenue?"
+    )
+    reply = personal_take_on_feedback(text, lang="en")
+    assert "ACP" in reply or "marketplace" in reply.lower()
+    assert "good to hear on the site" not in reply.lower()
+
+
+def test_build_feedback_tweet_roadmap_question():
+    text = (
+        "Great ARIA site — what's next for ZHC, partnerships, how will you generate revenue?"
+    )
+    personal = personal_take_on_feedback(text, lang="en")
+    tweet = build_feedback_thanks_tweet(text, handle="GoldenFarFR", personal=personal)
+    assert tweet_fits(tweet)
+    assert "ariavanguardzhc.com" in tweet
+    assert "ACP" in tweet or "marketplace" in tweet.lower()
+    assert "→" not in tweet
 
 
 def test_build_feedback_tweet_long_english_no_mid_sentence_cut():
@@ -117,7 +139,7 @@ def test_personal_take_feedback_widget():
         "on continue de construire ensemble"
     )
     reply = personal_take_on_feedback(text, lang="en")
-    assert "feedback" in reply.lower()
+    assert "vanguard" in reply.lower() or "brick" in reply.lower()
     assert "love the energy" not in reply.lower()
 
 
@@ -152,6 +174,16 @@ async def test_translate_skips_english():
     out, translated = await translate_to_english_for_x(text)
     assert translated is False
     assert out == text
+
+
+def test_assess_feedback_blocks_internal_test():
+    ok, reason = assess_feedback_publishable_on_x(
+        "Super site web ARIA test diagnostic",
+        score=80,
+        handle="GoldenFarFR",
+    )
+    assert not ok
+    assert reason == "internal_test"
 
 
 def test_assess_feedback_blocks_profanity_and_noise():
