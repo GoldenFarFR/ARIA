@@ -164,6 +164,59 @@ function Invoke-AriaBrain {
     Write-Host "[ARIA-Brain | ${sec:N1}s | vector + COLLEGUE]" -ForegroundColor DarkGray
 }
 
+$script:AriaOuvrierOrchestrate = Join-Path $script:AriaLettaDir "orchestrate-ouvrier.ps1"
+$script:AriaOuvrierConfig = Join-Path $script:AriaLettaDir "ouvrier_config.json"
+
+function Test-AriaOuvrierReady {
+    return (Test-Path $script:AriaOuvrierOrchestrate) -and (Test-Path $script:AriaOuvrierConfig)
+}
+
+function Invoke-AriaOuvrier {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [string]$Message
+    )
+
+    if (-not (Test-Path $script:AriaOuvrierOrchestrate)) {
+        Write-Host "Ouvrier absent — lance letta-orchestrator\setup-ouvrier.ps1" -ForegroundColor Red
+        return
+    }
+    if (-not (Test-Path $script:AriaOuvrierConfig)) {
+        Write-Host "ouvrier_config.json absent — .\setup-ouvrier.ps1" -ForegroundColor Red
+        return
+    }
+
+    Import-AriaVaultEnv
+    if (Test-Path $script:AriaLettaSyncEnv) { & $script:AriaLettaSyncEnv | Out-Null }
+    if (-not (Ensure-AriaLettaServer)) {
+        Write-Host "Letta injoignable — .\start-letta.ps1" -ForegroundColor Red
+        return
+    }
+
+    & $script:AriaOuvrierOrchestrate -Message $Message
+}
+
+function Invoke-AriaKartDefault {
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [string]$Intent = "OUVRIER"
+    )
+    switch ($Intent) {
+        "GROK" { Invoke-Grok -Prompt $Message; return }
+        "GROQ" { Invoke-Groq -Prompt $Message; return }
+        "CHAT" { Invoke-Ollama -Prompt $Message; return }
+        default {
+            if (Test-AriaOuvrierReady) {
+                Invoke-AriaOuvrier -Message $Message
+            } else {
+                Write-Host "Ouvrier non configure — fallback cerveau (lance setup-ouvrier.ps1)" -ForegroundColor Yellow
+                Invoke-AriaBrain -Message $Message
+            }
+        }
+    }
+}
+
 function Invoke-AriaLetta {
     [CmdletBinding()]
     param(
@@ -239,8 +292,8 @@ function Invoke-AriaAgent {
             return
         }
     }
-    Invoke-AriaBrain -Message $TaskPrompt
+    Invoke-AriaOuvrier -Message $TaskPrompt
 }
 
 Import-AriaVaultEnv
-Write-Host "ARIA shell v2.5 (cerveau aria-core + vector + COLLEGUE) — /letta pour Letta seul" -ForegroundColor DarkCyan
+Write-Host "ARIA shell v2.6 — defaut = Ouvrier Letta (Grok-like) | /cerveau = aria-core | /ollama /groq /grok" -ForegroundColor DarkCyan
