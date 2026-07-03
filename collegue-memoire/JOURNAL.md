@@ -376,3 +376,5 @@
 22h23 — deploy prod audit GitHub — commit 2a7f715, test drain_events_file fix
 22h34 — push lot ACP market intel + entrepreneur + session
 22h37 — fix bootstrap console: charge cles X vault pour promo ACP
+22h44 — push+deploy lot ACP entrepreneur — brain intent fix, prod live
+22h44 — feat autonomie revenu ACP + start-aria-autonomous.ps1

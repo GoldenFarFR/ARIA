@@ -69,19 +69,33 @@ def _bootstrap_brain_runtime() -> None:
     from pathlib import Path
 
     data_dir = Path(os.environ["DATA_DIR"])
+    env_base = AriaRuntimeSettings()
     configure_test_runtime(
         data_dir=data_dir,
-        settings=AriaRuntimeSettings(
-            aria_vector_memory=True,
-            aria_memory_arbitrator=True,
-            aria_ddg_search_cache=True,
-            aria_public_mode=False,
-            aria_llm_enabled=True,
-            llm_provider=os.environ.get("LLM_PROVIDER", "grok"),
-            llm_model=os.environ.get("LLM_MODEL", "grok-4.3"),
-            llm_api_key=os.environ.get("LLM_API_KEY", ""),
-            ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-            aria_autonomous=True,
+        settings=env_base.model_copy(
+            update={
+                "aria_vector_memory": True,
+                "aria_memory_arbitrator": True,
+                "aria_ddg_search_cache": True,
+                "aria_public_mode": False,
+                "aria_llm_enabled": True,
+                "llm_provider": os.environ.get("LLM_PROVIDER", env_base.llm_provider or "grok"),
+                "llm_model": os.environ.get("LLM_MODEL", env_base.llm_model or "grok-4.3"),
+                "llm_api_key": os.environ.get("LLM_API_KEY", env_base.llm_api_key),
+                "ollama_base_url": os.environ.get(
+                    "OLLAMA_BASE_URL", env_base.ollama_base_url
+                ),
+                "aria_autonomous": True,
+                "aria_acp_provider_enabled": os.environ.get(
+                    "ARIA_ACP_PROVIDER_ENABLED", ""
+                ).lower() in ("1", "true", "yes"),
+                "aria_acp_events_file": os.environ.get(
+                    "ARIA_ACP_EVENTS_FILE", env_base.aria_acp_events_file
+                ),
+                "aria_proactive_ideas": os.environ.get(
+                    "ARIA_PROACTIVE_IDEAS", ""
+                ).lower() in ("1", "true", "yes"),
+            }
         ),
     )
 
