@@ -354,3 +354,5 @@
 19h06 — Sprint 3 Letta-2 critique pending-lessons + collect-session
 19h12 — apply leçon Anti-Ollama fallback (exemple) → reflection
 19h12 — commit Sprint 4 apply pending-lessons (13 tests, live apply OK)
+19h15 — 19h15 — ARIA v3.0 KART unifiee cerveau+ouvrier+ACP client trade/fund
+19h17 — memoire: auto ApplyApproved collect-session + /apply-lessons KART + docs COLLEGUE
