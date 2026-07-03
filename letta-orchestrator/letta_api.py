@@ -131,6 +131,16 @@ def add_tool_to_agent(agent_id: str, tool_id: str) -> None:
     r.raise_for_status()
 
 
+def update_agent_memory_block(agent_id: str, block_label: str, value: str) -> None:
+    body = {"value": value[:12000]}
+    r = SESSION.patch(
+        f"{LETTA_URL}/v1/agents/{agent_id}/memory/block/{block_label}",
+        json=body,
+        timeout=60,
+    )
+    r.raise_for_status()
+
+
 def create_ouvrier_agent(
     name: str,
     llm: str,

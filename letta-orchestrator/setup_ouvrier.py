@@ -12,6 +12,7 @@ from letta_api import (
     add_tool_to_agent,
     create_ouvrier_agent,
     list_agents,
+    update_agent_memory_block,
     upsert_tool,
 )
 from ouvrier_tool_sources import TOOL_SOURCES
@@ -36,6 +37,8 @@ def main() -> None:
     if OUVRIER_NAME in known:
         agent_id = known[OUVRIER_NAME]
         print(f"Réutilise {OUVRIER_NAME} -> {agent_id}")
+        update_agent_memory_block(agent_id, "persona", persona)
+        print("Persona ouvrier mise à jour")
     else:
         llm = models.get("core") or models.get("grok") or models["scout"]
         agent_id = create_ouvrier_agent(
@@ -59,7 +62,7 @@ def main() -> None:
         encoding="utf-8",
     )
     print(f"\nOK — {CONFIG_PATH}")
-    print("Usage: .\\orchestrate-ouvrier.ps1 -Message \"ta tâche\"")
+    print('Usage: .\\orchestrate-ouvrier.ps1 -Message "ce que tu veux, en français naturel"')
 
 
 if __name__ == "__main__":

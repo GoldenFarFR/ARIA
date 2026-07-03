@@ -40,19 +40,16 @@ def bootstrap(user_message: str) -> str:
     handoff = _run_ps(ARIA_REPO_ROOT / "local-sync" / "scripts" / "session-handoff.ps1")
     inbox = _run_ps(ARIA_REPO_ROOT / "download" / "triage-inbox.ps1")
     pending = _pending_worker_count()
-    return f"""[BOOTSTRAP OUVRIER — copie conforme Cursor/Grok]
+    return f"""Contexte session (déjà synchronisé — ne redemande pas à l'opérateur de lancer quoi que ce soit) :
 
-Handoff:
-{handoff}
+• Handoff : {handoff[:800]}
+• File ouvrier : {pending} élément(s) [pending]
+• Boîte download : {inbox}
 
-ARIA-WORKER: {pending} item(s) [pending]
-Download inbox:
-{inbox}
+Déduis l'intention de Sylvain. Exécute toi-même. Pas de commandes à lui dicter.
+Si tu doutes, pose une question de confirmation courte avant d'agir.
 
-Tu es l'ouvrier ARIA. Utilise tes outils (run_powershell, read/write_repo_file, journal, build_local_quick).
-Traite [pending] avant le reste si > 0. Concis. Exécute toi-même.
-
-Demande Sylvain:
+Sylvain :
 {user_message}
 """
 

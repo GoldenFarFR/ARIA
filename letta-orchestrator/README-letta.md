@@ -70,8 +70,12 @@ cd %ARIA_REPO_ROOT%\letta-orchestrator
 ### Usage
 
 ```powershell
-.\orchestrate-ouvrier.ps1 -Message "traite download et fixe le test qui échoue"
+# Langage naturel uniquement — pas de commandes à préciser
+.\orchestrate-ouvrier.ps1 -Message "y'a des trucs dans download, occupe-toi en"
+.\orchestrate-ouvrier.ps1 -Message "le CI passait pas sur le truth ledger, c'est réglé ?"
 ```
+
+L'ouvrier **déduit** l'intention, **exécute** seul, et **demande confirmation** seulement s'il doute ou si c'est risqué.
 
 | Composant | Rôle |
 |-----------|------|
