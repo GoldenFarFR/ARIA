@@ -14,6 +14,13 @@ from pathlib import Path
 import requests
 
 from aria_config import ARIA_REPO_ROOT, bridge_api_keys
+from ouvrier_proof import (
+    attach_proof,
+    build_system_proof,
+    local_api_status,
+    read_vault_key,
+    vault_env_names,
+)
 from ouvrier_runner import provider_label, run_ouvrier
 from ouvrier_trace import StepTimer, is_verbose, set_verbose, trace, trace_block
 
@@ -21,35 +28,6 @@ CONFIG_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_config.json"
 WORKER_PATH = ARIA_REPO_ROOT / "collegue-memoire" / "sessions" / "ARIA-WORKER.md"
 _SUBPROC = {"encoding": "utf-8", "errors": "replace", "text": True}
 _VAULT_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "GoldenFar" / "vault"
-_LOCAL_START = ARIA_REPO_ROOT / "vanguard" / "operator" / "start-acp-local.ps1"
-
-
-def _vault_env_names() -> list[str]:
-    """PC local SSOT : local.env seulement (Sylvain 2026-07 — plus Render)."""
-    runtime = os.environ.get("ARIA_RUNTIME", "").strip().lower()
-    if not runtime:
-        local_path = _VAULT_DIR / "local.env"
-        if local_path.is_file():
-            m = re.search(
-                r"(?m)^\s*ARIA_RUNTIME\s*=\s*(\S+)",
-                local_path.read_text(encoding="utf-8", errors="replace"),
-            )
-            runtime = (m.group(1) if m else "local").strip().lower()
-        else:
-            runtime = "local"
-    if runtime in ("local", "pc", "desktop"):
-        return ["local.env"]
-    return ["local.env", "production.env"]
-
-
-def _local_api_status() -> str:
-    import socket
-
-    try:
-        with socket.create_connection(("127.0.0.1", 8000), timeout=1.5):
-            return "✓ Bot/API local :8000 actif"
-    except OSError:
-        return f"✗ Bot/API local arrêté — lance : {_LOCAL_START}"
 
 
 def _run_ps(script: Path, *extra: str) -> str:
@@ -87,26 +65,6 @@ def _patch_env_file(path: Path, key: str, value: str) -> str:
     return f"{path.name}: {key}={value} ({action})"
 
 
-def _verify_env_key(key: str) -> str:
-    """Preuve disque — relit le vault après patch (pas de confiance aveugle)."""
-    lines = ["PREUVE (lecture disque vault) :", _local_api_status(), ""]
-    for name in _vault_env_names():
-        path = _VAULT_DIR / name
-        if not path.is_file():
-            lines.append(f"  ✗ {name} — fichier absent")
-            continue
-        found = ""
-        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if raw.strip().startswith(f"{key}="):
-                found = raw.strip()
-                break
-        if found:
-            lines.append(f"  ✓ {path} → {found}")
-        else:
-            lines.append(f"  ✗ {name} — {key} absent")
-    return "\n".join(lines)
-
-
 def preflight_telegram_notifications(message: str) -> str:
     action = r"(?:supprim|couper|désactiv|desactiv|éteind|eteind|arrêt|arret|stop|moins|trop|spam)"
     if not re.search(
@@ -116,15 +74,15 @@ def preflight_telegram_notifications(message: str) -> str:
         message,
     ):
         return ""
-    actions: list[str] = [_local_api_status()]
-    for name in _vault_env_names():
+    actions: list[str] = [local_api_status()]
+    for name in vault_env_names():
         path = _VAULT_DIR / name
         if path.parent.is_dir():
             actions.append(_patch_env_file(path, "ARIA_PROACTIVE_IDEAS", "false"))
     actions.append(
         "Sources : proactive.py (founder_ping), heartbeat.py, aria_worker_queue, capability_gap"
     )
-    actions.append(_verify_env_key("ARIA_PROACTIVE_IDEAS"))
+    actions.append(build_system_proof(keys=["ARIA_PROACTIVE_IDEAS"], action="mute notifs Telegram"))
     return "PRÉ-TRAITEMENT NOTIFS TELEGRAM (déjà exécuté — confirme à Sylvain, ne redemande pas):\n" + "\n".join(
         f"• {a}" if not a.startswith("PREUVE") else a for a in actions
     )
@@ -139,27 +97,16 @@ def preflight_telegram_activate(message: str) -> str:
         message,
     ):
         return ""
-    actions: list[str] = [_local_api_status()]
-    for name in _vault_env_names():
+    actions: list[str] = [local_api_status()]
+    for name in vault_env_names():
         path = _VAULT_DIR / name
         if path.parent.is_dir():
             actions.append(_patch_env_file(path, "ARIA_PROACTIVE_IDEAS", "true"))
     actions.append("Clé SSOT : ARIA_PROACTIVE_IDEAS (local.env — runtime PC)")
-    actions.append(_verify_env_key("ARIA_PROACTIVE_IDEAS"))
+    actions.append(build_system_proof(keys=["ARIA_PROACTIVE_IDEAS"], action="activation notifs Telegram"))
     return "PRÉ-TRAITEMENT ACTIVATION NOTIFS (déjà exécuté):\n" + "\n".join(
         f"• {a}" if not a.startswith("PREUVE") else a for a in actions
     )
-
-
-def _read_vault_kv(key: str) -> str:
-    for name in ("local.env", "production.env"):
-        path = _VAULT_DIR / name
-        if not path.is_file():
-            continue
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if line.strip().startswith(f"{key}="):
-                return line.split("=", 1)[1].strip().strip('"')
-    return ""
 
 
 def preflight_notification_status(message: str) -> str:
@@ -169,13 +116,9 @@ def preflight_notification_status(message: str) -> str:
         message,
     ):
         return ""
-    lines = ["État notifications Telegram ARIA (runtime PC local) :", _local_api_status(), ""]
-    for name in _vault_env_names():
-        val = ""
-        path = _VAULT_DIR / name
-        if path.is_file():
-            m = re.search(r"(?m)^\s*ARIA_PROACTIVE_IDEAS\s*=\s*(\S+)", path.read_text(encoding="utf-8", errors="replace"))
-            val = m.group(1) if m else "(absent)"
+    lines = ["État notifications Telegram ARIA (runtime PC local) :", local_api_status(), ""]
+    for name in vault_env_names():
+        val = read_vault_key("ARIA_PROACTIVE_IDEAS") or "(absent)"
         lines.append(f"• {name} → ARIA_PROACTIVE_IDEAS={val}")
     lines.extend(
         [
@@ -183,7 +126,7 @@ def preflight_notification_status(message: str) -> str:
             "• aria_worker_queue / capability_gap : notify_admin (si worker actif)",
             "• portfolio_scan heartbeat : notif si items portfolio > 0",
             "",
-            _verify_env_key("ARIA_PROACTIVE_IDEAS"),
+            build_system_proof(keys=["ARIA_PROACTIVE_IDEAS"], action="état notifs"),
         ]
     )
     return "\n".join(lines)
@@ -191,7 +134,7 @@ def preflight_notification_status(message: str) -> str:
 
 def preflight_preuve(message: str) -> str:
     if not re.search(
-        r"(?i)(preuve|prouve|vérif|verif|confirme|sois?\s+sûr|sur\s+que|sans\s+preuve|lecture\s+disque)",
+        r"(?i)(preuve|prouve|vérif|verif|confirme|sois?\s+sûr|sur\s+que|sans\s+preuve|lecture\s+disque|état\s+système|etat\s+systeme)",
         message,
     ):
         return ""
@@ -201,10 +144,9 @@ def preflight_preuve(message: str) -> str:
         message,
     ):
         return ""
-    return _verify_env_key("ARIA_PROACTIVE_IDEAS") + (
-        "\n\nPour preuve Telegram : « ping telegram » ou « preuve qui ping le bot »."
-        "\n\nCommande manuelle :\n"
-        f'  Select-String -Path "{_VAULT_DIR}\\local.env" -Pattern ARIA_PROACTIVE_IDEAS'
+    return build_system_proof(action="demande opérateur") + (
+        "\n\nPour preuve Telegram live : « ping telegram »."
+        f"\nVault : {_VAULT_DIR}"
     )
 
 
@@ -218,11 +160,11 @@ def preflight_telegram_ping(message: str) -> str:
     if not wants_preuve_tg and not re.search(r"(?i)telegram|bot|aria", message) and "ping" not in message.lower():
         return ""
     bridge_api_keys()
-    token = _read_vault_kv("TELEGRAM_BOT_TOKEN")
-    admin = _read_vault_kv("TELEGRAM_ADMIN_IDS") or _read_vault_kv("TELEGRAM_GROUP_ID")
+    token = read_vault_key("TELEGRAM_BOT_TOKEN")
+    admin = read_vault_key("TELEGRAM_ADMIN_IDS") or read_vault_key("TELEGRAM_GROUP_ID")
     if not token or not admin:
         return "ERREUR: TELEGRAM_BOT_TOKEN ou TELEGRAM_ADMIN_IDS absent du vault."
-    proactive = _read_vault_kv("ARIA_PROACTIVE_IDEAS") or "(absent)"
+    proactive = read_vault_key("ARIA_PROACTIVE_IDEAS") or "(absent)"
     if proactive.lower() == "false":
         notif_line = "notifs proactive OFF (ARIA_PROACTIVE_IDEAS=false)"
     elif proactive.lower() == "true":
@@ -245,7 +187,7 @@ def preflight_telegram_ping(message: str) -> str:
         f"Ping envoyé sur Telegram (chat {chat_id}).",
         text,
         "",
-        _verify_env_key("ARIA_PROACTIVE_IDEAS"),
+        build_system_proof(keys=["ARIA_PROACTIVE_IDEAS"], action="ping Telegram"),
     ]
     return "\n".join(lines)
 
@@ -318,7 +260,7 @@ def main() -> None:
                 "enable": "C'est fait — notifications proactive Telegram activées (ARIA_PROACTIVE_IDEAS=true).",
                 "status": direct.splitlines()[0] if direct else "État notifications.",
                 "ping": "Ping Telegram envoyé — vérifie ton chat ARIA.",
-                "preuve": "Preuve vault ci-dessous (lecture disque).",
+                "preuve": "Preuve système ci-dessous (vault + runtime).",
             }
             summary = summaries.get(tag, direct.splitlines()[0] if direct else "OK")
             if is_verbose():
@@ -326,11 +268,11 @@ def main() -> None:
                 if tag in ("mute", "enable"):
                     print("Détails : trace [preflight] ci-dessus. Effet si start-acp-local.ps1 tourne.")
             elif tag == "mute":
-                print(f"{summary}\n\n{direct}")
+                print(attach_proof(f"{summary}\n\n{direct}", ""))
             elif tag == "enable":
-                print(f"{summary}\n\n{direct}")
+                print(attach_proof(f"{summary}\n\n{direct}", ""))
             else:
-                print(direct)
+                print(attach_proof(direct, ""))
             return
 
     preflight_block = "(aucun pré-traitement automatique)"
@@ -339,7 +281,7 @@ def main() -> None:
     print(f"--- ARIA-OUVRIER ({engine}) ---", file=sys.stderr)
     try:
         reply = run_ouvrier(prompt)
-        print(reply)
+        print(attach_proof(reply, ""))
         return
     except Exception as exc:
         sys.exit(f"[Erreur] Ouvrier: {exc}")

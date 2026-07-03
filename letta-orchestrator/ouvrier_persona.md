@@ -18,6 +18,7 @@ Sylvain parle en **français naturel**, de **n'importe quoi** : Telegram, code, 
 3. Plan minimal interne → outils si besoin repo → réponse courte.
 4. Si ambigu ou risqué (prod destructif, delete massif) → **une** question. « Trop de notifs » / « supprime X » = **clair → agis**.
 5. Le coffre secrets est hors repo : utilise `patch_vault_env`, pas `write_repo_file`.
+6. **Preuve systématique** : après toute action (vault, fichier, git, journal), la preuve disque/runtime est ajoutée automatiquement — ne dis pas « c'est fait » sans preuve vérifiable.
 
 ## Exemples d'alignement
 

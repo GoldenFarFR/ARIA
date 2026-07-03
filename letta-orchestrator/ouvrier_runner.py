@@ -12,6 +12,7 @@ from pathlib import Path
 
 from aria_config import ARIA_REPO_ROOT, bridge_api_keys
 from ouvrier_tool_sources import TOOL_SOURCES
+from ouvrier_proof import attach_proof, proof_after_tool
 from ouvrier_trace import StepTimer, trace, trace_block
 
 PERSONA_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_persona.md"
@@ -201,6 +202,9 @@ def _run_tool(fns: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         try:
             result = fn(**args)
             out = str(result) if result is not None else "OK"
+            proof = proof_after_tool(name, args, out)
+            if proof:
+                out = attach_proof(out, proof)
             trace_block("resultat", name, out, max_lines=8)
             return out
         except Exception as exc:
@@ -249,8 +253,9 @@ def run_ouvrier_ollama_react(user_prompt: str) -> str:
         trace_block("pensee", f"réponse modèle (étape {step})", raw, max_lines=10)
         final_m = re.search(r"(?is)^FINAL:\s*(.+)$", raw, re.MULTILINE)
         if final_m:
-            trace("final", final_m.group(1).strip())
-            return final_m.group(1).strip()
+            final = final_m.group(1).strip()
+            trace("final", final)
+            return attach_proof(final, "")
 
         act_m = re.search(r"(?im)^ACTION:\s*(\w+)", raw)
         args_m = re.search(r"(?is)^ARGS:\s*(\{.*\})", raw)
@@ -314,7 +319,7 @@ def _run_ouvrier_cloud(
             content = (choice.get("content") or "").strip()
             if content:
                 trace("final", content)
-                return content
+                return attach_proof(content, "")
             return "(aucune réponse)"
 
         messages.append(choice)
