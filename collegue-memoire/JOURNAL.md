@@ -358,3 +358,4 @@
 19h17 — memoire: auto ApplyApproved collect-session + /apply-lessons KART + docs COLLEGUE
 19h39 — refonte tweet feedback commu format+reponses roadmap
 19h42 — confirme policy feedback X EN + correction typos visiteur
+19h47 — feat feedback X fil 2 tweets citation+reply developpee
