@@ -155,29 +155,36 @@ async def collect_judge_evidence() -> JudgeEvidence:
     from aria_core.runtime import settings
     from aria_core.skills.github_skill import github_configured, repo_write_allowed
 
-    ev = JudgeEvidence(
-        resolved_gaps_7d=count_resolved_gaps(days=7),
-        memory_entries=count_memory_entries(),
-        telegram_configured=bool(getattr(settings, "telegram_bot_token", "") or ""),
-    )
-
     owner = getattr(settings, "github_owner", "") or ""
-    if github_configured() and owner:
-        ev.github_write = repo_write_allowed(owner.strip(), "aria-vanguard")
-
+    github_write = (
+        repo_write_allowed(owner.strip(), "aria-vanguard")
+        if github_configured() and owner
+        else False
+    )
+    health_ok = False
+    health_commit = ""
+    aria_core_build = ""
     try:
         from aria_core.health_watch import _probe_health
 
         ok, detail = await _probe_health()
-        ev.health_ok = ok
+        health_ok = ok
         if "commit=" in detail:
-            ev.health_commit = detail.split("commit=", 1)[-1].strip()
+            health_commit = detail.split("commit=", 1)[-1].strip()
         if "aria_core_build=" in detail:
-            ev.aria_core_build = detail.split("aria_core_build=", 1)[-1].strip().split()[0]
+            aria_core_build = detail.split("aria_core_build=", 1)[-1].strip().split()[0]
     except Exception as exc:
         logger.debug("judge health: %s", exc)
 
-    return ev
+    return JudgeEvidence(
+        resolved_gaps_7d=count_resolved_gaps(days=7),
+        memory_entries=count_memory_entries(),
+        telegram_configured=bool(getattr(settings, "telegram_bot_token", "") or ""),
+        github_write=github_write,
+        health_ok=health_ok,
+        health_commit=health_commit,
+        aria_core_build=aria_core_build,
+    )
 
 
 def apply_earned_levels(

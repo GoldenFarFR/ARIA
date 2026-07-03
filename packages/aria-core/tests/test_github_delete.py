@@ -87,6 +87,7 @@ async def test_delete_protected_repo_refused(monkeypatch):
         GITHUB_TOKEN="test",
         GITHUB_READ_REPOS="*",
         GITHUB_WRITE_REPOS="*",
+        GITHUB_PROTECTED_REPOS="kikou",
     )
 
     import aria_core.skills.github_skill as mod
@@ -94,6 +95,6 @@ async def test_delete_protected_repo_refused(monkeypatch):
     importlib.reload(mod)
     monkeypatch.setattr(mod, "github_configured", lambda: True)
 
-    out, data = await mod.execute_github_sandbox("delete repo dexpulse", lang="en")
+    out, data = await mod.execute_github_sandbox("delete repo kikou", lang="en")
     assert data.get("error") == "protected"
     assert "protected" in out.lower()

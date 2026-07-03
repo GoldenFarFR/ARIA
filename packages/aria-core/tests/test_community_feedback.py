@@ -218,7 +218,13 @@ async def test_translate_to_english_for_x(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_translate_skips_english():
+async def test_translate_skips_english(monkeypatch):
+    async def noop_llm(_t: str) -> None:
+        return None
+
+    monkeypatch.setattr("aria_core.community_feedback._llm_polish_quote_for_x", noop_llm)
+    monkeypatch.setattr("aria_core.community_feedback._llm_fix_english_typos", noop_llm)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: False)
     text = "Love the Vanguard site — please add Telegram"
     out, translated = await translate_to_english_for_x(text)
     assert translated is False

@@ -12,6 +12,26 @@ from aria_core.truth_ledger.store import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_canonical_truth_db(tmp_path, monkeypatch):
+    db = tmp_path / "aria.db"
+    ledger = tmp_path / "truth-ledger"
+    db_path = lambda: db
+    ledger_dir = lambda: ledger
+    for target in (
+        "aria_core.paths.aria_db_path",
+        "aria_core.truth_ledger.sync.aria_db_path",
+        "aria_core.paths.truth_ledger_dir",
+        "aria_core.truth_ledger.sync.truth_ledger_dir",
+    ):
+        monkeypatch.setattr(
+            target,
+            db_path if "db" in target else ledger_dir,
+        )
+    monkeypatch.setattr("aria_core.truth_ledger.store.DB_PATH", str(db))
+    monkeypatch.setattr("aria_core.truth_ledger.store.LEDGER_DIR", ledger)
+
+
 @pytest.mark.asyncio
 async def test_canonical_upsert_and_search():
     await init_truth_ledger()

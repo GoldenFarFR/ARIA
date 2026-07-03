@@ -236,6 +236,7 @@ def _assemble_context(parts: list[str], *, max_chars: int) -> str:
     priority_markers = (
         "# Rappel sémantique (mémoire vectorielle — opt-in)",
         "Arbitre mémoire ARIA",
+        "# Réflexion opérationnelle ARIA (Phase G)",
         "# Connaissances approuvées (mémoire sémantique)",
         "# Journal récent (mémoire épisodique)",
     )
