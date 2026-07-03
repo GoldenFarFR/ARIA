@@ -3,7 +3,7 @@
 Pipeline visuel (3 actifs distincts) :
 - **Avatar** : `current.jpg` — photo de profil carrée (Telegram /avatar, sync X).
 - **Ancre identité** : `identity_anchor.jpg` — référence visage (même personnage).
-- **Bannière** : `x_banner.jpg` — image large 3:1, générée depuis l'ancre, upload X header.
+- **Bannière** : `x_banner.jpg` — header 3:1 créatif Imagine (text-to-image brand, ≠ photo profil).
 """
 
 from __future__ import annotations
@@ -67,25 +67,45 @@ def normalize_banner_jpeg(
     return buf.getvalue()
 
 
-async def generate_x_banner_jpeg() -> bytes | None:
-    from aria_core.avatar_identity import get_identity_status, has_identity_anchor, identity_anchor_path
-    from aria_core.portrait_scene import generate_banner_portrait
-
-    if not has_identity_anchor():
-        return None
-    anchor = identity_anchor_path().read_bytes()
-    brief = get_identity_status().get("brief") or "ARIA ZHC chief AI officer GoldenFar"
-    scene = (
-        "Wide cinematic X/Twitter header banner 3:1 aspect ratio, "
-        "premium dark crypto brand GoldenFar, subtle gold accents, "
-        "futuristic holding aesthetic, no text overlay, photorealistic atmosphere"
+def default_banner_scene() -> str:
+    return (
+        "Zero-Human Company holding skyline at dusk, autonomous AI operations motif, "
+        "golden data streams over dark vault geometry, Vanguard ZHC energy, "
+        "cinematic depth of field, no text overlay"
     )
-    return await generate_banner_portrait(anchor, identity_brief=brief, scene=scene)
 
 
-async def ensure_x_banner_file() -> Path | None:
+def _banner_brand_brief() -> str:
+    from aria_core.runtime import settings
+
+    try:
+        from aria_core.avatar_identity import get_identity_status
+
+        brief = (get_identity_status().get("brief") or "").strip()
+        if brief:
+            return brief
+    except Exception:
+        pass
+    holding = (getattr(settings, "aria_holding_name", "") or "").strip()
+    if holding:
+        return f"{holding} — ARIA ZHC autonomous chief AI officer"
+    return "ARIA ZHC chief AI officer, GoldenFar Zero-Human Company holding"
+
+
+async def generate_x_banner_jpeg() -> bytes | None:
+    from aria_core.portrait_scene import generate_banner_creative
+
+    return await generate_banner_creative(
+        brand_brief=_banner_brand_brief(),
+        scene=default_banner_scene(),
+    )
+
+
+async def ensure_x_banner_file(*, force: bool = False) -> Path | None:
     path = x_banner_path()
-    if path.is_file() and path.stat().st_size > 10_000:
+    if force and path.is_file():
+        path.unlink(missing_ok=True)
+    if not force and path.is_file() and path.stat().st_size > 10_000:
         return path
     data = await generate_x_banner_jpeg()
     if not data:
