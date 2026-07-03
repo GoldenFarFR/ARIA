@@ -10,7 +10,7 @@ async def test_handle_operator_banner_not_actu(monkeypatch):
 
     called = {"cycle": False}
 
-    async def fake_cycle(*, lang="fr"):
+    async def fake_cycle(*, lang="fr", force_regenerate=False):
         called["cycle"] = True
         return "Banniere OK — action faite"
 
