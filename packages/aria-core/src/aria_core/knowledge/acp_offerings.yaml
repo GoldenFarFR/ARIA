@@ -1,0 +1,114 @@
+# ACP offering templates — workflows marketplace Aria Vanguard ZHC (premium SSOT)
+version: 1
+
+templates:
+  analyse_lite_x1:
+    name: analyse_lite_x1
+    description: >-
+      Lite on-chain token scan — fast SAFE/CAUTION/DANGER verdict for Base contracts.
+    price_usd: 1.99
+    sla_minutes: 5
+    requirements_description: Base contract address to scan.
+    deliverable_description: Lite verdict plus risk alerts.
+    sample_request: Scan 0xabc… on Base — liquidity and honeypot heuristics.
+    sample_deliverable: "liteVerdict: CAUTION — thin liquidity; review before size."
+    requirement_example:
+      contractAddress: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+    deliverable_example:
+      liteVerdict: CAUTION
+      riskAlerts: Thin liquidity pool; confirm on Basescan.
+    requirements:
+      type: object
+      required: [contractAddress]
+      properties:
+        contractAddress:
+          type: string
+          description: Base contract address (0x…).
+    deliverable:
+      type: object
+      required: [liteVerdict, riskAlerts]
+      properties:
+        liteVerdict:
+          type: string
+          description: SAFE, CAUTION, or DANGER heuristic verdict.
+        riskAlerts:
+          type: string
+          description: Top risk flags from the heuristic scan.
+
+  analyse_full_x1:
+    name: analyse_full_x1
+    description: >-
+      Full heuristic audit — security score, verdict, and operator-ready markdown report.
+    price_usd: 4.99
+    sla_minutes: 5
+    requirements_description: Base contract address for deep heuristic audit.
+    deliverable_description: Verdict, security score, and full audit report.
+    sample_request: Full audit 0xabc… — ownership, liquidity, honeypot, volume.
+    sample_deliverable: "verdict: SPECULATIVE — securityScore 55/100."
+    requirement_example:
+      contractAddress: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+    deliverable_example:
+      verdict: SPECULATIVE
+      securityScore: "55"
+      auditReport: Full markdown heuristic audit report.
+    requirements:
+      type: object
+      required: [contractAddress]
+      properties:
+        contractAddress:
+          type: string
+          description: Base contract address (0x…).
+    deliverable:
+      type: object
+      required: [verdict, securityScore, auditReport]
+      properties:
+        verdict:
+          type: string
+          description: AVOID, SPECULATIVE, or SAFE-style verdict.
+        securityScore:
+          type: string
+          description: Heuristic security score 0-100.
+        auditReport:
+          type: string
+          description: Full structured audit report (markdown).
+
+  veille_zhc_x1:
+    name: veille_zhc_x1
+    description: >-
+      ZHC watchlist signal — curated Vanguard ecosystem alert with context and action note.
+    price_usd: 2.49
+    sla_minutes: 15
+    requirements_description: Asset or theme to watch within the ZHC/Vanguard stack.
+    deliverable_description: Signal summary, context, and suggested operator action.
+    sample_request: Watch BASE ecosystem liquidity shift — 7d horizon, ZHC thesis lens.
+    sample_deliverable: "signal: Elevated flow — summary plus action note for operators."
+    requirement_example:
+      brief: ZHC watch — Base DeFi liquidity rotation, 7d window.
+      symbols: "BASE, ETH"
+    deliverable_example:
+      signal: WATCH
+      summary: Notable liquidity rotation on Base pairs.
+      actionNote: Revisit size; confirm on-chain before allocation.
+    requirements:
+      type: object
+      required: [brief]
+      properties:
+        brief:
+          type: string
+          description: What to watch and why — ZHC/Vanguard context.
+        symbols:
+          type: string
+          description: Optional tickers, pairs, or handles.
+    deliverable:
+      type: object
+      required: [signal, summary, actionNote]
+      properties:
+        signal:
+          type: string
+          description: WATCH, ALERT, or CLEAR signal label.
+        summary:
+          type: string
+          description: Concise signal summary for operators.
+        actionNote:
+          type: string
+          description: Suggested next step — not financial advice.
