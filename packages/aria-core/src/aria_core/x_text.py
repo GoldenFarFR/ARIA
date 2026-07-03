@@ -13,7 +13,13 @@ X_URL_WEIGHTED_CHARS = 23
 FEEDBACK_SITE_MAX_CHARS = 500
 FEEDBACK_X_QUOTE_MAX_WEIGHT = 200
 # Tweet 1 seul (fil) — citation plus longue, réponse en reply
-FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT = 240
+FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT = 255
+# Remplissage cible des tweets feedback (lisibilité + densité)
+FEEDBACK_X_MIN_TWEET_FILL_RATIO = 0.70
+
+
+def feedback_x_min_tweet_weight(max_chars: int = X_TWEET_MAX_CHARS) -> int:
+    return int(max_chars * FEEDBACK_X_MIN_TWEET_FILL_RATIO)
 
 _URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 
