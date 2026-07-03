@@ -1,0 +1,7 @@
+*
+!.gitignore
+!README.md
+!INBOX-STATE.json
+!rejected/
+!processed/
+!triage-inbox.ps1
