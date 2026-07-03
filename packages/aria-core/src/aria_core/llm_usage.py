@@ -13,6 +13,8 @@ from aria_core.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
+_FREE_PROVIDERS = frozenset({"", "none", "ollama", "local", "unknown"})
+
 _chat_usage_ctx: ContextVar[dict[str, int] | None] = ContextVar("chat_usage_ctx", default=None)
 
 
@@ -146,6 +148,105 @@ def _iter_rows(month: str | None = None) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
     return rows
+
+
+def is_paid_provider(provider: str) -> bool:
+    """Provider cloud facturé (≠ Ollama local)."""
+    return (provider or "").strip().lower() not in _FREE_PROVIDERS
+
+
+def _format_token_count(value: int) -> str:
+    n = int(value)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 10_000:
+        return f"{n / 1_000:.1f}k"
+    return f"{n:,}".replace(",", " ")
+
+
+def summarize_paid_usage(*, month: str | None = None, lifetime: bool = False) -> dict[str, Any]:
+    """
+    Agrège uniquement les appels cloud payants (grok, groq, xai, …).
+    lifetime=True → tous les mois dans data/llm-usage/.
+    """
+    if lifetime:
+        month_key = "lifetime"
+        rows = [r for r in _iter_rows() if _is_paid_row(r)]
+    else:
+        month_key = month or datetime.now(timezone.utc).strftime("%Y-%m")
+        rows = [r for r in _iter_rows(month_key) if _is_paid_row(r)]
+
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "calls_ok": 0,
+        "calls_failed": 0,
+    }
+    by_provider: dict[str, dict[str, int]] = {}
+    by_day: dict[str, dict[str, int]] = {}
+
+    def _bump(bucket: dict[str, dict[str, int]], key: str, row: dict[str, Any]) -> None:
+        slot = bucket.setdefault(
+            key,
+            {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0},
+        )
+        slot["input_tokens"] += int(row.get("input_tokens") or 0)
+        slot["output_tokens"] += int(row.get("output_tokens") or 0)
+        slot["total_tokens"] += int(row.get("total_tokens") or 0)
+        slot["calls"] += 1
+
+    for row in rows:
+        if bool(row.get("ok")):
+            totals["calls_ok"] += 1
+        else:
+            totals["calls_failed"] += 1
+        if not row.get("ok"):
+            continue
+        inp = int(row.get("input_tokens") or 0)
+        out = int(row.get("output_tokens") or 0)
+        tot = int(row.get("total_tokens") or (inp + out))
+        totals["input_tokens"] += inp
+        totals["output_tokens"] += out
+        totals["total_tokens"] += tot
+        _bump(by_provider, str(row.get("provider") or "unknown"), row)
+        _bump(by_day, str(row.get("day") or "?"), row)
+
+    return {
+        "month": month_key,
+        "totals": totals,
+        "by_provider": dict(sorted(by_provider.items())),
+        "by_day": dict(sorted(by_day.items())),
+        "rows": len(rows),
+    }
+
+
+def _is_paid_row(row: dict[str, Any]) -> bool:
+    return is_paid_provider(str(row.get("provider") or ""))
+
+
+def paid_usage_snapshot(*, month: str | None = None) -> dict[str, Any]:
+    """Mois courant + cumul lifetime — pour dashboard KART (0 appel API)."""
+    month_key = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    month_sum = summarize_paid_usage(month=month_key)
+    life_sum = summarize_paid_usage(lifetime=True)
+    return {
+        "month": month_key,
+        "month_total_tokens": int(month_sum["totals"]["total_tokens"]),
+        "month_calls": int(month_sum["totals"]["calls_ok"]),
+        "lifetime_total_tokens": int(life_sum["totals"]["total_tokens"]),
+        "lifetime_calls": int(life_sum["totals"]["calls_ok"]),
+        "by_provider_month": month_sum["by_provider"],
+    }
+
+
+def format_paid_usage_dashboard(*, month: str | None = None, lang: str = "fr") -> str:
+    snap = paid_usage_snapshot(month=month)
+    m_tok = _format_token_count(snap["month_total_tokens"])
+    l_tok = _format_token_count(snap["lifetime_total_tokens"])
+    if lang == "fr":
+        return f"payant {snap['month']}: {m_tok} tok | total: {l_tok} tok"
+    return f"paid {snap['month']}: {m_tok} tok | total: {l_tok} tok"
 
 
 def summarize_usage(*, month: str | None = None) -> dict[str, Any]:

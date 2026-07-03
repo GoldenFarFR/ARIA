@@ -24,6 +24,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Rapport tokens LLM ARIA")
     parser.add_argument("--month", help="YYYY-MM (défaut: mois UTC courant)")
     parser.add_argument("--json", action="store_true", help="Sortie JSON brute")
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Une ligne dashboard KART (payant mois + total lifetime)",
+    )
+    parser.add_argument(
+        "--paid-only",
+        action="store_true",
+        help="Uniquement providers cloud facturés",
+    )
     args = parser.parse_args()
 
     data = _repo_data_dir()
@@ -31,14 +41,34 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
     from aria_core.testing import configure_test_runtime
-    from aria_core.llm_usage import summarize_usage
+    from aria_core.llm_usage import (
+        format_paid_usage_dashboard,
+        paid_usage_snapshot,
+        summarize_paid_usage,
+        summarize_usage,
+    )
 
     configure_test_runtime(data_dir=data)
     month = args.month or datetime.now(timezone.utc).strftime("%Y-%m")
-    summary = summarize_usage(month=month)
+
+    if args.compact:
+        print(format_paid_usage_dashboard(month=month))
+        return 0
+
+    summary = (
+        summarize_paid_usage(month=month)
+        if args.paid_only
+        else summarize_usage(month=month)
+    )
 
     if args.json:
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        payload = summary
+        if args.paid_only:
+            payload = {
+                "summary": summary,
+                "snapshot": paid_usage_snapshot(month=month),
+            }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 
     t = summary["totals"]
