@@ -13,6 +13,8 @@ from aria_core.visual_autonomy import (
 
 @pytest.fixture(autouse=True)
 def isolated_visual(tmp_path, monkeypatch):
+    monkeypatch.delenv("ARIA_VISUAL_AUTONOMY", raising=False)
+    monkeypatch.delenv("ARIA_VISUAL_AUTO_APPLY", raising=False)
     avatar = tmp_path / "aria" / "avatar"
     avatar.mkdir(parents=True)
     monkeypatch.setattr("aria_core.avatar.aria_avatar_dir", lambda: avatar)
@@ -21,12 +23,13 @@ def isolated_visual(tmp_path, monkeypatch):
 
 
 def test_visual_autonomy_follows_aria_autonomous(monkeypatch):
-    monkeypatch.delenv("ARIA_VISUAL_AUTONOMY", raising=False)
-    configure_test_runtime(settings=AriaRuntimeSettings(aria_autonomous=True))
-    assert visual_autonomy_enabled() is True
+    from aria_core.runtime import get_settings
 
-    configure_test_runtime(settings=AriaRuntimeSettings(aria_autonomous=False))
-    assert visual_autonomy_enabled() is False
+    for autonomous in (True, False):
+        monkeypatch.delenv("ARIA_VISUAL_AUTONOMY", raising=False)
+        configure_test_runtime(settings=AriaRuntimeSettings(aria_autonomous=autonomous))
+        setattr(get_settings(), "aria_autonomous", autonomous)
+        assert visual_autonomy_enabled() is autonomous
 
 
 def test_visual_auto_apply_default_true_when_autonomous(monkeypatch):
