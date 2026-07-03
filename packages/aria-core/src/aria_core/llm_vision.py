@@ -75,6 +75,13 @@ async def vision_analyze(image_jpeg: bytes, instruction: str, *, max_tokens: int
         headers["X-Title"] = llm_provider_title()
 
     try:
+        from aria_core.llm_usage import (
+            estimate_tokens_from_text,
+            parse_usage_from_response,
+            record_llm_usage,
+        )
+
+        prompt_est = estimate_tokens_from_text(instruction) + 256
         async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(
                 url,
@@ -88,9 +95,37 @@ async def vision_analyze(image_jpeg: bytes, instruction: str, *, max_tokens: int
             )
             if response.status_code != 200:
                 logger.warning("Vision LLM %s: %s", response.status_code, response.text[:300])
+                record_llm_usage(
+                    provider=provider,
+                    model=model,
+                    input_tokens=prompt_est,
+                    output_tokens=0,
+                    ok=False,
+                    status_code=response.status_code,
+                    kind="vision",
+                    estimated=True,
+                )
                 return None
             data = response.json()
-            return data["choices"][0]["message"]["content"].strip()
+            reply = data["choices"][0]["message"]["content"].strip()
+            usage = parse_usage_from_response(data)
+            estimated = usage["total_tokens"] <= 0
+            if estimated:
+                usage = {
+                    "input_tokens": prompt_est,
+                    "output_tokens": estimate_tokens_from_text(reply),
+                    "total_tokens": prompt_est + estimate_tokens_from_text(reply),
+                }
+            record_llm_usage(
+                provider=provider,
+                model=model,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                ok=True,
+                kind="vision",
+                estimated=estimated,
+            )
+            return reply
     except Exception as exc:
         logger.warning("Vision LLM failed: %s", exc)
         return None
