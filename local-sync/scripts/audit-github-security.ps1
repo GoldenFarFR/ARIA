@@ -7,6 +7,14 @@ $ErrorActionPreference = "Stop"
 
 $projets = Join-Path $env:USERPROFILE "projets"
 $trustFile = Join-Path (Split-Path -Parent $PSScriptRoot) "security\github-trust.yaml"
+. (Resolve-Path (Join-Path $PSScriptRoot "..\..\scripts\aria-paths.ps1"))
+
+$script:MonorepoSensitiveMap = @{
+    "aria-local-sync"  = "local-sync"
+    "collegue-memoire" = "collegue-memoire"
+    "aria-vanguard"    = "vanguard"
+    "aria-skills"      = "skills"
+}
 $outJson = Join-Path $env:LOCALAPPDATA "GoldenFar\github-audit-latest.json"
 $machine = $env:COMPUTERNAME
 
@@ -153,7 +161,7 @@ if ($ghToken) {
         Accept        = "application/vnd.github+json"
         "X-GitHub-Api-Version" = "2022-11-28"
     }
-    foreach ($repoName in @("aria-local-sync", "collegue-memoire")) {
+    foreach ($repoName in @("ARIA")) {
         try {
             $events = Invoke-RestMethod -Headers $headers `
                 -Uri "https://api.github.com/repos/GoldenFarFR/$repoName/events?per_page=15" -TimeoutSec 15
@@ -174,14 +182,20 @@ if ($ghToken) {
     }
 }
 
-foreach ($repoName in $cfg.sensitive_repos) {
-    $repoPath = Join-Path $projets $repoName
-    if (-not (Test-Path (Join-Path $repoPath ".git"))) { continue }
-    $scanned += $repoName
-    Push-Location $repoPath
+function Invoke-SensitiveRepoScan {
+    param(
+        [string]$RepoPath,
+        [string]$RepoName,
+        [string]$PathPrefix,
+        [object]$Cfg,
+        [string]$Since,
+        [System.Collections.Generic.List[object]]$Findings
+    )
+    if (-not (Test-Path (Join-Path $RepoPath ".git"))) { return $false }
+    Push-Location $RepoPath
     try {
-        $commits = git log --since=$since --format="%H|%an|%ae|%ci|%s" 2>$null
-        if (-not $commits) { continue }
+        $commits = git log --since=$Since --format="%H|%an|%ae|%ci|%s" 2>$null
+        if (-not $commits) { return $true }
 
         $gfvPerDay = @{}
         foreach ($line in $commits) {
@@ -191,12 +205,18 @@ foreach ($repoName in $cfg.sensitive_repos) {
             $hash = $p[0]; $an = $p[1]; $ae = $p[2]; $ci = $p[3]; $subj = $p[4]
             $author = "$an <$ae>"
 
-            $authorTrusted = (Test-AuthorTrusted $an $cfg) -or (Test-AuthorTrusted $ae $cfg)
-            if (-not $authorTrusted) {
-                Add-Finding $findings "high" $repoName "unknown_author" "Auteur non reconnu: $author" $hash.Substring(0, 7)
+            $files = @(git diff-tree --no-commit-id --name-only -r $hash 2>$null)
+            if ($PathPrefix) {
+                $prefix = $PathPrefix.TrimEnd('/') + '/'
+                $files = @($files | Where-Object { $_ -like "$prefix*" })
+                if ($files.Count -eq 0) { continue }
             }
 
-            $files = git diff-tree --no-commit-id --name-only -r $hash 2>$null
+            $authorTrusted = (Test-AuthorTrusted $an $Cfg) -or (Test-AuthorTrusted $ae $Cfg)
+            if (-not $authorTrusted) {
+                Add-Finding $Findings "high" $RepoName "unknown_author" "Auteur non reconnu: $author" $hash.Substring(0, 7)
+            }
+
             $touchesVault = $files | Where-Object { $_ -match 'goldenfar-vault\.gfv|sync/vault/' }
             if ($touchesVault) {
                 $dt = [datetime]::Parse($ci)
@@ -206,42 +226,64 @@ foreach ($repoName in $cfg.sensitive_repos) {
                 $gfvPerDay[$dayKey]++
 
                 if ($gfvPerDay[$dayKey] -gt 2) {
-                    Add-Finding $findings "medium" $repoName "vault_multi_push" `
+                    Add-Finding $Findings "medium" $RepoName "vault_multi_push" `
                         "Plus de 2 commits vault le $dayKey" $hash.Substring(0, 7)
                 }
-                if ($cfg.vault_rotation_hours_utc -notcontains $hourUtc -and -not (Test-VaultCommitLegit $subj $cfg)) {
-                    if (-not (Test-AuthorTrusted $an $cfg)) {
-                        Add-Finding $findings "high" $repoName "vault_off_hours" `
+                if ($Cfg.vault_rotation_hours_utc -notcontains $hourUtc -and -not (Test-VaultCommitLegit $subj $Cfg)) {
+                    if (-not (Test-AuthorTrusted $an $Cfg)) {
+                        Add-Finding $Findings "high" $RepoName "vault_off_hours" `
                             "Vault modifie hors fenetre UTC ($hourUtc h): $subj" $hash.Substring(0, 7)
                     }
                 }
             }
 
             $added = git show $hash --pretty=format: -U0 2>$null | Where-Object {
-                $_ -match '^\+' -and $_ -notmatch '^\+\+\+' 
+                $_ -match '^\+' -and $_ -notmatch '^\+\+\+'
             }
-            foreach ($line in $added) {
-                if ($line -match '\.md$|Bitwarden|Test-Path|chemin|fichier|SETUP-AUTRE|SECURITE-CLES|gitignore|\.gitignore') { continue }
-                foreach ($pat in $cfg.secret_patterns) {
-                    if ($line -notlike "*$pat*") { continue }
-                    if ($pat -eq "rnd_" -and $line -notmatch 'rnd_[A-Za-z0-9]{8,}') { continue }
+            foreach ($diffLine in $added) {
+                if ($diffLine -match '\.md$|Bitwarden|Test-Path|chemin|fichier|SETUP-AUTRE|SECURITE-CLES|gitignore|\.gitignore') { continue }
+                foreach ($pat in $Cfg.secret_patterns) {
+                    if ($diffLine -notlike "*$pat*") { continue }
+                    if ($pat -eq "rnd_" -and $diffLine -notmatch 'rnd_[A-Za-z0-9]{8,}') { continue }
                     if ($pat -like '.vault-*') { continue }
-                    if ($pat -eq "ADMIN_API_SECRET=" -and $line -match '<|placeholder|exemple|your_|xxx') { continue }
+                    if ($pat -eq "ADMIN_API_SECRET=" -and $diffLine -match '<|placeholder|exemple|your_|xxx') { continue }
                     $sev = if ($authorTrusted) { "high" } else { "critical" }
                     $rule = if ($authorTrusted) { "secret_in_history" } else { "vault_untrusted_origin" }
-                    Add-Finding $findings $sev $repoName $rule `
+                    Add-Finding $Findings $sev $RepoName $rule `
                         "Ligne suspecte ($pat) auteur=$an" $hash.Substring(0, 7)
                     break
                 }
             }
         }
 
-        $reflog = git reflog --since=$since 2>$null
+        $reflog = git reflog --since=$Since 2>$null
         if ($reflog -match 'reset|rebase.*onto|push.*forced') {
-            Add-Finding $findings "high" $repoName "force_history" "Reflog: reset/rebase/force detecte" ""
+            Add-Finding $Findings "high" $RepoName "force_history" "Reflog: reset/rebase/force detecte" ""
         }
+        return $true
     } finally { Pop-Location }
 }
+
+$scannedSet = [System.Collections.Generic.HashSet[string]]::new()
+foreach ($repoName in $cfg.sensitive_repos) {
+    $legacyPath = Join-Path $projets $repoName
+    if (Invoke-SensitiveRepoScan -RepoPath $legacyPath -RepoName $repoName -PathPrefix "" -Cfg $cfg -Since $since -Findings $findings) {
+        [void]$scannedSet.Add($repoName)
+    }
+}
+
+$ariaRoot = $script:AriaRepoRoot
+if (Test-Path (Join-Path $ariaRoot ".git")) {
+    foreach ($repoName in $cfg.sensitive_repos) {
+        if ($scannedSet.Contains($repoName)) { continue }
+        $prefix = $script:MonorepoSensitiveMap[$repoName]
+        if (-not $prefix) { continue }
+        if (Invoke-SensitiveRepoScan -RepoPath $ariaRoot -RepoName $repoName -PathPrefix $prefix -Cfg $cfg -Since $since -Findings $findings) {
+            [void]$scannedSet.Add($repoName)
+        }
+    }
+}
+$scanned = @($scannedSet)
 
 $severityRank = @{ critical = 4; high = 3; medium = 2; low = 1; ok = 0 }
 $maxSev = "ok"
