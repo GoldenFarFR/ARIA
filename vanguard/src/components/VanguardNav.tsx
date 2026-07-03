@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { cn } from '../lib/cn'
 
 const SECTIONS = [
+  { href: '#structure', label: 'Structure' },
   { href: '#aria', label: 'ARIA' },
   { href: '#faq', label: 'FAQ' },
 ]

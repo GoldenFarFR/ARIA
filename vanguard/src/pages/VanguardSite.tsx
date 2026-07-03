@@ -1,21 +1,47 @@
 import { ArrowRight, ExternalLink } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { getSiteContent } from '../api'
-import { HOLDING_DOMAIN, HOLDING_SITE_URL } from '../lib/site'
+import { getHoldingStructure, getSiteContent } from '../api'
+import { HOLDING_DOMAIN, HOLDING_NAME, HOLDING_SITE_URL } from '../lib/site'
 import { BrandMark } from '../components/BrandMark'
 import { AriaChat } from '../components/AriaChat'
 import { FaqSection } from '../components/FaqSection'
 import { CommunityWelcomeBanner } from '../components/CommunityWelcomeBanner'
+import { OrgChart } from '../components/OrgChart'
 import { VanguardNav } from '../components/VanguardNav'
-import type { AgentSetup } from '../types'
+import type { AgentSetup, HoldingStructure, RepertoireItem } from '../types'
 
-const HOLDING = 'Aria Vanguard ZHC'
+const HOLDING = HOLDING_NAME
+
+const FALLBACK_MARKET: RepertoireItem = {
+  id: 'market-fallback',
+  name: 'Aria Market',
+  description: 'Flagship subsidiary — DEX signals, watchlist, ARIA insights',
+  status: 'live',
+  category: 'product',
+  priority: 1,
+  zhc_aligned: true,
+  tags: ['flagship'],
+  notes: '',
+  revenue_monthly: 0,
+  created_at: '',
+  updated_at: '',
+  entity_type: 'subsidiary',
+  slug: 'market',
+}
+
+function portfolioFromStructure(structure: HoldingStructure | null): RepertoireItem[] {
+  if (!structure) return [FALLBACK_MARKET]
+  const items = [...structure.subsidiaries, ...structure.ventures]
+  return items.length > 0 ? items : [FALLBACK_MARKET]
+}
 
 export function VanguardSite() {
   const [setup, setSetup] = useState<AgentSetup | null>(null)
+  const [holding, setHolding] = useState<HoldingStructure | null>(null)
 
   useEffect(() => {
     getSiteContent().then(setSetup).catch(console.error)
+    getHoldingStructure().then(setHolding).catch(console.error)
   }, [])
 
   const oneLiner =
@@ -61,6 +87,15 @@ export function VanguardSite() {
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </div>
+        </section>
+
+        <section id="structure" className="page-shell py-16 md:py-20 border-t border-[#c9a962]/8">
+          <OrgChart
+            holdingName={holding?.holding.name ?? HOLDING}
+            holdingStatus={holding?.holding.status ?? 'live'}
+            portfolio={portfolioFromStructure(holding)}
+            subsidiaryLabel={holding?.subsidiary_label}
+          />
         </section>
 
         <section id="aria" className="page-shell py-16 md:py-20 border-t border-[#c9a962]/8">
