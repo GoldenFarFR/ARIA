@@ -27,7 +27,23 @@ def main() -> int:
     parser.add_argument(
         "--compact",
         action="store_true",
-        help="Une ligne dashboard KART (payant mois + total lifetime)",
+        help="Une ligne dashboard KART Grok Build (xAI)",
+    )
+    parser.add_argument(
+        "--grok",
+        action="store_true",
+        help="Alias --compact (Grok Build / xAI uniquement)",
+    )
+    parser.add_argument(
+        "--cursor",
+        action="store_true",
+        help="Une ligne dashboard KART Cursor (état local cursor-usage.json)",
+    )
+    parser.add_argument(
+        "--set-cursor",
+        nargs="*",
+        metavar="KEY=VAL",
+        help="Maj cursor-usage.json (composer_pct=4 api_pct=0 plan=pro)",
     )
     parser.add_argument(
         "--paid-only",
@@ -41,7 +57,9 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
     from aria_core.testing import configure_test_runtime
+    from aria_core.cursor_usage import format_cursor_usage_dashboard, update_cursor_usage
     from aria_core.llm_usage import (
+        format_grok_build_dashboard,
         format_paid_usage_dashboard,
         paid_usage_snapshot,
         summarize_paid_usage,
@@ -51,8 +69,30 @@ def main() -> int:
     configure_test_runtime(data_dir=data)
     month = args.month or datetime.now(timezone.utc).strftime("%Y-%m")
 
-    if args.compact:
-        print(format_paid_usage_dashboard(month=month))
+    if args.set_cursor:
+        kwargs: dict[str, object] = {}
+        for item in args.set_cursor:
+            if "=" not in item:
+                continue
+            key, val = item.split("=", 1)
+            key = key.strip().lower()
+            val = val.strip()
+            if key in ("composer", "composer_pct", "composer_pool_pct"):
+                kwargs["composer_pool_pct"] = float(val)
+            elif key in ("api", "api_pct", "api_pool_pct"):
+                kwargs["api_pool_pct"] = float(val)
+            elif key == "plan":
+                kwargs["plan"] = val
+        update_cursor_usage(**kwargs)
+        print(format_cursor_usage_dashboard())
+        return 0
+
+    if args.cursor:
+        print(format_cursor_usage_dashboard())
+        return 0
+
+    if args.compact or args.grok:
+        print(format_grok_build_dashboard(month=month))
         return 0
 
     summary = (
