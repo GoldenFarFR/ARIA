@@ -346,6 +346,29 @@ async def test_acp_conversational_status(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_acp_market_intelligence(monkeypatch):
+    from aria_core.skills import acp_market_intelligence as mi
+    from pathlib import Path
+
+    def fake_browse(query, **kwargs):
+        if "audit" in query or "security" in query:
+            return [{
+                "id": "a1", "name": "AuditBot", "successfulJobCount": 42,
+                "offerings": [{"name": "token_scan", "priceValue": 3.5, "description": "security audit"}],
+            }], None
+        return [], "500"
+
+    monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
+    monkeypatch.setattr(acp_cli, "browse_agents", fake_browse)
+    monkeypatch.setattr(acp_cli, "list_offerings", lambda: ([{"name": "analyse_lite_x1"}], None))
+    monkeypatch.setattr(mi, "_SCAN_CACHE", Path("/nonexistent/scan.json"))
+
+    reply, data = await execute_acp_marketplace("scan marché acp", lang="fr")
+    assert data.get("acp") == "market_intelligence"
+    assert "MARKET INTELLIGENCE" in reply
+
+
+@pytest.mark.asyncio
 async def test_acp_templates_command():
     reply, data = await execute_acp_marketplace("templates offres acp", lang="fr")
     assert data.get("acp") == "templates"
