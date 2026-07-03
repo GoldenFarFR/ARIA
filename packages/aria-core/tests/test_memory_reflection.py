@@ -44,10 +44,22 @@ def test_sanitize_secrets_in_reflection():
 
 
 @pytest.mark.asyncio
-async def test_build_llm_context_includes_reflection():
+async def test_build_llm_context_includes_reflection(monkeypatch):
+    from aria_core.memory.arbitrator import ArbitrationResult
     from aria_core.memory.llm_context import build_llm_context
 
     append_reflection("Test reflection Phase G injectée")
+    assert "Phase G injectée" in get_reflections_text()
+
+    async def fake_arbitration(**kwargs):
+        return ArbitrationResult()
+
+    monkeypatch.setattr("aria_core.memory.collegue.get_collegue_text", lambda: "")
+    monkeypatch.setattr("aria_core.memory.values.get_values_text", lambda: "")
+    monkeypatch.setattr("aria_core.memory.goals.get_goals_text", lambda: "")
+    monkeypatch.setattr("aria_core.memory.arbitrator.run_memory_arbitration", fake_arbitration)
+    monkeypatch.setattr("aria_core.repertoire_db.get_messages", lambda *a, **k: [])
+
     ctx = await build_llm_context(public=False)
     assert "Réflexion opérationnelle ARIA" in ctx
     assert "Phase G injectée" in ctx

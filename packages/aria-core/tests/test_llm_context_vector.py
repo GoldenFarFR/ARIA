@@ -62,9 +62,9 @@ async def test_fetch_vector_recall_with_mock(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_llm_context_injects_vector_section(monkeypatch):
-    from aria_core.runtime import get_settings
+    from aria_core.runtime import settings
 
-    monkeypatch.setattr(get_settings(), "aria_vector_memory", True)
+    monkeypatch.setattr(settings, "aria_vector_memory", True)
 
     async def fake_search(query: str, *, entry_type=None, limit=8):
         return [
@@ -88,6 +88,17 @@ async def test_build_llm_context_injects_vector_section(monkeypatch):
         return []
 
     monkeypatch.setattr("aria_core.knowledge.cognitive.get_approved", fake_approved)
+
+    async def fake_arbitration(**kwargs):
+        from aria_core.memory.arbitrator import ArbitrationResult
+
+        return ArbitrationResult()
+
+    monkeypatch.setattr(
+        "aria_core.memory.arbitrator.run_memory_arbitration",
+        fake_arbitration,
+    )
+    monkeypatch.setattr("aria_core.memory.collegue.get_collegue_text", lambda: "")
 
     ctx = await build_llm_context(public=False, query_hint="mémoire vectorielle ARIA")
     assert "Rappel sémantique" in ctx
