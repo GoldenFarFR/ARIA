@@ -303,7 +303,7 @@ Dernier OK: 2026-07-03T18:38:32.577884+00:00
 
 ---
 
-## [pending] cap-gap-image_api_key — 2026-07-03T20:13:38Z
+## [done] cap-gap-image_api_key — 2026-07-03T20:13:38Z
 
 **Titre :** Capacite: generation banniere X 3:1 (IMAGE_API_KEY — ≠ avatar carre)  
 **Source :** `capability_gap` · **Priorité :** normal  
@@ -328,7 +328,7 @@ no token
 
 ---
 
-## [pending] cap-gap-security_ip_changed_vault — 2026-07-03T20:14:28Z
+## [done] cap-gap-security_ip_changed_vault — 2026-07-03T20:14:28Z
 
 **Titre :** Securite: IP changee lors acces vault/sync  
 **Source :** `capability_gap` · **Priorité :** high  
@@ -354,7 +354,7 @@ IP A -> B
 
 ---
 
-## [pending] cap-gap-health_render_regression — 2026-07-03T20:14:28Z
+## [done] cap-gap-health_render_regression — 2026-07-03T20:14:28Z
 
 **Titre :** Incident: regression health Render (3 echecs)  
 **Source :** `capability_gap` · **Priorité :** high  
