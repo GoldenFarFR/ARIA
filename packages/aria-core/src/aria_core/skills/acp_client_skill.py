@@ -42,7 +42,19 @@ _POLL_RE = re.compile(
     re.I,
 )
 _BROWSE_RE = re.compile(r"\bbrowse\b|\bparcourir\b|offres?\s+disponibles", re.I)
-_REVENUE_RE = re.compile(r"revenu|revenue|générer|generer|monétis|monetis|plan", re.I)
+_REVENUE_RE = re.compile(
+    r"revenu|revenue|gagn(?:é|er)|argent|earnings|générer|generer|monétis|monetis|plan",
+    re.I,
+)
+_CONVERSATIONAL_ACP_RE = re.compile(
+    r"(?i)(?:"
+    r"comment\s+(?:se\s+)?passe|"
+    r"ça\s+va|ca\s+va|"
+    r"gagn(?:é|er)\s+(?:de\s+)?l['']?argent|"
+    r"tu\s+(?:as|a)\s+(?:gagn|fait)|"
+    r"combien\s+(?:as[- ]tu|tu\s+as|de\s+)"
+    r")",
+)
 
 
 def wants_acp_marketplace(message: str) -> bool:
@@ -132,6 +144,40 @@ async def _format_status(lang: str) -> tuple[str, dict]:
     return "\n".join(lines), {"acp": "status"}
 
 
+async def _format_conversational_status(lang: str) -> tuple[str, dict]:
+    """Réponse honnête quand operateur demande comment va la console ACP / les revenus."""
+    from aria_core.revenue_goals import monthly_total_usd, total_revenue_usd
+
+    status_msg, status_data = await _format_status(lang)
+    lines_count, events_path = _events_file_status()
+    month_usd = monthly_total_usd()
+    total_usd = total_revenue_usd()
+
+    if lang == "fr":
+        earnings = (
+            f"Revenus logués : {total_usd:.2f} $ total, {month_usd:.2f} $ ce mois "
+            f"(revenue_ledger.json)."
+        )
+        if total_usd <= 0:
+            earnings += (
+                "\nPas encore de job client payé livré — offres publiées, "
+                "listener actif, premier $ = 1er job traité."
+            )
+        body = (
+            "Console ACP — état honnête\n\n"
+            f"{earnings}\n\n"
+            f"Fichier events : {lines_count} ligne(s) — {events_path}\n\n"
+            f"{status_msg}"
+        )
+        return body, {**status_data, "acp": "conversational_status"}
+
+    return (
+        f"ACP console: ${total_usd:.2f} logged total, ${month_usd:.2f} this month. "
+        f"Events: {lines_count}.\n\n{status_msg}",
+        {**status_data, "acp": "conversational_status"},
+    )
+
+
 async def _format_revenue_plan(lang: str) -> tuple[str, dict]:
     offerings, _ = list_offerings()
     names = [o.get("name") for o in offerings if o.get("name")]
@@ -189,6 +235,9 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
             name = item.get("name") or item.get("agentName") or "?"
             lines.append(f"• {name}")
         return "\n".join(lines), {"acp": "browse", "count": len(items)}
+
+    if _CONVERSATIONAL_ACP_RE.search(text) and _ACP_RE.search(text):
+        return await _format_conversational_status(lang_key)
 
     if _REVENUE_RE.search(text):
         return await _format_revenue_plan(lang_key)

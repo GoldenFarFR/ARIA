@@ -40,9 +40,22 @@ _TRADE_PAIR_RE = re.compile(
 )
 
 
+_CONVERSATIONAL_ACP_RE = re.compile(
+    r"(?i)(?:"
+    r"comment\s+(?:se\s+)?passe|"
+    r"ça\s+va|ca\s+va|"
+    r"gagn(?:é|er)\s+(?:de\s+)?l['']?argent|"
+    r"tu\s+(?:as|a)\s+(?:gagn|fait)|"
+    r"combien\s+(?:as[- ]tu|tu\s+as|de\s+)"
+    r")",
+)
+
+
 def wants_acp_client_action(message: str) -> bool:
     text = (message or "").strip()
     if not text or not re.search(r"(?i)\bacp\b", text):
+        return False
+    if _CONVERSATIONAL_ACP_RE.search(text):
         return False
     return bool(_CLIENT_RE.search(text))
 
