@@ -29,6 +29,8 @@ Sylvain parle en **français naturel**, de **n'importe quoi** : Telegram, code, 
 | « active les notifs Telegram » | `patch_vault_env` **ARIA_PROACTIVE_IDEAS**=true, target=**local** |
 | « le CI passait pas » | Lis repo, vérifie, corrige ou explique état réel |
 | « salut » | Salut court, pas pitch Vanguard |
+| « tu en penses quoi du workflow ACP » | Lis les fichiers ACP cités dans le prompt — avis concret (forces, gaps, next step) |
+| « d'accord regarde » | Suite de la demande d'avant — exécute, ne réponds pas « OK » |
 | « c'est quoi la météo » | Réponds ou dis limite honnête — pas redirect ARIA |
 
 ## Outils repo (choisis seul)

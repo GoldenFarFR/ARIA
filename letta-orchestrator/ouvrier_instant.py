@@ -18,7 +18,14 @@ _SOCIAL_RE = re.compile(
 )
 _OPS_RE = re.compile(
     r"(?i)\b(worker|pending|handoff|download|inbox|acp|deploy|commit|fix|implément|"
-    r"telegram|notif|preuve|ping|vault|render|github|pytest|fichier|code|offre|workflow)\b"
+    r"telegram|notif|preuve|ping|vault|render|github|pytest|fichier|code|offre|workflow|"
+    r"regarde|vérifie|verifie|vas[- ]?y|lance|continue)\b"
+)
+_CONTINUATION_RE = re.compile(
+    r"(?i)^\s*(?:d'?\s*accord|dac+ord|ok|oui|go|vas[- ]?y|regarde|vérifie|verifie|check|fais[- ]?le)\b"
+)
+_OPINION_RE = re.compile(
+    r"(?i)(?:tu en pense|ton avis|qu'en pense|tu penses quoi|en penses?-tu)"
 )
 
 
@@ -26,6 +33,8 @@ def is_simple_exchange(message: str) -> bool:
     """Échange court — pas de raisonnement visible ni bootstrap."""
     text = (message or "").strip()
     if not text or len(text) > 120:
+        return False
+    if _CONTINUATION_RE.search(text) or _OPINION_RE.search(text):
         return False
     if _OPS_RE.search(text):
         return False
@@ -42,7 +51,12 @@ def is_simple_exchange(message: str) -> bool:
         return True
     if any(h in low for h in SIMPLE_HINTS) and len(text) < 80:
         return True
-    if len(text) < 22 and "?" not in text and not any(c in text for c in ("{", "}", "/", "\\")):
+    if (
+        len(text) < 18
+        and "?" not in text
+        and not any(c in text for c in ("{", "}", "/", "\\"))
+        and not _CONTINUATION_RE.search(text)
+    ):
         return True
     return False
 

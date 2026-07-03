@@ -24,6 +24,7 @@ from ouvrier_proof import (
 )
 from ouvrier_instant import instant_reply, is_simple_exchange
 from ouvrier_runner import provider_label, run_ouvrier
+from ouvrier_session import enrich_continuation, is_continuation, load_session, save_session, wants_opinion
 from ouvrier_trace import StepTimer, emit_final, emit_proof, is_verbose, set_verbose, trace, trace_block
 
 CONFIG_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_config.json"
@@ -32,12 +33,51 @@ _SUBPROC = {"encoding": "utf-8", "errors": "replace", "text": True}
 _VAULT_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "GoldenFar" / "vault"
 
 
-def display_ouvrier_output(raw: str) -> None:
+_ACP_CONTEXT_FILES = (
+    "packages/aria-core/src/aria_core/skills/acp_product_launch_skill.py",
+    "packages/aria-core/src/aria_core/skills/acp_offering_skill.py",
+    "packages/aria-core/src/aria_core/knowledge/acp_offerings.yaml",
+    "skills/core/acp_integration.ps1",
+)
+
+
+def display_ouvrier_output(raw: str) -> str:
     """Réponse utilisateur (›) séparée des traces moteur et de la preuve."""
     bundled = attach_proof(raw, "")
     body, proof = split_reply_proof(bundled)
     emit_final(body)
     emit_proof(proof)
+    return body
+
+
+def preflight_acp_context(message: str) -> str:
+    """Injecte le workflow ACP du repo quand Sylvain demande un avis."""
+    if not re.search(r"(?i)\bacp\b", message):
+        return ""
+    if not (
+        re.search(r"(?i)workflow|offering|produit|skill|lancer|template", message)
+        or wants_opinion(message)
+        or re.search(r"(?i)cr[ée]er|nouveau", message)
+    ):
+        return ""
+    parts: list[str] = [
+        "Contexte ACP (fichiers repo — donne TON avis concret, pas un plan) :",
+    ]
+    for rel in _ACP_CONTEXT_FILES:
+        path = ARIA_REPO_ROOT / rel
+        if not path.is_file():
+            parts.append(f"• {rel} : absent")
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        excerpt = text[:1400].strip()
+        if len(text) > 1400:
+            excerpt += f"\n… ({len(text)} caractères au total)"
+        parts.append(f"--- {rel} ---\n{excerpt}")
+    parts.append(
+        "Réponds en français : ce que le workflow apporte, ce qui manque, prochaine étape. "
+        "Interdit : « je vais regarder le fichier » — tu as le contenu ci-dessus."
+    )
+    return "\n\n".join(parts)
 
 
 def _run_ps(script: Path, *extra: str) -> str:
@@ -262,11 +302,14 @@ def main() -> None:
             "[Erreur] ouvrier_config.json absent. Lance: .\\setup_ouvrier.py"
         )
 
-    if is_simple_exchange(args.message):
-        display_ouvrier_output(instant_reply(args.message))
+    user_msg = args.message
+    effective = enrich_continuation(user_msg) if is_continuation(user_msg) else user_msg
+
+    if is_simple_exchange(user_msg) and not is_continuation(user_msg):
+        save_session(user_msg, display_ouvrier_output(instant_reply(user_msg)))
         return
 
-    trace("pensee", f"Message Sylvain : {args.message[:300]}")
+    trace("pensee", f"Message Sylvain : {user_msg[:300]}")
     handlers = (
         ("mute", preflight_telegram_notifications),
         ("enable", preflight_telegram_activate),
@@ -276,10 +319,10 @@ def main() -> None:
     )
     for tag, handler in handlers:
         with StepTimer(f"preflight {tag}"):
-            direct = handler(args.message)
+            direct = handler(user_msg)
         if direct:
             trace_block("preflight", tag, direct, max_lines=10)
-        if direct and not re.search(r"(?i)^\s*(oui|ok|yes)\s*$", args.message):
+        if direct and not re.search(r"(?i)^\s*(oui|ok|yes)\s*$", user_msg):
             print(f"--- ARIA-OUVRIER ({tag}) ---", file=sys.stderr)
             summaries = {
                 "mute": "C'est fait — notifications proactive Telegram coupées (ARIA_PROACTIVE_IDEAS=false).",
@@ -294,21 +337,31 @@ def main() -> None:
                 if tag in ("mute", "enable"):
                     print("Détails : trace [preflight] ci-dessus. Effet si start-acp-local.ps1 tourne.")
             elif tag in ("mute", "enable"):
-                display_ouvrier_output(f"{summary}\n\n{direct}")
+                save_session(user_msg, display_ouvrier_output(f"{summary}\n\n{direct}"))
             else:
-                display_ouvrier_output(direct)
+                save_session(user_msg, display_ouvrier_output(direct))
             return
 
-    if _needs_bootstrap(args.message):
+    prompt = effective
+    acp_block = preflight_acp_context(effective)
+    if acp_block:
+        prompt = f"{acp_block}\n\n{prompt}"
+    elif wants_opinion(effective) or wants_opinion(str(load_session().get("last_user") or "")):
+        prompt = (
+            "Sylvain demande ton AVIS — lis le repo (read_repo_file) puis réponds.\n\n"
+            + prompt
+        )
+
+    if _needs_bootstrap(user_msg):
         preflight_block = "(aucun pré-traitement automatique)"
-        prompt = bootstrap(args.message, preflight_block)
-    else:
-        prompt = args.message
+        prompt = bootstrap(user_msg, preflight_block)
+        if acp_block and acp_block not in prompt:
+            prompt = f"{acp_block}\n\n{prompt}"
     engine = provider_label()
     print(f"--- ARIA-OUVRIER ({engine}) ---", file=sys.stderr)
     try:
         reply = run_ouvrier(prompt)
-        display_ouvrier_output(reply)
+        save_session(user_msg, display_ouvrier_output(reply))
         return
     except Exception as exc:
         sys.exit(f"[Erreur] Ouvrier: {exc}")

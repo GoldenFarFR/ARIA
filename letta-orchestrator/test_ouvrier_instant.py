@@ -1,0 +1,92 @@
+"""Tests réponses instinctives ouvrier."""
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+from ouvrier_instant import instant_reply, is_simple_exchange
+
+HERE = Path(__file__).resolve().parent
+
+
+def test_simple_greeting_wellbeing():
+    msg = "salut aria la forme aujourd'hui ?"
+    assert is_simple_exchange(msg)
+    reply = instant_reply(msg)
+    assert "Salut" in reply
+    assert "?" in reply
+    assert "Vanguard" not in reply
+    assert "status" not in reply.lower()
+
+
+def test_simple_salut_only():
+    assert is_simple_exchange("salut")
+    assert instant_reply("salut") == "Salut Sylvain !"
+
+
+def test_not_simple_acp():
+    msg = "créer workflow acp template veille_zhc_x1"
+    assert not is_simple_exchange(msg)
+
+
+def test_not_simple_opinion_acp():
+    msg = "tu a creer un nouveau workflow sur acp j'ai vu tu en pense quoi ?"
+    assert not is_simple_exchange(msg)
+
+
+def test_not_simple_continuation():
+    assert not is_simple_exchange("daccord regarde")
+    assert not is_simple_exchange("ok vas-y")
+
+
+def test_enrich_continuation_with_session(tmp_path, monkeypatch):
+    from ouvrier_session import enrich_continuation, save_session
+
+    monkeypatch.setattr(
+        "ouvrier_session._SESSION_PATH",
+        tmp_path / "kart-session.json",
+    )
+    save_session(
+        "tu a creer un nouveau workflow sur acp tu en pense quoi ?",
+        "Le workflow lie offering + promo X.",
+    )
+    enriched = enrich_continuation("daccord regarde")
+    assert "workflow sur acp" in enriched
+    assert "Suite" in enriched
+
+
+def test_preflight_acp_injects_repo():
+    from orchestrate_ouvrier import preflight_acp_context
+
+    block = preflight_acp_context("tu en penses quoi du nouveau workflow acp ?")
+    assert "acp_product_launch_skill" in block
+    assert "acp_offerings.yaml" in block
+    assert "TON avis" in block or "avis concret" in block
+
+
+def test_not_simple_worker():
+    assert not is_simple_exchange("traite les pending aria-worker")
+
+
+def test_merci():
+    assert is_simple_exchange("merci !")
+    assert "plaisir" in instant_reply("merci !").lower()
+
+
+def test_cli_instant_no_trace():
+    proc = subprocess.run(
+        [sys.executable, str(HERE / "orchestrate_ouvrier.py"), "--message", "salut aria la forme ?"],
+        cwd=str(HERE),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert proc.returncode == 0
+    out = (proc.stdout or "").strip()
+    assert "Salut" in out
+    assert "[pensee]" not in (proc.stdout or "") + (proc.stderr or "")
+    assert "handoff" not in out.lower()
+    assert "moteur" not in (proc.stderr or "").lower()
