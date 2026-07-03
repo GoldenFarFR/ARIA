@@ -95,7 +95,9 @@ def depth_system_instruction(lang: str, depth: LlmDepth) -> str:
     if lang == "fr":
         return (
             "CONCISION : réponse courte et pertinente (2–5 phrases). "
-            "Ne développe que si la question l'exige ou si l'utilisateur le demande explicitement."
+            "Tu peux répondre par une question si ça clarifie (style Socrate) — "
+            "jusqu'à ce que operateur dise « ok vazy » ou « si c'est bénéfique tu peux ». "
+            "Ne développe pas sans demande explicite."
         )
     return (
         "BE CONCISE: short, relevant reply (2–5 sentences). "

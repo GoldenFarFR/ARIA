@@ -350,6 +350,36 @@ class AriaBrain:
                     data=ready_data,
                 )
 
+            from aria_core.operator_go_ahead import (
+                execute_deferred_go_ahead,
+                wants_operator_deferred_go,
+            )
+
+            if wants_operator_deferred_go(route_msg):
+                go_reply, go_data = await execute_deferred_go_ahead(
+                    route_msg, lang=lang,
+                )
+                await repertoire_db.save_message("agent", go_reply, visitor_id=vid)
+                append_memory(
+                    "identity",
+                    f"Deferred go: {user_message[:80]}\n{go_reply[:200]}",
+                )
+                from aria_core.response_cost import append_cost_footer, build_cost_meta
+
+                lang_key_go = "fr" if lang == LANG_FR else "en"
+                go_display = append_cost_footer(
+                    go_reply,
+                    build_cost_meta(total_tokens=0),
+                    lang=lang_key_go,
+                )
+                go_data["llm_cost"] = build_cost_meta(total_tokens=0)
+                return ChatResponse(
+                    reply=go_display,
+                    skill_used=None,
+                    actions_taken=["Feu vert opérateur (fil Socrate — sans LLM)"],
+                    data=go_data,
+                )
+
         lang_key = "fr" if lang == LANG_FR else "en"
         if is_greeting(route_msg):
             welcome = format_greeting_reply(route_msg, lang_key, public=public)

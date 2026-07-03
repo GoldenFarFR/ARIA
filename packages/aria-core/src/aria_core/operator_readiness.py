@@ -25,6 +25,7 @@ _GO_AHEAD_RE = re.compile(
     r"|si [çc]a t['']aide"
     r"|fais[- ]?le\b"
     r"|fait[- ]?le\b"
+    r"|(?:^|\s)(?:vazy|vas[- ]?y)\b"
     r"|go ahead"
     r"|avance\b"
     r")",
