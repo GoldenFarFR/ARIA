@@ -33,6 +33,25 @@ function Import-AriaVaultEnv {
             if ($candidate) { $env:XAI_API_KEY = $candidate; break }
         }
     }
+    $groq = $env:GROQ_API_KEY
+    if (-not $groq -or $groq.Length -lt 20) {
+        foreach ($src in @("LLM_API_KEY", "GROQ_API_KEY")) {
+            $candidate = $null
+            foreach ($name in @("local.env", "production.env")) {
+                $path = Join-Path $vault $name
+                if (-not (Test-Path $path)) { continue }
+                $line = Select-String -Path $path -Pattern "^\s*$src=" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($line -and $line.Line -match '=\s*(.+)$') {
+                    $candidate = $Matches[1].Trim().Trim('"')
+                    if ($candidate.Length -ge 20) { break }
+                }
+            }
+            if ($candidate -and $candidate.Length -ge 20) {
+                $env:GROQ_API_KEY = $candidate
+                break
+            }
+        }
+    }
     if (-not $env:ARIA_REPO_ROOT) { $env:ARIA_REPO_ROOT = $script:AriaRepoRoot }
     if (-not $env:DATA_DIR -and (Test-Path $script:AriaDataDir)) {
         $env:DATA_DIR = $script:AriaDataDir
