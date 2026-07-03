@@ -146,6 +146,38 @@ def _vault_key(*names: str) -> str:
     return ""
 
 
+def _ouvrier_cloud_mode() -> str:
+    """
+    Politique moteur ouvrier KART.
+    groq | grok | ollama | auto (défaut : grok si clé xAI, sinon groq).
+    local = alias ollama.
+    """
+    raw = (
+        os.environ.get("ARIA_OUVRIER_CLOUD", "").strip().lower()
+        or _vault_key("ARIA_OUVRIER_CLOUD")
+        or "auto"
+    )
+    if raw in ("local", "ollama"):
+        return "ollama"
+    if raw in ("groq", "grok", "auto"):
+        return raw
+    return "auto"
+
+
+def _resolve_grok() -> tuple[str, str, str, str] | None:
+    bridge_api_keys()
+    xai = (
+        os.environ.get("XAI_API_KEY")
+        or os.environ.get("GROK_API_KEY")
+        or os.environ.get("IMAGE_API_KEY")
+        or _vault_key("XAI_API_KEY", "GROK_API_KEY", "IMAGE_API_KEY")
+        or ""
+    )
+    if len(xai) >= 20:
+        return "grok", "https://api.x.ai/v1/chat/completions", xai, "grok-3"
+    return None
+
+
 def _resolve_groq() -> tuple[str, str, str, str] | None:
     bridge_api_keys()
     groq = os.environ.get("GROQ_API_KEY") or _vault_key("GROQ_API_KEY", "LLM_API_KEY") or ""
@@ -166,18 +198,22 @@ def _resolve_ollama() -> tuple[str, str, None, str]:
 
 
 def _resolve_llm() -> tuple[str, str, str | None, str]:
-    bridge_api_keys()
-    xai = (
-        os.environ.get("XAI_API_KEY")
-        or os.environ.get("GROK_API_KEY")
-        or os.environ.get("IMAGE_API_KEY")
-        or _vault_key("XAI_API_KEY", "GROK_API_KEY", "IMAGE_API_KEY")
-        or ""
-    )
-    if len(xai) < 20:
-        xai = ""
-    if xai:
-        return "grok", "https://api.x.ai/v1/chat/completions", xai, "grok-3"
+    """Premier moteur affiché (provider_label / dash KART)."""
+    mode = _ouvrier_cloud_mode()
+    if mode == "ollama":
+        return _resolve_ollama()
+    if mode == "groq":
+        groq = _resolve_groq()
+        return groq if groq else _resolve_ollama()
+    if mode == "grok":
+        grok = _resolve_grok()
+        if grok:
+            return grok
+        groq = _resolve_groq()
+        return groq if groq else _resolve_ollama()
+    grok = _resolve_grok()
+    if grok:
+        return grok
     groq = _resolve_groq()
     if groq:
         return groq
@@ -185,15 +221,33 @@ def _resolve_llm() -> tuple[str, str, str | None, str]:
 
 
 def _cloud_candidates() -> list[tuple[str, str, str | None, str]]:
-    """Chaîne cloud : grok → groq (si grok échoue) ; groq seul sinon."""
-    primary = _resolve_llm()
-    if primary[0] == "ollama":
+    """Chaîne cloud selon ARIA_OUVRIER_CLOUD."""
+    mode = _ouvrier_cloud_mode()
+    if mode == "ollama":
         return []
-    chain = [primary]
-    if primary[0] == "grok":
+
+    chain: list[tuple[str, str, str | None, str]] = []
+    if mode == "groq":
         groq = _resolve_groq()
-        if groq and groq not in chain:
+        if groq:
             chain.append(groq)
+        return chain
+
+    if mode == "grok":
+        grok = _resolve_grok()
+        if grok:
+            chain.append(grok)
+        groq = _resolve_groq()
+        if groq and (not chain or groq[0] != chain[-1][0]):
+            chain.append(groq)
+        return chain
+
+    grok = _resolve_grok()
+    if grok:
+        chain.append(grok)
+    groq = _resolve_groq()
+    if groq and (not chain or groq[0] != chain[-1][0]):
+        chain.append(groq)
     return chain
 
 

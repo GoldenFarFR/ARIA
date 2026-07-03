@@ -1,4 +1,4 @@
-﻿# Journal de bord Aria
+# Journal de bord Aria
 
 > Actions techniques de l'assistant (fichiers, repos, commits).  
 > Décisions métier → `COLLEGUE.md` § Journal.
@@ -339,3 +339,4 @@
 17h57 — fix KART session continuation + preflight avis ACP workflow
 17h59 — feat ACP product launch (schemas enrichis, promo X/Telegram, tests 20/20)
 18h01 — feat ouvrier fallback grok KO vers groq puis ollama
+18h09 — fix ouvrier ACP adhoc direct (plus pavé LLM sur créer workflow)
