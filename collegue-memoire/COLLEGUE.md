@@ -163,7 +163,8 @@ Attendu : secrets coffre = Render, health `https://api.ariavanguardzhc.com/api/h
 
 | Date | Décision |
 |------|----------|
-| 2026-07-03 | **Letta ARIA-Ouvrier** : intention naturelle (jamais de commandes à Sylvain), confirmation si doute ; `orchestrate-ouvrier.ps1` |
+| 2026-07-03 | **ARIA KART v2.6** : défaut = Ouvrier Letta (Grok-like), plus pitch CAO ; `/cerveau` = aria-core ; `patch-aria-kart-ouvrier.ps1` |
+| 2026-07-03 | **Letta ARIA-Ouvrier** : intention naturelle, tout sujet (~90 % aligné), confirmation si doute |
 | 2026-07-03 | **build-local** : l'assistant lance `build-local.ps1 -Quick` après chaque modif code ; deploy Render reste **manuel** par Sylvain |
 | 2026-07-03 | **Download inbox** : `%ARIA_REPO_ROOT%\download\` — dépôt fichiers Sylvain, traitement auto ouvrier (règle `download-inbox`) |
 | 2026-07-02 | **Retrait DDC/Aptos/Excel** de COLLEGUE — contexte bureau autre PC, hors projet ARIA |
