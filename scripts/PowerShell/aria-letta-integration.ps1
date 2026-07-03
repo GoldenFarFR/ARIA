@@ -311,6 +311,38 @@ function Start-AriaLetta {
     & $script:AriaLettaStart @PSBoundParameters
 }
 
+function Invoke-AriaApplyLessons {
+    [CmdletBinding()]
+    param(
+        [ValidateSet("list", "approved", "approve", "apply")]
+        [string]$Action = "list",
+        [int]$Index = 0
+    )
+    $script = Join-Path $script:AriaLettaDir "apply-pending-lessons.ps1"
+    if (-not (Test-Path $script)) {
+        Write-Host "apply-pending-lessons.ps1 absent — letta-orchestrator Sprint 4" -ForegroundColor Red
+        return
+    }
+    switch ($Action) {
+        "list" { & $script -List }
+        "approved" { & $script -ApplyApproved }
+        "approve" {
+            if ($Index -lt 1) {
+                Write-Host "Usage: /apply-lessons approve N" -ForegroundColor Yellow
+                return
+            }
+            & $script -Approve $Index
+        }
+        "apply" {
+            if ($Index -lt 1) {
+                Write-Host "Usage: /apply-lessons apply N" -ForegroundColor Yellow
+                return
+            }
+            & $script -Apply $Index
+        }
+    }
+}
+
 function aria-letta {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
 
@@ -349,4 +381,4 @@ function Invoke-AriaAgent {
 }
 
 Import-AriaVaultEnv
-Write-Host "ARIA shell v3.0 — Unifiee (cerveau+ouvrier+ACP) | /ouvrier = legacy | /cerveau = brain seul" -ForegroundColor DarkCyan
+Write-Host "ARIA shell v3.0 — Unifiee (cerveau+ouvrier+ACP) | /apply-lessons | /cerveau = brain seul" -ForegroundColor DarkCyan

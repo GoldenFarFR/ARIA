@@ -53,6 +53,43 @@ $lettaHandler = @'
         }
 '@
 
+$applyHandler = @'
+        elseif ($S.StartsWith("/apply-lessons")) {
+            $rest = ($S -replace '^/apply-lessons\s*', '').Trim()
+            if ($rest -eq "" -or $rest -match '^(?i)list$') {
+                Invoke-AriaApplyLessons -Action list
+            } elseif ($rest -match '^(?i)approved$') {
+                Invoke-AriaApplyLessons -Action approved
+            } elseif ($rest -match '^(?i)approve\s+(\d+)$') {
+                Invoke-AriaApplyLessons -Action approve -Index ([int]$Matches[1])
+            } elseif ($rest -match '^(?i)apply\s+(\d+)$') {
+                Invoke-AriaApplyLessons -Action apply -Index ([int]$Matches[1])
+            } else {
+                Write-Host "Usage: /apply-lessons list | approved | approve N | apply N" -ForegroundColor Yellow
+            }
+        }
+'@
+
+$content = Get-Content $profilePath -Raw
+if ($content -notmatch 'StartsWith\("/apply-lessons"\)') {
+    $needleApply = 'elseif ($S.StartsWith("/letta"))'
+    if ($content -notmatch [regex]::Escape($needleApply)) {
+        $needleApply2 = 'elseif ($S -eq "/clear") { $Global:ActiveContextText = ""; $Global:ActiveContextName = "Aucun"; dash }'
+        if ($content -match [regex]::Escape($needleApply2)) {
+            $content = $content.Replace($needleApply2, ($needleApply2 + "`n" + $applyHandler.TrimEnd()))
+            [System.IO.File]::WriteAllText($profilePath, $content)
+            Write-Host "Commande /apply-lessons ajoutee dans aria()" -ForegroundColor Green
+        } else {
+            Write-Host "Structure aria() inattendue — ajoute /apply-lessons manuellement" -ForegroundColor Yellow
+        }
+    } else {
+        $idx = $content.IndexOf($needleApply)
+        $content = $content.Insert($idx, $applyHandler.TrimEnd() + "`n        ")
+        [System.IO.File]::WriteAllText($profilePath, $content)
+        Write-Host "Commande /apply-lessons ajoutee dans aria()" -ForegroundColor Green
+    }
+}
+
 $content = Get-Content $profilePath -Raw
 if ($content -notmatch 'StartsWith\("/letta"\)') {
     $needle = 'elseif ($S -eq "/clear") { $Global:ActiveContextText = ""; $Global:ActiveContextName = "Aucun"; dash }'
