@@ -11,6 +11,24 @@ def test_wants_entrepreneur():
     assert wants_entrepreneur("objectif 50$ par mois")
     assert wants_entrepreneur("commence à t'activer pour générer des revenus")
     assert wants_entrepreneur("prends des initiatives maintenant")
+    assert wants_entrepreneur("mode autonome")
+    assert wants_entrepreneur("tu fais ce que tu veux quand tu veux")
+
+
+@pytest.mark.asyncio
+async def test_autonomy_status(monkeypatch, tmp_path):
+    from aria_core import autonomy_revenue as ar
+    from aria_core import revenue_goals as rg
+
+    monkeypatch.setattr(ar, "_STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(rg, "LEDGER_PATH", tmp_path / "ledger.json")
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "aria_autonomous", True)
+
+    out, data = await execute_entrepreneur("mode autonome", lang="fr")
+    assert data["action"] == "autonomy_status"
+    assert "AUTONOMIE REVENU" in out
 
 
 @pytest.mark.asyncio
