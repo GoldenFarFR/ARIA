@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-import sys
+import re
 import time
 
 _PHASE_COLORS = {
@@ -13,10 +13,11 @@ _PHASE_COLORS = {
     "outil": "\033[95m",
     "resultat": "\033[37m",
     "fallback": "\033[33m",
-    "final": "\033[97m",
 }
 _RESET = "\033[0m"
-_ALWAYS_PHASES = frozenset({"moteur", "outil", "final", "fallback", "resultat"})
+_FINAL_COLOR = "\033[1;92m"
+_PROOF_COLOR = "\033[90m"
+_ALWAYS_PHASES = frozenset({"moteur", "outil", "fallback", "resultat"})
 
 
 def is_verbose() -> bool:
@@ -57,9 +58,31 @@ class StepTimer:
 
     def __enter__(self) -> StepTimer:
         self.t0 = time.perf_counter()
-        trace("pensee", f"▶ {self.label}…")
+        if is_verbose():
+            trace("pensee", f"▶ {self.label}…")
         return self
 
     def __exit__(self, *_) -> None:
-        sec = time.perf_counter() - self.t0
-        trace("pensee", f"✓ {self.label} ({sec:.1f}s)")
+        if is_verbose():
+            sec = time.perf_counter() - self.t0
+            trace("pensee", f"✓ {self.label} ({sec:.1f}s)")
+
+
+def emit_final(text: str) -> None:
+    """Réponse ARIA — une ligne distincte (pas une trace [pensee]/[final])."""
+    body = (text or "").strip()
+    if not body:
+        return
+    one_line = re.sub(r"\s+", " ", body)
+    print("", flush=True)
+    print(f"{_FINAL_COLOR}› {one_line}{_RESET}", flush=True)
+    print("", flush=True)
+
+
+def emit_proof(text: str) -> None:
+    """Preuve runtime — grisée, sous la réponse."""
+    block = (text or "").strip()
+    if not block:
+        return
+    for line in block.splitlines():
+        print(f"{_PROOF_COLOR}  {line}{_RESET}", flush=True)

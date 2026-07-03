@@ -254,9 +254,7 @@ def run_ouvrier_ollama_react(user_prompt: str) -> str:
         trace_block("pensee", f"réponse modèle (étape {step})", raw, max_lines=10)
         final_m = re.search(r"(?is)^FINAL:\s*(.+)$", raw, re.MULTILINE)
         if final_m:
-            final = final_m.group(1).strip()
-            trace("final", final)
-            return attach_proof(final, "")
+            return final_m.group(1).strip()
 
         act_m = re.search(r"(?im)^ACTION:\s*(\w+)", raw)
         args_m = re.search(r"(?is)^ARGS:\s*(\{.*\})", raw)
@@ -319,8 +317,7 @@ def _run_ouvrier_cloud(
         if not tool_calls:
             content = (choice.get("content") or "").strip()
             if content:
-                trace("final", content)
-                return attach_proof(content, "")
+                return content
             return "(aucune réponse)"
 
         messages.append(choice)

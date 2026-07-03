@@ -174,6 +174,30 @@ def proof_after_tool(name: str, args: dict, result: str) -> str:
     return ""
 
 
+def split_reply_proof(text: str) -> tuple[str, str]:
+    """Sépare le corps de réponse des blocs PREUVE (affichage KART)."""
+    raw = (text or "").strip()
+    if not raw:
+        return "", ""
+    marker = re.search(r"\n\s*──\s*PREUVE\s*──", raw, re.IGNORECASE)
+    if marker:
+        return raw[: marker.start()].strip(), raw[marker.start() :].strip()
+
+    body_lines: list[str] = []
+    proof_lines: list[str] = []
+    in_proof = False
+    for line in raw.splitlines():
+        if re.match(r"^\s*(?:──\s*)?PR[ÉE]UVE\b", line, re.IGNORECASE):
+            in_proof = True
+        if in_proof:
+            proof_lines.append(line)
+        else:
+            body_lines.append(line)
+    body = "\n".join(body_lines).strip()
+    proof = "\n".join(proof_lines).strip()
+    return body, proof
+
+
 def attach_proof(text: str, proof: str, *, always_compact: bool = False) -> str:
     if not text:
         text = ""

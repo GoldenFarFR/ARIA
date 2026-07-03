@@ -1,4 +1,4 @@
-﻿# Journal de bord Aria
+# Journal de bord Aria
 
 > Actions techniques de l'assistant (fichiers, repos, commits).  
 > Décisions métier → `COLLEGUE.md` § Journal.
@@ -334,3 +334,4 @@
 17h09 — feat ouvrier preuve systematique vault+runtime (ouvrier_proof.py)
 17h40 — feat aria-core ACP offering workflows (templates YAML, create/update CLI, tests 17/17)
 17h47 — fix KART v2.8.1 trace silencieuse + bootstrap skip + condense quote tweet feedback
+17h49 — feat ouvrier instant — salutations sans preflight/LLM (test_ouvrier_instant 6/6)

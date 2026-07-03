@@ -19,15 +19,25 @@ from ouvrier_proof import (
     build_system_proof,
     local_api_status,
     read_vault_key,
+    split_reply_proof,
     vault_env_names,
 )
+from ouvrier_instant import instant_reply, is_simple_exchange
 from ouvrier_runner import provider_label, run_ouvrier
-from ouvrier_trace import StepTimer, is_verbose, set_verbose, trace, trace_block
+from ouvrier_trace import StepTimer, emit_final, emit_proof, is_verbose, set_verbose, trace, trace_block
 
 CONFIG_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_config.json"
 WORKER_PATH = ARIA_REPO_ROOT / "collegue-memoire" / "sessions" / "ARIA-WORKER.md"
 _SUBPROC = {"encoding": "utf-8", "errors": "replace", "text": True}
 _VAULT_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "GoldenFar" / "vault"
+
+
+def display_ouvrier_output(raw: str) -> None:
+    """Réponse utilisateur (›) séparée des traces moteur et de la preuve."""
+    bundled = attach_proof(raw, "")
+    body, proof = split_reply_proof(bundled)
+    emit_final(body)
+    emit_proof(proof)
 
 
 def _run_ps(script: Path, *extra: str) -> str:
@@ -251,6 +261,11 @@ def main() -> None:
         sys.exit(
             "[Erreur] ouvrier_config.json absent. Lance: .\\setup_ouvrier.py"
         )
+
+    if is_simple_exchange(args.message):
+        display_ouvrier_output(instant_reply(args.message))
+        return
+
     trace("pensee", f"Message Sylvain : {args.message[:300]}")
     handlers = (
         ("mute", preflight_telegram_notifications),
@@ -278,12 +293,10 @@ def main() -> None:
                 print(summary)
                 if tag in ("mute", "enable"):
                     print("Détails : trace [preflight] ci-dessus. Effet si start-acp-local.ps1 tourne.")
-            elif tag == "mute":
-                print(attach_proof(f"{summary}\n\n{direct}", ""))
-            elif tag == "enable":
-                print(attach_proof(f"{summary}\n\n{direct}", ""))
+            elif tag in ("mute", "enable"):
+                display_ouvrier_output(f"{summary}\n\n{direct}")
             else:
-                print(attach_proof(direct, ""))
+                display_ouvrier_output(direct)
             return
 
     if _needs_bootstrap(args.message):
@@ -295,7 +308,7 @@ def main() -> None:
     print(f"--- ARIA-OUVRIER ({engine}) ---", file=sys.stderr)
     try:
         reply = run_ouvrier(prompt)
-        print(attach_proof(reply, ""))
+        display_ouvrier_output(reply)
         return
     except Exception as exc:
         sys.exit(f"[Erreur] Ouvrier: {exc}")
