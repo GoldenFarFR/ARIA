@@ -3,9 +3,13 @@ import re
 import pytest
 
 from aria_core.community_feedback import (
+    FeedbackReplyPair,
     _is_likely_english,
     assess_feedback_publishable_on_x,
+    build_feedback_followup_tweet,
+    build_feedback_quote_tweet,
     build_feedback_thanks_tweet,
+    personal_reply_pair_on_feedback,
     personal_take_on_feedback,
     queue_score_threshold,
     score_feedback,
@@ -91,6 +95,31 @@ def test_personal_take_answers_roadmap_questions():
     assert "good to hear on the site" not in reply.lower()
 
 
+def test_build_feedback_quote_tweet_thread_format():
+    text = (
+        "Hi ARIA — testing the Vanguard feedback channel. Dark mode, sober tone, "
+        "honest under-construction message. Ideas: holding page, Telegram, ACP transparency."
+    )
+    tweet = build_feedback_quote_tweet(text, handle="GoldenFarFR")
+    assert tweet_fits(tweet)
+    assert "✦" in tweet or "ariavanguardzhc.com" in tweet
+    assert "@GoldenFarFR" in tweet or "@goldenfarfr" in tweet.lower()
+    assert '"' in tweet
+    assert "→" not in tweet
+
+
+def test_build_feedback_followup_two_sentences():
+    pair = personal_reply_pair_on_feedback(
+        "Ideas for ZHC: (1) holding page (2) Telegram (3) ACP transparency",
+        lang="en",
+    )
+    tweet = build_feedback_followup_tweet(pair)
+    assert tweet_fits(tweet)
+    assert pair.primary.split()[0] in tweet
+    assert pair.followup.split()[0] in tweet
+    assert tweet.count("\n\n") >= 1
+
+
 def test_build_feedback_tweet_roadmap_question():
     text = (
         "Great ARIA site — what's next for ZHC, partnerships, how will you generate revenue?"
@@ -139,7 +168,7 @@ def test_personal_take_feedback_widget():
         "on continue de construire ensemble"
     )
     reply = personal_take_on_feedback(text, lang="en")
-    assert "vanguard" in reply.lower() or "brick" in reply.lower()
+    assert "feedback" in reply.lower() or "together" in reply.lower()
     assert "love the energy" not in reply.lower()
 
 
@@ -176,7 +205,7 @@ async def test_translate_to_english_for_x(monkeypatch):
     async def noop_llm(_t: str) -> None:
         return None
 
-    monkeypatch.setattr("aria_core.community_feedback._llm_translate_to_english", noop_llm)
+    monkeypatch.setattr("aria_core.community_feedback._llm_polish_quote_for_x", noop_llm)
     monkeypatch.setattr(
         "aria_core.community_feedback._google_translate_to_english",
         fake_google,
@@ -309,7 +338,11 @@ async def test_trusted_handle_posts_x_immediately(monkeypatch, tmp_path):
     async def fake_compose(text_en, **kwargs):
         return mod.personal_take_on_feedback(text_en, lang="en")
 
-    monkeypatch.setattr(mod, "compose_personal_reply_to_feedback", fake_compose)
+    async def fake_pair(text_en, **kwargs):
+        p = mod.personal_reply_pair_on_feedback(text_en, lang="en")
+        return FeedbackReplyPair(primary=p.primary, followup=p.followup)
+
+    monkeypatch.setattr(mod, "compose_feedback_reply_pair", fake_pair)
 
     out = await mod.maybe_tweet_community_feedback(
         "Love the Vanguard site feedback form — we keep building together",
