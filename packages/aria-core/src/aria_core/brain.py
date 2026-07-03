@@ -320,6 +320,36 @@ class AriaBrain:
                     data={"self_maintenance": True},
                 )
 
+            from aria_core.operator_readiness import (
+                execute_operator_readiness,
+                wants_operator_readiness,
+            )
+
+            if wants_operator_readiness(route_msg):
+                ready_reply, ready_data = await execute_operator_readiness(
+                    route_msg, lang=lang,
+                )
+                await repertoire_db.save_message("agent", ready_reply, visitor_id=vid)
+                append_memory(
+                    "identity",
+                    f"Readiness: {user_message[:80]}\n{ready_reply[:200]}",
+                )
+                from aria_core.response_cost import append_cost_footer, build_cost_meta
+
+                lang_key = "fr" if lang == LANG_FR else "en"
+                ready_display = append_cost_footer(
+                    ready_reply,
+                    build_cost_meta(total_tokens=0),
+                    lang=lang_key,
+                )
+                ready_data["llm_cost"] = build_cost_meta(total_tokens=0)
+                return ChatResponse(
+                    reply=ready_display,
+                    skill_used=None,
+                    actions_taken=["Operator readiness audit (sans LLM)"],
+                    data=ready_data,
+                )
+
         lang_key = "fr" if lang == LANG_FR else "en"
         if is_greeting(route_msg):
             welcome = format_greeting_reply(route_msg, lang_key, public=public)
