@@ -18,6 +18,7 @@ dependencies = [
     "requests-oauthlib>=2.0.0",
     "requests>=2.32.0",
     "aiosqlite>=0.20.0",
+    "filelock>=3.15.0",
 ]
 
 [project.optional-dependencies]
