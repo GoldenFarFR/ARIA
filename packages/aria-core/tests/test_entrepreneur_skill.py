@@ -9,6 +9,27 @@ from aria_core.skills.entrepreneur_skill import execute_entrepreneur, wants_entr
 def test_wants_entrepreneur():
     assert wants_entrepreneur("commence à te cultiver comme entrepreneuse IA")
     assert wants_entrepreneur("objectif 50$ par mois")
+    assert wants_entrepreneur("commence à t'activer pour générer des revenus")
+    assert wants_entrepreneur("prends des initiatives maintenant")
+
+
+@pytest.mark.asyncio
+async def test_revenue_activation_playbook(monkeypatch, tmp_path):
+    from aria_core import revenue_goals as rg
+
+    ledger = tmp_path / "revenue_ledger.json"
+    monkeypatch.setattr(rg, "LEDGER_PATH", ledger)
+    monkeypatch.setenv("ARIA_ACP_PROVIDER_ENABLED", "true")
+    monkeypatch.setenv("ARIA_PROACTIVE_IDEAS", "false")
+
+    out, data = await execute_entrepreneur(
+        "tu dois commencer à t'activer pour générer des revenus et prendre des initiatives",
+        lang="fr",
+    )
+    assert data["action"] == "revenue_activation"
+    assert "mode revenu ON" in out
+    assert "traiter jobs acp" in out
+    assert "ARIA_PROACTIVE_IDEAS=OFF" in out
 
 
 def test_detect_entrepreneur_intent():

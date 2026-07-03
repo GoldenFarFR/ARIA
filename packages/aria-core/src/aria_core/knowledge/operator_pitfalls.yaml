@@ -208,6 +208,17 @@ new_pc_checklist:
     verify: "acp events listen --legacy → Listening for events... connected."
     never: "Laisser le listener v2 en boucle de crash sans basculer legacy."
 
+  - id: acp-browse-api-500
+    severity: medium
+    lesson: >
+      acp browse (marketplace search) renvoie souvent HTTP 500 cote Virtuals — pas de donnees
+      agents/offres en temps reel. L'intelligence marche via cache + heuristiques gaps.
+    fix: >
+      Commande « scan marché acp » ; cache data/memory/acp_market_scan.json ; heartbeat
+      acp_market_scan quotidien. Relancer quand API revient.
+    verify: "scan marché acp → source live ou cache + gaps audit_security / veille_zhc"
+    never: "Inventer des stats marketplace sans browse OK ni cache valide."
+
   - id: secrets-via-vault-not-inline
     severity: critical
     lesson: >
