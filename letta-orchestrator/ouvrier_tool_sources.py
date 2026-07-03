@@ -63,7 +63,8 @@ def run_powershell(command: str) -> str:
         ["pwsh", "-NoProfile", "-Command", command],
         cwd=str(root),
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=300,
     )
     out = (proc.stdout or "") + (proc.stderr or "")
@@ -89,7 +90,8 @@ def session_handoff() -> str:
         ["pwsh", "-NoProfile", "-File", str(script)],
         cwd=str(root),
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=180,
     )
     out = (proc.stdout or "") + (proc.stderr or "")
@@ -128,7 +130,8 @@ def triage_download_inbox() -> str:
         ["pwsh", "-NoProfile", "-File", str(script)],
         cwd=str(root),
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     return (proc.stdout or proc.stderr or "").strip() or f"exit={proc.returncode}"
@@ -155,11 +158,56 @@ def append_journal(message: str) -> str:
         ["pwsh", "-NoProfile", "-File", str(script), "-Message", message],
         cwd=str(root),
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
     out = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     return out or f"exit={proc.returncode}"
+'''.strip(),
+    },
+    {
+        "name": "patch_vault_env",
+        "description": "Modifier local.env ou production.env (coffre GoldenFar, hors repo).",
+        "source_code": '''
+def patch_vault_env(key: str, value: str, target: str = "both") -> str:
+    """Patch GoldenFar vault env files (outside ARIA_REPO_ROOT).
+
+    Args:
+        key: Variable name (e.g. ARIA_PROACTIVE_IDEAS).
+        value: New value.
+        target: local, production, or both.
+    """
+    import os
+    import re
+    from pathlib import Path
+    vault = Path(os.environ.get("LOCALAPPDATA", "")) / "GoldenFar" / "vault"
+    names = []
+    t = (target or "both").lower()
+    if t in ("local", "both"):
+        names.append("local.env")
+    if t in ("production", "both"):
+        names.append("production.env")
+    results = []
+    for name in names:
+        path = vault / name
+        if not path.parent.is_dir():
+            results.append(f"ERROR: vault missing for {name}")
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        pat = re.compile(rf"^\\s*{re.escape(key)}\\s*=.*$", re.MULTILINE)
+        line = f"{key}={value}"
+        if pat.search(text):
+            text = pat.sub(line, text, count=1)
+            action = "updated"
+        else:
+            if text and not text.endswith("\\n"):
+                text += "\\n"
+            text += f"{line}\\n"
+            action = "added"
+        path.write_text(text, encoding="utf-8")
+        results.append(f"OK {name} {key}={value} ({action})")
+    return "\\n".join(results)
 '''.strip(),
     },
     {
@@ -179,7 +227,8 @@ def build_local_quick() -> str:
         ["pwsh", "-NoProfile", "-File", str(script), "-Quick"],
         cwd=str(script.parent),
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=600,
     )
     out = (proc.stdout or "") + (proc.stderr or "")
