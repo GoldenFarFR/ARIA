@@ -1,7 +1,12 @@
 # Helpers origine machine / IP pour audit securite
 
 function Get-SessionsRoot {
-    Join-Path (Join-Path $env:USERPROFILE "projets\collegue-memoire") "sessions"
+    $pathsScript = Join-Path $PSScriptRoot "..\..\scripts\aria-paths.ps1"
+    if (Test-Path $pathsScript) {
+        . (Resolve-Path $pathsScript)
+        return Join-Path $script:AriaCollegueRoot "sessions"
+    }
+    Join-Path (Join-Path $env:USERPROFILE "GitHub-Repos\ARIA\collegue-memoire") "sessions"
 }
 
 function Get-AllMachineIpRecords {

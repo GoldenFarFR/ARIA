@@ -27,6 +27,14 @@ if (Test-Path $ensureScript) {
     if ($boot.is_new_pc) {
         Write-Host "[BOOT] Nouveau PC detecte - voir sessions\$machine\boot-status.json" -ForegroundColor Yellow
     }
+    . (Resolve-Path (Join-Path $PSScriptRoot "..\..\scripts\aria-paths.ps1"))
+    $ariaRepo = $script:AriaRepoRoot
+    $collegue = $script:AriaCollegueRoot
+    $projets = Split-Path $ariaRepo -Parent
+    $sessionsRoot = Join-Path $collegue "sessions"
+    $stateFile = Join-Path (Join-Path $sessionsRoot $machine) "handoff-state.json"
+    $handoffSsot = Join-Path $sessionsRoot "HANDOFF.md"
+    $sessionStart = Join-Path $collegue "SESSION-START.md"
 }
 
 $ipScript = Join-Path $PSScriptRoot "report-machine-ip.ps1"

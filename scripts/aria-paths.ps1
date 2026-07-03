@@ -1,20 +1,26 @@
 # Chemins monorepo ARIA — source unique pour scripts PowerShell
 $ErrorActionPreference = "Stop"
 
+function Test-AriaMonorepoRoot {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path $Path)) { return $false }
+    return (Test-Path (Join-Path $Path ".git")) -and (Test-Path (Join-Path $Path "collegue-memoire"))
+}
+
 function Get-AriaRepoRoot {
-    if ($env:ARIA_REPO_ROOT -and (Test-Path $env:ARIA_REPO_ROOT)) {
-        return (Resolve-Path $env:ARIA_REPO_ROOT).Path
-    }
+    $candidates = @()
+    if ($env:ARIA_REPO_ROOT) { $candidates += $env:ARIA_REPO_ROOT }
     $here = $PSScriptRoot
     if ($here -match 'local-sync\\scripts$') {
-        return (Resolve-Path (Join-Path $here "..\..")).Path
+        $candidates += (Resolve-Path (Join-Path $here "..\..")).Path
+    } elseif ($here -match 'scripts$') {
+        $candidates += (Resolve-Path (Join-Path $here "..")).Path
     }
-    if ($here -match 'scripts$') {
-        return (Resolve-Path (Join-Path $here "..")).Path
-    }
-    $default = Join-Path $env:USERPROFILE "GitHub-Repos\ARIA"
-    if (Test-Path $default) {
-        return (Resolve-Path $default).Path
+    $candidates += (Join-Path $env:USERPROFILE "GitHub-Repos\ARIA")
+    foreach ($c in ($candidates | Select-Object -Unique)) {
+        if (Test-AriaMonorepoRoot $c) {
+            return (Resolve-Path $c).Path
+        }
     }
     throw "ARIA_REPO_ROOT introuvable. Definir `$env:ARIA_REPO_ROOT ou cloner GoldenFarFR/ARIA."
 }
