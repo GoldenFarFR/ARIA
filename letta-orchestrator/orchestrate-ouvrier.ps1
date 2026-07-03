@@ -1,7 +1,9 @@
 # ARIA-Ouvrier Letta — copie conforme Grok/Cursor (local, économie jetons)
 param(
     [Parameter(Mandatory)]
-    [string]$Message
+    [string]$Message,
+    [switch]$ShowTrace,
+    [switch]$Quiet
 )
 
 $ErrorActionPreference = "Stop"

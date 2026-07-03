@@ -12,6 +12,7 @@ from pathlib import Path
 
 from aria_config import ARIA_REPO_ROOT, bridge_api_keys
 from ouvrier_tool_sources import TOOL_SOURCES
+from ouvrier_trace import StepTimer, trace, trace_block
 
 PERSONA_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_persona.md"
 MAX_STEPS = 10
@@ -195,11 +196,16 @@ def _run_tool(fns: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     fn = fns.get(name)
     if not fn:
         return f"ERROR: unknown tool {name}"
-    try:
-        result = fn(**args)
-        return str(result) if result is not None else "OK"
-    except Exception as exc:
-        return f"ERROR: {exc}"
+    args_preview = json.dumps(args, ensure_ascii=False)[:200]
+    with StepTimer(f"outil {name}({args_preview})"):
+        try:
+            result = fn(**args)
+            out = str(result) if result is not None else "OK"
+            trace_block("resultat", name, out, max_lines=8)
+            return out
+        except Exception as exc:
+            trace("resultat", f"{name} ERROR: {exc}")
+            return f"ERROR: {exc}"
 
 
 def _ollama_chat(url: str, model: str, messages: list[dict[str, str]]) -> str:
@@ -236,10 +242,14 @@ def run_ouvrier_ollama_react(user_prompt: str) -> str:
     ]
     fns = _load_tool_fns()
 
-    for _ in range(MAX_STEPS):
-        raw = _ollama_chat(url, model, messages).strip()
+    trace("moteur", f"Ollama ReAct — {model}")
+    for step in range(1, MAX_STEPS + 1):
+        with StepTimer(f"ollama étape {step}/{MAX_STEPS}"):
+            raw = _ollama_chat(url, model, messages).strip()
+        trace_block("pensee", f"réponse modèle (étape {step})", raw, max_lines=10)
         final_m = re.search(r"(?is)^FINAL:\s*(.+)$", raw, re.MULTILINE)
         if final_m:
+            trace("final", final_m.group(1).strip())
             return final_m.group(1).strip()
 
         act_m = re.search(r"(?im)^ACTION:\s*(\w+)", raw)
@@ -264,12 +274,14 @@ def run_ouvrier_ollama_react(user_prompt: str) -> str:
 def run_ouvrier(user_prompt: str) -> str:
     """Boucle agentique : LLM cloud (tools) ou Ollama ReAct."""
     provider, url, api_key, model = _resolve_llm()
+    trace("moteur", f"Sélection → {provider}/{model}")
     if provider == "ollama":
         return run_ouvrier_ollama_react(user_prompt)
     try:
         return _run_ouvrier_cloud(user_prompt, provider, url, api_key, model)
-    except Exception:
+    except Exception as exc:
         if provider != "ollama":
+            trace("fallback", f"Cloud KO ({exc}) → Ollama ReAct")
             return run_ouvrier_ollama_react(user_prompt)
         raise
 
@@ -289,14 +301,19 @@ def _run_ouvrier_cloud(
     ]
     fns = _load_tool_fns()
 
-    for _ in range(MAX_STEPS):
-        data = _chat(url, api_key, model, messages, tools=True)
+    trace("moteur", f"Cloud tools — {provider}/{model}")
+    for step in range(1, MAX_STEPS + 1):
+        with StepTimer(f"LLM cloud étape {step}/{MAX_STEPS}"):
+            data = _chat(url, api_key, model, messages, tools=True)
         choice = data["choices"][0]["message"]
         tool_calls = choice.get("tool_calls") or []
+        if choice.get("content"):
+            trace_block("pensee", f"modèle (étape {step})", choice["content"], max_lines=6)
 
         if not tool_calls:
             content = (choice.get("content") or "").strip()
             if content:
+                trace("final", content)
                 return content
             return "(aucune réponse)"
 
@@ -305,6 +322,7 @@ def _run_ouvrier_cloud(
             fn = tc.get("function") or {}
             name = fn.get("name") or ""
             raw_args = fn.get("arguments") or "{}"
+            trace("outil", f"appel {name} ← {str(raw_args)[:180]}")
             try:
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             except json.JSONDecodeError:

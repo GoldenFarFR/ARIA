@@ -208,12 +208,10 @@ function Invoke-AriaOuvrier {
 
     Import-AriaVaultEnv
     if (Test-Path $script:AriaLettaSyncEnv) { & $script:AriaLettaSyncEnv | Out-Null }
-    if (-not (Ensure-AriaLettaServer)) {
-        Write-Host "Letta injoignable — .\start-letta.ps1" -ForegroundColor Red
-        return
-    }
 
-    & $script:AriaOuvrierOrchestrate -Message $Message
+    $ouvrierParams = @{ Message = $Message }
+    if ($env:ARIA_OUVRIER_VERBOSE -eq "1") { $ouvrierParams.ShowTrace = $true }
+    & $script:AriaOuvrierOrchestrate @ouvrierParams
 }
 
 function Invoke-AriaKartDefault {
@@ -315,4 +313,4 @@ function Invoke-AriaAgent {
 }
 
 Import-AriaVaultEnv
-Write-Host "ARIA shell v2.7 — defaut = Ouvrier Grok direct (outils) | Letta fallback | /cerveau = aria-core" -ForegroundColor DarkCyan
+Write-Host "ARIA shell v2.8 — Ouvrier direct + trace /verbose | /cerveau = aria-core" -ForegroundColor DarkCyan

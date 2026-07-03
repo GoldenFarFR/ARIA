@@ -15,6 +15,7 @@ import requests
 
 from aria_config import ARIA_REPO_ROOT, bridge_api_keys
 from ouvrier_runner import provider_label, run_ouvrier
+from ouvrier_trace import StepTimer, is_verbose, set_verbose, trace, trace_block
 
 CONFIG_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_config.json"
 WORKER_PATH = ARIA_REPO_ROOT / "collegue-memoire" / "sessions" / "ARIA-WORKER.md"
@@ -147,9 +148,14 @@ def _pending_worker_count() -> int:
 
 
 def bootstrap(user_message: str, preflight_block: str) -> str:
-    handoff = _run_ps(ARIA_REPO_ROOT / "local-sync" / "scripts" / "session-handoff.ps1")
-    inbox = _run_ps(ARIA_REPO_ROOT / "download" / "triage-inbox.ps1")
+    with StepTimer("session-handoff.ps1"):
+        handoff = _run_ps(ARIA_REPO_ROOT / "local-sync" / "scripts" / "session-handoff.ps1")
+    trace_block("bootstrap", "handoff", handoff, max_lines=6)
+    with StepTimer("triage-inbox.ps1"):
+        inbox = _run_ps(ARIA_REPO_ROOT / "download" / "triage-inbox.ps1")
+    trace_block("bootstrap", "download", inbox, max_lines=4)
     pending = _pending_worker_count()
+    trace("bootstrap", f"ARIA-WORKER [pending] = {pending}")
     return f"""Contexte session (déjà synchronisé — ne redemande pas à l'opérateur de lancer quoi que ce soit) :
 
 • Handoff : {handoff[:800]}
@@ -168,24 +174,37 @@ Sylvain :
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ARIA-Ouvrier via Letta")
+    parser = argparse.ArgumentParser(description="ARIA-Ouvrier direct")
     parser.add_argument("--message", required=True)
+    parser.add_argument("--verbose", "-v", action="store_true", help="Afficher raisonnement et outils")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Masquer la trace")
     args = parser.parse_args()
+
+    if args.quiet:
+        set_verbose(False)
+    elif args.verbose:
+        set_verbose(True)
 
     if not CONFIG_PATH.is_file():
         sys.exit(
             "[Erreur] ouvrier_config.json absent. Lance: .\\setup_ouvrier.py"
         )
-    for handler in (
-        preflight_telegram_notifications,
-        preflight_notification_status,
-        preflight_telegram_ping,
-    ):
-        direct = handler(args.message)
+    trace("pensee", f"Message Sylvain : {args.message[:300]}")
+    handlers = (
+        ("mute", preflight_telegram_notifications),
+        ("status", preflight_notification_status),
+        ("ping", preflight_telegram_ping),
+    )
+    for tag, handler in handlers:
+        with StepTimer(f"preflight {tag}"):
+            direct = handler(args.message)
+        if direct:
+            trace_block("preflight", tag, direct, max_lines=10)
         if direct and not re.search(r"(?i)^\s*(oui|ok|yes)\s*$", args.message):
-            tag = "mute" if handler is preflight_telegram_notifications else "direct"
             print(f"═══ ARIA-OUVRIER ({tag}) ═══", file=sys.stderr)
-            if handler is preflight_telegram_notifications:
+            if is_verbose():
+                print("(trace verbose ci-dessus sur stderr)", file=sys.stderr)
+            if tag == "mute":
                 print(
                     "C'est fait — notifications proactive Telegram coupées.\n\n"
                     f"{direct}\n\n"
