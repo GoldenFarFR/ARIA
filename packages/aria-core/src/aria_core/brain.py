@@ -167,8 +167,15 @@ def _is_strategic_conversation(message: str) -> bool:
         r"am[eé]lioration|aider|aujourd", lower
     ):
         return True
+    if re.search(r"\b(?:as[- ]?tu|astu|tu\s+as|avez[- ]?vous|have\s+you)\b", lower) and re.search(
+        r"plan|financier|acheteur|acheteurs|client|revenu|mrr|strat[eé]g|pr[eé]vu|attirer|buyer",
+        lower,
+    ):
+        return True
+    if re.search(r"comment\s+(?:as[- ]?tu|astu|tu\s+as)\b", lower):
+        return True
     opinion = re.search(
-        r"souhait|veu[xt]|voudr|penses?|avis|ton avis|what do you think|should (i|we|you)|"
+        r"souhait|\bveu[xt]\b|voudr|penses?|avis|ton avis|what do you think|should (i|we|you)|"
         r"intéressant|interessant|préfères|prefer",
         lower,
     )
@@ -177,7 +184,14 @@ def _is_strategic_conversation(message: str) -> bool:
 
 
 def _routing_message(message: str) -> str:
-    """Pont Cursor : router sur le message actuel, pas tout le contexte jsonl."""
+    """Pont Cursor / suite KART — router sur le tour actuel, pas tout le contexte."""
+    conf = re.search(
+        r"Sylvain confirme\s*:\s*(.+?)(?:\n|$)",
+        message,
+        re.IGNORECASE,
+    )
+    if conf:
+        return conf.group(1).strip()
     m = re.search(
         r"Message actuel de (?:Sylvain|Grok):\s*(.+?)(?:\n|$)",
         message,
@@ -456,7 +470,11 @@ class AriaBrain:
                 ) or skill_output
         else:
             reply, skill, actions, data, zhc_msg = await self._general_response(
-                user_message, lang, public=public, visitor_id=vid,
+                user_message,
+                lang,
+                public=public,
+                visitor_id=vid,
+                route_msg=route_msg,
             )
 
         reply = fix_handle_in_text(reply)
@@ -555,17 +573,21 @@ class AriaBrain:
         *,
         public: bool = False,
         visitor_id: str = "",
+        route_msg: str = "",
     ) -> tuple[str, SkillName | None, list[str], dict, None]:
         lang_key = "fr" if lang == LANG_FR else "en"
+        route = (route_msg or message).strip()
 
-        from aria_core.grounding import is_factual_question, is_general_qa
+        from aria_core.grounding import is_factual_question, is_general_qa, is_short_ack
         from aria_core.knowledge.epistemic import resolve_calibrated_answer
         from aria_core.knowledge.web_verify import is_live_info_question
 
-        if is_greeting(message):
-            welcome = format_greeting_reply(message, lang_key, public=public)
+        if is_short_ack(route):
+            return "OK.", None, ["Ack (template)"], {}, None
+        if is_greeting(route):
+            welcome = format_greeting_reply(route, lang_key, public=public)
             return welcome, None, ["Greeting (template)"], {"greeting": True}, None
-        if is_social_chitchat(message):
+        if is_social_chitchat(route):
             return social_ack_reply(lang_key), None, ["Social ack (no LLM)"], {}, None
         if public and is_community_suggestion(message):
             return (
@@ -575,9 +597,34 @@ class AriaBrain:
                 {"community_suggestion": True},
                 None,
             )
-        if is_help_request(message):
+        if is_help_request(route):
             help_text = help_commands_public(lang_key) if public else help_commands(lang_key)
             return help_text, None, ["Help (template)"], {}, None
+
+        if not public and _is_strategic_conversation(route):
+            if is_llm_configured():
+                llm_reply = await self._llm_response(
+                    message, lang, public=False, visitor_id=visitor_id,
+                )
+                if llm_reply:
+                    return (
+                        llm_reply,
+                        None,
+                        ["Conversation stratégique (LLM)"],
+                        {},
+                        None,
+                    )
+            if lang == LANG_FR:
+                quota_hint = (
+                    "Groq est en quota (429) — quota journalier presque épuisé, réessaie plus tard. "
+                    "Je peux quand même avancer côté ouvrier (code, ACP, worker queue)."
+                )
+            else:
+                quota_hint = (
+                    "Groq rate limit (429) — retry in ~10 min. "
+                    "I can still run worker tasks (code, ACP, queue)."
+                )
+            return quota_hint, None, ["Strategic — LLM indisponible"], {}, None
 
         if not public:
             from aria_core.memory.collegue import is_collegue_recall_question
@@ -631,8 +678,10 @@ class AriaBrain:
                 None,
             )
 
-        if (is_factual_question(message) or is_general_qa(message)) and is_live_info_question(
-            message,
+        if (
+            not _is_strategic_conversation(route)
+            and (is_factual_question(route) or is_general_qa(route))
+            and is_live_info_question(route)
         ):
             cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)
             if cal_reply:
@@ -659,7 +708,10 @@ class AriaBrain:
             if ledger_reply:
                 return ledger_reply, None, ["Truth ledger direct (verified)"], ledger_data, None
 
-            if is_factual_question(message) or is_general_qa(message):
+            if (
+                not _is_strategic_conversation(route)
+                and (is_factual_question(route) or is_general_qa(route))
+            ):
                 cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)
                 if cal_reply:
                     label = (
@@ -674,7 +726,10 @@ class AriaBrain:
                         cal_data,
                         None,
                     )
-        if is_factual_question(message) or is_general_qa(message):
+        if (
+            not _is_strategic_conversation(route)
+            and (is_factual_question(route) or is_general_qa(route))
+        ):
             cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)
             if cal_reply:
                 label = (
