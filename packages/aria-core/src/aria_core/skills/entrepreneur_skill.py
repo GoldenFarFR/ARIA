@@ -19,6 +19,12 @@ from aria_core.runtime import settings
 INITIATIVE_REL = "data/memory/entrepreneur_initiative.md"
 
 
+_AUTONOMY_STATUS_RE = re.compile(
+    r"(?i)(?:mode\s+autonome|autonomie\s+(?:totale|revenu|complète)|"
+    r"tu\s+fais\s+ce\s+que\s+tu\s+veux|agis\s+seule|full\s+autonomy)"
+)
+
+
 _ACTIVATION_RE = re.compile(
     r"(?i)(?:"
     r"commence(?:r)?\s+(?:à|a)\s+(?:agir|activer|travailler)|"
@@ -33,6 +39,8 @@ _ACTIVATION_RE = re.compile(
 
 def wants_entrepreneur(message: str) -> bool:
     lower = message.lower()
+    if _AUTONOMY_STATUS_RE.search(lower):
+        return True
     if _ACTIVATION_RE.search(lower):
         return True
     return bool(
@@ -167,6 +175,11 @@ async def execute_entrepreneur(
 ) -> tuple[str, dict]:
     lower = message.lower()
     progress = goal_progress()
+
+    if _AUTONOMY_STATUS_RE.search(lower):
+        from aria_core.autonomy_revenue import format_autonomy_status
+
+        return format_autonomy_status(lang), {"action": "autonomy_status"}
 
     if _ACTIVATION_RE.search(lower):
         return await _format_activation_playbook(lang)

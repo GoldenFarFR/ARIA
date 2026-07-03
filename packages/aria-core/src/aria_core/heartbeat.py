@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 from aria_core.knowledge.curriculum_cooldown import cooldown_minutes_remaining
@@ -151,6 +152,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="revenue_autonomy",
+        name="Revenue autonomy cycle",
+        description="Poll ACP, scan marché, promo X, initiative — sans relance opérateur",
+        interval_minutes=360,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="health_watch",
         name="Health regression watch",
         description="Ping /api/health — issue apres 3 echecs",
@@ -184,6 +192,11 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.proactive import proactive_ideas_enabled
 
             task.enabled = proactive_ideas_enabled()
+            if task.enabled and settings.aria_autonomous:
+                task.interval_minutes = max(
+                    240,
+                    int(os.environ.get("ARIA_AUTONOMY_INITIATIVE_HOURS", "8") or 8) * 60,
+                )
         if task.id == "avatar_style_refresh":
             from aria_core.avatar_style_refresh import _enabled, is_image_generation_available
             from aria_core.visual_autonomy import visual_autonomy_enabled
@@ -220,6 +233,16 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.skills.acp_cli import is_acp_available
 
             task.enabled = is_acp_available()
+        if task.id == "revenue_autonomy":
+            from aria_core.autonomy_revenue import revenue_autonomy_enabled
+            from aria_core.skills.acp_cli import is_acp_available
+
+            task.enabled = revenue_autonomy_enabled() and is_acp_available()
+            if task.enabled:
+                task.interval_minutes = max(
+                    60,
+                    int(os.environ.get("ARIA_AUTONOMY_CYCLE_MINUTES", "360") or 360),
+                )
 
 _HEARTBEAT_STATE_PATH = data_dir() / "heartbeat_state.json"
 
@@ -514,6 +537,18 @@ class AriaHeartbeat:
                     f"Top demande : {top_gap[0]} (score {top_gap[1]})\n"
                     f"Commande : scan marché acp"
                 )
+
+        elif task_id == "revenue_autonomy":
+            from aria_core.autonomy_revenue import run_revenue_autonomy_cycle
+
+            cycle = await run_revenue_autonomy_cycle(lang="fr")
+            actions = cycle.get("actions") or []
+            if actions:
+                append_memory("autonomy", f"[heartbeat] revenue_autonomy — {actions}")
+                body = "Autonomie revenu — actions :\n" + "\n".join(f"• {a}" for a in actions)
+                if cycle.get("initiative"):
+                    body += f"\n\nInitiative :\n{cycle['initiative'][:800]}"
+                await self._notify_telegram(body[:1500])
 
         elif task_id == "health_watch":
             from aria_core.health_watch import check_health_regression
