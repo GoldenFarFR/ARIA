@@ -25,4 +25,5 @@ known-first-party = ["src"]
 [tool.pytest.ini_options]
 addopts = "-ra -q --tb=short -n auto"
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = ["slow", "integration", "unit", "ai", "ledger"]
