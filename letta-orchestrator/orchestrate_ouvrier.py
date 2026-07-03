@@ -22,9 +22,11 @@ from ouvrier_proof import (
     split_reply_proof,
     vault_env_names,
 )
+from ouvrier_acp_direct import try_acp_workflow_direct
 from ouvrier_instant import instant_reply, is_simple_exchange
 from ouvrier_runner import provider_label, run_ouvrier
 from ouvrier_session import enrich_continuation, is_continuation, load_session, save_session, wants_opinion
+from ouvrier_vision import build_image_context, direct_image_reply, wants_image_context
 from ouvrier_trace import StepTimer, emit_final, emit_proof, is_verbose, set_verbose, trace, trace_block
 
 CONFIG_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_config.json"
@@ -51,13 +53,20 @@ def display_ouvrier_output(raw: str) -> str:
 
 
 def preflight_acp_context(message: str) -> str:
-    """Injecte le workflow ACP du repo quand Sylvain demande un avis."""
+    """Injecte le workflow ACP du repo — uniquement pour demandes d'avis, pas création."""
     if not re.search(r"(?i)\bacp\b", message):
         return ""
+    if re.search(
+        r"(?i)(?:^|\s)(?:cr[ée]er|crée|lancer)\s+(?:un\s+)?(?:workflow|offre|produit)"
+        r"|appeler\s+[a-z]"
+        r"|réparer\s+offres?\s+acp|reparer\s+offres?\s+acp"
+        r"|publier\s+produit\s+acp",
+        message,
+    ):
+        return ""
     if not (
-        re.search(r"(?i)workflow|offering|produit|skill|lancer|template", message)
-        or wants_opinion(message)
-        or re.search(r"(?i)cr[ée]er|nouveau", message)
+        wants_opinion(message)
+        or re.search(r"(?i)tu en penses|ton avis|qu.en penses|tu en pense", message)
     ):
         return ""
     parts: list[str] = [
@@ -303,10 +312,32 @@ def main() -> None:
         )
 
     user_msg = args.message
+    session = load_session()
     effective = enrich_continuation(user_msg) if is_continuation(user_msg) else user_msg
+    image_block, image_path, image_analysis = build_image_context(user_msg, session)
+    if image_block:
+        effective = f"{image_block}\n\n{effective}"
 
-    if is_simple_exchange(user_msg) and not is_continuation(user_msg):
+    direct = (
+        direct_image_reply(user_msg, image_analysis or "", image_path or "")
+        if image_analysis and image_path
+        else None
+    )
+    if direct:
+        save_session(user_msg, display_ouvrier_output(direct), image_path=image_path)
+        return
+
+    if (
+        is_simple_exchange(user_msg)
+        and not is_continuation(user_msg)
+        and not wants_image_context(user_msg, session)
+    ):
         save_session(user_msg, display_ouvrier_output(instant_reply(user_msg)))
+        return
+
+    acp_direct = try_acp_workflow_direct(effective)
+    if acp_direct:
+        save_session(user_msg, display_ouvrier_output(acp_direct), image_path=image_path)
         return
 
     trace("pensee", f"Message Sylvain : {user_msg[:300]}")
@@ -337,9 +368,13 @@ def main() -> None:
                 if tag in ("mute", "enable"):
                     print("Détails : trace [preflight] ci-dessus. Effet si start-acp-local.ps1 tourne.")
             elif tag in ("mute", "enable"):
-                save_session(user_msg, display_ouvrier_output(f"{summary}\n\n{direct}"))
+                save_session(
+                    user_msg,
+                    display_ouvrier_output(f"{summary}\n\n{direct}"),
+                    image_path=image_path,
+                )
             else:
-                save_session(user_msg, display_ouvrier_output(direct))
+                save_session(user_msg, display_ouvrier_output(direct), image_path=image_path)
             return
 
     prompt = effective
@@ -361,7 +396,7 @@ def main() -> None:
     print(f"--- ARIA-OUVRIER ({engine}) ---", file=sys.stderr)
     try:
         reply = run_ouvrier(prompt)
-        save_session(user_msg, display_ouvrier_output(reply))
+        save_session(user_msg, display_ouvrier_output(reply), image_path=image_path)
         return
     except Exception as exc:
         sys.exit(f"[Erreur] Ouvrier: {exc}")

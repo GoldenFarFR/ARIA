@@ -344,3 +344,5 @@
 18h11 — Création du workflow Test_1 dans ACP avec un prix de 25$ et 99 centimes, proposant un service d'analyse sur la pertinence d'un compte X avec promotion
 18h21 — feat ACP adhoc premium + promo X auto (revenus)
 18h23 — fix ACP delete workflow direct (ouvrier+brain) + supprime test_1
+18h24 — fix tweet ACP policy + test_1 premium 25.99 USDC publié X
+18h31 — fix ouvrier ACP direct + delete-all + repair premium YAML
