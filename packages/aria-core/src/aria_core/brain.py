@@ -248,6 +248,30 @@ class AriaBrain:
         visitor_id: str = "",
         public_mode: bool | None = None,
     ) -> ChatResponse:
+        from aria_core.llm_usage import (
+            begin_chat_usage_tracking,
+            clear_chat_usage_tracking,
+        )
+
+        begin_chat_usage_tracking()
+        try:
+            return await self._process_inner(
+                user_message,
+                lang,
+                visitor_id=visitor_id,
+                public_mode=public_mode,
+            )
+        finally:
+            clear_chat_usage_tracking()
+
+    async def _process_inner(
+        self,
+        user_message: str,
+        lang: str = LANG_EN,
+        *,
+        visitor_id: str = "",
+        public_mode: bool | None = None,
+    ) -> ChatResponse:
         public = is_public_mode() if public_mode is None else public_mode
         vid = visitor_id if public else ""
         shell_mode = not public and str(visitor_id).startswith("shell")
@@ -539,8 +563,37 @@ class AriaBrain:
         except Exception:
             pass
 
+        display_reply = reply
+        if (
+            not public
+            and getattr(settings, "aria_llm_cost_footer", True)
+        ):
+            from aria_core.llm_usage import get_chat_usage_totals
+            from aria_core.response_cost import (
+                append_cost_footer,
+                build_cost_meta,
+            )
+
+            usage = get_chat_usage_totals()
+            cost_meta = build_cost_meta(
+                total_tokens=usage["total_tokens"],
+                calls=usage["calls"],
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+            )
+            lang_key = "fr" if lang == LANG_FR else "en"
+            channel = "shell" if shell_mode else "plain"
+            display_reply = append_cost_footer(
+                reply,
+                cost_meta,
+                lang=lang_key,
+                channel=channel,
+            )
+            if isinstance(data, dict):
+                data["llm_cost"] = cost_meta
+
         return ChatResponse(
-            reply=reply,
+            reply=display_reply,
             skill_used=skill,
             actions_taken=actions,
             zhc_message=zhc_msg,

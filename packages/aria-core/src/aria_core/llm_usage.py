@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,45 @@ from typing import Any
 from aria_core.paths import data_dir
 
 logger = logging.getLogger(__name__)
+
+_chat_usage_ctx: ContextVar[dict[str, int] | None] = ContextVar("chat_usage_ctx", default=None)
+
+
+def begin_chat_usage_tracking() -> None:
+    _chat_usage_ctx.set({
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "calls": 0,
+    })
+
+
+def clear_chat_usage_tracking() -> None:
+    _chat_usage_ctx.set(None)
+
+
+def get_chat_usage_totals() -> dict[str, int]:
+    state = _chat_usage_ctx.get()
+    if not state:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "calls": 0,
+        }
+    return dict(state)
+
+
+def _accumulate_chat_usage(*, input_tokens: int, output_tokens: int) -> None:
+    state = _chat_usage_ctx.get()
+    if state is None:
+        return
+    inp = int(input_tokens)
+    out = int(output_tokens)
+    state["input_tokens"] += inp
+    state["output_tokens"] += out
+    state["total_tokens"] += inp + out
+    state["calls"] += 1
 
 
 def llm_usage_dir() -> Path:
@@ -77,6 +117,11 @@ def record_llm_usage(
         path = _month_path(day)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if ok and kind == "chat":
+            _accumulate_chat_usage(
+                input_tokens=int(input_tokens),
+                output_tokens=int(output_tokens),
+            )
     except Exception as exc:
         logger.debug("llm usage log skip: %s", exc)
 
