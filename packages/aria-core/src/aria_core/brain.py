@@ -31,6 +31,15 @@ from aria_core.grounding import (
 from aria_core.public_mode import is_public_mode, operator_action_blocked_reply, skill_allowed_in_public
 from aria_core.locale import LANG_EN, LANG_FR
 from aria_core.llm import chat_with_context, is_llm_configured
+from aria_core.llm_economy import (
+    LlmDepth,
+    calibrated_action_label,
+    depth_system_instruction,
+    detect_depth,
+    llm_unavailable_hint,
+    resolve_budget,
+    skill_output_readable,
+)
 from aria_core.memory import append_memory, build_llm_context, get_journal_summary
 from aria_core.models import ChatResponse, SkillName
 from aria_core.skills.portfolio_skill import execute_portfolio_analysis
@@ -461,6 +470,9 @@ class AriaBrain:
                     should_skip_llm_enhance(skill_key)
                     or not settings.aria_llm_enhance_skills
                 )
+            ) or (
+                skill_output_readable(skill_output)
+                and detect_depth(user_message) != LlmDepth.DEVELOP
             )
             if skip_enhance:
                 reply = skill_output
@@ -548,23 +560,51 @@ class AriaBrain:
             return None
         lang_key = "fr" if lang == LANG_FR else "en"
         lang_hint = "Réponds en français." if lang == LANG_FR else "Reply in English."
+        depth = detect_depth(user_message)
+        budget = resolve_budget(
+            depth,
+            public=public,
+            grounded=grounded_for_audience(public),
+        )
+        concision = depth_system_instruction(lang_key, depth)
         if grounded_for_audience(public):
             system = (
                 f"{anti_hallucination_rules(lang_key)}\n\n"
                 f"{strict_rephrase_rules(lang_key)}\n\n"
+                f"{concision}\n\n"
                 f"Skill output (do not add facts):\n{skill_output}\n\n"
                 f"{lang_hint}"
             )
             return await chat_with_context(
-                user_message, system, temperature=0.1, max_tokens=800,
+                user_message,
+                system,
+                temperature=0.1,
+                max_tokens=budget.enhance_max_tokens,
+                model=budget.model_override,
+                depth=depth.value,
             )
-        context = await build_llm_context(public=public, visitor_id=visitor_id or None)
+        context = await build_llm_context(
+            public=public,
+            visitor_id=visitor_id or None,
+            query_hint=user_message if not public else None,
+            max_chars=budget.context_max_chars,
+            include_conversations=budget.include_context_conversations,
+            include_extras=budget.include_context_extras,
+            collegue_max_chars=budget.collegue_max_chars,
+        )
         system = (
             f"{context}\n\n"
+            f"{concision}\n\n"
             f"Tu es ARIA. Un skill a produit ce résultat technique :\n{skill_output}\n\n"
             f"Reformule pour l'utilisateur de façon claire et actionnable. {lang_hint}"
         )
-        return await chat_with_context(user_message, system)
+        return await chat_with_context(
+            user_message,
+            system,
+            max_tokens=budget.enhance_max_tokens,
+            model=budget.model_override,
+            depth=depth.value,
+        )
 
     async def _general_response(
         self,
@@ -614,17 +654,13 @@ class AriaBrain:
                         {},
                         None,
                     )
-            if lang == LANG_FR:
-                quota_hint = (
-                    "Groq est en quota (429) — quota journalier presque épuisé, réessaie plus tard. "
-                    "Je peux quand même avancer côté ouvrier (code, ACP, worker queue)."
-                )
-            else:
-                quota_hint = (
-                    "Groq rate limit (429) — retry in ~10 min. "
-                    "I can still run worker tasks (code, ACP, queue)."
-                )
-            return quota_hint, None, ["Strategic — LLM indisponible"], {}, None
+            return (
+                llm_unavailable_hint(lang_key),
+                None,
+                ["Strategic — LLM indisponible"],
+                {},
+                None,
+            )
 
         if not public:
             from aria_core.memory.collegue import is_collegue_recall_question
@@ -678,28 +714,6 @@ class AriaBrain:
                 None,
             )
 
-        if (
-            not _is_strategic_conversation(route)
-            and (is_factual_question(route) or is_general_qa(route))
-            and is_live_info_question(route)
-        ):
-            cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)
-            if cal_reply:
-                label = "Actu web+Groq" if cal_data.get("web_verified") or cal_data.get(
-                    "web_verify",
-                ) else (
-                    "Groq calibrated"
-                    if cal_data.get("groq_calibrated")
-                    else "Policy/holding (static)"
-                )
-                return (
-                    cal_reply,
-                    SkillName.EPISTEMIC_CHECK,
-                    [label],
-                    cal_data,
-                    None,
-                )
-
         if grounded_for_audience(public):
             faq_reply, faq_data = faq_direct_answer(message, lang_key)
             if faq_reply:
@@ -708,39 +722,16 @@ class AriaBrain:
             if ledger_reply:
                 return ledger_reply, None, ["Truth ledger direct (verified)"], ledger_data, None
 
-            if (
-                not _is_strategic_conversation(route)
-                and (is_factual_question(route) or is_general_qa(route))
-            ):
-                cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)
-                if cal_reply:
-                    label = (
-                        "Groq calibrated"
-                        if cal_data.get("groq_calibrated")
-                        else "Policy/holding (static)"
-                    )
-                    return (
-                        cal_reply,
-                        SkillName.EPISTEMIC_CHECK,
-                        [label],
-                        cal_data,
-                        None,
-                    )
         if (
             not _is_strategic_conversation(route)
             and (is_factual_question(route) or is_general_qa(route))
         ):
             cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)
             if cal_reply:
-                label = (
-                    "Groq calibrated"
-                    if cal_data.get("groq_calibrated")
-                    else "Policy/holding (static)"
-                )
                 return (
                     cal_reply,
                     SkillName.EPISTEMIC_CHECK,
-                    [label],
+                    [calibrated_action_label(cal_data, lang=lang_key)],
                     cal_data,
                     None,
                 )
@@ -775,10 +766,13 @@ class AriaBrain:
                 else "Verified-facts-only mode (ARIA_LLM_ENABLED=false)."
             )
         elif is_llm_configured():
+            from aria_core.llm_economy import provider_display_name
+
+            prov = provider_display_name()
             llm_hint = (
-                "LLM configuré mais réponse indisponible — vérifie LLM_API_KEY (Groq) sur Render."
+                f"LLM configuré mais réponse indisponible — vérifie LLM_API_KEY ({prov})."
                 if lang == LANG_FR
-                else "LLM configured but unavailable — check LLM_API_KEY (Groq) on Render."
+                else f"LLM configured but unavailable — check LLM_API_KEY ({prov})."
             )
         else:
             llm_hint = (
@@ -810,6 +804,14 @@ class AriaBrain:
 
         lang_hint = "Réponds toujours en français." if lang == LANG_FR else "Always reply in English."
         lang_key = "fr" if lang == LANG_FR else "en"
+        depth = detect_depth(message)
+        budget = resolve_budget(
+            depth,
+            public=public,
+            grounded=grounded_for_audience(public),
+            self_context=self_context_only,
+        )
+        concision = depth_system_instruction(lang_key, depth)
 
         if grounded_for_audience(public):
             verified = await build_verified_facts_block(
@@ -819,12 +821,19 @@ class AriaBrain:
                 f"{anti_hallucination_rules(lang_key)}\n\n"
                 f"{verified}\n\n"
                 f"{grounded_llm_identity(lang_key)}\n"
+                f"{concision}\n"
                 "If VERIFIED FACTS do not answer the question, refuse in one short sentence.\n"
                 "Never invent revenue, team, strategy, or performance. Max 120 words.\n"
                 f"{lang_hint}"
             )
             return await chat_with_context(
-                message, system, None, temperature=0.1, max_tokens=350,
+                message,
+                system,
+                None,
+                temperature=0.1,
+                max_tokens=budget.max_tokens,
+                model=budget.model_override,
+                depth=depth.value,
             )
 
         if self_context_only:
@@ -836,6 +845,10 @@ class AriaBrain:
                 public=public,
                 visitor_id=visitor_id or None,
                 query_hint=message if not public else None,
+                max_chars=budget.context_max_chars,
+                include_conversations=budget.include_context_conversations,
+                include_extras=budget.include_context_extras,
+                collegue_max_chars=budget.collegue_max_chars,
             )
             if not public:
                 try:
@@ -886,10 +899,11 @@ class AriaBrain:
 
             local_rule = f"\n{SELF_CONTEXT_LLM_RULE}"
         if self_context_only:
-            system = f"{context}\n\n{local_rule}{lang_hint}"
+            system = f"{context}\n\n{concision}\n{local_rule}{lang_hint}"
         else:
             system = (
                 f"{context}\n\n"
+                f"{concision}\n"
                 f"{local_rule}"
                 f"{persona_block}\n"
                 f"{x_identity_prompt()}\n"
@@ -898,24 +912,34 @@ class AriaBrain:
                 f"{lang_hint}"
             )
         history = []
-        try:
-            messages = await repertoire_db.get_messages(
-                limit=10,
-                visitor_id=visitor_id if public else None,
-            )
-            for msg in messages:
-                role = "user" if msg["role"] == "user" else "assistant"
-                history.append({"role": role, "content": msg["content"][:500]})
-        except Exception:
-            pass
+        if budget.history_turns > 0:
+            try:
+                messages = await repertoire_db.get_messages(
+                    limit=budget.history_turns,
+                    visitor_id=visitor_id if public else None,
+                )
+                for msg in messages:
+                    role = "user" if msg["role"] == "user" else "assistant"
+                    history.append({
+                        "role": role,
+                        "content": msg["content"][: budget.history_msg_chars],
+                    })
+            except Exception:
+                pass
 
         if self_context_only:
             temp = 0.15
-            max_tok = 480
         else:
             temp = settings.aria_llm_temperature if public else max(settings.aria_llm_temperature, 0.35)
-            max_tok = 500 if public else 700
-        return await chat_with_context(message, system, history, temperature=temp, max_tokens=max_tok)
+        return await chat_with_context(
+            message,
+            system,
+            history,
+            temperature=temp,
+            max_tokens=budget.max_tokens,
+            model=budget.model_override,
+            depth=depth.value,
+        )
 
 
 aria_brain = AriaBrain()
