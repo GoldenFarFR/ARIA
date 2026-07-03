@@ -219,3 +219,86 @@ Dernier OK: 2026-07-01T23:15:23.299692+00:00
 ```
 
 ---
+
+## [done] cap-gap-image_api_key — 2026-07-03T18:38:25Z
+
+**Titre :** Capacite: generation banniere X 3:1 (IMAGE_API_KEY — ≠ avatar carre)  
+**Source :** `capability_gap` · **Priorité :** normal  
+**Repo(s) :** ARIA  
+**Fichiers :** packages/aria-core/src/aria_core/portrait_scene.py, packages/aria-core/src/aria_core/x_banner.py, aria-vanguard/operator/production.env.example  
+
+### Problème
+no token
+
+### Action demandée à l'ouvrier Cursor
+Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin aria-vanguard si besoin, sync-render + preuve health.
+
+### Critères d'acceptation
+- [x] IMAGE_API_KEY configure sur Render (xai-...) — len=84 local+Render (audit 2026-07-03)
+- [ ] generate_banner_portrait retourne JPEG 3:1 (x_banner.jpg 1500x500, <=3 Mo)
+- [ ] Distinct de current.jpg (avatar profil carre)
+
+### Contexte
+```
+no token
+```
+
+**Ouvrier 2026-07-03 :** secret OK prod ; génération bannière = test manuel opérateur si besoin.
+
+---
+
+## [done] cap-gap-security_ip_changed_vault — 2026-07-03T18:38:32Z
+
+**Titre :** Securite: IP changee lors acces vault/sync  
+**Source :** `capability_gap` · **Priorité :** high  
+**Repo(s) :** aria-local-sync  
+**Fichiers :** security/github-trust.yaml, scripts/report-machine-ip.ps1  
+
+### Problème
+repo=sessions rule=ip_changed_vault
+IP A -> B
+
+### Action demandée à l'ouvrier Cursor
+Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin aria-vanguard si besoin, sync-render + preuve health.
+
+### Critères d'acceptation
+- [x] IP enregistree pour machine connue — `80.215.206.1` via report-machine-ip.ps1
+- [x] Pas de critical ip_changed_vault — ip_changed=false apres enregistrement
+
+### Contexte
+```
+repo=sessions rule=ip_changed_vault
+IP A -> B
+```
+
+---
+
+## [done] cap-gap-health_render_regression — 2026-07-03T18:38:32Z
+
+**Titre :** Incident: regression health Render (3 echecs)  
+**Source :** `capability_gap` · **Priorité :** high  
+**Repo(s) :** aria-vanguard  
+**Fichiers :** operator/check-aria-status.ps1, backend/app/main.py  
+
+### Problème
+3 echecs consecutifs health
+Dernier: timeout
+Dernier OK: 2026-07-03T18:38:32.577884+00:00
+
+### Action demandée à l'ouvrier Cursor
+Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin aria-vanguard si besoin, sync-render + preuve health.
+
+### Critères d'acceptation
+- [x] GET /api/health status=ok — commit prod 5a29c0f, aria_core_build 92bf562
+- [x] check-aria-status.ps1 exit 0 — 2026-07-03
+
+### Contexte
+```
+3 echecs consecutifs health
+Dernier: timeout
+Dernier OK: 2026-07-03T18:38:32.577884+00:00
+```
+
+**Ouvrier 2026-07-03 :** health OK ; deploy prod lance dans meme session (audit GitHub).
+
+---

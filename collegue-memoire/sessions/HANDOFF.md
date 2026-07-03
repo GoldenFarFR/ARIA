@@ -81,35 +81,32 @@ SSOT detail : `sessions/REPRISE-2026-07-02.md` (D anticipe avant 07-02).
 
 ## PC-SYLVAIN
 
-- **Derniere session** : 2026-07-03T00:45:19
-- **Session Grok** : `019f2500-3d0c-7240-a841-4adee53d4d1b`
+- **Derniere session** : 2026-07-03T22:03:15
+- **Session Grok** : `019f298c-0199-7500-a9f5-99c0c4ba0007`
 - **Repos** : ARIA
-- **Fichiers modifies** : 5 (extrait ci-dessous)
+- **Fichiers modifies** : 2 (extrait ci-dessous)
 
 **Etat git** :
-- `ARIA` @ 7ae5f97 (dirty) - ARIA truth-ledger batch: 4 entries (203d2529ÔÇªb9650ca4)
+- `ARIA` @ e043081 (dirty) - feat(acp): reponse conversationnelle revenus + routage client honnete
 
 **Fichiers (extrait)** :
-- .gitignore
-- collegue-memoire/sessions/ARIA-WORKER.md
-- local-sync/scripts/report-machine-ip.ps1
-- vanguard/src/components/CommunityWelcomeBanner.tsx
-- vanguard/src/lib/site.ts
+- packages/aria-core/src/aria_core/heartbeat.py
+- packages/aria-core/tests/test_heartbeat_state.py
 
 **Journal** :
-- 23h38 — skill ingest-repo preuve cognitive+vector+rapport jsonl
-- 23h46 — fix routage ingest force cerveau + banniere
-- 23h52 — fix shell_chat init_repertoire_db agent_messages
-- 23h57 — fix recall COLLEGUE sans recherche web epistemique
-- 
-- ## 2026-07-03
-- 00h02 — retrait contexte bureau DDC/Aptos COLLEGUE + truth-ledger
-- 00h03 — supprime dossier A FAIRE (doublon letta-orchestrator)
-- 00h12 — fix routage self_context identite/objectifs + socratic_drill
-- 00h15 — retrait DDC/Excel du repo ARIA (socratic, local-sync, projets)
-- 00h18 — fix self_context sans vector (objectifs ARIA lisibles)
-- 00h29 — lot ACP v2 commit (acp_cli provider listener tests)
-- 00h29 — fix acp_cli unwrap data JSON agent list
-- 00h37 — fix start-acp-local.ps1 (logs, health, deps)
-- 00h39 — lance start-acp-local.ps1 + push fix operator c52dce8
+- 19h17 — memoire: auto ApplyApproved collect-session + /apply-lessons KART + docs COLLEGUE
+- 19h39 — refonte tweet feedback commu format+reponses roadmap
+- 19h42 — confirme policy feedback X EN + correction typos visiteur
+- 19h47 — feat feedback X fil 2 tweets citation+reply developpee
+- 20h40 — fix feedback-x sans lien + citation fidele + deploy prod
+- 21h12 — feat aria-core llm_economy brief/standard/develop + brain integration
+- 21h26 — feat response_cost footer gratuit/payant + tokens
+- 21h38 — feat mode debranchement Grok coding KART (ouvrier_coding_mode + skip cerveau)
+- 21h45 — feat compteur tokens payants dashboard KART + ouvrier record usage
+- 21h47 — fix Get-AriaKartPaidTokens python sans aria_core import
+- 21h49 — fix profil PS hook ARIA avant dash compteur tokens
+- 21h54 — fix routage ACP question conversationnelle revenus (acp_client_skill)
+- 21h57 — coupe notifs Telegram repertoire_grow + entrepreneur_cultivate heartbeat
+- 21h58 — playbook activation revenu entrepreneur_skill + proactive ACP
+- 21h59 — heartbeat 24h + persist last_runs disque (anti-spam redeploy)
 

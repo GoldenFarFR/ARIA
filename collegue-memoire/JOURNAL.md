@@ -370,3 +370,4 @@
 21h57 — coupe notifs Telegram repertoire_grow + entrepreneur_cultivate heartbeat
 21h58 — playbook activation revenu entrepreneur_skill + proactive ACP
 21h59 — heartbeat 24h + persist last_runs disque (anti-spam redeploy)
+22h05 — ACP market intelligence skill + proactive ON + heartbeat scan
