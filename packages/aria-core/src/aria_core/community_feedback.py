@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from aria_core.paths import data_dir
 from aria_core.x_text import (
     FEEDBACK_SITE_MAX_CHARS,
     FEEDBACK_X_QUOTE_MAX_WEIGHT,
+    FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT,
     X_TWEET_MAX_CHARS,
     fit_x_tweet,
     tweet_fits,
@@ -68,6 +70,8 @@ _INTERNAL_TEST_RE = re.compile(
     r"\b(?:test\s+diagnostic|diagnostic\s+test|ping\s+from\s+diagnostic)\b",
     re.IGNORECASE,
 )
+_IDEAS_LIST_RE = re.compile(r"\(\d+\)|\b\d+\)\s", re.IGNORECASE)
+_REPLY_PAIR_SEP = "|||"
 
 
 def _normalize_handle(handle: str) -> str:
@@ -266,42 +270,104 @@ _PROFANITY_RE = re.compile(
 _X_TWEET_MIN_LEN = 15
 
 
-def personal_take_on_feedback(text: str, *, lang: str = "fr") -> str:
-    """Réponse courte à l'avis — heuristique locale, ancrée sur le contenu."""
+@dataclass(frozen=True)
+class FeedbackReplyPair:
+    """Réponse fil X — 2 phrases (tweet reply sous la citation)."""
+
+    primary: str
+    followup: str
+
+
+def personal_reply_pair_on_feedback(text: str, *, lang: str = "fr") -> FeedbackReplyPair:
+    """Réponse 2 phrases — heuristique locale, ancrée sur le contenu."""
     t = (text or "").strip()
     if _ROADMAP_RE.search(t) or t.count("?") >= 2:
         if lang == "fr":
-            return (
-                "Marketplace ACP + signaux ZHC d'abord — partenariats quand la traction "
-                "valide le modèle."
+            return FeedbackReplyPair(
+                primary="Marketplace ACP + signaux ZHC d'abord.",
+                followup=(
+                    "Partenariats quand la traction valide le modèle — "
+                    "ton avis oriente la roadmap."
+                ),
             )
-        return (
-            "ACP marketplace + ZHC signal products ship first — partnerships once "
-            "traction proves the model."
+        return FeedbackReplyPair(
+            primary="ACP marketplace + ZHC signal products ship first.",
+            followup="Partnerships when traction proves the model — your note shapes the roadmap.",
+        )
+    if _IDEAS_LIST_RE.search(t) or (_ACTION_RE.search(t) and len(t) > 120):
+        if lang == "fr":
+            return FeedbackReplyPair(
+                primary="Tes idées produit sont notées — holding, Telegram, transparence ACP.",
+                followup="On ship Vanguard brique par brique ; les retours comme le tien priorisent la suite.",
+            )
+        return FeedbackReplyPair(
+            primary="Your product ideas are logged — holding page, Telegram, ACP transparency.",
+            followup="We ship Vanguard brick by brick; notes like yours steer what lands next.",
         )
     if _FEEDBACK_WIDGET_RE.search(t) and _BUILD_TOGETHER_RE.search(t):
         if lang == "fr":
-            return "On ship Vanguard brique par brique — ton avis oriente la prochaine itération."
-        return "We ship Vanguard brick by brick — your note steers the next iteration."
+            return FeedbackReplyPair(
+                primary="Canal avis + construire ensemble — exactement l'usage prévu.",
+                followup="Chaque note ZHC oriente la prochaine itération Vanguard.",
+            )
+        return FeedbackReplyPair(
+            primary="Feedback lane + building together — exactly how we use this channel.",
+            followup="Every ZHC note steers the next Vanguard iteration.",
+        )
     if _FEEDBACK_WIDGET_RE.search(t):
         if lang == "fr":
-            return "Canal avis noté — ça priorise la roadmap ZHC."
-        return "Feedback lane noted — it prioritizes the ZHC roadmap."
+            return FeedbackReplyPair(
+                primary="Canal avis noté — ça priorise la roadmap ZHC.",
+                followup="On continue d'itérer en public sur ariavanguardzhc.com.",
+            )
+        return FeedbackReplyPair(
+            primary="Feedback lane noted — it prioritizes the ZHC roadmap.",
+            followup="We keep iterating in public on ariavanguardzhc.com.",
+        )
     if _ACTION_RE.search(t) or (_PRODUCT_RE.search(t) and len(t) > 40):
         if lang == "fr":
-            return "Piste produit claire — prochain cycle ZHC."
-        return "Clear product signal — next ZHC ship cycle."
+            return FeedbackReplyPair(
+                primary="Piste produit claire — prochain cycle ZHC.",
+                followup="Ton retour précis compte pour ce qu'on ship ensuite.",
+            )
+        return FeedbackReplyPair(
+            primary="Clear product signal — next ZHC ship cycle.",
+            followup="Your specific note counts toward what we ship next.",
+        )
     if _CONTACT_RE.search(t):
         if lang == "fr":
-            return "On reste en contact — la commu ZHC avance avec des retours comme celui-ci."
-        return "We'll stay in touch — the ZHC community moves on notes like this."
+            return FeedbackReplyPair(
+                primary="On reste en contact — la commu ZHC avance avec des retours comme celui-ci.",
+                followup="Suivi sur @Aria_ZHC et le site pour la suite.",
+            )
+        return FeedbackReplyPair(
+            primary="We'll stay in touch — the ZHC community moves on notes like this.",
+            followup="Follow @Aria_ZHC and the site for what ships next.",
+        )
     if _COMPLIMENT_RE.search(t):
         if lang == "fr":
-            return "Merci — on continue d'itérer Vanguard en public."
-        return "Thanks — we keep shipping Vanguard in public."
+            return FeedbackReplyPair(
+                primary="Merci — contenu utile pour la suite Vanguard.",
+                followup="On continue d'itérer en public, brique par brique.",
+            )
+        return FeedbackReplyPair(
+            primary="Thanks — genuinely useful for where Vanguard goes next.",
+            followup="We keep shipping in public, brick by brick.",
+        )
     if lang == "fr":
-        return "Ton retour oriente ce qu'on ship sur Vanguard."
-    return "Your note steers what we ship on Vanguard."
+        return FeedbackReplyPair(
+            primary="Ton retour oriente ce qu'on ship sur Vanguard.",
+            followup="Chaque note sur le site compte pour la roadmap ZHC.",
+        )
+    return FeedbackReplyPair(
+        primary="Your note steers what we ship on Vanguard.",
+        followup="Every site note counts toward the ZHC roadmap.",
+    )
+
+
+def personal_take_on_feedback(text: str, *, lang: str = "fr") -> str:
+    """Compat — première phrase de la paire."""
+    return personal_reply_pair_on_feedback(text, lang=lang).primary
 
 
 def _feedback_tweet_header(handle: str) -> str:
@@ -309,12 +375,35 @@ def _feedback_tweet_header(handle: str) -> str:
     return f"@{h} on ariavanguardzhc.com" if h else "On ariavanguardzhc.com"
 
 
-async def compose_personal_reply_to_feedback(
+def feedback_x_thread_reply_enabled() -> bool:
+    return os.getenv("COMMUNITY_FEEDBACK_X_THREAD_REPLY", "true").lower() not in (
+        "false",
+        "0",
+        "no",
+    )
+
+
+def _tweet_id_from_post_note(note: str) -> str | None:
+    match = re.search(r"status/(\d+)", note or "")
+    return match.group(1) if match else None
+
+
+def _parse_reply_pair_llm(raw: str) -> FeedbackReplyPair | None:
+    line = (raw or "").strip().strip('"').strip("'")
+    if _REPLY_PAIR_SEP in line:
+        a, b = line.split(_REPLY_PAIR_SEP, 1)
+        a, b = a.strip(), b.strip()
+        if len(a) >= 12 and len(b) >= 12:
+            return FeedbackReplyPair(primary=a[:130], followup=b[:110])
+    return None
+
+
+async def compose_feedback_reply_pair(
     text_en: str,
     *,
     original: str = "",
-) -> str:
-    """Réponse ARIA ciblée sur l'avis (LLM si dispo, sinon heuristique)."""
+) -> FeedbackReplyPair:
+    """Réponse fil X — 2 phrases (LLM si dispo, sinon heuristique)."""
     from aria_core.llm import chat_with_context, is_llm_configured
     from aria_core.x_publication_policy import policy_rules_for_llm
     from aria_core.x_voice import human_voice_rules_for_llm, strip_obvious_ai_phrases
@@ -322,23 +411,30 @@ async def compose_personal_reply_to_feedback(
     source = (text_en or original or "").strip()
     orig = (original or text_en or "").strip()
     if not source:
-        return personal_take_on_feedback(original, lang="en")
+        return personal_reply_pair_on_feedback(original, lang="en")
 
-    # Réponses déterministes quand l'avis mentionne le canal feedback (évite LLM générique).
-    if _FEEDBACK_WIDGET_RE.search(orig):
-        return personal_take_on_feedback(orig, lang="en")
+    simple_widget_only = (
+        _FEEDBACK_WIDGET_RE.search(orig)
+        and not _ROADMAP_RE.search(orig)
+        and not _IDEAS_LIST_RE.search(orig)
+        and len(orig) < 100
+    )
+    if simple_widget_only:
+        return personal_reply_pair_on_feedback(orig, lang="en")
 
     if is_llm_configured():
         system = (
-            "You reply on @Aria_ZHC under a site visitor quote from ariavanguardzhc.com.\n"
-            "Write ONE short sentence (max 110 chars) that answers THEIR actual question or point.\n"
-            "If they ask about roadmap, revenue, or partnerships: mention ACP marketplace, "
-            "ZHC signal products, built-in-public — partnerships when traction proves the moat.\n"
-            "If they suggest a feature: acknowledge the specific idea.\n"
+            "You reply on @Aria_ZHC in a THREAD under a site visitor quote (ariavanguardzhc.com).\n"
+            "Write TWO short English sentences.\n"
+            "Sentence 1 (max 130 chars): answer their question OR name the specific ideas they raised.\n"
+            "Sentence 2 (max 110 chars): concrete next step, roadmap hint, or warm close.\n"
+            "If they ask roadmap/revenue/partnerships: ACP marketplace, ZHC signals, built-in-public.\n"
+            "If they list numbered ideas: acknowledge 2–3 by name.\n"
             "No generic thank-you. Forbidden: 'thanks for sharing', 'love the energy', "
-            "'good to hear on the site itself', 'thank you for your support'.\n"
+            "'good to hear on the site itself', 'feedback box is for notes like this'.\n"
             f"{policy_rules_for_llm('en')}\n"
             f"{human_voice_rules_for_llm('en')}\n"
+            f"Output format exactly: SENTENCE1{_REPLY_PAIR_SEP}SENTENCE2\n"
             "English only. No quotes. No @mentions."
         )
         try:
@@ -346,15 +442,31 @@ async def compose_personal_reply_to_feedback(
                 f"Community feedback to react to:\n{source[:600]}",
                 system,
                 temperature=0.45,
-                max_tokens=90,
+                max_tokens=120,
             )
-            line = strip_obvious_ai_phrases((composed or "").strip().strip('"').strip("'"))
-            if line and len(line) >= 12 and not _GENERIC_REPLY_RE.search(line):
-                return line[:110]
+            line = strip_obvious_ai_phrases((composed or "").strip())
+            pair = _parse_reply_pair_llm(line)
+            if pair and not _GENERIC_REPLY_RE.search(pair.primary):
+                return pair
+            if line and _REPLY_PAIR_SEP not in line:
+                one = line.strip('"').strip("'")
+                if len(one) >= 12 and not _GENERIC_REPLY_RE.search(one):
+                    base = personal_reply_pair_on_feedback(original or text_en, lang="en")
+                    return FeedbackReplyPair(primary=one[:130], followup=base.followup)
         except Exception as exc:
-            logger.warning("feedback personal reply LLM failed: %s", exc)
+            logger.warning("feedback reply pair LLM failed: %s", exc)
 
-    return personal_take_on_feedback(original or text_en, lang="en")
+    return personal_reply_pair_on_feedback(original or text_en, lang="en")
+
+
+async def compose_personal_reply_to_feedback(
+    text_en: str,
+    *,
+    original: str = "",
+) -> str:
+    """Compat — première phrase de la paire."""
+    pair = await compose_feedback_reply_pair(text_en, original=original)
+    return pair.primary
 
 
 def _short_excerpt(text: str, max_len: int = 72) -> str:
@@ -647,31 +759,87 @@ async def _polish_merged_quotes(texts: list[str]) -> list[str]:
     return out
 
 
+def build_feedback_quote_tweet(text: str, *, handle: str = "") -> str:
+    """Tweet 1 du fil — citation mise en forme (sans réponse ARIA)."""
+    quote_full = _condense_quote_sync(
+        re.sub(r"\s+", " ", (text or "").strip()),
+        FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT,
+    )
+    h = (handle or "").strip().lstrip("@")
+    quote_start = min(weighted_tweet_length(quote_full), FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT)
+    quote_weights = list(range(max(quote_start, 56), 47, -8)) or [max(quote_start, 56)]
+    for quote_weight in quote_weights:
+        quote = _truncate_quote(quote_full, quote_weight)
+        if h:
+            candidates = (
+                f"✦ @{h}\nariavanguardzhc.com\n\n\"{quote}\"",
+                f"@{h} · ariavanguardzhc.com\n\n\"{quote}\"",
+            )
+        else:
+            candidates = (
+                f"✦ ariavanguardzhc.com\n\n\"{quote}\"",
+                f"Site note · ariavanguardzhc.com\n\n\"{quote}\"",
+            )
+        for tweet in candidates:
+            if tweet_fits(tweet):
+                return tweet
+    quote = _truncate_quote(quote_full, 80)
+    if h:
+        return fit_x_tweet(f"@{h} · ariavanguardzhc.com\n\n\"{quote}\"")
+    return fit_x_tweet(f"ariavanguardzhc.com\n\n\"{quote}\"")
+
+
+def build_feedback_followup_tweet(pair: FeedbackReplyPair) -> str:
+    """Tweet 2 du fil — 2 phrases ARIA, aéré."""
+    primary = re.sub(r"\s+", " ", (pair.primary or "").strip())
+    followup = re.sub(r"\s+", " ", (pair.followup or "").strip())
+    if not primary:
+        return followup[:280]
+    intros = (
+        "Appreciate the thoughtful note —",
+        "Thanks for the detail —",
+        "Good signal —",
+    )
+    for intro in intros:
+        body = f"{intro}\n\n{primary}\n\n{followup}"
+        if tweet_fits(body):
+            return body
+    compact = f"{primary}\n\n{followup}"
+    if tweet_fits(compact):
+        return compact
+    return fit_x_tweet(f"{primary}\n\n{_truncate_quote(followup, 90)}")
+
+
 def build_merged_feedback_tweet(
     quotes_en: list[str],
     *,
     handle: str = "",
     personal: str = "",
+    reply_pair: FeedbackReplyPair | None = None,
 ) -> str:
-    """Tweet unique — plusieurs avis fusionnés."""
+    """Tweet citation — 1 avis ou fusion ; réponse en reply si fil actif."""
+    if len(quotes_en) <= 1 and feedback_x_thread_reply_enabled():
+        return build_feedback_quote_tweet(
+            quotes_en[0] if quotes_en else "",
+            handle=handle,
+        )
     if len(quotes_en) <= 1:
         return build_feedback_thanks_tweet(
             quotes_en[0] if quotes_en else "",
             handle=handle,
-            personal=personal,
+            personal=personal or (reply_pair.primary if reply_pair else ""),
         )
     header = _feedback_tweet_header(handle)
     if handle.strip():
-        header = f"{header} ({len(quotes_en)} notes)"
+        header = f"✦ {header} ({len(quotes_en)} notes)"
     else:
-        header = f"ariavanguardzhc.com ({len(quotes_en)} notes)"
+        header = f"✦ ariavanguardzhc.com ({len(quotes_en)} notes)"
     merged = " / ".join(f'"{_truncate_quote(q, 90)}"' for q in quotes_en[:3])
-    personal = re.sub(r"\s+", " ", (personal or "").strip())
-    tweet = f"{header}:\n{merged}\n{personal}"
+    tweet = f"{header}\n\n{merged}"
     if tweet_fits(tweet):
         return tweet
     short = " / ".join(f'"{_truncate_quote(q, 50)}"' for q in quotes_en[:2])
-    return fit_x_tweet(f"{header}:\n{short}\n{_truncate_quote(personal, 55)}")
+    return fit_x_tweet(f"{header}\n\n{short}")
 
 
 async def _flush_x_queue_bucket(key: str, bucket: dict[str, Any]) -> dict[str, Any] | None:
@@ -687,21 +855,23 @@ async def _flush_x_queue_bucket(key: str, bucket: dict[str, Any]) -> dict[str, A
         return {"status": "skipped", "reason": "empty_quote"}
 
     merged_original = "\n".join(texts)
-    personal = await compose_personal_reply_to_feedback(
+    reply_pair = await compose_feedback_reply_pair(
         quotes_en[0],
         original=merged_original,
     )
     tweet = build_merged_feedback_tweet(
         quotes_en,
         handle=str(bucket.get("handle") or ""),
-        personal=personal,
+        personal=reply_pair.primary,
+        reply_pair=reply_pair,
     )
     from aria_core.x_voice import strip_obvious_ai_phrases
 
     tweet = strip_obvious_ai_phrases(tweet)
+    followup_tweet = strip_obvious_ai_phrases(build_feedback_followup_tweet(reply_pair))
     ids = ",".join(str(it.get("id") or "")[:12] for it in items[:3])
 
-    from aria_core.gateway.x_twitter import post_tweet
+    from aria_core.gateway.x_twitter import post_tweet, reply_to_tweet
 
     operator_publish = is_trusted_operator_publish(str(bucket.get("handle") or ""))
     _exchange, note = await post_tweet(
@@ -711,15 +881,32 @@ async def _flush_x_queue_bucket(key: str, bucket: dict[str, Any]) -> dict[str, A
         force=operator_publish,
     )
     posted = "Publié sur X" in note or "x.com/" in note
+    reply_note = ""
+    thread_posted = False
+    if posted and feedback_x_thread_reply_enabled():
+        parent_id = _tweet_id_from_post_note(note)
+        if parent_id:
+            _reply_id, reply_note = await reply_to_tweet(
+                followup_tweet,
+                in_reply_to_tweet_id=parent_id,
+                approval_id=f"community_fb_reply:{ids}",
+                force=operator_publish,
+            )
+            thread_posted = "Reply publiée" in (reply_note or "")
     _clear_x_bucket(key)
     append_memory(
         "community",
-        f"[feedback→x batch] {ids} posted={posted} n={len(items)} {tweet[:100]}",
+        f"[feedback→x batch] {ids} posted={posted} thread={thread_posted} n={len(items)} {tweet[:100]}",
     )
+    full_note = note
+    if reply_note:
+        full_note = f"{note}\n{reply_note}"
     return {
         "status": "posted" if posted else "blocked",
-        "note": note,
+        "note": full_note,
         "draft": tweet,
+        "followup_draft": followup_tweet,
+        "thread_posted": thread_posted,
         "merged_count": len(items),
         "text_en": quotes_en[0] if len(quotes_en) == 1 else " / ".join(quotes_en[:2]),
     }

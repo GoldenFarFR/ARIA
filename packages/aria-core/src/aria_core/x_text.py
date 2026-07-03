@@ -12,6 +12,8 @@ X_URL_WEIGHTED_CHARS = 23
 # Site Vanguard — avis complet enregistré ; le tweet cite un extrait auto-adapté
 FEEDBACK_SITE_MAX_CHARS = 500
 FEEDBACK_X_QUOTE_MAX_WEIGHT = 200
+# Tweet 1 seul (fil) — citation plus longue, réponse en reply
+FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT = 240
 
 _URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 
