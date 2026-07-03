@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
+from aria_core.knowledge.curriculum_cooldown import cooldown_minutes_remaining
 from aria_core.memory import append_memory
+from aria_core.paths import data_dir
 from aria_core.models import HeartbeatTask
 from aria_core.skills.portfolio_skill import execute_portfolio_analysis
 from aria_core.skills.repertoire_skill import execute_develop_repertoire
@@ -34,7 +37,7 @@ HEARTBEAT_TASKS = [
         id="repertoire_grow",
         name="Repertoire growth",
         description="Strategic repertoire suggestions",
-        interval_minutes=360,
+        interval_minutes=1440,
     ),
     HeartbeatTask(
         id="x_curiosity",
@@ -54,7 +57,7 @@ HEARTBEAT_TASKS = [
         id="entrepreneur_cultivate",
         name="Entrepreneur cultivation",
         description="Study ZHC peers + track $50/mo revenue goal",
-        interval_minutes=360,
+        interval_minutes=1440,
         enabled=True,
     ),
     HeartbeatTask(
@@ -67,7 +70,7 @@ HEARTBEAT_TASKS = [
         id="founder_ping",
         name="Founder initiative ping",
         description="Spontaneous LLM idea + optional /directive for operator (Telegram)",
-        interval_minutes=480,
+        interval_minutes=1440,
         enabled=False,
     ),
     HeartbeatTask(
@@ -207,11 +210,59 @@ def _sync_x_curiosity_enabled() -> None:
                 and bool((getattr(settings, "aria_acp_events_file", None) or "").strip())
             )
 
+_HEARTBEAT_STATE_PATH = data_dir() / "heartbeat_state.json"
+
+
+def _load_heartbeat_state() -> dict[str, str]:
+    if not _HEARTBEAT_STATE_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(_HEARTBEAT_STATE_PATH.read_text(encoding="utf-8"))
+        last_runs = raw.get("last_runs") or {}
+        return {k: v for k, v in last_runs.items() if isinstance(k, str) and isinstance(v, str)}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_heartbeat_state(last_runs: dict[str, datetime]) -> None:
+    payload = {
+        "last_runs": {
+            task_id: dt.astimezone(timezone.utc).isoformat()
+            for task_id, dt in last_runs.items()
+        }
+    }
+    _HEARTBEAT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _HEARTBEAT_STATE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _task_due(task_id: str, interval_minutes: int, last_runs: dict[str, datetime]) -> bool:
+    last = last_runs.get(task_id)
+    if last is not None:
+        elapsed = (datetime.now(timezone.utc) - last).total_seconds() / 60.0
+        if elapsed < interval_minutes:
+            return False
+    persisted = _load_heartbeat_state().get(task_id)
+    if cooldown_minutes_remaining(persisted, interval_minutes=interval_minutes) > 0:
+        return False
+    return True
+
+
 class AriaHeartbeat:
     def __init__(self) -> None:
         self._running = False
         self._task: asyncio.Task | None = None
         self._last_runs: dict[str, datetime] = {}
+        self._hydrate_last_runs()
+
+    def _hydrate_last_runs(self) -> None:
+        for task_id, iso_ts in _load_heartbeat_state().items():
+            try:
+                dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                self._last_runs[task_id] = dt
+            except (ValueError, TypeError):
+                continue
 
     async def start(self) -> None:
         if self._running:
@@ -247,14 +298,14 @@ class AriaHeartbeat:
         for hb_task in HEARTBEAT_TASKS:
             if not hb_task.enabled:
                 continue
-            last = self._last_runs.get(hb_task.id)
-            if last and (now - last).total_seconds() < hb_task.interval_minutes * 60:
+            if not _task_due(hb_task.id, hb_task.interval_minutes, self._last_runs):
                 continue
 
             await self._run_task(hb_task.id)
             self._last_runs[hb_task.id] = now
             hb_task.last_run = now
 
+        _save_heartbeat_state(self._last_runs)
         _LAST_HEARTBEAT = now
 
     async def _notify_telegram(self, text: str) -> None:
