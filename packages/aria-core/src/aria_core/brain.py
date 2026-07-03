@@ -279,6 +279,20 @@ class AriaBrain:
         await repertoire_db.save_message("user", user_message, visitor_id=vid)
 
         if not public:
+            from aria_core.gateway.local_commands import execute_local_command, is_local_command
+
+            if is_local_command(route_msg):
+                local = await execute_local_command(route_msg, lang=lang)
+                if local:
+                    reply, data = local
+                    await repertoire_db.save_message("agent", reply, visitor_id=vid)
+                    return ChatResponse(
+                        reply=reply,
+                        skill_used=None,
+                        actions_taken=["Local operator command"],
+                        data=data,
+                    )
+
             from aria_core.tweet_compose_workflow import handle_workflow_message
 
             skip_self_maint = shell_mode or wants_worker_delegate(route_msg) or bool(

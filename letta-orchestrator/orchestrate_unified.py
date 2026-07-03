@@ -151,6 +151,20 @@ def main() -> None:
         _complete_turn(user_msg, acp_direct, image_path=image_path)
         return
 
+    from aria_core.gateway.local_commands import execute_local_command, is_local_command
+
+    if is_local_command(user_msg):
+        _bootstrap_brain_runtime()
+        try:
+            local_out = asyncio.run(execute_local_command(user_msg, lang="fr"))
+        except Exception as exc:
+            sys.exit(f"[Erreur] commande locale: {exc}")
+        if local_out:
+            reply, _data = local_out
+            print("--- ARIA-UNIFIÉE (commande locale) ---", file=sys.stderr)
+            _complete_turn(user_msg, reply, image_path=image_path)
+            return
+
     for tag, handler in (
         ("mute", preflight_telegram_notifications),
         ("enable", preflight_telegram_activate),
