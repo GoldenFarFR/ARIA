@@ -104,6 +104,19 @@ pitfalls:
     verify: "Render events pipeline_minutes_exhausted absent ; health commit = pin attendu"
     never: "sync-render en rafale apres chaque petit commit ou pin."
 
+  - id: render-autodeploy-truth-ledger-storm
+    severity: critical
+    lesson: >
+      aria-api autoDeploy=yes + truth-ledger GitHub sync sur main (~5 min) = centaines de redeploys
+      par jour (new_commit), quota pipeline epuise en quelques jours alors que l'operateur croit
+      n'avoir fait que 4-5 deploys manuels.
+    fix: >
+      set-render-autodeploy.ps1 -Mode off. Deploy manuel deploy-render.ps1 ou workflow GitHub
+      render-daily-deploy.yml (1x/jour, ~07h Paris). Secrets repo : RENDER_API_KEY,
+      RENDER_SERVICE_ID_ARIA_API.
+    verify: "Render autoDeploy=no ; deploys new_commit ~1/jour max ; pipeline < 60 min/mois"
+    never: "Laisser autoDeploy=yes sur aria-api avec truth-ledger sync vers main."
+
   - id: totp-telegram-disabled
     severity: high
     lesson: >
