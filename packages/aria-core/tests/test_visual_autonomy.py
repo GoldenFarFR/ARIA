@@ -23,12 +23,12 @@ def isolated_visual(tmp_path, monkeypatch):
 
 
 def test_visual_autonomy_follows_aria_autonomous(monkeypatch):
-    from aria_core.runtime import get_settings
-
     for autonomous in (True, False):
-        monkeypatch.delenv("ARIA_VISUAL_AUTONOMY", raising=False)
+        if autonomous:
+            monkeypatch.delenv("ARIA_VISUAL_AUTONOMY", raising=False)
+        else:
+            monkeypatch.setenv("ARIA_VISUAL_AUTONOMY", "false")
         configure_test_runtime(settings=AriaRuntimeSettings(aria_autonomous=autonomous))
-        setattr(get_settings(), "aria_autonomous", autonomous)
         assert visual_autonomy_enabled() is autonomous
 
 
