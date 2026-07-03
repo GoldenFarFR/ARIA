@@ -381,3 +381,82 @@ Dernier OK: 2026-07-03T20:14:28.125340+00:00
 ```
 
 ---
+
+## [pending] cap-gap-image_api_key — 2026-07-03T20:47:07Z
+
+**Titre :** Capacite: generation banniere X 3:1 (IMAGE_API_KEY — ≠ avatar carre)  
+**Source :** `capability_gap` · **Priorité :** normal  
+**Repo(s) :** ARIA  
+**Fichiers :** packages/aria-core/src/aria_core/portrait_scene.py, packages/aria-core/src/aria_core/x_banner.py, aria-vanguard/operator/production.env.example  
+
+### Problème
+no token
+
+### Action demandée à l'ouvrier Cursor
+Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin aria-vanguard si besoin, sync-render + preuve health.
+
+### Critères d'acceptation
+- [ ] IMAGE_API_KEY configure sur Render (xai-...)
+- [ ] generate_banner_portrait retourne JPEG 3:1 (x_banner.jpg 1500x500, <=3 Mo)
+- [ ] Distinct de current.jpg (avatar profil carre)
+
+### Contexte
+```
+no token
+```
+
+---
+
+## [pending] cap-gap-security_ip_changed_vault — 2026-07-03T20:47:17Z
+
+**Titre :** Securite: IP changee lors acces vault/sync  
+**Source :** `capability_gap` · **Priorité :** high  
+**Repo(s) :** aria-local-sync  
+**Fichiers :** security/github-trust.yaml, scripts/report-machine-ip.ps1  
+
+### Problème
+repo=sessions rule=ip_changed_vault
+IP A -> B
+
+### Action demandée à l'ouvrier Cursor
+Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin aria-vanguard si besoin, sync-render + preuve health.
+
+### Critères d'acceptation
+- [ ] IP enregistree pour machine connue
+- [ ] Pas de critical ip_changed_vault
+
+### Contexte
+```
+repo=sessions rule=ip_changed_vault
+IP A -> B
+```
+
+---
+
+## [pending] cap-gap-health_render_regression — 2026-07-03T20:47:17Z
+
+**Titre :** Incident: regression health Render (3 echecs)  
+**Source :** `capability_gap` · **Priorité :** high  
+**Repo(s) :** aria-vanguard  
+**Fichiers :** operator/check-aria-status.ps1, backend/app/main.py  
+
+### Problème
+3 echecs consecutifs health
+Dernier: timeout
+Dernier OK: 2026-07-03T20:47:17.105287+00:00
+
+### Action demandée à l'ouvrier Cursor
+Implémenter la capacité dans aria-core (ou config opérateur), tests, bump pin aria-vanguard si besoin, sync-render + preuve health.
+
+### Critères d'acceptation
+- [ ] GET /api/health status=ok
+- [ ] check-aria-status.ps1 exit 0
+
+### Contexte
+```
+3 echecs consecutifs health
+Dernier: timeout
+Dernier OK: 2026-07-03T20:47:17.105287+00:00
+```
+
+---
