@@ -74,6 +74,14 @@ class AriaRuntimeSettings(BaseSettings):
     aria_llm_enabled: bool = False
     aria_llm_temperature: float = 0.2
     aria_llm_enhance_skills: bool = False
+    aria_llm_depth_default: str = "brief"
+    aria_llm_context_max_brief: int = 3500
+    aria_llm_context_max_standard: int = 5000
+    aria_llm_context_max_develop: int = 8000
+    aria_llm_max_tokens_brief: int = 180
+    aria_llm_max_tokens_standard: int = 400
+    aria_llm_max_tokens_develop: int = 900
+    aria_llm_model_brief: str = "grok-3-mini"
     aria_proactive_ideas: bool = True
     aria_epistemic_web_verify: bool = True
     aria_epistemic_critic: bool = True

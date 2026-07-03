@@ -25,7 +25,7 @@ $ensureScript = Join-Path $PSScriptRoot "ensure-pc-ready.ps1"
 if (Test-Path $ensureScript) {
     $boot = & $ensureScript -SkipGitGate:$SkipGitGate -TotpCode $TotpCode
     if ($boot.is_new_pc) {
-        Write-Host "[BOOT] Nouveau PC detecte — voir sessions\$machine\boot-status.json" -ForegroundColor Yellow
+        Write-Host "[BOOT] Nouveau PC detecte - voir sessions\$machine\boot-status.json" -ForegroundColor Yellow
     }
 }
 
@@ -74,7 +74,7 @@ if (Test-Path $bootStatusPath) {
     try {
         $bs = Get-Content $bootStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($bs.is_new_pc) {
-            $bootHint = "**NOUVEAU PC** — Grok execute bootstrap ; Sylvain : rien sauf Bitwarden si secrets absents."
+            $bootHint = "**NOUVEAU PC** - Grok execute bootstrap ; Sylvain : rien sauf Bitwarden si secrets absents."
         }
         if ($bs.agent_next) {
             $bootHint += " Prochaine action agent : $($bs.agent_next)"
@@ -86,7 +86,7 @@ $lines = @(
     "# HANDOFF - $machine",
     "",
     "> Genere par session-handoff.ps1 - lire en debut de session Grok/Cursor.",
-    "> Sylvain ne dit rien : le handoff est automatique (pas besoin de « lis le github »).",
+    "> Sylvain ne dit rien : le handoff est automatique (pas besoin de 'lis le github').",
     "",
     "Horodatage : $(Get-Date -Format 'yyyy-MM-dd HH:mm')",
     ""
@@ -151,7 +151,7 @@ if ($actions.Count -eq 0) {
     $actions | Select-Object -Unique | ForEach-Object { $lines += "- $_" }
 }
 if ($others | Where-Object { $_.repos_in_session -contains "aria-local-sync" }) {
-    $lines += "- Si coffre change : ``apply-local.ps1 -TotpCode <6 chiffres>`` (chat IDE)"
+    $lines += '- Si coffre change : apply-local.ps1 -TotpCode <6 chiffres> (chat IDE)'
 }
 $lines += "- Lire sessions/CONSOMMATION-GROK.md (mode concis Grok/Cursor)"
 $lines += "- Lire COLLEGUE.md + JOURNAL.md"
@@ -160,7 +160,7 @@ if (Test-Path $workerFile) {
     $workerRaw = Get-Content $workerFile -Raw -Encoding UTF8
     $pendingCount = ([regex]::Matches($workerRaw, '(?m)^##\s+\[pending\]')).Count
     if ($pendingCount -gt 0) {
-        $lines += "- **OUVRIER** : $pendingCount tache(s) [pending] dans sessions/ARIA-WORKER.md — traiter en priorite"
+        $lines += "- **OUVRIER** : $pendingCount tache(s) [pending] dans sessions/ARIA-WORKER.md - traiter en priorite"
     }
 }
 

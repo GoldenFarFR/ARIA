@@ -50,6 +50,7 @@ def record_llm_usage(
     status_code: int | None = None,
     kind: str = "chat",
     estimated: bool = False,
+    depth: str | None = None,
     at: datetime | None = None,
 ) -> None:
     """Append une ligne dans data/llm-usage/YYYY-MM.jsonl."""
@@ -71,6 +72,8 @@ def record_llm_usage(
         }
         if status_code is not None:
             row["status_code"] = int(status_code)
+        if depth:
+            row["depth"] = str(depth)
         path = _month_path(day)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")

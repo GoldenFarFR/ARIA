@@ -114,6 +114,10 @@ async def build_llm_context(
     public: bool = False,
     visitor_id: str | None = None,
     query_hint: str | None = None,
+    max_chars: int = _CONTEXT_MAX_CHARS,
+    include_conversations: bool = True,
+    include_extras: bool = True,
+    collegue_max_chars: int = 0,
 ) -> str:
     from aria_core.directives import get_directives_text
     from aria_core.identity import x_identity_prompt
@@ -134,6 +138,8 @@ async def build_llm_context(
 
         collegue_block = get_collegue_text()
         if collegue_block:
+            if collegue_max_chars > 0 and len(collegue_block) > collegue_max_chars:
+                collegue_block = collegue_block[-collegue_max_chars:]
             parts.append("\n# Mémoire collègue (COLLEGUE.md — SSOT opérateur Sylvain)")
             parts.append(collegue_block)
         from aria_core.memory.arbitrator import get_arbitration_text, run_memory_arbitration
@@ -193,7 +199,7 @@ async def build_llm_context(
     if launchpads:
         parts.append("\n# Doctrine BASE launchpads (know by heart)")
         parts.append(launchpads[:1500])
-    if not public:
+    if not public and include_extras:
         try:
             from aria_core.training_portfolio import portfolio_summary
 
@@ -219,13 +225,13 @@ async def build_llm_context(
                 parts.append(ent[:1000])
         except Exception:
             pass
-    if messages:
+    if include_conversations and messages:
         parts.append("\n# Conversations récentes")
         for msg in messages:
             role = "User" if msg["role"] == "user" else "ARIA"
             parts.append(f"{role}: {msg['content'][:150]}")
 
-    return _assemble_context(parts, max_chars=_CONTEXT_MAX_CHARS)
+    return _assemble_context(parts, max_chars=max_chars)
 
 
 def _assemble_context(parts: list[str], *, max_chars: int) -> str:
