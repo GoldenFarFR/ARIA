@@ -82,6 +82,7 @@ class AriaRuntimeSettings(BaseSettings):
     aria_llm_max_tokens_standard: int = 400
     aria_llm_max_tokens_develop: int = 900
     aria_llm_model_brief: str = "grok-3-mini"
+    aria_llm_cost_footer: bool = True
     aria_proactive_ideas: bool = True
     aria_epistemic_web_verify: bool = True
     aria_epistemic_critic: bool = True
