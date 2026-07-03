@@ -1,0 +1,38 @@
+name: Render daily deploy (aria-api)
+
+on:
+  schedule:
+    # 05:00 UTC ≈ 07:00 Paris (CEST) — 1 redeploy/jour max
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: render-aria-api-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger aria-api deploy on Render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID_ARIA_API }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENDER_API_KEY:-}" ] || [ -z "${RENDER_SERVICE_ID:-}" ]; then
+            echo "Secrets manquants: RENDER_API_KEY et RENDER_SERVICE_ID_ARIA_API"
+            exit 1
+          fi
+          HTTP=$(curl -sS -o /tmp/render-deploy.json -w "%{http_code}" -X POST \
+            "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"clearCache":"do_not_clear"}')
+          cat /tmp/render-deploy.json
+          echo ""
+          echo "HTTP ${HTTP}"
+          if [ "${HTTP}" -ge 400 ]; then
+            exit 1
+          fi
