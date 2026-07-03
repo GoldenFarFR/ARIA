@@ -21,6 +21,35 @@ CONFIG_PATH = ARIA_REPO_ROOT / "letta-orchestrator" / "ouvrier_config.json"
 WORKER_PATH = ARIA_REPO_ROOT / "collegue-memoire" / "sessions" / "ARIA-WORKER.md"
 _SUBPROC = {"encoding": "utf-8", "errors": "replace", "text": True}
 _VAULT_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "GoldenFar" / "vault"
+_LOCAL_START = ARIA_REPO_ROOT / "vanguard" / "operator" / "start-acp-local.ps1"
+
+
+def _vault_env_names() -> list[str]:
+    """PC local SSOT : local.env seulement (Sylvain 2026-07 — plus Render)."""
+    runtime = os.environ.get("ARIA_RUNTIME", "").strip().lower()
+    if not runtime:
+        local_path = _VAULT_DIR / "local.env"
+        if local_path.is_file():
+            m = re.search(
+                r"(?m)^\s*ARIA_RUNTIME\s*=\s*(\S+)",
+                local_path.read_text(encoding="utf-8", errors="replace"),
+            )
+            runtime = (m.group(1) if m else "local").strip().lower()
+        else:
+            runtime = "local"
+    if runtime in ("local", "pc", "desktop"):
+        return ["local.env"]
+    return ["local.env", "production.env"]
+
+
+def _local_api_status() -> str:
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", 8000), timeout=1.5):
+            return "✓ Bot/API local :8000 actif"
+    except OSError:
+        return f"✗ Bot/API local arrêté — lance : {_LOCAL_START}"
 
 
 def _run_ps(script: Path, *extra: str) -> str:
@@ -60,8 +89,8 @@ def _patch_env_file(path: Path, key: str, value: str) -> str:
 
 def _verify_env_key(key: str) -> str:
     """Preuve disque — relit le vault après patch (pas de confiance aveugle)."""
-    lines = ["PREUVE (lecture disque vault) :"]
-    for name in ("local.env", "production.env"):
+    lines = ["PREUVE (lecture disque vault) :", _local_api_status(), ""]
+    for name in _vault_env_names():
         path = _VAULT_DIR / name
         if not path.is_file():
             lines.append(f"  ✗ {name} — fichier absent")
@@ -87,18 +116,13 @@ def preflight_telegram_notifications(message: str) -> str:
         message,
     ):
         return ""
-    actions: list[str] = []
-    for name in ("local.env", "production.env"):
+    actions: list[str] = [_local_api_status()]
+    for name in _vault_env_names():
         path = _VAULT_DIR / name
         if path.parent.is_dir():
             actions.append(_patch_env_file(path, "ARIA_PROACTIVE_IDEAS", "false"))
     actions.append(
-        "Sources code: packages/aria-core/src/aria_core/proactive.py (founder_ping), "
-        "heartbeat.py (founder_ping, portfolio_scan), aria_worker_queue.py, capability_gap.py"
-    )
-    actions.append(
-        "Prod Render : sync env seulement (pas de commit Git) — "
-        r"vanguard\operator\sync-render.ps1 -SkipRedeploy ou deploy-render.ps1 -EnvOnly"
+        "Sources : proactive.py (founder_ping), heartbeat.py, aria_worker_queue, capability_gap"
     )
     actions.append(_verify_env_key("ARIA_PROACTIVE_IDEAS"))
     return "PRÉ-TRAITEMENT NOTIFS TELEGRAM (déjà exécuté — confirme à Sylvain, ne redemande pas):\n" + "\n".join(
@@ -115,16 +139,12 @@ def preflight_telegram_activate(message: str) -> str:
         message,
     ):
         return ""
-    actions: list[str] = []
-    for name in ("local.env", "production.env"):
+    actions: list[str] = [_local_api_status()]
+    for name in _vault_env_names():
         path = _VAULT_DIR / name
         if path.parent.is_dir():
             actions.append(_patch_env_file(path, "ARIA_PROACTIVE_IDEAS", "true"))
-    actions.append("Clé SSOT : ARIA_PROACTIVE_IDEAS (pas ARIA_TELEGRAM_NOTIFICATIONS)")
-    actions.append(
-        "Prod Render : sync env seulement (pas de commit Git) — "
-        r"vanguard\operator\sync-render.ps1 -SkipRedeploy ou deploy-render.ps1 -EnvOnly"
-    )
+    actions.append("Clé SSOT : ARIA_PROACTIVE_IDEAS (local.env — runtime PC)")
     actions.append(_verify_env_key("ARIA_PROACTIVE_IDEAS"))
     return "PRÉ-TRAITEMENT ACTIVATION NOTIFS (déjà exécuté):\n" + "\n".join(
         f"• {a}" if not a.startswith("PREUVE") else a for a in actions
@@ -149,8 +169,8 @@ def preflight_notification_status(message: str) -> str:
         message,
     ):
         return ""
-    lines = ["État notifications Telegram ARIA (lu dans vault + code) :", ""]
-    for name in ("local.env", "production.env"):
+    lines = ["État notifications Telegram ARIA (runtime PC local) :", _local_api_status(), ""]
+    for name in _vault_env_names():
         val = ""
         path = _VAULT_DIR / name
         if path.is_file():
@@ -160,10 +180,8 @@ def preflight_notification_status(message: str) -> str:
     lines.extend(
         [
             "• founder_ping (heartbeat) : actif seulement si ARIA_PROACTIVE_IDEAS=true + LLM + bot",
-            "• aria_worker_queue / capability_gap : notify_admin sur tâches worker (prod)",
+            "• aria_worker_queue / capability_gap : notify_admin (si worker actif)",
             "• portfolio_scan heartbeat : notif si items portfolio > 0",
-            "",
-            "Local : effet si backend local tourne. Prod : sync-render (env), pas commit Git.",
             "",
             _verify_env_key("ARIA_PROACTIVE_IDEAS"),
         ]
@@ -179,7 +197,7 @@ def preflight_preuve(message: str) -> str:
         return ""
     return _verify_env_key("ARIA_PROACTIVE_IDEAS") + (
         "\n\nCommande manuelle :\n"
-        f'  Select-String -Path "{_VAULT_DIR}\\*.env" -Pattern ARIA_PROACTIVE_IDEAS'
+        f'  Select-String -Path "{_VAULT_DIR}\\local.env" -Pattern ARIA_PROACTIVE_IDEAS'
     )
 
 
@@ -278,11 +296,11 @@ def main() -> None:
             if is_verbose():
                 print(summary)
                 if tag in ("mute", "enable"):
-                    print("Détails : trace [preflight] ci-dessus. Prod : sync-render.ps1 (env), pas commit.")
+                    print("Détails : trace [preflight] ci-dessus. Effet si start-acp-local.ps1 tourne.")
             elif tag == "mute":
-                print(f"{summary}\n\n{direct}\n\nProd : .\\sync-render.ps1 -SkipRedeploy (pas de commit).")
+                print(f"{summary}\n\n{direct}")
             elif tag == "enable":
-                print(f"{summary}\n\n{direct}\n\nProd : .\\sync-render.ps1 -SkipRedeploy (pas de commit).")
+                print(f"{summary}\n\n{direct}")
             else:
                 print(direct)
             return

@@ -170,7 +170,7 @@ def append_journal(message: str) -> str:
         "name": "patch_vault_env",
         "description": "Modifier local.env ou production.env (coffre GoldenFar, hors repo).",
         "source_code": '''
-def patch_vault_env(key: str, value: str, target: str = "both") -> str:
+def patch_vault_env(key: str, value: str, target: str = "local") -> str:
     """Patch GoldenFar vault env files (outside ARIA_REPO_ROOT).
 
     Args:

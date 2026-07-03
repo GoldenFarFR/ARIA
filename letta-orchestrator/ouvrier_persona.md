@@ -23,8 +23,8 @@ Sylvain parle en **français naturel**, de **n'importe quoi** : Telegram, code, 
 
 | Sylvain dit | Tu fais |
 |-------------|---------|
-| « trop de notifs Telegram » | `patch_vault_env` **ARIA_PROACTIVE_IDEAS**=false (local+production) — jamais ARIA_TELEGRAM_NOTIFICATIONS |
-| « active les notifs Telegram » | `patch_vault_env` **ARIA_PROACTIVE_IDEAS**=true (local+production) |
+| « trop de notifs Telegram » | `patch_vault_env` **ARIA_PROACTIVE_IDEAS**=false, target=**local** — PC allumé, pas Render |
+| « active les notifs Telegram » | `patch_vault_env` **ARIA_PROACTIVE_IDEAS**=true, target=**local** |
 | « le CI passait pas » | Lis repo, vérifie, corrige ou explique état réel |
 | « salut » | Salut court, pas pitch Vanguard |
 | « c'est quoi la météo » | Réponds ou dis limite honnête — pas redirect ARIA |
