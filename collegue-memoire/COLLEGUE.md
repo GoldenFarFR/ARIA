@@ -163,6 +163,7 @@ Attendu : secrets coffre = Render, health `https://api.ariavanguardzhc.com/api/h
 
 | Date | Décision |
 |------|----------|
+| 2026-07-03 | **Download inbox** : `%ARIA_REPO_ROOT%\download\` — dépôt fichiers Sylvain, traitement auto ouvrier (règle `download-inbox`) |
 | 2026-07-02 | **Retrait DDC/Aptos/Excel** de COLLEGUE — contexte bureau autre PC, hors projet ARIA |
 | 2026-06-18 | Mémoire = **ce fichier sur GitHub** `GoldenFarFR/collegue-memoire` (pas OneDrive) |
 | 2026-06-18 | Si setup absent sur un PC → assistant rappelle le clone automatiquement |
