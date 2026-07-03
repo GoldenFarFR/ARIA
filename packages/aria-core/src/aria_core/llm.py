@@ -18,8 +18,8 @@ PROVIDER_URLS = {
 }
 
 DEFAULT_MODELS = {
-    "xai": "grok-3-mini",
-    "grok": "grok-3-mini",
+    "xai": "grok-4.3",
+    "grok": "grok-4.3",
     "openai": "gpt-4o-mini",
     "groq": "llama-3.3-70b-versatile",
     "openrouter": "openrouter/free",
