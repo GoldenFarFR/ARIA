@@ -368,3 +368,5 @@
 21h49 — fix profil PS hook ARIA avant dash compteur tokens
 21h54 — fix routage ACP question conversationnelle revenus (acp_client_skill)
 21h57 — coupe notifs Telegram repertoire_grow + entrepreneur_cultivate heartbeat
+21h58 — playbook activation revenu entrepreneur_skill + proactive ACP
+21h59 — heartbeat 24h + persist last_runs disque (anti-spam redeploy)
