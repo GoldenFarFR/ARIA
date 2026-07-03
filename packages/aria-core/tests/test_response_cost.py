@@ -1,7 +1,9 @@
 from aria_core.response_cost import (
     append_cost_footer,
     build_cost_meta,
+    cost_meta_reply,
     format_cost_footer,
+    is_cost_meta_question,
 )
 
 
@@ -39,3 +41,14 @@ def test_append_cost_footer():
     out = append_cost_footer("Salut ARIA", build_cost_meta(total_tokens=0), lang="fr")
     assert out.startswith("Salut ARIA")
     assert "gratuit" in out
+
+
+def test_cost_meta_question_detected():
+    assert is_cost_meta_question("pourquoi orange tu as utilisé grok api ?")
+    assert is_cost_meta_question("why paid orange on last reply")
+
+
+def test_cost_meta_reply_fr():
+    reply = cost_meta_reply("fr")
+    assert "gratuite" in reply
+    assert "🟠" in reply

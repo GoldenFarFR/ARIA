@@ -677,6 +677,17 @@ class AriaBrain:
 
         if is_short_ack(route):
             return "OK.", None, ["Ack (template)"], {}, None
+        if not public:
+            from aria_core.response_cost import cost_meta_reply, is_cost_meta_question
+
+            if is_cost_meta_question(route):
+                return (
+                    cost_meta_reply(lang_key),
+                    None,
+                    ["Coût LLM (template — sans API)"],
+                    {"cost_meta_help": True},
+                    None,
+                )
         if is_greeting(route):
             welcome = format_greeting_reply(route, lang_key, public=public)
             return welcome, None, ["Greeting (template)"], {"greeting": True}, None
