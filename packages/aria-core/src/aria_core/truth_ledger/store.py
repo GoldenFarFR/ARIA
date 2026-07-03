@@ -12,8 +12,9 @@ from uuid import uuid4
 
 import aiosqlite
 
-from aria_core.truth_ledger.sync import schedule_github_sync
 from aria_core.paths import aria_db_path, truth_ledger_dir
+from aria_core.truth_ledger.io import atomic_write_text, read_modify_write
+from aria_core.truth_ledger.sync import schedule_github_sync
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ status: {status}
 - Grounding: `{status}` — only `verified` entries feed future answers
 - Sandbox path: `{GITHUB_LEDGER_PREFIX}/{rel_path}`
 """
-    abs_path.write_text(body, encoding="utf-8")
+    atomic_write_text(abs_path, body)
     return rel_path
 
 
@@ -175,7 +176,7 @@ status: verified
 - Supersedes prior entry ids: `{sup_line}`
 - Sandbox path: `{GITHUB_LEDGER_PREFIX}/{rel_path}`
 """
-    abs_path.write_text(body, encoding="utf-8")
+    atomic_write_text(abs_path, body)
     return rel_path
 
 
@@ -206,12 +207,18 @@ async def supersede_canonical_id(canonical_id: str) -> list[str]:
 
 def _mark_file_superseded(file_path: str) -> None:
     full = LEDGER_DIR / file_path
-    if not full.exists():
-        return
-    text = full.read_text(encoding="utf-8")
-    if "status: verified" in text:
-        text = text.replace("status: verified", "status: superseded", 1)
-        full.write_text(text, encoding="utf-8")
+
+    def _to_superseded(text: str) -> str:
+        if "status: verified" in text:
+            return text.replace("status: verified", "status: superseded", 1)
+        return text
+
+    read_modify_write(
+        full,
+        _to_superseded,
+        ledger_dir=LEDGER_DIR,
+        missing_ok=True,
+    )
 
 
 async def get_active_canonical_hash(canonical_id: str) -> str | None:
@@ -421,11 +428,13 @@ async def verify_entry(entry_id: str) -> bool:
         await db.commit()
         file_path = row[0]
     full = LEDGER_DIR / file_path
-    if full.exists():
-        text = full.read_text(encoding="utf-8")
+
+    def _to_verified(text: str) -> str:
         if "status: pending" in text:
-            text = text.replace("status: pending", "status: verified", 1)
-            full.write_text(text, encoding="utf-8")
+            return text.replace("status: pending", "status: verified", 1)
+        return text
+
+    read_modify_write(full, _to_verified, ledger_dir=LEDGER_DIR, missing_ok=True)
     return True
 
 
