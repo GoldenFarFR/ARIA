@@ -229,6 +229,8 @@ def detect_intent(message: str) -> SkillName | None:
         return SkillName.MANAGE_REPERTOIRE
     if wants_launchpad_methodology(message):
         return SkillName.LAUNCHPAD_SELECT
+    if wants_holding_site(message):
+        return SkillName.HOLDING_SITE
     if wants_entrepreneur(message):
         return SkillName.ENTREPRENEUR_CULTIVATION
     scores: dict[SkillName, int] = {}
