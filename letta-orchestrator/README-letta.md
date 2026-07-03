@@ -55,6 +55,32 @@ letta-orchestrator/
 
 Intégration profil : `scripts/PowerShell/aria-letta-integration.ps1` (branché via `link-aria-profile.ps1`).
 
+## ARIA-Ouvrier (copie conforme Cursor/Grok)
+
+Même rôle que l'ouvrier Grok : handoff, ARIA-WORKER, download/, outils shell/fichiers, journal, build-local — **en local** (économie jetons Cursor).
+
+### Installation (une fois)
+
+```powershell
+cd %ARIA_REPO_ROOT%\letta-orchestrator
+.\start-letta.ps1
+.\setup_ouvrier.py
+```
+
+### Usage
+
+```powershell
+.\orchestrate-ouvrier.ps1 -Message "traite download et fixe le test qui échoue"
+```
+
+| Composant | Rôle |
+|-----------|------|
+| `ouvrier_persona.md` | Règles ouvrier (SSOT) |
+| `ouvrier_tool_sources.py` | 8 outils Letta (read/write, pwsh, handoff, journal…) |
+| `orchestrate_ouvrier.py` | Bootstrap handoff + inbox puis agent |
+
+**Limite honnête :** modèle local/cloud Letta < Grok Cursor sur grosses refactors multi-fichiers — même outils, intelligence variable.
+
 ## Dépannage
 
 | Symptôme | Action |

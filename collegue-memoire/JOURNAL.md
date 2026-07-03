@@ -325,3 +325,5 @@
 15h05 — fix truth-ledger-scaffold black+ruff+ci workflow
 15h13 — fix CI ARIA scope projects/truth-ledger black+ruff
 15h23 — aria-core truth_ledger/io.py atomic write + filelock
+15h30 — regle build-local auto apres modif code (deploy Render manuel)
+15h37 — Letta ARIA-Ouvrier agent + 8 outils copie conforme

@@ -29,6 +29,11 @@ $lines += "ollama_base_url=$ollama"
 if ($groq) { $lines += "groq_api_key=$groq" }
 if ($anthropic) { $lines += "anthropic_api_key=$anthropic" }
 
+if (-not $env:ARIA_REPO_ROOT) {
+    $env:ARIA_REPO_ROOT = (Resolve-Path (Join-Path $Here "..")).Path
+}
+$lines += "ARIA_REPO_ROOT=$($env:ARIA_REPO_ROOT)"
+
 $out = Join-Path $Here ".env"
 [System.IO.File]::WriteAllLines($out, $lines)
 Write-Host "OK .env Letta ($($lines.Count) clés)" -ForegroundColor Green

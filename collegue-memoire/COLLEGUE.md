@@ -163,6 +163,8 @@ Attendu : secrets coffre = Render, health `https://api.ariavanguardzhc.com/api/h
 
 | Date | Décision |
 |------|----------|
+| 2026-07-03 | **Letta ARIA-Ouvrier** : `letta-orchestrator/setup_ouvrier.py` — copie conforme ouvrier (outils repo + handoff) ; `orchestrate-ouvrier.ps1` |
+| 2026-07-03 | **build-local** : l'assistant lance `build-local.ps1 -Quick` après chaque modif code ; deploy Render reste **manuel** par Sylvain |
 | 2026-07-03 | **Download inbox** : `%ARIA_REPO_ROOT%\download\` — dépôt fichiers Sylvain, traitement auto ouvrier (règle `download-inbox`) |
 | 2026-07-02 | **Retrait DDC/Aptos/Excel** de COLLEGUE — contexte bureau autre PC, hors projet ARIA |
 | 2026-06-18 | Mémoire = **ce fichier sur GitHub** `GoldenFarFR/collegue-memoire` (pas OneDrive) |

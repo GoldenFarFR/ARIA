@@ -96,3 +96,67 @@ def send_message(agent_id: str, message: str) -> str | None:
         if chunk:
             texts.append(chunk)
     return "\n".join(texts).strip() or None
+
+
+def get_tool_id_by_name(name: str) -> str | None:
+    r = SESSION.get(f"{LETTA_URL}/v1/tools/name/{name}", timeout=30)
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    return r.text.strip().strip('"')
+
+
+def upsert_tool(name: str, source_code: str, description: str) -> str:
+    existing = get_tool_id_by_name(name)
+    body = {
+        "name": name,
+        "description": description,
+        "source_code": source_code,
+        "source_type": "python",
+    }
+    if existing:
+        r = SESSION.patch(f"{LETTA_URL}/v1/tools/{existing}", json=body, timeout=120)
+        r.raise_for_status()
+        return existing
+    r = SESSION.post(f"{LETTA_URL}/v1/tools/", json=body, timeout=120)
+    r.raise_for_status()
+    return r.json()["id"]
+
+
+def add_tool_to_agent(agent_id: str, tool_id: str) -> None:
+    r = SESSION.patch(
+        f"{LETTA_URL}/v1/agents/{agent_id}/add-tool/{tool_id}",
+        timeout=60,
+    )
+    r.raise_for_status()
+
+
+def create_ouvrier_agent(
+    name: str,
+    llm: str,
+    embedding: str,
+    persona: str,
+    tool_ids: list[str],
+) -> str:
+    body = {
+        "name": name,
+        "llm": llm,
+        "embedding": embedding,
+        "description": "Ouvrier ARIA — copie conforme Cursor/Grok (outils repo)",
+        "memory_blocks": [
+            {
+                "label": "persona",
+                "value": persona[:8000],
+                "description": "Règles ouvrier ARIA",
+            },
+            {
+                "label": "human",
+                "value": "Opérateur : Sylvain Rio (GoldenFarFR). Monorepo : ARIA.",
+                "description": "Contexte humain",
+            },
+        ],
+        "tool_ids": tool_ids,
+    }
+    r = SESSION.post(f"{LETTA_URL}/v1/agents/", json=body, timeout=300)
+    r.raise_for_status()
+    return r.json()["id"]
