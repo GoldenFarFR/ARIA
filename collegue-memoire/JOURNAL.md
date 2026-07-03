@@ -346,3 +346,5 @@
 18h23 — fix ACP delete workflow direct (ouvrier+brain) + supprime test_1
 18h24 — fix tweet ACP policy + test_1 premium 25.99 USDC publié X
 18h31 — fix ouvrier ACP direct + delete-all + repair premium YAML
+18h38 — 18h38 — fix KART v2.8.6 vision images ouvrier (groq scout + session last_image_path)
+18h44 — feat ACP schema.examples auto demande/livrable Virtuals

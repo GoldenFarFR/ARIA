@@ -359,13 +359,41 @@ def run_ouvrier_ollama_react(user_prompt: str) -> str:
     return "Limite d'étapes — demande plus courte ou réessaie après reset quota Groq/Grok."
 
 
+def _allow_ollama_fallback() -> bool:
+    """Ollama ReAct uniquement si mode explicite ollama ou opt-in vault."""
+    if _ouvrier_cloud_mode() == "ollama":
+        return True
+    raw = (
+        os.environ.get("ARIA_OUVRIER_OLLAMA_FALLBACK", "").strip().lower()
+        or _vault_key("ARIA_OUVRIER_OLLAMA_FALLBACK")
+        or ""
+    )
+    return raw in ("1", "true", "yes", "on")
+
+
+def _cloud_exhausted_message(last_exc: Exception | None) -> str:
+    detail = str(last_exc or "indisponible").strip()
+    if "429" in detail:
+        return (
+            "Groq est en quota (429) — réessaie dans une minute. "
+            "Fallback Ollama désactivé (qualité). "
+            "Routes directes : ACP create/delete, notifs Telegram, ping."
+        )
+    return (
+        f"LLM cloud indisponible ({detail}). "
+        "Réessaie plus tard — fallback Ollama désactivé par défaut."
+    )
+
+
 def run_ouvrier(user_prompt: str) -> str:
-    """Boucle agentique : grok → groq → Ollama ReAct."""
+    """Boucle agentique : grok → groq ; Ollama seulement si mode ollama explicite."""
     candidates = _cloud_candidates()
     if not candidates:
-        provider, _, _, model = _resolve_ollama()
-        trace("moteur", f"Sélection → {provider}/{model}")
-        return run_ouvrier_ollama_react(user_prompt)
+        if _allow_ollama_fallback():
+            provider, _, _, model = _resolve_ollama()
+            trace("moteur", f"Sélection → {provider}/{model}")
+            return run_ouvrier_ollama_react(user_prompt)
+        return _cloud_exhausted_message(RuntimeError("aucune clé cloud configurée"))
 
     last_exc: Exception | None = None
     for index, (provider, url, api_key, model) in enumerate(candidates):
@@ -379,12 +407,17 @@ def run_ouvrier(user_prompt: str) -> str:
                 nxt = candidates[index + 1]
                 trace("fallback", f"{provider} KO ({exc}) → {nxt[0]}/{nxt[3]}")
                 continue
-            trace("fallback", f"{provider} KO ({exc}) → Ollama ReAct")
-            return run_ouvrier_ollama_react(user_prompt)
+            if _allow_ollama_fallback():
+                trace("fallback", f"{provider} KO ({exc}) → Ollama ReAct")
+                return run_ouvrier_ollama_react(user_prompt)
+            trace("fallback", f"{provider} KO ({exc}) → stop (pas Ollama)")
+            return _cloud_exhausted_message(last_exc)
 
-    if last_exc:
-        trace("fallback", f"Cloud KO ({last_exc}) → Ollama ReAct")
-    return run_ouvrier_ollama_react(user_prompt)
+    if _allow_ollama_fallback():
+        if last_exc:
+            trace("fallback", f"Cloud KO ({last_exc}) → Ollama ReAct")
+        return run_ouvrier_ollama_react(user_prompt)
+    return _cloud_exhausted_message(last_exc)
 
 
 def _run_ouvrier_cloud(

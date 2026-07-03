@@ -24,6 +24,8 @@ from ouvrier_proof import (
 )
 from ouvrier_acp_direct import try_acp_workflow_direct
 from ouvrier_instant import instant_reply, is_simple_exchange
+from ouvrier_learn import maybe_record_lesson
+from ouvrier_memory import memory_status_line, preflight_memory_context
 from ouvrier_runner import provider_label, run_ouvrier
 from ouvrier_session import enrich_continuation, is_continuation, load_session, save_session, wants_opinion
 from ouvrier_vision import build_image_context, direct_image_reply, wants_image_context
@@ -52,6 +54,18 @@ def display_ouvrier_output(raw: str) -> str:
     return body
 
 
+def _complete_turn(
+    user_msg: str,
+    raw_reply: str,
+    *,
+    image_path: str | None = None,
+) -> None:
+    """Affiche, enregistre session, append leçon si notable."""
+    body = display_ouvrier_output(raw_reply)
+    maybe_record_lesson(user_msg, body)
+    save_session(user_msg, body, image_path=image_path)
+
+
 def preflight_acp_context(message: str) -> str:
     """Injecte le workflow ACP du repo — uniquement pour demandes d'avis, pas création."""
     if not re.search(r"(?i)\bacp\b", message):
@@ -67,6 +81,7 @@ def preflight_acp_context(message: str) -> str:
     if not (
         wants_opinion(message)
         or re.search(r"(?i)tu en penses|ton avis|qu.en penses|tu en pense", message)
+        or re.search(r"(?i)tu choisirais|choisirais quoi|carton|meilleur workflow", message)
     ):
         return ""
     parts: list[str] = [
@@ -324,7 +339,7 @@ def main() -> None:
         else None
     )
     if direct:
-        save_session(user_msg, display_ouvrier_output(direct), image_path=image_path)
+        _complete_turn(user_msg, direct, image_path=image_path)
         return
 
     if (
@@ -332,12 +347,12 @@ def main() -> None:
         and not is_continuation(user_msg)
         and not wants_image_context(user_msg, session)
     ):
-        save_session(user_msg, display_ouvrier_output(instant_reply(user_msg)))
+        _complete_turn(user_msg, instant_reply(user_msg))
         return
 
     acp_direct = try_acp_workflow_direct(effective)
     if acp_direct:
-        save_session(user_msg, display_ouvrier_output(acp_direct), image_path=image_path)
+        _complete_turn(user_msg, acp_direct, image_path=image_path)
         return
 
     trace("pensee", f"Message Sylvain : {user_msg[:300]}")
@@ -368,27 +383,29 @@ def main() -> None:
                 if tag in ("mute", "enable"):
                     print("Détails : trace [preflight] ci-dessus. Effet si start-acp-local.ps1 tourne.")
             elif tag in ("mute", "enable"):
-                save_session(
-                    user_msg,
-                    display_ouvrier_output(f"{summary}\n\n{direct}"),
-                    image_path=image_path,
-                )
+                _complete_turn(user_msg, f"{summary}\n\n{direct}", image_path=image_path)
             else:
-                save_session(user_msg, display_ouvrier_output(direct), image_path=image_path)
+                _complete_turn(user_msg, direct, image_path=image_path)
             return
 
     prompt = effective
+    memory_block = preflight_memory_context(user_msg)
+    trace("preflight", memory_status_line())
+    if memory_block:
+        trace_block("preflight", "mémoire aria-core", memory_block[:500], max_lines=4)
+        prompt = f"{memory_block}\n\n{prompt}"
     acp_block = preflight_acp_context(effective)
     if acp_block:
         prompt = f"{acp_block}\n\n{prompt}"
     elif wants_opinion(effective) or wants_opinion(str(load_session().get("last_user") or "")):
         prompt = (
-            "Sylvain demande ton AVIS — lis le repo (read_repo_file) puis réponds.\n\n"
+            "Sylvain demande ton AVIS — appuie-toi sur la mémoire ci-dessus et le repo "
+            "(read_repo_file) puis réponds.\n\n"
             + prompt
         )
 
     if _needs_bootstrap(user_msg):
-        preflight_block = "(aucun pré-traitement automatique)"
+        preflight_block = memory_block or "(aucun pré-traitement automatique)"
         prompt = bootstrap(user_msg, preflight_block)
         if acp_block and acp_block not in prompt:
             prompt = f"{acp_block}\n\n{prompt}"
@@ -396,7 +413,7 @@ def main() -> None:
     print(f"--- ARIA-OUVRIER ({engine}) ---", file=sys.stderr)
     try:
         reply = run_ouvrier(prompt)
-        save_session(user_msg, display_ouvrier_output(reply), image_path=image_path)
+        _complete_turn(user_msg, reply, image_path=image_path)
         return
     except Exception as exc:
         sys.exit(f"[Erreur] Ouvrier: {exc}")

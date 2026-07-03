@@ -18,7 +18,7 @@ _CONTINUATION_RE = re.compile(
 )
 _OPINION_RE = re.compile(
     r"(?i)(?:tu en pense|ton avis|qu'en pense|what do you think|"
-    r"ton opinion|tu penses quoi|en penses?-tu)"
+    r"ton opinion|tu penses quoi|en penses?-tu|tu choisirais|choisirais quoi)"
 )
 
 

@@ -62,8 +62,29 @@ def test_run_ouvrier_falls_back_grok_to_groq(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "gsk_" + "b" * 48)
     monkeypatch.setattr("ouvrier_runner._vault_key", lambda *_a, **_k: "")
     monkeypatch.setattr("ouvrier_runner._run_ouvrier_cloud", fake_cloud)
-    monkeypatch.setattr("ouvrier_runner.run_ouvrier_ollama_react", lambda _p: "Ollama")
+    monkeypatch.delenv("ARIA_OUVRIER_OLLAMA_FALLBACK", raising=False)
+    monkeypatch.setattr(
+        "ouvrier_runner.run_ouvrier_ollama_react",
+        lambda _p: (_ for _ in ()).throw(AssertionError("no ollama")),
+    )
 
     out = run_ouvrier("test fallback")
     assert out == "Réponse Groq OK"
     assert calls == ["grok", "groq"]
+
+
+def test_run_ouvrier_no_ollama_after_groq_fail(monkeypatch):
+    monkeypatch.setenv("ARIA_OUVRIER_CLOUD", "groq")
+    monkeypatch.delenv("ARIA_OUVRIER_OLLAMA_FALLBACK", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_" + "b" * 48)
+    monkeypatch.setattr("ouvrier_runner._vault_key", lambda *_a, **_k: "")
+    monkeypatch.setattr(
+        "ouvrier_runner._run_ouvrier_cloud",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("LLM cloud indisponible (429).")),
+    )
+    monkeypatch.setattr(
+        "ouvrier_runner.run_ouvrier_ollama_react",
+        lambda _p: (_ for _ in ()).throw(AssertionError("no ollama")),
+    )
+    out = run_ouvrier("quota test")
+    assert "429" in out
