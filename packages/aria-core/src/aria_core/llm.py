@@ -25,9 +25,30 @@ DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
     "groq": "llama-3.3-70b-versatile",
     "openrouter": "openrouter/free",
-    "virtuals": "deepseek-deepseek-v4-pro",
     "ollama": "llama3.2",
 }
+
+
+def _resolve_model(provider: str, explicit: str) -> str:
+    """SSOT spark_config — jamais de modele banni en primary Virtuals."""
+    from aria_core.spark_config import (
+        BANNED_VIRTUALS_PRIMARY_MODELS,
+        DEFAULT_FALLBACK_MODEL,
+        DEFAULT_MODEL_STANDARD,
+        resolve_primary_llm_model,
+    )
+
+    model = (explicit or "").strip()
+    if model in BANNED_VIRTUALS_PRIMARY_MODELS:
+        model = ""
+    p = provider.lower()
+    if not model:
+        if p == "virtuals":
+            return resolve_primary_llm_model()
+        if p == "groq":
+            return _setting_str("llm_fallback_model") or DEFAULT_FALLBACK_MODEL
+        return _setting_str("llm_model") or resolve_primary_llm_model() or DEFAULT_MODEL_STANDARD
+    return model
 
 
 @dataclass(frozen=True)
@@ -58,7 +79,7 @@ def _route_for_provider(provider: str, model: str) -> LlmRoute | None:
         return None
     if p == "ollama":
         base = settings.ollama_base_url.rstrip("/")
-        resolved_model = model or settings.llm_model or DEFAULT_MODELS["ollama"]
+        resolved_model = _resolve_model(p, model or settings.llm_model) or DEFAULT_MODELS["ollama"]
         return LlmRoute(p, f"{base}/v1/chat/completions", resolved_model, "ollama")
     url = PROVIDER_URLS.get(p)
     if not url:
@@ -66,7 +87,9 @@ def _route_for_provider(provider: str, model: str) -> LlmRoute | None:
     auth_key = _auth_key_for_provider(p)
     if p != "ollama" and not auth_key:
         return None
-    resolved_model = model or settings.llm_model or DEFAULT_MODELS.get(p, "grok-3-mini")
+    resolved_model = _resolve_model(p, model or settings.llm_model) or DEFAULT_MODELS.get(
+        p, "grok-3-mini"
+    )
     return LlmRoute(p, url, resolved_model, auth_key)
 
 
@@ -75,7 +98,7 @@ def _fallback_route(primary_model: str) -> LlmRoute | None:
     fb_key = _setting_str("llm_fallback_api_key")
     if not fb_provider or not fb_key:
         return None
-    fb_model = _setting_str("llm_fallback_model") or DEFAULT_MODELS.get(fb_provider.lower(), "")
+    fb_model = _resolve_model(fb_provider, _setting_str("llm_fallback_model"))
     route = _route_for_provider(fb_provider, fb_model or primary_model)
     if not route:
         return None

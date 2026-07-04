@@ -87,14 +87,37 @@ def wants_showcase_pr_watch(message: str) -> bool:
 
 
 @lru_cache(maxsize=1)
+def _acp_agent_ssot() -> dict[str, str]:
+    path = Path(__file__).resolve().parent.parent / "knowledge" / "acp_config.yaml"
+    if not path.is_file():
+        return {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    return {
+        "agent_id": str(data.get("agent_id") or "").strip(),
+        "agent_name": str(data.get("agent_name") or "").strip(),
+    }
+
+
+@lru_cache(maxsize=1)
 def load_watch_targets() -> list[dict[str, Any]]:
     if not _REGISTRY_PATH.is_file():
         return []
     data = yaml.safe_load(_REGISTRY_PATH.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         return []
+    ssot = _acp_agent_ssot()
     targets = data.get("targets") or []
-    return [t for t in targets if isinstance(t, dict) and t.get("enabled")]
+    out: list[dict[str, Any]] = []
+    for t in targets:
+        if not isinstance(t, dict) or not t.get("enabled"):
+            continue
+        merged = dict(t)
+        if ssot.get("agent_id"):
+            merged["agent_id"] = ssot["agent_id"]
+        out.append(merged)
+    return out
 
 
 def _load_state() -> dict[str, Any]:

@@ -22,12 +22,11 @@ def test_virtuals_with_groq_fallback_chain():
 
     routes = _resolve_routes()
     assert len(routes) == 2
-    assert routes[0] == LlmRoute(
-        "virtuals",
-        "https://compute.virtuals.io/v1/chat/completions",
-        "deepseek-deepseek-v4-pro",
-        "spark-key",
-    )
+    assert routes[0].provider == "virtuals"
+    assert routes[0].url == "https://compute.virtuals.io/v1/chat/completions"
+    assert routes[0].auth_key == "spark-key"
+    assert routes[0].model not in ("deepseek-deepseek-v4-pro", "")
+    assert "grok" in routes[0].model.lower()
     assert routes[1].provider == "groq"
     assert routes[1].auth_key == "gsk-fallback"
     assert is_llm_configured() is True

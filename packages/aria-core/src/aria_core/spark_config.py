@@ -73,6 +73,19 @@ def _flag_true(name: str, vault: dict[str, str]) -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def normalize_model_id(model: str) -> str:
+    """Alias SSOT — x-ai-grok-4-3 ≡ grok-4.3."""
+    m = (model or "").strip().lower()
+    for prefix in ("x-ai-", "x_ai_"):
+        if m.startswith(prefix):
+            m = m[len(prefix) :]
+    return m
+
+
+def models_equivalent(a: str, b: str) -> bool:
+    return normalize_model_id(a) == normalize_model_id(b)
+
+
 def resolve_primary_llm_model(vault: dict[str, str] | None = None) -> str:
     """Primary LLM_MODEL — never a Virtuals-banned model."""
     merged = vault if vault is not None else read_merged_vault_env()
@@ -265,8 +278,15 @@ def verify_spark_alignment() -> list[dict[str, Any]]:
     add("spark_chain", use_spark_chain(vault), "use_spark_chain")
     develop = spark_model_for_prompt("/depth develop test", vault)
     standard = spark_model_for_prompt("salut", vault)
+    chiron = _flag_true("ARIA_SPARK_AGGRESSIVE", vault) and (
+        (vault.get("ARIA_LLM_DEPTH_DEFAULT") or "").strip().lower() == "develop"
+    )
     add("develop_model_opus", "opus" in develop.lower(), develop)
-    add("standard_model_grok", "grok" in standard.lower(), standard)
+    add(
+        "standard_model_grok",
+        "grok" in standard.lower() or (chiron and "opus" in standard.lower()),
+        f"salut->{standard} chiron={chiron}",
+    )
 
     vault_lm = (vault.get("LLM_MODEL") or "").strip()
     if vault_lm in BANNED_VIRTUALS_PRIMARY_MODELS:

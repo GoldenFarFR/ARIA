@@ -77,11 +77,22 @@ def register_aria_host_integrations() -> None:
     from pathlib import Path
 
     from aria_core import bootstrap
+    from aria_core.spark_config import apply_spark_to_environ, resolve_spark_runtime
     from app.auth.access_code import DB_PATH, init_auth_db
     from app.auth.rate_limit import check_rate_limit
     from app.config import settings
     from app.games.scores import get_score
     from app.paths import data_dir
+
+    cfg = resolve_spark_runtime(bridge_keys=True)
+    apply_spark_to_environ(cfg)
+    settings.llm_provider = cfg.provider
+    settings.llm_model = cfg.llm_model
+    if cfg.virtuals_api_key:
+        settings.virtuals_api_key = cfg.virtuals_api_key
+    settings.aria_llm_model_standard = cfg.aria_llm_model_standard
+    settings.aria_llm_model_develop = cfg.aria_llm_model_develop
+    settings.aria_llm_model_brief = cfg.aria_llm_model_brief
 
     bootstrap.configure(data_dir=data_dir(), settings=settings)
     bootstrap.register_host_integrations(

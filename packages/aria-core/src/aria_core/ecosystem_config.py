@@ -229,13 +229,21 @@ def verify_ecosystem_alignment() -> list[dict[str, Any]]:
         row["name"] = f"spark_{row.get('name', '')}"
         checks.append(row)
 
+    from aria_core.spark_config import models_equivalent
+
     cfg = resolve_spark_runtime(bridge_keys=False)
+    prop_lm = (propagated.get("LLM_MODEL") or "").strip()
+    prop_std = (propagated.get("ARIA_LLM_MODEL_STANDARD") or "").strip()
+    runtime_ok = (
+        models_equivalent(cfg.llm_model, prop_lm)
+        or models_equivalent(cfg.llm_model, prop_std)
+        or cfg.llm_model == prop_lm
+        or cfg.llm_model == prop_std
+    )
     add(
         "spark_runtime_matches_propagated",
-        cfg.llm_model == propagated.get("LLM_MODEL") or cfg.llm_model == propagated.get(
-            "ARIA_LLM_MODEL_STANDARD"
-        ),
-        f"runtime={cfg.llm_model} propagated={propagated.get('LLM_MODEL')}",
+        runtime_ok,
+        f"runtime={cfg.llm_model} propagated={prop_lm} standard={prop_std}",
     )
 
     return checks
