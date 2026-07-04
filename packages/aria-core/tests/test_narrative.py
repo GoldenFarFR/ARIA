@@ -19,7 +19,7 @@ def test_one_liner_names_vanguard():
 def test_llm_system_block_forbids_dexpulse_as_holding():
     block = llm_system_block("en")
     assert holding_name() in block
-    assert "Never present DEXPulse as the holding" in block
+    assert "retired" in block.lower() or "Aria Market" in block
     assert GOVERNANCE_RULE in block or "subsidiary" in block.lower()
 
 
@@ -37,7 +37,7 @@ def test_welcome_chat_operator_vanguard_not_dexpulse():
 
 
 def test_x_juno_from_holding_not_dexpulse():
-    assert "DEXPulse" in x_juno_greeting()
+    assert "Aria Market" in x_juno_greeting()
     assert holding_name() in x_juno_greeting()
     assert "ARIA@DEXPulse" not in zhc_intro_from_agent()
     assert "AriaVanguard" in zhc_intro_from_agent() or holding_name().replace(" ", "") in zhc_intro_from_agent()

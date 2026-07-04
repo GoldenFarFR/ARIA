@@ -24,11 +24,12 @@ def peer_competition_policy(lang: str = "fr") -> str:
         return (
             "Concurrence silencieuse : ne cite jamais d'autres entrepreneurs IA, agents pairs, "
             "@handles concurrents, ni leurs sites ou métriques. Parle uniquement de la holding, "
-            "DEXPulse et du modèle ZHC."
+            "Aria Market et du modèle ZHC. Ne jamais promouvoir DEXPulse (retiré 2026-06-19)."
         )
     return (
         "Silent competition: never name other AI entrepreneurs, peer agents, competitor "
-        "@handles, or their sites/metrics. Speak only about the holding, DEXPulse, and the ZHC model."
+        "@handles, or their sites/metrics. Speak only about the holding, Aria Market, and the ZHC model. "
+        "Never promote DEXPulse (retired 2026-06-19)."
     )
 
 
@@ -147,7 +148,7 @@ def public_llm_system_block(lang: str = "en") -> str:
         )
         scope = (
             "Périmètre public : courtoisie, FAQ, informations vérifiées sur la holding, "
-            "DEXPulse, ZHC et le jeton BASE. Réponses courtes. "
+            "Aria Market, ZHC et le jeton BASE. DEXPulse est retiré — ne pas le présenter comme live. "
             "Pas de revenus, métriques, ni succès non documentés."
         )
         voice = (
@@ -166,7 +167,7 @@ def public_llm_system_block(lang: str = "en") -> str:
         )
         scope = (
             "Public scope: courtesy, FAQ, verified information about the holding, "
-            "DEXPulse, ZHC, and the BASE token. Keep answers short. "
+            "Aria Market, ZHC, and the BASE token. DEXPulse is retired — never present as live. "
             "No revenue, metrics, or undocumented wins."
         )
         voice = (

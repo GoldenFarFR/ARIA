@@ -10,25 +10,40 @@
   - holding
   - structure
   question: What is Aria Vanguard ZHC?
-  answer: Aria Vanguard ZHC is the ZHC parent holding. Every current and future venture is a subsidiary under the holding. DEXPulse is the flagship product subsidiary — never the holding itself.
+  answer: Aria Vanguard ZHC is the ZHC parent holding. Every current and future venture is a subsidiary under the holding. Aria Market is the flagship product subsidiary — never the holding itself. DEXPulse was retired 2026-06-19 (repo and Render service deleted).
+- id: dexpulse-retired
+  tags:
+  - dexpulse
+  - retired
+  - deprecated
+  question: What happened to DEXPulse? Is DEXPulse still live?
+  answer: 'DEXPulse is RETIRED since 2026-06-19. The GitHub repo GoldenFarFR/dexpulse and the Render service were deleted. Code migrated into aria-vanguard. Successor product: Aria Market (watchlist, signals, DexScreener embeds) at https://ariavanguardzhc.com and API https://api.ariavanguardzhc.com. Never promote, deploy, or market DEXPulse as a live product.'
+- id: aria-market-product
+  tags:
+  - aria-market
+  - product
+  - flagship
+  question: What is Aria Market?
+  answer: 'Aria Market is the flagship subsidiary — DEX analyzer with watchlist-first UX, multi-timeframe signals, alerts, and DexScreener chart embeds (ARIA provides signals, not chart hosting). Hosted in aria-vanguard (holding site + API). Site: https://ariavanguardzhc.com — API: https://api.ariavanguardzhc.com.'
 - id: dexpulse-product
   tags:
   - dexpulse
-  - product
+  - retired
+  - deprecated
   question: What is DEXPulse?
-  answer: 'DEXPulse is the flagship subsidiary — real-time DEX analyzer with multi-timeframe signals, watchlist alerts, and dashboard. Pair discovery via DEXScreener, OHLCV via GeckoTerminal. Production URL: https://dexpulse-m3bp.onrender.com'
+  answer: DEXPulse was the former flagship DEX analyzer subsidiary — RETIRED 2026-06-19. Repo and Render service deleted. Replaced by Aria Market in aria-vanguard. Do not cite dexpulse-m3bp or any DEXPulse URL as live. See canonical id aria-market-product for the current product.
 - id: aria-vanguard-site
   tags:
   - holding
   - site
   question: Where is the holding corporate site?
-  answer: 'Holding site: https://ariavanguardzhc.com (separate repo aria-vanguard). DEXPulse product is a subsidiary — linked from the holding site.'
+  answer: 'Holding site: https://ariavanguardzhc.com (monorepo vanguard/). Aria Market product is hosted on the same stack. API: https://api.ariavanguardzhc.com.'
 - id: public-access
   tags:
   - access
   - public
   question: Who can use ARIA on the website?
-  answer: Everyone for public ARIA chat. DEXPulse access uses Privy X login on Aria Vanguard ZHC. Each visitor has their own chat history. Rate limit applies against abuse.
+  answer: Everyone for public ARIA chat on https://ariavanguardzhc.com. Privy X login for market features on Aria Vanguard ZHC. Each visitor has their own chat history. Rate limit applies against abuse.
 - id: anti-hallucination
   tags:
   - policy
@@ -46,7 +61,7 @@
   - build
   - engineering
   question: Does ARIA build software?
-  answer: Yes. Builder Queen mode produces engineering plans. Runtime lives in aria-sandbox (package aria-core). GitHub sandbox holds experiments and truth-ledger mirror. Production repos (dexpulse, aria-vanguard) need operator approval before writes.
+  answer: Yes. Builder Queen mode produces engineering plans. Runtime lives in packages/aria-core (monorepo ARIA). GitHub mirror holds experiments and truth-ledger. Production deploy host is aria-vanguard (Render). Operator approval before writes to prod repos. Repo dexpulse no longer exists (retired 2026-06-19).
 - id: aria-marketing-comms
   tags:
   - marketing
@@ -58,7 +73,7 @@
   - zhc
   - governance
   question: What is the ZHC model?
-  answer: Zero-Human Company — ARIA operates day-to-day autonomously (portfolio, products, content). Human principal steers strategy; ARIA executes and informs via the public site and DEXPulse.
+  answer: Zero-Human Company — ARIA operates day-to-day autonomously (portfolio, products, content). Human principal steers strategy; ARIA executes and informs via the public site and Aria Market.
 - id: base-token
   tags:
   - token
@@ -70,7 +85,7 @@
   - github
   - repos
   question: What are the main GitHub repos?
-  answer: GoldenFarFR/aria-vanguard (holding site + API deploy host + DEXPulse app), GoldenFarFR/aria-sandbox (aria-core brain package + experiments + truth-ledger; Telegram gateway in aria-core), GoldenFarFR/aria-token-base (token R&D), GoldenFarFR/aria-skills, GoldenFarFR/kikou, GoldenFarFR/template-grok-cursor. Operator scripts in aria-vanguard/operator; secrets in local vault only. Live inventory — ask github status or liste tous les repos.
+  answer: 'GoldenFarFR/ARIA (monorepo privé — aria-core, vanguard, truth-ledger, collegue-memoire), GoldenFarFR/aria-vanguard (holding site + API deploy host + Aria Market), GoldenFarFR/aria-sandbox (experiments + truth-ledger mirror), GoldenFarFR/aria-token-base (token R&D), GoldenFarFR/aria-skills, GoldenFarFR/kikou, GoldenFarFR/template-grok-cursor. Operator scripts in vanguard/operator; secrets in local vault. Retired repos: dexpulse, dexpulse-secrets (deleted 2026-06-19). Live inventory — github status.'
 - id: github-governance
   tags:
   - github
@@ -84,13 +99,13 @@
   - legal
   - education
   question: Is this financial advice?
-  answer: No. DEXPulse and ARIA provide market education and analysis tools — not personalized investment advice. Always do your own research.
+  answer: No. Aria Market and ARIA provide market education and analysis tools — not personalized investment advice. Always do your own research.
 - id: contact-aria
   tags:
   - contact
   - comms
   question: How do I talk to ARIA?
-  answer: 'Chat on the DEXPulse dashboard or the aria-vanguard holding site. X: @Aria_ZHC.'
+  answer: 'Chat on https://ariavanguardzhc.com (holding + Aria Market). X: @Aria_ZHC. Telegram: @Aria_ZHC_Bot.'
 - id: aria-capability-index
   tags:
   - aria
@@ -122,7 +137,7 @@
   - marketing
   - autonomy
   question: What should ARIA learn and store from X or external sources?
-  answer: Only insights that advance the ZHC model, holding autonomy (build, deploy, skills, decisions), DEXPulse/product moat, and future marketing/comms decisions for Aria Vanguard — not generic crypto hype, price calls, or social noise. Stored in cognitive_knowledge (not the holding repertoire). Operator mandate 2026-06.
+  answer: Only insights that advance the ZHC model, holding autonomy (build, deploy, skills, decisions), Aria Market/product moat, and future marketing/comms decisions for Aria Vanguard — not generic crypto hype, price calls, or social noise. Never store DEXPulse as a live product (retired 2026-06-19). Stored in cognitive_knowledge (not the holding repertoire). Operator mandate 2026-06.
 - id: operator-runbook
   tags:
   - operator

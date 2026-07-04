@@ -219,6 +219,19 @@ new_pc_checklist:
     verify: "scan marché acp → source live ou cache + gaps audit_security / veille_zhc"
     never: "Inventer des stats marketplace sans browse OK ni cache valide."
 
+  - id: stale-dexpulse-knowledge
+    severity: critical
+    lesson: >
+      Le cerveau ARIA (canonical_facts, FAQ, persona, founder_ping) citait encore DEXPulse
+      comme produit live alors que le repo et le service Render ont ete supprimes le 2026-06-19.
+      Initiatives Telegram proposaient des campagnes marketing DEXPulse — hallucination produit.
+    fix: >
+      SSOT = canonical_facts.yaml (aria-market-product, dexpulse-retired). Apres toute decision
+      produit : sync canonical → faq.yaml → redeploy Render. Verifier proactive.py et persona.md.
+      POST /api/aria/truth-ledger/sync-canonical ou restart backend.
+    verify: "FAQ « What is DEXPulse? » → RETIRED ; founder_ping ne cite pas DEXPulse comme live"
+    never: "Promouvoir, deployer ou marketer DEXPulse apres 2026-06-19."
+
   - id: secrets-via-vault-not-inline
     severity: critical
     lesson: >
