@@ -4,11 +4,24 @@
 version: 1
 
 targets:
+  - id: aria-acp-degrade-4
+    owner: GoldenFarFR
+    repo: ARIA
+    pr_number: 4
+    enabled: true
+    test_reviewer_marker: "[SIM reviewer]"
+    our_logins:
+      - GoldenFarFR
+      - cursoragent
+    agent_id: "019f0522-b57b-7e8e-a70a-aab2070e070e"
+    agent_email: aria_vanguard_zhc@agents.world
+    offering: analyse_lite_x1
+
   - id: acp-showcase-37
     owner: Virtual-Protocol
     repo: acp-cli-demos
     pr_number: 37
-    enabled: true
+    enabled: false
     our_logins:
       - GoldenFarFR
       - cursoragent
