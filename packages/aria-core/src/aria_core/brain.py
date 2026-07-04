@@ -27,6 +27,7 @@ from aria_core.grounding import (
     strict_rephrase_rules,
     truth_ledger_direct_answer,
     unknown_reply,
+    is_aria_product_or_holding_question,
 )
 from aria_core.public_mode import is_public_mode, operator_action_blocked_reply, skill_allowed_in_public
 from aria_core.locale import LANG_EN, LANG_FR
@@ -1032,10 +1033,14 @@ class AriaBrain:
                 return llm_reply, None, [label], {}, None
 
         if grounded_for_audience(public) and not is_live_info_question(message):
-            return unknown_reply(lang_key), None, ["No verified source"], {}, None
+            if is_aria_product_or_holding_question(message):
+                return unknown_reply(lang_key), None, ["No verified source"], {}, None
+            # non-product topic: allow normal answer even in grounded public mode
 
         if public and is_factual_question(message):
-            return unknown_reply(lang_key), None, ["Factual — no verified source"], {}, None
+            if is_aria_product_or_holding_question(message):
+                return unknown_reply(lang_key), None, ["Factual — no verified source"], {}, None
+            # general factual for public: let LLM handle (we still have other safeguards)
 
         rep_summary = await get_repertoire_summary(lang)
         if not settings.aria_llm_enabled:
@@ -1096,13 +1101,17 @@ class AriaBrain:
             verified = await build_verified_facts_block(
                 message, public=public, lang=lang_key,
             )
+            if is_aria_product_or_holding_question(message):
+                refuse_rule = "If VERIFIED FACTS do not answer the question, refuse in one short sentence.\nNever invent revenue, team, strategy, or performance. Max 120 words.\n"
+            else:
+                # General topic even under grounded mode: answer normally, just stay factual where possible
+                refuse_rule = "Answer helpfully. For topics outside ARIA/holding/product, use normal knowledge; only stay strictly to verified facts for holding/product questions.\n"
             system = (
                 f"{anti_hallucination_rules(lang_key)}\n\n"
                 f"{verified}\n\n"
                 f"{grounded_llm_identity(lang_key)}\n"
                 f"{concision}\n"
-                "If VERIFIED FACTS do not answer the question, refuse in one short sentence.\n"
-                "Never invent revenue, team, strategy, or performance. Max 120 words.\n"
+                f"{refuse_rule}"
                 f"{lang_hint}"
             )
             return await chat_with_context(

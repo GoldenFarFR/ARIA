@@ -48,6 +48,25 @@ def grounded_for_audience(public: bool) -> bool:
     return settings.aria_grounded_mode and public
 
 
+def is_aria_product_or_holding_question(text: str) -> bool:
+    """True for questions about ARIA, holding, Vanguard, ZHC, DEXPulse (retired), metrics, product, features, site, etc.
+    Used to scope strict anti-hallucination / verified-facts-only to the topics that matter.
+    General knowledge, chit-chat, or unrelated topics should be answered normally.
+    """
+    t = (text or "").lower()
+    # Product / holding / business scope
+    if re.search(
+        r"\b(aria|vanguard|holding|zhc|goldenfar|dexpulse|market|base token|base-token|"
+        r"revenue|chiffre|metric|métrique|price|prix|feature|fonctionnalit|site|api|deploy|build|skill|brain|core|faq|ledger)\b",
+        t,
+    ):
+        return True
+    # Any strong factual question explicitly about the ecosystem
+    if is_factual_question(text) and any(k in t for k in ["holding", "aria", "vanguard", "product", "business"]):
+        return True
+    return False
+
+
 FACTUAL_SKILLS = frozenset({
     "faq_content",
     "epistemic_check",
