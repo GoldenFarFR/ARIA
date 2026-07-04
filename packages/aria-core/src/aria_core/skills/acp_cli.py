@@ -417,6 +417,42 @@ def trade_tokens(
     return data if isinstance(data, dict) else {"detail": str(data)}, None
 
 
+def email_search(query: str = "") -> tuple[dict | list | None, str | None]:
+    args = ["email", "search"]
+    if query.strip():
+        args.extend(["--query", query.strip()])
+    code, out, err = run_acp(*args)
+    if code != 0:
+        return None, err or out or f"exit {code}"
+    data = _parse_json(out)
+    if data is None and (out or "").strip():
+        return None, "réponse email search invalide"
+    return data, None
+
+
+def email_inbox(*, cursor: str = "") -> tuple[dict | list | None, str | None]:
+    args = ["email", "inbox"]
+    if cursor.strip():
+        args.extend(["--cursor", cursor.strip()])
+    code, out, err = run_acp(*args)
+    if code != 0:
+        return None, err or out or f"exit {code}"
+    data = _parse_json(out)
+    if data is None and (out or "").strip():
+        return None, "réponse email inbox invalide"
+    return data, None
+
+
+def email_thread(thread_id: str) -> tuple[dict | None, str | None]:
+    code, out, err = run_acp("email", "thread", "--thread-id", thread_id.strip())
+    if code != 0:
+        return None, err or out or f"exit {code}"
+    data = _parse_json(out)
+    if isinstance(data, dict):
+        return data, None
+    return None, "réponse email thread invalide"
+
+
 def browse_agents(
     query: str = "",
     *,
@@ -424,6 +460,7 @@ def browse_agents(
     sort_by: str = "successfulJobCount",
     mode: str = "mixed",
     legacy: bool = False,
+    timeout: int | None = None,
 ) -> tuple[list[dict], str | None]:
     args = ["browse"]
     if query.strip():
@@ -436,7 +473,14 @@ def browse_agents(
         args.extend(["--mode", mode.strip()])
     if legacy:
         args.append("--legacy")
-    code, out, err = run_acp(*args)
+    browse_timeout = timeout
+    if browse_timeout is None:
+        raw = (os.environ.get("ACP_BROWSE_TIMEOUT") or "15").strip()
+        try:
+            browse_timeout = max(5, int(raw))
+        except ValueError:
+            browse_timeout = 15
+    code, out, err = run_acp(*args, timeout=browse_timeout)
     if code != 0:
         return [], err or out or f"exit {code}"
     return _unwrap_list(_parse_json(out)), None
