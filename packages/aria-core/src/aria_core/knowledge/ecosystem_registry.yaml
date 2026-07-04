@@ -1,0 +1,106 @@
+# GoldenFar operator env SSOT — edit HERE, then verify-ecosystem-alignment.ps1
+# Consumers: spark_config, Import-AriaVaultEnv, sync-local, enable-spark-routing, Render
+
+version: 1
+
+prod_overlay_keys:
+  - LLM_PROVIDER
+  - LLM_MODEL
+  - VIRTUALS_API_KEY
+  - LLM_FALLBACK_API_KEY
+  - LLM_FALLBACK_PROVIDER
+  - LLM_FALLBACK_MODEL
+  - ARIA_SPARK_AGGRESSIVE
+  - ARIA_LLM_MODEL_DEVELOP
+  - ARIA_LLM_MODEL_STANDARD
+  - ARIA_LLM_MODEL_BRIEF
+  - ARIA_OUVRIER_CLOUD
+  - ARIA_OUVRIER_SKIP_GROQ_FALLBACK
+  - ARIA_LLM_MAX_TOKENS_DEVELOP
+  - ARIA_LLM_MAX_TOKENS_STANDARD
+  - ARIA_LLM_MAX_TOKENS_BRIEF
+  - ARIA_LLM_CONTEXT_MAX_DEVELOP
+  - ARIA_LLM_CONTEXT_MAX_STANDARD
+  - ARIA_LLM_CONTEXT_MAX_BRIEF
+  - ARIA_LLM_DEPTH_DEFAULT
+  - ARIA_OUVRIER_OLLAMA_FALLBACK
+
+obsolete_keys:
+  - DEXPULSE_API_URL
+  - GROK_MODEL_PRIMARY
+
+defaults:
+  LLM_PROVIDER: virtuals
+  LLM_MODEL: x-ai-grok-4-3
+  ARIA_OUVRIER_CLOUD: spark
+  ARIA_LLM_MODEL_STANDARD: x-ai-grok-4-3
+  ARIA_LLM_MODEL_DEVELOP: anthropic-claude-opus-4-8
+  ARIA_LLM_MODEL_BRIEF: deepseek-deepseek-v4-flash
+  LLM_FALLBACK_PROVIDER: groq
+  LLM_FALLBACK_MODEL: llama-3.3-70b-versatile
+  ARIA_SPARK_AGGRESSIVE: "true"
+  ARIA_OUVRIER_SKIP_GROQ_FALLBACK: "true"
+  ARIA_LLM_ENABLED: "true"
+  ARIA_VECTOR_MEMORY: "true"
+  ARIA_MEMORY_ARBITRATOR: "true"
+  ARIA_AUTONOMOUS: "true"
+  ARIA_REVENUE_AUTONOMY: "true"
+  OLLAMA_BASE_URL: http://127.0.0.1:11434
+  ARIA_OLLAMA_NUM_CTX: "8192"
+  ARIA_OLLAMA_MODEL: qwen2.5:14b
+
+# Operator profiles (aria-ops/vanguard/operator/ scripts)
+spark_profiles:
+  sport:
+    script: enable-spark-routing.ps1
+    aria_spark_aggressive: "true"
+    aria_ouvrier_skip_groq_fallback: "true"
+    aria_llm_depth_default: brief
+    aria_llm_max_tokens_develop: "1800"
+    aria_llm_model_brief: deepseek-deepseek-v4-flash
+  chiron:
+    script: enable-spark-chiron.ps1
+    aria_spark_aggressive: "true"
+    aria_ouvrier_skip_groq_fallback: "true"
+    aria_ouvrier_ollama_fallback: "false"
+    aria_llm_depth_default: develop
+    aria_llm_max_tokens_develop: "3200"
+    aria_llm_max_tokens_standard: "1200"
+    aria_llm_max_tokens_brief: "500"
+    aria_llm_context_max_develop: "32000"
+    aria_llm_model_brief: x-ai-grok-4-3
+
+banned_values:
+  LLM_MODEL:
+    - deepseek-deepseek-v4-pro
+
+# When a key changes, derived keys align (propagate_operator_env)
+propagations:
+  - if_key: LLM_PROVIDER
+    equals: virtuals
+    set:
+      ARIA_OUVRIER_CLOUD: spark
+  - if_key: ARIA_LLM_MODEL_STANDARD
+    copy_to: LLM_MODEL
+    when_target_empty_or_banned: true
+  - if_key: VIRTUALS_API_KEY
+    min_length: 10
+    set:
+      LLM_PROVIDER: virtuals
+
+path_derivations:
+  ARIA_REPO_ROOT: "%USERPROFILE%\\GitHub-Repos\\ARIA"
+  DATA_DIR: "{ARIA_REPO_ROOT}/vanguard/backend/data"
+
+consumers:
+  python:
+    - aria_core.ecosystem_config
+    - aria_core.spark_config
+    - packages/aria-core/scripts/shell_chat.py
+    - aria-ops/letta-orchestrator/orchestrate_unified.py
+    - aria-ops/letta-orchestrator/ouvrier_runner.py
+  powershell:
+    - scripts/PowerShell/aria-letta-integration.ps1
+    - aria-ops/vanguard/operator/enable-spark-routing.ps1
+    - aria-ops/vanguard/operator/sync-local.ps1
+    - local-sync/scripts/verify-ecosystem-alignment.ps1

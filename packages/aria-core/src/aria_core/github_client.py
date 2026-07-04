@@ -378,3 +378,41 @@ class GitHubClient:
             )
             r.raise_for_status()
             return r.json()
+
+    async def list_issue_comments(
+        self, owner: str, repo: str, issue_number: int
+    ) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                f"{API}/repos/{owner}/{repo}/issues/{issue_number}/comments",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, list) else []
+
+    async def list_pull_reviews(
+        self, owner: str, repo: str, pull_number: int
+    ) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                f"{API}/repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, list) else []
+
+    async def create_issue_comment(
+        self, owner: str, repo: str, issue_number: int, body: str
+    ) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"{API}/repos/{owner}/{repo}/issues/{issue_number}/comments",
+                headers=self._headers,
+                json={"body": body[:65000]},
+            )
+            r.raise_for_status()
+            return r.json()

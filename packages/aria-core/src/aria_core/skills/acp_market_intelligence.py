@@ -214,11 +214,19 @@ async def run_market_scan(*, use_cache_on_fail: bool = True) -> dict[str, Any]:
     seen: dict[str, dict] = {}
     errors: list[str] = []
 
+    fail_streak = 0
     for query in _SCAN_QUERIES:
-        rows, err = browse_agents(query, top_k=8, sort_by="successfulJobCount", mode="mixed")
+        rows, err = browse_agents(
+            query, top_k=8, sort_by="successfulJobCount", mode="mixed", timeout=12
+        )
         if err:
             errors.append(f"{query}: {err[:120]}")
+            fail_streak += 1
+            if fail_streak >= 3 and not seen:
+                errors.append("browse: abort apres 3 echecs consecutifs (API Virtuals)")
+                break
             continue
+        fail_streak = 0
         for row in rows:
             aid = str(row.get("id") or row.get("agentId") or row.get("name") or "")
             if aid and aid not in seen:

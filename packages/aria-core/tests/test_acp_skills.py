@@ -526,6 +526,86 @@ def test_create_offering_cli_args(monkeypatch):
     assert "create" in captured["args"]
 
 
+def test_wants_acp_prepare_and_email_watch():
+    from aria_core.skills.acp_prepare_skill import wants_acp_prepare
+    from aria_core.skills.acp_email_watcher import wants_acp_email_watch
+
+    assert wants_acp_prepare("préparer job acp 0xabc123")
+    assert wants_acp_prepare("prepare job acp 0xdead")
+    assert not wants_acp_prepare("bonjour")
+    assert wants_acp_email_watch("surveiller email acp")
+    assert wants_acp_email_watch("watch acp email")
+    assert not wants_acp_email_watch("acp status")
+
+
+@pytest.mark.asyncio
+async def test_acp_prepare_manual(monkeypatch, tmp_path):
+    from aria_core.skills import acp_prepare_skill as prep
+    from aria_core.skills.acp_onchain_scan import TokenScanContext
+    from aria_core.testing import configure_test_runtime
+
+    configure_test_runtime(data_dir=tmp_path / "data")
+    monkeypatch.setattr(prep, "is_acp_available", lambda: True)
+    monkeypatch.setattr(prep, "job_history", lambda jid, **kw: (None, "Server error 500"))
+    monkeypatch.setattr(prep, "_PREPARED_DIR", tmp_path / "data" / "memory" / "acp_prepared")
+
+    ctx = TokenScanContext(
+        contract="0x" + "c" * 40,
+        valid_address=True,
+        lite_verdict="CAUTION",
+        security_score=50,
+        risk_flags=["Test flag."],
+    )
+
+    async def fake_scan(contract):
+        return ctx
+
+    monkeypatch.setattr("aria_core.skills.acp_onchain_scan.scan_base_token", fake_scan)
+
+    contract = "0x" + "c" * 40
+    job = "0x" + "d" * 64
+    msg = f"préparer job acp {job} offre analyse_lite_x1 contract {contract}"
+    reply, data = await execute_acp_marketplace(msg, lang="fr")
+    assert data.get("acp") == "prepare"
+    assert data.get("job_id") == job
+    assert "liteVerdict" in reply
+    assert (tmp_path / "data" / "memory" / "acp_prepared").exists()
+
+
+@pytest.mark.asyncio
+async def test_acp_email_watch_detects_job(monkeypatch, tmp_path):
+    from aria_core.skills import acp_email_watcher as ew
+
+    monkeypatch.setattr(ew, "is_acp_available", lambda: True)
+    monkeypatch.setattr(ew, "_STATE_PATH", tmp_path / "acp_email_watch_state.json")
+    monkeypatch.setattr(
+        ew,
+        "email_inbox",
+        lambda **kw: (
+            {
+                "messages": [
+                    {
+                        "id": "m1",
+                        "subject": "ACP job funded — awaiting provider",
+                        "snippet": "Job 0x" + "a" * 64 + " for analyse_lite_x1",
+                    }
+                ]
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ew,
+        "email_search",
+        lambda q: ({"messages": []}, None),
+    )
+
+    reply, data = await execute_acp_marketplace("surveiller email acp", lang="fr")
+    assert data.get("acp") == "email_watch"
+    assert data["scan"]["new_alerts"]
+    assert "0x" in reply
+
+
 def test_resolve_acp_command_windows(monkeypatch):
     monkeypatch.setenv("APPDATA", str(Path("C:/Users/X/AppData/Roaming")))
     fake = Path("C:/Users/X/AppData/Roaming/npm/acp.cmd")

@@ -218,6 +218,14 @@ def _extract_file_path(message: str) -> str | None:
 async def execute_github_sandbox(user_message: str, lang: str = "en") -> tuple[str, dict]:
     lower = user_message.lower()
 
+    from aria_core.skills.showcase_pr_watcher import (
+        execute_showcase_pr_watch,
+        wants_showcase_pr_watch,
+    )
+
+    if wants_showcase_pr_watch(user_message):
+        return await execute_showcase_pr_watch(user_message, lang)
+
     if not github_configured():
         msg = (
             "GitHub non configuré. Ajoute `GITHUB_TOKEN` dans `.env` (local) ou `production.env` (Render)."
