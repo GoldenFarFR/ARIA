@@ -1,26 +1,26 @@
-# Aria Vanguard ZHC — holding stack
+# Aria Vanguard ZHC Ã¢â‚¬â€ holding stack
 
-> **Vision écosystème :** [`VISION.md`](./VISION.md) — carte repos : [`docs/ECOSYSTEM-REPOS.md`](./docs/ECOSYSTEM-REPOS.md)
+> **Vision ÃƒÂ©cosystÃƒÂ¨me :** [`VISION.md`](./VISION.md) Ã¢â‚¬â€ carte repos : [`docs/ECOSYSTEM-REPOS.md`](./docs/ECOSYSTEM-REPOS.md)
 
 Repo unique pour la holding **Aria Vanguard ZHC** :
 
-| Surface | URL | Déploiement |
+| Surface | URL | DÃƒÂ©ploiement |
 |---------|-----|-------------|
 | Vitrine | [ariavanguardzhc.com](https://ariavanguardzhc.com) | Render static (`aria-vanguard`) |
 | API ARIA | [api.ariavanguardzhc.com](https://api.ariavanguardzhc.com) | Render Docker (`aria-api`) |
 
-L'ancien repo `dexpulse` est **déprécié** — tout vit ici.
+L'ancien repo `dexpulse` est **dÃƒÂ©prÃƒÂ©ciÃƒÂ©** Ã¢â‚¬â€ tout vit ici.
 
 ## Structure
 
 ```
 aria-vanguard/
-├── src/                 # Vitrine holding (React)
-├── product-frontend/    # App marché servie par l'API (build Docker)
-├── backend/           # API FastAPI (auth, billing, Telegram, ARIA)
-├── operator/          # Scripts opérateur (sync Render, audit, coffre)
-├── Dockerfile         # Build API + product-frontend
-└── render.yaml        # Blueprint Render (static + docker)
+Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ src/                 # Vitrine holding (React)
+Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ product-frontend/    # App marchÃƒÂ© servie par l'API (build Docker)
+Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ backend/           # API FastAPI (auth, billing, Telegram, ARIA)
+Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ operator/          # Scripts opÃƒÂ©rateur (sync Render, audit, coffre)
+Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ Dockerfile         # Build API + product-frontend
+Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ render.yaml        # Blueprint Render (static + docker)
 ```
 
 ## Dev local

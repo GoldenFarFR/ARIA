@@ -1,41 +1,41 @@
-# ARIA — monorepo GoldenFar
+# ARIA — produit GoldenFar (public)
 
-Repo privé unique regroupant l'écosystème ARIA.
+Cerveau autonome **Aria Vanguard ZHC** : API, site, skills, intégration ACP.
 
-## Structure
+**Ops privées** (coffre, deploy, mémoire) : repo [`GoldenFarFR/aria-ops`](https://github.com/GoldenFarFR/aria-ops) — accès restreint.
 
-| Dossier | Contenu (ex-repo) |
-|---------|-------------------|
-| `packages/aria-core/` | Cerveau Python ARIA (ex aria-sandbox) |
-| `vanguard/` | API FastAPI, site holding, DEXPulse, operator/ (ex aria-vanguard) |
-| `skills/` | Skills Grok/Cursor (ex aria-skills) |
-| `local-sync/` | Sync multi-PC, coffre chiffré (ex aria-local-sync) |
-| `collegue-memoire/` | COLLEGUE.md, HANDOFF, journal (ex collegue-memoire) |
-| `sandbox/` | Truth-ledger, prompts expérimentaux |
-| `core/` | Personnalité Pro |
-| `memory/`, `bot/`, `scripts/` | Travail local ARIA |
-| `template-grok-cursor/` | Template IDE (ex template-grok-cursor) |
+**Showcase Virtual Protocol** : [`GoldenFarFR/aria-acp-showcase`](https://github.com/GoldenFarFR/aria-acp-showcase)
+
+## Structure (ce repo)
+
+| Dossier | Contenu |
+|---------|---------|
+| `packages/aria-core/` | Cerveau Python ARIA |
+| `vanguard/` | API FastAPI, site holding (sans `operator/`) |
+| `skills/` | Skills Grok/Cursor |
+| `template-grok-cursor/` | Template IDE |
+| `scripts/` | `aria-paths.ps1`, redirect handoff |
 
 ## Chemins
 
 ```powershell
-$env:ARIA_REPO_ROOT = "C:\Users\Studi\GitHub-Repos\ARIA"
+$env:ARIA_REPO_ROOT = "$env:USERPROFILE\GitHub-Repos\ARIA"
+$env:ARIA_OPS_ROOT  = "$env:USERPROFILE\GitHub-Repos\aria-ops"
 ```
-
-Scripts : `scripts/aria-paths.ps1` (SSOT chemins PowerShell).
 
 ## Deploy Render
 
-- Blueprint : `render.yaml` (racine)
-- Build : `docker build -f vanguard/Dockerfile .` depuis la racine
-- Secrets : `vanguard/operator/production.env` (coffre local, jamais commité)
+- Blueprint : `render.yaml`
+- Scripts opérateur : `aria-ops/vanguard/operator/` (privé)
+- Secrets : coffre `%LOCALAPPDATA%\GoldenFar\vault` — jamais Git
 
-## Session / handoff
+## Session handoff
 
 ```powershell
-cd $env:ARIA_REPO_ROOT\local-sync\scripts
-.\session-handoff.ps1
+& "$env:ARIA_OPS_ROOT\local-sync\scripts\session-handoff.ps1"
 ```
+
+Voir `REPO-PUBLIC-SECURITY.md`.
 
 ## Vision
 
