@@ -12,10 +12,10 @@ _DEPTH_OVERRIDE = re.compile(
     re.I,
 )
 _DEVELOP_HINT = re.compile(
-    r"\b(?:d[eé]veloppe|develop|explique(?:\s+en)?\s+d[eé]tail|"
-    r"d[eé]taille|plan\s+d[eé]taill[eé]|architecture|roadmap|"
-    r"analyse\s+compl[eè]te|full\s+analysis|deep\s+dive|"
-    r"en\s+profondeur|write\s+a\s+long)\b",
+    r"\b(?:d[eé]veloppe|develop|mode\s+d[eé]velopp[eé]|r[eé]ponse\s+compl[eè]te|"
+    r"explique(?:\s+en)?\s+d[eé]tail|d[eé]taille|plan\s+d[eé]taill[eé]|architecture|"
+    r"roadmap|analyse\s+compl[eè]te|full\s+analysis|deep\s+dive|"
+    r"en\s+profondeur|write\s+a\s+long|r[eé]fl[eé]chis\s+longuement)\b",
     re.I,
 )
 _BRIEF_HINT = re.compile(

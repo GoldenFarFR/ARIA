@@ -338,6 +338,75 @@ function Invoke-AriaUnified {
     & $script:AriaUnifiedOrchestrate @params
 }
 
+function Resolve-AriaKartInput {
+    <#
+    Langage naturel KART — pas de / obligatoire.
+    Retourne @{ Handled = $true } si action locale (trace, reload).
+    Sinon @{ Handled = $false; Message = $texte normalise }.
+    #>
+    param([Parameter(Mandatory)][string]$Text)
+    $t = $Text.Trim()
+    if (-not $t) { return @{ Handled = $false; Message = "" } }
+
+    if ($t -match '^(?i)(?:active|allume)\s+(?:la\s+)?trace(?:\s+verbose)?$') {
+        $env:ARIA_OUVRIER_VERBOSE = "1"
+        Write-Host "Trace verbose ON" -ForegroundColor Green
+        return @{ Handled = $true }
+    }
+    if ($t -match '^(?i)(?:coupe|désactive|desactive|arrête|arrete)\s+(?:la\s+)?trace$') {
+        $env:ARIA_OUVRIER_VERBOSE = ""
+        Write-Host "Trace verbose OFF" -ForegroundColor Yellow
+        return @{ Handled = $true }
+    }
+    if ($t -match '^(?i)(?:recharge|reload)\s+(?:le\s+)?profil$') {
+        . $PROFILE
+        Write-Host "Profil recharge" -ForegroundColor Green
+        return @{ Handled = $true }
+    }
+
+    if ($t -match '^/(status|qi|help|commandes|directive|learn|calibrate|level)\b') {
+        $cmd = $Matches[1].ToLower()
+        $rest = ($t -replace "^/$cmd\s*", "").Trim()
+        $map = @{
+            status    = "état aria"
+            qi        = "montre qi aria"
+            help      = "aide aria"
+            commandes = "aide aria"
+            directive = if ($rest) { "directive : $rest" } else { "aide aria" }
+            learn     = if ($rest) { "apprends : $rest" } else { "aide aria" }
+            calibrate = if ($rest) { "calibre : $rest" } else { "aide aria" }
+            level     = if ($rest) { "niveau $rest" } else { "niveau aria" }
+        }
+        return @{ Handled = $false; Message = $map[$cmd] }
+    }
+    if ($t -match '^/depth\s+(brief|standard|develop)\b(.*)$') {
+        $depth = $Matches[1]
+        $rest = $Matches[2].Trim()
+        $hint = switch ($depth) {
+            develop  { "développe en détail $rest" }
+            brief    { "réponse courte $rest" }
+            default  { $rest }
+        }
+        return @{ Handled = $false; Message = $hint.Trim() }
+    }
+    if ($t -eq "/verbose") {
+        if ($env:ARIA_OUVRIER_VERBOSE -eq "1") {
+            $env:ARIA_OUVRIER_VERBOSE = ""
+            Write-Host "Trace verbose OFF" -ForegroundColor Yellow
+        } else {
+            $env:ARIA_OUVRIER_VERBOSE = "1"
+            Write-Host "Trace verbose ON" -ForegroundColor Green
+        }
+        return @{ Handled = $true }
+    }
+
+    if ($t -match '^(?i)/(?:grok|groq|ollama)\s+') {
+        return @{ Handled = $false; Message = $t }
+    }
+
+    return @{ Handled = $false; Message = $t }
+}
+
 function Invoke-AriaKartDefault {
     param(
         [Parameter(Mandatory)][string]$Message,
