@@ -121,6 +121,7 @@ async def compose_x_tweet(user_message: str, lang: str = "en") -> str:
         system = (
             "You post for @Aria_ZHC (Aria Vanguard ZHC holding).\n"
             "Write ONE English X tweet (max 280 chars).\n"
+            "NEVER mention DEXPulse — retired 2026-06-19. Active product: Aria Market.\n"
             f"{policy_rules_for_llm('en')}\n"
             f"{human_voice_rules_for_llm('en')}\n"
             "Natural human voice — not an AI character, not a feature comma-list.\n"

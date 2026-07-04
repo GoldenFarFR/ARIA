@@ -115,10 +115,12 @@ async def test_comms_x_composes_when_explicit_publish(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_compose_x_tweet_fallback_learning():
+async def test_compose_x_tweet_fallback_learning(monkeypatch):
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: False)
     text = await compose_x_tweet(
         "publie un tweet pour apprendre ta première leçon",
         lang="fr",
     )
     assert "learn" in text.lower() or "study" in text.lower()
+    assert "dexpulse" not in text.lower()
     assert len(text) <= 280

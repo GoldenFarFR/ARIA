@@ -18,7 +18,8 @@ async def test_holding_seed_and_structure(tmp_path, monkeypatch):
     assert structure is not None
     assert structure.holding.entity_type == EntityType.HOLDING
     assert structure.holding.slug == "aria-vanguard-zhc"
-    assert any(s.slug == "dexpulse" for s in structure.subsidiaries)
+    assert any(s.slug == "aria-market" for s in structure.subsidiaries)
+    assert any(s.slug == "dexpulse" and s.status.value == "archived" for s in structure.subsidiaries)
     assert all(s.parent_id == structure.holding.id for s in structure.subsidiaries)
 
 
