@@ -219,6 +219,20 @@ new_pc_checklist:
     verify: "scan marché acp → source live ou cache + gaps audit_security / veille_zhc"
     never: "Inventer des stats marketplace sans browse OK ni cache valide."
 
+  - id: avatar-change-on-redeploy
+    severity: high
+    lesson: >
+      Apres redeploy Render, Telegram/X affichaient une nouvelle photo alors que l'echeance
+      style est 14 jours. Cause : is_due() retournait True si next_due_at absent dans
+      style_refresh.json ; heartbeat visual_autonomy + ARIA_VISUAL_AUTO_APPLY generaient
+      et publiaient un nouveau style Imagine au boot (~30s).
+    fix: >
+      bootstrap_style_schedule() au startup (main.py) — initialise next_due_at sans changer
+      l'avatar. is_due() = False si next_due_at absent. Cycle auto uniquement quand
+      next_due_at depasse (14j). Manuel : /avatar style now (force).
+    verify: "Apres redeploy : /avatar style status → is_due=false, photo X/TG inchangee"
+    never: "Traiter un redeploy comme une echeance style — deploy != nouveau look."
+
   - id: stale-dexpulse-knowledge
     severity: critical
     lesson: >
