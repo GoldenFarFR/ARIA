@@ -58,6 +58,15 @@ def _default_depth() -> LlmDepth:
         return LlmDepth.BRIEF
 
 
+def _chiron_mode() -> bool:
+    """Profil Chiron — top modèle même sur messages courts (ARIA_SPARK_AGGRESSIVE + depth develop)."""
+    if not _spark_active():
+        return False
+    if not _spark_aggressive():
+        return False
+    return _default_depth() == LlmDepth.DEVELOP
+
+
 def detect_depth(message: str, *, default: LlmDepth | None = None) -> LlmDepth:
     """Détecte brief / standard / develop depuis le message utilisateur."""
     text = (message or "").strip()
@@ -70,6 +79,11 @@ def detect_depth(message: str, *, default: LlmDepth | None = None) -> LlmDepth:
             return LlmDepth(override.group(1).lower())
         except ValueError:
             pass
+
+    if _chiron_mode():
+        if override and override.group(1).lower() == "brief":
+            return LlmDepth.BRIEF
+        return LlmDepth.DEVELOP
 
     if _DEVELOP_HINT.search(text) or len(text) > 420:
         return LlmDepth.DEVELOP
@@ -86,6 +100,8 @@ def depth_system_instruction(lang: str, depth: LlmDepth) -> str:
         if lang == "fr":
             return (
                 "MODE DÉVELOPPÉ : verdict en tête, puis détail factuel. "
+                "Sur salutation ou message court : prends les devants — état + "
+                "« si on faisait X, je pourrais Y » (initiative fondateur). "
                 "Chaque section a du contenu ou est omise — jamais de puces/titres vides, "
                 "jamais de scorecard ou % sans source. Pas de remplissage."
             )
