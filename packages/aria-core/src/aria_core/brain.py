@@ -83,7 +83,7 @@ INTENT_PATTERNS: list[tuple[SkillName, list[str]]] = [
     (SkillName.HOLDING_SITE, [
         r"site web", r"site holding", r"constru.*site", r"build.*site",
         r"aria.?vanguard", r"vanguard.*site", r"holding.*site", r"ariavanguardzhc",
-        r"devenir autonome", r"prendre des initiatives?", r"initiative",
+        r"devenir autonome", r"prendre des initiatives?",
     ]),
     (SkillName.ZHC_BRIDGE, [
         r"\bjuno\b", r"junoagent", r"zhc institute", r"zhcinstitute",
