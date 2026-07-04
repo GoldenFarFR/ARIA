@@ -231,6 +231,18 @@ new_pc_checklist:
     verify: "scan marché acp → source live ou cache + gaps audit_security / veille_zhc"
     never: "Inventer des stats marketplace sans browse OK ni cache valide."
 
+  - id: acp-privy-500-degraded-mode
+    severity: high
+    lesson: >
+      browse, job list/history, events listen, and provider submit all fail with Server error 500
+      (Privy/Alchemy Virtuals). No CLI workaround until their backend signs again.
+    fix: >
+      Degraded mode: heartbeat acp_email_watch (10 min) + command "prepare job acp 0x…"
+      (local deliverable JSON in data/memory/acp_prepared/) → paste in Hermes UI.
+      Watch agents.world email + Hermes console. When Privy recovers, listener + poll resume.
+    verify: "prepare job acp 0x… offering analyse_lite_x1 contract 0x… → JSON + saved file"
+    never: "Claim job delivered without Hermes submit or job id receipt."
+
   - id: premature-external-pr
     severity: high
     lesson: >

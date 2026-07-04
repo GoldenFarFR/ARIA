@@ -1,0 +1,64 @@
+# ACP upstream — références canoniques Virtuals + alimentation Letta (SSOT)
+version: 1
+
+upstream:
+  base_url: https://os.virtuals.io
+  llms_summary: /llms.txt
+  llms_full: /llms-full.txt
+  standard: ERC-8183
+  docs_roots:
+    - /acp/overview
+    - /acp/architecture
+    - /acp/concepts
+    - /acp/sdk/getting-started
+    - /acp/sdk/examples
+    - /acp/cli/reference
+    - /acp/cli/client-workflow
+    - /acp/cli/provider-workflow
+    - /acp/cli/event-streaming
+    - /acp/migration/sdk
+    - /acp/migration/cli
+
+packages:
+  cli: "@virtuals-protocol/acp-cli"
+  sdk: "@virtuals-protocol/acp-node-v2"
+  cli_skill: "npm root -g)/@virtuals-protocol/acp-cli/SKILL.md"
+
+contracts:
+  chain: base_mainnet
+  acp_core: "0x238E541BfefD82238730D00a2208E5497F1832E0"
+  fund_transfer_hook: "0x90717828D78731313CB350D6a58b0f91668Ea702"
+
+# Sections prioritaires extraites de llms-full.txt (filtre, pas miroir HTML)
+priority_sections:
+  - "What is ACP"
+  - "Architecture"
+  - "Core Concepts"
+  - "SDK Getting Started"
+  - "SDK Examples"
+  - "Provider Adapters"
+  - "CLI Command Reference"
+  - "Client Workflow"
+  - "Provider Workflow"
+  - "Event Streaming"
+  - "ACP Serve"
+  - "SDK Migration Guide"
+  - "CLI Migration Guide"
+  - "Quickstart"
+  - "Agent Wallet"
+  - "Agent Email"
+  - "Agent Card"
+  - "Agent Commerce"
+
+# Connaissance locale ARIA — injectée en premier (pas de réseau)
+local_knowledge:
+  - packages/aria-core/src/aria_core/knowledge/acp_config.yaml
+  - packages/aria-core/src/aria_core/knowledge/acp_offerings.yaml
+  - packages/aria-core/src/aria_core/knowledge/acp_quality.yaml
+
+letta:
+  passage_prefix: "[acp/upstream]"
+  max_passage_chars: 850
+  max_passages_per_run: 96
+  cache_subdir: acp_upstream
+  state_file: sync-acp-letta-state.json

@@ -152,6 +152,20 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="acp_email_watch",
+        name="ACP email job watch",
+        description="Poll agents.world inbox — job alerts (degraded mode when Virtuals Privy 500)",
+        interval_minutes=10,
+        enabled=False,
+    ),
+    HeartbeatTask(
+        id="showcase_pr_watch",
+        name="Showcase PR auto-reply",
+        description="Watch Virtual-Protocol/acp-cli-demos#37 — auto-reply to reviewer comments",
+        interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="revenue_autonomy",
         name="Revenue autonomy cycle",
         description="Poll ACP, scan marché, promo X, initiative — sans relance opérateur",
@@ -233,6 +247,15 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.skills.acp_cli import is_acp_available
 
             task.enabled = is_acp_available()
+        if task.id == "acp_email_watch":
+            from aria_core.skills.acp_cli import is_acp_available
+
+            task.enabled = is_acp_available()
+        if task.id == "showcase_pr_watch":
+            from aria_core.skills.github_skill import github_configured
+            from aria_core.skills.showcase_pr_watcher import load_watch_targets
+
+            task.enabled = github_configured() and bool(load_watch_targets())
         if task.id == "revenue_autonomy":
             from aria_core.autonomy_revenue import revenue_autonomy_enabled
             from aria_core.skills.acp_cli import is_acp_available
@@ -519,6 +542,45 @@ class AriaHeartbeat:
                     f"ACP provider — {result.get('processed')} job(s) traité(s)\n"
                     f"Actions : {', '.join(result.get('actions') or [])}"
                 )
+
+        elif task_id == "acp_email_watch":
+            from aria_core.skills.acp_email_watcher import run_email_watch
+
+            watch = await run_email_watch()
+            alerts = watch.get("new_alerts") or []
+            if alerts:
+                append_memory(
+                    "acp_email",
+                    f"[heartbeat] {len(alerts)} email job alert(s)",
+                )
+                for alert in alerts[:3]:
+                    jids = ", ".join(alert.get("job_ids") or []) or "?"
+                    body = (
+                        f"ACP email — job detected\n"
+                        f"Subject: {alert.get('subject', '?')[:120]}\n"
+                        f"Job(s): {jids}\n"
+                        f"Command: prepare job acp {jids.split(',')[0] if jids != '?' else '<id>'} "
+                        f"offering {alert.get('offering') or 'analyse_lite_x1'}"
+                    )
+                    await self._notify_telegram(body[:1500])
+
+        elif task_id == "showcase_pr_watch":
+            from aria_core.skills.showcase_pr_watcher import run_showcase_pr_watch
+
+            scan = await run_showcase_pr_watch()
+            replied = scan.get("replied") or []
+            if replied:
+                append_memory(
+                    "github",
+                    f"[heartbeat] showcase_pr_watch — {len(replied)} auto-repl(ies)",
+                )
+                for row in replied[:2]:
+                    body = (
+                        f"Showcase PR — auto-reply posted\n"
+                        f"To: @{row.get('trigger_author')}\n"
+                        f"URL: {row.get('reply_url') or row.get('trigger_url')}"
+                    )
+                    await self._notify_telegram(body[:1500])
 
         elif task_id == "acp_market_scan":
             from aria_core.skills.acp_market_intelligence import run_market_scan
