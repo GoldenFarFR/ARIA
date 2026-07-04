@@ -113,14 +113,14 @@ def _check_monthly_spend(ledger: dict[str, Any], cost: float, *, force: bool) ->
     return True, "OK"
 
 
-def check_tweet_content(text: str) -> tuple[bool, str]:
+def check_tweet_content(text: str, *, allow_urls: bool = False) -> tuple[bool, str]:
     """Règles contenu uniquement (pas quota / budget). Retourne (ok, raison)."""
     body = text.strip()
     if not body:
         return False, "tweet vide"
     if len(body) > 280:
         return False, f"trop long ({len(body)}/280)"
-    if settings.x_block_urls_in_posts and _contains_url(body):
+    if settings.x_block_urls_in_posts and _contains_url(body) and not allow_urls:
         return False, "URL interdite (~0,20 $/tweet — retire le lien)"
     hits: list[str] = []
     for pattern, label in _CONTENT_VIOLATIONS:
@@ -306,6 +306,68 @@ def check_tweet_allowed(
 
     last = _last_post_at(ledger)
     if last and not force and not skip_rate_gap:
+        gap = datetime.now(timezone.utc) - last
+        need = timedelta(hours=settings.x_min_hours_between_posts)
+        if gap < need:
+            wait = need - gap
+            hrs = wait.total_seconds() / 3600
+            return False, f"Attendre encore {hrs:.1f}h entre deux publications.", cost
+
+    ok, reason = _check_monthly_spend(ledger, cost, force=force)
+    if not ok:
+        return False, reason, cost
+
+    return True, "OK", cost
+
+
+def check_workflow_used_tweet_allowed(
+    text: str,
+    *,
+    force: bool = False,
+) -> tuple[bool, str, float]:
+    """Tweet ACP « workflow used » — autorise le lien Virtuals si configuré."""
+    try:
+        from aria_core.skills.acp_workflow_social import workflow_tweet_allow_url
+
+        allow_urls = workflow_tweet_allow_url()
+    except Exception:
+        allow_urls = False
+
+    if not settings.x_post_enabled and not force:
+        return False, "Publication X désactivée (X_POST_ENABLED=false).", 0.0
+
+    from aria_core.x_text import X_TWEET_MAX_CHARS, weighted_tweet_length
+
+    body = text.strip()
+    if not body:
+        return False, "Tweet vide.", 0.0
+    weight = weighted_tweet_length(body)
+    if weight > X_TWEET_MAX_CHARS:
+        return False, f"Tweet trop long ({weight}/{X_TWEET_MAX_CHARS} poids X).", 0.0
+
+    cost = _estimate_tweet_cost(body)
+    if settings.x_block_urls_in_posts and _contains_url(body) and not allow_urls:
+        return (
+            False,
+            "URL détectée — active ARIA_ACP_WORKFLOW_TWEET_ALLOW_URL=true pour workflow-used.",
+            cost,
+        )
+
+    content_ok, content_reason = check_tweet_content(body, allow_urls=allow_urls)
+    if not content_ok:
+        return False, f"Contenu bloqué ({content_reason}).", cost
+
+    ledger = _load_ledger()
+    today_posts = _posts_today(ledger)
+    if len(today_posts) >= settings.x_max_posts_per_day and not force:
+        return (
+            False,
+            f"Quota journalier atteint ({settings.x_max_posts_per_day} tweets/jour).",
+            cost,
+        )
+
+    last = _last_post_at(ledger)
+    if last and not force:
         gap = datetime.now(timezone.utc) - last
         need = timedelta(hours=settings.x_min_hours_between_posts)
         if gap < need:

@@ -234,6 +234,28 @@ async def _process_job(job_id: str, *, chain_id: str) -> str | None:
                 record_revenue(price, source="acp_provider", note=f"job:{job_id} {workflow}")
         except Exception as exc:
             logger.debug("revenue log skip: %s", exc)
+        try:
+            from aria_core.skills.acp_workflow_social import (
+                enqueue_workflow_used_tweet,
+                extract_offering_id,
+                flush_workflow_used_tweet,
+            )
+
+            off_id = extract_offering_id(history)
+            social = enqueue_workflow_used_tweet(
+                offering_name=offering or workflow,
+                workflow_key=workflow,
+                job_id=job_id,
+                offering_id=off_id,
+            )
+            if social.get("queued"):
+                flush = await flush_workflow_used_tweet()
+                if flush and flush.get("posted"):
+                    logger.info("ACP workflow-used tweet posted for %s", offering or workflow)
+                elif flush and not flush.get("posted"):
+                    logger.info("ACP workflow-used tweet queued: %s", flush.get("reason"))
+        except Exception as exc:
+            logger.debug("workflow-used social skip: %s", exc)
         return f"submit:{job_id}"
     logger.warning("ACP submit %s failed: %s", job_id, msg)
     return None

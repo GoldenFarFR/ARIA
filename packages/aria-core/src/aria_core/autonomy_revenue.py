@@ -157,6 +157,19 @@ async def run_revenue_autonomy_cycle(*, lang: str = "fr") -> dict[str, Any]:
         result["reason"] = "ARIA_REVENUE_AUTONOMY off ou ARIA_AUTONOMOUS=false"
         return result
 
+    try:
+        from aria_core.skills.acp_workflow_social import flush_workflow_used_tweet
+
+        workflow_x = await flush_workflow_used_tweet()
+        if workflow_x:
+            result["workflow_used_x"] = workflow_x
+            if workflow_x.get("posted"):
+                result["actions"].append(f"x_workflow_used:{workflow_x.get('offering')}")
+            else:
+                result["skipped"].append(f"x_workflow_used:{workflow_x.get('reason', 'blocked')}")
+    except Exception:
+        pass
+
     pending_x = await _flush_pending_x_promo()
     if pending_x:
         result["pending_x"] = pending_x
