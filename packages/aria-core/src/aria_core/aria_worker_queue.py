@@ -253,6 +253,22 @@ def _backfill_task_from_feedback_jsonl(task_id: str) -> WorkerTask | None:
     return None
 
 
+def _cap_gap_runtime_resolved_sync(task_id: str) -> bool:
+    """Skip re-sync worker si capability_gap déjà OK (anti-boucle)."""
+    tid = (task_id or "").strip()
+    if not tid.startswith("cap-gap-"):
+        return False
+    cap = tid[len("cap-gap-") :]
+    try:
+        import asyncio
+
+        from aria_core.capability_gap import gap_runtime_resolved
+
+        return asyncio.run(gap_runtime_resolved(cap))
+    except Exception:
+        return False
+
+
 def sync_pending_local_tasks_to_md() -> list[str]:
     """Rejoue les tâches pending du jsonl local vers ARIA-WORKER.md (session ouvrier)."""
     jsonl = _local_jsonl()
@@ -276,6 +292,13 @@ def sync_pending_local_tasks_to_md() -> list[str]:
     existing = path.read_text(encoding="utf-8") if path and path.is_file() else ""
     for tid, rec in latest.items():
         if str(rec.get("status") or "") != "pending":
+            continue
+        if _cap_gap_runtime_resolved_sync(tid):
+            _append_local_record(
+                _task_from_record(rec),
+                status="skipped_resolved",
+                extra={"reason": "runtime_ok"},
+            )
             continue
         if path and _has_pending_task(existing, tid):
             continue
@@ -365,6 +388,13 @@ async def enqueue_worker_task(
     from aria_core.skills.github_skill import github_configured, repo_write_allowed
 
     clean_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", task_id.strip())[:80].strip("-") or "task"
+    if _cap_gap_runtime_resolved_sync(clean_id):
+        return {
+            "task_id": clean_id,
+            "title": title.strip()[:200],
+            "status": "skipped_resolved",
+            "reason": "runtime_ok",
+        }
     task = WorkerTask(
         task_id=clean_id,
         title=title.strip()[:200],

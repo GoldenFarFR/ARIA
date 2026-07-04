@@ -103,6 +103,23 @@ def test_write_task_to_local_md(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_enqueue_worker_task_skips_when_cap_gap_resolved(monkeypatch):
+    from aria_core import aria_worker_queue as mod
+
+    monkeypatch.setattr(mod, "_cap_gap_runtime_resolved_sync", lambda _tid: True)
+    monkeypatch.setattr(mod, "resolve_local_worker_md", lambda: None)
+
+    out = await mod.enqueue_worker_task(
+        task_id="cap-gap-image_api_key",
+        title="IMAGE",
+        source="capability_gap",
+        problem="no token",
+        action="fix",
+    )
+    assert out["status"] == "skipped_resolved"
+
+
+@pytest.mark.asyncio
 async def test_enqueue_from_capability_gap_skips_when_resolved(monkeypatch):
     from aria_core import aria_worker_queue as mod
 
