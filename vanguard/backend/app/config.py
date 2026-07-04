@@ -97,6 +97,16 @@ class Settings(BaseSettings):
     llm_fallback_model: str = "llama-3.3-70b-versatile"
     llm_model: str = ""
     aria_spark_aggressive: bool = False
+    # Shell opérateur — juste milieu (ouverte chez Sylvain, publique reste grounded)
+    aria_operator_founder_mode: bool = False
+    aria_llm_depth_default: str = "brief"
+    aria_llm_context_max_brief: int = 3500
+    aria_llm_context_max_standard: int = 5000
+    aria_llm_context_max_develop: int = 8000
+    aria_llm_max_tokens_brief: int = 180
+    aria_llm_max_tokens_standard: int = 400
+    aria_llm_max_tokens_develop: int = 900
+    aria_llm_cost_footer: bool = True
     aria_llm_model_develop: str = "anthropic-claude-opus-4-8"
     aria_llm_model_standard: str = "x-ai-grok-4-3"
     aria_llm_model_brief: str = "deepseek-deepseek-v4-flash"

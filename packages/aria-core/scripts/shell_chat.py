@@ -114,6 +114,11 @@ def _bootstrap() -> Path:
     def _flag(name: str, default: bool = False) -> bool:
         return os.environ.get(name, str(default)).lower() in ("1", "true", "yes", "on")
 
+    founder = _flag("ARIA_OPERATOR_FOUNDER_MODE")
+    depth_default = (os.environ.get("ARIA_LLM_DEPTH_DEFAULT") or "").strip()
+    if not depth_default and founder:
+        depth_default = "standard"
+
     configure_test_runtime(
         data_dir=data_dir,
         settings=AriaRuntimeSettings(
@@ -130,6 +135,13 @@ def _bootstrap() -> Path:
             llm_fallback_provider=str(spark["llm_fallback_provider"]),
             llm_fallback_model=str(spark["llm_fallback_model"]),
             aria_spark_aggressive=bool(spark["aria_spark_aggressive"]),
+            aria_operator_founder_mode=founder,
+            aria_llm_depth_default=depth_default or "brief",
+            aria_epistemic_web_verify=_flag("ARIA_EPISTEMIC_WEB_VERIFY", not founder),
+            aria_epistemic_critic=_flag("ARIA_EPISTEMIC_CRITIC", not founder),
+            aria_llm_cost_footer=_flag("ARIA_LLM_COST_FOOTER", not founder),
+            aria_llm_max_tokens_standard=int(os.environ.get("ARIA_LLM_MAX_TOKENS_STANDARD", "400")),
+            aria_llm_max_tokens_develop=int(os.environ.get("ARIA_LLM_MAX_TOKENS_DEVELOP", "900")),
             aria_llm_model_develop=str(spark["aria_llm_model_develop"]),
             aria_llm_model_standard=str(spark["aria_llm_model_standard"]),
             aria_llm_model_brief=str(spark["aria_llm_model_brief"]),

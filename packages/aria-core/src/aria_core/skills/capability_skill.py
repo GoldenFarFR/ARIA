@@ -17,8 +17,11 @@ from aria_core.memory import append_memory
 
 
 def wants_capability(message: str) -> bool:
+    from aria_core.operator_conversational import wants_capability_improvement
     from aria_core.tweet_compose_workflow import is_tweet_operator_context
 
+    if wants_capability_improvement(message):
+        return False
     if is_tweet_operator_context(message):
         return False
     lower = message.lower()

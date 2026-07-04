@@ -50,12 +50,19 @@ class LlmEconomyBudget:
     enhance_max_tokens: int
 
 
+def _founder_mode() -> bool:
+    return bool(getattr(settings, "aria_operator_founder_mode", False))
+
+
 def _default_depth() -> LlmDepth:
-    raw = (getattr(settings, "aria_llm_depth_default", None) or "brief").strip().lower()
+    fallback = "standard" if _founder_mode() else "brief"
+    raw = (getattr(settings, "aria_llm_depth_default", None) or fallback).strip().lower()
+    if _founder_mode() and raw == "brief":
+        raw = "standard"
     try:
         return LlmDepth(raw)
     except ValueError:
-        return LlmDepth.BRIEF
+        return LlmDepth.STANDARD if _founder_mode() else LlmDepth.BRIEF
 
 
 def _chiron_mode() -> bool:
@@ -80,10 +87,24 @@ def detect_depth(message: str, *, default: LlmDepth | None = None) -> LlmDepth:
         except ValueError:
             pass
 
+    if _founder_mode() and _default_depth() != LlmDepth.DEVELOP:
+        if _DEVELOP_HINT.search(text) or len(text) > 280:
+            return LlmDepth.DEVELOP
+        if _BRIEF_HINT.match(text):
+            return LlmDepth.BRIEF
+        return default or _default_depth()
+
     if _chiron_mode():
         if override and override.group(1).lower() == "brief":
             return LlmDepth.BRIEF
         return LlmDepth.DEVELOP
+
+    if _founder_mode():
+        if _DEVELOP_HINT.search(text) or len(text) > 280:
+            return LlmDepth.DEVELOP
+        if _BRIEF_HINT.match(text):
+            return LlmDepth.BRIEF
+        return default or _default_depth()
 
     if _DEVELOP_HINT.search(text) or len(text) > 420:
         return LlmDepth.DEVELOP
@@ -177,7 +198,7 @@ def resolve_budget(
             model_override=_brief_model_if(depth),
             enhance_max_tokens=280,
         )
-    spark_boost = _spark_aggressive()
+    spark_boost = _spark_aggressive() or _founder_mode()
     std_model = _spark_model_for_depth(LlmDepth.STANDARD) if _spark_active() else None
     dev_model = _spark_model_for_depth(LlmDepth.DEVELOP) if _spark_active() else None
     if depth == LlmDepth.STANDARD:
