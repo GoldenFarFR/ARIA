@@ -1,4 +1,4 @@
-"""ACP email watcher — détecter jobs via aria_vanguard_zhc@agents.world (mode dégradé)."""
+"""ACP email watcher — detect jobs via aria_vanguard_zhc@agents.world (degraded mode)."""
 from __future__ import annotations
 
 import json

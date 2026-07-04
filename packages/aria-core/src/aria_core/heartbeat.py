@@ -154,7 +154,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="acp_email_watch",
         name="ACP email job watch",
-        description="Poll agents.world inbox — alertes jobs (mode dégradé Virtuals Privy 500)",
+        description="Poll agents.world inbox — job alerts (degraded mode when Virtuals Privy 500)",
         interval_minutes=10,
         enabled=False,
     ),
@@ -539,16 +539,16 @@ class AriaHeartbeat:
             if alerts:
                 append_memory(
                     "acp_email",
-                    f"[heartbeat] {len(alerts)} alerte(s) job email",
+                    f"[heartbeat] {len(alerts)} email job alert(s)",
                 )
                 for alert in alerts[:3]:
                     jids = ", ".join(alert.get("job_ids") or []) or "?"
                     body = (
-                        f"ACP email — job détecté\n"
-                        f"Sujet : {alert.get('subject', '?')[:120]}\n"
-                        f"Job(s) : {jids}\n"
-                        f"Commande : préparer job acp {jids.split(',')[0] if jids != '?' else '<id>'} "
-                        f"offre {alert.get('offering') or 'analyse_lite_x1'}"
+                        f"ACP email — job detected\n"
+                        f"Subject: {alert.get('subject', '?')[:120]}\n"
+                        f"Job(s): {jids}\n"
+                        f"Command: prepare job acp {jids.split(',')[0] if jids != '?' else '<id>'} "
+                        f"offering {alert.get('offering') or 'analyse_lite_x1'}"
                     )
                     await self._notify_telegram(body[:1500])
 

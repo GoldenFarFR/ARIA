@@ -234,14 +234,14 @@ new_pc_checklist:
   - id: acp-privy-500-degraded-mode
     severity: high
     lesson: >
-      browse, job list/history, events listen et provider submit echouent tous avec Server error 500
-      (Privy/Alchemy Virtuals). Impossible de contourner via CLI tant que leur backend signe pas.
+      browse, job list/history, events listen, and provider submit all fail with Server error 500
+      (Privy/Alchemy Virtuals). No CLI workaround until their backend signs again.
     fix: >
-      Mode degrade : heartbeat acp_email_watch (10 min) + commande « preparer job acp 0x… »
-      (deliverable JSON local data/memory/acp_prepared/) → coller dans Hermes UI.
-      Surveiller email agents.world + console Hermes. Quand Privy revient, listener + poll auto.
-    verify: "preparer job acp 0x… offre analyse_lite_x1 contract 0x… → JSON + fichier saved"
-    never: "Annoncer job livre sans submit Hermes ou receipt job id."
+      Degraded mode: heartbeat acp_email_watch (10 min) + command "prepare job acp 0x…"
+      (local deliverable JSON in data/memory/acp_prepared/) → paste in Hermes UI.
+      Watch agents.world email + Hermes console. When Privy recovers, listener + poll resume.
+    verify: "prepare job acp 0x… offering analyse_lite_x1 contract 0x… → JSON + saved file"
+    never: "Claim job delivered without Hermes submit or job id receipt."
 
   - id: premature-external-pr
     severity: high

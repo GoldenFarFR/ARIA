@@ -1,4 +1,4 @@
-"""ACP mode dégradé — préparer deliverable local sans provider submit (Hermès UI)."""
+"""ACP degraded mode — prepare local deliverable without provider submit (Hermes UI)."""
 from __future__ import annotations
 
 import json
@@ -98,8 +98,8 @@ def _save_prepared(
         "deliverable": deliverable,
         "quality": quality,
         "hermes_note": (
-            "Mode dégradé Virtuals — coller deliverable JSON dans Hermès "
-            "(provider submit CLI indisponible)."
+            "Virtuals degraded mode — paste deliverable JSON in Hermes "
+            "(provider submit CLI unavailable)."
         ),
     }
     path.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")

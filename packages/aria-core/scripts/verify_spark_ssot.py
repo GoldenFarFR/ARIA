@@ -1,4 +1,4 @@
-"""Vérifie l'alignement Spark SSOT — exit 0 si tout PASS."""
+"""Verify Spark SSOT alignment — exit 0 when all checks PASS."""
 from __future__ import annotations
 
 import sys
@@ -16,7 +16,7 @@ def main() -> int:
         if not ok:
             fail += 1
     if fail:
-        print(f"\n=== SPARK SSOT KO ({fail} echecs) ===", file=sys.stderr)
+        print(f"\n=== SPARK SSOT KO ({fail} failures) ===", file=sys.stderr)
         return 1
     print("\n=== SPARK SSOT OK ===")
     return 0
