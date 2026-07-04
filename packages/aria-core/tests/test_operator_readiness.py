@@ -1,9 +1,11 @@
 import pytest
 
+from aria_core.knowledge.web_verify import is_operator_local_question, should_use_web_verify
 from aria_core.operator_readiness import (
     parse_readiness_goal,
     wants_operator_go_ahead,
     wants_operator_readiness,
+    wants_operator_status_pulse,
 )
 
 
@@ -22,6 +24,22 @@ def test_go_ahead_benefique():
 
 def test_not_readiness_random():
     assert not wants_operator_readiness("comment va le marché crypto ?")
+
+
+def test_status_pulse_sylvain():
+    assert wants_operator_status_pulse("rien de nouveau a declarer ?")
+    assert wants_operator_status_pulse("quoi de neuf ?")
+    assert not wants_operator_status_pulse("bitcoin aujourd'hui")
+
+
+def test_operator_local_blocks_web(monkeypatch):
+    monkeypatch.setenv("ARIA_PUBLIC_MODE", "false")
+    from aria_core.runtime import settings
+
+    settings.aria_public_mode = False
+    assert is_operator_local_question("rien de nouveau a declarer ?")
+    assert not should_use_web_verify("rien de nouveau a declarer ?")
+    assert should_use_web_verify("rugby stade toulousain aujourd'hui")
 
 
 @pytest.mark.asyncio

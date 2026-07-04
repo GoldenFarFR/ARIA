@@ -57,9 +57,39 @@ def _as_source(text: str, url: str = "") -> WebSource | None:
     return WebSource(text=text[:280], url=(url or "").strip())
 
 
+def is_operator_local_question(query: str) -> bool:
+    """Questions opérateur ARIA — jamais de DuckDuckGo (impôts, admin perso, etc.)."""
+    from aria_core.operator_readiness import wants_operator_status_pulse
+
+    if wants_operator_status_pulse(query):
+        return True
+    lower = (query or "").lower()
+    if re.search(
+        r"d[eé]clar(?:ation|er)|imp[oô]t|fiscal|urssaf|caf\b|"
+        r"runbook|aria-worker|ouvrier|worker\s+queue|"
+        r"collegue\.md|journal\s+aria|check-aria-status",
+        lower,
+    ):
+        return True
+    return False
+
+
+def should_use_web_verify(query: str) -> bool:
+    """Web autorisé : visiteurs publics, ou opérateur + actu live explicite."""
+    from aria_core.public_mode import is_public_mode
+
+    if is_public_mode():
+        return True
+    if is_operator_local_question(query):
+        return False
+    return is_live_info_question(query)
+
+
 def is_live_info_question(query: str) -> bool:
     """Sport, horaires, actu jour J — nécessite souvent une recherche web."""
     if is_ecosystem_product_query(query):
+        return False
+    if is_operator_local_question(query):
         return False
     return bool(_LIVE_INFO_RE.search(query))
 
@@ -300,6 +330,8 @@ async def web_enhance_calibrated(
     from aria_core.runtime import settings
 
     if not getattr(settings, "aria_epistemic_web_verify", True):
+        return reply, meta
+    if not should_use_web_verify(query) and not force:
         return reply, meta
     if not force and not _web_verify_threshold(meta):
         return reply, meta

@@ -330,8 +330,31 @@ class AriaBrain:
 
             from aria_core.operator_readiness import (
                 execute_operator_readiness,
+                execute_operator_status_pulse,
                 wants_operator_readiness,
+                wants_operator_status_pulse,
             )
+
+            if wants_operator_status_pulse(route_msg):
+                pulse_reply, pulse_data = await execute_operator_status_pulse(
+                    route_msg, lang=lang,
+                )
+                await repertoire_db.save_message("agent", pulse_reply, visitor_id=vid)
+                from aria_core.response_cost import append_cost_footer, build_cost_meta
+
+                lang_key = "fr" if lang == LANG_FR else "en"
+                pulse_display = append_cost_footer(
+                    pulse_reply,
+                    build_cost_meta(total_tokens=0),
+                    lang=lang_key,
+                )
+                pulse_data["llm_cost"] = build_cost_meta(total_tokens=0)
+                return ChatResponse(
+                    reply=pulse_display,
+                    skill_used=None,
+                    actions_taken=["Operator status pulse (local — sans web)"],
+                    data=pulse_data,
+                )
 
             if wants_operator_readiness(route_msg):
                 ready_reply, ready_data = await execute_operator_readiness(

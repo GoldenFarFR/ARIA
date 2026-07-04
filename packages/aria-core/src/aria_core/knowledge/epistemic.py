@@ -362,24 +362,36 @@ async def resolve_calibrated_answer(
     query: str, lang: str = "fr",
 ) -> tuple[str | None, dict]:
     """Politique/holding YAML si match, sinon Groq + vérif web si incertain."""
-    from aria_core.knowledge.web_verify import is_ecosystem_product_query, is_live_info_question, web_first_answer
+    from aria_core.knowledge.web_verify import (
+        is_ecosystem_product_query,
+        is_live_info_question,
+        is_operator_local_question,
+        should_use_web_verify,
+        web_first_answer,
+    )
     from aria_core.memory.self_context import is_self_context_question
+    from aria_core.operator_readiness import wants_operator_status_pulse
 
     if is_self_context_question(query):
         return None, {"self_context": True, "skip_web": True}
+
+    if wants_operator_status_pulse(query) or is_operator_local_question(query):
+        return None, {"operator_local": True, "skip_web": True}
 
     static, static_data = epistemic_static_answer(query, lang)
     if static:
         return static, static_data
 
-    if is_live_info_question(query):
+    use_web = should_use_web_verify(query)
+
+    if use_web and is_live_info_question(query):
         wf_reply, wf_meta = await web_first_answer(query, lang)
         if wf_reply:
             return wf_reply, wf_meta
 
     reply, meta = await groq_calibrated_answer(query, lang)
     if not reply or meta.get("abstain") or meta.get("empty"):
-        if not is_ecosystem_product_query(query):
+        if use_web and not is_ecosystem_product_query(query):
             wf_reply, wf_meta = await web_first_answer(query, lang)
             if wf_reply:
                 return wf_reply, wf_meta
@@ -391,7 +403,7 @@ async def resolve_calibrated_answer(
         reply, meta = await enhance_calibrated_answer(query, reply, meta, lang)
 
     if not reply or float(meta.get("p_true", 0)) < 0.65:
-        if not is_ecosystem_product_query(query):
+        if use_web and not is_ecosystem_product_query(query):
             wf_reply, wf_meta = await web_first_answer(query, lang)
             if wf_reply:
                 return wf_reply, wf_meta
