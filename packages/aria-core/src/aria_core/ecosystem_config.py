@@ -137,16 +137,19 @@ def propagate_operator_env(merged: dict[str, str] | None = None) -> dict[str, st
             ):
                 out[copy_to] = source
 
+    grok_fallback = (
+        out.get("ARIA_LLM_MODEL_STANDARD")
+        or defaults.get("ARIA_LLM_MODEL_STANDARD")
+        or defaults.get("LLM_MODEL")
+        or "x-ai-grok-4-3"
+    )
     for key, banned_set in banned.items():
         val = (out.get(key) or "").strip()
         if val in banned_set:
             if key == "LLM_MODEL":
-                out[key] = (
-                    out.get("ARIA_LLM_MODEL_STANDARD")
-                    or defaults.get("ARIA_LLM_MODEL_STANDARD")
-                    or defaults.get("LLM_MODEL")
-                    or ""
-                )
+                out[key] = grok_fallback
+            elif key in ("ARIA_LLM_MODEL_DEVELOP", "ARIA_LLM_MODEL_BRIEF"):
+                out[key] = grok_fallback
 
     vk = out.get("VIRTUALS_API_KEY") or ""
     if len(vk) < 10:

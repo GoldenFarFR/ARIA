@@ -44,9 +44,9 @@ class AriaRuntimeSettings(BaseSettings):
     llm_model: str = ""
     aria_spark_aggressive: bool = False
     aria_operator_founder_mode: bool = False
-    aria_llm_model_develop: str = "anthropic-claude-opus-4-8"
+    aria_llm_model_develop: str = "x-ai-grok-4-3"
     aria_llm_model_standard: str = "x-ai-grok-4-3"
-    aria_llm_model_brief: str = "deepseek-deepseek-v4-flash"
+    aria_llm_model_brief: str = "x-ai-grok-4-3"
     image_api_key: str = ""
     image_api_model: str = "grok-imagine-image"
     ollama_base_url: str = "http://127.0.0.1:11434"
