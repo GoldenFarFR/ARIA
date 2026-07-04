@@ -139,8 +139,8 @@ class Settings(BaseSettings):
 
     # X publication policy (pay-per-use cost control)
     x_post_enabled: bool = True
-    x_max_posts_per_day: int = 3
-    x_min_hours_between_posts: float = 4.0
+    x_max_posts_per_day: int = 0  # 0 = illimité (pas de quota journalier)
+    x_min_hours_between_posts: float = 0.0  # 0 = pas d'intervalle min entre posts
     x_monthly_budget_usd: float = 5.0  # abonnement / crédits console X
     x_monthly_spend_cap_usd: float = 1.0  # plafond dépense Aria (enforce)
     x_block_urls_in_posts: bool = True
@@ -178,7 +178,6 @@ class Settings(BaseSettings):
     aria_acp_provider_enabled: bool = False
     aria_acp_events_file: str = ""
     aria_acp_workflow_used_tweet: bool = True
-    aria_acp_workflow_tweet_allow_url: bool = True
     aria_qi_shadow_judge_enabled: bool = True
     aria_qi_judge_force_aria: bool = False
     aria_qi_judge_force_ouvrier: bool = False

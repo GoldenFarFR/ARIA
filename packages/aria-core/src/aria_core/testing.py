@@ -61,8 +61,8 @@ class AriaRuntimeSettings(BaseSettings):
     x_access_token: str = ""
     x_access_token_secret: str = ""
     x_post_enabled: bool = True
-    x_max_posts_per_day: int = 3
-    x_min_hours_between_posts: float = 4.0
+    x_max_posts_per_day: int = 0
+    x_min_hours_between_posts: float = 0.0
     x_monthly_budget_usd: float = 5.0
     x_monthly_spend_cap_usd: float = 1.0
     x_block_urls_in_posts: bool = True
@@ -107,7 +107,6 @@ class AriaRuntimeSettings(BaseSettings):
     aria_acp_provider_enabled: bool = False
     aria_acp_events_file: str = ""
     aria_acp_workflow_used_tweet: bool = True
-    aria_acp_workflow_tweet_allow_url: bool = True
     aria_qi_shadow_judge_enabled: bool = True
     aria_qi_judge_force_aria: bool = False
     aria_qi_judge_force_ouvrier: bool = False
