@@ -17,8 +17,9 @@ _LLM_ROUTING_RE = re.compile(
     r"moteur\s+(?:cloud|llm)\s+(?:actif|utilis)|"
     r"provider\s*=\s*virtuals|compute\.virtuals\.io|"
     r"virtuals\s+spark\s+pas\s+apache|apache\s+spark\s+pas|"
-    r"pr[eé]f[eè]res?|plut[oô]t|mieux.*(?:groq|spark|qwen|virtuals)|"
-    r"(?:groq|spark|qwen|virtuals)\b.*\b(?:ou|vs|versus)\b"
+    r"(?:pr[eé]f[eè]res?|plut[oô]t)\s*(?:groq|spark|qwen|virtuals|llm|moteur|provider|api)|"
+    r"mieux.*(?:groq|spark|qwen|virtuals)|"
+    r"(?:groq|spark|qwen|virtuals)\b.*\b(?:ou|vs|versus|plutôt|préfér)\b"
     r")",
     re.IGNORECASE,
 )
