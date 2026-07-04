@@ -15,6 +15,14 @@ from aria_core.skills.acp_offering_skill import load_offering_templates
 
 _SCAN_CACHE = memory_dir() / "acp_market_scan.json"
 
+_LEADERBOARD_RE = re.compile(
+    r"(?i)(?:"
+    r"leaderboard|leader\s*board|classement\s+acp|top\s+agents?\s+acp|"
+    r"quand.*(?:voir|vois|voit|appara[iî]t).*(?:leader|classement|top)|"
+    r"learderboard|leaderbord"
+    r")",
+)
+
 _MARKET_RE = re.compile(
     r"(?i)(?:"
     r"étud(?:e|ier).*(?:offre|demande|marketplace)|"
@@ -87,8 +95,109 @@ _GAP_SUGGESTIONS: dict[str, dict[str, str]] = {
 }
 
 
+def wants_acp_leaderboard(message: str) -> bool:
+    return bool(_LEADERBOARD_RE.search((message or "").strip()))
+
+
 def wants_acp_market_research(message: str) -> bool:
     return bool(_MARKET_RE.search((message or "").strip()))
+
+
+def _aria_agent_id() -> str:
+    cfg_path = Path(__file__).resolve().parents[1] / "knowledge" / "acp_config.yaml"
+    if cfg_path.is_file():
+        try:
+            import yaml
+
+            doc = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            aid = str(doc.get("agent_id") or "").strip()
+            if aid:
+                return aid
+        except Exception:
+            pass
+    return "019f0522-b57b-7e8e-a70a-aab2070e070e"
+
+
+async def execute_acp_leaderboard(message: str, lang: str = "fr") -> tuple[str, dict]:
+    """Position ARIA sur le leaderboard browse Virtuals — sans inventer de rang."""
+    lang_key = "fr" if lang == "fr" else "en"
+    aria_id = _aria_agent_id()
+
+    if not is_acp_available():
+        msg = (
+            "Leaderboard ACP : acp-cli indisponible (PATH ou login)."
+            if lang_key == "fr"
+            else "ACP leaderboard: acp-cli unavailable."
+        )
+        return msg, {"acp": "leaderboard_unavailable"}
+
+    agents, err = browse_agents("")
+    if err:
+        msg = (
+            f"Leaderboard ACP : browse en erreur — {err[:220]}"
+            if lang_key == "fr"
+            else f"ACP leaderboard browse error — {err[:220]}"
+        )
+        return msg, {"acp": "leaderboard_error", "error": err[:300]}
+
+    ranked = sorted(
+        agents or [],
+        key=lambda a: (
+            int(a.get("successfulJobCount") or a.get("jobCount") or 0),
+            int(a.get("uniqueBuyerCount") or a.get("buyerCount") or 0),
+        ),
+        reverse=True,
+    )
+
+    aria_row: dict[str, Any] | None = None
+    aria_rank: int | None = None
+    for idx, raw in enumerate(ranked, start=1):
+        aid = str(raw.get("id") or raw.get("agentId") or "")
+        name = str(raw.get("name") or raw.get("agentName") or "")
+        if aid == aria_id or "aria vanguard" in name.lower():
+            aria_row = _agent_metrics(raw)
+            aria_rank = idx
+            break
+
+    lines = ["═══ ACP LEADERBOARD ═══", ""]
+    if aria_row and int(aria_row.get("jobs") or 0) > 0:
+        lines.append(
+            f"ARIA : rang ~{aria_rank} — {aria_row['jobs']} job(s) livré(s), "
+            f"{aria_row['buyers']} acheteur(s) unique(s)."
+            if lang_key == "fr"
+            else f"ARIA: rank ~{aria_rank} — {aria_row['jobs']} delivered job(s), "
+            f"{aria_row['buyers']} unique buyer(s)."
+        )
+    else:
+        lines.extend(
+            [
+                "Pas encore visible dans le top browse — 0 job livré côté ARIA."
+                if lang_key == "fr"
+                else "Not visible in browse top yet — 0 delivered jobs for ARIA.",
+                "Premier job client payé livré = première marche sur le leaderboard."
+                if lang_key == "fr"
+                else "First paid delivered client job = first step on the leaderboard.",
+            ]
+        )
+
+    if ranked:
+        lines.extend(["", "Top agents (browse) :" if lang_key == "fr" else "", "Top agents (browse):"])
+        for raw in ranked[:5]:
+            row = _agent_metrics(raw)
+            lines.append(
+                f"  • {row['name']} — {row['jobs']} jobs — {row['buyers']} buyers"
+            )
+
+    append_memory(
+        "acp_market",
+        f"[leaderboard] rank={aria_rank} jobs={aria_row.get('jobs') if aria_row else 0}",
+    )
+    return "\n".join(lines), {
+        "acp": "leaderboard",
+        "aria_rank": aria_rank,
+        "aria_jobs": int((aria_row or {}).get("jobs") or 0),
+        "agent_count": len(ranked),
+    }
 
 
 def _load_cache() -> dict[str, Any]:
