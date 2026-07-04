@@ -31,6 +31,24 @@ _SOCIAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Broad casual / small talk detector — used to let operator chat naturally
+_CASUAL_SMALLTALK_RE = re.compile(
+    r"\b("
+    r"météo|il fait|temps|pleut|soleil|chaud|froid|"
+    r"mangé|bouffe|dîner|déjeuner|petit dej|café|"
+    r"blague|joke|rigole|rire|drôle|"
+    r"week.end|weekend|vacances|sortir|"
+    r"fatigué|fatigue|dormi|sommeil|matin|soir|"
+    r"ça va|comment ça va|tu vas bien|ta journée|ta soirée|"
+    r"quoi de neuf|quoi de beau|des news|"
+    r"animal|chat|chien|famille|copain|copine|"
+    r"film|série|musique|jeu|sport|"
+    r"voyage|ville|pays|"
+    r"aujourd'hui|demain|hier|ce soir"
+    r")\b",
+    re.IGNORECASE,
+)
+
 _GREETING_RE = re.compile(
     r"^\s*(bonjour|salut|hello|hi|hey|coucou|bonsoir|"
     r"good morning|good evening|good afternoon|gm|gn)\b",
@@ -164,9 +182,12 @@ async def build_verified_facts_block(
         for item in faq_matches:
             parts.append(f"Q: {item['question']}\nA: {item['answer'].strip()}")
 
-    parts.append("\n## [Holding]")
-    parts.append(f"Name: {holding_name()}")
-    parts.append(f"Summary: {one_liner(lang)}")
+    # Only inject holding summary for public or when the query is work-related.
+    # For pure small talk with operator, keep context minimal to avoid business reflex.
+    if public or not is_pure_casual_smalltalk(query):
+        parts.append("\n## [Holding]")
+        parts.append(f"Name: {holding_name()}")
+        parts.append(f"Summary: {one_liner(lang)}")
 
     try:
         from aria_core.knowledge.cognitive import get_approved
@@ -263,6 +284,24 @@ def is_social_chitchat(message: str) -> bool:
     return bool(_SOCIAL_RE.search(text))
 
 
+def is_pure_casual_smalltalk(message: str) -> bool:
+    """Broad small talk / daily life / jokes / weather etc.
+    For operator channel: we want natural relaxed answers, no business steering.
+    We allow simple questions ("il fait beau ?") as long as they match casual patterns.
+    """
+    text = (message or "").strip()
+    if not text:
+        return False
+    if is_greeting(text) or is_help_request(text):
+        return False
+    # Only reject if it's a serious factual question AND does not look like casual chit-chat
+    if is_factual_question(text) and not (_SOCIAL_RE.search(text) or _CASUAL_SMALLTALK_RE.search(text)):
+        return False
+    if _SOCIAL_RE.search(text) or _CASUAL_SMALLTALK_RE.search(text):
+        return True
+    return False
+
+
 def is_greeting(message: str) -> bool:
     text = message.strip()
     if not text:
@@ -326,18 +365,17 @@ async def has_sufficient_grounding(query: str) -> bool:
 
 
 def social_ack_reply(lang: str = "en") -> str:
+    """Warm ack for public visitors. Operator small talk should not hit this."""
     if lang == "fr":
         return (
-            "Merci — ça fait plaisir. La commu ZHC compte.\n\n"
-            "Je reste factuelle sur revenus et métriques, mais je suis là pour Vanguard, "
-            "le modèle ZHC et ce qu'on construit en public. "
-            "Une idée produit ? Décris le quoi et le pourquoi — on priorise ce qui renforce l'écosystème."
+            "Merci — ça fait plaisir.\n\n"
+            "Si tu veux parler produit, site ou stratégie, je suis là. "
+            "Sinon, dis-moi ce qui te passe par la tête."
         )
     return (
-        "Thanks — love the energy. The ZHC community matters.\n\n"
-        "I stay factual on revenue and metrics, but I'm here for Vanguard, the ZHC model, "
-        "and what we ship in public. "
-        "Got a product idea? Say what and why — we prioritize what strengthens the stack."
+        "Thanks — means a lot.\n\n"
+        "If you want to talk product, site or strategy I'm here. "
+        "Otherwise tell me what's on your mind."
     )
 
 
