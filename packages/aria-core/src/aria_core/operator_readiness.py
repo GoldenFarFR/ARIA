@@ -35,6 +35,23 @@ _GOAL_RE = re.compile(
     r"pour que tu (?:puisses?|peux|puisse)\s+(.+?)(?:[.?!,]|$)",
     re.IGNORECASE,
 )
+_STATUS_PULSE_RE = re.compile(
+    r"(?:"
+    r"rien\s+de\s+nouveau(?:\s+(?:a|à)\s+)?(?:d[eé]clar|signal|rapporter)?"
+    r"|quoi\s+de\s+neuf"
+    r"|(?:y\s*['']?a[- ]?t[- ]?il|as[- ]?tu)\s+quelque\s+chose\s+(?:a|à)\s+"
+    r"(?:d[eé]clar|signal|rapporter)"
+    r"|(?:something|anything)\s+new\s+to\s+report"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def wants_operator_status_pulse(message: str) -> bool:
+    text = (message or "").strip()
+    if len(text) < 10:
+        return False
+    return bool(_STATUS_PULSE_RE.search(text))
 
 
 def wants_operator_readiness(message: str) -> bool:
@@ -204,6 +221,60 @@ async def _maybe_act_on_gaps(
         except Exception as exc:
             actions.append(f"Cap-gap {cap_id} : {exc.__class__.__name__}")
     return actions
+
+
+async def execute_operator_status_pulse(message: str, *, lang: str = "fr") -> tuple[str, dict[str, Any]]:
+    """Pulse opérateur — file ouvrier, santé locale, journal (sans web)."""
+    gaps, ok_items = await collect_readiness_gaps()
+    lang_key = "fr" if lang == "fr" else "en"
+    lines: list[str] = []
+
+    if lang_key == "fr":
+        lines.append("Pulse opérateur — sources locales (pas de web)")
+        lines.append("")
+        if gaps:
+            lines.append("À signaler :")
+            for g in gaps:
+                lines.append(f"  • {g['label']}")
+                if g.get("worker"):
+                    lines.append(f"    → {g['worker']}")
+        else:
+            lines.append("Rien de nouveau à déclarer — tout est calme côté ARIA.")
+        if ok_items:
+            lines.append("")
+            lines.append("OK :")
+            lines.extend(f"  ✓ {item}" for item in ok_items[:6])
+    else:
+        lines.append("Operator pulse — local sources (no web)")
+        if gaps:
+            lines.extend(f"  • {g['label']}" for g in gaps)
+        else:
+            lines.append("Nothing new to report — ARIA stack looks quiet.")
+        lines.extend(f"  OK {item}" for item in ok_items[:6])
+
+    try:
+        from aria_core.memory import get_journal_summary
+
+        journal = (get_journal_summary() or "").strip()
+        if journal:
+            tail = "\n".join(journal.splitlines()[-4:])
+            if lang_key == "fr":
+                lines.append("")
+                lines.append("Journal (fin) :")
+            else:
+                lines.append("")
+                lines.append("Journal (tail) :")
+            lines.append(tail[:500])
+    except Exception:
+        pass
+
+    data = {
+        "operator_status_pulse": True,
+        "gaps": gaps,
+        "ok": ok_items,
+        "skip_web": True,
+    }
+    return "\n".join(lines), data
 
 
 async def execute_operator_readiness(message: str, *, lang: str = "fr") -> tuple[str, dict[str, Any]]:
