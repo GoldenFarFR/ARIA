@@ -2,9 +2,9 @@
 
 Cerveau autonome **Aria Vanguard ZHC** : API, site, skills, intégration ACP.
 
-**Ops privées** (coffre, deploy, mémoire) : repo [`GoldenFarFR/aria-ops`](https://github.com/GoldenFarFR/aria-ops) — accès restreint.
+**Livraison Spark (preuve Virtuals)** : [`GoldenFarFR/aria-acp-showcase`](https://github.com/GoldenFarFR/aria-acp-showcase) · PR Showcase : [`acp-cli-demos/showcase/aria-vanguard-zhc`](https://github.com/GoldenFarFR/acp-cli-demos/tree/showcase/aria-vanguard-zhc)
 
-**Showcase Virtual Protocol** : [`GoldenFarFR/aria-acp-showcase`](https://github.com/GoldenFarFR/aria-acp-showcase)
+**Ops privées** (coffre, deploy, mémoire) : [`GoldenFarFR/aria-ops`](https://github.com/GoldenFarFR/aria-ops) — accès restreint.
 
 ## Structure (ce repo)
 
