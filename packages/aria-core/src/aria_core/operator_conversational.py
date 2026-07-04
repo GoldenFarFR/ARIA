@@ -17,8 +17,10 @@ _COMPETENCE_IMPROVE_RE = re.compile(
 
 _INJECTED_CLAIM_RE = re.compile(
     r"(?:"
-    r"supprim[ée]|annonce|facture|facturation|passe[r]?\s+en|vient\s+de|désormais|"
+    r"supprim[ée]|coup[ée]|annonce|facture|facturation|passe[r]?\s+en|vient\s+de|désormais|"
+    r"depuis\s+(?:hier|aujourd|ce\s+matin)|effective|impos[ée]|obligatoire|"
     r"effective|augment|baisse|gratuit\s+illimit|étoiles?|uptime|contribut|"
+    r"tweets?\s+automatiques|livré|livr[ée]|usdc|2fa|"
     r"merg[ée]|déploy[ée]|commit\s+[a-f0-9]{6,}|"
     r"\d+\s*%|\d+[\s,.]?\d*\s*(?:\$|€|usd|usdc)|"
     r"le\s+\d{1,2}\s+(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|"
