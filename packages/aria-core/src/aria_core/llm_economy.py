@@ -85,16 +85,18 @@ def depth_system_instruction(lang: str, depth: LlmDepth) -> str:
     if depth == LlmDepth.DEVELOP:
         if lang == "fr":
             return (
-                "MODE DÉVELOPPÉ : réponse structurée et complète si le sujet le demande. "
-                "Pas de remplissage inutile."
+                "MODE DÉVELOPPÉ : verdict en tête, puis détail factuel. "
+                "Chaque section a du contenu ou est omise — jamais de puces/titres vides, "
+                "jamais de scorecard ou % sans source. Pas de remplissage."
             )
         return (
-            "DEVELOP MODE: structured, complete answer when the topic warrants it. "
-            "No filler."
+            "DEVELOP MODE: lead with verdict, then factual detail. "
+            "Every section has content or is omitted — never empty bullets/headings, "
+            "never scorecards or percentages without sources. No filler."
         )
     if lang == "fr":
         return (
-            "CONCISION : réponse courte et pertinente (2–5 phrases). "
+            "CONCISION : verdict + 2–5 phrases utiles (pas de coquille vide). "
             "Tu peux répondre par une question si ça clarifie (style Socrate) — "
             "jusqu'à ce que Sylvain dise « ok vazy » ou « si c'est bénéfique tu peux ». "
             "Ne développe pas sans demande explicite."
