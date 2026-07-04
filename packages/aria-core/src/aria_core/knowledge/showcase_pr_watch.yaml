@@ -1,0 +1,17 @@
+# Watched external PR threads — auto-reply when Virtuals / reviewers comment.
+# Requires GITHUB_TOKEN (public_repo or repo scope).
+
+version: 1
+
+targets:
+  - id: acp-showcase-37
+    owner: Virtual-Protocol
+    repo: acp-cli-demos
+    pr_number: 37
+    enabled: true
+    our_logins:
+      - GoldenFarFR
+      - cursoragent
+    agent_id: "019f0522-b57b-7e8e-a70a-aab2070e070e"
+    agent_email: aria_vanguard_zhc@agents.world
+    offering: analyse_lite_x1
