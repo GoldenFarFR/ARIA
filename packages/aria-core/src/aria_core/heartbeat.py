@@ -152,6 +152,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="acp_email_watch",
+        name="ACP email job watch",
+        description="Poll agents.world inbox — alertes jobs (mode dégradé Virtuals Privy 500)",
+        interval_minutes=10,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="revenue_autonomy",
         name="Revenue autonomy cycle",
         description="Poll ACP, scan marché, promo X, initiative — sans relance opérateur",
@@ -230,6 +237,10 @@ def _sync_x_curiosity_enabled() -> None:
                 and bool((getattr(settings, "aria_acp_events_file", None) or "").strip())
             )
         if task.id == "acp_market_scan":
+            from aria_core.skills.acp_cli import is_acp_available
+
+            task.enabled = is_acp_available()
+        if task.id == "acp_email_watch":
             from aria_core.skills.acp_cli import is_acp_available
 
             task.enabled = is_acp_available()
@@ -519,6 +530,27 @@ class AriaHeartbeat:
                     f"ACP provider — {result.get('processed')} job(s) traité(s)\n"
                     f"Actions : {', '.join(result.get('actions') or [])}"
                 )
+
+        elif task_id == "acp_email_watch":
+            from aria_core.skills.acp_email_watcher import run_email_watch
+
+            watch = await run_email_watch()
+            alerts = watch.get("new_alerts") or []
+            if alerts:
+                append_memory(
+                    "acp_email",
+                    f"[heartbeat] {len(alerts)} alerte(s) job email",
+                )
+                for alert in alerts[:3]:
+                    jids = ", ".join(alert.get("job_ids") or []) or "?"
+                    body = (
+                        f"ACP email — job détecté\n"
+                        f"Sujet : {alert.get('subject', '?')[:120]}\n"
+                        f"Job(s) : {jids}\n"
+                        f"Commande : préparer job acp {jids.split(',')[0] if jids != '?' else '<id>'} "
+                        f"offre {alert.get('offering') or 'analyse_lite_x1'}"
+                    )
+                    await self._notify_telegram(body[:1500])
 
         elif task_id == "acp_market_scan":
             from aria_core.skills.acp_market_intelligence import run_market_scan

@@ -33,6 +33,14 @@ from aria_core.skills.acp_market_intelligence import (
     execute_acp_market_research,
     wants_acp_market_research,
 )
+from aria_core.skills.acp_email_watcher import (
+    execute_acp_email_watch,
+    wants_acp_email_watch,
+)
+from aria_core.skills.acp_prepare_skill import (
+    execute_acp_prepare,
+    wants_acp_prepare,
+)
 from aria_core.skills.acp_provider_skill import default_events_file, run_provider_cycle
 
 _ACP_RE = re.compile(
@@ -42,7 +50,7 @@ _ACP_RE = re.compile(
 
 _STATUS_RE = re.compile(r"\bacp\s+status\b|état\s+acp|status\s+acp", re.I)
 _POLL_RE = re.compile(
-    r"traiter\s+jobs?\s+acp|poll\s+acp|drain\s+acp|jobs?\s+acp",
+    r"traiter\s+jobs?\s+acp|poll\s+acp|drain\s+acp",
     re.I,
 )
 _BROWSE_RE = re.compile(r"\bbrowse\b|\bparcourir\b|offres?\s+disponibles", re.I)
@@ -71,6 +79,10 @@ def wants_acp_marketplace(message: str) -> bool:
     if _WORKFLOW_REVENUE_RE.search(text):
         return True
     if wants_acp_market_research(text):
+        return True
+    if wants_acp_prepare(text):
+        return True
+    if wants_acp_email_watch(text):
         return True
     if wants_acp_client_action(text):
         return True
@@ -139,7 +151,8 @@ async def _format_status(lang: str) -> tuple[str, dict]:
                 f"Provider poll : {'ON' if provider_on else 'OFF'} (ARIA_ACP_PROVIDER_ENABLED)",
                 f"Events file : {lines_count} lignes — {events_path}",
                 "",
-                "Commandes : acp status | traiter jobs acp | browse offerings | plan revenus acp",
+                "Commandes : acp status | traiter jobs acp | préparer job acp | surveiller email acp",
+                "Dégradé Virtuals : préparer job acp 0x… → coller JSON dans Hermès",
                 "Workflows : templates offres acp | créer offre acp template <nom>",
                 "Lancement : lancer produit acp template <nom> et publier sur X",
                 "Démarrage local : vanguard\\operator\\start-acp-local.ps1",
@@ -219,6 +232,12 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
     if _STATUS_RE.search(text) or re.search(r"^acp\s*$", text, re.I):
         return await _format_status(lang_key)
 
+    if wants_acp_prepare(text):
+        return await execute_acp_prepare(text, lang_key)
+
+    if wants_acp_email_watch(text):
+        return await execute_acp_email_watch(text, lang_key)
+
     if _POLL_RE.search(text):
         result = await run_provider_cycle()
         if lang_key == "fr":
@@ -293,7 +312,9 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
             "• financer / approuver / rejeter job acp <id>\n"
             "• trade acp swap 10 USDC contre ETH — acp trade\n"
             "• négocier abonnement acp — aria_full_access\n"
-            "• scan marché acp — étudier offre/demande + gaps workflows\n\n"
+            "• scan marché acp — étudier offre/demande + gaps workflows\n"
+            "• préparer job acp 0x… offre analyse_lite_x1 contract 0x… — livrable JSON (Hermès)\n"
+            "• surveiller email acp — alertes jobs via agents.world\n\n"
             "Lance : vanguard\\operator\\start-acp-local.ps1",
             {"acp": "help"},
         )
