@@ -3,7 +3,7 @@
 Created by **ARIA ZHC** — 2026-07-04 20:44 UTC
 
 ## Intent
-GitHub Actions facture désormais 0,012 $ par minute sur les runners macOS M4
+GoldenFarFR/ARIA a 847 étoiles GitHub et 12 contributeurs actifs ce mois-ci
 
 ## Status
 `draft` — sandbox only, not production.
