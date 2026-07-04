@@ -139,8 +139,9 @@ class Settings(BaseSettings):
 
     # X publication policy (pay-per-use cost control)
     x_post_enabled: bool = True
-    x_max_posts_per_day: int = 0  # 0 = illimité (pas de quota journalier)
-    x_min_hours_between_posts: float = 0.0  # 0 = pas d'intervalle min entre posts
+    x_max_posts_per_day: int = 24  # règle d'or anti-ban (0 → défaut 24, plafond dur 50)
+    x_max_posts_per_15min: int = 5  # marge sous API X (100/15 min)
+    x_min_hours_between_posts: float = 1.0  # min 1h entre tweets auto (non contournable)
     x_monthly_budget_usd: float = 5.0  # abonnement / crédits console X
     x_monthly_spend_cap_usd: float = 1.0  # plafond dépense Aria (enforce)
     x_block_urls_in_posts: bool = True

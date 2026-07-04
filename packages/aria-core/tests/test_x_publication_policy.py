@@ -1,8 +1,10 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 from aria_core.x_publication_policy import (
     LEDGER_PATH,
     X_COST_USD,
+    X_SAFE_MAX_POSTS_PER_15MIN,
     _estimate_tweet_cost,
     _save_ledger,
     check_engagement_allowed,
@@ -11,6 +13,7 @@ from aria_core.x_publication_policy import (
     check_tweet_content,
     list_published_tweets,
     record_tweet_posted,
+    record_x_rate_limit,
 )
 
 
@@ -107,6 +110,54 @@ def test_list_published_tweets_reads_ledger(tmp_path, monkeypatch):
     posts = list_published_tweets(limit=5)
     assert posts[0]["tweet_id"] == "b"
     assert posts[1]["text"] == "Older tweet?"
+
+
+def test_platform_15min_cap_blocks(monkeypatch, tmp_path):
+    from aria_core import x_publication_policy as mod
+
+    ledger_path = tmp_path / "x_api_ledger.json"
+    monkeypatch.setattr(mod, "LEDGER_PATH", ledger_path)
+    now = datetime.now(timezone.utc)
+    posts = [
+        {
+            "at": (now - timedelta(minutes=i * 2)).isoformat(),
+            "kind": "tweet",
+            "text": f"Tweet number {i}",
+            "cost_usd": 0.015,
+        }
+        for i in range(X_SAFE_MAX_POSTS_PER_15MIN)
+    ]
+    _save_ledger({"posts": posts, "estimated_spend_usd": 0.075})
+    allowed, reason, _ = check_tweet_allowed("Another safe tweet for platform test.")
+    assert not allowed
+    assert "15 min" in reason
+
+
+def test_duplicate_tweet_blocked_within_48h(monkeypatch, tmp_path):
+    from aria_core import x_publication_policy as mod
+
+    ledger_path = tmp_path / "x_api_ledger.json"
+    monkeypatch.setattr(mod, "LEDGER_PATH", ledger_path)
+    text = "Building in public with Aria Vanguard ZHC on Base."
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    _save_ledger({
+        "posts": [{"at": old, "kind": "tweet", "text": text, "cost_usd": 0.015}],
+        "estimated_spend_usd": 0.015,
+    })
+    allowed, reason, _ = check_tweet_allowed(text, force=True)
+    assert not allowed
+    assert "duplicata" in reason.lower() or "identique" in reason.lower()
+
+
+def test_rate_limit_cooldown_blocks(monkeypatch, tmp_path):
+    from aria_core import x_publication_policy as mod
+
+    ledger_path = tmp_path / "x_api_ledger.json"
+    monkeypatch.setattr(mod, "LEDGER_PATH", ledger_path)
+    record_x_rate_limit(wait_seconds=3600)
+    allowed, reason, _ = check_tweet_allowed("Safe tweet after API 429 cooldown.")
+    assert not allowed
+    assert "429" in reason or "rate limit" in reason.lower()
 
 
 def test_spend_cap_blocks_when_exceeded(monkeypatch):

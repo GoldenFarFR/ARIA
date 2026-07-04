@@ -124,6 +124,17 @@ def _post_tweet_sync(
         timeout=30,
     )
     data = response.json() if response.content else {}
+    if response.status_code == 429:
+        from aria_core.x_publication_policy import record_x_rate_limit
+
+        reset_raw = response.headers.get("x-rate-limit-reset")
+        try:
+            reset_ts = int(reset_raw) if reset_raw else None
+        except (TypeError, ValueError):
+            reset_ts = None
+        record_x_rate_limit(reset_ts=reset_ts)
+        err = data.get("detail") or data.get("title") or response.text[:300]
+        raise RuntimeError(f"X API 429 rate limit: {err}")
     if response.status_code not in (200, 201):
         err = data.get("detail") or data.get("title") or response.text[:300]
         raise RuntimeError(f"X API {response.status_code}: {err}")

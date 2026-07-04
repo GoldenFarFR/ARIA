@@ -14,6 +14,17 @@ from aria_core.paths import memory_dir
 POLICY_PATH = memory_dir() / "x_publication_policy.md"
 LEDGER_PATH = memory_dir() / "x_api_ledger.json"
 
+# X API v2 POST /2/tweets — docs.x.com/fundamentals/rate-limits (2026)
+X_API_POST_PER_USER_15MIN = 100
+X_API_POST_PER_APP_24H = 10000
+
+# Règle d'or anti-ban — plus strict que l'API, jamais contournée (force/skip_rate_gap)
+X_SAFE_MAX_POSTS_PER_15MIN = 5
+X_SAFE_MAX_POSTS_PER_DAY = 24
+X_SAFE_MAX_POSTS_PER_DAY_HARD = 50
+X_SAFE_MIN_MINUTES_BETWEEN = 60
+X_SAFE_DUPLICATE_HOURS = 48
+
 # Official X pay-per-use (USD) — docs.x.com 2026
 X_COST_USD = {
     "tweet": 0.015,
@@ -45,16 +56,35 @@ def _parse_ts(raw: str) -> datetime:
     return datetime.fromisoformat(raw.replace("Z", "+00:00"))
 
 
+def _tweet_posts(ledger: dict[str, Any]) -> list[dict]:
+    return [p for p in ledger.get("posts", []) if p.get("kind") == "tweet"]
+
+
 def _posts_today(ledger: dict[str, Any]) -> list[dict]:
     today = datetime.now(timezone.utc).date()
     out = []
-    for p in ledger.get("posts", []):
+    for p in _tweet_posts(ledger):
         try:
             if _parse_ts(p["at"]).date() == today:
                 out.append(p)
         except Exception:
             continue
     return out
+
+
+def _posts_since(ledger: dict[str, Any], since: datetime) -> list[dict]:
+    out = []
+    for p in _tweet_posts(ledger):
+        try:
+            if _parse_ts(p["at"]) >= since:
+                out.append(p)
+        except Exception:
+            continue
+    return out
+
+
+def _normalize_tweet_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
 
 
 def _last_post_at(ledger: dict[str, Any]) -> datetime | None:
@@ -100,24 +130,128 @@ def _monthly_spend_cap_usd() -> float:
     return min(settings.x_monthly_spend_cap_usd, settings.x_monthly_budget_usd)
 
 
-def _daily_quota_active() -> bool:
-    return settings.x_max_posts_per_day > 0
+def _effective_daily_limit() -> int:
+    raw = int(getattr(settings, "x_max_posts_per_day", 0) or 0)
+    desired = raw if raw > 0 else X_SAFE_MAX_POSTS_PER_DAY
+    return min(desired, X_SAFE_MAX_POSTS_PER_DAY_HARD)
 
 
-def _min_gap_active() -> bool:
-    return settings.x_min_hours_between_posts > 0
+def _effective_15min_limit() -> int:
+    raw = int(getattr(settings, "x_max_posts_per_15min", 0) or 0)
+    desired = raw if raw > 0 else X_SAFE_MAX_POSTS_PER_15MIN
+    return min(desired, X_SAFE_MAX_POSTS_PER_15MIN)
+
+
+def _effective_min_gap_hours() -> float:
+    raw = float(getattr(settings, "x_min_hours_between_posts", 0) or 0)
+    desired = raw if raw > 0 else (X_SAFE_MIN_MINUTES_BETWEEN / 60)
+    return max(desired, X_SAFE_MIN_MINUTES_BETWEEN / 60)
 
 
 def _format_daily_limit(lang: str = "fr") -> str:
-    if not _daily_quota_active():
-        return "illimité" if lang == "fr" else "unlimited"
-    return str(settings.x_max_posts_per_day)
+    return str(_effective_daily_limit())
 
 
 def _format_min_gap(lang: str = "fr") -> str:
-    if not _min_gap_active():
-        return "aucun" if lang == "fr" else "none"
-    return f"{settings.x_min_hours_between_posts}h"
+    hrs = _effective_min_gap_hours()
+    if hrs >= 1:
+        return f"{hrs:g}h"
+    mins = int(hrs * 60)
+    return f"{mins} min" if lang == "en" else f"{mins} min"
+
+
+def _format_15min_limit() -> str:
+    return str(_effective_15min_limit())
+
+
+def _api_rate_limit_blocked() -> tuple[bool, str]:
+    raw = (_load_ledger().get("rate_limit") or {}).get("until")
+    if not raw:
+        return False, "OK"
+    try:
+        until = _parse_ts(str(raw))
+    except Exception:
+        return False, "OK"
+    now = datetime.now(timezone.utc)
+    if now < until:
+        wait_min = max(1, int((until - now).total_seconds() // 60))
+        return (
+            True,
+            f"API X rate limit (429) — reprendre dans ~{wait_min} min (règle d'or anti-ban).",
+        )
+    return False, "OK"
+
+
+def record_x_rate_limit(*, reset_ts: int | None = None, wait_seconds: int = 900) -> None:
+    """Persiste un cooldown après 429 — évite ban en rafale."""
+    ledger = _load_ledger()
+    now = datetime.now(timezone.utc)
+    if reset_ts and reset_ts > 0:
+        until = datetime.fromtimestamp(reset_ts, tz=timezone.utc)
+    else:
+        until = now + timedelta(seconds=max(wait_seconds, 60))
+    if until <= now:
+        until = now + timedelta(seconds=900)
+    ledger["rate_limit"] = {
+        "until": until.isoformat(),
+        "recorded_at": now.isoformat(),
+        "reset_ts": reset_ts,
+    }
+    _save_ledger(ledger)
+
+
+def _check_platform_safety(
+    ledger: dict[str, Any],
+    body: str,
+) -> tuple[bool, str]:
+    """Garde-fous plateforme X — jamais contournés (règle d'or : pas de ban)."""
+    blocked, reason = _api_rate_limit_blocked()
+    if blocked:
+        return False, reason
+
+    now = datetime.now(timezone.utc)
+    posts_15m = _posts_since(ledger, now - timedelta(minutes=15))
+    cap_15 = _effective_15min_limit()
+    if len(posts_15m) >= cap_15:
+        return (
+            False,
+            f"Limite X anti-spam : max {cap_15} tweets / 15 min "
+            f"(API autorise {X_API_POST_PER_USER_15MIN}/15 min — marge sécurité).",
+        )
+
+    posts_today = _posts_today(ledger)
+    cap_day = _effective_daily_limit()
+    if len(posts_today) >= cap_day:
+        return (
+            False,
+            f"Limite X anti-spam : max {cap_day} tweets / jour (règle d'or compte automatisé).",
+        )
+
+    last = _last_post_at(ledger)
+    if last:
+        gap = now - last
+        need = timedelta(hours=_effective_min_gap_hours())
+        if gap < need:
+            wait = need - gap
+            mins = max(1, int(wait.total_seconds() // 60))
+            return (
+                False,
+                f"Intervalle min X : attendre encore ~{mins} min entre deux tweets auto.",
+            )
+
+    norm = _normalize_tweet_text(body)
+    if norm:
+        since = now - timedelta(hours=X_SAFE_DUPLICATE_HOURS)
+        for p in _posts_since(ledger, since):
+            prev = _normalize_tweet_text(str(p.get("text") or p.get("preview") or ""))
+            if prev and prev == norm:
+                return (
+                    False,
+                    f"Tweet identique déjà publié dans les {X_SAFE_DUPLICATE_HOURS}h "
+                    "(duplicata = risque spam/ban X).",
+                )
+
+    return True, "OK"
 
 
 def _check_monthly_spend(ledger: dict[str, Any], cost: float, *, force: bool) -> tuple[bool, str]:
@@ -165,7 +299,8 @@ def policy_rules_for_llm(lang: str = "en") -> str:
             "- Anglais uniquement sur X (pas de tweet français).\n"
             "- Pas d'URL (coût 0,20 $ vs 0,015 $).\n"
             "- Interdit : $X, pump, moon, 100x, buy now, NFA, conseil financier, hype prix.\n"
-            "- Pas de quota journalier ni d'intervalle min (budget API seulement).\n"
+            "- Règle d'or : jamais ban/suspend — max ~24 tweets/jour, 1h entre posts, "
+            "5/15 min, pas de duplicata 48h, jamais d'URL auto.\n"
             "- Ton : building in public, faits vérifiés, Vanguard ZHC — pas de shill.\n"
             "- @mentions : alias +veille / @holding OK (expansion auto)."
         )
@@ -174,7 +309,8 @@ def policy_rules_for_llm(lang: str = "en") -> str:
         "- English only on X (no French tweets).\n"
         "- No URLs ($0.20 vs $0.015 per tweet).\n"
         "- Forbidden: $X, pump, moon, 100x, buy now, NFA, financial advice, price hype.\n"
-        "- No daily quota or min gap (API spend cap only).\n"
+        "- Golden rule: never risk ban/suspend — ~24 tweets/day max, 1h gap, 5/15min, "
+        "no duplicate within 48h, no auto URLs.\n"
         "- Tone: building in public, verified facts, Vanguard ZHC — no shill.\n"
         "- Voice: natural human prose — no AI/agent/CAO character (see x_voice rules).\n"
         "- @mentions: +veille / @holding aliases OK (auto-expanded)."
@@ -201,8 +337,11 @@ def policy_summary(lang: str = "fr") -> str:
     if lang == "fr":
         return (
             f"Politique X {handle} (pay-per-use)\n\n"
-            f"- Tweets max / jour : {_format_daily_limit('fr')}\n"
+            f"- Règle d'or : pas de ban/suspend (compte automatisé)\n"
+            f"- Tweets max / jour : {_format_daily_limit('fr')} (plafond dur {X_SAFE_MAX_POSTS_PER_DAY_HARD})\n"
+            f"- Tweets max / 15 min : {_format_15min_limit()} (API X : {X_API_POST_PER_USER_15MIN})\n"
             f"- Intervalle min : {_format_min_gap('fr')}\n"
+            f"- Duplicata : bloqué {X_SAFE_DUPLICATE_HOURS}h\n"
             f"- Abonnement X : {settings.x_monthly_budget_usd:.2f} $/mois\n"
             f"- Plafond dépense Aria : {settings.x_monthly_spend_cap_usd:.2f} $/mois (actif)\n"
             f"- URLs dans tweets : {'bloquées' if settings.x_block_urls_in_posts else 'autorisées'} "
@@ -214,8 +353,8 @@ def policy_summary(lang: str = "fr") -> str:
             f"- Fichier : data/memory/x_publication_policy.md"
         )
     return (
-        f"X policy {handle} — max {_format_daily_limit('en')}/day, "
-        f"{_format_min_gap('en')} gap, "
+        f"X policy {handle} — golden rule anti-ban, max {_format_daily_limit('en')}/day, "
+        f"{_format_15min_limit()}/15min, {_format_min_gap('en')} gap, "
         f"${settings.x_monthly_spend_cap_usd:.2f}/mo spend cap "
         f"(${settings.x_monthly_budget_usd:.2f} subscription)."
     )
@@ -316,22 +455,9 @@ def check_tweet_allowed(
         return False, f"Contenu bloqué ({content_reason}).", cost
 
     ledger = _load_ledger()
-    today_posts = _posts_today(ledger)
-    if _daily_quota_active() and len(today_posts) >= settings.x_max_posts_per_day and not force:
-        return (
-            False,
-            f"Quota journalier atteint ({settings.x_max_posts_per_day} tweets/jour).",
-            cost,
-        )
-
-    last = _last_post_at(ledger)
-    if _min_gap_active() and last and not force and not skip_rate_gap:
-        gap = datetime.now(timezone.utc) - last
-        need = timedelta(hours=settings.x_min_hours_between_posts)
-        if gap < need:
-            wait = need - gap
-            hrs = wait.total_seconds() / 3600
-            return False, f"Attendre encore {hrs:.1f}h entre deux publications.", cost
+    ok_platform, platform_reason = _check_platform_safety(ledger, body)
+    if not ok_platform:
+        return False, platform_reason, cost
 
     ok, reason = _check_monthly_spend(ledger, cost, force=force)
     if not ok:
@@ -387,6 +513,11 @@ def ledger_summary() -> dict[str, Any]:
     ledger = _load_ledger()
     return {
         "posts_today": len(_posts_today(ledger)),
+        "posts_last_15min": len(_posts_since(ledger, datetime.now(timezone.utc) - timedelta(minutes=15))),
+        "daily_limit": _effective_daily_limit(),
+        "limit_15min": _effective_15min_limit(),
+        "min_gap_hours": _effective_min_gap_hours(),
+        "rate_limit_until": (ledger.get("rate_limit") or {}).get("until"),
         "estimated_spend_usd": ledger.get("estimated_spend_usd", 0),
         "spend_cap_usd": _monthly_spend_cap_usd(),
         "subscription_usd": settings.x_monthly_budget_usd,
@@ -415,9 +546,12 @@ def ensure_policy_file() -> None:
         "| Lire tes propres posts | 0,001 $ |\n\n"
         "**Oui — likes, réponses et DM coûtent chacun ~0,015 $ via l'API.**\n"
         "Ils restent désactivés par défaut (pas de ROI vs tweets originaux).\n\n"
-        "## Quotas & budget (.env)\n"
-        "- `X_MAX_POSTS_PER_DAY=0` — 0 = illimité (pas de quota journalier)\n"
-        "- `X_MIN_HOURS_BETWEEN_POSTS=0` — 0 = pas d'intervalle min\n"
+        "## Règle d'or & quotas plateforme X (.env)\n"
+        "- Jamais ban/suspend — limites anti-spam **non contournables**\n"
+        f"- `X_MAX_POSTS_PER_DAY` — défaut {X_SAFE_MAX_POSTS_PER_DAY}, plafond dur {X_SAFE_MAX_POSTS_PER_DAY_HARD}\n"
+        f"- `X_MAX_POSTS_PER_15MIN` — défaut {X_SAFE_MAX_POSTS_PER_15MIN} (API : {X_API_POST_PER_USER_15MIN}/15 min)\n"
+        f"- `X_MIN_HOURS_BETWEEN_POSTS` — défaut 1h (min {X_SAFE_MIN_MINUTES_BETWEEN} min)\n"
+        f"- Duplicata identique bloqué {X_SAFE_DUPLICATE_HOURS}h\n"
         "- `X_MONTHLY_BUDGET_USD=5` — abonnement / crédits console X\n"
         "- `X_MONTHLY_SPEND_CAP_USD=1` — plafond dépense Aria (pour l'instant)\n"
         "- `X_BLOCK_URLS_IN_POSTS=true` — jamais d'URL dans tweets auto (0,20 $/tweet)\n"

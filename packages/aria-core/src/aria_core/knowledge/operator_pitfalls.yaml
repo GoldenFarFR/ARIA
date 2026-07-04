@@ -285,6 +285,22 @@ new_pc_checklist:
       Copier-coller bearerToken/apiKey dans .env ou dans le chat ; dupliquer manuellement
       les memes secrets dans plusieurs fichiers.
 
+  - id: x-automation-golden-rule
+    severity: critical
+    lesson: >
+      Compte @Aria_ZHC automatisé : la règle d'or est de ne jamais se faire suspendre ou bannir.
+      L'API X autorise jusqu'à 100 POST /2/tweets par 15 min (OAuth user), mais le spam ou les
+      rafales déclenchent 429 puis risque de restriction compte. ARIA applique des plafonds plus
+      stricts (5/15 min, 24/jour, 1h entre posts, pas de duplicata 48h, jamais d'URL auto).
+    fix: >
+      Respecter x_publication_policy.py (golden rule non contournable). Après 429, cooldown
+      automatique via x-rate-limit-reset. Ne pas monter X_MAX_POSTS_PER_DAY au-delà de 50.
+      Publier via intent URL si urgence opérateur hors quota.
+    verify: "/x policy — limites affichées ; tweet auto bloqué si <1h depuis dernier post"
+    never: >
+      Rafale de tweets promo ACP, URLs dans tweets auto (~0,20 $ + spam), ou bypass force=True
+      des garde-fous plateforme.
+
 repos_ssot:
   brain: GoldenFarFR/aria-sandbox/packages/aria-core
   deploy_host: GoldenFarFR/aria-vanguard
