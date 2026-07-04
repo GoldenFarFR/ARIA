@@ -1,4 +1,4 @@
-"""SSOT écosystème GoldenFar — coffre, propagation, vérification alignement."""
+"""GoldenFar ecosystem SSOT — vault merge, propagation, alignment checks."""
 from __future__ import annotations
 
 import json
@@ -50,7 +50,7 @@ def vault_root() -> Path:
 
 
 def read_merged_vault_env() -> dict[str, str]:
-    """local.env puis production.env — même merge que Import-AriaVaultEnv."""
+    """local.env then production.env — same merge as Import-AriaVaultEnv."""
     overlay = prod_overlay_keys()
     root = vault_root()
     out: dict[str, str] = {}
@@ -85,7 +85,7 @@ def _expand_path(raw: str) -> str:
 
 
 def resolve_path_defaults(merged: dict[str, str] | None = None) -> dict[str, str]:
-    """ARIA_REPO_ROOT + DATA_DIR dérivés si absents."""
+    """Derive ARIA_REPO_ROOT + DATA_DIR when missing."""
     reg = load_registry()
     deriv = reg.get("path_derivations") or {}
     base = dict(merged or read_merged_vault_env())
@@ -103,7 +103,7 @@ def resolve_path_defaults(merged: dict[str, str] | None = None) -> dict[str, str
 
 
 def propagate_operator_env(merged: dict[str, str] | None = None) -> dict[str, str]:
-    """Aligne les variables liées — une modif entraîne les dérivées."""
+    """Align linked env vars — one change propagates derived keys."""
     reg = load_registry()
     out = resolve_path_defaults(merged)
     defaults = registry_defaults()
@@ -159,7 +159,7 @@ def propagate_operator_env(merged: dict[str, str] | None = None) -> dict[str, st
 
 
 def apply_operator_env(merged: dict[str, str] | None = None) -> dict[str, str]:
-    """Injecte le coffre propagé dans os.environ (session KART / scripts)."""
+    """Inject propagated vault into os.environ (KART session / scripts)."""
     resolved = propagate_operator_env(merged)
     for key, val in resolved.items():
         if val and not os.environ.get(key):
@@ -168,7 +168,7 @@ def apply_operator_env(merged: dict[str, str] | None = None) -> dict[str, str]:
 
 
 def export_registry_json(target: Path) -> Path:
-    """Export pour PowerShell (prod_overlay_keys, defaults)."""
+    """Export for PowerShell (prod_overlay_keys, defaults)."""
     reg = load_registry()
     payload = {
         "version": reg.get("version", 1),
@@ -183,7 +183,7 @@ def export_registry_json(target: Path) -> Path:
 
 
 def verify_ecosystem_alignment() -> list[dict[str, Any]]:
-    """PASS/FAIL — coffre, propagation, Spark, chemins, obsolètes."""
+    """PASS/FAIL — vault, propagation, Spark, paths, obsolete keys."""
     from aria_core.spark_config import resolve_spark_runtime, verify_spark_alignment
 
     checks: list[dict[str, Any]] = []
@@ -195,7 +195,7 @@ def verify_ecosystem_alignment() -> list[dict[str, Any]]:
 
     for obs in obsolete_keys():
         if obs in raw:
-            add(f"obsolete_absent_{obs}", False, f"présent dans coffre — retirer")
+            add(f"obsolete_absent_{obs}", False, f"present in vault — remove")
 
     banned = banned_values()
     for key, bad in banned.items():

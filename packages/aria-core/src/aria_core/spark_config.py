@@ -1,4 +1,4 @@
-"""SSOT Spark / Virtuals — coffre → cerveau → ouvrier → shell (un seul alignement)."""
+"""Spark / Virtuals SSOT — vault → brain → worker → shell (single alignment)."""
 from __future__ import annotations
 
 import os
@@ -29,7 +29,7 @@ VIRTUALS_CHAT_URL = "https://compute.virtuals.io/v1/chat/completions"
 
 from aria_core.ecosystem_config import banned_values as _banned_values
 
-# Virtuals renvoie vide sur ces modèles en primaire (ecosystem_registry.yaml)
+# Virtuals returns empty on these models as primary (ecosystem_registry.yaml)
 BANNED_VIRTUALS_PRIMARY_MODELS = _banned_values().get(
     "LLM_MODEL", frozenset({"deepseek-deepseek-v4-pro"})
 )
@@ -45,7 +45,7 @@ def vault_root() -> Path:
 
 
 def read_merged_vault_env() -> dict[str, str]:
-    """SSOT ecosystem_config — coffre mergé + propagation."""
+    """SSOT ecosystem_config — merged vault + propagation."""
     return propagate_operator_env(_read_merged_vault_env())
 
 
@@ -74,7 +74,7 @@ def _flag_true(name: str, vault: dict[str, str]) -> bool:
 
 
 def resolve_primary_llm_model(vault: dict[str, str] | None = None) -> str:
-    """LLM_MODEL primaire — jamais un modèle banni sur Virtuals."""
+    """Primary LLM_MODEL — never a Virtuals-banned model."""
     merged = vault if vault is not None else read_merged_vault_env()
     for candidate in (
         os.environ.get("LLM_MODEL"),
@@ -90,7 +90,7 @@ def resolve_primary_llm_model(vault: dict[str, str] | None = None) -> str:
 
 
 def spark_model_for_prompt(prompt: str, vault: dict[str, str] | None = None) -> str:
-    """Routage depth ouvrier + cerveau calibré — SSOT."""
+    """Depth routing for worker + calibrated brain — SSOT."""
     text = (prompt or "").strip()
     merged = vault if vault is not None else read_merged_vault_env()
     if re.search(r"(?i)/depth\s+develop\b", text) or _DEVELOP_HINT.search(text) or len(text) > 420:
@@ -165,14 +165,14 @@ class SparkRuntimeConfig:
 
 
 def bridge_spark_keys(vault: dict[str, str] | None = None) -> None:
-    """Injecte VIRTUALS_API_KEY dans os.environ depuis coffre."""
+    """Inject VIRTUALS_API_KEY into os.environ from vault."""
     vk = virtuals_api_key(vault)
     if vk and len(os.environ.get("VIRTUALS_API_KEY", "")) < 10:
         os.environ["VIRTUALS_API_KEY"] = vk
 
 
 def resolve_spark_runtime(*, bridge_keys: bool = True) -> SparkRuntimeConfig:
-    """Point d'entrée unique — cerveau, shell_chat, orchestrate_unified."""
+    """Single entry point — brain, shell_chat, orchestrate_unified."""
     vault = read_merged_vault_env()
     if bridge_keys:
         bridge_spark_keys(vault)
@@ -221,7 +221,7 @@ def resolve_spark_runtime(*, bridge_keys: bool = True) -> SparkRuntimeConfig:
 
 
 def apply_spark_to_environ(cfg: SparkRuntimeConfig) -> None:
-    """Aligne os.environ pour toute la session KART."""
+    """Align os.environ for the full KART session."""
     os.environ.setdefault("ARIA_LLM_ENABLED", "true")
     os.environ.setdefault("LLM_PROVIDER", cfg.provider)
     os.environ.setdefault("LLM_MODEL", cfg.llm_model)

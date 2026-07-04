@@ -1,5 +1,5 @@
-# SSOT variables opérateur GoldenFar — modifier ICI, puis verify-ecosystem-alignment.ps1
-# Consommateurs : spark_config, Import-AriaVaultEnv, sync-local, enable-spark-routing, Render
+# GoldenFar operator env SSOT — edit HERE, then verify-ecosystem-alignment.ps1
+# Consumers: spark_config, Import-AriaVaultEnv, sync-local, enable-spark-routing, Render
 
 version: 1
 
@@ -49,7 +49,7 @@ defaults:
   ARIA_OLLAMA_NUM_CTX: "8192"
   ARIA_OLLAMA_MODEL: qwen2.5:14b
 
-# Profils opérateur (scripts aria-ops/vanguard/operator/)
+# Operator profiles (aria-ops/vanguard/operator/ scripts)
 spark_profiles:
   sport:
     script: enable-spark-routing.ps1
@@ -74,7 +74,7 @@ banned_values:
   LLM_MODEL:
     - deepseek-deepseek-v4-pro
 
-# Quand une clé change, les dérivées s'alignent (propagate_operator_env)
+# When a key changes, derived keys align (propagate_operator_env)
 propagations:
   - if_key: LLM_PROVIDER
     equals: virtuals

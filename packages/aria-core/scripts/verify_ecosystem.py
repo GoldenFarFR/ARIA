@@ -1,4 +1,4 @@
-"""Vérifie l'alignement écosystème — export JSON + checks PASS/FAIL."""
+"""Verify ecosystem alignment — export JSON + PASS/FAIL checks."""
 from __future__ import annotations
 
 import sys
@@ -23,7 +23,7 @@ def main() -> int:
         if not ok:
             fail += 1
     if fail:
-        print(f"\n=== ECOSYSTEM KO ({fail} echecs) ===", file=sys.stderr)
+        print(f"\n=== ECOSYSTEM KO ({fail} failures) ===", file=sys.stderr)
         return 1
     print("\n=== ECOSYSTEM OK ===")
     return 0
