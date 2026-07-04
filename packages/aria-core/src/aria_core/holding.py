@@ -71,7 +71,7 @@ DEFAULT_SUBSIDIARIES: tuple[SubsidiaryTemplate, ...] = (
             "RETIRED 2026-06-19. Former flagship DEX analyzer — repo and Render service deleted. "
             "Successor: Aria Market in aria-vanguard."
         ),
-        status="retired",
+        status="archived",
         category="product",
         priority=1,
         tags=("dex", "retired", "deprecated"),

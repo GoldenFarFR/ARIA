@@ -330,6 +330,7 @@ async def test_style_guidance_acknowledged_in_workflow(monkeypatch):
     async def fake_questions(_msg: str) -> str:
         return "Quelles priorités marketing cette semaine ?"
 
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: False)
     monkeypatch.setattr(
         "aria_core.tweet_compose_workflow._propose_role_questions",
         fake_questions,
