@@ -24,7 +24,9 @@ def test_detect_depth_long_message_develop():
     assert detect_depth(text) == LlmDepth.DEVELOP
 
 
-def test_brief_budget_uses_mini_model_and_small_context():
+def test_brief_budget_uses_mini_model_and_small_context(monkeypatch):
+    monkeypatch.setattr("aria_core.llm_economy._spark_active", lambda: False)
+    monkeypatch.setenv("ARIA_LLM_MODEL_BRIEF", "grok-3-mini")
     budget = resolve_budget(LlmDepth.BRIEF, public=False)
     assert budget.max_tokens <= 200
     assert budget.context_max_chars <= 4000
