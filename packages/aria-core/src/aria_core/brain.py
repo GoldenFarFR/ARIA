@@ -742,8 +742,17 @@ class AriaBrain:
         if is_short_ack(route):
             return "OK.", None, ["Ack (template)"], {}, None
         if not public:
+            from aria_core.llm_routing_meta import is_llm_routing_question, llm_routing_reply
             from aria_core.response_cost import cost_meta_reply, is_cost_meta_question
 
+            if is_llm_routing_question(route):
+                return (
+                    llm_routing_reply(lang_key, route),
+                    None,
+                    ["Routage LLM (runtime — sans web)"],
+                    {"llm_routing_meta": True},
+                    None,
+                )
             if is_cost_meta_question(route):
                 return (
                     cost_meta_reply(lang_key),

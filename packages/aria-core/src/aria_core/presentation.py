@@ -363,7 +363,7 @@ def format_live_info_response(
             "",
             "📎 Sources",
         ]
-        footer = "ℹ️ Fallback web direct — recalibration Groq indisponible." if fallback else ""
+        footer = "ℹ️ Fallback web direct — recalibration LLM cloud indisponible." if fallback else ""
     else:
         header = [
             "══════════════════════════════════",
@@ -374,7 +374,7 @@ def format_live_info_response(
             "",
             "📎 Sources",
         ]
-        footer = "ℹ️ Direct web fallback — Groq recalibration unavailable." if fallback else ""
+        footer = "ℹ️ Direct web fallback — cloud LLM recalibration unavailable." if fallback else ""
 
     lines = list(header)
     if not normalized:
