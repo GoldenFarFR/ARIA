@@ -64,9 +64,32 @@ _CONTACT_RE = re.compile(
 _ROADMAP_RE = re.compile(
     r"\b(?:futur|future|roadmap|suite|next\s+step|what'?s\s+next|partenariat|partnership|"
     r"partner|revenu|revenue|monétis|monetiz|business\s+model|generate|générer|"
-    r"earn|profit|plans?|strateg|stratég)\b",
+    r"earn|profit|plans?|strateg|stratég|prévu|prevu|bientôt|bientot)\b",
     re.IGNORECASE,
 )
+
+
+def is_roadmap_partnership_question(message: str) -> bool:
+    return bool(_ROADMAP_RE.search((message or "").strip()))
+
+
+def operator_roadmap_reply(*, lang: str = "fr") -> str:
+    """Opérateur — politique ZHC locale, sans LLM probabiliste ni web."""
+    pair = personal_reply_pair_on_feedback(
+        "partenariats roadmap revenus futur?",
+        lang=lang,
+    )
+    if lang == "fr":
+        return (
+            f"{pair.primary}\n\n{pair.followup}\n\n"
+            "Aucun partenariat signé à annoncer — candidature Virtual Protocol en cours "
+            "(voir JOURNAL.md). Pas de date marketing inventée."
+        )
+    return (
+        f"{pair.primary}\n\n{pair.followup}\n\n"
+        "No signed partnership to announce — Virtual Protocol application in progress "
+        "(see JOURNAL.md). No invented launch dates."
+    )
 _INTERNAL_TEST_RE = re.compile(
     r"\b(?:test\s+diagnostic|diagnostic\s+test|ping\s+from\s+diagnostic)\b",
     re.IGNORECASE,

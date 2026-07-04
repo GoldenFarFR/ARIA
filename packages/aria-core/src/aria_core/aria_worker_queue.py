@@ -245,18 +245,31 @@ def list_pending_worker_tasks_from_disk() -> list[dict[str, str]]:
 
 
 def _local_worker_md_candidates() -> list[Path]:
+    """SSOT aria-ops avant copie legacy ARIA/collegue-memoire (gitignore transition)."""
+    home = Path.home()
     candidates: list[Path] = []
-    for env_key in ("ARIA_REPO_ROOT", "COLLEGUE_MEMOIRE_ROOT"):
+    for env_key in ("ARIA_OPS_ROOT",):
+        raw = os.getenv(env_key, "").strip()
+        if raw:
+            candidates.append(Path(raw) / "collegue-memoire" / "sessions" / "ARIA-WORKER.md")
+    candidates.append(
+        home / "GitHub-Repos" / "aria-ops" / "collegue-memoire" / "sessions" / "ARIA-WORKER.md",
+    )
+    for env_key in ("COLLEGUE_MEMOIRE_ROOT",):
         raw = os.getenv(env_key, "").strip()
         if not raw:
             continue
         root = Path(raw)
         candidates.append(root / "collegue-memoire" / "sessions" / "ARIA-WORKER.md")
         candidates.append(root / "sessions" / "ARIA-WORKER.md")
-    home = Path.home()
+    for env_key in ("ARIA_REPO_ROOT",):
+        raw = os.getenv(env_key, "").strip()
+        if not raw:
+            continue
+        root = Path(raw)
+        candidates.append(root / "collegue-memoire" / "sessions" / "ARIA-WORKER.md")
     candidates.extend(
         [
-            home / "GitHub-Repos" / "aria-ops" / "collegue-memoire" / "sessions" / "ARIA-WORKER.md",
             home / "GitHub-Repos" / "ARIA" / "collegue-memoire" / "sessions" / "ARIA-WORKER.md",
             home / "projets" / "collegue-memoire" / "sessions" / "ARIA-WORKER.md",
         ],
