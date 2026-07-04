@@ -15,6 +15,28 @@ _COMPETENCE_IMPROVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_INJECTED_CLAIM_RE = re.compile(
+    r"(?:"
+    r"supprim[ée]|annonce|facture|facturation|passe[r]?\s+en|vient\s+de|désormais|"
+    r"effective|augment|baisse|gratuit\s+illimit|étoiles?|uptime|contribut|"
+    r"merg[ée]|déploy[ée]|commit\s+[a-f0-9]{6,}|"
+    r"\d+\s*%|\d+[\s,.]?\d*\s*(?:\$|€|usd|usdc)|"
+    r"le\s+\d{1,2}\s+(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|"
+    r"septembre|octobre|novembre|décembre|decembre)\s+\d{4}"
+    r")",
+    re.IGNORECASE,
+)
+_OPERATOR_COMMAND_RE = re.compile(
+    r"(?:^/|crée|créer|creer|create\s+repo|level\s+up|montre\s+qi|check-aria|sync-render|"
+    r"deploy|worker\s+delegate|/learn|/directive)",
+    re.IGNORECASE,
+)
+_QUESTION_RE = re.compile(
+    r"(?:\?\s*$|^(?:est-ce|qu'?en\s+penses|tu\s+penses|comment|pourquoi|quoi|qui|quel|"
+    r"as-tu|tu\s+as\s+prevu|tu\s+pref))",
+    re.IGNORECASE,
+)
+
 _MORE_DETAIL_RE = re.compile(
     r"^(?:"
     r"arguments?\s+plus|plus\s+d['']?arguments?|d[eé]veloppe|en\s+d[eé]tail|"
@@ -30,6 +52,37 @@ def wants_capability_improvement(message: str) -> bool:
 
 def wants_more_detail_followup(message: str) -> bool:
     return bool(_MORE_DETAIL_RE.match((message or "").strip()))
+
+
+def is_injected_factual_claim(message: str) -> bool:
+    """Affirmation externe collée par l'opérateur — pas une question ni une commande."""
+    text = (message or "").strip()
+    if len(text) < 24:
+        return False
+    if _OPERATOR_COMMAND_RE.search(text):
+        return False
+    if _QUESTION_RE.search(text):
+        return False
+    if wants_capability_improvement(text):
+        return False
+    return bool(_INJECTED_CLAIM_RE.search(text))
+
+
+def unverified_claim_reply(message: str, *, lang: str = "fr") -> str:
+    snippet = (message or "").strip()[:120]
+    if lang == "fr":
+        return (
+            f"Tu m'as collé une info externe (« {snippet}… ») — "
+            "je n'ai rien dans JOURNAL, COLLEGUE ou GitHub qui la confirme. "
+            "Je ne valide pas sans preuve. "
+            "Si c'est un test d'hallucination : OK, je mord pas. "
+            "Si tu veux que je creuse, dis « vérifie » ou donne une source."
+        )
+    return (
+        f"You pasted an external claim (« {snippet}… ») — "
+        "nothing in my operator memory or GitHub confirms it. "
+        "I won't affirm without proof. Say « verify » if you want me to dig."
+    )
 
 
 def operator_improvement_reply(*, lang: str = "fr") -> str:
