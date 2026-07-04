@@ -18,7 +18,12 @@ prod_overlay_keys:
   - ARIA_OUVRIER_SKIP_GROQ_FALLBACK
   - ARIA_LLM_MAX_TOKENS_DEVELOP
   - ARIA_LLM_MAX_TOKENS_STANDARD
+  - ARIA_LLM_MAX_TOKENS_BRIEF
   - ARIA_LLM_CONTEXT_MAX_DEVELOP
+  - ARIA_LLM_CONTEXT_MAX_STANDARD
+  - ARIA_LLM_CONTEXT_MAX_BRIEF
+  - ARIA_LLM_DEPTH_DEFAULT
+  - ARIA_OUVRIER_OLLAMA_FALLBACK
 
 obsolete_keys:
   - DEXPULSE_API_URL
@@ -43,6 +48,27 @@ defaults:
   OLLAMA_BASE_URL: http://127.0.0.1:11434
   ARIA_OLLAMA_NUM_CTX: "8192"
   ARIA_OLLAMA_MODEL: qwen2.5:14b
+
+# Profils opérateur (scripts aria-ops/vanguard/operator/)
+spark_profiles:
+  sport:
+    script: enable-spark-routing.ps1
+    aria_spark_aggressive: "true"
+    aria_ouvrier_skip_groq_fallback: "true"
+    aria_llm_depth_default: brief
+    aria_llm_max_tokens_develop: "1800"
+    aria_llm_model_brief: deepseek-deepseek-v4-flash
+  chiron:
+    script: enable-spark-chiron.ps1
+    aria_spark_aggressive: "true"
+    aria_ouvrier_skip_groq_fallback: "true"
+    aria_ouvrier_ollama_fallback: "false"
+    aria_llm_depth_default: develop
+    aria_llm_max_tokens_develop: "3200"
+    aria_llm_max_tokens_standard: "1200"
+    aria_llm_max_tokens_brief: "500"
+    aria_llm_context_max_develop: "32000"
+    aria_llm_model_brief: x-ai-grok-4-3
 
 banned_values:
   LLM_MODEL:
