@@ -130,6 +130,29 @@ async def _promote_product(
         _, note = await post_tweet(tweet, approval_id="acp_product_launch")
         result["x_posted"] = "x.com/" in note.lower() and "/status/" in note.lower()
         result["x_note"] = note
+        if not result["x_posted"]:
+            try:
+                from aria_core.paths import memory_dir
+                import json as _json
+                from datetime import datetime, timezone
+
+                pending = memory_dir() / "x_pending_promo.json"
+                pending.write_text(
+                    _json.dumps(
+                        {
+                            "at": datetime.now(timezone.utc).isoformat(),
+                            "offering": name,
+                            "tweet_text": tweet,
+                            "blocked_note": note[:400],
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                result["x_pending_saved"] = True
+            except Exception:
+                result["x_pending_saved"] = False
     else:
         result["x_note"] = "X non configuré — brouillon conservé."
 

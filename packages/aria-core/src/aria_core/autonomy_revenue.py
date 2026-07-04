@@ -57,6 +57,36 @@ def _hours_since(iso: str | None) -> float:
         return 1e9
 
 
+async def _flush_pending_x_promo() -> dict[str, Any] | None:
+    """Publie un tweet promo ACP en file si la politique X l'autorise."""
+    from aria_core.paths import memory_dir
+
+    path = memory_dir() / "x_pending_promo.json"
+    if not path.is_file():
+        return None
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    tweet = str(doc.get("tweet_text") or "").strip()
+    offering = str(doc.get("offering") or "").strip()
+    if not tweet:
+        return None
+    from aria_core.gateway.x_twitter import is_x_post_configured, post_tweet
+
+    if not is_x_post_configured():
+        return {"posted": False, "reason": "x_not_configured"}
+    _, note = await post_tweet(tweet, approval_id="pending_acp_promo")
+    posted = "x.com/" in note.lower() and "/status/" in note.lower()
+    if posted:
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        _log_autonomy("x_pending_promo_posted", {"offering": offering, "note": note[:200]})
+    return {"posted": posted, "offering": offering, "note": note[:300]}
+
+
 async def run_revenue_autonomy_cycle(*, lang: str = "fr") -> dict[str, Any]:
     """Cycle autonome : poll ACP, scan marché, promo produit si revenu=0."""
     from aria_core.skills.acp_cli import is_acp_available
@@ -76,6 +106,14 @@ async def run_revenue_autonomy_cycle(*, lang: str = "fr") -> dict[str, Any]:
         result["ok"] = False
         result["reason"] = "ARIA_REVENUE_AUTONOMY off ou ARIA_AUTONOMOUS=false"
         return result
+
+    pending_x = await _flush_pending_x_promo()
+    if pending_x:
+        result["pending_x"] = pending_x
+        if pending_x.get("posted"):
+            result["actions"].append(f"x_pending:{pending_x.get('offering') or 'promo'}")
+        else:
+            result["skipped"].append("x_pending:blocked")
 
     month_usd = monthly_total_usd()
 
