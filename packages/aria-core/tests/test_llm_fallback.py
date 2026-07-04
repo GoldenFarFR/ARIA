@@ -1,7 +1,13 @@
 import pytest
 
-from aria_core.llm import LlmRoute, _resolve_routes, is_llm_configured
+from aria_core.llm import LlmRoute, _http_ok, _resolve_routes, is_llm_configured
 from aria_core.runtime import get_settings
+
+
+def test_http_ok_accepts_virtuals_201():
+    assert _http_ok(200) is True
+    assert _http_ok(201) is True
+    assert _http_ok(401) is False
 
 
 def test_virtuals_with_groq_fallback_chain():
