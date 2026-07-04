@@ -114,6 +114,11 @@ def _resolve_endpoint() -> tuple[str, str] | None:
     return routes[0].url, routes[0].model
 
 
+def _http_ok(status_code: int) -> bool:
+    """OpenAI-compatible APIs may return 200 or 201 (Virtuals Spark)."""
+    return 200 <= int(status_code) < 300
+
+
 def _headers_for_route(route: LlmRoute) -> dict[str, str]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if route.provider == "ollama":
@@ -161,7 +166,7 @@ async def _post_chat(
             headers=_headers_for_route(route),
             json=payload,
         )
-        if response.status_code != 200:
+        if not _http_ok(response.status_code):
             logger.warning(
                 "LLM error provider=%s model=%s status=%s: %s",
                 route.provider,
