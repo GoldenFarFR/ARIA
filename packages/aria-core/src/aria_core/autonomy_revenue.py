@@ -57,21 +57,74 @@ def _hours_since(iso: str | None) -> float:
         return 1e9
 
 
-async def _flush_pending_x_promo() -> dict[str, Any] | None:
-    """Publie un tweet promo ACP en file si la politique X l'autorise."""
+def _next_distribution_tweet() -> tuple[str, str] | None:
+    """Pending promo first, else next item in distribution queue."""
     from aria_core.paths import memory_dir
 
-    path = memory_dir() / "x_pending_promo.json"
-    if not path.is_file():
+    mem = memory_dir()
+    pending = mem / "x_pending_promo.json"
+    if pending.is_file():
+        try:
+            doc = json.loads(pending.read_text(encoding="utf-8"))
+            tweet = str(doc.get("tweet_text") or "").strip()
+            offering = str(doc.get("offering") or "").strip()
+            if tweet:
+                return offering, tweet
+        except Exception:
+            pass
+    queue_path = mem / "x_distribution_queue.json"
+    if not queue_path.is_file():
         return None
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc = json.loads(queue_path.read_text(encoding="utf-8"))
+        queue = doc.get("queue") or []
+        if not queue:
+            return None
+        head = queue[0] if isinstance(queue[0], dict) else {}
+        tweet = str(head.get("tweet") or head.get("tweet_text") or "").strip()
+        offering = str(head.get("offering") or "").strip()
+        return (offering, tweet) if tweet else None
     except Exception:
         return None
-    tweet = str(doc.get("tweet_text") or "").strip()
-    offering = str(doc.get("offering") or "").strip()
-    if not tweet:
+
+
+def _advance_distribution_queue(*, posted_offering: str) -> None:
+    from aria_core.paths import memory_dir
+
+    mem = memory_dir()
+    pending = mem / "x_pending_promo.json"
+    if pending.is_file():
+        try:
+            doc = json.loads(pending.read_text(encoding="utf-8"))
+            if str(doc.get("offering") or "") == posted_offering:
+                pending.unlink(missing_ok=True)
+                return
+        except Exception:
+            pending.unlink(missing_ok=True)
+            return
+    queue_path = mem / "x_distribution_queue.json"
+    if not queue_path.is_file():
+        return
+    try:
+        doc = json.loads(queue_path.read_text(encoding="utf-8"))
+        queue = list(doc.get("queue") or [])
+        if queue and str((queue[0] or {}).get("offering") or "") == posted_offering:
+            queue.pop(0)
+        doc["queue"] = queue
+        if queue:
+            queue_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+        else:
+            queue_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+async def _flush_pending_x_promo() -> dict[str, Any] | None:
+    """Publie un tweet promo ACP en file si la politique X l'autorise."""
+    picked = _next_distribution_tweet()
+    if not picked:
         return None
+    offering, tweet = picked
     from aria_core.gateway.x_twitter import is_x_post_configured, post_tweet
 
     if not is_x_post_configured():
@@ -79,10 +132,7 @@ async def _flush_pending_x_promo() -> dict[str, Any] | None:
     _, note = await post_tweet(tweet, approval_id="pending_acp_promo")
     posted = "x.com/" in note.lower() and "/status/" in note.lower()
     if posted:
-        try:
-            path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        _advance_distribution_queue(posted_offering=offering)
         _log_autonomy("x_pending_promo_posted", {"offering": offering, "note": note[:200]})
     return {"posted": posted, "offering": offering, "note": note[:300]}
 
