@@ -40,6 +40,9 @@ def test_virtuals_never_uses_groq_llm_api_key():
     settings.virtuals_api_key = ""
     settings.llm_api_key = "gsk-should-not-be-used"
     settings.llm_model = "deepseek-deepseek-v4-pro"
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+    settings.llm_fallback_model = ""
 
     routes = _resolve_routes()
     assert routes == []
