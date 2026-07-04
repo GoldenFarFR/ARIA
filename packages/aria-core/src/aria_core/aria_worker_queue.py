@@ -473,7 +473,15 @@ async def enqueue_from_capability_gap(
     lang: str = "fr",
 ) -> dict[str, Any]:
     """File ouvrier à partir d'un capability gap."""
-    from aria_core.capability_gap import CAPABILITY_SPECS
+    from aria_core.capability_gap import CAPABILITY_SPECS, gap_runtime_resolved
+
+    if await gap_runtime_resolved(capability_id):
+        return {
+            "status": "skipped_resolved",
+            "task_id": f"cap-gap-{capability_id}",
+            "capability_id": capability_id,
+            "reason": "runtime_ok",
+        }
 
     spec = CAPABILITY_SPECS.get(capability_id, {})
     files = tuple(spec.get("target_files") or ())
