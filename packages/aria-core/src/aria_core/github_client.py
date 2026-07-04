@@ -416,3 +416,29 @@ class GitHubClient:
             )
             r.raise_for_status()
             return r.json()
+
+    async def count_merged_prs(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        author: str | None = None,
+        days: int = 7,
+    ) -> int:
+        """Count merged PRs in last N days. Use search API (works for author too)."""
+        from datetime import datetime, timedelta, timezone
+
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        q = f"repo:{owner}/{repo} is:pr is:merged merged:>={since}"
+        if author:
+            q += f" author:{author}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                f"{API}/search/issues",
+                headers=self._headers,
+                params={"q": q, "per_page": 100},
+            )
+            if r.status_code != 200:
+                return 0
+            data = r.json()
+            return int(data.get("total_count", 0))
