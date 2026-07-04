@@ -1102,13 +1102,40 @@ class AriaBrain:
         lang_hint = "Réponds toujours en français." if lang == LANG_FR else "Always reply in English."
         lang_key = "fr" if lang == LANG_FR else "en"
         depth = detect_depth(message)
-        budget = resolve_budget(
-            depth,
-            public=public,
-            grounded=grounded_for_audience(public),
-            self_context=self_context_only,
-        )
-        concision = depth_system_instruction(lang_key, depth)
+
+        from aria_core.grounding import is_pure_casual_smalltalk
+        from aria_core.llm_economy import LlmEconomyBudget, LlmDepth
+
+        # Force very tight budget + strong concision for pure casual/small talk with operator.
+        # This keeps repartie quality without walls of text.
+        if not public and is_pure_casual_smalltalk(message):
+            budget = LlmEconomyBudget(
+                depth=LlmDepth.BRIEF,
+                max_tokens=360,
+                context_max_chars=2500,
+                history_turns=2,
+                history_msg_chars=300,
+                include_context_conversations=False,
+                include_context_extras=False,
+                collegue_max_chars=800,
+                model_override=None,
+                enhance_max_tokens=320,
+            )
+            concision = (
+                "RÈGLE CASUAL : réponds de façon légère, humaine et concise. "
+                "Idéalement 4 à 8 phrases. Tu peux faire une repartie intelligente et organique vers tes objectifs "
+                "(site Vanguard, autonomie ZHC, ce qu'on construit) quand ça enrichit vraiment la conversation, "
+                "mais reste punchy et directe. Pas de longs développements ni de paragraphes denses. "
+                "Ton : détendu, un peu d'humour sec si pertinent."
+            )
+        else:
+            budget = resolve_budget(
+                depth,
+                public=public,
+                grounded=grounded_for_audience(public),
+                self_context=self_context_only,
+            )
+            concision = depth_system_instruction(lang_key, depth)
 
         if grounded_for_audience(public):
             verified = await build_verified_facts_block(
