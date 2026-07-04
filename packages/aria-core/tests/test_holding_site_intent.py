@@ -20,5 +20,15 @@ def test_lancer_le_site_intent():
     assert wants_holding_site("Lancer le site") is True
 
 
+def test_proactive_greeting_block_not_holding_site():
+    """Instructions proactives (initiative) ≠ intent site holding."""
+    block = (
+        "MODE PROACTIF FONDATEUR\n"
+        "- Propose une initiative\n"
+        "- 1 initiative vision\n"
+    )
+    assert wants_holding_site(f"{block}\n\nsalut") is False
+
+
 def test_juno_still_triggers_bridge():
     assert detect_intent("benchmark JUNO metrics") == SkillName.ZHC_BRIDGE
