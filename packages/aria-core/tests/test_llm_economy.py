@@ -7,7 +7,8 @@ from aria_core.llm_economy import (
 )
 
 
-def test_detect_depth_brief_on_ok():
+def test_detect_depth_brief_on_ok(monkeypatch):
+    monkeypatch.setattr("aria_core.llm_economy._chiron_mode", lambda: False)
     assert detect_depth("ok prevu") == LlmDepth.BRIEF
 
 
@@ -47,6 +48,7 @@ def test_brief_budget_uses_mini_model_and_small_context(tmp_path):
             llm_provider="groq",
             aria_llm_model_brief="grok-3-mini",
             aria_llm_max_tokens_brief=180,
+            aria_llm_context_max_brief=3500,
         ),
     )
     budget = resolve_budget(LlmDepth.BRIEF, public=False)
