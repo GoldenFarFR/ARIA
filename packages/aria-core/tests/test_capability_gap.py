@@ -24,6 +24,10 @@ def test_build_spec_markdown():
 async def test_file_capability_gap_dedup(monkeypatch, tmp_path):
     from aria_core import capability_gap as mod
 
+    async def _not_resolved(_cid: str) -> bool:
+        return False
+
+    monkeypatch.setattr(mod, "gap_runtime_resolved", _not_resolved)
     monkeypatch.setattr(mod, "_gaps_dir", lambda: tmp_path)
     rec = {
         "capability_id": "x_oauth_write",
@@ -41,9 +45,28 @@ async def test_file_capability_gap_dedup(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_file_capability_gap_skips_when_resolved(monkeypatch, tmp_path):
+    from aria_core import capability_gap as mod
+
+    monkeypatch.setattr(mod, "_gaps_dir", lambda: tmp_path)
+    monkeypatch.setattr(mod, "_recently_filed", lambda _cid: None)
+
+    async def _resolved(_cid: str) -> bool:
+        return True
+
+    monkeypatch.setattr(mod, "gap_runtime_resolved", _resolved)
+    out = await file_capability_gap("image_api_key", context="no token")
+    assert out["status"] == "skipped_resolved"
+
+
+@pytest.mark.asyncio
 async def test_file_capability_gap_local_only(monkeypatch, tmp_path):
     from aria_core import capability_gap as mod
 
+    async def _not_resolved(_cid: str) -> bool:
+        return False
+
+    monkeypatch.setattr(mod, "gap_runtime_resolved", _not_resolved)
     monkeypatch.setattr(mod, "_gaps_dir", lambda: tmp_path)
     monkeypatch.setattr(mod, "_recently_filed", lambda _cid: None)
     monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: False)

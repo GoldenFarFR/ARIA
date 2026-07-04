@@ -19,6 +19,12 @@ _LAST_OK: datetime | None = None
 REGRESSION_THRESHOLD = 3
 
 
+async def probe_health_ok() -> bool:
+    """True si /api/health répond status=ok (guard capability_gap anti-boucle)."""
+    ok, _ = await _probe_health()
+    return ok
+
+
 async def _probe_health() -> tuple[bool, str]:
     bases: list[str] = []
     site = (getattr(settings, "site_base_url", None) or "").strip().rstrip("/")
