@@ -229,6 +229,32 @@ async def _find_open_github_gap_issue(
     return None
 
 
+async def gap_runtime_resolved(capability_id: str) -> bool:
+    """True si le gap ne devrait plus être émis (runtime OK). Anti-boucle worker."""
+    if capability_available(capability_id):
+        return True
+    if capability_id == "health_render_regression":
+        try:
+            from aria_core.health_watch import probe_health_ok
+
+            return await probe_health_ok()
+        except Exception:
+            return False
+    if capability_id == "security_ip_changed_vault":
+        try:
+            from aria_core.paths import memory_dir
+
+            ip_file = memory_dir().parent / "sessions" / "PC-SYLVAIN" / "ip-latest.json"
+            if not ip_file.is_file():
+                ip_file = Path.home() / "GitHub-Repos" / "ARIA" / "collegue-memoire" / "sessions" / "PC-SYLVAIN" / "ip-latest.json"
+            if ip_file.is_file():
+                data = json.loads(ip_file.read_text(encoding="utf-8"))
+                return bool(data.get("ip") or data.get("public_ip"))
+        except Exception:
+            return False
+    return False
+
+
 def capability_available(capability_id: str) -> bool:
     """Introspection legere — True si le code semble present."""
     if capability_id == "x_profile_banner":
@@ -302,6 +328,13 @@ async def file_capability_gap(
         "target_files": [],
         "acceptance": [],
     })
+
+    if await gap_runtime_resolved(capability_id):
+        return {
+            "status": "skipped_resolved",
+            "capability_id": capability_id,
+            "reason": "runtime_ok",
+        }
 
     existing = _recently_filed(capability_id)
     if existing:
