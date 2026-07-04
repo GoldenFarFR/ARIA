@@ -97,4 +97,5 @@ async def test_sync_exports_faq_yaml():
     data = yaml.safe_load(faq_path.read_text(encoding="utf-8"))
     ids = {item["id"] for item in data}
     assert "aria-role" in ids
-    assert "dexpulse-product" in ids
+    assert "dexpulse-retired" in ids
+    assert "aria-market-product" in ids

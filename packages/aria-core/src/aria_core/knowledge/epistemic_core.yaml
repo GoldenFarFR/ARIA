@@ -135,13 +135,34 @@
     - subsidiary or holding
     - dexpulse est la holding
   question: Is DEXPulse the holding?
-  claim_fr: Non. Aria Vanguard ZHC est la holding ; DEXPulse est la filiale produit phare.
-  claim_en: No. Aria Vanguard ZHC is the holding; DEXPulse is the flagship product subsidiary.
+  claim_fr: Non. Aria Vanguard ZHC est la holding. DEXPulse était une filiale — retirée 2026-06-19. Aria Market est la filiale phare actuelle.
+  claim_en: No. Aria Vanguard ZHC is the holding. DEXPulse was a subsidiary — retired 2026-06-19. Aria Market is the current flagship subsidiary.
   p_true: 1.0
   p_false: 0.0
   verdict: established
   sources:
     - canonical_facts.yaml
+
+- id: dexpulse-retired
+  scope: holding
+  topic: dexpulse
+  tags: [dexpulse, retired, deprecated]
+  triggers:
+    - dexpulse live
+    - dexpulse url
+    - site dexpulse
+    - promouvoir dexpulse
+    - campagne dexpulse
+    - what is dexpulse
+  question: Is DEXPulse still a live product?
+  claim_fr: Non. DEXPulse est RETIRÉ depuis 2026-06-19 (repo et service Render supprimés). Successeur = Aria Market sur ariavanguardzhc.com.
+  claim_en: No. DEXPulse is RETIRED since 2026-06-19 (repo and Render service deleted). Successor = Aria Market at ariavanguardzhc.com.
+  p_true: 1.0
+  p_false: 0.0
+  verdict: established
+  sources:
+    - canonical_facts.yaml
+    - VISION.md
 
 - id: zhc-model
   scope: holding
@@ -339,15 +360,15 @@
 - id: dexpulse-url
   scope: holding
   topic: dexpulse
-  tags: [dexpulse, product]
+  tags: [dexpulse, retired]
   triggers:
     - url dexpulse
     - dexpulse url
     - site dexpulse
     - dexpulse production
   question: What is the DEXPulse production URL?
-  claim_fr: "https://dexpulse-m3bp.onrender.com"
-  claim_en: "https://dexpulse-m3bp.onrender.com"
+  claim_fr: "DEXPulse est retiré — pas d'URL live. Produit actuel : https://ariavanguardzhc.com (Aria Market)."
+  claim_en: "DEXPulse is retired — no live URL. Current product: https://ariavanguardzhc.com (Aria Market)."
   p_true: 1.0
   p_false: 0.0
   verdict: established

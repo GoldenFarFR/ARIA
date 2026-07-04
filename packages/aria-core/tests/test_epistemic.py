@@ -20,7 +20,7 @@ def test_holding_static_match():
     reply, data = epistemic_static_answer("dexpulse est la holding", "fr")
     assert data.get("epistemic_static") is True
     assert data.get("match_id") == "holding-vs-dexpulse"
-    assert "filiale" in reply.lower()
+    assert "filiale" in reply.lower() or "retir" in reply.lower()
 
 
 def test_world_question_not_in_yaml():

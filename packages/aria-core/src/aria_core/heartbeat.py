@@ -24,7 +24,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="portfolio_scan",
         name="Portfolio scan",
-        description="Automatic DEXPulse watchlist analysis",
+        description="Automatic Aria Market watchlist analysis",
         interval_minutes=30,
     ),
     HeartbeatTask(

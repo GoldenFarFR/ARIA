@@ -8,10 +8,12 @@ def test_list_faq_has_entries():
     assert items[0]["question"]
 
 
-def test_search_faq_dexpulse():
+def test_search_faq_dexpulse_retired():
     matches = search_faq("What is DEXPulse")
     assert matches
-    assert any("dexpulse" in m.get("id", "") for m in matches)
+    hit = matches[0]
+    assert hit.get("id") in ("dexpulse-product", "dexpulse-retired")
+    assert "RETIRED" in hit.get("answer", "").upper() or "retiré" in hit.get("answer", "").lower()
 
 
 async def test_faq_skill_returns_answer():

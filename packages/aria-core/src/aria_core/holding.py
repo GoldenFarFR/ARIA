@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from aria_core.runtime import settings
 
 HOLDING_SLUG = "aria-vanguard-zhc"
-DEXPULSE_SLUG = "dexpulse"
-FLAGSHIP_PRODUCT = "DEXPulse"
+DEXPULSE_SLUG = "dexpulse"  # retired 2026-06-19 — kept for repertoire migration only
+ARIA_MARKET_SLUG = "aria-market"
+FLAGSHIP_PRODUCT = "Aria Market"
 DEFAULT_HOLDING_DOMAIN = "ariavanguardzhc.com"
 
 DEFAULT_HOLDING_NAME = "Aria Vanguard ZHC"
@@ -16,7 +17,8 @@ DEFAULT_HOLDING_TAGLINE = "Zero-Human Company holding — parent entity for auto
 DEFAULT_ARIA_TITLE = "Chief Autonomous Officer (CAO)"
 GOVERNANCE_RULE = (
     "Every ARIA venture is a subsidiary of Aria Vanguard ZHC. "
-    "DEXPulse is the flagship subsidiary — not the holding. "
+    "Aria Market is the flagship subsidiary — not the holding. "
+    "DEXPulse was retired 2026-06-19 (repo deleted). "
     "All current and future projects register under the holding."
 )
 SUBSIDIARY_OF_LABEL = "Subsidiary of Aria Vanguard ZHC"
@@ -50,17 +52,30 @@ HOLDING_TEMPLATE = SubsidiaryTemplate(
 
 DEFAULT_SUBSIDIARIES: tuple[SubsidiaryTemplate, ...] = (
     SubsidiaryTemplate(
-        slug=DEXPULSE_SLUG,
-        name="DEXPulse",
+        slug=ARIA_MARKET_SLUG,
+        name="Aria Market",
         description=(
-            "Subsidiary of Aria Vanguard ZHC. Real-time DEX analyzer — flagship product. "
-            "Charts, multi-timeframe signals, watchlist alerts, ARIA agent."
+            "Subsidiary of Aria Vanguard ZHC. Watchlist-first DEX analyzer — flagship product. "
+            "Multi-timeframe signals, alerts, DexScreener embeds, ARIA agent."
         ),
         status="live",
         category="product",
         priority=5,
-        tags=("dex", "saas", "flagship"),
+        tags=("dex", "saas", "flagship", "aria-market"),
         zhc_aligned=True,
+    ),
+    SubsidiaryTemplate(
+        slug=DEXPULSE_SLUG,
+        name="DEXPulse",
+        description=(
+            "RETIRED 2026-06-19. Former flagship DEX analyzer — repo and Render service deleted. "
+            "Successor: Aria Market in aria-vanguard."
+        ),
+        status="retired",
+        category="product",
+        priority=1,
+        tags=("dex", "retired", "deprecated"),
+        zhc_aligned=False,
     ),
 )
 
@@ -82,6 +97,6 @@ def aria_org_prompt() -> str:
     return (
         f"ORGANISATION : {holding_name()} est la holding mère (ZHC). "
         f"ARIA ZHC en est la {DEFAULT_ARIA_TITLE} — elle opère la holding et ses filiales. "
-        f"DEXPulse est une filiale (produit flagship), pas la holding elle-même. "
+        f"Aria Market est la filiale produit phare (DEXPulse retiré 2026-06-19). "
         f"Tout nouveau projet doit être rattaché à la holding dans le répertoire."
     )
