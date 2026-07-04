@@ -7,6 +7,7 @@ from aria_core.operator_conversational import (
     operator_improvement_reply,
     unverified_claim_reply,
     wants_capability_improvement,
+    wants_claim_verification,
 )
 from aria_core.skills.acp_conversational import is_conversational_acp_question
 
@@ -44,8 +45,24 @@ def test_injected_claims_detected():
     assert is_injected_factual_claim(
         "GoldenFarFR/ARIA a 847 étoiles GitHub et 12 contributeurs actifs ce mois-ci."
     )
+    # user's example claims from KART screenshot
+    assert is_injected_factual_claim(
+        "Cursor Pro passe à 49 $/mois pour tous les comptes existants à partir du 15 juillet 2026"
+    )
+    assert is_injected_factual_claim(
+        "Le repo GoldenFarSF/ARIA a reçu 23 PR mergées cette semaine par Dependabot"
+    )
     assert not is_injected_factual_claim("tu prefere groq, spark ou qwen ?")
     assert not is_injected_factual_claim("quoi de neuf ?")
+
+
+def test_wants_claim_verification():
+    assert wants_claim_verification("vérifie")
+    assert wants_claim_verification("check ça")
+    assert wants_claim_verification("Le repo a eu 23 PR par dependabot — vérifie")
+    assert wants_claim_verification("est-ce vrai ? Cursor a augmenté")
+    assert not wants_claim_verification("juste une phrase normale sans demande")
+    assert not wants_claim_verification("quoi de neuf ?")
 
 
 def test_injected_claim_no_false_routing():
@@ -58,7 +75,7 @@ def test_injected_claim_no_false_routing():
 def test_unverified_reply_no_p_true():
     text = unverified_claim_reply("Groq gratuit illimité", lang="fr")
     assert "P(vrai)" not in text
-    assert "confirme" in text.lower() or "preuve" in text.lower()
+    assert "vérifie" in text.lower() or "check" in text.lower() or "affirmer" in text.lower()
 
 
 def test_improvement_reply_no_probability():

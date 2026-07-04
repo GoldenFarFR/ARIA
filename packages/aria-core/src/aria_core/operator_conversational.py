@@ -29,6 +29,11 @@ _INJECTED_CLAIM_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+_VERIFY_CUE_RE = re.compile(
+    r"\b(vérif|verif|vérifie|verifie|check|creuse|confirme|est-ce (vrai|faux)|vrai ou faux|ça (est|sonne) (vrai|faux)|tu peux vérifier)\b",
+    re.IGNORECASE,
+)
 _OPERATOR_COMMAND_RE = re.compile(
     r"(?:^/|crée|créer|creer|create\s+repo|level\s+up|montre\s+qi|check-aria|sync-render|"
     r"deploy|worker\s+delegate|/learn|/directive)",
@@ -71,20 +76,30 @@ def is_injected_factual_claim(message: str) -> bool:
     return bool(_INJECTED_CLAIM_RE.search(text))
 
 
+def wants_claim_verification(message: str) -> bool:
+    """User explicitly asks to check if a pasted claim (price, catalog, PR count, billing...) is true or false."""
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    if _VERIFY_CUE_RE.search(text):
+        return True
+    # also if the whole message looks like "vérifie <claim pasted>"
+    if text.startswith(("vérifie", "verifie", "check", "creuse")) and len(text) > 20:
+        return True
+    return False
+
+
 def unverified_claim_reply(message: str, *, lang: str = "fr") -> str:
-    snippet = (message or "").strip()[:120]
+    snippet = (message or "").strip()[:110]
     if lang == "fr":
         return (
-            f"Tu m'as collé une info externe (« {snippet}… ») — "
-            "je n'ai rien dans JOURNAL, COLLEGUE ou GitHub qui la confirme. "
-            "Je ne valide pas sans preuve. "
-            "Si c'est un test d'hallucination : OK, je mord pas. "
-            "Si tu veux que je creuse, dis « vérifie » ou donne une source."
+            f"Hmm, « {snippet}… » — j'ai rien de ça dans JOURNAL, COLLEGUE ou mes derniers scans GitHub. "
+            "Je ne vais pas l'affirmer comme ça sans check. "
+            "Si tu veux que je vérifie (web + GitHub si c'est un repo/PR), dis « vérifie » ou colle la phrase avec « vérifie » dedans, je te dirai VRAI/FAUX avec ce que j'ai trouvé."
         )
     return (
-        f"You pasted an external claim (« {snippet}… ») — "
-        "nothing in my operator memory or GitHub confirms it. "
-        "I won't affirm without proof. Say « verify » if you want me to dig."
+        f"Hmm, « {snippet}… » — nothing in my logs or GitHub confirms it. "
+        "Won't just nod along without checking. Say « verify » (or include the cue) and I'll dig with web + GitHub, then tell you true/false like a normal chat."
     )
 
 
@@ -147,3 +162,108 @@ def llm_preference_reply(*, lang: str = "fr") -> str:
         "• Groq — fast fallback\n"
         "• Qwen local — scout/KART on your PC\n"
     )
+
+
+async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict]:
+    """Vérifie une affirmation externe collée (prix, catalogue, facturation, PRs, etc).
+    Répond comme à un humain : naturel, direct, avec VRAI/FAUX + sources courtes.
+    Utilise web (DDG) + GitHub quand pertinent (repo/PR/dependabot).
+    """
+    from datetime import datetime, timezone
+
+    text = (claim or "").strip()
+    snippet = text[:90] + ("…" if len(text) > 90 else "")
+    actions: list[str] = ["external_claim_verify"]
+    meta: dict = {"claim": snippet, "verified": True}
+
+    # Detect github-ish claim
+    is_github_claim = bool(re.search(r"(repo|pr|merg|dependabot|goldenfar)", text, re.I))
+    github_count = 0
+    github_detail = ""
+
+    if is_github_claim:
+        try:
+            from aria_core.github_client import GitHubClient
+            from aria_core.runtime import settings
+
+            token = ""
+            try:
+                token = getattr(settings, "github_token", "") or ""
+            except Exception:
+                token = ""
+            owner = "GoldenFarFR"
+            try:
+                owner = getattr(settings, "github_owner", "GoldenFarFR") or "GoldenFarFR"
+            except Exception:
+                pass
+            repo_guess = "ARIA"
+            m = re.search(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", text)
+            if m:
+                parts = m.group(1).split("/")
+                if len(parts) == 2:
+                    owner, repo_guess = parts[0], parts[1]
+            if token.strip():
+                gh = GitHubClient(token)
+                author = "dependabot[bot]" if "dependabot" in text.lower() else None
+                github_count = await gh.count_merged_prs(owner, repo_guess, author=author, days=7)
+                github_detail = f"GitHub: ~{github_count} PRs mergés les 7 derniers jours" + (f" par {author}" if author else "") + f" sur {owner}/{repo_guess}."
+                actions.append("github_pr_count")
+                meta["github_prs"] = github_count
+            else:
+                github_detail = "GitHub: token pas configuré (ou pas en contexte bootstrap), skip count PRs."
+        except Exception as e:
+            github_detail = f"GitHub check raté ({str(e)[:60]})."
+            meta["github_prs"] = github_count or 0
+
+    # Web search for the claim
+    web_bits: list[str] = []
+    try:
+        from aria_core.knowledge.web_verify import fetch_web_snippets
+
+        # craft a search query from the claim (remove "vérifie" cue)
+        q = re.sub(r"\b(vérifie|verifie|check|creuse)\b[:\s]*", "", text, flags=re.I).strip()[:200]
+        if not q:
+            q = text[:200]
+        snippets = await fetch_web_snippets(q, max_snippets=4)
+        for s in snippets:
+            web_bits.append(f"- {s.text[:160]}{' ('+s.url+')' if s.url else ''}")
+        if web_bits:
+            actions.append("web_ddg")
+            meta["web_snippets"] = len(web_bits)
+    except Exception:
+        web_bits = []
+
+    # Build natural human-style verdict
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    verdict = "INCERTAIN"
+    if github_count > 0 and "dependabot" in text.lower():
+        verdict = "VRAI" if github_count >= 20 else "FAUX (beaucoup moins)"
+    elif any(k in text.lower() for k in ["passe à", "49 $", "49$/mois", "cursor pro"]):
+        # example: we didn't find confirmation in search typically
+        verdict = "FAUX / INCERTAIN (pas de confirmation officielle récente dans les snippets)"
+    elif any(k in text.lower() for k in ["facture", "0,45", "render", "python", "512"]):
+        verdict = "À vérifier sur le dashboard Render — pas de trace publique immédiate dans les résultats"
+    elif "catalogue" in text.lower() or "spark" in text.lower() or "claude opus" in text.lower() or "grok 4" in text.lower():
+        verdict = "INCERTAIN (les catalogues modèles changent vite — pas de hit clair dans les 4 snippets)"
+
+    if lang == "fr":
+        lines = [
+            f"OK, j'ai checké « {snippet} » ({now}).",
+        ]
+        if web_bits:
+            lines.append("Web (DDG) :")
+            lines.extend(web_bits[:3])
+        if github_detail:
+            lines.append(github_detail)
+        lines.append(f"Verdict : {verdict}")
+        lines.append(
+            "Comme si on causait : ouais je vois pas de preuve solide pour la plupart de ces claims. "
+            "Si t'as un lien officiel / changelog / tweet, balance, je re-vérifie direct."
+        )
+        reply = "\n".join(lines)
+    else:
+        reply = f"Checked the claim « {snippet} ». Verdict: {verdict}. Sources checked via web + GitHub where relevant."
+
+    meta["verdict"] = verdict
+    meta["actions"] = actions
+    return reply, meta

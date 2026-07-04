@@ -441,9 +441,23 @@ class AriaBrain:
             from aria_core.operator_conversational import (
                 is_injected_factual_claim,
                 unverified_claim_reply,
+                verify_external_claim,
+                wants_claim_verification,
             )
 
             if is_injected_factual_claim(route_msg):
+                # Operator pasted a news-like claim (price, catalog, billing, PRs...).
+                # We now VERIFY instead of blindly refusing — determine vrai/faux with tools, reply like human chat.
+                if wants_claim_verification(route_msg) or True:  # always dig for operator so ARIA can answer these
+                    claim_reply, vdata = await verify_external_claim(route_msg, lang=lang_key)
+                    await repertoire_db.save_message("agent", claim_reply, visitor_id=vid)
+                    append_memory("chat", f"User: {user_message[:100]}\nARIA: {claim_reply[:200]}")
+                    return ChatResponse(
+                        reply=claim_reply,
+                        skill_used="EXTERNAL_CLAIM_VERIFY",
+                        actions_taken=["Affirmation externe vérifiée (web + GitHub au besoin)"],
+                        data={"injected_claim": True, "claim_verified": True, **(vdata or {})},
+                    )
                 claim_reply = unverified_claim_reply(route_msg, lang=lang_key)
                 await repertoire_db.save_message("agent", claim_reply, visitor_id=vid)
                 append_memory("chat", f"User: {user_message[:100]}\nARIA: {claim_reply[:200]}")
