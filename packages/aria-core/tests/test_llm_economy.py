@@ -11,6 +11,20 @@ def test_detect_depth_brief_on_ok():
     assert detect_depth("ok prevu") == LlmDepth.BRIEF
 
 
+def test_detect_depth_chiron_salut_is_develop(tmp_path):
+    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
+
+    configure_test_runtime(
+        data_dir=tmp_path / "data",
+        settings=AriaRuntimeSettings(
+            llm_provider="virtuals",
+            aria_spark_aggressive=True,
+            aria_llm_depth_default="develop",
+        ),
+    )
+    assert detect_depth("salut") == LlmDepth.DEVELOP
+
+
 def test_detect_depth_develop_on_explicit():
     assert detect_depth("développe la stratégie token") == LlmDepth.DEVELOP
 

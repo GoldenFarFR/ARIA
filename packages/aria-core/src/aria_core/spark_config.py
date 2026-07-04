@@ -93,10 +93,17 @@ def spark_model_for_prompt(prompt: str, vault: dict[str, str] | None = None) -> 
     """Depth routing for worker + calibrated brain — SSOT."""
     text = (prompt or "").strip()
     merged = vault if vault is not None else read_merged_vault_env()
-    if re.search(r"(?i)/depth\s+develop\b", text) or _DEVELOP_HINT.search(text) or len(text) > 420:
-        return vault_get("ARIA_LLM_MODEL_DEVELOP", vault=merged) or DEFAULT_MODEL_DEVELOP
+    depth_default = (vault_get("ARIA_LLM_DEPTH_DEFAULT", vault=merged) or "brief").strip().lower()
+    aggressive = _flag_true("ARIA_SPARK_AGGRESSIVE", merged)
     if re.search(r"(?i)/depth\s+brief\b", text):
         return vault_get("ARIA_LLM_MODEL_BRIEF", vault=merged) or DEFAULT_MODEL_BRIEF
+    if (
+        re.search(r"(?i)/depth\s+develop\b", text)
+        or _DEVELOP_HINT.search(text)
+        or len(text) > 420
+        or (aggressive and depth_default == "develop")
+    ):
+        return vault_get("ARIA_LLM_MODEL_DEVELOP", vault=merged) or DEFAULT_MODEL_DEVELOP
     standard = vault_get("ARIA_LLM_MODEL_STANDARD", vault=merged) or DEFAULT_MODEL_STANDARD
     primary = resolve_primary_llm_model(merged)
     if primary not in BANNED_VIRTUALS_PRIMARY_MODELS:
