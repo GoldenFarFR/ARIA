@@ -100,6 +100,26 @@ def _monthly_spend_cap_usd() -> float:
     return min(settings.x_monthly_spend_cap_usd, settings.x_monthly_budget_usd)
 
 
+def _daily_quota_active() -> bool:
+    return settings.x_max_posts_per_day > 0
+
+
+def _min_gap_active() -> bool:
+    return settings.x_min_hours_between_posts > 0
+
+
+def _format_daily_limit(lang: str = "fr") -> str:
+    if not _daily_quota_active():
+        return "illimité" if lang == "fr" else "unlimited"
+    return str(settings.x_max_posts_per_day)
+
+
+def _format_min_gap(lang: str = "fr") -> str:
+    if not _min_gap_active():
+        return "aucun" if lang == "fr" else "none"
+    return f"{settings.x_min_hours_between_posts}h"
+
+
 def _check_monthly_spend(ledger: dict[str, Any], cost: float, *, force: bool) -> tuple[bool, str]:
     cap = _monthly_spend_cap_usd()
     projected = float(ledger.get("estimated_spend_usd", 0)) + cost
@@ -145,7 +165,7 @@ def policy_rules_for_llm(lang: str = "en") -> str:
             "- Anglais uniquement sur X (pas de tweet français).\n"
             "- Pas d'URL (coût 0,20 $ vs 0,015 $).\n"
             "- Interdit : $X, pump, moon, 100x, buy now, NFA, conseil financier, hype prix.\n"
-            "- Max 3 tweets/jour, 4h entre posts, budget ~1 $/mois — pas de spam.\n"
+            "- Pas de quota journalier ni d'intervalle min (budget API seulement).\n"
             "- Ton : building in public, faits vérifiés, Vanguard ZHC — pas de shill.\n"
             "- @mentions : alias +veille / @holding OK (expansion auto)."
         )
@@ -154,7 +174,7 @@ def policy_rules_for_llm(lang: str = "en") -> str:
         "- English only on X (no French tweets).\n"
         "- No URLs ($0.20 vs $0.015 per tweet).\n"
         "- Forbidden: $X, pump, moon, 100x, buy now, NFA, financial advice, price hype.\n"
-        "- Max 3 tweets/day, 4h gap, ~$1/mo spend cap — no spam.\n"
+        "- No daily quota or min gap (API spend cap only).\n"
         "- Tone: building in public, verified facts, Vanguard ZHC — no shill.\n"
         "- Voice: natural human prose — no AI/agent/CAO character (see x_voice rules).\n"
         "- @mentions: +veille / @holding aliases OK (auto-expanded)."
@@ -181,8 +201,8 @@ def policy_summary(lang: str = "fr") -> str:
     if lang == "fr":
         return (
             f"Politique X {handle} (pay-per-use)\n\n"
-            f"- Tweets max / jour : {settings.x_max_posts_per_day}\n"
-            f"- Intervalle min : {settings.x_min_hours_between_posts}h\n"
+            f"- Tweets max / jour : {_format_daily_limit('fr')}\n"
+            f"- Intervalle min : {_format_min_gap('fr')}\n"
             f"- Abonnement X : {settings.x_monthly_budget_usd:.2f} $/mois\n"
             f"- Plafond dépense Aria : {settings.x_monthly_spend_cap_usd:.2f} $/mois (actif)\n"
             f"- URLs dans tweets : {'bloquées' if settings.x_block_urls_in_posts else 'autorisées'} "
@@ -194,8 +214,8 @@ def policy_summary(lang: str = "fr") -> str:
             f"- Fichier : data/memory/x_publication_policy.md"
         )
     return (
-        f"X policy {handle} — max {settings.x_max_posts_per_day}/day, "
-        f"{settings.x_min_hours_between_posts}h gap, "
+        f"X policy {handle} — max {_format_daily_limit('en')}/day, "
+        f"{_format_min_gap('en')} gap, "
         f"${settings.x_monthly_spend_cap_usd:.2f}/mo spend cap "
         f"(${settings.x_monthly_budget_usd:.2f} subscription)."
     )
@@ -297,7 +317,7 @@ def check_tweet_allowed(
 
     ledger = _load_ledger()
     today_posts = _posts_today(ledger)
-    if len(today_posts) >= settings.x_max_posts_per_day and not force:
+    if _daily_quota_active() and len(today_posts) >= settings.x_max_posts_per_day and not force:
         return (
             False,
             f"Quota journalier atteint ({settings.x_max_posts_per_day} tweets/jour).",
@@ -305,69 +325,7 @@ def check_tweet_allowed(
         )
 
     last = _last_post_at(ledger)
-    if last and not force and not skip_rate_gap:
-        gap = datetime.now(timezone.utc) - last
-        need = timedelta(hours=settings.x_min_hours_between_posts)
-        if gap < need:
-            wait = need - gap
-            hrs = wait.total_seconds() / 3600
-            return False, f"Attendre encore {hrs:.1f}h entre deux publications.", cost
-
-    ok, reason = _check_monthly_spend(ledger, cost, force=force)
-    if not ok:
-        return False, reason, cost
-
-    return True, "OK", cost
-
-
-def check_workflow_used_tweet_allowed(
-    text: str,
-    *,
-    force: bool = False,
-) -> tuple[bool, str, float]:
-    """Tweet ACP « workflow used » — autorise le lien Virtuals si configuré."""
-    try:
-        from aria_core.skills.acp_workflow_social import workflow_tweet_allow_url
-
-        allow_urls = workflow_tweet_allow_url()
-    except Exception:
-        allow_urls = False
-
-    if not settings.x_post_enabled and not force:
-        return False, "Publication X désactivée (X_POST_ENABLED=false).", 0.0
-
-    from aria_core.x_text import X_TWEET_MAX_CHARS, weighted_tweet_length
-
-    body = text.strip()
-    if not body:
-        return False, "Tweet vide.", 0.0
-    weight = weighted_tweet_length(body)
-    if weight > X_TWEET_MAX_CHARS:
-        return False, f"Tweet trop long ({weight}/{X_TWEET_MAX_CHARS} poids X).", 0.0
-
-    cost = _estimate_tweet_cost(body)
-    if settings.x_block_urls_in_posts and _contains_url(body) and not allow_urls:
-        return (
-            False,
-            "URL détectée — active ARIA_ACP_WORKFLOW_TWEET_ALLOW_URL=true pour workflow-used.",
-            cost,
-        )
-
-    content_ok, content_reason = check_tweet_content(body, allow_urls=allow_urls)
-    if not content_ok:
-        return False, f"Contenu bloqué ({content_reason}).", cost
-
-    ledger = _load_ledger()
-    today_posts = _posts_today(ledger)
-    if len(today_posts) >= settings.x_max_posts_per_day and not force:
-        return (
-            False,
-            f"Quota journalier atteint ({settings.x_max_posts_per_day} tweets/jour).",
-            cost,
-        )
-
-    last = _last_post_at(ledger)
-    if last and not force:
+    if _min_gap_active() and last and not force and not skip_rate_gap:
         gap = datetime.now(timezone.utc) - last
         need = timedelta(hours=settings.x_min_hours_between_posts)
         if gap < need:
@@ -458,11 +416,11 @@ def ensure_policy_file() -> None:
         "**Oui — likes, réponses et DM coûtent chacun ~0,015 $ via l'API.**\n"
         "Ils restent désactivés par défaut (pas de ROI vs tweets originaux).\n\n"
         "## Quotas & budget (.env)\n"
-        "- `X_MAX_POSTS_PER_DAY=3`\n"
-        "- `X_MIN_HOURS_BETWEEN_POSTS=4`\n"
+        "- `X_MAX_POSTS_PER_DAY=0` — 0 = illimité (pas de quota journalier)\n"
+        "- `X_MIN_HOURS_BETWEEN_POSTS=0` — 0 = pas d'intervalle min\n"
         "- `X_MONTHLY_BUDGET_USD=5` — abonnement / crédits console X\n"
         "- `X_MONTHLY_SPEND_CAP_USD=1` — plafond dépense Aria (pour l'instant)\n"
-        "- `X_BLOCK_URLS_IN_POSTS=true` (évite 0,20 $/tweet)\n"
+        "- `X_BLOCK_URLS_IN_POSTS=true` — jamais d'URL dans tweets auto (0,20 $/tweet)\n"
         "- `X_ALLOW_LIKES/REPLIES/DMS=false`\n\n"
         "## Contenu autorisé\n"
         "- Anglais uniquement sur X\n"
@@ -472,7 +430,7 @@ def ensure_policy_file() -> None:
         "## Contenu interdit (bloqué auto)\n"
         "- Hype prix ($X, pump, moon, 100x, buy now)\n"
         "- Conseil financier ou promesses de gain\n"
-        "- URLs dans tweets auto (sauf override manuel)\n\n"
+        "- URLs dans tweets auto (tous workflows ACP inclus)\n\n"
         "## Commandes Telegram\n"
         "- `/x status` — connexion + dépense\n"
         "- `/x policy` — cette politique\n"

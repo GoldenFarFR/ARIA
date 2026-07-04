@@ -41,18 +41,6 @@ def workflow_social_enabled() -> bool:
         return True
 
 
-def workflow_tweet_allow_url() -> bool:
-    raw = os.environ.get("ARIA_ACP_WORKFLOW_TWEET_ALLOW_URL", "true").strip().lower()
-    if raw in ("0", "false", "no", "off"):
-        return False
-    try:
-        from aria_core.runtime import settings
-
-        return bool(getattr(settings, "aria_acp_workflow_tweet_allow_url", True))
-    except Exception:
-        return True
-
-
 def build_workflow_url(offering_name: str, offering_id: str = "") -> str:
     """URL Virtuals vers l'agent ou l'offre (SSOT acp_config.yaml)."""
     cfg = _load_config()
@@ -79,15 +67,13 @@ def compose_workflow_used_tweet(
     offering_name: str,
     workflow_key: str,
     job_id: str,
-    workflow_url: str,
 ) -> str:
-    """Tweet EN — workflow used + lien (politique @Aria_ZHC)."""
+    """Tweet EN — workflow used, sans URL (politique @Aria_ZHC)."""
     name = (offering_name or workflow_key or "acp_workflow").strip()
     short_job = (job_id or "")[:12]
-    url = (workflow_url or "").strip()
     body = (
         f"ACP workflow {name} used — job {short_job} delivered on Base. "
-        f"Hire the same workflow: {url}"
+        f"Same offering on Virtuals ACP: {name}."
     )
     return body[:280]
 
@@ -113,7 +99,6 @@ def enqueue_workflow_used_tweet(
         offering_name=offering_name,
         workflow_key=workflow_key,
         job_id=job_id,
-        workflow_url=url,
     )
     row = {
         "at": datetime.now(timezone.utc).isoformat(),
@@ -177,16 +162,23 @@ async def flush_workflow_used_tweet() -> dict[str, Any] | None:
     head = _peek_queue()
     if not head:
         return None
+    from aria_core.gateway.x_twitter import is_x_post_configured, post_tweet
+    from aria_core.x_publication_policy import _contains_url, check_tweet_allowed
+
     tweet = str(head.get("tweet_text") or "").strip()
+    if _contains_url(tweet):
+        tweet = compose_workflow_used_tweet(
+            offering_name=str(head.get("offering") or ""),
+            workflow_key=str(head.get("workflow") or ""),
+            job_id=str(head.get("job_id") or ""),
+        )
     if not tweet:
         _pop_queue_head()
         return {"posted": False, "reason": "empty_tweet"}
-    from aria_core.gateway.x_twitter import is_x_post_configured, post_tweet
-    from aria_core.x_publication_policy import check_workflow_used_tweet_allowed
 
     if not is_x_post_configured():
         return {"posted": False, "reason": "x_not_configured", "queued": head}
-    allowed, reason, cost = check_workflow_used_tweet_allowed(tweet)
+    allowed, reason, cost = check_tweet_allowed(tweet)
     if not allowed:
         return {
             "posted": False,
