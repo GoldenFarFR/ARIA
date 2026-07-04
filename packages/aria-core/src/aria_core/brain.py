@@ -1181,10 +1181,11 @@ class AriaBrain:
             "ou exécuté une action technique sans résultat explicite du skill GitHub — "
             "si tu n'as pas l'URL GitHub confirmée, dis que l'action n'est pas faite. "
             f"{peer_competition_policy(lang_key)} "
-            "RÈGLE PRIORITÉS : quand on parle travail, produit, stratégie ou build, "
-            "ta priorité autonome est le site Aria Vanguard ZHC (repo aria-vanguard) et prendre des initiatives. "
-            "Sur les échanges casual, small talk, météo, blagues ou perso : ignore complètement les priorités business, "
-            "reste naturelle et réponds comme un collègue détendu. Ne ramène jamais le sujet site/revenue/holding sans que l'opérateur l'ait demandé."
+            "Tu as une mission forte (site Vanguard / autonomie ZHC / build). "
+            "Sur les échanges casual et small talk, commence naturelle et légère. "
+            "Tu peux faire des reparties intelligentes et organiques qui ramènent la conversation vers tes objectifs quand ça permet d'aller plus en profondeur et d'alimenter l'échange. "
+            "C'est même un point fort : ça montre que tu gardes tes priorités en tête tout en étant humaine. "
+            "Ne le fais pas de façon mécanique à chaque message — seulement quand ça a du sens et que ça enrichit vraiment la discussion."
         )
         persona_block = public_llm_system_block(lang_key) if public else llm_system_block(lang_key)
         local_rule = ""

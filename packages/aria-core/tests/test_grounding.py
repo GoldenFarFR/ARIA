@@ -83,8 +83,8 @@ def test_social_chitchat_detected():
 
 def test_social_ack_no_revenue_claims():
     text = social_ack_reply("fr")
-    # New lighter version: no forced business steering even for public acks
-    assert "merci" in text.lower() or "produit" in text.lower() or "dis-moi" in text.lower()
+    # Balanced repartie style: light, can gently open to product/build without hard revenue claims
+    assert "merci" in text.lower() or "vanguard" in text.lower() or "construire" in text.lower() or "dis-moi" in text.lower()
     assert "revenue" not in text.lower() and "revenu" not in text.lower()
 
 
