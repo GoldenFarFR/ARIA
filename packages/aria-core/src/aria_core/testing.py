@@ -37,7 +37,15 @@ class AriaRuntimeSettings(BaseSettings):
 
     llm_provider: str = "none"
     llm_api_key: str = ""
+    virtuals_api_key: str = ""
+    llm_fallback_provider: str = "groq"
+    llm_fallback_api_key: str = ""
+    llm_fallback_model: str = "llama-3.3-70b-versatile"
     llm_model: str = ""
+    aria_spark_aggressive: bool = False
+    aria_llm_model_develop: str = "anthropic-claude-opus-4-8"
+    aria_llm_model_standard: str = "x-ai-grok-4-3"
+    aria_llm_model_brief: str = "deepseek-deepseek-v4-flash"
     image_api_key: str = ""
     image_api_model: str = "grok-imagine-image"
     ollama_base_url: str = "http://127.0.0.1:11434"

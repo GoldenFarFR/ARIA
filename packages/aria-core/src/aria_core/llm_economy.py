@@ -159,38 +159,62 @@ def resolve_budget(
             model_override=_brief_model_if(depth),
             enhance_max_tokens=280,
         )
+    spark_boost = _spark_aggressive()
+    std_model = _spark_model_for_depth(LlmDepth.STANDARD) if _spark_active() else None
+    dev_model = _spark_model_for_depth(LlmDepth.DEVELOP) if _spark_active() else None
     if depth == LlmDepth.STANDARD:
         return LlmEconomyBudget(
             depth=depth,
-            max_tokens=std_tok if not public else min(std_tok, 350),
-            context_max_chars=std_ctx,
-            history_turns=6,
-            history_msg_chars=350,
-            include_context_conversations=False,
-            include_context_extras=False,
-            collegue_max_chars=2500,
-            model_override=None,
-            enhance_max_tokens=400,
+            max_tokens=(std_tok * 2 if spark_boost else std_tok) if not public else min(std_tok, 350),
+            context_max_chars=std_ctx * 2 if spark_boost else std_ctx,
+            history_turns=8 if spark_boost else 6,
+            history_msg_chars=450 if spark_boost else 350,
+            include_context_conversations=spark_boost,
+            include_context_extras=spark_boost,
+            collegue_max_chars=4000 if spark_boost else 2500,
+            model_override=std_model,
+            enhance_max_tokens=600 if spark_boost else 400,
         )
     return LlmEconomyBudget(
         depth=depth,
-        max_tokens=dev_tok if not public else min(dev_tok, 500),
-        context_max_chars=dev_ctx,
-        history_turns=10,
-        history_msg_chars=500,
+        max_tokens=(dev_tok * 2 if spark_boost else dev_tok) if not public else min(dev_tok, 500),
+        context_max_chars=dev_ctx * 2 if spark_boost else dev_ctx,
+        history_turns=14 if spark_boost else 10,
+        history_msg_chars=700 if spark_boost else 500,
         include_context_conversations=True,
         include_context_extras=True,
         collegue_max_chars=0,
-        model_override=None,
-        enhance_max_tokens=800,
+        model_override=dev_model,
+        enhance_max_tokens=1200 if spark_boost else 800,
     )
 
 
+def _spark_active() -> bool:
+    return (settings.llm_provider or "").strip().lower() == "virtuals"
+
+
+def _spark_model_for_depth(depth: LlmDepth) -> str | None:
+    if not _spark_active():
+        return None
+    if depth == LlmDepth.DEVELOP:
+        return (getattr(settings, "aria_llm_model_develop", None) or "").strip() or None
+    if depth == LlmDepth.STANDARD:
+        return (getattr(settings, "aria_llm_model_standard", None) or "").strip() or None
+    return (getattr(settings, "aria_llm_model_brief", None) or "").strip() or None
+
+
 def _brief_model_if(depth: LlmDepth) -> str | None:
+    spark_model = _spark_model_for_depth(depth)
+    if spark_model:
+        return spark_model
     if depth != LlmDepth.BRIEF:
         return None
     override = (getattr(settings, "aria_llm_model_brief", None) or "").strip()
     return override or None
+
+
+def _spark_aggressive() -> bool:
+    return bool(getattr(settings, "aria_spark_aggressive", False)) and _spark_active()
 
 
 def provider_display_name() -> str:
@@ -199,6 +223,8 @@ def provider_display_name() -> str:
         return "Grok/xAI"
     if p == "groq":
         return "Groq"
+    if p == "virtuals":
+        return "Virtuals Spark"
     if p == "ollama":
         return "Ollama"
     return p or "cloud"
