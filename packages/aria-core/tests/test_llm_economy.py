@@ -42,7 +42,16 @@ def test_brief_budget_uses_mini_model_and_small_context(tmp_path):
     assert budget.model_override == "grok-3-mini"
 
 
-def test_develop_budget_full_context():
+def test_develop_budget_full_context(tmp_path):
+    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
+
+    configure_test_runtime(
+        data_dir=tmp_path / "data",
+        settings=AriaRuntimeSettings(
+            llm_provider="groq",
+            aria_spark_aggressive=False,
+        ),
+    )
     budget = resolve_budget(LlmDepth.DEVELOP, public=False)
     assert budget.max_tokens >= 700
     assert budget.include_context_extras is True
