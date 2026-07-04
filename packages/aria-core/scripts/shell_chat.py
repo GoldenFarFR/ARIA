@@ -81,9 +81,9 @@ def _spark_settings() -> dict[str, str | bool]:
         "llm_fallback_provider": vault.get("LLM_FALLBACK_PROVIDER") or "groq",
         "llm_fallback_model": vault.get("LLM_FALLBACK_MODEL") or "llama-3.3-70b-versatile",
         "aria_spark_aggressive": (vault.get("ARIA_SPARK_AGGRESSIVE") or "").lower() in ("1", "true", "yes"),
-        "aria_llm_model_develop": vault.get("ARIA_LLM_MODEL_DEVELOP") or "anthropic-claude-opus-4-8",
+        "aria_llm_model_develop": vault.get("ARIA_LLM_MODEL_DEVELOP") or "x-ai-grok-4-3",
         "aria_llm_model_standard": vault.get("ARIA_LLM_MODEL_STANDARD") or "x-ai-grok-4-3",
-        "aria_llm_model_brief": vault.get("ARIA_LLM_MODEL_BRIEF") or "deepseek-deepseek-v4-flash",
+        "aria_llm_model_brief": vault.get("ARIA_LLM_MODEL_BRIEF") or "x-ai-grok-4-3",
     }
 
 
