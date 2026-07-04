@@ -7,6 +7,7 @@ from aria_core.grounding import (
     grounded_for_audience,
     is_greeting,
     is_social_chitchat,
+    is_pure_casual_smalltalk,
     should_skip_llm_enhance,
     social_ack_reply,
     unknown_reply,
@@ -82,5 +83,15 @@ def test_social_chitchat_detected():
 
 def test_social_ack_no_revenue_claims():
     text = social_ack_reply("fr")
-    assert "revenus" in text.lower() or "vérifi" in text.lower()
-    assert "équipe" not in text.lower() or "vérifi" in text.lower()
+    # New lighter version: no forced business steering even for public acks
+    assert "merci" in text.lower() or "produit" in text.lower() or "dis-moi" in text.lower()
+    assert "revenue" not in text.lower() and "revenu" not in text.lower()
+
+
+def test_pure_casual_smalltalk_detects_daily_life():
+    assert is_pure_casual_smalltalk("Il fait beau chez toi ?")
+    assert is_pure_casual_smalltalk("T'as mangé quoi aujourd'hui ?")
+    assert is_pure_casual_smalltalk("Raconte une blague nulle")
+    assert is_pure_casual_smalltalk("Ça va ? Ta journée ?")
+    assert not is_pure_casual_smalltalk("Qu'est-ce que le site Vanguard ?")
+    assert not is_pure_casual_smalltalk("On en est où sur le revenue goal ?")
