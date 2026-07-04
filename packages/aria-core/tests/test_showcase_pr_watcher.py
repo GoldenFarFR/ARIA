@@ -103,6 +103,63 @@ async def test_run_showcase_pr_watch_replies_to_external(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_showcase_pr_watch_skips_when_human_replied_first(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        spw,
+        "load_watch_targets",
+        lambda: [
+            {
+                "owner": "Virtual-Protocol",
+                "repo": "acp-cli-demos",
+                "pr_number": 37,
+                "enabled": True,
+                "our_logins": ["GoldenFarFR"],
+            }
+        ],
+    )
+    monkeypatch.setattr(spw, "_STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr("aria_core.skills.showcase_pr_watcher.github_configured", lambda: True)
+
+    class FakeSettings:
+        github_token = "test-token"
+
+    monkeypatch.setattr(spw, "settings", FakeSettings())
+
+    class FakeClient:
+        async def list_issue_comments(self, owner, repo, issue_number):
+            return [
+                {
+                    "id": 100,
+                    "user": {"login": "virtuals-dev"},
+                    "body": "Can you clarify the 500?",
+                    "created_at": "2026-07-04T18:00:00Z",
+                    "html_url": "https://example/100",
+                },
+                {
+                    "id": 101,
+                    "user": {"login": "GoldenFarFR"},
+                    "body": "Sure — here is the stack trace from our side.",
+                    "created_at": "2026-07-04T18:05:00Z",
+                    "html_url": "https://example/101",
+                },
+            ]
+
+        async def list_pull_reviews(self, owner, repo, pull_number):
+            return []
+
+        async def create_issue_comment(self, owner, repo, issue_number, body):
+            raise AssertionError("should not post when human already replied")
+
+    monkeypatch.setattr(spw, "GitHubClient", lambda token: FakeClient())
+
+    result = await spw.run_showcase_pr_watch()
+    assert result["new_external"] == 0
+    assert result["replied"] == []
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert state.get("handled", {}).get("issue:100") == "human-replied"
+
+
+@pytest.mark.asyncio
 async def test_run_showcase_pr_watch_skips_our_comments(monkeypatch, tmp_path):
     monkeypatch.setattr(
         spw,

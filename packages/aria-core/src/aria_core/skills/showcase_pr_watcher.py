@@ -153,6 +153,25 @@ def _is_external_comment(row: dict[str, Any], ours: set[str], target: dict[str, 
     return bool(author_l and author_l not in ours)
 
 
+def _already_answered_by_us(
+    comments: list[dict[str, Any]],
+    external_row: dict[str, Any],
+    ours: set[str],
+) -> bool:
+    """Skip auto-reply if operator already posted after this external comment."""
+    ext_at = (external_row.get("created_at") or "").strip()
+    if not ext_at:
+        return False
+    for row in comments:
+        author_l = (row.get("author") or "").lower()
+        if author_l not in ours:
+            continue
+        ours_at = (row.get("created_at") or "").strip()
+        if ours_at and ours_at > ext_at:
+            return True
+    return False
+
+
 def _comment_key(kind: str, comment_id: int | str) -> str:
     return f"{kind}:{comment_id}"
 
@@ -288,6 +307,9 @@ async def run_showcase_pr_watch(*, post_replies: bool = True) -> dict[str, Any]:
             if not key or not _is_external_comment(row, ours, target):
                 continue
             if key in handled:
+                continue
+            if _already_answered_by_us(comments, row, ours):
+                handled[key] = "human-replied"
                 continue
 
             result["new_external"] += 1
