@@ -107,7 +107,7 @@ def wants_holding_site(message: str) -> bool:
     return bool(
         re.search(
             r"site web|site holding|constru.*site|build.*site|créer.*site|creer.*site|"
-            r"aria.?vanguard|vanguard.*site|holding.*site|ariavanguardzhc|"
+            r"aria.?vanguard|vanguard.*site|holding\s+site|ariavanguardzhc|"
             r"devenir autonome|prendre des initiatives?",
             lower,
         )
