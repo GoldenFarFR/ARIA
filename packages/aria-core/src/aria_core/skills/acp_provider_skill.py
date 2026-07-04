@@ -12,6 +12,12 @@ from typing import Any
 import yaml
 
 from aria_core.skills.acp_cli import is_acp_available, job_history, provider_submit
+from aria_core.skills.acp_deliverable_quality import (
+    log_quality_receipt,
+    should_block_submit,
+    validate_deliverable,
+)
+from aria_core.skills.acp_workflow_engine import build_deliverable_for_job
 
 logger = logging.getLogger(__name__)
 
@@ -154,53 +160,24 @@ def _needs_provider_submit(history: dict) -> bool:
     return bool(status)
 
 
+# Backward-compatible exports for tests
 def _heuristic_audit(contract: str, *, full: bool) -> dict[str, Any]:
-    ca = (contract or "").strip()
-    if not _ADDR_RE.match(ca):
-        verdict = "CAUTION"
-        alerts = "Adresse contrat absente ou invalide — audit limité."
-        score = "35"
-    elif ca.lower().endswith("0000000000000000000000000000000000000000"):
-        verdict = "DANGER"
-        alerts = "Adresse nulle — risque élevé."
-        score = "5"
-    else:
-        verdict = "CAUTION"
-        alerts = (
-            "Scan heuristique ARIA (pas d'audit on-chain complet) : "
-            "vérifier liquidité, ownership renounced, honeypot, volume réel."
-        )
-        score = "55"
+    """Sync stub — prefer acp_workflow_engine + acp_onchain_scan."""
+    import asyncio
 
-    if full:
-        report = (
-            f"Audit FULL-X1 (heuristique ARIA) — CA {ca or 'N/A'}\n"
-            f"Verdict : {verdict}. Score sécurité : {score}/100.\n"
-            f"{alerts}\n"
-            "Recommandation : confirmer via explorers (Basescan), DexScreener, "
-            "et ne pas allouer de capital sans due diligence humaine."
-        )
-        return {
-            "verdict": verdict.replace("DANGER", "AVOID").replace("CAUTION", "SPECULATIVE"),
-            "securityScore": score,
-            "auditReport": report,
-        }
-    return {
-        "liteVerdict": verdict,
-        "riskAlerts": alerts,
-    }
+    from aria_core.skills.acp_onchain_scan import scan_base_token
+    from aria_core.skills.acp_workflow_engine import build_full_deliverable, build_lite_deliverable
+
+    ctx = asyncio.run(scan_base_token(contract))
+    return build_full_deliverable(ctx) if full else build_lite_deliverable(ctx)
 
 
 def _build_deliverable(history: dict) -> dict[str, Any] | None:
-    offering = _offering_name(history).lower()
-    contract = _contract_from_job(history)
-    full = "full" in offering or "analyse_full" in offering
-    lite = "lite" in offering or "analyse_lite" in offering or not full
-    if full:
-        return _heuristic_audit(contract, full=True)
-    if lite:
-        return _heuristic_audit(contract, full=False)
-    return _heuristic_audit(contract, full=False)
+    import asyncio
+
+    offering = _offering_name(history)
+    deliverable, _wf, _ctx = asyncio.run(build_deliverable_for_job(offering, history))
+    return deliverable
 
 
 async def _process_job(job_id: str, *, chain_id: str) -> str | None:
@@ -210,11 +187,53 @@ async def _process_job(job_id: str, *, chain_id: str) -> str | None:
         return None
     if not _needs_provider_submit(history):
         return None
-    deliverable = _build_deliverable(history)
+
+    offering = _offering_name(history)
+    deliverable, workflow, ctx = await build_deliverable_for_job(offering, history)
     if not deliverable:
         return None
+
+    onchain_score = ctx.security_score if ctx else None
+    report = validate_deliverable(workflow, deliverable, onchain_score=onchain_score)
+    if should_block_submit(report):
+        log_quality_receipt(
+            job_id=job_id,
+            workflow=workflow,
+            report=report,
+            submitted=False,
+            offering=offering,
+        )
+        logger.warning(
+            "ACP job %s quality gate FAILED (score=%s): %s",
+            job_id,
+            report.score,
+            "; ".join(report.issues),
+        )
+        return f"quality_blocked:{job_id}"
+
     ok, msg = provider_submit(job_id, deliverable, chain_id=chain_id)
+    log_quality_receipt(
+        job_id=job_id,
+        workflow=workflow,
+        report=report,
+        submitted=ok,
+        offering=offering,
+    )
     if ok:
+        try:
+            from aria_core.revenue_goals import record_revenue
+
+            cfg = _load_config()
+            offerings = cfg.get("offerings") or {}
+            price = 0.0
+            for key, spec in offerings.items():
+                if key.replace("_", "") in offering.lower().replace("_", "") or key in offering.lower():
+                    price = float((spec or {}).get("price_usd") or 0)
+                    break
+            if price > 0:
+                record_revenue(price, source="acp_provider", note=f"job:{job_id} {workflow}")
+        except Exception as exc:
+            logger.debug("revenue log skip: %s", exc)
         return f"submit:{job_id}"
     logger.warning("ACP submit %s failed: %s", job_id, msg)
     return None
@@ -256,6 +275,7 @@ async def run_provider_cycle(events_file: str | None = None) -> dict[str, Any]:
         "processed": 0,
         "actions": [],
         "errors": [],
+        "quality_blocked": 0,
         "events_read": 0,
     }
     if not is_acp_available():
@@ -288,8 +308,12 @@ async def run_provider_cycle(events_file: str | None = None) -> dict[str, Any]:
         action = await _process_job(job_id, chain_id=chain_id)
         seen.add(job_id)
         if action:
-            result["processed"] += 1
-            result["actions"].append(action)
+            if action.startswith("quality_blocked:"):
+                result["quality_blocked"] += 1
+                result["actions"].append(action)
+            elif action.startswith("submit:"):
+                result["processed"] += 1
+                result["actions"].append(action)
 
     state["seen_jobs"] = list(seen)
     _save_state(state)

@@ -1,0 +1,33 @@
+# ACP workflow quality gates — SSOT opérateur
+version: 1
+
+gates:
+  analyse_lite_x1:
+    min_quality_score: 70
+    min_risk_alerts_chars: 40
+    allowed_verdicts: [SAFE, CAUTION, DANGER]
+  analyse_full_x1:
+    min_quality_score: 75
+    min_audit_report_chars: 400
+    required_report_sections:
+      - "Executive summary"
+      - "Liquidity"
+      - "Volume"
+      - "Risk flags"
+      - "Recommendation"
+    allowed_verdicts: [AVOID, SPECULATIVE, SAFE]
+  veille_zhc_x1:
+    min_quality_score: 70
+    min_summary_chars: 80
+    min_action_note_chars: 40
+    allowed_signals: [WATCH, ALERT, CLEAR]
+
+onchain:
+  chain_dex_id: base
+  min_liquidity_usd_caution: 5000
+  min_liquidity_usd_danger: 500
+  min_volume_24h_usd: 1000
+
+submit:
+  block_on_quality_fail: true
+  log_receipts: true
