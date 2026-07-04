@@ -24,6 +24,21 @@ def test_compose_reply_thanks_on_merge_intent():
     assert "validate-showcase" in body
 
 
+def test_compose_reply_urgent():
+    body = spw.compose_reply(
+        "Urgent — we need a response on the Privy 500 blocker.",
+        target={"pr_number": 4},
+    )
+    assert "urgent ping" in body.lower()
+    assert "PR #4" in body
+
+
+def test_is_external_comment_with_sim_marker():
+    target = {"test_reviewer_marker": "[SIM reviewer]", "our_logins": ["GoldenFarFR"]}
+    row = {"author": "GoldenFarFR", "body": "[SIM reviewer] Urgent need a reply"}
+    assert spw._is_external_comment(row, {"goldenfarfr"}, target)
+
+
 def test_compose_reply_ack_on_incident():
     body = spw.compose_reply(
         "Yes this is a known Privy outage, investigating.",

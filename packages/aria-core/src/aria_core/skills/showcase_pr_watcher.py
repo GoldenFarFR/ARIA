@@ -68,6 +68,19 @@ _ACK_INCIDENT_TEMPLATE = """Thanks — noted on the API / Privy side.
 We are standing by in **degraded mode** (email watch + manual Hermes submit) for provider jobs until submit works again. We will update this thread when smoke test + escrow receipt succeed.
 """
 
+_URGENT_TEMPLATE = """Thanks for the urgent ping — we're on it.
+
+**Quick summary:**
+- Live ACP provider (Aria Vanguard ZHC) blocked by API **500** on provider submit since ~{blocker_since}
+- PR #{pr_number} adds degraded mode (`acp_email_watch` + `acp_prepare_skill`) so we can still fulfill manually via Hermes
+
+**What we need:**
+1. Is Privy/Alchemy 500 a known incident on your side?
+2. ETA for provider submit restoration?
+
+We will update this thread with smoke-test output or an escrow job receipt as soon as submit works.
+"""
+
 
 def wants_showcase_pr_watch(message: str) -> bool:
     return bool(_WATCH_CMD_RE.search((message or "").strip()))
@@ -104,6 +117,19 @@ def _our_logins(target: dict[str, Any]) -> set[str]:
     return {str(x).strip().lower() for x in raw if str(x).strip()}
 
 
+def _test_reviewer_marker(target: dict[str, Any]) -> str:
+    return str(target.get("test_reviewer_marker") or "").strip()
+
+
+def _is_external_comment(row: dict[str, Any], ours: set[str], target: dict[str, Any]) -> bool:
+    author_l = (row.get("author") or "").lower()
+    body = (row.get("body") or "").strip()
+    marker = _test_reviewer_marker(target)
+    if marker and marker in body:
+        return True
+    return bool(author_l and author_l not in ours)
+
+
 def _comment_key(kind: str, comment_id: int | str) -> str:
     return f"{kind}:{comment_id}"
 
@@ -124,6 +150,12 @@ def compose_reply(their_body: str, *, target: dict[str, Any]) -> str:
         text,
     ):
         return _THANKS_REOPEN_TEMPLATE.format(**ctx)
+
+    if re.search(
+        r"\b(urgent|urgence|asap|besoin.*retour|need.*response|need.*reply)\b",
+        text,
+    ):
+        return _URGENT_TEMPLATE.format(**ctx)
 
     if re.search(
         r"\b(500|privy|alchemy|incident|outage|degraded|maintenance|known issue)\b",
@@ -229,9 +261,8 @@ async def run_showcase_pr_watch(*, post_replies: bool = True) -> dict[str, Any]:
         result["scanned"] += len(comments)
 
         for row in comments:
-            author_l = (row.get("author") or "").lower()
             key = row.get("key") or ""
-            if not key or author_l in ours:
+            if not key or not _is_external_comment(row, ours, target):
                 continue
             if key in handled:
                 continue
