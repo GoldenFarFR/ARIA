@@ -49,3 +49,34 @@ async def test_collect_gaps_returns_structure():
     gaps, ok = await collect_readiness_gaps()
     assert isinstance(gaps, list)
     assert isinstance(ok, list)
+
+
+@pytest.mark.asyncio
+async def test_status_pulse_human_format(monkeypatch, tmp_path):
+    from aria_core.memory import collegue as collegue_mod
+    from aria_core.operator_readiness import execute_operator_status_pulse
+
+    journal = tmp_path / "JOURNAL.md"
+    journal.write_text(
+        "20h00 — ancien\n21h00 — milieu\n22h07 — fix pulse\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(collegue_mod, "_ops_memoire_candidates", lambda: [tmp_path])
+    monkeypatch.setattr(
+        "aria_core.operator_readiness._pending_worker_tasks",
+        lambda: [],
+    )
+    async def _fake_gaps(**_):
+        return [], ["API locale :8000 OK"]
+
+    monkeypatch.setattr(
+        "aria_core.operator_readiness.collect_readiness_gaps",
+        _fake_gaps,
+    )
+
+    reply, data = await execute_operator_status_pulse("rien de nouveau a declarer ?", lang="fr")
+    assert "Rien à déclarer" in reply
+    assert "vide — aucun [pending]" in reply
+    assert "22h07 — fix pulse" in reply
+    assert "Structure corporale" not in reply
+    assert data.get("pending_tasks") == []
