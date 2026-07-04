@@ -18,15 +18,19 @@ _LLM_ROUTING_RE = re.compile(
     r"provider\s*=\s*virtuals|compute\.virtuals\.io|"
     r"virtuals\s+spark\s+pas\s+apache|apache\s+spark\s+pas|"
     r"pr[eé]f[eè]res?|plut[oô]t|mieux.*(?:groq|spark|qwen|virtuals)|"
-    r"(?:groq|spark|qwen|virtuals).*(?:ou|vs|versus)"
+    r"(?:groq|spark|qwen|virtuals)\b.*\b(?:ou|vs|versus)\b"
     r")",
     re.IGNORECASE,
 )
 
 
 def is_llm_routing_question(message: str) -> bool:
+    from aria_core.operator_conversational import is_injected_factual_claim
+
     text = (message or "").strip()
     if len(text) < 8:
+        return False
+    if is_injected_factual_claim(text):
         return False
     if _LLM_ROUTING_RE.search(text):
         return True

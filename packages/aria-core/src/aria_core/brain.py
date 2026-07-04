@@ -214,6 +214,10 @@ def _routing_message(message: str) -> str:
 
 
 def detect_intent(message: str) -> SkillName | None:
+    from aria_core.operator_conversational import is_injected_factual_claim
+
+    if is_injected_factual_claim(message):
+        return None
     if wants_ingest_repo(message):
         return SkillName.INGEST_REPO
     if wants_acp_marketplace(message):
@@ -432,6 +436,22 @@ class AriaBrain:
                     skill_used=SkillName.CAPABILITY_QI,
                     actions_taken=["Compétences ARIA (local — sans épistémique)"],
                     data={"capability_improvement": True, "skip_web": True},
+                )
+
+            from aria_core.operator_conversational import (
+                is_injected_factual_claim,
+                unverified_claim_reply,
+            )
+
+            if is_injected_factual_claim(route_msg):
+                claim_reply = unverified_claim_reply(route_msg, lang=lang_key)
+                await repertoire_db.save_message("agent", claim_reply, visitor_id=vid)
+                append_memory("chat", f"User: {user_message[:100]}\nARIA: {claim_reply[:200]}")
+                return ChatResponse(
+                    reply=claim_reply,
+                    skill_used=None,
+                    actions_taken=["Affirmation externe (non vérifiée — sans skill détourné)"],
+                    data={"injected_claim": True, "skip_web": True},
                 )
 
         if is_greeting(route_msg):

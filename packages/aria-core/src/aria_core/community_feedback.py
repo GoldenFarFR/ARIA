@@ -64,13 +64,20 @@ _CONTACT_RE = re.compile(
 _ROADMAP_RE = re.compile(
     r"\b(?:futur|future|roadmap|suite|next\s+step|what'?s\s+next|partenariat|partnership|"
     r"partner|revenu|revenue|monétis|monetiz|business\s+model|generate|générer|"
-    r"earn|profit|plans?|strateg|stratég|prévu|prevu|bientôt|bientot)\b",
+    r"earn|profit|roadmap|plan\s+strat|strateg|stratég|prévu|prevu|bientôt|bientot)\b",
     re.IGNORECASE,
 )
 
 
 def is_roadmap_partnership_question(message: str) -> bool:
-    return bool(_ROADMAP_RE.search((message or "").strip()))
+    from aria_core.operator_conversational import is_injected_factual_claim
+
+    text = (message or "").strip()
+    if is_injected_factual_claim(text):
+        return False
+    if re.search(r"\bplan\s+gratuit\b", text, re.I):
+        return False
+    return bool(_ROADMAP_RE.search(text))
 
 
 def operator_roadmap_reply(*, lang: str = "fr") -> str:
