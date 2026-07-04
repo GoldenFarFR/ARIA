@@ -836,59 +836,65 @@ class AriaBrain:
         if is_short_ack(route):
             return "OK.", None, ["Ack (template)"], {}, None
         if not public:
-            from aria_core.llm_routing_meta import is_llm_routing_question, llm_routing_reply
-            from aria_core.response_cost import cost_meta_reply, is_cost_meta_question
+            from aria_core.grounding import is_pure_casual_smalltalk
 
-            from aria_core.operator_conversational import (
-                llm_preference_reply,
-                operator_improvement_reply,
-                wants_capability_improvement,
-                wants_more_detail_followup,
-            )
+            # Pure casual / humor / small talk with operator → skip all meta-routing
+            # and go straight to natural relaxed LLM (with repartie personality)
+            if not is_pure_casual_smalltalk(route):
+                from aria_core.llm_routing_meta import is_llm_routing_question, llm_routing_reply
+                from aria_core.response_cost import cost_meta_reply, is_cost_meta_question
 
-            if wants_capability_improvement(route):
-                return (
-                    operator_improvement_reply(lang=lang_key),
-                    SkillName.CAPABILITY_QI,
-                    ["Compétences ARIA (local QI — sans épistémique)"],
-                    {"capability_improvement": True, "skip_web": True},
-                    None,
+                from aria_core.operator_conversational import (
+                    llm_preference_reply,
+                    operator_improvement_reply,
+                    wants_capability_improvement,
+                    wants_more_detail_followup,
                 )
 
-            if wants_more_detail_followup(route) and is_llm_configured():
-                llm_reply = await self._llm_response(
-                    "Développe ta réponse précédente avec plus d'arguments concrets.",
-                    lang,
-                    public=False,
-                    visitor_id=visitor_id,
-                )
-                if llm_reply:
+                if wants_capability_improvement(route):
                     return (
-                        llm_reply,
-                        None,
-                        ["Suite / plus de détail (LLM opérateur)"],
-                        {"followup_detail": True},
+                        operator_improvement_reply(lang=lang_key),
+                        SkillName.CAPABILITY_QI,
+                        ["Compétences ARIA (local QI — sans épistémique)"],
+                        {"capability_improvement": True, "skip_web": True},
                         None,
                     )
 
-            if is_llm_routing_question(route):
-                pref = re.search(r"(?i)pr[eé]f|plut[oô]t|mieux|groq|spark|qwen", route)
-                body = llm_preference_reply(lang=lang_key) if pref else llm_routing_reply(lang_key, route)
-                return (
-                    body,
-                    None,
-                    ["Routage LLM (runtime — sans web)"],
-                    {"llm_routing_meta": True, "skip_web": True},
-                    None,
-                )
-            if is_cost_meta_question(route):
-                return (
-                    cost_meta_reply(lang_key),
-                    None,
-                    ["Coût LLM (template — sans API)"],
-                    {"cost_meta_help": True},
-                    None,
-                )
+                if wants_more_detail_followup(route) and is_llm_configured():
+                    llm_reply = await self._llm_response(
+                        "Développe ta réponse précédente avec plus d'arguments concrets.",
+                        lang,
+                        public=False,
+                        visitor_id=visitor_id,
+                    )
+                    if llm_reply:
+                        return (
+                            llm_reply,
+                            None,
+                            ["Suite / plus de détail (LLM opérateur)"],
+                            {"followup_detail": True},
+                            None,
+                        )
+
+                if is_llm_routing_question(route):
+                    # Only treat as model preference if it actually talks about choosing a provider/model
+                    pref = re.search(r"(?i)(?:pr[eé]f[eè]res?|plut[oô]t)\s*(?:groq|spark|qwen|virtuals|llm|moteur|provider)", route)
+                    body = llm_preference_reply(lang=lang_key) if pref else llm_routing_reply(lang_key, route)
+                    return (
+                        body,
+                        None,
+                        ["Routage LLM (runtime — sans web)"],
+                        {"llm_routing_meta": True, "skip_web": True},
+                        None,
+                    )
+                if is_cost_meta_question(route):
+                    return (
+                        cost_meta_reply(lang_key),
+                        None,
+                        ["Coût LLM (template — sans API)"],
+                        {"cost_meta_help": True},
+                        None,
+                    )
         if is_greeting(route):
             welcome = format_greeting_reply(route, lang_key, public=public)
             return welcome, None, ["Greeting (template)"], {"greeting": True}, None
@@ -899,10 +905,7 @@ class AriaBrain:
             # Operator: do NOT use the steering ack — fall through to natural LLM
             # (we will also catch broader casual below)
 
-        if not public and is_pure_casual_smalltalk(route):
-            # Pure small talk with operator → let LLM answer relaxed, no forced business.
-            # It will reach the LLM path with the updated persona rules.
-            pass  # fallthrough to relaxed conversation
+        # (casual bypass for operator already handled earlier — this is kept for safety)
         if public and is_community_suggestion(message):
             return (
                 community_suggestion_reply(lang_key),
