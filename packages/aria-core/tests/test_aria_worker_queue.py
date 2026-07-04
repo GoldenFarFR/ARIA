@@ -157,9 +157,17 @@ def test_resolve_local_worker_md_prefers_aria_ops(monkeypatch, tmp_path):
     from aria_core import aria_worker_queue as mod
 
     aria_ops = tmp_path / "aria-ops" / "collegue-memoire" / "sessions"
+    legacy = tmp_path / "ARIA" / "collegue-memoire" / "sessions"
     aria_ops.mkdir(parents=True)
-    worker = aria_ops / "ARIA-WORKER.md"
-    worker.write_text("# worker\n", encoding="utf-8")
-    monkeypatch.setattr(mod, "_local_worker_md_candidates", lambda: [worker])
+    legacy.mkdir(parents=True)
+    ops_worker = aria_ops / "ARIA-WORKER.md"
+    legacy_worker = legacy / "ARIA-WORKER.md"
+    ops_worker.write_text("## [done] ops-ssot\n", encoding="utf-8")
+    legacy_worker.write_text("## [pending] stale-task\n", encoding="utf-8")
+    monkeypatch.setattr(
+        mod,
+        "_local_worker_md_candidates",
+        lambda: [ops_worker, legacy_worker],
+    )
     got = resolve_local_worker_md()
-    assert got == worker
+    assert got == ops_worker

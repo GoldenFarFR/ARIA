@@ -894,6 +894,21 @@ class AriaBrain:
             if ledger_reply:
                 return ledger_reply, None, ["Truth ledger direct (verified)"], ledger_data, None
 
+        if not public:
+            from aria_core.community_feedback import (
+                is_roadmap_partnership_question,
+                operator_roadmap_reply,
+            )
+
+            if is_roadmap_partnership_question(route):
+                return (
+                    operator_roadmap_reply(lang=lang_key),
+                    None,
+                    ["Roadmap / partenariats (politique ZHC — sans web)"],
+                    {"roadmap_local": True, "skip_web": True},
+                    None,
+                )
+
         if (
             not _is_strategic_conversation(route)
             and (is_factual_question(route) or is_general_qa(route))
