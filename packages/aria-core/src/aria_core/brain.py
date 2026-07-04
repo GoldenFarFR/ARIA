@@ -780,12 +780,46 @@ class AriaBrain:
             from aria_core.llm_routing_meta import is_llm_routing_question, llm_routing_reply
             from aria_core.response_cost import cost_meta_reply, is_cost_meta_question
 
-            if is_llm_routing_question(route):
+            from aria_core.operator_conversational import (
+                llm_preference_reply,
+                operator_improvement_reply,
+                wants_capability_improvement,
+                wants_more_detail_followup,
+            )
+
+            if wants_capability_improvement(route):
                 return (
-                    llm_routing_reply(lang_key, route),
+                    operator_improvement_reply(lang=lang_key),
+                    SkillName.CAPABILITY_QI,
+                    ["Compétences ARIA (local QI — sans épistémique)"],
+                    {"capability_improvement": True, "skip_web": True},
+                    None,
+                )
+
+            if wants_more_detail_followup(route) and is_llm_configured():
+                llm_reply = await self._llm_response(
+                    "Développe ta réponse précédente avec plus d'arguments concrets.",
+                    lang,
+                    public=False,
+                    visitor_id=visitor_id,
+                )
+                if llm_reply:
+                    return (
+                        llm_reply,
+                        None,
+                        ["Suite / plus de détail (LLM opérateur)"],
+                        {"followup_detail": True},
+                        None,
+                    )
+
+            if is_llm_routing_question(route):
+                pref = re.search(r"(?i)pr[eé]f|plut[oô]t|mieux|groq|spark|qwen", route)
+                body = llm_preference_reply(lang=lang_key) if pref else llm_routing_reply(lang_key, route)
+                return (
+                    body,
                     None,
                     ["Routage LLM (runtime — sans web)"],
-                    {"llm_routing_meta": True},
+                    {"llm_routing_meta": True, "skip_web": True},
                     None,
                 )
             if is_cost_meta_question(route):
@@ -910,7 +944,8 @@ class AriaBrain:
                 )
 
         if (
-            not _is_strategic_conversation(route)
+            public
+            and not _is_strategic_conversation(route)
             and (is_factual_question(route) or is_general_qa(route))
         ):
             cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)

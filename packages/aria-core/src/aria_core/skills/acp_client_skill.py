@@ -298,9 +298,13 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
     if wants_acp_offering_templates(text):
         return await format_templates_help(lang_key)
 
+    if re.search(r"(?i)pr[eé]vu|faire\s+quoi|concernant|plan\b|quoi\s+sur", text):
+        return await _format_revenue_plan(lang_key)
+
     if lang_key == "fr":
         return (
-            "ACP marketplace ARIA\n\n"
+            "ACP — dis « acp status » pour l'état, « plan revenus acp » pour la stratégie, "
+            "« traiter jobs acp » pour livrer. (Liste complète : « aide acp ».)\n\n"
             "• acp status — agent + offres + fichier events\n"
             "• traiter jobs acp — poll provider (livrer jobs en attente)\n"
             "• browse offerings — parcourir le marketplace\n"

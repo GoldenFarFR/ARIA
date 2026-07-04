@@ -15,7 +15,9 @@ _CONVERSATIONAL_ACP_RE = re.compile(
     r"t['\s]?as\s+(?:gagn\w+|ganger|fait)|"
     r"combien\s+(?:as[- ]tu|tu\s+as|de\s+)|"
     r"rapporte(?:r)?\s+(?:de\s+)?l['\s]?argent|"
-    r"tu\s+(?:as|a)\s+gagn"
+    r"tu\s+(?:as|a)\s+gagn|"
+    r"pr[eé]vu.*(?:faire|fait)|faire\s+quoi|quoi\s+(?:sur|avec)\s+acp|"
+    r"concernant\s+acp|plan.*acp|suite.*acp"
     r")",
 )
 
