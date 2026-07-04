@@ -25,7 +25,7 @@ def wants_capability(message: str) -> bool:
     return bool(
         re.search(
             r"\bqi\b|indice aria|capability|niveau|niveaux|level up|levelup|"
-            r"montre.*niveau|score aria|progression aria|capacit",
+            r"montre.*niveau|score aria|progression aria|capacit|comp[eé]tence",
             lower,
         )
     )
