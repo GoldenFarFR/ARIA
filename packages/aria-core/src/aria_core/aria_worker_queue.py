@@ -139,6 +139,75 @@ def mark_task_done_in_markdown(content: str, task_id: str) -> str:
     return pattern.sub(rf"## {DONE_TAG} \1", content, count=1)
 
 
+def mark_worker_task_done(
+    task_id: str,
+    *,
+    note: str = "",
+    score: int | None = None,
+    resolver: str = "cursor",
+) -> dict[str, Any]:
+    """Passe une tâche [pending] → [done] et auto-note le ledger suggestions."""
+    clean_id = (task_id or "").strip()
+    if not clean_id:
+        return {"status": "invalid", "task_id": task_id}
+
+    path = resolve_local_worker_md()
+    if path is None or not path.is_file():
+        return {"status": "no_worker_md", "task_id": clean_id}
+
+    content = path.read_text(encoding="utf-8")
+    if not _has_pending_task(content, clean_id):
+        return {"status": "not_pending", "task_id": clean_id}
+
+    meta = {"task_id": clean_id}
+    try:
+        from aria_core.suggestion_feedback import parse_worker_task_meta
+
+        meta = parse_worker_task_meta(content, clean_id, pending=True)
+    except ImportError:
+        pass
+
+    new_content = mark_task_done_in_markdown(content, clean_id)
+    path.write_text(new_content, encoding="utf-8")
+
+    _append_local_record(
+        _task_from_record(
+            {
+                "task_id": clean_id,
+                "title": meta.get("title") or clean_id,
+                "source": meta.get("source") or "ouvrier",
+                "problem": "",
+                "action": "",
+                "priority": meta.get("priority") or "normal",
+            },
+        ),
+        status="done",
+        extra={"note": note[:300]} if note else None,
+    )
+
+    rating: dict[str, Any] = {"rated": []}
+    try:
+        from aria_core.suggestion_feedback import auto_rate_worker_done
+
+        rating = auto_rate_worker_done(
+            meta,
+            score=score,
+            note=note or f"mark_worker_task_done {clean_id}",
+            resolver=resolver,
+        )
+    except OSError:
+        pass
+
+    append_memory("self-improve", f"[aria-worker] {clean_id} done — rated {len(rating.get('rated') or [])}")
+    return {
+        "status": "done",
+        "task_id": clean_id,
+        "worker_md": str(path),
+        "score": rating.get("score"),
+        "rated": rating.get("rated") or [],
+    }
+
+
 def count_pending_tasks(content: str) -> int:
     return len(re.findall(r"^##\s+\[pending\]\s+", content, re.MULTILINE | re.IGNORECASE))
 
@@ -155,6 +224,7 @@ def _local_worker_md_candidates() -> list[Path]:
     home = Path.home()
     candidates.extend(
         [
+            home / "GitHub-Repos" / "aria-ops" / "collegue-memoire" / "sessions" / "ARIA-WORKER.md",
             home / "GitHub-Repos" / "ARIA" / "collegue-memoire" / "sessions" / "ARIA-WORKER.md",
             home / "projets" / "collegue-memoire" / "sessions" / "ARIA-WORKER.md",
         ],

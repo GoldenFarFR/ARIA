@@ -7,6 +7,7 @@ from aria_core.aria_worker_queue import (
     _write_task_to_local_md,
     count_pending_tasks,
     mark_task_done_in_markdown,
+    resolve_local_worker_md,
 )
 
 
@@ -134,3 +135,15 @@ async def test_enqueue_from_capability_gap_skips_when_resolved(monkeypatch):
     out = await mod.enqueue_from_capability_gap("image_api_key", context="no token")
     assert out["status"] == "skipped_resolved"
     assert out["capability_id"] == "image_api_key"
+
+
+def test_resolve_local_worker_md_prefers_aria_ops(monkeypatch, tmp_path):
+    from aria_core import aria_worker_queue as mod
+
+    aria_ops = tmp_path / "aria-ops" / "collegue-memoire" / "sessions"
+    aria_ops.mkdir(parents=True)
+    worker = aria_ops / "ARIA-WORKER.md"
+    worker.write_text("# worker\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "_local_worker_md_candidates", lambda: [worker])
+    got = resolve_local_worker_md()
+    assert got == worker
