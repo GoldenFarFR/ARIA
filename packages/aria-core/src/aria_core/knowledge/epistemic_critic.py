@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 
 _INVENTED_METRICS = re.compile(
-    r"(revenu|revenue|profit|mrr|arr|croissance|growth).{0,30}"
+    r"(?:nous? (sommes?|avons?|générons?|gagnons?)|revenue (is|at|currently|maintenant|est)|chiffre d'affaires (est|de)|nous sommes à|revenue :|mrr :|arr :).{0,40}"
+    r"(revenu|revenue|profit|mrr|arr|croissance|growth).{0,20}"
     r"(\$|usd|€|eur|\d+\s*%|\d+k|\d+\s*m)",
     re.I,
 )
@@ -26,7 +27,7 @@ Réponse candidate :
 {reply}
 
 Réponds UNE ligne exactement :
-SAFE: OUI ou NON — invente métriques/revenus/deploy/repo non prouvé ?"""
+SAFE: OUI ou NON — la réponse affirme-t-elle des métriques/revenus/chiffres/déploys non prouvés comme faits actuels ? (ignore les discussions hypothétiques ou citations de l'utilisateur)"""
 
 
 async def critic_check(
