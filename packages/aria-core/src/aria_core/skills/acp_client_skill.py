@@ -30,7 +30,9 @@ from aria_core.skills.acp_client_actions import (
     wants_acp_client_action,
 )
 from aria_core.skills.acp_market_intelligence import (
+    execute_acp_leaderboard,
     execute_acp_market_research,
+    wants_acp_leaderboard,
     wants_acp_market_research,
 )
 from aria_core.skills.acp_email_watcher import (
@@ -42,6 +44,7 @@ from aria_core.skills.acp_prepare_skill import (
     wants_acp_prepare,
 )
 from aria_core.skills.acp_provider_skill import default_events_file, run_provider_cycle
+from aria_core.skills.acp_conversational import is_conversational_acp_question
 
 _ACP_RE = re.compile(
     r"\b(?:acp|virtuals|marketplace|offering|job\s+acp)\b",
@@ -58,15 +61,6 @@ _REVENUE_RE = re.compile(
     r"revenu|revenue|gagn(?:é|er)|argent|earnings|générer|generer|monétis|monetis|plan",
     re.I,
 )
-_CONVERSATIONAL_ACP_RE = re.compile(
-    r"(?i)(?:"
-    r"comment\s+(?:se\s+)?passe|"
-    r"ça\s+va|ca\s+va|"
-    r"gagn(?:é|er)\s+(?:de\s+)?l['']?argent|"
-    r"tu\s+(?:as|a)\s+(?:gagn|fait)|"
-    r"combien\s+(?:as[- ]tu|tu\s+as|de\s+)"
-    r")",
-)
 _WORKFLOW_REVENUE_RE = re.compile(
     r"(?:nos?\s+)?workflows?.*(?:rapport|gagn|revenu|argent)|"
     r"(?:ou|où)\s+on\s+en\s+(?:est|ai\b).*(?:workflow|revenu|argent|acp)",
@@ -79,6 +73,8 @@ def wants_acp_marketplace(message: str) -> bool:
     if _WORKFLOW_REVENUE_RE.search(text):
         return True
     if wants_acp_market_research(text):
+        return True
+    if wants_acp_leaderboard(text):
         return True
     if wants_acp_prepare(text):
         return True
@@ -171,36 +167,40 @@ async def _format_status(lang: str) -> tuple[str, dict]:
 
 
 async def _format_conversational_status(lang: str) -> tuple[str, dict]:
-    """Réponse honnête quand operateur demande comment va la console ACP / les revenus."""
+    """Réponse naturelle quand operateur demande comment va ACP / les revenus."""
     from aria_core.revenue_goals import monthly_total_usd, total_revenue_usd
 
-    status_msg, status_data = await _format_status(lang)
     lines_count, events_path = _events_file_status()
     month_usd = monthly_total_usd()
     total_usd = total_revenue_usd()
+    offerings, _ = list_offerings()
+    off_count = len(offerings or [])
 
     if lang == "fr":
-        earnings = (
-            f"Revenus logués : {total_usd:.2f} $ total, {month_usd:.2f} $ ce mois "
-            f"(revenue_ledger.json)."
-        )
-        if total_usd <= 0:
-            earnings += (
-                "\nPas encore de job client payé livré — offres publiées, "
-                "listener actif, premier $ = 1er job traité."
+        if month_usd > 0:
+            lead = (
+                f"Oui — {month_usd:.2f} $ ce mois "
+                f"({total_usd:.2f} $ au total dans revenue_ledger.json)."
             )
-        body = (
-            "Console ACP — état honnête\n\n"
-            f"{earnings}\n\n"
-            f"Fichier events : {lines_count} ligne(s) — {events_path}\n\n"
-            f"{status_msg}"
-        )
-        return body, {**status_data, "acp": "conversational_status"}
+        else:
+            lead = (
+                "Pas encore aujourd'hui — 0 $ ce mois. "
+                f"{off_count} offre(s) sur le marketplace, listener local actif ; "
+                "le premier revenu arrive au premier job client payé livré."
+            )
+        body = f"{lead}\n\n({lines_count} event(s) en file — {events_path})"
+        return body, {"acp": "conversational_status", "offerings": off_count}
 
+    if month_usd > 0:
+        lead = f"Yes — ${month_usd:.2f} this month (${total_usd:.2f} total in revenue_ledger.json)."
+    else:
+        lead = (
+            f"Not yet — $0 this month. {off_count} offering(s) live, local listener on; "
+            "first revenue when a paid client job is delivered."
+        )
     return (
-        f"ACP console: ${total_usd:.2f} logged total, ${month_usd:.2f} this month. "
-        f"Events: {lines_count}.\n\n{status_msg}",
-        {**status_data, "acp": "conversational_status"},
+        f"{lead}\n\n({lines_count} queued event(s) — {events_path})",
+        {"acp": "conversational_status", "offerings": off_count},
     )
 
 
@@ -228,6 +228,9 @@ async def _format_revenue_plan(lang: str) -> tuple[str, dict]:
 async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, dict]:
     text = (message or "").strip()
     lang_key = "fr" if lang == "fr" else "en"
+
+    if is_conversational_acp_question(text):
+        return await _format_conversational_status(lang_key)
 
     if _STATUS_RE.search(text) or re.search(r"^acp\s*$", text, re.I):
         return await _format_status(lang_key)
@@ -268,11 +271,11 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
             lines.append(f"• {name}")
         return "\n".join(lines), {"acp": "browse", "count": len(items)}
 
+    if wants_acp_leaderboard(text):
+        return await execute_acp_leaderboard(text, lang_key)
+
     if wants_acp_market_research(text):
         return await execute_acp_market_research(text, lang_key)
-
-    if _CONVERSATIONAL_ACP_RE.search(text) and _ACP_RE.search(text):
-        return await _format_conversational_status(lang_key)
 
     if _REVENUE_RE.search(text):
         return await _format_revenue_plan(lang_key)

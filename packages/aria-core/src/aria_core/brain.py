@@ -544,15 +544,23 @@ class AriaBrain:
 
         if skill_output is not None:
             skill_key = skill.value if skill else None
-            skip_enhance = skill_key in {
-                SkillName.GITHUB_SANDBOX.value,
-                SkillName.HOLDING_SITE.value,
-                SkillName.ENTREPRENEUR_CULTIVATION.value,
-                SkillName.CAPABILITY_QI.value,
-                SkillName.MANAGE_REPERTOIRE.value,
-                SkillName.ACP_MARKETPLACE.value,
-                SkillName.WORKER_DELEGATE.value,
-            } or (
+            acp_conversational = (
+                skill_key == SkillName.ACP_MARKETPLACE.value
+                and isinstance(data, dict)
+                and data.get("acp") == "conversational_status"
+            )
+            skip_enhance = (
+                skill_key in {
+                    SkillName.GITHUB_SANDBOX.value,
+                    SkillName.HOLDING_SITE.value,
+                    SkillName.ENTREPRENEUR_CULTIVATION.value,
+                    SkillName.CAPABILITY_QI.value,
+                    SkillName.MANAGE_REPERTOIRE.value,
+                    SkillName.ACP_MARKETPLACE.value,
+                    SkillName.WORKER_DELEGATE.value,
+                }
+                and not acp_conversational
+            ) or (
                 grounded_for_audience(public)
                 and (
                     should_skip_llm_enhance(skill_key)

@@ -10,6 +10,7 @@ from aria_core.skills.acp_client_skill import (
     execute_acp_marketplace,
     wants_acp_marketplace,
 )
+from aria_core.skills.acp_conversational import is_conversational_acp_question
 
 
 def test_wants_acp_marketplace():
@@ -346,6 +347,16 @@ async def test_acp_offering_delete_not_found(monkeypatch):
     assert data.get("acp") == "offering_delete_not_found"
 
 
+def test_is_conversational_acp_question_typos():
+    assert is_conversational_acp_question("tu a ganger de largent sur acp aujourd'hui ?")
+    assert is_conversational_acp_question(
+        "Comment se passe ta console acp, tu a gagner de l'argent "
+        "avec t'es workflow et t'es abonnement ?"
+    )
+    assert not is_conversational_acp_question("acp status")
+    assert not is_conversational_acp_question("bonjour")
+
+
 def test_wants_acp_client_action_skips_conversational_earnings():
     msg = (
         "Comment se passe ta console acp, tu a gagner de l'argent "
@@ -373,9 +384,25 @@ async def test_acp_conversational_status(monkeypatch):
     )
     reply, data = await execute_acp_marketplace(msg, lang="fr")
     assert data.get("acp") == "conversational_status"
-    assert "Console ACP" in reply
-    assert "revenue_ledger" in reply
+    assert "Pas encore" in reply or "revenue_ledger" in reply
+    assert "Plan revenus ACP" not in reply
     assert "Négociation / abonnement" not in reply
+
+
+@pytest.mark.asyncio
+async def test_acp_conversational_screenshot_typos(monkeypatch):
+    monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
+    monkeypatch.setattr(acp_cli, "list_agents", lambda: ([], None))
+    monkeypatch.setattr(
+        acp_cli,
+        "list_offerings",
+        lambda: ([{"name": "analyse_lite_x1", "priceValue": 1.99}], None),
+    )
+    msg = "tu a ganger de largent sur acp aujourd'hui ?"
+    reply, data = await execute_acp_marketplace(msg, lang="fr")
+    assert data.get("acp") == "conversational_status"
+    assert "Plan revenus ACP" not in reply
+    assert "revenue_ledger" in reply or "Pas encore" in reply
 
 
 @pytest.mark.asyncio
@@ -419,6 +446,97 @@ async def test_acp_market_intelligence(monkeypatch):
     assert "MARKET INTELLIGENCE" in reply
     assert "audit_security" in reply or "audit" in reply.lower()
     assert "analyse_lite_x1" in reply
+
+
+@pytest.mark.asyncio
+async def test_acp_scan_url_triggers_market_intelligence(monkeypatch):
+    from aria_core.skills import acp_market_intelligence as mi
+
+    sample_agents = [
+        {
+            "id": "a1",
+            "name": "AuditBot",
+            "successfulJobCount": 10,
+            "uniqueBuyerCount": 3,
+            "offerings": [{"name": "token_scan", "priceValue": 3.5, "description": "audit scan"}],
+        },
+    ]
+
+    def fake_browse(query, **kwargs):
+        return sample_agents, None
+
+    monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
+    monkeypatch.setattr(acp_cli, "browse_agents", fake_browse)
+    monkeypatch.setattr(
+        acp_cli,
+        "list_offerings",
+        lambda: ([{"name": "analyse_lite_x1"}], None),
+    )
+    monkeypatch.setattr(mi, "_SCAN_CACHE", Path("/nonexistent/acp_market_scan.json"))
+
+    reply, data = await execute_acp_marketplace(
+        "https://app.virtuals.io/acp/scan",
+        lang="fr",
+    )
+    assert data.get("acp") == "market_intelligence"
+    assert "MARKET INTELLIGENCE" in reply
+    assert data.get("acp") != "help"
+
+
+@pytest.mark.asyncio
+async def test_acp_leaderboard_question(monkeypatch):
+    top_agents = [
+        {
+            "id": "top1",
+            "name": "LeaderBot",
+            "successfulJobCount": 100,
+            "uniqueBuyerCount": 40,
+            "offerings": [],
+        },
+        {
+            "id": "019f0522-b57b-7e8e-a70a-aab2070e070e",
+            "name": "Aria Vanguard ZHC",
+            "successfulJobCount": 0,
+            "uniqueBuyerCount": 0,
+            "offerings": [{"name": "analyse_lite_x1", "priceValue": 1.99}],
+        },
+    ]
+
+    def fake_browse(query, **kwargs):
+        return top_agents, None
+
+    monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
+    monkeypatch.setattr(acp_cli, "browse_agents", fake_browse)
+    monkeypatch.setattr(
+        acp_cli,
+        "list_offerings",
+        lambda: ([{"name": "analyse_lite_x1"}], None),
+    )
+    monkeypatch.setattr(
+        "aria_core.revenue_goals.monthly_total_usd",
+        lambda: 0.0,
+    )
+    monkeypatch.setattr(
+        "aria_core.revenue_goals.total_revenue_usd",
+        lambda: 0.0,
+    )
+
+    msg = (
+        "https://app.virtuals.io/acp/scan "
+        "quand esce que je te voit dans le learderboard ?"
+    )
+    reply, data = await execute_acp_marketplace(msg, lang="fr")
+    assert data.get("acp") == "leaderboard"
+    assert "LEADERBOARD" in reply
+    assert "Pas encore visible" in reply or "premier job" in reply.lower()
+    assert data.get("acp") != "help"
+
+
+def test_wants_acp_leaderboard_without_acp_keyword():
+    from aria_core.skills.acp_market_intelligence import wants_acp_leaderboard
+
+    assert wants_acp_leaderboard("quand est-ce que je te vois dans le leaderboard ?")
+    assert wants_acp_marketplace("quand est-ce que je te vois dans le leaderboard ?")
 
 
 @pytest.mark.asyncio
