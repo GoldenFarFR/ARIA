@@ -15,6 +15,12 @@ $script:AriaLettaAgents = Join-Path $script:AriaLettaDir "agents_config.json"
 
 function Import-AriaVaultEnv {
     $vault = Join-Path $env:LOCALAPPDATA "GoldenFar\vault"
+    $prodOverlay = @(
+        "LLM_PROVIDER", "LLM_MODEL", "VIRTUALS_API_KEY", "LLM_FALLBACK_API_KEY",
+        "LLM_FALLBACK_PROVIDER", "LLM_FALLBACK_MODEL", "ARIA_SPARK_AGGRESSIVE",
+        "ARIA_LLM_MODEL_DEVELOP", "ARIA_LLM_MODEL_STANDARD", "ARIA_LLM_MODEL_BRIEF",
+        "ARIA_OUVRIER_CLOUD", "ARIA_OUVRIER_SKIP_GROQ_FALLBACK"
+    )
     foreach ($name in @("local.env", "production.env")) {
         $path = Join-Path $vault $name
         if (-not (Test-Path $path)) { continue }
@@ -22,7 +28,19 @@ function Import-AriaVaultEnv {
             if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
                 $k = $Matches[1]; $v = $Matches[2].Trim()
                 if ($v -match '^"(.*)"$') { $v = $Matches[1] }
-                if ($v) { Set-Item -Path "env:$k" -Value $v }
+                if (-not $v) { return }
+                if ($name -eq "local.env" -and $k -in $prodOverlay) { return }
+                Set-Item -Path "env:$k" -Value $v
+            }
+        }
+    }
+    $prodPath = Join-Path $vault "production.env"
+    if (Test-Path $prodPath) {
+        Get-Content $prodPath | ForEach-Object {
+            if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+                $k = $Matches[1]; $v = $Matches[2].Trim()
+                if ($v -match '^"(.*)"$') { $v = $Matches[1] }
+                if ($k -in $prodOverlay -and $v) { Set-Item -Path "env:$k" -Value $v }
             }
         }
     }
