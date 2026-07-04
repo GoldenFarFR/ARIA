@@ -100,3 +100,20 @@ def test_write_task_to_local_md(tmp_path, monkeypatch):
     assert path == worker_md
     body = worker_md.read_text(encoding="utf-8")
     assert "[pending] community-fb-test-20260702" in body
+
+
+@pytest.mark.asyncio
+async def test_enqueue_from_capability_gap_skips_when_resolved(monkeypatch):
+    from aria_core import aria_worker_queue as mod
+
+    async def _resolved(_cid: str) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        "aria_core.capability_gap.gap_runtime_resolved",
+        _resolved,
+    )
+
+    out = await mod.enqueue_from_capability_gap("image_api_key", context="no token")
+    assert out["status"] == "skipped_resolved"
+    assert out["capability_id"] == "image_api_key"
