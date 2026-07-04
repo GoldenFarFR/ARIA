@@ -18,16 +18,50 @@ _LOCAL_COMMANDS = frozenset({
     "commands",
 })
 
+_NATURAL_EXACT: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"^(?:état|etat|status)(?:\s+(?:de\s+)?aria)?\s*$", re.I), "status"),
+    (re.compile(r"^(?:comment\s+(?:vas|va)[- ]?tu|où\s+on\s+en\s+est)(?:\s+aria)?\s*$", re.I), "status"),
+    (
+        re.compile(
+            r"^(?:montre|affiche|donne)(?:\s+moi)?\s+(?:l['']?)?(?:indice|qi)(?:\s+(?:de\s+)?aria)?\s*$",
+            re.I,
+        ),
+        "qi",
+    ),
+    (re.compile(r"^(?:aide|help|commandes|commands)(?:\s+(?:aria|locale?s?))?\s*$", re.I), "help"),
+    (re.compile(r"^(?:niveau|niveaux)(?:\s+(?:de\s+)?aria)?\s*$", re.I), "level"),
+]
+
+_NATURAL_PREFIX: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"^(?:directive|règle\s+permanente)\s*[:—-]\s*(.+)$", re.I), "directive"),
+    (re.compile(r"^(?:apprends|learn)\s*[:—-]\s*(.+)$", re.I), "learn"),
+    (re.compile(r"^(?:calibre|calibrate)\s*[:—-]\s*(.+)$", re.I), "calibrate"),
+    (re.compile(r"^(?:niveau|level)\s+(.+)$", re.I), "level"),
+]
+
 
 def parse_local_command(message: str) -> tuple[str, str] | None:
-    """Retourne (commande, args) si message commence par /commande."""
-    m = _SLASH_RE.match((message or "").strip())
-    if not m:
+    """Retourne (commande, args) si /commande ou phrase naturelle opérateur."""
+    text = (message or "").strip()
+    if not text:
         return None
-    cmd = (m.group(1) or "").lower()
-    if cmd not in _LOCAL_COMMANDS:
-        return None
-    return cmd, (m.group(2) or "").strip()
+
+    m = _SLASH_RE.match(text)
+    if m:
+        cmd = (m.group(1) or "").lower()
+        if cmd in _LOCAL_COMMANDS:
+            return cmd, (m.group(2) or "").strip()
+
+    for pat, cmd in _NATURAL_EXACT:
+        if pat.match(text):
+            return cmd, ""
+
+    for pat, cmd in _NATURAL_PREFIX:
+        hit = pat.match(text)
+        if hit:
+            return cmd, (hit.group(1) or "").strip()
+
+    return None
 
 
 def is_local_command(message: str) -> bool:
@@ -37,15 +71,14 @@ def is_local_command(message: str) -> bool:
 def _help_text(lang: str) -> str:
     if lang == "fr":
         return (
-            "Commandes locales (console / API opérateur — pas besoin de Telegram)\n\n"
-            "/directive <règle permanente>\n"
-            "/learn <topic> | <leçon>\n"
-            "/status — état ARIA (LLM, ACP, proactive, GitHub, X)\n"
-            "/qi — indice capacité\n"
-            "/level — niveaux · /level up codage [note]\n"
-            "/calibrate <affirmation> | vrai|faux|incertain | [source]\n"
-            "/help — cette aide\n\n"
-            "Langage naturel : acp status, scan marché acp, traiter jobs acp, etc."
+            "ARIA — langage naturel (pas de slash obligatoire)\n\n"
+            "état aria · comment vas-tu · montre qi\n"
+            "directive : <règle permanente>\n"
+            "apprends : <topic> | <leçon>\n"
+            "calibre : <affirmation> | vrai|faux|incertain\n"
+            "niveau aria · niveau up codage [note]\n"
+            "aide aria\n\n"
+            "Sinon : pose ta question, scan marché acp, implémente X, etc."
         )
     return (
         "Local operator commands (console / operator API — no Telegram needed)\n\n"

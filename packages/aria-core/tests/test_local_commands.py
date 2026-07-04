@@ -13,8 +13,18 @@ def test_parse_local_command():
     assert parse_local_command("acp status") is None
 
 
+def test_parse_natural_local_command():
+    assert parse_local_command("état aria") == ("status", "")
+    assert parse_local_command("comment vas-tu") == ("status", "")
+    assert parse_local_command("montre qi aria") == ("qi", "")
+    assert parse_local_command("aide aria") == ("help", "")
+    assert parse_local_command("directive : toujours Spark") == ("directive", "toujours Spark")
+    assert parse_local_command("apprends : acp | scan hebdo") == ("learn", "acp | scan hebdo")
+
+
 def test_is_local_command():
     assert is_local_command("/qi")
+    assert is_local_command("état aria")
     assert not is_local_command("scan marché acp")
 
 
@@ -22,8 +32,8 @@ def test_is_local_command():
 async def test_local_help():
     out, data = await execute_local_command("/help", lang="fr")
     assert data["local_command"] == "help"
-    assert "/directive" in out
-    assert "Telegram" in out or "console" in out.lower()
+    assert "directive" in out.lower()
+    assert "langage naturel" in out.lower()
 
 
 @pytest.mark.asyncio
