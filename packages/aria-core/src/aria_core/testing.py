@@ -106,6 +106,8 @@ class AriaRuntimeSettings(BaseSettings):
     aria_curriculum_notify_operator: bool = False
     aria_acp_provider_enabled: bool = False
     aria_acp_events_file: str = ""
+    aria_acp_workflow_used_tweet: bool = True
+    aria_acp_workflow_tweet_allow_url: bool = True
     aria_qi_shadow_judge_enabled: bool = True
     aria_qi_judge_force_aria: bool = False
     aria_qi_judge_force_ouvrier: bool = False
