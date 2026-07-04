@@ -21,8 +21,8 @@ PROD_OVERLAY_KEYS = _prod_overlay_keys()
 _defaults = registry_defaults()
 DEFAULT_PROVIDER_SPARK = _defaults.get("LLM_PROVIDER", "virtuals")
 DEFAULT_MODEL_STANDARD = _defaults.get("ARIA_LLM_MODEL_STANDARD", "x-ai-grok-4-3")
-DEFAULT_MODEL_DEVELOP = _defaults.get("ARIA_LLM_MODEL_DEVELOP", "x-ai-grok-4-3")
-DEFAULT_MODEL_BRIEF = _defaults.get("ARIA_LLM_MODEL_BRIEF", "x-ai-grok-4-3")
+DEFAULT_MODEL_DEVELOP = _defaults.get("ARIA_LLM_MODEL_DEVELOP", "anthropic-claude-opus-4-8")
+DEFAULT_MODEL_BRIEF = _defaults.get("ARIA_LLM_MODEL_BRIEF", "deepseek-deepseek-v4-flash")
 DEFAULT_FALLBACK_PROVIDER = _defaults.get("LLM_FALLBACK_PROVIDER", "groq")
 DEFAULT_FALLBACK_MODEL = _defaults.get("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
 VIRTUALS_CHAT_URL = "https://compute.virtuals.io/v1/chat/completions"
@@ -51,17 +51,10 @@ def read_merged_vault_env() -> dict[str, str]:
 
 def vault_get(*names: str, vault: dict[str, str] | None = None) -> str:
     merged = vault if vault is not None else read_merged_vault_env()
-    banned = _banned_values()
     for name in names:
-        env_val = (os.environ.get(name) or "").strip()
-        vault_val = (merged.get(name) or "").strip()
-        banned_set = banned.get(name, frozenset())
-        if env_val and env_val not in banned_set:
-            return env_val
-        if vault_val and vault_val not in banned_set:
-            return vault_val
-        if vault_val:
-            return vault_val
+        val = (os.environ.get(name) or merged.get(name) or "").strip()
+        if val:
+            return val
     return ""
 
 
@@ -288,10 +281,10 @@ def verify_spark_alignment() -> list[dict[str, Any]]:
     chiron = _flag_true("ARIA_SPARK_AGGRESSIVE", vault) and (
         (vault.get("ARIA_LLM_DEPTH_DEFAULT") or "").strip().lower() == "develop"
     )
-    add("develop_model_grok", "grok" in develop.lower(), develop)
+    add("develop_model_opus", "opus" in develop.lower(), develop)
     add(
         "standard_model_grok",
-        "grok" in standard.lower(),
+        "grok" in standard.lower() or (chiron and "opus" in standard.lower()),
         f"salut->{standard} chiron={chiron}",
     )
 

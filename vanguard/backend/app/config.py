@@ -107,9 +107,9 @@ class Settings(BaseSettings):
     aria_llm_max_tokens_standard: int = 400
     aria_llm_max_tokens_develop: int = 900
     aria_llm_cost_footer: bool = True
-    aria_llm_model_develop: str = "x-ai-grok-4-3"
+    aria_llm_model_develop: str = "anthropic-claude-opus-4-8"
     aria_llm_model_standard: str = "x-ai-grok-4-3"
-    aria_llm_model_brief: str = "x-ai-grok-4-3"
+    aria_llm_model_brief: str = "deepseek-deepseek-v4-flash"
     image_api_key: str = ""  # xAI Imagine — scènes portrait (/avatar scene)
     image_api_model: str = "grok-imagine-image"  # 0.02$/img — quality = 0.05$/img
     aria_operator_tz: str = "Europe/Paris"  # GMT+2 — planification tweets (/x compose)
