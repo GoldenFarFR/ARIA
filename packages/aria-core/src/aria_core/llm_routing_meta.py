@@ -45,9 +45,9 @@ def _model_for_depth(message: str) -> str:
     depth = detect_depth(message) or LlmDepth.STANDARD
     if (settings.llm_provider or "").strip().lower() == "virtuals":
         if depth == LlmDepth.DEVELOP:
-            return (getattr(settings, "aria_llm_model_develop", None) or "").strip() or "x-ai-grok-4-3"
+            return (getattr(settings, "aria_llm_model_develop", None) or "").strip() or "anthropic-claude-opus-4-8"
         if depth == LlmDepth.BRIEF:
-            return (getattr(settings, "aria_llm_model_brief", None) or "").strip() or "x-ai-grok-4-3"
+            return (getattr(settings, "aria_llm_model_brief", None) or "").strip() or "deepseek-deepseek-v4-flash"
         return (getattr(settings, "aria_llm_model_standard", None) or "").strip() or "x-ai-grok-4-3"
     return (settings.llm_model or "").strip() or "(défaut provider)"
 

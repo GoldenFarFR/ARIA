@@ -313,19 +313,6 @@ new_pc_checklist:
       Rafale de tweets promo ACP, URLs dans tweets auto (~0,20 $ + spam), ou bypass force=True
       des garde-fous plateforme.
 
-  - id: spark-catalog-grok-only-2026-07-04
-    severity: high
-    lesson: >
-      Virtuals a retire Claude Opus (et DeepSeek) du catalogue Spark le 2026-07-04.
-      Seul Grok 4 (x-ai-grok-4-3) reste disponible sur compute.virtuals.io.
-      Les appels develop/brief avec anthropic-claude-opus-4-8 ou deepseek retournent vide ou erreur.
-    fix: >
-      ecosystem_registry.yaml : DEVELOP/BRIEF/STANDARD = x-ai-grok-4-3.
-      Relancer enable-spark-chiron.ps1 ou enable-spark-routing.ps1 puis sync-render + deploy-render.
-      verify-spark-routing.ps1 et verify_spark_ssot.py doivent etre verts.
-    verify: "verify_spark_ssot.py exit 0 ; API Virtuals ping model=x-ai-grok-4-3 reponse non vide"
-    never: "Laisser ARIA_LLM_MODEL_DEVELOP=opus en prod apres retrait catalogue."
-
 repos_ssot:
   brain: GoldenFarFR/aria-sandbox/packages/aria-core
   deploy_host: GoldenFarFR/aria-vanguard
