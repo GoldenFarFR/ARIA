@@ -231,6 +231,19 @@ new_pc_checklist:
     verify: "scan marché acp → source live ou cache + gaps audit_security / veille_zhc"
     never: "Inventer des stats marketplace sans browse OK ni cache valide."
 
+  - id: premature-external-pr
+    severity: high
+    lesson: >
+      PR upstream (ex. Virtual-Protocol/acp-cli-demos Showcase) ouverte alors que le travail est
+      encore en test, preuve schema-only sans job escrow, ou gate validateur/receipt incomplet.
+      Credibilite Spark/DevRel degradee ; reviewer temps gaspille.
+    fix: >
+      SSOT collegue-memoire/sessions/PR-READINESS-NORM.md — gate S1-S6 Showcase avant gh pr create.
+      Package sur branche fork GoldenFarFR/* sans PR tant que gate incomplet. Fermer PR premature
+      avec commentaire honnete ; rouvrir seulement quand receipt job id + validate OK.
+    verify: "Gate checklist signee ; pas de PR ouverte si un item manque"
+    never: "Appeler livre une PR non mergee ; envoyer proof sans job id pour Showcase."
+
   - id: avatar-change-on-redeploy
     severity: high
     lesson: >
