@@ -32,6 +32,7 @@ def test_brief_budget_uses_mini_model_and_small_context(tmp_path):
         settings=AriaRuntimeSettings(
             llm_provider="groq",
             aria_llm_model_brief="grok-3-mini",
+            aria_llm_max_tokens_brief=180,
         ),
     )
     budget = resolve_budget(LlmDepth.BRIEF, public=False)
