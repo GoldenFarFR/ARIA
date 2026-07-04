@@ -28,3 +28,12 @@ operator_pitfalls:
 grounding_block:
   label: grounding
   max_chars: 4000
+
+# Spark develop (Opus) — synthèse mémoire Letta au-delà du copier-coller statique
+spark_enrichment:
+  enabled: true
+  model_depth: develop
+  cache_subdir: spark_letta
+  passage_prefix: "[spark/letta-memory]"
+  max_passages: 24
+  # Ordre imprint : grounding statique → spark enrich → ACP
