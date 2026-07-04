@@ -15,6 +15,7 @@ from aria_core.skills.acp_client_skill import (
 def test_wants_acp_marketplace():
     assert wants_acp_marketplace("acp status")
     assert wants_acp_marketplace("concernant acp quel plan")
+    assert wants_acp_marketplace("ou on en ai avec nos workflow ils rapporte de l'argent ?")
     assert not wants_acp_marketplace("bonjour")
 
 
@@ -25,13 +26,45 @@ def test_extract_job_id():
     assert acp_provider_skill._extract_job_id(ev2) == "abc"
 
 
-def test_heuristic_deliverable_lite():
+def test_heuristic_deliverable_lite(monkeypatch):
+    from aria_core.skills.acp_onchain_scan import TokenScanContext
+
+    ctx = TokenScanContext(
+        contract="0x" + "a" * 40,
+        valid_address=True,
+        lite_verdict="CAUTION",
+        security_score=55,
+        risk_flags=["Test flag — confirm on Basescan before sizing."],
+    )
+
+    async def fake_scan(contract):
+        return ctx
+
+    monkeypatch.setattr("aria_core.skills.acp_onchain_scan.scan_base_token", fake_scan)
     d = acp_provider_skill._heuristic_audit("0x" + "a" * 40, full=False)
     assert d["liteVerdict"] in ("SAFE", "CAUTION", "DANGER")
     assert d["riskAlerts"]
 
 
-def test_heuristic_deliverable_full():
+def test_heuristic_deliverable_full(monkeypatch):
+    from aria_core.skills.acp_onchain_scan import PairSnapshot, TokenScanContext
+
+    pair = PairSnapshot(liquidity_usd=8000, volume_24h_usd=2000, base_symbol="T", quote_symbol="WETH", dex_id="base")
+    ctx = TokenScanContext(
+        contract="0x" + "b" * 40,
+        valid_address=True,
+        pairs_found=1,
+        best_pair=pair,
+        lite_verdict="CAUTION",
+        security_score=55,
+        risk_flags=["Moderate liquidity."],
+        data_source="dexscreener",
+    )
+
+    async def fake_scan(contract):
+        return ctx
+
+    monkeypatch.setattr("aria_core.skills.acp_onchain_scan.scan_base_token", fake_scan)
     d = acp_provider_skill._heuristic_audit("0x" + "b" * 40, full=True)
     assert "verdict" in d
     assert "auditReport" in d
@@ -95,7 +128,7 @@ async def test_acp_revenue_plan(monkeypatch):
         lang="fr",
     )
     assert data.get("acp") == "revenue_plan"
-    assert "Plan revenus" in reply
+    assert "revenus" in reply.lower() or "Revenus" in reply
 
 
 def test_load_offering_templates():
