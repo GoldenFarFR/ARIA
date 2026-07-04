@@ -6,6 +6,7 @@ from aria_core.aria_worker_queue import (
     _has_pending_task,
     _write_task_to_local_md,
     count_pending_tasks,
+    list_pending_worker_tasks,
     mark_task_done_in_markdown,
     resolve_local_worker_md,
 )
@@ -40,6 +41,21 @@ def test_append_and_dedup():
     body2 = _append_task_to_markdown(body, task)
     assert body2.strip() == body.strip()
     assert _has_pending_task(body, "cap-gap-test-v1")
+
+
+def test_list_pending_extracts_titles():
+    task = WorkerTask(
+        task_id="cap-gap-demo",
+        title="Patch health Render",
+        source="capability_gap",
+        problem="timeout",
+        action="fix",
+    )
+    body = _append_task_to_markdown("", task)
+    pending = list_pending_worker_tasks(body)
+    assert len(pending) == 1
+    assert pending[0]["task_id"] == "cap-gap-demo"
+    assert pending[0]["title"] == "Patch health Render"
 
 
 def test_mark_done():

@@ -83,16 +83,10 @@ async def _probe_local_health() -> tuple[bool, str]:
         return False, f"API :8000 injoignable ({exc.__class__.__name__})"
 
 
-def _pending_worker_count() -> int:
-    try:
-        from aria_core.aria_worker_queue import count_pending_tasks, resolve_local_worker_md
+def _pending_worker_tasks() -> list[dict[str, str]]:
+    from aria_core.aria_worker_queue import list_pending_worker_tasks_from_disk
 
-        path = resolve_local_worker_md()
-        if not path or not path.is_file():
-            return 0
-        return count_pending_tasks(path.read_text(encoding="utf-8"))
-    except OSError:
-        return 0
+    return list_pending_worker_tasks_from_disk()
 
 
 async def collect_readiness_gaps(
@@ -154,13 +148,13 @@ async def collect_readiness_gaps(
             "capability_id": "health_render_regression",
         })
 
-    pending = _pending_worker_count()
-    if pending:
+    for task in _pending_worker_tasks():
         gaps.append({
-            "id": "worker_pending",
-            "label": f"{pending} tâche(s) ouvrier [pending] dans ARIA-WORKER.md",
-            "worker": "ouvrier Cursor traite la file",
+            "id": f"worker_{task['task_id']}",
+            "label": f"File ouvrier : {task['title']}",
+            "worker": f"ouvrier Cursor — {task['task_id']}",
             "capability_id": "",
+            "kind": "worker",
         })
 
     goal_l = (goal or "").lower()
@@ -224,54 +218,80 @@ async def _maybe_act_on_gaps(
 
 
 async def execute_operator_status_pulse(message: str, *, lang: str = "fr") -> tuple[str, dict[str, Any]]:
-    """Pulse opérateur — file ouvrier, santé locale, journal (sans web)."""
+    """Pulse opérateur — file ouvrier, santé locale, JOURNAL.md ops (sans web)."""
     gaps, ok_items = await collect_readiness_gaps()
     lang_key = "fr" if lang == "fr" else "en"
+    worker_gaps = [g for g in gaps if g.get("kind") == "worker"]
+    infra_gaps = [g for g in gaps if g.get("kind") != "worker"]
+    pending_tasks = _pending_worker_tasks()
     lines: list[str] = []
 
     if lang_key == "fr":
-        lines.append("Pulse opérateur — sources locales (pas de web)")
+        if not gaps:
+            lines.append("Rien à déclarer — stack OK, file ouvrier vide.")
+        elif worker_gaps and not infra_gaps:
+            n = len(worker_gaps)
+            lines.append(
+                f"{n} tâche{'s' if n > 1 else ''} ouvrier en attente — rien de bloquant côté infra."
+            )
+        else:
+            lines.append(f"{len(gaps)} point{'s' if len(gaps) > 1 else ''} à traiter.")
+
         lines.append("")
-        if gaps:
-            lines.append("À signaler :")
-            for g in gaps:
+        lines.append("File ouvrier (ARIA-WORKER.md) :")
+        if pending_tasks:
+            for t in pending_tasks:
+                lines.append(f"  • {t['title']} — `{t['task_id']}`")
+        else:
+            lines.append("  (vide — aucun [pending])")
+
+        if infra_gaps:
+            lines.append("")
+            lines.append("Infra :")
+            for g in infra_gaps:
                 lines.append(f"  • {g['label']}")
                 if g.get("worker"):
                     lines.append(f"    → {g['worker']}")
+
+        from aria_core.memory.collegue import get_ops_journal_tail
+
+        journal_tail = get_ops_journal_tail(lines=3)
+        lines.append("")
+        if journal_tail:
+            lines.append("Dernières actions (JOURNAL.md) :")
+            lines.extend(f"  {ln}" for ln in journal_tail)
         else:
-            lines.append("Rien de nouveau à déclarer — tout est calme côté ARIA.")
+            lines.append("Dernières actions : journal ops introuvable.")
+
         if ok_items:
             lines.append("")
-            lines.append("OK :")
-            lines.extend(f"  ✓ {item}" for item in ok_items[:6])
+            lines.append("État : " + " · ".join(ok_items[:4]))
     else:
-        lines.append("Operator pulse — local sources (no web)")
-        if gaps:
-            lines.extend(f"  • {g['label']}" for g in gaps)
+        if not gaps:
+            lines.append("Nothing to report — stack OK, worker queue empty.")
         else:
-            lines.append("Nothing new to report — ARIA stack looks quiet.")
-        lines.extend(f"  OK {item}" for item in ok_items[:6])
+            lines.append(f"{len(gaps)} item(s) need attention.")
+        lines.append("")
+        lines.append("Worker queue:")
+        if pending_tasks:
+            for t in pending_tasks:
+                lines.append(f"  • {t['title']} ({t['task_id']})")
+        else:
+            lines.append("  (empty)")
+        for g in infra_gaps:
+            lines.append(f"  • {g['label']}")
+        from aria_core.memory.collegue import get_ops_journal_tail
 
-    try:
-        from aria_core.memory import get_journal_summary
-
-        journal = (get_journal_summary() or "").strip()
-        if journal:
-            tail = "\n".join(journal.splitlines()[-4:])
-            if lang_key == "fr":
-                lines.append("")
-                lines.append("Journal (fin) :")
-            else:
-                lines.append("")
-                lines.append("Journal (tail) :")
-            lines.append(tail[:500])
-    except Exception:
-        pass
+        journal_tail = get_ops_journal_tail(lines=3)
+        if journal_tail:
+            lines.append("")
+            lines.extend(journal_tail)
 
     data = {
         "operator_status_pulse": True,
         "gaps": gaps,
         "ok": ok_items,
+        "pending_tasks": pending_tasks,
         "skip_web": True,
     }
     return "\n".join(lines), data

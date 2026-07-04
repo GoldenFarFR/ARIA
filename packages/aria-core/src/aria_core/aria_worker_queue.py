@@ -209,7 +209,39 @@ def mark_worker_task_done(
 
 
 def count_pending_tasks(content: str) -> int:
-    return len(re.findall(r"^##\s+\[pending\]\s+", content, re.MULTILINE | re.IGNORECASE))
+    return len(list_pending_worker_tasks(content))
+
+
+def list_pending_worker_tasks(content: str) -> list[dict[str, str]]:
+    """Extrait id + titre des sections ## [pending] dans ARIA-WORKER.md."""
+    tasks: list[dict[str, str]] = []
+    for section in re.split(
+        r"(?=^##\s+\[pending\]\s+)",
+        content,
+        flags=re.MULTILINE | re.IGNORECASE,
+    ):
+        if not re.match(r"^##\s+\[pending\]\s+", section, re.IGNORECASE):
+            continue
+        header = re.match(
+            r"^##\s+\[pending\]\s+([^\s—]+)",
+            section,
+            re.IGNORECASE,
+        )
+        task_id = header.group(1).strip() if header else "?"
+        title_m = re.search(r"\*\*Titre\s*:\*\*\s*(.+?)(?:\s{2}|\n)", section)
+        title = title_m.group(1).strip() if title_m else task_id
+        tasks.append({"task_id": task_id, "title": title})
+    return tasks
+
+
+def list_pending_worker_tasks_from_disk() -> list[dict[str, str]]:
+    path = resolve_local_worker_md()
+    if not path or not path.is_file():
+        return []
+    try:
+        return list_pending_worker_tasks(path.read_text(encoding="utf-8"))
+    except OSError:
+        return []
 
 
 def _local_worker_md_candidates() -> list[Path]:
