@@ -59,10 +59,17 @@ _CONVERSATIONAL_ACP_RE = re.compile(
     r"combien\s+(?:as[- ]tu|tu\s+as|de\s+)"
     r")",
 )
+_WORKFLOW_REVENUE_RE = re.compile(
+    r"(?:nos?\s+)?workflows?.*(?:rapport|gagn|revenu|argent)|"
+    r"(?:ou|où)\s+on\s+en\s+(?:est|ai\b).*(?:workflow|revenu|argent|acp)",
+    re.I,
+)
 
 
 def wants_acp_marketplace(message: str) -> bool:
     text = (message or "").strip()
+    if _WORKFLOW_REVENUE_RE.search(text):
+        return True
     if wants_acp_market_research(text):
         return True
     if wants_acp_client_action(text):
