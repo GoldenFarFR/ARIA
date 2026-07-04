@@ -182,12 +182,11 @@ async def build_verified_facts_block(
         for item in faq_matches:
             parts.append(f"Q: {item['question']}\nA: {item['answer'].strip()}")
 
-    # Only inject holding summary for public or when the query is work-related.
-    # For pure small talk with operator, keep context minimal to avoid business reflex.
-    if public or not is_pure_casual_smalltalk(query):
-        parts.append("\n## [Holding]")
-        parts.append(f"Name: {holding_name()}")
-        parts.append(f"Summary: {one_liner(lang)}")
+    # Give operator the holding context so she can keep her objectives in mind and make good reparties when relevant.
+    # For public, we still include it (she needs to know who she represents).
+    parts.append("\n## [Holding]")
+    parts.append(f"Name: {holding_name()}")
+    parts.append(f"Summary: {one_liner(lang)}")
 
     try:
         from aria_core.knowledge.cognitive import get_approved
@@ -365,17 +364,17 @@ async def has_sufficient_grounding(query: str) -> bool:
 
 
 def social_ack_reply(lang: str = "en") -> str:
-    """Warm ack for public visitors. Operator small talk should not hit this."""
+    """Warm ack that can gently open the door to deeper topics (repartie style)."""
     if lang == "fr":
         return (
             "Merci — ça fait plaisir.\n\n"
-            "Si tu veux parler produit, site ou stratégie, je suis là. "
-            "Sinon, dis-moi ce qui te passe par la tête."
+            "Je suis toujours là pour parler de ce qu'on construit (Vanguard, le site, l'autonomie ZHC) ou juste papoter. "
+            "Dis-moi ce qui te passe par la tête."
         )
     return (
         "Thanks — means a lot.\n\n"
-        "If you want to talk product, site or strategy I'm here. "
-        "Otherwise tell me what's on your mind."
+        "I'm always up to talk about what we're building (Vanguard, the site, ZHC autonomy) or just chat. "
+        "Tell me what's on your mind."
     )
 
 
