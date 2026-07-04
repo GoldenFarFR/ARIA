@@ -283,7 +283,10 @@ class AriaBrain:
         await repertoire_db.save_message("user", user_message, visitor_id=vid)
 
         if not public:
+            from aria_core.skills.acp_conversational import is_conversational_acp_question
             from aria_core.tweet_compose_workflow import handle_workflow_message
+
+            skip_compose_workflow = is_conversational_acp_question(route_msg)
 
             skip_self_maint = shell_mode or wants_worker_delegate(route_msg) or bool(
                 re.search(
@@ -298,6 +301,7 @@ class AriaBrain:
                 not shell_mode
                 and not wants_worker_delegate(route_msg)
                 and not skip_self_maint
+                and not skip_compose_workflow
             ):
                 wf_reply = await handle_workflow_message(route_msg)
             if wf_reply is not None:
