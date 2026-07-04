@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ PROVIDER_URLS = {
     "grok": "https://api.x.ai/v1/chat/completions",
     "groq": "https://api.groq.com/openai/v1/chat/completions",
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+    "virtuals": "https://compute.virtuals.io/v1/chat/completions",
 }
 
 DEFAULT_MODELS = {
@@ -23,41 +25,182 @@ DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
     "groq": "llama-3.3-70b-versatile",
     "openrouter": "openrouter/free",
+    "virtuals": "deepseek-deepseek-v4-pro",
     "ollama": "llama3.2",
 }
 
 
+@dataclass(frozen=True)
+class LlmRoute:
+    provider: str
+    url: str
+    model: str
+    auth_key: str
+
+
+def _setting_str(name: str, default: str = "") -> str:
+    return (getattr(settings, name, None) or default).strip()
+
+
+def _auth_key_for_provider(provider: str) -> str:
+    p = provider.lower()
+    if p == "virtuals":
+        return _setting_str("virtuals_api_key") or _setting_str("llm_api_key")
+    if p == "grok" or p == "xai":
+        return _setting_str("grok_api_key") or _setting_str("llm_api_key")
+    return _setting_str("llm_api_key")
+
+
+def _route_for_provider(provider: str, model: str) -> LlmRoute | None:
+    p = provider.lower()
+    if p in ("", "none"):
+        return None
+    if p == "ollama":
+        base = settings.ollama_base_url.rstrip("/")
+        resolved_model = model or settings.llm_model or DEFAULT_MODELS["ollama"]
+        return LlmRoute(p, f"{base}/v1/chat/completions", resolved_model, "ollama")
+    url = PROVIDER_URLS.get(p)
+    if not url:
+        return None
+    auth_key = _auth_key_for_provider(p)
+    if p != "ollama" and not auth_key:
+        return None
+    resolved_model = model or settings.llm_model or DEFAULT_MODELS.get(p, "grok-3-mini")
+    return LlmRoute(p, url, resolved_model, auth_key)
+
+
+def _fallback_route(primary_model: str) -> LlmRoute | None:
+    fb_provider = _setting_str("llm_fallback_provider")
+    fb_key = _setting_str("llm_fallback_api_key")
+    if not fb_provider or not fb_key:
+        return None
+    fb_model = _setting_str("llm_fallback_model") or DEFAULT_MODELS.get(fb_provider.lower(), "")
+    route = _route_for_provider(fb_provider, fb_model or primary_model)
+    if not route:
+        return None
+    return LlmRoute(route.provider, route.url, route.model, fb_key)
+
+
+def _resolve_routes(model: str | None = None, *, require_llm_enabled: bool = False) -> list[LlmRoute]:
+    if require_llm_enabled and not settings.aria_llm_enabled:
+        return []
+    effective_model = (model or "").strip()
+    primary = settings.llm_provider.lower()
+    routes: list[LlmRoute] = []
+    primary_route = _route_for_provider(primary, effective_model)
+    if primary_route:
+        routes.append(primary_route)
+    fallback = _fallback_route(effective_model)
+    if fallback and all(r.provider != fallback.provider for r in routes):
+        routes.append(fallback)
+    return routes
+
+
 def is_llm_provider_configured() -> bool:
-    provider = settings.llm_provider.lower()
-    if provider in ("", "none"):
-        return False
-    if provider == "ollama":
-        return True
-    return bool(settings.llm_api_key)
+    return bool(_resolve_routes())
 
 
 def is_llm_configured() -> bool:
-    """True only when operator enabled ARIA LLM AND provider credentials exist."""
     if not settings.aria_llm_enabled:
         return False
-    return is_llm_provider_configured()
+    return bool(_resolve_routes(require_llm_enabled=True))
 
 
 def _resolve_endpoint() -> tuple[str, str] | None:
-    if not is_llm_configured():
+    routes = _resolve_routes()
+    if not routes:
         return None
-    provider = settings.llm_provider.lower()
+    return routes[0].url, routes[0].model
 
-    if provider == "ollama":
-        base = settings.ollama_base_url.rstrip("/")
-        model = settings.llm_model or DEFAULT_MODELS["ollama"]
-        return f"{base}/v1/chat/completions", model
 
-    url = PROVIDER_URLS.get(provider)
-    if not url:
-        return None
-    model = settings.llm_model or DEFAULT_MODELS.get(provider, "grok-3-mini")
-    return url, model
+def _headers_for_route(route: LlmRoute) -> dict[str, str]:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if route.provider == "ollama":
+        headers["Authorization"] = "Bearer ollama"
+    elif route.auth_key:
+        headers["Authorization"] = f"Bearer {route.auth_key}"
+    if route.provider == "openrouter":
+        headers["HTTP-Referer"] = "https://github.com/GoldenFarFR/aria-vanguard"
+        from aria_core.narrative import llm_provider_title
+
+        headers["X-Title"] = llm_provider_title()
+    return headers
+
+
+async def _post_chat(
+    route: LlmRoute,
+    *,
+    messages: list[dict[str, str]],
+    temperature: float,
+    max_tokens: int,
+    prompt_est: int,
+    depth: str | None,
+) -> str | None:
+    from aria_core.llm_usage import (
+        estimate_tokens_from_text,
+        parse_usage_from_response,
+        record_llm_usage,
+    )
+
+    timeout = 120.0 if route.provider == "ollama" else 90.0
+    payload: dict[str, Any] = {
+        "model": route.model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if route.provider == "ollama":
+        num_ctx = int(getattr(settings, "aria_ollama_num_ctx", 0) or 0)
+        if num_ctx > 0:
+            payload["options"] = {"num_ctx": num_ctx}
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+            route.url,
+            headers=_headers_for_route(route),
+            json=payload,
+        )
+        if response.status_code != 200:
+            logger.warning(
+                "LLM error provider=%s model=%s status=%s: %s",
+                route.provider,
+                route.model,
+                response.status_code,
+                response.text[:300],
+            )
+            record_llm_usage(
+                provider=route.provider,
+                model=route.model,
+                input_tokens=prompt_est,
+                output_tokens=0,
+                ok=False,
+                status_code=response.status_code,
+                kind="chat",
+                estimated=True,
+                depth=depth,
+            )
+            return None
+        data: dict[str, Any] = response.json()
+        reply = data["choices"][0]["message"]["content"].strip()
+        usage = parse_usage_from_response(data)
+        estimated = usage["total_tokens"] <= 0
+        if estimated:
+            usage = {
+                "input_tokens": prompt_est,
+                "output_tokens": estimate_tokens_from_text(reply),
+                "total_tokens": prompt_est + estimate_tokens_from_text(reply),
+            }
+        record_llm_usage(
+            provider=route.provider,
+            model=route.model,
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+            ok=True,
+            kind="chat",
+            estimated=estimated,
+            depth=depth,
+        )
+        return reply
 
 
 async def chat_with_context(
@@ -70,100 +213,43 @@ async def chat_with_context(
     model: str | None = None,
     depth: str | None = None,
 ) -> str | None:
-    """Appel LLM avec mémoire injectée dans le system prompt."""
-    resolved = _resolve_endpoint()
-    if not resolved:
+    """Appel LLM avec mémoire injectée. Spark (virtuals) d'abord, fallback si échec."""
+    routes = _resolve_routes(model, require_llm_enabled=True)
+    if not routes:
         return None
 
-    url, resolved_model = resolved
-    effective_model = (model or "").strip() or resolved_model
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": system_context},
-    ]
-
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_context}]
     if conversation_history:
         messages.extend(conversation_history[-12:])
-
     messages.append({"role": "user", "content": user_message})
 
-    provider = settings.llm_provider.lower()
-    headers: dict[str, str] = {"Content-Type": "application/json"}
+    from aria_core.llm_usage import estimate_tokens_from_text
 
-    if provider == "ollama":
-        headers["Authorization"] = "Bearer ollama"
-    elif settings.llm_api_key:
-        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+    prompt_est = estimate_tokens_from_text(
+        system_context,
+        user_message,
+        *(m.get("content", "") for m in (conversation_history or [])),
+    )
+    temp = temperature if temperature is not None else settings.aria_llm_temperature
 
-    if provider == "openrouter":
-        headers["HTTP-Referer"] = "https://github.com/GoldenFarFR/aria-vanguard"
-        from aria_core.narrative import llm_provider_title
-
-        headers["X-Title"] = llm_provider_title()
-
-    try:
-        timeout = 120.0 if provider == "ollama" else 60.0
-        payload: dict[str, Any] = {
-            "model": effective_model,
-            "messages": messages,
-            "temperature": temperature if temperature is not None else settings.aria_llm_temperature,
-            "max_tokens": max_tokens,
-        }
-        if provider == "ollama":
-            num_ctx = int(getattr(settings, "aria_ollama_num_ctx", 0) or 0)
-            if num_ctx > 0:
-                payload["options"] = {"num_ctx": num_ctx}
-        from aria_core.llm_usage import (
-            estimate_tokens_from_text,
-            parse_usage_from_response,
-            record_llm_usage,
-        )
-
-        prompt_est = estimate_tokens_from_text(
-            system_context,
-            user_message,
-            *(m.get("content", "") for m in (conversation_history or [])),
-        )
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                url,
-                headers=headers,
-                json=payload,
-            )
-            if response.status_code != 200:
-                logger.warning("LLM error %s: %s", response.status_code, response.text[:300])
-                record_llm_usage(
-                    provider=provider,
-                    model=effective_model,
-                    input_tokens=prompt_est,
-                    output_tokens=0,
-                    ok=False,
-                    status_code=response.status_code,
-                    kind="chat",
-                    estimated=True,
-                    depth=depth,
-                )
-                return None
-            data: dict[str, Any] = response.json()
-            reply = data["choices"][0]["message"]["content"].strip()
-            usage = parse_usage_from_response(data)
-            estimated = usage["total_tokens"] <= 0
-            if estimated:
-                usage = {
-                    "input_tokens": prompt_est,
-                    "output_tokens": estimate_tokens_from_text(reply),
-                    "total_tokens": prompt_est + estimate_tokens_from_text(reply),
-                }
-            record_llm_usage(
-                provider=provider,
-                model=effective_model,
-                input_tokens=usage["input_tokens"],
-                output_tokens=usage["output_tokens"],
-                ok=True,
-                kind="chat",
-                estimated=estimated,
+    for idx, route in enumerate(routes):
+        try:
+            reply = await _post_chat(
+                route,
+                messages=messages,
+                temperature=temp,
+                max_tokens=max_tokens,
+                prompt_est=prompt_est,
                 depth=depth,
             )
-            return reply
-    except Exception as exc:
-        logger.error("LLM request failed: %s", exc)
-        return None
+            if reply is not None:
+                if idx > 0:
+                    logger.info(
+                        "LLM fallback ok provider=%s model=%s (primary failed)",
+                        route.provider,
+                        route.model,
+                    )
+                return reply
+        except Exception as exc:
+            logger.error("LLM request failed provider=%s: %s", route.provider, exc)
+    return None

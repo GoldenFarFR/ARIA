@@ -185,6 +185,18 @@ new_pc_checklist:
     verify: "GET /api/health → billing.stripe_webhook_configured=true"
     never: "Confondre sk_test_ avec whsec_ ou melanger mode test et live."
 
+  - id: spark-routing-fallback
+    severity: high
+    lesson: >
+      Spark (Virtuals Compute) est un credit temporaire — pas un remplacement durable de Groq/xAI.
+      Couper le financement Virtuals ne doit pas bloquer ARIA.
+    fix: >
+      enable-spark-routing.ps1 (virtuals primaire) garde LLM_FALLBACK_API_KEY=Groq.
+      Retour : disable-spark-routing.ps1 restaure snapshot pre-spark.
+      IMAGE_API_KEY (Grok Imagine) reste xAI — Spark ne couvre pas les images.
+    verify: "LLM_PROVIDER=virtuals + fallback groq ; test chat ; acp compute status limitRemaining"
+    never: "Supprimer Groq.txt ou LLM_FALLBACK_API_KEY quand Spark est actif."
+
   - id: acp-keychain-local-only
     severity: high
     lesson: >
