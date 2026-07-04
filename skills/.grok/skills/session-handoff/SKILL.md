@@ -21,13 +21,14 @@ Toi (Grok/Cursor) tu executes le handoff **avant la premiere phrase de reponse**
 
 Executer soi-meme, dans l'ordre :
 
-1. **Shell** : `%USERPROFILE%\projets\aria-local-sync\scripts\session-handoff.ps1`  
-   Si `aria-local-sync` absent : le script `ensure-pc-ready.ps1` (appele automatiquement) clone les repos.  
+1. **Shell** : `%USERPROFILE%\GitHub-Repos\aria-ops\local-sync\scripts\session-handoff.ps1`  
+   (ou `%ARIA_REPO_ROOT%\scripts\session-handoff.ps1` redirect)  
+   Si `aria-ops` absent : cloner `GoldenFarFR/aria-ops` (prive) a cote de `ARIA`.
    **TOTP** : si `[TOTP_REQUIRED]` ou session Git expiree → **demander a operateur dans le chat** les 6 chiffres Google Authenticator (GoldenFar Vault), puis relancer avec `-TotpCode` (pas Telegram/ARIA).
 2. **Lire** (obligatoire) :
-   - `collegue-memoire\sessions\HANDOFF.md` (SSOT GitHub)
-   - `collegue-memoire\SESSION-START.md` (genere local)
-   - `collegue-memoire\sessions\<MACHINE>\boot-status.json` (nouveau PC ?)
+   - `%ARIA_OPS_ROOT%\collegue-memoire\sessions\HANDOFF.md` (SSOT GitHub)
+   - `%ARIA_OPS_ROOT%\collegue-memoire\SESSION-START.md` (genere local)
+   - `%ARIA_OPS_ROOT%\collegue-memoire\sessions\<MACHINE>\boot-status.json` (nouveau PC ?)
    - `sessions/CONSOMMATION-GROK.md` (mode concis — moins de tokens)
    - `COLLEGUE.md` + fin de `JOURNAL.md`
 3. **Nouveau PC** (`boot-status.json` → `is_new_pc: true`) :
