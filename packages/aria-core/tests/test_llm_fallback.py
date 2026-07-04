@@ -27,6 +27,18 @@ def test_virtuals_with_groq_fallback_chain():
     assert is_llm_configured() is True
 
 
+def test_virtuals_never_uses_groq_llm_api_key():
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "virtuals"
+    settings.virtuals_api_key = ""
+    settings.llm_api_key = "gsk-should-not-be-used"
+    settings.llm_model = "deepseek-deepseek-v4-pro"
+
+    routes = _resolve_routes()
+    assert routes == []
+
+
 def test_groq_only_no_duplicate_fallback():
     settings = get_settings()
     settings.aria_llm_enabled = True

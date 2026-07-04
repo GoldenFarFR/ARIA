@@ -45,7 +45,8 @@ def _setting_str(name: str, default: str = "") -> str:
 def _auth_key_for_provider(provider: str) -> str:
     p = provider.lower()
     if p == "virtuals":
-        return _setting_str("virtuals_api_key") or _setting_str("llm_api_key")
+        # Ne jamais réutiliser llm_api_key (souvent Groq) — provoque 401 sur compute.virtuals.io
+        return _setting_str("virtuals_api_key")
     if p == "grok" or p == "xai":
         return _setting_str("grok_api_key") or _setting_str("llm_api_key")
     return _setting_str("llm_api_key")

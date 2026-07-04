@@ -17,6 +17,76 @@ def _repo_root() -> Path:
     return default if default.is_dir() else Path.cwd()
 
 
+_PROD_OVERLAY = frozenset({
+    "LLM_PROVIDER", "LLM_MODEL", "VIRTUALS_API_KEY", "LLM_FALLBACK_API_KEY",
+    "LLM_FALLBACK_PROVIDER", "LLM_FALLBACK_MODEL", "ARIA_SPARK_AGGRESSIVE",
+    "ARIA_LLM_MODEL_DEVELOP", "ARIA_LLM_MODEL_STANDARD", "ARIA_LLM_MODEL_BRIEF",
+    "ARIA_OUVRIER_CLOUD", "ARIA_OUVRIER_SKIP_GROQ_FALLBACK",
+})
+
+
+def _read_vault_env() -> dict[str, str]:
+    vault = Path(os.environ.get("LOCALAPPDATA", "")) / "GoldenFar" / "vault"
+    out: dict[str, str] = {}
+    for name in ("local.env", "production.env"):
+        path = vault / name
+        if not path.is_file():
+            continue
+        parsed: dict[str, str] = {}
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line or line.lstrip().startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key, val = key.strip(), val.strip().strip('"')
+            if key and val:
+                parsed[key] = val
+        if name == "local.env":
+            for key, val in parsed.items():
+                if key not in _PROD_OVERLAY:
+                    out[key] = val
+        else:
+            out.update(parsed)
+    return out
+
+
+def _spark_settings() -> dict[str, str | bool]:
+    vault = _read_vault_env()
+    virtuals_key = os.environ.get("VIRTUALS_API_KEY") or vault.get("VIRTUALS_API_KEY") or ""
+    ouvrier_cloud = (
+        os.environ.get("ARIA_OUVRIER_CLOUD") or vault.get("ARIA_OUVRIER_CLOUD") or ""
+    ).strip().lower()
+    provider = (os.environ.get("LLM_PROVIDER") or vault.get("LLM_PROVIDER") or "").strip().lower()
+    if (
+        ouvrier_cloud in ("spark", "virtuals")
+        or (vault.get("LLM_PROVIDER") or "").strip().lower() == "virtuals"
+        or len(virtuals_key) >= 10
+    ):
+        provider = "virtuals"
+    elif not provider:
+        provider = "ollama"
+    if virtuals_key:
+        os.environ["VIRTUALS_API_KEY"] = virtuals_key
+    groq_fb = (
+        os.environ.get("LLM_FALLBACK_API_KEY")
+        or vault.get("LLM_FALLBACK_API_KEY")
+        or os.environ.get("GROQ_API_KEY")
+        or os.environ.get("LLM_API_KEY")
+        or ""
+    )
+    return {
+        "provider": provider,
+        "llm_model": os.environ.get("LLM_MODEL") or vault.get("LLM_MODEL") or "deepseek-deepseek-v4-pro",
+        "virtuals_api_key": virtuals_key,
+        "llm_fallback_api_key": groq_fb,
+        "llm_fallback_provider": vault.get("LLM_FALLBACK_PROVIDER") or "groq",
+        "llm_fallback_model": vault.get("LLM_FALLBACK_MODEL") or "llama-3.3-70b-versatile",
+        "aria_spark_aggressive": (vault.get("ARIA_SPARK_AGGRESSIVE") or "").lower() in ("1", "true", "yes"),
+        "aria_llm_model_develop": vault.get("ARIA_LLM_MODEL_DEVELOP") or "anthropic-claude-opus-4-8",
+        "aria_llm_model_standard": vault.get("ARIA_LLM_MODEL_STANDARD") or "x-ai-grok-4-3",
+        "aria_llm_model_brief": vault.get("ARIA_LLM_MODEL_BRIEF") or "deepseek-deepseek-v4-flash",
+    }
+
+
 def _bootstrap() -> Path:
     repo = _repo_root()
     os.environ.setdefault("ARIA_REPO_ROOT", str(repo))
@@ -36,8 +106,7 @@ def _bootstrap() -> Path:
         ("ACCESS_CODE_ENABLED", "false"),
     ):
         os.environ.setdefault(key, value)
-    os.environ.setdefault("LLM_PROVIDER", "ollama")
-    os.environ.setdefault("LLM_MODEL", "qwen2.5:14b")
+    spark = _spark_settings()
     os.environ.setdefault("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 
     from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
@@ -53,9 +122,17 @@ def _bootstrap() -> Path:
             aria_memory_arbitrator=_flag("ARIA_MEMORY_ARBITRATOR", True),
             aria_public_mode=False,
             aria_llm_enabled=_flag("ARIA_LLM_ENABLED", True),
-            llm_provider=os.environ.get("LLM_PROVIDER", "ollama"),
-            llm_model=os.environ.get("LLM_MODEL", "qwen2.5:14b"),
-            llm_api_key=os.environ.get("LLM_API_KEY", "") or os.environ.get("GROQ_API_KEY", ""),
+            llm_provider=str(spark["provider"]),
+            llm_model=str(spark["llm_model"]),
+            virtuals_api_key=str(spark["virtuals_api_key"]),
+            llm_api_key=str(spark["llm_fallback_api_key"]),
+            llm_fallback_api_key=str(spark["llm_fallback_api_key"]),
+            llm_fallback_provider=str(spark["llm_fallback_provider"]),
+            llm_fallback_model=str(spark["llm_fallback_model"]),
+            aria_spark_aggressive=bool(spark["aria_spark_aggressive"]),
+            aria_llm_model_develop=str(spark["aria_llm_model_develop"]),
+            aria_llm_model_standard=str(spark["aria_llm_model_standard"]),
+            aria_llm_model_brief=str(spark["aria_llm_model_brief"]),
             ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
             aria_ollama_num_ctx=int(os.environ.get("ARIA_OLLAMA_NUM_CTX", "8192")),
             aria_autonomous=_flag("ARIA_AUTONOMOUS", True),
