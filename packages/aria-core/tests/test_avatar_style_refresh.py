@@ -5,6 +5,7 @@ from aria_core.avatar_identity import establish_identity_anchor
 from aria_core.avatar_style_refresh import (
     _compute_next_due,
     apply_pending_style,
+    bootstrap_style_schedule,
     discard_pending,
     generate_pending_style,
     get_refresh_status,
@@ -76,7 +77,9 @@ def test_interval_config_and_due():
     with pytest.raises(ValueError):
         update_config(interval_days=10)
 
-    assert is_due() is True
+    boot = bootstrap_style_schedule()
+    assert boot["action"] in ("initialized", "from_last_run", "from_history", "unchanged")
+    assert is_due() is False
     discard_pending()
 
 

@@ -93,6 +93,10 @@ async def _background_startup() -> None:
         websocket.setup_scanner_broadcast()
         await realtime_scanner.start()
         await pair_indexer.start()
+        from aria_core.avatar_style_refresh import bootstrap_style_schedule
+
+        boot = bootstrap_style_schedule()
+        logger.info("Avatar style schedule: %s", boot.get("action"))
         await aria_heartbeat.start()
         logger.info("Aria Market core services started")
     except Exception as exc:

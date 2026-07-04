@@ -138,6 +138,36 @@ def update_config(
     return get_refresh_status()
 
 
+def bootstrap_style_schedule() -> dict[str, Any]:
+    """
+    Initialise next_due_at sans déclencher de changement (safe redeploy).
+    Un redeploy ne doit jamais être interprété comme « échéance atteinte ».
+    """
+    state = _load_state()
+    if state.get("next_due_at"):
+        return {"action": "unchanged", "next_due_at": state["next_due_at"]}
+
+    last = _parse_dt(state.get("last_run_at"))
+    if last:
+        state["next_due_at"] = _compute_next_due(last)
+        _save_state(state)
+        return {"action": "from_last_run", "next_due_at": state["next_due_at"]}
+
+    history = state.get("history") or []
+    if history:
+        applied = _parse_dt(history[0].get("applied_at"))
+        if applied:
+            state["last_run_at"] = history[0].get("applied_at")
+            state["next_due_at"] = _compute_next_due(applied)
+            _save_state(state)
+            return {"action": "from_history", "next_due_at": state["next_due_at"]}
+
+    now = datetime.now(timezone.utc)
+    state["next_due_at"] = _compute_next_due(now)
+    _save_state(state)
+    return {"action": "initialized", "next_due_at": state["next_due_at"]}
+
+
 def is_due() -> bool:
     if not _enabled():
         return False
@@ -146,7 +176,7 @@ def is_due() -> bool:
         return False
     due = _parse_dt(state.get("next_due_at"))
     if due is None:
-        return True
+        return False
     return datetime.now(timezone.utc) >= due
 
 
