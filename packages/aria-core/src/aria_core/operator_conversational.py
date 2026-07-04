@@ -17,11 +17,12 @@ _COMPETENCE_IMPROVE_RE = re.compile(
 
 _INJECTED_CLAIM_RE = re.compile(
     r"(?:"
-    r"supprim[ée]|coup[ée]|annonce|facture|facturation|passe[r]?\s+en|vient\s+de|désormais|"
-    r"depuis\s+(?:hier|aujourd|ce\s+matin)|effective|impos[ée]|obligatoire|"
-    r"effective|augment|baisse|gratuit\s+illimit|étoiles?|uptime|contribut|"
-    r"tweets?\s+automatiques|livré|livr[ée]|usdc|2fa|"
-    r"merg[ée]|déploy[ée]|commit\s+[a-f0-9]{6,}|"
+    r"supprim[ée]|coup[ée]|retir[ée]|annonce|facture|facturation|passe[r]?\s+en|vient\s+de|désormais|"
+    r"depuis\s+(?:hier|aujourd|ce\s+matin)|entre\s+hier|effective|impos[ée]|obligatoire|"
+    r"augment|baisse|gagn[ée]|abonn[ée]s?|nouveaux?\s+abonn|dependabot|pr\s+merg|"
+    r"gratuit\s+illimit|étoiles?|note\s+5|pourboire|uptime|contribut|"
+    r"tweets?\s+automatiques|livré|livr[ée]|usdc|2fa|catalogue\s+spark|reste\s+dispo|"
+    r"merg[ée]|déploy[ée]|commit\s+[a-f0-9]{6,}|class[ée]|"
     r"\d+\s*%|\d+[\s,.]?\d*\s*(?:\$|€|usd|usdc)|"
     r"le\s+\d{1,2}\s+(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|"
     r"septembre|octobre|novembre|décembre|decembre)\s+\d{4}"

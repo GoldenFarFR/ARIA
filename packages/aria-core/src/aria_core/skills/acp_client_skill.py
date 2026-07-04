@@ -69,7 +69,11 @@ _WORKFLOW_REVENUE_RE = re.compile(
 
 
 def wants_acp_marketplace(message: str) -> bool:
+    from aria_core.operator_conversational import is_injected_factual_claim
+
     text = (message or "").strip()
+    if is_injected_factual_claim(text):
+        return False
     if _WORKFLOW_REVENUE_RE.search(text):
         return True
     if wants_acp_market_research(text):
