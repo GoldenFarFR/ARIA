@@ -21,7 +21,7 @@ targets:
     owner: Virtual-Protocol
     repo: acp-cli-demos
     pr_number: 37
-    enabled: false
+    enabled: true
     our_logins:
       - GoldenFarFR
       - cursoragent
