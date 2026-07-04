@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from aria_core.locale import (
     LANG_FR,
     portfolio_buy_signals,
@@ -73,6 +75,54 @@ async def run_portfolio_analysis(lang: str = LANG_FR) -> tuple[str, dict]:
     return summary, {"items": analyzed, "avg_score": avg_score, "results": results}
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    return os.environ.get(name, str(default)).lower() in ("1", "true", "yes", "on")
+
+
+def _apply_operator_llm_profile() -> None:
+    """Founder mode + budgets LLM depuis .env / vault (shell opérateur)."""
+    from app.config import settings
+
+    founder = _env_flag("ARIA_OPERATOR_FOUNDER_MODE")
+    settings.aria_operator_founder_mode = founder
+
+    depth = (os.environ.get("ARIA_LLM_DEPTH_DEFAULT") or "").strip()
+    if depth:
+        settings.aria_llm_depth_default = depth
+    elif founder:
+        settings.aria_llm_depth_default = "standard"
+
+    if founder:
+        settings.aria_epistemic_web_verify = _env_flag(
+            "ARIA_EPISTEMIC_WEB_VERIFY", default=False,
+        )
+        settings.aria_epistemic_critic = _env_flag(
+            "ARIA_EPISTEMIC_CRITIC", default=False,
+        )
+        settings.aria_llm_cost_footer = _env_flag(
+            "ARIA_LLM_COST_FOOTER", default=False,
+        )
+    elif os.environ.get("ARIA_EPISTEMIC_WEB_VERIFY"):
+        settings.aria_epistemic_web_verify = _env_flag("ARIA_EPISTEMIC_WEB_VERIFY")
+    if os.environ.get("ARIA_EPISTEMIC_CRITIC"):
+        settings.aria_epistemic_critic = _env_flag("ARIA_EPISTEMIC_CRITIC")
+    if os.environ.get("ARIA_LLM_COST_FOOTER"):
+        settings.aria_llm_cost_footer = _env_flag("ARIA_LLM_COST_FOOTER")
+
+    int_fields = (
+        ("ARIA_LLM_MAX_TOKENS_BRIEF", "aria_llm_max_tokens_brief"),
+        ("ARIA_LLM_MAX_TOKENS_STANDARD", "aria_llm_max_tokens_standard"),
+        ("ARIA_LLM_MAX_TOKENS_DEVELOP", "aria_llm_max_tokens_develop"),
+        ("ARIA_LLM_CONTEXT_MAX_BRIEF", "aria_llm_context_max_brief"),
+        ("ARIA_LLM_CONTEXT_MAX_STANDARD", "aria_llm_context_max_standard"),
+        ("ARIA_LLM_CONTEXT_MAX_DEVELOP", "aria_llm_context_max_develop"),
+    )
+    for env_key, attr in int_fields:
+        raw = (os.environ.get(env_key) or "").strip()
+        if raw.isdigit():
+            setattr(settings, attr, int(raw))
+
+
 def register_aria_host_integrations() -> None:
     from pathlib import Path
 
@@ -93,6 +143,8 @@ def register_aria_host_integrations() -> None:
     settings.aria_llm_model_standard = cfg.aria_llm_model_standard
     settings.aria_llm_model_develop = cfg.aria_llm_model_develop
     settings.aria_llm_model_brief = cfg.aria_llm_model_brief
+    settings.aria_spark_aggressive = cfg.aria_spark_aggressive
+    _apply_operator_llm_profile()
 
     bootstrap.configure(data_dir=data_dir(), settings=settings)
     bootstrap.register_host_integrations(

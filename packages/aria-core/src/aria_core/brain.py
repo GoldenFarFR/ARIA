@@ -340,15 +340,20 @@ class AriaBrain:
                     route_msg, lang=lang,
                 )
                 await repertoire_db.save_message("agent", pulse_reply, visitor_id=vid)
-                from aria_core.response_cost import append_cost_footer, build_cost_meta
-
                 lang_key = "fr" if lang == LANG_FR else "en"
-                pulse_display = append_cost_footer(
-                    pulse_reply,
-                    build_cost_meta(total_tokens=0),
-                    lang=lang_key,
-                )
-                pulse_data["llm_cost"] = build_cost_meta(total_tokens=0)
+                pulse_display = pulse_reply
+                if (
+                    getattr(settings, "aria_llm_cost_footer", True)
+                    and not getattr(settings, "aria_operator_founder_mode", False)
+                ):
+                    from aria_core.response_cost import append_cost_footer, build_cost_meta
+
+                    pulse_display = append_cost_footer(
+                        pulse_reply,
+                        build_cost_meta(total_tokens=0),
+                        lang=lang_key,
+                    )
+                    pulse_data["llm_cost"] = build_cost_meta(total_tokens=0)
                 return ChatResponse(
                     reply=pulse_display,
                     skill_used=None,
@@ -412,6 +417,23 @@ class AriaBrain:
                 )
 
         lang_key = "fr" if lang == LANG_FR else "en"
+        if not public:
+            from aria_core.operator_conversational import (
+                operator_improvement_reply,
+                wants_capability_improvement,
+            )
+
+            if wants_capability_improvement(route_msg):
+                imp = operator_improvement_reply(lang=lang_key)
+                await repertoire_db.save_message("agent", imp, visitor_id=vid)
+                append_memory("chat", f"User: {user_message[:100]}\nARIA: {imp[:200]}")
+                return ChatResponse(
+                    reply=imp,
+                    skill_used=SkillName.CAPABILITY_QI,
+                    actions_taken=["Compétences ARIA (local — sans épistémique)"],
+                    data={"capability_improvement": True, "skip_web": True},
+                )
+
         if is_greeting(route_msg):
             welcome = format_greeting_reply(route_msg, lang_key, public=public)
             await repertoire_db.save_message("agent", welcome, visitor_id=vid)
@@ -666,6 +688,7 @@ class AriaBrain:
         if (
             not public
             and getattr(settings, "aria_llm_cost_footer", True)
+            and not getattr(settings, "aria_operator_founder_mode", False)
         ):
             from aria_core.llm_usage import get_chat_usage_totals
             from aria_core.response_cost import (

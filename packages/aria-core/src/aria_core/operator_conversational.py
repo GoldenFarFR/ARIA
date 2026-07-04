@@ -9,7 +9,7 @@ from aria_core.runtime import settings
 _COMPETENCE_IMPROVE_RE = re.compile(
     r"(?:"
     r"il te faut quoi|de quoi as[- ]?tu besoin|what do you need|"
-    r"am[eé]liorer tes comp|improve your (?:skills|capabilities)|"
+    r"am[eé]liorer tes comp(?:[eé]tences?)?|improve your (?:skills|capabilities)|"
     r"renforcer tes comp|tes lacunes|tes faiblesses"
     r")",
     re.IGNORECASE,

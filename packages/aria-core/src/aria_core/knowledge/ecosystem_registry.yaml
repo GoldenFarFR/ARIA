@@ -78,6 +78,16 @@ spark_profiles:
     aria_llm_max_tokens_brief: "500"
     aria_llm_context_max_develop: "32000"
     aria_llm_model_brief: x-ai-grok-4-3
+  founder:
+    script: sync-local.ps1
+    aria_operator_founder_mode: "true"
+    aria_spark_aggressive: "true"
+    aria_llm_depth_default: standard
+    aria_epistemic_web_verify: "false"
+    aria_epistemic_critic: "false"
+    aria_llm_cost_footer: "false"
+    aria_llm_max_tokens_standard: "700"
+    aria_llm_max_tokens_develop: "1600"
 
 banned_values:
   LLM_MODEL:

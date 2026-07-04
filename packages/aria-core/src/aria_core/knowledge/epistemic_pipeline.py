@@ -18,7 +18,11 @@ async def finalize_reply(
     skill_used: str | None = None,
 ) -> tuple[str, dict]:
     """Applique critic gate + log calibration sur toute réponse opérateur."""
+    from aria_core.runtime import settings
+
     if public or not reply:
+        return reply, data
+    if getattr(settings, "aria_operator_founder_mode", False):
         return reply, data
 
     data = dict(data) if isinstance(data, dict) else {}
