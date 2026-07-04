@@ -49,4 +49,6 @@ memory/
 truth-ledger/
 letta-orchestrator/
 download/
-vanguard/operator/
+vanguard/operator/*
+!vanguard/operator/start-acp-local.ps1
+!vanguard/operator/test-aria-chat.ps1
