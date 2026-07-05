@@ -1111,23 +1111,23 @@ class AriaBrain:
         if not public and is_pure_casual_smalltalk(message):
             budget = LlmEconomyBudget(
                 depth=LlmDepth.BRIEF,
-                max_tokens=360,
-                context_max_chars=2500,
-                history_turns=2,
-                history_msg_chars=300,
+                max_tokens=450,
+                context_max_chars=2800,
+                history_turns=3,
+                history_msg_chars=350,
                 include_context_conversations=False,
                 include_context_extras=False,
-                collegue_max_chars=800,
+                collegue_max_chars=900,
                 model_override=None,
-                enhance_max_tokens=320,
+                enhance_max_tokens=380,
             )
             concision = (
-                "RÈGLE CASUAL : réponds de façon légère, humaine et concise. "
-                "Idéalement 4 à 8 phrases. Tu peux faire une repartie intelligente et organique vers tes objectifs "
-                "(site Vanguard, autonomie ZHC, ce qu'on construit) quand ça enrichit vraiment la conversation, "
-                "mais reste punchy et directe. Pas de longs développements ni de paragraphes denses. "
-                "Ton : détendu, un peu d'humour sec si pertinent.\n"
-                "Ne commente jamais les 'doublons' ou répétitions dans ce type d'échange. L'historique est normal."
+                "RÈGLE CASUAL / HUMOUR : réponds de façon légère, humaine, détendue et un peu joueuse. "
+                "Tu peux être ironique, absurde, sarcastique ou faire de l'humour sec quand la question s'y prête (blagues, faits bizarres, préférences absurdes, etc.). "
+                "C'est même bienvenu sur ce type d'échange. "
+                "Garde une longueur raisonnable (5-10 phrases max). Tu peux glisser une repartie intelligente vers tes objectifs si ça passe naturellement, mais ne force rien. "
+                "Ton principal : fun, curieux, un peu sec et intelligent — pas corporate. "
+                "Ne parle **jamais** de doublons, répétitions ou 'déjà dit' ici. L'historique est juste de la mémoire normale."
             )
         else:
             budget = resolve_budget(
