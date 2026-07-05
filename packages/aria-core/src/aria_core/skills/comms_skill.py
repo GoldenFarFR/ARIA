@@ -244,7 +244,7 @@ async def execute_comms_draft(user_message: str, lang: str = "en") -> tuple[str,
         title = "FAQ draft from visitor question"
         body = (
             f"Q: {user_message[:200]}\n\n"
-            f"A: [{h}] DEXPulse is the flagship subsidiary. "
+            f"A: [{h}] Aria Market is the flagship subsidiary. "
             f"{site['governance_rule']}"
         )
     elif any(w in lower for w in ("newsletter", "update", "weekly", "announce")):
