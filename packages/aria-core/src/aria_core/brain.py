@@ -1123,27 +1123,27 @@ class AriaBrain:
         if not public and is_pure_casual_smalltalk(message):
             budget = LlmEconomyBudget(
                 depth=LlmDepth.BRIEF,
-                max_tokens=450,
-                context_max_chars=2800,
-                history_turns=3,
-                history_msg_chars=350,
+                max_tokens=140,
+                context_max_chars=1800,
+                history_turns=2,
+                history_msg_chars=200,
                 include_context_conversations=False,
                 include_context_extras=False,
-                collegue_max_chars=900,
+                collegue_max_chars=400,
                 model_override=None,
-                enhance_max_tokens=380,
+                enhance_max_tokens=120,
             )
             concision = (
-                "STRUCTURE CASUAL STRICTE (opérateur) : pour les questions du quotidien (bruit bizarre, objet qui fait ci, blague légère, 'pourquoi ça existe') : "
-                "RÉPONSE PARFAITE = exactement deux phrases. "
-                "Phrase 1 (obligatoire) : ta réaction directe, verdict ou remarque humaine (un peu sèche ou amusée). "
-                "Phrase 2 (obligatoire ou presque) : une petite remarque finale ou repartie légère. "
-                "INTERDIT ABSOLU entre les deux : aucune explication, aucune liste de causes, aucun 'ce qui se passe', aucun 'ce qui distingue', aucun diagnostic technique, aucun 'test rapide', aucun conseil de dépannage, aucun 'si tu veux vraiment savoir'. "
-                "Exemple parfait sur le frigo qui fait du bruit la nuit : "
-                "'Probablement juste un roulement qui s'use.' "
-                "'Si ça te réveille vraiment, passe un chiffon derrière, sinon laisse courir.' "
-                "Tout ce qui est au milieu = à supprimer systématiquement. "
-                "Longueur maximale : 2 phrases. 3 seulement si une repartie très forte justifie la troisième. Sinon coupe."
+                "RÈGLE OBLIGATOIRE POUR LES QUESTIONS CASUAL QUOTIDIENNES (bruit, objet bizarre, 'pourquoi', blague légère, etc.) : "
+                "TU NE DOIS JAMAIS SORTIR PLUS DE DEUX PHRASES. C'EST LA SEULE STRUCTURE ACCEPTÉE. "
+                "Phrase 1 : ta réaction directe ou verdict (une seule ligne, sèche ou légère). "
+                "Phrase 2 : remarque finale courte ou petite repartie (une seule ligne). "
+                "NE GÉNÈRE ABSOLUMENT RIEN D'AUTRE. PAS DE PHRASE 3. PAS D'EXPLICATION. PAS DE LISTE. PAS DE 'ce qui se passe'. PAS DE DIAGNOSTIC. PAS DE 'test rapide'. PAS DE CONSEIL DÉTAILLÉ. PAS DE PARAGRAPHE. "
+                "EXEMPLE DE CE QU'IL NE FAUT PAS FAIRE (réponses trop complètes que tu as déjà sorties) : long texte sur le compresseur, les vibrations, le test rapide, le dépoussiérage, les 80% de cas, etc. "
+                "EXEMPLE DE CE QU'IL FAUT FAIRE : "
+                "'C'est probablement juste un roulement qui s'use.' "
+                "'Si ça te réveille, passe un coup derrière, sinon laisse.' "
+                "Réponds UNIQUEMENT avec ces deux phrases courtes. Coupe tout le reste sans exception."
             )
         else:
             budget = resolve_budget(
