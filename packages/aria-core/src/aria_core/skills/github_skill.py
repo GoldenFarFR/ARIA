@@ -111,6 +111,8 @@ def allowed_write_repos() -> list[str]:
         return [f"{settings.github_owner}/*"]
     repos = _parse_repo_list(raw)
     if not repos:
+        if not raw or raw.lower() in ("", "off", "none", "disabled", "0"):
+            return []  # explicit no-write for Telegram Aria (remove rights on GH/site)
         repos = [f"{settings.github_owner}/{settings.github_sandbox_repo}"]
         token_repo = settings.github_token_repo.strip()
         if token_repo:
