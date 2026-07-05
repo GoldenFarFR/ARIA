@@ -1134,13 +1134,16 @@ class AriaBrain:
                 enhance_max_tokens=380,
             )
             concision = (
-                "RÈGLE CASUAL + QUALITÉ D'HUMOUR (opérateur) : réponds court, naturel, un peu sec. "
-                "Humour : pince-sans-rire, auto-dérisoire, légèrement abrupt ou insolent. "
-                "ÉVITE À TOUT PRIX les blagues clichées : animaux espions (mouettes, chats calculateurs), légende du café renversé, bot corporate qui se transforme, histoires à chute de 4 phrases, 'dans ma tête d'IA'. "
-                "Si l'idée de gag est moyenne ou déjà vue, ne la fais pas — reste sobre et directe. "
-                "Une bonne pique sèche de 1-2 phrases > un paragraphe de setup. "
-                "Exemple bon : réponse plate + petite morsure. Exemple nul : setup animalier ou légende élaborée. "
-                "Longueur max 4-5 phrases sur ces échanges. Pas de développement."
+                "STRUCTURE CASUAL STRICTE (opérateur) : pour les questions du quotidien (bruit bizarre, objet qui fait ci, blague légère, 'pourquoi ça existe') : "
+                "RÉPONSE PARFAITE = exactement deux phrases. "
+                "Phrase 1 (obligatoire) : ta réaction directe, verdict ou remarque humaine (un peu sèche ou amusée). "
+                "Phrase 2 (obligatoire ou presque) : une petite remarque finale ou repartie légère. "
+                "INTERDIT ABSOLU entre les deux : aucune explication, aucune liste de causes, aucun 'ce qui se passe', aucun 'ce qui distingue', aucun diagnostic technique, aucun 'test rapide', aucun conseil de dépannage, aucun 'si tu veux vraiment savoir'. "
+                "Exemple parfait sur le frigo qui fait du bruit la nuit : "
+                "'Probablement juste un roulement qui s'use.' "
+                "'Si ça te réveille vraiment, passe un chiffon derrière, sinon laisse courir.' "
+                "Tout ce qui est au milieu = à supprimer systématiquement. "
+                "Longueur maximale : 2 phrases. 3 seulement si une repartie très forte justifie la troisième. Sinon coupe."
             )
         else:
             budget = resolve_budget(
