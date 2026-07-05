@@ -841,15 +841,21 @@ class AriaBrain:
             # Pure casual / humor / small talk with operator → skip all meta-routing
             # and go straight to natural relaxed LLM (with repartie personality)
             if not is_pure_casual_smalltalk(route):
-                from aria_core.llm_routing_meta import is_llm_routing_question, llm_routing_reply
-                from aria_core.response_cost import cost_meta_reply, is_cost_meta_question
+                # Extra guard: questions explicitly about humor, seriousness or her own tone
+                # must go through the playful casual LLM path, never templates.
+                if re.search(r"\b(humour|humour|sérieux|sérieuse|trop sérieux|ton|personnalité)\b", route, re.I):
+                    # will fall through later to the casual budget + instruction
+                    pass
+                else:
+                    from aria_core.llm_routing_meta import is_llm_routing_question, llm_routing_reply
+                    from aria_core.response_cost import cost_meta_reply, is_cost_meta_question
 
-                from aria_core.operator_conversational import (
-                    llm_preference_reply,
-                    operator_improvement_reply,
-                    wants_capability_improvement,
-                    wants_more_detail_followup,
-                )
+                    from aria_core.operator_conversational import (
+                        llm_preference_reply,
+                        operator_improvement_reply,
+                        wants_capability_improvement,
+                        wants_more_detail_followup,
+                    )
 
                 if wants_capability_improvement(route):
                     return (

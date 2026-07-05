@@ -77,6 +77,12 @@ def is_roadmap_partnership_question(message: str) -> bool:
         return False
     if re.search(r"\bplan\s+gratuit\b", text, re.I):
         return False
+
+    # Never treat self-referential questions about humor, seriousness, tone, or personality
+    # as roadmap/business questions — even if they contain "revenu" (as in "est revenu").
+    if re.search(r"\b(humour|humour|sérieux|sérieuse|trop sérieux|ton|personnalité|mode)\b", text, re.I):
+        return False
+
     return bool(_ROADMAP_RE.search(text))
 
 
