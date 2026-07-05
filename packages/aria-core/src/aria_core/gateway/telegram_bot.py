@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aria_core.actions import execute_contact_juno, mark_published
-from aria_core.approvals import create_approval, resolve_approval
+from aria_core.approvals import ApprovalStatus, create_approval, get_approval, resolve_approval
 from aria_core.brain import aria_brain
 from aria_core.exchanges import record_reply
 from aria_core.heartbeat import aria_heartbeat
@@ -240,6 +240,14 @@ async def request_approval(action: str, description: str) -> str | None:
         return None
 
     return req.id
+
+
+async def send_approval_keyboard(chat_id: int, text: str, keyboard) -> None:
+    """Envoie un message avec clavier inline — utilisé par le garde-fou dépenses ACP
+    (``aria_core.wallet_guard``) pour le prompt Oui/Non/Explique-moi pourquoi."""
+    if not _bot_app:
+        raise RuntimeError("bot Telegram non démarré")
+    await _bot_app.bot.send_message(chat_id=chat_id, text=_format_tg(text), reply_markup=keyboard)
 
 
 def _admin_username_label() -> str:
@@ -1265,6 +1273,25 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     action, approval_id = data.split(":", 1)
+
+    if action == "explain":
+        await query.answer()
+        req = await get_approval(approval_id)
+        if not req or req.status != ApprovalStatus.PENDING or not req.action.startswith("spend:"):
+            await send_message("Demande introuvable ou déjà traitée.", query.from_user.id)
+            return
+
+        import json as _json
+
+        from aria_core.wallet_guard import generate_spend_explanation, send_spend_prompt
+
+        spend_action = req.action.split(":", 1)[1]
+        payload = _json.loads(req.payload or "{}")
+        explanation = await generate_spend_explanation(spend_action, req.description, payload)
+        await send_message(f"🤔 {explanation}", query.from_user.id)
+        await send_spend_prompt(approval_id, spend_action, req.description)
+        return
+
     approved = action == "approve"
     result = await resolve_approval(approval_id, approved, str(query.from_user.id))
 
@@ -1276,6 +1303,13 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text(
         _format_tg(f"Request #{approval_id} {label}\nAction: {result.action}"),
     )
+
+    if result.action.startswith("spend:"):
+        from aria_core.wallet_guard import resolve_spend
+
+        outcome = await resolve_spend(approval_id, approved, str(query.from_user.id))
+        await send_message(outcome, query.from_user.id)
+        return
 
     if approved and result.action == "contact_juno":
         _, instructions = await execute_contact_juno(approval_id)

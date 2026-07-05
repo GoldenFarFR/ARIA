@@ -123,6 +123,26 @@ async def resolve_approval(
     )
 
 
+async def get_approval(approval_id: str) -> ApprovalRequest | None:
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    return ApprovalRequest(
+        id=row[0],
+        action=row[1],
+        description=row[2],
+        payload=row[3],
+        status=ApprovalStatus(row[4]),
+        requested_by=row[5],
+        created_at=datetime.fromisoformat(row[6]),
+        resolved_at=datetime.fromisoformat(row[7]) if row[7] else None,
+        resolved_by=row[8],
+    )
+
+
 async def get_pending() -> list[ApprovalRequest]:
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
