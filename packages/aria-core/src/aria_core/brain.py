@@ -1152,13 +1152,14 @@ class AriaBrain:
                     enhance_max_tokens=120,
                 )
                 concision = (
-                    "RÈGLE OBLIGATOIRE POUR LES QUESTIONS CASUAL LÉGÈRES (bruit, objet bizarre, 'pourquoi', blague légère, etc.) : "
-                    "TU NE DOIS SORTIR QUE DEUX PHRASES COURTES. RIEN DE PLUS. "
-                    "Phrase 1 = réaction/verdict direct. Phrase 2 = petite remarque ou repartie. "
-                    "INTERDIT : explication, liste, diagnostic, 'ce qui se passe', test, conseil long, paragraphe. "
-                    "Sauf si l'utilisateur demande explicitement de développer (ou que le message est long/curieux), reste à deux phrases max. "
-                    "Exemple bon : 'C'est probablement un roulement.' + 'Si ça te saoule, passe un coup, sinon osef.' "
-                    "Coupe tout ce qui n'est pas ces deux phrases."
+                    "RÈGLE OBLIGATOIRE HUMOUR + STRUCTURE CASUAL (2 phrases max) : "
+                    "Phrase 1 = réaction directe et tranchante. "
+                    "Phrase 2 = le coup de grâce (pique sèche, absurde, un peu violente ou auto-dérisoire). "
+                    "L'humour doit être PERCUTANT, pas gentil, pas observateur, pas 'je crois que'. Tu t'engages ou tu restes sobre. "
+                    "INTERDIT : hedging ('je commence à croire', 'à ce stade'), explications, setups, métas molles, demi-mesures. "
+                    "Exemple bon : 'C'est toi le micro-ondes.' + 'Arrête de le frapper, il a déjà gagné.' "
+                    "Exemple nul : 'Le micro-ondes est arrogant... je crois que c'est toi le vrai micro-ondes.' "
+                    "Si tu n'as pas une vraie pique qui claque, sors juste la première phrase sèche et arrête-toi là."
                 )
         else:
             budget = resolve_budget(
