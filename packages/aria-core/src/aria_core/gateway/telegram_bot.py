@@ -1300,16 +1300,35 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     label = "approved ✅" if approved else "rejected ❌"
-    await query.edit_message_text(
-        _format_tg(f"Request #{approval_id} {label}\nAction: {result.action}"),
-    )
 
     if result.action.startswith("spend:"):
         from aria_core.wallet_guard import resolve_spend
 
-        outcome = await resolve_spend(approval_id, approved, str(query.from_user.id))
+        try:
+            outcome = await resolve_spend(approval_id, approved, str(query.from_user.id))
+        except Exception:
+            logger.exception("resolve_spend a levé pour le spend #%s", approval_id)
+            await query.edit_message_text(
+                _format_tg(
+                    f"Request #{approval_id}\nAction: {result.action}\n"
+                    "⚠️ exception lors de l'exécution — vérifie le ledger"
+                ),
+            )
+            await send_message(
+                f"⚠️ Spend #{approval_id} : exception lors de l'exécution — vérifie le ledger",
+                query.from_user.id,
+            )
+            return
+        # Édition APRÈS resolve_spend : "approved ✅" ne s'affiche que si le spend a résolu sans exception
+        await query.edit_message_text(
+            _format_tg(f"Request #{approval_id} {label}\nAction: {result.action}"),
+        )
         await send_message(outcome, query.from_user.id)
         return
+
+    await query.edit_message_text(
+        _format_tg(f"Request #{approval_id} {label}\nAction: {result.action}"),
+    )
 
     if approved and result.action == "contact_juno":
         _, instructions = await execute_contact_juno(approval_id)
