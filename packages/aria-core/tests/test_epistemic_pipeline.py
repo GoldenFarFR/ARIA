@@ -52,7 +52,7 @@ def test_contradiction_holding():
 @pytest.mark.asyncio
 async def test_critic_flags_metrics():
     safe, adjusted, meta = await critic_check(
-        "Nos revenus sont de 50000$ ce mois sans preuve",
+        "Nous sommes à 50000$ de revenue ce mois sans preuve",
         "fr",
     )
     assert meta.get("critic") == "flagged"
