@@ -1120,15 +1120,16 @@ class AriaBrain:
 
         # Casual smalltalk with operator: default = ultra short (2 phrases).
         # But we respect when she needs to develop.
-        develop_keywords = r"\b(développe|develop|explique|détaille|en détail|racont|pourquoi en fait|plus loin|plus en profondeur)\b"
-        wants_develop = (
-            depth == LlmDepth.DEVELOP
-            or re.search(develop_keywords, message, re.I)
-            or len(message) > 220
-        )
+        if not public and is_pure_casual_smalltalk(message):
+            develop_keywords = r"\b(développe|develop|explique|détaille|en détail|racont|pourquoi en fait|plus loin|plus en profondeur)\b"
+            wants_develop = (
+                depth == LlmDepth.DEVELOP
+                or re.search(develop_keywords, message, re.I)
+                or len(message) > 220
+            )
 
             if wants_develop:
-                # User wants a real answer → use normal depth/budget
+                # User explicitly wants development on a casual topic → normal budget
                 budget = resolve_budget(
                     depth,
                     public=public,
