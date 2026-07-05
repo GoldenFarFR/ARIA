@@ -1405,12 +1405,15 @@ async def _handle_test_spend(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 def _register_handlers(app: Application) -> None:
-    from telegram.ext import CommandHandler, MessageHandler, filters
+    from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
     # Minimal commands only (user request)
     app.add_handler(CommandHandler("start", _handle_start))
     app.add_handler(CommandHandler("status", _handle_status))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
+
+    # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)
+    app.add_handler(CallbackQueryHandler(_handle_callback))
 
     # All other interactions via plain text (no slash commands)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
