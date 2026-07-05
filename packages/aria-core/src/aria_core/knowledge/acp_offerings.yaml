@@ -1,4 +1,7 @@
 # ACP offering templates — workflows marketplace Aria Vanguard ZHC (premium SSOT)
+# IMPORTANT: Sur ACP, l'agent a des barrières strictes.
+# Elle ne doit parler QUE de ces workflows réels + scan marché + améliorations + demander des audits opérateur.
+# Pas de liste de 78 compétences, pas de wallet/carte/email présentés comme offres.
 version: 1
 
 templates:

@@ -12,6 +12,7 @@ from aria_core.memory import append_memory
 from aria_core.paths import memory_dir
 from aria_core.skills.acp_cli import browse_agents, is_acp_available, list_offerings
 from aria_core.skills.acp_offering_skill import load_offering_templates
+from aria_core.skills.acp_schema import get_acp_strict_rules
 
 _SCAN_CACHE = memory_dir() / "acp_market_scan.json"
 
@@ -424,5 +425,9 @@ async def execute_acp_market_research(message: str, lang: str = "fr") -> tuple[s
         "",
         "Actions : scan marché acp | créer offre acp template <nom> | traiter jobs acp",
     ])
+
+    # Barrière forte ACP : on rappelle le focus et l'obligation d'audit
+    lines.extend(["", get_acp_strict_rules(lang_key)])
+
     append_memory("acp_market", f"[scan] source={scan.get('source')} agents={scan.get('agent_count')}")
     return "\n".join(lines), {"acp": "market_intelligence", "scan": scan, "our_offerings": sorted(ours)}
