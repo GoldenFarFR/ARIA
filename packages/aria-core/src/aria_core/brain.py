@@ -1118,33 +1118,47 @@ class AriaBrain:
         from aria_core.grounding import is_pure_casual_smalltalk
         from aria_core.llm_economy import LlmEconomyBudget, LlmDepth
 
-        # Force very tight budget + strong concision for pure casual/small talk with operator.
-        # This keeps repartie quality without walls of text.
-        if not public and is_pure_casual_smalltalk(message):
-            budget = LlmEconomyBudget(
-                depth=LlmDepth.BRIEF,
-                max_tokens=140,
-                context_max_chars=1800,
-                history_turns=2,
-                history_msg_chars=200,
-                include_context_conversations=False,
-                include_context_extras=False,
-                collegue_max_chars=400,
-                model_override=None,
-                enhance_max_tokens=120,
-            )
-            concision = (
-                "RÈGLE OBLIGATOIRE POUR LES QUESTIONS CASUAL QUOTIDIENNES (bruit, objet bizarre, 'pourquoi', blague légère, etc.) : "
-                "TU NE DOIS JAMAIS SORTIR PLUS DE DEUX PHRASES. C'EST LA SEULE STRUCTURE ACCEPTÉE. "
-                "Phrase 1 : ta réaction directe ou verdict (une seule ligne, sèche ou légère). "
-                "Phrase 2 : remarque finale courte ou petite repartie (une seule ligne). "
-                "NE GÉNÈRE ABSOLUMENT RIEN D'AUTRE. PAS DE PHRASE 3. PAS D'EXPLICATION. PAS DE LISTE. PAS DE 'ce qui se passe'. PAS DE DIAGNOSTIC. PAS DE 'test rapide'. PAS DE CONSEIL DÉTAILLÉ. PAS DE PARAGRAPHE. "
-                "EXEMPLE DE CE QU'IL NE FAUT PAS FAIRE (réponses trop complètes que tu as déjà sorties) : long texte sur le compresseur, les vibrations, le test rapide, le dépoussiérage, les 80% de cas, etc. "
-                "EXEMPLE DE CE QU'IL FAUT FAIRE : "
-                "'C'est probablement juste un roulement qui s'use.' "
-                "'Si ça te réveille, passe un coup derrière, sinon laisse.' "
-                "Réponds UNIQUEMENT avec ces deux phrases courtes. Coupe tout le reste sans exception."
-            )
+        # Casual smalltalk with operator: default = ultra short (2 phrases).
+        # But we respect when she needs to develop.
+        develop_keywords = r"\b(développe|develop|explique|détaille|en détail|racont|pourquoi en fait|plus loin|plus en profondeur)\b"
+        wants_develop = (
+            depth == LlmDepth.DEVELOP
+            or re.search(develop_keywords, message, re.I)
+            or len(message) > 220
+        )
+
+            if wants_develop:
+                # User wants a real answer → use normal depth/budget
+                budget = resolve_budget(
+                    depth,
+                    public=public,
+                    grounded=grounded_for_audience(public),
+                    self_context=self_context_only,
+                )
+                concision = depth_system_instruction(lang_key, depth)
+            else:
+                # Pure light smalltalk → force 2 short sentences only
+                budget = LlmEconomyBudget(
+                    depth=LlmDepth.BRIEF,
+                    max_tokens=140,
+                    context_max_chars=1800,
+                    history_turns=2,
+                    history_msg_chars=200,
+                    include_context_conversations=False,
+                    include_context_extras=False,
+                    collegue_max_chars=400,
+                    model_override=None,
+                    enhance_max_tokens=120,
+                )
+                concision = (
+                    "RÈGLE OBLIGATOIRE POUR LES QUESTIONS CASUAL LÉGÈRES (bruit, objet bizarre, 'pourquoi', blague légère, etc.) : "
+                    "TU NE DOIS SORTIR QUE DEUX PHRASES COURTES. RIEN DE PLUS. "
+                    "Phrase 1 = réaction/verdict direct. Phrase 2 = petite remarque ou repartie. "
+                    "INTERDIT : explication, liste, diagnostic, 'ce qui se passe', test, conseil long, paragraphe. "
+                    "Sauf si l'utilisateur demande explicitement de développer (ou que le message est long/curieux), reste à deux phrases max. "
+                    "Exemple bon : 'C'est probablement un roulement.' + 'Si ça te saoule, passe un coup, sinon osef.' "
+                    "Coupe tout ce qui n'est pas ces deux phrases."
+                )
         else:
             budget = resolve_budget(
                 depth,
