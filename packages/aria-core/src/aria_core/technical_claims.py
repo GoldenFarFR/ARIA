@@ -60,7 +60,7 @@ def reject_fake_technical_success(
             "la réponse précédente était une projection LLM, pas un livrable réel.\n\n"
             "Pour lancer le site holding de façon vérifiable, envoie :\n"
             "« lancer le site holding » (audit GitHub + journal) ou « github status ».\n\n"
-            "Pour modifier aria-vanguard : Cursor sur ce PC, ou droits d'écriture "
+            "Pour modifier le site (vanguard dans ARIA) : Cursor local + deploy. Aria Telegram n'a plus les droits d'écriture GitHub/site. "
             "GITHUB_WRITE_REPOS sur le repo."
         )
     return (
@@ -68,5 +68,5 @@ def reject_fake_technical_success(
         "the prior reply was LLM projection, not a real deliverable.\n\n"
         "To run a verifiable holding-site step, send:\n"
         "« lancer le site holding » (GitHub audit + journal) or « github status ».\n\n"
-        "To edit aria-vanguard: use Cursor locally, or grant GITHUB_WRITE_REPOS on that repo."
+        "To edit site: edit in ARIA/vanguard/ locally (Cursor), then build+deploy. Aria Telegram bot has write rights removed (GITHUB_WRITE_REPOS empty)."
     )

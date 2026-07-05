@@ -36,7 +36,7 @@ _VERIFY_CUE_RE = re.compile(
 )
 _OPERATOR_COMMAND_RE = re.compile(
     r"(?:^/|crée|créer|creer|create\s+repo|level\s+up|montre\s+qi|check-aria|sync-render|"
-    r"deploy|worker\s+delegate|/learn|/directive)",
+    r"deploy|worker\s+delegate|/learn|/directive|supprim|delete.*(?:workflow|offering|offre))",
     re.IGNORECASE,
 )
 _QUESTION_RE = re.compile(

@@ -70,7 +70,7 @@ pitfalls:
       nouvelle ait setWebhook → getWebhookInfo.url vide, ARIA muette malgre health OK.
     fix: >
       aria-core: ne plus delete_webhook dans stop_telegram_bot ; setWebhook manuel si besoin ;
-      pin aria-core + redeploy aria-vanguard.
+      pin aria-core + deploy-render (monorepo ARIA/vanguard).
     verify: "getWebhookInfo.url = test-1-nwf2.onrender.com/... + pending_update_count = 0"
     never: "Redeployer sans verifier getWebhookInfo apres — health aria_telegram ne suffit pas."
 
@@ -88,7 +88,7 @@ pitfalls:
     severity: high
     lesson: >
       production.env et local.env ne doivent jamais etre commites. Coffre = %LOCALAPPDATA%\\GoldenFar\\vault.
-    fix: "aria-vanguard/operator sur chaque PC + cle Render dans coffre + git pull avant session"
+    fix: "ARIA/vanguard/operator sur chaque PC + cle Render + git pull"
     verify: "check-aria-status.ps1 aligne Render vs production.env"
     never: "Coller des tokens dans un repo public ou dans le chat sans rotation apres."
 
@@ -165,8 +165,8 @@ pitfalls:
 new_pc_checklist:
   - "git clone GoldenFarFR/collegue-memoire → %USERPROFILE%\\projets\\collegue-memoire"
 
-  - "git clone GoldenFarFR/aria-skills → projets\\aria-skills puis scripts\\install.ps1"
-  - "git clone GoldenFarFR/aria-sandbox, aria-vanguard, collegue-memoire"
+  - "git clone GoldenFarFR/ARIA (monorepo) → tout dedans (vanguard/, packages/aria-core/, sandbox/, etc.)"
+  - "git clone GoldenFarFR/aria-skills (optionnel) → puis scripts/install.ps1"
   - "Render API key dans coffre keys\\render.api-key"
   - "pull-render.ps1 ou production.env deja rempli → check-aria-status.ps1"
   - "Apres modif code prod : build-local.ps1 puis deploy-render.ps1 -Reason (1 redeploy groupe)"
@@ -181,7 +181,7 @@ new_pc_checklist:
     fix: >
       Creer endpoint HTTPS /api/billing/webhook avec les 4 events subscription/checkout.
       Copier whsec_ dans coffre production.env → operator/sync-render.ps1.
-      Doc: aria-vanguard/operator/stripe/README.md.
+      Doc: ARIA/vanguard/operator/stripe/README.md.
     verify: "GET /api/health → billing.stripe_webhook_configured=true"
     never: "Confondre sk_test_ avec whsec_ ou melanger mode test et live."
 
@@ -315,8 +315,8 @@ new_pc_checklist:
 
 repos_ssot:
   brain: GoldenFarFR/aria-sandbox/packages/aria-core
-  deploy_host: GoldenFarFR/aria-vanguard
-  operator_scripts: GoldenFarFR/aria-vanguard/operator
+  deploy_host: GoldenFarFR/ARIA (vanguard subdir)
+  operator_scripts: GoldenFarFR/ARIA (vanguard subdir)/operator
   skills: GoldenFarFR/aria-skills
-  holding_site: GoldenFarFR/aria-vanguard
+  holding_site: GoldenFarFR/ARIA (vanguard subdir)
   operator_memory: GoldenFarFR/collegue-memoire

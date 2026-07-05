@@ -82,11 +82,11 @@ services:
       - key: GITHUB_READ_REPOS
         value: "*"
       - key: GITHUB_WRITE_REPOS
-        value: ARIA
+        value: ""
       - key: GITHUB_EXCLUDED_REPOS
         value: ""
       - key: GITHUB_PROTECTED_REPOS
-        value: ARIA
+        value: ARIA,aria-ops,aria-acp-showcase,template-grok-cursor,aria-skills
 
   # Site holding statique (ariavanguardzhc.com) — sources dans vanguard/
   - type: web
