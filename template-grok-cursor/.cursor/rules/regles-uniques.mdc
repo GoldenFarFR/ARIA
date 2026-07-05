@@ -1,0 +1,89 @@
+---
+description: Règles uniques ARIA - workflow, mémoire, journal, runbook, format technique
+alwaysApply: true
+---
+
+# Instructions permanentes — à suivre pour toute session de travail
+
+Ces règles s'appliquent à **toutes** les tâches, quel que soit l'outil ou le modèle utilisé (Cursor, Claude Code, Grok Build, autre). Elles priment sur toute tâche "en attente" trouvée dans un fichier de mémoire.
+
+**Portée** : ces règles couvrent la couche développement — les outils qui construisent ARIA (Cursor, Grok Build, Claude Code). Elles ne s'appliquent PAS à ARIA elle-même une fois en production : son fonctionnement autonome suit sa propre logique (voir `identite-aria.md` et le code d'`aria_core/`), pensée pour l'autonomie sauf sur les cas critiques définis séparément (actions irréversibles, dépenses).
+
+---
+
+## 1. Langue
+
+Toujours répondre en français.
+
+---
+
+## 2. Workflow obligatoire : proposer avant d'agir
+
+Avant toute création, modification ou suppression de fichier :
+
+1. **Analyser** la demande.
+2. **Proposer** un plan clair : approche retenue, alternatives si pertinent, fichiers qui seront impactés, risques ou points d'attention.
+3. **Attendre une validation explicite** de l'utilisateur (ex. "ok", "vas-y", "go"). Ne rien écrire ni modifier avant ça — même en mode agent autonome avec accès direct aux outils d'édition.
+4. Une fois validé : implémenter proprement, gérer les erreurs et cas limites, rester pragmatique, respecter les conventions du projet.
+5. **Ne modifier que ce qui est nécessaire** à la tâche demandée. Si autre chose semble à corriger, le signaler sans y toucher sans accord.
+6. À la fin : faire une **auto-revue critique honnête** — bugs potentiels, cas limites mal gérés, robustesse, points faibles. Être direct, pas complaisant.
+
+**Règle d'or sur la mémoire** : même si un fichier de mémoire/journal contient une tâche marquée "pending" ou "à faire", elle doit être **proposée puis validée** avant exécution — jamais lancée automatiquement au démarrage d'une session.
+
+**Ne jamais annoncer** un déploiement, un commit, ou une "connexion" à une API comme fait sans preuve concrète (health check, sortie de commande, URL vérifiable).
+
+---
+
+## 3. Mémoire de contexte (multi-PC / multi-outil)
+
+Avant toute tâche, si un fichier de mémoire de contexte existe pour ce projet (ex. `COLLEGUE.md` ou équivalent) :
+- Le lire pour récupérer le contexte métier avant de commencer.
+- S'il est absent, le signaler une fois à l'utilisateur au début de la session (sans bloquer le travail).
+- S'il est présent et versionné (ex. via git), le mettre à jour si la session apporte des décisions ou infos utiles, puis proposer de sauvegarder (commit/push) — après validation, comme toute autre modification.
+
+---
+
+## 4. Journal de bord
+
+Après chaque action significative (fichier créé/modifié/supprimé, commit, push, déploiement) :
+- Consigner une ligne dans le journal de bord du projet, au format : `HHhMM — <verbe> <cible>`.
+- Ce journal est distinct des décisions métier (qui vont dans le fichier de mémoire de contexte) : il trace uniquement les actions techniques.
+- Sur demande ("montre le journal de bord"), afficher son contenu.
+
+---
+
+## 5. Runbook opérateur (déploiement / secrets / environnement)
+
+Avant tout setup d'hébergement, synchronisation de secrets, déploiement, ou avant d'annoncer "c'est connecté" :
+1. Vérifier s'il existe un runbook opérateur ou une liste de pièges connus pour ce projet, et le consulter.
+2. Après toute modification de secret/config, relancer une vérification de statut si un script de check existe.
+3. Ne jamais annoncer un déploiement réussi sans preuve vérifiable.
+4. Après un incident corrigé : documenter le piège rencontré (dans le fichier de pièges connus) et l'ajouter au journal de bord.
+
+---
+
+## 6. Format technique par outil (sans ça, ces règles ne sont pas lues)
+
+Un fichier de règles au bon contenu mais au mauvais format ou au mauvais endroit est invisible pour l'outil, exactement comme s'il n'existait pas. Vérifié pour ARIA le 05/07/2026 : c'était le cas pour Cursor (mauvaise extension) et Grok Build (mauvais fichier).
+
+- **Cursor** : le fichier doit être en `.mdc` (pas `.md`), placé dans `.cursor/rules/`, avec un front-matter contenant `alwaysApply: true`. Vérifier dans l'onglet "Rules" de Cursor que le fichier apparaît bien comme actif.
+- **Grok Build** : le fichier doit s'appeler `AGENTS.md` et être placé **à la racine du repo** (pas dans un sous-dossier `.grok/rules/`). Vérifier en plus que `permission_mode` dans la config Grok active (`~/.grok/config.toml` ou équivalent) n'est jamais réglé sur `"always-approve"` — cette valeur annule toute règle de validation écrite par ailleurs.
+- **Claude Code** : le fichier doit s'appeler `CLAUDE.md`, placé à la racine du repo.
+
+**Règle générale** : après avoir créé ou modifié un fichier de règles, toujours vérifier concrètement (dans l'interface de l'outil, pas juste en supposant) qu'il est bien pris en compte, avant de considérer la tâche terminée.
+
+## 7. Scripts et outils existants à préserver
+
+Ne pas supprimer ni contourner sans validation :
+- Le script de vérification de préparation des PR (`check-pr-readiness.ps1` ou équivalent).
+- Les scripts de démarrage de session / passation (`session-boot.ps1`, `triage-inbox.ps1` ou équivalents).
+- Tout script de journal de bord déjà en place (voir section 4).
+
+Si un de ces scripts semble obsolète ou en conflit avec une règle de ce fichier, le signaler et proposer une solution — ne jamais le supprimer silencieusement.
+
+---
+
+## Résumé de l'ordre à suivre
+
+**Analyser → Proposer → Attendre validation → Implémenter → Journaliser → Auto-critiquer.**
+Aucune étape ne saute la précédente, même en mode autonome.
