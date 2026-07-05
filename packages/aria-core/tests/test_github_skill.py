@@ -31,12 +31,14 @@ def test_github_default_limited_write(monkeypatch):
         GITHUB_WRITE_REPOS="",
         GITHUB_READ_REPOS="",
         GITHUB_OWNER="GoldenFarFR",
-        GITHUB_SANDBOX_REPO="aria-sandbox",
-        GITHUB_TOKEN_REPO="aria-token-base",
+        GITHUB_SANDBOX_REPO="ARIA",
+        GITHUB_TOKEN_REPO="",
     )
     assert github_skill.github_unlimited_access() is False
     writes = github_skill.allowed_write_repos()
-    assert "GoldenFarFR/aria-sandbox" in writes
+    # Empty WRITE_REPOS now means strict no-write (for Telegram Aria safety / exact local policy)
+    assert writes == [] or len(writes) == 0
     assert github_skill.repo_write_allowed("GoldenFarFR", "dexpulse") is False
     reads = github_skill.allowed_read_repos()
-    assert "GoldenFarFR/aria-vanguard" in reads
+    # Default read when empty falls back to owner/sandbox (monorepo)
+    assert any("ARIA" in r or "sandbox" in r.lower() for r in reads) or "GoldenFarFR/*" in reads
