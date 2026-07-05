@@ -1,4 +1,4 @@
-# Aria Vanguard ZHC ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â holding stack (vitrine + API ARIA)
+﻿# Aria Vanguard ZHC ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â holding stack (vitrine + API ARIA)
 # Secrets: operator/production.env (coffre) + operator/sync-render.ps1
 # https://render.com/docs/blueprint-spec
 
@@ -80,7 +80,7 @@ services:
       - key: GITHUB_READ_REPOS
         value: "*"
       - key: GITHUB_WRITE_REPOS
-        value: ""
+        value: "off"
       - key: GITHUB_EXCLUDED_REPOS
         value: ""
       - key: GITHUB_PROTECTED_REPOS
