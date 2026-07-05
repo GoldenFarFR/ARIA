@@ -12,12 +12,11 @@ import yaml
 from aria_core.skills.acp_cli import (
     client_complete_job,
     client_create_job,
-    client_fund_job,
     client_reject_job,
     is_acp_available,
     list_offerings,
-    trade_tokens,
 )
+from aria_core.wallet_guard import SpendEscalationError, escalate_spend
 
 _CLIENT_RE = re.compile(
     r"(?i)\b(?:"
@@ -126,13 +125,20 @@ async def execute_acp_client_action(message: str, lang: str) -> tuple[str, dict]
         m = _AMOUNT_RE.search(message)
         if m:
             amount = float(m.group(1).replace(",", "."))
-        row, err = client_fund_job(job_id, amount_usdc=amount)
-        if err:
-            return f"Fund job : {err[:300]}", {"acp": "client_fund_error"}
-        amt = f" ({amount} USDC)" if amount else ""
+        amount_label = f"{amount} USDC" if amount else "montant par défaut du job"
+        try:
+            approval_id = await escalate_spend(
+                "client_fund_job",
+                amount=amount_label,
+                counterparty=f"job {job_id}",
+                description=f"Financer le job ACP {job_id} ({amount_label}).",
+                payload={"job_id": job_id, "amount_usdc": amount},
+            )
+        except SpendEscalationError as exc:
+            return str(exc), {"acp": "client_fund_blocked"}
         return (
-            f"Job {job_id} financé sur ACP{amt}.",
-            {"acp": "client_fund", **(row or {})},
+            f"⏳ Financement du job {job_id} ({amount_label}) en attente de validation Telegram (#{approval_id}).",
+            {"acp": "client_fund_pending", "approval_id": approval_id, "job_id": job_id},
         )
 
     if re.search(r"(?i)\b(?:trade|swap|vendre|sell|achet|buy)\b", message):
@@ -154,16 +160,23 @@ async def execute_acp_client_action(message: str, lang: str) -> tuple[str, dict]
             amount_in = "1"
         else:
             token_in, token_out, amount_in = "USDC", "ETH", "1"
-        row, err = trade_tokens(
-            token_in=token_in,
-            token_out=token_out,
-            amount_in=amount_in.replace(",", "."),
-        )
-        if err:
-            return f"Trade ACP : {err[:350]}", {"acp": "client_trade_error"}
+        try:
+            approval_id = await escalate_spend(
+                "trade_tokens",
+                amount=f"{amount_in} {token_in}",
+                counterparty=f"{token_in} → {token_out}",
+                description=f"Trade ACP : {amount_in} {token_in} → {token_out}.",
+                payload={
+                    "token_in": token_in,
+                    "token_out": token_out,
+                    "amount_in": amount_in.replace(",", "."),
+                },
+            )
+        except SpendEscalationError as exc:
+            return str(exc), {"acp": "client_trade_blocked"}
         return (
-            f"Trade ACP exécuté : {amount_in} {token_in} → {token_out}.",
-            {"acp": "client_trade", **(row or {})},
+            f"⏳ Trade ACP en attente de validation Telegram (#{approval_id}) : {amount_in} {token_in} → {token_out}.",
+            {"acp": "client_trade_pending", "approval_id": approval_id},
         )
 
     if re.search(r"(?i)\b(?:crée?r?\s+un\s+job|command|commander|achet)\b", message):
