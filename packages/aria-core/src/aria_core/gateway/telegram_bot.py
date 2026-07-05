@@ -1349,12 +1349,49 @@ async def _register_bot_commands() -> None:
     logger.info("Telegram command menu registered (%d commands)", len(commands))
 
 
+async def _handle_test_spend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/test_spend — escalade wallet de test (admin) : exécuteur mocké, aucune dépense réelle."""
+    message = update.message
+    if not message:
+        return
+    if not await _admin_check_reply(update):
+        return
+
+    from aria_core import wallet_guard
+    from aria_core.wallet_guard import SpendEscalationError
+
+    def _mock_test_executor(payload: dict) -> tuple[dict | None, str | None]:
+        # Jamais acp_cli — action dédiée "test_spend", absente des chemins de dépense réels.
+        return ({"status": "test_ok", "mock": True, "amount_usdc": payload.get("amount_usdc")}, None)
+
+    wallet_guard.WALLET_ACTIONS.setdefault("test_spend", _mock_test_executor)
+
+    try:
+        approval_id = await wallet_guard.escalate_spend(
+            "test_spend",
+            amount="0.10 USDC",
+            counterparty="TEST-JOB-000001",
+            description="Escalade de TEST — exécuteur mocké, aucune dépense réelle.",
+            payload={"job_id": "TEST-JOB-000001", "amount_usdc": 0.10, "test": True},
+        )
+    except SpendEscalationError as exc:
+        await _reply(message, str(exc))
+        return
+
+    await _reply(
+        message,
+        f"⏳ Escalade de test #{approval_id} envoyée — réponds au prompt "
+        "Oui / Non / Explique-moi pourquoi pour valider le flux.",
+    )
+
+
 def _register_handlers(app: Application) -> None:
     from telegram.ext import CommandHandler, MessageHandler, filters
 
     # Minimal commands only (user request)
     app.add_handler(CommandHandler("start", _handle_start))
     app.add_handler(CommandHandler("status", _handle_status))
+    app.add_handler(CommandHandler("test_spend", _handle_test_spend))
 
     # All other interactions via plain text (no slash commands)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
