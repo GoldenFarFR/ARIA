@@ -10,6 +10,7 @@ from typing import Any
 from aria_core.paths import memory_dir
 from aria_core.skills.acp_cli import is_acp_available, job_history
 from aria_core.skills.acp_deliverable_quality import validate_deliverable
+from aria_core.skills.acp_schema import get_acp_strict_rules
 from aria_core.skills.acp_workflow_engine import build_deliverable_for_job
 
 _PREPARE_RE = re.compile(
@@ -143,6 +144,8 @@ def _format_reply(
             f"Fichier : {saved}",
             "",
             "Étapes : Hermès → job → coller JSON → soumettre manuellement.",
+            "",
+            "→ Audit qualité opérateur obligatoire avant de considérer ce deliverable comme prêt.",
         ])
         return "\n".join(lines)
 
@@ -154,6 +157,10 @@ def _format_reply(
         payload,
         "",
         f"Saved: {saved}",
+        "",
+            "→ Operator quality audit required before considering this deliverable ready.",
+            "",
+            get_acp_strict_rules(lang),
     ]
     return "\n".join(lines)
 

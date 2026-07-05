@@ -39,6 +39,7 @@ from aria_core.skills.acp_email_watcher import (
     execute_acp_email_watch,
     wants_acp_email_watch,
 )
+from aria_core.skills.acp_schema import get_acp_strict_rules
 from aria_core.skills.acp_prepare_skill import (
     execute_acp_prepare,
     wants_acp_prepare,
@@ -158,6 +159,7 @@ async def _format_status(lang: str) -> tuple[str, dict]:
                 "Démarrage local : vanguard\\operator\\start-acp-local.ps1",
             ]
         )
+        lines.extend(["", get_acp_strict_rules("fr")])
         return "\n".join(lines), {"acp": "status", "offerings": len(offerings or [])}
 
     lines = ["═══ ACP STATUS ═══", ""]
@@ -245,6 +247,9 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
     if wants_acp_email_watch(text):
         return await execute_acp_email_watch(text, lang_key)
 
+    # Toujours rappeler les barrières strictes ACP dans les réponses marketplace
+    strict = get_acp_strict_rules(lang_key)
+
     if _POLL_RE.search(text):
         result = await run_provider_cycle()
         if lang_key == "fr":
@@ -306,30 +311,23 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
         return await _format_revenue_plan(lang_key)
 
     if lang_key == "fr":
-        return (
+        help_text = (
             "ACP — dis « acp status » pour l'état, « plan revenus acp » pour la stratégie, "
-            "« traiter jobs acp » pour livrer. (Liste complète : « aide acp ».)\n\n"
+            "« traiter jobs acp » pour livrer.\n\n"
             "• acp status — agent + offres + fichier events\n"
             "• traiter jobs acp — poll provider (livrer jobs en attente)\n"
             "• browse offerings — parcourir le marketplace\n"
             "• plan revenus acp — stratégie monétisation\n"
             "• templates offres acp — workflows disponibles\n"
             "• créer offre acp template <nom> — publier sur marketplace\n"
-            "• lancer produit acp template <nom> et publier sur X — produit + promo\n"
-            "• réparer offres acp — upgrade premium (schémas + exemples dashboard)\n"
-            "• supprime tous les workflows sur acp — vider le marketplace\n"
-            "• supprime le workflow <nom> — retirer une offre\n"
-            "• créer job acp offre <nom> — acheter un service\n"
-            "• financer / approuver / rejeter job acp <id>\n"
-            "• trade acp swap 10 USDC contre ETH — acp trade\n"
-            "• négocier abonnement acp — aria_full_access\n"
+            "• lancer produit acp template <nom> et publier sur X\n"
             "• scan marché acp — étudier offre/demande + gaps workflows\n"
-            "• préparer job acp 0x… offre analyse_lite_x1 contract 0x… — livrable JSON (Hermès)\n"
-            "• surveiller email acp — alertes jobs via agents.world\n\n"
-            "Lance : vanguard\\operator\\start-acp-local.ps1",
-            {"acp": "help"},
+            "• préparer job acp 0x… — livrable JSON (Hermès)\n\n"
+            "Lance : vanguard\\operator\\start-acp-local.ps1\n\n"
+            + strict
         )
+        return help_text, {"acp": "help"}
     return (
-        "ACP: acp status | traiter jobs acp | browse offerings | revenue plan",
+        "ACP: acp status | traiter jobs acp | browse | scan marché | prepare job\n\n" + strict,
         {"acp": "help"},
     )

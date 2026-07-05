@@ -17,6 +17,7 @@ from aria_core.skills.acp_deliverable_quality import (
     should_block_submit,
     validate_deliverable,
 )
+from aria_core.skills.acp_schema import get_acp_strict_rules
 from aria_core.skills.acp_workflow_engine import build_deliverable_for_job
 
 logger = logging.getLogger(__name__)
@@ -211,6 +212,10 @@ async def _process_job(job_id: str, *, chain_id: str) -> str | None:
         )
         return f"quality_blocked:{job_id}"
 
+    # Rappel barrière ACP forte : l'opérateur doit auditer avant validation finale
+    audit_note = " (audit qualité opérateur demandé avant promotion)"
+    # On n'altère pas le deliverable lui-même, on loggue juste l'obligation
+
     ok, msg = provider_submit(job_id, deliverable, chain_id=chain_id)
     log_quality_receipt(
         job_id=job_id,
@@ -256,7 +261,8 @@ async def _process_job(job_id: str, *, chain_id: str) -> str | None:
                     logger.info("ACP workflow-used tweet queued: %s", flush.get("reason"))
         except Exception as exc:
             logger.debug("workflow-used social skip: %s", exc)
-        return f"submit:{job_id}"
+        # Barrière ACP : on signale explicitement que l'audit opérateur est requis
+        return f"submit:{job_id} — audit qualité opérateur demandé"
     logger.warning("ACP submit %s failed: %s", job_id, msg)
     return None
 

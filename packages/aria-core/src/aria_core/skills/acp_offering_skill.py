@@ -18,7 +18,7 @@ from aria_core.skills.acp_cli import (
     list_subscriptions,
     update_offering,
 )
-from aria_core.skills.acp_schema import enrich_json_schema
+from aria_core.skills.acp_schema import enrich_json_schema, get_acp_strict_rules
 
 _TEMPLATES_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "acp_offerings.yaml"
 _CONFIG_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "acp_config.yaml"
@@ -634,10 +634,12 @@ async def format_templates_help(lang: str) -> tuple[str, dict]:
                 "        « créer workflow acp veille_zhc_x1 prix 2.99 »",
             ]
         )
+        lines.extend(["", get_acp_strict_rules("fr")])
         return "\n".join(lines), {"acp": "templates", "count": len(templates)}
     lines = ["ACP offering templates:"]
     for key, tpl in templates.items():
         lines.append(f"- {key}: {tpl.get('name')} @ {tpl.get('price_usd')} USDC")
+    lines.extend(["", get_acp_strict_rules("en")])
     return "\n".join(lines), {"acp": "templates", "count": len(templates)}
 
 
