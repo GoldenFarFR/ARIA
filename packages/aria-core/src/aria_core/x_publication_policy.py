@@ -558,7 +558,7 @@ def ensure_policy_file() -> None:
         "- `X_ALLOW_LIKES/REPLIES/DMS=false`\n\n"
         "## Contenu autorisé\n"
         "- Anglais uniquement sur X\n"
-        "- Building in public : Aria Vanguard ZHC, DEXPulse, autonomie Aria\n"
+        "- Building in public : Aria Vanguard ZHC, Aria Market, autonomie Aria\n"
         "- Faits vérifiés, signaux watchlist, briefs entraînement (sans conseil financier)\n"
         "- Ton sobre, fondateur — pas de shill\n\n"
         "## Contenu interdit (bloqué auto)\n"

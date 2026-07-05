@@ -22,6 +22,14 @@ from aria_core.runtime import settings
 logger = logging.getLogger(__name__)
 
 WORKER_REPO = "collegue-memoire"
+
+
+def _local_runtime() -> bool:
+    """True when running locally (debug mode). Used to prefer local files for worker queue."""
+    try:
+        return bool(getattr(settings, "debug", False))
+    except Exception:
+        return True  # conservative: if unsure, treat as local dev
 WORKER_PATH = "sessions/ARIA-WORKER.md"
 FALLBACK_REPO = "aria-sandbox"
 FALLBACK_PATH = "docs/aria-worker-queue/QUEUE.md"
@@ -379,6 +387,14 @@ def _cap_gap_runtime_resolved_sync(task_id: str) -> bool:
 
         from aria_core.capability_gap import gap_runtime_resolved
 
+        # Safe call: avoid "never awaited" / RuntimeWarning when already inside an event loop
+        # (e.g. called from async execute_worker_delegate during sync_pending_local_tasks_to_md).
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            return False
         return asyncio.run(gap_runtime_resolved(cap))
     except Exception:
         return False
@@ -538,13 +554,25 @@ async def enqueue_worker_task(
     if local_md:
         result["local_worker_md"] = str(local_md)
 
-    if not github_configured():
-        append_memory("self-improve", f"[aria-worker] {task.task_id} local only (no GITHUB_TOKEN)")
+    # For the worker queue (ARIA-WORKER.md), default to local file only.
+    # Only attempt GitHub push if the operator has explicitly allowed writes
+    # to the worker repos in GITHUB_WRITE_REPOS.
+    # This prevents 404 spam when the real files live in aria-ops/collegue-memoire locally.
+    write_raw = (getattr(settings, "github_write_repos", "") or "").strip().lower()
+    is_explicit_worker_write = any(x in write_raw for x in ("collegue-memoire", "aria-sandbox", "*"))
+
+    if not is_explicit_worker_write:
+        # No explicit permission to push worker MD to GitHub → stay on local file.
+        # Never attempt the remote calls for these files.
         result["status"] = "local_md" if local_md else "local_only"
         await _notify_worker_task(task, result, lang=lang)
         return result
 
-    owner = settings.github_owner.strip()
+    if not github_configured():
+        result["status"] = "local_md" if local_md else "local_only"
+        await _notify_worker_task(task, result, lang=lang)
+        return result
+
     targets: list[tuple[str, str]] = []
     if repo_write_allowed(owner, WORKER_REPO):
         targets.append((WORKER_REPO, WORKER_PATH))
@@ -552,8 +580,8 @@ async def enqueue_worker_task(
         targets.append((FALLBACK_REPO, FALLBACK_PATH))
 
     if not targets:
-        append_memory("self-improve", f"[aria-worker] {task.task_id} write denied")
-        result["status"] = "write_denied"
+        if local_md:
+            result["status"] = "local_md"
         await _notify_worker_task(task, result, lang=lang)
         return result
 
@@ -578,7 +606,12 @@ async def enqueue_worker_task(
             )
             pushed.append(push)
         except Exception as exc:
-            logger.warning("aria_worker_queue push %s/%s failed: %s", owner, repo, exc)
+            # Worker queue files (collegue-memoire / aria-sandbox) often don't exist as top-level GitHub repos
+            # in local setups. Never spam the console for them.
+            if repo in (WORKER_REPO, FALLBACK_REPO):
+                logger.debug("aria_worker_queue: skipped remote push for %s/%s (no explicit GITHUB_WRITE_REPOS)", owner, repo)
+            else:
+                logger.warning("aria_worker_queue push %s/%s failed: %s", owner, repo, exc)
             errors.append(f"{repo}: {exc}"[:200])
 
     if pushed:
@@ -667,20 +700,16 @@ async def _notify_worker_task(task: WorkerTask, result: dict[str, Any], *, lang:
             "ARIA → Ouvrier Cursor\n\n"
             f"Tâche : {task.task_id}\n"
             f"{task.title}\n\n"
-            f"Statut file : {result.get('status')}\n"
         )
     else:
-        msg = f"ARIA worker queue — {task.task_id}\n{result.get('status')}\n"
+        msg = f"ARIA worker queue — {task.task_id}\n"
 
     pushed = result.get("pushed") or []
     if pushed:
         p = pushed[0]
         msg += f"File : {p.get('repo')}/{p.get('path')}\n"
-    elif result.get("status") in ("local_only", "local_md"):
-        if result.get("local_worker_md"):
-            msg += f"Local MD : {result.get('local_worker_md')}\n"
-        msg += f"Local jsonl : {result.get('local_jsonl')}\n"
-        msg += "Ouvrier : lire sessions/ARIA-WORKER.md après pull collegue-memoire.\n"
+    else:
+        msg += "Ouvrier : lire sessions/ARIA-WORKER.md.\n"
 
     if result.get("status") == "dedup":
         msg += "(déjà en file cette semaine)\n"
@@ -698,8 +727,6 @@ def format_worker_reply(result: dict[str, Any], *, lang: str = "fr") -> str:
     if status == "pushed":
         pushed = (result.get("pushed") or [{}])[0]
         lines.append(f"File : {pushed.get('repo')}/{pushed.get('path')}")
-    elif status == "local_md" and result.get("local_worker_md"):
-        lines.append(f"File locale : {result.get('local_worker_md')}")
     if lang == "fr":
         lines.append("L'ouvrier traitera `sessions/ARIA-WORKER.md` à la prochaine session.")
     else:

@@ -87,6 +87,14 @@ def _repo_excluded(repo: str) -> bool:
     return repo.lower() in _excluded_repo_names()
 
 
+def _local_runtime() -> bool:
+    """True in local/debug runs (not production). Used to relax write permissions locally only."""
+    try:
+        return bool(getattr(settings, "debug", False))
+    except Exception:
+        return False
+
+
 def repo_read_allowed(owner: str, repo: str) -> bool:
     if _repo_excluded(repo):
         return False
@@ -101,6 +109,15 @@ def repo_write_allowed(owner: str, repo: str) -> bool:
         return False
     if github_unlimited_access() or settings.github_write_repos.strip() == WILDCARD:
         return owner.lower() == settings.github_owner.strip().lower()
+
+    raw = settings.github_write_repos.strip()
+    if not raw or raw.lower() in ("", "off", "none", "disabled", "0"):
+        # Local only: reopen GitHub writes for the owner when no explicit GITHUB_WRITE_REPOS.
+        # In production (debug=False) this stays blocked (safe default).
+        if _local_runtime():
+            return owner.lower() == settings.github_owner.strip().lower()
+        return False
+
     full = f"{owner}/{repo}"
     return full in allowed_write_repos()
 
@@ -112,7 +129,22 @@ def allowed_write_repos() -> list[str]:
     repos = _parse_repo_list(raw)
     if not repos:
         if not raw or raw.lower() in ("", "off", "none", "disabled", "0"):
-            return []  # explicit no-write for Telegram Aria (remove rights on GH/site)
+            if _local_runtime():
+                # Local run: provide a broad default so ARIA can write during dev
+                # without having to set GITHUB_WRITE_REPOS every time.
+                owner = settings.github_owner.strip()
+                base = [
+                    f"{owner}/{settings.github_sandbox_repo}",
+                    f"{owner}/ARIA",
+                    f"{owner}/aria-vanguard",
+                ]
+                token_repo = settings.github_token_repo.strip()
+                if token_repo:
+                    full = f"{owner}/{token_repo}"
+                    if full not in base:
+                        base.append(full)
+                return [r for r in base if not _repo_excluded(r.split("/")[-1])]
+            return []  # production: strict no-write when GITHUB_WRITE_REPOS is empty/off
         repos = [f"{settings.github_owner}/{settings.github_sandbox_repo}"]
         token_repo = settings.github_token_repo.strip()
         if token_repo:

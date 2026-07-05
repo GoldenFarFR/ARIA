@@ -83,6 +83,11 @@ def is_roadmap_partnership_question(message: str) -> bool:
     if re.search(r"\b(humour|humour|sérieux|sérieuse|trop sérieux|ton|personnalité|mode)\b", text, re.I):
         return False
 
+    # Direct clash / provocation at the operator on casual channel (e.g. "t'as 0 revenue et tu continues")
+    # should not hijack into the roadmap template. Let the liberated casual path handle it.
+    if re.search(r"\b(t'as|tu as|tu continues|tu sers|tu fais quoi|tu tournes|pas comme toi|0 revenue|zero revenue|tu es nulle|tu sers à rien)\b", text, re.I):
+        return False
+
     return bool(_ROADMAP_RE.search(text))
 
 

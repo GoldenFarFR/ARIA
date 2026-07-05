@@ -101,28 +101,55 @@ async def execute_manage_repertoire(message: str, lang: str = LANG_FR) -> tuple[
 async def execute_develop_repertoire(lang: str = LANG_FR) -> tuple[str, dict]:
     items = await repertoire_db.get_all()
     if not items:
-        dexpulse = await repertoire_db.create(
+        market = await repertoire_db.create(
             name=FLAGSHIP_PRODUCT,
             description=(
                 f"Subsidiary of {holding_name()}. "
-                "Real-time DEX analyzer — divergences, Fibonacci, alerts"
+                "Watchlist-first DEX analyzer — signals, alerts, DexScreener embeds (Aria Market)"
             ),
             category="product",
             status=RepertoireItemStatus.BUILDING,
             priority=5,
-            tags=["dex", "trading", "zhc"],
+            tags=["dex", "trading", "zhc", "flagship"],
             zhc_aligned=True,
-            notes="MVP v0.1 live. Next: autonomous portfolio agent.",
+            notes="Current flagship. Next: autonomous portfolio agent + transparency page.",
         )
-        items = [dexpulse]
+        items = [market]
 
     building = [i for i in items if i.status == RepertoireItemStatus.BUILDING]
     ideas = [i for i in items if i.status == RepertoireItemStatus.IDEA]
     live = [i for i in items if i.status == RepertoireItemStatus.LIVE]
 
+    suggestions: list[str] = []
+    h = holding_name()
+
+    # Auto-detect and hard-flag stale DEXPulse entries so the repertoire stops lying.
+    stale_dexpulse = [i for i in items if i.name.lower() == "dexpulse" or "dexpulse" in (i.description or "").lower()]
+    if stale_dexpulse:
+        for item in stale_dexpulse:
+            if item.status != RepertoireItemStatus.ARCHIVED:
+                suggestions.append(
+                    f"ARCHIVER maintenant : /repertoire archive {item.name}  (DEXPulse retiré 2026-06-19 — plus flagship, plus live)"
+                )
+            if "flagship" in [t.lower() for t in (item.tags or [])] or "flagship" in (item.description or "").lower():
+                suggestions.append(
+                    f"Retirer « flagship » de l'entrée retirée DEXPulse (elle n'est plus la filiale phare)"
+                )
+
     if lang == "en":
-        suggestions = []
-        h = holding_name()
+        if not any(i.entity_type == EntityType.HOLDING for i in items):
+            suggestions.append(f"Ensure {h} is registered as parent holding in repertoire")
+        if len(building) > 0 and not any("revenue" in i.tags for i in items):
+            suggestions.append(
+                f"Add a revenue stream to {FLAGSHIP_PRODUCT} subsidiary (premium alerts)"
+            )
+        if len(ideas) == 0:
+            suggestions.append(
+                f"Register a new venture as subsidiary of {h} — e.g. Telegram Premium Alerts"
+            )
+        suggestions.append(
+            f"Publish a transparency page for {FLAGSHIP_PRODUCT} under {h} (building in public)"
+        )
         if not any(i.entity_type == EntityType.HOLDING for i in items):
             suggestions.append(f"Ensure {h} is registered as parent holding in repertoire")
         if len(building) > 0 and not any("revenue" in i.tags for i in items):
@@ -151,8 +178,6 @@ async def execute_develop_repertoire(lang: str = LANG_FR) -> tuple[str, dict]:
         for s in suggestions:
             lines.append(f"→ {s}")
     else:
-        suggestions = []
-        h = holding_name()
         if not any(i.entity_type == EntityType.HOLDING for i in items):
             suggestions.append(f"Vérifier que {h} est bien la holding mère dans le répertoire")
         if len(building) > 0 and not any("revenue" in i.tags for i in items):

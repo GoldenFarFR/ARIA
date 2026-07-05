@@ -36,7 +36,7 @@ _CASUAL_SMALLTALK_RE = re.compile(
     r"\b("
     r"météo|il fait|temps|pleut|soleil|chaud|froid|"
     r"mangé|bouffe|dîner|déjeuner|petit dej|café|"
-    r"blague|joke|rigole|rire|drôle|"
+    r"blague|joke|rigole|rire|drôle|frigo|vanne|clash|cash|filtre|provoc|"
     r"week.end|weekend|vacances|sortir|"
     r"fatigué|fatigue|dormi|sommeil|matin|soir|"
     r"ça va|comment ça va|tu vas bien|ta journée|ta soirée|"

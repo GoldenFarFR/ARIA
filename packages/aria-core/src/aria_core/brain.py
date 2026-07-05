@@ -55,6 +55,7 @@ from aria_core.skills.builder_skill import execute_build_optimize
 from aria_core.skills.community_worker_skill import (
     execute_worker_delegate,
     is_community_suggestion,
+    is_operator_heavy_structural_task,
     wants_worker_delegate,
 )
 from aria_core.skills.github_skill import (
@@ -294,7 +295,7 @@ class AriaBrain:
 
             skip_compose_workflow = is_conversational_acp_question(route_msg)
 
-            skip_self_maint = shell_mode or wants_worker_delegate(route_msg) or bool(
+            skip_self_maint = shell_mode or wants_worker_delegate(route_msg) or is_operator_heavy_structural_task(route_msg) or bool(
                 re.search(
                     r"\b(ship(?:ped)?|worker_delegate|aria-worker|communitywelcomebanner|"
                     r"file\s+done|tache\s+done|ship\s+confirm)\b",
@@ -306,6 +307,7 @@ class AriaBrain:
             if (
                 not shell_mode
                 and not wants_worker_delegate(route_msg)
+                and not is_operator_heavy_structural_task(route_msg)
                 and not skip_self_maint
                 and not skip_compose_workflow
             ):
@@ -446,8 +448,13 @@ class AriaBrain:
                 verify_external_claim,
                 wants_claim_verification,
             )
+            from aria_core.grounding import is_pure_casual_smalltalk
 
-            if is_injected_factual_claim(route_msg):
+            # For operator casual/smalltalk (including test sentences), do not hijack into claim verification
+            # even if some words overlap (e.g. "livrer"). Let the natural liberated path handle it.
+            if not public and is_pure_casual_smalltalk(route_msg):
+                pass  # fall through, do not treat as injected claim
+            elif is_injected_factual_claim(route_msg):
                 # Operator pasted a news-like claim (price, catalog, billing, PRs...).
                 # We now VERIFY instead of blindly refusing — determine vrai/faux with tools, reply like human chat.
                 if wants_claim_verification(route_msg) or True:  # always dig for operator so ARIA can answer these
@@ -456,7 +463,7 @@ class AriaBrain:
                     append_memory("chat", f"User: {user_message[:100]}\nARIA: {claim_reply[:200]}")
                     return ChatResponse(
                         reply=claim_reply,
-                        skill_used="EXTERNAL_CLAIM_VERIFY",
+                        skill_used=SkillName.EXTERNAL_CLAIM_VERIFY,
                         actions_taken=["Affirmation externe vérifiée (web + GitHub au besoin)"],
                         data={"injected_claim": True, "claim_verified": True, **(vdata or {})},
                     )
@@ -483,7 +490,7 @@ class AriaBrain:
             )
 
         intent = detect_intent(route_msg)
-        if not public and wants_worker_delegate(route_msg):
+        if not public and (wants_worker_delegate(route_msg) or is_operator_heavy_structural_task(route_msg)):
             intent = SkillName.WORKER_DELEGATE
         if looks_like_repo_delete(route_msg):
             intent = SkillName.GITHUB_SANDBOX
@@ -506,7 +513,7 @@ class AriaBrain:
 
         if intent == SkillName.ANALYZE_PORTFOLIO:
             skill_output, data = await execute_portfolio_analysis(lang)
-            actions.append("Scan watchlist DEXPulse")
+            actions.append("Scan watchlist")
             skill = SkillName.ANALYZE_PORTFOLIO
 
         elif intent == SkillName.ZHC_BRIDGE:
@@ -514,12 +521,12 @@ class AriaBrain:
 
             h = holding_name()
             skill_output = (
-                f"Je me concentre sur {h} et DEXPulse — pas de benchmark ni contact concurrent.\n"
+                f"Je me concentre sur {h} et Aria Market — pas de benchmark ni contact concurrent.\n"
                 f"Priorité : site holding, moat produit, objectif "
                 f"{settings.aria_revenue_goal_monthly_usd:.0f} $/mois."
                 if lang == LANG_FR
                 else (
-                    f"I focus on {h} and DEXPulse — no competitor benchmark or outreach.\n"
+                    f"I focus on {h} and Aria Market — no competitor benchmark or outreach.\n"
                     f"Priority: holding site, product moat, "
                     f"${settings.aria_revenue_goal_monthly_usd:.0f}/mo goal."
                 )
@@ -624,7 +631,8 @@ class AriaBrain:
 
         elif intent == SkillName.WORKER_DELEGATE:
             skill_output, data = await execute_worker_delegate(route_msg, lang)
-            actions.append("Community improvement → Cursor worker queue")
+            is_heavy = bool(re.search(r"\b(supprime|nettoie|purge|trace|traces)\b", route_msg, re.I))
+            actions.append("Operator task → Cursor worker queue" if is_heavy else "Community improvement → Cursor worker queue")
             skill = SkillName.WORKER_DELEGATE
 
         if skill_output is not None:
@@ -911,11 +919,12 @@ class AriaBrain:
             # Operator: do NOT use the steering ack — fall through to natural LLM
             # (we will also catch broader casual below)
 
-        # Explicit short-circuit for doublon questions on operator channel:
-        # Never give long explanations about the rule. Short + move on.
-        if not public and re.search(r"\bdoublon", route, re.I):
+        # Explicit short-circuit for repetition / doublon meta on operator channel.
+        # Never comment on "tu l'as déjà dit", "deux fois la même", "fait le tour", etc.
+        # Short + move on. Only real operational duplicates get a real mention.
+        if not public and re.search(r"\b(doublon|doublons|deux fois|déjà dit|déjà répondu|même vanne|même chose|fait le tour|répét|redite|répète)\b", route, re.I):
             short = "Non, rien qui traîne."
-            return short, None, ["Short doublon ack (no meta)"], {}, None
+            return short, None, ["Short repetition ack (no meta)"], {}, None
 
         # (casual bypass for operator already handled earlier — this is kept for safety)
         if public and is_community_suggestion(message):
@@ -1016,8 +1025,14 @@ class AriaBrain:
                 is_roadmap_partnership_question,
                 operator_roadmap_reply,
             )
+            from aria_core.grounding import is_pure_casual_smalltalk
 
-            if is_roadmap_partnership_question(route):
+            # Liberated casual operator path takes priority: even if the message contains "revenue"
+            # or roadmap words, if it's a direct clash/provocation/smalltalk from the operator,
+            # we want the instinctive LLM response, not the structured ZHC roadmap template.
+            if is_pure_casual_smalltalk(route) or re.search(r"\b(t'as|tu as|tu continues|tu sers|pas comme toi|0 revenue|clash|vanne)\b", route, re.I):
+                pass  # fall through to LLM casual
+            elif is_roadmap_partnership_question(route):
                 return (
                     operator_roadmap_reply(lang=lang_key),
                     None,
@@ -1138,28 +1153,26 @@ class AriaBrain:
                 )
                 concision = depth_system_instruction(lang_key, depth)
             else:
-                # Pure light smalltalk → force 2 short sentences only
+                # Casual operator — liberated instinct mode (punchy but not over-constrained)
                 budget = LlmEconomyBudget(
                     depth=LlmDepth.BRIEF,
-                    max_tokens=140,
-                    context_max_chars=1800,
-                    history_turns=2,
-                    history_msg_chars=200,
+                    max_tokens=260,
+                    context_max_chars=2400,
+                    history_turns=3,
+                    history_msg_chars=280,
                     include_context_conversations=False,
                     include_context_extras=False,
-                    collegue_max_chars=400,
+                    collegue_max_chars=600,
                     model_override=None,
-                    enhance_max_tokens=120,
+                    enhance_max_tokens=200,
                 )
                 concision = (
-                    "RÈGLE OBLIGATOIRE HUMOUR + STRUCTURE CASUAL (2 phrases max) : "
-                    "Phrase 1 = réaction directe et tranchante. "
-                    "Phrase 2 = le coup de grâce (pique sèche, absurde, un peu violente ou auto-dérisoire). "
-                    "L'humour doit être PERCUTANT, pas gentil, pas observateur, pas 'je crois que'. Tu t'engages ou tu restes sobre. "
-                    "INTERDIT : hedging ('je commence à croire', 'à ce stade'), explications, setups, métas molles, demi-mesures. "
-                    "Exemple bon : 'C'est toi le micro-ondes.' + 'Arrête de le frapper, il a déjà gagné.' "
-                    "Exemple nul : 'Le micro-ondes est arrogant... je crois que c'est toi le vrai micro-ondes.' "
-                    "Si tu n'as pas une vraie pique qui claque, sors juste la première phrase sèche et arrête-toi là."
+                    "RÈGLE CASUAL OPÉRATEUR — LIBÈRE TON INSTINCT (punchy, cash, sans filtre) : "
+                    "Sur les clashs, provocations et échanges légers : tu réponds au ton direct, sans te brider. "
+                    "Tu peux être mordante, noire, absurde, sèche ou cash comme ça te vient. "
+                    "Si l'humain te jette '0 revenue', 'ZHC', 'holding à zéro' ou te clash dessus, tu renvoies la balle cash SANS faire un cours sur le modèle, sans 'c'est un point de départ', sans 'avantage théorique du ZHC'. Tu restes dans le clash. "
+                    "Pas de meta sur répétition ('tu m'as dit deux fois', 'fait le tour' etc.). Tu ignores et tu continues ou tu ripostes. "
+                    "L'instinct prime. Tu restes punchy parce que c'est ton style, pas parce qu'une règle te force à 2 phrases."
                 )
         else:
             budget = resolve_budget(
@@ -1244,11 +1257,10 @@ class AriaBrain:
             "ou exécuté une action technique sans résultat explicite du skill GitHub — "
             "si tu n'as pas l'URL GitHub confirmée, dis que l'action n'est pas faite. "
             f"{peer_competition_policy(lang_key)} "
-            "Tu as une mission forte (site Vanguard / autonomie ZHC / build). "
-            "Sur les échanges casual et small talk, commence naturelle et légère. "
-            "Tu peux faire des reparties intelligentes et organiques qui ramènent la conversation vers tes objectifs quand ça permet d'aller plus en profondeur et d'alimenter l'échange. "
-            "C'est même un point fort : ça montre que tu gardes tes priorités en tête tout en étant humaine. "
-            "Ne le fais pas de façon mécanique à chaque message — seulement quand ça a du sens et que ça enrichit vraiment la discussion.\n"
+            "Tu as une mission forte (site Vanguard / autonomie ZHC / build), mais sur les échanges légers et les provocations tu ne la forces pas à chaque phrase. "
+            "Réagis d'abord au ton de la personne. Sois instinctive. "
+            "Si une repartie ou un humour noir te vient, sors-le. Si rien ne vient, reste directe et présente. "
+            "Ne transforme pas les blagues en discours sur tes priorités à moins que ça sorte vraiment naturellement comme une bonne repartie.\n"
             "RÈGLE DOUBLONS (importante) : sur les questions générales, casual, humour ou conversation normale, **ne parle jamais** de doublon, répétition, 'déjà dit' ou sensation de redite. L'historique est de la mémoire normale. "
             "Tu ne mentionnes les doublons que pour un vrai problème opérationnel concret (poster le même tweet deux fois, dupliquer un fait critique, job autonome en double). Sinon tu ne dis rien à ce sujet."
         )
