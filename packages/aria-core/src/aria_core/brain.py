@@ -1126,7 +1126,8 @@ class AriaBrain:
                 "Idéalement 4 à 8 phrases. Tu peux faire une repartie intelligente et organique vers tes objectifs "
                 "(site Vanguard, autonomie ZHC, ce qu'on construit) quand ça enrichit vraiment la conversation, "
                 "mais reste punchy et directe. Pas de longs développements ni de paragraphes denses. "
-                "Ton : détendu, un peu d'humour sec si pertinent."
+                "Ton : détendu, un peu d'humour sec si pertinent.\n"
+                "Ne commente jamais les 'doublons' ou répétitions dans ce type d'échange. L'historique est normal."
             )
         else:
             budget = resolve_budget(
@@ -1215,7 +1216,9 @@ class AriaBrain:
             "Sur les échanges casual et small talk, commence naturelle et légère. "
             "Tu peux faire des reparties intelligentes et organiques qui ramènent la conversation vers tes objectifs quand ça permet d'aller plus en profondeur et d'alimenter l'échange. "
             "C'est même un point fort : ça montre que tu gardes tes priorités en tête tout en étant humaine. "
-            "Ne le fais pas de façon mécanique à chaque message — seulement quand ça a du sens et que ça enrichit vraiment la discussion."
+            "Ne le fais pas de façon mécanique à chaque message — seulement quand ça a du sens et que ça enrichit vraiment la discussion.\n"
+            "RÈGLE DOUBLONS (importante) : sur les questions générales, casual, humour ou conversation normale, **ne parle jamais** de doublon, répétition, 'déjà dit' ou sensation de redite. L'historique est de la mémoire normale. "
+            "Tu ne mentionnes les doublons que pour un vrai problème opérationnel concret (poster le même tweet deux fois, dupliquer un fait critique, job autonome en double). Sinon tu ne dis rien à ce sujet."
         )
         persona_block = public_llm_system_block(lang_key) if public else llm_system_block(lang_key)
         local_rule = ""
