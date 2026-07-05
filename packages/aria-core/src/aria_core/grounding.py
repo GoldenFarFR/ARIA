@@ -49,6 +49,16 @@ _CASUAL_SMALLTALK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Meta questions about ARIA herself (humor, seriousness, length, doublons, personality).
+# These should be treated as light conversational for the operator.
+_META_SELF_RE = re.compile(
+    r"\b("
+    r"humour|humour|fun|drôle|sérieux|sérieuse|trop sérieux|long|trop long|court|doublon|doublons|"
+    r"répétition|répète|déjà dit|déjà répondu|meta|comportement|ton|style|personnalité"
+    r")\b",
+    re.IGNORECASE,
+)
+
 _GREETING_RE = re.compile(
     r"^\s*(bonjour|salut|hello|hi|hey|coucou|bonsoir|"
     r"good morning|good evening|good afternoon|gm|gn)\b",
@@ -287,6 +297,7 @@ def is_pure_casual_smalltalk(message: str) -> bool:
     """Broad small talk / daily life / jokes / weather etc.
     For operator channel: we want natural relaxed answers, no business steering.
     We allow simple questions ("il fait beau ?") as long as they match casual patterns.
+    Also catches meta questions about ARIA herself (humor, length, doublons...) so they stay light.
     """
     text = (message or "").strip()
     if not text:
@@ -294,9 +305,9 @@ def is_pure_casual_smalltalk(message: str) -> bool:
     if is_greeting(text) or is_help_request(text):
         return False
     # Only reject if it's a serious factual question AND does not look like casual chit-chat
-    if is_factual_question(text) and not (_SOCIAL_RE.search(text) or _CASUAL_SMALLTALK_RE.search(text)):
+    if is_factual_question(text) and not (_SOCIAL_RE.search(text) or _CASUAL_SMALLTALK_RE.search(text) or _META_SELF_RE.search(text)):
         return False
-    if _SOCIAL_RE.search(text) or _CASUAL_SMALLTALK_RE.search(text):
+    if _SOCIAL_RE.search(text) or _CASUAL_SMALLTALK_RE.search(text) or _META_SELF_RE.search(text):
         return True
     return False
 

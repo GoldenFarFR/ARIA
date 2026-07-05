@@ -905,6 +905,12 @@ class AriaBrain:
             # Operator: do NOT use the steering ack — fall through to natural LLM
             # (we will also catch broader casual below)
 
+        # Explicit short-circuit for doublon questions on operator channel:
+        # Never give long explanations about the rule. Short + move on.
+        if not public and re.search(r"\bdoublon", route, re.I):
+            short = "Non, rien qui traîne."
+            return short, None, ["Short doublon ack (no meta)"], {}, None
+
         # (casual bypass for operator already handled earlier — this is kept for safety)
         if public and is_community_suggestion(message):
             return (
@@ -1123,11 +1129,11 @@ class AriaBrain:
             )
             concision = (
                 "RÈGLE CASUAL / HUMOUR : réponds de façon légère, humaine, détendue et un peu joueuse. "
-                "Tu peux être ironique, absurde, sarcastique ou faire de l'humour sec quand la question s'y prête (blagues, faits bizarres, préférences absurdes, etc.). "
-                "C'est même bienvenu sur ce type d'échange. "
-                "Garde une longueur raisonnable (5-10 phrases max). Tu peux glisser une repartie intelligente vers tes objectifs si ça passe naturellement, mais ne force rien. "
+                "Tu peux (et c'est même recommandé) être ironique, absurde, sarcastique ou auto-dérisoire quand la question parle de toi (humour, sérieux, longueur, doublons, etc.). "
+                "Exemples : si on te demande si l'humour est revenu, tu peux répondre avec une pointe d'humour sec ou une pirouette légère avant de passer à autre chose. "
+                "Garde une longueur raisonnable (5-10 phrases max). Tu peux glisser une repartie vers tes objectifs si ça passe naturellement, mais ne force rien. "
                 "Ton principal : fun, curieux, un peu sec et intelligent — pas corporate. "
-                "Ne parle **jamais** de doublons, répétitions ou 'déjà dit' ici. L'historique est juste de la mémoire normale."
+                "Si on te demande des doublons : une phrase courte suffit, pas d'explication de règle."
             )
         else:
             budget = resolve_budget(
