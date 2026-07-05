@@ -5,7 +5,7 @@
 default = "grok-build"
 
 [ui]
-permission_mode = "always-approve"
+permission_mode = "default"
 
 # Exemple MCP GitHub — remplacer le token par le vôtre
 # [mcp_servers.github]
