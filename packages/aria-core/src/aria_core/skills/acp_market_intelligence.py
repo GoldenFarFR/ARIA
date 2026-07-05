@@ -31,7 +31,8 @@ _MARKET_RE = re.compile(
     r"gap(?:s)?\s+(?:marketplace|acp|offre)|"
     r"quelle?\s+offre\s+créer|workflow.*créer|"
     r"intelligence\s+(?:marché|marche|market)|"
-    r"scan\s+(?:marché|marche|marketplace)\s+acp"
+    r"scan\s+(?:marché|marche|marketplace)\s+acp|"
+    r"virtuals\.io/acp/scan|/acp/scan"
     r")",
 )
 

@@ -17,17 +17,19 @@ from aria_core.skills.github_skill import (
 )
 
 INITIATIVE_PATH = memory_dir() / "holding_site_initiative.md"
-REPO = "aria-vanguard"
+REPO = "ARIA"  # monorepo; site sources live under vanguard/ subdir — write ops prefix paths with 'vanguard/' when targeting site files
 DOMAIN = settings.holding_domain or "ariavanguardzhc.com"
 AUDIT_DOC_PATH = "docs/aria-holding-audit.md"
+# Site paths are under vanguard/ subdir when REPO=ARIA (monorepo). Prefix applied for site files.
+SITE_DIR = "vanguard/" if REPO == "ARIA" else ""
 _KEY_FILES = (
-    "src/pages/VanguardSite.tsx",
-    "src/components/FaqSection.tsx",
-    "src/components/VanguardNav.tsx",
+    f"{SITE_DIR}src/pages/VanguardSite.tsx",
+    f"{SITE_DIR}src/components/FaqSection.tsx",
+    f"{SITE_DIR}src/components/VanguardNav.tsx",
 )
-SHOOTING_STAR_PATH = "src/components/ShootingStar.tsx"
-VANGUARD_SITE_PATH = "src/pages/VanguardSite.tsx"
-INDEX_CSS_PATH = "src/index.css"
+SHOOTING_STAR_PATH = f"{SITE_DIR}src/components/ShootingStar.tsx"
+VANGUARD_SITE_PATH = f"{SITE_DIR}src/pages/VanguardSite.tsx"
+INDEX_CSS_PATH = f"{SITE_DIR}src/index.css"
 SHOOTING_STAR_MARKER = "shooting-star-fly"
 
 SHOOTING_STAR_TSX = """/** Shooting star accent for the Vanguard hero — ARIA patch */
@@ -179,7 +181,7 @@ async def _execute_holding_site_build(user_message: str, lang: str) -> tuple[str
     if not repo_read_allowed(owner, REPO):
         msg = (
             f"Lecture refusée sur {owner}/{REPO}.\n"
-            "Élargis GITHUB_READ_REPOS ou mets * sous GoldenFarFR."
+            "Vérifie GITHUB_READ_REPOS (bot Telegram est en lecture seule par défaut)."
             if lang == "fr"
             else f"Read denied on {owner}/{REPO}."
         )
@@ -376,9 +378,9 @@ async def _execute_shooting_star_patch(user_message: str, lang: str) -> tuple[st
     if not repo_write_allowed(owner, REPO):
         msg = (
             f"Patch étoile filante — lecture OK, écriture refusée sur {owner}/{REPO}.\n"
-            "Ajoute GoldenFarFR/aria-vanguard (ou *) dans GITHUB_WRITE_REPOS, puis redeploie."
+            "GITHUB_WRITE_REPOS est vide (lecture seule pour Aria Telegram). Utilise token write seulement pour ops explicites."
             if lang == "fr"
-            else f"Shooting star patch — write denied on {owner}/{REPO}. Set GITHUB_WRITE_REPOS."
+            else f"Shooting star patch — write denied (Aria Telegram has no write rights on GitHub/site). Operator token only."
         )
         return msg, {
             "patch_complete": True,

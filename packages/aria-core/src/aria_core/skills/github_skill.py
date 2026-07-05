@@ -128,7 +128,7 @@ def allowed_read_repos() -> list[str]:
     if not repos:
         repos = [
             f"{settings.github_owner}/{settings.github_sandbox_repo}",
-            f"{settings.github_owner}/aria-vanguard",
+            f"{settings.github_owner}/ARIA",
         ]
     return [r for r in repos if not _repo_excluded(r.split("/")[-1])]
 
@@ -507,15 +507,14 @@ Created by **ARIA ZHC** — {ts}
         out = (
             f"Écriture GitHub OK.\n\n"
             f"**{o}/{repo}** → {path}\n{html}\n\n"
-            f"Accès opérateur : lecture/écriture sur tous les repos `{owner}/*` "
-            f"(sauf exclus : {', '.join(sorted(_excluded_repo_names())) or 'aucun'})."
+            f"Accès (bot Telegram) : lecture seule par défaut. Écriture réservée opérateur avec token write explicite (GITHUB_WRITE_REPOS)."
+
         )
     else:
         out = (
             f"GitHub write OK.\n\n"
             f"**{o}/{repo}** → {path}\n{html}\n\n"
-            f"Operator access: read/write on all `{owner}/*` repos "
-            f"(excluded: {', '.join(sorted(_excluded_repo_names())) or 'none'})."
+            f"Operator access (Telegram Aria): read-only by default. Writes only with explicit operator write token (GITHUB_WRITE_REPOS not empty)."
         )
     return out, {"slug": slug, "url": html, "repo": f"{o}/{repo}", "path": path}
 
