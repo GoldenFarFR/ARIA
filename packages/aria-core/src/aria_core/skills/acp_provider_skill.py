@@ -262,7 +262,7 @@ async def _process_job(job_id: str, *, chain_id: str) -> str | None:
         except Exception as exc:
             logger.debug("workflow-used social skip: %s", exc)
         # Barrière ACP : on signale explicitement que l'audit opérateur est requis
-        return f"submit:{job_id} — audit qualité opérateur demandé"
+        return f"submit:{job_id}"
     logger.warning("ACP submit %s failed: %s", job_id, msg)
     return None
 
