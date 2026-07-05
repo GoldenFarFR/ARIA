@@ -1,4 +1,4 @@
-"""Test runtime helpers — minimal settings without dexpulse host."""
+"""Test runtime helpers — minimal settings (no external product host)."""
 from __future__ import annotations
 
 import json
@@ -20,7 +20,7 @@ def _parse_id_list(value: str) -> list[int]:
 
 
 class AriaRuntimeSettings(BaseSettings):
-    """Subset of dexpulse Settings used by aria-core modules."""
+    """Subset of product (ex-DEXPulse) Settings used by aria-core modules for tests."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -30,6 +30,7 @@ class AriaRuntimeSettings(BaseSettings):
     telegram_admin_ids: str = ""
     telegram_admin_username: str = "golderfarfr"
     telegram_group_id: int | None = None
+    aria_owner_chat_id: str = ""
 
     access_code_enabled: bool = False
     site_base_url: str = ""
@@ -153,6 +154,14 @@ class AriaRuntimeSettings(BaseSettings):
     @property
     def admin_ids(self) -> list[int]:
         return _parse_id_list(self.telegram_admin_ids)
+
+    @property
+    def owner_chat_id(self) -> int | None:
+        raw = (self.aria_owner_chat_id or "").strip()
+        if raw.lstrip("-").isdigit():
+            return int(raw)
+        admins = self.admin_ids
+        return admins[0] if admins else None
 
     @property
     def public_site_url(self) -> str:

@@ -25,6 +25,7 @@ from aria_core.identity import (
     official_telegram_bot_username,
     official_x_url,
 )
+from aria_core import outgoing_pause
 from aria_core.integrations.host_hooks import check_rate_limit
 from aria_core.runtime import settings
 
@@ -70,6 +71,22 @@ def get_mode() -> str:
 
 def is_admin(user_id: int) -> bool:
     return user_id in settings.admin_ids
+
+
+def is_owner(user_id: int) -> bool:
+    """Propriétaire unique du kill-switch /stop /start (ARIA_OWNER_CHAT_ID, fallback admin_ids[0])."""
+    owner = getattr(settings, "owner_chat_id", None)
+    return owner is not None and user_id == owner
+
+
+async def _owner_only(update: Update) -> bool:
+    """True si l'utilisateur est le propriétaire du kill-switch, sinon répond et retourne False."""
+    user = update.effective_user
+    if user and is_owner(user.id):
+        return True
+    if update.message:
+        await _reply(update.message, "Commande réservée au propriétaire d'ARIA (kill-switch).")
+    return False
 
 
 def _format_tg(text: str) -> str:
@@ -257,6 +274,14 @@ def _admin_username_label() -> str:
 
 async def _handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    # Propriétaire + pause active → /start lève le kill-switch (décision opérateur).
+    if user and is_owner(user.id) and outgoing_pause.is_paused():
+        outgoing_pause.resume(by=user.id)
+        await _reply(
+            update.message,
+            "▶️ ARIA reprend — actions sortantes réactivées (pause levée via /start).",
+        )
+        return
     if user and is_admin(user.id):
         mode = "autonomous ZHC" if settings.aria_autonomous else "approval mode"
         links = get_channel_links_text()
@@ -333,10 +358,18 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     check_auto_completions()
     qi = global_index()
+    pst = outgoing_pause.pause_status()
+    if not pst["readable"]:
+        sorties = "⚠️ état illisible — dépenses gelées (fail-closed), tweets/jobs actifs"
+    elif pst["paused"]:
+        sorties = f"⏸ EN PAUSE {outgoing_pause.since_label()}"
+    else:
+        sorties = "actives ▶️"
     await _reply(
         update.message,
         f"ARIA — Status (opérateur)\n"
         f"Your ID: {user.id if user else '?'} — admin ✅\n"
+        f"Sorties (tweets/X/dépenses/jobs): {sorties}\n"
         f"Indice ARIA: {qi} / 1000 (demande en texte libre)\n"
         f"Heartbeat: {last_str}\n"
         f"Telegram: {get_mode()} ✅\n"
@@ -1293,6 +1326,26 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     approved = action == "approve"
+
+    # Kill-switch : un « Oui » sur une dépense pendant la pause ne doit rien exécuter NI
+    # consommer l'approbation — sinon, l'approbation résolue + ledger pending laisserait la
+    # dépense coincée après /start. On laisse tout en attente : re-cliquable une fois repris.
+    # (Un « Non » reste autorisé : aucun argent ne sort.)
+    if approved:
+        req = await get_approval(approval_id)
+        if req and req.action.startswith("spend:"):
+            _spend_block = outgoing_pause.money_block_reason(
+                f"L'exécution de la dépense #{approval_id}"
+            )
+            if _spend_block:
+                await query.answer("⛔ Dépense gelée", show_alert=True)
+                await send_message(
+                    _spend_block
+                    + "\nLa demande reste en attente : re-clique « Oui » après reprise.",
+                    query.from_user.id,
+                )
+                return
+
     result = await resolve_approval(approval_id, approved, str(query.from_user.id))
 
     if not result:
@@ -1363,6 +1416,8 @@ async def _register_bot_commands() -> None:
     commands = [
         BotCommand("start", f"Welcome — {holding_name()}"),
         BotCommand("status", "Heartbeat, LLM state, GitHub read"),
+        BotCommand("stop", "⏸ Pause immédiate des actions sortantes"),
+        BotCommand("resume", "▶️ Reprendre les actions sortantes"),
     ]
     await _bot_app.bot.set_my_commands(commands)
     logger.info("Telegram command menu registered (%d commands)", len(commands))
@@ -1404,12 +1459,40 @@ async def _handle_test_spend(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+async def _handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/stop — kill-switch : pause immédiate de toutes les actions sortantes (propriétaire uniquement)."""
+    if not await _owner_only(update):
+        return
+    user = update.effective_user
+    outgoing_pause.pause(by=user.id if user else None)
+    await _reply(
+        update.message,
+        "⏸ ARIA en pause — tweets, réponses/likes X, dépenses ACP et jobs planifiés suspendus.\n"
+        "Tes commandes manuelles sont aussi bloquées le temps de la pause.\n"
+        "Envoie /start (ou /resume) pour reprendre.",
+    )
+
+
+async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/resume — lève le kill-switch (propriétaire uniquement). Alias explicite de /start en pause."""
+    if not await _owner_only(update):
+        return
+    if not outgoing_pause.is_paused():
+        await _reply(update.message, "▶️ ARIA n'était pas en pause — rien à reprendre.")
+        return
+    user = update.effective_user
+    outgoing_pause.resume(by=user.id if user else None)
+    await _reply(update.message, "▶️ ARIA reprend — actions sortantes réactivées.")
+
+
 def _register_handlers(app: Application) -> None:
     from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
     # Minimal commands only (user request)
     app.add_handler(CommandHandler("start", _handle_start))
     app.add_handler(CommandHandler("status", _handle_status))
+    app.add_handler(CommandHandler("stop", _handle_stop))
+    app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
 
     # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)

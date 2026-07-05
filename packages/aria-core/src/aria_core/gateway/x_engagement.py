@@ -92,10 +92,15 @@ def _fetch_mentions_sync(
 def _like_tweet_sync(user_id: str, tweet_id: str) -> bool:
     import requests
 
+    from aria_core import outgoing_pause
     from aria_core.x_publication_policy import (
         check_engagement_allowed,
         record_engagement,
     )
+
+    if outgoing_pause.is_paused():
+        logger.info("Like bloqué — ARIA en pause (%s)", outgoing_pause.since_label())
+        return False
 
     allowed, reason, cost = check_engagement_allowed("like")
     if not allowed:

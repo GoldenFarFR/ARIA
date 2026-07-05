@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     debug: bool = True
     host: str = "0.0.0.0"
     port: int = 8000
-    database_url: str = "sqlite+aiosqlite:///./data/dexpulse.db"
+    database_url: str = "sqlite+aiosqlite:///./data/dexpulse.db"  # legacy filename (pre Aria Market rename); data is current product
     dexscreener_base_url: str = "https://api.dexscreener.com"
     geckoterminal_base_url: str = "https://api.geckoterminal.com/api/v2"
     scan_interval_seconds: int = 30
@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     telegram_admin_ids: str = ""  # IDs séparés par virgule
     telegram_admin_username: str = "golderfarfr"  # @username admin (affichage site/Telegram)
     telegram_group_id: int | None = None
+    # Kill-switch /stop /start — réservé au propriétaire (chat ID unique), indépendant des admin_ids.
+    aria_owner_chat_id: str = ""  # ARIA_OWNER_CHAT_ID ; vide → fallback admin_ids[0]
 
     @field_validator("telegram_group_id", mode="before")
     @classmethod
@@ -223,6 +225,15 @@ class Settings(BaseSettings):
     @property
     def admin_ids(self) -> list[int]:
         return _parse_id_list(self.telegram_admin_ids)
+
+    @property
+    def owner_chat_id(self) -> int | None:
+        """Propriétaire unique autorisé pour /stop /start (kill-switch). Fallback admin_ids[0]."""
+        raw = (self.aria_owner_chat_id or "").strip()
+        if raw.lstrip("-").isdigit():
+            return int(raw)
+        admins = self.admin_ids
+        return admins[0] if admins else None
 
     @property
     def telegram_webhook_url(self) -> str | None:
