@@ -17,21 +17,21 @@
   - retired
   - deprecated
   question: What happened to DEXPulse? Is DEXPulse still live?
-  answer: 'DEXPulse is RETIRED since 2026-06-19. The GitHub repo GoldenFarFR/dexpulse and the Render service were deleted. Code migrated into ARIA monorepo (vanguard/). Successor product: Aria Market (watchlist, signals, DexScreener embeds) at https://ariavanguardzhc.com and API https://api.ariavanguardzhc.com. Never promote, deploy, or market DEXPulse as a live product.'
+  answer: 'DEXPulse is RETIRED since 2026-06-19. The GitHub repo GoldenFarFR/dexpulse and the Render service were deleted. Code migrated into aria-vanguard. Successor product: Aria Market (watchlist, signals, DexScreener embeds) at https://ariavanguardzhc.com and API https://api.ariavanguardzhc.com. Never promote, deploy, or market DEXPulse as a live product.'
 - id: aria-market-product
   tags:
   - aria-market
   - product
   - flagship
   question: What is Aria Market?
-  answer: 'Aria Market is the flagship subsidiary — DEX analyzer with watchlist-first UX, multi-timeframe signals, alerts, and DexScreener chart embeds (ARIA provides signals, not chart hosting). Hosted in ARIA monorepo (vanguard/ subdir for holding site + API + Telegram bot). Site: https://ariavanguardzhc.com — API: https://api.ariavanguardzhc.com.'
+  answer: 'Aria Market is the flagship subsidiary — DEX analyzer with watchlist-first UX, multi-timeframe signals, alerts, and DexScreener chart embeds (ARIA provides signals, not chart hosting). Hosted in aria-vanguard (holding site + API). Site: https://ariavanguardzhc.com — API: https://api.ariavanguardzhc.com.'
 - id: dexpulse-product
   tags:
   - dexpulse
   - retired
   - deprecated
   question: What is DEXPulse?
-  answer: DEXPulse was the former flagship DEX analyzer subsidiary — RETIRED 2026-06-19. Repo and Render service deleted. Replaced by Aria Market in ARIA/vanguard. Do not cite dexpulse-m3bp or any DEXPulse URL as live. See canonical id aria-market-product for the current product.
+  answer: DEXPulse was the former flagship DEX analyzer subsidiary — RETIRED 2026-06-19. Repo and Render service deleted. Replaced by Aria Market in aria-vanguard. Do not cite dexpulse-m3bp or any DEXPulse URL as live. See canonical id aria-market-product for the current product.
 - id: aria-vanguard-site
   tags:
   - holding
@@ -85,7 +85,7 @@
   - github
   - repos
   question: What are the main GitHub repos?
-  answer: 'GoldenFarFR/ARIA (monorepo principal — contient aria-core, vanguard/ (site+API), sandbox, memory, bot, etc.). Le site holding + Telegram bot + API déploient depuis ARIA/vanguard via Render. GoldenFarFR/aria-ops (privé, mémoire+scripts). GoldenFarFR/aria-sandbox et aria-acp-showcase pour expériences. Pas de repo séparé aria-vanguard (un a été créé par erreur et sera supprimé). Operator scripts dans ARIA/vanguard/operator. Live inventory via /github status.'
+  answer: 'GoldenFarFR/ARIA (monorepo privé — aria-core, vanguard, truth-ledger, collegue-memoire), GoldenFarFR/aria-vanguard (holding site + API deploy host + Aria Market), GoldenFarFR/aria-sandbox (experiments + truth-ledger mirror), GoldenFarFR/aria-token-base (token R&D), GoldenFarFR/aria-skills, GoldenFarFR/kikou, GoldenFarFR/template-grok-cursor. Operator scripts in vanguard/operator; secrets in local vault. Retired repos: dexpulse, dexpulse-secrets (deleted 2026-06-19). Live inventory — github status.'
 - id: github-governance
   tags:
   - github
@@ -93,7 +93,7 @@
   - aria
   - governance
   question: Does ARIA have her own GitHub? Who owns the repos?
-  answer: 'Production code lives under GoldenFarFR GitHub org (monorepo GoldenFarFR/ARIA). ARIA (bot/Telegram) is configured read-only by default on GitHub (GITHUB_WRITE_REPOS empty) to prevent accidental or confused writes. Write is operator-only via explicit token scopes. Vanguard site+API deploy from subdir ARIA/vanguard. Experiments in sandbox subdir or dedicated. No separate aria-vanguard repo for prod.'
+  answer: 'Production code lives under the GoldenFarFR GitHub org — not a separate personal account for ARIA. ARIA reads and writes via an operator-configured token: aria-sandbox (experiments, truth-ledger) and aria-token-base (token R&D). The operator may prototype on a personal GitHub during R&D; promotion to GoldenFarFR repos is explicit. aria-sandbox hosts the aria-core runtime package and experiment workspace; aria-vanguard is the holding site and deploy host (API + market plugins).'
 - id: financial-advice
   tags:
   - legal
