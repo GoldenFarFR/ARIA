@@ -237,13 +237,13 @@ def welcome_chat(lang: str = "en") -> str:
             f"Bonjour — je suis {AGENT_NAME}, {DEFAULT_ARIA_TITLE} d'{h}.\n\n"
             f"Je pilote Vanguard : site ariavanguardzhc.com, répertoire ZHC, "
             f"communication X et roadmap autonome.\n\n"
-            f"Dis /status, /x compose ou pose ta question."
+            f"Dis /status ou pose ta question en texte libre."
         )
     return (
         f"Hi — I'm {AGENT_NAME}, {DEFAULT_ARIA_TITLE} of {h}.\n\n"
         f"I run Vanguard: ariavanguardzhc.com, ZHC repertoire, "
         f"X comms, and the autonomous roadmap.\n\n"
-        f"Try /status, /x compose, or ask your question."
+            f"Try /status or ask in plain text."
     )
 
 
@@ -257,28 +257,16 @@ def help_commands(lang: str = "en") -> str:
             f"- Construis / optimise (Builder Queen)\n"
             f"- Construis le site Aria Vanguard ZHC\n"
             f"- Montre ta mémoire\n"
-            f"- /directive <règle permanente>\n"
-            f"- /learn <topic> | <leçon>\n"
-            f"- /calibrate <affirmation> | vrai|faux | source\n"
-            f"- /experiment <id> — sandbox GitHub\n"
-            f"- /qi ou « montre mon qi » — indice + niveaux par catégorie\n"
-            f"- /level up <codage|social|…> — valider un palier\n"
-            f"- Quel launchpad BASE pour le jeton ?\n"
-            f"- oui / non ou learn yes / learn no (apprentissage X)"
+            f"- Tout en texte libre (seulement /start et /status restent)\n"
+            f"- Analyse, revenus, ACP, idées, mémoire : colle directement tes consignes"
         )
     return (
         f"{AGENT_NAME} commands (Vanguard / {h})\n"
         f"- Analyze market signals / watchlist\n"
         f"- Develop the Vanguard repertoire\n"
         f"- Build / optimize (Builder Queen mode)\n"
-        f"- GitHub sandbox / experiments (/experiment)\n"
-        f"- BASE launchpad pick (Bankr, Clanker, Virtuals, Flaunch…)\n"
-        f"- Build the Aria Vanguard ZHC holding site\n"
-        f"- Show your memory\n"
-        f"- /directive <permanent rule>\n"
-        f"- /learn <topic> | <lesson>\n"
-        f"- /experiment <id> — create sandbox experiment\n"
-        f"- oui / non or learn yes / learn no (X learning approval)"
+        f"- Everything in plain text (only /start and /status commands left)\n"
+        f"- Analysis, revenue, ACP, ideas, memory: just paste your instructions"
     )
 
 
@@ -287,21 +275,14 @@ def telegram_admin_start(mode: str, channel_links: str) -> str:
     return (
         f"Bonjour opérateur — {AGENT_NAME}, {DEFAULT_ARIA_TITLE} d'{h}.\n\n"
         f"{one_liner('fr')}\n\n"
-        f"Tu as les droits administrateur complets : code, directives, mémoire, GitHub read/write.\n"
+        f"Tu as les droits opérateur : lecture GitHub + tout en texte libre. Plus de directives slash ni écriture GitHub (sécurité).\n"
         f"Tu gardes tes objectifs en tête (site Vanguard, autonomie) même dans les échanges légers. "
         f"Tu peux faire des reparties naturelles qui ramènent la conversation vers ce qui compte quand ça enrichit le dialogue.\n"
         f"Les visiteurs publics n'ont que courtoisie + informations vérifiées.\n\n"
-        f"Commandes (menu /):\n"
-        f"/whoami — confirme ton rôle opérateur\n"
-        f"/status — heartbeat, LLM, GitHub\n"
-        f"/avatar — photo de profil (choose / pick / upload)\n"
-        f"/directive — règles permanentes\n"
-        f"/learn — mémoriser une leçon\n"
-        f"/calibrate — entraîner calibration épistémique\n"
-        f"/experiment — sandbox GitHub\n"
-        f"/qi — indice + objectifs par catégorie (0→1000)\n"
-        f"/handles — alias X (@holding @veille, +pack)\n"
-        f"/x compose — workflow tweet\n\n"
+        f"Commandes minimales :\n"
+        f"/start — message d'accueil\n"
+        f"/status — état (heartbeat, LLM, GitHub read)\n\n"
+        f"Tout le reste se fait en texte libre (copie-colle les mini-phrases).\n\n"
         f"Mode: {mode}\n\n"
         f"Canaux publics:\n{channel_links}"
     )

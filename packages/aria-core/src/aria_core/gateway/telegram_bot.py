@@ -287,7 +287,7 @@ async def _handle_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"Backend : {'local' if settings.debug else 'production'}\n"
             f"GitHub : {gh}\n"
             f"Peut créer/supprimer des repos : oui (GoldenFarFR/*, sauf protégés)\n\n"
-            f"GitHub : /github status · /github delete kikou · supprime repo test-aria-demo",
+            f"GitHub : texte libre (lecture seule) — ex: liste les repos ou status github",
         )
         return
     await _reply(
@@ -329,7 +329,7 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         update.message,
         f"ARIA — Status (opérateur)\n"
         f"Your ID: {user.id if user else '?'} — admin ✅\n"
-        f"Indice ARIA: {qi} / 1000 — /qi pour détail\n"
+        f"Indice ARIA: {qi} / 1000 (demande en texte libre)\n"
         f"Heartbeat: {last_str}\n"
         f"Telegram: {get_mode()} ✅\n"
         f"X {x_at()}: post {x_post} · read {x_read}\n"
@@ -449,9 +449,7 @@ async def _handle_x(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         status_block += (
             "Commandes:\n"
             "/handles — alias @holding @veille\n"
-            "/x profile — bio + site profil\n"
-            "/x compose — workflow tweet\n"
-            "/x post <texte> — publie (alias expand auto)"
+            "X : texte libre (ex: compose un tweet sur ... )"
         )
         await _reply(message, status_block)
         return
@@ -1311,40 +1309,20 @@ async def _register_bot_commands() -> None:
 
     commands = [
         BotCommand("start", f"Welcome — {holding_name()}"),
-        BotCommand("whoami", "Your Telegram ID and operator role"),
-        BotCommand("status", "Heartbeat, LLM, GitHub, access gate"),
-        BotCommand("avatar", "Profile photo — pick, choose, upload"),
-        BotCommand("directive", "Add permanent operator rule"),
-        BotCommand("learn", "Store approved knowledge"),
-        BotCommand("experiment", "Create GitHub sandbox experiment"),
-        BotCommand("github", "GitHub — status, list, create, delete repo"),
-        BotCommand("repertoire", "Holding repertoire — list, delete, archive"),
-        BotCommand("handles", "Alias X — @holding @veille (+pack)"),
-        BotCommand("x", "X — status, compose workflow, post"),
+        BotCommand("status", "Heartbeat, LLM state, GitHub read"),
     ]
     await _bot_app.bot.set_my_commands(commands)
     logger.info("Telegram command menu registered (%d commands)", len(commands))
 
 
 def _register_handlers(app: Application) -> None:
-    from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
+    from telegram.ext import CommandHandler, MessageHandler, filters
 
+    # Minimal commands only (user request)
     app.add_handler(CommandHandler("start", _handle_start))
-    app.add_handler(CommandHandler("whoami", _handle_whoami))
     app.add_handler(CommandHandler("status", _handle_status))
-    app.add_handler(CommandHandler("qi", _handle_qi))
-    app.add_handler(CommandHandler("level", _handle_level))
-    app.add_handler(CommandHandler("avatar", _handle_avatar))
-    app.add_handler(CommandHandler("directive", _handle_directive))
-    app.add_handler(CommandHandler("learn", _handle_learn))
-    app.add_handler(CommandHandler("calibrate", _handle_calibrate))
-    app.add_handler(CommandHandler("experiment", _handle_experiment))
-    app.add_handler(CommandHandler("handles", _handle_handles))
-    app.add_handler(CommandHandler("x", _handle_x))
-    app.add_handler(CommandHandler("github", _handle_github))
-    app.add_handler(CommandHandler("repertoire", _handle_repertoire))
-    app.add_handler(CallbackQueryHandler(_handle_callback))
-    app.add_handler(MessageHandler(filters.PHOTO, _handle_avatar_photo))
+
+    # All other interactions via plain text (no slash commands)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
 
 
