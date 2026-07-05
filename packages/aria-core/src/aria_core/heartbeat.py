@@ -349,6 +349,14 @@ class AriaHeartbeat:
 
     async def _tick(self) -> None:
         global _LAST_HEARTBEAT
+        # Kill-switch : en pause, aucun job planifié ne tourne (tweets programmés, ACP,
+        # revenue, mentions, profile/visual sync, health watch…). La boucle reste vivante
+        # et reprend telle quelle au /start. _LAST_HEARTBEAT n'est pas touché : /status
+        # affiche l'état de pause explicitement.
+        from aria_core import outgoing_pause
+
+        if outgoing_pause.is_paused():
+            return
         now = datetime.now(timezone.utc)
         _sync_x_curiosity_enabled()
 

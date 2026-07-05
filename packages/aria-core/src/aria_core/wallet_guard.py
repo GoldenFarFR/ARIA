@@ -14,6 +14,7 @@ import json
 import logging
 from typing import Any, Callable
 
+from aria_core import outgoing_pause
 from aria_core.approvals import create_approval
 from aria_core.memory import append_memory
 from aria_core.skills.acp_cli import client_fund_job, trade_tokens
@@ -65,6 +66,12 @@ async def escalate_spend(
     ``resolve_spend``, déclenchée uniquement par un clic Telegram réel. Si l'envoi
     échoue, l'entrée reste ``pending`` indéfiniment : aucune dépense n'a lieu.
     """
+    # Kill-switch (fail-closed pour l'argent) : en pause OU si l'état est illisible/corrompu,
+    # on ne crée même pas l'escalade. Les appelants (acp_client_actions, _handle_test_spend)
+    # catchent déjà SpendEscalationError et affichent le message.
+    _spend_block = outgoing_pause.money_block_reason("Cette dépense")
+    if _spend_block:
+        raise SpendEscalationError(_spend_block)
     if action not in WALLET_ACTIONS:
         raise ValueError(f"Action de dépense inconnue : {action}")
 
@@ -154,6 +161,13 @@ async def resolve_spend(approval_id: str, approved: bool, admin_id: str) -> str:
     """Exécute (ou refuse) une dépense après décision Telegram. Idempotent — un
     double-clic sur le même bouton ne peut pas déclencher une double exécution
     (transition atomique pending -> decision dans le ledger)."""
+    # Kill-switch (fail-closed) : hard-stop argent. Même un clic « Oui » sur un vieux prompt ne
+    # dépense pas tant qu'ARIA est en pause OU que l'état est illisible. L'entrée reste pending
+    # (pas de claim) → réexécutable après /start. Un refus reste autorisé (aucun argent ne sort).
+    if approved:
+        _spend_block = outgoing_pause.money_block_reason(f"L'exécution de la dépense #{approval_id}")
+        if _spend_block:
+            return _spend_block
     decision = "approved" if approved else "rejected"
     entry = await claim_for_decision(approval_id, decision=decision, decided_by=admin_id)
     if entry is None:
