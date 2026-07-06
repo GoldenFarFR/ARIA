@@ -1512,6 +1512,122 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _reply(message, "\n".join(lines))
 
 
+async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/these <adresse> <BUY|WATCH|SELL|AVOID> <thèse...> — journalise un pari (aucune exécution)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    from aria_core import investment_memory
+
+    parts = body.split(maxsplit=2)
+    usage = (
+        "Usage : /these <adresse> <BUY|WATCH|SELL|AVOID> <thèse>\n"
+        "Ex : /these 0xabc... WATCH holders solides, liquidité faible à surveiller.\n"
+        "Journal de raisonnement uniquement — aucune exécution de trade."
+    )
+    if len(parts) < 3:
+        await _reply(message, usage)
+        return
+
+    address, decision_raw, thesis = parts[0].strip(), parts[1].strip().upper(), parts[2].strip()
+    if not _SCAN_ADDR_RE.match(address):
+        await _reply(message, "Adresse invalide — attendu : 0x suivi de 40 caractères hexadécimaux.\n\n" + usage)
+        return
+    if decision_raw not in investment_memory.VALID_DECISIONS:
+        await _reply(
+            message,
+            f"Décision invalide : {decision_raw}. Attendu : {', '.join(investment_memory.VALID_DECISIONS)}.",
+        )
+        return
+
+    thesis_id = await investment_memory.record_thesis(
+        token_address=address, thesis=thesis, decision=decision_raw
+    )
+    await _reply(
+        message,
+        f"📝 Thèse #{thesis_id} enregistrée — {decision_raw} sur {address}.\n"
+        f"Clôture plus tard avec : /issue {thesis_id} <résultat> | <leçon>.",
+    )
+
+
+async def _handle_issue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/issue <id> <résultat/P&L> | <leçon> — clôture une thèse et attribue son issue."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    usage = (
+        "Usage : /issue <id> <résultat/P&L> | <leçon>\n"
+        "Ex : /issue 3 +18% en 2 semaines | j'ai sous-estimé le catalyseur listing.\n"
+        "Le séparateur « | » distingue le résultat de la leçon (leçon optionnelle)."
+    )
+    parts = body.split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].isdigit():
+        await _reply(message, usage)
+        return
+
+    thesis_id = int(parts[0])
+    rest = parts[1].strip()
+    if "|" in rest:
+        outcome, lesson = (segment.strip() for segment in rest.split("|", 1))
+    else:
+        outcome, lesson = rest, ""
+
+    from aria_core import investment_memory
+
+    closed = await investment_memory.close_thesis(thesis_id, outcome=outcome, lesson=lesson)
+    if closed is None:
+        await _reply(
+            message,
+            f"Thèse #{thesis_id} introuvable ou déjà clôturée — aucune modification.",
+        )
+        return
+
+    lines = [
+        f"✅ Thèse #{thesis_id} clôturée ({closed['decision']} sur {closed['token_address']}).",
+        f"Résultat : {outcome}",
+    ]
+    if lesson:
+        lines.append(f"Leçon : {lesson}")
+    await _reply(message, "\n".join(lines))
+
+
+async def _handle_theses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/theses — liste les thèses encore ouvertes (résultat non attribué)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core import investment_memory
+
+    open_theses = await investment_memory.list_open_theses()
+    if not open_theses:
+        await _reply(message, "Aucune thèse ouverte. Enregistre-en une avec /these.")
+        return
+
+    lines = ["📒 Thèses ouvertes :"]
+    for row in open_theses:
+        lines.append(f"#{row['id']} — {row['decision']} {row['token_address']}\n  {row['thesis']}")
+    await _reply(message, "\n".join(lines))
+
+
 async def _handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/stop — kill-switch : pause immédiate de toutes les actions sortantes (propriétaire uniquement)."""
     if not await _owner_only(update):
@@ -1548,6 +1664,9 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))
+    app.add_handler(CommandHandler("these", _handle_thesis))
+    app.add_handler(CommandHandler("issue", _handle_issue))
+    app.add_handler(CommandHandler("theses", _handle_theses))
 
     # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)
     app.add_handler(CallbackQueryHandler(_handle_callback))
