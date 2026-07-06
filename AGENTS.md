@@ -27,7 +27,7 @@ Tu dois l'utiliser en priorité pour toute analyse crypto/investissement, c'est 
 ---
 
 ### Profil opérateur
-Opérateur : **l'operateur** (email [email operateur retire]). **Non-développeur** : il ne code pas lui-même — il orchestre plusieurs IA (Cursor, Grok Build, Claude Code) pour construire et opérer ARIA, et recoupe/vérifie systématiquement ce qu'elles affirment. Travaille et échange **en français**. Travaille sous Windows (PowerShell, `C:\Users\Study`). Exécute les instructions techniques rapidement — prudence maximale sur les actions irréversibles et les garde-fous. **Une seule session IA à la fois sur le VPS de prod.**
+Opérateur : **l'operateur** (email [email operateur retire]). **Non-développeur** : il ne code pas lui-même. **Claude (chat ARIA + Claude Code) gère désormais 100% de la construction et de l'exploitation technique d'ARIA** — Cursor et Grok Build ne sont plus utilisés. operateur recoupe/vérifie systématiquement ce qui est affirmé. Travaille et échange **en français**. Travaille sous Windows (PowerShell, `C:\Users\Study`). Exécute les instructions techniques rapidement — prudence maximale sur les actions irréversibles et les garde-fous. **Une seule session IA à la fois sur le VPS de prod.**
 
 ---
 
@@ -58,7 +58,7 @@ Monorepo `github.com/GoldenFarFR/ARIA` (branche `main`). Repos liés : `aria-ops
 - **Argent** : `wallet_guard.py` (escalade Telegram), `outgoing_pause.py` (kill-switch, état `pause_state.json`).
 - **Persistance** : `DATA_DIR` → `/opt/aria-data` en prod (SQLite `aria.db`, `auth.db`, `dexpulse.db`, `chroma/`, `pause_state.json`).
 - **Modifier ARIA = rebuild l'image Docker** (le code vit dans l'image, seul `data` est monté). Un `git pull + restart` ne suffit PAS.
-- **Évolution BDD** : toute modification de code impliquant un changement de schéma de base de données (SQLite) doit inclure un script de migration automatique (ex. Alembic ou équivalent générique) et une procédure de backup préalable de `/opt/aria-data`. *(proposition — outil de migration à confirmer avec Grok/Cursor avant implémentation)*.
+- **Évolution BDD** : toute modification de code impliquant un changement de schéma de base de données (SQLite) doit inclure un script de migration automatique (ex. Alembic ou équivalent générique) et une procédure de backup préalable de `/opt/aria-data`. *(proposition — à valider avec operateur avant implémentation)*.
 - Voir `docs/backlog-technique.md` pour les risques identifiés non urgents (ex. architecture heartbeat).
 
 ---
