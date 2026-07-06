@@ -68,10 +68,19 @@ def _recipient(env: dict[str, str] | None = None) -> str:
     return (src.get("ARIA_VC_REPORT_TO") or src.get("ARIA_SMTP_USER") or "").strip()
 
 
-async def send_vc_report(result: VCResult, *, generated_at: str) -> tuple[bool, str | None]:
+async def send_vc_report(
+    result: VCResult,
+    *,
+    generated_at: str,
+    report_number: int | None = None,
+    series_number: int | None = None,
+) -> tuple[bool, str | None]:
     """Rend le rapport et l'envoie par email. Retourne ``(ok, error)``, ne lève jamais.
 
     Garde-fous appliqués dans l'ordre : kill-switch → destinataire → envoi SMTP.
+    ``report_number`` (optionnel) permet à un abonné de distinguer plusieurs
+    analyses suivies du même token (« Rapport n°2 »). ``series_number``
+    (optionnel) affiche le numéro de série global (« Série 00.047 »).
     """
     # 1. Kill-switch fail-closed : en pause (ou état illisible) → on n'envoie rien.
     if outgoing_pause.is_paused(strict=True):
@@ -84,8 +93,14 @@ async def send_vc_report(result: VCResult, *, generated_at: str) -> tuple[bool, 
         return False, "destinataire non configuré (ARIA_VC_REPORT_TO / ARIA_SMTP_USER absents)"
 
     # 3. Rendu + envoi.
-    html_body = render_html_report(result, generated_at=generated_at, recipient=to)
-    subject = email_subject(result)
+    html_body = render_html_report(
+        result,
+        generated_at=generated_at,
+        recipient=to,
+        report_number=report_number,
+        series_number=series_number,
+    )
+    subject = email_subject(result, generated_at=generated_at, report_number=report_number)
     text_body = _plain_fallback(result)
 
     ok, error = await send_email(to=to, subject=subject, html_body=html_body, text_body=text_body)

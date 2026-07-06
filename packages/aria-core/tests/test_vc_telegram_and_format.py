@@ -127,6 +127,8 @@ async def test_vc_valid_runs_analysis_and_sends_order(monkeypatch):
     monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", analyze)
     # Auto-log prédiction mocké (pas de DB dans ce test).
     monkeypatch.setattr("aria_core.vc_predictions.record_prediction", AsyncMock(return_value=42))
+    monkeypatch.setattr("aria_core.vc_predictions.count_predictions_for_contract", AsyncMock(return_value=1))
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", AsyncMock(return_value=46))
     # Email mocké (succès) — on vérifie juste le câblage, pas l'envoi réel.
     send_report = AsyncMock(return_value=(True, None))
     monkeypatch.setattr("aria_core.skills.vc_delivery.send_vc_report", send_report)
@@ -142,6 +144,10 @@ async def test_vc_valid_runs_analysis_and_sends_order(monkeypatch):
     assert "Tangem" in update.message.replies[1]
     assert "#42" in update.message.replies[2]
     assert "email" in update.message.replies[3].lower()
+    # Numérotation transmise à l'envoi (n° par token = compteur+1, série globale = total+1).
+    _, kwargs = send_report.call_args
+    assert kwargs["report_number"] == 2
+    assert kwargs["series_number"] == 47
 
 
 @pytest.mark.asyncio
@@ -149,6 +155,8 @@ async def test_vc_reports_email_failure_without_crashing(monkeypatch):
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
     monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", AsyncMock(return_value=_result()))
     monkeypatch.setattr("aria_core.vc_predictions.record_prediction", AsyncMock(return_value=7))
+    monkeypatch.setattr("aria_core.vc_predictions.count_predictions_for_contract", AsyncMock(return_value=0))
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", AsyncMock(return_value=6))
     # Email en échec (SMTP non configuré) — le handler ne doit pas crasher.
     monkeypatch.setattr(
         "aria_core.skills.vc_delivery.send_vc_report",

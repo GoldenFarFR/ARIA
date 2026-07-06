@@ -218,18 +218,47 @@ def report_integrity(result: VCResult, *, generated_at: str, recipient: str | No
     return digest[:12].upper(), digest
 
 
-def email_subject(result: VCResult) -> str:
-    """Objet d'email concis et professionnel."""
+def email_subject(
+    result: VCResult, *, generated_at: str | None = None, report_number: int | None = None
+) -> str:
+    """Objet d'email concis et professionnel.
+
+    Inclut la date et le n° de rapport (si fournis) : indispensable pour trier
+    ses rapports une fois abonné et destinataire de plusieurs analyses suivies
+    du même token dans la durée.
+    """
     potentiel = f"{result.potentiel}/10" if result.potentiel is not None else "n/a"
-    return f"[{BRAND}] Analyse VC — {result.recommandation} · Potentiel {potentiel} · {result.contract[:10]}…"
+    date_part = f"{generated_at.split(' ')[0]} · " if generated_at else ""
+    num_part = f"n°{report_number} · " if report_number else ""
+    return (
+        f"[{BRAND}] {num_part}{date_part}Analyse VC — {result.recommandation} · "
+        f"Potentiel {potentiel} · {result.contract[:10]}…"
+    )
 
 
-def render_html_report(result: VCResult, *, generated_at: str, recipient: str | None = None) -> str:
+def _format_serial(n: int) -> str:
+    """Numéro de série façon édition numérotée : 5 chiffres, ex. 47 -> '00.047'."""
+    padded = f"{max(0, int(n)):05d}"
+    return f"{padded[:2]}.{padded[2:]}"
+
+
+def render_html_report(
+    result: VCResult,
+    *,
+    generated_at: str,
+    recipient: str | None = None,
+    report_number: int | None = None,
+    series_number: int | None = None,
+) -> str:
     """Document HTML autonome, CSS inline — prêt pour l'email (et le futur site).
 
     ``recipient`` (optionnel) inscrit un filigrane d'édition personnelle : une
     fuite du rapport devient traçable au destinataire. Une empreinte SHA-256 du
-    contenu est apposée en pied (anti-falsification).
+    contenu est apposée en pied (anti-falsification). ``report_number``
+    (optionnel) affiche « Rapport n°N » : un abonné recevant plusieurs analyses
+    suivies du même token doit pouvoir les distinguer d'un coup d'œil.
+    ``series_number`` (optionnel) affiche « Série 00.0NN » : compteur global de
+    toutes les analyses ARIA, tous tokens confondus — identité d'édition numérotée.
     """
     potentiel = f"{result.potentiel}/10" if result.potentiel is not None else "n/a"
     reco_color = _RECO_COLORS.get(result.recommandation, "#5a5a5a")
@@ -286,6 +315,12 @@ def render_html_report(result: VCResult, *, generated_at: str, recipient: str | 
             "Analyse qualitative LLM indisponible — ce rapport repose uniquement sur les signaux quantitatifs.</div>"
         )
 
+    report_meta_line = f"Généré le {_esc(generated_at)}"
+    if report_number:
+        report_meta_line = f"Rapport n°{report_number} &middot; {report_meta_line}"
+    if series_number:
+        report_meta_line = f"Série {_esc(_format_serial(series_number))} &middot; {report_meta_line}"
+
     watermark_line = ""
     if recipient:
         watermark_line = (
@@ -317,6 +352,9 @@ def render_html_report(result: VCResult, *, generated_at: str, recipient: str | 
 <table role="presentation" width="100%" style="border-collapse:collapse;background:#eef1f6"><tr><td class="wrap" align="center" style="padding:24px 12px">
 <table role="presentation" width="640" style="max-width:640px;width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #e3e8f0;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(11,31,58,.10)">
   <tr><td class="pad-hdr" style="background:linear-gradient(135deg,{_ACCENT},{_ACCENT_SOFT});padding:22px 28px;border-bottom:3px solid {_GOLD}">
+    <div style="text-align:left;margin:0 0 10px">
+      <a href="https://ariavanguardzhc.com" style="color:{_GOLD_SOFT};font-size:11px;letter-spacing:.04em;text-decoration:none">ariavanguardzhc.com</a>
+    </div>
     <table role="presentation" width="100%" style="border-collapse:collapse"><tr>
       <td style="width:60px;vertical-align:middle">{emblem_img}</td>
       <td style="vertical-align:middle;padding-left:14px">
@@ -331,7 +369,7 @@ def render_html_report(result: VCResult, *, generated_at: str, recipient: str | 
   <tr><td class="pad" style="padding:20px 28px 0">
     <div style="font-size:12px;color:{_MUTE}">Token analysé</div>
     <div style="font-size:15px;font-weight:600;color:{_INK};word-break:break-all">{_esc(result.contract)}</div>
-    <div style="font-size:12px;color:#9aa4b1;margin-top:4px">Généré le {_esc(generated_at)}</div>
+    <div style="font-size:13px;font-weight:600;color:{_ACCENT_SOFT};margin-top:6px">{report_meta_line}</div>
     {tldr_block}
   </td></tr>
   <tr><td class="pad" style="padding:0 28px">
@@ -365,7 +403,7 @@ def render_html_report(result: VCResult, *, generated_at: str, recipient: str | 
       reproduction, rediffusion ou revente interdites sans autorisation écrite.
       {watermark_line}
       <div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c2c9d4">
-        Réf. {_esc(ref_id)} · Empreinte SHA-256 : {_esc(full_hash)}
+        Réf. {_esc(ref_id)} · Daté du {_esc(generated_at)} · Empreinte SHA-256 : {_esc(full_hash)}
       </div>
     </div>
   </td></tr>

@@ -52,6 +52,23 @@ async def test_close_unknown_returns_none():
 
 
 @pytest.mark.asyncio
+async def test_count_predictions_for_contract_increments():
+    assert await vc_predictions.count_predictions_for_contract("0xabc") == 0
+    await _record(contract="0xabc")
+    assert await vc_predictions.count_predictions_for_contract("0xabc") == 1
+    await _record(contract="0xabc")
+    assert await vc_predictions.count_predictions_for_contract("0xabc") == 2
+    # Autre contrat : compteur indépendant.
+    assert await vc_predictions.count_predictions_for_contract("0xdef") == 0
+
+
+@pytest.mark.asyncio
+async def test_count_predictions_for_contract_case_insensitive():
+    await _record(contract="0xABCDEF")
+    assert await vc_predictions.count_predictions_for_contract("0xabcdef") == 1
+
+
+@pytest.mark.asyncio
 async def test_metrics_end_to_end():
     p1 = await _record(potentiel=8)
     p2 = await _record(potentiel=8)

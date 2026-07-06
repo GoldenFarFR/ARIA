@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from aria_core.skills.vc_analysis import VCResult
 from aria_core.skills.vc_report import (
+    _format_serial,
     email_subject,
     render_html_report,
     report_integrity,
@@ -99,6 +100,60 @@ def test_email_subject_format():
     assert "ARIA Vanguard ZHC" in subj
     assert "BUY" in subj
     assert "7/10" in subj
+
+
+def test_email_subject_includes_date_when_provided():
+    subj = email_subject(_result(), generated_at=_GEN)
+    assert "2026-07-06" in subj  # tri facile en boîte mail une fois abonné à plusieurs rapports
+
+
+def test_email_subject_without_date_has_no_date_prefix():
+    subj = email_subject(_result())
+    assert subj == "[ARIA Vanguard ZHC] Analyse VC — BUY · Potentiel 7/10 · 0xaaaaaaaa…"
+
+
+def test_email_subject_includes_report_number_when_provided():
+    subj = email_subject(_result(), generated_at=_GEN, report_number=2)
+    assert "n°2" in subj
+    assert subj.index("n°2") < subj.index("2026-07-06")  # numéro avant la date
+
+
+def test_report_shows_report_number_when_provided():
+    out = render_html_report(_result(), generated_at=_GEN, report_number=3)
+    assert "Rapport n°3" in out
+
+
+def test_report_no_report_number_line_without_it():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "Rapport n°" not in out
+
+
+def test_format_serial_pads_and_splits():
+    assert _format_serial(47) == "00.047"
+    assert _format_serial(2) == "00.002"
+    assert _format_serial(12345) == "12.345"
+    assert _format_serial(0) == "00.000"
+
+
+def test_report_shows_series_number_when_provided():
+    out = render_html_report(_result(), generated_at=_GEN, series_number=47)
+    assert "Série 00.047" in out
+
+
+def test_report_no_series_line_without_it():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "Série" not in out
+
+
+def test_report_meta_line_order_series_then_report_then_date():
+    out = render_html_report(_result(), generated_at=_GEN, series_number=47, report_number=2)
+    assert out.index("Série 00.047") < out.index("Rapport n°2") < out.index(_GEN)
+
+
+def test_report_has_site_link_top_left():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert 'href="https://ariavanguardzhc.com"' in out
+    assert "ariavanguardzhc.com" in out
 
 
 def test_markdown_body_empty_is_safe():
