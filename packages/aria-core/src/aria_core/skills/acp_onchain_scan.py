@@ -12,6 +12,13 @@ from typing import Any
 import httpx
 import yaml
 
+from aria_core.services.blockscout import (
+    UNAVAILABLE as ONCHAIN_UNAVAILABLE,
+    ContractFlags,
+    TokenHoldersResult,
+    blockscout_client,
+)
+
 logger = logging.getLogger(__name__)
 
 _ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
@@ -104,7 +111,63 @@ async def _fetch_token_pairs(contract: str) -> list[PairSnapshot]:
     return [_parse_pair(row) for row in data if isinstance(row, dict)]
 
 
-def _score_and_verdict(ctx: TokenScanContext, pair: PairSnapshot | None) -> None:
+def _apply_onchain_signals(
+    flags: list[str],
+    contract_flags: ContractFlags | None,
+    holders: TokenHoldersResult | None,
+    pair: PairSnapshot | None,
+) -> int:
+    """Signaux Blockscout additionnels — lecture seule, purement additifs.
+
+    Une donnée on-chain indisponible (rate limit, timeout, erreur réseau) ne
+    dégrade jamais le score : le flag reflète l'absence de donnée, pas un
+    risque. Seuls des signaux positivement confirmés (fonction sensible
+    détectée, concentration whale) dégradent le score.
+    """
+    delta = 0
+
+    if contract_flags is not None:
+        if not contract_flags.available:
+            flags.append(f"Blockscout (audit contrat) : {contract_flags.error or ONCHAIN_UNAVAILABLE}.")
+        elif contract_flags.is_verified is False:
+            flags.append("Contrat non vérifié sur Blockscout — audit du code source impossible.")
+        else:
+            if contract_flags.has_mint:
+                flags.append("Fonction mint détectée dans le contrat — supply potentiellement inflatable.")
+                delta -= 30
+            if contract_flags.has_blacklist:
+                flags.append("Fonction blacklist détectée — l'équipe peut bloquer des wallets.")
+                delta -= 30
+            if contract_flags.has_disable_transfers:
+                flags.append("Fonction de désactivation des transferts détectée — risque honeypot.")
+                delta -= 30
+
+    if holders is not None:
+        if not holders.available:
+            flags.append(f"Blockscout (holders) : {holders.error or ONCHAIN_UNAVAILABLE}.")
+        else:
+            if holders.error:
+                flags.append(f"Blockscout (holders) : {holders.error}.")
+            known_lp = (pair.pair_address or "").lower() if pair else ""
+            candidates = [h for h in holders.holders if (h.address or "").lower() != known_lp]
+            top = max(candidates, key=lambda h: h.percentage or -1.0, default=None)
+            if top is not None and top.percentage is not None and top.percentage > 50:
+                flags.append(
+                    f"Concentration whale — top holder détient {top.percentage:.1f}% "
+                    "de la supply (hors LP connu)."
+                )
+                delta -= 20
+
+    return delta
+
+
+def _score_and_verdict(
+    ctx: TokenScanContext,
+    pair: PairSnapshot | None,
+    *,
+    contract_flags: ContractFlags | None = None,
+    holders: TokenHoldersResult | None = None,
+) -> None:
     cfg = _onchain_thresholds()
     liq_caution = float(cfg.get("min_liquidity_usd_caution") or 5000)
     liq_danger = float(cfg.get("min_liquidity_usd_danger") or 500)
@@ -126,12 +189,17 @@ def _score_and_verdict(ctx: TokenScanContext, pair: PairSnapshot | None) -> None
         ctx.risk_flags = ["Adresse nulle — risque critique."]
         return
 
+    onchain_flags: list[str] = []
+    onchain_delta = _apply_onchain_signals(onchain_flags, contract_flags, holders, pair)
+
     if not pair:
-        ctx.security_score = 35
-        ctx.lite_verdict = "CAUTION"
+        score = max(5, min(95, 35 + onchain_delta))
+        ctx.security_score = score
+        ctx.lite_verdict = "DANGER" if score < 35 else "CAUTION"
         ctx.risk_flags = [
             "Aucune paire DexScreener trouvée sur Base — liquidité non vérifiable.",
             "Confirmer le contrat sur Basescan avant toute allocation.",
+            *onchain_flags,
         ]
         return
 
@@ -172,6 +240,9 @@ def _score_and_verdict(ctx: TokenScanContext, pair: PairSnapshot | None) -> None
     if pair.dex_id:
         flags.append(f"Meilleure paire : {pair.base_symbol}/{pair.quote_symbol} sur {pair.dex_id}.")
 
+    score += onchain_delta
+    flags.extend(onchain_flags)
+
     score = max(5, min(95, score))
     ctx.security_score = score
     ctx.risk_flags = flags
@@ -194,13 +265,17 @@ async def scan_base_token(contract: str) -> TokenScanContext:
         _score_and_verdict(ctx, None)
         return ctx
 
-    pairs = await _fetch_token_pairs(ca)
+    pairs, contract_flags, holders = await asyncio.gather(
+        _fetch_token_pairs(ca),
+        blockscout_client.check_contract_flags(ca),
+        blockscout_client.get_token_holders(ca),
+    )
     ctx.pairs_found = len(pairs)
     if pairs:
         best = max(pairs, key=lambda p: p.liquidity_usd)
         ctx.best_pair = best
         ctx.data_source = "dexscreener"
-    _score_and_verdict(ctx, ctx.best_pair)
+    _score_and_verdict(ctx, ctx.best_pair, contract_flags=contract_flags, holders=holders)
     return ctx
 
 

@@ -154,7 +154,7 @@ class BlockscoutClient:
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     response = await client.get(url, params=params)
-            except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as exc:
+            except httpx.TransportError as exc:
                 if not timeout_retried:
                     timeout_retried = True
                     await asyncio.sleep(5.0)
