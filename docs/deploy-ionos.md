@@ -1,0 +1,99 @@
+# Déploiement ARIA — VPS IONOS
+
+Hôte de production : **VPS IONOS `root@31.70.114.74`**.
+Déploiement **manuel** : image Docker construite depuis le monorepo `GoldenFarFR/ARIA`.
+
+- Domaine public : `api.ariavanguardzhc.com` (DNS géré chez IONOS → VPS).
+- Conteneur : `aria-api` (image locale `aria-api`, build `vanguard/Dockerfile`).
+- Données persistantes : `/opt/aria-data` monté sur `/app/backend/data`.
+- Variables d'env : `--env-file /opt/aria/vanguard/backend/.env` (jamais commité).
+
+> ⚠️ **AVERTISSEMENT SÉCURITÉ — BINDING DU PORT (à respecter absolument)**
+>
+> Le conteneur **DOIT** être publié sur **`-p 127.0.0.1:8000:8000`** (boucle locale
+> uniquement), **jamais** sur `-p 8000:8000`.
+>
+> `-p 8000:8000` bind sur `0.0.0.0` → **l'API est exposée à tout Internet** sans
+> filtrage. L'historique du VPS montre que la commande a souvent été lancée ainsi
+> par erreur. Le conteneur actuel est correctement bindé sur `127.0.0.1` : **préserver
+> ce binding.** L'accès public passe par le reverse proxy / TLS en frontal
+> (`api.ariavanguardzhc.com`), pas par le port Docker directement.
+>
+> Vérifier après tout `docker run` :
+> ```bash
+> docker port aria-api        # doit afficher: 8000/tcp -> 127.0.0.1:8000
+> ss -tlnp | grep 8000        # doit être sur 127.0.0.1:8000, PAS 0.0.0.0:8000
+> ```
+
+---
+
+## 1. Installation initiale (VPS vierge)
+
+```bash
+# 1. Docker
+curl -fsSL https://get.docker.com | sh
+
+# 2. Git
+apt-get install -y git
+
+# 3. Cloner le monorepo
+git clone https://github.com/GoldenFarFR/ARIA.git /opt/aria
+
+# 4. Renseigner les secrets d'env (NON commité) — requis avant le run
+#    Chemin attendu par le conteneur : /opt/aria/vanguard/backend/.env
+#    (copier depuis le coffre, cf. production.env.example)
+#    -> éditer /opt/aria/vanguard/backend/.env
+
+# 5. Build de l'image
+cd /opt/aria
+docker build -f vanguard/Dockerfile -t aria-api .
+
+# 6. Lancer le conteneur (binding LOCAL obligatoire — cf. avertissement)
+docker run -d --name aria-api --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -v /opt/aria-data:/app/backend/data \
+  --env-file /opt/aria/vanguard/backend/.env \
+  aria-api
+```
+
+## 2. Mise à jour (nouvelle version)
+
+```bash
+cd /opt/aria \
+  && git pull \
+  && docker build -f vanguard/Dockerfile -t aria-api . \
+  && docker stop aria-api \
+  && docker rm aria-api \
+  && docker run -d --name aria-api --restart unless-stopped \
+       -p 127.0.0.1:8000:8000 \
+       -v /opt/aria-data:/app/backend/data \
+       --env-file /opt/aria/vanguard/backend/.env \
+       aria-api
+```
+
+Après mise à jour, contrôler :
+
+```bash
+docker port aria-api                       # 8000/tcp -> 127.0.0.1:8000
+docker logs --tail=50 aria-api             # boot uvicorn OK
+curl -s http://127.0.0.1:8000/api/health   # health local
+```
+
+---
+
+## Écart historique (à connaître)
+
+La procédure d'install retrouvée dans l'historique bash du VPS lançait le `docker run`
+initial **sans `-p`** (aucun port publié), et la commande de mise à jour en
+`-p 127.0.0.1:8000:8000`. On a **normalisé les deux sur `-p 127.0.0.1:8000:8000`**
+pour cohérence et sécurité. Les variantes vues en `-p 8000:8000` sont **à proscrire**
+(cf. avertissement sécurité).
+
+## Notes
+
+- **VÉRIFIÉ** : hôte `31.70.114.74`, build `vanguard/Dockerfile`, volume
+  `/opt/aria-data`, env-file `/opt/aria/vanguard/backend/.env`, restart policy
+  `unless-stopped` — d'après la procédure opérateur.
+- **À CONFIRMER (non couvert par la procédure fournie)** : le reverse proxy TLS en
+  frontal (nginx/Caddy) qui expose `api.ariavanguardzhc.com` vers `127.0.0.1:8000`,
+  et le renouvellement du certificat. À documenter séparément.
