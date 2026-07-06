@@ -1512,6 +1512,40 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _reply(message, "\n".join(lines))
 
 
+async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/vc <adresse> — analyse VC complète : ordre court ici, rapport détaillé par email.
+
+    Lecture seule + proposition. Aucune exécution : l'ordre est signé manuellement
+    sur Tangem par l'opérateur.
+    """
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    address = body.split()[0].strip() if body else ""
+    if not _SCAN_ADDR_RE.match(address):
+        await _reply(
+            message,
+            "Usage : /vc <adresse_contrat>\n"
+            "Analyse VC complète (Potentiel, Risque, Thèse, ordre proposé).\n"
+            "Adresse invalide — attendu : 0x suivi de 40 caractères hexadécimaux.",
+        )
+        return
+
+    from aria_core.skills.vc_analysis import analyze_vc, format_telegram_order
+
+    await _reply(message, "⏳ Analyse VC en cours (Spark deep + données on-chain)...")
+    result = await analyze_vc(address)
+    await _reply(message, format_telegram_order(result))
+
+
 async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/these <adresse> <BUY|WATCH|SELL|AVOID> <thèse...> — journalise un pari (aucune exécution)."""
     if not await _admin_check_reply(update):
@@ -1664,6 +1698,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))
+    app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))
     app.add_handler(CommandHandler("theses", _handle_theses))
