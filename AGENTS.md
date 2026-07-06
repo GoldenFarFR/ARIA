@@ -49,6 +49,9 @@ Opérateur : **l'operateur** (email [email operateur retire]). **Non-développeu
 - Capital test : **20-50$** au début. Cible long terme : **~100k$ sous gestion**, construite par paliers de confiance.
 - Architecture : conforme aux Règles absolues (validation humaine systématique, jamais de trade auto).
 
+**Positionnement produit (06/07/2026) : « un Nansen avec de la qualité, pas un multi-tools inutile ».**
+Profondeur > largeur : peu de capacités (lecture on-chain, smart-money, analyse VC, rapports premium) mais chacune excellente, auditée et vendable. Toute nouvelle feature se juge à l'aune de ce critère — si elle n'approfondit pas l'intelligence on-chain ou la qualité des rapports, on ne la construit pas.
+
 ---
 
 ### Architecture technique ARIA
