@@ -46,6 +46,8 @@ logger = logging.getLogger(__name__)
 MAX_POSITION_SIZE_PCT = 10.0
 
 _RISK_LEVELS = ("FAIBLE", "MODÉRÉ", "ÉLEVÉ", "EXTRÊME")
+_CONFIANCE_LEVELS = ("haute", "moyenne", "faible")
+_SCENARIO_NAMES = ("bull", "base", "bear")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _FIELD_MAX = 600
 _REPORT_MAX = 6000
@@ -60,17 +62,26 @@ RÈGLES DE SÉCURITÉ ABSOLUES (jamais transgresser) :
 
 SCHÉMA JSON EXACT attendu :
 {
+  "resume_executif": "<TL;DR percutant, 2-3 phrases : verdict + thèse + risque clé — doit donner envie de lire la suite>",
   "potentiel": <entier 0 à 10>,
   "risque": "<FAIBLE|MODÉRÉ|ÉLEVÉ|EXTRÊME>",
+  "confiance_globale": "<haute|moyenne|faible : ton niveau de confiance dans cette analyse au vu des données disponibles>",
   "these": "<thèse d'investissement synthétique, 2-4 phrases>",
   "recommandation": "<BUY|WATCH|SELL|AVOID>",
   "taille_pct": <nombre 0 à 10 : % du capital suggéré ; 0 si recommandation != BUY>,
   "entree": "<zone d'entrée ou 'marché'>",
   "invalidation": "<condition/niveau qui invalide la thèse>",
   "cible": "<objectif de la thèse>",
+  "scenarios": [
+    {"nom": "bull", "cible": "<cible de prix ou multiple>", "probabilite": <entier 0 à 100>, "confiance": "<haute|moyenne|faible>"},
+    {"nom": "base", "cible": "<...>", "probabilite": <0 à 100>, "confiance": "<...>"},
+    {"nom": "bear", "cible": "<...>", "probabilite": <0 à 100>, "confiance": "<...>"}
+  ],
   "donnees_insuffisantes": ["<critère non sourçable>", ...],
   "rapport_detaille": "<analyse complète Invest_Prompt_v4 : Potentiel (Techno/Moat, Équipe, Traction, Marché, Tokenomics, Smart Money), Risque, Thèse, Conclusion + Recommandation. Marque explicitement chaque donnée manquante.>"
-}"""
+}
+
+Les probabilités des 3 scénarios doivent refléter ton jugement (elles n'ont pas besoin de sommer exactement à 100). Chaque scénario porte son propre niveau de confiance."""
 
 
 @dataclass
@@ -89,6 +100,9 @@ class VCResult:
     security_score: int = 0
     lite_verdict: str = ""
     llm_used: bool = False
+    resume_executif: str = ""
+    confiance_globale: str = "faible"
+    scenarios: list[dict] = field(default_factory=list)
 
     @property
     def actionable(self) -> bool:
@@ -209,6 +223,10 @@ def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
     gaps_raw = parsed.get("donnees_insuffisantes")
     gaps = [_sanitize(g, 120) for g in gaps_raw][:20] if isinstance(gaps_raw, list) else []
 
+    confiance = str(parsed.get("confiance_globale", "")).strip().lower()
+    if confiance not in _CONFIANCE_LEVELS:
+        confiance = "faible"  # défaut prudent
+
     return VCResult(
         contract=ctx.contract,
         potentiel=_clamp_int(parsed.get("potentiel"), 0, 10, None),
@@ -224,7 +242,38 @@ def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
         security_score=ctx.security_score,
         lite_verdict=ctx.lite_verdict,
         llm_used=True,
+        resume_executif=_sanitize(parsed.get("resume_executif"), _FIELD_MAX),
+        confiance_globale=confiance,
+        scenarios=_validate_scenarios(parsed.get("scenarios")),
     )
+
+
+def _validate_scenarios(raw: object) -> list[dict]:
+    """Valide les scénarios LLM : nom en allowlist, probabilité 0-100, confiance en allowlist.
+
+    Toute donnée hors-schéma est corrigée ou écartée — jamais de passthrough brut.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw[:3]:
+        if not isinstance(item, dict):
+            continue
+        nom = str(item.get("nom", "")).strip().lower()
+        if nom not in _SCENARIO_NAMES:
+            continue
+        confiance = str(item.get("confiance", "")).strip().lower()
+        if confiance not in _CONFIANCE_LEVELS:
+            confiance = "faible"
+        out.append(
+            {
+                "nom": nom,
+                "cible": _sanitize(item.get("cible"), 120),
+                "probabilite": _clamp_int(item.get("probabilite"), 0, 100, 0),
+                "confiance": confiance,
+            }
+        )
+    return out
 
 
 def _deterministic_fallback(ctx: TokenScanContext) -> VCResult:
@@ -273,6 +322,9 @@ def _deterministic_fallback(ctx: TokenScanContext) -> VCResult:
         security_score=ctx.security_score,
         lite_verdict=ctx.lite_verdict,
         llm_used=False,
+        resume_executif="Analyse en mode dégradé : signaux quantitatifs on-chain uniquement, sans lecture qualitative.",
+        confiance_globale="faible",
+        scenarios=[],
     )
 
 

@@ -33,6 +33,13 @@ def _result(**kw) -> VCResult:
         security_score=60,
         lite_verdict="CAUTION",
         llm_used=True,
+        resume_executif="Infrastructure Base à moat réel, entrée mesurée recommandée.",
+        confiance_globale="moyenne",
+        scenarios=[
+            {"nom": "bull", "cible": "x3", "probabilite": 30, "confiance": "moyenne"},
+            {"nom": "base", "cible": "x1.5", "probabilite": 50, "confiance": "haute"},
+            {"nom": "bear", "cible": "-40%", "probabilite": 20, "confiance": "moyenne"},
+        ],
     )
     base.update(kw)
     return VCResult(**base)
@@ -84,7 +91,7 @@ def test_report_fallback_note_when_llm_disabled():
         generated_at=_GEN,
     )
     assert "Analyse qualitative LLM indisponible" in out
-    assert "n/a" in out
+    assert "—" in out  # jauge Potentiel affiche un tiret quand la valeur est absente
 
 
 def test_email_subject_format():
@@ -152,4 +159,51 @@ def test_report_integrity_changes_with_recipient():
 def test_report_recipient_watermark_is_escaped():
     out = render_html_report(_result(), generated_at=_GEN, recipient="<script>@x.com")
     assert "<script>@x.com" not in out
+    assert "&lt;script&gt;" in out
+
+
+# ----------------------- éléments visuels "wow" -----------------------
+
+
+def test_report_embeds_emblem():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "data:image/png;base64," in out  # emblème embarqué, pas d'asset externe
+
+
+def test_report_has_potentiel_gauge():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "Potentiel VC" in out
+    assert "/ 10" in out
+
+
+def test_report_has_tldr():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "En bref" in out
+    assert "moat réel" in out
+
+
+def test_report_has_scenarios():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "Scénario haussier" in out
+    assert "Scénario central" in out
+    assert "Scénario baissier" in out
+    assert "Probabilité 50%" in out
+
+
+def test_report_has_methodology_and_sources():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "Méthodologie & sources" in out
+    assert "DexScreener" in out
+    assert "Blockscout" in out
+
+
+def test_report_has_confidence_badge():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "Confiance : moyenne" in out
+
+
+def test_report_scenario_content_escaped():
+    hostile = _result(scenarios=[{"nom": "bull", "cible": "<script>x</script>", "probabilite": 50, "confiance": "haute"}])
+    out = render_html_report(hostile, generated_at=_GEN)
+    assert "<script>x</script>" not in out
     assert "&lt;script&gt;" in out

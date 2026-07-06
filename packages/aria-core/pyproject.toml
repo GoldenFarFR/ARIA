@@ -34,6 +34,7 @@ aria_core = [
     "**/*.md",
     "doctrine/**/*",
     "assets/avatar_gallery/*.jpg",
+    "assets/*.png",
 ]
 
 [tool.pytest.ini_options]

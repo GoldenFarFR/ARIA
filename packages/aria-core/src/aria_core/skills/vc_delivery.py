@@ -32,10 +32,21 @@ def _plain_fallback(result: VCResult) -> str:
     lines = [
         "ARIA Vanguard ZHC — Analyse d'investissement",
         f"Token : {result.contract}",
-        f"Recommandation : {result.recommandation} | Potentiel : {potentiel} | Risque : {result.risque}",
+        f"Recommandation : {result.recommandation} | Potentiel : {potentiel} | Risque : {result.risque}"
+        f" | Confiance : {result.confiance_globale}",
         "",
-        f"Thèse : {result.these}",
     ]
+    if result.resume_executif:
+        lines += [f"En bref : {result.resume_executif}", ""]
+    lines.append(f"Thèse : {result.these}")
+    if result.scenarios:
+        lines.append("")
+        lines.append("Scénarios :")
+        for sc in result.scenarios:
+            lines.append(
+                f"- {sc.get('nom')} : {sc.get('cible')} "
+                f"(prob. {sc.get('probabilite')}%, confiance {sc.get('confiance')})"
+            )
     if result.actionable and result.recommandation == "BUY":
         lines += [
             f"Taille suggérée : {result.taille_pct:.1f}% du capital",
