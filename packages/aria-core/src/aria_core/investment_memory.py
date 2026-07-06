@@ -143,3 +143,19 @@ async def list_open_theses(limit: int = 20) -> list[dict]:
         )
         rows = await row_cursor.fetchall()
     return [dict(zip(_COLUMNS, row)) for row in rows]
+
+
+async def list_theses_for_token(token_address: str, limit: int = 10) -> list[dict]:
+    """Historique des thèses (ouvertes + clôturées) pour un token, les plus récentes d'abord.
+
+    Sert de contexte factuel au moteur VC : « qu'a-t-on déjà parié sur ce token,
+    et qu'en a-t-on appris ? ».
+    """
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        row_cursor = await db.execute(
+            "SELECT * FROM investment_thesis WHERE token_address = ? ORDER BY id DESC LIMIT ?",
+            (token_address, limit),
+        )
+        rows = await row_cursor.fetchall()
+    return [dict(zip(_COLUMNS, row)) for row in rows]
