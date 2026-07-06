@@ -129,6 +129,42 @@ async def test_get_token_transfers_parses_amounts(monkeypatch):
     assert transfer.to_address == "0xto"
     assert transfer.token_symbol == "AAA"
     assert transfer.amount == pytest.approx(5.0)
+    assert transfer.error is None
+
+
+@pytest.mark.asyncio
+async def test_get_token_transfers_missing_decimals_no_zero_assumption(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc/token-transfers"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "items": [
+                        {
+                            "tx_hash": "0x1",
+                            "from": {"hash": "0xfrom"},
+                            "to": {"hash": "0xto"},
+                            "token": {"address": "0xtok", "symbol": "AAA", "name": "TokenA"},
+                            "total": {"value": str(5 * 10**18)},
+                            "timestamp": "2026-07-06T00:00:00Z",
+                            "method": "transfer",
+                        }
+                    ]
+                },
+            )
+        },
+    )
+
+    result = await client.get_token_transfers("0xabc", limit=50)
+
+    assert result.available is True
+    assert len(result.transfers) == 1
+    transfer = result.transfers[0]
+    assert transfer.amount is None
+    assert transfer.error == "décimales du token indisponible"
 
 
 @pytest.mark.asyncio
@@ -192,11 +228,42 @@ async def test_get_token_holders_computes_percentage(monkeypatch):
     result = await client.get_token_holders("0xtok")
 
     assert result.available is True
+    assert result.error is None
     assert result.total_supply == pytest.approx(1000.0)
     assert len(result.holders) == 2
     assert result.holders[0].address == "0xwhale"
     assert result.holders[0].percentage == pytest.approx(10.0)
     assert result.holders[1].percentage == pytest.approx(0.1)
+
+
+@pytest.mark.asyncio
+async def test_get_token_holders_missing_decimals_no_zero_assumption(monkeypatch):
+    client = BlockscoutClient()
+    token_url = f"{client.base_url}/tokens/0xtok"
+    holders_url = f"{client.base_url}/tokens/0xtok/holders"
+    _patch_client(
+        monkeypatch,
+        {
+            token_url: FakeResponse(200, {"total_supply": str(1000 * 10**18)}),
+            holders_url: FakeResponse(
+                200,
+                {
+                    "items": [
+                        {"address": {"hash": "0xwhale"}, "value": str(100 * 10**18)},
+                    ]
+                },
+            ),
+        },
+    )
+
+    result = await client.get_token_holders("0xtok")
+
+    assert result.available is True
+    assert result.total_supply is None
+    assert result.error == "décimales du token indisponible"
+    assert len(result.holders) == 1
+    assert result.holders[0].balance is None
+    assert result.holders[0].percentage is None
 
 
 @pytest.mark.asyncio
