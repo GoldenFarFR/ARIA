@@ -45,6 +45,23 @@ def test_format_buy_order_contains_actionable_fields():
     assert "automatique" in out.lower()
 
 
+def test_format_buy_order_with_capital_shows_dollar_amount():
+    out = format_telegram_order(_result(taille_pct=5.0), capital_usd=1500)
+    assert "5.0% du capital" in out
+    assert "$75" in out  # 5% de 1500
+    assert "$1,500" in out
+
+
+def test_format_buy_order_without_capital_no_dollar_amount():
+    out = format_telegram_order(_result())
+    assert "≈ $" not in out
+
+
+def test_format_buy_order_ignores_invalid_capital():
+    out = format_telegram_order(_result(), capital_usd=0)
+    assert "≈ $" not in out
+
+
 def test_format_watch_has_no_order_and_no_size():
     out = format_telegram_order(_result(recommandation="WATCH", taille_pct=0.0))
     assert "pas d'ordre" in out.lower()
@@ -148,6 +165,22 @@ async def test_vc_valid_runs_analysis_and_sends_order(monkeypatch):
     _, kwargs = send_report.call_args
     assert kwargs["report_number"] == 2
     assert kwargs["series_number"] == 47
+
+
+@pytest.mark.asyncio
+async def test_vc_uses_capital_env_var_for_dollar_amount(monkeypatch):
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", AsyncMock(return_value=_result(taille_pct=5.0)))
+    monkeypatch.setattr("aria_core.vc_predictions.record_prediction", AsyncMock(return_value=1))
+    monkeypatch.setattr("aria_core.vc_predictions.count_predictions_for_contract", AsyncMock(return_value=0))
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", AsyncMock(return_value=0))
+    monkeypatch.setattr("aria_core.skills.vc_delivery.send_vc_report", AsyncMock(return_value=(True, None)))
+    monkeypatch.setenv("ARIA_CAPITAL_USD", "1500")
+
+    update = FakeUpdate(f"/vc {ADDR}")
+    await telegram_bot._handle_vc(update, FakeContext())
+
+    assert "$75" in update.message.replies[1]  # 5% de $1500
 
 
 @pytest.mark.asyncio

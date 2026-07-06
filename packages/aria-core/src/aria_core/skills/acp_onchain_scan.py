@@ -41,6 +41,7 @@ class PairSnapshot:
     pair_created_at: int | None = None
     base_symbol: str = ""
     quote_symbol: str = ""
+    project_links: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -73,6 +74,48 @@ def _dex_chain_id() -> str:
     return str(_onchain_thresholds().get("chain_dex_id") or "base")
 
 
+_SOCIAL_LABELS = {
+    "twitter": "X (Twitter)",
+    "x": "X (Twitter)",
+    "telegram": "Telegram",
+    "discord": "Discord",
+    "github": "GitHub",
+    "reddit": "Reddit",
+}
+
+
+def _extract_project_links(raw: dict) -> list[dict]:
+    """Liens officiels déclarés par le projet (DexScreener `info.websites`/`socials`).
+
+    Aucune estimation : uniquement ce que DexScreener retourne réellement, et
+    uniquement des URL http(s) (allowlist de schéma — défense en profondeur,
+    la donnée vient d'un tiers non fiable et sera de toute façon revalidée
+    avant tout rendu HTML cliquable).
+    """
+    info = raw.get("info")
+    if not isinstance(info, dict):
+        return []
+
+    links: list[dict] = []
+    for site in info.get("websites") or []:
+        if not isinstance(site, dict):
+            continue
+        url = str(site.get("url") or "").strip()
+        if url.lower().startswith(("http://", "https://")):
+            links.append({"label": str(site.get("label") or "Site officiel"), "url": url})
+
+    for social in info.get("socials") or []:
+        if not isinstance(social, dict):
+            continue
+        url = str(social.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        kind = str(social.get("type") or "").strip().lower()
+        links.append({"label": _SOCIAL_LABELS.get(kind, kind.capitalize() or "Lien"), "url": url})
+
+    return links
+
+
 def _parse_pair(raw: dict) -> PairSnapshot:
     liq = raw.get("liquidity") or {}
     vol = raw.get("volume") or {}
@@ -94,6 +137,7 @@ def _parse_pair(raw: dict) -> PairSnapshot:
         pair_created_at=int(raw.get("pairCreatedAt") or 0) or None,
         base_symbol=str(base.get("symbol") or ""),
         quote_symbol=str(quote.get("symbol") or ""),
+        project_links=_extract_project_links(raw),
     )
 
 

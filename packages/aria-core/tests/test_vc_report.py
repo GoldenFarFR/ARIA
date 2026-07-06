@@ -156,6 +156,42 @@ def test_report_has_site_link_top_left():
     assert "ariavanguardzhc.com" in out
 
 
+# ----------------------- références projet (site, X, Telegram…) -----------------------
+
+
+def test_report_shows_project_links_when_present():
+    out = render_html_report(
+        _result(liens_projet=[{"label": "Website", "url": "https://atlas.example"}]),
+        generated_at=_GEN,
+    )
+    assert "Références" in out
+    assert "href='https://atlas.example'" in out
+    assert "Website" in out
+
+
+def test_report_no_project_links_shows_fallback_text():
+    out = render_html_report(_result(liens_projet=[]), generated_at=_GEN)
+    assert "Aucun lien officiel disponible" in out
+
+
+def test_report_rejects_non_http_link_even_if_smuggled_in():
+    """Défense en profondeur ultime : même une URL hostile déjà présente dans
+    VCResult (upstream compromis) ne doit jamais devenir un <a href> cliquable."""
+    hostile = _result(liens_projet=[{"label": "Faux site", "url": "javascript:alert(1)"}])
+    out = render_html_report(hostile, generated_at=_GEN)
+    assert "javascript:" not in out
+    assert "Aucun lien officiel disponible" in out
+
+
+def test_report_escapes_project_link_label_and_url():
+    hostile = _result(
+        liens_projet=[{"label": "<script>x</script>", "url": "https://atlas.example/<b>"}]
+    )
+    out = render_html_report(hostile, generated_at=_GEN)
+    assert "<script>x</script>" not in out
+    assert "&lt;script&gt;" in out
+
+
 def test_markdown_body_empty_is_safe():
     assert "Aucun contenu" in _render_markdown_body("")
 

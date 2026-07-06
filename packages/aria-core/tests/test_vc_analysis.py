@@ -181,6 +181,51 @@ def test_fallback_flags_missing_qualitative_analysis():
     assert any("qualitative" in g.lower() for g in result.donnees_insuffisantes)
 
 
+# ----------------------- liens du projet (jamais issus du LLM) -----------------------
+
+
+def _ctx_with_links(links: list[dict]) -> TokenScanContext:
+    ctx = _ctx()
+    ctx.best_pair.project_links = links
+    return ctx
+
+
+def test_extract_verified_links_passthrough_valid():
+    links = [{"label": "Website", "url": "https://atlas.example"}]
+    assert vc._extract_verified_links(_ctx_with_links(links)) == links
+
+
+def test_extract_verified_links_rejects_non_http_scheme():
+    """Défense en profondeur : même si un maillon amont laissait passer une URL
+    hostile, ce point d'entrée avant VCResult doit l'écarter."""
+    links = [{"label": "Faux site", "url": "javascript:alert(1)"}]
+    assert vc._extract_verified_links(_ctx_with_links(links)) == []
+
+
+def test_extract_verified_links_caps_count():
+    links = [{"label": f"Lien{i}", "url": f"https://example.com/{i}"} for i in range(10)]
+    assert len(vc._extract_verified_links(_ctx_with_links(links))) == vc._MAX_PROJECT_LINKS
+
+
+def test_extract_verified_links_no_pair_is_empty():
+    ctx = _ctx()
+    ctx.best_pair = None
+    assert vc._extract_verified_links(ctx) == []
+
+
+def test_validate_llm_output_carries_project_links():
+    links = [{"label": "Website", "url": "https://atlas.example"}]
+    parsed = json.loads(_valid_llm_json())
+    result = vc._validate_llm_output(parsed, _ctx_with_links(links))
+    assert result.liens_projet == links
+
+
+def test_deterministic_fallback_carries_project_links():
+    links = [{"label": "Telegram", "url": "https://t.me/atlas"}]
+    result = vc._deterministic_fallback(_ctx_with_links(links))
+    assert result.liens_projet == links
+
+
 # ----------------------- orchestration analyze_vc -----------------------
 
 

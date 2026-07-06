@@ -202,6 +202,37 @@ def _methodology_block(result: VCResult) -> str:
     )
 
 
+def _references_block(links: list[dict]) -> str:
+    """Liens officiels déclarés par le projet (site, X, Telegram…) — vérifiez par vous-même.
+
+    Revalidation stricte du schéma http(s) à ce dernier point d'entrée avant
+    tout `<a href>` cliquable — défense en profondeur : ces liens viennent
+    d'un tiers non fiable (DexScreener relaie ce que le projet déclare, ARIA
+    ne le vérifie pas). Toute URL hors http(s) est silencieusement écartée.
+    """
+    safe = [
+        link for link in (links or [])
+        if str(link.get("url", "")).strip().lower().startswith(("http://", "https://"))
+    ]
+    if not safe:
+        body = f"<div style='font-size:12px;color:{_MUTE}'>Aucun lien officiel disponible pour ce token.</div>"
+    else:
+        items = "".join(
+            f"<a href='{_esc(link['url'])}' style='display:inline-block;margin:0 10px 6px 0;padding:5px 12px;"
+            f"background:#eef1f6;border-radius:14px;font-size:12px;color:{_ACCENT};text-decoration:none'>"
+            f"{_esc(link['label'])}</a>"
+            for link in safe
+        )
+        body = f"<div>{items}</div>"
+    return (
+        "<div style='margin:16px 0 4px;background:#f7f9fc;border-radius:8px;padding:14px 18px'>"
+        f"<div style='font-family:Georgia,serif;font-size:15px;color:{_ACCENT};margin-bottom:8px'>Références — vérifiez par vous-même</div>"
+        f"{body}"
+        f"<div style='margin-top:8px;font-size:11px;color:{_MUTE}'>Liens déclarés par le projet (source : DexScreener) — non vérifiés par ARIA.</div>"
+        "</div>"
+    )
+
+
 def report_integrity(result: VCResult, *, generated_at: str, recipient: str | None = None) -> tuple[str, str]:
     """Empreinte du rapport : (référence courte, SHA-256 complet). Déterministe."""
     basis = "|".join(
@@ -331,6 +362,7 @@ def render_html_report(
     gauge = _potentiel_gauge(result.potentiel)
     scenarios_html = _scenarios_block(result.scenarios)
     methodology_html = _methodology_block(result)
+    references_html = _references_block(result.liens_projet)
     body_html = _render_markdown_body(result.rapport_detaille)
 
     return f"""<!DOCTYPE html>
@@ -390,6 +422,7 @@ def render_html_report(
     {gaps_block}
     <div style="margin-top:10px">{body_html}</div>
     {methodology_html}
+    {references_html}
   </td></tr>
   <tr><td class="pad" style="padding:18px 28px 26px;border-top:1px solid #eef1f6">
     <div style="font-size:11px;line-height:1.6;color:#9aa4b1">

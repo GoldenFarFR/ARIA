@@ -1539,6 +1539,7 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
 
+    import os
     from datetime import datetime, timezone
 
     from aria_core import vc_predictions
@@ -1548,7 +1549,12 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await _reply(message, "⏳ Analyse VC en cours (Spark deep + données on-chain)...")
     result = await analyze_vc(address)
-    await _reply(message, format_telegram_order(result))
+    capital_raw = os.environ.get("ARIA_CAPITAL_USD", "").strip()
+    try:
+        capital_usd = float(capital_raw) if capital_raw else None
+    except ValueError:
+        capital_usd = None
+    await _reply(message, format_telegram_order(result, capital_usd=capital_usd))
 
     # Auto-log de la prédiction (shadow) — construit le track record de pertinence.
     generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
