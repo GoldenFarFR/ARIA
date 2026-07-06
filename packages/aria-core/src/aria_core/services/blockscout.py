@@ -55,6 +55,7 @@ class TokenTransfer:
     amount: float | None
     timestamp: str | None
     method: str | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -241,14 +242,17 @@ class BlockscoutClient:
             token = item.get("token") or {}
             total = item.get("total") or {}
             amount = None
+            transfer_error = None
             raw_value = total.get("value")
-            decimals = total.get("decimals")
+            decimals_raw = total.get("decimals")
             if raw_value is not None:
-                try:
-                    decimals_int = int(decimals) if decimals is not None else 0
-                    amount = int(raw_value) / (10**decimals_int)
-                except (TypeError, ValueError):
-                    amount = None
+                if decimals_raw is None:
+                    transfer_error = "décimales du token indisponible"
+                else:
+                    try:
+                        amount = int(raw_value) / (10 ** int(decimals_raw))
+                    except (TypeError, ValueError):
+                        transfer_error = "décimales du token indisponible"
 
             transfers.append(
                 TokenTransfer(
@@ -261,6 +265,7 @@ class BlockscoutClient:
                     amount=amount,
                     timestamp=item.get("timestamp"),
                     method=item.get("method"),
+                    error=transfer_error,
                 )
             )
         return TokenTransfersResult(transfers=transfers, available=True, error=None)
@@ -314,14 +319,16 @@ class BlockscoutClient:
             return TokenHoldersResult(available=False, error=UNAVAILABLE)
 
         decimals_raw = token_data.get("decimals")
+        decimals: int | None
         try:
-            decimals = int(decimals_raw) if decimals_raw is not None else 0
+            decimals = int(decimals_raw) if decimals_raw is not None else None
         except (TypeError, ValueError):
-            decimals = 0
+            decimals = None
+        decimals_error = None if decimals is not None else "décimales du token indisponible"
 
         total_supply_raw = token_data.get("total_supply")
         total_supply = None
-        if total_supply_raw is not None:
+        if decimals is not None and total_supply_raw is not None:
             try:
                 total_supply = int(total_supply_raw) / (10**decimals)
             except (TypeError, ValueError):
@@ -339,7 +346,7 @@ class BlockscoutClient:
                 continue
             raw_balance = item.get("value")
             balance = None
-            if raw_balance is not None:
+            if decimals is not None and raw_balance is not None:
                 try:
                     balance = int(raw_balance) / (10**decimals)
                 except (TypeError, ValueError):
@@ -358,7 +365,7 @@ class BlockscoutClient:
                 )
             )
 
-        return TokenHoldersResult(holders=holders, total_supply=total_supply, available=True, error=None)
+        return TokenHoldersResult(holders=holders, total_supply=total_supply, available=True, error=decimals_error)
 
     # ------------------------------------------------------------------
     # 5. is_verified + scan fonctions sensibles (mint, disable_transfers, blacklist)
