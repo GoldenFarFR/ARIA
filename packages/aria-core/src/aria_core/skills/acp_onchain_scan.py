@@ -18,6 +18,7 @@ from aria_core.services.blockscout import (
     TokenHoldersResult,
     blockscout_client,
 )
+from aria_core.services.coingecko import TokenFundamentals, coingecko_client
 from aria_core.services.smart_money import analyze_smart_money
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,44 @@ def _apply_onchain_signals(
     return delta
 
 
+_HIGH_DILUTION_FDV_RATIO = 3.0
+
+
+def _apply_fundamentals_signals(flags: list[str], fundamentals: TokenFundamentals | None) -> int:
+    """Signaux CoinGecko additionnels — lecture seule, purement additifs.
+
+    Comme pour Blockscout : une donnée fondamentale indisponible (rate limit,
+    timeout, token non listé) ne dégrade jamais le score. Seul un ratio
+    FDV/market cap élevé (dilution future significative, vesting/unlocks à
+    venir) est un signal positivement confirmé qui dégrade le score.
+    """
+    if fundamentals is None:
+        return 0
+
+    if not fundamentals.available:
+        flags.append(f"CoinGecko (fondamentaux) : {fundamentals.error or 'donnée fondamentale indisponible'}.")
+        return 0
+
+    delta = 0
+    mc = fundamentals.market_cap_usd
+    fdv = fundamentals.fully_diluted_valuation_usd
+    if mc and fdv and mc > 0:
+        ratio = fdv / mc
+        if ratio >= _HIGH_DILUTION_FDV_RATIO:
+            flags.append(
+                f"Dilution future importante — FDV/market cap = {ratio:.1f}x "
+                "(supply non circulante conséquente, vesting/unlocks à surveiller)."
+            )
+            delta -= 10
+
+    if fundamentals.market_cap_usd:
+        flags.append(f"CoinGecko : market cap ${fundamentals.market_cap_usd:,.0f}.")
+    if fundamentals.categories:
+        flags.append(f"CoinGecko : catégorie(s) {', '.join(fundamentals.categories[:3])}.")
+
+    return delta
+
+
 def _score_and_verdict(
     ctx: TokenScanContext,
     pair: PairSnapshot | None,
@@ -256,13 +295,19 @@ def _score_and_verdict(
         ctx.lite_verdict = "CAUTION"
 
 
-async def scan_base_token(contract: str, *, include_smart_money: bool = False) -> TokenScanContext:
+async def scan_base_token(
+    contract: str, *, include_smart_money: bool = False, include_fundamentals: bool = False
+) -> TokenScanContext:
     """Fetch DexScreener + compute heuristic security score.
 
     `include_smart_money` est desactive par defaut : l'analyse wallet-tracker
     fait un appel Blockscout par top holder (throttle ~0.35s/appel) et
     ralentirait chaque scan standard. A activer explicitement pour une
     analyse plus poussee (ex. commande Telegram /scan <adresse> smart).
+
+    `include_fundamentals` est desactive par defaut : le throttle CoinGecko
+    (~2.2s/appel, tier public) ralentirait chaque scan standard. A activer
+    explicitement (ex. /scan <adresse> fond).
     """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
@@ -297,6 +342,13 @@ async def scan_base_token(contract: str, *, include_smart_money: bool = False) -
             ctx.risk_flags.extend(smart_money.flags)
         else:
             ctx.risk_flags.append(f"Smart-money : {smart_money.error or ONCHAIN_UNAVAILABLE}.")
+
+    if include_fundamentals:
+        fundamentals = await coingecko_client.get_token_fundamentals(ca)
+        fundamentals_flags: list[str] = []
+        fundamentals_delta = _apply_fundamentals_signals(fundamentals_flags, fundamentals)
+        ctx.security_score = max(5, min(95, ctx.security_score + fundamentals_delta))
+        ctx.risk_flags.extend(fundamentals_flags)
 
     return ctx
 
