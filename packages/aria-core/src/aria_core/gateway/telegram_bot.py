@@ -1541,20 +1541,117 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     from datetime import datetime, timezone
 
+    from aria_core import vc_predictions
     from aria_core.skills.vc_analysis import analyze_vc, format_telegram_order
     from aria_core.skills.vc_delivery import send_vc_report
+    from aria_core.skills.vc_report import report_integrity
 
     await _reply(message, "⏳ Analyse VC en cours (Spark deep + données on-chain)...")
     result = await analyze_vc(address)
     await _reply(message, format_telegram_order(result))
 
-    # Rapport détaillé par email (sous kill-switch, dégradation sûre si SMTP absent).
+    # Auto-log de la prédiction (shadow) — construit le track record de pertinence.
     generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    ref_id, _ = report_integrity(result, generated_at=generated_at)
+    try:
+        pred_id = await vc_predictions.record_prediction(
+            contract=result.contract,
+            recommandation=result.recommandation,
+            potentiel=result.potentiel,
+            risque=result.risque,
+            taille_pct=result.taille_pct,
+            security_score=result.security_score,
+            llm_used=result.llm_used,
+            report_ref=ref_id,
+        )
+        await _reply(message, f"🗃️ Prédiction #{pred_id} enregistrée. Clôture plus tard : /vcresult {pred_id} <pnl%> [note].")
+    except Exception as exc:  # noqa: BLE001 — le log ne doit jamais casser l'analyse
+        logger.warning("vc auto-log échoué: %s", exc)
+
+    # Rapport détaillé par email (sous kill-switch, dégradation sûre si SMTP absent).
     email_ok, email_error = await send_vc_report(result, generated_at=generated_at)
     if email_ok:
         await _reply(message, "📧 Rapport détaillé envoyé par email.")
     else:
         await _reply(message, f"📧 Rapport email non envoyé : {email_error}")
+
+
+async def _handle_vcresult(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/vcresult <id> <pnl%> [note] — attribue un résultat réel à une prédiction VC."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    usage = (
+        "Usage : /vcresult <id> <pnl%> [note]\n"
+        "Ex : /vcresult 3 +18 catalyseur listing.\n"
+        "Le pnl% est le résultat réel de la prédiction (positif ou négatif)."
+    )
+    parts = body.split(maxsplit=2)
+    if len(parts) < 2 or not parts[0].isdigit():
+        await _reply(message, usage)
+        return
+
+    pred_id = int(parts[0])
+    try:
+        outcome_pct = float(parts[1].replace("%", "").replace(",", ".").lstrip("+"))
+    except ValueError:
+        await _reply(message, "pnl% invalide (attendu un nombre, ex. +18 ou -25).\n\n" + usage)
+        return
+    note = parts[2].strip() if len(parts) > 2 else ""
+
+    from aria_core import vc_predictions
+
+    closed = await vc_predictions.close_prediction(pred_id, outcome_pct=outcome_pct, note=note)
+    if closed is None:
+        await _reply(message, f"Prédiction #{pred_id} introuvable ou déjà clôturée.")
+        return
+    await _reply(
+        message,
+        f"✅ Prédiction #{pred_id} clôturée — {closed['recommandation']} → résultat {outcome_pct:+.1f}%.",
+    )
+
+
+async def _handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/track — mesure de pertinence : hit-rate, P&L moyen, calibration."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core import vc_predictions
+
+    m = await vc_predictions.metrics()
+    if m["total"] == 0:
+        await _reply(message, "Aucune prédiction enregistrée. Lance des analyses avec /vc.")
+        return
+
+    lines = [
+        "📈 Pertinence ARIA — track record VC",
+        f"Prédictions : {m['total']} ({m['closed']} clôturées, {m['open']} ouvertes)",
+    ]
+    if m["hit_rate"] is not None:
+        lines.append(f"Hit-rate BUY : {m['hit_rate']:.0%} sur {m['buy_count']} BUY clôturés")
+        lines.append(f"P&L moyen BUY : {m['avg_pnl_buy']:+.1f}%")
+    else:
+        lines.append("Pas encore de BUY clôturé — clôture avec /vcresult pour mesurer.")
+
+    if m["calibration"]:
+        lines.append("")
+        lines.append("Calibration (Potentiel → P&L moyen réel) :")
+        for b in m["calibration"]:
+            lines.append(f"  {b['bucket']}/10 : {b['avg_pnl']:+.1f}% (n={b['count']})")
+        lines.append("Idéal : le P&L croît avec le potentiel.")
+
+    await _reply(message, "\n".join(lines))
 
 
 async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1710,6 +1807,8 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))
     app.add_handler(CommandHandler("vc", _handle_vc))
+    app.add_handler(CommandHandler("vcresult", _handle_vcresult))
+    app.add_handler(CommandHandler("track", _handle_track))
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))
     app.add_handler(CommandHandler("theses", _handle_theses))
