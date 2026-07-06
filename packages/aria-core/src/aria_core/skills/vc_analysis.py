@@ -109,6 +109,7 @@ class VCResult:
     scenarios: list[dict] = field(default_factory=list)
     upside_pct: float | None = None
     downside_pct: float | None = None
+    liens_projet: list[dict] = field(default_factory=list)
 
     @property
     def actionable(self) -> bool:
@@ -142,6 +143,29 @@ def _sanitize(text: object, max_len: int = _FIELD_MAX) -> str:
     s = _CONTROL_CHARS_RE.sub("", str(text or ""))
     s = s.replace("<", "‹").replace(">", "›")
     return s[:max_len]
+
+
+_MAX_PROJECT_LINKS = 6
+
+
+def _extract_verified_links(ctx: TokenScanContext) -> list[dict]:
+    """Liens officiels du projet (site, X, Telegram…), jamais issus du LLM.
+
+    Sourcés uniquement depuis les données brutes de scan (DexScreener), pour
+    que le client puisse vérifier lui-même — jamais une URL générée ou
+    devinée par le modèle. Revalidation stricte du schéma http(s) ici (défense
+    en profondeur, en plus du filtre déjà appliqué à l'extraction DexScreener) :
+    ces liens finissent en `<a href>` cliquable dans le rapport.
+    """
+    if not ctx.best_pair or not ctx.best_pair.project_links:
+        return []
+    out: list[dict] = []
+    for link in ctx.best_pair.project_links[:_MAX_PROJECT_LINKS]:
+        url = str(link.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        out.append({"label": _sanitize(link.get("label"), 40), "url": url[:300]})
+    return out
 
 
 def _build_untrusted_context(ctx: TokenScanContext, history: list[dict]) -> str:
@@ -269,6 +293,7 @@ def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
         scenarios=_validate_scenarios(parsed.get("scenarios")),
         upside_pct=up if up > 0 else None,
         downside_pct=down if down > 0 else None,
+        liens_projet=_extract_verified_links(ctx),
     )
 
 
@@ -349,14 +374,18 @@ def _deterministic_fallback(ctx: TokenScanContext) -> VCResult:
         resume_executif="Analyse en mode dégradé : signaux quantitatifs on-chain uniquement, sans lecture qualitative.",
         confiance_globale="faible",
         scenarios=[],
+        liens_projet=_extract_verified_links(ctx),
     )
 
 
-def format_telegram_order(result: VCResult) -> str:
+def format_telegram_order(result: VCResult, *, capital_usd: float | None = None) -> str:
     """Ordre court et actionnable pour Telegram — proposition, jamais exécution.
 
     Réservé au canal Telegram : concis, lisible sur mobile. Le rapport complet
     part par email. Le disclaimer « validation manuelle » est toujours présent.
+    ``capital_usd`` (optionnel) convertit la taille suggérée en un montant en
+    dollars — l'opérateur exécute manuellement sur Tangem, un montant net évite
+    tout calcul mental avant signature.
     """
     potentiel = f"{result.potentiel}/10" if result.potentiel is not None else "n/a"
     header = "📊 ARIA — Ordre proposé" if result.actionable else "📊 ARIA — Analyse (pas d'ordre)"
@@ -369,7 +398,11 @@ def format_telegram_order(result: VCResult) -> str:
     if result.rr is not None:
         lines.append(f"⚖️ R/R : {result.rr} (récompense/risque)")
     if result.actionable and result.recommandation == "BUY":
-        lines.append(f"Taille suggérée : {result.taille_pct:.1f}% du capital")
+        taille_line = f"Taille suggérée : {result.taille_pct:.1f}% du capital"
+        if capital_usd is not None and capital_usd > 0:
+            position_usd = capital_usd * result.taille_pct / 100
+            taille_line += f" (≈ ${position_usd:,.0f} sur ${capital_usd:,.0f})"
+        lines.append(taille_line)
         lines.append(f"Entrée : {result.entree}")
         lines.append(f"Invalidation : {result.invalidation}")
         lines.append(f"Cible : {result.cible}")
