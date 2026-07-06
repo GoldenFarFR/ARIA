@@ -113,7 +113,7 @@ def _render_markdown_body(text: str) -> str:
 
 def _badge(label: str, value: str, color: str) -> str:
     return (
-        "<td style='padding:0 6px 0 0;width:50%'>"
+        "<td class='kpi' style='padding:0 6px 6px 0;width:50%;vertical-align:top'>"
         "<div style='background:#f4f7fb;border:1px solid #e6ebf2;border-radius:8px;padding:12px 14px;text-align:center'>"
         f"<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:{_MUTE}'>{_esc(label)}</div>"
         f"<div style='font-size:19px;font-weight:700;margin-top:4px;color:{color}'>{_esc(value)}</div>"
@@ -136,7 +136,7 @@ def _potentiel_gauge(potentiel: int | None) -> str:
         "<table role='presentation' width='100%' style='border-collapse:collapse'><tr>"
         "<td style='vertical-align:middle'>"
         f"<div style='font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:{_GOLD_SOFT}'>Potentiel VC</div>"
-        f"<div style='color:#ffffff;font-family:Georgia,serif'><span style='font-size:44px;font-weight:700'>{_esc(value_txt)}</span>"
+        f"<div style='color:#ffffff;font-family:Georgia,serif'><span class='gauge-num' style='font-size:44px;font-weight:700'>{_esc(value_txt)}</span>"
         "<span style='font-size:18px;color:#b9c8de'> / 10</span></div>"
         "</td></tr></table>"
         f"<table role='presentation' width='100%' style='border-collapse:collapse;margin-top:10px'><tr>{segments}</tr></table>"
@@ -154,7 +154,7 @@ def _scenarios_block(scenarios: list[dict]) -> str:
         proba = sc.get("probabilite", 0)
         conf = sc.get("confiance", "faible")
         cells.append(
-            f"<td style='width:33%;vertical-align:top;padding:0 5px'>"
+            f"<td class='sc-col' style='width:33%;vertical-align:top;padding:0 5px 8px'>"
             f"<div style='border:1px solid #e6ebf2;border-top:3px solid {color};border-radius:8px;padding:12px 12px 14px'>"
             f"<div style='font-size:12px;font-weight:700;color:{color}'>{_esc(titre)}</div>"
             f"<div style='font-size:13px;color:{_INK};margin:6px 0;min-height:34px'>{_esc(sc.get('cible'))}</div>"
@@ -300,36 +300,48 @@ def render_html_report(result: VCResult, *, generated_at: str, recipient: str | 
 
     return f"""<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="x-apple-disable-message-reformatting">
+<style>
+  @media only screen and (max-width:480px) {{
+    .wrap {{ padding:12px 6px !important; }}
+    .pad {{ padding-left:18px !important; padding-right:18px !important; }}
+    .pad-hdr {{ padding-left:18px !important; padding-right:18px !important; }}
+    .sc-col {{ display:block !important; width:100% !important; padding:0 0 10px 0 !important; }}
+    .kpi {{ display:block !important; width:100% !important; padding:0 0 8px 0 !important; }}
+    .hdr-badge {{ display:block !important; text-align:left !important; padding:12px 0 0 0 !important; white-space:normal !important; }}
+    .gauge-num {{ font-size:38px !important; }}
+  }}
+</style></head>
 <body style="margin:0;padding:0;background:#eef1f6;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
-<table role="presentation" width="100%" style="border-collapse:collapse;background:#eef1f6"><tr><td align="center" style="padding:24px 12px">
+<table role="presentation" width="100%" style="border-collapse:collapse;background:#eef1f6"><tr><td class="wrap" align="center" style="padding:24px 12px">
 <table role="presentation" width="640" style="max-width:640px;width:100%;border-collapse:collapse;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(11,31,58,.12)">
-  <tr><td style="background:linear-gradient(135deg,{_ACCENT},{_ACCENT_SOFT});padding:22px 28px;border-bottom:3px solid {_GOLD}">
+  <tr><td class="pad-hdr" style="background:linear-gradient(135deg,{_ACCENT},{_ACCENT_SOFT});padding:22px 28px;border-bottom:3px solid {_GOLD}">
     <table role="presentation" width="100%" style="border-collapse:collapse"><tr>
       <td style="width:60px;vertical-align:middle">{emblem_img}</td>
       <td style="vertical-align:middle;padding-left:14px">
         <div style="color:#ffffff;font-size:19px;font-weight:700;letter-spacing:.03em;font-family:Georgia,serif">{_esc(BRAND)}</div>
         <div style="color:{_GOLD_SOFT};font-size:12px;margin-top:2px;letter-spacing:.04em">NOTE DE RECHERCHE — ANALYSE D'INVESTISSEMENT</div>
       </td>
-      <td style="vertical-align:middle;text-align:right;white-space:nowrap">
+      <td class="hdr-badge" style="vertical-align:middle;text-align:right;white-space:nowrap">
         <div style="display:inline-block;background:rgba(255,255,255,.10);border:1px solid {_GOLD_SOFT};border-radius:20px;padding:5px 12px;color:#ffffff;font-size:11px">Confiance : {_esc(result.confiance_globale)}</div>
       </td>
     </tr></table>
   </td></tr>
-  <tr><td style="padding:20px 28px 0">
+  <tr><td class="pad" style="padding:20px 28px 0">
     <div style="font-size:12px;color:{_MUTE}">Token analysé</div>
     <div style="font-size:15px;font-weight:600;color:{_INK};word-break:break-all">{_esc(result.contract)}</div>
     <div style="font-size:12px;color:#9aa4b1;margin-top:4px">Généré le {_esc(generated_at)}</div>
     {tldr_block}
   </td></tr>
-  <tr><td style="padding:0 28px">
+  <tr><td class="pad" style="padding:0 28px">
     {gauge}
     <table role="presentation" width="100%" style="border-collapse:collapse"><tr>
       {_badge("Risque", result.risque, risk_color)}
       {_badge("Recommandation", result.recommandation, reco_color)}
     </tr></table>
   </td></tr>
-  <tr><td style="padding:6px 28px">
+  <tr><td class="pad" style="padding:6px 28px">
     {fallback_note}
     <div style="background:#f7f9fc;border-radius:8px;padding:14px 18px;margin:14px 0">
       <div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:{_MUTE};margin-bottom:4px">Thèse</div>
@@ -341,7 +353,7 @@ def render_html_report(result: VCResult, *, generated_at: str, recipient: str | 
     <div style="margin-top:10px">{body_html}</div>
     {methodology_html}
   </td></tr>
-  <tr><td style="padding:18px 28px 26px;border-top:1px solid #eef1f6">
+  <tr><td class="pad" style="padding:18px 28px 26px;border-top:1px solid #eef1f6">
     <div style="font-size:11px;line-height:1.6;color:#9aa4b1">
       Ce document est une note de recherche automatisée produite par ARIA. Il constitue une
       <strong>proposition soumise à validation humaine</strong> — jamais un ordre d'exécution automatique.

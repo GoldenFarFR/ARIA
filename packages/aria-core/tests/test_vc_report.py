@@ -207,3 +207,13 @@ def test_report_scenario_content_escaped():
     out = render_html_report(hostile, generated_at=_GEN)
     assert "<script>x</script>" not in out
     assert "&lt;script&gt;" in out
+
+
+def test_report_is_mobile_responsive():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert 'name="viewport"' in out
+    assert "@media only screen and (max-width:480px)" in out
+    # Les colonnes de scénarios et les KPI stackent sur mobile.
+    assert "class='sc-col'" in out
+    assert "class='kpi'" in out
+    assert "display:block !important" in out
