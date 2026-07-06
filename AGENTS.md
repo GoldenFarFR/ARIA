@@ -86,16 +86,16 @@ Monorepo `github.com/GoldenFarFR/ARIA` (branche `main`). Repos liés : `aria-ops
 
 **🏗️ MANQUE (à construire) :**
 1. ~~Lecture on-chain directe (RPC Base / BaseScan / Blockscout)~~ — **FAIT** : `BlockscoutClient` (`services/blockscout.py`) + wallet-tracker smart-money (`services/smart_money.py`, opt-in via `/scan <adresse> smart`). Reste limité à l'API publique Blockscout (pas de RPC brut).
-2. **Données fondamentales** : CoinGecko, tokenomics/vesting/unlocks, treasury/équipe, dev-activity, levées.
+2. ~~Données fondamentales~~ — **PARTIEL** : `CoinGeckoClient` (`services/coingecko.py`, opt-in via `/scan <adresse> fond`) donne market cap, FDV, supply, catégories, whitepaper. Manque encore : vesting/unlocks détaillés, treasury/équipe, dev-activity, levées.
 3. **Boucle mémoire d'investissement** : thèse → décision → résultat/P&L → leçon. Aucune attribution d'issue aux paris.
 4. **Scoring VC** : équipe, TAM, moat, valorisation, catalyseurs. L'actuel est du signal TA court terme + jugement launchpad qualitatif.
 
 ---
 
 ### Prochaine brique prioritaire
-**Fait (06/07/2026) :** client Blockscout Base + wallet-tracker smart-money (4 critères croisés : cohérence temporelle, entrée précoce contrôlée, sortie disciplinée, concentration multi-wallets ; wash-trading et wallets contrat exclus). Signal purement additif au `security_score`, jamais un déclencheur de trade.
+**Fait (06/07/2026) :** client Blockscout Base + wallet-tracker smart-money (4 critères croisés) ; client CoinGecko fondamentaux (market cap, FDV, supply, catégories — ratio FDV/market cap élevé pénalise le score). Tout est additif/opt-in, jamais un déclencheur de trade.
 
-**À choisir ensuite** entre : données fondamentales (CoinGecko/tokenomics), boucle mémoire d'investissement (thèse→décision→P&L→leçon), ou scoring VC structuré — décision à valider avec Sylvain.
+**À choisir ensuite** entre : boucle mémoire d'investissement (thèse→décision→P&L→leçon), scoring VC structuré (équipe, TAM, moat), ou approfondir les fondamentaux (vesting/unlocks, treasury/équipe) — décision à valider avec Sylvain.
 
 ---
 
