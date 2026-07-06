@@ -145,6 +145,36 @@ async def get_prediction(prediction_id: int) -> dict | None:
     return dict(zip(_COLUMNS, row)) if row else None
 
 
+async def count_predictions_for_contract(contract: str) -> int:
+    """Nombre d'analyses déjà enregistrées pour ce contrat (avant la présente).
+
+    Sert à numéroter les rapports (« Rapport n°2 sur ce token ») pour qu'un
+    abonné recevant plusieurs analyses suivies du même token puisse s'y
+    retrouver. Comparaison insensible à la casse (adresse EVM).
+    """
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT COUNT(*) FROM vc_prediction WHERE LOWER(contract) = LOWER(?)",
+                (contract,),
+            )
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+async def total_predictions_count() -> int:
+    """Nombre total d'analyses ARIA jamais enregistrées (tous tokens confondus).
+
+    Sert de numéro de série global (« Série 00.047 ») — donne au rapport une
+    identité d'édition numérotée, indépendante du suivi par token.
+    """
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (await db.execute("SELECT COUNT(*) FROM vc_prediction")).fetchone()
+    return int(row[0]) if row else 0
+
+
 async def list_open_predictions(limit: int = 20) -> list[dict]:
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:

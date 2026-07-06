@@ -1553,7 +1553,11 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # Auto-log de la prédiction (shadow) — construit le track record de pertinence.
     generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
     ref_id, _ = report_integrity(result, generated_at=generated_at)
+    report_number = None
+    series_number = None
     try:
+        report_number = await vc_predictions.count_predictions_for_contract(result.contract) + 1
+        series_number = await vc_predictions.total_predictions_count() + 1
         pred_id = await vc_predictions.record_prediction(
             contract=result.contract,
             recommandation=result.recommandation,
@@ -1569,7 +1573,9 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         logger.warning("vc auto-log échoué: %s", exc)
 
     # Rapport détaillé par email (sous kill-switch, dégradation sûre si SMTP absent).
-    email_ok, email_error = await send_vc_report(result, generated_at=generated_at)
+    email_ok, email_error = await send_vc_report(
+        result, generated_at=generated_at, report_number=report_number, series_number=series_number
+    )
     if email_ok:
         await _reply(message, "📧 Rapport détaillé envoyé par email.")
     else:
