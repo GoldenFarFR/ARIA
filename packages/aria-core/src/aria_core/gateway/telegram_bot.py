@@ -1418,6 +1418,7 @@ async def _register_bot_commands() -> None:
         BotCommand("status", "Heartbeat, LLM state, GitHub read"),
         BotCommand("stop", "⏸ Pause immédiate des actions sortantes"),
         BotCommand("resume", "▶️ Reprendre les actions sortantes"),
+        BotCommand("scan", "🔎 Scan on-chain lecture seule (adresse contrat)"),
     ]
     await _bot_app.bot.set_my_commands(commands)
     logger.info("Telegram command menu registered (%d commands)", len(commands))
@@ -1459,6 +1460,50 @@ async def _handle_test_spend(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+_SCAN_ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
+
+
+async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/scan <adresse> — lecture seule : score de risque on-chain (DexScreener + Blockscout)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    address = body.strip()
+    if not _SCAN_ADDR_RE.match(address):
+        await _reply(
+            message,
+            "Usage : /scan <adresse_contrat>\n"
+            "Adresse invalide — attendu : 0x suivi de 40 caractères hexadécimaux.",
+        )
+        return
+
+    from aria_core.skills.acp_onchain_scan import scan_base_token
+
+    ctx = await scan_base_token(address)
+
+    lines = [
+        f"🔎 Scan {address}",
+        f"Score sécurité : {ctx.security_score}/100 — {ctx.lite_verdict}",
+        f"Source : {ctx.data_source} ({ctx.pairs_found} paire(s) trouvée(s))",
+    ]
+    if ctx.risk_flags:
+        lines.append("")
+        lines.append("Flags :")
+        lines.extend(f"- {flag}" for flag in ctx.risk_flags)
+    else:
+        lines.append("Aucun flag de risque détecté.")
+
+    await _reply(message, "\n".join(lines))
+
+
 async def _handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/stop — kill-switch : pause immédiate de toutes les actions sortantes (propriétaire uniquement)."""
     if not await _owner_only(update):
@@ -1494,6 +1539,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
+    app.add_handler(CommandHandler("scan", _handle_scan))
 
     # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)
     app.add_handler(CallbackQueryHandler(_handle_callback))
