@@ -84,7 +84,7 @@ Monorepo `github.com/GoldenFarFR/ARIA` (branche `main`). Repos liés : `aria-ops
 - `aria_vector_memory=False` (`config.py:197`).
 
 **🏗️ MANQUE (à construire) :**
-1. **Lecture on-chain directe** (RPC Base / BaseScan / Blockscout) → holders, audit contrat (mint/ownership/honeypot/taxes), whales. Aujourd'hui ARIA = DexScreener agrégé uniquement, zéro lecture RPC/contrat brute.
+1. ~~Lecture on-chain directe (RPC Base / BaseScan / Blockscout)~~ — **FAIT** : `BlockscoutClient` (`services/blockscout.py`) + wallet-tracker smart-money (`services/smart_money.py`, opt-in via `/scan <adresse> smart`). Reste limité à l'API publique Blockscout (pas de RPC brut).
 2. **Données fondamentales** : CoinGecko, tokenomics/vesting/unlocks, treasury/équipe, dev-activity, levées.
 3. **Boucle mémoire d'investissement** : thèse → décision → résultat/P&L → leçon. Aucune attribution d'issue aux paris.
 4. **Scoring VC** : équipe, TAM, moat, valorisation, catalyseurs. L'actuel est du signal TA court terme + jugement launchpad qualitatif.
@@ -92,15 +92,9 @@ Monorepo `github.com/GoldenFarFR/ARIA` (branche `main`). Repos liés : `aria-ops
 ---
 
 ### Prochaine brique prioritaire
-**Client de lecture Blockscout Base** (gratuit, API publique `base.blockscout.com/api/v2/`, lecture seule) — donne à ARIA des « yeux on-chain » (holders, transferts, audit contrat, whales). C'est le **prérequis** du wallet-tracker smart-money et de tout scoring VC réel.
+**Fait (06/07/2026) :** client Blockscout Base + wallet-tracker smart-money (4 critères croisés : cohérence temporelle, entrée précoce contrôlée, sortie disciplinée, concentration multi-wallets ; wash-trading et wallets contrat exclus). Signal purement additif au `security_score`, jamais un déclencheur de trade.
 
-**Contenu de l'audit contrat :** vérifier `is_verified` et scanner la présence de fonctions de compromission majeures (`mint`, `disable_transfers`, `blacklist`).
-
-**Politique de gestion des erreurs réseau/API (à valider avant codage) :**
-- Rate limit (429) : backoff exponentiel, 3 tentatives max, puis abandon de l'analyse en cours — ne bloque pas le reste du pipeline.
-- Timeout / endpoint indisponible : 1 retry après 5s, puis fallback sur DexScreener/GeckoTerminal déjà actifs, avec mention explicite « donnée on-chain indisponible » dans le résultat.
-- Échecs consécutifs répétés (>3) : escalade Telegram en notification simple (pas de blocage, pas de spam à chaque appel).
-- Aucune donnée on-chain manquante n'est jamais remplacée par une supposition — le score doit refléter l'absence de donnée plutôt que l'estimer.
+**À choisir ensuite** entre : données fondamentales (CoinGecko/tokenomics), boucle mémoire d'investissement (thèse→décision→P&L→leçon), ou scoring VC structuré — décision à valider avec Sylvain.
 
 ---
 
