@@ -14,6 +14,7 @@ neutralise toute tentative d'injection (email ou, demain, page web publique).
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 
@@ -106,17 +107,44 @@ def _badge(label: str, value: str, color: str) -> str:
     )
 
 
+def report_integrity(result: VCResult, *, generated_at: str, recipient: str | None = None) -> tuple[str, str]:
+    """Empreinte du rapport : (référence courte, SHA-256 complet).
+
+    Déterministe sur le contenu + destinataire + horodatage. La référence courte
+    identifie l'édition ; le SHA-256 permet de prouver qu'un rapport n'a pas été
+    falsifié (anti-alteration) et, combiné au destinataire, de tracer une fuite.
+    """
+    basis = "|".join(
+        [
+            str(result.contract),
+            str(generated_at),
+            recipient or "",
+            str(result.recommandation),
+            str(result.potentiel),
+            str(result.rapport_detaille),
+        ]
+    )
+    digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()
+    return digest[:12].upper(), digest
+
+
 def email_subject(result: VCResult) -> str:
     """Objet d'email concis et professionnel (échappé côté rendu HTML, brut ici pour l'en-tête)."""
     potentiel = f"{result.potentiel}/10" if result.potentiel is not None else "n/a"
     return f"[{BRAND}] Analyse VC — {result.recommandation} · Potentiel {potentiel} · {result.contract[:10]}…"
 
 
-def render_html_report(result: VCResult, *, generated_at: str) -> str:
-    """Document HTML autonome, CSS inline — prêt pour l'email (et le futur site)."""
+def render_html_report(result: VCResult, *, generated_at: str, recipient: str | None = None) -> str:
+    """Document HTML autonome, CSS inline — prêt pour l'email (et le futur site).
+
+    ``recipient`` (optionnel) inscrit un filigrane d'édition personnelle : une
+    fuite du rapport devient traçable au destinataire. Une empreinte SHA-256 du
+    contenu est apposée en pied (anti-falsification).
+    """
     potentiel = f"{result.potentiel}/10" if result.potentiel is not None else "n/a"
     reco_color = _RECO_COLORS.get(result.recommandation, "#5a5a5a")
     risk_color = _RISK_COLORS.get(result.risque, "#5a5a5a")
+    ref_id, full_hash = report_integrity(result, generated_at=generated_at, recipient=recipient)
 
     # Encart ordre proposé (seulement si actionnable).
     order_block = ""
@@ -160,6 +188,15 @@ def render_html_report(result: VCResult, *, generated_at: str) -> str:
             "Analyse qualitative LLM indisponible — ce rapport repose uniquement sur les signaux quantitatifs.</div>"
         )
 
+    # Filigrane d'édition personnelle (traçabilité des fuites) — seulement si destinataire connu.
+    watermark_line = ""
+    if recipient:
+        watermark_line = (
+            f"<div style='margin-top:4px'>Édition personnelle de "
+            f"<strong>{_esc(recipient)}</strong> — {_esc(generated_at)}. "
+            "Toute diffusion engage la responsabilité du destinataire.</div>"
+        )
+
     body_html = _render_markdown_body(result.rapport_detaille)
 
     return f"""<!DOCTYPE html>
@@ -200,6 +237,14 @@ def render_html_report(result: VCResult, *, generated_at: str) -> str:
       <strong>proposition soumise à validation humaine</strong> — jamais un ordre d'exécution automatique.
       Aucune exécution n'est réalisée par ARIA ; toute position est signée manuellement par l'opérateur.
       Ce n'est pas un conseil en investissement.
+    </div>
+    <div style="margin-top:12px;font-size:10px;line-height:1.7;color:#b3bcc8">
+      © 2026 {_esc(BRAND)} — Tous droits réservés. Document <strong>confidentiel</strong> :
+      reproduction, rediffusion ou revente interdites sans autorisation écrite.
+      {watermark_line}
+      <div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c2c9d4">
+        Réf. {_esc(ref_id)} · Empreinte SHA-256 : {_esc(full_hash)}
+      </div>
     </div>
   </td></tr>
 </table></td></tr></table></body></html>"""
