@@ -72,6 +72,8 @@ SCHÉMA JSON EXACT attendu :
   "entree": "<zone d'entrée ou 'marché'>",
   "invalidation": "<condition/niveau qui invalide la thèse>",
   "cible": "<objectif de la thèse>",
+  "upside_pct": <nombre 0 à 2000 : gain potentiel estimé en %, de l'entrée jusqu'à la cible ; 0 si non estimable avec les données disponibles>,
+  "downside_pct": <nombre 0 à 100 : perte potentielle estimée en %, de l'entrée jusqu'au niveau d'invalidation ; 0 si non estimable>,
   "scenarios": [
     {"nom": "bull", "cible": "<cible de prix ou multiple>", "probabilite": <entier 0 à 100>, "confiance": "<haute|moyenne|faible>"},
     {"nom": "base", "cible": "<...>", "probabilite": <0 à 100>, "confiance": "<...>"},
@@ -81,7 +83,9 @@ SCHÉMA JSON EXACT attendu :
   "rapport_detaille": "<analyse complète Invest_Prompt_v4 : Potentiel (Techno/Moat, Équipe, Traction, Marché, Tokenomics, Smart Money), Risque, Thèse, Conclusion + Recommandation. Marque explicitement chaque donnée manquante.>"
 }
 
-Les probabilités des 3 scénarios doivent refléter ton jugement (elles n'ont pas besoin de sommer exactement à 100). Chaque scénario porte son propre niveau de confiance."""
+Les probabilités des 3 scénarios doivent refléter ton jugement (elles n'ont pas besoin de sommer exactement à 100). Chaque scénario porte son propre niveau de confiance.
+
+upside_pct et downside_pct servent à calculer un ratio risque/récompense (R/R). Ne les chiffre QUE si les données le permettent (prix, niveaux de liquidité, cible et invalidation cohérents) ; sinon mets 0 — jamais de valeur inventée. downside_pct est une perte, exprimée en nombre positif."""
 
 
 @dataclass
@@ -103,11 +107,24 @@ class VCResult:
     resume_executif: str = ""
     confiance_globale: str = "faible"
     scenarios: list[dict] = field(default_factory=list)
+    upside_pct: float | None = None
+    downside_pct: float | None = None
 
     @property
     def actionable(self) -> bool:
         """Un ordre est « actionnable » quand la reco déclenche un mouvement."""
         return self.recommandation in ("BUY", "SELL")
+
+    @property
+    def rr(self) -> float | None:
+        """Ratio risque/récompense (récompense ÷ risque). ``None`` si non estimable.
+
+        Calculé à partir des estimations chiffrées du modèle (bornées) — jamais
+        d'une valeur inventée : sans upside/downside sourçables, il n'y a pas de R/R.
+        """
+        if self.upside_pct and self.downside_pct and self.downside_pct > 0:
+            return round(self.upside_pct / self.downside_pct, 1)
+        return None
 
 
 def _sanitize(text: object, max_len: int = _FIELD_MAX) -> str:
@@ -227,6 +244,11 @@ def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
     if confiance not in _CONFIANCE_LEVELS:
         confiance = "faible"  # défaut prudent
 
+    # Upside/downside → R/R : bornés, et 0 (ou illisible) = « non estimable » (None),
+    # jamais un ratio fabriqué. downside plafonné à 100 % (perte max = capital exposé).
+    up = _clamp_float(parsed.get("upside_pct"), 0.0, 2000.0, 0.0)
+    down = _clamp_float(parsed.get("downside_pct"), 0.0, 100.0, 0.0)
+
     return VCResult(
         contract=ctx.contract,
         potentiel=_clamp_int(parsed.get("potentiel"), 0, 10, None),
@@ -245,6 +267,8 @@ def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
         resume_executif=_sanitize(parsed.get("resume_executif"), _FIELD_MAX),
         confiance_globale=confiance,
         scenarios=_validate_scenarios(parsed.get("scenarios")),
+        upside_pct=up if up > 0 else None,
+        downside_pct=down if down > 0 else None,
     )
 
 
@@ -342,6 +366,8 @@ def format_telegram_order(result: VCResult) -> str:
         f"Token : {result.contract}",
         f"Reco : {result.recommandation} · Potentiel {potentiel} · Risque {result.risque}",
     ]
+    if result.rr is not None:
+        lines.append(f"⚖️ R/R : {result.rr} (récompense/risque)")
     if result.actionable and result.recommandation == "BUY":
         lines.append(f"Taille suggérée : {result.taille_pct:.1f}% du capital")
         lines.append(f"Entrée : {result.entree}")
