@@ -265,6 +265,42 @@ def _deterministic_fallback(ctx: TokenScanContext) -> VCResult:
     )
 
 
+def format_telegram_order(result: VCResult) -> str:
+    """Ordre court et actionnable pour Telegram — proposition, jamais exécution.
+
+    Réservé au canal Telegram : concis, lisible sur mobile. Le rapport complet
+    part par email. Le disclaimer « validation manuelle » est toujours présent.
+    """
+    potentiel = f"{result.potentiel}/10" if result.potentiel is not None else "n/a"
+    header = "📊 ARIA — Ordre proposé" if result.actionable else "📊 ARIA — Analyse (pas d'ordre)"
+
+    lines = [
+        header,
+        f"Token : {result.contract}",
+        f"Reco : {result.recommandation} · Potentiel {potentiel} · Risque {result.risque}",
+    ]
+    if result.actionable and result.recommandation == "BUY":
+        lines.append(f"Taille suggérée : {result.taille_pct:.1f}% du capital")
+        lines.append(f"Entrée : {result.entree}")
+        lines.append(f"Invalidation : {result.invalidation}")
+        lines.append(f"Cible : {result.cible}")
+    elif result.recommandation == "SELL":
+        lines.append(f"Entrée : {result.entree}")
+        lines.append(f"Invalidation : {result.invalidation}")
+
+    if result.these:
+        lines.append("")
+        lines.append(f"Thèse : {result.these}")
+
+    if not result.llm_used:
+        lines.append("")
+        lines.append("⚠️ Analyse qualitative indisponible (LLM désactivé) — signaux quantitatifs seuls.")
+
+    lines.append("")
+    lines.append("⚠️ Proposition — validation et exécution manuelle sur ta Tangem. Aucune exécution automatique.")
+    return "\n".join(lines)
+
+
 async def analyze_vc(contract: str) -> VCResult:
     """Analyse VC complète d'un token Base. Dôme-hardened, fallback déterministe."""
     ctx = await scan_base_token(contract, include_smart_money=True, include_fundamentals=True)
