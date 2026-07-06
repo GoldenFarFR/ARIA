@@ -1539,11 +1539,22 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
 
+    from datetime import datetime, timezone
+
     from aria_core.skills.vc_analysis import analyze_vc, format_telegram_order
+    from aria_core.skills.vc_delivery import send_vc_report
 
     await _reply(message, "⏳ Analyse VC en cours (Spark deep + données on-chain)...")
     result = await analyze_vc(address)
     await _reply(message, format_telegram_order(result))
+
+    # Rapport détaillé par email (sous kill-switch, dégradation sûre si SMTP absent).
+    generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    email_ok, email_error = await send_vc_report(result, generated_at=generated_at)
+    if email_ok:
+        await _reply(message, "📧 Rapport détaillé envoyé par email.")
+    else:
+        await _reply(message, f"📧 Rapport email non envoyé : {email_error}")
 
 
 async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
