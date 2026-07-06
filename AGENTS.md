@@ -87,15 +87,15 @@ Monorepo `github.com/GoldenFarFR/ARIA` (branche `main`). Repos liés : `aria-ops
 **🏗️ MANQUE (à construire) :**
 1. ~~Lecture on-chain directe (RPC Base / BaseScan / Blockscout)~~ — **FAIT** : `BlockscoutClient` (`services/blockscout.py`) + wallet-tracker smart-money (`services/smart_money.py`, opt-in via `/scan <adresse> smart`). Reste limité à l'API publique Blockscout (pas de RPC brut).
 2. ~~Données fondamentales~~ — **PARTIEL** : `CoinGeckoClient` (`services/coingecko.py`, opt-in via `/scan <adresse> fond`) donne market cap, FDV, supply, catégories, whitepaper. Manque encore : vesting/unlocks détaillés, treasury/équipe, dev-activity, levées.
-3. **Boucle mémoire d'investissement** : thèse → décision → résultat/P&L → leçon. Aucune attribution d'issue aux paris.
-4. **Scoring VC** : équipe, TAM, moat, valorisation, catalyseurs. L'actuel est du signal TA court terme + jugement launchpad qualitatif.
+3. ~~Boucle mémoire d'investissement~~ — **FAIT** : `investment_memory.py` (table SQLite `investment_thesis`, commandes Telegram `/these`, `/issue`, `/theses`). Journal local thèse→décision→résultat/P&L→leçon, transition atomique open→closed, aucune action financière.
+4. **Scoring VC** : équipe, TAM, moat, valorisation, catalyseurs. L'actuel est du signal TA court terme + jugement launchpad qualitatif. C'est désormais la **dernière grosse brique manquante** — et elle peut consommer les 3 briques déjà faites (on-chain, fondamentaux, mémoire).
 
 ---
 
 ### Prochaine brique prioritaire
 **Fait (06/07/2026) :** client Blockscout Base + wallet-tracker smart-money (4 critères croisés) ; client CoinGecko fondamentaux (market cap, FDV, supply, catégories — ratio FDV/market cap élevé pénalise le score). Tout est additif/opt-in, jamais un déclencheur de trade.
 
-**À choisir ensuite** entre : boucle mémoire d'investissement (thèse→décision→P&L→leçon), scoring VC structuré (équipe, TAM, moat), ou approfondir les fondamentaux (vesting/unlocks, treasury/équipe) — décision à valider avec operateur.
+**Prochaine cible : scoring VC structuré** — dernière grosse brique. Agréger on-chain (Blockscout/smart-money) + fondamentaux (CoinGecko) + historique des thèses (`investment_memory`) en un score VC (équipe, TAM, moat, valorisation, catalyseurs) au format Invest_Prompt_v4. À approfondir en parallèle : vesting/unlocks, treasury/équipe.
 
 ---
 
