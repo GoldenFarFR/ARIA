@@ -103,7 +103,7 @@ async def test_scan_valid_address_calls_scan_and_formats_reply(monkeypatch):
     update = FakeUpdate(f"/scan {ADDR}")
     await telegram_bot._handle_scan(update, FakeContext())
 
-    scan_mock.assert_awaited_once_with(ADDR)
+    scan_mock.assert_awaited_once_with(ADDR, include_smart_money=False)
     assert len(update.message.replies) == 1
     reply = update.message.replies[0]
     assert "42" in reply
@@ -130,6 +130,31 @@ async def test_scan_valid_address_via_context_args(monkeypatch):
     update = FakeUpdate("/scan")
     await telegram_bot._handle_scan(update, FakeContext(args=[ADDR]))
 
-    scan_mock.assert_awaited_once_with(ADDR)
+    scan_mock.assert_awaited_once_with(ADDR, include_smart_money=False)
     assert "SAFE" in update.message.replies[0]
     assert "Aucun flag" in update.message.replies[0]
+
+
+@pytest.mark.asyncio
+async def test_scan_smart_flag_enables_smart_money_and_warns(monkeypatch):
+    """/scan <adresse> smart — active l'analyse smart-money (plus lente)."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+
+    fake_ctx = TokenScanContext(
+        contract=ADDR,
+        valid_address=True,
+        security_score=55,
+        lite_verdict="CAUTION",
+        data_source="dexscreener",
+        risk_flags=["Smart-money : 2 wallets parmi les top holders montrent un comportement convergent."],
+    )
+    scan_mock = AsyncMock(return_value=fake_ctx)
+    monkeypatch.setattr("aria_core.skills.acp_onchain_scan.scan_base_token", scan_mock)
+
+    update = FakeUpdate(f"/scan {ADDR} smart")
+    await telegram_bot._handle_scan(update, FakeContext())
+
+    scan_mock.assert_awaited_once_with(ADDR, include_smart_money=True)
+    assert len(update.message.replies) == 2
+    assert "smart-money" in update.message.replies[0].lower()
+    assert "convergent" in update.message.replies[1].lower()

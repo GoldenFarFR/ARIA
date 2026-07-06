@@ -18,6 +18,7 @@ from aria_core.services.blockscout import (
     TokenHoldersResult,
     blockscout_client,
 )
+from aria_core.services.smart_money import analyze_smart_money
 
 logger = logging.getLogger(__name__)
 
@@ -255,8 +256,14 @@ def _score_and_verdict(
         ctx.lite_verdict = "CAUTION"
 
 
-async def scan_base_token(contract: str) -> TokenScanContext:
-    """Fetch DexScreener + compute heuristic security score."""
+async def scan_base_token(contract: str, *, include_smart_money: bool = False) -> TokenScanContext:
+    """Fetch DexScreener + compute heuristic security score.
+
+    `include_smart_money` est desactive par defaut : l'analyse wallet-tracker
+    fait un appel Blockscout par top holder (throttle ~0.35s/appel) et
+    ralentirait chaque scan standard. A activer explicitement pour une
+    analyse plus poussee (ex. commande Telegram /scan <adresse> smart).
+    """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
     ctx = TokenScanContext(contract=ca, valid_address=valid)
@@ -276,6 +283,21 @@ async def scan_base_token(contract: str) -> TokenScanContext:
         ctx.best_pair = best
         ctx.data_source = "dexscreener"
     _score_and_verdict(ctx, ctx.best_pair, contract_flags=contract_flags, holders=holders)
+
+    if include_smart_money:
+        smart_money = await analyze_smart_money(
+            ca,
+            holders,
+            client=blockscout_client,
+            lp_address=ctx.best_pair.pair_address if ctx.best_pair else None,
+            pair_created_at_ms=ctx.best_pair.pair_created_at if ctx.best_pair else None,
+        )
+        if smart_money.available:
+            ctx.security_score = max(5, min(95, ctx.security_score + smart_money.score_delta))
+            ctx.risk_flags.extend(smart_money.flags)
+        else:
+            ctx.risk_flags.append(f"Smart-money : {smart_money.error or ONCHAIN_UNAVAILABLE}.")
+
     return ctx
 
 
