@@ -75,6 +75,14 @@ Quand tu travailles avec Grok Build ou Cursor :
 - **Split aria-core (2026-06-19)** : cerveau = `aria-sandbox/packages/aria-core` ; hôte = plugins marché via `aria_host.py` uniquement ; pip pin SHA + `bump-aria-core-pin.ps1`.
 - **Fin repo `dexpulse` (2026-06-19)** : repo supprimé ; produit **Aria Market** + holding dans **`aria-vanguard`** (vitrine + `aria-api` Render). URL canonique API : `api.ariavanguardzhc.com`.
 - **App factory Kelly (2026-06-20)** : revenus prioritaires = micro-apps shipées en <7 jours (modèle Kelly Claude) ; poll hebdo Telegram ; Android Play Store possible (compte dev Google 25 $ — opérateur). Culture large obligatoire avant token.
+- **ARIA investisseuse VC — gamme LUXE du domaine (2026-07-07)** :
+  - **Moat = l'analyse (la décision prouvée), PAS l'exécution.** Un swap/onramp cross-chain « ne rapporterait rien » ; le business est le jugement + la preuve (track record, calibration, LLM-juge). On ne devient pas un exchange.
+  - **Positionnement luxe assumé** : abonnement ~500 $/mois, modèle boutique (**4-5 clients**), édition **premium** (navy/or/émeraude) complète + édition **standard** (rose/vert/or) allégée avec incitation au premium. « Un Nansen avec de la qualité, pas un multi-tools inutile ». Vs concurrence (Nansen/DexScreener = données brutes) : nous vendons un **verdict justifié + un track record prouvé**. Leader = le seul dont les verdicts sont prouvés.
+  - **Funnel « échelle de risque »** : attirer le web2 → entrée douce **BTC/ETH** (standard, faible risque) → confiance via track record → montée en risque (low-caps qualité, pré-bonding Virtuals). On ne vend jamais du risque au jour 1, on le mérite.
+  - **Overlay macro/géo/réglementaire obligatoire** : chaque rapport cadré par un « Contexte de marché » (régime risk-on/off ; événements type Ormuz / Ukraine / CLARITY Act / MiCA qui écrasent une thèse bottom-up). Facts-only, sources réelles datées (piste fact-check : ArAIstotle / Facticity AI, à évaluer sur VPS, sans toucher au token $FACY).
+  - **Niche 15% pré-bonding = Virtuals Protocol** (seul vrai launchpad à courbe de bonding sur Base ; Flaunch en second ; Clanker/Zora sautent le bonding). Rester **Base-first**, Solana en monitoring lecture-seule. Détail : `docs/recherche-launchpads-base-2026.md`.
+  - **Proof engine (LLM-juge)** = pilier qualité qui justifie le prix : audit adverse de chaque analyse (claims non étayés, cohérence R/R). Dôme maintenu partout (échappement, facts-only, **jamais d'exécution auto — validation humaine Telegram**).
+  - **Conformité AVANT facturation** : facturer de l'analyse peut relever du conseil en investissement réglementé (AMF / MiFID II / MiCA) → **avocat obligatoire avant tout encaissement**. Détail : `docs/conformite-dossier-avocat.md`.
 
 
 ---
