@@ -313,9 +313,9 @@ def render_html_report(result: VCResult, *, generated_at: str, recipient: str | 
     .gauge-num {{ font-size:38px !important; }}
   }}
 </style></head>
-<body style="margin:0;padding:0;background:#eef1f6;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+<body style="margin:0;padding:0;background:#eef1f6;-webkit-text-size-adjust:100%;text-size-adjust:100%;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
 <table role="presentation" width="100%" style="border-collapse:collapse;background:#eef1f6"><tr><td class="wrap" align="center" style="padding:24px 12px">
-<table role="presentation" width="640" style="max-width:640px;width:100%;border-collapse:collapse;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(11,31,58,.12)">
+<table role="presentation" width="640" style="max-width:640px;width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #e3e8f0;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(11,31,58,.10)">
   <tr><td class="pad-hdr" style="background:linear-gradient(135deg,{_ACCENT},{_ACCENT_SOFT});padding:22px 28px;border-bottom:3px solid {_GOLD}">
     <table role="presentation" width="100%" style="border-collapse:collapse"><tr>
       <td style="width:60px;vertical-align:middle">{emblem_img}</td>
