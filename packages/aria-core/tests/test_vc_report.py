@@ -406,3 +406,72 @@ def test_report_is_mobile_responsive():
     assert 'class="kpi"' in out
     assert 'class="stack sc-card"' in out
     assert "display:block !important" in out
+
+
+def test_report_has_no_radial_gradient():
+    """Perf mobile (Gmail WebView) : un radial-gradient sur une grande surface
+    force une re-rastérisation à chaque frame de scroll (rendu saccadé). Le
+    hero et le pied « certificat » doivent rester en linear-gradient/solide."""
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "radial-gradient" not in out
+
+
+# ----------------------- tiers (premium / standard) -----------------------
+
+
+def test_report_premium_is_the_default_tier():
+    default_out = render_html_report(_result(), generated_at=_GEN)
+    explicit_out = render_html_report(_result(), generated_at=_GEN, tier="premium")
+    assert default_out == explicit_out
+    assert "RAPPORT PREMIUM" in default_out
+    assert "Analyse détaillée" in default_out
+    assert "Méthodologie &amp; sources" in default_out
+    assert "Références" in default_out
+
+
+def test_report_premium_tier_shows_full_content():
+    out = render_html_report(_result(), generated_at=_GEN, tier="premium")
+    assert "RAPPORT PREMIUM" in out
+    assert "#0a0e1a" in out or "#101a2e" in out
+    assert "<h3" in out  # ## Potentiel du rapport_detaille
+    assert "Méthodologie &amp; sources" in out
+    assert "Références" in out
+
+
+def test_report_standard_tier_uses_rose_theme_and_hides_premium_content():
+    out = render_html_report(_result(), generated_at=_GEN, tier="standard")
+    assert "RAPPORT STANDARD" in out
+    assert "#1c0e18" in out or "#2a1622" in out
+    assert "<h3" not in out  # analyse détaillée (## Potentiel) masquée
+    assert "Méthodologie" not in out
+    assert "Références" not in out
+    assert "réservées à l'édition Premium" in out
+    # Le reste du rapport reste présent en standard.
+    assert "En bref" in out
+    assert "Ordre proposé" in out
+    assert "Thèse d&#x27;investissement" in out or "Thèse d'investissement" in out
+    assert "Scénarios" in out
+    assert "Données insuffisantes" in out
+    assert "Tous droits réservés" in out
+
+
+def test_report_invalid_tier_falls_back_to_premium():
+    out = render_html_report(_result(), generated_at=_GEN, tier="gratuit")
+    assert "RAPPORT PREMIUM" in out
+    assert "RAPPORT STANDARD" not in out
+    assert "Analyse détaillée" in out
+    assert "Méthodologie &amp; sources" in out
+
+
+def test_report_standard_tier_still_escapes_hostile_content():
+    hostile = _result(
+        these="<script>alert('xss')</script>",
+        rapport_detaille="## <img src=x onerror=alert(1)>\nTexte normal.",
+        entree="<b>marché</b>",
+    )
+    out = render_html_report(hostile, generated_at=_GEN, tier="standard")
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+    assert "<b>marché</b>" not in out
+    # Contenu hostile du rapport détaillé : de toute façon masqué en standard.
+    assert "<img src=x" not in out
