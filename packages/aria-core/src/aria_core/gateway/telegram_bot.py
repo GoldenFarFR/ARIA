@@ -1555,6 +1555,7 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except ValueError:
         capital_usd = None
     await _reply(message, format_telegram_order(result, capital_usd=capital_usd))
+    tier = (os.environ.get("ARIA_REPORT_TIER") or "premium").strip().lower() or "premium"
 
     # Auto-log de la prédiction (shadow) — construit le track record de pertinence.
     generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
@@ -1585,6 +1586,7 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         report_number=report_number,
         series_number=series_number,
         capital_usd=capital_usd,
+        tier=tier,
     )
     if email_ok:
         await _reply(message, "📧 Rapport détaillé envoyé par email.")

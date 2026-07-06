@@ -95,6 +95,62 @@ _METHODOLOGY_SOURCES = (
     ("Rédaction", "Claude Opus via Spark · contrôle anti-hallucination"),
 )
 
+# ─────────────────────────── Tiers (éditions premium / standard) ───────────────────────────
+# Deux éditions du même rapport : le design (or, émeraude, corps ivoire, structure)
+# est identique — seules les surfaces sombres (hero, pied « certificat », bandes
+# guilloché) et le bandeau de tier changent de teinte. Allowlist fermée, jamais
+# dérivée d'une valeur fournie par le LLM : `tier` ne fait que sélectionner l'une
+# des deux entrées ci-dessous et masquer des sections, jamais injecter du texte.
+_TIER_PREMIUM = "premium"
+_TIER_STANDARD = "standard"
+
+_TIER_THEMES = {
+    _TIER_PREMIUM: {
+        "label": "RAPPORT PREMIUM",
+        # Pastille dorée — même style que la pastille de recommandation BUY.
+        "pill_style": _RECO_COLORS["BUY"],
+        # Un seul linear-gradient (pas de radial-gradient) : sur mobile (Gmail
+        # WebView notamment), un radial-gradient sur une grande surface force
+        # une re-rastérisation à chaque frame de scroll ("effet saccadé,
+        # dessiné ligne par ligne"). Un linear-gradient à stops fixes est
+        # composité une fois et ne coûte rien au scroll.
+        "hero_bg": (
+            "background-color:#0a0e1a;"
+            "background-image:linear-gradient(165deg, #101a2e 0%, #0a0e1a 55%, #0c1020 100%);"
+        ),
+        "dark_base": "#0b1220",   # bandes guilloché (haut/bas) + fond de secours du pied
+        "deep_base": "#080c16",   # bande microprint + point le plus sombre du dégradé du pied
+        "footer_mid": "#0d1424",  # point clair du dégradé du pied « certificat »
+    },
+    _TIER_STANDARD: {
+        "label": "RAPPORT STANDARD",
+        # Pastille rose discrète — bordure + fond translucide (pas de fond plein).
+        "pill_style": "border:1px solid rgba(217,138,138,0.55);background-color:rgba(217,138,138,0.10);color:#e8b9b9;",
+        "hero_bg": (
+            "background-color:#1c0e18;"
+            "background-image:linear-gradient(165deg, #2a1622 0%, #1c0e18 55%, #22111c 100%);"
+        ),
+        "dark_base": "#1c0e18",
+        "deep_base": "#160b12",
+        "footer_mid": "#22111c",
+    },
+}
+
+
+def _theme(tier: str) -> dict:
+    """Résout la palette et le libellé du tier — allowlist fermée (défense en profondeur).
+
+    Toute valeur autre que ``"standard"`` retombe sur ``"premium"`` (défaut sûr) :
+    un tier absent, mal orthographié ou falsifié en amont ne doit jamais faire
+    basculer silencieusement le rendu vers un état non prévu. Les couleurs et
+    libellés proviennent exclusivement de ``_TIER_THEMES`` — jamais dérivés
+    d'une chaîne construite à partir du LLM.
+    """
+    resolved = _TIER_STANDARD if tier == _TIER_STANDARD else _TIER_PREMIUM
+    theme = dict(_TIER_THEMES[resolved])
+    theme["tier"] = resolved
+    return theme
+
 _FONT_SANS = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 _FONT_NUM = "'Helvetica Neue',-apple-system,'Segoe UI',Roboto,Arial,sans-serif"
 _FONT_SERIF = "Georgia,'Times New Roman',serif"
@@ -555,6 +611,7 @@ def render_html_report(
     report_number: int | None = None,
     series_number: int | None = None,
     capital_usd: float | None = None,
+    tier: str = "premium",
 ) -> str:
     """Document HTML autonome, CSS inline — prêt pour l'email (et le futur site).
 
@@ -572,7 +629,15 @@ def render_html_report(
     toutes les analyses ARIA, tous tokens confondus — identité d'édition numérotée.
     ``capital_usd`` (optionnel) convertit la taille suggérée en montants en dollars
     dans l'ordre proposé et dans la section « Potentiel en $ » — omise sans capital.
+    ``tier`` (« premium » par défaut, ou « standard ») sélectionne l'édition : le
+    design (or, émeraude, corps ivoire, structure) est identique, seules les
+    surfaces sombres (hero, pied « certificat », bandes) changent de teinte et le
+    tier « standard » masque l'analyse détaillée, la méthodologie et les
+    références (réservées au premium). Toute valeur hors ``{"standard"}`` retombe
+    sur « premium » (défaut sûr, cf. ``_theme`` — allowlist fermée).
     """
+    theme = _theme(tier)
+    is_standard = theme["tier"] == _TIER_STANDARD
     ref_id, full_hash = report_integrity(result, generated_at=generated_at, recipient=recipient)
     title = _report_title(result)
 
@@ -637,9 +702,33 @@ def render_html_report(
   </tr>"""
 
     gaps_block = _gaps_block_html(result.donnees_insuffisantes)
-    body_html = _render_markdown_body(result.rapport_detaille)
-    methodology_block = _methodology_block_html()
-    references_html = _references_block(result.liens_projet)
+
+    # Analyse détaillée / méthodologie / références : réservées au tier premium.
+    # En standard, ces sections sont entièrement omises (jamais tronquées ni
+    # partiellement affichées) et remplacées par une ligne d'incitation statique.
+    if is_standard:
+        detailed_block = f"""<tr>
+    <td class="ivory pad" style="background-color:{_IVORY};padding:22px 44px 40px;">
+      <div style="font-family:{_FONT_SANS};font-size:12px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">Analyse détaillée, méthodologie et sources&nbsp;: réservées à l'édition Premium.</div>
+    </td>
+  </tr>"""
+        methodology_row = ""
+        references_row = ""
+    else:
+        body_html = _render_markdown_body(result.rapport_detaille)
+        detailed_block = f"""<tr>
+    <td class="ivory pad" style="background-color:{_IVORY};padding:32px 44px 6px;">
+      {_section_header("Analyse détaillée")}
+      <div style="margin-top:18px;">{body_html}</div>
+    </td>
+  </tr>"""
+        methodology_row = _methodology_block_html()
+        references_html = _references_block(result.liens_projet)
+        references_row = f"""<tr>
+    <td class="ivory pad" style="background-color:{_IVORY};padding:12px 44px 40px;">
+      {references_html}
+    </td>
+  </tr>"""
 
     emblem = _emblem_data_uri()
     footer_emblem_img = (
@@ -676,18 +765,18 @@ def render_html_report(
 
 <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">{preheader}</div>
 
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:{_NIGHT};background-image:radial-gradient(120% 60% at 50% 0%, #0d1424 0%, {_NIGHT} 70%);">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:{_NIGHT};">
 <tr>
 <td align="center" style="padding:34px 12px 46px;">
 
   <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px;max-width:640px;width:100%;">
 
   <tr>
-    <td style="height:9px;line-height:9px;font-size:0;border-radius:14px 14px 0 0;border-top:1px solid {_GOLD_DEEP};border-bottom:1px solid rgba(15,107,92,0.65);background-color:#0b1220;background-image:linear-gradient(90deg, rgba(176,134,43,0.55), rgba(230,196,99,0.75) 30%, rgba(31,138,116,0.55) 70%, rgba(15,107,92,0.45));">&nbsp;</td>
+    <td style="height:9px;line-height:9px;font-size:0;border-radius:14px 14px 0 0;border-top:1px solid {_GOLD_DEEP};border-bottom:1px solid rgba(15,107,92,0.65);background-color:{theme['dark_base']};background-image:linear-gradient(90deg, rgba(176,134,43,0.55), rgba(230,196,99,0.75) 30%, rgba(31,138,116,0.55) 70%, rgba(15,107,92,0.45));">&nbsp;</td>
   </tr>
 
   <tr>
-    <td class="hero-pad" style="background-color:#0a0e1a;background-image:radial-gradient(120% 80% at 80% -10%, rgba(201,162,39,0.20) 0%, rgba(201,162,39,0) 55%),linear-gradient(165deg, #101a2e 0%, #0a0e1a 55%, #0c1020 100%);padding:33px 44px 30px;">
+    <td class="hero-pad" style="{theme['hero_bg']}padding:33px 44px 30px;">
 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr>
@@ -697,6 +786,14 @@ def render_html_report(
       </table>
 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
+        <tr>
+          <td align="left">
+            <span style="display:inline-block;padding:5px 12px;border-radius:999px;{theme['pill_style']}font-family:{_FONT_SANS};font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;line-height:1;">{_esc(theme['label'])}</span>
+          </td>
+        </tr>
+      </table>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;">
         <tr>
           <td style="font-family:{_FONT_MONO};font-size:11px;line-height:1.6;color:#93a09b;white-space:nowrap;">{_esc(ref_id)}</td>
         </tr>
@@ -764,7 +861,7 @@ def render_html_report(
   </tr>
 
   <tr>
-    <td class="microprint" style="background-color:#080c16;border-top:1px solid rgba(201,162,39,0.35);border-bottom:1px solid rgba(15,107,92,0.5);padding:4px 10px;overflow:hidden;">
+    <td class="microprint" style="background-color:{theme['deep_base']};border-top:1px solid rgba(201,162,39,0.35);border-bottom:1px solid rgba(15,107,92,0.5);padding:4px 10px;overflow:hidden;">
       <div style="white-space:nowrap;overflow:hidden;font-family:{_FONT_SANS};font-size:7px;line-height:1.6;letter-spacing:0.08em;text-transform:uppercase;color:rgba(230,196,99,0.42);">ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Note&nbsp;certifi&eacute;e&nbsp;{_esc(ref_id)}&nbsp;&middot;&nbsp;Reproduction&nbsp;interdite&nbsp;&middot;&nbsp;ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Note&nbsp;certifi&eacute;e&nbsp;{_esc(ref_id)}&nbsp;&middot;&nbsp;Reproduction&nbsp;interdite&nbsp;&middot;&nbsp;ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Note&nbsp;certifi&eacute;e&nbsp;{_esc(ref_id)}</div>
     </td>
   </tr>
@@ -778,26 +875,17 @@ def render_html_report(
   {watermark_diagonal}
   {gaps_block}
 
-  <tr>
-    <td class="ivory pad" style="background-color:{_IVORY};padding:32px 44px 6px;">
-      {_section_header("Analyse détaillée")}
-      <div style="margin-top:18px;">{body_html}</div>
-    </td>
-  </tr>
+  {detailed_block}
 
-  {methodology_block}
+  {methodology_row}
+
+  {references_row}
 
   <tr>
-    <td class="ivory pad" style="background-color:{_IVORY};padding:12px 44px 40px;">
-      {references_html}
-    </td>
-  </tr>
-
-  <tr>
-    <td style="height:8px;line-height:8px;font-size:0;border-top:1px solid rgba(15,107,92,0.6);border-bottom:1px solid {_GOLD_DEEP};background-color:#0b1220;background-image:linear-gradient(90deg, rgba(15,107,92,0.45), rgba(31,138,116,0.55) 30%, rgba(230,196,99,0.75) 70%, rgba(176,134,43,0.55));">&nbsp;</td>
+    <td style="height:8px;line-height:8px;font-size:0;border-top:1px solid rgba(15,107,92,0.6);border-bottom:1px solid {_GOLD_DEEP};background-color:{theme['dark_base']};background-image:linear-gradient(90deg, rgba(15,107,92,0.45), rgba(31,138,116,0.55) 30%, rgba(230,196,99,0.75) 70%, rgba(176,134,43,0.55));">&nbsp;</td>
   </tr>
   <tr>
-    <td class="pad" style="background-color:#0b1220;background-image:linear-gradient(180deg,#0d1424,#080c16);padding:30px 44px 26px;border-radius:0 0 14px 14px;">
+    <td class="pad" style="background-color:{theme['dark_base']};background-image:linear-gradient(180deg,{theme['footer_mid']},{theme['deep_base']});padding:30px 44px 26px;border-radius:0 0 14px 14px;">
 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr>
