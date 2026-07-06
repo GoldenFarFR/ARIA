@@ -84,22 +84,22 @@ Monorepo `github.com/GoldenFarFR/ARIA` (branche `main`). Repos liés : `aria-ops
 - Clés X/Twitter vides (`config.py:146-150`).
 - `aria_vector_memory=False` (`config.py:197`).
 
-**🏗️ MANQUE (à construire) :**
-1. ~~Lecture on-chain directe (RPC Base / BaseScan / Blockscout)~~ — **FAIT** : `BlockscoutClient` (`services/blockscout.py`) + wallet-tracker smart-money (`services/smart_money.py`, opt-in via `/scan <adresse> smart`). Reste limité à l'API publique Blockscout (pas de RPC brut).
-2. ~~Données fondamentales~~ — **PARTIEL** : `CoinGeckoClient` (`services/coingecko.py`, opt-in via `/scan <adresse> fond`) donne market cap, FDV, supply, catégories, whitepaper. Manque encore : vesting/unlocks détaillés, treasury/équipe, dev-activity, levées.
-3. ~~Boucle mémoire d'investissement~~ — **FAIT** : `investment_memory.py` (table SQLite `investment_thesis`, commandes Telegram `/these`, `/issue`, `/theses`). Journal local thèse→décision→résultat/P&L→leçon, transition atomique open→closed, aucune action financière.
-4. ~~Scoring VC~~ — **FAIT** : `skills/vc_analysis.py` (moteur LLM Spark deep + fallback déterministe, dôme anti-injection), `vc_report.py` (rapport HTML), `vc_delivery.py` + `services/mailer.py` (envoi email sous kill-switch). Commande `/vc <adresse>` → ordre court Telegram + rapport détaillé email. Reste possible : approfondir le qualitatif (équipe/levées, aujourd'hui « donnée insuffisante » si non sourçable).
+**🏗️ MANQUE / FAIT (mis à jour 06/07/2026) :**
+1. ~~Lecture on-chain directe (RPC Base / BaseScan / Blockscout)~~ — **FAIT** : `BlockscoutClient` (`services/blockscout.py`) + wallet-tracker smart-money (`services/smart_money.py`, opt-in `/scan <adresse> smart`). Limité à l'API publique Blockscout (pas de RPC brut).
+2. ~~Données fondamentales~~ — **PARTIEL** : `CoinGeckoClient` (`services/coingecko.py`, opt-in `/scan <adresse> fond`) : market cap, FDV, supply, catégories. Manque : vesting/unlocks, treasury/équipe, dev-activity, levées.
+3. ~~Boucle mémoire d'investissement~~ — **FAIT** : `investment_memory.py` (table `investment_thesis`, commandes `/these` `/issue` `/theses`). Thèse→décision→résultat/P&L→leçon, transition atomique open→closed, aucune action financière.
+4. ~~Scoring VC~~ — **FAIT** : `skills/vc_analysis.py` (moteur LLM Spark deep + fallback déterministe, dôme anti-injection) → `/vc <adresse>` = ordre court Telegram + rapport email HTML institutionnel (`vc_report.py` : emblème, jauge Potentiel, TL;DR, scénarios, méthodo, copyright + filigrane destinataire + empreinte SHA-256 ; `vc_delivery.py` + `services/mailer.py` sous kill-switch). Track record : `vc_predictions.py` (`/track`, `/vcresult`). Reste : approfondir le qualitatif (équipe/levées).
 
 ---
 
-### Prochaine brique prioritaire
-**Fait (06/07/2026) :** client Blockscout Base + wallet-tracker smart-money (4 critères croisés) ; client CoinGecko fondamentaux (market cap, FDV, supply, catégories — ratio FDV/market cap élevé pénalise le score). Tout est additif/opt-in, jamais un déclencheur de trade.
+### Prochaine brique prioritaire (mis à jour 06/07/2026)
+**Les 4 briques manquantes sont livrées** — pipeline `/vc` : ordre Telegram + rapport email HTML « qualité institutionnelle », sous **dôme de sécurité** (audit adversarial 6 angles : 1 faille HIGH prompt-injection trouvée et corrigée, commit `d75fa98`). Track record de pertinence : `/track` (hit-rate, P&L moyen, calibration Potentiel→P&L), `/vcresult <id> <pnl%>` clôt une prédiction. Chaque `/vc` est **auto-loggé (shadow)** pour accélérer l'échantillon statistique (à ~2 trades/mois, se limiter aux positions réelles serait trop lent).
 
-**Les 4 briques manquantes sont livrées** (on-chain, fondamentaux, mémoire d'investissement, scoring VC). Le pipeline `/vc` produit ordre Telegram + rapport email HTML, sous dôme de sécurité (audit adversarial 6 angles : 1 faille HIGH prompt-injection trouvée et corrigée, commit `d75fa98`).
+**Activation email en attente** : poser les 5 variables `ARIA_SMTP_*` dans `/opt/aria/vanguard/backend/.env` du VPS (App Password Gmail — jamais dans le repo, jamais dans le chat), effectives au prochain `docker run`. Sans elles, `/vc` marche (ordre Telegram + « email non configuré »).
 
-**Activation email en attente** : poser les 5 variables `ARIA_SMTP_*` dans `/opt/aria/vanguard/backend/.env` sur le VPS (App Password Gmail — jamais dans le repo), effectives au prochain `docker run`. Sans elles, `/vc` marche (ordre Telegram + « email non configuré »).
+**Outils externes (recherche sourcée 06/07/2026)** : intégrables gratuitement pour la crédibilité → **GoPlus** (audit token honeypot/taxes/mint, Base, REST gratuit) et **Zerion** (PnL on-chain vérifiable, tier dev gratuit, clé requise). **Aucun service tiers ne juge la qualité d'une analyse IA** (confirmé) → juge maison à bâtir avec DeepEval / G-Eval / SelfCheckGPT.
 
-**Pistes suivantes** : (D) site/abonnement payant consommant la même source ; approfondir le qualitatif VC (vesting/unlocks, treasury/équipe) ; alerte proactive (heartbeat) une fois la qualité validée sur ~2 trades/mois.
+**Pistes suivantes (cadrées avec operateur)** : (1) LLM-juge de pertinence branché sur le VC (réutiliser `qi_*`) ; (2) intégration GoPlus (gratuit) puis Zerion ; (3) **phase D — site + abonnement** : version gratuite = rapport hébergé qui s'auto-détruit à 7 jours (urgence + protection) ; premium = PDF + mises à jour de suivi + accès LLM ARIA en direct ; (4) version anglaise (marché plus large).
 
 ---
 
@@ -129,15 +129,25 @@ Un agent qui « croit bien faire » (normaliser, suivre la doc, aligner un exemp
 
 ---
 
-### Modèle recommandé (Claude chat)
-Sonnet 5 + thinking on pour tout prompt touchant prod/sécu/wallet. Sonnet 5 + thinking off pour les questions simples. Opus 4.8 + thinking on réservé aux gros recoupements multi-agents. Effort élevé par défaut.
+### Politique de modèles, subagents & consommation
 
-### Réglages Claude Code — code couleur
-Quand tu formules un prompt à relayer à Claude Code, indique le destinataire sur une ligne séparée au-dessus du bloc, avec un emoji :
-🟢 = ne rien changer, le défaut Claude Code (Sonnet 5, effort high) suffit
-🟠 = Sonnet + /effort xhigh (tâche plus exigeante, pas critique)
-🔴 = /model opus + /effort xhigh (sensible : prod/sécu/wallet)
-Ne jamais descendre sous l'effort « high » pour économiser sur ARIA.
+**Réglage par défaut (choix opérateur) : Sonnet 5 + effort xhigh partout.**
+Sur Max 5x ce réglage passe largement, évite tout arbitrage en cours de session et laisse la marge Opus intacte pour les cas qui le justifient. Ne jamais descendre sous l'effort « high ». À réajuster plus tard si besoin.
+
+**Exception — zone rouge (wallet_guard, permission_mode, kill-switch, config.toml, regles-uniques, archi sensible, secrets) :** basculer ponctuellement en `/model opus` + xhigh, puis revenir à Sonnet. Opus reste un cran au-dessus sur le sensible ; c'est le seul cas où on quitte le défaut.
+
+**Claude chat (session ARIA) :** Sonnet 5 + thinking ON par défaut ; thinking OFF pour les questions simples ; Opus 4.8 + thinking ON réservé au wallet/sécu et aux gros recoupements multi-agents.
+
+**Code couleur (prompts relayés à Claude Code — destinataire sur une ligne séparée au-dessus du bloc, avec emoji) :**
+🟢 = défaut (Sonnet 5, effort xhigh) — la quasi-totalité des cas
+🔴 = /model opus + /effort xhigh — uniquement wallet/sécu/archi sensible
+(plus de 🟠 : xhigh étant le défaut, il fusionne avec le vert)
+
+**Subagents (`.claude/agents/`, optionnels) :** `researcher` en **Haiku** pour les scans on-chain/web (Blockscout/Dex/CoinGecko) et la lecture de repo — rapide et peu coûteux ; `security-auditor` en **Opus** à lancer sur tout changement wallet/garde-fou. Les autres agents suivent le défaut Sonnet xhigh.
+
+**Garde-fou modèles :** un subagent n'exécute jamais d'action financière et ne modifie jamais un fichier de garde-fou — voir Règles absolues (auto-trade) et Piège des garde-fous. Toute proposition d'action sensible remonte à operateur pour validation.
+
+---
 
 ### Format de réponse (valable pour tous les agents, y compris Claude Code — hors code/diffs/plans techniques)
 Réponses courtes et claires, sans remplissage, sans exposer le raisonnement interne. Jamais le mot « Verdict » comme label.
