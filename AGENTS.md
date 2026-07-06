@@ -88,14 +88,18 @@ Monorepo `github.com/GoldenFarFR/ARIA` (branche `main`). Repos liés : `aria-ops
 1. ~~Lecture on-chain directe (RPC Base / BaseScan / Blockscout)~~ — **FAIT** : `BlockscoutClient` (`services/blockscout.py`) + wallet-tracker smart-money (`services/smart_money.py`, opt-in via `/scan <adresse> smart`). Reste limité à l'API publique Blockscout (pas de RPC brut).
 2. ~~Données fondamentales~~ — **PARTIEL** : `CoinGeckoClient` (`services/coingecko.py`, opt-in via `/scan <adresse> fond`) donne market cap, FDV, supply, catégories, whitepaper. Manque encore : vesting/unlocks détaillés, treasury/équipe, dev-activity, levées.
 3. ~~Boucle mémoire d'investissement~~ — **FAIT** : `investment_memory.py` (table SQLite `investment_thesis`, commandes Telegram `/these`, `/issue`, `/theses`). Journal local thèse→décision→résultat/P&L→leçon, transition atomique open→closed, aucune action financière.
-4. **Scoring VC** : équipe, TAM, moat, valorisation, catalyseurs. L'actuel est du signal TA court terme + jugement launchpad qualitatif. C'est désormais la **dernière grosse brique manquante** — et elle peut consommer les 3 briques déjà faites (on-chain, fondamentaux, mémoire).
+4. ~~Scoring VC~~ — **FAIT** : `skills/vc_analysis.py` (moteur LLM Spark deep + fallback déterministe, dôme anti-injection), `vc_report.py` (rapport HTML), `vc_delivery.py` + `services/mailer.py` (envoi email sous kill-switch). Commande `/vc <adresse>` → ordre court Telegram + rapport détaillé email. Reste possible : approfondir le qualitatif (équipe/levées, aujourd'hui « donnée insuffisante » si non sourçable).
 
 ---
 
 ### Prochaine brique prioritaire
 **Fait (06/07/2026) :** client Blockscout Base + wallet-tracker smart-money (4 critères croisés) ; client CoinGecko fondamentaux (market cap, FDV, supply, catégories — ratio FDV/market cap élevé pénalise le score). Tout est additif/opt-in, jamais un déclencheur de trade.
 
-**Prochaine cible : scoring VC structuré** — dernière grosse brique. Agréger on-chain (Blockscout/smart-money) + fondamentaux (CoinGecko) + historique des thèses (`investment_memory`) en un score VC (équipe, TAM, moat, valorisation, catalyseurs) au format Invest_Prompt_v4. À approfondir en parallèle : vesting/unlocks, treasury/équipe.
+**Les 4 briques manquantes sont livrées** (on-chain, fondamentaux, mémoire d'investissement, scoring VC). Le pipeline `/vc` produit ordre Telegram + rapport email HTML, sous dôme de sécurité (audit adversarial 6 angles : 1 faille HIGH prompt-injection trouvée et corrigée, commit `d75fa98`).
+
+**Activation email en attente** : poser les 5 variables `ARIA_SMTP_*` dans `/opt/aria/vanguard/backend/.env` sur le VPS (App Password Gmail — jamais dans le repo), effectives au prochain `docker run`. Sans elles, `/vc` marche (ordre Telegram + « email non configuré »).
+
+**Pistes suivantes** : (D) site/abonnement payant consommant la même source ; approfondir le qualitatif VC (vesting/unlocks, treasury/équipe) ; alerte proactive (heartbeat) une fois la qualité validée sur ~2 trades/mois.
 
 ---
 
