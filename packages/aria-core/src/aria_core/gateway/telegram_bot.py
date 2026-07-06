@@ -1478,20 +1478,24 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     parts = body.split()
     address = parts[0].strip() if parts else ""
-    deep = len(parts) > 1 and parts[1].strip().lower() == "smart"
+    flags = {p.strip().lower() for p in parts[1:]}
+    include_smart_money = "smart" in flags
+    include_fundamentals = "fond" in flags
     if not _SCAN_ADDR_RE.match(address):
         await _reply(
             message,
-            "Usage : /scan <adresse_contrat> [smart]\n"
+            "Usage : /scan <adresse_contrat> [smart] [fond]\n"
             "Adresse invalide — attendu : 0x suivi de 40 caractères hexadécimaux.",
         )
         return
 
     from aria_core.skills.acp_onchain_scan import scan_base_token
 
-    if deep:
-        await _reply(message, "⏳ Analyse smart-money en cours (plus lente, wallet par wallet)...")
-    ctx = await scan_base_token(address, include_smart_money=deep)
+    if include_smart_money or include_fundamentals:
+        await _reply(message, "⏳ Analyse approfondie en cours (plus lente)...")
+    ctx = await scan_base_token(
+        address, include_smart_money=include_smart_money, include_fundamentals=include_fundamentals
+    )
 
     lines = [
         f"🔎 Scan {address}",
