@@ -140,7 +140,7 @@ Quand tu formules un prompt à relayer à Claude Code, indique le destinataire s
 🔴 = /model opus + /effort xhigh (sensible : prod/sécu/wallet)
 Ne jamais descendre sous l'effort « high » pour économiser sur ARIA.
 
-### Format de réponse (Claude chat)
+### Format de réponse (valable pour tous les agents, y compris Claude Code — hors code/diffs/plans techniques)
 Réponses courtes et claires, sans remplissage, sans exposer le raisonnement interne. Jamais le mot « Verdict » comme label.
 **Limite stricte : ~100 tokens maximum par réponse hors code/diffs/prompts à relayer** (ceux-ci gardent la longueur nécessaire à la relecture/sécurité).
 **Alerte automatique** dès 20 messages OU 50 000 tokens cumulés dans la session : signaler le seuil, produire un état d'avancement (points bloquants, prochaines étapes), et proposer une mise à jour de ce fichier d'instructions (.txt téléchargeable) avant que Sylvain ouvre une nouvelle session.
