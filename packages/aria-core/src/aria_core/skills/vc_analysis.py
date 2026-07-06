@@ -110,6 +110,7 @@ class VCResult:
     upside_pct: float | None = None
     downside_pct: float | None = None
     liens_projet: list[dict] = field(default_factory=list)
+    symbol: str = ""
 
     @property
     def actionable(self) -> bool:
@@ -146,6 +147,17 @@ def _sanitize(text: object, max_len: int = _FIELD_MAX) -> str:
 
 
 _MAX_PROJECT_LINKS = 6
+
+
+def _project_symbol(ctx: TokenScanContext) -> str:
+    """Symbole du token (ex. « ATLAS »), jamais issu du LLM — sourcé du scan on-chain.
+
+    Purement décoratif (titre du rapport) : passé par ``_sanitize`` comme toute
+    donnée on-chain non fiable, avant d'être HTML-échappé à l'affichage.
+    """
+    if not ctx.best_pair or not ctx.best_pair.base_symbol:
+        return ""
+    return _sanitize(ctx.best_pair.base_symbol, 20)
 
 
 def _extract_verified_links(ctx: TokenScanContext) -> list[dict]:
@@ -294,6 +306,7 @@ def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
         upside_pct=up if up > 0 else None,
         downside_pct=down if down > 0 else None,
         liens_projet=_extract_verified_links(ctx),
+        symbol=_project_symbol(ctx),
     )
 
 
@@ -375,6 +388,7 @@ def _deterministic_fallback(ctx: TokenScanContext) -> VCResult:
         confiance_globale="faible",
         scenarios=[],
         liens_projet=_extract_verified_links(ctx),
+        symbol=_project_symbol(ctx),
     )
 
 

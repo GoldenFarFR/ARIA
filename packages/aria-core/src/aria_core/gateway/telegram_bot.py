@@ -1580,7 +1580,11 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # Rapport détaillé par email (sous kill-switch, dégradation sûre si SMTP absent).
     email_ok, email_error = await send_vc_report(
-        result, generated_at=generated_at, report_number=report_number, series_number=series_number
+        result,
+        generated_at=generated_at,
+        report_number=report_number,
+        series_number=series_number,
+        capital_usd=capital_usd,
     )
     if email_ok:
         await _reply(message, "📧 Rapport détaillé envoyé par email.")

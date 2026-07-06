@@ -74,6 +74,7 @@ async def send_vc_report(
     generated_at: str,
     report_number: int | None = None,
     series_number: int | None = None,
+    capital_usd: float | None = None,
 ) -> tuple[bool, str | None]:
     """Rend le rapport et l'envoie par email. Retourne ``(ok, error)``, ne lève jamais.
 
@@ -81,6 +82,8 @@ async def send_vc_report(
     ``report_number`` (optionnel) permet à un abonné de distinguer plusieurs
     analyses suivies du même token (« Rapport n°2 »). ``series_number``
     (optionnel) affiche le numéro de série global (« Série 00.047 »).
+    ``capital_usd`` (optionnel) permet d'afficher la position en dollars (taille
+    suggérée x capital du client) — même montant que celui utilisé côté Telegram.
     """
     # 1. Kill-switch fail-closed : en pause (ou état illisible) → on n'envoie rien.
     if outgoing_pause.is_paused(strict=True):
@@ -99,6 +102,7 @@ async def send_vc_report(
         recipient=to,
         report_number=report_number,
         series_number=series_number,
+        capital_usd=capital_usd,
     )
     subject = email_subject(result, generated_at=generated_at, report_number=report_number)
     text_body = _plain_fallback(result)
