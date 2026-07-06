@@ -683,11 +683,11 @@ def render_html_report(
   <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px;max-width:640px;width:100%;">
 
   <tr>
-    <td style="height:9px;line-height:9px;font-size:0;border-radius:14px 14px 0 0;border-top:1px solid {_GOLD_DEEP};border-bottom:1px solid rgba(15,107,92,0.65);background-color:#0b1220;background-image:linear-gradient(90deg, rgba(176,134,43,0.55), rgba(230,196,99,0.75) 30%, rgba(31,138,116,0.55) 70%, rgba(15,107,92,0.45)), repeating-linear-gradient(45deg, rgba(230,196,99,0.8) 0, rgba(230,196,99,0.8) 1px, transparent 1px, transparent 5px), repeating-linear-gradient(-45deg, rgba(31,138,116,0.7) 0, rgba(31,138,116,0.7) 1px, transparent 1px, transparent 5px);">&nbsp;</td>
+    <td style="height:9px;line-height:9px;font-size:0;border-radius:14px 14px 0 0;border-top:1px solid {_GOLD_DEEP};border-bottom:1px solid rgba(15,107,92,0.65);background-color:#0b1220;background-image:linear-gradient(90deg, rgba(176,134,43,0.55), rgba(230,196,99,0.75) 30%, rgba(31,138,116,0.55) 70%, rgba(15,107,92,0.45));">&nbsp;</td>
   </tr>
 
   <tr>
-    <td class="hero-pad" style="background-color:#0a0e1a;background-image:linear-gradient(112deg, rgba(230,196,99,0) 38%, rgba(230,196,99,0.13) 43%, rgba(230,196,99,0) 48%),linear-gradient(112deg, rgba(230,196,99,0) 55%, rgba(230,196,99,0.09) 59%, rgba(230,196,99,0) 63%),linear-gradient(112deg, rgba(31,138,116,0) 68%, rgba(31,138,116,0.10) 71%, rgba(31,138,116,0) 74%),linear-gradient(112deg, rgba(230,196,99,0) 80%, rgba(230,196,99,0.06) 83%, rgba(230,196,99,0) 86%),radial-gradient(130% 90% at 78% -12%, rgba(201,162,39,0.30) 0%, rgba(201,162,39,0) 55%),radial-gradient(90% 60% at 8% 108%, rgba(15,107,92,0.22) 0%, rgba(15,107,92,0) 60%),linear-gradient(165deg, #101a2e 0%, #0a0e1a 55%, #0c1020 100%);padding:33px 44px 30px;">
+    <td class="hero-pad" style="background-color:#0a0e1a;background-image:radial-gradient(120% 80% at 80% -10%, rgba(201,162,39,0.20) 0%, rgba(201,162,39,0) 55%),linear-gradient(165deg, #101a2e 0%, #0a0e1a 55%, #0c1020 100%);padding:33px 44px 30px;">
 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr>
@@ -794,7 +794,7 @@ def render_html_report(
   </tr>
 
   <tr>
-    <td style="height:8px;line-height:8px;font-size:0;border-top:1px solid rgba(15,107,92,0.6);border-bottom:1px solid {_GOLD_DEEP};background-color:#0b1220;background-image:linear-gradient(90deg, rgba(15,107,92,0.45), rgba(31,138,116,0.55) 30%, rgba(230,196,99,0.75) 70%, rgba(176,134,43,0.55)), repeating-linear-gradient(45deg, rgba(230,196,99,0.8) 0, rgba(230,196,99,0.8) 1px, transparent 1px, transparent 5px), repeating-linear-gradient(-45deg, rgba(31,138,116,0.7) 0, rgba(31,138,116,0.7) 1px, transparent 1px, transparent 5px);">&nbsp;</td>
+    <td style="height:8px;line-height:8px;font-size:0;border-top:1px solid rgba(15,107,92,0.6);border-bottom:1px solid {_GOLD_DEEP};background-color:#0b1220;background-image:linear-gradient(90deg, rgba(15,107,92,0.45), rgba(31,138,116,0.55) 30%, rgba(230,196,99,0.75) 70%, rgba(176,134,43,0.55));">&nbsp;</td>
   </tr>
   <tr>
     <td class="pad" style="background-color:#0b1220;background-image:linear-gradient(180deg,#0d1424,#080c16);padding:30px 44px 26px;border-radius:0 0 14px 14px;">
