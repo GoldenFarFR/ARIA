@@ -9,6 +9,7 @@ from aria_core.skills.vc_analysis import VCResult
 from aria_core.skills.vc_report import (
     email_subject,
     render_html_report,
+    report_integrity,
     _render_markdown_body,
 )
 
@@ -101,3 +102,54 @@ def test_markdown_body_escapes_plain_injection():
     out = _render_markdown_body("Texte avec <iframe> injecté")
     assert "<iframe>" not in out
     assert "&lt;iframe&gt;" in out
+
+
+# ----------------------- copyright / filigrane / empreinte -----------------------
+
+
+def test_report_has_copyright_and_confidentiality():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "Tous droits réservés" in out
+    assert "confidentiel" in out.lower()
+    assert "revente interdites" in out
+
+
+def test_report_watermark_present_with_recipient():
+    out = render_html_report(_result(), generated_at=_GEN, recipient="agentaria.zhc@gmail.com")
+    assert "Édition personnelle de" in out
+    assert "agentaria.zhc@gmail.com" in out
+
+
+def test_report_no_watermark_without_recipient():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "Édition personnelle de" not in out
+
+
+def test_report_integrity_hash_present_and_deterministic():
+    r = _result()
+    out = render_html_report(r, generated_at=_GEN)
+    ref_id, full_hash = report_integrity(r, generated_at=_GEN)
+    assert len(full_hash) == 64  # SHA-256 hex
+    assert ref_id in out
+    assert full_hash in out
+    # Déterministe : même entrée → même empreinte.
+    ref_id2, full_hash2 = report_integrity(r, generated_at=_GEN)
+    assert (ref_id, full_hash) == (ref_id2, full_hash2)
+
+
+def test_report_integrity_changes_with_content():
+    base = report_integrity(_result(), generated_at=_GEN)
+    altered = report_integrity(_result(rapport_detaille="## Autre contenu\nModifié."), generated_at=_GEN)
+    assert base != altered  # toute altération change l'empreinte
+
+
+def test_report_integrity_changes_with_recipient():
+    a = report_integrity(_result(), generated_at=_GEN, recipient="a@x.com")
+    b = report_integrity(_result(), generated_at=_GEN, recipient="b@x.com")
+    assert a != b  # empreinte par destinataire → fuite traçable
+
+
+def test_report_recipient_watermark_is_escaped():
+    out = render_html_report(_result(), generated_at=_GEN, recipient="<script>@x.com")
+    assert "<script>@x.com" not in out
+    assert "&lt;script&gt;" in out

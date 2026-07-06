@@ -73,7 +73,7 @@ async def send_vc_report(result: VCResult, *, generated_at: str) -> tuple[bool, 
         return False, "destinataire non configuré (ARIA_VC_REPORT_TO / ARIA_SMTP_USER absents)"
 
     # 3. Rendu + envoi.
-    html_body = render_html_report(result, generated_at=generated_at)
+    html_body = render_html_report(result, generated_at=generated_at, recipient=to)
     subject = email_subject(result)
     text_body = _plain_fallback(result)
 
