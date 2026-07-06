@@ -41,6 +41,7 @@ __pycache__/
 # aria-core runtime / tests locaux
 packages/aria-core/.aria-test-data/
 packages/aria-core/acp_provider_state.json
+packages/aria-core/GoldenFar/
 
 # Ops privés — vivent dans GoldenFarFR/aria-ops (ne pas re-ajouter)
 collegue-memoire/
