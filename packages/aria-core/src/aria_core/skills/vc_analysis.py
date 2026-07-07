@@ -477,7 +477,16 @@ def format_telegram_order(
         f" · {s['risk']} {risk_label(result.risque, lang)}",
     ]
     if result.rr is not None:
-        lines.append(s["rr"].format(rr=result.rr))
+        lines.append(
+            s["rr"].format(
+                rr=result.rr,
+                up=result.upside_pct or 0.0,
+                down=result.downside_pct or 0.0,
+            )
+        )
+        # Un stop très serré gonfle le ratio et le rend fragile (niveau facile à toucher).
+        if result.downside_pct is not None and result.downside_pct < 4 and result.rr >= 4:
+            lines.append(s["rr_tight_stop"].format(down=result.downside_pct))
     if result.actionable and result.recommandation == "BUY":
         taille_line = s["size"].format(pct=result.taille_pct)
         if capital_usd is not None and capital_usd > 0:
