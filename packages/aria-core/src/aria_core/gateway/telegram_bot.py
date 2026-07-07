@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1903,10 +1904,35 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
 
 
+# Garde-fou anti-boucle : Telegram redélivre le MÊME update (même update_id)
+# tant qu'il ne reçoit pas un 200 rapide. On mémorise les derniers update_id
+# traités pour ne jamais relancer deux fois la même analyse, même en cas de
+# redélivrance (backlog webhook, retries). Le check-and-set est synchrone donc
+# atomique vis-à-vis de la boucle asyncio (aucun await entre lecture et écriture).
+_seen_update_ids: "OrderedDict[int, None]" = OrderedDict()
+_SEEN_UPDATE_CAP = 1024
+
+
+def _webhook_update_already_seen(update_id: int | None) -> bool:
+    if update_id is None:
+        return False
+    if update_id in _seen_update_ids:
+        return True
+    _seen_update_ids[update_id] = None
+    while len(_seen_update_ids) > _SEEN_UPDATE_CAP:
+        _seen_update_ids.popitem(last=False)
+    return False
+
+
 async def process_webhook_update(payload: dict) -> None:
     if not _bot_app:
         raise RuntimeError("Bot not initialized")
     from telegram import Update
+
+    update_id = payload.get("update_id") if isinstance(payload, dict) else None
+    if _webhook_update_already_seen(update_id):
+        logger.info("Telegram webhook: update %s déjà traité — ignoré (anti-boucle)", update_id)
+        return
 
     update = Update.de_json(payload, _bot_app.bot)
     await _bot_app.process_update(update)
