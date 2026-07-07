@@ -121,3 +121,13 @@ async def test_weekly_report_shape():
     assert "calibration" in rep and "wallet" in rep
     assert rep["pool_active"] == 1
     assert rep["wallet"]["index"] == 100.0  # aucune position -> neutre
+
+
+@pytest.mark.asyncio
+async def test_self_report_is_readable_text():
+    await screened_pool.upsert_screened(contract="0xP", verdict="SAFE", security_score=75)
+    digest = await wt.self_report()
+    assert isinstance(digest, str)
+    assert "santé" in digest and "Wallet suivi" in digest
+    assert "Pool screené actif : 1" in digest  # pool maigre -> avertissement inclus
+    assert "pool maigre" in digest

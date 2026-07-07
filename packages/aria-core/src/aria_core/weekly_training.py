@@ -125,3 +125,46 @@ async def weekly_report() -> dict:
         "wallet": wallet,
         "pool_active": pool_active,
     }
+
+
+async def self_report() -> str:
+    """Digest « santé & réglages » d'ARIA, destiné à l'opérateur (Telegram).
+
+    C'est ainsi qu'ARIA fait remonter ce qui a besoin d'attention/réglage : état de
+    la calibration, valeur du wallet suivi, taille du pool (assez de candidats ?),
+    et candidats d'amélioration en attente de validation. Texte court, factuel.
+    """
+    rep = await weekly_report()
+    m, w = rep["calibration"], rep["wallet"]
+    lines = ["🩺 ARIA — santé & réglages"]
+
+    hit = m.get("hit_rate")
+    hit_str = f"{hit * 100:.0f}%" if hit is not None else "n/a (pas encore de BUY clôturé)"
+    lines.append(
+        f"• Calibration : {m['closed']} clôturés / {m['open']} ouverts · "
+        f"hit-rate BUY {hit_str} · {m.get('avoid_count', 0)} AVOID (Wall of NO)"
+    )
+    lines.append(
+        f"• Wallet suivi : indice {w['index']} ({w['total_return_pct']:+.1f}%) · "
+        f"VC {w['vc_return_pct']:+.1f}% / spéc {w['spec_return_pct']:+.1f}% · "
+        f"{w['positions_valued']} positions valorisées"
+    )
+
+    pool = rep["pool_active"]
+    warn = " ⚠️ pool maigre" if pool < 20 else ""
+    lines.append(f"• Pool screené actif : {pool}{warn}")
+
+    try:
+        from aria_core import improvement_ledger
+
+        counts = await improvement_ledger.count_by_status()
+        proposed = counts.get("proposed", 0)
+        if proposed:
+            lines.append(f"• 💡 {proposed} amélioration(s) en attente de ta validation (carnet)")
+    except Exception:  # noqa: BLE001 — le digest ne casse jamais
+        pass
+
+    if hit is not None and m.get("closed", 0) >= 10 and hit < 0.4:
+        lines.append("• 🔧 Réglage suggéré : hit-rate bas → durcir le filtre ou revoir le seuil R/R")
+
+    return "\n".join(lines)
