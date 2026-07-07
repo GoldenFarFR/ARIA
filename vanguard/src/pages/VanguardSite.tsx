@@ -15,7 +15,7 @@ const HOLDING = HOLDING_NAME
 const FALLBACK_MARKET: RepertoireItem = {
   id: 'market-fallback',
   name: 'Aria Market',
-  description: 'Flagship subsidiary — DEX signals, watchlist, ARIA insights',
+  description: 'Flagship subsidiary: DEX signals, watchlist, ARIA insights',
   status: 'live',
   category: 'product',
   priority: 1,
@@ -46,7 +46,7 @@ export function VanguardSite() {
 
   const oneLiner =
     setup?.one_liner ??
-    'ZHC holding operated by ARIA — building in public, one brick at a time.'
+    'ZHC holding operated by ARIA, building in public, one brick at a time.'
 
   return (
     <div className="min-h-screen vanguard-minimal text-[#d4d0c8] overflow-x-hidden">
@@ -106,7 +106,7 @@ export function VanguardSite() {
                 {setup?.identity ?? 'ARIA ZHC'}
               </h2>
               <p className="text-sm text-[#6b665c] mt-2 font-light max-w-sm">
-                {setup?.aria_title ?? 'Chief Autonomous Officer'} — ask a question or share an
+                {setup?.aria_title ?? 'Chief Autonomous Officer'}. Ask a question or share an
                 idea via the community banner.
               </p>
             </div>
