@@ -23,6 +23,10 @@ _DISCOVERY_PATHS = (
     "/networks/base/new_pools",
     "/networks/base/trending_pools",
 )
+# Top pools (triés par volume/liquidité) : le terrain de chasse des tokens ÉTABLIS
+# (vérifiés, avec vraie profondeur) — pas la benne des lancements frais. C'est ici
+# qu'on trouve les vrais builders du 85% VC.
+_TOP_POOLS_PATH = "/networks/base/pools"
 
 
 def _extract_token_contracts(payload: object) -> list[str]:
@@ -77,6 +81,78 @@ async def discover_base_tokens(*, fetch=None, limit: int = 100) -> list[str]:
     return list(seen.keys())
 
 
+def _extract_tokens_with_liquidity(payload: object) -> list[tuple[str, float]]:
+    """(adresse, réserve USD du pool) depuis une réponse pools GeckoTerminal.
+
+    ``attributes.reserve_in_usd`` = liquidité du pool. Permet de filtrer À LA
+    DÉCOUVERTE : inutile de scanner un pool sous le plancher (il échouera au filtre).
+    """
+    out: list[tuple[str, float]] = []
+    if not isinstance(payload, dict):
+        return out
+    for item in payload.get("data", []) or []:
+        try:
+            tid = item["relationships"]["base_token"]["data"]["id"]
+            reserve = (item.get("attributes") or {}).get("reserve_in_usd")
+        except (KeyError, TypeError, AttributeError):
+            continue
+        if not isinstance(tid, str):
+            continue
+        addr = tid.split("_", 1)[1] if "_" in tid else tid
+        if not (addr.startswith("0x") and len(addr) == 42):
+            continue
+        try:
+            r = float(reserve) if reserve is not None else 0.0
+        except (TypeError, ValueError):
+            r = 0.0
+        out.append((addr.lower(), r))
+    return out
+
+
+async def discover_top_pools(
+    *, fetch=None, limit: int = 100, min_liquidity_usd: float = 30_000.0
+) -> list[str]:
+    """Tokens des TOP pools Base (établis, liquides), filtrés par un plancher de liquidité.
+
+    Le vrai terrain de chasse du 85% VC : des tokens avec une profondeur réelle, pas
+    des lancements frais illiquides. On ne ramène que ce qui peut PASSER le filtre.
+    """
+    fetch = fetch or _fetch_gt
+    payload = await fetch(_TOP_POOLS_PATH)
+    seen: dict[str, None] = {}
+    for addr, reserve in _extract_tokens_with_liquidity(payload):
+        if reserve >= min_liquidity_usd and addr not in seen:
+            seen[addr] = None
+        if len(seen) >= limit:
+            break
+    return list(seen.keys())
+
+
+async def discover_virtuals_tokens(*, client=None, limit: int = 50) -> list[str]:
+    """Tokens Virtuals en bonding (la niche 15%) — vrais builders d'agents IA.
+
+    ATTENTION : ces tokens sont en courbe de bonding (liquidité mince, souvent non
+    vérifiés au sens Blockscout) -> ils N'entrent PAS dans l'absorbeur standard (ils
+    échoueraient à tort). Réservé au futur pipeline bonding dédié (mode d'analyse
+    adapté). Exposé ici pour ce pipeline, pas pour le crawl VC standard.
+    """
+    if client is None:
+        from aria_core.services.virtuals import virtuals_client as client
+    try:
+        protos = await client.fetch_prototypes()
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.info("base_crawler: découverte Virtuals échouée (%s)", exc)
+        return []
+    seen: dict[str, None] = {}
+    for vt in protos or []:
+        addr = (getattr(vt, "token_address", None) or "").lower()
+        if addr.startswith("0x") and len(addr) == 42 and addr not in seen:
+            seen[addr] = None
+        if len(seen) >= limit:
+            break
+    return list(seen.keys())
+
+
 async def crawl_and_absorb(*, discover=None, absorber=None, limit: int = 50) -> dict:
     """Découvre des tokens Base et les absorbe. Retourne le compte par verdict.
 
@@ -84,7 +160,9 @@ async def crawl_and_absorb(*, discover=None, absorber=None, limit: int = 50) -> 
     → 'kept'/'rejected'/'skip_*' (défaut : token_absorber.absorb). L'absorbeur
     court-circuite déjà les tokens connus, donc pas de gaspillage.
     """
-    disc = discover or discover_base_tokens
+    # Défaut : le terrain de chasse « top pools » (établis, liquides) — pas la benne
+    # des lancements frais. C'est là que vivent les vrais builders du 85% VC.
+    disc = discover or discover_top_pools
     if absorber is None:
         from aria_core.token_absorber import absorb as absorber
 
