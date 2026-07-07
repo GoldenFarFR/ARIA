@@ -56,14 +56,37 @@ docker run -d --name aria-api --restart unless-stopped \
   aria-api
 ```
 
-## 2. Mise à jour (nouvelle version)
+## 2. Mise à jour (nouvelle version) — méthode recommandée
+
+**Utiliser le script de déploiement** `vanguard/deploy.sh`. Il encode la séquence
+sûre (build avec commit injecté → suppression de TOUT conteneur `aria-api` avant
+de lancer → un seul conteneur en `127.0.0.1` → vérif health) :
+
+```bash
+cd /opt/aria && ./vanguard/deploy.sh
+```
+
+Le script échoue explicitement si le health ne confirme pas le commit déployé.
+
+### Pourquoi ce script (incidents évités)
+
+- **commit `unknown`** : un `docker build` sans `--build-arg GIT_COMMIT=…` laisse
+  le health afficher `commit:"unknown"` → on ne sait plus quelle version tourne.
+  Le script passe systématiquement le hash.
+- **conteneurs en double** : un ancien conteneur `aria-api` resté actif en même
+  temps qu'un nouveau a déjà provoqué un incident (double polling / confusion).
+  Le script fait `docker rm -f` sur **tout** conteneur `aria-api` avant le run.
+- **exposition publique** : binding **strictement `127.0.0.1`** (jamais `8000:8000`).
+
+### Mise à jour manuelle (repli, si le script est indisponible)
 
 ```bash
 cd /opt/aria \
-  && git pull \
-  && docker build -f vanguard/Dockerfile -t aria-api . \
-  && docker stop aria-api \
-  && docker rm aria-api \
+  && git pull --ff-only \
+  && docker tag aria-api:latest aria-api:rollback 2>/dev/null; \
+  docker build -f vanguard/Dockerfile \
+       --build-arg GIT_COMMIT="$(git rev-parse HEAD)" -t aria-api . \
+  && docker ps -aq --filter name=aria-api | xargs -r docker rm -f \
   && docker run -d --name aria-api --restart unless-stopped \
        -p 127.0.0.1:8000:8000 \
        -v /opt/aria-data:/app/backend/data \
@@ -76,7 +99,7 @@ Après mise à jour, contrôler :
 ```bash
 docker port aria-api                       # 8000/tcp -> 127.0.0.1:8000
 docker logs --tail=50 aria-api             # boot uvicorn OK
-curl -s http://127.0.0.1:8000/api/health   # health local
+curl -s http://127.0.0.1:8000/api/health   # "commit" doit = le hash déployé
 ```
 
 ---
