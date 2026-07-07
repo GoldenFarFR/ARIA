@@ -62,6 +62,14 @@ async def absorb(contract: str, *, scanner=None, force: bool = False, **screen_k
     # bannit PAS « pour toujours » — un re-scan plus tard pourra trancher. Sinon un bon
     # token scanné pendant un pic d'indisponibilité serait perdu définitivement.
     if not result.hard_fail:
+        # Transparence exigée : si le token est PROMETTEUR mais OPAQUE, ARIA remonte
+        # une requête de recalibrage à l'opérateur au lieu de trancher dans le noir.
+        try:
+            from aria_core.recalibration import maybe_escalate
+
+            await maybe_escalate(ctx, symbol=(ctx.best_pair.base_symbol if ctx.best_pair else ""))
+        except Exception as exc:  # noqa: BLE001 — l'escalade ne doit jamais casser l'absorption
+            logger.info("absorb %s : escalade recalibrage échouée (%s)", contract, exc)
         logger.info("absorb %s : échec mou (données incomplètes) — non banni, à réessayer", contract)
         return "skip_incomplete"
 

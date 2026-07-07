@@ -164,6 +164,18 @@ async def self_report() -> str:
     except Exception:  # noqa: BLE001 — le digest ne casse jamais
         pass
 
+    try:
+        from aria_core import recalibration
+
+        pending = await recalibration.count_pending()
+        if pending:
+            lines.append(
+                f"• 🔎 {pending} token(s) prometteur(s) mais opaque(s) : recalibrage demandé "
+                "(transparence insuffisante pour trancher)"
+            )
+    except Exception:  # noqa: BLE001 — le digest ne casse jamais
+        pass
+
     if hit is not None and m.get("closed", 0) >= 10 and hit < 0.4:
         lines.append("• 🔧 Réglage suggéré : hit-rate bas → durcir le filtre ou revoir le seuil R/R")
 
