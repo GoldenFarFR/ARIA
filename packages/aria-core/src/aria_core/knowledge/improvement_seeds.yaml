@@ -1,0 +1,68 @@
+# Graines du carnet d'auto-amélioration d'ARIA (improvement_ledger).
+#
+# Idées d'upgrades repérées (par l'opérateur ou ARIA) qu'ARIA garde EN MÉMOIRE
+# pour les tester et, si elles améliorent la calibration PROUVÉE, se les greffer
+# (toujours via une PR validée par un humain — jamais d'auto-fusion dans le cœur).
+#
+# `ingest_seeds()` les charge dans la table improvement_candidate (idempotent :
+# dédoublonnage par titre). Ajouter une graine ici = ARIA s'en souvient au boot.
+
+- title: "Scanner l'écosystème Aeon (agents IA)"
+  category: product
+  source: "github.com/aaronjmars/aeon docs/ECOSYSTEM.md"
+  benefit: "nouvelle source de sourcing : tokens d'agents IA à classifier/scanner"
+  seam: "radar/sourcing -> filtre on-chain existant (jamais un déclencheur)"
+
+- title: "Support Solana (non-EVM)"
+  category: data_source
+  source: "écosystème Aeon (projets sur Solana)"
+  benefit: "élargir la couverture hors Base ; MAIS non-EVM = stack entière (RPC Solana, Helius/Solscan, Raydium) + sort du Base-only du lancement (légal). Gros chantier, gaté."
+  seam: "services/solana_scan.py (nouveau) -> abstraction multi-chaîne"
+
+- title: "Réputation du déployeur (historique de rugs)"
+  category: data_source
+  source: "priorité opérateur : le contrat peut être fiable mais le dev malveillant"
+  benefit: "barrière de sécurité v2 : détecter un déployeur ayant déjà rug d'autres tokens"
+  seam: "services/deployer_history.py -> safety_screen (barrière prioritaire)"
+
+- title: "Overlay macro / sentiment (régime de marché)"
+  category: data_source
+  source: "tâche #14 + demande opérateur (événements internationaux, Fear & Greed)"
+  benefit: "moduler l'exposition selon le régime (risk-first) ; section macro dans le rapport"
+  seam: "services/macro.py -> include_macro + curseur d'exposition"
+
+- title: "Radar X (écoute sociale filtrée on-chain)"
+  category: tool
+  source: "tâche #7"
+  benefit: "sourcing autonome de candidats ; le social FILTRE, ne déclenche jamais"
+  seam: "services/x_social.py -> include_social"
+
+- title: "Projection ROI par comparables historiques"
+  category: tool
+  source: "tâche #5"
+  benefit: "replacer un token dans l'histoire (contexte tangible, jamais une promesse)"
+  seam: "moteur de comparables nourri par l'OHLCV (voûte 1)"
+
+- title: "Fact-check indépendant (Facticity / ArAIstotle)"
+  category: tool
+  source: "docs/architecture-extensibilite.md (catalogue)"
+  benefit: "2e dimension de juge : audit factuel indépendant des affirmations du rapport"
+  seam: "services/factcheck.py -> include_factcheck ou dimension de juge"
+
+- title: "Investiguer les outils/repos de gitlawb (GitHub)"
+  category: tool
+  source: "github.com/gitlawb (transmis par l'opérateur)"
+  benefit: "à investiguer : outils potentiellement utiles au sourcing/analyse"
+  seam: "à déterminer après investigation"
+
+- title: "Bankr (agent de trading conversationnel Base/Farcaster)"
+  category: product
+  source: "docs.bankr.bot (transmis par l'opérateur)"
+  benefit: "angles : distribution (portée Farcaster), source de tokens tendance, référence UX. ATTENTION : c'est un agent d'EXÉCUTION -> contredit notre 'zéro exécution' si utilisé pour trader ; utile surtout comme canal/source, pas comme moteur."
+  seam: "distribution/sourcing (jamais l'exécution)"
+
+- title: "Source OHLCV alternative (CoinAPI)"
+  category: data_source
+  source: "swiftask.ai/coinapi (évoqué par l'opérateur)"
+  benefit: "redondance/robustesse de l'OHLCV si GeckoTerminal tombe ; couverture élargie"
+  seam: "services/ohlcv.py (2e fournisseur derrière la même interface)"
