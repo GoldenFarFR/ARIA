@@ -133,6 +133,26 @@ profonde).
 - **Fondateurs** : bonus pour les premiers inscrits (objectif : **20 abonnés d'ici
   déc. 2026**).
 
+### Token ARIA — reporté (phase 3+), sous conditions strictes
+
+**Décision (validée) : le token n'est lancé QUE quand la communauté le réclame
+vraiment ET que TOUS les facteurs sont alignés. Jamais avant, jamais dans la
+précipitation.** Checklist de feu vert (tout requis, une seule case manquante = pas
+de token) :
+
+- ✅ **Produit mûr** + **revenus récurrents réels** + communauté active qui le demande.
+- ✅ **Design PURE UTILITÉ** (accès / features / gouvernance) — **zéro yield, zéro
+  hold-to-earn, zéro promesse d'appréciation** (sinon = valeur mobilière).
+- ✅ **Avocat crypto-securities** : clearance écrite (Howey / MiCA), juridiction
+  choisie, structure conforme.
+- ✅ **Cohérence de marque** : ne contredit PAS « l'IA qui dit non à la hype » (sinon
+  suicide de crédibilité).
+- ✅ **KYC / AML / fiscalité** cadrés.
+
+En attendant : lancement **propre sur USDC + perks**. Le token n'améliore pas le
+lancement, il ajoute une surface légale énorme — il vient *couronner* le succès, pas
+l'amorcer.
+
 ### Évolution : récompense pro-rata pondérée par l'activité (le « coefficient / dénominateur »)
 
 Au-delà du parrainage fixe. Un **pool de récompenses** (mois offerts, perks,
