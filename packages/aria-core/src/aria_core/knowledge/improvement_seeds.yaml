@@ -73,6 +73,36 @@
   benefit: "flux privé de ce que des groupes poussent → signal de COORDINATION (dôme : donnée non fiable, sanitisée, FILTRE jamais déclencheur ; on-chain arbitre). Usage : flag pump organisé (souvent AVOID, exit-liquidity) + dire au client s'il est smart money ou sac de fin de course. LIGNE ROUGE : ARIA n'est jamais le mégaphone du cabal, ne trade pas leurs calls (MAR)."
   seam: "services/group_intel.py (sanitisé) -> include_coordination"
 
+- title: "Analyse du wallet du dev/équipe (comportement on-chain)"
+  category: tool
+  source: "priorité opérateur : distinguer un builder engagé d'un farmer"
+  benefit: "signal de LÉGITIMITÉ contextuel (pas un rejet binaire) à partir du déployeur : (a) le dev détient-il de la supply et combien (skin-in-the-game vs pression de vente) ; (b) a-t-il ACHETÉ avec son argent (aligné) ou juste auto-alloué (farming) ; (c) a-t-il vendu — pour financer le projet (sain) ou pour extraire (rug lent) ; (d) est-il all-in (conviction). Nuance à double tranchant : peu/pas de détention = moins de pression MAIS moins d'engagement. C'est le cœur du jugement humain-vs-bot."
+  seam: "services/dev_wallet.py (creator -> transferts du token) -> include_dev_behavior + section rapport"
+
+- title: "Concentration multi-pools (exclure TOUS les pools, pas seulement le best)"
+  category: fix
+  source: "audit scan #3"
+  benefit: "un token liquide sur plusieurs pools (V2+V3, plusieurs DEX) voit les autres pools comptés comme baleines -> rejet à tort. Exclure l'ensemble des pair_address + holders is_contract connus (bridges, staking)."
+  seam: "_holder_concentration + _apply_onchain_signals (jeu d'exclusion commun)"
+
+- title: "Contrat non vérifié -> plafonner le verdict à CAUTION"
+  category: fix
+  source: "audit scan #5"
+  benefit: "un contrat non vérifié (code opaque) peut atteindre lite_verdict=SAFE sur bonne liquidité -> affiché SAFE à tort dans le chemin lite (Telegram /scan). Pénaliser ou plafonner à CAUTION."
+  seam: "_apply_onchain_signals / _score_and_verdict"
+
+- title: "Détection honeypot élargie (enableTrading/tradingActive/setBots)"
+  category: fix
+  source: "audit scan #6"
+  benefit: "les honeypots courants utilisent enableTrading/tradingActive/setTrading (trading fermé après achat) et setBots/isBot -> non détectés aujourd'hui. Élargir les alias ABI. Sinon marquer explicitement que la détection honeypot est partielle."
+  seam: "services/blockscout _SENSITIVE_FUNCTION_NAMES"
+
+- title: "Seuil dilution FDV/MC trop bas + disciplined_exit trop laxiste"
+  category: fix
+  source: "audit scan #7 et #8"
+  benefit: "FDV/MC>=3x pénalise des lancements low-float normaux (relever ~10x ou gating unlock court terme). disciplined_exit compte un dump total (1 achat+1 vente) comme sortie disciplinée -> exiger >=2 ventes par tranches."
+  seam: "_apply_onchain_signals (dilution) + smart_money.disciplined_exit"
+
 - title: "Source OHLCV alternative (CoinAPI)"
   category: data_source
   source: "swiftask.ai/coinapi (évoqué par l'opérateur)"

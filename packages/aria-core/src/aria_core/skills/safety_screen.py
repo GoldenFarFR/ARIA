@@ -21,6 +21,21 @@ from dataclasses import dataclass, field
 
 from aria_core.skills.acp_onchain_scan import TokenScanContext
 
+# Autorités où un mint externe est légitime (non contrôlé par un wallet de dev).
+_MINT_AUTHORITY_OK = frozenset({"renounced", "launchpad", "contract"})
+
+
+def _mint_is_dev_controlled(ctx: TokenScanContext) -> bool:
+    """True si un mint externe existe ET reste aux mains d'un dev (ou indéterminable).
+
+    Neutralisé (retourne False) si l'autorité est renoncée, un launchpad connu, ou
+    un contrat (timelock/multisig/émission). Fail-closed : un mint dont l'autorité
+    n'a pas pu être résolue ('unknown' ou non renseignée) reste bloquant.
+    """
+    if ctx.has_mint is not True:
+        return False
+    return (ctx.mint_authority or "unknown") not in _MINT_AUTHORITY_OK
+
 # Seuils du pool entraînable (stricts par défaut : on veut du VRAIMENT tradeable,
 # pas juste « pas un scam »). Ajustables par appel.
 DEFAULT_MIN_LIQUIDITY_USD = 30_000.0
@@ -39,6 +54,11 @@ class ScreenResult:
     liquidity_usd: float
     verdict: str  # lite_verdict du scan : SAFE / CAUTION / DANGER
     reasons: list[str] = field(default_factory=list)
+    # True si l'échec vient d'un signal NÉGATIF CONFIRMÉ (mint dev, blacklist,
+    # concentration prouvée, liquidité réelle trop basse...). False si l'échec
+    # tient UNIQUEMENT à une donnée indisponible (429, timeout, holders non
+    # renvoyés) : dans ce cas ce n'est pas un « rejet pour toujours » — à réessayer.
+    hard_fail: bool = False
 
 
 def safety_screen(
@@ -81,8 +101,13 @@ def safety_screen(
     # Barrières « le dev garde le pouvoir » (prioritaires)
     if require_verified and ctx.contract_verified is not True:
         reasons.append("contrat non vérifié (code opaque)")
-    if ctx.has_mint is True:
-        reasons.append("fonction mint présente (le dev peut créer des tokens)")
+    # Mint : bloquant seulement si un DEV en garde le contrôle. Un mint renoncé,
+    # piloté par un launchpad connu (Virtuals/Flaunch...) ou par un contrat
+    # (timelock/multisig/émission) est légitime -> neutralisé (cf. mint_authority).
+    mint_blocks = _mint_is_dev_controlled(ctx)
+    if mint_blocks:
+        detail = ctx.mint_authority_detail or "le dev peut créer des tokens"
+        reasons.append(f"fonction mint contrôlée par un dev ({detail})")
     if ctx.has_blacklist is True:
         reasons.append("fonction blacklist présente (le dev peut bloquer des ventes)")
     if ctx.has_disable_transfers is True:
@@ -103,7 +128,7 @@ def safety_screen(
         and ctx.security_score >= min_score
         and ctx.lite_verdict == "SAFE"
         and (ctx.contract_verified is True or not require_verified)
-        and ctx.has_mint is not True
+        and not mint_blocks
         and ctx.has_blacklist is not True
         and ctx.has_disable_transfers is not True
         and ctx.top_holder_pct is not None
@@ -115,6 +140,20 @@ def safety_screen(
             f"vérifié, holder max {ctx.top_holder_pct:.0f}%, verdict SAFE"
         ]
 
+    # Échec DUR = au moins un signal négatif CONFIRMÉ (pas une simple donnée absente).
+    # Sert à l'absorbeur : un échec purement « données indisponibles » (429/timeout)
+    # ne doit PAS bannir un token « pour toujours » — juste être réessayé plus tard.
+    hard_fail = (not passed) and (
+        (not ctx.valid_address)
+        or (ctx.best_pair is None)
+        or (ctx.best_pair is not None and liq < min_liquidity_usd)
+        or (ctx.contract_verified is False)
+        or mint_blocks_confirmed(ctx)
+        or (ctx.has_blacklist is True)
+        or (ctx.has_disable_transfers is True)
+        or (ctx.top_holder_pct is not None and ctx.top_holder_pct > max_top_holder_pct)
+    )
+
     return ScreenResult(
         contract=ctx.contract,
         passed=passed,
@@ -122,4 +161,14 @@ def safety_screen(
         liquidity_usd=liq,
         verdict=ctx.lite_verdict,
         reasons=reasons,
+        hard_fail=hard_fail,
     )
+
+
+def mint_blocks_confirmed(ctx: TokenScanContext) -> bool:
+    """True si le mint est CONFIRMÉ contrôlé par un dev (owner EOA) — pas 'unknown'.
+
+    'unknown' (autorité non résolue à cause d'une indisponibilité) reste un échec
+    MOU : on ne bannit pas définitivement, on réessaiera.
+    """
+    return ctx.has_mint is True and ctx.mint_authority == "eoa"

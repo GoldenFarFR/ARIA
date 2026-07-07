@@ -58,6 +58,13 @@ async def absorb(contract: str, *, scanner=None, force: bool = False, **screen_k
         )
         return "kept"
 
+    # Échec MOU (données indisponibles : 429/timeout, holders non renvoyés) : on ne
+    # bannit PAS « pour toujours » — un re-scan plus tard pourra trancher. Sinon un bon
+    # token scanné pendant un pic d'indisponibilité serait perdu définitivement.
+    if not result.hard_fail:
+        logger.info("absorb %s : échec mou (données incomplètes) — non banni, à réessayer", contract)
+        return "skip_incomplete"
+
     await screened_pool.record_rejected(
         contract=contract,
         reason="; ".join(result.reasons),
