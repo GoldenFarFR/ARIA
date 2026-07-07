@@ -238,6 +238,16 @@ async def self_report() -> str:
     lines.append(f"• Pool screené actif : {pool}{warn}")
 
     try:
+        from aria_core.skills.candidate_ranking import top_candidates
+
+        tops = await top_candidates(5)
+        if tops:
+            head = ", ".join(f"{t.symbol or t.contract[:8]} ({t.rank_score:.0f})" for t in tops)
+            lines.append(f"• 🥇 Top candidats (tri) : {head}")
+    except Exception:  # noqa: BLE001 — le digest ne casse jamais
+        pass
+
+    try:
         from aria_core import improvement_ledger
 
         counts = await improvement_ledger.count_by_status()
