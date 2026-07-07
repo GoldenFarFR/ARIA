@@ -278,11 +278,14 @@ async def test_check_contract_flags_verified_with_mint(monkeypatch):
                 {
                     "is_verified": True,
                     "name": "SusToken",
+                    # Détection basée sur l'ABI (fonctions réellement appelables),
+                    # pas sur le code source : mint + blacklist externes = vrais pouvoirs.
                     "abi": [
-                        {"type": "function", "name": "mint"},
-                        {"type": "function", "name": "transfer"},
+                        {"type": "function", "name": "mint", "stateMutability": "nonpayable"},
+                        {"type": "function", "name": "blacklist", "stateMutability": "nonpayable"},
+                        {"type": "function", "name": "transfer", "stateMutability": "nonpayable"},
                     ],
-                    "source_code": "contract SusToken { function blacklist(address a) public {} }",
+                    "source_code": "contract SusToken { }",
                 },
             )
         },
@@ -295,6 +298,41 @@ async def test_check_contract_flags_verified_with_mint(monkeypatch):
     assert flags.has_mint is True
     assert flags.has_blacklist is True
     assert flags.has_disable_transfers is False
+
+
+@pytest.mark.asyncio
+async def test_fixed_supply_internal_mint_not_flagged(monkeypatch):
+    """Anti-régression : un ERC20 à offre fixe (`_mint` INTERNE au constructeur) ne
+
+    doit PAS être flaggé has_mint. Avant le fix, la sous-chaîne "mint" du code
+    source déclenchait un faux positif qui rejetait de bons tokens.
+    """
+    client = BlockscoutClient()
+    url = f"{client.base_url}/smart-contracts/0xfix"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "is_verified": True,
+                    "name": "FixedToken",
+                    # Aucune fonction mint EXTERNE dans l'ABI (offre fixe).
+                    "abi": [
+                        {"type": "function", "name": "transfer", "stateMutability": "nonpayable"},
+                        {"type": "function", "name": "totalSupply", "stateMutability": "view"},
+                    ],
+                    # `_mint` interne + un getter mentionnant mint : ne doivent PAS compter.
+                    "source_code": "contract FixedToken { constructor(){ _mint(msg.sender, 1e24); } function mintingFinished() external view returns(bool){return true;} }",
+                },
+            )
+        },
+    )
+
+    flags = await client.check_contract_flags("0xfix")
+    assert flags.available is True
+    assert flags.has_mint is False  # plus de faux positif
+    assert flags.has_blacklist is False
 
 
 @pytest.mark.asyncio

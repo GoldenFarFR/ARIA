@@ -1,0 +1,49 @@
+# Registre des launchpads Base — reconnaissance du contexte de déploiement.
+#
+# POURQUOI : sur un launchpad (Virtuals, Flaunch, Clanker, Zora, Bankr...), l'autorité
+# du contrat (owner/mint) n'est JAMAIS renoncée — elle reste au PROTOCOLE. C'est
+# NORMAL et légitime. Rejeter ces tokens pour « fonction mint présente » serait une
+# erreur : le mint est piloté par l'infrastructure du launchpad, pas par un dev qui
+# peut rug à volonté.
+#
+# USAGE : on compare le CRÉATEUR (déployeur) d'un token à ces adresses. Match →
+# autorité « launchpad » (légitime). La barrière mint est alors neutralisée (le
+# contexte explique le mint), sans baisser la garde sur les AUTRES barrières
+# (liquidité, concentration, vérifié).
+#
+# Adresses en minuscules. Sources : docs/recherche-launchpads-base-2026.md + calibrage
+# live sur le VPS. `confidence` : high (confirmé) / medium (rapporté, à confirmer).
+# ATTENTION : reconnaître un launchpad ne vaut JAMAIS caution du token — un scam peut
+# se lancer sur un launchpad. Ça neutralise seulement le faux positif « mint du dev ».
+
+launchpads:
+  virtuals:
+    label: "Virtuals Protocol"
+    confidence: high
+    addresses:
+      - "0xf66dea7b3e897cd44a5a231c61b6b4423d613259"   # Bonding (courbe)
+
+  flaunch:
+    label: "Flaunch"
+    confidence: high
+    addresses:
+      - "0x51bba15255406cfe7099a42183302640ba7dafdc"   # PositionManager
+
+  clanker:
+    label: "Clanker"
+    confidence: medium
+    addresses:
+      - "0xe85a59c628f7d27878aceb4bf3b35733630083a9"   # deployer v4
+
+  zora:
+    label: "Zora"
+    confidence: medium
+    addresses:
+      - "0x777777751622c0d3258f214f9df38e35bf45baf3"   # ZoraFactory
+
+  # Bankr : cité par l'opérateur comme launchpad. Adresse de déploiement à confirmer
+  # en live (calibrage VPS) avant activation — laissée vide pour ne rien affirmer à tort.
+  bankr:
+    label: "Bankr"
+    confidence: medium
+    addresses: []

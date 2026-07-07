@@ -40,7 +40,31 @@ _DEX_BASE = "https://api.dexscreener.com"
 _BURN_ADDRESSES = {
     "0x0000000000000000000000000000000000000000",
     "0x000000000000000000000000000000000000dead",
+    "0xdead000000000000000042069420694206942069",  # burn « communautaire » répandu
+    "0x0000000000000000000000000000000000000001",  # parfois utilisée comme puits
 }
+
+
+def _is_burn_address(address: str | None) -> bool:
+    """True si l'adresse est un puits de burn (détenteur légitime de grosses parts).
+
+    Au-delà de la liste connue, reconnaît le MOTIF « adresse morte » : un corps
+    entièrement à zéro terminé (ou préfixé) par ``dead`` — ex. 0x…0000dEaD. Élargi
+    volontairement car les projets brûlent vers des variantes multiples de ``dead``.
+    """
+    if not address:
+        return False
+    a = address.strip().lower()
+    if a in _BURN_ADDRESSES:
+        return True
+    body = a[2:] if a.startswith("0x") else a
+    if len(body) != 40:
+        return False
+    if body.endswith("dead") and set(body[:-4]) <= {"0"}:
+        return True
+    if body.startswith("dead") and set(body[4:]) <= {"0"}:
+        return True
+    return False
 
 
 def _holder_concentration(
@@ -65,6 +89,48 @@ def _holder_concentration(
         return None, None, 0
     pcts.sort(reverse=True)
     return pcts[0], sum(pcts[:10]), len(pcts)
+
+
+async def _resolve_mint_authority(ctx: "TokenScanContext", token_address: str) -> None:
+    """Classe l'autorité d'un mint externe (renoncé / launchpad / contrat / dev / inconnu).
+
+    Best-effort et défensif : chaque appel réseau peut échouer sans jamais bloquer
+    (autorité -> 'unknown', prudent en aval). N'est appelée QUE si ``has_mint`` est
+    vrai, donc rare. Peuple ``ctx.mint_authority`` / ``ctx.launchpad``.
+    """
+    from aria_core.skills.mint_authority import classify_authority, match_launchpad
+
+    creator = None
+    owner_addr = None
+    owner_is_contract = None
+    try:
+        info = await blockscout_client.get_address_info(token_address)
+        creator = info.creator_address if info.available else None
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.info("mint_authority: get_address_info(%s) échoué (%s)", token_address, exc)
+
+    # Si déjà reconnu comme launchpad, inutile de lire l'owner (autorité = protocole).
+    if not match_launchpad(creator):
+        try:
+            owner_addr, _ = await blockscout_client.read_owner(token_address)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("mint_authority: read_owner(%s) échoué (%s)", token_address, exc)
+        if owner_addr:
+            try:
+                oinfo = await blockscout_client.get_address_info(owner_addr)
+                owner_is_contract = oinfo.is_contract if oinfo.available else None
+            except Exception as exc:  # noqa: BLE001
+                logger.info("mint_authority: owner info(%s) échoué (%s)", owner_addr, exc)
+
+    verdict = classify_authority(
+        has_mint=ctx.has_mint,
+        creator_address=creator,
+        owner_address=owner_addr,
+        owner_is_contract=owner_is_contract,
+    )
+    ctx.mint_authority = verdict.kind
+    ctx.mint_authority_detail = verdict.detail
+    ctx.launchpad = verdict.launchpad
 _QUALITY_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "acp_quality.yaml"
 
 
@@ -117,6 +183,12 @@ class TokenScanContext:
     market_cap_usd: float | None = None
     fully_diluted_valuation_usd: float | None = None
     categories: list[str] = field(default_factory=list)
+    # Autorité du contrat (résolue seulement si has_mint : un mint externe existe).
+    # Distingue un mint contrôlé par un dev (danger) d'un mint légitime (renoncé,
+    # launchpad connu, ou piloté par un contrat). Voir skills/mint_authority.py.
+    mint_authority: str | None = None  # na/renounced/launchpad/contract/eoa/unknown
+    mint_authority_detail: str = ""
+    launchpad: str | None = None  # label du launchpad si le déployeur est reconnu
 
 
 @lru_cache(maxsize=1)
@@ -257,13 +329,21 @@ def _apply_onchain_signals(
         else:
             if holders.error:
                 flags.append(f"Blockscout (holders) : {holders.error}.")
+            # Exclut le pool LP ET les adresses de burn : elles détiennent
+            # légitimement de grosses parts (une supply brûlée n'est pas une whale).
+            # Cohérent avec _holder_concentration (sinon un token déflationniste est
+            # pénalisé/rejeté à tort).
             known_lp = (pair.pair_address or "").lower() if pair else ""
-            candidates = [h for h in holders.holders if (h.address or "").lower() != known_lp]
+            candidates = [
+                h for h in holders.holders
+                if (h.address or "").lower() != known_lp
+                and (h.address or "").lower() not in _BURN_ADDRESSES
+            ]
             top = max(candidates, key=lambda h: h.percentage or -1.0, default=None)
             if top is not None and top.percentage is not None and top.percentage > 50:
                 flags.append(
                     f"Concentration whale — top holder détient {top.percentage:.1f}% "
-                    "de la supply (hors LP connu)."
+                    "de la supply (hors LP et burn)."
                 )
                 delta -= 20
 
@@ -457,6 +537,13 @@ async def scan_base_token(
         ctx.top_holder_pct = top
         ctx.top10_holder_pct = top10
         ctx.holders_counted = counted
+
+    # Autorité du mint : uniquement si un mint EXTERNE existe (rare depuis le fix ABI).
+    # Un mint légitime (renoncé, launchpad connu, contrat) ne doit pas faire rejeter un
+    # bon token ; seul un mint contrôlé par un wallet de dev est un danger. Best-effort :
+    # toute indisponibilité -> 'unknown' (prudent en aval), jamais bloquant.
+    if ctx.has_mint is True:
+        await _resolve_mint_authority(ctx, ca)
 
     if include_smart_money:
         smart_money = await analyze_smart_money(
