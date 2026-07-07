@@ -241,12 +241,16 @@ def _mount_frontend() -> None:
         if file_path.is_file():
             app.add_api_route(f"/{name}", _file_handler(file_path), methods=["GET"])
 
+    static_root = static.resolve()
+
     @app.get("/{path:path}")
     async def spa_fallback(path: str):
         if path.startswith("api") or path == "ws":
             raise HTTPException(status_code=404)
-        candidate = static / path
-        if candidate.is_file():
+        # Anti path traversal : le fichier servi DOIT rester sous le dossier statique.
+        # Sans cela, "../../etc/passwd" sortait de static et était servi (lecture arbitraire).
+        candidate = (static_root / path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(static_root):
             return FileResponse(candidate)
         return FileResponse(
             static / "index.html",
