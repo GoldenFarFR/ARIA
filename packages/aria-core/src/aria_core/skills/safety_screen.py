@@ -42,6 +42,9 @@ DEFAULT_MIN_LIQUIDITY_USD = 30_000.0
 DEFAULT_MIN_SCORE = 70
 # Au-delà, un seul wallet (hors LP/burn) peut faire s'effondrer le token en vendant.
 DEFAULT_MAX_TOP_HOLDER_PCT = 30.0
+# Au-delà, la taxe de vente rend la sortie trop coûteuse pour un pool entraînable
+# (souvent le signe d'un token extractif / semi-honeypot).
+DEFAULT_MAX_SELL_TAX = 0.15
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,21 @@ def safety_screen(
     if ctx.has_disable_transfers is True:
         reasons.append("désactivation des transferts possible (levier honeypot)")
 
+    # Barrières honeypot dynamiques (GoPlus, data-gated). None (non scanné / indisponible)
+    # → aucun effet : comportement strictement inchangé sur les scans qui ne l'appellent pas.
+    if ctx.is_honeypot is True:
+        reasons.append("honeypot confirmé (GoPlus) — revente bloquée")
+    if ctx.cannot_sell is True:
+        reasons.append("vente totale impossible (GoPlus)")
+    if ctx.sell_tax is not None and ctx.sell_tax > DEFAULT_MAX_SELL_TAX:
+        reasons.append(
+            f"taxe de vente {ctx.sell_tax * 100:.0f}% > {DEFAULT_MAX_SELL_TAX * 100:.0f}% (extractif)"
+        )
+    if ctx.hidden_owner is True:
+        reasons.append("owner caché (GoPlus)")
+    if ctx.can_take_back_ownership is True:
+        reasons.append("reprise de propriété possible (GoPlus)")
+
     # Barrière concentration (baleine)
     if ctx.top_holder_pct is None:
         reasons.append("distribution des holders inconnue (non confirmable)")
@@ -133,6 +151,11 @@ def safety_screen(
         and ctx.has_disable_transfers is not True
         and ctx.top_holder_pct is not None
         and ctx.top_holder_pct <= max_top_holder_pct
+        and ctx.is_honeypot is not True
+        and ctx.cannot_sell is not True
+        and (ctx.sell_tax is None or ctx.sell_tax <= DEFAULT_MAX_SELL_TAX)
+        and ctx.hidden_owner is not True
+        and ctx.can_take_back_ownership is not True
     )
     if passed:
         reasons = [
@@ -152,6 +175,11 @@ def safety_screen(
         or (ctx.has_blacklist is True)
         or (ctx.has_disable_transfers is True)
         or (ctx.top_holder_pct is not None and ctx.top_holder_pct > max_top_holder_pct)
+        or (ctx.is_honeypot is True)
+        or (ctx.cannot_sell is True)
+        or (ctx.sell_tax is not None and ctx.sell_tax > DEFAULT_MAX_SELL_TAX)
+        or (ctx.hidden_owner is True)
+        or (ctx.can_take_back_ownership is True)
     )
 
     return ScreenResult(

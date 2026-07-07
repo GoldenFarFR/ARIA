@@ -197,6 +197,16 @@ class TokenScanContext:
     # ne rejette pas d'office.
     dev_signal: str | None = None
     dev_points: list[str] = field(default_factory=list)
+    # Sécurité dynamique GoPlus (peuplé si include_honeypot ET donnée dispo). Ce que
+    # l'ABI statique de Blockscout ne voit pas : la revente est-elle RÉELLEMENT possible,
+    # taxes réelles d'achat/vente, pouvoirs cachés. None = non scanné ou indisponible →
+    # comportement strictement inchangé (additif, data-gated).
+    is_honeypot: bool | None = None
+    cannot_sell: bool | None = None
+    buy_tax: float | None = None
+    sell_tax: float | None = None
+    hidden_owner: bool | None = None
+    can_take_back_ownership: bool | None = None
 
 
 @lru_cache(maxsize=1)
@@ -490,6 +500,59 @@ def _score_and_verdict(
         ctx.lite_verdict = "CAUTION"
 
 
+# Seuil informatif de taxe honeypot (GoPlus) : au-delà, la taxe est signalée comme
+# extractive dans les risk_flags. La barrière DURE (rejet du pool) vit dans safety_screen.
+_HONEYPOT_TAX_FLAG = 0.10  # 10 %
+
+
+def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
+    """Absorbe la lecture GoPlus dans le contexte — additif, jamais bloquant ici.
+
+    Peuple les champs de décision + risk_flags et ajuste le score sur les seuls signaux
+    POSITIVEMENT confirmés. Une indisponibilité (None / available=False) ne dégrade rien :
+    elle est signalée comme absence de donnée, pas comme risque (doctrine : une panne
+    réseau ne bannit pas un bon token).
+    """
+    if sec is None or not sec.available:
+        detail = (getattr(sec, "error", None) if sec else None) or ONCHAIN_UNAVAILABLE
+        ctx.risk_flags.append(f"GoPlus (honeypot/taxes) : {detail}.")
+        return
+
+    ctx.is_honeypot = sec.is_honeypot
+    ctx.cannot_sell = sec.cannot_sell_all
+    ctx.buy_tax = sec.buy_tax
+    ctx.sell_tax = sec.sell_tax
+    ctx.hidden_owner = sec.hidden_owner
+    ctx.can_take_back_ownership = sec.can_take_back_ownership
+
+    delta = 0
+    if sec.is_honeypot is True:
+        ctx.risk_flags.append("HONEYPOT confirmé (GoPlus) — revente bloquée. À éviter.")
+        delta -= 60
+    if sec.cannot_sell_all is True:
+        ctx.risk_flags.append("Vente totale impossible (GoPlus cannot_sell_all) — levier honeypot.")
+        delta -= 40
+    if sec.sell_tax is not None and sec.sell_tax >= _HONEYPOT_TAX_FLAG:
+        ctx.risk_flags.append(f"Taxe de vente élevée {sec.sell_tax * 100:.0f}% (GoPlus) — extractif.")
+        delta -= 20
+    if sec.buy_tax is not None and sec.buy_tax >= _HONEYPOT_TAX_FLAG:
+        ctx.risk_flags.append(f"Taxe d'achat élevée {sec.buy_tax * 100:.0f}% (GoPlus).")
+        delta -= 10
+    if sec.hidden_owner is True:
+        ctx.risk_flags.append("Owner caché (GoPlus hidden_owner) — pouvoir dissimulé.")
+        delta -= 20
+    if sec.can_take_back_ownership is True:
+        ctx.risk_flags.append("Reprise de propriété possible (GoPlus) — renoncement réversible.")
+        delta -= 20
+
+    if delta:
+        ctx.security_score = max(5, min(95, ctx.security_score + delta))
+    # Un honeypot / revente impossible confirmé = danger sans ambiguïté : on aligne le
+    # verdict lisible pour que l'analyse ET le filtre soient cohérents.
+    if sec.is_honeypot is True or sec.cannot_sell_all is True:
+        ctx.lite_verdict = "DANGER"
+
+
 async def scan_base_token(
     contract: str,
     *,
@@ -497,6 +560,7 @@ async def scan_base_token(
     include_fundamentals: bool = False,
     include_ta: bool = False,
     include_dev_behavior: bool = False,
+    include_honeypot: bool = False,
 ) -> TokenScanContext:
     """Fetch DexScreener + compute heuristic security score.
 
@@ -606,6 +670,15 @@ async def scan_base_token(
     # jamais un rejet d'office). Best-effort ; toute indisponibilité -> 'unknown'.
     if include_dev_behavior:
         await _resolve_dev_behavior(ctx, ca)
+
+    # Sécurité dynamique (honeypot / taxes réelles / pouvoirs cachés) via GoPlus. Désactivé
+    # par défaut (un appel réseau de plus) ; activé sur le chemin d'analyse VC où une vraie
+    # décision se prend. Additif : sans donnée, ctx inchangé.
+    if include_honeypot:
+        from aria_core.services.goplus import goplus_client
+
+        sec = await goplus_client.get_token_security(ca)
+        _apply_honeypot_signals(ctx, sec)
 
     return ctx
 

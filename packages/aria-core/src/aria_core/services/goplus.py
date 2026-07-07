@@ -1,0 +1,227 @@
+"""Client de lecture seule GoPlus Security (Token Security API) — détection honeypot.
+
+Complète le scan ABI « statique » de Blockscout (quelles fonctions EXISTENT) par une
+lecture de COMPORTEMENT dynamique que l'ABI seule ne révèle pas : le token est-il un
+honeypot (revente bloquée), quelles sont les taxes d'achat/vente RÉELLES, l'owner est-il
+caché, peut-il reprendre la propriété, les transferts sont-ils suspendables, etc.
+
+API publique GoPlus, sans clé requise (chain Base = 8453). Lecture seule, aucun appel
+autre que GET. Même politique d'erreurs que blockscout.py (dôme) :
+- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
+- Timeout / 5xx : 1 retry après 5s, puis fallback explicite.
+- Donnée manquante JAMAIS remplacée par une supposition : `available=False` + `error`,
+  et chaque drapeau vaut None (inconnu) plutôt que False quand GoPlus ne répond pas.
+
+Un drapeau None (inconnu) ne bloque jamais à lui seul : seul un signal POSITIVEMENT
+confirmé (honeypot=1, cannot_sell=1, taxe élevée…) pénalise. Cohérent avec la doctrine :
+une panne réseau ne bannit pas un bon token.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+BASE_URL = "https://api.gopluslabs.io/api/v1"
+BASE_CHAIN_ID = "8453"  # Base mainnet
+
+UNAVAILABLE = "donnée GoPlus indisponible"
+
+_FAIL_STREAK_WARN_THRESHOLD = 3
+
+
+@dataclass
+class TokenSecurity:
+    """Lecture de sécurité dynamique d'un token (GoPlus). Chaque drapeau : True (confirmé),
+    False (confirmé absent), ou None (inconnu / GoPlus n'a pas la donnée)."""
+
+    address: str
+    # Le plus important : la revente est-elle possible ?
+    is_honeypot: bool | None = None
+    cannot_sell_all: bool | None = None
+    cannot_buy: bool | None = None
+    # Taxes réelles (fraction : 0.05 = 5 %). None si inconnu.
+    buy_tax: float | None = None
+    sell_tax: float | None = None
+    # Pouvoirs cachés du dev.
+    hidden_owner: bool | None = None
+    can_take_back_ownership: bool | None = None
+    owner_change_balance: bool | None = None
+    transfer_pausable: bool | None = None
+    trading_cooldown: bool | None = None
+    slippage_modifiable: bool | None = None
+    is_blacklisted: bool | None = None       # le contrat PEUT blacklister
+    is_mintable: bool | None = None
+    is_open_source: bool | None = None       # 0 = code non vérifié
+    is_proxy: bool | None = None
+    available: bool = False
+    error: str | None = None
+
+
+def _tri(value: object) -> bool | None:
+    """"1" -> True, "0" -> False, "" / None / autre -> None (inconnu)."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if s == "1":
+        return True
+    if s == "0":
+        return False
+    return None
+
+
+def _tax(value: object) -> float | None:
+    """Convertit une taxe GoPlus ("0.05") en fraction float, ou None si illisible/absente."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if s == "":
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+class GoPlusClient:
+    """Client HTTP async, lecture seule, throttle modéré (API publique sans clé)."""
+
+    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 0.5) -> None:
+        self.base_url = base_url.rstrip("/")
+        self._min_interval = min_interval
+        self._lock = asyncio.Lock()
+        self._last_request = 0.0
+        self._consecutive_failures = 0
+
+    async def _throttle(self) -> None:
+        async with self._lock:
+            now = asyncio.get_event_loop().time()
+            wait = self._min_interval - (now - self._last_request)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_request = asyncio.get_event_loop().time()
+
+    def _record_success(self) -> None:
+        self._consecutive_failures = 0
+
+    def _record_failure(self, detail: str) -> None:
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
+            logger.warning(
+                "goplus: %s echecs consecutifs (dernier: %s) — pas de blocage, pas d'escalade",
+                self._consecutive_failures,
+                detail,
+            )
+        else:
+            logger.info(
+                "goplus: echec appel (%s/%s) — %s",
+                self._consecutive_failures,
+                _FAIL_STREAK_WARN_THRESHOLD,
+                detail,
+            )
+
+    async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
+        """GET avec la politique d'erreurs du dôme. Retourne (data, error)."""
+        url = f"{self.base_url}{path}"
+        attempt_429 = 0
+        retried = False
+
+        while True:
+            await self._throttle()
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.get(url, params=params)
+            except httpx.TransportError as exc:
+                if not retried:
+                    retried = True
+                    await asyncio.sleep(5.0)
+                    continue
+                self._record_failure(f"{url} -> {exc}")
+                return None, f"{UNAVAILABLE} (timeout GoPlus)"
+
+            if response.status_code == 429:
+                attempt_429 += 1
+                if attempt_429 >= 3:
+                    self._record_failure(f"{url} -> HTTP 429 apres {attempt_429} tentatives")
+                    return None, f"{UNAVAILABLE} (rate limit GoPlus)"
+                await asyncio.sleep(0.5 * (2**attempt_429))
+                continue
+
+            if response.status_code >= 500:
+                if not retried:
+                    retried = True
+                    await asyncio.sleep(5.0)
+                    continue
+                self._record_failure(f"{url} -> HTTP {response.status_code}")
+                return None, f"{UNAVAILABLE} (erreur serveur GoPlus)"
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                self._record_failure(f"{url} -> {exc}")
+                return None, f"{UNAVAILABLE} ({exc})"
+
+            self._record_success()
+            return response.json(), None
+
+    async def get_token_security(
+        self, address: str, *, chain_id: str = BASE_CHAIN_ID
+    ) -> TokenSecurity:
+        """Interroge GoPlus Token Security pour un contrat. Best-effort, jamais bloquant."""
+        addr = (address or "").strip()
+        if not addr:
+            return TokenSecurity(address=addr, available=False, error="adresse vide")
+
+        data, error = await self._get_json(
+            f"/token_security/{chain_id}", params={"contract_addresses": addr}
+        )
+        if error is not None:
+            return TokenSecurity(address=addr, available=False, error=error)
+        if not isinstance(data, dict):
+            return TokenSecurity(address=addr, available=False, error=UNAVAILABLE)
+
+        # GoPlus : {"code":1,"message":"OK","result":{"<addr_lower>":{...}}}
+        result = data.get("result")
+        if not isinstance(result, dict) or not result:
+            # code != 1 ou résultat vide = GoPlus n'a pas (encore) la donnée pour ce token.
+            msg = str(data.get("message") or "").strip()
+            return TokenSecurity(
+                address=addr,
+                available=False,
+                error=f"{UNAVAILABLE} (aucune donnée pour ce contrat{': ' + msg if msg else ''})",
+            )
+
+        row = result.get(addr.lower())
+        if not isinstance(row, dict):
+            # Clé insensible à la casse : prend la première entrée si l'adresse exacte manque.
+            row = next((v for v in result.values() if isinstance(v, dict)), None)
+        if not isinstance(row, dict):
+            return TokenSecurity(address=addr, available=False, error=UNAVAILABLE)
+
+        return TokenSecurity(
+            address=addr,
+            is_honeypot=_tri(row.get("is_honeypot")),
+            cannot_sell_all=_tri(row.get("cannot_sell_all")),
+            cannot_buy=_tri(row.get("cannot_buy")),
+            buy_tax=_tax(row.get("buy_tax")),
+            sell_tax=_tax(row.get("sell_tax")),
+            hidden_owner=_tri(row.get("hidden_owner")),
+            can_take_back_ownership=_tri(row.get("can_take_back_ownership")),
+            owner_change_balance=_tri(row.get("owner_change_balance")),
+            transfer_pausable=_tri(row.get("transfer_pausable")),
+            trading_cooldown=_tri(row.get("trading_cooldown")),
+            slippage_modifiable=_tri(row.get("slippage_modifiable")),
+            is_blacklisted=_tri(row.get("is_blacklisted")),
+            is_mintable=_tri(row.get("is_mintable")),
+            is_open_source=_tri(row.get("is_open_source")),
+            is_proxy=_tri(row.get("is_proxy")),
+            available=True,
+            error=None,
+        )
+
+
+goplus_client = GoPlusClient()

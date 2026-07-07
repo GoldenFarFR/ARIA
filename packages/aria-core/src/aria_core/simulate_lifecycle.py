@@ -75,7 +75,7 @@ async def simulate(contract: str | None = None) -> dict:
     _line(f"\n[1] SCAN on-chain complet de {contract}")
     ctx = await scan_base_token(
         contract, include_smart_money=True, include_fundamentals=True,
-        include_ta=True, include_dev_behavior=True,
+        include_ta=True, include_dev_behavior=True, include_honeypot=True,
     )
     _line(f"    score={ctx.security_score} verdict={ctx.lite_verdict} verifie={ctx.contract_verified}")
     _line(f"    mint={ctx.has_mint} autorite={ctx.mint_authority} launchpad={ctx.launchpad}")
