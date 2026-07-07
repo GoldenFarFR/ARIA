@@ -244,6 +244,25 @@ def _build_untrusted_context(ctx: TokenScanContext, history: list[dict]) -> str:
             "Appuie entrée, invalidation et cible sur ces niveaux techniques réels ; "
             "ne propose jamais un niveau non soutenu par ces données."
         )
+    # Contexte de légitimité (drapeaux JUGÉS, pas bruts) : autorité du mint,
+    # launchpad, profondeur de liquidité, comportement du wallet du dev.
+    legit: list[str] = []
+    if ctx.launchpad:
+        legit.append(f"- Lancé via {_sanitize(ctx.launchpad, 40)} (autorité du protocole)")
+    if ctx.has_mint and ctx.mint_authority:
+        legit.append(
+            f"- Fonction mint : autorité '{_sanitize(ctx.mint_authority, 20)}' "
+            f"({_sanitize(ctx.mint_authority_detail, 160)})"
+        )
+    if ctx.liq_mcap_ratio is not None:
+        legit.append(f"- Ratio liquidité/market cap : {ctx.liq_mcap_ratio:.2f}")
+    if ctx.dev_signal:
+        legit.append(f"- Comportement du wallet du dev : {_sanitize(ctx.dev_signal, 20)}")
+        for pt in ctx.dev_points[:5]:
+            legit.append(f"  · {_sanitize(pt, 200)}")
+    if legit:
+        lines.append("Contexte de légitimité (à peser au cas par cas, jamais un rejet automatique) :")
+        lines += legit
     if ctx.risk_flags:
         lines.append("Signaux collectés (on-chain, fondamentaux, smart-money) :")
         lines += [f"- {_sanitize(flag, 300)}" for flag in ctx.risk_flags]
@@ -610,7 +629,8 @@ async def analyze_vc_with_context(
 
     t_start = time.monotonic()
     ctx = await scan_base_token(
-        contract, include_smart_money=True, include_fundamentals=True, include_ta=True
+        contract, include_smart_money=True, include_fundamentals=True, include_ta=True,
+        include_dev_behavior=True,
     )
     t_scan = time.monotonic() - t_start
 
