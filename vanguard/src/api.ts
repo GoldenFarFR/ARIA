@@ -166,6 +166,28 @@ export async function getSubscriptionStatus(): Promise<SubscriptionStatus> {
   return res.json()
 }
 
+export interface TrackRecord {
+  wallet_index: number
+  wallet_return_pct: number
+  vc_return_pct: number
+  spec_return_pct: number
+  positions: number
+  verdicts_total: number
+  verdicts_closed: number
+  hit_rate: number | null
+  avoid_count: number
+  pool_active: number
+  disclaimer: string
+}
+
+// Track-record public (teaser FOMO) : valeur du wallet suivi + calibration agrégée.
+// Le détail des positions reste réservé aux abonnés.
+export async function getTrackRecord(): Promise<TrackRecord> {
+  const res = await fetch(`${PRODUCT_API_URL}/aria/track-record`)
+  if (!res.ok) throw new Error('Track record unavailable')
+  return res.json()
+}
+
 export async function createCheckoutSession(body?: {
   success_url?: string
   cancel_url?: string
