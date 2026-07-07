@@ -439,10 +439,21 @@ def format_telegram_order(result: VCResult, *, capital_usd: float | None = None)
 
 async def analyze_vc(contract: str) -> VCResult:
     """Analyse VC complète d'un token Base. Dôme-hardened, fallback déterministe."""
+    result, _ctx = await analyze_vc_with_context(contract)
+    return result
+
+
+async def analyze_vc_with_context(contract: str) -> tuple[VCResult, TokenScanContext]:
+    """Comme ``analyze_vc`` mais renvoie AUSSI le contexte de scan (faits on-chain).
+
+    Permet au juge (``vc_judge.judge_analysis``) d'auditer l'analyse sur EXACTEMENT
+    les mêmes faits, sans re-scanner le token. ``analyze_vc`` reste la surface
+    publique inchangée (elle ignore le ctx) — aucun appelant existant n'est impacté.
+    """
     ctx = await scan_base_token(contract, include_smart_money=True, include_fundamentals=True)
 
     if not ctx.valid_address:
-        return _deterministic_fallback(ctx)
+        return _deterministic_fallback(ctx), ctx
 
     history = await list_theses_for_token(ctx.contract)
     untrusted = _build_untrusted_context(ctx, history)
@@ -466,11 +477,11 @@ async def analyze_vc(contract: str) -> VCResult:
         raw = None
 
     if not raw:
-        return _deterministic_fallback(ctx)
+        return _deterministic_fallback(ctx), ctx
 
     parsed = _extract_json(raw)
     if parsed is None:
         logger.warning("analyze_vc: sortie LLM non parsable — fallback déterministe")
-        return _deterministic_fallback(ctx)
+        return _deterministic_fallback(ctx), ctx
 
-    return _validate_llm_output(parsed, ctx)
+    return _validate_llm_output(parsed, ctx), ctx
