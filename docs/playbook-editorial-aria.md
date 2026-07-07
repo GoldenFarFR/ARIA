@@ -175,15 +175,34 @@ solide) PUIS par détection.
   abonné (après la fenêtre remboursement/chargeback de 30-60 j), pas à l'inscription.
   → farmer = devoir financer de **vrais abonnements récurrents** = **non rentable**.
 - **Clawback** : remboursement / chargeback → récompense annulée ou jamais vestée.
-- **Non-custodial** : les membres gardent leurs fonds (self-custody, Privy). On ne
-  détient jamais l'argent des autres → réduit fortement le risque « money
-  transmitter ». Distribution par **smart contract** (règles publiques, sans
-  intermédiaire qui custody).
-- **Unicité d'identité — web3-native d'abord** : preuve-de-personne on-chain
-  (World ID, Gitcoin Passport), **réputation / âge on-chain** du wallet, éventuel
-  **dépôt remboursable** (skin in the game) → *un humain = une part*. Le **KYC**
-  est réservé aux **gros retraits** ou là où l'AML l'impose vraiment. Principe
-  « une personne = une part » conservé, mise en œuvre **aussi décentralisée que possible**.
+- **Non-custodial** : les membres gardent leurs fonds (self-custody). On ne détient
+  jamais l'argent des autres → réduit fortement le risque « money transmitter ».
+- **RECEIVE-ONLY — zéro surface de drain (principe de confiance n°1)** : on ne
+  demande **JAMAIS** de signer une transaction qui peut déplacer les fonds du membre
+  (`approve`, `permit`, `setApprovalForAll`, signature de seed). Concrètement :
+  - **Connexion = login social Privy** (Google / e-mail / passkey) — pas de « connect
+    wallet » risqué ;
+  - **Récompense = on ENVOIE** l'USDC sur une **adresse de réception** que le membre
+    colle (recevoir ne requiert **aucune** signature) ;
+  - **Paiement = initié par le membre** (il envoie l'USDC, ou paie par **carte**) — on
+    ne « tire » jamais de son wallet.
+  → **Impossible de se faire drainer chez nous.** C'est aussi un **argument marketing
+  fort** : *« You will never sign a risky approval here. »*
+- **Wallet EMBARQUÉ (Privy) — l'expérience « interne » façon plateforme pro** : à la
+  connexion sociale, un **wallet self-custodial embarqué** est créé (clé sécurisée
+  MPC, **pas de seed à gérer, pas de « connect » externe**). Paiement et réception se
+  font **dans l'app**, sur des transactions **qu'on construit nous-mêmes** (donc
+  toujours saines — jamais une approbation piégée). Fluide, familier, sûr.
+  - ⚠️ **Self-custodial, PAS custodial** : le membre reste **propriétaire de sa clé**.
+    On ne détient **jamais** les clés ni les fonds. Sinon on devient (a) un
+    **custodian** (licence lourde, régulation) et (b) un **honeypot** — le drain
+    viendrait alors de *nous*. Le « top » = **UX interne fluide SANS prendre la garde.**
+  - Le membre peut aussi **exporter** sa clé / utiliser un wallet externe s'il préfère
+    (liberté web3). Par défaut : embarqué = zéro friction, zéro drain.
+- **Unicité d'identité — web3-native d'abord** : preuve-de-personne (World ID,
+  Gitcoin Passport), **réputation / âge on-chain** de l'adresse → *un humain = une
+  part*. **KYC** réservé aux **gros retraits** ou là où l'AML l'impose. Décentralisé
+  autant que possible.
 
 **Détection (en couche supplémentaire) :**
 - **Anti self-referral / rings** : bloquer même moyen de paiement, même IP/device,
