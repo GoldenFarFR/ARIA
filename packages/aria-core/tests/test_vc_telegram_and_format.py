@@ -11,6 +11,7 @@ import pytest
 
 from aria_core.gateway import telegram_bot
 from aria_core.skills.vc_analysis import VCResult, format_telegram_order
+from aria_core.skills.vc_judge import JudgeVerdict
 
 ADDR = "0x" + "a" * 40
 
@@ -189,8 +190,20 @@ async def test_vc_uses_capital_env_var_for_dollar_amount(monkeypatch):
 def _test_mode_mocks(monkeypatch, reasoning: str = "Analyse détaillée : Techno solide, équipe doxxée, traction on-chain réelle."):
     """Câble tous les mocks + renvoie les mocks sensibles (email + track-record)."""
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
-    analyze = AsyncMock(return_value=_result(rapport_detaille=reasoning))
-    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", analyze)
+    result = _result(rapport_detaille=reasoning)
+    # Mode test : le handler passe par analyze_vc_with_context (→ result + ctx).
+    analyze = AsyncMock(return_value=(result, object()))
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", analyze)
+    # Mode normal (réutilisé par un test) : analyze_vc renvoie juste le result.
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", AsyncMock(return_value=result))
+    # Proof engine mocké (testé à part) — verdict neutre pour ne rien casser.
+    monkeypatch.setattr(
+        "aria_core.skills.vc_judge.judge_analysis",
+        AsyncMock(return_value=JudgeVerdict(
+            verdict="solide", score=8, coherence_rr=True,
+            recommandation_juge="garder", resume="Audit OK.", llm_used=False,
+        )),
+    )
     record = AsyncMock(return_value=42)
     count = AsyncMock(return_value=1)
     total = AsyncMock(return_value=46)
@@ -272,7 +285,7 @@ async def test_vc_test_mode_rejects_non_admin(monkeypatch):
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: False)
     monkeypatch.setattr(telegram_bot.settings, "admin_ids", [999])
     analyze = AsyncMock()
-    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", analyze)
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", analyze)
     send_report = AsyncMock(return_value=(True, None))
     monkeypatch.setattr("aria_core.skills.vc_delivery.send_vc_report", send_report)
 
@@ -281,6 +294,32 @@ async def test_vc_test_mode_rejects_non_admin(monkeypatch):
 
     analyze.assert_not_called()
     send_report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_vc_test_mode_runs_judge_and_shows_verdict(monkeypatch):
+    """En mode test, le proof engine (juge) audite l'analyse et son verdict s'affiche."""
+    _analyze, _send, _record, _count, _total = _test_mode_mocks(monkeypatch)
+    verdict = JudgeVerdict(
+        verdict="fragile", score=4, coherence_rr=False, recommandation_juge="ajuster",
+        resume="Trous factuels détectés.", points_faibles=["Équipe non vérifiable."],
+        claims_non_etayes=["« équipe » non corroborée par un fait on-chain."], llm_used=True,
+    )
+    judge = AsyncMock(return_value=verdict)
+    monkeypatch.setattr("aria_core.skills.vc_judge.judge_analysis", judge)
+
+    update = FakeUpdate(f"/vc {ADDR} test")
+    await telegram_bot._handle_vc(update, FakeContext())
+
+    # Le juge est appelé avec le VCResult (1er arg) et le ctx (2e arg).
+    judge.assert_awaited_once()
+    args, _ = judge.call_args
+    assert isinstance(args[0], VCResult)
+    joined = "\n".join(update.message.replies)
+    assert "proof engine" in joined.lower()
+    assert "fragile" in joined
+    assert "Trous factuels" in joined
+    assert "non étayées" in joined
 
 
 @pytest.mark.asyncio

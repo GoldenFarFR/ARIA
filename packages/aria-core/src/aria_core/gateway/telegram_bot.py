@@ -1512,6 +1512,30 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _reply(message, "\n".join(lines))
 
 
+def _format_judge_verdict(v) -> str:
+    """Formatte le verdict du proof engine (juge) pour Telegram.
+
+    Le texte du juge est déjà sanitisé en amont (``vc_judge`` neutralise les
+    chevrons) — on se contente de le mettre en forme.
+    """
+    emoji = {"solide": "🟢", "fragile": "🟡", "rejeté": "🔴"}.get(v.verdict, "⚪")
+    src = "juge LLM" if v.llm_used else "juge déterministe (LLM indispo)"
+    lines = [
+        f"🧑‍⚖️ MODE TEST — Audit du proof engine ({src})",
+        f"{emoji} Verdict : {v.verdict} · Score {v.score}/10 · R/R cohérent : {'oui' if v.coherence_rr else 'non'}",
+        f"Recommandation du juge : {v.recommandation_juge}",
+    ]
+    if v.resume:
+        lines += ["", v.resume]
+    if v.points_forts:
+        lines += ["", "✅ Points forts :"] + [f"• {p}" for p in v.points_forts[:5]]
+    if v.points_faibles:
+        lines += ["", "⚠️ Points faibles :"] + [f"• {p}" for p in v.points_faibles[:5]]
+    if v.claims_non_etayes:
+        lines += ["", "🚩 Affirmations non étayées :"] + [f"• {c}" for c in v.claims_non_etayes[:5]]
+    return "\n".join(lines)
+
+
 async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/vc <adresse> [test] — analyse VC complète : ordre court ici, rapport détaillé par email.
 
@@ -1552,12 +1576,17 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from datetime import datetime, timezone
 
     from aria_core import vc_predictions
-    from aria_core.skills.vc_analysis import analyze_vc, format_telegram_order
+    from aria_core.skills.vc_analysis import analyze_vc, analyze_vc_with_context, format_telegram_order
     from aria_core.skills.vc_delivery import send_vc_report
     from aria_core.skills.vc_report import report_integrity
 
     await _reply(message, "⏳ Analyse VC en cours (Spark deep + données on-chain)...")
-    result = await analyze_vc(address)
+    if test_mode:
+        # Mode test : on récupère aussi le contexte de scan pour l'audit du juge.
+        result, ctx = await analyze_vc_with_context(address)
+    else:
+        result = await analyze_vc(address)
+        ctx = None
     capital_raw = os.environ.get("ARIA_CAPITAL_USD", "").strip()
     try:
         capital_usd = float(capital_raw) if capital_raw else None
@@ -1574,6 +1603,16 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if len(rapport) > limit:
             rapport = rapport[:limit].rstrip() + "\n\n… (raisonnement tronqué pour Telegram)"
         await _reply(message, "🧪 MODE TEST — Raisonnement complet :\n\n" + rapport)
+        # Proof engine (#2) — le juge adverse audite l'analyse sur les MÊMES faits
+        # on-chain. Mode test admin uniquement : aucun coût/latence ajouté au flux
+        # client, c'est un outil de contrôle qualité pour l'opérateur.
+        try:
+            from aria_core.skills.vc_judge import judge_analysis
+
+            verdict = await judge_analysis(result, ctx)
+            await _reply(message, _format_judge_verdict(verdict))
+        except Exception as exc:  # noqa: BLE001 — l'audit ne doit jamais casser le mode test
+            logger.warning("proof engine (juge) échoué: %s", exc)
         await _reply(
             message,
             "🧪 MODE TEST — non envoyé, non enregistré.\n"
