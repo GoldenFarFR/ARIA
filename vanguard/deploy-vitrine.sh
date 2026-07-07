@@ -71,10 +71,19 @@ nginx -t
 systemctl reload nginx
 
 echo "==> [4/4] vérification (vue du VPS)"
-code="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $HOST" http://127.0.0.1/)"
-if [ "$code" = "200" ] && curl -s -H "Host: $HOST" http://127.0.0.1/ | grep -qiE "aria|vanguard"; then
-    echo "✅ OK — la vitrine répond (HTTP $code) et sert bien son contenu sur $HOST"
+# Après certbot, le vhost :80 redirige (301) vers HTTPS — on teste donc HTTPS en
+# priorité (via --resolve, sur le vrai certificat), avec repli HTTP avant certbot.
+code="$(curl -s -o /dev/null -w '%{http_code}' --resolve "$HOST:443:127.0.0.1" "https://$HOST/" 2>/dev/null || true)"
+if [ "$code" = "200" ]; then
+    scheme="https"; body="$(curl -s --resolve "$HOST:443:127.0.0.1" "https://$HOST/" 2>/dev/null || true)"
 else
-    echo "⚠️  réponse inattendue (HTTP $code) — vérifie le server block nginx (vitrine.conf)"
+    scheme="http"
+    code="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $HOST" "http://127.0.0.1/" 2>/dev/null || true)"
+    body="$(curl -s -H "Host: $HOST" "http://127.0.0.1/" 2>/dev/null || true)"
+fi
+if [ "$code" = "200" ] && printf '%s' "$body" | grep -qiE "aria|vanguard"; then
+    echo "✅ OK — la vitrine répond (HTTP $code via $scheme) et sert son contenu sur $HOST"
+else
+    echo "⚠️  réponse inattendue (HTTP $code via $scheme) — vérifie le server block nginx"
     exit 1
 fi
