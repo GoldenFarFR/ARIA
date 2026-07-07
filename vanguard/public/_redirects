@@ -1,0 +1,8 @@
+# Fallback SPA (Cloudflare Pages / Netlify).
+# Le routing de la vitrine est CÔTÉ CLIENT (App.tsx lit window.location.pathname :
+#   /         -> vitrine ZHC
+#   /reports  -> page produit publique
+# ). Sans cette règle, un accès DIRECT à /reports (lien partagé, reload, bookmark)
+# renvoie 404 sur l'hébergement statique. Cette ligne sert index.html (code 200)
+# pour toute route inconnue, et React prend le relais.
+/*    /index.html   200
