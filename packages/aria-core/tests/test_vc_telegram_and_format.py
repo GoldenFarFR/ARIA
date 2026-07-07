@@ -183,6 +183,106 @@ async def test_vc_uses_capital_env_var_for_dollar_amount(monkeypatch):
     assert "$75" in update.message.replies[1]  # 5% de $1500
 
 
+# ----------------------- /vc MODE TEST admin -----------------------
+
+
+def _test_mode_mocks(monkeypatch, reasoning: str = "Analyse détaillée : Techno solide, équipe doxxée, traction on-chain réelle."):
+    """Câble tous les mocks + renvoie les mocks sensibles (email + track-record)."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+    analyze = AsyncMock(return_value=_result(rapport_detaille=reasoning))
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", analyze)
+    record = AsyncMock(return_value=42)
+    count = AsyncMock(return_value=1)
+    total = AsyncMock(return_value=46)
+    monkeypatch.setattr("aria_core.vc_predictions.record_prediction", record)
+    monkeypatch.setattr("aria_core.vc_predictions.count_predictions_for_contract", count)
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", total)
+    send_report = AsyncMock(return_value=(True, None))
+    monkeypatch.setattr("aria_core.skills.vc_delivery.send_vc_report", send_report)
+    return analyze, send_report, record, count, total
+
+
+@pytest.mark.asyncio
+async def test_vc_test_mode_shows_reasoning_no_email_no_record(monkeypatch):
+    analyze, send_report, record, count, total = _test_mode_mocks(monkeypatch)
+
+    update = FakeUpdate(f"/vc {ADDR} test")
+    await telegram_bot._handle_vc(update, FakeContext())
+
+    # L'analyse tourne normalement...
+    analyze.assert_awaited_once_with(ADDR)
+    # ...mais AUCUN email et AUCUNE écriture/incrément track-record.
+    send_report.assert_not_called()
+    record.assert_not_called()
+    count.assert_not_called()
+    total.assert_not_called()
+
+    joined = "\n".join(update.message.replies)
+    assert "MODE TEST" in joined
+    assert "non envoyé" in joined.lower()
+    assert "non enregistré" in joined.lower()
+    # Raisonnement complet affiché.
+    assert "Techno solide" in joined
+    # Ordre formaté toujours affiché.
+    assert "BUY" in joined
+
+
+@pytest.mark.asyncio
+async def test_vc_test_mode_flag_is_case_insensitive(monkeypatch):
+    _analyze, send_report, record, _count, _total = _test_mode_mocks(monkeypatch)
+
+    update = FakeUpdate(f"/vc {ADDR} TEST")
+    await telegram_bot._handle_vc(update, FakeContext())
+
+    send_report.assert_not_called()
+    record.assert_not_called()
+    assert "MODE TEST" in "\n".join(update.message.replies)
+
+
+@pytest.mark.asyncio
+async def test_vc_test_mode_truncates_long_reasoning(monkeypatch):
+    long_reasoning = "X" * 5000
+    _analyze, _send, _record, _count, _total = _test_mode_mocks(monkeypatch, reasoning=long_reasoning)
+
+    update = FakeUpdate(f"/vc {ADDR} test")
+    await telegram_bot._handle_vc(update, FakeContext())
+
+    joined = "\n".join(update.message.replies)
+    assert "tronqué" in joined
+    # Chaque message reste sous la limite Telegram gérée par _reply (4000).
+    assert all(len(r) <= 4000 for r in update.message.replies)
+
+
+@pytest.mark.asyncio
+async def test_vc_address_alone_is_normal_mode(monkeypatch):
+    """Une adresse seule (sans `test`) = mode normal : email + enregistrement appelés."""
+    _analyze, send_report, record, _count, _total = _test_mode_mocks(monkeypatch)
+
+    update = FakeUpdate(f"/vc {ADDR}")
+    await telegram_bot._handle_vc(update, FakeContext())
+
+    send_report.assert_awaited_once()
+    record.assert_awaited_once()
+    joined = "\n".join(update.message.replies)
+    assert "MODE TEST" not in joined
+
+
+@pytest.mark.asyncio
+async def test_vc_test_mode_rejects_non_admin(monkeypatch):
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: False)
+    monkeypatch.setattr(telegram_bot.settings, "admin_ids", [999])
+    analyze = AsyncMock()
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", analyze)
+    send_report = AsyncMock(return_value=(True, None))
+    monkeypatch.setattr("aria_core.skills.vc_delivery.send_vc_report", send_report)
+
+    update = FakeUpdate(f"/vc {ADDR} test")
+    await telegram_bot._handle_vc(update, FakeContext())
+
+    analyze.assert_not_called()
+    send_report.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_vc_reports_email_failure_without_crashing(monkeypatch):
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)

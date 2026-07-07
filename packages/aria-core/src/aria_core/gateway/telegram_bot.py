@@ -1513,10 +1513,15 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/vc <adresse> — analyse VC complète : ordre court ici, rapport détaillé par email.
+    """/vc <adresse> [test] — analyse VC complète : ordre court ici, rapport détaillé par email.
 
     Lecture seule + proposition. Aucune exécution : l'ordre est signé manuellement
     sur Tangem par l'opérateur.
+
+    MODE TEST admin — `/vc <adresse> test` : l'analyse tourne et le raisonnement
+    complet est affiché ici, mais AUCUN email n'est envoyé et AUCUNE prédiction
+    n'est enregistrée dans le track-record (compteurs inchangés). Pour tester sans
+    polluer les stats ni spammer.
     """
     if not await _admin_check_reply(update):
         return
@@ -1529,7 +1534,11 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not body and context.args:
         body = " ".join(context.args).strip()
 
-    address = body.split()[0].strip() if body else ""
+    parts = body.split()
+    # Flag `test` en fin d'arguments (insensible à la casse) — réservé à l'admin
+    # (le handler entier est déjà admin-gated ci-dessus).
+    test_mode = len(parts) >= 2 and parts[-1].lower() == "test"
+    address = parts[0].strip() if parts else ""
     if not _SCAN_ADDR_RE.match(address):
         await _reply(
             message,
@@ -1555,6 +1564,23 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except ValueError:
         capital_usd = None
     await _reply(message, format_telegram_order(result, capital_usd=capital_usd))
+
+    if test_mode:
+        # MODE TEST : on affiche le raisonnement complet mais on n'envoie aucun
+        # email et on n'écrit rien dans le track-record (compteurs inchangés).
+        rapport = result.rapport_detaille or "(aucun raisonnement détaillé disponible)"
+        # Tronque proprement avec un marqueur ; _reply plafonne ensuite à 4000.
+        limit = 3900
+        if len(rapport) > limit:
+            rapport = rapport[:limit].rstrip() + "\n\n… (raisonnement tronqué pour Telegram)"
+        await _reply(message, "🧪 MODE TEST — Raisonnement complet :\n\n" + rapport)
+        await _reply(
+            message,
+            "🧪 MODE TEST — non envoyé, non enregistré.\n"
+            "Aucun email émis, aucune prédiction ajoutée au track-record, compteurs inchangés.",
+        )
+        return
+
     tier = (os.environ.get("ARIA_REPORT_TIER") or "premium").strip().lower() or "premium"
 
     # Auto-log de la prédiction (shadow) — construit le track record de pertinence.
