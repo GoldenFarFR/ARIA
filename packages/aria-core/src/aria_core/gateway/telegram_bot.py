@@ -372,6 +372,7 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(
         update.message,
         f"ARIA — Status (opérateur)\n"
+        f"Build commit: {commit}\n"
         f"Your ID: {user.id if user else '?'} — admin ✅\n"
         f"Sorties (tweets/X/dépenses/jobs): {sorties}\n"
         f"Indice ARIA: {qi} / 1000 (demande en texte libre)\n"
