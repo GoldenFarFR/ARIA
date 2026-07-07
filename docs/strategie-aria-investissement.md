@@ -118,6 +118,30 @@ seams `include_<x>` (fact-check, macro, radar X, comparables…). Règle honnêt
 ne monte la note **que s'il améliore la calibration PROUVÉE** sur le track-record. On
 branche, on mesure, on garde les bons. La note se **gagne**, ne se décrète pas.
 
+## 6 bis. Objectifs de rendement — échelle par palier d'expérience
+
+Objectifs **par palier**, débloqués au fur et à mesure qu'ARIA **prouve** le palier
+précédent (lié au pacte `docs/protocole-argent-reel.md`) :
+
+| Palier | Profil de risque | Objectif indicatif / an | Débloqué quand |
+|---|---|---|---|
+| 0 (départ) | prudent, capital protégé d'abord | viser **~x1,5** (+50 %) | dès le départ (en suivi) |
+| 1 | risque supérieur assumé | viser **~x2** | le palier 0 est prouvé sur le track-record |
+| 2+ | plus agressif | au-delà | palier précédent prouvé, régimes variés |
+
+**⚠️ Cadrage honnête, non négociable — le mot « certain » n'a pas sa place.**
+- **Aucun rendement crypto n'est garanti ni certain.** « +50 %/an safe et certain »
+  **n'existe pas** — quiconque le promet fait un Ponzi (c'est LE pitch d'arnaque). ARIA,
+  « l'IA qui dit non à la fausse certitude », ne peut pas se le promettre à elle-même.
+- Ce sont des **OBJECTIFS** (viser), pas des promesses. Certaines années : +200 % ;
+  d'autres : −30 %. Le risque de perte reste réel à chaque palier.
+- **« Safe » = la discipline** (filtre sécurité, R/R ≥ 3:1, protection du capital,
+  éviter les −100 %), qui **maximise les chances** d'atteindre l'objectif et **minimise
+  la ruine** — pas l'absence de risque. Il n'y a **pas** de +50 % sans risque (le sans-
+  risque, c'est ~4-5 %/an). Ne pas perdre est 80 % du travail : survivre pour composer.
+- L'échelle monte avec l'**expérience PROUVÉE** d'ARIA, jamais avec l'espoir. C'est ce
+  qui transforme « j'aimerais que ce soit certain » en « c'est démontré ».
+
 ## 7. Exécution & garde-fous
 
 - Aujourd'hui : **100 % suivi (paper)**, aucun argent réel, aucun wallet, rien à signer.
