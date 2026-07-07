@@ -97,6 +97,34 @@ def match_launchpad(creator_address: str | None) -> str | None:
     return _launchpad_index().get(str(creator_address).strip().lower())
 
 
+@lru_cache(maxsize=1)
+def _norms_by_label() -> dict[str, dict]:
+    """Table label du launchpad -> ses normes de tokenomics (bonding, alloc, liq...)."""
+    out: dict[str, dict] = {}
+    if not _LAUNCHPADS_PATH.is_file():
+        return out
+    try:
+        cfg: dict[str, Any] = yaml.safe_load(_LAUNCHPADS_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return out
+    for _key, block in (cfg.get("launchpads") or {}).items():
+        label = str((block or {}).get("label") or _key)
+        out[label] = dict((block or {}).get("norms") or {})
+    return out
+
+
+def launchpad_norms(label: str | None) -> dict:
+    """Normes de tokenomics d'un launchpad (dict vide si inconnu)."""
+    if not label:
+        return {}
+    return _norms_by_label().get(label, {})
+
+
+def is_bonding_launchpad(label: str | None) -> bool:
+    """True si le launchpad fonctionne par courbe de bonding (liquidité exponentielle)."""
+    return bool(launchpad_norms(label).get("bonding_curve"))
+
+
 def classify_authority(
     *,
     has_mint: bool | None,

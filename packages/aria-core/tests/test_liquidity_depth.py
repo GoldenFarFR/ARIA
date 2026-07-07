@@ -38,3 +38,19 @@ def test_custom_min_ratio_per_launchpad():
 
 def test_default_floor_is_30pct():
     assert DEFAULT_MIN_RATIO == 0.30
+
+
+def test_bonding_curve_never_penalized():
+    # même un ratio très bas (5%) ne doit PAS être 'thin' sur une courbe de bonding
+    d = assess_liquidity_depth(5_000, 100_000, bonding_curve=True)
+    assert d.healthy is None          # ni sain ni fragile : non pertinent
+    assert d.ratio == 0.05            # ratio conservé pour info
+    assert "bonding" in d.note
+
+
+def test_bonding_flag_reads_from_launchpad_norms():
+    from aria_core.skills.mint_authority import is_bonding_launchpad
+
+    assert is_bonding_launchpad("Virtuals Protocol") is True
+    assert is_bonding_launchpad("Clanker") is False
+    assert is_bonding_launchpad(None) is False

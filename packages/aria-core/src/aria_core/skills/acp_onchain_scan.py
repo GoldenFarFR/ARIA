@@ -573,10 +573,17 @@ async def scan_base_token(
             ctx.fully_diluted_valuation_usd = fundamentals.fully_diluted_valuation_usd
             ctx.categories = list(fundamentals.categories or [])
             # Profondeur de liquidité : marché mince par rapport à la valorisation ?
+            # Neutralisé sur une courbe de bonding (liquidité exponentielle, mince au
+            # départ -> le ratio n'est pas un signal de fragilité).
             if ctx.market_cap_usd and ctx.best_pair:
                 from aria_core.skills.liquidity_depth import assess_liquidity_depth
+                from aria_core.skills.mint_authority import is_bonding_launchpad
 
-                depth = assess_liquidity_depth(ctx.best_pair.liquidity_usd, ctx.market_cap_usd)
+                depth = assess_liquidity_depth(
+                    ctx.best_pair.liquidity_usd,
+                    ctx.market_cap_usd,
+                    bonding_curve=is_bonding_launchpad(ctx.launchpad),
+                )
                 ctx.liq_mcap_ratio = depth.ratio
                 if depth.healthy is False:
                     ctx.risk_flags.append(f"Liquidité : {depth.note}.")
