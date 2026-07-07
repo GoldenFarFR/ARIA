@@ -186,6 +186,34 @@ HEARTBEAT_TASKS = [
         interval_minutes=1440,
         enabled=True,
     ),
+    HeartbeatTask(
+        id="vc_crawl",
+        name="BASE token crawl",
+        description="Decouvre les tokens Base -> filtre securite -> base propriataire",
+        interval_minutes=360,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="vc_resolve",
+        name="VC predictions resolve",
+        description="Cloture les pronostics a echeance via le prix OHLCV reel",
+        interval_minutes=1440,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="vc_weekly_forecast",
+        name="VC weekly forecast",
+        description="Tire 20 tokens du pool -> analyse -> enregistre 20 pronostics dates",
+        interval_minutes=10080,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="vc_self_report",
+        name="ARIA self report",
+        description="Digest sante & reglages -> operateur (Telegram)",
+        interval_minutes=10080,
+        enabled=True,
+    ),
 ]
 
 
@@ -462,6 +490,36 @@ class AriaHeartbeat:
                 append_memory("epistemic", f"[curriculum] {msg[:400]}")
                 if bool(getattr(settings, "aria_curriculum_notify_operator", False)):
                     await self._notify_telegram(msg)
+
+        elif task_id == "vc_crawl":
+            from aria_core.base_crawler import crawl_and_absorb
+
+            counts = await crawl_and_absorb(limit=40)
+            append_memory("vc", f"[crawl] {counts} — {counts.get('kept', 0)} gardés")
+
+        elif task_id == "vc_resolve":
+            from aria_core.weekly_training import resolve_due
+
+            summary = await resolve_due()
+            if summary.get("resolved", 0) > 0:
+                append_memory("vc", f"[resolve] {summary['resolved']} pronostics clôturés (OHLCV)")
+
+        elif task_id == "vc_weekly_forecast":
+            from aria_core.weekly_training import run_weekly_forecasts
+
+            ids = await run_weekly_forecasts(n=20)
+            append_memory("vc", f"[forecast] {len(ids)} pronostics hebdo enregistrés")
+            if ids:
+                await self._notify_telegram(
+                    f"🎯 ARIA — {len(ids)} nouveaux pronostics hebdo enregistrés (walk-forward)."
+                )
+
+        elif task_id == "vc_self_report":
+            from aria_core.weekly_training import self_report
+
+            digest = await self_report()
+            append_memory("vc", "[self_report] digest opérateur envoyé")
+            await self._notify_telegram(digest)
 
         elif task_id == "cultivation_curriculum":
             from aria_core.knowledge.cultivation_curriculum import generate_cultivation_message
