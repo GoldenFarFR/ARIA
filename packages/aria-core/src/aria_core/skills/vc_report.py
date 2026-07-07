@@ -92,7 +92,7 @@ _METHODOLOGY_SOURCES = (
     ("Blockscout Base", "on-chain, holders, audit"),
     ("CoinGecko", "market cap, FDV, supply"),
     ("Smart-money", "heuristique propriétaire"),
-    ("Rédaction", "Claude Opus via Spark · contrôle anti-hallucination"),
+    ("Rédaction", "moteur ARIA · contrôle anti-hallucination"),
 )
 
 # ─────────────────────────── Tiers (éditions premium / standard) ───────────────────────────
