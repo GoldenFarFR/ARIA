@@ -26,10 +26,31 @@ HOST="${HOST:-ariavanguardzhc.com}"
 command -v docker >/dev/null || { echo "ERREUR: docker introuvable"; exit 1; }
 [ -f "$REPO/vanguard/package.json" ] || { echo "ERREUR: $REPO/vanguard introuvable"; exit 1; }
 
-echo "==> [1/4] build vitrine (Docker node:22-slim)"
-docker run --rm -v "$REPO":/repo -w /repo/vanguard node:22-slim \
+# Les variables VITE_* sont injectées AU BUILD (elles finissent dans le bundle
+# statique). Chargées depuis vanguard/.env.deploy (gitignored) si présent.
+# VITE_PRIVY_APP_ID est un identifiant PUBLIC (pas un secret) : c'est la MÊME
+# valeur que PRIVY_APP_ID du backend. Sans elle, la vitrine n'affiche QUE
+# « VITE_PRIVY_APP_ID is not configured » — on refuse donc de builder à vide.
+ENV_DEPLOY="$REPO/vanguard/.env.deploy"
+if [ -f "$ENV_DEPLOY" ]; then set -a; . "$ENV_DEPLOY"; set +a; fi
+if [ -z "${VITE_PRIVY_APP_ID:-}" ]; then
+    echo "ERREUR: VITE_PRIVY_APP_ID manquant — la vitrine ne se rendrait PAS."
+    echo "  -> crée $ENV_DEPLOY (chmod 600) contenant :"
+    echo "       VITE_PRIVY_APP_ID=<valeur>     # = PRIVY_APP_ID de vanguard/backend/.env"
+    echo "  -> ou lance :  VITE_PRIVY_APP_ID=<valeur> ./vanguard/deploy-vitrine.sh"
+    exit 1
+fi
+
+echo "==> [1/4] build vitrine (Docker node:22-slim) — VITE_PRIVY_APP_ID injecté"
+docker run --rm -e VITE_PRIVY_APP_ID="$VITE_PRIVY_APP_ID" \
+    -v "$REPO":/repo -w /repo/vanguard node:22-slim \
     sh -c "npm ci --no-audit --no-fund && npm run build"
 [ -f "$REPO/vanguard/dist/index.html" ] || { echo "ERREUR: dist/index.html absent — build échoué"; exit 1; }
+# PREUVE que l'App ID est réellement embarqué dans le bundle (sinon écran d'erreur).
+if ! grep -rqF "$VITE_PRIVY_APP_ID" "$REPO/vanguard/dist/assets/" 2>/dev/null; then
+    echo "ERREUR: VITE_PRIVY_APP_ID absent du bundle construit — à revoir."; exit 1
+fi
+echo "    ✓ App ID Privy bien présent dans le bundle"
 
 echo "==> [2/4] publication atomique -> $WEBROOT"
 parent="$(dirname "$WEBROOT")"; mkdir -p "$parent"
