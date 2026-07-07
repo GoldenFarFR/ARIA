@@ -29,7 +29,7 @@ Poser le seam maintenant, même vide, plutôt que réécrire plus tard.
 - **S'impliquer comme si sa vie en dépendait**, driver, anticiper les scénarios — pas juste attendre les instructions.
 
 ## Profil opérateur
-l'operateur ([email operateur retire]). **Non-développeur** : expliquer simplement, pas à pas. Claude (chat + Claude Code) gère 100% de la construction/exploitation (Cursor/Grok abandonnés). Recoupe systématiquement. **En français**. Windows (PowerShell). **Une seule session IA à la fois sur le VPS de prod.**
+l'operateur (coordonnées privées dans `aria-ops`). **Non-développeur** : expliquer simplement, pas à pas. Claude (chat + Claude Code) gère 100% de la construction/exploitation (Cursor/Grok abandonnés). Recoupe systématiquement. **En français**. Windows (PowerShell). **Une seule session IA à la fois sur le VPS de prod.**
 
 ## Vision & stratégie
 ARIA = agent IA autonome, holding **Aria Vanguard ZHC**. Public : X **@Aria_ZHC**, Telegram **@Aria_ZHC_Bot**, `ariavanguardzhc.com`. **Gamme luxe** (~500 $/mois). Le moat = **l'analyse prouvée** (la décision), pas l'exécution. **85% VC** moyen/long terme + **15% trading** (poche adrénaline plafonnée). Capital test 20-50$ → cible ~100k$ par paliers de confiance. Preuve avant promesse : un **track record** public se construit avant tout argent réel (pacte : `docs/protocole-argent-reel.md`). Thèse : les vrais builders cachés sur Base. *(Note : l'objectif « 50$/mois via ACP » a été abandonné — marché ACP service en sommeil, données à l'appui.)*
@@ -46,6 +46,11 @@ Monorepo `github.com/GoldenFarFR/ARIA`. Liés : `aria-ops` (privé), `template-g
 - **Données** : DexScreener (prix/liq/vol), GeckoTerminal (OHLCV), Blockscout (contrat, holders, is_contract), CoinGecko (market cap, FDV, catégories). Moteur TA (RSI/MACD/EMA/fibo/divergences).
 - **LLM** : **enabled:true en prod** (health VPS confirmé). *(L'ancien « dormant » est périmé.)*
 - **Garde-fous wallet** : kill-switch fail-closed, resolve_spend via clic Telegram réel + anti double-clic. Exécution financière de-facto non câblée sur le VPS (provider off).
+- **Anti-scam dynamique (nuit 07/07)** : `services/goplus.py` (GoPlus Security, gratuit) — honeypot, taxes réelles achat/vente, owner caché, reprise de propriété. Câblé data-gated (`include_honeypot`) dans le scan + barrières dures `safety_screen`, actif sur l'analyse VC. Complète le scan ABI Blockscout (statique) par du comportement.
+- **Analyse de masse / tri (nuit 07/07)** : `skills/candidate_ranking.py` classe le pool screené (score composite transparent : sécurité + liquidité + concentration + verdict) → « Top candidats » dans le digest opérateur ; `draw_top` opt-in pour bâtir le track-record sur le haut du panier.
+- **Paper-trading 1 M$ mode trading (nuit 07/07)** : `paper_trader.py` — portefeuille FICTIF appliquant les VRAIS rapports (achats/ventes simulés, alertes clairement fictives, marque au marché, P&L). Preuve sur ~20 jours avant argent réel. Tâche heartbeat `paper_trade_cycle` **gatée par `ARIA_PAPER_TRADING_ENABLED`** (OFF par défaut). Aucun argent réel, aucune signature.
+- **ACP abandonné (confirmé)** : routage conversationnel ACP désactivé par défaut (`ARIA_ACP_ENABLED` off, `brain.detect_intent`) → la conversation libre Telegram tombe sur le LLM. Provider d'exécution ACP toujours off (CLI absent du conteneur).
+- **X** : publication `@Aria_ZHC` opérationnelle (testée opérateur), gatée `arm_campaign`. **TikTok** = seam vide (publisher à brancher). `aria_core.x_profile` = module non livré (imports gardés).
 
 ## Moteur de légitimité (session 07/07 — drapeau brut → jugement de contexte, au cas par cas)
 - `skills/mint_authority.py` + `knowledge/launchpads.yaml` : un mint n'est dangereux que si un DEV le contrôle (renounced / launchpad Virtuals-Flaunch-Clanker-Zora / contract / eoa / unknown). Normes par launchpad (Virtuals team ~15-20% = normal).
@@ -56,7 +61,7 @@ Monorepo `github.com/GoldenFarFR/ARIA`. Liés : `aria-ops` (privé), `template-g
 - **Carnet de bord** : `thesis_journal.py` (journal append-only + suivi de thèse : livre/stagne via `services/project_activity` GitHub) + `skills/chart_render.render_scenario_png` (chandeliers DexScreener + volume + MA7 + bulles entrées/sorties DCA + simulation forward + `save_png_data_uri`). Export `.txt`.
 - **Sourcing** : `base_crawler.discover_top_pools` (+ niche Virtuals), `radar_x.py` (le social source/réveille, l'on-chain arbitre — jamais un déclencheur).
 - **Pipeline sorties** : `release_pipeline.py` + `knowledge/release_pipeline.yaml` (12 munitions + teasers, X+TikTok synchro site, **gaté opérateur**).
-- **Cycle A-Z** : `python -m aria_core.simulate_lifecycle 0xCONTRAT`. Heartbeat : vc_crawl/resolve/weekly_forecast/self_report/radar_x/thesis_review.
+- **Cycle A-Z** : `python -m aria_core.simulate_lifecycle 0xCONTRAT`. Heartbeat : vc_crawl/resolve/weekly_forecast/self_report/radar_x/thesis_review (+ `paper_trade_cycle` gaté).
 
 ## Méthode smart-money (dans le scoring)
 « Smart money » = comportement mesurable, pas identité/taille. 4 critères : cohérence dans le temps, entrées précoces + tailles contrôlées, sorties disciplinées, concentration multi-wallets. Éliminer wash-trading, poisoning, wallets équipe. **Ne JAMAIS copy-trader** : le smart-money est une confirmation/contexte, pas un déclencheur. Nansen/Arkham reportés (qualification maison via Blockscout gratuit).
