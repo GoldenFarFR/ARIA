@@ -59,3 +59,58 @@ async def test_crawl_absorber_error_is_not_fatal():
 
     counts = await bc.crawl_and_absorb(discover=discover, absorber=absorber)
     assert counts.get("kept") == 1 and counts.get("error") == 1
+
+
+def _pool_payload(pairs):
+    return {
+        "data": [
+            {
+                "relationships": {"base_token": {"data": {"id": "base_" + a}}},
+                "attributes": {"reserve_in_usd": str(r)},
+            }
+            for a, r in pairs
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_top_pools_filters_by_liquidity_floor():
+    liquid, thin = "0x" + "a" * 40, "0x" + "b" * 40
+
+    async def fetch(path):
+        return _pool_payload([(liquid, 80_000), (thin, 5_000)])
+
+    assert await bc.discover_top_pools(fetch=fetch, min_liquidity_usd=30_000) == [liquid]
+
+
+@pytest.mark.asyncio
+async def test_top_pools_missing_reserve_is_filtered():
+    a = "0x" + "c" * 40
+
+    async def fetch(path):
+        return {"data": [{"relationships": {"base_token": {"data": {"id": "base_" + a}}}}]}
+
+    assert await bc.discover_top_pools(fetch=fetch, min_liquidity_usd=1) == []
+
+
+@pytest.mark.asyncio
+async def test_discover_virtuals_extracts_addresses():
+    a1 = "0x" + "d" * 40
+
+    class _VT:
+        token_address = a1
+
+    class _Client:
+        async def fetch_prototypes(self):
+            return [_VT(), _VT()]
+
+    assert await bc.discover_virtuals_tokens(client=_Client()) == [a1]
+
+
+@pytest.mark.asyncio
+async def test_discover_virtuals_degrades_gracefully():
+    class _Boom:
+        async def fetch_prototypes(self):
+            raise RuntimeError("down")
+
+    assert await bc.discover_virtuals_tokens(client=_Boom()) == []
