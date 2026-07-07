@@ -157,6 +157,7 @@ app.include_router(websocket.router)
 async def health():
     """Public liveness probe — no sensitive details."""
     from aria_core.gateway.x_twitter import is_x_post_configured, is_x_read_configured
+    from aria_core.llm import is_llm_provider_configured
     from aria_core.skills.github_skill import github_configured, github_unlimited_access
 
     commit = (
@@ -185,7 +186,9 @@ async def health():
         "aria_telegram": {"configured": bool(settings.telegram_bot_token.strip())},
         "aria_llm": {
             "enabled": settings.aria_llm_enabled,
-            "provider_configured": bool(settings.llm_api_key.strip()),
+            # Reflète le routage RÉEL : pour provider=virtuals la clé d'auth est
+            # virtuals_api_key, pas llm_api_key (qui restait souvent vide -> faux négatif).
+            "provider_configured": is_llm_provider_configured(),
         },
         "aria_acp": {
             "cli_available": __import__("shutil").which("acp") is not None,

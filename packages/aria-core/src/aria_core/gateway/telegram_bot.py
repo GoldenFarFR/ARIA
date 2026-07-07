@@ -545,13 +545,19 @@ async def _handle_x(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if sub == "profile":
-        from aria_core.x_profile import (
-            canonical_x_profile,
-            fetch_live_x_profile,
-            format_profile_summary,
-            profile_fields_differ,
-            sync_x_profile,
-        )
+        # Module x_profile pas encore livré : garde défensive pour ne pas lever
+        # ModuleNotFoundError si la commande est invoquée (parité avec le heartbeat).
+        try:
+            from aria_core.x_profile import (
+                canonical_x_profile,
+                fetch_live_x_profile,
+                format_profile_summary,
+                profile_fields_differ,
+                sync_x_profile,
+            )
+        except ModuleNotFoundError:
+            await _reply(message, "Profil X : module x_profile non livré (fonction à venir).")
+            return
 
         action = (args[1].lower() if len(args) > 1 else "status").strip()
         if action in ("preview", "cible", "target"):
