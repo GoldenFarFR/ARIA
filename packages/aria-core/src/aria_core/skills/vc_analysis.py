@@ -120,6 +120,14 @@ class VCResult:
     ta_timeframe: str = ""
     ta_levels_lines: list[str] = field(default_factory=list)
     chart_data_uri: str = ""
+    # Projection ROI par comparables historiques (Voûte 3, data-gated : peuplé
+    # seulement si la capitalisation actuelle est connue). Contexte tangible,
+    # JAMAIS une cible ni une promesse. Sans donnée → tout vide, section omise.
+    roi_scenarios: list[dict] = field(default_factory=list)
+    roi_sector: str = ""
+    roi_sector_recognized: bool = False
+    roi_basis: str = ""
+    roi_disclaimer: str = ""
 
     @property
     def actionable(self) -> bool:
@@ -531,6 +539,42 @@ def _attach_ta(result: VCResult, ctx: TokenScanContext) -> VCResult:
     except Exception as exc:  # noqa: BLE001 — jamais bloquant : section rendue sans image
         logger.warning("analyze_vc: rendu graphique TA échoué (%s) — section sans image", exc)
         result.chart_data_uri = ""
+    _attach_roi(result, ctx)
+    return result
+
+
+def _attach_roi(result: VCResult, ctx: TokenScanContext) -> VCResult:
+    """Reporte la projection ROI par comparables (Voûte 3) du ctx vers le VCResult.
+
+    Data-gated : sans capitalisation actuelle connue (fondamentaux CoinGecko
+    absents), ``available=False`` → tous les champs restent vides et le rapport
+    omet la section. Utilise le market cap si dispo, sinon la FDV (repli honnête,
+    ``basis='fdv'``). Aucune valeur inventée : tout dérive des faits du scan et
+    des jalons éditables du secteur.
+    """
+    from aria_core.skills.roi_comparables import project_roi
+
+    mcap = getattr(ctx, "market_cap_usd", None)
+    basis = "market_cap"
+    if not mcap:
+        mcap = getattr(ctx, "fully_diluted_valuation_usd", None)
+        basis = "fdv"
+    roi = project_roi(mcap, getattr(ctx, "categories", None), basis=basis)
+    if not roi.available:
+        return result
+    result.roi_scenarios = [
+        {
+            "label": s.label,
+            "ref_mcap_usd": s.ref_mcap_usd,
+            "multiple": s.multiple,
+            "note": s.note,
+        }
+        for s in roi.scenarios
+    ]
+    result.roi_sector = roi.sector or ""
+    result.roi_sector_recognized = roi.sector_recognized
+    result.roi_basis = roi.basis
+    result.roi_disclaimer = roi.disclaimer
     return result
 
 

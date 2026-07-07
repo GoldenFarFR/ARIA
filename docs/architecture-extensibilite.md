@@ -114,9 +114,9 @@ ne pas le modifier sans feu vert).
 | **Logs de timing** observabilité | instrumentation | dans skills + `llm.py` | Mesure scan vs LLM → pilote la perf. Prérequis pour de vrais chiffres. |
 | **Pipeline OHLCV** (#5, #9) | service | `services/ohlcv.py` (GeckoTerminal gratuit + Alchemy) → `include_ta` | Dépendance commune de la projection ROI, des niveaux TA et du graphique. |
 | **TA + graphique dans rapport** (#9) | skills prêts | `ta_levels` + `chart_render` → section data-gated de `vc_report` | Moteurs déjà construits ; câblage additif + preview. |
-| **Projection ROI temporelle** (#5) | skill | comparables historiques dans le moteur VC, nourri par OHLCV | Facts-only : jamais de promesse de rendement. |
+| ✅ **Projection ROI par comparables** (#5) | skill fait | `skills/roi_comparables.py` (jalons `knowledge/roi_comparables.yaml`) → champ data-gated de `vc_report` (premium) | Voûte 3 livrée. Placement historique tangible, JAMAIS une cible/promesse. Nourri par les fondamentaux du scan (market cap/FDV). |
 | **Virtuals pré-bonding** (#10) | service prêt | `services/virtuals.py` → `include_virtuals` + mode d'analyse dédié | Testable en live seulement sur VPS (réseau bloqué en cloud). |
-| **Radar X / social** (#7) | service + skill | `services/x_social.py` → `include_social` (watchlist candidats) | FILTRE, jamais déclencheur. Sanitisation stricte (texte hostile). |
+| ✅ **Radar X / social** (#7) | service + orchestrateur faits | `services/x_social.py` (écoute/sanitisation) + `radar_x.run_radar` → absorbeur on-chain ; tâche heartbeat `vc_radar_x` | Voûte 4 livrée. Le social SOURCE/RÉVEILLE, l'on-chain ARBITRE. Jamais un déclencheur de trade. |
 | **Fact-check (Facticity / ArAIstotle)** | service | `services/factcheck.py` → soit `include_factcheck`, soit **2e dimension de juge** | Motif identique à `vc_judge` : audit indépendant, pluggable. Ne pas toucher au token $FACY. |
 | **Moteur de connaissance 24/7** (#8) | worker VPS | tâche de fond réutilisant les MÊMES skills (scan/analyse) → écrit dans un knowledge store | Exige que les skills restent purs et appelables hors Telegram (ils le sont). Surveiller la RAM (~1,8 Gio). |
 | **Overlay macro / géopolitique** (#14) | données + section | source macro → section data-gated de `vc_report` | Additif, non-régression testée, preview avant prod. Facts-only. |
