@@ -228,6 +228,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=1440,
         enabled=True,
     ),
+    HeartbeatTask(
+        id="paper_trade_cycle",
+        name="Paper trading 1M$ (simulation)",
+        description="Applique les VRAIS rapports a un portefeuille FICTIF de 1M$ (mode trading) : ouvre/ferme des positions simulees, alertes achat/vente fictives. Preuve sur ~20 jours. Aucun argent reel, aucune signature.",
+        interval_minutes=180,
+        enabled=False,
+    ),
 ]
 
 
@@ -277,6 +284,13 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.gateway.x_twitter import is_x_post_configured
 
             task.enabled = is_x_post_configured()
+        if task.id == "paper_trade_cycle":
+            # Simulation interne 1M$ : OFF par defaut. L'operateur demarre le run de preuve
+            # (20 jours) en posant ARIA_PAPER_TRADING_ENABLED=1 dans le .env (cout LLM
+            # deliberé). Aucun argent reel, aucune surface outward-facing.
+            task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                "1", "true", "yes", "on",
+            )
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -627,6 +641,17 @@ class AriaHeartbeat:
                 append_memory(
                     "comms",
                     f"[x_profile] heartbeat sync drift={result.get('drift')}",
+                )
+
+        elif task_id == "paper_trade_cycle":
+            from aria_core import paper_trader
+
+            actions = await paper_trader.run_paper_cycle(notifier=self._notify_telegram)
+            if actions.get("opened") or actions.get("closed"):
+                append_memory(
+                    "paper",
+                    f"[paper_trade] fictif 1M$ : +{len(actions.get('opened', []))} achats / "
+                    f"-{len(actions.get('closed', []))} ventes",
                 )
 
         elif task_id == "self_banner_curiosity":
