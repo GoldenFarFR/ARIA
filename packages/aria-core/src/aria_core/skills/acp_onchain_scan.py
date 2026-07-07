@@ -192,6 +192,11 @@ class TokenScanContext:
     # Profondeur de liquidité (liquidité / market cap). Peuplé si les deux sont connus
     # (donc chemin analyse VC avec fondamentaux). Marché mince = fragile. Au cas par cas.
     liq_mcap_ratio: float | None = None
+    # Comportement du wallet du dev (peuplé si include_dev_behavior). Signal pondéré
+    # (aligned/neutral/concern/unknown) + observations factuelles. Nourrit le jugement,
+    # ne rejette pas d'office.
+    dev_signal: str | None = None
+    dev_points: list[str] = field(default_factory=list)
 
 
 @lru_cache(maxsize=1)
@@ -491,6 +496,7 @@ async def scan_base_token(
     include_smart_money: bool = False,
     include_fundamentals: bool = False,
     include_ta: bool = False,
+    include_dev_behavior: bool = False,
 ) -> TokenScanContext:
     """Fetch DexScreener + compute heuristic security score.
 
@@ -596,7 +602,44 @@ async def scan_base_token(
             ctx.ta = compute_levels(ohlcv.candles)
             ctx.ta_entry = suggest_entry_zone(ctx.ta)
 
+    # Comportement du wallet du dev : builder engagé vs farmer (jugement contextuel,
+    # jamais un rejet d'office). Best-effort ; toute indisponibilité -> 'unknown'.
+    if include_dev_behavior:
+        await _resolve_dev_behavior(ctx, ca)
+
     return ctx
+
+
+async def _resolve_dev_behavior(ctx: "TokenScanContext", token_address: str) -> None:
+    """Récolte + juge le comportement du wallet du déployeur. Défensif, jamais bloquant."""
+    from aria_core.skills.dev_wallet import (
+        gather_dev_wallet_facts,
+        judge_dev_wallet,
+    )
+    from aria_core.skills.mint_authority import launchpad_norms
+
+    try:
+        info = await blockscout_client.get_address_info(token_address)
+        creator = info.creator_address if info.available else None
+        if not creator:
+            ctx.dev_signal = "unknown"
+            ctx.dev_points = ["déployeur du contrat inconnu"]
+            return
+        facts = await gather_dev_wallet_facts(
+            token_address,
+            creator,
+            lp_address=ctx.best_pair.pair_address if ctx.best_pair else None,
+        )
+        norms = launchpad_norms(ctx.launchpad)
+        team_norm = norms.get("team_allocation_pct")
+        team_norm = tuple(team_norm) if isinstance(team_norm, (list, tuple)) and len(team_norm) == 2 else None
+        verdict = judge_dev_wallet(facts, launchpad_team_norm=team_norm)
+        ctx.dev_signal = verdict.signal
+        ctx.dev_points = verdict.points
+    except Exception as exc:  # noqa: BLE001 — le comportement dev est un bonus, jamais bloquant
+        logger.info("dev_behavior: analyse %s échouée (%s)", token_address, exc)
+        ctx.dev_signal = "unknown"
+        ctx.dev_points = []
 
 
 def scan_base_token_sync(contract: str) -> TokenScanContext:

@@ -127,12 +127,6 @@
   benefit: "un engagement social gonflé (bots, followers achetés, réponses génériques) simule de la traction. Croiser avec le Radar X : bruit élevé mais faible qualité/diversité d'auteurs = faux buzz."
   seam: "services/x_social.py (Radar X) -> score de qualité du bruit"
 
-- title: "Analyse du wallet du dev/équipe (comportement on-chain)"
-  category: tool
-  source: "priorité opérateur : builder engagé vs farmer (détient ? acheté ? vendu ? all-in ?)"
-  benefit: "signal de légitimité au cas par cas depuis le déployeur : détention (skin-in-the-game vs pression de vente ; sur Virtuals team ~15-20% = normal ; fondateur sans argent = 0% pas forcément mauvais), achat avec son argent vs auto-alloc, vente pour financer (sain) vs extraire (rug lent), all-in (conviction). Jamais binaire — contexte pondéré. LOGIQUE PROPORTIONNELLE à la taille du projet : une team de 10 organisée qui n'achète PAS = anormal (devraient avoir du skin-in-the-game) ; un dev solo sans argent = excusable, mais un achat reste un signal de conviction fort."
-  seam: "services/dev_wallet.py (creator -> transferts du token) -> include_dev_behavior"
-
 - title: "Vérification du verrouillage de liquidité (façade vs réel)"
   category: tool
   source: "priorité opérateur : LP-lock de façade"
