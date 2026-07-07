@@ -183,6 +183,16 @@ remboursés** — abonde la cagnotte USDC à **15 %** (évolutif vers 18-20 % qu
 les marges s'ouvrent). **Adresse publique** → « regardez la cagnotte grossir en
 direct ». Les 15 % absorbent le poste « acquisition » de la feuille de route.
 
+**Règle de distribution (verrouillée) :**
+- La cagnotte **accumule** d'abord (15 % du revenu net).
+- **Déclenchement** : dès que la cagnotte atteint **100 $**, les distributions
+  mensuelles démarrent.
+- **Chaque mois : 30 % du total de la cagnotte** est distribué (pro-rata du
+  coefficient d'activité). Les **70 % restants** demeurent et continuent de croître
+  → récompense **roulante**, jamais vidée d'un coup, incite à rester actif dans la durée.
+- Versements gatés par les défenses anti-farm (rétention, identité, revue des
+  anomalies) et la clearance avocat (KYC/AML/fiscalité) avant le premier paiement réel.
+
 ### Anti-farm / anti-abus — le dôme appliqué à la cagnotte
 
 Un pool en cash EST une cible. On défend **par construction** (structurel, le plus
