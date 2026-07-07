@@ -1,6 +1,6 @@
 """Boucle d'entraînement hebdomadaire (walk-forward) — le cœur qui accumule la preuve.
 
-- **Lundi** : ``run_weekly_forecasts`` tire N tokens du pool screné, les analyse et
+- **Lundi** : ``run_weekly_forecasts`` tire N tokens du pool screené, les analyse et
   enregistre N pronostics horodatés (avec prix d'entrée + pool + poche 85/15) →
   falsifiables.
 - **Échéance** : ``resolve_due`` clôture les pronostics arrivés à horizon en comparant
@@ -37,7 +37,7 @@ async def run_weekly_forecasts(
 ) -> list[int]:
     """Tire N tokens du pool, les analyse, enregistre N pronostics datés. Retourne les ids.
 
-    ``drawer()`` → liste de tokens du pool (défaut : loterie du pool screné).
+    ``drawer()`` → liste de tokens du pool (défaut : loterie du pool screené).
     ``analyzer(contract)`` → ``(VCResult, TokenScanContext)`` (défaut : analyse VC réelle).
     Le prix d'entrée (spot au moment du pronostic) et le pool sont capturés depuis le
     contexte → indispensables à la résolution automatique ultérieure.
@@ -235,7 +235,7 @@ async def self_report() -> str:
 
     pool = rep["pool_active"]
     warn = " ⚠️ pool maigre" if pool < 20 else ""
-    lines.append(f"• Pool screné actif : {pool}{warn}")
+    lines.append(f"• Pool screené actif : {pool}{warn}")
 
     try:
         from aria_core import improvement_ledger
