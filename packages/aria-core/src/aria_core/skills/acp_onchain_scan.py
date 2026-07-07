@@ -33,6 +33,38 @@ logger = logging.getLogger(__name__)
 
 _ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 _DEX_BASE = "https://api.dexscreener.com"
+
+# Adresses de « trou noir » : un gros solde ici n'est PAS une concentration risquée
+# (tokens brûlés / envoyés au néant). À exclure du calcul de concentration, tout
+# comme le pool LP (dont le gros solde est structurel, pas une baleine qui peut dumper).
+_BURN_ADDRESSES = {
+    "0x0000000000000000000000000000000000000000",
+    "0x000000000000000000000000000000000000dead",
+}
+
+
+def _holder_concentration(
+    holders: "TokenHoldersResult", lp_address: str | None
+) -> tuple[float | None, float | None, int]:
+    """(% du plus gros holder, % du top 10, nombre de holders comptés) HORS LP et burn.
+
+    Le pool LP et les adresses de burn détiennent légitimement de grosses parts :
+    les inclure ferait échouer tout token à tort. On ne compte que les vrais porteurs.
+    Retourne ``(None, None, 0)`` si aucune donnée exploitable.
+    """
+    lp = (lp_address or "").lower()
+    pcts: list[float] = []
+    for h in holders.holders:
+        if h.percentage is None:
+            continue
+        addr = (h.address or "").lower()
+        if addr == lp or addr in _BURN_ADDRESSES:
+            continue
+        pcts.append(float(h.percentage))
+    if not pcts:
+        return None, None, 0
+    pcts.sort(reverse=True)
+    return pcts[0], sum(pcts[:10]), len(pcts)
 _QUALITY_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "acp_quality.yaml"
 
 
@@ -68,6 +100,17 @@ class TokenScanContext:
     ta_entry: EntryZone | None = None
     ta_candles: list[Candle] = field(default_factory=list)
     ta_timeframe: str | None = None
+    # Barrières de sécurité structurées (peuplées au scan si la donnée on-chain
+    # existe ; None sinon). Exposent en clair ce que le score agrège, pour un
+    # filtre binaire strict (cf. skills/safety_screen.py). Concentration calculée
+    # HORS pool LP et adresses de burn (sinon tout token échoue à tort).
+    contract_verified: bool | None = None
+    has_mint: bool | None = None
+    has_blacklist: bool | None = None
+    has_disable_transfers: bool | None = None
+    top_holder_pct: float | None = None
+    top10_holder_pct: float | None = None
+    holders_counted: int | None = None
 
 
 @lru_cache(maxsize=1)
@@ -395,6 +438,19 @@ async def scan_base_token(
         ctx.best_pair = best
         ctx.data_source = "dexscreener"
     _score_and_verdict(ctx, ctx.best_pair, contract_flags=contract_flags, holders=holders)
+
+    # Expose en clair les barrières de sécurité (le filtre binaire les lit).
+    if contract_flags is not None and contract_flags.available:
+        ctx.contract_verified = contract_flags.is_verified
+        ctx.has_mint = contract_flags.has_mint
+        ctx.has_blacklist = contract_flags.has_blacklist
+        ctx.has_disable_transfers = contract_flags.has_disable_transfers
+    if holders is not None and holders.available:
+        lp = ctx.best_pair.pair_address if ctx.best_pair else None
+        top, top10, counted = _holder_concentration(holders, lp)
+        ctx.top_holder_pct = top
+        ctx.top10_holder_pct = top10
+        ctx.holders_counted = counted
 
     if include_smart_money:
         smart_money = await analyze_smart_money(
