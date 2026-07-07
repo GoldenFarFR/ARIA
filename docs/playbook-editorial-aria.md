@@ -156,8 +156,61 @@ activité RELATIVE** aux autres — auto-équilibrant, méritocratique, gamifié
     « valeur mobilière ». Rester en nature = sûr ;
   - adossé aux **ventes**, 1-2 niveaux, jamais pyramidal.
 
-🟠 *À décider : source du pool (X % du revenu en crédits / N mois offerts par mois),
-et poids exacts des actions.*
+### Financement (verrouillé) : 15 % du revenu NET
+
+Chaque paiement encaissé — **net** des frais (Stripe/gas), **hors montants
+remboursés** — abonde la cagnotte USDC à **15 %** (évolutif vers 18-20 % quand
+les marges s'ouvrent). **Adresse publique** → « regardez la cagnotte grossir en
+direct ». Les 15 % absorbent le poste « acquisition » de la feuille de route.
+
+### Anti-farm / anti-abus — le dôme appliqué à la cagnotte
+
+Un pool en cash EST une cible. On défend **par construction** (structurel, le plus
+solide) PUIS par détection.
+
+**Par construction (imparable) :**
+- Le pool ne contient QUE du **revenu réel net non-remboursé** → un farmeur ne peut
+  **jamais extraire plus que de la valeur réellement créée**.
+- **Récompense cash = sur la RÉTENTION** : on est payé quand le filleul **RESTE**
+  abonné (après la fenêtre remboursement/chargeback de 30-60 j), pas à l'inscription.
+  → farmer = devoir financer de **vrais abonnements récurrents** = **non rentable**.
+- **Clawback** : remboursement / chargeback → récompense annulée ou jamais vestée.
+- **Non-custodial** : les membres gardent leurs fonds (self-custody, Privy). On ne
+  détient jamais l'argent des autres → réduit fortement le risque « money
+  transmitter ». Distribution par **smart contract** (règles publiques, sans
+  intermédiaire qui custody).
+- **Unicité d'identité — web3-native d'abord** : preuve-de-personne on-chain
+  (World ID, Gitcoin Passport), **réputation / âge on-chain** du wallet, éventuel
+  **dépôt remboursable** (skin in the game) → *un humain = une part*. Le **KYC**
+  est réservé aux **gros retraits** ou là où l'AML l'impose vraiment. Principe
+  « une personne = une part » conservé, mise en œuvre **aussi décentralisée que possible**.
+
+**Détection (en couche supplémentaire) :**
+- **Anti self-referral / rings** : bloquer même moyen de paiement, même IP/device,
+  même source de financement du wallet entre parrain et filleul ; analyse de graphe
+  pour les anneaux de collusion.
+- **Wallets sybil** : âge/historique on-chain + heuristiques device/IP (Privy).
+- **Caps** par compte/période, **vesting** dans le temps, **seuil minimum** d'activité
+  réelle pour être éligible.
+- **Anomalies** : pic d'activité juste avant distribution → **revue manuelle (gate
+  humain)** avant les gros versements.
+- **Décroissance temporelle** du score (déjà prévue) → les dormants fondent.
+
+**Deux économies séparées (clé) :**
+- 💵 **Cagnotte USDC (cash)** : UNIQUEMENT activité **payée + retenue + KYC**. Très
+  dur à farmer.
+- 🎟️ **Points / perks** (mois offerts, badges) : engagement plus doux (partages),
+  **faible valeur**, KYC-light → un farmeur n'y récupère que des perks, **jamais du cash**.
+
+**Principe unificateur : fidélité et anti-farm sont le MÊME design.** Récompenser les
+membres *réels, retenus, actifs* fait **gagner les fidèles et perdre les farmeurs** —
+d'un seul geste.
+
+> ⚠️ Ne **jamais publier** les heuristiques de détection (sinon les farmeurs s'adaptent).
+> Publier les règles (transparence), garder secret le « comment on attrape ».
+
+🟠 *À décider : poids exacts des actions, seuil KYC de retrait, % du pool réservé au
+cash vs perks.*
 
 CTA récurrents dans les posts : « Scan it free 👉 [lien] », « Full report 👉 »,
 « Refer a friend, both get a month ».
