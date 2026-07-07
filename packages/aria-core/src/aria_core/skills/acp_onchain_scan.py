@@ -189,6 +189,9 @@ class TokenScanContext:
     mint_authority: str | None = None  # na/renounced/launchpad/contract/eoa/unknown
     mint_authority_detail: str = ""
     launchpad: str | None = None  # label du launchpad si le déployeur est reconnu
+    # Profondeur de liquidité (liquidité / market cap). Peuplé si les deux sont connus
+    # (donc chemin analyse VC avec fondamentaux). Marché mince = fragile. Au cas par cas.
+    liq_mcap_ratio: float | None = None
 
 
 @lru_cache(maxsize=1)
@@ -569,6 +572,14 @@ async def scan_base_token(
             ctx.market_cap_usd = fundamentals.market_cap_usd
             ctx.fully_diluted_valuation_usd = fundamentals.fully_diluted_valuation_usd
             ctx.categories = list(fundamentals.categories or [])
+            # Profondeur de liquidité : marché mince par rapport à la valorisation ?
+            if ctx.market_cap_usd and ctx.best_pair:
+                from aria_core.skills.liquidity_depth import assess_liquidity_depth
+
+                depth = assess_liquidity_depth(ctx.best_pair.liquidity_usd, ctx.market_cap_usd)
+                ctx.liq_mcap_ratio = depth.ratio
+                if depth.healthy is False:
+                    ctx.risk_flags.append(f"Liquidité : {depth.note}.")
 
     if include_ta and ctx.best_pair and ctx.best_pair.pair_address:
         ohlcv = await ohlcv_client.get_ohlcv(ctx.best_pair.pair_address)
