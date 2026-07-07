@@ -630,7 +630,7 @@ async def analyze_vc_with_context(
     t_start = time.monotonic()
     ctx = await scan_base_token(
         contract, include_smart_money=True, include_fundamentals=True, include_ta=True,
-        include_dev_behavior=True,
+        include_dev_behavior=True, include_honeypot=True,
     )
     t_scan = time.monotonic() - t_start
 
