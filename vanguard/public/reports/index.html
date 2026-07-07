@@ -4,12 +4,12 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="theme-color" content="#2b2c31" />
-<meta name="description" content="ARIA — on-chain crypto analysis reports. Facts, asymmetry, and a risk-first verdict. Open to all." />
+<meta name="description" content="ARIA: on-chain crypto analysis reports. Facts, asymmetry, and a risk-first verdict. Open to all." />
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-<title>Aria Vanguard ZHC — The report that proves the decision</title>
+<title>Aria Vanguard ZHC · The report that proves the decision</title>
 <style>
 :root{
   --ground:#2b2c31; --ground-deep:#202126; --ground-lift:#34353b;
@@ -51,8 +51,9 @@ body{background:var(--ground);color:var(--text);font-family:var(--sans);position
 .fb-bar>.wrap{display:flex;align-items:center;justify-content:space-between;gap:14px;height:40px}
 .fb-txt{font-size:.78rem;color:var(--muted);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fb-txt b{color:#d4c4a0}.fb-txt a{color:var(--gold-lite);text-decoration:none}
-.fb-open{flex:none;border:0;background:none;cursor:pointer;color:var(--gold-lite);font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase}
-.fb-open:hover{color:#f4f1ea}
+.fb-open{flex:none;border:0;background:none;cursor:pointer;color:var(--gold-lite);font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;animation:fbPulse 3.6s ease-in-out infinite}
+.fb-open:hover{color:#f4f1ea;animation:none;opacity:1}
+@keyframes fbPulse{0%,100%{opacity:.5}50%{opacity:1;text-shadow:0 0 9px rgba(230,196,99,.55)}}
 .fb-panel{position:absolute;top:40px;left:0;right:0;background:rgba(12,12,14,.98);border-bottom:1px solid rgba(230,196,99,.14);box-shadow:0 24px 40px -20px rgba(0,0,0,.6)}
 .fb-panel>.wrap{padding:12px 32px 14px}
 .fb-panel textarea{width:100%;background:#0c0c0e;border:1px solid rgba(230,196,99,.2);border-radius:6px;padding:10px 12px;color:#f4efe6;font-size:.85rem;resize:vertical;outline:none;font-family:var(--sans);min-height:4.5rem}
@@ -61,6 +62,11 @@ body{background:var(--ground);color:var(--text);font-family:var(--sans);position
 .fb-row button{border:0;border-radius:6px;padding:9px 20px;font-weight:700;color:#161512;cursor:pointer;background:linear-gradient(120deg,#e6c463,#c9a227 60%,#1f8a74)}
 .fb-row button:disabled{opacity:.5;cursor:not-allowed}
 .fb-note{font-family:var(--mono);font-size:.63rem;color:var(--faint);margin-top:8px;line-height:1.4}
+.fb-cats{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:9px}
+.fb-cat{cursor:pointer;font-family:var(--mono);font-size:.64rem;padding:5px 11px;border-radius:999px;border:1px solid rgba(230,196,99,.2);background:rgba(230,196,99,.04);color:var(--gold-lite);letter-spacing:.02em}
+.fb-cat:hover{background:rgba(230,196,99,.1)}
+.fb-cat.on{background:rgba(230,196,99,.18);border-color:rgba(230,196,99,.48);color:#f4f1ea}
+.fb-count{font-family:var(--mono);font-size:.63rem;color:var(--faint);align-self:center;white-space:nowrap}
 @media(max-width:640px){.fb-txt{font-size:.7rem}.fb-panel>.wrap{padding:12px 20px 14px}}
 .nav .wrap{display:flex;align-items:center;justify-content:space-between;height:100%}
 .brand{display:flex;align-items:center;gap:12px;font-family:var(--serif);font-size:1.15rem;color:#f1efe9}
@@ -77,7 +83,7 @@ body{background:var(--ground);color:var(--text);font-family:var(--sans);position
 
 section,header{position:relative;z-index:2}
 
-/* hero — compact */
+/* hero: compact */
 .hero{padding:112px 0 54px}
 .hero .split{display:grid;grid-template-columns:1.02fr .98fr;align-items:center;gap:44px}
 .eyebrow{display:flex;align-items:center;gap:12px;font-size:.72rem;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);margin-bottom:22px}
@@ -233,7 +239,8 @@ footer .brand{color:#2a1520}
 .secband{border-top:1px solid var(--line);background:linear-gradient(180deg,rgba(16,26,46,.32),transparent)}
 .secgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:18px;padding:46px 0}
 .secitem{text-align:center;padding:8px}
-.secitem .ic{font-size:1.85rem}
+.secitem .ic{color:var(--gold-lite);line-height:0}
+.secitem .ic svg{width:30px;height:30px;display:inline-block}
 .secitem .t{font-family:var(--mono);font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;color:var(--gold-lite);margin-top:12px}
 .secitem .d{font-size:.82rem;color:#b9bcc4;margin-top:6px;line-height:1.45}
 /* FAQ */
@@ -251,7 +258,7 @@ footer .brand{color:#2a1520}
 .ask input:disabled,.ask button:disabled{opacity:.5;cursor:not-allowed}
 .ask-note{font-family:var(--mono);font-size:.68rem;color:var(--faint);margin-top:10px;text-align:center;letter-spacing:.04em}
 @media(max-width:760px){.secgrid{grid-template-columns:repeat(2,1fr)}.demo-grid{grid-template-columns:1fr 1fr}}
-/* floating ARIA chat — available everywhere */
+/* floating ARIA chat: available everywhere */
 .aria-fab{position:fixed;bottom:22px;right:22px;z-index:70;display:flex;align-items:center;gap:10px;padding:10px 18px 10px 10px;border:0;border-radius:999px;cursor:pointer;background:linear-gradient(120deg,#e6c463,#c9a227 55%,#1f8a74);color:#161512;font-family:var(--sans);font-weight:700;font-size:.85rem;box-shadow:0 14px 34px rgba(201,162,39,.34);transition:transform .25s,box-shadow .25s}
 .aria-fab:hover{transform:translateY(-2px);box-shadow:0 18px 46px rgba(201,162,39,.46)}
 .fab-mark{position:relative;width:30px;height:30px;border-radius:50%;background:#0a0e1a;color:var(--gold-lite);font-family:var(--serif);display:grid;place-items:center;font-size:1rem}
@@ -321,20 +328,28 @@ footer .brand{color:#2a1520}
 <div class="grain"></div>
 <div class="progress" id="prog"></div>
 
-<!-- FEEDBACK (header) — real loop: scored → worker task → PR -->
+<!-- FEEDBACK (header): real loop: scored → worker task → PR -->
 <div class="fb-bar" id="fbBar">
   <div class="wrap">
-    <span class="fb-txt">♡ <b>ZHC</b> community — got an idea? ARIA scores it and turns strong ideas into real work. <a href="https://t.me/Aria_ZHC_Bot" target="_blank" rel="noopener noreferrer">Telegram ↗</a></span>
-    <button class="fb-open" id="fbOpen">＋ Your feedback</button>
+    <span class="fb-txt"><b>ZHC</b> community. Got an idea? ARIA scores it and turns strong ideas into real work. <a href="https://t.me/Aria_ZHC_Bot" target="_blank" rel="noopener noreferrer">Telegram ↗</a></span>
+    <button class="fb-open" id="fbOpen">+ Your feedback</button>
   </div>
   <div class="fb-panel" id="fbPanel" hidden>
     <div class="wrap">
-      <textarea id="fbMsg" rows="3" maxlength="500" placeholder="e.g. add a price chart, improve the FAQ, a token to analyse…"></textarea>
+      <div class="fb-cats" id="fbCats">
+        <button type="button" class="fb-cat" data-cat="Analysis quality">Analysis quality</button>
+        <button type="button" class="fb-cat" data-cat="Token to analyse">Token to analyse</button>
+        <button type="button" class="fb-cat" data-cat="New feature">New feature</button>
+        <button type="button" class="fb-cat" data-cat="Report clarity">Report clarity</button>
+        <button type="button" class="fb-cat" data-cat="Bug">Bug</button>
+      </div>
+      <textarea id="fbMsg" rows="3" maxlength="500" placeholder="What would sharpen ARIA's analysis? A signal to add, a token to cover, a clearer report…"></textarea>
       <div class="fb-row">
         <input id="fbHandle" type="text" maxlength="64" placeholder="Your @handle (optional)" />
+        <span class="fb-count" id="fbCount">0/500</span>
         <button id="fbSend">Send to ARIA →</button>
       </div>
-      <p class="fb-note" id="fbNote">Strong ideas become real tasks (PR) · a fitting note may be quoted on X (@Aria_ZHC) — never financial advice.</p>
+      <p class="fb-note" id="fbNote">Strong ideas become real tasks (PR) · a fitting note may be quoted on X (@Aria_ZHC). Never financial advice.</p>
     </div>
   </div>
 </div>
@@ -357,7 +372,7 @@ footer .brand{color:#2a1520}
         <p class="eyebrow enter e1">Open to all · no expertise required</p>
         <h1><span class="enter e2" style="display:block">The report that</span>
           <span class="g enter e3" style="display:block">proves the decision.</span></h1>
-        <p class="lead enter e4">New to this? You don't need to be an expert. ARIA does the analysis for you — in plain language — and <b>tells you when to walk away</b>. You always keep the decision.</p>
+        <p class="lead enter e4">New to this? You don't need to be an expert. ARIA does the analysis for you, in plain language, and <b>tells you when to walk away</b>. You always keep the decision.</p>
         <div class="cta-row enter e5">
           <a class="btn" href="#start">Join the waitlist →</a>
           <a class="ghost" href="#dossier">See what's inside ↓</a>
@@ -369,7 +384,7 @@ footer .brand{color:#2a1520}
             <div class="rep shimmer">
               <div class="rep-mast">
                 <div class="word"><span class="drop"></span> Aria Vanguard ZHC · Analysis report</div>
-                <h3>VC Analysis — sample</h3>
+                <h3>VC Analysis · sample</h3>
                 <div class="meta">BASE · 2026-07-07 · REF A-042</div>
                 <div class="pills">
                   <span class="pill buy">BUY</span>
@@ -394,7 +409,7 @@ footer .brand{color:#2a1520}
     <div class="head">
       <p class="kicker rv">Try it · free</p>
       <h2 class="rv d1">Paste a token. <span class="g">See ARIA think.</span></h2>
-      <p class="lead rv d2">A taste of the scan — on-chain facts and a first verdict in seconds. The full dossier comes with the report.</p>
+      <p class="lead rv d2">A taste of the scan: on-chain facts and a first verdict in seconds. The full dossier comes with the report.</p>
     </div>
     <div class="demo-panel rv d2">
       <div class="demo-in">
@@ -413,7 +428,7 @@ footer .brand{color:#2a1520}
     <div class="head">
       <p class="kicker rv">One dossier · every angle</p>
       <h2 class="rv d1">Everything that goes<br>into <span class="g">one decision.</span></h2>
-      <p class="lead rv d2">Facts, asymmetry, levels, and an adversarial audit — <b>raw data, never rumours.</b> Missing data is flagged <i>“insufficient.”</i></p>
+      <p class="lead rv d2">Facts, asymmetry, levels, and an adversarial audit. <b>Raw data, never rumours.</b> Missing data is flagged <i>“insufficient.”</i></p>
     </div>
 
     <div class="quinx">
@@ -444,7 +459,7 @@ footer .brand{color:#2a1520}
         </div>
       </div>
 
-      <!-- column 2 (offset — quinconce) -->
+      <!-- column 2 (offset: quinconce) -->
       <div class="qcol mid">
         <div class="qcard ivory">
           <div class="qlabel">On-chain signals</div>
@@ -474,11 +489,11 @@ footer .brand{color:#2a1520}
         <div class="qcard judge">
           <div class="qlabel">Risk-first by default</div>
           <div class="qbig no">No.</div>
-          <p class="qsub">ARIA's default verdict is <b style="color:#f0b6b6">AVOID · EXTREME</b>. A token has to <b>earn</b> a better call on the facts — missing data is flagged, never guessed. <b style="color:#e6c463">It knows how to say no.</b></p>
+          <p class="qsub">ARIA's default verdict is <b style="color:#f0b6b6">AVOID · EXTREME</b>. A token has to <b>earn</b> a better call on the facts. Missing data is flagged, never guessed. <b style="color:#e6c463">It knows how to say no.</b></p>
         </div>
         <div class="qcard ivory">
           <div class="qlabel">Thesis</div>
-          <p class="qthesis">“Credible liquidity, verified contract, smart-money accumulation — asymmetry favours a measured entry.”</p>
+          <p class="qthesis">“Credible liquidity, verified contract, smart-money accumulation. Asymmetry favours a measured entry.”</p>
         </div>
       </div>
     </div>
@@ -489,11 +504,11 @@ footer .brand{color:#2a1520}
 <section class="secband">
   <div class="wrap">
     <div class="secgrid">
-      <div class="secitem rv"><div class="ic">🔑</div><div class="t">Non-custodial</div><div class="d">You hold the keys. Always.</div></div>
-      <div class="secitem rv d1"><div class="ic">✍️</div><div class="t">You sign</div><div class="d">Nothing moves without you.</div></div>
-      <div class="secitem rv d1"><div class="ic">🚫</div><div class="t">No auto-trade</div><div class="d">ARIA never executes.</div></div>
-      <div class="secitem rv d2"><div class="ic">🔒</div><div class="t">Signed reports</div><div class="d">SHA-256 fingerprint.</div></div>
-      <div class="secitem rv d2"><div class="ic">⚖️</div><div class="t">Compliance-first</div><div class="d">Facts, not promises.</div></div>
+      <div class="secitem rv"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4"/><path d="m18 5 2 2"/><path d="m15 8 2 2"/></svg></div><div class="t">Non-custodial</div><div class="d">You hold the keys. Always.</div></div>
+      <div class="secitem rv d1"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></div><div class="t">You sign</div><div class="d">Nothing moves without you.</div></div>
+      <div class="secitem rv d1"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></div><div class="t">No auto-trade</div><div class="d">ARIA never executes.</div></div>
+      <div class="secitem rv d2"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div><div class="t">Signed reports</div><div class="d">SHA-256 fingerprint.</div></div>
+      <div class="secitem rv d2"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M8 21h8"/><path d="M6 7h12l-.5-1.6L12 4 6.5 5.4Z"/><path d="M6 7 3 13a3 3 0 0 0 6 0Z"/><path d="M18 7l3 6a3 3 0 0 1-6 0Z"/></svg></div><div class="t">Compliance-first</div><div class="d">Facts, not promises.</div></div>
     </div>
   </div>
 </section>
@@ -504,14 +519,14 @@ footer .brand{color:#2a1520}
     <div class="head">
       <p class="kicker rv" style="letter-spacing:.26em">Two editions, one standard of rigour</p>
       <h2 class="rv d1">Standard or <span class="g">premium.</span></h2>
-      <p class="lead rv d2">Same rigour — two finishes. Standard covers the essentials; premium reveals the full dossier. <b>Pricing indicative — ordering opens at launch.</b></p>
+      <p class="lead rv d2">Same rigour, two finishes. Standard covers the essentials; premium reveals the full dossier. <b>Pricing indicative. Ordering opens at launch.</b></p>
     </div>
     <div class="editions">
       <div class="ed rv d1">
         <div class="rep">
           <div class="rep-mast std">
             <div class="word"><span class="drop"></span> Aria Vanguard ZHC · Standard edition</div>
-            <h3 style="font-size:1.35rem">VC Analysis — sample</h3>
+            <h3 style="font-size:1.35rem">VC Analysis · sample</h3>
             <div class="meta">BASE · 2026-07-07 · REF A-042</div>
             <div class="pills">
               <span class="pill buy">BUY</span>
@@ -527,7 +542,7 @@ footer .brand{color:#2a1520}
             <div class="deliv lock"><span class="ic">✓</span> Detailed full analysis</div>
             <div class="deliv lock"><span class="ic">✓</span> Methodology &amp; sources</div>
             <div class="deliv lock"><span class="ic">✓</span> Verified project references</div>
-            <div class="tease">🔒 4 sections unlock in Premium</div>
+            <div class="tease"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:-1px;margin-right:5px"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>4 sections unlock in Premium</div>
           </div>
         </div>
         <div class="tag"><span class="name">Standard</span><span class="price">$30<small> / report</small></span></div>
@@ -536,7 +551,7 @@ footer .brand{color:#2a1520}
         <div class="rep">
           <div class="rep-mast">
             <div class="word"><span class="drop"></span> Aria Vanguard ZHC · Premium edition</div>
-            <h3 style="font-size:1.35rem">VC Analysis — sample</h3>
+            <h3 style="font-size:1.35rem">VC Analysis · sample</h3>
             <div class="meta">BASE · 2026-07-07 · REF A-042</div>
             <div class="pills">
               <span class="pill buy">BUY</span>
@@ -566,7 +581,7 @@ footer .brand{color:#2a1520}
   <div class="wrap">
     <p class="kicker rv" style="letter-spacing:.26em">Or the subscription · launch</p>
     <div class="price-big rv d1">$100<small> / month</small></div>
-    <p class="lead center rv d2"><b>Unlimited</b> reports, standard and premium — <b>plus live access to ARIA</b>, your analyst on demand.</p>
+    <p class="lead center rv d2"><b>Unlimited</b> reports, standard and premium, <b>plus live access to ARIA</b>, your analyst on demand.</p>
     <div class="terms rv d3">
       <span><i></i> Unlimited reports</span>
       <span><i></i> ARIA live · LLM</span>
@@ -582,7 +597,7 @@ footer .brand{color:#2a1520}
     <div class="head">
       <p class="kicker rv">Questions</p>
       <h2 class="rv d1">Ask <span class="g">ARIA.</span></h2>
-      <p class="lead rv d2">Tap a question — or ask your own. ARIA answers from verified facts, <b>never financial advice.</b></p>
+      <p class="lead rv d2">Tap a question, or ask your own. ARIA answers from verified facts, <b>never financial advice.</b></p>
     </div>
     <div class="faq-wrap rv d2">
       <div class="chips" id="faqChips">
@@ -594,7 +609,7 @@ footer .brand{color:#2a1520}
       </div>
       <div class="faq-answer">
         <div class="who"><span class="drop" style="width:12px;height:12px"></span> ARIA</div>
-        <span id="faqTxt">Pick a question above, or type your own below. I answer straight — and I tell you when something is not advice.</span>
+        <span id="faqTxt">Pick a question above, or type your own below. I answer straight, and I tell you when something is not advice.</span>
       </div>
       <div class="ask">
         <input id="askIn" type="text" placeholder="Ask ARIA anything…" />
@@ -609,7 +624,7 @@ footer .brand{color:#2a1520}
 <section class="final" id="start">
   <div class="wrap">
     <h2 class="rv">Be first in line.</h2>
-    <p class="lead rv d1">Reports and subscription open soon. Join the waitlist — <b>be notified the moment ARIA goes live.</b></p>
+    <p class="lead rv d1">Reports and subscription open soon. Join the waitlist. <b>Be notified the moment ARIA goes live.</b></p>
     <div class="rv d2" style="margin-top:30px"><a class="btn" href="#">Join the waitlist →</a></div>
     <p class="fine rv d3">Launching soon · no payment yet · open to all</p>
   </div>
@@ -622,7 +637,7 @@ footer .brand{color:#2a1520}
     <a class="dom" href="#">ariavanguardzhc.com</a>
   </div>
 </footer>
-<p class="disc">Aria Vanguard ZHC provides analysis for informational purposes only. Illustrative example — no analysis constitutes personalised investment advice or a solicitation. Non-custodial: ARIA never holds your funds and never moves them without your signature. No automatic execution — every decision is validated by the client. Past performance does not guarantee future results. Service subject to compliance validation before any billing.</p>
+<p class="disc">Aria Vanguard ZHC provides analysis for informational purposes only. Illustrative example. No analysis constitutes personalised investment advice or a solicitation. Non-custodial: ARIA never holds your funds and never moves them without your signature. No automatic execution. Every decision is validated by the client. Past performance does not guarantee future results. Service subject to compliance validation before any billing.</p>
 
 <!-- FLOATING ARIA CHAT (available everywhere) -->
 <button class="aria-fab" id="ariaFab" aria-label="Ask ARIA">
@@ -638,7 +653,7 @@ footer .brand{color:#2a1520}
     </div>
   </div>
   <div class="ac-body" id="acBody">
-    <div class="ac-msg aria">Hi — I'm ARIA. Ask me about the reports, security, or how it works. I answer from verified facts, never financial advice.</div>
+    <div class="ac-msg aria">Hi, I'm ARIA. Ask me about the reports, security, or how it works. I answer from verified facts, never financial advice.</div>
   </div>
   <div class="ac-chips">
     <span class="ac-chip" data-a="advice">Is this advice?</span>
@@ -725,47 +740,47 @@ footer .brand{color:#2a1520}
   /* FAQ · preset + ask ARIA (demo limit) */
   var faqTxt=document.getElementById('faqTxt');
   var faqA={
-    advice:'No. ARIA produces research for information only — not personalised advice, not a solicitation. You always make and sign your own decisions.',
+    advice:'No. ARIA produces research for information only, not personalised advice, not a solicitation. You always make and sign your own decisions.',
     funds:'Never. ARIA is non-custodial: you hold your keys, and nothing moves without your signature. ARIA never executes a trade.',
-    chains:'Base only at launch — focused and fast. More can follow once the first is rock-solid.',
+    chains:'Base only at launch: focused and fast. More can follow once the first is rock-solid.',
     get:'A verdict with confidence and risk, on-chain signals, reward/risk, scenarios, thesis and levels. Premium adds the detailed analysis, methodology and verified references.',
-    cancel:'Yes — the subscription is cancel-anytime. One-off reports are one-off. Ordering opens at launch.'
+    cancel:'Yes. The subscription is cancel-anytime. One-off reports are one-off. Ordering opens at launch.'
   };
   document.querySelectorAll('.chip').forEach(function(c){
     c.addEventListener('click',function(){
       document.querySelectorAll('.chip').forEach(function(x){ x.classList.remove('on'); });
       c.classList.add('on');
-      if(faqTxt) faqTxt.textContent=faqA[c.getAttribute('data-a')]||'—';
+      if(faqTxt) faqTxt.textContent=faqA[c.getAttribute('data-a')]||'…';
     });
   });
   var askBtn=document.getElementById('askBtn'), askIn=document.getElementById('askIn'), askNote=document.getElementById('askNote'), asked=0;
   function askAria(){
     var q=(askIn.value||'').trim(); if(!q)return; asked++;
-    if(faqTxt) faqTxt.textContent='On "'+q+'" — in this preview I answer from a fixed set of verified facts. Live, I answer from my knowledge base, always flagging what is not advice and what data is missing.';
+    if(faqTxt) faqTxt.textContent='On "'+q+'", in this preview I answer from a fixed set of verified facts. Live, I answer from my knowledge base, always flagging what is not advice and what data is missing.';
     askIn.value='';
     var left=2-asked;
-    if(left<=0){ if(askNote)askNote.textContent='That is the free limit — unlimited questions with the subscription.'; askIn.disabled=true; if(askBtn)askBtn.disabled=true; }
+    if(left<=0){ if(askNote)askNote.textContent='That is the free limit. Unlimited questions with the subscription.'; askIn.disabled=true; if(askBtn)askBtn.disabled=true; }
     else if(askNote) askNote.textContent=left+' free question left · unlimited with the subscription';
   }
   if(askBtn){ askBtn.addEventListener('click',askAria); askIn.addEventListener('keydown',function(e){ if(e.key==='Enter')askAria(); }); }
 
-  /* floating ARIA chat — available everywhere */
+  /* floating ARIA chat: available everywhere */
   var fab=document.getElementById('ariaFab'), chat=document.getElementById('ariaChat'), acClose=document.getElementById('acClose'),
       acBody=document.getElementById('acBody'), acIn=document.getElementById('acIn'), acSend=document.getElementById('acSend'), acNote=document.getElementById('acNote');
   var acA={
-    advice:'No — research for information only, not advice or a solicitation. You always decide and sign yourself.',
+    advice:'No. Research for information only, not advice or a solicitation. You always decide and sign yourself.',
     funds:'Never. ARIA is non-custodial: you hold your keys, nothing moves without your signature, and ARIA never trades for you.',
     get:'A verdict (confidence + risk), on-chain signals, reward/risk, scenarios, thesis and levels. Premium adds the detailed analysis, methodology and verified references.',
-    chains:'Base only at launch — focused and fast.'
+    chains:'Base only at launch: focused and fast.'
   };
   var acN=0, AC_LIMIT=4;
   function acAdd(txt,who){ if(!acBody)return; var d=document.createElement('div'); d.className='ac-msg '+who; d.textContent=txt; acBody.appendChild(d); acBody.scrollTop=acBody.scrollHeight; }
   function acAsk(q,canned){
     if(acIn.disabled) return;
     acAdd(q,'me'); acN++;
-    setTimeout(function(){ acAdd(canned||('On "'+q+'" — in this demo I answer from a fixed set of verified facts. Live, I answer from my knowledge base and always flag what is not advice.'),'aria'); },420);
+    setTimeout(function(){ acAdd(canned||('On "'+q+'", in this demo I answer from a fixed set of verified facts. Live, I answer from my knowledge base and always flag what is not advice.'),'aria'); },420);
     var left=AC_LIMIT-acN;
-    if(left<=0){ if(acNote)acNote.textContent='Free demo limit — unlimited with the subscription.'; acIn.disabled=true; if(acSend)acSend.disabled=true; }
+    if(left<=0){ if(acNote)acNote.textContent='Free demo limit. Unlimited with the subscription.'; acIn.disabled=true; if(acSend)acSend.disabled=true; }
     else if(acNote) acNote.textContent=left+' free messages left · unlimited with the subscription';
   }
   if(fab){ fab.addEventListener('click',function(){ chat.classList.add('open'); chat.setAttribute('aria-hidden','false'); fab.classList.add('hide'); setTimeout(function(){ acIn.focus(); },200); }); }
@@ -776,24 +791,33 @@ footer .brand{color:#2a1520}
   function acSendMsg(){ var q=(acIn.value||'').trim(); if(!q)return; acIn.value=''; acAsk(q,null); }
   if(acSend){ acSend.addEventListener('click',acSendMsg); acIn.addEventListener('keydown',function(e){ if(e.key==='Enter')acSendMsg(); }); }
 
-  /* community feedback (header) — real endpoint: scored -> worker task -> PR */
+  /* community feedback (header): real endpoint: scored -> worker task -> PR */
   var fbOpen=document.getElementById('fbOpen'), fbPanel=document.getElementById('fbPanel'),
       fbMsg=document.getElementById('fbMsg'), fbHandle=document.getElementById('fbHandle'),
-      fbSend=document.getElementById('fbSend'), fbNote=document.getElementById('fbNote');
+      fbSend=document.getElementById('fbSend'), fbNote=document.getElementById('fbNote'),
+      fbCount=document.getElementById('fbCount'), fbCat='';
   if(fbOpen){ fbOpen.addEventListener('click',function(){ fbPanel.hidden=!fbPanel.hidden; if(!fbPanel.hidden&&fbMsg)fbMsg.focus(); }); }
+  document.querySelectorAll('.fb-cat').forEach(function(c){ c.addEventListener('click',function(){
+    var was=c.classList.contains('on');
+    document.querySelectorAll('.fb-cat').forEach(function(x){ x.classList.remove('on'); });
+    if(was){ fbCat=''; } else { c.classList.add('on'); fbCat=c.getAttribute('data-cat')||''; }
+  }); });
+  if(fbMsg){ fbMsg.addEventListener('input',function(){ if(fbCount)fbCount.textContent=fbMsg.value.length+'/500'; }); }
   if(fbSend){ fbSend.addEventListener('click',function(){
     var msg=(fbMsg.value||'').trim();
     if(msg.length<8){ if(fbNote)fbNote.textContent='Please write a bit more (min 8 characters).'; return; }
+    var payload=(fbCat?('['+fbCat+'] '):'')+msg;
     fbSend.disabled=true; if(fbNote)fbNote.textContent='Sending to ARIA…';
     fetch('https://api.ariavanguardzhc.com/api/aria/community-feedback',{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ message:msg, handle:(fbHandle.value||'').trim(), lang:'en' })
+      body:JSON.stringify({ message:payload, handle:(fbHandle.value||'').trim(), lang:'en' })
     }).then(function(r){ return r.json(); }).then(function(d){
-      if(fbNote)fbNote.textContent=(d&&d.reply)?d.reply:'Thank you — ARIA has your note.';
-      fbMsg.value=''; fbSend.disabled=false;
-    }).catch(function(){ if(fbNote)fbNote.textContent='Network error — try again, or ping us on Telegram.'; fbSend.disabled=false; });
+      if(fbNote)fbNote.textContent=(d&&d.reply)?d.reply:'Thank you. ARIA has your note.';
+      fbMsg.value=''; if(fbCount)fbCount.textContent='0/500'; fbSend.disabled=false;
+    }).catch(function(){ if(fbNote)fbNote.textContent='Network error. Try again, or ping us on Telegram.'; fbSend.disabled=false; });
   }); }
 })();
 </script>
+
 </body>
 </html>

@@ -78,7 +78,7 @@ export function CommunityWelcomeBanner() {
             className="text-xs text-[#8a8578] hover:text-[#e8d5a8] transition-colors focus-ring flex items-center gap-1.5"
           >
             <MessageSquarePlus className="w-3.5 h-3.5 text-[#c9a962]" />
-            Your feedback — <span className="notranslate">ZHC</span> community
+            Your feedback · <span className="notranslate">ZHC</span> community
           </button>
           <button
             type="button"
@@ -102,7 +102,7 @@ export function CommunityWelcomeBanner() {
         <div className="flex items-start sm:items-center gap-3 sm:gap-4">
           <Heart className="w-4 h-4 text-[#c9a962] shrink-0 mt-0.5 sm:mt-0" aria-hidden />
           <p className="text-sm text-[#9a958a] leading-relaxed flex-1 font-light">
-            <span className="text-[#d4c4a0] notranslate">ZHC</span> community — got an idea? ARIA
+            <span className="text-[#d4c4a0] notranslate">ZHC</span> community. Got an idea? ARIA
             notes it and may ship it if it strengthens Vanguard.{' '}
             <a
               href={TELEGRAM_COMMUNITY_URL}
@@ -145,7 +145,7 @@ export function CommunityWelcomeBanner() {
               required
             />
             <p className="text-[11px] text-[#6b665c] leading-snug">
-              {message.length}/500 — full note saved; @Aria_ZHC quote auto-fits X limit (280)
+              {message.length}/500 · full note saved; @Aria_ZHC quote auto-fits X limit (280)
             </p>
             <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
               <input

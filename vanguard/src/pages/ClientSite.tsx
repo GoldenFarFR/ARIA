@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 
 /**
- * ClientSite — public product landing (English-first) for ARIA's analysis reports.
+ * ClientSite: public product landing (English-first) for ARIA's analysis reports.
  *
  * Separate surface from the ZHC vitrine (VanguardSite). Open to everyone; the
  * marketing campaign funnels curious visitors here. Design validated with the
@@ -174,7 +174,7 @@ export function ClientSite() {
                 <span className="g">proves the decision.</span>
               </h1>
               <p className="sub">
-                Not a signal. An <b>analysis dossier</b> — quantified, audited, <b>within everyone's reach</b>.
+                Not a signal. An <b>analysis dossier</b>: quantified, audited, <b>within everyone's reach</b>.
               </p>
               <div className="cta-row">
                 <a className="btn" href="#start">Order a report →</a>
@@ -185,7 +185,7 @@ export function ClientSite() {
               <div className="rep card3d">
                 <div className="rep-mast">
                   <div className="word"><span className="drop" /> Aria Vanguard ZHC · Analysis report</div>
-                  <h3>VC Analysis — sample</h3>
+                  <h3>VC Analysis · sample</h3>
                   <div className="meta">Base · 07/07/2026 · ref. A‑042</div>
                   <div className="rep-pills">
                     <span className="pill buy">BUY</span>
@@ -221,7 +221,7 @@ export function ClientSite() {
               <p className="kicker rv">Step 1</p>
               <h2 className="lead-h rv">We compute<br /><span className="g">every signal.</span></h2>
               <p className="sub rv">
-                Liquidity, holders, contract, smart money, security. <b>Raw facts</b>, never rumours — and any
+                Liquidity, holders, contract, smart money, security. <b>Raw facts</b>, never rumours, and any
                 missing data is flagged “insufficient”.
               </p>
             </div>
@@ -237,7 +237,7 @@ export function ClientSite() {
               <p className="kicker rv">Step 2</p>
               <h2 className="lead-h rv">Then we quantify<br /><span className="g">the return.</span></h2>
               <p className="sub rv">
-                Upside, downside, and the <b>reward-to-risk ratio</b> — the asymmetry, at a glance. Zero invented numbers.
+                Upside, downside, and the <b>reward-to-risk ratio</b>: the asymmetry, at a glance. Zero invented numbers.
               </p>
             </div>
             <div className="scene">
@@ -248,7 +248,7 @@ export function ClientSite() {
                     <div className="rr-col mid"><div className="lab">Reward / risk</div><div className="num rr">3.1</div></div>
                     <div className="rr-col"><div className="lab">Downside risk</div><div className="num dn">−46%</div></div>
                   </div>
-                  <div className="rr-cap">Favourable asymmetry — the targeted reward is 3.1× the risk taken.</div>
+                  <div className="rr-cap">Favourable asymmetry: the targeted reward is 3.1× the risk taken.</div>
                 </div></div>
               </div>
             </div>
@@ -281,7 +281,7 @@ export function ClientSite() {
               <h2 className="lead-h rv">And above all,<br /><span className="g">it knows how to say no.</span></h2>
               <p className="sub rv">
                 A second model <b>attacks</b> every analysis. If it doesn't hold up, you know before risking a dollar.
-                <b> No automatic execution — you always validate.</b>
+                <b> No automatic execution. You always validate.</b>
               </p>
             </div>
           </div>
@@ -294,14 +294,14 @@ export function ClientSite() {
           <p className="kicker rv" style={{ letterSpacing: '0.3em' }}>Two editions, one standard of rigour</p>
           <h2 className="lead-h rv">Standard or <span className="g">premium.</span></h2>
           <p className="sub rv" style={{ marginLeft: 'auto', marginRight: 'auto' }}>
-            The same content, the same rigour — two finishes. One-off, or unlimited by subscription.
+            The same content, the same rigour, two finishes. One-off, or unlimited by subscription.
           </p>
           <div className="editions">
             <div className="ed rv">
               <div className="rep">
                 <div className="rep-mast std">
                   <div className="word"><span className="drop" /> Aria Vanguard ZHC · Standard edition</div>
-                  <h3 className="sm">VC Analysis — sample</h3>
+                  <h3 className="sm">VC Analysis · sample</h3>
                   <div className="meta" style={{ color: '#8f8f96' }}>Base · 07/07/2026 · ref. A‑042</div>
                   <div className="rep-pills">
                     <span className="pill buy">BUY</span>
@@ -316,7 +316,7 @@ export function ClientSite() {
               <div className="rep">
                 <div className="rep-mast">
                   <div className="word"><span className="drop" /> Aria Vanguard ZHC · Premium edition</div>
-                  <h3 className="sm">VC Analysis — sample</h3>
+                  <h3 className="sm">VC Analysis · sample</h3>
                   <div className="meta">Base · 07/07/2026 · ref. A‑042</div>
                   <div className="rep-pills">
                     <span className="pill buy">BUY</span>
@@ -337,7 +337,7 @@ export function ClientSite() {
           <p className="kicker rv" style={{ letterSpacing: '0.3em' }}>Or the subscription · launch</p>
           <div className="price rv">100&nbsp;$<small>&nbsp;/ month</small></div>
           <p className="sub center rv" style={{ margin: '16px auto 0', maxWidth: '40ch' }}>
-            <b>Unlimited</b> reports, standard and premium — <b>plus live access to ARIA</b>, your analyst on demand.
+            <b>Unlimited</b> reports, standard and premium, <b>plus live access to ARIA</b>, your analyst on demand.
           </p>
           <div className="terms rv">
             <span><i />Unlimited reports</span>
@@ -352,7 +352,7 @@ export function ClientSite() {
       <section className="final" id="start">
         <div className="wrap">
           <h2 className="rv">Start now.</h2>
-          <p className="rv">A one-off report, or the subscription. ARIA does the analysis — you keep the decision.</p>
+          <p className="rv">A one-off report, or the subscription. ARIA does the analysis. You keep the decision.</p>
           <div style={{ marginTop: 30 }} className="rv"><a className="btn" href="#">Order a report →</a></div>
           <p className="fine rv">No commitment · secure payment</p>
         </div>
@@ -373,7 +373,7 @@ export function ClientSite() {
         </div>
       </footer>
       <p className="disc">
-        Aria Vanguard ZHC provides analysis for informational purposes only. Illustrative example — no analysis
+        Aria Vanguard ZHC provides analysis for informational purposes only. Illustrative example. No analysis
         constitutes personalised investment advice or a solicitation. No automatic execution: every decision is
         validated and signed by the client. Past performance does not guarantee future results. Service subject to
         compliance validation before any billing.

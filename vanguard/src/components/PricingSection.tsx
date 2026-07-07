@@ -30,7 +30,7 @@ export function PricingSection() {
             Aria Market Pro
           </h2>
           <p className="text-[#6b665c] max-w-xl mx-auto font-light">
-            Signaux actionnables pour traders Base — abonnement mensuel, capital minimal pour démarrer.
+            Signaux actionnables pour traders Base, abonnement mensuel, capital minimal pour démarrer.
           </p>
         </div>
 
@@ -62,7 +62,7 @@ export function PricingSection() {
             )}
             {!plan?.stripe_configured && plan && (
               <p className="text-xs text-[#6b665c] mt-3 text-center">
-                Paiement en cours de configuration — liste d&apos;attente ouverte.
+                Paiement en cours de configuration, liste d&apos;attente ouverte.
               </p>
             )}
           </div>
