@@ -154,7 +154,7 @@ async def test_vc_valid_runs_analysis_and_sends_order(monkeypatch):
     update = FakeUpdate(f"/vc {ADDR}")
     await telegram_bot._handle_vc(update, FakeContext())
 
-    analyze.assert_awaited_once_with(ADDR)
+    analyze.assert_awaited_once_with(ADDR, lang="fr")
     send_report.assert_awaited_once()
     # replies : "en cours", ordre, log prédiction, statut email
     assert len(update.message.replies) == 4
@@ -223,7 +223,7 @@ async def test_vc_test_mode_shows_reasoning_no_email_no_record(monkeypatch):
     await telegram_bot._handle_vc(update, FakeContext())
 
     # L'analyse tourne normalement...
-    analyze.assert_awaited_once_with(ADDR)
+    analyze.assert_awaited_once_with(ADDR, lang="fr")
     # ...mais AUCUN email et AUCUNE écriture/incrément track-record.
     send_report.assert_not_called()
     record.assert_not_called()

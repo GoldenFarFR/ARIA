@@ -392,64 +392,78 @@ def _deterministic_fallback(ctx: TokenScanContext) -> VCResult:
     )
 
 
-def format_telegram_order(result: VCResult, *, capital_usd: float | None = None) -> str:
+def format_telegram_order(
+    result: VCResult, *, capital_usd: float | None = None, lang: str = "fr"
+) -> str:
     """Ordre court et actionnable pour Telegram — proposition, jamais exécution.
 
     Réservé au canal Telegram : concis, lisible sur mobile. Le rapport complet
     part par email. Le disclaimer « validation manuelle » est toujours présent.
     ``capital_usd`` (optionnel) convertit la taille suggérée en un montant en
     dollars — l'opérateur exécute manuellement sur Tangem, un montant net évite
-    tout calcul mental avant signature.
+    tout calcul mental avant signature. ``lang`` (fr/en) ne traduit QUE les
+    libellés fixes et le code de risque : chiffres, adresses et reco inchangés.
     """
-    potentiel = f"{result.potentiel}/10" if result.potentiel is not None else "n/a"
-    header = "📊 ARIA — Ordre proposé" if result.actionable else "📊 ARIA — Analyse (pas d'ordre)"
+    from aria_core.skills.vc_i18n import order_strings, risk_label
+
+    s = order_strings(lang)
+    potentiel = f"{result.potentiel}/10" if result.potentiel is not None else s["na"]
+    header = s["order_header"] if result.actionable else s["analysis_header"]
 
     lines = [
         header,
-        f"Token : {result.contract}",
-        f"Reco : {result.recommandation} · Potentiel {potentiel} · Risque {result.risque}",
+        f"{s['token']} : {result.contract}",
+        f"{s['reco']} : {result.recommandation} · {s['potential']} {potentiel}"
+        f" · {s['risk']} {risk_label(result.risque, lang)}",
     ]
     if result.rr is not None:
-        lines.append(f"⚖️ R/R : {result.rr} (récompense/risque)")
+        lines.append(s["rr"].format(rr=result.rr))
     if result.actionable and result.recommandation == "BUY":
-        taille_line = f"Taille suggérée : {result.taille_pct:.1f}% du capital"
+        taille_line = s["size"].format(pct=result.taille_pct)
         if capital_usd is not None and capital_usd > 0:
             position_usd = capital_usd * result.taille_pct / 100
-            taille_line += f" (≈ ${position_usd:,.0f} sur ${capital_usd:,.0f})"
+            taille_line += s["size_usd"].format(pos=position_usd, cap=capital_usd)
         lines.append(taille_line)
-        lines.append(f"Entrée : {result.entree}")
-        lines.append(f"Invalidation : {result.invalidation}")
-        lines.append(f"Cible : {result.cible}")
+        lines.append(f"{s['entry']} : {result.entree}")
+        lines.append(f"{s['invalidation']} : {result.invalidation}")
+        lines.append(f"{s['target']} : {result.cible}")
     elif result.recommandation == "SELL":
-        lines.append(f"Entrée : {result.entree}")
-        lines.append(f"Invalidation : {result.invalidation}")
+        lines.append(f"{s['entry']} : {result.entree}")
+        lines.append(f"{s['invalidation']} : {result.invalidation}")
 
     if result.these:
         lines.append("")
-        lines.append(f"Thèse : {result.these}")
+        lines.append(f"{s['thesis']} : {result.these}")
 
     if not result.llm_used:
         lines.append("")
-        lines.append("⚠️ Analyse qualitative indisponible (LLM désactivé) — signaux quantitatifs seuls.")
+        lines.append(s["no_llm"])
 
     lines.append("")
-    lines.append("⚠️ Proposition — validation et exécution manuelle sur ta Tangem. Aucune exécution automatique.")
+    lines.append(s["disclaimer"])
     return "\n".join(lines)
 
 
-async def analyze_vc(contract: str) -> VCResult:
+async def analyze_vc(contract: str, lang: str = "fr") -> VCResult:
     """Analyse VC complète d'un token Base. Dôme-hardened, fallback déterministe."""
-    result, _ctx = await analyze_vc_with_context(contract)
+    result, _ctx = await analyze_vc_with_context(contract, lang=lang)
     return result
 
 
-async def analyze_vc_with_context(contract: str) -> tuple[VCResult, TokenScanContext]:
+async def analyze_vc_with_context(
+    contract: str, lang: str = "fr"
+) -> tuple[VCResult, TokenScanContext]:
     """Comme ``analyze_vc`` mais renvoie AUSSI le contexte de scan (faits on-chain).
 
     Permet au juge (``vc_judge.judge_analysis``) d'auditer l'analyse sur EXACTEMENT
     les mêmes faits, sans re-scanner le token. ``analyze_vc`` reste la surface
     publique inchangée (elle ignore le ctx) — aucun appelant existant n'est impacté.
+
+    ``lang`` (fr/en) : en anglais, une directive est ajoutée au prompt pour que la
+    prose du LLM sorte en anglais. En FR le prompt est inchangé (aucune régression).
     """
+    from aria_core.skills.vc_i18n import llm_language_directive
+
     ctx = await scan_base_token(contract, include_smart_money=True, include_fundamentals=True)
 
     if not ctx.valid_address:
@@ -467,7 +481,7 @@ async def analyze_vc_with_context(contract: str) -> tuple[VCResult, TokenScanCon
     try:
         raw = await chat_with_context(
             user_message,
-            _SYSTEM_PROMPT,
+            _SYSTEM_PROMPT + llm_language_directive(lang),
             max_tokens=1800,
             temperature=0.2,
             depth="develop",
