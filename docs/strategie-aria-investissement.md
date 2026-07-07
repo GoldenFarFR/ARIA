@@ -17,6 +17,29 @@
 
 Constante code : `vc_predictions.STRATEGY_ALLOCATION = {"vc": 0.85, "spec": 0.15}`.
 
+## 1 bis. La thèse VC d'ARIA : QUI on cherche  ⭐
+
+> **De vrais bâtisseurs sur Base, sous le radar, qui ont tokenisé et créé un produit
+> à gros potentiel.** (Thèse opérateur, gravée.)
+
+C'est la cible de la poche 85 %. Quatre critères cumulatifs :
+1. **Vrai bâtisseur** — une équipe qui construit réellement (produit vivant, commits,
+   itérations), pas du vaporware ni un pump. L'**anonymat n'est PAS disqualifiant**
+   (beaucoup d'excellents builders Base sont anonymes « comme moi ») — MAIS il doit être
+   **compensé par une preuve produit/traction** (un anon sans produit = scam ; un anon
+   avec un vrai produit + historique on-chain propre = la cible).
+2. **Sur Base** — cohérent avec le Base-only du lancement.
+3. **Sous le radar** — encore **peu découvert** : petite capitalisation, faible bruit
+   social, jeune. C'est là qu'est l'alpha (entrer AVANT la foule). Un token déjà pumpé
+   n'est PAS la cible.
+4. **Tokenisé + produit à gros potentiel** — il y a un token investissable ET un produit
+   réel avec un marché adressable crédible.
+
+**Conséquence sur le sourcing** (le filtre `safety_screen` retire les scams ; cette thèse
+ajoute une **sélection POSITIVE**) : on priorise les tokens **jeunes + faible cap + faible
+attention sociale + preuve de produit** (activité GitHub, app live, utilisateurs, revenus).
+Le radar (#7) et le moteur de connaissance (#8) alimentent cette détection « pépite cachée ».
+
 ## 2. Le pool entraînable : filtre → sélection honnête
 
 1. **Classifier / filtrer les scams.** Chaque contrat candidat passe `safety_screen`

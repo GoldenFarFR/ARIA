@@ -69,6 +69,23 @@ async def test_rejected_title_can_be_reproposed():
 
 
 @pytest.mark.asyncio
+async def test_ingest_seeds_is_idempotent():
+    n1 = await il.ingest_seeds()  # charge le vrai fichier de graines
+    assert n1 > 0
+    proposed = await il.list_candidates(status="proposed", limit=100)
+    assert len(proposed) == n1
+    # 2e appel : dédoublonnage par titre -> aucun doublon créé.
+    await il.ingest_seeds()
+    again = await il.list_candidates(status="proposed", limit=100)
+    assert len(again) == n1
+
+
+@pytest.mark.asyncio
+async def test_ingest_missing_file_is_graceful(tmp_path):
+    assert await il.ingest_seeds(tmp_path / "nope.yaml") == 0
+
+
+@pytest.mark.asyncio
 async def test_list_and_count_by_status():
     c1 = await il.record_candidate(title="A")
     c2 = await il.record_candidate(title="B")

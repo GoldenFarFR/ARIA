@@ -22,12 +22,15 @@ Stockage local SQLite `aria.db`, table `improvement_candidate` (ajout pur).
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import aiosqlite
 
 from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
+
+_SEEDS_PATH = Path(__file__).resolve().parent / "knowledge" / "improvement_seeds.yaml"
 
 _STATUSES = ("proposed", "testing", "grafted", "rejected")
 _CATEGORIES = ("tool", "data_source", "product", "artifact", "idea")
@@ -178,6 +181,42 @@ async def list_candidates(status: str | None = None, limit: int = 50) -> list[di
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (await db.execute(query, params)).fetchall()
     return [dict(zip(_COLUMNS, row)) for row in rows]
+
+
+async def ingest_seeds(path: str | Path | None = None) -> int:
+    """Charge les graines d'amélioration (YAML) dans la mémoire d'ARIA.
+
+    Idempotent : le dédoublonnage par titre de ``record_candidate`` fait qu'un
+    second appel n'ajoute rien (les graines déjà présentes ne sont pas dupliquées).
+    Appelé au démarrage pour qu'ARIA « se souvienne » des pistes repérées. Retourne
+    le nombre de graines traitées (existantes ou nouvelles). Dégradation gracieuse :
+    fichier absent ou YAML illisible → 0, jamais une exception qui casse le boot.
+    """
+    seeds_path = Path(path) if path else _SEEDS_PATH
+    if not seeds_path.exists():
+        return 0
+    try:
+        import yaml  # dépendance déjà présente (config) ; import paresseux
+
+        seeds = yaml.safe_load(seeds_path.read_text(encoding="utf-8")) or []
+    except Exception:  # noqa: BLE001 — jamais bloquant au démarrage
+        return 0
+    if not isinstance(seeds, list):
+        return 0
+    count = 0
+    for seed in seeds:
+        if not isinstance(seed, dict) or not seed.get("title"):
+            continue
+        await record_candidate(
+            title=str(seed.get("title")),
+            description=str(seed.get("description", "")),
+            category=str(seed.get("category", "idea")),
+            source=str(seed.get("source", "")),
+            benefit=str(seed.get("benefit", "")),
+            seam=str(seed.get("seam", "")),
+        )
+        count += 1
+    return count
 
 
 async def count_by_status() -> dict:
