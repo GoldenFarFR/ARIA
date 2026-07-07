@@ -461,10 +461,28 @@ async def analyze_vc_with_context(
 
     ``lang`` (fr/en) : en anglais, une directive est ajoutée au prompt pour que la
     prose du LLM sorte en anglais. En FR le prompt est inchangé (aucune régression).
-    """
-    from aria_core.skills.vc_i18n import llm_language_directive
 
+    Cache : si ``ARIA_VC_CACHE_TTL`` > 0, un même (contrat, langue) redemandé dans
+    la fenêtre TTL renvoie le résultat mémorisé (zéro re-scan, zéro token). Seules
+    les analyses LLM réussies sont mises en cache (jamais un fallback dégradé).
+    Un log de timing (scan vs LLM) est émis à chaque analyse réelle.
+    """
+    import time
+
+    from aria_core.skills import vc_cache
+    from aria_core.skills.vc_i18n import llm_language_directive, norm_lang
+
+    cache_ttl = _cache_ttl_seconds()
+    cache_key = (contract.strip().lower(), norm_lang(lang))
+    if cache_ttl > 0:
+        cached = vc_cache.get(cache_key)
+        if cached is not None:
+            logger.info("vc cache HIT contract=%s lang=%s", contract, norm_lang(lang))
+            return cached
+
+    t_start = time.monotonic()
     ctx = await scan_base_token(contract, include_smart_money=True, include_fundamentals=True)
+    t_scan = time.monotonic() - t_start
 
     if not ctx.valid_address:
         return _deterministic_fallback(ctx), ctx
@@ -478,6 +496,7 @@ async def analyze_vc_with_context(
         "</donnees_non_fiables>"
     )
 
+    t_llm0 = time.monotonic()
     try:
         raw = await chat_with_context(
             user_message,
@@ -489,13 +508,42 @@ async def analyze_vc_with_context(
     except Exception as exc:  # noqa: BLE001 — jamais bloquant, on retombe sur le fallback
         logger.error("analyze_vc: appel LLM échoué (%s) — fallback déterministe", exc)
         raw = None
+    t_llm = time.monotonic() - t_llm0
+
+    def _log_timing(llm_used: bool) -> None:
+        logger.info(
+            "vc timing contract=%s lang=%s scan=%.2fs llm=%.2fs total=%.2fs llm_used=%s",
+            contract, norm_lang(lang), t_scan, t_llm, time.monotonic() - t_start, llm_used,
+        )
 
     if not raw:
+        _log_timing(False)
         return _deterministic_fallback(ctx), ctx
 
     parsed = _extract_json(raw)
     if parsed is None:
         logger.warning("analyze_vc: sortie LLM non parsable — fallback déterministe")
+        _log_timing(False)
         return _deterministic_fallback(ctx), ctx
 
-    return _validate_llm_output(parsed, ctx), ctx
+    result = _validate_llm_output(parsed, ctx)
+    _log_timing(result.llm_used)
+    out = (result, ctx)
+    if cache_ttl > 0 and result.llm_used:
+        vc_cache.put(cache_key, out, cache_ttl)
+    return out
+
+
+def _cache_ttl_seconds() -> int:
+    """TTL du cache d'analyse (secondes). 0 = désactivé (défaut hors prod).
+
+    Prod : le Dockerfile fixe ``ARIA_VC_CACHE_TTL=300``. Absent/invalide → 0,
+    pour ne jamais polluer les tests hors-ligne ni surprendre en dev.
+    """
+    import os
+
+    raw = os.getenv("ARIA_VC_CACHE_TTL", "0").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
