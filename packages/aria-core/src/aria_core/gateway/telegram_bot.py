@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -1513,28 +1514,46 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _reply(message, "\n".join(lines))
 
 
-def _format_judge_verdict(v) -> str:
+def _format_judge_verdict(v, lang: str = "fr") -> str:
     """Formatte le verdict du proof engine (juge) pour Telegram.
 
     Le texte du juge est déjà sanitisé en amont (``vc_judge`` neutralise les
-    chevrons) — on se contente de le mettre en forme.
+    chevrons) — on se contente de le mettre en forme. ``lang`` (fr/en) ne traduit
+    que les libellés fixes ; les codes verdict/reco du juge restent inchangés.
     """
+    from aria_core.skills.vc_i18n import judge_strings
+
+    j = judge_strings(lang)
     emoji = {"solide": "🟢", "fragile": "🟡", "rejeté": "🔴"}.get(v.verdict, "⚪")
-    src = "juge LLM" if v.llm_used else "juge déterministe (LLM indispo)"
+    src = j["src_llm"] if v.llm_used else j["src_det"]
+    rr_ok = j["yes"] if v.coherence_rr else j["no"]
     lines = [
-        f"🧑‍⚖️ MODE TEST — Audit du proof engine ({src})",
-        f"{emoji} Verdict : {v.verdict} · Score {v.score}/10 · R/R cohérent : {'oui' if v.coherence_rr else 'non'}",
-        f"Recommandation du juge : {v.recommandation_juge}",
+        j["header"].format(src=src),
+        f"{emoji} {j['verdict']} : {v.verdict} · {j['score']} {v.score}/10"
+        f" · {j['rr_ok']} : {rr_ok}",
+        f"{j['reco']} : {v.recommandation_juge}",
     ]
     if v.resume:
         lines += ["", v.resume]
     if v.points_forts:
-        lines += ["", "✅ Points forts :"] + [f"• {p}" for p in v.points_forts[:5]]
+        lines += ["", j["strengths"]] + [f"• {p}" for p in v.points_forts[:5]]
     if v.points_faibles:
-        lines += ["", "⚠️ Points faibles :"] + [f"• {p}" for p in v.points_faibles[:5]]
+        lines += ["", j["weaknesses"]] + [f"• {p}" for p in v.points_faibles[:5]]
     if v.claims_non_etayes:
-        lines += ["", "🚩 Affirmations non étayées :"] + [f"• {c}" for c in v.claims_non_etayes[:5]]
+        lines += ["", j["unsupported"]] + [f"• {c}" for c in v.claims_non_etayes[:5]]
     return "\n".join(lines)
+
+
+# Garde de concurrence — plafonne les analyses VC simultanées. Chaque /vc lance
+# un scan on-chain + un appel LLM lourd (analyse, et en test le juge). Pour une
+# boutique 4-5 clients, 3 en parallèle suffit ; au-delà on met en file, et on
+# refuse poliment quand la file est pleine (évite l'empilement mémoire et la
+# surcharge du fournisseur LLM). Le sémaphore protège aussi contre un burst de
+# commandes /vc rapprochées.
+_VC_MAX_CONCURRENT = 3
+_VC_MAX_WAITERS = 6
+_vc_semaphore = asyncio.Semaphore(_VC_MAX_CONCURRENT)
+_vc_waiters = 0
 
 
 async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1547,12 +1566,23 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     complet est affiché ici, mais AUCUN email n'est envoyé et AUCUNE prédiction
     n'est enregistrée dans le track-record (compteurs inchangés). Pour tester sans
     polluer les stats ni spammer.
+
+    La langue de sortie (FR/EN) suit la préférence opérateur (`/langue`).
+    Concurrence bornée par ``_vc_semaphore`` (voir ci-dessus).
     """
+    global _vc_waiters
+
     if not await _admin_check_reply(update):
         return
     message = update.message
     if not message:
         return
+
+    from aria_core.skills import vc_prefs
+    from aria_core.skills.vc_i18n import scaffold_strings
+
+    lang = await vc_prefs.get_output_lang()
+    s = scaffold_strings(lang)
 
     text = (message.text or "").strip()
     body = text.split(maxsplit=1)[1].strip() if " " in text else ""
@@ -1565,14 +1595,33 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     test_mode = len(parts) >= 2 and parts[-1].lower() == "test"
     address = parts[0].strip() if parts else ""
     if not _SCAN_ADDR_RE.match(address):
-        await _reply(
-            message,
-            "Usage : /vc <adresse_contrat>\n"
-            "Analyse VC complète (Potentiel, Risque, Thèse, ordre proposé).\n"
-            "Adresse invalide — attendu : 0x suivi de 40 caractères hexadécimaux.",
-        )
+        await _reply(message, s["usage"])
         return
 
+    # File d'attente bornée : si trop d'analyses patientent déjà, on refuse net.
+    if _vc_semaphore.locked() and _vc_waiters >= _VC_MAX_WAITERS:
+        await _reply(message, s["overloaded"])
+        return
+    if _vc_semaphore.locked():
+        await _reply(message, s["busy"])
+
+    _vc_waiters += 1
+    try:
+        await _vc_semaphore.acquire()
+    finally:
+        _vc_waiters -= 1
+    try:
+        await _vc_analyze_and_reply(message, address, test_mode=test_mode, lang=lang, s=s)
+    finally:
+        _vc_semaphore.release()
+
+
+async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang: str, s: dict) -> None:
+    """Cœur de l'analyse /vc, exécuté sous le sémaphore de concurrence.
+
+    Séparé de ``_handle_vc`` pour que la garde de concurrence enveloppe l'intégralité
+    du travail lourd (scan + LLM + juge + email) dans un unique try/finally.
+    """
     import os
     from datetime import datetime, timezone
 
@@ -1581,44 +1630,40 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from aria_core.skills.vc_delivery import send_vc_report
     from aria_core.skills.vc_report import report_integrity
 
-    await _reply(message, "⏳ Analyse VC en cours (Spark deep + données on-chain)...")
+    await _reply(message, s["analyzing"])
     if test_mode:
         # Mode test : on récupère aussi le contexte de scan pour l'audit du juge.
-        result, ctx = await analyze_vc_with_context(address)
+        result, ctx = await analyze_vc_with_context(address, lang=lang)
     else:
-        result = await analyze_vc(address)
+        result = await analyze_vc(address, lang=lang)
         ctx = None
     capital_raw = os.environ.get("ARIA_CAPITAL_USD", "").strip()
     try:
         capital_usd = float(capital_raw) if capital_raw else None
     except ValueError:
         capital_usd = None
-    await _reply(message, format_telegram_order(result, capital_usd=capital_usd))
+    await _reply(message, format_telegram_order(result, capital_usd=capital_usd, lang=lang))
 
     if test_mode:
         # MODE TEST : on affiche le raisonnement complet mais on n'envoie aucun
         # email et on n'écrit rien dans le track-record (compteurs inchangés).
-        rapport = result.rapport_detaille or "(aucun raisonnement détaillé disponible)"
+        rapport = result.rapport_detaille or s["no_reasoning"]
         # Tronque proprement avec un marqueur ; _reply plafonne ensuite à 4000.
         limit = 3900
         if len(rapport) > limit:
-            rapport = rapport[:limit].rstrip() + "\n\n… (raisonnement tronqué pour Telegram)"
-        await _reply(message, "🧪 MODE TEST — Raisonnement complet :\n\n" + rapport)
+            rapport = rapport[:limit].rstrip() + s["test_truncated"]
+        await _reply(message, s["test_reasoning"] + rapport)
         # Proof engine (#2) — le juge adverse audite l'analyse sur les MÊMES faits
         # on-chain. Mode test admin uniquement : aucun coût/latence ajouté au flux
         # client, c'est un outil de contrôle qualité pour l'opérateur.
         try:
             from aria_core.skills.vc_judge import judge_analysis
 
-            verdict = await judge_analysis(result, ctx)
-            await _reply(message, _format_judge_verdict(verdict))
+            verdict = await judge_analysis(result, ctx, lang=lang)
+            await _reply(message, _format_judge_verdict(verdict, lang=lang))
         except Exception as exc:  # noqa: BLE001 — l'audit ne doit jamais casser le mode test
             logger.warning("proof engine (juge) échoué: %s", exc)
-        await _reply(
-            message,
-            "🧪 MODE TEST — non envoyé, non enregistré.\n"
-            "Aucun email émis, aucune prédiction ajoutée au track-record, compteurs inchangés.",
-        )
+        await _reply(message, s["test_footer"])
         return
 
     tier = (os.environ.get("ARIA_REPORT_TIER") or "premium").strip().lower() or "premium"
@@ -1701,6 +1746,38 @@ async def _handle_vcresult(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         message,
         f"✅ Prédiction #{pred_id} clôturée — {closed['recommandation']} → résultat {outcome_pct:+.1f}%.",
     )
+
+
+async def _handle_langue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/langue [fr|en] — langue de sortie des analyses VC (mémorisée). Sans argument : affiche l'actuelle."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core.skills import vc_prefs
+    from aria_core.skills.vc_i18n import scaffold_strings
+
+    text = (message.text or "").strip()
+    parts = text.split()
+    arg = parts[1].strip().lower() if len(parts) >= 2 else ""
+    if not arg and context.args:
+        arg = " ".join(context.args).strip().lower()
+
+    if not arg:
+        current = await vc_prefs.get_output_lang()
+        await _reply(message, scaffold_strings(current)["lang_current"].format(lang=current))
+        return
+
+    try:
+        new_lang = await vc_prefs.set_output_lang(arg)
+    except ValueError:
+        current = await vc_prefs.get_output_lang()
+        await _reply(message, scaffold_strings(current)["lang_usage"])
+        return
+
+    await _reply(message, scaffold_strings(new_lang)["lang_set"])
 
 
 async def _handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1893,6 +1970,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))
+    app.add_handler(CommandHandler(["langue", "lang", "language"], _handle_langue))
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))
     app.add_handler(CommandHandler("theses", _handle_theses))

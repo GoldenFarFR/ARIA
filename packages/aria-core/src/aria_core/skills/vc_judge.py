@@ -457,21 +457,28 @@ def _deterministic_fallback_judge(result: VCResult, ctx: TokenScanContext) -> Ju
 # --------------------------------------------------------------------------- #
 #  Point d'entrée public                                                         #
 # --------------------------------------------------------------------------- #
-async def judge_analysis(result: VCResult, ctx: TokenScanContext) -> JudgeVerdict:
+async def judge_analysis(
+    result: VCResult, ctx: TokenScanContext, lang: str = "fr"
+) -> JudgeVerdict:
     """Audite une analyse VC. Juge LLM si disponible, sinon juge déterministe.
 
     Gating identique à ``analyze_vc`` : ``chat_with_context`` est déjà gaté par
     ``settings.aria_llm_enabled`` (ce module ne lit ni ne modifie ce flag). LLM
     indisponible / désactivé / illisible → ``_deterministic_fallback_judge``.
 
+    ``lang`` (fr/en) : en anglais, la prose du juge (resume, points, claims) sort
+    en anglais via une directive ajoutée au prompt. FR = prompt inchangé.
+
     PORTE, jamais déclencheur : aucun effet de bord, aucune exécution.
     """
+    from aria_core.skills.vc_i18n import llm_language_directive
+
     user_message = _build_judge_message(result, ctx)
 
     try:
         raw = await chat_with_context(
             user_message,
-            _SYSTEM_PROMPT_JUGE,
+            _SYSTEM_PROMPT_JUGE + llm_language_directive(lang),
             max_tokens=1400,
             temperature=0.1,
             depth="develop",
