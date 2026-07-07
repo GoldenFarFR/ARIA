@@ -1,0 +1,58 @@
+# CI ARIA — surface produit VC (rapport / analyse / juge / Telegram / Virtuals / TA).
+#
+# Choix ASSUMÉ : on ne lance PAS toute la suite ici. Le dépôt compte ~17 tests
+# en échec PRÉ-EXISTANTS (certains dépendent du réseau, d'autres = dette technique
+# hors périmètre VC : routage LLM, holding_site, web_verify…). Les faire passer
+# est un chantier séparé (voir handoff). Cette CI verrouille ce qui rapporte —
+# la surface produit VC — et reste VERTE pour que le vert/rouge ait un sens.
+#
+# Pour élargir : ajouter des fichiers de test ci-dessous à mesure qu'ils sont
+# stabilisés. Aucune donnée live / aucun secret n'est requis (tout est mocké).
+
+name: CI — aria-core (surface VC)
+
+on:
+  push:
+    paths:
+      - "packages/aria-core/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "packages/aria-core/**"
+      - ".github/workflows/ci.yml"
+
+jobs:
+  tests-vc:
+    name: Tests surface VC (Python 3.12)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/aria-core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer aria-core + dépendances de test
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Suite VC (mockée, hors-ligne)
+        run: |
+          pytest -q \
+            tests/test_vc_judge.py \
+            tests/test_vc_telegram_and_format.py \
+            tests/test_vc_report.py \
+            tests/test_vc_analysis.py \
+            tests/test_vc_delivery.py \
+            tests/test_vc_predictions.py \
+            tests/test_virtuals_client.py \
+            tests/test_ta_levels.py \
+            tests/test_chart_render.py \
+            tests/test_telegram_format.py \
+            tests/test_acp_onchain_project_links.py
