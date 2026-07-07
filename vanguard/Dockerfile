@@ -28,6 +28,9 @@ RUN python -c "from app.main import app; print('import check ok')"
 ENV SERVE_FRONTEND=true
 ENV DEBUG=false
 ENV DATA_DIR=/app/backend/data
+# Cache TTL des analyses VC (secondes) — un même contrat redemandé dans la
+# fenêtre renvoie le résultat mémorisé (zéro re-scan, zéro token). 0 = désactivé.
+ENV ARIA_VC_CACHE_TTL=300
 RUN mkdir -p /app/backend/data
 
 EXPOSE 8000
