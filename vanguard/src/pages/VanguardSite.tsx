@@ -6,6 +6,7 @@ import { BrandMark } from '../components/BrandMark'
 import { AriaChat } from '../components/AriaChat'
 import { FaqSection } from '../components/FaqSection'
 import { CommunityWelcomeBanner } from '../components/CommunityWelcomeBanner'
+import { AriaWalletTeaser } from '../components/AriaWalletTeaser'
 import { OrgChart } from '../components/OrgChart'
 import { VanguardNav } from '../components/VanguardNav'
 import type { AgentSetup, HoldingStructure, RepertoireItem } from '../types'
@@ -87,6 +88,10 @@ export function VanguardSite() {
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </div>
+        </section>
+
+        <section id="track-record" className="page-shell py-14 md:py-16 border-t border-[#c9a962]/8">
+          <AriaWalletTeaser />
         </section>
 
         <section id="structure" className="page-shell py-16 md:py-20 border-t border-[#c9a962]/8">
