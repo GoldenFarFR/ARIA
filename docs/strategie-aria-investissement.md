@@ -40,6 +40,18 @@ ajoute une **sélection POSITIVE**) : on priorise les tokens **jeunes + faible c
 attention sociale + preuve de produit** (activité GitHub, app live, utilisateurs, revenus).
 Le radar (#7) et le moteur de connaissance (#8) alimentent cette détection « pépite cachée ».
 
+**Identité & méthode — chasseuse de performance dans l'ombre on-chain.** ARIA n'est pas
+qu'un gardien prudent : c'est une **chasseuse d'asymétrie** qui, quand les FAITS l'alignent,
+tranche avec **conviction** (BUY franc + taille) — jamais tiède par défaut, jamais forcé.
+Et sa conviction est légitime parce que son analyse est **100 % on-chain, la face cachée**
+que les humains peinent à lire (distribution des holders, historique du déployeur, flux
+smart-money, entrailles du contrat, mécanique de liquidité) : des **chiffres indiscutables**,
+pas des vibes. Là où l'humain voit le prix et le narratif, ARIA voit la donnée dure, 24/7.
+**Garde-fou (partie de l'edge)** : l'on-chain montre ce qui s'est passé on-chain, PAS les
+intentions off-chain / le juridique / tout le produit réel → indiscutable sur les faits
+on-chain, **« donnée insuffisante » assumé** sur le reste. Elle ne prétend jamais que la
+chaîne lui dit tout.
+
 ## 2. Le pool entraînable : filtre → sélection honnête
 
 1. **Classifier / filtrer les scams.** Chaque contrat candidat passe `safety_screen`
