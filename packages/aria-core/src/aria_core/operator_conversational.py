@@ -255,14 +255,14 @@ async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict
             lines.extend(web_bits[:3])
         if github_detail:
             lines.append(github_detail)
-        lines.append(f"Verdict : {verdict}")
+        lines.append(f"Au final : {verdict}")
         lines.append(
             "Comme si on causait : ouais je vois pas de preuve solide pour la plupart de ces claims. "
             "Si t'as un lien officiel / changelog / tweet, balance, je re-vérifie direct."
         )
         reply = "\n".join(lines)
     else:
-        reply = f"Checked the claim « {snippet} ». Verdict: {verdict}. Sources checked via web + GitHub where relevant."
+        reply = f"Checked the claim « {snippet} ». Bottom line: {verdict}. Sources checked via web + GitHub where relevant."
 
     meta["verdict"] = verdict
     meta["actions"] = actions
