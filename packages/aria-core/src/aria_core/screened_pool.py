@@ -33,6 +33,7 @@ _COLUMNS = [
     "status",
     "first_screened_at",
     "last_checked_at",
+    "screen_reason",
 ]
 
 
@@ -51,7 +52,8 @@ async def _ensure_table() -> None:
                 network TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
                 first_screened_at TEXT NOT NULL,
-                last_checked_at TEXT NOT NULL
+                last_checked_at TEXT NOT NULL,
+                screen_reason TEXT
             )
             """
         )
@@ -68,6 +70,7 @@ async def upsert_screened(
     verdict: str = "",
     pool_address: str = "",
     network: str = "base",
+    screen_reason: str = "",
 ) -> None:
     """Ajoute/rafraîchit un token screené (status ``active``).
 
@@ -82,8 +85,9 @@ async def upsert_screened(
             """
             INSERT INTO screened_token
               (contract, symbol, liquidity_usd, security_score, top_holder_pct,
-               verdict, pool_address, network, status, first_screened_at, last_checked_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+               verdict, pool_address, network, status, first_screened_at,
+               last_checked_at, screen_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
             ON CONFLICT(contract) DO UPDATE SET
               symbol=excluded.symbol,
               liquidity_usd=excluded.liquidity_usd,
@@ -93,14 +97,74 @@ async def upsert_screened(
               pool_address=excluded.pool_address,
               network=excluded.network,
               status='active',
-              last_checked_at=excluded.last_checked_at
+              last_checked_at=excluded.last_checked_at,
+              screen_reason=excluded.screen_reason
             """,
             (
                 contract, symbol, liquidity_usd, security_score, top_holder_pct,
-                verdict, pool_address, network, now, now,
+                verdict, pool_address, network, now, now, screen_reason,
             ),
         )
         await db.commit()
+
+
+async def record_rejected(
+    *, contract: str, reason: str = "", symbol: str = "", network: str = "base"
+) -> None:
+    """Marque un contrat comme rejeté (« jeté pour toujours »), avec sa raison.
+
+    On le garde EN BASE (status ``rejected``) plutôt que de l'ignorer : ça évite de
+    le re-scanner sans fin (intransigeance = efficace), et ça permet une
+    **résurrection** ciblée si un bruit réapparaît (cf. ``reconsider``). Upsert :
+    ``first_screened_at`` préservé.
+    """
+    await _ensure_table()
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO screened_token
+              (contract, symbol, liquidity_usd, security_score, top_holder_pct,
+               verdict, pool_address, network, status, first_screened_at,
+               last_checked_at, screen_reason)
+            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'rejected', ?, ?, ?)
+            ON CONFLICT(contract) DO UPDATE SET
+              status='rejected', last_checked_at=excluded.last_checked_at,
+              screen_reason=excluded.screen_reason
+            """,
+            (contract, symbol, network, now, now, reason),
+        )
+        await db.commit()
+
+
+async def get_status(contract: str) -> str | None:
+    """Statut connu d'un contrat (active / rejected / dropped), ou None si jamais vu."""
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute("SELECT status FROM screened_token WHERE contract=?", (contract,))
+        ).fetchone()
+    return row[0] if row else None
+
+
+async def reconsider(contract: str) -> bool:
+    """Un bruit a réapparu : rouvre un rejeté pour réévaluation. True si applicable.
+
+    Ne fait que LEVER le « jeté pour toujours » (statut -> pending) ; la vraie
+    décision revient au re-scan on-chain (le bruit filtre/réveille, il ne décide pas).
+    Retourne False si le contrat est inconnu ou déjà actif.
+    """
+    status = await get_status(contract)
+    if status not in ("rejected", "dropped"):
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE screened_token SET status='pending', last_checked_at=? WHERE contract=?",
+            (now, contract),
+        )
+        await db.commit()
+    return True
 
 
 async def drop_token(contract: str, *, reason: str = "") -> None:
