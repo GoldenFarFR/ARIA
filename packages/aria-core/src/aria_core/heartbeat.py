@@ -221,6 +221,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=720,
         enabled=True,
     ),
+    HeartbeatTask(
+        id="vc_thesis_review",
+        name="Thesis surveillance",
+        description="Repasse sur chaque position ouverte (prix + activite projet) -> alerte si stagne/casse",
+        interval_minutes=1440,
+        enabled=True,
+    ),
 ]
 
 
@@ -537,6 +544,20 @@ class AriaHeartbeat:
                     "vc",
                     f"[radar] {report['above_threshold']} candidats bruyants — "
                     f"{report.get('kept', 0)} gardés, {report.get('resurrected', 0)} réveillés",
+                )
+
+        elif task_id == "vc_thesis_review":
+            from aria_core.weekly_training import run_thesis_review
+
+            review = await run_thesis_review()
+            alerts = review.get("alerts", [])
+            if alerts:
+                append_memory("vc", f"[thesis] {len(alerts)} thèse(s) à revoir (stagne/casse)")
+                lignes = "\n".join(
+                    f"• {a['contract'][:10]} : {a['verdict']} — {a['note']}" for a in alerts[:8]
+                )
+                await self._notify_telegram(
+                    f"🔎 ARIA — {len(alerts)} thèse(s) à revoir :\n{lignes}"
                 )
 
         elif task_id == "cultivation_curriculum":
