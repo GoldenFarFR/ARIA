@@ -610,7 +610,17 @@ class AriaHeartbeat:
                 append_memory("avatar", "[visual_autonomy] en attente ancre — photo /avatar")
 
         elif task_id == "x_profile_sync":
-            from aria_core.x_profile import sync_x_profile
+            # Le module aria_core.x_profile n'est pas (encore) livré. Sans garde, l'import
+            # levait ModuleNotFoundError, sortait de la boucle de _tick AVANT la sauvegarde
+            # d'état -> la tâche restait « due » et re-crashait chaque tick, en sautant tous
+            # les jobs suivants (landmine dès que X est configuré). On dégrade proprement,
+            # comme visual_autonomy.py, en attendant que le module existe (surface X =
+            # outward-facing -> à livrer sous validation opérateur).
+            try:
+                from aria_core.x_profile import sync_x_profile
+            except ModuleNotFoundError:
+                append_memory("comms", "[x_profile] module non livré — sync X ignorée")
+                return
 
             result = await sync_x_profile()
             if result.get("synced"):
