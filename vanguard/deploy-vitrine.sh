@@ -33,11 +33,16 @@ command -v docker >/dev/null || { echo "ERREUR: docker introuvable"; exit 1; }
 # « VITE_PRIVY_APP_ID is not configured » — on refuse donc de builder à vide.
 ENV_DEPLOY="$REPO/vanguard/.env.deploy"
 if [ -f "$ENV_DEPLOY" ]; then set -a; . "$ENV_DEPLOY"; set +a; fi
+# Repli automatique : réutiliser l'App ID PUBLIC déjà présent côté backend
+# (PRIVY_APP_ID de vanguard/backend/.env) — même valeur, zéro saisie manuelle.
+BACKEND_ENV="$REPO/vanguard/backend/.env"
+if [ -z "${VITE_PRIVY_APP_ID:-}" ] && [ -f "$BACKEND_ENV" ]; then
+    VITE_PRIVY_APP_ID="$(sed -nE 's/^PRIVY_APP_ID=[[:space:]"'"'"']*([^[:space:]"'"'"']+).*/\1/p' "$BACKEND_ENV" | head -1)"
+fi
 if [ -z "${VITE_PRIVY_APP_ID:-}" ]; then
-    echo "ERREUR: VITE_PRIVY_APP_ID manquant — la vitrine ne se rendrait PAS."
-    echo "  -> crée $ENV_DEPLOY (chmod 600) contenant :"
-    echo "       VITE_PRIVY_APP_ID=<valeur>     # = PRIVY_APP_ID de vanguard/backend/.env"
-    echo "  -> ou lance :  VITE_PRIVY_APP_ID=<valeur> ./vanguard/deploy-vitrine.sh"
+    echo "ERREUR: VITE_PRIVY_APP_ID introuvable (ni env, ni .env.deploy, ni PRIVY_APP_ID backend)."
+    echo "  -> fournis-le :  VITE_PRIVY_APP_ID=<valeur> ./vanguard/deploy-vitrine.sh"
+    echo "     (valeur = App ID de ton dashboard Privy — identifiant public)"
     exit 1
 fi
 
