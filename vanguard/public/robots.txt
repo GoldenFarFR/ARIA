@@ -1,0 +1,10 @@
+# Aria Vanguard ZHC — vitrine publique.
+# Le contenu de la vitrine est destiné à être indexé (crawl autorisé).
+# Un vrai contrôle anti-bot/anti-scraping se fait au niveau de l'hébergeur
+# (proxy Cloudflare + Bot Fight / Turnstile), pas via ce fichier — robots.txt
+# est purement indicatif et n'a jamais bloqué un bot malveillant.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://ariavanguardzhc.com/sitemap.xml
