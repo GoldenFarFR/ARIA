@@ -33,12 +33,27 @@ def assess_liquidity_depth(
     market_cap_usd: float | None,
     *,
     min_ratio: float = DEFAULT_MIN_RATIO,
+    bonding_curve: bool = False,
 ) -> LiquidityDepth:
-    """Ratio liquidité/mcap et verdict de profondeur. ``healthy=None`` si non calculable."""
+    """Ratio liquidité/mcap et verdict de profondeur. ``healthy=None`` si non calculable.
+
+    ``bonding_curve=True`` : sur une courbe de bonding (Virtuals...), la liquidité
+    croît EXPONENTIELLEMENT avec la progression — elle démarre volontairement mince.
+    Le ratio n'est donc PAS un signal de fragilité ici : on renvoie le ratio pour
+    info mais ``healthy=None`` (ne jamais pénaliser un token en bonding pour ça).
+    """
     if not market_cap_usd or market_cap_usd <= 0 or liquidity_usd is None:
         return LiquidityDepth(ratio=None, healthy=None, min_ratio=min_ratio,
                               note="market cap ou liquidité indisponible")
     ratio = liquidity_usd / market_cap_usd
+    if bonding_curve:
+        return LiquidityDepth(
+            ratio=round(ratio, 3), healthy=None, min_ratio=min_ratio,
+            note=(
+                f"liquidité {ratio * 100:.0f}% de la market cap — courbe de bonding "
+                "(liquidité exponentielle, mince au départ : ratio non pertinent ici)"
+            ),
+        )
     healthy = ratio >= min_ratio
     pct = ratio * 100
     if healthy:
