@@ -112,6 +112,12 @@ class VCResult:
     downside_pct: float | None = None
     liens_projet: list[dict] = field(default_factory=list)
     symbol: str = ""
+    # Analyse technique (data-gated : peuplé seulement si une série OHLCV a été
+    # dérivée en niveaux). Sans donnée → tout reste vide, le rapport omet la section.
+    ta_trend: str = ""
+    ta_timeframe: str = ""
+    ta_levels_lines: list[str] = field(default_factory=list)
+    chart_data_uri: str = ""
 
     @property
     def actionable(self) -> bool:
@@ -204,6 +210,30 @@ def _build_untrusted_context(ctx: TokenScanContext, history: list[dict]) -> str:
             f"Variation prix 24h % : {p.price_change_24h}",
             f"Achats/Ventes 24h : {p.buys_24h}/{p.sells_24h}",
         ]
+    if ctx.ta and ctx.ta.n_bougies:
+        t = ctx.ta
+        lines.append(
+            f"Analyse technique ({_sanitize(ctx.ta_timeframe or '', 6)}, {t.n_bougies} bougies OHLCV réelles) :"
+        )
+        lines.append(f"- Tendance : {_sanitize(t.tendance, 30)} ({_sanitize(t.tendance_base, 200)})")
+        if t.plus_haut is not None and t.plus_bas is not None:
+            lines.append(f"- Plus-haut / plus-bas de la fenêtre : {t.plus_haut} / {t.plus_bas}")
+        if t.dernier_close is not None:
+            lines.append(f"- Dernier close : {t.dernier_close}")
+        for lvl in t.supports[:3]:
+            lines.append(f"- Support {lvl.prix} : {_sanitize(lvl.base, 160)}")
+        for lvl in t.resistances[:3]:
+            lines.append(f"- Résistance {lvl.prix} : {_sanitize(lvl.base, 160)}")
+        if ctx.ta_entry:
+            z = ctx.ta_entry
+            lines.append(
+                f"- Zone dérivée des niveaux réels : entrée {z.entree}, invalidation {z.invalidation}, "
+                f"cible {z.cible} ({_sanitize(z.base, 200)})"
+            )
+        lines.append(
+            "Appuie entrée, invalidation et cible sur ces niveaux techniques réels ; "
+            "ne propose jamais un niveau non soutenu par ces données."
+        )
     if ctx.risk_flags:
         lines.append("Signaux collectés (on-chain, fondamentaux, smart-money) :")
         lines += [f"- {_sanitize(flag, 300)}" for flag in ctx.risk_flags]
@@ -451,6 +481,57 @@ async def analyze_vc(contract: str, lang: str = "fr") -> VCResult:
     return result
 
 
+def _fmt_price(value: float) -> str:
+    """Formate un prix (jusqu'à 10 décimales, zéros superflus retirés, sans exposant)."""
+    s = f"{value:.10f}".rstrip("0").rstrip(".")
+    return s if s else "0"
+
+
+def _attach_ta(result: VCResult, ctx: TokenScanContext) -> VCResult:
+    """Reporte l'analyse technique (niveaux réels + graphique) du ctx vers le VCResult.
+
+    No-op strict si aucune série OHLCV n'a été dérivée en niveaux (data-gated) :
+    dans ce cas les champs TA restent vides et le rapport omet simplement la section.
+    Chaque ligne porte sa base factuelle (facts-only) ; le graphique est un PNG
+    data-URI email-safe rendu par ``chart_render`` (import paresseux : PIL n'est
+    chargé que si une série existe).
+    """
+    ta = getattr(ctx, "ta", None)
+    if not ta or not ta.n_bougies:
+        return result
+    result.ta_trend = ta.tendance or ""
+    result.ta_timeframe = ctx.ta_timeframe or ""
+    lines: list[str] = []
+    if ta.plus_haut is not None and ta.plus_bas is not None:
+        lines.append(
+            f"Plus-haut / plus-bas : {_fmt_price(ta.plus_haut)} / {_fmt_price(ta.plus_bas)}"
+        )
+    for lvl in ta.resistances[:3]:
+        lines.append(f"Résistance {_fmt_price(lvl.prix)} : {lvl.base}")
+    for lvl in ta.supports[:3]:
+        lines.append(f"Support {_fmt_price(lvl.prix)} : {lvl.base}")
+    if ctx.ta_entry:
+        z = ctx.ta_entry
+        lines.append(
+            f"Zone dérivée des niveaux réels : entrée {_fmt_price(z.entree)}, "
+            f"invalidation {_fmt_price(z.invalidation)}, cible {_fmt_price(z.cible)}"
+        )
+    result.ta_levels_lines = lines
+    try:
+        from aria_core.skills.chart_render import render_price_chart_png
+
+        entry = ctx.ta_entry.entree if ctx.ta_entry else None
+        inval = ctx.ta_entry.invalidation if ctx.ta_entry else None
+        target = ctx.ta_entry.cible if ctx.ta_entry else None
+        result.chart_data_uri = render_price_chart_png(
+            ctx.ta_candles, entry=entry, invalidation=inval, target=target
+        )
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant : section rendue sans image
+        logger.warning("analyze_vc: rendu graphique TA échoué (%s) — section sans image", exc)
+        result.chart_data_uri = ""
+    return result
+
+
 async def analyze_vc_with_context(
     contract: str, lang: str = "fr"
 ) -> tuple[VCResult, TokenScanContext]:
@@ -482,11 +563,13 @@ async def analyze_vc_with_context(
             return cached
 
     t_start = time.monotonic()
-    ctx = await scan_base_token(contract, include_smart_money=True, include_fundamentals=True)
+    ctx = await scan_base_token(
+        contract, include_smart_money=True, include_fundamentals=True, include_ta=True
+    )
     t_scan = time.monotonic() - t_start
 
     if not ctx.valid_address:
-        return _deterministic_fallback(ctx), ctx
+        return _attach_ta(_deterministic_fallback(ctx), ctx), ctx
 
     history = await list_theses_for_token(ctx.contract)
     untrusted = _build_untrusted_context(ctx, history)
@@ -519,15 +602,16 @@ async def analyze_vc_with_context(
 
     if not raw:
         _log_timing(False)
-        return _deterministic_fallback(ctx), ctx
+        return _attach_ta(_deterministic_fallback(ctx), ctx), ctx
 
     parsed = _extract_json(raw)
     if parsed is None:
         logger.warning("analyze_vc: sortie LLM non parsable — fallback déterministe")
         _log_timing(False)
-        return _deterministic_fallback(ctx), ctx
+        return _attach_ta(_deterministic_fallback(ctx), ctx), ctx
 
     result = _validate_llm_output(parsed, ctx)
+    _attach_ta(result, ctx)
     _log_timing(result.llm_used)
     out = (result, ctx)
     if cache_ttl > 0 and result.llm_used:

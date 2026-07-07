@@ -19,7 +19,15 @@ from aria_core.services.blockscout import (
     blockscout_client,
 )
 from aria_core.services.coingecko import TokenFundamentals, coingecko_client
+from aria_core.services.ohlcv import ohlcv_client
 from aria_core.services.smart_money import analyze_smart_money
+from aria_core.skills.ta_levels import (
+    Candle,
+    EntryZone,
+    TALevels,
+    compute_levels,
+    suggest_entry_zone,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +62,12 @@ class TokenScanContext:
     security_score: int = 35
     lite_verdict: str = "CAUTION"
     data_source: str = "heuristic"
+    # Analyse technique (data-gated : peuplé uniquement si include_ta ET série OHLCV
+    # disponible). Sans donnée, ces champs restent inertes → comportement inchangé.
+    ta: TALevels | None = None
+    ta_entry: EntryZone | None = None
+    ta_candles: list[Candle] = field(default_factory=list)
+    ta_timeframe: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -340,7 +354,11 @@ def _score_and_verdict(
 
 
 async def scan_base_token(
-    contract: str, *, include_smart_money: bool = False, include_fundamentals: bool = False
+    contract: str,
+    *,
+    include_smart_money: bool = False,
+    include_fundamentals: bool = False,
+    include_ta: bool = False,
 ) -> TokenScanContext:
     """Fetch DexScreener + compute heuristic security score.
 
@@ -352,6 +370,11 @@ async def scan_base_token(
     `include_fundamentals` est desactive par defaut : le throttle CoinGecko
     (~2.2s/appel, tier public) ralentirait chaque scan standard. A activer
     explicitement (ex. /scan <adresse> fond).
+
+    `include_ta` est desactive par defaut : recupere la serie OHLCV du pool
+    (GeckoTerminal, throttle ~2.2s/appel) et derive niveaux + zone d'entree
+    (facts-only). Peuple ctx.ta / ctx.ta_entry / ctx.ta_candles UNIQUEMENT si une
+    serie est disponible ; sinon ces champs restent None → comportement inchange.
     """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
@@ -393,6 +416,14 @@ async def scan_base_token(
         fundamentals_delta = _apply_fundamentals_signals(fundamentals_flags, fundamentals)
         ctx.security_score = max(5, min(95, ctx.security_score + fundamentals_delta))
         ctx.risk_flags.extend(fundamentals_flags)
+
+    if include_ta and ctx.best_pair and ctx.best_pair.pair_address:
+        ohlcv = await ohlcv_client.get_ohlcv(ctx.best_pair.pair_address)
+        if ohlcv.available and ohlcv.candles:
+            ctx.ta_candles = ohlcv.candles
+            ctx.ta_timeframe = ohlcv.timeframe
+            ctx.ta = compute_levels(ohlcv.candles)
+            ctx.ta_entry = suggest_entry_zone(ctx.ta)
 
     return ctx
 
