@@ -353,7 +353,14 @@ def _rr_block_html(result: VCResult) -> str:
         qualifier = "Asymétrie équilibrée"
     else:
         qualifier = "Asymétrie défavorable"
-    caption = f"{qualifier} : la récompense visée représente {rr:.1f}× le risque consenti."
+    # Formulé en clair : c'est un rapport de DISTANCES (gain visé ÷ risque consenti),
+    # jamais un multiple de gain — pour ne pas le lire comme « x12 ».
+    caption = (
+        f"{qualifier} : viser +{upside:.0f}% pour {downside:.0f}% risqué. "
+        f"Rapport des distances (récompense sur risque), pas un multiple de gain."
+    )
+    if downside and downside < 4 and rr >= 4:
+        caption += f" Stop serré ({downside:.0f}%) : ratio flatté, facile à toucher."
     return f"""<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:30px;">
         <tr>
           <td style="border-radius:12px;padding:2px;background-color:{_GOLD};background-image:linear-gradient(120deg,#8a6a13 0%,{_GOLD_LIGHT} 30%,{_GOLD} 55%,{_EMERALD} 85%,{_EMERALD_DEEP} 100%);">
