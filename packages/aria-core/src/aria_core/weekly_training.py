@@ -1,6 +1,6 @@
 """Boucle d'entraînement hebdomadaire (walk-forward) — le cœur qui accumule la preuve.
 
-- **Lundi** : ``run_weekly_forecasts`` tire N tokens du pool screené, les analyse et
+- **Lundi** : ``run_weekly_forecasts`` tire N tokens du pool screné, les analyse et
   enregistre N pronostics horodatés (avec prix d'entrée + pool + poche 85/15) →
   falsifiables.
 - **Échéance** : ``resolve_due`` clôture les pronostics arrivés à horizon en comparant
@@ -37,7 +37,7 @@ async def run_weekly_forecasts(
 ) -> list[int]:
     """Tire N tokens du pool, les analyse, enregistre N pronostics datés. Retourne les ids.
 
-    ``drawer()`` → liste de tokens du pool (défaut : loterie du pool screené).
+    ``drawer()`` → liste de tokens du pool (défaut : loterie du pool screné).
     ``analyzer(contract)`` → ``(VCResult, TokenScanContext)`` (défaut : analyse VC réelle).
     Le prix d'entrée (spot au moment du pronostic) et le pool sont capturés depuis le
     contexte → indispensables à la résolution automatique ultérieure.
@@ -73,8 +73,91 @@ async def run_weekly_forecasts(
             network="base",
         )
         ids.append(pid)
+        # Carnet de bord : consigne la thèse + un screenshot (chandeliers + simulation).
+        # Jamais bloquant : un échec d'écriture du carnet ne casse pas la fournée.
+        try:
+            await _journal_forecast(contract, result, ctx)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("weekly: écriture carnet échouée pour %s (%s)", contract, exc)
     logger.info("weekly: %s pronostics enregistrés sur %s tokens tirés", len(ids), len(tokens))
     return ids
+
+
+def _num(v) -> float | None:
+    """Parse un prix éventuellement en texte ('$0,012' -> 0.012). None si impossible."""
+    try:
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v).replace("$", "").replace(",", "").strip().split()[0]
+        return float(s)
+    except (ValueError, IndexError, TypeError):
+        return None
+
+
+async def _journal_forecast(contract: str, result, ctx) -> None:
+    """Consigne un pronostic dans le carnet de bord + génère un screenshot (data-gated)."""
+    from aria_core import thesis_journal as tj
+
+    entry = _num(getattr(result, "entree", None)) or (ctx.ta_entry.entree if ctx.ta_entry else None)
+    target = _num(getattr(result, "cible", None)) or (ctx.ta_entry.cible if ctx.ta_entry else None)
+    inval = _num(getattr(result, "invalidation", None)) or (
+        ctx.ta_entry.invalidation if ctx.ta_entry else None
+    )
+    chart_ref = ""
+    if ctx.ta_candles:
+        chart_ref = tj.save_entry_screenshot(
+            contract, ctx.ta_candles, entry=entry, invalidation=inval, target=target
+        )
+    await tj.record_entry(tj.JournalEntry(
+        contract=contract,
+        symbol=(ctx.best_pair.base_symbol if ctx.best_pair else ""),
+        decision=getattr(result, "recommandation", "") or "",
+        thesis=(getattr(result, "these", "") or "")[:1000],
+        reasoning="; ".join((ctx.risk_flags or [])[:3]),
+        facts=list((ctx.risk_flags or [])[:8]),
+        entry_price=entry, target_price=target, invalidation_price=inval,
+        chart_ref=chart_ref,
+    ))
+
+
+async def run_thesis_review() -> dict:
+    """Tour de surveillance autonome : re-vérifie chaque position ouverte (prix + activité).
+
+    Assemble les pronostics ouverts (BUY, non clôturés), résout le prix courant via
+    l'OHLCV du pool, tente l'activité GitHub, consigne un checkpoint par position et
+    remonte les ALERTES (thèse stagnante/invalidée). Retourne {reviewed, alerts:[...]}.
+    """
+    from aria_core import thesis_journal as tj
+
+    open_preds = await vc_predictions.list_open_predictions(limit=1000)
+    positions: list[dict] = []
+    pool_by_contract: dict[str, tuple[str, str]] = {}
+    for p in open_preds:
+        c = p.get("contract")
+        if not c or (p.get("recommandation") not in ("BUY", "WATCH")):
+            continue
+        positions.append({
+            "contract": c,
+            "entry_price": p.get("entry_price"),
+            "invalidation_price": p.get("invalidation_price"),
+            "github_url": p.get("github_url"),  # souvent absent -> activité 'unknown'
+        })
+        pool_by_contract[c] = ((p.get("pool_address") or "").strip(), p.get("network") or "base")
+
+    from aria_core.services.ohlcv import ohlcv_client
+
+    async def price_fn(contract: str):
+        pool, network = pool_by_contract.get(contract, ("", "base"))
+        if not pool:
+            return None
+        res = await ohlcv_client.get_ohlcv(pool, network=network)
+        return res.candles[-1].close if (res.available and res.candles) else None
+
+    alerts = await tj.review_open_theses(positions, price_fn=price_fn)
+    logger.info("thesis_review: %s positions, %s alertes", len(positions), len(alerts))
+    return {"reviewed": len(positions), "alerts": alerts}
 
 
 async def resolve_due(*, now: datetime | None = None, price_fn=None) -> dict:
@@ -152,7 +235,7 @@ async def self_report() -> str:
 
     pool = rep["pool_active"]
     warn = " ⚠️ pool maigre" if pool < 20 else ""
-    lines.append(f"• Pool screené actif : {pool}{warn}")
+    lines.append(f"• Pool screné actif : {pool}{warn}")
 
     try:
         from aria_core import improvement_ledger
