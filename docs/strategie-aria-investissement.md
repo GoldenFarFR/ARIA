@@ -154,6 +154,19 @@ précédent (lié au pacte `docs/protocole-argent-reel.md`) :
 - L'échelle monte avec l'**expérience PROUVÉE** d'ARIA, jamais avec l'espoir. C'est ce
   qui transforme « j'aimerais que ce soit certain » en « c'est démontré ».
 
+## 6 ter. Capital dormant (dry powder)
+
+Le capital **non déployé** (en attente de setups) ne dort pas bêtement :
+- **Défaut : USDC** (stable, sûr, prêt à frapper).
+- **Bascule vers ETH** quand ETH montre des **signes de hausse** (trend-following : ETH
+  au-dessus de ses moyennes clés, régime risk-on) → capter la tendance au lieu de rester
+  100 % stable en bull. **Honnête** : ce n'est PAS un yield garanti, c'est une exposition
+  directionnelle (ETH peut baisser) ; retour USDC quand le régime se dégrade.
+- **Yield réel (plus tard)** : prêter l'USDC (Aave/Compound, ~3-5 %/an) = vrai rendement
+  passif bas risque ; puis **optimisation borrow/lending** (à explorer, différé).
+- **Garde-fou** : USDC↔ETH est un swap → en suivi/paper c'est une allocation trackée ;
+  en argent réel, **signature humaine (Tangem)**, jamais auto.
+
 ## 7. Exécution & garde-fous
 
 - Aujourd'hui : **100 % suivi (paper)**, aucun argent réel, aucun wallet, rien à signer.

@@ -61,6 +61,18 @@
   benefit: "angles : distribution (portée Farcaster), source de tokens tendance, référence UX. ATTENTION : c'est un agent d'EXÉCUTION -> contredit notre 'zéro exécution' si utilisé pour trader ; utile surtout comme canal/source, pas comme moteur."
   seam: "distribution/sourcing (jamais l'exécution)"
 
+- title: "Détection de coordination / cabals (clustering de wallets)"
+  category: tool
+  source: "demande opérateur : écouter/découvrir les cabals"
+  benefit: "signal à DOUBLE tranchant : coordination sur un token pourri = piège pump&dump (AVOID, on serait l'exit liquidity) ; accumulation smart-money légitime sur un vrai projet = alpha early (hunt). ARIA distingue les deux. LIGNE ROUGE : détecter la manip = edge ; PARTICIPER à un pump coordonné = abus de marché (MAR) + suicide de marque = JAMAIS."
+  seam: "services/smart_money.py -> clustering/coordination -> include_coordination"
+
+- title: "Renseignement groupes/cabals (flux opérateur) comme signal"
+  category: data_source
+  source: "l'opérateur est membre de plusieurs groupes/cabals"
+  benefit: "flux privé de ce que des groupes poussent → signal de COORDINATION (dôme : donnée non fiable, sanitisée, FILTRE jamais déclencheur ; on-chain arbitre). Usage : flag pump organisé (souvent AVOID, exit-liquidity) + dire au client s'il est smart money ou sac de fin de course. LIGNE ROUGE : ARIA n'est jamais le mégaphone du cabal, ne trade pas leurs calls (MAR)."
+  seam: "services/group_intel.py (sanitisé) -> include_coordination"
+
 - title: "Source OHLCV alternative (CoinAPI)"
   category: data_source
   source: "swiftask.ai/coinapi (évoqué par l'opérateur)"
