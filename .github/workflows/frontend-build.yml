@@ -1,0 +1,73 @@
+# CI — fronts (vitrine + produit).
+#
+# POURQUOI : jusqu'ici AUCUN front n'était buildé automatiquement. Résultat, des
+# failles dormaient sans que rien ne sonne (lock désynchronisé, code qui ne
+# compile plus) — on ne les voyait qu'en essayant de déployer « quand on en avait
+# besoin ». Ce capteur les rend visibles À CHAQUE PUSH.
+#
+# On utilise `npm ci` (STRICT) volontairement : il ÉCHOUE si le package-lock.json
+# n'est pas en phase avec le package.json. C'est le filet qui attrape la dérive de
+# lock avant la prod, pas après.
+#
+# Les deux apps front du monorepo :
+#   • vanguard/                    → vitrine ZHC (marketing, page /reports)
+#   • vanguard/product-frontend/   → produit (dashboard, servi par le backend)
+
+name: CI — fronts (vitrine + produit)
+
+on:
+  push:
+    paths:
+      - "vanguard/**"
+      - ".github/workflows/frontend-build.yml"
+  pull_request:
+    paths:
+      - "vanguard/**"
+      - ".github/workflows/frontend-build.yml"
+
+jobs:
+  build-vitrine:
+    name: Build vitrine (vanguard/src)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vanguard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: vanguard/package-lock.json
+
+      - name: Install (npm ci — le lock DOIT être en phase)
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+  build-produit:
+    name: Build produit (vanguard/product-frontend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vanguard/product-frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: vanguard/product-frontend/package-lock.json
+
+      - name: Install (npm ci — le lock DOIT être en phase)
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
