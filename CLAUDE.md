@@ -32,7 +32,7 @@ Poser le seam maintenant, même vide, plutôt que réécrire plus tard.
 l'operateur ([email operateur retire]). **Non-développeur** : expliquer simplement, pas à pas. Claude (chat + Claude Code) gère 100% de la construction/exploitation (Cursor/Grok abandonnés). Recoupe systématiquement. **En français**. Windows (PowerShell). **Une seule session IA à la fois sur le VPS de prod.**
 
 ## Vision & stratégie
-ARIA = agent IA autonome, holding **Aria Vanguard ZHC**. Public : X **@Aria_ZHC**, Telegram **@Aria_ZHC_Bot**, `ariavanguardzhc.com`. **Gamme luxe** (~500 $/mois). Le moat = **l'analyse prouvée** (la décision), pas l'exécution. **85% VC** moyen/long terme + **15% trading** (poche adrénaline plafonnée). Capital test 20-50$ → cible ~100k$ par paliers de confiance. Preuve avant promesse : un **track record** public se construit avant tout argent réel (pacte : `docs/protocole-argent-reel.md`). Thèse : les vrais builders cachés sur Base. *(Note : l'objectif « 50$/mois via ACP » a été abandonné — marché ACP service en sommeil.)*
+ARIA = agent IA autonome, holding **Aria Vanguard ZHC**. Public : X **@Aria_ZHC**, Telegram **@Aria_ZHC_Bot**, `ariavanguardzhc.com`. **Gamme luxe** (~500 $/mois). Le moat = **l'analyse prouvée** (la décision), pas l'exécution. **85% VC** moyen/long terme + **15% trading** (poche adrénaline plafonnée). Capital test 20-50$ → cible ~100k$ par paliers de confiance. Preuve avant promesse : un **track record** public se construit avant tout argent réel (pacte : `docs/protocole-argent-reel.md`). Thèse : les vrais builders cachés sur Base. *(Note : l'objectif « 50$/mois via ACP » a été abandonné — marché ACP service en sommeil, données à l'appui.)*
 
 ## Architecture
 Monorepo `github.com/GoldenFarFR/ARIA`. Liés : `aria-ops` (privé), `template-grok-cursor`.
@@ -53,7 +53,7 @@ Monorepo `github.com/GoldenFarFR/ARIA`. Liés : `aria-ops` (privé), `template-g
 - `skills/liquidity_depth.py` : ratio liquidité/mcap (100k → 30-40k mini), neutralisé sur courbe de bonding.
 - `recalibration.py` : transparence exigée → escalade opérateur si token prometteur mais opaque.
 - `skills/safety_screen.py` : `has_mint` basé ABI (fonctions appelables), plus la sous-chaîne source (faux positif `_mint` éliminé). Burn par motif (zéros+dead). `hard_fail` : une panne réseau ne bannit plus un bon token.
-- **Carnet de bord** : `thesis_journal.py` (journal append-only + suivi de thèse : livre/stagne via `services/project_activity` GitHub) + `skills/chart_render.render_scenario_png` (chandeliers DexScreener + volume + MA7 + bulles entrées/sorties DCA + simulation forward). Export `.txt`.
+- **Carnet de bord** : `thesis_journal.py` (journal append-only + suivi de thèse : livre/stagne via `services/project_activity` GitHub) + `skills/chart_render.render_scenario_png` (chandeliers DexScreener + volume + MA7 + bulles entrées/sorties DCA + simulation forward + `save_png_data_uri`). Export `.txt`.
 - **Sourcing** : `base_crawler.discover_top_pools` (+ niche Virtuals), `radar_x.py` (le social source/réveille, l'on-chain arbitre — jamais un déclencheur).
 - **Pipeline sorties** : `release_pipeline.py` + `knowledge/release_pipeline.yaml` (12 munitions + teasers, X+TikTok synchro site, **gaté opérateur**).
 - **Cycle A-Z** : `python -m aria_core.simulate_lifecycle 0xCONTRAT`. Heartbeat : vc_crawl/resolve/weekly_forecast/self_report/radar_x/thesis_review.
