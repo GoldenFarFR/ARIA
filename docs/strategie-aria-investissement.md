@@ -30,6 +30,29 @@ Constante code : `vc_predictions.STRATEGY_ALLOCATION = {"vc": 0.85, "spec": 0.15
 3. **Tirer les 20 au sort** dans ce pool (loterie interne) → échantillon **non biaisé**
    (pas de cherry-pick) ET **tradeable** (a passé le filtre).
 
+### 2 bis. Tokens en bonding (pré-graduation) — chemin PARALLÈLE
+
+⚠️ **Angle mort à ne pas oublier.** Les tokens encore sur leur **courbe de bonding**
+(Virtuals et autres launchpads, avant « graduation » vers un DEX) **n'ont pas de paire
+DexScreener** — donc le pipeline ci-dessus (scan DEX → `best_pair` → OHLCV du pool) les
+**exclut totalement**. Or c'est la niche la plus early (poche 15 %).
+
+Ils exigent un **chemin dédié** (tâche #10) :
+- **Source distincte** : `services/virtuals.py` (déjà présent) → seam `include_virtuals`,
+  pas DexScreener. On lit l'état de la **courbe** (prix = f(offre), progression vers la
+  graduation, réserve), pas un pool DEX.
+- **Filtre de sécurité adapté** : les barrières changent (la « liquidité » = la réserve
+  de la courbe ; les holders sont sur le contrat launchpad ; la mécanique de graduation
+  remplace le LP-lock). `safety_screen` DEX ne s'applique pas tel quel → filtre bonding
+  dédié.
+- **Résolution/OHLCV** : la courbe n'a pas d'OHLCV standard → on suit l'état de la courbe
+  et l'événement de graduation.
+- **Poche & risque** : bonding = **le plus risqué** (pré-graduation, très rug-prone) →
+  strictement dans les 15 %, taille minime, tracké **séparément** du VC gradué.
+
+Séquencement : le pipeline DEX (tokens gradués) est la **v1 (lundi)**. Le chemin bonding
+est une **2ᵉ source** qu'on branche ensuite sur son seam — jamais forcé dans le pipeline DEX.
+
 ## 3. Boucle d'entraînement (walk-forward)
 
 - **Lundi** : 20 tokens tirés du pool → analyse → **20 pronostics horodatés** (direction
