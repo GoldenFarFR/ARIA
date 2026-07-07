@@ -214,6 +214,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=10080,
         enabled=True,
     ),
+    HeartbeatTask(
+        id="vc_radar_x",
+        name="Radar X social",
+        description="Ecoute sociale -> sourcing/reveil de candidats, arbitre on-chain (jamais un declencheur)",
+        interval_minutes=720,
+        enabled=True,
+    ),
 ]
 
 
@@ -520,6 +527,17 @@ class AriaHeartbeat:
             digest = await self_report()
             append_memory("vc", "[self_report] digest opérateur envoyé")
             await self._notify_telegram(digest)
+
+        elif task_id == "vc_radar_x":
+            from aria_core.radar_x import run_radar
+
+            report = await run_radar(limit=40)
+            if report.get("above_threshold", 0) > 0:
+                append_memory(
+                    "vc",
+                    f"[radar] {report['above_threshold']} candidats bruyants — "
+                    f"{report.get('kept', 0)} gardés, {report.get('resurrected', 0)} réveillés",
+                )
 
         elif task_id == "cultivation_curriculum":
             from aria_core.knowledge.cultivation_curriculum import generate_cultivation_message

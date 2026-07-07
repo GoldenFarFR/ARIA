@@ -111,6 +111,12 @@ class TokenScanContext:
     top_holder_pct: float | None = None
     top10_holder_pct: float | None = None
     holders_counted: int | None = None
+    # Fondamentaux CoinGecko (peuplés seulement si include_fundamentals ET donnée
+    # disponible). Exposés en clair pour nourrir la projection ROI par comparables
+    # (Voûte 3, skills/roi_comparables.py) sans re-fetch. None → section omise.
+    market_cap_usd: float | None = None
+    fully_diluted_valuation_usd: float | None = None
+    categories: list[str] = field(default_factory=list)
 
 
 @lru_cache(maxsize=1)
@@ -472,6 +478,10 @@ async def scan_base_token(
         fundamentals_delta = _apply_fundamentals_signals(fundamentals_flags, fundamentals)
         ctx.security_score = max(5, min(95, ctx.security_score + fundamentals_delta))
         ctx.risk_flags.extend(fundamentals_flags)
+        if fundamentals and fundamentals.available:
+            ctx.market_cap_usd = fundamentals.market_cap_usd
+            ctx.fully_diluted_valuation_usd = fundamentals.fully_diluted_valuation_usd
+            ctx.categories = list(fundamentals.categories or [])
 
     if include_ta and ctx.best_pair and ctx.best_pair.pair_address:
         ohlcv = await ohlcv_client.get_ohlcv(ctx.best_pair.pair_address)

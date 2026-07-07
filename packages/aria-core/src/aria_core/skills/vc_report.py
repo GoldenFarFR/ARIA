@@ -648,6 +648,76 @@ def _ta_block_html(result: VCResult) -> str:
   </tr>"""
 
 
+def _fmt_compact_usd(value: float) -> str:
+    """Capitalisation en format compact lisible ($30M, $1.2B). Facts-only."""
+    v = float(value)
+    if v >= 1_000_000_000:
+        return f"${v / 1_000_000_000:.1f}B".replace(".0B", "B")
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.0f}M"
+    if v >= 1_000:
+        return f"${v / 1_000:.0f}k"
+    return f"${v:.0f}"
+
+
+def _roi_block_html(result: VCResult) -> str:
+    """Section « Projection par comparables » : placement du token dans l'histoire.
+
+    Data-gated : vide sans scénario (capitalisation actuelle inconnue). Chaque
+    ligne est un PLACEMENT tangible (« à la capitalisation d'un comparable, Nx »),
+    JAMAIS une cible ni une promesse. L'avertissement du dôme est affiché en clair.
+    """
+    if not result.roi_scenarios:
+        return ""
+
+    basis_label = "FDV" if result.roi_basis == "fdv" else "capitalisation"
+    sector = _esc(result.roi_sector) if result.roi_sector else ""
+    if result.roi_sector_recognized and sector:
+        sector_line = f"Secteur&nbsp;: {sector}"
+    else:
+        sector_line = "Secteur non reconnu&nbsp;: comparables g&eacute;n&eacute;riques"
+
+    rows = ""
+    for s in result.roi_scenarios:
+        label = _esc(s.get("label", ""))
+        ref = _fmt_compact_usd(s.get("ref_mcap_usd", 0))
+        mult = s.get("multiple", 0)
+        note = _esc(s.get("note", ""))
+        note_html = (
+            f'<div style="font-family:{_FONT_SANS};font-size:11px;color:{_MUTE_WARM};'
+            f'margin-top:2px;">{note}</div>'
+            if note
+            else ""
+        )
+        rows += (
+            f'<tr>'
+            f'<td style="padding:9px 0;border-bottom:1px solid rgba(201,162,39,0.18);'
+            f'font-family:{_FONT_SANS};font-size:14px;color:{_INK_WARM};">'
+            f'{label}<div style="font-family:{_FONT_MONO};font-size:11px;color:{_MUTE_WARM};'
+            f'margin-top:2px;">{basis_label} de r&eacute;f&eacute;rence {ref}</div>{note_html}</td>'
+            f'<td align="right" style="padding:9px 0;border-bottom:1px solid rgba(201,162,39,0.18);'
+            f'font-family:{_FONT_MONO};font-size:18px;font-weight:700;color:{_GOLD_DEEP};'
+            f'white-space:nowrap;">{mult:g}x</td>'
+            f'</tr>'
+        )
+
+    disclaimer = _esc(
+        result.roi_disclaimer
+        or "Placement historique par comparables, pas une prevision ni une cible."
+    )
+
+    return f"""<tr>
+    <td class="ivory pad" style="background-color:{_IVORY};padding:30px 44px 6px;">
+      {_section_header("Projection par comparables")}
+      <div style="margin-top:6px;font-family:{_FONT_MONO};font-size:11px;letter-spacing:0.04em;color:{_MUTE_WARM};">{sector_line}</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
+        {rows}
+      </table>
+      <div style="margin-top:12px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{disclaimer}</div>
+    </td>
+  </tr>"""
+
+
 def render_html_report(
     result: VCResult,
     *,
@@ -739,8 +809,10 @@ def render_html_report(
     # premium, comme l'analyse détaillée. En standard, entièrement omise (data-gated).
     ta_block = "" if is_standard else _ta_block_html(result)
 
-    # TODO projection temporelle (tâche #5) — moteur de comparables historiques pas encore
-    # implémenté : ne jamais afficher de cône d'incertitude avec des montants inventés.
+    # Projection ROI par comparables historiques (Voûte 3, tâche #5) : contexte
+    # tangible réservé au premium, JAMAIS une cible ni un montant inventé. Data-gated :
+    # vide si la capitalisation actuelle est inconnue.
+    roi_block = "" if is_standard else _roi_block_html(result)
 
     watermark_diagonal = ""
     if recipient:
@@ -925,6 +997,8 @@ def render_html_report(
   {gaps_block}
 
   {ta_block}
+
+  {roi_block}
 
   {detailed_block}
 
