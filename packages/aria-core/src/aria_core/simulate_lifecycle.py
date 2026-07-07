@@ -26,6 +26,27 @@ def _line(txt: str = "") -> None:
     print(txt, flush=True)
 
 
+def _configure_host() -> bool:
+    """Configure la librairie comme le serveur au démarrage (spark/LLM/clés) → parité prod.
+
+    Lancé en ligne de commande (`docker exec ... python -m ...`), ce process est SÉPARÉ du
+    serveur : sans cet appel, la librairie n'est pas configurée et l'analyse VC retombe sur
+    le déterministe (LLM off). On réutilise LE MÊME configurateur que l'hôte pour éviter
+    toute dérive. Best-effort : hors conteneur (tests, local), l'import échoue proprement et
+    on garde le repli déterministe. Aucun garde-fou touché.
+    """
+    try:
+        from app.integrations.aria_host import register_aria_host_integrations
+    except Exception:
+        return False
+    try:
+        register_aria_host_integrations()
+        return True
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant, repli déterministe
+        _line(f"    (config hote echouee: {exc}) — repli deterministe")
+        return False
+
+
 async def simulate(contract: str | None = None) -> dict:
     from aria_core.skills.acp_onchain_scan import scan_base_token
     from aria_core.skills.safety_screen import safety_screen
@@ -33,6 +54,10 @@ async def simulate(contract: str | None = None) -> dict:
     _line("=" * 64)
     _line("SIMULATION CYCLE ARIA — A a Z")
     _line("=" * 64)
+
+    # Config hôte (spark/LLM/clés) comme au démarrage du serveur → analyse identique à la prod.
+    llm_on = _configure_host()
+    _line(f"\n[*] Config hote : {'LLM actif (parite prod)' if llm_on else 'mode deterministe (LLM off)'}")
 
     # 0. Découverte si aucun contrat fourni.
     if not contract:
