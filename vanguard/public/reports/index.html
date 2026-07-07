@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#2b2c31" />
+<meta name="description" content="ARIA — on-chain crypto analysis reports. Facts, asymmetry, and a risk-first verdict. Open to all." />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<title>Aria Vanguard ZHC — The report that proves the decision</title>
+<style>
+:root{
+  --ground:#2b2c31; --ground-deep:#202126; --ground-lift:#34353b;
+  --gold:#c9a227; --gold-lite:#e6c463; --gold-deep:#8a6a13;
+  --emerald:#2aa189; --emerald-deep:#1f8a74;
+  --rose:#e59ac0; --rose-soft:#d98a8a;
+  --ivory:#f6f2e9; --paper-line:#e7deca; --ink-warm:#2a2620; --mute-warm:#7a7264;
+  --navy:#0a0e1a; --navy-2:#101a2e;
+  --text:#e6e7eb; --muted:#a6a9b2; --faint:#797c86;
+  --line:rgba(230,196,99,0.12);
+  --serif:"Cormorant Garamond",Georgia,"Times New Roman",serif;
+  --sans:"Inter",-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  --grad:linear-gradient(118deg,#e6c463 0%,#c9a227 42%,#2aa189 100%);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--ground);color:var(--text);font-family:var(--sans);position:relative;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;line-height:1.6}
+.wrap{max-width:1180px;margin:0 auto;padding:0 32px}
+@media(max-width:600px){.wrap{padding:0 20px}}
+
+.field{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.field::before{content:"";position:absolute;inset:0;
+  background:radial-gradient(ellipse 90% 65% at 72% 6%,rgba(58,60,68,.9),transparent 60%),
+             radial-gradient(ellipse 55% 45% at 15% 88%,rgba(31,138,116,.06),transparent 60%),
+             radial-gradient(circle at 50% 120%,rgba(201,162,39,.05),transparent 55%)}
+.field::after{content:"";position:absolute;inset:-2px;opacity:.3;
+  background-image:radial-gradient(rgba(230,196,99,.08) 1px,transparent 1px);
+  background-size:34px 34px;mask-image:radial-gradient(ellipse 80% 55% at 60% 15%,#000,transparent 75%)}
+.grain{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.03;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>")}
+.tint{position:absolute;inset:0;z-index:0;pointer-events:none;background:linear-gradient(180deg,rgba(58,88,172,.34) 0%,rgba(152,116,46,.22) 25%,rgba(90,78,64,0) 44%,rgba(90,78,64,0) 80%,rgba(240,184,210,.4) 90%,rgba(249,229,239,.94) 100%)}
+.progress{position:fixed;top:0;left:0;height:2px;z-index:60;width:0;background:linear-gradient(90deg,#e6c463,#c9a227 45%,#2aa189)}
+
+.nav{position:fixed;top:40px;left:0;right:0;z-index:50;height:64px;
+  background:rgba(32,33,38,.62);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.fb-bar{position:fixed;top:0;left:0;right:0;z-index:55;background:linear-gradient(90deg,rgba(201,162,39,.1),rgba(16,16,18,.96) 45%,rgba(138,115,68,.1));backdrop-filter:blur(12px);border-bottom:1px solid rgba(230,196,99,.14)}
+.fb-bar>.wrap{display:flex;align-items:center;justify-content:space-between;gap:14px;height:40px}
+.fb-txt{font-size:.78rem;color:var(--muted);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fb-txt b{color:#d4c4a0}.fb-txt a{color:var(--gold-lite);text-decoration:none}
+.fb-open{flex:none;border:0;background:none;cursor:pointer;color:var(--gold-lite);font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase}
+.fb-open:hover{color:#f4f1ea}
+.fb-panel{position:absolute;top:40px;left:0;right:0;background:rgba(12,12,14,.98);border-bottom:1px solid rgba(230,196,99,.14);box-shadow:0 24px 40px -20px rgba(0,0,0,.6)}
+.fb-panel>.wrap{padding:12px 32px 14px}
+.fb-panel textarea{width:100%;background:#0c0c0e;border:1px solid rgba(230,196,99,.2);border-radius:6px;padding:10px 12px;color:#f4efe6;font-size:.85rem;resize:vertical;outline:none;font-family:var(--sans);min-height:4.5rem}
+.fb-row{display:flex;gap:10px;margin-top:8px;flex-wrap:wrap}
+.fb-row input{flex:1;min-width:180px;background:#0c0c0e;border:1px solid rgba(230,196,99,.16);border-radius:6px;padding:9px 12px;color:#f4efe6;font-size:.8rem;outline:none}
+.fb-row button{border:0;border-radius:6px;padding:9px 20px;font-weight:700;color:#161512;cursor:pointer;background:linear-gradient(120deg,#e6c463,#c9a227 60%,#1f8a74)}
+.fb-row button:disabled{opacity:.5;cursor:not-allowed}
+.fb-note{font-family:var(--mono);font-size:.63rem;color:var(--faint);margin-top:8px;line-height:1.4}
+@media(max-width:640px){.fb-txt{font-size:.7rem}.fb-panel>.wrap{padding:12px 20px 14px}}
+.nav .wrap{display:flex;align-items:center;justify-content:space-between;height:100%}
+.brand{display:flex;align-items:center;gap:12px;font-family:var(--serif);font-size:1.15rem;color:#f1efe9}
+.mono-badge{width:28px;height:28px;border-radius:50%;border:1px solid var(--gold);
+  display:grid;place-items:center;color:var(--gold-lite);font-family:var(--serif);font-size:.9rem}
+.brand .zhc{color:var(--gold-deep)}
+.nav .right{display:flex;align-items:center;gap:20px}
+.nav .live{display:flex;align-items:center;gap:8px;font-size:.68rem;letter-spacing:.22em;text-transform:uppercase;color:var(--muted)}
+.nav .live i{width:7px;height:7px;border-radius:50%;background:var(--emerald);animation:pulse 2.4s infinite}
+.nav .navcta{font-size:.74rem;font-weight:700;color:#161512;text-decoration:none;padding:9px 18px;border-radius:4px;
+  background:linear-gradient(120deg,#e6c463,#c9a227 60%,#1f8a74)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(42,161,137,.55)}70%{box-shadow:0 0 0 7px rgba(42,161,137,0)}100%{box-shadow:0 0 0 0 rgba(42,161,137,0)}}
+@media(max-width:600px){.nav .live{display:none}}
+
+section,header{position:relative;z-index:2}
+
+/* hero — compact */
+.hero{padding:112px 0 54px}
+.hero .split{display:grid;grid-template-columns:1.02fr .98fr;align-items:center;gap:44px}
+.eyebrow{display:flex;align-items:center;gap:12px;font-size:.72rem;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);margin-bottom:22px}
+.eyebrow::before{content:"";width:30px;height:1px;background:linear-gradient(90deg,var(--gold),var(--emerald))}
+h1{font-family:var(--serif);font-weight:500;font-size:clamp(2.9rem,7vw,5.2rem);line-height:.96;letter-spacing:-.012em;color:#f5f2eb;text-wrap:balance}
+.g{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{color:var(--muted);font-size:1.08rem;line-height:1.66;max-width:40ch;margin-top:22px}
+.lead b{color:#f4f1ea;font-weight:600}
+.cta-row{display:flex;flex-wrap:wrap;align-items:center;gap:14px 24px;margin-top:32px}
+.btn{display:inline-flex;align-items:center;gap:10px;padding:15px 32px;font-size:.92rem;font-weight:700;letter-spacing:.02em;
+  color:#161512;text-decoration:none;border:0;border-radius:4px;cursor:pointer;
+  background:linear-gradient(120deg,#8a6a13,#e6c463 32%,#c9a227 58%,#1f8a74 108%);background-size:180% 100%;
+  box-shadow:0 1px 0 rgba(255,255,255,.28) inset,0 14px 36px rgba(201,162,39,.22);
+  transition:background-position .55s,transform .28s,box-shadow .28s}
+.btn:hover{background-position:100% 0;transform:translateY(-2px);box-shadow:0 1px 0 rgba(255,255,255,.34) inset,0 18px 44px rgba(201,162,39,.32)}
+.ghost{color:var(--gold-lite);text-decoration:none;font-size:.9rem;border-bottom:1px solid rgba(230,196,99,.3);padding-bottom:3px;transition:.25s}
+.ghost:hover{color:#f4f1ea;border-color:var(--emerald)}
+
+.stage{perspective:1500px;display:flex;justify-content:center}
+.tilt{transform-style:preserve-3d;transition:transform .3s cubic-bezier(.2,.7,.2,1);will-change:transform}
+.float{animation:float 7s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+.rep{position:relative;width:min(410px,100%);border-radius:16px;overflow:hidden;box-shadow:0 40px 76px -22px rgba(0,0,0,.6)}
+.rep-mast{position:relative;padding:24px 26px 20px;overflow:hidden;background-color:var(--navy);background-image:linear-gradient(165deg,#101a2e,#0a0e1a 58%,#0c1020)}
+.rep-mast.std{background-color:#0a0a0d;background-image:linear-gradient(165deg,#161319,#0a0a0d 58%,#100b10)}
+.rep-mast.std::after{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#e59ac0,#4bbf9a 50%,#e6c463)}
+.shimmer::before{content:"";position:absolute;top:-60%;left:-30%;width:60%;height:220%;
+  background:linear-gradient(105deg,transparent,rgba(230,196,99,.13),transparent);transform:rotate(8deg);animation:sweep 6.5s ease-in-out infinite}
+@keyframes sweep{0%{left:-40%}55%,100%{left:130%}}
+.word{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:.64rem;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:16px}
+.drop{width:20px;height:20px;border-radius:50% 50% 50% 0;transform:rotate(45deg);background:radial-gradient(circle at 35% 30%,#f2dd98,#c9a227 55%,#8a6a13);box-shadow:0 0 14px rgba(201,162,39,.45)}
+.rep-mast h3{font-family:var(--serif);font-weight:500;color:var(--ivory);font-size:1.6rem;line-height:1.05}
+.rep-mast .meta{font-family:var(--mono);font-size:.72rem;color:#8fa0ad;margin-top:6px}
+.rep-mast.std .meta{color:#8f8f96}
+.pills{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px}
+.pill{font-size:.7rem;font-weight:600;letter-spacing:.03em;padding:5px 11px;border-radius:999px;border:1px solid transparent}
+.pill.buy{color:#10131f;background:linear-gradient(135deg,#b0862b,#e6c463 55%,#c9a227)}
+.pill.risk{color:var(--gold-lite);border-color:rgba(31,138,116,.6);background:rgba(15,107,92,.16)}
+.pill.pot{color:var(--gold-lite);border-color:rgba(201,162,39,.5);background:rgba(201,162,39,.08)}
+.pill.avoid{color:#aab4af;border-color:rgba(150,163,158,.5);background:rgba(150,163,158,.1)}
+.pill.extreme{color:#f0b6b6;border-color:rgba(217,138,138,.55);background:rgba(163,74,42,.2)}
+.pill.sp-r{color:#f0b6d2;border-color:rgba(229,154,192,.5);background:rgba(229,154,192,.1)}
+.pill.sp-g{color:#8fe0c4;border-color:rgba(75,191,154,.5);background:rgba(75,191,154,.1)}
+.rep-strip{background:var(--ivory);color:var(--mute-warm);font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;text-transform:uppercase;padding:11px 26px;text-align:center}
+.frag{position:absolute;z-index:3;font-family:var(--mono);font-size:.66rem;letter-spacing:.06em;color:var(--gold-lite);
+  background:rgba(20,22,28,.82);border:1px solid var(--line);border-radius:8px;padding:8px 12px;backdrop-filter:blur(6px);box-shadow:0 12px 26px rgba(0,0,0,.4)}
+.frag .k{color:var(--muted)}
+.frag.f1{top:6%;left:-6%}.frag.f2{bottom:14%;right:-8%}.frag.f2 .ok{color:#4bd0ae}
+
+/* section heads */
+.head{max-width:640px}
+.kicker{font-family:var(--mono);font-size:.74rem;letter-spacing:.24em;text-transform:uppercase;color:var(--gold-lite);margin-bottom:14px}
+h2{font-family:var(--serif);font-weight:500;font-size:clamp(2.1rem,4.6vw,3.2rem);line-height:1.03;letter-spacing:-.01em;color:#f4f1ea;text-wrap:balance}
+.center{text-align:center}.center .head{margin:0 auto}.center .lead{margin-left:auto;margin-right:auto}
+
+/* ── QUINCONCE dossier ── */
+.dossier{padding:80px 0;border-top:1px solid var(--line)}
+.quinx{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:start;margin-top:38px}
+.qcol{display:flex;flex-direction:column;gap:18px}
+.qcol.mid{margin-top:52px}
+.qcard{border-radius:13px;padding:16px 17px 15px;position:relative;overflow:hidden;
+  box-shadow:0 20px 44px -20px rgba(0,0,0,.6);opacity:0;transform:translateY(20px);
+  transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+.qcard.in{opacity:1;transform:none}
+.qcard.navy{background:linear-gradient(165deg,#101a2e,#0a0e1a);border:1px solid rgba(230,196,99,.1)}
+.qcard.dark{background:linear-gradient(165deg,#15171e,#0d0f15);border:1px solid rgba(230,196,99,.08)}
+.qcard.ivory{background:var(--ivory);color:var(--ink-warm)}
+.qcard.judge{background:linear-gradient(165deg,#17111a,#0d0a0e);border:1px solid rgba(229,154,192,.18)}
+.qcard.judge::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#e59ac0,#d98a8a 55%,#c9a227)}
+.qlabel{font-family:var(--mono);font-size:.63rem;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:11px;display:flex;align-items:center;gap:7px}
+.qcard.ivory .qlabel{color:#b08a2a}
+.qcard.judge .qlabel{color:var(--rose)}
+.qbig{font-family:var(--serif);font-weight:500;font-size:1.5rem;color:var(--ivory);line-height:1.06}
+.qcard.ivory .qbig{color:#0b1f3a}
+.qbig.no{font-size:2.2rem;background:linear-gradient(120deg,#e59ac0,#d98a8a 55%,#c9a227);-webkit-background-clip:text;background-clip:text;color:transparent}
+.qsub{font-size:.78rem;color:var(--muted);line-height:1.55;margin-top:8px}
+.qcard.ivory .qsub{color:var(--mute-warm)}
+.qcard.judge .qsub{color:#c7a9b6}
+.qrow{display:flex;justify-content:space-between;align-items:center;padding:5.5px 0;font-family:var(--mono);font-size:.74rem;border-bottom:1px solid rgba(230,196,99,.08)}
+.qcard.ivory .qrow{border-bottom:1px solid var(--paper-line)}
+.qrow:last-child{border-bottom:0}
+.qk{color:var(--muted)}.qcard.ivory .qk{color:var(--mute-warm)}
+.qv{color:#dfe2e8}.qcard.ivory .qv{color:var(--ink-warm)}
+.qv.ok{color:#4bd0ae}.qcard.ivory .qv.ok{color:var(--emerald-deep)}
+.qv.dn{color:var(--rose-soft)}.qv.up{color:#4bd0ae}
+.qrr{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;text-align:center}
+.qrr .lab{font-family:var(--mono);font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;color:var(--gold);line-height:1.3}
+.qrr .num{font-family:var(--serif);font-weight:600;line-height:1;margin-top:6px;font-variant-numeric:tabular-nums}
+.qrr .num.up{font-size:1.15rem;color:#4bd0ae}.qrr .num.rr{font-size:1.8rem;color:var(--gold-lite)}.qrr .num.dn{font-size:1.15rem;color:var(--rose-soft)}
+.qrr .mid{border-left:1px solid rgba(230,196,99,.14);border-right:1px solid rgba(230,196,99,.14)}
+.qthesis{font-family:var(--serif);font-size:1.02rem;line-height:1.4;color:#243a52;font-style:italic}
+
+/* ── editions with blur-teaser ── */
+.beat{padding:88px 0;border-top:1px solid var(--line)}
+.editions{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:42px;align-items:start}
+.ed{display:flex;flex-direction:column;gap:14px}
+.ed .rep{width:100%}
+.ed .tag{display:flex;align-items:baseline;justify-content:space-between;padding:0 4px}
+.ed .tag .name{font-family:var(--serif);color:#f4f1ea;font-size:1.15rem}
+.ed .tag .price{font-family:var(--serif);color:var(--gold-lite);font-size:1.55rem}
+.ed .tag .price small{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+.rep-body{padding:14px 20px 16px;background:linear-gradient(180deg,#0f1119,#0c0e15)}
+.rep-mast.std+.rep-body{background:linear-gradient(180deg,#100d13,#0b0a0e)}
+.deliv{display:flex;align-items:center;gap:10px;padding:6.5px 0;font-size:.77rem;color:#cdd0d8}
+.deliv .ic{width:15px;flex:none;text-align:center;color:var(--emerald);font-size:.72rem}
+.deliv.lock{filter:blur(3.6px);color:#9aa0ab;user-select:none;pointer-events:none}
+.deliv.lock .ic{color:var(--gold)}
+.tease{display:flex;align-items:center;justify-content:center;gap:7px;margin-top:12px;padding-top:12px;border-top:1px solid rgba(230,196,99,.14);font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--gold-lite)}
+.prem-note{margin-top:12px;padding-top:12px;border-top:1px solid rgba(42,161,137,.2);font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:#4bd0ae;text-align:center}
+
+/* offer + final */
+.offer{padding:92px 0;border-top:1px solid var(--line);text-align:center}
+.price-big{font-family:var(--serif);font-size:clamp(3.2rem,9vw,5rem);color:var(--gold-lite);line-height:1}
+.price-big small{font-family:var(--mono);font-size:1rem;color:var(--muted)}
+.terms{display:flex;justify-content:center;flex-wrap:wrap;gap:12px 26px;margin-top:22px;font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--gold-deep)}
+.terms span{display:flex;align-items:center;gap:8px}.terms i{width:5px;height:5px;border-radius:50%;background:var(--emerald)}
+.final{padding:104px 0 66px;text-align:center;background:transparent}
+.final h2{font-size:clamp(2.5rem,6.5vw,4.2rem);color:#2a1520}
+.final .lead{margin:20px auto 0;max-width:42ch;color:#7c4e60}
+.final .lead b{color:#2a1520}
+.fine{color:var(--faint);font-family:var(--mono);font-size:.72rem;letter-spacing:.05em;margin-top:16px}
+.final .fine{color:#8a5568}
+
+footer{border-top:1px solid rgba(150,80,110,.28);padding:30px 0;position:relative;z-index:2}
+footer .wrap{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px}
+footer .brand{color:#2a1520}
+.legal{display:flex;flex-wrap:wrap;gap:8px 18px;font-family:var(--mono);font-size:.72rem}
+.legal a{color:#8a5062;text-decoration:none}.legal a:hover{color:#2a1520}
+.dom{color:#a84f74;text-decoration:none;font-family:var(--mono);font-size:.72rem}
+.disc{position:relative;z-index:2;max-width:1180px;margin:0 auto;padding:0 32px 46px;font-size:.71rem;color:#6a4050;line-height:1.65;font-style:italic}
+/* live demo */
+.demo{padding:70px 0;border-top:1px solid var(--line)}
+.demo-panel{max-width:680px;margin:26px auto 0;background:linear-gradient(165deg,#14161d,#0d0f15);border:1px solid rgba(230,196,99,.14);border-radius:16px;padding:24px;box-shadow:0 30px 60px -24px rgba(0,0,0,.6);text-align:left}
+.demo-in{display:flex;gap:10px;flex-wrap:wrap}
+.demo-in input{flex:1;min-width:200px;background:#0b0d13;border:1px solid rgba(230,196,99,.16);border-radius:8px;padding:13px 15px;color:#e6e7eb;font-family:var(--mono);font-size:.8rem;outline:none}
+.demo-in input:focus{border-color:rgba(230,196,99,.42)}
+.demo-in button{border:0;border-radius:8px;padding:13px 24px;font-weight:700;color:#161512;cursor:pointer;background:linear-gradient(120deg,#e6c463,#c9a227 60%,#1f8a74)}
+.demo-hint{font-family:var(--mono);font-size:.68rem;color:var(--faint);margin-top:10px;letter-spacing:.04em}
+.demo-out{margin-top:6px}
+.scanline{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:.72rem;color:var(--gold-lite);padding:12px 0}
+.scanline .dot{width:8px;height:8px;border-radius:50%;background:var(--emerald);animation:pulse 1.1s infinite}
+.demo-res{opacity:0;transform:translateY(10px);transition:.5s}
+.demo-res.in{opacity:1;transform:none}
+.demo-verdict{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 0 12px;border-bottom:1px solid rgba(230,196,99,.1)}
+.demo-verdict .big{font-family:var(--serif);font-size:1.7rem;color:var(--ivory)}
+.demo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.demo-cell{background:#0b0d13;border:1px solid rgba(230,196,99,.08);border-radius:8px;padding:10px 12px;font-family:var(--mono)}
+.demo-cell .k{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.demo-cell .v{font-size:.88rem;color:#dfe2e8;margin-top:4px}
+.demo-cta{margin-top:15px;font-size:.82rem;color:var(--muted);line-height:1.55}
+.demo-cta b{color:var(--gold-lite)}
+/* security strip */
+.secband{border-top:1px solid var(--line);background:linear-gradient(180deg,rgba(16,26,46,.32),transparent)}
+.secgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:18px;padding:46px 0}
+.secitem{text-align:center;padding:8px}
+.secitem .ic{font-size:1.85rem}
+.secitem .t{font-family:var(--mono);font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;color:var(--gold-lite);margin-top:12px}
+.secitem .d{font-size:.82rem;color:#b9bcc4;margin-top:6px;line-height:1.45}
+/* FAQ */
+.faq{padding:80px 0;border-top:1px solid var(--line)}
+.faq-wrap{max-width:760px;margin:30px auto 0}
+.chips{display:flex;flex-wrap:wrap;gap:9px;justify-content:center;margin-bottom:18px}
+.chip{cursor:pointer;font-size:.77rem;padding:9px 15px;border-radius:999px;border:1px solid rgba(230,196,99,.2);background:rgba(230,196,99,.04);color:var(--gold-lite);transition:.2s}
+.chip:hover,.chip.on{background:rgba(230,196,99,.13);border-color:rgba(230,196,99,.42)}
+.faq-answer{background:linear-gradient(165deg,#14161d,#0d0f15);border:1px solid rgba(230,196,99,.12);border-radius:12px;padding:18px 20px;min-height:70px;color:#d3d6dd;font-size:.9rem;line-height:1.6;text-align:left}
+.faq-answer .who{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);margin-bottom:8px}
+.ask{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.ask input{flex:1;min-width:200px;background:#0b0d13;border:1px solid rgba(230,196,99,.16);border-radius:8px;padding:12px 14px;color:#e6e7eb;font-size:.85rem;outline:none}
+.ask input:focus{border-color:rgba(230,196,99,.42)}
+.ask button{border:0;border-radius:8px;padding:12px 20px;font-weight:700;color:#161512;cursor:pointer;background:linear-gradient(120deg,#e6c463,#c9a227 60%,#1f8a74)}
+.ask input:disabled,.ask button:disabled{opacity:.5;cursor:not-allowed}
+.ask-note{font-family:var(--mono);font-size:.68rem;color:var(--faint);margin-top:10px;text-align:center;letter-spacing:.04em}
+@media(max-width:760px){.secgrid{grid-template-columns:repeat(2,1fr)}.demo-grid{grid-template-columns:1fr 1fr}}
+/* floating ARIA chat — available everywhere */
+.aria-fab{position:fixed;bottom:22px;right:22px;z-index:70;display:flex;align-items:center;gap:10px;padding:10px 18px 10px 10px;border:0;border-radius:999px;cursor:pointer;background:linear-gradient(120deg,#e6c463,#c9a227 55%,#1f8a74);color:#161512;font-family:var(--sans);font-weight:700;font-size:.85rem;box-shadow:0 14px 34px rgba(201,162,39,.34);transition:transform .25s,box-shadow .25s}
+.aria-fab:hover{transform:translateY(-2px);box-shadow:0 18px 46px rgba(201,162,39,.46)}
+.fab-mark{position:relative;width:30px;height:30px;border-radius:50%;background:#0a0e1a;color:var(--gold-lite);font-family:var(--serif);display:grid;place-items:center;font-size:1rem}
+.fab-dot{position:absolute;top:-2px;right:-2px;width:9px;height:9px;border-radius:50%;background:#37d39a;border:2px solid #c9a227;animation:pulse 2.4s infinite}
+.aria-fab.hide{opacity:0;pointer-events:none;transform:scale(.8)}
+.aria-chat{position:fixed;bottom:20px;right:20px;z-index:71;width:318px;max-width:calc(100vw - 28px);height:454px;max-height:calc(100vh - 40px);display:flex;flex-direction:column;background:linear-gradient(180deg,#16181f,#101218);border:1px solid rgba(230,196,99,.16);border-radius:16px;overflow:hidden;box-shadow:0 40px 90px -20px rgba(0,0,0,.7);opacity:0;transform:translateY(16px) scale(.98);pointer-events:none;transition:opacity .3s,transform .3s}
+.aria-chat.open{opacity:.45;transform:none;pointer-events:auto}
+.aria-chat.open:hover,.aria-chat.open:focus-within{opacity:1}
+.ac-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;background:linear-gradient(165deg,#101a2e,#0a0e1a);border-bottom:1px solid var(--line)}
+.ac-id{display:flex;align-items:center;gap:10px}
+.ac-badge{width:34px;height:34px;border-radius:50%;border:1px solid var(--gold);color:var(--gold-lite);font-family:var(--serif);display:grid;place-items:center;font-size:1rem}
+.ac-name{font-family:var(--serif);color:var(--ivory);font-size:1.05rem;line-height:1.1}
+.ac-status{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:2px}
+.ac-status i{width:6px;height:6px;border-radius:50%;background:#37d39a;animation:pulse 2.4s infinite}
+.ac-close{background:none;border:0;color:var(--muted);font-size:1rem;cursor:pointer;padding:4px 8px}
+.ac-close:hover{color:var(--ivory)}
+.ac-exp{background:none;border:0;color:var(--muted);font-size:1.05rem;cursor:pointer;padding:4px 7px;line-height:1}
+.ac-exp:hover{color:var(--ivory)}
+.aria-chat.big{width:min(760px,94vw);height:min(80vh,720px)}
+.aria-chat.big .ac-body{padding:22px 26px}
+.aria-chat.big .ac-msg{font-size:.95rem;max-width:76%}
+.aria-chat.big .ac-input input{font-size:.95rem;padding:14px 16px}
+.aria-chat.big .ac-chips{padding:0 22px 12px}
+.ac-body{flex:1;overflow-y:auto;padding:15px;display:flex;flex-direction:column;gap:10px}
+.ac-msg{max-width:84%;padding:10px 13px;border-radius:12px;font-size:.85rem;line-height:1.5}
+.ac-msg.aria{align-self:flex-start;background:#1c1f27;color:#d7dae1;border:1px solid rgba(230,196,99,.08);border-bottom-left-radius:4px}
+.ac-msg.me{align-self:flex-end;background:linear-gradient(120deg,#c9a227,#8a6a13);color:#151312;border-bottom-right-radius:4px}
+.ac-chips{display:flex;flex-wrap:wrap;gap:7px;padding:0 15px 10px}
+.ac-chip{cursor:pointer;font-size:.72rem;padding:7px 11px;border-radius:999px;border:1px solid rgba(230,196,99,.2);background:rgba(230,196,99,.05);color:var(--gold-lite)}
+.ac-chip:hover{background:rgba(230,196,99,.13)}
+.ac-input{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
+.ac-input input{flex:1;background:#0b0d13;border:1px solid rgba(230,196,99,.16);border-radius:9px;padding:11px 13px;color:#e6e7eb;font-size:.85rem;outline:none}
+.ac-input input:focus{border-color:rgba(230,196,99,.4)}
+.ac-input button{width:42px;border:0;border-radius:9px;cursor:pointer;color:#161512;font-weight:700;font-size:1rem;background:linear-gradient(120deg,#e6c463,#c9a227 60%,#1f8a74)}
+.ac-input input:disabled,.ac-input button:disabled{opacity:.5;cursor:not-allowed}
+.ac-note{font-family:var(--mono);font-size:.63rem;color:var(--faint);text-align:center;padding:0 0 10px;letter-spacing:.04em}
+@media(max-width:600px){.aria-chat{height:72vh}.fab-label{display:none}.aria-fab{padding:11px}}
+
+/* motion */
+.rv{opacity:0;transform:translateY(20px);transition:opacity .8s cubic-bezier(.2,.7,.2,1),transform .8s cubic-bezier(.2,.7,.2,1)}
+.rv.in{opacity:1;transform:none}
+.rv.d1{transition-delay:.07s}.rv.d2{transition-delay:.14s}.rv.d3{transition-delay:.2s}
+.enter{opacity:0;animation:enter 1s cubic-bezier(.2,.7,.2,1) forwards}
+.e1{animation-delay:.12s}.e2{animation-delay:.28s}.e3{animation-delay:.44s}.e4{animation-delay:.6s}.e5{animation-delay:.74s}
+@keyframes enter{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+.enter-card{opacity:0;animation:enterCard 1.2s cubic-bezier(.2,.7,.2,1) .4s forwards}
+@keyframes enterCard{from{opacity:0;transform:translateY(36px) rotateX(11deg) scale(.94)}to{opacity:1;transform:none}}
+
+@media(max-width:900px){
+  .hero .split{grid-template-columns:1fr;gap:36px}
+  .stage{perspective:none}.frag{display:none}
+  .quinx{grid-template-columns:1fr 1fr}.qcol.mid{margin-top:0}
+  .editions{grid-template-columns:1fr}
+}
+@media(max-width:600px){.quinx{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .rv,.qcard,.enter,.enter-card{opacity:1!important;transform:none!important;transition:none!important}
+  .float{animation:none!important}
+}
+</style>
+</head>
+<body>
+
+<div class="field"></div>
+<div class="tint" id="tint"></div>
+<div class="grain"></div>
+<div class="progress" id="prog"></div>
+
+<!-- FEEDBACK (header) — real loop: scored → worker task → PR -->
+<div class="fb-bar" id="fbBar">
+  <div class="wrap">
+    <span class="fb-txt">♡ <b>ZHC</b> community — got an idea? ARIA scores it and turns strong ideas into real work. <a href="https://t.me/Aria_ZHC_Bot" target="_blank" rel="noopener noreferrer">Telegram ↗</a></span>
+    <button class="fb-open" id="fbOpen">＋ Your feedback</button>
+  </div>
+  <div class="fb-panel" id="fbPanel" hidden>
+    <div class="wrap">
+      <textarea id="fbMsg" rows="3" maxlength="500" placeholder="e.g. add a price chart, improve the FAQ, a token to analyse…"></textarea>
+      <div class="fb-row">
+        <input id="fbHandle" type="text" maxlength="64" placeholder="Your @handle (optional)" />
+        <button id="fbSend">Send to ARIA →</button>
+      </div>
+      <p class="fb-note" id="fbNote">Strong ideas become real tasks (PR) · a fitting note may be quoted on X (@Aria_ZHC) — never financial advice.</p>
+    </div>
+  </div>
+</div>
+
+<nav class="nav">
+  <div class="wrap">
+    <div class="brand"><span class="mono-badge">A</span> Aria Vanguard <span class="zhc">ZHC</span></div>
+    <div class="right">
+      <span class="live"><i></i> Aria online</span>
+      <a class="navcta" href="#start">Join the waitlist</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO (compact) -->
+<header class="hero">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <p class="eyebrow enter e1">Open to all · no expertise required</p>
+        <h1><span class="enter e2" style="display:block">The report that</span>
+          <span class="g enter e3" style="display:block">proves the decision.</span></h1>
+        <p class="lead enter e4">New to this? You don't need to be an expert. ARIA does the analysis for you — in plain language — and <b>tells you when to walk away</b>. You always keep the decision.</p>
+        <div class="cta-row enter e5">
+          <a class="btn" href="#start">Join the waitlist →</a>
+          <a class="ghost" href="#dossier">See what's inside ↓</a>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="tilt enter-card" id="heroTilt">
+          <div class="float">
+            <div class="rep shimmer">
+              <div class="rep-mast">
+                <div class="word"><span class="drop"></span> Aria Vanguard ZHC · Analysis report</div>
+                <h3>VC Analysis — sample</h3>
+                <div class="meta">BASE · 2026-07-07 · REF A-042</div>
+                <div class="pills">
+                  <span class="pill buy">BUY</span>
+                  <span class="pill risk">Risk · MODERATE</span>
+                  <span class="pill pot">Potential 7/10</span>
+                </div>
+              </div>
+              <div class="rep-strip">Premium edition · private delivery</div>
+            </div>
+          </div>
+          <div class="frag f1 enter e4"><span class="k">R/R</span> 3.1×</div>
+          <div class="frag f2 enter e5"><span class="k">Contract</span> <span class="ok">verified ✓</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- LIVE DEMO -->
+<section class="demo" id="demo">
+  <div class="wrap center">
+    <div class="head">
+      <p class="kicker rv">Try it · free</p>
+      <h2 class="rv d1">Paste a token. <span class="g">See ARIA think.</span></h2>
+      <p class="lead rv d2">A taste of the scan — on-chain facts and a first verdict in seconds. The full dossier comes with the report.</p>
+    </div>
+    <div class="demo-panel rv d2">
+      <div class="demo-in">
+        <input id="demoAddr" type="text" placeholder="0x…  paste a Base token address" spellcheck="false" />
+        <button id="demoBtn">Scan →</button>
+      </div>
+      <p class="demo-hint">Demo · illustrative sample result · Base chain</p>
+      <div class="demo-out" id="demoOut"></div>
+    </div>
+  </div>
+</section>
+
+<!-- QUINCONCE DOSSIER -->
+<section class="dossier" id="dossier">
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker rv">One dossier · every angle</p>
+      <h2 class="rv d1">Everything that goes<br>into <span class="g">one decision.</span></h2>
+      <p class="lead rv d2">Facts, asymmetry, levels, and an adversarial audit — <b>raw data, never rumours.</b> Missing data is flagged <i>“insufficient.”</i></p>
+    </div>
+
+    <div class="quinx">
+      <!-- column 1 -->
+      <div class="qcol">
+        <div class="qcard navy">
+          <div class="qlabel"><span class="drop" style="width:13px;height:13px"></span> Verdict</div>
+          <div class="qbig">BUY</div>
+          <div class="pills" style="margin-top:12px">
+            <span class="pill risk">Risk · MODERATE</span>
+            <span class="pill pot">Potential 7/10</span>
+          </div>
+        </div>
+        <div class="qcard dark">
+          <div class="qlabel">Reward / risk</div>
+          <div class="qrr">
+            <div><div class="lab">Upside</div><div class="num up" data-count="142" data-prefix="+" data-suffix="%">+0%</div></div>
+            <div class="mid"><div class="lab">R / R</div><div class="num rr" data-count="3.1" data-suffix="×">0×</div></div>
+            <div><div class="lab">Downside</div><div class="num dn" data-count="46" data-prefix="−" data-suffix="%">0%</div></div>
+          </div>
+          <p class="qsub" style="text-align:center;margin-top:12px">Reward 3.1× the risk taken.</p>
+        </div>
+        <div class="qcard dark">
+          <div class="qlabel">Delivery</div>
+          <div class="qrow"><span class="qk">Channel</span><span class="qv">Telegram &amp; web</span></div>
+          <div class="qrow"><span class="qk">Access</span><span class="qv">Private link</span></div>
+          <div class="qrow"><span class="qk">Signed</span><span class="qv ok">SHA-256 stamp</span></div>
+        </div>
+      </div>
+
+      <!-- column 2 (offset — quinconce) -->
+      <div class="qcol mid">
+        <div class="qcard ivory">
+          <div class="qlabel">On-chain signals</div>
+          <div class="qrow"><span class="qk">Security score</span><span class="qv">72 / 100</span></div>
+          <div class="qrow"><span class="qk">Liquidity</span><span class="qv">$184,000</span></div>
+          <div class="qrow"><span class="qk">Top holder</span><span class="qv">6.4 %</span></div>
+          <div class="qrow"><span class="qk">Contract</span><span class="qv ok">verified ✓</span></div>
+          <div class="qrow"><span class="qk">24h volume</span><span class="qv">$96,300</span></div>
+        </div>
+        <div class="qcard dark">
+          <div class="qlabel">Smart money</div>
+          <div class="qrow"><span class="qk">Tracked wallets</span><span class="qv">4 active</span></div>
+          <div class="qrow"><span class="qk">Net flow · 7d</span><span class="qv up">+$118,400</span></div>
+          <div class="qrow"><span class="qk">First in</span><span class="qv">11 days ago</span></div>
+        </div>
+      </div>
+
+      <!-- column 3 -->
+      <div class="qcol">
+        <div class="qcard ivory">
+          <div class="qlabel">Price levels</div>
+          <div class="qrow"><span class="qk">Entry</span><span class="qv">$0.0042</span></div>
+          <div class="qrow"><span class="qk">Invalidation</span><span class="qv dn">$0.0031</span></div>
+          <div class="qrow"><span class="qk">Target</span><span class="qv ok">$0.0102</span></div>
+          <div class="qrow"><span class="qk">Suggested size</span><span class="qv">2 % of capital</span></div>
+        </div>
+        <div class="qcard judge">
+          <div class="qlabel">Risk-first by default</div>
+          <div class="qbig no">No.</div>
+          <p class="qsub">ARIA's default verdict is <b style="color:#f0b6b6">AVOID · EXTREME</b>. A token has to <b>earn</b> a better call on the facts — missing data is flagged, never guessed. <b style="color:#e6c463">It knows how to say no.</b></p>
+        </div>
+        <div class="qcard ivory">
+          <div class="qlabel">Thesis</div>
+          <p class="qthesis">“Credible liquidity, verified contract, smart-money accumulation — asymmetry favours a measured entry.”</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SECURITY -->
+<section class="secband">
+  <div class="wrap">
+    <div class="secgrid">
+      <div class="secitem rv"><div class="ic">🔑</div><div class="t">Non-custodial</div><div class="d">You hold the keys. Always.</div></div>
+      <div class="secitem rv d1"><div class="ic">✍️</div><div class="t">You sign</div><div class="d">Nothing moves without you.</div></div>
+      <div class="secitem rv d1"><div class="ic">🚫</div><div class="t">No auto-trade</div><div class="d">ARIA never executes.</div></div>
+      <div class="secitem rv d2"><div class="ic">🔒</div><div class="t">Signed reports</div><div class="d">SHA-256 fingerprint.</div></div>
+      <div class="secitem rv d2"><div class="ic">⚖️</div><div class="t">Compliance-first</div><div class="d">Facts, not promises.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- EDITIONS -->
+<section class="beat center">
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker rv" style="letter-spacing:.26em">Two editions, one standard of rigour</p>
+      <h2 class="rv d1">Standard or <span class="g">premium.</span></h2>
+      <p class="lead rv d2">Same rigour — two finishes. Standard covers the essentials; premium reveals the full dossier. <b>Pricing indicative — ordering opens at launch.</b></p>
+    </div>
+    <div class="editions">
+      <div class="ed rv d1">
+        <div class="rep">
+          <div class="rep-mast std">
+            <div class="word"><span class="drop"></span> Aria Vanguard ZHC · Standard edition</div>
+            <h3 style="font-size:1.35rem">VC Analysis — sample</h3>
+            <div class="meta">BASE · 2026-07-07 · REF A-042</div>
+            <div class="pills">
+              <span class="pill buy">BUY</span>
+              <span class="pill sp-r">Risk · MODERATE</span>
+              <span class="pill sp-g">Potential 7/10</span>
+            </div>
+          </div>
+          <div class="rep-body">
+            <div class="deliv"><span class="ic">✓</span> Verdict · confidence · risk</div>
+            <div class="deliv"><span class="ic">✓</span> On-chain signals + reward/risk</div>
+            <div class="deliv"><span class="ic">✓</span> Entry / invalidation / target levels</div>
+            <div class="deliv lock"><span class="ic">✓</span> Scenarios &amp; thesis</div>
+            <div class="deliv lock"><span class="ic">✓</span> Detailed full analysis</div>
+            <div class="deliv lock"><span class="ic">✓</span> Methodology &amp; sources</div>
+            <div class="deliv lock"><span class="ic">✓</span> Verified project references</div>
+            <div class="tease">🔒 4 sections unlock in Premium</div>
+          </div>
+        </div>
+        <div class="tag"><span class="name">Standard</span><span class="price">$30<small> / report</small></span></div>
+      </div>
+      <div class="ed rv d2">
+        <div class="rep">
+          <div class="rep-mast">
+            <div class="word"><span class="drop"></span> Aria Vanguard ZHC · Premium edition</div>
+            <h3 style="font-size:1.35rem">VC Analysis — sample</h3>
+            <div class="meta">BASE · 2026-07-07 · REF A-042</div>
+            <div class="pills">
+              <span class="pill buy">BUY</span>
+              <span class="pill risk">Risk · MODERATE</span>
+              <span class="pill pot">Potential 7/10</span>
+            </div>
+          </div>
+          <div class="rep-body">
+            <div class="deliv"><span class="ic">✓</span> Verdict · confidence · risk</div>
+            <div class="deliv"><span class="ic">✓</span> On-chain signals + reward/risk</div>
+            <div class="deliv"><span class="ic">✓</span> Entry / invalidation / target levels</div>
+            <div class="deliv"><span class="ic">✓</span> Scenarios &amp; thesis</div>
+            <div class="deliv"><span class="ic">✓</span> Detailed full analysis</div>
+            <div class="deliv"><span class="ic">✓</span> Methodology &amp; sources</div>
+            <div class="deliv"><span class="ic">✓</span> Verified project references</div>
+            <div class="prem-note">Complete edition · everything revealed</div>
+          </div>
+        </div>
+        <div class="tag"><span class="name">Premium</span><span class="price">$50<small> / report</small></span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- OFFER -->
+<section class="offer">
+  <div class="wrap">
+    <p class="kicker rv" style="letter-spacing:.26em">Or the subscription · launch</p>
+    <div class="price-big rv d1">$100<small> / month</small></div>
+    <p class="lead center rv d2"><b>Unlimited</b> reports, standard and premium — <b>plus live access to ARIA</b>, your analyst on demand.</p>
+    <div class="terms rv d3">
+      <span><i></i> Unlimited reports</span>
+      <span><i></i> ARIA live · LLM</span>
+      <span><i></i> Cancel anytime</span>
+      <span><i></i> Compliance first</span>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section class="faq" id="faq">
+  <div class="wrap center">
+    <div class="head">
+      <p class="kicker rv">Questions</p>
+      <h2 class="rv d1">Ask <span class="g">ARIA.</span></h2>
+      <p class="lead rv d2">Tap a question — or ask your own. ARIA answers from verified facts, <b>never financial advice.</b></p>
+    </div>
+    <div class="faq-wrap rv d2">
+      <div class="chips" id="faqChips">
+        <span class="chip" data-a="advice">Is this financial advice?</span>
+        <span class="chip" data-a="funds">Do you touch my funds?</span>
+        <span class="chip" data-a="chains">Which chains?</span>
+        <span class="chip" data-a="get">What do I get?</span>
+        <span class="chip" data-a="cancel">Can I cancel?</span>
+      </div>
+      <div class="faq-answer">
+        <div class="who"><span class="drop" style="width:12px;height:12px"></span> ARIA</div>
+        <span id="faqTxt">Pick a question above, or type your own below. I answer straight — and I tell you when something is not advice.</span>
+      </div>
+      <div class="ask">
+        <input id="askIn" type="text" placeholder="Ask ARIA anything…" />
+        <button id="askBtn">Ask →</button>
+      </div>
+      <p class="ask-note" id="askNote">2 free questions in this demo · unlimited with the subscription</p>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL -->
+<section class="final" id="start">
+  <div class="wrap">
+    <h2 class="rv">Be first in line.</h2>
+    <p class="lead rv d1">Reports and subscription open soon. Join the waitlist — <b>be notified the moment ARIA goes live.</b></p>
+    <div class="rv d2" style="margin-top:30px"><a class="btn" href="#">Join the waitlist →</a></div>
+    <p class="fine rv d3">Launching soon · no payment yet · open to all</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="brand" style="font-size:.95rem"><span class="mono-badge" style="width:24px;height:24px;font-size:.75rem">A</span> Aria Vanguard ZHC</div>
+    <nav class="legal" aria-label="Legal"><a href="#">Terms</a><a href="#">Privacy</a><a href="#">Risk</a><a href="#">Refunds</a></nav>
+    <a class="dom" href="#">ariavanguardzhc.com</a>
+  </div>
+</footer>
+<p class="disc">Aria Vanguard ZHC provides analysis for informational purposes only. Illustrative example — no analysis constitutes personalised investment advice or a solicitation. Non-custodial: ARIA never holds your funds and never moves them without your signature. No automatic execution — every decision is validated by the client. Past performance does not guarantee future results. Service subject to compliance validation before any billing.</p>
+
+<!-- FLOATING ARIA CHAT (available everywhere) -->
+<button class="aria-fab" id="ariaFab" aria-label="Ask ARIA">
+  <span class="fab-mark">A<span class="fab-dot"></span></span>
+  <span class="fab-label">Ask ARIA</span>
+</button>
+<div class="aria-chat" id="ariaChat" role="dialog" aria-label="Chat with ARIA" aria-hidden="true">
+  <div class="ac-head">
+    <div class="ac-id"><span class="ac-badge">A</span><div><div class="ac-name">ARIA</div><div class="ac-status"><i></i> online · your analyst</div></div></div>
+    <div style="display:flex;align-items:center">
+      <button class="ac-exp" id="acExp" aria-label="Agrandir" title="Agrandir / réduire">⤢</button>
+      <button class="ac-close" id="acClose" aria-label="Close">✕</button>
+    </div>
+  </div>
+  <div class="ac-body" id="acBody">
+    <div class="ac-msg aria">Hi — I'm ARIA. Ask me about the reports, security, or how it works. I answer from verified facts, never financial advice.</div>
+  </div>
+  <div class="ac-chips">
+    <span class="ac-chip" data-a="advice">Is this advice?</span>
+    <span class="ac-chip" data-a="funds">My funds?</span>
+    <span class="ac-chip" data-a="get">What do I get?</span>
+    <span class="ac-chip" data-a="chains">Chains?</span>
+  </div>
+  <div class="ac-input">
+    <input id="acIn" type="text" placeholder="Message ARIA…" />
+    <button id="acSend" aria-label="Send">→</button>
+  </div>
+  <p class="ac-note" id="acNote">Demo · a few free messages</p>
+</div>
+
+<script>
+(function(){
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target);} });
+  },{threshold:.16});
+  document.querySelectorAll('.rv,.qcard').forEach(function(el){ io.observe(el); });
+
+  function animateCount(el){
+    var raw=el.getAttribute('data-count'), target=parseFloat(raw), dec=(raw.indexOf('.')>-1)?1:0;
+    var pre=el.getAttribute('data-prefix')||'', suf=el.getAttribute('data-suffix')||'';
+    if(reduce){ el.textContent=pre+target.toFixed(dec)+suf; return; }
+    var t0=null;
+    function step(ts){ if(!t0)t0=ts; var p=Math.min((ts-t0)/1300,1), e=1-Math.pow(1-p,3);
+      el.textContent=pre+(target*e).toFixed(dec)+suf; if(p<1)requestAnimationFrame(step); }
+    requestAnimationFrame(step);
+  }
+  var cio=new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ animateCount(e.target); cio.unobserve(e.target);} });
+  },{threshold:.6});
+  document.querySelectorAll('[data-count]').forEach(function(el){ cio.observe(el); });
+
+  if(!reduce){
+    var tilt=document.getElementById('heroTilt'), raf=null, tx=0, ty=0;
+    window.addEventListener('mousemove',function(ev){
+      tx=(ev.clientX/window.innerWidth-.5); ty=(ev.clientY/window.innerHeight-.5);
+      if(!raf)raf=requestAnimationFrame(function(){ raf=null; if(tilt)tilt.style.transform='rotateY('+(tx*10)+'deg) rotateX('+(-ty*8)+'deg)'; });
+    });
+  }
+
+  /* scroll: color journey + progress bar */
+  var tint=document.getElementById('tint'), prog=document.getElementById('prog');
+  var stops=[[48,72,146],[156,118,42],[230,164,206]]; /* bleu -> doré -> rose crystal (plus vif) */
+  function lerp(p){var n=stops.length-1,x=Math.max(0,Math.min(p,1))*n,i=Math.min(Math.floor(x),n-1),t=x-i,a=stops[i],b=stops[i+1];
+    return 'rgb('+Math.round(a[0]+(b[0]-a[0])*t)+','+Math.round(a[1]+(b[1]-a[1])*t)+','+Math.round(a[2]+(b[2]-a[2])*t)+')';}
+  var sraf=null;
+  function onScroll(){ if(sraf)return; sraf=requestAnimationFrame(function(){ sraf=null;
+    var h=document.documentElement.scrollHeight-window.innerHeight, p=h>0?window.scrollY/h:0;
+    if(prog)prog.style.width=(p*100).toFixed(1)+'%'; });}
+  window.addEventListener('scroll',onScroll,{passive:true}); onScroll();
+
+  /* live demo (illustrative sample) */
+  var demoBtn=document.getElementById('demoBtn'), demoOut=document.getElementById('demoOut');
+  function showResult(addr){
+    var seed=0,k; for(k=0;k<addr.length;k++) seed=(seed+addr.charCodeAt(k)*(k+1))%101;
+    var buy=seed%3!==0, risk=buy?'MODERATE':'EXTREME', pot=(buy?5+seed%4:1+seed%3)+'/10';
+    demoOut.innerHTML='<div class="demo-res" id="dres">'+
+      '<div class="demo-verdict"><span class="pill '+(buy?'buy':'avoid')+'">'+(buy?'BUY':'AVOID')+'</span> <span class="big">'+(buy?'Worth a look.':'ARIA says no.')+'</span></div>'+
+      '<div class="demo-grid">'+
+        '<div class="demo-cell"><div class="k">Risk</div><div class="v">'+risk+'</div></div>'+
+        '<div class="demo-cell"><div class="k">Potential</div><div class="v">'+pot+'</div></div>'+
+        '<div class="demo-cell"><div class="k">Contract</div><div class="v">'+(buy?'verified':'unverified')+'</div></div>'+
+      '</div>'+
+      '<p class="demo-cta">This is the <b>free taste</b>. The full report adds reward/risk, levels, scenarios, thesis and the detailed analysis. <b>Join the waitlist</b> to get it at launch.</p>'+
+    '</div>';
+    requestAnimationFrame(function(){ var r=document.getElementById('dres'); if(r)r.classList.add('in'); });
+  }
+  function runScan(){
+    var addr=(document.getElementById('demoAddr').value||'').trim()||'0xSAMPLE-BASE-TOKEN';
+    var steps=['Reading liquidity & holders…','Checking contract & smart money…','Weighing reward vs risk…'], i=0;
+    demoOut.innerHTML='<div class="scanline"><span class="dot"></span> ARIA scanning on-chain…</div>';
+    var iv=setInterval(function(){
+      if(i<steps.length){ demoOut.innerHTML='<div class="scanline"><span class="dot"></span> '+steps[i]+'</div>'; i++; }
+      else{ clearInterval(iv); showResult(addr); }
+    },700);
+  }
+  if(demoBtn){ demoBtn.addEventListener('click',runScan);
+    document.getElementById('demoAddr').addEventListener('keydown',function(e){ if(e.key==='Enter')runScan(); }); }
+
+  /* FAQ · preset + ask ARIA (demo limit) */
+  var faqTxt=document.getElementById('faqTxt');
+  var faqA={
+    advice:'No. ARIA produces research for information only — not personalised advice, not a solicitation. You always make and sign your own decisions.',
+    funds:'Never. ARIA is non-custodial: you hold your keys, and nothing moves without your signature. ARIA never executes a trade.',
+    chains:'Base only at launch — focused and fast. More can follow once the first is rock-solid.',
+    get:'A verdict with confidence and risk, on-chain signals, reward/risk, scenarios, thesis and levels. Premium adds the detailed analysis, methodology and verified references.',
+    cancel:'Yes — the subscription is cancel-anytime. One-off reports are one-off. Ordering opens at launch.'
+  };
+  document.querySelectorAll('.chip').forEach(function(c){
+    c.addEventListener('click',function(){
+      document.querySelectorAll('.chip').forEach(function(x){ x.classList.remove('on'); });
+      c.classList.add('on');
+      if(faqTxt) faqTxt.textContent=faqA[c.getAttribute('data-a')]||'—';
+    });
+  });
+  var askBtn=document.getElementById('askBtn'), askIn=document.getElementById('askIn'), askNote=document.getElementById('askNote'), asked=0;
+  function askAria(){
+    var q=(askIn.value||'').trim(); if(!q)return; asked++;
+    if(faqTxt) faqTxt.textContent='On "'+q+'" — in this preview I answer from a fixed set of verified facts. Live, I answer from my knowledge base, always flagging what is not advice and what data is missing.';
+    askIn.value='';
+    var left=2-asked;
+    if(left<=0){ if(askNote)askNote.textContent='That is the free limit — unlimited questions with the subscription.'; askIn.disabled=true; if(askBtn)askBtn.disabled=true; }
+    else if(askNote) askNote.textContent=left+' free question left · unlimited with the subscription';
+  }
+  if(askBtn){ askBtn.addEventListener('click',askAria); askIn.addEventListener('keydown',function(e){ if(e.key==='Enter')askAria(); }); }
+
+  /* floating ARIA chat — available everywhere */
+  var fab=document.getElementById('ariaFab'), chat=document.getElementById('ariaChat'), acClose=document.getElementById('acClose'),
+      acBody=document.getElementById('acBody'), acIn=document.getElementById('acIn'), acSend=document.getElementById('acSend'), acNote=document.getElementById('acNote');
+  var acA={
+    advice:'No — research for information only, not advice or a solicitation. You always decide and sign yourself.',
+    funds:'Never. ARIA is non-custodial: you hold your keys, nothing moves without your signature, and ARIA never trades for you.',
+    get:'A verdict (confidence + risk), on-chain signals, reward/risk, scenarios, thesis and levels. Premium adds the detailed analysis, methodology and verified references.',
+    chains:'Base only at launch — focused and fast.'
+  };
+  var acN=0, AC_LIMIT=4;
+  function acAdd(txt,who){ if(!acBody)return; var d=document.createElement('div'); d.className='ac-msg '+who; d.textContent=txt; acBody.appendChild(d); acBody.scrollTop=acBody.scrollHeight; }
+  function acAsk(q,canned){
+    if(acIn.disabled) return;
+    acAdd(q,'me'); acN++;
+    setTimeout(function(){ acAdd(canned||('On "'+q+'" — in this demo I answer from a fixed set of verified facts. Live, I answer from my knowledge base and always flag what is not advice.'),'aria'); },420);
+    var left=AC_LIMIT-acN;
+    if(left<=0){ if(acNote)acNote.textContent='Free demo limit — unlimited with the subscription.'; acIn.disabled=true; if(acSend)acSend.disabled=true; }
+    else if(acNote) acNote.textContent=left+' free messages left · unlimited with the subscription';
+  }
+  if(fab){ fab.addEventListener('click',function(){ chat.classList.add('open'); chat.setAttribute('aria-hidden','false'); fab.classList.add('hide'); setTimeout(function(){ acIn.focus(); },200); }); }
+  if(acClose){ acClose.addEventListener('click',function(){ chat.classList.remove('open'); chat.classList.remove('big'); chat.setAttribute('aria-hidden','true'); fab.classList.remove('hide'); }); }
+  var acExp=document.getElementById('acExp');
+  if(acExp){ acExp.addEventListener('click',function(){ chat.classList.toggle('big'); }); }
+  document.querySelectorAll('.ac-chip').forEach(function(c){ c.addEventListener('click',function(){ acAsk(c.textContent, acA[c.getAttribute('data-a')]); }); });
+  function acSendMsg(){ var q=(acIn.value||'').trim(); if(!q)return; acIn.value=''; acAsk(q,null); }
+  if(acSend){ acSend.addEventListener('click',acSendMsg); acIn.addEventListener('keydown',function(e){ if(e.key==='Enter')acSendMsg(); }); }
+
+  /* community feedback (header) — real endpoint: scored -> worker task -> PR */
+  var fbOpen=document.getElementById('fbOpen'), fbPanel=document.getElementById('fbPanel'),
+      fbMsg=document.getElementById('fbMsg'), fbHandle=document.getElementById('fbHandle'),
+      fbSend=document.getElementById('fbSend'), fbNote=document.getElementById('fbNote');
+  if(fbOpen){ fbOpen.addEventListener('click',function(){ fbPanel.hidden=!fbPanel.hidden; if(!fbPanel.hidden&&fbMsg)fbMsg.focus(); }); }
+  if(fbSend){ fbSend.addEventListener('click',function(){
+    var msg=(fbMsg.value||'').trim();
+    if(msg.length<8){ if(fbNote)fbNote.textContent='Please write a bit more (min 8 characters).'; return; }
+    fbSend.disabled=true; if(fbNote)fbNote.textContent='Sending to ARIA…';
+    fetch('https://api.ariavanguardzhc.com/api/aria/community-feedback',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ message:msg, handle:(fbHandle.value||'').trim(), lang:'en' })
+    }).then(function(r){ return r.json(); }).then(function(d){
+      if(fbNote)fbNote.textContent=(d&&d.reply)?d.reply:'Thank you — ARIA has your note.';
+      fbMsg.value=''; fbSend.disabled=false;
+    }).catch(function(){ if(fbNote)fbNote.textContent='Network error — try again, or ping us on Telegram.'; fbSend.disabled=false; });
+  }); }
+})();
+</script>
+</body>
+</html>
