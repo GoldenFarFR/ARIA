@@ -190,3 +190,38 @@ Points d'ancrage à préserver pour qu'elle évolue sans dette :
 
 > À traiter comme un chantier dédié (lié à #13 positionnement/GTM) : viser un
 > niveau « exceptionnel » cohérent avec le positionnement 500 $/mois.
+
+---
+
+## 7. ADR — Faut-il un framework d'agents (CrewAI, etc.) ?
+
+**Décision (2026-07) : non pour l'instant. Pas un interdit éternel — un critère.**
+
+Le réflexe « ARIA grossit → prenons CrewAI » confond deux pannes distinctes :
+
+1. **Panne de VOLUME/charge** (trop de requêtes, tokens, latence). Un framework
+   d'agents **aggrave** (agents qui délibèrent = plus de tokens/latence). Vraie
+   réponse : **cache, file d'attente, parallélisme, infra**.
+2. **Panne de COMPLEXITÉ d'orchestration** (décider dynamiquement quels outils
+   appeler, branches). Là un orchestrateur *peut* aider — mais le choix n'est
+   jamais « CrewAI ou rien » : orchestrateur **maison léger** vs LangGraph
+   (graphes explicites, déterministes) vs CrewAI (autonomie large). On penche
+   vers **le plus contrôlable**.
+
+**Pourquoi pas CrewAI aujourd'hui :** il retire le **contrôle** qui EST le moat
+d'ARIA (décision prouvée, auditable). Il masque le prompt réel (risque
+anti-injection), alourdit les dépendances, et son autonomie contredit le dôme
+(facts-only, zéro exécution auto). Or le pattern multi-agent utile (analyste +
+juge adverse) est **déjà** implémenté proprement et sous contrôle total ; un
+nouvel outil = une **dimension de juge** ou un `include_<x>` de plus.
+
+**Le critère PERMANENT (ce qui est gravé, pas l'outil) :** toute orchestration
+ajoutée doit (a) **préserver le contrôle et l'auditabilité**, (b) **laisser le
+dôme envelopper le tout** (jamais un plugin qu'on espère respecté), (c) ne pas
+masquer le texte envoyé au LLM. Un framework qui coche ces cases est discutable
+le jour venu ; sinon, non.
+
+**Quand rouvrir la question :** signal clair que l'orchestration devient
+ingérable en code maison (et non un simple problème de charge). On réévaluera
+alors avec le critère ci-dessus — en privilégiant un loop maison gardé ou un
+graphe explicite avant l'autonomie large.
