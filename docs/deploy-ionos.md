@@ -1,6 +1,6 @@
 # Déploiement ARIA — VPS IONOS
 
-Hôte de production : **VPS IONOS `root@31.70.114.74`**.
+Hôte de production : **VPS dédié** (IP, DNS→hôte et login SSH : repo privé `aria-ops`, jamais ici).
 Déploiement **manuel** : image Docker construite depuis le monorepo `GoldenFarFR/ARIA`.
 
 - Domaine public : `api.ariavanguardzhc.com` (DNS géré chez IONOS → VPS).
@@ -114,7 +114,7 @@ pour cohérence et sécurité. Les variantes vues en `-p 8000:8000` sont **à pr
 
 ## Notes
 
-- **VÉRIFIÉ** : hôte `31.70.114.74`, build `vanguard/Dockerfile`, volume
+- **VÉRIFIÉ** : hôte (voir `aria-ops` privé), build `vanguard/Dockerfile`, volume
   `/opt/aria-data`, env-file `/opt/aria/vanguard/backend/.env`, restart policy
   `unless-stopped` — d'après la procédure opérateur.
 - **À CONFIRMER (non couvert par la procédure fournie)** : le reverse proxy TLS en
