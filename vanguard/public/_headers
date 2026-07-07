@@ -1,3 +1,10 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: SAMEORIGIN
+  Strict-Transport-Security: max-age=15768000
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+
 /
   Cache-Control: no-cache, no-store, must-revalidate
 

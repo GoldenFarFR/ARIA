@@ -1476,18 +1476,26 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not body and context.args:
         body = " ".join(context.args).strip()
 
-    address = body.strip()
+    parts = body.split()
+    address = parts[0].strip() if parts else ""
+    flags = {p.strip().lower() for p in parts[1:]}
+    include_smart_money = "smart" in flags
+    include_fundamentals = "fond" in flags
     if not _SCAN_ADDR_RE.match(address):
         await _reply(
             message,
-            "Usage : /scan <adresse_contrat>\n"
+            "Usage : /scan <adresse_contrat> [smart] [fond]\n"
             "Adresse invalide — attendu : 0x suivi de 40 caractères hexadécimaux.",
         )
         return
 
     from aria_core.skills.acp_onchain_scan import scan_base_token
 
-    ctx = await scan_base_token(address)
+    if include_smart_money or include_fundamentals:
+        await _reply(message, "⏳ Analyse approfondie en cours (plus lente)...")
+    ctx = await scan_base_token(
+        address, include_smart_money=include_smart_money, include_fundamentals=include_fundamentals
+    )
 
     lines = [
         f"🔎 Scan {address}",
@@ -1501,6 +1509,347 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         lines.append("Aucun flag de risque détecté.")
 
+    await _reply(message, "\n".join(lines))
+
+
+def _format_judge_verdict(v) -> str:
+    """Formatte le verdict du proof engine (juge) pour Telegram.
+
+    Le texte du juge est déjà sanitisé en amont (``vc_judge`` neutralise les
+    chevrons) — on se contente de le mettre en forme.
+    """
+    emoji = {"solide": "🟢", "fragile": "🟡", "rejeté": "🔴"}.get(v.verdict, "⚪")
+    src = "juge LLM" if v.llm_used else "juge déterministe (LLM indispo)"
+    lines = [
+        f"🧑‍⚖️ MODE TEST — Audit du proof engine ({src})",
+        f"{emoji} Verdict : {v.verdict} · Score {v.score}/10 · R/R cohérent : {'oui' if v.coherence_rr else 'non'}",
+        f"Recommandation du juge : {v.recommandation_juge}",
+    ]
+    if v.resume:
+        lines += ["", v.resume]
+    if v.points_forts:
+        lines += ["", "✅ Points forts :"] + [f"• {p}" for p in v.points_forts[:5]]
+    if v.points_faibles:
+        lines += ["", "⚠️ Points faibles :"] + [f"• {p}" for p in v.points_faibles[:5]]
+    if v.claims_non_etayes:
+        lines += ["", "🚩 Affirmations non étayées :"] + [f"• {c}" for c in v.claims_non_etayes[:5]]
+    return "\n".join(lines)
+
+
+async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/vc <adresse> [test] — analyse VC complète : ordre court ici, rapport détaillé par email.
+
+    Lecture seule + proposition. Aucune exécution : l'ordre est signé manuellement
+    sur Tangem par l'opérateur.
+
+    MODE TEST admin — `/vc <adresse> test` : l'analyse tourne et le raisonnement
+    complet est affiché ici, mais AUCUN email n'est envoyé et AUCUNE prédiction
+    n'est enregistrée dans le track-record (compteurs inchangés). Pour tester sans
+    polluer les stats ni spammer.
+    """
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    parts = body.split()
+    # Flag `test` en fin d'arguments (insensible à la casse) — réservé à l'admin
+    # (le handler entier est déjà admin-gated ci-dessus).
+    test_mode = len(parts) >= 2 and parts[-1].lower() == "test"
+    address = parts[0].strip() if parts else ""
+    if not _SCAN_ADDR_RE.match(address):
+        await _reply(
+            message,
+            "Usage : /vc <adresse_contrat>\n"
+            "Analyse VC complète (Potentiel, Risque, Thèse, ordre proposé).\n"
+            "Adresse invalide — attendu : 0x suivi de 40 caractères hexadécimaux.",
+        )
+        return
+
+    import os
+    from datetime import datetime, timezone
+
+    from aria_core import vc_predictions
+    from aria_core.skills.vc_analysis import analyze_vc, analyze_vc_with_context, format_telegram_order
+    from aria_core.skills.vc_delivery import send_vc_report
+    from aria_core.skills.vc_report import report_integrity
+
+    await _reply(message, "⏳ Analyse VC en cours (Spark deep + données on-chain)...")
+    if test_mode:
+        # Mode test : on récupère aussi le contexte de scan pour l'audit du juge.
+        result, ctx = await analyze_vc_with_context(address)
+    else:
+        result = await analyze_vc(address)
+        ctx = None
+    capital_raw = os.environ.get("ARIA_CAPITAL_USD", "").strip()
+    try:
+        capital_usd = float(capital_raw) if capital_raw else None
+    except ValueError:
+        capital_usd = None
+    await _reply(message, format_telegram_order(result, capital_usd=capital_usd))
+
+    if test_mode:
+        # MODE TEST : on affiche le raisonnement complet mais on n'envoie aucun
+        # email et on n'écrit rien dans le track-record (compteurs inchangés).
+        rapport = result.rapport_detaille or "(aucun raisonnement détaillé disponible)"
+        # Tronque proprement avec un marqueur ; _reply plafonne ensuite à 4000.
+        limit = 3900
+        if len(rapport) > limit:
+            rapport = rapport[:limit].rstrip() + "\n\n… (raisonnement tronqué pour Telegram)"
+        await _reply(message, "🧪 MODE TEST — Raisonnement complet :\n\n" + rapport)
+        # Proof engine (#2) — le juge adverse audite l'analyse sur les MÊMES faits
+        # on-chain. Mode test admin uniquement : aucun coût/latence ajouté au flux
+        # client, c'est un outil de contrôle qualité pour l'opérateur.
+        try:
+            from aria_core.skills.vc_judge import judge_analysis
+
+            verdict = await judge_analysis(result, ctx)
+            await _reply(message, _format_judge_verdict(verdict))
+        except Exception as exc:  # noqa: BLE001 — l'audit ne doit jamais casser le mode test
+            logger.warning("proof engine (juge) échoué: %s", exc)
+        await _reply(
+            message,
+            "🧪 MODE TEST — non envoyé, non enregistré.\n"
+            "Aucun email émis, aucune prédiction ajoutée au track-record, compteurs inchangés.",
+        )
+        return
+
+    tier = (os.environ.get("ARIA_REPORT_TIER") or "premium").strip().lower() or "premium"
+
+    # Auto-log de la prédiction (shadow) — construit le track record de pertinence.
+    generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    ref_id, _ = report_integrity(result, generated_at=generated_at)
+    report_number = None
+    series_number = None
+    try:
+        report_number = await vc_predictions.count_predictions_for_contract(result.contract) + 1
+        series_number = await vc_predictions.total_predictions_count() + 1
+        pred_id = await vc_predictions.record_prediction(
+            contract=result.contract,
+            recommandation=result.recommandation,
+            potentiel=result.potentiel,
+            risque=result.risque,
+            taille_pct=result.taille_pct,
+            security_score=result.security_score,
+            llm_used=result.llm_used,
+            report_ref=ref_id,
+        )
+        await _reply(message, f"🗃️ Prédiction #{pred_id} enregistrée. Clôture plus tard : /vcresult {pred_id} <pnl%> [note].")
+    except Exception as exc:  # noqa: BLE001 — le log ne doit jamais casser l'analyse
+        logger.warning("vc auto-log échoué: %s", exc)
+
+    # Rapport détaillé par email (sous kill-switch, dégradation sûre si SMTP absent).
+    email_ok, email_error = await send_vc_report(
+        result,
+        generated_at=generated_at,
+        report_number=report_number,
+        series_number=series_number,
+        capital_usd=capital_usd,
+        tier=tier,
+    )
+    if email_ok:
+        await _reply(message, "📧 Rapport détaillé envoyé par email.")
+    else:
+        await _reply(message, f"📧 Rapport email non envoyé : {email_error}")
+
+
+async def _handle_vcresult(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/vcresult <id> <pnl%> [note] — attribue un résultat réel à une prédiction VC."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    usage = (
+        "Usage : /vcresult <id> <pnl%> [note]\n"
+        "Ex : /vcresult 3 +18 catalyseur listing.\n"
+        "Le pnl% est le résultat réel de la prédiction (positif ou négatif)."
+    )
+    parts = body.split(maxsplit=2)
+    if len(parts) < 2 or not parts[0].isdigit():
+        await _reply(message, usage)
+        return
+
+    pred_id = int(parts[0])
+    try:
+        outcome_pct = float(parts[1].replace("%", "").replace(",", ".").lstrip("+"))
+    except ValueError:
+        await _reply(message, "pnl% invalide (attendu un nombre, ex. +18 ou -25).\n\n" + usage)
+        return
+    note = parts[2].strip() if len(parts) > 2 else ""
+
+    from aria_core import vc_predictions
+
+    closed = await vc_predictions.close_prediction(pred_id, outcome_pct=outcome_pct, note=note)
+    if closed is None:
+        await _reply(message, f"Prédiction #{pred_id} introuvable ou déjà clôturée.")
+        return
+    await _reply(
+        message,
+        f"✅ Prédiction #{pred_id} clôturée — {closed['recommandation']} → résultat {outcome_pct:+.1f}%.",
+    )
+
+
+async def _handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/track — mesure de pertinence : hit-rate, P&L moyen, calibration."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core import vc_predictions
+
+    m = await vc_predictions.metrics()
+    if m["total"] == 0:
+        await _reply(message, "Aucune prédiction enregistrée. Lance des analyses avec /vc.")
+        return
+
+    lines = [
+        "📈 Pertinence ARIA — track record VC",
+        f"Prédictions : {m['total']} ({m['closed']} clôturées, {m['open']} ouvertes)",
+    ]
+    if m["hit_rate"] is not None:
+        lines.append(f"Hit-rate BUY : {m['hit_rate']:.0%} sur {m['buy_count']} BUY clôturés")
+        lines.append(f"P&L moyen BUY : {m['avg_pnl_buy']:+.1f}%")
+    else:
+        lines.append("Pas encore de BUY clôturé — clôture avec /vcresult pour mesurer.")
+
+    if m["calibration"]:
+        lines.append("")
+        lines.append("Calibration (Potentiel → P&L moyen réel) :")
+        for b in m["calibration"]:
+            lines.append(f"  {b['bucket']}/10 : {b['avg_pnl']:+.1f}% (n={b['count']})")
+        lines.append("Idéal : le P&L croît avec le potentiel.")
+
+    await _reply(message, "\n".join(lines))
+
+
+async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/these <adresse> <BUY|WATCH|SELL|AVOID> <thèse...> — journalise un pari (aucune exécution)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    from aria_core import investment_memory
+
+    parts = body.split(maxsplit=2)
+    usage = (
+        "Usage : /these <adresse> <BUY|WATCH|SELL|AVOID> <thèse>\n"
+        "Ex : /these 0xabc... WATCH holders solides, liquidité faible à surveiller.\n"
+        "Journal de raisonnement uniquement — aucune exécution de trade."
+    )
+    if len(parts) < 3:
+        await _reply(message, usage)
+        return
+
+    address, decision_raw, thesis = parts[0].strip(), parts[1].strip().upper(), parts[2].strip()
+    if not _SCAN_ADDR_RE.match(address):
+        await _reply(message, "Adresse invalide — attendu : 0x suivi de 40 caractères hexadécimaux.\n\n" + usage)
+        return
+    if decision_raw not in investment_memory.VALID_DECISIONS:
+        await _reply(
+            message,
+            f"Décision invalide : {decision_raw}. Attendu : {', '.join(investment_memory.VALID_DECISIONS)}.",
+        )
+        return
+
+    thesis_id = await investment_memory.record_thesis(
+        token_address=address, thesis=thesis, decision=decision_raw
+    )
+    await _reply(
+        message,
+        f"📝 Thèse #{thesis_id} enregistrée — {decision_raw} sur {address}.\n"
+        f"Clôture plus tard avec : /issue {thesis_id} <résultat> | <leçon>.",
+    )
+
+
+async def _handle_issue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/issue <id> <résultat/P&L> | <leçon> — clôture une thèse et attribue son issue."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    usage = (
+        "Usage : /issue <id> <résultat/P&L> | <leçon>\n"
+        "Ex : /issue 3 +18% en 2 semaines | j'ai sous-estimé le catalyseur listing.\n"
+        "Le séparateur « | » distingue le résultat de la leçon (leçon optionnelle)."
+    )
+    parts = body.split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].isdigit():
+        await _reply(message, usage)
+        return
+
+    thesis_id = int(parts[0])
+    rest = parts[1].strip()
+    if "|" in rest:
+        outcome, lesson = (segment.strip() for segment in rest.split("|", 1))
+    else:
+        outcome, lesson = rest, ""
+
+    from aria_core import investment_memory
+
+    closed = await investment_memory.close_thesis(thesis_id, outcome=outcome, lesson=lesson)
+    if closed is None:
+        await _reply(
+            message,
+            f"Thèse #{thesis_id} introuvable ou déjà clôturée — aucune modification.",
+        )
+        return
+
+    lines = [
+        f"✅ Thèse #{thesis_id} clôturée ({closed['decision']} sur {closed['token_address']}).",
+        f"Résultat : {outcome}",
+    ]
+    if lesson:
+        lines.append(f"Leçon : {lesson}")
+    await _reply(message, "\n".join(lines))
+
+
+async def _handle_theses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/theses — liste les thèses encore ouvertes (résultat non attribué)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core import investment_memory
+
+    open_theses = await investment_memory.list_open_theses()
+    if not open_theses:
+        await _reply(message, "Aucune thèse ouverte. Enregistre-en une avec /these.")
+        return
+
+    lines = ["📒 Thèses ouvertes :"]
+    for row in open_theses:
+        lines.append(f"#{row['id']} — {row['decision']} {row['token_address']}\n  {row['thesis']}")
     await _reply(message, "\n".join(lines))
 
 
@@ -1540,6 +1889,12 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))
+    app.add_handler(CommandHandler("vc", _handle_vc))
+    app.add_handler(CommandHandler("vcresult", _handle_vcresult))
+    app.add_handler(CommandHandler("track", _handle_track))
+    app.add_handler(CommandHandler("these", _handle_thesis))
+    app.add_handler(CommandHandler("issue", _handle_issue))
+    app.add_handler(CommandHandler("theses", _handle_theses))
 
     # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)
     app.add_handler(CallbackQueryHandler(_handle_callback))

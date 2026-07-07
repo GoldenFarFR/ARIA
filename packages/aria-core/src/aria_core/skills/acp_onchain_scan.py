@@ -18,6 +18,8 @@ from aria_core.services.blockscout import (
     TokenHoldersResult,
     blockscout_client,
 )
+from aria_core.services.coingecko import TokenFundamentals, coingecko_client
+from aria_core.services.smart_money import analyze_smart_money
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ class PairSnapshot:
     pair_created_at: int | None = None
     base_symbol: str = ""
     quote_symbol: str = ""
+    project_links: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -71,6 +74,48 @@ def _dex_chain_id() -> str:
     return str(_onchain_thresholds().get("chain_dex_id") or "base")
 
 
+_SOCIAL_LABELS = {
+    "twitter": "X (Twitter)",
+    "x": "X (Twitter)",
+    "telegram": "Telegram",
+    "discord": "Discord",
+    "github": "GitHub",
+    "reddit": "Reddit",
+}
+
+
+def _extract_project_links(raw: dict) -> list[dict]:
+    """Liens officiels déclarés par le projet (DexScreener `info.websites`/`socials`).
+
+    Aucune estimation : uniquement ce que DexScreener retourne réellement, et
+    uniquement des URL http(s) (allowlist de schéma — défense en profondeur,
+    la donnée vient d'un tiers non fiable et sera de toute façon revalidée
+    avant tout rendu HTML cliquable).
+    """
+    info = raw.get("info")
+    if not isinstance(info, dict):
+        return []
+
+    links: list[dict] = []
+    for site in info.get("websites") or []:
+        if not isinstance(site, dict):
+            continue
+        url = str(site.get("url") or "").strip()
+        if url.lower().startswith(("http://", "https://")):
+            links.append({"label": str(site.get("label") or "Site officiel"), "url": url})
+
+    for social in info.get("socials") or []:
+        if not isinstance(social, dict):
+            continue
+        url = str(social.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        kind = str(social.get("type") or "").strip().lower()
+        links.append({"label": _SOCIAL_LABELS.get(kind, kind.capitalize() or "Lien"), "url": url})
+
+    return links
+
+
 def _parse_pair(raw: dict) -> PairSnapshot:
     liq = raw.get("liquidity") or {}
     vol = raw.get("volume") or {}
@@ -92,6 +137,7 @@ def _parse_pair(raw: dict) -> PairSnapshot:
         pair_created_at=int(raw.get("pairCreatedAt") or 0) or None,
         base_symbol=str(base.get("symbol") or ""),
         quote_symbol=str(quote.get("symbol") or ""),
+        project_links=_extract_project_links(raw),
     )
 
 
@@ -157,6 +203,44 @@ def _apply_onchain_signals(
                     "de la supply (hors LP connu)."
                 )
                 delta -= 20
+
+    return delta
+
+
+_HIGH_DILUTION_FDV_RATIO = 3.0
+
+
+def _apply_fundamentals_signals(flags: list[str], fundamentals: TokenFundamentals | None) -> int:
+    """Signaux CoinGecko additionnels — lecture seule, purement additifs.
+
+    Comme pour Blockscout : une donnée fondamentale indisponible (rate limit,
+    timeout, token non listé) ne dégrade jamais le score. Seul un ratio
+    FDV/market cap élevé (dilution future significative, vesting/unlocks à
+    venir) est un signal positivement confirmé qui dégrade le score.
+    """
+    if fundamentals is None:
+        return 0
+
+    if not fundamentals.available:
+        flags.append(f"CoinGecko (fondamentaux) : {fundamentals.error or 'donnée fondamentale indisponible'}.")
+        return 0
+
+    delta = 0
+    mc = fundamentals.market_cap_usd
+    fdv = fundamentals.fully_diluted_valuation_usd
+    if mc and fdv and mc > 0:
+        ratio = fdv / mc
+        if ratio >= _HIGH_DILUTION_FDV_RATIO:
+            flags.append(
+                f"Dilution future importante — FDV/market cap = {ratio:.1f}x "
+                "(supply non circulante conséquente, vesting/unlocks à surveiller)."
+            )
+            delta -= 10
+
+    if fundamentals.market_cap_usd:
+        flags.append(f"CoinGecko : market cap ${fundamentals.market_cap_usd:,.0f}.")
+    if fundamentals.categories:
+        flags.append(f"CoinGecko : catégorie(s) {', '.join(fundamentals.categories[:3])}.")
 
     return delta
 
@@ -255,8 +339,20 @@ def _score_and_verdict(
         ctx.lite_verdict = "CAUTION"
 
 
-async def scan_base_token(contract: str) -> TokenScanContext:
-    """Fetch DexScreener + compute heuristic security score."""
+async def scan_base_token(
+    contract: str, *, include_smart_money: bool = False, include_fundamentals: bool = False
+) -> TokenScanContext:
+    """Fetch DexScreener + compute heuristic security score.
+
+    `include_smart_money` est desactive par defaut : l'analyse wallet-tracker
+    fait un appel Blockscout par top holder (throttle ~0.35s/appel) et
+    ralentirait chaque scan standard. A activer explicitement pour une
+    analyse plus poussee (ex. commande Telegram /scan <adresse> smart).
+
+    `include_fundamentals` est desactive par defaut : le throttle CoinGecko
+    (~2.2s/appel, tier public) ralentirait chaque scan standard. A activer
+    explicitement (ex. /scan <adresse> fond).
+    """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
     ctx = TokenScanContext(contract=ca, valid_address=valid)
@@ -276,6 +372,28 @@ async def scan_base_token(contract: str) -> TokenScanContext:
         ctx.best_pair = best
         ctx.data_source = "dexscreener"
     _score_and_verdict(ctx, ctx.best_pair, contract_flags=contract_flags, holders=holders)
+
+    if include_smart_money:
+        smart_money = await analyze_smart_money(
+            ca,
+            holders,
+            client=blockscout_client,
+            lp_address=ctx.best_pair.pair_address if ctx.best_pair else None,
+            pair_created_at_ms=ctx.best_pair.pair_created_at if ctx.best_pair else None,
+        )
+        if smart_money.available:
+            ctx.security_score = max(5, min(95, ctx.security_score + smart_money.score_delta))
+            ctx.risk_flags.extend(smart_money.flags)
+        else:
+            ctx.risk_flags.append(f"Smart-money : {smart_money.error or ONCHAIN_UNAVAILABLE}.")
+
+    if include_fundamentals:
+        fundamentals = await coingecko_client.get_token_fundamentals(ca)
+        fundamentals_flags: list[str] = []
+        fundamentals_delta = _apply_fundamentals_signals(fundamentals_flags, fundamentals)
+        ctx.security_score = max(5, min(95, ctx.security_score + fundamentals_delta))
+        ctx.risk_flags.extend(fundamentals_flags)
+
     return ctx
 
 
