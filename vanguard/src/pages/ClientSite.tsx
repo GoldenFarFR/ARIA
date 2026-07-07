@@ -110,6 +110,9 @@ const CSS = `
 .aria-client footer{border-top:1px solid var(--line);padding:32px 0;}
 .aria-client footer .wrap{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;font-size:0.78rem;color:var(--faint);}
 .aria-client footer .dom{color:var(--gold-deep);text-decoration:none;}
+.aria-client .legal-links{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:0.74rem;}
+.aria-client .legal-links a{color:var(--faint);text-decoration:none;}
+.aria-client .legal-links a:hover{color:var(--gold-light);}
 .aria-client .disc{max-width:1120px;margin:0 auto;padding:0 30px 44px;font-size:0.72rem;color:#6a6d76;line-height:1.6;font-style:italic;}
 .aria-client .rv{opacity:0;transform:translateY(18px);transition:opacity .8s ease,transform .8s ease;}
 .aria-client .rv.in{opacity:1;transform:none;}
@@ -360,6 +363,12 @@ export function ClientSite() {
           <div className="brand" style={{ fontSize: '0.9rem' }}>
             <span className="mono" style={{ width: 22, height: 22, fontSize: '0.7rem' }}>A</span> Aria Vanguard ZHC
           </div>
+          <nav className="legal-links" aria-label="Legal">
+            <a href="/terms">Terms</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/risk">Risk</a>
+            <a href="/refunds">Refunds</a>
+          </nav>
           <a className="dom" href="#">ariavanguardzhc.com</a>
         </div>
       </footer>
