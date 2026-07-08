@@ -90,9 +90,14 @@ class FakeMessage:
     def __init__(self, text: str):
         self.text = text
         self.replies: list[str] = []
+        self.reply_markups: list[object] = []
 
-    async def reply_text(self, text: str) -> None:
+    async def reply_text(self, text: str, reply_markup=None) -> None:
         self.replies.append(text)
+        self.reply_markups.append(reply_markup)
+
+    async def edit_reply_markup(self, reply_markup=None) -> None:
+        pass
 
 
 class FakeUser:
@@ -110,6 +115,29 @@ class FakeUpdate:
 class FakeContext:
     def __init__(self, args: list[str] | None = None):
         self.args = args or []
+
+
+class FakeQuery:
+    def __init__(self, data: str, message: FakeMessage, user_id: int = 42):
+        self.data = data
+        self.message = message
+        self.from_user = FakeUser(user_id)
+
+    async def answer(self) -> None:
+        pass
+
+
+class FakeCallbackUpdate:
+    def __init__(self, query: FakeQuery, user_id: int = 42):
+        self.callback_query = query
+        self.effective_user = FakeUser(user_id)
+        self.message = None
+
+
+async def _pick_vc_lang(update: FakeUpdate, *, lang: str, address: str = ADDR) -> None:
+    """Simule le clic sur le bouton de langue après /vc <adresse> (flux réel, non-test)."""
+    cb_update = FakeCallbackUpdate(FakeQuery(f"vclang:{lang}:{address}", update.message))
+    await telegram_bot._handle_callback(cb_update, FakeContext())
 
 
 @pytest.mark.asyncio
@@ -139,6 +167,22 @@ async def test_vc_rejects_invalid_address(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vc_first_asks_language_before_analyzing(monkeypatch):
+    """Hors mode test : /vc n'analyse PAS tout de suite — elle demande la langue
+    d'abord (boutons), jamais l'adresse email, jamais de confirmation séparée."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+    analyze = AsyncMock(return_value=_result())
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", analyze)
+
+    update = FakeUpdate(f"/vc {ADDR}")
+    await telegram_bot._handle_vc(update, FakeContext())
+
+    analyze.assert_not_called()  # rien ne tourne avant le choix de langue
+    assert len(update.message.replies) == 1
+    assert update.message.reply_markups[0] is not None  # boutons FR/EN présents
+
+
+@pytest.mark.asyncio
 async def test_vc_valid_runs_analysis_and_sends_order(monkeypatch):
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
     analyze = AsyncMock(return_value=_result())
@@ -153,19 +197,21 @@ async def test_vc_valid_runs_analysis_and_sends_order(monkeypatch):
 
     update = FakeUpdate(f"/vc {ADDR}")
     await telegram_bot._handle_vc(update, FakeContext())
+    await _pick_vc_lang(update, lang="fr")
 
     analyze.assert_awaited_once_with(ADDR, lang="fr")
     send_report.assert_awaited_once()
-    # replies : "en cours", ordre, log prédiction, statut email
-    assert len(update.message.replies) == 4
-    assert "BUY" in update.message.replies[1]
-    assert "Tangem" in update.message.replies[1]
-    assert "#42" in update.message.replies[2]
-    assert "email" in update.message.replies[3].lower()
+    # replies : "🌐 langue ?", "en cours", ordre, log prédiction, statut email
+    assert len(update.message.replies) == 5
+    assert "BUY" in update.message.replies[2]
+    assert "Tangem" in update.message.replies[2]
+    assert "#42" in update.message.replies[3]
+    assert "email" in update.message.replies[4].lower()
     # Numérotation transmise à l'envoi (n° par token = compteur+1, série globale = total+1).
     _, kwargs = send_report.call_args
     assert kwargs["report_number"] == 2
     assert kwargs["series_number"] == 47
+    assert kwargs["lang"] == "fr"
 
 
 @pytest.mark.asyncio
@@ -180,8 +226,9 @@ async def test_vc_uses_capital_env_var_for_dollar_amount(monkeypatch):
 
     update = FakeUpdate(f"/vc {ADDR}")
     await telegram_bot._handle_vc(update, FakeContext())
+    await _pick_vc_lang(update, lang="fr")
 
-    assert "$75" in update.message.replies[1]  # 5% de $1500
+    assert "$75" in update.message.replies[2]  # 5% de $1500
 
 
 # ----------------------- /vc MODE TEST admin -----------------------
@@ -273,6 +320,7 @@ async def test_vc_address_alone_is_normal_mode(monkeypatch):
 
     update = FakeUpdate(f"/vc {ADDR}")
     await telegram_bot._handle_vc(update, FakeContext())
+    await _pick_vc_lang(update, lang="fr")
 
     send_report.assert_awaited_once()
     record.assert_awaited_once()
@@ -337,6 +385,7 @@ async def test_vc_reports_email_failure_without_crashing(monkeypatch):
 
     update = FakeUpdate(f"/vc {ADDR}")
     await telegram_bot._handle_vc(update, FakeContext())
+    await _pick_vc_lang(update, lang="fr")
 
-    assert len(update.message.replies) == 4
-    assert "non envoyé" in update.message.replies[3].lower()
+    assert len(update.message.replies) == 5
+    assert "non envoyé" in update.message.replies[4].lower()
