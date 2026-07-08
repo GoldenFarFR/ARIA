@@ -98,6 +98,12 @@ def _format_tg(text: str) -> str:
 
 async def _reply(message, text: str) -> None:
     await message.reply_text(_format_tg(text))
+    try:
+        from aria_core.relay_chat import log_message
+
+        await log_message("aria", text)
+    except Exception:  # noqa: BLE001 — le relais ne doit jamais impacter la réponse réelle
+        pass
 
 
 async def _admin_check_reply(update: Update) -> bool:
@@ -2162,6 +2168,15 @@ async def process_webhook_update(payload: dict) -> None:
     if _webhook_update_already_seen(update_id):
         logger.info("Telegram webhook: update %s déjà traité — ignoré (anti-boucle)", update_id)
         return
+
+    try:
+        text = (payload.get("message") or {}).get("text") if isinstance(payload, dict) else None
+        if text:
+            from aria_core.relay_chat import log_message
+
+            await log_message("operator", text)
+    except Exception:  # noqa: BLE001 — le relais ne doit jamais impacter le traitement réel
+        pass
 
     update = Update.de_json(payload, _bot_app.bot)
     await _bot_app.process_update(update)

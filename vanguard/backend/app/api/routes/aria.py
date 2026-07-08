@@ -222,6 +222,39 @@ async def sepolia_status():
     return await autonomous_status()
 
 
+@router.get("/relay/recent")
+async def relay_recent(request: Request, since_id: int = 0):
+    """Historique récent du relais Claude/opérateur/ARIA (canal Telegram existant).
+
+    Gaté par un accès DÉDIÉ (`ARIA_RELAY_ACCESS_TOKEN`), distinct du secret admin —
+    ne donne accès qu'à ce relais, rien d'autre. Fail-closed : token absent/invalide
+    -> 403, jamais un historique renvoyé par erreur.
+    """
+    from aria_core.relay_chat import recent_messages, verify_relay_access
+
+    if not verify_relay_access(request.headers.get("X-Relay-Access")):
+        raise HTTPException(status_code=403, detail="Relay access required")
+    return {"messages": await recent_messages(since_id=since_id)}
+
+
+class RelayReplyRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+
+
+@router.post("/relay/reply")
+async def relay_reply(body: RelayReplyRequest, request: Request):
+    """Poste un message à l'opérateur à travers le bot ARIA existant (préfixé "Claude —"),
+    et le journalise. Même gate dédié que `/relay/recent`."""
+    from aria_core.relay_chat import send_relay_reply, verify_relay_access
+
+    if not verify_relay_access(request.headers.get("X-Relay-Access")):
+        raise HTTPException(status_code=403, detail="Relay access required")
+    sent = await send_relay_reply(body.text)
+    if not sent:
+        raise HTTPException(status_code=503, detail="Relay disabled or send failed")
+    return {"ok": True}
+
+
 @router.get("/dossier/{contract}")
 async def token_dossier(contract: str, request: Request):
     """Dossier par token (opérateur) : chronologie de TOUT ce qu'ARIA a consigné sur un CA.
