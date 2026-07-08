@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { getIdentityToken, useIdentityToken, useLogin, usePrivy, useUser } from '@privy-io/react-auth'
 import { getTrackRecord, type TrackRecord } from '../api'
+import { PRIVY_LOGIN_METHODS } from '../lib/privy-config'
+import { exchangePrivyForAriaSession } from '../lib/privy-session'
 
 /**
  * Teaser « Portefeuille suivi ARIA » pour la page d'accueil (FOMO honnête).
@@ -63,6 +66,18 @@ export function AriaWalletTeaser() {
   const [data, setData] = useState<TrackRecord | null>(null)
   const [loaded, setLoaded] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+
+  const { getAccessToken } = usePrivy()
+  const { refreshUser } = useUser()
+  const { identityToken: hookIdentityToken } = useIdentityToken()
+  const { login } = useLogin({
+    onComplete: () => {
+      void exchangePrivyForAriaSession(getAccessToken, getIdentityToken, refreshUser, hookIdentityToken)
+    },
+  })
+  const joinWaitlist = useCallback(() => {
+    login({ loginMethods: [...PRIVY_LOGIN_METHODS] })
+  }, [login])
 
   useEffect(() => {
     let alive = true
@@ -155,8 +170,8 @@ export function AriaWalletTeaser() {
           )}
 
           <div className="aw-cta">
-            <a className="aw-btn" href="#start">Rejoindre la liste d'attente
-              <Icon d="M5 12h14" extra="m13 6 6 6-6 6" /></a>
+            <button type="button" className="aw-btn" onClick={joinWaitlist}>Rejoindre la liste d'attente
+              <Icon d="M5 12h14" extra="m13 6 6 6-6 6" /></button>
             <span className="aw-locknote">
               <Icon d="M4 10h16v10H4z" extra="M8 10V7a4 4 0 0 1 8 0v3" />
               Détail des positions et preuves on-chain (hashes) réservés aux abonnés.
