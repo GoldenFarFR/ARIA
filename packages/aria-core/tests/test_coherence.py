@@ -165,6 +165,21 @@ def test_session_checkpoint_hook_wired():
     assert "session-checkpoint" in claude, "CLAUDE.md ne documente pas le checkpoint auto de session"
 
 
+def test_vps_deploy_reminder_wired():
+    """Rappel de déploiement VPS : marqueur suivi + logique seuil dans le hook + doc."""
+    ref = REPO / ".claude" / "last-deployed-ref"
+    assert ref.is_file(), "marqueur .claude/last-deployed-ref manquant (baseline du delta non déployé)"
+    content = ref.read_text(encoding="utf-8").strip()
+    assert re.fullmatch(r"[0-9a-f]{7,40}", content), (
+        "last-deployed-ref doit contenir un SHA de commit (baseline du dernier déploiement)"
+    )
+    hook = (REPO / ".claude" / "hooks" / "session-checkpoint.sh").read_text(encoding="utf-8")
+    assert "DEPLOY_THRESHOLD" in hook, "le hook ne mesure plus le delta non déployé (seuil absent)"
+    assert "last-deployed-ref" in hook, "le hook ne lit plus le marqueur de dernier déploiement"
+    claude = _read("CLAUDE.md")
+    assert "last-deployed-ref" in claude, "CLAUDE.md ne documente pas le rappel de déploiement VPS"
+
+
 # ── 4. Sécurité — invariants d'auth (failles fermées, ne pas rouvrir) ─────────────────────
 
 def test_operator_secret_header_only_not_query_string():

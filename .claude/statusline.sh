@@ -60,6 +60,24 @@ if [ -f "$cf" ]; then
   fi
 fi
 
+# --- Lignes non déployées sur le VPS (alimenté par le hook checkpoint) ------
+# Affiche « 🚀 Nk non-dépl. » dès qu'il y a du delta ; alerte au-delà du seuil (2500).
+deploy=""
+uf="${dir}/.claude/.undeployed-lines"
+if [ -f "$uf" ]; then
+  ud=$(cat "$uf" 2>/dev/null)
+  case "$ud" in
+    ''|*[!0-9]*) ud="" ;;
+  esac
+  if [ -n "$ud" ] && [ "$ud" -gt 0 ]; then
+    if [ "$ud" -ge 2500 ]; then
+      deploy="🚀 ${ud} l. à déployer · "
+    elif [ "$ud" -ge 500 ]; then
+      deploy="🚀 ${ud} l. non-dépl. · "
+    fi
+  fi
+fi
+
 # --- Progression du setup (hook asynchrone) --------------------------------
 # Affiche l'avancement de l'installation de l'environnement (venv + deps) tant qu'elle
 # tourne en arrière-plan, puis disparaît quand c'est prêt.
@@ -75,7 +93,7 @@ if [ -f "$sf" ]; then
 fi
 
 # --- Construction de la ligne ----------------------------------------------
-line="${chk}${setup}⚡ ${model} · ctx ${ctx_int:-0}% (${tok_k}k tok)"
+line="${deploy}${chk}${setup}⚡ ${model} · ctx ${ctx_int:-0}% (${tok_k}k tok)"
 line="${line} · \$$(printf '%.2f' "$cost")"
 [ -n "$h5_int" ] && line="${line} · 5h ${h5_int}%"
 [ -n "$d7_int" ] && line="${line} · 7j ${d7_int}%"
