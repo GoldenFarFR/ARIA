@@ -96,8 +96,13 @@ async def send_email(
     html_body: str,
     text_body: str | None = None,
     config: MailerConfig | None = None,
+    attachment: bytes | None = None,
+    attachment_filename: str | None = None,
+    attachment_maintype: str = "application",
+    attachment_subtype: str = "pdf",
 ) -> tuple[bool, str | None]:
-    """Envoie un email HTML (avec fallback texte). Retourne ``(ok, error)``, ne lève jamais."""
+    """Envoie un email HTML (avec fallback texte), pièce jointe optionnelle.
+    Retourne ``(ok, error)``, ne lève jamais."""
     cfg = config or mailer_config_from_env()
     if cfg is None or not cfg.configured:
         return False, "SMTP non configuré (ARIA_SMTP_USER / ARIA_SMTP_APP_PASSWORD absents)"
@@ -111,6 +116,13 @@ async def send_email(
     msg["To"] = to
     msg.set_content(text_body or "Votre client mail n'affiche pas le HTML. Rapport en pièce HTML.")
     msg.add_alternative(html_body, subtype="html")
+    if attachment:
+        msg.add_attachment(
+            attachment,
+            maintype=attachment_maintype,
+            subtype=attachment_subtype,
+            filename=attachment_filename or "rapport.pdf",
+        )
 
     logger.info(
         "mailer: envoi email host=%s port=%s user=%s to=%s subject=%r",

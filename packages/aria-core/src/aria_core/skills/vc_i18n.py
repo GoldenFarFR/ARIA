@@ -150,6 +150,244 @@ def scaffold_strings(lang: str) -> dict:
     }
 
 
+# --- Libellés de confiance pour l'affichage (même principe que risk_label) -----
+_CONFIDENCE_EN = {"haute": "high", "moyenne": "moderate", "faible": "low"}
+
+
+def confidence_label(confiance: str, lang: str) -> str:
+    """Traduit le code de confiance pour l'affichage (identité en FR)."""
+    if norm_lang(lang) == LANG_EN:
+        return _CONFIDENCE_EN.get((confiance or "").strip().lower(), confiance)
+    return confiance
+
+
+# --- Libellés fixes du rapport VC détaillé (HTML + PDF) -------------------------
+# Un seul dictionnaire, réutilisé par vc_report.py (email HTML) ET vc_report_pdf.py
+# (PDF sécurisé joint) — même principe FR=identique à l'existant / EN additif.
+def report_strings(lang: str) -> dict:
+    """Libellés fixes du rapport VC détaillé — jamais la prose libre du LLM
+    (thèse, résumé, raisonnement), qui est déjà générée dans la langue cible par
+    le LLM lui-même via ``llm_language_directive``. Ici : uniquement les libellés
+    de structure (titres de section, en-têtes de tableau, disclaimers fixes)."""
+    if norm_lang(lang) == LANG_EN:
+        return {
+            "tier_premium_label": "PREMIUM REPORT",
+            "tier_standard_label": "STANDARD REPORT",
+            "html_title": "ARIA Vanguard ZHC · Research note · {title}",
+            "confidential": "Confidential",
+            "research_note_kicker": "Research note · Investment analysis",
+            "network_label": "BASE NETWORK",
+            "meta_series": "Series {n}",
+            "meta_report_num": "Report #{n}",
+            "meta_generated": "Generated on {date}",
+            "meta_issued_by": "Issued by ARIA Vanguard ZHC",
+            "preheader_suffix": "ARIA Vanguard ZHC research note",
+            "refs_none": "No official link available for this token.",
+            "refs_title": "References: verify for yourself",
+            "refs_disclaimer": "Links declared by the project (source: DexScreener). Not verified by ARIA.",
+            "potential_label": "Potential {n}/10",
+            "potential_na": "Potential n/a",
+            "confidence_prefix": "Confidence {v}",
+            "risk_prefix": "Risk {v}",
+            "rr_qualifier_strong": "Very favorable asymmetry",
+            "rr_qualifier_good": "Favorable asymmetry",
+            "rr_qualifier_balanced": "Balanced asymmetry",
+            "rr_qualifier_weak": "Unfavorable asymmetry",
+            "rr_caption": (
+                "{qualifier}: aim for +{upside:.0f}% against {downside:.0f}% risked. "
+                "Reward-to-risk distance ratio, not a gain multiple."
+            ),
+            "rr_tight_stop": " Tight stop ({downside:.0f}%): ratio is flattered, easy to hit.",
+            "rr_upside_label": "Upside potential",
+            "rr_ratio_label": "Reward-risk ratio",
+            "rr_downside_label": "Downside risk",
+            "order_section": "Proposed order",
+            "order_reco": "Recommendation",
+            "order_size": "Suggested size",
+            "order_size_value": "{pct:.1f}% of capital",
+            "order_capital_to_position": "Client capital → position",
+            "order_entry": "Entry",
+            "order_invalidation": "Invalidation",
+            "order_target": "Target",
+            "order_disclaimer": "Proposal subject to human validation before any execution.",
+            "dollar_section": "Potential in $",
+            "dollar_position_line": "Position {position} → {target} at target",
+            "dollar_gain_label": "Gain",
+            "dollar_risk_line": "Risk incurred on invalidation ({inval})",
+            "dollar_scale_note": "Common scale: bars proportional to $ amounts.",
+            "scen_bull": "Bullish",
+            "scen_base": "Central · Reference",
+            "scen_bear": "Bearish",
+            "scen_probability_label": "Probability",
+            "scen_confidence_label": "Confidence {v}",
+            "scenarios_section": "Scenarios",
+            "methodology_section": "Methodology & sources",
+            "methodology_principle": "Methodological principle: no missing data is ever estimated.",
+            "methodology_sources": (
+                ("DexScreener", "market & liquidity"),
+                ("Blockscout Base", "on-chain, holders, audit"),
+                ("CoinGecko", "market cap, FDV, supply"),
+                ("Smart money", "proprietary heuristic"),
+                ("Report generation", "ARIA engine · anti-hallucination control"),
+            ),
+            "gaps_title": "Insufficient data: not estimated",
+            "gaps_footer": "In line with our principle: no missing data is ever estimated.",
+            "fallback_title": "Qualitative LLM analysis unavailable",
+            "fallback_body": "This report relies solely on quantitative signals.",
+            "ta_section": "Technical analysis",
+            "ta_ohlcv_real": "Real OHLCV",
+            "ta_trend_prefix": "trend",
+            "ta_candles_tf": "{tf} candles",
+            "ta_candles_default": "OHLCV candles",
+            "ta_caption_note": "levels derived from data, never fabricated",
+            "ta_chart_alt": "{cap} chart with derived levels",
+            "roi_section": "Comparable-based projection",
+            "roi_basis_fdv": "FDV",
+            "roi_basis_mcap": "market cap",
+            "roi_sector_line": "Sector: {sector}",
+            "roi_sector_unknown": "Sector not recognized: generic comparables",
+            "roi_ref_label": "Reference {basis} {ref}",
+            "roi_disclaimer_default": "Historical placement by comparables — not a forecast nor a target.",
+            "tldr_section": "At a glance",
+            "these_section": "Investment thesis",
+            "watermark_label": "Personal edition",
+            "watermark_personal": "Personal edition · {recipient} · {ref}",
+            "detailed_section": "Detailed analysis",
+            "standard_teaser": "Detailed analysis, methodology and sources: reserved for the Premium edition.",
+            "vanguard_zhc_kicker": "Vanguard · ZHC",
+            "footer_ref_label": "REF.",
+            "footer_dated": "Dated {date} · SHA-256 fingerprint: {hash}",
+            "footer_disclaimer_bold": "proposal subject to human validation",
+            "footer_disclaimer": (
+                "This note is a {bold}: no automatic execution is ever triggered. "
+                "It does not constitute investment advice. Crypto-assets carry a risk "
+                "of total loss of invested capital."
+            ),
+            "microprint_hero": "ARIA Vanguard ZHC · Certified note {ref} · Reproduction prohibited",
+            "microprint_footer": (
+                "ARIA Vanguard ZHC · Confidential document · {ref} · Reproduction and resale prohibited"
+            ),
+            "copyright": (
+                "© 2026 ARIA Vanguard ZHC · All rights reserved · Confidential document: "
+                "reproduction and resale prohibited."
+            ),
+            "subject_analysis": "VC Analysis",
+            "teaser_heading": "Analysis ready",
+            "teaser_attached_note": (
+                "Full analysis attached (secured PDF). Reproduction and resale prohibited — "
+                "strictly personal document."
+            ),
+        }
+    return {
+        "tier_premium_label": "RAPPORT PREMIUM",
+        "tier_standard_label": "RAPPORT STANDARD",
+        "html_title": "ARIA Vanguard ZHC · Note de recherche · {title}",
+        "confidential": "Confidentiel",
+        "research_note_kicker": "Note de recherche · Analyse d'investissement",
+        "network_label": "RÉSEAU BASE",
+        "meta_series": "Série {n}",
+        "meta_report_num": "Rapport n°{n}",
+        "meta_generated": "Généré le {date}",
+        "meta_issued_by": "Émis par ARIA Vanguard ZHC",
+        "preheader_suffix": "Note de recherche ARIA Vanguard ZHC",
+        "refs_none": "Aucun lien officiel disponible pour ce token.",
+        "refs_title": "Références : vérifiez par vous-même",
+        "refs_disclaimer": "Liens déclarés par le projet (source : DexScreener). Non vérifiés par ARIA.",
+        "potential_label": "Potentiel {n}/10",
+        "potential_na": "Potentiel n/a",
+        "confidence_prefix": "Confiance {v}",
+        "risk_prefix": "Risque {v}",
+        "rr_qualifier_strong": "Asymétrie très favorable",
+        "rr_qualifier_good": "Asymétrie favorable",
+        "rr_qualifier_balanced": "Asymétrie équilibrée",
+        "rr_qualifier_weak": "Asymétrie défavorable",
+        "rr_caption": (
+            "{qualifier} : viser +{upside:.0f}% pour {downside:.0f}% risqué. "
+            "Rapport des distances (récompense sur risque), pas un multiple de gain."
+        ),
+        "rr_tight_stop": " Stop serré ({downside:.0f}%) : ratio flatté, facile à toucher.",
+        "rr_upside_label": "Potentiel haussier",
+        "rr_ratio_label": "Ratio récompense-risque",
+        "rr_downside_label": "Risque baissier",
+        "order_section": "Ordre proposé",
+        "order_reco": "Recommandation",
+        "order_size": "Taille suggérée",
+        "order_size_value": "{pct:.1f}% du capital",
+        "order_capital_to_position": "Capital client → position",
+        "order_entry": "Entrée",
+        "order_invalidation": "Invalidation",
+        "order_target": "Cible",
+        "order_disclaimer": "Proposition soumise à validation humaine avant toute exécution.",
+        "dollar_section": "Potentiel en $",
+        "dollar_position_line": "Position {position} → {target} à la cible",
+        "dollar_gain_label": "Gain",
+        "dollar_risk_line": "Risque encaissé si invalidation ({inval})",
+        "dollar_scale_note": "Échelle commune : barres proportionnelles aux montants en $.",
+        "scen_bull": "Haussier",
+        "scen_base": "Central · Référence",
+        "scen_bear": "Baissier",
+        "scen_probability_label": "Probabilité",
+        "scen_confidence_label": "Confiance {v}",
+        "scenarios_section": "Scénarios",
+        "methodology_section": "Méthodologie & sources",
+        "methodology_principle": "Principe méthodologique : aucune donnée absente n'est estimée.",
+        "methodology_sources": (
+            ("DexScreener", "marché & liquidité"),
+            ("Blockscout Base", "on-chain, holders, audit"),
+            ("CoinGecko", "market cap, FDV, supply"),
+            ("Smart-money", "heuristique propriétaire"),
+            ("Rédaction", "moteur ARIA · contrôle anti-hallucination"),
+        ),
+        "gaps_title": "Données insuffisantes : non estimées",
+        "gaps_footer": "Conformément à notre principe : aucune donnée absente n'est estimée.",
+        "fallback_title": "Analyse qualitative LLM indisponible",
+        "fallback_body": "Ce rapport repose uniquement sur les signaux quantitatifs.",
+        "ta_section": "Analyse technique",
+        "ta_ohlcv_real": "OHLCV réel",
+        "ta_trend_prefix": "tendance",
+        "ta_candles_tf": "Bougies {tf}",
+        "ta_candles_default": "Bougies OHLCV",
+        "ta_caption_note": "niveaux dérivés des données, jamais fabriqués",
+        "ta_chart_alt": "Graphique {cap} avec niveaux dérivés",
+        "roi_section": "Projection par comparables",
+        "roi_basis_fdv": "FDV",
+        "roi_basis_mcap": "capitalisation",
+        "roi_sector_line": "Secteur : {sector}",
+        "roi_sector_unknown": "Secteur non reconnu : comparables génériques",
+        "roi_ref_label": "{basis} de référence {ref}",
+        "roi_disclaimer_default": "Placement historique par comparables, pas une prevision ni une cible.",
+        "tldr_section": "En bref",
+        "these_section": "Thèse d'investissement",
+        "watermark_label": "Édition personnelle",
+        "watermark_personal": "Édition personnelle · {recipient} · {ref}",
+        "detailed_section": "Analyse détaillée",
+        "standard_teaser": "Analyse détaillée, méthodologie et sources : réservées à l'édition Premium.",
+        "vanguard_zhc_kicker": "Vanguard · ZHC",
+        "footer_ref_label": "RÉF.",
+        "footer_dated": "Daté du {date} · Empreinte SHA-256 : {hash}",
+        "footer_disclaimer_bold": "proposition soumise à validation humaine",
+        "footer_disclaimer": (
+            "Cette note constitue une {bold} : aucune exécution automatique n'est "
+            "engagée. Elle ne constitue pas un conseil en investissement. Les "
+            "crypto-actifs présentent un risque de perte totale du capital investi."
+        ),
+        "microprint_hero": "ARIA Vanguard ZHC · Note certifiée {ref} · Reproduction interdite",
+        "microprint_footer": (
+            "ARIA Vanguard ZHC · Document confidentiel · {ref} · Reproduction et revente interdites"
+        ),
+        "copyright": (
+            "© 2026 ARIA Vanguard ZHC · Tous droits réservés · Document confidentiel : "
+            "reproduction et revente interdites."
+        ),
+        "subject_analysis": "Analyse VC",
+        "teaser_heading": "Analyse prête",
+        "teaser_attached_note": (
+            "Analyse complète en pièce jointe (PDF sécurisé). Reproduction et revente "
+            "interdites — document strictement personnel."
+        ),
+    }
+
+
 # --- Libellés du verdict du juge (proof engine, mode test) ---------------------
 def judge_strings(lang: str) -> dict:
     if norm_lang(lang) == LANG_EN:
