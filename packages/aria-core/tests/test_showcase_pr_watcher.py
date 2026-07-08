@@ -346,3 +346,43 @@ async def test_repair_reports_error_when_nothing_posted(monkeypatch, tmp_path):
     report = await spw.repair_last_reply()
     assert report["ok"] is False
     assert report["errors"]
+
+
+@pytest.mark.asyncio
+async def test_repair_derives_owner_repo_from_url_legacy_entry(monkeypatch, tmp_path):
+    # Entree d'etat LEGACY : postee par l'ancien code, sans owner/repo -> derives de l'URL.
+    state = {
+        "handled": {"issue:4913933229": "4913933229"},
+        "replies": [
+            {
+                "target": "acp-showcase-37",
+                "reply_id": 4913933229,
+                "reply_url": "https://github.com/Virtual-Protocol/acp-cli-demos/pull/37#issuecomment-4913933229",
+            }
+        ],
+    }
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(spw, "_STATE_PATH", state_path)
+    monkeypatch.setattr(spw, "load_watch_targets", lambda: [])
+    monkeypatch.setattr("aria_core.skills.showcase_pr_watcher.github_configured", lambda: True)
+    monkeypatch.setattr(spw, "append_memory", lambda *a, **k: None)
+
+    class FakeSettings:
+        github_token = "test-token"
+
+    monkeypatch.setattr(spw, "settings", FakeSettings())
+    edits: list[tuple] = []
+
+    class FakeClient:
+        async def edit_issue_comment(self, owner, repo, comment_id, body):
+            edits.append((owner, repo, comment_id, body))
+            return {"id": comment_id, "html_url": "https://github.com/x#c"}
+
+    monkeypatch.setattr(spw, "GitHubClient", lambda token: FakeClient())
+
+    report = await spw.repair_last_reply()
+    assert report["ok"] is True
+    assert edits[0][0] == "Virtual-Protocol" and edits[0][1] == "acp-cli-demos"
+    assert edits[0][2] == 4913933229
+    assert "@GoldenFarFR" in edits[0][3]
