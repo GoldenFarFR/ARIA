@@ -71,17 +71,11 @@ if command -v git >/dev/null 2>&1 && [ -f "$REF_FILE" ]; then
       printf '%s\n' "$target" > "$REMINDED" 2>/dev/null || true
       shortref=$(git rev-parse --short=12 "$ref" 2>/dev/null || printf '%s' "$ref")
       cat <<EOF
-🚀 DÉPLOIEMENT VPS conseillé — $total lignes non déployées (seuil $DEPLOY_THRESHOLD) depuis
-le dernier déploiement ($shortref). Propose à l'opérateur de déployer sur le VPS, et
-DONNE-LUI TOUTES LES COMMANDES À COPIER-COLLER (il est non-dev) :
-  1. Se placer sur main : git checkout main && git status
-  2. Vérifier le secret webhook : grep TELEGRAM_WEBHOOK_SECRET vanguard/backend/.env
-     (si absent : echo "TELEGRAM_WEBHOOK_SECRET=\$(openssl rand -hex 32)" >> vanguard/backend/.env)
-  3. Déployer : ./vanguard/deploy.sh   (fait git pull + build + rollback + health check)
-  4. Vérifier la sortie /api/health et que le bot Telegram répond.
-Quand il CONFIRME le déploiement : mets .claude/last-deployed-ref = commit déployé
-(git rev-parse main), puis commit + push sur main (ça remet le compteur à zéro).
-Ne laisse pas ce rappel remplacer la réponse à sa demande.
+🚀 RAPPEL DÉPLOIEMENT VPS — $total lignes accumulées depuis le dernier déploiement ($shortref) ; seuil $DEPLOY_THRESHOLD atteint.
+Affiche à l'opérateur UNE SEULE LIGNE de rappel, style : « 🚀 Déploiement VPS conseillé — quota 2500 lignes atteint ».
+Puis CONTINUE normalement (dépasser le seuil ne bloque rien ; ne t'arrête pas, ne colle PAS les commandes sauf s'il les demande).
+Les commandes de déploiement restent disponibles sur demande ("go" / "les commandes").
+Quand il CONFIRME un déploiement : mets .claude/last-deployed-ref = commit déployé (git rev-parse main), puis commit + push (remise à zéro).
 EOF
     fi
   )
