@@ -41,7 +41,9 @@ async def absorb(contract: str, *, scanner=None, force: bool = False, **screen_k
         if status == "active":
             return "skip_active"
 
-    ctx = await scan(contract)
+    # Honeypot ACTIF au filtre d'entrée : un token honeypot / à taxe extractive / owner
+    # réversible ne doit pas entrer dans le pool, pas seulement être signalé à l'analyse.
+    ctx = await scan(contract, include_honeypot=True)
     result = safety_screen(ctx, **screen_kwargs)
 
     if result.passed:
