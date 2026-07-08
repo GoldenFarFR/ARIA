@@ -32,6 +32,18 @@ def relay_enabled() -> bool:
     return bool(relay_access_token())
 
 
+def relay_autoreply_enabled() -> bool:
+    """Gate DISTINCT et plus fort que `relay_enabled()` — celui-ci autorise ARIA à
+    répondre de façon autonome (envoi Telegram réel), donc off par défaut, opt-in séparé
+    du token relay. Sans lui, le relais reste lecture/écriture pour Claude uniquement,
+    ARIA ne répond jamais toute seule."""
+    if not relay_enabled():
+        return False
+    return os.environ.get("ARIA_RELAY_AUTOREPLY_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def verify_relay_access(provided: str | None) -> bool:
     """Comparaison à temps constant — même politique que le secret admin
     (`public_mode.is_operator_request`)."""
@@ -100,4 +112,22 @@ async def send_relay_reply(text: str, *, sender=None) -> bool:
     except Exception:  # noqa: BLE001 — un envoi rate ne doit jamais planter l'appelant
         return False
     await log_message("claude", text.strip())
+    return True
+
+
+async def send_aria_relay_reply(text: str, *, sender=None) -> bool:
+    """Envoie une réponse d'ARIA ELLE-MÊME (pas Claude) dans le relay — sa vraie voix,
+    aucun préfixe. Utilisé uniquement par `relay_conversation.run_relay_conversation_cycle`
+    (gate `ARIA_RELAY_AUTOREPLY_ENABLED`), jamais appelable depuis la conversation
+    opérateur normale."""
+    if not relay_enabled() or not text.strip():
+        return False
+    if sender is None:
+        from aria_core.gateway.telegram_bot import send_message as sender
+
+    try:
+        await sender(text.strip())
+    except Exception:  # noqa: BLE001 — un envoi raté ne doit jamais planter l'appelant
+        return False
+    await log_message("aria", text.strip())
     return True
