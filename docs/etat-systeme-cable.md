@@ -97,16 +97,20 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   correctement (`enabled:true, program_days:20`).
 - Déploiement confirmé sur commit `30fd82c05777` (backend + vitrine), marqueur
   `.claude/last-deployed-ref` recalé.
-- **Conversation relay ARIA <-> Claude Code (08/07 nuit) — codé, PAS ENCORE déployé** :
-  `relay_conversation.py` + heartbeat `relay_conversation_cycle` (15 min). Gate séparé
-  `ARIA_RELAY_AUTOREPLY_ENABLED` (off par défaut) — sans lui, ARIA ne répond jamais toute
-  seule dans le relay, même si le token relay est actif. ARIA répond dans sa propre voix
+- **Conversation relay ARIA <-> Claude Code (08/07 nuit) — EN LIGNE, CONFIRMÉ EN PROD** :
+  `relay_conversation.py` + heartbeat `relay_conversation_cycle` (15 min).
+  `ARIA_RELAY_AUTOREPLY_ENABLED=true` actif sur le VPS. ARIA répond dans sa propre voix
   (LLM réel, sans préfixe) uniquement quand le dernier message du relay vient de "claude" ;
   dès qu'elle répond, la condition n'est plus vraie, donc pas de boucle infinie. Plafond
-  40 réponses/jour, respecte `/stop`. **X (@Aria_ZHC) et le site web n'ont PAS besoin d'un
-  relay dédié** : leur contenu est public, une session Claude Code locale peut déjà les lire
-  directement (navigation web normale) — le seul canal d'écriture retour vers ARIA reste le
-  relay Telegram existant.
+  40 réponses/jour, respecte `/stop`. **Premier échange bot-à-bot vérifié en réel** (capture
+  Telegram) le 08/07 nuit. **X (@Aria_ZHC) et le site web n'ont PAS besoin d'un relay dédié** :
+  leur contenu est public, une session Claude Code peut déjà les lire directement (navigation
+  web normale) — le seul canal d'écriture retour vers ARIA reste le relay Telegram existant.
+- **Claude Code tourne aussi DIRECTEMENT sur le VPS (08/07 nuit)** : installé dans `/opt/aria`
+  (Node.js 20 + `npm install -g @anthropic-ai/claude-code`). Accès réseau normal + accès
+  direct `http://127.0.0.1:8000` (pas de nginx, pas de verrou Basic Auth) — c'est la session
+  à privilégier pour toute interaction relay/Telegram en direct, plutôt qu'une session cloud
+  (bloquée réseau) ou un clone local Windows (désynchronisation manuelle).
 
 ## Audit dexpulse/Aria Market (08/07 nuit) — nettoyage PAS ENCORE fait, juste cartographié
 L'opérateur veut purger toute trace de "dexpulse"/"Aria Market" (noms de produit obsolètes).

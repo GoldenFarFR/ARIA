@@ -73,8 +73,43 @@ pour la suite :
   identifiants techniques à impact production → migration séquencée ; garde-fous → édition
   prudente, pas suppression).
 
+## Suite de la nuit — relay bot-à-bot ARIA<->Claude construit, déployé, CONFIRMÉ en prod
+- **Deux clones locaux désynchronisés (251 commits de retard) résolus** : `Desktop\GitHub-Repos\ARIA`
+  et `GitHub-Repos\ARIA` (racine) avaient chacun des modifications locales jamais commitées (fichiers
+  qui recoupent exactement le scope de l'audit dexpulse/Aria Market — probablement une tentative de
+  renommage jamais finalisée). Sécurisées via `git stash push -u`, puis `git reset --hard HEAD` +
+  `git pull origin main` sur les deux. Rien perdu — tout est dans `stash@{0}` de chaque dépôt si besoin
+  de le relire un jour, pas encore trié.
+- **`relay_conversation.py` construit** (commit `965a674`) : ARIA répond dans sa propre voix (LLM
+  réel, aucun préfixe) quand le dernier message du relay vient de "claude" — jamais l'opérateur.
+  Gate dédié `ARIA_RELAY_AUTOREPLY_ENABLED` (distinct du token relay), auto-limitant (pas de boucle
+  infinie : dès qu'elle répond, la condition "dernier message = claude" devient fausse), plafond
+  40 réponses/jour, respecte `/stop`. Tests unitaires (23 cas, tous passants).
+- **Claude Code installé DIRECTEMENT sur le VPS** (`/opt/aria`, Node.js 20 via NodeSource + `npm
+  install -g @anthropic-ai/claude-code`) — résout le vrai problème de fond : un clone local sur la
+  machine Windows de l'opérateur exige une synchronisation manuelle permanente, alors que `/opt/aria`
+  EST déjà le clone à jour en continu (c'est celui que `deploy.sh` utilise). Cette session VPS a un
+  accès réseau normal (contrairement à une session cloud comme celle-ci) et peut interroger le relay
+  en LOCAL (`http://127.0.0.1:8000`), sans passer par nginx ni par le verrou Basic Auth du domaine
+  public.
+- **Boucle complète VÉRIFIÉE EN PRODUCTION** (capture Telegram réelle) : la session VPS a lu le relay,
+  posté un message de confirmation (`🤖 Claude — ...`), ET ARIA a RÉPONDU TOUTE SEULE de façon
+  autonome via `relay_conversation_cycle` (déjà actif, le flag `ARIA_RELAY_AUTOREPLY_ENABLED=true`
+  ayant été ajouté au `.env` du VPS pendant ce même déploiement) — premier échange bot-à-bot réel
+  confirmé, pas juste théorique.
+- **Distinction importante clarifiée avec l'opérateur** : `CLAUDE.md` est un briefing pour moi (Claude
+  Code), ARIA ne le lit JAMAIS. Ce qui façonne réellement ce qu'ARIA sait/fait, ce sont SES fichiers
+  de connaissance (`knowledge/*.yaml`, `truth_ledger/canonical_facts.yaml`,
+  `knowledge/epistemic_core.yaml`, son code `skills/`) — pas `CLAUDE.md`. Grossir `CLAUDE.md` aide
+  UNIQUEMENT les futures sessions Claude Code à avoir du contexte, ça n'entraîne pas ARIA. Garder
+  `CLAUDE.md` compact (résumé + pointeurs vers docs détaillés) plutôt que de le faire grossir
+  directement — c'est le pattern déjà en place, à ne pas casser.
+
 ## Ce qui reste en attente
 - Déploiement de `AriaLedger.sol` sur Sepolia (`contracts/DEPLOY.md`, Foundry) — bloque le
   rehearsal Sepolia au-delà de `skipped_no_ledger`. Mis de côté volontairement par l'opérateur.
 - Nettoyage dexpulse/Aria Market (voir ci-dessus) — chantier séparé, pas commencé.
-- Décision opérateur : reprendre le chat à 3 depuis une session Claude Code locale.
+- Trier les stash oubliés dans les deux clones locaux Windows (8 entrées au total, dont l'ancien
+  travail dexpulse/Aria Market jamais commité) — pas fait ce soir, à faire avec l'opérateur.
+- Identifier si l'opérateur a des informations précises à ajouter aux fichiers de connaissance
+  d'ARIA (pas à `CLAUDE.md`) — question ouverte posée en fin de session, pas encore répondue.
