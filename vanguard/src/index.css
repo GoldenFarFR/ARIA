@@ -58,7 +58,7 @@ body {
 
 /* ── Layout minimal ── */
 .page-shell {
-  @apply max-w-2xl mx-auto px-5 w-full;
+  @apply max-w-2xl lg:max-w-4xl 2xl:max-w-5xl mx-auto px-5 sm:px-8 w-full;
 }
 
 /* ── Atmosphere ── */
@@ -73,6 +73,24 @@ body {
 .vanguard-minimal {
   background-color: #060608;
   background-image: radial-gradient(ellipse 70% 50% at 50% -20%, rgba(201, 169, 98, 0.07), transparent 60%);
+}
+
+/* Fond gris chaud plat façon Claude Code, utilisé partout (vitrine + cockpit) : écran
+   peu lumineux + filtre jaune plus confortable qu'un fond quasi-noir. Les panneaux
+   partagés (.glass-vanguard/.minimal-card) sont surchargés ici en clair-sur-gris (au
+   lieu de sombre-sur-noir) pour rester "posés" plutôt que "creusés". */
+.vanguard-charcoal {
+  background-color: #26241f;
+}
+
+.vanguard-charcoal .glass-vanguard {
+  background: rgba(244, 239, 230, 0.045);
+  border-color: rgba(201, 169, 98, 0.18);
+}
+
+.vanguard-charcoal .minimal-card {
+  background: rgba(244, 239, 230, 0.035);
+  border-color: rgba(201, 169, 98, 0.16);
 }
 
 .hero-glow {
@@ -100,23 +118,8 @@ body {
   opacity: 0.5;
 }
 
-@keyframes vanguard-float {
-  0%, 100% { transform: translate(0, 0); }
-  50% { transform: translate(12px, -8px); }
-}
-
-.animate-vanguard-float {
-  animation: vanguard-float 24s ease-in-out infinite;
-}
-
-.animate-vanguard-float-delayed {
-  animation: vanguard-float 28s ease-in-out infinite reverse;
-}
-
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .animate-vanguard-float,
-  .animate-vanguard-float-delayed,
   .skeleton { animation: none; }
 }
 
@@ -196,9 +199,9 @@ body {
 }
 
 .nav-minimal-scrolled {
-  background: rgba(6, 6, 8, 0.88);
+  background: rgba(38, 36, 31, 0.92);
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(201, 169, 98, 0.1);
+  border-bottom: 1px solid rgba(201, 169, 98, 0.15);
 }
 
 .minimal-card {

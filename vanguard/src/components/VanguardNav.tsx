@@ -50,7 +50,7 @@ export function VanguardNav() {
               <a
                 key={href}
                 href={href}
-                className="text-sm text-[#8a8578] hover:text-[#e8d5a8] transition-colors focus-ring"
+                className="text-sm text-[#b5b0a3] hover:text-[#e8d5a8] transition-colors focus-ring"
               >
                 {label}
               </a>
@@ -59,7 +59,7 @@ export function VanguardNav() {
               href="https://x.com/Aria_ZHC"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sm text-[#8a8578] hover:text-[#c9a962] transition-colors focus-ring inline-flex items-center gap-1 notranslate"
+              className="text-sm text-[#b5b0a3] hover:text-[#c9a962] transition-colors focus-ring inline-flex items-center gap-1 notranslate"
             >
               @Aria_ZHC <ExternalLink className="w-3 h-3" />
             </a>
