@@ -253,9 +253,14 @@ async def execute_github_sandbox(user_message: str, lang: str = "en") -> tuple[s
     lower = user_message.lower()
 
     from aria_core.skills.showcase_pr_watcher import (
+        execute_showcase_pr_repair,
         execute_showcase_pr_watch,
+        wants_showcase_pr_repair,
         wants_showcase_pr_watch,
     )
+
+    if wants_showcase_pr_repair(user_message):
+        return await execute_showcase_pr_repair(user_message, lang)
 
     if wants_showcase_pr_watch(user_message):
         return await execute_showcase_pr_watch(user_message, lang)

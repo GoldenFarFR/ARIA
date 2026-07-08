@@ -417,6 +417,19 @@ class GitHubClient:
             r.raise_for_status()
             return r.json()
 
+    async def edit_issue_comment(
+        self, owner: str, repo: str, comment_id: int, body: str
+    ) -> dict[str, Any]:
+        """Edite un commentaire d'issue/PR existant (PATCH). Reserve a l'auteur du commentaire."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.patch(
+                f"{API}/repos/{owner}/{repo}/issues/comments/{comment_id}",
+                headers=self._headers,
+                json={"body": body[:65000]},
+            )
+            r.raise_for_status()
+            return r.json()
+
     async def count_merged_prs(
         self,
         owner: str,
