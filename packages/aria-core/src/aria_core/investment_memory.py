@@ -154,7 +154,8 @@ async def list_theses_for_token(token_address: str, limit: int = 10) -> list[dic
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         row_cursor = await db.execute(
-            "SELECT * FROM investment_thesis WHERE token_address = ? ORDER BY id DESC LIMIT ?",
+            "SELECT * FROM investment_thesis WHERE LOWER(token_address) = LOWER(?) "
+            "ORDER BY id DESC LIMIT ?",
             (token_address, limit),
         )
         rows = await row_cursor.fetchall()
