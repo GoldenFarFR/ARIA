@@ -27,6 +27,12 @@ jamais l'envoyer, et **jamais exécuter** quoi que ce soit.
    donnée publique on-chain/marché (jamais de clé, token, ou adresse opérateur).
 6. **Dégradation sûre** : LLM désactivé / clé absente / timeout → fallback
    déterministe conservateur (jamais de BUY sans analyse qualitative).
+7. **Veto déterministe post-LLM** (`_enforce_danger_veto`, audit 08/07) : si le scan
+   honeypot/sécurité frais classe `lite_verdict=DANGER`, aucun BUY n'est possible quoi
+   que le LLM réponde — jamais contournable par une donnée on-chain trompeuse (le
+   signal est 100% déterministe, pas un jugement LLM qu'un contenu pourrait biaiser).
+   C'est le backstop qui manquait dans l'incident public AIXBT (agent vidé via une
+   commande injectée, sans aucun contrôle non-LLM avant l'exécution réelle).
 """
 from __future__ import annotations
 
@@ -370,6 +376,31 @@ def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
     )
 
 
+def _enforce_danger_veto(result: VCResult, ctx: TokenScanContext) -> None:
+    """Veto DÉTERMINISTE, non contournable par la sortie du LLM : si le honeypot/scan
+    de sécurité (frais à cet instant, `include_honeypot=True`) classe DANGER, aucun BUY
+    n'est jamais possible, quoi que le LLM ait répondu.
+
+    Pourquoi ce backstop existe (post-audit 08/07, suite à l'incident public AIXBT — un
+    agent vidé via une commande injectée, sans aucun contrôle non-LLM avant l'exécution
+    réelle) : les balises `<donnees_non_fiables>` + l'instruction de hiérarchie protègent
+    bien contre une INSTRUCTION injectée, mais un contenu on-chain trompeur (faux
+    partenariat, fausse traction dans un nom/description de token) pourrait encore
+    biaiser un JUGEMENT du LLM sans jamais ressembler à une instruction. `lite_verdict`
+    est un signal 100% déterministe (ABI, comportement, liquidité — jamais un jugement
+    du LLM) : il ne peut donc pas être « convaincu » par du texte, contrairement au LLM.
+    Mute `result` en place, journalise l'override pour audit (jamais un silence)."""
+    if ctx.lite_verdict != "DANGER" or result.recommandation != "BUY":
+        return
+    logger.warning(
+        "vc_analysis: veto DANGER — LLM a répondu BUY pour %s malgré lite_verdict=DANGER, "
+        "override en AVOID (backstop déterministe, jamais contournable par le LLM)",
+        ctx.contract,
+    )
+    result.recommandation = "AVOID"
+    result.taille_pct = 0.0
+
+
 def _validate_scenarios(raw: object) -> list[dict]:
     """Valide les scénarios LLM : nom en allowlist, probabilité 0-100, confiance en allowlist.
 
@@ -686,6 +717,7 @@ async def analyze_vc_with_context(
         return _attach_ta(_deterministic_fallback(ctx), ctx), ctx
 
     result = _validate_llm_output(parsed, ctx)
+    _enforce_danger_veto(result, ctx)
     _attach_ta(result, ctx)
     _log_timing(result.llm_used)
     out = (result, ctx)
