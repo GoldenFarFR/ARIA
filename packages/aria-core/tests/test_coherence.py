@@ -302,3 +302,15 @@ def test_showcase_pr_autoreply_transparent_and_gated_to_human():
 
     # Négation de merge -> jamais la réponse "on rouvre".
     assert spw.decide_reply("not ready to merge yet", target={"pr_number": 37})[0] == "handover"
+
+
+def test_github_command_registered_and_repair_routed():
+    """La commande /github doit être enregistrée (sinon /github repair reste muet), et la
+    correction showcase doit avoir une route texte-libre côté handler admin."""
+    src = _read("packages/aria-core/src/aria_core/gateway/telegram_bot.py")
+    assert 'CommandHandler("github"' in src, (
+        "/github non enregistré : la commande (dont /github repair) reste muette."
+    )
+    assert "wants_showcase_pr_repair" in src, (
+        "route texte-libre de la correction showcase absente du handler admin."
+    )

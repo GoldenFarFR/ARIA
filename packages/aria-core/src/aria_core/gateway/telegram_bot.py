@@ -1284,6 +1284,18 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         looks_like_repo_create,
         looks_like_repo_delete,
     )
+    from aria_core.skills.showcase_pr_watcher import wants_showcase_pr_repair
+
+    if wants_showcase_pr_repair(text):
+        # Correction operateur-only du dernier commentaire showcase PR (edition, tag operateur).
+        await message.reply_chat_action("typing")
+        try:
+            out, _ = await execute_github_sandbox(text, lang)
+            await _reply(message, out)
+        except Exception as exc:
+            logger.exception("Showcase PR repair failed")
+            await _reply(message, f"Correction showcase : échec ({exc})")
+        return
 
     if looks_like_repo_delete(text) or looks_like_repo_create(text):
         await message.reply_chat_action("typing")
@@ -1990,6 +2002,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))
     app.add_handler(CommandHandler("theses", _handle_theses))
+    app.add_handler(CommandHandler("github", _handle_github))
 
     # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)
     app.add_handler(CallbackQueryHandler(_handle_callback))
