@@ -174,6 +174,7 @@ async def track_record():
     wallet = await vc_predictions.live_wallet()
     m = await vc_predictions.metrics()
     pool = await screened_pool.count_pool("active")
+    pool_rejected = await screened_pool.count_pool("rejected")
     return {
         "wallet_index": wallet["index"],
         "wallet_return_pct": wallet["total_return_pct"],
@@ -185,6 +186,7 @@ async def track_record():
         "hit_rate": m["hit_rate"],
         "avoid_count": m.get("avoid_count", 0),
         "pool_active": pool,
+        "pool_rejected": pool_rejected,
         "disclaimer": (
             "Track-record de suivi (paper) valorisé aux prix on-chain réels. "
             "Informationnel, pas un conseil. Aucun rendement garanti."

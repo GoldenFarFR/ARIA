@@ -181,6 +181,7 @@ export interface TrackRecord {
   hit_rate: number | null
   avoid_count: number
   pool_active: number
+  pool_rejected: number
   disclaimer: string
 }
 

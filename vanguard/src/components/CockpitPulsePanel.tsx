@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getPulse, type Pulse } from '../api'
+import { getPulse, getTrackRecord, type Pulse, type TrackRecord } from '../api'
 
 const POLL_MS = 30_000
 
@@ -25,6 +25,7 @@ function relativeTime(iso: string | null): string {
 
 export function CockpitPulsePanel() {
   const [pulse, setPulse] = useState<Pulse | null>(null)
+  const [track, setTrack] = useState<TrackRecord | null>(null)
   const [failed, setFailed] = useState(false)
 
   const load = useCallback(() => {
@@ -34,6 +35,11 @@ export function CockpitPulsePanel() {
         setFailed(false)
       })
       .catch(() => setFailed(true))
+    getTrackRecord()
+      .then(setTrack)
+      .catch(() => {
+        /* le tri fraude/légitime reste optionnel — le pouls reste utile sans */
+      })
   }, [])
 
   useEffect(() => {
@@ -102,6 +108,29 @@ export function CockpitPulsePanel() {
           ))}
         </div>
       )}
+
+      {track ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+          <div className="minimal-card px-4 py-3">
+            <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">Contrats gardés</p>
+            <p className="text-lg text-[#c9a962] font-mono tabular-nums">{track.pool_active}</p>
+          </div>
+          <div className="minimal-card px-4 py-3">
+            <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">Contrats rejetés</p>
+            <p className="text-lg text-[#d98a8a] font-mono tabular-nums">{track.pool_rejected}</p>
+          </div>
+          <div className="minimal-card px-4 py-3">
+            <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">Pronostics</p>
+            <p className="text-lg text-[#d4d0c8] font-mono tabular-nums">{track.verdicts_total}</p>
+          </div>
+          <div className="minimal-card px-4 py-3">
+            <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">Hit-rate</p>
+            <p className="text-lg text-[#d4d0c8] font-mono tabular-nums">
+              {track.hit_rate != null ? `${Math.round(track.hit_rate * 100)}%` : '—'}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         <span className="luxury-badge">exécution réelle : {pulse.real_execution ? 'ON' : 'OFF (garde-fou)'}</span>
