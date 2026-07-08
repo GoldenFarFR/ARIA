@@ -355,3 +355,24 @@ def test_pulse_endpoint_public_and_present():
     assert '"/api/pulse"' in mw, "/api/pulse absent de l'allowlist publique du middleware"
     main = _read("vanguard/backend/app/main.py")
     assert '@app.get("/api/pulse")' in main, "endpoint /api/pulse manquant dans main.py"
+
+
+def test_token_dossier_operator_gated_and_read_only():
+    """Dossier par token : gaté OPÉRATEUR (expose le pipeline de candidats, jamais public/membre)
+    et strictement en LECTURE (agrégateur pur, aucun write, aucun client réseau propre)."""
+    import inspect
+
+    from aria_core import dossier
+
+    aria_route = _read("vanguard/backend/app/api/routes/aria.py")
+    assert '@router.get("/dossier/{contract}")' in aria_route, "route dossier manquante"
+    # La route doit exiger l'opérateur (le détail des candidats n'est jamais public ni membre).
+    route_seg = aria_route.split('@router.get("/dossier/{contract}")', 1)[1][:600]
+    assert "require_operator(request)" in route_seg, "le dossier doit être gaté opérateur"
+    # Jamais dans les allowlists publiques du middleware.
+    mw = _read("vanguard/backend/app/auth/middleware.py")
+    assert "/api/aria/dossier" not in mw, "le dossier ne doit JAMAIS être exposé en public"
+    # Agrégateur en lecture seule : aucune écriture SQL, aucun accès DB/réseau direct.
+    src = inspect.getsource(dossier)
+    for forbidden in ("INSERT", "UPDATE ", "DELETE", "aiosqlite", "httpx"):
+        assert forbidden not in src, f"le dossier doit rester une lecture pure (trouvé: {forbidden})"
