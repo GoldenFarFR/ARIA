@@ -19,12 +19,118 @@ from aria_core.services.blockscout import (
     blockscout_client,
 )
 from aria_core.services.coingecko import TokenFundamentals, coingecko_client
+from aria_core.services.ohlcv import ohlcv_client
 from aria_core.services.smart_money import analyze_smart_money
+from aria_core.skills.ta_levels import (
+    Candle,
+    EntryZone,
+    TALevels,
+    compute_levels,
+    suggest_entry_zone,
+)
 
 logger = logging.getLogger(__name__)
 
 _ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 _DEX_BASE = "https://api.dexscreener.com"
+
+# Adresses de « trou noir » : un gros solde ici n'est PAS une concentration risquée
+# (tokens brûlés / envoyés au néant). À exclure du calcul de concentration, tout
+# comme le pool LP (dont le gros solde est structurel, pas une baleine qui peut dumper).
+_BURN_ADDRESSES = {
+    "0x0000000000000000000000000000000000000000",
+    "0x000000000000000000000000000000000000dead",
+    "0xdead000000000000000042069420694206942069",  # burn « communautaire » répandu
+    "0x0000000000000000000000000000000000000001",  # parfois utilisée comme puits
+}
+
+
+def _is_burn_address(address: str | None) -> bool:
+    """True si l'adresse est un puits de burn (détenteur légitime de grosses parts).
+
+    Au-delà de la liste connue, reconnaît le MOTIF « adresse morte » : un corps
+    entièrement à zéro terminé (ou préfixé) par ``dead`` — ex. 0x…0000dEaD. Élargi
+    volontairement car les projets brûlent vers des variantes multiples de ``dead``.
+    """
+    if not address:
+        return False
+    a = address.strip().lower()
+    if a in _BURN_ADDRESSES:
+        return True
+    body = a[2:] if a.startswith("0x") else a
+    if len(body) != 40:
+        return False
+    if body.endswith("dead") and set(body[:-4]) <= {"0"}:
+        return True
+    if body.startswith("dead") and set(body[4:]) <= {"0"}:
+        return True
+    return False
+
+
+def _holder_concentration(
+    holders: "TokenHoldersResult", lp_address: str | None
+) -> tuple[float | None, float | None, int]:
+    """(% du plus gros holder, % du top 10, nombre de holders comptés) HORS LP et burn.
+
+    Le pool LP et les adresses de burn détiennent légitimement de grosses parts :
+    les inclure ferait échouer tout token à tort. On ne compte que les vrais porteurs.
+    Retourne ``(None, None, 0)`` si aucune donnée exploitable.
+    """
+    lp = (lp_address or "").lower()
+    pcts: list[float] = []
+    for h in holders.holders:
+        if h.percentage is None:
+            continue
+        addr = (h.address or "").lower()
+        if addr == lp or addr in _BURN_ADDRESSES:
+            continue
+        pcts.append(float(h.percentage))
+    if not pcts:
+        return None, None, 0
+    pcts.sort(reverse=True)
+    return pcts[0], sum(pcts[:10]), len(pcts)
+
+
+async def _resolve_mint_authority(ctx: "TokenScanContext", token_address: str) -> None:
+    """Classe l'autorité d'un mint externe (renoncé / launchpad / contrat / dev / inconnu).
+
+    Best-effort et défensif : chaque appel réseau peut échouer sans jamais bloquer
+    (autorité -> 'unknown', prudent en aval). N'est appelée QUE si ``has_mint`` est
+    vrai, donc rare. Peuple ``ctx.mint_authority`` / ``ctx.launchpad``.
+    """
+    from aria_core.skills.mint_authority import classify_authority, match_launchpad
+
+    creator = None
+    owner_addr = None
+    owner_is_contract = None
+    try:
+        info = await blockscout_client.get_address_info(token_address)
+        creator = info.creator_address if info.available else None
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.info("mint_authority: get_address_info(%s) échoué (%s)", token_address, exc)
+
+    # Si déjà reconnu comme launchpad, inutile de lire l'owner (autorité = protocole).
+    if not match_launchpad(creator):
+        try:
+            owner_addr, _ = await blockscout_client.read_owner(token_address)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("mint_authority: read_owner(%s) échoué (%s)", token_address, exc)
+        if owner_addr:
+            try:
+                oinfo = await blockscout_client.get_address_info(owner_addr)
+                owner_is_contract = oinfo.is_contract if oinfo.available else None
+            except Exception as exc:  # noqa: BLE001
+                logger.info("mint_authority: owner info(%s) échoué (%s)", owner_addr, exc)
+
+    verdict = classify_authority(
+        has_mint=ctx.has_mint,
+        creator_address=creator,
+        owner_address=owner_addr,
+        owner_is_contract=owner_is_contract,
+    )
+    ctx.mint_authority = verdict.kind
+    ctx.mint_authority_detail = verdict.detail
+    ctx.launchpad = verdict.launchpad
 _QUALITY_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "acp_quality.yaml"
 
 
@@ -54,6 +160,53 @@ class TokenScanContext:
     security_score: int = 35
     lite_verdict: str = "CAUTION"
     data_source: str = "heuristic"
+    # Analyse technique (data-gated : peuplé uniquement si include_ta ET série OHLCV
+    # disponible). Sans donnée, ces champs restent inertes → comportement inchangé.
+    ta: TALevels | None = None
+    ta_entry: EntryZone | None = None
+    ta_candles: list[Candle] = field(default_factory=list)
+    ta_timeframe: str | None = None
+    # Barrières de sécurité structurées (peuplées au scan si la donnée on-chain
+    # existe ; None sinon). Exposent en clair ce que le score agrège, pour un
+    # filtre binaire strict (cf. skills/safety_screen.py). Concentration calculée
+    # HORS pool LP et adresses de burn (sinon tout token échoue à tort).
+    contract_verified: bool | None = None
+    has_mint: bool | None = None
+    has_blacklist: bool | None = None
+    has_disable_transfers: bool | None = None
+    top_holder_pct: float | None = None
+    top10_holder_pct: float | None = None
+    holders_counted: int | None = None
+    # Fondamentaux CoinGecko (peuplés seulement si include_fundamentals ET donnée
+    # disponible). Exposés en clair pour nourrir la projection ROI par comparables
+    # (Voûte 3, skills/roi_comparables.py) sans re-fetch. None → section omise.
+    market_cap_usd: float | None = None
+    fully_diluted_valuation_usd: float | None = None
+    categories: list[str] = field(default_factory=list)
+    # Autorité du contrat (résolue seulement si has_mint : un mint externe existe).
+    # Distingue un mint contrôlé par un dev (danger) d'un mint légitime (renoncé,
+    # launchpad connu, ou piloté par un contrat). Voir skills/mint_authority.py.
+    mint_authority: str | None = None  # na/renounced/launchpad/contract/eoa/unknown
+    mint_authority_detail: str = ""
+    launchpad: str | None = None  # label du launchpad si le déployeur est reconnu
+    # Profondeur de liquidité (liquidité / market cap). Peuplé si les deux sont connus
+    # (donc chemin analyse VC avec fondamentaux). Marché mince = fragile. Au cas par cas.
+    liq_mcap_ratio: float | None = None
+    # Comportement du wallet du dev (peuplé si include_dev_behavior). Signal pondéré
+    # (aligned/neutral/concern/unknown) + observations factuelles. Nourrit le jugement,
+    # ne rejette pas d'office.
+    dev_signal: str | None = None
+    dev_points: list[str] = field(default_factory=list)
+    # Sécurité dynamique GoPlus (peuplé si include_honeypot ET donnée dispo). Ce que
+    # l'ABI statique de Blockscout ne voit pas : la revente est-elle RÉELLEMENT possible,
+    # taxes réelles d'achat/vente, pouvoirs cachés. None = non scanné ou indisponible →
+    # comportement strictement inchangé (additif, data-gated).
+    is_honeypot: bool | None = None
+    cannot_sell: bool | None = None
+    buy_tax: float | None = None
+    sell_tax: float | None = None
+    hidden_owner: bool | None = None
+    can_take_back_ownership: bool | None = None
 
 
 @lru_cache(maxsize=1)
@@ -194,13 +347,21 @@ def _apply_onchain_signals(
         else:
             if holders.error:
                 flags.append(f"Blockscout (holders) : {holders.error}.")
+            # Exclut le pool LP ET les adresses de burn : elles détiennent
+            # légitimement de grosses parts (une supply brûlée n'est pas une whale).
+            # Cohérent avec _holder_concentration (sinon un token déflationniste est
+            # pénalisé/rejeté à tort).
             known_lp = (pair.pair_address or "").lower() if pair else ""
-            candidates = [h for h in holders.holders if (h.address or "").lower() != known_lp]
+            candidates = [
+                h for h in holders.holders
+                if (h.address or "").lower() != known_lp
+                and (h.address or "").lower() not in _BURN_ADDRESSES
+            ]
             top = max(candidates, key=lambda h: h.percentage or -1.0, default=None)
             if top is not None and top.percentage is not None and top.percentage > 50:
                 flags.append(
                     f"Concentration whale — top holder détient {top.percentage:.1f}% "
-                    "de la supply (hors LP connu)."
+                    "de la supply (hors LP et burn)."
                 )
                 delta -= 20
 
@@ -339,8 +500,67 @@ def _score_and_verdict(
         ctx.lite_verdict = "CAUTION"
 
 
+# Seuil informatif de taxe honeypot (GoPlus) : au-delà, la taxe est signalée comme
+# extractive dans les risk_flags. La barrière DURE (rejet du pool) vit dans safety_screen.
+_HONEYPOT_TAX_FLAG = 0.10  # 10 %
+
+
+def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
+    """Absorbe la lecture GoPlus dans le contexte — additif, jamais bloquant ici.
+
+    Peuple les champs de décision + risk_flags et ajuste le score sur les seuls signaux
+    POSITIVEMENT confirmés. Une indisponibilité (None / available=False) ne dégrade rien :
+    elle est signalée comme absence de donnée, pas comme risque (doctrine : une panne
+    réseau ne bannit pas un bon token).
+    """
+    if sec is None or not sec.available:
+        detail = (getattr(sec, "error", None) if sec else None) or ONCHAIN_UNAVAILABLE
+        ctx.risk_flags.append(f"GoPlus (honeypot/taxes) : {detail}.")
+        return
+
+    ctx.is_honeypot = sec.is_honeypot
+    ctx.cannot_sell = sec.cannot_sell_all
+    ctx.buy_tax = sec.buy_tax
+    ctx.sell_tax = sec.sell_tax
+    ctx.hidden_owner = sec.hidden_owner
+    ctx.can_take_back_ownership = sec.can_take_back_ownership
+
+    delta = 0
+    if sec.is_honeypot is True:
+        ctx.risk_flags.append("HONEYPOT confirmé (GoPlus) — revente bloquée. À éviter.")
+        delta -= 60
+    if sec.cannot_sell_all is True:
+        ctx.risk_flags.append("Vente totale impossible (GoPlus cannot_sell_all) — levier honeypot.")
+        delta -= 40
+    if sec.sell_tax is not None and sec.sell_tax >= _HONEYPOT_TAX_FLAG:
+        ctx.risk_flags.append(f"Taxe de vente élevée {sec.sell_tax * 100:.0f}% (GoPlus) — extractif.")
+        delta -= 20
+    if sec.buy_tax is not None and sec.buy_tax >= _HONEYPOT_TAX_FLAG:
+        ctx.risk_flags.append(f"Taxe d'achat élevée {sec.buy_tax * 100:.0f}% (GoPlus).")
+        delta -= 10
+    if sec.hidden_owner is True:
+        ctx.risk_flags.append("Owner caché (GoPlus hidden_owner) — pouvoir dissimulé.")
+        delta -= 20
+    if sec.can_take_back_ownership is True:
+        ctx.risk_flags.append("Reprise de propriété possible (GoPlus) — renoncement réversible.")
+        delta -= 20
+
+    if delta:
+        ctx.security_score = max(5, min(95, ctx.security_score + delta))
+    # Un honeypot / revente impossible confirmé = danger sans ambiguïté : on aligne le
+    # verdict lisible pour que l'analyse ET le filtre soient cohérents.
+    if sec.is_honeypot is True or sec.cannot_sell_all is True:
+        ctx.lite_verdict = "DANGER"
+
+
 async def scan_base_token(
-    contract: str, *, include_smart_money: bool = False, include_fundamentals: bool = False
+    contract: str,
+    *,
+    include_smart_money: bool = False,
+    include_fundamentals: bool = False,
+    include_ta: bool = False,
+    include_dev_behavior: bool = False,
+    include_honeypot: bool = False,
 ) -> TokenScanContext:
     """Fetch DexScreener + compute heuristic security score.
 
@@ -352,6 +572,11 @@ async def scan_base_token(
     `include_fundamentals` est desactive par defaut : le throttle CoinGecko
     (~2.2s/appel, tier public) ralentirait chaque scan standard. A activer
     explicitement (ex. /scan <adresse> fond).
+
+    `include_ta` est desactive par defaut : recupere la serie OHLCV du pool
+    (GeckoTerminal, throttle ~2.2s/appel) et derive niveaux + zone d'entree
+    (facts-only). Peuple ctx.ta / ctx.ta_entry / ctx.ta_candles UNIQUEMENT si une
+    serie est disponible ; sinon ces champs restent None → comportement inchange.
     """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
@@ -373,6 +598,26 @@ async def scan_base_token(
         ctx.data_source = "dexscreener"
     _score_and_verdict(ctx, ctx.best_pair, contract_flags=contract_flags, holders=holders)
 
+    # Expose en clair les barrières de sécurité (le filtre binaire les lit).
+    if contract_flags is not None and contract_flags.available:
+        ctx.contract_verified = contract_flags.is_verified
+        ctx.has_mint = contract_flags.has_mint
+        ctx.has_blacklist = contract_flags.has_blacklist
+        ctx.has_disable_transfers = contract_flags.has_disable_transfers
+    if holders is not None and holders.available:
+        lp = ctx.best_pair.pair_address if ctx.best_pair else None
+        top, top10, counted = _holder_concentration(holders, lp)
+        ctx.top_holder_pct = top
+        ctx.top10_holder_pct = top10
+        ctx.holders_counted = counted
+
+    # Autorité du mint : uniquement si un mint EXTERNE existe (rare depuis le fix ABI).
+    # Un mint légitime (renoncé, launchpad connu, contrat) ne doit pas faire rejeter un
+    # bon token ; seul un mint contrôlé par un wallet de dev est un danger. Best-effort :
+    # toute indisponibilité -> 'unknown' (prudent en aval), jamais bloquant.
+    if ctx.has_mint is True:
+        await _resolve_mint_authority(ctx, ca)
+
     if include_smart_money:
         smart_money = await analyze_smart_money(
             ca,
@@ -393,8 +638,81 @@ async def scan_base_token(
         fundamentals_delta = _apply_fundamentals_signals(fundamentals_flags, fundamentals)
         ctx.security_score = max(5, min(95, ctx.security_score + fundamentals_delta))
         ctx.risk_flags.extend(fundamentals_flags)
+        if fundamentals and fundamentals.available:
+            ctx.market_cap_usd = fundamentals.market_cap_usd
+            ctx.fully_diluted_valuation_usd = fundamentals.fully_diluted_valuation_usd
+            ctx.categories = list(fundamentals.categories or [])
+            # Profondeur de liquidité : marché mince par rapport à la valorisation ?
+            # Neutralisé sur une courbe de bonding (liquidité exponentielle, mince au
+            # départ -> le ratio n'est pas un signal de fragilité).
+            if ctx.market_cap_usd and ctx.best_pair:
+                from aria_core.skills.liquidity_depth import assess_liquidity_depth
+                from aria_core.skills.mint_authority import is_bonding_launchpad
+
+                depth = assess_liquidity_depth(
+                    ctx.best_pair.liquidity_usd,
+                    ctx.market_cap_usd,
+                    bonding_curve=is_bonding_launchpad(ctx.launchpad),
+                )
+                ctx.liq_mcap_ratio = depth.ratio
+                if depth.healthy is False:
+                    ctx.risk_flags.append(f"Liquidité : {depth.note}.")
+
+    if include_ta and ctx.best_pair and ctx.best_pair.pair_address:
+        ohlcv = await ohlcv_client.get_ohlcv(ctx.best_pair.pair_address)
+        if ohlcv.available and ohlcv.candles:
+            ctx.ta_candles = ohlcv.candles
+            ctx.ta_timeframe = ohlcv.timeframe
+            ctx.ta = compute_levels(ohlcv.candles)
+            ctx.ta_entry = suggest_entry_zone(ctx.ta)
+
+    # Comportement du wallet du dev : builder engagé vs farmer (jugement contextuel,
+    # jamais un rejet d'office). Best-effort ; toute indisponibilité -> 'unknown'.
+    if include_dev_behavior:
+        await _resolve_dev_behavior(ctx, ca)
+
+    # Sécurité dynamique (honeypot / taxes réelles / pouvoirs cachés) via GoPlus. Désactivé
+    # par défaut (un appel réseau de plus) ; activé sur le chemin d'analyse VC où une vraie
+    # décision se prend. Additif : sans donnée, ctx inchangé.
+    if include_honeypot:
+        from aria_core.services.goplus import goplus_client
+
+        sec = await goplus_client.get_token_security(ca)
+        _apply_honeypot_signals(ctx, sec)
 
     return ctx
+
+
+async def _resolve_dev_behavior(ctx: "TokenScanContext", token_address: str) -> None:
+    """Récolte + juge le comportement du wallet du déployeur. Défensif, jamais bloquant."""
+    from aria_core.skills.dev_wallet import (
+        gather_dev_wallet_facts,
+        judge_dev_wallet,
+    )
+    from aria_core.skills.mint_authority import launchpad_norms
+
+    try:
+        info = await blockscout_client.get_address_info(token_address)
+        creator = info.creator_address if info.available else None
+        if not creator:
+            ctx.dev_signal = "unknown"
+            ctx.dev_points = ["déployeur du contrat inconnu"]
+            return
+        facts = await gather_dev_wallet_facts(
+            token_address,
+            creator,
+            lp_address=ctx.best_pair.pair_address if ctx.best_pair else None,
+        )
+        norms = launchpad_norms(ctx.launchpad)
+        team_norm = norms.get("team_allocation_pct")
+        team_norm = tuple(team_norm) if isinstance(team_norm, (list, tuple)) and len(team_norm) == 2 else None
+        verdict = judge_dev_wallet(facts, launchpad_team_norm=team_norm)
+        ctx.dev_signal = verdict.signal
+        ctx.dev_points = verdict.points
+    except Exception as exc:  # noqa: BLE001 — le comportement dev est un bonus, jamais bloquant
+        logger.info("dev_behavior: analyse %s échouée (%s)", token_address, exc)
+        ctx.dev_signal = "unknown"
+        ctx.dev_points = []
 
 
 def scan_base_token_sync(contract: str) -> TokenScanContext:

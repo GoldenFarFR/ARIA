@@ -216,6 +216,19 @@ def _routing_message(message: str) -> str:
     return message
 
 
+def _acp_intent_enabled() -> bool:
+    """L'ACP (service marketplace) a été abandonné — marché en sommeil (cf. CLAUDE.md).
+
+    On ne détourne donc PLUS la conversation libre vers l'ACP par défaut : c'était la cause
+    du « elle me répond marketplace ACP » en plein milieu d'une discussion. Le code ACP et
+    ses tests restent intacts et réactivables via ARIA_ACP_ENABLED=1 (aucune suppression,
+    un simple garde d'intention). Rien d'un garde-fou financier ici.
+    """
+    import os
+
+    return os.getenv("ARIA_ACP_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def detect_intent(message: str) -> SkillName | None:
     from aria_core.operator_conversational import is_injected_factual_claim
 
@@ -223,7 +236,7 @@ def detect_intent(message: str) -> SkillName | None:
         return None
     if wants_ingest_repo(message):
         return SkillName.INGEST_REPO
-    if wants_acp_marketplace(message):
+    if _acp_intent_enabled() and wants_acp_marketplace(message):
         return SkillName.ACP_MARKETPLACE
     if wants_capability(message):
         return SkillName.CAPABILITY_QI

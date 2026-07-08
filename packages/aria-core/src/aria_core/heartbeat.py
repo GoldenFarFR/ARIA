@@ -186,6 +186,55 @@ HEARTBEAT_TASKS = [
         interval_minutes=1440,
         enabled=True,
     ),
+    HeartbeatTask(
+        id="vc_crawl",
+        name="BASE token crawl",
+        description="Decouvre les tokens Base -> filtre securite -> base propriataire",
+        interval_minutes=360,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="vc_resolve",
+        name="VC predictions resolve",
+        description="Cloture les pronostics a echeance via le prix OHLCV reel",
+        interval_minutes=1440,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="vc_weekly_forecast",
+        name="VC weekly forecast",
+        description="Tire 20 tokens du pool -> analyse -> enregistre 20 pronostics dates",
+        interval_minutes=10080,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="vc_self_report",
+        name="ARIA self report",
+        description="Digest sante & reglages -> operateur (Telegram)",
+        interval_minutes=10080,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="vc_radar_x",
+        name="Radar X social",
+        description="Ecoute sociale -> sourcing/reveil de candidats, arbitre on-chain (jamais un declencheur)",
+        interval_minutes=720,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="vc_thesis_review",
+        name="Thesis surveillance",
+        description="Repasse sur chaque position ouverte (prix + activite projet) -> alerte si stagne/casse",
+        interval_minutes=1440,
+        enabled=True,
+    ),
+    HeartbeatTask(
+        id="paper_trade_cycle",
+        name="Paper trading 1M$ (simulation)",
+        description="Applique les VRAIS rapports a un portefeuille FICTIF de 1M$ (mode trading) : ouvre/ferme des positions simulees, alertes achat/vente fictives. Preuve sur ~20 jours. Aucun argent reel, aucune signature.",
+        interval_minutes=180,
+        enabled=False,
+    ),
 ]
 
 
@@ -235,6 +284,13 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.gateway.x_twitter import is_x_post_configured
 
             task.enabled = is_x_post_configured()
+        if task.id == "paper_trade_cycle":
+            # Simulation interne 1M$ : OFF par defaut. L'operateur demarre le run de preuve
+            # (20 jours) en posant ARIA_PAPER_TRADING_ENABLED=1 dans le .env (cout LLM
+            # deliberé). Aucun argent reel, aucune surface outward-facing.
+            task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                "1", "true", "yes", "on",
+            )
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -463,6 +519,61 @@ class AriaHeartbeat:
                 if bool(getattr(settings, "aria_curriculum_notify_operator", False)):
                     await self._notify_telegram(msg)
 
+        elif task_id == "vc_crawl":
+            from aria_core.base_crawler import crawl_and_absorb
+
+            counts = await crawl_and_absorb(limit=40)
+            append_memory("vc", f"[crawl] {counts} — {counts.get('kept', 0)} gardés")
+
+        elif task_id == "vc_resolve":
+            from aria_core.weekly_training import resolve_due
+
+            summary = await resolve_due()
+            if summary.get("resolved", 0) > 0:
+                append_memory("vc", f"[resolve] {summary['resolved']} pronostics clôturés (OHLCV)")
+
+        elif task_id == "vc_weekly_forecast":
+            from aria_core.weekly_training import run_weekly_forecasts
+
+            ids = await run_weekly_forecasts(n=20)
+            append_memory("vc", f"[forecast] {len(ids)} pronostics hebdo enregistrés")
+            if ids:
+                await self._notify_telegram(
+                    f"🎯 ARIA — {len(ids)} nouveaux pronostics hebdo enregistrés (walk-forward)."
+                )
+
+        elif task_id == "vc_self_report":
+            from aria_core.weekly_training import self_report
+
+            digest = await self_report()
+            append_memory("vc", "[self_report] digest opérateur envoyé")
+            await self._notify_telegram(digest)
+
+        elif task_id == "vc_radar_x":
+            from aria_core.radar_x import run_radar
+
+            report = await run_radar(limit=40)
+            if report.get("above_threshold", 0) > 0:
+                append_memory(
+                    "vc",
+                    f"[radar] {report['above_threshold']} candidats bruyants — "
+                    f"{report.get('kept', 0)} gardés, {report.get('resurrected', 0)} réveillés",
+                )
+
+        elif task_id == "vc_thesis_review":
+            from aria_core.weekly_training import run_thesis_review
+
+            review = await run_thesis_review()
+            alerts = review.get("alerts", [])
+            if alerts:
+                append_memory("vc", f"[thesis] {len(alerts)} thèse(s) à revoir (stagne/casse)")
+                lignes = "\n".join(
+                    f"• {a['contract'][:10]} : {a['verdict']} — {a['note']}" for a in alerts[:8]
+                )
+                await self._notify_telegram(
+                    f"🔎 ARIA — {len(alerts)} thèse(s) à revoir :\n{lignes}"
+                )
+
         elif task_id == "cultivation_curriculum":
             from aria_core.knowledge.cultivation_curriculum import generate_cultivation_message
 
@@ -513,13 +624,34 @@ class AriaHeartbeat:
                 append_memory("avatar", "[visual_autonomy] en attente ancre — photo /avatar")
 
         elif task_id == "x_profile_sync":
-            from aria_core.x_profile import sync_x_profile
+            # Le module aria_core.x_profile n'est pas (encore) livré. Sans garde, l'import
+            # levait ModuleNotFoundError, sortait de la boucle de _tick AVANT la sauvegarde
+            # d'état -> la tâche restait « due » et re-crashait chaque tick, en sautant tous
+            # les jobs suivants (landmine dès que X est configuré). On dégrade proprement,
+            # comme visual_autonomy.py, en attendant que le module existe (surface X =
+            # outward-facing -> à livrer sous validation opérateur).
+            try:
+                from aria_core.x_profile import sync_x_profile
+            except ModuleNotFoundError:
+                append_memory("comms", "[x_profile] module non livré — sync X ignorée")
+                return
 
             result = await sync_x_profile()
             if result.get("synced"):
                 append_memory(
                     "comms",
                     f"[x_profile] heartbeat sync drift={result.get('drift')}",
+                )
+
+        elif task_id == "paper_trade_cycle":
+            from aria_core import paper_trader
+
+            actions = await paper_trader.run_paper_cycle(notifier=self._notify_telegram)
+            if actions.get("opened") or actions.get("closed"):
+                append_memory(
+                    "paper",
+                    f"[paper_trade] fictif 1M$ : +{len(actions.get('opened', []))} achats / "
+                    f"-{len(actions.get('closed', []))} ventes",
                 )
 
         elif task_id == "self_banner_curiosity":

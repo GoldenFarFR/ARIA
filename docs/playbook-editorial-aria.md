@@ -274,6 +274,35 @@ CTA récurrents dans les posts : « Scan it free 👉 [lien] », « Full report 
   identiques aux rapports. Émoji signature ⚖️ (le juge).
 - **Voix** : toujours la même (§2), quel que soit le canal.
 
+## 9 bis. RÈGLE PERMANENTE — zéro trace « écrit par une IA » (surfaces produit)
+
+> **Non négociable, tout le temps.** Sur tout ce que le **client LIT comme le
+> produit** (rapports d'analyse, site/vitrine, `/reports`, e-mails, réponses du
+> chat produit), **aucun caractère ne doit trahir qu'une IA rédige.** Le client
+> doit avoir l'impression d'un analyste humain.
+
+**Interdits (surfaces produit) :**
+- **Tiret cadratin `—`** (le tell typographique n°1 des LLM). Le remplacer par une
+  virgule, un point, deux-points ou des parenthèses selon la grammaire.
+- **Emoji / pictogrammes décoratifs** comme marqueurs de section ou d'icône
+  (🔒🔑🚫✍️⚖️✨🚀…). Utiliser des **icônes SVG au trait** ou du texte.
+- Tournures de robot, méta-langage (« En tant qu'IA… »), listes à puces symboliques
+  artificielles, majuscules criardes.
+
+**Autorisé (conventions humaines standard) :** coche `✓`, flèche de lien externe
+`↗`, flèche de CTA `→`, icônes SVG au trait.
+
+**Où c'est appliqué à la source (le seam) :**
+- Moteur de rapport : `vc_analysis.py` `_SYSTEM_PROMPT` règle n°5 (voix humaine,
+  pas de tiret cadratin, pas d'emoji). *Toute nouvelle génération de prose client
+  doit hériter de cette contrainte.*
+- Front client : vitrine (`vanguard/src/**`) + `vanguard/public/reports/index.html`
+  tenus propres (audit `grep` du tiret cadratin + emoji avant chaque déploiement).
+
+> ⚠️ Ne s'applique PAS aux **posts marketing X/TikTok** (§2, §9) : là, les emoji
+> crypto-Twitter et le 👉 sont un choix éditorial délibéré et assumé, pas une trace
+> accidentelle. La frontière = **produit lu (humain) vs. post social (voix de marque).**
+
 ## 10. Métriques (cap sur les 20 abonnés)
 
 Suivre : abonnés X/Telegram, scans gratuits lancés, taux scan→rapport,

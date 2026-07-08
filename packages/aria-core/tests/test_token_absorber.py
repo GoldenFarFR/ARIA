@@ -1,0 +1,86 @@
+"""Absorbeur de tokens — garder / rejeter-pour-toujours / ressusciter (DB isolée)."""
+from __future__ import annotations
+
+import pytest
+
+from aria_core import screened_pool as sp
+from aria_core import token_absorber as ta
+from aria_core.skills.acp_onchain_scan import PairSnapshot, TokenScanContext
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(sp, "DB_PATH", str(tmp_path / "absorb_test.db"))
+    yield
+
+
+def _clean_ctx(contract: str) -> TokenScanContext:
+    return TokenScanContext(
+        contract=contract, valid_address=True,
+        best_pair=PairSnapshot(pair_address="0xpool", liquidity_usd=50_000.0, base_symbol="GOOD"),
+        security_score=78, lite_verdict="SAFE",
+        contract_verified=True, has_mint=False, has_blacklist=False,
+        has_disable_transfers=False, top_holder_pct=12.0,
+    )
+
+
+def _scam_ctx(contract: str) -> TokenScanContext:
+    return TokenScanContext(
+        contract=contract, valid_address=True,
+        best_pair=PairSnapshot(pair_address="0xpool", liquidity_usd=800.0, base_symbol="RUG"),
+        security_score=20, lite_verdict="DANGER",
+        contract_verified=False, has_mint=True, top_holder_pct=80.0,
+    )
+
+
+def _scanner(ctx_by_contract):
+    async def _scan(contract, **kw):
+        return ctx_by_contract[contract]
+    return _scan
+
+
+@pytest.mark.asyncio
+async def test_real_value_is_kept():
+    scan = _scanner({"0xgood": _clean_ctx("0xgood")})
+    assert await ta.absorb("0xgood", scanner=scan) == "kept"
+    assert await sp.get_status("0xgood") == "active"
+    pool = await sp.list_pool()
+    assert pool[0]["symbol"] == "GOOD"
+    assert "screené" in (pool[0]["screen_reason"] or "")
+
+
+@pytest.mark.asyncio
+async def test_junk_is_rejected_forever():
+    scan = _scanner({"0xrug": _scam_ctx("0xrug")})
+    assert await ta.absorb("0xrug", scanner=scan) == "rejected"
+    assert await sp.get_status("0xrug") == "rejected"
+    # 2e passage : jeté pour toujours, pas re-scanné.
+    assert await ta.absorb("0xrug", scanner=scan) == "skip_rejected"
+
+
+@pytest.mark.asyncio
+async def test_active_is_not_rescanned():
+    scan = _scanner({"0xgood": _clean_ctx("0xgood")})
+    await ta.absorb("0xgood", scanner=scan)
+    assert await ta.absorb("0xgood", scanner=scan) == "skip_active"
+
+
+@pytest.mark.asyncio
+async def test_resurrection_on_signal_reevaluates():
+    # D'abord rejeté (rien) ; puis le projet reprend vie (contexte propre) + un bruit.
+    rug, good = _scam_ctx("0xtok"), _clean_ctx("0xtok")
+    assert await ta.absorb("0xtok", scanner=_scanner({"0xtok": rug})) == "rejected"
+    # Un bruit réapparaît -> résurrection -> réévaluation sur les nouveaux faits.
+    verdict = await ta.reconsider_on_signal("0xtok", scanner=_scanner({"0xtok": good}))
+    assert verdict == "kept"
+    assert await sp.get_status("0xtok") == "active"
+
+
+@pytest.mark.asyncio
+async def test_resurrection_still_rejects_if_still_junk():
+    rug = _scam_ctx("0xtok")
+    await ta.absorb("0xtok", scanner=_scanner({"0xtok": rug}))
+    # Le bruit réveille, mais les faits sont toujours mauvais -> re-rejeté.
+    verdict = await ta.reconsider_on_signal("0xtok", scanner=_scanner({"0xtok": rug}))
+    assert verdict == "rejected"
+    assert await sp.get_status("0xtok") == "rejected"

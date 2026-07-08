@@ -1,0 +1,106 @@
+# Comparables historiques par secteur — carburant de la Voûte 3 (roi_comparables).
+#
+# But : replacer un token dans l'HISTOIRE de son secteur pour donner un contexte
+# TANGIBLE ("à la capitalisation d'un comparable médian du secteur, ce token vaudrait
+# Nx"). Ce n'est JAMAIS une promesse ni une cible : le marché ne se répète pas, un
+# comparable n'est pas une prédiction. C'est un ordre de grandeur pédagogique.
+#
+# Chaque secteur liste des JALONS (milestones) = capitalisations de référence
+# atteintes par des projets réels du secteur, par ordre de grandeur. Les valeurs
+# sont APPROXIMATIVES (pics historiques, arrondis) et éditables par l'opérateur.
+# `ref_mcap_usd` = capitalisation de référence ; `label` = comment on la nomme dans
+# le rapport ; `note` = exemple/contexte tangible (facultatif, éditable).
+#
+# Le moteur ne fait qu'une arithmétique (ref / actuel = multiple). Il n'invente
+# aucun chiffre : tout vient d'ici. Sans secteur reconnu, il retombe sur `generic`.
+
+disclaimer: >-
+  Placement historique par comparables, pas une prevision ni une cible. Un
+  comparable du passe ne se reproduit pas. Aucune garantie de rendement.
+
+sectors:
+  ai-agents:
+    aliases: [ai, artificial-intelligence, agents, ai-agent, ai-meme, autonomous-agents]
+    milestones:
+      - label: "comparable median du secteur"
+        ref_mcap_usd: 30000000
+        note: "palier atteint par de nombreux agents IA credibles apres traction"
+      - label: "comparable haut du secteur"
+        ref_mcap_usd: 250000000
+        note: "reserve aux projets d'agents IA avec adoption reelle"
+      - label: "cas exceptionnel (rare)"
+        ref_mcap_usd: 1000000000
+        note: "poignee de leaders ; issue atypique, pas un scenario de base"
+
+  defi:
+    aliases: [decentralized-finance, dex, lending, yield, perpetuals, dexes]
+    milestones:
+      - label: "comparable median du secteur"
+        ref_mcap_usd: 50000000
+      - label: "comparable haut du secteur"
+        ref_mcap_usd: 400000000
+      - label: "cas exceptionnel (rare)"
+        ref_mcap_usd: 2000000000
+
+  infra:
+    aliases: [infrastructure, l2, layer-2, rollup, oracle, bridge, interoperability]
+    milestones:
+      - label: "comparable median du secteur"
+        ref_mcap_usd: 80000000
+      - label: "comparable haut du secteur"
+        ref_mcap_usd: 600000000
+      - label: "cas exceptionnel (rare)"
+        ref_mcap_usd: 3000000000
+
+  depin:
+    aliases: [depin, decentralized-physical-infrastructure, compute, storage, wireless]
+    milestones:
+      - label: "comparable median du secteur"
+        ref_mcap_usd: 60000000
+      - label: "comparable haut du secteur"
+        ref_mcap_usd: 500000000
+      - label: "cas exceptionnel (rare)"
+        ref_mcap_usd: 2500000000
+
+  gaming:
+    aliases: [gaming, gamefi, game, metaverse, play-to-earn]
+    milestones:
+      - label: "comparable median du secteur"
+        ref_mcap_usd: 40000000
+      - label: "comparable haut du secteur"
+        ref_mcap_usd: 300000000
+      - label: "cas exceptionnel (rare)"
+        ref_mcap_usd: 1500000000
+
+  memecoin:
+    aliases: [meme, memes, memecoins, dog, cat, frog]
+    milestones:
+      - label: "comparable median du secteur"
+        ref_mcap_usd: 20000000
+        note: "volatilite extreme ; la majorite retombe a zero"
+      - label: "comparable haut du secteur"
+        ref_mcap_usd: 200000000
+      - label: "cas exceptionnel (rare)"
+        ref_mcap_usd: 1000000000
+
+  rwa:
+    aliases: [rwa, real-world-assets, tokenization, tokenized-assets]
+    milestones:
+      - label: "comparable median du secteur"
+        ref_mcap_usd: 70000000
+      - label: "comparable haut du secteur"
+        ref_mcap_usd: 500000000
+      - label: "cas exceptionnel (rare)"
+        ref_mcap_usd: 3000000000
+
+  # Secteur inconnu : jalons generiques, ordres de grandeur neutres. Sert de
+  # filet ; le rapport signale que le secteur n'a pas ete reconnu.
+  generic:
+    aliases: []
+    milestones:
+      - label: "petite capitalisation etablie"
+        ref_mcap_usd: 30000000
+      - label: "capitalisation moyenne"
+        ref_mcap_usd: 200000000
+      - label: "grande capitalisation (rare)"
+        ref_mcap_usd: 1000000000

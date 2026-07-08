@@ -341,6 +341,8 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     from aria_core.skills.github_skill import github_configured, github_unlimited_access
 
     user = update.effective_user
+    import os
+    commit = (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "")[:12] or "unknown"
     hb = aria_heartbeat.get_status()
     last = hb.get("last_heartbeat")
     last_str = last.strftime("%H:%M UTC") if last else "never"
@@ -370,6 +372,7 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(
         update.message,
         f"ARIA — Status (opérateur)\n"
+        f"Build commit: {commit}\n"
         f"Your ID: {user.id if user else '?'} — admin ✅\n"
         f"Sorties (tweets/X/dépenses/jobs): {sorties}\n"
         f"Indice ARIA: {qi} / 1000 (demande en texte libre)\n"
@@ -542,13 +545,19 @@ async def _handle_x(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if sub == "profile":
-        from aria_core.x_profile import (
-            canonical_x_profile,
-            fetch_live_x_profile,
-            format_profile_summary,
-            profile_fields_differ,
-            sync_x_profile,
-        )
+        # Module x_profile pas encore livré : garde défensive pour ne pas lever
+        # ModuleNotFoundError si la commande est invoquée (parité avec le heartbeat).
+        try:
+            from aria_core.x_profile import (
+                canonical_x_profile,
+                fetch_live_x_profile,
+                format_profile_summary,
+                profile_fields_differ,
+                sync_x_profile,
+            )
+        except ModuleNotFoundError:
+            await _reply(message, "Profil X : module x_profile non livré (fonction à venir).")
+            return
 
         action = (args[1].lower() if len(args) > 1 else "status").strip()
         if action in ("preview", "cible", "target"):

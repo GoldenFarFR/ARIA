@@ -6,6 +6,7 @@ import { BrandMark } from '../components/BrandMark'
 import { AriaChat } from '../components/AriaChat'
 import { FaqSection } from '../components/FaqSection'
 import { CommunityWelcomeBanner } from '../components/CommunityWelcomeBanner'
+import { AriaWalletTeaser } from '../components/AriaWalletTeaser'
 import { OrgChart } from '../components/OrgChart'
 import { VanguardNav } from '../components/VanguardNav'
 import type { AgentSetup, HoldingStructure, RepertoireItem } from '../types'
@@ -15,7 +16,7 @@ const HOLDING = HOLDING_NAME
 const FALLBACK_MARKET: RepertoireItem = {
   id: 'market-fallback',
   name: 'Aria Market',
-  description: 'Flagship subsidiary — DEX signals, watchlist, ARIA insights',
+  description: 'Flagship subsidiary: DEX signals, watchlist, ARIA insights',
   status: 'live',
   category: 'product',
   priority: 1,
@@ -46,7 +47,7 @@ export function VanguardSite() {
 
   const oneLiner =
     setup?.one_liner ??
-    'ZHC holding operated by ARIA — building in public, one brick at a time.'
+    'ZHC holding operated by ARIA, building in public, one brick at a time.'
 
   return (
     <div className="min-h-screen vanguard-minimal text-[#d4d0c8] overflow-x-hidden">
@@ -89,6 +90,10 @@ export function VanguardSite() {
           </div>
         </section>
 
+        <section id="track-record" className="page-shell py-14 md:py-16 border-t border-[#c9a962]/8">
+          <AriaWalletTeaser />
+        </section>
+
         <section id="structure" className="page-shell py-16 md:py-20 border-t border-[#c9a962]/8">
           <OrgChart
             holdingName={holding?.holding.name ?? HOLDING}
@@ -106,7 +111,7 @@ export function VanguardSite() {
                 {setup?.identity ?? 'ARIA ZHC'}
               </h2>
               <p className="text-sm text-[#6b665c] mt-2 font-light max-w-sm">
-                {setup?.aria_title ?? 'Chief Autonomous Officer'} — ask a question or share an
+                {setup?.aria_title ?? 'Chief Autonomous Officer'}. Ask a question or share an
                 idea via the community banner.
               </p>
             </div>

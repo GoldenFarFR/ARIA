@@ -1,0 +1,100 @@
+# Pipeline de sorties d'ARIA — munitions marketing + synchro site.
+#
+# Chaque feature DEJA CONSTRUITE attend son tour de diffusion. Statut :
+#   built     -> prete, pas encore annoncee (dormante)
+#   announced -> ARIA vient de l'annoncer (X/Telegram) ce jour-la
+#   live      -> visible et active sur le site
+#
+# Flux : ARIA annonce (built -> announced) puis active (announced -> live). Le site lit
+# ce manifeste et reflete le statut AUTOMATIQUEMENT : la roadmap de la vitrine reste
+# synchro avec les annonces, sans mise a jour manuelle.
+#
+# `pitch` = texte d'annonce pret a diffuser (voix humaine, zero trace IA : pas d'em-dash,
+# pas d'emoji). `blurb` = phrase courte affichee sur le site. Editables par l'operateur.
+# ORDRE = ordre de diffusion suggere (2 par semaine pendant la campagne).
+
+# Phase 0 — TEASER (1 a 2 semaines avant le reveal). ARIA chauffe le terrain en mode
+# "on construit quelque chose" : du FOMO honnete (building in public), zero promesse,
+# zero chiffre invente. On distille un teaser tous les 1-2 jours pour installer l'attente.
+# Voix humaine, zero trace IA (pas d'em-dash, pas d'emoji).
+teasers:
+  - "Quelque chose se construit sur Base. En silence. Une brique a la fois."
+  - "On ne lance pas un token. On construit un track record. La difference change tout."
+  - "Une analyste qui dit NON plus souvent qu'elle ne dit OUI. Bientot."
+  - "La face cachee de l'on-chain. Bientot vous verrez ce qu'elle voit."
+  - "Pas de hype. Pas de promesse. De la preuve, construite en public."
+  - "Elle lit le contrat, le wallet du dev, le vrai marche derriere le bruit. Patience."
+  - "La fondation d'abord. Ensuite, vous decidez. Bientot le reveal."
+
+releases:
+  - id: legitimacy-engine
+    title: "Moteur de legitimite"
+    status: built
+    blurb: "Chaque drapeau brut devient un jugement de contexte : un mint, une baleine, une liquidite ne se lisent pas betement."
+    pitch: "La plupart des outils lisent un drapeau et tranchent. ARIA lit le contexte derriere. Un mint controle par un launchpad n'est pas un mint controle par un dev. Une grosse adresse peut etre un burn. On vous explique pourquoi, pas juste oui ou non."
+
+  - id: dev-wallet
+    title: "Analyse du wallet du dev"
+    status: built
+    blurb: "Builder engage ou farmer ? ARIA lit le comportement on-chain du deployeur : detient-il, a-t-il achete, a-t-il vendu."
+    pitch: "Un fondateur qui met son propre argent n'a pas le meme engagement qu'un dev qui s'auto-alloue et revend. ARIA regarde le wallet du deployeur et vous dit lequel vous avez en face. Au cas par cas, jamais un verdict aveugle."
+
+  - id: transparency-recalibrate
+    title: "Transparence exigee"
+    status: built
+    blurb: "Pas de transparence, pas de confiance. En cas de doute, ARIA le dit au lieu de deviner."
+    pitch: "Un token opaque n'obtient pas un feu vert par defaut. Quand ARIA ne peut pas verifier, elle le signale plutot que d'inventer. La transparence totale est une condition, pas une option."
+
+  - id: track-record
+    title: "Track-record public"
+    status: built
+    blurb: "Le portefeuille suivi d'ARIA, en direct. Chaque verdict horodate, rien caché."
+    pitch: "On ne vous demande pas de nous croire. Le portefeuille suivi d'ARIA est public, en direct, avec chaque decision datee. La preuve avant la promesse."
+
+  - id: journal
+    title: "Carnet de bord"
+    status: built
+    blurb: "Chaque analyse consignee : these, graphique annote, points d'entree et de sortie."
+    pitch: "Pour chaque position, ARIA ecrit sa these, capture le graphique avec les points d'entree et de sortie, et garde tout. Vous voyez le raisonnement complet, pas juste la conclusion."
+
+  - id: thesis-surveillance
+    title: "Surveillance des theses"
+    status: built
+    blurb: "Apres l'entree, ARIA verifie si le projet livre encore ou s'il stagne."
+    pitch: "Investir n'est pas oublier. ARIA repasse sur chaque position et verifie si le projet continue de livrer ou s'il s'est eteint. Si la these se casse, vous etes prevenu."
+
+  - id: technical-analysis
+    title: "Analyse technique + graphique"
+    status: built
+    blurb: "Niveaux derives de vraies bougies, jamais inventes. Entree et sortie justifiees."
+    pitch: "Chaque niveau vient des vraies donnees du marche, pas d'une intuition. Support, resistance, zone d'entree : tout est derive du graphique reel et affiche dans le rapport."
+
+  - id: roi-comparables
+    title: "Projection par comparables"
+    status: built
+    blurb: "Un token replace dans l'histoire de son secteur. Contexte tangible, jamais une promesse."
+    pitch: "A la capitalisation d'un comparable etabli du secteur, ce token vaudrait combien ? ARIA le calcule pour donner un ordre de grandeur concret. C'est un repere historique, pas une cible."
+
+  - id: radar-x
+    title: "Radar social"
+    status: built
+    blurb: "ARIA ecoute le bruit social pour reperer des candidats, puis l'on-chain arbitre."
+    pitch: "Le buzz social sert a reperer, jamais a decider. ARIA ecoute, filtre les fermes de bots, puis l'analyse on-chain tranche. Le social source, les faits decident."
+
+  - id: launchpad-aware
+    title: "Reconnaissance des launchpads"
+    status: built
+    blurb: "Virtuals, Flaunch, Clanker, Zora : ARIA connait leurs regles et juge en contexte."
+    pitch: "Un token Virtuals en bonding ne se juge pas comme un token etabli. ARIA connait les normes de chaque launchpad et adapte son analyse, au lieu d'appliquer un seuil unique a tout le monde."
+
+  - id: liquidity-depth
+    title: "Profondeur de liquidite"
+    status: built
+    blurb: "Un marche trop mince pour sa valorisation est fragile. ARIA le detecte."
+    pitch: "Cent mille de capitalisation avec vingt mille de liquidite, c'est un marche fragile. ARIA mesure ce rapport et vous avertit quand le marche est trop mince pour sa taille."
+
+  - id: hunting-ground
+    title: "Terrain de chasse cible"
+    status: built
+    blurb: "ARIA ne scanne pas la benne des lancements frais : elle chasse la ou vivent les vrais builders."
+    pitch: "Les pepites ne sont pas dans la benne des lancements ephemeres. ARIA cible les tokens etablis avec une vraie profondeur, et la niche des vrais builders qui se cachent."

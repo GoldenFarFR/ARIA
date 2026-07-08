@@ -132,6 +132,37 @@ async def get_chat_history(request: Request, limit: int = 50):
     return await repertoire_db.get_messages(limit, visitor_id=visitor_id)
 
 
+@router.get("/track-record")
+async def track_record():
+    """Track-record PUBLIC (teaser FOMO) : valeur du wallet suivi + calibration synthétique.
+
+    Chiffres agrégés seulement — le détail des positions et les hashes de verdict sont
+    réservés aux abonnés (endpoint gaté à venir). Facts-only : si rien n'est encore
+    valorisé, l'indice vaut 100 (+0 %), jamais un chiffre gonflé.
+    """
+    from aria_core import screened_pool, vc_predictions
+
+    wallet = await vc_predictions.live_wallet()
+    m = await vc_predictions.metrics()
+    pool = await screened_pool.count_pool("active")
+    return {
+        "wallet_index": wallet["index"],
+        "wallet_return_pct": wallet["total_return_pct"],
+        "vc_return_pct": wallet["vc_return_pct"],
+        "spec_return_pct": wallet["spec_return_pct"],
+        "positions": wallet["positions_valued"],
+        "verdicts_total": m["total"],
+        "verdicts_closed": m["closed"],
+        "hit_rate": m["hit_rate"],
+        "avoid_count": m.get("avoid_count", 0),
+        "pool_active": pool,
+        "disclaimer": (
+            "Track-record de suivi (paper) valorisé aux prix on-chain réels. "
+            "Informationnel, pas un conseil. Aucun rendement garanti."
+        ),
+    }
+
+
 @router.get("/repertoire", response_model=list[RepertoireItem])
 async def list_repertoire():
     return await repertoire_db.get_all()
