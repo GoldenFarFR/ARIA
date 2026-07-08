@@ -94,15 +94,25 @@ def _route_for_provider(provider: str, model: str) -> LlmRoute | None:
 
 
 def _fallback_route(primary_model: str) -> LlmRoute | None:
+    """Route de secours dédiée (`llm_fallback_*`) — ne doit JAMAIS dépendre de
+    `llm_api_key` (la clé générique du provider primaire). Bug corrigé (audit 08/07) :
+    en passant par `_route_for_provider`, le fallback exigeait `llm_api_key` non-vide
+    AVANT de substituer `fb_key`, donc un fallback configuré avec SEULEMENT
+    `llm_fallback_api_key` (l'usage prévu) ne se déclenchait jamais silencieusement."""
     fb_provider = _setting_str("llm_fallback_provider")
     fb_key = _setting_str("llm_fallback_api_key")
     if not fb_provider or not fb_key:
         return None
-    fb_model = _resolve_model(fb_provider, _setting_str("llm_fallback_model"))
-    route = _route_for_provider(fb_provider, fb_model or primary_model)
-    if not route:
+    p = fb_provider.lower()
+    url = PROVIDER_URLS.get(p)
+    if not url:
         return None
-    return LlmRoute(route.provider, route.url, route.model, fb_key)
+    fb_model = (
+        _resolve_model(p, _setting_str("llm_fallback_model"))
+        or primary_model
+        or DEFAULT_MODELS.get(p, "grok-3-mini")
+    )
+    return LlmRoute(p, url, fb_model, fb_key)
 
 
 def _resolve_routes(model: str | None = None, *, require_llm_enabled: bool = False) -> list[LlmRoute]:

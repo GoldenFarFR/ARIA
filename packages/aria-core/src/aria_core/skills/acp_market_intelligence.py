@@ -10,7 +10,7 @@ from typing import Any
 
 from aria_core.memory import append_memory
 from aria_core.paths import memory_dir
-from aria_core.skills.acp_cli import browse_agents, is_acp_available, list_offerings
+from aria_core.skills import acp_cli
 from aria_core.skills.acp_offering_skill import load_offering_templates
 from aria_core.skills.acp_schema import get_acp_strict_rules
 
@@ -125,7 +125,7 @@ async def execute_acp_leaderboard(message: str, lang: str = "fr") -> tuple[str, 
     lang_key = "fr" if lang == "fr" else "en"
     aria_id = _aria_agent_id()
 
-    if not is_acp_available():
+    if not acp_cli.is_acp_available():
         msg = (
             "Leaderboard ACP : acp-cli indisponible (PATH ou login)."
             if lang_key == "fr"
@@ -133,7 +133,7 @@ async def execute_acp_leaderboard(message: str, lang: str = "fr") -> tuple[str, 
         )
         return msg, {"acp": "leaderboard_unavailable"}
 
-    agents, err = browse_agents("")
+    agents, err = acp_cli.browse_agents("")
     if err:
         msg = (
             f"Leaderboard ACP : browse en erreur — {err[:220]}"
@@ -276,7 +276,7 @@ def _aggregate_market(agents: list[dict]) -> dict[str, Any]:
 
 
 def _our_offering_names() -> set[str]:
-    ours, _ = list_offerings()
+    ours, _ = acp_cli.list_offerings()
     names = {str(o.get("name", "")).lower() for o in ours or [] if o.get("name")}
     if names:
         return names
@@ -319,7 +319,7 @@ def _gap_analysis(market: dict[str, Any], lang: str) -> list[str]:
 
 
 async def run_market_scan(*, use_cache_on_fail: bool = True) -> dict[str, Any]:
-    if not is_acp_available():
+    if not acp_cli.is_acp_available():
         return {"ok": False, "error": "no_cli", "agents": []}
 
     seen: dict[str, dict] = {}
@@ -327,7 +327,7 @@ async def run_market_scan(*, use_cache_on_fail: bool = True) -> dict[str, Any]:
 
     fail_streak = 0
     for query in _SCAN_QUERIES:
-        rows, err = browse_agents(
+        rows, err = acp_cli.browse_agents(
             query, top_k=8, sort_by="successfulJobCount", mode="mixed", timeout=12
         )
         if err:

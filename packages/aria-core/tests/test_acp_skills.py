@@ -219,9 +219,9 @@ def test_parse_adhoc_workflow():
 @pytest.mark.asyncio
 async def test_adhoc_workflow_create(monkeypatch):
     monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
-    monkeypatch.setattr(acp_offering_skill, "list_offerings", lambda: ([], None))
+    monkeypatch.setattr(acp_cli, "list_offerings", lambda: ([], None))
     monkeypatch.setattr(
-        acp_offering_skill,
+        acp_cli,
         "create_offering",
         lambda **kwargs: (
             {"id": "new-1", "name": kwargs["name"], "priceValue": kwargs["price_value"]},
@@ -297,12 +297,12 @@ def test_wants_acp_marketplace_delete_without_acp_keyword():
 async def test_acp_offering_delete(monkeypatch):
     monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
     monkeypatch.setattr(
-        acp_offering_skill,
+        acp_cli,
         "list_offerings",
         lambda: ([{"id": "oid-del", "name": "test_1"}], None),
     )
     monkeypatch.setattr(
-        acp_offering_skill,
+        acp_cli,
         "delete_offering",
         lambda offering_id, **kwargs: (offering_id == "oid-del", "deleted"),
     )
@@ -317,7 +317,7 @@ async def test_acp_offering_delete(monkeypatch):
 async def test_acp_offering_delete_all(monkeypatch):
     monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
     monkeypatch.setattr(
-        acp_offering_skill,
+        acp_cli,
         "list_offerings",
         lambda: (
             [
@@ -333,7 +333,7 @@ async def test_acp_offering_delete_all(monkeypatch):
         deleted.append(offering_id)
         return offering_id in ("a1", "a2"), "ok"
 
-    monkeypatch.setattr(acp_offering_skill, "delete_offering", fake_delete)
+    monkeypatch.setattr(acp_cli, "delete_offering", fake_delete)
     reply, data = await execute_acp_marketplace("supprime tous les workflow sur acp", lang="fr")
     assert data.get("acp") == "offering_delete_all"
     assert set(deleted) == {"a1", "a2"}
@@ -343,7 +343,7 @@ async def test_acp_offering_delete_all(monkeypatch):
 @pytest.mark.asyncio
 async def test_acp_offering_delete_not_found(monkeypatch):
     monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
-    monkeypatch.setattr(acp_offering_skill, "list_offerings", lambda: ([], None))
+    monkeypatch.setattr(acp_cli, "list_offerings", lambda: ([], None))
     reply, data = await execute_acp_marketplace("supprime le workflow ghost_1", lang="fr")
     assert data.get("acp") == "offering_delete_not_found"
 
@@ -557,9 +557,9 @@ async def test_acp_offering_create_missing_template(monkeypatch):
 @pytest.mark.asyncio
 async def test_acp_offering_create_new(monkeypatch):
     monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
-    monkeypatch.setattr(acp_offering_skill, "list_offerings", lambda: ([], None))
+    monkeypatch.setattr(acp_cli, "list_offerings", lambda: ([], None))
     monkeypatch.setattr(
-        acp_offering_skill,
+        acp_cli,
         "create_offering",
         lambda **kwargs: (
             {"id": "off-1", "name": kwargs["name"], "priceValue": kwargs["price_value"]},
@@ -579,12 +579,12 @@ async def test_acp_offering_create_new(monkeypatch):
 async def test_acp_offering_create_updates_existing(monkeypatch):
     monkeypatch.setattr(acp_cli, "is_acp_available", lambda: True)
     monkeypatch.setattr(
-        acp_offering_skill,
+        acp_cli,
         "list_offerings",
         lambda: ([{"id": "existing-id", "name": "analyse_lite_x1"}], None),
     )
     monkeypatch.setattr(
-        acp_offering_skill,
+        acp_cli,
         "update_offering",
         lambda offering_id, **kwargs: (
             {"id": offering_id, "name": "analyse_lite_x1", "priceValue": kwargs["price_value"]},

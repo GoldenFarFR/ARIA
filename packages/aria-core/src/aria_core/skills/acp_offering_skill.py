@@ -10,14 +10,7 @@ from typing import Any
 
 import yaml
 
-from aria_core.skills.acp_cli import (
-    create_offering,
-    delete_offering,
-    is_acp_available,
-    list_offerings,
-    list_subscriptions,
-    update_offering,
-)
+from aria_core.skills import acp_cli
 from aria_core.skills.acp_schema import enrich_json_schema, get_acp_strict_rules
 
 _TEMPLATES_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "acp_offerings.yaml"
@@ -114,7 +107,7 @@ def resolve_subscription_ids(*, attach_full_access: bool = True) -> str:
             sid = str(full.get("id") or "").strip()
             if sid:
                 return sid
-    rows, _ = list_subscriptions()
+    rows, _ = acp_cli.list_subscriptions()
     for row in rows or []:
         name = str(row.get("name") or "").strip().lower()
         if name == "aria_full_access":
@@ -646,10 +639,10 @@ async def format_templates_help(lang: str) -> tuple[str, dict]:
 async def execute_offering_delete_all(message: str, lang: str) -> tuple[str, dict]:
     """Supprime toutes les offres ACP de l'agent actif."""
     lang_key = "fr" if lang == "fr" else "en"
-    if not is_acp_available():
+    if not acp_cli.is_acp_available():
         return "ACP — acp-cli introuvable.", {"acp": "no_cli"}
 
-    existing, err_list = list_offerings()
+    existing, err_list = acp_cli.list_offerings()
     if err_list:
         return f"Liste offerings : {err_list[:200]}", {"acp": "offering_delete_all_list_error"}
 
@@ -667,7 +660,7 @@ async def execute_offering_delete_all(message: str, lang: str) -> tuple[str, dic
         if not oid:
             errors.append(f"• {name} — pas d'ID")
             continue
-        ok, detail = delete_offering(oid)
+        ok, detail = acp_cli.delete_offering(oid)
         if ok:
             deleted.append(name)
             lines.append(f"• {name} — supprimé")
@@ -692,7 +685,7 @@ async def execute_offering_delete_all(message: str, lang: str) -> tuple[str, dic
 async def execute_offering_delete(message: str, lang: str) -> tuple[str, dict]:
     """Supprime une offre ACP par nom — appel acp-cli réel."""
     lang_key = "fr" if lang == "fr" else "en"
-    if not is_acp_available():
+    if not acp_cli.is_acp_available():
         return "ACP — acp-cli introuvable.", {"acp": "no_cli"}
 
     if wants_acp_offering_delete_all(message):
@@ -708,7 +701,7 @@ async def execute_offering_delete(message: str, lang: str) -> tuple[str, dict]:
             )
         return "Specify workflow name to delete.", {"acp": "offering_delete_parse_failed"}
 
-    existing, err_list = list_offerings()
+    existing, err_list = acp_cli.list_offerings()
     if err_list:
         return f"Liste offerings : {err_list[:200]}", {"acp": "offering_delete_list_error"}
 
@@ -725,7 +718,7 @@ async def execute_offering_delete(message: str, lang: str) -> tuple[str, dict]:
     if not offering_id:
         return "Offre sans ID — suppression impossible.", {"acp": "offering_delete_no_id", "name": name}
 
-    ok, detail = delete_offering(offering_id)
+    ok, detail = acp_cli.delete_offering(offering_id)
     if not ok:
         return (detail or "échec")[:300], {
             "acp": "offering_delete_error",
@@ -748,7 +741,7 @@ async def execute_offering_delete(message: str, lang: str) -> tuple[str, dict]:
 async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, dict]:
     """Crée un workflow ACP depuis langage naturel — réponse courte."""
     lang_key = "fr" if lang == "fr" else "en"
-    if not is_acp_available():
+    if not acp_cli.is_acp_available():
         return "ACP — acp-cli introuvable.", {"acp": "no_cli"}
 
     spec = parse_adhoc_workflow(message)
@@ -763,7 +756,7 @@ async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, d
 
     payload = build_adhoc_payload(spec)
     kind = str(payload.pop("service_kind", "generic"))
-    existing, err_list = list_offerings()
+    existing, err_list = acp_cli.list_offerings()
     if err_list:
         return f"Erreur listings : {err_list[:120]}", {"acp": "adhoc_list_error"}
 
@@ -772,7 +765,7 @@ async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, d
         oid = str(hit.get("id") or "")
         if not oid:
             return "Offre existante sans ID.", {"acp": "adhoc_error"}
-        row, err = update_offering(
+        row, err = acp_cli.update_offering(
             oid,
             description=payload["description"],
             price_value=payload["price_value"],
@@ -783,7 +776,7 @@ async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, d
         )
         action = "mis à jour" if lang_key == "fr" else "updated"
     else:
-        row, err = create_offering(**payload)
+        row, err = acp_cli.create_offering(**payload)
         action = "créé" if lang_key == "fr" else "created"
 
     if err or not row:
@@ -839,7 +832,7 @@ async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, d
 
 async def execute_offering_create(message: str, lang: str) -> tuple[str, dict]:
     lang_key = "fr" if lang == "fr" else "en"
-    if not is_acp_available():
+    if not acp_cli.is_acp_available():
         msg = (
             "ACP — acp-cli introuvable (npm i -g @virtuals-protocol/acp-cli)."
             if lang_key == "fr"
@@ -878,7 +871,7 @@ async def execute_offering_create(message: str, lang: str) -> tuple[str, dict]:
     except ValueError as exc:
         return str(exc), {"acp": "offering_create_invalid_template"}
 
-    existing, err_list = list_offerings()
+    existing, err_list = acp_cli.list_offerings()
     if err_list:
         return f"Liste offerings : {err_list[:200]}", {"acp": "offering_create_list_error"}
 
@@ -892,7 +885,7 @@ async def execute_offering_create(message: str, lang: str) -> tuple[str, dict]:
                     {"acp": "offering_exists"},
                 )
             return f"Offering {payload['name']} already exists.", {"acp": "offering_exists"}
-        row, err = update_offering(
+        row, err = acp_cli.update_offering(
             offering_id,
             description=payload["description"],
             price_value=payload["price_value"],
@@ -903,7 +896,7 @@ async def execute_offering_create(message: str, lang: str) -> tuple[str, dict]:
         )
         action = "update"
     else:
-        row, err = create_offering(**payload)
+        row, err = acp_cli.create_offering(**payload)
         action = "create"
 
     if err or not row:
