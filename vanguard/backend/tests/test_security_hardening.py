@@ -17,6 +17,16 @@ from app.database import init_db
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def _reset_totp_throttle():
+    """L'état anti-force-brute est au niveau module : on le remet à zéro entre chaque test."""
+    import aria_core.public_mode as pm
+
+    pm._TOTP_FAILS.clear()
+    yield
+    pm._TOTP_FAILS.clear()
+
+
 @pytest.fixture
 async def client(tmp_path, monkeypatch):
     dexpulse_db = tmp_path / "dexpulse.db"
@@ -88,11 +98,72 @@ async def test_operator_secret_in_query_string_rejected(client, monkeypatch):
 @pytest.mark.asyncio
 async def test_operator_secret_in_header_accepted(client, monkeypatch):
     monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    monkeypatch.delenv("ADMIN_TOTP_SECRET", raising=False)  # 2FA OFF => secret seul
     res = await client.get(
         "/api/aria/directives",
         headers={"X-Admin-Secret": "s3cr3t"},
     )
     assert res.status_code == 200
+
+
+# ── 2bis. 2FA opérateur (TOTP) — opt-in via ADMIN_TOTP_SECRET ──────────────────
+
+@pytest.mark.asyncio
+async def test_operator_2fa_requires_totp_when_enabled(client, monkeypatch):
+    """Avec ADMIN_TOTP_SECRET défini, le secret admin SEUL ne suffit plus."""
+    from aria_core.admin_totp import generate_secret
+
+    monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    monkeypatch.setenv("ADMIN_TOTP_SECRET", generate_secret())
+    res = await client.get("/api/aria/directives", headers={"X-Admin-Secret": "s3cr3t"})
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_operator_2fa_accepts_secret_plus_valid_code(client, monkeypatch):
+    """Secret admin + code TOTP valide => accès opérateur ; code faux => refus."""
+    from aria_core.admin_totp import generate_secret, totp_code
+
+    totp_secret = generate_secret()
+    monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    monkeypatch.setenv("ADMIN_TOTP_SECRET", totp_secret)
+
+    ok = await client.get(
+        "/api/aria/directives",
+        headers={"X-Admin-Secret": "s3cr3t", "X-Admin-Totp": totp_code(totp_secret)},
+    )
+    assert ok.status_code == 200
+
+    bad = await client.get(
+        "/api/aria/directives",
+        headers={"X-Admin-Secret": "s3cr3t", "X-Admin-Totp": "000000"},
+    )
+    assert bad.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_operator_2fa_bruteforce_lockout(client, monkeypatch):
+    """Au-delà du seuil d'échecs TOTP, l'IP est verrouillée — même un code correct est refusé."""
+    from aria_core.admin_totp import generate_secret, totp_code
+    import aria_core.public_mode as pm
+
+    totp_secret = generate_secret()
+    monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    monkeypatch.setenv("ADMIN_TOTP_SECRET", totp_secret)
+
+    for _ in range(pm._TOTP_MAX_FAILS):
+        r = await client.get(
+            "/api/aria/directives",
+            headers={"X-Admin-Secret": "s3cr3t", "X-Admin-Totp": "000000"},
+        )
+        assert r.status_code == 403
+
+    # IP verrouillée : un code VALIDE est désormais refusé le temps de la fenêtre.
+    locked = await client.get(
+        "/api/aria/directives",
+        headers={"X-Admin-Secret": "s3cr3t", "X-Admin-Totp": totp_code(totp_secret)},
+    )
+    assert locked.status_code == 403
 
 
 # ── 3. Anti-usurpation via `handle` sur le endpoint public ────────────────────

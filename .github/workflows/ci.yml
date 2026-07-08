@@ -62,4 +62,5 @@ jobs:
             tests/test_goplus.py \
             tests/test_candidate_ranking.py \
             tests/test_paper_trader.py \
+            tests/test_admin_totp.py \
             tests/test_coherence.py

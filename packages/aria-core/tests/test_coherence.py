@@ -218,6 +218,20 @@ def test_uvicorn_proxy_headers_enabled():
     )
 
 
+def test_operator_2fa_totp_wired():
+    """2FA opérateur : module TOTP présent, is_operator_request TOTP-aware + anti-force-brute,
+    et le middleware passe par cette source unique."""
+    assert (CORE / "admin_totp.py").is_file(), "module admin_totp.py manquant (TOTP opérateur)"
+    pm = _read_core("public_mode.py")
+    assert "ADMIN_TOTP_SECRET" in pm, "is_operator_request n'intègre plus le second facteur TOTP"
+    assert "verify_totp" in pm, "public_mode ne vérifie plus le code TOTP"
+    assert "_TOTP_MAX_FAILS" in pm, "le verrou anti-force-brute du TOTP a disparu"
+    mw = _read("vanguard/backend/app/auth/middleware.py")
+    assert "is_operator_request" in mw, (
+        "le middleware ne route plus le bypass opérateur via is_operator_request (2FA contournable)."
+    )
+
+
 def test_site_login_google_and_2fa_wired():
     """Site : Google dans les méthodes Privy + bouton 2FA (enrôlement MFA Privy) câblés."""
     cfg = _read("vanguard/src/lib/privy-config.ts")
