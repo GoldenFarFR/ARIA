@@ -43,6 +43,23 @@ else
   reco="🟢 Sonnet xhigh (🔴 Opus si wallet/sécu)"
 fi
 
+# --- Checkpoint session (compteur de messages tous les 20) -----------------
+# Affiche l'approche du prochain checkpoint auto (« chk NN/20 ») pour que l'opérateur
+# le voie venir ; le hook UserPromptSubmit injecte le rappel pile au 20e.
+chk=""
+cf="${dir}/.claude/.msg-counter"
+if [ -f "$cf" ]; then
+  cn=$(cat "$cf" 2>/dev/null)
+  case "$cn" in
+    ''|*[!0-9]*) cn="" ;;
+  esac
+  if [ -n "$cn" ]; then
+    pos=$(( cn % 20 ))
+    [ "$pos" -eq 0 ] && pos=20
+    chk="📌 chk ${pos}/20 · "
+  fi
+fi
+
 # --- Progression du setup (hook asynchrone) --------------------------------
 # Affiche l'avancement de l'installation de l'environnement (venv + deps) tant qu'elle
 # tourne en arrière-plan, puis disparaît quand c'est prêt.
@@ -58,7 +75,7 @@ if [ -f "$sf" ]; then
 fi
 
 # --- Construction de la ligne ----------------------------------------------
-line="${setup}⚡ ${model} · ctx ${ctx_int:-0}% (${tok_k}k tok)"
+line="${chk}${setup}⚡ ${model} · ctx ${ctx_int:-0}% (${tok_k}k tok)"
 line="${line} · \$$(printf '%.2f' "$cost")"
 [ -n "$h5_int" ] && line="${line} · 5h ${h5_int}%"
 [ -n "$d7_int" ] && line="${line} · 7j ${d7_int}%"

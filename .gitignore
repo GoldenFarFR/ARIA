@@ -14,6 +14,8 @@ bot/venv/
 
 # État runtime du hook de démarrage (progression du setup)
 .claude/.setup-status
+# Compteur de messages (checkpoint auto de session tous les 20)
+.claude/.msg-counter
 
 # IDE / OS
 .idea/
