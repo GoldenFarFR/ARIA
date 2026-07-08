@@ -41,4 +41,50 @@ Ne laisse pas ce rappel remplacer la réponse à sa demande.
 EOF
 fi
 
+# ── Rappel de DÉPLOIEMENT VPS (déclenché par la taille du delta non déployé) ──────────
+# Mesure les lignes changées (ajoutées + supprimées) sur `main` depuis le dernier
+# déploiement (marqueur .claude/last-deployed-ref, SUIVI par git). Au-delà du seuil, on
+# rappelle de déployer manuellement. Throttle : un rappel par nouvel état de main (pas à
+# chaque message). L'écriture .undeployed-lines alimente la barre de statut.
+DEPLOY_THRESHOLD=2500
+REF_FILE="$ROOT/.claude/last-deployed-ref"
+REMINDED="$ROOT/.claude/.deploy-reminded-ref"
+UNDEPLOYED="$ROOT/.claude/.undeployed-lines"
+
+if command -v git >/dev/null 2>&1 && [ -f "$REF_FILE" ]; then
+  ( cd "$ROOT" 2>/dev/null || exit 0
+    ref=$(tr -d '[:space:]' < "$REF_FILE" 2>/dev/null)
+    target=$(git rev-parse main 2>/dev/null || git rev-parse HEAD 2>/dev/null)
+    [ -z "$ref" ] && exit 0
+    [ -z "$target" ] && exit 0
+    git cat-file -e "${ref}^{commit}" 2>/dev/null || exit 0
+
+    shortstat=$(git diff --shortstat "$ref" "$target" 2>/dev/null)
+    ins=$(printf '%s' "$shortstat" | grep -oE '[0-9]+ insertion' | grep -oE '^[0-9]+' || true)
+    del=$(printf '%s' "$shortstat" | grep -oE '[0-9]+ deletion' | grep -oE '^[0-9]+' || true)
+    total=$(( ${ins:-0} + ${del:-0} ))
+    printf '%s\n' "$total" > "$UNDEPLOYED" 2>/dev/null || true
+
+    last=""
+    [ -f "$REMINDED" ] && last=$(tr -d '[:space:]' < "$REMINDED" 2>/dev/null || true)
+    if [ "$total" -ge "$DEPLOY_THRESHOLD" ] && [ "$target" != "$last" ]; then
+      printf '%s\n' "$target" > "$REMINDED" 2>/dev/null || true
+      shortref=$(git rev-parse --short=12 "$ref" 2>/dev/null || printf '%s' "$ref")
+      cat <<EOF
+🚀 DÉPLOIEMENT VPS conseillé — $total lignes non déployées (seuil $DEPLOY_THRESHOLD) depuis
+le dernier déploiement ($shortref). Propose à l'opérateur de déployer sur le VPS, et
+DONNE-LUI TOUTES LES COMMANDES À COPIER-COLLER (il est non-dev) :
+  1. Se placer sur main : git checkout main && git status
+  2. Vérifier le secret webhook : grep TELEGRAM_WEBHOOK_SECRET vanguard/backend/.env
+     (si absent : echo "TELEGRAM_WEBHOOK_SECRET=\$(openssl rand -hex 32)" >> vanguard/backend/.env)
+  3. Déployer : ./vanguard/deploy.sh   (fait git pull + build + rollback + health check)
+  4. Vérifier la sortie /api/health et que le bot Telegram répond.
+Quand il CONFIRME le déploiement : mets .claude/last-deployed-ref = commit déployé
+(git rev-parse main), puis commit + push sur main (ça remet le compteur à zéro).
+Ne laisse pas ce rappel remplacer la réponse à sa demande.
+EOF
+    fi
+  )
+fi
+
 exit 0
