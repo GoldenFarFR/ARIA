@@ -42,9 +42,24 @@ def _exec_trade_tokens(payload: dict[str, Any]) -> tuple[dict | None, str | None
     )
 
 
+def _exec_onchain_anchor_sepolia(payload: dict[str, Any]) -> tuple[dict | None, str | None]:
+    from aria_core.onchain.sepolia_wallet import send_anchor_transaction
+
+    try:
+        tx_hash = send_anchor_transaction(
+            contract=payload["contract"],
+            root=payload["root"],
+            chain_id=payload["chain_id"],
+        )
+    except Exception as exc:  # noqa: BLE001 — une transaction ratée doit remonter, pas crasher
+        return None, str(exc)
+    return {"tx_hash": tx_hash}, None
+
+
 WALLET_ACTIONS: dict[str, Callable[[dict[str, Any]], tuple[dict | None, str | None]]] = {
     "client_fund_job": _exec_client_fund_job,
     "trade_tokens": _exec_trade_tokens,
+    "onchain_anchor_sepolia": _exec_onchain_anchor_sepolia,
 }
 
 

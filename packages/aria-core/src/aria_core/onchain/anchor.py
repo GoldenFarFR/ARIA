@@ -40,7 +40,7 @@ def anchor_enabled() -> bool:
     )
 
 
-def _ledger_address() -> str:
+def ledger_address() -> str:
     """Adresse du contrat AriaLedger déployé (publique, jamais une clé)."""
     return (os.environ.get("ARIA_LEDGER_ADDRESS", "") or "").strip()
 
@@ -90,7 +90,7 @@ def build_anchor_request(records: list[dict[str, Any]]) -> AnchorRequest | None:
     n'y a rien à ancrer. Ne signe rien, n'émet aucun appel réseau."""
     if not anchor_enabled():
         return None
-    contract = _ledger_address()
+    contract = ledger_address()
     if not contract or not records:
         return None
     root = merkle_root(records)  # "0x" + sha256 hex = bytes32
