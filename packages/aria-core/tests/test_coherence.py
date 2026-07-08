@@ -216,3 +216,13 @@ def test_uvicorn_proxy_headers_enabled():
     assert "--proxy-headers" in dockerfile, (
         "uvicorn sans --proxy-headers : l'IP client reste le loopback, le plafond par IP est inerte."
     )
+
+
+def test_site_login_google_and_2fa_wired():
+    """Site : Google dans les méthodes Privy + bouton 2FA (enrôlement MFA Privy) câblés."""
+    cfg = _read("vanguard/src/lib/privy-config.ts")
+    assert "'google'" in cfg, "Google absent des méthodes de connexion Privy (privy-config.ts)"
+    btn = _read("vanguard/src/components/MemberSignInButton.tsx")
+    assert "showMfaEnrollmentModal" in btn, (
+        "le bouton 2FA (enrôlement MFA Privy) a disparu de MemberSignInButton."
+    )

@@ -1,7 +1,10 @@
 /** Privy dashboard: https://dashboard.privy.io — see aria-vanguard/operator/README.md */
 export const PRIVY_APP_ID = (import.meta.env.VITE_PRIVY_APP_ID ?? '').trim()
 
-export const PRIVY_LOGIN_METHODS = ['email', 'twitter', 'discord'] as const
+// Google requiert l'activation du provider Google OAuth dans le tableau de bord Privy
+// (Authentication > Login methods > Google) avec les identifiants OAuth Google. Le code
+// ci-dessous ajoute juste le bouton ; sans l'activation dashboard, Privy l'ignore.
+export const PRIVY_LOGIN_METHODS = ['email', 'google', 'twitter', 'discord'] as const
 
 export const privyProviderConfig = {
   loginMethods: [...PRIVY_LOGIN_METHODS],
