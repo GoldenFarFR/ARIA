@@ -355,6 +355,9 @@ async def run_showcase_pr_watch(*, post_replies: bool = True) -> dict[str, Any]:
             post_body = _sign(_handover_message(target) if is_handover else payload)
             reply_meta: dict[str, Any] = {
                 "target": target.get("id") or f"{owner}/{repo}#{pr_number}",
+                "owner": owner,
+                "repo": repo,
+                "pr_number": pr_number,
                 "trigger_key": key,
                 "trigger_author": row.get("author"),
                 "trigger_url": row.get("url"),
@@ -417,3 +420,86 @@ async def execute_showcase_pr_watch(message: str, lang: str = "fr") -> tuple[str
     for row in handed[:3]:
         lines.append(f"  handover @{row.get('trigger_author')} ({row.get('reason')})")
     return "\n".join(lines), {"github": "showcase_pr_watch", "scan": scan}
+
+
+# --- Correction operateur-only d'un commentaire deja poste (edition, jamais suppression) ---
+
+_REPAIR_CMD_RE = re.compile(
+    r"(?i)(?:showcase\s+pr\s+(?:repair|fix|corrige|correct)\w*|"
+    r"(?:corrige|corriger|repare|reparer|repair|fix)\s+(?:le\s+|la\s+)?"
+    r"(?:commentaire|reponse|r[eé]ponse)\s+showcase|"
+    r"corrige\s+(?:la\s+|le\s+)?(?:reponse|r[eé]ponse|commentaire)\s+(?:du\s+)?pr)"
+)
+
+
+def wants_showcase_pr_repair(message: str) -> bool:
+    return bool(_REPAIR_CMD_RE.search((message or "").strip()))
+
+
+def _find_watch_target(owner: str, repo: str, pr_number: int) -> dict[str, Any]:
+    for t in load_watch_targets():
+        if (
+            str(t.get("owner") or "").strip() == owner
+            and str(t.get("repo") or "").strip() == repo
+            and int(t.get("pr_number") or 0) == int(pr_number or 0)
+        ):
+            return t
+    return {"owner": owner, "repo": repo, "pr_number": pr_number, "our_logins": ["GoldenFarFR"]}
+
+
+async def repair_last_reply(*, target_id: str | None = None) -> dict[str, Any]:
+    """Operateur-only : EDITE le dernier commentaire poste par ARIA pour le remplacer par le
+    message de relai correct (tag operateur). Ne supprime rien, ne poste rien de neuf.
+    Retourne un rapport (ok/edited/errors). Jamais appele en autonome."""
+    report: dict[str, Any] = {"ok": False, "edited": None, "errors": []}
+    if not github_configured():
+        report["errors"].append("GITHUB_TOKEN missing")
+        return report
+
+    state = _load_state()
+    posted = [
+        r for r in (state.get("replies") or [])
+        if r.get("reply_id") and r.get("owner") and r.get("repo")
+    ]
+    if target_id:
+        posted = [r for r in posted if r.get("target") == target_id]
+    if not posted:
+        report["errors"].append("aucun commentaire poste a corriger (etat vide)")
+        return report
+
+    last = posted[-1]
+    owner, repo = str(last["owner"]), str(last["repo"])
+    cid = int(last["reply_id"])
+    pr_number = int(last.get("pr_number") or 0)
+    new_body = _sign(_handover_message(_find_watch_target(owner, repo, pr_number)))
+
+    client = GitHubClient(settings.github_token.strip())
+    try:
+        edited = await client.edit_issue_comment(owner, repo, cid, new_body)
+    except Exception as exc:  # 403 possible si le token n'est pas auteur/collaborateur
+        logger.warning("showcase_pr repair edit failed %s/%s#%s: %s", owner, repo, cid, exc)
+        report["errors"].append(f"edit refuse par GitHub: {exc}")
+        return report
+
+    last["repaired_at"] = datetime.now(timezone.utc).isoformat()
+    last["repaired_url"] = edited.get("html_url")
+    _save_state(state)
+    append_memory("github", f"[showcase_pr] repair (edit) comment {cid} on {owner}/{repo}#{pr_number}")
+    report["ok"] = True
+    report["edited"] = {"owner": owner, "repo": repo, "id": cid, "url": edited.get("html_url")}
+    return report
+
+
+async def execute_showcase_pr_repair(message: str, lang: str = "fr") -> tuple[str, dict]:
+    report = await repair_last_reply()
+    if report.get("ok"):
+        ed = report["edited"] or {}
+        out = (
+            "Showcase PR — commentaire corrige (edition, tag operateur)\n"
+            f"{ed.get('owner')}/{ed.get('repo')} comment #{ed.get('id')}\n"
+            f"URL: {ed.get('url')}"
+        )
+    else:
+        errs = "; ".join(report.get("errors") or ["inconnu"])
+        out = f"Showcase PR — correction impossible : {errs}"
+    return out, {"github": "showcase_pr_repair", "report": report}
