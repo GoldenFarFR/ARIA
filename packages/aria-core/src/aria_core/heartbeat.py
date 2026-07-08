@@ -337,6 +337,21 @@ def _load_heartbeat_state() -> dict[str, str]:
         return {}
 
 
+def heartbeat_pulse() -> dict:
+    """Pouls COARSE et NON sensible du heartbeat, pour un endpoint public / le cockpit.
+
+    N'expose QUE des horodatages de cycles (cadence non sensible) : jamais un candidat, un
+    verdict, un montant, un secret ni une PII. `alive` = au moins un cycle a tourné."""
+    state = _load_heartbeat_state()  # {task_id: iso}
+    times = sorted(v for v in state.values() if isinstance(v, str) and v)
+    last_tick = times[-1] if times else None
+    safe_keys = (
+        "vc_crawl", "vc_weekly_forecast", "vc_radar_x", "vc_thesis_review", "paper_trade_cycle",
+    )
+    cycles = {k: state[k] for k in safe_keys if state.get(k)}
+    return {"alive": last_tick is not None, "last_tick": last_tick, "cycles": cycles}
+
+
 def _save_heartbeat_state(last_runs: dict[str, datetime]) -> None:
     payload = {
         "last_runs": {
