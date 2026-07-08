@@ -39,8 +39,22 @@ else
   reco="🟢 Sonnet xhigh (🔴 Opus si wallet/sécu)"
 fi
 
+# --- Progression du setup (hook asynchrone) --------------------------------
+# Affiche l'avancement de l'installation de l'environnement (venv + deps) tant qu'elle
+# tourne en arrière-plan, puis disparaît quand c'est prêt.
+setup=""
+sf="${dir}/.claude/.setup-status"
+if [ -f "$sf" ]; then
+  s=$(cat "$sf" 2>/dev/null)
+  case "$s" in
+    installing*) setup="🔧 env ${s#installing }% · " ;;
+    error)       setup="⚠️ env échec · " ;;
+    *)           setup="" ;;
+  esac
+fi
+
 # --- Construction de la ligne ----------------------------------------------
-line="⚡ ${model} · ctx ${ctx_int:-0}%"
+line="${setup}⚡ ${model} · ctx ${ctx_int:-0}%"
 line="${line} · \$$(printf '%.2f' "$cost")"
 [ -n "$h5_int" ] && line="${line} · 5h ${h5_int}%"
 [ -n "$d7_int" ] && line="${line} · 7j ${d7_int}%"
