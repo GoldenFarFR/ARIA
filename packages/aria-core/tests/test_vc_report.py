@@ -445,7 +445,7 @@ def test_report_standard_tier_uses_rose_theme_and_hides_premium_content():
     assert "<h3" not in out  # analyse détaillée (## Potentiel) masquée
     assert "Méthodologie" not in out
     assert "Références" not in out
-    assert "réservées à l'édition Premium" in out
+    assert "réservées à l&#x27;édition Premium" in out or "réservées à l'édition Premium" in out
     # Le reste du rapport reste présent en standard.
     assert "En bref" in out
     assert "Ordre proposé" in out
@@ -475,3 +475,70 @@ def test_report_standard_tier_still_escapes_hostile_content():
     assert "<b>marché</b>" not in out
     # Contenu hostile du rapport détaillé : de toute façon masqué en standard.
     assert "<img src=x" not in out
+
+
+# ── Langue (FR par défaut, EN additif — libellés fixes uniquement) ──────────
+
+def test_report_default_lang_is_fr_byte_identical_labels():
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert 'html lang="fr"' in out
+    assert "Ordre proposé" in out
+    assert "Analyse détaillée" in out
+    assert "Méthodologie &amp; sources" in out
+    assert "Confidentiel" in out
+
+
+def test_report_lang_en_translates_fixed_labels():
+    out = render_html_report(_result(), generated_at=_GEN, lang="en")
+    assert 'html lang="en"' in out
+    assert "Proposed order" in out
+    assert "Detailed analysis" in out
+    assert "Methodology &amp; sources" in out
+    assert "Confidential" in out
+    # Jamais un mélange : les libellés fixes FR ne doivent plus apparaître en EN.
+    assert "Ordre proposé" not in out
+    assert "Analyse détaillée" not in out
+
+
+def test_report_lang_en_translates_risk_and_confidence_codes():
+    out = render_html_report(_result(risque="ÉLEVÉ", confiance_globale="haute"), generated_at=_GEN, lang="en")
+    assert "Risk HIGH" in out
+    assert "Confidence high" in out
+
+
+def test_report_lang_en_translates_scenario_titles():
+    out = render_html_report(_result(), generated_at=_GEN, lang="en")
+    assert "Bullish" in out
+    assert "Bearish" in out
+    assert "Central" in out and "Reference" in out
+
+
+def test_report_lang_invalid_falls_back_to_fr():
+    out = render_html_report(_result(), generated_at=_GEN, lang="zz")
+    assert 'html lang="fr"' in out
+    assert "Ordre proposé" in out
+
+
+def test_email_subject_lang_en():
+    subj = email_subject(_result(), generated_at=_GEN, lang="en")
+    assert "VC Analysis" in subj
+    assert "Analyse VC" not in subj
+
+
+def test_email_teaser_html_never_leaks_thesis_or_detailed_report():
+    from aria_core.skills.vc_report import render_email_teaser_html
+
+    secret_thesis = "Thèse ultra-confidentielle jamais montrée ZQXJ."
+    result = _result(these=secret_thesis, rapport_detaille="## Détail\nContenu très confidentiel WVKQ.")
+    out = render_email_teaser_html(result, lang="fr")
+    assert secret_thesis not in out
+    assert "WVKQ" not in out
+    assert result.recommandation in out
+
+
+def test_email_teaser_text_lang_en():
+    from aria_core.skills.vc_report import email_teaser_text
+
+    out = email_teaser_text(_result(), lang="en")
+    assert "attached" in out.lower()
+    assert "Potential" in out

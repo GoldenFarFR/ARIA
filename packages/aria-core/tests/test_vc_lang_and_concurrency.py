@@ -42,7 +42,7 @@ class FakeMessage:
         self.text = text
         self.replies: list[str] = []
 
-    async def reply_text(self, text: str) -> None:
+    async def reply_text(self, text: str, reply_markup=None) -> None:
         self.replies.append(text)
 
 
@@ -158,12 +158,10 @@ async def test_langue_command_sets_and_shows(tmp_path, monkeypatch):
 
 
 # ------------------------ garde de concurrence ------------------------
+# La garde de concurrence vit dans `_run_vc_analysis` (partagée par le mode test
+# et le chemin réel déclenché après choix de langue) — on la teste directement.
 @pytest.mark.asyncio
 async def test_vc_rejects_when_overloaded(monkeypatch):
-    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
-    monkeypatch.setattr(
-        "aria_core.skills.vc_prefs.get_output_lang", AsyncMock(return_value="fr")
-    )
     core = AsyncMock()
     monkeypatch.setattr(telegram_bot, "_vc_analyze_and_reply", core)
 
@@ -172,10 +170,10 @@ async def test_vc_rejects_when_overloaded(monkeypatch):
         await telegram_bot._vc_semaphore.acquire()
     monkeypatch.setattr(telegram_bot, "_vc_waiters", telegram_bot._VC_MAX_WAITERS)
     try:
-        update = FakeUpdate(f"/vc {ADDR}")
-        await telegram_bot._handle_vc(update, FakeContext())
+        message = FakeMessage(f"/vc {ADDR}")
+        await telegram_bot._run_vc_analysis(message, ADDR, test_mode=False, lang="fr")
         # Refus net + AUCUNE analyse lancée.
-        assert any("charge maximale" in r for r in update.message.replies)
+        assert any("charge maximale" in r for r in message.replies)
         core.assert_not_called()
     finally:
         for _ in range(telegram_bot._VC_MAX_CONCURRENT):
@@ -185,15 +183,11 @@ async def test_vc_rejects_when_overloaded(monkeypatch):
 @pytest.mark.asyncio
 async def test_vc_runs_when_free(monkeypatch):
     """Chemin nominal : sémaphore libre -> l'analyse est bien appelée une fois."""
-    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
-    monkeypatch.setattr(
-        "aria_core.skills.vc_prefs.get_output_lang", AsyncMock(return_value="fr")
-    )
     core = AsyncMock()
     monkeypatch.setattr(telegram_bot, "_vc_analyze_and_reply", core)
 
-    update = FakeUpdate(f"/vc {ADDR}")
-    await telegram_bot._handle_vc(update, FakeContext())
+    message = FakeMessage(f"/vc {ADDR}")
+    await telegram_bot._run_vc_analysis(message, ADDR, test_mode=False, lang="fr")
     core.assert_awaited_once()
     # Sémaphore relâché après usage (aucun permis fuité).
     assert not telegram_bot._vc_semaphore.locked()
