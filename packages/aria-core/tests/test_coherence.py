@@ -157,8 +157,22 @@ def test_claude_md_declares_permanent_norms():
     """Le bloc 'Normes permanentes' (qualité/fluidité/UX…) doit rester présent — appliqué à chaque build."""
     claude = _read("CLAUDE.md")
     assert "Normes permanentes" in claude, "la section 'Normes permanentes' a disparu de CLAUDE.md"
-    for norm in ("Qualité", "Fluidité", "Graphique", "Robustesse", "Accessibilité"):
+    for norm in ("Qualité", "Fluidité", "Graphique", "Robustesse", "Accessibilité", "Protection des données"):
         assert norm in claude, f"la norme permanente '{norm}' a disparu de CLAUDE.md"
+
+
+def test_attack_simulation_present():
+    """Simulation d'attaque quotidienne + fix de validation (corps non-UTF8) verrouillés."""
+    assert (REPO / "vanguard" / "backend" / "security_sim" / "harness.py").is_file(), (
+        "harnais de simulation d'attaque manquant"
+    )
+    assert (REPO / ".github" / "workflows" / "security-sim.yml").is_file(), (
+        "workflow quotidien de simulation d'attaque manquant"
+    )
+    main = _read("vanguard/backend/app/main.py")
+    assert "RequestValidationError" in main, (
+        "le handler de validation (fix corps non-UTF8 -> 500) a disparu de main.py."
+    )
 
 
 def test_session_checkpoint_hook_wired():
