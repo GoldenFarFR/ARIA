@@ -9,6 +9,7 @@ from app.config import settings
 
 PUBLIC_PREFIXES = (
     "/api/health",
+    "/api/pulse",
     "/api/auth/",
     "/api/billing/webhook",
     "/api/billing/plan",
