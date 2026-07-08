@@ -269,14 +269,16 @@ def test_operator_2fa_totp_wired():
     )
 
 
-def test_site_login_google_and_2fa_wired():
-    """Site : Google dans les méthodes Privy + bouton 2FA (enrôlement MFA Privy) câblés."""
+def test_site_login_google_wired():
+    """Site : Google dans les méthodes de connexion Privy câblé.
+
+    Le bouton 2FA dédié dans la nav (enrôlement MFA Privy) a été retiré volontairement
+    (08/07) — prêtait à confusion ("on dirait qu'il faut l'activer"). Le suivi 2FA/TOTP
+    site reste ouvert côté tâche #32 ; l'enrôlement MFA Privy reste possible depuis le
+    dashboard membre le cas échéant, juste plus via un bouton dédié dans la nav.
+    """
     cfg = _read("vanguard/src/lib/privy-config.ts")
     assert "'google'" in cfg, "Google absent des méthodes de connexion Privy (privy-config.ts)"
-    btn = _read("vanguard/src/components/MemberSignInButton.tsx")
-    assert "showMfaEnrollmentModal" in btn, (
-        "le bouton 2FA (enrôlement MFA Privy) a disparu de MemberSignInButton."
-    )
 
 
 def test_showcase_pr_autoreply_transparent_and_gated_to_human():

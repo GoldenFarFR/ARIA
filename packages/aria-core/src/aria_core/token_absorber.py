@@ -16,6 +16,7 @@ Aucune écriture on-chain, aucune signature : c'est de la lecture + un journal.
 from __future__ import annotations
 
 import logging
+import time
 
 from aria_core import screened_pool
 from aria_core.skills.acp_onchain_scan import scan_base_token
@@ -24,14 +25,23 @@ from aria_core.skills.safety_screen import safety_screen
 logger = logging.getLogger(__name__)
 
 
-async def absorb(contract: str, *, scanner=None, force: bool = False, **screen_kwargs) -> str:
+async def absorb(
+    contract: str,
+    *,
+    scanner=None,
+    force: bool = False,
+    max_age_days: int | None = None,
+    **screen_kwargs,
+) -> str:
     """Scanne un contrat et le range : 'kept' / 'rejected' / 'skip_*'.
 
     Sans ``force`` : un contrat déjà 'rejected' ('jeté pour toujours') ou déjà
     'active' n'est PAS re-scanné (on renvoie 'skip_rejected' / 'skip_active').
     ``force=True`` (résurrection ou rafraîchissement) ignore ce court-circuit et
     réévalue. ``scanner`` est injectable (tests offline). ``screen_kwargs`` sont
-    passés à ``safety_screen`` (seuils ajustables).
+    passés à ``safety_screen`` (seuils ajustables). ``max_age_days`` (optionnel) :
+    hors-scope (pas fraude/légitime — 'skip_too_old') si la paire est plus vieille ;
+    vérifié avant le filtre de sécurité pour économiser le scan honeypot.
     """
     scan = scanner or scan_base_token
     if not force:
@@ -44,6 +54,14 @@ async def absorb(contract: str, *, scanner=None, force: bool = False, **screen_k
     # Honeypot ACTIF au filtre d'entrée : un token honeypot / à taxe extractive / owner
     # réversible ne doit pas entrer dans le pool, pas seulement être signalé à l'analyse.
     ctx = await scan(contract, include_honeypot=True)
+
+    if max_age_days is not None:
+        created_ms = ctx.best_pair.pair_created_at if ctx.best_pair else None
+        if created_ms:
+            age_days = (time.time() * 1000 - created_ms) / 86_400_000
+            if age_days > max_age_days:
+                return "skip_too_old"
+
     result = safety_screen(ctx, **screen_kwargs)
 
     if result.passed:

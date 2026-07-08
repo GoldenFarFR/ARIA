@@ -537,7 +537,7 @@ class AriaHeartbeat:
         elif task_id == "vc_crawl":
             from aria_core.base_crawler import crawl_and_absorb
 
-            counts = await crawl_and_absorb(limit=40)
+            counts = await crawl_and_absorb(limit=100, max_age_days=182)
             append_memory("vc", f"[crawl] {counts} — {counts.get('kept', 0)} gardés")
 
         elif task_id == "vc_resolve":

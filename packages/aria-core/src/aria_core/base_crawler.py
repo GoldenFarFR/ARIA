@@ -153,12 +153,15 @@ async def discover_virtuals_tokens(*, client=None, limit: int = 50) -> list[str]
     return list(seen.keys())
 
 
-async def crawl_and_absorb(*, discover=None, absorber=None, limit: int = 50) -> dict:
+async def crawl_and_absorb(
+    *, discover=None, absorber=None, limit: int = 50, max_age_days: int | None = None
+) -> dict:
     """Découvre des tokens Base et les absorbe. Retourne le compte par verdict.
 
     ``discover()`` → liste de contrats (défaut : GeckoTerminal). ``absorber(contract)``
     → 'kept'/'rejected'/'skip_*' (défaut : token_absorber.absorb). L'absorbeur
-    court-circuite déjà les tokens connus, donc pas de gaspillage.
+    court-circuite déjà les tokens connus, donc pas de gaspillage. ``max_age_days``
+    (optionnel) : transmis à l'absorbeur, hors-scope ('skip_too_old') au-delà.
     """
     # Défaut : le terrain de chasse « top pools » (établis, liquides) — pas la benne
     # des lancements frais. C'est là que vivent les vrais builders du 85% VC.
@@ -170,7 +173,10 @@ async def crawl_and_absorb(*, discover=None, absorber=None, limit: int = 50) -> 
     counts: dict[str, int] = {}
     for contract in list(tokens)[:limit]:
         try:
-            verdict = await absorber(contract)
+            if max_age_days is not None:
+                verdict = await absorber(contract, max_age_days=max_age_days)
+            else:
+                verdict = await absorber(contract)
         except Exception as exc:  # noqa: BLE001 — un token qui plante n'arrête pas le crawl
             logger.info("base_crawler: absorb %s échoué (%s)", contract, exc)
             verdict = "error"
