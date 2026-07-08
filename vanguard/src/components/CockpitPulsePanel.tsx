@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getPulse, getTrackRecord, type Pulse, type TrackRecord } from '../api'
+import { getExamStatus, getPulse, getTrackRecord, type ExamStatus, type Pulse, type TrackRecord } from '../api'
 
 const POLL_MS = 30_000
 
@@ -26,6 +26,7 @@ function relativeTime(iso: string | null): string {
 export function CockpitPulsePanel() {
   const [pulse, setPulse] = useState<Pulse | null>(null)
   const [track, setTrack] = useState<TrackRecord | null>(null)
+  const [exam, setExam] = useState<ExamStatus | null>(null)
   const [failed, setFailed] = useState(false)
 
   const load = useCallback(() => {
@@ -39,6 +40,11 @@ export function CockpitPulsePanel() {
       .then(setTrack)
       .catch(() => {
         /* le tri fraude/légitime reste optionnel — le pouls reste utile sans */
+      })
+    getExamStatus()
+      .then(setExam)
+      .catch(() => {
+        /* l'examen reste optionnel — le pouls reste utile sans */
       })
   }, [])
 
@@ -128,6 +134,32 @@ export function CockpitPulsePanel() {
             <p className="text-lg text-[#d4d0c8] font-mono tabular-nums">
               {track.hit_rate != null ? `${Math.round(track.hit_rate * 100)}%` : '—'}
             </p>
+          </div>
+        </div>
+      ) : null}
+
+      {exam?.enabled ? (
+        <div className="mb-5">
+          <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-2">
+            Examen trading — jour {exam.current_day}/{exam.program_days}
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="minimal-card px-4 py-3">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">Score du jour</p>
+              <p className="text-lg text-[#d4d0c8] font-mono tabular-nums">
+                {exam.today.avg_score != null ? `${exam.today.avg_score}/10` : '—'}
+              </p>
+            </div>
+            <div className="minimal-card px-4 py-3">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">Score cumulé</p>
+              <p className="text-lg text-[#c9a962] font-mono tabular-nums">
+                {exam.cumulative.avg_score != null ? `${exam.cumulative.avg_score}/10` : '—'}
+              </p>
+            </div>
+            <div className="minimal-card px-4 py-3">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">Questions répondues</p>
+              <p className="text-lg text-[#d4d0c8] font-mono tabular-nums">{exam.cumulative.answered}</p>
+            </div>
           </div>
         </div>
       ) : null}

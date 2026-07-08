@@ -235,6 +235,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=180,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="aria_exam_cycle",
+        name="Examen trading ARIA (rehearsal pedagogique)",
+        description="Genere ~25 questions de trading/jour (curriculum 50 concepts), les pose au raisonnement d'ARIA, note via juge LLM. 20 jours, en parallele du paper-trading. Aucune action financiere.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
 ]
 
 
@@ -291,6 +298,10 @@ def _sync_x_curiosity_enabled() -> None:
             task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
                 "1", "true", "yes", "on",
             )
+        if task.id == "aria_exam_cycle":
+            from aria_core.exam import exam_enabled
+
+            task.enabled = exam_enabled()
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -667,6 +678,27 @@ class AriaHeartbeat:
                     "paper",
                     f"[paper_trade] fictif 1M$ : +{len(actions.get('opened', []))} achats / "
                     f"-{len(actions.get('closed', []))} ventes",
+                )
+
+        elif task_id == "aria_exam_cycle":
+            from aria_core import exam
+
+            day = await exam.current_exam_day()
+            if day > exam.EXAM_PROGRAM_DAYS:
+                return  # programme des 20 jours termine — plus de nouveau cycle
+            questions = await exam.generate_daily_questions(day, n=25)
+            for q in questions:
+                await exam.administer_question(q)
+            summary = await exam.daily_summary(day)
+            if summary["answered"] > 0:
+                append_memory(
+                    "exam",
+                    f"[exam] jour {day}/{exam.EXAM_PROGRAM_DAYS} — {summary['answered']} "
+                    f"questions, score moyen {summary['avg_score']}/10",
+                )
+                await self._notify_telegram(
+                    f"📚 Examen ARIA — jour {day}/{exam.EXAM_PROGRAM_DAYS} : "
+                    f"{summary['answered']} questions, score moyen {summary['avg_score']}/10."
                 )
 
         elif task_id == "self_banner_curiosity":

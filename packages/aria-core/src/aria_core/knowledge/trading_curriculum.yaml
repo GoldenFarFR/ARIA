@@ -1,0 +1,251 @@
+# Curriculum "examen trading" (fourni par l'opérateur, 08/07), organisé en catégories. Sert
+# de base au générateur de questions journalières (aria_core/exam.py).
+#
+# Note d'intégrité (importante) : plusieurs concepts ci-dessous (Smart Money Concepts / ICT —
+# inducement, order blocks, liquidity sweeps...) sont populaires en trading retail mais
+# épistémologiquement contestés — une partie de la littérature les considère comme du
+# pattern-matching non validé statistiquement, pas une inefficience de marché prouvée. Les
+# questions générées à partir d'eux DOIVENT tester la compréhension du mécanisme décrit,
+# jamais présenter le concept comme une vérité de marché établie. Coder pour l'honnêteté,
+# pas pour la conviction.
+
+- category: smart_money_concepts
+  label: "Smart Money Concepts & liquidité"
+  concepts:
+    - id: inducement
+      label: "Inducement (IDM)"
+      note: "Faux signaux (doubles sommets/creux) qui déclenchent les stops retail avant le vrai mouvement."
+    - id: daily_vs_h4
+      label: "Illusion du Daily vs précision du H4"
+      note: "Les changements de caractère (CHOCH) se confirmeraient mieux en H4 qu'en daily selon cette école."
+    - id: liquidity_sweep
+      label: "Sweep de liquidité"
+      note: "Mèche qui transperce un support/résistance sans clôturer au-delà = nettoyage du carnet, pas cassure, selon cette lecture."
+    - id: fvg_vs_void
+      label: "Fair Value Gaps vs Liquidity Voids"
+      note: "Un FVG laissé après un mouvement algorithmique fort agirait comme support/résistance au retracement."
+    - id: time_and_price
+      label: "Time and Price Theory"
+      note: "Le timing d'exécution (session asiatique vs ouverture de Londres) influencerait la fiabilité d'une configuration."
+    - id: bsl_ssl
+      label: "BSL / SSL (liquidité côté achat/vente)"
+      note: "Sommets et creux évidents agiraient comme aimants pour les algorithmes en quête de liquidité."
+    - id: premium_discount
+      label: "Premium / Discount Arrays"
+      note: "Règle discrétionnaire : n'acheter qu'en zone discount (sous 50% de la dernière impulsion)."
+    - id: mitigation_block
+      label: "Mitigation Blocks"
+      note: "Un Order Block en échec serait retesté par les institutions pour clôturer à breakeven."
+    - id: institutional_ob
+      label: "Order Block institutionnel"
+      note: "Un OB « valide » selon cette école doit avoir provoqué un BOS et laissé un déséquilibre."
+    - id: breakout_failure
+      label: "Syndrome du breakout / fakeout"
+      note: "La majorité des cassures de niveaux classiques échoueraient — trader la réintégration plutôt que la cassure."
+
+- category: order_flow_execution
+  label: "Order Flow & analyse d'exécution"
+  concepts:
+    - id: dom_footprint_delta_vp
+      label: "Les 4 outils Order Flow"
+      note: "DOM (carnet), Footprint, Delta, Volume Profile — lire l'intentionnalité du marché au-delà des bougies."
+    - id: iceberg_orders
+      label: "Iceberg Orders"
+      note: "Ordres massifs divisés en petits morceaux pour rester indétectables sur un graphique classique."
+    - id: spoofing
+      label: "Spoofing"
+      note: "Afficher de faux ordres pour influencer la perception, puis les annuler avant exécution — pratique illégale dans la plupart des juridictions."
+    - id: cvd_divergence
+      label: "Divergence de Delta Cumulé (CVD)"
+      note: "Nouveau sommet de prix + CVD en baisse = hausse portée par l'épuisement vendeur plutôt que l'agressivité acheteuse, selon cette lecture."
+    - id: footprint_reading
+      label: "Lecture du Footprint"
+      note: "Déséquilibres diagonaux intra-bougie pour vérifier la dominance acheteuse/vendeuse réelle."
+    - id: exhaustion
+      label: "Épuisement (Exhaustion)"
+      note: "Absence de volume au prix marginal = plus personne prêt à payer à ce niveau."
+    - id: point_of_control
+      label: "Point of Control (POC)"
+      note: "Niveau de prix où le plus de volume a été échangé — centre de gravité du marché sur la période."
+    - id: value_area_rejection
+      label: "Value Area Rejection"
+      note: "Tentative de sortie de la Value Area sans volume agressif = probabilité de retour au POC, selon cette école."
+    - id: liquidation_cascades
+      label: "Cascades de liquidation"
+      note: "Zones de prix où des positions sur-levier seraient forcées de se clôturer (données dérivés)."
+    - id: sponsor_institutionnel
+      label: "« Sponsor » institutionnel d'une cassure"
+      note: "Une bougie qui brise un range serait défendue activement à sa base par l'entité qui l'a initiée."
+
+- category: quant_indicators
+  label: "Maîtrise quantitative et indicateurs"
+  concepts:
+    - id: macd_false_signal
+      label: "Faux signaux MACD"
+      note: "Un croisement MACD trop évident peut être un piège — exiger une confirmation de volume."
+    - id: hidden_divergence
+      label: "Divergences cachées"
+      note: "Contrairement à la divergence classique (retournement), la divergence cachée confirmerait la poursuite de tendance."
+    - id: momentum_reset
+      label: "Reset de momentum"
+      note: "Un oscillateur qui revient à zéro ne signale pas forcément un retournement, mais parfois une pause avant continuation."
+    - id: mean_reversion_vs_trend
+      label: "Mean Reversion vs Trend Following"
+      note: "Quantifier le régime de marché (range vs tendance directionnelle) avant d'appliquer un setup."
+    - id: intermarket_correlation
+      label: "Corrélation inter-marchés"
+      note: "Un signal haussier isolé peut échouer face à un contexte macro contraire (ex. DXY en forte hausse)."
+    - id: latency_arbitrage
+      label: "Arbitrage de latence"
+      note: "L'infrastructure technique (latence serveur) peut détruire l'espérance d'une stratégie très court terme."
+    - id: onchain_flows
+      label: "Analyse on-chain"
+      note: "Flux entrants/sortants des cold wallets vers les exchanges comme signal avancé d'offre/demande."
+    - id: wyckoff_effort_result
+      label: "Loi de l'Effort vs Résultat (Wyckoff)"
+      note: "Volume massif + prix stagnant (doji) = effort absorbé, retournement potentiel selon la méthode Wyckoff."
+    - id: implied_volatility
+      label: "Volatilité implicite"
+      note: "Le marché des options (défense de primes par les vendeurs) peut influencer les zones de support/résistance spot."
+    - id: monte_carlo_backtest
+      label: "Backtesting Monte Carlo"
+      note: "Simuler des milliers de réarrangements aléatoires des trades passés pour évaluer le risque de ruine d'une stratégie."
+
+- category: risk_math_psychology
+  label: "Mathématiques du risque et psychologie"
+  concepts:
+    - id: risk_asymmetry
+      label: "Asymétrie du risque"
+      note: "Chercher un point d'invalidation le plus serré possible pour viser un R/R élevé (ex. > 1:3)."
+    - id: max_drawdown
+      label: "Drawdown Maximum Tolérable (MDD)"
+      note: "Dimensionner la taille de position pour survivre mathématiquement à une série de pertes consécutives probable."
+    - id: dynamic_position_sizing
+      label: "Position sizing dynamique"
+      note: "Réduire l'exposition après des pertes successives pour protéger le capital de la composante émotionnelle."
+    - id: slippage_cost
+      label: "Coût du slippage"
+      note: "Le slippage (spread + liquidité insuffisante) doit être intégré au calcul d'espérance de gain, pas ignoré."
+    - id: trade_management
+      label: "Trade management (sécurisation partielle)"
+      note: "Sécuriser une partie des gains à un premier obstacle de liquidité pour financer le risque restant."
+    - id: curve_fitting
+      label: "Sur-optimisation (Curve Fitting)"
+      note: "Une stratégie parfaite en backtest sans logique de marché sous-jacente a de fortes chances d'échouer en réel."
+    - id: whipsaw
+      label: "Whipsaw"
+      note: "Mouvement erratique lors d'annonces économiques — la liquidité réelle se retire temporairement du carnet."
+    - id: atr_weekend_decorrelation
+      label: "Désynchronisation de la volatilité (ATR week-end)"
+      note: "L'ATR se contracte le week-end, ce qui peut fausser des configurations calibrées en semaine."
+    - id: revenge_trading
+      label: "Revenge trading"
+      note: "Re-rentrer en position immédiatement après un stop-loss pour « se refaire » détruit la discipline statistique du plan."
+    - id: accepting_uncertainty
+      label: "Accepter l'incertitude (edge statistique)"
+      note: "L'issue d'un trade individuel est aléatoire ; seule la distribution sur un grand nombre de trades donne le profit."
+
+- category: candlesticks_and_basics
+  label: "Bougies japonaises et fondamentaux"
+  concepts:
+    - id: hammer
+      label: "Hammer"
+      note: "Petit corps, longue mèche basse (≥2x le corps), signal de retournement haussier potentiel en fin de tendance baissière."
+    - id: engulfing
+      label: "Engulfing (avalant)"
+      note: "Bougie dont le corps englobe entièrement le corps de la bougie précédente — signal de retournement."
+    - id: doji
+      label: "Doji"
+      note: "Ouverture ≈ clôture — indécision du marché, signal à confirmer par le contexte."
+    - id: morning_evening_star
+      label: "Morning Star / Evening Star"
+      note: "Pattern à 3 bougies signalant un retournement de tendance (haussier / baissier respectivement)."
+    - id: support_resistance
+      label: "Supports et résistances"
+      note: "Niveaux de prix historiquement défendus par l'offre ou la demande."
+    - id: rsi_basics
+      label: "RSI — zones de surachat/survente"
+      note: "Oscillateur 0-100 ; > 70 surachat, < 30 survente (indicatif, pas un signal isolé suffisant)."
+    - id: risk_reward_ratio
+      label: "Ratio Risque/Récompense (R/R)"
+      note: "Rapport entre la perte potentielle (stop) et le gain visé (cible) — base du dimensionnement d'un trade."
+    - id: stop_loss_basics
+      label: "Stop-loss"
+      note: "Ordre de sortie automatique au-delà d'un seuil de perte accepté à l'avance."
+    - id: liquidity_basics
+      label: "Liquidité de marché"
+      note: "Capacité à entrer/sortir une position sans mouvement de prix excessif."
+    - id: order_book_basics
+      label: "Carnet d'ordres (order book)"
+      note: "Liste en temps réel des ordres d'achat (bid) et de vente (ask) en attente à différents prix."
+
+- category: trade_execution_lifecycle
+  label: "Cycle de vie d'un trade : entrée, tenue, sortie"
+  concepts:
+    - id: entry_after_confirmation
+      label: "Entrée après confirmation, jamais pendant"
+      note: "École discrétionnaire : éviter d'acheter une cassure en cours, attendre la clôture de la bougie de confirmation (ex. retracement dans un FVG/Order Block)."
+    - id: atr_trailing_stop
+      label: "Trailing stop basé sur l'ATR"
+      note: "Stop suiveur dynamique dimensionné sur la volatilité (ATR) pour laisser respirer une tendance sans sortir sur une mèche normale."
+    - id: split_exit_tp1_tp2
+      label: "Sortie asymétrique divisée (TP1/TP2)"
+      note: "Sécuriser une partie de la position à un premier obstacle de liquidité (stop ramené à breakeven), laisser courir le solde jusqu'à invalidation de structure."
+    - id: structure_based_hold
+      label: "Tenue basée sur la structure, pas l'émotion"
+      note: "Ne pas clôturer sur un simple retracement si la structure de tendance (creux/sommets successifs) reste intacte."
+
+- category: chart_analysis_standard
+  label: "Standard d'analyse graphique"
+  concepts:
+    - id: timeframe_choice
+      label: "Choix de l'unité de temps (ex. 4H)"
+      note: "Une école privilégie le 4H comme compromis bruit/signal pour les cassures de structure — un choix de style, pas une loi universelle ; d'autres approches valident sur d'autres unités."
+    - id: confluence_rule
+      label: "Règle de confluence (prix/volume/momentum)"
+      note: "Un setup jugé plus robuste par cette approche aligne trois dimensions : zone de liquidité (prix), validation par le Volume Profile/POC, et confirmation par un oscillateur."
+
+- category: macro_calendar
+  label: "Calendrier macroéconomique"
+  concepts:
+    - id: fomc
+      label: "FOMC (décision de taux Fed)"
+      note: "8 réunions/an ; une hausse de taux tend à renforcer le dollar et peser sur les actifs risqués — beaucoup de traders réduisent leur exposition avant l'annonce."
+    - id: cpi_inflation
+      label: "CPI (inflation US)"
+      note: "Publication mensuelle ; une inflation plus élevée que prévu peut déclencher des ventes de risk-off — influence la trajectoire anticipée des taux Fed."
+    - id: nfp
+      label: "NFP (emploi US, 1er vendredi du mois)"
+      note: "Peut générer un whipsaw (mèches qui balaient les stops des deux côtés) au moment de la publication — beaucoup de traders évitent d'être en position intraday à ce moment précis."
+
+- category: market_correlations
+  label: "Corrélations et divergences inter-marchés"
+  concepts:
+    - id: dxy_crypto_inverse
+      label: "DXY (Dollar Index) vs crypto"
+      note: "Relation historiquement inverse observée par une partie des traders — une forte hausse du dollar coïncide souvent avec une pression baissière sur BTC/ETH ; corrélation, pas causalité mécanique garantie."
+    - id: spx_btc_correlation
+      label: "SPX/Nasdaq vs BTC"
+      note: "BTC est souvent décrit comme se comportant en actif risqué corrélé aux indices tech américains — le degré de corrélation varie fortement dans le temps, un chiffre fixe ne doit jamais être présenté comme une constante."
+    - id: btc_dominance_altseason
+      label: "Dominance BTC (BTC.D) et rotation vers les altcoins"
+      note: "Schéma observé par une partie des traders : BTC.D en hausse = liquidité concentrée sur BTC (altcoins à la traîne) ; BTC.D en baisse pendant que BTC consolide = rotation vers les altcoins (« altseason »)."
+
+- category: algorithmic_edge_concepts
+  label: "Concepts d'edge algorithmique (matière à comprendre et critiquer, pas une spec d'exécution)"
+  concepts:
+    - id: stat_arb_pairs
+      label: "Arbitrage statistique / pairs trading"
+      note: "Repérer un écart temporaire entre deux actifs historiquement corrélés et parier sur le retour à la moyenne — nécessite une corrélation réelle et stable, pas juste apparente sur une fenêtre courte."
+    - id: nlp_sentiment_signal
+      label: "Analyse de sentiment (NLP) comme signal"
+      note: "Extraire un signal (volume de mentions, ton, activité de développement) depuis du texte non structuré (réseaux sociaux, commits) — sujet à un bruit et des faux positifs élevés, jamais un signal fiable isolément."
+    - id: adaptive_regime_params
+      label: "Paramètres adaptatifs selon le régime de marché"
+      note: "Un indicateur calibré une fois pour toutes se dégrade quand le régime de volatilité change — l'alternative est de ré-évaluer les paramètres en continu plutôt que de s'y tenir rigidement."
+    - id: onchain_wallet_clustering
+      label: "Clustering de wallets onchain (identification d'entités)"
+      note: "Regrouper heuristiquement des adresses appartenant probablement à la même entité à partir de leurs flux de transactions — ARIA lit déjà des données onchain publiques (Blockscout) mais ne fait aujourd'hui aucun clustering d'entités."
+    - id: latency_slippage_modeling
+      label: "Modélisation du slippage et de la latence d'exécution"
+      note: "Mesurer l'écart entre le prix visé et le prix réellement obtenu pour décider si un setup techniquement valide reste rentable une fois le coût d'exécution réel intégré."
