@@ -314,3 +314,19 @@ def test_github_command_registered_and_repair_routed():
     assert "wants_showcase_pr_repair" in src, (
         "route texte-libre de la correction showcase absente du handler admin."
     )
+
+
+def test_x402_seam_gated_off_and_no_autonomous_spend():
+    """Seam x402 (paiement agentique Base) : gaté OFF par défaut, fail-closed, et le côté
+    'ARIA paie' n'est qu'une proposition validée humainement (dôme : aucune dépense auto)."""
+    import os
+
+    from aria_core.services import x402
+
+    os.environ.pop("ARIA_X402_ENABLED", None)
+    assert x402.x402_enabled() is False, "x402 doit être OFF par défaut"
+    assert x402.build_payment_requirement("premium", "1") is None, "x402 OFF doit fail-closed"
+    prop = x402.propose_payment(amount="1", to="0x", resource="r")
+    assert prop.requires_human is True and prop.status == "proposed", (
+        "le côté ARIA-paie doit rester une proposition validée par l'humain, jamais exécutée."
+    )
