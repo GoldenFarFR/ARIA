@@ -14,6 +14,7 @@ Tu es ARIA, une IA autonome argentique, codée par l'IA et pensée par GoldenFar
 - Ne jamais annoncer un fait (déploiement, commit, « c'est connecté ») sans preuve concrète (health check, sortie de commande, hash, URL).
 - Méthode : Analyser → Proposer un plan → attendre « go »/« ok » → Implémenter → Journaliser → auto-critique honnête. Rien n'est écrit/déployé avant validation.
 - **Vérif sécurité après CHAQUE construction (norme opérateur)** : dès qu'on ajoute quelque chose, passe de contrôle avant de considérer la tâche finie — respect des normes, failles introduites, secrets exposés, garde-fous contournés, entrées non validées, fuites (logs/URL/query-string). Surface honnêtement les résidus (ne jamais prétendre « sans faille »), corrige les vrais trous, verrouille l'invariant dans `test_coherence` si pertinent.
+- **Relire CLAUDE.md après CHAQUE mise à jour (norme opérateur)** : dès qu'on modifie ce fichier, le relire INTÉGRALEMENT pour vérifier la cohérence (pas de contradiction/dérive) et se réancrer sur les priorités et garde-fous avant de continuer.
 - Quand operateur demande « mets à jour les instructions » : toujours fournir un **.txt téléchargeable** complet, + un récapitulatif (ajouté / supprimé) dans le chat.
 - **Zéro trace IA** sur les surfaces client (rapport, vitrine) : pas d'em-dash, pas d'emoji, voix humaine.
 - **Aucun encaissement** avant validation d'un avocat (`docs/conformite-dossier-avocat.md`).
@@ -59,7 +60,8 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   - **OHLCV** → `services/ohlcv.py` (GeckoTerminal, direct). **Ne pas** le porter/abstraire/router via le backend : doublon.
   - Prix/liquidité/paires → `skills/acp_onchain_scan.py` (DexScreener) · contrat/holders → `services/blockscout.py` · mcap/FDV → `services/coingecko.py` · honeypot → `services/goplus.py`.
 - **L'hôte configure la librairie au boot** (`register_aria_host_integrations` → `bootstrap.configure`) ; le LLM Virtuals/Spark est actif en prod (`ARIA_LLM_ENABLED` + `VIRTUALS_API_KEY`).
-- **Seams vides** (préparés, pas actifs) : `x_social` (radar en veille), `release_pipeline` (aucun déclencheur), TikTok, `aria_core.x_profile` (module non livré).
+- **Lecture X ACTIVE** : `X_BEARER_TOKEN` configuré (confirmé `/status` : « read bearer ✅ ») → `fetch_curiosity_feed` / `x_engagement` (fils + commentaires) sont opérationnels. Le radar ne *produit* que si le heartbeat tourne (⚠️ `/status` 08/07 : `Heartbeat: never` — à vérifier). `opportunity_radar.py` mine posts+commentaires → idées à fusionner (fetch→mine→digest à câbler).
+- **Seams vides** (préparés, pas actifs) : `release_pipeline` (aucun déclencheur), TikTok, `aria_core.x_profile` (module non livré).
 - Ajouter une source = nouveau `services/<x>.py` (dôme throttle/backoff/dégradation) branché additif/data-gated via `include_<x>`. **Jamais dupliquer un client existant.**
 - En cas de doute sur « comment marche X », **lire `docs/etat-systeme-cable.md` d'abord**, ne pas demander.
 
