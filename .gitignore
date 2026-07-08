@@ -64,3 +64,4 @@ download/
 vanguard/operator/*
 !vanguard/operator/start-acp-local.ps1
 !vanguard/operator/test-aria-chat.ps1
+!vanguard/operator/gen-admin-totp.py
