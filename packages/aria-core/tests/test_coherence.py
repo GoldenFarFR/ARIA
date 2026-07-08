@@ -94,6 +94,14 @@ def test_honeypot_active_on_vc_path():
     )
 
 
+def test_honeypot_active_on_pool_screening():
+    """Le filtre d'entrée du pool (token_absorber) doit AUSSI activer le honeypot."""
+    ta = _read_core("token_absorber.py")
+    assert "include_honeypot=True" in ta, (
+        "token_absorber n'active pas include_honeypot : un honeypot pourrait entrer dans le pool."
+    )
+
+
 def test_paper_trader_registered_in_heartbeat():
     """Le paper-trading 1M$ doit être une tâche heartbeat ET avoir un dispatch (pas orphelin)."""
     assert (CORE / "paper_trader.py").is_file(), "paper_trader.py manquant"
