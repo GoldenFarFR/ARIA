@@ -58,7 +58,7 @@ body {
 
 /* ── Layout minimal ── */
 .page-shell {
-  @apply max-w-2xl mx-auto px-5 w-full;
+  @apply max-w-2xl lg:max-w-4xl 2xl:max-w-5xl mx-auto px-5 sm:px-8 w-full;
 }
 
 /* ── Atmosphere ── */
@@ -73,6 +73,47 @@ body {
 .vanguard-minimal {
   background-color: #060608;
   background-image: radial-gradient(ellipse 70% 50% at 50% -20%, rgba(201, 169, 98, 0.07), transparent 60%);
+}
+
+/* Vitrine (page d'accueil) : atmosphère plus riche que .vanguard-minimal — pensée
+   pour les grands écrans où une seule teinte plate se voit à peine. `background-attachment:
+   fixed` ancre les halos au VIEWPORT (pas à la hauteur totale de la page, très grande) : ils
+   restent visibles en toile de fond à tout moment du défilement, pas seulement en haut du hero. */
+.vanguard-atmosphere {
+  background-color: #060608;
+  background-attachment: fixed;
+  background-image:
+    radial-gradient(ellipse 50% 60% at 6% -8%, rgba(201, 169, 98, 0.16), transparent 62%),
+    radial-gradient(ellipse 45% 55% at 100% 2%, rgba(201, 169, 98, 0.1), transparent 65%),
+    radial-gradient(ellipse 55% 60% at 94% 100%, rgba(138, 115, 68, 0.12), transparent 62%),
+    radial-gradient(ellipse 45% 55% at 0% 96%, rgba(201, 169, 98, 0.08), transparent 62%);
+}
+
+.vanguard-atmosphere::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(201, 169, 98, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(201, 169, 98, 0.04) 1px, transparent 1px);
+  background-size: 88px 88px;
+  mask-image: radial-gradient(ellipse 80% 75% at 50% 30%, black 0%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 75% at 50% 30%, black 0%, transparent 75%);
+}
+
+@media (max-width: 1023px) {
+  .vanguard-atmosphere {
+    background-attachment: scroll;
+  }
+}
+
+.hero-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(56px);
+  pointer-events: none;
 }
 
 .hero-glow {

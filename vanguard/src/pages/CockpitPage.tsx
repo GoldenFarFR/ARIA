@@ -9,8 +9,8 @@ export function CockpitPage() {
   const [unlocked, setUnlocked] = useState(() => hasOperatorSecret())
 
   return (
-    <div className="vanguard-minimal min-h-screen">
-      <div className="max-w-3xl mx-auto px-5 py-12 sm:py-16">
+    <div className="vanguard-atmosphere min-h-screen">
+      <div className="max-w-3xl lg:max-w-4xl mx-auto px-5 sm:px-8 py-12 sm:py-16">
         <header className="mb-10">
           <p className="section-label mb-2">ARIA · Live</p>
           <h1 className="font-display text-3xl sm:text-4xl text-gradient-vanguard mb-3">
