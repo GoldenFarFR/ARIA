@@ -16,6 +16,9 @@ bot/venv/
 .claude/.setup-status
 # Compteur de messages (checkpoint auto de session tous les 20)
 .claude/.msg-counter
+# État runtime du rappel de déploiement (throttle + delta non déployé pour la barre)
+.claude/.deploy-reminded-ref
+.claude/.undeployed-lines
 
 # IDE / OS
 .idea/
