@@ -143,3 +143,11 @@ def test_claude_md_declares_established_facts_block():
     claude = _read("CLAUDE.md")
     assert "NE PAS re-demander" in claude, "le bloc 'Faits établis' a disparu de CLAUDE.md"
     assert "etat-systeme-cable.md" in claude, "CLAUDE.md ne pointe plus vers la fiche d'état câblé"
+
+
+def test_claude_md_documents_automation():
+    """Une session neuve doit être CONSCIENTE des automatismes (hook + garde-fou + CI)."""
+    claude = _read("CLAUDE.md")
+    assert "Automatismes en place" in claude, "la section 'Automatismes en place' a disparu de CLAUDE.md"
+    assert "session-start.sh" in claude, "CLAUDE.md ne documente pas le hook de démarrage"
+    assert "test_coherence" in claude, "CLAUDE.md ne documente pas le garde-fou de cohérence"
