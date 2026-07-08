@@ -60,45 +60,34 @@ export function VanguardSite() {
         <div className="hero-glow pointer-events-none" aria-hidden />
 
         <section className="page-shell min-h-[calc(100vh-8rem)] flex flex-col justify-center py-16 md:py-24 relative">
-          <div className="grid lg:grid-cols-[1.15fr_0.85fr] gap-12 lg:gap-8 items-center">
-            <div className="max-w-xl">
-              <p className="section-label mb-6 notranslate">ZHC · under construction</p>
-              <h1 className="font-display font-semibold text-[2.75rem] sm:text-5xl md:text-6xl lg:text-[4.25rem] leading-[1.05] tracking-tight text-[#f4efe6] mb-6 text-balance">
-                <span className="notranslate">Aria Vanguard</span>
-                <span className="block text-gradient-vanguard text-[0.92em] font-medium mt-1 notranslate">
-                  ZHC
-                </span>
-              </h1>
-              <p className="text-base md:text-lg text-[#9a958a] max-w-md leading-relaxed font-light mb-10">
-                {oneLiner}
-              </p>
-              <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-                <a
-                  href="#aria"
-                  className="btn-vanguard-glow px-8 py-3.5 text-sm tracking-wide inline-flex items-center justify-center gap-2 focus-ring"
-                >
-                  Talk to ARIA
-                  <ArrowRight className="w-4 h-4" />
-                </a>
-                <a
-                  href="https://x.com/Aria_ZHC"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-[#8a8578] hover:text-[#e8d5a8] transition-colors tracking-wide focus-ring px-2 py-2 inline-flex items-center gap-1.5 notranslate"
-                >
-                  {setup?.x_handle ?? '@Aria_ZHC'}
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              </div>
-            </div>
-
-            <div className="hidden lg:flex relative h-[420px] items-center justify-center" aria-hidden>
-              <div className="hero-orb w-64 h-64 bg-[#c9a962]/[0.14] animate-vanguard-float" />
-              <div className="hero-orb w-48 h-48 bg-[#8a7344]/[0.16] translate-x-20 translate-y-14 animate-vanguard-float-delayed" />
-              <BrandMark
-                size={200}
-                className="relative opacity-95 drop-shadow-[0_0_70px_rgba(201,169,98,0.22)]"
-              />
+          <div className="max-w-xl">
+            <p className="section-label mb-6 notranslate">ZHC · under construction</p>
+            <h1 className="font-display font-semibold text-[2.75rem] sm:text-5xl md:text-6xl lg:text-[4.25rem] leading-[1.05] tracking-tight text-[#f4efe6] mb-6 text-balance">
+              <span className="notranslate">Aria Vanguard</span>
+              <span className="block text-gradient-vanguard text-[0.92em] font-medium mt-1 notranslate">
+                ZHC
+              </span>
+            </h1>
+            <p className="text-base md:text-lg text-[#9a958a] max-w-md leading-relaxed font-light mb-10">
+              {oneLiner}
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+              <a
+                href="#aria"
+                className="btn-vanguard-glow px-8 py-3.5 text-sm tracking-wide inline-flex items-center justify-center gap-2 focus-ring"
+              >
+                Talk to ARIA
+                <ArrowRight className="w-4 h-4" />
+              </a>
+              <a
+                href="https://x.com/Aria_ZHC"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-[#b5b0a3] hover:text-[#e8d5a8] transition-colors tracking-wide focus-ring px-2 py-2 inline-flex items-center gap-1.5 notranslate"
+              >
+                {setup?.x_handle ?? '@Aria_ZHC'}
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
             </div>
           </div>
         </section>
