@@ -13,7 +13,10 @@ par ``chart_render`` (Pillow, déterministe, sans réseau).
 from aria_core.skills.acp_onchain_scan import TokenScanContext
 from aria_core.skills.ta_levels import Candle, compute_levels, suggest_entry_zone
 from aria_core.skills.vc_analysis import VCResult, _attach_ta
+from aria_core.skills.vc_i18n import report_strings
 from aria_core.skills.vc_report import _ta_block_html
+
+_S = report_strings("fr")
 
 
 def _result() -> VCResult:
@@ -75,13 +78,13 @@ def test_attach_ta_populates_result_and_chart():
 
 def test_ta_block_html_omitted_when_empty():
     """Aucune section fantôme : sans donnée TA, le bloc est une chaîne vide."""
-    assert _ta_block_html(_result()) == ""
+    assert _ta_block_html(_result(), _S) == ""
 
 
 def test_ta_block_html_renders_levels_and_image():
     result = _result()
     _attach_ta(result, _ctx_with_ta())
-    html = _ta_block_html(result)
+    html = _ta_block_html(result, _S)
     assert "Analyse technique" in html
     assert "<img" in html and "data:image/png;base64," in html
     # facts-only : la mention « niveaux dérivés » figure, pas de promesse.

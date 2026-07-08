@@ -31,6 +31,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from aria_core.skills.vc_analysis import VCResult
+from aria_core.skills.vc_i18n import confidence_label, norm_lang, report_strings, risk_label
 
 BRAND = "ARIA Vanguard ZHC"
 _ACCENT = "#0b1f3a"       # navy institutionnel — utilisé par _render_markdown_body (conservé tel quel)
@@ -77,12 +78,13 @@ _CONF_COLORS = {
 _DEFAULT_PILL = "border:1px solid rgba(147,160,155,0.5);background-color:rgba(147,160,155,0.10);color:#93a09b;"
 _POTENTIEL_PILL = "border:1px solid rgba(201,162,39,0.55);background-color:rgba(201,162,39,0.08);color:#e6c463;"
 
-# Scénarios : titre affiché + style de barre de probabilité, indexés par ``nom``
-# (allowlist fermée dans vc_analysis._SCENARIO_NAMES : bull/base/bear uniquement).
+# Scénarios : clé de libellé (résolue via ``report_strings``) + style de barre de
+# probabilité, indexés par ``nom`` (allowlist fermée dans
+# vc_analysis._SCENARIO_NAMES : bull/base/bear uniquement).
 _SCEN_META = {
-    "bull": ("Haussier", "background-color:#1f8a74;background-image:linear-gradient(90deg,#0f6b5c,#1f8a74);", False),
-    "base": ("Central · Référence", "background-color:#c9a227;background-image:linear-gradient(90deg,#b0862b,#e6c463);", True),
-    "bear": ("Baissier", "background-color:#a34a2a;", False),
+    "bull": ("scen_bull", "background-color:#1f8a74;background-image:linear-gradient(90deg,#0f6b5c,#1f8a74);", False),
+    "base": ("scen_base", "background-color:#c9a227;background-image:linear-gradient(90deg,#b0862b,#e6c463);", True),
+    "bear": ("scen_bear", "background-color:#a34a2a;", False),
 }
 
 # Sources méthodologiques — contenu statique de l'annexe « Méthodologie & sources »
@@ -223,7 +225,7 @@ def _render_markdown_body(text: str) -> str:
     return "\n".join(html_parts)
 
 
-def _references_block(links: list[dict]) -> str:
+def _references_block(links: list[dict], s: dict) -> str:
     """Liens officiels déclarés par le projet (site, X, Telegram…) — vérifiez par vous-même.
 
     Revalidation stricte du schéma http(s) à ce dernier point d'entrée avant
@@ -236,7 +238,7 @@ def _references_block(links: list[dict]) -> str:
         if str(link.get("url", "")).strip().lower().startswith(("http://", "https://"))
     ]
     if not safe:
-        body = f"<div style='font-size:12px;color:{_MUTE}'>Aucun lien officiel disponible pour ce token.</div>"
+        body = f"<div style='font-size:12px;color:{_MUTE}'>{_esc(s['refs_none'])}</div>"
     else:
         items = "".join(
             f"<a href='{_esc(link['url'])}' style='display:inline-block;margin:0 10px 6px 0;padding:5px 12px;"
@@ -247,9 +249,9 @@ def _references_block(links: list[dict]) -> str:
         body = f"<div>{items}</div>"
     return (
         "<div style='margin:16px 0 4px;background:#f7f9fc;border-radius:8px;padding:14px 18px'>"
-        f"<div style='font-family:Georgia,serif;font-size:15px;color:{_ACCENT};margin-bottom:8px'>Références : vérifiez par vous-même</div>"
+        f"<div style='font-family:Georgia,serif;font-size:15px;color:{_ACCENT};margin-bottom:8px'>{_esc(s['refs_title'])}</div>"
         f"{body}"
-        f"<div style='margin-top:8px;font-size:11px;color:{_MUTE}'>Liens déclarés par le projet (source : DexScreener). Non vérifiés par ARIA.</div>"
+        f"<div style='margin-top:8px;font-size:11px;color:{_MUTE}'>{_esc(s['refs_disclaimer'])}</div>"
         "</div>"
     )
 
@@ -271,7 +273,11 @@ def report_integrity(result: VCResult, *, generated_at: str, recipient: str | No
 
 
 def email_subject(
-    result: VCResult, *, generated_at: str | None = None, report_number: int | None = None
+    result: VCResult,
+    *,
+    generated_at: str | None = None,
+    report_number: int | None = None,
+    lang: str = "fr",
 ) -> str:
     """Objet d'email concis et professionnel.
 
@@ -279,12 +285,15 @@ def email_subject(
     ses rapports une fois abonné et destinataire de plusieurs analyses suivies
     du même token dans la durée.
     """
-    potentiel = f"{result.potentiel}/10" if result.potentiel is not None else "n/a"
+    s = report_strings(lang)
+    potentiel_label = (
+        s["potential_label"].format(n=result.potentiel) if result.potentiel is not None else s["potential_na"]
+    )
     date_part = f"{generated_at.split(' ')[0]} · " if generated_at else ""
     num_part = f"n°{report_number} · " if report_number else ""
     return (
-        f"[{BRAND}] {num_part}{date_part}Analyse VC · {result.recommandation} · "
-        f"Potentiel {potentiel} · {result.contract[:10]}…"
+        f"[{BRAND}] {num_part}{date_part}{s['subject_analysis']} · {result.recommandation} · "
+        f"{potentiel_label} · {result.contract[:10]}…"
     )
 
 
@@ -314,13 +323,21 @@ def _pill(label: str, style: str) -> str:
     )
 
 
-def _badges_html(result: VCResult) -> str:
-    potentiel_label = f"Potentiel {result.potentiel}/10" if result.potentiel is not None else "Potentiel n/a"
+def _badges_html(result: VCResult, s: dict, lang: str) -> str:
+    potentiel_label = (
+        s["potential_label"].format(n=result.potentiel) if result.potentiel is not None else s["potential_na"]
+    )
     pills = [
         _pill(result.recommandation, _RECO_COLORS.get(result.recommandation, _DEFAULT_PILL)),
-        _pill(f"Confiance {result.confiance_globale}", _CONF_COLORS.get(result.confiance_globale, _DEFAULT_PILL)),
+        _pill(
+            s["confidence_prefix"].format(v=confidence_label(result.confiance_globale, lang)),
+            _CONF_COLORS.get(result.confiance_globale, _DEFAULT_PILL),
+        ),
         _pill(potentiel_label, _POTENTIEL_PILL),
-        _pill(f"Risque {result.risque}", _RISK_COLORS.get(result.risque, _DEFAULT_PILL)),
+        _pill(
+            s["risk_prefix"].format(v=risk_label(result.risque, lang)),
+            _RISK_COLORS.get(result.risque, _DEFAULT_PILL),
+        ),
     ]
     return "".join(pills)
 
@@ -338,7 +355,7 @@ def _section_header(title: str) -> str:
       </table>"""
 
 
-def _rr_block_html(result: VCResult) -> str:
+def _rr_block_html(result: VCResult, s: dict) -> str:
     """Encadré R/R focal — jamais affiché si le ratio n'est pas estimable (pas de valeur inventée)."""
     rr = result.rr
     if rr is None:
@@ -346,21 +363,18 @@ def _rr_block_html(result: VCResult) -> str:
     upside = result.upside_pct or 0.0
     downside = result.downside_pct or 0.0
     if rr >= 3:
-        qualifier = "Asymétrie très favorable"
+        qualifier = s["rr_qualifier_strong"]
     elif rr >= 1.5:
-        qualifier = "Asymétrie favorable"
+        qualifier = s["rr_qualifier_good"]
     elif rr >= 1:
-        qualifier = "Asymétrie équilibrée"
+        qualifier = s["rr_qualifier_balanced"]
     else:
-        qualifier = "Asymétrie défavorable"
+        qualifier = s["rr_qualifier_weak"]
     # Formulé en clair : c'est un rapport de DISTANCES (gain visé ÷ risque consenti),
     # jamais un multiple de gain — pour ne pas le lire comme « x12 ».
-    caption = (
-        f"{qualifier} : viser +{upside:.0f}% pour {downside:.0f}% risqué. "
-        f"Rapport des distances (récompense sur risque), pas un multiple de gain."
-    )
+    caption = s["rr_caption"].format(qualifier=qualifier, upside=upside, downside=downside)
     if downside and downside < 4 and rr >= 4:
-        caption += f" Stop serré ({downside:.0f}%) : ratio flatté, facile à toucher."
+        caption += s["rr_tight_stop"].format(downside=downside)
     return f"""<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:30px;">
         <tr>
           <td style="border-radius:12px;padding:2px;background-color:{_GOLD};background-image:linear-gradient(120deg,#8a6a13 0%,{_GOLD_LIGHT} 30%,{_GOLD} 55%,{_EMERALD} 85%,{_EMERALD_DEEP} 100%);">
@@ -372,9 +386,9 @@ def _rr_block_html(result: VCResult) -> str:
                       <td style="padding:22px 18px 4px;">
                         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                           <tr>
-                            <td width="33%" align="center" style="vertical-align:bottom;padding:0 8px;font-family:{_FONT_NUM};font-size:11px;line-height:1.4;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD};">Potentiel haussier</td>
-                            <td width="34%" align="center" style="vertical-align:bottom;padding:0 8px;border-left:1px solid rgba(230,196,99,0.18);border-right:1px solid rgba(230,196,99,0.18);font-family:{_FONT_NUM};font-size:11px;line-height:1.4;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD};">Ratio récompense-risque</td>
-                            <td width="33%" align="center" style="vertical-align:bottom;padding:0 8px;font-family:{_FONT_NUM};font-size:11px;line-height:1.4;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD};">Risque baissier</td>
+                            <td width="33%" align="center" style="vertical-align:bottom;padding:0 8px;font-family:{_FONT_NUM};font-size:11px;line-height:1.4;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD};">{_esc(s['rr_upside_label'])}</td>
+                            <td width="34%" align="center" style="vertical-align:bottom;padding:0 8px;border-left:1px solid rgba(230,196,99,0.18);border-right:1px solid rgba(230,196,99,0.18);font-family:{_FONT_NUM};font-size:11px;line-height:1.4;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD};">{_esc(s['rr_ratio_label'])}</td>
+                            <td width="33%" align="center" style="vertical-align:bottom;padding:0 8px;font-family:{_FONT_NUM};font-size:11px;line-height:1.4;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD};">{_esc(s['rr_downside_label'])}</td>
                           </tr>
                           <tr>
                             <td width="33%" align="center" style="vertical-align:bottom;padding:12px 8px 16px;">
@@ -402,23 +416,23 @@ def _rr_block_html(result: VCResult) -> str:
       </table>"""
 
 
-def _order_block_html(result: VCResult, capital_usd: float | None) -> str:
+def _order_block_html(result: VCResult, capital_usd: float | None, s: dict) -> str:
     """Ordre proposé — uniquement si la recommandation est actionnable (BUY/SELL)."""
     if not result.actionable:
         return ""
-    rows: list[tuple[str, str, bool]] = [("Recommandation", _esc(result.recommandation), False)]
+    rows: list[tuple[str, str, bool]] = [(s["order_reco"], _esc(result.recommandation), False)]
     if result.recommandation == "BUY":
-        rows.append(("Taille suggérée", _esc(f"{result.taille_pct:.1f}% du capital"), False))
+        rows.append((s["order_size"], _esc(s["order_size_value"].format(pct=result.taille_pct)), False))
         if capital_usd and capital_usd > 0:
             position = capital_usd * result.taille_pct / 100
             rows.append((
-                "Capital client → position",
+                s["order_capital_to_position"],
                 f"{_esc(f'${capital_usd:,.0f}')}&nbsp;&rarr;&nbsp;{_esc(f'${position:,.0f}')}",
                 False,
             ))
-    rows.append(("Entrée", _esc(result.entree), False))
-    rows.append(("Invalidation", _esc(result.invalidation), False))
-    rows.append(("Cible", _esc(result.cible), True))
+    rows.append((s["order_entry"], _esc(result.entree), False))
+    rows.append((s["order_invalidation"], _esc(result.invalidation), False))
+    rows.append((s["order_target"], _esc(result.cible), True))
 
     row_html = []
     for i, (label, value, is_target) in enumerate(rows):
@@ -426,23 +440,23 @@ def _order_block_html(result: VCResult, capital_usd: float | None) -> str:
         value_color = "#8a6d1f" if is_target else _INK_WARM
         row_html.append(
             f"""<tr>
-          <td style="padding:12px 2px;{border}font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">{label}</td>
+          <td style="padding:12px 2px;{border}font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">{_esc(label)}</td>
           <td align="right" style="padding:12px 2px;{border}font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-weight:600;color:{value_color};">{value}</td>
         </tr>"""
         )
 
     return f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:34px 44px 8px;">
-      {_section_header("Ordre proposé")}
+      {_section_header(s["order_section"])}
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;">
         {"".join(row_html)}
       </table>
-      <div style="margin-top:8px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">Proposition soumise à validation humaine avant toute exécution.</div>
+      <div style="margin-top:8px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{_esc(s["order_disclaimer"])}</div>
     </td>
   </tr>"""
 
 
-def _dollar_potential_html(result: VCResult, capital_usd: float | None) -> str:
+def _dollar_potential_html(result: VCResult, capital_usd: float | None, s: dict) -> str:
     """Potentiel en $ — uniquement si un capital est fourni ET upside/downside estimables.
 
     Jamais de montant fabriqué : sans capital renseigné ou sans upside/downside
@@ -464,26 +478,30 @@ def _dollar_potential_html(result: VCResult, capital_usd: float | None) -> str:
     gain_pct = max(0, min(100, round(gain / total * 100))) if total > 0 else 50
     loss_pct = 100 - gain_pct
     target_value = position + gain
+    position_line = s["dollar_position_line"].format(
+        position=_esc(f"${position:,.0f}"), target=_esc(f"${target_value:,.0f}")
+    )
+    risk_line = s["dollar_risk_line"].format(inval=_esc(result.invalidation))
 
     return f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:34px 44px 6px;">
-      {_section_header("Potentiel en $")}
+      {_section_header(s["dollar_section"])}
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;">
         <tr>
-          <td style="font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-weight:400;color:{_INK_WARM};">Position <span style="font-weight:600;">{_esc(f'${position:,.0f}')}</span> &rarr; <span style="font-weight:600;">{_esc(f'${target_value:,.0f}')}</span> à la cible</td>
+          <td style="font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-weight:400;color:{_INK_WARM};">{position_line}</td>
           <td align="right" style="font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-weight:600;color:#8a6d1f;white-space:nowrap;">+{_esc(f'${gain:,.0f}')}</td>
         </tr>
       </table>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border:1px solid #e2d8bd;border-radius:6px;background-color:#efe8d6;">
         <tr>
-          <td width="{gain_pct}%" style="border-radius:5px 0 0 5px;background-color:{_GOLD};background-image:linear-gradient(90deg,{_GOLD_DEEP},{_GOLD_LIGHT} 80%,{_GOLD});padding:7px 12px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#10131f;">Gain&nbsp;+{_esc(f'${gain:,.0f}')}</td>
+          <td width="{gain_pct}%" style="border-radius:5px 0 0 5px;background-color:{_GOLD};background-image:linear-gradient(90deg,{_GOLD_DEEP},{_GOLD_LIGHT} 80%,{_GOLD});padding:7px 12px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#10131f;">{_esc(s["dollar_gain_label"])}&nbsp;+{_esc(f'${gain:,.0f}')}</td>
           <td width="{100 - gain_pct}%" style="font-size:0;line-height:0;">&nbsp;</td>
         </tr>
       </table>
 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
         <tr>
-          <td style="font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-weight:400;color:{_INK_WARM};">Risque encaissé si invalidation (<span style="font-weight:600;">{_esc(result.invalidation)}</span>)</td>
+          <td style="font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-weight:400;color:{_INK_WARM};">{risk_line}</td>
           <td align="right" style="font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-weight:600;color:{_INK_WARM};white-space:nowrap;">&minus;{_esc(f'${loss:,.0f}')}</td>
         </tr>
       </table>
@@ -493,17 +511,18 @@ def _dollar_potential_html(result: VCResult, capital_usd: float | None) -> str:
           <td width="{100 - loss_pct}%" style="font-size:0;line-height:0;">&nbsp;</td>
         </tr>
       </table>
-      <div style="margin-top:8px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">Échelle commune : barres proportionnelles aux montants en $.</div>
+      <div style="margin-top:8px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{_esc(s["dollar_scale_note"])}</div>
     </td>
   </tr>"""
 
 
-def _scenario_card_html(sc: dict, width: str, padding: str) -> str:
+def _scenario_card_html(sc: dict, width: str, padding: str, s: dict, lang: str) -> str:
     nom = str(sc.get("nom", ""))
-    titre, bar_style, is_center = _SCEN_META.get(nom, ("Scénario", f"background-color:{_GOLD};", False))
+    title_key, bar_style, is_center = _SCEN_META.get(nom, (None, f"background-color:{_GOLD};", False))
+    titre = s.get(title_key, nom) if title_key else nom
     cible = _esc(sc.get("cible", ""))
     proba = max(0, min(100, int(sc.get("probabilite") or 0)))
-    conf = _esc(sc.get("confiance", "faible"))
+    conf = _esc(confidence_label(sc.get("confiance", "faible"), lang))
     border = _GOLD if is_center else "#e0d6ba"
     bg = "#fdfaf1" if is_center else "#fbf8f0"
     return f"""<td class="stack sc-card" width="{width}" style="padding:{padding};vertical-align:top;">
@@ -511,18 +530,18 @@ def _scenario_card_html(sc: dict, width: str, padding: str) -> str:
               <tr><td style="padding:16px 16px 14px;">
                 <div style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">{_esc(titre)}</div>
                 <div style="padding-top:8px;font-family:{_FONT_NUM};font-size:22px;line-height:1.2;font-weight:600;letter-spacing:-0.01em;font-variant-numeric:lining-nums tabular-nums;color:{_INK_WARM};">{cible}</div>
-                <div style="padding-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">Probabilité&nbsp;{proba}%</div>
+                <div style="padding-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">{_esc(s["scen_probability_label"])}&nbsp;{proba}%</div>
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;background-color:#ece4cf;border-radius:4px;"><tr>
                   <td width="{proba}%" style="height:6px;line-height:6px;font-size:0;border-radius:4px;{bar_style}">&nbsp;</td>
                   <td width="{100 - proba}%" style="height:6px;line-height:6px;font-size:0;">&nbsp;</td>
                 </tr></table>
-                <div style="padding-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">Confiance {conf}</div>
+                <div style="padding-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{_esc(s["scen_confidence_label"].format(v=conf))}</div>
               </td></tr>
             </table>
           </td>"""
 
 
-def _scenarios_block_html(scenarios: list[dict]) -> str:
+def _scenarios_block_html(scenarios: list[dict], s: dict, lang: str) -> str:
     if not scenarios:
         return ""
     n = len(scenarios)
@@ -534,11 +553,11 @@ def _scenarios_block_html(scenarios: list[dict]) -> str:
         widths = [share] * n
         paddings = ["0 4px"] * n
     cards = "".join(
-        _scenario_card_html(sc, widths[i], paddings[i]) for i, sc in enumerate(scenarios)
+        _scenario_card_html(sc, widths[i], paddings[i], s, lang) for i, sc in enumerate(scenarios)
     )
     return f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:34px 44px 2px;">
-      {_section_header("Scénarios")}
+      {_section_header(s["scenarios_section"])}
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;">
         <tr>{cards}</tr>
       </table>
@@ -546,10 +565,11 @@ def _scenarios_block_html(scenarios: list[dict]) -> str:
   </tr>"""
 
 
-def _methodology_block_html() -> str:
+def _methodology_block_html(s: dict) -> str:
+    sources = s["methodology_sources"]
     rows = []
-    for i, (name, desc) in enumerate(_METHODOLOGY_SOURCES):
-        border = "border-bottom:1px solid #ece3cd;" if i < len(_METHODOLOGY_SOURCES) - 1 else ""
+    for i, (name, desc) in enumerate(sources):
+        border = "border-bottom:1px solid #ece3cd;" if i < len(sources) - 1 else ""
         rows.append(
             f"""<tr>
           <td style="padding:8px 2px;{border}font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};white-space:nowrap;">{_esc(name)}</td>
@@ -558,16 +578,16 @@ def _methodology_block_html() -> str:
         )
     return f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:32px 44px 6px;">
-      {_section_header("Méthodologie & sources")}
+      {_section_header(s["methodology_section"])}
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;">
         {"".join(rows)}
       </table>
-      <div style="margin-top:16px;padding:2px 0 2px 16px;border-left:2px solid {_EMERALD};font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">Principe méthodologique&nbsp;: aucune donnée absente n'est estimée.</div>
+      <div style="margin-top:16px;padding:2px 0 2px 16px;border-left:2px solid {_EMERALD};font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{_esc(s["methodology_principle"])}</div>
     </td>
   </tr>"""
 
 
-def _gaps_block_html(gaps: list[str]) -> str:
+def _gaps_block_html(gaps: list[str], s: dict) -> str:
     if not gaps:
         return ""
     items = "".join(
@@ -582,11 +602,11 @@ def _gaps_block_html(gaps: list[str]) -> str:
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed #c8b878;border-radius:10px;background-color:#faf6ea;">
         <tr>
           <td style="padding:18px 20px;">
-            <div style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">Données insuffisantes&nbsp;: non estimées</div>
+            <div style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">{_esc(s["gaps_title"])}</div>
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
               {items}
             </table>
-            <div style="margin-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">Conformément à notre principe&nbsp;: aucune donnée absente n'est estimée.</div>
+            <div style="margin-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{_esc(s["gaps_footer"])}</div>
           </td>
         </tr>
       </table>
@@ -594,7 +614,7 @@ def _gaps_block_html(gaps: list[str]) -> str:
   </tr>"""
 
 
-def _fallback_note_html(result: VCResult) -> str:
+def _fallback_note_html(result: VCResult, s: dict) -> str:
     if result.llm_used:
         return ""
     return f"""<tr>
@@ -602,7 +622,7 @@ def _fallback_note_html(result: VCResult) -> str:
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed #c9603c;border-radius:10px;background-color:#faf0ea;">
         <tr>
           <td style="padding:16px 20px;font-family:{_FONT_SANS};font-size:13px;line-height:1.6;color:#8a3a1f;">
-            <strong>Analyse qualitative LLM indisponible</strong>. Ce rapport repose uniquement sur les signaux quantitatifs.
+            <strong>{_esc(s["fallback_title"])}</strong>. {_esc(s["fallback_body"])}
           </td>
         </tr>
       </table>
@@ -610,7 +630,7 @@ def _fallback_note_html(result: VCResult) -> str:
   </tr>"""
 
 
-def _ta_block_html(result: VCResult) -> str:
+def _ta_block_html(result: VCResult, s: dict) -> str:
     """Section « Analyse technique » : niveaux dérivés de l'OHLCV réel + graphique.
 
     Data-gated : vide si aucune donnée technique n'a été dérivée (comportement
@@ -620,7 +640,7 @@ def _ta_block_html(result: VCResult) -> str:
     if not result.ta_levels_lines and not result.chart_data_uri:
         return ""
 
-    trend = f"&nbsp;&middot;&nbsp;tendance {_esc(result.ta_trend)}" if result.ta_trend else ""
+    trend = f"&nbsp;&middot;&nbsp;{_esc(s['ta_trend_prefix'])} {_esc(result.ta_trend)}" if result.ta_trend else ""
     tf = _esc(result.ta_timeframe) if result.ta_timeframe else ""
 
     lines_html = ""
@@ -635,20 +655,21 @@ def _ta_block_html(result: VCResult) -> str:
 
     chart_html = ""
     if result.chart_data_uri.startswith("data:image/png"):
-        cap = f"Bougies {tf}" if tf else "Bougies OHLCV"
+        cap = s["ta_candles_tf"].format(tf=tf) if tf else s["ta_candles_default"]
+        alt = _esc(s["ta_chart_alt"].format(cap=cap))
         chart_html = (
             f'<div style="margin-top:16px;"><img src="{result.chart_data_uri}" '
-            f'alt="Graphique {cap} avec niveaux d&eacute;riv&eacute;s" width="560" '
+            f'alt="{alt}" width="560" '
             f'style="display:block;width:100%;max-width:560px;height:auto;border-radius:8px;'
             f'border:1px solid rgba(201,162,39,0.25);" /></div>'
             f'<div style="margin-top:6px;font-family:{_FONT_MONO};font-size:10px;color:{_MUTE_WARM};">'
-            f'{_esc(cap)}&nbsp;&middot;&nbsp;niveaux d&eacute;riv&eacute;s des donn&eacute;es, jamais fabriqu&eacute;s</div>'
+            f'{_esc(cap)}&nbsp;&middot;&nbsp;{_esc(s["ta_caption_note"])}</div>'
         )
 
     return f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:30px 44px 6px;">
-      {_section_header("Analyse technique")}
-      <div style="margin-top:6px;font-family:{_FONT_MONO};font-size:11px;letter-spacing:0.04em;color:{_MUTE_WARM};">OHLCV r&eacute;el{trend}</div>
+      {_section_header(s["ta_section"])}
+      <div style="margin-top:6px;font-family:{_FONT_MONO};font-size:11px;letter-spacing:0.04em;color:{_MUTE_WARM};">{_esc(s["ta_ohlcv_real"])}{trend}</div>
       {lines_html}
       {chart_html}
     </td>
@@ -667,7 +688,7 @@ def _fmt_compact_usd(value: float) -> str:
     return f"${v:.0f}"
 
 
-def _roi_block_html(result: VCResult) -> str:
+def _roi_block_html(result: VCResult, s: dict) -> str:
     """Section « Projection par comparables » : placement du token dans l'histoire.
 
     Data-gated : vide sans scénario (capitalisation actuelle inconnue). Chaque
@@ -677,45 +698,43 @@ def _roi_block_html(result: VCResult) -> str:
     if not result.roi_scenarios:
         return ""
 
-    basis_label = "FDV" if result.roi_basis == "fdv" else "capitalisation"
+    basis_label = s["roi_basis_fdv"] if result.roi_basis == "fdv" else s["roi_basis_mcap"]
     sector = _esc(result.roi_sector) if result.roi_sector else ""
     if result.roi_sector_recognized and sector:
-        sector_line = f"Secteur&nbsp;: {sector}"
+        sector_line = s["roi_sector_line"].format(sector=sector)
     else:
-        sector_line = "Secteur non reconnu&nbsp;: comparables g&eacute;n&eacute;riques"
+        sector_line = s["roi_sector_unknown"]
 
     rows = ""
-    for s in result.roi_scenarios:
-        label = _esc(s.get("label", ""))
-        ref = _fmt_compact_usd(s.get("ref_mcap_usd", 0))
-        mult = s.get("multiple", 0)
-        note = _esc(s.get("note", ""))
+    for sc in result.roi_scenarios:
+        label = _esc(sc.get("label", ""))
+        ref = _fmt_compact_usd(sc.get("ref_mcap_usd", 0))
+        mult = sc.get("multiple", 0)
+        note = _esc(sc.get("note", ""))
         note_html = (
             f'<div style="font-family:{_FONT_SANS};font-size:11px;color:{_MUTE_WARM};'
             f'margin-top:2px;">{note}</div>'
             if note
             else ""
         )
+        ref_line = _esc(s["roi_ref_label"].format(basis=basis_label, ref=ref))
         rows += (
             f'<tr>'
             f'<td style="padding:9px 0;border-bottom:1px solid rgba(201,162,39,0.18);'
             f'font-family:{_FONT_SANS};font-size:14px;color:{_INK_WARM};">'
             f'{label}<div style="font-family:{_FONT_MONO};font-size:11px;color:{_MUTE_WARM};'
-            f'margin-top:2px;">{basis_label} de r&eacute;f&eacute;rence {ref}</div>{note_html}</td>'
+            f'margin-top:2px;">{ref_line}</div>{note_html}</td>'
             f'<td align="right" style="padding:9px 0;border-bottom:1px solid rgba(201,162,39,0.18);'
             f'font-family:{_FONT_MONO};font-size:18px;font-weight:700;color:{_GOLD_DEEP};'
             f'white-space:nowrap;">{mult:g}x</td>'
             f'</tr>'
         )
 
-    disclaimer = _esc(
-        result.roi_disclaimer
-        or "Placement historique par comparables, pas une prevision ni une cible."
-    )
+    disclaimer = _esc(result.roi_disclaimer or s["roi_disclaimer_default"])
 
     return f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:30px 44px 6px;">
-      {_section_header("Projection par comparables")}
+      {_section_header(s["roi_section"])}
       <div style="margin-top:6px;font-family:{_FONT_MONO};font-size:11px;letter-spacing:0.04em;color:{_MUTE_WARM};">{sector_line}</div>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
         {rows}
@@ -723,6 +742,62 @@ def _roi_block_html(result: VCResult) -> str:
       <div style="margin-top:12px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{disclaimer}</div>
     </td>
   </tr>"""
+
+
+def render_email_teaser_html(result: VCResult, *, lang: str = "fr") -> str:
+    """Email COURT (badges + R/R) — l'analyse complète vit désormais dans le PDF
+    sécurisé joint. Ne JAMAIS y remettre la thèse/le rapport détaillé : le PDF
+    anti-copie perdrait tout son sens si le même contenu était copiable ici.
+    """
+    lang = norm_lang(lang)
+    s = report_strings(lang)
+    badges = _badges_html(result, s, lang)
+    rr = ""
+    if result.rr is not None:
+        rr = (
+            f"<div style='margin-top:14px;font-family:{_FONT_SANS};font-size:13px;"
+            f"color:{_MUTE};'>{_esc(s['rr_upside_label'])} +{result.upside_pct:.0f}% "
+            f"&middot; {_esc(s['rr_ratio_label'])} {result.rr:.1f} &middot; "
+            f"{_esc(s['rr_downside_label'])} &minus;{result.downside_pct:.0f}%</div>"
+        )
+    title = _report_title(result)
+    return f"""<!DOCTYPE html>
+<html lang="{lang}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_esc(s["html_title"].format(title=title))}</title></head>
+<body style="margin:0;padding:0;background-color:{_IVORY};font-family:{_FONT_SANS};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="padding:32px 16px;">
+<table role="presentation" width="480" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;width:100%;background-color:#fff;border-radius:10px;border:1px solid rgba(201,162,39,0.3);">
+<tr><td style="padding:28px 30px;">
+<div style="font-family:{_FONT_SERIF};font-size:22px;color:{_INK};">ARIA &middot; {_esc(title)}</div>
+<div style="margin-top:4px;font-family:{_FONT_SANS};font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE};">{_esc(s["teaser_heading"])}</div>
+<div style="margin-top:16px;">{badges}</div>
+{rr}
+<div style="margin-top:20px;padding-top:16px;border-top:1px solid rgba(201,162,39,0.25);font-family:{_FONT_SANS};font-size:12px;line-height:1.6;color:{_MUTE};">{_esc(s["teaser_attached_note"])}</div>
+</td></tr>
+</table>
+</td></tr></table>
+</body></html>"""
+
+
+def email_teaser_text(result: VCResult, *, lang: str = "fr") -> str:
+    """Version texte du teaser (clients sans HTML) — même principe : rien du
+    contenu détaillé, tout est dans le PDF sécurisé joint."""
+    lang = norm_lang(lang)
+    s = report_strings(lang)
+    title = _report_title(result)
+    potentiel = s["potential_label"].format(n=result.potentiel) if result.potentiel is not None else s["potential_na"]
+    lines = [
+        f"ARIA · {title}",
+        f"{result.recommandation} · {potentiel} · {s['risk_prefix'].format(v=risk_label(result.risque, lang))}",
+    ]
+    if result.rr is not None:
+        lines.append(
+            f"{s['rr_upside_label']} +{result.upside_pct:.0f}% · {s['rr_ratio_label']} {result.rr:.1f} · "
+            f"{s['rr_downside_label']} -{result.downside_pct:.0f}%"
+        )
+    lines += ["", s["teaser_attached_note"]]
+    return "\n".join(lines)
 
 
 def render_html_report(
@@ -734,6 +809,7 @@ def render_html_report(
     series_number: int | None = None,
     capital_usd: float | None = None,
     tier: str = "premium",
+    lang: str = "fr",
 ) -> str:
     """Document HTML autonome, CSS inline — prêt pour l'email (et le futur site).
 
@@ -758,19 +834,22 @@ def render_html_report(
     références (réservées au premium). Toute valeur hors ``{"standard"}`` retombe
     sur « premium » (défaut sûr, cf. ``_theme`` — allowlist fermée).
     """
+    lang = norm_lang(lang)
+    s = report_strings(lang)
     theme = _theme(tier)
     is_standard = theme["tier"] == _TIER_STANDARD
+    tier_label = s["tier_standard_label"] if is_standard else s["tier_premium_label"]
     ref_id, full_hash = report_integrity(result, generated_at=generated_at, recipient=recipient)
     title = _report_title(result)
 
     # Ligne méta du hero : chaque segment optionnel n'apparaît que si fourni.
     meta_parts = []
     if series_number:
-        meta_parts.append(f"Série {_esc(_format_serial(series_number))}")
+        meta_parts.append(s["meta_series"].format(n=_esc(_format_serial(series_number))))
     if report_number:
-        meta_parts.append(f"Rapport n°{_esc(report_number)}")
-    meta_parts.append(f"Généré le {_esc(generated_at)}")
-    meta_line = " &middot; ".join(meta_parts) + "&nbsp;&nbsp;&middot;&nbsp;&nbsp;Émis par ARIA&nbsp;Vanguard&nbsp;ZHC"
+        meta_parts.append(s["meta_report_num"].format(n=_esc(report_number)))
+    meta_parts.append(s["meta_generated"].format(date=_esc(generated_at)))
+    meta_line = " &middot; ".join(meta_parts) + f"&nbsp;&nbsp;&middot;&nbsp;&nbsp;{_esc(s['meta_issued_by'])}"
 
     # Préheader invisible (aperçu client mail) — jamais de valeur inventée (R/R omis si non estimable).
     preheader = f"{_esc(title)} (Base) &middot; {_esc(result.recommandation)}"
@@ -781,55 +860,56 @@ def render_html_report(
             f" &middot; Upside +{_esc(f'{result.upside_pct:.0f}')}% / "
             f"Downside &minus;{_esc(f'{result.downside_pct:.0f}')}%"
         )
-    preheader += " &middot; Note de recherche ARIA Vanguard ZHC"
+    preheader += f" &middot; {_esc(s['preheader_suffix'])}"
 
-    badges_html = _badges_html(result)
-    rr_block = _rr_block_html(result)
+    badges_html = _badges_html(result, s, lang)
+    rr_block = _rr_block_html(result, s)
 
     # ── Corps ivoire : blocs conditionnels, chacun omis si la donnée sous-jacente est absente. ──
-    fallback_note = _fallback_note_html(result)
+    fallback_note = _fallback_note_html(result, s)
 
     tldr_block = ""
     if result.resume_executif:
         tldr_block = f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:38px 44px 8px;">
-      {_section_header("En bref")}
+      {_section_header(s["tldr_section"])}
       <div class="ink" style="margin-top:16px;padding:2px 0 2px 18px;border-left:3px solid {_GOLD};font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-style:italic;color:{_INK_WARM};">&laquo;&nbsp;{_esc(result.resume_executif)}&nbsp;&raquo;</div>
     </td>
   </tr>"""
 
-    order_block = _order_block_html(result, capital_usd)
-    dollar_block = _dollar_potential_html(result, capital_usd)
+    order_block = _order_block_html(result, capital_usd, s)
+    dollar_block = _dollar_potential_html(result, capital_usd, s)
 
     these_block = ""
     if result.these:
         these_block = f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:34px 44px 4px;">
-      {_section_header("Thèse d'investissement")}
+      {_section_header(s["these_section"])}
       <div class="ink" style="margin-top:14px;font-family:{_FONT_SANS};font-size:14px;line-height:1.6;font-weight:400;color:{_INK_WARM};">{_esc(result.these)}</div>
     </td>
   </tr>"""
 
-    scenarios_block = _scenarios_block_html(result.scenarios)
+    scenarios_block = _scenarios_block_html(result.scenarios, s, lang)
 
     # Analyse technique (niveaux OHLCV réels + graphique) : profondeur réservée au
     # premium, comme l'analyse détaillée. En standard, entièrement omise (data-gated).
-    ta_block = "" if is_standard else _ta_block_html(result)
+    ta_block = "" if is_standard else _ta_block_html(result, s)
 
     # Projection ROI par comparables historiques (Voûte 3, tâche #5) : contexte
     # tangible réservé au premium, JAMAIS une cible ni un montant inventé. Data-gated :
     # vide si la capitalisation actuelle est inconnue.
-    roi_block = "" if is_standard else _roi_block_html(result)
+    roi_block = "" if is_standard else _roi_block_html(result, s)
 
     watermark_diagonal = ""
     if recipient:
+        watermark_text = _esc(s["watermark_personal"].format(recipient=recipient, ref=ref_id))
         watermark_diagonal = f"""<tr>
     <td class="ivory" align="center" style="background-color:{_IVORY};padding:26px 24px 6px;">
-      <div style="transform:rotate(-4deg);-webkit-transform:rotate(-4deg);font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#e3d9bd;">Édition&nbsp;personnelle&nbsp;&middot;&nbsp;{_esc(recipient)}&nbsp;&middot;&nbsp;{_esc(ref_id)}</div>
+      <div style="transform:rotate(-4deg);-webkit-transform:rotate(-4deg);font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#e3d9bd;">{watermark_text}</div>
     </td>
   </tr>"""
 
-    gaps_block = _gaps_block_html(result.donnees_insuffisantes)
+    gaps_block = _gaps_block_html(result.donnees_insuffisantes, s)
 
     # Analyse détaillée / méthodologie / références : réservées au tier premium.
     # En standard, ces sections sont entièrement omises (jamais tronquées ni
@@ -837,7 +917,7 @@ def render_html_report(
     if is_standard:
         detailed_block = f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:22px 44px 40px;">
-      <div style="font-family:{_FONT_SANS};font-size:12px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">Analyse détaillée, méthodologie et sources&nbsp;: réservées à l'édition Premium.</div>
+      <div style="font-family:{_FONT_SANS};font-size:12px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{_esc(s["standard_teaser"])}</div>
     </td>
   </tr>"""
         methodology_row = ""
@@ -846,12 +926,12 @@ def render_html_report(
         body_html = _render_markdown_body(result.rapport_detaille)
         detailed_block = f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:32px 44px 6px;">
-      {_section_header("Analyse détaillée")}
+      {_section_header(s["detailed_section"])}
       <div style="margin-top:18px;">{body_html}</div>
     </td>
   </tr>"""
-        methodology_row = _methodology_block_html()
-        references_html = _references_block(result.liens_projet)
+        methodology_row = _methodology_block_html(s)
+        references_html = _references_block(result.liens_projet, s)
         references_row = f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:12px 44px 40px;">
       {references_html}
@@ -863,16 +943,18 @@ def render_html_report(
         f"<img src='{emblem}' width='40' height='40' alt='' style='display:block;margin:0 auto 10px;border-radius:8px;'>"
         if emblem else ""
     )
-    footer_watermark = f"Édition personnelle&nbsp;&middot;&nbsp;{_esc(recipient)}" if recipient else ""
+    footer_watermark = (
+        f"{_esc(s['watermark_label'])}&nbsp;&middot;&nbsp;{_esc(recipient)}" if recipient else ""
+    )
 
     return f"""<!DOCTYPE html>
-<html lang="fr">
+<html lang="{lang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <meta name="supported-color-schemes" content="light">
-<title>ARIA Vanguard ZHC · Note de recherche · {_esc(title)}</title>
+<title>{_esc(s["html_title"].format(title=title))}</title>
 <style>
   @media (max-width:480px){{
     .stack{{display:block !important;width:100% !important;box-sizing:border-box !important;}}
@@ -909,14 +991,14 @@ def render_html_report(
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;"><a href="https://ariavanguardzhc.com" style="color:{_GOLD_SOFT};text-decoration:none;letter-spacing:0.04em;">ariavanguardzhc.com</a></td>
-          <td align="right" style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD_LIGHT};white-space:nowrap;">Confidentiel</td>
+          <td align="right" style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD_LIGHT};white-space:nowrap;">{_esc(s["confidential"])}</td>
         </tr>
       </table>
 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
         <tr>
           <td align="left">
-            <span style="display:inline-block;padding:5px 12px;border-radius:999px;{theme['pill_style']}font-family:{_FONT_SANS};font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;line-height:1;">{_esc(theme['label'])}</span>
+            <span style="display:inline-block;padding:5px 12px;border-radius:999px;{theme['pill_style']}font-family:{_FONT_SANS};font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;line-height:1;">{_esc(tier_label)}</span>
           </td>
         </tr>
       </table>
@@ -955,7 +1037,7 @@ def render_html_report(
 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:34px;">
         <tr>
-          <td align="center" style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD_LIGHT};">Note de recherche&nbsp;&middot;&nbsp;Analyse d&rsquo;investissement</td>
+          <td align="center" style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD_LIGHT};">{_esc(s["research_note_kicker"])}</td>
         </tr>
         <tr>
           <td align="center" style="padding-top:12px;">
@@ -963,7 +1045,7 @@ def render_html_report(
           </td>
         </tr>
         <tr>
-          <td align="center" style="padding-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD_LIGHT};">RÉSEAU BASE</td>
+          <td align="center" style="padding-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_GOLD_LIGHT};">{_esc(s["network_label"])}</td>
         </tr>
         <tr>
           <td align="center" style="padding-top:14px;">
@@ -990,7 +1072,7 @@ def render_html_report(
 
   <tr>
     <td class="microprint" style="background-color:{theme['deep_base']};border-top:1px solid rgba(201,162,39,0.35);border-bottom:1px solid rgba(15,107,92,0.5);padding:4px 10px;overflow:hidden;">
-      <div style="white-space:nowrap;overflow:hidden;font-family:{_FONT_SANS};font-size:7px;line-height:1.6;letter-spacing:0.08em;text-transform:uppercase;color:rgba(230,196,99,0.42);">ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Note&nbsp;certifi&eacute;e&nbsp;{_esc(ref_id)}&nbsp;&middot;&nbsp;Reproduction&nbsp;interdite&nbsp;&middot;&nbsp;ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Note&nbsp;certifi&eacute;e&nbsp;{_esc(ref_id)}&nbsp;&middot;&nbsp;Reproduction&nbsp;interdite&nbsp;&middot;&nbsp;ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Note&nbsp;certifi&eacute;e&nbsp;{_esc(ref_id)}</div>
+      <div style="white-space:nowrap;overflow:hidden;font-family:{_FONT_SANS};font-size:7px;line-height:1.6;letter-spacing:0.08em;text-transform:uppercase;color:rgba(230,196,99,0.42);">{(_esc(s["microprint_hero"].format(ref=ref_id)) + "&nbsp;&middot;&nbsp;") * 2}{_esc(s["microprint_hero"].format(ref=ref_id))}</div>
     </td>
   </tr>
 
@@ -1035,17 +1117,17 @@ def render_html_report(
 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;">
         <tr>
-          <td class="stack" style="font-family:{_FONT_MONO};font-size:11px;line-height:1.6;color:#93a09b;">RÉF.&nbsp;{_esc(ref_id)}</td>
+          <td class="stack" style="font-family:{_FONT_MONO};font-size:11px;line-height:1.6;color:#93a09b;">{_esc(s["footer_ref_label"])}&nbsp;{_esc(ref_id)}</td>
           <td class="stack meta-right" align="right" style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;color:#93a09b;">{footer_watermark}</td>
         </tr>
       </table>
-      <div style="margin-top:6px;font-family:{_FONT_MONO};font-size:11px;line-height:1.6;color:#93a09b;word-break:break-all;">Daté du {_esc(generated_at)} &middot; Empreinte SHA-256&nbsp;: {_esc(full_hash)}</div>
+      <div style="margin-top:6px;font-family:{_FONT_MONO};font-size:11px;line-height:1.6;color:#93a09b;word-break:break-all;">{_esc(s["footer_dated"].format(date=generated_at, hash=full_hash))}</div>
 
-      <div style="margin-top:16px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:400;color:#93a09b;">Cette note constitue une <span style="font-weight:600;color:#f2ead8;">proposition soumise à validation humaine</span>&nbsp;: aucune exécution automatique n&rsquo;est engagée. Elle ne constitue pas un conseil en investissement. Les crypto-actifs présentent un risque de perte totale du capital investi.</div>
+      <div style="margin-top:16px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:400;color:#93a09b;">{_esc(s["footer_disclaimer"]).format(bold=f'<span style="font-weight:600;color:#f2ead8;">{_esc(s["footer_disclaimer_bold"])}</span>')}</div>
 
-      <div class="microprint" style="margin-top:14px;overflow:hidden;white-space:nowrap;font-family:{_FONT_SANS};font-size:7px;line-height:1.6;letter-spacing:0.08em;text-transform:uppercase;color:rgba(230,196,99,0.35);">ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Document&nbsp;confidentiel&nbsp;&middot;&nbsp;{_esc(ref_id)}&nbsp;&middot;&nbsp;Reproduction&nbsp;et&nbsp;revente&nbsp;interdites&nbsp;&middot;&nbsp;ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Document&nbsp;confidentiel&nbsp;&middot;&nbsp;{_esc(ref_id)}&nbsp;&middot;&nbsp;Reproduction&nbsp;et&nbsp;revente&nbsp;interdites&nbsp;&middot;&nbsp;ARIA&nbsp;Vanguard&nbsp;ZHC</div>
+      <div class="microprint" style="margin-top:14px;overflow:hidden;white-space:nowrap;font-family:{_FONT_SANS};font-size:7px;line-height:1.6;letter-spacing:0.08em;text-transform:uppercase;color:rgba(230,196,99,0.35);">{(_esc(s["microprint_footer"].format(ref=ref_id)) + "&nbsp;&middot;&nbsp;") * 2}{_esc(s["microprint_footer"].format(ref=ref_id))}</div>
 
-      <div style="margin-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;color:#93a09b;" align="center">&copy;&nbsp;2026 ARIA Vanguard ZHC&nbsp;&middot; Tous droits réservés&nbsp;&middot; Document confidentiel&nbsp;: reproduction et revente interdites.</div>
+      <div style="margin-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;color:#93a09b;" align="center">&copy;&nbsp;{_esc(s["copyright"])}</div>
     </td>
   </tr>
 

@@ -1352,6 +1352,24 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     action, approval_id = data.split(":", 1)
 
+    if action == "vclang":
+        await query.answer()
+        lang, _, address = approval_id.partition(":")
+        from aria_core.skills.vc_i18n import norm_lang
+
+        lang = norm_lang(lang)
+        if not address or not _SCAN_ADDR_RE.match(address):
+            return
+        message = query.message
+        if not message:
+            return
+        try:
+            await message.edit_reply_markup(reply_markup=None)  # retire les boutons, un seul choix possible
+        except Exception:  # noqa: BLE001 — message déjà modifié/supprimé, jamais bloquant
+            pass
+        await _run_vc_analysis(message, address, test_mode=False, lang=lang)
+        return
+
     if action == "explain":
         await query.answer()
         req = await get_approval(approval_id)
@@ -1599,6 +1617,33 @@ _vc_semaphore = asyncio.Semaphore(_VC_MAX_CONCURRENT)
 _vc_waiters = 0
 
 
+_VC_LANG_BUTTONS = (("fr", "🇫🇷 Français"), ("en", "🇬🇧 English"))
+
+
+async def _run_vc_analysis(message, address: str, *, test_mode: bool, lang: str) -> None:
+    """Acquiert le sémaphore de concurrence puis lance l'analyse. Partagé par le
+    mode test (direct) et le chemin d'envoi réel (déclenché après choix de langue)."""
+    global _vc_waiters
+    from aria_core.skills.vc_i18n import scaffold_strings
+
+    s = scaffold_strings(lang)
+    if _vc_semaphore.locked() and _vc_waiters >= _VC_MAX_WAITERS:
+        await _reply(message, s["overloaded"])
+        return
+    if _vc_semaphore.locked():
+        await _reply(message, s["busy"])
+
+    _vc_waiters += 1
+    try:
+        await _vc_semaphore.acquire()
+    finally:
+        _vc_waiters -= 1
+    try:
+        await _vc_analyze_and_reply(message, address, test_mode=test_mode, lang=lang, s=s)
+    finally:
+        _vc_semaphore.release()
+
+
 async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/vc <adresse> [test] — analyse VC complète : ordre court ici, rapport détaillé par email.
 
@@ -1608,13 +1653,15 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     MODE TEST admin — `/vc <adresse> test` : l'analyse tourne et le raisonnement
     complet est affiché ici, mais AUCUN email n'est envoyé et AUCUNE prédiction
     n'est enregistrée dans le track-record (compteurs inchangés). Pour tester sans
-    polluer les stats ni spammer.
+    polluer les stats ni spammer. Utilise directement la préférence `/langue`
+    (pas de question interactive — outil de debug rapide pour l'opérateur).
 
-    La langue de sortie (FR/EN) suit la préférence opérateur (`/langue`).
+    Chemin d'envoi réel (hors test) : avant de lancer l'analyse, ARIA demande la
+    langue du rapport (boutons) — jamais l'adresse email (destinataire fixe,
+    `ARIA_VC_REPORT_TO`), jamais de confirmation d'envoi séparée. Le choix de
+    langue déclenche directement l'analyse + l'envoi via le callback ``vclang``.
     Concurrence bornée par ``_vc_semaphore`` (voir ci-dessus).
     """
-    global _vc_waiters
-
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -1641,22 +1688,20 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _reply(message, s["usage"])
         return
 
-    # File d'attente bornée : si trop d'analyses patientent déjà, on refuse net.
-    if _vc_semaphore.locked() and _vc_waiters >= _VC_MAX_WAITERS:
-        await _reply(message, s["overloaded"])
+    if test_mode:
+        await _run_vc_analysis(message, address, test_mode=True, lang=lang)
         return
-    if _vc_semaphore.locked():
-        await _reply(message, s["busy"])
 
-    _vc_waiters += 1
-    try:
-        await _vc_semaphore.acquire()
-    finally:
-        _vc_waiters -= 1
-    try:
-        await _vc_analyze_and_reply(message, address, test_mode=test_mode, lang=lang, s=s)
-    finally:
-        _vc_semaphore.release()
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(label, callback_data=f"vclang:{code}:{address}")
+        for code, label in _VC_LANG_BUTTONS
+    ]])
+    await message.reply_text(
+        "🌐 Langue du rapport ?" if lang == "fr" else "🌐 Report language?",
+        reply_markup=keyboard,
+    )
 
 
 async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang: str, s: dict) -> None:
@@ -1741,6 +1786,7 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
         series_number=series_number,
         capital_usd=capital_usd,
         tier=tier,
+        lang=lang,
     )
     if email_ok:
         await _reply(message, "📧 Rapport détaillé envoyé par email.")

@@ -389,3 +389,42 @@ def test_cockpit_operator_secret_never_persistent():
     api = _read("vanguard/src/api.ts")
     dossier_call = api.split("export async function getDossier", 1)[1][:400]
     assert "operatorHeaders()" in dossier_call, "le dossier doit envoyer le secret en HEADER, jamais en query-string"
+
+
+def test_vc_report_pdf_secured_and_email_body_never_leaks_full_report():
+    """PDF sécurisé joint au rapport /vc : (a) permissions anti-copie posées avant
+    envoi, jamais un mot de passe propriétaire codé en dur (généré à la volée par
+    l'appelant) ; (b) le corps de l'email (teaser) ne contient JAMAIS la thèse ni
+    le rapport détaillé — sinon la protection PDF anti-copie serait sans objet."""
+    import inspect
+
+    from aria_core.skills import vc_delivery, vc_report_pdf
+
+    delivery_src = inspect.getsource(vc_delivery)
+    assert "secure_pdf_bytes" in delivery_src, "le PDF joint doit être sécurisé avant envoi"
+    assert "secrets.token_urlsafe" in delivery_src, (
+        "le mot de passe propriétaire doit être généré à la volée (jamais codé en dur/réutilisé)"
+    )
+    assert "render_email_teaser_html" in delivery_src and "email_teaser_text" in delivery_src, (
+        "le corps de l'email doit être le teaser court, jamais le rapport complet"
+    )
+    assert "render_html_report" not in delivery_src, (
+        "le rapport HTML complet ne doit plus être envoyé comme corps d'email"
+    )
+
+    pdf_src = inspect.getsource(vc_report_pdf)
+    assert "pas inviolable" in pdf_src or "jamais un chiffrement inviolable" in pdf_src, (
+        "le module doit documenter honnêtement la limite de la protection PDF (dissuasif, pas absolu)"
+    )
+
+
+def test_vc_language_choice_never_asks_confirmation_or_email_address():
+    """/vc (chemin réel) demande la LANGUE avant envoi — jamais une confirmation
+    d'envoi séparée, jamais l'adresse email (destinataire toujours fixe, dôme)."""
+    src = _read_core("gateway/telegram_bot.py")
+    assert "vclang:" in src, "callback de choix de langue manquant"
+    # Le destinataire reste résolu par vc_delivery (ARIA_VC_REPORT_TO / ARIA_SMTP_USER),
+    # jamais saisi depuis Telegram.
+    handler_seg = src.split("async def _handle_vc(", 1)[1][:3000]
+    for forbidden in ("input(", "quelle adresse", "quel email", "confirmer l'envoi"):
+        assert forbidden not in handler_seg.lower(), f"jamais de prompt interdit : {forbidden}"

@@ -1,6 +1,8 @@
 """Livraison du rapport VC par email — orchestration (kill-switch + rendu + envoi).
 
-Aucun envoi réel : send_email et outgoing_pause sont mockés.
+Aucun envoi réel : send_email et outgoing_pause sont mockés. Depuis le passage
+au PDF sécurisé, le corps de l'email est un TEASER COURT (jamais la thèse ni le
+rapport détaillé) et l'analyse complète est la pièce jointe PDF chiffrée.
 """
 from __future__ import annotations
 
@@ -13,17 +15,25 @@ from aria_core.skills.vc_analysis import VCResult
 
 ADDR = "0x" + "a" * 40
 _GEN = "06/07/2026 18:00 UTC"
+_SECRET_THESIS = "Traction réelle jamais montrée nulle part ailleurs XYZZY."
 
 
 def _result(**kw) -> VCResult:
     base = dict(
-        contract=ADDR, potentiel=7, risque="MODÉRÉ", these="Traction réelle.",
+        contract=ADDR, potentiel=7, risque="MODÉRÉ", these=_SECRET_THESIS,
         recommandation="BUY", taille_pct=5.0, entree="marché",
-        invalidation="perte $5k", cible="x2", rapport_detaille="## Analyse\nDétail.",
+        invalidation="perte $5k", cible="x2", rapport_detaille="## Analyse\nDétail confidentiel.",
         donnees_insuffisantes=["équipe"], security_score=60, lite_verdict="CAUTION", llm_used=True,
+        upside_pct=150.0, downside_pct=25.0,
     )
     base.update(kw)
     return VCResult(**base)
+
+
+async def _fake_send(*, to, subject, html_body, text_body=None, config=None,
+                      attachment=None, attachment_filename=None,
+                      attachment_maintype="application", attachment_subtype="pdf"):
+    return True, None
 
 
 @pytest.mark.asyncio
@@ -73,25 +83,47 @@ async def test_delivery_no_recipient_configured(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delivery_success_renders_and_sends(monkeypatch):
+async def test_delivery_success_sends_teaser_with_secured_pdf_attachment(monkeypatch):
     monkeypatch.setattr(vc_delivery.outgoing_pause, "is_paused", lambda *, strict=False: False)
     monkeypatch.setattr(vc_delivery, "_recipient", lambda env=None: "agentaria.zhc@gmail.com")
     captured = {}
 
-    async def _fake_send(*, to, subject, html_body, text_body=None, config=None):
-        captured.update(to=to, subject=subject, html=html_body, text=text_body)
+    async def _capture_send(*, to, subject, html_body, text_body=None, config=None,
+                             attachment=None, attachment_filename=None,
+                             attachment_maintype="application", attachment_subtype="pdf"):
+        captured.update(
+            to=to, subject=subject, html=html_body, text=text_body,
+            attachment=attachment, filename=attachment_filename,
+        )
         return True, None
 
-    monkeypatch.setattr(vc_delivery, "send_email", _fake_send)
+    monkeypatch.setattr(vc_delivery, "send_email", _capture_send)
 
-    ok, error = await vc_delivery.send_vc_report(_result(), generated_at=_GEN)
+    ok, error = await vc_delivery.send_vc_report(_result(), generated_at=_GEN, report_number=2)
 
     assert ok is True
     assert error is None
     assert captured["to"] == "agentaria.zhc@gmail.com"
-    assert "ARIA Vanguard ZHC" in captured["html"]  # rapport HTML rendu
     assert "BUY" in captured["subject"]
-    assert "validation humaine" in captured["text"].lower()  # disclaimer dans le fallback texte
+
+    # Le corps (HTML + texte) ne doit JAMAIS contenir la thèse/le rapport détaillé —
+    # sinon le PDF anti-copie n'a plus de sens (même contenu copiable ailleurs).
+    assert _SECRET_THESIS not in captured["html"]
+    assert "Détail confidentiel" not in captured["html"]
+    assert _SECRET_THESIS not in captured["text"]
+    assert "Détail confidentiel" not in captured["text"]
+    assert "pièce jointe" in captured["text"].lower() or "PDF" in captured["text"]
+
+    # Pièce jointe : PDF chiffré (permissions anti-copie), pas les octets bruts.
+    assert captured["attachment"] is not None
+    assert captured["filename"].endswith(".pdf")
+    from pypdf import PdfReader
+    import io
+
+    reader = PdfReader(io.BytesIO(captured["attachment"]))
+    assert reader.is_encrypted
+    text = reader.pages[0].extract_text()
+    assert "ARIA" in text  # le PDF, lui, porte bien le rapport
 
 
 @pytest.mark.asyncio
@@ -104,6 +136,27 @@ async def test_delivery_propagates_send_failure(monkeypatch):
 
     assert ok is False
     assert "SMTP" in error
+
+
+@pytest.mark.asyncio
+async def test_delivery_respects_lang(monkeypatch):
+    """La langue choisie doit se refléter dans le sujet ET le PDF joint."""
+    monkeypatch.setattr(vc_delivery.outgoing_pause, "is_paused", lambda *, strict=False: False)
+    monkeypatch.setattr(vc_delivery, "_recipient", lambda env=None: "agentaria.zhc@gmail.com")
+    captured = {}
+
+    async def _capture_send(*, to, subject, html_body, text_body=None, config=None,
+                             attachment=None, attachment_filename=None,
+                             attachment_maintype="application", attachment_subtype="pdf"):
+        captured.update(subject=subject, text=text_body)
+        return True, None
+
+    monkeypatch.setattr(vc_delivery, "send_email", _capture_send)
+
+    await vc_delivery.send_vc_report(_result(), generated_at=_GEN, lang="en")
+
+    assert "VC Analysis" in captured["subject"]
+    assert "attached" in captured["text"].lower()
 
 
 def test_recipient_prefers_explicit_then_smtp_user():
