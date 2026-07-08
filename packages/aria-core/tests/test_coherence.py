@@ -151,3 +151,41 @@ def test_claude_md_documents_automation():
     assert "Automatismes en place" in claude, "la section 'Automatismes en place' a disparu de CLAUDE.md"
     assert "session-start.sh" in claude, "CLAUDE.md ne documente pas le hook de démarrage"
     assert "test_coherence" in claude, "CLAUDE.md ne documente pas le garde-fou de cohérence"
+
+
+# ── 4. Sécurité — invariants d'auth (failles fermées, ne pas rouvrir) ─────────────────────
+
+def test_operator_secret_header_only_not_query_string():
+    """Le secret opérateur s'authentifie par header SEUL — jamais en query-string (fuite logs)."""
+    pm = _read_core("public_mode.py")
+    assert "is_operator_request" in pm, "helper is_operator_request absent de public_mode"
+    assert "compare_digest" in pm, "comparaison du secret opérateur non à temps constant"
+    assert 'query_params.get("secret")' not in pm, (
+        "public_mode accepte encore le secret en query-string : fuite dans logs/historique/Referer."
+    )
+
+
+def test_telegram_webhook_fail_closed():
+    """Le webhook Telegram doit être fail-CLOSED (secret absent => refus) + compare à temps constant."""
+    route = _read("vanguard/backend/app/api/routes/telegram_route.py")
+    assert "compare_digest" in route, "comparaison du secret webhook non à temps constant"
+    assert "Webhook secret not configured" in route, (
+        "le webhook Telegram n'est plus fail-closed : sans secret, il accepterait des updates forgés."
+    )
+
+
+def test_community_feedback_handle_impersonation_guarded():
+    """Un handle opérateur revendiqué sans le secret admin ne doit pas donner de privilège."""
+    route = _read("vanguard/backend/app/api/routes/aria.py")
+    assert "is_operator_request" in route, "la route ne vérifie pas l'authentification opérateur réelle"
+    assert "is_trusted_feedback_handle" in route, (
+        "l'anti-usurpation du champ handle a disparu de la route community-feedback."
+    )
+
+
+def test_uvicorn_proxy_headers_enabled():
+    """Le conteneur doit lancer uvicorn avec --proxy-headers (IP réelle => plafond anti-abus)."""
+    dockerfile = _read("vanguard/Dockerfile")
+    assert "--proxy-headers" in dockerfile, (
+        "uvicorn sans --proxy-headers : l'IP client reste le loopback, le plafond par IP est inerte."
+    )

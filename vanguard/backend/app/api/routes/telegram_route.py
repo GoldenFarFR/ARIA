@@ -1,4 +1,5 @@
 import logging
+import secrets as _secrets
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -25,8 +26,20 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
     if not telegram_bot.is_running():
         raise HTTPException(status_code=503, detail="Telegram bot not started")
 
-    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-    if settings.telegram_webhook_secret and secret != settings.telegram_webhook_secret:
+    # Fail-CLOSED : sans secret configuré, l'endpoint accepterait des updates FORGÉS
+    # (n'importe qui pourrait POSTer un faux message Telegram et piloter le bot). On refuse
+    # plutôt que d'exposer le bot. Prérequis : TELEGRAM_WEBHOOK_SECRET dans le .env du VPS,
+    # puis relancer setWebhook (le bot y injecte automatiquement secret_token).
+    configured = (settings.telegram_webhook_secret or "").strip()
+    if not configured:
+        logger.error(
+            "Webhook Telegram REFUSÉ : TELEGRAM_WEBHOOK_SECRET absent. "
+            "Configure-le dans le .env puis relance setWebhook."
+        )
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    # Comparaison à temps constant : évite une attaque temporelle sur le secret.
+    if not _secrets.compare_digest(provided, configured):
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
     try:
