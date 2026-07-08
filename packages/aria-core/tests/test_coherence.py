@@ -277,3 +277,28 @@ def test_site_login_google_and_2fa_wired():
     assert "showMfaEnrollmentModal" in btn, (
         "le bouton 2FA (enrôlement MFA Privy) a disparu de MemberSignInButton."
     )
+
+
+def test_showcase_pr_autoreply_transparent_and_gated_to_human():
+    """Auto-reply outward (PR showcase Virtuals) : signature de transparence, zéro em-dash,
+    et tout ce qui n'est pas un feu vert net (question / technique / négatif) => passage de
+    relai à l'humain. ARIA n'invente ni ne tranche rien en public (norme outward + zéro trace IA)."""
+    from aria_core.skills import showcase_pr_watcher as spw
+
+    # Feu vert net : ARIA répond seule, avec signature de transparence, sans em-dash.
+    _, body = spw.decide_reply("LGTM, ready to merge.", target={"pr_number": 37})
+    signed = spw._sign(body)
+    assert "autonomously by the ARIA agent" in signed, "signature de transparence absente"
+    assert "—" not in signed, "em-dash dans une réponse publique (trace IA interdite)"
+    for tpl in (spw._THANKS_REOPEN_TEMPLATE, spw._HANDOVER_TEMPLATE, spw._OPERATOR_DRAFT_TEMPLATE):
+        assert "—" not in tpl, "em-dash dans un template outward"
+
+    # Cas réel PR#37 : le mainteneur donne un correctif technique -> ARIA passe la main.
+    action, _ = spw.decide_reply(
+        "The 500 is an unregistered signer, re-run acp agent add-signer.",
+        target={"pr_number": 37},
+    )
+    assert action == "handover", "un sujet technique doit passer le relai à l'humain, pas répondre"
+
+    # Négation de merge -> jamais la réponse "on rouvre".
+    assert spw.decide_reply("not ready to merge yet", target={"pr_number": 37})[0] == "handover"
