@@ -174,6 +174,27 @@ app.include_router(holding_member.router, prefix="/api")
 app.include_router(websocket.router)
 
 
+@app.get("/api/pulse")
+async def pulse():
+    """Pouls public read-only : signaux COARSE (heartbeat, mode), AUCUN secret / candidat / PII.
+    Alimente le suivi live et le cockpit sans exposer la surface opérateur."""
+    from aria_core.heartbeat import heartbeat_pulse
+    from aria_core.onchain.anchor import anchor_enabled
+
+    commit = (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "unknown")[:12]
+    paper = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    return {
+        "status": "ok",
+        "commit": commit,
+        "heartbeat": heartbeat_pulse(),
+        "paper_trading": paper,
+        "real_execution": False,
+        "onchain": {"anchor_ready": anchor_enabled(), "anchored": False},
+    }
+
+
 @app.get("/api/health")
 async def health():
     """Public liveness probe — no sensitive details."""

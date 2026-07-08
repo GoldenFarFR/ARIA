@@ -347,3 +347,11 @@ def test_onchain_anchor_gated_and_keyless():
     for forbidden in ("private_key", "send_raw_transaction", "eth_account"):
         assert forbidden not in src, "le serveur d'ancrage ne doit jamais signer/détenir de clé"
     assert (REPO / "contracts" / "DEPLOY.md").is_file(), "runbook de déploiement AriaLedger manquant"
+
+
+def test_pulse_endpoint_public_and_present():
+    """Le pouls /api/pulse est public (allowlist) et défini côté backend, pour le suivi live."""
+    mw = _read("vanguard/backend/app/auth/middleware.py")
+    assert '"/api/pulse"' in mw, "/api/pulse absent de l'allowlist publique du middleware"
+    main = _read("vanguard/backend/app/main.py")
+    assert '@app.get("/api/pulse")' in main, "endpoint /api/pulse manquant dans main.py"
