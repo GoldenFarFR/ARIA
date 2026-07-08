@@ -42,6 +42,16 @@ Monorepo `github.com/GoldenFarFR/ARIA`. Liés : `aria-ops` (privé), `template-g
 - **Argent** : `wallet_guard.py` (escalade Telegram), `outgoing_pause.py` (kill-switch, testé — ne pas recoder). Clé privée jamais sur le serveur (signature acp-cli local).
 - **Persistance** : `DATA_DIR` → `/opt/aria-data` (SQLite). **Modifier ARIA = rebuild l'image Docker** (un git pull + restart ne suffit pas).
 
+## Faits établis — NE PAS re-demander à l'opérateur (voir `docs/etat-systeme-cable.md`)
+Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une question de clarification :
+- **aria-core est autonome pour la donnée** : il a SES propres clients externes, il ne dépend pas du backend `vanguard/`.
+  - **OHLCV** → `services/ohlcv.py` (GeckoTerminal, direct). **Ne pas** le porter/abstraire/router via le backend : doublon.
+  - Prix/liquidité/paires → `skills/acp_onchain_scan.py` (DexScreener) · contrat/holders → `services/blockscout.py` · mcap/FDV → `services/coingecko.py` · honeypot → `services/goplus.py`.
+- **L'hôte configure la librairie au boot** (`register_aria_host_integrations` → `bootstrap.configure`) ; le LLM Virtuals/Spark est actif en prod (`ARIA_LLM_ENABLED` + `VIRTUALS_API_KEY`).
+- **Seams vides** (préparés, pas actifs) : `x_social` (radar en veille), `release_pipeline` (aucun déclencheur), TikTok, `aria_core.x_profile` (module non livré).
+- Ajouter une source = nouveau `services/<x>.py` (dôme throttle/backoff/dégradation) branché additif/data-gated via `include_<x>`. **Jamais dupliquer un client existant.**
+- En cas de doute sur « comment marche X », **lire `docs/etat-systeme-cable.md` d'abord**, ne pas demander.
+
 ## Capacités (à jour 07/07)
 - **Données** : DexScreener (prix/liq/vol), GeckoTerminal (OHLCV), Blockscout (contrat, holders, is_contract), CoinGecko (market cap, FDV, catégories). Moteur TA (RSI/MACD/EMA/fibo/divergences).
 - **LLM** : **enabled:true en prod** (health VPS confirmé). *(L'ancien « dormant » est périmé.)*
@@ -79,7 +89,7 @@ Backend Docker `aria-api`, binding **strictement `127.0.0.1:8000`** (JAMAIS publ
 Si le proxy git de l'environnement meurt (`fatal: could not read Username`), pousser via l'API GitHub (`mcp__github__push_files`) contourne le proxy. Puis VPS : `git pull && ./vanguard/deploy.sh`.
 
 ## Lecture requise (le cerveau détaillé)
-`docs/architecture-extensibilite.md` (d'abord) · `docs/strategie-aria-investissement.md` · `docs/protocole-argent-reel.md` · `docs/roadmap-campagne.md` · `docs/playbook-editorial-aria.md` · le HANDOFF le plus récent `docs/HANDOFF-*.md`.
+`docs/etat-systeme-cable.md` (état câblé, faits établis) · `docs/architecture-extensibilite.md` (d'abord) · `docs/strategie-aria-investissement.md` · `docs/protocole-argent-reel.md` · `docs/roadmap-campagne.md` · `docs/playbook-editorial-aria.md` · le HANDOFF le plus récent `docs/HANDOFF-*.md`.
 
 ## Format de réponse
 Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le mot « Verdict » comme label. À chaque fin de tâche, proposer un prochain pas (dans le respect de la validation explicite). Commits : `Co-Authored-By: Claude <noreply@anthropic.com>` ; jamais d'identifiant de modèle dans commit/PR/artefact ; pas de PR sans demande explicite.
