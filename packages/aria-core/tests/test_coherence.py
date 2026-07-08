@@ -330,3 +330,20 @@ def test_x402_seam_gated_off_and_no_autonomous_spend():
     assert prop.requires_human is True and prop.status == "proposed", (
         "le côté ARIA-paie doit rester une proposition validée par l'humain, jamais exécutée."
     )
+
+
+def test_onchain_anchor_gated_and_keyless():
+    """Ancrage onchain : gaté OFF par défaut, et le serveur ne signe/n'émet jamais (clé hors
+    serveur). Le runbook de déploiement local existe (geste opérateur)."""
+    import inspect
+    import os
+
+    from aria_core.onchain import anchor
+
+    os.environ.pop("ARIA_ONCHAIN_ANCHOR_ENABLED", None)
+    assert anchor.anchor_enabled() is False, "l'ancrage doit être OFF par défaut"
+    assert anchor.build_anchor_request([{"a": 1}]) is None, "OFF => fail-closed"
+    src = inspect.getsource(anchor)
+    for forbidden in ("private_key", "send_raw_transaction", "eth_account"):
+        assert forbidden not in src, "le serveur d'ancrage ne doit jamais signer/détenir de clé"
+    assert (REPO / "contracts" / "DEPLOY.md").is_file(), "runbook de déploiement AriaLedger manquant"
