@@ -243,6 +243,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="skill_project_cycle",
+        name="Projet d'apprentissage long-cours",
+        description="Un increment reel par jour sur un projet de plusieurs jours (3-7j, curriculum trading) ; synthese finale soumise a l'operateur seulement a la fin. 100% analyse/ecriture, aucune action financiere ni changement de code.",
+        interval_minutes=1440,
+        enabled=True,
+    ),
+    HeartbeatTask(
         id="sepolia_autonomous_cycle",
         name="Rehearsal Sepolia autonome",
         description="Decide ET execute SEULE sur Base Sepolia (testnet, aucune valeur reelle) -- sans clic Telegram. Kelly sizing sur calibration reelle, ancrage onchain autonome, telemetrie complete (latence/hesitation/erreurs). Chain_id verrouille 84532 ; le mainnet garde la validation humaine.",
@@ -309,6 +316,10 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.exam import exam_enabled
 
             task.enabled = exam_enabled()
+        if task.id == "skill_project_cycle":
+            from aria_core.knowledge.skill_projects import skill_projects_enabled
+
+            task.enabled = skill_projects_enabled()
         if task.id == "sepolia_autonomous_cycle":
             from aria_core.onchain.sepolia_autonomous import sepolia_autonomous_enabled
 

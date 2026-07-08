@@ -111,8 +111,9 @@ We are not a token, unlike nearly every named agent in this space.
   and now a live autonomous-agent rehearsal on Base Sepolia itself.
 - Fits the agentic economy: an autonomous agent that transacts and proves its work onchain, with
   human governance and verifiable output. Not another unaccountable trading bot.
-- Extensible by design (documented seams): new data sources, x402 live wiring, AgentKit or MiniKit
-  surfaces plug in without rewriting the core.
+- Extensible by design (documented seams): new data sources, x402 live wiring, and a path toward
+  Coinbase's own Agentic Wallets model (MPC custody, session caps, per-transaction limits) for the
+  mainnet signing layer once real capital is on the table, without rewriting the core.
 
 ## Status, honestly
 No real capital has been deployed, anywhere, ever. There is no track record to inflate yet, and
