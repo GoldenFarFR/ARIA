@@ -52,6 +52,13 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
 - Ajouter une source = nouveau `services/<x>.py` (dôme throttle/backoff/dégradation) branché additif/data-gated via `include_<x>`. **Jamais dupliquer un client existant.**
 - En cas de doute sur « comment marche X », **lire `docs/etat-systeme-cable.md` d'abord**, ne pas demander.
 
+## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
+- **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
+- **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici. **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
+- **CI** : `.github/workflows/ci.yml` lance la surface VC + les capacités clés + le garde-fou de cohérence à chaque push touchant `packages/aria-core/**`.
+- **Workflow Git** : développer sur la branche `claude/…`, PUIS **fusionner dans `main`** pour que les nouvelles sessions ET la prod héritent (une session neuve lit le `CLAUDE.md` de `main`). Rien n'est déployé sans `./vanguard/deploy.sh` sur le VPS.
+- **Paper-trading 1M$** : tâche heartbeat `paper_trade_cycle` **gatée par `ARIA_PAPER_TRADING_ENABLED`** (OFF par défaut) ; l'activer démarre le run de preuve de 20 jours.
+
 ## Capacités (à jour 07/07)
 - **Données** : DexScreener (prix/liq/vol), GeckoTerminal (OHLCV), Blockscout (contrat, holders, is_contract), CoinGecko (market cap, FDV, catégories). Moteur TA (RSI/MACD/EMA/fibo/divergences).
 - **LLM** : **enabled:true en prod** (health VPS confirmé). *(L'ancien « dormant » est périmé.)*
