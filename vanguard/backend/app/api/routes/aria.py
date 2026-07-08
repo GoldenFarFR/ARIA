@@ -212,6 +212,16 @@ async def exam_status():
     }
 
 
+@router.get("/sepolia-status")
+async def sepolia_status():
+    """Statut PUBLIC du rehearsal Sepolia autonome — chiffres agrégés + dernière décision
+    seulement (jamais une clé, jamais un montant réel : testnet, aucune valeur réelle).
+    """
+    from aria_core.onchain.sepolia_autonomous import autonomous_status
+
+    return await autonomous_status()
+
+
 @router.get("/dossier/{contract}")
 async def token_dossier(contract: str, request: Request):
     """Dossier par token (opérateur) : chronologie de TOUT ce qu'ARIA a consigné sur un CA.
