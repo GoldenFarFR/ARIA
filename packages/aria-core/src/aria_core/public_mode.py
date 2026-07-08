@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import secrets as _secrets
 
@@ -45,18 +46,63 @@ def resolve_visitor_id(request: Request, body_visitor_id: str | None = None) -> 
     return f"anon-{digest}"
 
 
+def _admin_totp_secret() -> str:
+    """Secret TOTP opérateur (opt-in) — vit dans le .env du VPS, jamais dans le repo."""
+    return (os.environ.get("ADMIN_TOTP_SECRET") or "").strip()
+
+
+# Anti-force-brute du second facteur : le code TOTP ne fait que 6 chiffres (10^6). Si le
+# secret admin fuitait, sans limite un attaquant pourrait tenter tous les codes. On verrouille
+# par IP au-delà de _TOTP_MAX_FAILS échecs dans _TOTP_WINDOW secondes (état en mémoire, par
+# processus — un seul conteneur en prod). Un succès réinitialise le compteur de l'IP.
+_TOTP_FAILS: dict[str, list[float]] = {}
+_TOTP_MAX_FAILS = 8
+_TOTP_WINDOW = 300.0
+
+
+def _totp_client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
 def is_operator_request(request: Request) -> bool:
     """Vrai si la requête porte le secret admin valide — SANS lever d'exception.
 
     Header seul (`X-Admin-Secret`) : on refuse le secret en query-string, qui fuit
     dans les logs serveur, l'historique navigateur et l'en-tête Referer. Comparaison
     à temps constant pour ne pas exposer le secret à une attaque temporelle.
+
+    Second facteur (2FA) OPT-IN : si `ADMIN_TOTP_SECRET` est défini dans l'environnement,
+    un code TOTP valide (header `X-Admin-Totp`) est EXIGÉ en plus du secret. Sans cette
+    variable, comportement inchangé (secret seul) — aucun risque de lock-out par défaut.
     """
     secret = (settings.admin_api_secret or "").strip()
     if not secret:
         return False
     provided = (request.headers.get("X-Admin-Secret") or "").strip()
-    return bool(provided) and _secrets.compare_digest(provided, secret)
+    if not (provided and _secrets.compare_digest(provided, secret)):
+        return False
+
+    totp_secret = _admin_totp_secret()
+    if totp_secret:
+        import time
+
+        from aria_core.admin_totp import verify_totp
+
+        ip = _totp_client_ip(request)
+        now = time.time()
+        fails = [t for t in _TOTP_FAILS.get(ip, []) if now - t < _TOTP_WINDOW]
+        if len(fails) >= _TOTP_MAX_FAILS:
+            _TOTP_FAILS[ip] = fails  # verrou anti-force-brute : reste bloqué le temps de la fenêtre
+            return False
+
+        code = (request.headers.get("X-Admin-Totp") or "").strip()
+        if not verify_totp(totp_secret, code):
+            fails.append(now)
+            _TOTP_FAILS[ip] = fails
+            return False
+
+        _TOTP_FAILS.pop(ip, None)  # succès -> on efface les échecs de cette IP
+    return True
 
 
 def require_operator(request: Request) -> None:

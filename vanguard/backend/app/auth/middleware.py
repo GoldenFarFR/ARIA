@@ -68,12 +68,12 @@ class AccessCodeMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if path.startswith("/api/"):
-            import secrets
+            from aria_core.public_mode import is_operator_request
 
-            admin_secret = (settings.admin_api_secret or "").strip()
-            provided_admin = (request.headers.get("X-Admin-Secret") or "").strip()
-            # Comparaison à temps constant : évite une attaque temporelle sur le secret admin.
-            if admin_secret and secrets.compare_digest(provided_admin, admin_secret):
+            # Source UNIQUE de vérité pour l'accès opérateur : secret admin (temps constant)
+            # + second facteur TOTP si ADMIN_TOTP_SECRET est défini (2FA opt-in). Ainsi le
+            # bypass opérateur du gate membre exige lui aussi le TOTP quand il est activé.
+            if is_operator_request(request):
                 return await call_next(request)
 
             token = _extract_token(request)
