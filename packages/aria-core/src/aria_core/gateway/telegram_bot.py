@@ -652,9 +652,16 @@ async def _handle_github(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _reply(message, out)
         return
 
+    if sub in ("repair", "fix", "corrige", "corriger"):
+        # Correction operateur-only : edite le dernier commentaire showcase PR poste par ARIA
+        # (le remplace par le message de relai correct qui te tague). Ne supprime rien.
+        out, _ = await execute_github_sandbox("showcase pr repair", lang)
+        await _reply(message, out)
+        return
+
     await _reply(
         message,
-        "Usage: /github status | list | create <nom> | delete <nom>\n"
+        "Usage: /github status | list | create <nom> | delete <nom> | repair\n"
         "Ou en texte libre : supprime repo kikou",
     )
 
