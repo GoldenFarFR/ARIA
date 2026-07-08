@@ -22,9 +22,10 @@
   tags: [holding, structure]
   question: What is Aria Vanguard ZHC?
   answer: >
-    Aria Vanguard ZHC is the ZHC parent holding. Every current and future venture is a subsidiary
-    under the holding. Aria Market is the flagship product subsidiary — never the holding itself.
-    DEXPulse was retired 2026-06-19 (repo and Render service deleted).
+    Aria Vanguard ZHC is the ZHC parent holding. Every current and future venture registers as a
+    subsidiary under the holding — never the holding itself. No subsidiary is currently live: ARIA
+    operates the holding directly at https://ariavanguardzhc.com. Aria Market and DEXPulse are
+    retired codenames, not live products — never present either as a current subsidiary.
 
 - id: dexpulse-retired
   topic: dexpulse
@@ -32,28 +33,24 @@
   question: What happened to DEXPulse? Is DEXPulse still live?
   answer: >
     DEXPulse is RETIRED since 2026-06-19. The GitHub repo GoldenFarFR/dexpulse and the Render
-    service were deleted. Code migrated into aria-vanguard. Successor product: Aria Market
-    (watchlist, signals, DexScreener embeds) at https://ariavanguardzhc.com and API
-    https://api.ariavanguardzhc.com. Never promote, deploy, or market DEXPulse as a live product.
+    service were deleted. Never promote, deploy, or market DEXPulse as a live product.
 
 - id: aria-market-product
   topic: product
-  tags: [aria-market, product, flagship]
+  tags: [aria-market, retired, deprecated]
   question: What is Aria Market?
   answer: >
-    Aria Market is the flagship subsidiary — DEX analyzer with watchlist-first UX, multi-timeframe
-    signals, alerts, and DexScreener chart embeds (ARIA provides signals, not chart hosting).
-    Hosted in aria-vanguard (holding site + API). Site: https://ariavanguardzhc.com —
-    API: https://api.ariavanguardzhc.com.
+    Aria Market was an earlier product codename, since retired — it is not a current subsidiary
+    or live product. ARIA operates the Aria Vanguard ZHC holding directly at
+    https://ariavanguardzhc.com. Never present Aria Market as a current subsidiary.
 
 - id: dexpulse-product
   topic: dexpulse
   tags: [dexpulse, retired, deprecated]
   question: What is DEXPulse?
   answer: >
-    DEXPulse was the former flagship DEX analyzer subsidiary — RETIRED 2026-06-19. Repo and
-    Render service deleted. Replaced by Aria Market in aria-vanguard. Do not cite dexpulse-m3bp
-    or any DEXPulse URL as live. See canonical id aria-market-product for the current product.
+    DEXPulse was a former product codename — RETIRED 2026-06-19, repo and Render service deleted.
+    It is not a live product. Do not cite dexpulse-m3bp or any DEXPulse URL as live.
 
 - id: aria-vanguard-site
   topic: holding

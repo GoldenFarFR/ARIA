@@ -31,15 +31,13 @@ async def test_cannot_delete_holding(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cannot_delete_dexpulse(tmp_path, monkeypatch):
+async def test_retired_codenames_not_seeded(tmp_path, monkeypatch):
+    """Aria Market / DEXPulse are retired codenames — a fresh repertoire must not carry them."""
     db = tmp_path / "aria.db"
     monkeypatch.setattr("aria_core.repertoire_db.DB_PATH", str(db))
     await repertoire_db.init_repertoire_db()
     items = await repertoire_db.get_all()
-    dexpulse = next(i for i in items if i.slug == "dexpulse")
-    ok, reason, _ = await repertoire_db.delete_item(dexpulse.id)
-    assert not ok
-    assert "protégée" in reason.lower() or "protected" in reason.lower()
+    assert not any(i.slug in ("aria-market", "dexpulse") for i in items)
 
 
 def test_detect_manage_repertoire_intent():
