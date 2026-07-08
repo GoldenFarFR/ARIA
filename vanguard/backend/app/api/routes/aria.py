@@ -26,8 +26,14 @@ from aria_core.models import (
 from aria_core.content.content_db import list_drafts
 from aria_core.content.service import list_faq, search_faq
 from aria_core.content.site_copy import public_site_payload
-from aria_core.public_mode import is_public_mode, require_operator, resolve_visitor_id
+from aria_core.public_mode import (
+    is_operator_request,
+    is_public_mode,
+    require_operator,
+    resolve_visitor_id,
+)
 from app.auth.rate_limit import check_rate_limit
+from app.auth.visitor import client_ip
 from app.config import settings
 
 from app.database import get_watchlist
@@ -60,7 +66,18 @@ async def chat(body: ChatRequest, request: Request):
             max_attempts=settings.aria_chat_rate_limit_per_hour,
             window_seconds=3600,
         )
-        if not allowed:
+        # Plafond par IP réelle : X-Visitor-Id est fourni par le client, donc le faire
+        # tourner contournerait la limite par-visiteur. Le plafond IP (plus large) borde
+        # cet abus. client_ip() renvoie None hors proxy (pas de régression).
+        ip = client_ip(request)
+        ip_allowed = True
+        if ip is not None:
+            ip_allowed = check_rate_limit(
+                f"aria_chat_ip:{ip}",
+                max_attempts=max(settings.aria_chat_rate_limit_per_hour * 3, 60),
+                window_seconds=3600,
+            )
+        if not allowed or not ip_allowed:
             raise HTTPException(
                 status_code=429,
                 detail="Rate limit reached. Try again in an hour.",
@@ -77,12 +94,24 @@ async def chat(body: ChatRequest, request: Request):
 async def community_feedback(body: CommunityFeedbackRequest, request: Request):
     """Avis communauté site — ARIA trie et file l'ouvrier si l'idée vaut le coup."""
     from aria_core.community_feedback import (
+        is_trusted_feedback_handle,
         is_trusted_operator_publish,
         submit_community_feedback,
     )
 
     visitor_id = resolve_visitor_id(request)
-    if not is_trusted_operator_publish(body.handle.strip()):
+
+    # Anti-usurpation : ce endpoint est PUBLIC (visiteur anonyme). Le champ `handle` n'est
+    # qu'une revendication non prouvée. Un handle de confiance (opérateur) revendiqué SANS
+    # le secret admin ne doit PAS débloquer les privilèges opérateur (pas de modération, pas
+    # de rate-limit, publication INSTANTANÉE et autonome sur @Aria_ZHC — ce qui violerait le
+    # garde-fou « jamais X autonome »). On le neutralise en le traitant comme anonyme.
+    raw_handle = body.handle.strip()
+    handle = raw_handle
+    if raw_handle and is_trusted_feedback_handle(raw_handle) and not is_operator_request(request):
+        handle = ""
+
+    if not is_trusted_operator_publish(handle):
         allowed = check_rate_limit(
             f"community_fb:{visitor_id}",
             max_attempts=8,
@@ -94,7 +123,7 @@ async def community_feedback(body: CommunityFeedbackRequest, request: Request):
     lang = "fr" if body.lang.lower().startswith("fr") else "en"
     return await submit_community_feedback(
         body.message.strip(),
-        handle=body.handle.strip(),
+        handle=handle,
         visitor_id=visitor_id,
         source="vanguard_site",
         lang=lang,
