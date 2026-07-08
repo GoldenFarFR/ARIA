@@ -58,6 +58,7 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
 - **CI** : `.github/workflows/ci.yml` lance la surface VC + les capacités clés + le garde-fou de cohérence à chaque push touchant `packages/aria-core/**`.
 - **Workflow Git** : développer sur la branche `claude/…`, PUIS **fusionner dans `main`** pour que les nouvelles sessions ET la prod héritent (une session neuve lit le `CLAUDE.md` de `main`). Rien n'est déployé sans `./vanguard/deploy.sh` sur le VPS.
 - **Paper-trading 1M$** : tâche heartbeat `paper_trade_cycle` **gatée par `ARIA_PAPER_TRADING_ENABLED`** (OFF par défaut) ; l'activer démarre le run de preuve de 20 jours.
+- **Checkpoint auto de session (tous les 20 messages)** : hook `.claude/hooks/session-checkpoint.sh` (UserPromptSubmit) compte les messages dans `.claude/.msg-counter` (gitignoré) et, tous les 20, injecte un rappel → l'assistant **propose de mettre à jour les fichiers de résumé** (HANDOFF, CLAUDE.md, `etat-systeme-cable.md`) pour garder `CLAUDE.md` alimenté et une nouvelle session prête. La barre de statut affiche « 📌 chk NN/20 » pour le voir venir. Sauvegarde sur validation opérateur (jamais imposée). Ne pas défaire ce hook.
 
 ## Capacités (à jour 07/07)
 - **Données** : DexScreener (prix/liq/vol), GeckoTerminal (OHLCV), Blockscout (contrat, holders, is_contract), CoinGecko (market cap, FDV, catégories). Moteur TA (RSI/MACD/EMA/fibo/divergences).

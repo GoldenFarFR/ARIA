@@ -153,6 +153,18 @@ def test_claude_md_documents_automation():
     assert "test_coherence" in claude, "CLAUDE.md ne documente pas le garde-fou de cohérence"
 
 
+def test_session_checkpoint_hook_wired():
+    """Checkpoint auto (tous les 20 messages) : hook présent, enregistré, documenté."""
+    assert (REPO / ".claude" / "hooks" / "session-checkpoint.sh").is_file(), (
+        "hook session-checkpoint.sh manquant (sauvegarde auto de session)"
+    )
+    settings = _read(".claude/settings.json")
+    assert "UserPromptSubmit" in settings, "hook checkpoint non enregistré (UserPromptSubmit absent de settings.json)"
+    assert "session-checkpoint.sh" in settings, "settings.json ne pointe pas vers session-checkpoint.sh"
+    claude = _read("CLAUDE.md")
+    assert "session-checkpoint" in claude, "CLAUDE.md ne documente pas le checkpoint auto de session"
+
+
 # ── 4. Sécurité — invariants d'auth (failles fermées, ne pas rouvrir) ─────────────────────
 
 def test_operator_secret_header_only_not_query_string():
