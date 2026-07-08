@@ -436,6 +436,22 @@ def wants_showcase_pr_repair(message: str) -> bool:
     return bool(_REPAIR_CMD_RE.search((message or "").strip()))
 
 
+_URL_REPO_RE = re.compile(r"github\.com/([^/]+)/([^/]+)/(?:pull|issues)/")
+
+
+def _owner_repo_from(entry: dict[str, Any]) -> tuple[str, str]:
+    """owner/repo explicites, sinon derives de l'URL (entrees d'etat legacy sans ces champs)."""
+    owner = str(entry.get("owner") or "").strip()
+    repo = str(entry.get("repo") or "").strip()
+    if owner and repo:
+        return owner, repo
+    for url in (entry.get("reply_url"), entry.get("trigger_url")):
+        m = _URL_REPO_RE.search(str(url or ""))
+        if m:
+            return m.group(1), m.group(2)
+    return "", ""
+
+
 def _find_watch_target(owner: str, repo: str, pr_number: int) -> dict[str, Any]:
     for t in load_watch_targets():
         if (
@@ -457,10 +473,7 @@ async def repair_last_reply(*, target_id: str | None = None) -> dict[str, Any]:
         return report
 
     state = _load_state()
-    posted = [
-        r for r in (state.get("replies") or [])
-        if r.get("reply_id") and r.get("owner") and r.get("repo")
-    ]
+    posted = [r for r in (state.get("replies") or []) if r.get("reply_id")]
     if target_id:
         posted = [r for r in posted if r.get("target") == target_id]
     if not posted:
@@ -468,7 +481,10 @@ async def repair_last_reply(*, target_id: str | None = None) -> dict[str, Any]:
         return report
 
     last = posted[-1]
-    owner, repo = str(last["owner"]), str(last["repo"])
+    owner, repo = _owner_repo_from(last)
+    if not (owner and repo):
+        report["errors"].append("owner/repo introuvable pour ce commentaire (etat incomplet)")
+        return report
     cid = int(last["reply_id"])
     pr_number = int(last.get("pr_number") or 0)
     new_body = _sign(_handover_message(_find_watch_target(owner, repo, pr_number)))
