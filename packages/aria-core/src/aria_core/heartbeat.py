@@ -709,6 +709,7 @@ class AriaHeartbeat:
 
             scan = await run_showcase_pr_watch()
             replied = scan.get("replied") or []
+            handed = scan.get("handed_over") or []
             if replied:
                 append_memory(
                     "github",
@@ -721,6 +722,22 @@ class AriaHeartbeat:
                         f"URL: {row.get('reply_url') or row.get('trigger_url')}"
                     )
                     await self._notify_telegram(body[:1500])
+            # Passage de relai : ARIA n'a pas tranche, elle te passe la main. Ping avec le
+            # commentaire recu et un brouillon pret a copier (tu decides et tu reponds).
+            if handed:
+                append_memory(
+                    "github",
+                    f"[heartbeat] showcase_pr_watch — {len(handed)} passage(s) de relai operateur",
+                )
+                for row in handed[:2]:
+                    body = (
+                        f"Showcase PR — ARIA te passe la main (ta reponse requise)\n"
+                        f"De: @{row.get('trigger_author')} ({row.get('reason')})\n"
+                        f"URL: {row.get('reply_url') or row.get('trigger_url')}\n\n"
+                        f"Il a ecrit:\n{row.get('comment_excerpt') or ''}\n\n"
+                        f"Brouillon suggere (a editer):\n{row.get('suggested_draft') or ''}"
+                    )
+                    await self._notify_telegram(body[:1800])
 
         elif task_id == "acp_market_scan":
             from aria_core.skills.acp_market_intelligence import run_market_scan
