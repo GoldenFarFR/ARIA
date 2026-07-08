@@ -175,6 +175,44 @@ def test_fallback_danger_is_avoid():
     assert result.risque == "EXTRÊME"
 
 
+def test_enforce_danger_veto_overrides_llm_buy():
+    """Backstop deterministe (post-audit AIXBT) : lite_verdict=DANGER doit annuler un
+    BUY du LLM, quoi qu'il ait repondu -- jamais contournable par du texte on-chain."""
+    result = vc._validate_llm_output(json.loads(_valid_llm_json()), _ctx(lite_verdict="DANGER"))
+    assert result.recommandation == "BUY"  # avant le veto : le LLM a bien dit BUY
+    vc._enforce_danger_veto(result, _ctx(lite_verdict="DANGER"))
+    assert result.recommandation == "AVOID"
+    assert result.taille_pct == 0.0
+
+
+def test_enforce_danger_veto_leaves_non_buy_untouched():
+    result = vc._validate_llm_output(json.loads(_valid_llm_json(recommandation="WATCH")), _ctx(lite_verdict="DANGER"))
+    vc._enforce_danger_veto(result, _ctx(lite_verdict="DANGER"))
+    assert result.recommandation == "WATCH"  # rien a vetoer, pas de BUY
+
+
+def test_enforce_danger_veto_leaves_buy_untouched_when_not_danger():
+    for verdict in ("SAFE", "CAUTION"):
+        result = vc._validate_llm_output(json.loads(_valid_llm_json()), _ctx(lite_verdict=verdict))
+        vc._enforce_danger_veto(result, _ctx(lite_verdict=verdict))
+        assert result.recommandation == "BUY"  # le veto ne s'applique qu'a DANGER
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_danger_verdict_vetoes_llm_buy_end_to_end(monkeypatch):
+    """Meme si une donnee on-chain trompeuse convainc le LLM de repondre BUY, un scan
+    honeypot frais classe DANGER doit forcer AVOID -- le vrai fix post-audit AIXBT."""
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx(lite_verdict="DANGER")))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.recommandation == "AVOID"
+    assert result.taille_pct == 0.0
+    assert result.actionable is False
+
+
 def test_fallback_flags_missing_qualitative_analysis():
     result = vc._deterministic_fallback(_ctx())
     assert result.potentiel is None
