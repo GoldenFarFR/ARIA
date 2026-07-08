@@ -194,6 +194,24 @@ async def track_record():
     }
 
 
+@router.get("/exam-status")
+async def exam_status():
+    """Statut PUBLIC du rehearsal pédagogique (examen trading, 20 jours) — chiffres
+    agrégés seulement. Jamais une action financière : uniquement mesurer et consigner."""
+    from aria_core import exam
+
+    day = min(await exam.current_exam_day(), exam.EXAM_PROGRAM_DAYS)
+    today = await exam.daily_summary(day)
+    cumulative = await exam.cumulative_summary()
+    return {
+        "enabled": exam.exam_enabled(),
+        "program_days": exam.EXAM_PROGRAM_DAYS,
+        "current_day": day,
+        "today": today,
+        "cumulative": cumulative,
+    }
+
+
 @router.get("/dossier/{contract}")
 async def token_dossier(contract: str, request: Request):
     """Dossier par token (opérateur) : chronologie de TOUT ce qu'ARIA a consigné sur un CA.

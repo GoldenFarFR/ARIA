@@ -215,6 +215,27 @@ export async function getPulse(): Promise<Pulse> {
   return res.json()
 }
 
+export interface ExamDaySummary {
+  day: number
+  answered: number
+  avg_score: number | null
+}
+
+export interface ExamStatus {
+  enabled: boolean
+  program_days: number
+  current_day: number
+  today: ExamDaySummary
+  cumulative: { total_questions: number; answered: number; avg_score: number | null }
+}
+
+// Examen trading ARIA (rehearsal pédagogique, 20 jours) — public, chiffres agrégés seulement.
+export async function getExamStatus(): Promise<ExamStatus> {
+  const res = await fetch(`${PRODUCT_API_URL}/aria/exam-status`)
+  if (!res.ok) throw new Error('Exam status unavailable')
+  return res.json()
+}
+
 export interface DossierEvent {
   at: string | null
   kind: string
