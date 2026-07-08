@@ -110,6 +110,26 @@ def test_paper_trader_registered_in_heartbeat():
     assert 'task_id == "paper_trade_cycle"' in hb, "dispatch de paper_trade_cycle absent de _run_task"
 
 
+def test_sepolia_autonomous_registered_in_heartbeat_and_never_uses_wallet_guard():
+    """Rehearsal Sepolia autonome : câblé au heartbeat, ET structurellement séparé de
+    wallet_guard.escalate_spend/resolve_spend (le garde-fou Telegram partagé — utilisé par
+    tout ce qui touchera un jour du capital réel — ne doit jamais être importé ici). C'est
+    l'exception bornée documentée dans les Règles absolues (mainnet reste toujours gaté)."""
+    assert (CORE / "onchain" / "sepolia_autonomous.py").is_file(), "sepolia_autonomous.py manquant"
+    hb = _read_core("heartbeat.py")
+    assert 'id="sepolia_autonomous_cycle"' in hb, "tâche sepolia_autonomous_cycle absente de HEARTBEAT_TASKS"
+    assert 'task_id == "sepolia_autonomous_cycle"' in hb, "dispatch de sepolia_autonomous_cycle absent de _run_task"
+
+    module = (CORE / "onchain" / "sepolia_autonomous.py").read_text(encoding="utf-8")
+    # Recherche l'APPEL (parenthèse ouvrante) plutôt que la sous-chaîne : le docstring du
+    # module explique volontairement pourquoi il ne les appelle jamais, donc les mentionne.
+    assert "escalate_spend(" not in module and "resolve_spend(" not in module, (
+        "sepolia_autonomous.py ne doit JAMAIS appeler wallet_guard.escalate_spend/resolve_spend "
+        "— l'autonomie doit rester structurellement bornée au testnet, jamais un chemin "
+        "partagé avec ce qui touchera un jour du capital réel."
+    )
+
+
 def test_acp_conversational_routing_gated_off():
     """L'ACP (abandonné) ne doit PAS détourner la conversation libre par défaut."""
     brain = _read_core("brain.py")

@@ -242,6 +242,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=1440,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="sepolia_autonomous_cycle",
+        name="Rehearsal Sepolia autonome",
+        description="Decide ET execute SEULE sur Base Sepolia (testnet, aucune valeur reelle) -- sans clic Telegram. Kelly sizing sur calibration reelle, ancrage onchain autonome, telemetrie complete (latence/hesitation/erreurs). Chain_id verrouille 84532 ; le mainnet garde la validation humaine.",
+        interval_minutes=60,
+        enabled=False,
+    ),
 ]
 
 
@@ -302,6 +309,10 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.exam import exam_enabled
 
             task.enabled = exam_enabled()
+        if task.id == "sepolia_autonomous_cycle":
+            from aria_core.onchain.sepolia_autonomous import sepolia_autonomous_enabled
+
+            task.enabled = sepolia_autonomous_enabled()
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -699,6 +710,18 @@ class AriaHeartbeat:
                 await self._notify_telegram(
                     f"📚 Examen ARIA — jour {day}/{exam.EXAM_PROGRAM_DAYS} : "
                     f"{summary['answered']} questions, score moyen {summary['avg_score']}/10."
+                )
+
+        elif task_id == "sepolia_autonomous_cycle":
+            from aria_core.onchain import sepolia_autonomous
+
+            result = await sepolia_autonomous.run_autonomous_cycle(notifier=self._notify_telegram)
+            outcome = result.get("outcome")
+            if outcome in ("ok", "error"):
+                append_memory(
+                    "sepolia_autonomous",
+                    f"[rehearsal] {result.get('contract', '?')[:10]} -> {outcome} "
+                    f"(hesitant={result.get('hesitant', False)})",
                 )
 
         elif task_id == "self_banner_curiosity":

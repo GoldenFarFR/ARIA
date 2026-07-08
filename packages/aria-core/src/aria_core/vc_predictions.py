@@ -273,8 +273,13 @@ def compute_metrics(predictions: list[dict]) -> dict:
 
     buys = [p for p in closed if p.get("recommandation") == "BUY"]
     wins = [p for p in buys if (p.get("outcome_pct") or 0) > 0]
+    losses = [p for p in buys if (p.get("outcome_pct") or 0) <= 0]
     hit_rate = (len(wins) / len(buys)) if buys else None
     avg_pnl_buy = (sum(p["outcome_pct"] for p in buys) / len(buys)) if buys else None
+    # Magnitudes séparées (gagnants vs perdants) — nécessaires au dimensionnement de Kelly
+    # (blend avg_pnl_buy ne suffit pas : Kelly a besoin du ratio gain/perte, pas du net).
+    avg_win_pct = (sum(p["outcome_pct"] for p in wins) / len(wins)) if wins else None
+    avg_loss_pct = (sum(p["outcome_pct"] for p in losses) / len(losses)) if losses else None
 
     # Calibration : P&L moyen par bucket de potentiel (uniquement analyses LLM notées).
     calibration = []
@@ -306,6 +311,8 @@ def compute_metrics(predictions: list[dict]) -> dict:
         "buy_count": len(buys),
         "hit_rate": hit_rate,
         "avg_pnl_buy": avg_pnl_buy,
+        "avg_win_pct": avg_win_pct,
+        "avg_loss_pct": avg_loss_pct,
         "calibration": calibration,
         "avoid_count": avoid_count,
         "by_strategy": by_strategy,
