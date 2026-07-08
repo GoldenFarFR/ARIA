@@ -243,6 +243,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="code_proposal_cycle",
+        name="Proposition de code long-cours",
+        description="Redige UNE amelioration concrete de son propre systeme et l'ouvre comme issue GitHub (jamais une PR, jamais un commit, jamais un merge autonome -- revue humaine requise). Gate OFF par defaut.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="skill_project_cycle",
         name="Projet d'apprentissage long-cours",
         description="Un increment reel par jour sur un projet de plusieurs jours (3-7j, curriculum trading) ; synthese finale soumise a l'operateur seulement a la fin. 100% analyse/ecriture, aucune action financiere ni changement de code.",
@@ -316,6 +323,10 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.exam import exam_enabled
 
             task.enabled = exam_enabled()
+        if task.id == "code_proposal_cycle":
+            from aria_core.skills.code_proposal import code_proposal_enabled
+
+            task.enabled = code_proposal_enabled()
         if task.id == "skill_project_cycle":
             from aria_core.knowledge.skill_projects import skill_projects_enabled
 
@@ -722,6 +733,13 @@ class AriaHeartbeat:
                     f"📚 Examen ARIA — jour {day}/{exam.EXAM_PROGRAM_DAYS} : "
                     f"{summary['answered']} questions, score moyen {summary['avg_score']}/10."
                 )
+
+        elif task_id == "code_proposal_cycle":
+            from aria_core.skills.code_proposal import run_code_proposal_cycle
+
+            result = await run_code_proposal_cycle(notifier=self._notify_telegram)
+            if result.get("outcome") == "ok":
+                append_memory("code_proposal", f"[proposal] {result.get('title', '?')} -> {result.get('url', '')}")
 
         elif task_id == "sepolia_autonomous_cycle":
             from aria_core.onchain import sepolia_autonomous
