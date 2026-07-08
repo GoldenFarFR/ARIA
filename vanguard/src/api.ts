@@ -181,6 +181,7 @@ export interface TrackRecord {
   hit_rate: number | null
   avoid_count: number
   pool_active: number
+  pool_rejected: number
   disclaimer: string
 }
 
@@ -211,6 +212,55 @@ export interface Pulse {
 export async function getPulse(): Promise<Pulse> {
   const res = await fetch(`${PRODUCT_API_URL}/pulse`, { signal: AbortSignal.timeout(12_000) })
   if (!res.ok) throw new Error('Pulse unavailable')
+  return res.json()
+}
+
+export interface ExamDaySummary {
+  day: number
+  answered: number
+  avg_score: number | null
+}
+
+export interface ExamStatus {
+  enabled: boolean
+  program_days: number
+  current_day: number
+  today: ExamDaySummary
+  cumulative: { total_questions: number; answered: number; avg_score: number | null }
+}
+
+// Examen trading ARIA (rehearsal pédagogique, 20 jours) — public, chiffres agrégés seulement.
+export async function getExamStatus(): Promise<ExamStatus> {
+  const res = await fetch(`${PRODUCT_API_URL}/aria/exam-status`)
+  if (!res.ok) throw new Error('Exam status unavailable')
+  return res.json()
+}
+
+export interface SepoliaLastDecision {
+  at: string | null
+  symbol: string | null
+  decision: string
+  outcome: string
+  tx_hash: string | null
+}
+
+export interface SepoliaStatus {
+  enabled: boolean
+  cycles_total: number
+  tx_count: number
+  error_count: number
+  hesitation_count: number
+  circuit_breaker_open: boolean
+  last: SepoliaLastDecision | null
+  wallet_address: string | null
+  wallet_balance_eth: number | null
+}
+
+// Rehearsal Sepolia autonome (testnet, aucune valeur réelle) — public, chiffres agrégés
+// + dernière décision seulement (jamais une clé, jamais un montant réel).
+export async function getSepoliaStatus(): Promise<SepoliaStatus> {
+  const res = await fetch(`${PRODUCT_API_URL}/aria/sepolia-status`)
+  if (!res.ok) throw new Error('Sepolia status unavailable')
   return res.json()
 }
 

@@ -202,9 +202,9 @@ HEARTBEAT_TASKS = [
     ),
     HeartbeatTask(
         id="vc_weekly_forecast",
-        name="VC weekly forecast",
-        description="Tire 20 tokens du pool -> analyse -> enregistre 20 pronostics dates",
-        interval_minutes=10080,
+        name="VC forecast",
+        description="Tire 20 tokens du pool -> analyse -> enregistre 20 pronostics dates (cadence 2j)",
+        interval_minutes=2880,
         enabled=True,
     ),
     HeartbeatTask(
@@ -233,6 +233,20 @@ HEARTBEAT_TASKS = [
         name="Paper trading 1M$ (simulation)",
         description="Applique les VRAIS rapports a un portefeuille FICTIF de 1M$ (mode trading) : ouvre/ferme des positions simulees, alertes achat/vente fictives. Preuve sur ~20 jours. Aucun argent reel, aucune signature.",
         interval_minutes=180,
+        enabled=False,
+    ),
+    HeartbeatTask(
+        id="aria_exam_cycle",
+        name="Examen trading ARIA (rehearsal pedagogique)",
+        description="Genere ~25 questions de trading/jour (curriculum 50 concepts), les pose au raisonnement d'ARIA, note via juge LLM. 20 jours, en parallele du paper-trading. Aucune action financiere.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
+        id="sepolia_autonomous_cycle",
+        name="Rehearsal Sepolia autonome",
+        description="Decide ET execute SEULE sur Base Sepolia (testnet, aucune valeur reelle) -- sans clic Telegram. Kelly sizing sur calibration reelle, ancrage onchain autonome, telemetrie complete (latence/hesitation/erreurs). Chain_id verrouille 84532 ; le mainnet garde la validation humaine.",
+        interval_minutes=60,
         enabled=False,
     ),
 ]
@@ -291,6 +305,14 @@ def _sync_x_curiosity_enabled() -> None:
             task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
                 "1", "true", "yes", "on",
             )
+        if task.id == "aria_exam_cycle":
+            from aria_core.exam import exam_enabled
+
+            task.enabled = exam_enabled()
+        if task.id == "sepolia_autonomous_cycle":
+            from aria_core.onchain.sepolia_autonomous import sepolia_autonomous_enabled
+
+            task.enabled = sepolia_autonomous_enabled()
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -537,7 +559,7 @@ class AriaHeartbeat:
         elif task_id == "vc_crawl":
             from aria_core.base_crawler import crawl_and_absorb
 
-            counts = await crawl_and_absorb(limit=40)
+            counts = await crawl_and_absorb(limit=100, max_age_days=182)
             append_memory("vc", f"[crawl] {counts} — {counts.get('kept', 0)} gardés")
 
         elif task_id == "vc_resolve":
@@ -551,10 +573,10 @@ class AriaHeartbeat:
             from aria_core.weekly_training import run_weekly_forecasts
 
             ids = await run_weekly_forecasts(n=20)
-            append_memory("vc", f"[forecast] {len(ids)} pronostics hebdo enregistrés")
+            append_memory("vc", f"[forecast] {len(ids)} pronostics enregistrés")
             if ids:
                 await self._notify_telegram(
-                    f"🎯 ARIA — {len(ids)} nouveaux pronostics hebdo enregistrés (walk-forward)."
+                    f"🎯 ARIA — {len(ids)} nouveaux pronostics enregistrés (walk-forward)."
                 )
 
         elif task_id == "vc_self_report":
@@ -667,6 +689,39 @@ class AriaHeartbeat:
                     "paper",
                     f"[paper_trade] fictif 1M$ : +{len(actions.get('opened', []))} achats / "
                     f"-{len(actions.get('closed', []))} ventes",
+                )
+
+        elif task_id == "aria_exam_cycle":
+            from aria_core import exam
+
+            day = await exam.current_exam_day()
+            if day > exam.EXAM_PROGRAM_DAYS:
+                return  # programme des 20 jours termine — plus de nouveau cycle
+            questions = await exam.generate_daily_questions(day, n=25)
+            for q in questions:
+                await exam.administer_question(q)
+            summary = await exam.daily_summary(day)
+            if summary["answered"] > 0:
+                append_memory(
+                    "exam",
+                    f"[exam] jour {day}/{exam.EXAM_PROGRAM_DAYS} — {summary['answered']} "
+                    f"questions, score moyen {summary['avg_score']}/10",
+                )
+                await self._notify_telegram(
+                    f"📚 Examen ARIA — jour {day}/{exam.EXAM_PROGRAM_DAYS} : "
+                    f"{summary['answered']} questions, score moyen {summary['avg_score']}/10."
+                )
+
+        elif task_id == "sepolia_autonomous_cycle":
+            from aria_core.onchain import sepolia_autonomous
+
+            result = await sepolia_autonomous.run_autonomous_cycle(notifier=self._notify_telegram)
+            outcome = result.get("outcome")
+            if outcome in ("ok", "error"):
+                append_memory(
+                    "sepolia_autonomous",
+                    f"[rehearsal] {result.get('contract', '?')[:10]} -> {outcome} "
+                    f"(hesitant={result.get('hesitant', False)})",
                 )
 
         elif task_id == "self_banner_curiosity":

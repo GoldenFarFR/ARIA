@@ -110,6 +110,26 @@ def test_paper_trader_registered_in_heartbeat():
     assert 'task_id == "paper_trade_cycle"' in hb, "dispatch de paper_trade_cycle absent de _run_task"
 
 
+def test_sepolia_autonomous_registered_in_heartbeat_and_never_uses_wallet_guard():
+    """Rehearsal Sepolia autonome : câblé au heartbeat, ET structurellement séparé de
+    wallet_guard.escalate_spend/resolve_spend (le garde-fou Telegram partagé — utilisé par
+    tout ce qui touchera un jour du capital réel — ne doit jamais être importé ici). C'est
+    l'exception bornée documentée dans les Règles absolues (mainnet reste toujours gaté)."""
+    assert (CORE / "onchain" / "sepolia_autonomous.py").is_file(), "sepolia_autonomous.py manquant"
+    hb = _read_core("heartbeat.py")
+    assert 'id="sepolia_autonomous_cycle"' in hb, "tâche sepolia_autonomous_cycle absente de HEARTBEAT_TASKS"
+    assert 'task_id == "sepolia_autonomous_cycle"' in hb, "dispatch de sepolia_autonomous_cycle absent de _run_task"
+
+    module = (CORE / "onchain" / "sepolia_autonomous.py").read_text(encoding="utf-8")
+    # Recherche l'APPEL (parenthèse ouvrante) plutôt que la sous-chaîne : le docstring du
+    # module explique volontairement pourquoi il ne les appelle jamais, donc les mentionne.
+    assert "escalate_spend(" not in module and "resolve_spend(" not in module, (
+        "sepolia_autonomous.py ne doit JAMAIS appeler wallet_guard.escalate_spend/resolve_spend "
+        "— l'autonomie doit rester structurellement bornée au testnet, jamais un chemin "
+        "partagé avec ce qui touchera un jour du capital réel."
+    )
+
+
 def test_acp_conversational_routing_gated_off():
     """L'ACP (abandonné) ne doit PAS détourner la conversation libre par défaut."""
     brain = _read_core("brain.py")
@@ -269,14 +289,16 @@ def test_operator_2fa_totp_wired():
     )
 
 
-def test_site_login_google_and_2fa_wired():
-    """Site : Google dans les méthodes Privy + bouton 2FA (enrôlement MFA Privy) câblés."""
+def test_site_login_google_wired():
+    """Site : Google dans les méthodes de connexion Privy câblé.
+
+    Le bouton 2FA dédié dans la nav (enrôlement MFA Privy) a été retiré volontairement
+    (08/07) — prêtait à confusion ("on dirait qu'il faut l'activer"). Le suivi 2FA/TOTP
+    site reste ouvert côté tâche #32 ; l'enrôlement MFA Privy reste possible depuis le
+    dashboard membre le cas échéant, juste plus via un bouton dédié dans la nav.
+    """
     cfg = _read("vanguard/src/lib/privy-config.ts")
     assert "'google'" in cfg, "Google absent des méthodes de connexion Privy (privy-config.ts)"
-    btn = _read("vanguard/src/components/MemberSignInButton.tsx")
-    assert "showMfaEnrollmentModal" in btn, (
-        "le bouton 2FA (enrôlement MFA Privy) a disparu de MemberSignInButton."
-    )
 
 
 def test_showcase_pr_autoreply_transparent_and_gated_to_human():

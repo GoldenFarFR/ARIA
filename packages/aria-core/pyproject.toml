@@ -22,6 +22,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "reportlab>=4.2.0",
     "pypdf>=5.0.0",
+    "web3>=7.0.0",
 ]
 
 [project.optional-dependencies]

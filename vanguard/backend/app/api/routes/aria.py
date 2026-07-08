@@ -174,6 +174,7 @@ async def track_record():
     wallet = await vc_predictions.live_wallet()
     m = await vc_predictions.metrics()
     pool = await screened_pool.count_pool("active")
+    pool_rejected = await screened_pool.count_pool("rejected")
     return {
         "wallet_index": wallet["index"],
         "wallet_return_pct": wallet["total_return_pct"],
@@ -185,11 +186,40 @@ async def track_record():
         "hit_rate": m["hit_rate"],
         "avoid_count": m.get("avoid_count", 0),
         "pool_active": pool,
+        "pool_rejected": pool_rejected,
         "disclaimer": (
             "Track-record de suivi (paper) valorisé aux prix on-chain réels. "
             "Informationnel, pas un conseil. Aucun rendement garanti."
         ),
     }
+
+
+@router.get("/exam-status")
+async def exam_status():
+    """Statut PUBLIC du rehearsal pédagogique (examen trading, 20 jours) — chiffres
+    agrégés seulement. Jamais une action financière : uniquement mesurer et consigner."""
+    from aria_core import exam
+
+    day = min(await exam.current_exam_day(), exam.EXAM_PROGRAM_DAYS)
+    today = await exam.daily_summary(day)
+    cumulative = await exam.cumulative_summary()
+    return {
+        "enabled": exam.exam_enabled(),
+        "program_days": exam.EXAM_PROGRAM_DAYS,
+        "current_day": day,
+        "today": today,
+        "cumulative": cumulative,
+    }
+
+
+@router.get("/sepolia-status")
+async def sepolia_status():
+    """Statut PUBLIC du rehearsal Sepolia autonome — chiffres agrégés + dernière décision
+    seulement (jamais une clé, jamais un montant réel : testnet, aucune valeur réelle).
+    """
+    from aria_core.onchain.sepolia_autonomous import autonomous_status
+
+    return await autonomous_status()
 
 
 @router.get("/dossier/{contract}")
