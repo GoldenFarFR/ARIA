@@ -1310,6 +1310,21 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         return
 
+    from aria_core.dossier import build_dossier, extract_contract, format_dossier_telegram
+
+    dossier_addr = extract_contract(text)
+    if dossier_addr:
+        # Un CA collé seul (ou dupliqué par copier-coller) → on sort le dossier daté
+        # de ce token (toutes les analyses passées). Si vide, le rendu propose /vc | /scan.
+        await message.reply_chat_action("typing")
+        try:
+            dossier = await build_dossier(dossier_addr)
+            await _reply(message, format_dossier_telegram(dossier))
+        except Exception as exc:
+            logger.exception("Dossier token failed")
+            await _reply(message, f"Dossier indisponible : {exc.__class__.__name__}")
+        return
+
     await message.reply_chat_action("typing")
     try:
         response = await aria_brain.process(text, lang=lang, public_mode=False)

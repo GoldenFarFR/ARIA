@@ -139,6 +139,24 @@ async def get_closed_positions(limit: int = 500) -> list[dict]:
     return [_row_to_pos(r) for r in rows]
 
 
+async def list_positions_for_contract(contract: str, limit: int = 100) -> list[dict]:
+    """Toutes les positions papier (ouvertes + clôturées) d'un contrat, récentes d'abord.
+
+    Alimente le « dossier par token ». La clé contrat est stockée en minuscules
+    (cf. open_position) — on normalise donc la recherche de la même façon.
+    """
+    await _ensure_tables()
+    contract = (contract or "").lower()
+    cols = ", ".join(_POS_FIELDS)
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            f"SELECT {cols} FROM paper_position WHERE contract = ? ORDER BY id DESC LIMIT ?",
+            (contract, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [_row_to_pos(r) for r in rows]
+
+
 async def _get_open(contract: str) -> dict | None:
     contract = (contract or "").lower()
     cols = ", ".join(_POS_FIELDS)

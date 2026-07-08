@@ -220,6 +220,24 @@ async def count_predictions_for_contract(contract: str) -> int:
     return int(row[0]) if row else 0
 
 
+async def list_predictions_for_contract(contract: str, limit: int = 50) -> list[dict]:
+    """Historique complet des analyses VC pour un contrat, les plus récentes d'abord.
+
+    Alimente le « dossier par token » (chronologie des analyses). Comparaison
+    insensible à la casse (adresse EVM stockée telle quelle par l'écrivain).
+    """
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await (
+            await db.execute(
+                "SELECT * FROM vc_prediction WHERE LOWER(contract) = LOWER(?) "
+                "ORDER BY id DESC LIMIT ?",
+                (contract, limit),
+            )
+        ).fetchall()
+    return [dict(zip(_COLUMNS, row)) for row in rows]
+
+
 async def total_predictions_count() -> int:
     """Nombre total d'analyses ARIA jamais enregistrées (tous tokens confondus).
 
