@@ -1946,6 +1946,23 @@ async def _handle_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _reply(message, "\n".join(lines))
 
 
+async def _handle_cycles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/cycles — les 3 derniers cycles Bitcoin (halving à halving) : accumulation,
+    hausse, distribution, baisse, chiffres réels + lecture qualitative. Contexte macro
+    long terme, jamais un signal d'achat/vente."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core.skills.btc_cycles import analyze_btc_cycles, format_cycles_report
+
+    await _reply(message, "Analyse des cycles Bitcoin en cours (historique réel, ça peut prendre un instant)…")
+    result = await analyze_btc_cycles()
+    await _reply(message, format_cycles_report(result))
+
+
 async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/these <adresse> <BUY|WATCH|SELL|AVOID> <thèse...> — journalise un pari (aucune exécution)."""
     if not await _admin_check_reply(update):
@@ -2102,6 +2119,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))
     app.add_handler(CommandHandler("watchlist", _handle_watchlist))
+    app.add_handler(CommandHandler("cycles", _handle_cycles))
     app.add_handler(CommandHandler(["langue", "lang", "language"], _handle_langue))
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))

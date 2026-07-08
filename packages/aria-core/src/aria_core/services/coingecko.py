@@ -47,6 +47,17 @@ class TokenFundamentals:
     error: str | None = None
 
 
+@dataclass
+class MarketChartResult:
+    """Série (horodatage ms, prix USD) réelle pour une devise majeure — jamais un point
+    inventé : absence de donnée portée par `available=False` + `error`."""
+
+    coin_id: str
+    prices: list[tuple[int, float]] = field(default_factory=list)
+    available: bool = False
+    error: str | None = None
+
+
 class CoinGeckoClient:
     """Client HTTP async, lecture seule, throttle prudent (API publique sans clé)."""
 
@@ -180,6 +191,38 @@ class CoinGeckoClient:
             available=True,
             error=None,
         )
+
+    async def get_market_chart_range(
+        self, coin_id: str, start_ts: int, end_ts: int, *, vs_currency: str = "usd"
+    ) -> MarketChartResult:
+        """Série de prix réelle (`market_chart/range`) pour une devise majeure (ex.
+        `bitcoin`) entre deux horodatages Unix — agrégation journalière automatique
+        au-delà de 90 jours sur le tier public. Jamais de prix inventé : absence ->
+        `available=False`."""
+        data, error = await self._get_json(
+            f"/coins/{coin_id}/market_chart/range?vs_currency={vs_currency}"
+            f"&from={int(start_ts)}&to={int(end_ts)}"
+        )
+        if error is not None:
+            return MarketChartResult(coin_id=coin_id, available=False, error=error)
+        if not isinstance(data, dict):
+            return MarketChartResult(coin_id=coin_id, available=False, error=UNAVAILABLE)
+
+        raw = data.get("prices")
+        if not isinstance(raw, list):
+            return MarketChartResult(coin_id=coin_id, available=False, error=UNAVAILABLE)
+
+        prices: list[tuple[int, float]] = []
+        for row in raw:
+            if not isinstance(row, (list, tuple)) or len(row) < 2:
+                continue
+            try:
+                prices.append((int(row[0]), float(row[1])))
+            except (TypeError, ValueError):
+                continue
+        if not prices:
+            return MarketChartResult(coin_id=coin_id, available=False, error=UNAVAILABLE)
+        return MarketChartResult(coin_id=coin_id, prices=prices, available=True, error=None)
 
 
 coingecko_client = CoinGeckoClient()
