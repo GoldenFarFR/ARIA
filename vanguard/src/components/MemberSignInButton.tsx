@@ -2,6 +2,7 @@ import {
   getIdentityToken,
   useIdentityToken,
   useLogin,
+  useMfaEnrollment,
   usePrivy,
   useUser,
 } from '@privy-io/react-auth'
@@ -34,6 +35,7 @@ function markPrivyModalOpened(): void {
 export function MemberSignInButton() {
   const { ready, authenticated, getAccessToken, logout } = usePrivy()
   const { refreshUser } = useUser()
+  const { showMfaEnrollmentModal } = useMfaEnrollment()
   const { identityToken: hookIdentityToken } = useIdentityToken()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -120,13 +122,23 @@ export function MemberSignInButton() {
   return (
     <div className="flex flex-col items-end gap-1">
       {authenticated && hasBackendSession ? (
-        <button
-          type="button"
-          onClick={() => void signOut()}
-          className="btn-vanguard-secondary px-3 py-2 text-xs uppercase tracking-[0.12em] focus-ring"
-        >
-          Sign out
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => showMfaEnrollmentModal()}
+            title="Activer la double authentification (2FA) — code d’authentification ou passkey"
+            className="btn-vanguard-secondary px-3 py-2 text-xs uppercase tracking-[0.12em] focus-ring"
+          >
+            2FA
+          </button>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="btn-vanguard-secondary px-3 py-2 text-xs uppercase tracking-[0.12em] focus-ring"
+          >
+            Sign out
+          </button>
+        </div>
       ) : (
         <button
           type="button"
