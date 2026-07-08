@@ -76,6 +76,47 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
 - Commande Telegram **`/watchlist [n]`** (admin, n∈[1,30], défaut 10) : classement du pool
   screené (`candidate_ranking.top_candidates`) — c'est LA checklist des contrats qu'ARIA suit.
 
+## Rehearsal Sepolia autonome + relay chat + exam — EN LIGNE (câblé + déployé 08/07 nuit)
+- **Sepolia autonome** : `ARIA_SEPOLIA_WALLET_ENABLED` + `ARIA_SEPOLIA_AUTONOMOUS_ENABLED` actifs
+  en prod. Wallet dédié `0x8c8c163DA8099Ef7B553Ee9D4D56EdE8c205Cae5`, financé (0.0001 ETH
+  Sepolia, faucet). `GET /api/aria/sepolia-status` confirmé propre (`enabled:true,
+  error_count:0, circuit_breaker_open:false`). **Reste en `skipped_no_ledger`** tant que
+  `AriaLedger.sol` n'est pas déployé sur Sepolia (`contracts/DEPLOY.md`, étape distincte non
+  encore faite) — normal, pas un bug.
+- **Relay chat (chat à 3)** : `ARIA_RELAY_ACCESS_TOKEN` actif, `GET /api/aria/relay/recent` +
+  `POST /api/aria/relay/reply` vérifiés en réel (historique Telegram lu avec succès). **Limite
+  découverte 08/07 nuit** : une session Claude Code tournant dans un environnement cloud/web
+  (comme celle-ci) n'a **pas d'accès réseau sortant vers le VPS** (politique proxy de
+  l'environnement, non contournable) — je ne peux donc PAS interroger le relay de façon
+  autonome depuis une session web. Deux façons d'utiliser le relay en pratique : (1) session
+  cloud → l'opérateur relaie manuellement via `curl` les messages que je compose ; (2) Claude
+  Code **en local** (desktop, réseau normal) → lecture/écriture autonome réelle du relay,
+  sans geste de l'opérateur. Ne pas re-proposer un chat "autonome" depuis une session cloud
+  sans vérifier l'accès réseau d'abord.
+- **Exam pédagogique** : `ARIA_EXAM_ENABLED` actif, `GET /api/aria/exam-status` répond
+  correctement (`enabled:true, program_days:20`).
+- Déploiement confirmé sur commit `30fd82c05777` (backend + vitrine), marqueur
+  `.claude/last-deployed-ref` recalé.
+
+## Audit dexpulse/Aria Market (08/07 nuit) — nettoyage PAS ENCORE fait, juste cartographié
+L'opérateur veut purger toute trace de "dexpulse"/"Aria Market" (noms de produit obsolètes).
+Audit réalisé (agent dédié), **aucun changement appliqué** — à traiter comme chantier séparé :
+- **Bug réel trouvé, indépendant du renommage** : `repertoire_skill.execute_develop_repertoire`
+  (appelée par le heartbeat à chaque cycle, `heartbeat.py:529`) **re-sème "Aria Market"** comme
+  filiale active dans `aria.db` si le répertoire est vide — alors que `canonical_facts.yaml`
+  affirme qu'aucune filiale n'est active. Contradiction à corriger, peu importe le nom choisi.
+- **Pas juste cosmétique** : un vrai fichier sur le disque VPS (`/opt/aria-data/dexpulse.db`,
+  `paths.py:product_db_path()`), un cookie de session déjà posé chez les membres actuels
+  (`aria_market_token`), des clés `localStorage` du frontend produit.
+- **Certains endroits gardent "dexpulse"/"Aria Market" EXPRÈS** — ce sont des garde-fous
+  anti-hallucination (`knowledge/contradiction.py`, `knowledge/epistemic_core.yaml`,
+  `brain.py` routage FAQ, `holding.py` constantes de purge `DEXPULSE_SLUG`/`ARIA_MARKET_SLUG`)
+  qui détectent et corrigent si quelqu'un (LLM ou visiteur) prétend que ces produits sont
+  encore actifs. Un renommage aveugle casserait ces détections — à traiter au cas par cas, pas
+  en find/replace global.
+- Aucun abonné Stripe réel n'existe encore (confirmé par l'opérateur) → renommer `PLAN_ID`
+  (`dexpulse_pro`) est sans risque de casser un abonnement en cours.
+
 ## Déploiement VPS — DEUX scripts séparés, ne pas confondre
 - `./vanguard/deploy.sh` déploie **uniquement le backend** (conteneur Docker `aria-api`).
 - `./vanguard/deploy-vitrine.sh` déploie **uniquement la vitrine statique** (build Vite → webroot
