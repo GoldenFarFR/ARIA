@@ -93,13 +93,6 @@ body {
   border-color: rgba(201, 169, 98, 0.16);
 }
 
-.hero-orb {
-  position: absolute;
-  border-radius: 9999px;
-  filter: blur(56px);
-  pointer-events: none;
-}
-
 .hero-glow {
   position: fixed;
   top: 10%;
@@ -125,23 +118,8 @@ body {
   opacity: 0.5;
 }
 
-@keyframes vanguard-float {
-  0%, 100% { transform: translate(0, 0); }
-  50% { transform: translate(12px, -8px); }
-}
-
-.animate-vanguard-float {
-  animation: vanguard-float 24s ease-in-out infinite;
-}
-
-.animate-vanguard-float-delayed {
-  animation: vanguard-float 28s ease-in-out infinite reverse;
-}
-
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .animate-vanguard-float,
-  .animate-vanguard-float-delayed,
   .skeleton { animation: none; }
 }
 
