@@ -109,3 +109,53 @@ async def test_send_relay_reply_sender_exception_does_not_raise(monkeypatch):
 
     ok = await relay_chat.send_relay_reply("test", sender=broken_sender)
     assert ok is False
+
+
+def test_autoreply_disabled_without_token(monkeypatch):
+    monkeypatch.delenv("ARIA_RELAY_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("ARIA_RELAY_AUTOREPLY_ENABLED", "true")
+    assert relay_chat.relay_autoreply_enabled() is False
+
+
+def test_autoreply_disabled_by_default_even_with_token(monkeypatch):
+    monkeypatch.setenv("ARIA_RELAY_ACCESS_TOKEN", "secret123")
+    monkeypatch.delenv("ARIA_RELAY_AUTOREPLY_ENABLED", raising=False)
+    assert relay_chat.relay_autoreply_enabled() is False
+
+
+def test_autoreply_enabled_with_both_flags(monkeypatch):
+    monkeypatch.setenv("ARIA_RELAY_ACCESS_TOKEN", "secret123")
+    monkeypatch.setenv("ARIA_RELAY_AUTOREPLY_ENABLED", "1")
+    assert relay_chat.relay_autoreply_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_send_aria_relay_reply_no_prefix_and_logs(monkeypatch):
+    monkeypatch.setenv("ARIA_RELAY_ACCESS_TOKEN", "secret123")
+    sent = []
+
+    async def fake_sender(text):
+        sent.append(text)
+        return True
+
+    ok = await relay_chat.send_aria_relay_reply("Salut Claude.", sender=fake_sender)
+    assert ok is True
+    assert sent == ["Salut Claude."]  # aucun prefixe -- c'est vraiment sa voix
+
+    messages = await relay_chat.recent_messages()
+    assert messages[-1]["sender"] == "aria"
+    assert messages[-1]["content"] == "Salut Claude."
+
+
+@pytest.mark.asyncio
+async def test_send_aria_relay_reply_noop_when_disabled(monkeypatch):
+    monkeypatch.delenv("ARIA_RELAY_ACCESS_TOKEN", raising=False)
+    called = []
+
+    async def fake_sender(text):
+        called.append(text)
+        return True
+
+    ok = await relay_chat.send_aria_relay_reply("test", sender=fake_sender)
+    assert ok is False
+    assert called == []

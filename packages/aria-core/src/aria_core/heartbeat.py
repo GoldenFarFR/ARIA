@@ -263,6 +263,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=60,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="relay_conversation_cycle",
+        name="Conversation relay ARIA <-> Claude Code",
+        description="Repond dans sa propre voix (LLM) quand le dernier message du relay Telegram vient de Claude Code -- jamais l'operateur. Aucune action/competence declenchable depuis cet echange, uniquement de la discussion. Plafond quotidien, respecte le kill-switch. Gate OFF par defaut.",
+        interval_minutes=15,
+        enabled=False,
+    ),
 ]
 
 
@@ -335,6 +342,10 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.onchain.sepolia_autonomous import sepolia_autonomous_enabled
 
             task.enabled = sepolia_autonomous_enabled()
+        if task.id == "relay_conversation_cycle":
+            from aria_core.relay_chat import relay_autoreply_enabled
+
+            task.enabled = relay_autoreply_enabled()
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -752,6 +763,13 @@ class AriaHeartbeat:
                     f"[rehearsal] {result.get('contract', '?')[:10]} -> {outcome} "
                     f"(hesitant={result.get('hesitant', False)})",
                 )
+
+        elif task_id == "relay_conversation_cycle":
+            from aria_core.relay_conversation import run_relay_conversation_cycle
+
+            result = await run_relay_conversation_cycle()
+            if result.get("outcome") == "ok":
+                append_memory("relay_conversation", "[relay] réponse envoyée à Claude Code")
 
         elif task_id == "self_banner_curiosity":
             from aria_core.self_maintenance import run_curiosity_x_banner_cycle
