@@ -1,6 +1,8 @@
 """Absorbeur de tokens — garder / rejeter-pour-toujours / ressusciter (DB isolée)."""
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from aria_core import screened_pool as sp
@@ -84,3 +86,30 @@ async def test_resurrection_still_rejects_if_still_junk():
     verdict = await ta.reconsider_on_signal("0xtok", scanner=_scanner({"0xtok": rug}))
     assert verdict == "rejected"
     assert await sp.get_status("0xtok") == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_older_than_max_age_is_skipped_before_security_screen():
+    now_ms = time.time() * 1000
+    old_ctx = _clean_ctx("0xold")
+    old_ctx.best_pair.pair_created_at = int(now_ms - 400 * 86_400_000)  # ~400 jours
+    scan_calls: list[str] = []
+
+    async def scan(contract, **kw):
+        scan_calls.append(contract)
+        return old_ctx
+
+    verdict = await ta.absorb("0xold", scanner=scan, max_age_days=182)
+    assert verdict == "skip_too_old"
+    # Ni gardé ni rejeté : hors-scope, jamais écrit dans le pool.
+    assert await sp.get_status("0xold") is None
+    assert scan_calls == ["0xold"]
+
+
+@pytest.mark.asyncio
+async def test_within_max_age_is_classified_normally():
+    now_ms = time.time() * 1000
+    fresh_ctx = _clean_ctx("0xfresh")
+    fresh_ctx.best_pair.pair_created_at = int(now_ms - 10 * 86_400_000)  # 10 jours
+    scan = _scanner({"0xfresh": fresh_ctx})
+    assert await ta.absorb("0xfresh", scanner=scan, max_age_days=182) == "kept"
