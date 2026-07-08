@@ -202,9 +202,9 @@ HEARTBEAT_TASKS = [
     ),
     HeartbeatTask(
         id="vc_weekly_forecast",
-        name="VC weekly forecast",
-        description="Tire 20 tokens du pool -> analyse -> enregistre 20 pronostics dates",
-        interval_minutes=10080,
+        name="VC forecast",
+        description="Tire 20 tokens du pool -> analyse -> enregistre 20 pronostics dates (cadence 2j)",
+        interval_minutes=2880,
         enabled=True,
     ),
     HeartbeatTask(
@@ -551,10 +551,10 @@ class AriaHeartbeat:
             from aria_core.weekly_training import run_weekly_forecasts
 
             ids = await run_weekly_forecasts(n=20)
-            append_memory("vc", f"[forecast] {len(ids)} pronostics hebdo enregistrés")
+            append_memory("vc", f"[forecast] {len(ids)} pronostics enregistrés")
             if ids:
                 await self._notify_telegram(
-                    f"🎯 ARIA — {len(ids)} nouveaux pronostics hebdo enregistrés (walk-forward)."
+                    f"🎯 ARIA — {len(ids)} nouveaux pronostics enregistrés (walk-forward)."
                 )
 
         elif task_id == "vc_self_report":
