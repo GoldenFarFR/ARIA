@@ -22,14 +22,18 @@ branch=$(echo "$input"   | jq -r '.git.branch // empty')
 added=$(echo "$input"    | jq -r '.total_lines_added // 0')
 removed=$(echo "$input"  | jq -r '.total_lines_removed // 0')
 dir=$(echo "$input"      | jq -r '.workspace.current_dir // .cwd // ""')
+tok=$(echo "$input"      | jq -r '.context_window.total_input_tokens // 0')
 
 ctx_int=${ctx%.*}
+tok_k=$(( ${tok:-0} / 1000 ))
 h5_int=${h5%.*}
 d7_int=${d7%.*}
 
 # --- Reco modèle (règle ARIA) ----------------------------------------------
 # Sonnet xhigh par défaut ; Opus ponctuel sur wallet/sécu ; alerte si quotas/contexte hauts.
-if [ "${ctx_int:-0}" -ge 80 ] 2>/dev/null; then
+if [ "${tok:-0}" -ge 500000 ] 2>/dev/null; then
+  reco="🧹 ${tok_k}k tokens (≥500k) → /compact"
+elif [ "${ctx_int:-0}" -ge 80 ] 2>/dev/null; then
   reco="🧹 contexte plein → /compact"
 elif [ -n "$d7_int" ] && [ "$d7_int" -ge 85 ] 2>/dev/null; then
   reco="⚠️ hebdo ${d7_int}% → reste en Sonnet"
@@ -54,7 +58,7 @@ if [ -f "$sf" ]; then
 fi
 
 # --- Construction de la ligne ----------------------------------------------
-line="${setup}⚡ ${model} · ctx ${ctx_int:-0}%"
+line="${setup}⚡ ${model} · ctx ${ctx_int:-0}% (${tok_k}k tok)"
 line="${line} · \$$(printf '%.2f' "$cost")"
 [ -n "$h5_int" ] && line="${line} · 5h ${h5_int}%"
 [ -n "$d7_int" ] && line="${line} · 7j ${d7_int}%"
