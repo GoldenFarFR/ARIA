@@ -92,7 +92,7 @@ _METHODOLOGY_SOURCES = (
     ("Blockscout Base", "on-chain, holders, audit"),
     ("CoinGecko", "market cap, FDV, supply"),
     ("Smart-money", "heuristique propriétaire"),
-    ("Rédaction", "Claude Opus via Spark · contrôle anti-hallucination"),
+    ("Rédaction", "moteur ARIA · contrôle anti-hallucination"),
 )
 
 # ─────────────────────────── Tiers (éditions premium / standard) ───────────────────────────
@@ -247,9 +247,9 @@ def _references_block(links: list[dict]) -> str:
         body = f"<div>{items}</div>"
     return (
         "<div style='margin:16px 0 4px;background:#f7f9fc;border-radius:8px;padding:14px 18px'>"
-        f"<div style='font-family:Georgia,serif;font-size:15px;color:{_ACCENT};margin-bottom:8px'>Références — vérifiez par vous-même</div>"
+        f"<div style='font-family:Georgia,serif;font-size:15px;color:{_ACCENT};margin-bottom:8px'>Références : vérifiez par vous-même</div>"
         f"{body}"
-        f"<div style='margin-top:8px;font-size:11px;color:{_MUTE}'>Liens déclarés par le projet (source : DexScreener) — non vérifiés par ARIA.</div>"
+        f"<div style='margin-top:8px;font-size:11px;color:{_MUTE}'>Liens déclarés par le projet (source : DexScreener). Non vérifiés par ARIA.</div>"
         "</div>"
     )
 
@@ -283,7 +283,7 @@ def email_subject(
     date_part = f"{generated_at.split(' ')[0]} · " if generated_at else ""
     num_part = f"n°{report_number} · " if report_number else ""
     return (
-        f"[{BRAND}] {num_part}{date_part}Analyse VC — {result.recommandation} · "
+        f"[{BRAND}] {num_part}{date_part}Analyse VC · {result.recommandation} · "
         f"Potentiel {potentiel} · {result.contract[:10]}…"
     )
 
@@ -353,7 +353,14 @@ def _rr_block_html(result: VCResult) -> str:
         qualifier = "Asymétrie équilibrée"
     else:
         qualifier = "Asymétrie défavorable"
-    caption = f"{qualifier} — la récompense visée représente {rr:.1f}× le risque consenti."
+    # Formulé en clair : c'est un rapport de DISTANCES (gain visé ÷ risque consenti),
+    # jamais un multiple de gain — pour ne pas le lire comme « x12 ».
+    caption = (
+        f"{qualifier} : viser +{upside:.0f}% pour {downside:.0f}% risqué. "
+        f"Rapport des distances (récompense sur risque), pas un multiple de gain."
+    )
+    if downside and downside < 4 and rr >= 4:
+        caption += f" Stop serré ({downside:.0f}%) : ratio flatté, facile à toucher."
     return f"""<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:30px;">
         <tr>
           <td style="border-radius:12px;padding:2px;background-color:{_GOLD};background-image:linear-gradient(120deg,#8a6a13 0%,{_GOLD_LIGHT} 30%,{_GOLD} 55%,{_EMERALD} 85%,{_EMERALD_DEEP} 100%);">
@@ -486,7 +493,7 @@ def _dollar_potential_html(result: VCResult, capital_usd: float | None) -> str:
           <td width="{100 - loss_pct}%" style="font-size:0;line-height:0;">&nbsp;</td>
         </tr>
       </table>
-      <div style="margin-top:8px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">Échelle commune — barres proportionnelles aux montants en $.</div>
+      <div style="margin-top:8px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">Échelle commune : barres proportionnelles aux montants en $.</div>
     </td>
   </tr>"""
 
@@ -575,7 +582,7 @@ def _gaps_block_html(gaps: list[str]) -> str:
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed #c8b878;border-radius:10px;background-color:#faf6ea;">
         <tr>
           <td style="padding:18px 20px;">
-            <div style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">Données insuffisantes&nbsp;&mdash;&nbsp;non estimées</div>
+            <div style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">Données insuffisantes&nbsp;: non estimées</div>
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
               {items}
             </table>
@@ -595,10 +602,125 @@ def _fallback_note_html(result: VCResult) -> str:
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed #c9603c;border-radius:10px;background-color:#faf0ea;">
         <tr>
           <td style="padding:16px 20px;font-family:{_FONT_SANS};font-size:13px;line-height:1.6;color:#8a3a1f;">
-            <strong>Analyse qualitative LLM indisponible</strong> — ce rapport repose uniquement sur les signaux quantitatifs.
+            <strong>Analyse qualitative LLM indisponible</strong>. Ce rapport repose uniquement sur les signaux quantitatifs.
           </td>
         </tr>
       </table>
+    </td>
+  </tr>"""
+
+
+def _ta_block_html(result: VCResult) -> str:
+    """Section « Analyse technique » : niveaux dérivés de l'OHLCV réel + graphique.
+
+    Data-gated : vide si aucune donnée technique n'a été dérivée (comportement
+    identique à aujourd'hui). Chaque niveau porte sa base factuelle (facts-only) ;
+    le graphique est un PNG data-URI email-safe déjà produit en amont.
+    """
+    if not result.ta_levels_lines and not result.chart_data_uri:
+        return ""
+
+    trend = f"&nbsp;&middot;&nbsp;tendance {_esc(result.ta_trend)}" if result.ta_trend else ""
+    tf = _esc(result.ta_timeframe) if result.ta_timeframe else ""
+
+    lines_html = ""
+    if result.ta_levels_lines:
+        items = "".join(
+            f'<li style="margin:0 0 6px;">{_esc(line)}</li>' for line in result.ta_levels_lines
+        )
+        lines_html = (
+            f'<ul style="margin:14px 0 0;padding-left:18px;font-family:{_FONT_SANS};'
+            f'font-size:14px;line-height:1.6;color:{_INK_WARM};">{items}</ul>'
+        )
+
+    chart_html = ""
+    if result.chart_data_uri.startswith("data:image/png"):
+        cap = f"Bougies {tf}" if tf else "Bougies OHLCV"
+        chart_html = (
+            f'<div style="margin-top:16px;"><img src="{result.chart_data_uri}" '
+            f'alt="Graphique {cap} avec niveaux d&eacute;riv&eacute;s" width="560" '
+            f'style="display:block;width:100%;max-width:560px;height:auto;border-radius:8px;'
+            f'border:1px solid rgba(201,162,39,0.25);" /></div>'
+            f'<div style="margin-top:6px;font-family:{_FONT_MONO};font-size:10px;color:{_MUTE_WARM};">'
+            f'{_esc(cap)}&nbsp;&middot;&nbsp;niveaux d&eacute;riv&eacute;s des donn&eacute;es, jamais fabriqu&eacute;s</div>'
+        )
+
+    return f"""<tr>
+    <td class="ivory pad" style="background-color:{_IVORY};padding:30px 44px 6px;">
+      {_section_header("Analyse technique")}
+      <div style="margin-top:6px;font-family:{_FONT_MONO};font-size:11px;letter-spacing:0.04em;color:{_MUTE_WARM};">OHLCV r&eacute;el{trend}</div>
+      {lines_html}
+      {chart_html}
+    </td>
+  </tr>"""
+
+
+def _fmt_compact_usd(value: float) -> str:
+    """Capitalisation en format compact lisible ($30M, $1.2B). Facts-only."""
+    v = float(value)
+    if v >= 1_000_000_000:
+        return f"${v / 1_000_000_000:.1f}B".replace(".0B", "B")
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.0f}M"
+    if v >= 1_000:
+        return f"${v / 1_000:.0f}k"
+    return f"${v:.0f}"
+
+
+def _roi_block_html(result: VCResult) -> str:
+    """Section « Projection par comparables » : placement du token dans l'histoire.
+
+    Data-gated : vide sans scénario (capitalisation actuelle inconnue). Chaque
+    ligne est un PLACEMENT tangible (« à la capitalisation d'un comparable, Nx »),
+    JAMAIS une cible ni une promesse. L'avertissement du dôme est affiché en clair.
+    """
+    if not result.roi_scenarios:
+        return ""
+
+    basis_label = "FDV" if result.roi_basis == "fdv" else "capitalisation"
+    sector = _esc(result.roi_sector) if result.roi_sector else ""
+    if result.roi_sector_recognized and sector:
+        sector_line = f"Secteur&nbsp;: {sector}"
+    else:
+        sector_line = "Secteur non reconnu&nbsp;: comparables g&eacute;n&eacute;riques"
+
+    rows = ""
+    for s in result.roi_scenarios:
+        label = _esc(s.get("label", ""))
+        ref = _fmt_compact_usd(s.get("ref_mcap_usd", 0))
+        mult = s.get("multiple", 0)
+        note = _esc(s.get("note", ""))
+        note_html = (
+            f'<div style="font-family:{_FONT_SANS};font-size:11px;color:{_MUTE_WARM};'
+            f'margin-top:2px;">{note}</div>'
+            if note
+            else ""
+        )
+        rows += (
+            f'<tr>'
+            f'<td style="padding:9px 0;border-bottom:1px solid rgba(201,162,39,0.18);'
+            f'font-family:{_FONT_SANS};font-size:14px;color:{_INK_WARM};">'
+            f'{label}<div style="font-family:{_FONT_MONO};font-size:11px;color:{_MUTE_WARM};'
+            f'margin-top:2px;">{basis_label} de r&eacute;f&eacute;rence {ref}</div>{note_html}</td>'
+            f'<td align="right" style="padding:9px 0;border-bottom:1px solid rgba(201,162,39,0.18);'
+            f'font-family:{_FONT_MONO};font-size:18px;font-weight:700;color:{_GOLD_DEEP};'
+            f'white-space:nowrap;">{mult:g}x</td>'
+            f'</tr>'
+        )
+
+    disclaimer = _esc(
+        result.roi_disclaimer
+        or "Placement historique par comparables, pas une prevision ni une cible."
+    )
+
+    return f"""<tr>
+    <td class="ivory pad" style="background-color:{_IVORY};padding:30px 44px 6px;">
+      {_section_header("Projection par comparables")}
+      <div style="margin-top:6px;font-family:{_FONT_MONO};font-size:11px;letter-spacing:0.04em;color:{_MUTE_WARM};">{sector_line}</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
+        {rows}
+      </table>
+      <div style="margin-top:12px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{disclaimer}</div>
     </td>
   </tr>"""
 
@@ -648,7 +770,7 @@ def render_html_report(
     if report_number:
         meta_parts.append(f"Rapport n°{_esc(report_number)}")
     meta_parts.append(f"Généré le {_esc(generated_at)}")
-    meta_line = " &middot; ".join(meta_parts) + "&nbsp;&nbsp;&mdash;&nbsp;&nbsp;Émis par ARIA&nbsp;Vanguard&nbsp;ZHC"
+    meta_line = " &middot; ".join(meta_parts) + "&nbsp;&nbsp;&middot;&nbsp;&nbsp;Émis par ARIA&nbsp;Vanguard&nbsp;ZHC"
 
     # Préheader invisible (aperçu client mail) — jamais de valeur inventée (R/R omis si non estimable).
     preheader = f"{_esc(title)} (Base) &middot; {_esc(result.recommandation)}"
@@ -690,8 +812,14 @@ def render_html_report(
 
     scenarios_block = _scenarios_block_html(result.scenarios)
 
-    # TODO projection temporelle (tâche #5) — moteur de comparables historiques pas encore
-    # implémenté : ne jamais afficher de cône d'incertitude avec des montants inventés.
+    # Analyse technique (niveaux OHLCV réels + graphique) : profondeur réservée au
+    # premium, comme l'analyse détaillée. En standard, entièrement omise (data-gated).
+    ta_block = "" if is_standard else _ta_block_html(result)
+
+    # Projection ROI par comparables historiques (Voûte 3, tâche #5) : contexte
+    # tangible réservé au premium, JAMAIS une cible ni un montant inventé. Data-gated :
+    # vide si la capitalisation actuelle est inconnue.
+    roi_block = "" if is_standard else _roi_block_html(result)
 
     watermark_diagonal = ""
     if recipient:
@@ -744,7 +872,7 @@ def render_html_report(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <meta name="supported-color-schemes" content="light">
-<title>ARIA Vanguard ZHC — Note de recherche · {_esc(title)}</title>
+<title>ARIA Vanguard ZHC · Note de recherche · {_esc(title)}</title>
 <style>
   @media (max-width:480px){{
     .stack{{display:block !important;width:100% !important;box-sizing:border-box !important;}}
@@ -875,6 +1003,10 @@ def render_html_report(
   {watermark_diagonal}
   {gaps_block}
 
+  {ta_block}
+
+  {roi_block}
+
   {detailed_block}
 
   {methodology_row}
@@ -913,7 +1045,7 @@ def render_html_report(
 
       <div class="microprint" style="margin-top:14px;overflow:hidden;white-space:nowrap;font-family:{_FONT_SANS};font-size:7px;line-height:1.6;letter-spacing:0.08em;text-transform:uppercase;color:rgba(230,196,99,0.35);">ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Document&nbsp;confidentiel&nbsp;&middot;&nbsp;{_esc(ref_id)}&nbsp;&middot;&nbsp;Reproduction&nbsp;et&nbsp;revente&nbsp;interdites&nbsp;&middot;&nbsp;ARIA&nbsp;Vanguard&nbsp;ZHC&nbsp;&middot;&nbsp;Document&nbsp;confidentiel&nbsp;&middot;&nbsp;{_esc(ref_id)}&nbsp;&middot;&nbsp;Reproduction&nbsp;et&nbsp;revente&nbsp;interdites&nbsp;&middot;&nbsp;ARIA&nbsp;Vanguard&nbsp;ZHC</div>
 
-      <div style="margin-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;color:#93a09b;" align="center">&copy;&nbsp;2026 ARIA Vanguard ZHC&nbsp;&mdash; Tous droits réservés&nbsp;&mdash; Document confidentiel&nbsp;: reproduction et revente interdites.</div>
+      <div style="margin-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;color:#93a09b;" align="center">&copy;&nbsp;2026 ARIA Vanguard ZHC&nbsp;&middot; Tous droits réservés&nbsp;&middot; Document confidentiel&nbsp;: reproduction et revente interdites.</div>
     </td>
   </tr>
 

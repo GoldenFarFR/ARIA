@@ -40,6 +40,7 @@ class AddressInfo:
     contract_name: str | None = None
     balance_wei: str | None = None
     balance_native: float | None = None
+    creator_address: str | None = None  # déployeur (pour reconnaître un launchpad)
     available: bool = False
     error: str | None = None
 
@@ -213,6 +214,7 @@ class BlockscoutClient:
             except (TypeError, ValueError):
                 balance_native = None
 
+        creator = data.get("creator_address_hash") or data.get("creator_address")
         return AddressInfo(
             address=address,
             is_contract=bool(data.get("is_contract")),
@@ -220,6 +222,7 @@ class BlockscoutClient:
             contract_name=data.get("name"),
             balance_wei=str(balance_wei) if balance_wei is not None else None,
             balance_native=balance_native,
+            creator_address=str(creator).lower() if creator else None,
             available=True,
             error=None,
         )
@@ -392,18 +395,33 @@ class BlockscoutClient:
                 error="contrat non vérifié — scan des fonctions sensibles impossible",
             )
 
-        function_names: set[str] = set()
+        # On ne considère QUE les fonctions de l'ABI qui MODIFIENT l'état
+        # (nonpayable/payable), c.-à-d. un pouvoir réellement invocable après le
+        # déploiement. On IGNORE :
+        #   - les fonctions `view`/`pure` (getters : `isBlacklisted`, `mintingFinished`)
+        #     qui ne sont pas le pouvoir lui-même ;
+        #   - le code source brut : `_mint` (fonction INTERNE d'OpenZeppelin) est
+        #     présent dans TOUS les ERC20, même à offre fixe -> scanner la source
+        #     donnait un faux positif « mint » quasi systématique (rejet à tort).
+        # Les fonctions internes n'apparaissent pas dans l'ABI : un `_mint` utilisé
+        # seulement au constructeur ne sera donc PAS flaggé. Seul un `mint(...)`
+        # externe (que le dev peut appeler pour diluer) l'est.
+        mutating_names: set[str] = set()
         for entry in data.get("abi") or []:
-            if isinstance(entry, dict) and entry.get("type") == "function" and entry.get("name"):
-                function_names.add(str(entry["name"]).lower())
-
-        source_code = str(data.get("source_code") or "").lower()
+            if not isinstance(entry, dict) or entry.get("type") != "function":
+                continue
+            if not entry.get("name"):
+                continue
+            mutability = str(entry.get("stateMutability") or "").lower()
+            if mutability in ("view", "pure"):
+                continue
+            mutating_names.add(str(entry["name"]).lower().replace("_", ""))
 
         def _has_flag(aliases: tuple[str, ...]) -> bool:
-            normalized_names = {name.replace("_", "") for name in function_names}
-            if any(alias in normalized_names for alias in aliases):
-                return True
-            return any(alias in source_code for alias in aliases)
+            # Correspondance par sous-chaîne sur les noms de fonctions mutantes :
+            # attrape les variantes (`mintTo`, `addToBlacklist`, `stopTrading`)
+            # sans le bruit du code source.
+            return any(alias in name for name in mutating_names for alias in aliases)
 
         return ContractFlags(
             address=token_address,
@@ -415,6 +433,39 @@ class BlockscoutClient:
             available=True,
             error=None,
         )
+
+    # ------------------------------------------------------------------
+    # 6. Lecture best-effort du propriétaire (owner) — détection du renoncement
+    # ------------------------------------------------------------------
+    async def read_owner(self, token_address: str) -> tuple[str | None, str | None]:
+        """Retourne (adresse_owner, erreur). ``owner`` en minuscules, ou None si illisible.
+
+        Interroge les méthodes de LECTURE du contrat (Blockscout ``methods-read``) et
+        récupère la valeur courante d'un getter sans argument nommé ``owner`` /
+        ``getOwner`` / ``_owner``. Best-effort et défensif : toute forme inattendue
+        renvoie (None, raison) — jamais d'exception (dégradation gracieuse).
+        """
+        data, error = await self._get_json(f"/smart-contracts/{token_address}/methods-read")
+        if error is not None:
+            return None, error
+        methods = data if isinstance(data, list) else (data.get("items") if isinstance(data, dict) else None)
+        if not isinstance(methods, list):
+            return None, UNAVAILABLE
+        for m in methods:
+            if not isinstance(m, dict):
+                continue
+            name = str(m.get("name") or "").lower().replace("_", "")
+            if name not in ("owner", "getowner"):
+                continue
+            if m.get("inputs"):
+                continue  # un vrai getter owner n'a pas d'argument
+            for out in m.get("outputs") or []:
+                if not isinstance(out, dict):
+                    continue
+                val = out.get("value")
+                if isinstance(val, str) and val.startswith("0x") and len(val) == 42:
+                    return val.lower(), None
+        return None, "owner introuvable"
 
 
 blockscout_client = BlockscoutClient()

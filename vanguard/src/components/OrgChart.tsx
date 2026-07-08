@@ -83,7 +83,7 @@ export function OrgChart({ holdingName, holdingStatus = 'live', portfolio, subsi
             <span className="text-[#c9a962] text-xs">+</span>
           </div>
           <p className="text-xs text-[#6b665c] pb-1 font-light">
-            Future ventures attach here — always under {holdingName}
+            Future ventures attach here, always under {holdingName}
           </p>
         </div>
       </div>

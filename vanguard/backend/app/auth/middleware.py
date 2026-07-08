@@ -68,9 +68,12 @@ class AccessCodeMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if path.startswith("/api/"):
+            import secrets
+
             admin_secret = (settings.admin_api_secret or "").strip()
             provided_admin = (request.headers.get("X-Admin-Secret") or "").strip()
-            if admin_secret and provided_admin == admin_secret:
+            # Comparaison à temps constant : évite une attaque temporelle sur le secret admin.
+            if admin_secret and secrets.compare_digest(provided_admin, admin_secret):
                 return await call_next(request)
 
             token = _extract_token(request)

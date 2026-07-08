@@ -25,7 +25,7 @@ export function AriaChat() {
       setReply(res.reply)
     } catch {
       setError(true)
-      setReply('ARIA is unavailable — please try again in a moment.')
+      setReply('ARIA is unavailable. Please try again in a moment.')
     } finally {
       setLoading(false)
     }

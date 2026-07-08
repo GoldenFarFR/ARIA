@@ -1,0 +1,146 @@
+# Graines du carnet d'auto-amélioration d'ARIA (improvement_ledger).
+#
+# Idées d'upgrades repérées (par l'opérateur ou ARIA) qu'ARIA garde EN MÉMOIRE
+# pour les tester et, si elles améliorent la calibration PROUVÉE, se les greffer
+# (toujours via une PR validée par un humain — jamais d'auto-fusion dans le cœur).
+#
+# `ingest_seeds()` les charge dans la table improvement_candidate (idempotent :
+# dédoublonnage par titre). Ajouter une graine ici = ARIA s'en souvient au boot.
+
+- title: "Scanner l'écosystème Aeon (agents IA)"
+  category: product
+  source: "github.com/aaronjmars/aeon docs/ECOSYSTEM.md"
+  benefit: "nouvelle source de sourcing : tokens d'agents IA à classifier/scanner"
+  seam: "radar/sourcing -> filtre on-chain existant (jamais un déclencheur)"
+
+- title: "Support Solana (non-EVM)"
+  category: data_source
+  source: "écosystème Aeon (projets sur Solana)"
+  benefit: "élargir la couverture hors Base ; MAIS non-EVM = stack entière (RPC Solana, Helius/Solscan, Raydium) + sort du Base-only du lancement (légal). Gros chantier, gaté."
+  seam: "services/solana_scan.py (nouveau) -> abstraction multi-chaîne"
+
+- title: "Réputation du déployeur (historique de rugs)"
+  category: data_source
+  source: "priorité opérateur : le contrat peut être fiable mais le dev malveillant"
+  benefit: "barrière de sécurité v2 : détecter un déployeur ayant déjà rug d'autres tokens"
+  seam: "services/deployer_history.py -> safety_screen (barrière prioritaire)"
+
+- title: "Overlay macro / sentiment (régime de marché)"
+  category: data_source
+  source: "tâche #14 + demande opérateur (événements internationaux, Fear & Greed)"
+  benefit: "moduler l'exposition selon le régime (risk-first) ; section macro dans le rapport"
+  seam: "services/macro.py -> include_macro + curseur d'exposition"
+
+- title: "Radar X (écoute sociale filtrée on-chain)"
+  category: tool
+  source: "tâche #7"
+  benefit: "sourcing autonome de candidats ; le social FILTRE, ne déclenche jamais"
+  seam: "services/x_social.py -> include_social"
+
+- title: "Projection ROI par comparables historiques"
+  category: tool
+  source: "tâche #5"
+  benefit: "replacer un token dans l'histoire (contexte tangible, jamais une promesse)"
+  seam: "moteur de comparables nourri par l'OHLCV (voûte 1)"
+
+- title: "Fact-check indépendant (Facticity / ArAIstotle)"
+  category: tool
+  source: "docs/architecture-extensibilite.md (catalogue)"
+  benefit: "2e dimension de juge : audit factuel indépendant des affirmations du rapport"
+  seam: "services/factcheck.py -> include_factcheck ou dimension de juge"
+
+- title: "Investiguer les outils/repos de gitlawb (GitHub)"
+  category: tool
+  source: "github.com/gitlawb (transmis par l'opérateur)"
+  benefit: "à investiguer : outils potentiellement utiles au sourcing/analyse"
+  seam: "à déterminer après investigation"
+
+- title: "Bankr (agent de trading conversationnel Base/Farcaster)"
+  category: product
+  source: "docs.bankr.bot (transmis par l'opérateur)"
+  benefit: "angles : distribution (portée Farcaster), source de tokens tendance, référence UX. ATTENTION : c'est un agent d'EXÉCUTION -> contredit notre 'zéro exécution' si utilisé pour trader ; utile surtout comme canal/source, pas comme moteur."
+  seam: "distribution/sourcing (jamais l'exécution)"
+
+- title: "Détection de coordination / cabals (clustering de wallets)"
+  category: tool
+  source: "demande opérateur : écouter/découvrir les cabals"
+  benefit: "signal à DOUBLE tranchant : coordination sur un token pourri = piège pump&dump (AVOID, on serait l'exit liquidity) ; accumulation smart-money légitime sur un vrai projet = alpha early (hunt). ARIA distingue les deux. LIGNE ROUGE : détecter la manip = edge ; PARTICIPER à un pump coordonné = abus de marché (MAR) + suicide de marque = JAMAIS."
+  seam: "services/smart_money.py -> clustering/coordination -> include_coordination"
+
+- title: "Renseignement groupes/cabals (flux opérateur) comme signal"
+  category: data_source
+  source: "l'opérateur est membre de plusieurs groupes/cabals"
+  benefit: "flux privé de ce que des groupes poussent → signal de COORDINATION (dôme : donnée non fiable, sanitisée, FILTRE jamais déclencheur ; on-chain arbitre). Usage : flag pump organisé (souvent AVOID, exit-liquidity) + dire au client s'il est smart money ou sac de fin de course. LIGNE ROUGE : ARIA n'est jamais le mégaphone du cabal, ne trade pas leurs calls (MAR)."
+  seam: "services/group_intel.py (sanitisé) -> include_coordination"
+
+- title: "Analyse du wallet du dev/équipe (comportement on-chain)"
+  category: tool
+  source: "priorité opérateur : distinguer un builder engagé d'un farmer"
+  benefit: "signal de LÉGITIMITÉ contextuel (pas un rejet binaire) à partir du déployeur : (a) le dev détient-il de la supply et combien (skin-in-the-game vs pression de vente) ; (b) a-t-il ACHETÉ avec son argent (aligné) ou juste auto-alloué (farming) ; (c) a-t-il vendu — pour financer le projet (sain) ou pour extraire (rug lent) ; (d) est-il all-in (conviction). Nuance à double tranchant : peu/pas de détention = moins de pression MAIS moins d'engagement. C'est le cœur du jugement humain-vs-bot."
+  seam: "services/dev_wallet.py (creator -> transferts du token) -> include_dev_behavior + section rapport"
+
+- title: "Concentration multi-pools (exclure TOUS les pools, pas seulement le best)"
+  category: fix
+  source: "audit scan #3"
+  benefit: "un token liquide sur plusieurs pools (V2+V3, plusieurs DEX) voit les autres pools comptés comme baleines -> rejet à tort. Exclure l'ensemble des pair_address + holders is_contract connus (bridges, staking)."
+  seam: "_holder_concentration + _apply_onchain_signals (jeu d'exclusion commun)"
+
+- title: "Contrat non vérifié -> plafonner le verdict à CAUTION"
+  category: fix
+  source: "audit scan #5"
+  benefit: "un contrat non vérifié (code opaque) peut atteindre lite_verdict=SAFE sur bonne liquidité -> affiché SAFE à tort dans le chemin lite (Telegram /scan). Pénaliser ou plafonner à CAUTION."
+  seam: "_apply_onchain_signals / _score_and_verdict"
+
+- title: "Détection honeypot élargie (enableTrading/tradingActive/setBots)"
+  category: fix
+  source: "audit scan #6"
+  benefit: "les honeypots courants utilisent enableTrading/tradingActive/setTrading (trading fermé après achat) et setBots/isBot -> non détectés aujourd'hui. Élargir les alias ABI. Sinon marquer explicitement que la détection honeypot est partielle."
+  seam: "services/blockscout _SENSITIVE_FUNCTION_NAMES"
+
+- title: "Seuil dilution FDV/MC trop bas + disciplined_exit trop laxiste"
+  category: fix
+  source: "audit scan #7 et #8"
+  benefit: "FDV/MC>=3x pénalise des lancements low-float normaux (relever ~10x ou gating unlock court terme). disciplined_exit compte un dump total (1 achat+1 vente) comme sortie disciplinée -> exiger >=2 ventes par tranches."
+  seam: "_apply_onchain_signals (dilution) + smart_money.disciplined_exit"
+
+- title: "Détection de faux volume (wash trading)"
+  category: tool
+  source: "suggestion ARIA (motif façade vs réel)"
+  benefit: "un gros volume peut être du wash trading (quelques wallets qui se renvoient la balle) pour simuler de l'activité. Signaux : ratio buys/sells anormal, peu de traders distincts vs volume, allers-retours répétés entre mêmes adresses, volume >> liquidité. Démasque un faux marché."
+  seam: "services/smart_money.py ou services/wash_trading.py -> include_wash"
+
+- title: "Détection de faux holders (sybil / airdrop farmé)"
+  category: tool
+  source: "suggestion ARIA (motif façade vs réel)"
+  benefit: "un compteur de holders gonflé (3000 wallets mais tous financés par la même source, créés le même jour, soldes identiques) simule une communauté. Démasque une fausse distribution."
+  seam: "services/blockscout (holders) -> clustering d'âge/financement -> include_sybil"
+
+- title: "Réputation du déployeur (historique de contrats)"
+  category: tool
+  source: "suggestion ARIA + priorité opérateur (dev malveillant)"
+  benefit: "le créateur (creator_address, déjà exposé) a-t-il déployé des contrats quasi identiques qui ont rug ? copy-paste de scam = signal fort. Complète l'analyse du wallet dev."
+  seam: "services/deployer_history.py -> include_deployer_reputation"
+
+- title: "Détection de faux buzz social (bots / followers achetés)"
+  category: tool
+  source: "suggestion ARIA (relie au Radar X)"
+  benefit: "un engagement social gonflé (bots, followers achetés, réponses génériques) simule de la traction. Croiser avec le Radar X : bruit élevé mais faible qualité/diversité d'auteurs = faux buzz."
+  seam: "services/x_social.py (Radar X) -> score de qualité du bruit"
+
+- title: "Vérification du verrouillage de liquidité (façade vs réel)"
+  category: tool
+  source: "priorité opérateur : LP-lock de façade"
+  benefit: "un 'LP locked' rassure à tort si c'est 24h ou un faux locker. Vérifier : LP dans un locker connu (UNCX/Unicrypt, Team.Finance, PinkLock) OU brûlée, durée restante longue, % de LP réellement verrouillé. Le drapeau VERT trompeur est le plus dangereux."
+  seam: "services/lp_lock.py -> include_lp_lock"
+
+- title: "Ratio liquidité / market cap (marché mince)"
+  category: fix
+  source: "intuition opérateur (100k mcap -> 30-40k liq mini)"
+  benefit: "FAIT (skills/liquidity_depth.py) : marché mince = fragile. Reste à moduler le plancher PAR launchpad (bonding curve démarre mince, Bankr liq++) via launchpads.yaml norms."
+  seam: "launchpads.yaml norms.min_liq_mcap_ratio -> assess_liquidity_depth(min_ratio=...)"
+
+- title: "Source OHLCV alternative (CoinAPI)"
+  category: data_source
+  source: "swiftask.ai/coinapi (évoqué par l'opérateur)"
+  benefit: "redondance/robustesse de l'OHLCV si GeckoTerminal tombe ; couverture élargie"
+  seam: "services/ohlcv.py (2e fournisseur derrière la même interface)"

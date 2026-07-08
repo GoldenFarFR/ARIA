@@ -1,0 +1,72 @@
+# Registre des launchpads Base — reconnaissance du contexte de déploiement.
+#
+# POURQUOI : sur un launchpad (Virtuals, Flaunch, Clanker, Zora, Bankr...), l'autorité
+# du contrat (owner/mint) n'est JAMAIS renoncée — elle reste au PROTOCOLE. C'est
+# NORMAL et légitime. Rejeter ces tokens pour « fonction mint présente » serait une
+# erreur : le mint est piloté par l'infrastructure du launchpad, pas par un dev qui
+# peut rug à volonté.
+#
+# USAGE : on compare le CRÉATEUR (déployeur) d'un token à ces adresses. Match →
+# autorité « launchpad » (légitime). La barrière mint est alors neutralisée (le
+# contexte explique le mint), sans baisser la garde sur les AUTRES barrières
+# (liquidité, concentration, vérifié).
+#
+# Adresses en minuscules. Sources : docs/recherche-launchpads-base-2026.md + calibrage
+# live sur le VPS. `confidence` : high (confirmé) / medium (rapporté, à confirmer).
+# ATTENTION : reconnaître un launchpad ne vaut JAMAIS caution du token — un scam peut
+# se lancer sur un launchpad. Ça neutralise seulement le faux positif « mint du dev ».
+
+# `norms` : contexte de tokenomics PROPRE au launchpad, pour juger AU CAS PAR CAS
+# (jamais un seuil absolu). Ex. sur Virtuals la team détient couramment 15-20 % —
+# c'est normal, pas un drapeau rouge. Un fondateur sans argent ne peut pas s'acheter
+# d'alloc : 0 % de détention n'est donc pas forcément de la mauvaise foi. ARIA compare
+# un token à la norme de SON launchpad, puis justifie l'écart. Champs indicatifs,
+# éditables par l'opérateur au fil de ses observations.
+
+launchpads:
+  virtuals:
+    label: "Virtuals Protocol"
+    confidence: high
+    addresses:
+      - "0xf66dea7b3e897cd44a5a231c61b6b4423d613259"   # Bonding (courbe)
+    norms:
+      bonding_curve: true
+      team_allocation_pct: [15, 20]   # observé opérateur : team ~15-20 % (normal)
+      liquidity_note: "liquidité montée par la courbe de bonding (faible au départ, croît)"
+
+  flaunch:
+    label: "Flaunch"
+    confidence: high
+    addresses:
+      - "0x51bba15255406cfe7099a42183302640ba7dafdc"   # PositionManager
+    norms:
+      bonding_curve: false
+      liquidity_note: "Fair Launch prix-fixe 30 min"
+
+  clanker:
+    label: "Clanker"
+    confidence: medium
+    addresses:
+      - "0xe85a59c628f7d27878aceb4bf3b35733630083a9"   # deployer v4
+    norms:
+      bonding_curve: false
+      liquidity_note: "liquide sur DEX dès t=0"
+
+  zora:
+    label: "Zora"
+    confidence: medium
+    addresses:
+      - "0x777777751622c0d3258f214f9df38e35bf45baf3"   # ZoraFactory
+    norms:
+      bonding_curve: false
+      liquidity_note: "pool Uniswap V4 dès t=0"
+
+  # Bankr : cité par l'opérateur. Observation : met ÉNORMÉMENT de liquidité sur chaque
+  # token lancé -> un seuil de liquidité bas n'a pas de sens ici. Adresse de déploiement
+  # à confirmer en live (calibrage VPS) avant activation.
+  bankr:
+    label: "Bankr"
+    confidence: medium
+    addresses: []
+    norms:
+      liquidity_note: "liquidité très élevée par défaut sur chaque lancement (observé opérateur)"

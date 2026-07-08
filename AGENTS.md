@@ -28,7 +28,7 @@ Tu dois l'utiliser en priorité pour toute analyse crypto/investissement, c'est 
 ---
 
 ### Profil opérateur
-Opérateur : **l'operateur** (email [email operateur retire]). **Non-développeur** : il ne code pas lui-même. **Claude (chat ARIA + Claude Code) gère désormais 100% de la construction et de l'exploitation technique d'ARIA** — Cursor et Grok Build ne sont plus utilisés. operateur recoupe/vérifie systématiquement ce qui est affirmé. Travaille et échange **en français**. Travaille sous Windows (PowerShell, `C:\Users\Study`). Exécute les instructions techniques rapidement — prudence maximale sur les actions irréversibles et les garde-fous. **Une seule session IA à la fois sur le VPS de prod.**
+Opérateur : **l'operateur** (coordonnées dans `aria-ops` privé). **Non-développeur** : il ne code pas lui-même. **Claude (chat ARIA + Claude Code) gère désormais 100% de la construction et de l'exploitation technique d'ARIA** — Cursor et Grok Build ne sont plus utilisés. operateur recoupe/vérifie systématiquement ce qui est affirmé. Travaille et échange **en français**. Travaille sous Windows (PowerShell, `C:\Users\Study`). Exécute les instructions techniques rapidement — prudence maximale sur les actions irréversibles et les garde-fous. **Une seule session IA à la fois sur le VPS de prod.**
 
 ---
 
@@ -115,16 +115,15 @@ Monorepo `github.com/GoldenFarFR/ARIA` (branche `main`). Repos liés : `aria-ops
 
 ---
 
-### Infrastructure prod (état vérifié 06/07/2026)
-- **VPS IONOS** `root@31.70.114.74` (Ubuntu, kernel 6.8). DNS `api.ariavanguardzhc.com` → `31.70.114.74`.
+### Infrastructure prod (public-safe)
+> IP, DNS→hôte, login SSH et posture de durcissement vivent dans le repo **privé `aria-ops`**, JAMAIS ici (cf. `REPO-PUBLIC-SECURITY.md`).
+- **Hébergement** : VPS dédié. Accès, IP et DNS → `aria-ops` (privé).
 - **Stack** : Docker `aria-api` (image locale), uvicorn sur `:8000`, derrière nginx (TLS, `proxy_pass localhost:8000`).
-- **⚠️ BINDING OBLIGATOIRE** : `-p 127.0.0.1:8000:8000`. **JAMAIS** `-p 8000:8000` (expose l'API sur Internet). L'historique bash du VPS montre que l'erreur a déjà été commise.
+- **⚠️ BINDING OBLIGATOIRE** : `-p 127.0.0.1:8000:8000`. **JAMAIS** `-p 8000:8000` (expose l'API sur Internet).
 - **Data** : bind-mount `/opt/aria-data` → `/app/backend/data`. Survit aux restart/reboot.
-- **Procédure de déploiement** : documentée dans `docs/deploy-ionos.md` (dans `main`). Deploy **manuel** : `git pull → docker build → docker stop/rm → docker run`. Pas d'autodeploy.
-- **Accès SSH** : mot de passe root (PasswordAuthentication=yes, sshd non durci). Clé d'audit retirée. SSH hardening reporté (risque de verrouillage).
-- **Sécu faite** : `.env` + `.db` en chmod 600, ufw actif (22/80/443), bind 127.0.0.1 actif.
-- **Sécu reste à faire** : sshd hardening, firewall IONOS panneau, fail2ban, élucider « Heartbeat: never », ménage (clés Gemini, token Telegram).
-- **Kill-switch** testé et validé en réel (commit `7b69d3f`, /stop /start). **Ne pas le recoder.**
+- **Procédure de déploiement** : `docs/deploy-ionos.md`. Deploy **manuel** : `git pull → docker build → docker stop/rm → docker run`. Pas d'autodeploy.
+- **Accès & durcissement SSH** : gérés hors repo public (aria-ops). Priorité sécu : clé-only + fail2ban + firewall.
+- **Kill-switch** testé et validé en réel (/stop /start). **Ne pas le recoder.**
 
 ### Piège des garde-fous
 Un agent qui « croit bien faire » (normaliser, suivre la doc, aligner un exemple) peut **silencieusement neutraliser un garde-fou** en modifiant `permission_mode`, `wallet_guard`, `config.toml`, ou `regles-uniques`. Cas vécu : `permission_mode = "always-approve"` annulait toute règle de validation. **Ne jamais toucher ces fichiers sans validation humaine explicite**, même quand la modif paraît anodine.

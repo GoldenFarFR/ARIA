@@ -144,7 +144,7 @@ def test_email_subject_includes_date_when_provided():
 
 def test_email_subject_without_date_has_no_date_prefix():
     subj = email_subject(_result())
-    assert subj == "[ARIA Vanguard ZHC] Analyse VC — BUY · Potentiel 7/10 · 0xaaaaaaaa…"
+    assert subj == "[ARIA Vanguard ZHC] Analyse VC · BUY · Potentiel 7/10 · 0xaaaaaaaa…"
 
 
 def test_email_subject_includes_report_number_when_provided():
