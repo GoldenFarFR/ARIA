@@ -50,7 +50,7 @@ export function VanguardSite() {
     'ZHC holding operated by ARIA, building in public, one brick at a time.'
 
   return (
-    <div className="min-h-screen vanguard-atmosphere text-[#d4d0c8] overflow-x-hidden">
+    <div className="min-h-screen vanguard-charcoal text-[#d4d0c8] overflow-x-hidden">
       <header className="fixed top-0 left-0 right-0 z-50">
         <CommunityWelcomeBanner />
         <VanguardNav />
