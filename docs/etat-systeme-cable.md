@@ -53,8 +53,38 @@ l'utilise — il ne lui « fournit » pas la donnée.
 - `aria_core.x_profile` : module **non livré** (imports gardés en try/except pour ne pas crasher).
 
 ## Ce qui est CODÉ mais ÉTEINT faute de clé (normal)
-SMTP Gmail (rapports email), LLM Vision, images xAI, ACP (CLI absent du conteneur = exécution
-financière de-facto non câblée). Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
+LLM Vision, images xAI, ACP (CLI absent du conteneur = exécution financière de-facto non câblée).
+Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
+
+- **SMTP Gmail (rapports email) : ACTIF en prod.** `/vc <contrat>` (mode normal, hors `test`)
+  demande la **langue du rapport** (boutons Telegram FR/EN) avant de lancer l'analyse LLM, puis
+  envoie un **PDF sécurisé** (reportlab + chiffrement pypdf, permissions limitées à l'impression
+  — dissuasif, jamais inviolable) en pièce jointe, avec filigrane nominatif traçable (destinataire
+  + empreinte SHA-256). Le corps de l'email ne contient qu'un **teaser court** (badges, R/R) —
+  la thèse et le rapport détaillé complet ne sont JAMAIS en clair dans le corps, seulement dans
+  le PDF joint. Destinataire fixe (jamais demandé). Voir `skills/vc_delivery.py`,
+  `skills/vc_report_pdf.py`, `skills/vc_i18n.py` (`SUPPORTED_VC_LANGS = (fr, en)` seulement —
+  ES/IT/ZH pas encore supportés, à faire si demandé).
+
+## Cockpit « ARIA en direct » (#21) — EN LIGNE (câblé + déployé 08/07)
+- `/cockpit` sur la vitrine : pouls public (`GET /api/pulse`, sans auth — heartbeat vivant/mort,
+  derniers cycles, badges paper-trading/exécution réelle/ancrage onchain) + dossier par contrat
+  (`GET /api/aria/dossier/{contract}`, **gaté opérateur uniquement**, jamais public/abonné).
+- Secret opérateur : **`sessionStorage` uniquement** (jamais `localStorage`), transmis **en
+  header** (`X-Admin-Secret` + `X-Admin-Totp` optionnel), jamais en query-string. Verrouillé par
+  `test_coherence`.
+- Commande Telegram **`/watchlist [n]`** (admin, n∈[1,30], défaut 10) : classement du pool
+  screené (`candidate_ranking.top_candidates`) — c'est LA checklist des contrats qu'ARIA suit.
+
+## Déploiement VPS — DEUX scripts séparés, ne pas confondre
+- `./vanguard/deploy.sh` déploie **uniquement le backend** (conteneur Docker `aria-api`).
+- `./vanguard/deploy-vitrine.sh` déploie **uniquement la vitrine statique** (build Vite → webroot
+  nginx, publication atomique). Aucune dépendance croisée : builder/déployer le backend ne touche
+  jamais aux fichiers statiques déjà servis, et vice-versa.
+- **Toute évolution du frontend (`vanguard/src/**`) exige de lancer les DEUX scripts** — sinon le
+  site sert encore l'ancien bundle malgré un backend à jour (piège rencontré le 08/07 : `/cockpit`
+  affichait l'ancienne page d'accueil après un `deploy.sh` seul, faute d'avoir aussi lancé
+  `deploy-vitrine.sh`).
 
 ## Doctrine câblage (rappel)
 - Ajouter une source de donnée = un nouveau `services/<x>.py` (même dôme : throttle + backoff +
