@@ -17,6 +17,16 @@
 > qualité/vitesse d'exécution démontrée, pas un chiffre arbitraire ; le budget reste dans
 > l'infrastructure et la preuve, **pas** un raccourci vers du capital réel (on reste en
 > apprentissage, pacte `docs/protocole-argent-reel.md` inchangé.)
+>
+> **Vérifié le 08/07 (recherche web) — à reconfirmer avant tout dépôt** : Base Batches 003
+> (Startup Track) est CLOSE (dépôt mars 2026, demo day mai 2026) ; le statut d'une cohorte 004 est
+> **non vérifiable** depuis cet environnement (basebatches.xyz et docs.base.org bloquent les
+> requêtes automatisées) — **vérifie toi-même sur basebatches.xyz / docs.base.org/get-started/get-funded
+> avant de soumettre où que ce soit**. Alternative sans deadline fixe : Base Ecosystem Fund
+> (Coinbase Ventures, capital-risque classique, au fil de l'eau) ou Builder Grants (rétroactif,
+> par nomination, pas un dossier à déposer). L'accent « économie agentique »/x402 est réel et
+> actuel côté Base (100M+ transactions x402, article officiel « The Agentic Economy Is Here ») —
+> notre positionnement est aligné, pas en décalage.
 
 ---
 
@@ -83,6 +93,18 @@ separation is enforced in code and locked by a CI test, not just a promise.
 - **A macro cycle engine**: real historical Bitcoin price data segmented into the last three
   halving-bounded cycles, with accumulation, markup, distribution, and markdown phases computed
   from actual numbers, not a memorized narrative.
+
+## Why this is not another Base AI agent
+The Base ecosystem already has a visible "AI market analyst": AIXBT, a social commentary agent
+with no onchain execution authority of its own. In March 2025 a prompt injection drained roughly
+55.5 ETH from a wallet connected to it, with no human check in the loop. We are not naming this to
+score a point. It is the exact failure mode our architecture is built to make structurally
+impossible for anything touching real capital: no autonomous spend ever reaches a wallet without a
+human clicking approve, and the one narrow exception we allow ourselves runs on an asset worth
+zero dollars. Virtuals Protocol, the dominant agent launchpad on Base, is infrastructure for
+creating and tokenizing agents, not a competing analyst. We have not found another Base project
+anchoring a Merkle-proven, independently verifiable track record onchain before asking for trust.
+We are not a token, unlike nearly every named agent in this space.
 
 ## Why this is Base-native
 - Built on and for Base: onchain data, onchain proof, USDC and x402 payments, low-cost anchoring,
