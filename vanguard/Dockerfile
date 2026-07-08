@@ -34,4 +34,8 @@ ENV ARIA_VC_CACHE_TTL=300
 RUN mkdir -p /app/backend/data
 
 EXPOSE 8000
-CMD ["sh", "-c", "echo \"aria-api boot commit=${GIT_COMMIT} PORT=${PORT:-8000}\" && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info"]
+# --proxy-headers + --forwarded-allow-ips=127.0.0.1 : nginx (seul en façade, sur le
+# loopback) fournit X-Forwarded-For ; uvicorn ne fait confiance qu'à lui pour reconstituer
+# l'IP client réelle. Sans ça, request.client.host reste le loopback et le plafond anti-abus
+# par IP ne peut pas fonctionner.
+CMD ["sh", "-c", "echo \"aria-api boot commit=${GIT_COMMIT} PORT=${PORT:-8000}\" && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info --proxy-headers --forwarded-allow-ips=127.0.0.1"]

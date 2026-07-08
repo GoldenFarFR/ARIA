@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import secrets as _secrets
 
 from fastapi import HTTPException, Request
 
@@ -44,16 +45,25 @@ def resolve_visitor_id(request: Request, body_visitor_id: str | None = None) -> 
     return f"anon-{digest}"
 
 
+def is_operator_request(request: Request) -> bool:
+    """Vrai si la requête porte le secret admin valide — SANS lever d'exception.
+
+    Header seul (`X-Admin-Secret`) : on refuse le secret en query-string, qui fuit
+    dans les logs serveur, l'historique navigateur et l'en-tête Referer. Comparaison
+    à temps constant pour ne pas exposer le secret à une attaque temporelle.
+    """
+    secret = (settings.admin_api_secret or "").strip()
+    if not secret:
+        return False
+    provided = (request.headers.get("X-Admin-Secret") or "").strip()
+    return bool(provided) and _secrets.compare_digest(provided, secret)
+
+
 def require_operator(request: Request) -> None:
     secret = (settings.admin_api_secret or "").strip()
     if not secret:
         raise HTTPException(status_code=403, detail="Operator endpoints disabled.")
-    provided = (
-        request.headers.get("X-Admin-Secret")
-        or request.query_params.get("secret")
-        or ""
-    ).strip()
-    if provided != secret:
+    if not is_operator_request(request):
         raise HTTPException(status_code=403, detail="Operator access required.")
 
 
