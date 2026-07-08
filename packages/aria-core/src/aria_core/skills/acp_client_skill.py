@@ -5,12 +5,7 @@ import os
 import re
 from pathlib import Path
 
-from aria_core.skills.acp_cli import (
-    browse_agents,
-    is_acp_available,
-    list_agents,
-    list_offerings,
-)
+from aria_core.skills import acp_cli
 from aria_core.skills.acp_offering_skill import (
     execute_adhoc_workflow_create,
     execute_offering_create,
@@ -112,7 +107,7 @@ def _events_file_status() -> tuple[int, str]:
 
 
 async def _format_status(lang: str) -> tuple[str, dict]:
-    if not is_acp_available():
+    if not acp_cli.is_acp_available():
         msg = (
             "ACP — acp-cli introuvable.\n"
             "Installe : npm i -g @virtuals-protocol/acp-cli\n"
@@ -122,8 +117,8 @@ async def _format_status(lang: str) -> tuple[str, dict]:
         )
         return msg, {"acp": "no_cli"}
 
-    agents, err_a = list_agents()
-    offerings, err_o = list_offerings()
+    agents, err_a = acp_cli.list_agents()
+    offerings, err_o = acp_cli.list_offerings()
     lines_count, events_path = _events_file_status()
     provider_on = os.environ.get("ARIA_ACP_PROVIDER_ENABLED", "").lower() in ("1", "true", "yes")
 
@@ -179,7 +174,7 @@ async def _format_conversational_status(lang: str) -> tuple[str, dict]:
     lines_count, events_path = _events_file_status()
     month_usd = monthly_total_usd()
     total_usd = total_revenue_usd()
-    offerings, _ = list_offerings()
+    offerings, _ = acp_cli.list_offerings()
     off_count = len(offerings or [])
 
     if lang == "fr":
@@ -211,7 +206,7 @@ async def _format_conversational_status(lang: str) -> tuple[str, dict]:
 
 
 async def _format_revenue_plan(lang: str) -> tuple[str, dict]:
-    offerings, _ = list_offerings()
+    offerings, _ = acp_cli.list_offerings()
     names = [o.get("name") for o in offerings if o.get("name")]
     if lang == "fr":
         off_txt = ", ".join(names[:4]) if names else "analyse_lite_x1, analyse_full_x1"
@@ -269,7 +264,7 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
         )
 
     if _BROWSE_RE.search(text):
-        items, err = browse_agents("")
+        items, err = acp_cli.browse_agents("")
         if err:
             return f"Browse ACP : {err[:300]}", {"acp": "browse_error"}
         if not items:

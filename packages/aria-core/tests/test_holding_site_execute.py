@@ -18,14 +18,14 @@ async def test_execute_audit_without_write(monkeypatch, tmp_path):
     reload_test_settings(
         monkeypatch,
         GITHUB_TOKEN="test",
-        GITHUB_READ_REPOS="GoldenFarFR/aria-vanguard",
+        GITHUB_READ_REPOS="GoldenFarFR/ARIA",
         GITHUB_WRITE_REPOS="GoldenFarFR/aria-sandbox",
         GITHUB_OWNER="GoldenFarFR",
     )
 
     class FakeClient:
         async def repo_exists(self, owner: str, repo: str) -> bool:
-            return repo == "aria-vanguard"
+            return repo == "ARIA"
 
         async def get_file_text(self, owner: str, repo: str, path: str) -> tuple[str, str | None]:
             if "VanguardSite" in path or "FaqSection" in path or "VanguardNav" in path:

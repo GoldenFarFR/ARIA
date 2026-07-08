@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from aria_core.skills.acp_cli import is_acp_available, list_offerings
+from aria_core.skills import acp_cli
 from aria_core.skills.acp_offering_skill import (
     _parse_price_override,
     _parse_template_key,
@@ -59,7 +59,7 @@ def compose_product_tweet(
 
 
 async def _upsert_offering(payload: dict[str, Any]) -> tuple[dict | None, str, str | None]:
-    existing, err_list = list_offerings()
+    existing, err_list = acp_cli.list_offerings()
     if err_list:
         return None, "list_error", err_list
     name = payload["name"]
@@ -173,7 +173,7 @@ async def _promote_product(
 
 async def execute_product_launch(message: str, lang: str) -> tuple[str, dict]:
     lang_key = "fr" if lang == "fr" else "en"
-    if not is_acp_available():
+    if not acp_cli.is_acp_available():
         msg = "ACP — acp-cli introuvable." if lang_key == "fr" else "ACP — acp-cli missing."
         return msg, {"acp": "no_cli"}
 
@@ -210,7 +210,7 @@ async def execute_product_launch(message: str, lang: str) -> tuple[str, dict]:
             template_names.add(str(tpl.get("name") or key).lower())
             meta["examples"][key] = {"request": sample_req, "deliverable": sample_deliv}
 
-        existing, _ = list_offerings()
+        existing, _ = acp_cli.list_offerings()
         for row in existing or []:
             name = str(row.get("name") or "").strip()
             if not name or name.lower() in template_names:

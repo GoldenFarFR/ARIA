@@ -43,8 +43,8 @@ async def test_execute_shooting_star_with_write(monkeypatch, tmp_path):
     reload_test_settings(
         monkeypatch,
         GITHUB_TOKEN="test",
-        GITHUB_READ_REPOS="GoldenFarFR/aria-vanguard",
-        GITHUB_WRITE_REPOS="GoldenFarFR/aria-vanguard",
+        GITHUB_READ_REPOS="GoldenFarFR/ARIA",
+        GITHUB_WRITE_REPOS="GoldenFarFR/ARIA",
         GITHUB_OWNER="GoldenFarFR",
     )
 
@@ -52,7 +52,7 @@ async def test_execute_shooting_star_with_write(monkeypatch, tmp_path):
 
     class FakeClient:
         async def repo_exists(self, owner: str, repo: str) -> bool:
-            return repo == "aria-vanguard"
+            return repo == "ARIA"
 
         async def get_file_text(self, owner: str, repo: str, path: str) -> tuple[str, str | None]:
             if path.endswith("VanguardSite.tsx"):
@@ -89,7 +89,7 @@ async def test_execute_shooting_star_write_denied(monkeypatch, tmp_path):
     reload_test_settings(
         monkeypatch,
         GITHUB_TOKEN="test",
-        GITHUB_READ_REPOS="GoldenFarFR/aria-vanguard",
+        GITHUB_READ_REPOS="GoldenFarFR/ARIA",
         GITHUB_WRITE_REPOS="GoldenFarFR/aria-sandbox",
         GITHUB_OWNER="GoldenFarFR",
     )
