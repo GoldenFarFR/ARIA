@@ -4,8 +4,10 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.integrations.aria_host import register_aria_host_integrations
@@ -129,6 +131,25 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def _sanitized_validation_handler(request, exc: RequestValidationError):
+    """Renvoie un 422 propre SANS jamais réémettre le corps brut de la requête.
+
+    Sécurité/robustesse : le handler par défaut inclut le champ `input` (le corps reçu) ;
+    un corps binaire (non-UTF8) faisait alors planter la sérialisation JSON -> 500 sur tout
+    POST. On préserve loc/msg/type (utiles au front) mais on retire `input`/`ctx`
+    (octets/objets non sérialisables, et évite de renvoyer une entrée hostile en écho).
+    """
+    clean = []
+    for err in exc.errors():
+        err = dict(err)
+        err.pop("input", None)
+        err.pop("ctx", None)
+        clean.append(err)
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(clean)})
+
 
 app.add_middleware(AccessCodeMiddleware)
 app.add_middleware(
