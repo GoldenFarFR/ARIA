@@ -64,4 +64,5 @@ jobs:
             tests/test_paper_trader.py \
             tests/test_admin_totp.py \
             tests/test_attestation.py \
+            tests/test_opportunity_radar.py \
             tests/test_coherence.py
