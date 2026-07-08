@@ -1,7 +1,11 @@
 import { authHeaders } from './lib/auth'
+import { operatorHeaders } from './lib/operator-auth'
 import { PRODUCT_API_URL } from './lib/site'
 import { getVisitorId, visitorHeaders } from './lib/visitor'
 import type { AgentSetup, HoldingStructure } from './types'
+
+/** Le secret opérateur fourni est absent, invalide, ou le TOTP requis manque/est faux. */
+export class OperatorAuthError extends Error {}
 
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers = { ...visitorHeaders(), ...authHeaders(), ...init?.headers }
@@ -185,6 +189,62 @@ export interface TrackRecord {
 export async function getTrackRecord(): Promise<TrackRecord> {
   const res = await fetch(`${PRODUCT_API_URL}/aria/track-record`)
   if (!res.ok) throw new Error('Track record unavailable')
+  return res.json()
+}
+
+export interface PulseHeartbeat {
+  alive: boolean
+  last_tick: string | null
+  cycles: Record<string, string>
+}
+
+export interface Pulse {
+  status: string
+  commit: string
+  heartbeat: PulseHeartbeat
+  paper_trading: boolean
+  real_execution: boolean
+  onchain: { anchor_ready: boolean; anchored: boolean }
+}
+
+// Pouls public (aucune auth) : signal coarse pour le suivi live du cockpit.
+export async function getPulse(): Promise<Pulse> {
+  const res = await fetch(`${PRODUCT_API_URL}/pulse`, { signal: AbortSignal.timeout(12_000) })
+  if (!res.ok) throw new Error('Pulse unavailable')
+  return res.json()
+}
+
+export interface DossierEvent {
+  at: string | null
+  kind: string
+  source: string
+  summary: string
+  data: Record<string, unknown>
+}
+
+export interface Dossier {
+  contract: string
+  valid: boolean
+  error?: string
+  symbol?: string | null
+  screened_status?: string | null
+  counts?: Record<string, number>
+  events?: DossierEvent[]
+  generated_at?: string
+}
+
+// Dossier par token (opérateur uniquement) : chronologie complète des analyses
+// ARIA sur un contrat. Lance une OperatorAuthError sur secret manquant/invalide,
+// pour que l'appelant efface la session opérateur et re-propose le formulaire.
+export async function getDossier(contract: string): Promise<Dossier> {
+  const res = await apiFetch(`/aria/dossier/${contract}`, {
+    headers: operatorHeaders(),
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (res.status === 401 || res.status === 403) {
+    throw new OperatorAuthError('Operator secret invalid or missing')
+  }
+  if (!res.ok) throw new Error('Dossier unavailable')
   return res.json()
 }
 

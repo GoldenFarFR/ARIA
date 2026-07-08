@@ -69,4 +69,5 @@ jobs:
             tests/test_onchain_anchor.py \
             tests/test_heartbeat_pulse.py \
             tests/test_dossier.py \
+            tests/test_telegram_watchlist_command.py \
             tests/test_coherence.py

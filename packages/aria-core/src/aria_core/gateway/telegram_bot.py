@@ -1858,6 +1858,48 @@ async def _handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _reply(message, "\n".join(lines))
 
 
+async def _handle_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/watchlist [n] — checklist des contrats qu'ARIA suit de près : le pool screené
+    classé par score composite (sécurité + liquidité + concentration + verdict).
+
+    Priorité de lecture, jamais un ordre — pour voir CE sur quoi ARIA garde l'œil
+    avant l'analyse VC approfondie (/vc <adresse>)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    arg = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    try:
+        n = max(1, min(30, int(arg))) if arg else 10
+    except ValueError:
+        n = 10
+
+    from aria_core.skills.candidate_ranking import top_candidates
+
+    tops = await top_candidates(n)
+    if not tops:
+        await _reply(
+            message,
+            "Pool de surveillance vide pour l'instant — aucun contrat suivi actuellement.",
+        )
+        return
+
+    lines = [f"👀 Contrats suivis de près ({len(tops)}/{n} demandés) :", ""]
+    for i, c in enumerate(tops, start=1):
+        name = c.symbol or f"{c.contract[:6]}…{c.contract[-4:]}"
+        lines.append(
+            f"{i}. {name} — score {c.rank_score:.0f} · sécurité {c.security_score} · "
+            f"liq ${c.liquidity_usd:,.0f} · {c.verdict}"
+        )
+        lines.append(f"   {c.contract}")
+    lines.append("")
+    lines.append("Classement de priorité (jamais un ordre) — analyse complète : /vc <adresse>")
+    await _reply(message, "\n".join(lines))
+
+
 async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/these <adresse> <BUY|WATCH|SELL|AVOID> <thèse...> — journalise un pari (aucune exécution)."""
     if not await _admin_check_reply(update):
@@ -2013,6 +2055,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))
+    app.add_handler(CommandHandler("watchlist", _handle_watchlist))
     app.add_handler(CommandHandler(["langue", "lang", "language"], _handle_langue))
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))

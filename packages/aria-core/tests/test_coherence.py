@@ -376,3 +376,16 @@ def test_token_dossier_operator_gated_and_read_only():
     src = inspect.getsource(dossier)
     for forbidden in ("INSERT", "UPDATE ", "DELETE", "aiosqlite", "httpx"):
         assert forbidden not in src, f"le dossier doit rester une lecture pure (trouvé: {forbidden})"
+
+
+def test_cockpit_operator_secret_never_persistent():
+    """Le cockpit web (secret opérateur saisi côté navigateur) doit rester SESSION-only :
+    jamais localStorage (persisterait le secret sur l'appareil), jamais dans une URL."""
+    auth = _read("vanguard/src/lib/operator-auth.ts")
+    for forbidden in ("localStorage.setItem", "localStorage.getItem"):
+        assert forbidden not in auth, "le secret opérateur ne doit JAMAIS toucher localStorage"
+    assert "sessionStorage" in auth, "le secret opérateur doit être session-only (sessionStorage)"
+
+    api = _read("vanguard/src/api.ts")
+    dossier_call = api.split("export async function getDossier", 1)[1][:400]
+    assert "operatorHeaders()" in dossier_call, "le dossier doit envoyer le secret en HEADER, jamais en query-string"
