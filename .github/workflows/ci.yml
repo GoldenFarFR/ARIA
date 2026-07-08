@@ -58,4 +58,8 @@ jobs:
             tests/test_acp_onchain_project_links.py \
             tests/test_telegram_webhook_dedup.py \
             tests/test_vc_lang_and_concurrency.py \
-            tests/test_vc_cache.py
+            tests/test_vc_cache.py \
+            tests/test_goplus.py \
+            tests/test_candidate_ranking.py \
+            tests/test_paper_trader.py \
+            tests/test_coherence.py
