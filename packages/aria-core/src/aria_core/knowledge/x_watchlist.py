@@ -39,8 +39,21 @@ def default_watch_handles() -> list[str]:
     return [str(h).lstrip("@") for h in (data.get("default_handles") or [])]
 
 
+def opportunity_watch_handles() -> list[str]:
+    """Comptes suivis pour les OPPORTUNITÉS écosystème (ex. @base) — annonces produit /
+    standards / grants à évaluer pour ARIA, pas des candidats token."""
+    data = _load()
+    out: list[str] = []
+    for entry in data.get("opportunity_handles") or []:
+        if isinstance(entry, str):
+            out.append(entry.lstrip("@"))
+        elif isinstance(entry, dict) and entry.get("handle"):
+            out.append(str(entry["handle"]).lstrip("@"))
+    return out
+
+
 def all_curiosity_handles() -> tuple[str, ...]:
-    """Deduped handles for passive X curiosity — peers, operator picks, defaults."""
+    """Deduped handles for passive X curiosity — peers, operator picks, opportunities, defaults."""
     from aria_core.knowledge.zhc_peer_agents import curiosity_handles
 
     seen: set[str] = set()
@@ -48,6 +61,7 @@ def all_curiosity_handles() -> tuple[str, ...]:
     for handle in (
         list(operator_watch_handles())
         + list(curiosity_handles())
+        + list(opportunity_watch_handles())
         + list(default_watch_handles())
     ):
         key = handle.lstrip("@").lower()

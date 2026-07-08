@@ -12,8 +12,15 @@ operator_handles:
     role: autonomous_analysis
     note: "operator alias aixbt_agen"
 
+# Comptes « opportunités écosystème » : ce qu'ils publient (standards, grants, SDK, x402,
+# MCP, programmes) est surfacé à l'opérateur comme « à envisager d'ajouter », pas comme un
+# candidat token. Lecture seule, jamais d'action autonome.
+opportunity_handles:
+  - handle: base
+    role: ecosystem_opportunities
+    note: "Base officiel — annonces produit/standards/grants a evaluer pour ARIA"
+
 default_handles:
   - Aria_ZHC
   - Dexscreener
-  - base
   - tomosman
