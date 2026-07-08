@@ -1,0 +1,137 @@
+"""Garde-fou de COHÉRENCE — impose que les affirmations sur le système collent au code réel.
+
+Pourquoi ce fichier existe : la description d'ARIA (CLAUDE.md, docs, capacités) était écrite
+à la main et dérivait du code (capacités annoncées mais orphelines/stubs/absentes, secrets
+qui réapparaissent). Chaque session lisait un instantané faux → incohérences. Ces tests
+CODIFIENT les invariants qui doivent TOUJOURS tenir ; s'ils cassent, la CI passe au rouge et
+la dérive est bloquée avant d'atteindre une nouvelle session.
+
+Tout est statique/hors-ligne (lecture de fichiers), aucun secret, aucun réseau. Quand tu
+changes volontairement un invariant, mets À JOUR ce fichier dans le MÊME commit : c'est le
+contrat de cohérence.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[3]
+CORE = REPO / "packages" / "aria-core" / "src" / "aria_core"
+
+
+def _read(rel: str) -> str:
+    p = REPO / rel
+    assert p.is_file(), f"Fichier attendu manquant : {rel}"
+    return p.read_text(encoding="utf-8", errors="replace")
+
+
+def _read_core(rel: str) -> str:
+    p = CORE / rel
+    assert p.is_file(), f"Module aria_core attendu manquant : {rel}"
+    return p.read_text(encoding="utf-8", errors="replace")
+
+
+# ── 1. Sécurité : le repo public ne doit contenir NI IP serveur NI email perso ───────────
+# (On ne hardcode PAS le secret ici — on détecte la CLASSE de fuite par motif générique.)
+
+_HUMAN_DOCS = [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/deploy-ionos.md",
+    "docs/etat-systeme-cable.md",
+    "docs/HANDOFF-2026-07-07-nuit.md",
+]
+_IPV4 = re.compile(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b")
+_ALLOWED_IPS = {"127.0.0.1", "0.0.0.0", "255.255.255.255"}
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@(?:gmail|outlook|yahoo|hotmail|proton(?:mail)?)\.[A-Za-z]{2,}")
+
+
+@pytest.mark.parametrize("rel", _HUMAN_DOCS)
+def test_no_public_ip_in_human_docs(rel):
+    """Aucune IP de serveur en clair dans les docs humaines (127.0.0.1/0.0.0.0 tolérés)."""
+    if not (REPO / rel).is_file():
+        pytest.skip(f"{rel} absent")
+    for m in _IPV4.finditer(_read(rel)):
+        ip = m.group(0)
+        octets = [int(x) for x in m.groups()]
+        if ip in _ALLOWED_IPS:
+            continue
+        if all(0 <= o <= 255 for o in octets):  # ressemble à une vraie IP
+            pytest.fail(
+                f"IP en clair détectée dans {rel} : '{ip}'. "
+                "Rien d'infra/IP ne doit vivre dans le repo public (→ aria-ops privé)."
+            )
+
+
+@pytest.mark.parametrize("rel", _HUMAN_DOCS)
+def test_no_personal_email_in_human_docs(rel):
+    """Aucun email personnel (fournisseur grand public) dans les docs publiques."""
+    if not (REPO / rel).is_file():
+        pytest.skip(f"{rel} absent")
+    found = _EMAIL.findall(_read(rel))
+    assert not found, (
+        f"Email personnel détecté dans {rel} : {found}. "
+        "La PII opérateur vit dans aria-ops (privé), pas ici."
+    )
+
+
+# ── 2. Câblage : les capacités ANNONCÉES doivent être réellement branchées ────────────────
+
+def test_honeypot_service_exists_and_wired():
+    """GoPlus (anti-scam) : service présent + drapeau include_honeypot dans le hub de scan."""
+    assert (CORE / "services" / "goplus.py").is_file(), "services/goplus.py manquant"
+    scan = _read_core("skills/acp_onchain_scan.py")
+    assert "include_honeypot" in scan, "include_honeypot absent de scan_base_token"
+
+
+def test_honeypot_active_on_vc_path():
+    """L'analyse VC doit VRAIMENT activer le honeypot (sinon la capacité est inerte)."""
+    vc = _read_core("skills/vc_analysis.py")
+    assert "include_honeypot=True" in vc, (
+        "vc_analysis n'active pas include_honeypot=True : la détection honeypot serait dormante."
+    )
+
+
+def test_paper_trader_registered_in_heartbeat():
+    """Le paper-trading 1M$ doit être une tâche heartbeat ET avoir un dispatch (pas orphelin)."""
+    assert (CORE / "paper_trader.py").is_file(), "paper_trader.py manquant"
+    hb = _read_core("heartbeat.py")
+    assert 'id="paper_trade_cycle"' in hb, "tâche paper_trade_cycle absente de HEARTBEAT_TASKS"
+    assert 'task_id == "paper_trade_cycle"' in hb, "dispatch de paper_trade_cycle absent de _run_task"
+
+
+def test_acp_conversational_routing_gated_off():
+    """L'ACP (abandonné) ne doit PAS détourner la conversation libre par défaut."""
+    brain = _read_core("brain.py")
+    assert "_acp_intent_enabled" in brain, (
+        "le garde d'intention ACP a disparu : la conversation libre risque de repartir vers l'ACP."
+    )
+
+
+def test_candidate_ranking_available():
+    from aria_core.skills.candidate_ranking import rank_candidates, top_candidates  # noqa: F401
+
+
+def test_paper_trader_importable():
+    from aria_core.paper_trader import run_paper_cycle, portfolio_summary  # noqa: F401
+
+
+# ── 3. Intégrité documentaire : ce que CLAUDE.md dit de lire doit exister ─────────────────
+
+def test_referenced_docs_exist():
+    """CLAUDE.md renvoie vers des docs de référence : elles doivent exister (pas de lien mort)."""
+    for rel in (
+        "docs/etat-systeme-cable.md",
+        "docs/architecture-extensibilite.md",
+        "docs/protocole-argent-reel.md",
+    ):
+        assert (REPO / rel).is_file(), f"Doc référencé dans CLAUDE.md manquant : {rel}"
+
+
+def test_claude_md_declares_established_facts_block():
+    """Le bloc 'faits établis' (anti-questions répétées) doit rester présent dans CLAUDE.md."""
+    claude = _read("CLAUDE.md")
+    assert "NE PAS re-demander" in claude, "le bloc 'Faits établis' a disparu de CLAUDE.md"
+    assert "etat-systeme-cable.md" in claude, "CLAUDE.md ne pointe plus vers la fiche d'état câblé"
