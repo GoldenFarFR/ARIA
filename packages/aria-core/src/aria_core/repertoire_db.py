@@ -7,6 +7,7 @@ from uuid import uuid4
 import aiosqlite
 
 from aria_core.holding import (
+    ARIA_MARKET_SLUG,
     DEFAULT_SUBSIDIARIES,
     DEXPULSE_SLUG,
     HOLDING_SLUG,
@@ -14,7 +15,10 @@ from aria_core.holding import (
     holding_name,
 )
 
-PROTECTED_SLUGS = frozenset({HOLDING_SLUG, DEXPULSE_SLUG})
+PROTECTED_SLUGS = frozenset({HOLDING_SLUG})
+# Retired codenames — no longer live products. Purged from the repertoire at every boot
+# in case they were seeded by an earlier version of DEFAULT_SUBSIDIARIES (pre-cleanup).
+RETIRED_SLUGS = frozenset({ARIA_MARKET_SLUG, DEXPULSE_SLUG})
 from aria_core.models import (
     EntityType,
     HoldingStructure,
@@ -65,6 +69,7 @@ async def init_repertoire_db() -> None:
         await _migrate_repertoire_columns(db)
         await _migrate_agent_messages_columns(db)
         await _seed_holding_group(db)
+        await _purge_retired_subsidiaries(db)
 
 
 async def _migrate_agent_messages_columns(db: aiosqlite.Connection) -> None:
@@ -174,6 +179,16 @@ async def _link_orphans_to_holding(db: aiosqlite.Connection, holding_id: str) ->
     )
 
 
+async def _purge_retired_subsidiaries(db: aiosqlite.Connection) -> None:
+    """Remove any repertoire row for a retired codename (Aria Market, DEXPulse) — no-op once clean."""
+    placeholders = ",".join("?" for _ in RETIRED_SLUGS)
+    await db.execute(
+        f"DELETE FROM repertoire WHERE slug IN ({placeholders})",
+        tuple(RETIRED_SLUGS),
+    )
+    await db.commit()
+
+
 def _row_to_item(row: tuple) -> RepertoireItem:
     tags = [t for t in row[7].split(",") if t] if row[7] else []
     entity_raw = row[12] if len(row) > 12 and row[12] else EntityType.SUBSIDIARY.value
@@ -222,7 +237,7 @@ def deletion_blocked_reason(item: RepertoireItem) -> str | None:
     if item.entity_type == EntityType.HOLDING:
         return "La holding mère ne peut pas être supprimée."
     if item.slug and item.slug in PROTECTED_SLUGS:
-        return f"{item.name} est une entité protégée (flagship/holding)."
+        return f"{item.name} est une entité protégée (holding)."
     return None
 
 

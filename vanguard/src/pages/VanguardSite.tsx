@@ -13,27 +13,9 @@ import type { AgentSetup, HoldingStructure, RepertoireItem } from '../types'
 
 const HOLDING = HOLDING_NAME
 
-const FALLBACK_MARKET: RepertoireItem = {
-  id: 'market-fallback',
-  name: 'Aria Market',
-  description: 'Flagship subsidiary: DEX signals, watchlist, ARIA insights',
-  status: 'live',
-  category: 'product',
-  priority: 1,
-  zhc_aligned: true,
-  tags: ['flagship'],
-  notes: '',
-  revenue_monthly: 0,
-  created_at: '',
-  updated_at: '',
-  entity_type: 'subsidiary',
-  slug: 'market',
-}
-
 function portfolioFromStructure(structure: HoldingStructure | null): RepertoireItem[] {
-  if (!structure) return [FALLBACK_MARKET]
-  const items = [...structure.subsidiaries, ...structure.ventures]
-  return items.length > 0 ? items : [FALLBACK_MARKET]
+  if (!structure) return []
+  return [...structure.subsidiaries, ...structure.ventures]
 }
 
 export function VanguardSite() {
