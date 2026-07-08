@@ -153,6 +153,14 @@ def test_claude_md_documents_automation():
     assert "test_coherence" in claude, "CLAUDE.md ne documente pas le garde-fou de cohérence"
 
 
+def test_claude_md_declares_permanent_norms():
+    """Le bloc 'Normes permanentes' (qualité/fluidité/UX…) doit rester présent — appliqué à chaque build."""
+    claude = _read("CLAUDE.md")
+    assert "Normes permanentes" in claude, "la section 'Normes permanentes' a disparu de CLAUDE.md"
+    for norm in ("Qualité", "Fluidité", "Graphique", "Robustesse", "Accessibilité"):
+        assert norm in claude, f"la norme permanente '{norm}' a disparu de CLAUDE.md"
+
+
 def test_session_checkpoint_hook_wired():
     """Checkpoint auto (tous les 20 messages) : hook présent, enregistré, documenté."""
     assert (REPO / ".claude" / "hooks" / "session-checkpoint.sh").is_file(), (
