@@ -1,7 +1,6 @@
 import { ExternalLink, Menu, X } from 'lucide-react'
 import { BrandMark } from './BrandMark'
 import { MemberSignInButton } from './MemberSignInButton'
-import { SiteLanguagePicker } from './SiteLanguagePicker'
 import { useEffect, useState } from 'react'
 import { cn } from '../lib/cn'
 
@@ -63,7 +62,6 @@ export function VanguardNav() {
             >
               @Aria_ZHC <ExternalLink className="w-3 h-3" />
             </a>
-            <SiteLanguagePicker />
             <MemberSignInButton />
           </div>
 
@@ -92,9 +90,6 @@ export function VanguardNav() {
             aria-label="Close menu"
           />
           <div className="absolute top-14 left-0 right-0 nav-minimal-scrolled p-6 space-y-4">
-            <div className="pb-2">
-              <SiteLanguagePicker />
-            </div>
             {SECTIONS.map(({ href, label }) => (
               <a
                 key={href}
