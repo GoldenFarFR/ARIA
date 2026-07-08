@@ -288,7 +288,7 @@ def test_showcase_pr_autoreply_transparent_and_gated_to_human():
     # Feu vert net : ARIA répond seule, avec signature de transparence, sans em-dash.
     _, body = spw.decide_reply("LGTM, ready to merge.", target={"pr_number": 37})
     signed = spw._sign(body)
-    assert "autonomously by the ARIA agent" in signed, "signature de transparence absente"
+    assert "autonomous AI powered by GoldenFarFR" in signed, "signature de transparence absente"
     assert "—" not in signed, "em-dash dans une réponse publique (trace IA interdite)"
     for tpl in (spw._THANKS_REOPEN_TEMPLATE, spw._HANDOVER_TEMPLATE, spw._OPERATOR_DRAFT_TEMPLATE):
         assert "—" not in tpl, "em-dash dans un template outward"

@@ -58,7 +58,7 @@ def test_decide_reply_handover_on_incident_mention():
 def test_reply_carries_transparency_signature_without_em_dash():
     _, body = spw.decide_reply("LGTM, ready to merge.", target={"pr_number": 37})
     signed = spw._sign(body)
-    assert "autonomously by the ARIA agent" in signed
+    assert "autonomous AI powered by GoldenFarFR" in signed
     assert _EM_DASH not in signed
 
 
@@ -132,7 +132,8 @@ async def test_run_hands_over_when_unclear(monkeypatch, tmp_path):
     assert len(result["handed_over"]) == 1
     # Le message public est le relai signe, pas un template a cote de la plaque.
     assert posted and "handing it over to my operator" in posted[0].lower()
-    assert "autonomously by the ARIA agent" in posted[0]
+    assert "@GoldenFarFR" in posted[0]  # l'operateur est tague (il reprend la main)
+    assert "autonomous AI powered by GoldenFarFR" in posted[0]
     ho = result["handed_over"][0]
     assert ho["handover"] is True
     assert ho["suggested_draft"]
@@ -181,7 +182,7 @@ async def test_run_auto_replies_on_green_light(monkeypatch, tmp_path):
     assert len(result["replied"]) == 1
     assert result["handed_over"] == []
     assert posted and "reopen PR #37" in posted[0]
-    assert "autonomously by the ARIA agent" in posted[0]
+    assert "autonomous AI powered by GoldenFarFR" in posted[0]
     assert _EM_DASH not in posted[0]
 
 
