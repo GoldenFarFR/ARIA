@@ -267,3 +267,82 @@ async def test_run_skips_our_comments(monkeypatch, tmp_path):
     assert result["new_external"] == 0
     assert result["replied"] == []
     assert result["handed_over"] == []
+
+
+def test_wants_showcase_pr_repair_matches():
+    assert spw.wants_showcase_pr_repair("showcase pr repair")
+    assert spw.wants_showcase_pr_repair("corrige la reponse showcase")
+    assert spw.wants_showcase_pr_repair("corrige la réponse du PR")
+    assert not spw.wants_showcase_pr_repair("showcase pr watch")
+    assert not spw.wants_showcase_pr_repair("bonjour")
+
+
+@pytest.mark.asyncio
+async def test_repair_edits_last_comment_to_handover(monkeypatch, tmp_path):
+    # Etat : ARIA a deja poste un commentaire (le mauvais). La reparation l'EDITE.
+    state = {
+        "handled": {"issue:9001": "9002"},
+        "replies": [
+            {
+                "target": "acp-showcase-37",
+                "owner": "Virtual-Protocol",
+                "repo": "acp-cli-demos",
+                "pr_number": 37,
+                "reply_id": 9002,
+                "reply_url": "https://github.com/x/issues/37#issuecomment-9002",
+                "handover": False,
+            }
+        ],
+    }
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(spw, "_STATE_PATH", state_path)
+    monkeypatch.setattr(spw, "load_watch_targets", lambda: [])
+    monkeypatch.setattr("aria_core.skills.showcase_pr_watcher.github_configured", lambda: True)
+    monkeypatch.setattr(spw, "append_memory", lambda *a, **k: None)
+
+    class FakeSettings:
+        github_token = "test-token"
+
+    monkeypatch.setattr(spw, "settings", FakeSettings())
+    edits: list[tuple] = []
+
+    class FakeClient:
+        async def edit_issue_comment(self, owner, repo, comment_id, body):
+            edits.append((owner, repo, comment_id, body))
+            return {
+                "id": comment_id,
+                "html_url": f"https://github.com/x/issues/37#issuecomment-{comment_id}",
+            }
+
+    monkeypatch.setattr(spw, "GitHubClient", lambda token: FakeClient())
+
+    report = await spw.repair_last_reply()
+    assert report["ok"] is True
+    assert report["edited"]["id"] == 9002
+    # Le nouveau corps = message de relai signe, taguant l'operateur.
+    assert edits and edits[0][2] == 9002
+    new_body = edits[0][3]
+    assert "handing it over to my operator" in new_body.lower()
+    assert "@GoldenFarFR" in new_body
+    assert "autonomous AI powered by GoldenFarFR" in new_body
+    assert _EM_DASH not in new_body
+    # Etat marque comme repare.
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["replies"][-1].get("repaired_at")
+
+
+@pytest.mark.asyncio
+async def test_repair_reports_error_when_nothing_posted(monkeypatch, tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"handled": {}, "replies": []}), encoding="utf-8")
+    monkeypatch.setattr(spw, "_STATE_PATH", state_path)
+    monkeypatch.setattr("aria_core.skills.showcase_pr_watcher.github_configured", lambda: True)
+
+    class FakeSettings:
+        github_token = "test-token"
+
+    monkeypatch.setattr(spw, "settings", FakeSettings())
+    report = await spw.repair_last_reply()
+    assert report["ok"] is False
+    assert report["errors"]
