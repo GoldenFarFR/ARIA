@@ -175,6 +175,21 @@ def test_attack_simulation_present():
     )
 
 
+def test_onchain_attestation_present_and_valueless():
+    """Preuve onchain : primitives Merkle + contrat AriaLedger présents ; le contrat ne
+    transfère JAMAIS de valeur (garde-fou : l'ancrage n'est pas une exécution financière)."""
+    assert (CORE / "onchain" / "attestation.py").is_file(), "module onchain/attestation.py manquant"
+    from aria_core.onchain.attestation import merkle_root, verify_proof  # noqa: F401
+
+    sol = REPO / "contracts" / "AriaLedger.sol"
+    assert sol.is_file(), "contrat AriaLedger.sol manquant"
+    src = sol.read_text(encoding="utf-8")
+    assert "payable" not in src, "AriaLedger ne doit jamais être payable (aucun transfert de valeur)"
+    assert "call{value" not in src and ".transfer(" not in src, (
+        "AriaLedger ne doit jamais déplacer de fonds — c'est un ancrage de hash, pas un wallet."
+    )
+
+
 def test_session_checkpoint_hook_wired():
     """Checkpoint auto (tous les 20 messages) : hook présent, enregistré, documenté."""
     assert (REPO / ".claude" / "hooks" / "session-checkpoint.sh").is_file(), (
