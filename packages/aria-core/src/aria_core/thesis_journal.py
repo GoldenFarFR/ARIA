@@ -227,7 +227,8 @@ async def list_entries(contract: str | None = None, limit: int = 50) -> list[dic
         db.row_factory = aiosqlite.Row
         if contract:
             cur = await db.execute(
-                "SELECT * FROM journal_entry WHERE contract = ? ORDER BY id DESC LIMIT ?",
+                "SELECT * FROM journal_entry WHERE LOWER(contract) = LOWER(?) "
+                "ORDER BY id DESC LIMIT ?",
                 (contract, limit),
             )
         else:
@@ -248,7 +249,8 @@ async def list_checkpoints(contract: str, limit: int = 50) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT * FROM thesis_checkpoint WHERE contract = ? ORDER BY id DESC LIMIT ?",
+            "SELECT * FROM thesis_checkpoint WHERE LOWER(contract) = LOWER(?) "
+            "ORDER BY id DESC LIMIT ?",
             (contract, limit),
         )
         rows = await cur.fetchall()

@@ -68,4 +68,5 @@ jobs:
             tests/test_x402.py \
             tests/test_onchain_anchor.py \
             tests/test_heartbeat_pulse.py \
+            tests/test_dossier.py \
             tests/test_coherence.py
