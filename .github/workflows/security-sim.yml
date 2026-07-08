@@ -1,0 +1,39 @@
+# Simulation d'attaque quotidienne — red-team automatisé en-process contre le backend.
+# Tire des milliers de requêtes hostiles sur TOUTES les routes et échoue si une faille
+# CRITICAL/HIGH est trouvée (crash 5xx, fuite secret/stacktrace, bypass auth).
+name: Security — attack simulation (daily)
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # tous les jours à 03:17 UTC
+  workflow_dispatch: {}
+  push:
+    paths:
+      - "vanguard/backend/**"
+      - "packages/aria-core/**"
+      - ".github/workflows/security-sim.yml"
+
+jobs:
+  attack-sim:
+    name: Red-team en-process (Python 3.12)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vanguard/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Installer le backend + aria-core
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -e ../../packages/aria-core
+      - name: Simulation d'attaque (échoue sur CRITICAL/HIGH)
+        run: python -m security_sim.run --budget 8000 --json sim-report.json
+      - name: Publier le rapport
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: attack-sim-report
+          path: vanguard/backend/sim-report.json

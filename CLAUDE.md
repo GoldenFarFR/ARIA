@@ -32,6 +32,7 @@ Poser le seam maintenant, même vide, plutôt que réécrire plus tard.
 - **Testabilité / non-régression** : toute capacité livrée avec un test câblé à la CI ; un invariant volontairement changé se met à jour dans `test_coherence` au même commit.
 - **Sobriété (perf & coût)** : réutiliser les clients existants (jamais dupliquer), cache/throttle quand pertinent, pas de gaspillage de tokens/appels API.
 - **Accessibilité** : focus clavier visible, contrastes lisibles, `prefers-reduced-motion` respecté, labels ARIA sur les contrôles.
+- **Protection des données utilisateur** : minimisation (ne collecter que le strict nécessaire), jamais de PII/secret dans les logs, réponses, URL ou query-string ; identifiants visiteurs pseudonymes ; stockage sécurisé et accès gaté ; aucun partage à un tiers sans base légale ; rétention limitée ; respect RGPD (droit d'accès/suppression). À vérifier à chaque endpoint/feature qui touche de la donnée utilisateur.
 
 ## Mindset attendu (précisé par l'opérateur, 07/07)
 - **Jamais satisfait**, au bon sens : ne pas retoucher ce qui marche — **discerner la vraie plus-value** et y aller à fond. Refaire du fonctionnel = risque gratuit.
