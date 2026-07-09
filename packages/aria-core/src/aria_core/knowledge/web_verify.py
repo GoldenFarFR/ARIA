@@ -26,12 +26,31 @@ _USER_AGENT = "Mozilla/5.0 (compatible; ARIA-ZHC/1.0)"
 _LIVE_INFO_RE = re.compile(
     r"rugby|stade\s+toulousain|toulousain|top\s*14|top14|"
     r"coupe du monde|world cup|match|fixture|football|soccer|"
-    r"nba|tennis|formule\s*1|f1\b|"
-    r"bitcoin|btc|crypto|ethereum|eth\b|"
+    r"\bnba\b|tennis|formule\s*1|\bf1\b|"
+    r"bitcoin|\bbtc\b|crypto|ethereum|\beth\b|"
     r"prix|cours|baisse|hausse|monte|descend|"
     r"actu|actualité|news|"
-    r"aujourd|today|ce soir|tonight|demain|tomorrow|"
     r"quelle?\s+heure|à\s+quelle\s+heure|what\s+time|when\s+does|when\s+is",
+    re.I,
+)
+# NB : "aujourd'hui/ce soir/demain" seuls ne déclenchent PLUS le chemin web (retiré, 09/07) --
+# trop de faux positifs sur du smalltalk banal ("comment vas-tu aujourd'hui ?"). Ces mots
+# restent utiles pour DATER une requête déjà légitime (cf. _query_variants ci-dessous), mais
+# ne doivent plus, seuls, décider qu'une question est "de l'actu".
+
+# Demande EXPLICITE de recherche/vérification web -- distinct de is_live_info_question
+# (actu/sport/prix). Sert le principe opérateur : si l'assistant (Claude Code) n'a pas
+# accès web depuis sa session, il passe par ARIA (qui, elle, a Tavily) -- ex. vérifier un
+# label Etherscan/Arkham, une adresse, une source. Sans ce déclencheur dédié, ces demandes
+# ne matchaient aucun mot-clé de _LIVE_INFO_RE et tombaient sur une réponse de mémoire.
+_EXPLICIT_WEB_REQUEST_RE = re.compile(
+    r"v[ée]rifie(?:r)?\s+sur\s+(?:le\s+)?(?:web|internet)|"
+    r"cherche(?:r)?\s+sur\s+(?:le\s+)?(?:web|internet)|"
+    r"recherch(?:e|er)\s+(?:sur\s+)?(?:le\s+)?(?:web|internet|en\s*ligne)|"
+    r"confirme(?:r)?\s+(?:via|avec)\s+une\s+recherche|"
+    r"fais\s+une\s+recherche|"
+    r"search\s+(?:the\s+)?(?:web|internet|online)|"
+    r"look\s+(?:this\s+)?up\s+online",
     re.I,
 )
 
@@ -92,6 +111,16 @@ def is_live_info_question(query: str) -> bool:
     if is_operator_local_question(query):
         return False
     return bool(_LIVE_INFO_RE.search(query))
+
+
+def is_explicit_web_request(query: str) -> bool:
+    """Demande EXPLICITE de recherche/vérification web (ex. "vérifie sur le web...",
+    "cherche sur internet..."), indépendamment du sujet -- voir _EXPLICIT_WEB_REQUEST_RE."""
+    if is_ecosystem_product_query(query):
+        return False
+    if is_operator_local_question(query):
+        return False
+    return bool(_EXPLICIT_WEB_REQUEST_RE.search(query))
 
 
 def is_ecosystem_product_query(query: str) -> bool:

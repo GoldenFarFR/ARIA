@@ -850,7 +850,7 @@ class AriaBrain:
 
         from aria_core.grounding import is_factual_question, is_general_qa, is_short_ack
         from aria_core.knowledge.epistemic import resolve_calibrated_answer
-        from aria_core.knowledge.web_verify import is_live_info_question
+        from aria_core.knowledge.web_verify import is_explicit_web_request, is_live_info_question
 
         if is_short_ack(route):
             return "OK.", None, ["Ack (template)"], {}, None
@@ -1054,14 +1054,16 @@ class AriaBrain:
 
         # Chemin calibré/web (Tavily/DDG via web_first_answer) : pour les visiteurs publics
         # sur toute question factuelle, ET pour l'opérateur sur les questions d'ACTU
-        # (news/prix/actualité) -- sinon la conversation fondateur (public=False) ne
-        # déclenchait JAMAIS la recherche web et ARIA répondait de mémoire. is_live_info_question
-        # exclut déjà les sujets perso opérateur (impôts, admin) et produits ARIA.
+        # (news/prix/actualité) OU une demande EXPLICITE de recherche/vérification web (ex.
+        # "vérifie sur le web...") -- sinon la conversation fondateur (public=False) ne
+        # déclenchait JAMAIS la recherche web et ARIA répondait de mémoire. Les deux
+        # fonctions excluent déjà les sujets perso opérateur (impôts, admin) et produits ARIA.
         if (
             not _is_strategic_conversation(route)
             and (
                 (public and (is_factual_question(route) or is_general_qa(route)))
                 or is_live_info_question(route)
+                or is_explicit_web_request(route)
             )
         ):
             cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)
