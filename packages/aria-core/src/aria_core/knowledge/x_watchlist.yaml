@@ -19,6 +19,9 @@ opportunity_handles:
   - handle: base
     role: ecosystem_opportunities
     note: "Base officiel — annonces produit/standards/grants a evaluer pour ARIA"
+  - handle: Whale_AI_net
+    role: project_discovery
+    note: "Partage beaucoup de projets ambitieux — A TRIER via safety_screen + analyse on-chain, jamais un declencheur"
 
 default_handles:
   - Aria_ZHC
