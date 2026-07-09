@@ -93,4 +93,5 @@ jobs:
             tests/test_btc_cycles.py \
             tests/test_code_proposal.py \
             tests/test_skill_projects.py \
+            tests/test_web_verify_fuzz_500x3.py \
             tests/test_coherence.py
