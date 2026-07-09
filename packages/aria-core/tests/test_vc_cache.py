@@ -27,6 +27,16 @@ def _clean_cache():
     vc_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_network_macro_context(monkeypatch):
+    """Contexte marché (tâche #14) : réseau coupé par défaut, respecte l'invariant
+    « aucun réseau » de ce fichier."""
+    monkeypatch.setattr(
+        "aria_core.skills.btc_cycles.fetch_current_macro_phase", AsyncMock(return_value=None),
+    )
+    yield
+
+
 # ------------------------------ unitaire ------------------------------
 def test_put_get_roundtrip():
     vc_cache.put(("k", "fr"), "value", ttl=100)

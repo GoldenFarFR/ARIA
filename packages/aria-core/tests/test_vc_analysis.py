@@ -18,6 +18,18 @@ from aria_core.skills.acp_onchain_scan import PairSnapshot, TokenScanContext
 ADDR = "0x" + "a" * 40
 
 
+@pytest.fixture(autouse=True)
+def _no_network_macro_context(monkeypatch):
+    """Contexte marché (tâche #14) : réseau coupé par défaut dans ce fichier -- renvoie
+    None (comportement data-gated normal, section omise), pour respecter l'invariant
+    « aucun appel réseau réel » du docstring de ce module. Les tests dédiés au contexte
+    macro le remontent explicitement avec leur propre monkeypatch.setattr."""
+    monkeypatch.setattr(
+        "aria_core.skills.btc_cycles.fetch_current_macro_phase", AsyncMock(return_value=None),
+    )
+    yield
+
+
 def _ctx(**kw) -> TokenScanContext:
     base = dict(
         contract=ADDR,
@@ -451,3 +463,75 @@ def test_no_financial_execution_imports():
     }
     assert "resolve_spend" not in called
     assert "pause" not in called
+
+
+# ----------------------- contexte marché macro (tâche #14) -----------------------
+
+@pytest.mark.asyncio
+async def test_analyze_vc_market_context_omitted_when_btc_history_unavailable(monkeypatch):
+    """Comportement par défaut de ce fichier (fixture autouse) : sans donnée, la section
+    est simplement omise -- rapport strictement inchangé, jamais de crash."""
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.market_context is None
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_market_context_attached_when_available_fr(monkeypatch):
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    monkeypatch.setattr(
+        "aria_core.skills.btc_cycles.fetch_current_macro_phase",
+        AsyncMock(return_value={
+            "label": "hausse (markup)", "since": "2024-04-20",
+            "change_pct": 42.0, "cycle_name": "cycle halving 2024->en cours",
+        }),
+    )
+
+    result = await vc.analyze_vc(ADDR, lang="fr")
+
+    assert result.market_context == {
+        "label": "hausse (markup)", "since": "2024-04-20",
+        "change_pct": 42.0, "cycle_name": "cycle halving 2024->en cours",
+    }
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_market_context_label_translated_in_english(monkeypatch):
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    monkeypatch.setattr(
+        "aria_core.skills.btc_cycles.fetch_current_macro_phase",
+        AsyncMock(return_value={
+            "label": "baisse (markdown)", "since": "2025-01-01",
+            "change_pct": -12.0, "cycle_name": "cycle halving 2024->en cours",
+        }),
+    )
+
+    result = await vc.analyze_vc(ADDR, lang="en")
+
+    assert result.market_context["label"] == "markdown (downtrend)"
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_market_context_failure_never_breaks_report(monkeypatch):
+    """Une panne du contexte macro (réseau, exception) ne doit jamais faire échouer
+    l'analyse VC elle-même -- dégradation stricte, jamais de crash."""
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    monkeypatch.setattr(
+        "aria_core.skills.btc_cycles.fetch_current_macro_phase",
+        AsyncMock(side_effect=RuntimeError("coingecko down")),
+    )
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.market_context is None
+    assert result.recommandation == "BUY"  # le reste du rapport n'est pas affecté

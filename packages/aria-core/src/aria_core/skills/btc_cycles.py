@@ -158,6 +158,53 @@ async def fetch_btc_history(*, client=None) -> list[tuple[int, float]] | None:
     return result.prices if result.available else None
 
 
+def current_phase_summary(stats: list[CycleStats]) -> dict | None:
+    """Phase actuelle (dernier segment du cycle en cours) -- fonction PURE, déterministe,
+    aucun appel réseau/LLM. Sert de contexte marché compact pour chaque rapport VC
+    (overlay macro, tâche #14) ; le récit complet des 3 cycles reste réservé à /cycles."""
+    if not stats:
+        return None
+    current_cycle = stats[-1]
+    if not current_cycle.phases:
+        return None
+    phase = current_cycle.phases[-1]
+    return {
+        "label": phase.label,
+        "since": phase.start_date,
+        "change_pct": phase.change_pct,
+        "cycle_name": current_cycle.name,
+    }
+
+
+_PHASE_CACHE_TTL_SECONDS = 3600  # la phase ne bascule pas d'un cycle à l'autre en 1h --
+# évite de refaire un aller-retour CoinGecko à CHAQUE rapport VC (sobriété).
+_phase_cache: dict = {"at": 0.0, "value": None}
+
+
+async def fetch_current_macro_phase(*, client=None, force_refresh: bool = False) -> dict | None:
+    """Point d'entrée compact pour l'overlay macro des rapports VC (tâche #14). Fail-closed
+    ET dégradation douce : historique indisponible -> renvoie la dernière valeur connue en
+    cache s'il y en a une, sinon None (jamais une phase inventée ; la section est alors
+    simplement omise du rapport)."""
+    import time
+
+    now = time.monotonic()
+    if not force_refresh and _phase_cache["value"] is not None:
+        if (now - _phase_cache["at"]) < _PHASE_CACHE_TTL_SECONDS:
+            return _phase_cache["value"]
+
+    prices = await fetch_btc_history(client=client)
+    if not prices:
+        return _phase_cache["value"]
+
+    stats = segment_cycles(prices)
+    result = current_phase_summary(stats)
+    if result is not None:
+        _phase_cache["at"] = now
+        _phase_cache["value"] = result
+    return result
+
+
 _NARRATIVE_SYSTEM = (
     "Tu es ARIA, analyste macro. La théorie des cycles Bitcoin (accumulation/hausse/"
     "distribution/baisse, ancrés sur le halving) est un CADRE DE LECTURE répandu, pas "

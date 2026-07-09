@@ -168,6 +168,23 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   d'achat, renvoie vers `/vc <contrat>` pour l'analyse complète. Un contrat n'est alerté
   qu'une seule fois (mémorisé localement, jamais de spam sur le même candidat). Respecte
   le kill-switch (`/stop`).
+- **Overlay macro « Contexte marché » dans le rapport /vc — codé, PREVIEW envoyé, EN ATTENTE de feu vert visuel (09/07)** :
+  tâche #14. Réutilise `btc_cycles.py` (rien dupliqué) : nouvelle fonction pure
+  `current_phase_summary()` (dernier segment du cycle Bitcoin en cours) + `fetch_current_macro_phase()`
+  (async, cache 1h en mémoire, dégradation douce sur une source qui échoue). **Aucun appel LLM** — chiffres
+  déterministes uniquement, zéro coût/latence ajoutés à chaque rapport. Câblé dans `vc_analysis.py`
+  (`VCResult.market_context`, nouveau champ data-gated) via `_attach_extras` (regroupe TA+ROI+macro,
+  chacun indépendant). Rendu dans `vc_report.py` (`_market_context_block_html`, même patron visuel que
+  ROI/TA, section premium uniquement). i18n FR/EN dans `vc_i18n.py`. **Géopolitique/réglementaire reste
+  un seam volontairement VIDE** — aucune source fiable branchée, jamais de donnée inventée pour combler
+  la case (à décider avec l'opérateur : quelle source ? coût ? avant de coder). Conformément à
+  `architecture-extensibilite.md` (« Toute nouvelle section suit ce motif + un preview validé par
+  l'utilisateur avant prod »), un rapport d'exemple a été envoyé à l'opérateur — **tâche laissée
+  `in_progress` tant qu'il n'a pas confirmé le placement/ton visuel**, même si le code est testé et
+  mergé sur `main` (tests ajoutés/étendus dans `test_btc_cycles.py`, `test_vc_analysis.py`,
+  `test_vc_cache.py`, `test_vc_report.py`, suite complète verte). Piège évité : `test_vc_analysis.py`/`test_vc_cache.py`
+  déclarent explicitement « aucun appel réseau réel » — une fixture autouse coupe
+  `fetch_current_macro_phase` par défaut dans ces deux fichiers pour ne jamais régresser cet invariant.
 - **Gestion de position paper-trading : stop suiveur + prise de profit échelonnée (09/07)** :
   `paper_trader.py` — remplace la sortie binaire (100 % à la cible OU à l'invalidation, tâche
   #38) par une gestion qui protège les gains acquis sans couper le potentiel restant.
