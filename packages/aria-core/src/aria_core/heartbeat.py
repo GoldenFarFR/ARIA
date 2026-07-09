@@ -345,8 +345,12 @@ def _sync_x_curiosity_enabled() -> None:
             task.enabled = not visual_autonomy_enabled()
         if task.id == "x_profile_sync":
             from aria_core.gateway.x_twitter import is_x_post_configured
+            from aria_core.x_profile import x_profile_sync_enabled
 
-            task.enabled = is_x_post_configured()
+            # Sync manuelle (commande admin /x profile sync) toujours disponible ;
+            # la tâche AUTOMATIQUE (heartbeat, personne ne clique) reste en plus
+            # gardée par ARIA_X_PROFILE_SYNC_ENABLED (outward-facing -> opt-in).
+            task.enabled = is_x_post_configured() and x_profile_sync_enabled()
         if task.id == "paper_trade_cycle":
             # Simulation interne 1M$ : OFF par defaut. L'operateur demarre le run de preuve
             # (20 jours) en posant ARIA_PAPER_TRADING_ENABLED=1 dans le .env (cout LLM
