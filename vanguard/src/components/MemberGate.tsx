@@ -11,7 +11,7 @@ interface MemberGateProps {
 
 /**
  * Public holding site — never hard-block on Privy.
- * Validates existing backend session only; no auto-redirect (avoids ping-pong with Aria Market).
+ * Validates existing backend session only; no auto-redirect.
  */
 export function MemberGate({ children }: MemberGateProps) {
   const { ready } = usePrivy()
