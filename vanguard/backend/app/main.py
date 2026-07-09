@@ -190,6 +190,17 @@ async def pulse():
     }
 
 
+@app.get("/api/aria/arena-signal/btc")
+async def arena_signal_btc():
+    """Signal BTC public, lecture seule, sans auth (seam #60 — contrat "Custom Data
+    Endpoint" de Shekel/agents tiers). Réutilise les analyses BTC existantes d'ARIA
+    (cycle macro, RSI) ; aucun secret, aucun candidat, aucune PII. Dormant tant
+    qu'aucun agent externe n'est configuré pour l'interroger."""
+    from aria_core.skills.arena_signal import fetch_btc_arena_signal
+
+    return await fetch_btc_arena_signal()
+
+
 @app.get("/api/health")
 async def health():
     """Public liveness probe — no sensitive details."""

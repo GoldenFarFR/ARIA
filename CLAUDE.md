@@ -26,6 +26,16 @@ Tu es ARIA, une IA autonome argentique, codée par l'IA et pensée par GoldenFar
 Avant toute intégration, lire **`docs/architecture-extensibilite.md`** (SSOT des seams).
 Poser le seam maintenant, même vide, plutôt que réécrire plus tard.
 
+**Profondeur proportionnelle à l'enjeu (09/07)** : avant d'intégrer un outil/projet
+externe qui touche de l'argent réel, un garde-fou, ou une décision d'architecture
+durable — ne pas s'arrêter à la première option trouvée. Chercher s'il existe de
+vraies alternatives, et creuser la profondeur du projet retenu (doc officielle,
+modèle de garde de fonds/clés, tarification réelle, signaux de légitimité) jusqu'à
+ce que tous les signaux soient au vert avant de s'en servir ou d'y brancher les
+données d'ARIA. Pour une question simple ou une retouche mineure, rester direct et
+sobre (cf. Sobriété ci-dessous) — la profondeur se mérite par l'enjeu, pas par
+défaut partout.
+
 ## Normes permanentes (respecter ET vérifier à CHAQUE construction — cf. Règles absolues)
 - **Qualité** : code prouvé (tests) et sans régression, aligné sur le style existant (nommage, idiomes, densité de commentaires), zéro code mort ni « TODO » laissé en silence. Livrer fini, pas « à finir ».
 - **Fluidité** : l'expérience (site + Telegram) doit être fluide — réponses rapides, états de chargement, jamais de bouton mort ni d'attente bloquante, dégradation douce si une donnée manque.
@@ -139,6 +149,7 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
 - **Checkpoint auto de session (tous les 20 messages)** : hook `.claude/hooks/session-checkpoint.sh` (UserPromptSubmit) compte les messages dans `.claude/.msg-counter` (gitignoré) et, tous les 20, injecte un rappel → l'assistant **propose de mettre à jour les fichiers de résumé** (HANDOFF, CLAUDE.md, `etat-systeme-cable.md`) pour garder `CLAUDE.md` alimenté et une nouvelle session prête. La barre de statut affiche « 📌 chk NN/20 » pour le voir venir. Sauvegarde sur validation opérateur (jamais imposée). Ne pas défaire ce hook.
 - **Backlog (liste `#` numérotée, TaskCreate/TaskUpdate) toujours alimentée (09/07, consigne opérateur explicite)** : garder en permanence **10 à 15 tâches pending/in_progress** dans la liste. Y penser souvent, pas seulement quand l'opérateur demande "ensuite ?" — dès qu'une session termine plusieurs tâches et fait descendre le compte sous ~10, proposer de nouvelles idées concrètes (jamais du remplissage vague) pour reconstituer la réserve. Les idées viennent de ce qui est observé en construisant (gaps trouvés en route, dette technique repérée, suites logiques d'une fonctionnalité livrée) — jamais inventées pour occuper l'espace.
 - **Rappel de déploiement VPS (seuil de lignes non déployées)** : le même hook mesure les lignes changées sur `main` depuis le dernier déploiement (marqueur **suivi** `.claude/last-deployed-ref`) et, au-delà de **2500 lignes** (ajustable en tête du hook), injecte un rappel → l'assistant affiche **UNE SEULE LIGNE** (« 🚀 Déploiement VPS conseillé — quota 2500 lignes atteint ») puis **CONTINUE normalement** (dépasser le seuil ne bloque rien). Les commandes de déploiement ne sont données **que sur demande** ("go"). Throttle : un rappel par nouvel état de `main`. Barre de statut : « 🚀 N l. à déployer ». **Quand l'opérateur confirme le déploiement, mettre `.claude/last-deployed-ref` = commit déployé (`git rev-parse main`) puis commit/push** — c'est ce qui remet le compteur à zéro. Ne pas défaire ce hook.
+- **Accès réseau Claude Code (environnement cloud, 09/07)** : liste blanche de domaines personnalisés (Custom domains), configurée UNIQUEMENT via les paramètres de l'environnement sur claude.ai — jamais depuis une session. Dès qu'un domaine utile manque (test réseau en 403/timeout), **demander à l'opérateur de l'ajouter** plutôt que de conclure "inaccessible" et abandonner. Un ajout prend effet **immédiatement, sans redémarrage de session** (vérifié 09/07 avec `*.virtuals.io`, `x.com`/`twitter.com`, `*.shekel.xyz`). Préférer un wildcard (`*.exemple.io`) à un sous-domaine unique quand plusieurs sous-domaines du même service sont probables (évite les allers-retours).
 
 ## Capacités (à jour 07/07)
 - **Données** : DexScreener (prix/liq/vol), GeckoTerminal (OHLCV), Blockscout (contrat, holders, is_contract), CoinGecko (market cap, FDV, catégories). Moteur TA (RSI/MACD/EMA/fibo/divergences).
