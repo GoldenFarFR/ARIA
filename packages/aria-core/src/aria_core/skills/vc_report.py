@@ -744,6 +744,30 @@ def _roi_block_html(result: VCResult, s: dict) -> str:
   </tr>"""
 
 
+def _market_context_block_html(result: VCResult, s: dict) -> str:
+    """Section « Contexte marché » (tâche #14) : phase actuelle du cycle Bitcoin, seule
+    source macro disponible aujourd'hui. Data-gated : vide sans phase connue (historique
+    BTC indisponible). Géopolitique/réglementaire : seam vide, pas encore de source
+    fiable branchée -- jamais un chiffre inventé pour combler la case."""
+    ctx = result.market_context
+    if not ctx:
+        return ""
+
+    line = _esc(s["market_context_btc_line"].format(
+        phase=ctx.get("label", ""), since=ctx.get("since", ""),
+        change=ctx.get("change_pct", 0.0), cycle=ctx.get("cycle_name", ""),
+    ))
+    disclaimer = _esc(s["market_context_disclaimer"])
+
+    return f"""<tr>
+    <td class="ivory pad" style="background-color:{_IVORY};padding:30px 44px 6px;">
+      {_section_header(s["market_context_section"])}
+      <div class="ink" style="margin-top:14px;font-family:{_FONT_SANS};font-size:14px;line-height:1.6;color:{_INK_WARM};">{line}</div>
+      <div style="margin-top:12px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{disclaimer}</div>
+    </td>
+  </tr>"""
+
+
 def render_email_teaser_html(result: VCResult, *, lang: str = "fr") -> str:
     """Email COURT (badges + R/R) — l'analyse complète vit désormais dans le PDF
     sécurisé joint. Ne JAMAIS y remettre la thèse/le rapport détaillé : le PDF
@@ -899,6 +923,10 @@ def render_html_report(
     # tangible réservé au premium, JAMAIS une cible ni un montant inventé. Data-gated :
     # vide si la capitalisation actuelle est inconnue.
     roi_block = "" if is_standard else _roi_block_html(result, s)
+
+    # Contexte marché macro (tâche #14) : phase du cycle Bitcoin, même traitement
+    # premium que TA/ROI. Data-gated : vide si l'historique BTC est indisponible.
+    market_context_block = "" if is_standard else _market_context_block_html(result, s)
 
     watermark_diagonal = ""
     if recipient:
@@ -1088,6 +1116,8 @@ def render_html_report(
   {ta_block}
 
   {roi_block}
+
+  {market_context_block}
 
   {detailed_block}
 
