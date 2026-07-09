@@ -48,15 +48,34 @@
    `docs/conformite-dossier-avocat.md`). Un fonds pour compte de tiers reste le mur le
    plus lourd et n'est pas le point de départ.
 
-## 3. La montée en taille (après le feu vert)
+## 3. La montée en taille — en DEUX étapes séquentielles (décision opérateur, 09/07)
 
+L'argent réel ne se déploie **pas d'un coup sur les deux poches**. Il se débloque
+poche par poche, dans cet ordre, et **chaque étape rejoue le barème complet du §2**
+sur son propre track-record (pas une seule fois au global) :
+
+- **Étape A — VC réel (poche 85 %) débloqué en premier.** Une fois les 8 cases du §2
+  cochées sur le track-record **paper**, l'argent réel démarre **uniquement** sur la
+  poche VC (positions moyen/long terme). La poche spéculation (15 %) **reste en paper**
+  pendant toute cette étape, même si le VC réel tourne déjà.
+- **Étape B — Trading réel (poche 15 %) débloqué ensuite, jamais avant.** Ne s'ouvre
+  que lorsque l'étape A a, à son tour, **rejoué les 8 cases du §2** — cette fois sur le
+  track-record du **VC réel** (pas le paper d'origine). Même rigueur, deuxième passage,
+  sur de l'argent réel cette fois. Tant que ce second barème n'est pas rempli, la poche
+  15 % reste paper.
+- La poche 15 % réelle, une fois débloquée, reste la **même poche** que celle documentée
+  ailleurs (aucun capital séparé, aucune structure parallèle) — juste alimentée en réel.
+
+**Palier de taille, à l'intérieur de chaque étape :**
 - **Palier 0** : petit ticket (quelques centaines de $ **de ton capital**, jamais celui
   d'un abonné), œil ouvert, revue à chaque cycle.
 - **Paliers suivants** : la taille n'augmente que si la preuve **continue** de tenir sur
   argent réel (la performance paper doit se confirmer en réel — le slippage réel est le
   juge de paix).
 - **Clause d'arrêt** : toute rupture d'une case du §2 (drawdown anormal, track record
-  trafiqué, calibration qui s'effondre) → **retour au paper**, sans discuter.
+  trafiqué, calibration qui s'effondre) → **retour au paper sur l'étape concernée**,
+  sans discuter. Une rupture sur l'étape B ne remet pas en cause l'étape A si celle-ci
+  reste saine (les deux poches sont jugées indépendamment une fois débloquées).
 
 ## 4. Ce qui mesure tout ça
 
