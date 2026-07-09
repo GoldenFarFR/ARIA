@@ -132,3 +132,44 @@ async def test_notifier_failure_does_not_crash_cycle(monkeypatch):
 
     result = await curiosity.run_curiosity_cycle(notifier=_boom)
     assert result["status"] == "ok"  # le cycle se termine proprement malgré l'échec d'envoi
+
+
+@pytest.mark.asyncio
+async def test_vc_intelligence_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(
+        "aria_core.gateway.x_twitter.fetch_curiosity_feed",
+        _fake_fetch([{"topic": "@a16zcrypto", "text": "We're excited about onchain agents."}]),
+    )
+    monkeypatch.delenv("ARIA_VC_INTELLIGENCE_ENABLED", raising=False)
+
+    async def notifier(text):
+        pass
+
+    result = await curiosity.run_curiosity_cycle(notifier=notifier)
+    assert result["vc_intelligence"] is None
+
+
+@pytest.mark.asyncio
+async def test_vc_intelligence_wired_when_enabled(monkeypatch):
+    monkeypatch.setattr(
+        "aria_core.gateway.x_twitter.fetch_curiosity_feed",
+        _fake_fetch([
+            {"topic": "@a16zcrypto", "text": "We're excited about onchain agents."},
+            {"topic": "@base", "text": "Someone should build an onchain agent standard."},
+        ]),
+    )
+    monkeypatch.setenv("ARIA_VC_INTELLIGENCE_ENABLED", "true")
+
+    async def _fake_vc_cycle(*, items, notifier=None, github_client=None):
+        assert all(i["topic"] == "@a16zcrypto" for i in items)  # filtré aux comptes VC seulement
+        return {"outcome": "ok", "summary": "test", "durable": False, "issue_url": None}
+
+    monkeypatch.setattr(
+        "aria_core.skills.vc_intelligence.run_vc_intelligence_cycle", _fake_vc_cycle
+    )
+
+    async def notifier(text):
+        pass
+
+    result = await curiosity.run_curiosity_cycle(notifier=notifier)
+    assert result["vc_intelligence"]["outcome"] == "ok"
