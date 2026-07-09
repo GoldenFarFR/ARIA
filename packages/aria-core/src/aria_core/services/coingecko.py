@@ -2,8 +2,11 @@
 
 Complète Blockscout (on-chain) et DexScreener (marché court terme) avec des
 données fondamentales : market cap, FDV, supply, catégories, âge du token.
-Aucune écriture, aucune clé API requise (tier public). Politique d'erreurs
-identique à `services/blockscout.py` (cf. AGENTS.md) :
+Aucune écriture. Clé Demo CoinGecko optionnelle (`COINGECKO_DEMO_API_KEY`,
+gratuite, cf. `.env` VPS) — CoinGecko exige désormais cette clé même sur son
+tier public (401 systématique sans elle, changement de politique constaté le
+09/07) ; absente, le client échoue proprement (jamais une valeur inventée).
+Politique d'erreurs identique à `services/blockscout.py` (cf. AGENTS.md) :
 - 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
 - Timeout / endpoint indisponible : 1 retry après 5s, puis fallback explicite.
 - Aucune donnée manquante n'est jamais remplacée par une supposition — le
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 
 import httpx
@@ -67,6 +71,11 @@ class CoinGeckoClient:
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
+        # CoinGecko exige désormais une clé Demo gratuite même sur le tier public
+        # (changement de politique constaté le 09/07 — 401 systématique sans elle).
+        # Optionnelle ici : absente -> comportement inchangé (échec géré normalement,
+        # jamais de valeur inventée), présente -> ajoutée en en-tête sur chaque appel.
+        self._api_key = os.environ.get("COINGECKO_DEMO_API_KEY", "").strip() or None
 
     async def _throttle(self) -> None:
         async with self._lock:
@@ -103,9 +112,10 @@ class CoinGeckoClient:
 
         while True:
             await self._throttle()
+            headers = {"x-cg-demo-api-key": self._api_key} if self._api_key else {}
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.get(url)
+                    response = await client.get(url, headers=headers)
             except httpx.TransportError as exc:
                 if not timeout_retried:
                     timeout_retried = True
