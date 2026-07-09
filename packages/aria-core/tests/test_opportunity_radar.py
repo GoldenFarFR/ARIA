@@ -2,7 +2,9 @@
 from aria_core.opportunity_radar import (
     extract_opportunities,
     format_operator_digest,
+    mine_curiosity_items,
     mine_threads,
+    opportunity_radar_enabled,
     rank_opportunities,
 )
 
@@ -61,3 +63,34 @@ def test_digest_is_human_readable():
 
 def test_empty_digest_message():
     assert "Aucune opportunit" in format_operator_digest([], lang="fr")
+
+
+def test_opportunity_radar_enabled_env_gate(monkeypatch):
+    monkeypatch.delenv("ARIA_OPPORTUNITY_RADAR_ENABLED", raising=False)
+    assert opportunity_radar_enabled() is False
+    monkeypatch.setenv("ARIA_OPPORTUNITY_RADAR_ENABLED", "true")
+    assert opportunity_radar_enabled() is True
+
+
+def test_mine_curiosity_items_filters_by_opportunity_handle():
+    items = [
+        {"topic": "@base", "text": "Someone should build an onchain agent standard for x402."},
+        {"topic": "@GoldenFarFR", "text": "It would be great to have an onchain agent too."},
+        {"topic": "@base", "text": "Base is a layer 2."},  # pas de langage d'opportunité
+    ]
+    cands = mine_curiosity_items(items, ["base"])
+    assert cands
+    assert all(c.source == "x:@base" for c in cands)
+    assert not any("GoldenFarFR" in c.source for c in cands)
+
+
+def test_mine_curiosity_items_no_handles_returns_empty():
+    items = [{"topic": "@base", "text": "Someone should build an onchain agent."}]
+    assert mine_curiosity_items(items, []) == []
+
+
+def test_mine_curiosity_items_handle_matching_ignores_case_and_at():
+    items = [{"topic": "@Whale_AI_net", "text": "Someone should build a scanner for this onchain."}]
+    cands = mine_curiosity_items(items, ["whale_ai_net"])
+    assert cands
+    assert cands[0].source == "x:@whale_ai_net"

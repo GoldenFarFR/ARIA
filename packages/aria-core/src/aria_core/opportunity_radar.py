@@ -12,6 +12,7 @@ attendant, on peut alimenter le radar avec des textes collés (opérateur) ou d'
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -92,6 +93,39 @@ def extract_opportunities(
                 idea=seg[:300], source=source, score=score, signals=signals, tech_hooks=hooks,
             ))
     return out
+
+
+def opportunity_radar_enabled() -> bool:
+    """Gate du DIGEST opérateur (tâche #52) -- OFF par défaut, outward-facing (Telegram push)."""
+    return os.environ.get("ARIA_OPPORTUNITY_RADAR_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def mine_curiosity_items(
+    items: Iterable[dict[str, Any]],
+    opportunity_handles: Iterable[str],
+    *,
+    threshold: float = _DEFAULT_THRESHOLD,
+) -> list[OpportunityCandidate]:
+    """Filtre les items de `fetch_curiosity_feed` aux comptes « opportunité » (ex. @base,
+    @Whale_AI_net -- cf. `x_watchlist.opportunity_watch_handles`), puis mine.
+
+    Root-only pour l'instant : le client X lecture actuel (`gateway/x_twitter.py`) n'a pas
+    d'endpoint réponses/recherche -- seul le texte du post est mineable, pas les commentaires
+    (malgré le nom du module, cf. docstring de tête). Réutilise le fetch déjà fait par le
+    cycle de curiosité existant -- aucun appel X supplémentaire."""
+    handles = {h.lstrip("@").lower() for h in opportunity_handles}
+    if not handles:
+        return []
+    cands: list[OpportunityCandidate] = []
+    for item in items:
+        topic = str(item.get("topic") or "").lstrip("@").lower()
+        if topic not in handles:
+            continue
+        text = str(item.get("text") or "")
+        cands += extract_opportunities(text, source=f"x:@{topic}", threshold=threshold)
+    return cands
 
 
 def mine_threads(

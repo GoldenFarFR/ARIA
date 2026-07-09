@@ -24,10 +24,15 @@ def parse_learn_approval(text: str) -> bool | None:
     return None
 
 
-async def run_curiosity_cycle() -> dict:
+async def run_curiosity_cycle(*, notifier=None) -> dict:
     """
     Fetch X volume → extract insights → store as pending knowledge → ask Telegram approval.
     Requires X API keys in .env. Without keys, returns setup instructions.
+
+    ``notifier`` (optionnel, ex. `Heartbeat._notify_telegram`) : si fourni ET
+    `opportunity_radar_enabled()`, mine aussi le MÊME fetch pour les comptes « opportunité »
+    (#52 -- tendances écosystème Base) et pousse un digest lecture-seule à l'opérateur.
+    Jamais un appel X supplémentaire : réutilise `raw_items` déjà récupéré ci-dessous.
     """
     if not settings.x_api_key and not settings.x_bearer_token:
         return {
@@ -88,7 +93,33 @@ async def run_curiosity_cycle() -> dict:
         await request_approval("learn_knowledge", desc)
         append_memory("curiosity", memory_note)
 
-    return {"status": "ok", "insights": new_insights}
+    opportunities_found = 0
+    if notifier is not None:
+        from aria_core.opportunity_radar import (
+            format_operator_digest,
+            mine_curiosity_items,
+            opportunity_radar_enabled,
+            rank_opportunities,
+        )
+
+        if opportunity_radar_enabled():
+            from aria_core.knowledge.x_watchlist import opportunity_watch_handles
+
+            cands = mine_curiosity_items(raw_items, opportunity_watch_handles())
+            ranked = rank_opportunities(cands, top=5)
+            if ranked:
+                opportunities_found = len(ranked)
+                digest = format_operator_digest(ranked, lang="fr", top=5)
+                try:
+                    await notifier(f"🧭 Radar opportunités\n\n{digest}")
+                    append_memory(
+                        "curiosity",
+                        f"[opportunity_radar] {opportunities_found} opportunité(s) surfacée(s)",
+                    )
+                except Exception as exc:  # noqa: BLE001 -- un envoi raté ne bloque jamais le cycle
+                    logger.warning("opportunity_radar notify failed: %s", exc)
+
+    return {"status": "ok", "insights": new_insights, "opportunities": opportunities_found}
 
 
 async def approve_pending_knowledge() -> int:
