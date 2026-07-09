@@ -52,6 +52,34 @@ async def test_close_unknown_returns_none():
 
 
 @pytest.mark.asyncio
+async def test_list_recently_closed_excludes_open_and_old():
+    import aiosqlite
+    from datetime import datetime, timedelta, timezone
+
+    old_id = await _record(contract="0xold")
+    await vc_predictions.close_prediction(old_id, outcome_pct=5.0)
+    old_closed_at = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    async with aiosqlite.connect(vc_predictions.DB_PATH) as db:
+        await db.execute(
+            "UPDATE vc_prediction SET closed_at = ? WHERE id = ?", (old_closed_at, old_id),
+        )
+        await db.commit()
+
+    still_open_id = await _record(contract="0xstillopen")
+
+    recent_id = await _record(contract="0xrecent")
+    await vc_predictions.close_prediction(recent_id, outcome_pct=-10.0)
+
+    since = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    closed = await vc_predictions.list_recently_closed(since)
+
+    ids = {row["id"] for row in closed}
+    assert recent_id in ids
+    assert still_open_id not in ids  # jamais un pronostic encore ouvert
+    assert old_id not in ids  # trop ancien pour la fenêtre demandée
+
+
+@pytest.mark.asyncio
 async def test_count_predictions_for_contract_increments():
     assert await vc_predictions.count_predictions_for_contract("0xabc") == 0
     await _record(contract="0xabc")
