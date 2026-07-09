@@ -13,9 +13,9 @@ def test_generate_cultivation_message_fr(monkeypatch, tmp_path):
     msg = generate_cultivation_message("fr")
     assert msg is not None
     assert "Culture large" in msg
-    assert "Livrer" in msg
-    assert "Play Store" in msg
-    assert "25" in msg
+    assert "Agir" in msg
+    assert "Play Store" not in msg  # aucun produit payant à livrer
+    assert "produit payant" in msg.lower()
 
     # Cooldown 24h — pas de spam après redeploy
     assert generate_cultivation_message("fr") is None

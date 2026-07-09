@@ -125,8 +125,8 @@ def operator_improvement_reply(*, lang: str = "fr") -> str:
         tips = {
             "codage": "plus de cycles ouvrier (PR mergées, tests verts) sur aria-core et aria-vanguard",
             "fiabilite": "moins d'incidents ops — health Render, secrets sync, runbook à jour",
-            "autonomie": "boucles ACP/revenu et heartbeat qui tournent sans que tu relances",
-            "business": "premiers jobs ACP payés livrés + log revenue_ledger",
+            "autonomie": "heartbeat qui tourne sans que tu relances, aucun raccourci ACP/revenu",
+            "business": "track-record VC/trading qui grandit (aucun produit payant aujourd'hui)",
             "intelligence": "mémoire ops (COLLEGUE, JOURNAL) tenue à jour multi-PC",
             "social": "X/Telegram réguliers sans promesses vides",
         }

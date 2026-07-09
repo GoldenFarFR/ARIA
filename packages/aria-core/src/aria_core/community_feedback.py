@@ -326,16 +326,17 @@ def personal_reply_pair_on_feedback(text: str, *, lang: str = "fr") -> FeedbackR
     if _ROADMAP_RE.search(t) or t.count("?") >= 2:
         if lang == "fr":
             return FeedbackReplyPair(
-                primary="Marketplace ACP + signaux ZHC d'abord.",
+                primary="On prouve d'abord l'analyse — track-record public avant tout produit payant.",
                 followup=(
-                    "Partenariats quand la traction valide le modèle — "
+                    "Partenariats et produits quand la preuve tient — "
                     "ton avis oriente la roadmap."
                 ),
             )
         return FeedbackReplyPair(
             primary=(
-                "ACP marketplace and ZHC signal products are what we ship first — "
-                "your roadmap ask is exactly the kind of signal we prioritize."
+                "Proving the analysis engine first — public track record before any paid "
+                "product — is what we ship right now; your roadmap ask is exactly the kind "
+                "of signal we prioritize."
             ),
             followup=(
                 "Partnerships and revenue models follow once traction proves the model; "
@@ -345,11 +346,11 @@ def personal_reply_pair_on_feedback(text: str, *, lang: str = "fr") -> FeedbackR
     if _IDEAS_LIST_RE.search(t) or (_ACTION_RE.search(t) and len(t) > 120):
         if lang == "fr":
             return FeedbackReplyPair(
-                primary="Tes idées produit sont notées — holding, Telegram, transparence ACP.",
+                primary="Tes idées produit sont notées — holding, Telegram, track-record public.",
                 followup="On ship Vanguard brique par brique ; les retours comme le tien priorisent la suite.",
             )
         return FeedbackReplyPair(
-            primary="Your product ideas are logged — holding page, Telegram, ACP transparency.",
+            primary="Your product ideas are logged — holding page, Telegram, public track record.",
             followup="We ship Vanguard brick by brick; notes like yours steer what lands next.",
         )
     if _FEEDBACK_WIDGET_RE.search(t) and _BUILD_TOGETHER_RE.search(t):
@@ -477,7 +478,8 @@ async def compose_feedback_reply_pair(
             "Sentence 1 (max 150 chars): answer their question OR name 2–3 specific ideas they raised.\n"
             "Sentence 2 (max 130 chars): concrete next step, roadmap hint, or human close.\n"
             "Use as much of the character budget as fits naturally — avoid one-liners.\n"
-            "If they ask roadmap/revenue/partnerships: ACP marketplace, ZHC signals, built-in-public.\n"
+            "If they ask roadmap/revenue/partnerships: no paid product yet, proving the analysis "
+            "track record first, built-in-public.\n"
             "If they list numbered ideas: acknowledge 2–3 by name.\n"
             "No generic thank-you. Forbidden: 'thanks for sharing', 'love the energy', "
             "'good to hear on the site itself', 'feedback box is for notes like this'.\n"

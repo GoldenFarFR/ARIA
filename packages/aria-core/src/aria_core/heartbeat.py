@@ -57,7 +57,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="entrepreneur_cultivate",
         name="Entrepreneur cultivation",
-        description="Study ZHC peers + track $50/mo revenue goal",
+        description="Study ZHC peers + track VC/trading track-record progress toward the real-money pact (no paid product)",
         interval_minutes=1440,
         enabled=True,
     ),

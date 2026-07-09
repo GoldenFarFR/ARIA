@@ -117,25 +117,8 @@ async def collect_readiness_gaps(
     else:
         ok_items.append("GitHub token présent")
 
-    try:
-        from aria_core.skills.acp_cli import is_acp_available
-
-        if is_acp_available():
-            ok_items.append("ACP cli disponible")
-        else:
-            gaps.append({
-                "id": "acp_cli",
-                "label": "acp-cli introuvable — marketplace ACP limitée",
-                "worker": "npm install -g @virtuals-protocol/acp-cli",
-                "capability_id": "",
-            })
-    except Exception:
-        gaps.append({
-            "id": "acp_cli",
-            "label": "ACP cli — vérification impossible",
-            "worker": "vérifier acp-cli sur le PC",
-            "capability_id": "",
-        })
+    # ACP volontairement abandonné (docs/acp-reactivation.md) -- acp-cli absent n'est pas
+    # un gap à combler, ne pas le signaler comme un manque.
 
     health_ok, health_detail = await _probe_local_health()
     if health_ok:

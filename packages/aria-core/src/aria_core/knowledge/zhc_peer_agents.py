@@ -109,33 +109,23 @@ def peers_markdown(lang: str = "fr") -> str:
 
 
 def cultivation_phases(lang: str = "fr") -> list[str]:
+    """Aucun produit payant à livrer -- les phases suivent le pacte argent réel
+    (docs/protocole-argent-reel.md), pas un calendrier de lancement produit."""
     if lang == "en":
         return [
-            "Phase 0 (days 1–7): Broad culture (geo, macro, regulation, peers) — study → one takeaway.",
-            "Phase 1 (days 8–21): App factory — weekly poll, ship first paid app v0 (web or Play Store).",
-            "Phase 2 (days 22–30): Reach $50/mo logged revenue; Play Store listing if Android path.",
+            "Phase 0 (ongoing): Broad culture (geo, macro, regulation, ecosystem) — study → one takeaway.",
+            "Phase 1 (ongoing): Grow the VC/trading track record (vc_predictions) — walk-forward pronostics.",
+            "Phase 2 (gate): Clear the §2 proof bar (docs/protocole-argent-reel.md) before any real capital.",
         ]
     return [
-        "Phase 0 (jours 1–7) : Culture large (géo, macro, régulation, pairs) — étudier → une synthèse.",
-        "Phase 1 (jours 8–21) : App factory — poll hebdo, livrer première app payante v0 (web ou Play Store).",
-        "Phase 2 (jours 22–30) : Atteindre 50 $/mois logués ; listing Play Store si voie Android.",
+        "Phase 0 (continu) : Culture large (géo, macro, régulation, écosystème) — étudier → une synthèse.",
+        "Phase 1 (continu) : Faire grandir le track-record VC/trading (vc_predictions) — pronostics walk-forward.",
+        "Phase 2 (barrière) : Franchir le barème de preuve (docs/protocole-argent-reel.md §2) avant tout capital réel.",
     ]
 
 
 def revenue_hypotheses(lang: str = "fr") -> list[tuple[str, str, float]]:
-    """(id, label, target_usd_monthly) — ordered by moat fit."""
-    if lang == "en":
-        return [
-            ("app_factory", "Kelly app studio — web micro-apps + Android Play Store", 35.0),
-            ("build_micro", "Build-my-idea via Telegram (small scope, fast delivery)", 20.0),
-            ("telegram_alerts", "Paid Telegram alert tier (watchlist + divergences)", 15.0),
-            ("signal_brief_premium", "Weekly signal brief (Gumroad/Telegram)", 10.0),
-            ("affiliate", "Affiliate/referral on tools we already use", 5.0),
-        ]
-    return [
-        ("app_factory", "Studio apps Kelly — micro-apps web + Android Play Store", 35.0),
-        ("build_micro", "Build-my-idea via Telegram (petit scope, livraison rapide)", 20.0),
-        ("telegram_alerts", "Tier alertes Telegram payant (watchlist + divergences)", 15.0),
-        ("signal_brief_premium", "Brief signaux hebdo (Gumroad/Telegram)", 10.0),
-        ("affiliate", "Affiliation / referral outils déjà utilisés", 5.0),
-    ]
+    """Aucune hypothèse de monétisation en test aujourd'hui (ACP abandonné, Stripe retiré,
+    aucun produit payant) -- retourne une liste vide plutôt qu'inventer une donnée. Le seul
+    chemin réel vers l'argent réel est le barème du pacte (docs/protocole-argent-reel.md)."""
+    return []
