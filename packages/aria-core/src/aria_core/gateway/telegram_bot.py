@@ -1494,12 +1494,15 @@ async def _register_bot_commands() -> None:
         return
     from telegram import BotCommand
 
+    # Menu "/" volontairement minimal (choix opérateur) : l'opérateur passe par la
+    # conversation naturelle, jamais les slash-commandes. On n'expose donc dans le menu
+    # QUE le kill-switch de sécurité (pause/reprise des actions sortantes). Toutes les
+    # autres commandes (vc, scan, track, watchlist, cycles, status, langue, vcresult,
+    # issue, thesis, theses, github, start, test_spend) restent ENREGISTRÉES et
+    # fonctionnelles si on les tape — elles n'encombrent simplement plus le menu.
     commands = [
-        BotCommand("start", f"Welcome — {holding_name()}"),
-        BotCommand("status", "Heartbeat, LLM state, GitHub read"),
-        BotCommand("stop", "⏸ Pause immédiate des actions sortantes"),
+        BotCommand("stop", "⏸ Pause immédiate des actions sortantes (kill-switch)"),
         BotCommand("resume", "▶️ Reprendre les actions sortantes"),
-        BotCommand("scan", "🔎 Scan on-chain lecture seule (adresse contrat)"),
     ]
     await _bot_app.bot.set_my_commands(commands)
     logger.info("Telegram command menu registered (%d commands)", len(commands))
