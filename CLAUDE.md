@@ -68,6 +68,35 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
 - **`/vc <contrat>` envoie désormais un PDF sécurisé multilingue (FR/EN) par email (08/07)** : boutons Telegram pour choisir la langue avant l'analyse, PDF chiffré (permissions impression seule, filigrane nominatif) en pièce jointe, corps de l'email = teaser court seulement (jamais la thèse complète en clair). ES/IT/ZH pas encore supportés (scope volontairement limité à FR/EN, l'infra LLM ne couvre que ça pour l'instant).
 - **Déploiement VPS = DEUX scripts séparés et indépendants** : `deploy.sh` (backend seul) ne redéploie JAMAIS la vitrine statique, et inversement. Toute évolution du frontend exige de lancer les deux (piège vécu le 08/07 : `/cockpit` montrait encore l'ancienne page après un `deploy.sh` seul).
 - En cas de doute sur « comment marche X », **lire `docs/etat-systeme-cable.md` d'abord**, ne pas demander.
+- **Filtre web durci par fuzz-testing (09/07 nuit 3) — méthodologie à réutiliser** : `web_verify.py`
+  (routage recherche web) et `grounding.py` (classifieurs factuel/smalltalk) validés sur 1482+64 cas
+  générés (négations, argot crypto, homographes) à 100%/100% sur lots indépendants — preuve de
+  généralisation, pas d'exemples mémorisés. **Bug architectural corrigé au passage** : `public`
+  (opérateur vs visiteur) n'était jamais réellement propagé jusqu'à `resolve_calibrated_answer`
+  (utilisait à la place un réglage global toujours `True` en prod) — root cause d'une hallucination
+  auto-rapportée par ARIA. Chaîne corrigée de bout en bout, verrouillée par tests. `heartbeat.py`
+  rendu résilient (une tâche cassée ne coupe plus tout le cycle). Détail : `docs/HANDOFF-2026-07-09-nuit3.md`.
+- **INCIDENT SÉCURITÉ (09/07 nuit 3) — clé privée réelle exposée, statut rotation NON CONFIRMÉ.**
+  `skills/development/connect.ts` contenait le VRAI wallet actif de l'agent Virtuals "Aria Vanguard
+  ZHC" (mainnet, du vrai ETH) codé en dur — confirmé par l'opérateur (captures dashboard Virtuals),
+  pas un exemple testnet malgré la référence trompeuse `baseSepolia`. Code corrigé (`process.env`),
+  mergé. **À vérifier en tout premier lieu à la prochaine session : la rotation de clé côté Virtuals
+  (ajout nouveau signer → retrait ancien) était en cours chez l'opérateur, pas confirmée terminée.**
+  Ne jamais supposer un finding sécurité "probablement bénin" sans preuve — remonter le doute.
+  Point encore non vérifié (bloqué par le garde-fou Credential Materialization, à checker
+  manuellement par l'opérateur) : chaîne type JWT dans
+  `skills/core/memory/ACP VIRTUAL PROTOCOL/20260628_1139_source.md:211`.
+- **CI scan de secrets livré (#55)** : `.github/workflows/secrets-scan.yml` (detect-secrets,
+  baseline-diff, tout le repo, tout push/PR) — c'est ce job qui a détecté l'incident ci-dessus dès
+  son premier vrai test.
+- **Due diligence Virtuals G.A.M.E. SDK / Arena faite (09/07 nuit 3), RIEN implémenté.** Protocole
+  légitime (audits réels, cadence de sortie active 2026, revenus déclarés 39,5M$) mais deux vraies
+  failles medium trouvées par audit sur les contrats de lancement de token (pas sur l'Arena).
+  Financement Spark semble découplé d'ACP/Arena (éligibilité basée sur signal GitHub du repo selon
+  la doc publique — non vérifié contre notre dossier réel). Plan de pilote proposé et backlogué
+  (#60) : lecture seule → wallet dédié isolé du wallet principal → capital pilote minuscule routé
+  via `wallet_guard.escalate_spend` (zéro exécution auto, même règle que le reste). En attente de
+  "go" opérateur, voir `docs/HANDOFF-2026-07-09-nuit3.md` pour le détail complet.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
