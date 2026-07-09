@@ -76,13 +76,13 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (utilisait à la place un réglage global toujours `True` en prod) — root cause d'une hallucination
   auto-rapportée par ARIA. Chaîne corrigée de bout en bout, verrouillée par tests. `heartbeat.py`
   rendu résilient (une tâche cassée ne coupe plus tout le cycle). Détail : `docs/HANDOFF-2026-07-09-nuit3.md`.
-- **INCIDENT SÉCURITÉ (09/07 nuit 3) — clé privée réelle exposée, statut rotation NON CONFIRMÉ.**
+- **INCIDENT SÉCURITÉ (09/07 nuit 3) — clé privée réelle exposée. RÉSOLU (rotation confirmée).**
   `skills/development/connect.ts` contenait le VRAI wallet actif de l'agent Virtuals "Aria Vanguard
   ZHC" (mainnet, du vrai ETH) codé en dur — confirmé par l'opérateur (captures dashboard Virtuals),
   pas un exemple testnet malgré la référence trompeuse `baseSepolia`. Code corrigé (`process.env`),
-  mergé. **À vérifier en tout premier lieu à la prochaine session : la rotation de clé côté Virtuals
-  (ajout nouveau signer → retrait ancien) était en cours chez l'opérateur, pas confirmée terminée.**
-  Ne jamais supposer un finding sécurité "probablement bénin" sans preuve — remonter le doute.
+  mergé. **Rotation côté Virtuals confirmée terminée par l'opérateur (09/07)** : nouvelle clé ajoutée
+  et vérifiée active AVANT suppression de l'ancienne (bon ordre respecté). Ne jamais supposer un
+  finding sécurité "probablement bénin" sans preuve — remonter le doute (leçon actée ce segment).
   Point encore non vérifié (bloqué par le garde-fou Credential Materialization, à checker
   manuellement par l'opérateur) : chaîne type JWT dans
   `skills/core/memory/ACP VIRTUAL PROTOCOL/20260628_1139_source.md:211`.
