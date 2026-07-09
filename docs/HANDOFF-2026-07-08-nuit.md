@@ -105,6 +105,41 @@ pour la suite :
   `CLAUDE.md` compact (résumé + pointeurs vers docs détaillés) plutôt que de le faire grossir
   directement — c'est le pattern déjà en place, à ne pas casser.
 
+## Audit complet A-à-Z (fin de nuit, avant que l'opérateur pousse demain)
+Trois agents dédiés (sécurité/garde-fous, cohérence documentation, qualité tests/code mort) ont
+audité l'ensemble du système. Corrections appliquées dans la foulée (mêmes commits) :
+
+1. **Sécurité — aucun finding critique.** Wallet_guard, outgoing_pause, séparation Sepolia
+   autonome/`wallet_guard` : tout confirmé étanche. Un seul finding modéré, corrigé : l'ID
+   Telegram réel de l'opérateur (`TELEGRAM_ADMIN_IDS=5864967247`) était committé en clair dans
+   `vanguard/operator/local.env.example`, `production.env.example`, et un test — remplacé par un
+   champ vide / placeholder (`123456789` pour le test). Pas une fuite de secret exploitable, mais
+   contraire à la doctrine "zéro PII dans le repo public". Notes mineures sans action requise :
+   `sepolia_autonomous_cycle` utilise `outgoing_pause.is_paused()` non-strict (fail-open) —
+   volontaire, cohérent avec le fait qu'aucun fonds réel n'est en jeu ; `gen-sepolia-wallet.py`
+   affiche la clé en clair dans le terminal — attendu, un script local one-shot documenté comme tel.
+2. **Cohérence doc/code — un vrai trou trouvé et corrigé** : `test_coherence.py` ne scannait
+   qu'un seul HANDOFF (`2026-07-07-nuit.md`) pour la fuite IP/email, alors que 4 nouveaux
+   fichiers HANDOFF existent depuis — corrigé pour scanner tous les `docs/HANDOFF-*.md`
+   automatiquement (glob, plus besoin d'y penser à chaque nouveau fichier). `docs/etat-systeme-cable.md`
+   ne mentionnait ni la correction d'hallucination LLM, ni la boîte de dépôt de connaissance, ni
+   `relay_chat.py` par son nom, ni le second chemin Sepolia (`sepolia_rehearsal.py`, routé via
+   `wallet_guard.escalate_spend`, distinct de l'autonome) — les quatre ajoutés. Aucune
+   contradiction trouvée entre `CLAUDE.md` et `etat-systeme-cable.md`.
+3. **Tests/CI — un vrai trou de couverture trouvé et corrigé** : 1288 tests passent (1 échec
+   connu, environnemental — `test_web_verify_rugby.py`, appel réseau live DuckDuckGo bloqué par
+   le bac à sable, sans rapport avec le code). Aucun code mort, aucun TODO silencieux. Le vrai
+   trou : les 9 modules livrés cette nuit (`relay_chat`, `relay_conversation`,
+   `knowledge_inbox`, `sepolia_wallet`, `sepolia_autonomous`, `exam`, `btc_cycles`,
+   `code_proposal`, `skill_projects`) avaient chacun leur test mais n'étaient PAS dans la liste
+   curatée de `.github/workflows/ci.yml` — une régression sur l'un d'eux serait passée inaperçue
+   en CI. Les 9 fichiers de test ajoutés à la CI ; commentaire d'en-tête périmé ("~17 tests en
+   échec") corrigé pour refléter l'état réel (1 seul, connu, environnemental).
+4. **Non traité ce soir (faible enjeu, à trancher avec l'opérateur)** : les 8 stash Git oubliés
+   sur les deux clones locaux Windows (jamais triés) ; la question ouverte sur quelles infos
+   précises ajouter aux fichiers de connaissance d'ARIA (posée à l'opérateur, sans réponse
+   encore).
+
 ## Ce qui reste en attente
 - Déploiement de `AriaLedger.sol` sur Sepolia (`contracts/DEPLOY.md`, Foundry) — bloque le
   rehearsal Sepolia au-delà de `skipped_no_ledger`. Mis de côté volontairement par l'opérateur.

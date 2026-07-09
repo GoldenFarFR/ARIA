@@ -83,7 +83,9 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   error_count:0, circuit_breaker_open:false`). **Reste en `skipped_no_ledger`** tant que
   `AriaLedger.sol` n'est pas déployé sur Sepolia (`contracts/DEPLOY.md`, étape distincte non
   encore faite) — normal, pas un bug.
-- **Relay chat (chat à 3)** : `ARIA_RELAY_ACCESS_TOKEN` actif, `GET /api/aria/relay/recent` +
+- **Relay chat (chat à 3)** — module `relay_chat.py` (table SQLite dédiée, token
+  `ARIA_RELAY_ACCESS_TOKEN` séparé du secret admin, `send_relay_reply`/`send_aria_relay_reply`
+  pour poster réellement dans le Telegram existant) : `ARIA_RELAY_ACCESS_TOKEN` actif, `GET /api/aria/relay/recent` +
   `POST /api/aria/relay/reply` vérifiés en réel (historique Telegram lu avec succès). **Limite
   découverte 08/07 nuit** : une session Claude Code tournant dans un environnement cloud/web
   (comme celle-ci) n'a **pas d'accès réseau sortant vers le VPS** (politique proxy de
@@ -106,6 +108,24 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   Telegram) le 08/07 nuit. **X (@Aria_ZHC) et le site web n'ont PAS besoin d'un relay dédié** :
   leur contenu est public, une session Claude Code peut déjà les lire directement (navigation
   web normale) — le seul canal d'écriture retour vers ARIA reste le relay Telegram existant.
+- **Deux chemins Sepolia distincts, ne pas confondre** : `sepolia_autonomous.py` (ci-dessus,
+  décide ET exécute seule, structurellement séparé de `wallet_guard`) est différent de
+  `onchain/sepolia_rehearsal.py`, qui lui passe par `wallet_guard.escalate_spend` (clic
+  Telegram Oui/Non classique) pour l'ancrage — un second chemin Sepolia, human-confirmed
+  celui-là, testnet uniquement lui aussi. Les deux sont corrects et gatés séparément ; le
+  premier n'emprunte jamais le second, verrouillé par `test_coherence`.
+- **Corrigé (08/07 nuit) — hallucination sur son propre modèle LLM** : ARIA a affirmé "je
+  tourne sur Claude Opus 4.8" en conversation réelle, sans fondement (son modèle standard est
+  Grok via Virtuals/Spark ; Claude Opus 4.8 n'est utilisé qu'en mode "develop" interne, jamais
+  annoncé comme tel). `grounding.py:grounded_llm_identity()` porte maintenant une ligne
+  explicite lui interdisant d'affirmer un nom de modèle précis sans certitude.
+- **Boîte de dépôt de connaissance — codée, PAS ENCORE déployée** : `docs/aria-learning-inbox/`
+  + `skills/knowledge_inbox.py`, heartbeat `knowledge_inbox_cycle` (360 min), gaté
+  `ARIA_KNOWLEDGE_INBOX_ENABLED` (off par défaut). Lit une note non traitée, PROPOSE (jamais
+  n'impose) son intégration dans `knowledge/*.yaml`/`canonical_facts.yaml` via une issue
+  GitHub (`aria-knowledge-proposal`) — jamais un commit ni une fusion autonome. Une note n'est
+  proposée qu'une seule fois (mémorisé localement). `CLAUDE.md` reste réservé au briefing de
+  Claude Code, jamais à la connaissance d'ARIA elle-même.
 - **Claude Code tourne aussi DIRECTEMENT sur le VPS (08/07 nuit)** : installé dans `/opt/aria`
   (Node.js 20 + `npm install -g @anthropic-ai/claude-code`). Accès réseau normal + accès
   direct `http://127.0.0.1:8000` (pas de nginx, pas de verrou Basic Auth) — c'est la session

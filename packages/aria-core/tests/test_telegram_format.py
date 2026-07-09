@@ -2,12 +2,12 @@ from aria_core.gateway.telegram_format import plain_telegram
 
 
 def test_plain_telegram_strips_markdown():
-    raw = "**OPÉRATEUR** — ID `5864967247`\n→ GitHub\n- item"
+    raw = "**OPÉRATEUR** — ID `123456789`\n→ GitHub\n- item"
     out = plain_telegram(raw)
     assert "**" not in out
     assert "`" not in out
     assert "OPÉRATEUR" in out
-    assert "5864967247" in out
+    assert "123456789" in out
     assert " : " in out or "GitHub" in out
 
 
