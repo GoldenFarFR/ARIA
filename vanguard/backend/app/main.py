@@ -232,6 +232,12 @@ async def health():
             "provider_enabled": settings.aria_acp_provider_enabled,
             "events_file_configured": bool((settings.aria_acp_events_file or "").strip()),
         },
+        "aria_web": {
+            # Fournisseur de recherche web ACTIF + si la clé Tavily est bien câblée.
+            # Permet de vérifier d'un coup d'œil que Tavily est branché (sans exposer la clé).
+            "provider": str(getattr(settings, "aria_web_search_provider", "ddg") or "ddg"),
+            "tavily_key_present": bool(os.getenv("TAVILY_API_KEY", "").strip()),
+        },
     }
     try:
         from aria_core._build import ARIA_CORE_BUILD

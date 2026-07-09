@@ -389,6 +389,8 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"ARIA_LLM_ENABLED: {llm_switch}\n"
         f"Provider ({provider}): {'configured' if provider_ok else 'missing'}\n"
         f"GitHub: {gh}\n"
+        f"Web: {str(getattr(settings, 'aria_web_search_provider', 'ddg') or 'ddg')}"
+        f"{' (Tavily ✅)' if os.environ.get('TAVILY_API_KEY', '').strip() else ''}\n"
         f"Public grounded: {'on' if settings.aria_grounded_mode else 'off'}\n"
         f"Telegram chat: founder LLM (opinion OK)\n"
         f"Proactive ideas: {'on' if settings.aria_proactive_ideas else 'off'}\n"
