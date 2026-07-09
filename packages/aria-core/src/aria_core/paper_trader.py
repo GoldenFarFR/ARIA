@@ -5,9 +5,13 @@ ferme des positions imaginaires au prix RÉEL du marché, émet des alertes d'ac
 vente CLAIREMENT FICTIVES, et mesure sa performance dans le temps. Objectif : prouver la
 performance sur ~20 jours AVANT tout argent réel (pacte docs/protocole-argent-reel.md).
 
-Mode TRADING (pas VC) : horizon court, sortie sur cible/invalidation dérivées de l'analyse
-réelle. AUCUNE exécution on-chain, AUCUNE signature, AUCUN argent réel — de la simulation
-persistée en local (aria.db). Le prix de marché est réel ; les ordres sont fictifs.
+Mode TRADING (pas VC) : horizon court, niveaux dérivés de l'analyse réelle. Gestion de
+position par STOP SUIVEUR (se resserre avec le plus haut atteint, ne se relâche jamais en
+dessous de l'invalidation d'origine) + PRISE DE PROFIT ÉCHELONNÉE (vend par tiers à +50 %,
++100 %, +200 % de gain plutôt qu'un tout-ou-rien à la cible) — protège les gains acquis
+sans couper le potentiel restant. AUCUNE exécution on-chain, AUCUNE signature, AUCUN
+argent réel — de la simulation persistée en local (aria.db). Le prix de marché est réel ;
+les ordres sont fictifs.
 """
 from __future__ import annotations
 
@@ -27,11 +31,27 @@ ALLOC_PCT = 0.05          # 5 % du capital de départ par position (~50 000 $) �
 MAX_POSITIONS = 15        # coussin de cash + diversification
 MODE = "trading"
 
+# Gestion de position (stop suiveur + prise de profit échelonnée) — remplace la sortie
+# binaire (100 % à la cible OU à l'invalidation) par une gestion qui protège les gains
+# ACQUIS sans couper le potentiel restant.
+TRAIL_STOP_PCT = 0.15         # stop suiveur : 15 % sous le plus haut atteint depuis l'entrée
+TP_STAGES = (0.5, 1.0, 2.0)   # paliers de gain vs entrée (+50 %, +100 %, +200 %)
+TP_STAGE_FRACTION = 1.0 / 3.0  # fraction de la quantité INITIALE vendue à chaque palier
+TP_QTY_EPSILON = 1e-9         # reliquat négligeable après le dernier palier -> clôture complète
+
 _POS_FIELDS = (
     "id", "contract", "symbol", "cost_usd", "entry_price", "qty",
     "target_price", "invalidation_price", "opened_at", "status",
     "exit_price", "closed_at", "pnl_usd", "pnl_pct", "close_reason",
+    "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
 )
+
+_ADDED_COLUMNS = [
+    ("high_water_price", "REAL"),
+    ("tp_stage_hit", "INTEGER NOT NULL DEFAULT 0"),
+    ("initial_qty", "REAL"),
+    ("realized_pnl_partial", "REAL NOT NULL DEFAULT 0"),
+]
 
 
 def _now() -> str:
@@ -72,10 +92,23 @@ async def _ensure_tables() -> None:
                 closed_at TEXT,
                 pnl_usd REAL,
                 pnl_pct REAL,
-                close_reason TEXT
+                close_reason TEXT,
+                high_water_price REAL,
+                tp_stage_hit INTEGER NOT NULL DEFAULT 0,
+                initial_qty REAL,
+                realized_pnl_partial REAL NOT NULL DEFAULT 0
             )
             """
         )
+        # Migration à chaud : ajoute les colonnes de gestion de position aux DB existantes
+        # (SQLite ne les crée pas si la table préexiste). Idempotent, non destructif.
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(paper_position)")).fetchall()
+        }
+        for name, ddl in _ADDED_COLUMNS:
+            if name not in existing:
+                await db.execute(f"ALTER TABLE paper_position ADD COLUMN {name} {ddl}")
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS paper_state (
@@ -174,18 +207,22 @@ async def has_open(contract: str) -> bool:
 
 
 async def cash_available() -> float:
-    """Cash = capital de départ − coût des positions ouvertes + P&L réalisé des clôturées."""
+    """Cash = capital de départ − coût des positions ouvertes + P&L réalisé des clôturées
+    + P&L réalisé des prises de profit PARTIELLES sur des positions encore ouvertes (le
+    coût restant de ``cost_usd`` est déjà réduit proportionnellement par ``reduce_position``,
+    donc seul le profit au-delà de la base de coût doit être rajouté ici)."""
     start = await starting_capital()
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT COALESCE(SUM(cost_usd), 0) FROM paper_position WHERE status = 'open'"
+            "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(realized_pnl_partial), 0) "
+            "FROM paper_position WHERE status = 'open'"
         ) as cur:
-            open_cost = (await cur.fetchone())[0] or 0.0
+            open_cost, open_partial = await cur.fetchone()
         async with db.execute(
             "SELECT COALESCE(SUM(pnl_usd), 0) FROM paper_position WHERE status = 'closed'"
         ) as cur:
             realized = (await cur.fetchone())[0] or 0.0
-    return float(start) - float(open_cost) + float(realized)
+    return float(start) - float(open_cost or 0.0) + float(realized) + float(open_partial or 0.0)
 
 
 async def open_position(
@@ -221,10 +258,11 @@ async def open_position(
             """
             INSERT INTO paper_position
               (contract, symbol, cost_usd, entry_price, qty, target_price,
-               invalidation_price, opened_at, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')
+               invalidation_price, opened_at, status, high_water_price, initial_qty)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
             """,
-            (contract, symbol or "", alloc, entry_price, qty, target_price, invalidation_price, _now()),
+            (contract, symbol or "", alloc, entry_price, qty, target_price, invalidation_price,
+             _now(), entry_price, qty),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -255,13 +293,62 @@ async def close_position(contract: str, exit_price: float, *, reason: str = "man
             "pnl_pct": pnl_pct, "close_reason": reason}
 
 
+async def reduce_position(
+    contract: str, exit_price: float, sell_qty: float, *, stage: int, reason: str = "prise de profit",
+) -> dict | None:
+    """Prise de profit PARTIELLE : vend une fraction de la position et garde le reste
+    ouvert avec une base de coût réduite proportionnellement (même ``entry_price``, moins
+    de ``qty``/``cost_usd``). Le P&L de la tranche vendue est accumulé dans
+    ``realized_pnl_partial`` -- il reste visible dans ``cash_available``/``portfolio_summary``
+    sans attendre la clôture complète de la position."""
+    await _ensure_tables()
+    pos = await _get_open(contract)
+    if not pos or not exit_price or exit_price <= 0 or sell_qty <= 0:
+        return None
+    sell_qty = min(sell_qty, pos["qty"])
+    frac = sell_qty / pos["qty"] if pos["qty"] else 0.0
+    sold_cost = pos["cost_usd"] * frac
+    proceeds = sell_qty * exit_price
+    pnl_usd = proceeds - sold_cost
+    new_qty = pos["qty"] - sell_qty
+    new_cost = pos["cost_usd"] - sold_cost
+    new_realized_partial = (pos.get("realized_pnl_partial") or 0.0) + pnl_usd
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE paper_position
+               SET qty = ?, cost_usd = ?, realized_pnl_partial = ?, tp_stage_hit = ?
+             WHERE id = ?
+            """,
+            (new_qty, new_cost, new_realized_partial, stage, pos["id"]),
+        )
+        await db.commit()
+    pnl_pct = (exit_price / pos["entry_price"] - 1.0) * 100.0 if pos["entry_price"] else 0.0
+    return {
+        **pos, "sold_qty": sell_qty, "exit_price": exit_price, "pnl_usd": pnl_usd,
+        "pnl_pct": pnl_pct, "close_reason": reason, "remaining_qty": new_qty,
+        "tp_stage_hit": stage,
+    }
+
+
+async def _update_high_water(position_id: int, price: float) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE paper_position SET high_water_price = ? WHERE id = ?", (price, position_id),
+        )
+        await db.commit()
+
+
 async def portfolio_summary(*, price_lookup=None) -> dict:
     """Photo du portefeuille : cash, valeur totale (marquée au marché si price_lookup),
     rendement %, P&L réalisé/latent, taux de réussite. ``price_lookup(contract)`` async → prix."""
     start = await starting_capital()
     opens = await get_open_positions()
     closed = await get_closed_positions(limit=100_000)
-    realized = sum((p["pnl_usd"] or 0.0) for p in closed)
+    realized = (
+        sum((p["pnl_usd"] or 0.0) for p in closed)
+        + sum((p.get("realized_pnl_partial") or 0.0) for p in opens)
+    )
     cash = start - sum(p["cost_usd"] for p in opens) + realized
 
     open_value = 0.0
@@ -324,6 +411,20 @@ def format_sell_alert(closed: dict) -> str:
     ])
 
 
+def format_partial_exit_alert(partial: dict) -> str:
+    name = partial.get("symbol") or (partial.get("contract") or "")[:10]
+    pnl = partial.get("pnl_usd") or 0.0
+    pct = partial.get("pnl_pct") or 0.0
+    sign = "+" if pnl >= 0 else ""
+    return "\n".join([
+        "🧪 SIMULATION — portefeuille papier 1 M$ (mode trading)",
+        f"PRISE DE PROFIT PARTIELLE FICTIVE {name} ({partial.get('close_reason', '')})",
+        f"Sortie {partial['exit_price']:.6g} · {sign}{pnl:,.0f} $ ({sign}{pct:.1f}%) sur la tranche vendue",
+        f"Position restante : {partial.get('remaining_qty', 0):.6g} unités",
+        "Aucun argent réel.",
+    ])
+
+
 def format_summary(summary: dict) -> str:
     wr = summary.get("win_rate")
     wr_str = f"{wr:.0f}%" if wr is not None else "n/a"
@@ -375,8 +476,9 @@ async def run_paper_cycle(
     max_new: int = 3,
 ) -> dict:
     """Un tour de simulation, appliquant les VRAIS rapports :
-      1. positions ouvertes : au prix réel, ferme celles dont la cible OU l'invalidation
-         est atteinte (mode trading) et émet une alerte de vente fictive ;
+      1. positions ouvertes : gestion par stop suiveur + prise de profit échelonnée
+         (voir ``TRAIL_STOP_PCT``/``TP_STAGES``) — protège les gains acquis sans couper le
+         potentiel restant, au lieu d'une sortie binaire 100 % cible OU 100 % invalidation ;
       2. nouveaux achats : sur les candidats classés avec un signal d'ACHAT réel, ouvre une
          position fictive et émet une alerte d'achat fictive.
     Tout est injectable (candidates/analyzer/price_lookup/notifier) → testable hors-ligne.
@@ -384,9 +486,10 @@ async def run_paper_cycle(
     """
     await _ensure_tables()
     price_lookup = price_lookup or _default_price_lookup
-    actions: dict = {"opened": [], "closed": [], "checked": 0}
+    actions: dict = {"opened": [], "closed": [], "partial": [], "checked": 0}
 
-    # 1) Gérer les positions ouvertes (sortie sur cible / invalidation).
+    # 1) Gérer les positions ouvertes : stop suiveur (ne se relâche jamais) puis prise de
+    #    profit échelonnée sur ce qui reste ouvert.
     for p in await get_open_positions():
         actions["checked"] += 1
         try:
@@ -395,19 +498,64 @@ async def run_paper_cycle(
             price = None
         if not price or price <= 0:
             continue
-        reason = None
-        if p.get("target_price") and price >= p["target_price"]:
-            reason = "cible atteinte"
-        elif p.get("invalidation_price") and price <= p["invalidation_price"]:
-            reason = "invalidation"
-        if reason:
-            closed = await close_position(p["contract"], price, reason=reason)
+
+        high_water = max(p.get("high_water_price") or p["entry_price"], price)
+        if high_water != (p.get("high_water_price") or p["entry_price"]):
+            await _update_high_water(p["id"], high_water)
+        trailing_stop = high_water * (1 - TRAIL_STOP_PCT)
+        invalidation = p.get("invalidation_price")
+        active_stop = max(trailing_stop, invalidation) if invalidation else trailing_stop
+        stop_is_trailing = not invalidation or trailing_stop > invalidation
+
+        if active_stop and price <= active_stop:
+            closed = await close_position(
+                p["contract"], price, reason="stop suiveur" if stop_is_trailing else "invalidation",
+            )
             if closed:
                 actions["closed"].append(closed)
                 if notifier:
                     try:
                         await notifier(format_sell_alert(closed))
                     except Exception:  # noqa: BLE001 — l'alerte ne casse pas le cycle
+                        pass
+            continue  # position fermée, rien d'autre à évaluer ce tour
+
+        # Prise de profit échelonnée : vend une fraction de la quantité INITIALE à chaque
+        # palier de gain franchi. Dernier palier (ou reliquat négligeable) -> clôture complète.
+        initial_qty = p.get("initial_qty") or p["qty"]
+        stage_hit = int(p.get("tp_stage_hit") or 0)
+        remaining_qty = p["qty"]
+        entry_price = p["entry_price"]
+        gain_pct = (price / entry_price - 1.0) if entry_price else 0.0
+
+        while stage_hit < len(TP_STAGES) and gain_pct >= TP_STAGES[stage_hit]:
+            stage_hit += 1
+            sell_qty = min(initial_qty * TP_STAGE_FRACTION, remaining_qty)
+            is_last_stage = stage_hit >= len(TP_STAGES) or remaining_qty - sell_qty <= TP_QTY_EPSILON
+            if is_last_stage:
+                closed = await close_position(
+                    p["contract"], price, reason=f"palier {stage_hit}/{len(TP_STAGES)} (clôture)",
+                )
+                if closed:
+                    actions["closed"].append(closed)
+                    if notifier:
+                        try:
+                            await notifier(format_sell_alert(closed))
+                        except Exception:  # noqa: BLE001
+                            pass
+                break
+
+            partial = await reduce_position(
+                p["contract"], price, sell_qty, stage=stage_hit,
+                reason=f"palier {stage_hit}/{len(TP_STAGES)}",
+            )
+            if partial:
+                actions["partial"].append(partial)
+                remaining_qty = partial["remaining_qty"]
+                if notifier:
+                    try:
+                        await notifier(format_partial_exit_alert(partial))
+                    except Exception:  # noqa: BLE001
                         pass
 
     # 2) Ouvrir de nouvelles positions depuis les candidats classés (signal d'achat réel).
@@ -417,7 +565,8 @@ async def run_paper_cycle(
         candidates = [c.contract for c in await top_candidates(20)]
     analyzer = analyzer or _default_analyzer
     # On ne re-rentre pas un nom qu'on vient de SORTIR ce tour (évite le churn : une sortie
-    # sur cible/invalidation exige un nouveau signal au tour suivant, pas un rachat immédiat).
+    # sur stop suiveur/dernier palier exige un nouveau signal au tour suivant, pas un rachat
+    # immédiat).
     closed_this_cycle = {c["contract"] for c in actions["closed"]}
 
     opened = 0

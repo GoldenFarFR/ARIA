@@ -168,6 +168,24 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   d'achat, renvoie vers `/vc <contrat>` pour l'analyse complète. Un contrat n'est alerté
   qu'une seule fois (mémorisé localement, jamais de spam sur le même candidat). Respecte
   le kill-switch (`/stop`).
+- **Gestion de position paper-trading : stop suiveur + prise de profit échelonnée (09/07)** :
+  `paper_trader.py` — remplace la sortie binaire (100 % à la cible OU à l'invalidation, tâche
+  #38) par une gestion qui protège les gains acquis sans couper le potentiel restant.
+  **Stop suiveur** (`TRAIL_STOP_PCT=15%`) : se resserre avec le plus haut atteint depuis
+  l'entrée (`high_water_price`), ne se relâche JAMAIS en dessous de l'invalidation d'origine
+  (`active_stop = max(trailing_stop, invalidation_price)`) — avant toute hausse significative,
+  c'est encore l'invalidation d'origine qui protège. **Prise de profit échelonnée**
+  (`TP_STAGES = (+50%, +100%, +200%)`, `TP_STAGE_FRACTION = 1/3`) : vend un tiers de la
+  quantité INITIALE à chaque palier de gain franchi (`reduce_position`, nouvelle fonction —
+  P&L partiel accumulé dans `realized_pnl_partial`, visible immédiatement dans
+  `cash_available`/`portfolio_summary` sans attendre la clôture complète) ; le dernier palier
+  clôture le reliquat (`close_position`, jamais de position résiduelle qui traîne). Migration
+  de schéma à chaud (`ALTER TABLE ADD COLUMN`, même patron que `vc_predictions.py`) —
+  non-destructive sur une DB déjà peuplée. Comportement CHANGÉ intentionnellement pour
+  `run_paper_cycle` (tests mis à jour dans le même commit, cf. doctrine `test_coherence`) :
+  une position qui dépasse l'ancienne "cible" ne se ferme plus à 100% d'un coup, elle se
+  réduit par paliers. Aucun impact sur le reste (dossier par contrat, cockpit) — lecture
+  seule des positions, champs supplémentaires transparents.
 - **Adressage `@claude` dans le chat Telegram opérateur/ARIA (09/07)** : un vrai chat à 3
   identités visuellement distinctes (avatars séparés) est **impossible avec un seul token de
   bot Telegram** — Telegram n'autorise qu'une identité par bot. Palliatif déjà en place :
