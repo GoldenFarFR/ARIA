@@ -6,11 +6,13 @@ async function main() {
 
   const agent = await AcpAgent.create({
     provider: await PrivyAlchemyEvmProviderAdapter.create({
-      walletAddress: \"0xd752a325433f4d55c5e0b125be84845d7de47bb3\",
+      // Jamais de cle privee en dur dans le repo -- toujours depuis l'environnement local,
+      // jamais commitee (cf. "cle privee jamais sur le serveur", CLAUDE.md).
+      walletAddress: process.env.ACP_WALLET_ADDRESS,
       chains: [baseSepolia],
-      signerPrivateKey: \"MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNnkMIkHVZxF1uvFDNazOypimrD31jr4rLLSSQWQC1qahRANCAAROmETNpdP+Lra+oVewzdSIofTcOu3vS85fLNHXuz5wAovNrvoxQH5r+I7P+FTKLk1jm+umqrnV4crzu7Py3rUf",
+      signerPrivateKey: process.env.ACP_SIGNER_PRIVATE_KEY,
     }),
-    builderCode: \"bc_euy3f9pu\",
+    builderCode: process.env.ACP_BUILDER_CODE,
   });
 
   console.log(\"✅ Agent connecté avec succès !\");
