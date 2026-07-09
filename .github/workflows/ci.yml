@@ -79,6 +79,8 @@ jobs:
             tests/test_claude_mentor.py \
             tests/test_high_conviction_alerts.py \
             tests/test_pump_dump_autopsy.py \
+            tests/test_x_profile.py \
+            tests/test_telegram_x_profile_command.py \
             tests/test_sepolia_wallet.py \
             tests/test_sepolia_autonomous.py \
             tests/test_exam.py \
