@@ -1,10 +1,9 @@
 # CI ARIA — surface produit VC (rapport / analyse / juge / Telegram / Virtuals / TA).
 #
-# Choix ASSUMÉ : on ne lance PAS toute la suite ici. Le dépôt compte ~17 tests
-# en échec PRÉ-EXISTANTS (certains dépendent du réseau, d'autres = dette technique
-# hors périmètre VC : routage LLM, holding_site, web_verify…). Les faire passer
-# est un chantier séparé (voir handoff). Cette CI verrouille ce qui rapporte —
-# la surface produit VC — et reste VERTE pour que le vert/rouge ait un sens.
+# Choix ASSUMÉ : on ne lance PAS toute la suite ici. Un seul test en échec
+# PRÉ-EXISTANT reste connu (test_web_verify_rugby.py — appel réseau live DuckDuckGo,
+# hors périmètre, non lié au code). Cette CI verrouille ce qui rapporte — la surface
+# produit VC + les capacités clés — et reste VERTE pour que le vert/rouge ait un sens.
 #
 # Pour élargir : ajouter des fichiers de test ci-dessous à mesure qu'ils sont
 # stabilisés. Aucune donnée live / aucun secret n'est requis (tout est mocké).
@@ -72,4 +71,13 @@ jobs:
             tests/test_telegram_watchlist_command.py \
             tests/test_vc_report_pdf.py \
             tests/test_vc_language_callback.py \
+            tests/test_relay_chat.py \
+            tests/test_relay_conversation.py \
+            tests/test_knowledge_inbox.py \
+            tests/test_sepolia_wallet.py \
+            tests/test_sepolia_autonomous.py \
+            tests/test_exam.py \
+            tests/test_btc_cycles.py \
+            tests/test_code_proposal.py \
+            tests/test_skill_projects.py \
             tests/test_coherence.py

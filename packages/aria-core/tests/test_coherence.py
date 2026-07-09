@@ -41,8 +41,7 @@ _HUMAN_DOCS = [
     "CLAUDE.md",
     "docs/deploy-ionos.md",
     "docs/etat-systeme-cable.md",
-    "docs/HANDOFF-2026-07-07-nuit.md",
-]
+] + sorted(str(p.relative_to(REPO)) for p in (REPO / "docs").glob("HANDOFF-*.md"))
 _IPV4 = re.compile(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b")
 _ALLOWED_IPS = {"127.0.0.1", "0.0.0.0", "255.255.255.255"}
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@(?:gmail|outlook|yahoo|hotmail|proton(?:mail)?)\.[A-Za-z]{2,}")
