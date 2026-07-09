@@ -24,11 +24,11 @@ class _FakeAccount:
 
 
 class _FakeFunctionCall:
-    def __init__(self, root_bytes):
-        self.root_bytes = root_bytes
+    def __init__(self, call_repr):
+        self.call_repr = call_repr
 
     def build_transaction(self, params):
-        return {"root": self.root_bytes, **params}
+        return {"call": self.call_repr, **params}
 
 
 class _FakeContract:
@@ -38,12 +38,25 @@ class _FakeContract:
     class functions:  # noqa: N801 — miroir de l'API web3.py (Contract.functions)
         @staticmethod
         def anchor(root_bytes):
-            return _FakeFunctionCall(root_bytes)
+            return _FakeFunctionCall(("anchor", root_bytes))
+
+        @staticmethod
+        def deposit():
+            return _FakeFunctionCall(("deposit",))
+
+        @staticmethod
+        def approve(spender, amount):
+            return _FakeFunctionCall(("approve", spender, amount))
+
+        @staticmethod
+        def exactInputSingle(params):  # noqa: N802 — nom ABI Uniswap V3
+            return _FakeFunctionCall(("exactInputSingle", params))
 
 
 class _FakeEth:
     def __init__(self):
         self.sent: list[bytes] = []
+        self._hash_counter = 0
 
     def get_balance(self, addr):
         return 10**18  # 1 ETH en wei
@@ -53,10 +66,12 @@ class _FakeEth:
 
     def send_raw_transaction(self, raw):
         self.sent.append(raw)
+        self._hash_counter += 1
+        idx = self._hash_counter
 
         class _Hash:
             def hex(self):
-                return "0xdeadbeef"
+                return f"0xdeadbeef{idx}"
         return _Hash()
 
     def contract(self, address, abi):
@@ -107,7 +122,7 @@ def test_send_anchor_transaction_signs_and_sends():
         contract=LEDGER_ADDRESS, root=GOOD_ROOT, chain_id=sw.SEPOLIA_CHAIN_ID,
         w3=w3, account_cls=_FakeAccount,
     )
-    assert tx_hash == "0xdeadbeef"
+    assert tx_hash == "0xdeadbeef1"
     assert len(w3.eth.sent) == 1
 
 
@@ -135,3 +150,93 @@ def test_refuses_when_no_key(monkeypatch):
             contract=LEDGER_ADDRESS, root=GOOD_ROOT, chain_id=sw.SEPOLIA_CHAIN_ID,
             w3=_FakeW3(), account_cls=_FakeAccount,
         )
+
+
+ROUTER_ADDRESS = "0x000000000000000000000000000000000000BEEF"
+TOKEN_OUT_ADDRESS = "0x000000000000000000000000000000000000CAFE"
+
+
+def _swap_env(monkeypatch, *, enabled=True):
+    if enabled:
+        monkeypatch.setenv("ARIA_SEPOLIA_SWAP_ENABLED", "1")
+    monkeypatch.setenv("ARIA_SEPOLIA_SWAP_ROUTER", ROUTER_ADDRESS)
+    monkeypatch.setenv("ARIA_SEPOLIA_SWAP_TOKEN_OUT", TOKEN_OUT_ADDRESS)
+
+
+def test_swap_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("ARIA_SEPOLIA_SWAP_ENABLED", raising=False)
+    assert sw.sepolia_swap_enabled() is False
+
+
+def test_swap_requires_wallet_enabled_too(monkeypatch):
+    monkeypatch.delenv("ARIA_SEPOLIA_WALLET_ENABLED", raising=False)
+    monkeypatch.setenv("ARIA_SEPOLIA_SWAP_ENABLED", "1")
+    assert sw.sepolia_swap_enabled() is False
+
+
+def test_send_test_swap_refuses_when_disabled(monkeypatch):
+    _swap_env(monkeypatch, enabled=False)
+    with pytest.raises(RuntimeError, match="désactivé"):
+        sw.send_test_swap_transaction(
+            amount_in_wei=10**15, chain_id=sw.SEPOLIA_CHAIN_ID,
+            w3=_FakeW3(), account_cls=_FakeAccount,
+        )
+
+
+def test_send_test_swap_refuses_non_sepolia(monkeypatch):
+    _swap_env(monkeypatch)
+    with pytest.raises(RuntimeError, match="Sepolia"):
+        sw.send_test_swap_transaction(
+            amount_in_wei=10**15, chain_id=8453,
+            w3=_FakeW3(), account_cls=_FakeAccount,
+        )
+
+
+def test_send_test_swap_refuses_amount_over_cap(monkeypatch):
+    _swap_env(monkeypatch)
+    with pytest.raises(RuntimeError, match="hors bornes"):
+        sw.send_test_swap_transaction(
+            amount_in_wei=sw.MAX_TEST_SWAP_WEI + 1, chain_id=sw.SEPOLIA_CHAIN_ID,
+            w3=_FakeW3(), account_cls=_FakeAccount,
+        )
+
+
+def test_send_test_swap_refuses_zero_amount(monkeypatch):
+    _swap_env(monkeypatch)
+    with pytest.raises(RuntimeError, match="hors bornes"):
+        sw.send_test_swap_transaction(
+            amount_in_wei=0, chain_id=sw.SEPOLIA_CHAIN_ID,
+            w3=_FakeW3(), account_cls=_FakeAccount,
+        )
+
+
+def test_send_test_swap_refuses_missing_router_config(monkeypatch):
+    monkeypatch.setenv("ARIA_SEPOLIA_SWAP_ENABLED", "1")
+    monkeypatch.delenv("ARIA_SEPOLIA_SWAP_ROUTER", raising=False)
+    monkeypatch.delenv("ARIA_SEPOLIA_SWAP_TOKEN_OUT", raising=False)
+    with pytest.raises(RuntimeError, match="non configurés"):
+        sw.send_test_swap_transaction(
+            amount_in_wei=10**15, chain_id=sw.SEPOLIA_CHAIN_ID,
+            w3=_FakeW3(), account_cls=_FakeAccount,
+        )
+
+
+def test_send_test_swap_happy_path_signs_three_transactions(monkeypatch):
+    _swap_env(monkeypatch)
+    w3 = _FakeW3()
+    result = sw.send_test_swap_transaction(
+        amount_in_wei=10**15, chain_id=sw.SEPOLIA_CHAIN_ID,
+        w3=w3, account_cls=_FakeAccount,
+    )
+    assert result == {
+        "deposit_tx": "0xdeadbeef1",
+        "approve_tx": "0xdeadbeef2",
+        "swap_tx": "0xdeadbeef3",
+    }
+    assert len(w3.eth.sent) == 3
+
+
+def test_send_test_swap_uses_op_stack_weth_predeploy_by_default(monkeypatch):
+    _swap_env(monkeypatch)
+    monkeypatch.delenv("ARIA_SEPOLIA_SWAP_TOKEN_IN", raising=False)
+    assert sw.swap_token_in() == "0x4200000000000000000000000000000000000006"
