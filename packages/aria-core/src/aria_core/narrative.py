@@ -7,7 +7,6 @@ from urllib.parse import quote
 from aria_core.holding import (
     DEFAULT_ARIA_TITLE,
     DEFAULT_HOLDING_DOMAIN,
-    FLAGSHIP_PRODUCT,
     GOVERNANCE_RULE,
     aria_org_prompt,
     holding_name,
@@ -23,13 +22,14 @@ def peer_competition_policy(lang: str = "fr") -> str:
     if lang == "fr":
         return (
             "Concurrence silencieuse : ne cite jamais d'autres entrepreneurs IA, agents pairs, "
-            "@handles concurrents, ni leurs sites ou métriques. Parle uniquement de la holding, "
-            "Aria Market et du modèle ZHC. Ne jamais promouvoir DEXPulse (retiré 2026-06-19)."
+            "@handles concurrents, ni leurs sites ou métriques. Parle uniquement de la holding "
+            "et du modèle ZHC. Ne jamais promouvoir DEXPulse ou Aria Market comme produits live "
+            "(tous deux retirés)."
         )
     return (
         "Silent competition: never name other AI entrepreneurs, peer agents, competitor "
-        "@handles, or their sites/metrics. Speak only about the holding, Aria Market, and the ZHC model. "
-        "Never promote DEXPulse (retired 2026-06-19)."
+        "@handles, or their sites/metrics. Speak only about the holding and the ZHC model. "
+        "Never promote DEXPulse or Aria Market as live products (both retired)."
     )
 
 
@@ -52,7 +52,7 @@ def structure_block(lang: str = "en") -> str:
             f"STRUCTURE CORPORATE :\n"
             f"• {holding_name()} = holding mère (ZHC)\n"
             f"• {AGENT_NAME} = {DEFAULT_ARIA_TITLE}\n"
-            f"• {FLAGSHIP_PRODUCT} = filiale flagship (produit live)\n"
+            f"• Aucune filiale live actuellement (Aria Market, DEXPulse retirés) — ARIA opère la holding directement\n"
             f"• Futurs projets = filiales sous {holding_name()}\n"
             f"Règle : {GOVERNANCE_RULE}"
         )
@@ -60,7 +60,7 @@ def structure_block(lang: str = "en") -> str:
         f"CORPORATE STRUCTURE:\n"
         f"• {holding_name()} = parent holding (ZHC)\n"
         f"• {AGENT_NAME} = {DEFAULT_ARIA_TITLE}\n"
-        f"• {FLAGSHIP_PRODUCT} = flagship subsidiary (live product)\n"
+        f"• No subsidiary currently live (Aria Market, DEXPulse retired) — ARIA operates the holding directly\n"
         f"• Future projects = subsidiaries under {holding_name()}\n"
         f"Rule: {GOVERNANCE_RULE}"
     )
@@ -137,7 +137,8 @@ def llm_system_block(lang: str = "en") -> str:
         f"You are {AGENT_NAME}, {DEFAULT_ARIA_TITLE} of {holding_name()} "
         f"(Zero-Human Company model).\n"
         f"{org}\n"
-        f"Never present {FLAGSHIP_PRODUCT} as the holding — it is always a subsidiary.\n"
+        f"No subsidiary is currently live — you operate the holding directly. Aria Market and "
+        f"DEXPulse are retired codenames, never present them as live.\n"
         f"Never present a future venture as standalone — it belongs under {holding_name()}.\n"
         f"{builder}\n"
         f"{voice}\n"
@@ -160,8 +161,8 @@ def public_llm_system_block(lang: str = "en") -> str:
         )
         scope = (
             "Périmètre public : courtoisie, FAQ, informations vérifiées sur la holding, "
-            "Aria Market, ZHC et le jeton BASE. DEXPulse est retiré — ne pas le présenter comme live. "
-            "Pas de revenus, métriques, ni succès non documentés."
+            "ZHC et le jeton BASE. Aria Market et DEXPulse sont retirés — ne pas les présenter "
+            "comme live. Pas de revenus, métriques, ni succès non documentés."
         )
         voice = (
             "Ton : chaleureux avec la communauté, direct, sobre. Jalons réels uniquement — "
@@ -179,8 +180,8 @@ def public_llm_system_block(lang: str = "en") -> str:
         )
         scope = (
             "Public scope: courtesy, FAQ, verified information about the holding, "
-            "Aria Market, ZHC, and the BASE token. DEXPulse is retired — never present as live. "
-            "No revenue, metrics, or undocumented wins."
+            "ZHC, and the BASE token. Aria Market and DEXPulse are retired — never present as "
+            "live. No revenue, metrics, or undocumented wins."
         )
         voice = (
             "Tone: warm with the community, direct, sober. Truthful milestones only — "
@@ -191,7 +192,8 @@ def public_llm_system_block(lang: str = "en") -> str:
     return (
         f"You are {AGENT_NAME}, public face of {holding_name()}.\n"
         f"{org}\n"
-        f"Never present {FLAGSHIP_PRODUCT} as the holding — it is always a subsidiary.\n"
+        f"No subsidiary is currently live — you operate the holding directly. Aria Market and "
+        f"DEXPulse are retired codenames, never present them as live.\n"
         f"{audience}\n"
         f"{scope}\n"
         f"{voice}\n"
@@ -309,7 +311,7 @@ def telegram_online_notice(mode_label: str) -> str:
     h = holding_name()
     return (
         f"🟢 {AGENT_NAME} online ({mode_label})\n"
-        f"{h} · {FLAGSHIP_PRODUCT} subsidiary\n"
+        f"{h}\n"
         f"Send /status for heartbeat and LLM state."
     )
 
@@ -329,19 +331,19 @@ def x_juno_greeting() -> str:
     return (
         f"Hi @JunoAgent — {AGENT_NAME} ({AGENT_HANDLE_X}) here, "
         f"{DEFAULT_ARIA_TITLE} of {h}.\n\n"
-        f"We're building a ZHC holding company. {FLAGSHIP_PRODUCT} is our flagship subsidiary "
-        f"(real-time DEX analyzer). All ventures register under {h}."
+        f"We're building a ZHC holding company — no subsidiary live yet, {h} operates directly. "
+        f"All ventures register under {h}."
     )
 
 
 def x_juno_hashtags() -> str:
-    return "#ZHC #ZeroHumanCompany #AriaVanguardZHC #AriaMarket"
+    return "#ZHC #ZeroHumanCompany #AriaVanguardZHC"
 
 
 def x_juno_intent_url() -> str:
     text = (
         f"Hi @JunoAgent — {AGENT_NAME} here, CAO of {holding_name()}. "
-        f"ZHC holding with {FLAGSHIP_PRODUCT} as flagship subsidiary. "
+        f"ZHC holding, no subsidiary live yet — I operate it directly. "
         f"Interested in playbook exchange. {x_juno_hashtags()}"
     )
     return f"https://twitter.com/intent/tweet?text={quote(text)}"
@@ -351,7 +353,7 @@ def zhc_intro_payload_greeting() -> str:
     h = holding_name()
     return (
         f"Hi JUNO — I'm {AGENT_NAME}, {DEFAULT_ARIA_TITLE} of {h}. "
-        f"{FLAGSHIP_PRODUCT} is our flagship subsidiary (real-time DEX analyzer). "
+        f"No subsidiary live yet — I operate the holding directly. "
         f"All ventures register under the holding."
     )
 
@@ -363,20 +365,20 @@ def zhc_intro_from_agent() -> str:
 def memory_identity_fallback() -> str:
     return (
         f"{AGENT_NAME} — {DEFAULT_ARIA_TITLE} of {holding_name()}. "
-        f"{FLAGSHIP_PRODUCT} is the flagship subsidiary."
+        f"No subsidiary currently live — operates the holding directly."
     )
 
 
 def llm_provider_title() -> str:
-    return f"{holding_name()} / {FLAGSHIP_PRODUCT} ARIA"
+    return f"{holding_name()} ARIA"
 
 
 def welcome_site_access() -> str:
-    return f"Welcome to {FLAGSHIP_PRODUCT} — subsidiary of {holding_name()}."
+    return f"Welcome to {holding_name()}."
 
 
 def welcome_site_return() -> str:
-    return f"Welcome back to {FLAGSHIP_PRODUCT} ({holding_name()})."
+    return f"Welcome back to {holding_name()}."
 
 
 def holding_site_url() -> str:
@@ -389,7 +391,7 @@ def setup_steps() -> list[str]:
     h = holding_name()
     site = holding_site_url()
     return [
-        f"1. Holding site: {site} ({DEFAULT_HOLDING_DOMAIN}) — {h} is the parent, {FLAGSHIP_PRODUCT} subsidiary",
+        f"1. Holding site: {site} ({DEFAULT_HOLDING_DOMAIN}) — {h} is the parent (no subsidiary live yet)",
         "2. Create dedicated email (ProtonMail or domain alias) → ARIA_EMAIL in .env",
         f"3. Create X account {AGENT_HANDLE_X} — bio must mention {h} as holding",
         f"4. Telegram bot {TELEGRAM_BOT} via @BotFather → TELEGRAM_BOT_TOKEN in Render",

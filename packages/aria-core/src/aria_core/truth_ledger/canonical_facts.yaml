@@ -57,8 +57,8 @@
   tags: [holding, site]
   question: Where is the holding corporate site?
   answer: >
-    Holding site: https://ariavanguardzhc.com (monorepo vanguard/). Aria Market product is
-    hosted on the same stack. API: https://api.ariavanguardzhc.com.
+    Holding site: https://ariavanguardzhc.com (monorepo vanguard/). No subsidiary is
+    currently live — ARIA operates the holding directly on this stack. API: https://api.ariavanguardzhc.com.
 
 - id: public-access
   topic: policy
@@ -113,7 +113,7 @@
   question: What is the ZHC model?
   answer: >
     Zero-Human Company — ARIA operates day-to-day autonomously (portfolio, products, content).
-    Human principal steers strategy; ARIA executes and informs via the public site and Aria Market.
+    Human principal steers strategy; ARIA executes and informs via the public site.
 
 - id: base-token
   topic: token
@@ -129,7 +129,7 @@
   question: What are the main GitHub repos?
   answer: >
     GoldenFarFR/ARIA (monorepo privé — aria-core, vanguard, truth-ledger, collegue-memoire),
-    GoldenFarFR/aria-vanguard (holding site + API deploy host + Aria Market),
+    GoldenFarFR/aria-vanguard (holding site + API deploy host),
     GoldenFarFR/aria-sandbox (experiments + truth-ledger mirror),
     GoldenFarFR/aria-token-base (token R&D), GoldenFarFR/aria-skills, GoldenFarFR/kikou,
     GoldenFarFR/template-grok-cursor. Operator scripts in vanguard/operator; secrets in local vault.
@@ -151,7 +151,7 @@
   tags: [legal, education]
   question: Is this financial advice?
   answer: >
-    No. Aria Market and ARIA provide market education and analysis tools — not personalized
+    No. ARIA provides market education and analysis tools — not personalized
     investment advice. Always do your own research.
 
 - id: contact-aria
@@ -159,7 +159,7 @@
   tags: [contact, comms]
   question: How do I talk to ARIA?
   answer: >
-    Chat on https://ariavanguardzhc.com (holding + Aria Market). X: @Aria_ZHC. Telegram: @Aria_ZHC_Bot.
+    Chat on https://ariavanguardzhc.com (holding). X: @Aria_ZHC. Telegram: @Aria_ZHC_Bot.
 
 - id: aria-capability-index
   topic: aria
@@ -199,9 +199,10 @@
   question: What should ARIA learn and store from X or external sources?
   answer: >
     Only insights that advance the ZHC model, holding autonomy (build, deploy, skills, decisions),
-    Aria Market/product moat, and future marketing/comms decisions for Aria Vanguard — not generic
-    crypto hype, price calls, or social noise. Never store DEXPulse as a live product (retired
-    2026-06-19). Stored in cognitive_knowledge (not the holding repertoire). Operator mandate 2026-06.
+    product moat, and future marketing/comms decisions for Aria Vanguard — not generic
+    crypto hype, price calls, or social noise. Never store DEXPulse or Aria Market as a live
+    product (both retired, DEXPulse since 2026-06-19). Stored in cognitive_knowledge (not the
+    holding repertoire). Operator mandate 2026-06.
 
 - id: operator-runbook
   topic: infra
