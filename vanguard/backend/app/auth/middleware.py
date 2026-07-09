@@ -11,8 +11,6 @@ PUBLIC_PREFIXES = (
     "/api/health",
     "/api/pulse",
     "/api/auth/",
-    "/api/billing/webhook",
-    "/api/billing/plan",
     "/api/telegram/webhook",
     "/assets/",
     "/favicon.svg",

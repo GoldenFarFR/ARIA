@@ -209,3 +209,47 @@ async def test_community_feedback_operator_handle_kept_with_admin_secret(client,
     )
     assert res.status_code == 200
     assert seen["handle"] == "GoldenFarFR"
+
+
+# ── 4. Vérification bytecode Sepolia (avant swap réel) — opérateur seulement ──────────
+
+@pytest.mark.asyncio
+async def test_sepolia_code_check_requires_operator_secret(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    res = await client.get("/api/aria/sepolia/code", params={"address": "0xabc"})
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_sepolia_code_check_returns_rpc_result(client, monkeypatch):
+    from aria_core.onchain import sepolia_wallet
+
+    monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    monkeypatch.setattr(
+        sepolia_wallet, "get_code",
+        lambda address, **_: {
+            "address": address, "has_code": True, "code_length_bytes": 4521,
+            "code_preview": "0x6080604052",
+        },
+    )
+    res = await client.get(
+        "/api/aria/sepolia/code",
+        params={"address": "0x2626664c2603336E57B271c5C0b26F421741e481"},
+        headers={"X-Admin-Secret": "s3cr3t"},
+    )
+    assert res.status_code == 200
+    assert res.json()["has_code"] is True
+
+
+@pytest.mark.asyncio
+async def test_sepolia_code_check_502_when_rpc_unavailable(client, monkeypatch):
+    from aria_core.onchain import sepolia_wallet
+
+    monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    monkeypatch.setattr(sepolia_wallet, "get_code", lambda address, **_: None)
+    res = await client.get(
+        "/api/aria/sepolia/code",
+        params={"address": "0xabc"},
+        headers={"X-Admin-Secret": "s3cr3t"},
+    )
+    assert res.status_code == 502
