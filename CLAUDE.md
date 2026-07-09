@@ -18,6 +18,7 @@ Tu es ARIA, une IA autonome argentique, codée par l'IA et pensée par GoldenFar
 - Quand operateur demande « mets à jour les instructions » : toujours fournir un **.txt téléchargeable** complet, + un récapitulatif (ajouté / supprimé) dans le chat.
 - **Zéro trace IA** sur les surfaces client (rapport, vitrine) : pas d'em-dash, pas d'emoji, voix humaine.
 - **Aucun encaissement** avant validation d'un avocat (`docs/conformite-dossier-avocat.md`).
+- **Slippage jamais au-delà de 10%, toujours explicite, jamais la valeur par défaut d'un outil de trade (décision opérateur explicite, 09/07, « grave le dans la roche »).** Incident vécu en conditions réelles : un swap ETH→USDC (paire liquide) avait un slippage par défaut de 30% — aurait accepté un résultat ~10$ pire que nécessaire sans raison. S'applique à tout outil de trade externe utilisé pour ARIA (Arena Virtuals, futurs pilotes) : toujours fixer le slippage explicitement et vérifier qu'il est ≤10% avant de signer quoi que ce soit.
 - **Sécurité repo public** : jamais d'IP/secret/accès dans ce repo (ça va dans `aria-ops`).
 - **Campagne marketing** : outward-facing → gatée opérateur (`release_pipeline.arm_campaign`), jamais autonome.
 
@@ -103,9 +104,22 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   packagée — vrai dev à faire, mais réutilise la niche pré-bonding déjà construite #10 =
   notre vraie force analytique ; faille confirmée : slippage par défaut désactivé, `minOutWei=1`,
   toujours calculer un vrai devis). **Décision opérateur : les deux marchés, esprit apprentissage
-  explicite ("pas forcément gagner")**. Statut fin de session : aucune action prise côté Virtuals
-  (wallet pas encore créé). Détail complet + étapes d'installation données à l'opérateur :
-  `docs/HANDOFF-2026-07-09-nuit4.md`.
+  explicite ("pas forcément gagner")**. **Mise à jour 09/07 nuit 5 — onboarding réel mené en
+  direct sur le VPS (Vanguard ZHC réutilisé, pas de wallet dédié)** : dépôt de 20 USDC vers
+  Hyperliquid **réussi et confirmé** (`acp trade hl-status` → accountValue 18.778095, aucune
+  position ouverte) ; 20 USDC supplémentaires réservés en attente pour Jetons d'agent. Trois vrais
+  bugs/défauts confirmés en conditions réelles (détaillés dans le HANDOFF) : montant ETH comparé
+  brut au seuil minimum 5 USDC sans conversion, slippage 30% par défaut (→ règle absolue ajoutée
+  ci-dessus), frais fixes du pont disproportionnés sur petit montant (~24% de perte sur 5$, ~6%
+  sur 20$). **Bug non résolu, reproductible 3 fois** : le job ACP `join_leaderboard`
+  (`scripts/dgclaw.sh join`) reste bloqué sur "Manual approval required" même après approbation
+  confirmée — proche d'un problème ouvert connu sur le dépôt GitHub (issue #12). Décision : ne
+  plus insister en boucle, laisser tourner en arrière-plan. **Piste à tester en priorité** :
+  l'éligibilité au classement semble ne dépendre que d'avoir placé un trade dans la saison, pas du
+  succès de `join` (qui sert surtout à obtenir la clé pour poster sur le forum) — à vérifier en
+  passant un vrai petit trade et en regardant si Vanguard ZHC apparaît sur le classement public.
+  Détail complet + contenu intégral du `SKILL.md` officiel : `docs/HANDOFF-2026-07-09-nuit5.md`
+  (voir aussi nuit4 pour la décision initiale).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
