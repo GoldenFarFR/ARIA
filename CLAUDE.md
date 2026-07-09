@@ -89,14 +89,23 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
 - **CI scan de secrets livré (#55)** : `.github/workflows/secrets-scan.yml` (detect-secrets,
   baseline-diff, tout le repo, tout push/PR) — c'est ce job qui a détecté l'incident ci-dessus dès
   son premier vrai test.
-- **Due diligence Virtuals G.A.M.E. SDK / Arena faite (09/07 nuit 3), RIEN implémenté.** Protocole
-  légitime (audits réels, cadence de sortie active 2026, revenus déclarés 39,5M$) mais deux vraies
-  failles medium trouvées par audit sur les contrats de lancement de token (pas sur l'Arena).
-  Financement Spark semble découplé d'ACP/Arena (éligibilité basée sur signal GitHub du repo selon
-  la doc publique — non vérifié contre notre dossier réel). Plan de pilote proposé et backlogué
-  (#60) : lecture seule → wallet dédié isolé du wallet principal → capital pilote minuscule routé
-  via `wallet_guard.escalate_spend` (zéro exécution auto, même règle que le reste). En attente de
-  "go" opérateur, voir `docs/HANDOFF-2026-07-09-nuit3.md` pour le détail complet.
+- **Pilote Virtuals Arena (#60) — décision opérateur actée (09/07 nuit 4), RIEN implémenté côté
+  aria-core.** Protocole Virtuals légitime (audits réels, cadence de sortie active, revenus
+  déclarés). **Le mécanisme d'exécution Arena (`dgclaw-skill`) est 100% autonome par conception**
+  (signé par le wallet de l'agent, aucune confirmation, aucune limite de risque intégrée) — c'est
+  l'infra de Virtuals qui exécute, PAS notre code : `wallet_guard`/Telegram ne voit jamais ces
+  trades, le kill-switch `/stop` ne s'y applique pas. **Ce n'est donc pas une entorse à la règle
+  absolue côté aria-core** (qui continue de s'appliquer intégralement à tout ce qui vit dans notre
+  codebase) — l'opérateur a explicitement et à plusieurs reprises accepté qu'ARIA soit un
+  "prototype à échelle réelle" sur ce système tiers séparé, wallet dédié isolé du wallet Vanguard
+  ZHC principal. **Deux marchés distincts identifiés** : HL Perps (`dgclaw-skill`, install en une
+  commande, zéro expertise ARIA dedans) et Jetons d'agent (`bondv5-trader`, PAS une skill
+  packagée — vrai dev à faire, mais réutilise la niche pré-bonding déjà construite #10 =
+  notre vraie force analytique ; faille confirmée : slippage par défaut désactivé, `minOutWei=1`,
+  toujours calculer un vrai devis). **Décision opérateur : les deux marchés, esprit apprentissage
+  explicite ("pas forcément gagner")**. Statut fin de session : aucune action prise côté Virtuals
+  (wallet pas encore créé). Détail complet + étapes d'installation données à l'opérateur :
+  `docs/HANDOFF-2026-07-09-nuit4.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
