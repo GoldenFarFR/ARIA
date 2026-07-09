@@ -221,6 +221,39 @@ async def _fetch_ddg_html(client: httpx.AsyncClient, q: str) -> list[str]:
     return []
 
 
+def _web_search_provider() -> str:
+    """Fournisseur de recherche web actif (défaut : ddg gratuit). Bascule opt-in vers
+    'tavily' via ARIA_WEB_SEARCH_PROVIDER + TAVILY_API_KEY (cf. aria_values free_brain)."""
+    from aria_core.runtime import settings
+
+    return str(getattr(settings, "aria_web_search_provider", "ddg") or "ddg").strip().lower()
+
+
+async def _fetch_tavily_snippets(query: str, max_snippets: int) -> list[WebSource]:
+    """Provider Tavily (dôme). Dégradation douce : liste vide si indisponible."""
+    from aria_core.services.tavily import is_tavily_configured, tavily_client
+
+    if not is_tavily_configured():
+        return []
+    result = await tavily_client.search(query, max_results=max_snippets)
+    if not result.available:
+        logger.info("web_verify tavily indisponible: %s", result.error)
+        return []
+    sources: list[WebSource] = []
+    # La réponse synthétique Tavily d'abord (souvent la plus directe), puis les extraits.
+    if result.answer:
+        src = _as_source(result.answer)
+        if src:
+            sources.append(src)
+    for text, url in result.snippets:
+        src = _as_source(text, url)
+        if src:
+            sources.append(src)
+        if len(sources) >= max_snippets:
+            break
+    return sources[:max_snippets]
+
+
 async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: object) -> list[WebSource]:
     if is_ecosystem_product_query(query):
         return []
@@ -236,6 +269,14 @@ async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: objec
             WebSource(text=c.text, url=c.url)
             for c in cached[:max_snippets]
         ]
+
+    # Provider opt-in : Tavily si configuré/activé, sinon DuckDuckGo (défaut gratuit).
+    if _web_search_provider() == "tavily":
+        tavily_sources = await _fetch_tavily_snippets(query, max_snippets)
+        if tavily_sources:
+            set_cached(query, tavily_sources)
+            return tavily_sources
+        # Tavily indisponible (clé absente, quota, panne) -> dégradation douce sur DDG.
 
     sources: list[WebSource] = []
     seen_text: set[str] = set()
