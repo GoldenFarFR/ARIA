@@ -96,7 +96,7 @@ async def _background_startup() -> None:
         boot = bootstrap_style_schedule()
         logger.info("Avatar style schedule: %s", boot.get("action"))
         await aria_heartbeat.start()
-        logger.info("Aria Market core services started")
+        logger.info("Aria Vanguard core services started")
     except Exception as exc:
         logger.exception("Core startup failed: %s", exc)
         return
