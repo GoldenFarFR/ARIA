@@ -147,7 +147,7 @@ async def test_secret_looking_title_blocks_publication(monkeypatch):
     result = await tcm.run_telegram_miner_cycle(
         llm=_good_llm(
             durable=True,
-            title="Ne jamais réutiliser 31.70.114.74 dans un exemple",
+            title="Ne jamais réutiliser 203.0.113.42 dans un exemple",
             body="Corps propre, sans secret.",
         ),
         github_client=fake_gh,
@@ -167,7 +167,7 @@ async def test_secret_looking_body_blocks_publication(monkeypatch):
         llm=_good_llm(
             durable=True,
             title="Titre propre",
-            body="La clé partagée était CG-RgwycjzPV6dPJDE7jDwvuEy1 par erreur.",
+            body="La clé partagée était CG-fakeKeyPlaceholder0000 par erreur.",
         ),
         github_client=fake_gh,
     )
