@@ -240,3 +240,47 @@ def test_send_test_swap_uses_op_stack_weth_predeploy_by_default(monkeypatch):
     _swap_env(monkeypatch)
     monkeypatch.delenv("ARIA_SEPOLIA_SWAP_TOKEN_IN", raising=False)
     assert sw.swap_token_in() == "0x4200000000000000000000000000000000000006"
+
+
+class _FakeEthWithCode:
+    def __init__(self, code: bytes):
+        self._code = code
+
+    def get_code(self, addr):
+        return self._code
+
+
+class _FakeW3WithCode:
+    def __init__(self, code: bytes):
+        self.eth = _FakeEthWithCode(code)
+
+    def to_checksum_address(self, addr):
+        return addr
+
+
+def test_get_code_reports_deployed_contract():
+    w3 = _FakeW3WithCode(b"\x60\x80\x60\x40")
+    result = sw.get_code("0x4200000000000000000000000000000000000006", w3=w3)
+    assert result["has_code"] is True
+    assert result["code_length_bytes"] == 4
+
+
+def test_get_code_reports_empty_address():
+    w3 = _FakeW3WithCode(b"")
+    result = sw.get_code("0x0000000000000000000000000000000000dead", w3=w3)
+    assert result["has_code"] is False
+    assert result["code_length_bytes"] == 0
+
+
+def test_get_code_returns_none_on_rpc_failure():
+    class _BrokenEth:
+        def get_code(self, addr):
+            raise ConnectionError("RPC unreachable")
+
+    class _BrokenW3:
+        eth = _BrokenEth()
+
+        def to_checksum_address(self, addr):
+            return addr
+
+    assert sw.get_code("0xabc", w3=_BrokenW3()) is None
