@@ -7,8 +7,8 @@ uniquement, jamais un commit ni une fusion autonome.
 Garde-fou spécifique à ce module (au-delà de la doctrine commune) : la source
 est une conversation PRIVÉE (peut contenir IP/mot de passe/clé -- vécu en
 conditions réelles cette même nuit) et la destination est une ISSUE GITHUB
-PUBLIQUE. Une création d'issue ne passe PAS par le scan `gitleaks` de la CI
-(qui ne couvre que les push) -- `_looks_like_secret` est le seul filet ici et
+PUBLIQUE. Une création d'issue ne passe PAS par le scan `detect-secrets` de la
+CI (qui ne couvre que les push) -- `_looks_like_secret` est le seul filet ici et
 bloque la publication (jamais un envoi partiel) au moindre doute plutôt que de
 laisser fuiter un fragment de secret dans le repo public.
 """

@@ -76,6 +76,46 @@ def test_no_personal_email_in_human_docs(rel):
     )
 
 
+def _is_private_or_doc_range(ip: str) -> bool:
+    """RFC 1918 (privé) + RFC 5737 (réservé documentation) — légitimes dans du code/tests,
+    jamais une vraie IP de serveur qui aurait fuité."""
+    octets = [int(x) for x in ip.split(".")]
+    if octets[0] == 10:
+        return True
+    if octets[0] == 172 and 16 <= octets[1] <= 31:
+        return True
+    if octets[0] == 192 and octets[1] == 168:
+        return True
+    return any(ip.startswith(prefix) for prefix in ("192.0.2.", "198.51.100.", "203.0.113."))
+
+
+def test_no_public_ip_in_source_or_tests():
+    """Même garde-fou que `test_no_public_ip_in_human_docs`, étendu au CODE (src + tests) --
+    trouvé le 09/07 : une vraie IP de VPS s'était glissée dans une fixture de test, jamais
+    repérée par `detect-secrets` (une IP n'est pas un « secret » classique) ni par le check
+    ci-dessus (scopé aux seuls docs humains). Zéro faux positif au moment de l'écriture."""
+    roots = [CORE, REPO / "packages" / "aria-core" / "tests"]
+    offenders: list[str] = []
+    for root in roots:
+        for path in root.rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for m in _IPV4.finditer(text):
+                ip = m.group(0)
+                octets = [int(x) for x in m.groups()]
+                if not all(0 <= o <= 255 for o in octets):
+                    continue
+                if ip in _ALLOWED_IPS or _is_private_or_doc_range(ip):
+                    continue
+                offenders.append(f"{path.relative_to(REPO)}: {ip}")
+    assert not offenders, (
+        "IP publique en clair détectée dans le code/tests : " + ", ".join(offenders) + ". "
+        "Utiliser une plage RFC 5737 (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) "
+        "pour tout exemple/fixture."
+    )
+
+
 # ── 2. Câblage : les capacités ANNONCÉES doivent être réellement branchées ────────────────
 
 def test_honeypot_service_exists_and_wired():
