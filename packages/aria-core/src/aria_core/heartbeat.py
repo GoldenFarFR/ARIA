@@ -270,6 +270,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=15,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="knowledge_inbox_cycle",
+        name="Boite de depot de connaissance",
+        description="Lit une note non traitee dans docs/aria-learning-inbox/ et PROPOSE (jamais n'impose) son integration dans les vrais fichiers de connaissance (knowledge/*.yaml, canonical_facts.yaml) via une ISSUE GitHub -- jamais un commit ni une fusion autonome. Une note n'est proposee qu'une seule fois. Gate OFF par defaut.",
+        interval_minutes=360,
+        enabled=False,
+    ),
 ]
 
 
@@ -346,6 +353,10 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.relay_chat import relay_autoreply_enabled
 
             task.enabled = relay_autoreply_enabled()
+        if task.id == "knowledge_inbox_cycle":
+            from aria_core.skills.knowledge_inbox import knowledge_inbox_enabled
+
+            task.enabled = knowledge_inbox_enabled()
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -770,6 +781,16 @@ class AriaHeartbeat:
             result = await run_relay_conversation_cycle()
             if result.get("outcome") == "ok":
                 append_memory("relay_conversation", "[relay] réponse envoyée à Claude Code")
+
+        elif task_id == "knowledge_inbox_cycle":
+            from aria_core.skills.knowledge_inbox import run_knowledge_inbox_cycle
+
+            result = await run_knowledge_inbox_cycle(notifier=self._notify_telegram)
+            if result.get("outcome") == "ok":
+                append_memory(
+                    "knowledge_inbox",
+                    f"[inbox] {result.get('path', '?')} -> proposition {result.get('title', '?')}",
+                )
 
         elif task_id == "self_banner_curiosity":
             from aria_core.self_maintenance import run_curiosity_x_banner_cycle
