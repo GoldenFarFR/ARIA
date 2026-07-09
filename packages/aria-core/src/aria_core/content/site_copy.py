@@ -48,6 +48,6 @@ def public_site_payload() -> dict:
                 "body": "Structured answers, DEX education, holding transparency, public intelligence.",
             },
         ],
-        "cta_primary": "Enter Aria Market",
+        "cta_primary": "Explore the Cockpit",
         "cta_secondary": "Ask ARIA",
     }

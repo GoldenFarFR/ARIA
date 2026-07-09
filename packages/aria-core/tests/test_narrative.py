@@ -37,7 +37,7 @@ def test_welcome_chat_operator_vanguard_not_dexpulse():
 
 
 def test_x_juno_from_holding_not_dexpulse():
-    assert "Aria Market" in x_juno_greeting()
+    assert "no subsidiary" in x_juno_greeting().lower()
     assert holding_name() in x_juno_greeting()
     assert "ARIA@DEXPulse" not in zhc_intro_from_agent()
     assert "AriaVanguard" in zhc_intro_from_agent() or holding_name().replace(" ", "") in zhc_intro_from_agent()
