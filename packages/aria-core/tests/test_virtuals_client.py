@@ -366,3 +366,51 @@ async def test_fetch_virtual_not_found_returns_none(monkeypatch):
 def test_unavailable_message_exposed():
     # Le message de fallback est exporté (cohérence avec les autres clients).
     assert isinstance(UNAVAILABLE, str) and UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_fetch_by_address_success(monkeypatch):
+    client = VirtualsClient()
+    address = "0xTOKEN00000000000000000000000000000000ab"
+    url = build_token_by_address_url(address)
+    _patch_client(monkeypatch, {url: FakeResponse(200, {"data": [_strapi_prototype()]})})
+
+    token = await client.fetch_by_address(address)
+    assert token is not None
+    assert token.symbol == "ARIA"
+    assert is_in_bonding(token) is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_by_address_empty_list_returns_none(monkeypatch):
+    client = VirtualsClient()
+    address = "0xNOTFOUND000000000000000000000000000000"
+    url = build_token_by_address_url(address)
+    _patch_client(monkeypatch, {url: FakeResponse(200, {"data": []})})
+
+    assert await client.fetch_by_address(address) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_by_address_network_error_returns_none(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    client = VirtualsClient()
+
+    import httpx
+
+    class TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None, params=None):
+            raise httpx.TimeoutException("boom")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.httpx.AsyncClient",
+        lambda **kw: TimeoutClient(),
+    )
+
+    assert await client.fetch_by_address("0xabc") is None
