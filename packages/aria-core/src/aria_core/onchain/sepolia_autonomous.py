@@ -36,6 +36,16 @@ si elle chie je veux le savoir, si elle en a marre je veux le savoir ». Traduit
 honnêtement en télémétrie mesurable : latence de décision (hésitation = anormalement
 lente vs sa propre moyenne récente), erreurs brutes, et un coupe-circuit local qui
 s'arme après des échecs consécutifs puis se ré-évalue proprement au cycle suivant.
+
+Swap de test (09/07, décision opérateur explicite « swap réel sur Sepolia, actif de
+test ») : sur une décision BUY, en plus de l'ancrage de décision ci-dessus, une tentative
+INDÉPENDANTE de swap réel (wrap/approve/exactInputSingle, ``sepolia_wallet.
+send_test_swap_transaction``) est journalisée si ``ARIA_SEPOLIA_SWAP_ENABLED``. Montant
+fixe petit (``TEST_SWAP_AMOUNT_WEI``), jamais dimensionné par Kelly — ce swap ne porte PAS
+sur le token candidat réellement analysé (inexistant sur ce testnet) mais sur la paire de
+test configurée : il valide le mécanisme d'exécution, pas une thèse de marché. Échec du
+swap n'efface jamais le succès de l'ancrage de décision, et inversement — deux artefacts
+indépendants du même cycle.
 """
 from __future__ import annotations
 
@@ -64,10 +74,14 @@ LATENCY_BASELINE_SAMPLE = 20
 LATENCY_HESITATION_MULTIPLE = 2.0
 CONSECUTIVE_ERROR_CIRCUIT_BREAKER = 4
 
+TEST_SWAP_AMOUNT_WEI = 200_000_000_000_000  # ~0.0002 ETH testnet, montant fixe mécanique — jamais Kelly
+
 _LOG_COLS = (
     "cycle_at", "contract", "symbol", "decision", "reasoning_excerpt",
     "latency_ms", "hesitant", "kelly_fraction", "kelly_size_usd", "tx_hash", "error", "outcome",
+    "swap_tx", "swap_error",
 )
+_ADDED_LOG_COLS = ("swap_tx", "swap_error")
 
 
 def sepolia_autonomous_enabled() -> bool:
@@ -178,6 +192,11 @@ async def _ensure_table() -> None:
             )
             """
         )
+        cursor = await db.execute("PRAGMA table_info(sepolia_autonomous_log)")
+        existing = {row[1] for row in await cursor.fetchall()}
+        for col in _ADDED_LOG_COLS:
+            if col not in existing:
+                await db.execute(f"ALTER TABLE sepolia_autonomous_log ADD COLUMN {col} TEXT")
         await db.commit()
 
 
@@ -246,6 +265,7 @@ async def run_autonomous_cycle(
     candidates=None,
     analyzer=None,
     anchor_sender=None,
+    swap_sender=None,
     notifier=None,
 ) -> dict:
     """Un tour du rehearsal autonome Sepolia. Fail-closed à chaque étage (voir le triple
@@ -362,22 +382,52 @@ async def run_autonomous_cycle(
         except Exception as exc:  # noqa: BLE001 — une diffusion ratée doit remonter dans la télémétrie, jamais casser le heartbeat
             error_text = str(exc)[:500]
 
+        # Swap de test — indépendant de l'ancrage : jamais dimensionné par Kelly, jamais
+        # sur le token candidat réel (inexistant sur ce testnet). Échec ici n'efface pas
+        # le succès de l'ancrage ci-dessus, et inversement.
+        swap_tx: str | None = None
+        swap_error_text: str | None = None
+        from aria_core.onchain.sepolia_wallet import sepolia_swap_enabled
+
+        if sepolia_swap_enabled():
+            try:
+                if swap_sender is None:
+                    from aria_core.onchain.sepolia_wallet import (
+                        SEPOLIA_CHAIN_ID,
+                        send_test_swap_transaction,
+                    )
+
+                    swap_result = send_test_swap_transaction(
+                        amount_in_wei=TEST_SWAP_AMOUNT_WEI, chain_id=SEPOLIA_CHAIN_ID,
+                    )
+                else:
+                    swap_result = swap_sender()
+                swap_tx = swap_result.get("swap_tx") if swap_result else None
+            except Exception as exc:  # noqa: BLE001 — une diffusion ratée doit remonter dans la télémétrie, jamais casser le heartbeat
+                swap_error_text = str(exc)[:500]
+
         outcome = "ok" if tx_hash else "error"
         await _insert_log(
             db, cycle_at=_now(), contract=contract, symbol=sig.get("symbol"),
             decision="BUY", reasoning_excerpt=sig.get("these"), latency_ms=latency_ms,
             hesitant=hesitant, kelly_fraction=fraction, kelly_size_usd=size_usd,
             tx_hash=tx_hash, error=error_text, outcome=outcome,
+            swap_tx=swap_tx, swap_error=swap_error_text,
         )
 
     if notifier:
         try:
             if tx_hash:
+                swap_line = (
+                    f"\nSwap de test (paire test, pas le candidat) : tx {swap_tx}"
+                    if swap_tx
+                    else (f"\nSwap de test échoué : {swap_error_text}" if swap_error_text else "")
+                )
                 await notifier(
                     "🧪 Rehearsal Sepolia autonome — décision exécutée SANS validation Telegram "
                     "(testnet, aucune valeur réelle)\n"
                     f"{sig.get('symbol') or contract[:10]} · Kelly {fraction * 100:.1f}% "
-                    f"({size_usd:,.0f} $ fictifs) · tx {tx_hash}"
+                    f"({size_usd:,.0f} $ fictifs) · tx {tx_hash}{swap_line}"
                 )
             else:
                 await notifier(
@@ -390,6 +440,7 @@ async def run_autonomous_cycle(
     return {
         "outcome": outcome, "contract": contract, "tx_hash": tx_hash,
         "kelly_fraction": fraction, "kelly_size_usd": size_usd, "hesitant": hesitant,
+        "swap_tx": swap_tx, "swap_error": swap_error_text,
     }
 
 
@@ -410,6 +461,12 @@ async def autonomous_status() -> dict:
         hesitations = (await (await db.execute(
             "SELECT COUNT(*) FROM sepolia_autonomous_log WHERE hesitant = 1"
         )).fetchone())[0]
+        swap_tx_count = (await (await db.execute(
+            "SELECT COUNT(*) FROM sepolia_autonomous_log WHERE swap_tx IS NOT NULL"
+        )).fetchone())[0]
+        swap_errors = (await (await db.execute(
+            "SELECT COUNT(*) FROM sepolia_autonomous_log WHERE swap_error IS NOT NULL"
+        )).fetchone())[0]
         last_row = await (await db.execute(
             "SELECT cycle_at, symbol, decision, outcome, tx_hash FROM sepolia_autonomous_log "
             "ORDER BY id DESC LIMIT 1"
@@ -422,6 +479,8 @@ async def autonomous_status() -> dict:
             "at": last_row[0], "symbol": last_row[1], "decision": last_row[2],
             "outcome": last_row[3], "tx_hash": last_row[4],
         }
+    from aria_core.onchain.sepolia_wallet import sepolia_swap_enabled
+
     return {
         "enabled": sepolia_autonomous_enabled(),
         "cycles_total": total,
@@ -432,4 +491,7 @@ async def autonomous_status() -> dict:
         "last": last,
         "wallet_address": get_address(),
         "wallet_balance_eth": get_balance_eth(),
+        "swap_enabled": sepolia_swap_enabled(),
+        "swap_tx_count": swap_tx_count,
+        "swap_error_count": swap_errors,
     }

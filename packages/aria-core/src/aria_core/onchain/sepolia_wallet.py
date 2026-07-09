@@ -1,5 +1,17 @@
 """Wallet Sepolia d'ARIA — SEULE exception documentée à « clé privée jamais sur le serveur ».
 
+``send_test_swap_transaction`` (ajouté 09/07, décision opérateur explicite : « swap réel
+sur Sepolia, actif de test ») exécute un VRAI swap Uniswap V3 (wrap WETH -> approve ->
+exactInputSingle, trois transactions signées réelles) mais sur une paire de TEST
+configurée (``ARIA_SEPOLIA_SWAP_TOKEN_OUT``), jamais sur le token candidat réellement
+analysé par ARIA (qui n'existe pas sur ce testnet, chaîne différente de Base mainnet).
+Objectif borné : prouver que le mécanisme de signature/diffusion/confirmation d'un swap
+fonctionne réellement (gas, slippage, nonce, échecs RPC) — PAS valider une stratégie de
+marché. Adresse routeur/token de sortie non fournies par défaut : doivent être vérifiées
+on-chain (bytecode + liquidité réelle) avant d'armer ``ARIA_SEPOLIA_SWAP_ENABLED``, cette
+vérification n'a pas pu être faite depuis cette session (pas d'accès RPC direct dans cet
+environnement — voir HANDOFF).
+
 Contrairement à ``onchain/anchor.py`` (préparation seule, signature 100% locale par
 l'opérateur) et ``services/x402.py`` (aucune clé, jamais), ce module DÉTIENT une clé
 privée sur le serveur et SIGNE réellement des transactions. Décision opérateur explicite
@@ -37,6 +49,79 @@ _ANCHOR_ABI = [
         "type": "function",
     }
 ]
+
+# Fragments ABI minimaux pour le swap de test — uniquement les fonctions appelées
+# (WETH9 standard : deposit/approve ; Uniswap V3 SwapRouter02 standard : exactInputSingle).
+_WETH_ABI = [
+    {
+        "inputs": [], "name": "deposit", "outputs": [],
+        "stateMutability": "payable", "type": "function",
+    },
+    {
+        "inputs": [
+            {"internalType": "address", "name": "spender", "type": "address"},
+            {"internalType": "uint256", "name": "amount", "type": "uint256"},
+        ],
+        "name": "approve",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "nonpayable", "type": "function",
+    },
+]
+
+_SWAP_ROUTER_ABI = [
+    {
+        "inputs": [
+            {
+                "components": [
+                    {"internalType": "address", "name": "tokenIn", "type": "address"},
+                    {"internalType": "address", "name": "tokenOut", "type": "address"},
+                    {"internalType": "uint24", "name": "fee", "type": "uint24"},
+                    {"internalType": "address", "name": "recipient", "type": "address"},
+                    {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
+                    {"internalType": "uint256", "name": "amountOutMinimum", "type": "uint256"},
+                    {"internalType": "uint160", "name": "sqrtPriceLimitX96", "type": "uint160"},
+                ],
+                "internalType": "struct ISwapRouter.ExactInputSingleParams",
+                "name": "params", "type": "tuple",
+            }
+        ],
+        "name": "exactInputSingle",
+        "outputs": [{"internalType": "uint256", "name": "amountOut", "type": "uint256"}],
+        "stateMutability": "payable", "type": "function",
+    }
+]
+
+MAX_TEST_SWAP_WEI = 2 * 10**15  # plafond dur ~0.002 ETH testnet (sans valeur réelle) par swap
+
+
+def sepolia_swap_enabled() -> bool:
+    """Gate additif dédié au swap de test — au-dessus de sepolia_wallet_enabled, jamais
+    actif seul. Le wallet peut ancrer des décisions sans jamais swapper."""
+    if not sepolia_wallet_enabled():
+        return False
+    return os.environ.get("ARIA_SEPOLIA_SWAP_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def swap_router_address() -> str:
+    return (os.environ.get("ARIA_SEPOLIA_SWAP_ROUTER", "") or "").strip()
+
+
+def swap_token_in() -> str:
+    """WETH prédéploiement OP-stack — même adresse sur toutes les chaînes OP-stack
+    (Base, Base Sepolia inclus), pas besoin de vérification par environnement."""
+    return (
+        os.environ.get("ARIA_SEPOLIA_SWAP_TOKEN_IN", "") or ""
+    ).strip() or "0x4200000000000000000000000000000000000006"
+
+
+def swap_token_out() -> str:
+    return (os.environ.get("ARIA_SEPOLIA_SWAP_TOKEN_OUT", "") or "").strip()
+
+
+def swap_fee_tier() -> int:
+    return int(os.environ.get("ARIA_SEPOLIA_SWAP_FEE_TIER", "3000") or 3000)
 
 
 def sepolia_wallet_enabled() -> bool:
@@ -127,3 +212,92 @@ def send_anchor_transaction(
     signed = account.sign_transaction(tx)
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
     return tx_hash.hex()
+
+
+def send_test_swap_transaction(
+    *,
+    amount_in_wei: int,
+    chain_id: int,
+    router: str | None = None,
+    token_in: str | None = None,
+    token_out: str | None = None,
+    fee: int | None = None,
+    w3=None,
+    account_cls=None,
+) -> dict:
+    """Wrap WETH -> approve -> exactInputSingle : trois transactions réellement signées
+    et diffusées sur Sepolia UNIQUEMENT, sur la paire de TEST configurée — jamais le token
+    candidat qu'ARIA analyse réellement (inexistant sur ce testnet). Teste le mécanisme
+    d'exécution (signature, gas, nonce, confirmation), pas une décision de marché.
+
+    Lève (jamais de dégradation silencieuse, comme ``send_anchor_transaction``) si le seam
+    est OFF, hors Sepolia, le montant dépasse ``MAX_TEST_SWAP_WEI``, ou si routeur/token de
+    sortie ne sont pas configurés — pas de valeur par défaut inventée pour un contrat non
+    vérifié.
+    """
+    if not sepolia_swap_enabled():
+        raise RuntimeError("swap de test Sepolia désactivé (ARIA_SEPOLIA_SWAP_ENABLED)")
+    if int(chain_id) != SEPOLIA_CHAIN_ID:
+        raise RuntimeError(
+            f"refusé : chain_id {chain_id} != Sepolia ({SEPOLIA_CHAIN_ID}) — "
+            "ce wallet ne signe jamais en dehors du testnet"
+        )
+    if amount_in_wei <= 0 or amount_in_wei > MAX_TEST_SWAP_WEI:
+        raise RuntimeError(
+            f"montant refusé : {amount_in_wei} wei hors bornes (0, {MAX_TEST_SWAP_WEI}] — "
+            "plafond de sécurité mécanique, pas un montant de trading"
+        )
+
+    router = (router or swap_router_address()).strip()
+    token_in = (token_in or swap_token_in()).strip()
+    token_out = (token_out or swap_token_out()).strip()
+    fee = fee if fee is not None else swap_fee_tier()
+    if not router or not token_out:
+        raise RuntimeError(
+            "routeur ou token de sortie non configurés (ARIA_SEPOLIA_SWAP_ROUTER / "
+            "ARIA_SEPOLIA_SWAP_TOKEN_OUT) — vérification on-chain requise avant swap réel"
+        )
+
+    account = _account(account_cls=account_cls)
+    if account is None:
+        raise RuntimeError("ARIA_SEPOLIA_PRIVATE_KEY absente — rien à signer")
+
+    if w3 is None:
+        from web3 import Web3
+
+        w3 = Web3(Web3.HTTPProvider(_rpc_url(), request_kwargs={"timeout": 20}))
+
+    router_cs = w3.to_checksum_address(router)
+    token_in_cs = w3.to_checksum_address(token_in)
+    token_out_cs = w3.to_checksum_address(token_out)
+
+    weth = w3.eth.contract(address=token_in_cs, abi=_WETH_ABI)
+    swap_router = w3.eth.contract(address=router_cs, abi=_SWAP_ROUTER_ABI)
+
+    def _sign_and_send(built_tx) -> str:
+        signed = account.sign_transaction(built_tx)
+        return w3.eth.send_raw_transaction(signed.raw_transaction).hex()
+
+    nonce = w3.eth.get_transaction_count(account.address)
+
+    deposit_tx = weth.functions.deposit().build_transaction({
+        "from": account.address, "value": amount_in_wei,
+        "nonce": nonce, "chainId": SEPOLIA_CHAIN_ID,
+    })
+    deposit_hash = _sign_and_send(deposit_tx)
+
+    approve_tx = weth.functions.approve(router_cs, amount_in_wei).build_transaction({
+        "from": account.address, "nonce": nonce + 1, "chainId": SEPOLIA_CHAIN_ID,
+    })
+    approve_hash = _sign_and_send(approve_tx)
+
+    swap_params = (
+        token_in_cs, token_out_cs, fee, account.address,
+        amount_in_wei, 0, 0,
+    )
+    swap_tx = swap_router.functions.exactInputSingle(swap_params).build_transaction({
+        "from": account.address, "nonce": nonce + 2, "chainId": SEPOLIA_CHAIN_ID,
+    })
+    swap_hash = _sign_and_send(swap_tx)
+
+    return {"deposit_tx": deposit_hash, "approve_tx": approve_hash, "swap_tx": swap_hash}
