@@ -80,6 +80,41 @@ def test_epistemic_direct_alias():
     assert data.get("epistemic_static") is True
 
 
+@pytest.mark.asyncio
+@patch("aria_core.llm.is_llm_configured", return_value=False)
+async def test_operator_self_reflective_question_never_hits_web_when_groq_abstains(_mock_cfg):
+    """Incident réel (09/07) : "remonte-moi tous les bugs détectés" (question opérateur
+    auto-réflexive, ni live-info ni demande explicite de web) a déclenché une recherche web
+    hors-sujet quand Groq n'avait pas de réponse -- should_use_web_verify() retombait sur
+    is_public_mode() (réglage global, toujours True) au lieu du vrai public=False transmis.
+    Verrouille : Groq abstient (LLM non configuré ici) + sujet hors is_live_info_question/
+    is_explicit_web_request + public=False => AUCUNE recherche web, jamais."""
+    with patch(
+        "aria_core.knowledge.web_verify.fetch_web_snippets", new_callable=AsyncMock,
+    ) as mock_fetch:
+        reply, meta = await resolve_calibrated_answer(
+            "remonte moi tous les bugs que tu as détectés", "fr", public=False,
+        )
+    mock_fetch.assert_not_awaited()
+    assert reply is None
+
+
+@pytest.mark.asyncio
+@patch("aria_core.llm.is_llm_configured", return_value=False)
+async def test_public_visitor_same_question_may_still_reach_web(_mock_cfg):
+    """Contrôle : pour un visiteur public (public=True), le comportement large existant
+    (accès web sur toute question factuelle/générale) reste inchangé -- seul le cas
+    opérateur devient plus strict."""
+    with patch(
+        "aria_core.knowledge.web_verify.fetch_web_snippets", new_callable=AsyncMock,
+    ) as mock_fetch:
+        mock_fetch.return_value = []
+        await resolve_calibrated_answer(
+            "remonte moi tous les bugs que tu as détectés", "fr", public=True,
+        )
+    mock_fetch.assert_awaited()
+
+
 def test_relevance_score_holding():
     score = epistemic_relevance_score("dexpulse holding")
     assert score >= EPISTEMIC_DIRECT_SCORE

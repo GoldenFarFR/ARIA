@@ -359,11 +359,23 @@ async def groq_factual_answer(query: str, lang: str = "fr") -> tuple[str | None,
 
 
 async def resolve_calibrated_answer(
-    query: str, lang: str = "fr",
+    query: str, lang: str = "fr", *, public: bool = True,
 ) -> tuple[str | None, dict]:
-    """Politique/holding YAML si match, sinon Groq + vérif web si incertain."""
+    """Politique/holding YAML si match, sinon Groq + vérif web si incertain.
+
+    `public` doit venir du VRAI expéditeur de CE message (brain.py._general_response),
+    jamais d'un défaut supposé -- corrigé le 09/07 : ce paramètre n'existait pas, le signal
+    public=False de l'opérateur (pourtant correctement calculé dans brain.py) était donc
+    perdu à cet appel, et should_use_web_verify() se rabattait sur un réglage de déploiement
+    global toujours permissif (cf. son propre correctif). `web_topic_ok` re-vérifie en plus
+    le sujet à CHAQUE branche de repli (pas seulement la première) pour l'opérateur -- sans
+    ça, un futur faux positif de is_live_info_question/is_explicit_web_request à l'entrée de
+    brain.py suffirait à rouvrir une recherche web incontrôlée dès que Groq hésite, quel que
+    soit le sujet réel.
+    """
     from aria_core.knowledge.web_verify import (
         is_ecosystem_product_query,
+        is_explicit_web_request,
         is_live_info_question,
         is_operator_local_question,
         should_use_web_verify,
@@ -382,17 +394,18 @@ async def resolve_calibrated_answer(
     if static:
         return static, static_data
 
-    use_web = should_use_web_verify(query)
+    use_web = should_use_web_verify(query, public=public)
+    web_topic_ok = public or is_live_info_question(query) or is_explicit_web_request(query)
 
-    if use_web and is_live_info_question(query):
-        wf_reply, wf_meta = await web_first_answer(query, lang)
+    if use_web and web_topic_ok:
+        wf_reply, wf_meta = await web_first_answer(query, lang, public=public)
         if wf_reply:
             return wf_reply, wf_meta
 
     reply, meta = await groq_calibrated_answer(query, lang)
     if not reply or meta.get("abstain") or meta.get("empty"):
-        if use_web and not is_ecosystem_product_query(query):
-            wf_reply, wf_meta = await web_first_answer(query, lang)
+        if use_web and web_topic_ok and not is_ecosystem_product_query(query):
+            wf_reply, wf_meta = await web_first_answer(query, lang, public=public)
             if wf_reply:
                 return wf_reply, wf_meta
         return None, meta
@@ -400,11 +413,11 @@ async def resolve_calibrated_answer(
     if meta.get("groq_calibrated"):
         from aria_core.knowledge.epistemic_pipeline import enhance_calibrated_answer
 
-        reply, meta = await enhance_calibrated_answer(query, reply, meta, lang)
+        reply, meta = await enhance_calibrated_answer(query, reply, meta, lang, public=public)
 
     if not reply or float(meta.get("p_true", 0)) < 0.65:
-        if use_web and not is_ecosystem_product_query(query):
-            wf_reply, wf_meta = await web_first_answer(query, lang)
+        if use_web and web_topic_ok and not is_ecosystem_product_query(query):
+            wf_reply, wf_meta = await web_first_answer(query, lang, public=public)
             if wf_reply:
                 return wf_reply, wf_meta
 
