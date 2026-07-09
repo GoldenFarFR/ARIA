@@ -118,8 +118,16 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   l'éligibilité au classement semble ne dépendre que d'avoir placé un trade dans la saison, pas du
   succès de `join` (qui sert surtout à obtenir la clé pour poster sur le forum) — à vérifier en
   passant un vrai petit trade et en regardant si Vanguard ZHC apparaît sur le classement public.
-  Détail complet + contenu intégral du `SKILL.md` officiel : `docs/HANDOFF-2026-07-09-nuit5.md`
-  (voir aussi nuit4 pour la décision initiale).
+  **Mise à jour 09/07 nuit 6 — bug `join` CONFIRMÉ indépendant de l'environnement** : reproduit sur
+  VPS (blocage indéfini "Manual approval required") ET PC Windows local (échec immédiat "Server
+  error 500") — même agent, deux machines, deux modes d'échec différents mais le même service
+  `join_leaderboard` cassé côté Virtuals. Décision : ne plus retenter, pivot confirmé vers "un trade
+  suffit pour l'éligibilité". Premier trade test préparé (0.0003 BTC long, 2x, aperçu validé —
+  minimum HL découvert au passage : 15$ de valeur notionnelle par ordre, distinct du minimum de
+  dépôt 5 USDC). **Incident sécurité mineur résolu au passage** : reliquat de clé privée EC collée
+  dans un NOM de fichier (pas son contenu) trouvé sur la machine Windows de l'opérateur (hors repo,
+  probable résidu de l'incident `connect.ts` du même jour) — supprimé. Détail technique complet
+  (astuces Git Bash/Windows réutilisables) : `docs/HANDOFF-2026-07-09-nuit6.md` (voir aussi nuit4/5).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
