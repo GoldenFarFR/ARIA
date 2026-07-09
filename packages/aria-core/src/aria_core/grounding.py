@@ -31,31 +31,50 @@ _SOCIAL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Broad casual / small talk detector — used to let operator chat naturally
+# Broad casual / small talk detector — used to let operator chat naturally.
+#
+# NB (09/07, audit fuzz post-web_verify) : plusieurs mots retirés parce qu'ils ont un sens
+# métier fort et courant chez l'opérateur (crypto/VC), donc faux-positivaient sur de VRAIES
+# questions sérieuses (vérifié empiriquement, pas une supposition) :
+# "temps" ("je n'ai pas le temps de tout lire, résume ta thèse"), "chat" (le channel Telegram
+# lui-même : "dans notre chat, active le mode admin"), "cash"/"clash"/"filtre" (paiement,
+# conflit technique, honeypot filter -- son propre domaine), "frigo" (idiome business "mettre
+# un projet au frigo" = reporter), "il fait" (trop générique : "il fait le nécessaire"),
+# "matin"/"soir" (quasi tout message d'actu marché : "ce matin le marché était volatile"),
+# "des news" (une vraie demande d'actu financière), "jeu" ("un jeu risqué ce trade").
+# "aujourd'hui/demain/hier/ce soir" retirés pour la même raison que dans web_verify.py (seuls,
+# ces mots ne signalent pas du smalltalk -- "on se voit demain pour la stratégie" est sérieux).
 _CASUAL_SMALLTALK_RE = re.compile(
     r"\b("
-    r"météo|il fait|temps|pleut|soleil|chaud|froid|"
+    r"météo|il fait (?:beau|chaud|froid|mauvais)|pleut|soleil|chaud|froid|"
     r"mangé|bouffe|dîner|déjeuner|petit dej|café|"
-    r"blague|joke|rigole|rire|drôle|frigo|vanne|clash|cash|filtre|provoc|"
+    r"blague|joke|rigole|rire|drôle|vanne|provoc|"
     r"week.end|weekend|vacances|sortir|"
-    r"fatigué|fatigue|dormi|sommeil|matin|soir|"
+    r"fatigué(?:e)?|fatigue|dormi|sommeil|"
     r"ça va|comment ça va|tu vas bien|ta journée|ta soirée|"
-    r"quoi de neuf|quoi de beau|des news|"
-    r"animal|chat|chien|famille|copain|copine|"
-    r"film|série|musique|jeu|sport|"
-    r"voyage|ville|pays|"
-    r"aujourd'hui|demain|hier|ce soir"
+    r"quoi de neuf|quoi de beau|"
+    r"animal|chien|famille|copain|copine|"
+    r"films?|série|musique|sport|"
+    r"voyag\w*|ville|pays"
     r")\b",
     re.IGNORECASE,
 )
 
 # Meta questions about ARIA herself (humor, seriousness, length, doublons, personality).
 # These should be treated as light conversational for the operator.
+#
+# NB (09/07) : "ton" (bare) matchait le POSSESSIF ("ton avis", "ton analyse") aussi bien que
+# le nom "tonalité" -- vérifié empiriquement : "quel est ton avis sur la stratégie ?" tombait
+# en smalltalk pur (réponse tronquée à 2 phrases) uniquement à cause de ce mot. Restreint à un
+# déterminant direct ("quel ton", "ce ton", "mon ton") pour ne garder que le sens "tonalité".
+# "long"/"court" bruts retirés pour la même raison ("vision à long terme" est un VRAI sujet
+# VC) -- "trop long"/"trop court" (déjà présents/ajoutés) couvrent le vrai feedback de longueur.
 _META_SELF_RE = re.compile(
     r"\b("
-    r"humour|humour|fun|drôle|sérieux|sérieuse|trop sérieux|long|trop long|court|doublon|doublons|"
-    r"répétition|répète|déjà dit|déjà répondu|meta|comportement|ton|style|personnalité"
-    r")\b",
+    r"humour|fun|drôle|sérieux|sérieuse|trop sérieux|trop long(?:ue)?|trop court(?:e)?|doublon|doublons|"
+    r"répétition|répète|déjà dit|déjà répondu|comportement|style|personnalité"
+    r")\b|"
+    r"(?:le|un|ce|quel|quelle|mon)\s+ton\b",
     re.IGNORECASE,
 )
 
