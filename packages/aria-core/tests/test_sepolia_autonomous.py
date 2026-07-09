@@ -172,6 +172,58 @@ async def test_buy_sends_autonomous_tx_and_logs_kelly_size():
 
 
 @pytest.mark.asyncio
+async def test_swap_not_attempted_when_gate_off():
+    result = await sa.run_autonomous_cycle(
+        candidates=["0xAAA"], analyzer=_buy_analyzer(), anchor_sender=lambda r: "0xdeadbeef",
+    )
+    assert result["swap_tx"] is None
+    assert result["swap_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_swap_attempted_independently_on_buy_when_enabled(monkeypatch):
+    monkeypatch.setenv("ARIA_SEPOLIA_SWAP_ENABLED", "1")
+    called = {}
+
+    def swap_sender():
+        called["hit"] = True
+        return {"deposit_tx": "0xd1", "approve_tx": "0xa1", "swap_tx": "0xs1"}
+
+    result = await sa.run_autonomous_cycle(
+        candidates=["0xAAA"], analyzer=_buy_analyzer(),
+        anchor_sender=lambda r: "0xdeadbeef", swap_sender=swap_sender,
+    )
+    assert called.get("hit") is True
+    assert result["swap_tx"] == "0xs1"
+    assert result["swap_error"] is None
+    assert result["tx_hash"] == "0xdeadbeef"  # ancrage indépendant, toujours présent
+
+    status = await sa.autonomous_status()
+    assert status["swap_tx_count"] == 1
+    assert status["swap_error_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_swap_failure_does_not_erase_anchor_success(monkeypatch):
+    monkeypatch.setenv("ARIA_SEPOLIA_SWAP_ENABLED", "1")
+
+    def failing_swap_sender():
+        raise RuntimeError("liquidité insuffisante sur la paire de test")
+
+    result = await sa.run_autonomous_cycle(
+        candidates=["0xAAA"], analyzer=_buy_analyzer(),
+        anchor_sender=lambda r: "0xdeadbeef", swap_sender=failing_swap_sender,
+    )
+    assert result["outcome"] == "ok"
+    assert result["tx_hash"] == "0xdeadbeef"
+    assert result["swap_tx"] is None
+    assert "liquidité insuffisante" in result["swap_error"]
+
+    status = await sa.autonomous_status()
+    assert status["swap_error_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_analyzer_exception_is_logged_not_raised():
     async def broken_analyzer(contract):
         raise RuntimeError("scan indisponible")
