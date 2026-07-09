@@ -179,9 +179,27 @@ def _slugify(text: str) -> str:
     return (s[:48] or "experiment")
 
 
+# Négation -- action IRRÉVERSIBLE (delete repo GitHub réel) : "ne supprime pas ce repo"
+# matchait tel quel avant ce garde-fou (même classe de bug que web_verify.py, trouvé en
+# auditant les fonctions is_*/looks_like_* du codebase, 09/07). Un repo sandbox non listé
+# dans github_protected_repos (donc PAS déjà couvert par _repo_protected) aurait pu être
+# effacé malgré une demande explicite de le garder.
+_DELETE_NEGATION_RE = re.compile(
+    r"(?:ne\s+)?supprime\w*(?:\s+\w+){0,2}\s+pas|"
+    r"(?:ne\s+)?efface\w*(?:\s+\w+){0,2}\s+pas|"
+    r"pas\s+besoin\s+de\s+(?:supprimer|effacer|delete|remove)|"
+    r"don'?t\s+delete|do\s+not\s+delete|"
+    r"don'?t\s+remove|do\s+not\s+remove|"
+    r"garde(?:r|z)?\s+(?:le\s+|ce\s+)?repo|keep\s+(?:the\s+|this\s+)?repo",
+    re.I,
+)
+
+
 def looks_like_repo_delete(message: str) -> bool:
     lower = message.lower()
     if not any(w in lower for w in ("supprim", "delete", "remove", "effac", "destroy")):
+        return False
+    if _DELETE_NEGATION_RE.search(lower):
         return False
     if any(
         phrase in lower
