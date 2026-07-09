@@ -1070,7 +1070,7 @@ class AriaBrain:
                 or is_explicit_web_request(route)
             )
         ):
-            cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)
+            cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key, public=public)
             if cal_reply:
                 return (
                     cal_reply,
