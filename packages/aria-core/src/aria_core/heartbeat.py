@@ -287,7 +287,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="telegram_miner_cycle",
         name="Mineur de conversations operateur/ARIA",
-        description="Relit les nouveaux echanges du relais Telegram existant (relay_chat.py, rien duplique) et PROPOSE (jamais n'impose) un enseignement durable et generalisable observe dans le dialogue reel -- jamais une citation verbatim (filet de securite anti-secret local, une creation d'issue ne passe pas par le scan gitleaks de la CI). PROPOSE via ISSUE GitHub -- jamais un commit ni une fusion autonome. Throttle interne ~1x/jour. Gate OFF par defaut.",
+        description="Relit les nouveaux echanges du relais Telegram existant (relay_chat.py, rien duplique) et PROPOSE (jamais n'impose) un enseignement durable et generalisable observe dans le dialogue reel -- jamais une citation verbatim (filet de securite anti-secret local, une creation d'issue ne passe pas par le scan detect-secrets de la CI). PROPOSE via ISSUE GitHub -- jamais un commit ni une fusion autonome. Throttle interne ~1x/jour. Gate OFF par defaut.",
         interval_minutes=60,
         enabled=False,
     ),
