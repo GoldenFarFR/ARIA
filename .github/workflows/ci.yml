@@ -82,6 +82,7 @@ jobs:
             tests/test_x_profile.py \
             tests/test_telegram_x_profile_command.py \
             tests/test_tavily.py \
+            tests/test_brain_operator_web.py \
             tests/test_sepolia_wallet.py \
             tests/test_sepolia_autonomous.py \
             tests/test_exam.py \
