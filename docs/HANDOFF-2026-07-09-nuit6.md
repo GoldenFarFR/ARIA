@@ -74,18 +74,28 @@ minimum`. Corrigé avec une taille plus grande (`--size 0.0003` ≈ 19$ notionne
 ~63 264$/BTC). Prévisualisation (`--dry-run`) confirmée propre : levier 2x, marge
 requise ~9,49$ sur les 18,78$ disponibles, slippage 5% (dans la limite absolue de 10%).
 
-## Test en cours au moment de la rédaction — pas encore confirmé exécuté
-Commande validée en aperçu, prête à exécuter pour de vrai :
+## Test exécuté — a échoué aussi, même symptôme que `join`
+Commande validée en aperçu (`--dry-run` propre), puis lancée pour de vrai :
 ```
 acp trade --side long --token BTC --size 0.0003 --leverage 2 --slippage 5
 ```
-Objectif du test : vérifier si, une fois ce trade réellement passé, Vanguard ZHC
-apparaît sur le classement public de l'Arena (`degen.virtuals.io`, déjà vérifié absent
-avant tout dépôt) — validerait l'hypothèse que `join` n'est pas un prérequis strict à
-l'éligibilité, seulement au forum.
+**Résultat : `Error: Server error 500`** — même échec générique que `join_leaderboard`,
+sur une opération différente (un vrai trade, pas juste l'inscription). Vérifié ensuite
+via `acp trade hl-status` : **aucun fonds prélevé**, solde inchangé à 18.778095 USDC,
+aucune position ouverte — l'échec a été propre, rien perdu.
+
+**Interprétation retenue (incertaine, faute d'accès aux journaux serveur de Virtuals)** :
+Hyperliquid lui-même fonctionne (274+ agents réels, milliers de trades vérifiés sur le
+classement public) — c'est la couche proxy de Virtuals (`api.acp.virtuals.io`, utilisée
+par `acp trade`) qui semble instable ce soir précisément (deux opérations différentes en
+500 au même moment). Aucune page de statut public trouvée pour confirmer une panne
+généralisée. **Décision : arrêter les tentatives pour ce soir, réessayer plus tard
+(quelques heures ou le lendemain)** plutôt que d'insister sur une infra qui semble
+instable maintenant.
 
 ## Ce qui reste en attente (priorité pour la prochaine session)
-1. **Confirmer si le trade ci-dessus a été exécuté**, et si oui, vérifier ensuite le
+1. **Réessayer le trade ci-dessus** (`acp trade --side long --token BTC --size 0.0003
+   --leverage 2 --slippage 5`) une fois un peu de temps passé — si ça passe, vérifier le
    classement public pour voir si Vanguard ZHC y apparaît sans `join` réussi.
 2. Si le trade confirme l'apparition au classement : le pilote HL Perps est
    fonctionnellement lancé malgré `join` cassé — seule la fonctionnalité forum resterait
