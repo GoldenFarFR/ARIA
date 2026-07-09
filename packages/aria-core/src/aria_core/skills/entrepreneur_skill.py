@@ -69,17 +69,15 @@ def _holding_snapshot(lang: str) -> str:
     if lang == "en":
         return (
             f"Holding focus — {h}\n"
-            f"- No subsidiary live — analysis engine runs directly (product moat)\n"
-            f"- Month-1 revenue goal: ${settings.aria_revenue_goal_monthly_usd:.0f}/mo\n"
-            f"- Logged this month: ${progress.get('monthly_total_usd', 0):.2f}\n"
-            f"- Progress: {progress.get('progress_pct', 0)}%"
+            f"- No subsidiary live — analysis engine runs directly (the analysis is the moat)\n"
+            f"- No paid product today — track record first (docs/protocole-argent-reel.md)\n"
+            f"- Real revenue logged this month: ${progress.get('monthly_total_usd', 0):.2f}"
         )
     return (
         f"Focus holding — {h}\n"
-        f"- Aucune filiale live — le moteur d'analyse tourne directement (moat produit)\n"
-        f"- Objectif revenu mois 1 : {settings.aria_revenue_goal_monthly_usd:.0f} $/mois\n"
-        f"- Logué ce mois : {progress.get('monthly_total_usd', 0):.2f} $\n"
-        f"- Progression : {progress.get('progress_pct', 0)} %"
+        f"- Aucune filiale live — le moteur d'analyse tourne directement (l'analyse est le moat)\n"
+        f"- Aucun produit payant aujourd'hui — track-record d'abord (docs/protocole-argent-reel.md)\n"
+        f"- Revenu réel logué ce mois : {progress.get('monthly_total_usd', 0):.2f} $"
     )
 
 
@@ -87,84 +85,77 @@ def _default_personal_objectives(lang: str) -> list[str]:
     if lang == "en":
         return [
             "Cultivate broadly (geo, macro, regulation, product, code) — crypto/token as strategic pillar.",
-            "Ship one paid app v0 (Kelly model — web or Play Store) before optimizing anything else.",
-            f"Hit ${settings.aria_revenue_goal_monthly_usd:.0f}/mo logged revenue by day 30.",
-            "Let the audience vote weekly; product before token hype.",
+            "Grow the VC/trading track record (vc_predictions) — no paid product to ship.",
+            "Hit the proof bar (docs/protocole-argent-reel.md §2) before any real capital.",
+            "Publish building-in-public updates; track record before hype.",
         ]
     return [
         "Me cultiver large (géo, macro, régulation, produit, code) — crypto/token comme pilier stratégique.",
-        "Livrer une app payante v0 (modèle Kelly — web ou Play Store) avant d'optimiser autre chose.",
-        f"Atteindre {settings.aria_revenue_goal_monthly_usd:.0f} $/mois logués avant le jour 30.",
-        "Laisser l'audience voter chaque semaine ; produit d'abord, pas de hype token.",
+        "Faire grandir le track-record VC/trading (vc_predictions) — aucun produit payant à livrer.",
+        "Atteindre le barème de preuve (docs/protocole-argent-reel.md §2) avant tout argent réel.",
+        "Publier des points d'étape en public ; le track-record avant le hype.",
     ]
 
 
 async def _format_activation_playbook(lang: str) -> tuple[str, dict]:
-    """Plan d'action concret quand l'opérateur demande d'activer les revenus."""
+    """Plan d'action concret quand l'opérateur demande d'activer les revenus.
+
+    Pas de produit payant aujourd'hui (ACP abandonné, Stripe retiré) : le seul chemin réel
+    vers l'argent réel est le barème du pacte (docs/protocole-argent-reel.md) — prouver le
+    track-record VC/trading avant tout capital réel.
+    """
     import os
 
-    from aria_core.revenue_goals import monthly_total_usd, total_revenue_usd
+    from aria_core.revenue_goals import total_revenue_usd
 
     progress = goal_progress()
-    month_usd = monthly_total_usd()
     total_usd = total_revenue_usd()
-    provider_on = os.environ.get("ARIA_ACP_PROVIDER_ENABLED", "").lower() in ("1", "true", "yes")
     proactive_on = os.environ.get("ARIA_PROACTIVE_IDEAS", "").lower() in ("1", "true", "yes")
 
     if lang == "en":
         verdict = (
-            "Verdict: revenue mode ON — I ship and log, not wait for permission."
+            "Verdict: no paid product today — the real path is proving the track record."
             if total_usd <= 0
-            else f"Verdict: ${total_usd:.2f} logged — scale what works."
+            else f"Verdict: ${total_usd:.2f} logged real revenue — keep proving the thesis."
         )
         steps = [
-            "1. ACP marketplace — poll every 5m (traiter jobs acp); fulfill + log revenue.",
-            "2. Promo — lancer produit acp template analyse_lite_x1 et publier sur X.",
+            "1. Track record — grow vc_predictions (walk-forward pronostics, calibration).",
+            "2. Self-audit — adversarial review stays honest, no complacent grading.",
             "3. Distribution — one building-in-public tweet/day within X budget cap.",
-            "4. App factory — weekly poll → ship paid v0 <7 days (Kelly model).",
-            "5. Ledger — log revenu <amount> source acp after every paid delivery.",
+            "4. Positioning — docs/strategie-aria-investissement.md, no invented metrics.",
+            "5. Ledger — log revenu <amount> source <x> only if/when real money ever moves.",
         ]
-        flags = (
-            f"Flags: ARIA_ACP_PROVIDER_ENABLED={'ON' if provider_on else 'OFF'}, "
-            f"ARIA_PROACTIVE_IDEAS={'ON' if proactive_on else 'OFF'} "
-            "(founder_ping ~8h on Telegram when ON)."
-        )
+        flags = f"Flags: ARIA_PROACTIVE_IDEAS={'ON' if proactive_on else 'OFF'} (founder_ping ~8h on Telegram when ON)."
     else:
         verdict = (
-            "Verdict : mode revenu ON — je livre et je logue, je n'attends pas la permission."
+            "Verdict : aucun produit payant aujourd'hui — le vrai chemin est de prouver le track-record."
             if total_usd <= 0
-            else f"Verdict : {total_usd:.2f} $ logués — on scale ce qui marche."
+            else f"Verdict : {total_usd:.2f} $ de revenu réel logués — on continue de prouver la thèse."
         )
         steps = [
-            "1. ACP marketplace — poll toutes les 5 min (traiter jobs acp) ; livrer + log revenu.",
-            "1b. scan marché acp — étudier offre/demande, gaps, créer workflow aligné.",
-            "2. Promo — lancer produit acp template analyse_lite_x1 et publier sur X.",
+            "1. Track-record — faire grandir vc_predictions (pronostics walk-forward, calibration).",
+            "2. Auto-audit — le juge adverse reste honnête, jamais complaisant.",
             "3. Distribution — 1 tweet building-in-public/jour dans le cap budget X.",
-            "4. App factory — poll hebdo → app payante v0 <7 jours (modèle Kelly).",
-            "5. Ledger — log revenu <montant> source acp après chaque livraison payée.",
+            "4. Positionnement — docs/strategie-aria-investissement.md, aucune métrique inventée.",
+            "5. Ledger — log revenu <montant> source <x> seulement si de l'argent réel bouge un jour.",
         ]
-        flags = (
-            f"Flags : ARIA_ACP_PROVIDER_ENABLED={'ON' if provider_on else 'OFF'}, "
-            f"ARIA_PROACTIVE_IDEAS={'ON' if proactive_on else 'OFF'} "
-            "(founder_ping ~8h sur Telegram si ON)."
-        )
+        flags = f"Flags : ARIA_PROACTIVE_IDEAS={'ON' if proactive_on else 'OFF'} (founder_ping ~8h sur Telegram si ON)."
 
     lines = [
         verdict,
         "",
-        f"Objectif mois 1 : {settings.aria_revenue_goal_monthly_usd:.0f} $/mois — "
-        f"logué ce mois : {month_usd:.2f} $ ({progress.get('progress_pct', 0)} %).",
+        "Barème avant argent réel : docs/protocole-argent-reel.md §2 (8 cases, aucune raccourcie).",
         "",
-        "Actions immédiates (autonomes, sans demander feu vert) :",
+        "Priorités réelles (pas d'action financière autonome) :",
         *steps,
         "",
         flags,
         "",
-        "Commandes opérateur : acp status | traiter jobs acp | lancer produit acp template analyse_lite_x1",
+        "Commande opérateur : /track (hit-rate, P&L, calibration)",
     ]
     append_memory(
         "entrepreneur",
-        f"[activation] revenue playbook — {month_usd:.2f}$/mo, proactive={proactive_on}",
+        f"[activation] track-record playbook — total_real_usd={total_usd:.2f}, proactive={proactive_on}",
     )
     return "\n".join(lines), {"action": "revenue_activation", "progress": progress}
 
@@ -188,9 +179,9 @@ async def execute_entrepreneur(
         m = re.search(r"(\d+(?:\.\d+)?)\s*\$?", message)
         if not m:
             hint = (
-                "Usage : log revenu 12.50 source gumroad brief #1"
+                "Usage : log revenu 12.50 source <origine> brief #1"
                 if lang == LANG_FR
-                else "Usage: log revenue 12.50 source gumroad brief #1"
+                else "Usage: log revenue 12.50 source <origin> brief #1"
             )
             return hint, {"action": "log_revenue", "ok": False}
         amount = float(m.group(1))
@@ -227,35 +218,33 @@ async def execute_entrepreneur(
 
     holding = _holding_snapshot(lang)
     phases = cultivation_phases(lang)
-    hypotheses = revenue_hypotheses(lang)
+    hypotheses = revenue_hypotheses(lang)  # toujours vide — aucune hypothèse de monétisation en test
     rev = progress_summary(lang)
 
     if lang == "en":
         verdict = (
             "Verdict: cultivation starts with holding focus — then I define my own objectives. "
-            f"Month-1 operator goal: ${settings.aria_revenue_goal_monthly_usd:.0f}/mo real revenue."
+            "No paid product today — the real bar is docs/protocole-argent-reel.md."
         )
         plan = [
             "1. Broad culture cycle (geo, macro, regulation) — study → ship one deliverable.",
-            "2. Weekly app poll — audience picks; Kelly model web or Play Store ($25 dev account).",
-            "3. Ship app v0 in <7 days (repo + landing or Android AAB).",
-            "4. Log every real dollar in revenue_ledger — training portfolio stays fictional.",
+            "2. Grow the VC/trading track record (vc_predictions) — no product to poll or ship.",
+            "3. Self-audit stays honest — adversarial review, no complacent grading.",
+            "4. Log every real dollar in revenue_ledger if/when it ever moves — training stays fictional.",
             "5. Publish building-in-public on @Aria_ZHC within X spend cap.",
         ]
-        hypo_lines = [f"→ {label} (~${target:.0f}/mo)" for _, label, target in hypotheses]
     else:
         verdict = (
             "Verdict : la culture commence par le focus holding — puis je définis mes objectifs. "
-            f"Objectif opérateur mois 1 : {settings.aria_revenue_goal_monthly_usd:.0f} $/mois de revenu réel."
+            "Aucun produit payant aujourd'hui — le vrai barème est docs/protocole-argent-reel.md."
         )
         plan = [
             "1. Cycle culture large (géo, macro, régulation) — étudier → livrer un artefact.",
-            "2. Poll app hebdo — l'audience choisit ; modèle Kelly web ou Play Store (25 $ compte dev).",
-            "3. Livrer app v0 en <7 jours (repo + landing ou AAB Android).",
-            "4. Logger chaque dollar réel dans revenue_ledger — le portefeuille training reste fictif.",
+            "2. Faire grandir le track-record VC/trading (vc_predictions) — aucun produit à sonder ou livrer.",
+            "3. Auto-audit honnête — juge adverse, jamais complaisant.",
+            "4. Logger chaque dollar réel dans revenue_ledger si ça bouge un jour — training reste fictif.",
             "5. Publier building-in-public sur @Aria_ZHC dans le cap dépense X.",
         ]
-        hypo_lines = [f"→ {label} (~{target:.0f} $/mois)" for _, label, target in hypotheses]
 
     lines = [
         verdict,
@@ -274,12 +263,6 @@ async def execute_entrepreneur(
     lines.extend(phases)
     lines.append("")
     if lang == "en":
-        lines.append("Revenue hypotheses (moat-first)")
-    else:
-        lines.append("Hypothèses revenu (moat d'abord)")
-    lines.extend(hypo_lines)
-    lines.append("")
-    if lang == "en":
         lines.append("Plan")
     else:
         lines.append("Plan")
@@ -290,8 +273,7 @@ async def execute_entrepreneur(
     summary = "\n".join(lines)
     append_memory(
         "entrepreneur",
-        f"Cultivation cycle — goal {settings.aria_revenue_goal_monthly_usd}$/mo, "
-        f"progress {progress['progress_pct']}%",
+        f"Cultivation cycle — no paid product, track-record progress {progress['progress_pct']}%",
     )
 
     if not progress.get("personal_objectives"):
