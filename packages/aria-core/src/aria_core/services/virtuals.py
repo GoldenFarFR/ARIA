@@ -440,5 +440,21 @@ class VirtualsClient:
             logger.info("virtuals: fetch_virtual echec inattendu — %s", exc)
             return None
 
+    async def fetch_by_address(self, token_address: str, chain: str = "BASE") -> VirtualToken | None:
+        """Token Virtuals par adresse de contrat (ce que reçoit `/vc <contrat>`, jamais
+        l'id Strapi interne). ``None`` sur erreur ou absence — jamais d'exception."""
+        try:
+            url = build_token_by_address_url(token_address, chain=chain)
+            data, error = await self._get_json(url)
+            if error is not None or not isinstance(data, dict):
+                return None
+            items = data.get("data")
+            if not isinstance(items, list) or not items:
+                return None
+            return parse_virtual(items[0])
+        except Exception as exc:
+            logger.info("virtuals: fetch_by_address echec inattendu — %s", exc)
+            return None
+
 
 virtuals_client = VirtualsClient()
