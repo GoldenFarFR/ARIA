@@ -121,7 +121,8 @@ async def compose_x_tweet(user_message: str, lang: str = "en") -> str:
         system = (
             "You post for @Aria_ZHC (Aria Vanguard ZHC holding).\n"
             "Write ONE English X tweet (max 280 chars).\n"
-            "NEVER mention DEXPulse — retired 2026-06-19. Active product: Aria Market.\n"
+            "NEVER mention DEXPulse or Aria Market — both retired codenames, not live products. "
+            "No subsidiary is currently live.\n"
             f"{policy_rules_for_llm('en')}\n"
             f"{human_voice_rules_for_llm('en')}\n"
             "Natural human voice — not an AI character, not a feature comma-list.\n"
@@ -244,8 +245,7 @@ async def execute_comms_draft(user_message: str, lang: str = "en") -> tuple[str,
         title = "FAQ draft from visitor question"
         body = (
             f"Q: {user_message[:200]}\n\n"
-            f"A: [{h}] Aria Market is the flagship subsidiary. "
-            f"{site['governance_rule']}"
+            f"A: [{h}] {site['governance_rule']}"
         )
     elif any(w in lower for w in ("newsletter", "update", "weekly", "announce")):
         kind, channel = "update", "site"

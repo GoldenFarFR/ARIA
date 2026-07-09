@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from aria_core import repertoire_db
-from aria_core.holding import FLAGSHIP_PRODUCT, holding_name
+from aria_core.holding import holding_name
 from aria_core.locale import LANG_FR
 from aria_core.memory import append_memory
 from aria_core.models import EntityType, RepertoireItemStatus
@@ -100,21 +100,6 @@ async def execute_manage_repertoire(message: str, lang: str = LANG_FR) -> tuple[
 
 async def execute_develop_repertoire(lang: str = LANG_FR) -> tuple[str, dict]:
     items = await repertoire_db.get_all()
-    if not items:
-        market = await repertoire_db.create(
-            name=FLAGSHIP_PRODUCT,
-            description=(
-                f"Subsidiary of {holding_name()}. "
-                "Watchlist-first DEX analyzer — signals, alerts, DexScreener embeds (Aria Market)"
-            ),
-            category="product",
-            status=RepertoireItemStatus.BUILDING,
-            priority=5,
-            tags=["dex", "trading", "zhc", "flagship"],
-            zhc_aligned=True,
-            notes="Current flagship. Next: autonomous portfolio agent + transparency page.",
-        )
-        items = [market]
 
     building = [i for i in items if i.status == RepertoireItemStatus.BUILDING]
     ideas = [i for i in items if i.status == RepertoireItemStatus.IDEA]
@@ -123,46 +108,46 @@ async def execute_develop_repertoire(lang: str = LANG_FR) -> tuple[str, dict]:
     suggestions: list[str] = []
     h = holding_name()
 
-    # Auto-detect and hard-flag stale DEXPulse entries so the repertoire stops lying.
-    stale_dexpulse = [i for i in items if i.name.lower() == "dexpulse" or "dexpulse" in (i.description or "").lower()]
-    if stale_dexpulse:
-        for item in stale_dexpulse:
+    # Auto-detect and hard-flag stale DEXPulse/Aria Market entries so the repertoire stops lying.
+    stale_names = {"dexpulse", "aria market"}
+    stale = [
+        i for i in items
+        if i.name.lower() in stale_names
+        or any(n in (i.description or "").lower() for n in stale_names)
+    ]
+    if stale:
+        for item in stale:
             if item.status != RepertoireItemStatus.ARCHIVED:
                 suggestions.append(
-                    f"ARCHIVER maintenant : /repertoire archive {item.name}  (DEXPulse retiré 2026-06-19 — plus flagship, plus live)"
+                    f"ARCHIVER maintenant : /repertoire archive {item.name}  (nom de code retiré — plus flagship, plus live)"
+                    if lang != "en"
+                    else f"ARCHIVE now: /repertoire archive {item.name}  (retired codename — no longer flagship, no longer live)"
                 )
             if "flagship" in [t.lower() for t in (item.tags or [])] or "flagship" in (item.description or "").lower():
                 suggestions.append(
-                    f"Retirer « flagship » de l'entrée retirée DEXPulse (elle n'est plus la filiale phare)"
+                    f"Retirer « flagship » de l'entrée retirée {item.name} (elle n'est plus la filiale phare)"
+                    if lang != "en"
+                    else f"Remove 'flagship' from retired entry {item.name} (no longer the flagship subsidiary)"
                 )
 
     if lang == "en":
         if not any(i.entity_type == EntityType.HOLDING for i in items):
             suggestions.append(f"Ensure {h} is registered as parent holding in repertoire")
-        if len(building) > 0 and not any("revenue" in i.tags for i in items):
+        if building and not any("revenue" in i.tags for i in items):
             suggestions.append(
-                f"Add a revenue stream to {FLAGSHIP_PRODUCT} subsidiary (premium alerts)"
+                f"Add a revenue stream to {building[0].name} (premium alerts)"
             )
-        if len(ideas) == 0:
-            suggestions.append(
-                f"Register a new venture as subsidiary of {h} — e.g. Telegram Premium Alerts"
-            )
-        suggestions.append(
-            f"Publish a transparency page for {FLAGSHIP_PRODUCT} under {h} (building in public)"
-        )
-        if not any(i.entity_type == EntityType.HOLDING for i in items):
-            suggestions.append(f"Ensure {h} is registered as parent holding in repertoire")
-        if len(building) > 0 and not any("revenue" in i.tags for i in items):
-            suggestions.append(
-                f"Add a revenue stream to {FLAGSHIP_PRODUCT} subsidiary (premium alerts)"
-            )
-        if len(ideas) == 0:
+        if not items:
+            suggestions.append(f"No subsidiary live — register the first venture under {h} when ready")
+        elif len(ideas) == 0:
             suggestions.append(
                 f"Register a new venture as subsidiary of {h} — e.g. Telegram Premium Alerts"
             )
-        suggestions.append(
-            f"Publish a transparency page for {FLAGSHIP_PRODUCT} under {h} (building in public)"
-        )
+        if building or live:
+            flagship = (live[0] if live else building[0]).name
+            suggestions.append(
+                f"Publish a transparency page for {flagship} under {h} (building in public)"
+            )
 
         lines = [
             f"Repertoire — {len(items)} entries ({len(live)} live, {len(building)} building, {len(ideas)} ideas)",
@@ -173,6 +158,8 @@ async def execute_develop_repertoire(lang: str = LANG_FR) -> tuple[str, dict]:
             lines.append(f"- {item.name} ({item.status.value}) P{item.priority}{zhc}")
             if item.description:
                 lines.append(f"  {item.description}")
+        if not items:
+            lines.append(f"(empty — no subsidiary live, {h} operates directly)")
         lines.append("")
         lines.append("Recommended actions:")
         for s in suggestions:
@@ -180,17 +167,21 @@ async def execute_develop_repertoire(lang: str = LANG_FR) -> tuple[str, dict]:
     else:
         if not any(i.entity_type == EntityType.HOLDING for i in items):
             suggestions.append(f"Vérifier que {h} est bien la holding mère dans le répertoire")
-        if len(building) > 0 and not any("revenue" in i.tags for i in items):
+        if building and not any("revenue" in i.tags for i in items):
             suggestions.append(
-                f"Ajouter une source de revenu à la filiale {FLAGSHIP_PRODUCT}"
+                f"Ajouter une source de revenu à la filiale {building[0].name}"
             )
-        if len(ideas) == 0:
+        if not items:
+            suggestions.append(f"Aucune filiale live — enregistrer la première venture sous {h} quand elle sera prête")
+        elif len(ideas) == 0:
             suggestions.append(
                 f"Enregistrer une nouvelle filiale sous {h} — ex. Alertes Telegram Premium"
             )
-        suggestions.append(
-            f"Publier une page transparence pour {FLAGSHIP_PRODUCT} sous {h} (building in public)"
-        )
+        if building or live:
+            flagship = (live[0] if live else building[0]).name
+            suggestions.append(
+                f"Publier une page transparence pour {flagship} sous {h} (building in public)"
+            )
 
         lines = [
             f"Répertoire — {len(items)} entrées ({len(live)} live, {len(building)} en construction, {len(ideas)} idées)",
@@ -201,6 +192,8 @@ async def execute_develop_repertoire(lang: str = LANG_FR) -> tuple[str, dict]:
             lines.append(f"- {item.name} ({item.status.value}) P{item.priority}{zhc}")
             if item.description:
                 lines.append(f"  {item.description}")
+        if not items:
+            lines.append(f"(vide — aucune filiale live, {h} opère directement)")
         lines.append("")
         lines.append("Actions recommandées :")
         for s in suggestions:
@@ -222,12 +215,8 @@ async def get_repertoire_summary(lang: str = LANG_FR) -> str:
     if not items:
         h = holding_name()
         if lang == "en":
-            return (
-                f"Empty repertoire — {FLAGSHIP_PRODUCT} subsidiary will be seeded under {h}."
-            )
-        return (
-            f"Répertoire vide — la filiale {FLAGSHIP_PRODUCT} sera créée sous {h}."
-        )
+            return f"No subsidiary live — ARIA operates {h} directly."
+        return f"Aucune filiale live — ARIA opère {h} directement."
     names = [f"{i.name} ({i.status.value})" for i in items]
     if lang == "en":
         return f"{len(items)} projects: {', '.join(names)}"

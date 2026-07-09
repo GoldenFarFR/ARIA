@@ -21,8 +21,8 @@ def detect_lang(text: str) -> str:
 
 def portfolio_empty(lang: str) -> str:
     if lang == LANG_EN:
-        return "Watchlist is empty. Add pairs in Aria Market so I can analyze your portfolio."
-    return "Watchlist vide. Ajoutez des paires dans Aria Market pour que je puisse analyser votre portefeuille."
+        return "Watchlist is empty — the discovery engine hasn't ranked a candidate yet. Try /watchlist shortly."
+    return "Watchlist vide — le moteur de découverte n'a pas encore classé de candidat. Réessaie /watchlist dans un instant."
 
 
 def portfolio_failed(lang: str) -> str:

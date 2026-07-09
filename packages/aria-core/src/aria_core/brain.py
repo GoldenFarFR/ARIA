@@ -534,12 +534,12 @@ class AriaBrain:
 
             h = holding_name()
             skill_output = (
-                f"Je me concentre sur {h} et Aria Market — pas de benchmark ni contact concurrent.\n"
+                f"Je me concentre sur {h} — pas de benchmark ni contact concurrent.\n"
                 f"Priorité : site holding, moat produit, objectif "
                 f"{settings.aria_revenue_goal_monthly_usd:.0f} $/mois."
                 if lang == LANG_FR
                 else (
-                    f"I focus on {h} and Aria Market — no competitor benchmark or outreach.\n"
+                    f"I focus on {h} — no competitor benchmark or outreach.\n"
                     f"Priority: holding site, product moat, "
                     f"${settings.aria_revenue_goal_monthly_usd:.0f}/mo goal."
                 )

@@ -20,4 +20,3 @@ PyYAML>=6.0.0
 Pillow>=11.0.0
 requests-oauthlib>=2.0.0
 requests>=2.32.0
-stripe>=11.0.0

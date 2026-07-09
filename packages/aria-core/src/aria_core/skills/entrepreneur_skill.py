@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from aria_core.holding import FLAGSHIP_PRODUCT, holding_name
+from aria_core.holding import holding_name
 from aria_core.knowledge.zhc_peer_agents import cultivation_phases, revenue_hypotheses
 from aria_core.locale import LANG_FR
 from aria_core.memory import append_memory
@@ -69,14 +69,14 @@ def _holding_snapshot(lang: str) -> str:
     if lang == "en":
         return (
             f"Holding focus — {h}\n"
-            f"- Flagship: {FLAGSHIP_PRODUCT} (product moat)\n"
+            f"- No subsidiary live — analysis engine runs directly (product moat)\n"
             f"- Month-1 revenue goal: ${settings.aria_revenue_goal_monthly_usd:.0f}/mo\n"
             f"- Logged this month: ${progress.get('monthly_total_usd', 0):.2f}\n"
             f"- Progress: {progress.get('progress_pct', 0)}%"
         )
     return (
         f"Focus holding — {h}\n"
-        f"- Filiale flagship : {FLAGSHIP_PRODUCT} (moat produit)\n"
+        f"- Aucune filiale live — le moteur d'analyse tourne directement (moat produit)\n"
         f"- Objectif revenu mois 1 : {settings.aria_revenue_goal_monthly_usd:.0f} $/mois\n"
         f"- Logué ce mois : {progress.get('monthly_total_usd', 0):.2f} $\n"
         f"- Progression : {progress.get('progress_pct', 0)} %"

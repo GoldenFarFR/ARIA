@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from aria_core.holding import (
     DEFAULT_ARIA_TITLE,
-    FLAGSHIP_PRODUCT,
     GOVERNANCE_RULE,
     holding_name,
 )
@@ -100,7 +99,7 @@ def _zhc_identity_topics() -> list[tuple[str, str]]:
         (
             "zhc-role-cao",
             f"CAO duties at {h}: (1) holding site + API, (2) marketing decisions — timing, tone, "
-            f"narrative, (3) product moat via {FLAGSHIP_PRODUCT} signals, (4) learn from X replies "
+            f"narrative, (3) product moat via the analysis engine's signals, (4) learn from X replies "
             f"and operator compose sessions into cognitive_knowledge, (5) propose /directive upgrades.",
         ),
         (
