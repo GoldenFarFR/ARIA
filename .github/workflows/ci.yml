@@ -94,4 +94,7 @@ jobs:
             tests/test_code_proposal.py \
             tests/test_skill_projects.py \
             tests/test_web_verify_fuzz_500x3.py \
+            tests/test_heartbeat_gate_resilience.py \
+            tests/test_grounding_smalltalk_fuzz.py \
+            tests/test_github_delete_negation.py \
             tests/test_coherence.py
