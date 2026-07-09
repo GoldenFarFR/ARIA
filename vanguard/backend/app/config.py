@@ -19,7 +19,7 @@ def _parse_id_list(value: str) -> list[int]:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    app_name: str = "Aria Market"
+    app_name: str = "Aria Vanguard ZHC"
     debug: bool = True
     host: str = "0.0.0.0"
     port: int = 8000
