@@ -83,6 +83,18 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   error_count:0, circuit_breaker_open:false`). **Reste en `skipped_no_ledger`** tant que
   `AriaLedger.sol` n'est pas déployé sur Sepolia (`contracts/DEPLOY.md`, étape distincte non
   encore faite) — normal, pas un bug.
+- **ARIA NE TRADE PAS sur Base Sepolia — vérifié code le 09/07** (`sepolia_autonomous.py`
+  relu ligne à ligne) : sur signal BUY, aucun swap/DEX n'est appelé — il n'existe même pas
+  de client DEX/router pour Sepolia dans `onchain/` (seuls fichiers Sepolia du dôme :
+  `sepolia_wallet.py`, `sepolia_autonomous.py`, `sepolia_rehearsal.py`, `anchor.py`,
+  `wallet_guard.py`). Le testnet n'a pas de pool DEX indexé pour un token Base arbitraire
+  (documenté dans le module lui-même). Ce que fait réellement le cycle : elle décide (LLM +
+  données réelles), dimensionne en Kelly sur un capital **fictif** (`REHEARSAL_NOTIONAL_USD`,
+  10 000 $ de répétition), puis **ancre onchain le hash de sa décision** (signature réelle,
+  gas réel, nonce réel) sur `AriaLedger` — un test d'ingénierie logicielle et de discipline
+  de sizing, jamais une exécution de trade, exactement comme voulu par l'opérateur (« un
+  test d'ingénierie logicielle, pas une validation de stratégie de trading »). Aucun ETH ne
+  change de mains sur un swap, aujourd'hui ni demain sur ce module tel que conçu.
 - **Relay chat (chat à 3)** — module `relay_chat.py` (table SQLite dédiée, token
   `ARIA_RELAY_ACCESS_TOKEN` séparé du secret admin, `send_relay_reply`/`send_aria_relay_reply`
   pour poster réellement dans le Telegram existant) : `ARIA_RELAY_ACCESS_TOKEN` actif, `GET /api/aria/relay/recent` +
@@ -131,6 +143,20 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   direct `http://127.0.0.1:8000` (pas de nginx, pas de verrou Basic Auth) — c'est la session
   à privilégier pour toute interaction relay/Telegram en direct, plutôt qu'une session cloud
   (bloquée réseau) ou un clone local Windows (désynchronisation manuelle).
+- **Adressage `@claude` dans le chat Telegram opérateur/ARIA (09/07)** : un vrai chat à 3
+  identités visuellement distinctes (avatars séparés) est **impossible avec un seul token de
+  bot Telegram** — Telegram n'autorise qu'une identité par bot. Palliatif déjà en place :
+  toute réponse de Claude est préfixée `🤖 Claude — ` (jamais ARIA), et ARIA ne préfixe
+  jamais sa propre voix — on distingue donc toujours qui parle à la lecture. Nouveau : un
+  message opérateur commençant par `@claude` (insensible à la casse, `_handle_message` dans
+  `telegram_bot.py`) n'active PLUS le pipeline LLM d'ARIA — elle répond juste un court accusé
+  de réception ("transmis à Claude") au lieu de répondre à sa place. Le texte complet reste
+  journalisé tel quel dans le relais (`process_webhook_update`, inchangé). **Limite non
+  résolue** : rien ne réveille automatiquement une session Claude quand `@claude` arrive —
+  une réponse réelle exige soit que l'opérateur ouvre la session Claude Code résidente sur
+  le VPS (`/opt/aria`, `claude`) au moment voulu, soit un futur cron VPS invoquant Claude en
+  mode headless (pas encore construit, implique coût/risque de boucle à cadrer avec
+  l'opérateur avant de le coder).
 
 ## Audit dexpulse/Aria Market (08/07 nuit) — nettoyage PAS ENCORE fait, juste cartographié
 L'opérateur veut purger toute trace de "dexpulse"/"Aria Market" (noms de produit obsolètes).
