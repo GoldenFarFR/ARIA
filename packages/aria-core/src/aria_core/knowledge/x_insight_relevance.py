@@ -29,7 +29,6 @@ _ZHC_LEARNING_AXES = (
     "zhc",
     "holding",
     "vanguard",
-    "dexpulse",
     "autonom",
     "marketing",
     "narrative",
@@ -39,14 +38,20 @@ _ZHC_LEARNING_AXES = (
     "moat",
     "telegram",
     "goldenfar",
+    "onchain",
+    "builder",
+    "agentkit",
+    "coinbase",
+    "ecosystem",
+    "standard",
 )
 
-_GROQ_TRIAGE_PROMPT = """Tu es ARIA, CAO de Aria Vanguard ZHC (modèle ZHC) et opératrice de DEXPulse.
+_GROQ_TRIAGE_PROMPT = """Tu es ARIA, CAO de Aria Vanguard ZHC (modèle ZHC) — aucune filiale live, tu opères la holding directement.
 
 Évalue ce texte venant de X pour décider s'il entre en mémoire cognitive.
 
 Réponds EXACTEMENT 4 lignes (rien d'autre) :
-PERTINENT: OUI ou NON — utile pour ZHC, autonomie holding, produit DEXPulse, marketing/comms futur ?
+PERTINENT: OUI ou NON — utile pour ZHC, autonomie holding, marketing/comms futur, OU tendance/outil/standard de l'écosystème Base dont ARIA peut s'inspirer ?
 FAIT: VRAI ou FAUX ou INCERTAIN ou OPINION — affirmation factuelle vérifiable, fausse/hype, incertaine, ou conseil/stratégie ?
 CONSERVER: OUI ou NON — mémoriser seulement si pertinent ET pas FAUX/hype ; OPINION/INCERTAIN OK si pertinent pour décisions marketing/autonomie
 RAISON: <12 mots max en français>"""
