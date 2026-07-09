@@ -37,7 +37,6 @@ async def test_revenue_activation_playbook(monkeypatch, tmp_path):
 
     ledger = tmp_path / "revenue_ledger.json"
     monkeypatch.setattr(rg, "LEDGER_PATH", ledger)
-    monkeypatch.setenv("ARIA_ACP_PROVIDER_ENABLED", "true")
     monkeypatch.setenv("ARIA_PROACTIVE_IDEAS", "false")
 
     out, data = await execute_entrepreneur(
@@ -45,8 +44,9 @@ async def test_revenue_activation_playbook(monkeypatch, tmp_path):
         lang="fr",
     )
     assert data["action"] == "revenue_activation"
-    assert "mode revenu ON" in out
-    assert "traiter jobs acp" in out
+    assert "ACP" not in out  # ACP est abandonné, jamais promis en activation
+    assert "aucun produit payant" in out.lower()
+    assert "protocole-argent-reel.md" in out
     assert "ARIA_PROACTIVE_IDEAS=OFF" in out
 
 
@@ -68,7 +68,8 @@ async def test_execute_entrepreneur_cultivation(monkeypatch, tmp_path):
     assert "holding" in out.lower() or "Focus" in out
     assert "zhcinstitute" not in out.lower()
     assert "juno" not in out.lower()
-    assert "Kelly" in out or "app factory" in out.lower() or "studio apps" in out.lower()
+    assert "Kelly" not in out and "app factory" not in out.lower() and "play store" not in out.lower()
+    assert "aucun produit payant" in out.lower()
     assert data["action"] == "cultivate"
     assert "goal_monthly_usd" in data["progress"]
 

@@ -358,78 +358,68 @@ categories:
     label_fr: Business
     label_en: Business
     icon: "💰"
+    # Aucun produit payant aujourd'hui (ACP abandonné, Stripe retiré) -- la progression
+    # business suit le barème réel du pacte argent réel (docs/protocole-argent-reel.md
+    # §2), pas un chiffre d'affaires inventé. Pas de metric/target automatique : ces
+    # paliers se valident à la main (preuve réelle), pas par un compteur de dollars.
     levels:
       1:
-        objective_fr: "Hypothèse revenu #1 documentée (moat DEXPulse, pas hype token)."
-        objective_en: "Revenue hypothesis #1 documented (DEXPulse moat, no token hype)."
+        objective_fr: "Barème du pacte compris et documenté (docs/protocole-argent-reel.md §2)."
+        objective_en: "Real-money pact bar understood and documented (docs/protocole-argent-reel.md §2)."
         days_fr: "< 1 jour"
         days_en: "< 1 day"
       2:
-        objective_fr: "1 $ de revenu réel logué dans revenue_ledger."
-        objective_en: "$1 real revenue logged in revenue_ledger."
-        days_fr: "1 jour"
-        days_en: "1 day"
-        metric: revenue_usd_total
-        target: 1
-      3:
-        objective_fr: "10 $ cumulés revenu réel logué."
-        objective_en: "$10 cumulative real revenue logged."
+        objective_fr: "10 premiers pronostics VC/trading horodatés (vc_predictions)."
+        objective_en: "First 10 timestamped VC/trading pronostics (vc_predictions)."
         days_fr: "1 semaine"
         days_en: "1 week"
-        metric: revenue_usd_total
-        target: 10
-      4:
-        objective_fr: "Micro-produit v0 publié (page ou offre Telegram)."
-        objective_en: "Micro-product v0 published (page or Telegram offer)."
+      3:
+        objective_fr: "20 pronostics résolus, première mesure de calibration."
+        objective_en: "20 resolved pronostics, first calibration measurement."
         days_fr: "2 semaines"
         days_en: "2 weeks"
-      5:
-        objective_fr: "25 $ revenu réel cumulé."
-        objective_en: "$25 cumulative real revenue."
+      4:
+        objective_fr: "Rapport /vc stable et ancré sur des données réelles (aucun produit payant à publier)."
+        objective_en: "/vc report stable and grounded on real data (no paid product to publish)."
         days_fr: "3 semaines"
         days_en: "3 weeks"
-        metric: revenue_usd_total
-        target: 25
-      6:
-        objective_fr: "Objectif 50 $/mois atteint (mandat mois 1)."
-        objective_en: "$50/mo goal reached (month-1 mandate)."
+      5:
+        objective_fr: "40 verdicts résolus, hit-rate BUY mesuré après frais (gas, slippage)."
+        objective_en: "40 resolved verdicts, BUY hit-rate measured after fees (gas, slippage)."
         days_fr: "1 mois"
         days_en: "1 month"
-        metric: revenue_usd_monthly
-        target: 50
-      7:
-        objective_fr: "2 sources de revenu distinctes loguées."
-        objective_en: "2 distinct revenue sources logged."
+      6:
+        objective_fr: "Courbe de calibration monotone démontrée sur l'échantillon disponible."
+        objective_en: "Monotone calibration curve demonstrated on the available sample."
         days_fr: "6 semaines"
         days_en: "6 weeks"
-      8:
-        objective_fr: "100 $ cumulés revenu réel."
-        objective_en: "$100 cumulative real revenue."
+      7:
+        objective_fr: "Stratégie 85/15 bat le benchmark (hold ETH + sélection aléatoire)."
+        objective_en: "85/15 strategy beats the benchmark (hold ETH + random selection)."
         days_fr: "2 mois"
         days_en: "2 months"
-        metric: revenue_usd_total
-        target: 100
-      9:
-        objective_fr: "Produit payant avec 5 clients ou équivalent récurrent."
-        objective_en: "Paid product with 5 customers or recurring equivalent."
+      8:
+        objective_fr: "≥ 80 verdicts résolus, robustesse anti-chance vérifiée (retrait des 2 meilleurs coups)."
+        objective_en: "≥ 80 resolved verdicts, anti-luck robustness verified (top-2 wins removed)."
         days_fr: "3 mois"
         days_en: "3 months"
-      10:
-        objective_fr: "250 $/mois récurrent ou équivalent logué."
-        objective_en: "$250/mo recurring or equivalent logged."
+      9:
+        objective_fr: "≥ 6 mois d'échantillon, drawdown maîtrisé, AVOID confirmés efficaces."
+        objective_en: "≥ 6 months of sample, controlled drawdown, AVOID calls confirmed effective."
         days_fr: "6 mois"
         days_en: "6 months"
-        metric: revenue_usd_monthly
-        target: 250
+      10:
+        objective_fr: "Proof engine (juge adverse) bien calibré — barème §2 complet, feu vert avocat obtenu."
+        objective_en: "Proof engine (adversarial judge) well calibrated — §2 bar cleared, lawyer green light obtained."
+        days_fr: "8 mois"
+        days_en: "8 months"
       11:
-        objective_fr: "1 000 $ cumulés — portefeuille training reste fictif."
-        objective_en: "$1,000 cumulative — training portfolio stays fictional."
+        objective_fr: "Étape A du pacte franchie — premier ticket réel déployé sur la poche VC."
+        objective_en: "Pact stage A cleared — first real ticket deployed on the VC sleeve."
         days_fr: "1 an"
         days_en: "1 year"
-        metric: revenue_usd_total
-        target: 1000
       12:
-        objective_fr: "Moat produit validé marché — croissance sans narrative token."
-        objective_en: "Product moat market-validated — growth without token narrative."
+        objective_fr: "Étape B du pacte franchie — poche trading débloquée en argent réel à son tour."
+        objective_en: "Pact stage B cleared — trading sleeve unlocked in real money too."
         days_fr: "18 mois"
         days_en: "18 months"

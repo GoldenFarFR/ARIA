@@ -40,13 +40,12 @@ def _dynamic_state_lines() -> list[str]:
     except Exception:
         pass
     try:
-        from aria_core.revenue_goals import goal_progress
+        from aria_core.revenue_goals import goal_progress, total_revenue_usd
 
         p = goal_progress()
-        status = "atteint" if p.get("on_track") else "en cours"
         lines.append(
-            f"- **Revenu mois** : {p.get('monthly_total_usd', 0):.2f} $ "
-            f"/ {p.get('goal_monthly_usd', 0):.0f} $ ({p.get('progress_pct', 0):.0f} % — {status})"
+            f"- **Revenu réel total** : {total_revenue_usd():.2f} $ "
+            "(aucun produit payant aujourd'hui — track-record d'abord)"
         )
         personal = p.get("personal_objectives") or []
         for obj in personal[:3]:

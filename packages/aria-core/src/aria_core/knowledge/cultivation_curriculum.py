@@ -1,6 +1,8 @@
-"""Curriculum de culture large — géo, macro, produit, code, crypto/token.
+"""Curriculum de culture large — géo, macro, écosystème, code, crypto/token.
 
-Chaque cycle se termine par une action ship (Kelly model), pas de théorie seule.
+Aucun produit payant à livrer (ACP abandonné, Stripe retiré) : chaque cycle se termine
+par une action concrète liée au track-record VC/trading ou à la veille écosystème,
+jamais un app/produit à vendre.
 """
 
 from __future__ import annotations
@@ -26,33 +28,33 @@ _CULTIVATION_DOMAINS: list[tuple[str, str, str]] = [
     ),
     (
         "macro",
-        "Comment un cycle macro (taux, liquidité) influence-t-il les revenus d'une micro-app ?",
-        "Choisis un pricing (freemium vs one-shot) pour la prochaine app.",
+        "Comment un cycle macro (taux, liquidité) influence-t-il le sizing des pronostics VC/trading ?",
+        "Note l'impact macro sur le prochain cycle de pronostics (weekly_training).",
     ),
     (
-        "product_studio",
-        "Quelle leçon du modèle Kelly Claude (ship apps payantes) appliquer cette semaine ?",
-        "Propose 1 micro-app livrable en <7 jours (web ou Play Store).",
+        "track_record",
+        "Quelle leçon tirer des derniers pronostics résolus (calibration, ratés) ?",
+        "Propose une amélioration mesurable du moteur d'analyse — jamais un produit à vendre.",
     ),
     (
-        "play_store",
-        "Play Store : compte dev Google = 25 $ unique — quelle app utilitaire vaut ce coût ?",
-        "Décris v0 Android (1 écran, 1 valeur) + stack (Kotlin / React Native).",
+        "ecosystem",
+        "Quelle tendance/outil de l'écosystème Base mérite d'être étudié cette semaine ?",
+        "Résume une inspiration concrète pour la thèse VC (docs/strategie-aria-investissement.md).",
     ),
     (
         "crypto_token",
-        "Quelle utility token crédible APRÈS un produit payant (pas hype seul) ?",
-        "Lie 1 feature app existante à une future utility token.",
+        "Quelle utility token crédible APRÈS un track-record prouvé (pas hype seul) ?",
+        "Lie ce raisonnement au barème du pacte (docs/protocole-argent-reel.md).",
     ),
     (
         "code",
-        "Quel outil open-source accélère le ship d'une app Android ou web cette semaine ?",
+        "Quel outil open-source améliore la qualité du moteur d'analyse cette semaine ?",
         "Ouvre un repo ou une issue GitHub avec scope <3 jours.",
     ),
     (
         "distribution",
-        "Comment faire voter l'audience sur la prochaine app (X, Telegram) ?",
-        "Prépare un poll 3 idées ou un thread building-in-public.",
+        "Quoi partager en public cette semaine sur l'avancée du track-record (X, Telegram) ?",
+        "Prépare un thread building-in-public ancré sur des chiffres réels.",
     ),
 ]
 
@@ -88,30 +90,28 @@ def generate_cultivation_message(lang: str = "fr") -> str | None:
 
     if lang == "en":
         lines = [
-            "🌐 Broad cultivation — study → ship (Kelly model)",
+            "🌐 Broad cultivation — study → act",
             f"Domain: {domain}",
             "",
             f"Study: {question}",
             "",
-            f"Ship (mandatory): {ship_action}",
+            f"Act (mandatory): {ship_action}",
             "",
-            "Rule: no study-only cycle — every unit ends with a deliverable "
-            "(app, repo, poll, post, or logged decision).",
-            "Play Store: Google developer account = $25 one-time (operator).",
+            "Rule: no study-only cycle — every unit ends with a concrete artefact "
+            "(repo, poll, post, or logged decision). No paid product to ship.",
         ]
         return "\n".join(lines)
 
     lines = [
-        "🌐 Culture large — étudier → livrer (modèle Kelly)",
+        "🌐 Culture large — étudier → agir",
         f"Domaine : {domain}",
         "",
         f"Étude : {question}",
         "",
-        f"Livrer (obligatoire) : {ship_action}",
+        f"Agir (obligatoire) : {ship_action}",
         "",
-        "Règle : pas de cycle théorie seule — chaque unité finit par un livrable "
-        "(app, repo, poll, post ou décision loguée).",
-        "Play Store : compte développeur Google = 25 $ unique (opérateur).",
+        "Règle : pas de cycle théorie seule — chaque unité finit par un artefact concret "
+        "(repo, poll, post ou décision loguée). Aucun produit payant à livrer.",
     ]
     return "\n".join(lines)
 

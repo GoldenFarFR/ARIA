@@ -91,7 +91,8 @@ def test_personal_take_answers_roadmap_questions():
         "Super site ARIA! What's next for ZHC — partnerships and how will you generate revenue?"
     )
     reply = personal_take_on_feedback(text, lang="en")
-    assert "ACP" in reply or "marketplace" in reply.lower()
+    assert "ACP" not in reply  # ACP est abandonné, jamais promis à un visiteur
+    assert "track record" in reply.lower() or "analysis" in reply.lower()
     assert "good to hear on the site" not in reply.lower()
 
 
@@ -131,7 +132,8 @@ def test_build_feedback_tweet_roadmap_question():
     tweet = build_feedback_thanks_tweet(text, handle="GoldenFarFR", personal=personal)
     assert tweet_fits(tweet)
     assert "ariavanguardzhc.com" not in tweet
-    assert "ACP" in tweet or "marketplace" in tweet.lower()
+    assert "ACP" not in tweet  # ACP est abandonné, jamais promis à un visiteur
+    assert "track record" in tweet.lower()
     assert "→" not in tweet
 
 

@@ -104,21 +104,19 @@ def set_personal_objectives(objectives: list[str]) -> list[str]:
 
 
 def progress_summary(lang: str = "fr") -> str:
+    """Aucun mandat de revenu actif (pas de produit payant) -- affiche le total réel logué,
+    jamais un faux objectif/mandat."""
     p = goal_progress()
     if lang == "en":
-        status = "ON TRACK" if p["on_track"] else "IN PROGRESS"
         return (
-            f"Revenue goal — {status}\n"
-            f"- Target: ${p['goal_monthly_usd']:.0f}/mo (operator mandate, month 1)\n"
-            f"- This month: ${p['monthly_total_usd']:.2f} ({p['progress_pct']:.0f}%)\n"
-            f"- Remaining: ${p['remaining_usd']:.2f}\n"
+            "Real revenue — no active paid-product goal (track record first)\n"
+            f"- This month: ${p['monthly_total_usd']:.2f}\n"
+            f"- Total logged: ${total_revenue_usd():.2f}\n"
             f"- Logged entries: {p['entries_this_month']}"
         )
-    status = "ATTEINT" if p["on_track"] else "EN COURS"
     return (
-        f"Objectif revenu — {status}\n"
-        f"- Cible : {p['goal_monthly_usd']:.0f} $/mois (mandat opérateur, mois 1)\n"
-        f"- Ce mois : {p['monthly_total_usd']:.2f} $ ({p['progress_pct']:.0f} %)\n"
-        f"- Reste : {p['remaining_usd']:.2f} $\n"
+        "Revenu réel — aucun objectif produit payant actif (track-record d'abord)\n"
+        f"- Ce mois : {p['monthly_total_usd']:.2f} $\n"
+        f"- Total logué : {total_revenue_usd():.2f} $\n"
         f"- Entrées loguées : {p['entries_this_month']}"
     )

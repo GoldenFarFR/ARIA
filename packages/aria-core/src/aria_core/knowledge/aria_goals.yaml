@@ -48,13 +48,14 @@ goals:
       mémoire) — shadow judge avant auto-promotion.
 
   - id: revenue_real
-    title: Revenu réel opérateur
-    horizon: mois-1
+    title: Argent réel — track-record d'abord
+    horizon: continu
     priority: 70
     status: in_progress
     text: >
-      Premier dollar Stripe / abonnement ARIA Pro — ledger `revenue_ledger.json`,
-      pas de métrique inventée.
+      Aucun produit payant aujourd'hui (ACP abandonné, Stripe retiré) — le seul chemin
+      vers l'argent réel est le barème du pacte (docs/protocole-argent-reel.md) :
+      prouver le track-record VC/trading avant tout capital réel.
 
   - id: memory_phases_g
     title: Mémoire Phase G reflection

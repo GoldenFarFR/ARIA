@@ -87,4 +87,4 @@ def test_format_autonomy_status_fr(monkeypatch, tmp_path):
     out = format_autonomy_status("fr")
     assert "AUTONOMIE REVENU" in out
     assert "Mode : ON" in out
-    assert "start-aria-autonomous.ps1" in out
+    assert "aucun produit payant" in out.lower()
