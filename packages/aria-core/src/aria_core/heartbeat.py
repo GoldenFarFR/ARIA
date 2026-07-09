@@ -303,128 +303,137 @@ HEARTBEAT_TASKS = [
 
 def _sync_x_curiosity_enabled() -> None:
     for task in HEARTBEAT_TASKS:
-        if task.id == "x_curiosity":
-            task.enabled = bool(
-                getattr(settings, "x_curiosity_enabled", False)
-                and (settings.x_bearer_token or settings.x_api_key)
-            )
-        if task.id == "x_mentions_learn":
-            from aria_core.gateway.x_engagement import mentions_reply_enabled
-
-            task.enabled = mentions_reply_enabled()
-        if task.id == "zhc_watch":
-            task.enabled = bool(settings.aria_juno_outreach)
-        if task.id == "founder_ping":
-            from aria_core.proactive import proactive_ideas_enabled
-
-            task.enabled = proactive_ideas_enabled()
-            if task.enabled and settings.aria_autonomous:
-                task.interval_minutes = max(
-                    240,
-                    int(os.environ.get("ARIA_AUTONOMY_INITIATIVE_HOURS", "8") or 8) * 60,
+        try:
+            if task.id == "x_curiosity":
+                task.enabled = bool(
+                    getattr(settings, "x_curiosity_enabled", False)
+                    and (settings.x_bearer_token or settings.x_api_key)
                 )
-        if task.id == "avatar_style_refresh":
-            from aria_core.avatar_style_refresh import _enabled, is_image_generation_available
-            from aria_core.visual_autonomy import visual_autonomy_enabled
+            if task.id == "x_mentions_learn":
+                from aria_core.gateway.x_engagement import mentions_reply_enabled
 
-            task.enabled = (
-                _enabled()
-                and is_image_generation_available()
-                and not visual_autonomy_enabled()
-            )
-        if task.id == "visual_autonomy":
-            from aria_core.avatar_style_refresh import is_image_generation_available
-            from aria_core.visual_autonomy import visual_autonomy_enabled
+                task.enabled = mentions_reply_enabled()
+            if task.id == "zhc_watch":
+                task.enabled = bool(settings.aria_juno_outreach)
+            if task.id == "founder_ping":
+                from aria_core.proactive import proactive_ideas_enabled
 
-            task.enabled = visual_autonomy_enabled() and is_image_generation_available()
-            raw_iv = int(getattr(settings, "aria_visual_autonomy_interval_minutes", 1440) or 1440)
-            task.interval_minutes = max(360, raw_iv)
-        if task.id == "self_banner_curiosity":
-            from aria_core.visual_autonomy import visual_autonomy_enabled
+                task.enabled = proactive_ideas_enabled()
+                if task.enabled and settings.aria_autonomous:
+                    task.interval_minutes = max(
+                        240,
+                        int(os.environ.get("ARIA_AUTONOMY_INITIATIVE_HOURS", "8") or 8) * 60,
+                    )
+            if task.id == "avatar_style_refresh":
+                from aria_core.avatar_style_refresh import _enabled, is_image_generation_available
+                from aria_core.visual_autonomy import visual_autonomy_enabled
 
-            task.enabled = not visual_autonomy_enabled()
-        if task.id == "x_profile_sync":
-            from aria_core.gateway.x_twitter import is_x_post_configured
-            from aria_core.x_profile import x_profile_sync_enabled
-
-            # Sync manuelle (commande admin /x profile sync) toujours disponible ;
-            # la tâche AUTOMATIQUE (heartbeat, personne ne clique) reste en plus
-            # gardée par ARIA_X_PROFILE_SYNC_ENABLED (outward-facing -> opt-in).
-            task.enabled = is_x_post_configured() and x_profile_sync_enabled()
-        if task.id == "paper_trade_cycle":
-            # Simulation interne 1M$ : OFF par defaut. L'operateur demarre le run de preuve
-            # (20 jours) en posant ARIA_PAPER_TRADING_ENABLED=1 dans le .env (cout LLM
-            # deliberé). Aucun argent reel, aucune surface outward-facing.
-            task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
-                "1", "true", "yes", "on",
-            )
-        if task.id == "aria_exam_cycle":
-            from aria_core.exam import exam_enabled
-
-            task.enabled = exam_enabled()
-        if task.id == "code_proposal_cycle":
-            from aria_core.skills.code_proposal import code_proposal_enabled
-
-            task.enabled = code_proposal_enabled()
-        if task.id == "skill_project_cycle":
-            from aria_core.knowledge.skill_projects import skill_projects_enabled
-
-            task.enabled = skill_projects_enabled()
-        if task.id == "sepolia_autonomous_cycle":
-            from aria_core.onchain.sepolia_autonomous import sepolia_autonomous_enabled
-
-            task.enabled = sepolia_autonomous_enabled()
-        if task.id == "relay_conversation_cycle":
-            from aria_core.relay_chat import relay_autoreply_enabled
-
-            task.enabled = relay_autoreply_enabled()
-        if task.id == "knowledge_inbox_cycle":
-            from aria_core.skills.knowledge_inbox import knowledge_inbox_enabled
-
-            task.enabled = knowledge_inbox_enabled()
-        if task.id == "claude_mentor_cycle":
-            from aria_core.skills.claude_mentor import claude_mentor_enabled
-
-            task.enabled = claude_mentor_enabled()
-        if task.id == "high_conviction_alert_cycle":
-            from aria_core.skills.high_conviction_alerts import high_conviction_alerts_enabled
-
-            task.enabled = high_conviction_alerts_enabled()
-        if task.id == "pump_dump_autopsy_cycle":
-            from aria_core.skills.pump_dump_autopsy import pump_dump_autopsy_enabled
-
-            task.enabled = pump_dump_autopsy_enabled()
-        if task.id == "acp_provider_poll":
-            from aria_core.skills.acp_cli import is_acp_available
-
-            task.enabled = (
-                bool(getattr(settings, "aria_acp_provider_enabled", False))
-                and is_acp_available()
-                and bool((getattr(settings, "aria_acp_events_file", None) or "").strip())
-            )
-        if task.id == "acp_market_scan":
-            from aria_core.skills.acp_cli import is_acp_available
-
-            task.enabled = is_acp_available()
-        if task.id == "acp_email_watch":
-            from aria_core.skills.acp_cli import is_acp_available
-
-            task.enabled = is_acp_available()
-        if task.id == "showcase_pr_watch":
-            from aria_core.skills.github_skill import github_configured
-            from aria_core.skills.showcase_pr_watcher import load_watch_targets
-
-            task.enabled = github_configured() and bool(load_watch_targets())
-        if task.id == "revenue_autonomy":
-            from aria_core.autonomy_revenue import revenue_autonomy_enabled
-            from aria_core.skills.acp_cli import is_acp_available
-
-            task.enabled = revenue_autonomy_enabled() and is_acp_available()
-            if task.enabled:
-                task.interval_minutes = max(
-                    60,
-                    int(os.environ.get("ARIA_AUTONOMY_CYCLE_MINUTES", "360") or 360),
+                task.enabled = (
+                    _enabled()
+                    and is_image_generation_available()
+                    and not visual_autonomy_enabled()
                 )
+            if task.id == "visual_autonomy":
+                from aria_core.avatar_style_refresh import is_image_generation_available
+                from aria_core.visual_autonomy import visual_autonomy_enabled
+
+                task.enabled = visual_autonomy_enabled() and is_image_generation_available()
+                raw_iv = int(getattr(settings, "aria_visual_autonomy_interval_minutes", 1440) or 1440)
+                task.interval_minutes = max(360, raw_iv)
+            if task.id == "self_banner_curiosity":
+                from aria_core.visual_autonomy import visual_autonomy_enabled
+
+                task.enabled = not visual_autonomy_enabled()
+            if task.id == "x_profile_sync":
+                from aria_core.gateway.x_twitter import is_x_post_configured
+                from aria_core.x_profile import x_profile_sync_enabled
+
+                # Sync manuelle (commande admin /x profile sync) toujours disponible ;
+                # la tâche AUTOMATIQUE (heartbeat, personne ne clique) reste en plus
+                # gardée par ARIA_X_PROFILE_SYNC_ENABLED (outward-facing -> opt-in).
+                task.enabled = is_x_post_configured() and x_profile_sync_enabled()
+            if task.id == "paper_trade_cycle":
+                # Simulation interne 1M$ : OFF par defaut. L'operateur demarre le run de preuve
+                # (20 jours) en posant ARIA_PAPER_TRADING_ENABLED=1 dans le .env (cout LLM
+                # deliberé). Aucun argent reel, aucune surface outward-facing.
+                task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                    "1", "true", "yes", "on",
+                )
+            if task.id == "aria_exam_cycle":
+                from aria_core.exam import exam_enabled
+
+                task.enabled = exam_enabled()
+            if task.id == "code_proposal_cycle":
+                from aria_core.skills.code_proposal import code_proposal_enabled
+
+                task.enabled = code_proposal_enabled()
+            if task.id == "skill_project_cycle":
+                from aria_core.knowledge.skill_projects import skill_projects_enabled
+
+                task.enabled = skill_projects_enabled()
+            if task.id == "sepolia_autonomous_cycle":
+                from aria_core.onchain.sepolia_autonomous import sepolia_autonomous_enabled
+
+                task.enabled = sepolia_autonomous_enabled()
+            if task.id == "relay_conversation_cycle":
+                from aria_core.relay_chat import relay_autoreply_enabled
+
+                task.enabled = relay_autoreply_enabled()
+            if task.id == "knowledge_inbox_cycle":
+                from aria_core.skills.knowledge_inbox import knowledge_inbox_enabled
+
+                task.enabled = knowledge_inbox_enabled()
+            if task.id == "claude_mentor_cycle":
+                from aria_core.skills.claude_mentor import claude_mentor_enabled
+
+                task.enabled = claude_mentor_enabled()
+            if task.id == "high_conviction_alert_cycle":
+                from aria_core.skills.high_conviction_alerts import high_conviction_alerts_enabled
+
+                task.enabled = high_conviction_alerts_enabled()
+            if task.id == "pump_dump_autopsy_cycle":
+                from aria_core.skills.pump_dump_autopsy import pump_dump_autopsy_enabled
+
+                task.enabled = pump_dump_autopsy_enabled()
+            if task.id == "acp_provider_poll":
+                from aria_core.skills.acp_cli import is_acp_available
+
+                task.enabled = (
+                    bool(getattr(settings, "aria_acp_provider_enabled", False))
+                    and is_acp_available()
+                    and bool((getattr(settings, "aria_acp_events_file", None) or "").strip())
+                )
+            if task.id == "acp_market_scan":
+                from aria_core.skills.acp_cli import is_acp_available
+
+                task.enabled = is_acp_available()
+            if task.id == "acp_email_watch":
+                from aria_core.skills.acp_cli import is_acp_available
+
+                task.enabled = is_acp_available()
+            if task.id == "showcase_pr_watch":
+                from aria_core.skills.github_skill import github_configured
+                from aria_core.skills.showcase_pr_watcher import load_watch_targets
+
+                task.enabled = github_configured() and bool(load_watch_targets())
+            if task.id == "revenue_autonomy":
+                from aria_core.autonomy_revenue import revenue_autonomy_enabled
+                from aria_core.skills.acp_cli import is_acp_available
+
+                task.enabled = revenue_autonomy_enabled() and is_acp_available()
+                if task.enabled:
+                    task.interval_minutes = max(
+                        60,
+                        int(os.environ.get("ARIA_AUTONOMY_CYCLE_MINUTES", "360") or 360),
+                    )
+        except Exception as exc:
+            # Un gate de tâche cassé (import manquant, dépendance non déployée...) ne
+            # doit jamais empêcher l'évaluation des AUTRES tâches ni, en amont, tout le
+            # reste de _tick() (cette fonction tourne à CHAQUE tick, avant la boucle
+            # d'exécution des tâches -- un throw ici gelait heartbeat entier). Fail-closed :
+            # la tâche en échec reste désactivée pour ce cycle, les autres continuent.
+            logger.warning("heartbeat gate check failed for task=%s: %s — désactivée ce cycle (fail-closed)", task.id, exc)
+            task.enabled = False
 
 _HEARTBEAT_STATE_PATH = data_dir() / "heartbeat_state.json"
 

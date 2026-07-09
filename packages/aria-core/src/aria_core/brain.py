@@ -189,7 +189,11 @@ def _is_strategic_conversation(message: str) -> bool:
     if re.search(r"comment\s+(?:as[- ]?tu|astu|tu\s+as)\b", lower):
         return True
     opinion = re.search(
-        r"souhait|\bveu[xt]\b|voudr|penses?|avis|ton avis|what do you think|should (i|we|you)|"
+        # \b sur penses?/avis (09/07, audit fuzz) : sans borne, "penses" matchait en
+        # sous-chaîne dans "dépenses" -- "les dépenses de développement du repo" (question
+        # opérationnelle légitime) tombait à tort en conversation stratégique/gouvernance
+        # (detect_intent renvoie None -> tout le catalogue de skills est sauté).
+        r"souhait|\bveu[xt]\b|voudr|\bpenses?\b|\bavis\b|ton avis|what do you think|should (i|we|you)|"
         r"intéressant|interessant|préfères|prefer",
         lower,
     )
