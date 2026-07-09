@@ -142,34 +142,6 @@ export async function getHoldingStructure(): Promise<HoldingStructure> {
   return res.json()
 }
 
-export interface BillingPlan {
-  plan_id: string
-  name: string
-  price_usd: number
-  interval: string
-  stripe_configured: boolean
-  features: string[]
-}
-
-export interface SubscriptionStatus {
-  plan: string
-  active: boolean
-  status: string
-  current_period_end: string | null
-}
-
-export async function getBillingPlan(): Promise<BillingPlan> {
-  const res = await fetch(`${PRODUCT_API_URL}/billing/plan`)
-  if (!res.ok) throw new Error('Billing plan unavailable')
-  return res.json()
-}
-
-export async function getSubscriptionStatus(): Promise<SubscriptionStatus> {
-  const res = await apiFetch('/billing/status')
-  if (!res.ok) throw new Error('Subscription status unavailable')
-  return res.json()
-}
-
 export interface TrackRecord {
   wallet_index: number
   wallet_return_pct: number
@@ -295,21 +267,5 @@ export async function getDossier(contract: string): Promise<Dossier> {
     throw new OperatorAuthError('Operator secret invalid or missing')
   }
   if (!res.ok) throw new Error('Dossier unavailable')
-  return res.json()
-}
-
-export async function createCheckoutSession(body?: {
-  success_url?: string
-  cancel_url?: string
-}): Promise<{ checkout_url: string }> {
-  const res = await apiFetch('/billing/checkout', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
-    throw new Error((data as { detail?: string }).detail || 'Checkout failed')
-  }
   return res.json()
 }
