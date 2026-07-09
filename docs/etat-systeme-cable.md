@@ -168,7 +168,7 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   d'achat, renvoie vers `/vc <contrat>` pour l'analyse complète. Un contrat n'est alerté
   qu'une seule fois (mémorisé localement, jamais de spam sur le même candidat). Respecte
   le kill-switch (`/stop`).
-- **Overlay macro « Contexte marché » dans le rapport /vc — codé, PREVIEW envoyé, EN ATTENTE de feu vert visuel (09/07)** :
+- **Overlay macro « Contexte marché » dans le rapport /vc — EN LIGNE, feu vert visuel opérateur confirmé (09/07)** :
   tâche #14. Réutilise `btc_cycles.py` (rien dupliqué) : nouvelle fonction pure
   `current_phase_summary()` (dernier segment du cycle Bitcoin en cours) + `fetch_current_macro_phase()`
   (async, cache 1h en mémoire, dégradation douce sur une source qui échoue). **Aucun appel LLM** — chiffres
@@ -179,8 +179,8 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   un seam volontairement VIDE** — aucune source fiable branchée, jamais de donnée inventée pour combler
   la case (à décider avec l'opérateur : quelle source ? coût ? avant de coder). Conformément à
   `architecture-extensibilite.md` (« Toute nouvelle section suit ce motif + un preview validé par
-  l'utilisateur avant prod »), un rapport d'exemple a été envoyé à l'opérateur — **tâche laissée
-  `in_progress` tant qu'il n'a pas confirmé le placement/ton visuel**, même si le code est testé et
+  l'utilisateur avant prod »), un rapport d'exemple a été envoyé à l'opérateur, qui a validé le
+  visuel (« le html est magnifique », 09/07) — **tâche #14 complète**. Code testé et
   mergé sur `main` (tests ajoutés/étendus dans `test_btc_cycles.py`, `test_vc_analysis.py`,
   `test_vc_cache.py`, `test_vc_report.py`, suite complète verte). Piège évité : `test_vc_analysis.py`/`test_vc_cache.py`
   déclarent explicitement « aucun appel réseau réel » — une fixture autouse coupe
