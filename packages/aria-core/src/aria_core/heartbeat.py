@@ -277,6 +277,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=360,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="claude_mentor_cycle",
+        name="Revue de performance ARIA par Claude",
+        description="Claude (Opus 4.8, profondeur develop via Virtuals -- pas de nouveau secret) lit les vraies donnees mesurees d'ARIA (calibration VC, paper-trading, telemetrie Sepolia) et poste UNE observation ancree sur les chiffres dans le relais Telegram (ARIA y repond en vrai). Si le constat merite d'etre durable, PROPOSE une issue GitHub connaissance -- jamais un commit ni une fusion autonome. Throttle interne ~1x/jour. Gate OFF par defaut.",
+        interval_minutes=60,
+        enabled=False,
+    ),
 ]
 
 
@@ -357,6 +364,10 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.skills.knowledge_inbox import knowledge_inbox_enabled
 
             task.enabled = knowledge_inbox_enabled()
+        if task.id == "claude_mentor_cycle":
+            from aria_core.skills.claude_mentor import claude_mentor_enabled
+
+            task.enabled = claude_mentor_enabled()
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -790,6 +801,16 @@ class AriaHeartbeat:
                 append_memory(
                     "knowledge_inbox",
                     f"[inbox] {result.get('path', '?')} -> proposition {result.get('title', '?')}",
+                )
+
+        elif task_id == "claude_mentor_cycle":
+            from aria_core.skills.claude_mentor import run_claude_mentor_cycle
+
+            result = await run_claude_mentor_cycle()
+            if result.get("outcome") == "ok":
+                append_memory(
+                    "claude_mentor",
+                    f"[mentor] remarque postée (durable={result.get('durable', False)})",
                 )
 
         elif task_id == "self_banner_curiosity":

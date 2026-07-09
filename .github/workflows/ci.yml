@@ -75,6 +75,7 @@ jobs:
             tests/test_relay_conversation.py \
             tests/test_telegram_claude_addressing.py \
             tests/test_knowledge_inbox.py \
+            tests/test_claude_mentor.py \
             tests/test_sepolia_wallet.py \
             tests/test_sepolia_autonomous.py \
             tests/test_exam.py \
