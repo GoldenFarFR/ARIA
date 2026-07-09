@@ -285,6 +285,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="telegram_miner_cycle",
+        name="Mineur de conversations operateur/ARIA",
+        description="Relit les nouveaux echanges du relais Telegram existant (relay_chat.py, rien duplique) et PROPOSE (jamais n'impose) un enseignement durable et generalisable observe dans le dialogue reel -- jamais une citation verbatim (filet de securite anti-secret local, une creation d'issue ne passe pas par le scan gitleaks de la CI). PROPOSE via ISSUE GitHub -- jamais un commit ni une fusion autonome. Throttle interne ~1x/jour. Gate OFF par defaut.",
+        interval_minutes=60,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="high_conviction_alert_cycle",
         name="Alertes proactives haute-conviction",
         description="Pousse une alerte Telegram des que le pool screene fait remonter un candidat SAFE au-dessus du seuil de score compose (candidate_ranking, deja existant -- rien duplique). Signal de tri, jamais un ordre d'achat -- renvoie vers /vc <contrat> pour l'analyse complete. Un contrat n'est alerte qu'une seule fois. Gate OFF par defaut.",
@@ -387,6 +394,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.claude_mentor import claude_mentor_enabled
 
                 task.enabled = claude_mentor_enabled()
+            if task.id == "telegram_miner_cycle":
+                from aria_core.skills.telegram_conversation_miner import telegram_miner_enabled
+
+                task.enabled = telegram_miner_enabled()
             if task.id == "high_conviction_alert_cycle":
                 from aria_core.skills.high_conviction_alerts import high_conviction_alerts_enabled
 
@@ -850,6 +861,16 @@ class AriaHeartbeat:
                 append_memory(
                     "claude_mentor",
                     f"[mentor] remarque postée (durable={result.get('durable', False)})",
+                )
+
+        elif task_id == "telegram_miner_cycle":
+            from aria_core.skills.telegram_conversation_miner import run_telegram_miner_cycle
+
+            result = await run_telegram_miner_cycle()
+            if result.get("outcome") == "ok":
+                append_memory(
+                    "telegram_miner",
+                    f"[mineur] proposition -- {result.get('title', '?')}",
                 )
 
         elif task_id == "high_conviction_alert_cycle":
