@@ -67,8 +67,10 @@ async def enhance_calibrated_answer(
     reply: str | None,
     meta: dict,
     lang: str,
+    *,
+    public: bool = True,
 ) -> tuple[str | None, dict]:
     """Web verify + re-calibration si incertain."""
     if not reply:
         return reply, meta
-    return await web_enhance_calibrated(query, reply, meta, lang)
+    return await web_enhance_calibrated(query, reply, meta, lang, public=public)

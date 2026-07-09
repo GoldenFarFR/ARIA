@@ -83,6 +83,10 @@ jobs:
             tests/test_telegram_x_profile_command.py \
             tests/test_tavily.py \
             tests/test_brain_operator_web.py \
+            tests/test_epistemic.py \
+            tests/test_epistemic_pipeline.py \
+            tests/test_operator_readiness.py \
+            tests/test_live_info_fallback.py \
             tests/test_web_verify_precision.py \
             tests/test_curiosity.py \
             tests/test_vc_intelligence.py \

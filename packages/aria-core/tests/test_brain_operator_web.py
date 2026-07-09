@@ -16,7 +16,7 @@ from aria_core.brain import AriaBrain
 async def test_operator_live_info_reaches_calibrated_web_path(monkeypatch):
     called = {"query": None}
 
-    async def _fake_resolve(query, lang):
+    async def _fake_resolve(query, lang, **kwargs):
         called["query"] = query
         return ("NEWS_SENTINEL: Nvidia a annoncé X aujourd'hui.", {"web_verified": True})
 
@@ -54,7 +54,7 @@ async def test_operator_explicit_web_request_reaches_calibrated_web_path(monkeyp
     is_explicit_web_request comble ce trou indépendamment du sujet."""
     called = {"query": None}
 
-    async def _fake_resolve(query, lang):
+    async def _fake_resolve(query, lang, **kwargs):
         called["query"] = query
         return ("WALLET_CHECK_SENTINEL: adresse confirmée Paradigm sur Etherscan.", {})
 
@@ -71,3 +71,32 @@ async def test_operator_explicit_web_request_reaches_calibrated_web_path(monkeyp
 
     assert called["query"] is not None
     assert "WALLET_CHECK_SENTINEL" in reply
+
+
+@pytest.mark.asyncio
+async def test_operator_public_flag_actually_threaded_to_resolve_calibrated_answer(monkeypatch):
+    """Correctif 09/07 (3e round, incident réel) : public=False n'était même pas un paramètre
+    de resolve_calibrated_answer -- brain.py appelait resolve_calibrated_answer(message,
+    lang_key) sans le transmettre, donc should_use_web_verify() retombait sur is_public_mode()
+    (réglage de déploiement global, toujours True en prod) au lieu du vrai statut opérateur.
+    Résultat vécu : une question opérateur auto-réflexive ("remonte-moi tous les bugs
+    détectés") a déclenché une recherche web hors-sujet présentée comme une actu vérifiée.
+    Ce test verrouille que `public` arrive bien jusqu'à resolve_calibrated_answer."""
+    received = {}
+
+    async def _fake_resolve(query, lang, **kwargs):
+        received.update(kwargs)
+        return ("SENTINEL", {})
+
+    monkeypatch.setattr(
+        "aria_core.knowledge.epistemic.resolve_calibrated_answer", _fake_resolve
+    )
+
+    brain = AriaBrain()
+    await brain._general_response(
+        "vérifie sur le web si cette adresse est bien Paradigm sur Etherscan",
+        "fr",
+        public=False,
+    )
+
+    assert received.get("public") is False

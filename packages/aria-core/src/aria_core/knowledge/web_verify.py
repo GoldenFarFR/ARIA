@@ -176,15 +176,25 @@ def is_operator_local_question(query: str) -> bool:
     return False
 
 
-def should_use_web_verify(query: str) -> bool:
-    """Web autorisé : visiteurs publics, ou opérateur + actu live explicite."""
-    from aria_core.public_mode import is_public_mode
+def should_use_web_verify(query: str, *, public: bool = True) -> bool:
+    """Web autorisé : visiteurs publics, ou opérateur + actu live/demande explicite.
 
-    if is_public_mode():
-        return True
+    `public` doit refléter CE MESSAGE précis (opérateur vs visiteur), pas un réglage de
+    déploiement global. Avant ce correctif (09/07), la fonction lisait is_public_mode()
+    (ARIA_PUBLIC_MODE — réglage de déploiement, TOUJOURS True en prod) au lieu du `public`
+    par-message pourtant correctement calculé dans brain.py : elle renvoyait donc
+    systématiquement True, quel que soit l'expéditeur ou le sujet, cassant la protection
+    is_operator_local_question/is_live_info_question pour l'opérateur (le signal
+    public=False ne remontait jamais jusqu'ici — cf. resolve_calibrated_answer/
+    _general_response). Incident réel : une question opérateur auto-réflexive ("remonte-moi
+    tous les bugs détectés") a déclenché une recherche web hors-sujet, présentée comme
+    "ACTU — sources web vérifiées".
+    """
     if is_operator_local_question(query):
         return False
-    return is_live_info_question(query)
+    if public:
+        return True
+    return is_live_info_question(query) or is_explicit_web_request(query)
 
 
 def is_live_info_question(query: str) -> bool:
@@ -487,6 +497,7 @@ async def web_enhance_calibrated(
     lang: str = "fr",
     *,
     force: bool = False,
+    public: bool = True,
 ) -> tuple[str | None, dict]:
     """Re-calibre via Groq + extraits web si incertain (ou force=True)."""
     from aria_core.knowledge.epistemic import _parse_groq_calibrated
@@ -495,7 +506,7 @@ async def web_enhance_calibrated(
 
     if not getattr(settings, "aria_epistemic_web_verify", True):
         return reply, meta
-    if not should_use_web_verify(query) and not force:
+    if not should_use_web_verify(query, public=public) and not force:
         return reply, meta
     if not force and not _web_verify_threshold(meta):
         return reply, meta
@@ -570,10 +581,10 @@ async def web_enhance_calibrated(
     return formatted, new_meta
 
 
-async def web_first_answer(query: str, lang: str = "fr") -> tuple[str | None, dict]:
+async def web_first_answer(query: str, lang: str = "fr", *, public: bool = True) -> tuple[str | None, dict]:
     """Recherche web puis Groq — pour actu/sport quand Groq seul échoue."""
     meta = {"p_true": 0.3, "truth": "INCERTAIN", "groq_calibrated": False}
-    reply, meta = await web_enhance_calibrated(query, None, meta, lang, force=True)
+    reply, meta = await web_enhance_calibrated(query, None, meta, lang, force=True, public=public)
     if reply:
         return reply, meta
 
