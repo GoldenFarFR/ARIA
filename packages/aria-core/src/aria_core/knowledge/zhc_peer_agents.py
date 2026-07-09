@@ -67,8 +67,8 @@ PEER_AGENTS: tuple[PeerAgent, ...] = (
         revenue_streams=("token trading", "community speculation"),
         moat="Memecoin + agent persona (weak product moat)",
         lesson_for_aria=(
-            "Avoid pure token-without-product. Our edge: DEXPulse signals + holding structure + "
-            "verified facts — product before hype."
+            "Avoid pure token-without-product. Our edge: on-chain analysis moat + holding structure + "
+            "verified facts — no subsidiary product live, the analysis itself is the moat."
         ),
     ),
 )
