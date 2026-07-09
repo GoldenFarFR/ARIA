@@ -84,6 +84,8 @@ jobs:
             tests/test_tavily.py \
             tests/test_brain_operator_web.py \
             tests/test_curiosity.py \
+            tests/test_vc_intelligence.py \
+            tests/test_x_watchlist.py \
             tests/test_sepolia_wallet.py \
             tests/test_sepolia_autonomous.py \
             tests/test_exam.py \

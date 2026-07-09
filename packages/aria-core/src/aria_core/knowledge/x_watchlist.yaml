@@ -27,3 +27,30 @@ default_handles:
   - Aria_ZHC
   - Dexscreener
   - tomosman
+
+# Comptes VC crypto reconnus — thèse/conviction publique, jamais une source de vérité en
+# soi. Sert l'inspiration stratégique (tâche #58, demande opérateur 09/07) : ARIA observe,
+# propose (issue GitHub) si un signal durable émerge — jamais un commit/fusion autonome sur
+# les fichiers de stratégie. Handles vérifiés par recherche web (09/07), pas inventés.
+vc_handles:
+  - handle: a16zcrypto
+    role: vc_thesis
+    note: "a16z crypto — un des plus gros fonds crypto au monde"
+  - handle: paradigm
+    role: vc_thesis
+    note: "Paradigm — Coinbase/Uniswap/Optimism/Flashbots, plusieurs actifs sur Base"
+  - handle: dragonfly_xyz
+    role: vc_thesis
+    note: "Dragonfly Capital — fonds généraliste crypto reconnu"
+  - handle: variantfund
+    role: vc_thesis
+    note: "Variant Fund — thèse user-ownership, portefeuille lié à Farcaster (écosystème Base)"
+  - handle: cbventures
+    role: vc_thesis
+    note: "Coinbase Ventures — pilote le Base Ecosystem Fund, pertinence Base directe"
+  - handle: ElectricCapital
+    role: vc_thesis
+    note: "Electric Capital — référence Developer Report (activité devs par écosystème)"
+  - handle: IOSGVC
+    role: vc_thesis
+    note: "IOSG Ventures — fonds Web3 généraliste"
