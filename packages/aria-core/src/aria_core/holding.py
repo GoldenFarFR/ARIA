@@ -9,7 +9,7 @@ from aria_core.runtime import settings
 HOLDING_SLUG = "aria-vanguard-zhc"
 DEXPULSE_SLUG = "dexpulse"  # retired 2026-06-19 — kept so repertoire cleanup can find/purge it
 ARIA_MARKET_SLUG = "aria-market"  # retired codename — kept so repertoire cleanup can find/purge it
-FLAGSHIP_PRODUCT = "Aria Market"  # retired codename — still referenced by narrative/grounding copy pending a dedicated cleanup
+FLAGSHIP_PRODUCT = "Aria Market"  # retired codename — kept so repertoire cleanup can find/purge it
 DEFAULT_HOLDING_DOMAIN = "ariavanguardzhc.com"
 
 DEFAULT_HOLDING_NAME = "Aria Vanguard ZHC"

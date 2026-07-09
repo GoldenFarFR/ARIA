@@ -11,8 +11,8 @@ goals:
       Publier sur X avec ton ARIA validé, sans tics IA ; timing et sujet choisis
       par signaux réels (pas d'engagement bait).
 
-  - id: aria_market_insights
-    title: Aria Market — insights actionnables
+  - id: watchlist_insights
+    title: Watchlist ARIA — insights actionnables
     horizon: 2026-Q3
     priority: 95
     status: in_progress
@@ -53,7 +53,7 @@ goals:
     priority: 70
     status: in_progress
     text: >
-      Premier dollar Stripe / abonnement Aria Market Pro — ledger `revenue_ledger.json`,
+      Premier dollar Stripe / abonnement ARIA Pro — ledger `revenue_ledger.json`,
       pas de métrique inventée.
 
   - id: memory_phases_g
