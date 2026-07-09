@@ -570,9 +570,13 @@ class AriaHeartbeat:
 
         elif task_id == "x_curiosity":
             from aria_core.curiosity import run_curiosity_cycle
-            result = await run_curiosity_cycle()
+            result = await run_curiosity_cycle(notifier=self._notify_telegram)
             if result.get("insights", 0) > 0:
                 append_memory("heartbeat", f"[x_curiosity] {result['insights']} insights pending")
+            if result.get("opportunities", 0) > 0:
+                append_memory(
+                    "heartbeat", f"[x_curiosity] {result['opportunities']} opportunités surfacées"
+                )
 
         elif task_id == "x_mentions_learn":
             from aria_core.gateway.x_engagement import run_mentions_learn_cycle
