@@ -117,9 +117,7 @@ export async function exchangePrivyForAriaSession(
         }
         setMemberProfile({
           handle,
-          message:
-            res.message ||
-            'Bienvenue sur Aria Vanguard ZHC. Aria Market est la filiale flagship — ouvre le produit pour l’expérience complète.',
+          message: res.message || 'Bienvenue sur Aria Vanguard ZHC.',
         })
         window.dispatchEvent(new Event('aria:member-session'))
         try {

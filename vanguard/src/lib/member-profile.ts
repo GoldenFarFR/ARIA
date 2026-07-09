@@ -37,20 +37,3 @@ export function clearMemberProfile(): void {
   }
 }
 
-export function dismissMemberWelcome(): void {
-  try {
-    sessionStorage.setItem(WELCOME_DISMISSED_KEY, '1')
-  } catch {
-    /* ignore */
-  }
-}
-
-export function shouldShowMemberWelcome(hasSession: boolean): boolean {
-  if (!hasSession) return false
-  if (!getMemberProfile()) return false
-  try {
-    return sessionStorage.getItem(WELCOME_DISMISSED_KEY) !== '1'
-  } catch {
-    return true
-  }
-}
