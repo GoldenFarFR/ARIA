@@ -477,6 +477,43 @@ def test_report_standard_tier_still_escapes_hostile_content():
     assert "<img src=x" not in out
 
 
+# ── Contexte marché macro (tâche #14) — data-gated, premium uniquement ──────
+
+_MARKET_CTX = {
+    "label": "hausse (markup)", "since": "2024-04-20",
+    "change_pct": 42.0, "cycle_name": "cycle halving 2024->en cours",
+}
+
+
+def test_report_market_context_section_present_when_available():
+    out = render_html_report(_result(market_context=_MARKET_CTX), generated_at=_GEN)
+    assert "Contexte marché" in out
+    assert "Bitcoin" in out
+    assert "hausse (markup)" in out
+    assert "20/04/2024" in out or "2024-04-20" in out
+    assert "loi de marché" in out.lower()
+
+
+def test_report_no_market_context_section_without_data():
+    out = render_html_report(_result(market_context=None), generated_at=_GEN)
+    assert "Contexte marché" not in out
+
+
+def test_report_market_context_hidden_in_standard_tier():
+    out = render_html_report(_result(market_context=_MARKET_CTX), generated_at=_GEN, tier="standard")
+    assert "Contexte marché" not in out
+
+
+def test_report_market_context_escapes_hostile_content():
+    hostile = _result(market_context={
+        "label": "<script>alert(1)</script>", "since": "2024-04-20",
+        "change_pct": 1.0, "cycle_name": "x",
+    })
+    out = render_html_report(hostile, generated_at=_GEN)
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+
+
 # ── Langue (FR par défaut, EN additif — libellés fixes uniquement) ──────────
 
 def test_report_default_lang_is_fr_byte_identical_labels():
