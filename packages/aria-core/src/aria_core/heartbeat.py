@@ -291,6 +291,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=60,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="pump_dump_autopsy_cycle",
+        name="Autopsie pump/dump",
+        description="Relit la vraie serie OHLCV parcourue par chaque pronostic VC clos recemment (le point-a-point entree->echeance masque un pump-puis-crash intermediaire) ; si un pattern reel est detecte (deterministe, aucun LLM), demande une autopsie courte au LLM. Log local + proposition d'issue GitHub (aria-playbook-proposal) si la lecon est jugee durable -- jamais un commit ni une fusion autonome. Gate OFF par defaut.",
+        interval_minutes=180,
+        enabled=False,
+    ),
 ]
 
 
@@ -379,6 +386,10 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.skills.high_conviction_alerts import high_conviction_alerts_enabled
 
             task.enabled = high_conviction_alerts_enabled()
+        if task.id == "pump_dump_autopsy_cycle":
+            from aria_core.skills.pump_dump_autopsy import pump_dump_autopsy_enabled
+
+            task.enabled = pump_dump_autopsy_enabled()
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -833,6 +844,16 @@ class AriaHeartbeat:
                     "high_conviction_alert",
                     f"[alerte] {result.get('contract', '?')[:10]} -> score "
                     f"{result.get('rank_score', 0):.0f}",
+                )
+
+        elif task_id == "pump_dump_autopsy_cycle":
+            from aria_core.skills.pump_dump_autopsy import run_pump_dump_autopsy_cycle
+
+            result = await run_pump_dump_autopsy_cycle()
+            if result.get("outcome") == "ok" and result.get("autopsied"):
+                append_memory(
+                    "pump_dump_autopsy",
+                    f"[autopsie] {result['autopsied']} cas sur {result.get('checked', 0)} clotures verifiees",
                 )
 
         elif task_id == "self_banner_curiosity":
