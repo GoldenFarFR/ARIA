@@ -1192,6 +1192,18 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _handle_public_message(update, text)
         return
 
+    if re.match(r"^@claude\b", text, re.IGNORECASE):
+        # Adressage explicite : message pour Claude Code, pas pour ARIA — n'active PAS
+        # le pipeline LLM d'ARIA (elle ne doit pas répondre à la place de Claude). Déjà
+        # journalisé tel quel dans le relais par process_webhook_update ; Claude le verra
+        # à sa prochaine lecture (session VPS ou cloud) et répondra préfixé "🤖 Claude — ".
+        await _reply(
+            message,
+            "📨 Message transmis à Claude (pas à moi) — il répondra ici, préfixé "
+            "« 🤖 Claude — », dès sa prochaine lecture du relais.",
+        )
+        return
+
     from aria_core.tweet_compose_workflow import handle_workflow_message
 
     wf_reply = await handle_workflow_message(text)

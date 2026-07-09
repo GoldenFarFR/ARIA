@@ -73,6 +73,7 @@ jobs:
             tests/test_vc_language_callback.py \
             tests/test_relay_chat.py \
             tests/test_relay_conversation.py \
+            tests/test_telegram_claude_addressing.py \
             tests/test_knowledge_inbox.py \
             tests/test_sepolia_wallet.py \
             tests/test_sepolia_autonomous.py \
