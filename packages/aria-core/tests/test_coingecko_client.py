@@ -30,7 +30,7 @@ class FakeClient:
     async def __aexit__(self, *args):
         return None
 
-    async def get(self, url, params=None):
+    async def get(self, url, params=None, headers=None):
         queue = self._responses[url]
         if isinstance(queue, list):
             return queue.pop(0)
@@ -150,7 +150,7 @@ async def test_timeout_retries_once_then_fallback(monkeypatch):
         async def __aexit__(self, *args):
             return None
 
-        async def get(self, url, params=None):
+        async def get(self, url, params=None, headers=None):
             calls["count"] += 1
             raise httpx.TimeoutException("boom")
 
