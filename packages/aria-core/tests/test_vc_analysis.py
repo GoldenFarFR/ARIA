@@ -535,3 +535,63 @@ async def test_analyze_vc_market_context_failure_never_breaks_report(monkeypatch
 
     assert result.market_context is None
     assert result.recommandation == "BUY"  # le reste du rapport n'est pas affecté
+
+
+# ── Tâche #9 : le prompt LLM ne laisse jamais un niveau de prix sans ancrage réel ──────
+
+def test_prompt_instructs_qualitative_levels_when_no_ta_and_no_bonding():
+    """Sans OHLCV ET sans être un token en bonding, le LLM doit être explicitement
+    prévenu de ne pas chiffrer de niveau de prix précis (pas de silence sur l'absence
+    de donnée -- avant ce correctif, l'absence de TA ne générait aucune instruction)."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    assert ctx.ta is None
+    assert ctx.bonding_phase is False
+
+    block = vc._build_untrusted_context(ctx, [])
+
+    assert "aucune série OHLCV réelle disponible" in block
+    assert "rester qualitatives" in block
+
+
+def test_prompt_explains_bonding_phase_instead_of_generic_no_data():
+    """Un token confirmé en bonding reçoit une explication SPÉCIFIQUE (pas le message
+    générique) -- la progression réelle vers la graduation ancre le raisonnement du LLM
+    sans jamais lui laisser inventer un prix."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=0)
+    ctx.bonding_phase = True
+    ctx.bonding_progress = 0.42
+    ctx.bonding_holder_count = 77
+
+    block = vc._build_untrusted_context(ctx, [])
+
+    assert "courbe de bonding Virtuals" in block
+    assert "42%" in block
+    assert "Holders (Virtuals) : 77" in block
+    assert "aucune série OHLCV réelle disponible" not in block  # message générique pas dupliqué
+
+
+def test_prompt_still_grounds_on_real_ta_levels_when_available():
+    """Régression : quand une vraie série OHLCV existe, l'instruction de grounding
+    existante reste inchangée (pas remplacée par les nouvelles branches)."""
+    from aria_core.skills.ta_levels import TALevels
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    ctx.ta = TALevels(
+        plus_haut=1.5, plus_bas=0.8, dernier_close=1.2,
+        tendance="haussière", tendance_base="MA7 > MA25", n_bougies=50,
+    )
+    ctx.ta_timeframe = "1h"
+
+    block = vc._build_untrusted_context(ctx, [])
+
+    assert "Appuie entrée, invalidation et cible sur ces niveaux techniques réels" in block
+    assert "aucune série OHLCV réelle disponible" not in block
+    assert "courbe de bonding Virtuals" not in block

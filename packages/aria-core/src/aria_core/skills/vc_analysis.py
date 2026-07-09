@@ -255,6 +255,30 @@ def _build_untrusted_context(ctx: TokenScanContext, history: list[dict]) -> str:
             "Appuie entrée, invalidation et cible sur ces niveaux techniques réels ; "
             "ne propose jamais un niveau non soutenu par ces données."
         )
+    elif ctx.bonding_phase:
+        progress_txt = (
+            f"{ctx.bonding_progress:.0%} du seuil de graduation"
+            if ctx.bonding_progress is not None
+            else "progression non disponible"
+        )
+        lines.append(
+            "Analyse technique : aucune série OHLCV — normal, ce token est encore en "
+            f"courbe de bonding Virtuals ({progress_txt}), pas de pool DEX avant graduation."
+        )
+        if ctx.bonding_holder_count is not None:
+            lines.append(f"- Holders (Virtuals) : {ctx.bonding_holder_count}")
+        lines.append(
+            "Aucun niveau de prix réel disponible : invalidation et cible doivent rester "
+            "qualitatives (ex. seuil de graduation, signal de holders) — jamais un prix "
+            "chiffré non soutenu par une donnée réelle. upside_pct/downside_pct à 0."
+        )
+    else:
+        lines.append(
+            "Analyse technique : aucune série OHLCV réelle disponible pour ce token. "
+            "Invalidation et cible doivent rester qualitatives (condition de marché, "
+            "pas un prix chiffré précis) ; upside_pct/downside_pct à 0 sauf si un autre "
+            "chiffre fiable (liquidité, prix DexScreener) les rend estimables."
+        )
     # Contexte de légitimité (drapeaux JUGÉS, pas bruts) : autorité du mint,
     # launchpad, profondeur de liquidité, comportement du wallet du dev.
     legit: list[str] = []
