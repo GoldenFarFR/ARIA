@@ -143,6 +143,23 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   direct `http://127.0.0.1:8000` (pas de nginx, pas de verrou Basic Auth) — c'est la session
   à privilégier pour toute interaction relay/Telegram en direct, plutôt qu'une session cloud
   (bloquée réseau) ou un clone local Windows (désynchronisation manuelle).
+- **Revue de performance ARIA par Claude — codée, PAS ENCORE déployée (09/07)** :
+  `skills/claude_mentor.py` + heartbeat `claude_mentor_cycle` (60 min, throttle interne
+  ~1x/jour). Gaté `ARIA_CLAUDE_MENTOR_ENABLED` (off) + relais déjà actif
+  (`ARIA_RELAY_ACCESS_TOKEN`). Corrige la conception initiale ("Claude bavarde avec ARIA")
+  vers un vrai retour d'entraînement : lit ses données de performance RÉELLEMENT mesurées
+  (`vc_predictions.metrics()`, `paper_trader.portfolio_summary()`,
+  `sepolia_autonomous.autonomous_status()` — fail-closed par source, jamais de valeur
+  inventée), appelle le vrai **Claude Opus 4.8** déjà câblé en prod via la profondeur
+  "develop" de la passerelle Virtuals (`spark_config.DEFAULT_MODEL_DEVELOP`) — **aucun
+  nouveau secret, aucun processus externe**, réutilise le client LLM existant
+  (`aria_core.llm.chat_with_context`). Deux sorties : (1) remarque postée dans le relais
+  Telegram existant → ARIA y répond en vrai via `relay_conversation_cycle` (feedback
+  visible et immédiat) ; (2) si le constat est jugé durable, proposition d'ISSUE GitHub
+  (même label `aria-knowledge-proposal` que `knowledge_inbox.py`, même doctrine stricte —
+  jamais un commit ni une fusion autonome, revue humaine systématique). Zéro chat libre
+  sans ancrage factuel : si aucune donnée de perf n'existe encore (`insufficient_data`),
+  le cycle ne coûte rien et n'appelle pas le LLM.
 - **Adressage `@claude` dans le chat Telegram opérateur/ARIA (09/07)** : un vrai chat à 3
   identités visuellement distinctes (avatars séparés) est **impossible avec un seul token de
   bot Telegram** — Telegram n'autorise qu'une identité par bot. Palliatif déjà en place :
