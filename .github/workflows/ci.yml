@@ -78,6 +78,7 @@ jobs:
             tests/test_knowledge_inbox.py \
             tests/test_claude_mentor.py \
             tests/test_high_conviction_alerts.py \
+            tests/test_pump_dump_autopsy.py \
             tests/test_sepolia_wallet.py \
             tests/test_sepolia_autonomous.py \
             tests/test_exam.py \

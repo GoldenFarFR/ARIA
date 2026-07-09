@@ -262,6 +262,23 @@ async def list_open_predictions(limit: int = 20) -> list[dict]:
     return [dict(zip(_COLUMNS, row)) for row in rows]
 
 
+async def list_recently_closed(since_iso: str, limit: int = 20) -> list[dict]:
+    """Pronostics clôturés depuis ``since_iso`` (ISO 8601), plus récents d'abord.
+
+    Sert de source aux moteurs d'analyse post-clôture (ex. autopsie pump/dump) —
+    lecture seule, aucune écriture, réutilise la table existante."""
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await (
+            await db.execute(
+                "SELECT * FROM vc_prediction WHERE status = 'closed' AND closed_at >= ? "
+                "ORDER BY closed_at DESC LIMIT ?",
+                (since_iso, limit),
+            )
+        ).fetchall()
+    return [dict(zip(_COLUMNS, row)) for row in rows]
+
+
 def compute_metrics(predictions: list[dict]) -> dict:
     """Métriques de pertinence à partir d'une liste de prédictions (fonction pure, testable).
 
