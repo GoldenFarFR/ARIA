@@ -52,8 +52,21 @@ def opportunity_watch_handles() -> list[str]:
     return out
 
 
+def vc_watch_handles() -> list[str]:
+    """Comptes VC crypto reconnus (ex. @a16zcrypto, @paradigm) — thèse/conviction publique,
+    jamais une source de vérité en soi (tâche #58)."""
+    data = _load()
+    out: list[str] = []
+    for entry in data.get("vc_handles") or []:
+        if isinstance(entry, str):
+            out.append(entry.lstrip("@"))
+        elif isinstance(entry, dict) and entry.get("handle"):
+            out.append(str(entry["handle"]).lstrip("@"))
+    return out
+
+
 def all_curiosity_handles() -> tuple[str, ...]:
-    """Deduped handles for passive X curiosity — peers, operator picks, opportunities, defaults."""
+    """Deduped handles for passive X curiosity — peers, operator picks, opportunities, VC, defaults."""
     from aria_core.knowledge.zhc_peer_agents import curiosity_handles
 
     seen: set[str] = set()
@@ -62,6 +75,7 @@ def all_curiosity_handles() -> tuple[str, ...]:
         list(operator_watch_handles())
         + list(curiosity_handles())
         + list(opportunity_watch_handles())
+        + list(vc_watch_handles())
         + list(default_watch_handles())
     ):
         key = handle.lstrip("@").lower()

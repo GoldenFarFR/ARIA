@@ -31,8 +31,10 @@ async def run_curiosity_cycle(*, notifier=None) -> dict:
 
     ``notifier`` (optionnel, ex. `Heartbeat._notify_telegram`) : si fourni ET
     `opportunity_radar_enabled()`, mine aussi le MÊME fetch pour les comptes « opportunité »
-    (#52 -- tendances écosystème Base) et pousse un digest lecture-seule à l'opérateur.
-    Jamais un appel X supplémentaire : réutilise `raw_items` déjà récupéré ci-dessous.
+    (#52 -- tendances écosystème Base) et pousse un digest lecture-seule à l'opérateur. De
+    même pour `vc_intelligence_enabled()` (#58 -- thèses VC crypto) : synthèse LLM + proposition
+    d'issue si jugé durable. Jamais un appel X supplémentaire : réutilise `raw_items` déjà
+    récupéré ci-dessous, dans les deux cas.
     """
     if not settings.x_api_key and not settings.x_bearer_token:
         return {
@@ -119,7 +121,38 @@ async def run_curiosity_cycle(*, notifier=None) -> dict:
                 except Exception as exc:  # noqa: BLE001 -- un envoi raté ne bloque jamais le cycle
                     logger.warning("opportunity_radar notify failed: %s", exc)
 
-    return {"status": "ok", "insights": new_insights, "opportunities": opportunities_found}
+    vc_intelligence_result = None
+    if notifier is not None:
+        from aria_core.skills.vc_intelligence import (
+            run_vc_intelligence_cycle,
+            vc_intelligence_enabled,
+        )
+
+        if vc_intelligence_enabled():
+            from aria_core.knowledge.x_watchlist import vc_watch_handles
+
+            vc_handles = {h.lower() for h in vc_watch_handles()}
+            vc_items = [
+                item for item in raw_items
+                if str(item.get("topic") or "").lstrip("@").lower() in vc_handles
+            ]
+            if vc_items:
+                vc_intelligence_result = await run_vc_intelligence_cycle(
+                    items=vc_items, notifier=notifier,
+                )
+                if vc_intelligence_result.get("outcome") == "ok":
+                    append_memory(
+                        "curiosity",
+                        f"[vc_intelligence] synthèse postée"
+                        f"{' + issue proposée' if vc_intelligence_result.get('issue_url') else ''}",
+                    )
+
+    return {
+        "status": "ok",
+        "insights": new_insights,
+        "opportunities": opportunities_found,
+        "vc_intelligence": vc_intelligence_result,
+    }
 
 
 async def approve_pending_knowledge() -> int:
