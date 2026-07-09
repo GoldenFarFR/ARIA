@@ -207,6 +207,15 @@ class TokenScanContext:
     sell_tax: float | None = None
     hidden_owner: bool | None = None
     can_take_back_ownership: bool | None = None
+    # Niche Virtuals bonding (peuplé UNIQUEMENT si aucune paire DexScreener n'existe ET
+    # que le contrat est réellement indexé par Virtuals en statut pré-graduation — voir
+    # services/virtuals.py). Absence de paire DEX est NORMALE à ce stade (la liquidité
+    # DEX n'existe qu'après graduation) : sans ce champ, `_score_and_verdict` traitait ça
+    # comme un défaut de sécurité générique et pouvait produire un AVOID mal fondé.
+    bonding_phase: bool = False
+    bonding_progress: float | None = None  # 0.0-1.0, part du seuil de graduation atteint
+    bonding_holder_count: int | None = None
+    bonding_mcap_virtual: float | None = None  # dénominé en VIRTUAL, pas converti en USD
 
 
 @lru_cache(maxsize=1)
@@ -438,6 +447,30 @@ def _score_and_verdict(
     onchain_delta = _apply_onchain_signals(onchain_flags, contract_flags, holders, pair)
 
     if not pair:
+        if ctx.bonding_phase:
+            # Token Virtuals encore en courbe de bonding : l'absence de paire DEX est
+            # NORMALE à ce stade (la liquidité DEX n'existe qu'après graduation), pas un
+            # défaut de sécurité générique. Score sur les signaux natifs disponibles.
+            score = 50 + onchain_delta
+            if ctx.bonding_progress is not None:
+                score += round(ctx.bonding_progress * 15)
+            if ctx.bonding_holder_count is not None and ctx.bonding_holder_count >= 50:
+                score += 5
+            score = max(5, min(95, score))
+            ctx.security_score = score
+            ctx.lite_verdict = "SAFE" if score >= 70 else ("DANGER" if score < 35 else "CAUTION")
+            progress_note = (
+                f"{ctx.bonding_progress:.0%} du seuil de graduation atteint"
+                if ctx.bonding_progress is not None
+                else "progression vers la graduation non disponible"
+            )
+            ctx.risk_flags = [
+                f"Token Virtuals en phase de bonding (pré-graduation) — {progress_note}.",
+                "Aucune paire DexScreener : normal à ce stade, la liquidité DEX n'existe "
+                "qu'après graduation — pas un signal de danger.",
+                *onchain_flags,
+            ]
+            return
         score = max(5, min(95, 35 + onchain_delta))
         ctx.security_score = score
         ctx.lite_verdict = "DANGER" if score < 35 else "CAUTION"
@@ -553,6 +586,25 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
         ctx.lite_verdict = "DANGER"
 
 
+async def _resolve_bonding_phase(ctx: "TokenScanContext", contract: str) -> None:
+    """Best-effort, appelé UNIQUEMENT quand aucune paire DexScreener n'a été trouvée : un
+    contrat sans pool peut légitimement être un token Virtuals encore en courbe de bonding
+    (pas de liquidité DEX avant graduation — normal, pas un défaut). Toute panne Virtuals
+    laisse `ctx.bonding_phase = False` (comportement inchangé, verdict générique "aucune
+    paire") — jamais bloquant, jamais de donnée inventée."""
+    try:
+        from aria_core.services.virtuals import graduation_progress, is_in_bonding, virtuals_client
+
+        token = await virtuals_client.fetch_by_address(contract)
+        if token is not None and is_in_bonding(token):
+            ctx.bonding_phase = True
+            ctx.bonding_progress = graduation_progress(token)
+            ctx.bonding_holder_count = token.holder_count
+            ctx.bonding_mcap_virtual = token.mcap
+    except Exception:  # noqa: BLE001 — best-effort, ne casse jamais le scan
+        pass
+
+
 async def scan_base_token(
     contract: str,
     *,
@@ -596,6 +648,8 @@ async def scan_base_token(
         best = max(pairs, key=lambda p: p.liquidity_usd)
         ctx.best_pair = best
         ctx.data_source = "dexscreener"
+    else:
+        await _resolve_bonding_phase(ctx, ca)
     _score_and_verdict(ctx, ctx.best_pair, contract_flags=contract_flags, holders=holders)
 
     # Expose en clair les barrières de sécurité (le filtre binaire les lit).
