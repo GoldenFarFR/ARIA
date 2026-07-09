@@ -23,34 +23,117 @@ _DDG_API = "https://api.duckduckgo.com/"
 _DDG_HTML = "https://html.duckduckgo.com/html/"
 _USER_AGENT = "Mozilla/5.0 (compatible; ARIA-ZHC/1.0)"
 
-_LIVE_INFO_RE = re.compile(
+_LIVE_INFO_STRONG_RE = re.compile(
     r"rugby|stade\s+toulousain|toulousain|top\s*14|top14|"
-    r"coupe du monde|world cup|match|fixture|football|soccer|"
+    r"coupe du monde|world cup|\bmatchs?\b|\bmatche[sd]?\b|fixture|football|soccer|"
     r"\bnba\b|tennis|formule\s*1|\bf1\b|"
     r"bitcoin|\bbtc\b|crypto|ethereum|\beth\b|"
-    r"prix|cours|baisse|hausse|monte|descend|"
-    r"actu|actualité|news|"
-    r"quelle?\s+heure|à\s+quelle\s+heure|what\s+time|when\s+does|when\s+is",
+    r"\bprix\b|\bprices?\b|\bbaisse\b|\bhausse\b|"
+    r"\bmonte\b|\bmonter\b|\bdescend\b|\bdescendre\b|\bdescendu\w*\b|"
+    r"\bpump(?:e|ing|é)?\b|\bdump(?:e|ing|é)?\b|\bath\b|plus\s+haut\s+historique|all[\s-]time\s+high|to\s+the\s+moon|\brekt\b|"
+    r"\bactu\b|actualité|news",
     re.I,
 )
+# "cours" à part : homographe (cotation vs classe/cours de yoga) -- cf. _J_AI_COURS_RE.
+_LIVE_INFO_CORE_RE = re.compile(_LIVE_INFO_STRONG_RE.pattern + r"|\bcours\b", re.I)
+_TIME_RE = re.compile(
+    r"quelle?\s+heure|à\s+quelle\s+heure|what\s+time|when\s+does|when\s+is", re.I
+)
+_LIVE_INFO_RE = re.compile(_LIVE_INFO_CORE_RE.pattern + "|" + _TIME_RE.pattern, re.I)
 # NB : "aujourd'hui/ce soir/demain" seuls ne déclenchent PLUS le chemin web (retiré, 09/07) --
 # trop de faux positifs sur du smalltalk banal ("comment vas-tu aujourd'hui ?"). Ces mots
 # restent utiles pour DATER une requête déjà légitime (cf. _query_variants ci-dessous), mais
 # ne doivent plus, seuls, décider qu'une question est "de l'actu".
+#
+# NB 2 (09/07, test 500 cas) : mots courts bornés en \b -- "cours"/"actu"/"match"/"monte"/
+# "descend" matchaient en sous-chaîne dans des mots sans rapport (parcours, discours, concours,
+# recours, secours, actuellement, actuelle, matcha, remonte, redescendre...). Bornage sans
+# perte de couverture ("actualité" reste sa propre alternative, "match" garde pluriel/conjugué).
+#
+# NB 3 (09/07, test 500 cas x3) : _LIVE_INFO_CORE_RE séparé de _TIME_RE pour pouvoir exclure
+# "à quelle heure on se voit demain ?" (planning perso, PAS de l'actu) sans toucher "à quelle
+# heure joue le match" (sport, légitime) -- cf. _PERSONAL_MEETING_RE dans is_live_info_question.
+# "cours" reste un homographe non résolu (classe de yoga vs cours de bourse) hors _J_AI_COURS_RE
+# (cas fréquent isolé) -- limite assumée d'un filtre par mots-clés, pas de vraie ambiguïté NLP.
+_PERSONAL_MEETING_RE = re.compile(
+    r"on\s+se\s+voit|se\s+revoit|rendez-vous|\brdv\b|"
+    r"notre\s+(?:call|point|r[ée]union|meeting|rdv)|"
+    r"works?\s+best\s+for\s+you|good\s+time\s+for\s+you|suits?\s+you\s+best",
+    re.I,
+)
+_J_AI_COURS_RE = re.compile(
+    r"j'ai\s+cours\b|\bcours\s+de\s+(?:yoga|maths?|sport|danse|musique|anglais|fran[çc]ais|guitare|piano)\b",
+    re.I,
+)
 
 # Demande EXPLICITE de recherche/vérification web -- distinct de is_live_info_question
 # (actu/sport/prix). Sert le principe opérateur : si l'assistant (Claude Code) n'a pas
 # accès web depuis sa session, il passe par ARIA (qui, elle, a Tavily) -- ex. vérifier un
 # label Etherscan/Arkham, une adresse, une source. Sans ce déclencheur dédié, ces demandes
 # ne matchaient aucun mot-clé de _LIVE_INFO_RE et tombaient sur une réponse de mémoire.
+#
+# _GAP tolère 0-2 mots de remplissage naturels entre le verbe et la cible ("cherche VITE FAIT
+# sur internet") -- sûr car is_explicit_web_request revérifie ensuite _NEGATED_WEB_REQUEST_RE,
+# donc une négation qui profite du même gap ("cherche PAS sur internet") est re-supprimée juste
+# après, jamais renvoyée telle quelle.
+_WEB_TARGET = r"(?:sur\s+(?:le\s+)?(?:web|internet)|en\s*ligne)"
+_GAP = r"(?:\s+\w+){0,2}\s+"
+
 _EXPLICIT_WEB_REQUEST_RE = re.compile(
-    r"v[ée]rifie(?:r)?\s+sur\s+(?:le\s+)?(?:web|internet)|"
-    r"cherche(?:r)?\s+sur\s+(?:le\s+)?(?:web|internet)|"
-    r"recherch(?:e|er)\s+(?:sur\s+)?(?:le\s+)?(?:web|internet|en\s*ligne)|"
+    rf"v[ée]rifie(?:r|s|z)?{_GAP}{_WEB_TARGET}|"
+    rf"cherche(?:r|s|z)?{_GAP}{_WEB_TARGET}|"
+    rf"regarde(?:r|s|z)?{_GAP}{_WEB_TARGET}|"
+    rf"creuse(?:r|s|z)?{_GAP}{_WEB_TARGET}|"
+    r"recherch(?:e|er|es|ez)\s+(?:sur\s+)?(?:le\s+)?(?:web|internet|en\s*ligne)|"
     r"confirme(?:r)?\s+(?:via|avec)\s+une\s+recherche|"
-    r"fais\s+une\s+recherche|"
-    r"search\s+(?:the\s+)?(?:web|internet|online)|"
-    r"look\s+(?:this\s+)?up\s+online",
+    r"fai(?:s|t|sons|tes|re)\s+une\s+recherche|"
+    r"fai(?:s|t|sons|tes)\s+un\s+tour\s+(?:sur\s+(?:le\s+)?(?:web|internet)|en\s*ligne)|"
+    r"jet(?:te|ter|tez|er|ez)\s+un\s+(?:œil|oeil)\s+(?:sur\s+(?:le\s+)?(?:web|internet)|en\s*ligne)|"
+    r"search(?:ing)?\s+(?:the\s+)?(?:web|internet|online)|"
+    r"check(?:ing)?\s+(?:this\s+)?(?:online|on\s+(?:the\s+)?(?:web|internet))|"
+    rf"check(?:er|es?|ez)?{_GAP}{_WEB_TARGET}|"
+    r"check(?:er|es?|ez)?(?:\s+\w+){0,2}\s+le\s+web\b|"
+    r"verify(?:ing)?\s+(?:this\s+)?(?:online|on\s+(?:the\s+)?(?:web|internet))|"
+    r"look\s+(?:this\s+)?up\s+online|"
+    r"take\s+a\s+look\s+online|(?:have|having)\s+a\s+look\s+(?:online|on\s+(?:the\s+)?(?:web|internet))|"
+    r"do\s+(?:some\s+)?research\s+online|research\s+this\s+online|"
+    r"dig(?:ging)?\s+up(?:\s+\w+){0,3}\s+online",
+    re.I,
+)
+
+# Négation de la demande -- trouvé en testant le filtre sur 500 cas (09/07) : "inutile de
+# chercher sur internet", "don't search the web"... matchaient _EXPLICIT_WEB_REQUEST_RE tel
+# quel (le verbe + sa cible apparaissent bien dans la phrase, la négation seule ne les sépare
+# pas). Couvre aussi le "ne" élidé à l'oral/texto ("cherche pas sur internet").
+_NEG_GAP = r"(?:\s+\w+){0,2}"
+
+_NEGATED_WEB_REQUEST_RE = re.compile(
+    rf"(?:ne\s+)?cherche\w*{_NEG_GAP}\s+pas|"
+    rf"(?:ne\s+)?recherch\w*{_NEG_GAP}\s+pas|"
+    rf"(?:ne\s+)?v[ée]rifie\w*{_NEG_GAP}\s+pas|"
+    rf"(?:ne\s+)?regarde\w*{_NEG_GAP}\s+pas|"
+    r"(?:ne\s+)?fais\s+pas|"
+    r"pas\s+(?:\w+\s+){0,3}(?:à\s+)?(?:chercher|v[ée]rifier|rechercher|creuser|regarder)|"
+    r"pas?\s+besoin\s+de\s+(?:chercher|rechercher|v[ée]rifier|regarder|creuser|check\w*)|"
+    r"aucun\s+besoin\s+de\s+(?:chercher|rechercher|v[ée]rifier|regarder|creuser|check\w*)|"
+    r"aucun\s+int[ée]r[êe]t\s+(?:à|a)\s+(?:chercher|v[ée]rifier|rechercher|regarder|creuser|check\w*)|"
+    r"(?:inutile?|pas\s+la\s+peine)\s+de\s+(?:chercher|rechercher|v[ée]rifier|regarder|creuser|check\w*|faire\s+une\s+recherche)|"
+    r"n'?utilise\w*\s+pas\s+de\s+recherche|"
+    r"[ée]vite(?:r)?\s+de\s+(?:chercher|v[ée]rifier|rechercher|regarder|creuser)|"
+    r"arr[êe]te(?:r)?\s+de\s+(?:chercher|v[ée]rifier|rechercher|regarder|creuser)|"
+    r"oublie(?:r)?\s+(?:la\s+)?recherche|"
+    r"laisse\s+tomber\s+(?:la\s+)?recherche|"
+    r"(?:ça|cela|ca)\s+sert\s+à\s+rien\s+de\s+(?:chercher|v[ée]rifier|rechercher|regarder)|"
+    r"rien\s+ne\s+sert\s+de\s+(?:chercher|v[ée]rifier|rechercher|regarder)|"
+    r"gagnerai(?:t|s|ent)?\s+rien\s+à\s+(?:chercher|v[ée]rifier|rechercher|faire\s+une\s+recherche)|"
+    r"don'?t\s+(?:bother\s+)?(?:search|check)|do\s+not\s+(?:search|check)|"
+    r"don'?t\s+look\s+(?:this\s+)?up|do\s+not\s+look\s+(?:this\s+)?up|"
+    r"don'?t\s+have\s+to\s+look|don'?t\s+need\s+to\s+(?:search|look|verify|check|research)|"
+    r"let'?s\s+not\s+(?:search|check)|"
+    r"no\s+need\s+to\s+(?:search|look|verify|check|research)|"
+    r"not\s+necessary\s+to\s+search|"
+    r"why\s+bother\s+(?:search|check)|"
+    r"no\s+point\s+(?:in\s+)?(?:search\w*|look\w*|check\w*)",
     re.I,
 )
 
@@ -110,15 +193,26 @@ def is_live_info_question(query: str) -> bool:
         return False
     if is_operator_local_question(query):
         return False
+    if not _LIVE_INFO_STRONG_RE.search(query):
+        if _J_AI_COURS_RE.search(query):
+            # "j'ai cours" / "cours de yoga" -- homographe de "cours" (classe, pas cotation) --
+            # et aucun autre signal fort (bitcoin/prix/actu/...) ne vient corroborer l'actu.
+            return False
+        if _TIME_RE.search(query) and _PERSONAL_MEETING_RE.search(query):
+            # "à quelle heure on se voit demain ?" -- planning perso, pas de l'actu sportive.
+            return False
     return bool(_LIVE_INFO_RE.search(query))
 
 
 def is_explicit_web_request(query: str) -> bool:
     """Demande EXPLICITE de recherche/vérification web (ex. "vérifie sur le web...",
-    "cherche sur internet..."), indépendamment du sujet -- voir _EXPLICIT_WEB_REQUEST_RE."""
+    "cherche sur internet..."), indépendamment du sujet -- voir _EXPLICIT_WEB_REQUEST_RE.
+    Une négation ("inutile de chercher...", "don't search...") annule la détection."""
     if is_ecosystem_product_query(query):
         return False
     if is_operator_local_question(query):
+        return False
+    if _NEGATED_WEB_REQUEST_RE.search(query):
         return False
     return bool(_EXPLICIT_WEB_REQUEST_RE.search(query))
 
