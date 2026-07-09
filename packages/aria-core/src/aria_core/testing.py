@@ -117,6 +117,10 @@ class AriaRuntimeSettings(BaseSettings):
     aria_vector_memory: bool = False
     # Cache DDG — opt-in, évite requêtes répétées (gratuit, fichier local)
     aria_ddg_search_cache: bool = False
+    # Fournisseur de recherche web : "ddg" (gratuit, défaut) ou "tavily" (opt-in, clé env
+    # TAVILY_API_KEY). Bascule uniquement quand l'opérateur fournit une clé. DDG reste le
+    # fallback si Tavily est indisponible.
+    aria_web_search_provider: str = "ddg"
     # Arbitre mémoire — résolution conflits court/moyen/long (Phase H, défaut on)
     aria_memory_arbitrator: bool = True
 
