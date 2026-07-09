@@ -138,6 +138,27 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   dans un NOM de fichier (pas son contenu) trouvé sur la machine Windows de l'opérateur (hors repo,
   probable résidu de l'incident `connect.ts` du même jour) — supprimé. Détail technique complet
   (astuces Git Bash/Windows réutilisables) : `docs/HANDOFF-2026-07-09-nuit6.md` (voir aussi nuit4/5).
+- **Nuit 7 — premier trade HL Perps réellement exécuté, cause racine `join` confirmée, pivot
+  Shekel, panne CoinGecko découverte.** Le trade préparé en nuit6 a été exécuté avec succès
+  (0.0003 BTC long, mainnet Hyperliquid, confirmé via `hl-status`) après avoir ré-autorisé un
+  signataire jusqu'au bout — confirmant le diagnostic d'un commentaire de PR Virtuals externe
+  (`acp-cli-demos#37`) : le blocage `join`/trades venait d'un signataire mal autorisé, pas d'une
+  panne serveur. Diligence complète menée sur **Shekel** (plateforme no-code d'agents Hyperliquid,
+  non-custodial confirmé, mécanisme "Custom Data Endpoint" natif) pour répondre à un vrai trou
+  découvert : `dgclaw-skill` n'a AUCUN outil de donnée de marché, un agent GAME brut ne peut que
+  deviner ou inventer. Nouveau seam livré : `skills/arena_signal.py` → `GET
+  /api/aria/arena-signal/btc` (public, sans auth, réutilise `btc_cycles`+`entry_signals`, jamais
+  de valeur inventée). **Découverte importante en déployant** : CoinGecko limite désormais TOUT
+  son tier gratuit aux 365 derniers jours d'historique (testé en direct, `error_code 10012`) —
+  casse potentiellement en silence l'overlay macro déjà en prod (tâche #14, dégradation douce,
+  jamais une erreur visible). RSI corrigé (fenêtre courte) ; la segmentation complète des 3
+  cycles reste hors de portée du tier gratuit, source alternative pas encore trouvée/vérifiée.
+  Nouveau : **mineur de conversations opérateur/ARIA** (`telegram_conversation_miner.py`, gate OFF,
+  même doctrine que `knowledge_inbox`/`claude_mentor`), avec un garde-fou anti-secret dédié
+  (une création d'issue GitHub ne passe pas par le scan CI). Revue de sécurité de fin de session :
+  un vrai incident auto-détecté et corrigé (vraie clé/IP commitées par erreur dans une fixture de
+  test) + un vrai trou de couverture bouché (`test_coherence.py` ne vérifiait les IP que dans les
+  docs, jamais le code — étendu). Détail complet : `docs/HANDOFF-2026-07-09-nuit7.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
