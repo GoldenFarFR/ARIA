@@ -222,6 +222,21 @@ async def sepolia_status():
     return await autonomous_status()
 
 
+@router.get("/sepolia/code")
+async def sepolia_code_check(address: str, request: Request):
+    """Opérateur SEULEMENT : vérifie qu'un contrat a réellement du bytecode déployé sur
+    Base Sepolia (lecture RPC seule, aucune clé, aucun signing) — étape de vérification
+    avant de configurer ARIA_SEPOLIA_SWAP_ROUTER/_TOKEN_OUT sur un contrat non confirmé.
+    """
+    require_operator(request)
+    from aria_core.onchain.sepolia_wallet import get_code
+
+    result = get_code(address)
+    if result is None:
+        raise HTTPException(status_code=502, detail="Lecture RPC Sepolia indisponible.")
+    return result
+
+
 @router.get("/relay/recent")
 async def relay_recent(request: Request, since_id: int = 0):
     """Historique récent du relais Claude/opérateur/ARIA (canal Telegram existant).

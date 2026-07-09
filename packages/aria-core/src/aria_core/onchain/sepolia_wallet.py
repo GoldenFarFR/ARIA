@@ -174,6 +174,29 @@ def get_balance_eth(*, w3=None, account_cls=None) -> float | None:
         return None
 
 
+def get_code(address: str, *, w3=None) -> dict | None:
+    """Lecture RPC seule (``eth_getCode``) — aucune clé, aucun signing, ne dépend même pas
+    du wallet d'ARIA. Sert à vérifier qu'un contrat (routeur, pool) existe RÉELLEMENT sur
+    Base Sepolia avant de configurer un swap réel dessus (``ARIA_SEPOLIA_SWAP_ROUTER`` /
+    ``_TOKEN_OUT``) — jamais d'adresse non vérifiée dans une transaction signée. None si la
+    lecture échoue (RPC down, adresse invalide) — jamais d'exception qui remonte."""
+    try:
+        if w3 is None:
+            from web3 import Web3
+
+            w3 = Web3(Web3.HTTPProvider(_rpc_url(), request_kwargs={"timeout": 15}))
+        code = w3.eth.get_code(w3.to_checksum_address(address))
+        code_hex = code.hex() if hasattr(code, "hex") else str(code)
+        return {
+            "address": address,
+            "has_code": len(code) > 0,
+            "code_length_bytes": len(code),
+            "code_preview": ("0x" + code_hex.removeprefix("0x"))[:66],
+        }
+    except Exception:
+        return None
+
+
 def send_anchor_transaction(
     *, contract: str, root: str, chain_id: int, w3=None, account_cls=None,
 ) -> str:
