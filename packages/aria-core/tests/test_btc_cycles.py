@@ -16,6 +16,7 @@ SYNTHETIC_HALVINGS = (
 @pytest.fixture(autouse=True)
 def _synthetic_halvings(monkeypatch):
     monkeypatch.setattr(bc, "HALVING_DATES", SYNTHETIC_HALVINGS)
+    monkeypatch.setattr(bc, "_phase_cache", {"at": 0.0, "value": None})
     yield
 
 
@@ -146,3 +147,75 @@ def test_format_cycles_report_includes_disclaimer_and_numbers():
     report = bc.format_cycles_report({"available": True, "cycles": [stats], "narrative": "Récit."})
     assert "300" in report
     assert "pas une loi de marché" in report.lower()
+
+
+# ----------------------- phase actuelle compacte (overlay macro, tâche #14) -----------------------
+
+def test_current_phase_summary_empty_without_stats_or_phases():
+    assert bc.current_phase_summary([]) is None
+    empty_phases = bc.CycleStats(
+        name="cycle A", window_start="2020-01-01", window_end="2020-12-31",
+        low_price=100.0, low_date="2020-01-01", high_price=300.0, high_date="2020-06-01",
+        gain_low_to_high_pct=200.0, drawdown_high_to_end_pct=-50.0, phases=[],
+    )
+    assert bc.current_phase_summary([empty_phases]) is None
+
+
+def test_current_phase_summary_returns_last_phase_of_last_cycle():
+    phase1 = bc.CyclePhase(
+        label="accumulation", start_date="2020-01-01", end_date="2020-03-01",
+        start_price=100.0, end_price=135.0, change_pct=35.0,
+    )
+    phase2 = bc.CyclePhase(
+        label="hausse (markup)", start_date="2020-03-01", end_date="2020-06-01",
+        start_price=135.0, end_price=300.0, change_pct=122.0,
+    )
+    old_cycle = bc.CycleStats(
+        name="cycle A", window_start="2019-01-01", window_end="2019-12-31",
+        low_price=50.0, low_date="2019-01-01", high_price=80.0, high_date="2019-06-01",
+        gain_low_to_high_pct=60.0, drawdown_high_to_end_pct=-10.0,
+        phases=[bc.CyclePhase(label="baisse (markdown)", start_date="2019-06-01", end_date="2019-12-31",
+                               start_price=80.0, end_price=70.0, change_pct=-12.5)],
+    )
+    current_cycle = bc.CycleStats(
+        name="cycle en cours", window_start="2020-01-01", window_end="2020-12-31",
+        low_price=100.0, low_date="2020-01-01", high_price=300.0, high_date="2020-06-01",
+        gain_low_to_high_pct=200.0, drawdown_high_to_end_pct=-50.0, phases=[phase1, phase2],
+    )
+    summary = bc.current_phase_summary([old_cycle, current_cycle])
+    assert summary == {
+        "label": "hausse (markup)", "since": "2020-03-01", "change_pct": 122.0,
+        "cycle_name": "cycle en cours",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_current_macro_phase_none_without_history_or_cache():
+    client = _FakeClient(_FakeChartResult([], available=False))
+    assert await bc.fetch_current_macro_phase(client=client) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_current_macro_phase_uses_cache_without_refetch():
+    prices = [(_ts("2020-01-01"), 100.0), (_ts("2020-06-01"), 300.0)]
+    client = _FakeClient(_FakeChartResult(prices))
+
+    first = await bc.fetch_current_macro_phase(client=client)
+    assert first is not None
+    assert len(client.calls) == 1
+
+    second = await bc.fetch_current_macro_phase(client=client)
+    assert second == first
+    assert len(client.calls) == 1  # cache valide -> pas de second appel réseau
+
+
+@pytest.mark.asyncio
+async def test_fetch_current_macro_phase_degrades_softly_using_stale_cache_on_failure():
+    prices = [(_ts("2020-01-01"), 100.0), (_ts("2020-03-01"), 135.0), (_ts("2020-06-01"), 300.0)]
+    ok_client = _FakeClient(_FakeChartResult(prices))
+    first = await bc.fetch_current_macro_phase(client=ok_client, force_refresh=True)
+    assert first is not None
+
+    broken_client = _FakeClient(_FakeChartResult([], available=False))
+    second = await bc.fetch_current_macro_phase(client=broken_client, force_refresh=True)
+    assert second == first  # dégradation douce : garde la dernière valeur connue, jamais None

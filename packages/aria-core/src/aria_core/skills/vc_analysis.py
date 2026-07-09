@@ -134,6 +134,11 @@ class VCResult:
     roi_sector_recognized: bool = False
     roi_basis: str = ""
     roi_disclaimer: str = ""
+    # Contexte marché macro (tâche #14, data-gated : peuplé seulement si l'historique BTC
+    # est disponible). Aujourd'hui SEULE la phase de cycle Bitcoin (fait déterministe,
+    # aucun LLM) ; géopolitique/réglementaire reste un seam vide -- aucune source fiable
+    # branchée, jamais de donnée inventée en attendant. Sans donnée -> section omise.
+    market_context: dict | None = None
 
     @property
     def actionable(self) -> bool:
@@ -556,6 +561,34 @@ def _fmt_price(value: float) -> str:
     return s if s else "0"
 
 
+_PHASE_LABEL_EN = {
+    "accumulation": "accumulation",
+    "hausse (markup)": "markup (uptrend)",
+    "distribution": "distribution",
+    "baisse (markdown)": "markdown (downtrend)",
+}
+
+
+async def _attach_market_context(result: VCResult, lang: str = "fr") -> VCResult:
+    """Contexte marché macro (tâche #14) : phase actuelle du cycle Bitcoin, seule source
+    macro disponible aujourd'hui (déterministe, aucun appel LLM, cache 1h -- zéro coût/
+    latence ajoutés à chaque rapport). Data-gated : historique BTC indisponible -> section
+    omise, rapport strictement inchangé. Géopolitique/réglementaire : seam volontairement
+    vide (aucune source fiable branchée), jamais de donnée inventée en attendant."""
+    from aria_core.skills.btc_cycles import fetch_current_macro_phase
+
+    try:
+        phase = await fetch_current_macro_phase()
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant, le rapport reste valide sans cette section
+        logger.warning("analyze_vc: contexte macro indisponible (%s)", exc)
+        phase = None
+    if not phase:
+        return result
+    label = _PHASE_LABEL_EN.get(phase["label"], phase["label"]) if lang == "en" else phase["label"]
+    result.market_context = {**phase, "label": label}
+    return result
+
+
 def _attach_ta(result: VCResult, ctx: TokenScanContext) -> VCResult:
     """Reporte l'analyse technique (niveaux réels + graphique) du ctx vers le VCResult.
 
@@ -599,6 +632,16 @@ def _attach_ta(result: VCResult, ctx: TokenScanContext) -> VCResult:
         logger.warning("analyze_vc: rendu graphique TA échoué (%s) — section sans image", exc)
         result.chart_data_uri = ""
     _attach_roi(result, ctx)
+    return result
+
+
+async def _attach_extras(result: VCResult, ctx: TokenScanContext, lang: str = "fr") -> VCResult:
+    """Regroupe les enrichissements additifs et data-gated : TA+ROI (synchrones) puis
+    contexte macro (async, réseau). Chacun est INDÉPENDANT -- l'absence de la donnée
+    d'un enrichissement n'empêche jamais les autres (le contexte macro ne dépend pas de
+    l'existence d'une série OHLCV pour CE token, contrairement à TA/ROI)."""
+    _attach_ta(result, ctx)
+    await _attach_market_context(result, lang)
     return result
 
 
@@ -675,7 +718,7 @@ async def analyze_vc_with_context(
     t_scan = time.monotonic() - t_start
 
     if not ctx.valid_address:
-        return _attach_ta(_deterministic_fallback(ctx), ctx), ctx
+        return await _attach_extras(_deterministic_fallback(ctx), ctx, lang), ctx
 
     history = await list_theses_for_token(ctx.contract)
     untrusted = _build_untrusted_context(ctx, history)
@@ -708,17 +751,17 @@ async def analyze_vc_with_context(
 
     if not raw:
         _log_timing(False)
-        return _attach_ta(_deterministic_fallback(ctx), ctx), ctx
+        return await _attach_extras(_deterministic_fallback(ctx), ctx, lang), ctx
 
     parsed = _extract_json(raw)
     if parsed is None:
         logger.warning("analyze_vc: sortie LLM non parsable — fallback déterministe")
         _log_timing(False)
-        return _attach_ta(_deterministic_fallback(ctx), ctx), ctx
+        return await _attach_extras(_deterministic_fallback(ctx), ctx, lang), ctx
 
     result = _validate_llm_output(parsed, ctx)
     _enforce_danger_veto(result, ctx)
-    _attach_ta(result, ctx)
+    await _attach_extras(result, ctx, lang)
     _log_timing(result.llm_used)
     out = (result, ctx)
     if cache_ttl > 0 and result.llm_used:
