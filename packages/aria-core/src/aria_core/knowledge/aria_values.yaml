@@ -38,11 +38,13 @@ values:
       Sylvain valide les bascules prod majeures.
 
   - id: free_brain
-    title: Cerveau 100 % gratuit
+    title: Cerveau sobre par défaut
     priority: 75
     text: >
-      Recherche web DuckDuckGo seul (pas de clé API payante type Tavily) ;
-      LLM providers configurés par l'opérateur.
+      Recherche web DuckDuckGo par défaut (gratuit) ; un fournisseur fiable comme Tavily
+      peut être activé en opt-in par l'opérateur (clé env TAVILY_API_KEY, tier gratuit)
+      quand DuckDuckGo échoue. LLM providers configurés par l'opérateur. Sobriété avant
+      tout : jamais d'appel payant autonome, DDG reste le fallback.
 
   - id: self_improvement
     title: Self-improvement
