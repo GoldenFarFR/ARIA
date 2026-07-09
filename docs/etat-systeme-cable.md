@@ -332,10 +332,11 @@ filtre de chemin) — c'est un job CI, aucun composant runtime, rien à déploye
 `.secrets.baseline` = état audité au 09/07, à régénérer et ré-auditer si un vrai nouveau secret
 légitime apparaît (procédure dans le commentaire du workflow).
 
-## INCIDENT — clé privée réelle du wallet Virtuals exposée puis retirée du code (09/07 nuit 3)
+## INCIDENT — clé privée réelle du wallet Virtuals exposée puis retirée du code (09/07 nuit 3) — RÉSOLU
 `skills/development/connect.ts` contenait une clé privée + adresse en dur, confirmée par
 l'opérateur comme le VRAI wallet actif de l'agent Virtuals "Aria Vanguard ZHC" (mainnet, pas un
 exemple testnet malgré la référence `baseSepolia` dans le fichier). Code corrigé (lecture depuis
-`process.env`), mais **la rotation de clé côté plateforme Virtuals (ajout nouveau signer → retrait
-de l'ancien) n'était pas confirmée terminée à la fin de la session — à vérifier en priorité avant
-toute nouvelle action touchant ce wallet.** Détail complet : `docs/HANDOFF-2026-07-09-nuit3.md`.
+`process.env`). **Rotation de clé côté plateforme Virtuals confirmée terminée par l'opérateur
+(09/07)** : nouvelle clé ajoutée en section "Signers", vérifiée active, PUIS ancienne clé (celle
+qui a fuité) supprimée — bon ordre respecté (jamais l'inverse, pour ne pas perdre l'accès). Détail
+complet : `docs/HANDOFF-2026-07-09-nuit3.md`.

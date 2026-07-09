@@ -56,11 +56,13 @@ des captures) — pas du testnet, pas un exemple. Correction de trajectoire act�
 plus présumer "probablement bénin" sur un finding de sécurité sans preuve, remonter le doute
 explicitement à l'opérateur.
 
-**Rotation de clé — guidée en temps réel, statut à la fin de cette session : NON CONFIRMÉ terminé.**
-Ordre recommandé sur l'UI Virtuals (section "Signers") : ajouter la nouvelle clé → vérifier →
-supprimer l'ancienne (jamais l'inverse). Dernier état connu : l'opérateur était en train de suivre
-cette procédure. **À vérifier en tout premier lieu à la prochaine session** — ne pas supposer que
-c'est fait.
+**Rotation de clé — CONFIRMÉE terminée par l'opérateur (09/07, même session).** Ordre suivi sur
+l'UI Virtuals (section "Signers") : nouvelle clé ajoutée → vérifiée active → ancienne clé (celle
+qui a fuité) supprimée seulement ensuite. Point de confusion en route : une première capture
+montrait une section "Clés API" (différente des "Signers"/wallet) — clarifié avant d'agir, pour ne
+pas supprimer la mauvaise chose. Restant à faire par l'opérateur, non bloquant : vérifier
+l'historique Basescan du wallet sur la fenêtre d'exposition (05/07 → rotation) pour confirmer
+qu'aucun mouvement suspect n'a eu lieu.
 
 **Point non résolu, bloqué par un garde-fou légitime** : une chaîne ressemblant à un JWT dans
 `skills/core/memory/ACP VIRTUAL PROTOCOL/20260628_1139_source.md:211` n'a pas pu être inspectée —
