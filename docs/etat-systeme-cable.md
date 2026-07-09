@@ -131,9 +131,9 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   Grok via Virtuals/Spark ; Claude Opus 4.8 n'est utilisé qu'en mode "develop" interne, jamais
   annoncé comme tel). `grounding.py:grounded_llm_identity()` porte maintenant une ligne
   explicite lui interdisant d'affirmer un nom de modèle précis sans certitude.
-- **Boîte de dépôt de connaissance — codée, PAS ENCORE déployée** : `docs/aria-learning-inbox/`
-  + `skills/knowledge_inbox.py`, heartbeat `knowledge_inbox_cycle` (360 min), gaté
-  `ARIA_KNOWLEDGE_INBOX_ENABLED` (off par défaut). Lit une note non traitée, PROPOSE (jamais
+- **Boîte de dépôt de connaissance — EN LIGNE, déployée et activée** : `docs/aria-learning-inbox/`
+  + `skills/knowledge_inbox.py`, heartbeat `knowledge_inbox_cycle` (360 min),
+  `ARIA_KNOWLEDGE_INBOX_ENABLED=true` sur le VPS. Lit une note non traitée, PROPOSE (jamais
   n'impose) son intégration dans `knowledge/*.yaml`/`canonical_facts.yaml` via une issue
   GitHub (`aria-knowledge-proposal`) — jamais un commit ni une fusion autonome. Une note n'est
   proposée qu'une seule fois (mémorisé localement). `CLAUDE.md` reste réservé au briefing de
@@ -143,9 +143,9 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   direct `http://127.0.0.1:8000` (pas de nginx, pas de verrou Basic Auth) — c'est la session
   à privilégier pour toute interaction relay/Telegram en direct, plutôt qu'une session cloud
   (bloquée réseau) ou un clone local Windows (désynchronisation manuelle).
-- **Revue de performance ARIA par Claude — codée, PAS ENCORE déployée (09/07)** :
+- **Revue de performance ARIA par Claude — EN LIGNE, déployée et activée (09/07)** :
   `skills/claude_mentor.py` + heartbeat `claude_mentor_cycle` (60 min, throttle interne
-  ~1x/jour). Gaté `ARIA_CLAUDE_MENTOR_ENABLED` (off) + relais déjà actif
+  ~1x/jour). `ARIA_CLAUDE_MENTOR_ENABLED=true` sur le VPS, relais déjà actif
   (`ARIA_RELAY_ACCESS_TOKEN`). Corrige la conception initiale ("Claude bavarde avec ARIA")
   vers un vrai retour d'entraînement : lit ses données de performance RÉELLEMENT mesurées
   (`vc_predictions.metrics()`, `paper_trader.portfolio_summary()`,
@@ -160,9 +160,9 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   jamais un commit ni une fusion autonome, revue humaine systématique). Zéro chat libre
   sans ancrage factuel : si aucune donnée de perf n'existe encore (`insufficient_data`),
   le cycle ne coûte rien et n'appelle pas le LLM.
-- **Alertes proactives haute-conviction — codée, PAS ENCORE déployée (09/07)** :
+- **Alertes proactives haute-conviction — EN LIGNE, déployée et activée (09/07)** :
   `skills/high_conviction_alerts.py`, heartbeat `high_conviction_alert_cycle` (60 min),
-  gaté `ARIA_HIGH_CONVICTION_ALERTS_ENABLED` (off par défaut). Pousse une alerte Telegram
+  `ARIA_HIGH_CONVICTION_ALERTS_ENABLED=true` sur le VPS. Pousse une alerte Telegram
   dès que `candidate_ranking` (déjà existant, rien dupliqué) fait remonter un candidat
   `SAFE` au-dessus du score composite (seuil 80/100) — signal de tri, jamais un ordre
   d'achat, renvoie vers `/vc <contrat>` pour l'analyse complète. Un contrat n'est alerté
