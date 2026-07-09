@@ -1052,10 +1052,17 @@ class AriaBrain:
                     None,
                 )
 
+        # Chemin calibré/web (Tavily/DDG via web_first_answer) : pour les visiteurs publics
+        # sur toute question factuelle, ET pour l'opérateur sur les questions d'ACTU
+        # (news/prix/actualité) -- sinon la conversation fondateur (public=False) ne
+        # déclenchait JAMAIS la recherche web et ARIA répondait de mémoire. is_live_info_question
+        # exclut déjà les sujets perso opérateur (impôts, admin) et produits ARIA.
         if (
-            public
-            and not _is_strategic_conversation(route)
-            and (is_factual_question(route) or is_general_qa(route))
+            not _is_strategic_conversation(route)
+            and (
+                (public and (is_factual_question(route) or is_general_qa(route)))
+                or is_live_info_question(route)
+            )
         ):
             cal_reply, cal_data = await resolve_calibrated_answer(message, lang_key)
             if cal_reply:
