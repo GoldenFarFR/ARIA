@@ -535,13 +535,11 @@ class AriaBrain:
             h = holding_name()
             skill_output = (
                 f"Je me concentre sur {h} — pas de benchmark ni contact concurrent.\n"
-                f"Priorité : site holding, moat produit, objectif "
-                f"{settings.aria_revenue_goal_monthly_usd:.0f} $/mois."
+                f"Priorité : track-record VC/trading, aucun produit payant aujourd'hui."
                 if lang == LANG_FR
                 else (
                     f"I focus on {h} — no competitor benchmark or outreach.\n"
-                    f"Priority: holding site, product moat, "
-                    f"${settings.aria_revenue_goal_monthly_usd:.0f}/mo goal."
+                    f"Priority: VC/trading track record, no paid product today."
                 )
             )
             actions.append("ZHC bridge: holding focus")

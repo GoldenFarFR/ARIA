@@ -40,15 +40,18 @@ def test_procedural_level_500_is_harder_than_13():
     assert early["handcrafted"] is False or early["level"] == 13
 
 
-def test_auto_business_level_on_revenue(monkeypatch):
-    cl.complete_level("business", note="hypothesis doc")
-    rg.record_revenue(1.0, source="test", note="level 2")
+def test_business_level_no_longer_auto_promotes_on_revenue():
+    """Aucun produit payant aujourd'hui : la rubrique business suit le barème du pacte
+    (docs/protocole-argent-reel.md), pas un compteur de dollars -- plus de metric/target
+    automatique, la promotion reste manuelle (complete_level)."""
+    cl.complete_level("business", note="pact bar documented")
+    rg.record_revenue(1.0, source="test", note="no longer wired to a level")
     state = cl.category_state("business", "fr")
     assert state["next_level"] == 2
-    assert state["auto_ready"] is True
+    assert state["auto_ready"] is False
     events = cl.check_auto_completions()
-    assert len(events) >= 1
-    assert cl.load_progress()["categories"]["business"]["level"] >= 2
+    assert not any(e.get("category") == "business" for e in events)
+    assert cl.load_progress()["categories"]["business"]["level"] == 1
 
 
 def test_format_summary_mentions_axes():
