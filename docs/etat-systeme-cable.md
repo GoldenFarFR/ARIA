@@ -160,6 +160,14 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   jamais un commit ni une fusion autonome, revue humaine systématique). Zéro chat libre
   sans ancrage factuel : si aucune donnée de perf n'existe encore (`insufficient_data`),
   le cycle ne coûte rien et n'appelle pas le LLM.
+- **Alertes proactives haute-conviction — codée, PAS ENCORE déployée (09/07)** :
+  `skills/high_conviction_alerts.py`, heartbeat `high_conviction_alert_cycle` (60 min),
+  gaté `ARIA_HIGH_CONVICTION_ALERTS_ENABLED` (off par défaut). Pousse une alerte Telegram
+  dès que `candidate_ranking` (déjà existant, rien dupliqué) fait remonter un candidat
+  `SAFE` au-dessus du score composite (seuil 80/100) — signal de tri, jamais un ordre
+  d'achat, renvoie vers `/vc <contrat>` pour l'analyse complète. Un contrat n'est alerté
+  qu'une seule fois (mémorisé localement, jamais de spam sur le même candidat). Respecte
+  le kill-switch (`/stop`).
 - **Adressage `@claude` dans le chat Telegram opérateur/ARIA (09/07)** : un vrai chat à 3
   identités visuellement distinctes (avatars séparés) est **impossible avec un seul token de
   bot Telegram** — Telegram n'autorise qu'une identité par bot. Palliatif déjà en place :

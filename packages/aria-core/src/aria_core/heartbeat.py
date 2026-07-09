@@ -284,6 +284,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=60,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="high_conviction_alert_cycle",
+        name="Alertes proactives haute-conviction",
+        description="Pousse une alerte Telegram des que le pool screene fait remonter un candidat SAFE au-dessus du seuil de score compose (candidate_ranking, deja existant -- rien duplique). Signal de tri, jamais un ordre d'achat -- renvoie vers /vc <contrat> pour l'analyse complete. Un contrat n'est alerte qu'une seule fois. Gate OFF par defaut.",
+        interval_minutes=60,
+        enabled=False,
+    ),
 ]
 
 
@@ -368,6 +375,10 @@ def _sync_x_curiosity_enabled() -> None:
             from aria_core.skills.claude_mentor import claude_mentor_enabled
 
             task.enabled = claude_mentor_enabled()
+        if task.id == "high_conviction_alert_cycle":
+            from aria_core.skills.high_conviction_alerts import high_conviction_alerts_enabled
+
+            task.enabled = high_conviction_alerts_enabled()
         if task.id == "acp_provider_poll":
             from aria_core.skills.acp_cli import is_acp_available
 
@@ -811,6 +822,17 @@ class AriaHeartbeat:
                 append_memory(
                     "claude_mentor",
                     f"[mentor] remarque postée (durable={result.get('durable', False)})",
+                )
+
+        elif task_id == "high_conviction_alert_cycle":
+            from aria_core.skills.high_conviction_alerts import run_high_conviction_alert_cycle
+
+            result = await run_high_conviction_alert_cycle(notifier=self._notify_telegram)
+            if result.get("outcome") == "ok":
+                append_memory(
+                    "high_conviction_alert",
+                    f"[alerte] {result.get('contract', '?')[:10]} -> score "
+                    f"{result.get('rank_score', 0):.0f}",
                 )
 
         elif task_id == "self_banner_curiosity":
