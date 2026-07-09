@@ -51,6 +51,7 @@ jobs:
             tests/test_vc_delivery.py \
             tests/test_vc_predictions.py \
             tests/test_virtuals_client.py \
+            tests/test_acp_onchain_bonding.py \
             tests/test_ta_levels.py \
             tests/test_chart_render.py \
             tests/test_telegram_format.py \
