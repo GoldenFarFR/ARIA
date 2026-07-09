@@ -22,7 +22,6 @@ from app.api.routes import (
     analysis,
     aria,
     auth,
-    billing,
     games,
     holding_member,
     pairs,
@@ -66,9 +65,6 @@ async def _background_startup() -> None:
     try:
         await init_db()
         await init_auth_db()
-        from app.billing.subscriptions import init_billing_db
-
-        await init_billing_db()
         await purge_expired()
         await repertoire_db.init_repertoire_db()
         from aria_core.content.content_db import init_content_db
@@ -161,7 +157,6 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/api")
-app.include_router(billing.router, prefix="/api")
 app.include_router(games.router, prefix="/api")
 app.include_router(pot.router, prefix="/api")
 app.include_router(telegram_route.router, prefix="/api")
@@ -236,16 +231,6 @@ async def health():
             "cli_available": __import__("shutil").which("acp") is not None,
             "provider_enabled": settings.aria_acp_provider_enabled,
             "events_file_configured": bool((settings.aria_acp_events_file or "").strip()),
-        },
-        "billing": {
-            "stripe_configured": bool(
-                settings.stripe_secret_key.strip() and settings.stripe_price_id.strip()
-            ),
-            "stripe_webhook_configured": bool(
-                (settings.stripe_webhook_secret or "").strip()
-            ),
-            "plan": "dexpulse_pro",
-            "price_usd": settings.market_pro_price_usd,
         },
     }
     try:

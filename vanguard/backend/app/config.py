@@ -200,12 +200,6 @@ class Settings(BaseSettings):
     aria_epistemic_web_verify: bool = True
     aria_epistemic_critic: bool = True
 
-    # Aria Market Pro — Stripe subscription (Vanguard checkout → webhook)
-    stripe_secret_key: str = ""
-    stripe_webhook_secret: str = ""
-    stripe_price_id: str = ""  # price_xxx recurring monthly
-    market_pro_price_usd: float = 5.0
-
     # GitHub — operator PAT; * = all repos under GITHUB_OWNER (see github_skill exclusions)
     github_token: str = ""
     github_owner: str = "GoldenFarFR"
@@ -266,7 +260,7 @@ class Settings(BaseSettings):
 
     @property
     def public_holding_url(self) -> str:
-        """Vitrine holding — checkout Stripe success/cancel, liens publics."""
+        """Vitrine holding — liens publics."""
         domain = self.holding_domain.strip().lstrip(".")
         if domain and not self.debug:
             return f"https://{domain}"
