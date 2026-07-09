@@ -61,7 +61,7 @@ PEER_AGENTS: tuple[PeerAgent, ...] = (
     PeerAgent(
         id="charles",
         name="Charles",
-        x_handle="CharlesAI",
+        x_handle="charles__AI",  # double underscore -- confirmé (Bitrue/CoinGecko/Coinbase), "CharlesAI" 404 silencieusement
         site="https://base.org",
         model="Base-chain AI agent token — narrative-heavy",
         revenue_streams=("token trading", "community speculation"),
