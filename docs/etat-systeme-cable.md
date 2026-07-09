@@ -50,7 +50,12 @@ l'utilise — il ne lui « fournit » pas la donnée.
 - `services/x_social.py` : le radar social tourne mais **en veille** (aucune vraie source X/Farcaster injectée → renvoie []).
 - `release_pipeline.py` (campagne X/TikTok) : complet mais **aucun déclencheur** ne l'appelle (rien ne l'arme).
 - **TikTok** : publisher non branché (`tiktok_publisher=None`).
-- `aria_core.x_profile` : module **non livré** (imports gardés en try/except pour ne pas crasher).
+- ~~`aria_core.x_profile` : module non livré~~ **LIVRÉ le 09/07 nuit 2** (`sync_x_profile()`) —
+  voir section dédiée plus bas. Commande Telegram active ; tâche heartbeat quotidienne encore
+  gardée par `ARIA_X_PROFILE_SYNC_ENABLED` (pas encore activée).
+- `opportunity_radar.py::mine_threads`/`extract_opportunities` : le scoring existe (langage
+  d'opportunité + accroches techniques Base), mais le FETCH réel d'une timeline X (`@base`,
+  `@Whale_AI_net`) n'est pas câblé — c'est la pièce qui manque pour #52.
 
 ## Ce qui est CODÉ mais ÉTEINT faute de clé (normal)
 LLM Vision, images xAI, ACP (CLI absent du conteneur = exécution financière de-facto non câblée).
@@ -217,6 +222,60 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   le VPS (`/opt/aria`, `claude`) au moment voulu, soit un futur cron VPS invoquant Claude en
   mode headless (pas encore construit, implique coût/risque de boucle à cadrer avec
   l'opérateur avant de le coder).
+
+## Recherche web fiable + fix chemin opérateur (09/07 nuit 2) — EN LIGNE, testé en conditions réelles
+- **Tavily** en opt-in derrière le point d'entrée unique `web_verify.fetch_web_snippets`
+  (provider-switch `ARIA_WEB_SEARCH_PROVIDER=tavily`, DDG reste le fallback). Client
+  `services/tavily.py`, patron dôme complet (throttle, backoff 429/403, `available`/`error`).
+  Clé `TAVILY_API_KEY` en env uniquement. **Actif en prod, confirmé** : health check
+  `aria_web: {provider: tavily, tavily_key_present: true}`, `/status` Telegram affiche
+  `Web: tavily (Tavily ✅)`.
+- **Bug critique trouvé et corrigé** : le chemin `resolve_calibrated_answer` (qui déclenche
+  Tavily/DDG) dans `brain.py::_general_response` était gaté `public` uniquement — la
+  conversation OPÉRATEUR ne l'atteignait JAMAIS, même sur une question d'actu explicite. Corrigé :
+  `is_live_info_question(route)` ouvre le chemin calibré/web pour l'opérateur aussi (le reste de
+  sa conversation fondateur est inchangé). **Vérifié en réel** : question Nvidia sur Telegram →
+  vraies news datées + sources + 1 crédit Tavily consommé (confirmé opérateur).
+- Déclenchement toujours **à la demande uniquement** (`should_use_web_verify`/
+  `is_live_info_question`), jamais un crawl de fond.
+
+## Profil X @Aria_ZHC — seam livré (09/07 nuit 2)
+`aria_core/x_profile.py` (était un seam vide documenté, imports gardés en `try/except` dans
+`heartbeat.py`/`visual_autonomy.py`, commande Telegram `/x profile sync|preview|force` déjà
+câblée mais muette). `sync_x_profile()` compare bio/nom/site à la narrative existante
+(`narrative.x_bio()`, `identity.ARIA_DISPLAY_NAME`, `narrative.holding_site_url()`), n'applique
+que s'il y a un écart. Champ "lieu" volontairement absent (aucune source canonique).
+Commande Telegram toujours disponible (admin-only). Tâche heartbeat quotidienne gardée en plus
+par `ARIA_X_PROFILE_SYNC_ENABLED` — **pas encore activée** sur le VPS.
+
+## Menu Telegram réduit au kill-switch (09/07 nuit 2 — choix opérateur)
+`set_my_commands` n'expose plus que `/stop`/`/resume`. Les 14 autres commandes (dont `/vc`,
+`/scan`, `/track`, `/watchlist`, `/github`...) restent enregistrées et fonctionnelles si tapées
+— retirées du menu visible seulement (l'opérateur passe par la conversation naturelle).
+
+## Autopsie pump/dump (#8) — ACTIVÉE en prod (09/07 nuit 2)
+`ARIA_PUMP_DUMP_AUTOPSY_ENABLED=true` sur le VPS. `skills/pump_dump_autopsy.py` re-analyse la
+vraie série OHLCV de chaque pronostic VC clos récemment (le point-à-point entrée→échéance de
+`weekly_training.resolve_due` masque un pump-puis-crash intermédiaire). Détection 100%
+déterministe (aucun LLM), autopsie LLM courte seulement si détecté, proposition d'issue GitHub
+(`aria-playbook-proposal`) si jugé durable — jamais un commit/fusion autonome.
+
+## Nettoyage narratif ACP/app-factory/$50-mois mort (09/07 nuit 2) — même famille que Aria Market
+L'ACP est abandonné et Stripe retiré, mais plusieurs surfaces poussaient encore ARIA à proposer
+"marketplace ACP + app payante v0 + Play Store" comme stratégie de revenu #1 (déclenché par un
+`founder_ping` proposant ce plan un soir où revenu=0, ce qui est toujours le cas aujourd'hui).
+**Bug public le plus grave trouvé** : `community_feedback.py` répondait à de vrais visiteurs X
+avec ce narratif mort, jamais gaté. Toutes les surfaces (persona, goals, heartbeat entrepreneur,
+cultivation curriculum, capability rubric...) réalignées sur le pacte réel
+(`docs/protocole-argent-reel.md`) : pas de produit payant actif aujourd'hui, la priorité est de
+prouver le track-record. `revenue_hypotheses()` renvoie `[]` (aucune hypothèse de monétisation
+en test actuellement, honnête plutôt que de lister des options mortes).
+
+## Pacte argent réel — deux étapes séquentielles (09/07 nuit 2)
+`docs/protocole-argent-reel.md` §3 : l'argent réel se débloque poche par poche, jamais les deux
+en même temps. VC réel (85%) débloqué en premier sur le track-record paper ; trading réel (15%)
+débloqué ENSUITE seulement, une fois le VC réel ayant lui-même rejoué le barème des 8 cases sur
+son propre track-record réel (pas le paper d'origine).
 
 ## Audit dexpulse/Aria Market (08/07 nuit) — nettoyage PAS ENCORE fait, juste cartographié
 L'opérateur veut purger toute trace de "dexpulse"/"Aria Market" (noms de produit obsolètes).
