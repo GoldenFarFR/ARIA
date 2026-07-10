@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from aria_core.investment_memory import VALID_DECISIONS, list_theses_for_token
 from aria_core.llm import chat_with_context
 from aria_core.skills.acp_onchain_scan import TokenScanContext, scan_base_token
+from aria_core.skills.market_sentiment import REGIME_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -208,12 +209,20 @@ def _extract_verified_links(ctx: TokenScanContext) -> list[dict]:
     return out
 
 
-def _build_untrusted_context(ctx: TokenScanContext, history: list[dict]) -> str:
+def _build_untrusted_context(
+    ctx: TokenScanContext, history: list[dict], sentiment_readings: list[dict] | None = None
+) -> str:
     """Assemble le bloc factuel (données non fiables) à partir de faits déjà collectés.
 
     N'inclut QUE de la donnée publique on-chain/marché — jamais de secret, jamais
     le code source brut du contrat (seuls les flags booléens déjà extraits par le
     scan sont présents, via ctx.risk_flags).
+
+    ``sentiment_readings`` (optionnel, régime BTC/ETH de ``market_sentiment.py``) est
+    injecté ICI, AVANT l'appel LLM — contrairement à l'overlay macro/cycle halving
+    (``_attach_market_context``) qui n'agit qu'APRÈS coup sur le rapport déjà généré
+    et n'influence jamais le raisonnement du LLM. Demande opérateur explicite (10/07) :
+    cette donnée doit réellement « ajuster la stratégie », pas seulement s'afficher.
     """
     lines = [
         f"Adresse du contrat : {_sanitize(ctx.contract, 60)}",
@@ -295,6 +304,23 @@ def _build_untrusted_context(ctx: TokenScanContext, history: list[dict]) -> str:
             "pas un prix chiffré précis) ; upside_pct/downside_pct à 0 sauf si un autre "
             "chiffre fiable (liquidité, prix DexScreener) les rend estimables."
         )
+    if sentiment_readings:
+        sent_lines = []
+        for r in sentiment_readings:
+            regime = r.get("regime")
+            if not regime or regime == "donnees_insuffisantes":
+                continue
+            label = _sanitize(REGIME_LABELS.get(regime, regime), 120)
+            pair = _sanitize(r.get("pair"), 10)
+            detail = _sanitize(r.get("detail"), 200)
+            sent_lines.append(f"- {pair} : {label} ({detail})")
+        if sent_lines:
+            lines.append(
+                "Sentiment de marché continu (macro court/moyen terme, PAS spécifique à ce "
+                "token — à peser dans le timing/la conviction, jamais un fait sur le token "
+                "lui-même) :"
+            )
+            lines += sent_lines
     # Contexte de légitimité (drapeaux JUGÉS, pas bruts) : autorité du mint,
     # launchpad, profondeur de liquidité, comportement du wallet du dev.
     legit: list[str] = []
@@ -735,6 +761,19 @@ def _attach_roi(result: VCResult, ctx: TokenScanContext) -> VCResult:
     return result
 
 
+async def _fetch_sentiment_readings() -> list[dict]:
+    """Lit les dernières lectures de ``market_sentiment`` (jamais de recalcul ici,
+    c'est le heartbeat qui rafraîchit). Dégradation douce : gate OFF, DB vide ou
+    erreur -> liste vide, jamais bloquant pour l'analyse VC."""
+    try:
+        from aria_core.skills.market_sentiment import latest_readings
+
+        return await latest_readings()
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.warning("analyze_vc: lecture market_sentiment échouée (%s)", exc)
+        return []
+
+
 async def analyze_vc_with_context(
     contract: str, lang: str = "fr"
 ) -> tuple[VCResult, TokenScanContext]:
@@ -776,7 +815,8 @@ async def analyze_vc_with_context(
         return await _attach_extras(_deterministic_fallback(ctx), ctx, lang), ctx
 
     history = await list_theses_for_token(ctx.contract)
-    untrusted = _build_untrusted_context(ctx, history)
+    sentiment_readings = await _fetch_sentiment_readings()
+    untrusted = _build_untrusted_context(ctx, history, sentiment_readings)
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"
         "<donnees_non_fiables>\n"

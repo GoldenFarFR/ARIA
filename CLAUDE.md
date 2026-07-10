@@ -50,6 +50,7 @@ défaut partout.
 - **Jamais satisfait**, au bon sens : ne pas retoucher ce qui marche — **discerner la vraie plus-value** et y aller à fond. Refaire du fonctionnel = risque gratuit.
 - **Reconnaître un vrai bon travail** quand il est livré. Fier de ce qui est bâti, affamé pour la suite.
 - **S'impliquer comme si sa vie en dépendait**, driver, anticiper les scénarios — pas juste attendre les instructions.
+- **Ne jamais appliquer une idée opérateur bêtement (10/07)** : quand operateur propose une approche (ex. "scanne 1x/jour", "un agent par repo"), l'évaluer d'abord — cadence, coût, mécanisme le plus adapté — et proposer mieux si ça existe, plutôt que d'exécuter la suggestion littérale sans réfléchir. Expliquer le raisonnement, pas juste le résultat.
 
 ## Profil opérateur
 l'operateur (coordonnées privées dans `aria-ops`). **Non-développeur** : expliquer simplement, pas à pas. Claude (chat + Claude Code) gère 100% de la construction/exploitation (Cursor/Grok abandonnés). Recoupe systématiquement. **En français**. Windows (PowerShell). **Une seule session IA à la fois sur le VPS de prod.**
@@ -241,10 +242,51 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   design "gamme luxe" definitivement acquis. `docs/protocole-argent-reel.md`/`/feuvert` restent la
   vraie réponse chiffrée à la question ("non, pas encore") — ce dashboard est la vitrine de
   transparence, pas une prétention de feu vert.
+- **Sentiment de marché → décision LLM réelle (#75, 10/07) — EN LIGNE.** Demande opérateur explicite,
+  après avoir vu le cockpit vide : « je veux que ses données soit utiles pour aria et toi pas pour
+  moi... pour que vous puissiez ajuster votre stratégie ». Distinction architecturale trouvée en
+  creusant `vc_analysis.py` : l'overlay macro halving (#14, `_attach_market_context`/`_attach_extras`)
+  s'exécute APRÈS la réponse LLM — pure décoration de rapport, n'a JAMAIS influencé le raisonnement,
+  malgré les apparences. Corrigé pour le sentiment BTC/ETH en le branchant sur le chemin PRÉ-LLM
+  (`_fetch_sentiment_readings` → `_build_untrusted_context`, même patron qu'EMA/MACD/golden pocket
+  #74) : le régime (doute_accumulation, euphorie, capitulation_peur...) atteint désormais le prompt
+  AVANT que le LLM ne tranche potentiel/thèse/recommandation. Régime `donnees_insuffisantes` jamais
+  affiché (silence). Dégradation douce (DB absente/gate OFF/erreur → liste vide, jamais bloquant).
+  6 tests ajoutés. **Le halving overlay (#14) reste, lui, post-hoc** — pas encore rebranché en
+  pré-LLM (hors scope de cette demande, seam à réévaluer si l'opérateur le souhaite).
+- **INCIDENT SÉCURITÉ MAJEUR (10/07) — délégation autonome à "Cursor" trouvée vivante et
+  RETIRÉE.** Déclenché par un message Telegram alarmant reçu par l'opérateur ("Feu vert reçu —
+  je cadre le chantier xprofile... je délègue à l'ouvrier Cursor") en réponse à `/feuvert`, qui
+  n'a RIEN à voir avec ce texte (commande déterministe, zéro coût LLM). Investigation (4 agents
+  parallèles + vérification manuelle) : un sous-système entier — `aria_worker_queue.py`,
+  `capability_gap.py`, `operator_readiness.py`, `skills/community_worker_skill.py` — committé le
+  05/07 **par Cursor lui-même** (co-auteur `cursoragent@cursor.com` sur les commits), câblé dans
+  `brain.py`/`heartbeat.py`/`telegram_bot.py`, jamais documenté nulle part dans CLAUDE.md malgré
+  la doctrine explicite "Cursor/Grok abandonnés". Reachable SANS validation opérateur : heartbeat
+  auto (6h et 15min), mots du quotidien en Telegram ("go", "vas-y", "lance", "nettoie le
+  répertoire"), et même un formulaire PUBLIC du site (`/api/aria/community-feedback`, visiteur
+  anonyme). **Preuve GitHub réelle que ça avait déjà agi** : issue #1 + PR #2 auto-générées le
+  03/07, jamais traitées, la réponse publique aux visiteurs affirmait littéralement "transmis à
+  l'ouvrier Grok/Cursor". `operator_go_ahead.py:136-138` (texte "Feu vert reçu — je reprends notre
+  échange et j'avance") confirmé comme la source exacte du message alarmant. **Retiré en entier**
+  (aria_worker_queue.py + community_worker_skill.py supprimés, capability_gap.py réduit à une
+  notification Telegram locale sans écriture GitHub ni délégation, brain.py/operator_readiness.py/
+  operator_go_ahead.py/community_feedback.py/health_watch.py nettoyés de tout appel externe).
+  Gardé : la synchro bannière X (self_maintenance.py) et la surveillance santé (health_watch.py),
+  qui notifient désormais Telegram au lieu de déléguer. `suggestion_feedback.py` supprimé au
+  passage (zéro appelant en prod, uniquement lié au worker queue mort). **Garde-fou mécanique
+  ajouté** : `test_coherence.py::test_external_write_actions_registered_in_allowlist` — toute
+  fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée
+  dans une allowlist explicite ; un nouvel appel non déclaré fait échouer la CI immédiatement,
+  sans dépendre d'un audit périodique ou d'une mémoire humaine. Testé positif (un faux appel
+  simulé fait bien échouer le test). **À faire par l'opérateur** : vérifier sur le VPS/Render la
+  valeur réelle de `GITHUB_WRITE_REPOS` (devrait être vide/off) ; décider si l'issue #1 et les
+  branches orphelines `aria/gap-x-profile-banner`/`cursor/aria-instinct-auto-ouvrier-delegate`
+  sont fermées/supprimées ou gardées en archive (question posée, pas encore tranchée).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
-- **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici. **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
+- **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
 - **CI** : `.github/workflows/ci.yml` lance la surface VC + les capacités clés + le garde-fou de cohérence à chaque push touchant `packages/aria-core/**`.
 - **Workflow Git** : développer sur la branche `claude/…`, PUIS **fusionner dans `main`** pour que les nouvelles sessions ET la prod héritent (une session neuve lit le `CLAUDE.md` de `main`). Rien n'est déployé sans `./vanguard/deploy.sh` sur le VPS.
 - **Paper-trading 1M$** : tâche heartbeat `paper_trade_cycle` **gatée par `ARIA_PAPER_TRADING_ENABLED`** (OFF par défaut) ; l'activer démarre le run de preuve de 20 jours.

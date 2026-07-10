@@ -62,10 +62,7 @@ async def test_status_pulse_human_format(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setattr(collegue_mod, "_ops_memoire_candidates", lambda: [tmp_path])
-    monkeypatch.setattr(
-        "aria_core.operator_readiness._pending_worker_tasks",
-        lambda: [],
-    )
+
     async def _fake_gaps(**_):
         return [], ["API locale :8000 OK"]
 
@@ -76,7 +73,5 @@ async def test_status_pulse_human_format(monkeypatch, tmp_path):
 
     reply, data = await execute_operator_status_pulse("rien de nouveau a declarer ?", lang="fr")
     assert "Rien à déclarer" in reply
-    assert "vide — aucun [pending]" in reply
     assert "22h07 — fix pulse" in reply
     assert "Structure corporale" not in reply
-    assert data.get("pending_tasks") == []
