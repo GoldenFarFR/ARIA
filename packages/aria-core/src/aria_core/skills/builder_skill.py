@@ -55,7 +55,6 @@ async def execute_build_optimize(user_message: str, lang: str = "en") -> tuple[s
             "5. Vérifier (build, test, smoke) + noter le pattern en mémoire\n\n"
             "**Créativité** : une idée distinctive par itération (UX, narrative, architecture).\n"
             "**Optimisation** : supprimer avant d'ajouter ; batch les appels coûteux.\n\n"
-            "Pour ancrer une règle permanente : `/directive <texte>`\n"
             "Pour mémoriser un pattern : `/learn engineering | <leçon>`\n"
         )
     else:
@@ -73,7 +72,6 @@ async def execute_build_optimize(user_message: str, lang: str = "en") -> tuple[s
             "5. Verify (build, test, smoke) + log the pattern to memory\n\n"
             "**Creativity**: one distinctive move per iteration (UX, narrative, architecture).\n"
             "**Optimization**: delete before adding; batch expensive calls.\n\n"
-            "Permanent rule: `/directive <text>`\n"
             "Store a pattern: `/learn engineering | <lesson>`\n"
         )
 

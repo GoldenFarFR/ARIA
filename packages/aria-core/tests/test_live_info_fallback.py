@@ -1,7 +1,23 @@
 import pytest
 
-from aria_core.knowledge.web_verify import WebSource
+from aria_core.knowledge.web_verify import (
+    _WEB_RECAL_PROMPT_EN,
+    _WEB_RECAL_PROMPT_FR,
+    WebSource,
+)
 from aria_core.presentation import format_live_info_brief, format_live_info_response
+
+
+def test_web_recal_prompt_forbids_cross_competition_conflation():
+    # Incident reel (10/07) : ARIA a affirme "France vs Espagne en demi-finale de la
+    # Coupe du monde" en citant une source qui parlait en fait de la Ligue des Nations
+    # (competition differente), et un quart de finale meme pas encore joue. Le prompt
+    # devait forcer une verification "meme evenement" + INCERTAIN si le resultat futur
+    # n'est pas encore determine, au lieu d'inventer un adversaire plausible.
+    for tpl in (_WEB_RECAL_PROMPT_FR, _WEB_RECAL_PROMPT_EN):
+        low = tpl.lower()
+        assert "même compétition" in low or "same competition" in low
+        assert "incertain" in low
 
 
 def test_format_live_info_picks_time_snippet():

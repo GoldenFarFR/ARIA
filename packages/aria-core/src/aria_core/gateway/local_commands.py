@@ -7,7 +7,6 @@ from typing import Any
 _SLASH_RE = re.compile(r"^\s*/(\w+)(?:@\S+)?(?:\s+(.*))?$", re.DOTALL)
 
 _LOCAL_COMMANDS = frozenset({
-    "directive",
     "learn",
     "status",
     "qi",
@@ -33,7 +32,6 @@ _NATURAL_EXACT: list[tuple[re.Pattern[str], str]] = [
 ]
 
 _NATURAL_PREFIX: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"^(?:directive|règle\s+permanente)\s*[:—-]\s*(.+)$", re.I), "directive"),
     (re.compile(r"^(?:apprends|learn)\s*[:—-]\s*(.+)$", re.I), "learn"),
     (re.compile(r"^(?:calibre|calibrate)\s*[:—-]\s*(.+)$", re.I), "calibrate"),
     (re.compile(r"^(?:niveau|level)\s+(.+)$", re.I), "level"),
@@ -73,7 +71,6 @@ def _help_text(lang: str) -> str:
         return (
             "ARIA — langage naturel (pas de slash obligatoire)\n\n"
             "état aria · comment vas-tu · montre qi\n"
-            "directive : <règle permanente>\n"
             "apprends : <topic> | <leçon>\n"
             "calibre : <affirmation> | vrai|faux|incertain\n"
             "niveau aria · niveau up codage [note]\n"
@@ -82,7 +79,6 @@ def _help_text(lang: str) -> str:
         )
     return (
         "Local operator commands (console / operator API — no Telegram needed)\n\n"
-        "/directive <permanent rule>\n"
         "/learn <topic> | <lesson>\n"
         "/status\n"
         "/qi\n"
@@ -158,20 +154,6 @@ async def execute_local_command(message: str, lang: str = "fr") -> tuple[str, di
 
     if cmd == "status":
         return await _cmd_status(lang_key), {"local_command": "status"}
-
-    if cmd == "directive":
-        if not args:
-            usage = "Usage: /directive <règle permanente pour ARIA>"
-            return usage, {"local_command": "directive", "ok": False}
-        from aria_core.directives import append_directive
-
-        entry = append_directive(args)
-        msg = (
-            "Directive enregistrée — prioritaire dans chaque appel LLM."
-            if lang_key == "fr"
-            else "Directive saved — prioritized in every LLM call."
-        )
-        return f"{msg}\n\n{entry}", {"local_command": "directive", "ok": True}
 
     if cmd == "learn":
         if "|" not in args:

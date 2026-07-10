@@ -70,7 +70,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="founder_ping",
         name="Founder initiative ping",
-        description="Spontaneous LLM idea + optional /directive for operator (Telegram)",
+        description="Spontaneous LLM idea for operator (Telegram)",
         interval_minutes=1440,
         enabled=False,
     ),

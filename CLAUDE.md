@@ -89,6 +89,17 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (utilisait à la place un réglage global toujours `True` en prod) — root cause d'une hallucination
   auto-rapportée par ARIA. Chaîne corrigée de bout en bout, verrouillée par tests. `heartbeat.py`
   rendu résilient (une tâche cassée ne coupe plus tout le cycle). Détail : `docs/HANDOFF-2026-07-09-nuit3.md`.
+- **Hallucination web réelle trouvée et corrigée (10/07)** : l'opérateur a demandé à ARIA
+  (Telegram, en direct) l'adversaire de la France en demi-finale d'un tournoi — elle a répondu
+  un adversaire précis, sourcé « LIVE INFO — verified web sources », alors que le quart de
+  finale qui déterminait cet adversaire n'était **même pas encore joué**, et l'une de ses
+  sources parlait en réalité d'une compétition différente (confondue avec la bonne par erreur).
+  Root cause : `_WEB_RECAL_PROMPT_FR`/`_WEB_RECAL_PROMPT_EN` (`web_verify.py`) disaient juste
+  « base ta réponse sur les extraits si pertinents » — rien n'obligeait à vérifier que la source
+  parle du MÊME événement, ni à répondre INCERTAIN quand un résultat futur dépend d'un tour pas
+  encore terminé. Prompt durci en conséquence (verrouillé par test). Preuve que les captures
+  d'écran opérateur restent le seul moyen de voir ARIA en action et de corriger son câblage sur
+  des faits, pas des suppositions — à continuer.
 - **INCIDENT SÉCURITÉ (09/07 nuit 3) — clé privée réelle exposée. RÉSOLU (rotation confirmée).**
   `skills/development/connect.ts` contenait le VRAI wallet actif de l'agent Virtuals "Aria Vanguard
   ZHC" (mainnet, du vrai ETH) codé en dur — confirmé par l'opérateur (captures dashboard Virtuals),
@@ -311,8 +322,20 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   append-only** (aucune fonction UPDATE/DELETE sur `aria_directive_log`). Deux frontières jamais
   franchies : capital réel (aucune catégorie financière dans l'allowlist) et auto-modification
   du canal (ARIA ne peut pas s'élargir ses propres pouvoirs). Surface de contrôle Telegram
-  admin `/directive` (list/log/propose/halt/resume). Verrouillé par `test_coherence`
+  admin `/canal` (list/log/propose/halt/resume). Verrouillé par `test_coherence`
   (`test_aria_directive_channel_perimeter_locked_and_gated` + `test_aria_directive_log_is_append_only`).
+  **Renommé `/directive` → `/canal` le 10/07** : une collision de nom de FONCTION Python
+  (`_handle_directive` réutilisé pour ce pilote) avait silencieusement écrasé l'ancienne
+  commande opérateur `/directive` (règle permanente → ARIA), la rendant injoignable en prod
+  sans qu'aucun test ne le détecte. Cette ancienne commande a depuis été **retirée entièrement**
+  (jamais utilisée en pratique, doublon du vrai flux : demander à Claude Code d'éditer
+  `directives.md` directement, revu et testé) — voir `directives.py`/`directives.md`. Un
+  **second bug réel trouvé au passage** : `get_directives_text()` tronquait la doctrine
+  concaténée par la fin, donc dès que `directives.md` dépassait la limite (4000 car.), toute
+  directive opérateur vivante était silencieusement invisible pour ARIA — corrigé (le live
+  prime désormais sur le statique, jamais tronqué). Leçon (même famille que le résidu Cursor
+  ci-dessus) : après un ajout de fonctionnalité, grep les noms de fonction/commande existants
+  AVANT de réutiliser un nom, et tester le chemin qu'on modifie, pas seulement le nouveau.
   **Élargir le périmètre = décision opérateur explicite, catégorie par catégorie** (jamais « tout
   sauf le sensible » d'un coup). **Pas encore câblé au heartbeat** (ARIA ne propose pas encore en
   autonomie — étape suivante à valider). Aucun câblage automatique tant que ce n'est pas décidé.
