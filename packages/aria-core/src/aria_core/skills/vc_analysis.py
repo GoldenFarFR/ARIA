@@ -279,6 +279,11 @@ def _build_untrusted_context(
             lines.append(
                 f"- Setup golden pocket + divergence RSI PRÉSENT : {'; '.join(g.reasons)}{rr_txt}"
             )
+        if ctx.ta_candle_patterns:
+            patterns_txt = "; ".join(
+                f"{p.name} ({p.direction}, {p.detail})" for p in ctx.ta_candle_patterns
+            )
+            lines.append(f"- Dernières bougies notables : {patterns_txt}")
         lines.append(
             "Appuie entrée, invalidation et cible sur ces niveaux techniques réels ; "
             "ne propose jamais un niveau non soutenu par ces données."
