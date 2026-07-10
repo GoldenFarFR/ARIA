@@ -156,6 +156,10 @@ def test_build_recent_tokens_url_defaults():
     assert url.startswith("https://www.clanker.world/api/tokens?")
     assert "chainId=8453" in url
     assert "limit=50" in url
+    # sortBy confirmé en direct depuis le VPS le 10/07 (énumération stricte révélée par
+    # l'erreur de validation de l'API) : "deployed-at", pas "createdAt" (plausible mais faux).
+    assert "sortBy=deployed-at" in url
+    assert "sort=desc" in url
 
 
 def test_build_recent_tokens_url_clamps_limit():
