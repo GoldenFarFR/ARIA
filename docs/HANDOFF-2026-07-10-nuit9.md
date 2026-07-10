@@ -175,6 +175,12 @@ quelques secondes, confirmé de nouveau (déjà vérifié 09/07 avec d'autres do
    nécessite un signalement à Anthropic.
 6. Items déjà en attente depuis nuit8 (SSH VPS #17, accès IONOS/Shekel, JWT non vérifié dans
    un fichier de mémoire) — toujours non traités, aucun accès/contexte nouveau ce segment.
+7. `deploy.sh` ne purge jamais le cache Docker (images + build cache) après un build — cause
+   confirmée du remplissage disque VPS à 79,8% traité ce segment (nettoyage manuel one-shot
+   80%→11%, pas une correction à la source). Proposé d'ajouter un `docker image prune -f` +
+   `docker builder prune -f` automatique en fin de script — jamais confirmé par l'opérateur,
+   donc pas fait. Sans ce fix, le disque se remplira de nouveau au fil des prochains
+   déploiements.
 
 ## Auto-critique honnête
 
