@@ -1,28 +1,10 @@
 const STEPS = [
-  {
-    title: 'Sourcing',
-    body: "Découverte de pools sur Base (volume, nouveauté, niche Virtuals pré-bonding) et écoute sociale (X). Le social réveille l'attention, il ne déclenche jamais un ordre.",
-  },
-  {
-    title: 'Filtre de sécurité',
-    body: "Contrat, holders, honeypot, taxes réelles, propriété du mint (Blockscout + GoPlus Security). Un token qui échoue ici n'atteint jamais l'analyse suivante.",
-  },
-  {
-    title: 'Analyse quantitative',
-    body: 'Niveaux techniques réels (support/résistance, RSI, EMA/MACD, Bollinger, Fibonacci + divergence), liquidité, concentration des holders, comportement smart-money — tout dérivé de données on-chain vérifiables, jamais estimé.',
-  },
-  {
-    title: 'Analyse qualitative (LLM)',
-    body: "Thèse d'investissement ancrée sur les chiffres ci-dessus, jamais librement inventée. Toute donnée manquante est déclarée comme telle plutôt que comblée.",
-  },
-  {
-    title: 'Juge adverse',
-    body: "Une seconde passe LLM, indépendante, cherche activement les failles de l'analyse avant qu'elle ne sorte.",
-  },
-  {
-    title: 'Track record',
-    body: 'Chaque verdict est journalisé et daté avant de connaître son issue. Le résultat réel (P&L) est attribué plus tard, jamais réécrit — la calibration ci-dessus vient de ce journal.',
-  },
+  { title: 'Sourcing', body: 'Pools Base + écoute X. Le social réveille, jamais ne déclenche.' },
+  { title: 'Filtre de sécurité', body: "Contrat, holders, honeypot. Échec ici = arrêt net." },
+  { title: 'Analyse quantitative', body: 'RSI, EMA/MACD, Bollinger, Fibonacci, liquidité — jamais estimé.' },
+  { title: 'Analyse qualitative (LLM)', body: 'Thèse ancrée sur ces chiffres. Donnée manquante = déclarée.' },
+  { title: 'Juge adverse', body: "Une 2e IA cherche les failles avant publication." },
+  { title: 'Track record', body: 'Verdict daté avant résultat. Jamais réécrit.' },
 ]
 
 export function CockpitMethodologyPanel() {
