@@ -75,7 +75,7 @@ SCHÉMA JSON EXACT attendu :
   "potentiel": <entier 0 à 10>,
   "risque": "<FAIBLE|MODÉRÉ|ÉLEVÉ|EXTRÊME>",
   "confiance_globale": "<haute|moyenne|faible : ton niveau de confiance dans cette analyse au vu des données disponibles>",
-  "these": "<thèse d'investissement synthétique, 2-4 phrases>",
+  "these": "<thèse d'investissement, 3-5 phrases. Ancre-la sur au moins DEUX signaux CONCRETS déjà fournis dans le contexte (score de sécurité, liquidité, R/R, niveaux techniques, contexte marché, smart money) -- jamais une généralité qui pourrait s'appliquer à n'importe quel token>",
   "recommandation": "<BUY|WATCH|SELL|AVOID>",
   "taille_pct": <nombre 0 à 10 : % du capital suggéré ; 0 si recommandation != BUY>,
   "entree": "<zone d'entrée ou 'marché'>",
@@ -84,15 +84,15 @@ SCHÉMA JSON EXACT attendu :
   "upside_pct": <nombre 0 à 2000 : gain potentiel estimé en %, de l'entrée jusqu'à la cible ; 0 si non estimable avec les données disponibles>,
   "downside_pct": <nombre 0 à 100 : perte potentielle estimée en %, de l'entrée jusqu'au niveau d'invalidation ; 0 si non estimable>,
   "scenarios": [
-    {"nom": "bull", "cible": "<cible de prix ou multiple>", "probabilite": <entier 0 à 100>, "confiance": "<haute|moyenne|faible>"},
-    {"nom": "base", "cible": "<...>", "probabilite": <0 à 100>, "confiance": "<...>"},
-    {"nom": "bear", "cible": "<...>", "probabilite": <0 à 100>, "confiance": "<...>"}
+    {"nom": "bull", "cible": "<cible de prix ou multiple>", "cible_multiple": <nombre positif : multiple estimé du prix d'entrée pour CE scénario (ex. 3.0 = x3), 0 ou omis si non estimable>, "probabilite": <entier 0 à 100>, "confiance": "<haute|moyenne|faible>"},
+    {"nom": "base", "cible": "<...>", "cible_multiple": <...>, "probabilite": <0 à 100>, "confiance": "<...>"},
+    {"nom": "bear", "cible": "<...>", "cible_multiple": <...>, "probabilite": <0 à 100>, "confiance": "<...>"}
   ],
   "donnees_insuffisantes": ["<critère non sourçable>", ...],
   "rapport_detaille": "<analyse complète Invest_Prompt_v4 : Potentiel (Techno/Moat, Équipe, Traction, Marché, Tokenomics, Smart Money), Risque, Thèse, Conclusion + Recommandation. Marque explicitement chaque donnée manquante.>"
 }
 
-Les probabilités des 3 scénarios doivent refléter ton jugement (elles n'ont pas besoin de sommer exactement à 100). Chaque scénario porte son propre niveau de confiance.
+Les probabilités des 3 scénarios doivent refléter ton jugement (elles n'ont pas besoin de sommer exactement à 100). Chaque scénario porte son propre niveau de confiance. cible_multiple permet d'afficher une barre à l'échelle commune entre bull/base/bear (audit #11) -- ne le chiffre QUE si tu peux l'estimer depuis les données réelles fournies, sinon 0 (jamais un nombre inventé pour faire joli).
 
 upside_pct et downside_pct servent à calculer un ratio risque/récompense (R/R). Ne les chiffre QUE si les données le permettent (prix, niveaux de liquidité, cible et invalidation cohérents) ; sinon mets 0 — jamais de valeur inventée. downside_pct est une perte, exprimée en nombre positif."""
 
@@ -353,6 +353,20 @@ def _clamp_float(value: object, low: float, high: float, default: float) -> floa
     return max(low, min(high, n))
 
 
+def _positive_float_or_none(value: object, low: float, high: float) -> float | None:
+    """Comme ``_clamp_float`` mais sans valeur par défaut fabriquée : une valeur
+    absente/non numérique/non positive reste ``None`` (audit #11 -- la barre
+    Potentiel-$ des scénarios doit s'appuyer sur un vrai nombre estimé par le
+    LLM, jamais sur un défaut inventé quand il ne l'a pas chiffré)."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    return max(low, min(high, n))
+
+
 def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
     """Transforme la sortie LLM brute en VCResult validé (allowlists + clamps + troncatures)."""
     recommandation = str(parsed.get("recommandation", "")).strip().upper()
@@ -451,6 +465,7 @@ def _validate_scenarios(raw: object) -> list[dict]:
             {
                 "nom": nom,
                 "cible": _sanitize(item.get("cible"), 120),
+                "cible_multiple": _positive_float_or_none(item.get("cible_multiple"), 0.01, 1000.0),
                 "probabilite": _clamp_int(item.get("probabilite"), 0, 100, 0),
                 "confiance": confiance,
             }
