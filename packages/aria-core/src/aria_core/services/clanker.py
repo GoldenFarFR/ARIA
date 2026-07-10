@@ -13,13 +13,16 @@ tokens with filters, sorting, and cursor-based pagination »). Auth : aucune pou
 lecture publique (clé partenaire ``x-api-key`` uniquement pour des quotas plus élevés,
 non requise ici).
 
-⚠️ Noms exacts des paramètres de requête ET forme exacte de la réponse **non confirmés
-en direct** (doc publique muette sur le détail, un appel de test a renvoyé HTTP 403 —
-probable blocage anti-bot générique côté Cloudflare). Même caveat que
-``services/virtuals.py`` : à reconfirmer depuis le VPS (accès réseau réel, éventuel
-besoin d'un user-agent de navigateur) avant un premier branchement live. Le parsing
-ci-dessous est délibérément tolérant (``_first`` sur plusieurs noms de champs
-plausibles) pour dégrader proprement plutôt que de supposer une forme figée.
+Paramètres de requête (``chainId``/``sort``/``sortBy``/``limit``) CONFIRMÉS EN DIRECT
+depuis le VPS le 10/07 (le sandbox cloud, lui, était bloqué en HTTP 403 — anti-bot
+générique côté Cloudflare, comportement propre à cet environnement, pas à l'API).
+``sortBy`` accepte une énumération stricte (cf. ``_VALID_SORT_BY``) révélée par le
+message d'erreur de validation de l'API elle-même quand une valeur invalide est
+envoyée — ``createdAt`` (plausible) était faux, ``deployed-at`` est la vraie valeur.
+⚠️ La forme exacte de la réponse pour une requête VALIDE reste à confirmer (le test
+live n'a pour l'instant renvoyé qu'une erreur de validation, jamais de vraies
+données) — le parsing ci-dessous reste délibérément tolérant (``_first`` sur
+plusieurs noms de champs plausibles) pour dégrader proprement en attendant.
 
 Mêmes politiques que les autres clients de ce dossier :
 - Aucune écriture, aucune signature, GET uniquement.
@@ -112,13 +115,24 @@ def _first(mapping: dict, *keys: str) -> object:
 # ----------------------------------------------------------------------
 # Construction d'URL
 # ----------------------------------------------------------------------
+#: Valeurs acceptées par ``sortBy``, CONFIRMÉES EN DIRECT le 10/07 depuis le VPS (le
+#: endpoint renvoie une erreur de validation explicite listant l'énumération exacte
+#: quand on envoie une valeur invalide — ``createdAt``, plausible mais faux, a été
+#: corrigé grâce à ce message d'erreur). Seule ``deployed-at`` correspond à « le plus
+#: récent d'abord », ce qu'on veut pour la découverte.
+_VALID_SORT_BY = frozenset(
+    {"market-cap", "tx-h24", "volume-h24", "price-percent-h24", "price-percent-h1", "deployed-at"}
+)
+
+
 def build_recent_tokens_url(chain_id: int = 8453, limit: int = 50) -> str:
     """URL des tokens les plus récents sur Base (``chain_id=8453``).
 
-    Noms de paramètres plausibles (``chainId``/``sort``/``limit``), NON confirmés en
-    direct — cf. avertissement en tête de module. À reconfirmer sur le VPS avant
-    un premier branchement live ; la fonction reste isolée pour qu'une correction
-    ne touche qu'un seul point.
+    ``chainId``/``sort``/``sortBy``/``limit`` CONFIRMÉS EN DIRECT le 10/07 (VPS,
+    accès réseau réel — le sandbox cloud était bloqué en HTTP 403 anti-bot). La forme
+    exacte de la réponse pour une requête VALIDE reste à confirmer (le test live n'a
+    pour l'instant renvoyé qu'une erreur de validation, jamais des données) — le
+    parsing (``parse_clanker_token``) reste tolérant en attendant.
     """
     try:
         size = int(limit)
@@ -128,7 +142,7 @@ def build_recent_tokens_url(chain_id: int = 8453, limit: int = 50) -> str:
     params = [
         ("chainId", str(chain_id)),
         ("sort", "desc"),
-        ("sortBy", "createdAt"),
+        ("sortBy", "deployed-at"),
         ("limit", str(size)),
     ]
     return f"{_TOKENS_ENDPOINT}?{urlencode(params)}"

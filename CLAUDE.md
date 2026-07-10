@@ -361,14 +361,22 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   sur hypothèse (doctrine « profondeur proportionnelle à l'enjeu »). Un launchpad en échec n'arrête
   jamais les autres (best-effort par adaptateur, testé). Tâche heartbeat `bonding_discovery_cycle`
   (180min, gate OFF `ARIA_BONDING_DISCOVERY_ENABLED`), les deux volets (bonding/direct) tournent
-  indépendamment (l'échec de l'un n'efface jamais le succès de l'autre, testé). **Point d'attention
-  avant activation** : un appel de test à `GET /api/tokens` de Clanker a renvoyé HTTP 403 depuis
-  l'environnement cloud (probable blocage anti-bot générique, même caveat que `virtuals.py` en son
-  temps) — à reconfirmer depuis le VPS (accès réseau réel) avant d'activer le gate. 75 tests
+  indépendamment (l'échec de l'un n'efface jamais le succès de l'autre, testé). 75 tests
   ajoutés, suite complète verte (4209 passés, 1 échec pré-existant sans rapport — test live
   DuckDuckGo bloqué en sandbox). Deuxième passe de recherche (Bankr/Zora/Ape.store/Mint.club)
   jamais réellement lancée ce segment malgré l'intention — à refaire si l'opérateur veut creuser
   ces launchpads avant de leur donner un vrai client.
+  **Mise à jour (même jour) — Clanker vérifié en direct depuis le VPS, corrigé.** L'appel de test
+  `GET /api/tokens` avait renvoyé HTTP 403 depuis l'environnement cloud (anti-bot, propre à ce
+  sandbox) ; depuis le VPS (vrai accès réseau) l'API répond réellement. Mieux : une requête
+  volontairement invalide a fait remonter l'énumération EXACTE de `sortBy` dans le message
+  d'erreur de l'API elle-même — `market-cap`/`tx-h24`/`volume-h24`/`price-percent-h24`/
+  `price-percent-h1`/`deployed-at`. `createdAt` (ma supposition initiale, documentée comme non
+  confirmée) était **faux** — corrigé en `deployed-at` (le tri "plus récent d'abord" voulu pour
+  la découverte). La forme exacte de la réponse pour une requête VALIDE reste non confirmée (le
+  test n'a encore renvoyé qu'une erreur de validation) — à revérifier avant d'activer le gate.
+  Gate `ARIA_BONDING_DISCOVERY_ENABLED` toujours pas activé, étape suivante : dry-run manuel
+  (`run_bonding_discovery_cycle()`) demandé à l'opérateur avant activation en continu.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
