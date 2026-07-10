@@ -61,8 +61,16 @@ _FIELD_MAX = 600
 # (AVAILABLE/gradué, inconnu, None) → PAS en bonding (conservateur).
 _BONDING_STATUSES = frozenset({"UNDERGRAD", "PROTOTYPE", "1"})
 
-# Champs porteurs des VIRTUAL accumulés dans la courbe (confiance moyenne —
-# à revérifier sur le VPS). Absents → graduation_progress renvoie None.
+# Champs porteurs des VIRTUAL accumulés dans la courbe. VÉRIFIÉ EN DIRECT le
+# 10/07 (contrat 0x6f8c2Eb5..., payload complet inspecté) : AUCUN de ces noms
+# n'existe dans la réponse API réelle -- graduation_progress() renvoie donc
+# toujours None en pratique aujourd'hui (dégradation honnête, jamais un chiffre
+# inventé -- cf. le "56,94%" affiché par l'UI Virtuals, dont la vraie formule
+# n'est pas confirmée : ni mcapInVirtual/42000 ni totalValueLocked ne
+# reproduisent exactement ce nombre, donc pas de proxy fiable à câbler tant
+# que ce n'est pas confirmé). Gardés en whitelist au cas où l'API les
+# exposerait un jour (ou pour un token différent) -- coût nul, jamais de faux
+# positif puisque absents = None.
 _VIRTUAL_RAISED_KEYS = (
     "virtualRaised",
     "raisedVirtual",
@@ -197,6 +205,24 @@ def build_token_by_address_url(token_address: str, chain: str = "BASE") -> str:
     """
     params = [
         ("filters[tokenAddress][$eq]", str(token_address).lower()),
+        ("filters[chain]", str(chain).upper()),
+    ]
+    return f"{_VIRTUALS_ENDPOINT}?{urlencode(params, safe='[]:$')}"
+
+
+def build_token_by_pretoken_url(pre_token_address: str, chain: str = "BASE") -> str:
+    """URL de filtre par adresse PRE-TOKEN (``filters[preToken][$eq]=0x…``).
+
+    Diagnostic réel (10/07, contrat 0x6f8c2Eb5... testé en direct) : ``tokenAddress``
+    reste ``null`` TANT QU'un token n'a pas gradué -- c'est structurel, pas une
+    panne. L'adresse de contrat que voit l'opérateur pendant la phase de bonding
+    (celle affichée sur virtuals.io, celle qu'il colle dans `/vc`) est stockée
+    dans ``preToken``, jamais ``tokenAddress``. Sans ce filtre de repli,
+    ``fetch_by_address`` ne pouvait STRUCTURELLEMENT jamais trouver un token
+    encore en bonding par son adresse -- exactement la catégorie que
+    ``_resolve_bonding_phase`` est censée détecter."""
+    params = [
+        ("filters[preToken][$eq]", str(pre_token_address).lower()),
         ("filters[chain]", str(chain).upper()),
     ]
     return f"{_VIRTUALS_ENDPOINT}?{urlencode(params, safe='[]:$')}"
@@ -493,9 +519,21 @@ class VirtualsClient:
 
     async def fetch_by_address(self, token_address: str, chain: str = "BASE") -> VirtualToken | None:
         """Token Virtuals par adresse de contrat (ce que reçoit `/vc <contrat>`, jamais
-        l'id Strapi interne). ``None`` sur erreur ou absence — jamais d'exception."""
+        l'id Strapi interne). ``None`` sur erreur ou absence — jamais d'exception.
+
+        Essaie d'abord ``tokenAddress`` (token gradué). Si rien ne matche, retente
+        via ``preToken`` (token encore en bonding -- ``tokenAddress`` y est
+        toujours ``null``, cf. ``build_token_by_pretoken_url``). Un second appel
+        réseau uniquement dans ce cas de repli, jamais sur le chemin heureux."""
         try:
             url = build_token_by_address_url(token_address, chain=chain)
+            data, error = await self._get_json(url)
+            if error is None and isinstance(data, dict):
+                items = data.get("data")
+                if isinstance(items, list) and items:
+                    return parse_virtual(items[0])
+
+            url = build_token_by_pretoken_url(token_address, chain=chain)
             data, error = await self._get_json(url)
             if error is not None or not isinstance(data, dict):
                 return None
