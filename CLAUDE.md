@@ -556,6 +556,8 @@ Un agent qui « croit bien faire » (normaliser, aligner un exemple) peut **sile
 ## Politique modèles & subagents
 Défaut : **Sonnet 5 + effort xhigh** partout, jamais sous « high ». **Zone rouge** (wallet_guard, permission_mode, kill-switch, config.toml, regles-uniques, secrets) → basculer `/model opus` + xhigh, puis revenir. Subagents : `researcher` en Haiku (scans on-chain/web, lecture repo), `security-auditor` en Opus (tout changement wallet/garde-fou). Un subagent n'exécute jamais d'action financière et ne modifie jamais un garde-fou.
 
+**Économie de tokens (quota Claude MAX 5x, consigne opérateur explicite)** : préférer consommer moins de tokens sur la fenêtre de 5h, même si ça prend plus de tours/plus de délai pour arriver au même résultat. Concrètement pour le tool `Workflow` (orchestration multi-agents) : ne JAMAIS lancer le mode recherche approfondie par défaut (~100 agents en fan-out) — bien trop coûteux pour ce quota. Par défaut, utiliser `WebSearch` directement (2-5 requêtes ciblées) pour toute recherche. Un workflow (~20 agents, plus léger) reste acceptable seulement si l'opérateur le demande explicitement ou si la tâche a vraiment besoin d'orchestration déterministe à grande échelle — jamais un réflexe par défaut.
+
 ## Déploiement (public-safe)
 Backend Docker `aria-api`, binding **strictement `127.0.0.1:8000`** (JAMAIS public), nginx en façade (TLS). Data bind-mount `/opt/aria-data`. `vanguard/deploy.sh` (build + rollback + health). Vitrine : `vanguard/deploy-vitrine.sh`. **Accès VPS, IP et infra : privés, dans `aria-ops`.** Sécu prioritaire : SSH clé-only + fail2ban + firewall (l'IP a fuité dans l'historique public → durcir SSH est le vrai correctif).
 
