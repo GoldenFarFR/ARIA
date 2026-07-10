@@ -390,6 +390,16 @@ async def resolve_calibrated_answer(
     if wants_operator_status_pulse(query) or is_operator_local_question(query):
         return None, {"operator_local": True, "skip_web": True}
 
+    # Cotations connues (crypto majeures, devises) : chemin STRUCTURÉ prioritaire,
+    # avant tout scrappage web générique -- incident réel corrigé le 10/07 (BTC/SOL
+    # cités ~30% sous leur vrai prix depuis une page web périmée). Une question hors
+    # de ce périmètre reconnu (`None`) retombe intégralement sur le chemin existant.
+    from aria_core.skills.market_quotes import resolve_known_asset_quote
+
+    quote_reply = await resolve_known_asset_quote(query)
+    if quote_reply:
+        return quote_reply, {"market_quote": True, "skip_web": True}
+
     static, static_data = epistemic_static_answer(query, lang)
     if static:
         return static, static_data

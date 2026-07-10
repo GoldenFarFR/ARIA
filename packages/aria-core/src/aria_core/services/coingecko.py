@@ -52,6 +52,21 @@ class TokenFundamentals:
 
 
 @dataclass
+class SimplePriceResult:
+    """Prix courants réels (``simple/price``), jamais un point inventé — absence de
+    donnée portée par ``available=False`` + ``error``. ``last_updated_at`` (Unix,
+    fourni par CoinGecko lui-même via ``include_last_updated_at``) est la vraie
+    preuve de fraîcheur : contrairement à une page web scrappée (cf. incident 10/07
+    — prix BTC/SOL périmés cités comme « en direct »), ce n'est pas juste le
+    contenu d'une page, c'est l'horodatage de mise à jour côté CoinGecko."""
+
+    prices: dict[str, dict[str, float]] = field(default_factory=dict)  # {coin_id: {vs_ccy: prix}}
+    last_updated_at: dict[str, int] = field(default_factory=dict)  # {coin_id: unix_ts}
+    available: bool = False
+    error: str | None = None
+
+
+@dataclass
 class MarketChartResult:
     """Série (horodatage ms, prix USD) réelle pour une devise majeure — jamais un point
     inventé : absence de donnée portée par `available=False` + `error`."""
@@ -200,6 +215,59 @@ class CoinGeckoClient:
             genesis_date=data.get("genesis_date"),
             available=True,
             error=None,
+        )
+
+    async def get_simple_price(
+        self, coin_ids: list[str], *, vs_currencies: list[str] | None = None
+    ) -> SimplePriceResult:
+        """Prix courants réels pour une liste de coins CoinGecko (``simple/price``).
+
+        Remplace un scrappage de page web (incident réel 10/07 : BTC/SOL cités à
+        ~30% sous leur vrai prix depuis une page périmée présentée comme « en
+        direct ») par un point de donnée structuré, horodaté par CoinGecko lui-même.
+        ``coin_ids`` sont des identifiants CoinGecko (ex. ``"bitcoin"``, pas ``"BTC"``)
+        — la résolution symbole→id vit dans ``skills/market_quotes.py``, pas ici
+        (ce client reste un simple client HTTP, sans logique métier).
+        """
+        vs = vs_currencies or ["usd"]
+        if not coin_ids:
+            return SimplePriceResult(available=False, error=UNAVAILABLE)
+        ids_param = ",".join(coin_ids)
+        vs_param = ",".join(vs)
+        data, error = await self._get_json(
+            f"/simple/price?ids={ids_param}&vs_currencies={vs_param}&include_last_updated_at=true"
+        )
+        if error is not None:
+            return SimplePriceResult(available=False, error=error)
+        if not isinstance(data, dict) or not data:
+            return SimplePriceResult(available=False, error=UNAVAILABLE)
+
+        prices: dict[str, dict[str, float]] = {}
+        last_updated_at: dict[str, int] = {}
+        for coin_id, payload in data.items():
+            if not isinstance(payload, dict):
+                continue
+            coin_prices = {}
+            for ccy in vs:
+                value = payload.get(ccy)
+                try:
+                    if value is not None:
+                        coin_prices[ccy] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            if coin_prices:
+                prices[coin_id] = coin_prices
+            ts = payload.get("last_updated_at")
+            try:
+                if ts is not None:
+                    last_updated_at[coin_id] = int(ts)
+            except (TypeError, ValueError):
+                pass
+
+        if not prices:
+            return SimplePriceResult(available=False, error=UNAVAILABLE)
+        return SimplePriceResult(
+            prices=prices, last_updated_at=last_updated_at, available=True, error=None
         )
 
     async def get_market_chart_range(

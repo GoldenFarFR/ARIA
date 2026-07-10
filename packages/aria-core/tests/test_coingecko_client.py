@@ -164,3 +164,60 @@ async def test_timeout_retries_once_then_fallback(monkeypatch):
     assert fundamentals.available is False
     assert UNAVAILABLE in fundamentals.error
     assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_simple_price_success_with_freshness_timestamp(monkeypatch):
+    client = CoinGeckoClient()
+    url = (
+        "https://api.coingecko.com/api/v3/simple/price"
+        "?ids=bitcoin,ethereum&vs_currencies=usd&include_last_updated_at=true"
+    )
+    payload = {
+        "bitcoin": {"usd": 62083.96, "last_updated_at": 1752192000},
+        "ethereum": {"usd": 1796.10, "last_updated_at": 1752192010},
+    }
+    _patch_client(monkeypatch, {url: FakeResponse(200, payload)})
+
+    result = await client.get_simple_price(["bitcoin", "ethereum"])
+
+    assert result.available is True
+    assert result.prices["bitcoin"]["usd"] == pytest.approx(62083.96)
+    assert result.prices["ethereum"]["usd"] == pytest.approx(1796.10)
+    assert result.last_updated_at["bitcoin"] == 1752192000
+
+
+@pytest.mark.asyncio
+async def test_get_simple_price_empty_ids_no_call():
+    client = CoinGeckoClient()
+    result = await client.get_simple_price([])
+    assert result.available is False
+
+
+@pytest.mark.asyncio
+async def test_get_simple_price_unknown_coin_returns_unavailable(monkeypatch):
+    client = CoinGeckoClient()
+    url = (
+        "https://api.coingecko.com/api/v3/simple/price"
+        "?ids=not-a-real-coin&vs_currencies=usd&include_last_updated_at=true"
+    )
+    _patch_client(monkeypatch, {url: FakeResponse(200, {})})
+
+    result = await client.get_simple_price(["not-a-real-coin"])
+    assert result.available is False
+    assert result.error == UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_get_simple_price_rate_limited_never_invents_a_price(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    client = CoinGeckoClient()
+    url = (
+        "https://api.coingecko.com/api/v3/simple/price"
+        "?ids=bitcoin&vs_currencies=usd&include_last_updated_at=true"
+    )
+    _patch_client(monkeypatch, {url: [FakeResponse(429), FakeResponse(429), FakeResponse(429)]})
+
+    result = await client.get_simple_price(["bitcoin"])
+    assert result.available is False
+    assert result.prices == {}
