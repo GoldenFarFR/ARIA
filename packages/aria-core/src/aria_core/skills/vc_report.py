@@ -516,7 +516,10 @@ def _dollar_potential_html(result: VCResult, capital_usd: float | None, s: dict)
   </tr>"""
 
 
-def _scenario_card_html(sc: dict, width: str, padding: str, s: dict, lang: str) -> str:
+_SCEN_VALUE_MIN_WIDTH_PCT = 6  # plancher visuel : une barre n'est jamais totalement invisible
+
+
+def _scenario_card_html(sc: dict, width: str, padding: str, s: dict, lang: str, value_pct: int | None) -> str:
     nom = str(sc.get("nom", ""))
     title_key, bar_style, is_center = _SCEN_META.get(nom, (None, f"background-color:{_GOLD};", False))
     titre = s.get(title_key, nom) if title_key else nom
@@ -525,11 +528,23 @@ def _scenario_card_html(sc: dict, width: str, padding: str, s: dict, lang: str) 
     conf = _esc(confidence_label(sc.get("confiance", "faible"), lang))
     border = _GOLD if is_center else "#e0d6ba"
     bg = "#fdfaf1" if is_center else "#fbf8f0"
+    # Barre "échelle commune" (audit #11) : largeur proportionnelle au multiple
+    # cible ESTIMÉ par le LLM, PARTAGÉE entre les 3 cartes (pas une barre auto-
+    # échelle 0-100 par carte, qui rendrait bull/base/bear visuellement égaux
+    # quelle que soit leur ampleur réelle). Omise si le multiple n'a pas pu être
+    # chiffré pour au moins 2 des 3 scénarios (pas assez de signal comparable).
+    value_bar_html = ""
+    if value_pct is not None:
+        value_bar_html = f"""
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;background-color:#ece4cf;border-radius:4px;"><tr>
+                  <td width="{value_pct}%" style="height:6px;line-height:6px;font-size:0;border-radius:4px;{bar_style}opacity:0.55;">&nbsp;</td>
+                  <td width="{100 - value_pct}%" style="height:6px;line-height:6px;font-size:0;">&nbsp;</td>
+                </tr></table>"""
     return f"""<td class="stack sc-card" width="{width}" style="padding:{padding};vertical-align:top;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid {border};border-radius:10px;background-color:{bg};">
               <tr><td style="padding:16px 16px 14px;">
                 <div style="font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">{_esc(titre)}</div>
-                <div style="padding-top:8px;font-family:{_FONT_NUM};font-size:22px;line-height:1.2;font-weight:600;letter-spacing:-0.01em;font-variant-numeric:lining-nums tabular-nums;color:{_INK_WARM};">{cible}</div>
+                <div style="padding-top:8px;font-family:{_FONT_NUM};font-size:22px;line-height:1.2;font-weight:600;letter-spacing:-0.01em;font-variant-numeric:lining-nums tabular-nums;color:{_INK_WARM};">{cible}</div>{value_bar_html}
                 <div style="padding-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTE_WARM};">{_esc(s["scen_probability_label"])}&nbsp;{proba}%</div>
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;background-color:#ece4cf;border-radius:4px;"><tr>
                   <td width="{proba}%" style="height:6px;line-height:6px;font-size:0;border-radius:4px;{bar_style}">&nbsp;</td>
@@ -539,6 +554,22 @@ def _scenario_card_html(sc: dict, width: str, padding: str, s: dict, lang: str) 
               </td></tr>
             </table>
           </td>"""
+
+
+def _scenario_value_widths(scenarios: list[dict]) -> list[int | None]:
+    """Largeurs (0-100) de la barre "échelle commune", une par scénario, ``None``
+    si ce scénario n'a pas de ``cible_multiple`` chiffré. Toute la liste est
+    ``[None, ...]`` si moins de 2 scénarios ont un multiple exploitable (pas
+    assez de signal pour une comparaison honnête)."""
+    multiples = [sc.get("cible_multiple") for sc in scenarios]
+    valid = [m for m in multiples if isinstance(m, (int, float)) and m > 0]
+    if len(valid) < 2:
+        return [None] * len(scenarios)
+    max_multiple = max(valid)
+    return [
+        max(_SCEN_VALUE_MIN_WIDTH_PCT, round(m / max_multiple * 100)) if isinstance(m, (int, float)) and m > 0 else None
+        for m in multiples
+    ]
 
 
 def _scenarios_block_html(scenarios: list[dict], s: dict, lang: str) -> str:
@@ -552,8 +583,17 @@ def _scenarios_block_html(scenarios: list[dict], s: dict, lang: str) -> str:
         share = f"{100 // n}%"
         widths = [share] * n
         paddings = ["0 4px"] * n
+    value_widths = _scenario_value_widths(scenarios)
+    has_value_scale = any(v is not None for v in value_widths)
     cards = "".join(
-        _scenario_card_html(sc, widths[i], paddings[i], s, lang) for i, sc in enumerate(scenarios)
+        _scenario_card_html(sc, widths[i], paddings[i], s, lang, value_widths[i])
+        for i, sc in enumerate(scenarios)
+    )
+    scale_note = (
+        f'<div style="margin-top:10px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;'
+        f'font-style:italic;color:{_MUTE_WARM};">{_esc(s["scen_value_scale_note"])}</div>'
+        if has_value_scale
+        else ""
     )
     return f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:34px 44px 2px;">
@@ -561,6 +601,7 @@ def _scenarios_block_html(scenarios: list[dict], s: dict, lang: str) -> str:
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;">
         <tr>{cards}</tr>
       </table>
+      {scale_note}
     </td>
   </tr>"""
 

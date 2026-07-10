@@ -385,6 +385,40 @@ def test_report_no_scenarios_section_when_empty():
     assert "Scénarios" not in out
 
 
+def test_report_no_value_scale_bar_without_cible_multiple():
+    # Audit #11 : sans cible_multiple (comme les fixtures existantes), aucune barre
+    # "échelle commune" ni sa note -- dégradation douce, rien de nouveau visible.
+    out = render_html_report(_result(), generated_at=_GEN)
+    assert "Échelle commune" not in out
+
+
+def test_report_shows_value_scale_bar_when_at_least_two_multiples_known():
+    out = render_html_report(
+        _result(scenarios=[
+            {"nom": "bull", "cible": "x5", "cible_multiple": 5.0, "probabilite": 20, "confiance": "moyenne"},
+            {"nom": "base", "cible": "x1.5", "cible_multiple": 1.5, "probabilite": 50, "confiance": "haute"},
+            {"nom": "bear", "cible": "-40%", "probabilite": 30, "confiance": "moyenne"},  # non chiffré
+        ]),
+        generated_at=_GEN,
+    )
+    assert "Échelle commune" in out
+    # bull (5.0/5.0=100%) et base (1.5/5.0=30%) doivent avoir des largeurs distinctes.
+    assert 'width="100%"' in out
+    assert 'width="30%"' in out
+
+
+def test_report_omits_value_scale_bar_with_fewer_than_two_multiples():
+    out = render_html_report(
+        _result(scenarios=[
+            {"nom": "bull", "cible": "x5", "cible_multiple": 5.0, "probabilite": 20, "confiance": "moyenne"},
+            {"nom": "base", "cible": "x1.5", "probabilite": 50, "confiance": "haute"},
+            {"nom": "bear", "cible": "-40%", "probabilite": 30, "confiance": "moyenne"},
+        ]),
+        generated_at=_GEN,
+    )
+    assert "Échelle commune" not in out
+
+
 def test_report_has_methodology_and_sources():
     out = render_html_report(_result(), generated_at=_GEN)
     assert "Méthodologie &amp; sources" in out  # titre statique, HTML-échappé comme tout le reste

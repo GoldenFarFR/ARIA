@@ -202,6 +202,17 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   précédente — "sans expiration" veut dire aucun TTL de lecture, la fraîcheur dépend uniquement
   du dernier cycle heartbeat réussi. Commande `/sentiment` (Telegram, admin-only). Complète
   `btc_cycles.py` (halving, pluri-annuel) par une lecture court/moyen terme, ne le remplace pas.
+- **Backlog #11/#64 résolu (10/07) — barres "échelle commune" des scénarios + thèse enrichie.**
+  Contexte de l'audit original perdu à une compaction antérieure (tâche restée bloquée deux
+  sessions) ; reconstruit en lisant le code réel plutôt qu'en devinant : la barre de PROBABILITÉ
+  de chaque carte bull/base/bear (`vc_report.py`) était déjà correctement à l'échelle (0-100% par
+  carte, indépendante) — mais rien ne comparait l'AMPLEUR des cibles entre elles (`cible` est de
+  la prose LLM libre, jamais un nombre). Ajout d'un champ structuré `cible_multiple` (optionnel,
+  jamais fabriqué si le LLM ne l'a pas chiffré) → barre supplémentaire à largeur PARTAGÉE entre
+  les 3 scénarios, omise si moins de 2 sont chiffrés (dégradation douce, même doctrine que le
+  reste du rapport). Thèse (`these`) enrichie au même commit : 3-5 phrases, doit s'ancrer sur ≥2
+  signaux concrets déjà fournis (sécurité, liquidité, R/R, TA, contexte marché) — jamais une
+  généralité interchangeable. 8 tests (vc_analysis + vc_report).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
