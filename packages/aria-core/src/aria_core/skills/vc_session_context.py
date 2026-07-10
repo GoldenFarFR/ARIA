@@ -109,27 +109,30 @@ async def load_operator_vc() -> dict | None:
 
 _FOLLOWUP_RE = re.compile(
     r"(?:"
-    r"pourquoi|explique|comment\s+(?:ce|ce\s+chiffre|ça|ca)|d['']où\s+vient|"
-    r"énorme|énorme|excessif|trop\s+(?:haut|élevé|eleve|gros)|"
-    r"(?:ton|ta|mon|cette|cet)\s+(?:analyse|rapport|reco|verdict|chiffre)"
+    r"pourquoi|explique|comment|justif|d['']?où|d ou tu|de ou tu|"
+    r"énorme|excessif|trop\s+(?:haut|élevé|eleve|gros)|"
+    r"(?:ton|ta|mon|cette|cet|ces)\s+(?:analyse|rapport|reco|verdict|chiffre|valeur)"
     r")",
     re.I,
 )
-_NUMBER_RE = re.compile(r"(?:\+?\d{2,4}\s*%?|ratio|r(?:/|isque).?récompense|rr\b)", re.I)
+_VC_TOPIC_RE = re.compile(
+    r"(?:"
+    r"\+?\d{2,4}\s*%?|ratio|r(?:/|isque).?récompense|\brr\b|"
+    r"\b(avoid|buy|watch|sell|analyse|rapport|reco|verdict|token|cible|entrée|invalidation|risque)\b|"
+    r"valeur"
+    r")",
+    re.I,
+)
 
 
 def is_vc_followup_question(message: str) -> bool:
     """Détecte une question de suivi sur le dernier rapport /vc (opérateur)."""
     text = (message or "").strip()
-    if not text or len(text) > 400:
+    if not text or len(text) > 500:
         return False
-    if _FOLLOWUP_RE.search(text) and _NUMBER_RE.search(text):
-        return True
-    if _FOLLOWUP_RE.search(text) and re.search(
-        r"\b(analyse|rapport|avoid|buy|watch|sell|velvet|token)\b", text, re.I
-    ):
-        return True
-    return False
+    if not _FOLLOWUP_RE.search(text):
+        return False
+    return bool(_VC_TOPIC_RE.search(text))
 
 
 def build_followup_context_block(data: dict, *, lang: str = "fr") -> str:
