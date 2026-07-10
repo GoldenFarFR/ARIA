@@ -142,6 +142,18 @@ export async function getHoldingStructure(): Promise<HoldingStructure> {
   return res.json()
 }
 
+export interface CalibrationBucket {
+  bucket: string
+  count: number
+  avg_pnl: number
+}
+
+export interface StrategyStats {
+  buy_count: number
+  hit_rate: number | null
+  avg_pnl_buy: number | null
+}
+
 export interface TrackRecord {
   wallet_index: number
   wallet_return_pct: number
@@ -152,6 +164,8 @@ export interface TrackRecord {
   verdicts_closed: number
   hit_rate: number | null
   avoid_count: number
+  calibration: CalibrationBucket[]
+  by_strategy: Record<string, StrategyStats>
   pool_active: number
   pool_rejected: number
   disclaimer: string
@@ -267,5 +281,52 @@ export async function getDossier(contract: string): Promise<Dossier> {
     throw new OperatorAuthError('Operator secret invalid or missing')
   }
   if (!res.ok) throw new Error('Dossier unavailable')
+  return res.json()
+}
+
+export interface MarketCyclePhase {
+  label: string
+  since: string
+  change_pct: number
+  cycle_name: string
+}
+
+export interface MarketCycle {
+  available: boolean
+  phase: MarketCyclePhase | null
+  disclaimer: string
+}
+
+// Cycle macro Bitcoin PUBLIC (halving à halving) -- déterministe, aucun LLM, cache 1h.
+export async function getMarketCycle(): Promise<MarketCycle> {
+  const res = await fetch(`${PRODUCT_API_URL}/aria/market-cycle`, { signal: AbortSignal.timeout(12_000) })
+  if (!res.ok) throw new Error('Market cycle unavailable')
+  return res.json()
+}
+
+export interface SentimentReading {
+  pair: string
+  regime: string
+  detail: string
+  rsi: number | null
+  bollinger_position: number | null
+  momentum_pct: number | null
+  drawdown_from_high_pct: number | null
+  rally_from_low_pct: number | null
+  trend_up: boolean | null
+  computed_at: string
+}
+
+export interface MarketSentiment {
+  readings: SentimentReading[]
+  regime_labels: Record<string, string>
+  disclaimer: string
+}
+
+// Sentiment de marché PUBLIC (RSI/Bollinger/momentum -> régimes) -- lit la dernière
+// lecture déjà calculée par le cycle heartbeat, aucun recalcul synchrone.
+export async function getMarketSentiment(): Promise<MarketSentiment> {
+  const res = await fetch(`${PRODUCT_API_URL}/aria/sentiment`, { signal: AbortSignal.timeout(12_000) })
+  if (!res.ok) throw new Error('Sentiment unavailable')
   return res.json()
 }
