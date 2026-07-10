@@ -27,11 +27,15 @@ def _clean_ctx(contract: str) -> TokenScanContext:
 
 
 def _scam_ctx(contract: str) -> TokenScanContext:
+    """Mauvais acteur CONFIRMÉ (blacklist active) -- pas juste des aspects
+    d'investissement faibles (liquidité/vérification/concentration), qui sont
+    devenus des échecs MOUS depuis le 10/07 (cf. test_safety_screen.py)."""
     return TokenScanContext(
         contract=contract, valid_address=True,
         best_pair=PairSnapshot(pair_address="0xpool", liquidity_usd=800.0, base_symbol="RUG"),
         security_score=20, lite_verdict="DANGER",
         contract_verified=False, has_mint=True, top_holder_pct=80.0,
+        has_blacklist=True,
     )
 
 

@@ -45,10 +45,13 @@ def test_not_bonding_phase_soft_fails():
     assert result.hard_fail is False  # retry-able, pas un rejet définitif
 
 
-def test_unverified_contract_hard_fails():
+def test_unverified_contract_soft_fails():
+    # Aspect d'investissement (peut être vérifié plus tard par le dev), pas un
+    # mécanisme malveillant -- échec MOU depuis le 10/07 (décision opérateur,
+    # même principe que safety_screen.py).
     result = bonding_safety_screen(_healthy_bonding_ctx(contract_verified=False))
     assert result.passed is False
-    assert result.hard_fail is True
+    assert result.hard_fail is False
 
 
 def test_unknown_contract_verification_soft_fails():

@@ -72,7 +72,10 @@ def bonding_safety_screen(
     if ctx.contract_verified is None:
         soft_reasons.append("vérification du contrat indisponible")
     elif ctx.contract_verified is False:
-        hard_reasons.append("contrat non vérifié (code opaque)")
+        # Aspect d'investissement (peut être corrigé par le dev plus tard), PAS un
+        # mécanisme malveillant -- échec mou, jamais un bannissement définitif
+        # (décision opérateur 10/07, même principe que safety_screen.py).
+        soft_reasons.append("contrat non vérifié (code opaque) -- à revérifier")
 
     mint_authority = ctx.mint_authority or "unknown"
     if ctx.has_mint is True:

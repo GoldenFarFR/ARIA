@@ -163,18 +163,20 @@ def safety_screen(
             f"vérifié, holder max {ctx.top_holder_pct:.0f}%, verdict SAFE"
         ]
 
-    # Échec DUR = au moins un signal négatif CONFIRMÉ (pas une simple donnée absente).
-    # Sert à l'absorbeur : un échec purement « données indisponibles » (429/timeout)
-    # ne doit PAS bannir un token « pour toujours » — juste être réessayé plus tard.
+    # Échec DUR = un mécanisme MALVEILLANT confirmé dans le contrat lui-même (le code
+    # ne "guérit" jamais avec le temps -- décision opérateur explicite, 10/07 : "si il y
+    # a une super technologie mais des failles dans le contrat on jette, aucun risque,
+    # il existe énormément d'autres projets"). PAS un échec dur : liquidité, paire DEX,
+    # vérification du contrat, concentration des holders -- ce sont des ASPECTS
+    # D'INVESTISSEMENT qui évoluent avec la maturité du projet (le même principe
+    # s'applique à "comme tous les autres tokens", pas seulement bonding). Ces
+    # candidats restent 'pending' (retry) : jamais bannis pour toujours sur un simple
+    # état de marché du moment.
     hard_fail = (not passed) and (
         (not ctx.valid_address)
-        or (ctx.best_pair is None)
-        or (ctx.best_pair is not None and liq < min_liquidity_usd)
-        or (ctx.contract_verified is False)
         or mint_blocks_confirmed(ctx)
         or (ctx.has_blacklist is True)
         or (ctx.has_disable_transfers is True)
-        or (ctx.top_holder_pct is not None and ctx.top_holder_pct > max_top_holder_pct)
         or (ctx.is_honeypot is True)
         or (ctx.cannot_sell is True)
         or (ctx.sell_tax is not None and ctx.sell_tax > DEFAULT_MAX_SELL_TAX)
