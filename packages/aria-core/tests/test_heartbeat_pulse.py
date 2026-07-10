@@ -23,3 +23,13 @@ def test_pulse_empty_state(monkeypatch):
     monkeypatch.setattr(heartbeat, "_load_heartbeat_state", lambda: {})
     p = heartbeat.heartbeat_pulse()
     assert p["alive"] is False and p["last_tick"] is None and p["cycles"] == {}
+
+
+def test_pulse_includes_market_sentiment_cycle(monkeypatch):
+    """Trou trouvé le 10/07 : market_sentiment_cycle manquait de la liste blanche,
+    invisible sur /api/pulse même une fois le cycle réellement exécuté."""
+    monkeypatch.setattr(heartbeat, "_load_heartbeat_state", lambda: {
+        "market_sentiment_cycle": "2026-07-10T07:26:19Z",
+    })
+    p = heartbeat.heartbeat_pulse()
+    assert "market_sentiment_cycle" in p["cycles"]

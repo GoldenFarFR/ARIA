@@ -18,6 +18,7 @@ const CYCLE_LABELS: Record<string, string> = {
   vc_radar_x: 'Radar X (écoute sociale)',
   vc_thesis_review: 'Revue de thèse',
   paper_trade_cycle: 'Cycle paper-trading',
+  market_sentiment_cycle: 'Sentiment de marché',
 }
 
 function relativeTime(iso: string | null): string {
