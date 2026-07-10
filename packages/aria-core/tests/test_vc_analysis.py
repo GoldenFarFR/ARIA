@@ -770,3 +770,78 @@ async def test_fetch_sentiment_readings_degrades_on_error(monkeypatch):
     result = await vc._fetch_sentiment_readings()
 
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Polymarket (#59) — signal macro pré-LLM
+# ---------------------------------------------------------------------------
+
+def _make_poly_signals(title: str = "How many Fed rate cuts in 2026?") -> list[dict]:
+    return [
+        {
+            "title": title,
+            "outcomes": [
+                {"label": "Will no Fed rate cuts happen in 2026?", "probability": 0.7845},
+                {"label": "Will 1 Fed rate cut happen in 2026?", "probability": 0.145},
+            ],
+        }
+    ]
+
+
+def _base_ctx() -> TokenScanContext:
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    return ctx
+
+
+def test_polymarket_signals_appear_in_context():
+    """Les probabilités Polymarket sont injectées dans le contexte LLM."""
+    ctx = _base_ctx()
+    block = vc._build_untrusted_context(ctx, [], polymarket_signals=_make_poly_signals())
+
+    assert "Marchés de prédiction Polymarket" in block
+    assert "Will no Fed rate cuts happen in 2026?" in block
+    assert "78%" in block
+
+
+def test_polymarket_absent_when_none_or_empty():
+    """Aucune mention Polymarket si liste vide ou None — dégradation douce."""
+    ctx = _base_ctx()
+    assert "Polymarket" not in vc._build_untrusted_context(ctx, [], polymarket_signals=None)
+    assert "Polymarket" not in vc._build_untrusted_context(ctx, [], polymarket_signals=[])
+
+
+def test_polymarket_absent_when_no_valid_outcomes():
+    """Outcomes malformés (probability manquante) -> section entièrement omise."""
+    ctx = _base_ctx()
+    bad = [{"title": "Broken event", "outcomes": [{"label": "Oops", "probability": None}]}]
+    assert "Polymarket" not in vc._build_untrusted_context(ctx, [], polymarket_signals=bad)
+
+
+def test_polymarket_limits_outcomes_to_three():
+    """Jamais plus de 3 outcomes par événement dans le contexte LLM (évite saturation)."""
+    ctx = _base_ctx()
+    many_outcomes = [
+        {"label": f"Outcome {i}", "probability": 0.1 * i} for i in range(1, 7)
+    ]
+    signals = [{"title": "Big event", "outcomes": many_outcomes}]
+    block = vc._build_untrusted_context(ctx, [], polymarket_signals=signals)
+    # 3 outcomes max → 3 lignes "- [Big event]"
+    assert block.count("[Big event]") == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_polymarket_signals_degrades_on_error(monkeypatch):
+    """Une erreur réseau/import ne doit jamais bloquer l'analyse VC."""
+    import aria_core.services.polymarket as pm
+
+    async def _boom(tag: str):
+        raise RuntimeError("réseau indisponible")
+
+    monkeypatch.setattr(pm.polymarket_client, "fetch_top_event_by_tag", _boom)
+
+    result = await vc._fetch_polymarket_signals()
+    assert result == []

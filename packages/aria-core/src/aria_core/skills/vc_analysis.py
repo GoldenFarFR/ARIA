@@ -210,7 +210,10 @@ def _extract_verified_links(ctx: TokenScanContext) -> list[dict]:
 
 
 def _build_untrusted_context(
-    ctx: TokenScanContext, history: list[dict], sentiment_readings: list[dict] | None = None
+    ctx: TokenScanContext,
+    history: list[dict],
+    sentiment_readings: list[dict] | None = None,
+    polymarket_signals: list[dict] | None = None,
 ) -> str:
     """Assemble le bloc factuel (données non fiables) à partir de faits déjà collectés.
 
@@ -321,6 +324,24 @@ def _build_untrusted_context(
                 "lui-même) :"
             )
             lines += sent_lines
+    if polymarket_signals:
+        poly_lines = []
+        for event in polymarket_signals:
+            title = _sanitize(event.get("title") or "", 120)
+            for outcome in (event.get("outcomes") or [])[:3]:  # 3 outcomes max par événement
+                label = _sanitize(outcome.get("label") or "", 160)
+                prob = outcome.get("probability")
+                if label and prob is not None:
+                    try:
+                        poly_lines.append(f"- [{title}] {label} : {float(prob):.0%}")
+                    except (TypeError, ValueError):
+                        pass
+        if poly_lines:
+            lines.append(
+                "Marchés de prédiction Polymarket (probabilités implicites sur événements macro "
+                "réels — à peser comme contexte macro, PAS comme signal spécifique au token) :"
+            )
+            lines += poly_lines
     # Contexte de légitimité (drapeaux JUGÉS, pas bruts) : autorité du mint,
     # launchpad, profondeur de liquidité, comportement du wallet du dev.
     legit: list[str] = []
@@ -774,6 +795,44 @@ async def _fetch_sentiment_readings() -> list[dict]:
         return []
 
 
+# Tags Polymarket à interroger pour le contexte macro (#59).
+# Uniquement ``fed-rates`` pour l'instant : testé en direct le 10/07, donne le
+# marché de prédiction le plus liquide sur les décisions de taux Fed — signal
+# complémentaire à ``btc_cycles`` (cycle halving) et ``market_sentiment``
+# (court/moyen terme technique). Extension à d'autres tags = décision opérateur.
+_POLYMARKET_TAGS: list[str] = ["fed-rates"]
+
+
+async def _fetch_polymarket_signals() -> list[dict]:
+    """Lit les événements macro Polymarket les plus liquides (#59, signal pré-LLM).
+
+    Même doctrine que ``_fetch_sentiment_readings`` : aucun recalcul synchrone,
+    dégradation douce (timeout / API indisponible / tag sans marché -> liste vide,
+    jamais bloquant). Retourne une liste de dicts ``{title, outcomes}`` où
+    ``outcomes`` est une liste de ``{label, probability}`` — probabilités implicites
+    de marché (0.0-1.0), jamais inventées.
+    """
+    try:
+        from aria_core.services.polymarket import polymarket_client
+
+        results = []
+        for tag in _POLYMARKET_TAGS:
+            event = await polymarket_client.fetch_top_event_by_tag(tag)
+            if not event.available or not event.outcomes:
+                continue
+            results.append({
+                "title": event.title or tag,
+                "outcomes": [
+                    {"label": o.label, "probability": o.probability}
+                    for o in event.outcomes
+                ],
+            })
+        return results
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.warning("analyze_vc: fetch Polymarket échoué (%s)", exc)
+        return []
+
+
 async def analyze_vc_with_context(
     contract: str, lang: str = "fr"
 ) -> tuple[VCResult, TokenScanContext]:
@@ -816,7 +875,8 @@ async def analyze_vc_with_context(
 
     history = await list_theses_for_token(ctx.contract)
     sentiment_readings = await _fetch_sentiment_readings()
-    untrusted = _build_untrusted_context(ctx, history, sentiment_readings)
+    polymarket_signals = await _fetch_polymarket_signals()
+    untrusted = _build_untrusted_context(ctx, history, sentiment_readings, polymarket_signals)
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"
         "<donnees_non_fiables>\n"
