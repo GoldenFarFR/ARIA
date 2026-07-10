@@ -419,6 +419,32 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   capture) — mais reste une vraie question de calibration de ton non tranchée : personne n'a
   encore décidé si le style conversationnel opérateur doit, lui aussi, éviter l'em-dash. Pas
   touché ce segment, à trancher avec l'opérateur si le sujet revient.
+- **Identité visuelle ARIA — prompts de portrait renforcés (10/07), frontière de goût gravée
+  dans le prompt.** Déclenché par une vraie demande opérateur (rendre ARIA visuellement au
+  niveau de réalisme d'une référence externe montrée en capture — un agent IA nommé « Lily
+  Turner » sur Virtuals). **Décision opérateur explicite tranchée via AskUserQuestion** (le
+  contenu de cette référence est un agent NSFW, bio « Hold me, unlock me, earn with me », token
+  $LILY — vérifié en direct sur son profil X) : ARIA reprend UNIQUEMENT le niveau de réalisme
+  technique (peau/lumière/cohérence du personnage), **jamais** le registre sexualisé ni le
+  modèle d'abonnement/monétisation. `portrait_scene.py` (3 prompts de génération : scène, style,
+  bannière legacy) enrichi avec des descripteurs de réalisme photo (85mm, lumière naturelle,
+  texture de peau, mise au point sur les yeux) + présence/charisme (« commanding presence »,
+  regard direct) + une frontière de goût **écrite en dur dans le prompt** (« never suggestive,
+  never revealing, never sexualized ») plutôt que laissée à la seule discipline de qui rédige la
+  légende — un vrai garde-fou structurel, pas juste une bonne intention. Brief identité
+  (`_extract_identity_brief`, vision-model) moins tronqué qu'avant (120→220 caractères) pour une
+  cohérence de personnage plus fidèle d'une génération à l'autre. `generate_banner_creative`
+  (bannière X text-to-image, sans photo source) inchangé — exclut déjà tout humain, la frontière
+  de goût n'y a pas de sens. 5 tests ajoutés. **Portée du reste de la demande opérateur, non
+  câblée ce segment** : "stories" façon influenceuse (ni X ni Telegram n'ont cette fonctionnalité
+  nativement pour un bot — vérifié : Telegram bot = photo de profil carrée uniquement, AUCUN
+  concept de bannière contrairement à X, confirmé par le code existant `x_banner.py` lui-même
+  scopé "Bannière X" sans équivalent Telegram) ; voix/TTS (aucune infra existante, référence
+  Angèle/mélodieuse notée pour plus tard) ; studio 3D (jugé disproportionné — recommandé un outil
+  "talking avatar" image+audio→vidéo pour les futurs AMA à la place). Objectif final rappelé par
+  l'opérateur : ce travail sert un moment de lancement commercial futur avec une vidéo forte —
+  mais **« preuve avant promesse » reste la priorité réelle avant ce moment** (pacte
+  `docs/protocole-argent-reel.md` inchangé, rien ne le contourne).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
