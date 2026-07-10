@@ -107,6 +107,32 @@ async def test_older_than_max_age_is_skipped_before_security_screen():
 
 
 @pytest.mark.asyncio
+async def test_soft_fail_leaves_a_pending_trace_with_reason():
+    # Holders inconnus (top_holder_pct=None) : echec MOU (pas hard_fail) -> avant le
+    # correctif #77, aucune trace nulle part (ni pool, ni raison). Desormais :
+    # status='pending' + la vraie raison, consultable.
+    ctx = _clean_ctx("0xunknown")
+    ctx.top_holder_pct = None
+    scan = _scanner({"0xunknown": ctx})
+    assert await ta.absorb("0xunknown", scanner=scan) == "skip_incomplete"
+    assert await sp.get_status("0xunknown") == "pending"
+    row = (await sp.list_pool(status="pending"))[0]
+    assert "holder" in row["screen_reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_soft_fail_pending_is_still_rescanned_next_cycle():
+    # 'pending' ne doit PAS court-circuiter comme 'rejected'/'active' : le prochain
+    # cycle doit re-scanner normalement (c'est tout le point d'un echec mou).
+    ctx_unknown = _clean_ctx("0xretry")
+    ctx_unknown.top_holder_pct = None
+    ctx_good = _clean_ctx("0xretry")
+    assert await ta.absorb("0xretry", scanner=_scanner({"0xretry": ctx_unknown})) == "skip_incomplete"
+    assert await ta.absorb("0xretry", scanner=_scanner({"0xretry": ctx_good})) == "kept"
+    assert await sp.get_status("0xretry") == "active"
+
+
+@pytest.mark.asyncio
 async def test_within_max_age_is_classified_normally():
     now_ms = time.time() * 1000
     fresh_ctx = _clean_ctx("0xfresh")

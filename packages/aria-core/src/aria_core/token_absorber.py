@@ -90,7 +90,15 @@ async def absorb(
             await maybe_escalate(ctx, symbol=(ctx.best_pair.base_symbol if ctx.best_pair else ""))
         except Exception as exc:  # noqa: BLE001 — l'escalade ne doit jamais casser l'absorption
             logger.info("absorb %s : escalade recalibrage échouée (%s)", contract, exc)
-        logger.info("absorb %s : échec mou (données incomplètes) — non banni, à réessayer", contract)
+        reason = "; ".join(result.reasons) if result.reasons else "raison indisponible"
+        logger.info("absorb %s : échec mou (%s) — non banni, à réessayer", contract, reason)
+        # Trace consultable (status='pending', ne court-circuite pas le re-scan) : avant
+        # ce correctif, un échec mou ne laissait AUCUNE donnée nulle part (audit #77).
+        await screened_pool.record_pending(
+            contract=contract,
+            reason=reason,
+            symbol=(ctx.best_pair.base_symbol if ctx.best_pair else ""),
+        )
         return "skip_incomplete"
 
     await screened_pool.record_rejected(
