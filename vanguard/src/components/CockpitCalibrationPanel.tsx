@@ -27,16 +27,16 @@ function CalibrationBar({ value, maxAbs }: { value: number; maxAbs: number }) {
         <div className="w-1/2 flex justify-end pr-px">
           {!positive ? (
             <div
-              className="h-1.5 self-center rounded-l-full"
-              style={{ width: `${widthPct}%`, backgroundColor: pnlColor(value), opacity: 0.8 }}
+              className="h-2 self-center rounded-l-full"
+              style={{ width: `${widthPct}%`, backgroundColor: pnlColor(value), opacity: 0.85 }}
             />
           ) : null}
         </div>
         <div className="w-1/2 flex justify-start pl-px">
           {positive ? (
             <div
-              className="h-1.5 self-center rounded-r-full"
-              style={{ width: `${widthPct}%`, backgroundColor: pnlColor(value), opacity: 0.8 }}
+              className="h-2 self-center rounded-r-full"
+              style={{ width: `${widthPct}%`, backgroundColor: pnlColor(value), opacity: 0.85 }}
             />
           ) : null}
         </div>
@@ -96,9 +96,9 @@ export function CockpitCalibrationPanel() {
           </p>
         </div>
         <div className="text-right shrink-0">
-          <p className="text-2xl font-mono tabular-nums text-[#f4efe6] leading-none">
+          <p className="text-3xl font-mono tabular-nums text-[#f4efe6] leading-none">
             {track.verdicts_closed}
-            <span className="text-sm text-[#8b8f9a]">/{track.verdicts_total}</span>
+            <span className="text-base text-[#8b8f9a]">/{track.verdicts_total}</span>
           </p>
           <p className="text-[10px] uppercase tracking-[0.12em] text-[#8a7344] mt-1">clôturés</p>
         </div>
@@ -118,7 +118,7 @@ export function CockpitCalibrationPanel() {
               </span>
               <CalibrationBar value={b.avg_pnl} maxAbs={maxAbs} />
               <span
-                className="w-16 shrink-0 text-right text-xs font-mono tabular-nums"
+                className="w-20 shrink-0 text-right text-lg font-mono font-semibold tabular-nums"
                 style={{ color: pnlColor(b.avg_pnl) }}
               >
                 {b.avg_pnl >= 0 ? '+' : ''}
@@ -133,14 +133,14 @@ export function CockpitCalibrationPanel() {
       )}
 
       {strategies.length > 0 ? (
-        <div className="grid sm:grid-cols-2 gap-3 pt-1 border-t border-[rgba(201,169,98,0.12)]">
+        <div className="grid sm:grid-cols-2 gap-3 pt-4 border-t border-[rgba(201,169,98,0.12)]">
           {strategies.map(([key, s]) => (
-            <div key={key} className="pt-3">
-              <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">
+            <div key={key}>
+              <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1.5">
                 {STRATEGY_LABELS[key] ?? key}
               </p>
-              <div className="flex items-baseline gap-2">
-                <span className="text-xl text-[#f4efe6] font-mono tabular-nums">
+              <div className="flex items-baseline gap-2.5">
+                <span className="text-3xl font-mono font-semibold tabular-nums text-[#f4efe6] leading-none">
                   {s.hit_rate != null ? `${Math.round(s.hit_rate * 100)}%` : '—'}
                 </span>
                 <span className="text-[11px] text-[#8b8f9a]">hit-rate · {s.buy_count} BUY</span>
