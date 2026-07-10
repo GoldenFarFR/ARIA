@@ -178,15 +178,20 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   ("tu ferais confiance à ARIA pour 100k$ ?") répondue honnêtement NON, puis outillée plutôt que
   laissée en simple avis : `skills/real_money_readiness.py` calcule objectivement, depuis le vrai
   journal `vc_predictions`, les 8 cases pré-engagées de `docs/protocole-argent-reel.md` — jamais
-  un jugement subjectif. Commande `/feuvert` (Telegram, admin-only — jamais public). État réel au
-  10/07 : `sample_size` calculable et quasi certainement `fail` (paper-trading gaté OFF par
-  défaut, aucune preuve d'un run de 20+ jours) ; `integrity` `ok` par garantie structurelle
-  (`close_prediction` ne réécrit jamais, aucune fonction de suppression) ; `robustness` calculable
-  dès 3 BUY clôturés. Le reste (`benchmark` hold-ETH, `risk` vérif a posteriori des AVOID, `judge`
-  méta-audit, `lawyer`) reste honnêtement `unknown` — la donnée ou l'action humaine manque encore
-  pour même MESURER ces cases, pas seulement pour les remplir. Le vrai chiffre (combien de cases
-  cochées aujourd'hui) nécessite de lancer `/feuvert` sur le VPS (données réelles), pas
-  calculable depuis cette session cloud sans accès à `/opt/aria-data`.
+  un jugement subjectif. Commande `/feuvert` (Telegram, admin-only — jamais public).
+  **Correction du 10/07 (même segment)** : cette entrée affirmait à tort le paper-trading
+  "gaté OFF par défaut, aucune preuve d'un run" — jamais vérifié contre l'état réel du VPS,
+  seulement supposé depuis la doc. Vérifié en direct via `GET /api/pulse` : `paper_trading:
+  true`, cycle `paper_trade_cycle` déjà exécuté (le run de preuve tourne réellement, pas
+  seulement câblé). `sample_size` reste très probablement `fail` aujourd'hui (échantillon
+  encore jeune : 4 pronostics au total, 0 clôturé, vu sur `/cockpit` le 10/07) mais le
+  compteur avance désormais pour de vrai. `integrity` `ok` par garantie structurelle
+  (`close_prediction` ne réécrit jamais, aucune fonction de suppression) ; `robustness`
+  calculable dès 3 BUY clôturés. Le reste (`benchmark` hold-ETH, `risk` vérif a posteriori
+  des AVOID, `judge` méta-audit, `lawyer`) reste honnêtement `unknown` — la donnée ou
+  l'action humaine manque encore pour même MESURER ces cases, pas seulement pour les
+  remplir. Leçon retenue : toujours vérifier l'état réel (API publique, `/pulse`) avant
+  d'affirmer un statut de gate, même documenté ailleurs comme "OFF par défaut".
 - **Sentiment de marché continu (#71, 10/07) — EN LIGNE, gate OFF.** Demande opérateur (image Wall
   St Cheat Sheet — psychologie du cycle de marché) : scanner en continu, sans expiration, les
   paires principales. Livré : `skills/indicators.py` gagne `bollinger_bands` (même patron
