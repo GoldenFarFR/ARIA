@@ -21,6 +21,8 @@ from aria_core.services.blockscout import (
 from aria_core.services.coingecko import TokenFundamentals, coingecko_client
 from aria_core.services.ohlcv import ohlcv_client
 from aria_core.services.smart_money import analyze_smart_money
+from aria_core.skills.entry_signals import EntrySignal, detect_entry
+from aria_core.skills.indicators import ema_series, macd_series
 from aria_core.skills.ta_levels import (
     Candle,
     EntryZone,
@@ -28,6 +30,15 @@ from aria_core.skills.ta_levels import (
     compute_levels,
     suggest_entry_zone,
 )
+
+_EMA_FAST_PERIOD = 12
+_EMA_SLOW_PERIOD = 26
+
+
+def _last_value(series: list[float | None]) -> float | None:
+    """Dernière valeur définie d'une série (None pendant la chauffe) -- jamais
+    une estimation, juste le dernier point réellement calculé."""
+    return next((v for v in reversed(series) if v is not None), None)
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +177,15 @@ class TokenScanContext:
     ta_entry: EntryZone | None = None
     ta_candles: list[Candle] = field(default_factory=list)
     ta_timeframe: str | None = None
+    # EMA/MACD (indicators.py) + setup golden pocket/divergence RSI (entry_signals.py) --
+    # câblés le 10/07 (décision opérateur), même garde ``include_ta`` que ci-dessus.
+    # Dernières valeurs seulement (le LLM raisonne sur l'état courant, pas la série).
+    ta_ema_fast: float | None = None
+    ta_ema_slow: float | None = None
+    ta_macd_line: float | None = None
+    ta_macd_signal: float | None = None
+    ta_macd_histogram: float | None = None
+    ta_golden_pocket_signal: EntrySignal | None = None
     # Barrières de sécurité structurées (peuplées au scan si la donnée on-chain
     # existe ; None sinon). Exposent en clair ce que le score agrège, pour un
     # filtre binaire strict (cf. skills/safety_screen.py). Concentration calculée
@@ -629,6 +649,9 @@ async def scan_base_token(
     (GeckoTerminal, throttle ~2.2s/appel) et derive niveaux + zone d'entree
     (facts-only). Peuple ctx.ta / ctx.ta_entry / ctx.ta_candles UNIQUEMENT si une
     serie est disponible ; sinon ces champs restent None → comportement inchange.
+    Cable le 10/07 (decision operateur) : EMA/MACD (ctx.ta_ema_*/ctx.ta_macd_*)
+    et le setup golden pocket + divergence RSI (ctx.ta_golden_pocket_signal),
+    memes champs facts-only, meme garde `include_ta`.
     """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
@@ -719,6 +742,15 @@ async def scan_base_token(
             ctx.ta_timeframe = ohlcv.timeframe
             ctx.ta = compute_levels(ohlcv.candles)
             ctx.ta_entry = suggest_entry_zone(ctx.ta)
+
+            closes = [c.close for c in ohlcv.candles]
+            ctx.ta_ema_fast = _last_value(ema_series(closes, _EMA_FAST_PERIOD))
+            ctx.ta_ema_slow = _last_value(ema_series(closes, _EMA_SLOW_PERIOD))
+            macd_line, macd_signal, macd_hist = macd_series(closes)
+            ctx.ta_macd_line = _last_value(macd_line)
+            ctx.ta_macd_signal = _last_value(macd_signal)
+            ctx.ta_macd_histogram = _last_value(macd_hist)
+            ctx.ta_golden_pocket_signal = detect_entry(ohlcv.candles)
 
     # Comportement du wallet du dev : builder engagé vs farmer (jugement contextuel,
     # jamais un rejet d'office). Best-effort ; toute indisponibilité -> 'unknown'.

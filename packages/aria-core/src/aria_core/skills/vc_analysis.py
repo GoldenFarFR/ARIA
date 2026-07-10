@@ -251,6 +251,22 @@ def _build_untrusted_context(ctx: TokenScanContext, history: list[dict]) -> str:
                 f"- Zone dérivée des niveaux réels : entrée {z.entree}, invalidation {z.invalidation}, "
                 f"cible {z.cible} ({_sanitize(z.base, 200)})"
             )
+        if ctx.ta_ema_fast is not None and ctx.ta_ema_slow is not None:
+            lines.append(
+                f"- EMA12 {ctx.ta_ema_fast:.6g} / EMA26 {ctx.ta_ema_slow:.6g} "
+                f"({'EMA12 > EMA26' if ctx.ta_ema_fast > ctx.ta_ema_slow else 'EMA12 < EMA26'})"
+            )
+        if ctx.ta_macd_line is not None and ctx.ta_macd_signal is not None:
+            lines.append(
+                f"- MACD {ctx.ta_macd_line:.6g} / signal {ctx.ta_macd_signal:.6g} / "
+                f"histogramme {ctx.ta_macd_histogram:.6g}"
+            )
+        if ctx.ta_golden_pocket_signal and ctx.ta_golden_pocket_signal.present:
+            g = ctx.ta_golden_pocket_signal
+            rr_txt = f", R/R {g.rr:.1f}" if g.rr is not None else ""
+            lines.append(
+                f"- Setup golden pocket + divergence RSI PRÉSENT : {'; '.join(g.reasons)}{rr_txt}"
+            )
         lines.append(
             "Appuie entrée, invalidation et cible sur ces niveaux techniques réels ; "
             "ne propose jamais un niveau non soutenu par ces données."
