@@ -1102,6 +1102,82 @@ async def _handle_avatar_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
+def vision_enabled() -> bool:
+    """Seam gaté OFF par défaut. Une image analysée coûte des tokens vision (LLM) à
+    chaque envoi — jamais activé sans décision opérateur explicite."""
+    import os
+
+    return os.environ.get("ARIA_VISION_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Point d'entrée UNIQUE pour tout message photo (avant ce correctif, AUCUN
+    handler photo n'était enregistré — toute image envoyée à ARIA était ignorée en
+    silence, y compris pour /avatar). Deux routes distinctes selon la légende :
+      - légende vide ou mots-clés avatar (``_caption_is_avatar_upload``) -> flux
+        /avatar existant (photo de profil / identité visuelle) ;
+      - légende normale (une question, « juge cette situation »...) -> lecture
+        visuelle générale (vision), gatée ``ARIA_VISION_ENABLED``, admin-only pour
+        l'instant (coût LLM par image, pas encore ouvert au public).
+    """
+    message = update.message
+    if not message or not message.photo:
+        return
+    caption = (message.caption or "").strip()
+    if _caption_is_avatar_upload(caption):
+        await _handle_avatar_photo(update, context)
+        return
+    await _handle_vision_photo(update, context, caption)
+
+
+async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, caption: str) -> None:
+    message = update.message
+    user = update.effective_user
+    if not message or not user:
+        return
+
+    if not is_admin(user.id):
+        # Public : décision de scope volontaire (coût LLM par image, pas encore
+        # ouvert). Décliner brièvement plutôt que le silence actuel — sans appel LLM.
+        await _reply(
+            message,
+            "Je ne lis pas encore les images en dehors de l'équipe — envoie ta question en texte.",
+        )
+        return
+
+    if not vision_enabled():
+        await _reply(
+            message,
+            "L'analyse d'image n'est pas encore activée (ARIA_VISION_ENABLED désactivé).",
+        )
+        return
+
+    import base64
+
+    photo = message.photo[-1]
+    try:
+        tg_file = await context.bot.get_file(photo.file_id)
+        data = bytes(await tg_file.download_as_bytearray())
+    except Exception as exc:  # noqa: BLE001 — jamais planter sur un échec de téléchargement
+        logger.info("vision: téléchargement photo échoué (%s)", exc)
+        await _reply(message, "Je n'ai pas réussi à récupérer cette image, réessaie.")
+        return
+
+    image_data_uri = f"data:image/jpeg;base64,{base64.b64encode(data).decode('ascii')}"
+    prompt = caption or "Décris cette image et donne ta lecture."
+
+    from aria_core.locale import LANG_FR, detect_lang
+
+    lang = detect_lang(prompt) if caption else LANG_FR
+    reply = await aria_brain._llm_response(prompt, lang, public=False, image_data_uri=image_data_uri)
+    if reply is None:
+        await _reply(message, "L'analyse d'image a échoué (LLM indisponible) — réessaie plus tard.")
+        return
+    await _reply(message, reply)
+
+
 async def _handle_experiment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _admin_check_reply(update):
         return
@@ -2283,6 +2359,11 @@ def _register_handlers(app: Application) -> None:
 
     # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)
     app.add_handler(CallbackQueryHandler(_handle_callback))
+
+    # Photos (avatar upload OR vision analysis, dispatched by caption — cf. _handle_photo).
+    # Avant ce correctif, AUCUN handler photo n'était enregistré : toute image envoyée à
+    # ARIA était ignorée en silence.
+    app.add_handler(MessageHandler(filters.PHOTO, _handle_photo))
 
     # All other interactions via plain text (no slash commands)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))

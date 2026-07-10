@@ -377,6 +377,43 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   test n'a encore renvoyé qu'une erreur de validation) — à revérifier avant d'activer le gate.
   Gate `ARIA_BONDING_DISCOVERY_ENABLED` toujours pas activé, étape suivante : dry-run manuel
   (`run_bonding_discovery_cycle()`) demandé à l'opérateur avant activation en continu.
+- **Vision (images en chat Telegram) — CODÉ, gate OFF, PAS déployé (10/07).** Déclenché par un
+  vrai bug trouvé en capture d'écran : l'opérateur a envoyé un graphique DexScreener avec
+  « juge cette situation », ARIA n'a rien répondu. **Cause racine confirmée** : `telegram_bot.py`
+  n'enregistrait AUCUN handler photo (`MessageHandler(filters.PHOTO, ...)` absent) — toute image
+  envoyée à ARIA était ignorée en silence. Pire, une fonction `_handle_avatar_photo` existait déjà
+  pour le flux `/avatar` mais n'avait, elle non plus, jamais été enregistrée (même bug que le
+  reliquat Cursor/collision `/directive` : une fonction écrite mais jamais câblée au bon endroit).
+  **Corrigé en un seul point d'entrée** `_handle_photo` (nouveau dispatcher, seul handler photo
+  enregistré) qui route selon la légende : légende vide ou mots-clés avatar → flux `/avatar`
+  existant ; légende normale (question, « juge cette situation ») → nouvelle lecture visuelle
+  générale (`_handle_vision_photo`), **admin-only, gate OFF par défaut** (`ARIA_VISION_ENABLED`,
+  coût LLM par image, décision produit volontairement pas encore ouverte au public — un visiteur
+  reçoit un refus court sans jamais déclencher d'appel LLM). Sous le capot :
+  `llm.chat_with_context` gagne un paramètre `image_data_uri` optionnel (bascule le message
+  utilisateur en contenu multimodal `[{"type":"text",...},{"type":"image_url",...}]`, forme
+  chat-completions OpenAI-compatible — comportement texte strictement inchangé sans image, tous
+  les appelants existants intacts) ; `AriaBrain._llm_response` le reçoit et l'ajoute au prompt
+  système final (`chat_with_context`), avec une **règle anti-hallucination dédiée** : ARIA ne lit
+  un chiffre précis (prix, %, volume) que si elle peut réellement le voir net dans l'image, sinon
+  elle le dit explicitement au lieu de l'inventer — même doctrine facts-only que le reste du
+  système. **Non vérifié** : que Grok (modèle standard via Virtuals/Spark) accepte réellement la
+  vision au travers de la passerelle `compute.virtuals.io` — aucune garantie donnée dans le code,
+  seulement documentée comme non testée en direct ; à confirmer sur le VPS avant activation.
+  **Limite v1 assumée** : le message image ne passe pas par `repertoire_db.save_message` (appelé
+  seulement dans le gros dispatcher texte, pas dans `_llm_response` directement) — une image
+  envoyée n'entre donc pas dans l'historique conversationnel pour un suivi ultérieur en texte.
+  25 tests ajoutés (llm/brain/telegram), suite complète verte.
+- **Note de calibration (même segment) — la règle "zéro trace IA" ne couvre PAS le chat Telegram
+  opérateur.** En creusant l'incident em-dash (l'opérateur a montré des réponses ARIA truffées de
+  `—` en conversation Telegram), vérifié dans le code : le texte de la règle absolue dit
+  explicitement « sur les surfaces client (rapport, vitrine) » — la conversation Telegram avec
+  l'opérateur n'est ni un rapport ni la vitrine. `brain.py::_llm_response` autorise même
+  explicitement les emojis légers dans son `channel_rule`. Donc pas une violation de la règle
+  telle qu'écrite (correction d'une affirmation trop forte faite en réagissant à chaud à la
+  capture) — mais reste une vraie question de calibration de ton non tranchée : personne n'a
+  encore décidé si le style conversationnel opérateur doit, lui aussi, éviter l'em-dash. Pas
+  touché ce segment, à trancher avec l'opérateur si le sujet revient.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
