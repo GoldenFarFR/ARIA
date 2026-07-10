@@ -104,22 +104,18 @@ async def discover_and_absorb_bonding(*, discover=None, absorber=None, limit_per
 
 
 async def absorb_direct_candidate(contract: str, *, scanner=None) -> str:
-    """Absorbe un candidat DEX-direct FRAÎCHEMENT DÉCOUVERT (Clanker, y compris via
+    """Absorbe un candidat DEX-direct fraîchement découvert (Clanker, y compris via
     Bankr qui déploie dessus -- adresses vanity reconnaissables, vérifié 10/07).
 
-    Diagnostic réel (premier dry-run bonding discovery, 10/07) : ``safety_screen``
-    traite ``ctx.best_pair is None`` comme un échec DUR (``hard_fail``) -- correct
-    pour un token trouvé via ``discover_top_pools`` (pool déjà établi, "pas de
-    paire" = mort/inexistant), FAUX pour un token tout juste déployé : l'absence de
-    paire à cet instant signifie très probablement "pas encore indexé par
-    DexScreener", pas "n'existe pas". 18 candidats sur 20 avaient été bannis À VIE
-    sur ce seul signal lors du premier dry-run.
-
-    Cette fonction intercepte UNIQUEMENT ce cas précis, en amont de
-    ``token_absorber.absorb`` : pas de paire -> échec MOU (``pending``, retenté au
-    prochain cycle), jamais un rejet définitif. Dès qu'une paire existe (le token a
-    eu le temps d'être indexé), délègue entièrement à ``token_absorber.absorb`` --
-    même jugement que le pipeline standard, rien de nouveau à tester côté filtre.
+    Simple relais vers ``token_absorber.absorb`` (même jugement que le pipeline
+    standard, pool 85% VC). L'absence de paire DEX/liquidité insuffisante/contrat
+    pas encore vérifié n'est PLUS un rejet définitif depuis le correctif du
+    10/07 sur ``safety_screen.hard_fail`` (décision opérateur : seul un mécanisme
+    malveillant CONFIRMÉ dans le contrat justifie un bannissement définitif -- la
+    liquidité/vérification/paire sont des aspects d'investissement qui évoluent
+    avec la maturité du projet, "comme tous les autres tokens"). Un token tout
+    juste déployé atterrit donc correctement en ``pending`` (retry) plutôt que
+    ``rejected`` sans logique dédiée ici -- scan unique, réutilisé via ``ctx=``.
     """
     from aria_core.token_absorber import absorb as absorb_standard
 
@@ -131,16 +127,6 @@ async def absorb_direct_candidate(contract: str, *, scanner=None) -> str:
         return "skip_active"
 
     ctx = await scan(contract, include_honeypot=True)
-    if ctx.best_pair is None:
-        await screened_pool.record_pending(
-            contract=contract,
-            reason=(
-                "candidat fraîchement découvert (launchpad direct) : paire DEX pas "
-                "encore indexée -- retenté au prochain cycle, jamais banni sur ce seul signal"
-            ),
-        )
-        return "skip_incomplete"
-
     return await absorb_standard(contract, scanner=scanner, ctx=ctx)
 
 

@@ -110,3 +110,49 @@ def test_concentration_threshold_tunable():
     # 35% échoue au seuil par défaut (30), passe si on relève à 40.
     assert safety_screen(_ctx(top_holder=35.0)).passed is False
     assert safety_screen(_ctx(top_holder=35.0), max_top_holder_pct=40.0).passed is True
+
+
+# ── hard_fail : mécanisme malveillant (définitif) vs aspect d'investissement
+# (mou, réévalué avec la maturité du projet) -- décision opérateur 10/07 ────────
+
+def test_no_pair_is_soft_fail_not_hard():
+    r = safety_screen(_ctx(has_pair=False))
+    assert r.passed is False
+    assert r.hard_fail is False
+
+
+def test_low_liquidity_is_soft_fail_not_hard():
+    r = safety_screen(_ctx(liq=1_000.0))
+    assert r.passed is False
+    assert r.hard_fail is False
+
+
+def test_unverified_contract_is_soft_fail_not_hard():
+    r = safety_screen(_ctx(verified=False))
+    assert r.passed is False
+    assert r.hard_fail is False
+
+
+def test_whale_concentration_is_soft_fail_not_hard():
+    r = safety_screen(_ctx(top_holder=45.0))
+    assert r.passed is False
+    assert r.hard_fail is False
+
+
+def test_invalid_address_is_hard_fail():
+    r = safety_screen(_ctx(valid=False))
+    assert r.hard_fail is True
+
+
+def test_mint_function_is_hard_fail():
+    ctx = _ctx(has_mint=True)
+    ctx.mint_authority = "eoa"  # confirmé (pas 'unknown', qui reste mou)
+    assert safety_screen(ctx).hard_fail is True
+
+
+def test_blacklist_is_hard_fail():
+    assert safety_screen(_ctx(has_blacklist=True)).hard_fail is True
+
+
+def test_disable_transfers_is_hard_fail():
+    assert safety_screen(_ctx(has_disable=True)).hard_fail is True
