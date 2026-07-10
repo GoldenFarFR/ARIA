@@ -622,4 +622,98 @@ def test_prompt_still_grounds_on_real_ta_levels_when_available():
 
     assert "Appuie entrée, invalidation et cible sur ces niveaux techniques réels" in block
     assert "aucune série OHLCV réelle disponible" not in block
+
+
+# ── Câblage EMA/MACD + golden pocket (10/07, décision opérateur) ──────────────────────
+
+def test_prompt_includes_ema_macd_when_computed():
+    from aria_core.skills.ta_levels import TALevels
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    ctx.ta = TALevels(
+        plus_haut=1.5, plus_bas=0.8, dernier_close=1.2,
+        tendance="haussière", tendance_base="MA7 > MA25", n_bougies=50,
+    )
+    ctx.ta_ema_fast = 1.25
+    ctx.ta_ema_slow = 1.10
+    ctx.ta_macd_line = 0.05
+    ctx.ta_macd_signal = 0.03
+    ctx.ta_macd_histogram = 0.02
+
+    block = vc._build_untrusted_context(ctx, [])
+
+    assert "EMA12 1.25" in block
+    assert "EMA26 1.1" in block
+    assert "EMA12 > EMA26" in block
+    assert "MACD 0.05" in block
+    assert "histogramme 0.02" in block
+
+
+def test_prompt_omits_ema_macd_when_not_computed():
+    """Sans EMA/MACD calculés (série trop courte), aucune ligne fabriquée."""
+    from aria_core.skills.ta_levels import TALevels
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    ctx.ta = TALevels(
+        plus_haut=1.5, plus_bas=0.8, dernier_close=1.2,
+        tendance="haussière", tendance_base="MA7 > MA25", n_bougies=50,
+    )
+
+    block = vc._build_untrusted_context(ctx, [])
+
+    assert "EMA" not in block
+    assert "MACD" not in block
+
+
+def test_prompt_includes_golden_pocket_signal_when_present():
+    from aria_core.skills.entry_signals import EntrySignal
+    from aria_core.skills.ta_levels import TALevels
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    ctx.ta = TALevels(
+        plus_haut=1.5, plus_bas=0.8, dernier_close=1.2,
+        tendance="haussière", tendance_base="MA7 > MA25", n_bougies=50,
+    )
+    ctx.ta_golden_pocket_signal = EntrySignal(
+        present=True, reasons=["prix dans la zone Fibonacci 0,618-0,786"],
+        in_golden_pocket=True, rsi_divergence=True,
+        entry=1.2, invalidation=1.0, target=1.5, rr=1.5, lookback_used=25,
+    )
+
+    block = vc._build_untrusted_context(ctx, [])
+
+    assert "golden pocket + divergence RSI PRÉSENT" in block
+    assert "R/R 1.5" in block
+
+
+def test_prompt_omits_golden_pocket_line_when_absent():
+    from aria_core.skills.entry_signals import EntrySignal
+    from aria_core.skills.ta_levels import TALevels
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    ctx.ta = TALevels(
+        plus_haut=1.5, plus_bas=0.8, dernier_close=1.2,
+        tendance="haussière", tendance_base="MA7 > MA25", n_bougies=50,
+    )
+    ctx.ta_golden_pocket_signal = EntrySignal(present=False, reasons=["setup non réuni"])
+
+    block = vc._build_untrusted_context(ctx, [])
+
+    assert "golden pocket + divergence RSI PRÉSENT" not in block
     assert "courbe de bonding Virtuals" not in block
