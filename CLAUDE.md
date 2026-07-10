@@ -151,8 +151,10 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   de valeur inventée). **Découverte importante en déployant** : CoinGecko limite désormais TOUT
   son tier gratuit aux 365 derniers jours d'historique (testé en direct, `error_code 10012`) —
   casse potentiellement en silence l'overlay macro déjà en prod (tâche #14, dégradation douce,
-  jamais une erreur visible). RSI corrigé (fenêtre courte) ; la segmentation complète des 3
-  cycles reste hors de portée du tier gratuit, source alternative pas encore trouvée/vérifiée.
+  jamais une erreur visible). RSI corrigé (fenêtre courte) ; **résolu dans la foulée (même
+  segment, #62)** : `btc_cycles.fetch_btc_history` bascule sur `services/blockchain_info.py`
+  (gratuit, sans clé, ~1600 points quotidiens 2009→aujourd'hui) — segmentation des 3 cycles à
+  nouveau réelle et complète, CoinGecko gardé seulement pour le RSI (fenêtre courte).
   Nouveau : **mineur de conversations opérateur/ARIA** (`telegram_conversation_miner.py`, gate OFF,
   même doctrine que `knowledge_inbox`/`claude_mentor`), avec un garde-fou anti-secret dédié
   (une création d'issue GitHub ne passe pas par le scan CI). Revue de sécurité de fin de session :
