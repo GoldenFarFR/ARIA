@@ -27,7 +27,6 @@ OPERATOR_SKILLS = frozenset({
     "holding_site",
     "entrepreneur_cultivation",
     "acp_marketplace",
-    "worker_delegate",
 })
 
 

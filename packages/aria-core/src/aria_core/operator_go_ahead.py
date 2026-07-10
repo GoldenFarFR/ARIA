@@ -134,7 +134,7 @@ async def execute_deferred_go_ahead(
     if lang_key == "fr":
         reply = (
             "Feu vert noté — mais je ne vois pas d'action claire dans nos derniers échanges.\n"
-            "Redis en une phrase l'objectif (ex. « déploie X », « file ouvrier pour Y »), "
+            "Redis en une phrase l'objectif (ex. « déploie X », « corrige Y »), "
             "ou continue le dialogue par questions."
         )
     else:
