@@ -336,12 +336,19 @@ def compute_metrics(predictions: list[dict]) -> dict:
     }
 
 
-async def metrics() -> dict:
-    """Charge toutes les prédictions et calcule les métriques de pertinence."""
+async def list_all_predictions() -> list[dict]:
+    """Toutes les prédictions (ouvertes et clôturées), sans filtre. Utilisé par les
+    analyses transversales (ex. scorecard « prêt pour l'argent réel ») qui ont besoin
+    de la totalité du journal, pas seulement d'un sous-ensemble déjà agrégé."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (await db.execute("SELECT * FROM vc_prediction")).fetchall()
-    return compute_metrics([dict(zip(_COLUMNS, row)) for row in rows])
+    return [dict(zip(_COLUMNS, row)) for row in rows]
+
+
+async def metrics() -> dict:
+    """Charge toutes les prédictions et calcule les métriques de pertinence."""
+    return compute_metrics(await list_all_predictions())
 
 
 def _sleeve_return(holdings: list[dict], current_prices: dict[int, float]) -> tuple[float, int]:

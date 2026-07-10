@@ -1986,6 +1986,26 @@ async def _handle_cycles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(message, format_cycles_report(result))
 
 
+async def _handle_readiness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/feuvert — scorecard objectif contre les 8 cases pré-engagées de
+    docs/protocole-argent-reel.md avant tout argent réel. Jamais un jugement
+    subjectif : calculé depuis le vrai journal vc_predictions. Admin-only —
+    l'état du feu vert argent réel n'a rien à faire en surface publique."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core.skills.real_money_readiness import (
+        compute_readiness_scorecard,
+        format_readiness_report,
+    )
+
+    scorecard = await compute_readiness_scorecard()
+    await _reply(message, format_readiness_report(scorecard))
+
+
 async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/these <adresse> <BUY|WATCH|SELL|AVOID> <thèse...> — journalise un pari (aucune exécution)."""
     if not await _admin_check_reply(update):
@@ -2143,6 +2163,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("track", _handle_track))
     app.add_handler(CommandHandler("watchlist", _handle_watchlist))
     app.add_handler(CommandHandler("cycles", _handle_cycles))
+    app.add_handler(CommandHandler("feuvert", _handle_readiness))
     app.add_handler(CommandHandler(["langue", "lang", "language"], _handle_langue))
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))
