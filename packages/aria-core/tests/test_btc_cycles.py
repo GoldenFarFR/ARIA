@@ -80,14 +80,31 @@ class _FakeClient:
         self._result = result
         self.calls = []
 
-    async def get_market_chart_range(self, coin_id, start_ts, end_ts, *, vs_currency="usd"):
-        self.calls.append((coin_id, start_ts, end_ts, vs_currency))
+    async def fetch_btc_market_price_history(self, *, timespan="all"):
+        self.calls.append(timespan)
         return self._result
 
 
 @pytest.mark.asyncio
 async def test_fetch_btc_history_returns_none_when_unavailable():
     client = _FakeClient(_FakeChartResult([], available=False, error="rate limit"))
+    assert await bc.fetch_btc_history(client=client) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_btc_history_filters_out_points_before_history_start():
+    # Blockchain.com renvoie l'historique depuis 2009 -- tout ce qui precede
+    # HISTORY_START (2015-06-01, marge avant le premier halving) doit etre exclu.
+    prices = [(_ts("2012-01-01"), 5.0), (_ts("2016-01-01"), 400.0), (_ts("2020-01-01"), 7000.0)]
+    client = _FakeClient(_FakeChartResult(prices))
+    result = await bc.fetch_btc_history(client=client)
+    assert result == [(_ts("2016-01-01"), 400.0), (_ts("2020-01-01"), 7000.0)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_btc_history_none_when_everything_filtered_out():
+    prices = [(_ts("2010-01-01"), 1.0), (_ts("2012-01-01"), 5.0)]
+    client = _FakeClient(_FakeChartResult(prices))
     assert await bc.fetch_btc_history(client=client) is None
 
 
