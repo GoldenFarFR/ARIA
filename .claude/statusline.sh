@@ -43,20 +43,21 @@ else
   reco="🟢 Sonnet xhigh (🔴 Opus si wallet/sécu)"
 fi
 
-# --- Checkpoint session (compteur de messages tous les 20) -----------------
-# Affiche l'approche du prochain checkpoint auto (« chk NN/20 ») pour que l'opérateur
-# le voie venir ; le hook UserPromptSubmit injecte le rappel pile au 20e.
+# --- Checkpoint session (compteur de messages tous les 1000) ---------------
+# Affiche l'approche du prochain checkpoint auto (« chk NN/1000 ») pour que l'opérateur
+# le voie venir ; le hook UserPromptSubmit injecte le rappel pile au 1000e.
 chk=""
 cf="${dir}/.claude/.msg-counter"
+CHECKPOINT_INTERVAL=1000
 if [ -f "$cf" ]; then
   cn=$(cat "$cf" 2>/dev/null)
   case "$cn" in
     ''|*[!0-9]*) cn="" ;;
   esac
   if [ -n "$cn" ]; then
-    pos=$(( cn % 20 ))
-    [ "$pos" -eq 0 ] && pos=20
-    chk="📌 chk ${pos}/20 · "
+    pos=$(( cn % CHECKPOINT_INTERVAL ))
+    [ "$pos" -eq 0 ] && pos=$CHECKPOINT_INTERVAL
+    chk="📌 chk ${pos}/${CHECKPOINT_INTERVAL} · "
   fi
 fi
 
