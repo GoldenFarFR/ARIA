@@ -102,6 +102,32 @@ def test_parse_clanker_token_shape():
     assert token.description == "Un vrai builder Base."
 
 
+def test_parse_clanker_token_real_confirmed_shape():
+    # Forme RÉELLE confirmée en direct le 10/07 depuis le VPS (snake_case, "admin"
+    # = déployeur, "starting_market_cap" = mcap) -- pas une supposition.
+    real = {
+        "id": 1472414,
+        "created_at": "2026-07-10T17:56:29.000Z",
+        "admin": "0x24f788dd8199e3B35c89903e9b0d11B4903A2892",
+        "tx_hash": "0xc1b280c0e1a0cd6b39c81b3df211d281eea8ec22da58ec9216bf77f7fd187ae",
+        "contract_address": "0xbd060F1485B7279bbB1761dd35b6E6A670b11b07",
+        "name": "Hansem The Blackbull",
+        "symbol": "HANSEM",
+        "chain_id": 8453,
+        "starting_market_cap": 12000.0,
+        "deployed_at": "2026-07-10T17:56:30.000Z",
+        "description": "Un vrai builder Base.",
+    }
+    token = parse_clanker_token(real)
+    assert token.contract_address == "0xbd060F1485B7279bbB1761dd35b6E6A670b11b07"
+    assert token.name == "Hansem The Blackbull"
+    assert token.symbol == "HANSEM"
+    assert token.chain_id == 8453
+    assert token.mcap == pytest.approx(12000.0)
+    assert token.deployer_address == "0x24f788dd8199e3B35c89903e9b0d11B4903A2892"
+    assert token.created_at == "2026-07-10T17:56:29.000Z"
+
+
 def test_parse_clanker_token_alt_field_names_tolerated():
     # Forme alternative plausible (snake_case) — le parsing doit rester tolérant.
     alt = {
@@ -155,16 +181,24 @@ def test_build_recent_tokens_url_defaults():
     url = build_recent_tokens_url()
     assert url.startswith("https://www.clanker.world/api/tokens?")
     assert "chainId=8453" in url
-    assert "limit=50" in url
+    # Plafond RÉEL confirmé en direct le 10/07 (VPS) : limit<=20, sinon HTTP 400 --
+    # un appel par défaut (limit=50, non clampé) échouait TOUT l'appel, pas juste
+    # "sous-optimal". Le défaut de la signature (50) est donc clampé à 20 ici.
+    assert "limit=20" in url
     # sortBy confirmé en direct depuis le VPS le 10/07 (énumération stricte révélée par
     # l'erreur de validation de l'API) : "deployed-at", pas "createdAt" (plausible mais faux).
     assert "sortBy=deployed-at" in url
     assert "sort=desc" in url
 
 
-def test_build_recent_tokens_url_clamps_limit():
+def test_build_recent_tokens_url_clamps_limit_to_real_max():
     url = build_recent_tokens_url(limit=99999)
-    assert "limit=100" in url
+    assert "limit=20" in url
+
+
+def test_build_recent_tokens_url_small_limit_passes_through():
+    url = build_recent_tokens_url(limit=5)
+    assert "limit=5" in url
 
 
 def test_build_token_by_address_url():
@@ -201,6 +235,20 @@ async def test_fetch_recent_403_returns_empty_not_raise(monkeypatch):
     client = ClankerClient()
     url = build_recent_tokens_url()
     _patch_client(monkeypatch, {url: FakeResponse(403)})
+
+    assert await client.fetch_recent() == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_recent_400_validation_error_returns_empty_not_raise(monkeypatch):
+    # Incident réel (10/07, VPS) : limit>20 -> HTTP 400 ("Too big: expected <=20").
+    # Un statut 4xx générique ne doit jamais faire remonter d'exception à l'appelant.
+    client = ClankerClient()
+    url = build_recent_tokens_url()
+    _patch_client(
+        monkeypatch,
+        {url: FakeResponse(400, {"error": "Invalid input", "data": [{"message": "Too big"}]})},
+    )
 
     assert await client.fetch_recent() == []
 

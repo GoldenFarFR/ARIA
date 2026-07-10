@@ -13,16 +13,20 @@ tokens with filters, sorting, and cursor-based pagination »). Auth : aucune pou
 lecture publique (clé partenaire ``x-api-key`` uniquement pour des quotas plus élevés,
 non requise ici).
 
-Paramètres de requête (``chainId``/``sort``/``sortBy``/``limit``) CONFIRMÉS EN DIRECT
-depuis le VPS le 10/07 (le sandbox cloud, lui, était bloqué en HTTP 403 — anti-bot
-générique côté Cloudflare, comportement propre à cet environnement, pas à l'API).
-``sortBy`` accepte une énumération stricte (cf. ``_VALID_SORT_BY``) révélée par le
-message d'erreur de validation de l'API elle-même quand une valeur invalide est
-envoyée — ``createdAt`` (plausible) était faux, ``deployed-at`` est la vraie valeur.
-⚠️ La forme exacte de la réponse pour une requête VALIDE reste à confirmer (le test
-live n'a pour l'instant renvoyé qu'une erreur de validation, jamais de vraies
-données) — le parsing ci-dessous reste délibérément tolérant (``_first`` sur
-plusieurs noms de champs plausibles) pour dégrader proprement en attendant.
+Paramètres de requête (``chainId``/``sort``/``sortBy``/``limit``) et forme de la
+réponse CONFIRMÉS EN DIRECT depuis le VPS le 10/07 (le sandbox cloud, lui, était
+bloqué en HTTP 403 — anti-bot générique côté Cloudflare, comportement propre à cet
+environnement, pas à l'API). Deux corrections faites grâce aux messages de validation
+de l'API elle-même (jamais de la doc, muette sur ces détails) : ``sortBy`` accepte une
+énumération stricte (cf. ``_VALID_SORT_BY`` — ``createdAt``, plausible, était faux) ;
+``limit`` a un plafond RÉEL de 20 (cf. ``_MAX_LIMIT`` — 100, plausible, était faux et
+faisait échouer TOUT l'appel en HTTP 400, pas juste sous-optimal). Réponse valide :
+``{"data": [...]}``, chaque item un dict à plat en ``snake_case`` (``id``,
+``created_at``, ``admin`` — le déployeur —, ``tx_hash``, ``contract_address``,
+``name``, ``symbol``, ``description``, ``deployed_at``, ``starting_market_cap``,
+``chain_id``, ``platform``...). Le parsing ci-dessous reste délibérément tolérant
+(``_first`` sur plusieurs noms de champs, snake_case ET camelCase) pour dégrader
+proprement si la forme évolue, plutôt que de figer une dépendance fragile.
 
 Mêmes politiques que les autres clients de ce dossier :
 - Aucune écriture, aucune signature, GET uniquement.
@@ -125,20 +129,29 @@ _VALID_SORT_BY = frozenset(
 )
 
 
+#: Plafond RÉEL de ``limit``, CONFIRMÉ EN DIRECT le 10/07 depuis le VPS : un appel
+#: avec ``limit=50`` a échoué en HTTP 400 avec un message de validation explicite
+#: (``"maximum":20,"inclusive":true,"path":["limit"]``) — 100 (supposition initiale)
+#: était faux. Un ``limit`` hors bornes n'est plus juste "sous-optimal", il fait
+#: échouer TOUT l'appel (fetch_recent renvoie ``[]``) : ce plafond doit rester exact.
+_MAX_LIMIT = 20
+
+
 def build_recent_tokens_url(chain_id: int = 8453, limit: int = 50) -> str:
     """URL des tokens les plus récents sur Base (``chain_id=8453``).
 
-    ``chainId``/``sort``/``sortBy``/``limit`` CONFIRMÉS EN DIRECT le 10/07 (VPS,
-    accès réseau réel — le sandbox cloud était bloqué en HTTP 403 anti-bot). La forme
-    exacte de la réponse pour une requête VALIDE reste à confirmer (le test live n'a
-    pour l'instant renvoyé qu'une erreur de validation, jamais des données) — le
-    parsing (``parse_clanker_token``) reste tolérant en attendant.
+    ``chainId``/``sort``/``sortBy``/``limit`` (``<=20``) CONFIRMÉS EN DIRECT le 10/07
+    (VPS, accès réseau réel — le sandbox cloud était bloqué en HTTP 403 anti-bot). La
+    forme d'une réponse VALIDE (``limit`` conforme) a aussi été confirmée en direct :
+    ``{"data": [...]}`` où chaque item est un dict à plat (``id``, ``created_at``,
+    ``admin``, ``tx_hash``, ``contract_address``, ``name``, ``symbol``,
+    ``description``, ...) — voir ``parse_clanker_token`` pour les champs retenus.
     """
     try:
         size = int(limit)
     except (TypeError, ValueError):
-        size = 50
-    size = max(1, min(size, 100))
+        size = _MAX_LIMIT
+    size = max(1, min(size, _MAX_LIMIT))
     params = [
         ("chainId", str(chain_id)),
         ("sort", "desc"),
@@ -160,8 +173,13 @@ def build_token_by_address_url(token_address: str, chain_id: int = 8453) -> str:
 def parse_clanker_token(raw: dict) -> ClankerToken | None:
     """Parse un objet de réponse Clanker en ``ClankerToken``. Jamais d'exception.
 
-    Tolère plusieurs noms de champs plausibles (forme exacte non confirmée en
-    direct). Raw non-dict → ``None`` ; champ manquant → ``None`` (facts-only).
+    Champs réels CONFIRMÉS EN DIRECT le 10/07 (``contract_address``, ``admin``,
+    ``created_at``/``deployed_at``, ``starting_market_cap`` — snake_case) placés en
+    tête de chaque liste de fallback ; variantes camelCase gardées en repli tolérant
+    au cas où la forme évolue. Raw non-dict → ``None`` ; champ manquant → ``None``
+    (facts-only) — ``volume24h``/``liquidity_usd``/``holder_count`` restent
+    généralement ``None`` sur cet endpoint (feed de déploiement, pas de données de
+    marché live), sans qu'aucune donnée manquante ne soit jamais inventée.
     """
     if not isinstance(raw, dict):
         return None
@@ -169,18 +187,18 @@ def parse_clanker_token(raw: dict) -> ClankerToken | None:
     return ClankerToken(
         name=_sanitize(_first(raw, "name", "tokenName"), 120),
         symbol=_sanitize(_first(raw, "symbol", "ticker"), 20),
-        chain_id=_safe_int(_first(raw, "chainId", "chain_id")),
+        chain_id=_safe_int(_first(raw, "chain_id", "chainId")),
         contract_address=_sanitize(
-            _first(raw, "contractAddress", "contract_address", "address", "tokenAddress"), 80
+            _first(raw, "contract_address", "contractAddress", "address", "tokenAddress"), 80
         ),
-        pool_address=_sanitize(_first(raw, "poolAddress", "pool_address", "pair"), 80),
-        created_at=_sanitize(_first(raw, "createdAt", "created_at", "deployedAt"), 40),
-        mcap=_safe_float(_first(raw, "marketCap", "mcap", "market_cap")),
+        pool_address=_sanitize(_first(raw, "pool_address", "poolAddress", "pair"), 80),
+        created_at=_sanitize(_first(raw, "created_at", "createdAt", "deployed_at", "deployedAt"), 40),
+        mcap=_safe_float(_first(raw, "starting_market_cap", "marketCap", "mcap", "market_cap")),
         volume24h=_safe_float(_first(raw, "volume24h", "volume_24h", "volume")),
         liquidity_usd=_safe_float(_first(raw, "liquidityUsd", "liquidity_usd", "liquidity")),
         holder_count=_safe_int(_first(raw, "holderCount", "holder_count", "holders")),
         deployer_address=_sanitize(
-            _first(raw, "deployerAddress", "deployer_address", "creator", "deployer"), 80
+            _first(raw, "admin", "msg_sender", "deployer_address", "deployerAddress", "creator", "deployer"), 80
         ),
         description=_sanitize(_first(raw, "description"), _FIELD_MAX),
         warning_flags=[
