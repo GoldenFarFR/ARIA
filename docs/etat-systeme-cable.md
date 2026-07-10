@@ -346,21 +346,22 @@ complet : `docs/HANDOFF-2026-07-09-nuit3.md`.
 `proxy_pass` nginx vers `localhost:8000`, **aucun Basic Auth**) — PAS sur `ariavanguardzhc.com`
 (vitrine statique, verrouillée par Basic Auth sur tout, `/api/*` y retombe sur `index.html` faute
 de règle de proxy). Ne jamais tester cet endpoint sur le mauvais domaine. Alimente Shekel (agent
-tiers Arène Virtuals) et tout futur consommateur externe. Champs souvent `null` en ce moment pour
-le cycle macro complet — normal, voir section CoinGecko ci-dessous, pas un bug de l'endpoint.
+tiers Arène Virtuals) et tout futur consommateur externe. Cycle macro complet à nouveau alimenté
+(voir section CoinGecko/Blockchain.com ci-dessous) — RSI et cycle renvoient de vraies valeurs.
 
-## CoinGecko — tier gratuit désormais limité à 365 jours d'historique (09/07 nuit 7) — IMPACT RÉEL
+## CoinGecko — tier gratuit limité à 365 jours d'historique (09/07 nuit 7) — CORRIGÉ (Blockchain.com)
 Changement de politique CoinGecko confirmé en direct (`error_code 10012`, HTTP 401 même avec une
 clé Demo valide) : impossible de requêter des données de plus de 365 jours sur le tier gratuit,
-peu importe la taille de la fenêtre. Casse potentiellement en silence l'overlay macro du rapport
-`/vc` (tâche #14, déjà en prod) puisque `btc_cycles` demande l'historique depuis 2015 —
-dégradation douce existante (`None`, jamais une valeur inventée), donc pas d'erreur visible, juste
-une section absente. RSI de `arena_signal.py` corrigé (fenêtre 90 jours). La segmentation complète
-des 3 cycles reste cassée tant qu'une source alternative gratuite n'est pas trouvée ET vérifiée
-(candidats identifiés mais non branchés : FRED/CBBTCUSD a une clause de copyright Coinbase non
-tranchée, Bitcoin.com Charts API pas encore accessible en réseau). Clé `COINGECKO_DEMO_API_KEY`
-dans `vanguard/backend/.env` (PAS `/opt/aria/.env` racine — piège vécu, deux fichiers `.env`
-différents selon le composant). Détail complet : `docs/HANDOFF-2026-07-09-nuit7.md`.
+peu importe la taille de la fenêtre. Cassait potentiellement en silence l'overlay macro du rapport
+`/vc` (tâche #14, déjà en prod) puisque `btc_cycles` demande l'historique depuis 2015.
+**Corrigé** : `btc_cycles.fetch_btc_history` bascule sur `services/blockchain_info.py`
+(`charts/market-price`, société établie, gratuit, sans clé, ~1600 points quotidiens 2009→aujourd'hui) —
+segmentation des 3 cycles vérifiée en direct, réelle et complète. CoinGecko reste utilisé pour le
+RSI récent de `arena_signal.py` (fenêtre 90 jours, largement dans la limite des 365 jours) — **deux
+clients distincts, jamais interchangeables** (piège vécu : les confondre casse le typage silencieusement,
+verrouillé par test dédié). Clé `COINGECKO_DEMO_API_KEY` dans `vanguard/backend/.env` (PAS
+`/opt/aria/.env` racine — piège vécu, deux fichiers `.env` différents selon le composant). Détail
+complet : `docs/HANDOFF-2026-07-09-nuit7.md`.
 
 ## Mineur de conversations opérateur/ARIA (#57) — LIVRÉ, gate OFF (09/07 nuit 7)
 `skills/telegram_conversation_miner.py`, tâche heartbeat `telegram_miner_cycle` (60min, throttle

@@ -147,15 +147,27 @@ def segment_cycles(prices: list[tuple[int, float]]) -> list[CycleStats]:
 
 
 async def fetch_btc_history(*, client=None) -> list[tuple[int, float]] | None:
-    """Vraie série de prix BTC/USD depuis HISTORY_START (CoinGecko). None si
-    indisponible — jamais une série inventée."""
-    if client is None:
-        from aria_core.services.coingecko import coingecko_client as client
+    """Vraie série de prix BTC/USD depuis HISTORY_START (Blockchain.com). None si
+    indisponible — jamais une série inventée.
 
-    start_ts = _to_ts(HISTORY_START)
-    end_ts = int(datetime.now(timezone.utc).timestamp())
-    result = await client.get_market_chart_range(BTC_COIN_ID, start_ts, end_ts)
-    return result.prices if result.available else None
+    CoinGecko a changé sa politique (confirmé en direct le 09/07, `error_code
+    10012`) : son tier gratuit refuse désormais toute requête portant sur des
+    données de plus de 365 jours -- structurellement incompatible avec les 10+
+    ans requis ici. Basculé sur `services/blockchain_info.py` (société établie,
+    endpoint public documenté, ~1600 points quotidiens 2009->aujourd'hui,
+    aucune clé). Le RSI récent (`arena_signal.py`) reste sur CoinGecko, qui
+    fonctionne très bien pour une fenêtre courte (<=365 jours).
+    """
+    if client is None:
+        from aria_core.services.blockchain_info import blockchain_info_client as client
+
+    result = await client.fetch_btc_market_price_history()
+    if not result.available:
+        return None
+
+    start_ms = _to_ts(HISTORY_START) * 1000
+    filtered = [(t, p) for t, p in result.prices if t >= start_ms]
+    return filtered or None
 
 
 def current_phase_summary(stats: list[CycleStats]) -> dict | None:
