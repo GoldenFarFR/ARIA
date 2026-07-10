@@ -120,6 +120,9 @@ async def test_run_hands_over_when_unclear(monkeypatch, tmp_path):
         async def list_pull_reviews(self, owner, repo, pull_number):
             return []
 
+        async def list_review_comments(self, owner, repo, pull_number):
+            return []
+
         async def create_issue_comment(self, owner, repo, issue_number, body):
             posted.append(body)
             return {"id": 9002, "html_url": "https://github.com/example/issues/37#issuecomment-9002"}
@@ -141,6 +144,60 @@ async def test_run_hands_over_when_unclear(monkeypatch, tmp_path):
 
     state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert "issue:9001" in state.get("handled", {})
+
+
+@pytest.mark.asyncio
+async def test_run_hands_over_on_inline_review_comment(monkeypatch, tmp_path):
+    # Cas reel PR#37 (09/07) : un relecteur laisse une suggestion INLINE sur une ligne de
+    # diff (path=showcase.json), sans jamais poster de commentaire "issue" ni de corps de
+    # review global -> avant le fix, ce commentaire etait invisible pour le watcher.
+    target = {
+        "id": "test",
+        "owner": "Virtual-Protocol",
+        "repo": "acp-cli-demos",
+        "pr_number": 37,
+        "enabled": True,
+        "our_logins": ["GoldenFarFR"],
+    }
+    _fake_env(monkeypatch, tmp_path, target)
+    posted: list[str] = []
+
+    class FakeClient:
+        async def list_issue_comments(self, owner, repo, issue_number):
+            return []
+
+        async def list_pull_reviews(self, owner, repo, pull_number):
+            return []
+
+        async def list_review_comments(self, owner, repo, pull_number):
+            return [
+                {
+                    "id": 3557711722,
+                    "user": {"login": "ytoast"},
+                    "body": "Nit: trim topics to the recognized taxonomy.",
+                    "path": "showcase/aria-vanguard-zhc/showcase.json",
+                    "created_at": "2026-07-09T12:00:00Z",
+                    "html_url": "https://github.com/example/pull/37#discussion_r3557711722",
+                }
+            ]
+
+        async def create_issue_comment(self, owner, repo, issue_number, body):
+            posted.append(body)
+            return {"id": 9101, "html_url": "https://github.com/example/issues/37#issuecomment-9101"}
+
+    monkeypatch.setattr(spw, "GitHubClient", lambda token: FakeClient())
+
+    result = await spw.run_showcase_pr_watch()
+    assert result["new_external"] == 1
+    assert result["replied"] == []
+    assert len(result["handed_over"]) == 1
+    assert posted and "handing it over to my operator" in posted[0].lower()
+    ho = result["handed_over"][0]
+    assert ho["handover"] is True
+    assert "showcase.json" in ho["comment_excerpt"]
+
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert "review_comment:3557711722" in state.get("handled", {})
 
 
 @pytest.mark.asyncio
@@ -169,6 +226,9 @@ async def test_run_auto_replies_on_green_light(monkeypatch, tmp_path):
             ]
 
         async def list_pull_reviews(self, owner, repo, pull_number):
+            return []
+
+        async def list_review_comments(self, owner, repo, pull_number):
             return []
 
         async def create_issue_comment(self, owner, repo, issue_number, body):
@@ -219,6 +279,9 @@ async def test_run_skips_when_human_replied_first(monkeypatch, tmp_path):
         async def list_pull_reviews(self, owner, repo, pull_number):
             return []
 
+        async def list_review_comments(self, owner, repo, pull_number):
+            return []
+
         async def create_issue_comment(self, owner, repo, issue_number, body):
             raise AssertionError("should not post when human already replied")
 
@@ -256,6 +319,9 @@ async def test_run_skips_our_comments(monkeypatch, tmp_path):
             ]
 
         async def list_pull_reviews(self, owner, repo, pull_number):
+            return []
+
+        async def list_review_comments(self, owner, repo, pull_number):
             return []
 
         async def create_issue_comment(self, owner, repo, issue_number, body):
