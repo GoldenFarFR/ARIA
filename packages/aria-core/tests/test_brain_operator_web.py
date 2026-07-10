@@ -100,3 +100,40 @@ async def test_operator_public_flag_actually_threaded_to_resolve_calibrated_answ
     )
 
     assert received.get("public") is False
+
+
+@pytest.mark.asyncio
+async def test_operator_vc_followup_uses_local_memory_not_web(monkeypatch):
+    """Suivi /vc : +515 pourquoi ? doit s'ancrer sur le dernier rapport, pas le web."""
+    web_called = {"n": 0}
+
+    async def _fake_resolve(query, lang, **kwargs):
+        web_called["n"] += 1
+        return ("WEB_SHOULD_NOT_RUN", {})
+
+    async def _fake_vc_block(*, lang="fr"):
+        return "DERNIER RAPPORT /vc: +515% entrée 0.346 cible 2.13 AVOID"
+
+    async def _fake_llm(self, message, lang, **kwargs):
+        assert "DERNIER RAPPORT" in (kwargs.get("extra_system_context") or "")
+        return "Le +515% vient de l'entrée 0.346 vers la cible 2.13."
+
+    monkeypatch.setattr(
+        "aria_core.knowledge.epistemic.resolve_calibrated_answer", _fake_resolve,
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.vc_session_context.get_followup_context_block", _fake_vc_block,
+    )
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+    monkeypatch.setattr("aria_core.brain.AriaBrain._llm_response", _fake_llm)
+
+    brain = AriaBrain()
+    reply, skill, labels, data, _ = await brain._general_response(
+        "+515 pourquoi ?", "fr", public=False,
+    )
+
+    assert web_called["n"] == 0
+    assert data.get("vc_followup") is True
+    assert "515" in reply
+    assert "0.346" in reply
+

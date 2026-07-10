@@ -1810,7 +1810,14 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
         capital_usd = float(capital_raw) if capital_raw else None
     except ValueError:
         capital_usd = None
-    await _reply(message, format_telegram_order(result, capital_usd=capital_usd, lang=lang))
+    order_text = format_telegram_order(result, capital_usd=capital_usd, lang=lang)
+    await _reply(message, order_text)
+
+    from aria_core import repertoire_db
+    from aria_core.skills.vc_session_context import record_operator_vc
+
+    await repertoire_db.save_message("user", f"/vc {address}", skill_used="vc")
+    await repertoire_db.save_message("agent", order_text, skill_used="vc")
 
     if test_mode:
         # MODE TEST : on affiche le raisonnement complet mais on n'envoie aucun
@@ -1831,6 +1838,7 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
             await _reply(message, _format_judge_verdict(verdict, lang=lang))
         except Exception as exc:  # noqa: BLE001 — l'audit ne doit jamais casser le mode test
             logger.warning("proof engine (juge) échoué: %s", exc)
+        await record_operator_vc(result, prediction_id=None, telegram_summary=order_text)
         await _reply(message, s["test_footer"])
         return
 
@@ -1854,6 +1862,7 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
             llm_used=result.llm_used,
             report_ref=ref_id,
         )
+        await record_operator_vc(result, prediction_id=pred_id, telegram_summary=order_text)
         await _reply(message, f"🗃️ Prédiction #{pred_id} enregistrée. Clôture plus tard : /vcresult {pred_id} <pnl%> [note].")
     except Exception as exc:  # noqa: BLE001 — le log ne doit jamais casser l'analyse
         logger.warning("vc auto-log échoué: %s", exc)
