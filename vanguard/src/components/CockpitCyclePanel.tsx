@@ -1,18 +1,42 @@
 import { useEffect, useState } from 'react'
 import { getMarketCycle, type MarketCycle } from '../api'
 
-const PHASE_COLORS: Record<string, string> = {
-  accumulation: '#7fb88f',
-  'hausse (markup)': '#c9a962',
-  distribution: '#e8c468',
-  'baisse (markdown)': '#d98a8a',
-}
+const PHASES = [
+  { key: 'accumulation', label: 'Accumulation', color: '#7fb88f' },
+  { key: 'hausse (markup)', label: 'Hausse', color: '#e8c468' },
+  { key: 'distribution', label: 'Distribution', color: '#e0a15a' },
+  { key: 'baisse (markdown)', label: 'Baisse', color: '#d98a8a' },
+]
 
 function relativeDays(since: string): string {
   const then = new Date(since).getTime()
   if (Number.isNaN(then)) return since
   const days = Math.max(0, Math.round((Date.now() - then) / 86_400_000))
   return `depuis ${days} j`
+}
+
+function PhaseTrack({ activeLabel }: { activeLabel: string }) {
+  return (
+    <div className="flex gap-1.5 mb-4" role="img" aria-label={`Phase actuelle du cycle : ${activeLabel}`}>
+      {PHASES.map((p) => {
+        const active = p.key === activeLabel
+        return (
+          <div key={p.key} className="flex-1">
+            <div
+              className="h-1.5 rounded-full transition-opacity"
+              style={{ backgroundColor: p.color, opacity: active ? 0.9 : 0.15 }}
+            />
+            <p
+              className="text-[10px] uppercase tracking-[0.1em] mt-1.5 truncate"
+              style={{ color: active ? p.color : '#5c5f66', fontWeight: active ? 600 : 400 }}
+            >
+              {p.label}
+            </p>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 export function CockpitCyclePanel() {
@@ -63,26 +87,31 @@ export function CockpitCyclePanel() {
   }
 
   const { phase } = cycle
-  const color = PHASE_COLORS[phase.label] ?? '#8b8f9a'
+  const activePhase = PHASES.find((p) => p.key === phase.label)
+  const color = activePhase?.color ?? '#8b8f9a'
 
   return (
     <div className="glass-vanguard rounded-sm p-5 sm:p-6">
       <p className="section-label mb-4">Cycle Bitcoin (halving à halving)</p>
-      <div className="flex items-center gap-3 mb-2">
-        <span className="inline-flex h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
-        <span className="text-lg text-[#f4efe6] font-medium capitalize">{phase.label}</span>
+
+      <PhaseTrack activeLabel={phase.label} />
+
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <p className="text-lg text-[#f4efe6] font-medium capitalize leading-tight">
+            {activePhase?.label ?? phase.label}
+          </p>
+          <p className="text-xs text-[#8b8f9a] mt-0.5">
+            {phase.cycle_name} · {relativeDays(phase.since)}
+          </p>
+        </div>
+        <p className="text-3xl font-mono tabular-nums" style={{ color }}>
+          {phase.change_pct >= 0 ? '+' : ''}
+          {phase.change_pct.toFixed(0)}%
+        </p>
       </div>
-      <p className="text-sm text-[#8b8f9a] mb-1">
-        {phase.cycle_name} · {relativeDays(phase.since)}
-      </p>
-      <p
-        className="text-2xl font-mono tabular-nums mb-4"
-        style={{ color: phase.change_pct >= 0 ? '#7fb88f' : '#d98a8a' }}
-      >
-        {phase.change_pct >= 0 ? '+' : ''}
-        {phase.change_pct.toFixed(0)}%
-      </p>
-      <p className="text-[11px] text-[#8b8f9a] leading-relaxed">{cycle.disclaimer}</p>
+
+      <p className="text-[11px] text-[#8b8f9a] mt-4 leading-relaxed">{cycle.disclaimer}</p>
     </div>
   )
 }
