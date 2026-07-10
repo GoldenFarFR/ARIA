@@ -15,9 +15,11 @@ Contrainte découverte le 09/07 (testée en direct sur l'API réelle, error_code
 10012) : le tier gratuit CoinGecko refuse toute requête portant sur des données
 de plus de 365 jours, quelle que soit la taille de la fenêtre demandée (pas un
 souci de découpage). Le RSI (qui n'a besoin que de quelques semaines) utilise
-donc une fenêtre RÉCENTE dédiée (``_RSI_WINDOW_DAYS``), distincte de
-l'historique complet 10 ans de `btc_cycles` (qui, lui, reste structurellement
-hors de portée du tier gratuit — cf. tâche #62 pour une source alternative).
+donc une fenêtre RÉCENTE dédiée (``_RSI_WINDOW_DAYS``) via CoinGecko, tandis
+que le cycle macro (`btc_cycles`, 10 ans) est passé à Blockchain.com
+(`services/blockchain_info.py`) — deux clients DIFFÉRENTS, deux interfaces
+différentes, jamais interchangeables (d'où les deux paramètres séparés
+ci-dessous plutôt qu'un seul `client` partagé).
 """
 from __future__ import annotations
 
@@ -30,9 +32,11 @@ NOTE = (
     "Deterministic ARIA signals only (no LLM guess). Missing fields mean the "
     "underlying data was unavailable right now, not zero. RSI is computed from "
     "real daily BTC/USD closes (CoinGecko, last ~90 days — CoinGecko's free "
-    "tier hard-caps historical queries at 365 days); no OHLC candle source is "
-    "wired for BTC yet, so Fibonacci/golden-pocket/divergence signals are not "
-    "included here (would require fabricating candles from close-only data)."
+    "tier hard-caps historical queries at 365 days); the BTC halving-cycle "
+    "phase is computed from Blockchain.com's long history instead. No OHLC "
+    "candle source is wired for BTC yet, so Fibonacci/golden-pocket/divergence "
+    "signals are not included here (would require fabricating candles from "
+    "close-only data)."
 )
 
 _RSI_WINDOW_DAYS = 90  # marge large au-dessus du minimum RSI-14 (~15j), reste << 365j
@@ -53,11 +57,16 @@ async def _fetch_recent_btc_closes(*, client=None) -> list[float] | None:
     return [p for _, p in sorted(result.prices, key=lambda x: x[0])]
 
 
-async def fetch_btc_arena_signal(*, client=None) -> dict:
-    """Point d'entrée compact pour l'endpoint public `/api/aria/arena-signal/btc`."""
-    phase = await fetch_current_macro_phase(client=client)
+async def fetch_btc_arena_signal(*, cycle_client=None, rsi_client=None) -> dict:
+    """Point d'entrée compact pour l'endpoint public `/api/aria/arena-signal/btc`.
 
-    closes = await _fetch_recent_btc_closes(client=client)
+    ``cycle_client`` (Blockchain.com, historique long) et ``rsi_client``
+    (CoinGecko, fenêtre courte) sont deux clients DISTINCTS — ne jamais les
+    confondre, leurs interfaces ne sont pas interchangeables.
+    """
+    phase = await fetch_current_macro_phase(client=cycle_client)
+
+    closes = await _fetch_recent_btc_closes(client=rsi_client)
     rsi_14: float | None = None
     if closes:
         series = rsi_series(closes)

@@ -96,6 +96,7 @@ jobs:
             tests/test_sepolia_autonomous.py \
             tests/test_exam.py \
             tests/test_btc_cycles.py \
+            tests/test_blockchain_info_client.py \
             tests/test_arena_signal.py \
             tests/test_telegram_conversation_miner.py \
             tests/test_code_proposal.py \

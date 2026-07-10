@@ -104,13 +104,25 @@ une fausse clé privée factice dans un test, même précédent que le JWT du co
 et régénérée par prudence** (rate-limitée, pas une clé de fonds — pas d'urgence, mais
 à faire).
 
-**Recherche approfondie mais bloquée (documenté, pas abandonné)** :
-- Tâche #62 (source alternative pour l'historique BTC long) : deux candidats identifiés
-  par recherche web (FRED/CBBTCUSD — mais données Coinbase sous copyright, zone grise
-  légale non tranchée ; Bitcoin.com Charts API — profondeur non vérifiable, domaine non
-  autorisé). Décision : ne pas brancher sans vérification directe, cohérent avec la
-  norme de diligence qu'on vient d'écrire ensemble.
-- Tâche #59 (Polymarket) : bloqué, aucun domaine Polymarket autorisé.
+**Recherche approfondie, initialement bloquée puis résolue une fois les domaines ajoutés** :
+- **Tâche #62 — RÉSOLUE.** Une fois `blockchain.info` autorisé, testé en direct :
+  `api.blockchain.info/charts/market-price` renvoie ~1600 points quotidiens réels de
+  2009 à aujourd'hui, gratuit, sans clé (société établie depuis 2011, endpoint public
+  documenté). Nouveau client `services/blockchain_info.py` (même dôme que les autres :
+  throttle, retry, jamais de valeur inventée), branché dans `btc_cycles.fetch_btc_history`
+  à la place de CoinGecko. **Vérifié en direct de bout en bout** : les 3 cycles de
+  halving se segmentent à nouveau correctement (phase actuelle confirmée : "baisse
+  markdown" depuis 2025-10-26, -44%) — l'overlay macro du rapport `/vc` (tâche #14) est
+  réellement restauré, pas juste contourné. CoinGecko reste utilisé pour le RSI récent
+  de `arena_signal.py` (fenêtre 90j, dans la limite gratuite) — **deux clients aux
+  interfaces différentes, jamais interchangeables** : `arena_signal.fetch_btc_arena_signal`
+  a dû être refactorée avec deux paramètres séparés (`cycle_client`/`rsi_client`) après
+  qu'un premier essai de client unique ait cassé 4 tests (le partage d'un seul client
+  entre deux interfaces différentes est le genre d'erreur qu'un test attrape immédiatement).
+  20 tests au total (4 nouveaux pour le client + 2 nouveaux + 4 réécrits pour `arena_signal`).
+- Tâche #59 (Polymarket) : domaines ajoutés et vérifiés reachable, mais pas encore
+  intégré ce segment (priorité donnée à la restauration de #62, plus impactante — une
+  fonctionnalité déjà en prod cassée compte plus qu'une nouvelle fonctionnalité).
 - Tâche #64 (audit B5, barres Potentiel-$) : le détail exact de l'audit original a été
   perdu dans une compaction de contexte antérieure. Plutôt que de deviner sur un rapport
   premium déjà validé visuellement par l'opérateur, la tâche reste en attente de
@@ -122,15 +134,11 @@ Déjà autorisés et actifs : `*.virtuals.io`, `degen.virtuals.io`, `whitepaper.
 `*.youtube.com`, `shekel.xyz`/`*.shekel.xyz`, `x.com`/`twitter.com`,
 `geckoterminal.com`/`*.geckoterminal.com`, `coingecko.com`/`*.coingecko.com`/
 `docs.coingecko.com`, `ariavanguardzhc.com`/`*.ariavanguardzhc.com`,
-`cloudpanel.ionos.fr`/`*.cloudpanel.ionos.fr`, `hyperagent.ch`, `coinrule.com`, `katoshi.ai`.
-
-**Encore bloqués, jamais autorisés** (pour reprendre #62/#66 dès que possible) :
-```
-blockchain.info / *.blockchain.info
-bitcoin.com / *.bitcoin.com
-fred.stlouisfed.org / *.stlouisfed.org
-polymarket.com / gamma-api.polymarket.com / clob.polymarket.com
-```
+`cloudpanel.ionos.fr`/`*.cloudpanel.ionos.fr`, `hyperagent.ch`, `coinrule.com`, `katoshi.ai`,
+`blockchain.info`, `bitcoin.com`, `fred.stlouisfed.org`, `polymarket.com`/
+`gamma-api.polymarket.com`/`clob.polymarket.com` (ces 4 derniers ajoutés en cours de
+segment autonome — `blockchain.info` déjà intégré en code, les 3 Polymarket restent
+à exploiter pour la tâche #59).
 
 ## IONOS — accès Control Panel instable (non résolu par nous)
 L'opérateur a perdu l'accès au panneau IONOS (icône serveur cassée) au même moment où
