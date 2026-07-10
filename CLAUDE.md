@@ -445,6 +445,46 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   l'opérateur : ce travail sert un moment de lancement commercial futur avec une vidéo forte —
   mais **« preuve avant promesse » reste la priorité réelle avant ce moment** (pacte
   `docs/protocole-argent-reel.md` inchangé, rien ne le contourne).
+- **Nuit 9 — pivot Cursor audité (pas un incident), régressions `/vc` corrigées, bug bonding
+  Virtuals résolu en conditions réelles.** L'opérateur a travaillé directement avec Cursor
+  pendant une indisponibilité de Claude Code (quota) — confirmé légitime et transparent
+  (`experiments/exp-20260710-1958/README.md`, 3 PR toutes mergées par l'opérateur lui-même,
+  aucun garde-fou touché) : différence fondamentale avec l'incident délégation-autonome retiré
+  le même jour (ici l'opérateur pilote, ne délègue pas). Revue complète des 3 PR + régression
+  réelle trouvée et corrigée dans le PR #22 (`repertoire_db.save_message()` non protégé après
+  `/vc`, cassait tout le flux après l'envoi au client) et faux positif de routage corrigé
+  (`operator_readiness.py` détournait "ok trouve moi maintenant un jeton..." vers l'audit de
+  readiness sur le seul mot "maintenant"). **Câblages livrés** : `candlestick_patterns.py`
+  dans `/vc` (seam dormant depuis le 10/07) ; diligence produit légère (`services/
+  site_snapshot.py` + GitHub, `_fetch_product_diligence` dans `vc_analysis.py`) répondant à un
+  trou qu'ARIA avait identifié elle-même devant l'opérateur — limite connue : ne lit que la
+  page d'accueil déclarée, pas la fiche Virtuals elle-même qui porte souvent équipe/tokenomics
+  pour les tokens lancés sur Virtuals (piste ouverte). **Recadrage doctrine découverte
+  bonding/direct** (décision opérateur explicite) : un dry-run réel a montré 18 candidats
+  Clanker/Bankr sur 20 bannis à vie pour "aucune paire DEX" (juste trop jeunes, pas des scams).
+  Principe posé : `hard_fail` (rejet définitif) ne couvre plus QUE les mécanismes malveillants
+  CONFIRMÉS dans le contrat (mint dev, blacklist, disable-transfers, honeypot, sell-tax
+  extractif, owner caché, reprise de propriété) — liquidité/paire/vérification/concentration
+  sont des aspects d'investissement qui évoluent avec la maturité du projet, jamais un
+  bannissement définitif (`safety_screen.py`/`bonding_screen.py`, `passed` inchangé, seule la
+  classification définitif/à-réessayer change). **Bug plus profond trouvé et vérifié en
+  direct** (domaines `api.virtuals.io`/`www.clanker.world` ajoutés par l'opérateur, testé
+  contre l'API réelle sur deux contrats fournis par l'opérateur) : `tokenAddress` reste `null`
+  tant qu'un token Virtuals n'a pas gradué (structurel) — l'adresse de contrat visible pendant
+  le bonding vit dans `preToken`, jamais cherché avant. `fetch_by_address` ne pouvait donc
+  STRUCTURELLEMENT jamais détecter un token encore en bonding. Fix (`build_token_by_pretoken_url`
+  + repli automatique) vérifié end-to-end sur le contrat réel (`bonding_phase=True`,
+  `bonding_holder_count=306`, conforme à la capture opérateur), déployé et reconfirmé après
+  coup. `graduation_progress()` reste honnêtement `None` (aucun champ API réel ne porte cette
+  donnée, le "56,94%" affiché par l'UI Virtuals n'a pas de formule simple confirmée — pas de
+  proxy inventé). **Connecteurs MCP explorés** (Base MCP, Crypto.com, Gmail, Stripe, Massive
+  Market Data) à la demande opérateur : Base MCP lecture seule utilisée (wallet à 0$, aucun
+  wallet agent délégué, aucun outil d'écriture touché — conforme à la règle capital réel) ;
+  Massive Market Data (stocks/options/forex, pas memecoins) activé côté opérateur mais jamais
+  chargé dans cette session précise malgré plusieurs vérifications — confirmé fonctionnel dans
+  une session fraîche ouverte en parallèle (bug de propagation plateforme, pas une mauvaise
+  config), piste ouverte pour un futur complément macro. Détail complet :
+  `docs/HANDOFF-2026-07-10-nuit9.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
