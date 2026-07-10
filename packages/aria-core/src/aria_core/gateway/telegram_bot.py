@@ -2117,6 +2117,110 @@ async def _handle_issue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _reply(message, "\n".join(lines))
 
 
+_DIRECTIVE_STATUS_ICON = {
+    "pending": "⏳",
+    "executing": "⚙️",
+    "done": "✅",
+    "refused": "🚫",
+}
+
+
+async def _handle_directive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/directive — surface de contrôle du canal ARIA -> Claude Code (admin, pilote).
+
+    Sous-commandes :
+      /directive list                       — la file (en cours + traitées)
+      /directive log                        — le journal d'audit (append-only)
+      /directive propose <cat> <titre>      — dépose une directive (cat: repo_hygiene|docs|backlog)
+      /directive halt [raison]              — coupe-circuit (fige le canal)
+      /directive resume                     — lève le coupe-circuit
+
+    Ne DÉCLENCHE aucune exécution : la file est lue et traitée par une session Claude
+    Code côté VPS. Le canal reste gaté OFF (ARIA_DIRECTIVE_CHANNEL_ENABLED) tant qu'il
+    n'est pas explicitement activé.
+    """
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core import aria_directives as ad
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    parts = body.split(maxsplit=1)
+    sub = parts[0].strip().lower() if parts else "list"
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    usage = (
+        "Canal de directives ARIA -> Claude Code (pilote) :\n"
+        "/directive list — la file\n"
+        "/directive log — le journal d'audit\n"
+        "/directive propose <cat> <titre> — cat: repo_hygiene | docs | backlog\n"
+        "/directive halt [raison] — coupe-circuit\n"
+        "/directive resume — lever le coupe-circuit"
+    )
+
+    if sub in ("help", "aide", "?"):
+        await _reply(message, usage)
+        return
+
+    if sub == "propose":
+        cat_parts = rest.split(maxsplit=1)
+        if len(cat_parts) < 2:
+            await _reply(message, "Usage : /directive propose <cat> <titre>\n" + usage)
+            return
+        category, title = cat_parts[0].strip().lower(), cat_parts[1].strip()
+        res = await ad.propose_directive(category, title)
+        if res.get("ok"):
+            await _reply(message, f"⏳ Directive #{res['id']} déposée ({category}) : {title}")
+        else:
+            await _reply(message, f"🚫 Refusée : {res.get('reason', 'inconnue')}")
+        return
+
+    if sub == "halt":
+        await ad.halt_channel(rest or "halt manuel Telegram")
+        await _reply(message, "🛑 Canal FIGÉ. Aucune directive ne sera traitée. /directive resume pour reprendre.")
+        return
+
+    if sub == "resume":
+        await ad.resume_channel()
+        state = "OFF" if not ad.channel_enabled() else "ON"
+        await _reply(message, f"▶️ Coupe-circuit levé. (Gate ARIA_DIRECTIVE_CHANNEL_ENABLED : {state}.)")
+        return
+
+    if sub == "log":
+        entries = await ad.read_log(limit=15)
+        if not entries:
+            await _reply(message, "Journal vide.")
+            return
+        lines = ["🧾 Journal (récent -> ancien) :"]
+        for e in entries:
+            did = f"#{e['directive_id']}" if e["directive_id"] else "—"
+            lines.append(f"{e['at'][11:19]} · {e['actor']} · {e['event']} {did} {e['detail'][:60]}")
+        await _reply(message, "\n".join(lines))
+        return
+
+    # défaut : list
+    directives = await ad.list_directives(limit=30)
+    halted = "🛑 FIGÉ" if ad.is_halted() else "actif"
+    gate = "ON" if ad.channel_enabled() else "OFF"
+    if not directives:
+        await _reply(message, f"File vide. (Canal : {halted} · gate : {gate}.)\n\n{usage}")
+        return
+    lines = [f"📋 File de directives (canal {halted} · gate {gate}) :"]
+    for d in directives:
+        icon = _DIRECTIVE_STATUS_ICON.get(d["status"], "•")
+        lines.append(f"{icon} #{d['id']} [{d['category']}] {d['title']}")
+        if d["status"] in ("done", "refused") and d["outcome"]:
+            lines.append(f"    -> {d['outcome'][:80]}")
+    await _reply(message, "\n".join(lines))
+
+
 async def _handle_theses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/theses — liste les thèses encore ouvertes (résultat non attribué)."""
     if not await _admin_check_reply(update):
@@ -2186,6 +2290,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("issue", _handle_issue))
     app.add_handler(CommandHandler("theses", _handle_theses))
     app.add_handler(CommandHandler("github", _handle_github))
+    app.add_handler(CommandHandler("directive", _handle_directive))
 
     # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)
     app.add_handler(CallbackQueryHandler(_handle_callback))
