@@ -251,16 +251,33 @@ async def chat_with_context(
     max_tokens: int = 400,
     model: str | None = None,
     depth: str | None = None,
+    image_data_uri: str | None = None,
 ) -> str | None:
-    """Appel LLM avec mémoire injectée. Spark (virtuals) d'abord, fallback si échec."""
+    """Appel LLM avec mémoire injectée. Spark (virtuals) d'abord, fallback si échec.
+
+    ``image_data_uri`` (optionnel, ``data:image/...;base64,...``) bascule le message
+    utilisateur en contenu multimodal (forme chat-completions OpenAI-compatible,
+    ``[{"type":"text",...},{"type":"image_url",...}]``) — sinon comportement
+    strictement inchangé (chaîne simple, tous les appelants existants intacts).
+    Aucune garantie que le modèle/route actif accepte la vision : un modèle qui ne
+    la supporte pas répond en général en ignorant l'image, jamais une exception ;
+    aucune vérité inventée sur ce point tant que non testé en direct.
+    """
     routes = _resolve_routes(model, require_llm_enabled=True)
     if not routes:
         return None
 
-    messages: list[dict[str, str]] = [{"role": "system", "content": system_context}]
+    user_content: object = user_message
+    if image_data_uri:
+        user_content = [
+            {"type": "text", "text": user_message},
+            {"type": "image_url", "image_url": {"url": image_data_uri}},
+        ]
+
+    messages: list[dict[str, object]] = [{"role": "system", "content": system_context}]
     if conversation_history:
         messages.extend(conversation_history[-12:])
-    messages.append({"role": "user", "content": user_message})
+    messages.append({"role": "user", "content": user_content})
 
     from aria_core.llm_usage import estimate_tokens_from_text
 
@@ -269,6 +286,10 @@ async def chat_with_context(
         user_message,
         *(m.get("content", "") for m in (conversation_history or [])),
     )
+    if image_data_uri:
+        # Estimation grossière fixe (l'encodage base64 lui-même n'est PAS du texte à
+        # compter caractère par caractère) : évite une télémétrie de coût silencieuse.
+        prompt_est += 800
     temp = temperature if temperature is not None else settings.aria_llm_temperature
 
     for idx, route in enumerate(routes):

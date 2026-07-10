@@ -1148,6 +1148,7 @@ class AriaBrain:
         visitor_id: str = "",
         local_memory_only: bool = False,
         self_context_only: bool = False,
+        image_data_uri: str | None = None,
     ) -> str | None:
         from aria_core.gateway.telegram_bot import get_bot_username, get_channel_links_text
 
@@ -1301,6 +1302,17 @@ class AriaBrain:
             from aria_core.memory.self_context import SELF_CONTEXT_LLM_RULE
 
             local_rule = f"\n{SELF_CONTEXT_LLM_RULE}"
+        vision_rule = ""
+        if image_data_uri:
+            vision_rule = (
+                "\nRÈGLE IMAGE : une image est jointe (probablement une capture d'écran, un "
+                "graphique de prix, un tableau de bord). Décris ce que tu vois et donne ta "
+                "lecture. Ne lis un chiffre précis (prix, pourcentage, volume) que si tu peux "
+                "réellement le voir net dans l'image — sinon dis explicitement que ce chiffre "
+                "n'est pas lisible avec certitude, ne l'invente jamais. Cette lecture visuelle "
+                "n'est jamais une preuve on-chain vérifiée (contrairement à une analyse /vc) — "
+                "précise-le si l'utilisateur semble vouloir l'utiliser comme telle.\n"
+            )
         if self_context_only:
             system = f"{context}\n\n{concision}\n{local_rule}{lang_hint}"
         else:
@@ -1308,6 +1320,7 @@ class AriaBrain:
                 f"{context}\n\n"
                 f"{concision}\n"
                 f"{local_rule}"
+                f"{vision_rule}"
                 f"{persona_block}\n"
                 f"{x_identity_prompt()}\n"
                 f"{channel_rule}\n"
@@ -1342,6 +1355,7 @@ class AriaBrain:
             max_tokens=budget.max_tokens,
             model=budget.model_override,
             depth=depth.value,
+            image_data_uri=image_data_uri,
         )
 
 
