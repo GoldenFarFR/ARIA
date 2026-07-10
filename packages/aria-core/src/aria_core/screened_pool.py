@@ -210,35 +210,44 @@ async def drop_token(contract: str, *, reason: str = "") -> None:
         await db.commit()
 
 
-async def list_pool(status: str = "active", limit: int = 1000) -> list[dict]:
+async def list_pool(status: str = "active", limit: int = 1000, *, network: str = "base") -> list[dict]:
+    """``network="base"`` par défaut préserve EXACTEMENT le comportement historique
+    (le pool VC 85% n'a jamais écrit autre chose que ``network="base"``). Le pool
+    bonding (niche 15%, cf. ``bonding_absorber.py``) vit sous ``network="base-bonding"``
+    — jamais mélangé sans un appel explicite, pour ne pas contaminer le tirage
+    hebdomadaire (``weekly_training.draw_lottery`` reste 100% pool VC, inchangé)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (
             await db.execute(
-                "SELECT * FROM screened_token WHERE status=? ORDER BY last_checked_at DESC LIMIT ?",
-                (status, limit),
+                "SELECT * FROM screened_token WHERE status=? AND network=? "
+                "ORDER BY last_checked_at DESC LIMIT ?",
+                (status, network, limit),
             )
         ).fetchall()
     return [dict(zip(_COLUMNS, row)) for row in rows]
 
 
-async def count_pool(status: str = "active") -> int:
+async def count_pool(status: str = "active", *, network: str = "base") -> int:
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
-            await db.execute("SELECT COUNT(*) FROM screened_token WHERE status=?", (status,))
+            await db.execute(
+                "SELECT COUNT(*) FROM screened_token WHERE status=? AND network=?",
+                (status, network),
+            )
         ).fetchone()
     return int(row[0]) if row else 0
 
 
-async def draw_lottery(n: int = 20, *, status: str = "active") -> list[dict]:
+async def draw_lottery(n: int = 20, *, status: str = "active", network: str = "base") -> list[dict]:
     """Tire ``n`` tokens AU SORT dans le pool actif (échantillon non biaisé).
 
     Si le pool contient moins de ``n`` tokens, retourne tout le pool (mélangé).
     Le tirage aléatoire est ce qui empêche le cherry-pick : ARIA ne choisit pas
     « ceux qui l'arrangent », le hasard décide dans un vivier déjà screené.
     """
-    pool = await list_pool(status=status, limit=100_000)
+    pool = await list_pool(status=status, limit=100_000, network=network)
     if n <= 0 or not pool:
         return []
     if len(pool) <= n:

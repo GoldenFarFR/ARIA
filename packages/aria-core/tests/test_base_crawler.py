@@ -114,3 +114,26 @@ async def test_discover_virtuals_degrades_gracefully():
             raise RuntimeError("down")
 
     assert await bc.discover_virtuals_tokens(client=_Boom()) == []
+
+
+@pytest.mark.asyncio
+async def test_discover_virtuals_graduated_extracts_addresses():
+    a1 = "0x" + "e" * 40
+
+    class _VT:
+        token_address = a1
+
+    class _Client:
+        async def fetch_graduated(self):
+            return [_VT(), _VT()]
+
+    assert await bc.discover_virtuals_graduated_tokens(client=_Client()) == [a1]
+
+
+@pytest.mark.asyncio
+async def test_discover_virtuals_graduated_degrades_gracefully():
+    class _Boom:
+        async def fetch_graduated(self):
+            raise RuntimeError("down")
+
+    assert await bc.discover_virtuals_graduated_tokens(client=_Boom()) == []

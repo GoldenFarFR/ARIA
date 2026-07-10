@@ -11,6 +11,7 @@ from aria_core.services.virtuals import (
     UNAVAILABLE,
     VirtualsClient,
     VirtualToken,
+    build_graduated_url,
     build_prototypes_url,
     build_token_by_address_url,
     build_token_url,
@@ -247,6 +248,12 @@ def test_build_prototypes_url_custom_page_size():
     assert "pagination[pageSize]=25" in url
 
 
+def test_build_graduated_url_filters_available():
+    url = build_graduated_url()
+    assert "filters[status]=AVAILABLE" in url
+    assert "filters[status]=UNDERGRAD" not in url
+
+
 def test_build_token_url():
     assert build_token_url(987) == "https://api.virtuals.io/api/virtuals/987"
 
@@ -303,6 +310,46 @@ async def test_fetch_prototypes_network_error_returns_empty(monkeypatch):
 
     result = await client.fetch_prototypes()
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_graduated_success(monkeypatch):
+    client = VirtualsClient()
+    url = build_graduated_url()
+    _patch_client(
+        monkeypatch,
+        {url: FakeResponse(200, {"data": [_strapi_prototype(status="AVAILABLE")]})},
+    )
+
+    tokens = await client.fetch_graduated()
+    assert len(tokens) == 1
+    assert tokens[0].status == "AVAILABLE"
+    assert is_in_bonding(tokens[0]) is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_graduated_network_error_returns_empty(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    client = VirtualsClient()
+
+    import httpx
+
+    class TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None, params=None):
+            raise httpx.TimeoutException("boom")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.httpx.AsyncClient",
+        lambda **kw: TimeoutClient(),
+    )
+
+    assert await client.fetch_graduated() == []
 
 
 @pytest.mark.asyncio

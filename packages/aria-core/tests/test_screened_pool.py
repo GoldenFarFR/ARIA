@@ -80,3 +80,24 @@ async def test_lottery_returns_all_when_pool_smaller():
 @pytest.mark.asyncio
 async def test_lottery_empty_pool():
     assert await sp.draw_lottery(20) == []
+
+
+@pytest.mark.asyncio
+async def test_bonding_pool_isolated_from_vc_pool():
+    """network='base-bonding' (niche 15%) ne doit JAMAIS apparaître dans le tirage
+    85% VC par défaut (network='base') — sinon contamination du track-record."""
+    await _seed_pool(5)  # tout en network="base" (défaut)
+    await sp.upsert_screened(
+        contract="0xbond1", symbol="BOND1", liquidity_usd=0.0,
+        security_score=60, verdict="SAFE", network="base-bonding",
+    )
+    assert await sp.count_pool("active") == 5
+    assert await sp.count_pool("active", network="base-bonding") == 1
+    vc_pool = await sp.list_pool()
+    assert "BOND1" not in {p["symbol"] for p in vc_pool}
+    bonding_pool = await sp.list_pool(network="base-bonding")
+    assert {p["symbol"] for p in bonding_pool} == {"BOND1"}
+    vc_draw = await sp.draw_lottery(20)
+    assert "BOND1" not in {p["symbol"] for p in vc_draw}
+    bonding_draw = await sp.draw_lottery(20, network="base-bonding")
+    assert {p["symbol"] for p in bonding_draw} == {"BOND1"}
