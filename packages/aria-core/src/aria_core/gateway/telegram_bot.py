@@ -2006,6 +2006,22 @@ async def _handle_readiness(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _reply(message, format_readiness_report(scorecard))
 
 
+async def _handle_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/sentiment — dernière lecture de sentiment (RSI/Bollinger/momentum/retracement,
+    vocabulaire Wall St Cheat Sheet) des paires principales. Lit ce que le cycle
+    heartbeat `market_sentiment_cycle` a déjà calculé — ne recalcule rien ici."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core.skills.market_sentiment import format_sentiment_report, latest_readings
+
+    readings = await latest_readings()
+    await _reply(message, format_sentiment_report(readings))
+
+
 async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/these <adresse> <BUY|WATCH|SELL|AVOID> <thèse...> — journalise un pari (aucune exécution)."""
     if not await _admin_check_reply(update):
@@ -2164,6 +2180,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("watchlist", _handle_watchlist))
     app.add_handler(CommandHandler("cycles", _handle_cycles))
     app.add_handler(CommandHandler("feuvert", _handle_readiness))
+    app.add_handler(CommandHandler("sentiment", _handle_sentiment))
     app.add_handler(CommandHandler(["langue", "lang", "language"], _handle_langue))
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))

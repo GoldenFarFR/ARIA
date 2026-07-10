@@ -99,9 +99,12 @@ jobs:
             tests/test_blockchain_info_client.py \
             tests/test_polymarket_client.py \
             tests/test_indicators.py \
+            tests/test_candlestick_patterns.py \
             tests/test_entry_signals.py \
             tests/test_real_money_readiness.py \
             tests/test_telegram_readiness_command.py \
+            tests/test_market_sentiment.py \
+            tests/test_telegram_sentiment_command.py \
             tests/test_arena_signal.py \
             tests/test_telegram_conversation_miner.py \
             tests/test_code_proposal.py \

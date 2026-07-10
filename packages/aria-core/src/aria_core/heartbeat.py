@@ -305,6 +305,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=180,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="market_sentiment_cycle",
+        name="Sentiment de marche continu",
+        description="Rafraichit SANS expiration la lecture de sentiment (RSI/Bollinger/momentum/retracement, deterministe, aucun LLM) des paires principales (BTC, ETH) -- vocabulaire aligne sur le Wall St Cheat Sheet, regroupe en regimes mesurables. Ecrase toujours la derniere lecture (aucun cache perime) ; une paire en echec de fetch n'interrompt pas les autres. Gate OFF par defaut.",
+        interval_minutes=60,
+        enabled=False,
+    ),
 ]
 
 
@@ -406,6 +413,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.pump_dump_autopsy import pump_dump_autopsy_enabled
 
                 task.enabled = pump_dump_autopsy_enabled()
+            if task.id == "market_sentiment_cycle":
+                from aria_core.skills.market_sentiment import market_sentiment_enabled
+
+                task.enabled = market_sentiment_enabled()
             if task.id == "acp_provider_poll":
                 from aria_core.skills.acp_cli import is_acp_available
 
@@ -892,6 +903,17 @@ class AriaHeartbeat:
                 append_memory(
                     "pump_dump_autopsy",
                     f"[autopsie] {result['autopsied']} cas sur {result.get('checked', 0)} clotures verifiees",
+                )
+
+        elif task_id == "market_sentiment_cycle":
+            from aria_core.skills.market_sentiment import run_market_sentiment_cycle
+
+            result = await run_market_sentiment_cycle()
+            if result.get("updated"):
+                append_memory(
+                    "market_sentiment",
+                    f"[sentiment] {', '.join(result['updated'])} rafraichi(s)"
+                    + (f" ; echec : {', '.join(result['failed'])}" if result.get("failed") else ""),
                 )
 
         elif task_id == "self_banner_curiosity":
