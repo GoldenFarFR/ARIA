@@ -52,6 +52,16 @@ async def test_drop_removes_from_active():
 
 
 @pytest.mark.asyncio
+async def test_record_pending_stores_reason_without_blocking_rescan():
+    await sp.record_pending(contract="0xsoft", symbol="SOFT", reason="holders inconnus")
+    assert await sp.get_status("0xsoft") == "pending"
+    row = (await sp.list_pool(status="pending"))[0]
+    assert row["screen_reason"] == "holders inconnus"
+    # 'pending' n'est ni 'active' ni 'rejected' : rien dans le pool actif compte.
+    assert await sp.count_pool("active") == 0
+
+
+@pytest.mark.asyncio
 async def test_lottery_draws_distinct_subset():
     await _seed_pool(10)
     random.seed(0)

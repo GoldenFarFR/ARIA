@@ -137,6 +137,37 @@ async def record_rejected(
         await db.commit()
 
 
+async def record_pending(
+    *, contract: str, reason: str = "", symbol: str = "", network: str = "base"
+) -> None:
+    """Marque un contrat comme « à revoir » (échec MOU, donnée indisponible), avec sa
+    raison — jamais un rejet définitif.
+
+    Contrairement à ``record_rejected``, ``status='pending'`` NE court-circuite PAS le
+    re-scan (``get_status`` ne bloque que sur 'rejected'/'active') : le contrat sera
+    retenté au prochain cycle. Objectif : que la raison d'un échec mou (holders non
+    renvoyés, contrat non vérifié, etc.) laisse une trace consultable plutôt que de
+    disparaître sans aucune donnée, en base ou ailleurs (cf. audit #77).
+    """
+    await _ensure_table()
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO screened_token
+              (contract, symbol, liquidity_usd, security_score, top_holder_pct,
+               verdict, pool_address, network, status, first_screened_at,
+               last_checked_at, screen_reason)
+            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'pending', ?, ?, ?)
+            ON CONFLICT(contract) DO UPDATE SET
+              status='pending', last_checked_at=excluded.last_checked_at,
+              screen_reason=excluded.screen_reason
+            """,
+            (contract, symbol, network, now, now, reason),
+        )
+        await db.commit()
+
+
 async def get_status(contract: str) -> str | None:
     """Statut connu d'un contrat (active / rejected / dropped), ou None si jamais vu."""
     await _ensure_table()
