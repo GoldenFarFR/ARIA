@@ -84,7 +84,6 @@ async def check_health_regression() -> dict[str, Any]:
             "health_render_regression",
             context=ctx,
             lang="fr",
-            open_pr=False,
         )
         result["gap"] = gap
         _FAIL_STREAK = 0

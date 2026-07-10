@@ -1,41 +1,4 @@
-import json
-from datetime import datetime, timezone
-
 import pytest
-
-from aria_core.capability_gap import (
-    SECURITY_RULE_TO_GAP,
-    file_audit_security_gaps,
-    file_capability_gap,
-)
-
-
-@pytest.mark.asyncio
-async def test_file_audit_security_gaps_dedup_rules(monkeypatch, tmp_path):
-    from aria_core import capability_gap as mod
-
-    monkeypatch.setattr(mod, "_gaps_dir", lambda: tmp_path)
-
-    async def _noop_notify(*_a, **_k):
-        return None
-
-    monkeypatch.setattr(mod, "_notify_gap", _noop_notify)
-    monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: False)
-    monkeypatch.setattr(mod, "append_memory", lambda *a, **k: None)
-
-    findings = [
-        {"severity": "critical", "rule": "ip_changed_vault", "repo": "sessions", "detail": "IP A -> B"},
-        {"severity": "critical", "rule": "ip_changed_vault", "repo": "sessions", "detail": "doublon"},
-        {"severity": "high", "rule": "unknown_author", "repo": "x", "detail": "ignore"},
-    ]
-    results = await file_audit_security_gaps(findings)
-    assert len(results) == 1
-    assert results[0]["status"] == "local_only"
-    assert (tmp_path / "security_ip_changed_vault.md").is_file()
-
-
-def test_security_rule_mapping_complete():
-    assert SECURITY_RULE_TO_GAP["github_foreign_actor"] == "security_github_foreign_actor"
 
 
 @pytest.mark.asyncio
@@ -56,17 +19,19 @@ async def test_health_watch_ok_resets_streak(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_health_watch_files_after_threshold(monkeypatch, tmp_path):
+    """Après 3 échecs, health_watch signale (Telegram) -- ne délègue plus a
+    un ouvrier externe et n'ouvre plus d'issue GitHub (10/07)."""
     from aria_core import health_watch as hw
     from aria_core import capability_gap as mod
 
     hw._FAIL_STREAK = 2
+
     async def fail_probe():
         return False, "timeout"
 
     monkeypatch.setattr(hw, "_probe_health", fail_probe)
     monkeypatch.setattr(mod, "_gaps_dir", lambda: tmp_path)
     monkeypatch.setattr(mod, "_recently_filed", lambda _c: None)
-    monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: False)
     monkeypatch.setattr(mod, "append_memory", lambda *a, **k: None)
 
     async def _noop_notify(*_a, **_k):
@@ -76,7 +41,7 @@ async def test_health_watch_files_after_threshold(monkeypatch, tmp_path):
 
     result = await hw.check_health_regression()
     assert result["ok"] is False
-    assert result.get("gap", {}).get("status") == "local_only"
+    assert result.get("gap", {}).get("status") == "logged"
     assert hw._FAIL_STREAK == 0
 
 

@@ -52,12 +52,6 @@ from aria_core.skills.repertoire_skill import (
     wants_manage_repertoire,
 )
 from aria_core.skills.builder_skill import execute_build_optimize
-from aria_core.skills.community_worker_skill import (
-    execute_worker_delegate,
-    is_community_suggestion,
-    is_operator_heavy_structural_task,
-    wants_worker_delegate,
-)
 from aria_core.skills.github_skill import (
     execute_github_sandbox,
     looks_like_repo_create,
@@ -76,6 +70,25 @@ from aria_core.skills.acp_client_skill import execute_acp_marketplace, wants_acp
 from aria_core.skills.ingest_repo_skill import execute_ingest_repo, wants_ingest_repo
 from aria_core.identity import fix_handle_in_text, official_x_at, official_x_url, x_identity_prompt
 from aria_core.runtime import settings
+
+_COMMUNITY_SUGGESTION_RE = re.compile(
+    r"\b(?:suggest(?:ion)?|propos(?:e|ition)?|ajoute(?:r)?|amélior(?:e|er)|amelior(?:e|er)|"
+    r"would\s+like|feature\s+request|telegram|bandeau|banner|faq|feedback|avis)\b",
+    re.IGNORECASE,
+)
+
+
+def is_community_suggestion(message: str) -> bool:
+    """Visiteur public (site) proposant une idée -> accusé de réception chaleureux.
+
+    Purement un classifieur texte, aucune action externe : cf. community_feedback.py
+    pour le vrai traitement (score, notification opérateur, jamais de délégation
+    de code à un tiers -- historique de l'incident du 10/07 dans capability_gap.py).
+    """
+    text = (message or "").strip()
+    if len(text) < 12:
+        return False
+    return bool(_COMMUNITY_SUGGESTION_RE.search(text))
 
 
 INTENT_PATTERNS: list[tuple[SkillName, list[str]]] = [
@@ -312,10 +325,9 @@ class AriaBrain:
 
             skip_compose_workflow = is_conversational_acp_question(route_msg)
 
-            skip_self_maint = shell_mode or wants_worker_delegate(route_msg) or is_operator_heavy_structural_task(route_msg) or bool(
+            skip_self_maint = shell_mode or bool(
                 re.search(
-                    r"\b(ship(?:ped)?|worker_delegate|aria-worker|communitywelcomebanner|"
-                    r"file\s+done|tache\s+done|ship\s+confirm)\b",
+                    r"\b(ship(?:ped)?|communitywelcomebanner)\b",
                     route_msg,
                     re.IGNORECASE,
                 ),
@@ -323,8 +335,6 @@ class AriaBrain:
             wf_reply = None
             if (
                 not shell_mode
-                and not wants_worker_delegate(route_msg)
-                and not is_operator_heavy_structural_task(route_msg)
                 and not skip_self_maint
                 and not skip_compose_workflow
             ):
@@ -507,8 +517,6 @@ class AriaBrain:
             )
 
         intent = detect_intent(route_msg)
-        if not public and (wants_worker_delegate(route_msg) or is_operator_heavy_structural_task(route_msg)):
-            intent = SkillName.WORKER_DELEGATE
         if looks_like_repo_delete(route_msg):
             intent = SkillName.GITHUB_SANDBOX
         elif looks_like_repo_create(route_msg):
@@ -644,12 +652,6 @@ class AriaBrain:
             actions.append(f"Ingest repo — {data.get('files_count', 0)} fichiers")
             skill = SkillName.INGEST_REPO
 
-        elif intent == SkillName.WORKER_DELEGATE:
-            skill_output, data = await execute_worker_delegate(route_msg, lang)
-            is_heavy = bool(re.search(r"\b(supprime|nettoie|purge|trace|traces)\b", route_msg, re.I))
-            actions.append("Operator task → Cursor worker queue" if is_heavy else "Community improvement → Cursor worker queue")
-            skill = SkillName.WORKER_DELEGATE
-
         if skill_output is not None:
             skill_key = skill.value if skill else None
             acp_conversational = (
@@ -665,7 +667,6 @@ class AriaBrain:
                     SkillName.CAPABILITY_QI.value,
                     SkillName.MANAGE_REPERTOIRE.value,
                     SkillName.ACP_MARKETPLACE.value,
-                    SkillName.WORKER_DELEGATE.value,
                 }
                 and not acp_conversational
             ) or (
