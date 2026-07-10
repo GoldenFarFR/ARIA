@@ -259,11 +259,20 @@ def test_build_token_url():
 
 
 def test_build_token_by_address_url():
+    # Adresse mise en minuscules (10/07) : un filtre $eq en casse mixte ne
+    # matche pas si Virtuals stocke l'adresse en minuscules -- cause réelle
+    # d'un échec silencieux de détection bonding sur deux contrats testés.
     url = build_token_by_address_url("0xABC")
     assert url == (
         "https://api.virtuals.io/api/virtuals"
-        "?filters[tokenAddress][$eq]=0xABC&filters[chain]=BASE"
+        "?filters[tokenAddress][$eq]=0xabc&filters[chain]=BASE"
     )
+
+
+def test_build_token_by_address_url_mixed_case_input():
+    url = build_token_by_address_url("0x6f8c2Eb585a93B29721B17E050bEabd3125fA937")
+    assert "0x6f8c2eb585a93b29721b17e050beabd3125fa937" in url
+    assert "0x6f8c2Eb5" not in url
 
 
 # ----------------------------------------------------------------------

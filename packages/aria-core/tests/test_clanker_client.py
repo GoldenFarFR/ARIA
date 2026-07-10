@@ -202,8 +202,10 @@ def test_build_recent_tokens_url_small_limit_passes_through():
 
 
 def test_build_token_by_address_url():
+    # Adresse en minuscules (10/07, même correctif que virtuals.py) -- défensif
+    # contre un filtre exact côté API qui ne matcherait pas la casse mixte.
     url = build_token_by_address_url("0xABC", chain_id=8453)
-    assert url == "https://www.clanker.world/api/tokens?chainId=8453&address=0xABC"
+    assert url == "https://www.clanker.world/api/tokens?chainId=8453&address=0xabc"
 
 
 # ----------------------------------------------------------------------

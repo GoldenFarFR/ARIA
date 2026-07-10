@@ -184,9 +184,19 @@ def build_token_url(virtual_id: object) -> str:
 
 
 def build_token_by_address_url(token_address: str, chain: str = "BASE") -> str:
-    """URL de filtre par adresse de token (``filters[tokenAddress][$eq]=0x…``)."""
+    """URL de filtre par adresse de token (``filters[tokenAddress][$eq]=0x…``).
+
+    Adresse mise en minuscules avant le filtre : diagnostic réel (10/07,
+    contrats 0x6f8c2Eb5.../0xB455C23d... testés en direct) -- un filtre EXACT
+    (`$eq`) sur une adresse en casse mixte (le format habituel copié depuis un
+    explorateur/wallet) ne matche pas si l'API Virtuals stocke l'adresse en
+    minuscules, faisant échouer silencieusement TOUTE détection de bonding
+    (`_resolve_bonding_phase`) -- retombée sur l'analyse générique "aucune
+    paire". Les adresses EVM sont insensibles à la casse (le mélange n'existe
+    que pour le checksum d'affichage), donc aucune perte d'information.
+    """
     params = [
-        ("filters[tokenAddress][$eq]", str(token_address)),
+        ("filters[tokenAddress][$eq]", str(token_address).lower()),
         ("filters[chain]", str(chain).upper()),
     ]
     return f"{_VIRTUALS_ENDPOINT}?{urlencode(params, safe='[]:$')}"
