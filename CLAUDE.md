@@ -171,9 +171,14 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (10 tests) n'était câblé NULLE PART — ni dans le rapport `/vc` en prod, ni même dans la CI (juste
   ajouté). Il ne fait pas doublon avec `ta_levels.suggest_entry_zone` (déjà câblé, générique,
   toujours renvoyé) : c'est un signal plus rare et de meilleure qualité, complémentaire. Les deux
-  capacités (EMA/MACD + entry_signals) restent volontairement NON branchées dans
-  `acp_onchain_scan.py`/`vc_report.py` (pipeline de scan déjà en prod) — même prudence que #11/#59,
-  décision de câblage laissée à l'opérateur. Détail : `docs/architecture-extensibilite.md`.
+  capacités (EMA/MACD + entry_signals) sont restées NON branchées jusqu'à décision opérateur.
+  **Câblées le 10/07 (même segment, décision opérateur explicite)** : `acp_onchain_scan.py`
+  peuple `ctx.ta_ema_fast/slow`, `ctx.ta_macd_line/signal/histogram`, `ctx.ta_golden_pocket_signal`
+  dans le même bloc `include_ta` que le TA existant → `vc_analysis._build_untrusted_context`
+  les expose au LLM (EMA12/26, MACD/signal/histogramme toujours ; golden pocket seulement si
+  `present=True`, silence sinon). Périmètre volontairement limité au CONTEXTE LLM — aucune
+  nouvelle section visuelle dans `vc_report.py` (le rapport HTML n'a pas changé). 6 tests
+  ajoutés (`test_vc_analysis.py`). Détail : `docs/architecture-extensibilite.md`.
 - **Scorecard « feu vert argent réel » (#70, 10/07) — EN LIGNE.** Question directe de l'opérateur
   ("tu ferais confiance à ARIA pour 100k$ ?") répondue honnêtement NON, puis outillée plutôt que
   laissée en simple avis : `skills/real_money_readiness.py` calcule objectivement, depuis le vrai
