@@ -214,6 +214,7 @@ def _build_untrusted_context(
     history: list[dict],
     sentiment_readings: list[dict] | None = None,
     polymarket_signals: list[dict] | None = None,
+    product_diligence: dict | None = None,
 ) -> str:
     """Assemble le bloc factuel (données non fiables) à partir de faits déjà collectés.
 
@@ -347,6 +348,33 @@ def _build_untrusted_context(
                 "réels — à peser comme contexte macro, PAS comme signal spécifique au token) :"
             )
             lines += poly_lines
+    if product_diligence:
+        website_snapshot = product_diligence.get("website_snapshot")
+        github = product_diligence.get("github")
+        if website_snapshot:
+            lines.append(
+                "Site officiel du projet (texte extrait automatiquement -- DÉCLARATIF, "
+                "le projet parle de lui-même, aucune vérification indépendante) :"
+            )
+            lines.append(f"- {_sanitize(website_snapshot, 620)}")
+        if github:
+            gh_bits = []
+            if github.get("description"):
+                gh_bits.append(f"description \"{_sanitize(github['description'], 200)}\"")
+            if github.get("stars") is not None:
+                gh_bits.append(f"{github['stars']} étoiles")
+            if github.get("open_issues") is not None:
+                gh_bits.append(f"{github['open_issues']} issues ouvertes")
+            if github.get("days_since_push") is not None:
+                gh_bits.append(f"dernier push il y a {github['days_since_push']} j")
+            if github.get("archived"):
+                gh_bits.append("ARCHIVÉ")
+            if github.get("fork"):
+                gh_bits.append("fork (pas le dépôt d'origine)")
+            if gh_bits:
+                lines.append(
+                    f"Dépôt GitHub du projet (métadonnées vérifiables) : {'; '.join(gh_bits)}"
+                )
     # Contexte de légitimité (drapeaux JUGÉS, pas bruts) : autorité du mint,
     # launchpad, profondeur de liquidité, comportement du wallet du dev.
     legit: list[str] = []
@@ -838,6 +866,38 @@ async def _fetch_polymarket_signals() -> list[dict]:
         return []
 
 
+async def _fetch_product_diligence(ctx: TokenScanContext) -> dict | None:
+    """Diligence produit légère (site + GitHub) -- trou qu'ARIA a elle-même identifié
+    en conditions réelles (capture opérateur 10/07) : ``/vc`` couvrait l'on-chain et
+    la traction marché, jamais le produit (équipe, roadmap, usage réel). Même
+    doctrine que ``_fetch_sentiment_readings``/``_fetch_polymarket_signals`` :
+    best-effort, dégradation douce, jamais bloquant. None si aucun lien projet
+    exploitable ou aucune donnée récupérée."""
+    links = ctx.best_pair.project_links if ctx.best_pair else []
+    if not links:
+        return None
+    try:
+        from aria_core.services.project_activity import (
+            fetch_github_diligence_snapshot,
+            github_url_from_links,
+            website_url_from_links,
+        )
+        from aria_core.services.site_snapshot import fetch_site_text_snapshot
+
+        github_url = github_url_from_links(links)
+        website_url = website_url_from_links(links)
+        website_snapshot = await fetch_site_text_snapshot(website_url) if website_url else None
+        github_snapshot = (
+            await fetch_github_diligence_snapshot(github_url) if github_url else None
+        )
+        if not website_snapshot and not github_snapshot:
+            return None
+        return {"website_snapshot": website_snapshot, "github": github_snapshot}
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.warning("analyze_vc: diligence produit échouée (%s)", exc)
+        return None
+
+
 async def analyze_vc_with_context(
     contract: str, lang: str = "fr"
 ) -> tuple[VCResult, TokenScanContext]:
@@ -881,7 +941,10 @@ async def analyze_vc_with_context(
     history = await list_theses_for_token(ctx.contract)
     sentiment_readings = await _fetch_sentiment_readings()
     polymarket_signals = await _fetch_polymarket_signals()
-    untrusted = _build_untrusted_context(ctx, history, sentiment_readings, polymarket_signals)
+    product_diligence = await _fetch_product_diligence(ctx)
+    untrusted = _build_untrusted_context(
+        ctx, history, sentiment_readings, polymarket_signals, product_diligence
+    )
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"
         "<donnees_non_fiables>\n"
