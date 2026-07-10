@@ -1,23 +1,22 @@
 # Mini-phrases prêtes à copier-coller pour Telegram (@Aria_ZHC_Bot)
 
-Seules commandes slash restantes : `/start` et `/status`.
+Menu "/" : `/stop` et `/resume` (kill-switch). Les autres commandes admin
+(`/status`, `/vc`, `/feuvert`, `/sentiment`, `/langue`, `/these`, `/issue`,
+`/theses`, `/github`) restent fonctionnelles si tapées, juste retirées du menu.
 
 Tout le reste = texte libre. Copie-colle une de ces phrases.
 
 ## État & suivi rapide
 /status
-Quel est ton état actuel ? (LLM, autonomie, revenus)
+Quel est ton état actuel ? (LLM, autonomie)
 
-## Revenus & ACP
-Où en sont les revenus ce mois ? Objectifs ?
-Liste les jobs ACP en cours et leur statut.
-Analyse les offres ACP les plus rentables en ce moment.
-Fais un point sur l'entrepreneuriat et les opportunités.
+## Analyse & pronostics
+Analyse ce token/wallet : [colle l'adresse]
+/vc [adresse]
+/feuvert
 
 ## Travail / délégation
-Analyse ce token/wallet : [colle l'adresse]
-Cherche des opportunités de jobs ACP dans [secteur].
-Propose 3 idées concrètes pour augmenter les revenus.
+Propose 3 idées concrètes pour améliorer Vanguard.
 Fais un résumé des dernières conversations importantes.
 
 ## Mémoire & apprentissage (sans /learn)
