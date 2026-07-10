@@ -21,7 +21,7 @@ targets:
     owner: Virtual-Protocol
     repo: acp-cli-demos
     pr_number: 37
-    enabled: true
+    enabled: false  # PR closed 10/07 (not a strategic priority right now); reopen if a fresh PR is opened later
     our_logins:
       - GoldenFarFR
       - cursoragent
