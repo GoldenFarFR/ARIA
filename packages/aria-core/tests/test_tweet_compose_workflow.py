@@ -241,6 +241,40 @@ async def test_gather_compose_context_lists_published(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_propose_learning_system_prompt_excludes_trading_autonomy(monkeypatch):
+    # Root cause d'un vrai incident (10/07) : ARIA a dit en Telegram vouloir "décider
+    # seule les allocations de trading" -- traçable a ce system prompt qui disait
+    # "décider seule (build, marketing, priorisation)" sans exclure explicitement le
+    # trading/capital réel. Verrouille que l'exclusion reste dans le prompt envoyé au LLM.
+    import aria_core.tweet_compose_workflow as tcw
+
+    captured = {}
+
+    async def fake_chat(user, system, **kw):
+        captured["system"] = system
+        return "sujet bidon"
+
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat)
+    async def fake_context():
+        return ""
+
+    monkeypatch.setattr(tcw, "_gather_compose_context", fake_context)
+    monkeypatch.setattr(tcw, "_record_compose_intel", lambda **kw: None)
+
+    async def fake_store(**kw):
+        return None
+
+    monkeypatch.setattr(tcw, "_store_compose_learning", fake_store)
+
+    await tcw._propose_learning()
+
+    system = captured["system"]
+    assert "JAMAIS sur le trading ou l'allocation" in system
+    assert "TOUJOURS humaine" in system
+
+
+@pytest.mark.asyncio
 async def test_polish_english_removes_french_learn_topic():
     mixed = (
         "I'm ARIA – new ZHC agent at Vanguard. Exploring: Approfondir la narrative "
