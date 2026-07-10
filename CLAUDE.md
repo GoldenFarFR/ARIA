@@ -283,6 +283,17 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   valeur réelle de `GITHUB_WRITE_REPOS` (devrait être vide/off) ; décider si l'issue #1 et les
   branches orphelines `aria/gap-x-profile-banner`/`cursor/aria-instinct-auto-ouvrier-delegate`
   sont fermées/supprimées ou gardées en archive (question posée, pas encore tranchée).
+  **Suite (10/07, même jour) — résidu PROMPT nettoyé** : la première passe avait retiré le
+  CODE (skills/queue), pas le NARRATIF. ARIA a redit en Telegram « je rédige `sessions/ARIA-WORKER.md`
+  pour déléguer à l'ouvrier Cursor » — root cause trouvée dans `directives.md` (chargé dans son
+  prompt via `directives.py`, sections « mode débranchement Grok » + « Community → ouvrier Cursor »
+  qui lui ORDONNAIENT de déléguer à un skill `worker_delegate` supprimé). Réécrit → doctrine à
+  jour (Claude Code construit, ARIA propose via `aria_directives`/issue). Mentions mortes aussi
+  nettoyées dans `public_mode.py` (liste), `llm_economy.py`/`operator_go_ahead.py` (bouts de prompt),
+  `community_feedback.py`/`qi_auto_judge.py` (docstrings). Gardé intact : le « ouvrier » LÉGITIME de
+  `spark_config`/`ecosystem_config` (nom du tier LLM Spark/Virtuals, sans rapport avec Cursor) et le
+  commentaire d'historique de `capability_gap.py`. Leçon : après avoir retiré un système, grep AUSSI
+  les fichiers de prompt/knowledge (`directives.md`, persona, YAML), pas seulement le code exécuteur.
 - **Canal de directives ARIA → Claude Code (#82, 10/07) — PILOTE EN LIGNE, gate OFF, RIEN
   d'automatique.** Décision opérateur explicite et répétée (« ARIA à la tête, elle dialogue
   qu'avec toi en bidirectionnel, tu renvoies vers Cowork si nécessaire ») — bâti EXPRÈS avec

@@ -1,4 +1,4 @@
-"""Feedback communauté site — collecte, triage, délégation ouvrier si pertinent."""
+"""Feedback communauté site — collecte, triage, remerciement X (aucune délégation autonome)."""
 
 from __future__ import annotations
 
@@ -249,7 +249,7 @@ def assess_feedback_publishable_on_x(
 
 
 def queue_score_threshold() -> int:
-    """Seuil file ouvrier — monte via COMMUNITY_FEEDBACK_QUEUE_SCORE quand Vanguard grossit."""
+    """Seuil de mise en file (remerciement X) — monte via COMMUNITY_FEEDBACK_QUEUE_SCORE quand Vanguard grossit."""
     raw = os.getenv("COMMUNITY_FEEDBACK_QUEUE_SCORE", "").strip()
     if not raw:
         return DEFAULT_QUEUE_SCORE

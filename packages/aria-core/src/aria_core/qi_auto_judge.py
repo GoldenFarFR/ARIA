@@ -1,6 +1,6 @@
 """Juge QI ARIA — métriques réelles jusqu'à auto-évaluation.
 
-Phase actuelle : règles déterministes (ouvrier Cursor / heartbeat).
+Phase actuelle : règles déterministes (heartbeat).
 Phase shadow : LLM self-judge en test (qi_self_judge_shadow) ; promotion auto si accord ≥90 % / 30j.
 """
 from __future__ import annotations

@@ -283,11 +283,11 @@ def llm_unavailable_hint(lang: str) -> str:
     if lang == "fr":
         return (
             f"LLM cloud indisponible ({prov} — quota ou billing). "
-            "Je peux quand même avancer côté ouvrier (code, ACP, worker queue)."
+            "Je peux quand même faire les analyses déterministes (scan on-chain, TA) sans le LLM."
         )
     return (
         f"Cloud LLM unavailable ({prov} — quota or billing). "
-        "I can still run worker tasks (code, ACP, queue)."
+        "I can still run deterministic analyses (on-chain scan, TA) without the LLM."
     )
 
 
