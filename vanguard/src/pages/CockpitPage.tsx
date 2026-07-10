@@ -21,9 +21,7 @@ export function CockpitPage() {
             Centre de commandement
           </h1>
           <p className="text-sm text-[#8b8f9a] leading-relaxed max-w-2xl">
-            Toutes les analyses convergent ici : pouls du système, calibration réelle du
-            track-record, cycle macro, sentiment de marché, et comment ARIA aboutit à ses
-            pronostics. Lecture seule — aucune action financière n'est jamais déclenchée d'ici.
+            Là où tout converge. Lecture seule — jamais d'ordre passé d'ici.
           </p>
         </header>
 

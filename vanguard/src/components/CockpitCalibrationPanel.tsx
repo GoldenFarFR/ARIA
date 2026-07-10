@@ -91,8 +91,7 @@ export function CockpitCalibrationPanel() {
         <div>
           <p className="section-label mb-1">Calibration</p>
           <p className="text-sm text-[#d4d0c8] leading-relaxed max-w-md">
-            Est-ce qu'un potentiel noté 8/10 bat vraiment un 5/10&nbsp;? La vraie mesure d'un
-            analyste, pas une affirmation.
+            Un 8/10 bat-il vraiment un 5/10&nbsp;? La preuve, pas la promesse.
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -106,8 +105,7 @@ export function CockpitCalibrationPanel() {
 
       {buckets.length === 0 ? (
         <p className="text-sm text-[#8b8f9a] mt-4 mb-2">
-          Pas encore assez de pronostics clôturés et notés pour tracer une courbe de
-          calibration — c'est une donnée qui manque, pas un chiffre inventé.
+          Pas assez de données pour une courbe fiable — jamais un chiffre inventé.
         </p>
       ) : (
         <div className="space-y-3 mt-5 mb-6">
