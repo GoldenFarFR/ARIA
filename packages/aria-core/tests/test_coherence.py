@@ -576,3 +576,30 @@ def test_external_write_actions_registered_in_allowlist():
         f"être déclaré(s) dans _EXTERNAL_WRITE_ALLOWLIST : {unexpected}. "
         "Ajoute-le avec une raison si légitime, ou retire l'appel si non voulu."
     )
+
+
+def test_aria_directive_channel_perimeter_locked_and_gated():
+    """Canal de directives ARIA -> Claude Code (pilote, 10/07) : le périmètre autorisé
+    est verrouillé à la SEULE famille déjà déléguée. L'élargir exige un changement
+    délibéré de cette assertion dans le MÊME commit (jamais un glissement silencieux).
+    Frontières dures : aucune catégorie financière ni d'auto-modification du canal."""
+    from aria_core import aria_directives as ad
+
+    assert ad._DIRECTIVE_CATEGORIES == frozenset({"repo_hygiene", "docs", "backlog"}), (
+        "Périmètre du canal de directives modifié. Si volontaire, mets à jour cette "
+        "assertion ET confirme qu'aucune catégorie ne touche du capital réel ni le canal "
+        "lui-même (ARIA ne doit jamais pouvoir s'auto-élargir les pouvoirs)."
+    )
+    # Gate OFF par défaut : le producteur lit ARIA_DIRECTIVE_CHANNEL_ENABLED, refusé sinon.
+    src = _read_core("aria_directives.py")
+    assert 'os.environ.get("ARIA_DIRECTIVE_CHANNEL_ENABLED"' in src
+    assert "if not channel_enabled():" in src  # propose_directive refuse porte fermée
+
+
+def test_aria_directive_log_is_append_only():
+    """Le journal d'audit ne doit JAMAIS être modifié ni effacé : aucune requête
+    UPDATE/DELETE ne cible ``aria_directive_log`` dans le module (trace inviolable)."""
+    src = _read_core("aria_directives.py")
+    assert "UPDATE aria_directive_log" not in src
+    assert "DELETE FROM aria_directive_log" not in src
+    assert "DROP TABLE aria_directive_log" not in src
