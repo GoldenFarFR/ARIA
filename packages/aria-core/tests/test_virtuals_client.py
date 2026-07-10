@@ -1,7 +1,11 @@
 """Tests du client Virtuals Protocol (lecture seule) — aucun appel réseau réel, tout mocké.
 
-Réseau bloqué dans l'environnement : on teste parsing, dôme, dégradation
-gracieuse et construction d'URL sur fixtures. Branchement live sur le VPS.
+On teste parsing, dôme, dégradation gracieuse et construction d'URL sur fixtures
+(pas d'appel réseau réel dans la suite, même quand l'environnement l'autorise).
+Vérifié en direct contre l'API réelle le 10/07 (domaine ajouté à la liste
+blanche) : cf. fix tokenAddress/preToken sur les contrats 0x6f8c2Eb5.../
+0xB455C23d... -- le token bonding réel confirmait exactement la fixture
+``_strapi_prototype`` (tokenAddress=null, preToken renseigné).
 """
 
 import pytest
@@ -14,6 +18,7 @@ from aria_core.services.virtuals import (
     build_graduated_url,
     build_prototypes_url,
     build_token_by_address_url,
+    build_token_by_pretoken_url,
     build_token_url,
     graduation_progress,
     is_in_bonding,
@@ -275,6 +280,15 @@ def test_build_token_by_address_url_mixed_case_input():
     assert "0x6f8c2Eb5" not in url
 
 
+def test_build_token_by_pretoken_url():
+    url = build_token_by_pretoken_url("0x6f8c2Eb585a93B29721B17E050bEabd3125fA937")
+    assert url == (
+        "https://api.virtuals.io/api/virtuals"
+        "?filters[preToken][$eq]=0x6f8c2eb585a93b29721b17e050beabd3125fa937"
+        "&filters[chain]=BASE"
+    )
+
+
 # ----------------------------------------------------------------------
 # Client HTTP : succès + dégradation gracieuse (jamais d'exception)
 # ----------------------------------------------------------------------
@@ -441,10 +455,66 @@ async def test_fetch_by_address_success(monkeypatch):
 async def test_fetch_by_address_empty_list_returns_none(monkeypatch):
     client = VirtualsClient()
     address = "0xNOTFOUND000000000000000000000000000000"
-    url = build_token_by_address_url(address)
-    _patch_client(monkeypatch, {url: FakeResponse(200, {"data": []})})
+    token_url = build_token_by_address_url(address)
+    pretoken_url = build_token_by_pretoken_url(address)
+    _patch_client(
+        monkeypatch,
+        {token_url: FakeResponse(200, {"data": []}), pretoken_url: FakeResponse(200, {"data": []})},
+    )
 
     assert await client.fetch_by_address(address) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_by_address_falls_back_to_pretoken(monkeypatch):
+    """Diagnostic réel (10/07) : un token encore en bonding a ``tokenAddress=null``
+    -- seul un repli sur ``preToken`` permet de le trouver par son adresse de
+    contrat pré-graduation."""
+    client = VirtualsClient()
+    address = "0x6f8c2Eb585a93B29721B17E050bEabd3125fA937"
+    token_url = build_token_by_address_url(address)
+    pretoken_url = build_token_by_pretoken_url(address)
+    _patch_client(
+        monkeypatch,
+        {
+            token_url: FakeResponse(200, {"data": []}),
+            pretoken_url: FakeResponse(200, {"data": [_strapi_prototype()]}),
+        },
+    )
+
+    token = await client.fetch_by_address(address)
+    assert token is not None
+    assert is_in_bonding(token) is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_by_address_skips_pretoken_call_when_tokenaddress_hits(monkeypatch):
+    """Chemin heureux (token gradué) : un seul appel réseau, pas de repli inutile."""
+    client = VirtualsClient()
+    address = "0xB455C23dEC25Fcf98E46e6A87Bf3De67134c6E7f"
+    token_url = build_token_by_address_url(address)
+
+    class _SingleUrlClient:
+        calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None, params=None):
+            _SingleUrlClient.calls += 1
+            assert url == token_url, "ne doit pas appeler l'URL preToken si tokenAddress matche"
+            return FakeResponse(200, {"data": [_strapi_prototype(tokenAddress=address, preToken=None)]})
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.httpx.AsyncClient", lambda **kw: _SingleUrlClient()
+    )
+
+    token = await client.fetch_by_address(address)
+    assert token is not None
+    assert _SingleUrlClient.calls == 1
 
 
 @pytest.mark.asyncio
