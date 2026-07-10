@@ -162,8 +162,13 @@ def build_recent_tokens_url(chain_id: int = 8453, limit: int = 50) -> str:
 
 
 def build_token_by_address_url(token_address: str, chain_id: int = 8453) -> str:
-    """URL de filtre par adresse de contrat."""
-    params = [("chainId", str(chain_id)), ("address", str(token_address))]
+    """URL de filtre par adresse de contrat.
+
+    Adresse mise en minuscules (même correctif que ``virtuals.py``, 10/07) --
+    défensif : les adresses EVM sont insensibles à la casse, aucune perte
+    d'information, mais protège contre un filtre exact côté API qui ne
+    matcherait pas une adresse en casse mixte (checksum)."""
+    params = [("chainId", str(chain_id)), ("address", str(token_address).lower())]
     return f"{_TOKENS_ENDPOINT}?{urlencode(params)}"
 
 
