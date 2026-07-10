@@ -339,6 +339,36 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   **Élargir le périmètre = décision opérateur explicite, catégorie par catégorie** (jamais « tout
   sauf le sensible » d'un coup). **Pas encore câblé au heartbeat** (ARIA ne propose pas encore en
   autonomie — étape suivante à valider). Aucun câblage automatique tant que ce n'est pas décidé.
+- **Découverte multi-launchpad : bonding + gradués + directs (10/07) — CODÉ, gate OFF, PAS déployé.**
+  Suite de la tâche #10 (analyse dédiée bonding, déjà en prod) : ce qui manquait était le SOURCING
+  automatique (rien ne découvrait/absorbait des candidats en continu, seulement l'analyse à la
+  demande `/vc <contrat>`). Livré : `services/launchpad_discovery.py` (registre d'adaptateurs,
+  catégorise chaque launchpad `bonding`/`direct`/`unknown` en réutilisant `mint_authority.
+  is_bonding_launchpad` comme SEULE source de vérité — jamais dupliquée) → deux pipelines distincts
+  selon le modèle de liquidité : (1) **bonding** (Virtuals encore en courbe, sans paire DEX par
+  construction) → nouveau `skills/bonding_screen.py` (pendant de `safety_screen.py` qui exige
+  TOUJOURS une paire DEX et rejetterait à tort) → `skills/bonding_absorber.py` écrit dans
+  `screened_pool` sous `network="base-bonding"` — **jamais** `network="base"` (le pool 85% VC) ;
+  (2) **direct** (Clanker, Virtuals gradués — vraie liquidité DEX dès le départ) → rejoint le
+  pipeline STANDARD existant (`token_absorber.absorb`, pool 85%), aucun nouveau filtre nécessaire.
+  `screened_pool.list_pool/count_pool/draw_lottery` gagnent un paramètre `network="base"` (défaut
+  strictement inchangé, testé) pour garantir l'isolation — `weekly_training.draw_lottery` reste
+  100% pool VC, jamais contaminé par la niche. Nouveau client `services/clanker.py` (même patron
+  que `virtuals.py` : dôme anti-injection, throttle, jamais d'exception sortante) + `virtuals.
+  fetch_graduated` (tokens ayant récemment gradué). **Launchpads sans diligence faite restent des
+  seams vides documentés** (Flaunch/Zora : adaptateur `discover=None` ; Bankr/Ape.store/Mint.club :
+  entrées `knowledge/launchpads.yaml` sans adresse, `confidence: unverified`) — aucun client fabriqué
+  sur hypothèse (doctrine « profondeur proportionnelle à l'enjeu »). Un launchpad en échec n'arrête
+  jamais les autres (best-effort par adaptateur, testé). Tâche heartbeat `bonding_discovery_cycle`
+  (180min, gate OFF `ARIA_BONDING_DISCOVERY_ENABLED`), les deux volets (bonding/direct) tournent
+  indépendamment (l'échec de l'un n'efface jamais le succès de l'autre, testé). **Point d'attention
+  avant activation** : un appel de test à `GET /api/tokens` de Clanker a renvoyé HTTP 403 depuis
+  l'environnement cloud (probable blocage anti-bot générique, même caveat que `virtuals.py` en son
+  temps) — à reconfirmer depuis le VPS (accès réseau réel) avant d'activer le gate. 75 tests
+  ajoutés, suite complète verte (4209 passés, 1 échec pré-existant sans rapport — test live
+  DuckDuckGo bloqué en sandbox). Deuxième passe de recherche (Bankr/Zora/Ape.store/Mint.club)
+  jamais réellement lancée ce segment malgré l'intention — à refaire si l'opérateur veut creuser
+  ces launchpads avant de leur donner un vrai client.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

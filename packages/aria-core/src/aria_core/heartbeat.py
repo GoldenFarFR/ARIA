@@ -312,6 +312,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=60,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="bonding_discovery_cycle",
+        name="Decouverte multi-launchpad (bonding + gradues)",
+        description="Decouvre des candidats sur les launchpads Base actifs (services/launchpad_discovery.py) : tokens ENCORE en courbe de bonding (Virtuals, niche 15% -- filtre dedie bonding_screen.py, jamais le filtre standard qui exigerait a tort une paire DEX) ET tokens a liquidite DEX reelle (Clanker, Virtuals gradues -- rejoignent le pipeline d'absorption standard, pool 85% VC). Launchpads sans client verifie (Flaunch/Zora/Bankr/Ape.store/Mint.club) restent des seams vides, pas appeles. Gate OFF par defaut.",
+        interval_minutes=180,
+        enabled=False,
+    ),
 ]
 
 
@@ -417,6 +424,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.market_sentiment import market_sentiment_enabled
 
                 task.enabled = market_sentiment_enabled()
+            if task.id == "bonding_discovery_cycle":
+                from aria_core.skills.bonding_absorber import bonding_discovery_enabled
+
+                task.enabled = bonding_discovery_enabled()
             if task.id == "acp_provider_poll":
                 from aria_core.skills.acp_cli import is_acp_available
 
@@ -915,6 +926,19 @@ class AriaHeartbeat:
                     "market_sentiment",
                     f"[sentiment] {', '.join(result['updated'])} rafraichi(s)"
                     + (f" ; echec : {', '.join(result['failed'])}" if result.get("failed") else ""),
+                )
+
+        elif task_id == "bonding_discovery_cycle":
+            from aria_core.skills.bonding_absorber import run_bonding_discovery_cycle
+
+            result = await run_bonding_discovery_cycle()
+            bonding = result.get("bonding") or {}
+            direct = result.get("direct") or {}
+            if bonding.get("kept") or direct.get("kept"):
+                append_memory(
+                    "bonding_discovery",
+                    f"[decouverte] bonding kept={bonding.get('kept', 0)} "
+                    f"direct kept={direct.get('kept', 0)}",
                 )
 
         elif task_id == "self_banner_curiosity":

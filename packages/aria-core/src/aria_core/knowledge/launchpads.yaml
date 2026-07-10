@@ -70,3 +70,21 @@ launchpads:
     addresses: []
     norms:
       liquidity_note: "liquidité très élevée par défaut sur chaque lancement (observé opérateur)"
+
+  # Ape.store / Mint.club : cités dans la recherche launchpads (10/07), diligence PAS
+  # encore faite (pas d'API de découverte vérifiée en direct, pas d'adresse confirmée
+  # BaseScan). Seams documentés volontairement vides — cf. doctrine "profondeur
+  # proportionnelle à l'enjeu" : on ne fabrique pas un client ni un registre sur une
+  # hypothèse. À enrichir seulement après vraie diligence (docs officielle, modèle de
+  # garde, tarification, signaux de légitimité).
+  ape_store:
+    label: "Ape.store"
+    confidence: unverified
+    addresses: []
+    norms: {}
+
+  mint_club:
+    label: "Mint.club"
+    confidence: unverified
+    addresses: []
+    norms: {}

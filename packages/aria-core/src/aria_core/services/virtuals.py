@@ -143,8 +143,13 @@ def _first(mapping: dict, *keys: str) -> object:
 # ----------------------------------------------------------------------
 # Construction d'URL (endpoints Strapi publics)
 # ----------------------------------------------------------------------
-def build_prototypes_url(chain: str = "BASE", page_size: int = 100) -> str:
-    """URL de l'index des prototypes (encore en bonding), triés par récence.
+def build_prototypes_url(chain: str = "BASE", page_size: int = 100, *, status: str = "UNDERGRAD") -> str:
+    """URL de l'index filtré par statut, trié par récence.
+
+    ``status`` par défaut ``"UNDERGRAD"`` (encore en bonding, comportement historique
+    inchangé). ``build_graduated_url`` réutilise cette même fonction avec
+    ``status="AVAILABLE"`` (tokens gradués) — un seul point de construction d'URL,
+    jamais dupliqué.
 
     Ex. ``…/api/virtuals?filters[status]=UNDERGRAD&filters[chain]=BASE&sort[0]=createdAt:desc&pagination[pageSize]=100``
     """
@@ -154,12 +159,23 @@ def build_prototypes_url(chain: str = "BASE", page_size: int = 100) -> str:
         size = 100
     size = max(1, min(size, 200))
     params = [
-        ("filters[status]", "UNDERGRAD"),
+        ("filters[status]", str(status)),
         ("filters[chain]", str(chain).upper()),
         ("sort[0]", "createdAt:desc"),
         ("pagination[pageSize]", str(size)),
     ]
     return f"{_VIRTUALS_ENDPOINT}?{urlencode(params, safe='[]:$')}"
+
+
+def build_graduated_url(chain: str = "BASE", page_size: int = 100) -> str:
+    """URL des tokens ayant gradué récemment (statut ``AVAILABLE``).
+
+    ``sort[0]=createdAt:desc`` reste trié par date de CRÉATION du prototype (pas de
+    date de graduation exposée par l'API) — les plus récemment créés apparaissent en
+    tête, ce qui capture en pratique les graduations récentes sans être une garantie
+    stricte d'ordre de graduation.
+    """
+    return build_prototypes_url(chain=chain, page_size=page_size, status="AVAILABLE")
 
 
 def build_token_url(virtual_id: object) -> str:
@@ -425,6 +441,31 @@ class VirtualsClient:
             return tokens
         except Exception as exc:  # dégradation ultime : jamais d'exception sortante
             logger.info("virtuals: fetch_prototypes echec inattendu — %s", exc)
+            return []
+
+    async def fetch_graduated(self, chain: str = "BASE", page_size: int = 100) -> list[VirtualToken]:
+        """Tokens ayant récemment gradué (statut ``AVAILABLE``). Toujours une liste.
+
+        Ces tokens ont une vraie liquidité DEX (post-graduation) : ils rejoignent le
+        pipeline d'absorption STANDARD (85% VC), pas la niche bonding — cf.
+        ``services/launchpad_discovery.py``.
+        """
+        try:
+            url = build_graduated_url(chain=chain, page_size=page_size)
+            data, error = await self._get_json(url)
+            if error is not None or not isinstance(data, dict):
+                return []
+            items = data.get("data")
+            if not isinstance(items, list):
+                return []
+            tokens: list[VirtualToken] = []
+            for item in items:
+                token = parse_virtual(item)
+                if token is not None:
+                    tokens.append(token)
+            return tokens
+        except Exception as exc:  # dégradation ultime : jamais d'exception sortante
+            logger.info("virtuals: fetch_graduated echec inattendu — %s", exc)
             return []
 
     async def fetch_virtual(self, virtual_id: object) -> VirtualToken | None:

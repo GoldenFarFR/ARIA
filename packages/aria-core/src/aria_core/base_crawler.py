@@ -153,6 +153,33 @@ async def discover_virtuals_tokens(*, client=None, limit: int = 50) -> list[str]
     return list(seen.keys())
 
 
+async def discover_virtuals_graduated_tokens(*, client=None, limit: int = 50) -> list[str]:
+    """Tokens Virtuals ayant récemment gradué — vraie liquidité DEX, pipeline STANDARD.
+
+    Contrairement à ``discover_virtuals_tokens`` (bonding, niche 15%), ces tokens ont
+    une paire DEX réelle post-graduation : ils rejoignent l'absorbeur générique
+    (``token_absorber.absorb``, pool 85% VC) comme n'importe quel token Base, sans
+    traitement spécial. Exposé pour un pickup plus rapide qu'attendre leur apparition
+    dans ``discover_top_pools`` (seuil de liquidité, peuvent être encore fins juste
+    après graduation).
+    """
+    if client is None:
+        from aria_core.services.virtuals import virtuals_client as client
+    try:
+        tokens = await client.fetch_graduated()
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.info("base_crawler: découverte Virtuals gradués échouée (%s)", exc)
+        return []
+    seen: dict[str, None] = {}
+    for vt in tokens or []:
+        addr = (getattr(vt, "token_address", None) or "").lower()
+        if addr.startswith("0x") and len(addr) == 42 and addr not in seen:
+            seen[addr] = None
+        if len(seen) >= limit:
+            break
+    return list(seen.keys())
+
+
 async def crawl_and_absorb(
     *, discover=None, absorber=None, limit: int = 50, max_age_days: int | None = None
 ) -> dict:
