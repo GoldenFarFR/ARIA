@@ -14,7 +14,7 @@ _READINESS_RE = re.compile(
     r"qu['']?est[- ]?ce qu['']?il manque"
     r"|il manque.*pour que tu"
     r"|what(?:'s| is) missing.*for you"
-    r"|(?:ok|oui|yes).{0,40}(?:tout est pr[eê]t|maintenant|c['']est bon|ready)"
+    r"|(?:ok|oui|yes).{0,40}(?:tout est pr[eê]t|c['']est bon|ready)"
     r"|tout est pr[eê]t.{0,60}(?:manque|pour que tu)"
     r")",
     re.IGNORECASE | re.DOTALL,
