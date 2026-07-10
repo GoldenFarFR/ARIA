@@ -159,6 +159,19 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   un vrai incident auto-détecté et corrigé (vraie clé/IP commitées par erreur dans une fixture de
   test) + un vrai trou de couverture bouché (`test_coherence.py` ne vérifiait les IP que dans les
   docs, jamais le code — étendu). Détail complet : `docs/HANDOFF-2026-07-09-nuit7.md`.
+- **Nuit 8 — mandat opérateur "travaille 8h, creuse plus profond" : EMA/MACD livrés, seam
+  `entry_signals` trouvé dormant.** Écart CLAUDE.md/code corrigé : "Moteur TA (RSI/MACD/EMA/fibo/
+  divergences)" était annoncé depuis longtemps mais MACD/EMA n'étaient calculés nulle part (vérifié
+  par grep avant d'écrire quoi que ce soit) — `skills/indicators.py` (`ema_series`/`macd_series`,
+  déterministe, 7 tests) comble l'écart. Fibo/divergence RSI, eux, existaient déjà et sont réels
+  (`skills/entry_signals.py`, `fibonacci_zone`+`bullish_rsi_divergence`+`detect_entry` — le setup
+  "golden pocket + divergence RSI"). **Découverte en vérifiant** : ce module complet et testé
+  (10 tests) n'était câblé NULLE PART — ni dans le rapport `/vc` en prod, ni même dans la CI (juste
+  ajouté). Il ne fait pas doublon avec `ta_levels.suggest_entry_zone` (déjà câblé, générique,
+  toujours renvoyé) : c'est un signal plus rare et de meilleure qualité, complémentaire. Les deux
+  capacités (EMA/MACD + entry_signals) restent volontairement NON branchées dans
+  `acp_onchain_scan.py`/`vc_report.py` (pipeline de scan déjà en prod) — même prudence que #11/#59,
+  décision de câblage laissée à l'opérateur. Détail : `docs/architecture-extensibilite.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
