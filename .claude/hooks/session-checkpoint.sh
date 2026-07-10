@@ -6,9 +6,10 @@
 # nouvelle session reparte à jour. Le compteur est un FICHIER (déterministe, survit à la
 # compaction du contexte) : le modèle ne compte pas à la main (peu fiable).
 #
-# Mécanisme : à chaque prompt utilisateur on incrémente .claude/.msg-counter ; tous les 20,
-# on écrit sur stdout un rappel qui est injecté dans le contexte du modèle (contrat
-# UserPromptSubmit) → l'assistant propose alors la mise à jour, puis continue normalement.
+# Mécanisme : à chaque prompt utilisateur on incrémente .claude/.msg-counter ; tous les
+# INTERVAL messages, on écrit sur stdout un rappel qui est injecté dans le contexte du
+# modèle (contrat UserPromptSubmit) → l'assistant propose alors la mise à jour, puis
+# continue normalement.
 #
 # Ne bloque JAMAIS le prompt : toute erreur est absorbée, exit 0 systématique.
 set -uo pipefail
@@ -18,7 +19,7 @@ cat >/dev/null 2>&1 || true
 
 ROOT="${CLAUDE_PROJECT_DIR:-/home/user/ARIA}"
 COUNTER="$ROOT/.claude/.msg-counter"
-INTERVAL=20
+INTERVAL=1000
 
 mkdir -p "$ROOT/.claude" 2>/dev/null || true
 

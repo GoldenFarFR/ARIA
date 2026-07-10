@@ -250,7 +250,7 @@ def test_onchain_attestation_present_and_valueless():
 
 
 def test_session_checkpoint_hook_wired():
-    """Checkpoint auto (tous les 20 messages) : hook présent, enregistré, documenté."""
+    """Checkpoint auto (cadence configurable, cf. INTERVAL du hook) : hook présent, enregistré, documenté."""
     assert (REPO / ".claude" / "hooks" / "session-checkpoint.sh").is_file(), (
         "hook session-checkpoint.sh manquant (sauvegarde auto de session)"
     )
