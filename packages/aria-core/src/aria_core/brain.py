@@ -860,6 +860,33 @@ class AriaBrain:
         if is_short_ack(route):
             return "OK.", None, ["Ack (template)"], {}, None
         if not public:
+            from aria_core.skills.vc_session_context import (
+                get_followup_context_block,
+                is_vc_followup_question,
+            )
+
+            if is_vc_followup_question(route):
+                vc_block = await get_followup_context_block(lang=lang_key)
+                if vc_block:
+                    from aria_core.llm import is_llm_configured
+
+                    if is_llm_configured():
+                        llm_reply = await self._llm_response(
+                            message,
+                            lang,
+                            public=False,
+                            visitor_id=visitor_id,
+                            extra_system_context=vc_block,
+                        )
+                        if llm_reply:
+                            return (
+                                llm_reply,
+                                None,
+                                ["Suivi rapport /vc (mémoire locale)"],
+                                {"vc_followup": True, "skip_web": True},
+                                None,
+                            )
+        if not public:
             from aria_core.grounding import is_pure_casual_smalltalk
 
             # Pure casual / humor / small talk with operator → skip all meta-routing
@@ -1149,6 +1176,7 @@ class AriaBrain:
         local_memory_only: bool = False,
         self_context_only: bool = False,
         image_data_uri: str | None = None,
+        extra_system_context: str | None = None,
     ) -> str | None:
         from aria_core.gateway.telegram_bot import get_bot_username, get_channel_links_text
 
@@ -1302,6 +1330,9 @@ class AriaBrain:
             from aria_core.memory.self_context import SELF_CONTEXT_LLM_RULE
 
             local_rule = f"\n{SELF_CONTEXT_LLM_RULE}"
+        vc_extra = ""
+        if extra_system_context:
+            vc_extra = f"\n{extra_system_context.strip()}\n"
         vision_rule = ""
         if image_data_uri:
             vision_rule = (
@@ -1314,13 +1345,14 @@ class AriaBrain:
                 "précise-le si l'utilisateur semble vouloir l'utiliser comme telle.\n"
             )
         if self_context_only:
-            system = f"{context}\n\n{concision}\n{local_rule}{lang_hint}"
+            system = f"{context}\n\n{concision}\n{local_rule}{vc_extra}{lang_hint}"
         else:
             system = (
                 f"{context}\n\n"
                 f"{concision}\n"
                 f"{local_rule}"
                 f"{vision_rule}"
+                f"{vc_extra}"
                 f"{persona_block}\n"
                 f"{x_identity_prompt()}\n"
                 f"{channel_rule}\n"
