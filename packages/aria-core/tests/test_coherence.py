@@ -489,3 +489,90 @@ def test_vc_language_choice_never_asks_confirmation_or_email_address():
     handler_seg = src.split("async def _handle_vc(", 1)[1][:3000]
     for forbidden in ("input(", "quelle adresse", "quel email", "confirmer l'envoi"):
         assert forbidden not in handler_seg.lower(), f"jamais de prompt interdit : {forbidden}"
+
+
+# ── Registre des actions externes (10/07) ────────────────────────────────────────────────
+#
+# Incident : un sous-système entier (aria_worker_queue.py + capability_gap.py), câblé dans
+# brain.py/heartbeat.py, pouvait ouvrir des issues/PR GitHub et déléguer du code à un outil
+# tiers ("Cursor") sans aucune validation opérateur -- déclenchable par des mots du quotidien
+# en Telegram ("go", "vas-y", "nettoie le répertoire") ou même un formulaire public du site.
+# Il a réellement écrit sur ce repo (issue #1 + PR #2, 03/07) avant d'être retiré (10/07).
+# Ce test est le garde-fou MÉCANIQUE censé empêcher la récidive : toute fonction capable
+# d'écrire réellement à l'extérieur (GitHub, X, email) est listée ci-dessous. Si un NOUVEAU
+# fichier de production appelle une de ces fonctions sans être ajouté à la liste, ce test
+# échoue -- il ne dépend d'aucune mémoire humaine ni d'aucun audit périodique.
+#
+# Pour ajouter un appelant légitime : l'ajouter ci-dessous avec une raison, dans le MÊME
+# commit qui introduit l'appel (même règle que le reste de ce fichier).
+
+_EXTERNAL_WRITE_PATTERNS = [
+    # GitHub (github_client.GitHubClient) -- écriture réelle sur un repo.
+    r"\.create_issue\(", r"\.put_file\(", r"\.put_files_batch\(",
+    r"\.create_pull_request\(", r"\.create_branch\(", r"\.delete_repo\(",
+    r"\.create_repo\(", r"\.create_issue_comment\(", r"\.edit_issue_comment\(",
+    # X/Twitter (gateway.x_twitter) -- post/édition réelle du profil public.
+    r"\bapply_profile_banner\(", r"\bapply_profile_image\(",
+    r"\bapply_x_profile_fields\(", r"\bpost_tweet\(", r"\breply_to_tweet\(",
+    # Email (services.mailer) -- envoi réel.
+    r"\bsend_email\(",
+]
+_EXTERNAL_WRITE_RE = re.compile("|".join(_EXTERNAL_WRITE_PATTERNS))
+
+# Fichiers de définition (posséder la fonction n'est pas "l'appeler") + tests, exclus du scan.
+_EXTERNAL_WRITE_DEFINITION_FILES = {
+    "github_client.py",
+    "gateway/x_twitter.py",
+    "services/mailer.py",
+}
+
+# Chaque fichier listé ici a un appelant légitime et connu -- vérifié le 10/07.
+_EXTERNAL_WRITE_ALLOWLIST = {
+    # GitHub
+    "skills/claude_mentor.py",
+    "skills/showcase_pr_watcher.py",
+    "skills/holding_site_skill.py",
+    "skills/vc_intelligence.py",
+    "skills/knowledge_inbox.py",
+    "skills/github_skill.py",
+    "skills/telegram_conversation_miner.py",
+    "skills/pump_dump_autopsy.py",
+    "skills/code_proposal.py",
+    "truth_ledger/sync.py",
+    # X/Twitter
+    "skills/acp_workflow_social.py",
+    "skills/comms_skill.py",
+    "skills/acp_product_launch_skill.py",
+    "tweet_compose_workflow.py",
+    "gateway/telegram_bot.py",
+    "gateway/x_engagement.py",
+    "autonomy_revenue.py",
+    "actions.py",
+    "avatar.py",
+    "community_feedback.py",
+    "self_maintenance.py",
+    "x_profile.py",
+    "visual_autonomy.py",
+    # Email
+    "skills/vc_delivery.py",
+}
+
+
+def test_external_write_actions_registered_in_allowlist():
+    """Garde-fou mécanique anti-récidive (cf. incident Cursor/worker-queue, 10/07) : tout
+    fichier de production appelant une fonction d'écriture externe (GitHub/X/email) doit
+    être déclaré dans _EXTERNAL_WRITE_ALLOWLIST. Casse immédiatement si un nouveau chemin
+    d'action autonome apparaît sans revue explicite."""
+    unexpected: list[str] = []
+    for path in CORE.rglob("*.py"):
+        rel = str(path.relative_to(CORE))
+        if rel in _EXTERNAL_WRITE_DEFINITION_FILES:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if _EXTERNAL_WRITE_RE.search(text) and rel not in _EXTERNAL_WRITE_ALLOWLIST:
+            unexpected.append(rel)
+    assert not unexpected, (
+        "Nouveau(x) fichier(s) appelant une action d'écriture externe (GitHub/X/email) sans "
+        f"être déclaré(s) dans _EXTERNAL_WRITE_ALLOWLIST : {unexpected}. "
+        "Ajoute-le avec une raison si légitime, ou retire l'appel si non voulu."
+    )

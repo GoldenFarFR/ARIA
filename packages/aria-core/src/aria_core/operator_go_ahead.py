@@ -106,16 +106,6 @@ async def execute_deferred_go_ahead(
             data["action"] = action.value
             return reply, data
 
-    from aria_core.skills.community_worker_skill import (
-        execute_worker_delegate,
-        wants_worker_delegate,
-    )
-
-    if wants_worker_delegate(combined):
-        reply, wdata = await execute_worker_delegate(combined, lang)
-        data.update(wdata)
-        return reply, data
-
     from aria_core.operator_readiness import (
         execute_operator_readiness,
         wants_operator_readiness,
