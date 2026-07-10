@@ -213,6 +213,24 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   reste du rapport). Thèse (`these`) enrichie au même commit : 3-5 phrases, doit s'ancrer sur ≥2
   signaux concrets déjà fournis (sécurité, liquidité, R/R, TA, contexte marché) — jamais une
   généralité interchangeable. 8 tests (vc_analysis + vc_report).
+- **Centre de commandement — dashboard (#72, 10/07).** Question opérateur : « qu'est-ce qui
+  prouve qu'ARIA est câblée pour gérer un portefeuille ? ». `/cockpit` (déjà existant, pouls +
+  dossier) étendu en vrai tableau de bord : `/api/aria/track-record` gagne `calibration` +
+  `by_strategy` (données déjà calculées, jamais un contrat exposé — l'alpha reste réservée, même
+  doctrine que l'existant) ; deux endpoints publics neufs `/api/aria/market-cycle` (cycle halving)
+  et `/api/aria/sentiment` (lit `market_sentiment.py`, aucun recalcul synchrone) ; 4 nouveaux
+  panneaux React (`CockpitCalibrationPanel`/`CockpitCyclePanel`/`CockpitSentimentPanel`/
+  `CockpitMethodologyPanel` — ce dernier explique le pipeline sourcing→sécurité→quantitatif→
+  LLM→juge→track-record). **Vérifié** : TypeScript compile propre, les 3 endpoints testés en
+  direct avec un vrai backend local (dont un vrai appel réseau BTC réussi, phase "baisse
+  markdown" -44% confirmée), 4 nouveaux tests + 52 tests backend existants verts. **PAS vérifié**
+  visuellement en navigateur ce segment : `PrivyProvider` bloque le boot de l'app en local sans
+  vrai App ID Privy — une tentative de contournement (retirer temporairement le wrapper d'auth)
+  a été correctement bloquée par le classifieur de sécurité de session, reverted immédiatement.
+  Rendu à valider par l'opérateur (capture d'écran ou déploiement preview) avant de considérer le
+  design "gamme luxe" definitivement acquis. `docs/protocole-argent-reel.md`/`/feuvert` restent la
+  vraie réponse chiffrée à la question ("non, pas encore") — ce dashboard est la vitrine de
+  transparence, pas une prétention de feu vert.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
