@@ -1,9 +1,12 @@
-"""Indicateurs techniques généraux (facts-only, déterministe) — EMA et MACD.
+"""Indicateurs techniques généraux (facts-only, déterministe) — EMA, MACD, Bollinger.
 
 Complète `entry_signals.rsi_series` (RSI de Wilder) et `ta_levels` (niveaux/tendance).
 `CLAUDE.md` annonce depuis longtemps un "Moteur TA (RSI/MACD/EMA/fibo/divergences)" —
 MACD et EMA n'étaient en réalité jamais calculés nulle part avant ce module (écart
-découvert le 10/07 en vérifiant le code réel avant d'écrire quoi que ce soit).
+découvert le 10/07 en vérifiant le code réel avant d'écrire quoi que ce soit). Les
+bandes de Bollinger, elles, n'ont jamais été annoncées mais manquaient pour couvrir
+la demande opérateur du 10/07 (RSI + Bollinger + volumes + bougies comme entrées d'un
+futur moteur de backtest — cf. `docs/architecture-extensibilite.md`).
 
 Tout est dérivé de la série de closes fournie (mêmes closes → même résultat). Aucune
 valeur inventée : période de chauffe insuffisante → ``None`` à ces positions, jamais
@@ -11,9 +14,13 @@ une estimation.
 """
 from __future__ import annotations
 
+import math
+
 _EMA_FAST = 12
 _EMA_SLOW = 26
 _MACD_SIGNAL = 9
+_BOLLINGER_PERIOD = 20
+_BOLLINGER_NUM_STD = 2.0
 
 
 def ema_series(closes: list[float], period: int) -> list[float | None]:
@@ -72,3 +79,33 @@ def macd_series(
             histogram[idx] = macd_line[idx] - value
 
     return macd_line, signal_line, histogram
+
+
+def bollinger_bands(
+    closes: list[float],
+    *,
+    period: int = _BOLLINGER_PERIOD,
+    num_std: float = _BOLLINGER_NUM_STD,
+) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    """Bandes de Bollinger (milieu = SMA, haut/bas = SMA ± ``num_std`` écarts-types
+    de population sur la même fenêtre). ``None`` pendant la période de chauffe.
+
+    Convention standard : écart-type de POPULATION (diviseur ``period``, pas
+    ``period - 1``) sur la fenêtre glissante — pas l'écart-type de l'échantillon.
+    """
+    n = len(closes)
+    middle: list[float | None] = [None] * n
+    upper: list[float | None] = [None] * n
+    lower: list[float | None] = [None] * n
+    if period <= 0 or n < period:
+        return middle, upper, lower
+
+    for i in range(period - 1, n):
+        window = closes[i - period + 1 : i + 1]
+        mean = sum(window) / period
+        variance = sum((x - mean) ** 2 for x in window) / period
+        std = math.sqrt(variance)
+        middle[i] = mean
+        upper[i] = mean + num_std * std
+        lower[i] = mean - num_std * std
+    return middle, upper, lower
