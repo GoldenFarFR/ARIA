@@ -481,6 +481,7 @@ def heartbeat_pulse() -> dict:
     last_tick = times[-1] if times else None
     safe_keys = (
         "vc_crawl", "vc_weekly_forecast", "vc_radar_x", "vc_thesis_review", "paper_trade_cycle",
+        "market_sentiment_cycle",
     )
     cycles = {k: state[k] for k in safe_keys if state.get(k)}
     return {"alive": last_tick is not None, "last_tick": last_tick, "cycles": cycles}
