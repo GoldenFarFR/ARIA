@@ -151,18 +151,46 @@ async def _call_image_edit(*, prompt: str, anchor_jpeg: bytes) -> bytes | None:
     return None
 
 
+# Descripteurs partagés (réalisme + marque) — un seul point d'ajustement pour les 3
+# prompts de portrait. Décision opérateur explicite (10/07, AskUserQuestion) : viser le
+# niveau de réalisme technique de références comme Lily Turner (peau/lumière/cohérence)
+# **sans** reprendre son registre (contenu sexualisé, tenues suggestives) — la ligne
+# "jamais suggestif/sexualisé" ci-dessous n'est donc pas une prudence générique, c'est
+# la frontière explicitement tranchée par l'opérateur, gravée dans le prompt lui-même
+# plutôt que laissée à la seule discipline de qui rédige la légende.
+_REALISM_STYLE = (
+    "Shot on a professional DSLR with an 85mm portrait lens, natural skin texture with "
+    "visible pores and fine detail, soft directional studio or golden-hour lighting, sharp "
+    "focus on the eyes, ultra-realistic photography, no airbrushed or plastic AI look."
+)
+_BRAND_PRESENCE = (
+    "Confident poised expression, direct engaged gaze, commanding presence — someone whose "
+    "peers take seriously."
+)
+_TASTE_BOUNDARY = (
+    "Elegant, sophisticated, business-appropriate or editorial styling — never suggestive, "
+    "never revealing, never sexualized."
+)
+# Le brief identité (vision-model, `_extract_identity_brief`) reste borné, mais moins
+# tronqué qu'avant (120 -> 220) : plus de détail retenu (traits, style, tenue habituelle)
+# pour une cohérence de personnage plus fidèle d'une génération à l'autre.
+_IDENTITY_BRIEF_MAX = 220
+
+
 async def generate_scene_portrait(
     anchor_jpeg: bytes,
     *,
     identity_brief: str,
     scene: str,
 ) -> bytes | None:
-    brief = (identity_brief or "same woman, AI chief officer").strip()[:120]
+    brief = (identity_brief or "same woman, AI chief officer").strip()[:_IDENTITY_BRIEF_MAX]
     prompt = (
-        f"Same person — identical face and facial features unchanged. {brief}. "
+        f"Same person — identical face and facial features unchanged, unmistakably "
+        f"recognizable. {brief}. "
         f"New setting and environment: {scene.strip()[:200]}. "
         "Change outfit, hairstyle, background, lighting as needed. "
-        "Square profile photo, photorealistic."
+        f"{_REALISM_STYLE} {_BRAND_PRESENCE} {_TASTE_BOUNDARY} "
+        "Square profile photo."
     )
     return await _call_image_edit(prompt=prompt, anchor_jpeg=anchor_jpeg)
 
@@ -173,12 +201,14 @@ async def generate_style_portrait(
     identity_brief: str,
     style: str,
 ) -> bytes | None:
-    brief = (identity_brief or "same woman, AI chief officer").strip()[:120]
+    brief = (identity_brief or "same woman, AI chief officer").strip()[:_IDENTITY_BRIEF_MAX]
     prompt = (
-        f"Same person — identical face and facial features unchanged. {brief}. "
+        f"Same person — identical face and facial features unchanged, unmistakably "
+        f"recognizable. {brief}. "
         f"Transform everything else: {style.strip()[:280]}. "
         "New outfit, hairstyle, background environment, lighting and mood. "
-        "Square profile photo, photorealistic."
+        f"{_REALISM_STYLE} {_BRAND_PRESENCE} {_TASTE_BOUNDARY} "
+        "Square profile photo."
     )
     return await _call_image_edit(prompt=prompt, anchor_jpeg=anchor_jpeg)
 
@@ -220,11 +250,12 @@ async def generate_banner_portrait(
     scene: str,
 ) -> bytes | None:
     """Legacy edit-from-anchor — reserve aux avatars, pas la banniere X."""
-    brief = (identity_brief or "same woman, AI chief officer").strip()[:120]
+    brief = (identity_brief or "same woman, AI chief officer").strip()[:_IDENTITY_BRIEF_MAX]
     prompt = (
-        f"Same person — face unchanged. {brief}. "
+        f"Same person — face unchanged, unmistakably recognizable. {brief}. "
         f"Wide X/Twitter header 3:1. {scene.strip()[:200]}. "
-        "No text, photorealistic, dark gold crypto brand."
+        f"No text. {_REALISM_STYLE} {_BRAND_PRESENCE} {_TASTE_BOUNDARY} "
+        "Dark gold crypto brand."
     )
     return await _call_image_edit(prompt=prompt, anchor_jpeg=anchor_jpeg)
 
