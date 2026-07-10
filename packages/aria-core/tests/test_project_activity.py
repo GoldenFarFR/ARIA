@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 import aria_core.thesis_journal as tj
 import pytest
 from aria_core.services.project_activity import (
+    fetch_github_diligence_snapshot,
     github_days_since_commit,
     github_url_from_links,
     parse_github_repo,
+    website_url_from_links,
 )
 
 NOW = datetime(2026, 7, 7, tzinfo=timezone.utc)
@@ -60,6 +62,57 @@ async def test_fetch_failure_degrades():
         raise RuntimeError("api down")
 
     assert await github_days_since_commit("https://github.com/o/r", fetch=fetch) is None
+
+
+# ── Diligence produit (site + GitHub, 10/07) ──────────────────────
+
+def test_website_url_from_links_skips_socials_and_github():
+    links = [
+        {"url": "https://x.com/proj"},
+        {"url": "https://t.me/proj"},
+        {"url": "https://myproject.xyz"},
+        {"url": "https://github.com/o/r"},
+    ]
+    assert website_url_from_links(links) == "https://myproject.xyz"
+
+
+def test_website_url_from_links_none_when_only_socials():
+    links = [{"url": "https://x.com/proj"}, {"url": "https://discord.gg/proj"}]
+    assert website_url_from_links(links) is None
+
+
+@pytest.mark.asyncio
+async def test_github_diligence_snapshot_returns_structured_facts():
+    async def fetch(path):
+        return {
+            "id": 1, "description": "A cool repo", "stargazers_count": 42,
+            "open_issues_count": 3, "pushed_at": "2026-07-01T00:00:00Z",
+            "archived": False, "fork": False,
+        }
+
+    snap = await fetch_github_diligence_snapshot(
+        "https://github.com/o/r", fetch=fetch, now=NOW
+    )
+    assert snap == {
+        "description": "A cool repo", "stars": 42, "open_issues": 3,
+        "days_since_push": 6, "archived": False, "fork": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_github_diligence_snapshot_non_github_returns_none():
+    async def fetch(path):
+        raise AssertionError("ne doit pas fetch")
+
+    assert await fetch_github_diligence_snapshot("https://x.com/foo", fetch=fetch) is None
+
+
+@pytest.mark.asyncio
+async def test_github_diligence_snapshot_degrades_on_failure():
+    async def fetch(path):
+        raise RuntimeError("api down")
+
+    assert await fetch_github_diligence_snapshot("https://github.com/o/r", fetch=fetch) is None
 
 
 # ── Tour de surveillance ───────────────────────────────────────

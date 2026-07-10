@@ -886,3 +886,88 @@ async def test_fetch_polymarket_signals_degrades_on_error(monkeypatch):
 
     result = await vc._fetch_polymarket_signals()
     assert result == []
+
+
+# ── Diligence produit (site + GitHub, 10/07) ──────────────────────
+
+def test_product_diligence_website_and_github_appear_in_context():
+    ctx = _base_ctx()
+    diligence = {
+        "website_snapshot": "MyToken — Real utility token for real builders",
+        "github": {
+            "description": "A cool repo", "stars": 42, "open_issues": 3,
+            "days_since_push": 6, "archived": False, "fork": False,
+        },
+    }
+    block = vc._build_untrusted_context(ctx, [], product_diligence=diligence)
+
+    assert "Site officiel du projet" in block
+    assert "DÉCLARATIF" in block
+    assert "Real utility token for real builders" in block
+    assert "Dépôt GitHub du projet" in block
+    assert "42 étoiles" in block
+    assert "dernier push il y a 6 j" in block
+
+
+def test_product_diligence_absent_when_none():
+    ctx = _base_ctx()
+    block = vc._build_untrusted_context(ctx, [], product_diligence=None)
+    assert "Site officiel du projet" not in block
+    assert "Dépôt GitHub du projet" not in block
+
+
+def test_product_diligence_flags_archived_and_fork():
+    ctx = _base_ctx()
+    diligence = {"github": {"archived": True, "fork": True}}
+    block = vc._build_untrusted_context(ctx, [], product_diligence=diligence)
+    assert "ARCHIVÉ" in block
+    assert "fork (pas le dépôt d'origine)" in block
+
+
+@pytest.mark.asyncio
+async def test_fetch_product_diligence_none_without_links():
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = []
+    assert await vc._fetch_product_diligence(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_product_diligence_combines_site_and_github(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [
+        {"url": "https://myproject.xyz"}, {"url": "https://github.com/o/r"},
+    ]
+
+    async def fake_site(url):
+        assert url == "https://myproject.xyz"
+        return "MyToken snapshot text"
+
+    async def fake_github(url):
+        assert url == "https://github.com/o/r"
+        return {"description": "repo", "stars": 1, "open_issues": 0,
+                "days_since_push": 1, "archived": False, "fork": False}
+
+    monkeypatch.setattr("aria_core.services.site_snapshot.fetch_site_text_snapshot", fake_site)
+    monkeypatch.setattr(
+        "aria_core.services.project_activity.fetch_github_diligence_snapshot", fake_github
+    )
+
+    result = await vc._fetch_product_diligence(ctx)
+    assert result == {
+        "website_snapshot": "MyToken snapshot text",
+        "github": {"description": "repo", "stars": 1, "open_issues": 0,
+                    "days_since_push": 1, "archived": False, "fork": False},
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_product_diligence_degrades_on_error(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"url": "https://myproject.xyz"}]
+
+    async def _boom(url):
+        raise RuntimeError("timeout")
+
+    monkeypatch.setattr("aria_core.services.site_snapshot.fetch_site_text_snapshot", _boom)
+
+    assert await vc._fetch_product_diligence(ctx) is None

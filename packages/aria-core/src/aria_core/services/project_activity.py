@@ -91,3 +91,58 @@ def github_url_from_links(links: list[dict] | None) -> str | None:
         if "github.com" in url.lower() and parse_github_repo(url):
             return url
     return None
+
+
+# Domaines sociaux/dev connus -- jamais le "site" du projet lui-même, donc exclus
+# de la recherche du site officiel ci-dessous.
+_NON_WEBSITE_DOMAINS = (
+    "github.com", "twitter.com", "x.com", "t.me", "telegram.me",
+    "discord.gg", "discord.com", "medium.com", "youtube.com", "youtu.be",
+    "instagram.com", "tiktok.com", "reddit.com", "warpcast.com", "farcaster.xyz",
+)
+
+
+def website_url_from_links(links: list[dict] | None) -> str | None:
+    """Premier lien qui n'est PAS un réseau social/dev connu -- heuristique simple
+    pour retrouver le site officiel du projet parmi les liens DexScreener
+    (`info.websites` + `info.socials`, jamais distingués autrement en amont)."""
+    for link in links or []:
+        url = str((link or {}).get("url") or "").strip()
+        if not url:
+            continue
+        low = url.lower()
+        if any(domain in low for domain in _NON_WEBSITE_DOMAINS):
+            continue
+        return url
+    return None
+
+
+async def fetch_github_diligence_snapshot(
+    repo_url: str | None, *, fetch=None, now: datetime | None = None
+) -> dict | None:
+    """Instantané GitHub pour la diligence produit pré-investissement (description,
+    étoiles, issues ouvertes, fraîcheur) -- même client/doctrine que
+    ``github_days_since_commit`` (best-effort, jamais bloquant, ``fetch`` injectable
+    pour les tests). Distinct de ce dernier : lit `/repos/{owner}/{repo}` (métadonnées),
+    pas `/commits` (historique)."""
+    parsed = parse_github_repo(repo_url)
+    if not parsed:
+        return None
+    owner, repo = parsed
+    fetch = fetch or _fetch_github
+    try:
+        data = await fetch(f"/repos/{owner}/{repo}")
+    except Exception as exc:  # noqa: BLE001 -- jamais bloquant
+        logger.info("project_activity: diligence github %s/%s échouée (%s)", owner, repo, exc)
+        return None
+    if not isinstance(data, dict) or "id" not in data:
+        return None
+    pushed_at = data.get("pushed_at") or data.get("updated_at")
+    return {
+        "description": str(data.get("description") or "")[:200],
+        "stars": data.get("stargazers_count"),
+        "open_issues": data.get("open_issues_count"),
+        "days_since_push": _days_since(pushed_at, now=now) if pushed_at else None,
+        "archived": bool(data.get("archived")),
+        "fork": bool(data.get("fork")),
+    }
