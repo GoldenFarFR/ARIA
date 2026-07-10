@@ -19,11 +19,11 @@ const RSI_ZONES = [
   { from: 70, to: 100, color: '#e8c468' },
 ]
 
-const BOLLINGER_ZONES = [
-  { from: -0.3, to: 0, color: '#d98a8a' },
-  { from: 0, to: 1, color: '#8b8f9a' },
-  { from: 1, to: 1.3, color: '#e8c468' },
-]
+function rsiColor(rsi: number): string {
+  if (rsi >= 70) return '#e8c468'
+  if (rsi <= 30) return '#d98a8a'
+  return '#d4d0c8'
+}
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime()
@@ -34,6 +34,17 @@ function relativeTime(iso: string): string {
   const hours = Math.round(mins / 60)
   if (hours < 24) return `il y a ${hours} h`
   return `il y a ${Math.round(hours / 24)} j`
+}
+
+function Stat({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">{label}</p>
+      <p className="text-2xl font-mono tabular-nums leading-none" style={{ color }}>
+        {value}
+      </p>
+    </div>
+  )
 }
 
 export function CockpitSentimentPanel() {
@@ -81,73 +92,55 @@ export function CockpitSentimentPanel() {
           Aucune lecture pour le moment — le scan continu n'a pas encore tourné.
         </p>
       ) : (
-        <div className="space-y-5 mb-2">
+        <div className="space-y-4 mb-2">
           {sentiment.readings.map((r) => {
             const color = REGIME_COLORS[r.regime] ?? '#8b8f9a'
             const label = sentiment.regime_labels[r.regime] ?? r.regime
             return (
               <div key={r.pair} className="minimal-card px-4 py-4">
-                <div className="flex items-start justify-between flex-wrap gap-2 mb-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-base text-[#f4efe6] font-mono font-medium">{r.pair}</span>
-                      <span
-                        className="text-[10px] uppercase tracking-[0.12em] px-2 py-0.5 rounded-full"
-                        style={{ color, backgroundColor: `${color}1a`, border: `1px solid ${color}40` }}
-                      >
-                        {label.split(' (')[0]}
-                      </span>
-                    </div>
-                    <p className="text-xs text-[#8b8f9a] leading-relaxed mt-1.5 max-w-md">{r.detail}</p>
+                <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-base text-[#f4efe6] font-mono font-semibold tracking-tight">
+                      {r.pair}
+                    </span>
+                    <span
+                      className="text-[10px] uppercase tracking-[0.12em] px-2 py-0.5 rounded-full font-medium"
+                      style={{ color, backgroundColor: `${color}1f`, border: `1px solid ${color}55` }}
+                    >
+                      {label.split(' (')[0]}
+                    </span>
                   </div>
-                  <span className="text-[11px] text-[#8b8f9a] font-mono shrink-0">
-                    {relativeTime(r.computed_at)}
-                  </span>
+                  <span className="text-[11px] text-[#8b8f9a] font-mono">{relativeTime(r.computed_at)}</span>
                 </div>
 
                 {r.rsi != null ? (
-                  <div className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
-                    <div>
-                      <div className="flex items-baseline justify-between mb-1">
-                        <span className="text-[10px] uppercase tracking-[0.12em] text-[#8a7344]">RSI</span>
-                        <span className="text-xs font-mono tabular-nums text-[#d4d0c8]">
-                          {r.rsi.toFixed(0)}
-                        </span>
-                      </div>
-                      <LinearGauge value={r.rsi} min={0} max={100} zones={RSI_ZONES} />
+                  <>
+                    <div className="grid grid-cols-3 gap-4 mb-3">
+                      <Stat label="RSI" value={r.rsi.toFixed(0)} color={rsiColor(r.rsi)} />
+                      <Stat
+                        label="Momentum"
+                        value={`${r.momentum_pct != null && r.momentum_pct >= 0 ? '+' : ''}${
+                          r.momentum_pct != null ? r.momentum_pct.toFixed(1) : '—'
+                        }%`}
+                        color={r.momentum_pct != null ? (r.momentum_pct >= 0 ? '#7fb88f' : '#d98a8a') : '#8b8f9a'}
+                      />
+                      <Stat
+                        label="Retracement"
+                        value={
+                          r.drawdown_from_high_pct != null ? `${r.drawdown_from_high_pct.toFixed(1)}%` : '—'
+                        }
+                        color={
+                          r.drawdown_from_high_pct != null && r.drawdown_from_high_pct < -20
+                            ? '#d98a8a'
+                            : '#d4d0c8'
+                        }
+                      />
                     </div>
-                    {r.bollinger_position != null ? (
-                      <div>
-                        <div className="flex items-baseline justify-between mb-1">
-                          <span className="text-[10px] uppercase tracking-[0.12em] text-[#8a7344]">
-                            Position Bollinger
-                          </span>
-                          <span className="text-xs font-mono tabular-nums text-[#d4d0c8]">
-                            {r.bollinger_position.toFixed(2)}
-                          </span>
-                        </div>
-                        <LinearGauge
-                          value={r.bollinger_position}
-                          min={-0.3}
-                          max={1.3}
-                          zones={BOLLINGER_ZONES}
-                        />
-                      </div>
-                    ) : null}
-                  </div>
+                    <LinearGauge value={r.rsi} min={0} max={100} zones={RSI_ZONES} />
+                  </>
                 ) : null}
 
-                <div className="flex gap-4 mt-3 text-[11px] font-mono text-[#8b8f9a] tabular-nums">
-                  {r.momentum_pct != null ? (
-                    <span style={{ color: r.momentum_pct >= 0 ? '#7fb88f' : '#d98a8a' }}>
-                      momentum {r.momentum_pct >= 0 ? '+' : ''}
-                      {r.momentum_pct.toFixed(1)}%
-                    </span>
-                  ) : null}
-                  {r.drawdown_from_high_pct != null ? (
-                    <span>retracement {r.drawdown_from_high_pct.toFixed(1)}%</span>
-                  ) : null}
-                </div>
+                <p className="text-xs text-[#8b8f9a] leading-relaxed mt-3">{r.detail}</p>
               </div>
             )
           })}
