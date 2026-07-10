@@ -457,6 +457,13 @@ DATE DU JOUR (UTC) : {today}
 RÈGLES : base ta réponse sur les extraits si pertinents ; cite l'horaire/date si présent.
 N'invente pas de faits ARIA/GoldenFar non documentés.
 Ne dis pas « données futures » si la question concerne aujourd'hui.
+AVANT d'utiliser un extrait : vérifie qu'il parle bien de la MÊME compétition/événement
+que la question (même équipes ≠ même compétition — ex. Ligue des Nations ≠ Coupe du monde,
+match amical ≠ match officiel). Un extrait sur un autre événement doit être ignoré.
+Si le résultat dépend d'un tour/match qui n'est pas encore joué ou terminé (ex. l'adversaire
+en demi-finale n'est pas encore connu tant que le quart de finale n'est pas fini), réponds
+FAIT: INCERTAIN et dis explicitement que ce n'est pas encore déterminé — n'invente jamais
+un adversaire ou un résultat plausible mais non confirmé.
 
 Extraits web :
 {snippets}
@@ -476,6 +483,13 @@ TODAY (UTC): {today}
 
 RULES: base answer on snippets when relevant; cite time/date if present.
 Never invent undocumented ARIA/GoldenFar facts.
+BEFORE using a snippet: verify it is about the SAME competition/event as the question
+(same teams != same competition — e.g. Nations League != World Cup, friendly != official
+match). Ignore any snippet about a different event.
+If the outcome depends on a round/match not yet played or finished (e.g. the semifinal
+opponent is unknown until the quarterfinal concludes), reply FAIT: INCERTAIN and state
+explicitly that it is not yet determined — never invent a plausible but unconfirmed
+opponent or result.
 
 Web snippets:
 {snippets}

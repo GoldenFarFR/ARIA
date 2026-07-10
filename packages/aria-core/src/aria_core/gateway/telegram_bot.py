@@ -748,25 +748,6 @@ async def _handle_level(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _reply(message, out)
 
 
-async def _handle_directive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-    text = (message.text or "").strip()
-    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
-    if not body and context.args:
-        body = " ".join(context.args).strip()
-    if not body:
-        await _reply(message, "Usage: /directive <permanent rule for ARIA>")
-        return
-    from aria_core.directives import append_directive
-
-    append_directive(body)
-    await _reply(message, "Directive saved — ARIA will prioritize this in every LLM call.")
-
-
 async def _handle_learn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _admin_check_reply(update):
         return
@@ -2125,15 +2106,23 @@ _DIRECTIVE_STATUS_ICON = {
 }
 
 
-async def _handle_directive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/directive — surface de contrôle du canal ARIA -> Claude Code (admin, pilote).
+async def _handle_aria_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/canal — surface de contrôle du canal ARIA -> Claude Code (admin, pilote).
+
+    Nom délibérément DISTINCT de `/directive` : une ancienne commande opérateur
+    portait ce nom (règle permanente -> ARIA via `directives.append_directive`) ;
+    une collision de nom de FONCTION Python (même nom `_handle_directive` que ce
+    pilote) l'a écrasée silencieusement une fois (10/07). Cette ancienne commande a
+    depuis été retirée (jamais utilisée en pratique, doublon du vrai flux : demander
+    à Claude Code d'éditer `directives.md` directement, revu et testé). Garder `/canal`
+    sous un nom distinct reste la bonne pratique anti-collision, même sans doublon actif.
 
     Sous-commandes :
-      /directive list                       — la file (en cours + traitées)
-      /directive log                        — le journal d'audit (append-only)
-      /directive propose <cat> <titre>      — dépose une directive (cat: repo_hygiene|docs|backlog)
-      /directive halt [raison]              — coupe-circuit (fige le canal)
-      /directive resume                     — lève le coupe-circuit
+      /canal list                       — la file (en cours + traitées)
+      /canal log                        — le journal d'audit (append-only)
+      /canal propose <cat> <titre>      — dépose une directive (cat: repo_hygiene|docs|backlog)
+      /canal halt [raison]              — coupe-circuit (fige le canal)
+      /canal resume                     — lève le coupe-circuit
 
     Ne DÉCLENCHE aucune exécution : la file est lue et traitée par une session Claude
     Code côté VPS. Le canal reste gaté OFF (ARIA_DIRECTIVE_CHANNEL_ENABLED) tant qu'il
@@ -2158,11 +2147,11 @@ async def _handle_directive(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     usage = (
         "Canal de directives ARIA -> Claude Code (pilote) :\n"
-        "/directive list — la file\n"
-        "/directive log — le journal d'audit\n"
-        "/directive propose <cat> <titre> — cat: repo_hygiene | docs | backlog\n"
-        "/directive halt [raison] — coupe-circuit\n"
-        "/directive resume — lever le coupe-circuit"
+        "/canal list — la file\n"
+        "/canal log — le journal d'audit\n"
+        "/canal propose <cat> <titre> — cat: repo_hygiene | docs | backlog\n"
+        "/canal halt [raison] — coupe-circuit\n"
+        "/canal resume — lever le coupe-circuit"
     )
 
     if sub in ("help", "aide", "?"):
@@ -2172,7 +2161,7 @@ async def _handle_directive(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if sub == "propose":
         cat_parts = rest.split(maxsplit=1)
         if len(cat_parts) < 2:
-            await _reply(message, "Usage : /directive propose <cat> <titre>\n" + usage)
+            await _reply(message, "Usage : /canal propose <cat> <titre>\n" + usage)
             return
         category, title = cat_parts[0].strip().lower(), cat_parts[1].strip()
         res = await ad.propose_directive(category, title)
@@ -2184,7 +2173,7 @@ async def _handle_directive(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if sub == "halt":
         await ad.halt_channel(rest or "halt manuel Telegram")
-        await _reply(message, "🛑 Canal FIGÉ. Aucune directive ne sera traitée. /directive resume pour reprendre.")
+        await _reply(message, "🛑 Canal FIGÉ. Aucune directive ne sera traitée. /canal resume pour reprendre.")
         return
 
     if sub == "resume":
@@ -2290,7 +2279,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("issue", _handle_issue))
     app.add_handler(CommandHandler("theses", _handle_theses))
     app.add_handler(CommandHandler("github", _handle_github))
-    app.add_handler(CommandHandler("directive", _handle_directive))
+    app.add_handler(CommandHandler("canal", _handle_aria_channel))
 
     # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)
     app.add_handler(CallbackQueryHandler(_handle_callback))

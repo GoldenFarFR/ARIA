@@ -1,4 +1,9 @@
-"""/directive — surface de contrôle Telegram du canal ARIA -> Claude Code (pilote).
+"""/canal — surface de contrôle Telegram du canal ARIA -> Claude Code (pilote).
+
+Renommé le 10/07 depuis /directive : collision de nom de fonction avait
+silencieusement écrasé l'ancienne commande opérateur /directive (règle
+permanente -> ARIA). Voir test_telegram_directive_and_canal_are_distinct
+dans test_directive_canal_no_collision.py pour le garde-fou anti-récidive.
 
 DB + marqueur de coupe-circuit isolés, gate ON pour tester le dépôt. Vérifie la
 restriction admin, le dépôt/refus par périmètre, le coupe-circuit, la lecture.
@@ -47,56 +52,56 @@ def _env(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_directive_rejects_non_admin(monkeypatch):
+async def test_canal_rejects_non_admin(monkeypatch):
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: False)
     monkeypatch.setattr(telegram_bot.settings, "admin_ids", [999])
-    update = FakeUpdate("/directive list")
-    await telegram_bot._handle_directive(update, FakeContext())
+    update = FakeUpdate("/canal list")
+    await telegram_bot._handle_aria_channel(update, FakeContext())
     reply = update.message.replies[0].lower()
     assert "restricted" in reply or "admin" in reply
 
 
 @pytest.mark.asyncio
-async def test_directive_propose_in_perimeter_enters_queue():
-    update = FakeUpdate("/directive propose docs mettre a jour un doc")
-    await telegram_bot._handle_directive(update, FakeContext())
+async def test_canal_propose_in_perimeter_enters_queue():
+    update = FakeUpdate("/canal propose docs mettre a jour un doc")
+    await telegram_bot._handle_aria_channel(update, FakeContext())
     assert "déposée" in update.message.replies[0]
     assert len(await ad.list_directives(status="pending")) == 1
 
 
 @pytest.mark.asyncio
-async def test_directive_propose_out_of_perimeter_refused():
-    update = FakeUpdate("/directive propose wallet signer une transaction")
-    await telegram_bot._handle_directive(update, FakeContext())
+async def test_canal_propose_out_of_perimeter_refused():
+    update = FakeUpdate("/canal propose wallet signer une transaction")
+    await telegram_bot._handle_aria_channel(update, FakeContext())
     assert "Refusée" in update.message.replies[0]
     assert await ad.list_directives() == []
 
 
 @pytest.mark.asyncio
-async def test_directive_halt_then_resume():
-    up_halt = FakeUpdate("/directive halt raison test")
-    await telegram_bot._handle_directive(up_halt, FakeContext())
+async def test_canal_halt_then_resume():
+    up_halt = FakeUpdate("/canal halt raison test")
+    await telegram_bot._handle_aria_channel(up_halt, FakeContext())
     assert "FIGÉ" in up_halt.message.replies[0]
     assert ad.is_halted() is True
 
-    up_resume = FakeUpdate("/directive resume")
-    await telegram_bot._handle_directive(up_resume, FakeContext())
+    up_resume = FakeUpdate("/canal resume")
+    await telegram_bot._handle_aria_channel(up_resume, FakeContext())
     assert ad.is_halted() is False
 
 
 @pytest.mark.asyncio
-async def test_directive_list_shows_queue_and_gate_state():
+async def test_canal_list_shows_queue_and_gate_state():
     await ad.propose_directive("backlog", "une tache")
-    update = FakeUpdate("/directive list")
-    await telegram_bot._handle_directive(update, FakeContext())
+    update = FakeUpdate("/canal list")
+    await telegram_bot._handle_aria_channel(update, FakeContext())
     reply = update.message.replies[0]
     assert "une tache" in reply
     assert "backlog" in reply
 
 
 @pytest.mark.asyncio
-async def test_directive_log_shows_events():
+async def test_canal_log_shows_events():
     await ad.propose_directive("docs", "doc A")
-    update = FakeUpdate("/directive log")
-    await telegram_bot._handle_directive(update, FakeContext())
+    update = FakeUpdate("/canal log")
+    await telegram_bot._handle_aria_channel(update, FakeContext())
     assert "proposed" in update.message.replies[0]
