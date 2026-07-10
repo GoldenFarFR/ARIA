@@ -26,6 +26,14 @@ def test_not_readiness_random():
     assert not wants_operator_readiness("comment va le marché crypto ?")
 
 
+def test_not_readiness_ok_maintenant_unrelated_request():
+    # Bug vécu (10/07) : "ok" + "maintenant" à moins de 40 caractères faisait
+    # basculer une vraie demande de recherche de token sur l'audit de readiness.
+    assert not wants_operator_readiness(
+        "ok trouve moi maintenant un jeton qui repond a t'es critere BUY"
+    )
+
+
 def test_status_pulse_sylvain():
     assert wants_operator_status_pulse("rien de nouveau a declarer ?")
     assert wants_operator_status_pulse("quoi de neuf ?")

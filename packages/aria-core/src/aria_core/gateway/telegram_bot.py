@@ -1816,8 +1816,11 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
     from aria_core import repertoire_db
     from aria_core.skills.vc_session_context import record_operator_vc
 
-    await repertoire_db.save_message("user", f"/vc {address}", skill_used="vc")
-    await repertoire_db.save_message("agent", order_text, skill_used="vc")
+    try:
+        await repertoire_db.save_message("user", f"/vc {address}", skill_used="vc")
+        await repertoire_db.save_message("agent", order_text, skill_used="vc")
+    except Exception as exc:  # noqa: BLE001 — historique best-effort, jamais bloquant pour le rapport
+        logger.warning("save_message /vc échoué: %s", exc)
 
     if test_mode:
         # MODE TEST : on affiche le raisonnement complet mais on n'envoie aucun
