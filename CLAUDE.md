@@ -377,7 +377,7 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   test n'a encore renvoyé qu'une erreur de validation) — à revérifier avant d'activer le gate.
   Gate `ARIA_BONDING_DISCOVERY_ENABLED` toujours pas activé, étape suivante : dry-run manuel
   (`run_bonding_discovery_cycle()`) demandé à l'opérateur avant activation en continu.
-- **Vision (images en chat Telegram) — CODÉ, gate OFF, PAS déployé (10/07).** Déclenché par un
+- **Vision (images en chat Telegram) — EN LIGNE, gate ON, testé en conditions réelles (10/07).** Déclenché par un
   vrai bug trouvé en capture d'écran : l'opérateur a envoyé un graphique DexScreener avec
   « juge cette situation », ARIA n'a rien répondu. **Cause racine confirmée** : `telegram_bot.py`
   n'enregistrait AUCUN handler photo (`MessageHandler(filters.PHOTO, ...)` absent) — toute image
@@ -397,9 +397,14 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   système final (`chat_with_context`), avec une **règle anti-hallucination dédiée** : ARIA ne lit
   un chiffre précis (prix, %, volume) que si elle peut réellement le voir net dans l'image, sinon
   elle le dit explicitement au lieu de l'inventer — même doctrine facts-only que le reste du
-  système. **Non vérifié** : que Grok (modèle standard via Virtuals/Spark) accepte réellement la
-  vision au travers de la passerelle `compute.virtuals.io` — aucune garantie donnée dans le code,
-  seulement documentée comme non testée en direct ; à confirmer sur le VPS avant activation.
+  système. **Confirmé en direct sur le VPS (10/07, même segment)** : gate activé
+  (`ARIA_VISION_ENABLED=1` dans `vanguard/backend/.env` — PAS `/opt/aria/.env`, piège vécu : le
+  vrai fichier chargé par le conteneur est pointé explicitement par `deploy.sh`), premier test réel
+  (graphique DexScreener B20/ETH + « juge cette situation ») → réponse de qualité, chiffres lus
+  correctement sur l'image (liquidité, FDV, %, volumes, ratio buy/sell), raisonnement sur le ratio
+  liquidité/FDV comme signal, distinction rug vs dump post-hype, limites honnêtes explicites
+  (lecture d'image ≠ vérification on-chain). Grok (via la passerelle Virtuals/Spark) accepte donc
+  bien la vision — plus une inconnue.
   **Limite v1 assumée** : le message image ne passe pas par `repertoire_db.save_message` (appelé
   seulement dans le gros dispatcher texte, pas dans `_llm_response` directement) — une image
   envoyée n'entre donc pas dans l'historique conversationnel pour un suivi ultérieur en texte.
