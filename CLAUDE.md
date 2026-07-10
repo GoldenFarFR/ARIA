@@ -283,6 +283,27 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   valeur réelle de `GITHUB_WRITE_REPOS` (devrait être vide/off) ; décider si l'issue #1 et les
   branches orphelines `aria/gap-x-profile-banner`/`cursor/aria-instinct-auto-ouvrier-delegate`
   sont fermées/supprimées ou gardées en archive (question posée, pas encore tranchée).
+- **Canal de directives ARIA → Claude Code (#82, 10/07) — PILOTE EN LIGNE, gate OFF, RIEN
+  d'automatique.** Décision opérateur explicite et répétée (« ARIA à la tête, elle dialogue
+  qu'avec toi en bidirectionnel, tu renvoies vers Cowork si nécessaire ») — bâti EXPRÈS avec
+  le bordage inverse de l'incident Cursor ci-dessus, PAS le même système (ne jamais les
+  confondre). `aria_directives.py` = une file locale SQLite + journal d'audit append-only ;
+  **il n'exécute rien et n'écrit rien à l'extérieur** (GitHub/X/email). ARIA (`propose_directive`)
+  dépose une directive priorisée ; une session Claude Code **côté VPS (lancée par un humain)**
+  la lit (`claim_next_directive`) et l'exécute — le classifieur de sécurité de session reste la
+  dernière ligne de défense, ce N'EST donc pas encore « humain 100% hors de la boucle » (cran
+  suivant, volontairement pas fait). Bordage : **périmètre en dur** `_DIRECTIVE_CATEGORIES`
+  (`repo_hygiene`/`docs`/`backlog` seulement — la famille déjà déléguée ; toute autre catégorie
+  refusée à l'écriture), **gate OFF** `ARIA_DIRECTIVE_CHANNEL_ENABLED` (fail-closed),
+  **coupe-circuit dédié** `halt_channel` (distinct de `/stop` et `outgoing_pause`), **journal
+  append-only** (aucune fonction UPDATE/DELETE sur `aria_directive_log`). Deux frontières jamais
+  franchies : capital réel (aucune catégorie financière dans l'allowlist) et auto-modification
+  du canal (ARIA ne peut pas s'élargir ses propres pouvoirs). Surface de contrôle Telegram
+  admin `/directive` (list/log/propose/halt/resume). Verrouillé par `test_coherence`
+  (`test_aria_directive_channel_perimeter_locked_and_gated` + `test_aria_directive_log_is_append_only`).
+  **Élargir le périmètre = décision opérateur explicite, catégorie par catégorie** (jamais « tout
+  sauf le sensible » d'un coup). **Pas encore câblé au heartbeat** (ARIA ne propose pas encore en
+  autonomie — étape suivante à valider). Aucun câblage automatique tant que ce n'est pas décidé.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
