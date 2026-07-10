@@ -34,7 +34,6 @@ SPAM_MAX_LEN = 8
 X_TWEET_MIN_SCORE = 35
 DEFAULT_X_COOLDOWN_HOURS = 4.0
 _HOLDING_DOMAIN = "ariavanguardzhc.com"
-_WORKER_OK = frozenset({"pushed", "local_only", "queued_local", "local_md"})
 
 _PRODUCT_RE = re.compile(
     r"\b(?:site|page|vanguard|market|marché|bot|telegram|skill|ui|ux|bandeau|banner|"
@@ -1140,7 +1139,7 @@ def format_public_reply(
         if queued:
             return (
                 "Merci — ton avis compte pour la commu ZHC. "
-                "Je l'ai transmis à l'ouvrier Grok/Cursor : si ça renforce Vanguard, on prépare le workflow de ship."
+                "Je l'ai transmis à l'opérateur : si ça renforce Vanguard, on regarde comment le prioriser."
                 + x_bit_fr
             )
         if verdict == "spam":
@@ -1153,7 +1152,7 @@ def format_public_reply(
     if queued:
         return (
             "Thanks — your input matters. "
-            "Forwarded to the Grok/Cursor worker: if it strengthens Vanguard, we'll prep the ship workflow."
+            "Forwarded to the operator: if it strengthens Vanguard, we'll look at prioritizing it."
             + x_bit_en
         )
     if verdict == "spam":
@@ -1215,44 +1214,24 @@ async def submit_community_feedback(
     x_tweet: dict[str, Any] = {"status": "skipped"}
 
     if auto_queue and verdict == "queue" and not operator:
-        from aria_core.aria_worker_queue import enqueue_worker_task, sync_pending_local_tasks_to_md
-
-        sync_pending_local_tasks_to_md()
-
         slug = re.sub(r"[^a-z0-9]+", "-", clean.lower())[:24].strip("-") or "idea"
         day = datetime.now(timezone.utc).strftime("%Y%m%d")
         worker_task_id = f"community-fb-{slug}-{day}"
         handle_bit = f" (@{handle.strip().lstrip('@')})" if handle.strip() else ""
-        problem = (
-            f"Feedback communauté site{handle_bit} — score {score}/100\n\n{clean}"
-        )
         try:
-            wr = await enqueue_worker_task(
-                task_id=worker_task_id,
-                title=clean[:120],
-                source="community_feedback",
-                problem=problem,
-                action=(
-                    "Évaluer l'idée communauté ; si alignée vision ZHC/Vanguard, préparer workflow "
-                    "ouvrier (spec courte, fichiers cibles, critères d'acceptation) puis implémenter."
-                ),
-                priority="normal",
-                repos=("aria-vanguard", "aria-sandbox"),
-                acceptance=(
-                    "Décision documentée (ship / defer / decline)",
-                    "Si ship : PR ou commit + JOURNAL.md",
-                ),
-                context=f"visitor={visitor_id or 'anon'} source={source}",
-                lang=lang,
+            from aria_core.gateway.telegram_bot import notify_admin
+
+            await notify_admin(
+                f"Feedback communauté site{handle_bit} — score {score}/100\n\n{clean}"
             )
-            worker_status = wr.get("status")
-            queued = wr.get("status") in _WORKER_OK
+            worker_status = "notified"
+            queued = True
             append_memory(
                 "community",
-                f"[feedback→worker] {feedback_id} score={score} task={worker_task_id} status={worker_status}",
+                f"[feedback→operateur] {feedback_id} score={score} task={worker_task_id} status={worker_status}",
             )
         except Exception as exc:
-            logger.warning("community feedback worker queue failed: %s", exc)
+            logger.warning("community feedback notify failed: %s", exc)
             verdict = "noted"
             queued = False
 

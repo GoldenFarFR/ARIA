@@ -32,26 +32,23 @@ def test_score_feedback_low_for_spam():
 
 
 @pytest.mark.asyncio
-async def test_submit_queues_worker(monkeypatch, tmp_path):
+async def test_submit_notifies_operator_instead_of_worker_queue(monkeypatch, tmp_path):
+    """10/07 : un score élevé notifie l'opérateur (Telegram) -- ne délègue plus
+    jamais de code à un ouvrier externe (cf. incident capability_gap.py)."""
     from aria_core import community_feedback as mod
 
     monkeypatch.setattr(mod, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(mod, "append_memory", lambda *a, **k: None)
 
-    async def fake_enqueue(**kwargs):
-        return {"status": "local_md", "task_id": kwargs["task_id"]}
+    notified: list[str] = []
+
+    async def fake_notify(msg):
+        notified.append(msg)
 
     async def noop_x(*a, **k):
         return {"status": "skipped", "reason": "test"}
 
-    monkeypatch.setattr(
-        "aria_core.aria_worker_queue.enqueue_worker_task",
-        fake_enqueue,
-    )
-    monkeypatch.setattr(
-        "aria_core.aria_worker_queue.sync_pending_local_tasks_to_md",
-        lambda: [],
-    )
+    monkeypatch.setattr("aria_core.gateway.telegram_bot.notify_admin", fake_notify)
     monkeypatch.setattr(mod, "maybe_tweet_community_feedback", noop_x)
 
     out = await submit_community_feedback(
@@ -63,6 +60,7 @@ async def test_submit_queues_worker(monkeypatch, tmp_path):
     assert out["ok"] is True
     assert out["queued"] is True
     assert out["verdict"] == "queue"
+    assert notified and "FAQ Vanguard" in notified[0]
     assert (tmp_path / "community-feedback.jsonl").is_file()
 
 

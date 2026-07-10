@@ -31,7 +31,6 @@ class SkillName(str, Enum):
     EXTERNAL_CLAIM_VERIFY = "external_claim_verify"
     ACP_MARKETPLACE = "acp_marketplace"
     INGEST_REPO = "ingest_repo"
-    WORKER_DELEGATE = "worker_delegate"
 
 
 class RepertoireItemStatus(str, Enum):

@@ -717,3 +717,56 @@ def test_prompt_omits_golden_pocket_line_when_absent():
 
     assert "golden pocket + divergence RSI PRÉSENT" not in block
     assert "courbe de bonding Virtuals" not in block
+
+
+def test_prompt_includes_sentiment_when_available():
+    """Câblage #75 (10/07) : le régime BTC/ETH doit atteindre le LLM AVANT sa
+    réponse (contrairement à l'overlay macro halving, purement post-hoc)."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    readings = [
+        {
+            "pair": "BTC", "regime": "doute_accumulation",
+            "detail": "reprise +8.0% depuis le plus bas récent, RSI 50",
+        },
+        {"pair": "ETH", "regime": "donnees_insuffisantes", "detail": "0/60 closes"},
+    ]
+
+    block = vc._build_untrusted_context(ctx, [], readings)
+
+    assert "Sentiment de marché continu" in block
+    assert "- BTC : Doute / accumulation" in block
+    # la paire sans lecture fiable ne doit jamais apparaître (pas de bruit inventé)
+    assert "- ETH :" not in block
+
+
+def test_prompt_omits_sentiment_when_absent_or_insufficient():
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+
+    assert "Sentiment de marché continu" not in vc._build_untrusted_context(ctx, [], None)
+    assert "Sentiment de marché continu" not in vc._build_untrusted_context(ctx, [], [])
+    only_insufficient = [{"pair": "BTC", "regime": "donnees_insuffisantes", "detail": "0/60 closes"}]
+    assert "Sentiment de marché continu" not in vc._build_untrusted_context(ctx, [], only_insufficient)
+
+
+@pytest.mark.asyncio
+async def test_fetch_sentiment_readings_degrades_on_error(monkeypatch):
+    """Une erreur de lecture (DB absente, gate OFF sans table) ne doit jamais
+    bloquer l'analyse VC -- liste vide, jamais d'exception propagée."""
+    import aria_core.skills.market_sentiment as ms
+
+    async def _boom():
+        raise RuntimeError("db indisponible")
+
+    monkeypatch.setattr(ms, "latest_readings", _boom)
+
+    result = await vc._fetch_sentiment_readings()
+
+    assert result == []
