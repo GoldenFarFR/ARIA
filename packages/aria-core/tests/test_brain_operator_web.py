@@ -100,3 +100,43 @@ async def test_operator_public_flag_actually_threaded_to_resolve_calibrated_answ
     )
 
     assert received.get("public") is False
+
+
+@pytest.mark.asyncio
+async def test_operator_vc_followup_uses_local_memory_not_web(monkeypatch):
+    """Suivi /vc : intercepté tôt dans process(), pas le web ni les skills launchpad."""
+    web_called = {"n": 0}
+
+    async def _fake_resolve(query, lang, **kwargs):
+        web_called["n"] += 1
+        return ("WEB_SHOULD_NOT_RUN", {})
+
+    async def _fake_vc_block(*, lang="fr"):
+        return "DERNIER RAPPORT /vc: +605% entrée 0.346 cible 2.13 AVOID"
+
+    async def _fake_llm(self, message, lang, **kwargs):
+        assert "DERNIER RAPPORT" in (kwargs.get("extra_system_context") or "")
+        return "AVOID car whale 57% et liquidité mince — le +605% est mécanique (support→sommet)."
+
+    monkeypatch.setattr(
+        "aria_core.knowledge.epistemic.resolve_calibrated_answer", _fake_resolve,
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.vc_session_context.get_followup_context_block", _fake_vc_block,
+    )
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+    monkeypatch.setattr("aria_core.brain.AriaBrain._llm_response", _fake_llm)
+    async def _noop_save(*a, **k):
+        return None
+
+    monkeypatch.setattr("aria_core.repertoire_db.save_message", _noop_save)
+    monkeypatch.setattr("aria_core.memory.append_memory", lambda *a, **k: None)
+
+    brain = AriaBrain()
+    response = await brain.process("pourquoi avoid ?", lang="fr", public_mode=False)
+
+    assert web_called["n"] == 0
+    assert response.data.get("vc_followup") is True
+    assert "605" in response.reply or "AVOID" in response.reply
+    assert "LAUNCHPAD" not in response.reply
+
