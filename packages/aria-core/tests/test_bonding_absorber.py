@@ -5,7 +5,7 @@ import pytest
 
 from aria_core import screened_pool as sp
 from aria_core.skills import bonding_absorber as ba
-from aria_core.skills.acp_onchain_scan import TokenScanContext
+from aria_core.skills.acp_onchain_scan import PairSnapshot, TokenScanContext
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +103,67 @@ async def test_one_candidate_error_does_not_block_others():
     assert counts == {"kept": 1, "error": 1}
 
 
+# ── absorb_direct_candidate (10/07, correctif dry-run) ────────────
+
+def _direct_ctx(contract: str, *, has_pair: bool = True, **overrides) -> TokenScanContext:
+    """Candidat 'direct' fraîchement découvert (Clanker/Virtuals gradués)."""
+    defaults = dict(
+        contract=contract, valid_address=True,
+        best_pair=(
+            PairSnapshot(
+                pair_address="0xpair", dex_id="aerodrome", liquidity_usd=50_000.0,
+                volume_24h_usd=10_000.0, base_symbol="TOK", quote_symbol="WETH",
+            )
+            if has_pair else None
+        ),
+        security_score=78, lite_verdict="SAFE", contract_verified=True,
+        has_mint=False, has_blacklist=False, has_disable_transfers=False,
+        top_holder_pct=12.0,
+    )
+    defaults.update(overrides)
+    return TokenScanContext(**defaults)
+
+
+@pytest.mark.asyncio
+async def test_absorb_direct_candidate_no_pair_yet_goes_pending_not_rejected():
+    """Le bug diagnostiqué en direct (10/07) : 18/20 candidats 'direct' bannis À VIE
+    sur le seul signal 'pas de paire DEX' -- un token tout juste déployé n'a
+    souvent pas encore de paire indexée. Doit atterrir en 'pending', jamais
+    'rejected'."""
+    scan = _scanner({"0xfresh": _direct_ctx("0xfresh", has_pair=False)})
+    assert await ba.absorb_direct_candidate("0xfresh", scanner=scan) == "skip_incomplete"
+    assert await sp.get_status("0xfresh") == "pending"
+
+
+@pytest.mark.asyncio
+async def test_absorb_direct_candidate_with_pair_delegates_to_standard_pipeline():
+    scan = _scanner({"0xmature": _direct_ctx("0xmature", has_pair=True)})
+    assert await ba.absorb_direct_candidate("0xmature", scanner=scan) == "kept"
+    # Rejoint le pool STANDARD (network="base"), pas le pool bonding.
+    assert await sp.count_pool("active") == 1
+    assert await sp.count_pool("active", network=ba.BONDING_NETWORK) == 0
+
+
+@pytest.mark.asyncio
+async def test_absorb_direct_candidate_real_hard_fail_still_rejected_forever():
+    """Une paire EXISTE mais le token est un mauvais acteur confirmé (blacklist) :
+    le rejet définitif standard s'applique toujours -- seule l'absence de paire
+    bénéficie de la grâce."""
+    scan = _scanner({"0xrug": _direct_ctx("0xrug", has_pair=True, has_blacklist=True)})
+    assert await ba.absorb_direct_candidate("0xrug", scanner=scan) == "rejected"
+    assert await sp.get_status("0xrug") == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_absorb_direct_candidate_already_rejected_short_circuits():
+    async def _boom(contract, **kw):
+        raise AssertionError("ne doit pas re-scanner un contrat déjà rejeté")
+
+    scan = _scanner({"0xrug": _direct_ctx("0xrug", has_pair=True, has_blacklist=True)})
+    assert await ba.absorb_direct_candidate("0xrug", scanner=scan) == "rejected"
+    assert await ba.absorb_direct_candidate("0xrug", scanner=_boom) == "skip_rejected"
+
+
 def test_bonding_discovery_gated_off_by_default(monkeypatch):
     monkeypatch.delenv("ARIA_BONDING_DISCOVERY_ENABLED", raising=False)
     assert ba.bonding_discovery_enabled() is False
@@ -121,14 +182,14 @@ async def test_run_bonding_discovery_cycle_combines_both_volets(monkeypatch):
     async def fake_discover_direct(*, limit_per_launchpad):
         return {"clanker": ["0xdirect1", "0xdirect2"]}
 
-    async def fake_absorb_standard(contract):
+    async def fake_absorb_direct(contract):
         return "kept" if contract == "0xdirect1" else "rejected"
 
     monkeypatch.setattr(ba, "discover_and_absorb_bonding", fake_discover_and_absorb_bonding)
     monkeypatch.setattr(
         "aria_core.services.launchpad_discovery.discover_direct_candidates", fake_discover_direct
     )
-    monkeypatch.setattr("aria_core.token_absorber.absorb", fake_absorb_standard)
+    monkeypatch.setattr(ba, "absorb_direct_candidate", fake_absorb_direct)
 
     full = await ba.run_bonding_discovery_cycle(limit_per_launchpad=10)
     assert full["bonding"] == {"kept": 1}

@@ -31,6 +31,7 @@ async def absorb(
     scanner=None,
     force: bool = False,
     max_age_days: int | None = None,
+    ctx=None,
     **screen_kwargs,
 ) -> str:
     """Scanne un contrat et le range : 'kept' / 'rejected' / 'skip_*'.
@@ -41,7 +42,10 @@ async def absorb(
     réévalue. ``scanner`` est injectable (tests offline). ``screen_kwargs`` sont
     passés à ``safety_screen`` (seuils ajustables). ``max_age_days`` (optionnel) :
     hors-scope (pas fraude/légitime — 'skip_too_old') si la paire est plus vieille ;
-    vérifié avant le filtre de sécurité pour économiser le scan honeypot.
+    vérifié avant le filtre de sécurité pour économiser le scan honeypot. ``ctx``
+    (optionnel) : contexte déjà scanné (évite un second scan réseau si l'appelant
+    a déjà dû regarder ``ctx.best_pair`` avant de décider d'appeler ``absorb`` —
+    cf. ``bonding_absorber.absorb_direct_candidate``).
     """
     scan = scanner or scan_base_token
     if not force:
@@ -53,7 +57,8 @@ async def absorb(
 
     # Honeypot ACTIF au filtre d'entrée : un token honeypot / à taxe extractive / owner
     # réversible ne doit pas entrer dans le pool, pas seulement être signalé à l'analyse.
-    ctx = await scan(contract, include_honeypot=True)
+    if ctx is None:
+        ctx = await scan(contract, include_honeypot=True)
 
     if max_age_days is not None:
         created_ms = ctx.best_pair.pair_created_at if ctx.best_pair else None

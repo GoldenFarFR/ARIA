@@ -42,6 +42,19 @@ def _scanner(ctx_by_contract):
 
 
 @pytest.mark.asyncio
+async def test_absorb_with_preset_ctx_skips_internal_scan():
+    """``ctx=`` (10/07, évite un double scan réseau depuis
+    ``bonding_absorber.absorb_direct_candidate``) : le scanner injecté ne doit
+    JAMAIS être appelé quand un contexte déjà scanné est fourni."""
+    async def _boom(contract, **kw):
+        raise AssertionError("ne doit pas re-scanner si ctx est déjà fourni")
+
+    verdict = await ta.absorb("0xgood", scanner=_boom, ctx=_clean_ctx("0xgood"))
+    assert verdict == "kept"
+    assert await sp.get_status("0xgood") == "active"
+
+
+@pytest.mark.asyncio
 async def test_real_value_is_kept():
     scan = _scanner({"0xgood": _clean_ctx("0xgood")})
     assert await ta.absorb("0xgood", scanner=scan) == "kept"

@@ -103,6 +103,47 @@ async def discover_and_absorb_bonding(*, discover=None, absorber=None, limit_per
     return counts
 
 
+async def absorb_direct_candidate(contract: str, *, scanner=None) -> str:
+    """Absorbe un candidat DEX-direct FRAÎCHEMENT DÉCOUVERT (Clanker, y compris via
+    Bankr qui déploie dessus -- adresses vanity reconnaissables, vérifié 10/07).
+
+    Diagnostic réel (premier dry-run bonding discovery, 10/07) : ``safety_screen``
+    traite ``ctx.best_pair is None`` comme un échec DUR (``hard_fail``) -- correct
+    pour un token trouvé via ``discover_top_pools`` (pool déjà établi, "pas de
+    paire" = mort/inexistant), FAUX pour un token tout juste déployé : l'absence de
+    paire à cet instant signifie très probablement "pas encore indexé par
+    DexScreener", pas "n'existe pas". 18 candidats sur 20 avaient été bannis À VIE
+    sur ce seul signal lors du premier dry-run.
+
+    Cette fonction intercepte UNIQUEMENT ce cas précis, en amont de
+    ``token_absorber.absorb`` : pas de paire -> échec MOU (``pending``, retenté au
+    prochain cycle), jamais un rejet définitif. Dès qu'une paire existe (le token a
+    eu le temps d'être indexé), délègue entièrement à ``token_absorber.absorb`` --
+    même jugement que le pipeline standard, rien de nouveau à tester côté filtre.
+    """
+    from aria_core.token_absorber import absorb as absorb_standard
+
+    scan = scanner or scan_base_token
+    status = await screened_pool.get_status(contract)
+    if status == "rejected":
+        return "skip_rejected"
+    if status == "active":
+        return "skip_active"
+
+    ctx = await scan(contract, include_honeypot=True)
+    if ctx.best_pair is None:
+        await screened_pool.record_pending(
+            contract=contract,
+            reason=(
+                "candidat fraîchement découvert (launchpad direct) : paire DEX pas "
+                "encore indexée -- retenté au prochain cycle, jamais banni sur ce seul signal"
+            ),
+        )
+        return "skip_incomplete"
+
+    return await absorb_standard(contract, scanner=scanner, ctx=ctx)
+
+
 def bonding_discovery_enabled() -> bool:
     """Seam gaté OFF par défaut. Le cycle heartbeat de découverte multi-launchpad ne
     tourne qu'une fois ce flag activé par l'opérateur (nouveaux appels réseau)."""
@@ -117,21 +158,20 @@ async def run_bonding_discovery_cycle(*, limit_per_launchpad: int = 50) -> dict:
     Deux volets INDÉPENDANTS (un échec de l'un n'efface jamais le succès de l'autre) :
       - ``bonding`` : candidats encore en courbe (niche 15%, ``network="base-bonding"``) ;
       - ``direct`` : candidats à liquidité DEX réelle (Clanker, Virtuals gradués) —
-        rejoignent le pipeline STANDARD existant (``token_absorber.absorb``, pool 85%),
-        rien de nouveau à tester côté filtre, juste un point de découverte de plus.
+        passent par ``absorb_direct_candidate`` (grâce period « pas encore de paire »
+        avant de rejoindre le pipeline STANDARD ``token_absorber.absorb``, pool 85%).
     """
     bonding_counts = await discover_and_absorb_bonding(limit_per_launchpad=limit_per_launchpad)
 
     direct_counts: dict[str, int] = {}
     try:
         from aria_core.services.launchpad_discovery import discover_direct_candidates
-        from aria_core.token_absorber import absorb as absorb_standard
 
         by_launchpad = await discover_direct_candidates(limit_per_launchpad=limit_per_launchpad)
         for _launchpad_key, addresses in (by_launchpad or {}).items():
             for contract in addresses:
                 try:
-                    verdict = await absorb_standard(contract)
+                    verdict = await absorb_direct_candidate(contract)
                 except Exception as exc:  # noqa: BLE001
                     logger.info("bonding_discovery_cycle: absorb direct %s échoué (%s)", contract, exc)
                     verdict = "error"
