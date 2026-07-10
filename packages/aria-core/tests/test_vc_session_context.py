@@ -69,6 +69,14 @@ def test_is_vc_followup_detects_plus515_pourquoi():
     assert vsc.is_vc_followup_question("+515% sur ton analyse c'est énorme")
 
 
+def test_is_vc_followup_detects_pourquoi_avoid():
+    assert vsc.is_vc_followup_question("pourquoi avoid ?")
+
+
+def test_is_vc_followup_detects_justification_question():
+    assert vsc.is_vc_followup_question("comment tu justifies ces valeurs de ou tu les tiens ?")
+
+
 def test_is_vc_followup_ignores_unrelated_chat():
     assert not vsc.is_vc_followup_question("salut ça va ?")
     assert not vsc.is_vc_followup_question("quelle est la capitale de la France ?")

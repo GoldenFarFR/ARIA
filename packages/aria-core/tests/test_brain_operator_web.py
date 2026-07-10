@@ -104,7 +104,7 @@ async def test_operator_public_flag_actually_threaded_to_resolve_calibrated_answ
 
 @pytest.mark.asyncio
 async def test_operator_vc_followup_uses_local_memory_not_web(monkeypatch):
-    """Suivi /vc : +515 pourquoi ? doit s'ancrer sur le dernier rapport, pas le web."""
+    """Suivi /vc : intercepté tôt dans process(), pas le web ni les skills launchpad."""
     web_called = {"n": 0}
 
     async def _fake_resolve(query, lang, **kwargs):
@@ -112,11 +112,11 @@ async def test_operator_vc_followup_uses_local_memory_not_web(monkeypatch):
         return ("WEB_SHOULD_NOT_RUN", {})
 
     async def _fake_vc_block(*, lang="fr"):
-        return "DERNIER RAPPORT /vc: +515% entrée 0.346 cible 2.13 AVOID"
+        return "DERNIER RAPPORT /vc: +605% entrée 0.346 cible 2.13 AVOID"
 
     async def _fake_llm(self, message, lang, **kwargs):
         assert "DERNIER RAPPORT" in (kwargs.get("extra_system_context") or "")
-        return "Le +515% vient de l'entrée 0.346 vers la cible 2.13."
+        return "AVOID car whale 57% et liquidité mince — le +605% est mécanique (support→sommet)."
 
     monkeypatch.setattr(
         "aria_core.knowledge.epistemic.resolve_calibrated_answer", _fake_resolve,
@@ -126,14 +126,17 @@ async def test_operator_vc_followup_uses_local_memory_not_web(monkeypatch):
     )
     monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
     monkeypatch.setattr("aria_core.brain.AriaBrain._llm_response", _fake_llm)
+    async def _noop_save(*a, **k):
+        return None
+
+    monkeypatch.setattr("aria_core.repertoire_db.save_message", _noop_save)
+    monkeypatch.setattr("aria_core.memory.append_memory", lambda *a, **k: None)
 
     brain = AriaBrain()
-    reply, skill, labels, data, _ = await brain._general_response(
-        "+515 pourquoi ?", "fr", public=False,
-    )
+    response = await brain.process("pourquoi avoid ?", lang="fr", public_mode=False)
 
     assert web_called["n"] == 0
-    assert data.get("vc_followup") is True
-    assert "515" in reply
-    assert "0.346" in reply
+    assert response.data.get("vc_followup") is True
+    assert "605" in response.reply or "AVOID" in response.reply
+    assert "LAUNCHPAD" not in response.reply
 

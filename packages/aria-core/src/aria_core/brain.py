@@ -320,6 +320,13 @@ class AriaBrain:
         await repertoire_db.save_message("user", user_message, visitor_id=vid)
 
         if not public:
+            vc_followup = await self._try_vc_followup_response(
+                user_message, route_msg, lang, visitor_id=vid,
+            )
+            if vc_followup is not None:
+                return vc_followup
+
+        if not public:
             from aria_core.skills.acp_conversational import is_conversational_acp_question
             from aria_core.tweet_compose_workflow import handle_workflow_message
 
@@ -782,6 +789,45 @@ class AriaBrain:
             data=data,
         )
 
+    async def _try_vc_followup_response(
+        self,
+        user_message: str,
+        route_msg: str,
+        lang: str,
+        *,
+        visitor_id: str = "",
+    ) -> ChatResponse | None:
+        """Répond aux questions de suivi sur le dernier /vc AVANT tout routage skill/web."""
+        from aria_core.llm import is_llm_configured
+        from aria_core.skills.vc_session_context import (
+            get_followup_context_block,
+            is_vc_followup_question,
+        )
+
+        if not is_vc_followup_question(route_msg):
+            return None
+        lang_key = "fr" if lang == LANG_FR else "en"
+        vc_block = await get_followup_context_block(lang=lang_key)
+        if not vc_block or not is_llm_configured():
+            return None
+        llm_reply = await self._llm_response(
+            user_message,
+            lang,
+            public=False,
+            visitor_id=visitor_id,
+            extra_system_context=vc_block,
+        )
+        if not llm_reply:
+            return None
+        await repertoire_db.save_message("agent", llm_reply, skill_used="vc_followup", visitor_id=visitor_id)
+        append_memory("chat", f"User: {user_message[:100]}\nARIA: {llm_reply[:200]}")
+        return ChatResponse(
+            reply=llm_reply,
+            skill_used=None,
+            actions_taken=["Suivi rapport /vc (mémoire locale)"],
+            data={"vc_followup": True, "skip_web": True},
+        )
+
     async def _enhance_with_llm(
         self,
         user_message: str,
@@ -859,33 +905,6 @@ class AriaBrain:
 
         if is_short_ack(route):
             return "OK.", None, ["Ack (template)"], {}, None
-        if not public:
-            from aria_core.skills.vc_session_context import (
-                get_followup_context_block,
-                is_vc_followup_question,
-            )
-
-            if is_vc_followup_question(route):
-                vc_block = await get_followup_context_block(lang=lang_key)
-                if vc_block:
-                    from aria_core.llm import is_llm_configured
-
-                    if is_llm_configured():
-                        llm_reply = await self._llm_response(
-                            message,
-                            lang,
-                            public=False,
-                            visitor_id=visitor_id,
-                            extra_system_context=vc_block,
-                        )
-                        if llm_reply:
-                            return (
-                                llm_reply,
-                                None,
-                                ["Suivi rapport /vc (mémoire locale)"],
-                                {"vc_followup": True, "skip_web": True},
-                                None,
-                            )
         if not public:
             from aria_core.grounding import is_pure_casual_smalltalk
 
