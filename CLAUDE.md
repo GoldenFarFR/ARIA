@@ -241,6 +241,18 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   design "gamme luxe" definitivement acquis. `docs/protocole-argent-reel.md`/`/feuvert` restent la
   vraie réponse chiffrée à la question ("non, pas encore") — ce dashboard est la vitrine de
   transparence, pas une prétention de feu vert.
+- **Sentiment de marché → décision LLM réelle (#75, 10/07) — EN LIGNE.** Demande opérateur explicite,
+  après avoir vu le cockpit vide : « je veux que ses données soit utiles pour aria et toi pas pour
+  moi... pour que vous puissiez ajuster votre stratégie ». Distinction architecturale trouvée en
+  creusant `vc_analysis.py` : l'overlay macro halving (#14, `_attach_market_context`/`_attach_extras`)
+  s'exécute APRÈS la réponse LLM — pure décoration de rapport, n'a JAMAIS influencé le raisonnement,
+  malgré les apparences. Corrigé pour le sentiment BTC/ETH en le branchant sur le chemin PRÉ-LLM
+  (`_fetch_sentiment_readings` → `_build_untrusted_context`, même patron qu'EMA/MACD/golden pocket
+  #74) : le régime (doute_accumulation, euphorie, capitulation_peur...) atteint désormais le prompt
+  AVANT que le LLM ne tranche potentiel/thèse/recommandation. Régime `donnees_insuffisantes` jamais
+  affiché (silence). Dégradation douce (DB absente/gate OFF/erreur → liste vide, jamais bloquant).
+  6 tests ajoutés. **Le halving overlay (#14) reste, lui, post-hoc** — pas encore rebranché en
+  pré-LLM (hors scope de cette demande, seam à réévaluer si l'opérateur le souhaite).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
