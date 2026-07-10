@@ -12,6 +12,39 @@ function pnlColor(v: number): string {
   return '#8b8f9a'
 }
 
+/** Barre bidirectionnelle ancrée sur un zéro central — jamais une barre qui part
+ * du bord gauche (une perte lirait comme un gain sinon). */
+function CalibrationBar({ value, maxAbs }: { value: number; maxAbs: number }) {
+  // widthPct est relatif à la largeur de SA moitié (w-1/2) : 100% = atteint le
+  // bord du conteneur. maxAbs (le plus grand |avg_pnl|) doit donc mapper à 100,
+  // pas à 50 (piège classique : confondre "moitié du total" et "bord de la moitié").
+  const widthPct = Math.max(6, Math.round((Math.abs(value) / maxAbs) * 100))
+  const positive = value >= 0
+  return (
+    <div className="relative flex-1 h-4">
+      <div className="absolute inset-y-0 left-1/2 w-px bg-[rgba(244,239,230,0.15)]" />
+      <div className="absolute inset-0 flex">
+        <div className="w-1/2 flex justify-end pr-px">
+          {!positive ? (
+            <div
+              className="h-1.5 self-center rounded-l-full"
+              style={{ width: `${widthPct}%`, backgroundColor: pnlColor(value), opacity: 0.8 }}
+            />
+          ) : null}
+        </div>
+        <div className="w-1/2 flex justify-start pl-px">
+          {positive ? (
+            <div
+              className="h-1.5 self-center rounded-r-full"
+              style={{ width: `${widthPct}%`, backgroundColor: pnlColor(value), opacity: 0.8 }}
+            />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function CockpitCalibrationPanel() {
   const [track, setTrack] = useState<TrackRecord | null>(null)
   const [failed, setFailed] = useState(false)
@@ -54,66 +87,60 @@ export function CockpitCalibrationPanel() {
 
   return (
     <div className="glass-vanguard rounded-sm p-5 sm:p-6">
-      <div className="flex items-center justify-between mb-1">
-        <p className="section-label">Calibration</p>
-        <span className="text-[11px] text-[#8b8f9a] font-mono">
-          {track.verdicts_closed}/{track.verdicts_total} clôturés
-        </span>
+      <div className="flex items-start justify-between gap-4 mb-1">
+        <div>
+          <p className="section-label mb-1">Calibration</p>
+          <p className="text-sm text-[#d4d0c8] leading-relaxed max-w-md">
+            Est-ce qu'un potentiel noté 8/10 bat vraiment un 5/10&nbsp;? La vraie mesure d'un
+            analyste, pas une affirmation.
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-2xl font-mono tabular-nums text-[#f4efe6] leading-none">
+            {track.verdicts_closed}
+            <span className="text-sm text-[#8b8f9a]">/{track.verdicts_total}</span>
+          </p>
+          <p className="text-[10px] uppercase tracking-[0.12em] text-[#8a7344] mt-1">clôturés</p>
+        </div>
       </div>
-      <p className="text-sm text-[#d4d0c8] mb-5 leading-relaxed">
-        Est-ce qu'un potentiel noté 8/10 bat vraiment un 5/10&nbsp;? La vraie mesure d'un
-        analyste, pas une affirmation.
-      </p>
 
       {buckets.length === 0 ? (
-        <p className="text-sm text-[#8b8f9a] mb-5">
+        <p className="text-sm text-[#8b8f9a] mt-4 mb-2">
           Pas encore assez de pronostics clôturés et notés pour tracer une courbe de
           calibration — c'est une donnée qui manque, pas un chiffre inventé.
         </p>
       ) : (
-        <div className="space-y-2.5 mb-6">
-          {buckets.map((b) => {
-            const widthPct = Math.max(4, Math.round((Math.abs(b.avg_pnl) / maxAbs) * 100))
-            return (
-              <div key={b.bucket} className="flex items-center gap-3">
-                <span className="w-16 shrink-0 text-[11px] font-mono text-[#8a7344] tabular-nums">
-                  {b.bucket}
-                </span>
-                <div className="flex-1 h-5 rounded-sm bg-[rgba(244,239,230,0.05)] overflow-hidden">
-                  <div
-                    className="h-full rounded-sm"
-                    style={{
-                      width: `${widthPct}%`,
-                      backgroundColor: pnlColor(b.avg_pnl),
-                      opacity: 0.75,
-                    }}
-                  />
-                </div>
-                <span
-                  className="w-20 shrink-0 text-right text-xs font-mono tabular-nums"
-                  style={{ color: pnlColor(b.avg_pnl) }}
-                >
-                  {b.avg_pnl >= 0 ? '+' : ''}
-                  {b.avg_pnl.toFixed(1)}%
-                </span>
-                <span className="w-14 shrink-0 text-right text-[11px] text-[#8b8f9a] font-mono tabular-nums">
-                  n={b.count}
-                </span>
-              </div>
-            )
-          })}
+        <div className="space-y-3 mt-5 mb-6">
+          {buckets.map((b) => (
+            <div key={b.bucket} className="flex items-center gap-3">
+              <span className="w-14 shrink-0 text-[11px] font-mono text-[#8a7344] tabular-nums">
+                {b.bucket}
+              </span>
+              <CalibrationBar value={b.avg_pnl} maxAbs={maxAbs} />
+              <span
+                className="w-16 shrink-0 text-right text-xs font-mono tabular-nums"
+                style={{ color: pnlColor(b.avg_pnl) }}
+              >
+                {b.avg_pnl >= 0 ? '+' : ''}
+                {b.avg_pnl.toFixed(1)}%
+              </span>
+              <span className="w-10 shrink-0 text-right text-[11px] text-[#8b8f9a] font-mono tabular-nums">
+                n={b.count}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 
       {strategies.length > 0 ? (
-        <div className="grid sm:grid-cols-2 gap-3">
+        <div className="grid sm:grid-cols-2 gap-3 pt-1 border-t border-[rgba(201,169,98,0.12)]">
           {strategies.map(([key, s]) => (
-            <div key={key} className="minimal-card px-4 py-3">
+            <div key={key} className="pt-3">
               <p className="text-[11px] uppercase tracking-[0.12em] text-[#8a7344] mb-1">
                 {STRATEGY_LABELS[key] ?? key}
               </p>
               <div className="flex items-baseline gap-2">
-                <span className="text-lg text-[#d4d0c8] font-mono tabular-nums">
+                <span className="text-xl text-[#f4efe6] font-mono tabular-nums">
                   {s.hit_rate != null ? `${Math.round(s.hit_rate * 100)}%` : '—'}
                 </span>
                 <span className="text-[11px] text-[#8b8f9a]">hit-rate · {s.buy_count} BUY</span>
