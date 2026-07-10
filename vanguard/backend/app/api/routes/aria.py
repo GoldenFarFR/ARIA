@@ -165,9 +165,13 @@ async def get_chat_history(request: Request, limit: int = 50):
 async def track_record():
     """Track-record PUBLIC (teaser FOMO) : valeur du wallet suivi + calibration synthétique.
 
-    Chiffres agrégés seulement — le détail des positions et les hashes de verdict sont
-    réservés aux abonnés (endpoint gaté à venir). Facts-only : si rien n'est encore
-    valorisé, l'indice vaut 100 (+0 %), jamais un chiffre gonflé.
+    Chiffres agrégés seulement — le détail des positions, les contrats candidats et les
+    hashes de verdict restent réservés aux abonnés/opérateur (jamais exposés ici, ça
+    donnerait l'alpha gratuitement). Facts-only : si rien n'est encore valorisé, l'indice
+    vaut 100 (+0 %), jamais un chiffre gonflé. Calibration/ventilation 85-15 ajoutées le
+    10/07 (centre de commandement) : « est-ce qu'un 8/10 bat vraiment un 5/10 ? » --
+    la vraie question d'un investisseur, répondue avec les vrais chiffres ou explicitement
+    absente (buckets vides) si l'échantillon est encore trop jeune.
     """
     from aria_core import screened_pool, vc_predictions
 
@@ -185,11 +189,53 @@ async def track_record():
         "verdicts_closed": m["closed"],
         "hit_rate": m["hit_rate"],
         "avoid_count": m.get("avoid_count", 0),
+        "calibration": m.get("calibration", []),
+        "by_strategy": m.get("by_strategy", {}),
         "pool_active": pool,
         "pool_rejected": pool_rejected,
         "disclaimer": (
             "Track-record de suivi (paper) valorisé aux prix on-chain réels. "
             "Informationnel, pas un conseil. Aucun rendement garanti."
+        ),
+    }
+
+
+@router.get("/market-cycle")
+async def market_cycle():
+    """Cycle macro Bitcoin PUBLIC (halving à halving, pluri-annuel) : phase actuelle
+    seulement (déterministe, aucun LLM, cache 1h côté aria-core). Contexte, jamais un
+    signal d'achat/vente -- même cadre que la section « Contexte marché » des rapports /vc.
+    """
+    from aria_core.skills.btc_cycles import fetch_current_macro_phase
+
+    phase = await fetch_current_macro_phase()
+    return {
+        "available": phase is not None,
+        "phase": phase,
+        "disclaimer": (
+            "Cadre de lecture répandu (théorie des cycles de 4 ans liée au halving), "
+            "pas une loi de marché prouvée."
+        ),
+    }
+
+
+@router.get("/sentiment")
+async def market_sentiment_public():
+    """Sentiment de marché PUBLIC (RSI/Bollinger/momentum/retracement -> régimes,
+    vocabulaire Wall St Cheat Sheet) des paires principales (BTC, ETH). Lit UNIQUEMENT
+    la dernière lecture déjà calculée par le cycle heartbeat `market_sentiment_cycle`
+    (gate ARIA_MARKET_SENTIMENT_ENABLED) -- ne recalcule rien ici, jamais d'appel
+    réseau synchrone sur une requête publique.
+    """
+    from aria_core.skills.market_sentiment import REGIME_LABELS, latest_readings
+
+    readings = await latest_readings()
+    return {
+        "readings": readings,
+        "regime_labels": REGIME_LABELS,
+        "disclaimer": (
+            "Cadre de lecture inspiré du Wall St Cheat Sheet (psychologie du cycle de "
+            "marché), simplifié en régimes mesurables -- pas une loi de marché prouvée."
         ),
     }
 
