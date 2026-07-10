@@ -405,6 +405,22 @@ class GitHubClient:
             data = r.json()
             return data if isinstance(data, list) else []
 
+    async def list_review_comments(
+        self, owner: str, repo: str, pull_number: int
+    ) -> list[dict[str, Any]]:
+        """Commentaires INLINE sur une ligne de diff (distinct de list_pull_reviews, qui ne
+        renvoie que le corps global d'une review — souvent vide quand un relecteur laisse
+        uniquement des suggestions ligne par ligne, comme sur showcase.json)."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                f"{API}/repos/{owner}/{repo}/pulls/{pull_number}/comments",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, list) else []
+
     async def create_issue_comment(
         self, owner: str, repo: str, issue_number: int, body: str
     ) -> dict[str, Any]:

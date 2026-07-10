@@ -252,6 +252,7 @@ def decide_reply(their_body: str, *, target: dict[str, Any]) -> tuple[str, str]:
 def _normalize_comments(
     issue_comments: list[dict[str, Any]],
     reviews: list[dict[str, Any]],
+    review_comments: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for row in issue_comments:
@@ -285,6 +286,24 @@ def _normalize_comments(
                 "author": author,
                 "body": body,
                 "created_at": row.get("submitted_at") or row.get("created_at") or "",
+                "url": row.get("html_url") or "",
+            }
+        )
+    for row in review_comments or []:
+        author = ((row.get("user") or {}).get("login") or "").strip()
+        rcid = row.get("id")
+        body = (row.get("body") or "").strip()
+        if not rcid or not body:
+            continue
+        path = (row.get("path") or "").strip()
+        rows.append(
+            {
+                "key": _comment_key("review_comment", rcid),
+                "id": rcid,
+                "kind": "review_comment",
+                "author": author,
+                "body": f"[{path}] {body}" if path else body,
+                "created_at": row.get("created_at") or "",
                 "url": row.get("html_url") or "",
             }
         )
@@ -329,12 +348,13 @@ async def run_showcase_pr_watch(*, post_replies: bool = True) -> dict[str, Any]:
         try:
             issue_comments = await client.list_issue_comments(owner, repo, pr_number)
             reviews = await client.list_pull_reviews(owner, repo, pr_number)
+            review_comments = await client.list_review_comments(owner, repo, pr_number)
         except Exception as exc:
             logger.warning("showcase_pr_watch fetch failed %s/%s#%s: %s", owner, repo, pr_number, exc)
             result["errors"].append(f"{owner}/{repo}#{pr_number}: {exc}")
             continue
 
-        comments = _normalize_comments(issue_comments, reviews)
+        comments = _normalize_comments(issue_comments, reviews, review_comments)
         result["scanned"] += len(comments)
 
         for row in comments:
