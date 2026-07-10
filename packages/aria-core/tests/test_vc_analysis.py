@@ -719,6 +719,47 @@ def test_prompt_omits_golden_pocket_line_when_absent():
     assert "courbe de bonding Virtuals" not in block
 
 
+def test_prompt_includes_candle_patterns_when_detected():
+    from aria_core.skills.candlestick_patterns import CandlePattern
+    from aria_core.skills.ta_levels import TALevels
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    ctx.ta = TALevels(
+        plus_haut=1.5, plus_bas=0.8, dernier_close=1.2,
+        tendance="haussière", tendance_base="MA7 > MA25", n_bougies=50,
+    )
+    ctx.ta_candle_patterns = [
+        CandlePattern(48, "hammer", "bullish", "mèche basse longue, corps en haut"),
+    ]
+
+    block = vc._build_untrusted_context(ctx, [])
+
+    assert "Dernières bougies notables" in block
+    assert "hammer (bullish" in block
+
+
+def test_prompt_omits_candle_patterns_line_when_none_detected():
+    from aria_core.skills.ta_levels import TALevels
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    ctx.best_pair = PairSnapshot(
+        pair_address="0xpair", dex_id="aerodrome", liquidity_usd=8000, volume_24h_usd=3000,
+        base_symbol="TOK", quote_symbol="WETH",
+    )
+    ctx.ta = TALevels(
+        plus_haut=1.5, plus_bas=0.8, dernier_close=1.2,
+        tendance="haussière", tendance_base="MA7 > MA25", n_bougies=50,
+    )
+
+    block = vc._build_untrusted_context(ctx, [])
+
+    assert "Dernières bougies notables" not in block
+
+
 def test_prompt_includes_sentiment_when_available():
     """Câblage #75 (10/07) : le régime BTC/ETH doit atteindre le LLM AVANT sa
     réponse (contrairement à l'overlay macro halving, purement post-hoc)."""

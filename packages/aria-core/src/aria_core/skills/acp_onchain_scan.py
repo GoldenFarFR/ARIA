@@ -21,6 +21,7 @@ from aria_core.services.blockscout import (
 from aria_core.services.coingecko import TokenFundamentals, coingecko_client
 from aria_core.services.ohlcv import ohlcv_client
 from aria_core.services.smart_money import analyze_smart_money
+from aria_core.skills.candlestick_patterns import CandlePattern, detect_patterns
 from aria_core.skills.entry_signals import EntrySignal, detect_entry
 from aria_core.skills.indicators import ema_series, macd_series
 from aria_core.skills.ta_levels import (
@@ -186,6 +187,11 @@ class TokenScanContext:
     ta_macd_signal: float | None = None
     ta_macd_histogram: float | None = None
     ta_golden_pocket_signal: EntrySignal | None = None
+    # Patterns de bougies (candlestick_patterns.py, module testé mais jamais câblé
+    # avant ce correctif) -- même garde `include_ta`, mêmes vraies bougies OHLC.
+    # Seuls les patterns les plus récents sont gardés (le LLM raisonne sur l'état
+    # courant, pas tout l'historique).
+    ta_candle_patterns: list[CandlePattern] = field(default_factory=list)
     # Barrières de sécurité structurées (peuplées au scan si la donnée on-chain
     # existe ; None sinon). Exposent en clair ce que le score agrège, pour un
     # filtre binaire strict (cf. skills/safety_screen.py). Concentration calculée
@@ -751,6 +757,7 @@ async def scan_base_token(
             ctx.ta_macd_signal = _last_value(macd_signal)
             ctx.ta_macd_histogram = _last_value(macd_hist)
             ctx.ta_golden_pocket_signal = detect_entry(ohlcv.candles)
+            ctx.ta_candle_patterns = detect_patterns(ohlcv.candles)[-3:]
 
     # Comportement du wallet du dev : builder engagé vs farmer (jugement contextuel,
     # jamais un rejet d'office). Best-effort ; toute indisponibilité -> 'unknown'.
