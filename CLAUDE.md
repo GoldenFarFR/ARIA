@@ -187,6 +187,21 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   pour même MESURER ces cases, pas seulement pour les remplir. Le vrai chiffre (combien de cases
   cochées aujourd'hui) nécessite de lancer `/feuvert` sur le VPS (données réelles), pas
   calculable depuis cette session cloud sans accès à `/opt/aria-data`.
+- **Sentiment de marché continu (#71, 10/07) — EN LIGNE, gate OFF.** Demande opérateur (image Wall
+  St Cheat Sheet — psychologie du cycle de marché) : scanner en continu, sans expiration, les
+  paires principales. Livré : `skills/indicators.py` gagne `bollinger_bands` (même patron
+  qu'`ema_series`/`macd_series`) ; nouveau `skills/candlestick_patterns.py` (doji/marubozu/
+  hammer/shooting_star/engulfing, 171 lignes, testé, PAS câblé — nécessite de vraies bougies OHLC,
+  absentes pour BTC/ETH via CoinGecko `market_chart`, réservé aux tokens Base via `ohlcv.py`) ;
+  nouveau `skills/market_sentiment.py` (`classify_sentiment` : RSI+Bollinger+momentum+retracement
+  → 6 régimes + repli neutre, PAS les 13 émotions fines du cheat sheet — aucune signature
+  numérique ne distingue "colère" de "dépression", simplification assumée et documentée). Tâche
+  heartbeat `market_sentiment_cycle` (60min, gate OFF `ARIA_MARKET_SENTIMENT_ENABLED`) rafraîchit
+  BTC + ETH (`PRINCIPAL_PAIRS`, liste de départ extensible — pas "toutes les paires" au sens
+  large). Persistance SQLite `market_sentiment` : `upsert_reading` écrase TOUJOURS la lecture
+  précédente — "sans expiration" veut dire aucun TTL de lecture, la fraîcheur dépend uniquement
+  du dernier cycle heartbeat réussi. Commande `/sentiment` (Telegram, admin-only). Complète
+  `btc_cycles.py` (halving, pluri-annuel) par une lecture court/moyen terme, ne le remplace pas.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

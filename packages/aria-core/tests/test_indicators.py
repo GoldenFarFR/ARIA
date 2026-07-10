@@ -2,9 +2,11 @@
 le 10/07 (MACD/EMA n'étaient calculés nulle part avant ce module)."""
 from __future__ import annotations
 
+import math
+
 import pytest
 
-from aria_core.skills.indicators import ema_series, macd_series
+from aria_core.skills.indicators import bollinger_bands, ema_series, macd_series
 
 
 def test_ema_series_too_short_all_none():
@@ -65,3 +67,40 @@ def test_macd_never_crashes_on_short_series():
     assert macd_line == [None, None, None]
     assert signal_line == [None, None, None]
     assert histogram == [None, None, None]
+
+
+def test_bollinger_too_short_all_none():
+    middle, upper, lower = bollinger_bands([1.0, 2.0], period=5)
+    assert middle == [None, None]
+    assert upper == [None, None]
+    assert lower == [None, None]
+
+
+def test_bollinger_constant_closes_bands_collapse_on_middle():
+    closes = [50.0] * 25
+    middle, upper, lower = bollinger_bands(closes, period=20)
+    defined_idx = range(19, 25)
+    for i in defined_idx:
+        assert middle[i] == pytest.approx(50.0)
+        # Écart-type nul sur une série constante -> bandes haute/basse == milieu.
+        assert upper[i] == pytest.approx(50.0)
+        assert lower[i] == pytest.approx(50.0)
+
+
+def test_bollinger_matches_hand_computed_values():
+    # Fenêtre [1,2,3,4,5], period=5, num_std=2 : moyenne=3, écart-type population
+    # = sqrt(((-2)^2+(-1)^2+0^2+1^2+2^2)/5) = sqrt(2) ~= 1.4142.
+    closes = [1.0, 2.0, 3.0, 4.0, 5.0]
+    middle, upper, lower = bollinger_bands(closes, period=5, num_std=2.0)
+    assert middle[:4] == [None, None, None, None]
+    assert middle[4] == pytest.approx(3.0)
+    assert upper[4] == pytest.approx(3.0 + 2 * math.sqrt(2.0))
+    assert lower[4] == pytest.approx(3.0 - 2 * math.sqrt(2.0))
+
+
+def test_bollinger_upper_always_above_lower_when_defined():
+    closes = [100.0 + (i % 7) * 3.5 for i in range(40)]
+    middle, upper, lower = bollinger_bands(closes, period=10)
+    for u, l in zip(upper, lower):
+        if u is not None and l is not None:
+            assert u >= l
