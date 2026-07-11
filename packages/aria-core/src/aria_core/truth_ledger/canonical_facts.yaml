@@ -74,10 +74,11 @@
   tags: [policy, grounding]
   question: How does ARIA avoid making things up?
   answer: >
-    Verified-facts-only mode by default (ARIA_LLM_ENABLED=false). Answers come from canonical
-    facts, FAQ, and verified Truth Ledger — no generative LLM on public chat. Factual skills are
-    never rewritten by LLM. Social messages get a short template ack. If no verified source exists,
-    ARIA says she lacks verified information. Operator can re-enable LLM later when grounding is trusted.
+    Canonical facts, FAQ, and verified Truth Ledger are checked first and win on a match — never
+    rewritten by the LLM. The LLM (ARIA_LLM_ENABLED=true in production) handles everything else,
+    constrained by a grounding layer: verified sources first, calibrated fact/small-talk routing,
+    and an explicit "I don't have verified information on that" instead of inventing an answer
+    when no source backs one.
 
 - id: truth-ledger
   topic: policy
@@ -85,9 +86,10 @@
   question: What is the Truth Ledger?
   answer: >
     Mega history of every ARIA exchange. Local path: backend/data/truth-ledger/.
-    GitHub mirror: GoldenFarFR/aria-sandbox/truth-ledger/. Only status=verified entries
-    ground future answers. Canonical facts live in canonical_facts.yaml — edit there when
-    facts change; old entries are marked superseded automatically on sync.
+    GitHub: GoldenFarFR/ARIA/truth-ledger/ (public repo) and GoldenFarFR/aria-ops/truth-ledger/
+    (private repo, fuller history). Only status=verified entries ground future answers.
+    Canonical facts live in canonical_facts.yaml — edit there when facts change; old entries
+    are marked superseded automatically on sync.
 
 - id: aria-builds
   topic: build
@@ -96,7 +98,7 @@
   answer: >
     Yes. Builder Queen mode produces engineering plans. Runtime lives in packages/aria-core
     (monorepo ARIA). GitHub mirror holds experiments and truth-ledger. Production deploy
-    host is aria-vanguard (Render). Operator approval before writes to prod repos.
+    host is ARIA/vanguard (Render). Operator approval before writes to prod repos.
     Repo dexpulse no longer exists (retired 2026-06-19).
 
 - id: aria-marketing-comms
@@ -128,12 +130,14 @@
   tags: [github, repos]
   question: What are the main GitHub repos?
   answer: >
-    GoldenFarFR/ARIA (monorepo privé — aria-core, vanguard, truth-ledger, collegue-memoire),
-    GoldenFarFR/aria-vanguard (holding site + API deploy host),
-    GoldenFarFR/aria-sandbox (experiments + truth-ledger mirror),
-    GoldenFarFR/aria-token-base (token R&D), GoldenFarFR/aria-skills, GoldenFarFR/kikou,
-    GoldenFarFR/template-grok-cursor. Operator scripts in vanguard/operator; secrets in local vault.
-    Retired repos: dexpulse, dexpulse-secrets (deleted 2026-06-19). Live inventory — github status.
+    GoldenFarFR/ARIA (public monorepo — aria-core, vanguard holding+API, truth-ledger; replaces
+    the old separate aria-vanguard and aria-sandbox, merged in). GoldenFarFR/aria-ops (private —
+    operator scripts, secrets vault, collegue-memoire). GoldenFarFR/aria-token-base (token R&D),
+    GoldenFarFR/aria-skills, GoldenFarFR/kikou, GoldenFarFR/template-grok-cursor,
+    GoldenFarFR/aria-acp-showcase. Operator scripts in aria-ops/vanguard/operator; secrets in
+    local vault. Retired repos: dexpulse, dexpulse-secrets, aria-vanguard, aria-sandbox (merged
+    into ARIA); collegue-memoire and aria-local-sync as standalone repos (folded into aria-ops).
+    Live inventory — github status.
 
 - id: github-governance
   topic: infra
@@ -141,10 +145,11 @@
   question: Does ARIA have her own GitHub? Who owns the repos?
   answer: >
     Production code lives under the GoldenFarFR GitHub org — not a separate personal account for ARIA.
-    ARIA reads and writes via an operator-configured token: aria-sandbox (experiments, truth-ledger)
-    and aria-token-base (token R&D). The operator may prototype on a personal GitHub during R&D;
-    promotion to GoldenFarFR repos is explicit. aria-sandbox hosts the aria-core runtime package
-    and experiment workspace; aria-vanguard is the holding site and deploy host (API + market plugins).
+    Read access is broad; write access is off by default (GITHUB_WRITE_REPOS empty/off in
+    production — ARIA does not write to GitHub autonomously). GITHUB_SANDBOX_REPO points at ARIA
+    (the monorepo, replacing the old separate aria-sandbox) and aria-token-base for token R&D.
+    The operator may prototype on a personal GitHub during R&D; promotion to GoldenFarFR repos
+    is explicit.
 
 - id: financial-advice
   topic: legal
@@ -210,7 +215,7 @@
   question: How does the operator set up a new PC, GitHub account, or coding agent without forgetting steps?
   answer: >
     SSOT machine: aria_core/knowledge/operator_pitfalls.yaml (pitfalls + new_pc_checklist).
-    SSOT humain: aria-vanguard/operator/OPERATOR-RUNBOOK.md. Scripts: operator/new-pc.ps1,
+    SSOT humain: aria-ops/vanguard/operator/OPERATOR-RUNBOOK.md. Scripts: operator/new-pc.ps1,
     check-aria-status.ps1 (audit), sync-render.ps1 (secrets → Render + mandatory redeploy).
     IDE agents: skill operator-runbook + Cursor rule always-on. ARIA recalls via MEMORY_RECALL
     when the operator says runbook, nouveau pc, or ne pas oublier. After each fixed incident:
