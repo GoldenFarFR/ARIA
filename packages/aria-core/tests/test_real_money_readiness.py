@@ -8,6 +8,7 @@ from aria_core import vc_predictions
 from aria_core.skills.real_money_readiness import (
     REQUIRED_SAMPLE_SIZE,
     REQUIRED_SPAN_DAYS,
+    _hit_rate_credible_interval,
     compute_readiness_scorecard,
     format_readiness_report,
 )
@@ -130,6 +131,67 @@ async def test_calibration_unknown_without_enough_scored_buckets():
     scorecard = await compute_readiness_scorecard()
     calib = next(c for c in scorecard["checks"] if c.id == "calibration")
     assert calib.status == "unknown"
+
+
+def test_credible_interval_defined_at_zero_buys_and_wide():
+    # Aucune donnée -> retombe sur le prior Jeffreys Beta(0.5, 0.5), symétrique autour de
+    # 50% et très large (contrairement à un intervalle fréquentiste, non défini à n=0).
+    lo, hi = _hit_rate_credible_interval(0, 0)
+    assert 0.0 < lo < 0.02
+    assert 0.98 < hi < 1.0
+    assert lo < 0.5 < hi
+
+
+def test_credible_interval_one_win_out_of_one_still_wide():
+    # 1/1 -> hit-rate observé 100%, mais l'intervalle doit rester large (pas de fausse
+    # certitude sur un seul point de données) et ne pas coller à [100%, 100%].
+    lo, hi = _hit_rate_credible_interval(1, 1)
+    assert lo < 0.30
+    assert hi > 0.95
+
+
+def test_credible_interval_narrows_with_more_samples():
+    # Même hit-rate observé (50%), mais l'intervalle doit se resserrer avec n croissant.
+    lo_small, hi_small = _hit_rate_credible_interval(1, 2)
+    lo_large, hi_large = _hit_rate_credible_interval(40, 80)
+    assert (hi_large - lo_large) < (hi_small - lo_small)
+
+
+@pytest.mark.asyncio
+async def test_calibration_detail_includes_credible_interval_even_with_zero_buys():
+    # Aucun BUY clôturé du tout -> la case reste "unknown" (logique de statut inchangée),
+    # mais le detail doit quand même porter l'intervalle bayésien (0 BUY, prior seul).
+    scorecard = await compute_readiness_scorecard()
+    calib = next(c for c in scorecard["checks"] if c.id == "calibration")
+    assert calib.status == "unknown"
+    assert "intervalle de crédibilité" in calib.detail
+    assert "sur 0 BUY" in calib.detail
+
+
+@pytest.mark.asyncio
+async def test_calibration_detail_includes_credible_interval_with_one_buy():
+    await _record_and_close(outcome_pct=10.0, potentiel=None)
+    scorecard = await compute_readiness_scorecard()
+    calib = next(c for c in scorecard["checks"] if c.id == "calibration")
+    # Statut inchangé par rapport à l'ancien comportement (verrouillé par le test existant
+    # test_calibration_unknown_without_enough_scored_buckets) -- jamais promu à "ok".
+    assert calib.status == "unknown"
+    assert "intervalle de crédibilité" in calib.detail
+    assert "sur 1 BUY" in calib.detail
+    assert "échantillon encore trop petit pour trancher" in calib.detail
+
+
+@pytest.mark.asyncio
+async def test_calibration_credible_interval_never_flips_unknown_to_ok():
+    # Peu de BUY, hit-rate observé favorable (100%) -- l'intervalle bayésien large ne doit
+    # jamais faire basculer le statut en "ok" : reste gouverné par la logique existante
+    # (buckets de calibration notés, ici aucun car potentiel=None).
+    for _ in range(3):
+        await _record_and_close(outcome_pct=20.0, potentiel=None)
+    scorecard = await compute_readiness_scorecard()
+    calib = next(c for c in scorecard["checks"] if c.id == "calibration")
+    assert calib.status == "unknown"
+    assert "sur 3 BUY" in calib.detail
 
 
 def test_format_readiness_report_includes_verdict_and_all_checks():

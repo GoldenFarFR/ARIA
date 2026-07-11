@@ -13,11 +13,116 @@ manque encore pour même MESURER la case, pas seulement pour la remplir.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 REQUIRED_SAMPLE_SIZE = 80
 REQUIRED_SPAN_DAYS = 180  # ~6 mois, cf. protocole-argent-reel.md case 1
+CALIBRATION_CREDIBLE_LEVEL = 0.90
+_JEFFREYS_PRIOR = 0.5  # Beta(0.5, 0.5) -- prior non informatif standard pour une proportion
+
+
+def _betacf(x: float, a: float, b: float) -> float:
+    """Fraction continue de l'incomplete beta function (Numerical Recipes 6.4)."""
+    max_iter = 200
+    eps = 3e-12
+    fpmin = 1e-300
+    qab = a + b
+    qap = a + 1.0
+    qam = a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < fpmin:
+        d = fpmin
+    d = 1.0 / d
+    h = d
+    for m in range(1, max_iter + 1):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < eps:
+            break
+    return h
+
+
+def _regularized_incomplete_beta(x: float, a: float, b: float) -> float:
+    """I_x(a, b) -- CDF de Beta(a, b) en x, via fraction continue (pas de dépendance
+    scipy/numpy pour ce seul calcul, cohérent avec le reste du package -- stdlib only)."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    log_beta_ab = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+    front = math.exp(log_beta_ab + a * math.log(x) + b * math.log(1.0 - x))
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * _betacf(x, a, b) / a
+    return 1.0 - front * _betacf(1.0 - x, b, a) / b
+
+
+def _beta_ppf(p: float, a: float, b: float) -> float:
+    """Fonction quantile (CDF inverse) de Beta(a, b), par bissection sur
+    ``_regularized_incomplete_beta`` (monotone en x, donc la bissection converge sans risque)."""
+    if p <= 0.0:
+        return 0.0
+    if p >= 1.0:
+        return 1.0
+    lo, hi = 0.0, 1.0
+    for _ in range(100):
+        mid = (lo + hi) / 2.0
+        if _regularized_incomplete_beta(mid, a, b) < p:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def _hit_rate_credible_interval(
+    wins: int, n: int, *, level: float = CALIBRATION_CREDIBLE_LEVEL,
+) -> tuple[float, float]:
+    """Intervalle de crédibilité bayésien Beta-Binomial sur le hit-rate BUY, prior de
+    Jeffreys Beta(0.5, 0.5) (non informatif standard pour une proportion) -- fonctionne
+    même à n=0 (retombe sur le prior, intervalle large [~0.3%, ~99.7%] à 90%) ou n=1,
+    contrairement à un intervalle fréquentiste (Wald) qui dégénère ou n'est pas défini.
+    Postérieure : Beta(wins + 0.5, pertes + 0.5)."""
+    losses = n - wins
+    a = wins + _JEFFREYS_PRIOR
+    b = losses + _JEFFREYS_PRIOR
+    alpha = (1.0 - level) / 2.0
+    lo = _beta_ppf(alpha, a, b)
+    hi = _beta_ppf(1.0 - alpha, a, b)
+    return lo, hi
+
+
+def _hit_rate_credible_note(wins: int, n: int, *, level: float = CALIBRATION_CREDIBLE_LEVEL) -> str:
+    """Phrase à ajouter au `detail` d'une case -- n'influence JAMAIS le statut calculé
+    (ok/fail/unknown) : purement informatif, sur l'incertitude du hit-rate observé."""
+    lo, hi = _hit_rate_credible_interval(wins, n, level=level)
+    pct = f"{(wins / n * 100):.0f}%" if n else "n/a"
+    note = (
+        f"hit-rate observé {pct} sur {n} BUY, intervalle de crédibilité {level * 100:.0f}% "
+        f"(bayésien Beta-Binomial, prior Jeffreys non informatif) : [{lo * 100:.0f}%, {hi * 100:.0f}%]"
+    )
+    if n < REQUIRED_SAMPLE_SIZE:
+        note += " — échantillon encore trop petit pour trancher"
+    return note
 
 
 @dataclass(frozen=True)
@@ -79,9 +184,16 @@ def _check_integrity() -> ReadinessCheck:
     )
 
 
-def _check_calibration(metrics: dict) -> ReadinessCheck:
+def _check_calibration(predictions: list[dict], metrics: dict) -> ReadinessCheck:
     calib = metrics.get("calibration") or []
     hit = metrics.get("hit_rate")
+    buys = [p for p in _closed(predictions) if p.get("recommandation") == "BUY"]
+    n_buys = len(buys)
+    wins = sum(1 for p in buys if (p.get("outcome_pct") or 0) > 0)
+    # Intervalle de crédibilité purement informatif -- calculé même à 0/1 BUY, mais ne
+    # touche jamais au statut ci-dessous (ok/fail/unknown reste la logique existante,
+    # inchangée). Ne JAMAIS transformer un unknown en ok grâce à ce calcul.
+    credible_note = _hit_rate_credible_note(wins, n_buys)
     if len(calib) < 2 or hit is None:
         return ReadinessCheck(
             id="calibration",
@@ -89,7 +201,7 @@ def _check_calibration(metrics: dict) -> ReadinessCheck:
             status="unknown",
             detail=(
                 f"pas assez de données pour juger ({len(calib)} bucket(s) noté(s), "
-                f"hit-rate {'n/a' if hit is None else f'{hit * 100:.0f}%'})"
+                f"hit-rate {'n/a' if hit is None else f'{hit * 100:.0f}%'}) ; {credible_note}"
             ),
         )
     avgs = [b["avg_pnl"] for b in calib]
@@ -103,7 +215,7 @@ def _check_calibration(metrics: dict) -> ReadinessCheck:
         detail=(
             f"courbe {'monotone' if monotone else 'NON monotone'} sur {len(calib)} buckets ; "
             f"hit-rate BUY {hit * 100:.0f}% — ATTENTION : gas/slippage réels non déduits ici, "
-            "ce chiffre est brut, pas net de frais"
+            f"ce chiffre est brut, pas net de frais ; {credible_note}"
         ),
     )
 
@@ -196,7 +308,7 @@ async def compute_readiness_scorecard() -> dict:
     checks = [
         _check_sample_size(predictions),
         _check_integrity(),
-        _check_calibration(metrics),
+        _check_calibration(predictions, metrics),
         _check_benchmark(),
         _check_robustness(predictions),
         _check_risk(metrics),
