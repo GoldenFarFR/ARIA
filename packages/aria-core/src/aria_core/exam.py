@@ -79,10 +79,21 @@ async def init_exam_db() -> None:
                 concept_id TEXT NOT NULL,
                 category TEXT NOT NULL,
                 question TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                cycle INTEGER NOT NULL DEFAULT 1
             )
             """
         )
+        # Migration à chaud : ajoute `cycle` aux DB existantes (SQLite ne le crée pas
+        # si la table préexiste). Idempotent, non destructif — cf. vc_predictions.py.
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(exam_question)")).fetchall()
+        }
+        if "cycle" not in existing:
+            await db.execute(
+                "ALTER TABLE exam_question ADD COLUMN cycle INTEGER NOT NULL DEFAULT 1"
+            )
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS exam_answer (
@@ -107,15 +118,64 @@ class ExamQuestion:
     question: str
 
 
+async def _cycle_state(db: aiosqlite.Connection) -> tuple[int, set[str]]:
+    """Cycle courant + concepts déjà posés dans ce cycle (persisté dans exam_question.cycle).
+
+    Un cycle regroupe les jours tant que le pool de concepts n'est pas épuisé. Table
+    vide -> cycle 1, aucun concept encore posé."""
+    row = await (await db.execute("SELECT MAX(cycle) FROM exam_question")).fetchone()
+    cycle = row[0] or 1
+    cursor = await db.execute(
+        "SELECT DISTINCT concept_id FROM exam_question WHERE cycle = ?", (cycle,)
+    )
+    asked_ids = {r[0] for r in await cursor.fetchall()}
+    return cycle, asked_ids
+
+
+def _select_concepts_for_day(
+    concepts: list[dict], n: int, asked_ids: set[str], cycle: int
+) -> tuple[list[dict], int]:
+    """Choisit jusqu'à ``n`` concepts sans jamais reproposer un concept déjà posé dans le
+    cycle courant. Si le pool restant du cycle ne suffit pas, épuise-le puis complète en
+    démarrant le cycle suivant (jamais deux fois le même concept le même jour).
+
+    Retourne les concepts choisis et le numéro de cycle à leur associer."""
+    remaining = [c for c in concepts if c["id"] not in asked_ids]
+    if len(remaining) >= n:
+        picked = remaining if len(remaining) == n else random.sample(remaining, n)
+        return picked, cycle
+
+    # Pool du cycle courant épuisé (ou insuffisant) : on prend le reste, puis on
+    # démarre un nouveau cycle pour compléter la journée.
+    picked = remaining[:]
+    picked_ids = {c["id"] for c in picked}
+    fresh_pool = [c for c in concepts if c["id"] not in picked_ids]
+    need = n - len(picked)
+    if fresh_pool:
+        picked += fresh_pool if len(fresh_pool) <= need else random.sample(fresh_pool, need)
+    return picked, cycle + 1
+
+
+async def current_exam_cycle() -> int:
+    """Numéro du cycle courant (1-indexé) — combien de fois le pool des 67 concepts a
+    déjà été intégralement parcouru (+1 pour le cycle en cours)."""
+    await init_exam_db()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cycle, _ = await _cycle_state(db)
+    return cycle
+
+
 async def generate_daily_questions(day: int, n: int = 25, *, llm=None) -> list[ExamQuestion]:
     """Génère jusqu'à ``n`` questions pour ``day``, une par concept tiré sans remise dans
-    le curriculum. Fail-closed : liste vide si le curriculum est vide — jamais une question
-    inventée sans base conceptuelle. Une génération LLM individuelle qui échoue est
-    ignorée (pas de question vide insérée), les autres continuent."""
+    le curriculum, sans jamais reproposer un concept déjà posé au cours du cycle courant
+    (suivi cross-jour persisté via ``exam_question.cycle`` — le pool de 67 concepts doit
+    être intégralement épuisé avant qu'un concept ne revienne). Fail-closed : liste vide
+    si le curriculum est vide — jamais une question inventée sans base conceptuelle. Une
+    génération LLM individuelle qui échoue est ignorée (pas de question vide insérée),
+    les autres continuent."""
     concepts = all_concepts()
     if not concepts:
         return []
-    picked = concepts[:] if len(concepts) <= n else random.sample(concepts, n)
 
     if llm is None:
         from aria_core.llm import chat_with_context as llm
@@ -123,6 +183,8 @@ async def generate_daily_questions(day: int, n: int = 25, *, llm=None) -> list[E
     await init_exam_db()
     questions: list[ExamQuestion] = []
     async with aiosqlite.connect(DB_PATH) as db:
+        cycle, asked_ids = await _cycle_state(db)
+        picked, day_cycle = _select_concepts_for_day(concepts, n, asked_ids, cycle)
         for c in picked:
             prompt = (
                 "Rédige UNE question d'examen de trading (niveau exigeant, entretien "
@@ -141,10 +203,11 @@ async def generate_daily_questions(day: int, n: int = 25, *, llm=None) -> list[E
                 question=text.strip(),
             )
             await db.execute(
-                "INSERT INTO exam_question (id, day, concept_id, category, question, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO exam_question "
+                "(id, day, concept_id, category, question, created_at, cycle) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (q.id, q.day, q.concept_id, q.category, q.question,
-                 datetime.now(timezone.utc).isoformat()),
+                 datetime.now(timezone.utc).isoformat(), day_cycle),
             )
             questions.append(q)
         await db.commit()
