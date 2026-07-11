@@ -384,7 +384,7 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   agent Aria Vanguard ZHC (`0xd752a325433f4d55c5e0b125be84845d7de47bb3`). **Le pilote #60
   lui-même reste actif/in_progress** — seule cette position précise est close. Détail complet :
   `docs/HANDOFF-2026-07-11.md`.
-- **Confabulation sur soi-même côté opérateur — #105 (11/07) — CODÉ, testé, PAS déployé.**
+- **Confabulation sur soi-même côté opérateur — #105 (11/07) — CODÉ, testé, DÉPLOYÉ (32e6b2f5, 11/07).**
   Deux réponses réelles testées sur Telegram post-déploiement 960a72f2 : (1) « tu fonctionnes
   avec quel type d'intelligence, un LLM ? » → « Oui, actuellement Claude Opus 4.8 » (régression
   EXACTE de l'incident du 08/07, `grounded_llm_identity()`) ; (2) « comment tu analyses un
@@ -466,6 +466,27 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   **Codé, testé, PAS déployé** — #108/#110 ont déjà été déployés séparément (commit `32e6b2f5`,
   avant que ce correctif ne soit prêt) ; #113 attend son propre déploiement groupé avec le
   prochain correctif prêt. Détail complet : `docs/HANDOFF-2026-07-11.md`.
+- **#111 résolu — faux positif épistémique sur question d'actu (11/07), root cause du « bug de
+  routage » repéré dans l'entrée « Test manuel Telegram » ci-dessus — CODÉ, testé, PAS déployé.**
+  Testé sur Telegram post-déploiement 32e6b2f5 : « qu'est-ce qui s'est passé sur les marchés
+  crypto dans la dernière heure ? » (vraie question d'actu, `is_live_info_question`=True) a reçu
+  « Non. Les promesses de gains garantis sur crypto sont du hype — probabilité de véracité très
+  faible. » (P(vrai)=0.95, source « ARIA learning filter ») — 0 token LLM consommé, donc pas une
+  hallucination du LLM mais un mauvais matching du système de réponse calibrée déterministe.
+  **Cause racine** : `resolve_calibrated_answer()` (`knowledge/epistemic.py`) appelait
+  `epistemic_static_answer()` (matching `epistemic_core.yaml`) EN PREMIER, avant tout routage
+  `is_live_info_question`/`is_explicit_web_request` — et `_score_claim()` comptait le seul mot
+  partagé « crypto » 4 fois (présent dans `claim_fr` + `claim_en` + `tags` + `topic` du claim
+  `crypto-hype-unreliable`, 2 pts chacun = 8 = `EPISTEMIC_DIRECT_SCORE`), sans qu'aucun `trigger`
+  réel (« 100x garanti », « moon soon »…) ne soit présent dans la question. **Fix** : `EpistemicMatch`
+  et `_score_claim()` exposent désormais `trigger_hit` (un vrai trigger explicite a matché, pas
+  juste un mot générique partagé) ; `resolve_calibrated_answer()` ne laisse plus un match SANS
+  trigger réel court-circuiter une question détectée `is_live_info_question`/
+  `is_explicit_web_request` — elle route alors vers `web_first_answer` comme attendu. Un vrai
+  trigger explicite (ex. « 100x garanti ») continue de répondre depuis le YAML canonique même
+  si la formulation ressemble à de l'actu (`test_real_hype_trigger_still_wins_over_web_even_if_
+  news_shaped`). 4 nouveaux tests (`test_epistemic.py`), suite complète verte (4393 passed, 7
+  skipped, 0 échec). **Rien déployé.**
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
