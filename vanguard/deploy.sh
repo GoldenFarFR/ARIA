@@ -63,6 +63,9 @@ echo "$HEALTH"
 echo
 if printf '%s' "$HEALTH" | grep -q "\"commit\":\"$SHORT\""; then
   echo "✅ OK — le conteneur tourne et sert le commit $SHORT"
+  echo "==> Purge du cache Docker (déploiement réussi)"
+  docker image prune -f
+  docker builder prune -f
 else
   echo "⚠️  Health ne confirme pas le commit $SHORT."
   echo "    Logs : docker logs --tail 40 $NAME"
