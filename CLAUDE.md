@@ -328,6 +328,26 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   le heartbeat `vc_crawl` juste après `crawl_and_absorb`. 8 nouveaux tests, suite complète verte
   (4369 passed, 7 skipped, 0 échec — 0 régression). **Rien déployé** (le code n'a d'effet qu'au
   prochain rebuild Docker + restart) : décision opérateur avant de le pousser en prod.
+- **Plafond anti-boucle-infinie sur `retry_stale_pending()` (11/07, suite directe ci-dessus) —
+  CODÉ, testé, PAS déployé.** Le retry ci-dessus n'avait aucune limite : un candidat qui
+  n'atteint jamais `active` ni un vrai `hard_fail` malveillant confirmé serait retenté toutes
+  les 24h **pour toujours** (coût scan API récurrent, sans fin). Ajouté : colonne
+  `screened_token.retry_count` (migration à chaud idempotente, même patron que
+  `vc_predictions.py`/`exam.py`) — incrémentée à chaque `record_pending`, remise à zéro par
+  `upsert_screened` (devient `active`) et `reconsider` (résurrection sur bruit externe, budget
+  de tentatives frais). `screened_pool.abandon_stale_pending()` bascule un `pending` en
+  `rejected` définitif (raison explicite `"abandonné après N tentatives (Xj) — signal faible
+  persistant : <dernière raison molle>"`) au-delà de **5 tentatives OU 7 jours** depuis
+  `first_screened_at` — **aucun nouveau critère de sécurité** (aucun filtre dupliqué,
+  `safety_screen`/`token_absorber`/seuil `passed` inchangés), uniquement une limite sur le
+  NOMBRE DE PASSAGES, appliquée par `base_crawler.retry_stale_pending()` seulement quand
+  `absorber` a déjà tranché que le candidat reste `skip_incomplete` (ni mûri, ni malveillant
+  confirmé). Migration vérifiée manuellement contre une copie du schéma de prod réel (92
+  lignes `rejected`/`pending` existantes, colonne ajoutée sans erreur, `retry_count=0` par
+  défaut). 13 nouveaux tests, suite complète verte (4382 passed, 7 skipped, 0 échec — 0
+  régression). **Rien déployé, données de production NON touchées** (la reclassification des
+  39 candidats `rejected` sans signal dur identifiés dans l'audit — 41 moins 2 rejets encore
+  valides aujourd'hui — reste une décision séparée, après validation opérateur de ce correctif).
 - **11/07 (ce segment) — 4 items du backlog fermés, en attendant la décision opérateur sur le
   gate bonding.** `production.env.example` (aria-ops) : ID Telegram réel (`5864967247`) retiré
   (placeholder vide, comme les autres champs secrets du fichier), encodage mojibake des

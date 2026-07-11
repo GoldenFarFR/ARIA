@@ -26,6 +26,16 @@ async def _backdate(contract: str, hours_ago: float) -> None:
         await db.commit()
 
 
+async def _backdate_first_screened(contract: str, days_ago: float) -> None:
+    """Recule ``first_screened_at`` -- simule un candidat connu depuis longtemps."""
+    ts = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    async with aiosqlite.connect(sp.DB_PATH) as db:
+        await db.execute(
+            "UPDATE screened_token SET first_screened_at=? WHERE contract=?", (ts, contract)
+        )
+        await db.commit()
+
+
 async def _seed_pool(n: int) -> None:
     for i in range(n):
         await sp.upsert_screened(
@@ -149,3 +159,82 @@ async def test_list_stale_pending_respects_limit_and_oldest_first():
         await _backdate(f"0xp{i}", hours_ago=24 + i)  # 0xp4 = le plus vieux
     stale = await sp.list_stale_pending(older_than_hours=24, limit=2)
     assert [row["contract"] for row in stale] == ["0xp4", "0xp3"]
+
+
+# --- retry_count : incrément / reset (suite audit #77/#105) -----------------------
+
+@pytest.mark.asyncio
+async def test_record_pending_increments_retry_count():
+    await sp.record_pending(contract="0xretry", reason="holders inconnus")
+    assert (await sp.list_pool(status="pending"))[0]["retry_count"] == 1
+    await sp.record_pending(contract="0xretry", reason="holders inconnus")
+    assert (await sp.list_pool(status="pending"))[0]["retry_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_upsert_screened_resets_retry_count():
+    await sp.record_pending(contract="0xmature", reason="liquidité en train de monter")
+    await sp.record_pending(contract="0xmature", reason="liquidité en train de monter")
+    assert (await sp.list_pool(status="pending"))[0]["retry_count"] == 2
+    await sp.upsert_screened(contract="0xmature", symbol="MAT", liquidity_usd=50_000.0,
+                             security_score=80, verdict="SAFE")
+    assert (await sp.list_pool(status="active"))[0]["retry_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_reconsider_resets_retry_count():
+    await sp.record_rejected(contract="0xnoisy", reason="honeypot confirmé")
+    assert await sp.reconsider("0xnoisy") is True
+    row = (await sp.list_pool(status="pending"))[0]
+    assert row["contract"] == "0xnoisy"
+    assert row["retry_count"] == 0
+
+
+# --- abandon_stale_pending : plafond tentatives / âge ------------------------------
+
+@pytest.mark.asyncio
+async def test_abandon_stale_pending_below_thresholds_is_noop():
+    await sp.record_pending(contract="0xfresh2", reason="contrat pas encore vérifié")
+    assert await sp.abandon_stale_pending("0xfresh2", max_retries=5, max_age_days=7) is False
+    assert await sp.get_status("0xfresh2") == "pending"
+
+
+@pytest.mark.asyncio
+async def test_abandon_stale_pending_unknown_contract_is_noop():
+    assert await sp.abandon_stale_pending("0xneverseen") is False
+
+
+@pytest.mark.asyncio
+async def test_abandon_stale_pending_ignores_non_pending_status():
+    await sp.record_rejected(contract="0xalreadyrejected", reason="honeypot confirmé")
+    assert await sp.abandon_stale_pending("0xalreadyrejected", max_retries=0, max_age_days=0) is False
+
+
+@pytest.mark.asyncio
+async def test_abandon_stale_pending_exceeds_max_retries():
+    for _ in range(5):
+        await sp.record_pending(contract="0xstuck", reason="score de sécurité 40 < 70")
+    assert await sp.get_status("0xstuck") == "pending"
+    assert await sp.abandon_stale_pending("0xstuck", max_retries=5, max_age_days=7) is True
+    assert await sp.get_status("0xstuck") == "rejected"
+    row = (await sp.list_pool(status="rejected"))[0]
+    assert "abandonné après 5 tentatives" in row["screen_reason"]
+    assert "score de sécurité 40 < 70" in row["screen_reason"]  # dernière raison molle gardée
+
+
+@pytest.mark.asyncio
+async def test_abandon_stale_pending_exceeds_max_age_even_with_few_retries():
+    await sp.record_pending(contract="0xold2", reason="liquidité en train de monter")
+    await _backdate_first_screened("0xold2", days_ago=8)
+    assert await sp.abandon_stale_pending("0xold2", max_retries=5, max_age_days=7) is True
+    assert await sp.get_status("0xold2") == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_abandon_stale_pending_missing_reason_falls_back():
+    await sp.record_pending(contract="0xnoreason")  # reason="" (défaut)
+    for _ in range(4):
+        await sp.record_pending(contract="0xnoreason")
+    await sp.abandon_stale_pending("0xnoreason", max_retries=5, max_age_days=7)
+    row = (await sp.list_pool(status="rejected"))[0]
+    assert "raison indisponible" in row["screen_reason"]

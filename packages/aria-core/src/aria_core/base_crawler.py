@@ -213,7 +213,14 @@ async def crawl_and_absorb(
 
 
 async def retry_stale_pending(
-    *, limit: int = 20, older_than_hours: int = 24, lister=None, absorber=None
+    *,
+    limit: int = 20,
+    older_than_hours: int = 24,
+    max_retries: int = 5,
+    max_age_days: int = 7,
+    lister=None,
+    absorber=None,
+    abandon_checker=None,
 ) -> dict:
     """Retente délibérément les candidats ``pending`` (échec MOU) laissés de côté.
 
@@ -231,6 +238,16 @@ async def retry_stale_pending(
     MÊME code de filtrage que le crawl normal — un candidat encore immature reste
     'pending' (nouvel essai au prochain passage), un candidat désormais malveillant
     confirmé devient 'rejected', un candidat qui a mûri devient enfin 'active'.
+
+    Plafond anti-boucle-infinie (suite audit #77/#105 : 41/50 ``rejected`` trouvés
+    sans signal dur, reliquats d'une version plus stricte du filtre, jamais retentés
+    depuis — sans plafond, un candidat qui ne mûrit jamais serait retenté toutes les
+    24h pour toujours). Si un candidat reste ``skip_incomplete`` (encore MOU) après ce
+    nouveau passage, ``abandon_checker`` (défaut ``screened_pool.abandon_stale_pending``)
+    vérifie ``max_retries``/``max_age_days`` et bascule en ``rejected`` (raison
+    explicite) si dépassé. Encore une fois AUCUN nouveau critère de sécurité — juste
+    une limite sur le nombre de passages, appliquée seulement après qu'``absorber``
+    a déjà tranché que ce n'est ni mûri ('kept') ni malveillant confirmé ('rejected').
     """
     if lister is None:
         from aria_core import screened_pool
@@ -243,12 +260,22 @@ async def retry_stale_pending(
     if absorber is None:
         from aria_core.token_absorber import absorb as absorber
 
+    if abandon_checker is None:
+        from aria_core import screened_pool as _screened_pool
+
+        async def abandon_checker(contract):
+            return await _screened_pool.abandon_stale_pending(
+                contract, max_retries=max_retries, max_age_days=max_age_days
+            )
+
     stale = await lister()
     counts: dict[str, int] = {}
     for row in stale:
         contract = row["contract"] if isinstance(row, dict) else row
         try:
             verdict = await absorber(contract)
+            if verdict == "skip_incomplete" and await abandon_checker(contract):
+                verdict = "abandoned"
         except Exception as exc:  # noqa: BLE001 — un candidat en échec n'arrête pas les autres
             logger.info("base_crawler: retry %s échoué (%s)", contract, exc)
             verdict = "error"

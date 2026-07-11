@@ -212,3 +212,86 @@ async def test_retry_stale_pending_default_lister_uses_screened_pool(monkeypatch
     assert absorbed == ["0xDEFAULT"]
     assert counts == {"kept": 1}
     assert calls == {"older_than_hours": 24, "limit": 20}
+
+
+# --- plafond anti-boucle-infinie (suite audit #77/#105) ----------------------------
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_abandons_past_threshold():
+    # Encore MOU après ce passage ET au-delà du seuil -> bascule en 'abandoned',
+    # PAS 'skip_incomplete' -- c'est le comptage qui doit refléter l'arrêt définitif.
+    async def lister():
+        return [{"contract": "0xSTUCK"}]
+
+    async def absorber(contract):
+        return "skip_incomplete"
+
+    async def abandon_checker(contract):
+        assert contract == "0xSTUCK"
+        return True
+
+    counts = await bc.retry_stale_pending(lister=lister, absorber=absorber,
+                                          abandon_checker=abandon_checker)
+    assert counts == {"abandoned": 1}
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_keeps_skip_incomplete_below_threshold():
+    # Encore MOU mais pas encore au-delà du seuil -> reste 'skip_incomplete', retenté
+    # au prochain cycle (comportement inchangé pour un candidat qui a encore une chance).
+    async def lister():
+        return [{"contract": "0xTRYING"}]
+
+    async def absorber(contract):
+        return "skip_incomplete"
+
+    async def abandon_checker(contract):
+        return False
+
+    counts = await bc.retry_stale_pending(lister=lister, absorber=absorber,
+                                          abandon_checker=abandon_checker)
+    assert counts == {"skip_incomplete": 1}
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_does_not_check_abandon_on_resolved_verdicts():
+    # 'kept' (mûri) et 'rejected' (malveillant confirmé) sont déjà des verdicts
+    # terminaux -- abandon_checker ne doit JAMAIS être consulté dans ces cas
+    # (pas de double logique, un seul chemin décide du sort d'un candidat résolu).
+    async def lister():
+        return [{"contract": "0xGOOD"}, {"contract": "0xBAD"}]
+
+    async def absorber(contract):
+        return {"0xGOOD": "kept", "0xBAD": "rejected"}[contract]
+
+    async def abandon_checker(contract):
+        raise AssertionError("ne doit jamais être appelé sur un verdict déjà résolu")
+
+    counts = await bc.retry_stale_pending(lister=lister, absorber=absorber,
+                                          abandon_checker=abandon_checker)
+    assert counts == {"kept": 1, "rejected": 1}
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_default_abandon_checker_uses_screened_pool(monkeypatch):
+    from aria_core import screened_pool as sp
+
+    async def lister():
+        return [{"contract": "0xSTUCK2"}]
+
+    async def absorber(contract):
+        return "skip_incomplete"
+
+    calls: dict[str, object] = {}
+
+    async def fake_abandon_stale_pending(contract, *, max_retries=5, max_age_days=7):
+        calls["contract"] = contract
+        calls["max_retries"] = max_retries
+        calls["max_age_days"] = max_age_days
+        return True
+
+    monkeypatch.setattr(sp, "abandon_stale_pending", fake_abandon_stale_pending)
+
+    counts = await bc.retry_stale_pending(lister=lister, absorber=absorber)
+    assert counts == {"abandoned": 1}
+    assert calls == {"contract": "0xSTUCK2", "max_retries": 5, "max_age_days": 7}
