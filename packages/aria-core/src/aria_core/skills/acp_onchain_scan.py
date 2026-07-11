@@ -242,6 +242,16 @@ class TokenScanContext:
     bonding_progress: float | None = None  # 0.0-1.0, part du seuil de graduation atteint
     bonding_holder_count: int | None = None
     bonding_mcap_virtual: float | None = None  # dénominé en VIRTUAL, pas converti en USD
+    # Diligence produit Virtuals (audit 11/07, cf. skills/vc_analysis.py). Peuplé DÈS
+    # qu'un token est trouvé sur Virtuals via `_resolve_bonding_phase` (bonding ou non --
+    # zéro coût réseau supplémentaire, même appel que ci-dessus) ; pour un token DÉJÀ
+    # gradué (une paire DEX existe, donc `_resolve_bonding_phase` n'est jamais appelée),
+    # `vc_analysis._fetch_virtuals_product_diligence` fait un repli best-effort via le
+    # même client singleton. Texte DÉCLARATIF (l'équipe parle d'elle-même sur sa propre
+    # fiche virtuals.io) -- jamais vérifié on-chain, même doctrine que website_snapshot.
+    virtuals_description: str | None = None
+    virtuals_tokenomics: str | None = None
+    virtuals_additional_details: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -617,12 +627,22 @@ async def _resolve_bonding_phase(ctx: "TokenScanContext", contract: str) -> None
     contrat sans pool peut légitimement être un token Virtuals encore en courbe de bonding
     (pas de liquidité DEX avant graduation — normal, pas un défaut). Toute panne Virtuals
     laisse `ctx.bonding_phase = False` (comportement inchangé, verdict générique "aucune
-    paire") — jamais bloquant, jamais de donnée inventée."""
+    paire") — jamais bloquant, jamais de donnée inventée.
+
+    Capture AUSSI (audit 11/07) `ctx.virtuals_description`/`_tokenomics`/
+    `_additional_details` dès qu'un token Virtuals est trouvé -- bonding ou non --
+    puisque le même appel réseau a déjà ramené ce payload : zéro coût supplémentaire
+    pour nourrir la diligence produit (`vc_analysis._fetch_product_diligence`)."""
     try:
         from aria_core.services.virtuals import graduation_progress, is_in_bonding, virtuals_client
 
         token = await virtuals_client.fetch_by_address(contract)
-        if token is not None and is_in_bonding(token):
+        if token is None:
+            return
+        ctx.virtuals_description = token.description
+        ctx.virtuals_tokenomics = token.tokenomics
+        ctx.virtuals_additional_details = token.additional_details
+        if is_in_bonding(token):
             ctx.bonding_phase = True
             ctx.bonding_progress = graduation_progress(token)
             ctx.bonding_holder_count = token.holder_count
