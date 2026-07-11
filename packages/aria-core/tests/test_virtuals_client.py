@@ -288,6 +288,22 @@ def test_graduation_progress_none_when_absent():
     assert graduation_progress(token) is None
 
 
+def test_graduation_progress_totalvaluelocked_not_a_proxy():
+    """Invariant verrouillé le 11/07 : ``totalValueLocked`` n'est PAS un candidat.
+
+    Vérifié en direct sur l'API réelle : ce champ reste ``"0"`` pour tout token
+    encore UNDERGRAD (y compris avec de vrais holders/liquidité), et n'est
+    peuplé qu'après graduation -- il suit la liquidité DEX post-graduation,
+    pas la réserve de courbe pré-graduation. Un token en bonding avec un
+    ``totalValueLocked`` non nul serait donc un signal trompeur s'il était
+    câblé par erreur comme proxy : ce test verrouille qu'il ne l'influence pas.
+    """
+    token = parse_virtual(
+        _strapi_prototype(status="UNDERGRAD", totalValueLocked=99999, virtualRaised=None)
+    )
+    assert graduation_progress(token) is None
+
+
 # ----------------------------------------------------------------------
 # build_*_url
 # ----------------------------------------------------------------------
@@ -425,6 +441,74 @@ async def test_fetch_graduated_network_error_returns_empty(monkeypatch):
     )
 
     assert await client.fetch_graduated() == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_graduated_filters_out_bonding_tokens_client_side(monkeypatch):
+    """Diagnostic réel (11/07, accès réseau direct api.virtuals.io) : le filtre
+    Strapi ``filters[status]=…`` est IGNORÉ côté serveur quelle que soit la
+    valeur testée (``AVAILABLE``, ``SENTIENT``, ``GRADUATED``, ``INITIALIZED``
+    ou une valeur bidon renvoient tous la même liste non filtrée, triée par
+    date de création). ``fetch_graduated`` doit donc filtrer lui-même côté
+    client (comme ``is_in_bonding`` le fait déjà pour la détection bonding),
+    sinon un token encore ``UNDERGRAD`` se glisse dans les "gradués"."""
+    client = VirtualsClient()
+    url = build_graduated_url()
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "data": [
+                        _strapi_prototype(status="AVAILABLE", name="Gradue"),
+                        # Le serveur renvoie aussi un token encore en bonding
+                        # malgré filters[status]=AVAILABLE -- filtre ignoré.
+                        _strapi_prototype(status="UNDERGRAD", name="PasEncoreGradue"),
+                    ]
+                },
+            )
+        },
+    )
+
+    tokens = await client.fetch_graduated()
+
+    names = {t.name for t in tokens}
+    assert names == {"Gradue"}
+    assert all(not is_in_bonding(t) for t in tokens)
+
+
+@pytest.mark.asyncio
+async def test_fetch_prototypes_filters_out_graduated_tokens_client_side(monkeypatch):
+    """Symétrique de ``test_fetch_graduated_filters_out_bonding_tokens_client_side`` :
+    même filtre serveur non fiable, donc ``fetch_prototypes`` doit lui aussi
+    filtrer côté client pour ne garder que les tokens réellement en bonding.
+    Passe inaperçu en pratique (les créations récentes sont presque toutes
+    UNDERGRAD) mais reste un bug de fond du même filtre Strapi ignoré."""
+    client = VirtualsClient()
+    url = build_prototypes_url()
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "data": [
+                        _strapi_prototype(status="UNDERGRAD", name="EnBonding"),
+                        # Malgré filters[status]=UNDERGRAD, le serveur renvoie
+                        # aussi un token déjà gradué -- filtre ignoré.
+                        _strapi_prototype(status="AVAILABLE", name="DejaGradue"),
+                    ]
+                },
+            )
+        },
+    )
+
+    tokens = await client.fetch_prototypes()
+
+    names = {t.name for t in tokens}
+    assert names == {"EnBonding"}
+    assert all(is_in_bonding(t) for t in tokens)
 
 
 @pytest.mark.asyncio
