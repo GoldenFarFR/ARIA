@@ -14,7 +14,7 @@ metadata:
 
 ## Regle d or
 
-**Sylvain ne lance rien et ne dit rien** au demarrage (pas meme « lis le github »).
+**L'operateur ne lance rien et ne dit rien** au demarrage (pas meme « lis le github »).
 Toi (Grok/Cursor) tu executes le handoff **avant la premiere phrase de reponse**.
 
 ## Premiere action — CHAQUE session
@@ -24,7 +24,7 @@ Executer soi-meme, dans l'ordre :
 1. **Shell** : `%USERPROFILE%\GitHub-Repos\aria-ops\local-sync\scripts\session-handoff.ps1`  
    (ou `%ARIA_REPO_ROOT%\scripts\session-handoff.ps1` redirect)  
    Si `aria-ops` absent : cloner `GoldenFarFR/aria-ops` (prive) a cote de `ARIA`.
-   **TOTP** : si `[TOTP_REQUIRED]` ou session Git expiree → **demander a Sylvain dans le chat** les 6 chiffres Google Authenticator (GoldenFar Vault), puis relancer avec `-TotpCode` (pas Telegram/ARIA).
+   **TOTP** : si `[TOTP_REQUIRED]` ou session Git expiree → **demander a l'operateur dans le chat** les 6 chiffres Google Authenticator (GoldenFar Vault), puis relancer avec `-TotpCode` (pas Telegram/ARIA).
 2. **Lire** (obligatoire) :
    - `%ARIA_OPS_ROOT%\collegue-memoire\sessions\HANDOFF.md` (SSOT GitHub)
    - `%ARIA_OPS_ROOT%\collegue-memoire\SESSION-START.md` (genere local)
@@ -32,14 +32,14 @@ Executer soi-meme, dans l'ordre :
    - `sessions/CONSOMMATION-GROK.md` (mode concis — moins de tokens)
    - `COLLEGUE.md` + fin de `JOURNAL.md`
 3. **Nouveau PC** (`boot-status.json` → `is_new_pc: true`) :
-   - Si `has_vault_secrets: false` : demander a Sylvain **une seule fois** les 2 lignes Bitwarden (master + TOTP) — rien d autre.
+   - Si `has_vault_secrets: false` : demander a l'operateur **une seule fois** les 2 lignes Bitwarden (master + TOTP) — rien d autre.
    - Si secrets OK : `bootstrap-autre-pc.ps1 -SkipHandoff` puis `check-aria-status.ps1`
    - Ajouter la machine dans `aria-local-sync\security\github-trust.yaml` → `known_machines`
 4. **PC connu** : appliquer handoff (`git pull`, `apply-local.ps1 -TotpCode` si coffre change sur l autre PC).
 5. Resumer en 3-5 lignes (delta autre PC) **puis** repondre a la demande.
 6. Checklist : `SESSION-CHECKLIST.html` ou `open-checklist.ps1`
 
-Ne jamais dire « lance session-handoff » a Sylvain.
+Ne jamais dire « lance session-handoff » a l'operateur.
 
 ## Phrases declencheurs (meme effet)
 
