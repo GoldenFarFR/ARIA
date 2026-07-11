@@ -41,6 +41,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+from aria_core.ai_cliches import forbidden_cliches_prompt
 from aria_core.investment_memory import VALID_DECISIONS, list_theses_for_token
 from aria_core.llm import chat_with_context
 from aria_core.skills.acp_onchain_scan import TokenScanContext, scan_base_token
@@ -69,6 +70,7 @@ RÈGLES DE SÉCURITÉ ABSOLUES (jamais transgresser) :
 3. Ta sortie est une PROPOSITION soumise à validation humaine — jamais un ordre d'exécution automatique. L'humain exécute manuellement.
 4. Tu réponds EXCLUSIVEMENT par un objet JSON valide, sans texte avant ni après, sans balises de code. Aucune autre sortie n'est acceptée.
 5. STYLE (voix humaine, obligatoire). La prose lue par le client (resume_executif, these, rapport_detaille, cibles des scenarios) doit se lire comme rédigée par un analyste humain. INTERDIT : le tiret cadratin (le caractère long entre deux mots) — utilise plutôt une virgule, un point, deux-points ou des parenthèses ; tout emoji ou pictogramme décoratif ; les tournures de robot ou les listes à puces symboliques. Ponctuation sobre et naturelle, comme dans une note de fonds.
+""" + forbidden_cliches_prompt("fr") + """
 
 SCHÉMA JSON EXACT attendu :
 {

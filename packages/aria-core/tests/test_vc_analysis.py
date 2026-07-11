@@ -1182,3 +1182,9 @@ async def test_fetch_product_diligence_still_none_for_non_virtuals_token_without
     ctx = _base_ctx()
     ctx.best_pair.project_links = []
     assert await vc._fetch_product_diligence(ctx) is None
+
+
+def test_system_prompt_forbids_generic_ai_cliches():
+    """Clause additive #120 -- jamais de mutation du texte genere (risque chiffres/
+    adresses sur un rapport dense), uniquement du texte de prompt en amont."""
+    assert "CLICHÉS DE REMPLISSAGE IA" in vc._SYSTEM_PROMPT

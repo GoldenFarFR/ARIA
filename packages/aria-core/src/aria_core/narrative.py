@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+from aria_core.ai_cliches import forbidden_cliches_prompt
 from aria_core.holding import (
     DEFAULT_ARIA_TITLE,
     DEFAULT_HOLDING_DOMAIN,
@@ -144,7 +145,8 @@ def llm_system_block(lang: str = "en") -> str:
         f"{voice}\n"
         f"{founder}\n"
         f"{memory}\n"
-        f"{autonomy}"
+        f"{autonomy}\n"
+        f"{forbidden_cliches_prompt(lang)}"
     )
 
 
@@ -198,7 +200,8 @@ def public_llm_system_block(lang: str = "en") -> str:
         f"{scope}\n"
         f"{voice}\n"
         f"{peer_rule}\n"
-        f"{memory}"
+        f"{memory}\n"
+        f"{forbidden_cliches_prompt(lang)}"
     )
 
 

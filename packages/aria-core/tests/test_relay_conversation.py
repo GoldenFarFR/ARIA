@@ -130,3 +130,7 @@ def test_history_message_uses_configured_operator_display_name(test_settings):
     assert relay_conversation._history_message(operator_entry) == {
         "role": "user", "content": "[TestOperatorName] hello",
     }
+
+
+def test_system_context_forbids_generic_ai_cliches():
+    assert "CLICHÉS DE REMPLISSAGE IA" in relay_conversation._SYSTEM_CONTEXT
