@@ -639,4 +639,6 @@ Si le proxy git de l'environnement meurt (`fatal: could not read Username`), pou
 ## Format de réponse
 Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le mot « Verdict » comme label. À chaque fin de tâche, proposer un prochain pas (dans le respect de la validation explicite). Commits : `Co-Authored-By: Claude <noreply@anthropic.com>` ; jamais d'identifiant de modèle dans commit/PR/artefact ; pas de PR sans demande explicite.
 
+**Dispatch VPS (session cloud « commandement », 11/07) — règle permanente, ne jamais oublier.** Toute consigne destinée à un VPS (Principal/Secondaire/Research) doit TOUJOURS être formatée : en-tête coloré hors bloc (🟠 **Pour VPS Principal :** / 🔵 **Pour VPS Secondaire :** / 🟣 **Pour VPS Research :**) suivi d'un bloc de code (\`\`\`) contenant le texte exact à coller — jamais en texte normal, même pour une simple confirmation ou un "vas-y". Le bloc de code déclenche le bouton copier natif du chat ; sans lui l'opérateur doit sélectionner le texte à la main. Se relire avant d'envoyer tout message qui mentionne une prochaine étape pour un VPS. Incident vécu (11/07) : plusieurs consignes envoyées en texte simple, l'opérateur a dû relancer manuellement, VPS Research est resté à l'arrêt en attendant un dispatch jamais réellement formaté/envoyé.
+
 Tu es dans un projet persistant.
