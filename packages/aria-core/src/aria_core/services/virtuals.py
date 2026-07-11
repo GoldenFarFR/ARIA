@@ -132,15 +132,19 @@ _BONDING_STATUSES = frozenset({"UNDERGRAD", "PROTOTYPE", "1"})
 #    testée (`AVAILABLE`, `SENTIENT`, `GRADUATED`, `INITIALIZED` -- pourtant
 #    une valeur réelle observée dans les données --, ou une valeur bidon) :
 #    les 5 renvoient exactement la même liste triée par date de création,
-#    non filtrée. `build_graduated_url`/`fetch_graduated` n'effectuent donc
-#    PAS de filtrage réel côté serveur (le tri par date masque le problème
+#    non filtrée. `build_graduated_url`/`fetch_graduated` n'effectuaient donc
+#    PAS de filtrage réel côté serveur (le tri par date masquait le problème
 #    en pratique car les créations récentes sont presque toutes UNDERGRAD).
-#    Sans risque de sécurité observé (le seul appelant,
+#    Aucun risque de sécurité observé (le seul appelant,
 #    `base_crawler.discover_virtuals_graduated_tokens`, exclut déjà les
 #    entrées à `token_address=None`, donc les faux UNDERGRAD non filtrés
-#    sont éliminés en aval) -- hors scope de ce correctif ciblé sur
-#    `graduation_progress()`, signalé séparément à l'opérateur plutôt que
-#    corrigé ici sans confirmation.
+#    étaient déjà éliminés en aval) -- CORRIGÉ le 11/07 : `fetch_prototypes`
+#    et `fetch_graduated` filtrent désormais eux-mêmes côté client via
+#    `is_in_bonding` (même allowlist déjà testée, aucune nouvelle logique de
+#    parsing), cf. tests `test_fetch_*_filters_out_*_client_side` dans
+#    `test_virtuals_client.py`. Les URLs conservent `filters[status]=…` dans
+#    la requête (coût nul, au cas où l'API le respecterait un jour) mais ne
+#    doivent plus être considérées comme filtrantes à elles seules.
 _VIRTUAL_RAISED_KEYS = (
     "virtualRaised",
     "raisedVirtual",
@@ -222,12 +226,19 @@ def _first(mapping: dict, *keys: str) -> object:
 # Construction d'URL (endpoints Strapi publics)
 # ----------------------------------------------------------------------
 def build_prototypes_url(chain: str = "BASE", page_size: int = 100, *, status: str = "UNDERGRAD") -> str:
-    """URL de l'index filtré par statut, trié par récence.
+    """URL de l'index filtré par statut (nominalement), trié par récence.
 
     ``status`` par défaut ``"UNDERGRAD"`` (encore en bonding, comportement historique
     inchangé). ``build_graduated_url`` réutilise cette même fonction avec
     ``status="AVAILABLE"`` (tokens gradués) — un seul point de construction d'URL,
     jamais dupliqué.
+
+    ⚠️ Diagnostic réel (11/07, accès réseau direct api.virtuals.io) : ``filters[status]``
+    est IGNORÉ côté serveur quelle que soit la valeur envoyée (toutes renvoient la
+    même liste non filtrée). Le paramètre est conservé dans l'URL (au cas où l'API
+    le respecterait un jour, coût nul) mais NE FILTRE PAS réellement — le filtrage
+    effectif se fait côté client dans ``VirtualsClient.fetch_prototypes`` /
+    ``fetch_graduated`` via ``is_in_bonding``.
 
     Ex. ``…/api/virtuals?filters[status]=UNDERGRAD&filters[chain]=BASE&sort[0]=createdAt:desc&pagination[pageSize]=100``
     """
@@ -246,12 +257,17 @@ def build_prototypes_url(chain: str = "BASE", page_size: int = 100, *, status: s
 
 
 def build_graduated_url(chain: str = "BASE", page_size: int = 100) -> str:
-    """URL des tokens ayant gradué récemment (statut ``AVAILABLE``).
+    """URL des tokens ayant gradué récemment (statut ``AVAILABLE`` demandé).
 
     ``sort[0]=createdAt:desc`` reste trié par date de CRÉATION du prototype (pas de
     date de graduation exposée par l'API) — les plus récemment créés apparaissent en
     tête, ce qui capture en pratique les graduations récentes sans être une garantie
     stricte d'ordre de graduation.
+
+    ⚠️ ``filters[status]=AVAILABLE`` n'est PAS appliqué côté serveur (cf.
+    ``build_prototypes_url``) : l'URL seule ne renvoie pas une liste filtrée. Utiliser
+    ``VirtualsClient.fetch_graduated`` (jamais cette URL brute) pour obtenir une vraie
+    liste de tokens gradués — le filtrage réel s'y fait côté client.
     """
     return build_prototypes_url(chain=chain, page_size=page_size, status="AVAILABLE")
 
@@ -536,7 +552,16 @@ class VirtualsClient:
             return response.json(), None
 
     async def fetch_prototypes(self, chain: str = "BASE", page_size: int = 100) -> list[VirtualToken]:
-        """Index des tokens encore en bonding. Toujours une liste (``[]`` sur erreur)."""
+        """Index des tokens encore en bonding. Toujours une liste (``[]`` sur erreur).
+
+        Filtre ``is_in_bonding`` appliqué CÔTÉ CLIENT après réception : diagnostic réel
+        (11/07, accès réseau direct api.virtuals.io) — le filtre serveur
+        ``filters[status]=…`` de ``build_prototypes_url`` est ignoré quelle que soit la
+        valeur testée (toutes renvoient la même liste non filtrée, triée par date de
+        création). Sans ce filtre client, un token déjà gradué se glisserait dans
+        l'index "encore en bonding" — cf. le commentaire détaillé au-dessus de
+        ``_VIRTUAL_RAISED_KEYS``.
+        """
         try:
             url = build_prototypes_url(chain=chain, page_size=page_size)
             data, error = await self._get_json(url)
@@ -548,7 +573,7 @@ class VirtualsClient:
             tokens: list[VirtualToken] = []
             for item in items:
                 token = parse_virtual(item)
-                if token is not None:
+                if token is not None and is_in_bonding(token):
                     tokens.append(token)
             return tokens
         except Exception as exc:  # dégradation ultime : jamais d'exception sortante
@@ -561,6 +586,16 @@ class VirtualsClient:
         Ces tokens ont une vraie liquidité DEX (post-graduation) : ils rejoignent le
         pipeline d'absorption STANDARD (85% VC), pas la niche bonding — cf.
         ``services/launchpad_discovery.py``.
+
+        Filtre ``not is_in_bonding`` appliqué CÔTÉ CLIENT après réception : diagnostic
+        réel (11/07, accès réseau direct api.virtuals.io) — le filtre serveur
+        ``filters[status]=…`` de ``build_graduated_url`` est ignoré quelle que soit la
+        valeur testée (``AVAILABLE``, ``SENTIENT``, ``GRADUATED``, ``INITIALIZED`` ou
+        une valeur bidon renvoient tous la même liste non filtrée, triée par date de
+        création — jamais une vraie liste de gradués). Sans ce filtre client, un token
+        encore ``UNDERGRAD`` se glisserait dans l'index "gradués" et rejoindrait à tort
+        le pipeline STANDARD — cf. le commentaire détaillé au-dessus de
+        ``_VIRTUAL_RAISED_KEYS``.
         """
         try:
             url = build_graduated_url(chain=chain, page_size=page_size)
@@ -573,7 +608,7 @@ class VirtualsClient:
             tokens: list[VirtualToken] = []
             for item in items:
                 token = parse_virtual(item)
-                if token is not None:
+                if token is not None and not is_in_bonding(token):
                     tokens.append(token)
             return tokens
         except Exception as exc:  # dégradation ultime : jamais d'exception sortante
