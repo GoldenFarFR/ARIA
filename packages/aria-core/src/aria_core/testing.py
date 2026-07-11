@@ -45,6 +45,7 @@ class AriaRuntimeSettings(BaseSettings):
     llm_model: str = ""
     aria_spark_aggressive: bool = False
     aria_operator_founder_mode: bool = False
+    aria_operator_display_name: str = "Operator"
     aria_llm_model_develop: str = "anthropic-claude-opus-4-8"
     aria_llm_model_standard: str = "x-ai-grok-4-3"
     aria_llm_model_brief: str = "deepseek-deepseek-v4-flash"

@@ -135,7 +135,7 @@ def depth_system_instruction(lang: str, depth: LlmDepth) -> str:
         return (
             "CONCISION : verdict + 2–5 phrases utiles (pas de coquille vide). "
             "Tu peux répondre par une question si ça clarifie (style Socrate) — "
-            "jusqu'à ce que operateur dise « ok vazy » ou « si c'est bénéfique tu peux ». "
+            "jusqu'à ce que l'opérateur dise « ok vazy » ou « si c'est bénéfique tu peux ». "
             "Ne développe pas sans demande explicite."
         )
     return (

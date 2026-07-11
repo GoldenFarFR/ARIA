@@ -215,16 +215,26 @@ def _is_strategic_conversation(message: str) -> bool:
 
 
 def _routing_message(message: str) -> str:
-    """Pont Cursor / suite KART — router sur le tour actuel, pas tout le contexte."""
+    """Pont Cursor / suite KART — router sur le tour actuel, pas tout le contexte.
+
+    Le nom reconnu dans les préfixes ("<nom> confirme :", "Message actuel de <nom>:")
+    vient de ``settings.aria_operator_display_name`` (#114 — jamais le nom réel en dur
+    dans le code, seulement dans le ``.env`` réel du VPS, non commité). Défaut générique
+    "Operator" si non configuré : ne matche simplement rien de spécial, dégrade sans
+    casser (retourne le message tel quel, comme pour tout texte qui ne matche aucun
+    des deux préfixes)."""
+    from aria_core.runtime import settings
+
+    name = re.escape((getattr(settings, "aria_operator_display_name", "") or "Operator").strip())
     conf = re.search(
-        r"operateur confirme\s*:\s*(.+?)(?:\n|$)",
+        rf"{name} confirme\s*:\s*(.+?)(?:\n|$)",
         message,
         re.IGNORECASE,
     )
     if conf:
         return conf.group(1).strip()
     m = re.search(
-        r"Message actuel de (?:operateur|Grok):\s*(.+?)(?:\n|$)",
+        rf"Message actuel de (?:{name}|Grok):\s*(.+?)(?:\n|$)",
         message,
         re.IGNORECASE | re.DOTALL,
     )

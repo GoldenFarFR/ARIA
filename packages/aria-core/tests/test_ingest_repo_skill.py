@@ -23,7 +23,7 @@ async def test_execute_ingest_repo_writes_proof(tmp_path, monkeypatch):
     repo = tmp_path / "ARIA"
     (repo / "collegue-memoire").mkdir(parents=True)
     (repo / "collegue-memoire" / "COLLEGUE.md").write_text(
-        "# Test\noperateur GoldenFar\n", encoding="utf-8"
+        "# Test\nOperator GoldenFar\n", encoding="utf-8"
     )
     (repo / "VISION.md").write_text("Vision test", encoding="utf-8")
 

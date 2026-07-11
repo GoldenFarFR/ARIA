@@ -1,4 +1,4 @@
-"""Audit « ok tout est prêt — qu'est-ce qu'il manque ? » — opérateur operateur."""
+"""Audit « ok tout est prêt — qu'est-ce qu'il manque ? » — côté opérateur."""
 from __future__ import annotations
 
 import re

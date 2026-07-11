@@ -551,6 +551,35 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   passed, 7 skipped, 0 échec, 0 régression). **Codé, testé, PAS déployé** — regroupé avec
   le prochain déploiement plutôt qu'un rebuild dédié isolé (même doctrine de déploiement
   groupé). Détail complet : `docs/HANDOFF-2026-07-11.md`.
+- **#114 — volet code, nom réel remplacé par une config (11/07), CODÉ, testé, PAS déployé.**
+  Suite du volet doc de VPS Principal (`CLAUDE.md`, commit `adb28831`). Le nom réel de
+  l'opérateur était en dur dans du code fonctionnel, pas seulement des commentaires : deux
+  regex dans `brain._routing_message` (pont Cursor/KART) détectaient un préfixe littéral
+  `"<nom> confirme :"`/`"Message actuel de <nom>:"`, et `relay_conversation._history_message`
+  écrivait le nom en dur comme label `[<nom>]` dans l'historique envoyé au LLM. **Pas un
+  simple retrait de texte** : nouveau champ `settings.aria_operator_display_name` (défaut
+  générique `"Operator"`, ajouté à `vanguard/backend/app/config.py` ET
+  `aria_core.testing.AriaRuntimeSettings`) — les deux fonctions le lisent via `getattr` avec
+  repli sûr, la vraie valeur ne vivra que dans le `.env` réel du VPS, jamais commise. Défaut
+  non configuré = comportement inchangé pour "Grok" (toujours en dur, ce n'est pas un nom de
+  personne) et dégradation propre (aucun message mal-parsé, retourné tel quel) pour le reste.
+  8 nouveaux tests dédiés (`test_brain_routing_message.py`, noms de test génériques
+  uniquement — jamais le vrai nom, y compris dans les tests) + 2 tests mis à jour
+  (`test_relay_conversation.py`, comportement par défaut + comportement configuré) + 2
+  fixtures de test nettoyées (`test_ingest_repo_skill.py`). Commentaires/docstrings
+  également nettoyés (`operator_readiness.py`, `operator_go_ahead.py`,
+  `acp_conversational.py`, `acp_client_skill.py`, `llm_economy.py`) + 2 faits `knowledge/*.yaml`
+  (`aria_values.yaml`, `aria_goals.yaml`) qui alimentent le raisonnement d'ARIA. Suite
+  complète verte (4411 passed, 7 skipped, 0 échec, 0 régression). **Grep exhaustif du repo
+  fait** : plus aucune occurrence dans le code Python/YAML/config. **Reste hors périmètre
+  code, trouvé et signalé, PAS touché** : `AGENTS.md` (6 occurrences, doc miroir de
+  `CLAUDE.md` pour d'autres outils), `skills/.grok/skills/session-handoff/SKILL.md` (4),
+  `core/README.md`, `docs/conformite-dossier-avocat.md`, `docs/protocole-argent-reel.md` —
+  décision opérateur nécessaire (les traiter maintenant ou les laisser en backlog distinct).
+  `docs/HANDOFF-2026-07-07-nuit.md` volontairement laissé intact (archive historique datée,
+  même doctrine que la compaction `CLAUDE.md` du 11/07 : jamais réécrire un point-in-time
+  passé). **Rien déployé** — regroupé avec le prochain déploiement. Détail complet :
+  `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
