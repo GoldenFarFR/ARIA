@@ -405,13 +405,49 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   n'est PAS touché (aucun changement sur `grounded_for_audience` lui-même, casual/stratégique
   toujours libres). Limite honnête : ne couvre que les phrasings testés par regex — une
   formulation très différente peut encore échapper au filet et confabuler. 11 nouveaux tests,
-  suite complète verte (4377 passed, 7 skipped, 0 échec). **Rien déployé.**
+  suite complète verte (4377 passed, 7 skipped, 0 échec). **Déployé et vérifié 11/07** (commit
+  `32e6b2f5`, groupé avec #105/#108 — health check double confirmé, script + curl indépendant).
   **Limite structurelle actée** : une réponse conversationnelle du LLM (même grounded) n'est
   JAMAIS une preuve de ce qu'ARIA fait réellement — la vraie preuve vit dans les rapports `/vc`
   (données on-chain réelles, tracées) et les logs serveur, jamais dans l'auto-description en
   chat. Un chat grounded réduit le risque de confabulation, il ne le supprime pas structurellement
   (dépend de la couverture des detecteurs/facts) — ne jamais citer une réponse Telegram d'ARIA
   comme preuve d'une capacité ou d'un comportement système.
+- **Coordination à deux sessions VPS (11/07) — méthode adoptée ce segment, à connaître pour la
+  suite.** Une session cloud (celle-ci) pilote deux sessions Claude Code distinctes tournant sur
+  le VPS (« VPS Principal » / « VPS Secondaire »), chacune dans son propre git worktree isolé
+  (cf. incident `a4eb3955` plus haut — jamais deux sessions sur le même dossier de travail).
+  L'opérateur relaie les messages entre les trois (aucun canal direct entre sessions —
+  `create_trigger`/`persistent_session_id` testé, **refusé par la politique d'organisation**,
+  confirmé non contournable). Règles opérationnelles fixées : chaque rapport VPS s'auto-identifie
+  ("[VPS Principal]"/"[VPS Secondaire]") ; tout code touchant la logique réelle (pas juste de la
+  doc) est montré en texte brut avant tout push, jamais un résumé seul ; CLAUDE.md/HANDOFF
+  peuvent être écrits librement par les VPS dans leurs commits (pas de verrou technique — la
+  règle déjà existante "relire intégralement après chaque mise à jour" suffit, appliquée par la
+  session cloud après coup plutôt qu'en blocage avant écriture) ; déploiement groupé plutôt qu'un
+  rebuild Docker par correctif. Productif : 3 correctifs réels livrés et déployés en un segment
+  (#105/#108/#110) grâce à ce parallélisme.
+- **Test manuel Telegram post-déploiement (11/07) — méthode à répéter après chaque déploiement
+  touchant la conversation.** Poser quelques questions ciblées à ARIA en direct sur Telegram
+  après un déploiement a débusqué 4 problèmes réels que la CI ne couvrait pas : la régression
+  #105/#110 ci-dessus, un **bug de routage** (question d'actualité crypto matchée à tort sur une
+  réponse canonique hors-sujet, `P(vrai)=0.95` affiché sur du contenu sans rapport — cause
+  probable : classifieur d'intent, pas le LLM, 0 token consommé), et une **fabrication citée**
+  plus grave (`web_verify.py` : question "maxi BTC ou ETH ?" a reçu une réponse "LIVE INFO —
+  verified web sources" citant un article CNBC sur l'opinion de **Mark Cuban**, attribuée à tort
+  à ARIA — même famille que l'incident rugby du 10/07, mais cette fois la source ne parle même
+  pas de la bonne ENTITÉ, pas seulement du mauvais événement ; correctif en cours, cf. #113).
+  Root cause identifiée avec précision (le prompt de recalibration web ne vérifiait que "même
+  compétition", jamais "même entité que celle interrogée") ; fix en texte de prompt uniquement,
+  aucun changement de plomberie — limite honnête assumée : renforce l'instruction LLM, ne peut
+  pas garantir mécaniquement 100% de conformité (même nature que le fix rugby déjà accepté).
+  Découverte annexe non technique : demande opérateur explicite (11/07) que le prénom/nom réel
+  n'apparaisse plus jamais publiquement (sauf README `goldenfarfr/goldenfarfr`, voulu) — trouvé
+  dans le repo public ARIA (`CLAUDE.md`, `config.py`, et un usage FONCTIONNEL réel dans
+  `brain.py` — regex de détection de message opérateur, pas juste du texte à retirer). Backlog
+  #111 (routage)/#112 (qualité réelle des tweets avant confiance totale sur l'autonomie X, déjà
+  autorisée par l'opérateur)/#113 (fabrication citée, en cours)/#114 (nom réel) créés, détail et
+  état d'avancement dans `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
