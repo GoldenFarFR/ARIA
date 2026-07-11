@@ -166,3 +166,37 @@ async def run_bonding_discovery_cycle(*, limit_per_launchpad: int = 50) -> dict:
         logger.info("bonding_discovery_cycle: volet direct échoué (%s)", exc)
 
     return {"bonding": bonding_counts, "direct": direct_counts}
+
+
+async def retry_stale_bonding_pending(
+    *, limit: int = 20, older_than_hours: int = 24, max_retries: int = 5, max_age_days: int = 7,
+) -> dict:
+    """Retente les candidats bonding ``pending`` laissés de côté — pendant bonding de
+    ``base_crawler.retry_stale_pending`` (#105, plafond anti-boucle #108), même trou
+    identifié pour le pool ``base-bonding`` : ``discover_and_absorb_bonding`` ne revoit
+    un candidat ``pending`` que s'il réapparaît par hasard dans une découverte
+    ultérieure, rien ne le retente délibérément si le launchpad ne le remet pas sous
+    le nez du crawl.
+
+    Ne duplique RIEN : délègue entièrement à ``base_crawler.retry_stale_pending``
+    (boucle, comptage, plafond anti-boucle-infinie via ``abandon_stale_pending`` —
+    network-agnostique, clé primaire = ``contract``) avec seulement un ``lister``
+    scopé au réseau ``base-bonding`` et l'``absorber`` bonding en place du standard.
+    Même sémantique de verdicts ('kept'/'rejected'/'skip_incomplete'/'abandoned').
+    """
+    from aria_core import screened_pool
+    from aria_core.base_crawler import retry_stale_pending
+
+    async def lister():
+        return await screened_pool.list_stale_pending(
+            older_than_hours=older_than_hours, limit=limit, network=BONDING_NETWORK
+        )
+
+    return await retry_stale_pending(
+        limit=limit,
+        older_than_hours=older_than_hours,
+        max_retries=max_retries,
+        max_age_days=max_age_days,
+        lister=lister,
+        absorber=absorb_bonding_candidate,
+    )

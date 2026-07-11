@@ -531,6 +531,26 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   conforme à la copie. `rejected` : 50→9, `pending` : 42→83. Ces 41 seront repris par
   `retry_stale_pending()` au heartbeat suivant (pas immédiat, dépend de `older_than_hours`).
   Détail complet (liste des 41, requête SQL exacte, sauvegarde) : `docs/HANDOFF-2026-07-11.md`.
+- **#107 — retry différé étendu au pipeline bonding (11/07), CODÉ, testé, PAS déployé.**
+  Même trou que #105 mais côté niche 15% : `discover_and_absorb_bonding` ne revoit un
+  candidat `pending` (`network="base-bonding"`) que s'il réapparaît par hasard dans une
+  découverte ultérieure — rien ne le retente délibérément. Ajouté `bonding_absorber.
+  retry_stale_bonding_pending()`, câblé dans le heartbeat `bonding_discovery_cycle` juste
+  après `run_bonding_discovery_cycle` (même patron que `vc_crawl` pour #105/#108).
+  **Zéro duplication de logique** : `screened_pool.list_stale_pending()`/
+  `abandon_stale_pending()` étaient déjà génériques (le premier accepte déjà un paramètre
+  `network`, le second opère sur `contract` seul, clé primaire, sans notion de réseau) —
+  la nouvelle fonction délègue entièrement à `base_crawler.retry_stale_pending()` déjà
+  existant (boucle, comptage, plafond anti-boucle-infinie #108), seuls `lister` (scopé
+  `network="base-bonding"`) et `absorber` (`absorb_bonding_candidate` au lieu du standard)
+  sont substitués via les paramètres d'injection déjà prévus pour ça. 4 nouveaux tests
+  (`test_bonding_absorber.py`) : candidat frais jamais retenté, isolation stricte du pool
+  standard (`network="base"` jamais vu par ce retry), plafond anti-boucle-infinie
+  fonctionnel sur un candidat bonding bloqué (bascule `rejected` après 5 tentatives, même
+  garde-fou que #108), câblage réseau par défaut vérifié. Suite complète verte (4402
+  passed, 7 skipped, 0 échec, 0 régression). **Codé, testé, PAS déployé** — regroupé avec
+  le prochain déploiement plutôt qu'un rebuild dédié isolé (même doctrine de déploiement
+  groupé). Détail complet : `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
