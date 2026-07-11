@@ -1,7 +1,11 @@
 import pytest
 import yaml
 
-from aria_core.truth_ledger.canonical import load_canonical_facts, sync_canonical_facts
+from aria_core.truth_ledger.canonical import (
+    canonical_facts_sync_enabled,
+    load_canonical_facts,
+    sync_canonical_facts,
+)
 from aria_core.truth_ledger.store import (
     get_active_canonical_hash,
     init_truth_ledger,
@@ -99,3 +103,17 @@ async def test_sync_exports_faq_yaml():
     assert "aria-role" in ids
     assert "dexpulse-retired" in ids
     assert "aria-market-product" in ids
+
+
+def test_canonical_facts_sync_gate_off_by_default(monkeypatch):
+    monkeypatch.delenv("ARIA_CANONICAL_FACTS_SYNC_ENABLED", raising=False)
+    assert canonical_facts_sync_enabled() is False
+
+
+def test_canonical_facts_sync_gate_on_via_env(monkeypatch):
+    monkeypatch.setenv("ARIA_CANONICAL_FACTS_SYNC_ENABLED", "1")
+    assert canonical_facts_sync_enabled() is True
+    monkeypatch.setenv("ARIA_CANONICAL_FACTS_SYNC_ENABLED", "true")
+    assert canonical_facts_sync_enabled() is True
+    monkeypatch.setenv("ARIA_CANONICAL_FACTS_SYNC_ENABLED", "0")
+    assert canonical_facts_sync_enabled() is False
