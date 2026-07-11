@@ -137,8 +137,12 @@
   tags: [zhc, governance]
   question: What is the ZHC model?
   answer: >
-    Zero-Human Company — ARIA operates day-to-day autonomously (portfolio, products, content).
-    Human principal steers strategy; ARIA executes and informs via the public site.
+    Zero-Human Company — ARIA operates day-to-day autonomously on products and content
+    (proposals, analysis, X timing/tone within the arm_campaign gate). Human principal steers
+    strategy and validates all real-capital actions — that stays true today. Long-term goal
+    (not yet reached): once ARIA's judgment is proven reliable enough, the operator plans to
+    extend her autonomy to real portfolio decisions. Progress toward that is evidence-based,
+    tracked via /feuvert and the real track record — not assumed.
 
 - id: base-token
   topic: token
