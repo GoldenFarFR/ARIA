@@ -34,7 +34,9 @@ suites:
     cases:
       - id: collegue_operator
         question: "qui est l'opérateur GoldenFar selon ta mémoire collègue ?"
-        expect_keywords: ["operateur"]
+        # Nom réel jamais en dur (#114) — résolu à l'exécution via
+        # settings.aria_operator_display_name par socratic_drill.py.
+        expect_keywords: ["__OPERATOR_DISPLAY_NAME__"]
         forbid_patterns: ["ACTU — sources web"]
         expected_sources: [collegue]
 

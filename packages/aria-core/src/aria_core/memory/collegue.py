@@ -85,7 +85,7 @@ def is_collegue_recall_question(message: str) -> bool:
 
 
 def get_ops_journal_tail(*, lines: int = 3) -> list[str]:
-    """Dernières lignes de collegue-memoire/JOURNAL.md (ops operateur)."""
+    """Dernières lignes de collegue-memoire/JOURNAL.md (ops opérateur)."""
     for root in _ops_memoire_candidates():
         path = root / "JOURNAL.md"
         if not path.is_file():

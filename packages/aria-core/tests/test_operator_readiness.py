@@ -9,7 +9,7 @@ from aria_core.operator_readiness import (
 )
 
 
-def test_readiness_phrase_operateur():
+def test_readiness_phrase_operator():
     msg = (
         "ok et maintenant tout est pret, qu'est-ce qu'il manque "
         "pour que tu puisses publier sur le site"
@@ -34,7 +34,7 @@ def test_not_readiness_ok_maintenant_unrelated_request():
     )
 
 
-def test_status_pulse_operateur():
+def test_status_pulse_operator():
     assert wants_operator_status_pulse("rien de nouveau a declarer ?")
     assert wants_operator_status_pulse("quoi de neuf ?")
     assert not wants_operator_status_pulse("bitcoin aujourd'hui")

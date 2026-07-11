@@ -164,7 +164,7 @@ async def _run(message: str, *, json_out: bool) -> int:
     result = await aria_brain.process(
         message.strip(),
         lang=LANG_FR,
-        visitor_id="shell-operateur",
+        visitor_id="shell-operator",
         public_mode=False,
     )
     if json_out:

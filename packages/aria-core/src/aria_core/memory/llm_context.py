@@ -140,7 +140,10 @@ async def build_llm_context(
         if collegue_block:
             if collegue_max_chars > 0 and len(collegue_block) > collegue_max_chars:
                 collegue_block = collegue_block[-collegue_max_chars:]
-            parts.append("\n# Mémoire collègue (COLLEGUE.md — SSOT opérateur operateur)")
+            from aria_core.runtime import settings
+
+            operator_name = (getattr(settings, "aria_operator_display_name", "") or "Operator").strip()
+            parts.append(f"\n# Mémoire collègue (COLLEGUE.md — SSOT opérateur {operator_name})")
             parts.append(collegue_block)
         from aria_core.memory.arbitrator import get_arbitration_text, run_memory_arbitration
 

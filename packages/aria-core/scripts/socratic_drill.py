@@ -76,6 +76,15 @@ def _score_reply(
     }
 
 
+def _resolve_keywords(expect_keywords: list[str]) -> list[str]:
+    if "__OPERATOR_DISPLAY_NAME__" not in expect_keywords:
+        return expect_keywords
+    from aria_core.runtime import settings
+
+    operator_name = (getattr(settings, "aria_operator_display_name", "") or "Operator").strip()
+    return [operator_name if kw == "__OPERATOR_DISPLAY_NAME__" else kw for kw in expect_keywords]
+
+
 async def _run_case(case: dict, suite: str) -> dict:
     from aria_core.brain import aria_brain
 
@@ -102,7 +111,7 @@ async def _run_case(case: dict, suite: str) -> dict:
 
     score = _score_reply(
         reply,
-        expect_keywords=case.get("expect_keywords") or [],
+        expect_keywords=_resolve_keywords(case.get("expect_keywords") or []),
         forbid_patterns=case.get("forbid_patterns") or [],
     )
     elapsed = round(time.monotonic() - t0, 2)
