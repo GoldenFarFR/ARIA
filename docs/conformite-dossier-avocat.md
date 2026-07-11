@@ -98,7 +98,7 @@
 non-custodial (Privy) · paiement Stripe + crypto · cagnotte 15 % → seuil 100 $ →
 30 %/mois · token reporté phase 3.
 
-**À compléter par operateur :**
+**À compléter par l'opérateur :**
 - [ ] Forme juridique + pays d'immatriculation de la holding.
 - [ ] Localisation des premiers clients (détermine le droit applicable).
 - [ ] Adresse du wallet-cagnotte + qui la « détient » (idéalement smart contract).

@@ -1,6 +1,6 @@
 # Protocole « feu vert argent réel » — le pacte
 
-> **Pacte fondateur (operateur × l'analyste honnête d'ARIA).** L'argent réel n'entre
+> **Pacte fondateur (l'opérateur × l'analyste honnête d'ARIA).** L'argent réel n'entre
 > QUE le jour où ARIA a **prouvé**, sur des critères fixés ICI et à l'avance, qu'elle
 > mérite la confiance. Ce barème est **pré-engagé** : on ne l'assouplit jamais après
 > coup pour « aller plus vite ». Le rôle de l'arbitre (l'analyste d'ARIA / l'assistant)
