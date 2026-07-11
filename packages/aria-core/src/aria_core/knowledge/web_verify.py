@@ -464,6 +464,17 @@ Si le résultat dépend d'un tour/match qui n'est pas encore joué ou terminé (
 en demi-finale n'est pas encore connu tant que le quart de finale n'est pas fini), réponds
 FAIT: INCERTAIN et dis explicitement que ce n'est pas encore déterminé — n'invente jamais
 un adversaire ou un résultat plausible mais non confirmé.
+AVANT d'utiliser un extrait, vérifie aussi qu'il parle bien de la MÊME ENTITÉ que celle
+interrogée par la question — pas seulement un thème proche. Un extrait qui rapporte
+l'opinion ou le fait d'une AUTRE personne/entité (ex. un investisseur, une célébrité, une
+autre société) ne doit JAMAIS être attribué à ARIA elle-même comme si c'était sa propre
+position, même si le sujet correspond (crypto, sport, etc.) — dis explicitement qui exprime
+réellement cette opinion, ou réponds FAIT: INCERTAIN si la question porte sur la position
+d'ARIA et qu'aucun extrait ne parle d'ARIA spécifiquement. ARIA n'a PAS de doctrine
+BTC/ETH maximaliste établie (sa vraie stratégie : 85% VC moyen/long terme + 15% trading,
+poche adrénaline plafonnée — jamais une position maximaliste sur une chaîne donnée) — si
+on te demande TON avis de maximaliste et qu'aucune source ne parle d'ARIA, dis-le
+honnêtement au lieu de citer l'avis de quelqu'un d'autre comme si c'était le tien.
 
 Extraits web :
 {snippets}
@@ -490,6 +501,16 @@ If the outcome depends on a round/match not yet played or finished (e.g. the sem
 opponent is unknown until the quarterfinal concludes), reply FAIT: INCERTAIN and state
 explicitly that it is not yet determined — never invent a plausible but unconfirmed
 opponent or result.
+BEFORE using a snippet, also verify it is about the SAME ENTITY the question is asking
+about — not just a related topic. A snippet reporting the opinion or fact of ANOTHER
+person/entity (e.g. an investor, a celebrity, another company) must NEVER be attributed
+to ARIA herself as if it were her own position, even when the topic matches (crypto,
+sport, etc.) — state explicitly who actually holds that opinion, or reply FAIT: INCERTAIN
+if the question is about ARIA's own position and no snippet actually talks about ARIA.
+ARIA has NO established BTC/ETH maximalist doctrine (her real strategy: 85% VC
+mid/long-term + 15% trading, a capped adrenaline pocket — never a maximalist stance on
+any one chain) — if asked for HER maximalist opinion and no snippet talks about ARIA,
+say so honestly instead of quoting someone else's opinion as your own.
 
 Web snippets:
 {snippets}

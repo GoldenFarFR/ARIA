@@ -436,18 +436,36 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   plus grave (`web_verify.py` : question "maxi BTC ou ETH ?" a reçu une réponse "LIVE INFO —
   verified web sources" citant un article CNBC sur l'opinion de **Mark Cuban**, attribuée à tort
   à ARIA — même famille que l'incident rugby du 10/07, mais cette fois la source ne parle même
-  pas de la bonne ENTITÉ, pas seulement du mauvais événement ; correctif en cours, cf. #113).
-  Root cause identifiée avec précision (le prompt de recalibration web ne vérifiait que "même
-  compétition", jamais "même entité que celle interrogée") ; fix en texte de prompt uniquement,
-  aucun changement de plomberie — limite honnête assumée : renforce l'instruction LLM, ne peut
-  pas garantir mécaniquement 100% de conformité (même nature que le fix rugby déjà accepté).
-  Découverte annexe non technique : demande opérateur explicite (11/07) que le prénom/nom réel
-  n'apparaisse plus jamais publiquement (sauf README `goldenfarfr/goldenfarfr`, voulu) — trouvé
-  dans le repo public ARIA (`CLAUDE.md`, `config.py`, et un usage FONCTIONNEL réel dans
-  `brain.py` — regex de détection de message opérateur, pas juste du texte à retirer). Backlog
-  #111 (routage)/#112 (qualité réelle des tweets avant confiance totale sur l'autonomie X, déjà
-  autorisée par l'opérateur)/#113 (fabrication citée, en cours)/#114 (nom réel) créés, détail et
-  état d'avancement dans `docs/HANDOFF-2026-07-11.md`.
+  pas de la bonne ENTITÉ, pas seulement du mauvais événement ; **corrigé depuis par VPS
+  Secondaire, détail dans l'entrée dédiée ci-dessous, cf. #113**). Root cause identifiée avec
+  précision (le prompt de recalibration web ne vérifiait que "même compétition", jamais "même
+  entité que celle interrogée") ; fix en texte de prompt uniquement, aucun changement de
+  plomberie — limite honnête assumée : renforce l'instruction LLM, ne peut pas garantir
+  mécaniquement 100% de conformité (même nature que le fix rugby déjà accepté). Découverte
+  annexe non technique : demande opérateur explicite (11/07) que le prénom/nom réel n'apparaisse
+  plus jamais publiquement (sauf README `goldenfarfr/goldenfarfr`, voulu) — trouvé dans le repo
+  public ARIA (`CLAUDE.md`, `config.py`, et un usage FONCTIONNEL réel dans `brain.py` — regex de
+  détection de message opérateur, pas juste du texte à retirer). Backlog #111 (routage)/#112
+  (qualité réelle des tweets avant confiance totale sur l'autonomie X, déjà autorisée par
+  l'opérateur)/#113 (fabrication citée, corrigé)/#114 (nom réel) créés, détail et état
+  d'avancement dans `docs/HANDOFF-2026-07-11.md`.
+- **#113 — détail technique de la règle d'entité `web_verify.py` (11/07), livré par VPS
+  Secondaire.** `_WEB_RECAL_PROMPT_FR`/`_EN` gagnent une règle « même ENTITÉ que celle
+  interrogée », distincte de la règle « même compétition/événement » (10/07, taillée pour le
+  sport uniquement) : un extrait qui rapporte l'opinion d'un tiers (investisseur, célébrité,
+  autre société) ne doit plus jamais être attribué à ARIA comme sa propre position, même si le
+  thème correspond — avec rappel explicite de sa vraie doctrine (85% VC moyen/long terme + 15%
+  trading, poche adrénaline plafonnée, **aucune position maximaliste sur une chaîne**, phrasing
+  repris de "Vision & stratégie" en tête de ce fichier). Toute la plomberie d'abstention honnête
+  (`FAIT: INCERTAIN`) existait déjà côté `epistemic.py`/`web_verify.py` — seul le texte du prompt
+  manquait la règle, aucun changement de code de traitement. 3 nouveaux tests
+  (`test_live_info_fallback.py`, même patron que le fix rugby du 10/07) dont un cas de contraste
+  (question légitimement sur un tiers — CEO Coinbase — ne doit pas être bloquée). Suite complète
+  verte (4385 passed, 7 skipped, 0 échec, 0 régression). **Limite assumée** : correctif de
+  PROMPT, pas un filtre déterministe — même nature et même limite que le fix rugby du 10/07.
+  **Codé, testé, PAS déployé** — #108/#110 ont déjà été déployés séparément (commit `32e6b2f5`,
+  avant que ce correctif ne soit prêt) ; #113 attend son propre déploiement groupé avec le
+  prochain correctif prêt. Détail complet : `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

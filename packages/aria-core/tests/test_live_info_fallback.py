@@ -20,6 +20,107 @@ def test_web_recal_prompt_forbids_cross_competition_conflation():
         assert "incertain" in low
 
 
+def test_web_recal_prompt_forbids_third_party_opinion_attribution():
+    # Incident reel (11/07) : "tu es maxi btc ou maxi eth ?" a fait repondre "Je suis
+    # maxi eth" en citant un article CNBC sur l'opinion de Mark Cuban ("Ethereum
+    # maximalist") comme source "verified web sources" -- l'article ne parle meme pas
+    # d'ARIA (contrairement a l'incident rugby du 10/07 ou la source parlait au moins
+    # du bon sport). La regle "meme competition/evenement" ne generalise pas a ce cas :
+    # il fallait une regle distincte exigeant la MEME ENTITE que celle interrogee, pas
+    # seulement un theme proche, avant d'attribuer une affirmation comme un fait ARIA.
+    for tpl in (_WEB_RECAL_PROMPT_FR, _WEB_RECAL_PROMPT_EN):
+        low = tpl.lower()
+        assert "entité" in low or "entity" in low
+        assert "aria" in low
+        assert "maximalist" in low  # couvre "maximaliste" (FR) et "maximalist" (EN)
+
+
+@pytest.mark.asyncio
+async def test_web_enhance_surfaces_honest_decline_without_forcing_attribution(monkeypatch):
+    # Meme si le LLM (mocke ici) suit desormais la regle du prompt et refuse d'attribuer
+    # l'opinion de Mark Cuban a ARIA (FAIT: INCERTAIN, reponse honnete), le pipeline ne
+    # doit RIEN transformer en fait verifie force -- la simple presence de sources web ne
+    # doit jamais fabriquer une position ARIA qui n'existe pas.
+    from aria_core.knowledge import web_verify as wv
+
+    async def fake_snippets(_q):
+        return [
+            WebSource(
+                text="Mark Cuban says he is an Ethereum maximalist, not Bitcoin.",
+                url="https://cnbc.com/mark-cuban-eth",
+            )
+        ]
+
+    async def fake_chat(*_a, **_k):
+        return (
+            "FAIT: INCERTAIN\n"
+            "REPONSE: Aucune source ne parle de la position d'ARIA elle-même sur "
+            "BTC/ETH, seulement de celle de Mark Cuban -- je n'ai pas de doctrine "
+            "maximaliste établie.\n"
+            "P_VRAI: 0.20\n"
+            "P_FAUX: 0.10\n"
+            "RAISON: source parle de Mark Cuban, pas d'ARIA"
+        )
+
+    monkeypatch.setattr(wv, "fetch_web_snippets", fake_snippets)
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+
+    reply, meta = await wv.web_enhance_calibrated(
+        "tu es maxi btc ou maxi eth ?",
+        None,
+        {"p_true": 0.3, "truth": "INCERTAIN"},
+        "fr",
+        force=True,
+    )
+    assert reply
+    assert "maxi eth" not in reply.lower()
+    assert "maxi btc" not in reply.lower()
+    assert "mark cuban" in reply.lower()  # source citée honnêtement, pas cachée
+    assert meta.get("truth") == "incertain"
+
+
+@pytest.mark.asyncio
+async def test_web_enhance_still_answers_when_source_matches_asked_entity(monkeypatch):
+    # Contraste : quand la question porte reellement sur une entite tierce (pas ARIA) et
+    # que la source parle bien de cette meme entite, la regle ne doit PAS bloquer une
+    # reponse normale -- seul le cas "source parle d'une autre entite que celle
+    # interrogee" doit etre refuse, pas toute question sur un tiers.
+    from aria_core.knowledge import web_verify as wv
+
+    async def fake_snippets(_q):
+        return [
+            WebSource(
+                text="Brian Armstrong is the CEO of Coinbase.",
+                url="https://coinbase.com/about",
+            )
+        ]
+
+    async def fake_chat(*_a, **_k):
+        return (
+            "FAIT: VRAI\n"
+            "REPONSE: Brian Armstrong est le CEO de Coinbase.\n"
+            "P_VRAI: 0.95\n"
+            "P_FAUX: 0.02\n"
+            "RAISON: source directe Coinbase"
+        )
+
+    monkeypatch.setattr(wv, "fetch_web_snippets", fake_snippets)
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+
+    reply, meta = await wv.web_enhance_calibrated(
+        "qui est le CEO de Coinbase ?",
+        None,
+        {"p_true": 0.3, "truth": "INCERTAIN"},
+        "fr",
+        force=True,
+    )
+    assert reply
+    assert "armstrong" in reply.lower()
+    assert meta.get("truth") == "vrai"
+
+
 def test_format_live_info_picks_time_snippet():
     snippets = [
         "Calendrier Top 14 disponible sur LNR.",
