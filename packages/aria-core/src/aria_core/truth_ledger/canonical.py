@@ -1,9 +1,20 @@
-"""Sync canonical_facts.yaml → Truth Ledger (supersedes stale entries)."""
+"""Sync canonical_facts.yaml → Truth Ledger (supersedes stale entries).
+
+``sync_canonical_facts()`` existe depuis la migration monorepo (01/07) mais n'avait
+JAMAIS eu d'appelant en production (grep exhaustif de tout l'historique git, 11/07) --
+ni heartbeat, ni script, ni hook de demarrage, seul son propre test l'exerçait. Cause
+racine trouvee du meme segment : `content/faq.yaml` et `truth_ledger/canonical_facts.yaml`
+avaient derive en quasi-doublons (22 entrees identiques, aucune synchro reelle) malgre
+`_export_faq_from_canonical` conçu exactement pour eviter ça -- le mecanisme existait,
+il ne tournait juste jamais. Cable dans `heartbeat.py` (`canonical_facts_sync_cycle`) le
+11/07, gate OFF par defaut comme toute nouvelle tache heartbeat (`canonical_facts_sync_enabled`
+ci-dessous)."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +26,14 @@ from aria_core.truth_ledger.store import (
 )
 
 _CANONICAL_PATH = Path(__file__).parent / "canonical_facts.yaml"
+
+
+def canonical_facts_sync_enabled() -> bool:
+    """Gate additif -- `sync_canonical_facts()` n'est appelee depuis le heartbeat que si
+    ce flag est actif (OFF par defaut, meme patron que les autres taches heartbeat)."""
+    return os.environ.get("ARIA_CANONICAL_FACTS_SYNC_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def load_canonical_facts() -> list[dict]:

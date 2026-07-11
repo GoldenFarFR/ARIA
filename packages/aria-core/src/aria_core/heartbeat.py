@@ -319,6 +319,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=180,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="canonical_facts_sync_cycle",
+        name="Sync canonical_facts.yaml -> Truth Ledger + faq.yaml",
+        description="Relit canonical_facts.yaml (SSOT), supersede les entrees Truth Ledger changees (hash-based, jamais un doublon si le contenu est inchange) et regenere faq.yaml a l'identique -- le skill FAQ (content/faq.yaml) ne derive plus jamais de la vraie source de verite. Existait depuis la migration monorepo (01/07) sans jamais avoir tourne en prod (cause racine du doublon faq.yaml/canonical_facts.yaml trouve et corrige le 11/07). Gate OFF par defaut.",
+        interval_minutes=180,
+        enabled=False,
+    ),
 ]
 
 
@@ -428,6 +435,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.bonding_absorber import bonding_discovery_enabled
 
                 task.enabled = bonding_discovery_enabled()
+            if task.id == "canonical_facts_sync_cycle":
+                from aria_core.truth_ledger.canonical import canonical_facts_sync_enabled
+
+                task.enabled = canonical_facts_sync_enabled()
             if task.id == "acp_provider_poll":
                 from aria_core.skills.acp_cli import is_acp_available
 
@@ -926,6 +937,18 @@ class AriaHeartbeat:
                     "market_sentiment",
                     f"[sentiment] {', '.join(result['updated'])} rafraichi(s)"
                     + (f" ; echec : {', '.join(result['failed'])}" if result.get("failed") else ""),
+                )
+
+        elif task_id == "canonical_facts_sync_cycle":
+            from aria_core.truth_ledger.canonical import sync_canonical_facts
+
+            result = await sync_canonical_facts()
+            if result.get("synced") or result.get("superseded"):
+                append_memory(
+                    "canonical_facts_sync",
+                    f"[canonical] {result.get('synced', 0)} synchronise(s), "
+                    f"{result.get('superseded', 0)} remplace(s), "
+                    f"{result.get('unchanged', 0)} inchange(s) sur {result.get('total_facts', 0)}",
                 )
 
         elif task_id == "bonding_discovery_cycle":
