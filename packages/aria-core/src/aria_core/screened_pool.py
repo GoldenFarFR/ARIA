@@ -13,7 +13,7 @@ Aucune action financière : c'est un annuaire de candidats.
 from __future__ import annotations
 
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -208,6 +208,34 @@ async def drop_token(contract: str, *, reason: str = "") -> None:
             (now, contract),
         )
         await db.commit()
+
+
+async def list_stale_pending(
+    *, older_than_hours: int = 24, limit: int = 20, network: str = "base"
+) -> list[dict]:
+    """Candidats ``pending`` dont le dernier check date d'au moins ``older_than_hours``.
+
+    'pending' == échec MOU (donnée pas encore mûre : contrat pas encore vérifié,
+    holders pas encore lisibles, liquidité pas encore montée...) — jamais un rejet
+    définitif (cf. ``record_pending``), mais rien ne le retente PROACTIVEMENT
+    aujourd'hui : seule une redécouverte fortuite (même contrat qui réapparaît dans
+    ``discover_top_pools``/``discover_direct_candidates``) le fait rescanner. Cette
+    liste sert de file d'attente pour un retry délibéré (cf.
+    ``base_crawler.retry_stale_pending``), pas un nouveau mécanisme de filtrage —
+    ``token_absorber.absorb`` (déjà appelé sans court-circuit sur 'pending') fait
+    tout le travail de réévaluation.
+    """
+    await _ensure_table()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await (
+            await db.execute(
+                "SELECT * FROM screened_token WHERE status='pending' AND network=? "
+                "AND last_checked_at <= ? ORDER BY last_checked_at ASC LIMIT ?",
+                (network, cutoff, limit),
+            )
+        ).fetchall()
+    return [dict(zip(_COLUMNS, row)) for row in rows]
 
 
 async def list_pool(status: str = "active", limit: int = 1000, *, network: str = "base") -> list[dict]:

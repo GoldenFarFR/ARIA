@@ -310,6 +310,24 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   modifié** (lecture seule) : décision opérateur nécessaire sur le gate déjà ON pour 0 preuve, et
   sur élargir le sourcing vs assouplir le filtre avant de compter les 20 jours pour de vrai. Détail
   complet : `docs/audit-2026-07-11-paper-trading-cadence.md`.
+- **Retry délibéré des candidats `pending` (11/07, suite directe de l'audit #77) — CODÉ, testé,
+  PAS déployé.** Vérifié avant de coder (décision opérateur explicite) : `safety_screen`/
+  `token_absorber` classent DÉJÀ correctement un échec lié à la fraîcheur du token (score<70,
+  contrat pas vérifié, holders inconnus, liquidité basse, verdict CAUTION) en `pending` (échec
+  MOU, jamais un rejet définitif) — **aucun bug dans ce classement**, confirmé en reconstruisant
+  le contexte exact d'une des 41 lignes `rejected` sans signal dur trouvées dans l'audit : elles
+  sont des reliquats d'une version plus stricte du code (probablement pré-10/07), jamais
+  retouchées depuis (`rejected` court-circuite le rescan, contrairement à `pending`) — pas un
+  bug actuel, hors scope de ce correctif. **Le vrai trou** : rien ne va délibérément rescanner un
+  candidat `pending` — seule une redécouverte fortuite (même contrat qui réapparaît dans le
+  crawl) déclenche un nouveau passage, déjà testé et correct
+  (`test_soft_fail_pending_is_still_rescanned_next_cycle`). Ajouté : `screened_pool.
+  list_stale_pending()` (candidats `pending` dont `last_checked_at` dépasse 24h) +
+  `base_crawler.retry_stale_pending()` (appelle le MÊME `token_absorber.absorb()` que le crawl
+  normal sur ces candidats — aucun filtre dupliqué, aucun seuil de sécurité touché), câblés dans
+  le heartbeat `vc_crawl` juste après `crawl_and_absorb`. 8 nouveaux tests, suite complète verte
+  (4369 passed, 7 skipped, 0 échec — 0 régression). **Rien déployé** (le code n'a d'effet qu'au
+  prochain rebuild Docker + restart) : décision opérateur avant de le pousser en prod.
 - **11/07 (ce segment) — 4 items du backlog fermés, en attendant la décision opérateur sur le
   gate bonding.** `production.env.example` (aria-ops) : ID Telegram réel (`5864967247`) retiré
   (placeholder vide, comme les autres champs secrets du fichier), encodage mojibake des
