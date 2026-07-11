@@ -957,7 +957,10 @@ class AriaHeartbeat:
                 )
 
         elif task_id == "bonding_discovery_cycle":
-            from aria_core.skills.bonding_absorber import run_bonding_discovery_cycle
+            from aria_core.skills.bonding_absorber import (
+                retry_stale_bonding_pending,
+                run_bonding_discovery_cycle,
+            )
 
             result = await run_bonding_discovery_cycle()
             bonding = result.get("bonding") or {}
@@ -967,6 +970,12 @@ class AriaHeartbeat:
                     "bonding_discovery",
                     f"[decouverte] bonding kept={bonding.get('kept', 0)} "
                     f"direct kept={direct.get('kept', 0)}",
+                )
+            retry_counts = await retry_stale_bonding_pending()
+            if retry_counts:
+                append_memory(
+                    "bonding_discovery",
+                    f"[retry] {retry_counts} — {retry_counts.get('kept', 0)} mûris",
                 )
 
         elif task_id == "self_banner_curiosity":

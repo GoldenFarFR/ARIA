@@ -1,11 +1,23 @@
 """Absorbeur niche bonding (DB isolée) — jamais network='base' (pool 85% VC)."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
+import aiosqlite
 import pytest
 
 from aria_core import screened_pool as sp
 from aria_core.skills import bonding_absorber as ba
 from aria_core.skills.acp_onchain_scan import PairSnapshot, TokenScanContext
+
+
+async def _backdate(contract: str, hours_ago: float) -> None:
+    ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+    async with aiosqlite.connect(sp.DB_PATH) as db:
+        await db.execute(
+            "UPDATE screened_token SET last_checked_at=? WHERE contract=?", (ts, contract)
+        )
+        await db.commit()
 
 
 @pytest.fixture(autouse=True)
@@ -210,3 +222,98 @@ async def test_run_bonding_discovery_cycle_direct_failure_does_not_erase_bonding
     result = await ba.run_bonding_discovery_cycle()
     assert result["bonding"] == {"kept": 1}
     assert result["direct"] == {}
+
+
+# ── retry_stale_bonding_pending (#107, pendant bonding de #105/#108) ───────────────
+
+@pytest.mark.asyncio
+async def test_retry_stale_bonding_pending_ignores_fresh_entry():
+    scan = _scanner({"0xfresh": _bonding_ctx("0xfresh", mint_authority="unknown")})
+    assert await ba.absorb_bonding_candidate("0xfresh", scanner=scan) == "skip_incomplete"
+    # Pas encore stale (last_checked_at tout juste écrit) -- rien à retenter.
+    counts = await ba.retry_stale_bonding_pending()
+    assert counts == {}
+    assert await sp.get_status("0xfresh") == "pending"
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_bonding_pending_never_touches_standard_pool(monkeypatch):
+    # Un candidat 'pending' du pool STANDARD (network='base') ne doit jamais être
+    # retenté par le retry bonding -- même doctrine d'isolation que le reste du fichier.
+    await sp.record_pending(contract="0xstandard", reason="holders inconnus", network="base")
+    await _backdate("0xstandard", hours_ago=30)
+
+    calls: list[str] = []
+
+    async def fake_absorb(contract, **kw):
+        calls.append(contract)
+        return "kept"
+
+    monkeypatch.setattr(ba, "absorb_bonding_candidate", fake_absorb)
+
+    counts = await ba.retry_stale_bonding_pending(older_than_hours=24)
+    assert calls == []  # le candidat 'base' n'a jamais été vu par le lister bonding
+    assert counts == {}
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_bonding_pending_reuses_base_crawler_without_duplicating_logic():
+    # Vérifie le câblage exact : lister scopé network=base-bonding, absorber =
+    # absorb_bonding_candidate, plafond anti-boucle délégué tel quel (aucune logique
+    # de comptage/abandon dupliquée dans bonding_absorber.py).
+    scan = _scanner({"0xstuck": _bonding_ctx("0xstuck", mint_authority="unknown")})
+    assert await ba.absorb_bonding_candidate("0xstuck", scanner=scan) == "skip_incomplete"
+    await _backdate("0xstuck", hours_ago=30)
+
+    # Pousse retry_count à 4 : l'appel absorber() ci-dessous échoue mou une fois de
+    # plus (record_pending l'incrémente à 5), pile le seuil max_retries=5.
+    async with aiosqlite.connect(sp.DB_PATH) as db:
+        await db.execute(
+            "UPDATE screened_token SET retry_count=4 WHERE contract=?", ("0xstuck",)
+        )
+        await db.commit()
+
+    async def absorber(contract):
+        return await ba.absorb_bonding_candidate(contract, scanner=scan)
+
+    from aria_core import screened_pool as sp2
+
+    async def lister():
+        return await sp2.list_stale_pending(older_than_hours=24, network=ba.BONDING_NETWORK)
+
+    from aria_core.base_crawler import retry_stale_pending
+
+    counts = await retry_stale_pending(
+        lister=lister, absorber=absorber, max_retries=5, max_age_days=7,
+    )
+    assert counts == {"abandoned": 1}
+    assert await sp.get_status("0xstuck") == "rejected"
+    row = (await sp.list_pool(status="rejected", network=ba.BONDING_NETWORK))[0]
+    assert "abandonné après 5 tentatives" in row["screen_reason"]
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_bonding_pending_default_wiring_uses_bonding_network(monkeypatch):
+    # Vérifie que retry_stale_bonding_pending() lui-même (pas via injection manuelle)
+    # scope bien sa recherche à network='base-bonding' et son absorber à
+    # absorb_bonding_candidate, sans rien toucher au pool standard.
+    calls: dict[str, object] = {}
+
+    async def fake_list_stale_pending(*, older_than_hours=24, limit=20, network="base"):
+        calls["network"] = network
+        calls["older_than_hours"] = older_than_hours
+        return [{"contract": "0xbondstale"}]
+
+    absorbed: list[str] = []
+
+    async def fake_absorb_bonding_candidate(contract, **kw):
+        absorbed.append(contract)
+        return "kept"
+
+    monkeypatch.setattr(sp, "list_stale_pending", fake_list_stale_pending)
+    monkeypatch.setattr(ba, "absorb_bonding_candidate", fake_absorb_bonding_candidate)
+
+    counts = await ba.retry_stale_bonding_pending()
+    assert calls["network"] == ba.BONDING_NETWORK
+    assert absorbed == ["0xbondstale"]
+    assert counts == {"kept": 1}
