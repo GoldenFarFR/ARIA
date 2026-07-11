@@ -632,8 +632,16 @@ async def _resolve_bonding_phase(ctx: "TokenScanContext", contract: str) -> None
     Capture AUSSI (audit 11/07) `ctx.virtuals_description`/`_tokenomics`/
     `_additional_details` dès qu'un token Virtuals est trouvé -- bonding ou non --
     puisque le même appel réseau a déjà ramené ce payload : zéro coût supplémentaire
-    pour nourrir la diligence produit (`vc_analysis._fetch_product_diligence`)."""
+    pour nourrir la diligence produit (`vc_analysis._fetch_product_diligence`).
+
+    Repli on-chain (audit 11/07, gate OFF par défaut `ARIA_ONCHAIN_GRADUATION_ENABLED`) :
+    quand l'heuristique API (`graduation_progress`) renvoie `None`, tente une lecture
+    on-chain réelle (`services/base_onchain.py`) -- couverture PARTIELLE et honnête (une
+    seule instance connue du contrat Bonding V5), jamais bloquant (thread séparé via
+    `asyncio.to_thread`, mêmes conventions que `mailer.py`/`x_twitter.py` pour les appels
+    synchrones), jamais de valeur inventée si la lecture échoue ou ne couvre pas ce token."""
     try:
+        from aria_core.services.base_onchain import onchain_graduation_enabled, onchain_graduation_progress
         from aria_core.services.virtuals import graduation_progress, is_in_bonding, virtuals_client
 
         token = await virtuals_client.fetch_by_address(contract)
@@ -645,6 +653,12 @@ async def _resolve_bonding_phase(ctx: "TokenScanContext", contract: str) -> None
         if is_in_bonding(token):
             ctx.bonding_phase = True
             ctx.bonding_progress = graduation_progress(token)
+            if ctx.bonding_progress is None and onchain_graduation_enabled():
+                ctx.bonding_progress = await asyncio.to_thread(
+                    onchain_graduation_progress,
+                    pair_address=token.pair_address,
+                    token_address=token.pre_token_address or token.token_address,
+                )
             ctx.bonding_holder_count = token.holder_count
             ctx.bonding_mcap_virtual = token.mcap
     except Exception:  # noqa: BLE001 — best-effort, ne casse jamais le scan

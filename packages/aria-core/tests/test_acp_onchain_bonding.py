@@ -170,6 +170,91 @@ async def test_resolve_bonding_phase_sets_fields_when_in_bonding(monkeypatch):
     assert ctx.bonding_holder_count == 120
 
 
+# ── _resolve_bonding_phase : repli on-chain (audit 11/07, gate OFF par défaut) ─────
+
+
+@pytest.mark.asyncio
+async def test_resolve_bonding_phase_onchain_fallback_when_gate_on(monkeypatch):
+    """virtual_raised absent (heuristique API renvoie None) + gate ON -> le repli
+    on-chain est tenté et son résultat est utilisé."""
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return _bonding_token(
+            virtual_raised=None, pair_address="0xPair", pre_token_address=ADDR,
+        )
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.base_onchain.onchain_graduation_enabled", lambda: True,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.base_onchain.onchain_graduation_progress",
+        lambda **kwargs: 0.73,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    await scan._resolve_bonding_phase(ctx, ADDR)
+
+    assert ctx.bonding_phase is True
+    assert ctx.bonding_progress == pytest.approx(0.73)
+
+
+@pytest.mark.asyncio
+async def test_resolve_bonding_phase_onchain_fallback_skipped_when_gate_off(monkeypatch):
+    """Gate OFF (comportement par défaut) -> le repli on-chain n'est même pas tenté,
+    bonding_progress reste None comme avant ce changement."""
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return _bonding_token(virtual_raised=None, pair_address="0xPair", pre_token_address=ADDR)
+
+    def _should_not_be_called(**kwargs):
+        raise AssertionError("onchain_graduation_progress ne doit pas être appelé, gate OFF")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.base_onchain.onchain_graduation_enabled", lambda: False,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.base_onchain.onchain_graduation_progress", _should_not_be_called,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    await scan._resolve_bonding_phase(ctx, ADDR)
+
+    assert ctx.bonding_phase is True
+    assert ctx.bonding_progress is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_bonding_phase_onchain_fallback_not_tried_when_api_heuristic_has_value(
+    monkeypatch,
+):
+    """virtual_raised présent (heuristique API réussit) -> le repli on-chain n'est jamais
+    tenté, même gate ON (évite un eth_call inutile)."""
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return _bonding_token(pair_address="0xPair", pre_token_address=ADDR)  # virtual_raised=21000 par défaut
+
+    def _should_not_be_called(**kwargs):
+        raise AssertionError("onchain_graduation_progress ne doit pas être appelé, heuristique déjà résolue")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.base_onchain.onchain_graduation_enabled", lambda: True,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.base_onchain.onchain_graduation_progress", _should_not_be_called,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    await scan._resolve_bonding_phase(ctx, ADDR)
+
+    assert ctx.bonding_progress == pytest.approx(0.5)
+
+
 @pytest.mark.asyncio
 async def test_resolve_bonding_phase_graduated_token_stays_false(monkeypatch):
     """Un token DÉJÀ gradué (AVAILABLE) sans paire DexScreener est un cas réellement
