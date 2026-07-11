@@ -23,9 +23,10 @@ $env:ARIA_REPO_ROOT = "$env:USERPROFILE\GitHub-Repos\ARIA"
 $env:ARIA_OPS_ROOT  = "$env:USERPROFILE\GitHub-Repos\aria-ops"
 ```
 
-## Deploy Render
+## Deploy VPS IONOS
 
-- Blueprint : `render.yaml`
+- Procédure complète : `docs/deploy-ionos.md`
+- Script backend : `vanguard/deploy.sh` · vitrine : `vanguard/deploy-vitrine.sh`
 - Scripts opérateur : `aria-ops/vanguard/operator/` (privé)
 - Secrets : coffre `%LOCALAPPDATA%\GoldenFar\vault` — jamais Git
 
