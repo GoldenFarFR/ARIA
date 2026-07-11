@@ -268,6 +268,18 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   recherche externe. 2 notes déposées dans `docs/aria-learning-inbox/` (Virtuals x
   Robinhood Chain, diligence Bankr). Section "Faits établis" compactée le même segment
   (Nuit 7-9 réduites, rien perdu — cf. `docs/HANDOFF-2026-07-10-detail-archive.md`).
+  **Fin de session, feu vert opérateur nommé explicitement sur 3 points Tier 2** :
+  `goldenfar-vault.gfv` (aria-ops) retiré du suivi git + négations `.gitignore` qui le
+  réintroduisaient supprimées (décision opérateur "aucune donnée sensible sur GitHub"
+  prime sur le design précédent ; fichier reste dans l'historique passé, réécriture
+  différée) — commit `9212f42` ; 413 doublons `truth-ledger/*-canonical-base-token.md`
+  supprimés (mécanisme dormant confirmé, aucun appelant en prod) ; `sync_canonical_facts()`
+  câblé dans le heartbeat (`canonical_facts_sync_cycle`, gate `ARIA_CANONICAL_FACTS_SYNC_ENABLED`
+  OFF) pour que `faq.yaml` ne dérive plus jamais de `canonical_facts.yaml` — mergé `main`
+  (`696cbb23`), suite verte (4361 passed, 7 skipped, 0 échec), branche supprimée. La
+  "duplication à risque" `faq.yaml`/`canonical_facts.yaml` notée juste au-dessus est donc
+  câblée en solution (activation en prod encore à décider). Reste en attente : ID
+  Telegram en clair dans `production.env.example`, nomenclature `#104` restante.
   Détail complet : `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
