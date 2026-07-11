@@ -319,6 +319,43 @@ class AriaBrain:
         route_msg = _routing_message(user_message)
         await repertoire_db.save_message("user", user_message, visitor_id=vid)
 
+        # Ancrage anti-confabulation sur la NATURE/MÉTHODE d'ARIA -- doit gagner sur TOUT
+        # autre interceptor précoce (vc_followup, self-maintenance, etc.), sinon la garantie
+        # #110 (zéro confabulation sur ces deux sujets, public ET opérateur) est illusoire dès
+        # qu'un routage antérieur matche en premier. Incident réel (11/07, post-déploiement
+        # 32e6b2f5) : "comment tu analyses un token, tu utilises de l'IA générative ?" a été
+        # avalée par `vc_session_context.is_vc_followup_question` (son regex générique matche
+        # sur "comment" + "token") AVANT que `_general_response` -- où vivait le fix #110 --
+        # ne soit jamais atteint, tant qu'un `/vc` récent (TTL 4h) traînait en mémoire courte.
+        # Résultat vécu : vrai appel LLM (10923 tokens), confabulation de nouveau possible.
+        # Placé ici, tout en haut de `process()`, avant TOUT autre routage.
+        from aria_core.grounding import (
+            analysis_methodology_reply,
+            is_analysis_methodology_question,
+            is_llm_identity_question,
+            llm_identity_reply,
+        )
+
+        lang_key_early = "fr" if lang == LANG_FR else "en"
+        if is_llm_identity_question(route_msg):
+            early_reply = llm_identity_reply(lang_key_early)
+            await repertoire_db.save_message("agent", early_reply, visitor_id=vid)
+            return ChatResponse(
+                reply=early_reply,
+                skill_used=None,
+                actions_taken=["Identité LLM (template — sans confabulation)"],
+                data={"llm_identity": True, "skip_web": True},
+            )
+        if is_analysis_methodology_question(route_msg):
+            early_reply = analysis_methodology_reply(lang_key_early)
+            await repertoire_db.save_message("agent", early_reply, visitor_id=vid)
+            return ChatResponse(
+                reply=early_reply,
+                skill_used=None,
+                actions_taken=["Méthode d'analyse (template — sans confabulation)"],
+                data={"analysis_methodology": True, "skip_web": True},
+            )
+
         if not public:
             vc_followup = await self._try_vc_followup_response(
                 user_message, route_msg, lang, visitor_id=vid,
