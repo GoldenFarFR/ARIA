@@ -286,6 +286,25 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (`696cbb23`), suite verte (4361 passed, 7 skipped, 0 échec), branche supprimée. La
   "duplication à risque" `faq.yaml`/`canonical_facts.yaml` notée juste au-dessus est donc
   câblée en solution (activation en prod encore à décider).
+- **Audit #77 (11/07) — cadence réelle du candidate flow avant `ARIA_PAPER_TRADING_ENABLED` :
+  verdict NON, volume insuffisant.** Alerte trouvée en auditant : `ARIA_PAPER_TRADING_ENABLED=true`
+  est **déjà actif en prod** (`paper_state.created_at` = 08/07, il y a 3 jours) — l'horloge des
+  20 jours tourne peut-être déjà sans décision tracée. Données réelles sur 3,73 jours organiques
+  (20 lignes de mon propre dry-run bonding de ce segment exclues pour ne pas fausser les chiffres) :
+  72 candidats distincts absorbés dans `screened_token` (~135/semaine — le sourcing brut n'est PAS
+  le problème), mais **0 % n'atteint jamais le statut `active`** (50 rejetés, 22 pending), confirmé
+  sur 4 jours de logs heartbeat (`— 0 gardés` à chaque cycle `vc_crawl`, sans exception).
+  Conséquence : `vc_weekly_forecast` (tire 20 candidats du pool actif tous les 2 jours) a tourné
+  au moins 2 fois et produit `0 pronostics` les deux fois ; `paper_trade_cycle` (même source) n'a
+  ouvert 0 position en 3 jours de gate ON. Les 10 `vc_prediction` existants sont TOUS manuels
+  (`/vc <contrat>` sur 6 contrats distincts), 0 résolue, horizon 30 j (`vc`) donc aucune ne peut
+  résoudre avant le 06-09/08 — hors de toute fenêtre de 20 jours démarrée maintenant. Cause
+  probable chiffrée : le filtre (`safety_screen`, 5 critères mous requis simultanément — score≥70,
+  vérifié, holders connus, liquidité≥30k$, verdict SAFE) rejette à 87,5 % sur des critères de
+  fraîcheur du token, pas un signal malveillant confirmé (~12,5 % seulement). **Rien activé ni
+  modifié** (lecture seule) : décision opérateur nécessaire sur le gate déjà ON pour 0 preuve, et
+  sur élargir le sourcing vs assouplir le filtre avant de compter les 20 jours pour de vrai. Détail
+  complet : `docs/audit-2026-07-11-paper-trading-cadence.md`.
 - **11/07 (ce segment) — 4 items du backlog fermés, en attendant la décision opérateur sur le
   gate bonding.** `production.env.example` (aria-ops) : ID Telegram réel (`5864967247`) retiré
   (placeholder vide, comme les autres champs secrets du fichier), encodage mojibake des
