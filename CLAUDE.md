@@ -412,7 +412,10 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (données on-chain réelles, tracées) et les logs serveur, jamais dans l'auto-description en
   chat. Un chat grounded réduit le risque de confabulation, il ne le supprime pas structurellement
   (dépend de la couverture des detecteurs/facts) — ne jamais citer une réponse Telegram d'ARIA
-  comme preuve d'une capacité ou d'un comportement système.
+  comme preuve d'une capacité ou d'un comportement système. **Complément 11/07 (voir entrée
+  #110 incomplet plus bas)** : le fix ne gagnait que sur le chemin `_general_response` — un
+  interceptor antérieur dans `process()` (`vc_session_context.is_vc_followup_question`) pouvait
+  encore avaler la question méthode d'analyse avant que `_general_response` ne soit jamais atteint.
 - **Coordination à deux sessions VPS (11/07) — méthode adoptée ce segment, à connaître pour la
   suite.** Une session cloud (celle-ci) pilote deux sessions Claude Code distinctes tournant sur
   le VPS (« VPS Principal » / « VPS Secondaire »), chacune dans son propre git worktree isolé
@@ -487,6 +490,29 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   si la formulation ressemble à de l'actu (`test_real_hype_trigger_still_wins_over_web_even_if_
   news_shaped`). 4 nouveaux tests (`test_epistemic.py`), suite complète verte (4393 passed, 7
   skipped, 0 échec). **Rien déployé.**
+- **#110 incomplet — `vc_followup` court-circuitait le fix anti-confabulation (11/07) — CODÉ,
+  testé, PAS déployé.** Testé sur Telegram post-déploiement 32e6b2f5, dans la MÊME conversation
+  que #105, juste après la question identité LLM : « comment tu analyses un token, tu utilises
+  de l'IA générative ? » a coûté 10923 tokens (payant) — donc bien passée par un vrai appel LLM,
+  pas par le template déterministe #110. **Cause racine** : `process()`
+  (`brain.py::_process_inner`) appelle `_try_vc_followup_response()` **avant** même d'atteindre
+  `_general_response()` — là où vivait tout le routage #110. `vc_session_context.
+  is_vc_followup_question()` (regex générique « comment »/« pourquoi »/... + « token »/
+  « analyse »/...) matche AUSSI cette question générique de méthode dès qu'un `/vc` récent
+  (TTL 4h) traîne en mémoire courte (`vc_operator_last`, alimentée par toute commande `/vc`
+  opérateur) — confirmé en isolant `is_vc_followup_question("comment tu analyses un token, tu
+  utilises de l'IA générative ?")` → `True`. Pas une régression de la regex #110 elle-même
+  (matche toujours correctement en isolation) : une collision entre deux détecteurs jamais
+  croisés, où le plus ancien/large gagne par ordre d'exécution. **Fix** : les deux détecteurs
+  #110 (`is_llm_identity_question`/`is_analysis_methodology_question`) sont désormais vérifiés
+  tout en haut de `process()`, avant TOUT autre routage (`vc_followup` inclus) — la garantie
+  "jamais de confabulation sur ces deux sujets" ne dépend plus de l'ordre des interceptors
+  ajoutés avant ou après. Le bloc original dans `_general_response` reste en place (deuxième
+  ligne de défense pour tout appelant direct de cette méthode, ex. tests). 2 nouveaux tests
+  reproduisent les conditions réelles (`/vc` récent en cache) via `process()` — l'un d'eux
+  échoue bien contre le code pré-fix (vérifié manuellement avant de committer, `llm_calls
+  == 1` au lieu de `0`), confirmant qu'il verrouille vraiment ce cas. Suite complète verte
+  (4395 passed, 7 skipped, 0 échec). **Rien déployé.**
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

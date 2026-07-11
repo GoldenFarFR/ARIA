@@ -199,3 +199,81 @@ async def test_operator_analysis_methodology_question_never_reaches_free_llm(mon
     assert "goplus" in reply.lower()
     assert "blockscout" in reply.lower()
 
+
+@pytest.mark.asyncio
+async def test_analysis_methodology_question_wins_over_vc_followup_interceptor(monkeypatch):
+    """Incident réel (11/07, post-déploiement 32e6b2f5) : le fix précédent verrouillait
+    `_general_response`, mais `process()` appelle `_try_vc_followup_response` AVANT même
+    d'atteindre `_general_response`. `vc_session_context.is_vc_followup_question` matche
+    "comment tu analyses un token, tu utilises de l'IA générative ?" (son regex générique
+    capture "comment" + "token") dès qu'un /vc récent traîne en mémoire courte (TTL 4h) —
+    la question partait alors vers un vrai appel LLM (10923 tokens en prod réel), jamais vers
+    le template déterministe. Reproduit les conditions réelles (un /vc récent en cache) via
+    `process()` (pas `_general_response` directement) et verrouille que le chemin déterministe
+    gagne quand même."""
+    from aria_core.skills import vc_session_context
+
+    llm_calls = {"n": 0}
+
+    async def _fake_llm(self, *a, **k):
+        llm_calls["n"] += 1
+        return "ne devrait jamais être atteint"
+
+    async def _fake_followup_block(*, lang="fr"):
+        # Simule un /vc récent encore dans la fenêtre TTL de 4h.
+        return "DERNIER RAPPORT /vc: WOJAK entrée 0.01 cible 0.05 BUY"
+
+    monkeypatch.setattr("aria_core.brain.AriaBrain._llm_response", _fake_llm)
+    monkeypatch.setattr(vc_session_context, "get_followup_context_block", _fake_followup_block)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+
+    async def _noop_save(*a, **k):
+        return None
+
+    monkeypatch.setattr("aria_core.repertoire_db.save_message", _noop_save)
+    monkeypatch.setattr("aria_core.memory.append_memory", lambda *a, **k: None)
+
+    brain = AriaBrain()
+    response = await brain.process(
+        "comment tu analyses un token, tu utilises de l'IA générative ?",
+        lang="fr",
+        public_mode=False,
+    )
+
+    assert llm_calls["n"] == 0
+    assert response.data.get("analysis_methodology") is True
+    assert response.data.get("vc_followup") is not True
+    assert "goplus" in response.reply.lower()
+    assert "blockscout" in response.reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_llm_identity_question_wins_over_early_interceptors(monkeypatch):
+    """Même garde-fou que ci-dessus, pour l'autre question (identité LLM) — verrouille qu'elle
+    gagne aussi via `process()` (pas seulement `_general_response`), avant tout autre routage
+    précoce (self-maintenance, operator readiness, etc.)."""
+    llm_calls = {"n": 0}
+
+    async def _fake_llm(self, *a, **k):
+        llm_calls["n"] += 1
+        return "ne devrait jamais être atteint"
+
+    monkeypatch.setattr("aria_core.brain.AriaBrain._llm_response", _fake_llm)
+
+    async def _noop_save(*a, **k):
+        return None
+
+    monkeypatch.setattr("aria_core.repertoire_db.save_message", _noop_save)
+    monkeypatch.setattr("aria_core.memory.append_memory", lambda *a, **k: None)
+
+    brain = AriaBrain()
+    response = await brain.process(
+        "tu fonctionnes avec quel type d'intelligence, un LLM ?",
+        lang="fr",
+        public_mode=False,
+    )
+
+    assert llm_calls["n"] == 0
+    assert response.data.get("llm_identity") is True
+    assert "opus" not in response.reply.lower()
+
