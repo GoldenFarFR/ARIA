@@ -228,9 +228,16 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   `bonding_discovery_cycle` (180min, gate OFF `ARIA_BONDING_DISCOVERY_ENABLED`), les deux volets
   tournent indépendamment (testé). Clanker vérifié en direct depuis le VPS (mise à jour même
   segment) : `sortBy` réel énuméré par l'API elle-même (`deployed-at`, pas `createdAt` comme
-  supposé — corrigé). **Gate `ARIA_BONDING_DISCOVERY_ENABLED` toujours pas activé au 11/07** —
-  étape suivante inchangée : **dry-run manuel (`run_bonding_discovery_cycle()`) demandé à
-  l'opérateur avant activation en continu, jamais relancé depuis**.
+  supposé — corrigé). **Dry-run manuel exécuté (11/07, ce segment)** via
+  `python -m aria_core.dry_run_bonding_discovery` (docker `aria-api`), gate
+  `ARIA_BONDING_DISCOVERY_ENABLED` resté OFF pendant tout le test : `bonding={}` (0
+  candidat — `virtuals_bonding` interrogé en réel, rien en courbe actuellement),
+  `direct={'skip_incomplete': 20}` (20 candidats Clanker découverts, 0 gardé — vérifié à la
+  main sur 3 adresses : pas encore de paire DEX + contrat non vérifié, comportement attendu
+  pour des tokens tout juste déployés, pas un défaut). Aucune erreur, aucune écriture en pool
+  `active` (seulement `pending`/réseau `base` standard, pas de contamination du pool
+  bonding). **Gate `ARIA_BONDING_DISCOVERY_ENABLED` toujours pas activé au 11/07** —
+  décision d'activation en continu reste à l'opérateur.
 - **Vision (images en chat Telegram) — EN LIGNE, gate ON, testé en conditions réelles (10/07).** Handler photo manquant corrigé (`telegram_bot.py` n'enregistrait aucun `MessageHandler(filters.PHOTO)`, toute image ignorée en silence) — un seul point d'entrée `_handle_photo` créé. Lecture visuelle admin-only, gate OFF par défaut (`ARIA_VISION_ENABLED`), testé en direct sur un vrai graphique DexScreener avec succès (chiffres lus correctement, distinction rug/dump). Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
 - **Note de calibration (10/07) — la règle « zéro trace IA » ne couvre PAS le chat Telegram
   opérateur.** Vérifié dans le code : la règle absolue dit explicitement « sur les surfaces
