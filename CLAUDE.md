@@ -513,6 +513,24 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   échoue bien contre le code pré-fix (vérifié manuellement avant de committer, `llm_calls
   == 1` au lieu de `0`), confirmant qu'il verrouille vraiment ce cas. Suite complète verte
   (4395 passed, 7 skipped, 0 échec). **Rien déployé.**
+- **Reclassification `rejected` → `pending` des 41 candidats sans signal dur (11/07) — EXÉCUTÉE
+  en production, DONNÉES RÉELLES modifiées.** Suite directe de l'audit #106/correctif #108
+  (plafond anti-boucle-infinie déployé et vérifié actif avant toute écriture — `abandon_stale_
+  pending`/`retry_count` confirmés présents dans le conteneur `aria-api`, câblés dans le
+  heartbeat `vc_crawl`). Les 41 candidats `screened_token` identifiés sans marqueur dur
+  (mint/blacklist/honeypot/owner caché) — reliquats pré-`d1a65472` — reclassés `pending`,
+  `retry_count=0`, via une `UPDATE` ciblée par liste exacte de 41 adresses (`AND
+  status='rejected'` en garde). **SOSO et VIRTUAL confirmés absents des 41** (déjà dans le
+  groupe des 9 exclus, marqueur "owner caché" GoPlus toujours valide) — écart signalé et
+  clarifié avec l'opérateur avant exécution (le "39" initialement demandé provenait d'un
+  recomptage erroné, confirmé). Double exécution : (1) sur une copie de `/opt/aria-data/
+  aria.db`, vérifiée intégralement (41/41 `pending`/`retry_count=0`, 9 exclues intactes,
+  aucune autre table touchée, total `screened_token` stable à 92) avant tout feu vert sur la
+  vraie base ; (2) sur la base réelle après second feu vert explicite, sauvegarde horodatée
+  prise juste avant écriture, mêmes vérifications rejouées à l'identique — résultat 100%
+  conforme à la copie. `rejected` : 50→9, `pending` : 42→83. Ces 41 seront repris par
+  `retry_stale_pending()` au heartbeat suivant (pas immédiat, dépend de `older_than_hours`).
+  Détail complet (liste des 41, requête SQL exacte, sauvegarde) : `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
