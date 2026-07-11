@@ -151,6 +151,11 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   dans un NOM de fichier (pas son contenu) trouvé sur la machine Windows de l'opérateur (hors repo,
   probable résidu de l'incident `connect.ts` du même jour) — supprimé. Détail technique complet
   (astuces Git Bash/Windows réutilisables) : `docs/HANDOFF-2026-07-09-nuit6.md` (voir aussi nuit4/5).
+  **Mise à jour 11/07 — position BTC test fermée** : la position 0.0003 BTC ouverte lors du
+  premier trade test (nuit 6/7 ci-dessus) a été fermée à 100% et le capital consolidé en USDC sur
+  Base — voir entrée dédiée « Clôture position Arena BTC #60 » dans le journal ci-dessous pour le
+  détail complet des vérifications. Le pilote #60 lui-même reste actif/in_progress, seule cette
+  position précise est close.
 - **Nuit 7 (09/07)** — trade HL Perps exécuté (cause racine `join` confirmée : signataire mal autorisé, pas une panne serveur), diligence Shekel livrée (`skills/arena_signal.py`), panne CoinGecko 365j corrigée via `services/blockchain_info.py`. `telegram_conversation_miner.py` livré ce segment, gate OFF, **toujours jamais activé** (voir "reste en attente"). Détail complet : `docs/HANDOFF-2026-07-09-nuit7.md`.
 - **Nuit 8 (10/07)** — écart CLAUDE.md/code fermé : EMA/MACD livrés et câblés dans `/vc` (`skills/indicators.py`), seam `entry_signals` (golden pocket + divergence RSI) trouvé dormant puis câblé le même segment. Détail complet : `docs/HANDOFF-2026-07-10-nuit8.md`.
 - **Scorecard « feu vert argent réel » (#70, 10/07) — EN LIGNE.** `/feuvert` calcule objectivement les 8 cases de `docs/protocole-argent-reel.md` depuis le vrai journal `vc_predictions` — jamais un jugement subjectif. `sample_size`/`benchmark`/`risk`/`judge`/`lawyer` restent `unknown` : pas assez de pronostics clôturés pour même mesurer ces cases (manque de volume, pas un bug). Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
@@ -323,6 +328,24 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   filesystem, pas de token/API nécessaire ; le garde-fou Credential Materialization a bloqué un
   grep plus large qui aurait pu exposer `GITHUB_TOKEN`, correctement).
   Détail complet : `docs/HANDOFF-2026-07-11.md`.
+- **Clôture position Arena BTC #60 (11/07) — 0.0003 BTC fermée à 100%, capital consolidé en
+  USDC sur Base.** Exécuté manuellement par l'opérateur dans son propre terminal, **PAS via une
+  session autonome** (conforme à la règle absolue sur le capital réel — l'outil `acp` signe sans
+  passer par la confirmation Telegram habituelle de `wallet_guard`, seam déjà documenté ci-dessus :
+  Arena reste hors du périmètre `wallet_guard`/kill-switch par construction). Double vérification
+  à chaque étape (pas seulement le texte de sortie de l'outil) : (1) position HL fermée confirmée
+  par `acp trade hl-status` (`positions: []`) ET par la page d'approbation Virtuals (statut
+  « Approuvé », signature correspondante) ; (2) retrait des USDC de Hyperliquid vers Arbitrum
+  (19.03 USDC) puis pont Arbitrum→Base via `acp trade --token-in usdc --chain-in 42161
+  --amount-in 19 --token-out usdc --chain-out 8453 --slippage 5` — slippage 5% explicite (≤10%,
+  règle absolue respectée ; la sous-commande dédiée `withdraw-from-hl` n'expose pas de paramètre
+  de slippage, la commande générique `acp trade` si) ; (3) solde SOL séparé (0.2 SOL, déposé
+  antérieurement sur ce wallet agent) ponté Solana→Base via la même commande générique et la même
+  discipline de slippage explicite (5%), 15.641675 USDC reçus ; (4) solde final vérifié par
+  lecture on-chain directe (`acp wallet balance`) : base-mainnet USDC = 36.95362 sur le wallet
+  agent Aria Vanguard ZHC (`0xd752a325433f4d55c5e0b125be84845d7de47bb3`). **Le pilote #60
+  lui-même reste actif/in_progress** — seule cette position précise est close. Détail complet :
+  `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
