@@ -152,7 +152,93 @@ _BONDING_STATUSES = frozenset({"UNDERGRAD", "PROTOTYPE", "1"})
 #    parsing), cf. tests `test_fetch_*_filters_out_*_client_side` dans
 #    `test_virtuals_client.py`. Les URLs conservent `filters[status]=…` dans
 #    la requête (coût nul, au cas où l'API le respecterait un jour) mais ne
-#    doivent plus être considérées comme filtrantes à elles seules.
+#    doivent plus être considérées comme filtrantes à elles-mêmes.
+# 6. RÉINVESTIGUÉ le 11/07 (suite), accès RPC mainnet Base réel obtenu ce
+#    segment (`mainnet.base.org`, gratuit, lecture seule -- aucune signature,
+#    aucun wallet). Lecture on-chain directe tentée sur le contrat Bonding
+#    documenté comme "confiance moyenne" (`0xF66DeA7b3e897cD44A5a231c61B6B4423d613259`,
+#    cf. `docs/recherche-launchpads-base-2026.md`) : `tokenInfo(address)` sur
+#    ce contrat renvoie une entrée VIDE (tous les champs à zéro/défaut) pour
+#    un vrai token en bonding réel (WOODY, factory `BONDING_V5`) -- CONFIRME
+#    que cette adresse est fausse ou obsolète pour la version V5 actuelle de
+#    Virtuals (plusieurs versions de factory coexistent, `BONDING_V5` observé
+#    dans le payload API). L'adresse correcte du contrat Bonding V5 n'a PAS
+#    été identifiée malgré plusieurs pistes (le token est un clone EIP-1167
+#    pointant vers une implémentation ERC20 générique, pas le Bonding lui-même ;
+#    `owner()` du token renvoie un wallet EOA, pas un contrat ; Blockscout Base
+#    n'indexe pas encore les transactions de tokens aussi récents) -- nécessite
+#    soit BaseScan avec un vrai compte/API (recherche par nom de contrat
+#    vérifié), soit une confirmation directe de l'équipe Virtuals.
+#
+#    EN REVANCHE, une vraie constante a été confirmée par lecture directe de
+#    `getReserves()` sur la PAIRE elle-même (adresse disponible directement
+#    dans le payload API sous `preTokenPair`, sans passer par le contrat
+#    Bonding) : la réserve du token agent (`reserve0`) démarre à EXACTEMENT
+#    1 000 000 000 (vérifié identique sur 4 tokens fraîchement lancés
+#    différents -- WOODY, ASUAGENT, CRASHCAT, DBT). C'est un candidat réel et
+#    vérifié pour la "réserve initiale" qui manquait jusqu'ici.
+#
+#    Le seuil de graduation lu sur le contrat "confiance moyenne"
+#    (`gradThreshold` = 125 000 000, via l'appel `gradThreshold()`) NE TIENT
+#    PAS : testé contre `reserve0` réel de 5 tokens ENCORE marqués UNDERGRAD
+#    par l'API (TIBBIR, CAS, AIXBT, REPPO, AIDOG -- tous à des stades de
+#    progression différents), la formule `(1e9 - reserve0) / (1e9 - 125e6)`
+#    donne systématiquement > 100% (100,01% à 110,34%) alors que ces tokens
+#    ne sont PAS gradués -- preuve empirique que ce seuil de 125M vient bien
+#    du mauvais contrat.
+#
+#    RÉSOLU le 11/07 (suite 2) -- le VRAI contrat Bonding V5 actif trouvé par
+#    balayage direct des logs on-chain (`eth_getLogs` sur le topic
+#    `Graduated(address,address)`, par blocs de 10 000 sur `mainnet.base.org`
+#    -- limite de plage du RPC gratuit) : un vrai événement `Graduated` réel
+#    trouvé émis par `0x1A540088125d00dD3990f9dA45CA0859af4d3B01`
+#    (`TransparentUpgradeableProxy` EIP-1967, vérifié sur Blockscout,
+#    implémentation `0xCceb278a2b3A0b6D32E47B9cD61D2bD1212C3Fab`). Confirmé
+#    comme le bon contrat : `tokenInfo()` y renvoie de vraies données non
+#    vides pour le token gradué de cet événement (contrairement à l'ancienne
+#    adresse "confiance moyenne", vide pour tout token réel).
+#
+#    Cause racine du seuil global faux : en `BondingV5.sol`
+#    (`launchpadv2/BondingV5.sol` du repo `Virtual-Protocol/protocol-contracts`,
+#    PAS `fun/Bonding.sol` lu la fois précédente -- deux générations de
+#    contrats coexistent dans le même repo), le seuil n'est PLUS une constante
+#    globale mais un mapping PAR TOKEN : `mapping(address => uint256) public
+#    tokenGradThreshold`. Il existe aussi `tokenFakeInitialVirtualLiq`
+#    (mapping par token) -- explique la divergence `mcapInVirtual`/`reserve1`
+#    jamais percée avant cette session : c'est un offset de réserve virtuelle
+#    (patron pump.fun), pas une anomalie.
+#
+#    FORMULE CONFIRMÉE EMPIRIQUEMENT sur un vrai token gradué (pas une
+#    supposition) : `tokenGradThreshold(token graduated) = 168 316 831,68` et
+#    `getReserves()` sur sa paire réelle donne `reserve0 = 163 037 404,96`
+#    -- bien `<= tokenGradThreshold`, exactement la condition de graduation du
+#    code source (`newReserveA <= gradThreshold` dans `_buy()`). Même seuil
+#    exact (168 316 831,68) et `tokenFakeInitialVirtualLiq = 8500` retrouvés
+#    identiques sur 2 tokens frais du même contrat (WOODY, CRASHCAT) --
+#    cohérent avec un calcul déterministe (`BondingConfig.calculateGradThreshold`)
+#    plutôt qu'une vraie variance par token pour un lancement standard.
+#
+#    Formule validée : `progress = (1_000_000_000 - reserve0) /
+#    (1_000_000_000 - tokenGradThreshold(token))`, où `reserve0` vient de
+#    `getReserves()` sur `pair` (lisible directement via `preTokenPair` dans
+#    le payload API Strapi, ou via `tokenInfo(token).pair` sur le contrat).
+#
+#    LIMITE RÉELLE RESTANTE (honnête, pas résolue) : plusieurs instances du
+#    contrat Bonding V5 coexistent -- `tokenInfo()`/`tokenGradThreshold()`
+#    renvoient du VIDE pour un token qui n'est pas géré par CETTE instance
+#    précise (vérifié : TIBBIR, un vrai token Base encore UNDERGRAD, retourne
+#    zéro sur les deux mappings de `0x1A540088...`). Aucun champ de l'API
+#    Strapi n'indique quelle instance gère quel token -- un futur câblage
+#    devrait soit tenter plusieurs adresses connues (best-effort, dégradation
+#    douce vers `None` si aucune ne reconnaît le token -- couverture partielle
+#    honnête plutôt qu'un seum bloquant), soit découvrir dynamiquement les
+#    instances actives par balayage de logs comme fait ce segment (coûteux,
+#    pas adapté à un appel synchrone par analyse `/vc`).
+#
+#    Accès réseau utilisé ce segment (déjà autorisé par l'opérateur, feu vert
+#    explicite 11/07) : `mainnet.base.org` (RPC public Base, lecture seule,
+#    aucune signature/wallet, aucune dépendance nouvelle -- `web3.py` déjà
+#    présent dans les deps du projet).
 _VIRTUAL_RAISED_KEYS = (
     "virtualRaised",
     "raisedVirtual",
@@ -171,6 +257,10 @@ class VirtualToken:
     chain: str | None = None
     token_address: str | None = None
     pre_token_address: str | None = None
+    # Adresse de la paire de bonding (audit 11/07, `preTokenPair` dans le payload API,
+    # jamais capturé avant) -- lecture directe possible via `getReserves()` sans avoir à
+    # identifier le contrat Bonding lui-même. Cf. `services/base_onchain.py`.
+    pair_address: str | None = None
     created_at: str | None = None
     mcap: float | None = None
     volume24h: float | None = None
@@ -445,6 +535,7 @@ def parse_virtual(raw: dict) -> VirtualToken | None:
         chain=_sanitize(_first(attrs, "chain"), 20),
         token_address=_sanitize(_first(attrs, "tokenAddress", "token_address", "contractAddress"), 80),
         pre_token_address=_sanitize(_first(attrs, "preToken", "preTokenAddress", "pre_token_address"), 80),
+        pair_address=_sanitize(_first(attrs, "preTokenPair", "preTokenPairAddress", "pre_token_pair"), 80),
         created_at=_sanitize(_first(attrs, "createdAt", "created_at"), 40),
         mcap=_safe_float(_first(attrs, "mcapInVirtual", "mcap", "marketCap", "market_cap")),
         volume24h=_safe_float(_first(attrs, "volume24h", "volume_24h", "volume")),
