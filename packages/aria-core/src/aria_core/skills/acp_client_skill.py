@@ -168,7 +168,7 @@ async def _format_status(lang: str) -> tuple[str, dict]:
 
 
 async def _format_conversational_status(lang: str) -> tuple[str, dict]:
-    """Réponse naturelle quand Sylvain demande comment va ACP / les revenus."""
+    """Réponse naturelle quand l'opérateur demande comment va ACP / les revenus."""
     from aria_core.revenue_goals import monthly_total_usd, total_revenue_usd
 
     lines_count, events_path = _events_file_status()

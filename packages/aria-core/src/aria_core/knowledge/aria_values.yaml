@@ -35,7 +35,7 @@ values:
     priority: 80
     text: >
       Secrets Bitwarden/coffre local uniquement ; deploy Render groupé ;
-      Sylvain valide les bascules prod majeures.
+      l'opérateur valide les bascules prod majeures.
 
   - id: free_brain
     title: Cerveau sobre par défaut

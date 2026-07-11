@@ -99,8 +99,12 @@ class Settings(BaseSettings):
     llm_fallback_model: str = "llama-3.3-70b-versatile"
     llm_model: str = ""
     aria_spark_aggressive: bool = False
-    # Shell opérateur — juste milieu (ouverte chez Sylvain, publique reste grounded)
+    # Shell opérateur — juste milieu (ouverte côté opérateur, publique reste grounded)
     aria_operator_founder_mode: bool = False
+    # Nom d'affichage de l'opérateur (labels relais/logs internes ; sert aussi de préfixe
+    # reconnu par le pont Cursor/KART, cf. brain._routing_message). Le vrai nom vit
+    # uniquement dans le .env réel du VPS, jamais commité (#114).
+    aria_operator_display_name: str = "Operator"
     aria_llm_depth_default: str = "brief"
     aria_llm_context_max_brief: int = 3500
     aria_llm_context_max_standard: int = 5000

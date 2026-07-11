@@ -46,7 +46,7 @@ async def test_nothing_to_answer_when_no_messages():
 @pytest.mark.asyncio
 async def test_nothing_to_answer_when_last_message_not_claude():
     await relay_chat.log_message("operator", "salut ARIA")
-    await relay_chat.log_message("aria", "salut Sylvain")
+    await relay_chat.log_message("aria", "salut")
     result = await relay_conversation.run_relay_conversation_cycle()
     assert result == {"outcome": "nothing_to_answer"}
 
@@ -118,6 +118,15 @@ def test_history_message_maps_sender_to_role():
     assert relay_conversation._history_message(claude_entry) == {
         "role": "user", "content": "[Claude] salut",
     }
+    # Défaut générique "Operator" -- jamais le nom réel en dur (#114).
     assert relay_conversation._history_message(operator_entry) == {
-        "role": "user", "content": "[Sylvain] hello",
+        "role": "user", "content": "[Operator] hello",
+    }
+
+
+def test_history_message_uses_configured_operator_display_name(test_settings):
+    test_settings.aria_operator_display_name = "TestOperatorName"
+    operator_entry = {"sender": "operator", "content": "hello"}
+    assert relay_conversation._history_message(operator_entry) == {
+        "role": "user", "content": "[TestOperatorName] hello",
     }

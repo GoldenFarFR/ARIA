@@ -50,7 +50,12 @@ async def _autoreplies_today() -> int:
 def _history_message(entry: dict) -> dict:
     if entry["sender"] == "aria":
         return {"role": "assistant", "content": entry["content"]}
-    label = "Claude" if entry["sender"] == "claude" else "Sylvain"
+    if entry["sender"] == "claude":
+        label = "Claude"
+    else:
+        from aria_core.runtime import settings
+
+        label = getattr(settings, "aria_operator_display_name", "") or "Operator"
     return {"role": "user", "content": f"[{label}] {entry['content']}"}
 
 

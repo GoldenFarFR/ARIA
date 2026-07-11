@@ -64,7 +64,7 @@ goals:
     status: done
     text: >
       Réflexions explicites + synthèse journal/QI injectées — prod flag vector off
-      jusqu'à validation Sylvain.
+      jusqu'à validation opérateur.
 
   - id: memory_phase_h_arbitrator
     title: Mémoire Phase H arbitre

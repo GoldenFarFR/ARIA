@@ -78,7 +78,7 @@ async def execute_deferred_go_ahead(
     lang: str = "fr",
 ) -> tuple[str, dict[str, Any]]:
     """
-    Sylvain : questions → questions → ok vazy / si bénéfique tu peux.
+    Opérateur : questions → questions → ok vazy / si bénéfique tu peux.
     Agit depuis le fil récent sans nouveau gros appel LLM si possible.
     """
     lang_key = "fr" if lang == "fr" else "en"

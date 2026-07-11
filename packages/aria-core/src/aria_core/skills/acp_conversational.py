@@ -1,4 +1,4 @@
-"""Détection questions ACP conversationnelles (revenus, état) — tolère typos Sylvain."""
+"""Détection questions ACP conversationnelles (revenus, état) — tolère typos opérateur."""
 from __future__ import annotations
 
 import re
