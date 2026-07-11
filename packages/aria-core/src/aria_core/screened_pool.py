@@ -34,6 +34,14 @@ _COLUMNS = [
     "first_screened_at",
     "last_checked_at",
     "screen_reason",
+    "retry_count",
+]
+
+# Colonnes ajoutées après coup : (nom, définition SQL) pour la migration ALTER
+# (même patron que `vc_predictions.py`/`exam.py` — SQLite ne les crée pas sur une
+# table préexistante, seulement `CREATE TABLE IF NOT EXISTS`).
+_ADDED_COLUMNS = [
+    ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -53,10 +61,20 @@ async def _ensure_table() -> None:
                 status TEXT NOT NULL DEFAULT 'active',
                 first_screened_at TEXT NOT NULL,
                 last_checked_at TEXT NOT NULL,
-                screen_reason TEXT
+                screen_reason TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        # Migration à chaud : ajoute les colonnes manquantes aux DB existantes
+        # (SQLite ne les crée pas si la table préexiste). Idempotent, non destructif.
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(screened_token)")).fetchall()
+        }
+        for name, ddl in _ADDED_COLUMNS:
+            if name not in existing:
+                await db.execute(f"ALTER TABLE screened_token ADD COLUMN {name} {ddl}")
         await db.commit()
 
 
@@ -76,7 +94,9 @@ async def upsert_screened(
 
     Upsert : ``first_screened_at`` est préservé au ré-enregistrement (on garde la
     date de première entrée), ``last_checked_at`` est toujours mis à jour. Ré-activer
-    (`active`) un token qui repasse le filtre est volontaire.
+    (`active`) un token qui repasse le filtre est volontaire. ``retry_count`` est
+    remis à zéro : une fois actif, le compteur de tentatives « pending » n'a plus
+    de sens — s'il redégrade plus tard, il repart sur un budget de tentatives frais.
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -86,8 +106,8 @@ async def upsert_screened(
             INSERT INTO screened_token
               (contract, symbol, liquidity_usd, security_score, top_holder_pct,
                verdict, pool_address, network, status, first_screened_at,
-               last_checked_at, screen_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+               last_checked_at, screen_reason, retry_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 0)
             ON CONFLICT(contract) DO UPDATE SET
               symbol=excluded.symbol,
               liquidity_usd=excluded.liquidity_usd,
@@ -98,7 +118,8 @@ async def upsert_screened(
               network=excluded.network,
               status='active',
               last_checked_at=excluded.last_checked_at,
-              screen_reason=excluded.screen_reason
+              screen_reason=excluded.screen_reason,
+              retry_count=0
             """,
             (
                 contract, symbol, liquidity_usd, security_score, top_holder_pct,
@@ -148,6 +169,12 @@ async def record_pending(
     retenté au prochain cycle. Objectif : que la raison d'un échec mou (holders non
     renvoyés, contrat non vérifié, etc.) laisse une trace consultable plutôt que de
     disparaître sans aucune donnée, en base ou ailleurs (cf. audit #77).
+
+    ``retry_count`` s'incrémente à chaque appel (1 au premier échec mou, +1 à chaque
+    repassage — que ce soit une redécouverte fortuite ou un retry délibéré, même
+    fonction pour les deux, cf. ``token_absorber.absorb``) : c'est ce compteur que
+    ``abandon_stale_pending`` lit pour arrêter d'insister sur un signal qui ne mûrit
+    jamais (cf. suite audit #77/#105).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -157,11 +184,12 @@ async def record_pending(
             INSERT INTO screened_token
               (contract, symbol, liquidity_usd, security_score, top_holder_pct,
                verdict, pool_address, network, status, first_screened_at,
-               last_checked_at, screen_reason)
-            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'pending', ?, ?, ?)
+               last_checked_at, screen_reason, retry_count)
+            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'pending', ?, ?, ?, 1)
             ON CONFLICT(contract) DO UPDATE SET
               status='pending', last_checked_at=excluded.last_checked_at,
-              screen_reason=excluded.screen_reason
+              screen_reason=excluded.screen_reason,
+              retry_count=screened_token.retry_count + 1
             """,
             (contract, symbol, network, now, now, reason),
         )
@@ -183,7 +211,10 @@ async def reconsider(contract: str) -> bool:
 
     Ne fait que LEVER le « jeté pour toujours » (statut -> pending) ; la vraie
     décision revient au re-scan on-chain (le bruit filtre/réveille, il ne décide pas).
-    Retourne False si le contrat est inconnu ou déjà actif.
+    Retourne False si le contrat est inconnu ou déjà actif. ``retry_count`` repart à
+    zéro : un signal externe qui justifie la résurrection mérite un budget de
+    tentatives frais, pas la suite d'un compteur d'une vie précédente (y compris pour
+    un contrat déjà abandonné par ``abandon_stale_pending``).
     """
     status = await get_status(contract)
     if status not in ("rejected", "dropped"):
@@ -191,7 +222,8 @@ async def reconsider(contract: str) -> bool:
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE screened_token SET status='pending', last_checked_at=? WHERE contract=?",
+            "UPDATE screened_token SET status='pending', last_checked_at=?, "
+            "retry_count=0 WHERE contract=?",
             (now, contract),
         )
         await db.commit()
@@ -236,6 +268,58 @@ async def list_stale_pending(
             )
         ).fetchall()
     return [dict(zip(_COLUMNS, row)) for row in rows]
+
+
+async def abandon_stale_pending(
+    contract: str, *, max_retries: int = 5, max_age_days: int = 7
+) -> bool:
+    """Bascule un ``pending`` qui n'en finit plus vers un état terminal (``rejected``).
+
+    Un candidat en échec MOU indéfiniment (jamais actif, jamais un vrai
+    ``hard_fail`` malveillant confirmé) resterait sinon ``pending`` pour toujours :
+    retenté à chaque cycle ``retry_stale_pending`` (audit #77), un scan API toutes
+    les 24h sans fin pour un signal qui ne mûrit jamais. **Ce n'est PAS un nouveau
+    critère de sécurité** — aucun filtre dupliqué, ``safety_screen``/
+    ``token_absorber`` inchangés, le seuil `passed` reste identique — uniquement
+    une limite sur le NOMBRE DE PASSAGES : au-delà de ``max_retries`` tentatives
+    OU ``max_age_days`` jours depuis ``first_screened_at``, on arrête d'insister et
+    on classe définitivement, en gardant la dernière raison molle connue en trace
+    (jamais une case vide, même doctrine que ``record_pending``/``record_rejected``).
+
+    Retourne False (no-op) si le contrat est inconnu, n'est plus ``pending``, ou n'a
+    pas encore dépassé les seuils — appelé par ``base_crawler.retry_stale_pending``
+    uniquement après un nouvel échec mou confirmé (``token_absorber.absorb`` a déjà
+    tranché : encore MOU, ni mûri en ``active`` ni un vrai rejet malveillant).
+    """
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT status, first_screened_at, retry_count, screen_reason "
+                "FROM screened_token WHERE contract=?",
+                (contract,),
+            )
+        ).fetchone()
+        if row is None or row[0] != "pending":
+            return False
+        _status, first_screened_at, retry_count, last_reason = row
+        age_days = (
+            datetime.now(timezone.utc) - datetime.fromisoformat(first_screened_at)
+        ).total_seconds() / 86_400
+        if retry_count < max_retries and age_days < max_age_days:
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        reason = (
+            f"abandonné après {retry_count} tentatives ({age_days:.1f}j) — signal "
+            f"faible persistant : {last_reason or 'raison indisponible'}"
+        )
+        await db.execute(
+            "UPDATE screened_token SET status='rejected', last_checked_at=?, "
+            "screen_reason=? WHERE contract=?",
+            (now, reason, contract),
+        )
+        await db.commit()
+    return True
 
 
 async def list_pool(status: str = "active", limit: int = 1000, *, network: str = "base") -> list[dict]:
