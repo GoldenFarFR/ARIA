@@ -151,91 +151,11 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   dans un NOM de fichier (pas son contenu) trouvé sur la machine Windows de l'opérateur (hors repo,
   probable résidu de l'incident `connect.ts` du même jour) — supprimé. Détail technique complet
   (astuces Git Bash/Windows réutilisables) : `docs/HANDOFF-2026-07-09-nuit6.md` (voir aussi nuit4/5).
-- **Nuit 7 — premier trade HL Perps réellement exécuté, cause racine `join` confirmée, pivot
-  Shekel, panne CoinGecko découverte.** Le trade préparé en nuit6 a été exécuté avec succès
-  (0.0003 BTC long, mainnet Hyperliquid, confirmé via `hl-status`) après avoir ré-autorisé un
-  signataire jusqu'au bout — confirmant le diagnostic d'un commentaire de PR Virtuals externe
-  (`acp-cli-demos#37`) : le blocage `join`/trades venait d'un signataire mal autorisé, pas d'une
-  panne serveur. Diligence complète menée sur **Shekel** (plateforme no-code d'agents Hyperliquid,
-  non-custodial confirmé, mécanisme "Custom Data Endpoint" natif) pour répondre à un vrai trou
-  découvert : `dgclaw-skill` n'a AUCUN outil de donnée de marché, un agent GAME brut ne peut que
-  deviner ou inventer. Nouveau seam livré : `skills/arena_signal.py` → `GET
-  /api/aria/arena-signal/btc` (public, sans auth, réutilise `btc_cycles`+`entry_signals`, jamais
-  de valeur inventée). **Découverte importante en déployant** : CoinGecko limite désormais TOUT
-  son tier gratuit aux 365 derniers jours d'historique (testé en direct, `error_code 10012`) —
-  casse potentiellement en silence l'overlay macro déjà en prod (tâche #14, dégradation douce,
-  jamais une erreur visible). RSI corrigé (fenêtre courte) ; **résolu dans la foulée (même
-  segment, #62)** : `btc_cycles.fetch_btc_history` bascule sur `services/blockchain_info.py`
-  (gratuit, sans clé, ~1600 points quotidiens 2009→aujourd'hui) — segmentation des 3 cycles à
-  nouveau réelle et complète, CoinGecko gardé seulement pour le RSI (fenêtre courte).
-  Nouveau : **mineur de conversations opérateur/ARIA** (`telegram_conversation_miner.py`, gate OFF,
-  même doctrine que `knowledge_inbox`/`claude_mentor`), avec un garde-fou anti-secret dédié
-  (une création d'issue GitHub ne passe pas par le scan CI). Revue de sécurité de fin de session :
-  un vrai incident auto-détecté et corrigé (vraie clé/IP commitées par erreur dans une fixture de
-  test) + un vrai trou de couverture bouché (`test_coherence.py` ne vérifiait les IP que dans les
-  docs, jamais le code — étendu). Détail complet : `docs/HANDOFF-2026-07-09-nuit7.md`.
-- **Nuit 8 — mandat opérateur "travaille 8h, creuse plus profond" : EMA/MACD livrés, seam
-  `entry_signals` trouvé dormant.** Écart CLAUDE.md/code corrigé : "Moteur TA (RSI/MACD/EMA/fibo/
-  divergences)" était annoncé depuis longtemps mais MACD/EMA n'étaient calculés nulle part (vérifié
-  par grep avant d'écrire quoi que ce soit) — `skills/indicators.py` (`ema_series`/`macd_series`,
-  déterministe, 7 tests) comble l'écart. Fibo/divergence RSI, eux, existaient déjà et sont réels
-  (`skills/entry_signals.py`, `fibonacci_zone`+`bullish_rsi_divergence`+`detect_entry` — le setup
-  "golden pocket + divergence RSI"). **Découverte en vérifiant** : ce module complet et testé
-  (10 tests) n'était câblé NULLE PART — ni dans le rapport `/vc` en prod, ni même dans la CI (juste
-  ajouté). Il ne fait pas doublon avec `ta_levels.suggest_entry_zone` (déjà câblé, générique,
-  toujours renvoyé) : c'est un signal plus rare et de meilleure qualité, complémentaire. Les deux
-  capacités (EMA/MACD + entry_signals) sont restées NON branchées jusqu'à décision opérateur.
-  **Câblées le 10/07 (même segment, décision opérateur explicite)** : `acp_onchain_scan.py`
-  peuple `ctx.ta_ema_fast/slow`, `ctx.ta_macd_line/signal/histogram`, `ctx.ta_golden_pocket_signal`
-  dans le même bloc `include_ta` que le TA existant → `vc_analysis._build_untrusted_context`
-  les expose au LLM (EMA12/26, MACD/signal/histogramme toujours ; golden pocket seulement si
-  `present=True`, silence sinon). Périmètre volontairement limité au CONTEXTE LLM — aucune
-  nouvelle section visuelle dans `vc_report.py` (le rapport HTML n'a pas changé). 6 tests
-  ajoutés (`test_vc_analysis.py`). Détail : `docs/architecture-extensibilite.md`.
-- **Scorecard « feu vert argent réel » (#70, 10/07) — EN LIGNE.** Question directe de l'opérateur
-  ("tu ferais confiance à ARIA pour 100k$ ?") répondue honnêtement NON, puis outillée plutôt que
-  laissée en simple avis : `skills/real_money_readiness.py` calcule objectivement, depuis le vrai
-  journal `vc_predictions`, les 8 cases pré-engagées de `docs/protocole-argent-reel.md` — jamais
-  un jugement subjectif. Commande `/feuvert` (Telegram, admin-only — jamais public).
-  **Correction du 10/07 (même segment)** : cette entrée affirmait à tort le paper-trading
-  "gaté OFF par défaut, aucune preuve d'un run" — jamais vérifié contre l'état réel du VPS,
-  seulement supposé depuis la doc. Vérifié en direct via `GET /api/pulse` : `paper_trading:
-  true`, cycle `paper_trade_cycle` déjà exécuté (le run de preuve tourne réellement, pas
-  seulement câblé). `sample_size` reste très probablement `fail` aujourd'hui (échantillon
-  encore jeune : 4 pronostics au total, 0 clôturé, vu sur `/cockpit` le 10/07) mais le
-  compteur avance désormais pour de vrai. `integrity` `ok` par garantie structurelle
-  (`close_prediction` ne réécrit jamais, aucune fonction de suppression) ; `robustness`
-  calculable dès 3 BUY clôturés. Le reste (`benchmark` hold-ETH, `risk` vérif a posteriori
-  des AVOID, `judge` méta-audit, `lawyer`) reste honnêtement `unknown` — la donnée ou
-  l'action humaine manque encore pour même MESURER ces cases, pas seulement pour les
-  remplir. Leçon retenue : toujours vérifier l'état réel (API publique, `/pulse`) avant
-  d'affirmer un statut de gate, même documenté ailleurs comme "OFF par défaut".
-- **Sentiment de marché continu (#71, 10/07) — EN LIGNE, gate OFF.** Demande opérateur (image Wall
-  St Cheat Sheet — psychologie du cycle de marché) : scanner en continu, sans expiration, les
-  paires principales. Livré : `skills/indicators.py` gagne `bollinger_bands` (même patron
-  qu'`ema_series`/`macd_series`) ; nouveau `skills/candlestick_patterns.py` (doji/marubozu/
-  hammer/shooting_star/engulfing, 171 lignes, testé, PAS câblé — nécessite de vraies bougies OHLC,
-  absentes pour BTC/ETH via CoinGecko `market_chart`, réservé aux tokens Base via `ohlcv.py`) ;
-  nouveau `skills/market_sentiment.py` (`classify_sentiment` : RSI+Bollinger+momentum+retracement
-  → 6 régimes + repli neutre, PAS les 13 émotions fines du cheat sheet — aucune signature
-  numérique ne distingue "colère" de "dépression", simplification assumée et documentée). Tâche
-  heartbeat `market_sentiment_cycle` (60min, gate OFF `ARIA_MARKET_SENTIMENT_ENABLED`) rafraîchit
-  BTC + ETH (`PRINCIPAL_PAIRS`, liste de départ extensible — pas "toutes les paires" au sens
-  large). Persistance SQLite `market_sentiment` : `upsert_reading` écrase TOUJOURS la lecture
-  précédente — "sans expiration" veut dire aucun TTL de lecture, la fraîcheur dépend uniquement
-  du dernier cycle heartbeat réussi. Commande `/sentiment` (Telegram, admin-only). Complète
-  `btc_cycles.py` (halving, pluri-annuel) par une lecture court/moyen terme, ne le remplace pas.
-- **Backlog #11/#64 résolu (10/07) — barres "échelle commune" des scénarios + thèse enrichie.**
-  Contexte de l'audit original perdu à une compaction antérieure (tâche restée bloquée deux
-  sessions) ; reconstruit en lisant le code réel plutôt qu'en devinant : la barre de PROBABILITÉ
-  de chaque carte bull/base/bear (`vc_report.py`) était déjà correctement à l'échelle (0-100% par
-  carte, indépendante) — mais rien ne comparait l'AMPLEUR des cibles entre elles (`cible` est de
-  la prose LLM libre, jamais un nombre). Ajout d'un champ structuré `cible_multiple` (optionnel,
-  jamais fabriqué si le LLM ne l'a pas chiffré) → barre supplémentaire à largeur PARTAGÉE entre
-  les 3 scénarios, omise si moins de 2 sont chiffrés (dégradation douce, même doctrine que le
-  reste du rapport). Thèse (`these`) enrichie au même commit : 3-5 phrases, doit s'ancrer sur ≥2
-  signaux concrets déjà fournis (sécurité, liquidité, R/R, TA, contexte marché) — jamais une
-  généralité interchangeable. 8 tests (vc_analysis + vc_report).
+- **Nuit 7 (09/07)** — trade HL Perps exécuté (cause racine `join` confirmée : signataire mal autorisé, pas une panne serveur), diligence Shekel livrée (`skills/arena_signal.py`), panne CoinGecko 365j corrigée via `services/blockchain_info.py`. `telegram_conversation_miner.py` livré ce segment, gate OFF, **toujours jamais activé** (voir "reste en attente"). Détail complet : `docs/HANDOFF-2026-07-09-nuit7.md`.
+- **Nuit 8 (10/07)** — écart CLAUDE.md/code fermé : EMA/MACD livrés et câblés dans `/vc` (`skills/indicators.py`), seam `entry_signals` (golden pocket + divergence RSI) trouvé dormant puis câblé le même segment. Détail complet : `docs/HANDOFF-2026-07-10-nuit8.md`.
+- **Scorecard « feu vert argent réel » (#70, 10/07) — EN LIGNE.** `/feuvert` calcule objectivement les 8 cases de `docs/protocole-argent-reel.md` depuis le vrai journal `vc_predictions` — jamais un jugement subjectif. `sample_size`/`benchmark`/`risk`/`judge`/`lawyer` restent `unknown` : pas assez de pronostics clôturés pour même mesurer ces cases (manque de volume, pas un bug). Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
+- **Sentiment de marché continu (#71, 10/07) — EN LIGNE, gate OFF.** `skills/market_sentiment.py` (6 régimes RSI+Bollinger+momentum+retracement), heartbeat `market_sentiment_cycle` (60min), commande `/sentiment`. Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
+- **Backlog #11/#64 résolu (10/07)** — barres « échelle commune » entre scénarios bull/base/bear (`cible_multiple`) + thèse enrichie (3-5 phrases, ancrée sur ≥2 signaux) dans `/vc`. Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
 - **Centre de commandement — dashboard (#72, 10/07).** Question opérateur : « qu'est-ce qui
   prouve qu'ARIA est câblée pour gérer un portefeuille ? ». `/cockpit` (déjà existant, pouls +
   dossier) étendu en vrai tableau de bord : `/api/aria/track-record` gagne `calibration` +
@@ -247,65 +167,14 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   LLM→juge→track-record). **Vérifié** : TypeScript compile propre, les 3 endpoints testés en
   direct avec un vrai backend local (dont un vrai appel réseau BTC réussi, phase "baisse
   markdown" -44% confirmée), 4 nouveaux tests + 52 tests backend existants verts. **PAS vérifié**
-  visuellement en navigateur ce segment : `PrivyProvider` bloque le boot de l'app en local sans
-  vrai App ID Privy — une tentative de contournement (retirer temporairement le wrapper d'auth)
-  a été correctement bloquée par le classifieur de sécurité de session, reverted immédiatement.
-  Rendu à valider par l'opérateur (capture d'écran ou déploiement preview) avant de considérer le
-  design "gamme luxe" definitivement acquis. `docs/protocole-argent-reel.md`/`/feuvert` restent la
-  vraie réponse chiffrée à la question ("non, pas encore") — ce dashboard est la vitrine de
-  transparence, pas une prétention de feu vert.
-- **Sentiment de marché → décision LLM réelle (#75, 10/07) — EN LIGNE.** Demande opérateur explicite,
-  après avoir vu le cockpit vide : « je veux que ses données soit utiles pour aria et toi pas pour
-  moi... pour que vous puissiez ajuster votre stratégie ». Distinction architecturale trouvée en
-  creusant `vc_analysis.py` : l'overlay macro halving (#14, `_attach_market_context`/`_attach_extras`)
-  s'exécute APRÈS la réponse LLM — pure décoration de rapport, n'a JAMAIS influencé le raisonnement,
-  malgré les apparences. Corrigé pour le sentiment BTC/ETH en le branchant sur le chemin PRÉ-LLM
-  (`_fetch_sentiment_readings` → `_build_untrusted_context`, même patron qu'EMA/MACD/golden pocket
-  #74) : le régime (doute_accumulation, euphorie, capitulation_peur...) atteint désormais le prompt
-  AVANT que le LLM ne tranche potentiel/thèse/recommandation. Régime `donnees_insuffisantes` jamais
-  affiché (silence). Dégradation douce (DB absente/gate OFF/erreur → liste vide, jamais bloquant).
-  6 tests ajoutés. **Le halving overlay (#14) reste, lui, post-hoc** — pas encore rebranché en
-  pré-LLM (hors scope de cette demande, seam à réévaluer si l'opérateur le souhaite).
-- **INCIDENT SÉCURITÉ MAJEUR (10/07) — délégation autonome à "Cursor" trouvée vivante et
-  RETIRÉE.** Déclenché par un message Telegram alarmant reçu par l'opérateur ("Feu vert reçu —
-  je cadre le chantier xprofile... je délègue à l'ouvrier Cursor") en réponse à `/feuvert`, qui
-  n'a RIEN à voir avec ce texte (commande déterministe, zéro coût LLM). Investigation (4 agents
-  parallèles + vérification manuelle) : un sous-système entier — `aria_worker_queue.py`,
-  `capability_gap.py`, `operator_readiness.py`, `skills/community_worker_skill.py` — committé le
-  05/07 **par Cursor lui-même** (co-auteur `cursoragent@cursor.com` sur les commits), câblé dans
-  `brain.py`/`heartbeat.py`/`telegram_bot.py`, jamais documenté nulle part dans CLAUDE.md malgré
-  la doctrine explicite "Cursor/Grok abandonnés". Reachable SANS validation opérateur : heartbeat
-  auto (6h et 15min), mots du quotidien en Telegram ("go", "vas-y", "lance", "nettoie le
-  répertoire"), et même un formulaire PUBLIC du site (`/api/aria/community-feedback`, visiteur
-  anonyme). **Preuve GitHub réelle que ça avait déjà agi** : issue #1 + PR #2 auto-générées le
-  03/07, jamais traitées, la réponse publique aux visiteurs affirmait littéralement "transmis à
-  l'ouvrier Grok/Cursor". `operator_go_ahead.py:136-138` (texte "Feu vert reçu — je reprends notre
-  échange et j'avance") confirmé comme la source exacte du message alarmant. **Retiré en entier**
-  (aria_worker_queue.py + community_worker_skill.py supprimés, capability_gap.py réduit à une
-  notification Telegram locale sans écriture GitHub ni délégation, brain.py/operator_readiness.py/
-  operator_go_ahead.py/community_feedback.py/health_watch.py nettoyés de tout appel externe).
-  Gardé : la synchro bannière X (self_maintenance.py) et la surveillance santé (health_watch.py),
-  qui notifient désormais Telegram au lieu de déléguer. `suggestion_feedback.py` supprimé au
-  passage (zéro appelant en prod, uniquement lié au worker queue mort). **Garde-fou mécanique
-  ajouté** : `test_coherence.py::test_external_write_actions_registered_in_allowlist` — toute
-  fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée
-  dans une allowlist explicite ; un nouvel appel non déclaré fait échouer la CI immédiatement,
-  sans dépendre d'un audit périodique ou d'une mémoire humaine. Testé positif (un faux appel
-  simulé fait bien échouer le test). **À faire par l'opérateur** : vérifier sur le VPS/Render la
-  valeur réelle de `GITHUB_WRITE_REPOS` (devrait être vide/off) ; décider si l'issue #1 et les
-  branches orphelines `aria/gap-x-profile-banner`/`cursor/aria-instinct-auto-ouvrier-delegate`
-  sont fermées/supprimées ou gardées en archive (question posée, pas encore tranchée).
-  **Suite (10/07, même jour) — résidu PROMPT nettoyé** : la première passe avait retiré le
-  CODE (skills/queue), pas le NARRATIF. ARIA a redit en Telegram « je rédige `sessions/ARIA-WORKER.md`
-  pour déléguer à l'ouvrier Cursor » — root cause trouvée dans `directives.md` (chargé dans son
-  prompt via `directives.py`, sections « mode débranchement Grok » + « Community → ouvrier Cursor »
-  qui lui ORDONNAIENT de déléguer à un skill `worker_delegate` supprimé). Réécrit → doctrine à
-  jour (Claude Code construit, ARIA propose via `aria_directives`/issue). Mentions mortes aussi
-  nettoyées dans `public_mode.py` (liste), `llm_economy.py`/`operator_go_ahead.py` (bouts de prompt),
-  `community_feedback.py`/`qi_auto_judge.py` (docstrings). Gardé intact : le « ouvrier » LÉGITIME de
-  `spark_config`/`ecosystem_config` (nom du tier LLM Spark/Virtuals, sans rapport avec Cursor) et le
-  commentaire d'historique de `capability_gap.py`. Leçon : après avoir retiré un système, grep AUSSI
-  les fichiers de prompt/knowledge (`directives.md`, persona, YAML), pas seulement le code exécuteur.
+  visuellement en navigateur — `PrivyProvider` bloque le boot de l'app en local sans vrai App ID
+  Privy. **Toujours en attente d'une validation opérateur (capture d'écran ou déploiement
+  preview)** avant de considérer le design "gamme luxe" définitivement acquis — pas retranché
+  depuis. `docs/protocole-argent-reel.md`/`/feuvert` restent la vraie réponse chiffrée à la
+  question ("non, pas encore") — ce dashboard est la vitrine de transparence, pas une prétention
+  de feu vert.
+- **Sentiment de marché → décision LLM réelle (#75, 10/07) — EN LIGNE.** Sentiment BTC/ETH branché en PRÉ-LLM (`_fetch_sentiment_readings` → `_build_untrusted_context`, atteint le prompt AVANT la décision — l'ancien overlay macro halving #14 s'exécutait, lui, APRÈS et n'a jamais influencé le raisonnement malgré les apparences). **Le halving overlay (#14) reste, lui, post-hoc** — pas encore rebranché en pré-LLM, seam à réévaluer si l'opérateur le souhaite (toujours vrai au 11/07). Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
+- **INCIDENT SÉCURITÉ MAJEUR (10/07) — délégation autonome à « Cursor » trouvée vivante et RETIRÉE** (code ET narratif nettoyés — `aria_worker_queue.py`/`community_worker_skill.py` supprimés, `directives.md` réécrit ; garde-fou mécanique `test_coherence.py::test_external_write_actions_registered_in_allowlist` ajouté et testé positif). **À faire par l'opérateur (toujours non tranché au 11/07)** : vérifier la valeur réelle de `GITHUB_WRITE_REPOS` sur le VPS/Render (devrait être vide/off — bloqué pour Claude Code par le garde-fou Credential Materialization, doit être fait manuellement) ; décider si l'issue #1 et les branches orphelines `aria/gap-x-profile-banner`/`cursor/aria-instinct-auto-ouvrier-delegate` sont fermées/supprimées ou gardées en archive. Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
 - **Canal de directives ARIA → Claude Code (#82, 10/07) — PILOTE EN LIGNE, gate OFF, RIEN
   d'automatique.** Décision opérateur explicite et répétée (« ARIA à la tête, elle dialogue
   qu'avec toi en bidirectionnel, tu renvoies vers Cowork si nécessaire ») — bâti EXPRÈS avec
@@ -338,7 +207,8 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   AVANT de réutiliser un nom, et tester le chemin qu'on modifie, pas seulement le nouveau.
   **Élargir le périmètre = décision opérateur explicite, catégorie par catégorie** (jamais « tout
   sauf le sensible » d'un coup). **Pas encore câblé au heartbeat** (ARIA ne propose pas encore en
-  autonomie — étape suivante à valider). Aucun câblage automatique tant que ce n'est pas décidé.
+  autonomie — étape suivante à valider, toujours vrai au 11/07). Aucun câblage automatique tant
+  que ce n'est pas décidé.
 - **Découverte multi-launchpad : bonding + gradués + directs (10/07) — CODÉ, gate OFF, PAS déployé.**
   Suite de la tâche #10 (analyse dédiée bonding, déjà en prod) : ce qui manquait était le SOURCING
   automatique (rien ne découvrait/absorbait des candidats en continu, seulement l'analyse à la
@@ -351,168 +221,54 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   `screened_pool` sous `network="base-bonding"` — **jamais** `network="base"` (le pool 85% VC) ;
   (2) **direct** (Clanker, Virtuals gradués — vraie liquidité DEX dès le départ) → rejoint le
   pipeline STANDARD existant (`token_absorber.absorb`, pool 85%), aucun nouveau filtre nécessaire.
-  `screened_pool.list_pool/count_pool/draw_lottery` gagnent un paramètre `network="base"` (défaut
-  strictement inchangé, testé) pour garantir l'isolation — `weekly_training.draw_lottery` reste
-  100% pool VC, jamais contaminé par la niche. Nouveau client `services/clanker.py` (même patron
-  que `virtuals.py` : dôme anti-injection, throttle, jamais d'exception sortante) + `virtuals.
-  fetch_graduated` (tokens ayant récemment gradué). **Launchpads sans diligence faite restent des
-  seams vides documentés** (Flaunch/Zora : adaptateur `discover=None` ; Bankr/Ape.store/Mint.club :
-  entrées `knowledge/launchpads.yaml` sans adresse, `confidence: unverified`) — aucun client fabriqué
-  sur hypothèse (doctrine « profondeur proportionnelle à l'enjeu »). Un launchpad en échec n'arrête
-  jamais les autres (best-effort par adaptateur, testé). Tâche heartbeat `bonding_discovery_cycle`
-  (180min, gate OFF `ARIA_BONDING_DISCOVERY_ENABLED`), les deux volets (bonding/direct) tournent
-  indépendamment (l'échec de l'un n'efface jamais le succès de l'autre, testé). 75 tests
-  ajoutés, suite complète verte (4209 passés, 1 échec pré-existant sans rapport — test live
-  DuckDuckGo bloqué en sandbox). Deuxième passe de recherche (Bankr/Zora/Ape.store/Mint.club)
-  jamais réellement lancée ce segment malgré l'intention — à refaire si l'opérateur veut creuser
-  ces launchpads avant de leur donner un vrai client.
-  **Mise à jour (même jour) — Clanker vérifié en direct depuis le VPS, corrigé.** L'appel de test
-  `GET /api/tokens` avait renvoyé HTTP 403 depuis l'environnement cloud (anti-bot, propre à ce
-  sandbox) ; depuis le VPS (vrai accès réseau) l'API répond réellement. Mieux : une requête
-  volontairement invalide a fait remonter l'énumération EXACTE de `sortBy` dans le message
-  d'erreur de l'API elle-même — `market-cap`/`tx-h24`/`volume-h24`/`price-percent-h24`/
-  `price-percent-h1`/`deployed-at`. `createdAt` (ma supposition initiale, documentée comme non
-  confirmée) était **faux** — corrigé en `deployed-at` (le tri "plus récent d'abord" voulu pour
-  la découverte). La forme exacte de la réponse pour une requête VALIDE reste non confirmée (le
-  test n'a encore renvoyé qu'une erreur de validation) — à revérifier avant d'activer le gate.
-  Gate `ARIA_BONDING_DISCOVERY_ENABLED` toujours pas activé, étape suivante : dry-run manuel
-  (`run_bonding_discovery_cycle()`) demandé à l'opérateur avant activation en continu.
-- **Vision (images en chat Telegram) — EN LIGNE, gate ON, testé en conditions réelles (10/07).** Déclenché par un
-  vrai bug trouvé en capture d'écran : l'opérateur a envoyé un graphique DexScreener avec
-  « juge cette situation », ARIA n'a rien répondu. **Cause racine confirmée** : `telegram_bot.py`
-  n'enregistrait AUCUN handler photo (`MessageHandler(filters.PHOTO, ...)` absent) — toute image
-  envoyée à ARIA était ignorée en silence. Pire, une fonction `_handle_avatar_photo` existait déjà
-  pour le flux `/avatar` mais n'avait, elle non plus, jamais été enregistrée (même bug que le
-  reliquat Cursor/collision `/directive` : une fonction écrite mais jamais câblée au bon endroit).
-  **Corrigé en un seul point d'entrée** `_handle_photo` (nouveau dispatcher, seul handler photo
-  enregistré) qui route selon la légende : légende vide ou mots-clés avatar → flux `/avatar`
-  existant ; légende normale (question, « juge cette situation ») → nouvelle lecture visuelle
-  générale (`_handle_vision_photo`), **admin-only, gate OFF par défaut** (`ARIA_VISION_ENABLED`,
-  coût LLM par image, décision produit volontairement pas encore ouverte au public — un visiteur
-  reçoit un refus court sans jamais déclencher d'appel LLM). Sous le capot :
-  `llm.chat_with_context` gagne un paramètre `image_data_uri` optionnel (bascule le message
-  utilisateur en contenu multimodal `[{"type":"text",...},{"type":"image_url",...}]`, forme
-  chat-completions OpenAI-compatible — comportement texte strictement inchangé sans image, tous
-  les appelants existants intacts) ; `AriaBrain._llm_response` le reçoit et l'ajoute au prompt
-  système final (`chat_with_context`), avec une **règle anti-hallucination dédiée** : ARIA ne lit
-  un chiffre précis (prix, %, volume) que si elle peut réellement le voir net dans l'image, sinon
-  elle le dit explicitement au lieu de l'inventer — même doctrine facts-only que le reste du
-  système. **Confirmé en direct sur le VPS (10/07, même segment)** : gate activé
-  (`ARIA_VISION_ENABLED=1` dans `vanguard/backend/.env` — PAS `/opt/aria/.env`, piège vécu : le
-  vrai fichier chargé par le conteneur est pointé explicitement par `deploy.sh`), premier test réel
-  (graphique DexScreener B20/ETH + « juge cette situation ») → réponse de qualité, chiffres lus
-  correctement sur l'image (liquidité, FDV, %, volumes, ratio buy/sell), raisonnement sur le ratio
-  liquidité/FDV comme signal, distinction rug vs dump post-hype, limites honnêtes explicites
-  (lecture d'image ≠ vérification on-chain). Grok (via la passerelle Virtuals/Spark) accepte donc
-  bien la vision — plus une inconnue.
-  **Limite v1 assumée** : le message image ne passe pas par `repertoire_db.save_message` (appelé
-  seulement dans le gros dispatcher texte, pas dans `_llm_response` directement) — une image
-  envoyée n'entre donc pas dans l'historique conversationnel pour un suivi ultérieur en texte.
-  25 tests ajoutés (llm/brain/telegram), suite complète verte.
-- **Note de calibration (même segment) — la règle "zéro trace IA" ne couvre PAS le chat Telegram
-  opérateur.** En creusant l'incident em-dash (l'opérateur a montré des réponses ARIA truffées de
-  `—` en conversation Telegram), vérifié dans le code : le texte de la règle absolue dit
-  explicitement « sur les surfaces client (rapport, vitrine) » — la conversation Telegram avec
-  l'opérateur n'est ni un rapport ni la vitrine. `brain.py::_llm_response` autorise même
-  explicitement les emojis légers dans son `channel_rule`. Donc pas une violation de la règle
-  telle qu'écrite (correction d'une affirmation trop forte faite en réagissant à chaud à la
-  capture) — mais reste une vraie question de calibration de ton non tranchée : personne n'a
-  encore décidé si le style conversationnel opérateur doit, lui aussi, éviter l'em-dash. Pas
-  touché ce segment, à trancher avec l'opérateur si le sujet revient.
-- **Identité visuelle ARIA — prompts de portrait renforcés (10/07), frontière de goût gravée
-  dans le prompt.** Déclenché par une vraie demande opérateur (rendre ARIA visuellement au
-  niveau de réalisme d'une référence externe montrée en capture — un agent IA nommé « Lily
-  Turner » sur Virtuals). **Décision opérateur explicite tranchée via AskUserQuestion** (le
-  contenu de cette référence est un agent NSFW, bio « Hold me, unlock me, earn with me », token
-  $LILY — vérifié en direct sur son profil X) : ARIA reprend UNIQUEMENT le niveau de réalisme
-  technique (peau/lumière/cohérence du personnage), **jamais** le registre sexualisé ni le
-  modèle d'abonnement/monétisation. `portrait_scene.py` (3 prompts de génération : scène, style,
-  bannière legacy) enrichi avec des descripteurs de réalisme photo (85mm, lumière naturelle,
-  texture de peau, mise au point sur les yeux) + présence/charisme (« commanding presence »,
-  regard direct) + une frontière de goût **écrite en dur dans le prompt** (« never suggestive,
-  never revealing, never sexualized ») plutôt que laissée à la seule discipline de qui rédige la
-  légende — un vrai garde-fou structurel, pas juste une bonne intention. Brief identité
-  (`_extract_identity_brief`, vision-model) moins tronqué qu'avant (120→220 caractères) pour une
-  cohérence de personnage plus fidèle d'une génération à l'autre. `generate_banner_creative`
-  (bannière X text-to-image, sans photo source) inchangé — exclut déjà tout humain, la frontière
-  de goût n'y a pas de sens. 5 tests ajoutés. **Portée du reste de la demande opérateur, non
-  câblée ce segment** : "stories" façon influenceuse (ni X ni Telegram n'ont cette fonctionnalité
-  nativement pour un bot — vérifié : Telegram bot = photo de profil carrée uniquement, AUCUN
-  concept de bannière contrairement à X, confirmé par le code existant `x_banner.py` lui-même
-  scopé "Bannière X" sans équivalent Telegram) ; voix/TTS (aucune infra existante, référence
-  Angèle/mélodieuse notée pour plus tard) ; studio 3D (jugé disproportionné — recommandé un outil
-  "talking avatar" image+audio→vidéo pour les futurs AMA à la place). Objectif final rappelé par
-  l'opérateur : ce travail sert un moment de lancement commercial futur avec une vidéo forte —
-  mais **« preuve avant promesse » reste la priorité réelle avant ce moment** (pacte
-  `docs/protocole-argent-reel.md` inchangé, rien ne le contourne).
-- **Nuit 9 — pivot Cursor audité (pas un incident), régressions `/vc` corrigées, bug bonding
-  Virtuals résolu en conditions réelles.** L'opérateur a travaillé directement avec Cursor
-  pendant une indisponibilité de Claude Code (quota) — confirmé légitime et transparent
-  (`experiments/exp-20260710-1958/README.md`, 3 PR toutes mergées par l'opérateur lui-même,
-  aucun garde-fou touché) : différence fondamentale avec l'incident délégation-autonome retiré
-  le même jour (ici l'opérateur pilote, ne délègue pas). Revue complète des 3 PR + régression
-  réelle trouvée et corrigée dans le PR #22 (`repertoire_db.save_message()` non protégé après
-  `/vc`, cassait tout le flux après l'envoi au client) et faux positif de routage corrigé
-  (`operator_readiness.py` détournait "ok trouve moi maintenant un jeton..." vers l'audit de
-  readiness sur le seul mot "maintenant"). **Câblages livrés** : `candlestick_patterns.py`
-  dans `/vc` (seam dormant depuis le 10/07) ; diligence produit légère (`services/
-  site_snapshot.py` + GitHub, `_fetch_product_diligence` dans `vc_analysis.py`) répondant à un
-  trou qu'ARIA avait identifié elle-même devant l'opérateur — limite connue : ne lit que la
-  page d'accueil déclarée, pas la fiche Virtuals elle-même qui porte souvent équipe/tokenomics
-  pour les tokens lancés sur Virtuals (piste ouverte). **Recadrage doctrine découverte
-  bonding/direct** (décision opérateur explicite) : un dry-run réel a montré 18 candidats
-  Clanker/Bankr sur 20 bannis à vie pour "aucune paire DEX" (juste trop jeunes, pas des scams).
-  Principe posé : `hard_fail` (rejet définitif) ne couvre plus QUE les mécanismes malveillants
-  CONFIRMÉS dans le contrat (mint dev, blacklist, disable-transfers, honeypot, sell-tax
-  extractif, owner caché, reprise de propriété) — liquidité/paire/vérification/concentration
-  sont des aspects d'investissement qui évoluent avec la maturité du projet, jamais un
-  bannissement définitif (`safety_screen.py`/`bonding_screen.py`, `passed` inchangé, seule la
-  classification définitif/à-réessayer change). **Bug plus profond trouvé et vérifié en
-  direct** (domaines `api.virtuals.io`/`www.clanker.world` ajoutés par l'opérateur, testé
-  contre l'API réelle sur deux contrats fournis par l'opérateur) : `tokenAddress` reste `null`
-  tant qu'un token Virtuals n'a pas gradué (structurel) — l'adresse de contrat visible pendant
-  le bonding vit dans `preToken`, jamais cherché avant. `fetch_by_address` ne pouvait donc
-  STRUCTURELLEMENT jamais détecter un token encore en bonding. Fix (`build_token_by_pretoken_url`
-  + repli automatique) vérifié end-to-end sur le contrat réel (`bonding_phase=True`,
-  `bonding_holder_count=306`, conforme à la capture opérateur), déployé et reconfirmé après
-  coup. `graduation_progress()` reste honnêtement `None` (aucun champ API réel ne porte cette
-  donnée, le "56,94%" affiché par l'UI Virtuals n'a pas de formule simple confirmée — pas de
-  proxy inventé). **Connecteurs MCP explorés** (Base MCP, Crypto.com, Gmail, Stripe, Massive
-  Market Data) à la demande opérateur : Base MCP lecture seule utilisée (wallet à 0$, aucun
-  wallet agent délégué, aucun outil d'écriture touché — conforme à la règle capital réel) ;
-  Massive Market Data (stocks/options/forex, pas memecoins) activé côté opérateur mais jamais
-  chargé dans cette session précise malgré plusieurs vérifications — confirmé fonctionnel dans
-  une session fraîche ouverte en parallèle (bug de propagation plateforme, pas une mauvaise
-  config), piste ouverte pour un futur complément macro. Détail complet :
-  `docs/HANDOFF-2026-07-10-nuit9.md`.
-- **11/07 — accès SSH multi-repo VPS, nettoyage cohérence (4 branches mergées), `graduation_progress()` résolu et câblé (gate OFF, pas encore mergé).**
+  **Launchpads sans diligence faite restent des seams vides documentés** (Flaunch/Zora : adaptateur
+  `discover=None` ; Bankr/Ape.store/Mint.club : entrées `knowledge/launchpads.yaml` sans adresse,
+  `confidence: unverified` — diligence Bankr approfondie faite le 11/07, cf. note dans
+  `docs/aria-learning-inbox/`, toujours pas de client construit). Tâche heartbeat
+  `bonding_discovery_cycle` (180min, gate OFF `ARIA_BONDING_DISCOVERY_ENABLED`), les deux volets
+  tournent indépendamment (testé). Clanker vérifié en direct depuis le VPS (mise à jour même
+  segment) : `sortBy` réel énuméré par l'API elle-même (`deployed-at`, pas `createdAt` comme
+  supposé — corrigé). **Gate `ARIA_BONDING_DISCOVERY_ENABLED` toujours pas activé au 11/07** —
+  étape suivante inchangée : **dry-run manuel (`run_bonding_discovery_cycle()`) demandé à
+  l'opérateur avant activation en continu, jamais relancé depuis**.
+- **Vision (images en chat Telegram) — EN LIGNE, gate ON, testé en conditions réelles (10/07).** Handler photo manquant corrigé (`telegram_bot.py` n'enregistrait aucun `MessageHandler(filters.PHOTO)`, toute image ignorée en silence) — un seul point d'entrée `_handle_photo` créé. Lecture visuelle admin-only, gate OFF par défaut (`ARIA_VISION_ENABLED`), testé en direct sur un vrai graphique DexScreener avec succès (chiffres lus correctement, distinction rug/dump). Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
+- **Note de calibration (10/07) — la règle « zéro trace IA » ne couvre PAS le chat Telegram
+  opérateur.** Vérifié dans le code : la règle absolue dit explicitement « sur les surfaces
+  client (rapport, vitrine) » — la conversation Telegram avec l'opérateur n'est ni un rapport ni
+  la vitrine, `brain.py::_llm_response` autorise même les emojis légers. Pas une violation de la
+  règle telle qu'écrite. **Reste une vraie question de calibration de ton non tranchée** (em-dash
+  en conversation opérateur) — jamais tranchée depuis, à trancher avec l'opérateur si le sujet
+  revient.
+- **Identité visuelle ARIA — prompts de portrait renforcés (10/07).** Frontière de goût gravée en dur dans le prompt (« never suggestive, never revealing, never sexualized ») suite à une demande opérateur de monter en réalisme technique (jamais le registre sexualisé) — décision tranchée via `AskUserQuestion`. Reste explicitement différé (pas des points ouverts, des choix de scope documentés) : stories (aucune fonctionnalité native Telegram/bot pour ça), voix/TTS (aucune infra existante), studio 3D (jugé disproportionné). Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
+- **Nuit 9 (10/07) — pivot Cursor audité (pas un incident, opérateur a piloté 3 PR pendant une indisponibilité Claude Code), régressions `/vc` corrigées (`repertoire_db.save_message` non protégé, faux positif de routage `operator_readiness.py`), bug bonding Virtuals résolu (`tokenAddress` structurellement `null` avant graduation, adresse réelle dans `preToken` — fix vérifié end-to-end sur un contrat réel).** Deux points notés « ouverts » à l'époque sont **résolus depuis le 11/07** (voir entrée ci-dessous et `docs/HANDOFF-2026-07-11.md`) : diligence produit exploite désormais la fiche Virtuals (pas seulement le site externe), et `graduation_progress()` est câblé (gate OFF) via lecture on-chain. Connecteurs MCP explorés (Base MCP, Crypto.com, Gmail, Stripe, Massive Market Data) — **Massive Market Data reste une piste ouverte** (bug de propagation plateforme jamais reconfirmé résolu depuis). Détail complet : `docs/HANDOFF-2026-07-10-nuit9.md`.
+- **11/07 — accès SSH multi-repo VPS, nettoyage cohérence (5 branches mergées), `graduation_progress()` résolu, câblé ET mergé (gate OFF).**
   Session tournant directement sur le VPS avec accès réseau réel non filtré (contrairement
   au cloud) : investigation on-chain jamais possible avant. **7 deploy keys SSH dédiées**
-  mises en place pour travailler sur l'écosystème complet (ARIA + aria-ops + aria-core +
+  mises en place pour l'écosystème complet (ARIA + aria-ops + aria-core +
   template-grok-cursor + aria-acp-showcase + acp-cli-demos + GoldenFarFR) — détail
-  `aria-ops/runbooks/vps-github-access.md`. **4 chantiers de cohérence** mergés `--no-ff`
+  `aria-ops/runbooks/vps-github-access.md`. `deploy.sh` purge désormais le cache Docker
+  après succès (cause du remplissage disque nuit9). **5 branches** mergées `--no-ff`
   après validation diff-par-diff et suite verte à chaque étape : suivi cross-jour
-  `exam.py` (bug confirmé empiriquement, répétition garantie dès jour 2-3, fixé) ;
-  diligence produit `/vc` exploite désormais la fiche Virtuals (tokenomics/description),
-  pas seulement le site externe ; 2 modules morts supprimés (`totp_relay.py`,
-  `gateway/local_commands.py`) + 4 docs corrigées pour dérive doc/code ; investigation
-  `graduation_progress()`. **`graduation_progress()` RÉSOLU** (était honnêtement `None`
-  depuis nuit9) : vrai contrat Bonding V5 trouvé par balayage de logs on-chain
-  (`0x1A540088125d00dD3990f9dA45CA0859af4d3B01`), seuil de graduation confirmé PAR TOKEN
-  (`tokenGradThreshold`, pas une constante globale comme supposé avant — cause du seuil
-  125M/42000 faux trouvé en passe 1), formule validée empiriquement sur un vrai token
-  gradué. Implémenté dans `services/base_onchain.py` (lecture seule, aucune clé),
+  `exam.py` ; diligence produit `/vc` exploite désormais la fiche Virtuals
+  (tokenomics/description) ; 2 modules morts supprimés + 4 docs corrigées pour dérive
+  doc/code ; **`graduation_progress()` RÉSOLU ET MERGÉ** — vrai contrat Bonding V5 trouvé
+  par balayage de logs on-chain (`0x1A540088125d00dD3990f9dA45CA0859af4d3B01`), seuil de
+  graduation confirmé PAR TOKEN (`tokenGradThreshold`, pas une constante globale — cause
+  du seuil 125M/42000 faux trouvé en passe 1), formule validée empiriquement sur un vrai
+  token gradué, implémenté dans `services/base_onchain.py` (lecture seule, aucune clé),
   gaté `ARIA_ONCHAIN_GRADUATION_ENABLED` (OFF), couverture partielle honnête documentée
-  (une seule instance de contrat connue). **Branche `claude/graduation-onchain-research`
-  poussée, PAS ENCORE mergée dans `main`** — décision opérateur en attente. Audit complet
-  de la connaissance ARIA (`knowledge/*.yaml`) : contradiction confirmée sur le statut LLM
-  (même famille que le bug Aria Market, pas corrigée), duplication à risque
+  (une seule instance de contrat connue). **Aucune trace de "BONDING_V4" trouvée nulle
+  part dans ce repo** (recherche exhaustive, cf. HANDOFF) — les seules mentions "V4"
+  concernent Clanker v4/Uniswap V4, probable confusion, pas une vraie contradiction.
+  Audit complet de la connaissance ARIA (`knowledge/*.yaml`) : contradiction confirmée sur
+  le statut LLM (même famille que le bug Aria Market, pas corrigée), duplication à risque
   `faq.yaml`/`canonical_facts.yaml` (choix d'architecture à trancher), et constat que
   "ARIA manque de données" vient de mécanismes de collecte propres à l'arrêt
   (`telegram_conversation_miner.py` codé mais jamais activé), pas d'un manque de
   recherche externe. 2 notes déposées dans `docs/aria-learning-inbox/` (Virtuals x
-  Robinhood Chain, diligence Bankr) via le canal prévu (proposition GitHub, jamais un
-  commit direct dans la connaissance). Détail complet : `docs/HANDOFF-2026-07-11.md`.
+  Robinhood Chain, diligence Bankr). Section "Faits établis" compactée le même segment
+  (Nuit 7-9 réduites, rien perdu — cf. `docs/HANDOFF-2026-07-10-detail-archive.md`).
+  Détail complet : `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
