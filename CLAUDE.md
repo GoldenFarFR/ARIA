@@ -485,6 +485,34 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   une session fraîche ouverte en parallèle (bug de propagation plateforme, pas une mauvaise
   config), piste ouverte pour un futur complément macro. Détail complet :
   `docs/HANDOFF-2026-07-10-nuit9.md`.
+- **11/07 — accès SSH multi-repo VPS, nettoyage cohérence (4 branches mergées), `graduation_progress()` résolu et câblé (gate OFF, pas encore mergé).**
+  Session tournant directement sur le VPS avec accès réseau réel non filtré (contrairement
+  au cloud) : investigation on-chain jamais possible avant. **7 deploy keys SSH dédiées**
+  mises en place pour travailler sur l'écosystème complet (ARIA + aria-ops + aria-core +
+  template-grok-cursor + aria-acp-showcase + acp-cli-demos + GoldenFarFR) — détail
+  `aria-ops/runbooks/vps-github-access.md`. **4 chantiers de cohérence** mergés `--no-ff`
+  après validation diff-par-diff et suite verte à chaque étape : suivi cross-jour
+  `exam.py` (bug confirmé empiriquement, répétition garantie dès jour 2-3, fixé) ;
+  diligence produit `/vc` exploite désormais la fiche Virtuals (tokenomics/description),
+  pas seulement le site externe ; 2 modules morts supprimés (`totp_relay.py`,
+  `gateway/local_commands.py`) + 4 docs corrigées pour dérive doc/code ; investigation
+  `graduation_progress()`. **`graduation_progress()` RÉSOLU** (était honnêtement `None`
+  depuis nuit9) : vrai contrat Bonding V5 trouvé par balayage de logs on-chain
+  (`0x1A540088125d00dD3990f9dA45CA0859af4d3B01`), seuil de graduation confirmé PAR TOKEN
+  (`tokenGradThreshold`, pas une constante globale comme supposé avant — cause du seuil
+  125M/42000 faux trouvé en passe 1), formule validée empiriquement sur un vrai token
+  gradué. Implémenté dans `services/base_onchain.py` (lecture seule, aucune clé),
+  gaté `ARIA_ONCHAIN_GRADUATION_ENABLED` (OFF), couverture partielle honnête documentée
+  (une seule instance de contrat connue). **Branche `claude/graduation-onchain-research`
+  poussée, PAS ENCORE mergée dans `main`** — décision opérateur en attente. Audit complet
+  de la connaissance ARIA (`knowledge/*.yaml`) : contradiction confirmée sur le statut LLM
+  (même famille que le bug Aria Market, pas corrigée), duplication à risque
+  `faq.yaml`/`canonical_facts.yaml` (choix d'architecture à trancher), et constat que
+  "ARIA manque de données" vient de mécanismes de collecte propres à l'arrêt
+  (`telegram_conversation_miner.py` codé mais jamais activé), pas d'un manque de
+  recherche externe. 2 notes déposées dans `docs/aria-learning-inbox/` (Virtuals x
+  Robinhood Chain, diligence Bankr) via le canal prévu (proposition GitHub, jamais un
+  commit direct dans la connaissance). Détail complet : `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
