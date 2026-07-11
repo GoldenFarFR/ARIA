@@ -53,7 +53,17 @@ logger = logging.getLogger(__name__)
 API_ROOT = "https://api.virtuals.io/api"
 _VIRTUALS_ENDPOINT = f"{API_ROOT}/virtuals"
 
-# Seuil de graduation : 42 000 VIRTUAL accumulés dans la courbe (doc de recherche).
+# Seuil de graduation : 42 000 VIRTUAL (doc de recherche -- constante conservée pour
+# compat, cf. le REJET de cette prémisse elle-même documenté juste en dessous).
+# RÉINVESTIGUÉ le 11/07 (accès réseau direct api.virtuals.io + app.virtuals.io depuis
+# le VPS, confirmé HTTP 200) : le bundle JS front (`app.virtuals.io/assets/index-*.js`,
+# lu en clair, aucune auth) décrit littéralement les 42 000 $VIRTUAL comme la
+# LIQUIDITÉ INITIALE fournie par le créateur au lancement ("...je vais fournir 42 000
+# $VIRTUAL... comme liquidité initiale pour le pool"), PAS un objectif de VIRTUAL
+# "accumulés" au fil des achats. La prémisse "raised/42000" qui a motivé cette
+# constante était donc déjà fausse à la base, pas juste non confirmée -- cf. le
+# commentaire détaillé sur `_VIRTUAL_RAISED_KEYS` ci-dessous pour le reste de
+# l'investigation (pourquoi aucun champ de l'API Strapi ne peut servir de proxy).
 GRADUATION_THRESHOLD_VIRTUAL = 42_000.0
 
 UNAVAILABLE = "donnée Virtuals indisponible"
@@ -74,11 +84,75 @@ _BONDING_STATUSES = frozenset({"UNDERGRAD", "PROTOTYPE", "1"})
 # n'existe dans la réponse API réelle -- graduation_progress() renvoie donc
 # toujours None en pratique aujourd'hui (dégradation honnête, jamais un chiffre
 # inventé -- cf. le "56,94%" affiché par l'UI Virtuals, dont la vraie formule
-# n'est pas confirmée : ni mcapInVirtual/42000 ni totalValueLocked ne
-# reproduisent exactement ce nombre, donc pas de proxy fiable à câbler tant
-# que ce n'est pas confirmé). Gardés en whitelist au cas où l'API les
-# exposerait un jour (ou pour un token différent) -- coût nul, jamais de faux
-# positif puisque absents = None.
+# n'est pas confirmée). Gardés en whitelist au cas où l'API les exposerait un
+# jour (ou pour un token différent) -- coût nul, jamais de faux positif
+# puisque absents = None.
+#
+# RÉINVESTIGUÉ le 11/07, accès réseau réel confirmé (curl direct depuis le VPS,
+# HTTP 200 sur `api.virtuals.io` ET `app.virtuals.io`) -- verdict inchangé
+# (toujours None), mais l'investigation est allée nettement plus loin qu'avant :
+#
+# 1. Liste ET détail (`/api/virtuals` filtré status=UNDERGRAD, et
+#    `/api/virtuals/{id}`) inspectés sur des dizaines de tokens réellement en
+#    bonding (ex. CRASHCAT juste lancé : mcapInVirtual=8500, holderCount=1 ;
+#    ORCHAD en cours de bonding : mcapInVirtual=36000, holderCount=3). La
+#    LISTE COMPLÈTE des ~70 clés du payload réel a été énumérée -- aucune ne
+#    porte un pourcentage, un "raised", ou une progression de courbe, sous
+#    quelque nom que ce soit (`virtualTokenValue` inclus : c'est juste
+#    `mcapInVirtual * 1e9`, une reformulation, pas une nouvelle donnée).
+# 2. `totalValueLocked` (candidat qui semblait prometteur) est INUTILISABLE :
+#    toujours `"0"` pour un token encore UNDERGRAD (vérifié y compris sur
+#    ORCHAD, qui a pourtant de vrais holders et une vraie liquidityUsd) --
+#    il n'est peuplé qu'APRÈS graduation (vérifié sur des tokens AVAILABLE
+#    réels, ex. TOSHI : totalValueLocked=46897). Confirme que ce champ suit
+#    la liquidité DEX post-graduation, pas la réserve de courbe pré-graduation.
+# 3. `mcapInVirtual` n'est PAS une réserve accumulée : c'est une valorisation
+#    dérivée (prix x offre), pas le montant brut de VIRTUAL déposé dans le
+#    pool de bonding. Preuve directe trouvée en triant ~200 tokens par
+#    `mcapInVirtual` décroissant (`sort[0]=mcapInVirtual:desc`, toujours sans
+#    filtre de statut fiable -- point 5) : un token encore UNDERGRAD (CTDA,
+#    mcapInVirtual=385 200) a un mcap PLUS ÉLEVÉ que plusieurs tokens déjà
+#    AVAILABLE/gradués dans le même instantané (SOLACE=362 111,
+#    NOX=356 254). Aucun seuil fixe de mcap ne sépare donc les deux groupes
+#    -- exclut définitivement tout ratio `mcapInVirtual / constante` comme
+#    proxy de progression, y compris `/42000` déjà écarté avant cette session.
+# 4. Le bundle JS du front (`app.virtuals.io`, HTML + assets, lu en clair,
+#    aucune auth) confirme que les 42 000 $VIRTUAL sont la LIQUIDITÉ INITIALE
+#    du pool au lancement (texte UI exact : "...je vais fournir 42 000
+#    $VIRTUAL... comme liquidité initiale pour le pool"), pas un objectif de
+#    VIRTUAL accumulés -- la prémisse même de la formule `raised/42000` était
+#    fausse dès le départ, pas juste non confirmée. Le même bundle contient
+#    l'ABI d'un contrat on-chain `Bonding`/`BondingV2` (Base) avec un
+#    événement `Graduated(address token, address agentToken)` et des
+#    paramètres modifiables (`newGradThreshold` notamment) -- la vraie
+#    donnée de progression est un état on-chain (réserve de la courbe vs
+#    seuil de graduation réel du contrat), jamais exposée par cette API
+#    Strapi de découverte. La lire proprement demanderait un appel RPC
+#    mainnet Base authentifié (adresse de contrat + décodage ABI) : aucune
+#    infrastructure de lecture on-chain mainnet n'existe dans ce dépôt
+#    aujourd'hui (seul `onchain/sepolia_wallet.py` existe, testnet, pour la
+#    signature de wallet -- pas un client de lecture générique) et un
+#    nouveau point de sortie réseau RPC mainnet nécessite une autorisation
+#    opérateur explicite (doctrine CLAUDE.md) avant d'être câblé -- non fait
+#    ce segment, faute de cette confirmation.
+# 5. Effet de bord trouvé en creusant ce point : le filtre `filters[status]=…`
+#    de l'API Strapi semble ignoré côté serveur quelle que soit la valeur
+#    testée (`AVAILABLE`, `SENTIENT`, `GRADUATED`, `INITIALIZED` -- pourtant
+#    une valeur réelle observée dans les données --, ou une valeur bidon) :
+#    les 5 renvoient exactement la même liste triée par date de création,
+#    non filtrée. `build_graduated_url`/`fetch_graduated` n'effectuaient donc
+#    PAS de filtrage réel côté serveur (le tri par date masquait le problème
+#    en pratique car les créations récentes sont presque toutes UNDERGRAD).
+#    Aucun risque de sécurité observé (le seul appelant,
+#    `base_crawler.discover_virtuals_graduated_tokens`, exclut déjà les
+#    entrées à `token_address=None`, donc les faux UNDERGRAD non filtrés
+#    étaient déjà éliminés en aval) -- CORRIGÉ le 11/07 : `fetch_prototypes`
+#    et `fetch_graduated` filtrent désormais eux-mêmes côté client via
+#    `is_in_bonding` (même allowlist déjà testée, aucune nouvelle logique de
+#    parsing), cf. tests `test_fetch_*_filters_out_*_client_side` dans
+#    `test_virtuals_client.py`. Les URLs conservent `filters[status]=…` dans
+#    la requête (coût nul, au cas où l'API le respecterait un jour) mais ne
+#    doivent plus être considérées comme filtrantes à elles seules.
 _VIRTUAL_RAISED_KEYS = (
     "virtualRaised",
     "raisedVirtual",
@@ -194,12 +268,19 @@ def _first(mapping: dict, *keys: str) -> object:
 # Construction d'URL (endpoints Strapi publics)
 # ----------------------------------------------------------------------
 def build_prototypes_url(chain: str = "BASE", page_size: int = 100, *, status: str = "UNDERGRAD") -> str:
-    """URL de l'index filtré par statut, trié par récence.
+    """URL de l'index filtré par statut (nominalement), trié par récence.
 
     ``status`` par défaut ``"UNDERGRAD"`` (encore en bonding, comportement historique
     inchangé). ``build_graduated_url`` réutilise cette même fonction avec
     ``status="AVAILABLE"`` (tokens gradués) — un seul point de construction d'URL,
     jamais dupliqué.
+
+    ⚠️ Diagnostic réel (11/07, accès réseau direct api.virtuals.io) : ``filters[status]``
+    est IGNORÉ côté serveur quelle que soit la valeur envoyée (toutes renvoient la
+    même liste non filtrée). Le paramètre est conservé dans l'URL (au cas où l'API
+    le respecterait un jour, coût nul) mais NE FILTRE PAS réellement — le filtrage
+    effectif se fait côté client dans ``VirtualsClient.fetch_prototypes`` /
+    ``fetch_graduated`` via ``is_in_bonding``.
 
     Ex. ``…/api/virtuals?filters[status]=UNDERGRAD&filters[chain]=BASE&sort[0]=createdAt:desc&pagination[pageSize]=100``
     """
@@ -218,12 +299,17 @@ def build_prototypes_url(chain: str = "BASE", page_size: int = 100, *, status: s
 
 
 def build_graduated_url(chain: str = "BASE", page_size: int = 100) -> str:
-    """URL des tokens ayant gradué récemment (statut ``AVAILABLE``).
+    """URL des tokens ayant gradué récemment (statut ``AVAILABLE`` demandé).
 
     ``sort[0]=createdAt:desc`` reste trié par date de CRÉATION du prototype (pas de
     date de graduation exposée par l'API) — les plus récemment créés apparaissent en
     tête, ce qui capture en pratique les graduations récentes sans être une garantie
     stricte d'ordre de graduation.
+
+    ⚠️ ``filters[status]=AVAILABLE`` n'est PAS appliqué côté serveur (cf.
+    ``build_prototypes_url``) : l'URL seule ne renvoie pas une liste filtrée. Utiliser
+    ``VirtualsClient.fetch_graduated`` (jamais cette URL brute) pour obtenir une vraie
+    liste de tokens gradués — le filtrage réel s'y fait côté client.
     """
     return build_prototypes_url(chain=chain, page_size=page_size, status="AVAILABLE")
 
@@ -399,7 +485,13 @@ def graduation_progress(token: VirtualToken) -> float | None:
 
     Ratio ``VIRTUAL accumulés / 42 000``. Renvoie ``None`` quand l'API n'expose
     pas la valeur accumulée (facts-only : pas d'inférence depuis la mcap, qui
-    n'est pas la réserve de courbe).
+    n'est pas la réserve de courbe -- vérifié en direct le 11/07 : un token
+    encore en bonding peut avoir un ``mcapInVirtual`` plus élevé que des
+    tokens déjà gradués, donc aucun ratio contre une constante fixe n'est
+    valide comme proxy). Voir le commentaire au-dessus de
+    ``_VIRTUAL_RAISED_KEYS`` pour le détail complet de l'investigation
+    (payload réel énumèré, formule UI non reproductible, mécanisme réel
+    on-chain hors de portée de cette API).
     """
     raised = token.virtual_raised
     if raised is None or raised < 0:
@@ -504,7 +596,16 @@ class VirtualsClient:
             return response.json(), None
 
     async def fetch_prototypes(self, chain: str = "BASE", page_size: int = 100) -> list[VirtualToken]:
-        """Index des tokens encore en bonding. Toujours une liste (``[]`` sur erreur)."""
+        """Index des tokens encore en bonding. Toujours une liste (``[]`` sur erreur).
+
+        Filtre ``is_in_bonding`` appliqué CÔTÉ CLIENT après réception : diagnostic réel
+        (11/07, accès réseau direct api.virtuals.io) — le filtre serveur
+        ``filters[status]=…`` de ``build_prototypes_url`` est ignoré quelle que soit la
+        valeur testée (toutes renvoient la même liste non filtrée, triée par date de
+        création). Sans ce filtre client, un token déjà gradué se glisserait dans
+        l'index "encore en bonding" — cf. le commentaire détaillé au-dessus de
+        ``_VIRTUAL_RAISED_KEYS``.
+        """
         try:
             url = build_prototypes_url(chain=chain, page_size=page_size)
             data, error = await self._get_json(url)
@@ -516,7 +617,7 @@ class VirtualsClient:
             tokens: list[VirtualToken] = []
             for item in items:
                 token = parse_virtual(item)
-                if token is not None:
+                if token is not None and is_in_bonding(token):
                     tokens.append(token)
             return tokens
         except Exception as exc:  # dégradation ultime : jamais d'exception sortante
@@ -529,6 +630,16 @@ class VirtualsClient:
         Ces tokens ont une vraie liquidité DEX (post-graduation) : ils rejoignent le
         pipeline d'absorption STANDARD (85% VC), pas la niche bonding — cf.
         ``services/launchpad_discovery.py``.
+
+        Filtre ``not is_in_bonding`` appliqué CÔTÉ CLIENT après réception : diagnostic
+        réel (11/07, accès réseau direct api.virtuals.io) — le filtre serveur
+        ``filters[status]=…`` de ``build_graduated_url`` est ignoré quelle que soit la
+        valeur testée (``AVAILABLE``, ``SENTIENT``, ``GRADUATED``, ``INITIALIZED`` ou
+        une valeur bidon renvoient tous la même liste non filtrée, triée par date de
+        création — jamais une vraie liste de gradués). Sans ce filtre client, un token
+        encore ``UNDERGRAD`` se glisserait dans l'index "gradués" et rejoindrait à tort
+        le pipeline STANDARD — cf. le commentaire détaillé au-dessus de
+        ``_VIRTUAL_RAISED_KEYS``.
         """
         try:
             url = build_graduated_url(chain=chain, page_size=page_size)
@@ -541,7 +652,7 @@ class VirtualsClient:
             tokens: list[VirtualToken] = []
             for item in items:
                 token = parse_virtual(item)
-                if token is not None:
+                if token is not None and not is_in_bonding(token):
                     tokens.append(token)
             return tokens
         except Exception as exc:  # dégradation ultime : jamais d'exception sortante
