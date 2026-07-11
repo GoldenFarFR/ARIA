@@ -174,7 +174,7 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   question ("non, pas encore") — ce dashboard est la vitrine de transparence, pas une prétention
   de feu vert.
 - **Sentiment de marché → décision LLM réelle (#75, 10/07) — EN LIGNE.** Sentiment BTC/ETH branché en PRÉ-LLM (`_fetch_sentiment_readings` → `_build_untrusted_context`, atteint le prompt AVANT la décision — l'ancien overlay macro halving #14 s'exécutait, lui, APRÈS et n'a jamais influencé le raisonnement malgré les apparences). **Le halving overlay (#14) reste, lui, post-hoc** — pas encore rebranché en pré-LLM, seam à réévaluer si l'opérateur le souhaite (toujours vrai au 11/07). Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
-- **INCIDENT SÉCURITÉ MAJEUR (10/07) — délégation autonome à « Cursor » trouvée vivante et RETIRÉE** (code ET narratif nettoyés — `aria_worker_queue.py`/`community_worker_skill.py` supprimés, `directives.md` réécrit ; garde-fou mécanique `test_coherence.py::test_external_write_actions_registered_in_allowlist` ajouté et testé positif). **À faire par l'opérateur (toujours non tranché au 11/07)** : vérifier la valeur réelle de `GITHUB_WRITE_REPOS` sur le VPS/Render (devrait être vide/off — bloqué pour Claude Code par le garde-fou Credential Materialization, doit être fait manuellement) ; décider si l'issue #1 et les branches orphelines `aria/gap-x-profile-banner`/`cursor/aria-instinct-auto-ouvrier-delegate` sont fermées/supprimées ou gardées en archive. Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
+- **INCIDENT SÉCURITÉ MAJEUR (10/07) — délégation autonome à « Cursor » trouvée vivante et RETIRÉE** (code ET narratif nettoyés — `aria_worker_queue.py`/`community_worker_skill.py` supprimés, `directives.md` réécrit ; garde-fou mécanique `test_coherence.py::test_external_write_actions_registered_in_allowlist` ajouté et testé positif). **`GITHUB_WRITE_REPOS` vérifié `off` (11/07, ce segment)** — confirmé dans le `.env` réel du conteneur `aria-api` sur ce VPS (accès filesystem direct, pas de token nécessaire). **Reste à faire par l'opérateur** : décider si l'issue #1 et les branches orphelines `aria/gap-x-profile-banner`/`cursor/aria-instinct-auto-ouvrier-delegate` sont fermées/supprimées ou gardées en archive — éligible à l'exception élargie du 11/07 (suppression de branches/PR orphelines) une fois leur contenu confirmé déjà fusionné ailleurs ("ahead 0"), sur cible nommée explicitement. Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
 - **Canal de directives ARIA → Claude Code (#82, 10/07) — PILOTE EN LIGNE, gate OFF, RIEN
   d'automatique.** Décision opérateur explicite et répétée (« ARIA à la tête, elle dialogue
   qu'avec toi en bidirectionnel, tu renvoies vers Cowork si nécessaire ») — bâti EXPRÈS avec
@@ -285,8 +285,24 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   OFF) pour que `faq.yaml` ne dérive plus jamais de `canonical_facts.yaml` — mergé `main`
   (`696cbb23`), suite verte (4361 passed, 7 skipped, 0 échec), branche supprimée. La
   "duplication à risque" `faq.yaml`/`canonical_facts.yaml` notée juste au-dessus est donc
-  câblée en solution (activation en prod encore à décider). Reste en attente : ID
-  Telegram en clair dans `production.env.example`, nomenclature `#104` restante.
+  câblée en solution (activation en prod encore à décider).
+- **11/07 (ce segment) — 4 items du backlog fermés, en attendant la décision opérateur sur le
+  gate bonding.** `production.env.example` (aria-ops) : ID Telegram réel (`5864967247`) retiré
+  (placeholder vide, comme les autres champs secrets du fichier), encodage mojibake des
+  commentaires FR corrigé, `GITHUB_PROTECTED_REPOS`/`GITHUB_SANDBOX_REPO` réalignés sur les
+  noms réels (`ARIA`, pas `aria-vanguard`/`aria-sandbox`), `GITHUB_WRITE_REPOS` par défaut
+  passé de `*` à `off` (un template ne doit pas enseigner le défaut dangereux). Nomenclature
+  `#104` : déjà résolue par le nettoyage Tier 1 fait plus tôt cette session (commits
+  `731131a`/`55f4f8f`/`3941f60` sur aria-ops/template-grok-cursor/aria-acp-showcase).
+  **Contradiction LLM confirmée ci-dessus, corrigée** : `canonical_facts.yaml`/`faq.yaml`
+  disaient encore `ARIA_LLM_ENABLED=false`/« no generative LLM » et portaient des noms de
+  repos morts dans 5 faits (`anti-hallucination`, `truth-ledger`, `aria-builds`, `repos`,
+  `github-governance`, `operator-runbook`) — réalignés sur l'état réel (LLM actif en prod
+  avec grounding, monorepo `ARIA` + `aria-ops`). Suite complète verte après coup (4361 passed,
+  7 skipped, 0 échec). **`GITHUB_WRITE_REPOS` (point en attente depuis nuit8/9) confirmé `off`**
+  dans le `.env` réel du conteneur `aria-api` sur ce VPS (`vanguard/backend/.env` — accès direct
+  filesystem, pas de token/API nécessaire ; le garde-fou Credential Materialization a bloqué un
+  grep plus large qui aurait pu exposer `GITHUB_TOKEN`, correctement).
   Détail complet : `docs/HANDOFF-2026-07-11.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
