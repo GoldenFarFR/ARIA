@@ -1,13 +1,18 @@
 from aria_core.content.service import _score_faq, _load_faq
 from aria_core.grounding import (
     FAQ_DIRECT_SCORE,
+    analysis_methodology_reply,
     anti_hallucination_rules,
     faq_direct_answer,
     format_greeting_reply,
     grounded_for_audience,
+    grounded_llm_identity,
+    is_analysis_methodology_question,
     is_greeting,
+    is_llm_identity_question,
     is_social_chitchat,
     is_pure_casual_smalltalk,
+    llm_identity_reply,
     should_skip_llm_enhance,
     social_ack_reply,
     unknown_reply,
@@ -17,6 +22,60 @@ from aria_core.grounding import (
 def test_grounded_for_audience_operator_bypass():
     assert grounded_for_audience(public=False) is False
     assert grounded_for_audience(public=True) is True
+
+
+def test_llm_identity_question_detects_real_incident_phrasing():
+    # Incident réel 11/07 : régression exacte du fix du 08/07 sur ce chemin précis
+    # (grounded_llm_identity n'est jamais injecté côté opérateur).
+    assert is_llm_identity_question("tu fonctionnes avec quel type d'intelligence, un LLM ?")
+    assert is_llm_identity_question("es-tu une IA ?")
+    assert is_llm_identity_question("are you an LLM?")
+    assert is_llm_identity_question("what model are you?")
+    assert not is_llm_identity_question("bonjour")
+    assert not is_llm_identity_question("quel est le prix du token")
+
+
+def test_llm_identity_question_does_not_shadow_routing_meta():
+    # Ne doit pas capturer les questions de routage TECHNIQUE (provider/API du tour) —
+    # llm_routing_meta.is_llm_routing_question reste le mécanisme dédié pour ça.
+    assert not is_llm_identity_question("/depth develop quel moteur LLM utilises-tu")
+    assert not is_llm_identity_question("route vers virtuals spark")
+
+
+def test_llm_identity_reply_never_names_a_specific_model():
+    for lang in ("fr", "en"):
+        reply = llm_identity_reply(lang)
+        assert "opus" not in reply.lower()
+        assert "grok" not in reply.lower()
+        assert "llm" in reply.lower()
+
+
+def test_llm_identity_reply_matches_grounded_llm_identity_facts():
+    # La réponse chat doit rester cohérente avec le bloc système (mêmes faits, ton différent).
+    for lang in ("fr", "en"):
+        chat_reply = llm_identity_reply(lang).lower()
+        system_block = grounded_llm_identity(lang).lower()
+        assert ("certitude" in chat_reply or "certainty" in chat_reply)
+        assert ("certitude" in system_block or "certainty" in system_block)
+
+
+def test_analysis_methodology_question_detects_real_incident_phrasing():
+    assert is_analysis_methodology_question(
+        "comment tu analyses un token, tu utilises de l'IA générative ?"
+    )
+    assert is_analysis_methodology_question("how do you analyze a token")
+    assert is_analysis_methodology_question("quels outils utilises-tu pour analyser")
+    assert not is_analysis_methodology_question("bonjour")
+    assert not is_analysis_methodology_question("quel est le prix du token")
+
+
+def test_analysis_methodology_reply_cites_real_tools():
+    for lang in ("fr", "en"):
+        reply = analysis_methodology_reply(lang).lower()
+        assert "goplus" in reply
+        assert "blockscout" in reply
+        assert "rsi" in reply
+        assert "geckoterminal" in reply
 
 
 def test_faq_direct_answer_high_confidence():

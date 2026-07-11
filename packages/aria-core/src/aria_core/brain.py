@@ -899,7 +899,15 @@ class AriaBrain:
         lang_key = "fr" if lang == LANG_FR else "en"
         route = (route_msg or message).strip()
 
-        from aria_core.grounding import is_factual_question, is_general_qa, is_short_ack
+        from aria_core.grounding import (
+            analysis_methodology_reply,
+            is_analysis_methodology_question,
+            is_factual_question,
+            is_general_qa,
+            is_llm_identity_question,
+            is_short_ack,
+            llm_identity_reply,
+        )
         from aria_core.knowledge.epistemic import resolve_calibrated_answer
         from aria_core.knowledge.web_verify import is_explicit_web_request, is_live_info_question
 
@@ -971,6 +979,31 @@ class AriaBrain:
                         {"cost_meta_help": True},
                         None,
                     )
+
+        # Ancrage anti-confabulation sur la NATURE/MÉTHODE d'ARIA — s'applique à public ET
+        # opérateur (contrairement au bloc ci-dessus). Incident réel 11/07 : ces deux
+        # catégories tombaient dans la conversation fondateur non ancrée (grounded_llm_identity
+        # n'est injecté que si grounded_for_audience(public), jamais côté opérateur) et ARIA a
+        # confabulé (« Opus 4.8 » affirmé comme moteur standard ; méthode d'analyse générique
+        # sans citer un seul vrai outil). Réponse déterministe, aucun appel LLM : élimine le
+        # risque de confabulation sur ces deux sujets précis, quel que soit l'interlocuteur.
+        if is_llm_identity_question(route):
+            return (
+                llm_identity_reply(lang_key),
+                None,
+                ["Identité LLM (template — sans confabulation)"],
+                {"llm_identity": True, "skip_web": True},
+                None,
+            )
+        if is_analysis_methodology_question(route):
+            return (
+                analysis_methodology_reply(lang_key),
+                None,
+                ["Méthode d'analyse (template — sans confabulation)"],
+                {"analysis_methodology": True, "skip_web": True},
+                None,
+            )
+
         if is_greeting(route):
             welcome = format_greeting_reply(route, lang_key, public=public)
             return welcome, None, ["Greeting (template)"], {"greeting": True}, None

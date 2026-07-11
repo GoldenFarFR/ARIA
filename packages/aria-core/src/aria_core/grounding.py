@@ -457,6 +457,113 @@ def grounded_llm_identity(lang: str = "en") -> str:
     )
 
 
+_LLM_IDENTITY_RE = re.compile(
+    r"(?:"
+    r"es[- ]?tu\s+(?:une?\s+)?(?:ia|i\.a\.?|llm|intelligence\s+artificielle)\b|"
+    r"are\s+you\s+(?:an?\s+)?(?:ai|llm|artificial\s+intelligence|large\s+language\s+model)\b|"
+    r"tu\s+(?:es|fonctionnes?|marches?|tournes?)\s+(?:avec\s+|sur\s+)?quel\s+type\s+d['’]intelligence|"
+    r"what\s+kind\s+of\s+intelligence\s+are\s+you|"
+    r"tu\s+(?:es|fonctionnes?|tournes?)\s+(?:avec\s+|sur\s+)?(?:un\s+)?llm\b|"
+    r"quel\s+(?:type\s+d['’]|)intelligence\s+(?:utilises?[- ]?tu|as[- ]?tu)|"
+    r"what\s+(?:model|llm)\s+(?:are\s+you|do\s+you\s+use|powers?\s+you)|"
+    r"quel\s+mod[eè]le\s+(?:es[- ]?tu|utilises?[- ]?tu|te\s+fait\s+fonctionner)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_llm_identity_question(message: str) -> bool:
+    """True pour une question sur la NATURE d'ARIA (« es-tu un LLM/une IA ? ») — distincte de
+    ``llm_routing_meta.is_llm_routing_question`` (routage technique : quel provider/API pour
+    CE tour) et de ``self_context.is_self_context_question`` (mission/valeurs/objectifs).
+
+    Ajoutée après un incident réel (11/07) : l'opérateur a demandé « tu fonctionnes avec quel
+    type d'intelligence, un LLM ? » sur Telegram et ARIA a répondu « Oui, actuellement Claude
+    Opus 4.8 » — régression du même incident corrigé le 08/07
+    (``grounded_llm_identity``), parce que ``grounded_llm_identity`` n'est injecté QUE dans le
+    chemin ``grounded_for_audience(public)`` (visiteurs publics), jamais dans la conversation
+    opérateur/fondateur. Ce détecteur route la question vers une réponse déterministe (aucun
+    appel LLM), quel que soit `public`, pour garantir zéro confabulation sur ce sujet précis.
+    """
+    text = (message or "").strip()
+    if len(text) < 6:
+        return False
+    return bool(_LLM_IDENTITY_RE.search(text))
+
+
+def llm_identity_reply(lang: str = "en") -> str:
+    """Réponse déterministe (pas d'appel LLM) — mêmes faits que ``grounded_llm_identity``,
+    reformulés pour un chat direct plutôt qu'un bloc système."""
+    if lang == "fr":
+        return (
+            "Oui, je m'appuie sur un LLM pour raisonner. L'infrastructure sous-jacente varie "
+            "selon la tâche (fournisseur principal + secours) — je ne sais pas avec certitude "
+            "quel modèle précis a généré une réponse donnée, et je ne vais pas en inventer un. "
+            "Pour le détail technique exact de ce tour (provider/modèle actif), demande-moi le "
+            "routage LLM."
+        )
+    return (
+        "Yes, I run on an LLM to reason. The underlying infrastructure varies by task (primary "
+        "provider + fallback) — I don't know with certainty which exact model generated a given "
+        "reply, and I won't make one up. For the exact technical routing of this turn (active "
+        "provider/model), ask me about LLM routing."
+    )
+
+
+_ANALYSIS_METHOD_RE = re.compile(
+    r"(?:"
+    r"comment\s+(?:tu\s+)?analyses?(?:[- ]tu)?\b|"
+    r"comment\s+(?:tu\s+)?fais[- ]?tu\s+(?:ton\s+|l['’]|une\s+)?analyse|"
+    r"comment\s+tu\s+fais\s+(?:pour\s+)?analyser|"
+    r"how\s+do\s+you\s+analyz[e]|how\s+do\s+you\s+do\s+(?:your\s+)?analysis|"
+    r"quels?\s+outils?\s+(?:utilises?[- ]?tu|as[- ]?tu)\s+(?:pour\s+)?(?:l['’]|)analys|"
+    r"what\s+tools?\s+do\s+you\s+use\s+to\s+analyz[e]|"
+    r"tu\s+utilises?\s+(?:de\s+l['’])?ia\s+g[ée]n[ée]rative\s+pour\s+analys|"
+    r"m[ée]thode\s+d['’]analyse"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_analysis_methodology_question(message: str) -> bool:
+    """True pour une question sur la MÉTHODE d'analyse d'un token (« comment tu analyses,
+    IA générative ? »). Incident réel (11/07) : réponse générique en 6 points ne citant AUCUN
+    vrai outil (GoPlus, RSI/EMA/MACD, Blockscout, GeckoTerminal, safety_screen) — pas
+    techniquement faux, mais non ancré sur le code réel (même famille de risque que
+    ``is_llm_identity_question`` : confabulation sur ses propres capacités). Route vers une
+    réponse déterministe listant les VRAIS outils, quel que soit `public`.
+    """
+    text = (message or "").strip()
+    if len(text) < 6:
+        return False
+    return bool(_ANALYSIS_METHOD_RE.search(text))
+
+
+def analysis_methodology_reply(lang: str = "en") -> str:
+    """Réponse déterministe (pas d'appel LLM) listant les vrais outils du pipeline VC —
+    cf. `skills/safety_screen.py`, `services/goplus.py`, `skills/indicators.py`,
+    `services/blockscout.py`, `services/ohlcv.py`. Tenue à jour si le pipeline change."""
+    if lang == "fr":
+        return (
+            "L'analyse n'est pas de l'IA générative de bout en bout — les signaux sont calculés, "
+            "pas devinés : filtre de sécurité (contrat vérifié, autorité du mint, concentration "
+            "des holders, verdict SAFE/CAUTION/DANGER), honeypot/taxes/owner caché via GoPlus, "
+            "analyse technique réelle (RSI, EMA/MACD, Bollinger, golden pocket, divergence RSI), "
+            "holders et code via Blockscout, prix/liquidité/OHLCV via DexScreener et GeckoTerminal. "
+            "Le LLM n'intervient qu'à la fin, pour rédiger la thèse (cible/invalidation) à partir "
+            "de ces signaux déjà calculés — jamais pour inventer un chiffre."
+        )
+    return (
+        "The analysis isn't end-to-end generative AI — signals are computed, not guessed: a "
+        "security filter (contract verified, mint authority, holder concentration, SAFE/CAUTION/"
+        "DANGER verdict), honeypot/taxes/hidden owner via GoPlus, real technical analysis (RSI, "
+        "EMA/MACD, Bollinger, golden pocket, RSI divergence), holders and code via Blockscout, "
+        "price/liquidity/OHLCV via DexScreener and GeckoTerminal. The LLM only steps in at the end "
+        "to write up the thesis (target/invalidation) from these already-computed signals — never "
+        "to invent a number."
+    )
+
+
 def should_skip_llm_enhance(skill_name: str | None) -> bool:
     if not skill_name:
         return True
