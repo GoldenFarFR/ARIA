@@ -210,3 +210,48 @@ async def crawl_and_absorb(
         counts[verdict] = counts.get(verdict, 0) + 1
     logger.info("base_crawler: %s tokens traités %s", sum(counts.values()), counts)
     return counts
+
+
+async def retry_stale_pending(
+    *, limit: int = 20, older_than_hours: int = 24, lister=None, absorber=None
+) -> dict:
+    """Retente délibérément les candidats ``pending`` (échec MOU) laissés de côté.
+
+    ``crawl_and_absorb`` ne revoit un candidat ``pending`` QUE s'il réapparaît par
+    hasard dans une découverte ultérieure (``token_absorber.absorb`` ne court-circuite
+    déjà pas 'pending', cf. ``test_soft_fail_pending_is_still_rescanned_next_cycle``)
+    — mais rien ne va délibérément le repêcher si le marché ne le remet pas sous le
+    nez du crawl. Résultat mesuré (audit #77) : le pool ``active`` reste à 0 malgré
+    un flux de découverte correct, parce que les candidats « pas encore mûrs »
+    (contrat pas encore vérifié, holders pas encore lisibles, liquidité en train de
+    monter) ne sont jamais revisités une fois leurs données susceptibles d'avoir mûri.
+
+    Ne duplique aucun filtre : ``lister`` (défaut ``screened_pool.list_stale_pending``)
+    trouve juste QUI retenter, ``absorber`` (défaut ``token_absorber.absorb``) est le
+    MÊME code de filtrage que le crawl normal — un candidat encore immature reste
+    'pending' (nouvel essai au prochain passage), un candidat désormais malveillant
+    confirmé devient 'rejected', un candidat qui a mûri devient enfin 'active'.
+    """
+    if lister is None:
+        from aria_core import screened_pool
+
+        async def lister():
+            return await screened_pool.list_stale_pending(
+                older_than_hours=older_than_hours, limit=limit
+            )
+
+    if absorber is None:
+        from aria_core.token_absorber import absorb as absorber
+
+    stale = await lister()
+    counts: dict[str, int] = {}
+    for row in stale:
+        contract = row["contract"] if isinstance(row, dict) else row
+        try:
+            verdict = await absorber(contract)
+        except Exception as exc:  # noqa: BLE001 — un candidat en échec n'arrête pas les autres
+            logger.info("base_crawler: retry %s échoué (%s)", contract, exc)
+            verdict = "error"
+        counts[verdict] = counts.get(verdict, 0) + 1
+    logger.info("base_crawler: retry pending -> %s tokens revus %s", sum(counts.values()), counts)
+    return counts

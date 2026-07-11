@@ -696,10 +696,15 @@ class AriaHeartbeat:
                     await self._notify_telegram(msg)
 
         elif task_id == "vc_crawl":
-            from aria_core.base_crawler import crawl_and_absorb
+            from aria_core.base_crawler import crawl_and_absorb, retry_stale_pending
 
             counts = await crawl_and_absorb(limit=100, max_age_days=182)
             append_memory("vc", f"[crawl] {counts} — {counts.get('kept', 0)} gardés")
+            retry_counts = await retry_stale_pending()
+            if retry_counts:
+                append_memory(
+                    "vc", f"[retry] {retry_counts} — {retry_counts.get('kept', 0)} mûris"
+                )
 
         elif task_id == "vc_resolve":
             from aria_core.weekly_training import resolve_due

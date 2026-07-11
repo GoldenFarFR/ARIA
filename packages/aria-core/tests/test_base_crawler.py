@@ -137,3 +137,78 @@ async def test_discover_virtuals_graduated_degrades_gracefully():
             raise RuntimeError("down")
 
     assert await bc.discover_virtuals_graduated_tokens(client=_Boom()) == []
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_calls_absorber_on_stale_rows():
+    # audit #77 : le pool actif reste à 0 parce que rien ne retente PROACTIVEMENT
+    # un candidat 'pending' laissé de côté -- ce test vérifie juste le câblage
+    # (lister -> absorber), la logique de filtrage reste 100% dans token_absorber.
+    async def lister():
+        return [{"contract": "0xSTALE1"}, {"contract": "0xSTALE2"}]
+
+    calls: list[str] = []
+
+    async def absorber(contract):
+        calls.append(contract)
+        return {"0xSTALE1": "kept", "0xSTALE2": "skip_incomplete"}[contract]
+
+    counts = await bc.retry_stale_pending(lister=lister, absorber=absorber)
+    assert calls == ["0xSTALE1", "0xSTALE2"]
+    assert counts == {"kept": 1, "skip_incomplete": 1}
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_no_stale_rows_is_noop():
+    async def lister():
+        return []
+
+    async def absorber(contract):
+        raise AssertionError("ne doit jamais être appelé sans candidat")
+
+    assert await bc.retry_stale_pending(lister=lister, absorber=absorber) == {}
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_error_is_not_fatal():
+    async def lister():
+        return [{"contract": "0xA"}, {"contract": "0xB"}]
+
+    async def absorber(contract):
+        if contract == "0xB":
+            raise RuntimeError("scan down")
+        return "kept"
+
+    counts = await bc.retry_stale_pending(lister=lister, absorber=absorber)
+    assert counts == {"kept": 1, "error": 1}
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_default_lister_uses_screened_pool(monkeypatch):
+    # Vérifie le branchement par défaut (screened_pool.list_stale_pending +
+    # token_absorber.absorb) sans dupliquer leurs propres tests unitaires dédiés.
+    from aria_core import screened_pool as sp
+
+    calls: dict[str, int] = {}
+
+    async def fake_list_stale_pending(*, older_than_hours=24, limit=20):
+        calls["older_than_hours"] = older_than_hours
+        calls["limit"] = limit
+        return [{"contract": "0xDEFAULT"}]
+
+    monkeypatch.setattr(sp, "list_stale_pending", fake_list_stale_pending)
+
+    absorbed: list[str] = []
+
+    async def fake_absorb(contract):
+        absorbed.append(contract)
+        return "kept"
+
+    import aria_core.token_absorber as token_absorber_module
+
+    monkeypatch.setattr(token_absorber_module, "absorb", fake_absorb)
+
+    counts = await bc.retry_stale_pending()
+    assert absorbed == ["0xDEFAULT"]
+    assert counts == {"kept": 1}
+    assert calls == {"older_than_hours": 24, "limit": 20}
