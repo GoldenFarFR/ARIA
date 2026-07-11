@@ -384,6 +384,34 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   agent Aria Vanguard ZHC (`0xd752a325433f4d55c5e0b125be84845d7de47bb3`). **Le pilote #60
   lui-même reste actif/in_progress** — seule cette position précise est close. Détail complet :
   `docs/HANDOFF-2026-07-11.md`.
+- **Confabulation sur soi-même côté opérateur — #105 (11/07) — CODÉ, testé, PAS déployé.**
+  Deux réponses réelles testées sur Telegram post-déploiement 960a72f2 : (1) « tu fonctionnes
+  avec quel type d'intelligence, un LLM ? » → « Oui, actuellement Claude Opus 4.8 » (régression
+  EXACTE de l'incident du 08/07, `grounded_llm_identity()`) ; (2) « comment tu analyses un
+  token, IA générative ? » → réponse générique en 6 points, aucun vrai outil cité. **Cause
+  racine identique aux deux** : `grounded_for_audience(public) = aria_grounded_mode AND public`
+  — tout le système de grounding (bloc faits vérifiés, `grounded_llm_identity`, FAQ directe,
+  chemin web calibré) n'est câblé QUE derrière ce flag, qui est TOUJOURS `False` côté opérateur
+  (« Operator gets founder LLM », design volontaire — cf. `test_grounded_for_audience_operator_
+  bypass`). Le fix du 08/07 avait corrigé le TEXTE de `grounded_llm_identity()` mais cette
+  fonction n'a jamais été appelable sur le chemin conversation opérateur — pas une régression de
+  code, un angle mort de scope resté depuis l'origine. **Fix** : deux nouveaux détecteurs
+  audience-indépendants (`grounding.is_llm_identity_question`/`is_analysis_methodology_question`)
+  routés vers une réponse **déterministe, zéro appel LLM** (`llm_identity_reply`/
+  `analysis_methodology_reply`, câblés dans `brain._general_response`, même famille que
+  `llm_routing_meta.is_llm_routing_question` déjà existant pour le routage technique). Nouveaux
+  faits `llm-model-identity`/`analysis-methodology` ajoutés à `canonical_facts.yaml`/`faq.yaml`
+  en défense en profondeur (recherche FAQ). Le reste de la conversation fondateur opérateur
+  n'est PAS touché (aucun changement sur `grounded_for_audience` lui-même, casual/stratégique
+  toujours libres). Limite honnête : ne couvre que les phrasings testés par regex — une
+  formulation très différente peut encore échapper au filet et confabuler. 11 nouveaux tests,
+  suite complète verte (4377 passed, 7 skipped, 0 échec). **Rien déployé.**
+  **Limite structurelle actée** : une réponse conversationnelle du LLM (même grounded) n'est
+  JAMAIS une preuve de ce qu'ARIA fait réellement — la vraie preuve vit dans les rapports `/vc`
+  (données on-chain réelles, tracées) et les logs serveur, jamais dans l'auto-description en
+  chat. Un chat grounded réduit le risque de confabulation, il ne le supprime pas structurellement
+  (dépend de la couverture des detecteurs/facts) — ne jamais citer une réponse Telegram d'ARIA
+  comme preuve d'une capacité ou d'un comportement système.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

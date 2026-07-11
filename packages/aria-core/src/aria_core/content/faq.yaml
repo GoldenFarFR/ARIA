@@ -50,6 +50,20 @@
   - grounding
   question: How does ARIA avoid making things up?
   answer: 'Canonical facts, FAQ, and verified Truth Ledger are checked first and win on a match — never rewritten by the LLM. The LLM (ARIA_LLM_ENABLED=true in production) handles everything else, constrained by a grounding layer: verified sources first, calibrated fact/small-talk routing, and an explicit "I don''t have verified information on that" instead of inventing an answer when no source backs one.'
+- id: llm-model-identity
+  tags:
+  - policy
+  - grounding
+  - llm
+  question: What model or LLM does ARIA run on?
+  answer: ARIA reasons on an LLM, but the underlying infrastructure varies by task (primary provider + fallback) — she does not know with certainty which exact model generated a given reply, and does not invent one when asked. The exact provider/model for a specific turn is a separate technical routing question, not a fixed standing identity.
+- id: analysis-methodology
+  tags:
+  - capability
+  - grounding
+  - vc
+  question: How does ARIA analyze a token — is it generative AI end to end?
+  answer: No — signals are computed, not guessed. Security filter (contract verified, mint authority, holder concentration, SAFE/CAUTION/DANGER verdict via skills/safety_screen.py), honeypot/ taxes/hidden owner via GoPlus (services/goplus.py), real technical analysis (RSI, EMA/MACD, Bollinger, golden pocket, RSI divergence via skills/indicators.py), holders and contract code via Blockscout, price/liquidity/OHLCV via DexScreener and GeckoTerminal. The LLM only writes up the qualitative thesis (target/invalidation) from these already-computed signals at the end — it never invents a number.
 - id: truth-ledger
   tags:
   - truth-ledger

@@ -140,3 +140,62 @@ async def test_operator_vc_followup_uses_local_memory_not_web(monkeypatch):
     assert "605" in response.reply or "AVOID" in response.reply
     assert "LAUNCHPAD" not in response.reply
 
+
+@pytest.mark.asyncio
+async def test_operator_llm_identity_question_never_reaches_free_llm(monkeypatch):
+    """Régression réelle (11/07) : l'opérateur a demandé "tu fonctionnes avec quel type
+    d'intelligence, un LLM ?" et ARIA a répondu "Opus 4.8" — grounded_llm_identity()
+    n'est jamais injecté côté opérateur (grounded_for_audience(public) est toujours False
+    pour l'opérateur). Ce test verrouille le nouveau chemin déterministe : _llm_response
+    ne doit JAMAIS être appelé pour cette question, côté opérateur comme côté public."""
+    llm_calls = {"n": 0}
+
+    async def _fake_llm(self, *a, **k):
+        llm_calls["n"] += 1
+        return "ne devrait jamais être atteint"
+
+    monkeypatch.setattr("aria_core.brain.AriaBrain._llm_response", _fake_llm)
+
+    brain = AriaBrain()
+    reply, skill, labels, data, _ = await brain._general_response(
+        "tu fonctionnes avec quel type d'intelligence, un LLM ?", "fr", public=False,
+    )
+
+    assert llm_calls["n"] == 0
+    assert data.get("llm_identity") is True
+    assert "opus" not in reply.lower()
+    assert "grok" not in reply.lower()
+
+    # Même garantie côté visiteur public.
+    reply_pub, _, _, data_pub, _ = await brain._general_response(
+        "are you an LLM?", "en", public=True,
+    )
+    assert llm_calls["n"] == 0
+    assert data_pub.get("llm_identity") is True
+    assert "opus" not in reply_pub.lower()
+
+
+@pytest.mark.asyncio
+async def test_operator_analysis_methodology_question_never_reaches_free_llm(monkeypatch):
+    """Régression réelle (11/07) : "comment tu analyses un token, IA générative ?" a reçu une
+    réponse générique en 6 points ne citant aucun vrai outil. Ce test verrouille le nouveau
+    chemin déterministe : _llm_response ne doit jamais être appelé, et la réponse doit citer
+    les vrais outils du pipeline (pas une description générique)."""
+    llm_calls = {"n": 0}
+
+    async def _fake_llm(self, *a, **k):
+        llm_calls["n"] += 1
+        return "ne devrait jamais être atteint"
+
+    monkeypatch.setattr("aria_core.brain.AriaBrain._llm_response", _fake_llm)
+
+    brain = AriaBrain()
+    reply, skill, labels, data, _ = await brain._general_response(
+        "comment tu analyses un token, tu utilises de l'IA générative ?", "fr", public=False,
+    )
+
+    assert llm_calls["n"] == 0
+    assert data.get("analysis_methodology") is True
+    assert "goplus" in reply.lower()
+    assert "blockscout" in reply.lower()
+
