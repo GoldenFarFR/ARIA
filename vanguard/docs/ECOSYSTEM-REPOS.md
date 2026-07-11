@@ -1,5 +1,12 @@
 # GoldenFar / Aria — Carte des repos GitHub
 
+> **⚠️ Obsolète (nomenclature pré-migration monorepo).** Ce document date du
+> 2026-06-19 et décrit une structure multi-repos (`aria-sandbox`,
+> `aria-vanguard`, `aria-skills`, `aria-token-base`) antérieure à la migration
+> vers le monorepo `github.com/GoldenFarFR/ARIA` (commit `3907bbf3`, 01/07).
+> Source de vérité actuelle sur l'architecture : `CLAUDE.md` (section
+> « Architecture ») à la racine du repo `ARIA`. À nettoyer/réécrire.
+
 **SSOT vision :** [`VISION.md`](../VISION.md)  
 **SSOT faits produit :** `aria-sandbox/packages/aria-core/src/aria_core/truth_ledger/canonical_facts.yaml`  
 **Dernière mise à jour :** 2026-06-19
