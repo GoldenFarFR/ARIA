@@ -23,6 +23,7 @@ THRESHOLD_UNCERTAIN = 0.40
 class EpistemicMatch:
     claim: dict
     score: int
+    trigger_hit: bool = False
 
 
 def _load_epistemic() -> list[dict]:
@@ -60,16 +61,30 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", stripped)
 
 
-def _score_claim(query: str, claim: dict) -> int:
+def _score_claim(query: str, claim: dict) -> tuple[int, bool]:
+    """Retourne (score, trigger_hit). `trigger_hit` = un des `triggers` explicites du claim
+    apparaît littéralement dans la requête -- signal fort, spécifique à ce claim précis.
+    Le reste du score (overlap générique de mots sur question/claim_fr/claim_en/tags/topic)
+    est un signal faible : un seul mot partagé (ex. "crypto") compte plusieurs fois à travers
+    des champs redondants et peut à lui seul atteindre EPISTEMIC_DIRECT_SCORE sans aucun
+    trigger réel -- incident réel (11/07) : "qu'est-ce qui s'est passé sur les marchés crypto
+    dans la dernière heure ?" (vraie question d'actu) a matché `crypto-hype-unreliable`
+    (triggers: "100x garanti", "moon soon", etc. -- aucun présent) via le seul mot "crypto"
+    compté dans claim_fr + claim_en + tags + topic (2+2+2+2=8 = seuil direct), court-circuitant
+    resolve_calibrated_answer avant même le routage is_live_info_question. `trigger_hit`
+    permet à resolve_calibrated_answer de ne faire confiance qu'aux matches vraiment ciblés
+    quand la requête est par ailleurs détectée comme actualité live."""
     q = _normalize(query)
     if not q:
-        return 0
+        return 0, False
     score = 0
+    trigger_hit = False
 
     for trigger in claim.get("triggers") or []:
         t = _normalize(str(trigger))
         if t and t in q:
             score += 14
+            trigger_hit = True
 
     question = _normalize(claim.get("question") or "")
     if question and question in q:
@@ -92,14 +107,14 @@ def _score_claim(query: str, claim: dict) -> int:
     if topic and topic in q:
         score += 2
 
-    return score
+    return score, trigger_hit
 
 
 def search_epistemic(query: str, limit: int = 3, *, static_only: bool = False) -> list[EpistemicMatch]:
     items = _static_claims() if static_only else _load_epistemic()
     if not query.strip():
         return [EpistemicMatch(c, 1) for c in items[:limit]]
-    scored = [EpistemicMatch(item, _score_claim(query, item)) for item in items]
+    scored = [EpistemicMatch(item, *_score_claim(query, item)) for item in items]
     scored = [m for m in scored if m.score > 0]
     scored.sort(key=lambda m: m.score, reverse=True)
     return scored[:limit]
@@ -200,6 +215,7 @@ def epistemic_static_answer(
         "match_id": best.claim.get("id"),
         "p_true": p_true,
         "source": "epistemic_core.yaml",
+        "trigger_hit": best.trigger_hit,
     }
 
 
@@ -401,7 +417,16 @@ async def resolve_calibrated_answer(
         return quote_reply, {"market_quote": True, "skip_web": True}
 
     static, static_data = epistemic_static_answer(query, lang)
-    if static:
+    live_news = is_live_info_question(query) or is_explicit_web_request(query)
+    if static and not (live_news and not static_data.get("trigger_hit")):
+        # Un match statique sans trigger réel (pur overlap générique de mots, cf.
+        # _score_claim) ne doit jamais court-circuiter une vraie question d'actualité --
+        # incident réel (11/07) : "qu'est-ce qui s'est passé sur les marchés crypto dans la
+        # dernière heure ?" a matché `crypto-hype-unreliable` via le seul mot "crypto" (aucun
+        # trigger comme "100x garanti" présent) et a répondu hors-sujet au lieu de router vers
+        # is_live_info_question -> web_first_answer. Un match avec trigger_hit=True (ex. "100x
+        # garanti moon soon gem", cf. test_hype_policy_in_yaml) reste prioritaire même si la
+        # question a par ailleurs une tournure actu.
         return static, static_data
 
     use_web = should_use_web_verify(query, public=public)

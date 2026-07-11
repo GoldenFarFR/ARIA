@@ -38,6 +38,63 @@ def test_hype_policy_in_yaml():
     reply, data = epistemic_static_answer("100x garanti moon soon gem", "en")
     assert data.get("epistemic_static") is True
     assert "hype" in reply.lower()
+    assert data.get("trigger_hit") is True
+
+
+def test_crypto_news_question_matches_without_real_trigger():
+    """Incident réel (11/07) : le seul mot "crypto" (présent dans claim_fr + claim_en + tags
+    + topic de `crypto-hype-unreliable`) suffit à atteindre EPISTEMIC_DIRECT_SCORE sans aucun
+    trigger réel ("100x garanti" etc.) -- épinglé ici pour documenter le comportement de
+    epistemic_static_answer isolé (le garde-fou vit dans resolve_calibrated_answer, cf.
+    test_live_news_question_bypasses_static_false_positive ci-dessous)."""
+    reply, data = epistemic_static_answer(
+        "qu'est-ce qui s'est passé sur les marchés crypto dans la dernière heure ?", "fr",
+    )
+    assert data.get("epistemic_static") is True
+    assert data.get("match_id") == "crypto-hype-unreliable"
+    assert data.get("trigger_hit") is False
+
+
+@pytest.mark.asyncio
+@patch("aria_core.llm.is_llm_configured", return_value=False)
+async def test_live_news_question_bypasses_static_false_positive(_mock_cfg):
+    """Incident réel (11/07) : "qu'est-ce qui s'est passé sur les marchés crypto dans la
+    dernière heure ?" (vraie actu, is_live_info_question=True) a reçu la réponse hors-sujet
+    "Les promesses de gains garantis sur crypto sont du hype" (P(vrai)=0.95, source "ARIA
+    learning filter") au lieu d'une recherche web -- epistemic_static_answer était appelé
+    et court-circuitait resolve_calibrated_answer AVANT tout routage is_live_info_question,
+    et le match n'avait aucun trigger réel (juste le mot "crypto" partagé). Verrouille : une
+    question d'actu sans trigger réel atteint bien web_first_answer, pas le YAML canonique."""
+    with patch(
+        "aria_core.knowledge.web_verify.web_first_answer", new_callable=AsyncMock,
+    ) as mock_web:
+        mock_web.return_value = ("NEWS_SENTINEL: marché en baisse de 2% cette heure.", {})
+        reply, data = await resolve_calibrated_answer(
+            "qu'est-ce qui s'est passé sur les marchés crypto dans la dernière heure ?",
+            "fr",
+            public=True,
+        )
+    mock_web.assert_awaited()
+    assert "NEWS_SENTINEL" in reply
+    assert data.get("epistemic_static") is not True
+    assert data.get("match_id") != "crypto-hype-unreliable"
+
+
+@pytest.mark.asyncio
+@patch("aria_core.llm.is_llm_configured", return_value=False)
+async def test_real_hype_trigger_still_wins_over_web_even_if_news_shaped(_mock_cfg):
+    """Contrôle : un vrai trigger explicite ("100x garanti") doit continuer à répondre depuis
+    le YAML canonique même si la formulation ressemble à une question d'actu -- seul le
+    match SANS trigger réel doit céder le pas au web."""
+    with patch(
+        "aria_core.knowledge.web_verify.web_first_answer", new_callable=AsyncMock,
+    ) as mock_web:
+        reply, data = await resolve_calibrated_answer(
+            "actu du jour : un projet promet un 100x garanti, c'est vrai ?", "fr", public=True,
+        )
+    mock_web.assert_not_awaited()
+    assert data.get("epistemic_static") is True
+    assert data.get("match_id") == "crypto-hype-unreliable"
 
 
 def test_parse_groq_calibrated_president():
