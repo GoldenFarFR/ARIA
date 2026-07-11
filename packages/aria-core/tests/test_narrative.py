@@ -2,6 +2,7 @@ from aria_core.holding import GOVERNANCE_RULE, holding_name
 from aria_core.narrative import (
     llm_system_block,
     one_liner,
+    public_llm_system_block,
     welcome_chat,
     x_juno_greeting,
     x_juno_intent_url,
@@ -47,3 +48,13 @@ def test_x_intent_url_mentions_vanguard():
     url = x_juno_intent_url()
     assert "twitter.com/intent/tweet" in url
     assert "Vanguard" in url or "vanguard" in url.lower()
+
+
+def test_llm_system_block_forbids_generic_ai_cliches():
+    assert "CLICHÉS DE REMPLISSAGE IA" in llm_system_block("fr")
+    assert "AI FILLER CLICHÉS" in llm_system_block("en")
+
+
+def test_public_llm_system_block_forbids_generic_ai_cliches():
+    assert "CLICHÉS DE REMPLISSAGE IA" in public_llm_system_block("fr")
+    assert "AI FILLER CLICHÉS" in public_llm_system_block("en")
