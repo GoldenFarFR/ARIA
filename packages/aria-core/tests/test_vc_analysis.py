@@ -30,6 +30,19 @@ def _no_network_macro_context(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_network_virtuals_diligence(monkeypatch):
+    """Repli best-effort Virtuals (audit 11/07, cf. ``_fetch_virtuals_product_diligence``) :
+    réseau coupé par défaut ici aussi -- ``None`` (pas un token Virtuals connu), pour le
+    même invariant « aucun appel réseau réel » que la fixture ci-dessus. Les tests dédiés
+    à la diligence Virtuals le remontent explicitement avec leur propre monkeypatch."""
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address",
+        AsyncMock(return_value=None),
+    )
+    yield
+
+
 def _ctx(**kw) -> TokenScanContext:
     base = dict(
         contract=ADDR,
@@ -957,6 +970,7 @@ async def test_fetch_product_diligence_combines_site_and_github(monkeypatch):
         "website_snapshot": "MyToken snapshot text",
         "github": {"description": "repo", "stars": 1, "open_issues": 0,
                     "days_since_push": 1, "archived": False, "fork": False},
+        "virtuals": None,
     }
 
 
@@ -970,4 +984,201 @@ async def test_fetch_product_diligence_degrades_on_error(monkeypatch):
 
     monkeypatch.setattr("aria_core.services.site_snapshot.fetch_site_text_snapshot", _boom)
 
+    assert await vc._fetch_product_diligence(ctx) is None
+
+
+# ── Diligence produit Virtuals (fiche virtuals.io, audit 11/07) ────────────────
+#
+# Trou noté explicitement non résolu dans le HANDOFF nuit9 : la diligence produit
+# ne lisait QUE le site externe déclaré, jamais la fiche Virtuals elle-même où
+# vivent équipe/tokenomics pour un token lancé sur Virtuals.
+
+
+def test_virtuals_product_diligence_appears_in_context():
+    ctx = _base_ctx()
+    diligence = {
+        "virtuals": {
+            "description": "Agent IA on-chain pour la gestion de portefeuille",
+            "tokenomics": "15% team, 85% via bonding curve",
+            "additional_details": "Équipe doxxée, roadmap publique",
+        }
+    }
+    block = vc._build_untrusted_context(ctx, [], product_diligence=diligence)
+
+    assert "Fiche Virtuals du projet" in block
+    assert "DÉCLARATIF" in block
+    assert "Agent IA on-chain pour la gestion de portefeuille" in block
+    assert "15% team, 85% via bonding curve" in block
+    assert "Équipe doxxée, roadmap publique" in block
+
+
+def test_virtuals_product_diligence_partial_fields_only_shows_what_exists():
+    ctx = _base_ctx()
+    diligence = {"virtuals": {"description": "Un agent IA.", "tokenomics": None, "additional_details": None}}
+    block = vc._build_untrusted_context(ctx, [], product_diligence=diligence)
+
+    assert "Fiche Virtuals du projet" in block
+    assert "Un agent IA." in block
+    # Champs absents -> pas de bloc "tokenomics"/"détails additionnels" vide affiché.
+    assert 'tokenomics "' not in block
+    assert "détails additionnels" not in block
+
+
+def test_virtuals_product_diligence_absent_when_none():
+    ctx = _base_ctx()
+    block = vc._build_untrusted_context(ctx, [], product_diligence=None)
+    assert "Fiche Virtuals du projet" not in block
+
+    block_empty_virtuals = vc._build_untrusted_context(
+        ctx, [], product_diligence={"virtuals": None}
+    )
+    assert "Fiche Virtuals du projet" not in block_empty_virtuals
+
+
+@pytest.mark.asyncio
+async def test_fetch_virtuals_product_diligence_reuses_bonding_scan_no_extra_call(monkeypatch):
+    """Token en bonding : `_resolve_bonding_phase` a déjà peuplé ctx.virtuals_* pendant
+    le scan on-chain -- aucun appel réseau supplémentaire ne doit être fait ici."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=0)
+    ctx.virtuals_description = "Agent IA on-chain."
+    ctx.virtuals_tokenomics = "15% team, 85% via bonding curve"
+    ctx.virtuals_additional_details = "Équipe doxxée"
+
+    async def _fail_if_called(address, chain="BASE"):
+        raise AssertionError("ne doit pas re-fetch : le payload est déjà en mémoire (ctx)")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", _fail_if_called,
+    )
+
+    result = await vc._fetch_virtuals_product_diligence(ctx)
+    assert result == {
+        "description": "Agent IA on-chain.",
+        "tokenomics": "15% team, 85% via bonding curve",
+        "additional_details": "Équipe doxxée",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_virtuals_product_diligence_graduated_token_best_effort_fallback(monkeypatch):
+    """Token gradué (une paire DEX existe donc `_resolve_bonding_phase` n'a jamais tourné) :
+    repli best-effort via le même client singleton -- un seul appel réseau."""
+    from aria_core.services.virtuals import VirtualToken
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+
+    async def fake_fetch_by_address(address, chain="BASE"):
+        assert address == ADDR
+        return VirtualToken(
+            name="Graduated Agent",
+            symbol="GRAD",
+            status="AVAILABLE",
+            description="Agent IA gradué, marketplace actif.",
+            tokenomics="20% team, 80% liquidité + communauté",
+            additional_details="Roadmap Q4 2026",
+        )
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+
+    result = await vc._fetch_virtuals_product_diligence(ctx)
+    assert result == {
+        "description": "Agent IA gradué, marketplace actif.",
+        "tokenomics": "20% team, 80% liquidité + communauté",
+        "additional_details": "Roadmap Q4 2026",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_virtuals_product_diligence_soft_degrades_when_fields_absent(monkeypatch):
+    """Token trouvé sur Virtuals mais sans description/tokenomics/détails -- dégradation
+    douce : None, jamais une valeur inventée (comportement WATCH/AVOID inchangé côté LLM)."""
+    from aria_core.services.virtuals import VirtualToken
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return VirtualToken(name="Bare Agent", symbol="BARE", status="AVAILABLE")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+
+    assert await vc._fetch_virtuals_product_diligence(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_virtuals_product_diligence_non_virtuals_token_unchanged(monkeypatch):
+    """Token qui n'est pas sur Virtuals (repli best-effort renvoie None) -- comportement
+    inchangé : pas de section Virtuals, jamais bloquant."""
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return None
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+    assert await vc._fetch_virtuals_product_diligence(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_virtuals_product_diligence_never_attempted_when_no_pair_and_not_bonding(monkeypatch):
+    """Sans paire DEX ET sans donnée déjà en mémoire (ex. `_resolve_bonding_phase` a
+    tourné mais n'a rien trouvé) : pas de second appel réseau -- juste None."""
+    async def _fail_if_called(address, chain="BASE"):
+        raise AssertionError("ne doit pas retenter un appel réseau ici")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", _fail_if_called,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=0)
+    assert await vc._fetch_virtuals_product_diligence(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_virtuals_product_diligence_degrades_on_network_error(monkeypatch):
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
+
+    async def _boom(address, chain="BASE"):
+        raise RuntimeError("Virtuals API indisponible")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", _boom,
+    )
+
+    assert await vc._fetch_virtuals_product_diligence(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_product_diligence_combines_virtuals_with_no_links(monkeypatch):
+    """Un token en bonding n'a structurellement AUCUN lien projet DexScreener (pas de
+    paire => pas d'`info.websites`/`socials`) -- avant ce correctif, `_fetch_product_diligence`
+    retournait None systématiquement pour ces tokens. Doit maintenant remonter la fiche
+    Virtuals même sans aucun `project_links`."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=0)
+    ctx.best_pair = None
+    ctx.virtuals_description = "Agent IA on-chain."
+    ctx.virtuals_tokenomics = "15% team, 85% via bonding curve"
+
+    result = await vc._fetch_product_diligence(ctx)
+    assert result == {
+        "website_snapshot": None,
+        "github": None,
+        "virtuals": {
+            "description": "Agent IA on-chain.",
+            "tokenomics": "15% team, 85% via bonding curve",
+            "additional_details": None,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_product_diligence_still_none_for_non_virtuals_token_without_links():
+    """Comportement inchangé pour un token non-Virtuals sans lien projet -- la fixture
+    autouse ``_no_network_virtuals_diligence`` renvoie None, comme avant ce correctif."""
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = []
     assert await vc._fetch_product_diligence(ctx) is None
