@@ -16,12 +16,20 @@ d'erreurs et de dégradation que ``services/blockscout.py`` / ``services/coingec
 ## Dôme de sécurité (données externes hostiles)
 
 TOUTES les chaînes issues de l'API (nom, symbole, description, statut,
-adresses, liens sociaux) sont **non fiables** et passent par ``_sanitize`` :
-retrait des caractères de contrôle + **neutralisation des chevrons** ``<`` / ``>``
+adresses, liens sociaux, tokenomics, détails additionnels) sont **non
+fiables** et passent par ``_sanitize``/``_sanitize_structured`` : retrait des
+caractères de contrôle + **neutralisation des chevrons** ``<`` / ``>``
 (remplacés par ``‹`` / ``›``), pour qu'un nom/symbole hostile ne puisse pas
 forger une balise délimitante et s'échapper d'une zone non fiable en aval
 (anti prompt-injection — même helper que ``skills/vc_analysis.py``). Les liens
 sociaux sont en plus restreints au schéma ``http(s)`` uniquement.
+
+``description``/``tokenomics``/``additional_details`` alimentent la diligence
+produit de ``skills/vc_analysis.py`` (audit 11/07) : pour un token Virtuals,
+l'équipe et la tokenomics vivent sur SA FICHE (virtuals.io), pas forcément sur
+un site externe. Restent du texte **déclaratif** (le projet parle de
+lui-même) — jamais une vérification indépendante, même doctrine que le reste
+du dôme.
 
 ⚠️ Réseau bloqué dans l'environnement de build : les appels live échouent et
 sont testés sur fixtures ; branchement live sur le VPS (cf. doc de recherche —
@@ -100,6 +108,13 @@ class VirtualToken:
     # Extras dérivés (au-delà du strict minimum), facts-only :
     virtual_id: int | None = None  # id Strapi de l'entité (pour build_token_url)
     virtual_raised: float | None = None  # VIRTUAL accumulés, si l'API l'expose
+    # Diligence produit (audit 11/07) : équipe/tokenomics d'un token Virtuals vivent sur
+    # SA FICHE (virtuals.io), pas forcément sur un site externe -- cf. `vc_analysis.py`.
+    # Forme exacte non confirmée en direct (peut être une chaîne ou un objet structuré
+    # selon l'API) : aplatis en texte lisible par `_sanitize_structured`, jamais analysés
+    # plus finement (facts-only, aucun champ inventé si absent).
+    tokenomics: str | None = None
+    additional_details: str | None = None
 
 
 # ----------------------------------------------------------------------
@@ -116,6 +131,33 @@ def _sanitize(text: object, max_len: int = _FIELD_MAX) -> str | None:
     s = _CONTROL_CHARS_RE.sub("", str(text))
     s = s.replace("<", "‹").replace(">", "›")
     return s[:max_len]
+
+
+def _sanitize_structured(value: object, max_len: int = _FIELD_MAX) -> str | None:
+    """Comme ``_sanitize`` mais tolère aussi un objet structuré (dict/list).
+
+    Certains champs Virtuals (``tokenomics``, ``additionalDetails``) sont parfois un
+    objet JSON plutôt qu'une simple chaîne -- forme non confirmée en direct (jamais
+    inspectée sur un payload réel). Aplati en texte lisible ``clé: valeur`` sur UNE
+    seule profondeur (jamais de récursion incontrôlée sur un objet hostile) ; chaque
+    clé et valeur passe par ``_sanitize`` comme toute autre donnée externe. ``None``
+    ou objet vide → ``None`` (facts-only, jamais un texte inventé).
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _sanitize(value, max_len) or None
+    if isinstance(value, dict):
+        parts = [
+            f"{_sanitize(k, 60)}: {_sanitize(v, 160)}"
+            for k, v in value.items()
+            if not isinstance(v, (dict, list))
+        ]
+        return _sanitize("; ".join(parts), max_len) or None
+    if isinstance(value, list):
+        parts = [_sanitize(v, 160) for v in value if not isinstance(v, (dict, list))]
+        return _sanitize("; ".join(p for p in parts if p), max_len) or None
+    return _sanitize(value, max_len) or None
 
 
 # ----------------------------------------------------------------------
@@ -329,6 +371,8 @@ def parse_virtual(raw: dict) -> VirtualToken | None:
         raw_status=_sanitize(raw_status, 40),
         virtual_id=_safe_int(raw.get("id") if raw.get("id") is not None else attrs.get("id")),
         virtual_raised=virtual_raised,
+        tokenomics=_sanitize_structured(_first(attrs, "tokenomics")),
+        additional_details=_sanitize_structured(_first(attrs, "additionalDetails", "additional_details")),
     )
 
 

@@ -351,12 +351,30 @@ def _build_untrusted_context(
     if product_diligence:
         website_snapshot = product_diligence.get("website_snapshot")
         github = product_diligence.get("github")
+        virtuals = product_diligence.get("virtuals")
         if website_snapshot:
             lines.append(
                 "Site officiel du projet (texte extrait automatiquement -- DÉCLARATIF, "
                 "le projet parle de lui-même, aucune vérification indépendante) :"
             )
             lines.append(f"- {_sanitize(website_snapshot, 620)}")
+        if virtuals:
+            v_bits = []
+            if virtuals.get("description"):
+                v_bits.append(f"description \"{_sanitize(virtuals['description'], 400)}\"")
+            if virtuals.get("tokenomics"):
+                v_bits.append(f"tokenomics \"{_sanitize(virtuals['tokenomics'], 400)}\"")
+            if virtuals.get("additional_details"):
+                v_bits.append(
+                    f"détails additionnels \"{_sanitize(virtuals['additional_details'], 400)}\""
+                )
+            if v_bits:
+                lines.append(
+                    "Fiche Virtuals du projet (texte fourni par l'équipe sur virtuals.io -- "
+                    "DÉCLARATIF, même prudence que le site officiel ci-dessus : le projet "
+                    "parle de lui-même, aucune vérification indépendante) :"
+                )
+                lines.append(f"- {'; '.join(v_bits)}")
         if github:
             gh_bits = []
             if github.get("description"):
@@ -866,15 +884,64 @@ async def _fetch_polymarket_signals() -> list[dict]:
         return []
 
 
+async def _fetch_virtuals_product_diligence(ctx: TokenScanContext) -> dict | None:
+    """Diligence produit spécifique à un token Virtuals -- complète (jamais remplace)
+    le site externe : pour un token lancé sur Virtuals, l'équipe (doxxée ou non), la
+    tokenomics et une description plus riche vivent sur la FICHE VIRTUALS elle-même
+    (virtuals.io), pas forcément le site externe déclaré (trou identifié en conditions
+    réelles, cf. ``docs/HANDOFF-2026-07-10-nuit9.md``).
+
+    Deux chemins, jamais un double appel réseau au même contrat :
+    - Bonding (aucune paire DexScreener) : ``_resolve_bonding_phase`` a DÉJÀ interrogé
+      l'API Virtuals pendant le scan on-chain -- ``ctx.virtuals_*`` porte le résultat
+      en mémoire, zéro coût réseau ici.
+    - Gradué (une paire DexScreener existe, donc ``_resolve_bonding_phase`` n'a jamais
+      tourné -- elle n'est appelée que si ``pairs_found == 0``) : repli best-effort, UN
+      SEUL appel via le même client singleton (``virtuals_client``, aucune duplication
+      de client HTTP) ; renvoie ``None`` proprement et vite si ce n'est pas un token
+      Virtuals (dégradation douce, jamais bloquant).
+
+    Comme ``website_snapshot`` : texte DÉCLARATIF (l'équipe parle d'elle-même sur sa
+    propre fiche), jamais vérifié on-chain -- même prudence côté LLM en aval.
+    """
+    description = ctx.virtuals_description
+    tokenomics = ctx.virtuals_tokenomics
+    additional_details = ctx.virtuals_additional_details
+
+    already_resolved = description or tokenomics or additional_details
+    if not already_resolved and ctx.pairs_found > 0:
+        try:
+            from aria_core.services.virtuals import virtuals_client
+
+            token = await virtuals_client.fetch_by_address(ctx.contract)
+        except Exception as exc:  # noqa: BLE001 — jamais bloquant
+            logger.warning("analyze_vc: diligence Virtuals échouée (%s)", exc)
+            token = None
+        if token is not None:
+            description = token.description
+            tokenomics = token.tokenomics
+            additional_details = token.additional_details
+
+    if not description and not tokenomics and not additional_details:
+        return None
+    return {
+        "description": description,
+        "tokenomics": tokenomics,
+        "additional_details": additional_details,
+    }
+
+
 async def _fetch_product_diligence(ctx: TokenScanContext) -> dict | None:
-    """Diligence produit légère (site + GitHub) -- trou qu'ARIA a elle-même identifié
-    en conditions réelles (capture opérateur 10/07) : ``/vc`` couvrait l'on-chain et
-    la traction marché, jamais le produit (équipe, roadmap, usage réel). Même
-    doctrine que ``_fetch_sentiment_readings``/``_fetch_polymarket_signals`` :
-    best-effort, dégradation douce, jamais bloquant. None si aucun lien projet
-    exploitable ou aucune donnée récupérée."""
+    """Diligence produit légère (site + GitHub + fiche Virtuals) -- trou qu'ARIA a
+    elle-même identifié en conditions réelles (capture opérateur 10/07) : ``/vc``
+    couvrait l'on-chain et la traction marché, jamais le produit (équipe, roadmap,
+    usage réel). Même doctrine que ``_fetch_sentiment_readings``/
+    ``_fetch_polymarket_signals`` : best-effort, dégradation douce, jamais bloquant.
+    None si aucun lien projet exploitable, aucune fiche Virtuals et aucune donnée
+    récupérée."""
     links = ctx.best_pair.project_links if ctx.best_pair else []
-    if not links:
+    virtuals = await _fetch_virtuals_product_diligence(ctx)
+    if not links and not virtuals:
         return None
     try:
         from aria_core.services.project_activity import (
@@ -890,9 +957,9 @@ async def _fetch_product_diligence(ctx: TokenScanContext) -> dict | None:
         github_snapshot = (
             await fetch_github_diligence_snapshot(github_url) if github_url else None
         )
-        if not website_snapshot and not github_snapshot:
+        if not website_snapshot and not github_snapshot and not virtuals:
             return None
-        return {"website_snapshot": website_snapshot, "github": github_snapshot}
+        return {"website_snapshot": website_snapshot, "github": github_snapshot, "virtuals": virtuals}
     except Exception as exc:  # noqa: BLE001 — jamais bloquant
         logger.warning("analyze_vc: diligence produit échouée (%s)", exc)
         return None

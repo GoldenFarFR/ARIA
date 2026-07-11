@@ -32,6 +32,68 @@ def _bonding_token(**overrides) -> VirtualToken:
     return VirtualToken(**defaults)
 
 
+# ── _resolve_bonding_phase : diligence produit (description/tokenomics/détails,
+#    audit 11/07) -- capturée sans coût réseau supplémentaire, même appel ────────
+
+
+@pytest.mark.asyncio
+async def test_resolve_bonding_phase_captures_product_diligence(monkeypatch):
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return _bonding_token(
+            description="Agent IA on-chain pour la gestion de portefeuille",
+            tokenomics="15% team, 85% via bonding curve",
+            additional_details="Équipe doxxée, roadmap publique",
+        )
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    await scan._resolve_bonding_phase(ctx, ADDR)
+
+    assert ctx.virtuals_description == "Agent IA on-chain pour la gestion de portefeuille"
+    assert ctx.virtuals_tokenomics == "15% team, 85% via bonding curve"
+    assert ctx.virtuals_additional_details == "Équipe doxxée, roadmap publique"
+
+
+@pytest.mark.asyncio
+async def test_resolve_bonding_phase_product_diligence_absent_stays_none(monkeypatch):
+    """Token trouvé sur Virtuals mais sans ces champs -- dégradation douce, jamais
+    une valeur inventée : les trois champs restent None."""
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return _bonding_token(description=None, tokenomics=None, additional_details=None)
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    await scan._resolve_bonding_phase(ctx, ADDR)
+
+    assert ctx.virtuals_description is None
+    assert ctx.virtuals_tokenomics is None
+    assert ctx.virtuals_additional_details is None
+    assert ctx.bonding_phase is True  # le statut bonding reste détecté normalement
+
+
+@pytest.mark.asyncio
+async def test_resolve_bonding_phase_not_found_leaves_diligence_none(monkeypatch):
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return None
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    await scan._resolve_bonding_phase(ctx, ADDR)
+
+    assert ctx.virtuals_description is None
+    assert ctx.virtuals_tokenomics is None
+    assert ctx.virtuals_additional_details is None
+
+
 # ── _score_and_verdict : comportement existant inchangé (régression) ──────────────────
 
 def test_no_pair_no_bonding_keeps_existing_generic_verdict():
