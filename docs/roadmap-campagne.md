@@ -26,8 +26,8 @@ Construire et tester le moteur complet, hors ligne, avant toute exposition.
 - [x] Carnet de bord + screenshots (chandeliers + simulation) + surveillance des thèses
 - [x] Terrain de chasse multi-sources
 - [x] Pipeline de sorties + teasers, **gaté opérateur**
-- [ ] **Déploiement VPS + première vraie analyse A-Z** (débloque le passage en Phase 1)
-- [ ] Premier vrai cycle hebdomadaire (pronostics datés, résolution OHLCV)
+- [x] **Déploiement VPS + première vraie analyse A-Z** (débloque le passage en Phase 1) — confirmé déployé (commit `30fd82c05777`, voir `docs/etat-systeme-cable.md`), heartbeat actif depuis le 08/07
+- [x] Premier vrai cycle hebdomadaire (pronostics datés, résolution OHLCV) — `vc_crawl`/`vc_resolve`/`vc_weekly_forecast` enregistrés et exécutés en continu (`heartbeat.py`)
 
 ## Phase 1 — Produit parfait (avant le feu vert)
 Rendre la surface irréprochable pour la gamme luxe (500 $/mois).

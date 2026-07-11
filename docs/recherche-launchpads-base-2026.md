@@ -1,11 +1,14 @@
 # Recherche — Launchpads Base à courbe de bonding (niche 15 % « pré-bonding »)
 
 > Synthèse factuelle produite le 06/07/2026 (6 agents de recherche, 0 erreur).
-> **Statut de fiabilité : aucun endpoint n'a été testé en direct** (proxy egress
-> bloqué en 403 côté recherche). Toute la validation repose sur code public +
-> docs + résumés de recherche. **Premier chantier avant prod : un `curl` de
-> confirmation depuis le VPS** sur chaque endpoint, et re-vérification des
-> adresses de contrats sur BaseScan.
+> **Statut de fiabilité (mis à jour 10/07) : l'endpoint Clanker est confirmé
+> testé en direct depuis le VPS** (`services/clanker.py`, réponse réelle de
+> l'API, énumération `sortBy` obtenue de l'API elle-même). **Les autres
+> endpoints (Virtuals bonding, Flaunch, Zora) restent non testés en direct**
+> (403 en session cloud), validation encore basée sur code public + docs +
+> résumés de recherche. Chantier restant : `curl` de confirmation depuis le
+> VPS sur les endpoints non-Clanker, et re-vérification des adresses de
+> contrats sur BaseScan.
 
 ---
 
@@ -146,8 +149,9 @@ mais l'edge y est cher à capter et en détérioration → **monitoring d'abord*
 
 ## 5. Trous et incertitudes (à ne pas surestimer)
 
-- **Aucun endpoint testé en direct** (403 sur tous les hôtes). → `curl` de
-  confirmation depuis le VPS avant intégration.
+- **Endpoint Clanker confirmé testé en direct depuis le VPS (10/07)** — les
+  autres endpoints (403 en session cloud) restent non testés en direct. →
+  `curl` de confirmation depuis le VPS avant intégration pour ceux-ci.
 - **Adresses de contrats à confiance moyenne** (revérifier BaseScan) : Bonding
   Virtuals `0xF66D…3259`, deployers Clanker v4 `0xE85A…83a9` / `0x375C…2c5E`,
   PositionManager Flaunch `0x51Bb…AFDC`. *(ZoraFactory `0x7777…baF3` = mieux
