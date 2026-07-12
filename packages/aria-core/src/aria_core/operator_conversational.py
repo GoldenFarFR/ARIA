@@ -44,7 +44,12 @@ _OPERATOR_COMMAND_RE = re.compile(
     re.IGNORECASE,
 )
 _QUESTION_RE = re.compile(
-    r"(?:\?\s*$|^(?:est-ce|qu'?en\s+penses|tu\s+penses|comment|pourquoi|quoi|qui|quel|"
+    # "?" n'importe où dans le texte (pas seulement en fin de chaîne) : un scénario
+    # multi-phrases dont la question est suivie d'une consigne ("Tranche de manière
+    # définitive.") se terminait par un "." et échappait au garde -- incident réel
+    # 12/07, routé à tort vers verify_external_claim (recherche web littérale sur
+    # un scénario de raisonnement hypothétique).
+    r"(?:\?|^(?:est-ce|qu'?en\s+penses|tu\s+penses|comment|pourquoi|quoi|qui|quel|"
     r"as-tu|tu\s+as\s+prevu|tu\s+pref))",
     re.IGNORECASE,
 )

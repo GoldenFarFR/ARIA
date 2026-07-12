@@ -56,6 +56,27 @@ def test_injected_claims_detected():
     assert not is_injected_factual_claim("quoi de neuf ?")
 
 
+def test_injected_claim_multi_sentence_question_not_misrouted():
+    # Incident réel (12/07) : un scénario trading multi-phrases contenant "2%"/"15%"
+    # (matche _INJECTED_CLAIM_RE) et une vraie question au milieu ("... Short ?")
+    # suivie d'une consigne sans "?" final ("Tranche de manière définitive.") --
+    # routé à tort vers verify_external_claim (recherche web littérale) faute de
+    # détecter la question, car _QUESTION_RE n'exigeait le "?" qu'en toute fin.
+    scenario = (
+        "Sur un graphique en unité de temps 4 heures (H4) d'un altcoin majeur, le prix "
+        "vient d'imprimer un nouveau sommet local (Higher High), mais l'histogramme et "
+        "les lignes du MACD affichent une divergence baissière claire. Simultanément, "
+        "trois autres éléments entrent en jeu : (1) le carnet d'ordres (orderbook) "
+        "montre un mur de vente massif 2% plus haut, (2) le funding rate sur les "
+        "contrats perpétuels vient de plonger en territoire très négatif, et (3) le "
+        "projet déploie une mise à jour réseau très attendue dans exactement 48 heures. "
+        "Tu as une position Long (à l'achat) ouverte 15% plus bas. Que fais-tu "
+        "maintenant : tu clôtures tout, tu prends des profits partiels, ou tu hedge "
+        "avec une position Short ? Tranche de manière définitive."
+    )
+    assert not is_injected_factual_claim(scenario)
+
+
 def test_wants_claim_verification():
     assert wants_claim_verification("vérifie")
     assert wants_claim_verification("check ça")
