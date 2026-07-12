@@ -309,38 +309,39 @@ async def retry_stale_pending(
 
     stale = await lister()
 
+    # ``known_age_days`` (Volet C, 12/07 -- correctif du même jour : calculé
+    # INCONDITIONNELLEMENT, PAS seulement quand ``absorber is None``. En prod,
+    # ``heartbeat.py`` injecte TOUJOURS son propre ``absorber`` (wrapper Volet A qui
+    # tague ``source``) -- une version antérieure de ce calcul, cantonnée à la branche
+    # "absorber par défaut", ne s'exécutait donc jamais réellement (trouvé en
+    # vérifiant la prod, pas en supposant que ça marchait). Dérivé de
+    # ``first_screened_at`` -- borne conservative de l'âge on-chain réel (souvent
+    # plus vieux que sa première détection par ARIA, jamais plus jeune pour les
+    # candidats ``top_pools``/``bonding_direct``). Transmis à TOUT ``absorber``
+    # (par défaut ou injecté) via un kwarg -- les wrappers Volet A
+    # (``_absorb_top_pools``/``_absorb_radar`` dans ``heartbeat.py``) le
+    # retransmettent déjà tel quel via leur ``**kw``, sans modification nécessaire
+    # côté ``heartbeat.py``.
+    _age_by_contract: dict[str, float] = {}
+    for row in stale:
+        if not isinstance(row, dict):
+            continue
+        contract_key = row.get("contract")
+        first_screened = row.get("first_screened_at")
+        if not (contract_key and first_screened):
+            continue
+        try:
+            dt = datetime.fromisoformat(str(first_screened).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            _age_by_contract[contract_key] = (
+                datetime.now(timezone.utc) - dt
+            ).total_seconds() / 86_400.0
+        except (ValueError, TypeError):
+            continue
+
     if absorber is None:
-        # Chemin par défaut UNIQUEMENT (un ``absorber`` injecté par un appelant/test
-        # garde sa signature à un seul argument, intacte) : ``known_age_days`` est
-        # dérivé de ``first_screened_at`` (Volet C, 12/07) — borne conservative de
-        # l'âge on-chain réel (souvent plus vieux que sa première détection par ARIA,
-        # jamais plus jeune pour les candidats ``top_pools``/``bonding_direct``) —
-        # permet au pré-filtre Blockscout léger de ``token_absorber.absorb`` de
-        # court-circuiter le scan complet pour les candidats structurellement bloqués
-        # (contrat jamais vérifié / holders jamais indexés) sans re-scanner à chaque
-        # passage. Calculé une fois par cycle, avant la boucle.
-        from aria_core.token_absorber import absorb as _default_absorb
-
-        _age_by_contract: dict[str, float] = {}
-        for row in stale:
-            if not isinstance(row, dict):
-                continue
-            contract_key = row.get("contract")
-            first_screened = row.get("first_screened_at")
-            if not (contract_key and first_screened):
-                continue
-            try:
-                dt = datetime.fromisoformat(str(first_screened).replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                _age_by_contract[contract_key] = (
-                    datetime.now(timezone.utc) - dt
-                ).total_seconds() / 86_400.0
-            except (ValueError, TypeError):
-                continue
-
-        async def absorber(contract):
-            return await _default_absorb(contract, known_age_days=_age_by_contract.get(contract))
+        from aria_core.token_absorber import absorb as absorber
 
     if abandon_checker is None:
         from aria_core import screened_pool as _screened_pool
@@ -354,7 +355,7 @@ async def retry_stale_pending(
     for row in stale:
         contract = row["contract"] if isinstance(row, dict) else row
         try:
-            verdict = await absorber(contract)
+            verdict = await absorber(contract, known_age_days=_age_by_contract.get(contract))
             # 'skip_prefiltered' (Volet C) est aussi une variante d'échec mou -- un
             # candidat structurellement bloqué doit finir par être abandonné, comme
             # 'skip_incomplete', pas retenté indéfiniment tous les 24h.
