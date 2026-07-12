@@ -7,6 +7,7 @@ import { CockpitGate } from '../components/CockpitGate'
 import { CockpitMethodologyPanel } from '../components/CockpitMethodologyPanel'
 import { CockpitPulsePanel } from '../components/CockpitPulsePanel'
 import { CockpitSentimentPanel } from '../components/CockpitSentimentPanel'
+import { CockpitWalletPanel } from '../components/CockpitWalletPanel'
 import { clearOperatorSession, hasOperatorSecret } from '../lib/operator-auth'
 
 export function CockpitPage() {
@@ -31,6 +32,10 @@ export function CockpitPage() {
 
         <section className="mb-8">
           <CockpitCalibrationPanel />
+        </section>
+
+        <section className="mb-8">
+          <CockpitWalletPanel />
         </section>
 
         <section className="grid md:grid-cols-2 gap-6 mb-8">
