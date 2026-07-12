@@ -224,7 +224,12 @@ def resolve_budget(
         include_context_extras=True,
         collegue_max_chars=0,
         model_override=dev_model,
-        enhance_max_tokens=1200 if spark_boost else 800,
+        # Incident réel (12/07) : 1200/800 tronquait en plein mot les réponses
+        # "enhance" (reformulation d'une sortie de skill) en profondeur develop —
+        # confirmé par les logs (finish_reason=length, output_tokens=1200 pile
+        # sur le plafond), indépendant de ARIA_LLM_MAX_TOKENS_DEVELOP (littéral
+        # ici, jamais paramétré par une variable d'environnement).
+        enhance_max_tokens=3000 if spark_boost else 2000,
     )
 
 

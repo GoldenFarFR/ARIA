@@ -75,6 +75,26 @@ def test_develop_budget_full_context(tmp_path):
     assert budget.history_turns == 10
 
 
+def test_develop_enhance_budget_not_too_low(tmp_path):
+    # Incident réel (12/07) : enhance_max_tokens=1200 (spark_boost) coupait en
+    # plein mot les réponses "enhance" (reformulation d'une sortie de skill) en
+    # profondeur develop -- confirmé par les logs prod (finish_reason=length,
+    # output_tokens=1200 pile sur le plafond), littéral, jamais paramétré par
+    # ARIA_LLM_MAX_TOKENS_DEVELOP (piège découvert en traçant le mauvais chemin
+    # de code en premier). Verrouille un budget avec une vraie marge.
+    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
+
+    configure_test_runtime(
+        data_dir=tmp_path / "data",
+        settings=AriaRuntimeSettings(
+            llm_provider="virtuals",
+            aria_spark_aggressive=True,
+        ),
+    )
+    budget = resolve_budget(LlmDepth.DEVELOP, public=False)
+    assert budget.enhance_max_tokens >= 2500
+
+
 def test_calibrated_label_neutral():
     label = calibrated_action_label({"groq_calibrated": True}, lang="fr")
     assert "calibré" in label.lower() or "LLM" in label
