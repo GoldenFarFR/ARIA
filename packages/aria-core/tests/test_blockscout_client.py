@@ -95,6 +95,43 @@ async def test_get_address_info_not_found(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_address_info_parses_holders_count(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xtok"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "is_contract": True,
+                    "is_verified": False,
+                    "token": {"holders_count": "42"},
+                },
+            )
+        },
+    )
+
+    info = await client.get_address_info("0xtok")
+
+    assert info.holders_count == 42
+
+
+@pytest.mark.asyncio
+async def test_get_address_info_holders_count_none_when_not_a_token(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xwallet"
+    _patch_client(
+        monkeypatch,
+        {url: FakeResponse(200, {"is_contract": False, "is_verified": None})},
+    )
+
+    info = await client.get_address_info("0xwallet")
+
+    assert info.holders_count is None
+
+
+@pytest.mark.asyncio
 async def test_get_token_transfers_parses_amounts(monkeypatch):
     client = BlockscoutClient()
     url = f"{client.base_url}/addresses/0xabc/token-transfers"
