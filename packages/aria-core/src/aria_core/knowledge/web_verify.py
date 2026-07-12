@@ -56,6 +56,26 @@ _LIVE_INFO_RE = re.compile(_LIVE_INFO_CORE_RE.pattern + "|" + _TIME_RE.pattern, 
 # heure joue le match" (sport, légitime) -- cf. _PERSONAL_MEETING_RE dans is_live_info_question.
 # "cours" reste un homographe non résolu (classe de yoga vs cours de bourse) hors _J_AI_COURS_RE
 # (cas fréquent isolé) -- limite assumée d'un filtre par mots-clés, pas de vraie ambiguïté NLP.
+#
+# NB 4 (12/07) : incident réel -- un scénario hypothétique de raisonnement (650+ caractères,
+# "Un token a : (1)... (2)... est-ce que j'achète ?") mentionnant une seule fois "prix" est
+# parti en recherche web littérale (la requête entière envoyée telle quelle à DDG), ramenant
+# des résultats sans rapport. Les 2492 cas du fuzz test (test_web_verify_fuzz_500x3.py) sont
+# TOUS sous 190 caractères -- ce filtre n'a jamais été pensé/testé sur un texte long. Un mot
+# de marché générique (prix/bitcoin/crypto/hausse/baisse/pump/dump/...) isolé dans un texte
+# long ne suffit plus seul ; un signal VRAIMENT non ambigu (rugby, coupe du monde, actu...)
+# reste suffisant même dans un texte long -- cf. _LIVE_INFO_UNAMBIGUOUS_RE et le garde de
+# longueur dans is_live_info_question.
+_LIVE_INFO_UNAMBIGUOUS_RE = re.compile(
+    r"rugby|stade\s+toulousain|toulousain|top\s*14|top14|"
+    r"coupe du monde|world cup|\bmatchs?\b|\bmatche[sd]?\b|fixture|football|soccer|"
+    r"\bnba\b|tennis|formule\s*1|\bf1\b|"
+    r"\bactu\b|actualité|news",
+    re.I,
+)
+# Marge confortable au-dessus du max observé (189 car.) dans les 2492 cas déjà validés --
+# aucun risque de régression sur le corpus existant, uniquement les textes structurés/longs.
+_LIVE_INFO_LONG_TEXT_CHARS = 250
 _PERSONAL_MEETING_RE = re.compile(
     r"on\s+se\s+voit|se\s+revoit|rendez-vous|\brdv\b|"
     r"notre\s+(?:call|point|r[ée]union|meeting|rdv)|"
@@ -307,6 +327,11 @@ def is_live_info_question(query: str) -> bool:
         if _TIME_RE.search(query) and _PERSONAL_MEETING_RE.search(query):
             # "à quelle heure on se voit demain ?" -- planning perso, pas de l'actu sportive.
             return False
+    if len(query) > _LIVE_INFO_LONG_TEXT_CHARS and not _LIVE_INFO_UNAMBIGUOUS_RE.search(query):
+        # Texte long (scénario hypothétique, question de raisonnement structurée) : un mot
+        # de marché générique isolé ne suffit plus (cf. NB 4) -- sauf signal vraiment non
+        # ambigu (rugby, coupe du monde, actu...), qui reste suffisant même dans un texte long.
+        return False
     return bool(_LIVE_INFO_RE.search(query))
 
 
