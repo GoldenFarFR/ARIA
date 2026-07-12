@@ -322,6 +322,9 @@ async def chat_with_context(
                         route.provider,
                         route.model,
                     )
+                    from aria_core.llm_usage import mark_fallback_used
+
+                    mark_fallback_used(route.provider)
                 return reply
         except Exception as exc:
             logger.error("LLM request failed provider=%s: %s", route.provider, exc)
