@@ -49,7 +49,7 @@ l'utilise — il ne lui « fournit » pas la donnée.
 ## Ce qui est un SEAM VIDE (préparé mais pas branché — ne pas le présenter comme actif)
 - `services/x_social.py` : le radar social tourne mais **en veille** (aucune vraie source X/Farcaster injectée → renvoie []).
 - `release_pipeline.py` (campagne X/TikTok) : complet mais **aucun déclencheur** ne l'appelle (rien ne l'arme).
-- **TikTok** : publisher non branché (`tiktok_publisher=None`).
+- **TikTok** : client posé (`gateway/tiktok.py`, #34, cf. section dédiée plus bas) mais **jamais câblé** à `release_pipeline.publish_release(tiktok_publisher=...)` en prod (aucun appelant réel — le déclencheur manque toujours, comme ci-dessus) — et même une fois câblé, l'adaptateur reste inerte tant qu'aucun pipeline vidéo n'existe.
 - ~~`aria_core.x_profile` : module non livré~~ **LIVRÉ le 09/07 nuit 2** (`sync_x_profile()`) —
   voir section dédiée plus bas. Commande Telegram active ; tâche heartbeat quotidienne encore
   gardée par `ARIA_X_PROFILE_SYNC_ENABLED` (pas encore activée).
@@ -370,3 +370,38 @@ dupliqué), propose un enseignement durable via issue GitHub — jamais un commi
 même doctrine que `knowledge_inbox`/`claude_mentor`. Garde-fou spécifique : bloque toute
 publication si le titre/corps ressemble à un secret (une création d'issue ne passe pas par le
 scan `detect-secrets` de la CI, contrairement à un push).
+
+## X vs TikTok — état réel des deux canaux de diffusion (#34, 12/07)
+
+**X** : publication ACTIVE (`gateway/x_twitter.py::post_tweet`, testée opérateur), gatée
+`release_pipeline.arm_campaign` (outward-facing, jamais autonome sans feu vert). Lecture X
+(différent de la publication) coupée délibérément depuis début juillet pour maîtriser le coût
+pay-per-use — cf. `/status`, `is_x_reading_active()` (#123, 12/07).
+
+**TikTok** : jusqu'ici un seam totalement vide (`tiktok_publisher=None` dans tout appel à
+`release_pipeline.publish_release`, aucun client). #34 pose le CLIENT (`gateway/tiktok.py`) —
+toujours dormant, rien n'est câblé à un déclencheur réel :
+- `TikTokClient` implémente le vrai flux Content Posting API (OAuth2 refresh, init upload,
+  upload chunké, statut de publication) — patron dôme identique à `tavily.py`/`goplus.py`
+  (throttle, backoff 429/5xx, jamais un succès inventé).
+- Gate `ARIA_TIKTOK_PUBLISH_ENABLED` (OFF par défaut) + 3 credentials `TIKTOK_CLIENT_KEY`/
+  `TIKTOK_CLIENT_SECRET`/`TIKTOK_REFRESH_TOKEN` (env uniquement, jamais en dur) — aucun des
+  deux n'est configuré aujourd'hui (aucun compte TikTok créé).
+- L'adaptateur `tiktok_release_publisher(text, release) -> bool` (signature attendue par
+  `release_pipeline.publish_release`) reste **inerte même gate armé** : TikTok exige une
+  vraie vidéo (`source=FILE_UPLOAD`) et aucun pipeline de génération vidéo n'existe côté
+  ARIA — poser un faux succès irait contre la doctrine "jamais une donnée inventée".
+- `release_pipeline.py` lui-même reste sans déclencheur (comme documenté plus haut) : câbler
+  ce publisher dans un vrai appel `publish_release(...)` reste une décision séparée, qui
+  suppose aussi qu'un asset vidéo existe.
+- **Trouvaille au passage (hors scope #34, non corrigée)** : quand un `tiktok_publisher`
+  injecté renvoie `False` sans lever d'exception, `release_pipeline.publish_release` ne
+  l'ajoute ni à `published_to` ni à `pending_channels` (seule une exception atterrit dans
+  `pending_channels`) — comportement pré-existant, verrouillé par test dans
+  `test_tiktok.py::test_release_publisher_matches_injectable_signature`, pas retouché ici.
+- Garde-fou mécanique étendu : `test_coherence.py::test_external_write_actions_registered_in_allowlist`
+  connaît désormais `TikTokClient.publish_video` (aucun appelant aujourd'hui — se déclenchera
+  dès qu'un vrai pipeline vidéo appellera cette méthode hors de `gateway/tiktok.py`).
+
+17 nouveaux tests (`test_tiktok.py`), aucun appel réseau réel possible (aucune clé), suite
+complète verte.
