@@ -200,6 +200,50 @@ async def track_record():
     }
 
 
+@router.get("/paper-wallet")
+async def paper_wallet():
+    """Portefeuille paper-trading PUBLIC (#76) : preuve de track-record, jamais l'alpha.
+
+    Même doctrine que ``track_record()`` : chiffres agrégés seulement. Positions
+    OUVERTES = agrégat uniquement (nombre + P&L latent total, jamais une ligne par
+    position — c'est l'alpha la plus sensible, en temps réel, exposer le détail
+    permettrait de copy-trader). Historique (trades CLÔTURÉS) = symbole visible
+    (narratif crédible) mais jamais le contrat, ni le prix d'entrée/sortie, ni la
+    raison de sortie (fuiterait la méthode stop suiveur / TP échelonné) — date
+    tronquée au jour (pas l'heure précise, pour ne pas corréler avec un event
+    on-chain). Facts-only comme ``track_record()`` : 0 position -> rendement 0 %,
+    jamais un chiffre gonflé.
+    """
+    from aria_core import paper_trader
+
+    summary = await paper_trader.portfolio_summary()
+    closed = await paper_trader.get_closed_positions(limit=50)
+    history = [
+        {
+            "symbol": p.get("symbol") or "",
+            "closed_at": (p.get("closed_at") or "")[:10],
+            "pnl_pct": p.get("pnl_pct"),
+            "outcome": "win" if (p.get("pnl_usd") or 0.0) > 0 else "loss",
+        }
+        for p in closed
+    ]
+    return {
+        "starting": summary["starting"],
+        "equity": summary["equity"],
+        "return_pct": summary["return_pct"],
+        "realized_pnl": summary["realized_pnl"],
+        "unrealized_pnl": summary["unrealized_pnl"],
+        "open_positions": summary["open_positions"],
+        "closed_trades": summary["closed_trades"],
+        "win_rate": summary["win_rate"],
+        "history": history,
+        "disclaimer": (
+            "Portefeuille de suivi (paper), 1 000 000 $ fictifs, prix on-chain réels. "
+            "Informationnel, pas un conseil. Aucun rendement garanti."
+        ),
+    }
+
+
 @router.get("/market-cycle")
 async def market_cycle():
     """Cycle macro Bitcoin PUBLIC (halving à halving, pluri-annuel) : phase actuelle

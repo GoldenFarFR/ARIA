@@ -179,6 +179,34 @@ export async function getTrackRecord(): Promise<TrackRecord> {
   return res.json()
 }
 
+export interface PaperWalletTrade {
+  symbol: string
+  closed_at: string
+  pnl_pct: number | null
+  outcome: 'win' | 'loss'
+}
+
+export interface PaperWallet {
+  starting: number
+  equity: number
+  return_pct: number
+  realized_pnl: number
+  unrealized_pnl: number
+  open_positions: number
+  closed_trades: number
+  win_rate: number | null
+  history: PaperWalletTrade[]
+  disclaimer: string
+}
+
+// Portefeuille paper-trading public (#76) : preuve de track-record, jamais l'alpha.
+// Positions ouvertes = agrégat seulement ; historique = symbole visible, contrat jamais.
+export async function getPaperWallet(): Promise<PaperWallet> {
+  const res = await fetch(`${PRODUCT_API_URL}/aria/paper-wallet`)
+  if (!res.ok) throw new Error('Paper wallet unavailable')
+  return res.json()
+}
+
 export interface PulseHeartbeat {
   alive: boolean
   last_tick: string | null
