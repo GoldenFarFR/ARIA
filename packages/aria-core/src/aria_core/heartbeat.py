@@ -326,6 +326,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=180,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="memory_consolidation",
+        name="Consolidation memoire episodique",
+        description="Consolide memory_dir() (fichiers {categorie}_{date}.md) categorie par categorie, un seul appel LLM en depth=brief par categorie qualifiee (seuil >=3 nouvelles entrees). Archive-then-rewrite : instantane brut avant toute reecriture, aucune suppression physique. Perimetre verrouille en dur -- jamais le truth-ledger, jamais cognitive_knowledge WHERE approved=1. Gate OFF par defaut (#128).",
+        interval_minutes=1440,
+        enabled=False,
+    ),
 ]
 
 
@@ -439,6 +446,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.truth_ledger.canonical import canonical_facts_sync_enabled
 
                 task.enabled = canonical_facts_sync_enabled()
+            if task.id == "memory_consolidation":
+                from aria_core.memory.consolidation import consolidation_enabled
+
+                task.enabled = consolidation_enabled()
             if task.id == "acp_provider_poll":
                 from aria_core.skills.acp_cli import is_acp_available
 
@@ -954,6 +965,17 @@ class AriaHeartbeat:
                     f"[canonical] {result.get('synced', 0)} synchronise(s), "
                     f"{result.get('superseded', 0)} remplace(s), "
                     f"{result.get('unchanged', 0)} inchange(s) sur {result.get('total_facts', 0)}",
+                )
+
+        elif task_id == "memory_consolidation":
+            from aria_core.memory.consolidation import run_memory_consolidation_cycle
+
+            result = await run_memory_consolidation_cycle()
+            if result.get("consolidated"):
+                append_memory(
+                    "heartbeat",
+                    f"[memory_consolidation] {len(result['consolidated'])} categorie(s) "
+                    f"consolidee(s) : {', '.join(result['consolidated'])}",
                 )
 
         elif task_id == "bonding_discovery_cycle":
