@@ -1048,9 +1048,19 @@ async def _handle_avatar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 def _caption_is_avatar_upload(caption: str) -> bool:
+    """Incident #147 (12/07) : une photo envoyée SANS légende (pour tester la vision,
+    par exemple) était traitée par défaut comme une demande de changement de photo de
+    profil publique -- appliquée réellement sur le bot Telegram en prod (avatar réel
+    remplacé par un portrait tiers, sans confirmation). Ce défaut datait d'avant
+    l'existence de la vision (10/07, cf. docstring de _handle_photo) : à l'époque une
+    photo sans légende n'avait qu'un seul sens possible. Ce n'est plus vrai -- une
+    légende vide ou ambiguë doit désormais tomber sur la vision (lecture seule, sans
+    conséquence publique), jamais sur un changement d'identité visuelle publique.
+    Seul un signal EXPLICITE (/avatar, ou un mot-clé avatar sans ambiguïté) déclenche
+    encore ce chemin."""
     text = (caption or "").strip()
     if not text:
-        return True
+        return False
     lower = text.lower()
     if lower.startswith("/avatar"):
         return True
@@ -1121,15 +1131,17 @@ def vision_enabled() -> bool:
 
 
 async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Point d'entrée UNIQUE pour tout message photo (avant ce correctif, AUCUN
+    """Point d'entrée UNIQUE pour tout message photo (avant ce correctif du 10/07, AUCUN
     handler photo n'était enregistré — toute image envoyée à ARIA était ignorée en
     silence, y compris pour /avatar). Deux routes distinctes selon la légende :
-      - légende vide ou mots-clés avatar (``_caption_is_avatar_upload``) -> flux
-        /avatar existant (photo de profil / identité visuelle) ;
-      - légende normale (une question, « juge cette situation »...) -> lecture
-        visuelle générale (vision), gatée ``ARIA_VISION_ENABLED``, admin-only pour
+      - mot-clé avatar EXPLICITE (``_caption_is_avatar_upload``) -> flux /avatar
+        existant (photo de profil / identité visuelle publique) ;
+      - légende vide, ambiguë, ou normale (une question, « juge cette situation »...)
+        -> lecture visuelle (vision), gatée ``ARIA_VISION_ENABLED``, admin-only pour
         l'instant (coût LLM par image, pas encore ouvert au public).
-    """
+    Incident #147 (12/07) : la légende vide déclenchait AUTREFOIS le changement
+    d'avatar public par défaut -- corrigé, une photo ambiguë ne touche plus jamais
+    l'identité visuelle publique sans signal explicite."""
     message = update.message
     if not message or not message.photo:
         return
