@@ -92,7 +92,9 @@ def test_read_wildcard_with_explicit_write_list(monkeypatch):
 
 def test_write_off_local_debug_keeps_dev_default(monkeypatch):
     """Convenance dev locale inchangée : WRITE vide/off en debug local rouvre
-    l'écriture sur les repos par défaut (sandbox/ARIA/aria-vanguard)."""
+    l'écriture sur le repo sandbox par défaut. Incident #139 (12/07) : écrire sur
+    "ARIA" n'a JAMAIS été une convenance dev légitime -- reste bloqué même en debug
+    local, cf. test_github_mandatory_write_blocked_repos_never_writable ci-dessous."""
     _reload(
         monkeypatch,
         GITHUB_READ_REPOS="*",
@@ -102,7 +104,24 @@ def test_write_off_local_debug_keeps_dev_default(monkeypatch):
         DEBUG="true",
     )
     assert github_skill.repo_write_allowed("GoldenFarFR", "aria-sandbox") is True
-    assert github_skill.repo_write_allowed("GoldenFarFR", "ARIA") is True
+    assert github_skill.repo_write_allowed("GoldenFarFR", "ARIA") is False
+
+
+def test_github_mandatory_write_blocked_repos_never_writable(monkeypatch):
+    """Incident #139 (12/07) : _MANDATORY_WRITE_BLOCKED_REPOS doit rester étanche à
+    TOUTE config .env (wildcard write, debug local, WRITE_REPOS explicite incluant
+    le repo) -- c'est tout le point d'un plancher qui ne dépend pas de la config."""
+    _reload(
+        monkeypatch,
+        GITHUB_READ_REPOS="*",
+        GITHUB_WRITE_REPOS="*",
+        GITHUB_OWNER="GoldenFarFR",
+        DEBUG="true",
+    )
+    for repo in ("ARIA", "aria", "aria-ops", "aria-token-base"):
+        assert github_skill.repo_write_allowed("GoldenFarFR", repo) is False
+    # La lecture, elle, reste inchangée -- ce plancher ne doit JAMAIS s'étendre à READ.
+    assert github_skill.repo_read_allowed("GoldenFarFR", "ARIA") is True
 
 
 def test_write_off_production_stays_strict(monkeypatch):
