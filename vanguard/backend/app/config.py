@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     alert_cooldown_hours: int = 4
     auth_rate_limit_attempts: int = 5
     auth_rate_limit_window_minutes: int = 15
+    # #22 — filet applicatif anti-scraping pour les endpoints /api/ PUBLICS (visiteurs
+    # anonymes, sans session Privy). /api/aria/chat et /api/aria/community-feedback ont
+    # déjà leur propre limiteur plus fin (par visiteur + par IP) et sont exemptés ici.
+    # Complète, ne remplace pas, un pare-feu edge (Cloudflare) — cf.
+    # docs/edge-firewall-cloudflare.md pour le volet DNS/WAF.
+    public_rate_limit_enabled: bool = True
+    public_rate_limit_attempts: int = 90
+    public_rate_limit_window_seconds: int = 60
     max_candles: int = 300
     # str | list — pydantic-settings JSON-decodes list[...] from env; Render uses comma-separated CORS_ORIGINS
     cors_origins: str | list[str] = (

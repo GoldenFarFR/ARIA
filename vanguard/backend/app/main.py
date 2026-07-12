@@ -32,7 +32,7 @@ from app.api.routes import (
 )
 from aria_core.gateway import telegram_bot
 from app.auth.access_code import init_auth_db, purge_expired
-from app.auth.middleware import AccessCodeMiddleware
+from app.auth.middleware import AccessCodeMiddleware, PublicRateLimitMiddleware
 from app.config import settings
 from app.database import init_db
 from app.realtime.pair_indexer import pair_indexer
@@ -155,6 +155,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Ajouté en DERNIER -> englobe tout le reste (CORS, AccessCode) -> s'exécute EN PREMIER,
+# avant toute session/DB lookup (#22).
+app.add_middleware(PublicRateLimitMiddleware)
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(games.router, prefix="/api")

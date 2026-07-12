@@ -5,6 +5,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.auth.access_code import verify_session
+from app.auth.rate_limit import check_rate_limit
+from app.auth.visitor import client_ip
 from app.config import settings
 
 PUBLIC_PREFIXES = (
@@ -88,4 +90,69 @@ class AccessCodeMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Member session required. Sign in with Privy on Aria Vanguard ZHC."},
             )
 
+        return await call_next(request)
+
+
+# #22 — endpoints publics /api/ (visiteurs anonymes, sans session Privy) exemptés du gate
+# ci-dessus mais qui n'avaient jusqu'ici AUCUNE limite : content/faq, holding,
+# zhc/message/intro, track-record, exam-status, sepolia-status, relay/recent, /api/health,
+# /api/pulse, arena-signal/btc... -- une cible facile pour du scraping/bot abusif. /api/aria/
+# chat et /api/aria/community-feedback ont déjà leur propre limiteur (par visiteur + par IP,
+# cf. app/api/routes/aria.py) -- exemptés ici pour ne pas superposer deux logiques
+# différentes, et consigne opérateur explicite de ne rien ajouter de plus sur le chat (#22).
+# /api/auth/ (login/handoff) et /api/telegram/webhook ont leurs propres garde-fous
+# (auth_rate_limit_*, secret Telegram) -- exemptés pour ne pas risquer de bloquer Telegram
+# ou de doubler une logique de lockout déjà pensée pour l'auth.
+#
+# Complète, ne remplace pas, un pare-feu edge (Cloudflare WAF/rate-limiting) : le filet
+# applicatif tourne toujours, même si l'edge tombe en panne ou n'est pas encore configuré
+# (cf. docs/edge-firewall-cloudflare.md pour le volet DNS/WAF, hors de portée de ce dépôt).
+_RATE_LIMIT_EXEMPT_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", "/api/aria/chat"),
+        ("POST", "/api/aria/community-feedback"),
+    }
+)
+_RATE_LIMIT_EXEMPT_PREFIXES = ("/api/auth/", "/api/telegram/webhook")
+
+
+class PublicRateLimitMiddleware(BaseHTTPMiddleware):
+    """Plafond par IP, partagé entre tous les endpoints publics /api/ ci-dessus."""
+
+    async def dispatch(self, request: Request, call_next):
+        if not settings.public_rate_limit_enabled:
+            return await call_next(request)
+
+        method = request.method.upper()
+        if method == "OPTIONS":
+            return await call_next(request)
+
+        path = request.url.path
+        if not path.startswith("/api/"):
+            return await call_next(request)
+        if (method, path) in _RATE_LIMIT_EXEMPT_ROUTES:
+            return await call_next(request)
+        if any(path.startswith(p) for p in _RATE_LIMIT_EXEMPT_PREFIXES):
+            return await call_next(request)
+        if not _is_public(path, method):
+            # Route membre : déjà gardée par une session Privy (AccessCodeMiddleware),
+            # hors cible de ce filet anti-scraping anonyme.
+            return await call_next(request)
+
+        ip = client_ip(request)
+        if ip is None:
+            # Pas de proxy-headers connu -> IP indéterminable ; on ne bloque jamais
+            # à l'aveugle (même doctrine que check_rate_limit ailleurs dans le code).
+            return await call_next(request)
+
+        allowed = check_rate_limit(
+            f"public_api_ip:{ip}",
+            max_attempts=settings.public_rate_limit_attempts,
+            window_seconds=settings.public_rate_limit_window_seconds,
+        )
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests — slow down."},
+            )
         return await call_next(request)
