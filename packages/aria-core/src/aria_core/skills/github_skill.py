@@ -12,6 +12,18 @@ from aria_core.runtime import settings
 
 WILDCARD = "*"
 
+# Incident #139 (12/07) : truth_ledger/sync.py a poussé des conversations Telegram en
+# clair sur GoldenFarFR/ARIA parce que GITHUB_SANDBOX_REPO=ARIA en prod + un bug dans
+# repo_write_allowed() autorisait l'écriture dès que GITHUB_READ_REPOS=* était actif.
+# Le bug de fond est corrigé (01475c42), mais la protection reposait ENTIÈREMENT sur
+# une config .env correcte -- rien n'empêchait une future config VPS de reproduire
+# l'oubli sans qu'un test le signale à la revue de code. Ces repos ne doivent JAMAIS
+# être écrits par une action automatisée, quelle que soit la config .env : bloqué en
+# dur, indépendant de GITHUB_WRITE_REPOS/GITHUB_EXCLUDED_REPOS. Scopé à l'ÉCRITURE
+# SEULE (pas à _excluded_repo_names(), partagé avec la LECTURE) : ARIA doit rester
+# lisible pour son propre auto-amélioration (ex. holding_site_skill.py, code_proposal.py).
+_MANDATORY_WRITE_BLOCKED_REPOS = frozenset({"aria", "aria-ops", "aria-token-base"})
+
 
 def _parse_repo_list(raw: str) -> list[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
@@ -112,6 +124,8 @@ def repo_read_allowed(owner: str, repo: str) -> bool:
 
 
 def repo_write_allowed(owner: str, repo: str) -> bool:
+    if repo.lower() in _MANDATORY_WRITE_BLOCKED_REPOS:
+        return False
     if _repo_excluded(repo):
         return False
     if _write_is_wildcard():
