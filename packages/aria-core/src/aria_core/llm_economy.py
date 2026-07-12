@@ -261,8 +261,8 @@ def _spark_aggressive() -> bool:
     return bool(getattr(settings, "aria_spark_aggressive", False)) and _spark_active()
 
 
-def provider_display_name() -> str:
-    p = (settings.llm_provider or "cloud").strip().lower()
+def provider_display_name(provider: str | None = None) -> str:
+    p = (provider if provider is not None else settings.llm_provider or "cloud").strip().lower()
     if p in ("grok", "xai"):
         return "Grok/xAI"
     if p == "groq":
@@ -272,6 +272,16 @@ def provider_display_name() -> str:
     if p == "ollama":
         return "Ollama"
     return p or "cloud"
+
+
+def fallback_notice_line(provider: str, *, lang: str = "fr") -> str:
+    """Ligne opérateur-only (#135) : signale qu'un tour de chat est passé par la route de
+    secours (Spark down), jamais montrée hors chat de l'opérateur -- pas soumise à la
+    doctrine "zéro trace IA" (surface interne, pas client)."""
+    name = provider_display_name(provider)
+    if lang == "fr":
+        return f"Note : réponse générée via le fallback ({name}), Spark indisponible — relire avant de t'appuyer dessus pour une décision complexe."
+    return f"Note: this reply was generated via the fallback provider ({name}), Spark unavailable — double-check before relying on it for a complex decision."
 
 
 def calibrated_action_label(cal_data: dict, *, lang: str = "fr") -> str:

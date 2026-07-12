@@ -1413,7 +1413,15 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await message.reply_chat_action("typing")
     try:
         response = await aria_brain.process(text, lang=lang, public_mode=False)
-        await _reply(message, response.reply)
+        reply_text = response.reply
+        if response.data.get("llm_fallback_used") and is_owner(user.id):
+            # #135 : signal opérationnel réservé au propriétaire, jamais à un simple admin
+            # ni a fortiori au public -- silence total si Spark a répondu normalement.
+            from aria_core.llm_economy import fallback_notice_line
+
+            provider = response.data.get("llm_fallback_provider", "")
+            reply_text = f"{reply_text}\n\n{fallback_notice_line(provider, lang=lang)}"
+        await _reply(message, reply_text)
     except Exception as exc:
         logger.exception("Telegram brain.process failed")
         await _reply(

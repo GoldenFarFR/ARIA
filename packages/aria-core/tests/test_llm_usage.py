@@ -3,9 +3,13 @@ from datetime import datetime, timezone
 
 from aria_core.cursor_usage import format_cursor_usage_dashboard, update_cursor_usage
 from aria_core.llm_usage import (
+    begin_chat_usage_tracking,
+    clear_chat_usage_tracking,
     format_grok_build_dashboard,
     format_paid_usage_dashboard,
+    get_chat_fallback_state,
     is_paid_provider,
+    mark_fallback_used,
     parse_usage_from_response,
     paid_usage_snapshot,
     record_llm_usage,
@@ -106,6 +110,26 @@ def test_grok_build_usage_excludes_groq(tmp_path):
     assert grok["totals"]["total_tokens"] == 1000
     dash = format_grok_build_dashboard(month="2026-07")
     assert dash.startswith("grok 2026-07:")
+
+
+def test_chat_fallback_state_noop_outside_tracked_turn():
+    """#135 : hors d'un tour suivi (pas de begin_chat_usage_tracking actif), mark_fallback_used
+    ne doit rien faire -- même patron de no-op que _accumulate_chat_usage."""
+    clear_chat_usage_tracking()
+    mark_fallback_used("groq")
+    assert get_chat_fallback_state() == {"used": False, "provider": ""}
+
+
+def test_chat_fallback_state_tracked_turn():
+    begin_chat_usage_tracking()
+    try:
+        assert get_chat_fallback_state() == {"used": False, "provider": ""}
+        mark_fallback_used("groq")
+        assert get_chat_fallback_state() == {"used": True, "provider": "groq"}
+    finally:
+        clear_chat_usage_tracking()
+    # Après clear, retour à l'état neutre.
+    assert get_chat_fallback_state() == {"used": False, "provider": ""}
 
 
 def test_cursor_usage_dashboard(tmp_path, monkeypatch):

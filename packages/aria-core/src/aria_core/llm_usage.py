@@ -17,6 +17,7 @@ _FREE_PROVIDERS = frozenset({"", "none", "ollama", "local", "unknown"})
 _GROK_BUILD_PROVIDERS = frozenset({"grok", "xai", "grok-build"})
 
 _chat_usage_ctx: ContextVar[dict[str, int] | None] = ContextVar("chat_usage_ctx", default=None)
+_chat_fallback_ctx: ContextVar[dict[str, Any] | None] = ContextVar("chat_fallback_ctx", default=None)
 
 
 def begin_chat_usage_tracking() -> None:
@@ -26,10 +27,12 @@ def begin_chat_usage_tracking() -> None:
         "total_tokens": 0,
         "calls": 0,
     })
+    _chat_fallback_ctx.set({"used": False, "provider": ""})
 
 
 def clear_chat_usage_tracking() -> None:
     _chat_usage_ctx.set(None)
+    _chat_fallback_ctx.set(None)
 
 
 def get_chat_usage_totals() -> dict[str, int]:
@@ -41,6 +44,24 @@ def get_chat_usage_totals() -> dict[str, int]:
             "total_tokens": 0,
             "calls": 0,
         }
+    return dict(state)
+
+
+def mark_fallback_used(provider: str) -> None:
+    """Note qu'une route de secours (pas la route primaire) a répondu pour ce tour de chat
+    (#135). No-op hors d'un tour suivi par begin_chat_usage_tracking — même patron que
+    _accumulate_chat_usage ci-dessous."""
+    state = _chat_fallback_ctx.get()
+    if state is None:
+        return
+    state["used"] = True
+    state["provider"] = provider
+
+
+def get_chat_fallback_state() -> dict[str, Any]:
+    state = _chat_fallback_ctx.get()
+    if not state:
+        return {"used": False, "provider": ""}
     return dict(state)
 
 
