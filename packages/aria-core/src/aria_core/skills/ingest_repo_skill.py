@@ -9,12 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aria_core.memory import append_memory
-from aria_core.memory.vector.chroma_store import vector_store_status
 from aria_core.memory.vector.ingest import ingest_approved_item
+from aria_core.memory.vector.lancedb_store import vector_store_status
 from aria_core.paths import memory_dir
 
 _SKIP_DIRS = frozenset({
-    ".git", "node_modules", "venv", "__pycache__", "chroma", ".aria-test-data",
+    ".git", "node_modules", "venv", "__pycache__", "vector", ".aria-test-data",
     "dist", "build", ".letta", ".pytest_cache", "site-packages",
 })
 _TEXT_SUFFIXES = frozenset({

@@ -57,7 +57,12 @@ packages/aria-core/GoldenFar/
 # Ops privés — vivent dans GoldenFarFR/aria-ops (ne pas re-ajouter)
 collegue-memoire/
 local-sync/
-memory/
+# Ancré à la racine (/memory/) : non ancré, ce motif matchait aussi
+# packages/aria-core/src/aria_core/memory/ (code source légitime, jamais
+# voulu) — silencieusement ignoré jusqu'à sa découverte lors de la migration
+# LanceDB (12/07) ; consolidation.py (#128) n'a survécu que via un
+# git add -f explicite, jamais garanti pour un futur ajout.
+/memory/
 truth-ledger/
 letta-orchestrator/
 download/

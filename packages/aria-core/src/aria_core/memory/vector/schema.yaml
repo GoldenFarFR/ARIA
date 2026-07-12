@@ -1,5 +1,5 @@
 # Schéma mémoire vectorielle ARIA — Phase B (documentation + validation future)
-# chromadb non activé ; types cibles pour indexation Phase C
+# LanceDB (opt-in, désactivé par défaut) ; types cibles pour indexation Phase C
 
 version: 1
 

@@ -27,7 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=9.0.3", "pytest-asyncio>=0.24.0"]
-vector = ["chromadb>=0.5.0"]
+vector = ["lancedb>=0.34.0", "fastembed>=0.8.0", "pyarrow>=25.0.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

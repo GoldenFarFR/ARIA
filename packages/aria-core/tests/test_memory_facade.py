@@ -7,7 +7,7 @@ from aria_core.memory import (
     is_vector_enabled,
     vector_store_status,
 )
-from aria_core.memory.vector.chroma_store import search, store
+from aria_core.memory.vector.lancedb_store import search, store
 
 
 def test_legacy_append_memory_still_works(tmp_path, monkeypatch):
@@ -47,14 +47,14 @@ async def test_vector_store_noop_when_disabled():
 
 
 def test_vector_flag_opt_in(monkeypatch):
-    from aria_core.memory.vector.chroma_client import chromadb_installed, reset_client_cache
+    from aria_core.memory.vector.lancedb_client import lancedb_installed, reset_client_cache
     from aria_core.runtime import settings
 
     monkeypatch.setattr(settings, "aria_vector_memory", True)
     reset_client_cache()
     assert is_vector_enabled() is True
     status = vector_store_status()
-    if chromadb_installed():
+    if lancedb_installed():
         assert status["installed"] is True
     else:
         assert status["available"] is False
