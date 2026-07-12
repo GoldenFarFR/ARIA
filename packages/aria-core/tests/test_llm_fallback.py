@@ -82,9 +82,48 @@ async def test_chat_falls_back_to_groq(monkeypatch):
         return "fallback-ok"
 
     monkeypatch.setattr(llm_mod, "_post_chat", fake_post)
-    out = await llm_mod.chat_with_context("hi", "sys", max_tokens=50)
-    assert out == "fallback-ok"
-    assert calls == ["virtuals", "groq"]
+
+    from aria_core import llm_usage
+
+    llm_usage.begin_chat_usage_tracking()
+    try:
+        out = await llm_mod.chat_with_context("hi", "sys", max_tokens=50)
+        assert out == "fallback-ok"
+        assert calls == ["virtuals", "groq"]
+        # #135 : le tour de chat doit être marqué comme étant passé par le fallback.
+        fallback_state = llm_usage.get_chat_fallback_state()
+        assert fallback_state == {"used": True, "provider": "groq"}
+    finally:
+        llm_usage.clear_chat_usage_tracking()
+
+
+@pytest.mark.asyncio
+async def test_chat_primary_success_no_fallback_marked(monkeypatch):
+    """#135 : quand la route primaire répond du premier coup, rien ne doit signaler un
+    fallback -- silence total, condition nécessaire pour ne jamais bruiter le cas normal."""
+    from aria_core import llm as llm_mod
+
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "virtuals"
+    settings.virtuals_api_key = "spark-key"
+    settings.llm_fallback_provider = "groq"
+    settings.llm_fallback_api_key = "gsk-fallback"
+
+    async def fake_post(route, **kwargs):
+        return "spark-ok"
+
+    monkeypatch.setattr(llm_mod, "_post_chat", fake_post)
+
+    from aria_core import llm_usage
+
+    llm_usage.begin_chat_usage_tracking()
+    try:
+        out = await llm_mod.chat_with_context("hi", "sys", max_tokens=50)
+        assert out == "spark-ok"
+        assert llm_usage.get_chat_fallback_state() == {"used": False, "provider": ""}
+    finally:
+        llm_usage.clear_chat_usage_tracking()
 
 
 @pytest.mark.asyncio

@@ -302,16 +302,24 @@ class AriaBrain:
         from aria_core.llm_usage import (
             begin_chat_usage_tracking,
             clear_chat_usage_tracking,
+            get_chat_fallback_state,
         )
 
         begin_chat_usage_tracking()
         try:
-            return await self._process_inner(
+            response = await self._process_inner(
                 user_message,
                 lang,
                 visitor_id=visitor_id,
                 public_mode=public_mode,
             )
+            fallback = get_chat_fallback_state()
+            if fallback["used"]:
+                # #135 : au moins un appel LLM de ce tour est passé par la route de secours
+                # (Spark down) -- l'opérateur seul doit le savoir, jamais une surface publique.
+                response.data["llm_fallback_used"] = True
+                response.data["llm_fallback_provider"] = fallback["provider"]
+            return response
         finally:
             clear_chat_usage_tracking()
 
