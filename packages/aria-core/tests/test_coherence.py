@@ -583,6 +583,24 @@ def test_external_write_actions_registered_in_allowlist():
     )
 
 
+def test_github_mandatory_write_blocked_repos_includes_aria():
+    """Garde-fou mécanique anti-récidive (incident #139, 12/07) : truth_ledger/sync.py a
+    poussé des conversations Telegram en clair sur GoldenFarFR/ARIA parce que la seule
+    protection contre l'écriture reposait sur une config .env correcte (GITHUB_SANDBOX_REPO,
+    GITHUB_EXCLUDED_REPOS) -- rien ne signalait à la revue de code qu'une future config VPS
+    pouvait reproduire l'oubli. github_skill._MANDATORY_WRITE_BLOCKED_REPOS bloque désormais
+    l'écriture sur ces repos EN DUR, indépendamment de tout réglage .env. Casse immédiatement
+    si "aria" en disparaît."""
+    from aria_core.skills import github_skill
+
+    assert {"aria", "aria-ops"} <= github_skill._MANDATORY_WRITE_BLOCKED_REPOS, (
+        "github_skill._MANDATORY_WRITE_BLOCKED_REPOS ne protège plus 'aria'/'aria-ops' en "
+        "écriture -- c'est exactement l'oubli qui a causé l'incident #139 (truth_ledger/sync.py "
+        "poussant des conversations Telegram en clair sur main). Si le retrait est volontaire, "
+        "confirme explicitement pourquoi ce repo n'a plus besoin de ce plancher."
+    )
+
+
 def test_aria_directive_channel_perimeter_locked_and_gated():
     """Canal de directives ARIA -> Claude Code (pilote, 10/07) : le périmètre autorisé
     est verrouillé à la SEULE famille déjà déléguée. L'élargir exige un changement

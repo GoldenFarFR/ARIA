@@ -39,7 +39,13 @@ def test_patch_index_css_appends_keyframes():
 
 
 @pytest.mark.asyncio
-async def test_execute_shooting_star_with_write(monkeypatch, tmp_path):
+async def test_execute_shooting_star_write_blocked_even_with_explicit_write_repos(monkeypatch, tmp_path):
+    """Incident #139 (12/07) : le commit direct sur ARIA (sans PR, sans revue) a été
+    retiré -- github_skill._MANDATORY_WRITE_BLOCKED_REPOS bloque désormais l'écriture
+    sur "aria" EN DUR, même quand GITHUB_WRITE_REPOS l'inclut explicitement (c'est
+    justement ce que ce test vérifiait comme "succès" avant l'incident). La lecture/
+    audit du site reste intacte (repo_read_allowed non touché) -- seul le commit direct
+    est coupé."""
     reload_test_settings(
         monkeypatch,
         GITHUB_TOKEN="test",
@@ -77,11 +83,12 @@ async def test_execute_shooting_star_with_write(monkeypatch, tmp_path):
         "ajoute une étoile filante sur la page d'accueil de aria-vanguard",
         lang="fr",
     )
+    # La LECTURE a bien eu lieu (patch calculé) mais aucune écriture n'est partie.
     assert data.get("patch_complete") is True
-    assert data.get("committed") is True
-    assert len(puts) == 3
-    assert "ShootingStar" in out
-    assert data.get("github_commit_url")
+    assert data.get("write_denied") is True
+    assert not data.get("committed")
+    assert puts == []
+    assert "refusée" in out.lower() or "refuse" in out.lower()
 
 
 @pytest.mark.asyncio
