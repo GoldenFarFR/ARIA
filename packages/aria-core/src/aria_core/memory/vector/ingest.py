@@ -5,7 +5,7 @@ import logging
 
 from aria_core.knowledge.cognitive import KnowledgeItem, get_knowledge_by_id
 from aria_core.memory.vector._flags import is_vector_enabled
-from aria_core.memory.vector.chroma_store import store
+from aria_core.memory.vector.lancedb_store import store
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ def entry_type_for_item(item: KnowledgeItem) -> str:
 
 
 async def ingest_approved_item(item_id: str) -> str | None:
-    """Indexe un item cognitive approuvé dans Chroma — no-op si flag off."""
+    """Indexe un item cognitive approuvé dans la mémoire vectorielle — no-op si flag off."""
     if not is_vector_enabled():
         return None
     item = await get_knowledge_by_id(item_id)

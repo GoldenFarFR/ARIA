@@ -34,7 +34,7 @@ def validate_entry(entry_type: str, metadata: dict[str, Any] | None) -> tuple[bo
 
 
 def normalize_metadata(entry_type: str, metadata: dict[str, Any] | None) -> dict[str, str]:
-    """Chroma n'accepte que str/int/float/bool — on stringifie le reste."""
+    """Métadonnées sérialisées en JSON côté store — on stringifie tout sauf str/int/float/bool natifs."""
     out: dict[str, str] = {"entry_type": entry_type}
     for key, value in (metadata or {}).items():
         if value is None:

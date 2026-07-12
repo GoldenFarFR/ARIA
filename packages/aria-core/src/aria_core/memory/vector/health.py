@@ -4,33 +4,33 @@ from __future__ import annotations
 from typing import Any
 
 from aria_core.memory.vector import is_vector_enabled, vector_store_status
-from aria_core.memory.vector.chroma_client import chromadb_installed, get_collection
-from aria_core.paths import chroma_dir
+from aria_core.memory.vector.lancedb_client import get_table, lancedb_installed
+from aria_core.paths import vector_dir
 
 
 async def vector_health_report() -> dict[str, Any]:
-    """Rapport diagnostic — safe si Chroma absent ou flag off."""
+    """Rapport diagnostic — safe si LanceDB absent ou flag off."""
     report: dict[str, Any] = {
         "flag_enabled": is_vector_enabled(),
-        "chromadb_installed": chromadb_installed(),
-        "persist_dir": str(chroma_dir()),
+        "vector_backend_installed": lancedb_installed(),
+        "persist_dir": str(vector_dir()),
         "status": vector_store_status(),
     }
     if not is_vector_enabled():
         report["ready"] = False
         report["reason"] = "aria_vector_memory=false"
         return report
-    if not chromadb_installed():
+    if not lancedb_installed():
         report["ready"] = False
-        report["reason"] = "chromadb not installed — pip install -e '.[vector]'"
+        report["reason"] = "lancedb not installed — pip install -e '.[vector]'"
         return report
-    coll = get_collection()
-    if coll is None:
+    tbl = get_table()
+    if tbl is None:
         report["ready"] = False
-        report["reason"] = "collection init failed"
+        report["reason"] = "table init failed"
         return report
     try:
-        count = int(coll.count())
+        count = int(tbl.count_rows())
     except Exception as exc:
         report["ready"] = False
         report["reason"] = f"count failed: {exc}"

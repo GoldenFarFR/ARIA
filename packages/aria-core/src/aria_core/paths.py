@@ -50,8 +50,14 @@ def aria_avatar_gallery_dir() -> Path:
     return path
 
 
-def chroma_dir() -> Path:
-    """Persistance Chroma embedded — Phase C (opt-in via aria_vector_memory)."""
-    path = data_dir() / "chroma"
+def vector_dir() -> Path:
+    """Persistance mémoire vectorielle embarquée — Phase C (opt-in via aria_vector_memory).
+
+    Nom neutre (indépendant du moteur) — LanceDB depuis la migration CVE-2026-45829
+    (chromadb, RCE serveur non corrigée). L'ancien dossier ``chroma/`` d'un déploiement
+    précédent n'est pas migré : mémoire vectorielle désactivée par défaut, volume quasi
+    nul quand elle l'était (188 Ko), pas un vrai jeu de données à préserver.
+    """
+    path = data_dir() / "vector"
     path.mkdir(parents=True, exist_ok=True)
     return path
