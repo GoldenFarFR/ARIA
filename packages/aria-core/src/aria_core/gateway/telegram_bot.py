@@ -632,13 +632,13 @@ async def _handle_github(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message = update.message
     if not message:
         return
-    from aria_core.locale import detect_lang
+    from aria_core.locale import detect_operator_lang
     from aria_core.skills.github_skill import execute_github_sandbox
 
     text = (message.text or "").strip()
     args = text.split()[1:] if " " in text else []
     sub = (args[0].lower() if args else "status").strip()
-    lang = detect_lang(text)
+    lang = detect_operator_lang(text)
 
     if sub in ("status", "config", "aide", "help", ""):
         out, _ = await execute_github_sandbox("github status", lang)
@@ -688,13 +688,13 @@ async def _handle_repertoire(update: Update, context: ContextTypes.DEFAULT_TYPE)
     message = update.message
     if not message:
         return
-    from aria_core.locale import detect_lang
+    from aria_core.locale import detect_operator_lang
     from aria_core.skills.repertoire_skill import execute_manage_repertoire
 
     text = (message.text or "").strip()
     args = text.split()[1:] if " " in text else []
     sub = (args[0].lower() if args else "list").strip()
-    lang = detect_lang(text)
+    lang = detect_operator_lang(text)
 
     if sub in ("list", "liste", "help", "aide", ""):
         out, _ = await execute_manage_repertoire("répertoire list", lang)
@@ -1176,9 +1176,9 @@ async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     image_data_uri = f"data:image/jpeg;base64,{base64.b64encode(data).decode('ascii')}"
     prompt = caption or "Décris cette image et donne ta lecture."
 
-    from aria_core.locale import LANG_FR, detect_lang
+    from aria_core.locale import LANG_FR, detect_operator_lang
 
-    lang = detect_lang(prompt) if caption else LANG_FR
+    lang = detect_operator_lang(prompt) if caption else LANG_FR
     reply = await aria_brain._llm_response(prompt, lang, public=False, image_data_uri=image_data_uri)
     if reply is None:
         await _reply(message, "L'analyse d'image a échoué (LLM indisponible) — réessaie plus tard.")
@@ -1203,10 +1203,10 @@ async def _handle_experiment(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Example: /experiment ui-v2 Dark mode holding page prototype",
         )
         return
-    from aria_core.locale import detect_lang
+    from aria_core.locale import detect_operator_lang
     from aria_core.skills.github_skill import execute_github_sandbox
 
-    lang = detect_lang(body)
+    lang = detect_operator_lang(body)
     prompt = f"create experiment sandbox {body}"
     out, _ = await execute_github_sandbox(prompt, lang)
     await _reply(message, out)
@@ -1335,9 +1335,9 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await _reply(message, f"Exchange #{exchange_id} not found.")
             return
 
-    from aria_core.locale import detect_lang
+    from aria_core.locale import detect_operator_lang
 
-    lang = detect_lang(text)
+    lang = detect_operator_lang(text)
 
     from aria_core.self_maintenance import handle_operator_self_message
 
