@@ -19,10 +19,40 @@ import logging
 import time
 
 from aria_core import screened_pool
+from aria_core.services.blockscout import blockscout_client
 from aria_core.skills.acp_onchain_scan import scan_base_token
 from aria_core.skills.safety_screen import safety_screen
 
 logger = logging.getLogger(__name__)
+
+# Pré-filtre découverte (Volet C, 12/07) : sous ce seuil, un candidat est traité
+# comme "pas encore mûr" (contrat pas encore vérifié, holders pas encore indexés
+# par Blockscout) plutôt que comme "structurellement bloqué" — garde-fou anti-faux-
+# négatif pour les tokens tout juste déployés (cf. ``_prefilter_reason``).
+_PREFILTER_MIN_AGE_DAYS = 2.0
+
+_PREFILTER_REASON_PREFIX = "pré-filtre découverte (Blockscout)"
+
+
+def _prefilter_reason(info) -> str | None:
+    """``None`` si le candidat doit passer au scan complet, sinon le motif à tracer.
+
+    Ne tranche QUE sur des faits Blockscout disponibles (``info.available``) — toute
+    donnée manquante (429, timeout, adresse introuvable) fait passer au scan complet
+    (fail-open, jamais de rejet sur absence de donnée, cf. politique ``blockscout.py``).
+    """
+    if info is None or not info.available:
+        return None
+    unverified = info.is_verified is False
+    holders_unknown = info.holders_count is None or info.holders_count == 0
+    if not (unverified or holders_unknown):
+        return None
+    bits = []
+    if unverified:
+        bits.append("contrat non vérifié")
+    if holders_unknown:
+        bits.append("holders non indexés")
+    return f"{_PREFILTER_REASON_PREFIX} : {' et '.join(bits)} — écarté avant scan complet"
 
 
 async def absorb(
@@ -31,6 +61,7 @@ async def absorb(
     scanner=None,
     force: bool = False,
     max_age_days: int | None = None,
+    known_age_days: float | None = None,
     ctx=None,
     source: str = "",
     **screen_kwargs,
@@ -49,7 +80,15 @@ async def absorb(
     cf. ``bonding_absorber.absorb_direct_candidate``). ``source`` (optionnel, ex.
     ``'top_pools'``/``'radar_x'``) : pipeline de découverte d'origine, transmis tel
     quel à ``screened_pool`` — pure traçabilité, n'affecte aucune décision de filtrage
-    (suite audit #77 diversification, 12/07).
+    (suite audit #77 diversification, 12/07). ``known_age_days`` (optionnel, Volet C
+    12/07) : âge on-chain déjà connu de l'appelant (ex. ``first_screened_at`` côté
+    ``retry_stale_pending``) — si ``>= _PREFILTER_MIN_AGE_DAYS`` ET qu'aucun ``ctx``
+    n'est déjà fourni, un appel Blockscout léger (``get_address_info``) tranche AVANT
+    le scan complet : contrat toujours non vérifié et/ou holders jamais indexés après
+    ce délai -> ``'skip_prefiltered'`` (échec mou, retracé en ``pending``, jamais
+    ``rejected`` — un candidat peut toujours mûrir plus tard). ``None`` (défaut) ou
+    valeur sous le seuil : comportement inchangé, scan complet systématique — ne
+    jamais rejeter sur une donnée manquante ou un candidat encore trop frais.
     """
     scan = scanner or scan_base_token
     if not force:
@@ -58,6 +97,18 @@ async def absorb(
             return "skip_rejected"
         if status == "active":
             return "skip_active"
+
+    if ctx is None and known_age_days is not None and known_age_days >= _PREFILTER_MIN_AGE_DAYS:
+        info = await blockscout_client.get_address_info(contract)
+        reason = _prefilter_reason(info)
+        if reason is not None:
+            logger.info("absorb %s : pré-filtré (%s) — scan complet évité", contract, reason)
+            await screened_pool.record_pending(
+                contract=contract,
+                reason=reason,
+                source=source,
+            )
+            return "skip_prefiltered"
 
     # Honeypot ACTIF au filtre d'entrée : un token honeypot / à taxe extractive / owner
     # réversible ne doit pas entrer dans le pool, pas seulement être signalé à l'analyse.
