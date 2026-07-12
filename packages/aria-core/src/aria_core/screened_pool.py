@@ -35,6 +35,7 @@ _COLUMNS = [
     "last_checked_at",
     "screen_reason",
     "retry_count",
+    "source",
 ]
 
 # Colonnes ajoutées après coup : (nom, définition SQL) pour la migration ALTER
@@ -42,6 +43,11 @@ _COLUMNS = [
 # table préexistante, seulement `CREATE TABLE IF NOT EXISTS`).
 _ADDED_COLUMNS = [
     ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
+    # Pipeline de découverte d'origine ('top_pools' / 'radar_x' / ...) : chaîne vide
+    # sur les lignes historiques (jamais NULL, jamais un rejet opaque). Suite audit
+    # #77 diversification (12/07) : sans ça, impossible de mesurer objectivement quel
+    # pipeline contribue le bruit (échecs durs) vs le signal.
+    ("source", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -62,7 +68,8 @@ async def _ensure_table() -> None:
                 first_screened_at TEXT NOT NULL,
                 last_checked_at TEXT NOT NULL,
                 screen_reason TEXT,
-                retry_count INTEGER NOT NULL DEFAULT 0
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT ''
             )
             """
         )
@@ -89,6 +96,7 @@ async def upsert_screened(
     pool_address: str = "",
     network: str = "base",
     screen_reason: str = "",
+    source: str = "",
 ) -> None:
     """Ajoute/rafraîchit un token screené (status ``active``).
 
@@ -97,6 +105,9 @@ async def upsert_screened(
     (`active`) un token qui repasse le filtre est volontaire. ``retry_count`` est
     remis à zéro : une fois actif, le compteur de tentatives « pending » n'a plus
     de sens — s'il redégrade plus tard, il repart sur un budget de tentatives frais.
+    ``source`` (optionnel, ex. ``'top_pools'``/``'radar_x'``) : pipeline de découverte
+    d'origine, préservé au ré-enregistrement comme ``first_screened_at`` (n'écrase pas
+    une source déjà connue si l'appelant ne la précise pas).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -106,8 +117,8 @@ async def upsert_screened(
             INSERT INTO screened_token
               (contract, symbol, liquidity_usd, security_score, top_holder_pct,
                verdict, pool_address, network, status, first_screened_at,
-               last_checked_at, screen_reason, retry_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 0)
+               last_checked_at, screen_reason, retry_count, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 0, ?)
             ON CONFLICT(contract) DO UPDATE SET
               symbol=excluded.symbol,
               liquidity_usd=excluded.liquidity_usd,
@@ -119,25 +130,28 @@ async def upsert_screened(
               status='active',
               last_checked_at=excluded.last_checked_at,
               screen_reason=excluded.screen_reason,
-              retry_count=0
+              retry_count=0,
+              source=CASE WHEN excluded.source != '' THEN excluded.source ELSE screened_token.source END
             """,
             (
                 contract, symbol, liquidity_usd, security_score, top_holder_pct,
-                verdict, pool_address, network, now, now, screen_reason,
+                verdict, pool_address, network, now, now, screen_reason, source,
             ),
         )
         await db.commit()
 
 
 async def record_rejected(
-    *, contract: str, reason: str = "", symbol: str = "", network: str = "base"
+    *, contract: str, reason: str = "", symbol: str = "", network: str = "base",
+    source: str = "",
 ) -> None:
     """Marque un contrat comme rejeté (« jeté pour toujours »), avec sa raison.
 
     On le garde EN BASE (status ``rejected``) plutôt que de l'ignorer : ça évite de
     le re-scanner sans fin (intransigeance = efficace), et ça permet une
     **résurrection** ciblée si un bruit réapparaît (cf. ``reconsider``). Upsert :
-    ``first_screened_at`` préservé.
+    ``first_screened_at`` préservé. ``source`` : même logique que ``upsert_screened``
+    (préservé si non précisé au ré-enregistrement).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -147,19 +161,21 @@ async def record_rejected(
             INSERT INTO screened_token
               (contract, symbol, liquidity_usd, security_score, top_holder_pct,
                verdict, pool_address, network, status, first_screened_at,
-               last_checked_at, screen_reason)
-            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'rejected', ?, ?, ?)
+               last_checked_at, screen_reason, source)
+            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'rejected', ?, ?, ?, ?)
             ON CONFLICT(contract) DO UPDATE SET
               status='rejected', last_checked_at=excluded.last_checked_at,
-              screen_reason=excluded.screen_reason
+              screen_reason=excluded.screen_reason,
+              source=CASE WHEN excluded.source != '' THEN excluded.source ELSE screened_token.source END
             """,
-            (contract, symbol, network, now, now, reason),
+            (contract, symbol, network, now, now, reason, source),
         )
         await db.commit()
 
 
 async def record_pending(
-    *, contract: str, reason: str = "", symbol: str = "", network: str = "base"
+    *, contract: str, reason: str = "", symbol: str = "", network: str = "base",
+    source: str = "",
 ) -> None:
     """Marque un contrat comme « à revoir » (échec MOU, donnée indisponible), avec sa
     raison — jamais un rejet définitif.
@@ -174,7 +190,8 @@ async def record_pending(
     repassage — que ce soit une redécouverte fortuite ou un retry délibéré, même
     fonction pour les deux, cf. ``token_absorber.absorb``) : c'est ce compteur que
     ``abandon_stale_pending`` lit pour arrêter d'insister sur un signal qui ne mûrit
-    jamais (cf. suite audit #77/#105).
+    jamais (cf. suite audit #77/#105). ``source`` : même logique que
+    ``upsert_screened`` (préservé si non précisé au ré-enregistrement).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -184,14 +201,15 @@ async def record_pending(
             INSERT INTO screened_token
               (contract, symbol, liquidity_usd, security_score, top_holder_pct,
                verdict, pool_address, network, status, first_screened_at,
-               last_checked_at, screen_reason, retry_count)
-            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'pending', ?, ?, ?, 1)
+               last_checked_at, screen_reason, retry_count, source)
+            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'pending', ?, ?, ?, 1, ?)
             ON CONFLICT(contract) DO UPDATE SET
               status='pending', last_checked_at=excluded.last_checked_at,
               screen_reason=excluded.screen_reason,
-              retry_count=screened_token.retry_count + 1
+              retry_count=screened_token.retry_count + 1,
+              source=CASE WHEN excluded.source != '' THEN excluded.source ELSE screened_token.source END
             """,
-            (contract, symbol, network, now, now, reason),
+            (contract, symbol, network, now, now, reason, source),
         )
         await db.commit()
 

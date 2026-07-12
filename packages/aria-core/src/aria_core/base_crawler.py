@@ -140,13 +140,22 @@ async def discover_top_pools(
     *,
     fetch=None,
     limit: int = 100,
-    min_liquidity_usd: float = 30_000.0,
+    min_liquidity_usd: float = 45_000.0,
     min_age_days: float | None = None,
 ) -> list[str]:
     """Tokens des TOP pools Base (établis, liquides), filtrés par un plancher de liquidité.
 
     Le vrai terrain de chasse du 85% VC : des tokens avec une profondeur réelle, pas
     des lancements frais illiquides. On ne ramène que ce qui peut PASSER le filtre.
+
+    ``min_liquidity_usd`` (défaut 45 000 $, relevé depuis 30 000 $ le 12/07 — suite
+    audit #77 diversification) : ce plancher checke ``reserve_in_usd`` via
+    GeckoTerminal, alors que le gate réel dans ``safety_screen`` checke la liquidité
+    via DexScreener (``scan_base_token``) — deux fournisseurs qui ne sont PAS garantis
+    d'accord sur le même pool. Marge de sécurité empirique (échantillon du 12/07 :
+    des candidats à $30k+ en `reserve_in_usd` scannaient à $0 côté DexScreener), pas
+    un nouveau critère de sécurité — le seuil réel (30k$) dans ``safety_screen.py``
+    reste inchangé, cette marge réduit juste le bruit envoyé à ``absorb()``.
 
     ``min_age_days`` (optionnel, défaut ``None`` = pas de filtre, comportement
     inchangé) : exclut les pools plus jeunes que ce seuil. Un âge inconnu (champ
