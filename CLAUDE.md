@@ -611,6 +611,67 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   même doctrine que la compaction `CLAUDE.md` du 11/07 : jamais réécrire un point-in-time
   passé). **Rien déployé** — regroupé avec le prochain déploiement. Détail complet :
   `docs/HANDOFF-2026-07-11.md`.
+- **Migration LanceDB (12/07) — EN LIGNE, déployée et vérifiée.** `chromadb` (CVE-2026-45829,
+  CVSS 10, RCE, non patché) retiré de la surface prod — remplacé par LanceDB (store vectoriel
+  embarqué, zéro composant serveur) + `fastembed` (ONNX local, `BAAI/bge-small-en-v1.5`) pour
+  l'embedding (chromadb l'auto-embeddait, LanceDB non). Nouveaux modules
+  `memory/vector/embedding.py`/`lancedb_client.py`/`lancedb_store.py` (remplacent les
+  équivalents `chroma_*`), `paths.chroma_dir()` → `vector_dir()`. Bug `.gitignore` corrigé au
+  passage (`memory/` non ancré avalait silencieusement `packages/aria-core/.../memory/` —
+  ancré en `/memory/`). Déployée par VPS Principal (commit `d31c11a6`), confirmée via CI
+  (re-scan SCA propre) + `/status`. **Mémoire vectorielle (activation réelle du comportement,
+  distincte de la migration d'infra) volontairement PAS activée** — décision séparée, à
+  trancher plus tard.
+- **RÉGRESSION réelle trouvée en testant ARIA en direct (12/07) — mauvais routage web sur texte
+  long, CORRIGÉ et DÉPLOYÉ (`7610dea1`).** Un scénario de raisonnement hypothétique (650+
+  caractères, mentionne "prix" une seule fois) envoyé à ARIA est parti en recherche web
+  littérale (DDG) au lieu d'être raisonné — `web_verify.py::is_live_info_question` laissait un
+  mot de marché générique isolé (prix/bitcoin/crypto/...) déclencher seul, même noyé dans un
+  texte long sans aucun autre signal d'actualité réelle. Fix : garde de longueur
+  (`_LIVE_INFO_LONG_TEXT_CHARS = 250`) — au-delà, un mot générique seul ne déclenche plus, sauf
+  signal vraiment non ambigu (`_LIVE_INFO_UNAMBIGUOUS_RE` : rugby/coupe du monde/nba/tennis/f1).
+  Testé contre les 2492 cas du fuzz test existant (0 régression) + 3 nouveaux tests ciblés.
+  **Redéployé et revalidé sur Telegram en direct** : le même prompt-test envoyé après
+  déploiement a produit une analyse de raisonnement correcte (verdict argumenté sur 4 signaux
+  fournis, zéro recherche web fabriquée).
+- **Second bug de routage réel trouvé sur le MÊME test (12/07) — chemin totalement différent,
+  CORRIGÉ et DÉPLOYÉ (`27c6057` — pas encore redéployé sur le VPS à ce stade).** Un second
+  scénario (analyse technique MACD/orderbook/funding rate, contient "2%"/"15%") est reparti en
+  recherche web littérale, cette fois via un chemin **opérateur** distinct
+  (`operator_conversational.py::is_injected_factual_claim` → `verify_external_claim`, conçu
+  pour vérifier des affirmations collées courtes, pas pour un scénario de raisonnement). Cause
+  racine précise : `_QUESTION_RE` n'exigeait le `?` qu'en toute fin de chaîne
+  (`\?\s*$`) — un message multi-phrases avec une vraie question au milieu suivie d'une
+  consigne sans `?` final ("Tranche de manière définitive.") échappait totalement au garde
+  "ceci est une question, pas une affirmation à vérifier". Fix : `?` détecté n'importe où dans
+  le texte. Testé contre le scénario exact de l'incident + suite complète (4497 passed, 1 échec
+  pré-existant hors-scope — test réseau réel bloqué par le proxy sandbox, sans rapport). **Pas
+  encore redéployé/revalidé en direct** — prochaine étape.
+- **Trou de robustesse trouvé au passage (12/07) — CORRIGÉ et DÉPLOYÉ (`27c6057`), pas encore
+  redéployé sur le VPS.** En creusant le second bug ci-dessus, découverte que
+  `llm.py::_post_chat` ne vérifie jamais `finish_reason` de la réponse API — une réponse coupée
+  par l'API (`finish_reason=length`, budget `max_tokens` atteint) est affichée telle quelle
+  sans aucun signal, ni log ni télémétrie. Observé en direct : une réponse ARIA (test logique
+  farming/modus tollens) s'est arrêtée net en plein mot sur Telegram, confirmé par l'opérateur.
+  Fix : `_post_chat` journalise un warning + enregistre `truncated=true` dans
+  `data/llm-usage/YYYY-MM.jsonl` quand `finish_reason == "length"`. **N'augmente pas les
+  budgets `max_tokens`** (pas de preuve suffisante sur la vraie cause en prod sans accès aux
+  logs VPS depuis cette session cloud) — rend seulement le phénomène observable pour un vrai
+  diagnostic la prochaine fois. Test dédié (`test_truncated_response_logged_and_recorded`),
+  suite complète verte.
+- **Piège infra multi-repo découvert (12/07) — le `origin` d'une session VPS peut pointer vers
+  le mauvais dépôt sans aucune erreur visible.** VPS Research a rapporté un push confirmé
+  ("Everything up-to-date", `git ls-remote` positif) vers `claude/trading-psychology-research-temp`
+  — la branche n'existait pourtant pas sur `ARIA` (vérifié par le commandement via l'API GitHub
+  directe, indépendante du proxy git de session). Cause : `origin` de cette session VPS pointait
+  vers `aria-ops`, pas `ARIA` — toutes ses commandes git (`push`, `ls-remote`) étaient donc
+  cohérentes... avec le mauvais dépôt. Le rapport de recherche comportementale (psychologie
+  trading, cf. entrée dédiée ci-dessus dans le contexte de session) a été retrouvé sur
+  `aria-ops` et rapatrié manuellement (copie de fichier + nouveau commit) dans `ARIA` au bon
+  emplacement (`docs/aria-learning-inbox/`). **Leçon** : un `git push`/`git ls-remote` qui
+  "réussit" dans une session ne prouve PAS qu'il a touché le bon dépôt — vérifier `git remote
+  -v` en cas de doute, ou faire confirmer par le commandement via l'API GitHub (indépendante du
+  proxy local par session).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
