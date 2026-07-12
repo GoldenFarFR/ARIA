@@ -95,6 +95,13 @@ def _local_runtime() -> bool:
         return False
 
 
+def _write_is_wildcard() -> bool:
+    """GITHUB_WRITE_REPOS seul, jamais GITHUB_READ_REPOS (incident : lecture illimitée
+    n'implique jamais l'écriture -- repo_write_allowed() doit rester étanche à READ_REPOS)."""
+    write = settings.github_write_repos.strip()
+    return write in (WILDCARD, f"{settings.github_owner.strip()}/*")
+
+
 def repo_read_allowed(owner: str, repo: str) -> bool:
     if _repo_excluded(repo):
         return False
@@ -107,7 +114,7 @@ def repo_read_allowed(owner: str, repo: str) -> bool:
 def repo_write_allowed(owner: str, repo: str) -> bool:
     if _repo_excluded(repo):
         return False
-    if github_unlimited_access() or settings.github_write_repos.strip() == WILDCARD:
+    if _write_is_wildcard():
         return owner.lower() == settings.github_owner.strip().lower()
 
     raw = settings.github_write_repos.strip()
@@ -123,9 +130,9 @@ def repo_write_allowed(owner: str, repo: str) -> bool:
 
 
 def allowed_write_repos() -> list[str]:
-    raw = settings.github_write_repos.strip()
-    if raw == WILDCARD or raw == f"{settings.github_owner}/*":
+    if _write_is_wildcard():
         return [f"{settings.github_owner}/*"]
+    raw = settings.github_write_repos.strip()
     repos = _parse_repo_list(raw)
     if not repos:
         if not raw or raw.lower() in ("", "off", "none", "disabled", "0"):
