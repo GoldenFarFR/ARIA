@@ -430,6 +430,15 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   session cloud après coup plutôt qu'en blocage avant écriture) ; déploiement groupé plutôt qu'un
   rebuild Docker par correctif. Productif : 3 correctifs réels livrés et déployés en un segment
   (#105/#108/#110) grâce à ce parallélisme.
+- **Autorité de commit centralisée (12/07) — durcit la règle de dispatch VPS, remplace la mention
+  "CLAUDE.md/HANDOFF librement" ci-dessus.** Décision opérateur explicite : seule la session cloud
+  (commandement) fait les commits qui atterrissent sur `main`. Un VPS ne pousse jamais sur `main`
+  (déjà acquis le 11/07) ET ne se considère plus comme faisant le commit "final" du tout : il
+  prépare (implémente, teste, commit local si besoin pour son propre suivi), pousse sur une
+  branche temporaire dédiée (`claude/<sujet>-review-temp`), puis s'arrête là — y compris pour
+  CLAUDE.md/HANDOFF désormais (la mention "librement" ci-dessus est périmée). La session cloud
+  relit et fait elle-même le commit qui compte sur `main`. But : un point de contrôle unique avant
+  toute écriture durable sur l'historique public.
 - **Test manuel Telegram post-déploiement (11/07) — méthode à répéter après chaque déploiement
   touchant la conversation.** Poser quelques questions ciblées à ARIA en direct sur Telegram
   après un déploiement a débusqué 4 problèmes réels que la CI ne couvrait pas : la régression
