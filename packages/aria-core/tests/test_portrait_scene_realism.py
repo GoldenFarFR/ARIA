@@ -79,6 +79,63 @@ def test_identity_brief_truncation_extended_not_120():
 
 
 @pytest.mark.asyncio
+async def test_generate_scene_portrait_locks_brand_palette_no_violet(monkeypatch):
+    """#94 -- la palette de marque (or/charbon, jamais violet/néon) est gravée dans le
+    prompt PARTAGÉ, pas laissée à la seule discipline des presets appelants."""
+    captured = {}
+
+    async def fake_edit(*, prompt, anchor_jpeg):
+        captured["prompt"] = prompt
+        return b"fake-image"
+
+    monkeypatch.setattr(portrait_scene, "_call_image_edit", fake_edit)
+
+    await portrait_scene.generate_scene_portrait(
+        b"anchor", identity_brief="confident", scene="rooftop at sunset"
+    )
+    prompt = captured["prompt"].lower()
+    assert "gold" in prompt and "charcoal" in prompt
+    assert "never neon" in prompt
+    assert "violet or purple" in prompt
+    assert "generic ai-generated" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_style_portrait_locks_brand_palette_no_violet(monkeypatch):
+    captured = {}
+
+    async def fake_edit(*, prompt, anchor_jpeg):
+        captured["prompt"] = prompt
+        return b"fake-image"
+
+    monkeypatch.setattr(portrait_scene, "_call_image_edit", fake_edit)
+
+    await portrait_scene.generate_style_portrait(
+        b"anchor", identity_brief="confident", style="editorial fashion shoot"
+    )
+    prompt = captured["prompt"].lower()
+    assert "violet or purple" in prompt
+    assert "editorial fashion shoot" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_banner_portrait_locks_brand_palette_no_violet(monkeypatch):
+    captured = {}
+
+    async def fake_edit(*, prompt, anchor_jpeg):
+        captured["prompt"] = prompt
+        return b"fake-image"
+
+    monkeypatch.setattr(portrait_scene, "_call_image_edit", fake_edit)
+
+    await portrait_scene.generate_banner_portrait(
+        b"anchor", identity_brief="confident", scene="trading floor"
+    )
+    prompt = captured["prompt"].lower()
+    assert "violet or purple" in prompt
+
+
+@pytest.mark.asyncio
 async def test_generate_banner_creative_still_excludes_people(monkeypatch):
     # Le banner text-to-image (sans photo source) exclut déjà tout humain -- la
     # frontière de goût n'a pas de sens ici (rien à sexualiser), comportement inchangé.

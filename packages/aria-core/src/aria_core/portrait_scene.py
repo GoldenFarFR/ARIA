@@ -171,6 +171,20 @@ _TASTE_BOUNDARY = (
     "Elegant, sophisticated, business-appropriate or editorial styling — never suggestive, "
     "never revealing, never sexualized."
 )
+# Palette de marque ARIA (#94) -- ancrée sur le SEUL artefact de marque réellement livré
+# (vanguard/src/index.css : surface quasi-noire #08080a, or #c9a962/#e8d5a8, champagne
+# #d4c4a0, crème #f4efe6, display serif Cormorant Garamond -- élégance éditoriale, jamais
+# futuriste-néon). Avant ce correctif, rien ne verrouillait la couleur dans ces prompts --
+# les presets de `avatar_style_refresh.py` avaient dérivé vers un violet-néon absent du
+# vrai site (corrigé au même commit), un des clichés visuels les plus reconnaissables de
+# l'imagerie "IA générique". Verrouiller la palette ici, dans le prompt PARTAGÉ, empêche
+# cette dérive de revenir par une future variante mal alignée.
+_BRAND_PALETTE = (
+    "Color palette strictly warm gold and deep charcoal or near-black — the exact ARIA ZHC "
+    "brand palette (champagne, warm gold, cream accents on near-black), timeless editorial "
+    "luxury. Never neon, never violet or purple, never futuristic sci-fi cyan or blue glow — "
+    "those read as generic AI-generated imagery, the opposite of this brand."
+)
 # Le brief identité (vision-model, `_extract_identity_brief`) reste borné, mais moins
 # tronqué qu'avant (120 -> 220) : plus de détail retenu (traits, style, tenue habituelle)
 # pour une cohérence de personnage plus fidèle d'une génération à l'autre.
@@ -189,7 +203,7 @@ async def generate_scene_portrait(
         f"recognizable. {brief}. "
         f"New setting and environment: {scene.strip()[:200]}. "
         "Change outfit, hairstyle, background, lighting as needed. "
-        f"{_REALISM_STYLE} {_BRAND_PRESENCE} {_TASTE_BOUNDARY} "
+        f"{_REALISM_STYLE} {_BRAND_PRESENCE} {_BRAND_PALETTE} {_TASTE_BOUNDARY} "
         "Square profile photo."
     )
     return await _call_image_edit(prompt=prompt, anchor_jpeg=anchor_jpeg)
@@ -207,7 +221,7 @@ async def generate_style_portrait(
         f"recognizable. {brief}. "
         f"Transform everything else: {style.strip()[:280]}. "
         "New outfit, hairstyle, background environment, lighting and mood. "
-        f"{_REALISM_STYLE} {_BRAND_PRESENCE} {_TASTE_BOUNDARY} "
+        f"{_REALISM_STYLE} {_BRAND_PRESENCE} {_BRAND_PALETTE} {_TASTE_BOUNDARY} "
         "Square profile photo."
     )
     return await _call_image_edit(prompt=prompt, anchor_jpeg=anchor_jpeg)
@@ -254,7 +268,7 @@ async def generate_banner_portrait(
     prompt = (
         f"Same person — face unchanged, unmistakably recognizable. {brief}. "
         f"Wide X/Twitter header 3:1. {scene.strip()[:200]}. "
-        f"No text. {_REALISM_STYLE} {_BRAND_PRESENCE} {_TASTE_BOUNDARY} "
+        f"No text. {_REALISM_STYLE} {_BRAND_PRESENCE} {_BRAND_PALETTE} {_TASTE_BOUNDARY} "
         "Dark gold crypto brand."
     )
     return await _call_image_edit(prompt=prompt, anchor_jpeg=anchor_jpeg)

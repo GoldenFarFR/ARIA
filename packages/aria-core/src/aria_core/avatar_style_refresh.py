@@ -24,13 +24,24 @@ STATE_NAME = "style_refresh.json"
 PENDING_PREVIEW = "style_pending.jpg"
 ALLOWED_INTERVALS = (14,)
 
-# Presets locaux — 0 token Groq avant chaque Imagine
+# Presets locaux — 0 token Groq avant chaque Imagine.
+# Réécrits le 12/07 (#94) : les 3 presets marqués "violet"/"néon"/"futuriste" ci-dessous
+# (avant réécriture) dérivaient vers un cliché visuel d'imagerie IA générique totalement
+# absent de la marque réelle — `vanguard/src/index.css` ne définit AUCUNE couleur violette,
+# seulement or/champagne/crème sur quasi-noir, avec une police display serif éditoriale
+# (Cormorant Garamond), pas une esthétique sci-fi. Réalignés sur cette seule vraie source
+# de vérité de marque, en gardant 5 variantes distinctes (tenue/coiffure/décor/lumière).
 STYLE_PRESETS = (
-    "Tenue blazer sombre, coiffure lisse, fond studio or ZHC, lumière douce — autorité calme.",
-    "Robe-chemisier violet holding, cheveux ondulés, open space futuriste, rim light crypto.",
-    "Tailleur noir et or, chignon bas, skyline nocturne flou, cinématique fondateur.",
-    "Pull premium dark, cheveux libres, bureau minimal doré, lumière latérale chaude.",
-    "Veste structurée néon violet-or, brushing naturel, décor tech abstrait, photo pro.",
+    "Tenue blazer sombre structuré, coiffure lisse, fond studio charbon avec liseré or, "
+    "lumière douce — autorité calme, esthétique éditoriale.",
+    "Robe-chemisier champagne, cheveux ondulés, bibliothèque holding feutrée aux teintes "
+    "or et acajou, lumière chaude latérale.",
+    "Tailleur noir et or, chignon bas, terrasse nocturne sur skyline flou, reflets dorés, "
+    "cinématique fondateur.",
+    "Pull premium noir profond, cheveux libres, bureau minimal en bois sombre et laiton, "
+    "lumière dorée latérale, ambiance feutrée.",
+    "Veste structurée noir mat à liseré or, brushing naturel, mur texturé charbon et "
+    "champagne, photo pro éditoriale.",
 )
 
 
@@ -243,6 +254,9 @@ async def propose_style(*, force_new: bool = False) -> str:
         "Tu choisis UN nouveau style visuel pour ta photo de profil (Grok Imagine, images/edits). "
         "Même visage strictement identique ; change habits, coiffure, décor, lumière, ambiance. "
         "Style photo pro — pas de lieu exotique. 2-3 phrases en français. "
+        "Palette de marque stricte : or/champagne/crème sur charbon quasi-noir, élégance "
+        "éditoriale intemporelle — jamais de violet, néon, ou bleu/cyan futuriste (cliché "
+        "d'imagerie IA générique, absent de la marque réelle). "
         "Évite de répéter les styles récents."
     )
     user = "Propose le prochain style avatar ARIA."
@@ -253,7 +267,7 @@ async def propose_style(*, force_new: bool = False) -> str:
     style = (raw or "").strip()
     if not style:
         style = (
-            "Lumière studio douce, accents violet ZHC, fond dégradé minimal, "
+            "Lumière studio douce, accents or et champagne ZHC, fond dégradé charbon minimal, "
             "tenue business moderne — autorité calme."
         )
     return style[:600]
