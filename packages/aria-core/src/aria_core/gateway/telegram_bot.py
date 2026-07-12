@@ -359,11 +359,19 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     gh = "unlimited ✅" if github_configured() and github_unlimited_access() else (
         "configured" if github_configured() else "missing"
     )
-    from aria_core.gateway.x_twitter import is_x_post_configured, is_x_read_configured
+    from aria_core.gateway.x_twitter import (
+        is_x_post_configured,
+        is_x_read_configured,
+        is_x_reading_active,
+    )
     from aria_core.identity import official_x_at as x_at
 
     x_post = "connected ✅" if is_x_post_configured() else "missing keys"
-    x_read = "bearer ✅" if is_x_read_configured() else "off"
+    x_read = (
+        "bearer ✅" if is_x_reading_active()
+        else "coupée — bearer only" if is_x_read_configured()
+        else "off"
+    )
     from aria_core.capability_levels import global_index, check_auto_completions
 
     check_auto_completions()

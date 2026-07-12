@@ -43,10 +43,29 @@ def is_x_configured() -> bool:
     return is_x_read_configured() or is_x_post_configured()
 
 
+def is_x_reading_active() -> bool:
+    """True only when a real read actually happens: bearer configured AND at least
+    one read-consuming gate is on (curiosity feed, auto-reply, mentions learn).
+
+    Bearer presence alone is NOT enough — reading can be (and, per opérateur
+    decision 11/07, currently is) deliberately cut for cost control while the
+    bearer token stays configured. Never do a live API call here (cost/sobriété) —
+    derive the real state from the same gates the heartbeat/engagement cycles use.
+    """
+    if not is_x_read_configured():
+        return False
+    return bool(
+        getattr(settings, "x_curiosity_enabled", False)
+        or settings.x_allow_replies
+        or getattr(settings, "x_mentions_learn_enabled", False)
+    )
+
+
 def x_status() -> dict[str, Any]:
     return {
         "handle": official_x_at(),
         "read": is_x_read_configured(),
+        "reading_active": is_x_reading_active(),
         "post": is_x_post_configured(),
         "configured": is_x_configured(),
         "curiosity_enabled": is_x_read_configured(),
