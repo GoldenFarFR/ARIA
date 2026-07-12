@@ -227,7 +227,7 @@ async def test_retry_stale_pending_calls_absorber_on_stale_rows():
 
     calls: list[str] = []
 
-    async def absorber(contract):
+    async def absorber(contract, **kw):
         calls.append(contract)
         return {"0xSTALE1": "kept", "0xSTALE2": "skip_incomplete"}[contract]
 
@@ -252,7 +252,7 @@ async def test_retry_stale_pending_error_is_not_fatal():
     async def lister():
         return [{"contract": "0xA"}, {"contract": "0xB"}]
 
-    async def absorber(contract):
+    async def absorber(contract, **kw):
         if contract == "0xB":
             raise RuntimeError("scan down")
         return "kept"
@@ -306,7 +306,7 @@ async def test_retry_stale_pending_abandons_past_threshold():
     async def lister():
         return [{"contract": "0xSTUCK"}]
 
-    async def absorber(contract):
+    async def absorber(contract, **kw):
         return "skip_incomplete"
 
     async def abandon_checker(contract):
@@ -325,7 +325,7 @@ async def test_retry_stale_pending_keeps_skip_incomplete_below_threshold():
     async def lister():
         return [{"contract": "0xTRYING"}]
 
-    async def absorber(contract):
+    async def absorber(contract, **kw):
         return "skip_incomplete"
 
     async def abandon_checker(contract):
@@ -344,7 +344,7 @@ async def test_retry_stale_pending_does_not_check_abandon_on_resolved_verdicts()
     async def lister():
         return [{"contract": "0xGOOD"}, {"contract": "0xBAD"}]
 
-    async def absorber(contract):
+    async def absorber(contract, **kw):
         return {"0xGOOD": "kept", "0xBAD": "rejected"}[contract]
 
     async def abandon_checker(contract):
@@ -362,7 +362,7 @@ async def test_retry_stale_pending_default_abandon_checker_uses_screened_pool(mo
     async def lister():
         return [{"contract": "0xSTUCK2"}]
 
-    async def absorber(contract):
+    async def absorber(contract, **kw):
         return "skip_incomplete"
 
     calls: dict[str, object] = {}
@@ -431,17 +431,57 @@ async def test_retry_stale_pending_default_wrapper_missing_first_screened_at_is_
 
 
 @pytest.mark.asyncio
-async def test_retry_stale_pending_custom_absorber_not_wrapped():
-    # Un absorber injecté (test/appelant) garde sa signature à un seul argument --
-    # le wrapper known_age_days est réservé au chemin PAR DÉFAUT uniquement.
-    async def lister():
-        return [{"contract": "0xCUSTOM", "first_screened_at": "2020-01-01T00:00:00+00:00"}]
+async def test_retry_stale_pending_known_age_days_reaches_custom_absorber():
+    # Correctif du 12/07 : ``heartbeat.py`` injecte TOUJOURS son propre ``absorber``
+    # en prod (wrapper Volet A qui tague ``source``) -- un ``absorber`` personnalisé
+    # DOIT recevoir ``known_age_days`` comme n'importe quel autre, sinon le pré-filtre
+    # Volet C ne se déclenche jamais réellement (bug trouvé en vérifiant la prod).
+    from datetime import datetime, timedelta, timezone
 
-    async def absorber(contract):
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+
+    async def lister():
+        return [{"contract": "0xCUSTOM", "first_screened_at": old_ts}]
+
+    received: list[object] = []
+
+    async def absorber(contract, *, known_age_days=None):
+        received.append(known_age_days)
         return "kept"
 
     counts = await bc.retry_stale_pending(lister=lister, absorber=absorber)
     assert counts == {"kept": 1}
+    assert len(received) == 1
+    assert received[0] == pytest.approx(5.0, abs=0.05)
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_known_age_days_reaches_heartbeat_style_wrapper():
+    # Reproduit EXACTEMENT la forme du wrapper Volet A en prod
+    # (``heartbeat.py::_absorb_top_pools``) : ``async def _wrap(contract, **kw)`` qui
+    # retransmet ``**kw`` tel quel -- c'est précisément le trou qui avait échappé aux
+    # tests existants (l'ancien câblage ne passait ``known_age_days`` qu'à un
+    # absorber par défaut, jamais consulté puisque ``heartbeat.py`` en injecte
+    # toujours un). Ici on vérifie que le kwarg traverse bien ce style de wrapper.
+    from datetime import datetime, timedelta, timezone
+
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+
+    async def lister():
+        return [{"contract": "0xHB", "first_screened_at": old_ts}]
+
+    received_kw: list[dict] = []
+
+    async def _underlying_absorb(contract, *, source="", known_age_days=None):
+        received_kw.append({"source": source, "known_age_days": known_age_days})
+        return "kept"
+
+    async def _absorb_top_pools(contract, **kw):  # même forme que heartbeat.py
+        return await _underlying_absorb(contract, source="top_pools", **kw)
+
+    counts = await bc.retry_stale_pending(lister=lister, absorber=_absorb_top_pools)
+    assert counts == {"kept": 1}
+    assert received_kw == [{"source": "top_pools", "known_age_days": pytest.approx(5.0, abs=0.05)}]
 
 
 @pytest.mark.asyncio
@@ -451,7 +491,7 @@ async def test_retry_stale_pending_abandons_skip_prefiltered_past_threshold():
     async def lister():
         return [{"contract": "0xBLOCKED"}]
 
-    async def absorber(contract):
+    async def absorber(contract, **kw):
         return "skip_prefiltered"
 
     async def abandon_checker(contract):
