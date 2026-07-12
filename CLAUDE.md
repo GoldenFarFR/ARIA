@@ -430,6 +430,17 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   session cloud après coup plutôt qu'en blocage avant écriture) ; déploiement groupé plutôt qu'un
   rebuild Docker par correctif. Productif : 3 correctifs réels livrés et déployés en un segment
   (#105/#108/#110) grâce à ce parallélisme.
+- **Rôles VPS fixes + jamais d'inactivité (12/07, décision opérateur explicite).** Chaque VPS
+  reste utilisé selon le rôle de sa création, jamais interchangé : **Principal/Secondaire =
+  ouvriers** (exécutent réparations/améliorations concrètes sur le code réel, backlog numéroté) ;
+  **Research = radar technologique large** (détecte des technologies/approches à implémenter
+  dans ARIA, recherche sourcée, banque dans `docs/aria-learning-inbox/`). Un détournement
+  ponctuel du rôle de Research (ex. #79 veille concurrentielle le 12/07) reste possible sur
+  demande explicite, mais le mode par défaut de Research est le scan large-spectre, pas une
+  tâche d'ouvrier. **Aucun VPS ne doit jamais rester inactif une fois sa tâche terminée** — dès
+  qu'un VPS rapporte "terminé", la session cloud doit immédiatement lui redispatcher la suite
+  (nouvelle tâche du backlog pour Principal/Secondaire, nouvelle passe de scan pour Research)
+  avant de passer à autre chose.
 - **Autorité de commit centralisée (12/07) — durcit la règle de dispatch VPS, remplace la mention
   "CLAUDE.md/HANDOFF librement" ci-dessus.** Décision opérateur explicite : seule la session cloud
   (commandement) fait les commits qui atterrissent sur `main`. Un VPS ne pousse jamais sur `main`
