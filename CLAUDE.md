@@ -672,6 +672,25 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   "réussit" dans une session ne prouve PAS qu'il a touché le bon dépôt — vérifier `git remote
   -v` en cas de doute, ou faire confirmer par le commandement via l'API GitHub (indépendante du
   proxy local par session).
+- **#117 réellement investigué (12/07) — était marqué "completed" sans aucune preuve, corrigé.**
+  Comparaison multi-modèles (VPS Secondaire, script isolé sans impact sur la mémoire/routage
+  réel) sur 3 prompts durs du jour, providers réellement configurés (virtuals/Spark,
+  grok/xai, groq — openai/openrouter/ollama non configurés, non testables). **Résistance à
+  l'injection de prompt : tient sur les 3 providers** (aucun n'obéit à une fausse clause
+  d'exemption de garde-fou, tous la signalent explicitement à des degrés divers) — rassurant
+  pour le pire scénario (Spark tombe pendant une tentative de manipulation). **Profondeur de
+  raisonnement : dégrade réellement sur le fallback documenté.** Sur le scénario VaultX
+  (incident de sécurité, décision one-shot), Groq (llama-3.3-70b, fallback par défaut) choisit
+  `approve(0)` — exactement l'option que la réponse de référence Spark réfute explicitement
+  (laisse 8M exposés dans un wallet compromis) : une vraie erreur de décision opérationnelle,
+  pas une nuance de style. Grok/xai rate entièrement le point du prompt TWAP (prend "code
+  propre, calcul exact" au pied de la lettre sans questionner l'hypothèse économique
+  sous-jacente). **n=2 prompts seulement** — signal réel, pas une preuve statistique, à
+  élargir avant de fermer #117 pour de bon. Conséquence pratique bornée : la validation
+  humaine déjà obligatoire sur tout capital réel limite le risque immédiat, mais une
+  amélioration à considérer (#135, pas urgent) : signaler visiblement dans la réponse quand
+  elle vient du fallback plutôt que du provider primaire, pour une prudence accrue de
+  l'opérateur si ça arrive en conditions réelles.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
