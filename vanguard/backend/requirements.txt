@@ -1,22 +1,30 @@
 # aria-core: installé depuis packages/aria-core (monorepo) — voir vanguard/Dockerfile
+#
+# Les planchers `>=` sont le CONTRAT de sécurité, pas une simple indication : un
+# scanner SCA (et un resolver contraint / miroir hors-ligne) lit le plancher, pas
+# la version réellement installée. Un plancher laissé bas déclare donc « cette
+# version vulnérable est acceptable » même si la prod tourne, elle, sur une version
+# saine. Les planchers ci-dessous sont alignés sur la première version CORRIGÉE de
+# chaque avis de sécurité connu (vérifié via OSV, 12/07) — et toutes sont déjà les
+# versions que la prod exécute, donc aucun changement de comportement.
 chromadb>=0.5.0
 
 fastapi>=0.115.0
-python-multipart>=0.0.9
+python-multipart>=0.0.31
 uvicorn[standard]>=0.32.0
 httpx>=0.28.0
 pandas>=2.2.0
 numpy>=2.0.0
 pydantic>=2.10.0
 pydantic-settings>=2.6.0
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
 aiosqlite>=0.20.0
 websockets>=14.0
 python-telegram-bot>=21.0
-pytest>=8.0.0
+pytest>=9.0.3
 pytest-asyncio>=0.24.0
-PyJWT[crypto]>=2.10.0
+PyJWT[crypto]>=2.13.0
 PyYAML>=6.0.0
-Pillow>=11.0.0
+Pillow>=12.2.0
 requests-oauthlib>=2.0.0
-requests>=2.32.0
+requests>=2.33.0
