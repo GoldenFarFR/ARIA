@@ -48,6 +48,44 @@ def test_explicit_web_request_excludes_ecosystem_product_apk():
     assert not is_explicit_web_request("cherche sur internet l'apk de Aria Market")
 
 
+def test_long_hypothetical_scenario_with_bare_market_word_no_longer_triggers():
+    # Incident réel (12/07) : un scénario hypothétique de raisonnement (650+ caractères,
+    # "Un token a : (1)... (2)... est-ce que j'achète ?") mentionnant une seule fois "prix"
+    # est parti en recherche web littérale (la requête entière envoyée telle quelle à DDG).
+    # Les 2492 cas du fuzz test sont tous sous 190 caractères -- jamais testé sur un texte long.
+    long_hypothetical = (
+        "Un token sur Base a : (1) 40% de son supply détenu par le wallet créateur mais "
+        "renoncé (owner renounced) il y a 6 mois, (2) un volume 24h qui a été multiplié par "
+        "15 dans les 3 dernières heures sans annonce publique trouvable, (3) une liquidité "
+        "de 45k$ mais qui vient d'être divisée par deux il y a 40 minutes sur un seul "
+        "retrait, (4) le compte X du projet est inactif depuis 3 semaines mais un compte "
+        "tiers non-officiel avec 200 followers vient de le mentionner 6 fois en 1 heure. "
+        "Le prix a pris +180% en 2 heures. Est-ce que j'achète maintenant, et si oui avec "
+        "quel plan de sortie ?"
+    )
+    assert not is_live_info_question(long_hypothetical)
+    assert not is_explicit_web_request(long_hypothetical)
+
+
+def test_long_text_with_unambiguous_signal_still_triggers():
+    # Le garde de longueur ne doit PAS supprimer un signal vraiment non ambigu (rugby,
+    # coupe du monde, actu...) même dans un texte long -- seul un mot de marché générique
+    # isolé (prix/bitcoin/crypto/...) doit perdre son pouvoir déclencheur seul.
+    long_with_rugby = (
+        "Je réfléchis à plein de choses en ce moment : mon portefeuille crypto, mes "
+        "objectifs professionnels pour l'année, et accessoirement je me demande à quelle "
+        "heure joue le Stade Toulousain ce soir, parce que j'ai prévu de regarder le match "
+        "avec des amis et je veux organiser la soirée en conséquence sans me tromper d'horaire."
+    )
+    assert is_live_info_question(long_with_rugby)
+
+
+def test_short_bare_price_question_still_triggers():
+    # Non-régression explicite : une question courte et directe sur un prix doit continuer
+    # à déclencher, garde de longueur non pertinente ici (bien sous le seuil).
+    assert is_live_info_question("Quel est le prix du bitcoin ?")
+
+
 def test_opinion_question_never_triggers_either_path():
     msg = "tu penses quoi de la vie en général ?"
     assert not is_live_info_question(msg)
