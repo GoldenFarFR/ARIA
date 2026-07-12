@@ -6,7 +6,7 @@ import html as html_module
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
@@ -16,6 +16,7 @@ import httpx
 class WebSource:
     text: str
     url: str = ""
+    published: datetime | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +153,106 @@ def _resolve_ddg_url(href: str) -> str:
     return href
 
 
-def _as_source(text: str, url: str = "") -> WebSource | None:
+def _as_source(text: str, url: str = "", published: datetime | None = None) -> WebSource | None:
     text = re.sub(r"\s+", " ", (text or "").strip())
     if len(text) < 15:
         return None
-    return WebSource(text=text[:280], url=(url or "").strip())
+    return WebSource(text=text[:280], url=(url or "").strip(), published=published)
+
+
+# #126 — fraîcheur des sources web. DDG (gratuit, sans clé) ne renvoie aucun champ de date
+# structuré : certains extraits (surtout ceux de la recherche HTML/lite) préfixent malgré tout
+# le texte d'une date ou d'un âge relatif ("3 hours ago - ...", "Jul 10, 2026 - ..."). On tente
+# de l'extraire en best-effort ; Tavily (provider opt-in), lui, fournit un vrai champ
+# `published_date` sur ses résultats — cf. `_parse_iso_datetime`. Sans date décelable,
+# `published` reste None : la source n'est ni privilégiée ni écartée, juste non triable.
+_RELATIVE_AGO_RE = re.compile(
+    r"^\s*(\d+)\s*(minute|min|hour|heure|day|jour|semaine|week|month|mois|year|an)s?\s+ago\b", re.I
+)
+_RELATIVE_IL_Y_A_RE = re.compile(
+    r"^\s*il y a\s+(\d+)\s*(minute|heure|jour|semaine|mois|an)s?\b", re.I
+)
+_UNIT_SECONDS = {
+    "minute": 60, "min": 60,
+    "hour": 3600, "heure": 3600,
+    "day": 86400, "jour": 86400,
+    "week": 604800, "semaine": 604800,
+    "month": 2592000, "mois": 2592000,
+    "year": 31536000, "an": 31536000,
+}
+_ISO_DATE_RE = re.compile(r"^\s*(\d{4})-(\d{2})-(\d{2})")
+_MONTH_NAMES = {
+    "jan": 1, "feb": 2, "fev": 2, "fevr": 2, "mar": 3, "mars": 3, "apr": 4, "avr": 4,
+    "may": 5, "mai": 5, "jun": 6, "juin": 6, "jul": 7, "juil": 7, "aug": 8, "aout": 8,
+    "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_MONTH_NAME_DATE_RE = re.compile(r"^\s*([A-Za-zéû]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})\b")
+
+
+def _parse_leading_date(text: str, *, now: datetime) -> datetime | None:
+    """Extrait une date/âge relatif en tête d'un extrait DDG, si présent. Best-effort."""
+    if not text:
+        return None
+    m = _RELATIVE_AGO_RE.match(text) or _RELATIVE_IL_Y_A_RE.match(text)
+    if m:
+        n, unit = m.groups()
+        seconds = _UNIT_SECONDS.get(unit.lower())
+        if seconds:
+            return now - timedelta(seconds=int(n) * seconds)
+    m = _ISO_DATE_RE.match(text)
+    if m:
+        year, month, day = (int(g) for g in m.groups())
+        try:
+            return datetime(year, month, day, tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    m = _MONTH_NAME_DATE_RE.match(text)
+    if m:
+        month_raw, day_raw, year_raw = m.groups()
+        month = _MONTH_NAMES.get(month_raw.lower()[:3])
+        if month:
+            try:
+                return datetime(int(year_raw), month, int(day_raw), tzinfo=timezone.utc)
+            except ValueError:
+                return None
+    return None
+
+
+def _parse_iso_datetime(raw: str | None) -> datetime | None:
+    """Date Tavily (`published_date`, généralement ISO 8601). Retombe sur le parsing
+    best-effort si ce n'est pas de l'ISO (Tavily n'en garantit pas le format)."""
+    if not raw:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return _parse_leading_date(s, now=datetime.now(timezone.utc))
+
+
+_STALE_AFTER = timedelta(days=2)
+
+
+def _rank_by_freshness(sources: list[WebSource], *, now: datetime | None = None) -> list[WebSource]:
+    """Pour une question d'actu live (#126) : sources datées récentes d'abord (plus récent en
+    tête), puis les sources sans date connue (impossible à juger, on ne les pénalise pas),
+    puis les sources datées mais périmées (> `_STALE_AFTER`) en dernier. Jamais de suppression
+    pure : une source ancienne reste préférable à aucune source (filet anti-fabrication #113)."""
+    now = now or datetime.now(timezone.utc)
+    dated = [s for s in sources if s.published is not None]
+    undated = [s for s in sources if s.published is None]
+    fresh = [s for s in dated if now - s.published <= _STALE_AFTER]
+    stale = [s for s in dated if now - s.published > _STALE_AFTER]
+    fresh.sort(key=lambda s: s.published, reverse=True)
+    stale.sort(key=lambda s: s.published, reverse=True)
+    return fresh + undated + stale
 
 
 def is_operator_local_question(query: str) -> bool:
@@ -278,9 +374,13 @@ async def _fetch_ddg_once(client: httpx.AsyncClient, q: str) -> list[WebSource]:
         logger.warning("web_verify DDG API failed for %r: %s", q[:40], exc)
         return sources
 
+    now = datetime.now(timezone.utc)
+
     abstract = (data.get("AbstractText") or "").strip()
     if abstract and len(abstract) > 20:
-        src = _as_source(abstract, data.get("AbstractURL") or "")
+        src = _as_source(
+            abstract, data.get("AbstractURL") or "", published=_parse_leading_date(abstract, now=now)
+        )
         if src:
             sources.append(src)
 
@@ -293,7 +393,7 @@ async def _fetch_ddg_once(client: httpx.AsyncClient, q: str) -> list[WebSource]:
                 continue
             text = (topic.get("Text") or "").strip()
             url = topic.get("FirstURL") or ""
-            src = _as_source(text, url)
+            src = _as_source(text, url, published=_parse_leading_date(text, now=now))
             if src:
                 sources.append(src)
 
@@ -302,6 +402,7 @@ async def _fetch_ddg_once(client: httpx.AsyncClient, q: str) -> list[WebSource]:
 
 
 def _parse_ddg_html(html: str) -> list[WebSource]:
+    now = datetime.now(timezone.utc)
     blocks = re.findall(
         r'class="result__body".*?</div>\s*</div>',
         html,
@@ -315,7 +416,7 @@ def _parse_ddg_html(html: str) -> list[WebSource]:
             continue
         text = html_module.unescape(re.sub(r"<[^>]+>", "", snip_m.group(1)))
         url = _resolve_ddg_url(href_m.group(1)) if href_m else ""
-        src = _as_source(text, url)
+        src = _as_source(text, url, published=_parse_leading_date(text, now=now))
         if src:
             sources.append(src)
     if sources:
@@ -326,7 +427,7 @@ def _parse_ddg_html(html: str) -> list[WebSource]:
     for i, chunk in enumerate(raw_snips):
         text = html_module.unescape(re.sub(r"<[^>]+>", "", chunk))
         url = _resolve_ddg_url(raw_urls[i]) if i < len(raw_urls) else ""
-        src = _as_source(text, url)
+        src = _as_source(text, url, published=_parse_leading_date(text, now=now))
         if src:
             sources.append(src)
     return sources
@@ -378,8 +479,8 @@ async def _fetch_tavily_snippets(query: str, max_snippets: int) -> list[WebSourc
         src = _as_source(result.answer)
         if src:
             sources.append(src)
-    for text, url in result.snippets:
-        src = _as_source(text, url)
+    for text, url, published_raw in result.snippets:
+        src = _as_source(text, url, published=_parse_iso_datetime(published_raw))
         if src:
             sources.append(src)
         if len(sources) >= max_snippets:
@@ -403,10 +504,19 @@ async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: objec
             for c in cached[:max_snippets]
         ]
 
+    # #126 : pour une question d'actu live, on récupère un peu plus de candidats que
+    # nécessaire pour pouvoir les trier par fraîcheur avant de tronquer à max_snippets --
+    # sinon le premier résultat "assez bon" gagnerait par simple ordre d'arrivée réseau.
+    live = is_live_info_question(query)
+    collect_limit = min(max_snippets * 3, 10) if live else max_snippets
+
     # Provider opt-in : Tavily si configuré/activé, sinon DuckDuckGo (défaut gratuit).
     if _web_search_provider() == "tavily":
-        tavily_sources = await _fetch_tavily_snippets(query, max_snippets)
+        tavily_sources = await _fetch_tavily_snippets(query, collect_limit)
         if tavily_sources:
+            if live:
+                tavily_sources = _rank_by_freshness(tavily_sources)
+            tavily_sources = tavily_sources[:max_snippets]
             set_cached(query, tavily_sources)
             return tavily_sources
         # Tavily indisponible (clé absente, quota, panne) -> dégradation douce sur DDG.
@@ -421,8 +531,10 @@ async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: objec
                     if key not in seen_text:
                         seen_text.add(key)
                         sources.append(src)
-                    if len(sources) >= max_snippets:
-                        return sources[:max_snippets]
+                    if len(sources) >= collect_limit:
+                        break
+                if len(sources) >= collect_limit:
+                    break
             if not sources:
                 for q in variants:
                     for src in await _fetch_ddg_html(client, q):
@@ -430,10 +542,14 @@ async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: objec
                         if key not in seen_text:
                             seen_text.add(key)
                             sources.append(src)
-                        if len(sources) >= max_snippets:
-                            return sources[:max_snippets]
+                        if len(sources) >= collect_limit:
+                            break
+                    if len(sources) >= collect_limit:
+                        break
     except Exception as exc:
         logger.warning("web_verify failed: %s", exc)
+    if live:
+        sources = _rank_by_freshness(sources)
     result = sources[:max_snippets]
     if result:
         set_cached(query, result)
