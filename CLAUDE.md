@@ -691,6 +691,21 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   amélioration à considérer (#135, pas urgent) : signaler visiblement dans la réponse quand
   elle vient du fallback plutôt que du provider primaire, pour une prudence accrue de
   l'opérateur si ça arrive en conditions réelles.
+- **Correction honnête (12/07) — le pool de sourcing ne "mûrira" pas avec le temps, contrairement
+  à ce qui avait été affirmé plus tôt le même segment.** Lecture directe `aria.db::screened_token`
+  (VPS Secondaire) : `network='base'` = 110 `pending`, 9 `rejected`, **0 `active`**, aucune
+  progression en 5 jours (le plus ancien `pending` date du 07/07). `network='base-bonding'` = 0
+  ligne (premier cycle du sourcing bonding activé ce jour pas encore tourné). `vc_weekly_forecast`
+  tourne à l'heure (cadence ~48h respectée) mais produit **0 pronostics** depuis 3 cycles —
+  cohérent avec un pool actif vide. **Root cause identifiée, pas un problème de délai** : les 110
+  `pending` échouent tous sur des critères durs (score sécurité<70, liquidité<30k$, verdict
+  CAUTION/DANGER, contrat non vérifié) — le retry différé (#105/#108) aide les échecs *mous* qui
+  mûrissent avec le temps, pas ceux-là. `base_crawler` remonte aujourd'hui des tokens qui
+  échouent déjà le filtre de sécurité en amont, pas des candidats prometteurs qui ont juste
+  besoin de temps. Sans changement du sourcing amont (pré-filtrer sur un minimum de qualité,
+  pas juste élargir le débit brut), le forecast automatique restera à 0 pronostics indéfiniment.
+  Coordination nécessaire avec l'investigation de diversification du débit de scan déjà en cours
+  chez Principal (#134/#136).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
