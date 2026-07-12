@@ -990,50 +990,55 @@ class AriaBrain:
                         wants_more_detail_followup,
                     )
 
-                if wants_capability_improvement(route):
-                    return (
-                        operator_improvement_reply(lang=lang_key),
-                        SkillName.CAPABILITY_QI,
-                        ["Compétences ARIA (local QI — sans épistémique)"],
-                        {"capability_improvement": True, "skip_web": True},
-                        None,
-                    )
-
-                if wants_more_detail_followup(route) and is_llm_configured():
-                    llm_reply = await self._llm_response(
-                        "Développe ta réponse précédente avec plus d'arguments concrets.",
-                        lang,
-                        public=False,
-                        visitor_id=visitor_id,
-                    )
-                    if llm_reply:
+                    # #144 : ces 4 checks utilisent des noms importés juste au-dessus --
+                    # doivent rester DANS ce else (sinon un message contenant "ton",
+                    # "sérieux(se)", "personnalité" ou "humour" comme mot isolé prend la
+                    # branche if/pass ci-dessus sans jamais importer ces noms, et le bloc
+                    # ci-dessous levait UnboundLocalError -- incident réel #144, 12/07).
+                    if wants_capability_improvement(route):
                         return (
-                            llm_reply,
-                            None,
-                            ["Suite / plus de détail (LLM opérateur)"],
-                            {"followup_detail": True},
+                            operator_improvement_reply(lang=lang_key),
+                            SkillName.CAPABILITY_QI,
+                            ["Compétences ARIA (local QI — sans épistémique)"],
+                            {"capability_improvement": True, "skip_web": True},
                             None,
                         )
 
-                if is_llm_routing_question(route):
-                    # Only treat as model preference if it actually talks about choosing a provider/model
-                    pref = re.search(r"(?i)(?:pr[eé]f[eè]res?|plut[oô]t)\s*(?:groq|spark|qwen|virtuals|llm|moteur|provider)", route)
-                    body = llm_preference_reply(lang=lang_key) if pref else llm_routing_reply(lang_key, route)
-                    return (
-                        body,
-                        None,
-                        ["Routage LLM (runtime — sans web)"],
-                        {"llm_routing_meta": True, "skip_web": True},
-                        None,
-                    )
-                if is_cost_meta_question(route):
-                    return (
-                        cost_meta_reply(lang_key),
-                        None,
-                        ["Coût LLM (template — sans API)"],
-                        {"cost_meta_help": True},
-                        None,
-                    )
+                    if wants_more_detail_followup(route) and is_llm_configured():
+                        llm_reply = await self._llm_response(
+                            "Développe ta réponse précédente avec plus d'arguments concrets.",
+                            lang,
+                            public=False,
+                            visitor_id=visitor_id,
+                        )
+                        if llm_reply:
+                            return (
+                                llm_reply,
+                                None,
+                                ["Suite / plus de détail (LLM opérateur)"],
+                                {"followup_detail": True},
+                                None,
+                            )
+
+                    if is_llm_routing_question(route):
+                        # Only treat as model preference if it actually talks about choosing a provider/model
+                        pref = re.search(r"(?i)(?:pr[eé]f[eè]res?|plut[oô]t)\s*(?:groq|spark|qwen|virtuals|llm|moteur|provider)", route)
+                        body = llm_preference_reply(lang=lang_key) if pref else llm_routing_reply(lang_key, route)
+                        return (
+                            body,
+                            None,
+                            ["Routage LLM (runtime — sans web)"],
+                            {"llm_routing_meta": True, "skip_web": True},
+                            None,
+                        )
+                    if is_cost_meta_question(route):
+                        return (
+                            cost_meta_reply(lang_key),
+                            None,
+                            ["Coût LLM (template — sans API)"],
+                            {"cost_meta_help": True},
+                            None,
+                        )
 
         # Ancrage anti-confabulation sur la NATURE/MÉTHODE d'ARIA — s'applique à public ET
         # opérateur (contrairement au bloc ci-dessus). Incident réel 11/07 : ces deux
