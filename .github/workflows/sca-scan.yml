@@ -1,0 +1,52 @@
+# Scan SCA (Software Composition Analysis) — détecte les dépendances (Python ET JS/npm,
+# tout le repo : aria-core, vanguard/backend, vanguard/src, vanguard/product-frontend,
+# truth-ledger) portant une CVE connue. Même patron que secrets-scan.yml (#55) : workflow
+# dédié, aucun chemin filtré (contrairement à ci.yml), tourne sur tout push/PR.
+#
+# Deux jobs distincts (recommandation officielle OSV-Scanner) :
+# - scan-pr : sur une pull request, ne signale QUE les vulnérabilités introduites par la
+#   PR (diff-only) — n'échoue pas une PR à cause d'une CVE déjà présente sur main.
+# - scan-full : sur push (main) + hebdomadaire (lundi), scan complet — capte aussi une CVE
+#   publiée après coup sur une dépendance déjà en place, jamais couverte par un diff PR.
+#
+# SARIF publié dans l'onglet Security > Code scanning (gratuit sur repo public).
+# Pour un faux positif : voir la doc de config OSV-Scanner (.osv-scanner.toml, non créé
+# ici tant qu'aucun faux positif réel n'a été audité — cf. .secrets.baseline pour le
+# patron d'audit à suivre si un jour nécessaire).
+
+name: Security — SCA scan (OSV-Scanner)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "30 12 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  scan-pr:
+    if: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      actions: read
+      security-events: write
+      contents: read
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.3.8"
+    with:
+      scan-args: |-
+        --recursive
+        ./
+
+  scan-full:
+    if: ${{ github.event_name != 'pull_request' }}
+    permissions:
+      actions: read
+      security-events: write
+      contents: read
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.8"
+    with:
+      scan-args: |-
+        --recursive
+        ./
