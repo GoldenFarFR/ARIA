@@ -703,4 +703,6 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 
 **Ligne d'objectif en fin de réponse (décision opérateur explicite, 12/07)** : à chaque réponse qui dispatche une tâche à un VPS, la TOUTE DERNIÈRE ligne (après le/les bloc(s) de dispatch) doit énoncer explicitement et brièvement l'objectif de la tâche envoyée — un aperçu rapide, sans avoir à lire tout le bloc de code, pour que l'opérateur sache d'un coup d'œil ce qui est en cours sur chaque VPS.
 
+**Mode Plan avant exécution sur chaque VPS (décision opérateur explicite, 12/07)** : avant d'envoyer une nouvelle tâche à un VPS, l'opérateur bascule la session cible en mode **"Plan"** (`Shift+Tab` pour faire défiler les modes de permission). Le dispatch doit alors demander explicitement d'élaborer un plan sans exécuter (« élabore un plan, n'exécute rien »). Le VPS renvoie son plan à l'opérateur, qui le relaie au commandement (session cloud) pour relecture avant tout « go ». Une fois le plan validé, l'opérateur repasse la session en mode "Auto" et donne le feu vert pour exécuter. Objectif : appliquer systématiquement aux VPS la méthode déjà écrite plus haut (Analyser → Proposer un plan → attendre "go" → Implémenter), qui jusque-là n'était pas formalisée pour les sessions VPS spécifiquement.
+
 Tu es dans un projet persistant.
