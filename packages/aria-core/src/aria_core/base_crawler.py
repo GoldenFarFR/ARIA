@@ -13,6 +13,7 @@ Lecture seule, aucune signature.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import httpx
 
@@ -23,10 +24,15 @@ _DISCOVERY_PATHS = (
     "/networks/base/new_pools",
     "/networks/base/trending_pools",
 )
-# Top pools (triés par volume/liquidité) : le terrain de chasse des tokens ÉTABLIS
-# (vérifiés, avec vraie profondeur) — pas la benne des lancements frais. C'est ici
-# qu'on trouve les vrais builders du 85% VC.
-_TOP_POOLS_PATH = "/networks/base/pools"
+# Top pools : le terrain de chasse des tokens ÉTABLIS (vérifiés, avec vraie
+# profondeur) — pas la benne des lancements frais. C'est ici qu'on trouve les
+# vrais builders du 85% VC. ``sort=h24_volume_usd_desc`` est EXPLICITE (suite
+# audit #77 : le défaut GeckoTerminal pour cet endpoint est ``h24_tx_count_desc``
+# — nombre de transactions 24h, pas profondeur/volume — biaisé vers l'activité
+# brute (bots/snipers sur des tokens tout juste lancés) plutôt que vers des pools
+# réellement établis. Le commentaire précédent affirmait un tri par volume/liquidité
+# jamais imposé par le code — corrigé ici avec un paramètre de requête explicite).
+_TOP_POOLS_PATH = "/networks/base/pools?sort=h24_volume_usd_desc"
 
 
 def _extract_token_contracts(payload: object) -> list[str]:
@@ -81,19 +87,39 @@ async def discover_base_tokens(*, fetch=None, limit: int = 100) -> list[str]:
     return list(seen.keys())
 
 
-def _extract_tokens_with_liquidity(payload: object) -> list[tuple[str, float]]:
-    """(adresse, réserve USD du pool) depuis une réponse pools GeckoTerminal.
+def _pool_age_days(created_at: object) -> float | None:
+    """Âge d'un pool en jours depuis ``attributes.pool_created_at`` (ISO 8601, GeckoTerminal).
 
-    ``attributes.reserve_in_usd`` = liquidité du pool. Permet de filtrer À LA
-    DÉCOUVERTE : inutile de scanner un pool sous le plancher (il échouera au filtre).
+    ``None`` si le champ est absent ou n'a pas pu être parsé (jamais d'exception —
+    un âge inconnu n'est pas une erreur, juste une donnée manquante à traiter par
+    l'appelant, cf. ``discover_top_pools``).
     """
-    out: list[tuple[str, float]] = []
+    if not created_at:
+        return None
+    try:
+        created = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return (datetime.now(timezone.utc) - created).total_seconds() / 86_400.0
+
+
+def _extract_tokens_with_liquidity(payload: object) -> list[tuple[str, float, float | None]]:
+    """(adresse, réserve USD, âge en jours ou None) depuis une réponse pools GeckoTerminal.
+
+    ``attributes.reserve_in_usd`` = liquidité du pool, ``attributes.pool_created_at``
+    = date de création (ISO 8601). Permet de filtrer À LA DÉCOUVERTE : inutile de
+    scanner un pool sous le plancher de liquidité ou trop jeune (il échouera/mûrira
+    rarement au filtre de sécurité) — coût nul, ces deux champs sont déjà dans la
+    même réponse GeckoTerminal, aucun appel réseau supplémentaire.
+    """
+    out: list[tuple[str, float, float | None]] = []
     if not isinstance(payload, dict):
         return out
     for item in payload.get("data", []) or []:
         try:
             tid = item["relationships"]["base_token"]["data"]["id"]
-            reserve = (item.get("attributes") or {}).get("reserve_in_usd")
+            attrs = item.get("attributes") or {}
+            reserve = attrs.get("reserve_in_usd")
         except (KeyError, TypeError, AttributeError):
             continue
         if not isinstance(tid, str):
@@ -105,23 +131,38 @@ def _extract_tokens_with_liquidity(payload: object) -> list[tuple[str, float]]:
             r = float(reserve) if reserve is not None else 0.0
         except (TypeError, ValueError):
             r = 0.0
-        out.append((addr.lower(), r))
+        age_days = _pool_age_days(attrs.get("pool_created_at"))
+        out.append((addr.lower(), r, age_days))
     return out
 
 
 async def discover_top_pools(
-    *, fetch=None, limit: int = 100, min_liquidity_usd: float = 30_000.0
+    *,
+    fetch=None,
+    limit: int = 100,
+    min_liquidity_usd: float = 30_000.0,
+    min_age_days: float | None = None,
 ) -> list[str]:
     """Tokens des TOP pools Base (établis, liquides), filtrés par un plancher de liquidité.
 
     Le vrai terrain de chasse du 85% VC : des tokens avec une profondeur réelle, pas
     des lancements frais illiquides. On ne ramène que ce qui peut PASSER le filtre.
+
+    ``min_age_days`` (optionnel, défaut ``None`` = pas de filtre, comportement
+    inchangé) : exclut les pools plus jeunes que ce seuil. Un âge inconnu (champ
+    ``pool_created_at`` absent/imparsable) est traité comme trop jeune dès que
+    ``min_age_days`` est fourni — fail-closed, cohérent avec le reste du pipeline
+    (cf. ``safety_screen``), sans jamais toucher à ses gates de sécurité.
     """
     fetch = fetch or _fetch_gt
     payload = await fetch(_TOP_POOLS_PATH)
     seen: dict[str, None] = {}
-    for addr, reserve in _extract_tokens_with_liquidity(payload):
-        if reserve >= min_liquidity_usd and addr not in seen:
+    for addr, reserve, age_days in _extract_tokens_with_liquidity(payload):
+        if reserve < min_liquidity_usd:
+            continue
+        if min_age_days is not None and (age_days is None or age_days < min_age_days):
+            continue
+        if addr not in seen:
             seen[addr] = None
         if len(seen) >= limit:
             break
