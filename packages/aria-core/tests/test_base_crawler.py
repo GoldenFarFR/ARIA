@@ -94,6 +94,70 @@ async def test_top_pools_missing_reserve_is_filtered():
 
 
 @pytest.mark.asyncio
+async def test_top_pools_requests_sort_by_volume():
+    """Suite audit #77 : le tri GeckoTerminal par défaut (h24_tx_count_desc) n'est
+    pas la profondeur/volume — on pin explicitement sort=h24_volume_usd_desc."""
+    seen_paths = []
+
+    async def fetch(path):
+        seen_paths.append(path)
+        return _pool_payload([])
+
+    await bc.discover_top_pools(fetch=fetch)
+    assert len(seen_paths) == 1
+    assert "sort=h24_volume_usd_desc" in seen_paths[0]
+    assert seen_paths[0].startswith("/networks/base/pools")
+
+
+def _pool_payload_with_age(triples):
+    """triples: (addr, reserve, pool_created_at ISO str ou None)."""
+    return {
+        "data": [
+            {
+                "relationships": {"base_token": {"data": {"id": "base_" + a}}},
+                "attributes": {"reserve_in_usd": str(r), "pool_created_at": created_at},
+            }
+            for a, r, created_at in triples
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_top_pools_min_age_days_none_is_noop():
+    """Défaut inchangé : sans min_age_days, un pool créé il y a 1h passe toujours."""
+    fresh = "0x" + "e" * 40
+
+    async def fetch(path):
+        return _pool_payload_with_age([(fresh, 80_000, "2026-07-12T08:00:00Z")])
+
+    assert await bc.discover_top_pools(fetch=fetch, min_liquidity_usd=1) == [fresh]
+
+
+@pytest.mark.asyncio
+async def test_top_pools_min_age_days_filters_fresh_pools():
+    old, fresh = "0x" + "f" * 40, "0x" + "1" * 40
+
+    async def fetch(path):
+        return _pool_payload_with_age(
+            [(old, 80_000, "2026-06-01T00:00:00Z"), (fresh, 80_000, "2026-07-12T08:00:00Z")]
+        )
+
+    got = await bc.discover_top_pools(fetch=fetch, min_liquidity_usd=1, min_age_days=7)
+    assert got == [old]
+
+
+@pytest.mark.asyncio
+async def test_top_pools_min_age_days_excludes_unknown_age():
+    """Âge inconnu (pool_created_at absent) = fail-closed dès que min_age_days est actif."""
+    unknown = "0x" + "2" * 40
+
+    async def fetch(path):
+        return _pool_payload_with_age([(unknown, 80_000, None)])
+
+    assert await bc.discover_top_pools(fetch=fetch, min_liquidity_usd=1, min_age_days=7) == []
+
+
+@pytest.mark.asyncio
 async def test_discover_virtuals_extracts_addresses():
     a1 = "0x" + "d" * 40
 
