@@ -32,6 +32,7 @@ async def absorb(
     force: bool = False,
     max_age_days: int | None = None,
     ctx=None,
+    source: str = "",
     **screen_kwargs,
 ) -> str:
     """Scanne un contrat et le range : 'kept' / 'rejected' / 'skip_*'.
@@ -45,7 +46,10 @@ async def absorb(
     vérifié avant le filtre de sécurité pour économiser le scan honeypot. ``ctx``
     (optionnel) : contexte déjà scanné (évite un second scan réseau si l'appelant
     a déjà dû regarder ``ctx.best_pair`` avant de décider d'appeler ``absorb`` —
-    cf. ``bonding_absorber.absorb_direct_candidate``).
+    cf. ``bonding_absorber.absorb_direct_candidate``). ``source`` (optionnel, ex.
+    ``'top_pools'``/``'radar_x'``) : pipeline de découverte d'origine, transmis tel
+    quel à ``screened_pool`` — pure traçabilité, n'affecte aucune décision de filtrage
+    (suite audit #77 diversification, 12/07).
     """
     scan = scanner or scan_base_token
     if not force:
@@ -80,6 +84,7 @@ async def absorb(
             verdict=result.verdict,
             pool_address=(best.pair_address if best else ""),
             screen_reason=result.reasons[0] if result.reasons else "",
+            source=source,
         )
         return "kept"
 
@@ -103,6 +108,7 @@ async def absorb(
             contract=contract,
             reason=reason,
             symbol=(ctx.best_pair.base_symbol if ctx.best_pair else ""),
+            source=source,
         )
         return "skip_incomplete"
 
@@ -110,15 +116,19 @@ async def absorb(
         contract=contract,
         reason="; ".join(result.reasons),
         symbol=(ctx.best_pair.base_symbol if ctx.best_pair else ""),
+        source=source,
     )
     return "rejected"
 
 
-async def reconsider_on_signal(contract: str, *, scanner=None, **screen_kwargs) -> str:
+async def reconsider_on_signal(
+    contract: str, *, scanner=None, source: str = "", **screen_kwargs
+) -> str:
     """Un bruit a réapparu : ressuscite un rejeté et le réévalue sur les faits on-chain.
 
     Le signal ne décide de rien — il rouvre juste la porte, le re-scan tranche.
-    Retourne le nouveau verdict ('kept' / 'rejected').
+    Retourne le nouveau verdict ('kept' / 'rejected'). ``source`` : même paramètre
+    que ``absorb`` (le signal qui réveille EST le pipeline d'origine ici, ex. 'radar_x').
     """
     await screened_pool.reconsider(contract)
-    return await absorb(contract, scanner=scanner, force=True, **screen_kwargs)
+    return await absorb(contract, scanner=scanner, force=True, source=source, **screen_kwargs)

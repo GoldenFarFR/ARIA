@@ -708,10 +708,20 @@ class AriaHeartbeat:
 
         elif task_id == "vc_crawl":
             from aria_core.base_crawler import crawl_and_absorb, retry_stale_pending
+            from aria_core.token_absorber import absorb as _absorb
 
-            counts = await crawl_and_absorb(limit=100, max_age_days=182)
+            # Wrapper léger : tague chaque absorption 'top_pools' pour l'observabilité
+            # sourcing (suite audit #77 diversification, 12/07) sans toucher à la
+            # signature de crawl_and_absorb/retry_stale_pending (ni aux tests qui
+            # injectent leur propre absorber).
+            async def _absorb_top_pools(contract, **kw):
+                return await _absorb(contract, source="top_pools", **kw)
+
+            counts = await crawl_and_absorb(
+                absorber=_absorb_top_pools, limit=100, max_age_days=182
+            )
             append_memory("vc", f"[crawl] {counts} — {counts.get('kept', 0)} gardés")
-            retry_counts = await retry_stale_pending()
+            retry_counts = await retry_stale_pending(absorber=_absorb_top_pools)
             if retry_counts:
                 append_memory(
                     "vc", f"[retry] {retry_counts} — {retry_counts.get('kept', 0)} mûris"
@@ -743,8 +753,19 @@ class AriaHeartbeat:
 
         elif task_id == "vc_radar_x":
             from aria_core.radar_x import run_radar
+            from aria_core.token_absorber import absorb as _absorb
+            from aria_core.token_absorber import reconsider_on_signal as _reconsider
 
-            report = await run_radar(limit=40)
+            # Même tagging que vc_crawl, source='radar_x' (suite audit #77 diversification).
+            async def _absorb_radar(contract, **kw):
+                return await _absorb(contract, source="radar_x", **kw)
+
+            async def _reconsider_radar(contract, **kw):
+                return await _reconsider(contract, source="radar_x", **kw)
+
+            report = await run_radar(
+                limit=40, absorber=_absorb_radar, resonator=_reconsider_radar
+            )
             if report.get("above_threshold", 0) > 0:
                 append_memory(
                     "vc",

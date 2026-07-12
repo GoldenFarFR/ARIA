@@ -150,6 +150,52 @@ async def test_soft_fail_pending_is_still_rescanned_next_cycle():
 
 
 @pytest.mark.asyncio
+async def test_source_is_stored_on_kept():
+    scan = _scanner({"0xgood": _clean_ctx("0xgood")})
+    assert await ta.absorb("0xgood", scanner=scan, source="top_pools") == "kept"
+    row = (await sp.list_pool())[0]
+    assert row["source"] == "top_pools"
+
+
+@pytest.mark.asyncio
+async def test_source_is_stored_on_pending():
+    ctx = _clean_ctx("0xunknown")
+    ctx.top_holder_pct = None
+    scan = _scanner({"0xunknown": ctx})
+    assert await ta.absorb("0xunknown", scanner=scan, source="radar_x") == "skip_incomplete"
+    row = (await sp.list_pool(status="pending"))[0]
+    assert row["source"] == "radar_x"
+
+
+@pytest.mark.asyncio
+async def test_source_is_stored_on_rejected():
+    scan = _scanner({"0xrug": _scam_ctx("0xrug")})
+    assert await ta.absorb("0xrug", scanner=scan, source="bonding_direct") == "rejected"
+    row = (await sp.list_pool(status="rejected"))[0]
+    assert row["source"] == "bonding_direct"
+
+
+@pytest.mark.asyncio
+async def test_source_defaults_to_empty_string():
+    scan = _scanner({"0xgood": _clean_ctx("0xgood")})
+    assert await ta.absorb("0xgood", scanner=scan) == "kept"
+    row = (await sp.list_pool())[0]
+    assert row["source"] == ""
+
+
+@pytest.mark.asyncio
+async def test_reconsider_on_signal_passes_source_through():
+    rug, good = _scam_ctx("0xtok"), _clean_ctx("0xtok")
+    await ta.absorb("0xtok", scanner=_scanner({"0xtok": rug}))
+    verdict = await ta.reconsider_on_signal(
+        "0xtok", scanner=_scanner({"0xtok": good}), source="radar_x"
+    )
+    assert verdict == "kept"
+    row = (await sp.list_pool())[0]
+    assert row["source"] == "radar_x"
+
+
+@pytest.mark.asyncio
 async def test_within_max_age_is_classified_normally():
     now_ms = time.time() * 1000
     fresh_ctx = _clean_ctx("0xfresh")
