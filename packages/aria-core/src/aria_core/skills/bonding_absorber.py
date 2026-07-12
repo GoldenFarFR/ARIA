@@ -33,13 +33,21 @@ BONDING_NETWORK = "base-bonding"
 
 
 async def absorb_bonding_candidate(
-    contract: str, *, scanner=None, force: bool = False, **screen_kwargs
+    contract: str, *, scanner=None, force: bool = False,
+    known_age_days: float | None = None, **screen_kwargs
 ) -> str:
     """Scanne un candidat bonding et le range : 'kept' / 'rejected' / 'skip_*'.
 
     Symétrique à ``token_absorber.absorb`` mais sur le pool ``base-bonding`` et via
     ``bonding_safety_screen`` (aucune exigence de paire DEX). ``force=True`` ignore le
-    court-circuit statut connu (résurrection / rafraîchissement).
+    court-circuit statut connu (résurrection / rafraîchissement). ``known_age_days``
+    (accepté et IGNORÉ, Volet C 12/07) : ``base_crawler.retry_stale_pending`` le
+    transmet désormais à TOUT ``absorber`` inconditionnellement (correctif du même
+    jour — sinon le pré-filtre ne se déclenchait jamais en prod, cf.
+    ``token_absorber``) — un token en bonding n'a pas de paire DEX ni de pré-filtre
+    Blockscout équivalent, ce paramètre n'a donc aucun sens ici. Explicitement dans
+    la signature (pas absorbé par ``**screen_kwargs``) pour ne PAS le laisser fuiter
+    vers ``bonding_safety_screen``, qui ne l'attend pas et lèverait une exception.
     """
     scan = scanner or scan_base_token
     if not force:

@@ -284,7 +284,7 @@ async def test_retry_stale_bonding_pending_reuses_base_crawler_without_duplicati
         )
         await db.commit()
 
-    async def absorber(contract):
+    async def absorber(contract, **kw):
         return await ba.absorb_bonding_candidate(contract, scanner=scan)
 
     from aria_core import screened_pool as sp2
