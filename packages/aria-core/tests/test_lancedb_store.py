@@ -29,10 +29,10 @@ def _fake_vector(text: str) -> list[float]:
 
 @pytest.fixture(autouse=True)
 def isolated_lancedb(tmp_path, monkeypatch):
-    from aria_core import paths as p
+    from aria_core.memory.vector import lancedb_client as lc
     from aria_core.memory.vector import lancedb_store as ls
 
-    monkeypatch.setattr(p, "vector_dir", lambda: tmp_path / "vector")
+    monkeypatch.setattr(lc, "vector_dir", lambda: tmp_path / "vector")
     monkeypatch.setattr(ls, "embed_text", _fake_vector)
     reset_client_cache()
     yield
