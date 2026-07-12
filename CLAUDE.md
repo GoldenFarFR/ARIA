@@ -439,6 +439,17 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   CLAUDE.md/HANDOFF désormais (la mention "librement" ci-dessus est périmée). La session cloud
   relit et fait elle-même le commit qui compte sur `main`. But : un point de contrôle unique avant
   toute écriture durable sur l'historique public.
+- **Piège vécu (12/07) — `git push origin <nom-de-branche>` pousse la branche locale de ce nom,
+  pas le `HEAD` courant.** En committant sur `main` local puis en lançant `git push origin
+  claude/session-context-files-ofl85l`, 2 commits (règle de commit centralisée + marqueur de
+  déploiement) sont partis vers cette branche annexe au lieu de `main` — `origin/main` n'a jamais
+  bougé, sans erreur ni avertissement visible. Détecté seulement parce que Secondaire a re-vérifié
+  et signalé l'écart plutôt que de faire confiance à mon annonce. Corrigé par rebase +
+  `git push origin main:main` (refspec explicite). **Réflexe désormais obligatoire pour la session
+  cloud** : toujours pousser sur `main` avec le refspec explicite `git push origin main:main` (ou
+  `HEAD:main`), jamais `git push origin <nom>` seul ; et après CHAQUE push cloud vers `main`,
+  re-vérifier soi-même via `git fetch origin main && git show origin/main:<fichier>` avant
+  d'annoncer un commit comme fait — ne jamais se fier au seul texte de sortie de `git push`.
 - **Test manuel Telegram post-déploiement (11/07) — méthode à répéter après chaque déploiement
   touchant la conversation.** Poser quelques questions ciblées à ARIA en direct sur Telegram
   après un déploiement a débusqué 4 problèmes réels que la CI ne couvrait pas : la régression
@@ -677,6 +688,6 @@ Si le proxy git de l'environnement meurt (`fatal: could not read Username`), pou
 ## Format de réponse
 Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le mot « Verdict » comme label. À chaque fin de tâche, proposer un prochain pas (dans le respect de la validation explicite). Commits : `Co-Authored-By: Claude <noreply@anthropic.com>` ; jamais d'identifiant de modèle dans commit/PR/artefact ; pas de PR sans demande explicite.
 
-**Dispatch VPS (session cloud « commandement », 11/07) — règle permanente, ne jamais oublier.** Toute consigne destinée à un VPS (Principal/Secondaire/Research) doit TOUJOURS être formatée : en-tête coloré hors bloc (🟠 **Pour VPS Principal :** / 🔵 **Pour VPS Secondaire :** / 🟣 **Pour VPS Research :**) suivi d'un bloc de code (\`\`\`) contenant le texte exact à coller — jamais en texte normal, même pour une simple confirmation ou un "vas-y". Le bloc de code déclenche le bouton copier natif du chat ; sans lui l'opérateur doit sélectionner le texte à la main. Se relire avant d'envoyer tout message qui mentionne une prochaine étape pour un VPS. Incident vécu (11/07) : plusieurs consignes envoyées en texte simple, l'opérateur a dû relancer manuellement, VPS Research est resté à l'arrêt en attendant un dispatch jamais réellement formaté/envoyé.
+**Dispatch VPS (session cloud « commandement », 11/07, complété 12/07) — règle permanente, ne jamais oublier.** Toute consigne destinée à un VPS (Principal/Secondaire/Research) doit TOUJOURS être formatée : en-tête coloré hors bloc (🟠 **Pour VPS Principal :** / 🔵 **Pour VPS Secondaire :** / 🟣 **Pour VPS Research :**) suivi d'un bloc de code (\`\`\`) contenant le texte exact à coller — jamais en texte normal, même pour une simple confirmation ou un "vas-y". Le bloc de code déclenche le bouton copier natif du chat ; sans lui l'opérateur doit sélectionner le texte à la main. Se relire avant d'envoyer tout message qui mentionne une prochaine étape pour un VPS. Incident vécu (11/07) : plusieurs consignes envoyées en texte simple, l'opérateur a dû relancer manuellement, VPS Research est resté à l'arrêt en attendant un dispatch jamais réellement formaté/envoyé. **Deux rappels obligatoires dans CHAQUE bloc dispatché (décision opérateur explicite, 12/07)** : (1) auto-identification — le VPS doit commencer son prochain rapport par `[VPS Principal]`/`[VPS Secondaire]`/`[VPS Research]` (oublié une fois par Research le 12/07) ; (2) autorité de commit — seule la session cloud commit/pousse sur `main`, le VPS prépare et pousse uniquement sur une branche temporaire dédiée (cf. entrée "Autorité de commit centralisée" ci-dessus). Ces deux rappels vont dans le bloc de code lui-même (pas seulement en préambule hors bloc), pour survivre au copier-coller tel quel.
 
 Tu es dans un projet persistant.
