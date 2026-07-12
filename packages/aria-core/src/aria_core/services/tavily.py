@@ -38,8 +38,9 @@ class TavilyResult:
     jamais de donnée inventée."""
 
     query: str
-    # Chaque snippet : (text, url).
-    snippets: list[tuple[str, str]] = field(default_factory=list)
+    # Chaque snippet : (text, url, published_date brut ou None -- Tavily ne le fournit pas
+    # toujours, surtout hors recherche "news"; cf. #126).
+    snippets: list[tuple[str, str, str | None]] = field(default_factory=list)
     # Réponse synthétique optionnelle de Tavily (include_answer).
     answer: str | None = None
     available: bool = False
@@ -172,14 +173,16 @@ class TavilyClient:
         if not isinstance(data, dict):
             return TavilyResult(query=q, available=False, error=UNAVAILABLE)
 
-        snippets: list[tuple[str, str]] = []
+        snippets: list[tuple[str, str, str | None]] = []
         for item in data.get("results") or []:
             if not isinstance(item, dict):
                 continue
             text = str(item.get("content") or item.get("title") or "").strip()
             url = str(item.get("url") or "").strip()
+            published = item.get("published_date")
+            published = str(published).strip() if published else None
             if len(text) >= 15:
-                snippets.append((text[:280], url))
+                snippets.append((text[:280], url, published))
 
         answer = data.get("answer")
         answer = str(answer).strip() if answer else None

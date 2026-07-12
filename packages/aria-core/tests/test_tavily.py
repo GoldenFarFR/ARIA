@@ -100,7 +100,7 @@ async def test_search_success_parses_results_and_answer(_fresh_client):
     result = await _fresh_client.search("bitcoin price", max_results=4)
     assert result.available is True
     assert result.answer == "Bitcoin is around $X today."
-    assert any("BTC trades" in t for t, _ in result.snippets)
+    assert any("BTC trades" in t for t, _, _ in result.snippets)
     # La clé est bien envoyée dans le payload (mais jamais loguée par le code).
     assert _FakeAsyncClient._captured_payload["api_key"] == "tvly-test-key"
 
@@ -137,7 +137,7 @@ async def test_fetch_web_snippets_uses_tavily_when_provider_set(monkeypatch):
     async def _fake_search(query, *, max_results=4, **kw):
         return TavilyResult(
             query=query,
-            snippets=[("Real fact about the query from Tavily.", "https://src.com")],
+            snippets=[("Real fact about the query from Tavily.", "https://src.com", None)],
             answer="Direct Tavily answer.",
             available=True,
         )
