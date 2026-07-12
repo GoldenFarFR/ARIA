@@ -41,6 +41,7 @@ class AddressInfo:
     balance_wei: str | None = None
     balance_native: float | None = None
     creator_address: str | None = None  # déployeur (pour reconnaître un launchpad)
+    holders_count: int | None = None  # présent si ``address`` est un token (champ ``token.holders_count``)
     available: bool = False
     error: str | None = None
 
@@ -215,6 +216,15 @@ class BlockscoutClient:
                 balance_native = None
 
         creator = data.get("creator_address_hash") or data.get("creator_address")
+        token = data.get("token") if isinstance(data.get("token"), dict) else {}
+        holders_raw = token.get("holders_count")
+        holders_count = None
+        if holders_raw is not None:
+            try:
+                holders_count = int(holders_raw)
+            except (TypeError, ValueError):
+                holders_count = None
+
         return AddressInfo(
             address=address,
             is_contract=bool(data.get("is_contract")),
@@ -223,6 +233,7 @@ class BlockscoutClient:
             balance_wei=str(balance_wei) if balance_wei is not None else None,
             balance_native=balance_native,
             creator_address=str(creator).lower() if creator else None,
+            holders_count=holders_count,
             available=True,
             error=None,
         )

@@ -7,6 +7,7 @@ import pytest
 
 from aria_core import screened_pool as sp
 from aria_core import token_absorber as ta
+from aria_core.services.blockscout import AddressInfo
 from aria_core.skills.acp_onchain_scan import PairSnapshot, TokenScanContext
 
 
@@ -202,3 +203,108 @@ async def test_within_max_age_is_classified_normally():
     fresh_ctx.best_pair.pair_created_at = int(now_ms - 10 * 86_400_000)  # 10 jours
     scan = _scanner({"0xfresh": fresh_ctx})
     assert await ta.absorb("0xfresh", scanner=scan, max_age_days=182) == "kept"
+
+
+# --- Volet C (12/07) : pré-filtre découverte Blockscout léger avant scan complet ---
+
+def _boom_scan(contract, **kw):
+    raise AssertionError("le scan complet ne doit pas être invoqué : le pré-filtre aurait dû court-circuiter")
+
+
+def _info_returning(info):
+    async def _get(addr):
+        return info
+    return _get
+
+
+@pytest.mark.asyncio
+async def test_prefilter_skips_full_scan_when_unverified_and_no_holders(monkeypatch):
+    info = AddressInfo(address="0xstale", is_verified=False, holders_count=0, available=True)
+    monkeypatch.setattr(ta.blockscout_client, "get_address_info", _info_returning(info))
+
+    verdict = await ta.absorb("0xstale", scanner=_boom_scan, known_age_days=5.0)
+
+    assert verdict == "skip_prefiltered"
+    row = (await sp.list_pool(status="pending"))[0]
+    assert "pré-filtre découverte" in row["screen_reason"]
+    assert "non vérifié" in row["screen_reason"]
+    assert "holders non indexés" in row["screen_reason"]
+
+
+@pytest.mark.asyncio
+async def test_prefilter_records_source(monkeypatch):
+    info = AddressInfo(address="0xstale", is_verified=False, holders_count=None, available=True)
+    monkeypatch.setattr(ta.blockscout_client, "get_address_info", _info_returning(info))
+
+    await ta.absorb("0xstale", scanner=_boom_scan, known_age_days=5.0, source="top_pools")
+
+    row = (await sp.list_pool(status="pending"))[0]
+    assert row["source"] == "top_pools"
+
+
+@pytest.mark.asyncio
+async def test_prefilter_guard_rail_skips_fresh_candidate(monkeypatch):
+    """Un candidat de <2j ne doit JAMAIS être pré-filtré, même si Blockscout le dirait
+    non vérifié -- il n'a simplement pas encore eu le temps de mûrir (faux négatif)."""
+    async def _boom_blockscout(addr):
+        raise AssertionError("le pré-filtre ne doit pas consulter Blockscout sous le seuil d'âge")
+
+    monkeypatch.setattr(ta.blockscout_client, "get_address_info", _boom_blockscout)
+    ctx = _clean_ctx("0xfresh2")
+    scan = _scanner({"0xfresh2": ctx})
+
+    verdict = await ta.absorb("0xfresh2", scanner=scan, known_age_days=0.5)
+
+    assert verdict == "kept"
+
+
+@pytest.mark.asyncio
+async def test_known_age_days_none_never_prefilters(monkeypatch):
+    async def _boom_blockscout(addr):
+        raise AssertionError("known_age_days=None (défaut) ne doit jamais déclencher le pré-filtre")
+
+    monkeypatch.setattr(ta.blockscout_client, "get_address_info", _boom_blockscout)
+    ctx = _clean_ctx("0xnoage")
+    scan = _scanner({"0xnoage": ctx})
+
+    verdict = await ta.absorb("0xnoage", scanner=scan)
+
+    assert verdict == "kept"
+
+
+@pytest.mark.asyncio
+async def test_prefilter_fails_open_when_blockscout_unavailable(monkeypatch):
+    info = AddressInfo(address="0xdown", available=False, error="donnée on-chain indisponible")
+    monkeypatch.setattr(ta.blockscout_client, "get_address_info", _info_returning(info))
+    ctx = _clean_ctx("0xdown")
+    scan = _scanner({"0xdown": ctx})
+
+    verdict = await ta.absorb("0xdown", scanner=scan, known_age_days=5.0)
+
+    assert verdict == "kept"
+
+
+@pytest.mark.asyncio
+async def test_prefilter_lets_verified_candidate_through(monkeypatch):
+    info = AddressInfo(address="0xok", is_verified=True, holders_count=50, available=True)
+    monkeypatch.setattr(ta.blockscout_client, "get_address_info", _info_returning(info))
+    ctx = _clean_ctx("0xok")
+    scan = _scanner({"0xok": ctx})
+
+    verdict = await ta.absorb("0xok", scanner=scan, known_age_days=5.0)
+
+    assert verdict == "kept"
+
+
+@pytest.mark.asyncio
+async def test_prefilter_skipped_when_ctx_already_provided(monkeypatch):
+    """``ctx`` déjà fourni (ex. bonding_direct) : le scan a déjà eu lieu, aucune
+    économie possible -- le pré-filtre ne doit pas être consulté du tout."""
+    async def _boom_blockscout(addr):
+        raise AssertionError("ctx déjà fourni : le pré-filtre ne doit jamais être consulté")
+
+    monkeypatch.setattr(ta.blockscout_client, "get_address_info", _boom_blockscout)
+
+    verdict = await ta.absorb("0xpreset", scanner=_boom_scan, known_age_days=5.0, ctx=_clean_ctx("0xpreset"))
+
+    assert verdict == "kept"

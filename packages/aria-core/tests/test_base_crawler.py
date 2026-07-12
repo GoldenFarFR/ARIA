@@ -277,9 +277,11 @@ async def test_retry_stale_pending_default_lister_uses_screened_pool(monkeypatch
     monkeypatch.setattr(sp, "list_stale_pending", fake_list_stale_pending)
 
     absorbed: list[str] = []
+    ages: list[object] = []
 
-    async def fake_absorb(contract):
+    async def fake_absorb(contract, *, known_age_days=None):
         absorbed.append(contract)
+        ages.append(known_age_days)
         return "kept"
 
     import aria_core.token_absorber as token_absorber_module
@@ -290,6 +292,9 @@ async def test_retry_stale_pending_default_lister_uses_screened_pool(monkeypatch
     assert absorbed == ["0xDEFAULT"]
     assert counts == {"kept": 1}
     assert calls == {"older_than_hours": 24, "limit": 20}
+    # Pas de 'first_screened_at' sur la ligne fake -> known_age_days=None (Volet C,
+    # 12/07) : le pré-filtre par défaut ne peut rien déduire, pas d'exception non plus.
+    assert ages == [None]
 
 
 # --- plafond anti-boucle-infinie (suite audit #77/#105) ----------------------------
@@ -373,3 +378,86 @@ async def test_retry_stale_pending_default_abandon_checker_uses_screened_pool(mo
     counts = await bc.retry_stale_pending(lister=lister, absorber=absorber)
     assert counts == {"abandoned": 1}
     assert calls == {"contract": "0xSTUCK2", "max_retries": 5, "max_age_days": 7}
+
+
+# --- Volet C (12/07) : wrapper par défaut passant known_age_days au pré-filtre -----
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_default_wrapper_derives_known_age_days(monkeypatch):
+    # first_screened_at à 3 jours -> known_age_days ~3.0 transmis au pré-filtre par
+    # défaut de token_absorber.absorb (câblage uniquement, la décision reste dans
+    # token_absorber -- cf. test_token_absorber.py pour la logique du pré-filtre).
+    from datetime import datetime, timedelta, timezone
+
+    from aria_core import screened_pool as sp
+
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+
+    async def lister():
+        return [{"contract": "0xOLD", "first_screened_at": old_ts}]
+
+    ages: list[object] = []
+
+    async def fake_absorb(contract, *, known_age_days=None):
+        ages.append(known_age_days)
+        return "kept"
+
+    import aria_core.token_absorber as token_absorber_module
+
+    monkeypatch.setattr(token_absorber_module, "absorb", fake_absorb)
+
+    await bc.retry_stale_pending(lister=lister)
+    assert len(ages) == 1
+    assert ages[0] == pytest.approx(3.0, abs=0.05)
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_default_wrapper_missing_first_screened_at_is_none(monkeypatch):
+    async def lister():
+        return [{"contract": "0xNOTS"}]  # pas de 'first_screened_at'
+
+    ages: list[object] = []
+
+    async def fake_absorb(contract, *, known_age_days=None):
+        ages.append(known_age_days)
+        return "kept"
+
+    import aria_core.token_absorber as token_absorber_module
+
+    monkeypatch.setattr(token_absorber_module, "absorb", fake_absorb)
+
+    await bc.retry_stale_pending(lister=lister)
+    assert ages == [None]
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_custom_absorber_not_wrapped():
+    # Un absorber injecté (test/appelant) garde sa signature à un seul argument --
+    # le wrapper known_age_days est réservé au chemin PAR DÉFAUT uniquement.
+    async def lister():
+        return [{"contract": "0xCUSTOM", "first_screened_at": "2020-01-01T00:00:00+00:00"}]
+
+    async def absorber(contract):
+        return "kept"
+
+    counts = await bc.retry_stale_pending(lister=lister, absorber=absorber)
+    assert counts == {"kept": 1}
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_pending_abandons_skip_prefiltered_past_threshold():
+    # 'skip_prefiltered' (Volet C) doit déclencher le même contrôle d'abandon que
+    # 'skip_incomplete' -- un candidat structurellement bloqué ne doit pas boucler.
+    async def lister():
+        return [{"contract": "0xBLOCKED"}]
+
+    async def absorber(contract):
+        return "skip_prefiltered"
+
+    async def abandon_checker(contract):
+        assert contract == "0xBLOCKED"
+        return True
+
+    counts = await bc.retry_stale_pending(lister=lister, absorber=absorber,
+                                          abandon_checker=abandon_checker)
+    assert counts == {"abandoned": 1}
