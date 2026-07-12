@@ -19,6 +19,18 @@ def detect_lang(text: str) -> str:
     return LANG_EN
 
 
+def detect_operator_lang(text: str) -> str:
+    """Chemin opérateur uniquement (admin Telegram) -- ne jamais retomber sur l'anglais
+    par défaut en cas d'ambiguïté. L'opérateur est un interlocuteur unique et francophone
+    par doctrine (CLAUDE.md), pas un cas à détecter -- contrairement à detect_lang(), pensé
+    pour des visiteurs publics multilingues et gardé inchangé pour ce chemin-là.
+
+    Incident réel (12/07) : "tu a scanner de nouveau projet qui t'interresse ?" (sans
+    accent, un seul mot-indice sur les deux requis par detect_lang()) tombait sur son
+    défaut anglais -- ARIA a répondu entièrement en anglais à l'opérateur."""
+    return LANG_FR
+
+
 def portfolio_empty(lang: str) -> str:
     if lang == LANG_EN:
         return "Watchlist is empty — the discovery engine hasn't ranked a candidate yet. Try /watchlist shortly."
