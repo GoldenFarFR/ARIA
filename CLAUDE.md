@@ -706,6 +706,35 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   pas juste élargir le débit brut), le forecast automatique restera à 0 pronostics indéfiniment.
   Coordination nécessaire avec l'investigation de diversification du débit de scan déjà en cours
   chez Principal (#134/#136).
+- **Diagnostic précis du goulot de sourcing (12/07, Principal) — le pré-filtre de liquidité
+  existait déjà, il checke juste la mauvaise source.** `discover_top_pools()` a un plancher
+  `min_liquidity_usd=30_000` sur `reserve_in_usd` **GeckoTerminal**, mais le scan réel
+  (`acp_onchain_scan.py::scan_base_token`) source sa liquidité via **DexScreener** — deux
+  fournisseurs différents, pas garantis d'accord (9/34 échecs liquidité à 0$ au scan alors
+  qu'ils avaient passé le seuil GeckoTerminal). Les deux motifs dominants (contrat non
+  vérifié 88.2%, holders inconnus 87.3%) ne peuvent pas être pré-filtrés avec les données
+  déjà présentes à la découverte — demanderait un appel Blockscout supplémentaire par
+  candidat (Volet C, recherche/chiffrage seulement, pas encore décidé). `screened_token` n'a
+  aucune colonne `source` — impossible de distinguer un candidat venu de `discover_top_pools`
+  (déjà un plancher, juste mal calibré) de `run_radar` (aucun plancher du tout) une fois en
+  base — vrai trou d'observabilité. Plan validé (Volet A colonne `source` + Volet B1
+  relèvement du plancher avec marge $45-50k) : implémenté par Principal, tests + commit sur
+  branche temporaire en cours. **`safety_screen.py` non touché** (décision opérateur déjà
+  actée, gates de sécurité intacts).
+- **Cron programmé ne se déclenche pas si la session VPS reste active en continu (12/07,
+  découverte opérationnelle).** Un job de vérification programmé pour 19:00 UTC n'a jamais
+  tourné — Principal était resté actif sans interruption sur un autre travail, et les tâches
+  cron de ce type ne se déclenchent qu'en session inactive. Vérification faite manuellement à
+  la place. À garder en tête pour toute vérification programmée future sur une session qui
+  risque de rester active.
+- **Activer `bonding_discovery_cycle` aggrave le bruit tant que le sourcing n'est pas corrigé
+  (12/07, premier cycle réel, 18:24Z).** Volet bonding (courbe) : 0 candidat ce cycle. Volet
+  "direct" (Clanker/gradués Virtuals → pool standard) : 20 nouveaux candidats absorbés, tous
+  `pending`, profil d'échec **pire** que le backlog existant (100% contrat non
+  vérifié/score<70/holders inconnus vs 88-95% sur les 110 déjà connus). Confirme l'urgence des
+  Volets A+B1 ci-dessus — sans eux, chaque nouveau canal de sourcing ajoute plus de bruit dur,
+  pas plus de candidats viables. Suivi dans le rendez-vous de vérification déjà posé (2-3
+  semaines).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
