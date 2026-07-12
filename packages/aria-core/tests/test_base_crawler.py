@@ -109,6 +109,20 @@ async def test_top_pools_requests_sort_by_volume():
     assert seen_paths[0].startswith("/networks/base/pools")
 
 
+@pytest.mark.asyncio
+async def test_top_pools_default_liquidity_floor_is_45k():
+    """Suite audit #77 diversification (12/07) : relevé de 30k à 45k -- marge de
+    sécurité contre l'écart GeckoTerminal (reserve_in_usd, checké ici) vs DexScreener
+    (liquidité réellement testée par safety_screen), pas un nouveau critère de
+    sécurité en soi."""
+    above, below = "0x" + "e" * 40, "0x" + "f" * 40
+
+    async def fetch(path):
+        return _pool_payload([(above, 45_000), (below, 44_999)])
+
+    assert await bc.discover_top_pools(fetch=fetch) == [above]
+
+
 def _pool_payload_with_age(triples):
     """triples: (addr, reserve, pool_created_at ISO str ou None)."""
     return {

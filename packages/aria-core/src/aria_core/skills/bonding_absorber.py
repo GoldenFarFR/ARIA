@@ -127,7 +127,7 @@ async def absorb_direct_candidate(contract: str, *, scanner=None) -> str:
         return "skip_active"
 
     ctx = await scan(contract, include_honeypot=True)
-    return await absorb_standard(contract, scanner=scanner, ctx=ctx)
+    return await absorb_standard(contract, scanner=scanner, ctx=ctx, source="bonding_direct")
 
 
 def bonding_discovery_enabled() -> bool:

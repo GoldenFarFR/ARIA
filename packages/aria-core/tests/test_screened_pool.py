@@ -66,6 +66,48 @@ async def test_upsert_same_contract_no_duplicate():
 
 
 @pytest.mark.asyncio
+async def test_upsert_stores_source():
+    await sp.upsert_screened(contract="0xsrc", symbol="S", liquidity_usd=1.0,
+                             security_score=70, verdict="SAFE", source="top_pools")
+    row = (await sp.list_pool())[0]
+    assert row["source"] == "top_pools"
+
+
+@pytest.mark.asyncio
+async def test_upsert_default_source_is_empty_string():
+    await sp.upsert_screened(contract="0xnosrc", symbol="N", liquidity_usd=1.0,
+                             security_score=70, verdict="SAFE")
+    row = (await sp.list_pool())[0]
+    assert row["source"] == ""
+
+
+@pytest.mark.asyncio
+async def test_upsert_preserves_source_when_not_resupplied():
+    await sp.upsert_screened(contract="0xkeep", symbol="K", liquidity_usd=1.0,
+                             security_score=70, verdict="SAFE", source="radar_x")
+    # Ré-enregistrement (ex. refresh périodique) sans repréciser la source : ne
+    # doit PAS l'écraser à '' (première origine connue, censée être stable).
+    await sp.upsert_screened(contract="0xkeep", symbol="K", liquidity_usd=2.0,
+                             security_score=75, verdict="SAFE")
+    row = (await sp.list_pool())[0]
+    assert row["source"] == "radar_x"
+
+
+@pytest.mark.asyncio
+async def test_record_pending_stores_source():
+    await sp.record_pending(contract="0xpend", reason="holders inconnus", source="radar_x")
+    row = (await sp.list_pool(status="pending"))[0]
+    assert row["source"] == "radar_x"
+
+
+@pytest.mark.asyncio
+async def test_record_rejected_stores_source():
+    await sp.record_rejected(contract="0xrej", reason="honeypot", source="top_pools")
+    row = (await sp.list_pool(status="rejected"))[0]
+    assert row["source"] == "top_pools"
+
+
+@pytest.mark.asyncio
 async def test_drop_removes_from_active():
     await _seed_pool(2)
     await sp.drop_token("0x" + "0" * 40)  # T0

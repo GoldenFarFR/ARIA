@@ -157,6 +157,17 @@ async def test_absorb_direct_candidate_with_pair_delegates_to_standard_pipeline(
 
 
 @pytest.mark.asyncio
+async def test_absorb_direct_candidate_tags_source_bonding_direct():
+    """Suite audit #77 diversification (12/07) : traçabilité -- un candidat 'direct'
+    qui rejoint le pool standard doit être identifiable comme tel, pas confondu avec
+    un candidat 'top_pools'/'radar_x'."""
+    scan = _scanner({"0xmature": _direct_ctx("0xmature", has_pair=True)})
+    assert await ba.absorb_direct_candidate("0xmature", scanner=scan) == "kept"
+    row = (await sp.list_pool())[0]
+    assert row["source"] == "bonding_direct"
+
+
+@pytest.mark.asyncio
 async def test_absorb_direct_candidate_real_hard_fail_still_rejected_forever():
     """Une paire EXISTE mais le token est un mauvais acteur confirmé (blacklist) :
     le rejet définitif standard s'applique toujours -- seule l'absence de paire
