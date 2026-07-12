@@ -1162,3 +1162,60 @@ l'exposition ARIA n'existe pas encore tant que `x402` reste gaté OFF —
 les deux illustrent le même principe déjà observé plusieurs fois dans ce
 scan : une techno peut être solide sans être urgente si le risque qu'elle
 couvre n'est pas encore vivant dans le déploiement actuel.
+
+---
+
+# Passe 11 (2026-07-12) — protection MEV pour les swaps réels (sepolia_wallet.py)
+
+## 31. Protection MEV (sandwich/front-running) — watch, risque déjà atténué par l'architecture Base elle-même
+
+**Vérifié avant de proposer.** Grep sur "mev"/"flashbot"/"private mempool"/
+"frontrun"/"sandwich" : aucun résultat réel dans le code — territoire
+neuf. Pertinent car `onchain/sepolia_wallet.py` exécute déjà de vrais
+swaps signés (Uniswap V3, wrap→approve→exactInputSingle) en répétition
+avant un éventuel passage à des fonds réels sur Base mainnet (cf. passe 8
+#26) — un swap réel non protégé est exposé aux sandwich attacks classiques
+sur beaucoup de chaînes.
+
+**Recherche faite — nuance importante trouvée.** Flashbots Protect (la
+solution la plus connue) **ne supporte PAS Base** — seulement Ethereum
+mainnet/Sepolia/Holesky, extension aux L2 annoncée mais pas encore
+livrée. Mais surtout : **Base a une protection structurelle par défaut**,
+indépendante de tout outil tiers — architecture à séquenceur unique
+centralisé, premier-arrivé-premier-servi, **pas de mempool public** au
+sens où Ethereum L1 en a un. Confirmé par plusieurs sources indépendantes :
+"les attaques de sandwich classiques sont quasiment impossibles" sur ce
+type de L2 aujourd'hui — le volume de sandwich sur L2 est nettement
+inférieur à celui de l'arbitrage atomique, à l'inverse d'Ethereum L1 où le
+sandwich domine largement.
+
+**Caveat documenté, pas ignoré** : cette protection est une **propriété
+de la centralisation actuelle** du séquenceur — la décentralisation
+prévue des séquenceurs L2 (feuille de route générale du secteur, pas
+spécifique à Base) réintroduirait de la dynamique MEV classique à terme.
+Ce n'est donc pas un "jamais nécessaire", c'est un "pas nécessaire tant
+que l'architecture actuelle tient".
+
+**Solution existante si besoin un jour** : dRPC propose une protection
+MEV dédiée sur Base (endpoint RPC différent, obfuscation du mempool) —
+mais **payante** ("premium feature, à partir de 1$ par unité"), pas
+gratuite comme Flashbots Protect sur Ethereum L1.
+
+**Verdict : watch, pas de piste actionnable maintenant.** Le risque que
+cette catégorie couvre est déjà largement atténué par l'architecture Base
+elle-même aujourd'hui, et `sepolia_wallet.py` reste de toute façon en
+rehearsal testnet (aucun fond réel en jeu). À réévaluer à deux moments
+précis : (1) si un passage à des fonds réels sur Base mainnet est décidé
+(cf. #26/#26bis), et (2) si Base annonce une feuille de route de
+décentralisation de son séquenceur qui changerait la donne — pas avant.
+
+---
+
+## Verdict de cette passe
+
+Une seule piste, tranchée nettement : la protection MEV est une vraie
+catégorie technique, mais le risque qu'elle adresse est déjà largement
+neutralisé par une propriété structurelle de Base (séquenceur unique, pas
+de mempool public) — pas une lacune à combler maintenant, un point de
+vigilance à réévaluer à deux déclencheurs précis et identifiés (passage
+mainnet réel, décentralisation du séquenceur Base).
