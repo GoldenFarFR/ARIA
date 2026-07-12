@@ -2,6 +2,8 @@ from aria_core.llm_economy import (
     LlmDepth,
     calibrated_action_label,
     detect_depth,
+    fallback_notice_line,
+    provider_display_name,
     resolve_budget,
     skill_output_readable,
 )
@@ -104,3 +106,23 @@ def test_calibrated_label_neutral():
 def test_skill_output_readable_short():
     assert skill_output_readable("Résultat court et lisible.")
     assert not skill_output_readable("x" * 600)
+
+
+def test_provider_display_name_explicit_override():
+    # #135 : signaler le fallback réellement utilisé pour ce tour, pas le provider primaire
+    # de settings.llm_provider -- la surcharge explicite doit primer.
+    assert provider_display_name("groq") == "Groq"
+    assert provider_display_name("grok") == "Grok/xAI"
+    assert provider_display_name("virtuals") == "Virtuals Spark"
+    assert provider_display_name("something-unknown") == "something-unknown"
+
+
+def test_fallback_notice_line_names_provider_and_sober_tone():
+    line = fallback_notice_line("groq", lang="fr")
+    assert "Groq" in line
+    assert "Spark" in line
+    assert "—" in line  # tiret cadratin toléré ici (surface opérateur, pas client -- #135 pt.3)
+    assert "!" not in line  # non-alarmiste
+
+    line_en = fallback_notice_line("grok", lang="en")
+    assert "Grok/xAI" in line_en
