@@ -85,3 +85,63 @@ async def test_chat_falls_back_to_groq(monkeypatch):
     out = await llm_mod.chat_with_context("hi", "sys", max_tokens=50)
     assert out == "fallback-ok"
     assert calls == ["virtuals", "groq"]
+
+
+@pytest.mark.asyncio
+async def test_truncated_response_logged_and_recorded(monkeypatch):
+    # Incident réel (12/07) : une réponse coupée par l'API (finish_reason=length, budget
+    # max_tokens atteint) était affichée telle quelle sans aucun signal -- ni log, ni
+    # télémétrie. L'opérateur l'a vue s'arrêter net en plein mot sur Telegram.
+    from aria_core import llm as llm_mod
+
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "groq"
+    settings.llm_api_key = "gsk-main"
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {"content": "réponse coupée en plein mot..."},
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": {"prompt_tokens": 9000, "completion_tokens": 2400, "total_tokens": 11400},
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers=None, json=None):
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", lambda **kw: FakeClient())
+
+    recorded: dict = {}
+
+    def fake_record(**kwargs):
+        recorded.update(kwargs)
+
+    import aria_core.llm_usage as llm_usage_mod
+
+    monkeypatch.setattr(llm_usage_mod, "record_llm_usage", fake_record)
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        llm_mod.logger, "warning", lambda msg, *a, **kw: warnings.append(msg % a if a else msg)
+    )
+
+    out = await llm_mod.chat_with_context("prompt long", "sys", max_tokens=2400)
+    assert out == "réponse coupée en plein mot..."
+    assert recorded.get("truncated") is True
+    assert any("truncated" in w.lower() for w in warnings)
