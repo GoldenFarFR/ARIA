@@ -243,6 +243,10 @@ async def publish_release(
         try:
             if await x_publisher(text, target):
                 published.append("x")
+            else:
+                # Echec explicite (False, pas d'exception) -- meme sort qu'un canal sans
+                # publisher configure : jamais silencieusement absent des deux listes (#127).
+                pending.append("x")
         except Exception:  # noqa: BLE001 — un canal qui plante n'annule pas les autres
             pending.append("x")
     else:
@@ -252,6 +256,8 @@ async def publish_release(
         try:
             if await tiktok_publisher(text, target):
                 published.append("tiktok")
+            else:
+                pending.append("tiktok")
         except Exception:  # noqa: BLE001
             pending.append("tiktok")
     else:
