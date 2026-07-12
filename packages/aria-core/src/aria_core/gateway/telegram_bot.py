@@ -1422,12 +1422,15 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             provider = response.data.get("llm_fallback_provider", "")
             reply_text = f"{reply_text}\n\n{fallback_notice_line(provider, lang=lang)}"
         await _reply(message, reply_text)
-    except Exception as exc:
-        logger.exception("Telegram brain.process failed")
+    except Exception:
+        # #144 : traceback complet côté serveur (jamais affiché à l'opérateur) --
+        # un crash intermittent, dépendant du contenu exact du message (cf. le bug
+        # UnboundLocalError du 12/07), n'est diagnosticable qu'avec la stack complète
+        # ET le texte qui l'a déclenché, pas juste le nom de la classe d'exception.
+        logger.exception("Telegram brain.process failed on message: %r", text)
         await _reply(
             message,
-            f"Erreur interne : {exc.__class__.__name__}\n"
-            f"Pour supprimer un repo : /github delete kikou",
+            "Erreur interne — déjà journalisée côté serveur pour investigation.",
         )
 
 
