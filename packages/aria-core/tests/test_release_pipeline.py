@@ -116,6 +116,26 @@ async def test_publish_one_channel_failure_not_fatal():
 
 
 @pytest.mark.asyncio
+async def test_publish_explicit_false_lands_in_pending_not_silently_dropped():
+    """#127 (trouvé par Principal en livrant #34) : un publisher injecté qui renvoie
+    False SANS lever une exception disparaissait des DEUX listes (published_to ET
+    pending_channels) -- silencieux, aucune trace. Un False explicite doit avoir le
+    même sort qu'un canal sans publisher configuré : toujours dans pending_channels."""
+    await rp.arm_campaign()
+
+    async def x_pub(text, rel):
+        return True
+
+    async def tt_pub(text, rel):
+        return False  # échec explicite, pas d'exception
+
+    res = await rp.publish_release(x_publisher=x_pub, tiktok_publisher=tt_pub)
+    assert res["published_to"] == ["x"]
+    assert "tiktok" in res["pending_channels"]
+    assert "tiktok" not in res["published_to"]
+
+
+@pytest.mark.asyncio
 async def test_publish_returns_none_when_exhausted():
     await rp.arm_campaign()
     # tout passer en live -> plus de 'built'

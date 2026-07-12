@@ -271,11 +271,10 @@ async def test_release_publisher_matches_injectable_signature():
     """Compatible avec release_pipeline.publish_release(tiktok_publisher=...) : ne casse
     jamais le canal X, et ne revendique jamais 'tiktok' comme publié à tort.
 
-    NB découverte au passage (hors scope #34, non corrigée ici) : quand un publisher
-    injecté renvoie False SANS lever, `publish_release` ne l'ajoute ni à
-    `published_to` ni à `pending_channels` (seule une exception atterrit dans
-    `pending_channels` -- cf. `release_pipeline.py::publish_release`). Comportement
-    pré-existant, inchangé par ce module ; assertion ci-dessous documente l'état réel."""
+    Découverte au passage en livrant #34, corrigée en #127 : un publisher injecté qui
+    renvoie False SANS lever atterrit désormais dans `pending_channels` (même sort qu'un
+    canal sans publisher configuré) au lieu de disparaître silencieusement des deux
+    listes -- cf. `release_pipeline.py::publish_release`."""
     from aria_core import release_pipeline as rp
 
     await rp.arm_campaign()
@@ -286,3 +285,4 @@ async def test_release_publisher_matches_injectable_signature():
     res = await rp.publish_release(x_publisher=x_pub, tiktok_publisher=tiktok.tiktok_release_publisher)
     assert "x" in res["published_to"]
     assert "tiktok" not in res["published_to"]  # jamais revendiqué publié sans vidéo réelle
+    assert "tiktok" in res["pending_channels"]  # #127 -- plus jamais silencieusement absent
