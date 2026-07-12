@@ -79,7 +79,13 @@ async def test_no_photo_is_noop():
 
 
 @pytest.mark.asyncio
-async def test_empty_caption_routes_to_avatar_flow(monkeypatch):
+async def test_empty_caption_routes_to_vision_flow_not_avatar(monkeypatch):
+    """Incident #147 (12/07) : une photo sans légende (envoyée pour tester la vision)
+    déclenchait AUTREFOIS un changement de photo de profil publique par défaut --
+    appliqué réellement en prod (avatar du bot remplacé par un portrait tiers sans
+    confirmation). Une légende vide ou ambiguë ne doit plus jamais toucher l'identité
+    visuelle publique -- seul un signal explicite (/avatar, mot-clé avatar) le fait
+    encore (cf. test_avatar_keyword_caption_routes_to_avatar_flow ci-dessous)."""
     called = {}
 
     async def fake_avatar(update, context):
@@ -94,7 +100,7 @@ async def test_empty_caption_routes_to_avatar_flow(monkeypatch):
     update = FakeUpdate(caption="")
     await telegram_bot._handle_photo(update, FakeContext())
 
-    assert called == {"avatar": True}
+    assert called == {"vision": True}
 
 
 @pytest.mark.asyncio
@@ -134,6 +140,47 @@ async def test_normal_caption_routes_to_vision_flow(monkeypatch):
     await telegram_bot._handle_photo(update, FakeContext())
 
     assert called == {"vision": True, "caption": "juge cette situation"}
+
+
+@pytest.mark.asyncio
+async def test_incident_147_exact_caption_routes_to_vision_not_avatar(monkeypatch):
+    """Reproduit le texte exact de l'incident #147 (12/07) : "c'est qui ?" envoyé en
+    légende d'une photo -- ne doit jamais déclencher un changement d'avatar public."""
+    called = {}
+
+    async def fake_avatar(update, context):
+        called["avatar"] = True
+
+    async def fake_vision(update, context, caption):
+        called["vision"] = True
+
+    monkeypatch.setattr(telegram_bot, "_handle_avatar_photo", fake_avatar)
+    monkeypatch.setattr(telegram_bot, "_handle_vision_photo", fake_vision)
+
+    update = FakeUpdate(caption="c'est qui ?")
+    await telegram_bot._handle_photo(update, FakeContext())
+
+    assert called == {"vision": True}
+
+
+class TestCaptionIsAvatarUpload:
+    """Tests directs sur _caption_is_avatar_upload (incident #147, 12/07)."""
+
+    def test_empty_caption_is_not_avatar_upload(self):
+        assert telegram_bot._caption_is_avatar_upload("") is False
+        assert telegram_bot._caption_is_avatar_upload("   ") is False
+
+    def test_slash_avatar_still_triggers_upload(self):
+        assert telegram_bot._caption_is_avatar_upload("/avatar") is True
+        assert telegram_bot._caption_is_avatar_upload("/avatar identity") is True
+
+    def test_explicit_avatar_keyword_still_triggers_upload(self):
+        assert telegram_bot._caption_is_avatar_upload("mets cette photo de profil") is True
+        assert telegram_bot._caption_is_avatar_upload("change ton avatar") is True
+
+    def test_ambiguous_question_never_triggers_upload(self):
+        assert telegram_bot._caption_is_avatar_upload("c'est qui ?") is False
+        assert telegram_bot._caption_is_avatar_upload("qu'en penses-tu ?") is False
 
 
 @pytest.mark.asyncio
