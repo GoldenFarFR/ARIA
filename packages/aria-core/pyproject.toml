@@ -14,19 +14,19 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "python-telegram-bot>=21.0",
     "PyYAML>=6.0.0",
-    "Pillow>=11.0.0",
+    "Pillow>=12.2.0",
     "requests-oauthlib>=2.0.0",
-    "requests>=2.32.0",
+    "requests>=2.33.0",
     "aiosqlite>=0.20.0",
-    "filelock>=3.15.0",
+    "filelock>=3.20.3",
     "fastapi>=0.115.0",
     "reportlab>=4.2.0",
-    "pypdf>=5.0.0",
-    "web3>=7.0.0",
+    "pypdf>=6.13.3",
+    "web3>=7.15.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0"]
+dev = ["pytest>=9.0.3", "pytest-asyncio>=0.24.0"]
 vector = ["chromadb>=0.5.0"]
 
 [tool.setuptools.packages.find]
