@@ -3,6 +3,7 @@ import pytest
 from aria_core.avatar import current_avatar_path, ensure_avatar_seeded
 from aria_core.avatar_identity import establish_identity_anchor
 from aria_core.avatar_style_refresh import (
+    STYLE_PRESETS,
     _compute_next_due,
     apply_pending_style,
     bootstrap_style_schedule,
@@ -113,6 +114,18 @@ async def test_discard_pending(monkeypatch):
     assert get_refresh_status()["has_pending"] is True
     discard_pending()
     assert get_refresh_status()["has_pending"] is False
+
+
+def test_style_presets_never_drift_off_brand():
+    """#94 -- les presets locaux (0 token) doivent rester sur la palette réelle du site
+    (vanguard/src/index.css : or/champagne/crème sur charbon) — jamais violet/néon/futuriste,
+    un cliché d'imagerie IA générique absent de la marque. 5 variantes distinctes conservées."""
+    assert len(STYLE_PRESETS) == 5
+    for preset in STYLE_PRESETS:
+        lower = preset.lower()
+        assert "violet" not in lower
+        assert "néon" not in lower and "neon" not in lower
+        assert "futuriste" not in lower
 
 
 def test_compute_next_due_days(monkeypatch):

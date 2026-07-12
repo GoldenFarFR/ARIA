@@ -405,3 +405,63 @@ toujours dormant, rien n'est câblé à un déclencheur réel :
 
 17 nouveaux tests (`test_tiktok.py`), aucun appel réseau réel possible (aucune clé), suite
 complète verte.
+
+## Prompt de génération visuelle (portraits, Grok Imagine) — revue #94 (12/07)
+
+**Frontière de goût inchangée** (décision opérateur du 10/07, `_TASTE_BOUNDARY` dans
+`portrait_scene.py`) : "never suggestive, never revealing, never sexualized" — pas touchée,
+pas évaluée ici, hors scope.
+
+**Constat vérifié** : rien dans les prompts de portrait (`portrait_scene.py`) ni dans les
+presets de style (`avatar_style_refresh.py::STYLE_PRESETS`) ne verrouillait une couleur de
+marque. Résultat concret trouvé en comparant au SEUL vrai artefact de marque livré
+(`vanguard/src/index.css` : `--color-gold: #c9a962`, `--color-champagne: #d4c4a0`,
+`--color-cream: #f4efe6`, surface quasi-noire `#08080a`, police display `Cormorant
+Garamond` — élégance éditoriale, aucune trace de violet nulle part sur le site) :
+3 des 5 `STYLE_PRESETS` dérivaient vers un violet-néon-futuriste, absent de la marque réelle
+et l'un des clichés visuels les plus reconnaissables de l'imagerie IA générique (avec le
+"85mm DSLR"/"golden hour" qui, seul, ne suffit pas à empêcher cette dérive — le réalisme
+photographique et la distinctivité de marque sont deux axes différents, seul le premier
+était couvert). Même dérive dans le style de secours texte (`propose_style`, "accents violet
+ZHC") et absente de toute instruction dans le prompt système LLM (`_style_use_llm`).
+
+**Avant** (`avatar_style_refresh.py::STYLE_PRESETS`, 3 des 5) :
+```
+"Robe-chemisier violet holding, cheveux ondulés, open space futuriste, rim light crypto."
+"Veste structurée néon violet-or, brushing naturel, décor tech abstrait, photo pro."
+```
+**Après** :
+```
+"Robe-chemisier champagne, cheveux ondulés, bibliothèque holding feutrée aux teintes
+or et acajou, lumière chaude latérale."
+"Veste structurée noir mat à liseré or, brushing naturel, mur texturé charbon et
+champagne, photo pro éditoriale."
+```
+
+**Avant** (`portrait_scene.py`, prompt partagé — aucune contrainte de couleur) :
+```
+{_REALISM_STYLE} {_BRAND_PRESENCE} {_TASTE_BOUNDARY}
+```
+**Après** (nouveau bloc partagé `_BRAND_PALETTE`, inséré dans les 3 prompts de portrait —
+scène, style, bannière-depuis-ancre) :
+```
+"Color palette strictly warm gold and deep charcoal or near-black — the exact ARIA ZHC
+brand palette (champagne, warm gold, cream accents on near-black), timeless editorial
+luxury. Never neon, never violet or purple, never futuristic sci-fi cyan or blue glow —
+those read as generic AI-generated imagery, the opposite of this brand."
+```
+
+**Limite honnête** : cette session cloud n'a pas de clé xAI/Grok Imagine configurée (aucun
+appel réseau réel possible ici) — impossible de générer une vraie comparaison AVANT/APRÈS en
+image depuis cette session. Le diff ci-dessus est un diff de PROMPT, vérifié par test
+(`test_portrait_scene_realism.py`/`test_avatar_style_refresh.py` — absence de "violet"/
+"néon"/"futuriste" verrouillée), pas une preuve visuelle rendue. **Prochaine étape suggérée
+côté opérateur** : `/avatar style now` (VPS, clé xAI réelle) pour générer un aperçu réel avec
+le nouveau prompt et comparer visuellement à un portrait existant — seule façon de confirmer
+que le rendu est effectivement plus distinctif, pas seulement le texte du prompt.
+
+**Non touché, hors scope, signalé pour référence** : `avatar.py::GALLERY_VARIANTS` a une
+entrée `("zhc-violet", "ARIA — futur violet", (124, 58, 237), ...)` — un système SÉPARÉ de
+3 avatars de secours en aplat de couleur (pas des portraits photoréalistes Grok Imagine),
+où une option violette parmi 3 est un choix de variété légitime, pas la même dérive. Laissé
+tel quel.
