@@ -1219,3 +1219,102 @@ neutralisé par une propriété structurelle de Base (séquenceur unique, pas
 de mempool public) — pas une lacune à combler maintenant, un point de
 vigilance à réévaluer à deux déclencheurs précis et identifiés (passage
 mainnet réel, décentralisation du séquenceur Base).
+
+---
+
+# Passe 12 (2026-07-12) — surveillance continue des positions ouvertes (sub-quotidien, faible coût)
+
+## Correction préalable (importante) à la note psychologie trading du 2026-07-12
+
+Cette passe a révélé une inexactitude dans
+`2026-07-12-psychologie-trading-recherche-verifiee.md` (trait 3, vitesse
+de révision de thèse) : j'avais écrit "aucun mécanisme ne re-vérifie une
+thèse ouverte" — **c'est faux**. `heartbeat.py::vc_thesis_review`
+(quotidien, `enabled=True`) appelle
+`weekly_training.py::run_thesis_review()`, qui relit chaque position
+ouverte (prix via OHLCV + activité GitHub), consigne un checkpoint et
+remonte une alerte si la thèse "stagne/casse". Le vrai gap n'est donc
+**pas** l'absence totale de mécanisme, mais sa **granularité** : une seule
+passe par jour (1440 min), pas de signal entre deux passages. Correction
+notée ici plutôt que réécrite dans l'ancienne note, pour garder la trace
+de l'erreur et de sa correction (transparence).
+
+## 32. Surveillance continue à faible coût des positions ouvertes
+
+**Vérifié avant de proposer.** Grep confirmé par l'opérateur et par moi :
+rien de "watch continu" n'existe — seul `vc_thesis_review` (quotidien) et
+deux tâches horaires désactivées (`high_conviction_alerts`,
+`market_sentiment_cycle`, toutes deux `enabled=False`). Vrai axe à
+explorer, pas un doublon.
+
+**Webhooks vs polling — tranché par la recherche, pas par principe.**
+Consensus clair : le polling coûte cher en appels API/latence pour un
+gain souvent nul (rien n'a changé la plupart du temps) ; le pattern
+recommandé en 2026 est **hybride** — webhook comme chemin rapide,
+polling périodique comme filet de sécurité en cas de panne du webhook
+("the webhook gives you speed, the poll ensures nothing is permanently
+lost"). Ce pattern hybride est directement transposable : garder
+`vc_thesis_review` quotidien tel quel comme filet, ajouter un chemin
+webhook en plus pour la réactivité — pas un remplacement.
+
+**Candidat concret identifié** : **Alchemy Notify — Address Activity
+webhook**. Supporte Base, suit les transferts ETH/ERC20/ERC721/ERC1155
+sur des adresses suivies (ex. wallet du dev, adresse du pool LP d'une
+position ouverte), **palier gratuit disponible** (retry avec backoff
+jusqu'à 10 min en cas d'échec de livraison sur le palier gratuit/PAYG).
+Limites exactes du palier gratuit (nombre d'adresses suivies, quota
+mensuel) non confirmées dans cette recherche — **à vérifier avant tout
+engagement**, ne pas supposer "gratuit = illimité".
+
+**Écarté après vérification** : Blockscout, déjà utilisé par ARIA
+(`services/blockscout.py::BASE_URL = "https://base.blockscout.com/api/v2"`),
+propose des alertes/webhooks **mais uniquement en self-hosting** — ARIA
+consomme l'instance publique hébergée, pas une instance auto-hébergée.
+Cohérent avec le pattern déjà en place chez ARIA (GoPlus, DexScreener,
+GeckoTerminal — toujours des API tierces hébergées, jamais d'infra
+auto-hébergée dans `services/`) : ajouter un self-hosted Blockscout
+casserait cette cohérence pour un seul besoin, alors qu'Alchemy Notify
+s'y intègre sans rien changer à ce principe.
+
+**Seam identifié, avec une limite honnête.** ARIA a déjà une capacité de
+réception de webhooks **en production** — `gateway/telegram_bot.py`
+tourne en mode "webhook" (`_webhook_mode`), avec anti-rejeu déjà en place
+(`process_webhook_update`, dédoublonnage par `update_id`). C'est le bon
+patron à réutiliser (serveur HTTP déjà exposé, discipline anti-rejeu déjà
+écrite) plutôt qu'inventer un nouveau récepteur. **Limite** : le fichier
+exact où ce serveur HTTP est déclaré/route les endpoints n'a pas été
+localisé dans ce checkout (`packages/aria-core` ne contient aucun
+`FastAPI(`/`@app.` — le point d'entrée réel du conteneur `aria-api` vit
+probablement hors de ce package) — je note le pattern à suivre, pas le
+fichier exact à éditer, honnêteté plutôt que supposition.
+
+**Alertes différentielles — confirmé comme la bonne pratique, pas une
+idée isolée.** Ne notifier que sur un changement de signal clé (ex. sortie
+de fonds du wallet dev, retrait de liquidité, chute du `security_score`)
+plutôt qu'à chaque transfert — directement compatible avec la structure
+déjà utilisée par `run_thesis_review` (verdict "stagne/casse"), il
+suffirait d'appeler la même logique de jugement en réaction à un webhook
+au lieu d'attendre le prochain passage quotidien.
+
+**Coût réel** : palier gratuit Alchemy à valider précisément avant tout
+chiffrage définitif ; en tout état de cause bien moins cher qu'un service
+commercial de surveillance de portefeuille dédié (non cherché ici, hors
+scope — la question posée portait sur une alternative low-cost, pas sur
+une comparaison de services premium).
+
+**Verdict : piste actionnable, priorité moyenne.** Un vrai gap de
+granularité (quotidien → quasi temps réel), une solution concrète et
+cohérente avec l'architecture existante (webhook + polling de secours,
+pattern anti-rejeu déjà en prod pour Telegram), un chiffrage encore à
+affiner (palier gratuit Alchemy) avant tout engagement.
+
+---
+
+## Verdict de cette passe
+
+Une correction transparente d'une inexactitude de la passe précédente
+(le mécanisme de revue de thèse existe, sa granularité est le vrai sujet)
+et une piste actionnable bien sourcée : Alchemy Notify (webhook, palier
+gratuit, support Base) en complément — pas en remplacement — de
+`vc_thesis_review`, en réutilisant le patron webhook+anti-rejeu déjà en
+production pour Telegram.
