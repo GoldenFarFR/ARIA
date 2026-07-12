@@ -54,6 +54,22 @@ _QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ANALYSIS_REQUEST_RE = re.compile(
+    # Demande d'analyse à l'impératif, sans "?" -- incident réel 12/07 (test
+    # d'injection de prompt délibéré) : "Analyse ce fil et dis-moi ce que tu en
+    # penses pour une position." contient "vient de"/"annonce" (matche
+    # _INJECTED_CLAIM_RE) mais aucun "?", donc échappait aussi à _QUESTION_RE.
+    # Le contenu externe cité doit être traité comme donnée à analyser, pas
+    # comme une affirmation à vérifier par recherche web. Ancré sur des
+    # tournures impératives avec objet ("analyse CE fil"), pas juste le mot
+    # "analyse" seul (qui apparaît aussi dans de vraies affirmations narratives,
+    # ex. "Une analyse a montré que...").
+    r"\b(?:analyse|d[ée]cortique|examine|regarde)\s+(?:ce|cette|cet|ça|le|la|les)\b|"
+    r"dis[- ]moi\s+ce\s+que\s+tu\s+en\s+penses|donne[- ]moi\s+ton\s+avis|"
+    r"qu[e']?\s*en\s+penses[- ]tu",
+    re.IGNORECASE,
+)
+
 _MORE_DETAIL_RE = re.compile(
     r"^(?:"
     r"arguments?\s+plus|plus\s+d['']?arguments?|d[eé]veloppe|en\s+d[eé]tail|"
@@ -79,6 +95,8 @@ def is_injected_factual_claim(message: str) -> bool:
     if _OPERATOR_COMMAND_RE.search(text):
         return False
     if _QUESTION_RE.search(text):
+        return False
+    if _ANALYSIS_REQUEST_RE.search(text):
         return False
     if wants_capability_improvement(text):
         return False
