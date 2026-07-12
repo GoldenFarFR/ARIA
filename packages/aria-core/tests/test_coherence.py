@@ -516,6 +516,10 @@ _EXTERNAL_WRITE_PATTERNS = [
     r"\bapply_x_profile_fields\(", r"\bpost_tweet\(", r"\breply_to_tweet\(",
     # Email (services.mailer) -- envoi réel.
     r"\bsend_email\(",
+    # TikTok (gateway.tiktok, #34) -- publication vidéo réelle. Aujourd'hui aucun appelant
+    # (tiktok_release_publisher reste inerte, pas de pipeline vidéo) -- posé en avance pour
+    # que le jour où ce seam s'active, le garde-fou déclenche immédiatement.
+    r"\.publish_video\(",
 ]
 _EXTERNAL_WRITE_RE = re.compile("|".join(_EXTERNAL_WRITE_PATTERNS))
 
@@ -524,6 +528,7 @@ _EXTERNAL_WRITE_DEFINITION_FILES = {
     "github_client.py",
     "gateway/x_twitter.py",
     "services/mailer.py",
+    "gateway/tiktok.py",
 }
 
 # Chaque fichier listé ici a un appelant légitime et connu -- vérifié le 10/07.
