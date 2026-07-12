@@ -220,7 +220,19 @@ async def _post_chat(
             )
             return None
         data: dict[str, Any] = response.json()
-        reply = data["choices"][0]["message"]["content"].strip()
+        choice = data["choices"][0]
+        reply = choice["message"]["content"].strip()
+        finish_reason = choice.get("finish_reason")
+        truncated = finish_reason == "length"
+        if truncated:
+            logger.warning(
+                "LLM response truncated (finish_reason=length) provider=%s model=%s "
+                "depth=%s max_tokens=%s — la réponse envoyée est incomplète.",
+                route.provider,
+                route.model,
+                depth,
+                max_tokens,
+            )
         usage = parse_usage_from_response(data)
         estimated = usage["total_tokens"] <= 0
         if estimated:
@@ -238,6 +250,7 @@ async def _post_chat(
             kind="chat",
             estimated=estimated,
             depth=depth,
+            truncated=truncated,
         )
         return reply
 
