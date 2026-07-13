@@ -735,6 +735,96 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   Volets A+B1 ci-dessus — sans eux, chaque nouveau canal de sourcing ajoute plus de bruit dur,
   pas plus de candidats viables. Suivi dans le rendez-vous de vérification déjà posé (2-3
   semaines).
+- **Session cloud 13/07 (marathon complet) — #154 (rollback auto) et #157 (même correctif côté
+  vitrine) livrés, testés ET DÉPLOYÉS en conditions réelles sur le VPS.** `deploy.sh` bascule
+  désormais en blue-green (port 8000↔8001, conteneur interne toujours 8000) : nouveau conteneur
+  lancé et health-checké pendant que l'ancien tourne encore, nginx ne bascule qu'après succès,
+  ancien supprimé seulement après revérification du trafic réel. Complété par
+  `willfarrell/autoheal` + disjoncteur maison (`vanguard/scripts/autoheal-circuit-breaker.sh`,
+  plafond 3 redémarrages/10min). Étape manuelle unique (template nginx upstream + autoheal +
+  systemd) faite en direct sur le VPS ce soir. **Vrai bug trouvé en déploiement réel, pas en
+  test** : la vérification finale de `deploy.sh` (et de `deploy-vitrine.sh`, #157, même famille)
+  tirait un curl immédiatement après `systemctl reload nginx` — reload pas instantané (workers
+  mettent un court instant à tourner), donc échec systématique et rollback automatique à
+  chaque fois malgré un déploiement réellement sain (reproduit 2 fois à l'identique, confirmé
+  par un `sleep 3` manuel qui corrige tout). Fix définitif (boucle `retry_until`, ~10s de
+  plafond) en cours côté Principal pour `deploy.sh` au moment de la fin de session (pas encore
+  fusionné) ; déjà livré et fusionné côté `deploy-vitrine.sh` (`vanguard/deploy_vitrine_lib.sh`).
+  Déploiement réel confirmé cette nuit : backend sur commit `001612d7d8c4` (vérifié
+  `/api/health` à travers nginx après correction manuelle du délai), vitrine confirmée par
+  timestamp filesystem (`/var/www/ariavanguardzhc`, faute d'accès HTTP à l'époque — voir
+  point Basic Auth ci-dessous). `.claude/last-deployed-ref` = `001612d7d8c4` — **plusieurs
+  commits mergés APRÈS ce déploiement restent en attente du prochain tour** : #157
+  (deploy-vitrine.sh), rayon du blob +25%, 3 correctifs accessibilité (voir plus bas).
+- **Authentification HTTP Basic sur l'apex ariavanguardzhc.com — activée puis retirée dans la
+  même session (13/07).** D'abord confirmée comme volontaire (décision opérateur explicite :
+  "site privé le temps qu'il soit bien construit"), puis reversée quelques échanges plus tard
+  ("enleve moi cette authentification elle fait chier tous le monde") — bloc `auth_basic`/
+  `auth_basic_user_file` retiré de `/etc/nginx/sites-available/vitrine` (sauvegarde
+  `.bak` laissée sur le VPS), `nginx -t && reload` confirmés, `curl` direct revérifié à `200`
+  sans identifiants. **Le site est donc de nouveau public.** Piège vécu au passage : la
+  vérification de `deploy-vitrine.sh` (#157) exige un `HTTP 200` exact — tant que le Basic Auth
+  aurait été actif, CHAQUE futur déploiement de vitrine aurait échoué systématiquement (401 ≠
+  200) et restauré l'ancien contenu à chaque fois. Un correctif (vérification filesystem plutôt
+  que HTTP authentifié) avait été rédigé pour parer ce cas puis explicitement annulé une fois
+  l'authentification retirée pour de bon — **jamais réellement envoyé à Principal** (confirmé
+  par l'opérateur après coup), donc `deploy-vitrine.sh` fusionné tel quel (vérification HTTP
+  simple), correct tant que le site reste public.
+- **Boucle du blob organique cassée (13/07)** : l'animation (particules, ondulation des
+  branches, respiration lumineuse, pouls du cœur) était une pure fonction périodique de `time`
+  (fréquences fixes) — donc mathématiquement répétitive et perceptible comme telle (~29s pour
+  le balancement des particules, ~4.5-14s pour le reste), repérée par l'opérateur en observant
+  le site. Corrigé par `organicDrift()` (`OrganismHero.tsx`) : somme de 3 fréquences très basses
+  et incommensurables ajoutée à la phase/amplitude des 4 points de boucle identifiés — même
+  déterminisme pur-fonction-du-temps (aucun état muté), mais sans période commune courte,
+  vérifié analytiquement (le drift diverge nettement à chaque multiple des anciennes périodes
+  sur 10 min de simulation). Rayon global du blob (branches nav + décoratives) augmenté de +25%
+  le même soir (décision opérateur explicite, facteur d'échelle 1.2→1.5).
+- **Chat du widget site recadré sur Vanguard/ARIA/ZHC/BASE (13/07)** : `/aria/chat`
+  (`app/api/routes/aria.py`) redirige désormais toute question d'actualité générale
+  (`is_live_info_question`, réutilisé de `web_verify.py`) sans mot-clé du périmètre vers une
+  réponse de recadrage bilingue immédiate, sans jamais appeler le cerveau ni faire de recherche
+  web — Telegram (`public_mode`, même `aria_brain.process`) non touché, filtre localisé à cette
+  seule route REST.
+- **#155 (ux_watch) livré, fusionné et déployé (gate OFF)** : `skills/ux_watch.py` capture le
+  site réel (Playwright, desktop+mobile) une fois par jour maximum, lit visuellement via
+  `llm_vision.vision_analyze` (brique déjà câblée pour l'avatar, pas `ARIA_VISION_ENABLED` —
+  gate propre à la photo Telegram admin-only, sans rapport), compare au référentiel UX gamme
+  luxe (CLAUDE.md, Normes permanentes) et PROPOSE une issue GitHub groupée (`aria-ux-proposal`)
+  — jamais un commit/refonte/fusion autonome. Playwright+Chromium ajoutés au Dockerfile
+  (+300-500 Mo mesurés, même doctrine que ffmpeg/#23, accepté tel quel).
+- **Audit accessibilité de la nouvelle page d'accueil (blob) + 3 correctifs, livrés et fusionnés
+  (13/07)** : 1) les 4 nœuds-actions (Événements/Méthodologie/Accès membre/Telegram) étaient des
+  `<a href="#">` qui n'activaient qu'au Enter, jamais à l'Espace — convertis en vrais
+  `<button type="button">` (Cockpit/Track record, vraie navigation, restent des `<a>`) ; 2) le
+  curseur "Ambiance" pouvait atteindre un gris moyen (~44-50%) sous 4.5:1 WCAG AA contre le
+  blanc ET le noir en même temps — remappé sur deux plages disjointes (blanc sûr ≤43%, noir sûr
+  ≥51%), vérifié empiriquement sans échec sur les 101 positions du slider (pire cas 4.665:1) ;
+  3) `.ao-market-live .ao-live-dot` ne respectait pas `prefers-reduced-motion` (oubli, même
+  patron que `.ao-pc-dot` ajouté). Contrastes du texte principal et focus clavier déjà
+  conformes (vérifié, pas supposé) — pas un audit qui n'a rien trouvé, juste que le plus gros
+  était déjà bon.
+- **CI (scan de secrets) : 2 vrais faux positifs corrigés, root cause d'un rouge systématique
+  sur `main` et toutes les branches depuis le merge de #60 (13/07).** 1) `.secrets.baseline` :
+  `vanguard/backend/tests/test_aria_bonding_pool.py` réutilisait la valeur factice `"s3cr3t"`
+  déjà connue/auditée ailleurs (`test_security_hardening.py`), jamais enregistrée au baseline —
+  régénéré (`detect-secrets scan`), vérifié une seule addition exacte, zéro suppression,
+  confirmation opérateur explicite avant modification (fichier garde-fou, classifieur bloqué à
+  raison sur la première tentative). 2) `scripts/safe-push.sh` : un commentaire mentionnant
+  `git@github.com` (syntaxe SSH, pas un email) matchait la regex du scanner PII (#142) —
+  reformulé (`git\@github.com`) sans toucher au garde-fou `ALLOWLISTED_EMAILS`. CI repassée
+  verte, vérifié sur GitHub Actions après coup.
+- **Suppression de branche distante bloquée par la politique d'egress du proxy de session, pas
+  par le classifieur (13/07)** : `git push origin --delete <branche>` sur une branche déjà
+  fusionnée à l'identique a échoué en HTTP 403 (log proxy : "non autorisé par la politique de
+  l'organisation, ne pas contourner, remonter le blocage") — contenu sans risque, mais l'action
+  elle-même reste impossible depuis cette session cloud. L'opérateur l'a supprimée lui-même sur
+  GitHub (`/branches`, icône corbeille) en quelques secondes.
+- **Suivi #133/#134 (bonding/scan) — précision opérateur (13/07 soir)** : ~17 jours avant
+  l'activation prévue des vrais achats dans le faux wallet 1M$ (paper-trading, déjà gaté ON
+  depuis le 08/07) pour produire des valeurs de performance réelles. À revérifier avant cette
+  échéance que le pool produit enfin des candidats `active` (0% de conversion constaté le
+  11/07) — sinon la fenêtre se refermera sur un pool toujours vide.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
