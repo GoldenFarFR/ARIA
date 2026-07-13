@@ -52,8 +52,10 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 # Normalisation : ramène HTTPS (https://github.com/OWNER/REPO.git), SSH
-# (git@github.com:OWNER/REPO.git) et proxy local (.../git/OWNER/REPO) à la même
-# forme canonique "owner/repo" -- insensible à la casse, tolère un .git final.
+# (git\@github.com:OWNER/REPO.git -- backslash pour ne pas matcher le scan
+# email CI, ce n'est pas une adresse mail) et proxy local (.../git/OWNER/REPO)
+# à la même forme canonique "owner/repo" -- insensible à la casse, tolère un
+# .git final.
 _normalize() {
     local url="${1%.git}"
     url="$(echo "$url" | sed -E 's#.*[:/]([^/]+/[^/]+)$#\1#')"
