@@ -204,6 +204,58 @@ async def test_run_founder_ping_forbids_treating_candidates_as_people(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_run_founder_ping_forbids_narrating_unexecuted_actions(monkeypatch):
+    """#150 (13/07) : "Initiative ARIA" a annoncé un tweet ("shipping...") jamais posté --
+    confirmé par l'opérateur en conditions réelles. Cette fonction n'exécute STRICTEMENT
+    RIEN (pas de tweet, pas de commit), donc le prompt doit interdire toute formulation
+    de fait accompli et exiger le conditionnel/proposition explicite."""
+    settings = get_settings()
+    settings.aria_proactive_ideas = True
+    settings.aria_llm_enabled = True
+    settings.llm_api_key = "x"
+    settings.llm_provider = "groq"
+    settings.telegram_bot_token = "t"
+    settings.telegram_admin_ids = "1"
+
+    async def fake_top_candidates(n):
+        return [_fake_candidate()]
+
+    async def fake_total_count():
+        return 1
+
+    async def fake_open_preds(limit=1):
+        return []
+
+    monkeypatch.setattr(
+        "aria_core.skills.candidate_ranking.top_candidates", fake_top_candidates
+    )
+    monkeypatch.setattr(
+        "aria_core.vc_predictions.total_predictions_count", fake_total_count
+    )
+    monkeypatch.setattr(
+        "aria_core.vc_predictions.list_open_predictions", fake_open_preds
+    )
+    monkeypatch.setattr(
+        "aria_core.proactive.read_recent_memory", lambda category, limit: []
+    )
+
+    captured = {}
+
+    async def fake_chat(user, system, **kwargs):
+        captured["system"] = system
+        return "Verdict : ok."
+
+    with patch("aria_core.proactive.build_llm_context", new=AsyncMock(return_value="contexte")):
+        monkeypatch.setattr("aria_core.proactive.chat_with_context", fake_chat)
+        await proactive.run_founder_ping(lang="fr")
+
+    system = captured["system"]
+    assert "n'exécute STRICTEMENT RIEN" in system
+    assert "j'ai posté" in system.lower()
+    assert "je propose de" in system.lower()
+
+
+@pytest.mark.asyncio
 async def test_run_founder_ping_no_last_initiative_no_accountability_block(monkeypatch):
     settings = get_settings()
     settings.aria_proactive_ideas = True
