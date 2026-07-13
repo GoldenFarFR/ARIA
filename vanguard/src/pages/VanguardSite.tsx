@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getHoldingStructure, getSiteContent } from '../api'
 import { HOLDING_DOMAIN, HOLDING_NAME, HOLDING_SITE_URL } from '../lib/site'
+import { useHeaderClearance } from '../lib/use-header-clearance'
 import { BrandMark } from '../components/BrandMark'
 import { AriaChat } from '../components/AriaChat'
 import { FaqSection } from '../components/FaqSection'
@@ -21,20 +22,26 @@ function portfolioFromStructure(structure: HoldingStructure | null): RepertoireI
 export function VanguardSite() {
   const [setup, setSetup] = useState<AgentSetup | null>(null)
   const [holding, setHolding] = useState<HoldingStructure | null>(null)
+  const headerRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     getSiteContent().then(setSetup).catch(console.error)
     getHoldingStructure().then(setHolding).catch(console.error)
   }, [])
 
+  // Real header height (banner text wraps on narrow phones, banner can be
+  // minimized/expanded) instead of a static Tailwind padding-top guess --
+  // see use-header-clearance.ts.
+  useHeaderClearance(headerRef)
+
   return (
     <div className="min-h-screen vanguard-charcoal text-[#d4d0c8] overflow-x-hidden">
-      <header className="fixed top-0 left-0 right-0 z-50">
+      <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50">
         <CommunityWelcomeBanner />
         <VanguardNav />
       </header>
 
-      <main className="relative pt-28 md:pt-32">
+      <main className="relative pt-[var(--vanguard-header-h)]">
         <div className="hero-glow pointer-events-none" aria-hidden />
 
         <OrganismHero />
