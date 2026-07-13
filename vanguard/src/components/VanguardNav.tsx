@@ -4,11 +4,10 @@ import { MemberSignInButton } from './MemberSignInButton'
 import { useEffect, useState } from 'react'
 import { cn } from '../lib/cn'
 
-const SECTIONS = [
-  { href: '#structure', label: 'Structure' },
-  { href: '#aria', label: 'ARIA' },
-  { href: '#faq', label: 'FAQ' },
-]
+// The #structure/#aria/#faq sections these used to point to were removed
+// from VanguardSite.tsx (organism-first homepage -- see VanguardSite.tsx) --
+// no in-page anchors left to link to, so this nav no longer lists any.
+const SECTIONS: { href: string; label: string }[] = []
 
 export function VanguardNav() {
   const [open, setOpen] = useState(false)
