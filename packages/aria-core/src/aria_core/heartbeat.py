@@ -327,6 +327,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="marketing_video_cycle",
+        name="Video marketing verdict (pilote)",
+        description="Consomme un candidat vc_video_snapshot deja capture (aucun recalcul du verdict/graphique) et genere une courte video (texte + graphique deja rendu + portrait ARIA, V1 sans voix, tache #23). Ne publie jamais rien -- cree une approvals.create_approval, revue humaine requise avant toute diffusion TikTok/X. Gate OFF par defaut.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="memory_consolidation",
         name="Consolidation memoire episodique",
         description="Consolide memory_dir() (fichiers {categorie}_{date}.md) categorie par categorie, un seul appel LLM en depth=brief par categorie qualifiee (seuil >=3 nouvelles entrees). Archive-then-rewrite : instantane brut avant toute reecriture, aucune suppression physique. Perimetre verrouille en dur -- jamais le truth-ledger, jamais cognitive_knowledge WHERE approved=1. Gate OFF par defaut (#128).",
@@ -450,6 +457,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.memory.consolidation import consolidation_enabled
 
                 task.enabled = consolidation_enabled()
+            if task.id == "marketing_video_cycle":
+                from aria_core.skills.marketing_video import marketing_video_enabled
+
+                task.enabled = marketing_video_enabled()
             if task.id == "acp_provider_poll":
                 from aria_core.skills.acp_cli import is_acp_available
 
@@ -997,6 +1008,17 @@ class AriaHeartbeat:
                     "heartbeat",
                     f"[memory_consolidation] {len(result['consolidated'])} categorie(s) "
                     f"consolidee(s) : {', '.join(result['consolidated'])}",
+                )
+
+        elif task_id == "marketing_video_cycle":
+            from aria_core.skills.marketing_video import run_marketing_video_cycle
+
+            result = await run_marketing_video_cycle(notifier=self._notify_telegram)
+            if result.get("outcome") == "ok":
+                append_memory(
+                    "marketing_video",
+                    f"[marketing_video] video generee (candidat #{result.get('id', '?')}) "
+                    f"-- en attente d'approbation opérateur (#{result.get('approval_id', '?')})",
                 )
 
         elif task_id == "bonding_discovery_cycle":
