@@ -1,0 +1,19 @@
+{
+  "name": "agent-token-trader",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Wrapper #60 (marché « Jetons d'agent ») autour de bondv5-trader, en aval de l'analyse pré-bonding aria-core (#10). Aucune logique de scoring ici.",
+  "scripts": {
+    "poll": "tsx src/poll.ts",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "bondv5-trader": "github:Virtual-Protocol/bondv5-trader",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
