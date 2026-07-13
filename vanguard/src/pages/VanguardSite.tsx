@@ -1,18 +1,17 @@
 import { useRef } from 'react'
-import { HOLDING_DOMAIN, HOLDING_NAME, HOLDING_SITE_URL } from '../lib/site'
 import { useHeaderClearance } from '../lib/use-header-clearance'
-import { BrandMark } from '../components/BrandMark'
 import { CommunityWelcomeBanner } from '../components/CommunityWelcomeBanner'
 import { OrganismHero } from '../components/OrganismHero'
 import { VanguardNav } from '../components/VanguardNav'
 
-const HOLDING = HOLDING_NAME
-
-// Everything the operator needs (track record, structure, FAQ, chat) is now
-// reachable straight from OrganismHero itself (its own nav branches + the
-// ask-input wired to the real ARIA chat). The setup/holding fetches and the
-// below-hero sections that used to consume them (#track-record, #structure,
-// #aria, FAQ) are gone with them.
+// Full-screen blob, zero page scroll: the organism fills exactly one screen
+// (height:calc(100dvh - var(--vanguard-header-h)) in OrganismHero's own CSS)
+// below the fixed header, so the outer shell is pinned to h-screen with
+// overflow hidden rather than the old min-h-screen (which allowed a
+// vertical scrollbar down to a footer). Everything the operator needs
+// (track record, structure, FAQ, chat) is reachable straight from
+// OrganismHero itself (its own nav branches + the ask-input wired to the
+// real ARIA chat) -- no below-hero content left to scroll to.
 export function VanguardSite() {
   const headerRef = useRef<HTMLElement>(null)
 
@@ -22,7 +21,7 @@ export function VanguardSite() {
   useHeaderClearance(headerRef)
 
   return (
-    <div className="min-h-screen vanguard-charcoal text-[#d4d0c8] overflow-x-hidden">
+    <div className="h-screen overflow-hidden vanguard-charcoal text-[#d4d0c8]">
       <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50">
         <CommunityWelcomeBanner />
         <VanguardNav />
@@ -32,23 +31,6 @@ export function VanguardSite() {
         <div className="hero-glow pointer-events-none" aria-hidden />
 
         <OrganismHero />
-
-        <footer className="page-shell py-12 border-t border-[#c9a962]/8">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 text-xs text-[#6b665c]">
-            <div className="flex items-center gap-3">
-              <BrandMark size={20} />
-              <span>
-                © {new Date().getFullYear()} <span className="notranslate">{HOLDING}</span>
-              </span>
-            </div>
-            <a
-              href={HOLDING_SITE_URL}
-              className="font-mono text-[#8a7344] hover:text-[#c9a962] transition-colors focus-ring notranslate"
-            >
-              {HOLDING_DOMAIN}
-            </a>
-          </div>
-        </footer>
       </main>
     </div>
   )
