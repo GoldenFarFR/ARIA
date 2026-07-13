@@ -123,6 +123,7 @@ export function MemberSignInButton() {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            data-nav-target="member-signin"
             onClick={() => void signOut()}
             className="btn-vanguard-secondary px-3 py-2 text-xs uppercase tracking-[0.12em] focus-ring"
           >
@@ -132,6 +133,7 @@ export function MemberSignInButton() {
       ) : (
         <button
           type="button"
+          data-nav-target="member-signin"
           onClick={handlePrimaryClick}
           disabled={busy}
           className="btn-vanguard-secondary px-3 py-2 text-xs uppercase tracking-[0.12em] focus-ring disabled:opacity-50"

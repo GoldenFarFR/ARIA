@@ -358,3 +358,35 @@ export async function getMarketSentiment(): Promise<MarketSentiment> {
   if (!res.ok) throw new Error('Sentiment unavailable')
   return res.json()
 }
+
+export interface TrendingPairToken {
+  address: string
+  name: string
+  symbol: string
+}
+
+export interface TrendingPair {
+  chain_id: string
+  base_token: TrendingPairToken
+  price_usd: number | null
+  price_change_h24: number | null
+}
+
+export interface TrendingPairsResponse {
+  feed: string
+  chain_id: string | null
+  pairs: TrendingPair[]
+  total: number
+  source: string
+}
+
+// Paires crypto tendance en direct (DexScreener/GeckoTerminal via le backend) -- seule
+// classe d'actif avec une vraie source de données dans ce backend (cf. pairs.py). Alimente
+// le fond décoratif "marché" de l'accueil (OrganismHero) -- jamais de valeur inventée.
+export async function getTrendingPairs(limit = 30): Promise<TrendingPairsResponse> {
+  const res = await fetch(`${PRODUCT_API_URL}/pairs/trending?limit=${limit}`, {
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) throw new Error('Trending pairs unavailable')
+  return res.json()
+}
