@@ -1,9 +1,13 @@
+import re
+
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from aria_core import repertoire_db
 from aria_core.brain import aria_brain
 from aria_core.heartbeat import aria_heartbeat, HEARTBEAT_TASKS, _START_TIME
+from aria_core.knowledge.web_verify import is_live_info_question
+from aria_core.locale import LANG_FR, detect_lang
 from aria_core.memory import count_memory_entries
 from aria_core.holding import (
     DEFAULT_ARIA_TITLE,
@@ -39,6 +43,35 @@ from app.config import settings
 from app.database import get_watchlist
 
 router = APIRouter(prefix="/aria", tags=["aria"])
+
+# Widget site (/aria/chat) SEULEMENT -- pas le chat public Telegram (généraliste par
+# doctrine, même brain.process mais route distincte). Une question qui ressemble à de
+# l'actu générale (is_live_info_question) et ne porte AUCUN mot-clé du périmètre
+# Vanguard/ARIA/ZHC/BASE ne doit pas déclencher de recherche web ici -- réponse de
+# recadrage immédiate à la place.
+_SITE_SCOPE_RE = re.compile(
+    r"\bvanguard\b|\baria\b|\bzhc\b|\bbase\b|\btoken\b|\blaunchpad\b|"
+    r"m[ée]thodolog|track[\s-]?record",
+    re.IGNORECASE,
+)
+
+
+def _is_out_of_scope_live_info(message: str) -> bool:
+    return is_live_info_question(message) and not _SITE_SCOPE_RE.search(message)
+
+
+def _scope_redirect_reply(message: str) -> str:
+    if detect_lang(message) == LANG_FR:
+        return (
+            "Ce chat est dédié à Vanguard, ARIA, ZHC et BASE — pas à l'actualité générale "
+            "(sport, cours, news...). Pose-moi une question sur le holding, ARIA, le token, "
+            "le launchpad, ou notre méthodologie/track record."
+        )
+    return (
+        "This chat is scoped to Vanguard, ARIA, ZHC and BASE — not general news (sports, "
+        "prices, headlines...). Ask me about the holding, ARIA, the token, the launchpad, "
+        "or our methodology/track record."
+    )
 
 
 class KnowledgeCreateRequest(BaseModel):
@@ -83,8 +116,20 @@ async def chat(body: ChatRequest, request: Request):
                 detail="Rate limit reached. Try again in an hour.",
             )
 
+    message = body.message.strip()
+    if _is_out_of_scope_live_info(message):
+        reply = _scope_redirect_reply(message)
+        await repertoire_db.save_message("user", message, visitor_id=visitor_id)
+        await repertoire_db.save_message("agent", reply, visitor_id=visitor_id)
+        return ChatResponse(
+            reply=reply,
+            skill_used=None,
+            actions_taken=["Chat scope filter (site widget) — recadrage sans recherche web"],
+            data={"scope_redirect": True, "skip_web": True},
+        )
+
     return await aria_brain.process(
-        body.message.strip(),
+        message,
         visitor_id=visitor_id,
         public_mode=is_public_mode(),
     )
