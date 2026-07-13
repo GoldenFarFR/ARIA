@@ -80,6 +80,89 @@ async def record_operator_vc(
         await db.commit()
 
 
+async def _ensure_video_table() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vc_video_snapshot (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract TEXT NOT NULL,
+                symbol TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                processed_at TEXT
+            )
+            """
+        )
+        await db.commit()
+
+
+async def queue_video_candidate(result: VCResult) -> int:
+    """Capture TOUT ce dont la vidéo marketing (tâche #23) a besoin, au même
+    instant que ``record_operator_vc`` -- même objet ``result`` déjà en mémoire,
+    aucun recalcul. Statut 'pending' : un cycle heartbeat séparé (gate OFF par
+    défaut) viendra consommer cette ligne plus tard, jamais synchrone ici."""
+    await _ensure_video_table()
+    payload = {
+        "contract": result.contract,
+        "symbol": result.symbol or "",
+        "recommandation": result.recommandation,
+        "potentiel": result.potentiel,
+        "risque": result.risque,
+        "these": result.these,
+        "cible": result.cible,
+        "invalidation": result.invalidation,
+        "scenarios": result.scenarios,
+        "upside_pct": result.upside_pct,
+        "downside_pct": result.downside_pct,
+        "chart_data_uri": result.chart_data_uri,
+    }
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO vc_video_snapshot (contract, symbol, payload, status, created_at) "
+            "VALUES (?, ?, ?, 'pending', ?)",
+            (result.contract, result.symbol or "", json.dumps(payload, ensure_ascii=False), now),
+        )
+        candidate_id = cur.lastrowid
+        await db.commit()
+    return candidate_id
+
+
+async def load_next_video_candidate() -> dict | None:
+    """Lecture seule : la plus ancienne ligne 'pending', ou None si la file est vide."""
+    await _ensure_video_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT id, payload FROM vc_video_snapshot WHERE status = 'pending' "
+                "ORDER BY id ASC LIMIT 1"
+            )
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        data = json.loads(row[1])
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("vc_session_context: snapshot vidéo illisible (id=%s)", row[0])
+        return None
+    data["id"] = row[0]
+    return data
+
+
+async def mark_video_candidate_done(candidate_id: int, *, status: str = "done") -> None:
+    """Marque une ligne 'pending' comme traitée (jamais de suppression -- trace conservée)."""
+    await _ensure_video_table()
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE vc_video_snapshot SET status = ?, processed_at = ? WHERE id = ?",
+            (status, now, candidate_id),
+        )
+        await db.commit()
+
+
 async def load_operator_vc() -> dict | None:
     """Charge le dernier /vc si encore dans la fenêtre TTL."""
     await _ensure_table()

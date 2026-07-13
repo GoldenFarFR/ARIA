@@ -1845,7 +1845,7 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
     await _reply(message, order_text)
 
     from aria_core import repertoire_db
-    from aria_core.skills.vc_session_context import record_operator_vc
+    from aria_core.skills.vc_session_context import queue_video_candidate, record_operator_vc
 
     try:
         await repertoire_db.save_message("user", f"/vc {address}", skill_used="vc")
@@ -1873,6 +1873,10 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
         except Exception as exc:  # noqa: BLE001 — l'audit ne doit jamais casser le mode test
             logger.warning("proof engine (juge) échoué: %s", exc)
         await record_operator_vc(result, prediction_id=None, telegram_summary=order_text)
+        try:
+            await queue_video_candidate(result)
+        except Exception as exc:  # noqa: BLE001 — capture vidéo best-effort, jamais bloquante
+            logger.warning("vc video snapshot (test mode) échoué: %s", exc)
         await _reply(message, s["test_footer"])
         return
 
@@ -1897,6 +1901,10 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
             report_ref=ref_id,
         )
         await record_operator_vc(result, prediction_id=pred_id, telegram_summary=order_text)
+        try:
+            await queue_video_candidate(result)
+        except Exception as exc:  # noqa: BLE001 — capture vidéo best-effort, jamais bloquante
+            logger.warning("vc video snapshot échoué: %s", exc)
         await _reply(message, f"🗃️ Prédiction #{pred_id} enregistrée. Clôture plus tard : /vcresult {pred_id} <pnl%> [note].")
     except Exception as exc:  # noqa: BLE001 — le log ne doit jamais casser l'analyse
         logger.warning("vc auto-log échoué: %s", exc)

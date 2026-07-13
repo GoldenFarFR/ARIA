@@ -50,6 +50,12 @@ def aria_avatar_gallery_dir() -> Path:
     return path
 
 
+def aria_marketing_video_dir() -> Path:
+    path = data_dir() / "aria" / "marketing_video"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def vector_dir() -> Path:
     """Persistance mémoire vectorielle embarquée — Phase C (opt-in via aria_vector_memory).
 
