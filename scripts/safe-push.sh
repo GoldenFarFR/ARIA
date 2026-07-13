@@ -75,5 +75,14 @@ if [[ "$(_normalize "$ACTUAL_ORIGIN")" != "$(_normalize "$EXPECTED_URL")" ]]; th
 fi
 
 echo "Remote vérifié : origin correspond bien à $REPO_TARGET ($EXPECTED_URL)."
-echo "Push vers $EXPECTED_URL HEAD:refs/heads/$BRANCH_NAME ..."
-git push "$EXPECTED_URL" "HEAD:refs/heads/$BRANCH_NAME"
+# Pousse vers l'URL RÉELLE de origin (ACTUAL_ORIGIN, déjà lue et vérifiée
+# ci-dessus), jamais vers l'alias "origin" par son nom (protection d'origine
+# conservée : toujours une URL explicite, jamais une confiance aveugle en
+# l'alias) -- et jamais vers EXPECTED_URL codée en dur en HTTPS non plus :
+# un checkout configuré en SSH (clé de déploiement, ex. alias github-aria-main)
+# n'a aucune credential HTTPS disponible, donc pousser vers l'URL HTTPS
+# littérale échoue ("could not read Username for 'https://github.com'") même
+# quand origin est parfaitement le bon dépôt. ACTUAL_ORIGIN porte la bonne
+# méthode d'auth pour CE checkout ET reste une URL explicite déjà validée.
+echo "Push vers $ACTUAL_ORIGIN (vérifié = $REPO_TARGET) HEAD:refs/heads/$BRANCH_NAME ..."
+git push "$ACTUAL_ORIGIN" "HEAD:refs/heads/$BRANCH_NAME"
