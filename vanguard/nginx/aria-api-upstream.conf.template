@@ -1,0 +1,16 @@
+# Upstream aria-api — indirection nécessaire au rollback blue-green de deploy.sh.
+#
+# ── Installation (UNE seule fois, avant le premier déploiement blue-green) ─────────────
+#   1) cp vanguard/nginx/aria-api-upstream.conf.template /etc/nginx/conf.d/aria-api-upstream.conf
+#   2) Dans le site nginx existant de api.ariavanguardzhc.com (géré par certbot, HORS
+#      dépôt — voir aria-ops), remplacer la cible du proxy :
+#        AVANT :  proxy_pass http://127.0.0.1:8000;
+#        APRÈS :  proxy_pass http://aria_api_backend;
+#   3) nginx -t && systemctl reload nginx
+#      -> aucun changement de comportement à ce stade, juste une indirection.
+#
+# Après cette installation unique, deploy.sh réécrit CE fichier (jamais le site nginx
+# lui-même) à chaque bascule blue-green réussie, en alternant le port cible 8000/8001.
+upstream aria_api_backend {
+    server 127.0.0.1:8000;
+}

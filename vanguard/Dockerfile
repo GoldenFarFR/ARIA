@@ -15,8 +15,9 @@ ARG GIT_COMMIT=unknown
 
 # ffmpeg : assemblage local des videos marketing (tache #23, skills/marketing_video.py)
 # -- binaire systeme uniquement, aucune cle API, licence libre (LGPL/GPL selon build).
+# curl : sonde du HEALTHCHECK natif ci-dessous (#154, absent de python:3.12-slim par défaut).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY packages/aria-core /packages/aria-core
@@ -40,6 +41,12 @@ ENV ARIA_VC_CACHE_TTL=300
 RUN mkdir -p /app/backend/data
 
 EXPOSE 8000
+# HEALTHCHECK natif Docker (#154) -- seul signal que willfarrell/autoheal (sidecar,
+# vanguard/scripts/autoheal-circuit-breaker.sh) sait observer pour redémarrer un
+# conteneur "unhealthy" (panne transitoire post-déploiement). Distinct du health-check
+# HTTP externe de deploy.sh (commit cassé -> pas de bascule, jamais de restart en boucle).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -f http://127.0.0.1:8000/api/health || exit 1
 # --proxy-headers + --forwarded-allow-ips=127.0.0.1 : nginx (seul en façade, sur le
 # loopback) fournit X-Forwarded-For ; uvicorn ne fait confiance qu'à lui pour reconstituer
 # l'IP client réelle. Sans ça, request.client.host reste le loopback et le plafond anti-abus
