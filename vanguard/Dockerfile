@@ -13,6 +13,12 @@ WORKDIR /app
 
 ARG GIT_COMMIT=unknown
 
+# ffmpeg : assemblage local des videos marketing (tache #23, skills/marketing_video.py)
+# -- binaire systeme uniquement, aucune cle API, licence libre (LGPL/GPL selon build).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY packages/aria-core /packages/aria-core
 RUN pip install --no-cache-dir /packages/aria-core
 
