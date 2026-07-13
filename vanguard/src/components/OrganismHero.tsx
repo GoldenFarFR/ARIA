@@ -275,6 +275,20 @@ function mulberry32(seed: number): () => number {
   }
 }
 
+// A single fixed-frequency sine is a closed loop -- a real organism's rhythm never
+// repeats identically twice. Summing 3 incommensurate slow frequencies (irrational-ish
+// ratios) keeps the same cheap, pure-function-of-time determinism but has no short
+// common period -- the combined pattern doesn't perceptibly repeat within any normal
+// viewing session. `offset` decorrelates instances (branches/particles) from each
+// other so the whole scene doesn't breathe in lockstep.
+function organicDrift(time: number, offset: number): number {
+  return (
+    0.5 * Math.sin(time * 0.0313 + offset * 0.7 + 1) +
+    0.32 * Math.sin(time * 0.0091 + offset * 1.618 + 2.4) +
+    0.18 * Math.sin(time * 0.0517 + offset * 0.31 + 4.8)
+  )
+}
+
 function createOrganismEngine(opts: EngineOptions): EngineHandle {
   const { canvas, root, portfolioElRef, reducedMotion, onLayout } = opts
   const ctxOrNull = canvas.getContext('2d')
@@ -511,7 +525,7 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
     financeParticles.forEach((p) => {
       p.y -= p.speed * dt
       if (p.y < -60) p.y = H + 60
-      const targetX = p.baseX + Math.sin(time * 0.216 + p.phase * 0.01) * p.driftX
+      const targetX = p.baseX + Math.sin(time * 0.216 + p.phase * 0.01 + organicDrift(time, p.phase) * 0.8) * p.driftX
       p.x += (targetX - p.x) * 0.06
     })
     resolveFinanceCollisions()
@@ -782,17 +796,18 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
     branches.forEach((b) => {
       const pts = b.pts
       const freq = 0.45 + ((b.seed % 97) / 97) * 0.6
+      const branchDrift = organicDrift(time, b.seed)
       const wp: Point[] = []
       for (let i = 0; i < pts.length; i++) {
         const p = pts[i]
         const reach = Math.min(1, i / (pts.length - 1))
-        const wobbleAmt = reducedMotion || branchHovered ? 0 : (7.5 + reactPulse * 6) * (0.25 + reach * 0.9)
-        const wob = Math.sin(time * freq + b.phase + i * 0.8) * wobbleAmt
+        const wobbleAmt = reducedMotion || branchHovered ? 0 : (7.5 + reactPulse * 6) * (0.25 + reach * 0.9) * (1 + branchDrift * 0.22)
+        const wob = Math.sin(time * freq + b.phase + i * 0.8 + branchDrift * 0.6) * wobbleAmt
         wp.push({ x: p.x, y: p.y + wob })
       }
       const glowMix = reducedMotion
         ? 0.55
-        : 0.35 + 0.5 * Math.sin(time * 1.1 + b.phase) * 0.5 + 0.5 * 0.6 + reactPulse * 0.5
+        : 0.35 + 0.5 * Math.sin(time * 1.1 + b.phase + organicDrift(time, b.seed + 31) * 0.9) * 0.5 + 0.5 * 0.6 + reactPulse * 0.5
       const ambientRgb = AMBIENT.rgb
       const baseCol = b.isNav ? ambientRgb.map((v) => Math.min(255, v + 7)) : ambientRgb.map((v) => Math.round(v * 0.72))
       const hotCol = AMBIENT.hot
@@ -806,7 +821,7 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
     drawFeedingBranches()
 
     const baseR = 20.6 + reactPulse * 8
-    const pulseVal = reducedMotion || branchHovered ? 0 : Math.sin(time * 1.4) * 3
+    const pulseVal = reducedMotion || branchHovered ? 0 : Math.sin(time * 1.4 + organicDrift(time, 7) * 0.7) * (3 + organicDrift(time, 41) * 0.9)
     const coreR = baseR + pulseVal + reactPulse * 6
     const haloR = coreR * 2.6 * 0.7
     const coreHot = AMBIENT.hot
