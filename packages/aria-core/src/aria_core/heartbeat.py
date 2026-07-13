@@ -341,6 +341,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="directive_proposal_cycle",
+        name="Directive auto-proposal (pilote)",
+        description="Scanne des marqueurs TODO(aria) pour un candidat repo_hygiene/docs/backlog et appelle propose_directive (aria_directives.py, tache #82). Gate OFF par defaut -- 3 interrupteurs independants (HeartbeatTask.enabled, ARIA_DIRECTIVE_PROPOSAL_ENABLED, ARIA_DIRECTIVE_CHANNEL_ENABLED). Toute proposition reste 'pending', revue humaine requise avant execution -- ne touche jamais _DIRECTIVE_CATEGORIES ni le gating de aria_directives.py.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="memory_consolidation",
         name="Consolidation memoire episodique",
         description="Consolide memory_dir() (fichiers {categorie}_{date}.md) categorie par categorie, un seul appel LLM en depth=brief par categorie qualifiee (seuil >=3 nouvelles entrees). Archive-then-rewrite : instantane brut avant toute reecriture, aucune suppression physique. Perimetre verrouille en dur -- jamais le truth-ledger, jamais cognitive_knowledge WHERE approved=1. Gate OFF par defaut (#128).",
@@ -472,6 +479,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.marketing_video import marketing_video_enabled
 
                 task.enabled = marketing_video_enabled()
+            if task.id == "directive_proposal_cycle":
+                from aria_core.skills.directive_proposal import directive_proposal_enabled
+
+                task.enabled = directive_proposal_enabled()
             if task.id == "acp_provider_poll":
                 from aria_core.skills.acp_cli import is_acp_available
 
@@ -954,6 +965,16 @@ class AriaHeartbeat:
                 append_memory(
                     "ux_watch",
                     f"[ux_watch] {result.get('findings_count', 0)} detail(s) -> {result.get('issue_url', '?')}",
+                )
+
+        elif task_id == "directive_proposal_cycle":
+            from aria_core.skills.directive_proposal import run_directive_proposal_cycle
+
+            result = await run_directive_proposal_cycle(notifier=self._notify_telegram)
+            if result.get("outcome") == "ok":
+                append_memory(
+                    "directive_proposal",
+                    f"[directive] {result.get('category', '?')} -> {result.get('title', '?')}",
                 )
 
         elif task_id == "claude_mentor_cycle":
