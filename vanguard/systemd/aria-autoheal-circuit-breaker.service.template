@@ -1,0 +1,22 @@
+# Disjoncteur autoheal (#154) — voir vanguard/scripts/autoheal-circuit-breaker.sh.
+#
+# ── Installation (UNE seule fois, avec le reste du prérequis #154) ─────────────────
+#   1) cp vanguard/systemd/aria-autoheal-circuit-breaker.service.template \
+#        /etc/systemd/system/aria-autoheal-circuit-breaker.service
+#   2) systemctl daemon-reload
+#   3) systemctl enable --now aria-autoheal-circuit-breaker
+#   4) journalctl -u aria-autoheal-circuit-breaker -f   # vérifier le démarrage
+[Unit]
+Description=ARIA autoheal circuit breaker (#154 — plafonne les redémarrages auto)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/opt/aria/vanguard/scripts/autoheal-circuit-breaker.sh
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target
