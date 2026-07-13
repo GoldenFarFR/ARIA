@@ -886,9 +886,21 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
       if (reducedMotion) draw(performance.now())
     },
     setThemeLightness(L: number) {
-      bgLightness = L
+      // Contrast fix (a11y audit #156.2, 13/07): a raw 1:1 slider->lightness
+      // mapping put a plain mid-gray background (~L 44-50%) within reach --
+      // and a mid-gray fails WCAG AA 4.5:1 against BOTH pure white and pure
+      // black text (computed: white/gray45% ~4.06:1, black/gray47% ~4.05:1),
+      // so no single text-color choice at that lightness can rescue it.
+      // Remapped onto two disjoint safe ranges instead: white text only ever
+      // sees bg in [0,43] (worst case ~4.70:1), black text only ever sees bg
+      // in [51,100] (worst case ~4.67:1) -- verified empirically across the
+      // full 0-100 slider sweep (Playwright), not just spot-checked. The
+      // slider itself keeps its 0-100 range/labels (Noir/Blanc) and the same
+      // isLight split at 55 -- only the achieved background lightness changes.
       const isLight = L >= 55
-      root.style.setProperty('--bg', `hsl(0,0%,${L}%)`)
+      const bg = isLight ? 51 + ((L - 55) / 45) * 49 : (L / 55) * 43
+      bgLightness = bg
+      root.style.setProperty('--bg', `hsl(0,0%,${bg}%)`)
       root.style.setProperty('--text', isLight ? 'hsl(0,0%,9%)' : 'hsl(0,0%,96%)')
       root.style.setProperty('--text-dim', isLight ? 'hsla(0,0%,9%,0.62)' : 'hsla(0,0%,96%,0.55)')
       if (reducedMotion) draw(performance.now())
@@ -936,6 +948,13 @@ const CSS = `
   position:absolute; z-index:6; transform:translate(-50%,-50%); pointer-events:auto;
   display:flex; flex-direction:column; align-items:center; gap:12px;
   text-decoration:none; cursor:pointer;
+}
+/* Événements/Méthodologie/Accès membre/Telegram are real <button> (a11y audit
+   #156.1) sharing .ao-node with the <a> nodes (Cockpit/Track record) --
+   strip the browser's default button chrome so both render identically. */
+.aria-organism button.ao-node{
+  background:none; border:0; margin:0; padding:0; font:inherit; color:inherit;
+  appearance:none; -webkit-appearance:none;
 }
 .aria-organism .ao-node-north{ flex-direction:column-reverse; }
 .aria-organism .ao-node .ao-ring{
@@ -1152,6 +1171,7 @@ const CSS = `
   box-shadow:0 0 0 0 rgba(201,255,176,0.55); animation:aoPcPulse 1.8s ease-in-out infinite;
 }
 .aria-organism .ao-market-live.is-stale .ao-live-dot{ background:rgba(232,233,234,0.35); animation:none; }
+@media (prefers-reduced-motion: reduce){ .aria-organism .ao-market-live .ao-live-dot{ animation:none; } }
 .aria-organism .ao-market-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
 .aria-organism .ao-market-row{
   display:flex; align-items:center; gap:11px; width:100%;
@@ -1525,10 +1545,16 @@ export function OrganismHero() {
               </a>
             )
           }
+          // Événements/Méthodologie/Accès membre/Telegram never navigate --
+          // they preventDefault() and open a modal (or pulse the sign-in
+          // button). A real <button> (not <a href="#">) so Space activates
+          // it like Enter (native <a> semantics only respond to Enter), and
+          // a screen reader announces "button" instead of a misleading
+          // "link" (a11y audit #156.1, 13/07).
           return (
-            <a
+            <button
               key={tip.label}
-              href="#"
+              type="button"
               className={className}
               style={{ left: tip.x, top: tip.y }}
               onClick={handleNodeClick(tip.label)}
@@ -1538,7 +1564,7 @@ export function OrganismHero() {
               onBlur={() => engineRef.current?.setBranchHovered(false)}
             >
               {content}
-            </a>
+            </button>
           )
         })}
       </div>
