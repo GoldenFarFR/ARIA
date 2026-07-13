@@ -14,6 +14,14 @@
   --color-champagne: #d4c4a0;
 }
 
+:root {
+  /* Fallback for VanguardSite's fixed header clearance, overwritten at
+     runtime by use-header-clearance.ts (ResizeObserver on the real header)
+     once it measures the actual rendered height. Matches the old static
+     `pt-28` guess so there's no flash of zero padding before JS runs. */
+  --vanguard-header-h: 7rem;
+}
+
 * {
   box-sizing: border-box;
 }

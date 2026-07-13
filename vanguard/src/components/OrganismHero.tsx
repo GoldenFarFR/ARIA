@@ -126,6 +126,40 @@ const NORTH_LABELS = new Set(['Telegram', 'Cockpit', 'Track record', 'Accès mem
 const CAPTURE_RADIUS = 191.25
 const UI_FADE_PAD = 60
 
+// ---------------------------------------------------------------------------
+// Nav label geometry tuning for narrow (portrait mobile) viewports.
+//
+// Branch length is already `R * fraction` with `R = min(W, H)`, so it
+// already avoids assuming desktop-width room. What it doesn't account for:
+// two fixed-degree angles tuned to look good on a wide desktop canvas can
+// still crowd on a narrow phone, because the absolute pixel gap between two
+// tips at a fixed angular delta is proportional to R -- and R is far
+// smaller on a narrow phone (R = W there) than on desktop (R = H there),
+// while the nav label's own footprint (font-size, padding) never shrinks.
+// Confirmed by measurement (Playwright, 375x812): Événements/Méthodologie
+// (39 degrees apart, both south-facing, both rendered with the label BELOW
+// the ring -- see NORTH_LABELS) collide; every other pair, either further
+// apart in angle or flipped to render its label above the ring, does not.
+//
+// Two independent, width-scaled compensations below, both a no-op at
+// desktop widths (>= NAV_NARROW_BREAKPOINT):
+//  1. a small angular nudge that widens specifically the tightest gap
+//  2. a small radius boost so every nav tip (not just that pair) sits
+//     further from the core, buying every label a little more room
+// ---------------------------------------------------------------------------
+
+const NAV_NARROW_BREAKPOINT = 640
+
+// Degrees to push each label away from the other, at the narrowest widths.
+const NAV_ANGLE_NUDGE: Partial<Record<string, number>> = {
+  'Événements': -1,
+  Méthodologie: 1,
+}
+
+function navNarrowness(width: number): number {
+  return Math.max(0, Math.min(1, (NAV_NARROW_BREAKPOINT - width) / NAV_NARROW_BREAKPOINT))
+}
+
 const EVENTS = [
   { name: 'WebX 2026', date: '13-14 juil. 2026', detail: 'Tokyo — la plus grande conférence Web3 d’Asie.' },
   { name: 'NFT.NYC 2026', date: '1-3 sept. 2026', detail: 'New York — conférence de référence NFT et Web3.' },
@@ -313,10 +347,14 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
     branches = []
     const tips: NavTip[] = []
     const R = Math.min(W, H)
+    const narrowness = navNarrowness(W)
+    const angleWiden = narrowness * 32 // up to 32deg extra half-gap at the narrowest widths
+    const lengthBoost = 1 + narrowness * 0.6 // up to +60% tip radius at the narrowest widths
     NAV_NODES.forEach((n, i) => {
       const rng = mulberry32(1000 + i * 271)
-      const len = R * (0.16 + rng() * 0.04) * 1.2
-      const tip = buildBranch(rng, n.angle, len, 2, 3.2, true)
+      const angle = n.angle + (NAV_ANGLE_NUDGE[n.label] ?? 0) * angleWiden
+      const len = R * (0.16 + rng() * 0.04) * 1.2 * lengthBoost
+      const tip = buildBranch(rng, angle, len, 2, 3.2, true)
       tips.push({ x: cx + tip.x, y: cy + tip.y, label: n.label })
     })
     const deco = mulberry32(4242)
@@ -820,6 +858,17 @@ const CSS = `
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
   position:relative; width:100%; min-height:100vh; overflow:hidden;
   background:var(--bg); color:var(--text); font-family:var(--sans);
+}
+/* On narrow (portrait mobile) viewports, min-height:100vh stretches the
+   organism far taller than its content needs -- the core cluster stays
+   vertically centered (cy = H/2) while the ask-form sits pinned near the
+   very bottom (bottom:30px), so a full 100vh here reads as a large empty
+   gap between them. Capping the effective height keeps desktop untouched
+   (this query never matches landscape/desktop widths) while shrinking
+   that dead space on tall narrow phones. dvh (not vh) so mobile browser
+   toolbars don't inflate the cap further. */
+@media (max-width:640px){
+  .aria-organism{ min-height:min(100dvh, 640px); }
 }
 .aria-organism *{box-sizing:border-box;}
 .aria-organism .ao-canvas{position:absolute; inset:0; display:block; width:100%; height:100%;}
