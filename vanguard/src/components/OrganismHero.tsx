@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { getPaperWallet, getTrendingPairs, type PaperWallet, type TrendingPair } from '../api'
+import { agentChat, getPaperWallet, getTrendingPairs, type PaperWallet, type TrendingPair } from '../api'
 
 /**
  * OrganismHero: the ZHC homepage hero -- an animated "living organism" (a glowing
@@ -18,8 +18,12 @@ import { getPaperWallet, getTrendingPairs, type PaperWallet, type TrendingPair }
  *    other asset class (stocks/forex/commodities/indices) is fabricated
  *  - the portfolio panel shows the real paper-trading aggregate (getPaperWallet),
  *    never a fake position list
- *  - branch-tip labels route to real destinations (in-page sections, /cockpit,
- *    the member sign-in button, the real ARIA chat) instead of demo-only handlers
+ *  - branch-tip labels route to real destinations (/cockpit, the member
+ *    sign-in button, in-page modals) instead of demo-only handlers
+ *  - the ask-input at the bottom (`.ao-ask`) IS the real ARIA chat: it posts
+ *    to `agentChat()` (POST /aria/chat, same client the old standalone chat
+ *    section used) and renders the reply in `.ao-ask-reply` -- there is no
+ *    separate chat section on this page anymore, this is it
  *
  * The canvas animation engine (branch wobble, capture/feeding pseudopod mechanic,
  * finance-particle drift/collision) is imperative by nature (a physics loop, not
@@ -514,12 +518,24 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
   // Portfolio panel is real React-rendered DOM living in the same wrapper, but
   // getBoundingClientRect() returns viewport coordinates while particles live
   // in the canvas' own local space (root top-left = 0,0) -- convert once.
-  function getPortfolioBoxLocal(): { left: number; right: number; top: number; bottom: number } | null {
+  //
+  // Cached rather than recomputed inside drawFinanceBg(): getBoundingClientRect()
+  // forces a synchronous layout, and drawFinanceBg() runs every animation
+  // frame (up to 60x/s) -- calling it there meant paying for a forced reflow
+  // twice a frame for a box that only actually moves on resize or when the
+  // panel's own content changes size (wallet data arriving). Recomputed only
+  // from those two triggers instead (see the two ResizeObservers below).
+  let portfolioBoxLocal: { left: number; right: number; top: number; bottom: number } | null = null
+
+  function recomputePortfolioBox() {
     const el = portfolioElRef.current
-    if (!el) return null
+    if (!el) {
+      portfolioBoxLocal = null
+      return
+    }
     const rootRect = root.getBoundingClientRect()
     const elRect = el.getBoundingClientRect()
-    return {
+    portfolioBoxLocal = {
       left: elRect.left - rootRect.left,
       right: elRect.right - rootRect.left,
       top: elRect.top - rootRect.top,
@@ -689,7 +705,7 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
   function drawFinanceBg() {
     if (!financeParticles) buildFinanceParticles()
     if (!financeParticles) return
-    const portfolioBox = getPortfolioBoxLocal()
+    const portfolioBox = portfolioBoxLocal
     ctx.save()
     ctx.textBaseline = 'middle'
     financeParticles.forEach((p) => {
@@ -800,6 +816,7 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
     resize()
     buildAll()
     financeParticles = null
+    recomputePortfolioBox()
   }
 
   const ro = new ResizeObserver(() => {
@@ -807,6 +824,12 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
     if (reducedMotion) draw(performance.now())
   })
   ro.observe(root)
+
+  // Separate observer: the portfolio panel's own height changes (wallet data
+  // arriving turns "Chargement..." into a five-row list) without the root
+  // element itself resizing -- root's observer alone would miss that move.
+  const portfolioRo = new ResizeObserver(() => recomputePortfolioBox())
+  if (portfolioElRef.current) portfolioRo.observe(portfolioElRef.current)
 
   fullRebuildLayout()
   draw(performance.now())
@@ -841,6 +864,7 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
       destroyed = true
       cancelAnimationFrame(rafId)
       ro.disconnect()
+      portfolioRo.disconnect()
     },
   }
 }
@@ -900,10 +924,11 @@ const CSS = `
 .aria-organism .ao-node-event .ao-ring{ border-color:rgb(224,196,232); background:rgba(224,196,232,0.18); }
 .aria-organism .ao-node-event:hover .ao-ring{ background:rgba(224,196,232,0.6); }
 
-.aria-organism .ao-ask{
+.aria-organism .ao-ask-wrap{
   position:absolute; bottom:30px; left:50%; transform:translateX(-50%); z-index:7;
-  display:flex; gap:8px; width:min(420px, calc(100% - 48px));
+  display:flex; flex-direction:column; gap:10px; width:min(420px, calc(100% - 48px));
 }
+.aria-organism .ao-ask{ display:flex; gap:8px; width:100%; }
 .aria-organism .ao-ask input{
   flex:1; background:rgba(255,255,255,0.04); border:1px solid rgba(232,233,234,0.14);
   border-radius:20px; padding:11px 18px; color:var(--text); font-family:var(--sans);
@@ -916,7 +941,20 @@ const CSS = `
   font-family:var(--mono); font-size:11px; letter-spacing:0.06em; text-transform:uppercase;
   cursor:pointer; font-weight:700;
 }
+.aria-organism .ao-ask button:disabled{ opacity:0.5; cursor:default; }
 .aria-organism .ao-ask button:focus-visible{outline:2px solid var(--text); outline-offset:2px;}
+
+.aria-organism .ao-ask-reply{
+  background:rgba(5,6,7,0.78); border:1px solid rgba(232,233,234,0.14); border-radius:14px;
+  padding:12px 16px; font-family:var(--sans); font-size:12.5px; line-height:1.5;
+  color:var(--text); max-height:220px; overflow-y:auto; backdrop-filter:blur(8px);
+  white-space:pre-wrap;
+}
+.aria-organism .ao-ask-reply.is-error{ color:#e0a8a8; }
+.aria-organism .ao-ask-reply .ao-ask-q{
+  font-family:var(--mono); font-size:10px; letter-spacing:0.04em; text-transform:uppercase;
+  color:var(--text-dim); margin-bottom:6px; white-space:normal;
+}
 
 .aria-organism .ao-reduced-note{
   position:absolute; bottom:78px; left:50%; transform:translateX(-50%); z-index:5;
@@ -1115,6 +1153,10 @@ export function OrganismHero() {
   const [themeOpen, setThemeOpen] = useState(false)
   const [themeValue, setThemeValue] = useState(4)
   const [askValue, setAskValue] = useState('')
+  const [askQuestion, setAskQuestion] = useState<string | null>(null)
+  const [askReply, setAskReply] = useState<string | null>(null)
+  const [askLoading, setAskLoading] = useState(false)
+  const [askError, setAskError] = useState(false)
   const [savedEvents, setSavedEvents] = useState<Record<number, boolean>>({})
   const [calendarConnected, setCalendarConnected] = useState(false)
   const [activeCategories, setActiveCategoriesState] = useState<Set<MarketCategory>>(
@@ -1253,13 +1295,6 @@ export function OrganismHero() {
   }, [openModal, themeOpen])
 
   // --- Nav destinations -------------------------------------------------------
-  const scrollToId = useCallback((id: string) => {
-    document.getElementById(id)?.scrollIntoView({
-      behavior: reducedMotionRef.current ? 'auto' : 'smooth',
-      block: 'start',
-    })
-  }, [])
-
   const pulseMemberSignIn = useCallback(() => {
     window.scrollTo({ top: 0, behavior: reducedMotionRef.current ? 'auto' : 'smooth' })
     window.setTimeout(
@@ -1287,39 +1322,41 @@ export function OrganismHero() {
     )
   }, [])
 
-  const focusAriaChat = useCallback(() => {
-    document.getElementById('aria')?.scrollIntoView({
-      behavior: reducedMotionRef.current ? 'auto' : 'smooth',
-      block: 'start',
-    })
-    window.setTimeout(
-      () => {
-        document.querySelector<HTMLInputElement>('#aria input')?.focus()
-      },
-      reducedMotionRef.current ? 0 : 500,
-    )
-  }, [])
-
   const handleNodeClick = useCallback(
     (label: string) => (e: React.MouseEvent) => {
       e.preventDefault()
-      if (label === 'Track record') scrollToId('track-record')
-      else if (label === 'Événements') setOpenModal('events')
+      if (label === 'Événements') setOpenModal('events')
       else if (label === 'Méthodologie') setOpenModal('method')
       else if (label === 'Accès membre') pulseMemberSignIn()
       else if (label === 'Telegram') setOpenModal('telegram')
     },
-    [scrollToId, pulseMemberSignIn],
+    [pulseMemberSignIn],
   )
 
+  // The ask-input IS the real ARIA chat now (no separate #aria section to
+  // scroll to) -- same agentChat() client, reply rendered right above the
+  // input. Never fabricate on failure: show an explicit unavailable message,
+  // not a fake answer (same doctrine as the wallet panel above).
   const handleAskSubmit = useCallback(
     (e: FormEvent) => {
       e.preventDefault()
+      const trimmed = askValue.trim()
+      if (!trimmed || askLoading) return
       engineRef.current?.pulse()
-      focusAriaChat()
       setAskValue('')
+      setAskQuestion(trimmed)
+      setAskReply(null)
+      setAskError(false)
+      setAskLoading(true)
+      agentChat(trimmed)
+        .then((res) => setAskReply(res.reply))
+        .catch(() => {
+          setAskError(true)
+          setAskReply('Réponse indisponible pour le moment.')
+        })
+        .finally(() => setAskLoading(false))
     },
-    [focusAriaChat],
+    [askValue, askLoading],
   )
 
   const toggleEventSaved = useCallback((i: number) => {
@@ -1392,7 +1429,12 @@ export function OrganismHero() {
               <span className="ao-lbl">{tip.label}</span>
             </>
           )
-          if (tip.label === 'Cockpit') {
+          // Track record's own in-page section (#track-record) is gone --
+          // the real data now lives on /cockpit, same destination and same
+          // plain-anchor wiring as the Cockpit branch (deliberately identical
+          // right now; left as two labels rather than merged pending an
+          // operator call on whether to consolidate them).
+          if (tip.label === 'Cockpit' || tip.label === 'Track record') {
             return (
               <a key={tip.label} href="/cockpit" className={className} style={{ left: tip.x, top: tip.y }}>
                 {content}
@@ -1431,17 +1473,31 @@ export function OrganismHero() {
         </div>
       )}
 
-      <form className="ao-ask" onSubmit={handleAskSubmit}>
-        <input
-          type="text"
-          value={askValue}
-          onChange={(e) => setAskValue(e.target.value)}
-          placeholder="Demande quelque chose à ARIA…"
-          autoComplete="off"
-          aria-label="Demander à ARIA"
-        />
-        <button type="submit">Demander</button>
-      </form>
+      <div className="ao-ask-wrap">
+        {(askLoading || askReply) && (
+          <div
+            className={`ao-ask-reply${askError ? ' is-error' : ''}`}
+            role="status"
+            aria-live="polite"
+          >
+            {askQuestion && <div className="ao-ask-q">{askQuestion}</div>}
+            <div>{askLoading ? 'ARIA réfléchit…' : askReply}</div>
+          </div>
+        )}
+        <form className="ao-ask" onSubmit={handleAskSubmit}>
+          <input
+            type="text"
+            value={askValue}
+            onChange={(e) => setAskValue(e.target.value)}
+            placeholder="Demande quelque chose à ARIA…"
+            autoComplete="off"
+            aria-label="Demander à ARIA"
+          />
+          <button type="submit" disabled={askLoading}>
+            Demander
+          </button>
+        </form>
+      </div>
 
       <button
         type="button"
