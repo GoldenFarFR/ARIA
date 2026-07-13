@@ -395,14 +395,15 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
     NAV_NODES.forEach((n, i) => {
       const rng = mulberry32(1000 + i * 271)
       const angle = n.angle + (NAV_ANGLE_NUDGE[n.label] ?? 0) * angleWiden
-      const len = R * (0.16 + rng() * 0.04) * 1.2 * lengthBoost
+      // 1.5 = base 1.2 scaled +25% (rayon global du blob, décision opérateur 13/07)
+      const len = R * (0.16 + rng() * 0.04) * 1.5 * lengthBoost
       const tip = buildBranch(rng, angle, len, 2, 3.2, true)
       tips.push({ x: cx + tip.x, y: cy + tip.y, label: n.label })
     })
     const deco = mulberry32(4242)
     for (let k = 0; k < 7; k++) {
       const ang = deco() * 360
-      buildBranchFrom(mulberry32(5000 + k * 333), { x: 0, y: 0 }, ang, R * (0.07 + deco() * 0.05) * 1.2, 1, 2.0)
+      buildBranchFrom(mulberry32(5000 + k * 333), { x: 0, y: 0 }, ang, R * (0.07 + deco() * 0.05) * 1.5, 1, 2.0)
     }
     onLayout({ navTips: tips, core: { x: cx, y: cy } })
   }
