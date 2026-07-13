@@ -543,6 +543,7 @@ _EXTERNAL_WRITE_ALLOWLIST = {
     "skills/telegram_conversation_miner.py",
     "skills/pump_dump_autopsy.py",
     "skills/code_proposal.py",
+    "skills/ux_watch.py",
     "truth_ledger/sync.py",
     # X/Twitter
     "skills/acp_workflow_social.py",

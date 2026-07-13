@@ -306,6 +306,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="ux_watch_cycle",
+        name="Veille UX visuelle du site",
+        description="Capture le site reel (Playwright, desktop+mobile) et le lit visuellement (llm_vision.vision_analyze, brique deja cablee pour l'avatar -- pas ARIA_VISION_ENABLED, gate propre a la fonctionnalite photo Telegram admin-only, sans rapport). Compare au referentiel UX gamme luxe (CLAUDE.md, Normes permanentes). PROPOSE des micro-details concrets via ISSUE GitHub (aria-ux-proposal) -- jamais une refonte, jamais un changement de code direct, jamais un commit ni une fusion autonome. Un cycle par jour maximum. Gate OFF par defaut.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="market_sentiment_cycle",
         name="Sentiment de marche continu",
         description="Rafraichit SANS expiration la lecture de sentiment (RSI/Bollinger/momentum/retracement, deterministe, aucun LLM) des paires principales (BTC, ETH) -- vocabulaire aligne sur le Wall St Cheat Sheet, regroupe en regimes mesurables. Ecrase toujours la derniere lecture (aucun cache perime) ; une paire en echec de fetch n'interrompt pas les autres. Gate OFF par defaut.",
@@ -425,6 +432,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.knowledge_inbox import knowledge_inbox_enabled
 
                 task.enabled = knowledge_inbox_enabled()
+            if task.id == "ux_watch_cycle":
+                from aria_core.skills.ux_watch import ux_watch_enabled
+
+                task.enabled = ux_watch_enabled()
             if task.id == "claude_mentor_cycle":
                 from aria_core.skills.claude_mentor import claude_mentor_enabled
 
@@ -933,6 +944,16 @@ class AriaHeartbeat:
                 append_memory(
                     "knowledge_inbox",
                     f"[inbox] {result.get('path', '?')} -> proposition {result.get('title', '?')}",
+                )
+
+        elif task_id == "ux_watch_cycle":
+            from aria_core.skills.ux_watch import run_ux_watch_cycle
+
+            result = await run_ux_watch_cycle()
+            if result.get("outcome") == "proposed":
+                append_memory(
+                    "ux_watch",
+                    f"[ux_watch] {result.get('findings_count', 0)} detail(s) -> {result.get('issue_url', '?')}",
                 )
 
         elif task_id == "claude_mentor_cycle":
