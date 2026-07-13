@@ -22,6 +22,7 @@ from app.api.routes import (
     analysis,
     aria,
     auth,
+    forex,
     games,
     holding_member,
     pairs,
@@ -164,6 +165,7 @@ app.include_router(games.router, prefix="/api")
 app.include_router(pot.router, prefix="/api")
 app.include_router(telegram_route.router, prefix="/api")
 app.include_router(pairs.router, prefix="/api")
+app.include_router(forex.router, prefix="/api")
 app.include_router(analysis.router, prefix="/api")
 app.include_router(watchlist.router, prefix="/api")
 app.include_router(alerts.router, prefix="/api")
