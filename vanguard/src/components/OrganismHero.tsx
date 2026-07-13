@@ -1,6 +1,30 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { agentChat, getPaperWallet, getTrendingPairs, type PaperWallet, type TrendingPair } from '../api'
 
+// Minimal shape of the Web Speech API's SpeechRecognition -- not in TS's
+// standard DOM lib, and only Chrome/Edge/Safari ship it (never Firefox as
+// of this writing). Feature-detected at runtime (see micSupported below);
+// the mic button simply doesn't render where it's unsupported rather than
+// showing a control that silently does nothing.
+interface MinimalSpeechRecognition extends EventTarget {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  start(): void
+  stop(): void
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+  onerror: (() => void) | null
+  onend: (() => void) | null
+}
+
+function getSpeechRecognitionCtor(): (new () => MinimalSpeechRecognition) | null {
+  const w = window as unknown as {
+    SpeechRecognition?: new () => MinimalSpeechRecognition
+    webkitSpeechRecognition?: new () => MinimalSpeechRecognition
+  }
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
+}
+
 /**
  * OrganismHero: the ZHC homepage hero -- an animated "living organism" (a glowing
  * blob with tapered, wobbling branches) that doubles as the primary navigation and
@@ -880,19 +904,13 @@ const CSS = `
   --bg:#050607; --text:#e8e9ea; --text-dim:#7d838a;
   --mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
-  position:relative; width:100%; min-height:100vh; overflow:hidden;
+  position:relative; width:100%; overflow:hidden;
+  /* Exact fit, not a minimum: header height (via --vanguard-header-h, see
+     use-header-clearance.ts) + this height must equal exactly one screen,
+     full-screen-blob with zero page scroll (no vertical scrollbar). dvh
+     (not vh) so mobile browser chrome doesn't leave a sliver of overflow. */
+  height:calc(100dvh - var(--vanguard-header-h));
   background:var(--bg); color:var(--text); font-family:var(--sans);
-}
-/* On narrow (portrait mobile) viewports, min-height:100vh stretches the
-   organism far taller than its content needs -- the core cluster stays
-   vertically centered (cy = H/2) while the ask-form sits pinned near the
-   very bottom (bottom:30px), so a full 100vh here reads as a large empty
-   gap between them. Capping the effective height keeps desktop untouched
-   (this query never matches landscape/desktop widths) while shrinking
-   that dead space on tall narrow phones. dvh (not vh) so mobile browser
-   toolbars don't inflate the cap further. */
-@media (max-width:640px){
-  .aria-organism{ min-height:min(100dvh, 640px); }
 }
 .aria-organism *{box-sizing:border-box;}
 .aria-organism .ao-canvas{position:absolute; inset:0; display:block; width:100%; height:100%;}
@@ -943,6 +961,21 @@ const CSS = `
 }
 .aria-organism .ao-ask button:disabled{ opacity:0.5; cursor:default; }
 .aria-organism .ao-ask button:focus-visible{outline:2px solid var(--text); outline-offset:2px;}
+
+.aria-organism .ao-ask button.ao-mic{
+  background:rgba(255,255,255,0.04); color:var(--text-dim); border:1px solid rgba(232,233,234,0.14);
+  border-radius:50%; padding:0; width:38px; height:38px; flex:none;
+  display:flex; align-items:center; justify-content:center;
+}
+.aria-organism .ao-ask button.ao-mic:hover{ color:var(--text); border-color:#8fe3d3; }
+.aria-organism .ao-ask button.ao-mic.is-listening{
+  color:#04211c; background:#8fe3d3; border-color:#8fe3d3; animation:ao-mic-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ao-mic-pulse{
+  0%,100%{ box-shadow:0 0 0 0 rgba(143,227,211,0.45); }
+  50%{ box-shadow:0 0 0 6px rgba(143,227,211,0); }
+}
+@media (prefers-reduced-motion: reduce){ .aria-organism .ao-ask button.ao-mic.is-listening{ animation:none; } }
 
 .aria-organism .ao-ask-reply{
   background:rgba(5,6,7,0.78); border:1px solid rgba(232,233,234,0.14); border-radius:14px;
@@ -1157,6 +1190,9 @@ export function OrganismHero() {
   const [askReply, setAskReply] = useState<string | null>(null)
   const [askLoading, setAskLoading] = useState(false)
   const [askError, setAskError] = useState(false)
+  const [micSupported, setMicSupported] = useState(false)
+  const [isListening, setIsListening] = useState(false)
+  const recognitionRef = useRef<MinimalSpeechRecognition | null>(null)
   const [savedEvents, setSavedEvents] = useState<Record<number, boolean>>({})
   const [calendarConnected, setCalendarConnected] = useState(false)
   const [activeCategories, setActiveCategoriesState] = useState<Set<MarketCategory>>(
@@ -1359,6 +1395,38 @@ export function OrganismHero() {
     [askValue, askLoading],
   )
 
+  // Feature-detected once on mount -- Firefox has no Web Speech API at all,
+  // and even Chrome/Safari require it. The button below only renders when
+  // this is true; never show a mic that does nothing when clicked.
+  useEffect(() => {
+    setMicSupported(!!getSpeechRecognitionCtor())
+  }, [])
+
+  const toggleMic = useCallback(() => {
+    if (isListening) {
+      recognitionRef.current?.stop()
+      return
+    }
+    const Ctor = getSpeechRecognitionCtor()
+    if (!Ctor) return
+    const recognition = new Ctor()
+    recognition.lang = 'fr-FR'
+    recognition.interimResults = true
+    recognition.continuous = false
+    recognition.onresult = (event) => {
+      let transcript = ''
+      for (let i = 0; i < event.results.length; i++) transcript += event.results[i][0]?.transcript ?? ''
+      setAskValue(transcript)
+    }
+    // Permission denied / no speech detected / browser-level failure -- fail
+    // silently back to typing, never a fabricated transcript.
+    recognition.onerror = () => setIsListening(false)
+    recognition.onend = () => setIsListening(false)
+    recognitionRef.current = recognition
+    recognition.start()
+    setIsListening(true)
+  }, [isListening])
+
   const toggleEventSaved = useCallback((i: number) => {
     setSavedEvents((prev) => ({ ...prev, [i]: !prev[i] }))
   }, [])
@@ -1493,6 +1561,22 @@ export function OrganismHero() {
             autoComplete="off"
             aria-label="Demander à ARIA"
           />
+          {micSupported && (
+            <button
+              type="button"
+              className={`ao-mic${isListening ? ' is-listening' : ''}`}
+              onClick={toggleMic}
+              aria-label={isListening ? 'Arrêter la dictée' : 'Dicter la question à voix haute'}
+              aria-pressed={isListening}
+            >
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"
+                />
+              </svg>
+            </button>
+          )}
           <button type="submit" disabled={askLoading}>
             Demander
           </button>
