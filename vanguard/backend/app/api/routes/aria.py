@@ -327,6 +327,53 @@ async def sepolia_code_check(address: str, request: Request):
     return result
 
 
+@router.get("/bonding-pool")
+async def bonding_pool(request: Request, status: str = "active", limit: int = 100):
+    """Opérateur SEULEMENT (#60, marché « Jetons d'agent ») : expose en lecture seule
+    le pool `screened_token` réseau `base-bonding` déjà filtré par `bonding_screen.py`.
+
+    Existe pour que le wrapper `bondv5-trader` (process TypeScript séparé) lise les
+    candidats déjà analysés via HTTP plutôt que d'ouvrir `aria.db` en SQLite directement
+    — deux langages/process ne doivent jamais taper le même fichier SQLite en continu.
+    Aucune analyse ici, juste une relecture de `screened_pool.list_pool`.
+    """
+    require_operator(request)
+    from aria_core import screened_pool
+
+    limit = max(1, min(limit, 1000))
+    items = await screened_pool.list_pool(status=status, network="base-bonding", limit=limit)
+    return {"items": items, "status": status, "count": len(items)}
+
+
+@router.post("/bonding-pool/trade-log")
+async def bonding_pool_trade_log(body: dict, request: Request):
+    """Opérateur SEULEMENT : enregistre le résultat d'une exécution `bondv5-trader`
+    (#60). Écriture strictement dans `bonding_trade_log`, jamais dans `screened_token`
+    — la séparation lecture-analyse / écriture-exécution est volontaire."""
+    require_operator(request)
+    from aria_core import bonding_trade_log
+
+    contract = str(body.get("contract") or "").strip()
+    side = str(body.get("side") or "").strip()
+    status = str(body.get("status") or "").strip()
+    if not contract or side not in ("buy", "sell") or status not in ("ok", "failed", "blocked"):
+        raise HTTPException(status_code=422, detail="contract, side (buy/sell) et status (ok/failed/blocked) requis.")
+
+    await bonding_trade_log.record_trade(
+        contract=contract,
+        symbol=str(body.get("symbol") or ""),
+        side=side,
+        amount_usdc=float(body.get("amount_usdc") or 0.0),
+        amount_token=float(body.get("amount_token") or 0.0),
+        min_out_wei=str(body.get("min_out_wei") or ""),
+        slippage_bps=int(body.get("slippage_bps") or 0),
+        tx_hash=str(body.get("tx_hash") or ""),
+        status=status,
+        reason=str(body.get("reason") or ""),
+    )
+    return {"recorded": True}
+
+
 @router.get("/relay/recent")
 async def relay_recent(request: Request, since_id: int = 0):
     """Historique récent du relais Claude/opérateur/ARIA (canal Telegram existant).
