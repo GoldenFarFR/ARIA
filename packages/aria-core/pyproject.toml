@@ -23,6 +23,7 @@ dependencies = [
     "reportlab>=4.2.0",
     "pypdf>=6.13.3",
     "web3>=7.15.0",
+    "playwright>=1.48.0",
 ]
 
 [project.optional-dependencies]

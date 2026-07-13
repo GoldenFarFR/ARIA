@@ -23,6 +23,12 @@ RUN apt-get update \
 COPY packages/aria-core /packages/aria-core
 RUN pip install --no-cache-dir /packages/aria-core
 
+# Chromium headless (Playwright) : captures d'ecran reelles du site pour ux_watch
+# (tache #155, skills/ux_watch.py) -- +300-500 Mo mesures, accepte tel quel (decision
+# operateur, 13/07), meme doctrine que ffmpeg/#23 ci-dessus. --with-deps installe les
+# libs systeme requises (fonts, libnss, etc.) en plus du binaire Chromium lui-meme.
+RUN playwright install --with-deps chromium
+
 COPY vanguard/backend/requirements.txt ./backend/
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
