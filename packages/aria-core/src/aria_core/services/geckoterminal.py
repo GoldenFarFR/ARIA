@@ -7,7 +7,8 @@ une -- inverserait le sens de dépendance du monorepo. Ce module est donc un
 client séparé, léger, avec ses propres dataclasses (pas les modèles Pydantic du
 backend), pensé uniquement pour les besoins de l'évaluateur wallet (#157) :
 - ``get_pool_created_at`` : horodatage de création d'un pool (entrée précoce).
-- ``resolve_primary_pool`` : résout le pool réel (plus forte liquidité) d'un token.
+- ``resolve_primary_pool`` : résout le pool réel d'un token (volume 24h plausible,
+  réserve en départage -- cf. sa docstring pour le correctif du 14/07).
 - ``get_ohlcv`` : historique de prix pour valoriser un trade (PnL FIFO) -- délègue
   à ``services/ohlcv.py`` (correction 14/07, cf. docstring de la méthode) plutôt
   que de dupliquer un second client OHLCV avec une fenêtre plus étroite.
@@ -49,6 +50,35 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
 # Palier gratuit GeckoTerminal ~30 req/min -- même throttle que le client existant
 # côté vanguard (2.1s), valeur déjà éprouvée en production.
 _MIN_INTERVAL = 2.1
+
+# Seuil de plausibilité réserve/volume pour `resolve_primary_pool` (correctif
+# 14/07, cf. sa docstring) -- calibré sur données réelles (requête directe
+# GeckoTerminal, token WETH sur Base, 20 pools) : les pools légitimes de la
+# liste avaient un ratio réserve/volume dans ~[0.01, 5] (ex. WETH/USDC 0.3%
+# réel ~1.4x), tandis que le pool corrompu écarté par ce correctif affichait
+# un ratio ~204 000x -- marge de plusieurs ordres de grandeur, seuil choisi
+# largement en dessous pour rester robuste sans risquer d'exclure un pool
+# légitime à la marge.
+_PLAUSIBILITY_RATIO_MAX = 1000.0
+
+
+def _pool_is_plausible(reserve_usd: float, volume_h24_usd: float) -> bool:
+    """Un pool est jugé implausible si sa réserve déclarée et son volume 24h
+    divergent dans des proportions statistiquement incohérentes pour un pool
+    réel -- dans UN sens (réserve énorme, volume quasi nul : signal de
+    `reserve_in_usd` corrompu/spoofé, cas réel confirmé 14/07) OU DANS L'AUTRE
+    (volume énorme, réserve quasi nulle : signal classique de wash-trading).
+    Une réserve nulle/négative est toujours implausible (aucune liquidité
+    réelle ne peut avoir généré un swap). Un volume nul n'est PAS en soi
+    disqualifiant (un token légitime peut simplement n'avoir eu aucun trade
+    dans les dernières 24h) -- seul le RATIO extrême, quand il est calculable,
+    disqualifie."""
+    if reserve_usd <= 0:
+        return False
+    if volume_h24_usd <= 0:
+        return True
+    ratio = max(reserve_usd / volume_h24_usd, volume_h24_usd / reserve_usd)
+    return ratio <= _PLAUSIBILITY_RATIO_MAX
 
 
 @dataclass
@@ -154,16 +184,36 @@ class GeckoTerminalClient:
         return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
 
     async def resolve_primary_pool(self, token_address: str, *, network: str = NETWORK) -> PoolMetadata:
-        """Résout le pool PRINCIPAL d'un token (celui à la plus forte liquidité,
-        `reserve_in_usd`) -- #157 : `get_pool_created_at`/`get_ohlcv` attendent une
-        adresse de POOL, pas un contrat de TOKEN (deux choses différentes en AMM).
-        Correction d'un bug latent : le code appelant passait directement l'adresse
-        du contrat token là où une adresse de pool était attendue. Sert aussi de
-        base à l'exclusion multi-token du wash-trading (#157, correction 14/07) --
-        le pool RÉEL de chaque token, pas une adresse statique unique. ``network``
-        (#157 multi-chaînes, 14/07) : identifiant réseau GeckoTerminal (cf.
-        ``GECKO_NETWORK_SLUGS``), ``"base"`` par défaut -- comportement historique
-        inchangé pour tout appelant existant."""
+        """Résout le pool PRINCIPAL d'un token -- #157 : `get_pool_created_at`/
+        `get_ohlcv` attendent une adresse de POOL, pas un contrat de TOKEN (deux
+        choses différentes en AMM). Correction d'un bug latent : le code appelant
+        passait directement l'adresse du contrat token là où une adresse de pool
+        était attendue. Sert aussi de base à l'exclusion multi-token du
+        wash-trading (#157, correction 14/07) -- le pool RÉEL de chaque token,
+        pas une adresse statique unique. ``network`` (#157 multi-chaînes, 14/07) :
+        identifiant réseau GeckoTerminal (cf. ``GECKO_NETWORK_SLUGS``), ``"base"``
+        par défaut -- comportement historique inchangé pour tout appelant existant.
+
+        **Correctif sélection de pool (relecture 14/07, suite #157)** : le critère
+        historique ("plus fort `reserve_in_usd`") a produit un cas réel confirmé où
+        un pool WETH annonçant 7,6 MILLIARDS de dollars de réserve pour 37 000
+        dollars de volume 24h (ratio ~204 000x, `reserve_in_usd` visiblement
+        corrompu/spoofé côté GeckoTerminal pour ce pool exotique) a été choisi à la
+        place du vrai pool WETH/USDC utilisé dans une transaction réelle -- un
+        écart de prix de ~8x, jamais signalé comme erreur (`available=True`), donc
+        pire qu'une jambe simplement non-priced. Nouveau critère (cf.
+        `_pool_is_plausible`) : filtre d'abord les pools dont le ratio
+        réserve/volume est statistiquement implausible dans un sens ou l'autre
+        (réserve gonflée sans volume réel = signal de donnée corrompue ; volume
+        gonflé sans réserve réelle = signal de wash-trading), PUIS trie les
+        survivants par volume 24h (reflète l'usage réel, plus dur à falsifier
+        durablement qu'une réserve déclarée), `reserve_in_usd` servant de
+        départage secondaire. Un token à POOL UNIQUE (immense majorité des cas
+        hors wallet-scoring) n'est JAMAIS soumis au filtre -- ce pool est
+        toujours retenu, comportement strictement inchangé pour ce cas. Un
+        token à plusieurs pools dont AUCUN ne passe le filtre échoue
+        honnêtement (`available=False`) plutôt que de retomber sur le pire des
+        choix disponibles."""
         data, error = await self._get_json(f"/networks/{network}/tokens/{token_address}/pools")
         if error is not None:
             return PoolMetadata(pool_address=token_address, available=False, error=error)
@@ -171,21 +221,40 @@ class GeckoTerminalClient:
             return PoolMetadata(pool_address=token_address, available=False, error=UNAVAILABLE)
 
         pools = data.get("data") or []
-        best_attrs: dict | None = None
-        best_liquidity = -1.0
+        candidates: list[tuple[dict, float, float]] = []
         for item in pools:
             if not isinstance(item, dict):
                 continue
             attrs = item.get("attributes") or {}
             try:
-                liquidity = float(attrs.get("reserve_in_usd") or 0.0)
+                reserve = float(attrs.get("reserve_in_usd") or 0.0)
             except (TypeError, ValueError):
-                liquidity = 0.0
-            if liquidity > best_liquidity:
-                best_liquidity = liquidity
-                best_attrs = attrs
+                reserve = 0.0
+            volume_raw = (attrs.get("volume_usd") or {}).get("h24") if isinstance(attrs.get("volume_usd"), dict) else None
+            try:
+                volume = float(volume_raw or 0.0)
+            except (TypeError, ValueError):
+                volume = 0.0
+            candidates.append((attrs, reserve, volume))
 
-        if not best_attrs or not best_attrs.get("address"):
+        if not candidates:
+            return PoolMetadata(pool_address=token_address, available=False, error="aucun pool trouvé pour ce token")
+
+        if len(candidates) == 1:
+            # Pool unique -- jamais soumis au filtre de plausibilité (rien à
+            # départager), comportement strictement inchangé.
+            best_attrs, _reserve, _volume = candidates[0]
+        else:
+            plausible = [c for c in candidates if _pool_is_plausible(c[1], c[2])]
+            if not plausible:
+                return PoolMetadata(
+                    pool_address=token_address,
+                    available=False,
+                    error="aucun pool plausible pour ce token (réserve/volume incohérents sur tous les pools trouvés)",
+                )
+            best_attrs, _best_reserve, _best_volume = max(plausible, key=lambda c: (c[2], c[1]))
+
+        if not best_attrs.get("address"):
             return PoolMetadata(pool_address=token_address, available=False, error="aucun pool trouvé pour ce token")
 
         pool_address = str(best_attrs["address"])
