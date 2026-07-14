@@ -965,7 +965,9 @@ def _valid_address(address: str) -> bool:
     return bool(address) and address.startswith("0x") and len(address) == 42
 
 
-DEFAULT_SCAN_CHAINS: tuple[str, ...] = ("base", "ethereum", "bnb")
+# "bnb" retiré (14/07) -- Blockscout ne sert pas BNB Smart Chain, vérifié sur
+# 3 angles indépendants (cf. blockscout.CHAIN_IDS pour le détail).
+DEFAULT_SCAN_CHAINS: tuple[str, ...] = ("base", "ethereum")
 
 
 async def score_wallets(
