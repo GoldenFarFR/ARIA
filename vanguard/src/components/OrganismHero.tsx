@@ -1231,7 +1231,7 @@ const CSS = `
   transition:border-color .2s ease, background .2s ease;
 }
 .aria-organism .ao-market-row:hover{ border-color:rgba(232,233,234,0.25); background:rgba(255,255,255,0.05); }
-.aria-organism .ao-market-row.is-active{ border-color:#8fe3d3; background:rgba(255,255,255,0.05); }
+.aria-organism .ao-market-row.is-active{ background:rgba(255,255,255,0.05); }
 .aria-organism .ao-market-row:focus-visible{ outline:2px solid #8fe3d3; outline-offset:3px; }
 .aria-organism .ao-market-swatch{ width:11px; height:11px; border-radius:50%; flex:none; }
 .aria-organism .ao-market-name{ font-size:13px; font-weight:600; color:var(--text); flex:1; text-align:left; }
@@ -1818,6 +1818,7 @@ export function OrganismHero() {
                       className={`ao-market-row${checked ? ' is-active' : ''}`}
                       aria-pressed={checked}
                       onClick={() => toggleCategory(key)}
+                      style={checked ? { borderColor: swatchColor } : undefined}
                     >
                       <span className="ao-market-swatch" style={{ background: swatchColor }} />
                       <span className="ao-market-name">{label}</span>
