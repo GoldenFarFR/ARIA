@@ -489,13 +489,41 @@ def _web_search_provider() -> str:
     return str(getattr(settings, "aria_web_search_provider", "ddg") or "ddg").strip().lower()
 
 
+async def _translate_query_to_english(query: str) -> str:
+    """Traduit la requête en anglais avant l'envoi à Tavily (14/07, décision opérateur
+    explicite : « ajoute l'anglais à Tavily et supprime le français »). Les sources
+    primaires (CoinDesk, The Block, Reuters, Bloomberg Crypto...) sont très majoritairement
+    en anglais ; une requête envoyée telle quelle en français biaisait vers des agrégateurs
+    FR plus faibles (cryptoast.fr, pages génériques) — root cause d'une partie du signal
+    trop vague ayant mené à l'incident de fabrication du 14/07 (#voir CLAUDE.md).
+    Dégradation douce : si le LLM est indisponible/échoue, on retombe sur la requête
+    originale plutôt que d'échouer la recherche."""
+    from aria_core.llm import chat_with_context, is_llm_configured
+
+    if not is_llm_configured():
+        return query
+    translated = await chat_with_context(
+        query,
+        (
+            "Translate the following search query into a concise, natural English web "
+            "search query. Reply with ONLY the translated query text, no quotes, no "
+            "explanation. If it is already in English, return it unchanged."
+        ),
+        temperature=0.0,
+        max_tokens=60,
+    )
+    cleaned = (translated or "").strip().strip('"').strip()
+    return cleaned or query
+
+
 async def _fetch_tavily_snippets(query: str, max_snippets: int) -> list[WebSource]:
     """Provider Tavily (dôme). Dégradation douce : liste vide si indisponible."""
     from aria_core.services.tavily import is_tavily_configured, tavily_client
 
     if not is_tavily_configured():
         return []
-    result = await tavily_client.search(query, max_results=max_snippets)
+    english_query = await _translate_query_to_english(query)
+    result = await tavily_client.search(english_query, max_results=max_snippets)
     if not result.available:
         logger.info("web_verify tavily indisponible: %s", result.error)
         return []
