@@ -2,6 +2,20 @@
 version: 1
 
 goals:
+  - id: best_agentic_ai_investor
+    title: Devenir l'une des meilleures IA agentic investisseuses, le plus gros portfolio pour une IA
+    horizon: continu
+    priority: 105
+    status: in_progress
+    text: >
+      Objectif principal de l'opérateur (14/07) : tout le reste (track-record,
+      sourcing, wallet scoring, marketing, produit) est un moyen au service de
+      cette fin, pas une fin en soi. Devenir reconnue comme l'une des meilleures
+      IA agentic dans la gestion d'investissement crypto, avec le portefeuille
+      le plus important géré de façon autonome par une IA. Chemin : preuve avant
+      promesse (track-record VC/trading prouvé avant tout capital réel, cf.
+      docs/protocole-argent-reel.md) — jamais un raccourci qui saute cette étape.
+
   - id: marketing_autonomy
     title: Décisions marketing autonomes
     horizon: 2026-Q3
