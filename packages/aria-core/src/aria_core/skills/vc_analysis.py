@@ -142,6 +142,11 @@ class VCResult:
     # aucun LLM) ; géopolitique/réglementaire reste un seam vide -- aucune source fiable
     # branchée, jamais de donnée inventée en attendant. Sans donnée -> section omise.
     market_context: dict | None = None
+    # Contexte macro actions/ETF/matières premières (tâche #14 suite, 13/07,
+    # services/alphavantage.py) -- volontairement SÉPARÉ de market_context (BTC) :
+    # source indépendante, gate dédié (ARIA_ALPHAVANTAGE_ENABLED, OFF par défaut,
+    # BTC n'a pas ce gate), aucun couplage entre les deux. Sans donnée -> section omise.
+    market_context_equities: dict | None = None
 
     @property
     def actionable(self) -> bool:
@@ -744,6 +749,27 @@ async def _attach_market_context(result: VCResult, lang: str = "fr") -> VCResult
     return result
 
 
+async def _attach_equities_context(result: VCResult) -> VCResult:
+    """Contexte macro actions/ETF/matières premières (tâche #14 suite, 13/07) :
+    SPY/QQQ (proxy ETF, aucun endpoint indice natif chez ce fournisseur) + un
+    indice composite matières premières hors métaux précieux (absents chez ce
+    fournisseur). Gate OFF par défaut (``ARIA_ALPHAVANTAGE_ENABLED``, vérifié
+    dans ``fetch_equities_commodities_context`` lui-même) -- aucun appel réseau
+    tant que non activé. Data-gated comme le reste : une source manquante
+    n'empêche jamais les autres, jamais de donnée inventée."""
+    from aria_core.services.alphavantage import fetch_equities_commodities_context
+
+    try:
+        ctx = await fetch_equities_commodities_context()
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant, le rapport reste valide sans cette section
+        logger.warning("analyze_vc: contexte actions/ETF/matières premières indisponible (%s)", exc)
+        ctx = None
+    if not ctx:
+        return result
+    result.market_context_equities = ctx
+    return result
+
+
 def _attach_ta(result: VCResult, ctx: TokenScanContext) -> VCResult:
     """Reporte l'analyse technique (niveaux réels + graphique) du ctx vers le VCResult.
 
@@ -797,6 +823,7 @@ async def _attach_extras(result: VCResult, ctx: TokenScanContext, lang: str = "f
     l'existence d'une série OHLCV pour CE token, contrairement à TA/ROI)."""
     _attach_ta(result, ctx)
     await _attach_market_context(result, lang)
+    await _attach_equities_context(result)
     return result
 
 

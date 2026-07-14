@@ -548,6 +548,63 @@ def test_report_market_context_escapes_hostile_content():
     assert "&lt;script&gt;" in out
 
 
+# ── Contexte actions/ETF/matières premières (tâche #14 suite, 13/07) — data-gated,
+# premium uniquement, indépendant du contexte BTC ci-dessus ────────────────
+
+_EQUITIES_CTX = {
+    "spy": {"price": 512.34, "change_pct": 1.23, "date": "2026-07-13", "stale": False},
+    "qqq": {"price": 481.0, "change_pct": -0.5, "date": "2026-07-13", "stale": False},
+    "commodities": {"value": 104.2, "unit": "index points", "date": "2026-07-13", "stale": False},
+}
+
+
+def test_report_equities_context_section_present_when_available():
+    out = render_html_report(_result(market_context_equities=_EQUITIES_CTX), generated_at=_GEN)
+    assert "Actions et matières premières" in out
+    assert "SPY" in out
+    assert "QQQ" in out
+    assert "512.34" in out
+    assert "104.2" in out
+    assert "indice natif" in out.lower()
+
+
+def test_report_no_equities_context_section_without_data():
+    out = render_html_report(_result(market_context_equities=None), generated_at=_GEN)
+    assert "Actions et matières premières" not in out
+
+
+def test_report_equities_context_partial_data_only_renders_available_lines():
+    """SPY seul disponible (QQQ/commodities absents) -- rendu partiel, jamais de
+    ligne vide ni de valeur inventée pour combler."""
+    partial = {"spy": {"price": 500.0, "change_pct": 0.1, "date": "2026-07-13", "stale": False}}
+    out = render_html_report(_result(market_context_equities=partial), generated_at=_GEN)
+    assert "Actions et matières premières" in out
+    assert "SPY" in out
+    assert "QQQ" not in out
+
+
+def test_report_equities_context_hidden_in_standard_tier():
+    out = render_html_report(_result(market_context_equities=_EQUITIES_CTX), generated_at=_GEN, tier="standard")
+    assert "Actions et matières premières" not in out
+
+
+def test_report_equities_context_escapes_hostile_content():
+    hostile = _result(market_context_equities={
+        "commodities": {"value": "<script>alert(1)</script>", "unit": "x", "date": "x", "stale": False},
+    })
+    out = render_html_report(hostile, generated_at=_GEN)
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+
+
+def test_report_equities_context_independent_from_btc_context():
+    out = render_html_report(
+        _result(market_context=_MARKET_CTX, market_context_equities=None), generated_at=_GEN,
+    )
+    assert "Contexte marché" in out
+    assert "Actions et matières premières" not in out
+
+
 # ── Langue (FR par défaut, EN additif — libellés fixes uniquement) ──────────
 
 def test_report_default_lang_is_fr_byte_identical_labels():

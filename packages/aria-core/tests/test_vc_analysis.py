@@ -578,6 +578,78 @@ async def test_analyze_vc_market_context_failure_never_breaks_report(monkeypatch
     assert result.recommandation == "BUY"  # le reste du rapport n'est pas affecté
 
 
+# ------------- contexte actions/ETF/matières premières (tâche #14 suite, 13/07) -------------
+
+@pytest.mark.asyncio
+async def test_analyze_vc_equities_context_omitted_when_disabled(monkeypatch):
+    """Gate OFF par défaut (fixture autouse de ce fichier, aucune clé/env posée) --
+    section omise, rapport strictement inchangé, jamais d'appel réseau."""
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.market_context_equities is None
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_equities_context_attached_when_available(monkeypatch):
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    equities_payload = {"spy": {"price": 500.0, "change_pct": 1.2, "date": "2026-07-13", "stale": False}}
+    monkeypatch.setattr(
+        "aria_core.services.alphavantage.fetch_equities_commodities_context",
+        AsyncMock(return_value=equities_payload),
+    )
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.market_context_equities == equities_payload
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_equities_context_independent_from_btc_context(monkeypatch):
+    """BTC et actions/ETF sont deux sources INDÉPENDANTES -- l'une disponible et
+    l'autre pas ne s'influencent jamais."""
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    monkeypatch.setattr(
+        "aria_core.skills.btc_cycles.fetch_current_macro_phase",
+        AsyncMock(return_value={
+            "label": "hausse (markup)", "since": "2024-04-20",
+            "change_pct": 42.0, "cycle_name": "cycle halving 2024->en cours",
+        }),
+    )
+    monkeypatch.setattr(
+        "aria_core.services.alphavantage.fetch_equities_commodities_context",
+        AsyncMock(return_value=None),
+    )
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.market_context is not None
+    assert result.market_context_equities is None
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_equities_context_failure_never_breaks_report(monkeypatch):
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    monkeypatch.setattr(
+        "aria_core.services.alphavantage.fetch_equities_commodities_context",
+        AsyncMock(side_effect=RuntimeError("alphavantage down")),
+    )
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.market_context_equities is None
+    assert result.recommandation == "BUY"
+
+
 # ── Tâche #9 : le prompt LLM ne laisse jamais un niveau de prix sans ancrage réel ──────
 
 def test_prompt_instructs_qualitative_levels_when_no_ta_and_no_bonding():
