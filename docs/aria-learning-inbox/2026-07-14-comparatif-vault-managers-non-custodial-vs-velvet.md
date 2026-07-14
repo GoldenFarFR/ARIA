@@ -193,6 +193,110 @@ recherche.
 
 ---
 
+## Protection contre les pertes (complément demandé, dimension absente de la première passe)
+
+**Point de départ vérifié : la clause Velvet Capital signalée côté commandement
+se confirme intégralement, indépendamment.** Lu directement dans
+`velvet.capital/terms-of-service.html`, section 18 ("Assumption of Risks") :
+*« Digital Assets are not deposits of or guaranteed by any bank, are not
+insured by the FDIC, the SIPC, or any governmental agency, and may have
+little or no value. »* Le document place explicitement tout le risque de
+perte sur l'utilisateur (wallet, credentials, permissions de smart contract,
+pertes liées aux "AI Features" ou aux "Beta Features"). **Nuance sur le
+"Risk Management module" mentionné côté commandement** : cette recherche n'a
+trouvé aucune mention d'un tel module dans les ToS ni sur le site public
+consultés ce soir — ni pour le confirmer comme "en construction", ni pour le
+contredire. Absence de preuve, pas preuve d'absence : possible qu'il soit
+documenté ailleurs (app connectée, Discord) hors de portée d'une recherche
+externe en lecture seule.
+
+**Nuance importante trouvée indépendamment, qui ne contredit pas le
+diagnostic mais l'affine** : Velvet Capital **est listé comme produit de
+couverture achetable sur Nexus Mutual** (assureur décentralisé on-chain,
+"20+ New Cover Listings" — Velvet Capital y figure explicitement, protection
+contre "smart contract hacks, oracle failure, oracle manipulation,
+liquidation failure or governance takeovers"). **Ce n'est pas Velvet qui
+assure** — c'est un tiers (Nexus Mutual) qui vend une couverture optionnelle,
+payante, que l'utilisateur doit acheter lui-même, et qui — point central —
+**ne couvre que les défaillances techniques/exploits, jamais les pertes de
+trading ou les mauvaises décisions du manager**. Le diagnostic de fond du
+commandement est donc confirmé au niveau qui compte : **aucune protection,
+native ou tierce, ne couvre jamais une perte de trading normale sur aucun
+des 5 protocoles comparés ce soir** — seule la question de savoir si une
+couverture tierce existe pour les exploits varie d'un protocole à l'autre.
+
+### Vérification indépendante des 4 concurrents déjà comparés
+
+- **Enzyme Finance** — **aucun mécanisme d'assurance natif trouvé**, et
+  **aucun produit de couverture Nexus Mutual autonome confirmé non plus**
+  (recherche ciblée effectuée, sans résultat) — situation potentiellement
+  moins couverte que Velvet sur cet axe précis, à prendre avec prudence
+  (absence de preuve trouvée, pas preuve formelle d'absence). Point ironique
+  identifié en cherchant : c'est l'inverse d'une couverture pour Enzyme —
+  **Nexus Mutual utilise Enzyme.Blue comme infrastructure pour gérer SA
+  PROPRE trésorerie de plus de 60M$** (le fonds qui sert à payer les
+  sinistres des AUTRES protocoles couverts), ce qui ne protège en rien les
+  déposants d'un vault Enzyme tiers.
+
+- **Yearn V3 / écosystème Yearn** — **pas de fonds d'assurance dédié et
+  permanent non plus**, mais un **historique réel et documenté de
+  remboursement ad hoc via la trésorerie du protocole, décidé par vote de
+  gouvernance à chaque incident** : remboursement à 100% des victimes du
+  hack v1 yDAI de 2021 (11M$, financé par un emprunt sur la trésorerie YFI,
+  pas un fonds pré-provisionné) ; remboursement des pertes de l'exploit yETH
+  (proposition de gouvernance approuvée à 97%, 3,2M$ distribués par Merkle
+  drop en 48h) ; 80% de compensation proposée aux victimes de l'exploit Sonne
+  Finance touchant des vaults yvUSDT/yvDAI (10% de décote acceptée par les
+  utilisateurs concernés). **Différence structurelle importante avec une
+  vraie assurance** : ce n'est jamais un droit contractuel, seulement une
+  décision de gouvernance au cas par cas, qui pourrait tout aussi bien être
+  refusée une prochaine fois — mais c'est le seul protocole du comparatif
+  avec un **track record vérifiable de remboursement réel après exploit**,
+  ce qui est un signal de bonne foi concret, pas juste une promesse. Yearn
+  est aussi listé comme couverture disponible sur Nexus Mutual (cover
+  individuel + "Bundled Protocol Cover" avec Ajna Finance), avec un
+  historique de sinistre déjà payé : 2,3M$ versés pour un hack de smart
+  contract Yearn.
+
+- **dHEDGE/Chamber** — **listé comme produit de couverture Nexus Mutual**
+  ("dHEDGE was recently listed as a new cover option on Nexus Mutual"),
+  même régime que Velvet : opt-in, payant, couvre exploits/défaillances
+  techniques uniquement, jamais les pertes de trading. Aucun fonds
+  d'assurance natif au protocole lui-même trouvé au-delà de cette option
+  tierce.
+
+- **Morpho Vaults V2** — **listé comme couverture Nexus Mutual**, y compris
+  au niveau de vaults individuels sur Base (le "Base DeFi Pass", option
+  "set and forget" couvrant plusieurs protocoles dont Morpho). **Preuve la
+  plus concrète trouvée ce soir qu'une telle couverture a déjà été
+  activée en pratique** : un cas de sinistre documenté où un déposant du
+  vault "ExtraFi Xlend USDC" sur Morpho avait une couverture Nexus Mutual
+  active au moment où l'exploit Resolv a créé de la mauvaise dette
+  ("bad debt") non liquidée à temps sur les marchés USR — donc pas
+  seulement une option théorique, un cas d'usage réel identifié.
+
+### Synthèse sur cette dimension
+
+**Le diagnostic du commandement tient, généralisé aux 5 protocoles** : nulle
+part une perte de trading ou une mauvaise décision de manager n'est
+assurée ou compensée — la seule chose qui varie est (a) si une couverture
+tierce optionnelle existe pour les exploits/défaillances techniques (Nexus
+Mutual : oui pour Velvet, Yearn, dHEDGE/Chamber, Morpho ; non confirmé pour
+Enzyme), et (b) si le protocole a un historique réel de remboursement ad hoc
+par sa propre trésorerie en cas d'exploit (oui, uniquement documenté pour
+Yearn, via vote de gouvernance, jamais garanti). **Pour la poche "15%
+spéculation" d'ARIA, dont le risque principal est justement la perte de
+trading normale sur des micro-caps (pas un exploit de smart contract), cette
+dimension ne change donc PAS le verdict précédent** — Velvet reste le choix
+le mieux positionné sur les autres critères (API, absence de whitelist), et
+n'est ni mieux ni pire protégé que les autres sur ce point précis. Ce
+complément confirme surtout qu'**aucune protection contre les pertes de
+trading n'existe nulle part dans ce comparatif** — un rappel utile à
+documenter explicitement plutôt qu'à supposer implicite, avant toute
+décision d'allocation de capital réel.
+
+---
+
 ## Tableau comparatif
 
 | | Velvet Capital | Enzyme Finance | Yearn V3 | dHEDGE/Chamber |
@@ -304,6 +408,20 @@ si ARIA devait un jour proposer un vault sur des actifs déjà établis
 - [What Is Velvet Capital — MEXC](https://blog.mexc.com/what-is-velvet/) · [How Velvet Connects AI — Medium](https://medium.com/@XT_com/how-velvet-connects-ai-on-chain-trading-and-vault-based-portfolios-66a2e60f9253)
 - Note ARIA de référence : `docs/aria-learning-inbox/2026-07-14-velvet-capital-vault-manager-piste-capital-reel.md`
 - `docs/protocole-argent-reel.md` (lu en intégralité plus tôt ce soir — contexte de l'étape 2 gating)
+
+### Sources — complément "Protection contre les pertes"
+
+- [Velvet Capital — Terms of Service](https://www.velvet.capital/terms-of-service.html) (section 18, lu directement, lecture seule)
+- [Nexus Mutual — 20+ New Cover Listings (Velvet Capital)](https://nexusmutual.io/blog/20-new-cover-listings)
+- [Nexus Mutual — Fund Portfolio Cover](https://docs.nexusmutual.io/overview/cover-products/fund-portfolio-cover/)
+- [Nexus Mutual manages its capital using Enzyme](https://enzyme.finance/blog-posts/userstory-nexus-capitalmanagement)
+- [Nexus Mutual stakes its capital pool with Kiln through Enzyme](https://www.kiln.fi/post/nexus-mutual-stakes-its-capital-pool-with-kiln-through-enzyme)
+- [Paying claims for the Yearn hack — Nexus Mutual (Medium)](https://medium.com/nexus-mutual/paying-claims-for-the-yearn-hack-693bcfc5cd57)
+- [YIP-78: Partial Compensation Sonne Hack Victims — Yearn governance](https://gov.yearn.fi/t/yip-78-partial-compensation-sonne-hack-victims/14103)
+- [Nexus Mutual Launches Bundled Protocol Cover (Yearn + Ajna)](https://nexusmutual.io/blog/bundled-protocol-cover-is-live)
+- [dHEDGE listed as new cover option on Nexus Mutual](https://bitcoinexchangeguide.com/yearn-finance-offering-tokenized-nexus-mutual-insurance-covers-for-5-top-defi-protocols/)
+- [Nexus Mutual responds to Arcadia Finance exploit (méthodologie de claim)](https://www.reinsurancene.ws/nexus-mutual-responds-to-arcadia-finance-exploit-reinforcing-commitment-to-onchain-protection/)
+- Recherche WebSearch : cas de sinistre Morpho "ExtraFi Xlend USDC" / exploit Resolv (Nexus Mutual, Base DeFi Pass) — trouvé via recherche générale Nexus Mutual + Morpho, page de détail du claim non ouverte individuellement ce soir
 
 ## Frontières confirmées respectées
 
