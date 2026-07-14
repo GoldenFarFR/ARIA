@@ -556,6 +556,7 @@ class _MultiTokenResult:
     early_entry_tokens: list[str] = field(default_factory=list)
     informed_entry_tokens: list[str] = field(default_factory=list)
     pool_lookup_errors: int = 0
+    gecko_dexscreener_gap_tokens: list[str] = field(default_factory=list)
     resolved_pool_addresses: set[str] = field(default_factory=set)
 
 
@@ -570,6 +571,7 @@ async def _analyze_wallet_multi_token(
     l'adresse token seule, pour ne jamais fusionner par erreur deux tokens
     d'adresses identiques sur deux chaînes différentes (espaces d'adresses
     indépendants par construction EVM)."""
+    from aria_core.services.dexscreener import has_any_pair as _dexscreener_has_any_pair
     from aria_core.services.geckoterminal import GECKO_NETWORK_SLUGS
 
     wallet_l = wallet.lower()
@@ -634,6 +636,15 @@ async def _analyze_wallet_multi_token(
                     result.informed_entry_tokens.append(token_addr)
         else:
             result.pool_lookup_errors += 1
+            # Triangulation (#157, 14/07) : GeckoTerminal n'a pas résolu de pool --
+            # avant de conclure "token illiquide", on croise avec DexScreener.
+            # `True` = écart réel entre les deux sources (DexScreener voit une
+            # paire que GeckoTerminal rate -- signal à creuser, pas un défaut du
+            # wallet) ; `False`/`None` (aucune paire confirmée, ou vérification
+            # elle-même indisponible) n'ajoute rien de plus que ce que
+            # `pool_lookup_errors` dit déjà.
+            if await _dexscreener_has_any_pair(token_addr, chain=chain) is True:
+                result.gecko_dexscreener_gap_tokens.append(token_addr)
 
     return result
 
@@ -797,6 +808,7 @@ class WalletScoreCard:
     closed_trades_count: int = 0
     unpriced_legs: int = 0
     pool_lookup_errors: int = 0  # tokens sans pool GeckoTerminal résolu (#157, 14/07 -- diagnostic)
+    gecko_dexscreener_gap_count: int = 0  # parmi eux, DexScreener voit une paire que GeckoTerminal a ratée (#157, 14/07)
     win_rate: float | None = None
     realized_pnl_usd: float | None = None
     sortino: float | None = None
@@ -877,6 +889,11 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         f"Trades clôturés valorisés : {card.closed_trades_count} (jambes sans prix : {card.unpriced_legs}, "
         f"tokens sans pool GeckoTerminal résolu : {card.pool_lookup_errors})"
     )
+    if card.gecko_dexscreener_gap_count:
+        lines.append(
+            f"Dont {card.gecko_dexscreener_gap_count} avec une paire DexScreener trouvée que GeckoTerminal "
+            "n'a pas résolue (écart entre sources, pas forcément un token illiquide)."
+        )
     lines.append(f"Win rate : {card.win_rate:.0%}" if card.win_rate is not None else "Win rate : indisponible")
     lines.append(
         f"PnL réalisé : ${card.realized_pnl_usd:,.2f}"
@@ -1066,6 +1083,7 @@ async def score_wallets(
         card.closed_trades_count = len(multi.closed_trades)
         card.unpriced_legs = multi.unpriced_legs
         card.pool_lookup_errors = multi.pool_lookup_errors
+        card.gecko_dexscreener_gap_count = len(multi.gecko_dexscreener_gap_tokens)
 
         dex_exclusions = _build_dex_infrastructure_exclusions(grouped, wallet) | multi.resolved_pool_addresses
         disq = await _hard_disqualifiers(

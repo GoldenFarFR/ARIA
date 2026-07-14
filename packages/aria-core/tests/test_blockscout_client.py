@@ -668,18 +668,18 @@ class TestMultiChainProApi:
         assert client._api_key is None
 
     def test_base_with_pro_key_uses_pro_api(self, monkeypatch):
-        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "test-key")
         client = BlockscoutClient(chain="base")
         assert client.base_url == "https://api.blockscout.com/8453/api/v2"
-        assert client._api_key == "proapi_test_key"
+        assert client._api_key == "test-key"
 
     def test_ethereum_with_pro_key_resolves_chain_id_1(self, monkeypatch):
-        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "test-key")
         client = BlockscoutClient(chain="ethereum")
         assert client.base_url == "https://api.blockscout.com/1/api/v2"
 
     def test_bnb_with_pro_key_resolves_chain_id_56(self, monkeypatch):
-        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "test-key")
         client = BlockscoutClient(chain="bnb")
         assert client.base_url == "https://api.blockscout.com/56/api/v2"
 
@@ -698,7 +698,7 @@ class TestMultiChainProApi:
 
     @pytest.mark.asyncio
     async def test_pro_api_key_sent_as_query_param(self, monkeypatch):
-        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "test-key")
         client = BlockscoutClient(chain="ethereum")
         url = f"{client.base_url}/addresses/0xabc"
 
@@ -730,12 +730,12 @@ class TestMultiChainProApi:
         await client.get_address_info("0xabc")
 
         assert captured["url"] == url
-        assert captured["params"]["apikey"] == "proapi_test_key"
+        assert captured["params"]["apikey"] == "test-key"
 
     def test_get_blockscout_client_caches_per_chain(self, monkeypatch):
         from aria_core.services.blockscout import get_blockscout_client
 
-        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "test-key")
         a = get_blockscout_client("ethereum")
         b = get_blockscout_client("ethereum")
         assert a is b
