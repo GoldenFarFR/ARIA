@@ -1130,6 +1130,11 @@ def vision_enabled() -> bool:
     )
 
 
+# Lecture directe d'une page web (13/07) -- même prudence que vision_enabled() :
+# gate séparé (ARIA_WEB_FETCH_ENABLED, cf. knowledge/web_verify.py), admin-only.
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
 async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Point d'entrée UNIQUE pour tout message photo (avant ce correctif du 10/07, AUCUN
     handler photo n'était enregistré — toute image envoyée à ARIA était ignorée en
@@ -1229,6 +1234,17 @@ async def _handle_public_message(update: Update, text: str) -> None:
     message = update.message
     user = update.effective_user
     if not message or not user:
+        return
+
+    if _URL_RE.search(text):
+        # Décline systématiquement, indépendamment du gate ARIA_WEB_FETCH_ENABLED
+        # (même posture que vision_enabled() pour les photos) -- jamais un fetch
+        # discret d'une URL fournie par un visiteur public.
+        await _reply(
+            message,
+            "Je ne lis pas encore de page web directement en dehors de l'équipe — "
+            "pose ta question en texte.",
+        )
         return
 
     allowed = check_rate_limit(
@@ -1350,6 +1366,32 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     from aria_core.locale import detect_operator_lang
 
     lang = detect_operator_lang(text)
+
+    url_match = _URL_RE.search(text)
+    if url_match:
+        from aria_core.knowledge.web_verify import answer_from_page, web_fetch_enabled
+
+        if not web_fetch_enabled():
+            await _reply(
+                message,
+                "La lecture de page web n'est pas encore activée "
+                "(ARIA_WEB_FETCH_ENABLED désactivé)."
+                if lang == "fr"
+                else "Direct page reading is not enabled yet (ARIA_WEB_FETCH_ENABLED disabled).",
+            )
+            return
+
+        await message.reply_chat_action("typing")
+        url = url_match.group(0).rstrip(").,;!?»\"'")
+        reply, _meta = await answer_from_page(url, text, lang=lang)
+        if reply is None:
+            reply = (
+                "Je n'ai pas réussi à lire cette page pour répondre — réessaie ou reformule."
+                if lang == "fr"
+                else "I couldn't read that page to answer — try again or rephrase."
+            )
+        await _reply(message, reply)
+        return
 
     from aria_core.self_maintenance import handle_operator_self_message
 
