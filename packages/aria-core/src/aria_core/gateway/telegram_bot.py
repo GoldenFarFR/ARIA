@@ -1758,6 +1758,17 @@ async def _run_wallet_score(message, addresses: list[str]) -> None:
         _wallet_score_semaphore.release()
 
 
+# Libellés spéciaux (14/07) -- uniquement pour les noms de chaîne où une simple
+# capitalisation donne un résultat trompeur/moche (ex. "zksync" -> "Zksync" au
+# lieu de "zkSync Era"). Tout le reste dérive de blockscout.CHAIN_IDS.keys()
+# via .capitalize() -- jamais une 2e liste statique des 13 noms à tenir à jour.
+_CHAIN_LABEL_OVERRIDES = {"zksync": "zkSync Era"}
+
+
+def _chain_display_label(chain: str) -> str:
+    return _CHAIN_LABEL_OVERRIDES.get(chain, chain.capitalize())
+
+
 def _format_wallet_score_card(card) -> list[str]:
     from aria_core.services.wallet_scoring_weights import WEIGHTS
 
@@ -1771,8 +1782,11 @@ def _format_wallet_score_card(card) -> list[str]:
         lines.append(f"  ⚠️ {card.financing_check_note}")
     # Transparence multi-chaînes (#157, 14/07) : jamais laisser penser qu'ARIA
     # a "tout" vu par défaut -- montre explicitement où une activité a été trouvée.
-    chains_label = {"base": "Base", "ethereum": "Ethereum"}
-    scanned = ", ".join(chains_label.get(c, c) for c in card.chains_scanned) or "aucune"
+    # Étiquettes dérivées de blockscout.CHAIN_IDS (jamais un 3e registre de noms
+    # de chaîne codé en dur à part -- correction 14/07 : ce dict était resté
+    # bloqué à 2 entrées après l'extension de CHAIN_IDS à 13 chaînes, montrant
+    # le slug brut "arbitrum"/"zksync"/etc. au lieu d'un libellé lisible).
+    scanned = ", ".join(_chain_display_label(c) for c in card.chains_scanned) or "aucune"
     lines.append(f"  Chaînes avec activité trouvée : {scanned}")
     lines.append(
         f"  Tokens analysés : {card.tokens_analyzed}/{card.tokens_found}"
