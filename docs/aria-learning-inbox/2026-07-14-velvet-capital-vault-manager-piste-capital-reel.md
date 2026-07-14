@@ -31,6 +31,19 @@ les institutions).
 - Faille de smart contract documentée et corrigée : délai de flux de prix Chainlink
   permettant un arbitrage de mint de parts.
 - Rien trouvé côté hack/rug en 2025-2026, mais ce n'est pas un protocole sans historique.
+- **Aucune assurance sur les pertes (vérifié en direct, 14/07, domaine velvet.capital
+  uniquement -- une première recherche générique avait mélangé un AUTRE projet appelé
+  "Velvet" citant CertiK/Hacken et un fonds d'assurance à 80%, non confirmé sur
+  velvet.capital lui-même, écarté)** : conditions d'utilisation standard -- actifs
+  numériques non assurés FDIC/SIPC, non garantis. Non-custodial protège contre le vol
+  par le manager (jamais un retrait de fonds déposants), PAS contre une perte de
+  trading normale ni un exploit de smart contract -- la perte resterait à la charge
+  du déposant. Un "Risk Management module" est en construction (pas encore live),
+  décrit comme un filet en cas de force majeure -- pas une assurance confirmée sur
+  les pertes de trading courantes. Mesures de réduction du risque déjà actives :
+  alertes Webacy (tokens à risque), protection d'impact de prix (0x Swap API) sur
+  tokens peu liquides, protection anti-MEV/front-running -- réduisent la probabilité
+  de perte, ne la compensent pas après coup.
 
 ## Pourquoi ça s'aligne avec la doctrine actuelle (pas un raccourci)
 
@@ -57,11 +70,15 @@ pas reperdre la recherche d'ici là.
 
 ## Branches ouvertes (non creusées)
 
-- Comparer Velvet à d'autres vaults non-custodiaux équivalents sur Base (ex.
-  Enzyme Finance, Yearn V3 vaults) avant de trancher si Velvet reste le meilleur
-  choix le moment venu -- cette recherche n'a couvert QUE Velvet (nommé par
-  l'opérateur), pas un vrai comparatif concurrentiel.
+- ~~Comparer Velvet à d'autres vaults non-custodiaux équivalents sur Base~~ --
+  FAIT le 14/07 par Research :
+  `docs/aria-learning-inbox/2026-07-14-comparatif-vault-managers-non-custodial-vs-velvet.md`
+  (Enzyme Finance, Yearn V3, dHEDGE/Chamber, Morpho -- verdict : Velvet reste le
+  meilleur choix, Enzyme meilleur second choix).
 - Vérifier le détail exact du contrôle qu'un "vault manager" a réellement sur les
   fonds (limites de rééquilibrage, whitelist de tokens/protocoles autorisés côté
   vault) avant toute intégration -- non vérifié ce soir, sujet à re-creuser en
   détail au moment où cette piste serait activée pour de vrai.
+- Le "Risk Management module" de Velvet (force majeure) est en construction, pas
+  encore live -- à re-vérifier au moment où cette piste serait activée pour de
+  vrai (peut-être déployé et documenté différemment d'ici là).
