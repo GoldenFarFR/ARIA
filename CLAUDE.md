@@ -811,7 +811,7 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   régénéré (`detect-secrets scan`), vérifié une seule addition exacte, zéro suppression,
   confirmation opérateur explicite avant modification (fichier garde-fou, classifieur bloqué à
   raison sur la première tentative). 2) `scripts/safe-push.sh` : un commentaire mentionnant
-  `git@github.com` (syntaxe SSH, pas un email) matchait la regex du scanner PII (#142) —
+  `git\@github.com` (syntaxe SSH, pas un email) matchait la regex du scanner PII (#142) —
   reformulé (`git\@github.com`) sans toucher au garde-fou `ALLOWLISTED_EMAILS`. CI repassée
   verte, vérifié sur GitHub Actions après coup.
 - **Suppression de branche distante bloquée par la politique d'egress du proxy de session, pas
