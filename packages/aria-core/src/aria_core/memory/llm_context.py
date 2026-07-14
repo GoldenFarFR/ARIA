@@ -161,6 +161,9 @@ async def build_llm_context(
         goals_block = get_goals_text()
         if goals_block:
             parts.append(f"\n{goals_block}")
+        from aria_core.memory.capability_state import get_capability_state_text
+
+        parts.append(f"\n{get_capability_state_text()}")
         from aria_core.memory.reflection import get_reflections_text
 
         reflection_block = get_reflections_text()
