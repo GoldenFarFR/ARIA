@@ -34,6 +34,33 @@ def peer_competition_policy(lang: str = "fr") -> str:
     )
 
 
+def no_unverified_search_state_claim_rule(lang: str = "fr") -> str:
+    """Règle LLM interne (14/07) — même famille que l'interdit GitHub existant
+    dans channel_rule (brain.py). Incident réel : sur une question sans aucun
+    mot-clé d'actu reconnu (ex. un défilé civil), aucune recherche web n'est
+    déclenchée, et le LLM a quand même affirmé un état technique précis
+    ("mon crawl web est à sec, mes derniers passages reviennent vides") --
+    une fabrication, puisque rien n'a été tenté ce tour-ci. Corrige
+    l'invariant plutôt qu'un mot-clé précis : ne jamais décrire un mécanisme
+    de recherche non utilisé, quel que soit le sujet."""
+    if lang == "fr":
+        return (
+            "INTERDIT (même famille que les actions GitHub) : affirmer avoir vérifié un flux "
+            "web/actualité en direct ou décrire un état technique précis d'un outil de recherche "
+            "('mon crawl est à sec', 'mes derniers passages reviennent vides', 'j'ai checké et "
+            "rien ne remonte') si aucune recherche web n'a réellement eu lieu pour cette question. "
+            "Dans ce cas, dis simplement que tu n'as pas de flux d'actualité générale sur ce sujet "
+            "et que tu ne l'as pas vérifié, sans détailler un mécanisme que tu n'as pas utilisé."
+        )
+    return (
+        "FORBIDDEN (same family as GitHub actions): claiming to have checked a live web/news feed "
+        "or describing a precise technical state of a search tool ('my crawl is dry', 'my last "
+        "passes come back empty') if no web search actually happened for this question. In that "
+        "case, simply say you have no general news feed on this topic and did not check, without "
+        "describing a mechanism you never used."
+    )
+
+
 def one_liner(lang: str = "en") -> str:
     h = holding_name()
     if lang == "fr":
