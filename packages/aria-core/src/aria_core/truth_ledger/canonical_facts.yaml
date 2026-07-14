@@ -247,4 +247,21 @@
     IDE agents: skill operator-runbook + Cursor rule always-on. ARIA recalls via MEMORY_RECALL
     when the operator says runbook, nouveau pc, or ne pas oublier. After each fixed incident:
     append operator_pitfalls.yaml, run check-aria-status.ps1, propose /learn for strategic memory.
+
+- id: llm-cost-profile-july-2026
+  topic: infra
+  tags: [llm, cost, depth, cascade, economy]
+  question: Which files use the expensive depth="develop" LLM profile, and where could cheaper cascade routing apply?
+  answer: >
+    Real usage data (/opt/aria-data/llm-usage/2026-07.jsonl, July 2026): depth="develop" (the
+    expensive deep-reasoning profile) is used at exactly 2 call sites — skills/vc_analysis.py
+    and skills/vc_judge.py, both reserved for VC thesis/judge reasoning. depth=None (default,
+    cheaper) covers 358 calls/month across ~18 other files (community_feedback.py, x_voice.py,
+    brain.py, wallet_guard.py, tweet_compose_workflow.py, proactive.py, avatar.py,
+    relay_conversation.py, avatar_style_refresh.py, knowledge/epistemic_critic.py,
+    knowledge/x_insight_relevance.py, skills/comms_skill.py, qi_self_judge_shadow.py,
+    knowledge/web_verify.py, knowledge/epistemic.py, knowledge/app_idea_poll.py,
+    gateway/x_engagement.py) — candidates for a future cascade to a cheaper model, never
+    depth="develop" itself, which stays reserved for VC/judge reasoning. Source: GitHub issue
+    #27 (aria-knowledge-proposal), verified and integrated 2026-07-14.
     Golden rule: updating Render env vars does not reload the running Python process — redeploy first.

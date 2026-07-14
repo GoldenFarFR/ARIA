@@ -267,16 +267,23 @@ async def test_release_publisher_inert_even_when_gate_on(monkeypatch, _configure
 
 
 @pytest.mark.asyncio
-async def test_release_publisher_matches_injectable_signature():
+async def test_release_publisher_matches_injectable_signature(tmp_path, monkeypatch):
     """Compatible avec release_pipeline.publish_release(tiktok_publisher=...) : ne casse
     jamais le canal X, et ne revendique jamais 'tiktok' comme publié à tort.
 
     Découverte au passage en livrant #34, corrigée en #127 : un publisher injecté qui
     renvoie False SANS lever atterrit désormais dans `pending_channels` (même sort qu'un
     canal sans publisher configuré) au lieu de disparaître silencieusement des deux
-    listes -- cf. `release_pipeline.py::publish_release`."""
+    listes -- cf. `release_pipeline.py::publish_release`.
+
+    DB isolée (même patron que test_release_pipeline.py::_tmp_db) : release_pipeline.DB_PATH
+    est un module-level constant figé à l'import -- sans ce monkeypatch, ce test partage la
+    même base sqlite que tout autre test du process qui importe release_pipeline sans
+    l'isoler, et échoue de façon non-déterministe une fois que le manifeste est épuisé par
+    un test antérieur (même classe de bug que #149, jamais corrigée ici spécifiquement)."""
     from aria_core import release_pipeline as rp
 
+    monkeypatch.setattr(rp, "DB_PATH", str(tmp_path / "rel.db"))
     await rp.arm_campaign()
 
     async def x_pub(text, rel):

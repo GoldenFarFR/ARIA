@@ -34,6 +34,14 @@ def isolated_canonical_truth_db(tmp_path, monkeypatch):
         )
     monkeypatch.setattr("aria_core.truth_ledger.store.DB_PATH", str(db))
     monkeypatch.setattr("aria_core.truth_ledger.store.LEDGER_DIR", ledger)
+    # _export_faq_from_canonical() writes to a hardcoded Path(__file__)-relative location
+    # with no data_dir() indirection -- sans ce monkeypatch, tout test qui appelle
+    # sync_canonical_facts() réécrit le VRAI content/faq.yaml suivi par git à chaque
+    # lancement de la suite (trouvé le 14/07 : une édition manuelle de canonical_facts.yaml
+    # non encore répercutée s'est retrouvée committée par erreur via un simple `pytest`).
+    monkeypatch.setattr(
+        "aria_core.truth_ledger.canonical._FAQ_EXPORT_PATH", tmp_path / "faq.yaml"
+    )
 
 
 @pytest.mark.asyncio
@@ -92,12 +100,11 @@ async def test_sync_canonical_facts_populates_ledger():
 
 @pytest.mark.asyncio
 async def test_sync_exports_faq_yaml():
+    from aria_core.truth_ledger import canonical
+
     await init_truth_ledger()
     await sync_canonical_facts()
-    from pathlib import Path
-    import aria_core.content.service as faq_service
-
-    faq_path = faq_service._FAQ_PATH
+    faq_path = canonical._FAQ_EXPORT_PATH
     data = yaml.safe_load(faq_path.read_text(encoding="utf-8"))
     ids = {item["id"] for item in data}
     assert "aria-role" in ids
