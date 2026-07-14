@@ -15,7 +15,7 @@ Aucune action financière : on enregistre et on mesure, on ne trade rien.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aria_core import screened_pool, vc_predictions
 
@@ -158,6 +158,36 @@ async def run_thesis_review() -> dict:
     alerts = await tj.review_open_theses(positions, price_fn=price_fn)
     logger.info("thesis_review: %s positions, %s alertes", len(positions), len(alerts))
     return {"reviewed": len(positions), "alerts": alerts}
+
+
+async def due_predictions_summary(*, now: datetime | None = None) -> dict:
+    """Combien de pronostics ouverts sont réellement à échéance maintenant, vs encore
+    dans leur horizon -- distinction manquante dans ``proactive.py::_real_state_snapshot``
+    jusqu'au 14/07 : un simple statut "au moins un pronostic ouvert" laissait le LLM
+    d'initiative proposer de "finaliser le pronostic ouvert" alors qu'aucun n'était
+    réellement arrivé à échéance (horizon VC 30j, aucun des 10 pronostics existants
+    ne peut résoudre avant début août) -- confabulation constatée en direct sur
+    Telegram, retractée seulement parce que l'opérateur a demandé les chiffres précis.
+    Réutilise HORIZON_DAYS/le calcul déjà éprouvé dans ``resolve_due``, jamais dupliqué."""
+    now = now or datetime.now(timezone.utc)
+    open_preds = await vc_predictions.list_open_predictions(limit=1000)
+    due = 0
+    nearest_due_at: datetime | None = None
+    for p in open_preds:
+        created = _parse_iso(p.get("created_at") or "")
+        if created is None:
+            continue
+        horizon = HORIZON_DAYS.get(p.get("strategy") or "vc", 30)
+        due_at = created + timedelta(days=horizon)
+        if now >= due_at:
+            due += 1
+        elif nearest_due_at is None or due_at < nearest_due_at:
+            nearest_due_at = due_at
+    return {
+        "open_total": len(open_preds),
+        "due_now": due,
+        "nearest_due_at": nearest_due_at.date().isoformat() if nearest_due_at else None,
+    }
 
 
 async def resolve_due(*, now: datetime | None = None, price_fn=None) -> dict:
