@@ -38,6 +38,8 @@ NAME="aria-api"
 LOCK_FILE="$REPO_DIR/.deploy.lock"
 HEALTH_RETRIES=10
 HEALTH_INTERVAL=3
+VERIFY_RETRIES=10
+VERIFY_INTERVAL=1
 
 # shellcheck source=./deploy_lib.sh
 source "$REPO_DIR/vanguard/deploy_lib.sh"
@@ -134,19 +136,30 @@ if ! nginx -t; then
 fi
 systemctl reload nginx
 
-echo "==> [8/8] Vérification du trafic RÉEL à travers nginx (pas juste le port direct)"
+echo "==> [8/8] Vérification du trafic RÉEL à travers nginx (pas juste le port direct, avec retry -- le reload nginx n'est pas instantané)"
 # Même approche que deploy-vitrine.sh : HTTPS via --resolve en priorité (vrai
 # certificat), repli HTTP avec Host: (avant certbot / environnement de test).
-CODE="$(curl -s -o /dev/null -w '%{http_code}' --resolve "$API_HOST:443:127.0.0.1" "https://$API_HOST/api/health" 2>/dev/null || true)"
-if [ "$CODE" = "200" ]; then
-  PUBLIC_HEALTH="$(curl -s --resolve "$API_HOST:443:127.0.0.1" "https://$API_HOST/api/health" 2>/dev/null || true)"
-else
-  PUBLIC_HEALTH="$(curl -s -H "Host: $API_HOST" "http://127.0.0.1/api/health" 2>/dev/null || true)"
-fi
+# `systemctl reload nginx` (ligne 135) n'est pas instantané -- les nouveaux workers
+# mettent un court instant à tourner. Un unique curl juste après pouvait faussement
+# déclencher un rollback alors que la bascule était en réalité correcte (bug réel
+# constaté en déploiement). retry_until (deploy_lib.sh, identique à
+# deploy_vitrine_lib.sh côté #157) retente sur un plafond de $((VERIFY_RETRIES * VERIFY_INTERVAL))s.
+LAST_CODE=""; LAST_PUBLIC_HEALTH=""
+verify_public_traffic_once() {
+  local code health
+  code="$(curl -s -o /dev/null -w '%{http_code}' --resolve "$API_HOST:443:127.0.0.1" "https://$API_HOST/api/health" 2>/dev/null || true)"
+  if [ "$code" = "200" ]; then
+    health="$(curl -s --resolve "$API_HOST:443:127.0.0.1" "https://$API_HOST/api/health" 2>/dev/null || true)"
+  else
+    health="$(curl -s -H "Host: $API_HOST" "http://127.0.0.1/api/health" 2>/dev/null || true)"
+  fi
+  LAST_CODE="$code"; LAST_PUBLIC_HEALTH="$health"
+  printf '%s' "$health" | grep -q "\"commit\":\"$SHORT\""
+}
 
-if ! printf '%s' "$PUBLIC_HEALTH" | grep -q "\"commit\":\"$SHORT\""; then
-  echo "⚠️  Bascule nginx effectuée mais le trafic réel ne confirme PAS le commit $SHORT." >&2
-  echo "    Réponse : $PUBLIC_HEALTH" >&2
+if ! retry_until "$VERIFY_RETRIES" "$VERIFY_INTERVAL" verify_public_traffic_once; then
+  echo "⚠️  Bascule nginx effectuée mais le trafic réel ne confirme PAS le commit $SHORT après $((VERIFY_RETRIES * VERIFY_INTERVAL))s." >&2
+  echo "    Dernière réponse (HTTP $LAST_CODE) : $LAST_PUBLIC_HEALTH" >&2
   echo "    aria-api-old est CONSERVÉ (pas supprimé) comme filet -- intervention manuelle requise." >&2
   cp "$UPSTREAM_BACKUP" "$NGINX_UPSTREAM_FILE"
   nginx -t && systemctl reload nginx || true

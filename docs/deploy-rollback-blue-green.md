@@ -57,8 +57,11 @@ Après cette installation unique, les déploiements suivants ne relancent QUE
    - `nginx -t` échoue → bascule annulée, upstream restauré, renommages défaits,
      `exit 1`.
 7. Vérification finale à travers nginx (pas juste le port direct, via `--resolve`
-   comme `deploy-vitrine.sh`). Échec → upstream restauré, ancien conteneur **conservé**
-   (jamais supprimé tant que le trafic réel n'est pas confirmé), `exit 1`.
+   comme `deploy-vitrine.sh`), **avec retry** (`retry_until`, jusqu'à 10 x 1s) --
+   correctif post-déploiement : `systemctl reload nginx` n'est pas instantané, un
+   unique curl juste après pouvait faussement déclencher un rollback alors que la
+   bascule était en réalité correcte. Échec → upstream restauré, ancien conteneur
+   **conservé** (jamais supprimé tant que le trafic réel n'est pas confirmé), `exit 1`.
 8. Seulement si tout est confirmé : suppression de l'ancien conteneur, purge du cache
    Docker.
 

@@ -43,3 +43,26 @@ render_upstream_conf() {
     local port="$1"
     printf 'upstream aria_api_backend {\n    server 127.0.0.1:%s;\n}\n' "$port"
 }
+
+# Réessaie une commande jusqu'à succès (exit 0) ou expiration du plafond
+# max_attempts x interval_seconds. `systemctl reload nginx` n'est pas instantané --
+# les nouveaux workers mettent un court instant à tourner (bug réel constaté en
+# déploiement #154 : la vérification finale de deploy.sh tirait un unique curl juste
+# après le reload, sans marge, et pouvait faussement déclencher un rollback alors que
+# la bascule était en réalité correcte). Fonction IDENTIQUE à celle de
+# deploy_vitrine_lib.sh (#157) -- ne pas dupliquer différemment, les deux scripts
+# partagent le même besoin de retry post-reload nginx.
+retry_until() {
+    local max_attempts="$1" interval_seconds="$2"
+    shift 2
+    local attempt
+    for attempt in $(seq 1 "$max_attempts"); do
+        if "$@"; then
+            return 0
+        fi
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            sleep "$interval_seconds"
+        fi
+    done
+    return 1
+}
