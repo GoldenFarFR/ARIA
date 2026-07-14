@@ -32,13 +32,15 @@
     - web verify
   question: How does ARIA improve epistemic calibration?
   claim_fr: >-
-    Phase B : si Groq répond INCERTAIN ou P(vrai) < 65 %, vérif web (DuckDuckGo) puis re-calibration.
-    Toute réponse opérateur passe le gate anti-hallucination ; journal Brier via /calibrate.
-    Replay quotidien + curriculum exposition sur Telegram.
+    Phase B : si Groq répond INCERTAIN ou P(vrai) < 65 %, vérif web (fournisseur configuré —
+    Tavily ou DuckDuckGo selon ARIA_WEB_SEARCH_PROVIDER) puis re-calibration. Toute réponse
+    opérateur passe le gate anti-hallucination ; journal Brier via /calibrate. Replay
+    quotidien + curriculum exposition sur Telegram.
   claim_en: >-
-    Phase B: if Groq answers INCERTAIN or P(true) < 65%, web verify (DuckDuckGo) then re-calibrate.
-    Every operator reply passes anti-hallucination gate; Brier ledger via /calibrate.
-    Daily replay + exposure curriculum on Telegram.
+    Phase B: if Groq answers INCERTAIN or P(true) < 65%, web verify (configured provider —
+    Tavily or DuckDuckGo per ARIA_WEB_SEARCH_PROVIDER) then re-calibrate. Every operator
+    reply passes anti-hallucination gate; Brier ledger via /calibrate. Daily replay +
+    exposure curriculum on Telegram.
   p_true: 1.0
   p_false: 0.0
   verdict: policy
