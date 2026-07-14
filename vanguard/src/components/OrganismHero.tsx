@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { agentChat, getPaperWallet, getTrendingPairs, type PaperWallet, type TrendingPair } from '../api'
+import {
+  agentChat,
+  getForexMajors,
+  getPaperWallet,
+  getTrendingPairs,
+  type ForexMajorPair,
+  type PaperWallet,
+  type TrendingPair,
+} from '../api'
 
 // Minimal shape of the Web Speech API's SpeechRecognition -- not in TS's
 // standard DOM lib, and only Chrome/Edge/Safari ship it (never Firefox as
@@ -36,10 +44,12 @@ function getSpeechRecognitionCtor(): (new () => MinimalSpeechRecognition) | null
  *    carries the brand mark -- see VanguardSite.tsx)
  *  - styles scoped under `.aria-organism` (never document.documentElement -- the
  *    ambience slider only ever touches this component's own CSS custom properties)
- *  - background "market" particles are real crypto data (GET /pairs/trending, the
- *    only real market data source this backend has -- see backend/app/api/routes/
- *    pairs.py) plus a handful of hardcoded, verified upcoming crypto events; no
- *    other asset class (stocks/forex/commodities/indices) is fabricated
+ *  - background "market" particles are real data from this backend's two live
+ *    sources -- crypto (GET /pairs/trending, see backend/app/api/routes/pairs.py)
+ *    and forex majors (GET /forex/majors, Frankfurter/BCE reference rates, see
+ *    backend/app/api/routes/forex.py) -- plus a handful of hardcoded, verified
+ *    upcoming crypto events; no other asset class (stocks/ETF/commodities/indices)
+ *    has a real backend source yet, so none is fabricated for those
  *  - the portfolio panel shows the real paper-trading aggregate (getPaperWallet),
  *    never a fake position list
  *  - branch-tip labels route to real destinations (/cockpit, the member
@@ -76,7 +86,7 @@ interface Branch {
 
 interface FinanceToken {
   t: string
-  c: 'crypto' | 'event'
+  c: 'crypto' | 'event' | 'forex'
 }
 
 interface FinanceParticle {
@@ -116,7 +126,7 @@ export interface NavTip {
   label: string
 }
 
-type MarketCategory = 'crypto' | 'event'
+type MarketCategory = 'crypto' | 'event' | 'forex'
 
 // ---------------------------------------------------------------------------
 // Fixed, real data (not an API call): the three upcoming crypto events shown
@@ -133,11 +143,13 @@ const EVENT_BG_TOKENS: FinanceToken[] = [
 const FINANCE_COLORS: Record<MarketCategory, string> = {
   crypto: '81,255,190',
   event: '195,110,225',
+  forex: '255,196,102',
 }
 
-// Crypto is the only real "market" left after dropping the demo-only asset
-// classes (stocks/forex/commodities/indices had no real backend source) --
-// so the ambient tint is simply the crypto palette, always.
+// Crypto and forex are the two real "markets" this backend has (stocks/ETF/
+// commodities/indices still have no real backend source) -- the ambient tint
+// stays on the crypto palette regardless of which categories are toggled;
+// changing that wasn't asked for here.
 const AMBIENT = { rgb: [143, 227, 211], hot: [201, 255, 176], vg: '20,30,28' }
 
 const NAV_NODES: NavNodeDef[] = [
@@ -241,6 +253,19 @@ function buildCryptoTokens(pairs: TrendingPair[]): FinanceToken[] {
   return out
 }
 
+// Forex majors, same "never fabricate" doctrine as buildCryptoTokens -- keeps
+// only pairs the backend marked `available: true` (a real Frankfurter/BCE
+// rate, not a failed upstream call). No "$" prefix: these are exchange rates,
+// not USD prices.
+function buildForexTokens(pairs: ForexMajorPair[]): FinanceToken[] {
+  const out: FinanceToken[] = []
+  for (const p of pairs) {
+    if (!p.available || p.rate == null || !Number.isFinite(p.rate) || p.rate <= 0) continue
+    out.push({ t: `${p.base}/${p.quote}  ${formatUsdPrice(p.rate)}`, c: 'forex' })
+  }
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Canvas engine -- deterministic branch geometry (mulberry32), organic wobble,
 // drifting finance-text particles, and the "capture" pseudopod mechanic. Kept
@@ -259,6 +284,7 @@ interface EngineOptions {
 interface EngineHandle {
   setActiveCategories: (cats: Set<MarketCategory>) => void
   setCryptoTokens: (tokens: FinanceToken[]) => void
+  setForexTokens: (tokens: FinanceToken[]) => void
   setThemeLightness: (l: number) => void
   setBranchHovered: (v: boolean) => void
   pulse: () => void
@@ -296,6 +322,7 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
   const noop: EngineHandle = {
     setActiveCategories: () => {},
     setCryptoTokens: () => {},
+    setForexTokens: () => {},
     setThemeLightness: () => {},
     setBranchHovered: () => {},
     pulse: () => {},
@@ -320,13 +347,20 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
   let rafId = 0
   let destroyed = false
 
-  let activeCategories = new Set<MarketCategory>(['crypto', 'event'])
+  // Mirrors the React state default (~line 1234) -- must stay in sync at
+  // construction time, since setActiveCategories() is only ever called from
+  // the modal's toggle callback, never on mount (operator-caught gap: a
+  // React-only default would leave forex checked in the UI but silently
+  // absent from the canvas pool until the visitor toggled the modal once).
+  let activeCategories = new Set<MarketCategory>(['crypto', 'event', 'forex'])
   let cryptoTokens: FinanceToken[] = []
+  let forexTokens: FinanceToken[] = []
 
   function currentPool(): FinanceToken[] {
     const pool: FinanceToken[] = []
     if (activeCategories.has('crypto')) pool.push(...cryptoTokens)
     if (activeCategories.has('event')) pool.push(...EVENT_BG_TOKENS)
+    if (activeCategories.has('forex')) pool.push(...forexTokens)
     return pool
   }
 
@@ -885,6 +919,11 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
       financeParticles = null
       if (reducedMotion) draw(performance.now())
     },
+    setForexTokens(tokens: FinanceToken[]) {
+      forexTokens = tokens
+      financeParticles = null
+      if (reducedMotion) draw(performance.now())
+    },
     setThemeLightness(L: number) {
       // Contrast fix (a11y audit #156.2, 13/07): a raw 1:1 slider->lightness
       // mapping put a plain mid-gray background (~L 44-50%) within reach --
@@ -1232,7 +1271,7 @@ export function OrganismHero() {
   const [savedEvents, setSavedEvents] = useState<Record<number, boolean>>({})
   const [calendarConnected, setCalendarConnected] = useState(false)
   const [activeCategories, setActiveCategoriesState] = useState<Set<MarketCategory>>(
-    () => new Set<MarketCategory>(['crypto', 'event']),
+    () => new Set<MarketCategory>(['crypto', 'event', 'forex']),
   )
 
   const [wallet, setWallet] = useState<PaperWallet | null>(null)
@@ -1293,6 +1332,38 @@ export function OrganismHero() {
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load()
     }, 90_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [])
+
+  // --- Real forex market data (Frankfurter/BCE, 2nd real source) -----------
+  // Frankfurter republishes ECB reference rates once per business day (see
+  // forex.py docstring) -- polling at crypto's 90s cadence would be ~960
+  // requests/day for data that only ever changes once. 30 min is a deliberate
+  // compromise: fast enough to recover from a one-off startup failure without
+  // manual intervention, far below what the actual data cadence would justify
+  // otherwise. Same visibility gate as crypto, same never-fabricate fallback.
+  useEffect(() => {
+    let cancelled = false
+
+    async function load() {
+      try {
+        const res = await getForexMajors()
+        if (cancelled) return
+        engineRef.current?.setForexTokens(buildForexTokens(res.pairs))
+      } catch {
+        if (cancelled) return
+        // Never fabricate: on failure, show no forex particles at all.
+        engineRef.current?.setForexTokens([])
+      }
+    }
+
+    void load()
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void load()
+    }, 30 * 60_000)
     return () => {
       cancelled = true
       window.clearInterval(interval)
@@ -1718,10 +1789,10 @@ export function OrganismHero() {
               <span>{liveOk ? `en direct · ${liveLabel}` : liveLabel}</span>
             </div>
             <ul className="ao-market-list">
-              {(['crypto', 'event'] as MarketCategory[]).map((key) => {
+              {(['crypto', 'event', 'forex'] as MarketCategory[]).map((key) => {
                 const checked = activeCategories.has(key)
                 const isMarket = key !== 'event'
-                const label = key === 'crypto' ? 'Crypto' : 'Événements'
+                const label = key === 'crypto' ? 'Crypto' : key === 'forex' ? 'Forex' : 'Événements'
                 const swatchColor = !isMarket
                   ? 'rgba(210,210,214,0.55)'
                   : checked
