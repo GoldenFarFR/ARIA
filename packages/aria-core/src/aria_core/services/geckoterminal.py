@@ -18,12 +18,15 @@ manquante n'est jamais remplacée par une supposition -- ``available=False``/
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import httpx
 
 from aria_core.skills.ta_levels import Candle
+
+logger = logging.getLogger(__name__)
 
 UNAVAILABLE = "donnée GeckoTerminal indisponible"
 
@@ -68,22 +71,54 @@ class GeckoTerminalClient:
             self._last_request = asyncio.get_event_loop().time()
 
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
-        await self._throttle()
+        """GET avec retry sur 429/5xx/timeout -- même politique que blockscout.py
+        (#157, correction 14/07 : cette fonction ne retentait jamais un rate limit,
+        marquant silencieusement "indisponible" au premier 429 rencontré, sans log
+        -- diagnostic impossible. Un wallet actif (~20 tokens x 2 appels) peut
+        facilement déclencher un 429 isolé sur le palier gratuit ; le retenter une
+        fois suffit dans l'immense majorité des cas plutôt que d'abandonner net."""
         url = f"{self.base_url}{path}"
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(url, params=params, headers={"Accept": "application/json"})
-        except httpx.TransportError as exc:
-            return None, f"{UNAVAILABLE} (timeout GeckoTerminal: {exc})"
+        attempt_429 = 0
+        timeout_retried = False
 
-        if response.status_code in (400, 404, 429):
-            return None, f"{UNAVAILABLE} (HTTP {response.status_code})"
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            return None, f"{UNAVAILABLE} ({exc})"
+        while True:
+            await self._throttle()
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.get(url, params=params, headers={"Accept": "application/json"})
+            except httpx.TransportError as exc:
+                if not timeout_retried:
+                    timeout_retried = True
+                    await asyncio.sleep(5.0)
+                    continue
+                logger.warning("geckoterminal: timeout sur %s -> %s", url, exc)
+                return None, f"{UNAVAILABLE} (timeout GeckoTerminal)"
 
-        return response.json(), None
+            if response.status_code == 429:
+                attempt_429 += 1
+                if attempt_429 >= 3:
+                    logger.warning("geckoterminal: HTTP 429 sur %s apres %s tentatives", url, attempt_429)
+                    return None, f"{UNAVAILABLE} (rate limit GeckoTerminal)"
+                await asyncio.sleep(0.5 * (2**attempt_429))
+                continue
+
+            if response.status_code >= 500:
+                if not timeout_retried:
+                    timeout_retried = True
+                    await asyncio.sleep(5.0)
+                    continue
+                logger.warning("geckoterminal: HTTP %s sur %s", response.status_code, url)
+                return None, f"{UNAVAILABLE} (erreur serveur GeckoTerminal)"
+
+            if response.status_code in (400, 404):
+                return None, f"{UNAVAILABLE} (HTTP {response.status_code})"
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.warning("geckoterminal: %s", exc)
+                return None, f"{UNAVAILABLE} ({exc})"
+
+            return response.json(), None
 
     async def get_pool_created_at(self, pool_address: str) -> PoolMetadata:
         data, error = await self._get_json(f"/networks/{NETWORK}/pools/{pool_address}")
