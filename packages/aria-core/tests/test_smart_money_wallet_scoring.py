@@ -474,6 +474,28 @@ def _clean_goplus() -> FakeGoPlusClient:
     return FakeGoPlusClient()
 
 
+@pytest.fixture(autouse=True)
+def _cmc_unavailable_by_default(monkeypatch):
+    """#157, 14/07 : CoinMarketCap (3e couche) est tenté à chaque échec
+    GeckoTerminal, INDÉPENDAMMENT du résultat DexScreener (cf.
+    `TestCmcPricingRecovery`) -- sans ce défaut, tous les tests existants qui
+    font échouer GeckoTerminal déclencheraient un VRAI appel réseau CMC non
+    mocké. Par défaut CMC échoue aussi (`available=False`), comme s'il n'était
+    pas configuré -- les tests qui veulent vérifier la récupération CMC
+    surchargent ce défaut localement via `monkeypatch.setattr`."""
+    from aria_core.services.coinmarketcap import OHLCVResult as CmcOHLCVResult
+    from aria_core.services.coinmarketcap import PoolMetadata as CmcPoolMetadata
+
+    async def _unavailable_pool(token_address, *, network_slug="base"):
+        return CmcPoolMetadata(pool_address=token_address, available=False, error="CMC non mocké dans ce test")
+
+    async def _unavailable_ohlcv(pool_address, *, network_slug="base"):
+        return CmcOHLCVResult(candles=[], available=False, error="CMC non mocké dans ce test")
+
+    monkeypatch.setattr("aria_core.services.coinmarketcap.resolve_primary_pool", _unavailable_pool)
+    monkeypatch.setattr("aria_core.services.coinmarketcap.get_ohlcv", _unavailable_ohlcv)
+
+
 class TestScoreWalletsValidation:
     @pytest.mark.asyncio
     async def test_no_addresses(self):
@@ -789,6 +811,162 @@ class TestScoreWalletsEndToEnd:
         # le nom n'apparaît dans AUCUN champ de score -- juste display_name
         assert "named.base.eth" not in str(card.win_rate)
         assert card.suspect_positive == sm._suspect_positive_flag(card)  # calcul indépendant du nom
+
+
+class TestCmcPricingRecovery:
+    """#157, 14/07 : CoinMarketCap comme 3e couche de PRICING (pas un 3e
+    diagnostic comme DexScreener) -- tentée à chaque échec GeckoTerminal,
+    INDÉPENDAMMENT du résultat DexScreener (corrigé en review : un if/else
+    aurait empêché CMC de tourner dès que DexScreener confirmait une paire,
+    alors que DexScreener ne fournit aucun prix historique lui-même)."""
+
+    def _mock_cmc_success(self, monkeypatch, *, token_address, pool_address, price: float = 1.0):
+        from aria_core.services.coinmarketcap import OHLCVResult as CmcOHLCVResult
+        from aria_core.services.coinmarketcap import PoolMetadata as CmcPoolMetadata
+
+        async def _resolve(addr, *, network_slug="base"):
+            if addr == token_address:
+                return CmcPoolMetadata(pool_address=pool_address, available=True)
+            return CmcPoolMetadata(pool_address=addr, available=False, error="pas ce token")
+
+        async def _ohlcv(pool_addr, *, network_slug="base"):
+            if pool_addr == pool_address:
+                return _flat_ohlcv(price, start=_dt(-2))
+            return CmcOHLCVResult(candles=[], available=False, error="pas ce pool")
+
+        monkeypatch.setattr("aria_core.services.coinmarketcap.resolve_primary_pool", _resolve)
+        monkeypatch.setattr("aria_core.services.coinmarketcap.get_ohlcv", _ohlcv)
+
+    @pytest.mark.asyncio
+    async def test_cmc_recovers_pricing_when_gecko_and_dexscreener_both_fail(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        async def _fake_has_any_pair(contract, *, chain="base"):
+            return False  # DexScreener non plus n'a rien trouvé
+
+        monkeypatch.setattr("aria_core.services.dexscreener.has_any_pair", _fake_has_any_pair)
+        self._mock_cmc_success(monkeypatch, token_address=TOKEN_X, pool_address=POOL_X)
+
+        buy_ts = _dt(0)
+        sell_ts = _dt(1)
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=sell_ts, amount=5.0),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()  # aucun pool connu -> échoue pour TOKEN_X
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.cmc_price_recovery_count == 1
+        assert card.closed_trades_count == 1
+        assert card.unpriced_legs == 0
+
+    @pytest.mark.asyncio
+    async def test_cmc_still_attempted_even_when_dexscreener_confirms_a_pair(self, tmp_path, monkeypatch):
+        # Correction demandée en review (14/07) : `has_any_pair == True` ne
+        # doit JAMAIS empêcher CMC de tenter sa propre résolution -- DexScreener
+        # confirme qu'une paire EXISTE, mais ne la price pas lui-même. Les deux
+        # compteurs (diagnostic gap + récupération de prix) doivent être vrais
+        # simultanément sur ce même token.
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        async def _fake_has_any_pair(contract, *, chain="base"):
+            return True  # DexScreener CONFIRME une paire
+
+        monkeypatch.setattr("aria_core.services.dexscreener.has_any_pair", _fake_has_any_pair)
+        self._mock_cmc_success(monkeypatch, token_address=TOKEN_X, pool_address=POOL_X)
+
+        buy_ts = _dt(0)
+        sell_ts = _dt(1)
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=sell_ts, amount=5.0),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.gecko_dexscreener_gap_count == 1
+        assert card.cmc_price_recovery_count == 1
+        assert card.closed_trades_count == 1
+
+    @pytest.mark.asyncio
+    async def test_cmc_never_called_when_gecko_already_succeeded(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        async def _fail_if_called(*args, **kwargs):
+            raise AssertionError("CMC ne doit jamais être appelé quand GeckoTerminal a déjà résolu le pool")
+
+        monkeypatch.setattr("aria_core.services.coinmarketcap.resolve_primary_pool", _fail_if_called)
+        monkeypatch.setattr("aria_core.services.coinmarketcap.get_ohlcv", _fail_if_called)
+
+        buy_ts = _dt(0)
+        sell_ts = _dt(1)
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=sell_ts, amount=5.0),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: _flat_ohlcv(1.0, start=_dt(-2))},
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.cmc_price_recovery_count == 0
+        assert card.closed_trades_count == 1
+
+    @pytest.mark.asyncio
+    async def test_all_three_sources_fail_still_degrades_softly(self, tmp_path, monkeypatch):
+        # Gecko, DexScreener ET CMC échouent tous -- comportement inchangé
+        # (unpriced_legs incrémenté), jamais une exception qui remonte.
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        async def _fake_has_any_pair(contract, *, chain="base"):
+            return None  # vérification elle-même indisponible
+
+        monkeypatch.setattr("aria_core.services.dexscreener.has_any_pair", _fake_has_any_pair)
+        # CMC reste sur le défaut autouse (_cmc_unavailable_by_default) -- échoue aussi.
+
+        buy_ts = _dt(0)
+        transfers = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0)],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.available is True
+        assert card.cmc_price_recovery_count == 0
+        assert card.gecko_dexscreener_gap_count == 0
+        assert card.unpriced_legs == 1
 
 
 def test_wallet_scoring_gate_off_by_default(monkeypatch):
