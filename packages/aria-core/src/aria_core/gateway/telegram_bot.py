@@ -1778,6 +1778,14 @@ def _format_wallet_score_card(card) -> list[str]:
         f"  Tokens analysés : {card.tokens_analyzed}/{card.tokens_found}"
         + (f" (plafond de {WEIGHTS.max_tokens_analyzed} atteint)" if card.tokens_skipped_capped else "")
     )
+    if card.unpriced_legs or card.pool_lookup_errors:
+        # Diagnostic (#157, 14/07) : distingue "pool jamais trouvé sur GeckoTerminal"
+        # (token trop obscur/mort, pas un bug) d'un autre problème de valorisation --
+        # jamais deviner en silence pourquoi la valorisation est vide.
+        lines.append(
+            f"  Diagnostic prix : {card.unpriced_legs} jambe(s) sans prix, "
+            f"{card.pool_lookup_errors} token(s) sans pool GeckoTerminal résolu"
+        )
     lines.append(f"  Win rate : {card.win_rate:.0%}" if card.win_rate is not None else "  Win rate : indisponible")
     lines.append(
         f"  PnL réalisé : ${card.realized_pnl_usd:,.2f}"

@@ -796,6 +796,7 @@ class WalletScoreCard:
 
     closed_trades_count: int = 0
     unpriced_legs: int = 0
+    pool_lookup_errors: int = 0  # tokens sans pool GeckoTerminal résolu (#157, 14/07 -- diagnostic)
     win_rate: float | None = None
     realized_pnl_usd: float | None = None
     sortino: float | None = None
@@ -872,7 +873,10 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         + (f", plafond de {WEIGHTS.max_tokens_analyzed} atteint" if card.tokens_skipped_capped else "")
         + ")"
     )
-    lines.append(f"Trades clôturés valorisés : {card.closed_trades_count} (jambes sans prix : {card.unpriced_legs})")
+    lines.append(
+        f"Trades clôturés valorisés : {card.closed_trades_count} (jambes sans prix : {card.unpriced_legs}, "
+        f"tokens sans pool GeckoTerminal résolu : {card.pool_lookup_errors})"
+    )
     lines.append(f"Win rate : {card.win_rate:.0%}" if card.win_rate is not None else "Win rate : indisponible")
     lines.append(
         f"PnL réalisé : ${card.realized_pnl_usd:,.2f}"
@@ -1061,6 +1065,7 @@ async def score_wallets(
         multi = await _analyze_wallet_multi_token(wallet, selected_transfers, gecko=gecko)
         card.closed_trades_count = len(multi.closed_trades)
         card.unpriced_legs = multi.unpriced_legs
+        card.pool_lookup_errors = multi.pool_lookup_errors
 
         dex_exclusions = _build_dex_infrastructure_exclusions(grouped, wallet) | multi.resolved_pool_addresses
         disq = await _hard_disqualifiers(
