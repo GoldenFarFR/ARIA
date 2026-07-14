@@ -838,6 +838,7 @@ async def _hard_disqualifiers(
     *,
     extra_exclusions: set[str] | None = None,
     goplus_client=None,
+    funding_source_chain: str | None = None,
 ) -> HardDisqualifiers:
     reasons: list[str] = []
 
@@ -854,12 +855,26 @@ async def _hard_disqualifiers(
 
     # Financement par un wallet déjà connu comme malveillant -- GoPlus Malicious
     # Address API (AML), #157 (14/07). RÉSERVE HONNÊTE (research doc du 14/07,
-    # vérifiée en direct) : couverture Base et format de réponse confirmés, PAS
-    # la densité réelle des données malveillantes -- filtre probabiliste
-    # supplémentaire, jamais présenté comme exhaustif. Fail-closed strict :
-    # une vérification indisponible reste "indisponible" (note informative, PAS
-    # une disqualification, PAS non plus un faux négatif silencieux qui dirait
-    # "non malveillant" sans le dire).
+    # vérifiée en direct, ÉTENDUE ce soir aux 13 chaînes du scan multi-chaînes) :
+    # les 13 chain_id confirmés répondent tous "code: 1, ok" avec le même format
+    # -- couverture FORMAT confirmée partout, mais PAS la densité réelle des
+    # données malveillantes, qui varie probablement par chaîne (signal indirect :
+    # `contract_address` indéterminé sur celo/rootstock/unichain/soneium/mode
+    # pour une adresse connue, alors que base/ethereum/arbitrum/optimism/polygon/
+    # gnosis/scroll/zksync le résolvent). Filtre probabiliste supplémentaire,
+    # jamais présenté comme exhaustif, quelle que soit la chaîne. Fail-closed
+    # strict : une vérification indisponible reste "indisponible" (note
+    # informative, PAS une disqualification, PAS non plus un faux négatif
+    # silencieux qui dirait "non malveillant" sans le dire).
+    #
+    # `funding_source_chain` (#157, correction 14/07) : la chaîne où
+    # `funding_source` a RÉELLEMENT été trouvé (cf. score_wallets) -- jamais
+    # supposée Base par défaut désormais que le scan couvre 13 chaînes ; une
+    # adresse de financement peut légitimement vivre sur une chaîne différente
+    # de celle où le wallet trade. `CHAIN_IDS` (blockscout.py) est la SEULE
+    # source de vérité pour traduire le nom de chaîne en chain_id GoPlus --
+    # aucun registre dupliqué. Chaîne absente/inconnue : repli sur le défaut
+    # de `get_address_security` (Base), jamais un chain_id inventé.
     financed_by_malicious = False
     financing_check_note: str | None = None
     if funding_source:
@@ -867,7 +882,13 @@ async def _hard_disqualifiers(
             from aria_core.services.goplus import goplus_client as _default_goplus_client
 
             goplus_client = _default_goplus_client
-        security = await goplus_client.get_address_security(funding_source)
+        from aria_core.services.blockscout import CHAIN_IDS
+
+        chain_id = CHAIN_IDS.get(funding_source_chain) if funding_source_chain else None
+        if chain_id is not None:
+            security = await goplus_client.get_address_security(funding_source, chain_id=str(chain_id))
+        else:
+            security = await goplus_client.get_address_security(funding_source)
         if security.available:
             financed_by_malicious = security.is_malicious
             if financed_by_malicious:
@@ -1128,6 +1149,7 @@ async def score_wallets(
         primary_info: AddressInfo | None = None
         funding_source: str | None = None
         funding_truncated = False
+        funding_source_chain: str | None = None
         any_chain_available = False
         last_error: str | None = None
 
@@ -1153,6 +1175,11 @@ async def score_wallets(
                 fs, trunc = await _funding_source(chain_client, wallet)
                 if fs:
                     funding_source, funding_truncated = fs, trunc
+                    # Chaîne RÉELLE où funding_source a été trouvé (#157,
+                    # correction 14/07) -- jamais supposée Base par défaut :
+                    # une adresse de financement peut vivre sur une chaîne
+                    # différente de celle où le wallet trade ses tokens.
+                    funding_source_chain = chain
 
         if not any_chain_available:
             card.available = False
@@ -1195,7 +1222,7 @@ async def score_wallets(
         dex_exclusions = _build_dex_infrastructure_exclusions(grouped, wallet) | multi.resolved_pool_addresses
         disq = await _hard_disqualifiers(
             wallet, primary_info or AddressInfo(address=wallet, available=False), all_flat_transfers, funding_source,
-            extra_exclusions=dex_exclusions, goplus_client=goplus,
+            extra_exclusions=dex_exclusions, goplus_client=goplus, funding_source_chain=funding_source_chain,
         )
         card.disqualified = disq.disqualified
         card.disqualification_reasons = disq.reasons
