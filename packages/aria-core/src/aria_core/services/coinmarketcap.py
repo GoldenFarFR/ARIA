@@ -45,13 +45,32 @@ UNAVAILABLE = "donnée CoinMarketCap indisponible"
 BASE_URL_KEYLESS = "https://pro-api.coinmarketcap.com/public-api"
 BASE_URL_KEYED = "https://pro-api.coinmarketcap.com"
 
-# Même vocabulaire chaîne que blockscout.CHAIN_IDS / geckoterminal.GECKO_NETWORK_SLUGS.
-# Seule "base" a été vérifiée en direct ce soir (14/07) -- "ethereum"/"bsc" sont
-# des valeurs standard CMC supposées raisonnables, PAS testées en direct.
+# Même vocabulaire chaîne que blockscout.CHAIN_IDS / geckoterminal.GECKO_NETWORK_SLUGS
+# (13 chaînes, #157 classement TVL dynamique, 14/07). "bnb" retiré -- Blockscout
+# ne sert pas BNB Smart Chain (cf. blockscout.CHAIN_IDS), inutile de garder un
+# slug CMC qu'aucune chaîne active n'atteindra jamais.
+#
+# Seule "base" a été vérifiée en direct ce soir : /v4/dex/pairs/quotes/latest
+# a répondu avec succès en keyless (`network_slug=base`). Les 12 autres valeurs
+# sont des SUPPOSITIONS raisonnables (mêmes noms que GeckoTerminal la plupart
+# du temps, CMC n'a pas de registre "networks" public équivalent trouvé pour
+# vérifier ligne à ligne) -- documentées comme NON vérifiées, jamais présentées
+# comme confirmées. À corriger si un test en conditions réelles (avec la clé
+# VPS) révèle une divergence, même doctrine que le reste de ce fichier.
 CMC_NETWORK_SLUGS: dict[str, str] = {
-    "base": "base",
-    "ethereum": "ethereum",
-    "bnb": "bsc",
+    "base": "base",  # vérifié en direct
+    "ethereum": "ethereum",  # non vérifié
+    "arbitrum": "arbitrum",  # non vérifié
+    "optimism": "optimism",  # non vérifié
+    "polygon": "polygon",  # non vérifié -- GeckoTerminal dit "polygon_pos", supposition CMC différente (nom court usuel)
+    "celo": "celo",  # non vérifié
+    "gnosis": "gnosis",  # non vérifié -- GeckoTerminal dit "xdai", supposition CMC différente (nom usuel, pas de garantie)
+    "scroll": "scroll",  # non vérifié
+    "zksync": "zksync",  # non vérifié
+    "rootstock": "rootstock",  # non vérifié
+    "unichain": "unichain",  # non vérifié
+    "soneium": "soneium",  # non vérifié
+    "mode": "mode",  # non vérifié
 }
 
 

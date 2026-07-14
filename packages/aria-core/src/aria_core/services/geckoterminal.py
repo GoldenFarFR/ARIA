@@ -42,9 +42,25 @@ NETWORK = "base"
 # identifiant réseau GeckoTerminal (#157, wallet-scoring multi-chaînes, 14/07).
 # "bnb" retiré (14/07) -- Blockscout ne sert pas BNB Smart Chain (cf.
 # blockscout.CHAIN_IDS), inutile de garder son slug GeckoTerminal seul.
+# Étendu (14/07) aux 11 chaînes restantes du classement TVL dynamique (#157,
+# services/defillama.py) -- slugs VÉRIFIÉS EN DIRECT (GET
+# https://api.geckoterminal.com/api/v2/networks), pas supposés : le
+# vocabulaire GeckoTerminal ne suit pas toujours le nom usuel de la chaîne
+# ("gnosis" -> "xdai", "zksync era" -> "zksync" et non "zksync_era").
 GECKO_NETWORK_SLUGS: dict[str, str] = {
     "base": "base",
     "ethereum": "eth",
+    "arbitrum": "arbitrum",
+    "optimism": "optimism",
+    "polygon": "polygon_pos",
+    "celo": "celo",
+    "gnosis": "xdai",
+    "scroll": "scroll",
+    "zksync": "zksync",
+    "rootstock": "rootstock",
+    "unichain": "unichain",
+    "soneium": "soneium",
+    "mode": "mode",
 }
 
 # Palier gratuit GeckoTerminal ~30 req/min -- même throttle que le client existant
