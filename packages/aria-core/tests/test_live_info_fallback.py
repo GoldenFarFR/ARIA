@@ -80,6 +80,68 @@ async def test_web_enhance_surfaces_honest_decline_without_forcing_attribution(m
     assert meta.get("truth") == "incertain"
 
 
+def test_web_recal_prompt_forbids_generic_fabrication_beyond_aria_facts():
+    # Incident reel (14/07) : "quelles sont les dernieres news crypto importantes ?" a
+    # produit une reponse citant des faits precis (depart d'une dirigeante d'OpenAI,
+    # retraits massifs Binance lies a MiCA) alors qu'AUCUNE des sources affichees
+    # (extraits Tavily generiques type "les dernieres news crypto") ne mentionnait ces
+    # faits. La regle "n'invente pas de faits ARIA/GoldenFar" ne couvre que les faits sur
+    # ARIA elle-meme -- il manquait une regle generale interdisant d'inventer N'IMPORTE
+    # QUEL fait precis absent des extraits, quel que soit le sujet.
+    for tpl in (_WEB_RECAL_PROMPT_FR, _WEB_RECAL_PROMPT_EN):
+        low = tpl.lower()
+        assert "incertain" in low
+        assert "générale" in low or "general" in low  # "règle générale anti-invention" / "GENERAL ANTI-FABRICATION RULE"
+        assert "vagues" in low or "vague" in low
+
+
+@pytest.mark.asyncio
+async def test_web_enhance_declines_when_snippets_too_vague_to_support_specific_facts(monkeypatch):
+    # Meme si le LLM (mocke ici) suit desormais la regle generale et refuse d'inventer des
+    # faits precis a partir d'extraits vagues, le pipeline ne doit rien transformer en
+    # "ACTU verifiee" force -- la reponse honnete (INCERTAIN) doit passer telle quelle.
+    from aria_core.knowledge import web_verify as wv
+
+    async def fake_snippets(_q):
+        return [
+            WebSource(
+                text="The latest crypto news includes significant market movements and regulatory updates.",
+                url="https://cryptoast.fr/actu",
+            ),
+            WebSource(
+                text="Devenez un expert en crypto. Le guide pour acheter du Bitcoin.",
+                url="https://fr.investing.com/news/cryptocurrency-news",
+            ),
+        ]
+
+    async def fake_chat(*_a, **_k):
+        return (
+            "FAIT: INCERTAIN\n"
+            "REPONSE: Les sources trouvées sont trop génériques (pages d'accueil de sites "
+            "d'actualité) pour citer des faits précis vérifiés aujourd'hui.\n"
+            "P_VRAI: 0.20\n"
+            "P_FAUX: 0.10\n"
+            "RAISON: extraits génériques sans détail vérifiable"
+        )
+
+    monkeypatch.setattr(wv, "fetch_web_snippets", fake_snippets)
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+
+    reply, meta = await wv.web_enhance_calibrated(
+        "quelles sont les dernières news crypto importantes ?",
+        None,
+        {"p_true": 0.3, "truth": "INCERTAIN"},
+        "fr",
+        force=True,
+    )
+    assert reply
+    assert "fidji simo" not in reply.lower()
+    assert "openai" not in reply.lower()
+    assert "mica" not in reply.lower()
+    assert meta.get("truth") == "incertain"
+
+
 @pytest.mark.asyncio
 async def test_web_enhance_still_answers_when_source_matches_asked_entity(monkeypatch):
     # Contraste : quand la question porte reellement sur une entite tierce (pas ARIA) et

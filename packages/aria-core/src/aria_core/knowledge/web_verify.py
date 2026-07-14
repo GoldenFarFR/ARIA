@@ -640,6 +640,14 @@ BTC/ETH maximaliste établie (sa vraie stratégie : 85% VC moyen/long terme + 15
 poche adrénaline plafonnée — jamais une position maximaliste sur une chaîne donnée) — si
 on te demande TON avis de maximaliste et qu'aucune source ne parle d'ARIA, dis-le
 honnêtement au lieu de citer l'avis de quelqu'un d'autre comme si c'était le tien.
+RÈGLE GÉNÉRALE ANTI-INVENTION (au-delà des cas ARIA/GoldenFar) : ta réponse ne doit
+contenir QUE des faits explicitement présents dans les extraits ci-dessous — jamais un
+fait plausible, cohérent avec l'actualité générale, ou "probable" que tu ajoutes toi-même
+pour rendre la réponse plus complète. Si les extraits sont vagues, génériques ou trop
+courts pour répondre précisément à la question (ex. un résumé du type "il y a eu des
+mouvements de marché importants" sans détail vérifiable), réponds FAIT: INCERTAIN et dis
+que les sources ne donnent pas assez de détails — n'invente JAMAIS un nom, un chiffre ou
+un événement précis absent des extraits, même s'il semble crédible.
 
 Extraits web :
 {snippets}
@@ -682,6 +690,14 @@ ARIA has NO established BTC/ETH maximalist doctrine (her real strategy: 85% VC
 mid/long-term + 15% trading, a capped adrenaline pocket — never a maximalist stance on
 any one chain) — if asked for HER maximalist opinion and no snippet talks about ARIA,
 say so honestly instead of quoting someone else's opinion as your own.
+GENERAL ANTI-FABRICATION RULE (beyond ARIA/GoldenFar cases): your answer must contain
+ONLY facts explicitly present in the snippets below — never a plausible-sounding fact,
+consistent with general news, or "likely" detail that you add yourself to make the
+answer feel complete. If the snippets are vague, generic, or too thin to answer the
+question precisely (e.g. a summary like "there were significant market movements" with
+no verifiable detail), reply FAIT: INCERTAIN and say the sources lack enough detail —
+NEVER invent a specific name, number, or event absent from the snippets, even if it
+sounds credible.
 
 Web snippets:
 {snippets}
