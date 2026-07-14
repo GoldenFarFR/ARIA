@@ -103,6 +103,15 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="wallet_scoring_chain_ranking_refresh",
+        name="Classement TVL des chaînes wallet-scoring",
+        description="Rafraîchit mensuellement (DefiLlama) le classement TVL des "
+                    "chaînes EVM scannées par /walletscore, parmi les 13 "
+                    "confirmées Blockscout×GeckoTerminal (#157, 14/07).",
+        interval_minutes=43200,  # ~30 jours -- décision opérateur explicite (mensuel, pas quotidien)
+        enabled=True,  # lecture seule, dégradation douce si DefiLlama indisponible -- faible risque
+    ),
+    HeartbeatTask(
         id="tweet_schedule",
         name="Scheduled X posts",
         description="Publish /x compose tweets at operator local time",
@@ -835,6 +844,14 @@ class AriaHeartbeat:
             result = await run_app_idea_poll_cycle(lang="fr")
             await self._notify_telegram(result["message"])
             append_memory("entrepreneur", "[app_poll] weekly 3-app poll sent")
+
+        elif task_id == "wallet_scoring_chain_ranking_refresh":
+            from aria_core.services.smart_money import refresh_chain_ranking_cache
+
+            # Routine silencieuse (pas de notification Telegram, doctrine
+            # "jamais de spam Telegram" déjà en tête de ce fichier) -- succès/
+            # échec déjà loggé dans refresh_chain_ranking_cache lui-même.
+            await refresh_chain_ranking_cache()
 
         elif task_id == "tweet_schedule":
             from aria_core.tweet_compose_workflow import process_scheduled_tweets
