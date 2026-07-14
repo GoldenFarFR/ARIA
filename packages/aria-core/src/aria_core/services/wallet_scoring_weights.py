@@ -94,6 +94,16 @@ class WalletScoringWeights:
     # lié à UN seul token/schéma) -- exclue du calcul de contrepartie dominante.
     wash_trading_infra_min_distinct_tokens: int = 2
 
+    # Prix par tx_hash exact (14/07, complément pool+OHLCV) : plafond de
+    # tx_hash distincts tentés par token avant de retomber sur pool+OHLCV pour
+    # le reste. Un wallet actif (le profil même que ce scoring cherche à
+    # repérer) peut avoir des dizaines/centaines de tx distincts sur un seul
+    # token -- sans plafond, une requête `/walletscore` déclencherait autant
+    # d'appels Blockscout séquentiels supplémentaires. Valeur de départ
+    # raisonnable, compromis précision/coût -- pas une vérité gravée,
+    # ajustable comme tout `WEIGHTS.*` via le fichier de surcharge.
+    max_hash_priced_legs_per_token: int = 20
+
 
 def _load_weights() -> WalletScoringWeights:
     """Charge les poids réels depuis le fichier privé désigné par

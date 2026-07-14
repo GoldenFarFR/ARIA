@@ -46,9 +46,11 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
-def _transfer(*, from_addr: str, to_addr: str, token: str, ts: datetime, amount: float = 100.0) -> TokenTransfer:
+def _transfer(
+    *, from_addr: str, to_addr: str, token: str, ts: datetime, amount: float = 100.0, tx_hash: str = "0x1",
+) -> TokenTransfer:
     return TokenTransfer(
-        tx_hash="0x1",
+        tx_hash=tx_hash,
         from_address=from_addr,
         to_address=to_addr,
         token_address=token,
@@ -64,11 +66,16 @@ def _transfer(*, from_addr: str, to_addr: str, token: str, ts: datetime, amount:
 # ---------------------------------------------------------------------------
 
 class TestFifoMatch:
+    """``buys``/``sells`` sont des triplets ``(ts, amount, tx_hash)`` (14/07,
+    prix par hash exact) -- le hash n'est pas exercé par ces tests (fonctions
+    pures sur des séries synthétiques, ``price_lookup`` ignore son 2e argument
+    via un lambda ``ts, _h``), seul le comportement FIFO/prix est couvert ici."""
+
     def test_simple_winning_trade(self):
-        buys = [(_dt(0), 10.0)]
-        sells = [(_dt(1), 10.0)]
+        buys = [(_dt(0), 10.0, "0xbuy")]
+        sells = [(_dt(1), 10.0, "0xsell")]
         prices = {_dt(0): 1.0, _dt(1): 2.0}
-        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts: prices.get(ts))
+        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts, _h: prices.get(ts))
 
         assert len(result.closed_trades) == 1
         trade = result.closed_trades[0]
@@ -78,35 +85,35 @@ class TestFifoMatch:
         assert result.open_position_amount == 0.0
 
     def test_simple_losing_trade(self):
-        buys = [(_dt(0), 10.0)]
-        sells = [(_dt(1), 10.0)]
+        buys = [(_dt(0), 10.0, "0xbuy")]
+        sells = [(_dt(1), 10.0, "0xsell")]
         prices = {_dt(0): 2.0, _dt(1): 1.0}
-        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts: prices.get(ts))
+        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts, _h: prices.get(ts))
 
         assert result.closed_trades[0].pnl_usd == pytest.approx(-10.0)
 
     def test_missing_price_counted_unpriced_never_zeroed(self):
-        buys = [(_dt(0), 10.0)]
-        sells = [(_dt(1), 10.0)]
-        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts: None)
+        buys = [(_dt(0), 10.0, "0xbuy")]
+        sells = [(_dt(1), 10.0, "0xsell")]
+        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts, _h: None)
 
         assert result.closed_trades == []
         assert result.unpriced_legs == 1
 
     def test_partial_sell_leaves_open_position(self):
-        buys = [(_dt(0), 10.0)]
-        sells = [(_dt(1), 4.0)]
+        buys = [(_dt(0), 10.0, "0xbuy")]
+        sells = [(_dt(1), 4.0, "0xsell")]
         prices = {_dt(0): 1.0, _dt(1): 1.5}
-        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts: prices.get(ts))
+        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts, _h: prices.get(ts))
 
         assert result.closed_trades[0].token_amount == pytest.approx(4.0)
         assert result.open_position_amount == pytest.approx(6.0)
 
     def test_fifo_order_oldest_buy_matched_first(self):
-        buys = [(_dt(0), 5.0), (_dt(1), 5.0)]
-        sells = [(_dt(2), 5.0)]
+        buys = [(_dt(0), 5.0, "0xbuy1"), (_dt(1), 5.0, "0xbuy2")]
+        sells = [(_dt(2), 5.0, "0xsell")]
         prices = {_dt(0): 1.0, _dt(1): 3.0, _dt(2): 2.0}
-        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts: prices.get(ts))
+        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts, _h: prices.get(ts))
 
         assert len(result.closed_trades) == 1
         # apparié avec l'achat à 1.0 (le plus ancien), pas celui à 3.0
@@ -114,9 +121,24 @@ class TestFifoMatch:
         assert result.open_position_amount == pytest.approx(5.0)
 
     def test_sell_without_matching_buy_ignored_not_a_priced_leg(self):
-        result = sm._fifo_match(TOKEN_X, [], [(_dt(0), 10.0)], lambda ts: 1.0)
+        result = sm._fifo_match(TOKEN_X, [], [(_dt(0), 10.0, "0xsell")], lambda ts, _h: 1.0)
         assert result.closed_trades == []
         assert result.unpriced_legs == 0
+
+    def test_price_lookup_receives_matching_tx_hash_per_leg(self):
+        """Le hash transporté par chaque jambe est bien celui repassé à
+        ``price_lookup`` -- pas seulement le timestamp (14/07, condition
+        nécessaire pour que la résolution de prix par hash exact fonctionne)."""
+        buys = [(_dt(0), 10.0, "0xbuy")]
+        sells = [(_dt(1), 10.0, "0xsell")]
+        seen_hashes = []
+
+        def _price_lookup(ts, tx_hash):
+            seen_hashes.append(tx_hash)
+            return 1.0
+
+        sm._fifo_match(TOKEN_X, buys, sells, _price_lookup)
+        assert seen_hashes == ["0xbuy", "0xsell"]
 
 
 class TestSortinoRatio:
@@ -410,14 +432,154 @@ class TestSuspectPositiveFlag:
 
 
 # ---------------------------------------------------------------------------
+# Prix par tx_hash exact (14/07, complément pool+OHLCV -- cf. rapport
+# [VPS Secondaire] 14/07 : preuve de faisabilité + cas réel WETH/USDC
+# tx 0x9e7307776cc89b087a6c025c5e0c72deaab78e2e5b85b5179b00dfd6f4d165cc,
+# wallet 0x28ce8143bF18b23f7F089e28D5A89CEbFd9A4B3d, swap direct sans
+# agrégateur -- vérifié en direct contre Blockscout/GeckoTerminal ce soir).
+# ---------------------------------------------------------------------------
+
+_TX = "0xswaptx"
+_STABLE = next(iter(sm._STABLECOIN_ADDRESSES_BY_CHAIN["base"]))
+
+
+class TestHashBasedPrice:
+    @pytest.mark.asyncio
+    async def test_direct_stable_leg_returns_ratio_price(self):
+        client = FakeBlockscoutClient(
+            tx_token_transfers={
+                _TX: TokenTransfersResult(
+                    transfers=[
+                        _transfer(from_addr=WALLET_A, to_addr=POOL_X, token=TOKEN_X, ts=_dt(0), amount=2.0, tx_hash=_TX),
+                        _transfer(from_addr=POOL_X, to_addr=WALLET_A, token=_STABLE, ts=_dt(0), amount=5000.0, tx_hash=_TX),
+                    ],
+                    available=True,
+                ),
+            },
+        )
+        price = await sm._hash_based_price(client, _TX, TOKEN_X, WALLET_A, chain="base")
+        assert price == pytest.approx(2500.0)  # 5000 stable / 2 token
+
+    @pytest.mark.asyncio
+    async def test_multihop_no_stable_leg_falls_back_to_none(self):
+        """Sortie multi-hop non-stable (ex. token -> autre token) -- repli
+        attendu pour la majorité des jambes, pas un cas d'erreur."""
+        client = FakeBlockscoutClient(
+            tx_token_transfers={
+                _TX: TokenTransfersResult(
+                    transfers=[
+                        _transfer(from_addr=WALLET_A, to_addr=POOL_X, token=TOKEN_X, ts=_dt(0), amount=2.0, tx_hash=_TX),
+                        _transfer(from_addr=POOL_X, to_addr=WALLET_A, token=TOKEN_Y, ts=_dt(0), amount=10.0, tx_hash=_TX),
+                    ],
+                    available=True,
+                ),
+            },
+        )
+        price = await sm._hash_based_price(client, _TX, TOKEN_X, WALLET_A, chain="base")
+        assert price is None
+
+    @pytest.mark.asyncio
+    async def test_wallet_not_party_falls_back_to_none(self):
+        """Pattern agrégateur-redirect réel constaté le 14/07 (wallet
+        0xbae88c80..., tx 0x9ef4f224...) : ni la jambe token ni la jambe
+        stable ne touchent le wallet directement -- jamais deviné."""
+        client = FakeBlockscoutClient(
+            tx_token_transfers={
+                _TX: TokenTransfersResult(
+                    transfers=[
+                        _transfer(from_addr=ROUTER, to_addr=POOL_X, token=TOKEN_X, ts=_dt(0), amount=2.0, tx_hash=_TX),
+                        _transfer(from_addr=POOL_X, to_addr="0xelsewhere", token=_STABLE, ts=_dt(0), amount=5000.0, tx_hash=_TX),
+                    ],
+                    available=True,
+                ),
+            },
+        )
+        price = await sm._hash_based_price(client, _TX, TOKEN_X, WALLET_A, chain="base")
+        assert price is None
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_double_token_leg_never_guesses(self):
+        client = FakeBlockscoutClient(
+            tx_token_transfers={
+                _TX: TokenTransfersResult(
+                    transfers=[
+                        _transfer(from_addr=WALLET_A, to_addr=POOL_X, token=TOKEN_X, ts=_dt(0), amount=1.0, tx_hash=_TX),
+                        _transfer(from_addr=WALLET_A, to_addr=POOL_X, token=TOKEN_X, ts=_dt(0), amount=1.0, tx_hash=_TX),
+                        _transfer(from_addr=POOL_X, to_addr=WALLET_A, token=_STABLE, ts=_dt(0), amount=5000.0, tx_hash=_TX),
+                    ],
+                    available=True,
+                ),
+            },
+        )
+        price = await sm._hash_based_price(client, _TX, TOKEN_X, WALLET_A, chain="base")
+        assert price is None
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_double_stable_leg_never_guesses(self):
+        stable_2 = sorted(sm._STABLECOIN_ADDRESSES_BY_CHAIN["base"])[1]
+        client = FakeBlockscoutClient(
+            tx_token_transfers={
+                _TX: TokenTransfersResult(
+                    transfers=[
+                        _transfer(from_addr=WALLET_A, to_addr=POOL_X, token=TOKEN_X, ts=_dt(0), amount=2.0, tx_hash=_TX),
+                        _transfer(from_addr=POOL_X, to_addr=WALLET_A, token=_STABLE, ts=_dt(0), amount=2500.0, tx_hash=_TX),
+                        _transfer(from_addr=POOL_X, to_addr=WALLET_A, token=stable_2, ts=_dt(0), amount=2500.0, tx_hash=_TX),
+                    ],
+                    available=True,
+                ),
+            },
+        )
+        price = await sm._hash_based_price(client, _TX, TOKEN_X, WALLET_A, chain="base")
+        assert price is None
+
+    @pytest.mark.asyncio
+    async def test_blockscout_unavailable_returns_none_never_raises(self):
+        client = FakeBlockscoutClient(
+            tx_token_transfers={_TX: TokenTransfersResult(available=False, error="timeout")},
+        )
+        price = await sm._hash_based_price(client, _TX, TOKEN_X, WALLET_A, chain="base")
+        assert price is None
+
+    @pytest.mark.asyncio
+    async def test_unsupported_chain_returns_none_even_with_a_clean_stable_leg(self):
+        """Registre stablecoin vide pour une chaîne (ethereum, pas encore
+        couvert par ce chantier) -- repli systématique, pas un manque
+        silencieux (cf. docstring de _STABLECOIN_ADDRESSES_BY_CHAIN)."""
+        client = FakeBlockscoutClient(
+            tx_token_transfers={
+                _TX: TokenTransfersResult(
+                    transfers=[
+                        _transfer(from_addr=WALLET_A, to_addr=POOL_X, token=TOKEN_X, ts=_dt(0), amount=2.0, tx_hash=_TX),
+                        _transfer(from_addr=POOL_X, to_addr=WALLET_A, token=_STABLE, ts=_dt(0), amount=5000.0, tx_hash=_TX),
+                    ],
+                    available=True,
+                ),
+            },
+        )
+        price = await sm._hash_based_price(client, _TX, TOKEN_X, WALLET_A, chain="ethereum")
+        assert price is None
+
+    @pytest.mark.asyncio
+    async def test_client_none_returns_none(self):
+        price = await sm._hash_based_price(None, _TX, TOKEN_X, WALLET_A, chain="base")
+        assert price is None
+
+
+# ---------------------------------------------------------------------------
 # Bout-en-bout mocké : score_wallets
 # ---------------------------------------------------------------------------
 
 class FakeBlockscoutClient:
-    def __init__(self, *, address_infos=None, transfers=None, transactions=None):
+    def __init__(self, *, address_infos=None, transfers=None, transactions=None, tx_token_transfers=None):
         self._address_infos = address_infos or {}
         self._transfers = transfers or {}
         self._transactions = transactions or {}
+        # tx_hash -> TokenTransfersResult (14/07, prix par hash exact) -- vide
+        # par défaut : `_hash_based_price` retombe alors systématiquement sur
+        # pool+OHLCV pour tous les tests qui ne mockent pas cette méthode
+        # explicitement, comportement identique à avant ce chantier.
+        self._tx_token_transfers = tx_token_transfers or {}
+        self.tx_token_transfers_calls: list[str] = []
 
     async def get_address_info(self, address):
         return self._address_infos.get(
@@ -430,6 +592,12 @@ class FakeBlockscoutClient:
     async def get_transactions_bounded(self, address, *, max_pages=5):
         return self._transactions.get(
             address, BoundedTransactionsResult(transactions=[], available=True, truncated=False)
+        )
+
+    async def get_transaction_token_transfers(self, tx_hash):
+        self.tx_token_transfers_calls.append(tx_hash)
+        return self._tx_token_transfers.get(
+            tx_hash, TokenTransfersResult(available=False, error="non mocké dans ce test")
         )
 
 
@@ -967,6 +1135,155 @@ class TestCmcPricingRecovery:
         assert card.cmc_price_recovery_count == 0
         assert card.gecko_dexscreener_gap_count == 0
         assert card.unpriced_legs == 1
+
+
+class TestMaxHashPricedLegsPerToken:
+    """Plafond (correction opérateur, 14/07) : un wallet actif peut avoir des
+    dizaines/centaines de tx_hash distincts sur UN token -- sans plafond,
+    autant d'appels Blockscout séquentiels supplémentaires par requête. Vérifie
+    que le nombre d'appels à ``get_transaction_token_transfers`` ne dépasse
+    JAMAIS ``WEIGHTS.max_hash_priced_legs_per_token``, et que les jambes
+    au-delà du plafond restent valorisées via pool+OHLCV (aucun abandon
+    silencieux)."""
+
+    @pytest.mark.asyncio
+    async def test_hash_lookups_capped_legs_beyond_fall_back_to_ohlcv(self, tmp_path, monkeypatch):
+        from dataclasses import replace
+
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        monkeypatch.setattr(sm, "WEIGHTS", replace(sm.WEIGHTS, max_hash_priced_legs_per_token=3))
+
+        n_buys = 6
+        buys = [
+            _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(i), amount=1.0, tx_hash=f"0xbuy{i}")
+            for i in range(n_buys)
+        ]
+        sell = _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(n_buys), amount=float(n_buys), tx_hash="0xsell")
+        transfers = TokenTransfersResult(transfers=[*buys, sell], available=True)
+        # Aucun hash mocké dans tx_token_transfers -- toutes les jambes
+        # retombent sur pool+OHLCV, ce qui isole précisément le comportement
+        # du plafond (nombre d'appels), pas la résolution de prix elle-même.
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: _flat_ohlcv(1.0, start=_dt(-2))},
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.available is True
+        # 7 tx_hash distincts au total (6 achats + 1 vente) -- plafonné à 3,
+        # jamais 7 (un par jambe).
+        assert len(client.tx_token_transfers_calls) == 3
+        assert client.tx_token_transfers_calls == ["0xbuy0", "0xbuy1", "0xbuy2"]  # ordre chronologique
+        # Toutes les jambes restent néanmoins valorisées via pool+OHLCV --
+        # aucun abandon silencieux au-delà du plafond.
+        assert card.unpriced_legs == 0
+        assert card.closed_trades_count >= 1
+
+
+class TestHashPriceRealSwapRegression:
+    """Cas réel capturé en direct le 14/07 -- swap WETH->USDC direct (Uniswap
+    V3 SwapRouter02 `exactInputSingle`, sans agrégateur/redirection),
+    wallet 0x28ce8143bF18b23f7F089e28D5A89CEbFd9A4B3d, tx
+    0x9e7307776cc89b087a6c025c5e0c72deaab78e2e5b85b5179b00dfd6f4d165cc :
+    - jambe WETH : wallet -> pool, 0.000066281897035081 WETH (vente).
+    - jambe USDC : pool -> wallet, 0.123906 USDC (réception directe).
+    - ratio implicite : ~1869.38 USDC/WETH (cohérent avec le exchange_rate
+      spot WETH ~1878.39 relevé au même moment sur Blockscout).
+
+    Contrairement au premier cas trouvé le 14/07 (tx 0x9ef4f224..., wallet
+    0xbae88c80... -- pattern agrégateur `strictlySwapAndCall`, aucune jambe ne
+    touche le wallet directement, DONC INUTILISABLE pour ce test), celui-ci
+    est un swap direct : jambe token ET jambe stable touchent bien le wallet.
+
+    Le pool+OHLCV mocké renvoie volontairement un prix TRÈS différent (500.0,
+    contre ~1869 réel) aux deux timestamps -- si le prix par hash n'était pas
+    réellement utilisé pour la jambe de vente, ce test échouerait en
+    détectant 500.0 au lieu de ~1869.38."""
+
+    _WALLET = "0x28ce8143bF18b23f7F089e28D5A89CEbFd9A4B3d"
+    _WETH = "0x4200000000000000000000000000000000000006"
+    _TX = "0x9e7307776cc89b087a6c025c5e0c72deaab78e2e5b85b5179b00dfd6f4d165cc"
+    _POOL = "0x6c561b446416e1a00e8e93e221854d6ea4171372"  # WETH/USDC 0.3%, la plus forte liquidité/volume
+    _WRONG_OHLCV_PRICE = 500.0
+    _REAL_RATIO_PRICE = 0.123906 / 0.000066281897035081  # ~1869.379
+
+    @pytest.mark.asyncio
+    async def test_sell_leg_priced_from_real_tx_hash_not_from_mocked_pool_price(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        buy_ts = _dt(-1)
+        sell_ts = datetime(2026, 7, 14, 19, 24, 55, tzinfo=timezone.utc)
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                # Achat synthétique antérieur -- AUCUN hash mocké dans
+                # tx_token_transfers, retombe volontairement sur pool+OHLCV
+                # (prouve que les deux mécanismes coexistent sur le même token).
+                _transfer(
+                    from_addr=FUNDER, to_addr=self._WALLET, token=self._WETH,
+                    ts=buy_ts, amount=0.001, tx_hash="0xbuy-not-mocked",
+                ),
+                # Vente réelle -- hash mocké ci-dessous avec les VRAIS transferts.
+                _transfer(
+                    from_addr=self._WALLET, to_addr=self._POOL, token=self._WETH,
+                    ts=sell_ts, amount=0.000066281897035081, tx_hash=self._TX,
+                ),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(
+            transfers={self._WALLET: transfers},
+            tx_token_transfers={
+                self._TX: TokenTransfersResult(
+                    transfers=[
+                        _transfer(
+                            from_addr=self._WALLET, to_addr=self._POOL, token=self._WETH,
+                            ts=sell_ts, amount=0.000066281897035081, tx_hash=self._TX,
+                        ),
+                        _transfer(
+                            from_addr=self._POOL, to_addr=self._WALLET, token=_STABLE,
+                            ts=sell_ts, amount=0.123906, tx_hash=self._TX,
+                        ),
+                    ],
+                    available=True,
+                ),
+            },
+        )
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={self._WETH: self._POOL},
+            pool_created_at={self._WETH: _dt(-5)},
+            ohlcv={self._POOL: _flat_ohlcv(self._WRONG_OHLCV_PRICE, start=_dt(-6))},
+        )
+
+        report = await sm.score_wallets(
+            [self._WALLET], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.available is True
+        assert card.closed_trades_count == 1
+        assert card.unpriced_legs == 0
+
+        # Prix RÉEL par hash pour la jambe de vente -- pas le prix pool mocké.
+        pnl = card.realized_pnl_usd
+        assert pnl is not None
+        # buy_price = 500.0 (OHLCV mocké, hash non fourni pour cet achat) ;
+        # sell_price doit être ~1869.38 (hash réel), PAS 500.0 (sinon pnl≈0).
+        # FIFO n'apparie que le plus petit des deux montants (vente 0.0000663
+        # < achat 0.001) -- la position d'achat restante reste ouverte.
+        matched_amount = 0.000066281897035081
+        expected_pnl = matched_amount * (self._REAL_RATIO_PRICE - self._WRONG_OHLCV_PRICE)
+        assert pnl == pytest.approx(expected_pnl, rel=1e-4)
+        assert pnl != pytest.approx(0.0, abs=0.01)  # écarterait un repli silencieux sur le prix pool mocké
+        # tx du buy_leg jamais interrogée (non mockée) sans faire planter le test --
+        # confirme le repli silencieux OHLCV pour ce hash précis.
+        assert "0xbuy-not-mocked" in client.tx_token_transfers_calls
+        assert self._TX in client.tx_token_transfers_calls
 
 
 def test_wallet_scoring_gate_off_by_default(monkeypatch):
