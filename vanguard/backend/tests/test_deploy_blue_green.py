@@ -111,6 +111,45 @@ class TestAutohealCircuitBreaker:
         assert res.stdout.strip() == "1"
 
 
+class TestRetryUntil:
+    """#154 (correctif post-déploiement) : la vérification finale de deploy.sh tirait
+    un unique curl juste après `systemctl reload nginx`, sans marge -- reload pas
+    instantané, faux échec possible. retry_until (identique à deploy_vitrine_lib.sh,
+    #157) retente sur un plafond court plutôt qu'un essai unique."""
+
+    def test_succeeds_immediately(self):
+        res = _run(DEPLOY_LIB, "retry_until 3 0.05 true")
+        assert res.returncode == 0
+
+    def test_succeeds_within_cap_after_failures(self, tmp_path):
+        state = tmp_path / "counter"
+        flaky = (
+            "flaky() { local n=0; [ -f \"$1\" ] && n=$(cat \"$1\"); "
+            "n=$((n+1)); echo \"$n\" > \"$1\"; [ \"$n\" -ge 3 ]; }"
+        )
+        res = _run(DEPLOY_LIB, f"{flaky}; retry_until 5 0.05 flaky '{state}'")
+        assert res.returncode == 0, res.stderr
+        assert state.read_text().strip() == "3"
+
+    def test_fails_after_exhausting_cap(self):
+        res = _run(DEPLOY_LIB, "retry_until 3 0.05 false")
+        assert res.returncode != 0
+
+    def test_identical_to_deploy_vitrine_lib_implementation(self):
+        """#157 (deploy_vitrine_lib.sh) définit la MÊME fonction -- vérifie qu'elles ne
+        divergent pas silencieusement entre les deux scripts (même besoin, même code)."""
+        vitrine_lib = VANGUARD_DIR / "deploy_vitrine_lib.sh"
+        deploy_src = DEPLOY_LIB.read_text()
+        vitrine_src = vitrine_lib.read_text()
+
+        def _extract_body(src: str) -> str:
+            start = src.index("retry_until() {")
+            end = src.index("\n}\n", start) + len("\n}\n")
+            return src[start:end]
+
+        assert _extract_body(deploy_src) == _extract_body(vitrine_src)
+
+
 @pytest.mark.parametrize("lib", [DEPLOY_LIB, AUTOHEAL_LIB])
 def test_lib_files_exist(lib):
     assert lib.is_file(), f"{lib} manquant"
