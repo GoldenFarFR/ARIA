@@ -412,6 +412,23 @@ class BlockscoutClient:
 
         return TokenTransfersResult(transfers=transfers[:limit], available=True, error=None)
 
+    async def get_transaction_token_transfers(self, tx_hash: str) -> TokenTransfersResult:
+        """Tous les transferts ERC-20 d'UNE transaction précise (14/07,
+        wallet-scoring #157 -- prix par tx_hash exact, complément de
+        ``get_ohlcv``/``price_at``). Une seule page : une transaction de swap,
+        même multi-hop, compte au plus quelques dizaines de transferts, jamais
+        besoin de paginer. Réutilise ``_parse_token_transfer`` (même parsing
+        décimales/adresses que ``get_token_transfers``, aucune duplication)."""
+        data, error = await self._get_json(f"/transactions/{tx_hash}/token-transfers")
+        if error is not None:
+            return TokenTransfersResult(available=False, error=error)
+        if not isinstance(data, dict):
+            return TokenTransfersResult(available=False, error=UNAVAILABLE)
+
+        items = data.get("items") or []
+        transfers = [self._parse_token_transfer(item) for item in items if isinstance(item, dict)]
+        return TokenTransfersResult(transfers=transfers, available=True, error=None)
+
     # ------------------------------------------------------------------
     # 3. Historique des transactions
     # ------------------------------------------------------------------
