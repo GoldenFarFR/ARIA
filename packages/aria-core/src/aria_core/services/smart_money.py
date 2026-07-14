@@ -49,6 +49,22 @@ _WASH_TRADING_COUNTERPARTY_SHARE = 0.6
 _MIN_TRANSFERS_FOR_WASH_CHECK = 3
 _ZERO_ADDRESS = "0x" + "0" * 40
 
+# Prix par tx_hash exact (14/07, complément pool+OHLCV -- cf. _hash_based_price) :
+# stablecoins reconnus PAR ADRESSE DE CONTRAT (jamais par symbole -- un token
+# peut usurper un symbole "USDC"), pour transformer un ratio de deux jambes
+# on-chain en prix USD sans dépendre du pool/OHLCV. Base UNIQUEMENT pour ce
+# chantier (adresses vérifiées une à une contre Blockscout le 14/07) --
+# chaîne absente du dict = registre vide = repli systématique sur pool+OHLCV,
+# pas un manque silencieux (cf. _hash_based_price).
+_STABLECOIN_ADDRESSES_BY_CHAIN: dict[str, set[str]] = {
+    "base": {
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC (natif, Circle)
+        "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC (bridged)
+        "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",  # DAI (bridged)
+        "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",  # USDT (bridged)
+    },
+}
+
 
 @dataclass
 class WalletBehavior:
@@ -366,25 +382,29 @@ class _TokenFIFOResult:
 
 def _fifo_match(
     token_address: str,
-    buys: list[tuple[datetime, float]],
-    sells: list[tuple[datetime, float]],
+    buys: list[tuple[datetime, float, str]],
+    sells: list[tuple[datetime, float, str]],
     price_lookup,
 ) -> _TokenFIFOResult:
     """FIFO strict : chaque vente consomme les achats les plus anciens en premier.
-    ``price_lookup(ts) -> float | None`` -- une jambe sans prix disponible des DEUX
-    côtés (achat ET vente) est comptée dans ``unpriced_legs``, jamais valorisée à
-    zéro ni ignorée silencieusement (doctrine facts-only)."""
-    buy_queue: deque[list] = deque(sorted(([ts, amt] for ts, amt in buys), key=lambda b: b[0]))
+    ``price_lookup(ts, tx_hash) -> float | None`` -- une jambe sans prix disponible
+    des DEUX côtés (achat ET vente) est comptée dans ``unpriced_legs``, jamais
+    valorisée à zéro ni ignorée silencieusement (doctrine facts-only).
+    ``buys``/``sells`` portent le ``tx_hash`` d'origine de chaque jambe (14/07,
+    prix par hash exact) -- reste synchrone : la résolution éventuelle d'un prix
+    par hash (appel réseau) est faite EN AMONT par l'appelant, qui fournit un
+    ``price_lookup`` déjà résolu (dict/fermeture), jamais dans cette fonction."""
+    buy_queue: deque[list] = deque(sorted(([ts, amt, tx_hash] for ts, amt, tx_hash in buys), key=lambda b: b[0]))
     closed: list[ClosedTrade] = []
     unpriced = 0
 
-    for sell_ts, sell_amount in sorted(sells, key=lambda s: s[0]):
+    for sell_ts, sell_amount, sell_hash in sorted(sells, key=lambda s: s[0]):
         remaining = sell_amount
         while remaining > 1e-12 and buy_queue:
-            buy_ts, buy_amount = buy_queue[0]
+            buy_ts, buy_amount, buy_hash = buy_queue[0]
             matched = min(remaining, buy_amount)
-            buy_price = price_lookup(buy_ts)
-            sell_price = price_lookup(sell_ts)
+            buy_price = price_lookup(buy_ts, buy_hash)
+            sell_price = price_lookup(sell_ts, sell_hash)
             if buy_price is None or sell_price is None:
                 unpriced += 1
             else:
@@ -407,7 +427,7 @@ def _fifo_match(
         # avant la fenêtre de transferts récupérée, ou via un mécanisme non-transfer
         # comme un mint direct) ; pas une jambe "sans prix", juste hors-scope FIFO.
 
-    open_amount = sum(amt for _, amt in buy_queue)
+    open_amount = sum(amt for _, amt, _ in buy_queue)
     return _TokenFIFOResult(
         token_address=token_address, closed_trades=closed, unpriced_legs=unpriced, open_position_amount=open_amount,
     )
@@ -561,17 +581,90 @@ class _MultiTokenResult:
     resolved_pool_addresses: set[str] = field(default_factory=set)
 
 
+async def _hash_based_price(
+    client: BlockscoutClient | None,
+    tx_hash: str,
+    token_address: str,
+    wallet: str,
+    *,
+    chain: str,
+) -> float | None:
+    """Prix USD d'une jambe déduit du ratio réellement exécuté dans SA
+    transaction (14/07, complément de ``resolve_primary_pool``+``get_ohlcv``+
+    ``price_at``) -- vérité d'exécution, pas une approximation par bougie à un
+    timestamp arrondi. Méthode : ratio entre le montant du token ciblé et un
+    montant stablecoin, l'un et l'autre sur une jambe de la MÊME transaction
+    qui touche directement ``wallet`` (``from``/``to``) -- pas un décodage du
+    log ``Swap`` brut (cf. rapport [VPS Secondaire] 14/07 : la preuve de
+    faisabilité de Task A utilisait déjà ce ratio de transferts, pas les
+    montants bruts du log).
+
+    Repli sur ``None`` (jamais une exception) dans tous les cas où le prix ne
+    peut pas être établi SANS deviner :
+    - chaîne sans registre stablecoin connu (cf. ``_STABLECOIN_ADDRESSES_BY_CHAIN``,
+      Base uniquement pour ce chantier) ou client Blockscout absent ;
+    - transaction indisponible (timeout/429/erreur -- déjà géré par ``_get_json``) ;
+    - aucune jambe du token ciblé touchant le wallet dans cette tx (swap routé
+      via un agrégateur/smart-account qui redirige la sortie ailleurs -- pattern
+      réel constaté le 14/07 sur un wallet de test, PAS un cas rare marginal) ;
+    - aucune jambe stablecoin touchant le wallet dans cette tx (swap token<->token
+      non-stable, ou sortie multi-hop non-stable) -- repli attendu pour la
+      majorité des jambes, pas un cas d'erreur ;
+    - PLUSIEURS jambes du token ciblé OU plusieurs jambes stablecoin touchant
+      le wallet dans la même tx (tx composite/batch ambiguë) -- jamais un choix
+      arbitraire (même doctrine que ``_fifo_match`` : jamais valorisé à zéro ni
+      deviné) ;
+    - montant token nul/négatif (garde de division).
+    """
+    stables = _STABLECOIN_ADDRESSES_BY_CHAIN.get(chain)
+    if not stables or client is None or not tx_hash:
+        return None
+
+    result = await client.get_transaction_token_transfers(tx_hash)
+    if not result.available:
+        return None
+
+    wallet_l = wallet.lower()
+    token_l = token_address.lower()
+    token_amount: float | None = None
+    stable_amount: float | None = None
+    for t in result.transfers:
+        if wallet_l not in ((t.from_address or "").lower(), (t.to_address or "").lower()):
+            continue
+        if not t.amount:
+            continue
+        addr = (t.token_address or "").lower()
+        if addr == token_l:
+            if token_amount is not None:
+                return None  # jambe token ambiguë -- jamais deviner laquelle
+            token_amount = t.amount
+        elif addr in stables:
+            if stable_amount is not None:
+                return None  # jambe stable ambiguë -- jamais deviner laquelle
+            stable_amount = t.amount
+
+    if not token_amount or token_amount <= 0 or not stable_amount:
+        return None
+    return stable_amount / token_amount
+
+
 async def _analyze_wallet_multi_token(
     wallet: str,
     transfers_by_token: dict[str, list[TokenTransfer]],
     *,
     gecko,
+    chain_clients: dict[str, BlockscoutClient] | None = None,
 ) -> _MultiTokenResult:
     """``transfers_by_token`` est keyé par une clé composite ``"{chaîne}:{adresse}"``
     (cf. ``_group_transfers_by_token``, #157 multi-chaînes 14/07) -- jamais
     l'adresse token seule, pour ne jamais fusionner par erreur deux tokens
     d'adresses identiques sur deux chaînes différentes (espaces d'adresses
-    indépendants par construction EVM)."""
+    indépendants par construction EVM). ``chain_clients`` (14/07, prix par
+    tx_hash exact) : registre chaîne -> client Blockscout, utilisé pour
+    interroger le bon client lors du lookup ``_hash_based_price`` par token
+    (déjà connu par chaîne via la clé composite) ; ``None``/registre incomplet
+    pour une chaîne dégrade proprement vers pool+OHLCV pour tous ses tokens
+    (même politique que l'absence de client dans ``_hash_based_price``)."""
     from aria_core.services.coinmarketcap import CMC_NETWORK_SLUGS
     from aria_core.services.coinmarketcap import get_ohlcv as _cmc_get_ohlcv
     from aria_core.services.coinmarketcap import resolve_primary_pool as _cmc_resolve_primary_pool
@@ -579,6 +672,7 @@ async def _analyze_wallet_multi_token(
     from aria_core.services.geckoterminal import GECKO_NETWORK_SLUGS
 
     wallet_l = wallet.lower()
+    chain_clients = chain_clients or {}
     result = _MultiTokenResult()
 
     for composite_key, token_transfers in transfers_by_token.items():
@@ -586,12 +680,12 @@ async def _analyze_wallet_multi_token(
         network = GECKO_NETWORK_SLUGS.get(chain, "base")
 
         buys = [
-            (ts, t.amount)
+            (ts, t.amount, t.tx_hash)
             for t in token_transfers
             if (t.to_address or "").lower() == wallet_l and t.amount and (ts := _parse_timestamp(t.timestamp)) is not None
         ]
         sells = [
-            (ts, t.amount)
+            (ts, t.amount, t.tx_hash)
             for t in token_transfers
             if (t.from_address or "").lower() == wallet_l and t.amount and (ts := _parse_timestamp(t.timestamp)) is not None
         ]
@@ -640,12 +734,37 @@ async def _analyze_wallet_multi_token(
                     ohlcv = cmc_ohlcv
                     result.cmc_recovered_tokens.append(token_addr)
 
-        if ohlcv is None or not ohlcv.available or not ohlcv.candles:
+        # Prix par tx_hash exact (14/07) : tenté pour chaque tx_hash DISTINCT de
+        # ce token, dans l'ordre chronologique (cohérent avec le FIFO qui suit),
+        # plafonné à WEIGHTS.max_hash_priced_legs_per_token -- jamais une boucle
+        # non bornée sur un wallet très actif. Au-delà du plafond, les jambes
+        # restantes retombent directement sur pool+OHLCV (ci-dessous), jamais un
+        # abandon silencieux du reste du token.
+        chain_client = chain_clients.get(chain)
+        seen_hashes: set[str] = set()
+        ordered_hashes: list[str] = []
+        for ts, _amt, tx_hash in sorted(buys + sells, key=lambda leg: leg[0]):
+            if tx_hash and tx_hash not in seen_hashes:
+                seen_hashes.add(tx_hash)
+                ordered_hashes.append(tx_hash)
+
+        hash_prices: dict[str, float] = {}
+        for tx_hash in ordered_hashes[: WEIGHTS.max_hash_priced_legs_per_token]:
+            price = await _hash_based_price(chain_client, tx_hash, token_addr, wallet, chain=chain)
+            if price is not None:
+                hash_prices[tx_hash] = price
+
+        if (ohlcv is None or not ohlcv.available or not ohlcv.candles) and not hash_prices:
             result.unpriced_legs += len(buys) + len(sells)
         else:
             from aria_core.services.geckoterminal import price_at
 
-            def _price_lookup(ts, _ohlcv=ohlcv):
+            def _price_lookup(ts, tx_hash, _ohlcv=ohlcv, _hash_prices=hash_prices):
+                cached = _hash_prices.get(tx_hash)
+                if cached is not None:
+                    return cached
+                if _ohlcv is None or not _ohlcv.available or not _ohlcv.candles:
+                    return None
                 return price_at(_ohlcv, int(ts.timestamp()))
 
             fifo = _fifo_match(token_addr, buys, sells, _price_lookup)
@@ -653,9 +772,9 @@ async def _analyze_wallet_multi_token(
             result.unpriced_legs += fifo.unpriced_legs
 
         if pool_meta.available and pool_meta.created_at:
-            earliest_buy_ts = min(ts for ts, _ in buys)
+            earliest_buy_ts = min(ts for ts, _amt, _hash in buys)
             elapsed = (earliest_buy_ts - pool_meta.created_at).total_seconds()
-            amounts = [a for _, a in buys]
+            amounts = [a for _, a, _ in buys]
             largest_share = (max(amounts) / sum(amounts)) if amounts and sum(amounts) > 0 else None
             controlled = largest_share is None or largest_share <= _LARGEST_BUY_SHARE_MAX
             if 0 <= elapsed <= _EARLY_ENTRY_WINDOW_SECONDS and controlled:
@@ -1111,7 +1230,7 @@ async def score_wallets(
         # Analyse multi-token AVANT les disqualifiants durs : fournit les pools
         # réellement résolus par token, utilisés ci-dessous pour généraliser
         # l'exclusion wash-trading sans faux positif (#157, correction 14/07).
-        multi = await _analyze_wallet_multi_token(wallet, selected_transfers, gecko=gecko)
+        multi = await _analyze_wallet_multi_token(wallet, selected_transfers, gecko=gecko, chain_clients=chain_clients)
         card.closed_trades_count = len(multi.closed_trades)
         card.unpriced_legs = multi.unpriced_legs
         card.pool_lookup_errors = multi.pool_lookup_errors
