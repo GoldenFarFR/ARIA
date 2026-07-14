@@ -26,6 +26,7 @@ from aria_core.truth_ledger.store import (
 )
 
 _CANONICAL_PATH = Path(__file__).parent / "canonical_facts.yaml"
+_FAQ_EXPORT_PATH = Path(__file__).parent.parent / "content" / "faq.yaml"
 
 
 def canonical_facts_sync_enabled() -> bool:
@@ -102,7 +103,6 @@ async def _get_active_canonical_hash(canonical_id: str) -> str | None:
 
 def _export_faq_from_canonical(facts: list[dict]) -> None:
     """Keep faq.yaml aligned with canonical facts."""
-    faq_path = Path(__file__).parent.parent / "content" / "faq.yaml"
     export = []
     for fact in facts:
         export.append({
@@ -111,7 +111,7 @@ def _export_faq_from_canonical(facts: list[dict]) -> None:
             "question": fact.get("question", "").strip(),
             "answer": fact.get("answer", "").strip(),
         })
-    faq_path.write_text(
+    _FAQ_EXPORT_PATH.write_text(
         yaml.dump(export, allow_unicode=True, sort_keys=False, width=1000),
         encoding="utf-8",
     )
