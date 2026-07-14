@@ -78,6 +78,23 @@ _MORE_DETAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Ligne numérotée ("1.", "2)") ou à puce ("- ") en tête de ligne.
+_STRUCTURED_LIST_LINE_RE = re.compile(r"(?m)^\s*(?:\d+[.\)]|-)\s")
+_STRUCTURED_TASK_MIN_ITEMS = 3
+
+
+def _has_structured_multistep_task(text: str) -> bool:
+    """3 lignes numérotées/à puces ou plus -- signale une tâche de raisonnement
+    à plusieurs étapes (grille d'évaluation, plan, scénario découpé), pas une
+    affirmation isolée collée à vérifier. Générique sur la FORME du message
+    (nombre de points structurés), pas sur un mot-clé précis -- contrairement à
+    _ANALYSIS_REQUEST_RE (ancré sur des tournures fixes), ce signal généralise à
+    n'importe quel prompt élaboré à étapes multiples, y compris ceux qu'aucune
+    formulation connue n'anticipe encore (incident réel 14/07 : deux prompts de
+    test "Tu es désormais le PDG..."/"Tu es le directeur des investissements..."
+    routés à tort vers verify_external_claim faute d'un signal structurel)."""
+    return len(_STRUCTURED_LIST_LINE_RE.findall(text)) >= _STRUCTURED_TASK_MIN_ITEMS
+
 
 def wants_capability_improvement(message: str) -> bool:
     return bool(_COMPETENCE_IMPROVE_RE.search((message or "").strip()))
@@ -97,6 +114,8 @@ def is_injected_factual_claim(message: str) -> bool:
     if _QUESTION_RE.search(text):
         return False
     if _ANALYSIS_REQUEST_RE.search(text):
+        return False
+    if _has_structured_multistep_task(text):
         return False
     if wants_capability_improvement(text):
         return False

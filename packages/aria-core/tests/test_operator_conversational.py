@@ -101,6 +101,50 @@ def test_injected_claim_imperative_analysis_request_not_misrouted():
     assert not is_injected_factual_claim(injected_thread)
 
 
+def test_injected_claim_structured_roleplay_task_not_misrouted():
+    # Incident réel (14/07) : deux prompts de test opérateur ("Tu es désormais
+    # le PDG d'une entreprise autonome..."/"Tu es le directeur des
+    # investissements d'un fonds de 500 millions de dollars...") contiennent un
+    # mot qui matche _INJECTED_CLAIM_RE ("désormais", ou un pourcentage comme
+    # "42 %") mais AUCUN "?" nulle part et aucune tournure connue de
+    # _ANALYSIS_REQUEST_RE ("analyse ce/cette...") -- routés à tort vers
+    # verify_external_claim (recherche web littérale sur un scénario de
+    # raisonnement structuré), confirmé en reproduisant le cas exact.
+    pdg_prompt = (
+        "Tu es désormais le PDG d'une entreprise autonome. Objectif : faire "
+        "passer le chiffre d'affaires annuel de 0 € à 10 millions €. Tu dois "
+        "construire un plan complet comprenant :\n"
+        "- les produits à lancer,\n"
+        "- les marchés ciblés,\n"
+        "- les priorités,\n"
+        "- le budget,\n"
+        "- les KPI."
+    )
+    fonds_prompt = (
+        "Tu es le directeur des investissements d'un fonds de 500 millions de "
+        "dollars. Tu reçois les informations suivantes :\n"
+        "- Le fondateur possède 42 % des tokens.\n"
+        "- La liquidité est de 120 000 $.\n"
+        "- Les 10 premiers wallets contrôlent 78 % du supply.\n"
+        "Ta mission :\n"
+        "1. Identifier tous les signaux positifs.\n"
+        "2. Identifier tous les risques.\n"
+        "3. Donner une probabilité de rug pull."
+    )
+    assert not is_injected_factual_claim(pdg_prompt)
+    assert not is_injected_factual_claim(fonds_prompt)
+
+
+def test_short_list_still_routes_as_injected_claim():
+    # Contraste : une vraie affirmation collée avec seulement 1-2 puces (pas un
+    # scénario structuré à plusieurs étapes) doit continuer à être vérifiée.
+    claim = (
+        "Voici ce qu'on m'a dit :\n"
+        "- Render a supprimé le plan gratuit pour les web services Python le 3 juillet 2026."
+    )
+    assert is_injected_factual_claim(claim)
+
+
 def test_wants_claim_verification():
     assert wants_claim_verification("vérifie")
     assert wants_claim_verification("check ça")

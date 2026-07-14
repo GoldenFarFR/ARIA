@@ -7,6 +7,7 @@ from aria_core.narrative import (
     help_commands,
     help_commands_public,
     llm_system_block,
+    no_unverified_search_state_claim_rule,
     peer_competition_policy,
     public_llm_system_block,
 )
@@ -1422,6 +1423,7 @@ class AriaBrain:
             "INTERDIT : prétendre avoir créé/modifié un repo GitHub, poussé du code, "
             "ou exécuté une action technique sans résultat explicite du skill GitHub — "
             "si tu n'as pas l'URL GitHub confirmée, dis que l'action n'est pas faite. "
+            f"{no_unverified_search_state_claim_rule(lang_key)} "
             f"{peer_competition_policy(lang_key)} "
             "Tu as une mission forte (site Vanguard / autonomie ZHC / build), mais sur les échanges légers et les provocations tu ne la forces pas à chaque phrase. "
             "Réagis d'abord au ton de la personne. Sois instinctive. "
