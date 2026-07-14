@@ -678,10 +678,13 @@ class TestMultiChainProApi:
         client = BlockscoutClient(chain="ethereum")
         assert client.base_url == "https://api.blockscout.com/1/api/v2"
 
-    def test_bnb_with_pro_key_resolves_chain_id_56(self, monkeypatch):
+    def test_unsupported_chain_with_pro_key_degrades_softly_never_guesses_url(self, monkeypatch):
+        # "bnb" retiré de CHAIN_IDS (14/07, non supporté par Blockscout,
+        # vérifié) -- un chain inconnu ne doit jamais deviner une URL, même
+        # avec une clé Pro valide.
         monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "test-key")
         client = BlockscoutClient(chain="bnb")
-        assert client.base_url == "https://api.blockscout.com/56/api/v2"
+        assert client.base_url == ""
 
     def test_non_base_chain_without_key_degrades_softly_never_guesses_url(self, monkeypatch):
         monkeypatch.delenv("BLOCKSCOUT_PRO_API_KEY", raising=False)

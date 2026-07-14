@@ -34,10 +34,17 @@ PRO_API_URL = "https://api.blockscout.com"
 
 # Chaînes EVM couvertes par le wallet-scoring (#157, 14/07). Solana n'est PAS
 # EVM (adresses différentes, pas de Blockscout) -- chantier séparé, hors scope.
+# "bnb" retiré (14/07, vérifié par VPS Research sur 3 angles indépendants :
+# absent du répertoire officiel chains.blockscout.com, erreur explicite
+# "Network not supported" sur un vrai appel, tous les sous-domaines
+# communautaires testés en 404) -- Blockscout ne sert pas BNB Smart Chain,
+# jamais une donnée réelle n'aurait pu remonter. Avalanche jamais ajouté pour
+# la même raison. Alternative réelle si BNB est voulu un jour : BSCTrace via
+# MegaNode (client séparé, pas une entrée CHAIN_IDS) -- cf.
+# docs/aria-learning-inbox/2026-07-14-verification-blockscout-bnb-avalanche-non-supportes.md
 CHAIN_IDS: dict[str, int] = {
     "base": 8453,
     "ethereum": 1,
-    "bnb": 56,
 }
 
 UNAVAILABLE = "donnée on-chain indisponible"

@@ -1771,7 +1771,7 @@ def _format_wallet_score_card(card) -> list[str]:
         lines.append(f"  ⚠️ {card.financing_check_note}")
     # Transparence multi-chaînes (#157, 14/07) : jamais laisser penser qu'ARIA
     # a "tout" vu par défaut -- montre explicitement où une activité a été trouvée.
-    chains_label = {"base": "Base", "ethereum": "Ethereum", "bnb": "BNB Chain"}
+    chains_label = {"base": "Base", "ethereum": "Ethereum"}
     scanned = ", ".join(chains_label.get(c, c) for c in card.chains_scanned) or "aucune"
     lines.append(f"  Chaînes avec activité trouvée : {scanned}")
     lines.append(

@@ -39,10 +39,11 @@ NETWORK = "base"
 
 # Correspondance chaîne ARIA (même vocabulaire que blockscout.CHAIN_IDS) ->
 # identifiant réseau GeckoTerminal (#157, wallet-scoring multi-chaînes, 14/07).
+# "bnb" retiré (14/07) -- Blockscout ne sert pas BNB Smart Chain (cf.
+# blockscout.CHAIN_IDS), inutile de garder son slug GeckoTerminal seul.
 GECKO_NETWORK_SLUGS: dict[str, str] = {
     "base": "base",
     "ethereum": "eth",
-    "bnb": "bsc",
 }
 
 # Palier gratuit GeckoTerminal ~30 req/min -- même throttle que le client existant
