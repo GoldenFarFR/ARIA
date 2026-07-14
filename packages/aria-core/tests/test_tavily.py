@@ -181,6 +181,60 @@ async def test_fetch_web_snippets_falls_back_to_ddg_when_tavily_empty(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_tavily_query_translated_to_english_before_search(monkeypatch):
+    # Décision opérateur explicite (14/07) : les sources primaires (CoinDesk, The
+    # Block, Reuters...) sont très majoritairement en anglais -- une requête envoyée
+    # telle quelle en français à Tavily biaisait vers des agrégateurs FR plus faibles.
+    from aria_core.knowledge import web_verify
+
+    monkeypatch.setattr("aria_core.services.tavily.is_tavily_configured", lambda: True)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+
+    async def _fake_translate(*_a, **_k):
+        return "what are the latest important crypto news"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_translate)
+
+    captured_query = {}
+
+    async def _fake_search(query, *, max_results=4, **kw):
+        captured_query["value"] = query
+        from aria_core.services.tavily import TavilyResult
+
+        return TavilyResult(query=query, snippets=[], answer=None, available=True)
+
+    monkeypatch.setattr("aria_core.services.tavily.tavily_client.search", _fake_search)
+
+    await web_verify._fetch_tavily_snippets("quelles sont les dernières news crypto importantes ?", 4)
+
+    assert captured_query["value"] == "what are the latest important crypto news"
+
+
+@pytest.mark.asyncio
+async def test_tavily_query_translation_degrades_softly_without_llm(monkeypatch):
+    # Si le LLM n'est pas configuré/échoue, on retombe sur la requête originale
+    # plutôt que d'échouer la recherche entière.
+    from aria_core.knowledge import web_verify
+
+    monkeypatch.setattr("aria_core.services.tavily.is_tavily_configured", lambda: True)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: False)
+
+    captured_query = {}
+
+    async def _fake_search(query, *, max_results=4, **kw):
+        captured_query["value"] = query
+        from aria_core.services.tavily import TavilyResult
+
+        return TavilyResult(query=query, snippets=[], answer=None, available=True)
+
+    monkeypatch.setattr("aria_core.services.tavily.tavily_client.search", _fake_search)
+
+    await web_verify._fetch_tavily_snippets("prix du bitcoin", 4)
+
+    assert captured_query["value"] == "prix du bitcoin"
+
+
+@pytest.mark.asyncio
 async def test_fetch_web_snippets_default_provider_is_ddg(monkeypatch):
     from aria_core.knowledge import web_verify
 
