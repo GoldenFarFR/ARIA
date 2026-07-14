@@ -448,13 +448,18 @@ def _max_drawdown_pct(closed_trades: list[ClosedTrade]) -> float | None:
     return max_dd
 
 
-def _group_transfers_by_token(transfers: list[TokenTransfer]) -> dict[str, list[TokenTransfer]]:
+def _group_transfers_by_token(transfers: list[TokenTransfer], *, chain: str = "base") -> dict[str, list[TokenTransfer]]:
+    """Clé composite ``"{chain}:{adresse}"`` (#157 multi-chaînes, 14/07) --
+    jamais l'adresse seule, pour que deux tokens de même adresse hexadécimale
+    sur deux chaînes EVM différentes (espaces d'adresses indépendants) ne
+    soient jamais fusionnés par erreur. Comportement historique inchangé pour
+    tout appelant à une seule chaîne (``chain="base"`` par défaut)."""
     grouped: dict[str, list[TokenTransfer]] = {}
     for t in transfers:
         addr = (t.token_address or "").lower()
         if not addr:
             continue
-        grouped.setdefault(addr, []).append(t)
+        grouped.setdefault(f"{chain}:{addr}", []).append(t)
     return grouped
 
 
@@ -560,10 +565,20 @@ async def _analyze_wallet_multi_token(
     *,
     gecko,
 ) -> _MultiTokenResult:
+    """``transfers_by_token`` est keyé par une clé composite ``"{chaîne}:{adresse}"``
+    (cf. ``_group_transfers_by_token``, #157 multi-chaînes 14/07) -- jamais
+    l'adresse token seule, pour ne jamais fusionner par erreur deux tokens
+    d'adresses identiques sur deux chaînes différentes (espaces d'adresses
+    indépendants par construction EVM)."""
+    from aria_core.services.geckoterminal import GECKO_NETWORK_SLUGS
+
     wallet_l = wallet.lower()
     result = _MultiTokenResult()
 
-    for token_addr, token_transfers in transfers_by_token.items():
+    for composite_key, token_transfers in transfers_by_token.items():
+        chain, _, token_addr = composite_key.partition(":")
+        network = GECKO_NETWORK_SLUGS.get(chain, "base")
+
         buys = [
             (ts, t.amount)
             for t in token_transfers
@@ -580,11 +595,18 @@ async def _analyze_wallet_multi_token(
         # Résout le VRAI pool du token (pas le contrat token lui-même -- deux
         # choses différentes en AMM, cf. `resolve_primary_pool`). Sert à la fois
         # la valorisation OHLCV et l'exclusion wash-trading multi-token (#157,
-        # correction 14/07).
-        pool_meta = await gecko.resolve_primary_pool(token_addr)
+        # correction 14/07). ``network`` (#157 multi-chaînes, 14/07) : interroge
+        # la BONNE chaîne GeckoTerminal, jamais Base en dur pour un token trouvé
+        # sur Ethereum/BNB.
+        pool_meta = await gecko.resolve_primary_pool(token_addr, network=network)
         if pool_meta.available:
+            # Adresse de pool NUE (jamais préfixée par la chaîne) : comparée
+            # telle quelle à des adresses de contrepartie brutes dans
+            # `_hard_disqualifiers`/`_dominant_counterparty_share` -- une
+            # collision fortuite entre chaînes (espaces d'adresses EVM
+            # indépendants, ~2^160) est négligeable, pas un vrai risque.
             result.resolved_pool_addresses.add(pool_meta.pool_address.lower())
-            ohlcv = await gecko.get_ohlcv(pool_meta.pool_address)
+            ohlcv = await gecko.get_ohlcv(pool_meta.pool_address, network=network)
         else:
             ohlcv = None
 
@@ -770,6 +792,7 @@ class WalletScoreCard:
     tokens_found: int = 0
     tokens_analyzed: int = 0
     tokens_skipped_capped: bool = False
+    chains_scanned: list[str] = field(default_factory=list)  # chaînes où une activité réelle a été trouvée (#157, 14/07)
 
     closed_trades_count: int = 0
     unpriced_legs: int = 0
@@ -921,18 +944,35 @@ def _valid_address(address: str) -> bool:
     return bool(address) and address.startswith("0x") and len(address) == 42
 
 
+DEFAULT_SCAN_CHAINS: tuple[str, ...] = ("base", "ethereum", "bnb")
+
+
 async def score_wallets(
     addresses: list[str],
     *,
-    client: BlockscoutClient,
+    client: BlockscoutClient | None = None,
+    chains: dict[str, BlockscoutClient] | None = None,
     gecko,
     llm=None,
     goplus=None,
+    max_tokens: int | None = None,
 ) -> WalletScoringReport:
     """Point d'entrée wallet-centrique (#157) : 1 à 3 adresses -> disqualifiants
     durs, score composite, drapeau suspect positif, thèse LLM. Toujours un
     signal de confirmation/contexte, jamais un déclencheur (même règle absolue
-    que `analyze_smart_money`)."""
+    que `analyze_smart_money`).
+
+    Multi-chaînes EVM (#157, 14/07, décision opérateur explicite) : une même
+    adresse 0x est valide sur toutes les chaînes EVM -- ARIA essaie chaque
+    chaîne et CONSOLIDE en un seul score (pas un score par chaîne), plafond de
+    tokens analysés appliqué globalement sur l'ensemble consolidé. ``chains``
+    (dict chaîne -> client) permet d'injecter un registre explicite (tests, ou
+    un sous-ensemble de chaînes) ; à défaut, ``client`` seul retombe sur un
+    comportement mono-chaîne "base" STRICTEMENT inchangé (chemin historique,
+    tous les tests existants) ; si ni l'un ni l'autre n'est fourni, le vrai
+    registre de production (Base/Ethereum/BNB) est utilisé. Solana n'est PAS
+    EVM (chantier séparé, hors scope) -- jamais dans ce registre.
+    """
     if not addresses:
         return WalletScoringReport(available=False, error="aucune adresse fournie")
     if len(addresses) > 3:
@@ -940,42 +980,78 @@ async def score_wallets(
     if not all(_valid_address(a) for a in addresses):
         return WalletScoringReport(available=False, error="adresse invalide -- attendu 0x + 40 caractères hexadécimaux")
 
+    if chains is not None:
+        chain_clients = chains
+    elif client is not None:
+        chain_clients = {"base": client}
+    else:
+        from aria_core.services.blockscout import get_blockscout_client
+
+        chain_clients = {c: get_blockscout_client(c) for c in DEFAULT_SCAN_CHAINS}
+
     cards: list[WalletScoreCard] = []
     funding_sources: dict[str, str] = {}
 
     for wallet in addresses:
         card = WalletScoreCard(address=wallet)
 
-        info = await client.get_address_info(wallet)
-        card.display_name = info.ens_domain_name if info.available else None
+        grouped: dict[str, list[TokenTransfer]] = {}
+        chains_with_data: list[str] = []
+        all_flat_transfers: list[TokenTransfer] = []
+        primary_info: AddressInfo | None = None
+        funding_source: str | None = None
+        funding_truncated = False
+        any_chain_available = False
+        last_error: str | None = None
 
-        transfers_result = await client.get_token_transfers(
-            wallet, limit=2000, max_pages=10, token_type="ERC-20",
-        )
-        if not transfers_result.available:
+        for chain, chain_client in chain_clients.items():
+            transfers_result = await chain_client.get_token_transfers(
+                wallet, limit=2000, max_pages=10, token_type="ERC-20",
+            )
+            if not transfers_result.available:
+                last_error = transfers_result.error or UNAVAILABLE
+                continue
+            any_chain_available = True
+            if transfers_result.transfers:
+                chains_with_data.append(chain)
+                all_flat_transfers.extend(transfers_result.transfers)
+            grouped.update(_group_transfers_by_token(transfers_result.transfers, chain=chain))
+
+            if primary_info is None or not primary_info.available:
+                info = await chain_client.get_address_info(wallet)
+                if info.available:
+                    primary_info = info
+
+            if funding_source is None:
+                fs, trunc = await _funding_source(chain_client, wallet)
+                if fs:
+                    funding_source, funding_truncated = fs, trunc
+
+        if not any_chain_available:
             card.available = False
-            card.error = transfers_result.error or UNAVAILABLE
+            card.error = last_error or UNAVAILABLE
             cards.append(card)
             continue
 
-        grouped = _group_transfers_by_token(transfers_result.transfers)
-        selected_tokens, found, skipped = _select_tokens_for_deep_analysis(grouped)
+        card.display_name = primary_info.ens_domain_name if primary_info else None
+        card.chains_scanned = chains_with_data
+
+        cap = max_tokens if max_tokens is not None else WEIGHTS.max_tokens_analyzed
+        selected_tokens, found, skipped = _select_tokens_for_deep_analysis(grouped, cap=cap)
         card.tokens_found = found
         card.tokens_analyzed = len(selected_tokens)
         card.tokens_skipped_capped = skipped > 0
         if card.tokens_skipped_capped:
             logger.info(
                 "score_wallets: wallet %s -- plafond de %s tokens atteint (%s trouvés, %s ignorés, "
-                "sélection par récence/nombre de trades)",
-                wallet, WEIGHTS.max_tokens_analyzed, found, skipped,
+                "sélection par récence/nombre de trades, toutes chaînes confondues)",
+                wallet, cap, found, skipped,
             )
 
-        selected_transfers = {addr: grouped[addr] for addr in selected_tokens}
-        all_flat_transfers = [t for token_transfers in grouped.values() for t in token_transfers]
+        selected_transfers = {key: grouped[key] for key in selected_tokens}
 
-        funding_source, truncated = await _funding_source(client, wallet)
         card.funding_source = funding_source
-        card.funding_source_truncated = truncated
+        card.funding_source_truncated = funding_truncated
         if funding_source:
             funding_sources[wallet.lower()] = funding_source
 
@@ -988,7 +1064,7 @@ async def score_wallets(
 
         dex_exclusions = _build_dex_infrastructure_exclusions(grouped, wallet) | multi.resolved_pool_addresses
         disq = await _hard_disqualifiers(
-            wallet, info, all_flat_transfers, funding_source,
+            wallet, primary_info or AddressInfo(address=wallet, available=False), all_flat_transfers, funding_source,
             extra_exclusions=dex_exclusions, goplus_client=goplus,
         )
         card.disqualified = disq.disqualified

@@ -1,4 +1,4 @@
-"""Client de lecture seule Blockscout (Base) — « yeux on-chain » d'ARIA.
+"""Client de lecture seule Blockscout — « yeux on-chain » d'ARIA.
 
 Aucune écriture, aucune signature, aucun appel autre que GET. Politique
 d'erreurs définie dans AGENTS.md :
@@ -7,12 +7,22 @@ d'erreurs définie dans AGENTS.md :
 - Aucune donnée manquante n'est jamais remplacée par une supposition — le
   champ `error` (et `available=False`) porte l'absence de donnée.
 - Échecs consécutifs répétés (>3) : logué, jamais bloquant, jamais de spam Telegram.
+
+Multi-chaînes EVM (14/07, wallet-scoring #157 uniquement -- le reste d'ARIA
+reste Base) : Blockscout a migré son accès historique "sans clé" vers la
+Pro API (un compte gratuit, une clé, ``https://api.blockscout.com/{chain_id}/
+api/v2/...``) à partir du 1er juillet 2026. ``base.blockscout.com`` (legacy,
+sans clé) reste utilisé par défaut tant qu'aucune clé n'est configurée --
+dégradation douce, zéro régression sur Base. Dès que ``BLOCKSCOUT_PRO_API_KEY``
+est présente dans l'environnement, TOUTES les chaînes (Base incluse) passent
+par la Pro API (débit bien supérieur : 5 req/s contre ~3 req/s en legacy).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 
 import httpx
@@ -20,8 +30,23 @@ import httpx
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://base.blockscout.com/api/v2"
+PRO_API_URL = "https://api.blockscout.com"
+
+# Chaînes EVM couvertes par le wallet-scoring (#157, 14/07). Solana n'est PAS
+# EVM (adresses différentes, pas de Blockscout) -- chantier séparé, hors scope.
+CHAIN_IDS: dict[str, int] = {
+    "base": 8453,
+    "ethereum": 1,
+    "bnb": 56,
+}
 
 UNAVAILABLE = "donnée on-chain indisponible"
+
+
+def _pro_api_key() -> str:
+    """Clé Blockscout Pro -- UNIQUEMENT depuis l'environnement (jamais en dur),
+    même politique que ``TAVILY_API_KEY`` (cf. services/tavily.py)."""
+    return os.environ.get("BLOCKSCOUT_PRO_API_KEY", "").strip()
 
 _SENSITIVE_FUNCTION_NAMES = {
     "mint": ("mint",),
@@ -129,11 +154,36 @@ class ContractFlags:
 
 
 class BlockscoutClient:
-    """Client HTTP async, lecture seule, throttle modéré (API publique sans clé)."""
+    """Client HTTP async, lecture seule, throttle modéré.
 
-    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 0.35) -> None:
-        self.base_url = base_url.rstrip("/")
-        self._min_interval = min_interval
+    ``chain`` sélectionne le réseau EVM (``"base"`` par défaut, comportement
+    historique inchangé). Si ``BLOCKSCOUT_PRO_API_KEY`` est configurée, passe
+    par la Pro API (multi-chaînes, 5 req/s) ; sinon, dégradation douce vers
+    l'ancien endpoint gratuit ``base.blockscout.com`` -- disponible pour
+    ``"base"`` UNIQUEMENT (les autres chaînes exigent la clé Pro)."""
+
+    def __init__(self, *, chain: str = "base", min_interval: float | None = None) -> None:
+        self.chain = chain
+        api_key = _pro_api_key()
+        chain_id = CHAIN_IDS.get(chain)
+
+        if api_key and chain_id is not None:
+            self.base_url = f"{PRO_API_URL}/{chain_id}/api/v2"
+            self._api_key: str | None = api_key
+            default_interval = 0.2  # Pro API : 5 req/s -- throttle légèrement en dessous.
+        elif chain == "base":
+            self.base_url = BASE_URL
+            self._api_key = None
+            default_interval = 0.35
+        else:
+            # Chaîne non-Base sans clé Pro : pas d'endpoint gratuit connu --
+            # toute requête échoue proprement via _get_json (jamais une URL
+            # devinée au hasard).
+            self.base_url = ""
+            self._api_key = None
+            default_interval = 0.35
+
+        self._min_interval = min_interval if min_interval is not None else default_interval
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
@@ -162,7 +212,13 @@ class BlockscoutClient:
 
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
         """GET avec la politique d'erreurs AGENTS.md. Retourne (data, error)."""
+        if not self.base_url:
+            return None, f"{UNAVAILABLE} (clé Blockscout Pro requise pour la chaîne '{self.chain}')"
+
         url = f"{self.base_url}{path}"
+        call_params = dict(params or {})
+        if self._api_key:
+            call_params["apikey"] = self._api_key
         attempt_429 = 0
         timeout_retried = False
 
@@ -170,7 +226,7 @@ class BlockscoutClient:
             await self._throttle()
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.get(url, params=params)
+                    response = await client.get(url, params=call_params)
             except httpx.TransportError as exc:
                 if not timeout_retried:
                     timeout_retried = True
@@ -588,3 +644,17 @@ class BlockscoutClient:
 
 
 blockscout_client = BlockscoutClient()
+
+_chain_clients: dict[str, BlockscoutClient] = {"base": blockscout_client}
+
+
+def get_blockscout_client(chain: str) -> BlockscoutClient:
+    """Client Blockscout pour ``chain`` (#157, wallet-scoring multi-chaînes,
+    14/07) -- un client par chaîne (throttle/état d'échecs indépendants),
+    mis en cache. ``chain`` hors ``CHAIN_IDS`` renvoie quand même un client
+    (dégradation douce gérée par ``_get_json``), jamais une exception."""
+    client = _chain_clients.get(chain)
+    if client is None:
+        client = BlockscoutClient(chain=chain)
+        _chain_clients[chain] = client
+    return client

@@ -655,3 +655,88 @@ async def test_timeout_retries_once_then_fallback(monkeypatch):
     assert info.available is False
     assert UNAVAILABLE in info.error
     assert calls["count"] == 2
+
+
+# ── multi-chaînes EVM + Pro API (#157, 14/07) ─────────────────────────────────
+
+
+class TestMultiChainProApi:
+    def test_default_base_no_key_uses_legacy_free_endpoint(self, monkeypatch):
+        monkeypatch.delenv("BLOCKSCOUT_PRO_API_KEY", raising=False)
+        client = BlockscoutClient()
+        assert client.base_url == "https://base.blockscout.com/api/v2"
+        assert client._api_key is None
+
+    def test_base_with_pro_key_uses_pro_api(self, monkeypatch):
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        client = BlockscoutClient(chain="base")
+        assert client.base_url == "https://api.blockscout.com/8453/api/v2"
+        assert client._api_key == "proapi_test_key"
+
+    def test_ethereum_with_pro_key_resolves_chain_id_1(self, monkeypatch):
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        client = BlockscoutClient(chain="ethereum")
+        assert client.base_url == "https://api.blockscout.com/1/api/v2"
+
+    def test_bnb_with_pro_key_resolves_chain_id_56(self, monkeypatch):
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        client = BlockscoutClient(chain="bnb")
+        assert client.base_url == "https://api.blockscout.com/56/api/v2"
+
+    def test_non_base_chain_without_key_degrades_softly_never_guesses_url(self, monkeypatch):
+        monkeypatch.delenv("BLOCKSCOUT_PRO_API_KEY", raising=False)
+        client = BlockscoutClient(chain="ethereum")
+        assert client.base_url == ""
+
+    @pytest.mark.asyncio
+    async def test_non_base_chain_without_key_fails_clean_never_raises(self, monkeypatch):
+        monkeypatch.delenv("BLOCKSCOUT_PRO_API_KEY", raising=False)
+        client = BlockscoutClient(chain="ethereum")
+        info = await client.get_address_info("0xabc")
+        assert info.available is False
+        assert "clé Blockscout Pro" in info.error
+
+    @pytest.mark.asyncio
+    async def test_pro_api_key_sent_as_query_param(self, monkeypatch):
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        client = BlockscoutClient(chain="ethereum")
+        url = f"{client.base_url}/addresses/0xabc"
+
+        captured = {}
+
+        class _Resp:
+            status_code = 200
+
+            def json(self):
+                return {"is_contract": False}
+
+            def raise_for_status(self):
+                return None
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
+            async def get(self, u, params=None):
+                captured["url"] = u
+                captured["params"] = params
+                return _Resp()
+
+        monkeypatch.setattr("aria_core.services.blockscout.httpx.AsyncClient", lambda **kw: _Client())
+
+        await client.get_address_info("0xabc")
+
+        assert captured["url"] == url
+        assert captured["params"]["apikey"] == "proapi_test_key"
+
+    def test_get_blockscout_client_caches_per_chain(self, monkeypatch):
+        from aria_core.services.blockscout import get_blockscout_client
+
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "proapi_test_key")
+        a = get_blockscout_client("ethereum")
+        b = get_blockscout_client("ethereum")
+        assert a is b
+        assert get_blockscout_client("base") is not a

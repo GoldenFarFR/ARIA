@@ -176,8 +176,10 @@ class TestSelectTokensForDeepAnalysis:
         assert len(selected) == 20
         assert skipped == 5
 
-    def test_default_cap_matches_operator_decision_n20(self):
-        assert sm.WEIGHTS.max_tokens_analyzed == 20
+    def test_default_cap_matches_operator_decision_n50(self):
+        # Relevé 20->50 le 14/07 (décision opérateur explicite) : première
+        # analyse volontairement longue et complète.
+        assert sm.WEIGHTS.max_tokens_analyzed == 50
 
     def test_most_recent_token_selected_first(self):
         old_token = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xold", ts=_dt(0))
@@ -441,7 +443,7 @@ class FakeGeckoTerminalClient:
         self._pool_created_at = pool_created_at or {}
         self._ohlcv = ohlcv or {}
 
-    async def resolve_primary_pool(self, token_address):
+    async def resolve_primary_pool(self, token_address, **kwargs):
         pool_address = self._pool_for_token.get(token_address)
         if pool_address is None:
             return PoolMetadata(pool_address=token_address, available=False, error="aucun pool trouvé pour ce token")
@@ -556,8 +558,11 @@ class TestScoreWalletsEndToEnd:
 
     @pytest.mark.asyncio
     async def test_cap_reached_logs_explicitly_never_silent(self, tmp_path, monkeypatch, caplog):
-        """#157 -- décision opérateur N=20 : au-delà, log EXPLICITE, jamais une
-        troncature silencieuse."""
+        """#157 -- au-delà du plafond, log EXPLICITE, jamais une troncature
+        silencieuse. Utilise ``max_tokens`` explicite (#157, 14/07 : override
+        pour des re-scans plus rapides une fois les bons wallets identifiés)
+        plutôt que le défaut (relevé 20->50 le même jour) pour garder ce test
+        rapide et lisible."""
         monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
         transfers = TokenTransfersResult(
             transfers=[
@@ -571,7 +576,7 @@ class TestScoreWalletsEndToEnd:
 
         with caplog.at_level("INFO"):
             report = await sm.score_wallets(
-                [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+                [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(), max_tokens=20,
             )
 
         card = report.wallets[0]
