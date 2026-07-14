@@ -976,15 +976,38 @@ async def _hard_disqualifiers(
     # Address API (AML), #157 (14/07). RÉSERVE HONNÊTE (research doc du 14/07,
     # vérifiée en direct, ÉTENDUE ce soir aux 13 chaînes du scan multi-chaînes) :
     # les 13 chain_id confirmés répondent tous "code: 1, ok" avec le même format
-    # -- couverture FORMAT confirmée partout, mais PAS la densité réelle des
-    # données malveillantes, qui varie probablement par chaîne (signal indirect :
-    # `contract_address` indéterminé sur celo/rootstock/unichain/soneium/mode
-    # pour une adresse connue, alors que base/ethereum/arbitrum/optimism/polygon/
-    # gnosis/scroll/zksync le résolvent). Filtre probabiliste supplémentaire,
-    # jamais présenté comme exhaustif, quelle que soit la chaîne. Fail-closed
-    # strict : une vérification indisponible reste "indisponible" (note
-    # informative, PAS une disqualification, PAS non plus un faux négatif
-    # silencieux qui dirait "non malveillant" sans le dire).
+    # -- couverture FORMAT confirmée partout.
+    #
+    # Approfondi le même soir (2e test, adresses ACTIVES/connues cette fois --
+    # WETH predeploy sur unichain/soneium/mode, token CELO natif, WRBTC sur
+    # rootstock -- pas des adresses burn) sur celo/rootstock/unichain/soneium/
+    # mode :
+    # - `contract_address` reste "-1" (indéterminé) sur les 5 chaînes MÊME avec
+    #   une adresse très active et connue -- ce n'était donc PAS un artefact du
+    #   choix d'adresse burn du premier test : ce champ précis ne se résout
+    #   simplement jamais sur ces 5 chaînes, quelle que soit l'adresse.
+    # - MAIS `data_source`/`honeypot_related_address` (les champs réellement
+    #   liés à l'analyse de sécurité, pas `contract_address`) se comportent
+    #   différemment selon la chaîne : sur Unichain/Soneium/Mode, `data_source`
+    #   passe de `""` (adresse burn) à `"GoPlus"` (adresse active) et
+    #   `honeypot_related_address` de `"0"` à `"1"` -- une vraie analyse tourne
+    #   sur ces 3 chaînes une fois qu'il y a de l'activité à analyser. Sur
+    #   Celo/Rootstock, `data_source` reste `""` même avec une adresse active et
+    #   connue -- aucun signe d'analyse engagée sur ces 2 chaînes, sur les deux
+    #   adresses testées ce soir (burn et active).
+    # - Réserve à garder explicite : une seule adresse active testée par chaîne
+    #   ce soir, jamais une adresse effectivement flaggée malveillante nulle
+    #   part -- ceci documente un INDICE de couverture (Unichain/Soneium/Mode
+    #   probablement mieux couvertes que Celo/Rootstock), PAS une preuve
+    #   définitive d'absence de données sur Celo/Rootstock.
+    #
+    # Conclusion pratique inchangée : filtre probabiliste supplémentaire,
+    # jamais présenté comme exhaustif, quelle que soit la chaîne -- la densité
+    # réelle des données malveillantes varie probablement par chaîne, avec un
+    # indice de couverture plus faible sur Celo/Rootstock. Fail-closed strict :
+    # une vérification indisponible reste "indisponible" (note informative, PAS
+    # une disqualification, PAS non plus un faux négatif silencieux qui dirait
+    # "non malveillant" sans le dire).
     #
     # `funding_source_chain` (#157, correction 14/07) : la chaîne où
     # `funding_source` a RÉELLEMENT été trouvé (cf. score_wallets) -- jamais
