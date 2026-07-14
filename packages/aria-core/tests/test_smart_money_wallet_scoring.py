@@ -264,8 +264,10 @@ class TestBuildDexInfrastructureExclusions:
 class FakeGoPlusClient:
     def __init__(self, *, security=None):
         self._security = security or {}
+        self.calls: list[tuple[str, str | None]] = []  # (address, chain_id reçu) -- #157, 14/07
 
     async def get_address_security(self, address, **kwargs):
+        self.calls.append((address, kwargs.get("chain_id")))
         return self._security.get(
             address, AddressSecurity(address=address, flags={}, is_malicious=False, available=True),
         )
@@ -360,6 +362,81 @@ class TestHardDisqualifiers:
         result = await sm._hard_disqualifiers(WALLET_A, info, [], None)
         assert result.financed_by_known_malicious is False
         assert result.financing_check_note is None
+
+    @pytest.mark.asyncio
+    async def test_funding_source_chain_forwarded_to_goplus(self):
+        # #157, correction 14/07 : la chaîne RÉELLE où funding_source a été
+        # trouvé doit atteindre GoPlus -- jamais Base par défaut désormais que
+        # le scan couvre 13 chaînes.
+        info = AddressInfo(address=WALLET_A, is_contract=False, available=True)
+        goplus = FakeGoPlusClient()
+
+        await sm._hard_disqualifiers(
+            WALLET_A, info, [], FUNDER, goplus_client=goplus, funding_source_chain="celo",
+        )
+
+        assert goplus.calls == [(FUNDER, "42220")]
+
+    @pytest.mark.asyncio
+    async def test_no_funding_source_chain_falls_back_to_goplus_default(self):
+        # Comportement mono-chaîne historique inchangé : pas de chain_id
+        # explicite -> get_address_security retombe sur son propre défaut
+        # (Base), _hard_disqualifiers n'invente jamais un chain_id.
+        info = AddressInfo(address=WALLET_A, is_contract=False, available=True)
+        goplus = FakeGoPlusClient()
+
+        await sm._hard_disqualifiers(WALLET_A, info, [], FUNDER, goplus_client=goplus)
+
+        assert goplus.calls == [(FUNDER, None)]
+
+    @pytest.mark.asyncio
+    async def test_unknown_funding_source_chain_falls_back_never_crashes(self):
+        info = AddressInfo(address=WALLET_A, is_contract=False, available=True)
+        goplus = FakeGoPlusClient()
+
+        await sm._hard_disqualifiers(
+            WALLET_A, info, [], FUNDER, goplus_client=goplus, funding_source_chain="not_a_real_chain",
+        )
+
+        assert goplus.calls == [(FUNDER, None)]
+
+
+class TestFundingSourceChainThreading:
+    """#157, correction 14/07 -- bout-en-bout via score_wallets : la chaîne où
+    funding_source est RÉELLEMENT trouvée doit atteindre GoPlus, pas Base par
+    défaut, quand cette chaîne n'est pas la première scannée."""
+
+    @pytest.mark.asyncio
+    async def test_funding_source_found_on_non_base_chain_reaches_goplus(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        base_client = FakeBlockscoutClient()  # aucune transaction -- _funding_source échoue sur "base"
+        celo_client = FakeBlockscoutClient(
+            transactions={
+                WALLET_A: BoundedTransactionsResult(
+                    transactions=[
+                        Transaction(
+                            tx_hash="0x1", from_address=FUNDER, to_address=WALLET_A,
+                            value_native=1.0, status="ok", method=None, timestamp=_iso(_dt(0)),
+                        )
+                    ],
+                    available=True, truncated=False,
+                ),
+            },
+        )
+        goplus = FakeGoPlusClient()
+
+        report = await sm.score_wallets(
+            [WALLET_A],
+            chains={"base": base_client, "celo": celo_client},  # ordre = base tenté avant celo
+            gecko=FakeGeckoTerminalClient(),
+            llm=_fake_llm,
+            goplus=goplus,
+        )
+
+        card = report.wallets[0]
+        assert card.funding_source == FUNDER
+        assert goplus.calls == [(FUNDER, "42220")]  # 42220 = chain_id Celo, jamais 8453 (Base) par défaut
 
 
 # ---------------------------------------------------------------------------

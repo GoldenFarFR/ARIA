@@ -251,12 +251,21 @@ class GoPlusClient:
     async def get_address_security(self, address: str, *, chain_id: str = BASE_CHAIN_ID) -> "AddressSecurity":
         """Interroge GoPlus Malicious Address API (AML). Vérifié en direct sur Base
         (docs/aria-learning-inbox/2026-07-14-veille-registre-wallets-malveillants-157.md,
-        14/07) : couverture Base et format de réponse confirmés SANS clé
-        d'autorisation -- PAS la densité réelle des données malveillantes (le test
-        en direct portait sur une adresse burn, pas une adresse effectivement
-        flaggée). Traiter comme un filtre probabiliste supplémentaire, jamais
-        présenté comme exhaustif -- même doctrine que le reste du dôme : une
-        indisponibilité ne vaut jamais "non malveillant", elle reste indisponible."""
+        14/07), puis ÉTENDU ce même soir aux 13 chain_id du scan multi-chaînes
+        (base, ethereum, arbitrum, optimism, polygon, celo, gnosis, scroll,
+        zksync, rootstock, unichain, soneium, mode) : les 13 répondent
+        `code: 1, "ok"` avec le MÊME format -- couverture format confirmée
+        partout SANS clé d'autorisation. PAS la densité réelle des données
+        malveillantes (le test en direct portait sur une adresse burn, pas une
+        adresse effectivement flaggée) -- et probablement variable par chaîne :
+        le champ `contract_address` (résolution "est-ce un contrat ?") revient
+        indéterminé (`"-1"`) sur celo/rootstock/unichain/soneium/mode pour la
+        même adresse burn, alors qu'il se résout sur les 8 autres chaînes --
+        signal indirect qu'une couverture plus fine existe pour certaines
+        chaînes. Traiter comme un filtre probabiliste supplémentaire, jamais
+        présenté comme exhaustif, quelle que soit la chaîne -- même doctrine
+        que le reste du dôme : une indisponibilité ne vaut jamais "non
+        malveillant", elle reste indisponible."""
         addr = (address or "").strip()
         if not addr:
             return AddressSecurity(address=addr, available=False, error="adresse vide")
