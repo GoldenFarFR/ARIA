@@ -1785,6 +1785,11 @@ def _format_wallet_score_card(card) -> list[str]:
         lines.append(
             f"  Diagnostic prix : {card.unpriced_legs} jambe(s) sans prix, "
             f"{card.pool_lookup_errors} token(s) sans pool GeckoTerminal résolu"
+            + (
+                f" (dont {card.gecko_dexscreener_gap_count} vu(s) par DexScreener -- écart entre sources)"
+                if card.gecko_dexscreener_gap_count
+                else ""
+            )
         )
     lines.append(f"  Win rate : {card.win_rate:.0%}" if card.win_rate is not None else "  Win rate : indisponible")
     lines.append(

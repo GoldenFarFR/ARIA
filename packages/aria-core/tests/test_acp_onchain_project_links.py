@@ -7,7 +7,7 @@ type `javascript:` glissée dans un payload de token malveillant).
 """
 from __future__ import annotations
 
-from aria_core.skills.acp_onchain_scan import _extract_project_links, _parse_pair
+from aria_core.services.dexscreener import _extract_project_links, _parse_pair
 
 
 def test_extract_project_links_websites_and_socials():

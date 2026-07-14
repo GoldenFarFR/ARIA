@@ -9,7 +9,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import httpx
 import yaml
 
 from aria_core.services.blockscout import (
@@ -19,6 +18,8 @@ from aria_core.services.blockscout import (
     blockscout_client,
 )
 from aria_core.services.coingecko import TokenFundamentals, coingecko_client
+from aria_core.services.dexscreener import PairSnapshot
+from aria_core.services.dexscreener import fetch_token_pairs as _dexscreener_fetch_token_pairs
 from aria_core.services.ohlcv import ohlcv_client
 from aria_core.services.smart_money import analyze_smart_money
 from aria_core.skills.candlestick_patterns import CandlePattern, detect_patterns
@@ -44,7 +45,6 @@ def _last_value(series: list[float | None]) -> float | None:
 logger = logging.getLogger(__name__)
 
 _ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
-_DEX_BASE = "https://api.dexscreener.com"
 
 # Adresses de « trou noir » : un gros solde ici n'est PAS une concentration risquée
 # (tokens brûlés / envoyés au néant). À exclure du calcul de concentration, tout
@@ -144,22 +144,6 @@ async def _resolve_mint_authority(ctx: "TokenScanContext", token_address: str) -
     ctx.mint_authority_detail = verdict.detail
     ctx.launchpad = verdict.launchpad
 _QUALITY_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "acp_quality.yaml"
-
-
-@dataclass
-class PairSnapshot:
-    pair_address: str = ""
-    dex_id: str = ""
-    liquidity_usd: float = 0.0
-    volume_24h_usd: float = 0.0
-    price_usd: float = 0.0
-    price_change_24h: float = 0.0
-    buys_24h: int = 0
-    sells_24h: int = 0
-    pair_created_at: int | None = None
-    base_symbol: str = ""
-    quote_symbol: str = ""
-    project_links: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -272,87 +256,12 @@ def _dex_chain_id() -> str:
     return str(_onchain_thresholds().get("chain_dex_id") or "base")
 
 
-_SOCIAL_LABELS = {
-    "twitter": "X (Twitter)",
-    "x": "X (Twitter)",
-    "telegram": "Telegram",
-    "discord": "Discord",
-    "github": "GitHub",
-    "reddit": "Reddit",
-}
-
-
-def _extract_project_links(raw: dict) -> list[dict]:
-    """Liens officiels déclarés par le projet (DexScreener `info.websites`/`socials`).
-
-    Aucune estimation : uniquement ce que DexScreener retourne réellement, et
-    uniquement des URL http(s) (allowlist de schéma — défense en profondeur,
-    la donnée vient d'un tiers non fiable et sera de toute façon revalidée
-    avant tout rendu HTML cliquable).
-    """
-    info = raw.get("info")
-    if not isinstance(info, dict):
-        return []
-
-    links: list[dict] = []
-    for site in info.get("websites") or []:
-        if not isinstance(site, dict):
-            continue
-        url = str(site.get("url") or "").strip()
-        if url.lower().startswith(("http://", "https://")):
-            links.append({"label": str(site.get("label") or "Site officiel"), "url": url})
-
-    for social in info.get("socials") or []:
-        if not isinstance(social, dict):
-            continue
-        url = str(social.get("url") or "").strip()
-        if not url.lower().startswith(("http://", "https://")):
-            continue
-        kind = str(social.get("type") or "").strip().lower()
-        links.append({"label": _SOCIAL_LABELS.get(kind, kind.capitalize() or "Lien"), "url": url})
-
-    return links
-
-
-def _parse_pair(raw: dict) -> PairSnapshot:
-    liq = raw.get("liquidity") or {}
-    vol = raw.get("volume") or {}
-    txns = raw.get("txns") or {}
-    h24 = txns.get("h24") if isinstance(txns, dict) else {}
-    base = raw.get("baseToken") or {}
-    quote = raw.get("quoteToken") or {}
-    return PairSnapshot(
-        pair_address=str(raw.get("pairAddress") or ""),
-        dex_id=str(raw.get("dexId") or ""),
-        liquidity_usd=float(liq.get("usd") or 0),
-        volume_24h_usd=float(vol.get("h24") or 0),
-        price_usd=float(raw.get("priceUsd") or 0),
-        price_change_24h=float(raw.get("priceChange", {}).get("h24") or 0)
-        if isinstance(raw.get("priceChange"), dict)
-        else 0.0,
-        buys_24h=int(h24.get("buys") or 0) if isinstance(h24, dict) else 0,
-        sells_24h=int(h24.get("sells") or 0) if isinstance(h24, dict) else 0,
-        pair_created_at=int(raw.get("pairCreatedAt") or 0) or None,
-        base_symbol=str(base.get("symbol") or ""),
-        quote_symbol=str(quote.get("symbol") or ""),
-        project_links=_extract_project_links(raw),
-    )
-
-
 async def _fetch_token_pairs(contract: str) -> list[PairSnapshot]:
-    chain = _dex_chain_id()
-    url = f"{_DEX_BASE}/token-pairs/v1/{chain}/{contract}"
-    try:
-        async with httpx.AsyncClient(timeout=18.0) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception as exc:
-        logger.warning("DexScreener token-pairs %s: %s", contract[:10], exc)
-        return []
-    if not isinstance(data, list):
-        return []
-    return [_parse_pair(row) for row in data if isinstance(row, dict)]
+    """Délègue à ``services.dexscreener`` (14/07, #157) -- ce client existait en
+    dur ici ; extrait pour être réutilisable (wallet-scoring, triangulation avec
+    GeckoTerminal) sans dupliquer un second appel DexScreener. Comportement du
+    scan `/vc` strictement inchangé (même parsing, même dataclass)."""
+    return await _dexscreener_fetch_token_pairs(contract, chain=_dex_chain_id())
 
 
 def _apply_onchain_signals(

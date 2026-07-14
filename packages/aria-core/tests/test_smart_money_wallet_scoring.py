@@ -581,6 +581,88 @@ class TestScoreWalletsEndToEnd:
         assert card.unpriced_legs == 1
 
     @pytest.mark.asyncio
+    async def test_dexscreener_gap_flagged_when_gecko_misses_a_real_pair(self, tmp_path, monkeypatch):
+        # #157, 14/07 : triangulation -- GeckoTerminal ne résout aucun pool mais
+        # DexScreener confirme une paire réelle -> écart de source signalé
+        # explicitement, distinct d'un simple "token illiquide".
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        async def _fake_has_any_pair(contract, *, chain="base"):
+            return True
+
+        monkeypatch.setattr("aria_core.services.dexscreener.has_any_pair", _fake_has_any_pair)
+
+        buy_ts = _dt(0)
+        transfers = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0)],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()  # aucun pool connu -> resolve_primary_pool échoue
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.pool_lookup_errors == 1
+        assert card.gecko_dexscreener_gap_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_dexscreener_gap_when_both_sources_agree_no_pool(self, tmp_path, monkeypatch):
+        # Les deux sources d'accord (aucune paire nulle part) -> pas de faux
+        # signal d'écart, jamais confondu avec le cas ci-dessus.
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        async def _fake_has_any_pair(contract, *, chain="base"):
+            return False
+
+        monkeypatch.setattr("aria_core.services.dexscreener.has_any_pair", _fake_has_any_pair)
+
+        buy_ts = _dt(0)
+        transfers = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0)],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.pool_lookup_errors == 1
+        assert card.gecko_dexscreener_gap_count == 0
+
+    @pytest.mark.asyncio
+    async def test_no_dexscreener_gap_when_verification_itself_unavailable(self, tmp_path, monkeypatch):
+        # DexScreener indisponible (None) -- jamais confondu avec un écart
+        # confirmé (True) : on ne peut simplement pas trancher, donc pas de gap.
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        async def _fake_has_any_pair(contract, *, chain="base"):
+            return None
+
+        monkeypatch.setattr("aria_core.services.dexscreener.has_any_pair", _fake_has_any_pair)
+
+        buy_ts = _dt(0)
+        transfers = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0)],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.pool_lookup_errors == 1
+        assert card.gecko_dexscreener_gap_count == 0
+
+    @pytest.mark.asyncio
     async def test_cap_reached_logs_explicitly_never_silent(self, tmp_path, monkeypatch, caplog):
         """#157 -- au-delà du plafond, log EXPLICITE, jamais une troncature
         silencieuse. Utilise ``max_tokens`` explicite (#157, 14/07 : override
