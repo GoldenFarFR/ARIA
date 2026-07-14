@@ -1769,6 +1769,11 @@ def _format_wallet_score_card(card) -> list[str]:
         lines.append("  🔴 DISQUALIFIÉ : " + "; ".join(card.disqualification_reasons))
     if card.financing_check_note:
         lines.append(f"  ⚠️ {card.financing_check_note}")
+    # Transparence multi-chaînes (#157, 14/07) : jamais laisser penser qu'ARIA
+    # a "tout" vu par défaut -- montre explicitement où une activité a été trouvée.
+    chains_label = {"base": "Base", "ethereum": "Ethereum", "bnb": "BNB Chain"}
+    scanned = ", ".join(chains_label.get(c, c) for c in card.chains_scanned) or "aucune"
+    lines.append(f"  Chaînes avec activité trouvée : {scanned}")
     lines.append(
         f"  Tokens analysés : {card.tokens_analyzed}/{card.tokens_found}"
         + (f" (plafond de {WEIGHTS.max_tokens_analyzed} atteint)" if card.tokens_skipped_capped else "")
@@ -1791,14 +1796,14 @@ def _format_wallet_score_card(card) -> list[str]:
 
 
 async def _wallet_score_analyze_and_reply(message, addresses: list[str]) -> None:
-    from aria_core.services.blockscout import blockscout_client
     from aria_core.services.geckoterminal import geckoterminal_client
     from aria_core.services.goplus import goplus_client
     from aria_core.services.smart_money import score_wallets
 
-    report = await score_wallets(
-        addresses, client=blockscout_client, gecko=geckoterminal_client, goplus=goplus_client,
-    )
+    # ``chains``/``client`` omis : score_wallets utilise le vrai registre
+    # multi-chaînes de production (Base/Ethereum/BNB, #157 14/07) -- une même
+    # adresse 0x est valide sur toutes, ARIA essaie chaque chaîne et consolide.
+    report = await score_wallets(addresses, gecko=geckoterminal_client, goplus=goplus_client)
 
     if not report.available:
         await _reply(message, f"⚠️ {report.error or 'analyse indisponible'}")

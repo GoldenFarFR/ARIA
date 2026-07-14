@@ -12,7 +12,9 @@ backend), pensé uniquement pour les besoins de l'évaluateur wallet (#157) :
   à ``services/ohlcv.py`` (correction 14/07, cf. docstring de la méthode) plutôt
   que de dupliquer un second client OHLCV avec une fenêtre plus étroite.
 
-Réseau fixé à Base en dur (doctrine ARIA : Base uniquement). Aucune donnée
+Réseau : Base par défaut (doctrine ARIA : Base uniquement pour tout SAUF le
+wallet-scoring #157, 14/07 -- seule capacité multi-chaînes EVM à ce jour, cf.
+``services/blockscout.py`` pour le même registre de chaînes). Aucune donnée
 manquante n'est jamais remplacée par une supposition -- ``available=False``/
 ``error`` portent l'absence de donnée, même politique que ``blockscout.py``.
 """
@@ -34,6 +36,14 @@ UNAVAILABLE = "donnée GeckoTerminal indisponible"
 
 BASE_URL = "https://api.geckoterminal.com/api/v2"
 NETWORK = "base"
+
+# Correspondance chaîne ARIA (même vocabulaire que blockscout.CHAIN_IDS) ->
+# identifiant réseau GeckoTerminal (#157, wallet-scoring multi-chaînes, 14/07).
+GECKO_NETWORK_SLUGS: dict[str, str] = {
+    "base": "base",
+    "ethereum": "eth",
+    "bnb": "bsc",
+}
 
 # Palier gratuit GeckoTerminal ~30 req/min -- même throttle que le client existant
 # côté vanguard (2.1s), valeur déjà éprouvée en production.
@@ -122,8 +132,8 @@ class GeckoTerminalClient:
 
             return response.json(), None
 
-    async def get_pool_created_at(self, pool_address: str) -> PoolMetadata:
-        data, error = await self._get_json(f"/networks/{NETWORK}/pools/{pool_address}")
+    async def get_pool_created_at(self, pool_address: str, *, network: str = NETWORK) -> PoolMetadata:
+        data, error = await self._get_json(f"/networks/{network}/pools/{pool_address}")
         if error is not None:
             return PoolMetadata(pool_address=pool_address, available=False, error=error)
         if not isinstance(data, dict):
@@ -142,15 +152,18 @@ class GeckoTerminalClient:
             return PoolMetadata(pool_address=pool_address, available=False, error="date de création du pool indisponible")
         return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
 
-    async def resolve_primary_pool(self, token_address: str) -> PoolMetadata:
+    async def resolve_primary_pool(self, token_address: str, *, network: str = NETWORK) -> PoolMetadata:
         """Résout le pool PRINCIPAL d'un token (celui à la plus forte liquidité,
         `reserve_in_usd`) -- #157 : `get_pool_created_at`/`get_ohlcv` attendent une
         adresse de POOL, pas un contrat de TOKEN (deux choses différentes en AMM).
         Correction d'un bug latent : le code appelant passait directement l'adresse
         du contrat token là où une adresse de pool était attendue. Sert aussi de
         base à l'exclusion multi-token du wash-trading (#157, correction 14/07) --
-        le pool RÉEL de chaque token, pas une adresse statique unique."""
-        data, error = await self._get_json(f"/networks/{NETWORK}/tokens/{token_address}/pools")
+        le pool RÉEL de chaque token, pas une adresse statique unique. ``network``
+        (#157 multi-chaînes, 14/07) : identifiant réseau GeckoTerminal (cf.
+        ``GECKO_NETWORK_SLUGS``), ``"base"`` par défaut -- comportement historique
+        inchangé pour tout appelant existant."""
+        data, error = await self._get_json(f"/networks/{network}/tokens/{token_address}/pools")
         if error is not None:
             return PoolMetadata(pool_address=token_address, available=False, error=error)
         if not isinstance(data, dict):
@@ -185,7 +198,7 @@ class GeckoTerminalClient:
 
         return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
 
-    async def get_ohlcv(self, pool_address: str, **_kwargs: object) -> OHLCVResult:
+    async def get_ohlcv(self, pool_address: str, *, network: str = NETWORK, **_kwargs: object) -> OHLCVResult:
         """Délègue à ``services.ohlcv.ohlcv_client`` -- correction 14/07 (#157) :
         cette méthode réimplémentait un second client GeckoTerminal avec sa
         propre fenêtre fixe (200 bougies 1h ~ 8 jours), alors qu'un client
@@ -196,12 +209,14 @@ class GeckoTerminalClient:
         un re-test opérateur après le fix retry/429 du même jour, résultat
         identique) des jambes "sans prix" sur un wallet dont l'historique de
         trades dépasse 8 jours : la fenêtre 1h ne remontait simplement pas
-        assez loin, ce n'était pas un problème de rate-limit. ``**_kwargs``
+        assez loin, ce n'était pas un problème de rate-limit. ``network``
+        (#157 multi-chaînes, 14/07) transite jusqu'à ``services/ohlcv.py`` (qui
+        acceptait déjà ce paramètre, jamais utilisé jusqu'ici). ``**_kwargs``
         absorbe d'éventuels period/aggregate/limit hérités (aucun appelant en
         prod n'en passe actuellement) sans lever."""
         from aria_core.services.ohlcv import ohlcv_client as _wide_ohlcv_client
 
-        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=NETWORK)
+        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=network)
         if not wide.available or not wide.candles:
             return OHLCVResult(candles=[], available=False, error=wide.error or UNAVAILABLE)
         return OHLCVResult(candles=wide.candles, available=True, error=None)

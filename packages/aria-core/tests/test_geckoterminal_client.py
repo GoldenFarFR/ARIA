@@ -250,3 +250,40 @@ class TestResolvePrimaryPool:
 
         assert result.available is False
         assert "rate limit" in result.error
+
+    @pytest.mark.asyncio
+    async def test_network_param_threaded_into_url(self, monkeypatch):
+        # #157, multi-chaînes 14/07 : resolve_primary_pool doit interroger le
+        # réseau demandé (ex. "eth"), jamais "base" en dur.
+        client = GeckoTerminalClient()
+        url = f"{client.base_url}/networks/eth/tokens/0xtoken/pools"
+        _patch_client(
+            monkeypatch,
+            {url: FakeResponse(200, {"data": [{"attributes": {"address": "0xpool_eth", "reserve_in_usd": "100"}}]})},
+        )
+
+        result = await client.resolve_primary_pool("0xtoken", network="eth")
+
+        assert result.available is True
+        assert result.pool_address == "0xpool_eth"
+
+
+class TestGetOhlcvNetworkParam:
+    @pytest.mark.asyncio
+    async def test_get_ohlcv_forwards_network_to_wide_client(self, monkeypatch):
+        # #157, multi-chaînes 14/07 : le network demandé doit atteindre
+        # services.ohlcv.ohlcv_client, jamais rester bloqué sur "base".
+        from aria_core.services import ohlcv as ohlcv_module
+
+        captured = {}
+
+        async def _fake_wide_get_ohlcv(pool_address, *, network="base"):
+            captured["network"] = network
+            return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
+
+        monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+
+        client = GeckoTerminalClient()
+        await client.get_ohlcv("0xpool", network="bsc")
+
+        assert captured["network"] == "bsc"
