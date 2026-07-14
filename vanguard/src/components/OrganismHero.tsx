@@ -461,17 +461,29 @@ function createOrganismEngine(opts: EngineOptions): EngineHandle {
     const particles: FinanceParticle[] = []
     const pool = currentPool()
     if (pool.length) {
-      const shuffled = pool.slice()
+      // Event particles get placement priority: their 2-line text needs a
+      // minDist roughly 2x a crypto/forex entry's, so shuffled in equally
+      // with ~30 other candidates they usually lose the 14-attempt
+      // placement lottery to a canvas that's already full. Placing the (at
+      // most 3, fixed-order, never shuffled among themselves) event entries
+      // first, while the canvas is still empty, fixes that. Everything else
+      // -- size/color/minDist/reduced-motion, the shuffle of the rest of the
+      // pool, hardCap computed on the full pool -- is unchanged; only the
+      // processing ORDER differs from before.
+      const eventEntries = pool.filter((entry) => entry.c === 'event')
+      const restEntries = pool.filter((entry) => entry.c !== 'event')
+      const shuffled = restEntries.slice()
       for (let i = shuffled.length - 1; i > 0; i--) {
         const j = Math.floor(rng() * (i + 1))
         const tmp = shuffled[i]
         shuffled[i] = shuffled[j]
         shuffled[j] = tmp
       }
+      const ordered = eventEntries.concat(shuffled)
       const maxAttempts = 14
-      const hardCap = Math.min(shuffled.length, Math.max(8, Math.round((W * H) / 20000)))
-      for (let k = 0; k < shuffled.length && particles.length < hardCap; k++) {
-        const entry = shuffled[k]
+      const hardCap = Math.min(pool.length, Math.max(8, Math.round((W * H) / 20000)))
+      for (let k = 0; k < ordered.length && particles.length < hardCap; k++) {
+        const entry = ordered[k]
         const isEvent = entry.c === 'event'
         const lines = isEvent ? entry.t.split(' · ') : null
         const size = 13 + rng() * 3
