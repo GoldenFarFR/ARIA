@@ -825,6 +825,24 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   depuis le 08/07) pour produire des valeurs de performance réelles. À revérifier avant cette
   échéance que le pool produit enfin des candidats `active` (0% de conversion constaté le
   11/07) — sinon la fenêtre se refermera sur un pool toujours vide.
+- **Norme de process — tester tout nouveau client d'API externe contre un VRAI appel avant de
+  le considérer terminé (14/07, incident #157 smart-wallet-scoring).** Bug réel confirmé ce
+  soir : `blockscout.py::_parse_token_transfer` lisait `token.get("address")`, mais la vraie
+  API Blockscout v2 renvoie le champ sous `address_hash` — `token_address` était donc TOUJOURS
+  `None`, quel que soit le wallet. Ce bug existait depuis la construction initiale de l'analyse
+  smart-money (bien avant ce soir), invisible parce que **tous les tests mockaient déjà le
+  mauvais nom de champ** (`"address"` au lieu de `"address_hash")` — ils validaient un schéma
+  imaginaire, jamais le vrai comportement de l'API. La dégradation douce (jamais bloquant,
+  doctrine `AGENTS.md`) a caché le problème au lieu de le signaler : l'ancienne analyse
+  smart-money tournait à vide silencieusement depuis sa mise en place. Trouvé seulement parce
+  qu'un vrai test `/walletscore` en conditions réelles sur un vrai wallet a donné "0 tokens"
+  alors qu'un `curl` direct montrait 50+ transferts ERC-20 réels. **Réflexe désormais
+  obligatoire** : pour tout nouveau client d'API externe (ou toute nouvelle méthode dessus),
+  vérifier au moins UNE FOIS le nom exact des champs contre un vrai appel réel (`curl` sur le
+  VPS, qui a un accès réseau réel contrairement à cette session cloud) avant de considérer la
+  fonctionnalité terminée — ne jamais faire confiance à un mock auto-cohérent écrit de mémoire
+  sans l'avoir confronté à la réalité au moins une fois. Correctif + tests re-mockés sur le vrai
+  schéma : commit `85e4c16`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
