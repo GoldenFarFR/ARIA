@@ -176,10 +176,10 @@ class TestSelectTokensForDeepAnalysis:
         assert len(selected) == 20
         assert skipped == 5
 
-    def test_default_cap_matches_operator_decision_n50(self):
-        # Relevé 20->50 le 14/07 (décision opérateur explicite) : première
-        # analyse volontairement longue et complète.
-        assert sm.WEIGHTS.max_tokens_analyzed == 50
+    def test_default_cap_matches_operator_decision_n10(self):
+        # 20->50 puis ramené à 10 le 14/07 (décision opérateur explicite) :
+        # scans plus rapides par défaut.
+        assert sm.WEIGHTS.max_tokens_analyzed == 10
 
     def test_most_recent_token_selected_first(self):
         old_token = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xold", ts=_dt(0))
