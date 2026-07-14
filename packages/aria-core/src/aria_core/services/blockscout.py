@@ -42,9 +42,25 @@ PRO_API_URL = "https://api.blockscout.com"
 # la même raison. Alternative réelle si BNB est voulu un jour : BSCTrace via
 # MegaNode (client séparé, pas une entrée CHAIN_IDS) -- cf.
 # docs/aria-learning-inbox/2026-07-14-verification-blockscout-bnb-avalanche-non-supportes.md
+# Étendu (14/07) aux 13 chaînes confirmées interrogeables des deux côtés
+# (Blockscout Pro API × GeckoTerminal) -- établi ce soir pour le classement
+# TVL dynamique (#157, services/defillama.py). chain_id = DefiLlama `chainId`
+# (vérifié en direct, GET https://api.llama.fi/v2/chains, aucune des 13
+# manquante dans la réponse).
 CHAIN_IDS: dict[str, int] = {
     "base": 8453,
     "ethereum": 1,
+    "arbitrum": 42161,
+    "optimism": 10,
+    "polygon": 137,
+    "celo": 42220,
+    "gnosis": 100,
+    "scroll": 534352,
+    "zksync": 324,
+    "rootstock": 30,
+    "unichain": 130,
+    "soneium": 1868,
+    "mode": 34443,
 }
 
 UNAVAILABLE = "donnée on-chain indisponible"
