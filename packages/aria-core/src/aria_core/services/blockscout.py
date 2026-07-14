@@ -280,7 +280,7 @@ class BlockscoutClient:
             tx_hash=str(item.get("tx_hash") or item.get("transaction_hash") or ""),
             from_address=str((item.get("from") or {}).get("hash") or ""),
             to_address=str((item.get("to") or {}).get("hash") or ""),
-            token_address=token.get("address"),
+            token_address=token.get("address_hash") or token.get("address"),
             token_symbol=token.get("symbol"),
             token_name=token.get("name"),
             amount=amount,
