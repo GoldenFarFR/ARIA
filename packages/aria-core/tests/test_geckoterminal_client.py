@@ -32,7 +32,10 @@ class FakeClient:
         return None
 
     async def get(self, url, params=None, headers=None):
-        return self._responses[url]
+        queue = self._responses[url]
+        if isinstance(queue, list):
+            return queue.pop(0)
+        return queue
 
 
 def _patch_client(monkeypatch, responses: dict):
@@ -40,6 +43,13 @@ def _patch_client(monkeypatch, responses: dict):
         "aria_core.services.geckoterminal.httpx.AsyncClient",
         lambda **kw: FakeClient(responses),
     )
+
+
+def _patch_no_sleep(monkeypatch):
+    async def _fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("aria_core.services.geckoterminal.asyncio.sleep", _fake_sleep)
 
 
 @pytest.mark.asyncio
@@ -192,8 +202,45 @@ class TestResolvePrimaryPool:
     async def test_error_response_propagates_unavailable(self, monkeypatch):
         client = GeckoTerminalClient()
         url = f"{client.base_url}/networks/base/tokens/0xtoken/pools"
+        _patch_no_sleep(monkeypatch)
         _patch_client(monkeypatch, {url: FakeResponse(429)})
 
         result = await client.resolve_primary_pool("0xtoken")
 
         assert result.available is False
+
+    @pytest.mark.asyncio
+    async def test_429_retries_then_succeeds(self, monkeypatch):
+        """#157, correction 14/07 -- un 429 isolé ne doit plus abandonner net."""
+        client = GeckoTerminalClient()
+        url = f"{client.base_url}/networks/base/tokens/0xtoken/pools"
+        _patch_no_sleep(monkeypatch)
+        _patch_client(
+            monkeypatch,
+            {
+                url: [
+                    FakeResponse(429),
+                    FakeResponse(
+                        200,
+                        {"data": [{"attributes": {"address": "0xpool_a", "reserve_in_usd": "10"}}]},
+                    ),
+                ]
+            },
+        )
+
+        result = await client.resolve_primary_pool("0xtoken")
+
+        assert result.available is True
+        assert result.pool_address == "0xpool_a"
+
+    @pytest.mark.asyncio
+    async def test_429_gives_up_after_max_retries(self, monkeypatch):
+        client = GeckoTerminalClient()
+        url = f"{client.base_url}/networks/base/tokens/0xtoken/pools"
+        _patch_no_sleep(monkeypatch)
+        _patch_client(monkeypatch, {url: [FakeResponse(429), FakeResponse(429), FakeResponse(429)]})
+
+        result = await client.resolve_primary_pool("0xtoken")
+
+        assert result.available is False
+        assert "rate limit" in result.error
