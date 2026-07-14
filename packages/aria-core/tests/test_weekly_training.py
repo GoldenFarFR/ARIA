@@ -115,6 +115,38 @@ async def test_resolve_due_skips_without_entry_or_pool():
 
 
 @pytest.mark.asyncio
+async def test_due_predictions_summary_distinguishes_open_from_due():
+    # Créé maintenant, horizon vc=30j -> ouvert mais PAS à échéance.
+    await vc_predictions.record_prediction(
+        contract="0xAAA", recommandation="BUY", potentiel=8, risque="MODÉRÉ",
+        taille_pct=5.0, security_score=72, llm_used=True, strategy="vc",
+    )
+    summary = await wt.due_predictions_summary(now=datetime.now(timezone.utc))
+    assert summary["open_total"] == 1
+    assert summary["due_now"] == 0
+    assert summary["nearest_due_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_due_predictions_summary_counts_due_now():
+    await vc_predictions.record_prediction(
+        contract="0xAAA", recommandation="BUY", potentiel=8, risque="MODÉRÉ",
+        taille_pct=5.0, security_score=72, llm_used=True, strategy="vc",
+    )
+    future = datetime(2100, 1, 1, tzinfo=timezone.utc)
+    summary = await wt.due_predictions_summary(now=future)
+    assert summary["open_total"] == 1
+    assert summary["due_now"] == 1
+    assert summary["nearest_due_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_due_predictions_summary_empty_when_no_predictions():
+    summary = await wt.due_predictions_summary()
+    assert summary == {"open_total": 0, "due_now": 0, "nearest_due_at": None}
+
+
+@pytest.mark.asyncio
 async def test_weekly_report_shape():
     await screened_pool.upsert_screened(contract="0xP", verdict="SAFE", security_score=75)
     rep = await wt.weekly_report()

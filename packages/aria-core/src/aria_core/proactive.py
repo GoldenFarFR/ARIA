@@ -42,11 +42,21 @@ async def _real_state_snapshot() -> str:
         logger.info("founder_ping: snapshot pool échoué (%s)", exc)
 
     try:
-        from aria_core import vc_predictions
+        from aria_core import vc_predictions, weekly_training
 
         total = await vc_predictions.total_predictions_count()
-        open_preds = await vc_predictions.list_open_predictions(limit=1)
-        status = "au moins un pronostic ouvert" if open_preds else "aucun pronostic ouvert"
+        due = await weekly_training.due_predictions_summary()
+        # Distinction cruciale (trouvée le 14/07 via une initiative confabulée) :
+        # "ouvert" (pas encore résolu) n'est PAS "à échéance" (horizon atteint,
+        # prêt à clôturer avec un vrai résultat). Sans elle, le LLM proposait
+        # de "finaliser" un pronostic qui ne pouvait objectivement rien produire.
+        if due["due_now"] > 0:
+            status = f"{due['due_now']} arrivé(s) à échéance -- prêt(s) à clôturer avec un résultat réel"
+        elif due["open_total"] > 0:
+            nearest = due["nearest_due_at"] or "date inconnue"
+            status = f"{due['open_total']} ouvert(s) mais AUCUN à échéance (le plus proche le {nearest}) -- rien à finaliser maintenant"
+        else:
+            status = "aucun pronostic ouvert"
         lines.append(f"Track-record : {total} pronostic(s) au total, {status}.")
     except Exception as exc:  # noqa: BLE001
         logger.info("founder_ping: snapshot vc_predictions échoué (%s)", exc)

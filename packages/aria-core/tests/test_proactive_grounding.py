@@ -3,6 +3,7 @@ dernière initiative — avant ce correctif, c'était du texte LLM pur, sans lie
 vraies données (candidat inventé possible, aucun suivi de promesse)."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,8 +28,11 @@ async def test_real_state_snapshot_includes_pool_and_track_record(monkeypatch):
     async def fake_total_count():
         return 7
 
-    async def fake_open_preds(limit=1):
-        return [{"id": 1}]
+    async def fake_open_preds(limit=1000):
+        return [{
+            "id": 1, "strategy": "vc",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }]
 
     monkeypatch.setattr(
         "aria_core.skills.candidate_ranking.top_candidates", fake_top_candidates
@@ -44,7 +48,10 @@ async def test_real_state_snapshot_includes_pool_and_track_record(monkeypatch):
     assert "GOOD" in snapshot
     assert "SAFE" in snapshot
     assert "7 pronostic" in snapshot
-    assert "au moins un pronostic ouvert" in snapshot
+    # Ouvert mais pas encore à échéance (créé à l'instant, horizon vc=30j) --
+    # ne doit JAMAIS inviter à "finaliser" un pronostic non résolvable (14/07).
+    assert "AUCUN à échéance" in snapshot
+    assert "rien à finaliser" in snapshot
 
 
 @pytest.mark.asyncio
