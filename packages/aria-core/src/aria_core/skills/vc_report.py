@@ -809,6 +809,50 @@ def _market_context_block_html(result: VCResult, s: dict) -> str:
   </tr>"""
 
 
+def _equities_context_block_html(result: VCResult, s: dict) -> str:
+    """Section « Actions et matières premières » (tâche #14 suite, 13/07,
+    services/alphavantage.py). Data-gated : vide si aucune des trois sources
+    (SPY/QQQ/matières premières) n'est disponible -- volontairement SÉPARÉE de
+    ``_market_context_block_html`` (BTC), sources et gates indépendants. Chaque
+    ligne est indépendante : une source manquante n'empêche jamais les autres."""
+    ctx = result.market_context_equities
+    if not ctx:
+        return ""
+
+    lines: list[str] = []
+    spy = ctx.get("spy")
+    if spy and spy.get("price") is not None:
+        lines.append(_esc(s["equities_context_spy_line"].format(
+            price=spy["price"], change=spy.get("change_pct") or 0.0, date=spy.get("date") or "",
+        )))
+    qqq = ctx.get("qqq")
+    if qqq and qqq.get("price") is not None:
+        lines.append(_esc(s["equities_context_qqq_line"].format(
+            price=qqq["price"], change=qqq.get("change_pct") or 0.0, date=qqq.get("date") or "",
+        )))
+    commodities = ctx.get("commodities")
+    if commodities and commodities.get("value") is not None:
+        lines.append(_esc(s["equities_context_commodities_line"].format(
+            value=commodities["value"], unit=commodities.get("unit") or "", date=commodities.get("date") or "",
+        )))
+    if not lines:
+        return ""
+
+    lines_html = "".join(
+        f'<div class="ink" style="margin-top:8px;font-family:{_FONT_SANS};font-size:14px;line-height:1.6;color:{_INK_WARM};">{line}</div>'
+        for line in lines
+    )
+    disclaimer = _esc(s["equities_context_disclaimer"])
+
+    return f"""<tr>
+    <td class="ivory pad" style="background-color:{_IVORY};padding:30px 44px 6px;">
+      {_section_header(s["equities_context_section"])}
+      {lines_html}
+      <div style="margin-top:12px;font-family:{_FONT_SANS};font-size:11px;line-height:1.6;font-style:italic;color:{_MUTE_WARM};">{disclaimer}</div>
+    </td>
+  </tr>"""
+
+
 def render_email_teaser_html(result: VCResult, *, lang: str = "fr") -> str:
     """Email COURT (badges + R/R) — l'analyse complète vit désormais dans le PDF
     sécurisé joint. Ne JAMAIS y remettre la thèse/le rapport détaillé : le PDF
@@ -968,6 +1012,12 @@ def render_html_report(
     # Contexte marché macro (tâche #14) : phase du cycle Bitcoin, même traitement
     # premium que TA/ROI. Data-gated : vide si l'historique BTC est indisponible.
     market_context_block = "" if is_standard else _market_context_block_html(result, s)
+
+    # Contexte actions/ETF/matières premières (tâche #14 suite, 13/07), même
+    # traitement premium. Data-gated : vide si aucune source n'est disponible
+    # (gate ARIA_ALPHAVANTAGE_ENABLED OFF par défaut -> toujours vide tant que
+    # non activé).
+    equities_context_block = "" if is_standard else _equities_context_block_html(result, s)
 
     watermark_diagonal = ""
     if recipient:
@@ -1159,6 +1209,8 @@ def render_html_report(
   {roi_block}
 
   {market_context_block}
+
+  {equities_context_block}
 
   {detailed_block}
 
