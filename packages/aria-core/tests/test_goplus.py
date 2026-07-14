@@ -330,3 +330,38 @@ async def test_get_address_security_network_error_propagates():
 
     assert result.available is False
     assert "indisponible" in result.error
+
+
+@pytest.mark.asyncio
+async def test_get_address_security_forwards_explicit_chain_id():
+    """#157, 14/07 -- multi-chaînes : chain_id doit être transmis tel quel dans
+    les params, jamais silencieusement retombé sur Base quand l'appelant en
+    passe un autre (trouvé non testé en explorant le code ce soir)."""
+    c = GoPlusClient()
+    seen_params = {}
+
+    async def fake_get_json(path, *, params=None):
+        seen_params.update(params or {})
+        return {"code": 1, "message": "ok", "result": {"contract_address": "0", "data_source": ""}}, None
+
+    c._get_json = fake_get_json  # type: ignore[method-assign]
+
+    await c.get_address_security(ADDR, chain_id="42220")  # Celo
+
+    assert seen_params.get("chain_id") == "42220"
+
+
+@pytest.mark.asyncio
+async def test_get_address_security_defaults_to_base_chain_id():
+    c = GoPlusClient()
+    seen_params = {}
+
+    async def fake_get_json(path, *, params=None):
+        seen_params.update(params or {})
+        return {"code": 1, "message": "ok", "result": {"contract_address": "0", "data_source": ""}}, None
+
+    c._get_json = fake_get_json  # type: ignore[method-assign]
+
+    await c.get_address_security(ADDR)  # pas de chain_id explicite
+
+    assert seen_params.get("chain_id") == "8453"
