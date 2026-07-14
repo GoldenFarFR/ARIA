@@ -42,6 +42,7 @@ class AddressInfo:
     balance_native: float | None = None
     creator_address: str | None = None  # déployeur (pour reconnaître un launchpad)
     holders_count: int | None = None  # présent si ``address`` est un token (champ ``token.holders_count``)
+    ens_domain_name: str | None = None  # nom ENS/Basename (cosmétique, jamais un facteur de score)
     available: bool = False
     error: str | None = None
 
@@ -91,6 +92,20 @@ class TransactionsResult:
     transactions: list[Transaction] = field(default_factory=list)
     available: bool = True
     error: str | None = None
+
+
+@dataclass
+class BoundedTransactionsResult:
+    """Résultat de ``get_transactions_bounded`` -- ``truncated=True`` signifie que le
+    plafond de pages a été atteint SANS épuiser l'historique réel du wallet : toute
+    conclusion tirée de ``transactions`` (ancienneté, source de financement) est
+    alors une BORNE (le wallet est AU MOINS aussi vieux que la plus ancienne
+    transaction trouvée ici), jamais une valeur exacte garantie."""
+
+    transactions: list[Transaction] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+    truncated: bool = False
 
 
 @dataclass
@@ -225,6 +240,8 @@ class BlockscoutClient:
             except (TypeError, ValueError):
                 holders_count = None
 
+        ens_domain_name = data.get("ens_domain_name")
+
         return AddressInfo(
             address=address,
             is_contract=bool(data.get("is_contract")),
@@ -234,6 +251,7 @@ class BlockscoutClient:
             balance_native=balance_native,
             creator_address=str(creator).lower() if creator else None,
             holders_count=holders_count,
+            ens_domain_name=str(ens_domain_name) if ens_domain_name else None,
             available=True,
             error=None,
         )
@@ -241,48 +259,79 @@ class BlockscoutClient:
     # ------------------------------------------------------------------
     # 2. Transferts de tokens (qui paie qui, quels tokens, montants)
     # ------------------------------------------------------------------
-    async def get_token_transfers(self, address: str, limit: int = 50) -> TokenTransfersResult:
-        data, error = await self._get_json(f"/addresses/{address}/token-transfers")
-        if error is not None:
-            return TokenTransfersResult(available=False, error=error)
-        if not isinstance(data, dict):
-            return TokenTransfersResult(available=False, error=UNAVAILABLE)
-
-        items = data.get("items") or []
-        transfers: list[TokenTransfer] = []
-        for item in items[:limit]:
-            if not isinstance(item, dict):
-                continue
-            token = item.get("token") or {}
-            total = item.get("total") or {}
-            amount = None
-            transfer_error = None
-            raw_value = total.get("value")
-            decimals_raw = total.get("decimals")
-            if raw_value is not None:
-                if decimals_raw is None:
+    @staticmethod
+    def _parse_token_transfer(item: dict) -> TokenTransfer:
+        token = item.get("token") or {}
+        total = item.get("total") or {}
+        amount = None
+        transfer_error = None
+        raw_value = total.get("value")
+        decimals_raw = total.get("decimals")
+        if raw_value is not None:
+            if decimals_raw is None:
+                transfer_error = "décimales du token indisponible"
+            else:
+                try:
+                    amount = int(raw_value) / (10 ** int(decimals_raw))
+                except (TypeError, ValueError):
                     transfer_error = "décimales du token indisponible"
-                else:
-                    try:
-                        amount = int(raw_value) / (10 ** int(decimals_raw))
-                    except (TypeError, ValueError):
-                        transfer_error = "décimales du token indisponible"
 
-            transfers.append(
-                TokenTransfer(
-                    tx_hash=str(item.get("tx_hash") or item.get("transaction_hash") or ""),
-                    from_address=str((item.get("from") or {}).get("hash") or ""),
-                    to_address=str((item.get("to") or {}).get("hash") or ""),
-                    token_address=token.get("address"),
-                    token_symbol=token.get("symbol"),
-                    token_name=token.get("name"),
-                    amount=amount,
-                    timestamp=item.get("timestamp"),
-                    method=item.get("method"),
-                    error=transfer_error,
-                )
-            )
-        return TokenTransfersResult(transfers=transfers, available=True, error=None)
+        return TokenTransfer(
+            tx_hash=str(item.get("tx_hash") or item.get("transaction_hash") or ""),
+            from_address=str((item.get("from") or {}).get("hash") or ""),
+            to_address=str((item.get("to") or {}).get("hash") or ""),
+            token_address=token.get("address"),
+            token_symbol=token.get("symbol"),
+            token_name=token.get("name"),
+            amount=amount,
+            timestamp=item.get("timestamp"),
+            method=item.get("method"),
+            error=transfer_error,
+        )
+
+    async def get_token_transfers(
+        self,
+        address: str,
+        limit: int = 50,
+        *,
+        max_pages: int = 1,
+        token_type: str | None = None,
+    ) -> TokenTransfersResult:
+        """``max_pages`` > 1 suit le curseur ``next_page_params`` de Blockscout pour
+        approcher l'historique complet d'un wallet (#157, wallet-centrique multi-token)
+        -- comportement par défaut (``max_pages=1``) inchangé pour les appelants
+        existants (``analyze_smart_money``, token-centrique, une page suffit).
+        ``token_type`` (ex. ``"ERC-20"``) filtre le bruit NFT/ERC-1155 côté API."""
+        params: dict = {"type": token_type} if token_type else {}
+        transfers: list[TokenTransfer] = []
+        pages_fetched = 0
+
+        while True:
+            data, error = await self._get_json(f"/addresses/{address}/token-transfers", params=params)
+            if error is not None:
+                if pages_fetched == 0:
+                    return TokenTransfersResult(available=False, error=error)
+                break
+            if not isinstance(data, dict):
+                if pages_fetched == 0:
+                    return TokenTransfersResult(available=False, error=UNAVAILABLE)
+                break
+
+            items = data.get("items") or []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                transfers.append(self._parse_token_transfer(item))
+                if len(transfers) >= limit:
+                    break
+
+            pages_fetched += 1
+            next_page = data.get("next_page_params")
+            if not next_page or pages_fetched >= max_pages or len(transfers) >= limit:
+                break
+            params = {**({"type": token_type} if token_type else {}), **next_page}
+
+        return TokenTransfersResult(transfers=transfers[:limit], available=True, error=None)
 
     # ------------------------------------------------------------------
     # 3. Historique des transactions
@@ -321,6 +370,65 @@ class BlockscoutClient:
                 )
             )
         return TransactionsResult(transactions=transactions, available=True, error=None)
+
+    # ------------------------------------------------------------------
+    # 3b. Historique borné (approche l'ancienneté du wallet / la source de
+    # financement -- #157, jamais garanti exhaustif : Blockscout n'offre pas de tri
+    # bon marché "plus ancien d'abord" sur cet endpoint, vérifié en direct
+    # (``sort=asc`` renvoie une liste vide). Pagination plafonnée à ``max_pages`` ;
+    # ``truncated=True`` si le plafond est atteint sans épuiser l'historique --
+    # le résultat est alors une BORNE, jamais la vraie première transaction.
+    # ------------------------------------------------------------------
+    async def get_transactions_bounded(self, address: str, *, max_pages: int = 5) -> "BoundedTransactionsResult":
+        params: dict = {}
+        transactions: list[Transaction] = []
+        pages_fetched = 0
+
+        while True:
+            data, error = await self._get_json(f"/addresses/{address}/transactions", params=params)
+            if error is not None:
+                if pages_fetched == 0:
+                    return BoundedTransactionsResult(available=False, error=error)
+                break
+            if not isinstance(data, dict):
+                if pages_fetched == 0:
+                    return BoundedTransactionsResult(available=False, error=UNAVAILABLE)
+                break
+
+            items = data.get("items") or []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                to_field = item.get("to")
+                value_native = None
+                raw_value = item.get("value")
+                if raw_value is not None:
+                    try:
+                        value_native = int(raw_value) / 1e18
+                    except (TypeError, ValueError):
+                        value_native = None
+                transactions.append(
+                    Transaction(
+                        tx_hash=str(item.get("hash") or ""),
+                        from_address=str((item.get("from") or {}).get("hash") or ""),
+                        to_address=(to_field or {}).get("hash") if isinstance(to_field, dict) else None,
+                        value_native=value_native,
+                        status=item.get("status"),
+                        method=item.get("method"),
+                        timestamp=item.get("timestamp"),
+                        block_number=item.get("block_number"),
+                    )
+                )
+
+            pages_fetched += 1
+            next_page = data.get("next_page_params")
+            if not next_page:
+                return BoundedTransactionsResult(transactions=transactions, available=True, error=None, truncated=False)
+            if pages_fetched >= max_pages:
+                break
+            params = next_page
+
+        return BoundedTransactionsResult(transactions=transactions, available=True, error=None, truncated=True)
 
     # ------------------------------------------------------------------
     # 4. Distribution des holders (top holders, %)

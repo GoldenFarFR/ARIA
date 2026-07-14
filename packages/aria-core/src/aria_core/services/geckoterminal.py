@@ -1,0 +1,201 @@
+"""Client GeckoTerminal (lecture seule, public, sans clé) -- côté aria-core (#157).
+
+Un client GeckoTerminal existe déjà côté ``vanguard/backend`` (chart data pour le
+produit), mais aria-core (Telegram/CLI, tourne aussi standalone sans le backend
+FastAPI) n'a AUCUNE dépendance vers ``vanguard/backend`` et ne doit pas en créer
+une -- inverserait le sens de dépendance du monorepo. Ce module est donc un
+client séparé, léger, avec ses propres dataclasses (pas les modèles Pydantic du
+backend), pensé uniquement pour les besoins de l'évaluateur wallet (#157) :
+- ``get_pool_created_at`` : horodatage de création d'un pool (entrée précoce).
+- ``get_ohlcv`` : historique de prix pour valoriser un trade (PnL FIFO) et pour le
+  raffinement "conditions techniques à l'entrée" (``ta_levels``/``candlestick_patterns``).
+
+Réseau fixé à Base en dur (doctrine ARIA : Base uniquement). Aucune donnée
+manquante n'est jamais remplacée par une supposition -- ``available=False``/
+``error`` portent l'absence de donnée, même politique que ``blockscout.py``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+import httpx
+
+from aria_core.skills.ta_levels import Candle
+
+UNAVAILABLE = "donnée GeckoTerminal indisponible"
+
+BASE_URL = "https://api.geckoterminal.com/api/v2"
+NETWORK = "base"
+
+# Palier gratuit GeckoTerminal ~30 req/min -- même throttle que le client existant
+# côté vanguard (2.1s), valeur déjà éprouvée en production.
+_MIN_INTERVAL = 2.1
+
+
+@dataclass
+class PoolMetadata:
+    pool_address: str
+    created_at: datetime | None = None
+    available: bool = True
+    error: str | None = None
+
+
+@dataclass
+class OHLCVResult:
+    candles: list[Candle] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+class GeckoTerminalClient:
+    """Client HTTP async, lecture seule, throttle conservateur (API publique gratuite)."""
+
+    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = _MIN_INTERVAL) -> None:
+        self.base_url = base_url.rstrip("/")
+        self._min_interval = min_interval
+        self._lock = asyncio.Lock()
+        self._last_request = 0.0
+
+    async def _throttle(self) -> None:
+        async with self._lock:
+            now = asyncio.get_event_loop().time()
+            wait = self._min_interval - (now - self._last_request)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_request = asyncio.get_event_loop().time()
+
+    async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
+        await self._throttle()
+        url = f"{self.base_url}{path}"
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(url, params=params, headers={"Accept": "application/json"})
+        except httpx.TransportError as exc:
+            return None, f"{UNAVAILABLE} (timeout GeckoTerminal: {exc})"
+
+        if response.status_code in (400, 404, 429):
+            return None, f"{UNAVAILABLE} (HTTP {response.status_code})"
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return None, f"{UNAVAILABLE} ({exc})"
+
+        return response.json(), None
+
+    async def get_pool_created_at(self, pool_address: str) -> PoolMetadata:
+        data, error = await self._get_json(f"/networks/{NETWORK}/pools/{pool_address}")
+        if error is not None:
+            return PoolMetadata(pool_address=pool_address, available=False, error=error)
+        if not isinstance(data, dict):
+            return PoolMetadata(pool_address=pool_address, available=False, error=UNAVAILABLE)
+
+        attrs = (data.get("data") or {}).get("attributes") or {}
+        raw = attrs.get("pool_created_at")
+        created_at = None
+        if raw:
+            try:
+                created_at = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except ValueError:
+                created_at = None
+
+        if created_at is None:
+            return PoolMetadata(pool_address=pool_address, available=False, error="date de création du pool indisponible")
+        return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
+
+    async def resolve_primary_pool(self, token_address: str) -> PoolMetadata:
+        """Résout le pool PRINCIPAL d'un token (celui à la plus forte liquidité,
+        `reserve_in_usd`) -- #157 : `get_pool_created_at`/`get_ohlcv` attendent une
+        adresse de POOL, pas un contrat de TOKEN (deux choses différentes en AMM).
+        Correction d'un bug latent : le code appelant passait directement l'adresse
+        du contrat token là où une adresse de pool était attendue. Sert aussi de
+        base à l'exclusion multi-token du wash-trading (#157, correction 14/07) --
+        le pool RÉEL de chaque token, pas une adresse statique unique."""
+        data, error = await self._get_json(f"/networks/{NETWORK}/tokens/{token_address}/pools")
+        if error is not None:
+            return PoolMetadata(pool_address=token_address, available=False, error=error)
+        if not isinstance(data, dict):
+            return PoolMetadata(pool_address=token_address, available=False, error=UNAVAILABLE)
+
+        pools = data.get("data") or []
+        best_attrs: dict | None = None
+        best_liquidity = -1.0
+        for item in pools:
+            if not isinstance(item, dict):
+                continue
+            attrs = item.get("attributes") or {}
+            try:
+                liquidity = float(attrs.get("reserve_in_usd") or 0.0)
+            except (TypeError, ValueError):
+                liquidity = 0.0
+            if liquidity > best_liquidity:
+                best_liquidity = liquidity
+                best_attrs = attrs
+
+        if not best_attrs or not best_attrs.get("address"):
+            return PoolMetadata(pool_address=token_address, available=False, error="aucun pool trouvé pour ce token")
+
+        pool_address = str(best_attrs["address"])
+        raw_created = best_attrs.get("pool_created_at")
+        created_at = None
+        if raw_created:
+            try:
+                created_at = datetime.fromisoformat(str(raw_created).replace("Z", "+00:00"))
+            except ValueError:
+                created_at = None
+
+        return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
+
+    async def get_ohlcv(
+        self,
+        pool_address: str,
+        *,
+        period: str = "hour",
+        aggregate: int = 1,
+        limit: int = 200,
+    ) -> OHLCVResult:
+        data, error = await self._get_json(
+            f"/networks/{NETWORK}/pools/{pool_address}/ohlcv/{period}",
+            params={"aggregate": aggregate, "limit": limit},
+        )
+        if error is not None:
+            return OHLCVResult(available=False, error=error)
+        if not isinstance(data, dict):
+            return OHLCVResult(available=False, error=UNAVAILABLE)
+
+        rows = (((data.get("data") or {}).get("attributes")) or {}).get("ohlcv_list") or []
+        candles: list[Candle] = []
+        for row in rows:
+            try:
+                candles.append(
+                    Candle(
+                        ts=int(row[0]),
+                        open=float(row[1]),
+                        high=float(row[2]),
+                        low=float(row[3]),
+                        close=float(row[4]),
+                        volume=float(row[5]),
+                    )
+                )
+            except (TypeError, ValueError, IndexError):
+                continue
+        candles.sort(key=lambda c: c.ts)
+        return OHLCVResult(candles=candles, available=True, error=None)
+
+
+def price_at(ohlcv: OHLCVResult, ts: int) -> float | None:
+    """Prix (clôture de la bougie la plus proche à ou avant ``ts``) -- jamais une
+    interpolation ou une supposition : ``None`` si aucune bougie ne précède ``ts``."""
+    candidates = [c for c in ohlcv.candles if c.ts <= ts]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: c.ts).close
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+geckoterminal_client = GeckoTerminalClient()
