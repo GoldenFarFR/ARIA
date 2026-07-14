@@ -723,6 +723,20 @@ async def _ensure_wallet_scoring_tables() -> None:
             )
             """
         )
+        # Classement TVL dynamique des chaînes scannées (#157, 14/07) -- une
+        # ligne par chaîne (PRIMARY KEY), remplacée en bloc à chaque
+        # rafraîchissement réussi (cf. `refresh_chain_ranking_cache`), jamais
+        # un journal append-only comme `wallet_score_log` ci-dessus.
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wallet_scoring_chain_ranking (
+                chain TEXT PRIMARY KEY,
+                tvl_usd REAL NOT NULL,
+                rank INTEGER NOT NULL,
+                refreshed_at TEXT NOT NULL
+            )
+            """
+        )
         await db.commit()
 
 
@@ -738,6 +752,69 @@ async def _log_wallet_score(wallet: str, report_json: str) -> None:
             (wallet.lower(), datetime.now(timezone.utc).isoformat(), report_json),
         )
         await db.commit()
+
+
+# Plafond du classement TVL dynamique (#157, 14/07, décision opérateur) --
+# aujourd'hui inerte (13 chaînes confirmées au total, toutes < 20), gardé
+# générique si la liste confirmée grandit plus tard.
+_MAX_RANKED_CHAINS = 20
+
+# Repli si le cache TVL n'a jamais tourné (premier déploiement) ou si
+# DefiLlama est indisponible -- jamais un /walletscore qui casse faute de
+# classement à jour. "bnb" absent (retiré de blockscout.CHAIN_IDS, 14/07,
+# Blockscout ne le sert pas).
+_FALLBACK_SCAN_CHAINS: tuple[str, ...] = ("base", "ethereum")
+
+
+async def refresh_chain_ranking_cache() -> bool:
+    """Rafraîchit `wallet_scoring_chain_ranking` depuis le classement TVL
+    DefiLlama (#157, 14/07) -- appelé par le heartbeat mensuel
+    (`wallet_scoring_chain_ranking_refresh`), jamais par un scan `/walletscore`
+    individuel. Sur échec DefiLlama, la table n'est JAMAIS vidée -- le dernier
+    classement réussi continue de servir jusqu'au prochain rafraîchissement
+    réussi. Retourne `True` si le cache a été mis à jour, `False` sinon."""
+    from aria_core.services.defillama import fetch_chain_tvl_ranking
+
+    ranking = await fetch_chain_tvl_ranking()
+    if ranking is None:
+        logger.warning("refresh_chain_ranking_cache: DefiLlama indisponible -- cache TVL inchangé")
+        return False
+
+    ranking = ranking[:_MAX_RANKED_CHAINS]
+    refreshed_at = datetime.now(timezone.utc).isoformat()
+
+    await _ensure_wallet_scoring_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM wallet_scoring_chain_ranking")
+        await db.executemany(
+            "INSERT INTO wallet_scoring_chain_ranking (chain, tvl_usd, rank, refreshed_at) VALUES (?, ?, ?, ?)",
+            [(chain, tvl, rank, refreshed_at) for rank, (chain, tvl) in enumerate(ranking, start=1)],
+        )
+        await db.commit()
+
+    logger.info("refresh_chain_ranking_cache: %s chaînes mises en cache (%s)", len(ranking), refreshed_at)
+    return True
+
+
+async def DEFAULT_SCAN_CHAINS() -> tuple[str, ...]:
+    """Chaînes scannées par défaut par `/walletscore` -- lit le classement TVL
+    en cache (#157, 14/07), trié par rang. Repli sur `_FALLBACK_SCAN_CHAINS`
+    si le cache est vide (jamais tourné) OU inaccessible -- jamais une
+    exception qui casse un scan faute de classement à jour."""
+    try:
+        await _ensure_wallet_scoring_tables()
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                "SELECT chain FROM wallet_scoring_chain_ranking ORDER BY rank ASC"
+            )
+            rows = await cursor.fetchall()
+    except Exception:
+        logger.warning("DEFAULT_SCAN_CHAINS: cache TVL inaccessible -- repli sur %s", _FALLBACK_SCAN_CHAINS)
+        return _FALLBACK_SCAN_CHAINS
+
+    if not rows:
+        return _FALLBACK_SCAN_CHAINS
+    return tuple(row[0] for row in rows)
 
 
 @dataclass
@@ -995,11 +1072,6 @@ def _valid_address(address: str) -> bool:
     return bool(address) and address.startswith("0x") and len(address) == 42
 
 
-# "bnb" retiré (14/07) -- Blockscout ne sert pas BNB Smart Chain, vérifié sur
-# 3 angles indépendants (cf. blockscout.CHAIN_IDS pour le détail).
-DEFAULT_SCAN_CHAINS: tuple[str, ...] = ("base", "ethereum")
-
-
 async def score_wallets(
     addresses: list[str],
     *,
@@ -1022,9 +1094,11 @@ async def score_wallets(
     (dict chaîne -> client) permet d'injecter un registre explicite (tests, ou
     un sous-ensemble de chaînes) ; à défaut, ``client`` seul retombe sur un
     comportement mono-chaîne "base" STRICTEMENT inchangé (chemin historique,
-    tous les tests existants) ; si ni l'un ni l'autre n'est fourni, le vrai
-    registre de production (Base/Ethereum/BNB) est utilisé. Solana n'est PAS
-    EVM (chantier séparé, hors scope) -- jamais dans ce registre.
+    tous les tests existants) ; si ni l'un ni l'autre n'est fourni, le
+    classement TVL dynamique (`DEFAULT_SCAN_CHAINS()`, #157 14/07 -- DefiLlama,
+    rafraîchi mensuellement par le heartbeat, repli sur Base/Ethereum si le
+    cache n'a jamais tourné) est utilisé. Solana n'est PAS EVM (chantier
+    séparé, hors scope) -- jamais dans ce registre.
     """
     if not addresses:
         return WalletScoringReport(available=False, error="aucune adresse fournie")
@@ -1040,7 +1114,7 @@ async def score_wallets(
     else:
         from aria_core.services.blockscout import get_blockscout_client
 
-        chain_clients = {c: get_blockscout_client(c) for c in DEFAULT_SCAN_CHAINS}
+        chain_clients = {c: get_blockscout_client(c) for c in await DEFAULT_SCAN_CHAINS()}
 
     cards: list[WalletScoreCard] = []
     funding_sources: dict[str, str] = {}
