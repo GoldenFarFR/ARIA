@@ -390,3 +390,27 @@ export async function getTrendingPairs(limit = 30): Promise<TrendingPairsRespons
   if (!res.ok) throw new Error('Trending pairs unavailable')
   return res.json()
 }
+
+export interface ForexMajorPair {
+  base: string
+  quote: string
+  rate: number | null
+  date: string | null
+  available: boolean
+}
+
+export interface ForexMajorsResponse {
+  pairs: ForexMajorPair[]
+}
+
+// Paires forex majeures (EUR/USD, USD/JPY, GBP/USD, USD/CHF), taux de référence BCE
+// via Frankfurter -- 2e source réelle de ce backend après les paires crypto (cf.
+// forex.py). `available` par paire distingue un taux réel d'un échec upstream --
+// jamais de valeur inventée côté frontend non plus.
+export async function getForexMajors(): Promise<ForexMajorsResponse> {
+  const res = await fetch(`${PRODUCT_API_URL}/forex/majors`, {
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) throw new Error('Forex majors unavailable')
+  return res.json()
+}
