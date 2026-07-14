@@ -1818,7 +1818,7 @@ export function OrganismHero() {
                       className={`ao-market-row${checked ? ' is-active' : ''}`}
                       aria-pressed={checked}
                       onClick={() => toggleCategory(key)}
-                      style={checked ? { borderColor: `rgb(${FINANCE_COLORS[key]})` } : undefined}
+                      style={checked ? { borderColor: swatchColor } : undefined}
                     >
                       <span className="ao-market-swatch" style={{ background: swatchColor }} />
                       <span className="ao-market-name">{label}</span>
