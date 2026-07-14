@@ -7,8 +7,10 @@ une -- inverserait le sens de dépendance du monorepo. Ce module est donc un
 client séparé, léger, avec ses propres dataclasses (pas les modèles Pydantic du
 backend), pensé uniquement pour les besoins de l'évaluateur wallet (#157) :
 - ``get_pool_created_at`` : horodatage de création d'un pool (entrée précoce).
-- ``get_ohlcv`` : historique de prix pour valoriser un trade (PnL FIFO) et pour le
-  raffinement "conditions techniques à l'entrée" (``ta_levels``/``candlestick_patterns``).
+- ``resolve_primary_pool`` : résout le pool réel (plus forte liquidité) d'un token.
+- ``get_ohlcv`` : historique de prix pour valoriser un trade (PnL FIFO) -- délègue
+  à ``services/ohlcv.py`` (correction 14/07, cf. docstring de la méthode) plutôt
+  que de dupliquer un second client OHLCV avec une fenêtre plus étroite.
 
 Réseau fixé à Base en dur (doctrine ARIA : Base uniquement). Aucune donnée
 manquante n'est jamais remplacée par une supposition -- ``available=False``/
@@ -183,41 +185,26 @@ class GeckoTerminalClient:
 
         return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
 
-    async def get_ohlcv(
-        self,
-        pool_address: str,
-        *,
-        period: str = "hour",
-        aggregate: int = 1,
-        limit: int = 200,
-    ) -> OHLCVResult:
-        data, error = await self._get_json(
-            f"/networks/{NETWORK}/pools/{pool_address}/ohlcv/{period}",
-            params={"aggregate": aggregate, "limit": limit},
-        )
-        if error is not None:
-            return OHLCVResult(available=False, error=error)
-        if not isinstance(data, dict):
-            return OHLCVResult(available=False, error=UNAVAILABLE)
+    async def get_ohlcv(self, pool_address: str, **_kwargs: object) -> OHLCVResult:
+        """Délègue à ``services.ohlcv.ohlcv_client`` -- correction 14/07 (#157) :
+        cette méthode réimplémentait un second client GeckoTerminal avec sa
+        propre fenêtre fixe (200 bougies 1h ~ 8 jours), alors qu'un client
+        GeckoTerminal existait déjà (``services/ohlcv.py``, échelle jour(120)
+        → 4h(180) → 1h(240), déjà éprouvée en prod par `vc_predictions`/
+        `weekly_training`/`pump_dump_autopsy`) -- violation de la doctrine
+        "jamais dupliquer un client existant", et cause RÉELLE (confirmée par
+        un re-test opérateur après le fix retry/429 du même jour, résultat
+        identique) des jambes "sans prix" sur un wallet dont l'historique de
+        trades dépasse 8 jours : la fenêtre 1h ne remontait simplement pas
+        assez loin, ce n'était pas un problème de rate-limit. ``**_kwargs``
+        absorbe d'éventuels period/aggregate/limit hérités (aucun appelant en
+        prod n'en passe actuellement) sans lever."""
+        from aria_core.services.ohlcv import ohlcv_client as _wide_ohlcv_client
 
-        rows = (((data.get("data") or {}).get("attributes")) or {}).get("ohlcv_list") or []
-        candles: list[Candle] = []
-        for row in rows:
-            try:
-                candles.append(
-                    Candle(
-                        ts=int(row[0]),
-                        open=float(row[1]),
-                        high=float(row[2]),
-                        low=float(row[3]),
-                        close=float(row[4]),
-                        volume=float(row[5]),
-                    )
-                )
-            except (TypeError, ValueError, IndexError):
-                continue
-        candles.sort(key=lambda c: c.ts)
-        return OHLCVResult(candles=candles, available=True, error=None)
+        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=NETWORK)
+        if not wide.available or not wide.candles:
+            return OHLCVResult(candles=[], available=False, error=wide.error or UNAVAILABLE)
+        return OHLCVResult(candles=wide.candles, available=True, error=None)
 
 
 def price_at(ohlcv: OHLCVResult, ts: int) -> float | None:

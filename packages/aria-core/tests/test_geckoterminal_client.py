@@ -81,28 +81,30 @@ async def test_get_pool_created_at_missing_date_unavailable(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_ohlcv_parses_and_sorts_candles(monkeypatch):
-    client = GeckoTerminalClient()
-    url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/hour"
-    _patch_client(
-        monkeypatch,
-        {
-            url: FakeResponse(
-                200,
-                {
-                    "data": {
-                        "attributes": {
-                            "ohlcv_list": [
-                                [200, 2.0, 2.5, 1.9, 2.2, 500.0],
-                                [100, 1.0, 1.5, 0.9, 1.2, 1000.0],
-                            ]
-                        }
-                    }
-                },
-            )
-        },
-    )
+async def test_get_ohlcv_delegates_to_wide_ohlcv_client(monkeypatch):
+    # #157, correction 14/07 : get_ohlcv ne fait plus sa propre requête HTTP
+    # (fenêtre fixe ~8 jours, trop étroite -- root cause confirmée des jambes
+    # "sans prix" persistant après le fix retry/429) -- délègue désormais à
+    # services.ohlcv.ohlcv_client (échelle jour->4h->1h, déjà éprouvée en prod).
+    from aria_core.services import ohlcv as ohlcv_module
+    from aria_core.skills.ta_levels import Candle
 
+    async def _fake_wide_get_ohlcv(pool_address, *, network="base"):
+        assert pool_address == "0xpool"
+        return ohlcv_module.OHLCVResult(
+            pool_address=pool_address,
+            network=network,
+            candles=[
+                Candle(ts=100, open=1.0, high=1.5, low=0.9, close=1.2, volume=1000.0),
+                Candle(ts=200, open=2.0, high=2.5, low=1.9, close=2.2, volume=500.0),
+            ],
+            timeframe="1D",
+            available=True,
+        )
+
+    monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+
+    client = GeckoTerminalClient()
     result = await client.get_ohlcv("0xpool")
 
     assert result.available is True
@@ -110,11 +112,15 @@ async def test_get_ohlcv_parses_and_sorts_candles(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_ohlcv_404_unavailable_not_empty_list_silently(monkeypatch):
-    client = GeckoTerminalClient()
-    url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/hour"
-    _patch_client(monkeypatch, {url: FakeResponse(404)})
+async def test_get_ohlcv_unavailable_when_wide_client_has_nothing(monkeypatch):
+    from aria_core.services import ohlcv as ohlcv_module
 
+    async def _fake_wide_get_ohlcv(pool_address, *, network="base"):
+        return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, error="pool introuvable sur GeckoTerminal")
+
+    monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+
+    client = GeckoTerminalClient()
     result = await client.get_ohlcv("0xpool")
 
     assert result.available is False
