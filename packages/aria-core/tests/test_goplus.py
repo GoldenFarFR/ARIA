@@ -220,3 +220,113 @@ def test_screen_take_back_ownership_fails():
     c = _clean_ctx()
     c.can_take_back_ownership = True
     assert safety_screen(c).passed is False
+
+
+# ── Malicious Address API (AML, #157) ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_address_security_flags_malicious():
+    payload = {
+        "code": 1,
+        "message": "ok",
+        "result": {
+            "sanctioned": "1",
+            "phishing_activities": "0",
+            "mixer": "0",
+            "contract_address": "0",
+            "data_source": "",
+            "number_of_malicious_contracts_created": "0",
+        },
+    }
+    c = _client_returning(payload)
+
+    result = await c.get_address_security(ADDR)
+
+    assert result.available is True
+    assert result.is_malicious is True
+    assert result.flags == {"sanctioned": True}
+
+
+@pytest.mark.asyncio
+async def test_get_address_security_clean_address():
+    """Vérifié en direct (14/07) : réponse réelle sur l'adresse burn Base,
+    tous drapeaux à "0" -- couverture Base confirmée, pas la densité des
+    données malveillantes."""
+    payload = {
+        "code": 1,
+        "message": "ok",
+        "result": {
+            "cybercrime": "0", "money_laundering": "0", "gas_abuse": "0",
+            "financial_crime": "0", "darkweb_transactions": "0", "reinit": "0",
+            "phishing_activities": "0", "fake_kyc": "0", "blacklist_doubt": "0",
+            "fake_standard_interface": "0", "stealing_attack": "0",
+            "blackmail_activities": "0", "sanctioned": "0",
+            "malicious_mining_activities": "0", "mixer": "0", "fake_token": "0",
+            "honeypot_related_address": "0",
+            "contract_address": "1", "data_source": "",
+            "number_of_malicious_contracts_created": "0",
+        },
+    }
+    c = _client_returning(payload)
+
+    result = await c.get_address_security(ADDR)
+
+    assert result.available is True
+    assert result.is_malicious is False
+    assert result.flags == {}
+
+
+@pytest.mark.asyncio
+async def test_get_address_security_meta_fields_never_flags():
+    """contract_address/data_source/number_of_malicious_contracts_created sont
+    des métadonnées, jamais des catégories de risque -- même avec une valeur
+    "positive", elles ne doivent jamais faire basculer is_malicious."""
+    payload = {
+        "code": 1,
+        "result": {
+            "contract_address": "1",
+            "number_of_malicious_contracts_created": "5",
+            "data_source": "some_source",
+        },
+    }
+    c = _client_returning(payload)
+
+    result = await c.get_address_security(ADDR)
+
+    assert result.is_malicious is False
+    assert result.flags == {}
+
+
+@pytest.mark.asyncio
+async def test_get_address_security_bad_code_unavailable():
+    c = _client_returning({"code": 0, "message": "address invalid"})
+
+    result = await c.get_address_security(ADDR)
+
+    assert result.available is False
+    assert "address invalid" in result.error
+
+
+@pytest.mark.asyncio
+async def test_get_address_security_empty_address_no_call():
+    c = GoPlusClient()
+
+    result = await c.get_address_security("")
+
+    assert result.available is False
+    assert result.error == "adresse vide"
+
+
+@pytest.mark.asyncio
+async def test_get_address_security_network_error_propagates():
+    c = GoPlusClient()
+
+    async def fake_get_json(path, *, params=None):
+        return None, "donnée GoPlus indisponible (timeout GoPlus)"
+
+    c._get_json = fake_get_json  # type: ignore[method-assign]
+
+    result = await c.get_address_security(ADDR)
+
+    assert result.available is False
+    assert "indisponible" in result.error

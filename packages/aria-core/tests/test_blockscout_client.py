@@ -406,6 +406,226 @@ async def test_rate_limit_gives_up_after_three_attempts(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_address_info_parses_ens_domain_name(monkeypatch):
+    """#157 -- ens_domain_name couvre ENS mainnet ET Basenames (vérifié en direct
+    sur base.blockscout.com : vitalik.eth ET jesse.base.eth remontent tous deux
+    dans ce même champ). Cosmétique uniquement, jamais un facteur de score."""
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xens"
+    _patch_client(
+        monkeypatch,
+        {url: FakeResponse(200, {"is_contract": False, "ens_domain_name": "jesse.base.eth"})},
+    )
+
+    info = await client.get_address_info("0xens")
+
+    assert info.ens_domain_name == "jesse.base.eth"
+
+
+@pytest.mark.asyncio
+async def test_get_address_info_no_name_is_none_not_empty_string(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xnoname"
+    _patch_client(
+        monkeypatch,
+        {url: FakeResponse(200, {"is_contract": False, "ens_domain_name": None})},
+    )
+
+    info = await client.get_address_info("0xnoname")
+
+    assert info.ens_domain_name is None
+
+
+@pytest.mark.asyncio
+async def test_get_token_transfers_single_page_default_unchanged(monkeypatch):
+    """max_pages=1 (défaut) -- comportement inchangé pour les appelants existants
+    (analyze_smart_money) même si un next_page_params est présent."""
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc/token-transfers"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "items": [
+                        {
+                            "tx_hash": "0x1",
+                            "from": {"hash": "0xfrom"},
+                            "to": {"hash": "0xto"},
+                            "token": {"address": "0xtok"},
+                            "total": {"value": str(1 * 10**18), "decimals": "18"},
+                            "timestamp": "2026-07-06T00:00:00Z",
+                        }
+                    ],
+                    "next_page_params": {"block_number": 100},
+                },
+            )
+        },
+    )
+
+    result = await client.get_token_transfers("0xabc", limit=50)
+
+    assert len(result.transfers) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_token_transfers_paginates_across_max_pages(monkeypatch):
+    """#157 -- max_pages>1 suit next_page_params jusqu'à épuisement ou plafond."""
+    client = BlockscoutClient()
+    base = f"{client.base_url}/addresses/0xabc/token-transfers"
+
+    def _page(tx_hash: str, has_next: bool):
+        payload = {
+            "items": [
+                {
+                    "tx_hash": tx_hash,
+                    "from": {"hash": "0xfrom"},
+                    "to": {"hash": "0xto"},
+                    "token": {"address": "0xtok"},
+                    "total": {"value": str(1 * 10**18), "decimals": "18"},
+                    "timestamp": "2026-07-06T00:00:00Z",
+                }
+            ],
+        }
+        if has_next:
+            payload["next_page_params"] = {"block_number": 100}
+        return FakeResponse(200, payload)
+
+    # Le même URL (sans query string dans le mock) sert 3 pages en séquence.
+    _patch_client(monkeypatch, {base: [_page("0x1", True), _page("0x2", True), _page("0x3", False)]})
+
+    result = await client.get_token_transfers("0xabc", limit=50, max_pages=5)
+
+    assert result.available is True
+    assert [t.tx_hash for t in result.transfers] == ["0x1", "0x2", "0x3"]
+
+
+@pytest.mark.asyncio
+async def test_get_token_transfers_respects_max_pages_cap(monkeypatch):
+    client = BlockscoutClient()
+    base = f"{client.base_url}/addresses/0xabc/token-transfers"
+
+    def _page(tx_hash: str):
+        return FakeResponse(
+            200,
+            {
+                "items": [
+                    {
+                        "tx_hash": tx_hash,
+                        "from": {"hash": "0xfrom"},
+                        "to": {"hash": "0xto"},
+                        "token": {"address": "0xtok"},
+                        "total": {"value": str(1 * 10**18), "decimals": "18"},
+                        "timestamp": "2026-07-06T00:00:00Z",
+                    }
+                ],
+                "next_page_params": {"block_number": 100},
+            },
+        )
+
+    _patch_client(monkeypatch, {base: [_page("0x1"), _page("0x2"), _page("0x3")]})
+
+    result = await client.get_token_transfers("0xabc", limit=50, max_pages=2)
+
+    assert [t.tx_hash for t in result.transfers] == ["0x1", "0x2"]
+
+
+@pytest.mark.asyncio
+async def test_get_token_transfers_type_filter_passed_as_param(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc/token-transfers"
+    seen_params = {}
+
+    class RecordingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, params=None):
+            seen_params.update(params or {})
+            return FakeResponse(200, {"items": []})
+
+    monkeypatch.setattr(
+        "aria_core.services.blockscout.httpx.AsyncClient",
+        lambda **kw: RecordingClient(),
+    )
+
+    await client.get_token_transfers("0xabc", token_type="ERC-20")
+
+    assert seen_params.get("type") == "ERC-20"
+
+
+@pytest.mark.asyncio
+async def test_get_transactions_bounded_not_truncated_when_history_exhausted(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc/transactions"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "items": [
+                        {
+                            "hash": "0xtx1",
+                            "from": {"hash": "0xfrom"},
+                            "to": {"hash": "0xto"},
+                            "value": str(1 * 10**18),
+                            "timestamp": "2026-07-06T00:00:00Z",
+                        }
+                    ]
+                    # pas de next_page_params -> historique épuisé
+                },
+            )
+        },
+    )
+
+    result = await client.get_transactions_bounded("0xabc", max_pages=5)
+
+    assert result.available is True
+    assert result.truncated is False
+    assert len(result.transactions) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_transactions_bounded_marks_truncated_when_cap_hit(monkeypatch):
+    """#157 -- pas de tri bon marché "plus ancien d'abord" côté Blockscout (vérifié
+    en direct) : si le plafond de pages est atteint sans que next_page_params
+    s'épuise, le résultat est une BORNE (truncated=True), jamais présenté comme
+    l'historique complet."""
+    client = BlockscoutClient()
+    base = f"{client.base_url}/addresses/0xabc/transactions"
+
+    def _page(tx_hash: str):
+        return FakeResponse(
+            200,
+            {
+                "items": [
+                    {
+                        "hash": tx_hash,
+                        "from": {"hash": "0xfrom"},
+                        "to": {"hash": "0xto"},
+                        "value": str(1 * 10**18),
+                        "timestamp": "2026-07-06T00:00:00Z",
+                    }
+                ],
+                "next_page_params": {"block_number": 1},
+            },
+        )
+
+    _patch_client(monkeypatch, {base: [_page("0x1"), _page("0x2")]})
+
+    result = await client.get_transactions_bounded("0xabc", max_pages=2)
+
+    assert result.available is True
+    assert result.truncated is True
+    assert len(result.transactions) == 2
+
+
+@pytest.mark.asyncio
 async def test_timeout_retries_once_then_fallback(monkeypatch):
     _patch_no_sleep(monkeypatch)
     client = BlockscoutClient()

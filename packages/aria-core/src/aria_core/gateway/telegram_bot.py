@@ -1728,6 +1728,133 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _reply(message, "\n".join(lines))
 
 
+# Garde de concurrence dédiée (#157) -- distincte de `_vc_semaphore` : un scan
+# wallet multi-token peut prendre jusqu'à ~1-2 min (pagination Blockscout +
+# jusqu'au plafond de tokens de `wallet_scoring_weights.WEIGHTS.max_tokens_analyzed`
+# x GeckoTerminal throttlé), ne doit pas se disputer le même budget de
+# concurrence que /vc.
+_WALLET_SCORE_MAX_CONCURRENT = 2
+_WALLET_SCORE_MAX_WAITERS = 4
+_wallet_score_semaphore = asyncio.Semaphore(_WALLET_SCORE_MAX_CONCURRENT)
+_wallet_score_waiters = 0
+
+
+async def _run_wallet_score(message, addresses: list[str]) -> None:
+    global _wallet_score_waiters
+    if _wallet_score_semaphore.locked() and _wallet_score_waiters >= _WALLET_SCORE_MAX_WAITERS:
+        await _reply(message, "⏳ File d'attente /walletscore pleine, réessaie dans quelques minutes.")
+        return
+    if _wallet_score_semaphore.locked():
+        await _reply(message, "⏳ Une autre analyse wallet est en cours, mise en file d'attente...")
+
+    _wallet_score_waiters += 1
+    try:
+        await _wallet_score_semaphore.acquire()
+    finally:
+        _wallet_score_waiters -= 1
+    try:
+        await _wallet_score_analyze_and_reply(message, addresses)
+    finally:
+        _wallet_score_semaphore.release()
+
+
+def _format_wallet_score_card(card) -> list[str]:
+    from aria_core.services.wallet_scoring_weights import WEIGHTS
+
+    lines = [f"\n— {card.address}" + (f" ({card.display_name})" if card.display_name else "")]
+    if not card.available:
+        lines.append(f"  Indisponible : {card.error}")
+        return lines
+    if card.disqualified:
+        lines.append("  🔴 DISQUALIFIÉ : " + "; ".join(card.disqualification_reasons))
+    if card.financing_check_note:
+        lines.append(f"  ⚠️ {card.financing_check_note}")
+    lines.append(
+        f"  Tokens analysés : {card.tokens_analyzed}/{card.tokens_found}"
+        + (f" (plafond de {WEIGHTS.max_tokens_analyzed} atteint)" if card.tokens_skipped_capped else "")
+    )
+    lines.append(f"  Win rate : {card.win_rate:.0%}" if card.win_rate is not None else "  Win rate : indisponible")
+    lines.append(
+        f"  PnL réalisé : ${card.realized_pnl_usd:,.2f}"
+        if card.realized_pnl_usd is not None
+        else "  PnL réalisé : indisponible"
+    )
+    lines.append(
+        f"  Sortino : {card.sortino:.2f}" if card.sortino is not None else "  Sortino : indisponible"
+    )
+    lines.append(f"  Récurrence entrée précoce (multi-lancements) : {card.early_entry_recurrence_count} token(s)")
+    if card.suspect_positive:
+        lines.append("  🟢 Suspect positif (exceptionnel sur plusieurs axes à la fois) — à surveiller de près.")
+    if card.thesis:
+        lines.append(f"  Thèse : {card.thesis}")
+    return lines
+
+
+async def _wallet_score_analyze_and_reply(message, addresses: list[str]) -> None:
+    from aria_core.services.blockscout import blockscout_client
+    from aria_core.services.geckoterminal import geckoterminal_client
+    from aria_core.services.goplus import goplus_client
+    from aria_core.services.smart_money import score_wallets
+
+    report = await score_wallets(
+        addresses, client=blockscout_client, gecko=geckoterminal_client, goplus=goplus_client,
+    )
+
+    if not report.available:
+        await _reply(message, f"⚠️ {report.error or 'analyse indisponible'}")
+        return
+
+    lines = ["🕵️ Évaluation smart-wallet — confirmation/contexte, JAMAIS un signal de copy-trade."]
+    for card in report.wallets:
+        lines.extend(_format_wallet_score_card(card))
+
+    if report.convergence_pairs:
+        lines.append("\n⚠️ Wallets soumis ensemble partageant une source de financement (suspects même entité) :")
+        lines.extend(f"  {a} <-> {b}" for a, b in report.convergence_pairs)
+
+    if report.synthesis:
+        lines.append(f"\nSynthèse : {report.synthesis}")
+
+    await _reply(message, "\n".join(lines))
+
+
+async def _handle_walletscore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/walletscore <a1> [a2] [a3] — évaluateur "smart wallet" maison (#157), lecture
+    seule : 1 à 3 adresses de WALLET (pas un contrat token, cf. /scan pour ça) ->
+    disqualifiants durs, score composite (PnL/win-rate FIFO, Sortino, récurrence
+    d'entrée précoce multi-lancements, diversification, drawdown), drapeau "suspect
+    positif" séparé, thèse LLM. Toujours une confirmation/contexte, jamais un
+    déclencheur. Gate ``ARIA_WALLET_SCORING_ENABLED``, OFF par défaut."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core.services.smart_money import wallet_scoring_enabled
+
+    if not wallet_scoring_enabled():
+        await _reply(message, "Évaluateur wallet désactivé (ARIA_WALLET_SCORING_ENABLED).")
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    addresses = [p.strip() for p in body.split() if p.strip()]
+    if not addresses or len(addresses) > 3 or not all(_SCAN_ADDR_RE.match(a) for a in addresses):
+        await _reply(
+            message,
+            "Usage : /walletscore <adresse_wallet> [adresse2] [adresse3]\n"
+            "1 à 3 adresses WALLET (pas un contrat token) — attendu : 0x suivi de 40 caractères hexadécimaux.",
+        )
+        return
+
+    await _reply(message, "⏳ Analyse wallet en cours (peut prendre jusqu'à quelques minutes)...")
+    await _run_wallet_score(message, addresses)
+
+
 def _format_judge_verdict(v, lang: str = "fr") -> str:
     """Formatte le verdict du proof engine (juge) pour Telegram.
 
@@ -2436,6 +2563,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))
+    app.add_handler(CommandHandler("walletscore", _handle_walletscore))
     app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))

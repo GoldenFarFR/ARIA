@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -60,6 +60,25 @@ class TokenSecurity:
     is_proxy: bool | None = None
     available: bool = False
     error: str | None = None
+
+
+@dataclass
+class AddressSecurity:
+    """Lecture GoPlus Malicious Address API (AML) -- #157. ``flags`` ne contient
+    QUE les catégories POSITIVEMENT confirmées (True) ; une absence de clé =
+    catégorie non signalée, jamais reconstruite comme False (cohérent avec
+    l'esprit de ``_tri`` : silence ≠ confirmation d'innocence)."""
+
+    address: str
+    flags: dict[str, bool] = field(default_factory=dict)
+    is_malicious: bool = False  # True si AU MOINS UNE catégorie positivement confirmée
+    available: bool = False
+    error: str | None = None
+
+
+# Champs de la réponse `address_security` qui ne sont PAS des catégories de
+# risque (métadonnées) -- exclus du calcul de `is_malicious`.
+_ADDRESS_SECURITY_META_FIELDS = {"contract_address", "data_source", "number_of_malicious_contracts_created"}
 
 
 def _tri(value: object) -> bool | None:
@@ -222,6 +241,48 @@ class GoPlusClient:
             available=True,
             error=None,
         )
+
+
+    # ------------------------------------------------------------------
+    # 2. Adresse malveillante connue (AML) -- #157, couche 1 disqualifiante de
+    # l'évaluateur wallet-centrique. Second endpoint du même fournisseur déjà
+    # intégré ci-dessus (aucune nouvelle dépendance/diligence éditeur).
+    # ------------------------------------------------------------------
+    async def get_address_security(self, address: str, *, chain_id: str = BASE_CHAIN_ID) -> "AddressSecurity":
+        """Interroge GoPlus Malicious Address API (AML). Vérifié en direct sur Base
+        (docs/aria-learning-inbox/2026-07-14-veille-registre-wallets-malveillants-157.md,
+        14/07) : couverture Base et format de réponse confirmés SANS clé
+        d'autorisation -- PAS la densité réelle des données malveillantes (le test
+        en direct portait sur une adresse burn, pas une adresse effectivement
+        flaggée). Traiter comme un filtre probabiliste supplémentaire, jamais
+        présenté comme exhaustif -- même doctrine que le reste du dôme : une
+        indisponibilité ne vaut jamais "non malveillant", elle reste indisponible."""
+        addr = (address or "").strip()
+        if not addr:
+            return AddressSecurity(address=addr, available=False, error="adresse vide")
+
+        data, error = await self._get_json(f"/address_security/{addr}", params={"chain_id": chain_id})
+        if error is not None:
+            return AddressSecurity(address=addr, available=False, error=error)
+        if not isinstance(data, dict):
+            return AddressSecurity(address=addr, available=False, error=UNAVAILABLE)
+
+        if data.get("code") != 1:
+            msg = str(data.get("message") or "").strip()
+            return AddressSecurity(
+                address=addr, available=False, error=f"{UNAVAILABLE} ({msg or 'code GoPlus != 1'})",
+            )
+
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return AddressSecurity(address=addr, available=False, error=UNAVAILABLE)
+
+        flags = {
+            key: True
+            for key, raw in result.items()
+            if key not in _ADDRESS_SECURITY_META_FIELDS and _tri(raw) is True
+        }
+        return AddressSecurity(address=addr, flags=flags, is_malicious=bool(flags), available=True, error=None)
 
 
 goplus_client = GoPlusClient()
