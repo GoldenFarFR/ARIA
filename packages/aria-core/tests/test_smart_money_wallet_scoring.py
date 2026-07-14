@@ -557,6 +557,30 @@ class TestScoreWalletsEndToEnd:
         assert report.synthesis == "synthèse test"
 
     @pytest.mark.asyncio
+    async def test_pool_lookup_errors_surfaced_on_card(self, tmp_path, monkeypatch):
+        # #157, 14/07 : distingue "pool jamais trouvé sur GeckoTerminal" (token
+        # trop obscur/mort) d'un autre problème de valorisation -- jamais un
+        # diagnostic perdu en silence.
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        buy_ts = _dt(0)
+        transfers = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0)],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        # Aucune entrée dans pool_for_token -> resolve_primary_pool échoue pour TOKEN_X.
+        gecko = FakeGeckoTerminalClient()
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.available is True
+        assert card.pool_lookup_errors == 1
+        assert card.unpriced_legs == 1
+
+    @pytest.mark.asyncio
     async def test_cap_reached_logs_explicitly_never_silent(self, tmp_path, monkeypatch, caplog):
         """#157 -- au-delà du plafond, log EXPLICITE, jamais une troncature
         silencieuse. Utilise ``max_tokens`` explicite (#157, 14/07 : override
