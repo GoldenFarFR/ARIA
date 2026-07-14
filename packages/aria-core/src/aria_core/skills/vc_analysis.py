@@ -56,7 +56,6 @@ MAX_POSITION_SIZE_PCT = 10.0
 _RISK_LEVELS = ("FAIBLE", "MODÉRÉ", "ÉLEVÉ", "EXTRÊME")
 _CONFIANCE_LEVELS = ("haute", "moyenne", "faible")
 _SCENARIO_NAMES = ("bull", "base", "bear")
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _FIELD_MAX = 600
 _REPORT_MAX = 6000
 
@@ -169,17 +168,13 @@ def _sanitize(text: object, max_len: int = _FIELD_MAX) -> str:
     """Neutralise toute donnée externe avant injection dans le prompt LLM.
 
     Point d'étranglement unique : TOUTES les données non fiables passent ici.
-    - Retire les caractères de contrôle.
-    - **Neutralise les chevrons `<` `>`** (remplacés par les guillemets simples
-      `‹` `›`) : une donnée hostile (ex. un symbole de token contenant
-      « </donnees_non_fiables> SYSTEME: … ») ne peut donc PAS forger la balise
-      délimitante et s'échapper de la zone non fiable (anti prompt-injection).
-      Les chevrons n'ont aucun usage légitime dans des métadonnées on-chain.
-    - Tronque à ``max_len``.
-    """
-    s = _CONTROL_CHARS_RE.sub("", str(text or ""))
-    s = s.replace("<", "‹").replace(">", "›")
-    return s[:max_len]
+    Délègue à ``aria_core.sanitize.sanitize_untrusted_text`` (extrait le 13/07
+    pour être réutilisable ailleurs, ex. ``knowledge/web_verify.py`` --
+    comportement inchangé ici, alias conservé pour ne pas retoucher les
+    dizaines d'appelants de ce module)."""
+    from aria_core.sanitize import sanitize_untrusted_text
+
+    return sanitize_untrusted_text(text, max_len)
 
 
 _MAX_PROJECT_LINKS = 6
