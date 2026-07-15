@@ -949,6 +949,7 @@ class FakeGeckoTerminalClient:
         # D'INFRASTRUCTURE GeckoTerminal (timeout/429/erreur serveur) plutôt que
         # le verdict de donnée par défaut "aucun pool trouvé pour ce token".
         self._pool_error_for_token = pool_error_for_token or {}
+        self.get_ohlcv_calls: list[tuple[str, dict]] = []  # (pool_address, kwargs reçus) -- #182, 15/07
 
     async def resolve_primary_pool(self, token_address, **kwargs):
         pool_address = self._pool_for_token.get(token_address)
@@ -963,6 +964,7 @@ class FakeGeckoTerminalClient:
         )
 
     async def get_ohlcv(self, pool_address, **kwargs):
+        self.get_ohlcv_calls.append((pool_address, kwargs))  # #182, 15/07 -- correctif de vitesse
         return self._ohlcv.get(pool_address, OHLCVResult(candles=[], available=False, error="indisponible"))
 
 
@@ -2532,3 +2534,37 @@ class TestFormatWalletScoreCardLinesCumulative:
         )
         text = "\n".join(lines)
         assert "Couverture cumulée : 10/806" in text
+
+
+class TestOhlcvSingleTierSpeedFix:
+    """#182, 15/07 -- correctif de vitesse : le wallet-scoring n'utilise
+    price_at() (une seule bougie) et n'a jamais besoin du seuil de 20 bougies
+    pensé pour /vc -- min_useful_candles=1 doit être passé à gecko.get_ohlcv
+    au point d'appel wallet-scoring, économisant jusqu'à 2 appels
+    GeckoTerminal par token jeune/microcap."""
+
+    @pytest.mark.asyncio
+    async def test_wallet_scoring_requests_single_tier_ohlcv(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        buy_ts = _dt(0)
+        sell_ts = _dt(1)
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=sell_ts, amount=5.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: _flat_ohlcv(1.0, start=_dt(-2))},
+        )
+
+        await sm.score_wallets([WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus())
+
+        assert gecko.get_ohlcv_calls, "gecko.get_ohlcv jamais appelé -- test mal posé"
+        pool_address, kwargs = gecko.get_ohlcv_calls[0]
+        assert pool_address == POOL_X
+        assert kwargs.get("min_useful_candles") == 1

@@ -151,3 +151,58 @@ async def test_empty_pool_address():
     res = await client.get_ohlcv("   ")
     assert res.available is False
     assert res.error
+
+
+# ── min_useful_candles (#182, 15/07, correctif de vitesse wallet-scoring) ──
+
+@pytest.mark.asyncio
+async def test_min_useful_candles_one_accepts_first_tier_immediately(monkeypatch):
+    """Le wallet-scoring ne consomme qu'une seule bougie via price_at --
+    min_useful_candles=1 doit accepter le palier journalier dès qu'il a AU
+    MOINS une bougie, sans jamais escalader vers 4H/1H (économie de 2 appels
+    GeckoTerminal par token pour un token jeune/microcap)."""
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    _patch(monkeypatch, {_url("day"): FakeResponse(200, _payload(_rows(1)))})
+
+    res = await client.get_ohlcv(POOL, min_useful_candles=1)
+
+    assert res.available is True
+    assert res.timeframe == "1D"
+    assert len(res.candles) == 1
+
+
+@pytest.mark.asyncio
+async def test_min_useful_candles_default_unchanged_for_existing_callers(monkeypatch):
+    """Aucune régression pour les appelants existants (/vc, ta_levels) qui
+    n'ont jamais passé ce paramètre -- 1 seule bougie journalière doit
+    toujours déclencher l'escalade vers 4H, comme avant ce chantier."""
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    _patch(
+        monkeypatch,
+        {
+            _url("day"): FakeResponse(200, _payload(_rows(1))),
+            _url("hour"): FakeResponse(200, _payload(_rows(30))),
+        },
+    )
+
+    res = await client.get_ohlcv(POOL)  # pas de min_useful_candles -- défaut
+
+    assert res.available is True
+    assert res.timeframe == "4H"  # escalade toujours déclenchée par défaut
+
+
+@pytest.mark.asyncio
+async def test_min_useful_candles_one_still_falls_back_if_first_tier_truly_empty(monkeypatch):
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    _patch(
+        monkeypatch,
+        {
+            _url("day"): FakeResponse(200, _payload([])),
+            _url("hour"): FakeResponse(200, _payload(_rows(1))),
+        },
+    )
+
+    res = await client.get_ohlcv(POOL, min_useful_candles=1)
+
+    assert res.available is True
+    assert res.timeframe == "4H"
