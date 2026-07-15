@@ -305,3 +305,53 @@ réelle confirmée en direct, pas seulement supposée. `min_trade_usd=1.0`
 reste le défaut livré (le seuil exact à retenir en prod, 1$/25$/autre, est
 une décision de tuning séparée, pas tranchée ici). Coût cumulé de cette
 vérification : 4,781 + 3,278 = **8,059 crédits** (0,3% du quota mensuel).
+
+## 10. `get_first_funded_by` — renforcement du signal de financement partagé (15/07, nuit suivante)
+
+Portée exacte : `build_addresses_stats_query`/`get_first_funded_by` dans
+`services/dune.py`, en appui du signal de financement partagé déjà existant
+(`_pairwise_convergence`/funding source, `smart_money.py`) via
+`addresses.stats.first_funded_by` — table déjà testée en direct par
+Research le même soir (cf.
+`docs/aria-learning-inbox/2026-07-15-graphsense-verifie-negatif-dune-labels-pivot.md`
+§2.1). Fonction + requête + tests SEULEMENT, comme les deux requêtes
+précédentes — PAS de branchement dans `smart_money.py` (décision opérateur),
+le chantier Sybil complet (Louvain/K-means) reste séparé et plus lourd.
+
+**Bug réel trouvé en vérification live (avant merge)** : le premier essai de
+`build_addresses_stats_query` émettait les adresses en littéraux entre
+guillemets simples (``address IN ('0x...', '0x...')``), même style que
+`dex.trades.taker` (`varchar`) dans les deux requêtes précédentes. Exécution
+réelle → échec : `address` est **`varbinary`** dans `addresses.stats` (type
+confirmé par `resultMetadata` de l'exécution), et DuneSQL ne caste pas
+implicitement une chaîne vers `varbinary` dans un `IN` (« Cannot find common
+type between varbinary and varchar(42) »). Corrigé en émettant des
+littéraux hexadécimaux nus (``0x...`` sans guillemets, syntaxe varbinary
+native) — reconfirmé en exécution réelle après correctif.
+
+**Vérification live (query 7992959, adresses WETH Base
+`0x4200...0006` + son financeur `0xe8a3ec...9e93`, mêmes adresses que le
+rapport Research pour comparaison directe)** :
+
+| address | first_funded_by | first_funded_at | is_eoa | is_smart_contract |
+|---|---|---|---|---|
+| `0xe8a3ecea7d6a688ee903173024225357ddf29e93` | `0xe8a3ecea7d6a688ee903173024225357ddf29e93` | 2023-06-16 19:54:59 UTC | true | false |
+| `0x4200000000000000000000000000000000000006` | `0xe8a3ecea7d6a688ee903173024225357ddf29e93` | 2023-06-22 18:53:33 UTC | true | false |
+
+Résultat WETH identique à celui déjà rapporté par Research (même
+`first_funded_by`/`first_funded_at`) — confirme la stabilité du signal
+entre les deux sessions. Coût : 1,068 crédit pour 2 adresses (cohérent avec
+le ~0,963 crédit/2 adresses déjà observé par Research — pas de filtre de
+partition disponible sur cette table côté appelant, réserve déjà documentée
+dans le code).
+
+**Réserve reprise du rapport Research, portée telle quelle par
+`FundedByRecord`** : `is_eoa`/`is_smart_contract` peuvent se tromper sur des
+adresses prédéployées spécifiques à Base (WETH ci-dessus est un predeploy
+L2, classé `is_eoa: true` à tort) — ce module ne réinterprète jamais ces
+deux champs, il les renvoie tels quels.
+
+**Verdict** : fonction fiable, schéma et types confirmés en direct (avec un
+vrai bug de type trouvé et corrigé avant merge, pas juste une supposition
+validée). Prête pour une intégration future dans `smart_money.py`, décision
+séparée non prise dans cette tâche.
