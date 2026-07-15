@@ -461,3 +461,156 @@ class TestBuildRecentBasePairsQuery:
     def test_rejects_non_int_lookback_hours(self):
         with pytest.raises(ValueError):
             dune.build_recent_base_pairs_query(min_volume_usd=5000.0, lookback_hours=48.5)
+
+
+WETH_BASE = "0x4200000000000000000000000000000000000006"
+FUNDER = "0xe8a3ecea7d6a688ee903173024225357ddf29e93"
+
+
+class TestBuildAddressesStatsQuery:
+    def test_substitutes_addresses_lowercased(self):
+        checksummed = "0x" + WETH_BASE[2:].upper()  # EIP-55 style casing (le préfixe "0x" reste toujours minuscule)
+        sql = dune.build_addresses_stats_query([checksummed], blockchain="base")
+        assert WETH_BASE in sql
+        assert "blockchain = 'base'" in sql
+
+    def test_addresses_emitted_as_bare_hex_literals_not_quoted(self):
+        """`address` est `varbinary` dans `addresses.stats` (confirmé en
+        exécution réelle) -- un littéral entre guillemets simples y échoue
+        (« Cannot find common type between varbinary and varchar »)."""
+        sql = dune.build_addresses_stats_query([WETH_BASE])
+        assert f"IN ({WETH_BASE})" in sql
+        assert f"'{WETH_BASE}'" not in sql
+
+    def test_multiple_addresses_joined(self):
+        sql = dune.build_addresses_stats_query([WETH_BASE, FUNDER])
+        assert WETH_BASE in sql
+        assert FUNDER in sql
+
+    def test_rejects_empty_list(self):
+        with pytest.raises(ValueError):
+            dune.build_addresses_stats_query([])
+
+    def test_rejects_malformed_address(self):
+        with pytest.raises(ValueError):
+            dune.build_addresses_stats_query(["not-an-address"])
+
+    def test_rejects_short_address(self):
+        with pytest.raises(ValueError):
+            dune.build_addresses_stats_query(["0x1234"])
+
+    def test_rejects_non_string_address(self):
+        with pytest.raises(ValueError):
+            dune.build_addresses_stats_query([12345])
+
+    def test_rejects_invalid_blockchain(self):
+        with pytest.raises(ValueError):
+            dune.build_addresses_stats_query([WETH_BASE], blockchain="base; DROP TABLE x")
+
+
+class TestGetFirstFundedBy:
+    @pytest.mark.asyncio
+    async def test_empty_addresses_no_network_call(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        holder = _patch_client(monkeypatch, [])
+
+        result = await dune.get_first_funded_by([])
+
+        assert result.available is True
+        assert result.records == []
+        assert holder["calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_no_key_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DUNE_API_KEY", raising=False)
+
+        result = await dune.get_first_funded_by([WETH_BASE])
+
+        assert result.available is False
+
+    @pytest.mark.asyncio
+    async def test_happy_path_parses_records(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {
+                                    "address": WETH_BASE,
+                                    "first_funded_by": FUNDER,
+                                    "first_funded_at": "2023-06-22 18:53:33",
+                                    "is_eoa": True,
+                                    "is_smart_contract": False,
+                                }
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_first_funded_by([WETH_BASE], performance="small")
+
+        assert result.available is True
+        assert len(result.records) == 1
+        record = result.records[0]
+        assert record.address == WETH_BASE
+        assert record.first_funded_by == FUNDER
+        assert record.is_eoa is True
+        assert record.is_smart_contract is False
+
+    @pytest.mark.asyncio
+    async def test_malformed_rows_skipped_not_a_crash(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"address": ""},  # adresse vide -> ignorée
+                                {"no_address_field": True},  # champ absent -> ignorée
+                                {"address": WETH_BASE, "first_funded_by": 12345},  # type invalide -> None, pas de crash
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_first_funded_by([WETH_BASE])
+
+        assert result.available is True
+        assert len(result.records) == 1
+        assert result.records[0].first_funded_by is None
+
+    @pytest.mark.asyncio
+    async def test_execution_failure_propagates_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500)])
+
+        result = await dune.get_first_funded_by([WETH_BASE])
+
+        assert result.available is False
+        assert result.error
