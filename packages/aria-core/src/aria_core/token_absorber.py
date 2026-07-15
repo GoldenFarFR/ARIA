@@ -166,14 +166,21 @@ async def absorb(
             liquidity_usd=result.liquidity_usd,
             security_score=result.security_score,
             verdict=result.verdict,
+            top_holder_pct=ctx.top_holder_pct,
         )
         return "skip_incomplete"
 
+    # Même correctif (15/07) : un rejet dur a lui aussi un scan complet en main,
+    # ne pas le laisser indiscernable d'un rejet sans aucun signal.
     await screened_pool.record_rejected(
         contract=contract,
         reason="; ".join(result.reasons),
         symbol=(ctx.best_pair.base_symbol if ctx.best_pair else ""),
         source=source,
+        liquidity_usd=result.liquidity_usd,
+        security_score=result.security_score,
+        verdict=result.verdict,
+        top_holder_pct=ctx.top_holder_pct,
     )
     return "rejected"
 

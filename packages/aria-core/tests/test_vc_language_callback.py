@@ -6,6 +6,7 @@ ignorée en sécurité, retrait des boutons après clic, langue transmise à l'a
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -69,8 +70,11 @@ class FakeContext:
 
 
 def _mock_pipeline(monkeypatch):
-    analyze = AsyncMock(return_value=_result())
-    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", analyze)
+    # Le chemin normal appelle désormais analyze_vc_with_context (15/07, #158-adjacent
+    # fix) pour pouvoir renseigner entry_price/pool_address -- ctx.best_pair=None ici,
+    # ces tests ne portent pas sur le suivi wallet.
+    analyze = AsyncMock(return_value=(_result(), SimpleNamespace(best_pair=None)))
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", analyze)
     monkeypatch.setattr("aria_core.vc_predictions.record_prediction", AsyncMock(return_value=1))
     monkeypatch.setattr("aria_core.vc_predictions.count_predictions_for_contract", AsyncMock(return_value=0))
     monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", AsyncMock(return_value=0))

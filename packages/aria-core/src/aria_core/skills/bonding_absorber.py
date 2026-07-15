@@ -86,7 +86,8 @@ async def absorb_bonding_candidate(
         return "skip_incomplete"
 
     await screened_pool.record_rejected(
-        contract=contract, reason="; ".join(result.reasons), network=BONDING_NETWORK
+        contract=contract, reason="; ".join(result.reasons), network=BONDING_NETWORK,
+        security_score=result.security_score, verdict=result.verdict,
     )
     return "rejected"
 
