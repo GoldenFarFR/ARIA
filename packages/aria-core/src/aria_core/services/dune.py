@@ -284,13 +284,35 @@ async def run_sql_and_wait(
 # à la fenêtre, cohérent puisque tout trade d'un token réellement nouveau (launch_time
 # dans la fenêtre) tombe forcément aussi dans la fenêtre.
 #
+# CORRECTIF #185 (15/07, bug réel trouvé en vérification live via le MCP dune
+# -- cf. docs/dune-integration-plan.md §8.1, query 7992486) : `peak_multiple`
+# ressortait aberrant (~10^22 x) sur plusieurs lignes en tête. Cause identifiée
+# par inspection des valeurs intermédiaires : `launch_price_usd` quasi-nul
+# (ex. 3.6e-14 $) -- `token_peak`/`token_launch_price` calculaient un prix
+# unitaire (`amount_usd / token_bought_amount`) sur CHAQUE trade, y compris un
+# trade de "dust" (montant infinitésimal) qui fait exploser la division sans
+# être un vrai prix de marché. `NULLIF(token_bought_amount, 0)` protège contre
+# la division par zéro EXACT, pas contre un montant proche de zéro.
+# Corrigé en excluant les trades de dust du calcul du prix AVANT le MIN/MAX
+# (`amount_usd >= {min_trade_usd}` dans `token_peak` ET `token_launch_price`
+# -- le bug pouvait toucher n'importe quel côté de la division, pas seulement
+# le prix de lancement) -- PAS un plafond arbitraire sur `peak_multiple` final,
+# qui aurait masqué le symptôme sans corriger la cause (un token dont le VRAI
+# prix de lancement était mal mesuré resterait mal mesuré, juste caché par le
+# plafond au lieu d'être exclu proprement).
+#
 # Paramètres attendus par l'appelant (substitution simple avant l'envoi --
 # CE MODULE NE FAIT AUCUNE VALIDATION/ÉCHAPPEMENT, l'appelant doit s'assurer
-# que `min_multiple`/`lookback_days` sont des valeurs numériques de confiance,
-# jamais une entrée utilisateur non filtrée -- doctrine "lecture seule" ne
-# protège pas contre une injection SQL si ces valeurs viennent d'ailleurs) :
+# que `min_multiple`/`lookback_days`/`min_trade_usd` sont des valeurs
+# numériques de confiance, jamais une entrée utilisateur non filtrée --
+# doctrine "lecture seule" ne protège pas contre une injection SQL si ces
+# valeurs viennent d'ailleurs) :
 # - `min_multiple` (float, ex. 5.0 pour "au moins 5x")
 # - `lookback_days` (int, fenêtre de recherche des lancements de tokens, ex. 30)
+# - `min_trade_usd` (float, défaut 1.0 -- montant USD minimum d'un trade pour
+#   compter dans le calcul du prix ; exclut le dust sans exclure les tokens
+#   eux-mêmes, un token peut toujours apparaître au résultat via ses AUTRES
+#   trades au-dessus du plancher)
 EARLY_BUYER_MULTIPLE_QUERY_TEMPLATE = """
 WITH token_launch AS (
     SELECT
@@ -320,6 +342,7 @@ token_peak AS (
     FROM dex.trades
     WHERE blockchain = 'base'
       AND block_time >= NOW() - INTERVAL '{lookback_days}' day
+      AND amount_usd >= {min_trade_usd}
     GROUP BY token_bought_address
 ),
 token_launch_price AS (
@@ -331,6 +354,7 @@ token_launch_price AS (
         ON t.token_bought_address = tl.token_address
     WHERE t.blockchain = 'base'
       AND t.block_time = tl.launch_time
+      AND t.amount_usd >= {min_trade_usd}
     GROUP BY t.token_bought_address
 )
 SELECT
@@ -354,16 +378,22 @@ ORDER BY peak_multiple DESC
 EXECUTE_SQL_LIMIT_1 = "SELECT * FROM dex.trades WHERE blockchain = 'base' LIMIT 1"
 
 
-def build_early_buyer_multiple_query(*, min_multiple: float, lookback_days: int) -> str:
+def build_early_buyer_multiple_query(
+    *, min_multiple: float, lookback_days: int, min_trade_usd: float = 1.0,
+) -> str:
     """Construit la requête ci-dessus avec les paramètres demandés. Valide
-    que les deux entrées sont bien numériques AVANT toute substitution dans
+    que les trois entrées sont bien numériques AVANT toute substitution dans
     le SQL -- seule protection anti-injection pertinente ici, cette requête
     n'accepte jamais de chaîne de caractères libre."""
     if not isinstance(min_multiple, (int, float)) or min_multiple <= 0:
         raise ValueError("min_multiple doit être un nombre positif")
     if not isinstance(lookback_days, int) or lookback_days <= 0:
         raise ValueError("lookback_days doit être un entier positif")
-    return EARLY_BUYER_MULTIPLE_QUERY_TEMPLATE.format(min_multiple=min_multiple, lookback_days=lookback_days)
+    if not isinstance(min_trade_usd, (int, float)) or min_trade_usd <= 0:
+        raise ValueError("min_trade_usd doit être un nombre positif")
+    return EARLY_BUYER_MULTIPLE_QUERY_TEMPLATE.format(
+        min_multiple=min_multiple, lookback_days=lookback_days, min_trade_usd=min_trade_usd,
+    )
 
 
 # ---------------------------------------------------------------------------

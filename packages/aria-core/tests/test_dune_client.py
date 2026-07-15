@@ -380,6 +380,32 @@ class TestBuildEarlyBuyerMultipleQuery:
         with pytest.raises(ValueError):
             dune.build_early_buyer_multiple_query(min_multiple=5.0, lookback_days=30.5)
 
+    def test_dust_filter_applied_to_both_peak_and_launch_price(self):
+        """#185, 15/07 -- correctif du bug réel trouvé en vérification live
+        (peak_multiple aberrant ~10^22x, causé par une division sur un prix
+        quasi-nul issu d'un trade de dust). Le plancher amount_usd doit
+        s'appliquer aux DEUX côtés de la division (token_peak ET
+        token_launch_price) -- le bug pouvait toucher n'importe quel côté,
+        pas seulement le prix de lancement."""
+        sql = dune.build_early_buyer_multiple_query(min_multiple=5.0, lookback_days=30, min_trade_usd=2.5)
+
+        token_peak_cte = sql.split("token_peak AS (")[1].split("token_launch_price AS (")[0]
+        token_launch_price_cte = sql.split("token_launch_price AS (")[1].split(")\nSELECT")[0]
+        assert "amount_usd >= 2.5" in token_peak_cte
+        assert "amount_usd >= 2.5" in token_launch_price_cte
+
+    def test_min_trade_usd_defaults_to_one(self):
+        sql = dune.build_early_buyer_multiple_query(min_multiple=5.0, lookback_days=30)
+        assert "amount_usd >= 1.0" in sql
+
+    def test_rejects_non_positive_min_trade_usd(self):
+        with pytest.raises(ValueError):
+            dune.build_early_buyer_multiple_query(min_multiple=5.0, lookback_days=30, min_trade_usd=0)
+
+    def test_rejects_non_numeric_min_trade_usd(self):
+        with pytest.raises(ValueError):
+            dune.build_early_buyer_multiple_query(min_multiple=5.0, lookback_days=30, min_trade_usd="1$")
+
 
 class TestBuildRecentBasePairsQuery:
     """Deuxième source de découverte de tokens Base (#134, 15/07) -- même
