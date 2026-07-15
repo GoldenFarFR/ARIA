@@ -47,7 +47,7 @@ fi
 # déploiement (marqueur .claude/last-deployed-ref, SUIVI par git). Au-delà du seuil, on
 # rappelle de déployer manuellement. Throttle : un rappel par nouvel état de main (pas à
 # chaque message). L'écriture .undeployed-lines alimente la barre de statut.
-DEPLOY_THRESHOLD=6000
+DEPLOY_THRESHOLD=4000
 REF_FILE="$ROOT/.claude/last-deployed-ref"
 REMINDED="$ROOT/.claude/.deploy-reminded-ref"
 UNDEPLOYED="$ROOT/.claude/.undeployed-lines"
@@ -73,7 +73,7 @@ if command -v git >/dev/null 2>&1 && [ -f "$REF_FILE" ]; then
       shortref=$(git rev-parse --short=12 "$ref" 2>/dev/null || printf '%s' "$ref")
       cat <<EOF
 🚀 RAPPEL DÉPLOIEMENT VPS — $total lignes accumulées depuis le dernier déploiement ($shortref) ; seuil $DEPLOY_THRESHOLD atteint.
-Affiche à l'opérateur UNE SEULE LIGNE de rappel, style : « 🚀 Déploiement VPS conseillé — quota 6000 lignes atteint ».
+Affiche à l'opérateur UNE SEULE LIGNE de rappel, style : « 🚀 Déploiement VPS conseillé — quota 4000 lignes atteint ».
 Puis CONTINUE normalement (dépasser le seuil ne bloque rien ; ne t'arrête pas, ne colle PAS les commandes sauf s'il les demande).
 Les commandes de déploiement restent disponibles sur demande ("go" / "les commandes").
 Quand il CONFIRME un déploiement : mets .claude/last-deployed-ref = commit déployé (git rev-parse main), puis commit + push (remise à zéro).
