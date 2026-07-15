@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import RedirectResponse
 
 from aria_core.holding import holding_name
-from aria_core.narrative import welcome_site_return
+from aria_core.narrative import welcome_site_access, welcome_site_return
 from app.auth.access_code import create_session, purge_expired, verify_session
 from app.auth.privy_sessions import login_with_privy, lookup_linked_handle
 from app.auth.privy_verify import (
@@ -157,7 +157,7 @@ async def privy_login(body: PrivyTokenRequest):
                     "Première connexion : Privy Dashboard → Authentication → Advanced → "
                     "activer « Return user data in an identity token », puis réessaie."
                 )
-        token, expires = await login_with_privy(
+        token, expires, is_new_member = await login_with_privy(
             privy_did=privy_did,
             twitter_username=member_handle,
             ttl_hours=settings.session_ttl_hours,
@@ -171,7 +171,7 @@ async def privy_login(body: PrivyTokenRequest):
         token=token,
         expires_at=expires.isoformat(),
         twitter_username=member_handle,
-        message=welcome_site_return(),
+        message=welcome_site_access() if is_new_member else welcome_site_return(),
     )
 
 
