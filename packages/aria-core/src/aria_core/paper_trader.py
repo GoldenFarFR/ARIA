@@ -44,6 +44,7 @@ _POS_FIELDS = (
     "target_price", "invalidation_price", "opened_at", "status",
     "exit_price", "closed_at", "pnl_usd", "pnl_pct", "close_reason",
     "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
+    "chain",
 )
 
 _ADDED_COLUMNS = [
@@ -51,6 +52,9 @@ _ADDED_COLUMNS = [
     ("tp_stage_hit", "INTEGER NOT NULL DEFAULT 0"),
     ("initial_qty", "REAL"),
     ("realized_pnl_partial", "REAL NOT NULL DEFAULT 0"),
+    # #194 -- pivot momentum multi-chaînes, chaque position se souvient de sa chaîne
+    # (Base historiquement implicite -- défaut 'base' pour les positions déjà ouvertes)
+    ("chain", "TEXT NOT NULL DEFAULT 'base'"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -104,7 +108,8 @@ async def _ensure_tables() -> None:
                 high_water_price REAL,
                 tp_stage_hit INTEGER NOT NULL DEFAULT 0,
                 initial_qty REAL,
-                realized_pnl_partial REAL NOT NULL DEFAULT 0
+                realized_pnl_partial REAL NOT NULL DEFAULT 0,
+                chain TEXT NOT NULL DEFAULT 'base'
             )
             """
         )
@@ -274,9 +279,12 @@ async def open_position(
     target_price: float | None = None,
     invalidation_price: float | None = None,
     alloc_usd: float | None = None,
+    chain: str = "base",
 ) -> dict | None:
     """Ouvre une position FICTIVE au prix d'entrée réel. Refuse si déjà ouverte, plafond de
     positions atteint, coupe-circuit de risque armé, prix invalide ou cash insuffisant.
+    ``chain`` (#194, pivot momentum multi-chaînes) persiste la chaîne d'origine pour que la
+    gestion ultérieure de la position (prix, re-scan) sache quelle chaîne interroger.
     Retourne la position ou None."""
     await _ensure_tables()
     contract = (contract or "").lower()
@@ -314,11 +322,11 @@ async def open_position(
             """
             INSERT INTO paper_position
               (contract, symbol, cost_usd, entry_price, qty, target_price,
-               invalidation_price, opened_at, status, high_water_price, initial_qty)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+               invalidation_price, opened_at, status, high_water_price, initial_qty, chain)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
             """,
             (contract, symbol or "", alloc, entry_price, qty, target_price, invalidation_price,
-             _now(), entry_price, qty),
+             _now(), entry_price, qty, (chain or "base").lower()),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -496,11 +504,19 @@ def format_summary(summary: dict) -> str:
 
 # ── Défauts prod (réseau/LLM), injectables en test ───────────────────────────────────
 
-async def _default_price_lookup(contract: str) -> float | None:
-    from aria_core.skills.acp_onchain_scan import scan_base_token
+async def _default_price_lookup(contract: str, *, chain: str = "base") -> float | None:
+    """Généralisé multi-chaînes (#194) -- DexScreener directement (déjà multi-chaînes,
+    services/dexscreener.py) plutôt que scan_base_token (spécifique Base, et surtout
+    bien plus lourd : honeypot + TA + mint-authority complets pour juste un prix de
+    suivi). ``chain`` par défaut ``"base"`` -- comportement inchangé pour tout appelant
+    qui ne le précise pas."""
+    from aria_core.services.dexscreener import fetch_token_pairs
 
-    ctx = await scan_base_token(contract)
-    return ctx.best_pair.price_usd if ctx.best_pair else None
+    pairs = await fetch_token_pairs(contract, chain=chain)
+    if not pairs:
+        return None
+    best = max(pairs, key=lambda p: p.liquidity_usd)
+    return best.price_usd if best.price_usd > 0 else None
 
 
 async def _default_analyzer(contract: str) -> dict | None:
@@ -523,6 +539,34 @@ async def _default_analyzer(contract: str) -> dict | None:
     }
 
 
+async def _momentum_candidates_and_chain_map(*, limit: int = 20) -> tuple[list[str], dict[str, str]]:
+    """#194, pivot momentum -- source de candidats par défaut pour CE TEST (remplace
+    ``candidate_ranking.top_candidates()`` UNIQUEMENT comme défaut de ``run_paper_cycle``
+    quand ni ``candidates`` ni ``analyzer`` ne sont fournis par l'appelant -- ``screened_pool``/
+    la poche VC 85% ne sont ni modifiés ni moins utilisés ailleurs, décision opérateur
+    explicite et réversible). Renvoie la liste de contrats (contrat garde sa forme
+    ``list[str]`` historique, inchangée pour le reste de la boucle) + la table
+    contrat→chaîne pour l'analyzer momentum ci-dessous."""
+    from aria_core import momentum_entry
+
+    found = await momentum_entry.discover_momentum_candidates()
+    chain_by_contract = {c["contract"]: c["chain"] for c in found}
+    return [c["contract"] for c in found[:limit]], chain_by_contract
+
+
+def _default_momentum_analyzer(chain_by_contract: dict[str, str]):
+    """Ferme sur la table contrat→chaîne construite au sourcing (#194) -- garde la
+    signature ``analyzer(contract)`` historique inchangée, aucun appelant existant
+    (tests, autres pilotes) n'est affecté."""
+    from aria_core import momentum_entry
+
+    async def analyzer(contract: str) -> dict | None:
+        chain = chain_by_contract.get(contract, "base")
+        return await momentum_entry.evaluate_momentum_entry(contract, chain)
+
+    return analyzer
+
+
 async def run_paper_cycle(
     *,
     candidates=None,
@@ -542,6 +586,10 @@ async def run_paper_cycle(
     """
     await _ensure_tables()
     price_lookup = price_lookup or _default_price_lookup
+    # #194 -- le défaut sait suivre la chaîne persistée d'une position (multi-chaînes) ;
+    # tout price_lookup INJECTÉ (tests, ou le pipeline momentum qui fournit le sien via
+    # une fermeture propre) garde son contrat d'appel historique à un seul argument.
+    using_default_price_lookup = price_lookup is _default_price_lookup
     actions: dict = {"opened": [], "closed": [], "partial": [], "checked": 0}
 
     # 1) Gérer les positions ouvertes : stop suiveur (ne se relâche jamais) puis prise de
@@ -549,7 +597,10 @@ async def run_paper_cycle(
     for p in await get_open_positions():
         actions["checked"] += 1
         try:
-            price = await price_lookup(p["contract"])
+            if using_default_price_lookup:
+                price = await price_lookup(p["contract"], chain=p.get("chain") or "base")
+            else:
+                price = await price_lookup(p["contract"])
         except Exception:  # noqa: BLE001
             price = None
         if not price or price <= 0:
@@ -639,7 +690,16 @@ async def run_paper_cycle(
         return actions
 
     # 2) Ouvrir de nouvelles positions depuis les candidats classés (signal d'achat réel).
-    if candidates is None:
+    # #194 -- pivot momentum multi-chaînes : quand NI candidates NI analyzer ne sont
+    # fournis (le cas réel du heartbeat, run_paper_cycle(notifier=...) sans arguments),
+    # remplace le défaut candidate_ranking.top_candidates()/_default_analyzer (VC-thesis,
+    # poche 85%) par le pipeline momentum pour CE TEST -- décision opérateur explicite,
+    # réversible, screened_pool/safety_screen non touchés. Tout appelant qui fournit
+    # SON PROPRE candidates ou analyzer garde le comportement historique inchangé.
+    if candidates is None and analyzer is None:
+        candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=20)
+        analyzer = _default_momentum_analyzer(_momentum_chain_by_contract)
+    elif candidates is None:
         from aria_core.skills.candidate_ranking import top_candidates
 
         candidates = [c.contract for c in await top_candidates(20)]
@@ -674,7 +734,10 @@ async def run_paper_cycle(
         price = sig.get("price")
         if not price:
             try:
-                price = await price_lookup(contract)
+                if using_default_price_lookup:
+                    price = await price_lookup(contract, chain=sig.get("chain") or "base")
+                else:
+                    price = await price_lookup(contract)
             except Exception:  # noqa: BLE001
                 price = None
         if not price or price <= 0:
@@ -686,6 +749,7 @@ async def run_paper_cycle(
             target_price=sig.get("target"),
             invalidation_price=sig.get("invalidation"),
             alloc_usd=new_entry_alloc_usd,
+            chain=sig.get("chain") or "base",
         )
         if pos:
             opened += 1
