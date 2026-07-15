@@ -101,3 +101,47 @@ esprit que l'overlay macro déjà existant (`btc_cycles.py`). Rien d'urgent, ban
   directement depuis le code aria-core en production (probablement non — MCP
   est un protocole d'outils pour agents, pas pour un service backend ; le client
   REST/SQL classique reste la voie normale pour le code de production).
+
+## 7. Vérification technique demandée le 15/07 — BLOQUÉE, cause identifiée précisément
+
+Avant de construire quoi que ce soit sur `dex.trades` / `tokens.transfers` /
+`prices.usd`, l'opérateur a demandé un vrai test live (pas une supposition sur
+la doc) pour confirmer que ces tables contiennent des données Base récentes et
+fiables. **Le test n'a pas pu être exécuté** — mais la cause est identifiée
+avec précision plutôt que devinée.
+
+**Ce qui a été vérifié** :
+- Le serveur MCP `dune` est bien enregistré dans cette session
+  (`claude mcp list` le confirme, type HTTP, URL `https://api.dune.com/mcp/v1`).
+- Il est marqué **« Needs authentication »** — aucun outil `mcp__dune__*` n'est
+  chargeable via `ToolSearch`, confirmé par deux requêtes différentes (query
+  `"dune"` puis `"dune sql query execute"`), les deux sans résultat.
+- **Cause trouvée dans `~/.claude.json`** : la configuration du serveur MCP
+  `dune` contient bien une entrée `x-dune-api-key`, mais sa valeur est le
+  **texte littéral `"ta_nouvelle_cle"`** — un placeholder, pas une vraie clé.
+  Ce n'est donc pas un problème d'attente de connexion OAuth ni un problème
+  Dune côté serveur : **la clé API n'a jamais été renseignée**, malgré la
+  mention au §1 ci-dessus d'une clé « générée et enregistrée » le 15/07.
+- Recherche exhaustive d'une clé alternative stockée ailleurs (variables
+  d'environnement, fichiers `.env*` sur toute la machine, répertoires
+  `aria-dune-client`) : **aucune vraie clé trouvée nulle part sur cette
+  machine.**
+- Cette session (non-interactive) ne peut pas exécuter le flux
+  d'autorisation OAuth/interactif nécessaire pour corriger une config MCP —
+  seule une session interactive (`/mcp` ou `claude mcp add` avec la vraie
+  clé) peut le faire.
+
+**Action corrective concrète, à faire par l'opérateur (pas par ce VPS)** :
+régénérer/copier la vraie clé API sur `dune.com` (compte `goldenfarfr`,
+palier Free) et remplacer le placeholder `"ta_nouvelle_cle"` par sa valeur
+réelle dans la config du serveur MCP `dune` — après quoi une prochaine
+session VPS pourra exécuter le vrai test (`execute-sql` sur `dex.trades`
+filtré `blockchain = 'base'`, sur une adresse de token Base connue) et
+rapporter un résultat réel plutôt qu'une supposition.
+
+**Contraste utile** : par comparaison, deux services testés dans le radar de
+ce soir (GoPlus Security, Clanker — voir
+`docs/aria-learning-inbox/2026-07-15-radar-goplus-clanker-webacy.md`) ont pu
+être vérifiés par un vrai appel `curl` en direct, sans aucune clé API —
+la fiabilité du process de vérification n'est pas en cause ici, seul le
+Dune MCP est bloqué, et pour une raison précise et corrigible.
