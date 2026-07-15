@@ -2240,8 +2240,19 @@ def format_wallet_score_card_lines(card: WalletScoreCard) -> list[str]:
     scanned = ", ".join(chain_display_label(c) for c in card.chains_scanned) or "aucune"
     lines.append(f"  Chaînes avec activité trouvée : {scanned}")
     lines.append(
-        f"  Tokens analysés : {card.tokens_analyzed}/{card.tokens_found}"
+        f"  Tokens analysés cette passe : {card.tokens_analyzed}/{card.tokens_found}"
         + (f" (plafond de {WEIGHTS.max_tokens_analyzed} atteint)" if card.tokens_skipped_capped else "")
+    )
+    # 15/07, constat opérateur -- la thèse LLM ci-dessous reçoit déjà le cumul
+    # (`_format_card_for_prompt`) et le mentionne dans sa prose ("X/Y couverts au
+    # total"), mais la carte elle-même n'affichait jamais ce cumul -- deux chiffres
+    # différents dans le même message Telegram (ex. "50/806" dans la carte,
+    # "118/806" dans la thèse texte juste en dessous), sans savoir lequel regarder.
+    # Toujours affiché (pas seulement si plafonné) pour que le cumul soit visible
+    # dès le premier passage.
+    lines.append(
+        f"  Couverture cumulée : {card.tokens_scanned_cumulative}/{card.tokens_found}"
+        + (" (complète)" if card.full_coverage else "")
     )
     if card.unpriced_legs or card.pool_lookup_errors:
         lines.append(
