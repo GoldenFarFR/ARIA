@@ -76,13 +76,13 @@ def test_apply_fundamentals_signals_reports_market_cap_and_categories():
 async def test_scan_base_token_fundamentals_disabled_by_default(monkeypatch):
     monkeypatch.setattr(scan, "_fetch_token_pairs", AsyncMock(return_value=[]))
     monkeypatch.setattr(
-        scan.blockscout_client, "check_contract_flags", AsyncMock(return_value=scan.ContractFlags(address=ADDR))
+        type(scan.blockscout_client), "check_contract_flags", AsyncMock(return_value=scan.ContractFlags(address=ADDR))
     )
     monkeypatch.setattr(
-        scan.blockscout_client, "get_token_holders", AsyncMock(return_value=scan.TokenHoldersResult())
+        type(scan.blockscout_client), "get_token_holders", AsyncMock(return_value=scan.TokenHoldersResult())
     )
     fundamentals_mock = AsyncMock()
-    monkeypatch.setattr(scan.coingecko_client, "get_token_fundamentals", fundamentals_mock)
+    monkeypatch.setattr(type(scan.coingecko_client), "get_token_fundamentals", fundamentals_mock)
 
     await scan.scan_base_token(ADDR)
 
@@ -93,13 +93,13 @@ async def test_scan_base_token_fundamentals_disabled_by_default(monkeypatch):
 async def test_scan_base_token_include_fundamentals_wires_coingecko(monkeypatch):
     monkeypatch.setattr(scan, "_fetch_token_pairs", AsyncMock(return_value=[]))
     monkeypatch.setattr(
-        scan.blockscout_client, "check_contract_flags", AsyncMock(return_value=scan.ContractFlags(address=ADDR))
+        type(scan.blockscout_client), "check_contract_flags", AsyncMock(return_value=scan.ContractFlags(address=ADDR))
     )
     monkeypatch.setattr(
-        scan.blockscout_client, "get_token_holders", AsyncMock(return_value=scan.TokenHoldersResult())
+        type(scan.blockscout_client), "get_token_holders", AsyncMock(return_value=scan.TokenHoldersResult())
     )
     monkeypatch.setattr(
-        scan.coingecko_client,
+        type(scan.coingecko_client),
         "get_token_fundamentals",
         AsyncMock(
             return_value=TokenFundamentals(

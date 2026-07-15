@@ -164,7 +164,7 @@ def test_no_pair_branch_still_applies_onchain_flags():
 async def test_scan_base_token_wires_blockscout_calls(monkeypatch):
     monkeypatch.setattr(scan, "_fetch_token_pairs", AsyncMock(return_value=[_pair()]))
     monkeypatch.setattr(
-        scan.blockscout_client,
+        type(scan.blockscout_client),
         "check_contract_flags",
         AsyncMock(
             return_value=ContractFlags(
@@ -173,7 +173,7 @@ async def test_scan_base_token_wires_blockscout_calls(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        scan.blockscout_client,
+        type(scan.blockscout_client),
         "get_token_holders",
         AsyncMock(return_value=TokenHoldersResult(available=True, error=None)),
     )
