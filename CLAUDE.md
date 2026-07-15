@@ -1891,6 +1891,74 @@ portrait de gagnants — biais du survivant écarté) :
 reprendre la recherche sur l'angle suivant. Le seul critère d'arrêt est la
 confirmation opérateur qu'ARIA est prête.
 
+## 🎯 PLAN MAÎTRE — ARIA prête à trader (priorité absolue, décision opérateur
+explicite, 15/07, gravé) : "je veux voir ce compteur des 1 million bouger"
+
+Ceci prime sur tout le reste tant que le compteur n'a pas bougé pour de vrai.
+Ordre exact à suivre, chaque étape déverrouille la suivante :
+
+**1. Construire #194 (en cours, VPS Secondaire)** — nouveau pipeline
+d'entrée momentum/technique (remplace le filtre VC-thesis pour ce test),
+sourcing élargi DexScreener (spec officielle sauvegardée :
+`docs/aria-learning-inbox/2026-07-15-dexscreener-openapi-spec-verifiee.yaml`)
++ `discover_top_pools`, multi-chaînes (Base/Solana/Robinhood/au-delà, GoPlus
+vérifié compatible), honeypot GoPlus seul garde-fou dur, 100% du capital 1M$
+pour ce test. C'est LE bloc central — rien d'autre ne compte tant que ça
+n'est pas fini.
+
+**2. Accélérer la cadence (nouveau, trouvé ce soir en préparant ce plan)** —
+`paper_trade_cycle` tourne aujourd'hui toutes les **180 minutes**
+(`heartbeat.py`), beaucoup trop lent pour "voir le compteur bouger" ou pour
+l'exigence "ARIA doit être là avant tout le monde". Le nouveau pipeline
+#194 est conçu pour être rapide (déterministe d'abord, LLM en confirmation
+seulement) et DexScreener tolère 300 req/min — largement de quoi tourner
+bien plus souvent. **Réduire l'intervalle à 15-20 minutes** pour la durée de
+ce test diagnostique (pas nécessairement permanent — à réévaluer une fois
+le comportement observé). À inclure dans la livraison #194 ou en tâche
+séparée immédiate si #194 est déjà trop avancé pour l'inclure proprement.
+
+**3. Visibilité — DÉJÀ CÂBLÉE, vérifié dans le code ce soir, rien à
+construire** : `paper_trader.run_paper_cycle` notifie déjà Telegram sur
+achat (`format_buy_alert`), vente (`format_sell_alert`), sortie partielle
+(`format_partial_exit_alert`) ET les deux paliers du coupe-circuit #186
+(`format_soft_drawdown_alert`/`format_hard_circuit_breaker_alert`) — câblé
+via `heartbeat.py::_notify_telegram` (confirmé ligne 934). Le panneau public
+cockpit "wallet suivi" (#76) lit déjà `portfolio_summary()` en direct. Une
+fois déployé, l'opérateur verra chaque mouvement sans rien construire de
+plus ici.
+
+**4. #186 (coupe-circuit + sizing) — FAIT, mergé (`cf3eef57`).** Reste actif
+quelle que soit la source de candidats, aucun changement nécessaire.
+
+**5. #187 (surveillance continue + concentration) — EN PAUSE, reprend après
+#194.** Non-bloquant pour voir le compteur bouger une première fois, mais
+important pour la suite (positions déjà ouvertes re-scannées, pas de
+sur-concentration).
+
+**6. DÉPLOIEMENT — LE VRAI GOULOT FINAL, rien de tout ça ne compte tant que
+ce n'est pas sur le VPS.** ~5900 lignes accumulées non déployées à ce stade
+(sourcing #105-109/#136-138, suivi wallet permanent, fix `/whoami`, vitesse
+OHLCV #182, `risk_guard` #186, Dune `first_funded_by`, bientôt #194) — tout
+ça peut être parfaitement construit et testé, ça ne fait RIEN bouger tant
+que `deploy.sh` n'a pas tourné sur le VPS. **Dès que #194 est mergé et
+vert : demander le "go" opérateur pour un déploiement groupé complet**,
+pas d'attente inutile après.
+
+**7. #193 (diagnostic live sur tokens réels) — en cours, Principal.** Sert
+à vérifier concrètement ce qui passait/échouait avant #194 — alimente le
+calibrage des seuils si besoin une fois les résultats reçus.
+
+**Hors de ce plan, volontairement** : le bonding (différé, "on verra plus
+tard"), tout capital réel (le pacte reste : validation humaine obligatoire
+dès que ça touche du réel, ce plan ne concerne QUE le paper 1M$ "sans
+approbation humaine, test pur"), #189/#191/#192 (recherche continue,
+utile mais pas bloquante pour voir le compteur bouger une première fois).
+
+**Prochaine action concrète, dans l'ordre** : attendre le rapport #194 de
+Secondaire → relire/merger/tester → ajouter la réduction de cadence si pas
+déjà incluse → demander le "go" déploiement → vérifier sur Telegram/cockpit
+que le compteur bouge réellement → seulement ensuite reprendre #187.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
