@@ -53,6 +53,14 @@ _ADDED_COLUMNS = [
     ("realized_pnl_partial", "REAL NOT NULL DEFAULT 0"),
 ]
 
+# Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
+# `_ADDED_COLUMNS` ci-dessus. Plus haut d'équité jamais atteint, utilisé par
+# risk_guard.py pour le coupe-circuit de drawdown (jamais NULL après le premier
+# appel de `get_equity_high_water_mark` -- initialisé au capital de départ).
+_STATE_ADDED_COLUMNS = [
+    ("equity_high_water_mark", "REAL"),
+]
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -118,6 +126,13 @@ async def _ensure_tables() -> None:
             )
             """
         )
+        state_existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(paper_state)")).fetchall()
+        }
+        for name, ddl in _STATE_ADDED_COLUMNS:
+            if name not in state_existing:
+                await db.execute(f"ALTER TABLE paper_state ADD COLUMN {name} {ddl}")
         await db.execute(
             "INSERT OR IGNORE INTO paper_state (id, starting_capital, created_at) VALUES (1, ?, ?)",
             (STARTING_CAPITAL_USD, _now()),
@@ -143,8 +158,30 @@ async def reset_portfolio(starting: float = STARTING_CAPITAL_USD, *, created_at:
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE paper_state SET starting_capital = ?, created_at = ? WHERE id = 1",
-            (starting, created_at or _now()),
+            "UPDATE paper_state SET starting_capital = ?, created_at = ?, equity_high_water_mark = ? WHERE id = 1",
+            (starting, created_at or _now(), starting),
+        )
+        await db.commit()
+
+
+async def get_equity_high_water_mark() -> float:
+    """Plus haut d'équité jamais atteint (#186, coupe-circuit de drawdown). Initialisé
+    au capital de départ tant qu'aucune équité supérieure n'a encore été observée --
+    jamais NULL après cet appel (les DB migrées ont la colonne mais pas la valeur)."""
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT equity_high_water_mark FROM paper_state WHERE id = 1") as cur:
+            row = await cur.fetchone()
+    if row and row[0] is not None:
+        return float(row[0])
+    return await starting_capital()
+
+
+async def set_equity_high_water_mark(value: float) -> None:
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE paper_state SET equity_high_water_mark = ? WHERE id = 1", (value,),
         )
         await db.commit()
 
@@ -165,7 +202,11 @@ async def get_closed_positions(limit: int = 500) -> list[dict]:
     cols = ", ".join(_POS_FIELDS)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            f"SELECT {cols} FROM paper_position WHERE status = 'closed' ORDER BY closed_at DESC LIMIT ?",
+            # `id DESC` en tie-break (#186) : `closed_at` (résolution microseconde) peut
+            # coïncider entre deux clôtures rapprochées dans un même tick/test -- l'ordre
+            # d'insertion reste le signal fiable de récence dans ce cas, notamment pour le
+            # comptage de pertes consécutives de risk_guard.evaluate_portfolio_risk.
+            f"SELECT {cols} FROM paper_position WHERE status = 'closed' ORDER BY closed_at DESC, id DESC LIMIT ?",
             (limit,),
         ) as cur:
             rows = await cur.fetchall()
@@ -235,7 +276,8 @@ async def open_position(
     alloc_usd: float | None = None,
 ) -> dict | None:
     """Ouvre une position FICTIVE au prix d'entrée réel. Refuse si déjà ouverte, plafond de
-    positions atteint, prix invalide ou cash insuffisant. Retourne la position ou None."""
+    positions atteint, coupe-circuit de risque armé, prix invalide ou cash insuffisant.
+    Retourne la position ou None."""
     await _ensure_tables()
     contract = (contract or "").lower()
     if not contract or not entry_price or entry_price <= 0:
@@ -245,9 +287,23 @@ async def open_position(
     if len(await get_open_positions()) >= MAX_POSITIONS:
         return None
 
+    # #186 -- chokepoint de sécurité en profondeur : vérifié ICI (pas seulement dans
+    # run_paper_cycle) pour couvrir TOUT appelant présent ou futur (ex. commande manuelle,
+    # futur pilote de capital réel réutilisant cette même fonction), pas seulement le cycle
+    # heartbeat actuel.
+    from aria_core import risk_guard
+
+    blocked, reason = risk_guard.blocks_new_entries()
+    if blocked:
+        logger.info("open_position: refusé par risk_guard (%s)", reason)
+        return None
+
     start = await starting_capital()
     cash = await cash_available()
     alloc = alloc_usd if alloc_usd is not None else ALLOC_PCT * start
+    # #186 -- plafond de risque : ne réduit jamais alloc au-delà de sa valeur d'entrée,
+    # jamais un bonus. Sans invalidation_price connue, inchangé (stop suiveur seul garde-fou).
+    alloc = risk_guard.size_position_by_risk(alloc, entry_price, invalidation_price, start)
     alloc = min(alloc, cash)
     if alloc <= 0:
         return None
@@ -558,6 +614,30 @@ async def run_paper_cycle(
                     except Exception:  # noqa: BLE001
                         pass
 
+    # 1bis) Photo du risque portefeuille (#186) -- une seule fois par cycle, APRÈS la gestion
+    # des positions déjà ouvertes (qui doit continuer normalement même coupe-circuit armé) et
+    # AVANT toute tentative d'ouverture. Met à jour le plus haut d'équité persisté, arme le
+    # coupe-circuit dédié si un palier dur est franchi pour la première fois.
+    from aria_core import risk_guard
+
+    risk_state = await risk_guard.evaluate_portfolio_risk(price_lookup=price_lookup)
+    actions["risk_state"] = risk_state
+    if risk_state.newly_triggered_hard and notifier:
+        try:
+            await notifier(risk_guard.format_hard_circuit_breaker_alert(risk_state))
+        except Exception:  # noqa: BLE001 — l'alerte ne casse pas le cycle
+            pass
+    elif risk_state.newly_triggered_soft and notifier:
+        try:
+            await notifier(risk_guard.format_soft_drawdown_alert(risk_state))
+        except Exception:  # noqa: BLE001
+            pass
+
+    if risk_state.blocked:
+        # Palier dur (ou pause globale) : aucune NOUVELLE entrée ce tour -- les positions
+        # déjà ouvertes ont déjà été gérées normalement ci-dessus (étape 1).
+        return actions
+
     # 2) Ouvrir de nouvelles positions depuis les candidats classés (signal d'achat réel).
     if candidates is None:
         from aria_core.skills.candidate_ranking import top_candidates
@@ -568,6 +648,11 @@ async def run_paper_cycle(
     # sur stop suiveur/dernier palier exige un nouveau signal au tour suivant, pas un rachat
     # immédiat).
     closed_this_cycle = {c["contract"] for c in actions["closed"]}
+    start = await starting_capital()
+    # #186 -- palier souple : réduit de moitié l'allocation des NOUVELLES entrées (jamais
+    # les positions déjà ouvertes). Passé explicitement à open_position, qui applique ENSUITE
+    # son propre plafond de risque par trade (défense en profondeur, cf. size_position_by_risk).
+    new_entry_alloc_usd = risk_state.alloc_multiplier * ALLOC_PCT * start
 
     opened = 0
     for contract in candidates:
@@ -600,6 +685,7 @@ async def run_paper_cycle(
             price,
             target_price=sig.get("target"),
             invalidation_price=sig.get("invalidation"),
+            alloc_usd=new_entry_alloc_usd,
         )
         if pos:
             opened += 1
