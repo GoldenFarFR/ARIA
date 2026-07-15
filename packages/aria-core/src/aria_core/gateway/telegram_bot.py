@@ -1630,20 +1630,40 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def _register_bot_commands() -> None:
-    """Enregistre le menu / visible dans Telegram (bouton Menu du bot)."""
+    """Enregistre le menu / visible dans Telegram (bouton Menu du bot).
+
+    15/07 -- revenu sur la réduction du 09/07 (constat opérateur : le menu minimal
+    ne reflétait jamais les nouvelles commandes construites au fil des sessions,
+    ex. /walletqueue absent alors que déjà utilisé). Le menu liste maintenant
+    TOUTES les commandes enregistrées (cf. `add_handler(CommandHandler(...))`
+    plus bas) -- une seule source de vérité, plus de liste séparée à tenir à
+    jour à la main à chaque nouvelle commande."""
     if not _bot_app:
         return
     from telegram import BotCommand
 
-    # Menu "/" volontairement minimal (choix opérateur) : l'opérateur passe par la
-    # conversation naturelle, jamais les slash-commandes. On n'expose donc dans le menu
-    # QUE le kill-switch de sécurité (pause/reprise des actions sortantes). Toutes les
-    # autres commandes (vc, scan, track, watchlist, cycles, status, langue, vcresult,
-    # issue, thesis, theses, github, start, test_spend) restent ENREGISTRÉES et
-    # fonctionnelles si on les tape — elles n'encombrent simplement plus le menu.
     commands = [
         BotCommand("stop", "⏸ Pause immédiate des actions sortantes (kill-switch)"),
         BotCommand("resume", "▶️ Reprendre les actions sortantes"),
+        BotCommand("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
+        BotCommand("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
+        BotCommand("vc", "Analyse VC complète d'un contrat"),
+        BotCommand("scan", "Scan rapide de risque on-chain d'un contrat"),
+        BotCommand("status", "État système (santé, capacités actives)"),
+        BotCommand("watchlist", "Top candidats du pool screené"),
+        BotCommand("track", "Pertinence du track-record (hit-rate, calibration)"),
+        BotCommand("feuvert", "Scorecard avant argent réel (8 cases)"),
+        BotCommand("sentiment", "Dernière lecture de sentiment marché"),
+        BotCommand("cycles", "Les 3 derniers cycles Bitcoin (macro)"),
+        BotCommand("these", "Journalise une thèse (BUY/WATCH/SELL/AVOID)"),
+        BotCommand("theses", "Liste des thèses encore ouvertes"),
+        BotCommand("issue", "Clôture une thèse avec son résultat"),
+        BotCommand("vcresult", "Attribue un résultat réel à une prédiction VC"),
+        BotCommand("langue", "Langue des analyses (fr/en)"),
+        BotCommand("github", "Réparer/éditer une réponse showcase PR"),
+        BotCommand("canal", "Contrôle du canal ARIA → Claude Code"),
+        BotCommand("test_spend", "Test wallet_guard (aucune dépense réelle)"),
+        BotCommand("start", "Message de bienvenue / lever la pause"),
     ]
     await _bot_app.bot.set_my_commands(commands)
     logger.info("Telegram command menu registered (%d commands)", len(commands))
