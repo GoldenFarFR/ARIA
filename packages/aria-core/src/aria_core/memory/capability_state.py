@@ -19,6 +19,7 @@ import os
 _CAPABILITY_GATES: tuple[tuple[str, str], ...] = (
     ("ARIA_WEB_FETCH_ENABLED", "Lecture directe d'une page web depuis une URL (admin-only)"),
     ("ARIA_WALLET_SCORING_ENABLED", "Scoring smart-wallet maison (/walletscore, admin-only)"),
+    ("ARIA_WALLET_SCAN_QUEUE_ENABLED", "File d'attente de scan wallet en arrière-plan (/walletqueue)"),
     ("ARIA_VISION_ENABLED", "Lecture d'image envoyée en chat (admin-only)"),
     ("ARIA_SEPOLIA_WALLET_ENABLED", "Rehearsal Sepolia — wallet testnet"),
     ("ARIA_SEPOLIA_AUTONOMOUS_ENABLED", "Rehearsal Sepolia — décision+exécution autonome (testnet)"),

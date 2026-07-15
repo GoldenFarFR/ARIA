@@ -30,6 +30,15 @@ from aria_core.identity import (
 from aria_core import outgoing_pause
 from aria_core.integrations.host_hooks import check_rate_limit
 from aria_core.runtime import settings
+# Formatage de carte/rapport wallet (#157 suite, 15/07) -- factorisé dans
+# smart_money.py pour que le cycle de fond `wallet_scan_queue.py` réutilise
+# EXACTEMENT le même texte que `/walletscore`, jamais un second formatage
+# divergent. Réexporté sous l'ancien nom privé pour ne pas casser les tests
+# existants qui l'importent depuis ce module.
+from aria_core.services.smart_money import (
+    chain_display_label as _chain_display_label,
+    format_wallet_scoring_report as _format_wallet_scoring_report,
+)
 
 if TYPE_CHECKING:
     from telegram import Update
@@ -1758,70 +1767,6 @@ async def _run_wallet_score(message, addresses: list[str]) -> None:
         _wallet_score_semaphore.release()
 
 
-# Libellés spéciaux (14/07) -- uniquement pour les noms de chaîne où une simple
-# capitalisation donne un résultat trompeur/moche (ex. "zksync" -> "Zksync" au
-# lieu de "zkSync Era"). Tout le reste dérive de blockscout.CHAIN_IDS.keys()
-# via .capitalize() -- jamais une 2e liste statique des 13 noms à tenir à jour.
-_CHAIN_LABEL_OVERRIDES = {"zksync": "zkSync Era"}
-
-
-def _chain_display_label(chain: str) -> str:
-    return _CHAIN_LABEL_OVERRIDES.get(chain, chain.capitalize())
-
-
-def _format_wallet_score_card(card) -> list[str]:
-    from aria_core.services.wallet_scoring_weights import WEIGHTS
-
-    lines = [f"\n— {card.address}" + (f" ({card.display_name})" if card.display_name else "")]
-    if not card.available:
-        lines.append(f"  Indisponible : {card.error}")
-        return lines
-    if card.disqualified:
-        lines.append("  🔴 DISQUALIFIÉ : " + "; ".join(card.disqualification_reasons))
-    if card.financing_check_note:
-        lines.append(f"  ⚠️ {card.financing_check_note}")
-    # Transparence multi-chaînes (#157, 14/07) : jamais laisser penser qu'ARIA
-    # a "tout" vu par défaut -- montre explicitement où une activité a été trouvée.
-    # Étiquettes dérivées de blockscout.CHAIN_IDS (jamais un 3e registre de noms
-    # de chaîne codé en dur à part -- correction 14/07 : ce dict était resté
-    # bloqué à 2 entrées après l'extension de CHAIN_IDS à 13 chaînes, montrant
-    # le slug brut "arbitrum"/"zksync"/etc. au lieu d'un libellé lisible).
-    scanned = ", ".join(_chain_display_label(c) for c in card.chains_scanned) or "aucune"
-    lines.append(f"  Chaînes avec activité trouvée : {scanned}")
-    lines.append(
-        f"  Tokens analysés : {card.tokens_analyzed}/{card.tokens_found}"
-        + (f" (plafond de {WEIGHTS.max_tokens_analyzed} atteint)" if card.tokens_skipped_capped else "")
-    )
-    if card.unpriced_legs or card.pool_lookup_errors:
-        # Diagnostic (#157, 14/07) : distingue "pool jamais trouvé sur GeckoTerminal"
-        # (token trop obscur/mort, pas un bug) d'un autre problème de valorisation --
-        # jamais deviner en silence pourquoi la valorisation est vide.
-        lines.append(
-            f"  Diagnostic prix : {card.unpriced_legs} jambe(s) sans prix, "
-            f"{card.pool_lookup_errors} token(s) sans pool GeckoTerminal résolu"
-            + (
-                f" (dont {card.gecko_dexscreener_gap_count} vu(s) par DexScreener -- écart entre sources)"
-                if card.gecko_dexscreener_gap_count
-                else ""
-            )
-        )
-    lines.append(f"  Win rate : {card.win_rate:.0%}" if card.win_rate is not None else "  Win rate : indisponible")
-    lines.append(
-        f"  PnL réalisé : ${card.realized_pnl_usd:,.2f}"
-        if card.realized_pnl_usd is not None
-        else "  PnL réalisé : indisponible"
-    )
-    lines.append(
-        f"  Sortino : {card.sortino:.2f}" if card.sortino is not None else "  Sortino : indisponible"
-    )
-    lines.append(f"  Récurrence entrée précoce (multi-lancements) : {card.early_entry_recurrence_count} token(s)")
-    if card.suspect_positive:
-        lines.append("  🟢 Suspect positif (exceptionnel sur plusieurs axes à la fois) — à surveiller de près.")
-    if card.thesis:
-        lines.append(f"  Thèse : {card.thesis}")
-    return lines
-
-
 async def _wallet_score_analyze_and_reply(message, addresses: list[str]) -> None:
     from aria_core.services.geckoterminal import geckoterminal_client
     from aria_core.services.goplus import goplus_client
@@ -1836,18 +1781,7 @@ async def _wallet_score_analyze_and_reply(message, addresses: list[str]) -> None
         await _reply(message, f"⚠️ {report.error or 'analyse indisponible'}")
         return
 
-    lines = ["🕵️ Évaluation smart-wallet — confirmation/contexte, JAMAIS un signal de copy-trade."]
-    for card in report.wallets:
-        lines.extend(_format_wallet_score_card(card))
-
-    if report.convergence_pairs:
-        lines.append("\n⚠️ Wallets soumis ensemble partageant une source de financement (suspects même entité) :")
-        lines.extend(f"  {a} <-> {b}" for a, b in report.convergence_pairs)
-
-    if report.synthesis:
-        lines.append(f"\nSynthèse : {report.synthesis}")
-
-    await _reply(message, "\n".join(lines))
+    await _reply(message, _format_wallet_scoring_report(report))
 
 
 async def _handle_walletscore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1885,6 +1819,60 @@ async def _handle_walletscore(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await _reply(message, "⏳ Analyse wallet en cours (peut prendre jusqu'à quelques minutes)...")
     await _run_wallet_score(message, addresses)
+
+
+async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/walletqueue <a1> [a2] ...] — injecte un ou plusieurs wallets dans la file
+    d'attente de scan EN ARRIÈRE-PLAN (#157 suite, 15/07) : contrairement à
+    `/walletscore` (un seul passage, réponse immédiate), chaque wallet en file
+    avance de plusieurs tokens à chaque passage du heartbeat
+    (`wallet_scan_queue_cycle`) sans action supplémentaire de l'opérateur --
+    ARIA notifie la progression tous les `PROGRESS_NOTIFY_STEP` (50) tokens
+    couverts, puis le rapport final complet dès la couverture complète (le
+    wallet quitte alors la file). Double gate : ``ARIA_WALLET_SCORING_ENABLED``
+    (le moteur lui-même) ET ``ARIA_WALLET_SCAN_QUEUE_ENABLED`` (le cycle de
+    fond) — OFF par défaut tous les deux."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core.services.smart_money import wallet_scoring_enabled
+    from aria_core.services.wallet_scan_queue import enqueue_wallets, queue_size, wallet_scan_queue_enabled
+
+    if not wallet_scoring_enabled():
+        await _reply(message, "Évaluateur wallet désactivé (ARIA_WALLET_SCORING_ENABLED).")
+        return
+    if not wallet_scan_queue_enabled():
+        await _reply(message, "File d'attente en arrière-plan désactivée (ARIA_WALLET_SCAN_QUEUE_ENABLED).")
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    addresses = [p.strip() for p in body.split() if p.strip()]
+    if not addresses or not all(_SCAN_ADDR_RE.match(a) for a in addresses):
+        await _reply(
+            message,
+            "Usage : /walletqueue <adresse_wallet> [adresse2] [adresse3] ...\n"
+            "Ajoute à la file d'attente de fond — attendu : 0x suivi de 40 caractères hexadécimaux.",
+        )
+        return
+
+    added = await enqueue_wallets(addresses)
+    total = await queue_size()
+    skipped = len(addresses) - len(added)
+    lines = [f"✅ {len(added)} wallet(s) ajouté(s) à la file d'attente en arrière-plan."]
+    if skipped:
+        lines.append(f"({skipped} déjà en file, ignoré(s))")
+    lines.append(
+        f"File d'attente : {total} wallet(s) au total. Tu seras notifié tous les 50 tokens "
+        "couverts, puis dès la couverture complète."
+    )
+    await _reply(message, "\n".join(lines))
 
 
 def _format_judge_verdict(v, lang: str = "fr") -> str:
@@ -2605,6 +2593,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))
     app.add_handler(CommandHandler("walletscore", _handle_walletscore))
+    app.add_handler(CommandHandler("walletqueue", _handle_walletqueue))
     app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))
