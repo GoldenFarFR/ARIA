@@ -944,6 +944,47 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   de rebuild, une variable d'environnement lue à l'appel, pas au chargement du module) —
   bloqué par le même manque d'accès VPS que ci-dessus. Coût : un appel LLM vision par
   image envoyée, mais admin-only donc maîtrisé.
+- **15/07 — #157 suite : scan `/walletscore` incrémental + formule composite de
+  classement, EN LIGNE (codé, testé, poussé sur main, PAS déployé).** Trois commits :
+  `128556d` (scan persistant), `0125c74` (formule composite). Le plafond
+  `WEIGHTS.max_tokens_analyzed` ne pouvait jamais couvrir un wallet très actif (680
+  tokens) en un seul appel — nouveau module `wallet_scan_state.py` persiste par wallet
+  quels tokens ont déjà été analysés (+ leurs trades archivés) et la date du dernier
+  scan ; chaque appel `score_wallets()` traite le prochain lot de tokens jamais vus ou
+  dont l'activité a évolué, jusqu'à couverture complète, puis ne rafraîchit que
+  l'activité nouvelle. Le score (win rate/PnL/Sortino/drawdown/diversification) se base
+  sur TOUS les trades archivés, pas seulement le dernier lot. Décisions opérateur
+  explicites ajoutées : échantillon minimum avant classement fiable (≥90j d'ancienneté
+  ET ≥100 swaps, `sample_size_sufficient`) ; robustesse anti-chance (retire les 10
+  meilleurs ET 10 pires trades, vérifie si le reste est positif, `robust_pnl_positive`,
+  indisponible sous 30 trades clôturés) ; courbe de santé dans le temps (compare 2e
+  moitié chronologique à la 1ère, `health_trend` amélioration/stable/dégradation,
+  indisponible sous 10 trades) ; classement comparatif (percentile de chaque wallet
+  parmi tous les AUTRES déjà notés dans `wallet_score_log`, jamais lui-même — composite
+  = moyenne de win rate/Sortino/PnL/diversification UNIQUEMENT, la durée de détention
+  reste un percentile contextuel séparé car ce n'est pas un axe "meilleur si plus haut"
+  sans ambiguïté). Recherche externe faite avant de coder (arxiv zScore wallet
+  reputation scoring : sous-catégories plafonnées, aucun trait ne domine — méthode
+  reprise ici). 27 nouveaux tests, suite complète verte (4900 passed). **Rien déployé.**
+- **15/07 — limite méthodologique réelle trouvée (question posée via Gemini, relayée
+  par l'opérateur) : le cost-basis d'un token reçu par simple virement (pas un swap)
+  n'est PAS mis à zéro, contrairement à ce qu'on pourrait attendre.** Vérifié dans
+  `_hash_based_price`/`_analyze_wallet_multi_token` : un "achat" = N'IMPORTE QUEL
+  transfert entrant (swap, virement, airdrop — aucune distinction à ce stade). Le prix
+  d'entrée est résolu ainsi : (1) ratio exact stablecoin/token si la MÊME transaction a
+  une jambe stable touchant le wallet (vrai swap) ; (2) SINON, repli sur le **prix de
+  marché (OHLCV)** au moment du transfert — traite un virement gratuit comme s'il avait
+  été acheté au prix du marché, jamais comme un coût nul. Impact réel : un token reçu
+  gratuitement (airdrop) puis revendu **sous-estime** le vrai gain du wallet (on
+  soustrait un "prix payé" qui n'a jamais existé). Ce repli reste correct pour le cas le
+  plus fréquent (swap token-à-token sans jambe stable dans la tx), donc pas à supprimer
+  — juste incomplet pour le cas virement pur. **Piste de correction identifiée, PAS
+  encore construite** : la transaction complète est déjà récupérée par
+  `_hash_based_price` — si elle ne contient QUE le transfert entrant seul (aucune autre
+  jambe, pas juste "pas de stablecoin"), c'est un signal fort d'un `transfer()` simple
+  plutôt qu'un swap → le prix d'entrée pourrait alors être fixé à 0$ au lieu du prix de
+  marché. Faisable sans appel réseau supplémentaire (la donnée est déjà là). Décision
+  opérateur à prendre avant de construire.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
