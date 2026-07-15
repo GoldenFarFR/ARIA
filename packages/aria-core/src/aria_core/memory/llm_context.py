@@ -182,9 +182,23 @@ async def build_llm_context(
         if directives:
             parts.append("\n# Directives opérateur (priorité haute)")
             parts.append(directives)
+        journal_summary = get_journal_summary()
+        if arbitration.conflicts:
+            from aria_core.memory.arbitrator import suppressed_journal_preview
+
+            # Même filtre que le rappel vectoriel ci-dessus (suppressed_vector), mais pour
+            # la couche "journal" -- trouvé écrit (suppressed_journal_preview) mais jamais
+            # appliqué ici (balayage code mort du 15/07) : sans ce filtre, un extrait de
+            # journal que l'arbitrage a explicitement supprimé pour conflit restait quand
+            # même injecté dans le contexte LLM via get_journal_summary(), non filtré.
+            suppressed_journal = suppressed_journal_preview(arbitration)
+            if suppressed_journal and journal_summary:
+                entries = journal_summary.split("\n---\n")
+                entries = [e for e in entries if not any(p in e for p in suppressed_journal)]
+                journal_summary = "\n---\n".join(entries) if entries else "Aucune mémoire enregistrée pour l'instant."
         parts.extend([
             "\n# Journal récent (mémoire épisodique)",
-            get_journal_summary(),
+            journal_summary,
         ])
         try:
             from aria_core.knowledge.cognitive import get_approved
