@@ -1350,18 +1350,58 @@ class TestComparativeRanking:
         assert card.percentile_win_rate is None
         assert card.percentile_pnl is None
 
+    @staticmethod
+    def _mk_hash_priced_transfers(wallet: str) -> TokenTransfersResult:
+        # 15/07, suite du correctif #175 (comparabilité percentile) : jambes
+        # hash-exactes (tx_hash + jambe stablecoin) pour que ce wallet soit
+        # `price_confidence_low=False` et reste éligible à la population de
+        # comparaison -- sinon le nouveau filtre l'exclurait silencieusement
+        # et le test ne mesurerait plus le mécanisme de percentile qu'il vise.
+        return TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=wallet, token=TOKEN_X, ts=_dt(0), amount=10.0, tx_hash="0xbuy"),
+                _transfer(from_addr=wallet, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+
+    @staticmethod
+    def _hash_priced_tx_transfers(wallet: str, *, sell_price: float) -> dict:
+        return {
+            "0xbuy": TokenTransfersResult(
+                transfers=[
+                    _transfer(from_addr=FUNDER, to_addr=wallet, token=TOKEN_X, ts=_dt(0), amount=10.0, tx_hash="0xbuy"),
+                    _transfer(from_addr=wallet, to_addr=FUNDER, token=_STABLE, ts=_dt(0), amount=10.0, tx_hash="0xbuy"),
+                ],
+                available=True,
+            ),
+            "0xsell": TokenTransfersResult(
+                transfers=[
+                    _transfer(from_addr=wallet, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0, tx_hash="0xsell"),
+                    _transfer(from_addr=FUNDER, to_addr=wallet, token=_STABLE, ts=_dt(2), amount=10.0 * sell_price, tx_hash="0xsell"),
+                ],
+                available=True,
+            ),
+        }
+
     @pytest.mark.asyncio
     async def test_winning_wallet_ranks_above_a_previously_scored_loser(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
 
-        loser_client = FakeBlockscoutClient(transfers={WALLET_A: self._mk_transfers(WALLET_A)})
+        loser_client = FakeBlockscoutClient(
+            transfers={WALLET_A: self._mk_hash_priced_transfers(WALLET_A)},
+            tx_token_transfers=self._hash_priced_tx_transfers(WALLET_A, sell_price=0.5),
+        )
         loser_gecko = FakeGeckoTerminalClient(
             pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
             ohlcv={POOL_X: OHLCVResult(candles=self._candles(0.5), available=True)},  # buy 1.0 -> sell 0.5 : perte
         )
         await sm.score_wallets([WALLET_A], client=loser_client, gecko=loser_gecko, llm=_fake_llm, goplus=_clean_goplus())
 
-        winner_client = FakeBlockscoutClient(transfers={WALLET_B: self._mk_transfers(WALLET_B)})
+        winner_client = FakeBlockscoutClient(
+            transfers={WALLET_B: self._mk_hash_priced_transfers(WALLET_B)},
+            tx_token_transfers=self._hash_priced_tx_transfers(WALLET_B, sell_price=2.0),
+        )
         winner_gecko = FakeGeckoTerminalClient(
             pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
             ohlcv={POOL_X: OHLCVResult(candles=self._candles(2.0), available=True)},  # buy 1.0 -> sell 2.0 : gain
@@ -1370,6 +1410,7 @@ class TestComparativeRanking:
             [WALLET_B], client=winner_client, gecko=winner_gecko, llm=_fake_llm, goplus=_clean_goplus(),
         )
         card_b = report_b.wallets[0]
+        assert card_b.price_confidence_low is False  # confirme la prémisse (hash-exact, pas exclu)
 
         assert card_b.compared_against_n_wallets == 1
         assert card_b.percentile_win_rate == pytest.approx(100.0)
@@ -1908,6 +1949,76 @@ class TestRugPullAsymmetricFloor:
         card = report.wallets[0]
         assert card.cmc_price_recovery_count == 1
         assert card.closed_trades_count == 1  # achat NON bloqué malgré pool_meta.available=False
+
+
+class TestPercentileComparabilityCaveat:
+    """15/07, revue ChatGPT -- angle mort de comparabilité : le drapeau de
+    confiance basse existait déjà mais n'était jamais rattaché au chiffre du
+    percentile lui-même, ni utilisé pour filtrer la population de comparaison."""
+
+    def test_caveat_attached_directly_to_percentile_line(self):
+        card = sm.WalletScoreCard(
+            address=WALLET_A,
+            compared_against_n_wallets=5,
+            composite_percentile=90.0,
+            price_confirmation_ratio=0.10,
+            price_confidence_low=True,
+        )
+        text = sm._format_card_for_prompt(card)
+        assert "percentile composite 90e" in text
+        assert "ATTENTION" in text
+        assert "10%" in text  # le ratio réel, pas juste un renvoi générique
+
+    def test_no_caveat_when_confidence_is_high(self):
+        card = sm.WalletScoreCard(
+            address=WALLET_A,
+            compared_against_n_wallets=5,
+            composite_percentile=90.0,
+            price_confirmation_ratio=0.80,
+            price_confidence_low=False,
+        )
+        text = sm._format_card_for_prompt(card)
+        assert "ATTENTION" not in text
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_wallet_excluded_from_comparison_population(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        # WALLET_A : PnL entièrement estimé (OHLCV, aucun hash mocké) -> price_confidence_low=True.
+        low_conf_transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        low_conf_client = FakeBlockscoutClient(transfers={WALLET_A: low_conf_transfers})
+        low_conf_gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(
+                candles=[
+                    Candle(ts=int(_dt(-2).timestamp()), open=1.0, high=1.0, low=1.0, close=1.0, volume=1000.0),
+                    Candle(ts=int(_dt(0).timestamp()), open=1.0, high=1.0, low=1.0, close=1.0, volume=1000.0),
+                    Candle(ts=int(_dt(2).timestamp()), open=2.0, high=2.0, low=2.0, close=2.0, volume=1000.0),
+                ],
+                available=True,
+            )},
+        )
+        low_conf_report = await sm.score_wallets(
+            [WALLET_A], client=low_conf_client, gecko=low_conf_gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+        assert low_conf_report.wallets[0].price_confidence_low is True  # confirme la prémisse
+
+        winner_client = FakeBlockscoutClient(transfers={WALLET_B: TestComparativeRanking._mk_transfers(WALLET_B)})
+        winner_gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(candles=TestComparativeRanking._candles(2.0), available=True)},
+        )
+        report_b = await sm.score_wallets(
+            [WALLET_B], client=winner_client, gecko=winner_gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+        # WALLET_A (confiance basse) exclu -- aucune population de comparaison valide.
+        assert report_b.wallets[0].compared_against_n_wallets == 0
 
 
 class TestPriceConfirmationRatio:

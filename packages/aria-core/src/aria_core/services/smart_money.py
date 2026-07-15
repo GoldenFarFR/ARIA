@@ -698,6 +698,58 @@ async def analyze_smart_money(
 # entrepris (pas un correctif de seuil ponctuel : élargir le seuil de 60% ou
 # le nombre de wallets vérifiés en pairwise ne fait que déplacer la taille de
 # cluster minimale requise pour contourner, jamais l'éliminer).
+#
+# SEPTIÈME PASSAGE (15/07, revue DeepSeek -- 4e IA externe). Un point corrige
+# une sur-affirmation de mon propre commentaire (cf. `buy_blocked_thin_
+# liquidity` plus haut -- gains fictifs symétriques par vente sur pool
+# manipulé, dorénavant reformulé honnêtement). Les autres, vérifiés réels et
+# nouveaux (pas de doublon avec les passages précédents) :
+#
+# - Drawdown/Sortino calculés SEULEMENT sur le PnL RÉALISÉ (`_max_drawdown_pct`/
+#   `_sortino_ratio` ne lisent que `closed_trades`, jamais `open_position_
+#   amount`) : un wallet qui porte une position ouverte massivement en perte
+#   latente (achetée puis jamais revendue, donc jamais "réalisée") affiche un
+#   drawdown nul ou très faible alors que son risque réel est énorme -- la
+#   mesure de risque est structurellement optimiste tant qu'une position
+#   reste ouverte. Corriger exigerait une vraie fonctionnalité de mark-to-
+#   market (prix courant fiable par token ouvert + coût moyen pondéré de la
+#   file FIFO restante + redéfinition de ce que "drawdown" mesure -- courbe
+#   d'équité réalisée+latente plutôt que réalisée seule) : même famille de
+#   chantier dédié que le benchmark alpha/Sybil déjà différés, pas un ajout
+#   de seuil. Non construit.
+# - `price_confirmation_ratio`/`price_confidence_low` mesurent la confiance
+#   de MÉTHODE (prix par ratio stablecoin exact vs. repli OHLCV estimé), PAS
+#   la résistance à la manipulation de marché -- un axe orthogonal. Une jambe
+#   à 100% "confirmée" par hash exact reste vraie (ratio réellement exécuté
+#   dans SA transaction), mais une jambe purement OHLCV peut être exacte
+#   (marché sain) ou manipulée (pool à faible volume, cf. vulnérabilité
+#   dusting déjà documentée) -- le drapeau ne distingue pas ces deux cas
+#   parmi les jambes estimées. Documenté ici comme clarification de portée,
+#   pas un nouveau mécanisme à corriger (la vulnérabilité sous-jacente est
+#   déjà la dusting/pool-manipulé ci-dessus).
+# - Élagage anti-chance et faux négatif sur un style légitimement concentré
+#   (barbell/conviction sizing) : `_robust_pnl_check` trie par PnL en dollars
+#   et retire les `robust_trim_pct` extrêmes des deux côtés avant de vérifier
+#   que le reste est positif -- pensé pour neutraliser un coup de chance
+#   isolé (cf. passages précédents), mais un trader dont l'edge réel VIENT
+#   justement d'un petit nombre de gains extrêmes (quelques multi-baggers
+#   assumés, beaucoup de petites pertes/positions coupées vite) peut voir ses
+#   meilleurs trades légitimes trimmés et le reste artificiellement jugé "non
+#   robuste" -- un faux négatif sur un style de trading réel, pas seulement
+#   un vrai positif sur la chance. Distinguer "chance isolée" de "conviction
+#   sizing assumé" exigerait un signal indépendant (ex. taille de position
+#   pré-décidée, thèse documentée) que le simple historique on-chain ne
+#   fournit pas -- non construit, tension assumée entre les deux lectures
+#   possibles du même signal.
+# - Plafond `max_tokens_analyzed`/couverture exhaustive (revue DeepSeek,
+#   même angle que "biais de sélection de la couche 2" déjà documenté
+#   QUATRIÈME PASSAGE) : vérifié -- déjà présenté comme une limite de
+#   complétude explicite (`full_coverage`/`tokens_scanned_cumulative`
+#   affichés dans le rapport, et depuis le correctif #172, `full_coverage=
+#   False` exclut désormais le wallet de la population de comparaison
+#   percentile). Pas un angle mort supplémentaire, la couverture partielle
+#   est déjà divulguée et neutralisée là où elle compterait le plus (le
+#   classement comparatif).
 # ============================================================================
 #
 # CONSTAT DE PALIER (15/07) : à ce stade, les rounds successifs de revue
@@ -1373,9 +1425,17 @@ async def _analyze_wallet_multi_token(
             # du tout, un cas différent où CMC peut avoir recouvré un prix
             # valide qu'il ne faut alors jamais bloquer). Une jambe de VENTE
             # utilise l'OHLCV même si la liquidité actuelle du pool est sous
-            # le plancher (rug pull confirmé après un achat légitime) : cette
-            # lecture ne fait jamais que révéler un prix réel, jamais
-            # fabriquer un gain -- rien à protéger de ce côté.
+            # le plancher (rug pull confirmé après un achat légitime) -- ce
+            # choix reste correct pour le cas qu'il vise (bloquer la vente
+            # aussi ferait juste réintroduire l'ancien bug d'immunité rug-pull
+            # dans l'autre sens). PRÉCISION (15/07, revue DeepSeek -- corrige
+            # une sur-affirmation de ce commentaire) : ça ne veut PAS dire que
+            # cette lecture est à l'abri de toute manipulation -- un prix de
+            # VENTE lu sur un pool à la liquidité manipulée (pump ponctuel
+            # plutôt que dump) peut tout aussi bien gonfler un PnL réalisé de
+            # façon fictive. C'est le miroir exact de la vulnérabilité dusting
+            # déjà documentée plus bas (perte fictive), symétrique côté gain --
+            # ni l'un ni l'autre n'est corrigé, cf. bloc de limites.
             buy_tx_hashes = {b_hash for _ts, _amt, b_hash in buys}
             buy_blocked_thin_liquidity = pool_meta.available and not pool_liquid_enough
 
@@ -1514,7 +1574,13 @@ async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
     fantômes de scans partiels chanceux). Une fiche sans champ `full_coverage`
     du tout (format ancien, avant #157 suite) est traitée comme non couverte
     -- exclue par prudence, jamais un défaut de donnée qui s'invite dans la
-    comparaison."""
+    comparaison.
+
+    Exclut aussi `price_confidence_low=True` (15/07, revue ChatGPT -- angle
+    mort de comparabilité) : un wallet dont le cost-basis repose majoritairement
+    sur des prix ESTIMÉS ne doit pas servir de référence pour juger un autre
+    wallet dont les prix sont majoritairement CONFIRMÉS -- même doctrine que
+    `full_coverage`, symétrique."""
     await _ensure_wallet_scoring_tables()
     exclude_l = exclude_wallet.lower()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1536,6 +1602,14 @@ async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
         except (TypeError, ValueError):
             continue  # ligne corrompue/format ancien -- ignorée, jamais un crash du classement
         if not entry.get("full_coverage"):
+            continue
+        if entry.get("price_confidence_low"):
+            # Angle mort de comparabilité (15/07, revue ChatGPT) : un wallet dont
+            # le cost-basis repose majoritairement sur des prix ESTIMÉS (pas
+            # confirmés par exécution exacte) ne doit pas polluer la population
+            # de comparaison des AUTRES wallets -- même doctrine que full_coverage
+            # ci-dessus (une fiche à qualité de données douteuse n'est pas une
+            # référence fiable pour juger un autre wallet).
             continue
         parsed.append(entry)
     return parsed
@@ -2037,6 +2111,17 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
             else f"Classement comparatif : pas assez d'axes communs avec les {card.compared_against_n_wallets} "
                  "autre(s) wallet(s) suivi(s)"
         )
+        if card.composite_percentile is not None and card.price_confidence_low:
+            # Angle mort de comparabilité (15/07, revue ChatGPT) : le drapeau de
+            # confiance basse vivait ailleurs dans le rapport, jamais rattaché au
+            # chiffre du percentile lui-même -- un lecteur (humain ou LLM de
+            # synthèse) pouvait présenter un excellent classement comme fiable
+            # sans le relier à un cost-basis majoritairement estimé.
+            lines.append(
+                "ATTENTION : ce percentile repose majoritairement sur des prix estimés "
+                f"(confiance du cost-basis {card.price_confirmation_ratio:.0%}, sous le seuil de "
+                f"{WEIGHTS.min_price_confirmation_ratio:.0%}) -- à interpréter avec prudence."
+            )
         if card.percentile_holding_period is not None:
             lines.append(f"Percentile durée de détention (contextuel, hors composite) : {card.percentile_holding_period:.0f}e")
     else:
