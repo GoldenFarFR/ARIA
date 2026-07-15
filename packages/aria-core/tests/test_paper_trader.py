@@ -240,6 +240,7 @@ async def test_migration_adds_position_management_columns(tmp_db):
     assert pos["realized_pnl_partial"] == 0.0
     assert pos["high_water_price"] is None
     assert pos["initial_qty"] is None
+    assert pos["chain"] == "base"
 
 
 @pytest.mark.asyncio
@@ -277,3 +278,116 @@ def test_alerts_labeled_simulation():
          "pnl_pct": 50.0, "close_reason": "cible"}
     )
     assert "SIMULATION" in sell and "FICTIVE" in sell
+
+
+# ── #194 : pivot momentum multi-chaînes ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_open_position_stores_chain(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, chain="solana")
+    assert pos["chain"] == "solana"
+
+
+@pytest.mark.asyncio
+async def test_open_position_defaults_chain_to_base(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    assert pos["chain"] == "base"
+
+
+@pytest.mark.asyncio
+async def test_default_price_lookup_uses_chain_aware_dexscreener(monkeypatch):
+    from aria_core.services.dexscreener import PairSnapshot
+
+    seen = {}
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        seen["chain"] = chain
+        return [PairSnapshot(pair_address="p", price_usd=3.5, liquidity_usd=10_000.0)]
+
+    monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", fake_fetch_token_pairs)
+    price = await pt._default_price_lookup(A, chain="solana")
+    assert price == 3.5
+    assert seen["chain"] == "solana"
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_prices_open_position_with_its_own_chain(tmp_db, monkeypatch):
+    """Le price_lookup PAR DÉFAUT doit interroger la chaîne PERSISTÉE de chaque
+    position, pas toujours 'base' -- sinon une position Solana ne serait jamais
+    re-priced correctement une fois ouverte."""
+    from aria_core.services.dexscreener import PairSnapshot
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, chain="solana")
+
+    seen_chains = []
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        seen_chains.append(chain)
+        return [PairSnapshot(pair_address="p", price_usd=1.0, liquidity_usd=10_000.0)]
+
+    monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", fake_fetch_token_pairs)
+    await pt.run_paper_cycle(candidates=[])
+
+    assert "solana" in seen_chains
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_defaults_to_momentum_pipeline_when_nothing_injected(tmp_db, monkeypatch):
+    """#194 : quand ni candidates ni analyzer ne sont fournis (le vrai appel
+    heartbeat), le défaut devient le pipeline momentum -- plus candidate_ranking."""
+    from aria_core import momentum_entry
+
+    top_candidates_called = False
+
+    async def fake_top_candidates(n, **kw):
+        nonlocal top_candidates_called
+        top_candidates_called = True
+        return []
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "solana"}]
+
+    async def fake_evaluate(contract, chain):
+        assert chain == "solana"
+        return {"action": "BUY", "symbol": "DDD", "price": 1.0, "target": 2.0,
+                "invalidation": 0.5, "chain": chain}
+
+    monkeypatch.setattr("aria_core.skills.candidate_ranking.top_candidates", fake_top_candidates)
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle()
+
+    assert top_candidates_called is False
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["chain"] == "solana"
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_preserves_old_default_when_candidates_explicit(tmp_db, monkeypatch):
+    """Un appelant qui fournit SES PROPRES candidates (mais pas d'analyzer) garde
+    l'analyzer VC historique -- le pivot momentum ne s'applique QUE quand rien du
+    tout n'est injecté (comportement heartbeat réel)."""
+    from aria_core import momentum_entry
+
+    momentum_called = False
+
+    async def fake_evaluate(contract, chain):
+        nonlocal momentum_called
+        momentum_called = True
+        return None
+
+    async def fake_default_analyzer(contract):
+        return {"action": "HOLD"}
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+    monkeypatch.setattr(pt, "_default_analyzer", fake_default_analyzer)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.run_paper_cycle(candidates=[A])
+
+    assert momentum_called is False
