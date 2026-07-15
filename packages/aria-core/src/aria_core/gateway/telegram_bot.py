@@ -340,12 +340,17 @@ async def _handle_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"GitHub : texte libre (lecture seule) — ex: liste les repos ou status github",
         )
         return
+    # Correction #181 (15/07) : ne JAMAIS renvoyer la liste réelle des IDs
+    # admin à un visiteur non reconnu -- fuite d'information vers N'IMPORTE
+    # QUI écrivant au bot (seule ligne de tout le fichier qui exposait
+    # `settings.admin_ids` en dehors d'une réponse déjà réservée à un admin
+    # confirmé). Le visiteur n'a besoin que de SON PROPRE ID pour demander
+    # son ajout -- jamais de savoir combien d'admins existent ni lesquels.
     await _reply(
         message,
         f"Ton ID Telegram : {user.id}\n"
-        f"Rôle : ❌ visiteur (pas admin)\n"
-        f"IDs autorisés : {settings.admin_ids or 'aucun'}\n\n"
-        f"Si c'est ton compte, ajoute {user.id} dans TELEGRAM_ADMIN_IDS.",
+        f"Rôle : ❌ visiteur (pas admin)\n\n"
+        f"Si c'est ton compte, demande à l'opérateur de t'ajouter (ID {user.id}).",
     )
 
 
@@ -2612,6 +2617,7 @@ def _register_handlers(app: Application) -> None:
 
     # Minimal commands only (user request)
     app.add_handler(CommandHandler("start", _handle_start))
+    app.add_handler(CommandHandler("whoami", _handle_whoami))
     app.add_handler(CommandHandler("status", _handle_status))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
