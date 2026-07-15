@@ -2489,3 +2489,46 @@ class TestTransferHistoryTruncated:
 
         assert card.transfer_history_truncated is False
         assert "historique de transferts tronqué" not in sm._format_card_for_prompt(card)
+
+
+class TestFormatWalletScoreCardLinesCumulative:
+    """15/07, constat opérateur -- la carte Telegram affichait "Tokens analysés :
+    X/Y" (cette passe seulement) sans jamais montrer le cumul, alors que la thèse
+    LLM (prompt) reçoit et mentionne, elle, le cumul réel -- deux chiffres
+    différents dans le même message pour un humain qui lit les deux. Corrigé :
+    la carte affiche désormais aussi la couverture cumulée."""
+
+    def _card(self, **overrides) -> sm.WalletScoreCard:
+        card = sm.WalletScoreCard(address=WALLET_A)
+        card.tokens_found = 806
+        card.tokens_analyzed = 50
+        card.tokens_skipped_capped = True
+        card.tokens_scanned_cumulative = 118
+        card.full_coverage = False
+        for key, value in overrides.items():
+            setattr(card, key, value)
+        return card
+
+    def test_shows_this_pass_count_distinctly(self):
+        lines = sm.format_wallet_score_card_lines(self._card())
+        text = "\n".join(lines)
+        assert "Tokens analysés cette passe : 50/806" in text
+
+    def test_shows_cumulative_coverage(self):
+        lines = sm.format_wallet_score_card_lines(self._card())
+        text = "\n".join(lines)
+        assert "Couverture cumulée : 118/806" in text
+
+    def test_marks_complete_when_full_coverage(self):
+        lines = sm.format_wallet_score_card_lines(
+            self._card(tokens_scanned_cumulative=806, full_coverage=True)
+        )
+        text = "\n".join(lines)
+        assert "Couverture cumulée : 806/806 (complète)" in text
+
+    def test_cumulative_shown_even_when_not_capped(self):
+        lines = sm.format_wallet_score_card_lines(
+            self._card(tokens_analyzed=10, tokens_skipped_capped=False, tokens_scanned_cumulative=10)
+        )
+        text = "\n".join(lines)
+        assert "Couverture cumulée : 10/806" in text
