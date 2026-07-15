@@ -241,7 +241,26 @@ HEARTBEAT_TASKS = [
         id="paper_trade_cycle",
         name="Paper trading 1M$ (simulation)",
         description="Applique les VRAIS rapports a un portefeuille FICTIF de 1M$ (mode trading) : ouvre/ferme des positions simulees, alertes achat/vente fictives. Preuve sur ~20 jours. Aucun argent reel, aucune signature.",
-        interval_minutes=180,
+        # #195 (15/07, plan maître étape 2) : 180min -> 15min -- 180 était beaucoup trop lent
+        # pour "voir le compteur bouger" côté opérateur. Vérifié avant de baisser : le seul
+        # débit externe qui compte ici est GeckoTerminal (OHLCV, appelé via analyze_vc_with_context
+        # pour chaque candidat analysé côté nouvelles entrées -- gestion des positions déjà
+        # ouvertes passe par DexScreener, pas GeckoTerminal). Client throttlé à 2.1s/appel
+        # (_MIN_INTERVAL dans services/geckoterminal.py, ~28.5 req/min, sous le palier gratuit
+        # documenté ~30 req/min) -- ce throttle est appliqué PAR APPEL sur un client partagé au
+        # niveau du process, donc la charge instantanée reste bornée quelle que soit la fréquence
+        # du cycle (un cycle de ~20 candidats analysés prend déjà ~42s de throttle Gecko à lui
+        # seul, indépendamment de l'intervalle entre deux cycles) -- seul le VOLUME agrégé monte
+        # (12x plus de cycles/heure qu'à 180min), pas le débit instantané. GeckoTerminal free tier
+        # n'a pas de plafond mensuel documenté, seulement req/min -- donc pas de raison technique
+        # de rester au-dessus de 15min. Risque de collision avec le futur usage TA de #194
+        # (Secondaire, paper_trader.py) : même client partagé au niveau process -> auto-filé par
+        # le même throttle, pas de conflit, juste une file d'attente plus longue si les deux
+        # tournent en même temps. Pas descendu sous 15min : MAX_POSITIONS=15 + jusqu'à 20
+        # candidats analysés par cycle laissent une marge de sécurité raisonnable avant de
+        # s'approcher du palier gratuit en cas de pic (plusieurs positions à gérer + plusieurs
+        # nouvelles analyses le même cycle).
+        interval_minutes=15,
         enabled=False,
     ),
     HeartbeatTask(
