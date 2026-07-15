@@ -44,7 +44,7 @@ _POS_FIELDS = (
     "target_price", "invalidation_price", "opened_at", "status",
     "exit_price", "closed_at", "pnl_usd", "pnl_pct", "close_reason",
     "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
-    "category", "entry_security_json", "chain",
+    "category", "entry_security_json", "chain", "thesis",
 )
 
 _ADDED_COLUMNS = [
@@ -58,6 +58,12 @@ _ADDED_COLUMNS = [
     # #194 -- pivot momentum multi-chaînes, chaque position se souvient de sa chaîne
     # (Base historiquement implicite -- défaut 'base' pour les positions déjà ouvertes)
     ("chain", "TEXT NOT NULL DEFAULT 'base'"),
+    # #197 (15/07) -- VCResult.these (analyse VC complète, déjà calculée par
+    # analyze_vc_with_context) persistée à l'ouverture -- avant ce chantier, jamais
+    # transmise ni sauvegardée : seuls les niveaux chiffrés (prix/cible/invalidation)
+    # survivaient. Objectif opérateur explicite : la session cloud doit pouvoir vérifier
+    # après coup, en base, POURQUOI ARIA est entrée -- pas seulement à quel prix.
+    ("thesis", "TEXT"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -114,7 +120,8 @@ async def _ensure_tables() -> None:
                 realized_pnl_partial REAL NOT NULL DEFAULT 0,
                 category TEXT NOT NULL DEFAULT '',
                 entry_security_json TEXT,
-                chain TEXT NOT NULL DEFAULT 'base'
+                chain TEXT NOT NULL DEFAULT 'base',
+                thesis TEXT
             )
             """
         )
@@ -287,6 +294,7 @@ async def open_position(
     category: str = "",
     entry_security_json: str = "",
     chain: str = "base",
+    thesis: str | None = None,
 ) -> dict | None:
     """Ouvre une position FICTIVE au prix d'entrée réel. Refuse si déjà ouverte, plafond de
     positions atteint, coupe-circuit de risque armé, prix invalide, cash insuffisant, ou
@@ -294,7 +302,11 @@ async def open_position(
     paper_trader_risk.py -- l'alloc est RÉDUITE pour tenir sous le plafond quand la place
     restante est significative, sinon la position est skippée). ``chain`` (#194, pivot
     momentum multi-chaînes) persiste la chaîne d'origine pour que la gestion ultérieure de
-    la position (prix, re-scan) sache quelle chaîne interroger. Retourne la position ou None."""
+    la position (prix, re-scan) sache quelle chaîne interroger. ``thesis`` (#197, 15/07) :
+    raisonnement VC complet (``VCResult.these``) persisté tel quel -- pourquoi ARIA entre,
+    pas seulement à quel prix. La persistance prime sur l'affichage Telegram : sauvegardée
+    ICI, indépendamment de tout notifier/topic configuré ou non. Retourne la position ou
+    None."""
     await _ensure_tables()
     contract = (contract or "").lower()
     if not contract or not entry_price or entry_price <= 0:
@@ -347,12 +359,12 @@ async def open_position(
             INSERT INTO paper_position
               (contract, symbol, cost_usd, entry_price, qty, target_price,
                invalidation_price, opened_at, status, high_water_price, initial_qty,
-               category, entry_security_json, chain)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+               category, entry_security_json, chain, thesis)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, entry_price, qty, target_price, invalidation_price,
              _now(), entry_price, qty, category or "", entry_security_json or None,
-             (chain or "base").lower()),
+             (chain or "base").lower(), thesis),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -478,13 +490,47 @@ def format_buy_alert(pos: dict) -> str:
     lines = [
         "🧪 SIMULATION — portefeuille papier 1 M$ (mode trading)",
         f"ACHAT FICTIF {name}",
+        f"Contrat {pos.get('contract', '')}",
         f"Entrée {pos['entry_price']:.6g} · taille {pos['cost_usd']:,.0f} $",
     ]
     if pos.get("target_price"):
         lines.append(f"Cible {pos['target_price']:.6g}")
     if pos.get("invalidation_price"):
         lines.append(f"Invalidation {pos['invalidation_price']:.6g}")
+    # #197 (15/07) -- la thèse VC (pourquoi ARIA entre, pas seulement à quel prix) était
+    # calculée mais jamais montrée. Affichée ici tronquée (lisibilité Telegram mobile) --
+    # le texte COMPLET, lui, est toujours persisté tel quel en base (thesis, cf.
+    # open_position), jamais tronqué là où ça compte pour la vérification après coup.
+    thesis = (pos.get("thesis") or "").strip()
+    if thesis:
+        lines.append(f"Thèse : {thesis[:500]}")
     lines.append("Aucun argent réel — preuve de performance en cours.")
+    return "\n".join(lines)
+
+
+def format_position_tracking_alert(tracked: list[dict]) -> str:
+    """Suivi PÉRIODIQUE des positions déjà ouvertes (#197, 15/07) -- pas seulement à
+    l'achat/la vente. ``tracked`` : liste de dicts {contract, symbol, entry_price, price,
+    qty, cost_usd}, une entrée par position ENCORE ouverte à la fin du cycle (les
+    positions fermées CE tour sont déjà couvertes par format_sell_alert, pas dupliquées
+    ici). Liste vide -> chaîne vide (rien à envoyer, l'appelant ne notifie pas)."""
+    if not tracked:
+        return ""
+    lines = [
+        "🧪 SIMULATION — suivi positions ouvertes (portefeuille papier 1 M$)",
+    ]
+    for t in tracked:
+        name = t.get("symbol") or (t.get("contract") or "")[:10]
+        entry = t.get("entry_price") or 0.0
+        price = t.get("price") or 0.0
+        qty = t.get("qty") or 0.0
+        cost = t.get("cost_usd") or 0.0
+        value = qty * price
+        pnl = value - cost
+        pnl_pct = (price / entry - 1.0) * 100.0 if entry else 0.0
+        sign = "+" if pnl >= 0 else ""
+        lines.append(f"{name} : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $")
+    lines.append("Aucun argent réel.")
     return "\n".join(lines)
 
 
@@ -567,6 +613,10 @@ async def _default_analyzer(contract: str) -> dict | None:
         "invalidation": inval,
         "category": category,
         "entry_security_json": entry_snapshot.to_json(),
+        # #197 (15/07) -- VCResult.these était déjà calculée ici mais jamais remontée :
+        # perdue dès la sortie de cette fonction. Remontée jusqu'à open_position() par
+        # run_paper_cycle ci-dessous.
+        "these": getattr(result, "these", "") or "",
     }
 
 
@@ -625,6 +675,9 @@ async def run_paper_cycle(
     # une fermeture propre) garde son contrat d'appel historique à un seul argument.
     using_default_price_lookup = price_lookup is _default_price_lookup
     actions: dict = {"opened": [], "closed": [], "partial": [], "checked": 0}
+    # #197 (15/07) -- suivi périodique : une entrée par position encore ouverte à la fin
+    # du cycle (prix courant déjà récupéré ci-dessous, aucun appel réseau supplémentaire).
+    tracked: list[dict] = []
 
     # 1) Gérer les positions ouvertes : d'abord une surveillance continue de SÉCURITÉ
     #    (#187 -- honeypot/ownership apparus après l'entrée, jamais vérifiés qu'une seule
@@ -667,6 +720,13 @@ async def run_paper_cycle(
 
         if not price or price <= 0:
             continue
+
+        # #197 -- provisoire : retiré ci-dessous si la position se clôture (totalement)
+        # dans ce même tour, pour ne jamais dupliquer avec format_sell_alert.
+        tracked.append({
+            "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
+            "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price,
+        })
 
         high_water = max(p.get("high_water_price") or p["entry_price"], price)
         if high_water != (p.get("high_water_price") or p["entry_price"]):
@@ -727,7 +787,23 @@ async def run_paper_cycle(
                     except Exception:  # noqa: BLE001
                         pass
 
-    # 1bis) Photo du risque portefeuille (#186) -- une seule fois par cycle, APRÈS la gestion
+    # 1bis) Suivi périodique des positions ENCORE ouvertes (#197, 15/07) -- pas seulement
+    # à l'achat/la vente. Retire celles fermées CE tour (déjà couvertes par
+    # format_sell_alert, jamais dupliquées). Un seul message consolidé, pas un par
+    # position (évite le bruit Telegram) -- persistance en base (thesis, prix, contrat)
+    # prime de toute façon sur cet affichage, qui reste best-effort.
+    closed_contracts_this_cycle = {c["contract"] for c in actions["closed"]}
+    tracked = [t for t in tracked if t["contract"] not in closed_contracts_this_cycle]
+    actions["tracked"] = tracked
+    if tracked and notifier:
+        msg = format_position_tracking_alert(tracked)
+        if msg:
+            try:
+                await notifier(msg)
+            except Exception:  # noqa: BLE001 — l'alerte ne casse pas le cycle
+                pass
+
+    # 1ter) Photo du risque portefeuille (#186) -- une seule fois par cycle, APRÈS la gestion
     # des positions déjà ouvertes (qui doit continuer normalement même coupe-circuit armé) et
     # AVANT toute tentative d'ouverture. Met à jour le plus haut d'équité persisté, arme le
     # coupe-circuit dédié si un palier dur est franchi pour la première fois.
@@ -858,6 +934,7 @@ async def run_paper_cycle(
             category=sig.get("category", ""),
             entry_security_json=sig.get("entry_security_json", ""),
             chain=sig.get("chain") or "base",
+            thesis=sig.get("these"),
         )
         if pos:
             opened += 1

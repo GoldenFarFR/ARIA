@@ -427,6 +427,35 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+async def _handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """#197 (15/07) : bilan paper-trading (départ / PnL total / résultat) -- données déjà
+    calculées par paper_trader.portfolio_summary(), jamais câblées à une commande
+    Telegram avant ce chantier. Admin-only : le suivi de trading reste privé pour
+    l'instant, même doctrine que /status."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core import paper_trader
+
+    # price_lookup explicite : sans lui, portfolio_summary() marque chaque position
+    # ouverte à son COÛT (unrealized_pnl toujours à 0) -- le PnL "en cours" demandé
+    # doit inclure le latent réel, pas seulement le réalisé.
+    summary = await paper_trader.portfolio_summary(price_lookup=paper_trader._default_price_lookup)
+    depart = summary["starting"]
+    pnl_total = summary["realized_pnl"] + summary["unrealized_pnl"]
+    resultat = summary["equity"]  # = départ + pnl_total par construction (portfolio_summary)
+    sign = "+" if pnl_total >= 0 else ""
+    await _reply(
+        update.message,
+        "🧪 SIMULATION — bilan paper-trading (portefeuille papier 1 M$)\n\n"
+        f"Départ    : {depart:,.0f} $\n"
+        f"PnL total : {sign}{pnl_total:,.0f} $\n"
+        f"Résultat  : {resultat:,.0f} $\n\n"
+        f"(réalisé {summary['realized_pnl']:+,.0f} $ · latent {summary['unrealized_pnl']:+,.0f} $ · "
+        f"{summary['open_positions']} positions ouvertes)\n"
+        "Aucun argent réel — track record de preuve.",
+    )
+
+
 async def _reply_handles_registry(message, args: list[str]) -> None:
     """Liste ou modifie le registre handles X (args = action + paramètres)."""
     from aria_core.handle_registry import (
@@ -1663,6 +1692,7 @@ async def _register_bot_commands() -> None:
         BotCommand("vc", "Analyse VC complète d'un contrat"),
         BotCommand("scan", "Scan rapide de risque on-chain d'un contrat"),
         BotCommand("status", "État système (santé, capacités actives)"),
+        BotCommand("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
         BotCommand("watchlist", "Top candidats du pool screené"),
         BotCommand("track", "Pertinence du track-record (hit-rate, calibration)"),
         BotCommand("feuvert", "Scorecard avant argent réel (8 cases)"),
@@ -2627,6 +2657,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("start", _handle_start))
     app.add_handler(CommandHandler("whoami", _handle_whoami))
     app.add_handler(CommandHandler("status", _handle_status))
+    app.add_handler(CommandHandler("feedback", _handle_feedback))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))

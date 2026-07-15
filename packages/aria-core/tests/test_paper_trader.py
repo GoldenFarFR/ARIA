@@ -597,3 +597,141 @@ async def test_run_cycle_preserves_old_default_when_candidates_explicit(tmp_db, 
     await pt.run_paper_cycle(candidates=[A])
 
     assert momentum_called is False
+
+
+# ── #197 : thèse VC persistée + suivi périodique des positions ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_open_position_persists_thesis(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, thesis="Bon momentum, holders sains.")
+    assert pos["thesis"] == "Bon momentum, holders sains."
+
+
+@pytest.mark.asyncio
+async def test_open_position_thesis_defaults_to_none(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    assert pos["thesis"] is None
+
+
+@pytest.mark.asyncio
+async def test_default_analyzer_surfaces_these(monkeypatch):
+    """VCResult.these était déjà calculée par analyze_vc_with_context mais jamais
+    remontée par _default_analyzer avant ce chantier -- vrai gap trouvé (15/07)."""
+    from types import SimpleNamespace
+
+    class FakePair:
+        base_symbol = "AAA"
+        price_usd = 2.0
+
+    class FakeCtx:
+        best_pair = FakePair()
+        ta_entry = None
+
+    fake_result = SimpleNamespace(
+        recommandation="BUY", these="Thèse de test : forte traction sociale.",
+        cible="3.0", invalidation="1.5",
+    )
+
+    async def fake_analyze(contract, lang="fr"):
+        return fake_result, FakeCtx()
+
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", fake_analyze)
+
+    sig = await pt._default_analyzer(A)
+
+    assert sig["these"] == "Thèse de test : forte traction sociale."
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_threads_thesis_from_analyzer_to_open_position(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "DDD", "price": 1.0, "target": 2.0,
+            "invalidation": 0.5, "these": "Raisonnement complet de test.",
+        }
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(candidates=[D], analyzer=analyzer, price_lookup=price_lookup)
+
+    assert act["opened"][0]["thesis"] == "Raisonnement complet de test."
+    pos = await pt._get_open(D)
+    assert pos["thesis"] == "Raisonnement complet de test."
+
+
+def test_format_buy_alert_includes_thesis_and_contract():
+    buy = pt.format_buy_alert(
+        {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000,
+         "target_price": 3.0, "invalidation_price": 1.5, "thesis": "Raison précise d'entrée."}
+    )
+    assert "Raison précise d'entrée." in buy
+    assert A in buy
+
+
+def test_format_buy_alert_no_thesis_no_crash():
+    """thesis absente/None (position ouverte avant ce chantier, ou analyzer sans these)
+    -- pas de ligne "Thèse", pas de crash."""
+    buy = pt.format_buy_alert(
+        {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000}
+    )
+    assert "Thèse" not in buy
+
+
+def test_format_position_tracking_alert_empty_list():
+    assert pt.format_position_tracking_alert([]) == ""
+
+
+def test_format_position_tracking_alert_shows_latent_pnl():
+    msg = pt.format_position_tracking_alert([
+        {"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 1000.0, "cost_usd": 1000.0}
+    ])
+    assert "AAA" in msg
+    assert "+50.0%" in msg or "+50" in msg
+    assert "SIMULATION" in msg
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000)
+
+    async def price_lookup(contract):
+        return 1.1  # petit mouvement, aucun palier/stop franchi -- reste ouverte
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+
+    assert act["closed"] == []
+    assert len(act["tracked"]) == 1
+    assert any("suivi positions ouvertes" in a for a in alerts)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_tracking_alert_excludes_positions_closed_this_cycle(tmp_db):
+    """Une position fermée CE tour ne doit JAMAIS apparaître aussi dans le suivi
+    périodique -- déjà couverte par l'alerte de vente, pas de doublon."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000)
+
+    async def price_lookup(contract):
+        return 0.89  # sous l'invalidation -> se ferme ce tour
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+
+    assert len(act["closed"]) == 1
+    assert act["tracked"] == []
+    assert not any("suivi positions ouvertes" in a for a in alerts)
