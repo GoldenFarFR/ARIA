@@ -558,14 +558,32 @@ async def analyze_smart_money(
 #   de la médiane) serait insensible à l'axe $ vs % choisi, mais change la
 #   méthodologie plus profondément (instabilité du z-score lui-même sur petit
 #   échantillon à gérer) -- candidat pour un futur passage, pas ce soir.
-# - Pondération égale par trade (pas par capital) de win_rate/trim/health_trend
-#   (revue ChatGPT) : seule la diversification a désormais une variante
-#   pondérée par capital (cf. plus haut). Win rate, trim anti-chance et
-#   courbe de santé restent comptés PAR TRADE -- un trade de 500 000$ pèse
-#   autant qu'un trade de 10$. Choix ASSUMÉ, pas un oubli : le comptage par
-#   trade mesure autre chose (la capacité à trouver des gagnants sur des
-#   paris indépendants), pas remplaçable par une version pondérée sans perdre
-#   ce signal -- documenté plutôt que "corrigé" dans un sens ou l'autre.
+# - Pondération égale par trade (pas par capital) de win_rate/trim/health_trend/
+#   SORTINO (revue ChatGPT, précisé 15/07 -- revue externe : Sortino avait été
+#   omis de cette liste par erreur, alors qu'il partage exactement le même
+#   défaut, cf. ci-dessous) : seule la diversification a désormais une variante
+#   pondérée par capital (cf. plus haut). Win rate, trim anti-chance, courbe de
+#   santé ET Sortino restent comptés/calculés PAR TRADE en % de rendement --
+#   un trade de 500 000$ pèse autant qu'un trade de 10$. Choix ASSUMÉ pour
+#   win_rate/trim/health_trend (le comptage par trade mesure autre chose : la
+#   capacité à trouver des gagnants sur des paris indépendants) -- mais pour
+#   SORTINO spécifiquement, la conséquence est plus trompeuse qu'un simple
+#   choix de méthodologie : un ratio présenté comme "rendement ajusté au
+#   risque" peut afficher un chiffre POSITIF alors que le PnL réel en dollars
+#   est NÉGATIF. Démonstration chiffrée vérifiée (5 trades, seuil minimum
+#   `WEIGHTS.min_closed_trades_for_sortino` atteint) : 4 micro-trades à +100%
+#   sur une mise de 1$ chacun (+4$ au total) + 1 trade majeur à -50% sur une
+#   mise de 1000$ (-500$) -- PnL réel = -496$ (perte nette), mais
+#   mean(return_i) = 0.7, downside_deviation = 0.5, Sortino = 1.4 (positif,
+#   "honorable"). **Corrigé partiellement (15/07)** : `sortino_pnl_
+#   contradiction` détecte et signale VISIBLEMENT le cas le plus flagrant et
+#   vérifiable à coup sûr (contradiction de SIGNE entre Sortino et PnL réel,
+#   jamais une nuance à interpréter), affiché en ATTENTION à côté du Sortino
+#   -- mais ne corrige PAS le biais sous-jacent lui-même (un Sortino pondéré
+#   par la taille de position, calculé sur la courbe de valeur du portefeuille
+#   plutôt que sur les rendements unitaires, serait une refonte méthodologique
+#   plus profonde -- non entreprise, même arbitrage que les autres métriques
+#   non pondérées ci-dessus).
 # - Manipulation du point de bascule de la courbe de santé (revue Grok,
 #   précision sur la limite déjà notée) : au-delà du simple découpage par
 #   nombre de trades plutôt que par fenêtre calendaire, un wallet peut
@@ -833,6 +851,62 @@ async def analyze_smart_money(
 #   erreur à corriger dans un sens ou l'autre sans un mécanisme plus fin
 #   (ex. pondérer la contribution d'un wallet à la population de comparaison
 #   par sa confiance plutôt qu'un tout-ou-rien) -- chantier séparé si repris.
+# ============================================================================
+#
+# NEUVIÈME PASSAGE (15/07, revue externe -- l'équation résumée à l'opérateur a
+# elle-même été auditée ligne par ligne). Deux corrections apportées au CODE
+# (percentile lissé + contradiction Sortino/PnL signalée, cf. plus haut), une
+# affirmation externe vérifiée et RÉFUTÉE, un vrai angle mort documenté :
+#
+# - Diversification -- l'AXE est nommé "diversification" mais NE MESURE PAS
+#   une largeur/dispersion de portefeuille (type Herfindahl/entropie) : `D =
+#   diversification_profitable_tokens / diversification_total_tokens` est en
+#   réalité un TAUX DE RÉUSSITE PAR TOKEN (combien de tokens distincts finissent
+#   nets positifs), un axe plus proche d'un second win_rate que d'une mesure de
+#   dispersion. Conséquence vérifiée : un wallet qui trade UN SEUL token,
+#   profitable, obtient D=1 (score parfait) -- un wallet qui en trade 20 dont
+#   15 profitables obtient D=0,75 (plus bas), alors qu'il est objectivement
+#   PLUS diversifié. Le nom pousse donc, littéralement, à l'extrême
+#   concentration plutôt qu'à l'éparpillement qu'il est censé récompenser.
+#   Nuance vérifiée : `_suspect_positive_flag` (couche 3, distincte du
+#   percentile/composite) exige DÉJÀ `diversification_total_tokens >=
+#   WEIGHTS.suspect_diversification_min_tokens` avant de compter cet axe comme
+#   "suspect" -- un garde-fou existe donc contre ce gaming précis, mais
+#   UNIQUEMENT pour le drapeau "suspect positif", jamais pour l'axe
+#   `percentile_diversification`/`composite_percentile` lui-même, qui reste
+#   sans aucun plancher de nombre de tokens. Non corrigé (renommer l'axe ou lui
+#   ajouter un plancher change le sens même de la métrique affichée depuis le
+#   début de ce chantier -- décision de méthodologie, pas un ajustement de
+#   seuil ponctuel).
+# - Complétude de l'équation -- clarification (pas un bug) : `diversification_
+#   capital_weighted_ratio` (#163) N'EST PAS combiné avec le ratio de comptage
+#   ci-dessus dans une formule pondérée unique -- les deux restent deux champs
+#   SÉPARÉS (même doctrine "axes jamais fondus" que tout le reste de ce
+#   module) ; seul le ratio de COMPTAGE entre dans `percentile_diversification`/
+#   `composite_percentile`, la variante pondérée par capital reste un
+#   diagnostic d'AFFICHAGE seul (`_format_card_for_prompt`), jamais utilisée
+#   dans le calcul du percentile.
+# - RÉFUTÉ après vérification (revue externe) : l'affirmation qu'un PnL brut
+#   "linéaire" ferait s'écraser le percentile de tous les autres wallets vers
+#   0 dès qu'un seul wallet a un PnL démesuré. Vérifié contre `_percentile` :
+#   c'est un percentile de RANG (compte les autres wallets strictement en
+#   dessous / population), jamais une normalisation min-max ni un calcul sur
+#   la magnitude brute -- un unique outlier à 10M$ ne change RIEN au
+#   percentile des autres wallets (il ne compte que pour son propre rang, au
+#   sommet). Cette classe de distorsion ("un extrême écrase tout le reste")
+#   s'appliquerait à une moyenne/normalisation par la valeur, pas à un
+#   percentile par rang -- non applicable ici.
+# - Frais de gas jamais déduits du PnL (revue externe) -- vérifié réel, pas
+#   déjà géré ailleurs : `ClosedTrade.pnl_usd` ne soustrait aucun coût de
+#   transaction (`qty * (sell_price - buy_price)` seul) ; aucune donnée de gas
+#   (gas_used/gas_price par jambe) n'est même récupérée dans ce module. Un
+#   wallet qui accumule de nombreux micro-trades gagnants EN POURCENTAGE mais
+#   dont chaque swap coûte plus cher en gas que le gain lui-même serait donc
+#   présenté comme performant alors qu'il est gas-négatif en réalité. Non
+#   corrigé : exigerait un appel réseau supplémentaire par transaction (reçu
+#   de transaction, gas_used * gas_price) pour CHAQUE jambe FIFO -- un nouveau
+#   type de donnée jamais fetché ici, coût réseau significatif sur un wallet
+#   actif -- chantier séparé si jamais entrepris, pas un correctif ponctuel.
 # ============================================================================
 
 # Tous les poids/seuils tunables de ce chantier vivent dans
@@ -1737,10 +1811,19 @@ async def _apply_comparative_ranking(card: WalletScoreCard) -> None:
         return
 
     def _percentile(value: float | None, population: list[float]) -> float | None:
+        """Percentile de rang MOYEN (15/07, revue externe -- lissage des
+        ex-æquo) : un wallet dont la valeur est comptée seulement contre les
+        AUTRES strictement inférieurs plaçait à tort tout wallet ex-æquo avec
+        la majorité au 0e percentile (ex. beaucoup de wallets à win_rate=0.5
+        pile) -- indiscernable d'un wallet réellement pire que tout le monde.
+        Convention statistique standard (percentile de rang moyen, cf.
+        `scipy.stats.percentileofscore(kind='mean')`) : les ex-æquo comptent
+        pour une demi-position plutôt que zéro."""
         if value is None or not population:
             return None
         below = sum(1 for p in population if p < value)
-        return round(100.0 * below / len(population), 1)
+        tied = sum(1 for p in population if p == value)
+        return round(100.0 * (below + 0.5 * tied) / len(population), 1)
 
     win_rate_pop = [o["win_rate"] for o in others if o.get("win_rate") is not None]
     sortino_pop = [o["sortino"] for o in others if o.get("sortino") is not None]
@@ -1989,6 +2072,17 @@ class WalletScoreCard:
     win_rate: float | None = None
     realized_pnl_usd: float | None = None
     sortino: float | None = None
+    # Contradiction Sortino/PnL (15/07, revue externe -- biais d'asymétrie de
+    # taille) : `sortino` se calcule sur `return_i` (rendement EN %), jamais
+    # pondéré par le capital engagé sur le trade -- un wallet peut afficher un
+    # Sortino positif "honorable" (moyenne des % de rendement) alors que son
+    # PnL réalisé EN DOLLARS est négatif (une grosse perte en $ mais petite en
+    # %, plusieurs petits gains en % sur des mises minuscules). Ce drapeau
+    # capture le cas le plus flagrant et vérifiable À COUP SÛR (contradiction
+    # de SIGNE entre les deux, jamais une nuance à interpréter) -- il ne
+    # corrige pas le biais sous-jacent (non pondéré par la taille, cf. bloc de
+    # limites), il rend visible sa manifestation la plus trompeuse.
+    sortino_pnl_contradiction: bool = False
     max_drawdown_pct: float | None = None
     avg_holding_period_days: float | None = None  # 15/07 -- conviction vs. rotation rapide (méthodologie sourcée)
 
@@ -2151,6 +2245,13 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         if card.sortino is not None
         else "Sortino : indisponible (trop peu de trades clôturés ou aucune perte observée)"
     )
+    if card.sortino_pnl_contradiction:
+        lines.append(
+            "ATTENTION : Sortino positif mais PnL réalisé négatif -- le Sortino se base sur le "
+            "rendement en % par trade, jamais pondéré par la taille de la position (un petit gain "
+            "en % sur une grosse perte en $ peut gonfler ce ratio) -- ne pas lire seul, croiser avec "
+            "le PnL réalisé en dollars ci-dessus."
+        )
     lines.append(
         f"Max drawdown (wallet) : {card.max_drawdown_pct:.0%}"
         if card.max_drawdown_pct is not None
@@ -2488,6 +2589,9 @@ async def score_wallets(
             card.max_drawdown_pct = _max_drawdown_pct(cumulative_trades)
             returns = [r for t in cumulative_trades if (r := t.return_pct) is not None]
             card.sortino = _sortino_ratio(returns)
+            card.sortino_pnl_contradiction = (
+                card.sortino is not None and card.sortino > 0 and card.realized_pnl_usd < 0
+            )
             card.avg_holding_period_days = _avg_holding_period_days(cumulative_trades)
             card.win_rate_recent, card.realized_pnl_usd_recent, card.recent_window_trades_count = (
                 _recent_window_metrics(cumulative_trades, window_days=WEIGHTS.recent_window_days)
