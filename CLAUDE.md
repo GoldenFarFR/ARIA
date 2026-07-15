@@ -1695,6 +1695,26 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   fonctionne correctement une fois le contenu total maîtrisé). Corrigé en
   mockant ces générateurs à vide dans le test, suite complète reverte
   (5020 passed).
+- **15/07 (nuit) — #182 corrigé : correctif de vitesse scan wallet (VPS
+  Principal), réponse à la question opérateur "1h entre 2 scans de 50
+  tokens, il faut diviser ça par 2".** Diagnostic (cloud) : le
+  wallet-scoring n'utilise `price_at()` (une seule bougie la plus
+  proche d'un timestamp) mais `OHLCVClient.get_ohlcv` exigeait 20
+  bougies (`_MIN_USEFUL_CANDLES`, pensé pour /vc et son besoin de
+  support/résistance) avant d'accepter le palier journalier, sinon
+  escalade vers 4H puis 1H -- jusqu'à 2 appels GeckoTerminal
+  supplémentaires par token pour un token jeune/microcap n'ayant pas
+  encore 20 bougies journalières (profil fréquent d'un wallet actif sur
+  Base). Fix : nouveau paramètre `min_useful_candles` sur
+  `OHLCVClient.get_ohlcv` (défaut inchangé, `_MIN_USEFUL_CANDLES`),
+  transmis via `GeckoTerminalClient.get_ohlcv` (uniquement si fourni
+  explicitement -- zéro nouveau kwarg pour les appelants existants),
+  passé à `1` au point d'appel wallet-scoring dans `smart_money.py`.
+  Zéro régression `/vc` (défaut inchangé partout, verrouillé par test
+  dédié). 8 nouveaux tests, suite complète verte. **Rien déployé** --
+  la lenteur observée en prod ce soir (captures opérateur, ~20-45min
+  entre notifications de progression) reflète encore l'ANCIEN code ;
+  amélioration attendue seulement après déploiement.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
