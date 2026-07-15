@@ -1644,6 +1644,18 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   que par une ré-implémentation Louvain/K-means from scratch -- le signal
   brut est déjà là, gratuit. Détail complet :
   `docs/aria-learning-inbox/2026-07-15-graphsense-verifie-negatif-dune-labels-pivot.md`.
+- **15/07 (nuit, suite) — VPS Research : `algorithm_name` (Dune
+  `labels.owner_addresses`) vérifié vide -- verdict négatif, symétrique à
+  GraphSense.** Requête réelle : `algorithm_name` est `NULL` sur les 52,4
+  millions de lignes de la table (5 groupes seulement en tout,
+  `source` NULL/Forta/forta/Manual, jamais un nom d'algorithme réel) --
+  aucun raccourci de clustering supplémentaire ici. Les deux raccourcis
+  réels pour le chantier Sybil restent ceux du rapport précédent :
+  `addresses.stats.first_funded_by` et `cex.addresses`. Découverte
+  adjacente banquée : Forta Network (source réelle sur ~6900 lignes) --
+  détection de menaces temps réel sur smart contracts, même famille que
+  GoPlus, hors sujet Sybil direct. Coût 0,111 crédit. Détail complet :
+  `docs/aria-learning-inbox/2026-07-15-labels-owner-addresses-algorithm-name-verdict-negatif.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
