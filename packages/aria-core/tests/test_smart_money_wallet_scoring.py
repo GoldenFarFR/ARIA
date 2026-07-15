@@ -25,6 +25,18 @@ from aria_core.services.geckoterminal import OHLCVResult, PoolMetadata
 from aria_core.services.goplus import AddressSecurity
 from aria_core.skills.ta_levels import Candle
 from aria_core.services import smart_money as sm
+from aria_core.services import wallet_scan_state
+
+
+@pytest.fixture(autouse=True)
+def _isolated_wallet_scan_state_db(tmp_path, monkeypatch):
+    """15/07 (#157 suite) : wallet_scan_state.py a son PROPRE DB_PATH (module
+    séparé de smart_money.py, cf. import différé anti-cycle) -- sans cette
+    isolation automatique, un `score_wallets` de test écrirait dans la vraie
+    base par défaut et polluerait les tests suivants (un wallet/token de test
+    "déjà scanné" resterait marqué comme tel entre deux tests sans rapport)."""
+    monkeypatch.setattr(wallet_scan_state, "DB_PATH", str(tmp_path / "wallet_scan_state.db"))
+
 
 WALLET_A = "0x" + "a" * 40
 WALLET_B = "0x" + "b" * 40
