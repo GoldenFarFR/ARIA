@@ -1168,6 +1168,47 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   qui scale avec l'échantillon, documentation honnête plutôt que correctif cosmétique) reste
   la référence réutilisable pour toute future source de données manipulable qu'ARIA
   branchera, comme noté par l'opérateur.
+- **15/07 (nuit, suite) — un vrai bug corrigé (Gemini), un vrai biais documenté (DeepSeek
+  round 2), marathon wallet-scoring définitivement clos (`7ab29a6`).** Gemini a trouvé le
+  dernier angle mort sérieux : une panne D'INFRASTRUCTURE GeckoTerminal (timeout/429/erreur
+  serveur, ponctuelle, déjà retentée plusieurs fois avant d'abandonner) lors de la résolution
+  du pool d'un token pouvait se figer en **cicatrice permanente** — le scan incrémental
+  persistant (`wallet_scan_state.py`, #157 suite) ne re-tente un token déjà "vu" QUE si son
+  activité on-chain a changé, jamais sur la simple disparition d'une panne réseau. Une simple
+  coupure d'une seconde pendant un scan en arrière-plan condamnait donc une jambe à rester
+  "sans prix" pour toujours, faussant durablement le PnL ET `price_confirmation_ratio` du
+  wallet. **Vérifié avant de coder** : `resolve_primary_pool` (`geckoterminal.py`) distingue
+  déjà, EN TEXTE, un verdict de DONNÉE légitime ("aucun pool trouvé pour ce token") d'une
+  panne d'infrastructure (tout échec `_get_json` est préfixé par sa constante `UNAVAILABLE`)
+  — signal déjà présent, jamais exploité. Corrigé : `_analyze_wallet_multi_token` classe
+  chaque échec de résolution de pool en conséquence
+  (`transient_pricing_error_tokens`), et `score_wallets` exclut ces tokens du
+  checkpoint "scanné" — ils redeviennent éligibles au prochain appel sans qu'aucune
+  nouvelle activité ne soit nécessaire. **Portée honnête assumée** : ne corrige QUE la
+  couche de résolution de pool (le point d'entrée le plus fréquent de la cascade) — les
+  couches OHLCV (`services/ohlcv.py`, client PARTAGÉ avec `vc_predictions`/
+  `weekly_training`/`pump_dump_autopsy`) et CoinMarketCap confondent encore panne
+  transitoire et absence légitime de donnée sous la même convention de texte ; les
+  démêler exigerait soit un champ typé threadé à travers un client partagé par d'autres
+  systèmes (risque de régression ailleurs), soit un filtrage fragile par sous-chaîne de
+  diagnostic — documenté comme résidu plus étroit qu'avant, pas éliminé. **DeepSeek
+  (round 2)** a ensuite pointé un vrai biais introduit par le correctif #175 de la nuit
+  précédente : exclure un wallet `price_confidence_low` de la population de comparaison
+  percentile protège l'intégrité du percentile des AUTRES wallets, mais resserre
+  mécaniquement cette population autour des wallets qui tradent via des paires
+  stablecoin directes — sous-représentant structurellement les traders de tokens peu
+  liquides ou routés via agrégateur, **exactement le profil que la thèse même d'ARIA
+  cherche à sourcer** (microcaps Base). Documenté comme tension assumée plutôt que
+  corrigé : revenir sur l'exclusion #175 réintroduirait directement le bug qu'elle
+  corrigeait (ancrer un percentile sur des chiffres non fiables) — un vrai arbitrage
+  entre deux défauts connus, pas une erreur unilatérale. 3 nouveaux tests (dont un test
+  de contraste confirmant qu'un token sans AUCUN pool, verdict légitime, reste bien
+  marqué "scanné" comme avant), suite complète verte (4928/4928). Un dernier passage de
+  gpt-nano (5e voix) le même soir n'a apporté qu'une reformulation/relecture du résumé
+  déjà envoyé à l'opérateur, aucun nouveau point technique. **Marathon wallet-scoring
+  fermé pour cette session** — plus de 22 correctifs réels au total (#158 à #177) sur ce
+  chantier, documentation honnête et à jour des limites structurelles qui restent de
+  vrais chantiers séparés si jamais repris.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
