@@ -168,6 +168,30 @@ class TestResolvePrimaryPool:
         assert result.available is True
         assert result.pool_address == "0xpool_high"
         assert result.created_at.month == 2
+        assert result.reserve_usd == pytest.approx(50_000.0)  # 15/07 -- défense anti-dust/scam-pool
+
+    @pytest.mark.asyncio
+    async def test_missing_reserve_data_defaults_to_zero_not_none(self, monkeypatch):
+        # 15/07, revue Gemini suite -- vérifie précisément que le vrai client
+        # ne renvoie JAMAIS reserve_usd=None pour une donnée manquante (ex.
+        # scam token fraîchement dusté, pas encore indexé par GeckoTerminal) :
+        # `float(attrs.get("reserve_in_usd") or 0.0)` retombe sur 0.0, qui
+        # échoue DÉJÀ le plancher de liquidité côté smart_money.py -- le
+        # fail-open sur `None` (cf. WEIGHTS.min_pool_liquidity_usd_for_pricing)
+        # n'est jamais atteint par ce chemin réel, seulement par un double de
+        # test qui omet le champ.
+        client = GeckoTerminalClient()
+        url = f"{client.base_url}/networks/base/tokens/0xtoken/pools"
+        _patch_client(
+            monkeypatch,
+            {url: FakeResponse(200, {"data": [{"attributes": {"address": "0xpool_new"}}]})},
+        )
+
+        result = await client.resolve_primary_pool("0xtoken")
+
+        assert result.available is True
+        assert result.reserve_usd == 0.0
+        assert result.reserve_usd is not None
 
     @pytest.mark.asyncio
     async def test_no_pools_found_unavailable_never_guesses_token_as_pool(self, monkeypatch):

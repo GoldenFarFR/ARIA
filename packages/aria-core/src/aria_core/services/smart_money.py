@@ -25,7 +25,7 @@ import math
 import os
 from collections import deque
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from statistics import fmean
 
 import aiosqlite
@@ -85,6 +85,32 @@ def _is_wrap_unwrap_leg(transfer: TokenTransfer) -> bool:
     if addr not in _WRAPPED_NATIVE_ADDRESSES:
         return False
     return (transfer.from_address or "").lower() == _ZERO_ADDRESS or (transfer.to_address or "").lower() == _ZERO_ADDRESS
+
+
+# Extension de l'exploit wrap/unwrap (15/07, revue Gemini suite) : un swap
+# stable<->stable (USDC<->USDT/DAI, pool à frais infimes, risque directionnel
+# quasi nul) permet le même padding de WEIGHTS.min_total_swaps que wrap/
+# unwrap, sans passer par un mint/burn -- non couvert par `_is_wrap_unwrap_leg`.
+# Réutilise le registre stablecoin DÉJÀ existant (`_STABLECOIN_ADDRESSES_BY_CHAIN`,
+# construit pour le pricing par hash exact) -- aucun nouveau registre à
+# maintenir, contrairement au cas LST/wrapped (stETH<->wstETH, WBTC<->tBTC,
+# rETH<->wETH) qui resterait un vrai trou (registre de correspondance peg par
+# peg, hors de portée de ce correctif -- documenté comme limite ci-dessous).
+_ALL_RECOGNIZED_STABLECOINS: frozenset[str] = frozenset().union(*_STABLECOIN_ADDRESSES_BY_CHAIN.values())
+
+
+def _is_recognized_stablecoin(token_address: str | None) -> bool:
+    return (token_address or "").lower() in _ALL_RECOGNIZED_STABLECOINS
+
+
+def _is_stable_to_stable_peg_swap(tx_hash: str, transfers_by_tx: dict[str, list[TokenTransfer]]) -> bool:
+    """Vrai si TOUTES les jambes touchant le wallet dans cette transaction sont
+    des stablecoins reconnus (achat ET vente d'un côté comme de l'autre) --
+    un swap stable<->stable, pas un vrai pari directionnel. Une seule jambe
+    stablecoin (ex. achat d'un memecoin PAYÉ en USDC) n'est jamais concernée --
+    `len(legs) >= 2` exige au moins un aller ET un retour."""
+    legs = transfers_by_tx.get(tx_hash, [])
+    return len(legs) >= 2 and all(_is_recognized_stablecoin(t.token_address) for t in legs)
 
 
 @dataclass
@@ -493,6 +519,65 @@ async def analyze_smart_money(
 #   serait plus robuste à ce cas -- piste identifiée, pas construite ce
 #   passage (refonte de la fonction, effet sur le comportement existant à
 #   valider séparément).
+#
+# TROISIÈME PASSAGE (15/07, même soirée -- revue croisée round 2/3, Gemini x2
+# + ChatGPT + Grok). Corrigés ce passage : swaps stable<->stable exclus du
+# compteur de swaps (extension de l'exploit wrap/unwrap ci-dessus, cf.
+# `_is_stable_to_stable_peg_swap`) ; métriques sur fenêtre récente
+# (`_recent_window_metrics`, réponse au biais temporel -- ChatGPT) ; clarifié
+# et verrouillé par test que le fail-open sur liquidité inconnue n'est jamais
+# atteint par le vrai client GeckoTerminal (cf. commentaire sur
+# `pool_liquid_enough` plus bas). Vérifié et REJETÉ (répété deux fois par
+# Gemini, toujours faux contre le code) : la division par zéro du Sortino --
+# `_sortino_ratio` retourne `None` dès que `downside` est vide, avant tout
+# calcul de déviation, verrouillé par `test_no_losses_unavailable_not_infinite`.
+#
+# Documentés, DÉLIBÉRÉMENT non corrigés ce passage :
+#
+# - Paires LST/wrapped à corrélation quasi parfaite (revue Gemini) : au-delà
+#   du stable<->stable maintenant fermé, WBTC<->tBTC, stETH<->wstETH,
+#   rETH<->wETH permettent le même padding à coût/risque quasi nul. Pas de
+#   registre existant à réutiliser ici (contrairement aux stablecoins) --
+#   construire et maintenir un registre de correspondance peg par peg est le
+#   même type de charge que le registre de protocoles DeFi déjà écarté plus
+#   haut. Trou plus étroit qu'avant (le sous-cas stable<->stable, sans doute
+#   le plus utilisé en pratique, est fermé), mais réel.
+# - Dilution du trim anti-chance par micro-trades (revue Gemini, raffinement) :
+#   `_robust_pnl_check` trie par PnL EN DOLLARS, pas par rendement en %. Un
+#   attaquant qui veut faire sortir un trade légendaire (ex. +10 000% sur une
+#   position minuscule) du trim doit padder avec des trades dont le PnL EN
+#   DOLLARS est comparable ou supérieur -- pas de simples micro-trades à
+#   quelques centimes, qui restent alors en dessous du trade légendaire dans
+#   le tri et continuent de se faire trimmer les premiers. La vulnérabilité
+#   réelle est donc plus étroite que "spammer des micro-trades gratuits" :
+#   elle exige un trade légendaire lui-même de faible montant EN DOLLARS
+#   malgré un pourcentage énorme, ET un déploiement de capital réel sur les
+#   trades de padding pour dépasser ce montant -- un cas plus contraint, pas
+#   éliminé pour autant. Piste de raffinement identifiée, pas construite : un
+#   trim par écart-type/z-score (retirer les trades à plus de X écarts-types
+#   de la médiane) serait insensible à l'axe $ vs % choisi, mais change la
+#   méthodologie plus profondément (instabilité du z-score lui-même sur petit
+#   échantillon à gérer) -- candidat pour un futur passage, pas ce soir.
+# - Pondération égale par trade (pas par capital) de win_rate/trim/health_trend
+#   (revue ChatGPT) : seule la diversification a désormais une variante
+#   pondérée par capital (cf. plus haut). Win rate, trim anti-chance et
+#   courbe de santé restent comptés PAR TRADE -- un trade de 500 000$ pèse
+#   autant qu'un trade de 10$. Choix ASSUMÉ, pas un oubli : le comptage par
+#   trade mesure autre chose (la capacité à trouver des gagnants sur des
+#   paris indépendants), pas remplaçable par une version pondérée sans perdre
+#   ce signal -- documenté plutôt que "corrigé" dans un sens ou l'autre.
+# - Manipulation du point de bascule de la courbe de santé (revue Grok,
+#   précision sur la limite déjà notée) : au-delà du simple découpage par
+#   nombre de trades plutôt que par fenêtre calendaire, un wallet peut
+#   délibérément accélérer ou ralentir son activité pour placer le point de
+#   bascule à un moment favorable de sa propre courbe de PnL -- un levier de
+#   manipulation actif, pas seulement un angle mort passif. Même refonte
+#   candidate que déjà notée (découpage calendaire), pas construite.
+# - Coordination Sybil, absence de benchmark marché, gaming structurel des
+#   tests de robustesse, MEV/arbitrage atomique, farming du seuil d'entrée,
+#   asymétrie de couverture protocolaire : reconfirmés par la revue round 2/3
+#   (Grok) comme toujours non résolus -- aucun élément nouveau qui changerait
+#   l'évaluation déjà écrite plus haut, pas de duplication de l'entrée.
 # ============================================================================
 
 # Tous les poids/seuils tunables de ce chantier vivent dans
@@ -695,13 +780,21 @@ def _count_total_swaps(all_flat_transfers: list[TokenTransfer], wallet: str) -> 
     trades CLÔTURÉS (qui exige un achat ET une vente appariés en FIFO).
 
     Exclut les jambes de wrap/unwrap ETH<->WETH (15/07, revue Gemini, cf.
-    `_is_wrap_unwrap_leg`) -- sinon un script de wrapping répété débloquerait
-    WEIGHTS.min_total_swaps sans jamais avoir pris de risque de trading réel."""
+    `_is_wrap_unwrap_leg`) et les swaps stable<->stable (15/07, revue Gemini
+    suite, cf. `_is_stable_to_stable_peg_swap`) -- sinon un script de
+    wrapping/peg-swapping répété débloquerait WEIGHTS.min_total_swaps sans
+    jamais avoir pris de risque de trading réel."""
     wallet_l = wallet.lower()
+    by_tx: dict[str, list[TokenTransfer]] = {}
+    touching: list[TokenTransfer] = []
+    for t in all_flat_transfers:
+        if (t.to_address or "").lower() == wallet_l or (t.from_address or "").lower() == wallet_l:
+            touching.append(t)
+            by_tx.setdefault(t.tx_hash, []).append(t)
+
     return sum(
-        1 for t in all_flat_transfers
-        if ((t.to_address or "").lower() == wallet_l or (t.from_address or "").lower() == wallet_l)
-        and not _is_wrap_unwrap_leg(t)
+        1 for t in touching
+        if not _is_wrap_unwrap_leg(t) and not _is_stable_to_stable_peg_swap(t.tx_hash, by_tx)
     )
 
 
@@ -755,6 +848,26 @@ def _health_trend(
     if delta < -stable_band_pct:
         return "dégradation"
     return "stable"
+
+
+def _recent_window_metrics(
+    closed_trades: list[ClosedTrade], *, window_days: int,
+) -> tuple[float | None, float | None, int]:
+    """Biais temporel (15/07, revue ChatGPT) : un wallet excellent 3 ans puis
+    dégradé depuis 6 mois garde un win_rate/Sortino/PnL historiques excellents
+    très longtemps -- la courbe de santé (`_health_trend`) aide (2e moitié vs
+    1ère) mais ne corrige PAS le score principal, qui reste calculé sur tout
+    l'historique. Calcule win_rate/PnL réalisé sur les SEULS trades clôturés
+    (vente) dans les ``window_days`` derniers jours -- en COMPLÉMENT, jamais en
+    remplacement des métriques historiques complètes (mêmes cumulative_trades,
+    juste un sous-ensemble récent). Renvoie ``(None, None, 0)`` si aucun trade
+    clôturé dans la fenêtre -- jamais un chiffre sur un vide."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    recent = [t for t in closed_trades if t.sell_ts >= cutoff]
+    if not recent:
+        return None, None, 0
+    wins = sum(1 for t in recent if t.pnl_usd > 0)
+    return wins / len(recent), sum(t.pnl_usd for t in recent), len(recent)
 
 
 def _group_transfers_by_token(transfers: list[TokenTransfer], *, chain: str = "base") -> dict[str, list[TokenTransfer]]:
@@ -1018,10 +1131,19 @@ async def _analyze_wallet_multi_token(
         # mais dont la liquidité CONFIRMÉE est sous le plancher n'est pas assez
         # fiable pour valoriser un PnL réel (pool trivialement manipulable --
         # ex. token de dust envoyé par un scammeur avec une "liquidité"
-        # artificielle sur un pool minuscule). ``reserve_usd is None``
-        # (inconnu -- pas cette donnée côté API, ou test qui ne la fournit
-        # pas) reste fail-open : seule une valeur CONFIRMÉE sous le plancher
-        # bloque, jamais un défaut de donnée.
+        # artificielle sur un pool minuscule). ``reserve_usd is None`` reste
+        # fail-open -- POINT VÉRIFIÉ EXPLICITEMENT (15/07, revue Gemini suite,
+        # objection "et si la liquidité est *inconnue* juste après le
+        # déploiement d'un scam, avant l'indexation ?") : `GeckoTerminalClient.
+        # resolve_primary_pool` (vrai client, cf. geckoterminal.py) ne renvoie
+        # JAMAIS `None` pour une réserve manquante -- `reserve_in_usd` absent
+        # de la réponse API retombe sur `0.0` (`float(attrs.get(...) or 0.0)`),
+        # qui échoue DÉJÀ le plancher. Le cas `None` n'est donc atteignable
+        # QUE par un double de test/une interface alternative qui ne
+        # renseigne pas ce champ -- jamais par le vrai chemin de production.
+        # Le fail-open reste un filet de sécurité d'INTERFACE (rétrocompat
+        # tests existants), pas une faille de sécurité active. Verrouillé par
+        # `test_missing_reserve_data_defaults_to_zero_not_none` (geckoterminal).
         pool_liquid_enough = pool_meta.available and (
             pool_meta.reserve_usd is None or pool_meta.reserve_usd >= WEIGHTS.min_pool_liquidity_usd_for_pricing
         )
@@ -1515,6 +1637,12 @@ class WalletScoreCard:
     max_drawdown_pct: float | None = None
     avg_holding_period_days: float | None = None  # 15/07 -- conviction vs. rotation rapide (méthodologie sourcée)
 
+    # Fenêtre récente (15/07, revue ChatGPT -- biais temporel) : en PLUS des
+    # métriques historiques complètes ci-dessus, jamais à leur place.
+    win_rate_recent: float | None = None
+    realized_pnl_usd_recent: float | None = None
+    recent_window_trades_count: int = 0
+
     # Confiance du cost-basis (15/07, revue Gemini) : part des jambes (achat +
     # vente) valorisées par un prix d'exécution EXACT plutôt que par le repli
     # marché OHLCV. Affiché À CÔTÉ du score (jamais en cachant win_rate/PnL),
@@ -1682,6 +1810,14 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         if card.avg_holding_period_days is not None
         else "Durée moyenne de détention : indisponible"
     )
+    if card.recent_window_trades_count:
+        lines.append(
+            f"Fenêtre récente ({WEIGHTS.recent_window_days}j, {card.recent_window_trades_count} trade(s) "
+            f"clôturé(s)) : win rate {card.win_rate_recent:.0%}, PnL ${card.realized_pnl_usd_recent:,.2f} "
+            "-- en complément de l'historique complet ci-dessus, jamais à sa place."
+        )
+    else:
+        lines.append(f"Fenêtre récente ({WEIGHTS.recent_window_days}j) : aucun trade clôturé -- indisponible")
     lines.append(
         f"Récurrence acheteur précoce multi-lancements : {card.early_entry_recurrence_count} token(s) "
         f"(dont {card.informed_entry_count} avec conditions techniques jugées informées)"
@@ -1962,6 +2098,9 @@ async def score_wallets(
             returns = [r for t in cumulative_trades if (r := t.return_pct) is not None]
             card.sortino = _sortino_ratio(returns)
             card.avg_holding_period_days = _avg_holding_period_days(cumulative_trades)
+            card.win_rate_recent, card.realized_pnl_usd_recent, card.recent_window_trades_count = (
+                _recent_window_metrics(cumulative_trades, window_days=WEIGHTS.recent_window_days)
+            )
 
             by_token: dict[str, float] = {}
             capital_by_token: dict[str, float] = {}
