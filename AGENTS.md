@@ -76,6 +76,9 @@ Monorepo `github.com/GoldenFarFR/ARIA` (branche `main`). Repos liés : `aria-ops
 - **Scoring risque token** (`acp_onchain_scan.py`) : security_score 0-95 + SAFE/CAUTION/DANGER (liquidité, volume, sells/buys). Red-flags basiques.
 - **Mémoire** : journal (`memory/__init__.py`), connaissance cognitive (`cognitive_knowledge`, confidence + approved), truth-ledger, réflexion/buts/valeurs/arbitre.
 
+**🔧 CONSTRUIT, PAS BRANCHÉ (15/07)** :
+- **Dune Analytics** (`services/dune.py`, cf. `docs/dune-integration-plan.md`) : client Execute SQL (dôme habituel, clé `DUNE_API_KEY` optionnelle lue par appel, `available=False` immédiat sans clé — jamais d'appel réseau). `run_sql_and_wait` orchestre exécution + sondage de statut (gratuit côté Dune) + lecture du résultat, borné (`max_wait`, jamais une attente non bornée). `build_early_buyer_multiple_query` : requête SQL dédiée (§3.2 du plan) "wallets ayant acheté un token Base dans sa première heure de vie, qui a ensuite fait ≥Nx" sur `dex.trades`. **Réserve honnête : noms de colonnes/endpoints vérifiés contre la doc PUBLIQUE Dune uniquement (aucune clé disponible cette session pour un appel réel) — à reconfirmer via `EXECUTE_SQL_LIMIT_1` avant tout usage en prod**, norme du 14/07 (ne jamais faire confiance à un schéma deviné de mémoire). Aucun gate `ARIA_DUNE_ENABLED`, aucune tâche heartbeat, aucun appel depuis `wallet_candidate_sourcing.py` — décision opérateur explicite (15/07), l'intégration au sourcing existant est une tâche séparée.
+
 **✅ SOLIDE — garde-fous wallet :**
 - Clé privée **JAMAIS sur le serveur** — signature via subprocess `acp-cli` local (keychain PC opérateur).
 - Mécanisme technique : `resolve_spend` atteignable uniquement par clic Telegram réel + anti double-clic atomique — indépendant de `aria_autonomous`.
