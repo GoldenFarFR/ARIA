@@ -1983,6 +1983,54 @@ service en tâche de fond persistante (différent d'un cycle heartbeat
 classique), une vraie brique d'architecture à poser proprement une fois
 #194 stabilisé.
 
+## Clôture de session (15/07 nuit) — plus de questions que de réponses,
+comme prévu par l'opérateur ("théoriquement maintenant... tu devrais te
+retrouver avec plus de question que de réponse")
+
+**Fait et fusionné sur `main` ce segment** : #186 (coupe-circuit drawdown +
+sizing par risque, `cf3eef57`), #195 (cadence 180→15min, `a16ae20b`), le
+correctif d'injection texte caché CSS (`0fb1a14`, #192), la fonction Dune
+`first_funded_by` (`c95feed`). **Rien de tout ça n'est encore déployé sur
+le VPS** — ~6400 lignes accumulées, seuil de rappel (4000) dépassé depuis
+plusieurs heures.
+
+**En vol, pas encore livré** :
+- **#194 (le bloc central)** — pipeline momentum/technique + DexScreener à
+  fond + multi-chaînes, dispatché à Secondaire, aucun rapport reçu à la
+  clôture de ce segment.
+- **#196** — écoute WebSocket temps réel (vérifiée fonctionnelle en direct
+  ce soir), en file après #194.
+- **#197** — poster l'activité de trading dans le sujet Telegram dédié de
+  l'opérateur (BS Cabal), demandé ce soir, pas commencé.
+- **#187** — surveillance continue positions + concentration, en pause
+  depuis le pivot #194.
+- **#189** — diligence Research (frais réels $10 Coinbase + validation
+  statistique du protocole 30j/7j/14j), dispatché, pas de rapport reçu.
+- **#191/#192** — mandat permanent Research (psychologie + atouts/points
+  faibles IA), actif, continue en boucle sans intervention nécessaire.
+
+**Questions réellement ouvertes, à trancher avec l'opérateur à la reprise** :
+1. Tension jamais résolue entre le protocole 30j/7j/14j (ce segment) et le
+   barème `protocole-argent-reel.md` (≥80 trades/≥180j) — lequel prime, ou
+   coexistent-ils (test préliminaire poche 15% vs grand barème) ?
+2. Date de démarrage réelle du compteur 30 jours — pas encore fixée
+   concrètement (dépend du déploiement de #194+#186+#195).
+3. `verify_external_claim` (trouvé par Research, #192) : verdict par liste
+   figée de 5 cas, ne raisonne jamais sur les preuves récupérées — proposition
+   de fix documentée, pas implémentée (nécessite un test LLM réel).
+4. Aucun module de backtest historique (paper-trading forward seulement) —
+   gap documenté par Research, pas construit.
+5. Quick Intel (second avis sécurité, payant) — banqué, pas d'arbitrage
+   coût/bénéfice tranché.
+6. #194 : le comportement multi-chaînes (Solana/Robinhood au-delà de Base)
+   n'a encore jamais été testé de bout en bout, seulement vérifié brique
+   par brique (GoPlus, DexScreener).
+
+**Prochaine reprise, dans l'ordre** : attendre/relire #194 (Secondaire) →
+merger → demander le "go" déploiement groupé (#186+#195+#194+correctif
+injection+Dune) → vérifier sur Telegram/cockpit que le compteur bouge →
+trancher les 6 questions ci-dessus avec l'opérateur → #197 → reprendre #187.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
