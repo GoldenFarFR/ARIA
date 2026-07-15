@@ -430,6 +430,16 @@ WITH token_launch AS (
     HAVING MIN(block_time) >= NOW() - INTERVAL '{lookback_hours}' hour
 ),
 recent_volume AS (
+    -- RÉSERVE (VPS Research, 15/07, test live sur dex.trades) : `amount_usd`
+    -- est `null` sur certaines lignes issues de projets agrégateurs (ex.
+    -- `0x API`) -- `SUM()` ignore silencieusement ces lignes (ni erreur ni
+    -- exception), donc `volume_usd` ici est un plancher, jamais un total
+    -- garanti exact : un token tradé surtout via agrégateur peut être
+    -- sous-évalué et manquer le seuil `min_volume_usd` à tort (faux négatif
+    -- de découverte, jamais un faux positif de sécurité). À traiter avant
+    -- tout usage en prod si ça s'avère significatif (ex. COALESCE + colonne
+    -- séparée `trade_count_unpriced` pour rendre le manque visible, jamais
+    -- une valeur inventée).
     SELECT
         token_bought_address AS token_address,
         SUM(amount_usd) AS volume_usd,
