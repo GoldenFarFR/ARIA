@@ -1567,7 +1567,15 @@ async def _analyze_wallet_multi_token(
             # une vente n'est jamais exploitable pour fabriquer un gain (elle ne
             # fait que révéler un prix réel, éventuellement mauvais), donc rien
             # à protéger de ce côté.
-            ohlcv = await gecko.get_ohlcv(pool_meta.pool_address, network=network)
+            # min_useful_candles=1 (#182, 15/07, correctif de vitesse) : le
+            # wallet-scoring ne consomme jamais qu'une seule bougie par
+            # `price_at` (la plus proche d'un timestamp donné) -- le seuil par
+            # défaut de 20 bougies (pensé pour /vc, qui a besoin d'assez de
+            # bougies pour du support/résistance) n'a aucun sens ici et coûte
+            # jusqu'à 2 appels GeckoTerminal supplémentaires par token pour un
+            # token jeune/microcap qui n'a pas encore 20 bougies journalières
+            # -- exactement le profil fréquent d'un wallet actif sur Base.
+            ohlcv = await gecko.get_ohlcv(pool_meta.pool_address, network=network, min_useful_candles=1)
             if not pool_liquid_enough:
                 result.thin_liquidity_tokens.append(token_addr)
         else:

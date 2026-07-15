@@ -291,7 +291,14 @@ class GeckoTerminalClient:
             pool_address=pool_address, created_at=created_at, reserve_usd=best_reserve, available=True, error=None,
         )
 
-    async def get_ohlcv(self, pool_address: str, *, network: str = NETWORK, **_kwargs: object) -> OHLCVResult:
+    async def get_ohlcv(
+        self,
+        pool_address: str,
+        *,
+        network: str = NETWORK,
+        min_useful_candles: int | None = None,
+        **_kwargs: object,
+    ) -> OHLCVResult:
         """Délègue à ``services.ohlcv.ohlcv_client`` -- correction 14/07 (#157) :
         cette méthode réimplémentait un second client GeckoTerminal avec sa
         propre fenêtre fixe (200 bougies 1h ~ 8 jours), alors qu'un client
@@ -304,12 +311,20 @@ class GeckoTerminalClient:
         trades dépasse 8 jours : la fenêtre 1h ne remontait simplement pas
         assez loin, ce n'était pas un problème de rate-limit. ``network``
         (#157 multi-chaînes, 14/07) transite jusqu'à ``services/ohlcv.py`` (qui
-        acceptait déjà ce paramètre, jamais utilisé jusqu'ici). ``**_kwargs``
-        absorbe d'éventuels period/aggregate/limit hérités (aucun appelant en
-        prod n'en passe actuellement) sans lever."""
+        acceptait déjà ce paramètre, jamais utilisé jusqu'ici). ``min_useful_candles``
+        (#182, 15/07, correctif de vitesse wallet-scoring) transite aussi jusqu'à
+        ``services/ohlcv.py`` -- ``None`` par défaut (le paramètre correspondant
+        de ``ohlcv_client.get_ohlcv`` garde alors SON propre défaut,
+        ``_MIN_USEFUL_CANDLES``, aucun changement pour les appelants existants).
+        ``**_kwargs`` absorbe d'éventuels period/aggregate/limit hérités (aucun
+        appelant en prod n'en passe actuellement) sans lever."""
         from aria_core.services.ohlcv import ohlcv_client as _wide_ohlcv_client
 
-        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=network)
+        extra: dict[str, object] = {}
+        if min_useful_candles is not None:
+            extra["min_useful_candles"] = min_useful_candles
+
+        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=network, **extra)
         if not wide.available or not wide.candles:
             return OHLCVResult(candles=[], available=False, error=wide.error or UNAVAILABLE)
         return OHLCVResult(candles=wide.candles, available=True, error=None)
