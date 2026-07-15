@@ -62,7 +62,7 @@ if [ -f "$cf" ]; then
 fi
 
 # --- Lignes non déployées sur le VPS (alimenté par le hook checkpoint) ------
-# Affiche « 🚀 Nk non-dépl. » dès qu'il y a du delta ; alerte au-delà du seuil (2500).
+# Affiche « 🚀 Nk non-dépl. » dès qu'il y a du delta ; alerte au-delà du seuil (6000).
 deploy=""
 uf="${dir}/.claude/.undeployed-lines"
 if [ -f "$uf" ]; then
@@ -71,7 +71,7 @@ if [ -f "$uf" ]; then
     ''|*[!0-9]*) ud="" ;;
   esac
   if [ -n "$ud" ] && [ "$ud" -gt 0 ]; then
-    if [ "$ud" -ge 2500 ]; then
+    if [ "$ud" -ge 6000 ]; then
       deploy="🚀 ${ud} l. à déployer · "
     elif [ "$ud" -ge 500 ]; then
       deploy="🚀 ${ud} l. non-dépl. · "
