@@ -240,6 +240,33 @@ class TestAvgHoldingPeriod:
         assert sm._avg_holding_period_days(trades) == pytest.approx(6.0)
 
 
+class TestRecentWindowMetrics:
+    """15/07, revue ChatGPT -- biais temporel : `_dt()` est relatif à une base
+    FIXE (2026-01-01), pas à MAINTENANT -- les timestamps sont construits
+    directement relatifs à `datetime.now()` (même patron que
+    `test_age_measured_from_earliest_transfer_to_now`)."""
+
+    def test_no_trades_in_window_unavailable(self):
+        now = datetime.now(timezone.utc)
+        old_trade = sm.ClosedTrade(TOKEN_X, now - timedelta(days=200), now - timedelta(days=199), 10.0, 1.0, 2.0)
+        win_rate, pnl, count = sm._recent_window_metrics([old_trade], window_days=90)
+        assert win_rate is None
+        assert pnl is None
+        assert count == 0
+
+    def test_recent_trades_computed_independently_of_old_history(self):
+        # Un wallet excellent il y a 200 jours (hors fenêtre) mais perdant
+        # récemment (dans la fenêtre) -- la fenêtre récente ne doit refléter
+        # QUE le trade récent, jamais diluée par l'historique ancien.
+        now = datetime.now(timezone.utc)
+        old_winner = sm.ClosedTrade(TOKEN_X, now - timedelta(days=200), now - timedelta(days=199), 10.0, 1.0, 100.0)
+        recent_loser = sm.ClosedTrade(TOKEN_X, now - timedelta(days=10), now - timedelta(days=5), 10.0, 10.0, 1.0)
+        win_rate, pnl, count = sm._recent_window_metrics([old_winner, recent_loser], window_days=90)
+        assert count == 1
+        assert win_rate == pytest.approx(0.0)
+        assert pnl == pytest.approx(10.0 * (1.0 - 10.0))
+
+
 class TestWalletAgeAndSwapCount:
     def test_no_transfers_unavailable(self):
         assert sm._wallet_age_days([]) is None
@@ -277,6 +304,26 @@ class TestWalletAgeAndSwapCount:
         zero = "0x" + "0" * 40
         mint = _transfer(from_addr=zero, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), tx_hash="0xm")
         assert sm._count_total_swaps([mint], WALLET_A) == 1
+
+    def test_stable_to_stable_peg_swap_excluded_from_swap_count(self):
+        # 15/07, revue Gemini suite -- extension de l'exploit wrap/unwrap :
+        # un swap stable<->stable (frais infimes, risque directionnel quasi
+        # nul) permet le même padding de min_total_swaps. Réutilise le
+        # registre stablecoin existant, aucun nouveau registre à maintenir.
+        stable_a, stable_b = list(sm._STABLECOIN_ADDRESSES_BY_CHAIN["base"])[:2]
+        out_leg = _transfer(from_addr=WALLET_A, to_addr=ROUTER, token=stable_a, ts=_dt(0), tx_hash="0xpeg")
+        in_leg = _transfer(from_addr=ROUTER, to_addr=WALLET_A, token=stable_b, ts=_dt(0), tx_hash="0xpeg")
+        real_buy = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(1), tx_hash="0xr")
+        assert sm._count_total_swaps([out_leg, in_leg, real_buy], WALLET_A) == 1
+
+    def test_single_stablecoin_leg_not_treated_as_peg_swap(self):
+        # Un achat de memecoin PAYÉ en stablecoin (une seule jambe stable dans
+        # la tx, l'autre est le memecoin) n'est jamais un swap stable<->stable
+        # -- exige au moins DEUX jambes stables dans la même transaction.
+        stable_a = next(iter(sm._STABLECOIN_ADDRESSES_BY_CHAIN["base"]))
+        stable_leg = _transfer(from_addr=WALLET_A, to_addr=ROUTER, token=stable_a, ts=_dt(0), tx_hash="0xbuy")
+        memecoin_leg = _transfer(from_addr=ROUTER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), tx_hash="0xbuy")
+        assert sm._count_total_swaps([stable_leg, memecoin_leg], WALLET_A) == 2
 
 
 class TestRobustPnlCheck:

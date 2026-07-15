@@ -163,6 +163,12 @@ class WalletScoringWeights:
     # plancher bloque la valorisation.
     min_pool_liquidity_usd_for_pricing: float = 30_000.0
 
+    # Biais temporel (15/07, revue ChatGPT) : fenêtre récente calculée EN PLUS
+    # (jamais à la place) des métriques historiques complètes -- un wallet
+    # dégradé récemment reste sinon masqué par un historique agrégé favorable.
+    # Valeur de départ, ajustable comme tout `WEIGHTS.*`.
+    recent_window_days: int = 90
+
 
 def _load_weights() -> WalletScoringWeights:
     """Charge les poids réels depuis le fichier privé désigné par
