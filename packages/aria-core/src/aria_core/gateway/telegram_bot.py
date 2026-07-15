@@ -1848,10 +1848,14 @@ async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE
     avance de plusieurs tokens à chaque passage du heartbeat
     (`wallet_scan_queue_cycle`) sans action supplémentaire de l'opérateur --
     ARIA notifie la progression tous les `PROGRESS_NOTIFY_STEP` (50) tokens
-    couverts, puis le rapport final complet dès la couverture complète (le
-    wallet quitte alors la file). Double gate : ``ARIA_WALLET_SCORING_ENABLED``
-    (le moteur lui-même) ET ``ARIA_WALLET_SCAN_QUEUE_ENABLED`` (le cycle de
-    fond) — OFF par défaut tous les deux."""
+    couverts, puis le rapport final complet dès la couverture complète. Suivi
+    PERMANENT (#157 suite 2, 15/07) : le wallet ne quitte JAMAIS la file à
+    100% -- il bascule en surveillance hebdomadaire (nouvelle activité
+    détectée et notifiée sans jamais redemander une couverture complète),
+    retiré seulement après 3 mois sans aucune activité on-chain réelle.
+    Double gate : ``ARIA_WALLET_SCORING_ENABLED`` (le moteur lui-même) ET
+    ``ARIA_WALLET_SCAN_QUEUE_ENABLED`` (le cycle de fond) — OFF par défaut
+    tous les deux."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -1890,7 +1894,8 @@ async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE
         lines.append(f"({skipped} déjà en file, ignoré(s))")
     lines.append(
         f"File d'attente : {total} wallet(s) au total. Tu seras notifié tous les 50 tokens "
-        "couverts, puis dès la couverture complète."
+        "couverts, puis dès la couverture complète -- suivi hebdomadaire ensuite pour toujours "
+        "(sauf 3 mois d'inactivité on-chain)."
     )
     await _reply(message, "\n".join(lines))
 

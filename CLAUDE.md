@@ -1429,6 +1429,40 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   segment, cf. entrée VPS Research ci-dessus) -- à reconfirmer via
   `EXECUTE_SQL_LIMIT_1` avant tout usage en prod. 26 tests (dont le nouveau,
   verrouillant le correctif WHERE/HAVING), suite complète verte (4992 passed).
+- **15/07 (nuit) — suivi PERMANENT des wallets scorés (#157 suite 2, décision
+  opérateur explicite : « je veux que wallet score ne scanne jamais de token, et
+  je veux que chaque wallet scanner a 100% et toujours un suivis de scan pour
+  toujours sauf si le wallet devien inactif plus de 3 mois »), CODÉ, TESTÉ, PAS
+  DÉPLOYÉ.** `wallet_scan_queue.py` réécrit : un wallet qui atteint 100% de
+  couverture n'est plus jamais retiré de la file -- il bascule en mode
+  SURVEILLANCE (`monitoring_since` posé), revérifié une fois par semaine
+  (`MONITORING_INTERVAL_DAYS=7`, confirmé par l'opérateur : « une analyse par
+  semaine devrait suffire »). Chaque vérification hebdomadaire ne redemande
+  JAMAIS une couverture complète (déjà acquise, le moteur incrémental existant
+  ne reprend que le neuf) -- silencieuse si aucune nouvelle activité, notifiée
+  seulement si de nouveaux tokens ont été couverts. Seule sortie : si
+  `WalletScoreCard.last_activity_at` (nouveau champ, dernière activité on-chain
+  RÉELLE observée, distinct de `last_scan_at` qui avance à chaque passage même
+  sans rien de neuf) dépasse `INACTIVITY_CUTOFF_DAYS` (90j, "3 mois") sans
+  aucune activité, la surveillance s'arrête et le wallet est retiré -- jamais
+  avant, jamais sur la durée passée dans la file. Nouvelles colonnes
+  `next_check_at`/`monitoring_since` (migration à chaud idempotente) pilotent
+  le FIFO -- `list_pending()` ne renvoie que les wallets réellement DUS
+  (rattrapage toujours dû immédiatement, surveillance due chaque semaine),
+  jamais un ordre arbitraire. Nouveau `queue_counts()` distingue rattrapage vs
+  surveillance pour l'affichage. Seuil de déclassement par score (mentionné par
+  l'opérateur : « si les notes de wallet descende sous un certain seuil je
+  prevoi de ne plus les scanner ») explicitement différé par l'opérateur à plus
+  tard, "quand la liste sera plus longue". `smart_money.py`/
+  `wallet_scan_state.py` gagnent `last_activity_at` (calculé sur le max des
+  timestamps de transferts réellement observés à chaque passage, persisté au
+  même titre que `scanned_tokens`/`last_scan_at`). `heartbeat.py` mis à jour
+  (`result["completed_first_time"]`/`result["dropped_inactive"]` remplacent
+  l'ancien `result["completed"]`, qui n'a plus de sens puisque rien n'est plus
+  jamais "complété puis retiré"). 31 tests (`test_wallet_scan_queue.py`
+  réécrit + 4 nouveaux dans `test_smart_money_wallet_scoring.py`), suite
+  complète verte (4999 passed). **Rien déployé** -- regroupé avec le prochain
+  déploiement (`/walletqueue` lui-même pas encore en prod).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

@@ -36,10 +36,18 @@ async def _ensure_tables() -> None:
                 scanned_tokens TEXT NOT NULL DEFAULT '[]',
                 last_scan_at TEXT,
                 tokens_found_total INTEGER NOT NULL DEFAULT 0,
-                full_coverage_at TEXT
+                full_coverage_at TEXT,
+                last_activity_at TEXT
             )
             """
         )
+        # Migration à chaud idempotente (15/07, suivi permanent -- #157 suite 2) --
+        # une base déjà déployée avant ce champ n'a pas cette colonne.
+        checkpoint_cols = {
+            row[1] for row in await (await db.execute("PRAGMA table_info(wallet_scan_checkpoint)")).fetchall()
+        }
+        if "last_activity_at" not in checkpoint_cols:
+            await db.execute("ALTER TABLE wallet_scan_checkpoint ADD COLUMN last_activity_at TEXT")
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS wallet_archived_trade (
@@ -75,6 +83,12 @@ class ScanCheckpoint:
     last_scan_at: datetime | None = None
     tokens_found_total: int = 0
     full_coverage_at: datetime | None = None
+    # Suivi permanent (15/07, #157 suite 2) : dernière activité on-chain RÉELLE
+    # jamais vue pour ce wallet (max des timestamps de transferts observés) --
+    # distinct de `last_scan_at` (qui avance à CHAQUE passage, même sans
+    # nouvelle activité). Sert à mesurer une vraie inactivité (ex. 3 mois)
+    # pour arrêter la surveillance hebdomadaire post-100%.
+    last_activity_at: datetime | None = None
 
     @property
     def full_coverage(self) -> bool:
@@ -86,19 +100,20 @@ async def get_checkpoint(wallet: str) -> ScanCheckpoint:
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
             await db.execute(
-                "SELECT scanned_tokens, last_scan_at, tokens_found_total, full_coverage_at "
+                "SELECT scanned_tokens, last_scan_at, tokens_found_total, full_coverage_at, last_activity_at "
                 "FROM wallet_scan_checkpoint WHERE wallet=?",
                 (wallet.lower(),),
             )
         ).fetchone()
     if row is None:
         return ScanCheckpoint()
-    scanned_raw, last_scan_raw, tokens_found_total, full_coverage_raw = row
+    scanned_raw, last_scan_raw, tokens_found_total, full_coverage_raw, last_activity_raw = row
     return ScanCheckpoint(
         scanned_tokens=set(json.loads(scanned_raw or "[]")),
         last_scan_at=datetime.fromisoformat(last_scan_raw) if last_scan_raw else None,
         tokens_found_total=tokens_found_total or 0,
         full_coverage_at=datetime.fromisoformat(full_coverage_raw) if full_coverage_raw else None,
+        last_activity_at=datetime.fromisoformat(last_activity_raw) if last_activity_raw else None,
     )
 
 
@@ -109,19 +124,21 @@ async def save_checkpoint(
     last_scan_at: datetime,
     tokens_found_total: int,
     full_coverage_at: datetime | None,
+    last_activity_at: datetime | None = None,
 ) -> None:
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             INSERT INTO wallet_scan_checkpoint
-                (wallet, scanned_tokens, last_scan_at, tokens_found_total, full_coverage_at)
-            VALUES (?, ?, ?, ?, ?)
+                (wallet, scanned_tokens, last_scan_at, tokens_found_total, full_coverage_at, last_activity_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(wallet) DO UPDATE SET
                 scanned_tokens=excluded.scanned_tokens,
                 last_scan_at=excluded.last_scan_at,
                 tokens_found_total=excluded.tokens_found_total,
-                full_coverage_at=excluded.full_coverage_at
+                full_coverage_at=excluded.full_coverage_at,
+                last_activity_at=excluded.last_activity_at
             """,
             (
                 wallet.lower(),
@@ -129,6 +146,7 @@ async def save_checkpoint(
                 last_scan_at.isoformat(),
                 tokens_found_total,
                 full_coverage_at.isoformat() if full_coverage_at else None,
+                last_activity_at.isoformat() if last_activity_at else None,
             ),
         )
         await db.commit()

@@ -1,12 +1,18 @@
 """File d'attente de scan wallet en arrière-plan (#157 suite, 15/07) --
 `/walletqueue` injecte, `wallet_scan_queue_cycle` fait avancer tout seul jusqu'à
 couverture complète, notifie la progression tous les 50 tokens puis le rapport
-final. Vérifie : gating (double gate), FIFO, dédoublonnage, notification de
-progression/complétion, respect du kill-switch, taille de file affichée."""
+final. Suivi PERMANENT (#157 suite 2, 15/07) : un wallet qui atteint 100% n'est
+JAMAIS retiré -- il bascule en surveillance hebdomadaire, retiré seulement après
+`INACTIVITY_CUTOFF_DAYS` (3 mois) sans aucune activité on-chain réelle. Vérifie :
+gating (double gate), FIFO/due-scheduling, dédoublonnage, notification de
+progression/complétion/surveillance, respect du kill-switch, comptage
+rattrapage vs surveillance."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
+import aiosqlite
 import pytest
 
 from aria_core.services import wallet_scan_queue as wsq
@@ -21,6 +27,20 @@ def _isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(wsq, "DB_PATH", str(tmp_path / "wallet_scan_queue_test.db"))
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
     yield
+
+
+async def _force_monitoring_state(wallet: str, *, next_check_at: datetime, monitoring_since: datetime | None = None) -> None:
+    """Bascule directement une ligne existante en mode surveillance -- il n'y a
+    pas d'API publique pour enfiler un wallet déjà en surveillance (on y arrive
+    toujours via une première couverture complète), donc les tests qui portent
+    sur le comportement POST-100% manipulent la ligne directement."""
+    since = monitoring_since or next_check_at
+    async with aiosqlite.connect(wsq.DB_PATH) as db:
+        await db.execute(
+            "UPDATE wallet_scan_queue SET monitoring_since=?, next_check_at=? WHERE wallet=?",
+            (since.isoformat(), next_check_at.isoformat(), wallet.lower()),
+        )
+        await db.commit()
 
 
 def test_disabled_by_default():
@@ -57,6 +77,14 @@ async def test_enqueue_lowercases_address():
 
 
 @pytest.mark.asyncio
+async def test_enqueue_new_wallet_is_immediately_due_and_not_monitoring():
+    await wsq.enqueue_wallets([A])
+    pending = await wsq.list_pending()
+    assert pending[0].is_monitoring is False
+    assert pending[0].monitoring_since is None
+
+
+@pytest.mark.asyncio
 async def test_remove_from_queue():
     await wsq.enqueue_wallets([A, B])
     await wsq.remove_from_queue(A)
@@ -68,10 +96,27 @@ async def test_remove_from_queue():
 @pytest.mark.asyncio
 async def test_mark_attempt_updates_milestone():
     await wsq.enqueue_wallets([A])
-    await wsq.mark_attempt(A, last_notified_milestone=50)
+    now = datetime.now(timezone.utc)
+    await wsq.mark_attempt(A, next_check_at=now, last_notified_milestone=50)
     pending = await wsq.list_pending()
     assert pending[0].last_notified_milestone == 50
     assert pending[0].last_attempt_at is not None
+
+
+@pytest.mark.asyncio
+async def test_mark_attempt_next_check_at_controls_due_scheduling():
+    await wsq.enqueue_wallets([A])
+    future = datetime.now(timezone.utc) + timedelta(days=5)
+    await wsq.mark_attempt(A, next_check_at=future)
+    assert await wsq.list_pending(limit=10) == []
+
+
+@pytest.mark.asyncio
+async def test_queue_counts_distinguishes_catching_up_from_monitoring():
+    await wsq.enqueue_wallets([A, B])
+    await _force_monitoring_state(A, next_check_at=datetime.now(timezone.utc) + timedelta(days=7))
+    counts = await wsq.queue_counts()
+    assert counts == {"catching_up": 1, "monitoring": 1}
 
 
 @pytest.mark.asyncio
@@ -131,6 +176,9 @@ class _FakeCard:
     thesis: str | None = None
     display_name: str | None = None
     error: str | None = None
+    # Suivi permanent (#157 suite 2, 15/07) : dernière activité on-chain réelle
+    # observée -- utilisée par le cycle pour trancher l'inactivité de 3 mois.
+    last_activity_at: datetime | None = None
 
 
 @dataclass
@@ -175,7 +223,7 @@ async def test_cycle_no_notification_below_next_milestone(monkeypatch):
     monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
     monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
     await wsq.enqueue_wallets([A])
-    await wsq.mark_attempt(A, last_notified_milestone=50)
+    await wsq.mark_attempt(A, next_check_at=datetime.now(timezone.utc), last_notified_milestone=50)
 
     card = _FakeCard(address=A, tokens_scanned_cumulative=60, tokens_found=200, full_coverage=False)
 
@@ -195,7 +243,7 @@ async def test_cycle_no_notification_below_next_milestone(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cycle_sends_completion_notification_and_removes_from_queue(monkeypatch):
+async def test_cycle_first_completion_transitions_to_monitoring_never_removed(monkeypatch):
     monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
     monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
     await wsq.enqueue_wallets([A, B])
@@ -219,14 +267,134 @@ async def test_cycle_sends_completion_notification_and_removes_from_queue(monkey
         notified.append(text)
 
     result = await wsq.run_wallet_scan_queue_cycle(notifier=_notifier)
-    assert result["completed"] == [A]
+    assert result["completed_first_time"] == [A]
+    assert result["dropped_inactive"] == []
     assert len(notified) == 1
     assert "terminé" in notified[0]
-    assert "1 wallet(s) restant(s)" in notified[0]
 
+    # Jamais retiré de la file -- bascule en surveillance permanente.
+    assert await wsq.queue_size() == 2
+    counts = await wsq.queue_counts()
+    assert counts == {"catching_up": 1, "monitoring": 1}
+
+    # Plus dû immédiatement (reprogrammé +7j) -- absent du prochain `list_pending`.
+    pending = await wsq.list_pending(limit=10)
+    assert [q.wallet for q in pending] == [B]
+
+
+@pytest.mark.asyncio
+async def test_cycle_monitoring_no_new_activity_is_silent_but_rescheduled(monkeypatch):
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+    past = datetime.now(timezone.utc) - timedelta(days=10)
+    await _force_monitoring_state(A, next_check_at=past)
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200, full_coverage=True, tokens_analyzed=0,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    notified = []
+
+    async def _notifier(text):
+        notified.append(text)
+
+    result = await wsq.run_wallet_scan_queue_cycle(notifier=_notifier)
+    assert result["outcome"] == "ok"
+    assert notified == []
     assert await wsq.queue_size() == 1
-    pending = await wsq.list_pending()
-    assert pending[0].wallet == B
+
+    # Reprogrammé +7j -- plus dû immédiatement.
+    assert await wsq.list_pending(limit=10) == []
+
+
+@pytest.mark.asyncio
+async def test_cycle_monitoring_new_activity_notifies_and_reschedules(monkeypatch):
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+    past = datetime.now(timezone.utc) - timedelta(days=10)
+    await _force_monitoring_state(A, next_check_at=past)
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=205, tokens_found=205, full_coverage=True, tokens_analyzed=5,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    notified = []
+
+    async def _notifier(text):
+        notified.append(text)
+
+    result = await wsq.run_wallet_scan_queue_cycle(notifier=_notifier)
+    assert result["outcome"] == "ok"
+    assert len(notified) == 1
+    assert "activité" in notified[0]
+    assert await wsq.queue_size() == 1
+
+
+@pytest.mark.asyncio
+async def test_cycle_monitoring_inactive_over_90_days_is_dropped(monkeypatch):
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+    past = datetime.now(timezone.utc) - timedelta(days=10)
+    await _force_monitoring_state(A, next_check_at=past)
+
+    stale_activity = datetime.now(timezone.utc) - timedelta(days=95)
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200, full_coverage=True,
+        tokens_analyzed=0, last_activity_at=stale_activity,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    notified = []
+
+    async def _notifier(text):
+        notified.append(text)
+
+    result = await wsq.run_wallet_scan_queue_cycle(notifier=_notifier)
+    assert result["dropped_inactive"] == [A]
+    assert len(notified) == 1
+    assert "inactif" in notified[0]
+    assert await wsq.queue_size() == 0
+
+
+@pytest.mark.asyncio
+async def test_cycle_monitoring_recent_activity_within_cutoff_is_not_dropped(monkeypatch):
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+    past = datetime.now(timezone.utc) - timedelta(days=10)
+    await _force_monitoring_state(A, next_check_at=past)
+
+    recent_activity = datetime.now(timezone.utc) - timedelta(days=5)
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200, full_coverage=True,
+        tokens_analyzed=0, last_activity_at=recent_activity,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    result = await wsq.run_wallet_scan_queue_cycle()
+    assert result["dropped_inactive"] == []
+    assert await wsq.queue_size() == 1
 
 
 @pytest.mark.asyncio
