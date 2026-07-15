@@ -364,6 +364,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="wallet_candidate_sourcing_cycle",
+        name="Sourcing automatique de wallets candidats (historique ARIA)",
+        description="Repere dans vc_predictions.py un token qu'ARIA a deja juge gagnant (verdict clos, gain reel confirme >=100%), liste qui le detient ENCORE aujourd'hui (blockscout.get_token_holders, deja construit) et enfile ces adresses dans wallet_scan_queue.py -- zero nouvelle dependance externe, zero cout. Triple gate (ARIA_WALLET_CANDIDATE_SOURCING_ENABLED + ARIA_WALLET_SCAN_QUEUE_ENABLED + ARIA_WALLET_SCORING_ENABLED), tous OFF par defaut.",
+        interval_minutes=180,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="memory_consolidation",
         name="Consolidation memoire episodique",
         description="Consolide memory_dir() (fichiers {categorie}_{date}.md) categorie par categorie, un seul appel LLM en depth=brief par categorie qualifiee (seuil >=3 nouvelles entrees). Archive-then-rewrite : instantane brut avant toute reecriture, aucune suppression physique. Perimetre verrouille en dur -- jamais le truth-ledger, jamais cognitive_knowledge WHERE approved=1. Gate OFF par defaut (#128).",
@@ -495,6 +502,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.services.wallet_scan_queue import wallet_scan_queue_enabled
 
                 task.enabled = wallet_scan_queue_enabled()
+            if task.id == "wallet_candidate_sourcing_cycle":
+                from aria_core.skills.wallet_candidate_sourcing import wallet_candidate_sourcing_enabled
+
+                task.enabled = wallet_candidate_sourcing_enabled()
             if task.id == "marketing_video_cycle":
                 from aria_core.skills.marketing_video import marketing_video_enabled
 
@@ -1088,6 +1099,17 @@ class AriaHeartbeat:
                 append_memory(
                     "wallet_scan_queue",
                     f"[wallet_scan_queue] couverture complete : {', '.join(result['completed'])}",
+                )
+
+        elif task_id == "wallet_candidate_sourcing_cycle":
+            from aria_core.skills.wallet_candidate_sourcing import run_wallet_candidate_sourcing_cycle
+
+            result = await run_wallet_candidate_sourcing_cycle(notifier=self._notify_telegram)
+            if result.get("outcome") == "ok" and result.get("total_sourced"):
+                append_memory(
+                    "wallet_candidate_sourcing",
+                    f"[wallet_candidate_sourcing] {result['total_sourced']} wallet(s) source(s) "
+                    f"depuis {len(result.get('tokens_processed') or [])} token(s)",
                 )
 
         elif task_id == "marketing_video_cycle":
