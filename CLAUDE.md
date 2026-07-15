@@ -1535,6 +1535,23 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (`_register_bot_commands`, oubliée dans le lot initial). 6 nouveaux tests
   (dont une régression directe sur la fuite), suite complète verte (5013
   passed). **Code mergé sur main, pas encore déployé sur le VPS.**
+- **15/07 (nuit, suite) — VPS Research : diligence skills.sh (Vercel).**
+  Produit officiel Vercel (lancé 21/01/2026, CLI open-source MIT
+  `vercel-labs/skills`, 91k+ installations, 87k+ skills indexées) -- pas
+  un projet obscur. Test réel (curl direct, contourne le 403 anti-bot
+  rencontré côté cloud) : l'API de recherche programmatique (600k+
+  skills) exige un jeton Vercel OIDC scopé équipe/projet, pas une simple
+  clé API -- ARIA ne tournant pas sur Vercel, contrainte d'infra réelle,
+  pas juste un compte à créer. **Risque identifié** : aucun processus de
+  revue de sécurité documenté pour les skills tierces avant installation
+  -- vecteur d'injection à traiter avec la même prudence que l'auto-
+  modification (lecture humaine intégrale avant toute adoption, jamais
+  d'installation automatique). **Verdict : intéressant à connaître, pas
+  une priorité d'intégration** -- outil méta (capacités de dev), pas une
+  source de données on-chain. Branches banquées non creusées :
+  `antfu/skills-cli`, SkillX.sh, SkillsMP, SkillHub, Claude Code
+  Templates. Détail complet :
+  `docs/aria-learning-inbox/2026-07-15-diligence-skills-sh-vercel-marketplace.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
