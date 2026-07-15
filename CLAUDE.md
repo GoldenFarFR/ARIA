@@ -1715,6 +1715,49 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   la lenteur observée en prod ce soir (captures opérateur, ~20-45min
   entre notifications de progression) reflète encore l'ANCIEN code ;
   amélioration attendue seulement après déploiement.
+- **15/07 (nuit) — `get_first_funded_by`/`addresses.stats` (VPS Principal),
+  MERGÉ ET POUSSÉ SUR MAIN (`3ca1cdd`).** Nouvelle fonction
+  `get_first_funded_by`/`build_addresses_stats_query` dans `services/dune.py`
+  -- renfort du signal de financement partagé déjà présent dans
+  `smart_money.py` (`_pairwise_convergence`), portée strictement respectée :
+  fonction + requête + tests seulement, **aucun branchement** dans
+  `smart_money.py` (décision opérateur du 15/07, le chantier Sybil complet
+  Louvain/K-means reste séparé). **Bug réel trouvé et corrigé avant merge,
+  pas une supposition** : `address` est `varbinary` dans `addresses.stats`
+  (pas `varchar` comme `dex.trades.taker`) -- un littéral entre guillemets
+  simples échoue en exécution réelle (« Cannot find common type between
+  varbinary and varchar »), corrigé en émettant des littéraux hexadécimaux
+  nus (`0x...`). Vérifié en direct deux fois via le MCP Dune (queries
+  7992959/7992962), résultat WETH Base identique à celui déjà rapporté par
+  Research la nuit précédente -- confirme la stabilité du signal entre
+  sessions. 51 tests dans `test_dune_client.py` (12 nouveaux), suite
+  complète vérifiée verte après merge (5039 passed). Documenté dans
+  `docs/dune-integration-plan.md` §10 et `AGENTS.md`.
+- **15/07 (nuit) — proposition de gestion du risque de portefeuille, réponse
+  à la question opérateur "propose moi la meilleure façon de gérer ses
+  choses là" (coupe-circuit perte, catastrophe, corrélation, custody des
+  gains) -- RECHERCHE SEULEMENT, RIEN CODÉ.** Vérifié par grep qu'aucun
+  garde-fou automatique de ce type n'existe aujourd'hui (seuls existent :
+  stop suiveur 15%/take-profit par tiers par position, `MAX_POSITIONS=15`
+  en compte simple, `wallet_guard`/`outgoing_pause`, slippage ≤10%). Recherche
+  externe (WebSearch, pratiques standards + 3 investisseurs légendaires) :
+  Paul Tudor Jones (jamais plus de 1% du capital par trade, sortie défensive
+  sur MM200, ratio 5:1), Ray Dalio/Bridgewater (diversification non-corrélée,
+  drawdown jamais >~33%), Stanley Druckenmiller (paris concentrés mais coupe
+  la perte INSTANTANÉMENT, "zéro loyauté à une position"). **Trou identifié
+  dans le plan initial** : aucun plafond dur en % du capital par POSITION
+  (indépendant du calcul Kelly) -- la règle la plus universellement citée
+  chez les grands traders, à ajouter en point 5. Plan en 5 points proposé,
+  **en attente du "ok" opérateur avant toute rédaction détaillée/implémentation**
+  (Méthode : Analyser → Proposer → attendre "ok" → Implémenter) :
+  1) coupe-circuit auto sur drawdown portefeuille (palier souple + palier dur,
+  réutilise `outgoing_pause` existant) ; 2) surveillance continue des positions
+  déjà ouvertes (dépeg stable + re-scan sécurité GoPlus/Blockscout, pas
+  seulement à l'entrée) ; 3) plafond de corrélation/concentration (au-delà du
+  simple compte `MAX_POSITIONS`) ; 4) politique de custody des gains réels
+  (sweep vers réserve, pas encore écrite) ; 5) plafond dur % capital par
+  position, indépendant de Kelly (règle PTJ). Rien construit -- décision
+  opérateur nécessaire sur les seuils exacts avant tout code.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
