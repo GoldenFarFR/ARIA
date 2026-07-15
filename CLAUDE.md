@@ -1789,6 +1789,81 @@ hors-sujet, pas de backlog "confort" en attendant. Les tâches déjà en cours
 sans lien direct (ex. #13 positionnement, #82 canal directives, #145 test à
 l'aveugle) restent en pause jusqu'à nouvel ordre, pas abandonnées.
 
+**Pivot critère d'entrée pour le test 1M$ (#194, décision opérateur explicite,
+15/07, gravé) — remplace le filtre VC-thesis par un critère momentum/technique
+pour CE TEST SPÉCIFIQUEMENT.** Déclenché par l'opérateur montrant en direct
+le classement trending DexScreener Base (des dizaines de tokens réels,
+liquides, actifs — PAMPU/MYRAD/aeon/GITLAWB/LFI/BASEMATE/CNX/BOTCOIN/SAIRI/
+KellyClaude/ODAI/OVPP/SUPERGEMMA/TSG/ClawBank etc.) : le filtre `safety_screen`
+(score≥70, liquidité≥30k$, holders connus, verdict SAFE — pensé pour sourcer
+des "vrais builders cachés" pour la poche VC 85%) n'est PAS le bon critère
+pour la poche trading/spéculation — un pari technique/momentum sur un token
+déjà liquide qui bouge est un métier différent d'un pari de conviction sur un
+builder précoce.
+- **Nouveau critère pour ce test** : alignement technique (EMA/MACD/Bollinger/
+  patterns de bougies, golden pocket + divergence RSI — déjà tout construit
+  dans `indicators.py`/`entry_signals.py`, jamais câblé comme porte d'entrée)
+  + R/R positif (cible/invalidation) + signaux positifs additionnels (buzz/
+  anticipation d'annonce — `radar_x.py`/`market_sentiment.py`, en bonus,
+  jamais bloquant si la donnée manque pour un petit token).
+- **Seul garde-fou dur conservé** : le détecteur honeypot/arnaque technique
+  (GoPlus) — coût quasi nul, protège contre un piège détectable même sur un
+  pur pari momentum. Décision opérateur explicite après question directe.
+  Rien d'autre du filtre VC-thesis ne s'applique à ce nouveau chemin.
+- **Bonding (Virtuals pré-graduation) : différé, "on verra plus tard"**
+  (décision opérateur explicite) — ce nouveau critère porte sur les tokens
+  Base standards (`network="base"`) uniquement, la niche bonding n'est pas
+  touchée par ce chantier.
+- **Pour ce test précis, 100% du capital 1M$ passe par ce nouveau critère**
+  (pas de split 85/15 pendant le test) — décision opérateur explicite
+  ("avec le test des 1 million c'est 100% trading").
+- **Objectif explicite du test, à ne jamais perdre de vue en construisant** :
+  ce n'est pas d'abord un test de rentabilité — c'est un test DIAGNOSTIQUE.
+  L'opérateur veut **pousser ARIA à faire des erreurs ou être surprise**,
+  pour comprendre comment elle trade réellement, avant d'affiner. Construire
+  un pipeline permissif et rapide sert cet objectif ; sur-filtrer par excès
+  de prudence le dessert.
+- **Vitesse et anticipation, exigence opérateur explicite** ("si il y a de
+  l'argent à gagner ARIA doit y être avant tout le monde") : le pipeline
+  actuel était trop lent (`c'est trop long`) en plus d'être trop restrictif.
+  Le nouveau chemin doit rester léger/rapide (scan déterministe TA+R/R+
+  honeypot en premier, LLM réservé à la confirmation finale si besoin,
+  jamais une analyse `/vc` complète pour chaque candidat) et favoriser les
+  signaux de momentum/buzz FRAIS (qui commencent à se former) plutôt qu'un
+  mouvement déjà bien avancé que tout le monde a déjà vu.
+- **Ce qui NE change PAS** : le filtre `safety_screen`/honeypot verrouillé par
+  `test_coherence.py` reste intact et actif pour la poche VC 85% (thèse
+  builders précoces) et pour tout capital réel futur — ce pivot est scopé au
+  pipeline de sourcing du test paper-trading 1M$ uniquement, jamais un
+  affaiblissement du garde-fou lui-même. `risk_guard.py` (#186, coupe-circuit
+  + plafond de risque) reste pleinement actif, indépendant de la source des
+  candidats.
+- **Multi-chaînes, aucune limite Base (décision opérateur explicite, 15/07,
+  gravé)** : "aucune limite base, solana, robinhood tous !" — pour CE TEST
+  (paper-trading 1M$), le pipeline momentum n'est plus limité à Base.
+  **Vérifié en direct avant d'accepter** (jamais supposé) : GoPlus (le seul
+  garde-fou dur conservé) supporte réellement Solana (`id: "solana"`) ET
+  "Robinhood" (chaîne réelle, `id: "4663"`, présente dans la vraie liste
+  `supported_chains` de l'API) EN PLUS de Base — le garde-fou honeypot peut
+  donc suivre l'élargissement sans être affaibli. DexScreener est également
+  nativement multi-chaînes (confirmé par appel réel : `search`/`token-pairs`
+  acceptent n'importe quel `chainId`, "robinhood" est un chainId réel qui
+  répond). **Travail réel restant, pas un simple changement de config** :
+  `_default_price_lookup`/`_default_analyzer` dans `paper_trader.py`
+  appellent aujourd'hui `scan_base_token` (spécifique Base) — à généraliser
+  pour accepter un `chain`/`chainId` et utiliser DexScreener directement
+  (déjà multi-chaînes) plutôt que le wrapper Base-only. La couverture OHLCV/TA
+  (GeckoTerminal) sur des chaînes exotiques comme "Robinhood" est incertaine —
+  dégradation honnête si indisponible (jamais une donnée inventée), pas un
+  blocage. Base reste la priorité #1 (tout existe déjà), Solana en second
+  (couverture GoPlus/DexScreener confirmée), "Robinhood" et au-delà en best-
+  effort selon ce que les mêmes clients couvrent réellement.
+- **Philosophie du volume de données (décision opérateur explicite, 15/07)** :
+  "plus on a de données à traiter, plus on peut réparer" — cohérent avec
+  l'objectif diagnostique du test (pousser ARIA à agir/se tromper pour
+  apprendre) : privilégier un sourcing large plutôt qu'un filtre étroit, tant
+  que le seul garde-fou dur (honeypot) reste actif sur chaque chaîne touchée.
+
 **Mandat permanent VPS Research — atouts/points faibles d'une IA qui trade
 (décision opérateur explicite, 15/07, gravé) : boucle continue, jamais un
 audit ponctuel, jusqu'à ce que l'opérateur juge ARIA prête.** Deux volets,
