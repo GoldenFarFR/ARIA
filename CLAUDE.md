@@ -1114,6 +1114,60 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   dollars) ; pondération égale par trade de win_rate/trim/health_trend assumée (pas un
   oubli) ; manipulation possible du point de bascule de la courbe de santé. 6 nouveaux
   tests, suite complète verte (4917/4917).
+- **15/07 (nuit) — angle mort ChatGPT fermé (`4dfdf60`) + 4e IA (DeepSeek) traitée dans la
+  foulée : marathon wallet-scoring vraiment clos pour cette session.** ChatGPT avait relevé
+  un « angle mort de comparabilité » : `price_confirmation_ratio`/`price_confidence_low`
+  (correctif précédent) restait purement informationnel, sans jamais influencer le
+  percentile lui-même — un wallet à 95% de prix ESTIMÉS (OHLCV) pouvait recevoir un
+  classement aussi confiant qu'un wallet à prix majoritairement CONFIRMÉS (hash exact).
+  Corrigé sur le même patron que l'exclusion `full_coverage=False` (#172) : un wallet
+  `price_confidence_low=True` est désormais exclu de la population de comparaison
+  percentile, et une ligne ATTENTION s'affiche à côté du percentile quand le wallet SCORÉ
+  lui-même a une confiance basse (jamais caché, doctrine constante de ce chantier). 3
+  nouveaux tests. **Régression trouvée en cours de route** : un test pré-existant
+  (`test_winning_wallet_ranks_above_a_previously_scored_loser`) utilisait des fixtures
+  100% OHLCV (aucune jambe hash-exacte) — avec le nouveau filtre, les deux wallets de test
+  devenaient `price_confidence_low=True` et s'excluaient mutuellement, cassant un test qui
+  visait le MÉCANISME de percentile, pas la confiance de prix. Corrigé en donnant à ce test
+  des jambes hash-exactes (tx_hash + jambe stablecoin mockée) reproduisant les mêmes PnL
+  qu'avant — le test mesure de nouveau ce qu'il est censé mesurer, sans être un faux
+  négatif du nouveau garde-fou.
+  **Revue DeepSeek (4e IA, immédiatement après)** : 5 points, triés comme les rounds
+  précédents. **1 correction de ma propre documentation** : le commentaire sur le plancher
+  de liquidité asymétrique affirmait qu'une vente « ne fait jamais que révéler un prix réel,
+  jamais fabriquer un gain » — faux en général (seulement vrai pour le sous-cas rug-pull
+  qu'il visait) : un prix de VENTE lu sur un pool à la liquidité manipulée (pump ponctuel
+  plutôt que dump) peut tout aussi bien gonfler un PnL réalisé fictivement — miroir exact
+  de la vulnérabilité dusting déjà documentée, côté gain plutôt que perte. Reformulé
+  honnêtement dans le code. **2 angles morts réels et nouveaux, documentés (pas corrigés,
+  même arbitrage que Sybil/benchmark alpha déjà différés)** : (a) drawdown/Sortino ne lisent
+  que le PnL RÉALISÉ (`closed_trades`) — une position ouverte massivement en perte latente
+  affiche un risque nul tant qu'elle n'est pas vendue ; corriger exigerait un vrai système
+  de mark-to-market (prix courant + coût moyen pondéré de la file FIFO restante +
+  redéfinition de ce que « drawdown » mesure) — chantier séparé, pas un ajustement de
+  seuil ; (b) le trim anti-chance (tri par PnL $, retire les extrêmes des deux côtés) peut
+  produire un FAUX NÉGATIF sur un style de trading légitimement concentré (conviction
+  sizing/barbell — quelques gains extrêmes assumés, beaucoup de petites pertes coupées
+  vite) : ses meilleurs trades légitimes se font trimmer et le reste paraît à tort « non
+  robuste » — distinguer chance isolée de conviction assumée exigerait un signal que
+  l'historique on-chain seul ne fournit pas. **1 clarification de portée** : `price_
+  confirmation_ratio` mesure la confiance de MÉTHODE (prix exact vs. estimé), pas la
+  résistance à la manipulation de marché — un axe orthogonal, une jambe « confirmée » à
+  100% reste vraie, une jambe estimée peut être saine ou manipulée sans que le ratio le
+  distingue (la vulnérabilité sous-jacente est déjà la dusting documentée, pas un nouveau
+  mécanisme). **1 point déjà couvert, écarté sans y retoucher** : le plafond de tokens
+  analysés par passage (`max_tokens_analyzed`) est déjà documenté comme biais de sélection
+  de couche 2 (round 4, ChatGPT) et neutralisé côté percentile par `full_coverage` (#172) —
+  pas un trou supplémentaire. Suite complète verte (4923/4923). **Bilan du marathon** :
+  plus de 20 correctifs réels construits (#158 à #175) + une documentation honnête et
+  exhaustive des limites structurelles qui restent de vrais chantiers séparés si jamais
+  repris (Sybil/clustering d'entité au-delà de la convergence pairwise = LE plus important ;
+  dusting sur pool manipulé ; mark-to-market des positions ouvertes ; benchmark alpha vs
+  bêta) — le patron de défense (plancher de qualité confirmée, fail-open sur inconnu/fail-
+  closed sur mauvais confirmé, ratio de confiance affiché jamais caché, seuil anti-chance
+  qui scale avec l'échantillon, documentation honnête plutôt que correctif cosmétique) reste
+  la référence réutilisable pour toute future source de données manipulable qu'ARIA
+  branchera, comme noté par l'opérateur.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
