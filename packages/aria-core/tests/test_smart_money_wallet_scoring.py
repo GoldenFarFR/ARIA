@@ -210,6 +210,46 @@ class TestSelectTokensForDeepAnalysis:
         selected, _, _ = sm._select_tokens_for_deep_analysis(grouped, cap=1)
         assert selected == ["0xnew"]
 
+    def test_without_wallet_preserves_historical_recency_only_behavior(self):
+        """Rétrocompatibilité : sans wallet=, aucun round-trip n'est jamais détecté,
+        le tri retombe exactement sur le comportement historique (récence pure)."""
+        old_round_trip = [
+            _transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xold", ts=_dt(0), tx_hash="0xb1"),
+            _transfer(from_addr=WALLET_A, to_addr=FUNDER, token="0xold", ts=_dt(1), tx_hash="0xs1"),
+        ]
+        new_open = [_transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xnew", ts=_dt(10), tx_hash="0xb2")]
+        grouped = {"0xold": old_round_trip, "0xnew": new_open}
+        selected, _, _ = sm._select_tokens_for_deep_analysis(grouped, cap=1)
+        assert selected == ["0xnew"]  # récence pure, round-trip ignoré sans wallet
+
+    def test_round_trip_token_beats_more_recent_open_position(self):
+        """15/07 -- correctif réel : un token plus ANCIEN mais avec un round-trip
+        achat+vente complet doit passer avant un token plus récent mais encore
+        ouvert (jamais clôturable en FIFO -> jamais de PnL/win-rate mesurable)."""
+        old_round_trip = [
+            _transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xclosed", ts=_dt(0), tx_hash="0xb1"),
+            _transfer(from_addr=WALLET_A, to_addr=FUNDER, token="0xclosed", ts=_dt(1), tx_hash="0xs1"),
+        ]
+        new_open = [_transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xopen", ts=_dt(10), tx_hash="0xb2")]
+        grouped = {"0xclosed": old_round_trip, "0xopen": new_open}
+        selected, _, _ = sm._select_tokens_for_deep_analysis(grouped, wallet=WALLET_A, cap=1)
+        assert selected == ["0xclosed"]
+
+    def test_recency_still_breaks_ties_among_round_trip_tokens(self):
+        """La récence/fréquence continue de départager -- seulement APRÈS le
+        critère round-trip, jamais remplacée."""
+        older_closed = [
+            _transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xolder", ts=_dt(0), tx_hash="0xb1"),
+            _transfer(from_addr=WALLET_A, to_addr=FUNDER, token="0xolder", ts=_dt(1), tx_hash="0xs1"),
+        ]
+        newer_closed = [
+            _transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xnewer", ts=_dt(5), tx_hash="0xb2"),
+            _transfer(from_addr=WALLET_A, to_addr=FUNDER, token="0xnewer", ts=_dt(6), tx_hash="0xs2"),
+        ]
+        grouped = {"0xolder": older_closed, "0xnewer": newer_closed}
+        selected, _, _ = sm._select_tokens_for_deep_analysis(grouped, wallet=WALLET_A, cap=1)
+        assert selected == ["0xnewer"]
+
 
 # ---------------------------------------------------------------------------
 # Anti-faux-positif wash-trading multi-token (#157, correction 14/07)

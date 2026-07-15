@@ -527,19 +527,43 @@ _EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _select_tokens_for_deep_analysis(
-    grouped: dict[str, list[TokenTransfer]], *, cap: int = WEIGHTS.max_tokens_analyzed,
+    grouped: dict[str, list[TokenTransfer]], *, wallet: str = "", cap: int = WEIGHTS.max_tokens_analyzed,
 ) -> tuple[list[str], int, int]:
-    """Trie par (récence du dernier transfert, nombre de trades) décroissant --
-    plafonne à ``cap`` tokens analysés en profondeur (décision opérateur, #157).
-    Renvoie (adresses sélectionnées, nb total de tokens distincts trouvés, nb
-    ignorés par le plafond) -- l'appelant DOIT logger explicitement si le 3e
-    élément est > 0, jamais une troncature silencieuse."""
+    """Trie par (round-trip achat+vente présent, récence du dernier transfert,
+    nombre de trades) décroissant -- plafonne à ``cap`` tokens analysés en
+    profondeur (décision opérateur, #157). Renvoie (adresses sélectionnées, nb
+    total de tokens distincts trouvés, nb ignorés par le plafond) -- l'appelant
+    DOIT logger explicitement si le 3e élément est > 0, jamais une troncature
+    silencieuse.
+
+    ``wallet`` (15/07, correctif réel) : la priorité "récence seule" biaisait
+    systématiquement l'échantillon vers des positions ENCORE OUVERTES chez les
+    wallets très actifs (le token le plus récent est, par construction, plus
+    souvent un achat pas encore revendu) -- un round-trip achat+vente ne peut
+    JAMAIS se former sur une position ouverte, donc le plafond de `cap` tokens
+    se remplissait parfois entièrement de positions non clôturables, laissant
+    win rate/PnL/Sortino "indisponible" même sur un wallet très actif avec de
+    vrais trades clôturés ailleurs dans son historique. Les tokens avec un
+    round-trip confirmé (au moins un transfert entrant ET sortant) passent
+    désormais en premier ; la récence/fréquence ne départage plus qu'en cas
+    d'égalité, dans chaque groupe. ``wallet=""`` (défaut) préserve le
+    comportement historique (aucun round-trip jamais détecté, tri par récence
+    pure) -- rétrocompatible pour tout appelant qui ne connaît pas le wallet.
+    """
+    wallet_l = wallet.lower()
+
+    def _has_round_trip(token_transfers: list[TokenTransfer]) -> bool:
+        if not wallet_l:
+            return False
+        has_buy = any((t.to_address or "").lower() == wallet_l for t in token_transfers)
+        has_sell = any((t.from_address or "").lower() == wallet_l for t in token_transfers)
+        return has_buy and has_sell
 
     def _sort_key(item: tuple[str, list[TokenTransfer]]):
         _addr, token_transfers = item
         timestamps = [ts for t in token_transfers if (ts := _parse_timestamp(t.timestamp)) is not None]
         latest = max(timestamps) if timestamps else _EPOCH_UTC
-        return (latest, len(token_transfers))
+        return (_has_round_trip(token_transfers), latest, len(token_transfers))
 
     ranked = sorted(grouped.items(), key=_sort_key, reverse=True)
     selected = [addr for addr, _ in ranked[:cap]]
@@ -1333,7 +1357,7 @@ async def score_wallets(
         card.chains_scanned = chains_with_data
 
         cap = max_tokens if max_tokens is not None else WEIGHTS.max_tokens_analyzed
-        selected_tokens, found, skipped = _select_tokens_for_deep_analysis(grouped, cap=cap)
+        selected_tokens, found, skipped = _select_tokens_for_deep_analysis(grouped, wallet=wallet, cap=cap)
         card.tokens_found = found
         card.tokens_analyzed = len(selected_tokens)
         card.tokens_skipped_capped = skipped > 0
