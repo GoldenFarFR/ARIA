@@ -1033,6 +1033,69 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   taille de l'échantillon (pourcentage), jamais un compte absolu qui se dilue ; (e)
   documenter honnêtement ce qui reste un vrai trou plutôt que de prétendre l'avoir
   fermé avec un correctif cosmétique.
+- **15/07 (suite, même soirée) — rounds 4/5/6 de la revue croisée (`236af77` → `4ba693e`),
+  jusqu'à 5 correctifs/précisions de plus, marathon wallet-scoring terminé pour cette
+  session.** Précisions de portée (documentation seule, pas de code) : migrations/
+  redénominations/splits de token (ChatGPT) décomposées en les 2 limites DÉJÀ écrites
+  (DeFi/pont si nouveau contrat, rebasing si même contrat) plutôt qu'un 3e mécanisme ;
+  incohérence "consolidé multi-chaînes" vs "ponts cross-chain non reliés" (ChatGPT)
+  corrigée dans la docstring de `score_wallets` — "consolidé" = métriques agrégées par
+  wallet, JAMAIS continuité du cost-basis à travers un bridge. **2 vrais bugs trouvés et
+  corrigés** (pas des limites résiduelles) : (1) **immunité aux rug pulls** (Gemini) — le
+  plancher de liquidité (#160) bloquait aussi la valorisation d'une VENTE, faisant
+  disparaître des stats la perte réelle d'un rug pull (pool effondré au moment du scan)
+  au lieu de la comptabiliser. Corrigé : plancher désormais ASYMÉTRIQUE (gate l'achat
+  uniquement). Portée honnête : ne résout que le cas où l'achat a un prix confirmé par
+  hash (indépendant de la liquidité actuelle) — si achat ET vente dépendent du seul
+  instantané de liquidité, le trade reste non clôturé (même root cause que la
+  vulnérabilité dusting ci-dessous : aucune donnée de liquidité historique disponible).
+  (2) **régression trouvée EN CONSTRUISANT le correctif ci-dessus** (jamais déployée) :
+  la 1ère version confondait "pool résolu mais trop peu liquide" avec "pool non résolu
+  du tout" — bloquait à tort les achats recouvrés par CoinMarketCap (3e couche de
+  pricing). Corrigé, verrouillé par test. **1 correctif méthodologique** : `_latest_
+  scored_wallets` exclut désormais les fiches `full_coverage=False` de la population de
+  comparaison percentile (Gemini — un score partiel/scan incomplet ne doit jamais servir
+  de référence pour juger un wallet à couverture complète). **1 vulnérabilité confirmée
+  restée non résolue, documentée en détail** : dusting sur pool manipulé (Gemini) — un
+  pool créé juste au-dessus du plancher ($35k) avec un prix ponctuel manipulé peut encore
+  faire accepter un cost-basis démesuré ; ma 1ère piste de correctif (réutiliser
+  `_pool_is_plausible` existant) testée et REJETÉE après vérification (cette fonction
+  traite délibérément un volume quasi nul comme non-disqualifiant, exactement le profil
+  d'un pool de scam) — un vrai correctif (détection de pic isolé vs bougies voisines, ou
+  corroboration de marché indépendante) reste un chantier séparé, pas fait ce soir, risque
+  réel de nouveaux faux positifs à traiter avec plus de rigueur. **Documenté** : rebase
+  négatif (symétrique du positif déjà géré, jetons fantômes dans la file FIFO → profit
+  fictif) ; wash-trading en petit cluster coordonné 2-5 wallets (Gemini+Grok convergents,
+  contourne simultanément le seuil 60% ET la convergence pairwise — même famille que
+  Sybil, pas un correctif de seuil possible). 7 nouveaux tests ce dernier lot, suite
+  complète verte (4920/4920). Tout est dans `smart_money.py` (commit `4ba693e`) — plus de
+  20 correctifs réels au total sur ce chantier ce soir (#158 à #172), documentation
+  exhaustive des limites structurelles restantes (Sybil au-delà de la convergence
+  pairwise reste LA plus importante, jamais résolue, chantier séparé si repris).
+- **15/07 (fin de soirée) — délégation opérateur explicite : Claude Code (moi) reçoit
+  désormais et DÉCIDE seul des propositions `aria-knowledge-proposal` (issues GitHub
+  générées par `knowledge_inbox.py`), au lieu que l'opérateur les relise une à une.**
+  Rodé en direct sur l'issue #29 (diligence Flaunch/Zora Coins, générée depuis
+  `docs/aria-learning-inbox/2026-07-13-diligence-flaunch-zora-coins.md`) : vérifié le
+  contenu par recherche externe indépendante AVANT toute décision (Flayer Labs/Joel
+  Strahl, API flaunch-sdk, listing FLAY/LBank, Jacob Horne ex-Coinbase co-fondateur Zora,
+  incident "Base is for everyone" ~17M$→-90/95% — tous confirmés). **Trouvé un vrai
+  problème dans la proposition elle-même** : le fichier cible qu'elle visait
+  (`truth_ledger/canonical_facts.yaml`) ne correspondait ni à son schéma réel
+  (`id`/`topic`/`tags`/`question`/`answer`, pas `id`/`fact`/`source`/`confidence`) ni à sa
+  portée (identité/produit d'ARIA, pas de la diligence marché externe) — l'opérateur a
+  explicitement autorisé une **contre-proposition** plutôt qu'un accept/reject binaire.
+  Intégré à la place dans `knowledge/launchpads.yaml` (commit `04b54f4`, registre déjà
+  dédié aux launchpads Base où `flaunch`/`zora` existaient déjà) : ajout des faits
+  fonctionnellement utiles (frais de swap Flaunch, Sniper Tax/vesting/frais Zora) dans
+  les `norms:` existants, jamais la narration complète (hors doctrine du fichier). Une
+  erreur d'édition (bloc `clanker` dupliqué) trouvée et corrigée avant commit — vérifié
+  par un chargement YAML réel, pas juste une relecture visuelle. Issue #29 close avec un
+  commentaire expliquant précisément le raisonnement (jamais un rejet silencieux).
+  **Ce protocole (vérifier par recherche externe → juger schéma/portée du fichier cible →
+  intégrer correctement OU contre-proposer avec justification → clore l'issue avec
+  explication) est désormais la référence pour toute future proposition
+  `aria-knowledge-proposal`** — à appliquer systématiquement, pas seulement ce soir.
 - **15/07 (suite, même soirée) — round 2/3 de la revue croisée (`8565d62` → `236af77`), 3
   correctifs de plus.** Swaps stable<->stable (USDC/USDT/DAI) exclus du compteur de swaps
   (même exploit que wrap/unwrap, réutilise le registre stablecoin existant) ; métriques
