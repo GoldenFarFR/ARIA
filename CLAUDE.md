@@ -1591,6 +1591,38 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   secours, pas un point de départ obligé. Rien codé ce soir (diligence
   seulement). Détail complet :
   `docs/aria-learning-inbox/2026-07-15-radar-sybil-clustering-entite-gratuit.md`.
+- **15/07 (nuit, suite) — #185 corrigé : plancher anti-dust sur
+  `build_early_buyer_multiple_query`, vérifié en direct (VPS Principal).**
+  `amount_usd >= min_trade_usd` (défaut 1.0) ajouté dans `token_peak` ET
+  `token_launch_price` (le bug pouvait toucher n'importe quel côté de la
+  division). Volontairement PAS un plafond arbitraire sur `peak_multiple`
+  (aurait masqué le symptôme). Vérifié en direct, mêmes paramètres qu'hier :
+  `peak_multiple` max passe de ~10^22x à ~1,65×10^7x (15 ordres de
+  grandeur). **Nuance honnête** : le résultat reste élevé après correction
+  -- possiblement en partie un phénomène réel (bonding curves Base type
+  Clanker, prix de départ authentiquement quasi nul), pas seulement un
+  résidu du bug -- distinguer précisément les deux cas reste hors scope.
+  4 nouveaux tests, suite complète verte (5017 passed).
+- **15/07 (nuit, suite) — VPS Secondaire : nettoyage code mort, arbitrage
+  câblage vs suppression sur `visitor.py` (même rigueur que #181).**
+  `VISITOR_API_PREFIXES`/`is_visitor_api()` (allowlist de chemins "API
+  visiteur") confirmées totalement orphelines -- décision SUPPRESSION,
+  pas câblage : le vrai mécanisme actif de routage public/membre est
+  `VANGUARD_PUBLIC_ROUTES`/`PUBLIC_PREFIXES` dans
+  `auth/middleware.py::AccessCodeMiddleware._is_public` (plus précis,
+  méthode+chemin, réellement consulté à chaque requête) -- câbler
+  l'allowlist morte aurait créé une DEUXIÈME source de vérité pour cette
+  classification, risque de divergence pire que l'absence actuelle.
+  Aucun impact de sécurité actif trouvé (`access_code_enabled=False` par
+  défaut rend tout ce gate no-op en configuration standard). 3 alias
+  legacy supprimés en mécanique (auto-documentés comme superseded,
+  0 référence hors leur propre définition) : `groq_factual_answer`/
+  `resolve_factual_answer` (epistemic.py), `sync_entry_to_github`
+  (truth_ledger/sync.py), `extract_twitter_from_identity`
+  (privy_verify.py). Reste du Tier 1 (self_maintenance_context_for_brain,
+  welcome_site_access, workflow_active, suppressed_journal_preview) et
+  tout le Tier 3 banqués pour un futur balayage dédié. Suite complète
+  vérifiée verte (5003 passed avant les deux merges ci-dessus).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
