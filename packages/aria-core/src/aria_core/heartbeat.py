@@ -357,6 +357,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="wallet_scan_queue_cycle",
+        name="File d'attente de scan wallet en arriere-plan",
+        description="Fait avancer d'un passage chaque wallet injecte via /walletqueue (jusqu'a 2 par cycle) -- reutilise le moteur incremental existant (score_wallets/wallet_scan_state.py), rien duplique. Notifie une progression tous les 50 tokens couverts, puis le rapport final complet des la couverture complete (le wallet quitte alors la file). Double gate : ARIA_WALLET_SCAN_QUEUE_ENABLED ET ARIA_WALLET_SCORING_ENABLED -- OFF par defaut tous les deux.",
+        interval_minutes=20,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="memory_consolidation",
         name="Consolidation memoire episodique",
         description="Consolide memory_dir() (fichiers {categorie}_{date}.md) categorie par categorie, un seul appel LLM en depth=brief par categorie qualifiee (seuil >=3 nouvelles entrees). Archive-then-rewrite : instantane brut avant toute reecriture, aucune suppression physique. Perimetre verrouille en dur -- jamais le truth-ledger, jamais cognitive_knowledge WHERE approved=1. Gate OFF par defaut (#128).",
@@ -484,6 +491,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.memory.consolidation import consolidation_enabled
 
                 task.enabled = consolidation_enabled()
+            if task.id == "wallet_scan_queue_cycle":
+                from aria_core.services.wallet_scan_queue import wallet_scan_queue_enabled
+
+                task.enabled = wallet_scan_queue_enabled()
             if task.id == "marketing_video_cycle":
                 from aria_core.skills.marketing_video import marketing_video_enabled
 
@@ -1067,6 +1078,16 @@ class AriaHeartbeat:
                     "heartbeat",
                     f"[memory_consolidation] {len(result['consolidated'])} categorie(s) "
                     f"consolidee(s) : {', '.join(result['consolidated'])}",
+                )
+
+        elif task_id == "wallet_scan_queue_cycle":
+            from aria_core.services.wallet_scan_queue import run_wallet_scan_queue_cycle
+
+            result = await run_wallet_scan_queue_cycle(notifier=self._notify_telegram)
+            if result.get("completed"):
+                append_memory(
+                    "wallet_scan_queue",
+                    f"[wallet_scan_queue] couverture complete : {', '.join(result['completed'])}",
                 )
 
         elif task_id == "marketing_video_cycle":

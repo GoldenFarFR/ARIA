@@ -408,10 +408,12 @@ class TestSelectTokensForDeepAnalysis:
         assert len(selected) == 20
         assert skipped == 5
 
-    def test_default_cap_matches_operator_decision_n10(self):
-        # 20->50 puis ramené à 10 le 14/07 (décision opérateur explicite) :
-        # scans plus rapides par défaut.
-        assert sm.WEIGHTS.max_tokens_analyzed == 10
+    def test_default_cap_matches_operator_decision_n50(self):
+        # 20->50 puis ramené à 10 le 14/07, remonté à 50 le 15/07 une fois la
+        # file d'attente en arrière-plan (wallet_scan_queue.py) construite --
+        # un passage plus lourd est acceptable, les scans répétés ne bloquent
+        # plus une réponse Telegram synchrone.
+        assert sm.WEIGHTS.max_tokens_analyzed == 50
 
     def test_most_recent_token_selected_first(self):
         old_token = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xold", ts=_dt(0))

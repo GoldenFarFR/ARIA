@@ -1279,6 +1279,47 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   rendant le percentile moins discriminant (toujours correct, juste moins granulaire
   -- propriété statistique inhérente, pas un défaut de code). 3 nouveaux tests, suite
   complète verte.
+- **15/07 — `/walletscore` DÉPLOYÉ EN PROD (commit `de51a6d`), puis file d'attente en
+  arrière-plan `/walletqueue` construite le même soir (pas encore déployée).**
+  Déploiement confirmé par l'opérateur (`deploy.sh` 8/8, blue-green, nginx re-vérifié
+  sur trafic réel) — `ARIA_WALLET_SCORING_ENABLED=true` actif sur le VPS. Premier test
+  réel sur un wallet extrême (1024j, 1067 swaps, 680 tokens tradés) : le plafond de
+  10 tokens/passage rendait la couverture complète impraticable en usage manuel (~68
+  rappels `/walletscore` nécessaires). Décision opérateur : (1) plafond
+  `WEIGHTS.max_tokens_analyzed` remonté 10->50 (le scan répété ne bloque plus une
+  réponse Telegram synchrone une fois la file construite) ; (2) nouveau mode
+  `/walletqueue <adresse> [...]` — injecte un wallet une seule fois, un nouveau cycle
+  heartbeat `wallet_scan_queue_cycle` (20min, double gate
+  `ARIA_WALLET_SCAN_QUEUE_ENABLED` ET `ARIA_WALLET_SCORING_ENABLED`, tous deux OFF par
+  défaut) le fait avancer tout seul (jusqu'à 2 wallets/cycle, sobriété API), notifie
+  une progression tous les 50 tokens couverts (`wallet_scan_queue.PROGRESS_NOTIFY_STEP`)
+  et le rapport final complet dès la couverture complète (le wallet quitte alors la
+  file) — chaque notification affiche aussi la taille de file restante. Nouveau module
+  `services/wallet_scan_queue.py` (table SQLite dédiée, FIFO, dédoublonnage) --
+  réutilise EXACTEMENT le moteur incrémental existant (`score_wallets`/
+  `wallet_scan_state.py`, #157 suite), rien dupliqué. Respecte le kill-switch
+  (`outgoing_pause.is_paused()`), même doctrine que les autres cycles proactifs.
+  Formatage de carte/rapport Telegram factorisé de `telegram_bot.py` vers
+  `smart_money.py` (`chain_display_label`/`format_wallet_score_card_lines`/
+  `format_wallet_scoring_report`) pour que `/walletscore` et le cycle de fond
+  affichent EXACTEMENT le même texte, jamais un second formatage divergent. 22
+  nouveaux tests (`test_wallet_scan_queue.py`), suite complète verte (4948 passed).
+  **Rien déployé pour `/walletqueue`** — regroupé avec le prochain déploiement.
+  **Décision opérateur actée pour le passage au trading réel** : seuil fixé à ~500
+  wallets scorés ET vérification que la distribution des scores est saine (pas
+  dégénérée) avant d'envisager que ARIA trade sur la base de ce signal — critère à
+  vérifier une fois le volume atteint, même doctrine que le protocole argent réel
+  existant (`docs/protocole-argent-reel.md`). **Zerion vérifié (recherche web, 15/07)**
+  : leur API expose un vrai endpoint PnL par wallet (`/wallets/{address}/pnl`, FIFO,
+  utile pour croiser/valider un score déjà calculé), mais **aucun endpoint public de
+  classement/découverte de wallets** — leur "leaderboard" est une fonctionnalité
+  sociale de l'appli grand public, pas un accès programmatique. Ne résout donc pas le
+  problème de sourcing automatique de candidats. Piste alternative banquée (pas
+  construite) : dériver les wallets candidats des propres données on-chain d'ARIA
+  (premiers acheteurs des tokens qui ont le mieux performé dans son historique,
+  via Blockscout — déjà partiellement mesuré côté wallet via
+  `early_entry_recurrence_count`, jamais encore inversé pour SOURCER de nouveaux
+  wallets).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

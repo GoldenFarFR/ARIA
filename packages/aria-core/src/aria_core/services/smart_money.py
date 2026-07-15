@@ -2212,6 +2212,79 @@ class WalletScoringReport:
     error: str | None = None
 
 
+# Libellés d'affichage Telegram/heartbeat (15/07 suite -- factorisé depuis
+# telegram_bot.py pour que `wallet_scan_queue.py` réutilise EXACTEMENT le même
+# texte que `/walletscore`, jamais un second formatage divergent). Uniquement
+# pour les noms de chaîne où une simple capitalisation donne un résultat
+# trompeur/moche -- tout le reste dérive de blockscout.CHAIN_IDS.keys() via
+# .capitalize(), jamais une 2e liste statique des 13 noms à tenir à jour.
+_CHAIN_LABEL_OVERRIDES = {"zksync": "zkSync Era"}
+
+
+def chain_display_label(chain: str) -> str:
+    return _CHAIN_LABEL_OVERRIDES.get(chain, chain.capitalize())
+
+
+def format_wallet_score_card_lines(card: WalletScoreCard) -> list[str]:
+    """Formate une fiche wallet pour affichage Telegram -- réutilisée par
+    `/walletscore` (analyse immédiate) ET `wallet_scan_queue.py` (analyse en
+    arrière-plan), jamais un second texte divergent pour le même contenu."""
+    lines = [f"\n— {card.address}" + (f" ({card.display_name})" if card.display_name else "")]
+    if not card.available:
+        lines.append(f"  Indisponible : {card.error}")
+        return lines
+    if card.disqualified:
+        lines.append("  🔴 DISQUALIFIÉ : " + "; ".join(card.disqualification_reasons))
+    if card.financing_check_note:
+        lines.append(f"  ⚠️ {card.financing_check_note}")
+    scanned = ", ".join(chain_display_label(c) for c in card.chains_scanned) or "aucune"
+    lines.append(f"  Chaînes avec activité trouvée : {scanned}")
+    lines.append(
+        f"  Tokens analysés : {card.tokens_analyzed}/{card.tokens_found}"
+        + (f" (plafond de {WEIGHTS.max_tokens_analyzed} atteint)" if card.tokens_skipped_capped else "")
+    )
+    if card.unpriced_legs or card.pool_lookup_errors:
+        lines.append(
+            f"  Diagnostic prix : {card.unpriced_legs} jambe(s) sans prix, "
+            f"{card.pool_lookup_errors} token(s) sans pool GeckoTerminal résolu"
+            + (
+                f" (dont {card.gecko_dexscreener_gap_count} vu(s) par DexScreener -- écart entre sources)"
+                if card.gecko_dexscreener_gap_count
+                else ""
+            )
+        )
+    lines.append(f"  Win rate : {card.win_rate:.0%}" if card.win_rate is not None else "  Win rate : indisponible")
+    lines.append(
+        f"  PnL réalisé : ${card.realized_pnl_usd:,.2f}"
+        if card.realized_pnl_usd is not None
+        else "  PnL réalisé : indisponible"
+    )
+    lines.append(
+        f"  Sortino : {card.sortino:.2f}" if card.sortino is not None else "  Sortino : indisponible"
+    )
+    lines.append(f"  Récurrence entrée précoce (multi-lancements) : {card.early_entry_recurrence_count} token(s)")
+    if card.suspect_positive:
+        lines.append("  🟢 Suspect positif (exceptionnel sur plusieurs axes à la fois) — à surveiller de près.")
+    if card.thesis:
+        lines.append(f"  Thèse : {card.thesis}")
+    return lines
+
+
+def format_wallet_scoring_report(report: WalletScoringReport) -> str:
+    """Texte Telegram complet pour un rapport `score_wallets` -- même contenu
+    que la réponse synchrone de `/walletscore`, réutilisable tel quel par le
+    cycle de fond (`wallet_scan_queue.py`)."""
+    lines = ["🕵️ Évaluation smart-wallet — confirmation/contexte, JAMAIS un signal de copy-trade."]
+    for card in report.wallets:
+        lines.extend(format_wallet_score_card_lines(card))
+    if report.convergence_pairs:
+        lines.append("\n⚠️ Wallets soumis ensemble partageant une source de financement (suspects même entité) :")
+        lines.extend(f"  {a} <-> {b}" for a, b in report.convergence_pairs)
+    if report.synthesis:
+        lines.append(f"\nSynthèse : {report.synthesis}")
+    return "\n".join(lines)
+
+
 def _suspect_positive_flag(card: WalletScoreCard) -> bool:
     """Couche 3 (#157) -- SÉPARÉ du score composite, jamais fondu dans une
     moyenne. Vrai si le wallet dépasse un seuil statique sur au moins

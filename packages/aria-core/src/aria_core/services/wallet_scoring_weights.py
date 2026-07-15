@@ -57,10 +57,13 @@ _WEIGHTS_PATH_ENV_VAR = "ARIA_WALLET_SCORING_WEIGHTS_PATH"
 class WalletScoringWeights:
     # Plafond de tokens distincts analysés en profondeur par wallet (récence/
     # nombre de trades) -- décision opérateur du 14/07 : 20->50 puis ramené à
-    # 10 le même jour (scans plus rapides par défaut). Le paramètre
+    # 10 le même jour (scans plus rapides par défaut) ; remonté à 50 le 15/07
+    # une fois la file d'attente en arrière-plan (`wallet_scan_queue.py`)
+    # construite -- un passage plus lourd est acceptable puisque les scans
+    # répétés ne bloquent plus une réponse Telegram synchrone. Le paramètre
     # ``max_tokens`` de ``score_wallets`` permet toujours de passer un
     # plafond différent ponctuellement sans retoucher cette valeur par défaut.
-    max_tokens_analyzed: int = 10
+    max_tokens_analyzed: int = 50
 
     # Sous ce nombre de trades clôturés, le ratio de Sortino est jugé trop
     # bruité pour être présenté comme fiable (research doc #157) -- indisponible
