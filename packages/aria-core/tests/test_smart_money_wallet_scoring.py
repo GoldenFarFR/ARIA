@@ -935,16 +935,24 @@ class FakeGeckoTerminalClient:
     (15/07, défense anti-dust/scam-pool) : liquidité confirmée du pool résolu --
     absente/``None`` par défaut (fail-open, comportement historique inchangé)."""
 
-    def __init__(self, *, pool_for_token=None, pool_created_at=None, ohlcv=None, reserve_usd_for_token=None):
+    def __init__(
+        self, *, pool_for_token=None, pool_created_at=None, ohlcv=None, reserve_usd_for_token=None,
+        pool_error_for_token=None,
+    ):
         self._pool_for_token = pool_for_token or {}
         self._pool_created_at = pool_created_at or {}
         self._ohlcv = ohlcv or {}
         self._reserve_usd_for_token = reserve_usd_for_token or {}
+        # 15/07, revue Gemini -- gel des erreurs transitoires : simule une panne
+        # D'INFRASTRUCTURE GeckoTerminal (timeout/429/erreur serveur) plutôt que
+        # le verdict de donnée par défaut "aucun pool trouvé pour ce token".
+        self._pool_error_for_token = pool_error_for_token or {}
 
     async def resolve_primary_pool(self, token_address, **kwargs):
         pool_address = self._pool_for_token.get(token_address)
         if pool_address is None:
-            return PoolMetadata(pool_address=token_address, available=False, error="aucun pool trouvé pour ce token")
+            error = self._pool_error_for_token.get(token_address, "aucun pool trouvé pour ce token")
+            return PoolMetadata(pool_address=token_address, available=False, error=error)
         return PoolMetadata(
             pool_address=pool_address,
             created_at=self._pool_created_at.get(token_address),
@@ -2158,6 +2166,90 @@ class TestCapitalWeightedDiversification:
             token_leg = _transfer(from_addr=WALLET_A, to_addr=pool, token=token, ts=_dt(1), amount=token_amount)
             stable_leg = _transfer(from_addr=pool, to_addr=WALLET_A, token=_STABLE, ts=_dt(1), amount=stable_amount)
         return TokenTransfersResult(transfers=[token_leg, stable_leg], available=True)
+
+
+class TestTransientPricingErrorRetry:
+    """15/07, revue Gemini -- gel des erreurs transitoires : une panne
+    D'INFRASTRUCTURE GeckoTerminal (timeout/429/erreur serveur, déjà retentée
+    par `_get_json` avant d'abandonner) ne doit JAMAIS figer un token comme
+    "scanné" dans le checkpoint incrémental -- sinon une coupure réseau
+    ponctuelle se transforme en cicatrice permanente sur le score du wallet."""
+
+    @pytest.mark.asyncio
+    async def test_transient_error_token_retried_on_next_pass_without_new_activity(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        buy_ts = _dt(0)
+        sell_ts = _dt(2)
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=10.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=sell_ts, amount=10.0),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+
+        # Passage 1 : GeckoTerminal renvoie une panne D'INFRASTRUCTURE (pas le
+        # verdict de donnée "aucun pool trouvé pour ce token").
+        failing_gecko = FakeGeckoTerminalClient(
+            pool_error_for_token={TOKEN_X: "donnée GeckoTerminal indisponible (timeout GeckoTerminal)"},
+        )
+        report1 = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=failing_gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+        card1 = report1.wallets[0]
+        assert card1.transient_pricing_errors == 1
+        assert card1.full_coverage is False  # le token n'est PAS marqué "scanné"
+
+        checkpoint = await wallet_scan_state.get_checkpoint(WALLET_A)
+        assert len(checkpoint.scanned_tokens) == 0  # rien de figé malgré la tentative
+
+        # Passage 2 : MÊME wallet, MÊMES transferts (aucune nouvelle activité
+        # on-chain) -- GeckoTerminal a récupéré, le token doit être retenté et
+        # valorisé sans qu'aucun nouveau transfert ne l'ait déclenché.
+        recovered_gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(
+                candles=[
+                    Candle(ts=int(_dt(-2).timestamp()), open=1.0, high=1.0, low=1.0, close=1.0, volume=1000.0),
+                    Candle(ts=int(buy_ts.timestamp()), open=1.0, high=1.0, low=1.0, close=1.0, volume=1000.0),
+                    Candle(ts=int(sell_ts.timestamp()), open=2.0, high=2.0, low=2.0, close=2.0, volume=1000.0),
+                ],
+                available=True,
+            )},
+        )
+        report2 = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=recovered_gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+        card2 = report2.wallets[0]
+        assert card2.closed_trades_count == 1  # valorisé au 2e passage, sans nouvelle activité
+        assert card2.transient_pricing_errors == 0
+        assert card2.full_coverage is True
+
+    @pytest.mark.asyncio
+    async def test_genuine_no_pool_token_marked_scanned_not_flagged_transient(self, tmp_path, monkeypatch):
+        # Contraste : un token sans AUCUN pool (verdict de donnée légitime, pas
+        # une panne) reste marqué "scanné" -- comportement HISTORIQUE inchangé,
+        # jamais un compteur d'erreur transitoire pour ce cas.
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        transfers = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0)],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()  # aucune entrée -> "aucun pool trouvé pour ce token"
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+        card = report.wallets[0]
+        assert card.transient_pricing_errors == 0
+        assert card.pool_lookup_errors == 1
+        assert card.full_coverage is True  # marqué "scanné" malgré l'échec (verdict définitif)
+
+        checkpoint = await wallet_scan_state.get_checkpoint(WALLET_A)
+        assert len(checkpoint.scanned_tokens) == 1
 
 
 def test_wallet_scoring_gate_off_by_default(monkeypatch):
