@@ -1309,17 +1309,68 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   wallets scorés ET vérification que la distribution des scores est saine (pas
   dégénérée) avant d'envisager que ARIA trade sur la base de ce signal — critère à
   vérifier une fois le volume atteint, même doctrine que le protocole argent réel
-  existant (`docs/protocole-argent-reel.md`). **Zerion vérifié (recherche web, 15/07)**
-  : leur API expose un vrai endpoint PnL par wallet (`/wallets/{address}/pnl`, FIFO,
-  utile pour croiser/valider un score déjà calculé), mais **aucun endpoint public de
-  classement/découverte de wallets** — leur "leaderboard" est une fonctionnalité
-  sociale de l'appli grand public, pas un accès programmatique. Ne résout donc pas le
-  problème de sourcing automatique de candidats. Piste alternative banquée (pas
-  construite) : dériver les wallets candidats des propres données on-chain d'ARIA
-  (premiers acheteurs des tokens qui ont le mieux performé dans son historique,
-  via Blockscout — déjà partiellement mesuré côté wallet via
-  `early_entry_recurrence_count`, jamais encore inversé pour SOURCER de nouveaux
-  wallets).
+  existant (`docs/protocole-argent-reel.md`). **Zerion vérifié (recherche web, 15/07,
+  précisé après une 2e passe)** : leur API expose un vrai endpoint PnL par wallet
+  (`/wallets/{address}/pnl`, FIFO, utile pour croiser/valider un score déjà calculé).
+  **Correction** : Zerion a bien un vrai produit de découverte ("Zerion Feed", surface
+  les wallets les plus performants avec win rate/PnL/followers) — mais rien ne
+  confirme qu'il soit exposé via `developers.zerion.io` (doc API bloquée à la lecture
+  automatique, semble être une fonctionnalité de l'appli mobile grand public
+  uniquement). **Nansen creusé en parallèle** (légitimité forte, méthodologie
+  transparente -- univers curé ~5-10k wallets "Smart Money", scoring par
+  règles+sourcing public+clustering, mis à jour quotidiennement, ~0,005$/appel) --
+  **écarté sur consigne opérateur explicite** ("il nous faut une base de données
+  gratuite") au profit de l'option zéro-coût ci-dessous.
+- **15/07 (suite) — sourcing automatique de wallets candidats construit, zéro
+  dépendance externe (réponse à « qui va trouver les wallets ? »), CODÉ/TESTÉ, PAS
+  DÉPLOYÉ.** Nouveau `skills/wallet_candidate_sourcing.py` : repère un token qu'ARIA
+  a déjà jugé gagnant et liste qui le détient ENCORE aujourd'hui
+  (`blockscout.get_token_holders`, déjà construit) -- signal de conviction, pas une
+  découverte de marché large. Enfile ces adresses dans `wallet_scan_queue.py` (#181),
+  jamais un signal de trading en lui-même. **Bug réel trouvé par l'opérateur avant
+  même le premier déploiement** ("ça va être trop long, elle juge tous les tokens non
+  pertinents, non ?") : `vc_predictions` seule (horizon 30j) a **0 pronostic clôturé**
+  au dernier audit connu (11/07) -- cette source serait restée vide des semaines.
+  Corrigé : `list_strong_performers()` combine désormais DEUX sources (`vc_predictions`
+  clôturées ET `paper_trader.get_closed_positions()`, déjà actif en prod, résout bien
+  plus vite via stop suiveur/prise de profit sur prix réel). **Second ajustement**
+  (demande opérateur "il faudrait au moins 5 tokens/semaine") : retiré le plafond
+  artificiel d'un seul token sourcé par cycle heartbeat -- un cycle traite désormais
+  TOUS les tokens gagnants jamais encore sourcés en une passe. Limite honnête assumée,
+  documentée dans le code : **aucun débit minimum n'est garanti** -- ça dépend du
+  nombre réel de trades gagnants d'ARIA sur la période, pas d'un réglage de code ; si
+  le débit réel reste insuffisant une fois déployé, le seul levier honnête est
+  d'abaisser `MIN_OUTCOME_PCT_STRONG_PERFORMER` (100% par défaut, soit x2) -- décision
+  opérateur à prendre avec des vraies données de prod, pas faite à l'aveugle ici.
+  Heuristique volontairement simple (exclut le plus gros détenteur -- pool DEX/routeur
+  ou allocation équipe, jamais un "smart wallet" -- + adresses mortes, aucun appel API
+  supplémentaire par détenteur pour vérifier `is_contract`) : documentée comme
+  imparfaite, pire cas un scan `/walletscore` bruyant sur un contrat, jamais un risque.
+  Nouveau cycle heartbeat `wallet_candidate_sourcing_cycle` (180min), TRIPLE gate
+  (`ARIA_WALLET_CANDIDATE_SOURCING_ENABLED` + `ARIA_WALLET_SCAN_QUEUE_ENABLED` +
+  `ARIA_WALLET_SCORING_ENABLED`, tous OFF par défaut), respecte le kill-switch. 14
+  nouveaux tests (`test_wallet_candidate_sourcing.py`), suite complète verte (4962
+  passed). **Rien déployé.**
+- **15/07 (soir) — pilote agent-wallet réel : Coinbase Agentic Wallets retenu et
+  amorcé, RIEN encore câblé côté code.** Décision opérateur actée dans
+  `docs/pilote-agent-wallet-10usd.md` (§2) -- CLI `npx awal` reconfirmé légitime
+  (doc officielle `docs.cdp.coinbase.com`, repo GitHub `coinbase/agentic-wallet-skills`).
+  L'opérateur a créé une clé API Coinbase Developer Platform nommée "ARIA" --
+  **corrigée en direct avant validation** : la clé cochait initialement les 4
+  permissions (View/Trade/Transfer/Receive), y compris Transfer (l'écran Coinbase
+  affiche lui-même un avertissement anti-arnaque sur cette permission précise) --
+  ramenée à **View (lecture seule) uniquement**, conforme au plan écrit (§3 : aucune
+  capacité de transfert libre, aucun trading tant que le wrapper de sécurité --
+  plafond vérifié, slippage verrouillé, kill-switch -- n'existe pas). Rappel actif
+  fait à l'opérateur : une permission cochée sur une clé est un pouvoir actif
+  immédiatement, indépendant de ce qu'ARIA (le bot) fait aujourd'hui -- si Trade avait
+  été coché, n'importe quel outil connecté à cette clé (skill Coinbase, MCP) aurait pu
+  trader sans passer par aucun garde-fou. Noms de variables d'environnement donnés
+  pour stockage sécurisé sur le VPS (`COINBASE_CDP_API_KEY_NAME`/
+  `COINBASE_CDP_API_KEY_PRIVATE_KEY`, PEM sur une ligne avec `\n` littéraux) -- **rien
+  ne les lit encore côté code**, juste mises à l'abri en attendant la construction du
+  wrapper (`agent_wallet_pilot.py`, §5 du plan, pas commencé). Clé privée jamais vue
+  ni demandée dans cette session (doctrine secrets, même famille que les clés SSH).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

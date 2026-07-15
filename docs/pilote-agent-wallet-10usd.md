@@ -29,8 +29,12 @@ tranquille ».
 Wallets est la seule option confirmée accessible sans attente. MetaMask reste le
 choix cible à long terme — à activer dès que l'accès anticipé s'ouvre, sans repasser
 par ce document (mêmes garde-fous, juste un autre wrapper).
-**Décision à prendre par l'opérateur avant tout code** : tester avec Coinbase
-maintenant, ou attendre l'accès MetaMask ?
+**Décision opérateur actée (15/07) : Coinbase Agentic Wallets retenu pour ce pilote.**
+CLI `npx awal` reconfirmé légitime (doc officielle `docs.cdp.coinbase.com`, repo
+GitHub `coinbase/agentic-wallet-skills`) — création du wallet (email + code à 6
+chiffres) gratuite et sans KYC, le KYC n'intervient QUE si le financement passe par
+`npx awal fund` depuis un compte Coinbase classique (un transfert externe depuis un
+wallet déjà détenu par l'opérateur évite complètement le KYC).
 
 ## 3. Garde-fous obligatoires (non négociables, quel que soit le produit choisi)
 
