@@ -1493,6 +1493,31 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   frontière approchée. Détail complet :
   `docs/aria-learning-inbox/2026-07-15-radar-webacy-approfondi-arkham-entity-labels.md`
   + `docs/dune-integration-plan.md` §7bis.
+- **15/07 (nuit, suite) — VPS Secondaire : deuxième source de découverte de
+  tokens Base via Dune, `build_recent_base_pairs_query()`, MERGÉE.** Piste
+  initiale abandonnée après vérification en direct : "/v1/dex/pairs/{chain}"
+  (§3.1 du plan) confirmé INEXISTANT (404 sur toute variante d'URL, y
+  compris avec auth -- contrairement à l'Execute SQL API, réelle, qui
+  répond 401 sans clé valide). Repli sur §3.2 : réutilise STRICTEMENT
+  `services/dune.py` déjà mergé, même patron que
+  `build_early_buyer_multiple_query` -- `token_launch` (premier trade Base
+  jamais vu par token) filtré via HAVING sur l'agrégat, jamais via une date
+  dans le WHERE (même piège déjà identifié et corrigé sur la 1ère requête,
+  vérifié explicitement par un test dédié). `recent_volume`, elle, peut être
+  bornée directement par `lookback_hours` dans son WHERE (safe : un token
+  dont le lancement tombe dans la fenêtre a tous ses trades dans la fenêtre
+  aussi). **Relecture cloud avant merge** : documenté un angle non couvert
+  par Secondaire -- `SUM(amount_usd)` ignore silencieusement les lignes
+  `null` (agrégateurs type `0x API`, trouvé par Research le même soir, cf.
+  entrée ci-dessus) -- `volume_usd` est donc un PLANCHER, pas un total
+  garanti (faux négatif de découverte possible, jamais un faux positif de
+  sécurité) -- documenté en commentaire dans le code, pas corrigé (hors
+  scope de cette passe, à traiter si significatif en usage réel). Portée
+  EXACTE respectée : requête + tests SEULEMENT, aucun branchement
+  `base_crawler.py`, aucun gate, aucune tâche heartbeat. 8 nouveaux tests
+  (`TestBuildRecentBasePairsQuery`), suite complète verte (4997+ passed).
+  **Rien branché au pipeline de sourcing** -- décision séparée après
+  relecture, pas prise ce soir.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
