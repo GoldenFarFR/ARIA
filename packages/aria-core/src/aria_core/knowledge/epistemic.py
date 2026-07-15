@@ -369,11 +369,6 @@ async def groq_calibrated_answer(query: str, lang: str = "fr") -> tuple[str | No
     return _parse_groq_calibrated(raw, lang)
 
 
-async def groq_factual_answer(query: str, lang: str = "fr") -> tuple[str | None, dict]:
-    """Alias — même moteur."""
-    return await groq_calibrated_answer(query, lang)
-
-
 async def resolve_calibrated_answer(
     query: str, lang: str = "fr", *, public: bool = True,
 ) -> tuple[str | None, dict]:
@@ -457,11 +452,6 @@ async def resolve_calibrated_answer(
                 return wf_reply, wf_meta
 
     return reply, meta
-
-
-async def resolve_factual_answer(query: str, lang: str = "fr") -> tuple[str | None, dict]:
-    """Alias rétrocompat."""
-    return await resolve_calibrated_answer(query, lang)
 
 
 def epistemic_context_block(query: str, limit: int = 3) -> str:
