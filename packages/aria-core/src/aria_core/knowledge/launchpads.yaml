@@ -42,6 +42,13 @@ launchpads:
     norms:
       bonding_curve: false
       liquidity_note: "Fair Launch prix-fixe 30 min"
+      # Diligence 15/07 (issue #29, vérifiée par recherche externe indépendante
+      # avant intégration -- Flayer Labs/Joel Strahl, API flaunch-sdk/docs.flaunch.gg,
+      # listing FLAY/LBank tous confirmés) : frais de swap 1% en waterfall vers le
+      # créateur (jusqu'à 100 wallets/NFT Memestream) -- pas un signal de rug, un
+      # mécanisme de revenu créateur natif au protocole.
+      swap_fee_pct: 1
+      team: "Flayer Labs (Joel Strahl)"
 
   clanker:
     label: "Clanker"
@@ -60,6 +67,17 @@ launchpads:
     norms:
       bonding_curve: false
       liquidity_note: "pool Uniswap V4 dès t=0"
+      # Diligence 15/07 (issue #29, vérifié par recherche externe -- Jacob Horne
+      # (ex-Coinbase) confirmé co-fondateur, incident "Base is for everyone"
+      # confirmé : ~17M$ de capitalisation en moins d'une heure puis -90/95% en
+      # quelques heures, avril 2025) : Sniper Tax 99% décroissante sur 10s (anti-bot
+      # d'entrée), vesting créateur 5 ans, frais 1% créateur + 0.01% protocole.
+      # L'incident illustre le risque de pump viral incontrôlé propre à ce
+      # launchpad -- toujours appliquer un filtre anti-pump, jamais juger sur le
+      # seul volume/momentum initial.
+      sniper_tax_decay: "99% décroissant sur 10s"
+      creator_vesting_years: 5
+      fee_pct: {creator: 1, protocol: 0.01}
 
   # Bankr : cité par l'opérateur. Observation : met ÉNORMÉMENT de liquidité sur chaque
   # token lancé -> un seuil de liquidité bas n'a pas de sens ici. Adresse de déploiement
