@@ -74,16 +74,40 @@ Ordre, du plus rapide/bloquant au plus lent/optionnel :
 - **Base** : réutilise `base_crawler.discover_base_tokens` (pools nouveaux +
   tendance GeckoTerminal, aucune sémantique VC — fonction de découverte pure,
   ne passe jamais par `token_absorber`/`safety_screen`).
-- **Multi-chaînes** : nouveaux endpoints DexScreener (`services/dexscreener.py`,
-  vérifiés en direct le 15/07, HTTP 200, aucune clé requise) —
-  `token_profiles_latest`/`token_boosts_latest` d'abord (fraîcheur — signaux qui
-  COMMENCENT à se former), `token_boosts_top` en dernier (classement déjà avancé).
+- **Multi-chaînes** : nouveaux endpoints DexScreener (`services/dexscreener.py`),
+  construits sur la spec OpenAPI OFFICIELLE vérifiée (récupérée en direct depuis
+  la vraie source, pas devinée —
+  `docs/aria-learning-inbox/2026-07-15-dexscreener-openapi-spec-verifiee.yaml`) —
+  `token_profiles_latest`/`token_profiles_recent_updates`/`token_boosts_latest`
+  d'abord (fraîcheur — signaux qui COMMENCENT à se former), `token_boosts_top` en
+  dernier (classement déjà avancé). **Aucune clé API nulle part** sur tout
+  DexScreener (confirmé sur la spec officielle) — aucune gestion de clé prévue.
+- **Pré-filtre de liquidité PAR LOT** (`_batch_liquidity_prefilter`, appliqué en
+  fin de sourcing) : `/tokens/v1/{chainId}/{tokenAddresses}` accepte jusqu'à 30
+  adresses séparées par des virgules en UN SEUL appel (300 req/min) — bien plus
+  efficace que d'évaluer chaque candidat en entier (honeypot + OHLCV + TA) avant
+  de découvrir qu'il n'a même pas de liquidité exploitable. Groupé par chaîne,
+  corrèle chaque paire renvoyée à son contrat via le nouveau champ
+  `PairSnapshot.base_address` (absent avant ce correctif — le batch renvoie des
+  PAIRES, pas indexées par adresse token demandée). Un candidat absent de la
+  réponse batch (chaîne mal couverte, appel en échec) est **conservé tel quel** —
+  ce pré-filtre ne rejette jamais par excès de prudence, seul un résultat
+  POSITIVEMENT défavorable (liquidité connue et sous le plancher) élimine.
 - **Chaînes acceptées** (`DEFAULT_CHAINS = ("base", "solana", "robinhood")`) —
   **volontairement limitées aux chaînes VÉRIFIÉES** ce soir (GoPlus + DexScreener
   répondent HTTP 200) : accepter n'importe quelle chaîne renvoyée par DexScreener
   casserait le seul garde-fou dur sur toute chaîne que GoPlus ne couvre pas.
   Étendre cette liste seulement après vérification GoPlus réelle (même doctrine
   que ce soir : curl direct avant d'accepter, jamais supposé).
+- **Endpoints délibérément non utilisés** (confirmés non pertinents pour #194) :
+  `community-takeovers/*`, `ads/*`, `orders/v1/*` — pas de signal momentum/sécurité
+  directement exploitable pour ce pipeline. `metas/trending/v1`+
+  `metas/meta/v1/{slug}` sont implémentés dans `dexscreener.py`
+  (`metas_trending`/`meta_by_slug`, narratifs tendance type « AI ») mais **pas
+  encore branchés** dans `discover_momentum_candidates` — un narratif est un
+  signal de CONTEXTE (plusieurs tokens à la fois), pas un contrat individuel ;
+  les intégrer demanderait une décision de conception (comment pondérer un
+  narratif chaud vs un token individuel) hors scope de ce correctif.
 
 ## 5. Généralisation `paper_trader.py`
 

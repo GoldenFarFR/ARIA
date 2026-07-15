@@ -38,9 +38,11 @@ import logging
 from aria_core.services.dexscreener import (
     PairSnapshot,
     fetch_token_pairs,
+    fetch_tokens_batch,
     token_boosts_latest,
     token_boosts_top,
     token_profiles_latest,
+    token_profiles_recent_updates,
 )
 from aria_core.skills.candlestick_patterns import detect_patterns
 from aria_core.skills.entry_signals import detect_entry
@@ -71,6 +73,68 @@ _SOURCE_LIMIT_PER_CHANNEL = 30
 _MIN_LIQUIDITY_USD = 5_000.0  # plancher bas -- pipeline permissif, pas un filtre VC
 _RR_MIN_FOR_DIRECT_BUY = 1.5  # R/R franc -> décision déterministe sans appel LLM
 _RR_AMBIGUOUS_FLOOR = 1.0     # sous ce seuil, R/R positif mais faible -> LLM tranche
+_TOKENS_BATCH_SIZE = 30  # limite documentée de /tokens/v1/{chainId}/{tokenAddresses}
+
+
+async def _batch_liquidity_prefilter(
+    candidates: list[dict], *, min_liquidity_usd: float = _MIN_LIQUIDITY_USD,
+) -> list[dict]:
+    """Pré-filtre de liquidité PAR LOT (#194) via ``fetch_tokens_batch`` -- jusqu'à
+    30 adresses par appel, bien plus efficace que d'évaluer chaque candidat en
+    entier (honeypot + OHLCV + TA) avant de découvrir qu'il n'a même pas de
+    liquidité exploitable. Groupe par chaîne (l'endpoint est mono-chaîne par appel),
+    corrèle chaque paire renvoyée à son contrat via ``PairSnapshot.base_address``,
+    ne garde que les candidats avec AU MOINS une paire au-dessus du plancher.
+
+    Un candidat ABSENT de la réponse batch (chaîne mal couverte par cet endpoint,
+    appel en échec, réponse partielle) est CONSERVÉ tel quel -- ce pré-filtre ne
+    doit jamais rejeter par excès de prudence ; seul un résultat POSITIVEMENT
+    défavorable (liquidité connue et sous le plancher) élimine un candidat."""
+    by_chain: dict[str, list[str]] = {}
+    for c in candidates:
+        by_chain.setdefault(c["chain"], []).append(c["contract"])
+
+    best_liquidity: dict[tuple[str, str], float] = {}
+    seen_in_batch: set[tuple[str, str]] = set()
+    for chain, addrs in by_chain.items():
+        for i in range(0, len(addrs), _TOKENS_BATCH_SIZE):
+            chunk = addrs[i : i + _TOKENS_BATCH_SIZE]
+            try:
+                pairs = await fetch_tokens_batch(chunk, chain=chain)
+            except Exception as exc:  # noqa: BLE001 — une panne du pré-filtre ne rejette personne
+                logger.info("_batch_liquidity_prefilter: %s (%d adresses) échoué (%s)", chain, len(chunk), exc)
+                continue
+            for p in pairs:
+                addr = (p.base_address or "").lower()
+                if not addr:
+                    continue
+                key = (addr, chain)
+                seen_in_batch.add(key)
+                best_liquidity[key] = max(best_liquidity.get(key, 0.0), p.liquidity_usd)
+
+    kept: list[dict] = []
+    for c in candidates:
+        key = (c["contract"], c["chain"])
+        if key not in seen_in_batch:
+            kept.append(c)  # pas de donnée -- on ne rejette jamais sur l'absence
+            continue
+        if best_liquidity.get(key, 0.0) >= min_liquidity_usd:
+            kept.append(c)
+    return kept
+
+
+def _add_candidate(
+    out: list[dict], seen: set[tuple[str, str]], chains: tuple[str, ...], contract: str, chain: str,
+) -> None:
+    contract = (contract or "").strip().lower()
+    chain = (chain or "").strip().lower()
+    if not contract or not chain or chain not in chains:
+        return
+    key = (contract, chain)
+    if key in seen:
+        return
+    seen.add(key)
+    out.append({"contract": contract, "chain": chain})
 
 
 async def discover_momentum_candidates(
@@ -78,21 +142,12 @@ async def discover_momentum_candidates(
 ) -> list[dict]:
     """Sourcing multi-chaînes large (#194) -- privilégie la FRAÎCHEUR (nouveaux
     pools/boosts/profils récents) plutôt qu'un mouvement déjà bien avancé.
-    Dédoublonné par (contract, chain). Jamais de filtre de sécurité ici -- c'est le
-    rôle de ``evaluate_momentum_entry`` (honeypot + TA), pas du sourcing."""
+    Dédoublonné par (contract, chain). Jamais de filtre de SÉCURITÉ ici -- c'est le
+    rôle de ``evaluate_momentum_entry`` (honeypot + TA) ; seul un pré-filtre de
+    LIQUIDITÉ (par lot, ``fetch_tokens_batch``) élimine les candidats manifestement
+    creux avant le pipeline de décision complet, coûteux par candidat."""
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
-
-    def _add(contract: str, chain: str) -> None:
-        contract = (contract or "").strip().lower()
-        chain = (chain or "").strip().lower()
-        if not contract or not chain or chain not in chains:
-            return
-        key = (contract, chain)
-        if key in seen:
-            return
-        seen.add(key)
-        out.append({"contract": contract, "chain": chain})
 
     if "base" in chains:
         try:
@@ -103,19 +158,26 @@ async def discover_momentum_candidates(
             logger.info("discover_momentum_candidates: base_crawler échoué (%s)", exc)
             base_contracts = []
         for addr in base_contracts:
-            _add(addr, "base")
+            _add_candidate(out, seen, chains, addr, "base")
 
-    # Fraîcheur d'abord (profils/boosts récents), classement "top" en dernier --
-    # cohérent avec la préférence opérateur pour des signaux qui COMMENCENT à se
-    # former plutôt qu'un mouvement déjà bien vu de tous.
-    for fetch in (token_profiles_latest, token_boosts_latest, token_boosts_top):
+    # Fraîcheur d'abord (profils créés/mis à jour, boosts récents), classement
+    # "top" en dernier -- cohérent avec la préférence opérateur pour des signaux
+    # qui COMMENCENT à se former plutôt qu'un mouvement déjà bien vu de tous.
+    for fetch in (
+        token_profiles_latest, token_profiles_recent_updates, token_boosts_latest, token_boosts_top,
+    ):
         try:
             listings = await fetch()
         except Exception as exc:  # noqa: BLE001
             logger.info("discover_momentum_candidates: %s échoué (%s)", fetch.__name__, exc)
             listings = []
         for listing in listings[:limit_per_chain]:
-            _add(listing.token_address, listing.chain_id)
+            _add_candidate(out, seen, chains, listing.token_address, listing.chain_id)
+
+    try:
+        out = await _batch_liquidity_prefilter(out)
+    except Exception as exc:  # noqa: BLE001 — le pré-filtre ne doit jamais faire échouer le sourcing
+        logger.info("discover_momentum_candidates: pré-filtre de liquidité échoué (%s)", exc)
 
     return out
 
