@@ -2083,6 +2083,14 @@ Ne pas lancer ce chantier tant que la priorité absolue (le test 1M$, cf.
 sections ci-dessus) n'est pas résolue — mais ne pas l'oublier non plus,
 c'est un axe stratégique explicite pour la suite.
 
+**Niveau d'ambition précisé (même segment)** : « une perle rare comme il
+en existe très peu, une des meilleures IA avec raisonnement, que tout le
+monde veuille l'avoir. » Pas un produit de niche discret — l'objectif
+final est l'excellence reconnaissable et désirable, sur le raisonnement
+ET la personnalité/présence. À garder en tête comme étalon quand ce
+chantier sera repris (pas une fonctionnalité de plus, une exigence de
+qualité globale).
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
