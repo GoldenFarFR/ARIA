@@ -468,6 +468,19 @@ def _max_drawdown_pct(closed_trades: list[ClosedTrade]) -> float | None:
     return max_dd
 
 
+def _avg_holding_period_days(closed_trades: list[ClosedTrade]) -> float | None:
+    """Durée moyenne de détention (achat -> vente) en jours, sur les trades
+    clôturés -- signal de conviction vs. rotation rapide, méthodologie sourcée
+    (recherche externe 15/07 : "an increasing share of coins held over longer
+    durations... indicates strong conviction", cf. docs/aria-learning-inbox).
+    Aucune donnée réseau supplémentaire : buy_ts/sell_ts sont déjà dans chaque
+    ``ClosedTrade``, ce calcul est gratuit."""
+    if not closed_trades:
+        return None
+    days = [(t.sell_ts - t.buy_ts).total_seconds() / 86_400 for t in closed_trades]
+    return fmean(days)
+
+
 def _group_transfers_by_token(transfers: list[TokenTransfer], *, chain: str = "base") -> dict[str, list[TokenTransfer]]:
     """Clé composite ``"{chain}:{adresse}"`` (#157 multi-chaînes, 14/07) --
     jamais l'adresse seule, pour que deux tokens de même adresse hexadécimale
@@ -1093,6 +1106,15 @@ class WalletScoreCard:
     tokens_skipped_capped: bool = False
     chains_scanned: list[str] = field(default_factory=list)  # chaînes où une activité réelle a été trouvée (#157, 14/07)
 
+    # Scan incrémental persistant (#157 suite, 15/07) : `tokens_analyzed` ci-dessus
+    # reste "analysés CETTE passe" -- ces deux champs donnent la vue cumulative
+    # (couverture réelle du wallet au fil des appels successifs, cf.
+    # wallet_scan_state.py). `full_coverage=True` = tous les tokens connus à ce
+    # jour ont été vus au moins une fois ; un futur appel ne fait plus que
+    # rafraîchir l'activité nouvelle depuis le dernier scan.
+    tokens_scanned_cumulative: int = 0
+    full_coverage: bool = False
+
     closed_trades_count: int = 0
     unpriced_legs: int = 0
     pool_lookup_errors: int = 0  # tokens sans pool GeckoTerminal résolu (#157, 14/07 -- diagnostic)
@@ -1102,6 +1124,7 @@ class WalletScoreCard:
     realized_pnl_usd: float | None = None
     sortino: float | None = None
     max_drawdown_pct: float | None = None
+    avg_holding_period_days: float | None = None  # 15/07 -- conviction vs. rotation rapide (méthodologie sourcée)
 
     diversification_profitable_tokens: int = 0
     diversification_total_tokens: int = 0
@@ -1149,7 +1172,8 @@ def _suspect_positive_flag(card: WalletScoreCard) -> bool:
 
 _WALLET_THESIS_SYSTEM = (
     "Tu es ARIA. On te montre un ou plusieurs wallets déjà notés par un pipeline "
-    "déterministe (FIFO PnL, Sortino, drawdown, récurrence d'entrée précoce -- "
+    "déterministe (FIFO PnL, Sortino, drawdown, durée moyenne de détention, "
+    "récurrence d'entrée précoce -- "
     "AUCUN chiffre ci-dessous n'est de toi, tu synthétises, tu n'en inventes jamais "
     "un nouveau). Si une donnée est marquée indisponible, dis-le explicitement, ne "
     "la comble jamais. Rappel absolu : ce score sert de confirmation/contexte, "
@@ -1170,13 +1194,18 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
     if card.financing_check_note:
         lines.append(card.financing_check_note)
     lines.append(
-        f"Tokens tradés trouvés : {card.tokens_found} (analysés en profondeur : {card.tokens_analyzed}"
-        + (f", plafond de {WEIGHTS.max_tokens_analyzed} atteint" if card.tokens_skipped_capped else "")
+        f"Tokens tradés trouvés : {card.tokens_found} (analysés cette passe : {card.tokens_analyzed}"
+        + (f", plafond de {WEIGHTS.max_tokens_analyzed} atteint -- {card.tokens_scanned_cumulative}/{card.tokens_found} couverts au total" if card.tokens_skipped_capped else "")
         + ")"
     )
     lines.append(
-        f"Trades clôturés valorisés : {card.closed_trades_count} (jambes sans prix : {card.unpriced_legs}, "
-        f"tokens sans pool GeckoTerminal résolu : {card.pool_lookup_errors})"
+        "Couverture complète du portefeuille atteinte." if card.full_coverage
+        else f"Scan progressif en cours ({card.tokens_scanned_cumulative}/{card.tokens_found} tokens couverts à ce jour) -- "
+             "relancer /walletscore plus tard pour poursuivre et affiner la note."
+    )
+    lines.append(
+        f"Trades clôturés valorisés (cumulé) : {card.closed_trades_count} (jambes sans prix cette passe : "
+        f"{card.unpriced_legs}, tokens sans pool GeckoTerminal résolu cette passe : {card.pool_lookup_errors})"
     )
     if card.gecko_dexscreener_gap_count:
         lines.append(
@@ -1206,6 +1235,11 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
     )
     lines.append(
         f"Diversification : {card.diversification_profitable_tokens}/{card.diversification_total_tokens} tokens profitables"
+    )
+    lines.append(
+        f"Durée moyenne de détention : {card.avg_holding_period_days:.1f} jour(s)"
+        if card.avg_holding_period_days is not None
+        else "Durée moyenne de détention : indisponible"
     )
     lines.append(
         f"Récurrence acheteur précoce multi-lancements : {card.early_entry_recurrence_count} token(s) "
@@ -1356,16 +1390,38 @@ async def score_wallets(
         card.display_name = primary_info.ens_domain_name if primary_info else None
         card.chains_scanned = chains_with_data
 
+        # Scan incrémental persistant (#157 suite, 15/07) : ne ré-analyse QUE les
+        # tokens jamais vus, ou dont l'activité a évolué depuis le dernier scan
+        # (nouveau transfert postérieur à `checkpoint.last_scan_at`) -- jamais les
+        # 680 tokens d'un coup, jamais non plus une re-analyse inutile d'un token
+        # déjà couvert et inchangé.
+        from aria_core.services import wallet_scan_state
+
+        checkpoint = await wallet_scan_state.get_checkpoint(wallet)
+        total_found = len(grouped)
+
+        def _needs_scan(key: str, transfers: list[TokenTransfer]) -> bool:
+            if key not in checkpoint.scanned_tokens:
+                return True
+            if checkpoint.last_scan_at is None:
+                return False
+            return any(
+                (ts := _parse_timestamp(t.timestamp)) is not None and ts > checkpoint.last_scan_at
+                for t in transfers
+            )
+
+        pending = {k: v for k, v in grouped.items() if _needs_scan(k, v)}
+
         cap = max_tokens if max_tokens is not None else WEIGHTS.max_tokens_analyzed
-        selected_tokens, found, skipped = _select_tokens_for_deep_analysis(grouped, wallet=wallet, cap=cap)
-        card.tokens_found = found
+        selected_tokens, _pending_total, skipped = _select_tokens_for_deep_analysis(pending, wallet=wallet, cap=cap)
+        card.tokens_found = total_found
         card.tokens_analyzed = len(selected_tokens)
         card.tokens_skipped_capped = skipped > 0
         if card.tokens_skipped_capped:
             logger.info(
-                "score_wallets: wallet %s -- plafond de %s tokens atteint (%s trouvés, %s ignorés, "
-                "sélection par récence/nombre de trades, toutes chaînes confondues)",
-                wallet, cap, found, skipped,
+                "score_wallets: wallet %s -- plafond de %s tokens atteint (%s restants à couvrir, "
+                "sélection par round-trip puis récence/nombre de trades, toutes chaînes confondues)",
+                wallet, cap, skipped,
             )
 
         selected_transfers = {key: grouped[key] for key in selected_tokens}
@@ -1379,11 +1435,34 @@ async def score_wallets(
         # réellement résolus par token, utilisés ci-dessous pour généraliser
         # l'exclusion wash-trading sans faux positif (#157, correction 14/07).
         multi = await _analyze_wallet_multi_token(wallet, selected_transfers, gecko=gecko, chain_clients=chain_clients)
-        card.closed_trades_count = len(multi.closed_trades)
         card.unpriced_legs = multi.unpriced_legs
         card.pool_lookup_errors = multi.pool_lookup_errors
         card.gecko_dexscreener_gap_count = len(multi.gecko_dexscreener_gap_tokens)
         card.cmc_price_recovery_count = len(multi.cmc_recovered_tokens)
+
+        # Persistance : ce lot remplace les trades archivés des tokens qu'il
+        # couvre (le FIFO est recalculé en entier depuis l'historique complet du
+        # token, jamais un append qui dupliquerait les mêmes trades historiques).
+        batch_addresses = {key.partition(":")[2] for key in selected_tokens}
+        await wallet_scan_state.replace_archived_trades(wallet, batch_addresses, multi.closed_trades)
+
+        now = datetime.now(timezone.utc)
+        new_scanned = checkpoint.scanned_tokens | set(selected_tokens)
+        full_coverage_at = checkpoint.full_coverage_at
+        if full_coverage_at is None and len(new_scanned) >= total_found:
+            full_coverage_at = now
+        await wallet_scan_state.save_checkpoint(
+            wallet, scanned_tokens=new_scanned, last_scan_at=now,
+            tokens_found_total=total_found, full_coverage_at=full_coverage_at,
+        )
+        card.tokens_scanned_cumulative = len(new_scanned)
+        card.full_coverage = full_coverage_at is not None
+
+        # Score final basé sur TOUS les trades clôturés jamais archivés pour ce
+        # wallet (cumulatif), pas seulement ceux de ce lot -- la note s'affine au
+        # fil des passages plutôt que de repartir de zéro à chaque appel.
+        cumulative_trades = await wallet_scan_state.list_archived_trades(wallet)
+        card.closed_trades_count = len(cumulative_trades)
 
         dex_exclusions = _build_dex_infrastructure_exclusions(grouped, wallet) | multi.resolved_pool_addresses
         disq = await _hard_disqualifiers(
@@ -1394,16 +1473,17 @@ async def score_wallets(
         card.disqualification_reasons = disq.reasons
         card.financing_check_note = disq.financing_check_note
 
-        if multi.closed_trades:
-            wins = sum(1 for t in multi.closed_trades if t.pnl_usd > 0)
-            card.win_rate = wins / len(multi.closed_trades)
-            card.realized_pnl_usd = sum(t.pnl_usd for t in multi.closed_trades)
-            card.max_drawdown_pct = _max_drawdown_pct(multi.closed_trades)
-            returns = [r for t in multi.closed_trades if (r := t.return_pct) is not None]
+        if cumulative_trades:
+            wins = sum(1 for t in cumulative_trades if t.pnl_usd > 0)
+            card.win_rate = wins / len(cumulative_trades)
+            card.realized_pnl_usd = sum(t.pnl_usd for t in cumulative_trades)
+            card.max_drawdown_pct = _max_drawdown_pct(cumulative_trades)
+            returns = [r for t in cumulative_trades if (r := t.return_pct) is not None]
             card.sortino = _sortino_ratio(returns)
+            card.avg_holding_period_days = _avg_holding_period_days(cumulative_trades)
 
             by_token: dict[str, float] = {}
-            for t in multi.closed_trades:
+            for t in cumulative_trades:
                 by_token[t.token_address] = by_token.get(t.token_address, 0.0) + t.pnl_usd
             card.diversification_total_tokens = len(by_token)
             card.diversification_profitable_tokens = sum(1 for v in by_token.values() if v > 0)
