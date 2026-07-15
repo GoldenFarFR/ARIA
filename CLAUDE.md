@@ -1552,6 +1552,25 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   `antfu/skills-cli`, SkillX.sh, SkillsMP, SkillHub, Claude Code
   Templates. Détail complet :
   `docs/aria-learning-inbox/2026-07-15-diligence-skills-sh-vercel-marketplace.md`.
+- **15/07 (nuit, suite) — VPS Principal : vérification LIVE des deux
+  requêtes Dune composées -- 1 vrai bug trouvé, documenté (pas corrigé).**
+  Schéma `dex.trades` confirmé colonne par colonne (`blockchain`/`taker`/
+  `token_bought_address`/`amount_usd`/`block_time` -- tous exacts) ;
+  adresses `varbinary` déjà restituées en hex `0x...` par l'API, aucun
+  décodage à ajouter. `build_recent_base_pairs_query` : verdict positif
+  sans réserve (109 lignes, volumes $478K-$88,9M plausibles, 2,932
+  crédits). `build_early_buyer_multiple_query` : exécute sans erreur SQL
+  mais **`peak_multiple` aberrant (~10^22x)** sur plusieurs lignes en tête
+  -- cause identifiée : division sur `launch_price_usd` quasi-nul (dust
+  trade probable sur le tout premier trade d'un token, `MIN()` sur un seul
+  point de mesure sans plancher de montant). `EXECUTE_SQL_LIMIT_1` seul
+  n'aurait pas attrapé ça (requête syntaxiquement valide) -- confirme la
+  valeur du test réel avec paramètres + inspection des valeurs, pas
+  seulement le schéma. **Ne pas utiliser cette requête en prod avant
+  correction** (backlog #185, pistes déjà documentées : plancher de
+  montant, médiane sur N premiers trades, ou plafond de multiple
+  suspect). Coût total de la vérification : 10,269 crédits/2500 (0,4%).
+  Détail complet : `docs/dune-integration-plan.md` §8.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
