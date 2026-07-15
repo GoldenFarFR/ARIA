@@ -660,6 +660,46 @@ async def analyze_smart_money(
 #   comme un chantier dédié, pas un correctif de fin de soirée.
 # ============================================================================
 #
+# SIXIÈME PASSAGE (15/07, revue Gemini + Grok convergentes). Corrigés ce
+# passage : immunité aux rug pulls (plancher de liquidité désormais
+# ASYMÉTRIQUE -- gate uniquement les jambes d'achat, jamais les ventes, cf.
+# commentaire sur `pool_liquid_enough`/`_price_lookup` plus haut -- bug réel
+# dans le correctif #160, pas une simple limite résiduelle) ; pollution du
+# percentile par des scores partiels (`_latest_scored_wallets` exclut
+# désormais les fiches `full_coverage=False` de la population de comparaison).
+# **Portée honnête du correctif rug-pull** : ne résout PAS tous les cas --
+# seulement celui où la jambe d'ACHAT a un prix établi indépendamment de la
+# liquidité actuelle (prix par tx_hash exact, cf. `TestRugPullAsymmetricFloor`).
+# Si l'achat ET la vente dépendent tous deux du SEUL instantané de liquidité
+# actuel du pool (majorité des jambes, pas de stablecoin dans la tx), l'achat
+# reste bloqué par le plancher (comportement inchangé, protection anti-dust
+# intacte) -- le trade ne se clôture alors toujours pas (FIFO exige les deux
+# bords valorisés), donc la perte reste invisible dans ce sous-cas précis.
+# Root cause partagée avec la vulnérabilité dusting ci-dessus : aucune donnée
+# de liquidité HISTORIQUE (par timestamp) n'est disponible, seulement un
+# instantané au moment du scan -- même limite structurelle, pas résolue.
+#
+# Documenté, non corrigé -- wash-trading en petit cluster coordonné (2-5
+# wallets, revue Gemini + Grok convergentes) : le disqualifiant de couche 1
+# (contrepartie unique ≥60%) et la convergence pairwise (même source de
+# financement) sont tous deux CONTOURNABLES simultanément par un acteur qui
+# répartit son volume de complaisance sur 2-4 CONTREPARTIES distinctes
+# (ex. wallet A envoie 30% vers B, 30% vers C, 40% de trades légitimes --
+# aucune contrepartie unique ne franchit 60%) tout en utilisant des sources de
+# financement différentes ou étalées dans le temps pour chaque wallet du
+# cluster (évite la convergence pairwise stricte). Chaque wallet passe alors
+# individuellement tous les disqualifiants et le seuil de 100 swaps, entre
+# dans le classement comparatif, et le cluster peut biaiser collectivement les
+# percentiles ou faire lever le drapeau "suspect positif" de façon
+# coordonnée. Niveau de coordination intermédiaire entre le wash-trading
+# intra-wallet (déjà couvert) et le Sybil industriel à grande échelle (déjà
+# documenté ci-dessus) -- même famille de trou (pas de clustering d'entité au-
+# delà de la convergence pairwise), à fermer par le même chantier dédié si
+# entrepris (pas un correctif de seuil ponctuel : élargir le seuil de 60% ou
+# le nombre de wallets vérifiés en pairwise ne fait que déplacer la taille de
+# cluster minimale requise pour contourner, jamais l'éliminer).
+# ============================================================================
+#
 # CONSTAT DE PALIER (15/07) : à ce stade, les rounds successifs de revue
 # externe reconfirment très majoritairement les mêmes limites structurelles
 # déjà écrites (Sybil, benchmark marché, MEV, gaming des seuils/tests) plutôt
@@ -1246,43 +1286,58 @@ async def _analyze_wallet_multi_token(
             # Ajouté même si trop peu liquide pour la valorisation -- reste une
             # vraie brique d'infra DEX pour l'exclusion wash-trading.
             result.resolved_pool_addresses.add(pool_meta.pool_address.lower())
-        if pool_liquid_enough:
+            # Paradoxe "immunité aux rug pulls" (15/07, revue Gemini -- BUG réel
+            # confirmé dans le correctif #160) : la liquidité CONFIRMÉE ci-dessus
+            # est un instantané pris AU MOMENT DU SCAN, pas historique. Un token
+            # acheté quand le pool avait 100k$ puis victime d'un rug pull (pool
+            # effondré à 1k$ au moment du scan) verrait sa VENTE bloquée par le
+            # même plancher que celui pensé pour bloquer le dust à l'ACHAT --
+            # la perte réelle du rug pull disparaîtrait alors des statistiques
+            # au lieu d'être comptabilisée (l'inverse exact de l'objectif anti-
+            # dust). L'OHLCV est donc TOUJOURS récupéré dès que le pool est
+            # résolu ; seul `pool_liquid_enough` gate désormais la confiance
+            # côté ACHAT dans `_price_lookup` ci-dessous (jamais la vente) --
+            # une vente n'est jamais exploitable pour fabriquer un gain (elle ne
+            # fait que révéler un prix réel, éventuellement mauvais), donc rien
+            # à protéger de ce côté.
             ohlcv = await gecko.get_ohlcv(pool_meta.pool_address, network=network)
-        else:
-            ohlcv = None
-            if pool_meta.available:
-                # Pool résolu mais confirmé trop peu liquide -- traité comme
-                # non-priced (jamais un prix de marché fabriqué sur un pool
-                # manipulable), PAS comme "pool introuvable" : la triangulation
-                # DexScreener/CMC ci-dessous répond à une question différente
-                # (l'ABSENCE de pool), ne s'applique pas ici.
+            if not pool_liquid_enough:
                 result.thin_liquidity_tokens.append(token_addr)
-            else:
-                # Triangulation (#157, 14/07) : GeckoTerminal n'a pas résolu de
-                # pool -- avant de conclure "token illiquide", on croise avec
-                # DexScreener. `True` = écart réel entre les deux sources
-                # (DexScreener voit une paire que GeckoTerminal rate -- signal
-                # à creuser, pas un défaut du wallet) ; `False`/`None` (aucune
-                # paire confirmée, ou vérification elle-même indisponible)
-                # n'ajoute rien de plus que ce que `pool_lookup_errors` dit déjà.
-                if await _dexscreener_has_any_pair(token_addr, chain=chain) is True:
-                    result.gecko_dexscreener_gap_tokens.append(token_addr)
+        else:
+            # `pool_liquid_enough` vaut toujours False ici (`pool_meta.available`
+            # est son premier facteur) -- mais ça ne veut PAS dire "trop peu
+            # liquide", ça veut dire "GeckoTerminal n'a trouvé AUCUN pool du
+            # tout", un cas DIFFÉRENT géré séparément ci-dessous (triangulation
+            # DexScreener/CMC). Si CMC recouvre un prix, `buy_blocked_thin_
+            # liquidity` (calculé après ce bloc) ne doit JAMAIS bloquer les
+            # achats sur cette base -- seul un pool GeckoTerminal RÉSOLU mais
+            # confirmé trop thin doit bloquer l'achat.
+            ohlcv = None
+            # Triangulation (#157, 14/07) : GeckoTerminal n'a pas résolu de
+            # pool -- avant de conclure "token illiquide", on croise avec
+            # DexScreener. `True` = écart réel entre les deux sources
+            # (DexScreener voit une paire que GeckoTerminal rate -- signal
+            # à creuser, pas un défaut du wallet) ; `False`/`None` (aucune
+            # paire confirmée, ou vérification elle-même indisponible)
+            # n'ajoute rien de plus que ce que `pool_lookup_errors` dit déjà.
+            if await _dexscreener_has_any_pair(token_addr, chain=chain) is True:
+                result.gecko_dexscreener_gap_tokens.append(token_addr)
 
-                # 3e couche (#157, 14/07) : CoinMarketCap tente sa PROPRE
-                # résolution de pool, INDÉPENDAMMENT du résultat DexScreener
-                # ci-dessus -- le diagnostic "écart entre sources" et la
-                # tentative de pricing CMC ne sont pas la même chose. Même
-                # quand DexScreener confirme une paire (`True`), il ne fournit
-                # aucun prix historique (pas de méthode OHLCV dans ce client)
-                # -- CMC est quand même tenté, sinon le token reste non-valorisé
-                # alors qu'une paire est confirmée exister.
-                cmc_network = CMC_NETWORK_SLUGS.get(chain, "base")
-                cmc_pool = await _cmc_resolve_primary_pool(token_addr, network_slug=cmc_network)
-                if cmc_pool.available:
-                    cmc_ohlcv = await _cmc_get_ohlcv(cmc_pool.pool_address, network_slug=cmc_network)
-                    if cmc_ohlcv.available and cmc_ohlcv.candles:
-                        ohlcv = cmc_ohlcv
-                        result.cmc_recovered_tokens.append(token_addr)
+            # 3e couche (#157, 14/07) : CoinMarketCap tente sa PROPRE
+            # résolution de pool, INDÉPENDAMMENT du résultat DexScreener
+            # ci-dessus -- le diagnostic "écart entre sources" et la
+            # tentative de pricing CMC ne sont pas la même chose. Même
+            # quand DexScreener confirme une paire (`True`), il ne fournit
+            # aucun prix historique (pas de méthode OHLCV dans ce client)
+            # -- CMC est quand même tenté, sinon le token reste non-valorisé
+            # alors qu'une paire est confirmée exister.
+            cmc_network = CMC_NETWORK_SLUGS.get(chain, "base")
+            cmc_pool = await _cmc_resolve_primary_pool(token_addr, network_slug=cmc_network)
+            if cmc_pool.available:
+                cmc_ohlcv = await _cmc_get_ohlcv(cmc_pool.pool_address, network_slug=cmc_network)
+                if cmc_ohlcv.available and cmc_ohlcv.candles:
+                    ohlcv = cmc_ohlcv
+                    result.cmc_recovered_tokens.append(token_addr)
 
         # Prix par tx_hash exact (14/07) : tenté pour chaque tx_hash DISTINCT de
         # ce token, dans l'ordre chronologique (cohérent avec le FIFO qui suit),
@@ -1309,11 +1364,31 @@ async def _analyze_wallet_multi_token(
         else:
             from aria_core.services.geckoterminal import price_at
 
-            def _price_lookup(ts, tx_hash, _ohlcv=ohlcv, _hash_prices=hash_prices):
+            # Plancher asymétrique (15/07, revue Gemini -- immunité aux rug
+            # pulls) : `buy_tx_hashes` identifie les jambes d'ACHAT -- seules
+            # celles-ci sont bloquées si le pool GeckoTerminal a été RÉSOLU
+            # mais confirmé trop peu liquide (``pool_meta.available and not
+            # pool_liquid_enough`` -- PAS juste ``not pool_liquid_enough``,
+            # qui vaut aussi True quand GeckoTerminal n'a trouvé AUCUN pool
+            # du tout, un cas différent où CMC peut avoir recouvré un prix
+            # valide qu'il ne faut alors jamais bloquer). Une jambe de VENTE
+            # utilise l'OHLCV même si la liquidité actuelle du pool est sous
+            # le plancher (rug pull confirmé après un achat légitime) : cette
+            # lecture ne fait jamais que révéler un prix réel, jamais
+            # fabriquer un gain -- rien à protéger de ce côté.
+            buy_tx_hashes = {b_hash for _ts, _amt, b_hash in buys}
+            buy_blocked_thin_liquidity = pool_meta.available and not pool_liquid_enough
+
+            def _price_lookup(
+                ts, tx_hash, _ohlcv=ohlcv, _hash_prices=hash_prices,
+                _buy_hashes=buy_tx_hashes, _blocked=buy_blocked_thin_liquidity,
+            ):
                 cached = _hash_prices.get(tx_hash)
                 if cached is not None:
                     return cached
                 if _ohlcv is None or not _ohlcv.available or not _ohlcv.candles:
+                    return None
+                if tx_hash in _buy_hashes and _blocked:
                     return None
                 return price_at(_ohlcv, int(ts.timestamp()))
 
@@ -1427,7 +1502,19 @@ async def _log_wallet_score(wallet: str, report_json: str) -> None:
 async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
     """Dernière fiche connue de chaque AUTRE wallet déjà noté (`wallet_score_log`,
     couche 4) -- une ligne par wallet, la plus récente. Base de comparaison du
-    classement percentile (15/07) : jamais le wallet contre lui-même."""
+    classement percentile (15/07) : jamais le wallet contre lui-même.
+
+    Exclut les fiches `full_coverage=False` (15/07, revue Gemini -- pollution
+    asymétrique du percentile) : un wallet scanné une seule fois, dont seuls
+    quelques tokens prioritaires (récents/rentables, cf. `_select_tokens_for_
+    deep_analysis`) ont été analysés en profondeur, produit un score
+    temporairement plus favorable qu'un wallet à couverture complète -- le
+    comparer sur un pied d'égalité fausse la distribution (un wallet
+    moyennement actif mais entièrement couvert serait pénalisé face à des
+    fantômes de scans partiels chanceux). Une fiche sans champ `full_coverage`
+    du tout (format ancien, avant #157 suite) est traitée comme non couverte
+    -- exclue par prudence, jamais un défaut de donnée qui s'invite dans la
+    comparaison."""
     await _ensure_wallet_scoring_tables()
     exclude_l = exclude_wallet.lower()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1445,9 +1532,12 @@ async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
     parsed: list[dict] = []
     for (report_json,) in rows:
         try:
-            parsed.append(json.loads(report_json))
+            entry = json.loads(report_json)
         except (TypeError, ValueError):
             continue  # ligne corrompue/format ancien -- ignorée, jamais un crash du classement
+        if not entry.get("full_coverage"):
+            continue
+        parsed.append(entry)
     return parsed
 
 
@@ -2025,6 +2115,18 @@ async def score_wallets(
     rafraîchi mensuellement par le heartbeat, repli sur Base/Ethereum si le
     cache n'a jamais tourné) est utilisé. Solana n'est PAS EVM (chantier
     séparé, hors scope) -- jamais dans ce registre.
+
+    PRÉCISION DE PORTÉE (15/07, revue ChatGPT -- incohérence relevée entre
+    cette docstring et la limite "ponts cross-chain" documentée plus haut) :
+    "consolidé" signifie ici que les trades/métriques de TOUTES les chaînes
+    scannées sont agrégés dans UN SEUL jeu de chiffres (win_rate/PnL/Sortino/
+    etc. mélangent les trades Base et Ethereum d'un même wallet, par exemple)
+    -- PAS que le cost-basis d'UNE position suit une continuité à travers un
+    bridge. Un achat sur Base puis un pont vers Arbitrum puis une vente sur
+    Arbitrum (économiquement UN seul trade) est vu comme DEUX événements
+    FIFO indépendants et non reliés (cf. limite "ponts cross-chain" plus
+    haut) -- consolidation des MÉTRIQUES par wallet, jamais continuité du
+    cost-basis à travers les bridges.
     """
     if not addresses:
         return WalletScoringReport(available=False, error="aucune adresse fournie")
