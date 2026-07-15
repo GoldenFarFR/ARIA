@@ -2064,6 +2064,25 @@ sur `paper_trader.py` → merger → demander le "go" déploiement groupé
 (topic BS Cabal + `/feedback`)/cockpit que le compteur bouge → trancher
 les 8 questions ci-dessus avec l'opérateur → reprendre #187.
 
+**Vision future notée (décision/souhait opérateur explicite, 15/07, fin de
+session) — HORS de la priorité absolue actuelle, pas à construire
+maintenant.** Au-delà d'être une super investisseuse, l'opérateur veut
+qu'ARIA devienne à terme une sorte d'« amie intime » — la personnalité
+devra être "parfaite", en plus de la voix et du physique. Contexte déjà
+existant à réutiliser le moment venu (ne jamais repartir de zéro) :
+- **Physique/identité visuelle** : #23 (avatar, vidéos) déjà livré ;
+  frontière de goût déjà gravée le 10/07 dans les prompts de portrait
+  ("never suggestive, never revealing, never sexualized") — à respecter
+  systématiquement si ce chantier avance.
+- **Personnalité** : `persona.md`/valeurs/objectifs (mémoire d'ARIA) déjà
+  la fondation existante — un travail de "personnalité parfaite" partirait
+  de là, pas d'un nouveau système.
+- **Voix** : explicitement noté le 10/07 comme scope différé, "aucune
+  infra existante" (pas de TTS) — reste vrai, rien construit depuis.
+Ne pas lancer ce chantier tant que la priorité absolue (le test 1M$, cf.
+sections ci-dessus) n'est pas résolue — mais ne pas l'oublier non plus,
+c'est un axe stratégique explicite pour la suite.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
