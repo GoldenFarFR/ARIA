@@ -2434,3 +2434,56 @@ def test_wallet_scoring_gate_off_by_default(monkeypatch):
 def test_wallet_scoring_gate_on_when_enabled(monkeypatch):
     monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "true")
     assert sm.wallet_scoring_enabled() is True
+
+
+class TestTransferHistoryTruncated:
+    """15/07, revue externe -- le plafond de pagination Blockscout (2000
+    transferts/10 pages) peut tronquer l'historique d'un wallet très actif
+    sans qu'aucun signal ne le dise -- risque de biais silencieux sur TOUS
+    les axes (W/PnL/S/D) puisque des achats/ventes anciens manqueraient."""
+
+    @pytest.mark.asyncio
+    async def test_surfaced_on_card_and_displayed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0),
+            ],
+            available=True,
+            truncated=True,  # plafond de pagination atteint, historique pas réellement épuisé
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(candles=TestComparativeRanking._candles(2.0), available=True)},
+        )
+        report = await sm.score_wallets([WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus())
+        card = report.wallets[0]
+
+        assert card.transfer_history_truncated is True
+        text = sm._format_card_for_prompt(card)
+        assert "ATTENTION" in text
+        assert "historique de transferts tronqué" in text
+
+    @pytest.mark.asyncio
+    async def test_not_flagged_when_history_genuinely_exhausted(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0),
+            ],
+            available=True,
+            truncated=False,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(candles=TestComparativeRanking._candles(2.0), available=True)},
+        )
+        report = await sm.score_wallets([WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus())
+        card = report.wallets[0]
+
+        assert card.transfer_history_truncated is False
+        assert "historique de transferts tronqué" not in sm._format_card_for_prompt(card)
