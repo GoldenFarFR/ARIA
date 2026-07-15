@@ -79,7 +79,10 @@ async def absorb_bonding_candidate(
     if not result.hard_fail:
         reason = "; ".join(result.reasons) if result.reasons else "raison indisponible"
         logger.info("bonding_absorb %s : échec mou (%s) — non banni, à réessayer", contract, reason)
-        await screened_pool.record_pending(contract=contract, reason=reason, network=BONDING_NETWORK)
+        await screened_pool.record_pending(
+            contract=contract, reason=reason, network=BONDING_NETWORK,
+            security_score=result.security_score, verdict=result.verdict,
+        )
         return "skip_incomplete"
 
     await screened_pool.record_rejected(

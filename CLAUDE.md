@@ -843,6 +843,87 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   fonctionnalité terminée — ne jamais faire confiance à un mock auto-cohérent écrit de mémoire
   sans l'avoir confronté à la réalité au moins une fois. Correctif + tests re-mockés sur le vrai
   schéma : commit `85e4c16`.
+- **Diligence capital réel étape 2 — MetaMask Agent Wallet retenu, comparatif concurrents fait
+  (14-15/07).** Après diligence Velvet Unicorn/eToro/IBKR (résumée plus haut), l'opérateur a
+  tranché en faveur de **MetaMask Agent Wallet** (self-custodial, ERC-7710/7715, CLI `mm`,
+  compatible Claude Code nommément cité dans sa doc, DEX-natif — swap/bridge/perps/prediction
+  markets/Aave, 25+ chaînes EVM) — accès anticipé déjà demandé par l'opérateur, pas encore
+  ouvert. Comparatif élargi (15/07) aux concurrents directs de même catégorie : **Coinbase
+  Agentic Wallets** (MPC+enclave AWS Nitro, `npx awal`, gratuit à créer, testable dès ~20$ USDC,
+  MCP officiel compatible Claude, x402 natif — semble accessible immédiatement, pas d'accès
+  anticipé identifié), **Trust Wallet Agent Kit** (non-custodial, couverture chaînes la plus
+  large des trois : EVM+Solana+BTC+Cosmos+TON+Aptos+Tron+NEAR+Sui, accès via
+  `portal.trustwallet.com`), **Cobo Agentic Wallet** (MPC 3 parts, système "Pact" plus formel,
+  positionné enterprise) et la brique standard sous-jacente **Safe + ERC-4337** (session keys
+  EIP-7702). **Constat commun aux quatre, pas spécifique à MetaMask** : tous fonctionnent sur le
+  principe plafond + liste blanche accordés une fois, puis autonomie dans ces bornes — jamais
+  une confirmation humaine par transaction individuelle, sauf sortie du cadre (2FA/escalade).
+  Détail complet (adresses, wallets créés, sources) volontairement dans **`aria-ops`** (privé),
+  jamais dans ce repo : `docs/aria-learning-inbox/2026-07-14-metamask-agent-wallet-decision.md`,
+  `2026-07-14-velvet-unicorn-wallet-pilote.md` (superseded), `2026-07-14-agent-wallets-concurrents-metamask.md`.
+- **Proposition opérateur (15/07) — pilote capital réel ~10$ sur l'agent-wallet retenu, PAS
+  ENCORE implémenté, produit final pas encore choisi.** Raisonnement opérateur : montant assez
+  bas pour n'avoir aucune conséquence réelle en cas d'erreur, sert à calibrer avant le vrai
+  palier. Ma position (actée avec l'opérateur, pas encore tranchée définitivement) : ce n'est
+  pas le montant qui compte mais le précédent — ce serait la première fois que le code d'ARIA
+  (pas un tiers isolé comme Arena #60, pas un testnet comme Sepolia) déplacerait du capital réel
+  mainnet sans clic Telegram par transaction. Si ça se fait, ça doit être traité avec la même
+  rigueur que l'exception Sepolia : **nommé explicitement** comme exception bornée (pas noyé
+  dans "un test tranquille"), **plafond dur codé** (vérification de solde avant chaque
+  transaction, pas une confiance dans le réglage UI de l'outil), **aucune capacité de transfert
+  libre** (swap uniquement ; un retrait éventuel vers UNE SEULE adresse pré-enregistrée, jamais
+  un champ libre — le transfert est le vrai vecteur de vol, pas le swap), **slippage ≤10%
+  explicite et codé en dur** (règle absolue déjà actée le 09/07, jamais la valeur par défaut de
+  l'outil), **kill-switch = `/stop` existant** (à vérifier qu'il coupe bien ce chemin), et le
+  log de transactions décrit ci-dessous. Rien à construire tant que le produit n'est pas choisi
+  et que l'opérateur n'a pas donné le "go" sur ce plan complet.
+- **#158/#159 — EN LIGNE (codé, testé, PAS déployé), 15/07 : diagnostics dédiés lisibles
+  directement depuis le cloud, sans dépendre d'une session VPS.** Suite directe de la Routine
+  cassée ci-dessous et de la demande opérateur d'un log de transactions agent-wallet. Deux
+  nouveaux endpoints admin-gatés par un **token dédié** `ARIA_DIAGNOSTIC_TOKEN` (header
+  `X-Diagnostic-Access`), distinct du secret admin ET du token relay (`ARIA_RELAY_ACCESS_TOKEN`)
+  — même patron exact que `relay_chat.py`/`verify_relay_access` : si ce token fuit un jour dans
+  une conversation Claude Code, le pire cas est "quelqu'un lit un journal", jamais "quelqu'un
+  valide une dépense". Fail-closed (403 sans token configuré), routes ajoutées à
+  `VANGUARD_PUBLIC_ROUTES` (exemptées du gate Privy/opérateur, comme `relay/*`, car elles se
+  protègent elles-mêmes) :
+  - `GET /api/aria/diagnostics/pool-status` (`vanguard/backend/app/api/routes/aria.py`) — compte
+    `screened_token` par statut sur `network='base'` et `'base-bonding'`, + les 3 candidats
+    `pending` les plus proches du seuil de sécurité via la nouvelle
+    `screened_pool.list_closest_to_passing()` (score le plus haut d'abord, puis liquidité la
+    plus proche de 30 000$). Remplace le dispatch VPS manuel pour le check quotidien du pool.
+  - `GET /api/aria/diagnostics/agent-wallet-ledger` — lit le nouveau
+    `aria_core/agent_wallet_log.py` (append-only, même doctrine que `bonding_trade_log.py`/
+    `aria_directive_log` : aucune fonction UPDATE/DELETE, enregistre CHAQUE tentative ok/failed/
+    blocked, pas seulement les succès). **Seam vide pour l'instant** — aucun pilote agent-wallet
+    n'est encore câblé dessus (MetaMask/Coinbase/Trust Wallet pas encore choisi), `record_transaction()`
+    attend d'être appelé le jour où le pilote #10$ (voir ci-dessus) sera construit.
+  - **Bug réel corrigé au passage** (découvert en construisant `list_closest_to_passing`) :
+    `screened_pool.record_pending()` codait en dur `liquidity_usd=0`/`security_score=0` même
+    quand l'appelant (`token_absorber.absorb`, échec mou APRÈS un scan complet) avait déjà les
+    vraies valeurs en main — un candidat pending prometteur (score 78, liquidité 50k$) était
+    donc indiscernable d'un candidat sans aucun signal. Corrigé : `record_pending()` accepte
+    désormais `liquidity_usd`/`security_score`/`verdict` optionnels (défaut 0/'' préservé pour
+    l'appelant sans scan, ex. pré-filtre Volet C — jamais une donnée inventée), câblé dans
+    `token_absorber.py` et `bonding_absorber.py` (ce dernier sans `liquidity_usd`, neutre par
+    construction sur courbe de bonding). Sans ce correctif, l'endpoint pool-status aurait renvoyé des
+    "candidats les plus proches" indiscernables les uns des autres (tous à 0/0).
+  - Suites complètes vertes après coup : 4880 passed (aria-core), 108 passed (vanguard/backend).
+    **Rien déployé** — regroupé avec le prochain déploiement.
+- **Découverte 15/07 — une Routine cloud créée le 14/07 sans confirmation opérateur explicite,
+  résolue par #158 ci-dessus.** La session cloud "commandement" avait créé (probablement lors
+  d'un tour antérieur, avant un compactage de contexte — jamais confirmé explicitement à
+  l'opérateur) une Routine récurrente ("Vérif pool sourcing 24h ARIA", quotidienne 09:00 UTC /
+  11:00 heure française) qui réinjecte automatiquement dans cette même session le texte de la
+  demande de check quotidien du pool `screened_token`. Limite identifiée : cette session cloud
+  n'a pas d'accès réseau direct au VPS/à la vraie base `aria.db` — la Routine ne pouvait donc
+  pas exécuter le check elle-même. **Réglé par #158** : une fois `ARIA_DIAGNOSTIC_TOKEN` déployé
+  et configuré, la Routine (ou une future version d'elle) pourra appeler
+  `/api/aria/diagnostics/pool-status` directement en HTTPS, sans dispatch VPS. Leçon retenue :
+  créer une automatisation récurrente (`create_trigger`) est une action durable qui doit être
+  confirmée à l'opérateur AVANT d'être programmée, pas découverte après coup dans l'UI — pas
+  fait correctement ici. **Décision opérateur toujours en attente** : garder cette Routine
+  (à reconfigurer pour appeler le nouvel endpoint une fois déployé) ou la supprimer.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

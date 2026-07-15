@@ -101,6 +101,58 @@ async def test_record_pending_stores_source():
 
 
 @pytest.mark.asyncio
+async def test_record_pending_stores_score_liquidity_verdict_when_supplied():
+    """15/07 — un échec mou APRÈS un scan complet (score/liquidité déjà connus) ne
+    doit plus être indiscernable d'un candidat sans aucun signal (cf. #158)."""
+    await sp.record_pending(
+        contract="0xpromising", reason="holders inconnus",
+        liquidity_usd=50_000.0, security_score=78, verdict="SAFE",
+    )
+    row = (await sp.list_pool(status="pending"))[0]
+    assert row["liquidity_usd"] == 50_000.0
+    assert row["security_score"] == 78
+    assert row["verdict"] == "SAFE"
+
+
+@pytest.mark.asyncio
+async def test_record_pending_defaults_stay_zero_without_scan():
+    """Le pré-filtre (Volet C) n'a pas de scan complet -- ne jamais inventer une
+    donnée : défauts 0/'' préservés quand l'appelant ne les fournit pas."""
+    await sp.record_pending(contract="0xunscanned", reason="pré-filtré")
+    row = (await sp.list_pool(status="pending"))[0]
+    assert row["liquidity_usd"] == 0
+    assert row["security_score"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_closest_to_passing_ranks_by_score_then_liquidity_gap():
+    await sp.record_pending(contract="0xlow", reason="r", liquidity_usd=10_000.0, security_score=40)
+    await sp.record_pending(contract="0xhigh", reason="r", liquidity_usd=29_000.0, security_score=65)
+    await sp.record_pending(contract="0xmid", reason="r", liquidity_usd=5_000.0, security_score=65)
+    ranked = await sp.list_closest_to_passing(limit=3)
+    assert [r["contract"] for r in ranked] == ["0xhigh", "0xmid", "0xlow"]
+
+
+@pytest.mark.asyncio
+async def test_list_closest_to_passing_ignores_active_and_rejected():
+    await sp.upsert_screened(contract="0xactive", symbol="A", liquidity_usd=1.0, security_score=95, verdict="SAFE")
+    await sp.record_rejected(contract="0xrej2", reason="honeypot")
+    await sp.record_pending(contract="0xpend2", reason="r", security_score=50)
+    ranked = await sp.list_closest_to_passing(limit=10)
+    assert [r["contract"] for r in ranked] == ["0xpend2"]
+
+
+@pytest.mark.asyncio
+async def test_list_closest_to_passing_handles_missing_scores_gracefully():
+    """Un candidat sans score connu (pré-filtre) ne doit pas casser le tri -- relégué
+    en fin de classement plutôt que de fausser l'ordre."""
+    await sp.record_pending(contract="0xunknown_score", reason="pré-filtré")
+    await sp.record_pending(contract="0xknown_score", reason="r", security_score=60)
+    ranked = await sp.list_closest_to_passing(limit=10)
+    assert [r["contract"] for r in ranked] == ["0xknown_score", "0xunknown_score"]
+
+
+@pytest.mark.asyncio
 async def test_record_rejected_stores_source():
     await sp.record_rejected(contract="0xrej", reason="honeypot", source="top_pools")
     row = (await sp.list_pool(status="rejected"))[0]
