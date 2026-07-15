@@ -1371,6 +1371,19 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   ne les lit encore côté code**, juste mises à l'abri en attendant la construction du
   wrapper (`agent_wallet_pilot.py`, §5 du plan, pas commencé). Clé privée jamais vue
   ni demandée dans cette session (doctrine secrets, même famille que les clés SSH).
+- **15/07 (soir, suite) — vrai goulot trouvé sur `wallet_scan_queue_cycle` (constat
+  opérateur : « 25 minutes pour 50 tokens, c'est pas un peu long ? »), corrigé.**
+  Vérifié plutôt que deviné : ~30s/token vient du throttle GeckoTerminal (2,1s min
+  entre appels, calibré sur la limite gratuite ~30 req/min) -- **partagé par tout
+  ARIA** (analyse VC, autopsie pump/dump...), jamais touché à la légère pour ne pas
+  risquer un bannissement qui casserait tous les prix du système. **Vrai problème
+  trouvé en creusant** : le heartbeat d'ARIA traite ses tâches en SÉQUENCE stricte
+  (`heartbeat.py::_tick`, une boucle `for` qui `await` chaque tâche l'une après
+  l'autre) -- un `wallet_scan_queue_cycle` à 2 wallets x 50 tokens pouvait donc
+  bloquer TOUTES les autres automatisations activées d'ARIA jusqu'à ~50 minutes.
+  Corrigé : `MAX_WALLETS_PER_CYCLE` ramené de 2 à 1 (décision opérateur explicite,
+  "pas pressé") -- pire cas de blocage ramené à ~25 minutes, sans toucher au throttle
+  partagé. Tests mis à jour, suite complète verte (4962 passed).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

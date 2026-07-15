@@ -245,8 +245,8 @@ async def test_cycle_processes_at_most_max_wallets_per_cycle(monkeypatch):
 
     result = await wsq.run_wallet_scan_queue_cycle()
     assert result["outcome"] == "ok"
-    assert len(calls) == wsq.MAX_WALLETS_PER_CYCLE == 2
-    assert calls == [A, B]
+    assert len(calls) == wsq.MAX_WALLETS_PER_CYCLE == 1
+    assert calls == [A]
 
 
 @pytest.mark.asyncio

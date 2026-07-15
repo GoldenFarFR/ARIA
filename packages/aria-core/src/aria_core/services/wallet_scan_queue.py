@@ -33,8 +33,14 @@ DB_PATH = str(aria_db_path())
 PROGRESS_NOTIFY_STEP = 50
 
 # Wallets traités par passage de heartbeat (sobriété -- éviter de saturer les
-# API externes en un seul cycle si plusieurs wallets sont en file).
-MAX_WALLETS_PER_CYCLE = 2
+# API externes en un seul cycle si plusieurs wallets sont en file). Ramené de
+# 2 à 1 le 15/07 (constat opérateur) : le heartbeat d'ARIA traite ses tâches
+# en SÉQUENCE, jamais en parallèle -- un cycle à 2 wallets x 50 tokens x ~2,1s
+# de throttle GeckoTerminal peut bloquer TOUTES les autres automatisations
+# activées jusqu'à ~50 minutes. À 1 wallet, le pire cas tombe à ~25 minutes.
+# Opérateur explicitement pas pressé -- préfère la marge de sécurité sur le
+# reste du heartbeat à la vitesse de couverture de ce cycle précis.
+MAX_WALLETS_PER_CYCLE = 1
 
 
 def wallet_scan_queue_enabled() -> bool:
