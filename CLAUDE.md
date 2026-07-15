@@ -936,6 +936,14 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   ou un accès opérateur direct redevient disponible. En attendant, toute nouvelle demande
   se traite depuis cette session cloud avec ses limites connues (pas d'accès réseau
   direct au VPS/`aria.db`, curl/WebFetch seulement vers l'extérieur).
+- **15/07 — activer `ARIA_VISION_ENABLED` en attente d'accès VPS (demande opérateur
+  explicite, même segment).** Aucun code à changer — la fonctionnalité vision (lecture
+  d'images Telegram, admin-only) est déjà livrée et testée en conditions réelles (10/07,
+  vrai graphique DexScreener, chiffres lus correctement). Juste ajouter
+  `ARIA_VISION_ENABLED=true` au `.env` du conteneur `aria-api` puis redémarrer (pas besoin
+  de rebuild, une variable d'environnement lue à l'appel, pas au chargement du module) —
+  bloqué par le même manque d'accès VPS que ci-dessus. Coût : un appel LLM vision par
+  image envoyée, mais admin-only donc maîtrisé.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
