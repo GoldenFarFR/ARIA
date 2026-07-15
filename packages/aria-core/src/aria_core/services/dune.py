@@ -364,3 +364,100 @@ def build_early_buyer_multiple_query(*, min_multiple: float, lookback_days: int)
     if not isinstance(lookback_days, int) or lookback_days <= 0:
         raise ValueError("lookback_days doit être un entier positif")
     return EARLY_BUYER_MULTIPLE_QUERY_TEMPLATE.format(min_multiple=min_multiple, lookback_days=lookback_days)
+
+
+# ---------------------------------------------------------------------------
+# Requête SQL dédiée (#134 « débit de scan élargi », 15/07) -- DEUXIÈME source
+# INDÉPENDANTE de découverte de tokens Base, en complément (jamais en
+# remplacement) de GeckoTerminal (déjà utilisé par
+# ``base_crawler.discover_top_pools``). Portée EXACTE de cette tâche : client
+# + requête + tests SEULEMENT -- PAS de branchement dans ``base_crawler.py``,
+# PAS de gate, PAS de tâche heartbeat (décision opérateur du 15/07,
+# intégration réelle au pipeline = décision séparée après relecture croisée).
+#
+# Abandon de la piste initiale ("/v1/dex/pairs/{chain}", §3.1 du plan) --
+# vérifiée en direct (15/07) et confirmée INEXISTANTE (404 sur toute variante
+# d'URL essayée, y compris avec un header d'auth présent -- contrairement à
+# l'Execute SQL API, réelle, qui répond 401 sans clé valide). Cette requête
+# réutilise donc STRICTEMENT la même Execute SQL API que
+# ``build_early_buyer_multiple_query`` ci-dessus, aucun nouveau client.
+#
+# Logique de la requête :
+# 1. `token_launch` : premier trade DEX Base jamais vu pour chaque token
+#    (même CTE/même piège corrigé que ci-dessus -- voir avertissement
+#    ci-dessous), filtré aux tokens dont ce premier trade tombe dans la
+#    fenêtre récente (`lookback_hours`, ex. 24-48h).
+# 2. `recent_volume` : volume USD total et nombre de trades sur la fenêtre
+#    récente, par token -- borné directement par `lookback_hours` dans le
+#    WHERE (safe ici, PAS le même piège que token_launch : un token dont le
+#    launch_time tombe dans la fenêtre a par construction TOUS ses trades
+#    dans la fenêtre aussi -- même raisonnement déjà appliqué à
+#    `token_peak`/`token_launch_price` dans la requête ci-dessus).
+# 3. Résultat : tokens Base nouvellement apparus (premier trade dans la
+#    fenêtre) avec un volume minimum, triés par volume décroissant --
+#    candidats de découverte, PAS encore un verdict de sécurité (le filtre
+#    de sécurité réel reste `safety_screen`/`token_absorber`, inchangé).
+#
+# AVERTISSEMENT ANTI-RÉGRESSION (relecture opérateur du 15/07, même piège que
+# la 1ère requête avant sa correction) : `token_launch` ne doit JAMAIS filtrer
+# par date dans son WHERE -- seulement `blockchain = 'base'`. Le filtre de
+# fenêtre récente s'applique UNIQUEMENT via HAVING sur l'agrégat
+# MIN(block_time), sinon un token ÉTABLI depuis longtemps dont le premier
+# trade DANS la fenêtre de calcul tombe par hasard il y a `lookback_hours`
+# serait à tort classé "vient de naître" -- l'agrégat doit porter sur
+# l'historique COMPLET de `dex.trades` pour que "premier trade jamais vu"
+# soit vraiment le tout premier, pas le premier dans une fenêtre déjà filtrée.
+#
+# RÉSERVE HONNÊTE (mêmes colonnes `dex.trades` que ci-dessus, mêmes non
+# vérifiées par appel réel -- cf. réserve en tête de fichier) : à reconfirmer
+# via `EXECUTE_SQL_LIMIT_1` avant tout usage en prod.
+#
+# Paramètres attendus par l'appelant (substitution simple, mêmes garanties
+# que ``build_early_buyer_multiple_query`` -- CE MODULE NE FAIT AUCUNE
+# VALIDATION/ÉCHAPPEMENT au-delà du typage numérique, l'appelant doit
+# s'assurer que ces valeurs sont de confiance, jamais une entrée utilisateur
+# non filtrée) :
+# - `min_volume_usd` (float, ex. 5000.0 pour "au moins 5 000$ de volume")
+# - `lookback_hours` (int, fenêtre de recherche des lancements de tokens, ex. 48)
+RECENT_BASE_PAIRS_QUERY_TEMPLATE = """
+WITH token_launch AS (
+    SELECT
+        token_bought_address AS token_address,
+        MIN(block_time) AS launch_time
+    FROM dex.trades
+    WHERE blockchain = 'base'
+    GROUP BY token_bought_address
+    HAVING MIN(block_time) >= NOW() - INTERVAL '{lookback_hours}' hour
+),
+recent_volume AS (
+    SELECT
+        token_bought_address AS token_address,
+        SUM(amount_usd) AS volume_usd,
+        COUNT(*) AS trade_count
+    FROM dex.trades
+    WHERE blockchain = 'base'
+      AND block_time >= NOW() - INTERVAL '{lookback_hours}' hour
+    GROUP BY token_bought_address
+)
+SELECT
+    tl.token_address,
+    tl.launch_time,
+    rv.volume_usd,
+    rv.trade_count
+FROM token_launch tl
+JOIN recent_volume rv ON rv.token_address = tl.token_address
+WHERE rv.volume_usd >= {min_volume_usd}
+ORDER BY rv.volume_usd DESC
+"""
+
+
+def build_recent_base_pairs_query(*, min_volume_usd: float, lookback_hours: int) -> str:
+    """Construit la requête ci-dessus avec les paramètres demandés. Valide
+    que les deux entrées sont bien numériques AVANT toute substitution dans
+    le SQL -- même garantie que ``build_early_buyer_multiple_query``, cette
+    requête n'accepte jamais de chaîne de caractères libre."""
+    if not isinstance(min_volume_usd, (int, float)) or min_volume_usd <= 0:
+        raise ValueError("min_volume_usd doit être un nombre positif")
+    if not isinstance(lookback_hours, int) or lookback_hours <= 0:
+        raise ValueError("lookback_hours doit être un entier positif")
+    return RECENT_BASE_PAIRS_QUERY_TEMPLATE.format(min_volume_usd=min_volume_usd, lookback_hours=lookback_hours)
