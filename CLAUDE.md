@@ -1959,6 +1959,19 @@ Secondaire → relire/merger/tester → ajouter la réduction de cadence si pas
 déjà incluse → demander le "go" déploiement → vérifier sur Telegram/cockpit
 que le compteur bouge réellement → seulement ensuite reprendre #187.
 
+**8. #196 (fast-follow #194, WebSocket temps réel DexScreener) — vérifié en
+direct ce soir (handshake `101 Switching Protocols` réel, flux live reçu
+immédiatement, pas une supposition)** : `wss://api.dexscreener.com/
+token-boosts/{latest,top}/v1` et `/token-profiles/{latest,recent-updates}/v1`
+fonctionnent réellement — ARIA pourrait être notifiée à l'INSTANT où un
+token se déclare, au lieu du polling périodique (même #194 accéléré à
+15-20min reste du polling). Répond directement à "ARIA doit être là avant
+tout le monde". **Dispatché volontairement APRÈS #194 (pas en parallèle)**
+pour éviter toute collision de scope avec Secondaire — nécessite un
+service en tâche de fond persistante (différent d'un cycle heartbeat
+classique), une vraie brique d'architecture à poser proprement une fois
+#194 stabilisé.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
