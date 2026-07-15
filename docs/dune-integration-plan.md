@@ -263,3 +263,45 @@ négligeable, cohérent avec le budget décrit au §4.
   silencieusement : correction = tâche séparée, pas dans le périmètre de
   cette vérification (lecture/documentation seulement, aucun autre fichier
   touché ce soir).
+
+## 9. Correctif #185 (15/07, nuit suivante) — plancher `amount_usd`, vérifié en direct
+
+Correction appliquée à `build_early_buyer_multiple_query` : nouveau
+paramètre `min_trade_usd` (défaut `1.0`), appliqué en `WHERE amount_usd >=
+{min_trade_usd}` dans **les deux** CTE qui divisent (`token_peak` ET
+`token_launch_price` — le bug pouvait toucher n'importe quel côté de la
+division, pas seulement le prix de lancement). Volontairement PAS un
+plafond arbitraire sur `peak_multiple` final (aurait masqué le symptôme
+sans corriger la cause).
+
+**Vérifié en direct, mêmes paramètres de test que §8.1** (`min_multiple=2.0,
+lookback_days=7`), pour comparaison directe avant/après :
+
+| | Avant (query 7992486) | Après, `min_trade_usd=1.0` (query 7992589) |
+|---|---|---|
+| Lignes totales | 118 839 | 82 759 |
+| `peak_multiple` max observé | **~1,01 × 10²²** | **~1,65 × 10⁷** |
+| Coût | 7,337 crédits | 4,781 crédits |
+
+**Amélioration réelle et large (15 ordres de grandeur), mais résultat
+toujours élevé** — pas encore franchement "plausible" au sens strict. Test
+complémentaire exploratoire (informationnel seulement, PAS le seuil
+livré dans le code) avec `min_trade_usd=25.0` (query 7992595) : le
+maximum descend encore à **~2,8 × 10⁵**, toujours élevé.
+
+**Nuance honnête à garder** : une partie de ces multiples élevés n'est
+peut-être PAS un résidu du même bug, mais un phénomène réel propre à Base —
+les lancements par bonding curve (ex. Clanker, cf. §7bis/le radar du 15/07)
+démarrent authentiquement à un prix quasi nul par construction, avec des
+multiples précoces légitimement énormes dans les toutes premières minutes.
+Distinguer "vrai bonding curve à prix de départ authentiquement proche de
+zéro" de "reliquat de dust/bruit de mesure" demanderait une inspection
+projet-par-projet (ex. croiser avec `project` dans `dex.trades`), pas faite
+ce soir — hors scope de cette tâche (corriger le plancher demandé et
+vérifier l'amélioration, pas trancher cette question plus large).
+
+**Verdict** : correctif demandé appliqué et vérifié — amélioration large et
+réelle confirmée en direct, pas seulement supposée. `min_trade_usd=1.0`
+reste le défaut livré (le seuil exact à retenir en prod, 1$/25$/autre, est
+une décision de tuning séparée, pas tranchée ici). Coût cumulé de cette
+vérification : 4,781 + 3,278 = **8,059 crédits** (0,3% du quota mensuel).
