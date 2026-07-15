@@ -761,6 +761,79 @@ async def analyze_smart_money(
 # d'atomicité de transaction), pas des correctifs ponctuels supplémentaires --
 # à rouvrir sur décision explicite si l'un d'eux devient prioritaire.
 # ============================================================================
+#
+# HUITIÈME PASSAGE (15/07, revue Gemini + DeepSeek round 2). Un vrai bug
+# corrigé (pas une limite résiduelle), un vrai angle mort documenté :
+#
+# - Gel des erreurs transitoires (revue Gemini) -- CORRIGÉ pour la couche la
+#   plus impactante : une panne D'INFRASTRUCTURE GeckoTerminal (timeout/429/
+#   erreur serveur, déjà retentée plusieurs fois par `_get_json` avant
+#   d'abandonner) lors de la résolution de pool d'un token pouvait se figer en
+#   cicatrice PERMANENTE -- le scan incrémental persistant (checkpoint) ne
+#   re-tente un token déjà "vu" que si son activité on-chain a changé, jamais
+#   sur la simple résolution d'une erreur API. Une coupure réseau ponctuelle
+#   pendant UN scan en arrière-plan condamnait donc une jambe à rester
+#   "sans prix" pour toujours dans les archives (`wallet_archived_trade`),
+#   faussant durablement le PnL ET `price_confirmation_ratio` du wallet,
+#   sans aucun moyen de correction automatique. Corrigé : `resolve_primary_
+#   pool` distingue déjà, EN TEXTE, un verdict de DONNÉE ("aucun pool trouvé
+#   pour ce token"/"aucun pool plausible...") d'une panne d'infrastructure
+#   (préfixée par la constante `UNAVAILABLE` de `geckoterminal.py` dans
+#   TOUS les cas d'échec `_get_json`) -- signal déjà présent, jamais exploité
+#   jusqu'ici. `_analyze_wallet_multi_token` classe désormais chaque token en
+#   échec de résolution (`transient_pricing_error_tokens`), et `score_wallets`
+#   exclut ces tokens de `checkpoint.scanned_tokens` -- ils restent éligibles
+#   à une nouvelle tentative au prochain appel, MÊME sans nouvelle activité
+#   on-chain. **Portée honnête, PAS un correctif universel** : ne couvre que
+#   la couche de résolution de POOL (GeckoTerminal), où le texte d'erreur
+#   sépare proprement les deux cas. Les couches OHLCV (`services/ohlcv.py`,
+#   client partagé avec `vc_predictions`/`weekly_training`/`pump_dump_
+#   autopsy`) et CoinMarketCap (triangulation 3e couche) CONFLENT, elles,
+#   panne transitoire et absence légitime de donnée sous LA MÊME convention
+#   de préfixe (`f"{UNAVAILABLE} (pool absent)"`/`f"{UNAVAILABLE} (aucune
+#   bougie...)"` ressemblent textuellement à une vraie panne) -- les
+#   distinguer proprement exigerait soit un champ typé dédié threadé à
+#   travers ces clients partagés (risque de régression sur leurs AUTRES
+#   appelants), soit un filtrage fragile par sous-chaîne de diagnostic
+#   jamais conçue pour cet usage. Le même mode de défaillance (gel
+#   silencieux) reste donc possible si l'échec survient à CES couches plutôt
+#   qu'à la résolution de pool -- résiduel plus étroit qu'avant (le point
+#   d'entrée le plus fréquent est fermé), mais réel, documenté, pas corrigé.
+#   3 nouveaux tests (dont un test de contraste : un token sans AUCUN pool,
+#   verdict légitime, reste bien marqué "scanné" -- comportement historique
+#   inchangé).
+# - Biais de sélection induit par l'exclusion `price_confidence_low` (revue
+#   DeepSeek round 2) -- DOCUMENTÉ, tension assumée, pas corrigé. Le
+#   correctif #175 (exclure un wallet à confiance de prix basse de la
+#   population de comparaison percentile) protège l'INTÉGRITÉ du percentile
+#   des AUTRES wallets (éviter d'ancrer une comparaison sur des chiffres
+#   potentiellement faussés par une estimation de prix peu fiable) -- mais
+#   introduit mécaniquement un biais de SÉLECTION dans la population de
+#   référence elle-même : un wallet qui trade des tokens peu liquides, sans
+#   paire stablecoin directe, ou via un agrégateur/smart-account (routage qui
+#   échappe à la détection `_hash_based_price`, cf. sa docstring) aura
+#   STRUCTURELLEMENT un `price_confirmation_ratio` bas -- pas parce qu'il
+#   triche ou performe mal, mais parce que SON style de trading produit
+#   moins de jambes hash-exactes. Un tel wallet reste scoré (avec son propre
+#   avertissement affiché), mais n'est plus jamais utilisé comme POINT DE
+#   RÉFÉRENCE pour comparer d'autres wallets -- la population de comparaison
+#   se resserre autour des wallets qui tradent via des paires stablecoin
+#   directes, PAS autour d'un échantillon représentatif du "smart money" au
+#   sens large. **Tension particulièrement pertinente pour la thèse même
+#   d'ARIA** (sourcing de builders sur des microcaps Base souvent peu
+#   liquides, cf. CLAUDE.md "Vision & stratégie") : ce sont précisément CES
+#   traders-là qui risquent d'être sous-représentés dans le groupe de
+#   référence. Vient s'ajouter au paradoxe du percentile déjà documenté
+#   (round 2/3, population non représentative du marché) -- même famille de
+#   limite, un axe de biais SUPPLÉMENTAIRE et distinct (style de trading,
+#   pas seulement démographie des utilisateurs de l'outil). **Pas de
+#   correctif de code proposé** : revenir sur l'exclusion #175 réintroduirait
+#   directement le bug qu'elle corrigeait (ancrer un percentile sur des
+#   chiffres non fiables) -- un arbitrage entre deux défauts connus, pas une
+#   erreur à corriger dans un sens ou l'autre sans un mécanisme plus fin
+#   (ex. pondérer la contribution d'un wallet à la population de comparaison
+#   par sa confiance plutôt qu'un tout-ou-rien) -- chantier séparé si repris.
+# ============================================================================
 
 # Tous les poids/seuils tunables de ce chantier vivent dans
 # wallet_scoring_weights.py (isolé à la demande opérateur, 14/07 -- statut
@@ -1189,6 +1262,17 @@ class _MultiTokenResult:
     resolved_pool_addresses: set[str] = field(default_factory=set)
     thin_liquidity_tokens: list[str] = field(default_factory=list)  # 15/07, revue Gemini -- défense anti-dust/scam-pool
     unmatched_sell_events: int = 0  # 15/07, revue Gemini -- transparence rebasing, cf. `_TokenFIFOResult`
+    # Gel des erreurs transitoires (15/07, revue Gemini -- angle mort couche 2/3) :
+    # clé composite ("{chaîne}:{adresse}") des tokens dont la résolution de pool
+    # GeckoTerminal a échoué ce passage pour une cause D'INFRASTRUCTURE (timeout/
+    # 429/erreur serveur -- déjà retentée plusieurs fois par `_get_json` avant
+    # d'abandonner) plutôt qu'un verdict de DONNÉE ("aucun pool trouvé pour ce
+    # token", légitime). Utilisé par `score_wallets` pour ne JAMAIS marquer un tel
+    # token comme définitivement "scanné" dans le checkpoint incrémental -- sinon
+    # une simple coupure réseau ponctuelle se fige en cicatrice permanente sur le
+    # score du wallet (le scan incrémental ne re-tente un token déjà vu QUE si son
+    # activité on-chain a changé, jamais sur une simple résolution d'erreur API).
+    transient_pricing_error_tokens: set[str] = field(default_factory=set)
 
 
 async def _hash_based_price(
@@ -1280,6 +1364,7 @@ async def _analyze_wallet_multi_token(
     from aria_core.services.coinmarketcap import resolve_primary_pool as _cmc_resolve_primary_pool
     from aria_core.services.dexscreener import has_any_pair as _dexscreener_has_any_pair
     from aria_core.services.geckoterminal import GECKO_NETWORK_SLUGS
+    from aria_core.services.geckoterminal import UNAVAILABLE as _gecko_unavailable
 
     wallet_l = wallet.lower()
     chain_clients = chain_clients or {}
@@ -1365,6 +1450,18 @@ async def _analyze_wallet_multi_token(
             # achats sur cette base -- seul un pool GeckoTerminal RÉSOLU mais
             # confirmé trop thin doit bloquer l'achat.
             ohlcv = None
+            # Gel des erreurs transitoires (15/07, revue Gemini) : `pool_meta.error`
+            # distingue déjà, en texte, un verdict de DONNÉE ("aucun pool trouvé
+            # pour ce token"/"aucun pool plausible...", cf. `resolve_primary_pool`)
+            # d'une panne D'INFRASTRUCTURE (`_get_json` préfixe TOUJOURS ces
+            # dernières par la constante `UNAVAILABLE` -- timeout/429/erreur
+            # serveur/réponse malformée, déjà retentées plusieurs fois avant
+            # d'abandonner). Seule la 2e catégorie doit empêcher ce token d'être
+            # marqué "scanné" dans le checkpoint incrémental (cf. `score_wallets`)
+            # -- un vrai "pas de pool" reste, lui, définitivement couvert (rien à
+            # re-tenter, le verdict ne changera pas tout seul).
+            if pool_meta.error is not None and pool_meta.error.startswith(_gecko_unavailable):
+                result.transient_pricing_error_tokens.add(composite_key)
             # Triangulation (#157, 14/07) : GeckoTerminal n'a pas résolu de
             # pool -- avant de conclure "token illiquide", on croise avec
             # DexScreener. `True` = écart réel entre les deux sources
@@ -1885,6 +1982,10 @@ class WalletScoreCard:
     # signal possible de rebase/rendement DeFi jamais crédité comme profit,
     # juste compté pour transparence. Diagnostic PAR PASSE (pas cumulatif).
     unmatched_sell_events: int = 0
+    # Gel des erreurs transitoires (15/07, revue Gemini) : parmi les tokens de
+    # cette passe, combien ont échoué pour une cause d'infrastructure (jamais
+    # marqués "scanné" -- retentés au prochain appel). Diagnostic PAR PASSE.
+    transient_pricing_errors: int = 0
     win_rate: float | None = None
     realized_pnl_usd: float | None = None
     sortino: float | None = None
@@ -2023,6 +2124,11 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         lines.append(
             f"{card.unmatched_sell_events} vente(s) dont la quantité dépasse ce qui a été acheté dans la fenêtre "
             "récupérée (rendement de rebase/DeFi possible, ou achat antérieur) -- jamais créditée comme profit."
+        )
+    if card.transient_pricing_errors:
+        lines.append(
+            f"{card.transient_pricing_errors} token(s) non couvert(s) cette passe suite à une panne d'API "
+            "temporaire (timeout/rate-limit) -- retenté(s) automatiquement au prochain scan, jamais figé(s)."
         )
     if card.gecko_dexscreener_gap_count:
         lines.append(
@@ -2333,6 +2439,7 @@ async def score_wallets(
         card.cmc_price_recovery_count = len(multi.cmc_recovered_tokens)
         card.thin_liquidity_pricing_skipped_count = len(multi.thin_liquidity_tokens)
         card.unmatched_sell_events = multi.unmatched_sell_events
+        card.transient_pricing_errors = len(multi.transient_pricing_error_tokens)
 
         # Persistance : ce lot remplace les trades archivés des tokens qu'il
         # couvre (le FIFO est recalculé en entier depuis l'historique complet du
@@ -2341,7 +2448,14 @@ async def score_wallets(
         await wallet_scan_state.replace_archived_trades(wallet, batch_addresses, multi.closed_trades)
 
         now = datetime.now(timezone.utc)
-        new_scanned = checkpoint.scanned_tokens | set(selected_tokens)
+        # Gel des erreurs transitoires (15/07, revue Gemini) : un token dont la
+        # résolution de pool a échoué CE PASSAGE pour une cause d'infrastructure
+        # (`transient_pricing_error_tokens`) n'est JAMAIS marqué "scanné" -- il
+        # reste éligible à une nouvelle tentative au prochain appel, même sans
+        # nouvelle activité on-chain (`_needs_scan` le re-sélectionnera). Sans
+        # ça, un simple timeout/429 ponctuel se serait figé en cicatrice
+        # permanente (jambe jamais reprix, jamais retentée) dans les archives.
+        new_scanned = checkpoint.scanned_tokens | (set(selected_tokens) - multi.transient_pricing_error_tokens)
         full_coverage_at = checkpoint.full_coverage_at
         if full_coverage_at is None and len(new_scanned) >= total_found:
             full_coverage_at = now
