@@ -50,10 +50,22 @@ async def _ensure_tables() -> None:
                 sell_ts TEXT NOT NULL,
                 token_amount REAL NOT NULL,
                 buy_price REAL NOT NULL,
-                sell_price REAL NOT NULL
+                sell_price REAL NOT NULL,
+                buy_price_exact INTEGER NOT NULL DEFAULT 0,
+                sell_price_exact INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        # Migration à chaud idempotente (15/07, revue Gemini -- price_confirmation_ratio)
+        # -- même patron que vc_predictions.py/exam.py : une base déjà déployée avant ce
+        # champ n'a pas ces colonnes, `CREATE TABLE IF NOT EXISTS` ne les ajoute pas
+        # rétroactivement.
+        cursor = await db.execute("PRAGMA table_info(wallet_archived_trade)")
+        existing_cols = {row[1] for row in await cursor.fetchall()}
+        if "buy_price_exact" not in existing_cols:
+            await db.execute("ALTER TABLE wallet_archived_trade ADD COLUMN buy_price_exact INTEGER NOT NULL DEFAULT 0")
+        if "sell_price_exact" not in existing_cols:
+            await db.execute("ALTER TABLE wallet_archived_trade ADD COLUMN sell_price_exact INTEGER NOT NULL DEFAULT 0")
         await db.commit()
 
 
@@ -146,13 +158,15 @@ async def replace_archived_trades(wallet: str, token_addresses: set[str], trades
             await db.executemany(
                 """
                 INSERT INTO wallet_archived_trade
-                    (wallet, token_address, buy_ts, sell_ts, token_amount, buy_price, sell_price)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (wallet, token_address, buy_ts, sell_ts, token_amount, buy_price, sell_price,
+                     buy_price_exact, sell_price_exact)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         wallet_l, t.token_address, t.buy_ts.isoformat(), t.sell_ts.isoformat(),
                         t.token_amount, t.buy_price, t.sell_price,
+                        int(getattr(t, "buy_price_exact", False)), int(getattr(t, "sell_price_exact", False)),
                     )
                     for t in trades
                 ],
@@ -169,8 +183,8 @@ async def list_archived_trades(wallet: str) -> list:
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (
             await db.execute(
-                "SELECT token_address, buy_ts, sell_ts, token_amount, buy_price, sell_price "
-                "FROM wallet_archived_trade WHERE wallet=?",
+                "SELECT token_address, buy_ts, sell_ts, token_amount, buy_price, sell_price, "
+                "buy_price_exact, sell_price_exact FROM wallet_archived_trade WHERE wallet=?",
                 (wallet.lower(),),
             )
         ).fetchall()
@@ -182,6 +196,8 @@ async def list_archived_trades(wallet: str) -> list:
             token_amount=r[3],
             buy_price=r[4],
             sell_price=r[5],
+            buy_price_exact=bool(r[6]),
+            sell_price_exact=bool(r[7]),
         )
         for r in rows
     ]

@@ -101,6 +101,11 @@ def _pool_is_plausible(reserve_usd: float, volume_h24_usd: float) -> bool:
 class PoolMetadata:
     pool_address: str
     created_at: datetime | None = None
+    reserve_usd: float | None = None  # 15/07 (défense anti-dust/scam-pool, #157) -- ``None``
+    # = inconnu (jamais construit par un appelant qui ne le fournit pas, ex. tests
+    # existants) et traité comme "faire confiance" (fail-open), PAS comme "liquidité
+    # nulle" -- seule une valeur CONFIRMÉE sous le plancher doit bloquer la
+    # valorisation OHLCV (cf. WEIGHTS.min_pool_liquidity_usd_for_pricing).
     available: bool = True
     error: str | None = None
 
@@ -259,7 +264,7 @@ class GeckoTerminalClient:
         if len(candidates) == 1:
             # Pool unique -- jamais soumis au filtre de plausibilité (rien à
             # départager), comportement strictement inchangé.
-            best_attrs, _reserve, _volume = candidates[0]
+            best_attrs, best_reserve, _volume = candidates[0]
         else:
             plausible = [c for c in candidates if _pool_is_plausible(c[1], c[2])]
             if not plausible:
@@ -268,7 +273,7 @@ class GeckoTerminalClient:
                     available=False,
                     error="aucun pool plausible pour ce token (réserve/volume incohérents sur tous les pools trouvés)",
                 )
-            best_attrs, _best_reserve, _best_volume = max(plausible, key=lambda c: (c[2], c[1]))
+            best_attrs, best_reserve, _best_volume = max(plausible, key=lambda c: (c[2], c[1]))
 
         if not best_attrs.get("address"):
             return PoolMetadata(pool_address=token_address, available=False, error="aucun pool trouvé pour ce token")
@@ -282,7 +287,9 @@ class GeckoTerminalClient:
             except ValueError:
                 created_at = None
 
-        return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
+        return PoolMetadata(
+            pool_address=pool_address, created_at=created_at, reserve_usd=best_reserve, available=True, error=None,
+        )
 
     async def get_ohlcv(self, pool_address: str, *, network: str = NETWORK, **_kwargs: object) -> OHLCVResult:
         """Délègue à ``services.ohlcv.ohlcv_client`` -- correction 14/07 (#157) :

@@ -113,21 +113,55 @@ class WalletScoringWeights:
     min_wallet_age_days: int = 90
     min_total_swaps: int = 100
 
-    # Robustesse anti-chance (15/07, décision opérateur) : retire les N
-    # meilleurs ET N pires trades clôturés (double extrémité, pas seulement
-    # les meilleurs) avant de vérifier si le PnL restant reste positif --
-    # n'est calculé que si le wallet a assez de trades pour que le retrait
+    # Robustesse anti-chance (15/07, décision opérateur ; corrigé le même jour
+    # après revue externe croisée Gemini/ChatGPT/Grok, convergente sur ce point) :
+    # retire un POURCENTAGE (pas un compte fixe) des trades les mieux ET les
+    # moins bien classés (double extrémité) avant de vérifier si le PnL
+    # restant reste positif. Un compte fixe (l'ancien ``robust_trim_count=10``)
+    # se dilue à mesure que l'échantillon grossit (10/30 = 33% retiré au seuil
+    # minimum, mais seulement 10/20000 = 0.05% sur un wallet très actif) --
+    # un attaquant peut alors noyer un unique trade "chanceux" derrière
+    # suffisamment de micro-trades insignifiants pour qu'il ne soit plus dans
+    # le top-N absolu retiré. Un pourcentage scale avec N et ferme ce vecteur.
+    # N'est calculé que si le wallet a assez de trades pour que le retrait
     # laisse un reste significatif (sinon indisponible, jamais un chiffre sur
     # un échantillon vidé).
-    robust_trim_count: int = 10
+    robust_trim_pct: float = 0.10
     robust_trim_min_closed_trades: int = 30
 
     # Courbe de santé dans le temps (15/07) : compare la performance (PnL moyen
     # par trade) de la seconde moitié chronologique des trades clôturés à la
     # première -- signal "amélioration"/"stable"/"dégradation", jamais calculé
     # sous ce minimum de trades (bruit statistique sur de petits échantillons).
+    # Limite connue (revue ChatGPT, 15/07) : le découpage se fait par NOMBRE de
+    # trades, pas par fenêtre calendaire -- un wallet actif 3 ans puis dormant
+    # 1 an peut voir sa "tendance" dominée par une reprise récente. Documenté
+    # dans smart_money.py, pas corrigé cette passe (refonte plus profonde).
     health_trend_min_closed_trades: int = 10
     health_trend_stable_band_pct: float = 0.15
+
+    # Confiance dans le cost-basis (15/07, suite revue Gemini) : part minimale
+    # de jambes valorisées par un prix d'exécution EXACT (ratio tx_hash contre
+    # une jambe stablecoin) plutôt que par le repli marché OHLCV, avant de
+    # lever un drapeau de confiance basse à côté du score (jamais en cachant
+    # win_rate/PnL -- même doctrine que ``sample_size_sufficient``, pas le
+    # masquage complet de Sortino/robust_pnl/health_trend). Valeur de départ,
+    # ajustable comme tout ``WEIGHTS.*``.
+    min_price_confirmation_ratio: float = 0.30
+
+    # Défense anti-dust/scam-pool (15/07, revue Gemini) : un pool RÉSOLU par
+    # GeckoTerminal mais dont la liquidité réelle (``reserve_usd``) est sous ce
+    # plancher n'est pas assez fiable pour valoriser un PnL réel (pool
+    # trivialement manipulable, ex. token de dust envoyé par un scammeur avec
+    # une "liquidité" artificielle) -- traité comme non-priced plutôt que de
+    # faire confiance à un prix de marché fabriqué. Même plancher que celui
+    # déjà utilisé ailleurs dans ARIA pour le tri des candidats VC
+    # (``safety_screen``/``liquidity_depth``, ~30k$) -- pas un nouveau chiffre
+    # arbitraire. ``reserve_usd`` inconnu (``None``, ex. tests existants ou
+    # chaîne sans cette donnée) est traité comme "faire confiance" (fail-open),
+    # jamais comme liquidité nulle -- seule une valeur CONFIRMÉE sous ce
+    # plancher bloque la valorisation.
+    min_pool_liquidity_usd_for_pricing: float = 30_000.0
 
 
 def _load_weights() -> WalletScoringWeights:

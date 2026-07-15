@@ -65,6 +65,27 @@ _STABLECOIN_ADDRESSES_BY_CHAIN: dict[str, set[str]] = {
     },
 }
 
+# Exploit "wrap/unwrap" (15/07, revue Gemini) : un script qui wrap/unwrap du
+# ETH<->WETH des centaines de fois pour quelques centimes de gas débloquerait
+# artificiellement WEIGHTS.min_total_swaps sans jamais prendre de risque de
+# trading. Détection bon marché et SANS ambiguïté (contrairement au registre
+# de protocoles DeFi documenté plus bas, hors de portée) : le wrapped-native
+# token de chaque chaîne a une adresse canonique UNIQUE, et deposit()/withdraw()
+# émettent un Transfer standard depuis/vers l'adresse zéro (mint/burn) -- pas
+# de faux positif possible. Chaîne absente du registre = pas de protection
+# (comportement dégradé documenté, même politique que `_STABLECOIN_ADDRESSES_BY_CHAIN`).
+_WRAPPED_NATIVE_ADDRESSES: frozenset[str] = frozenset({
+    "0x4200000000000000000000000000000000000006",  # WETH -- Base (predeploy standard)
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",  # WETH -- Ethereum mainnet
+})
+
+
+def _is_wrap_unwrap_leg(transfer: TokenTransfer) -> bool:
+    addr = (transfer.token_address or "").lower()
+    if addr not in _WRAPPED_NATIVE_ADDRESSES:
+        return False
+    return (transfer.from_address or "").lower() == _ZERO_ADDRESS or (transfer.to_address or "").lower() == _ZERO_ADDRESS
+
 
 @dataclass
 class WalletBehavior:
@@ -363,6 +384,115 @@ async def analyze_smart_money(
 # vraie "smart money" sérieuse. Aucune correction prévue à court terme --
 # à rouvrir si un besoin business précis (ex. dossier funding, due diligence
 # poussée sur un wallet donné) le justifie.
+#
+# SUITE (15/07, second passage -- revue croisée Gemini/ChatGPT/Grok + web
+# search Sybil/Nansen/Arkham). Corrigés ce passage (cf. code + WEIGHTS) :
+# exploit wrap/unwrap ETH<->WETH sur le seuil de swaps (`_is_wrap_unwrap_leg`),
+# dilution du trim anti-chance par volume de trades (`robust_trim_pct`),
+# dust/scam-pool via plancher de liquidité confirmée (`min_pool_liquidity_
+# usd_for_pricing`), transparence sur la confiance du cost-basis
+# (`price_confirmation_ratio`) et sur les ventes non appariées
+# (`unmatched_sell_events`), diversification pondérée par capital en plus du
+# comptage. Vérifiés et REJETÉS (déjà correctement gérés, pas un vrai trou) :
+# division par zéro du Sortino (`_sortino_ratio` retourne déjà `None` si
+# `downside` est vide, AVANT tout calcul de déviation -- le garde
+# `downside_deviation == 0` qui suit est du code défensif mort, jamais
+# atteignable, mais inoffensif) ; win rate non pondéré par la taille des
+# pertes (déjà compensé par construction -- Sortino/PnL restent des axes
+# séparés, jamais fondus avec le win rate, donc un "99% de gains + 1 perte
+# catastrophique" reste visible ailleurs).
+#
+# Documentés, DÉLIBÉRÉMENT non corrigés ce passage (trop coûteux/complexes
+# pour un correctif ponctuel, ou hors de portée d'un ajustement de seuil) :
+#
+# - Coordination Sybil / multi-wallets (revue Grok, LE plus important des
+#   points non résolus) : un seul opérateur peut faire tourner des dizaines
+#   de wallets qui passent chacun le seuil d'échantillon et performent de
+#   façon coordonnée -- chaque wallet a un bon score individuel, et
+#   collectivement ils biaisent le classement comparatif (percentiles) à
+#   mesure que le pool de wallets suivis grossit. Le trim anti-chance n'y
+#   change rien (un Sybil bien orchestré répartit ses outliers). Confirmé par
+#   recherche externe (15/07) : c'est un problème structurel connu de toute
+#   analyse wallet-by-wallet sans clustering d'entité -- Nansen/Arkham/
+#   Chainalysis/TRM s'appuient sur le clustering par SOURCE DE FINANCEMENT
+#   PARTAGÉE (même famille que notre `_pairwise_convergence` existant, cf.
+#   Victor FC 2020) mais à l'échelle d'un GRAPHE sur toute la population
+#   suivie, pas juste une comparaison pairwise entre les 1-3 wallets soumis
+#   ENSEMBLE dans un seul appel -- notre version actuelle est donc la même
+#   famille d'heuristique, juste bien plus étroite en portée. Les approches
+#   les plus robustes (Chainalysis/TRM) utilisent désormais des graph neural
+#   networks entraînés sur des clusters Sybil labellisés, nettement plus dur
+#   à contourner qu'un clustering par heuristique seule -- hors de portée
+#   d'un correctif ponctuel, un vrai chantier séparé si jamais entrepris.
+# - Farming du seuil d'entrée / wash-trading léger (revue Grok) : au-delà du
+#   wrap/unwrap déjà fermé ci-dessus, rien n'empêche un wallet de padder
+#   `min_total_swaps` avec des allers-retours minuscules sur un VRAI token
+#   liquide (slippage/frais réels à chaque tour, donc plus coûteux que le
+#   wrap/unwrap, mais pas impossible). Piste bon marché identifiée mais pas
+#   construite (recherche externe 15/07) : les wash-traders utilisent
+#   typiquement des MONTANTS RONDS et un impact de prix quasi nul malgré le
+#   volume -- un détecteur dédié serait un complément naturel à
+#   `_dominant_counterparty_share` existant, banqué pour un futur passage.
+# - Absence de benchmark marché (alpha vs beta, revue Grok) : un wallet qui
+#   fait simplement du bêta pur (long BTC/ETH en marché haussier) peut sortir
+#   d'excellents win rate/Sortino/PnL sans aucune compétence particulière --
+#   le système mesure la qualité du footprint on-chain, pas la valeur ajoutée
+#   par rapport au marché. Nécessiterait une série de rendement de référence
+#   (BTC/ETH/indice DeFi) et un calcul d'alpha dédié -- une vraie
+#   fonctionnalité à chiffrer séparément, pas un ajustement de seuil.
+# - Gaming structurel des tests de robustesse (revue Grok) : un wallet peut
+#   délibérément prendre ses pires trades en tout début d'activité (avant que
+#   l'historique ne compte vraiment) pour "consommer" le budget du trim anti-
+#   chance, ou structurer son activité pour que la 2e moitié de la courbe de
+#   santé semble artificiellement meilleure. Plus facile juste au-dessus des
+#   seuils minimums (30 trades pour le trim, 10 pour la courbe de santé) --
+#   limite inhérente à tout seuil statique, pas un bug isolé corrigible.
+# - MEV / arbitrage atomique / flash loans (revue Grok) : ces stratégies a
+#   risque quasi nul peuvent produire un win rate et un Sortino excellents
+#   (downside quasi inexistant par construction) et passent bien le trim
+#   anti-chance (trades uniformément bons, pas d'outlier à retirer). Le
+#   système les traite comme des trades normaux -- les distinguer exigerait
+#   une détection d'atomicité/flash-loan au niveau de la transaction
+#   (bytecode/call-trace), une donnée que Blockscout ne fournit pas
+#   nativement -- hors de portée sans une nouvelle source de données dédiée.
+# - Biais de survie du gate d'échantillon (revue ChatGPT) : le seuil
+#   `min_wallet_age_days`/`min_total_swaps` sélectionne les wallets qui ont
+#   SURVÉCU assez longtemps pour l'atteindre -- les wallets catastrophiques
+#   meurent souvent avant, et les meilleurs traders peuvent changer de wallet
+#   régulièrement (opsec). Le classement devient donc un classement des
+#   wallets SURVIVANTS, pas nécessairement des meilleurs traders. Inhérent à
+#   tout gate d'échantillon minimum -- pas un bug, un compromis assumé (même
+#   doctrine que `docs/protocole-argent-reel.md` : échantillon minimum avant
+#   de faire confiance, quitte à exclure des cas valides).
+# - Choix méthodologique FIFO (revue ChatGPT) : toutes les métriques utilisent
+#   un modèle FIFO unique pour assurer la COMPARABILITÉ entre wallets -- un
+#   modèle LIFO/HIFO donnerait un PnL différent sur des séquences achat/vente
+#   partielles répétées. Ce n'est pas un choix fiscal (aucune prétention de
+#   conformité fiscale, seulement une mesure de performance comparable) --
+#   assumé, pas un défaut.
+# - Paradoxe du percentile / population de comparaison non représentative
+#   (revue Gemini + ChatGPT) : le classement comparatif compare CE wallet aux
+#   AUTRES wallets déjà passés par `/walletscore` -- pas un échantillon
+#   représentatif du marché. Si l'outil devient massivement utilisé par des
+#   amateurs, un trader moyen se retrouve artificiellement dans un haut
+#   percentile ; si seuls des pros l'utilisent, l'inverse. Le percentile d'un
+#   même wallet peut donc bouger dans le temps SANS qu'aucun de ses propres
+#   trades n'ait changé -- uniquement parce que la démographie de la base
+#   suivie a évolué. Un benchmark fixe (échantillon aléatoire représentatif
+#   de la blockchain, ex. 5000 wallets actifs) réglerait le problème mais
+#   coûterait cher (faire tourner ce même pipeline multi-appels-réseau sur des
+#   milliers de wallets, en continu) -- non construit. `compared_against_n_
+#   wallets` reste affiché à côté du percentile pour au moins signaler l'ordre
+#   de grandeur de la population de comparaison (jamais caché).
+# - Découpage chronologique par NOMBRE de trades pour la courbe de santé
+#   (revue ChatGPT) : `_health_trend` compare la 1ère à la 2e moitié par
+#   nombre de trades, pas par fenêtre calendaire -- un wallet actif 3 ans puis
+#   dormant 1 an peut voir sa "tendance" dominée par une reprise récente
+#   plutôt que refléter une vraie évolution de compétence. Un découpage par
+#   fenêtre calendaire (milieu de la durée totale, pas du nombre de trades)
+#   serait plus robuste à ce cas -- piste identifiée, pas construite ce
+#   passage (refonte de la fonction, effet sur le comportement existant à
+#   valider séparément).
 # ============================================================================
 
 # Tous les poids/seuils tunables de ce chantier vivent dans
@@ -396,6 +526,14 @@ class ClosedTrade:
     token_amount: float
     buy_price: float
     sell_price: float
+    # Confiance du cost-basis (15/07, revue Gemini) : ``True`` si CE bord précis
+    # a été valorisé par un ratio d'exécution exact (tx_hash + jambe stablecoin
+    # dans la même transaction), ``False`` s'il retombe sur le prix de marché
+    # OHLCV -- jamais l'inverse d'un jugement de qualité du trade lui-même,
+    # uniquement de la CONFIANCE dans le prix utilisé pour le calculer (cf.
+    # ``price_confirmation_ratio`` sur ``WalletScoreCard``).
+    buy_price_exact: bool = False
+    sell_price_exact: bool = False
 
     @property
     def pnl_usd(self) -> float:
@@ -414,6 +552,14 @@ class _TokenFIFOResult:
     closed_trades: list[ClosedTrade] = field(default_factory=list)
     unpriced_legs: int = 0
     open_position_amount: float = 0.0
+    # Ventes dont la queue d'achats FIFO s'est épuisée avant d'être entièrement
+    # consommée (15/07, revue Gemini) : signal possible d'un rendement de
+    # rebase/DeFi (stETH, aTokens -- le solde augmente sans transfert entrant
+    # équivalent) ou d'un achat antérieur à la fenêtre de transferts récupérée.
+    # Jamais crédité comme profit (impossible de distinguer les deux cas sans
+    # deviner) -- juste compté pour transparence, cf. `unmatched_sell_events`
+    # sur `WalletScoreCard`.
+    unmatched_sell_events: int = 0
 
 
 def _fifo_match(
@@ -421,6 +567,8 @@ def _fifo_match(
     buys: list[tuple[datetime, float, str]],
     sells: list[tuple[datetime, float, str]],
     price_lookup,
+    *,
+    exact_hashes: frozenset[str] = frozenset(),
 ) -> _TokenFIFOResult:
     """FIFO strict : chaque vente consomme les achats les plus anciens en premier.
     ``price_lookup(ts, tx_hash) -> float | None`` -- une jambe sans prix disponible
@@ -429,10 +577,17 @@ def _fifo_match(
     ``buys``/``sells`` portent le ``tx_hash`` d'origine de chaque jambe (14/07,
     prix par hash exact) -- reste synchrone : la résolution éventuelle d'un prix
     par hash (appel réseau) est faite EN AMONT par l'appelant, qui fournit un
-    ``price_lookup`` déjà résolu (dict/fermeture), jamais dans cette fonction."""
+    ``price_lookup`` déjà résolu (dict/fermeture), jamais dans cette fonction.
+    ``exact_hashes`` (15/07, additif -- défaut vide, rétrocompatible avec tout
+    appelant/test existant) : ensemble des tx_hash déjà résolus par un prix
+    d'exécution EXACT (cf. ``hash_prices`` dans ``_analyze_wallet_multi_token``)
+    -- sert uniquement à marquer ``ClosedTrade.buy_price_exact``/``sell_price_exact``,
+    aucun effet sur le prix retenu lui-même (toujours celui renvoyé par
+    ``price_lookup``)."""
     buy_queue: deque[list] = deque(sorted(([ts, amt, tx_hash] for ts, amt, tx_hash in buys), key=lambda b: b[0]))
     closed: list[ClosedTrade] = []
     unpriced = 0
+    unmatched_sell_events = 0
 
     for sell_ts, sell_amount, sell_hash in sorted(sells, key=lambda s: s[0]):
         remaining = sell_amount
@@ -452,6 +607,8 @@ def _fifo_match(
                         token_amount=matched,
                         buy_price=buy_price,
                         sell_price=sell_price,
+                        buy_price_exact=buy_hash in exact_hashes,
+                        sell_price_exact=sell_hash in exact_hashes,
                     )
                 )
             buy_queue[0][1] -= matched
@@ -462,10 +619,14 @@ def _fifo_match(
         # ne peut pas être un trade ARIA-observable (le wallet a acquis le token
         # avant la fenêtre de transferts récupérée, ou via un mécanisme non-transfer
         # comme un mint direct) ; pas une jambe "sans prix", juste hors-scope FIFO.
+        # Comptée (pas créditée) -- cf. `unmatched_sell_events` ci-dessus.
+        if remaining > 1e-12:
+            unmatched_sell_events += 1
 
     open_amount = sum(amt for _, amt, _ in buy_queue)
     return _TokenFIFOResult(
-        token_address=token_address, closed_trades=closed, unpriced_legs=unpriced, open_position_amount=open_amount,
+        token_address=token_address, closed_trades=closed, unpriced_legs=unpriced,
+        open_position_amount=open_amount, unmatched_sell_events=unmatched_sell_events,
     )
 
 
@@ -531,24 +692,38 @@ def _wallet_age_days(all_flat_transfers: list[TokenTransfer]) -> float | None:
 def _count_total_swaps(all_flat_transfers: list[TokenTransfer], wallet: str) -> int:
     """Nombre total de transferts touchant le wallet (achat OU vente) dans la
     fenêtre récupérée -- mesure d'activité brute, distincte du nombre de
-    trades CLÔTURÉS (qui exige un achat ET une vente appariés en FIFO)."""
+    trades CLÔTURÉS (qui exige un achat ET une vente appariés en FIFO).
+
+    Exclut les jambes de wrap/unwrap ETH<->WETH (15/07, revue Gemini, cf.
+    `_is_wrap_unwrap_leg`) -- sinon un script de wrapping répété débloquerait
+    WEIGHTS.min_total_swaps sans jamais avoir pris de risque de trading réel."""
     wallet_l = wallet.lower()
     return sum(
         1 for t in all_flat_transfers
-        if (t.to_address or "").lower() == wallet_l or (t.from_address or "").lower() == wallet_l
+        if ((t.to_address or "").lower() == wallet_l or (t.from_address or "").lower() == wallet_l)
+        and not _is_wrap_unwrap_leg(t)
     )
 
 
-def _robust_pnl_check(closed_trades: list[ClosedTrade], *, trim_count: int, min_required: int) -> bool | None:
-    """Robustesse anti-chance (15/07, décision opérateur) : retire les
-    ``trim_count`` MEILLEURS et les ``trim_count`` PIRES trades (double
-    extrémité) par PnL, puis vérifie si le PnL restant reste positif. Ne
-    s'applique QUE si le wallet a au moins ``min_required`` trades clôturés
-    (sinon le retrait viderait ou déséquilibrerait un échantillon déjà petit)
-    -- ``None`` explicite plutôt qu'un chiffre sur un reste non significatif."""
+def _robust_pnl_check(closed_trades: list[ClosedTrade], *, trim_pct: float, min_required: int) -> bool | None:
+    """Robustesse anti-chance (15/07, décision opérateur ; corrigé le même jour
+    après revue externe croisée Gemini/ChatGPT/Grok) : retire un POURCENTAGE
+    (``trim_pct`` de chaque extrémité, pas un compte fixe) des trades les
+    MEILLEURS et les PIRES par PnL, puis vérifie si le PnL restant reste
+    positif. Un compte fixe se dilue à mesure que l'échantillon grossit (10
+    trades sur 30 = 33% retiré, mais seulement 0.05% sur 20 000 trades) -- un
+    pourcentage scale avec N et empêche de noyer un unique trade "chanceux"
+    derrière assez de micro-trades insignifiants pour le faire sortir du
+    top-N absolu retiré. Ne s'applique QUE si le wallet a au moins
+    ``min_required`` trades clôturés (sinon le retrait viderait ou
+    déséquilibrerait un échantillon déjà petit) -- ``None`` explicite plutôt
+    qu'un chiffre sur un reste non significatif."""
     if len(closed_trades) < min_required:
         return None
     ordered = sorted(closed_trades, key=lambda t: t.pnl_usd)
+    trim_count = max(1, round(len(ordered) * trim_pct)) if trim_pct > 0 else 0
+    if trim_count * 2 >= len(ordered):
+        return None  # le retrait viderait ou inverserait l'échantillon -- jamais un résultat dessus
     trimmed = ordered[trim_count:-trim_count] if trim_count > 0 else ordered
     if not trimmed:
         return None
@@ -717,6 +892,8 @@ class _MultiTokenResult:
     gecko_dexscreener_gap_tokens: list[str] = field(default_factory=list)
     cmc_recovered_tokens: list[str] = field(default_factory=list)
     resolved_pool_addresses: set[str] = field(default_factory=set)
+    thin_liquidity_tokens: list[str] = field(default_factory=list)  # 15/07, revue Gemini -- défense anti-dust/scam-pool
+    unmatched_sell_events: int = 0  # 15/07, revue Gemini -- transparence rebasing, cf. `_TokenFIFOResult`
 
 
 async def _hash_based_price(
@@ -837,40 +1014,63 @@ async def _analyze_wallet_multi_token(
         # la BONNE chaîne GeckoTerminal, jamais Base en dur pour un token trouvé
         # sur Ethereum/BNB.
         pool_meta = await gecko.resolve_primary_pool(token_addr, network=network)
+        # Défense anti-dust/scam-pool (15/07, revue Gemini) : un pool résolu
+        # mais dont la liquidité CONFIRMÉE est sous le plancher n'est pas assez
+        # fiable pour valoriser un PnL réel (pool trivialement manipulable --
+        # ex. token de dust envoyé par un scammeur avec une "liquidité"
+        # artificielle sur un pool minuscule). ``reserve_usd is None``
+        # (inconnu -- pas cette donnée côté API, ou test qui ne la fournit
+        # pas) reste fail-open : seule une valeur CONFIRMÉE sous le plancher
+        # bloque, jamais un défaut de donnée.
+        pool_liquid_enough = pool_meta.available and (
+            pool_meta.reserve_usd is None or pool_meta.reserve_usd >= WEIGHTS.min_pool_liquidity_usd_for_pricing
+        )
         if pool_meta.available:
             # Adresse de pool NUE (jamais préfixée par la chaîne) : comparée
             # telle quelle à des adresses de contrepartie brutes dans
             # `_hard_disqualifiers`/`_dominant_counterparty_share` -- une
             # collision fortuite entre chaînes (espaces d'adresses EVM
             # indépendants, ~2^160) est négligeable, pas un vrai risque.
+            # Ajouté même si trop peu liquide pour la valorisation -- reste une
+            # vraie brique d'infra DEX pour l'exclusion wash-trading.
             result.resolved_pool_addresses.add(pool_meta.pool_address.lower())
+        if pool_liquid_enough:
             ohlcv = await gecko.get_ohlcv(pool_meta.pool_address, network=network)
         else:
             ohlcv = None
-            # Triangulation (#157, 14/07) : GeckoTerminal n'a pas résolu de pool --
-            # avant de conclure "token illiquide", on croise avec DexScreener.
-            # `True` = écart réel entre les deux sources (DexScreener voit une
-            # paire que GeckoTerminal rate -- signal à creuser, pas un défaut du
-            # wallet) ; `False`/`None` (aucune paire confirmée, ou vérification
-            # elle-même indisponible) n'ajoute rien de plus que ce que
-            # `pool_lookup_errors` dit déjà.
-            if await _dexscreener_has_any_pair(token_addr, chain=chain) is True:
-                result.gecko_dexscreener_gap_tokens.append(token_addr)
+            if pool_meta.available:
+                # Pool résolu mais confirmé trop peu liquide -- traité comme
+                # non-priced (jamais un prix de marché fabriqué sur un pool
+                # manipulable), PAS comme "pool introuvable" : la triangulation
+                # DexScreener/CMC ci-dessous répond à une question différente
+                # (l'ABSENCE de pool), ne s'applique pas ici.
+                result.thin_liquidity_tokens.append(token_addr)
+            else:
+                # Triangulation (#157, 14/07) : GeckoTerminal n'a pas résolu de
+                # pool -- avant de conclure "token illiquide", on croise avec
+                # DexScreener. `True` = écart réel entre les deux sources
+                # (DexScreener voit une paire que GeckoTerminal rate -- signal
+                # à creuser, pas un défaut du wallet) ; `False`/`None` (aucune
+                # paire confirmée, ou vérification elle-même indisponible)
+                # n'ajoute rien de plus que ce que `pool_lookup_errors` dit déjà.
+                if await _dexscreener_has_any_pair(token_addr, chain=chain) is True:
+                    result.gecko_dexscreener_gap_tokens.append(token_addr)
 
-            # 3e couche (#157, 14/07) : CoinMarketCap tente sa PROPRE résolution
-            # de pool, INDÉPENDAMMENT du résultat DexScreener ci-dessus -- le
-            # diagnostic "écart entre sources" et la tentative de pricing CMC ne
-            # sont pas la même chose. Même quand DexScreener confirme une paire
-            # (`True`), il ne fournit aucun prix historique (pas de méthode OHLCV
-            # dans ce client) -- CMC est quand même tenté, sinon le token reste
-            # non-valorisé alors qu'une paire est confirmée exister.
-            cmc_network = CMC_NETWORK_SLUGS.get(chain, "base")
-            cmc_pool = await _cmc_resolve_primary_pool(token_addr, network_slug=cmc_network)
-            if cmc_pool.available:
-                cmc_ohlcv = await _cmc_get_ohlcv(cmc_pool.pool_address, network_slug=cmc_network)
-                if cmc_ohlcv.available and cmc_ohlcv.candles:
-                    ohlcv = cmc_ohlcv
-                    result.cmc_recovered_tokens.append(token_addr)
+                # 3e couche (#157, 14/07) : CoinMarketCap tente sa PROPRE
+                # résolution de pool, INDÉPENDAMMENT du résultat DexScreener
+                # ci-dessus -- le diagnostic "écart entre sources" et la
+                # tentative de pricing CMC ne sont pas la même chose. Même
+                # quand DexScreener confirme une paire (`True`), il ne fournit
+                # aucun prix historique (pas de méthode OHLCV dans ce client)
+                # -- CMC est quand même tenté, sinon le token reste non-valorisé
+                # alors qu'une paire est confirmée exister.
+                cmc_network = CMC_NETWORK_SLUGS.get(chain, "base")
+                cmc_pool = await _cmc_resolve_primary_pool(token_addr, network_slug=cmc_network)
+                if cmc_pool.available:
+                    cmc_ohlcv = await _cmc_get_ohlcv(cmc_pool.pool_address, network_slug=cmc_network)
+                    if cmc_ohlcv.available and cmc_ohlcv.candles:
+                        ohlcv = cmc_ohlcv
+                        result.cmc_recovered_tokens.append(token_addr)
 
         # Prix par tx_hash exact (14/07) : tenté pour chaque tx_hash DISTINCT de
         # ce token, dans l'ordre chronologique (cohérent avec le FIFO qui suit),
@@ -905,9 +1105,10 @@ async def _analyze_wallet_multi_token(
                     return None
                 return price_at(_ohlcv, int(ts.timestamp()))
 
-            fifo = _fifo_match(token_addr, buys, sells, _price_lookup)
+            fifo = _fifo_match(token_addr, buys, sells, _price_lookup, exact_hashes=frozenset(hash_prices))
             result.closed_trades.extend(fifo.closed_trades)
             result.unpriced_legs += fifo.unpriced_legs
+            result.unmatched_sell_events += fifo.unmatched_sell_events
 
         if pool_meta.available and pool_meta.created_at:
             earliest_buy_ts = min(ts for ts, _amt, _hash in buys)
@@ -1299,14 +1500,36 @@ class WalletScoreCard:
     pool_lookup_errors: int = 0  # tokens sans pool GeckoTerminal résolu (#157, 14/07 -- diagnostic)
     gecko_dexscreener_gap_count: int = 0  # parmi eux, DexScreener voit une paire que GeckoTerminal a ratée (#157, 14/07)
     cmc_price_recovery_count: int = 0  # parmi eux, valorisés via CoinMarketCap après échec GeckoTerminal (#157, 14/07)
+    # Défense anti-dust/scam-pool (15/07, revue Gemini) : tokens dont le pool a
+    # été résolu mais dont la liquidité confirmée est sous
+    # WEIGHTS.min_pool_liquidity_usd_for_pricing -- non valorisés (diagnostic
+    # PAR PASSE, même convention que les deux compteurs ci-dessus).
+    thin_liquidity_pricing_skipped_count: int = 0
+    # Ventes dont la queue FIFO d'achats s'est épuisée (15/07, revue Gemini) --
+    # signal possible de rebase/rendement DeFi jamais crédité comme profit,
+    # juste compté pour transparence. Diagnostic PAR PASSE (pas cumulatif).
+    unmatched_sell_events: int = 0
     win_rate: float | None = None
     realized_pnl_usd: float | None = None
     sortino: float | None = None
     max_drawdown_pct: float | None = None
     avg_holding_period_days: float | None = None  # 15/07 -- conviction vs. rotation rapide (méthodologie sourcée)
 
+    # Confiance du cost-basis (15/07, revue Gemini) : part des jambes (achat +
+    # vente) valorisées par un prix d'exécution EXACT plutôt que par le repli
+    # marché OHLCV. Affiché À CÔTÉ du score (jamais en cachant win_rate/PnL),
+    # même doctrine que `sample_size_sufficient` -- pas le masquage complet de
+    # Sortino/robust_pnl/health_trend.
+    price_confirmation_ratio: float | None = None
+    price_confidence_low: bool = False
+
     diversification_profitable_tokens: int = 0
     diversification_total_tokens: int = 0
+    # Diversification pondérée par capital (15/07, revue ChatGPT) : part du
+    # capital total déployé qui a fini dans une position profitable -- complète
+    # (remplace pas) le ratio de comptage ci-dessus, mesure la CONCENTRATION du
+    # capital plutôt que la largeur des paris indépendants.
+    diversification_capital_weighted_ratio: float | None = None
 
     early_entry_recurrence_count: int = 0
     informed_entry_count: int = 0
@@ -1408,6 +1631,17 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         f"Trades clôturés valorisés (cumulé) : {card.closed_trades_count} (jambes sans prix cette passe : "
         f"{card.unpriced_legs}, tokens sans pool GeckoTerminal résolu cette passe : {card.pool_lookup_errors})"
     )
+    if card.thin_liquidity_pricing_skipped_count:
+        lines.append(
+            f"Dont {card.thin_liquidity_pricing_skipped_count} token(s) avec un pool trop peu liquide pour faire "
+            f"confiance à son prix (< ${WEIGHTS.min_pool_liquidity_usd_for_pricing:,.0f}) -- non valorisé(s), "
+            "défense anti-dust/scam-pool."
+        )
+    if card.unmatched_sell_events:
+        lines.append(
+            f"{card.unmatched_sell_events} vente(s) dont la quantité dépasse ce qui a été acheté dans la fenêtre "
+            "récupérée (rendement de rebase/DeFi possible, ou achat antérieur) -- jamais créditée comme profit."
+        )
     if card.gecko_dexscreener_gap_count:
         lines.append(
             f"Dont {card.gecko_dexscreener_gap_count} avec une paire DexScreener trouvée que GeckoTerminal "
@@ -1438,6 +1672,12 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         f"Diversification : {card.diversification_profitable_tokens}/{card.diversification_total_tokens} tokens profitables"
     )
     lines.append(
+        f"Diversification pondérée par capital : {card.diversification_capital_weighted_ratio:.0%} du capital "
+        "déployé a fini dans une position profitable"
+        if card.diversification_capital_weighted_ratio is not None
+        else "Diversification pondérée par capital : indisponible"
+    )
+    lines.append(
         f"Durée moyenne de détention : {card.avg_holding_period_days:.1f} jour(s)"
         if card.avg_holding_period_days is not None
         else "Durée moyenne de détention : indisponible"
@@ -1455,8 +1695,9 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         else "Ancienneté du wallet : indisponible"
     )
     lines.append(
-        f"Robustesse anti-chance (retrait des {WEIGHTS.robust_trim_count} meilleurs ET {WEIGHTS.robust_trim_count} "
-        f"pires trades) : PnL restant {'positif' if card.robust_pnl_positive else 'négatif'}"
+        f"Robustesse anti-chance (retrait des {WEIGHTS.robust_trim_pct:.0%} meilleurs ET "
+        f"{WEIGHTS.robust_trim_pct:.0%} pires trades) : PnL restant "
+        f"{'positif' if card.robust_pnl_positive else 'négatif'}"
         if card.robust_pnl_positive is not None
         else "Robustesse anti-chance : indisponible (pas assez de trades clôturés)"
     )
@@ -1465,6 +1706,14 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         if card.health_trend is not None
         else "Tendance de santé dans le temps : indisponible (pas assez de trades clôturés)"
     )
+    if card.price_confirmation_ratio is not None:
+        lines.append(f"Confiance du cost-basis : {card.price_confirmation_ratio:.0%} des prix confirmés par exécution exacte")
+        if card.price_confidence_low:
+            lines.append(
+                "Attention : une partie importante des prix d'entrée de ce wallet est estimée via les prix de "
+                "marché historiques (transferts type CEX ou swaps complexes sans stablecoin direct) -- le PnL "
+                "réel peut différer."
+            )
     if card.compared_against_n_wallets > 0:
         lines.append(
             f"Classement comparatif (vs {card.compared_against_n_wallets} autre(s) wallet(s) suivi(s)) : "
@@ -1669,6 +1918,8 @@ async def score_wallets(
         card.pool_lookup_errors = multi.pool_lookup_errors
         card.gecko_dexscreener_gap_count = len(multi.gecko_dexscreener_gap_tokens)
         card.cmc_price_recovery_count = len(multi.cmc_recovered_tokens)
+        card.thin_liquidity_pricing_skipped_count = len(multi.thin_liquidity_tokens)
+        card.unmatched_sell_events = multi.unmatched_sell_events
 
         # Persistance : ce lot remplace les trades archivés des tokens qu'il
         # couvre (le FIFO est recalculé en entier depuis l'historique complet du
@@ -1713,15 +1964,50 @@ async def score_wallets(
             card.avg_holding_period_days = _avg_holding_period_days(cumulative_trades)
 
             by_token: dict[str, float] = {}
+            capital_by_token: dict[str, float] = {}
             for t in cumulative_trades:
                 by_token[t.token_address] = by_token.get(t.token_address, 0.0) + t.pnl_usd
+                capital_by_token[t.token_address] = (
+                    capital_by_token.get(t.token_address, 0.0) + t.token_amount * t.buy_price
+                )
             card.diversification_total_tokens = len(by_token)
             card.diversification_profitable_tokens = sum(1 for v in by_token.values() if v > 0)
 
+            # Diversification pondérée par capital (15/07, revue ChatGPT) : le
+            # ratio de comptage ci-dessus traite un pari de 5$ comme un pari de
+            # 50 000$ -- un wallet peut gonfler artificiellement sa
+            # diversification "comptée" via 200 positions minuscules pendant
+            # qu'un seul gros pari domine réellement son capital. Complète
+            # (remplace pas) le ratio de comptage -- les deux mesurent des
+            # choses différentes (largeur des paris indépendants vs.
+            # concentration réelle du capital), même doctrine "axes séparés,
+            # jamais fondus" que le reste de ce module.
+            total_capital = sum(capital_by_token.values())
+            card.diversification_capital_weighted_ratio = (
+                round(
+                    sum(v for addr, v in capital_by_token.items() if by_token.get(addr, 0.0) > 0) / total_capital, 4,
+                )
+                if total_capital > 0
+                else None
+            )
+
             card.robust_pnl_positive = _robust_pnl_check(
                 cumulative_trades,
-                trim_count=WEIGHTS.robust_trim_count,
+                trim_pct=WEIGHTS.robust_trim_pct,
                 min_required=WEIGHTS.robust_trim_min_closed_trades,
+            )
+
+            # Confiance du cost-basis (15/07, revue Gemini) : part des JAMBES
+            # (achat + vente comptées séparément) valorisées par un prix
+            # d'exécution exact plutôt que par le repli marché OHLCV.
+            exact_legs = sum(
+                (1 if t.buy_price_exact else 0) + (1 if t.sell_price_exact else 0) for t in cumulative_trades
+            )
+            total_legs = len(cumulative_trades) * 2
+            card.price_confirmation_ratio = round(exact_legs / total_legs, 4) if total_legs else None
+            card.price_confidence_low = (
+                card.price_confirmation_ratio is not None
+                and card.price_confirmation_ratio < WEIGHTS.min_price_confirmation_ratio
             )
             card.health_trend = _health_trend(
                 cumulative_trades,
