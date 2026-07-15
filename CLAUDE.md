@@ -1463,6 +1463,36 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   réécrit + 4 nouveaux dans `test_smart_money_wallet_scoring.py`), suite
   complète verte (4999 passed). **Rien déployé** -- regroupé avec le prochain
   déploiement (`/walletqueue` lui-même pas encore en prod).
+- **15/07 (nuit, suite) — VPS Research : Webacy approfondi (complémentaire à
+  GoPlus) + nouvelle piste Arkham Intelligence + blocage Dune résolu.**
+  Vérifié avant merge (grep-avant-proposer confirmé sur `goplus.py`/
+  `smart_money.py`, chiffre de crédit Dune recoupé indépendamment via
+  `mcp__dune__getUsage` depuis cette session : 0 -> 0,161 crédit, correspond
+  exactement). **Webacy** : légitimité réelle (financement ~10M$ Mozilla
+  Ventures/GSR/Sui Foundation, clients Etherscan/Revoke.cash/Arculus),
+  confirmé complémentaire à GoPlus (réputation d'ADRESSE -- Exposure/Threat
+  Risk/Sanctioned -- vs sécurité de CONTRAT côté GoPlus, aucun chevauchement
+  aujourd'hui) -- piste pour un futur `/walletscore`, jamais `safety_screen`.
+  Tarif API exact et couverture Base non positivement confirmés (portail
+  dev 403, 401 sans clé) -- banqué, pas activé. **Nouvelle branche : Arkham
+  Intelligence** (entity labels réels -- exchanges/funds/whales/individus),
+  trouvée en creusant un angle mort réel de `smart_money.py` : l'exclusion
+  actuelle des wallets "équipe/vesting/LP" ne repose que sur le flag brut
+  `is_contract` + une liste DEX à la main -- un EOA d'équipe/whale connu
+  n'est pas détecté. Base confirmée supportée, rate limits documentés (20
+  req/s) -- mais produit payant (149-999$/mois), banqué comme piste
+  sérieuse, pas urgent (mérite un "go" seulement si le sourcing actuel
+  s'avère insuffisant en pratique). **Bonus : blocage Dune du tour précédent
+  résolu** (clé corrigée en cours de session côté MCP) -- test live réussi
+  sur `dex.trades`/`prices.usd`/`tokens.transfers` (WETH Base), coût réel
+  0,161 crédit/2500 mensuels, les trois tables confirmées vivantes et
+  fiables. **Réserve qualité de donnée trouvée** : `amount_usd` est `null`
+  sur certaines lignes `dex.trades` issues d'agrégateurs (`0x API`) -- à
+  gérer explicitement (jamais supposer une valeur) si `services/dune.py`
+  est étendu. Aucun compte créé, aucune clé achetée/activée, aucune
+  frontière approchée. Détail complet :
+  `docs/aria-learning-inbox/2026-07-15-radar-webacy-approfondi-arkham-entity-labels.md`
+  + `docs/dune-integration-plan.md` §7bis.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
