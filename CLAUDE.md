@@ -877,6 +877,10 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   l'outil), **kill-switch = `/stop` existant** (à vérifier qu'il coupe bien ce chemin), et le
   log de transactions décrit ci-dessous. Rien à construire tant que le produit n'est pas choisi
   et que l'opérateur n'a pas donné le "go" sur ce plan complet.
+  **Plan complet rédigé le 15/07** (choix de produit, garde-fous, module à construire,
+  question d'interprétation) : `docs/pilote-agent-wallet-10usd.md` — statut PLAN SEULEMENT,
+  rien codé/activé, en attente du "go" opérateur (et du choix Coinbase maintenant vs attendre
+  l'accès anticipé MetaMask).
 - **#158/#159 — EN LIGNE (codé, testé, PAS déployé), 15/07 : diagnostics dédiés lisibles
   directement depuis le cloud, sans dépendre d'une session VPS.** Suite directe de la Routine
   cassée ci-dessous et de la demande opérateur d'un log de transactions agent-wallet. Deux
