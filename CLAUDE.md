@@ -1518,6 +1518,23 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (`TestBuildRecentBasePairsQuery`), suite complète verte (4997+ passed).
   **Rien branché au pipeline de sourcing** -- décision séparée après
   relecture, pas prise ce soir.
+- **15/07 (nuit, suite) — VPS Principal : `/whoami` câblé + fuite `admin_ids`
+  corrigée (#181), MERGÉ ET DÉPLOYÉ EN CODE (pas encore sur le VPS).**
+  Handler orphelin (jamais enregistré via `add_handler`, seul hit du fichier
+  = sa propre définition -- probable reliquat créé hors flux git normal, cf.
+  hypothèse opérateur "peut-être Grok"). Décision : CÂBLÉ, pas supprimé --
+  vérifié non-redondant (`/status` admin-only, `/start` visiteur ne montre
+  ni ID ni instructions) -- seule voie pour qu'un visiteur non reconnu
+  retrouve son ID Telegram. **Vrai bug de sécurité trouvé en investiguant,
+  corrigé au passage** : la branche VISITEUR renvoyait `settings.admin_ids`
+  (la vraie liste des IDs admin) à N'IMPORTE QUI tapant `/whoami` -- seule
+  ligne de tout le fichier exposant cette liste hors d'une réponse déjà
+  réservée à un admin confirmé. Un visiteur ne voit plus que son propre ID.
+  Branche admin inchangée (déjà exposée par construction, aucune nouvelle
+  fuite). Ajouté par la relecture cloud : entrée dans le menu `/` visible
+  (`_register_bot_commands`, oubliée dans le lot initial). 6 nouveaux tests
+  (dont une régression directe sur la fuite), suite complète verte (5013
+  passed). **Code mergé sur main, pas encore déployé sur le VPS.**
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
