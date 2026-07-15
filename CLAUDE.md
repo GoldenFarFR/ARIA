@@ -1033,6 +1033,24 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   taille de l'échantillon (pourcentage), jamais un compte absolu qui se dilue ; (e)
   documenter honnêtement ce qui reste un vrai trou plutôt que de prétendre l'avoir
   fermé avec un correctif cosmétique.
+- **15/07 (suite, même soirée) — round 2/3 de la revue croisée (`8565d62` → `236af77`), 3
+  correctifs de plus.** Swaps stable<->stable (USDC/USDT/DAI) exclus du compteur de swaps
+  (même exploit que wrap/unwrap, réutilise le registre stablecoin existant) ; métriques
+  sur fenêtre récente (`win_rate_recent`/`realized_pnl_usd_recent`, 90j par défaut, en
+  complément jamais en remplacement — répond au biais temporel : un wallet dégradé
+  récemment restait masqué par un historique agrégé favorable) ; le "fail-open sur
+  liquidité inconnue" soulevé par Gemini comme faille de sécurité a été vérifié PUIS
+  clarifié comme non exploitable en pratique — le vrai client GeckoTerminal ne renvoie
+  jamais `None` pour une réserve manquante (retombe sur `0.0`, qui échoue déjà le
+  plancher), verrouillé par un test dédié. La division par zéro du Sortino, réaffirmée
+  deux fois par Gemini, reste fausse contre le code (déjà gardée). Limites ajoutées à la
+  documentation : paires LST/wrapped non couvertes (stETH/wstETH, WBTC/tBTC — registre
+  hors de portée) ; la dilution du trim anti-chance par micro-trades est plus étroite
+  qu'annoncée (tri par PnL en dollars, pas en %, donc un padding "gratuit" ne suffit pas
+  à faire sortir un trade légendaire du tri sauf s'il est lui-même de faible montant en
+  dollars) ; pondération égale par trade de win_rate/trim/health_trend assumée (pas un
+  oubli) ; manipulation possible du point de bascule de la courbe de santé. 6 nouveaux
+  tests, suite complète verte (4917/4917).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
