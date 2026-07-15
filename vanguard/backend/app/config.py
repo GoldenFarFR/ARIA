@@ -79,8 +79,14 @@ class Settings(BaseSettings):
     telegram_group_id: int | None = None
     # Kill-switch /stop /start — réservé au propriétaire (chat ID unique), indépendant des admin_ids.
     aria_owner_chat_id: str = ""  # ARIA_OWNER_CHAT_ID ; vide → fallback admin_ids[0]
+    # #197 (15/07) — sujet ("topic") Telegram dédié au suivi paper-trading (salon privé
+    # opérateur, en plus du DM admin habituel, jamais à la place). Les deux doivent être
+    # renseignées pour activer l'envoi vers le topic ; l'une des deux absente = comportement
+    # actuel inchangé (DM admin seul), aucune régression.
+    aria_trading_topic_chat_id: int | None = None
+    aria_trading_topic_thread_id: int | None = None
 
-    @field_validator("telegram_group_id", mode="before")
+    @field_validator("telegram_group_id", "aria_trading_topic_chat_id", "aria_trading_topic_thread_id", mode="before")
     @classmethod
     def empty_group_id(cls, v: Any) -> int | None:
         if v is None or v == "":

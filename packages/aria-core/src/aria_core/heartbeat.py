@@ -730,6 +730,25 @@ class AriaHeartbeat:
         except Exception as exc:
             logger.warning("Telegram notify failed: %s", exc)
 
+    async def _notify_telegram_trading(self, text: str) -> None:
+        """#197 (15/07) : envoie le DM admin habituel (inchangé) PUIS, EN PLUS, le même
+        message vers un sujet ("topic") Telegram dédié au suivi paper-trading si les deux
+        variables ``ARIA_TRADING_TOPIC_CHAT_ID``/``ARIA_TRADING_TOPIC_THREAD_ID`` sont
+        configurées. Aucune des deux configurée (défaut) -> identique à
+        ``_notify_telegram`` seul, aucune régression. Usage volontairement RÉSERVÉ à
+        ``paper_trade_cycle`` (pas un changement global de ``_notify_telegram``, qui reste
+        utilisé tel quel par les 20+ autres tâches heartbeat)."""
+        await self._notify_telegram(text)
+        chat_id = getattr(settings, "aria_trading_topic_chat_id", None)
+        thread_id = getattr(settings, "aria_trading_topic_thread_id", None)
+        if not chat_id or not thread_id:
+            return
+        try:
+            from aria_core.gateway.telegram_bot import send_message
+            await send_message(text, chat_id=chat_id, message_thread_id=thread_id)
+        except Exception as exc:
+            logger.warning("Telegram trading-topic notify failed: %s", exc)
+
     async def _run_task(self, task_id: str) -> None:
         if task_id == "portfolio_scan":
             summary, data = await execute_portfolio_analysis(lang="en")
@@ -978,7 +997,7 @@ class AriaHeartbeat:
         elif task_id == "paper_trade_cycle":
             from aria_core import paper_trader
 
-            actions = await paper_trader.run_paper_cycle(notifier=self._notify_telegram)
+            actions = await paper_trader.run_paper_cycle(notifier=self._notify_telegram_trading)
             if actions.get("opened") or actions.get("closed"):
                 append_memory(
                     "paper",

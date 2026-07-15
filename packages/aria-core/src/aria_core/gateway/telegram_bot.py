@@ -182,14 +182,21 @@ async def apply_bot_profile_photo(image_path: Path) -> tuple[bool, str | None]:
             await bot.shutdown()
 
 
-async def send_message(text: str, chat_id: int | None = None) -> bool:
+async def send_message(text: str, chat_id: int | None = None, *, message_thread_id: int | None = None) -> bool:
+    """``message_thread_id`` (#197, 15/07) : sujet ("topic") d'un supergroupe Telegram
+    avec « Sujets » activés -- paramètre natif de l'API Bot, déjà supporté par
+    python-telegram-bot (``Bot.send_message``). ``None`` (défaut) préserve le
+    comportement existant à l'identique (message posté à la racine du chat, aucune
+    régression pour les 20+ appelants actuels)."""
     if not _bot_app or not settings.telegram_bot_token:
         return False
     target = chat_id or settings.telegram_group_id or (settings.admin_ids[0] if settings.admin_ids else None)
     if not target:
         return False
     try:
-        await _bot_app.bot.send_message(chat_id=target, text=_format_tg(text))
+        await _bot_app.bot.send_message(
+            chat_id=target, text=_format_tg(text), message_thread_id=message_thread_id,
+        )
         return True
     except Exception as exc:
         logger.warning("Telegram send failed: %s", exc)

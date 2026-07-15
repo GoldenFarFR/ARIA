@@ -31,6 +31,8 @@ class AriaRuntimeSettings(BaseSettings):
     telegram_admin_username: str = "golderfarfr"
     telegram_group_id: int | None = None
     aria_owner_chat_id: str = ""
+    aria_trading_topic_chat_id: int | None = None
+    aria_trading_topic_thread_id: int | None = None
 
     access_code_enabled: bool = False
     site_base_url: str = ""
@@ -140,7 +142,7 @@ class AriaRuntimeSettings(BaseSettings):
     truth_ledger_github_batch_size: int = 100
     truth_ledger_github_batch_interval_sec: int = 300
 
-    @field_validator("telegram_group_id", mode="before")
+    @field_validator("telegram_group_id", "aria_trading_topic_chat_id", "aria_trading_topic_thread_id", mode="before")
     @classmethod
     def empty_group_id(cls, v: Any) -> int | None:
         if v is None or v == "":
