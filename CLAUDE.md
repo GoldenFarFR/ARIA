@@ -1384,6 +1384,51 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   Corrigé : `MAX_WALLETS_PER_CYCLE` ramené de 2 à 1 (décision opérateur explicite,
   "pas pressé") -- pire cas de blocage ramené à ~25 minutes, sans toucher au throttle
   partagé. Tests mis à jour, suite complète verte (4962 passed).
+- **15/07 (soir) — radar large-spectre VPS Research : Clanker/GoPlus/Webacy, +
+  blocage Dune identifié précisément.** Deux angles dispatchés. (1) Vérification
+  Dune (`dex.trades`/`tokens.transfers`/`prices.usd`) : **bloquée, cause trouvée
+  pas devinée** -- la config MCP `dune` contenait le placeholder littéral
+  `"ta_nouvelle_cle"` au lieu de la vraie clé, jamais renseignée malgré la mention
+  "générée et enregistrée" plus haut. Documenté avec l'action corrective exacte
+  dans `docs/dune-integration-plan.md` §7 -- corrigé le même soir par l'opérateur
+  (clé réelle enregistrée sur le VPS). (2) Radar : Clanker (launchpad Base racheté
+  Farcaster/Neynar, API publique testée en direct par `curl` sans clé, token
+  observé déployé quelques secondes avant l'appel, `chain_id 8453` confirmé) et
+  GoPlus Security (testé en direct sans clé, `supported_chains` confirme Base,
+  données réelles honeypot/mintable/ownership obtenues) -- **correction du
+  commandement après vérification directe du code** : Clanker et GoPlus sont en
+  réalité déjà construits et intégrés (`services/clanker.py`, `services/goplus.py`
+  -- GoPlus actif en prod depuis longtemps), Research n'avait vérifié l'absence
+  de note de diligence dans `aria-learning-inbox/` (exacte) mais pas l'existence
+  du code -- seule **Webacy** (risk-scoring wallet, verrouillé 401 sans clé,
+  piste réelle non tranchée) est une vraie nouveauté. Aucune frontière approchée
+  (aucun compte créé, aucune clé achetée). Détail complet :
+  `docs/aria-learning-inbox/2026-07-15-radar-goplus-clanker-webacy.md`.
+- **15/07 (soir) — client Dune Analytics construit (VPS Principal), mergé après
+  correctif de revue (`services/dune.py`).** Wrapper Execute SQL (dôme habituel,
+  `DUNE_API_KEY` lue à chaque appel, `available=False` sans appel réseau si
+  absente) + `build_early_buyer_multiple_query()` -- la requête SQL de sourcing
+  §3.2 du plan (`docs/dune-integration-plan.md`) : wallets ayant acheté un token
+  Base dans sa première heure, qui a ensuite fait ≥Nx. **Vrai bug de fond trouvé
+  en relecture avant merge** : la CTE `token_launch` calculait le premier trade
+  jamais vu (`MIN(block_time)`) sur des lignes déjà filtrées à la fenêtre
+  `lookback_days` -- un token ÉTABLI depuis longtemps, dont le premier trade DANS
+  la fenêtre tombait par hasard il y a `lookback_days` jours, aurait été à tort
+  classé "vient de naître", polluant tout le signal d'acheteurs précoces avec des
+  acheteurs d'un token ancien en pleine remontée (le contraire du but recherché).
+  Corrigé avant merge : le filtre de date passe du `WHERE` (pré-agrégat) au
+  `HAVING` (post-agrégat) -- `token_launch` scanne désormais l'historique complet
+  de `dex.trades`, ne garde que les tokens dont la PREMIÈRE transaction jamais vue
+  tombe réellement dans la fenêtre récente. Coût plus élevé pour cette CTE (scan
+  complet), nécessaire pour la correction. Portée respectée par VPS Principal :
+  aucun gate `ARIA_DUNE_ENABLED`, aucune tâche heartbeat, aucun branchement à
+  `wallet_candidate_sourcing.py` -- simple client + requête, comme demandé.
+  **Réserve honnête assumée (documentée dans le code)** : noms de champs
+  `dex.trades` vérifiés contre la doc publique Dune uniquement, jamais un appel
+  réel (clé MCP restée mal configurée -- `"ta_nouvelle_cle"` littéral -- tout le
+  segment, cf. entrée VPS Research ci-dessus) -- à reconfirmer via
+  `EXECUTE_SQL_LIMIT_1` avant tout usage en prod. 26 tests (dont le nouveau,
+  verrouillant le correctif WHERE/HAVING), suite complète verte (4992 passed).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
