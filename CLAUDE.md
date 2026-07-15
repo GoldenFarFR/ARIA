@@ -1789,6 +1789,33 @@ hors-sujet, pas de backlog "confort" en attendant. Les tâches déjà en cours
 sans lien direct (ex. #13 positionnement, #82 canal directives, #145 test à
 l'aveugle) restent en pause jusqu'à nouvel ordre, pas abandonnées.
 
+**Mandat permanent VPS Research — atouts/points faibles d'une IA qui trade
+(décision opérateur explicite, 15/07, gravé) : boucle continue, jamais un
+audit ponctuel, jusqu'à ce que l'opérateur juge ARIA prête.** Deux volets,
+tenus à jour en continu dans `docs/aria-learning-inbox/` (méthode déjà
+posée le 12/07 : uniquement des preuves comparatives/vérifiées, jamais un
+portrait de gagnants — biais du survivant écarté) :
+1. **Atouts propres à une IA-trader** (vs. un humain) : catalogue et vérifie
+   qu'ARIA les exploite VRAIMENT (pas supposé) — disponibilité 24/7 sans
+   fatigue, cohérence des critères d'un cycle à l'autre, capacité de
+   simulation/backtest illimitée avant capital réel, traitement simultané de
+   sources de données qu'un humain ne peut pas croiser à la main, traçabilité
+   parfaite (`truth_ledger`). Pour chaque atout : est-il pleinement exploité
+   ou seulement partiellement câblé ?
+2. **Points faibles propres à une IA** (distincts des biais humains déjà
+   couverts par #191 — psychologie/émotions) : hallucination/fabrication de
+   données, sur-ajustement à des motifs qui ne généralisent pas hors
+   backtest, fragilité face à un régime de marché jamais vu, **vulnérabilité
+   à la manipulation adversariale/injection de prompt** (un projet malveillant
+   qui façonnerait son nom/site/métadonnées on-chain pour biaiser le
+   raisonnement LLM d'ARIA — angle non encore audité en profondeur, #117 n'a
+   testé que n=2 prompts), dépendance à un seul fournisseur de modèle/donnée,
+   coût/latence des appels LLM. Chaque point faible réel trouvé doit être
+   comblé (code, prompt, ou garde-fou) — jamais laissé en simple constat.
+**Ne jamais s'arrêter après une passe** : combler ce qui est trouvé, puis
+reprendre la recherche sur l'angle suivant. Le seul critère d'arrêt est la
+confirmation opérateur qu'ARIA est prête.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
