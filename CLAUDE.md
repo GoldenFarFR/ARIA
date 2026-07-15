@@ -985,6 +985,54 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   plutôt qu'un swap → le prix d'entrée pourrait alors être fixé à 0$ au lieu du prix de
   marché. Faisable sans appel réseau supplémentaire (la donnée est déjà là). Décision
   opérateur à prendre avant de construire.
+- **15/07 — revue croisée multi-IA du `/walletscore` (Gemini x2, ChatGPT, Grok, 18
+  angles morts relevés au total) — 6 correctifs réels construits, testés et déployés
+  dans le code (commit `8565d62`), reste hors scope documenté honnêtement.** Méthode :
+  chaque point a été VÉRIFIÉ contre le vrai code avant d'agir (pas pris pour argent
+  comptant) — 2 affirmations de Gemini se sont révélées fausses une fois confrontées au
+  code (mécanisme exact du "dust scam" erroné — les deux jambes utilisent la même série
+  OHLCV, pas un $0 fabriqué à l'achat ; division par zéro du Sortino déjà gérée par un
+  garde existant). **Corrigés** : (1) trim anti-chance en POURCENTAGE plutôt qu'en compte
+  fixe (`robust_trim_pct`, remplace `robust_trim_count`) — un compte fixe de 10 se dilue
+  de 33% à 0.05% du volume selon N, laissant passer un trade chanceux noyé derrière assez
+  de micro-trades (les 3 IA convergent indépendamment sur ce point, signal fort) ; (2)
+  exclusion des jambes wrap/unwrap ETH<->WETH (mint/burn depuis/vers l'adresse zéro sur
+  le wrapped-native connu) du compteur `min_total_swaps` — fermait un exploit à coût
+  quasi nul (quelques centimes de gas) pour débloquer artificiellement le seuil de
+  fiabilité sans jamais prendre de risque de trading ; (3) plancher de liquidité
+  confirmée (`min_pool_liquidity_usd_for_pricing`, même 30k$ que `safety_screen`) avant
+  de faire confiance à un prix OHLCV — défense anti-dust/scam-pool, fail-open si la
+  liquidité est inconnue (jamais un défaut de donnée traité comme liquidité nulle) ; (4)
+  `price_confirmation_ratio` + drapeau `price_confidence_low`, affiché À CÔTÉ du score
+  (jamais en cachant win_rate/PnL, même doctrine que `sample_size_sufficient`) ; (5)
+  `unmatched_sell_events` — ventes dont la queue FIFO d'achats s'épuise (signal de
+  rebase/rendement DeFi type stETH), jamais crédité comme profit, juste rendu visible ;
+  (6) diversification pondérée par capital engagé, en complément (pas en remplacement)
+  du ratio par comptage de tokens. **Documenté, délibérément non corrigé** (trop coûteux/
+  complexe pour un correctif ponctuel) : coordination Sybil/multi-wallets (le plus
+  important des points non résolus, confirmé par recherche externe — Nansen/Arkham/
+  Chainalysis/TRM s'appuient sur la même famille de clustering par source de financement
+  que notre `_pairwise_convergence` existant, mais à l'échelle d'un graphe sur toute la
+  population suivie, pas juste pairwise entre 1-3 wallets soumis ensemble) ; absence de
+  benchmark marché (alpha vs bêta) ; gaming structurel des tests de robustesse ; MEV/
+  arbitrage atomique/flash loans ; biais de survie du gate d'échantillon ; choix
+  méthodologique FIFO vs LIFO/HIFO (assumé, pas un défaut) ; paradoxe du percentile
+  (population de comparaison non représentative, dérive avec la démographie des
+  utilisateurs de l'outil) ; découpage de la courbe de santé par nombre de trades plutôt
+  que par fenêtre calendaire. Tout est écrit noir sur blanc dans un bloc dédié de
+  `smart_money.py` (« LIMITES STRUCTURELLES CONNUES »), jamais laissé implicite. 10
+  nouveaux tests ciblés (99/99 sur ce fichier, 4912/4912 sur la suite complète).
+  **Patron réutilisable pour l'avenir (noté explicitement par l'opérateur)** : ces 6
+  correctifs ne sont pas propres au wallet-scoring — ce sont des mécanismes de défense
+  génériques qu'ARIA retrouvera face à d'autres sources de données manipulables une fois
+  plus autonome : (a) ne jamais faire confiance à un prix/signal sans un plancher de
+  qualité confirmée (liquidité ici, transposable à tout flux externe) ; (b) fail-open sur
+  une donnée INCONNUE, fail-closed seulement sur une donnée CONFIRMÉE mauvaise — jamais
+  l'inverse ; (c) afficher un ratio de confiance À CÔTÉ d'un score plutôt que de le
+  cacher ou de refuser de scorer ; (d) un seuil/plafond ANTI-CHANCE doit scaler avec la
+  taille de l'échantillon (pourcentage), jamais un compte absolu qui se dilue ; (e)
+  documenter honnêtement ce qui reste un vrai trou plutôt que de prétendre l'avoir
+  fermé avec un correctif cosmétique.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
