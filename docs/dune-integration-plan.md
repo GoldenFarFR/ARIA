@@ -175,3 +175,91 @@ ce soir (GoPlus Security, Clanker — voir
 être vérifiés par un vrai appel `curl` en direct, sans aucune clé API —
 la fiabilité du process de vérification n'est pas en cause ici, seul le
 Dune MCP est bloqué, et pour une raison précise et corrigible.
+
+## 8. Vérification live des DEUX requêtes composées mergées (§3.2/§5, 15/07)
+
+Le §7bis avait vérifié les tables brutes (`dex.trades`/`prices.usd`/
+`tokens.transfers`) isolément, pas les deux requêtes SQL composées (CTE)
+finalement mergées dans `services/dune.py`
+(`build_early_buyer_multiple_query`, `build_recent_base_pairs_query`). Test
+demandé séparément — fait ce soir via le serveur MCP `dune` (clé
+fonctionnelle, confirmé), paramètres modestes de test, performance `small`.
+
+**Schéma `dex.trades` confirmé colonne par colonne** (via `searchTables`,
+avant tout appel Execute SQL) : `blockchain`, `taker`, `token_bought_address`,
+`token_bought_amount`, `amount_usd`, `block_time` — **tous les noms de
+colonnes supposés par le code sont exacts**, aucune divergence. Point non
+documenté auparavant : `token_bought_address`/`token_sold_address`/`taker`
+sont typées `varbinary` en interne, mais l'API Execute SQL les restitue déjà
+en hex `0x...` dans le JSON de résultat — **aucun décodage supplémentaire
+nécessaire côté `dune.py`**, confirmation utile pour l'intégration future.
+
+### 8.1 `build_early_buyer_multiple_query(min_multiple=2.0, lookback_days=7)`
+
+Exécution réussie, **aucune erreur SQL** :
+[`https://dune.com/queries/7992486`](https://dune.com/queries/7992486),
+118 839 lignes au total, **coût réel : 7,337 crédits**.
+
+Échantillon (10 premières lignes, triées par `peak_multiple` décroissant) :
+adresses wallet/token bien formées (`0x` + 40 hex), `launch_time` récent et
+cohérent (10-14 juillet 2026, dans la fenêtre `lookback_days=7`).
+
+**RÉSULTAT ABERRANT TROUVÉ (à corriger avant tout usage en prod)** : les
+`peak_multiple` des lignes en tête sont numériquement absurdes —
+`1.0119556163573924e+22` (≈10 sextillions x) et `505220219833540400`
+(≈505 quadrillions x) sur les 9 premières lignes. Aucun token réel ne fait
+un tel multiple. Cause probable identifiée par inspection des valeurs
+intermédiaires : `launch_price_usd` vaut `3.597860287502912e-14` sur la
+ligne la plus aberrante — un prix quasi nul, cohérent avec une division
+`amount_usd / token_bought_amount` où `token_bought_amount` est un montant
+infinitésimal (jambe de test/dust, ou un token à très grand nombre de
+décimales mal normalisé) sur LE PREMIER trade jamais vu de ce token
+(`token_launch_price`, `MIN()` sur un seul point de mesure, pas une médiane
+ni un filtre de montant minimum). Le diviseur `NULLIF(token_bought_amount, 0)`
+protège bien contre la division par zéro exacte, mais pas contre une
+division par un montant proche de zéro — **c'est le vrai bug à corriger**,
+pas une erreur SQL (la requête tourne et retourne un résultat syntaxiquement
+valide, donc `EXECUTE_SQL_LIMIT_1` seul n'aurait pas suffi à l'attraper --
+il fallait un vrai test avec des paramètres réels et une inspection des
+valeurs, pas seulement du schéma).
+
+Piste de correction (pas implémentée ce soir, hors scope de cette tâche de
+vérification) : soit un plancher minimum sur `token_bought_amount`/
+`amount_usd` avant de calculer un prix unitaire, soit remplacer
+`MIN(block_time)`/prix-au-premier-trade par une médiane sur les N premiers
+trades, soit plafonner `peak_multiple` à une valeur jugée déjà extraordinaire
+(ex. 1000x) et traiter tout dépassement comme suspect à vérifier manuellement
+plutôt qu'un signal brut.
+
+### 8.2 `build_recent_base_pairs_query(min_volume_usd=5000.0, lookback_hours=48)`
+
+Exécution réussie, **aucune erreur SQL** :
+[`https://dune.com/queries/7992498`](https://dune.com/queries/7992498),
+109 lignes au total, **coût réel : 2,932 crédits**.
+
+Échantillon (10 premières lignes, triées par `volume_usd` décroissant) :
+adresses token bien formées, `launch_time` dans la fenêtre 48h demandée
+(14-15 juillet 2026), `volume_usd` de 478 153$ à 88 912 609$, `trade_count`
+de 949 à 24 838 — **valeurs toutes plausibles, aucune ligne vide ni
+aberrante trouvée sur cette requête**. Contraste net avec §8.1 : cette
+requête ne divise jamais deux montants d'un même trade (`SUM(amount_usd)`
+brut), donc pas exposée au même piège de division par un montant
+infinitésimal.
+
+### 8.3 Coût total de cette vérification
+
+7,337 + 2,932 = **10,269 crédits** sur le quota mensuel de 2 500 (0,4%) —
+négligeable, cohérent avec le budget décrit au §4.
+
+### 8.4 Verdict
+
+- **`build_recent_base_pairs_query`** : verdict positif sans réserve
+  technique restante — schéma confirmé, résultats plausibles, coût minime.
+- **`build_early_buyer_multiple_query`** : requête syntaxiquement correcte
+  et exécutable, schéma confirmé, MAIS **un vrai bug de qualité de donnée
+  trouvé en direct** (multiples aberrants par division sur un prix
+  quasi-nul) — **NE PAS considérer cette requête comme fiable en prod avant
+  correction** (cf. piste ci-dessus). Documenté ici plutôt que corrigé
+  silencieusement : correction = tâche séparée, pas dans le périmètre de
+  cette vérification (lecture/documentation seulement, aucun autre fichier
+  touché ce soir).
