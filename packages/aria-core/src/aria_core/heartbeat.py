@@ -359,7 +359,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="wallet_scan_queue_cycle",
         name="File d'attente de scan wallet en arriere-plan",
-        description="Fait avancer d'un passage chaque wallet injecte via /walletqueue (jusqu'a 2 par cycle) -- reutilise le moteur incremental existant (score_wallets/wallet_scan_state.py), rien duplique. Notifie une progression tous les 50 tokens couverts, puis le rapport final complet des la couverture complete (le wallet quitte alors la file). Double gate : ARIA_WALLET_SCAN_QUEUE_ENABLED ET ARIA_WALLET_SCORING_ENABLED -- OFF par defaut tous les deux.",
+        description="Fait avancer d'un passage chaque wallet injecte via /walletqueue (1 par cycle) -- reutilise le moteur incremental existant (score_wallets/wallet_scan_state.py), rien duplique. Notifie une progression tous les 50 tokens couverts, puis le rapport final complet des la couverture complete. Suivi PERMANENT : le wallet ne quitte jamais la file a 100%, bascule en surveillance hebdomadaire (nouvelle activite detectee et notifiee sans jamais re-exiger une couverture complete) -- retire seulement apres 3 mois sans aucune activite on-chain reelle. Double gate : ARIA_WALLET_SCAN_QUEUE_ENABLED ET ARIA_WALLET_SCORING_ENABLED -- OFF par defaut tous les deux.",
         interval_minutes=20,
         enabled=False,
     ),
@@ -1095,10 +1095,17 @@ class AriaHeartbeat:
             from aria_core.services.wallet_scan_queue import run_wallet_scan_queue_cycle
 
             result = await run_wallet_scan_queue_cycle(notifier=self._notify_telegram)
-            if result.get("completed"):
+            if result.get("completed_first_time"):
                 append_memory(
                     "wallet_scan_queue",
-                    f"[wallet_scan_queue] couverture complete : {', '.join(result['completed'])}",
+                    f"[wallet_scan_queue] couverture complete, surveillance activee : "
+                    f"{', '.join(result['completed_first_time'])}",
+                )
+            if result.get("dropped_inactive"):
+                append_memory(
+                    "wallet_scan_queue",
+                    f"[wallet_scan_queue] surveillance arretee (inactif >90j) : "
+                    f"{', '.join(result['dropped_inactive'])}",
                 )
 
         elif task_id == "wallet_candidate_sourcing_cycle":

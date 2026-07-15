@@ -2113,6 +2113,12 @@ class WalletScoreCard:
     # rafraîchir l'activité nouvelle depuis le dernier scan.
     tokens_scanned_cumulative: int = 0
     full_coverage: bool = False
+    # Suivi permanent (15/07, #157 suite 2) : dernière activité on-chain RÉELLE
+    # jamais vue (max des timestamps de transferts observés), jamais régressée
+    # d'un passage à l'autre -- sert à mesurer une vraie inactivité (ex. wallet
+    # muet depuis 3 mois) pour `wallet_scan_queue.py`, distinct de la simple
+    # date du dernier SCAN (qui avance même sans nouvelle activité).
+    last_activity_at: datetime | None = None
 
     closed_trades_count: int = 0
     unpriced_legs: int = 0
@@ -2725,12 +2731,28 @@ async def score_wallets(
         full_coverage_at = checkpoint.full_coverage_at
         if full_coverage_at is None and len(new_scanned) >= total_found:
             full_coverage_at = now
+
+        # Suivi permanent (15/07, #157 suite 2) : max des timestamps de TOUS les
+        # transferts vus ce passage (pas seulement ceux du lot sélectionné) --
+        # `all_flat_transfers` couvre l'historique complet récupéré cette passe,
+        # jamais régressé (max avec la valeur déjà connue au checkpoint).
+        observed_activity = [
+            ts for t in all_flat_transfers if (ts := _parse_timestamp(t.timestamp)) is not None
+        ]
+        last_activity_at = checkpoint.last_activity_at
+        if observed_activity:
+            newest_observed = max(observed_activity)
+            if last_activity_at is None or newest_observed > last_activity_at:
+                last_activity_at = newest_observed
+
         await wallet_scan_state.save_checkpoint(
             wallet, scanned_tokens=new_scanned, last_scan_at=now,
             tokens_found_total=total_found, full_coverage_at=full_coverage_at,
+            last_activity_at=last_activity_at,
         )
         card.tokens_scanned_cumulative = len(new_scanned)
         card.full_coverage = full_coverage_at is not None
+        card.last_activity_at = last_activity_at
 
         # Score final basé sur TOUS les trades clôturés jamais archivés pour ce
         # wallet (cumulatif), pas seulement ceux de ce lot -- la note s'affine au
