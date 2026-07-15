@@ -481,6 +481,71 @@ def _avg_holding_period_days(closed_trades: list[ClosedTrade]) -> float | None:
     return fmean(days)
 
 
+def _wallet_age_days(all_flat_transfers: list[TokenTransfer]) -> float | None:
+    """Ancienneté du wallet -- du PREMIER transfert observé (dans la fenêtre
+    récupérée, cf. limites de pagination Blockscout) à MAINTENANT. Un wallet
+    inactif depuis un moment reste "âgé" (l'ancienneté mesure depuis combien de
+    temps il existe/trade, pas depuis combien de temps il est actif)."""
+    timestamps = [ts for t in all_flat_transfers if (ts := _parse_timestamp(t.timestamp)) is not None]
+    if not timestamps:
+        return None
+    return (datetime.now(timezone.utc) - min(timestamps)).total_seconds() / 86_400
+
+
+def _count_total_swaps(all_flat_transfers: list[TokenTransfer], wallet: str) -> int:
+    """Nombre total de transferts touchant le wallet (achat OU vente) dans la
+    fenêtre récupérée -- mesure d'activité brute, distincte du nombre de
+    trades CLÔTURÉS (qui exige un achat ET une vente appariés en FIFO)."""
+    wallet_l = wallet.lower()
+    return sum(
+        1 for t in all_flat_transfers
+        if (t.to_address or "").lower() == wallet_l or (t.from_address or "").lower() == wallet_l
+    )
+
+
+def _robust_pnl_check(closed_trades: list[ClosedTrade], *, trim_count: int, min_required: int) -> bool | None:
+    """Robustesse anti-chance (15/07, décision opérateur) : retire les
+    ``trim_count`` MEILLEURS et les ``trim_count`` PIRES trades (double
+    extrémité) par PnL, puis vérifie si le PnL restant reste positif. Ne
+    s'applique QUE si le wallet a au moins ``min_required`` trades clôturés
+    (sinon le retrait viderait ou déséquilibrerait un échantillon déjà petit)
+    -- ``None`` explicite plutôt qu'un chiffre sur un reste non significatif."""
+    if len(closed_trades) < min_required:
+        return None
+    ordered = sorted(closed_trades, key=lambda t: t.pnl_usd)
+    trimmed = ordered[trim_count:-trim_count] if trim_count > 0 else ordered
+    if not trimmed:
+        return None
+    return sum(t.pnl_usd for t in trimmed) > 0
+
+
+def _health_trend(
+    closed_trades: list[ClosedTrade], *, min_required: int, stable_band_pct: float,
+) -> str | None:
+    """Courbe de santé dans le temps (15/07) : compare le PnL moyen par trade
+    de la seconde moitié CHRONOLOGIQUE (triée par date de vente) à la
+    première -- "amélioration" (nettement meilleure), "dégradation" (nettement
+    pire), ou "stable" (écart sous ``stable_band_pct`` -- pas un bruit
+    présenté comme un signal). ``None`` sous ``min_required`` trades (signal
+    jugé trop bruité sur un petit échantillon, même doctrine que Sortino)."""
+    if len(closed_trades) < min_required:
+        return None
+    ordered = sorted(closed_trades, key=lambda t: t.sell_ts)
+    mid = len(ordered) // 2
+    first_half, second_half = ordered[:mid], ordered[mid:]
+    if not first_half or not second_half:
+        return None
+    first_avg = fmean(t.pnl_usd for t in first_half)
+    second_avg = fmean(t.pnl_usd for t in second_half)
+    reference = max(abs(first_avg), abs(second_avg), 1e-9)
+    delta = (second_avg - first_avg) / reference
+    if delta > stable_band_pct:
+        return "amélioration"
+    if delta < -stable_band_pct:
+        return "dégradation"
+    return "stable"
+
+
 def _group_transfers_by_token(transfers: list[TokenTransfer], *, chain: str = "base") -> dict[str, list[TokenTransfer]]:
     """Clé composite ``"{chain}:{adresse}"`` (#157 multi-chaînes, 14/07) --
     jamais l'adresse seule, pour que deux tokens de même adresse hexadécimale
@@ -910,6 +975,84 @@ async def _log_wallet_score(wallet: str, report_json: str) -> None:
         await db.commit()
 
 
+async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
+    """Dernière fiche connue de chaque AUTRE wallet déjà noté (`wallet_score_log`,
+    couche 4) -- une ligne par wallet, la plus récente. Base de comparaison du
+    classement percentile (15/07) : jamais le wallet contre lui-même."""
+    await _ensure_wallet_scoring_tables()
+    exclude_l = exclude_wallet.lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await (
+            await db.execute(
+                """
+                SELECT report_json FROM wallet_score_log w1
+                WHERE wallet != ? AND scored_at = (
+                    SELECT MAX(scored_at) FROM wallet_score_log w2 WHERE w2.wallet = w1.wallet
+                )
+                """,
+                (exclude_l,),
+            )
+        ).fetchall()
+    parsed: list[dict] = []
+    for (report_json,) in rows:
+        try:
+            parsed.append(json.loads(report_json))
+        except (TypeError, ValueError):
+            continue  # ligne corrompue/format ancien -- ignorée, jamais un crash du classement
+    return parsed
+
+
+def _diversification_ratio(entry: dict) -> float | None:
+    total = entry.get("diversification_total_tokens")
+    profitable = entry.get("diversification_profitable_tokens")
+    if not total:
+        return None
+    return profitable / total
+
+
+async def _apply_comparative_ranking(card: WalletScoreCard) -> None:
+    """Classement comparatif (15/07, décision opérateur) : percentile de CE
+    wallet parmi tous les AUTRES wallets déjà notés, par axe puis composite.
+    Jamais un percentile sur une population vide -- `None` explicite, pas un
+    50% par défaut qui suggérerait une comparaison qui n'a pas eu lieu.
+
+    `composite_percentile` ne moyenne QUE les axes de performance/skill
+    (win rate, Sortino, PnL, diversification) -- la durée de détention est un
+    trait comportemental (conviction vs. rotation), pas un axe "meilleur si
+    plus haut" sans ambiguïté (cf. recherche externe 15/07), donc affichée à
+    part, jamais fondue dans la moyenne composite."""
+    others = await _latest_scored_wallets(card.address)
+    card.compared_against_n_wallets = len(others)
+    if not others:
+        return
+
+    def _percentile(value: float | None, population: list[float]) -> float | None:
+        if value is None or not population:
+            return None
+        below = sum(1 for p in population if p < value)
+        return round(100.0 * below / len(population), 1)
+
+    win_rate_pop = [o["win_rate"] for o in others if o.get("win_rate") is not None]
+    sortino_pop = [o["sortino"] for o in others if o.get("sortino") is not None]
+    pnl_pop = [o["realized_pnl_usd"] for o in others if o.get("realized_pnl_usd") is not None]
+    holding_pop = [o["avg_holding_period_days"] for o in others if o.get("avg_holding_period_days") is not None]
+    diversification_pop = [r for o in others if (r := _diversification_ratio(o)) is not None]
+
+    card.percentile_win_rate = _percentile(card.win_rate, win_rate_pop)
+    card.percentile_sortino = _percentile(card.sortino, sortino_pop)
+    card.percentile_pnl = _percentile(card.realized_pnl_usd, pnl_pop)
+    card.percentile_holding_period = _percentile(card.avg_holding_period_days, holding_pop)
+    card.percentile_diversification = _percentile(_diversification_ratio(asdict(card)), diversification_pop)
+
+    skill_axes = [
+        p for p in (
+            card.percentile_win_rate, card.percentile_sortino, card.percentile_pnl, card.percentile_diversification,
+        )
+        if p is not None
+    ]
+    card.composite_percentile = round(fmean(skill_axes), 1) if skill_axes else None
+
+
 # Plafond du classement TVL dynamique (#157, 14/07, décision opérateur) --
 # aujourd'hui inerte (13 chaînes confirmées au total, toutes < 20), gardé
 # générique si la liste confirmée grandit plus tard.
@@ -1135,6 +1278,28 @@ class WalletScoreCard:
     funding_source: str | None = None
     funding_source_truncated: bool = False
 
+    # Échantillon minimum + robustesse anti-chance + tendance dans le temps
+    # (15/07, décision opérateur). Tous calculés sur `cumulative_trades`
+    # (l'historique complet archivé, pas seulement ce lot) -- s'affinent au
+    # fil des scans successifs, même doctrine que le reste du score cumulatif.
+    wallet_age_days: float | None = None
+    total_swaps: int = 0
+    sample_size_sufficient: bool = False  # âge >= min_wallet_age_days ET swaps >= min_total_swaps
+    robust_pnl_positive: bool | None = None  # None = pas assez de trades pour ce test
+    health_trend: str | None = None  # "amélioration" / "stable" / "dégradation" / None (pas assez de trades)
+
+    # Classement comparatif (15/07) : percentile de CE wallet parmi tous les
+    # wallets déjà notés (wallet_score_log), par axe puis composite. None tant
+    # qu'il n'y a pas d'autres wallets notés pour comparer (jamais un
+    # percentile inventé sur une population vide/unitaire).
+    percentile_win_rate: float | None = None
+    percentile_sortino: float | None = None
+    percentile_pnl: float | None = None
+    percentile_diversification: float | None = None
+    percentile_holding_period: float | None = None
+    composite_percentile: float | None = None
+    compared_against_n_wallets: int = 0
+
     suspect_positive: bool = False
     thesis: str | None = None
 
@@ -1246,6 +1411,35 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         f"(dont {card.informed_entry_count} avec conditions techniques jugées informées)"
     )
     lines.append(f"Suspect positif (multi-axes) : {'oui' if card.suspect_positive else 'non'}")
+    lines.append(
+        f"Échantillon suffisant pour un classement fiable ({WEIGHTS.min_wallet_age_days}j+/"
+        f"{WEIGHTS.min_total_swaps}+ swaps) : {'oui' if card.sample_size_sufficient else 'non'} "
+        f"(âge : {card.wallet_age_days:.0f}j, swaps : {card.total_swaps})"
+        if card.wallet_age_days is not None
+        else "Ancienneté du wallet : indisponible"
+    )
+    lines.append(
+        f"Robustesse anti-chance (retrait des {WEIGHTS.robust_trim_count} meilleurs ET {WEIGHTS.robust_trim_count} "
+        f"pires trades) : PnL restant {'positif' if card.robust_pnl_positive else 'négatif'}"
+        if card.robust_pnl_positive is not None
+        else "Robustesse anti-chance : indisponible (pas assez de trades clôturés)"
+    )
+    lines.append(
+        f"Tendance de santé dans le temps : {card.health_trend}"
+        if card.health_trend is not None
+        else "Tendance de santé dans le temps : indisponible (pas assez de trades clôturés)"
+    )
+    if card.compared_against_n_wallets > 0:
+        lines.append(
+            f"Classement comparatif (vs {card.compared_against_n_wallets} autre(s) wallet(s) suivi(s)) : "
+            f"percentile composite {card.composite_percentile:.0f}e" if card.composite_percentile is not None
+            else f"Classement comparatif : pas assez d'axes communs avec les {card.compared_against_n_wallets} "
+                 "autre(s) wallet(s) suivi(s)"
+        )
+        if card.percentile_holding_period is not None:
+            lines.append(f"Percentile durée de détention (contextuel, hors composite) : {card.percentile_holding_period:.0f}e")
+    else:
+        lines.append("Classement comparatif : indisponible (aucun autre wallet encore suivi pour comparer)")
     return "\n".join(lines)
 
 
@@ -1488,9 +1682,32 @@ async def score_wallets(
             card.diversification_total_tokens = len(by_token)
             card.diversification_profitable_tokens = sum(1 for v in by_token.values() if v > 0)
 
+            card.robust_pnl_positive = _robust_pnl_check(
+                cumulative_trades,
+                trim_count=WEIGHTS.robust_trim_count,
+                min_required=WEIGHTS.robust_trim_min_closed_trades,
+            )
+            card.health_trend = _health_trend(
+                cumulative_trades,
+                min_required=WEIGHTS.health_trend_min_closed_trades,
+                stable_band_pct=WEIGHTS.health_trend_stable_band_pct,
+            )
+
+        # Échantillon minimum (15/07, décision opérateur) : sur `all_flat_transfers`
+        # (l'historique brut, pas seulement les trades clôturés) -- un wallet peut
+        # être "jeune" ou "peu actif" indépendamment d'avoir des trades clôturés.
+        card.wallet_age_days = _wallet_age_days(all_flat_transfers)
+        card.total_swaps = _count_total_swaps(all_flat_transfers, wallet)
+        card.sample_size_sufficient = (
+            card.wallet_age_days is not None and card.wallet_age_days >= WEIGHTS.min_wallet_age_days
+            and card.total_swaps >= WEIGHTS.min_total_swaps
+        )
+
         card.early_entry_recurrence_count = len(multi.early_entry_tokens)
         card.informed_entry_count = len(multi.informed_entry_tokens)
         card.suspect_positive = _suspect_positive_flag(card)
+
+        await _apply_comparative_ranking(card)
 
         cards.append(card)
 

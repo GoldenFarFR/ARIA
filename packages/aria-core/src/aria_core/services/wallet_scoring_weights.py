@@ -104,6 +104,31 @@ class WalletScoringWeights:
     # ajustable comme tout `WEIGHTS.*` via le fichier de surcharge.
     max_hash_priced_legs_per_token: int = 20
 
+    # Échantillon minimum avant de présenter un classement comme fiable (15/07,
+    # décision opérateur explicite) -- même doctrine que le protocole "feu
+    # vert argent réel" appliqué à ARIA elle-même (`docs/protocole-argent-
+    # reel.md`, échantillon minimum avant de faire confiance) : un wallet avec
+    # peu d'historique n'est pas noté "mauvais", juste marqué "échantillon
+    # insuffisant" -- jamais un score présenté avec une fausse confiance.
+    min_wallet_age_days: int = 90
+    min_total_swaps: int = 100
+
+    # Robustesse anti-chance (15/07, décision opérateur) : retire les N
+    # meilleurs ET N pires trades clôturés (double extrémité, pas seulement
+    # les meilleurs) avant de vérifier si le PnL restant reste positif --
+    # n'est calculé que si le wallet a assez de trades pour que le retrait
+    # laisse un reste significatif (sinon indisponible, jamais un chiffre sur
+    # un échantillon vidé).
+    robust_trim_count: int = 10
+    robust_trim_min_closed_trades: int = 30
+
+    # Courbe de santé dans le temps (15/07) : compare la performance (PnL moyen
+    # par trade) de la seconde moitié chronologique des trades clôturés à la
+    # première -- signal "amélioration"/"stable"/"dégradation", jamais calculé
+    # sous ce minimum de trades (bruit statistique sur de petits échantillons).
+    health_trend_min_closed_trades: int = 10
+    health_trend_stable_band_pct: float = 0.15
+
 
 def _load_weights() -> WalletScoringWeights:
     """Charge les poids réels depuis le fichier privé désigné par

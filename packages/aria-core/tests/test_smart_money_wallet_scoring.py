@@ -191,6 +191,79 @@ class TestMaxDrawdown:
         assert sm._max_drawdown_pct(trades) == pytest.approx(0.4)
 
 
+class TestAvgHoldingPeriod:
+    def test_no_trades_unavailable(self):
+        assert sm._avg_holding_period_days([]) is None
+
+    def test_known_average(self):
+        trades = [
+            sm.ClosedTrade(TOKEN_X, _dt(0), _dt(2), 10.0, 1.0, 2.0),  # 2 jours
+            sm.ClosedTrade(TOKEN_X, _dt(0), _dt(10), 10.0, 1.0, 2.0),  # 10 jours
+        ]
+        assert sm._avg_holding_period_days(trades) == pytest.approx(6.0)
+
+
+class TestWalletAgeAndSwapCount:
+    def test_no_transfers_unavailable(self):
+        assert sm._wallet_age_days([]) is None
+
+    def test_age_measured_from_earliest_transfer_to_now(self):
+        old_ts = _dt(-100)
+        old = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=old_ts)
+        recent = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(-1))
+        age = sm._wallet_age_days([recent, old])
+        expected = (datetime.now(timezone.utc) - old_ts).total_seconds() / 86_400
+        assert age == pytest.approx(expected, abs=0.01)
+
+    def test_total_swaps_counts_both_directions(self):
+        buy = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), tx_hash="0xb")
+        sell = _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(1), tx_hash="0xs")
+        unrelated = _transfer(from_addr=FUNDER, to_addr=WALLET_B, token=TOKEN_X, ts=_dt(1), tx_hash="0xu")
+        assert sm._count_total_swaps([buy, sell, unrelated], WALLET_A) == 2
+
+
+class TestRobustPnlCheck:
+    def test_below_minimum_unavailable(self):
+        trades = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 1.0, 2.0) for _ in range(5)]
+        assert sm._robust_pnl_check(trades, trim_count=10, min_required=30) is None
+
+    def test_trims_both_tails_and_stays_positive(self):
+        # 30 trades : 10 très négatifs, 10 neutres/légèrement positifs, 10 très positifs.
+        # Retrait des 10 meilleurs ET 10 pires -> il ne reste que les 10 neutres/positifs.
+        losers = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 10.0, 1.0) for _ in range(10)]  # pnl -9 chacun
+        middle = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 1.0, 1.1) for _ in range(10)]  # pnl +0.1 chacun
+        winners = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 1.0, 100.0) for _ in range(10)]  # pnl +99 chacun
+        result = sm._robust_pnl_check(losers + middle + winners, trim_count=10, min_required=30)
+        assert result is True
+
+    def test_all_losses_remain_negative_after_trim(self):
+        # sell < buy pour chaque trade -> pnl toujours négatif, peu importe la magnitude.
+        trades = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 10.0, 10.0 - i * 0.1) for i in range(1, 41)]
+        result = sm._robust_pnl_check(trades, trim_count=10, min_required=30)
+        assert result is False
+
+
+class TestHealthTrend:
+    def test_below_minimum_unavailable(self):
+        trades = [sm.ClosedTrade(TOKEN_X, _dt(i), _dt(i + 1), 1.0, 1.0, 1.1) for i in range(5)]
+        assert sm._health_trend(trades, min_required=10, stable_band_pct=0.15) is None
+
+    def test_clear_improvement_detected(self):
+        first_half = [sm.ClosedTrade(TOKEN_X, _dt(i), _dt(i + 1), 1.0, 10.0, 9.0) for i in range(5)]  # pnl -1
+        second_half = [sm.ClosedTrade(TOKEN_X, _dt(10 + i), _dt(11 + i), 1.0, 1.0, 11.0) for i in range(5)]  # pnl +10
+        assert sm._health_trend(first_half + second_half, min_required=10, stable_band_pct=0.15) == "amélioration"
+
+    def test_clear_degradation_detected(self):
+        first_half = [sm.ClosedTrade(TOKEN_X, _dt(i), _dt(i + 1), 1.0, 1.0, 11.0) for i in range(5)]  # pnl +10
+        second_half = [sm.ClosedTrade(TOKEN_X, _dt(10 + i), _dt(11 + i), 1.0, 10.0, 9.0) for i in range(5)]  # pnl -1
+        assert sm._health_trend(first_half + second_half, min_required=10, stable_band_pct=0.15) == "dégradation"
+
+    def test_similar_performance_is_stable(self):
+        first_half = [sm.ClosedTrade(TOKEN_X, _dt(i), _dt(i + 1), 1.0, 1.0, 2.0) for i in range(5)]  # pnl +1
+        second_half = [sm.ClosedTrade(TOKEN_X, _dt(10 + i), _dt(11 + i), 1.0, 1.0, 2.05) for i in range(5)]  # pnl +1.05
+        assert sm._health_trend(first_half + second_half, min_required=10, stable_band_pct=0.15) == "stable"
+
+
 # ---------------------------------------------------------------------------
 # Groupement / sélection avec plafond (couche 2, décision opérateur N=20)
 # ---------------------------------------------------------------------------
@@ -1108,6 +1181,91 @@ class TestScoreWalletsEndToEnd:
         # le nom n'apparaît dans AUCUN champ de score -- juste display_name
         assert "named.base.eth" not in str(card.win_rate)
         assert card.suspect_positive == sm._suspect_positive_flag(card)  # calcul indépendant du nom
+
+
+class TestComparativeRanking:
+    """15/07, décision opérateur : classement percentile parmi les AUTRES
+    wallets déjà notés (`wallet_score_log`), jamais un pourcentage inventé sur
+    une population vide/unitaire."""
+
+    @staticmethod
+    def _mk_transfers(wallet: str) -> TokenTransfersResult:
+        return TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=wallet, token=TOKEN_X, ts=_dt(0), amount=10.0),
+                _transfer(from_addr=wallet, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0),
+            ],
+            available=True,
+        )
+
+    @staticmethod
+    def _candles(sell_price: float) -> list:
+        return [
+            Candle(ts=int(_dt(-2).timestamp()), open=1.0, high=1.0, low=1.0, close=1.0, volume=1000.0),
+            Candle(ts=int(_dt(0).timestamp()), open=1.0, high=1.0, low=1.0, close=1.0, volume=1000.0),
+            Candle(ts=int(_dt(2).timestamp()), open=sell_price, high=sell_price, low=sell_price, close=sell_price, volume=1000.0),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_first_wallet_ever_scored_has_no_comparison_population(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        client = FakeBlockscoutClient(transfers={WALLET_A: self._mk_transfers(WALLET_A)})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(candles=self._candles(2.0), available=True)},
+        )
+        report = await sm.score_wallets([WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus())
+        card = report.wallets[0]
+        assert card.compared_against_n_wallets == 0
+        assert card.composite_percentile is None
+        assert card.percentile_win_rate is None
+        assert card.percentile_pnl is None
+
+    @pytest.mark.asyncio
+    async def test_winning_wallet_ranks_above_a_previously_scored_loser(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        loser_client = FakeBlockscoutClient(transfers={WALLET_A: self._mk_transfers(WALLET_A)})
+        loser_gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(candles=self._candles(0.5), available=True)},  # buy 1.0 -> sell 0.5 : perte
+        )
+        await sm.score_wallets([WALLET_A], client=loser_client, gecko=loser_gecko, llm=_fake_llm, goplus=_clean_goplus())
+
+        winner_client = FakeBlockscoutClient(transfers={WALLET_B: self._mk_transfers(WALLET_B)})
+        winner_gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(candles=self._candles(2.0), available=True)},  # buy 1.0 -> sell 2.0 : gain
+        )
+        report_b = await sm.score_wallets(
+            [WALLET_B], client=winner_client, gecko=winner_gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+        card_b = report_b.wallets[0]
+
+        assert card_b.compared_against_n_wallets == 1
+        assert card_b.percentile_win_rate == pytest.approx(100.0)
+        assert card_b.percentile_pnl == pytest.approx(100.0)
+        assert card_b.percentile_diversification == pytest.approx(100.0)
+        # Sortino indisponible des deux côtés (1 seul trade clôturé chacun,
+        # sous min_closed_trades_for_sortino) -- exclu du composite, pas un 0 inventé.
+        assert card_b.percentile_sortino is None
+        assert card_b.composite_percentile == pytest.approx(100.0)
+
+    @pytest.mark.asyncio
+    async def test_wallet_never_compared_against_its_own_previous_score(self, tmp_path, monkeypatch):
+        """Re-scorer LE MÊME wallet ne doit jamais le comparer à sa propre
+        entrée précédente dans wallet_score_log (auto-comparaison exclue)."""
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        client = FakeBlockscoutClient(transfers={WALLET_A: self._mk_transfers(WALLET_A)})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(candles=self._candles(2.0), available=True)},
+        )
+        await sm.score_wallets([WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus())
+        report_again = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+        assert report_again.wallets[0].compared_against_n_wallets == 0
 
 
 class TestCmcPricingRecovery:
