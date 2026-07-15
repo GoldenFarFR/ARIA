@@ -1396,6 +1396,51 @@ class TestComparativeRanking:
         )
         assert report_again.wallets[0].compared_against_n_wallets == 0
 
+    @pytest.mark.asyncio
+    async def test_partially_covered_wallet_excluded_from_comparison_population(self, tmp_path, monkeypatch):
+        # 15/07, revue Gemini -- pollution asymétrique du percentile : un
+        # wallet scanné une seule fois (full_coverage=False, seuls quelques
+        # tokens prioritaires analysés) ne doit jamais servir de référence
+        # dans le classement comparatif d'un AUTRE wallet -- son score est
+        # temporairement biaisé, pas une mesure fiable de sa performance
+        # globale.
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        # WALLET_A a 2 tokens mais un plafond d'analyse de 1 -> full_coverage=False.
+        partial_transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0),
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_Y, ts=_dt(0), amount=10.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_Y, ts=_dt(2), amount=10.0),
+            ],
+            available=True,
+        )
+        partial_client = FakeBlockscoutClient(transfers={WALLET_A: partial_transfers})
+        partial_gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X, TOKEN_Y: POOL_Y},
+            pool_created_at={TOKEN_X: _dt(-1), TOKEN_Y: _dt(-1)},
+            ohlcv={
+                POOL_X: OHLCVResult(candles=self._candles(2.0), available=True),
+                POOL_Y: OHLCVResult(candles=self._candles(2.0), available=True),
+            },
+        )
+        partial_report = await sm.score_wallets(
+            [WALLET_A], client=partial_client, gecko=partial_gecko, llm=_fake_llm, goplus=_clean_goplus(), max_tokens=1,
+        )
+        assert partial_report.wallets[0].full_coverage is False  # confirme la prémisse du test
+
+        winner_client = FakeBlockscoutClient(transfers={WALLET_B: self._mk_transfers(WALLET_B)})
+        winner_gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(candles=self._candles(2.0), available=True)},
+        )
+        report_b = await sm.score_wallets(
+            [WALLET_B], client=winner_client, gecko=winner_gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+        # WALLET_A (partiel) exclu -- aucune population de comparaison valide.
+        assert report_b.wallets[0].compared_against_n_wallets == 0
+
 
 class TestCmcPricingRecovery:
     """#157, 14/07 : CoinMarketCap comme 3e couche de PRICING (pas un 3e
@@ -1737,8 +1782,12 @@ class TestLiquidityFloorForPricing:
 
         card = report.wallets[0]
         assert card.available is True
+        # L'achat reste bloqué (pool confirmé trop peu liquide) -- sans achat
+        # valorisé, le trade ne peut pas se clôturer (FIFO exige les deux
+        # bords), même si la vente elle-même serait valorisable (15/07,
+        # plancher désormais asymétrique -- cf. TestRugPullAsymmetricFloor).
         assert card.closed_trades_count == 0
-        assert card.unpriced_legs == 2  # achat + vente, jamais valorisés sur ce pool trop peu liquide
+        assert card.unpriced_legs == 1  # un seul échec d'appariement (achat bloqué), pas 2 jambes comptées en vrac
         assert card.thin_liquidity_pricing_skipped_count == 1
         assert card.pool_lookup_errors == 0  # le pool EST résolu -- ce n'est pas un échec de résolution
 
@@ -1770,6 +1819,95 @@ class TestLiquidityFloorForPricing:
         card = report.wallets[0]
         assert card.closed_trades_count == 1
         assert card.thin_liquidity_pricing_skipped_count == 0
+
+
+class TestRugPullAsymmetricFloor:
+    """15/07, revue Gemini -- bug réel confirmé dans le correctif #160 (pas
+    une simple limite résiduelle) : le plancher de liquidité, pensé pour
+    bloquer le dust à l'ACHAT, bloquait aussi la valorisation d'une VENTE --
+    un rug pull (pool effondré au moment du scan) faisait donc disparaître la
+    perte réelle des statistiques au lieu de la comptabiliser. Corrigé : le
+    plancher ne gate désormais que les jambes d'achat, jamais les ventes."""
+
+    @pytest.mark.asyncio
+    async def test_confirmed_entry_then_rug_pull_exit_captures_real_loss(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        # Achat confirmé par prix d'exécution exact (100$/token) -- établi
+        # indépendamment de la liquidité ACTUELLE du pool, donc jamais bloqué
+        # par le plancher (le hash-pricing est vérifié avant tout gate de
+        # liquidité).
+        buy_leg = _transfer(from_addr=POOL_X, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=100.0, tx_hash="0xbuy")
+        stable_leg = _transfer(from_addr=WALLET_A, to_addr=POOL_X, token=_STABLE, ts=_dt(0), amount=10_000.0, tx_hash="0xbuy")
+        # Sortie après rug pull -- aucun hash mocké, retombe sur l'OHLCV du
+        # pool, dont la liquidité CONFIRMÉE au moment du scan est très sous le
+        # plancher (rug pull déjà survenu).
+        sell_leg = _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(1), amount=100.0, tx_hash="0xsell")
+
+        transfers = TokenTransfersResult(transfers=[buy_leg, sell_leg], available=True)
+        client = FakeBlockscoutClient(
+            transfers={WALLET_A: transfers},
+            tx_token_transfers={"0xbuy": TokenTransfersResult(transfers=[buy_leg, stable_leg], available=True)},
+        )
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: _flat_ohlcv(1.0, start=_dt(-2))},  # prix crashé post-rug
+            reserve_usd_for_token={TOKEN_X: 500.0},  # rug pull confirmé -- très sous le plancher
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        # La perte réelle du rug pull EST capturée -- pas d'immunité.
+        assert card.closed_trades_count == 1
+        assert card.realized_pnl_usd == pytest.approx(100.0 * (1.0 - 100.0))  # -9900$, perte réelle
+
+    @pytest.mark.asyncio
+    async def test_cmc_recovered_price_never_blocked_by_thin_liquidity_gate(self, tmp_path, monkeypatch):
+        # Régression du bug trouvé en construisant le correctif ci-dessus :
+        # quand GeckoTerminal ne résout AUCUN pool (pas "confirmé trop peu
+        # liquide", juste absent) mais CMC recouvre un prix valide, l'achat ne
+        # doit JAMAIS être bloqué -- `pool_meta.available=False` ne doit pas
+        # se confondre avec "pool résolu mais trop peu liquide".
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        async def _fake_has_any_pair(contract, *, chain="base"):
+            return False
+
+        monkeypatch.setattr("aria_core.services.dexscreener.has_any_pair", _fake_has_any_pair)
+
+        from aria_core.services.coinmarketcap import OHLCVResult as CmcOHLCVResult
+        from aria_core.services.coinmarketcap import PoolMetadata as CmcPoolMetadata
+
+        async def _cmc_resolve(addr, *, network_slug="base"):
+            return CmcPoolMetadata(pool_address=POOL_X, available=True)
+
+        async def _cmc_ohlcv(pool_addr, *, network_slug="base"):
+            return CmcOHLCVResult(candles=_flat_ohlcv(2.0, start=_dt(-2)).candles, available=True)
+
+        monkeypatch.setattr("aria_core.services.coinmarketcap.resolve_primary_pool", _cmc_resolve)
+        monkeypatch.setattr("aria_core.services.coinmarketcap.get_ohlcv", _cmc_ohlcv)
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(1), amount=10.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()  # aucun pool_for_token -- GeckoTerminal ne résout rien
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.cmc_price_recovery_count == 1
+        assert card.closed_trades_count == 1  # achat NON bloqué malgré pool_meta.available=False
 
 
 class TestPriceConfirmationRatio:
