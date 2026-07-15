@@ -1,0 +1,45 @@
+# Traits de psychologie/discipline comportementale, vérifiés par études comparatives ou
+# méta-analyses (jamais des portraits de traders célèbres — biais du survivant écarté par
+# construction, cf. docs/aria-learning-inbox/2026-07-12-psychologie-trading-recherche-verifiee.md).
+# Chaque entrée documente : la preuve sourcée, si ARIA le prend déjà en compte, et où/comment
+# combler l'écart si non. Proposé via issue GitHub aria-knowledge-proposal #28, vérifié contre
+# le code réel avant intégration (pas une confiance aveugle dans la proposition).
+
+disposition_effect:
+  description: >
+    Les investisseurs réalisent 10% plus d'opportunités de vente de gagnants que de perdants
+    (biais optimal inverse), causant des rendements inférieurs de 4,4% par an. Étude comparative
+    réelle sur 10 000 foyers (comptes de courtage, 1987-1993), répliquée dans plusieurs pays
+    (Chine, Finlande, Israël, Afrique du Sud, Taïwan, Tunisie) — pas un artefact culturel isolé.
+  sources:
+    - "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4746969"
+    - "https://www.sciencedirect.com/science/article/pii/S0378426623000821"
+  statut_aria: >
+    Partiel. paper_trader.py::TRAIL_STOP_PCT applique une contre-mesure mécanique (stop suiveur
+    qui ne se relâche jamais), mais UNIQUEMENT dans la boucle de simulation autonome — aucune
+    exécution réelle. Gap réel identifié : vc_analysis.py (l'analyse /vc lue par un humain qui
+    décide lui-même) n'inclut aujourd'hui aucune formulation qui nomme explicitement ce biais
+    quand l'analyse porte sur une position déjà en perte.
+  contre_mesure_proposee: >
+    Ajout au prompt de raisonnement (vc_analysis.py::_SYSTEM_PROMPT) — règle de style qui demande
+    de nommer explicitement le risque de disposition effect sur une position en perte. Pas encore
+    implémenté (hors scope de cette proposition de connaissance, qui documente le fait — le
+    changement de prompt reste une décision de code séparée, à part).
+
+outcome_bias:
+  description: >
+    Des décisions identiques sont notées plus favorablement quand elles ont eu un résultat
+    positif que négatif, alors que la décision elle-même est identique — expérience contrôlée
+    (Baron & Hershey, 1988), robustesse confirmée par réplication récente (le biais persiste même
+    chez des participants qui déclarent explicitement que le résultat ne devrait pas compter).
+  sources:
+    - "https://www.researchgate.net/publication/19789598_Outcome_Bias_in_Decision_Evaluation"
+    - "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12372742/"
+  statut_aria: >
+    Déjà couvert, vérifié dans le code (pas une supposition) : skills/vc_judge.py::judge_analysis
+    audite l'analyse VC contre les FAITS on-chain bruts disponibles au moment de la décision
+    (_SYSTEM_PROMPT_JUGE : "FAITS on-chain bruts qui étaient sa seule source autorisée"), jamais
+    contre un résultat de marché ultérieur. investment_memory.py sépare structurellement la thèse
+    (status='open', au moment T) du résultat (status='closed', transition atomique via
+    close_thesis) — le système juge déjà le raisonnement, pas le P&L final. Confirmation d'un
+    choix de conception existant, pas un gap à combler.
