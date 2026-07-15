@@ -1571,6 +1571,26 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   montant, médiane sur N premiers trades, ou plafond de multiple
   suspect). Coût total de la vérification : 10,269 crédits/2500 (0,4%).
   Détail complet : `docs/dune-integration-plan.md` §8.
+- **15/07 (nuit, suite) — VPS Research : chemin GRATUIT trouvé pour le
+  clustering Sybil au-delà du pairwise (la plus grosse limite documentée
+  de `smart_money.py`).** Repère académique (Victor, FC2020, "Address
+  Clustering Heuristics for Ethereum") : heuristique de dépôt/airdrop/
+  autorisation spécifique au modèle de compte Ethereum (Bitcoin's multi-
+  input ne s'applique pas) -- l'heuristique de dépôt seule clusterise
+  17,9% des EOA actives, chiffre publié. Outil open-source vérifié réel
+  (API GitHub, pas juste la doc) : `TrustaLabs/Airdrop-Sybil-
+  Identification` (Python actif, GPL-3.0) -- Louvain+K-Core (`networkx`,
+  BSD) puis K-means (`scikit-learn`, BSD) réimplémentable SANS dépendre
+  du code GPL. Méthodologie Arbitrum Foundation (doc seule, 271★) valide
+  le même principe funder/sweep à l'échelle d'un vrai airdrop
+  multi-milliardaire. Papier ML 2025 (LightGBM) plus précis mais hors de
+  portée immédiate (code non confirmé). **Recommandation** : construire
+  le graphe funder/sweep sur l'historique déjà collecté par ARIA
+  (Blockscout), Louvain pour isoler les communautés, K-means pour le
+  raffinement -- gratuit, Arkham/Webacy restent des options payantes de
+  secours, pas un point de départ obligé. Rien codé ce soir (diligence
+  seulement). Détail complet :
+  `docs/aria-learning-inbox/2026-07-15-radar-sybil-clustering-entite-gratuit.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
