@@ -140,31 +140,3 @@ async def _github_sync_loop() -> None:
             await flush_pending_github_sync()
         except Exception as exc:
             logger.warning("Truth ledger scheduled flush failed: %s", exc)
-
-
-async def sync_entry_to_github(rel_path: str, entry_id: str) -> bool:
-    """Legacy single-file sync — prefer batched flush_pending_github_sync."""
-    if not github_configured():
-        return False
-    local = truth_ledger_dir() / rel_path
-    if not local.exists():
-        return False
-
-    owner = settings.github_owner
-    repo = settings.github_sandbox_repo
-    if not repo_write_allowed(owner, repo):
-        return False
-
-    gh_path = f"{GITHUB_LEDGER_PREFIX}/{rel_path}"
-    content = local.read_text(encoding="utf-8")
-    client = GitHubClient(settings.github_token)
-    _, sha = await client.get_file_text(owner, repo, gh_path)
-    await client.put_file(
-        owner,
-        repo,
-        gh_path,
-        content,
-        f"ARIA truth-ledger: {entry_id[:8]}",
-        sha=sha,
-    )
-    return True

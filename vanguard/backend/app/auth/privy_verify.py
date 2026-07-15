@@ -127,11 +127,5 @@ def extract_member_from_identity(token: str) -> tuple[str, str]:
     )
 
 
-def extract_twitter_from_identity(token: str) -> tuple[str, str | None]:
-    """Return (privy_did, twitter_username) — legacy alias."""
-    privy_did, handle = extract_member_from_identity(token)
-    return privy_did, handle
-
-
 def privy_configured() -> bool:
     return bool((settings.privy_app_id or "").strip())
