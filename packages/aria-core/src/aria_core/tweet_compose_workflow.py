@@ -73,11 +73,6 @@ def _save(state: dict[str, Any]) -> None:
     WORKFLOW_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def workflow_active() -> bool:
-    phase = _load().get("phase", TweetComposePhase.IDLE.value)
-    return phase not in (TweetComposePhase.IDLE.value, TweetComposePhase.SCHEDULED.value)
-
-
 def reset_workflow() -> str:
     _save({"phase": TweetComposePhase.IDLE.value, "draft": "", "history": []})
     return "Workflow tweet annulé."

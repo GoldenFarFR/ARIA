@@ -3,6 +3,7 @@ from aria_core.grounding import (
     FAQ_DIRECT_SCORE,
     analysis_methodology_reply,
     anti_hallucination_rules,
+    build_verified_facts_block,
     faq_direct_answer,
     format_greeting_reply,
     grounded_for_audience,
@@ -154,3 +155,17 @@ def test_pure_casual_smalltalk_detects_daily_life():
     assert is_pure_casual_smalltalk("Ça va ? Ta journée ?")
     assert not is_pure_casual_smalltalk("Qu'est-ce que le site Vanguard ?")
     assert not is_pure_casual_smalltalk("On en est où sur le revenue goal ?")
+
+
+async def test_build_verified_facts_block_includes_self_maintenance_when_not_public():
+    """Balayage code mort du 15/07 : self_maintenance_context_for_brain() (self_maintenance.py)
+    était écrite mais jamais injectée dans le contexte LLM -- filet pour les ordres opérateur
+    (profil X/bannière/avatar) qui échappent au classifieur regex strict de handle_operator_self_message.
+    Même point d'insertion que les directives opérateur, admin-only comme elles."""
+    block = await build_verified_facts_block("test query", public=False, lang="fr")
+    assert "Operator self-directive" in block
+
+
+async def test_build_verified_facts_block_omits_self_maintenance_when_public():
+    block = await build_verified_facts_block("test query", public=True, lang="fr")
+    assert "Operator self-directive" not in block

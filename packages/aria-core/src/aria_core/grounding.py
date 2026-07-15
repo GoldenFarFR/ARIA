@@ -265,6 +265,20 @@ async def build_verified_facts_block(
         except Exception:
             pass
 
+        try:
+            from aria_core.self_maintenance import self_maintenance_context_for_brain
+
+            # Filet pour les ordres opérateur (profil X/bannière/avatar) qui échappent au
+            # classifieur regex strict (handle_operator_self_message, brain.py) -- sans ce
+            # bloc, un message dans une formulation non couverte par ce classifieur retombe
+            # sur la réponse LLM générale, avec le même risque de re-routage ACTU que ce bloc
+            # est censé prévenir (cf. self_maintenance.py). Trouvé écrit mais jamais injecté
+            # ici (balayage code mort du 15/07) -- même point d'insertion que "directives"
+            # juste au-dessus, admin-only comme lui.
+            parts.append(f"\n{self_maintenance_context_for_brain()}")
+        except Exception:
+            pass
+
     return "\n".join(parts)[:6000]
 
 
