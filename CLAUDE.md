@@ -1209,6 +1209,45 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   fermé pour cette session** — plus de 22 correctifs réels au total (#158 à #177) sur ce
   chantier, documentation honnête et à jour des limites structurelles qui restent de
   vrais chantiers séparés si jamais repris.
+- **15/07 (nuit, suite) — demande opérateur de réduire la formule à une équation, ce qui a
+  fait resurgir 2 vrais bugs de plus (`0b049ad`) : le marathon n'était donc pas vraiment
+  fini, réduire à une équation a servi d'audit.** En écrivant l'équation à 4 niveaux
+  (par trade FIFO → axes wallet → percentile de rang → composite = moyenne des
+  percentiles disponibles) puis en la faisant relire, deux vrais trous sont apparus,
+  invisibles tant que la formule restait en prose :
+  1. **`_percentile` ne créditait pas les ex-æquo** : un wallet dont la valeur était
+     EXACTEMENT égale à celle de la majorité de la population (ex. plusieurs wallets à
+     win_rate=0,5 pile) tombait à tort au 0e percentile — indiscernable d'un wallet
+     réellement pire que tout le monde. Corrigé sur la convention statistique standard
+     du rang moyen (`(en-dessous + 0,5×ex-æquo) / population`, cf. `scipy.stats.
+     percentileofscore(kind='mean')`).
+  2. **`sortino_pnl_contradiction`** : Sortino se calcule sur le RENDEMENT EN % par
+     trade, jamais pondéré par le capital engagé — un wallet peut afficher un Sortino
+     positif "honorable" alors que son PnL réel en DOLLARS est négatif. Démonstration
+     chiffrée verrouillée par test : 4 micro-trades à +100% sur 1$ chacun (+4$) + 1
+     trade majeur à -50% sur 1000$ (-500$) → PnL réel -496$ (perte nette), mais Sortino
+     = +1,4 (positif). Nouveau drapeau qui détecte et affiche cette contradiction de
+     SIGNE en ATTENTION à côté du Sortino — ne corrige PAS le biais sous-jacent
+     (redéfinir Sortino en version pondérée par capital serait une refonte
+     méthodologique plus profonde, non entreprise ce soir), rend juste sa manifestation
+     la plus trompeuse impossible à manquer.
+  **Documenté (pas corrigé)** : l'axe "diversification" est en réalité un TAUX DE
+  RÉUSSITE PAR TOKEN (`tokens profitables / tokens total`), pas une mesure de largeur
+  de portefeuille type Herfindahl/entropie — un wallet qui trade UN SEUL token
+  profitable obtient le score parfait (1,0), littéralement à l'opposé de ce que le nom
+  suggère. `_suspect_positive_flag` a déjà un garde-fou contre ce gaming précis (exige
+  un nombre minimum de tokens avant de compter cet axe comme suspect), mais UNIQUEMENT
+  pour ce drapeau séparé, jamais pour le percentile/composite lui-même. Frais de gas
+  jamais déduits du PnL (vérifié par recherche dans le code, confirmé réel — aucune
+  donnée de gas même récupérée dans ce module) : un wallet qui accumule des micro-trades
+  gagnants en % pourrait être gas-négatif en réalité sans que ça se voie jamais.
+  **Réfuté après vérification** : l'affirmation qu'un PnL brut "linéaire" ferait
+  s'écraser le percentile de tous les autres wallets vers 0 dès qu'un seul wallet a un
+  PnL démesuré — faux contre le code, `_percentile` est un percentile de RANG (compte
+  les autres wallets strictement en dessous), jamais une normalisation par magnitude ;
+  un outlier ne change rien au percentile des autres, cette classe de distorsion ne
+  s'appliquerait qu'à une moyenne/normalisation par la valeur brute. 5 nouveaux tests,
+  suite complète verte (4930/4930).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
