@@ -1623,6 +1623,27 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   welcome_site_access, workflow_active, suppressed_journal_preview) et
   tout le Tier 3 banqués pour un futur balayage dédié. Suite complète
   vérifiée verte (5003 passed avant les deux merges ci-dessus).
+- **15/07 (nuit, suite) — VPS Research : GraphSense vérifié négatif (code
+  lu, pas supposition) -- pivot vers `labels.*`/`cex.addresses`/
+  `addresses.stats` de Dune pour le clustering Sybil.** Lecture directe du
+  code source `graphsense-spark` (pas la doc marketing) : grep
+  `cluster|deposit|entity` sur les 6 fichiers du module Ethereum
+  (`account/eth/*.scala`) -- zéro résultat. Le clustering réel
+  (co-spend/multi-input) n'existe que côté `utxo.*`, spécifique Bitcoin --
+  GraphSense n'implémente PAS les heuristiques Victor (FC2020) pour le
+  modèle de compte. Piste fermée avec preuve. **Pivot testé en direct** :
+  `addresses.stats.first_funded_by` (heuristique de financement partagé
+  déjà calculée, confirmée sur une adresse Base réelle -- réserve trouvée :
+  `is_smart_contract` se trompe sur les predeploys Base) ; `cex.addresses`
+  (labels d'exchange réels sur Base : Binance/XT.com/Bithumb/Korbit/
+  CoinDCX -- signal qu'ARIA n'a aujourd'hui aucunement, `smart_money.py`
+  ne connaît que des adresses DEX manuelles) ; `labels.owner_addresses`
+  (schéma riche `custody_owner`/`algorithm_name`, piste non creusée plus
+  loin). Coût total ~1,2 crédit/2500. **Recommandation actualisée** :
+  démarrer le chantier Sybil par une requête Dune sur ces tables plutôt
+  que par une ré-implémentation Louvain/K-means from scratch -- le signal
+  brut est déjà là, gratuit. Détail complet :
+  `docs/aria-learning-inbox/2026-07-15-graphsense-verifie-negatif-dune-labels-pivot.md`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
