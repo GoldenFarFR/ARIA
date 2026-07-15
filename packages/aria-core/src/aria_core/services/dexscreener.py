@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 import httpx
 
@@ -177,3 +178,83 @@ async def has_any_pair(contract: str, *, chain: str = "base") -> bool | None:
     if not isinstance(data, list):
         return None
     return len(data) > 0
+
+
+async def search_pairs(query: str) -> list[PairSnapshot]:
+    """Recherche libre DexScreener (``/latest/dex/search``, #194, 15/07) -- couvre
+    TOUTES les chaînes indexées (pas un endpoint par chaîne), source de sourcing
+    multi-chaînes vérifiée en direct (curl, HTTP 200) avant construction. Même
+    forme de paire que ``token-pairs/v1`` (``_parse_pair`` réutilisé tel quel).
+    Liste vide si aucun résultat OU si l'appel échoue -- jamais une exception."""
+    url = f"{BASE_URL}/latest/dex/search?q={quote(query)}"
+    data, error = await _get_json(url)
+    if error is not None:
+        logger.warning("dexscreener: search '%s' -> %s", query[:30], error)
+        return []
+    if not isinstance(data, dict):
+        return []
+    pairs = data.get("pairs")
+    if not isinstance(pairs, list):
+        return []
+    return [_parse_pair(row) for row in pairs if isinstance(row, dict)]
+
+
+@dataclass
+class TokenListing:
+    """Entrée « boost » ou « profil » DexScreener (#194) -- métadonnées de
+    découverte SANS donnée de prix/liquidité (contrairement à ``PairSnapshot``) :
+    juste de quoi identifier un contrat + chaîne à passer ensuite au vrai pipeline
+    de décision (honeypot + TA + R/R), jamais utilisé seul comme signal d'achat."""
+
+    chain_id: str = ""
+    token_address: str = ""
+    description: str = ""
+    links: list[dict] = field(default_factory=list)
+
+
+def _parse_listing(raw: dict) -> TokenListing:
+    links: list[dict] = []
+    for link in raw.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        url = str(link.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        kind = str(link.get("type") or "").strip().lower()
+        label = str(link.get("label") or "") or _SOCIAL_LABELS.get(kind, kind.capitalize() or "Lien")
+        links.append({"label": label, "url": url})
+    return TokenListing(
+        chain_id=str(raw.get("chainId") or ""),
+        token_address=str(raw.get("tokenAddress") or ""),
+        description=str(raw.get("description") or ""),
+        links=links,
+    )
+
+
+async def _fetch_listings(path: str) -> list[TokenListing]:
+    data, error = await _get_json(f"{BASE_URL}{path}")
+    if error is not None:
+        logger.warning("dexscreener: %s -> %s", path, error)
+        return []
+    if not isinstance(data, list):
+        return []
+    return [_parse_listing(row) for row in data if isinstance(row, dict)]
+
+
+async def token_boosts_top() -> list[TokenListing]:
+    """Tokens actuellement les plus « boostés » (promotion payante DexScreener,
+    #194) -- signal « quelqu'un investit pour la visibilité de CE token
+    maintenant », jamais un signal d'achat à lui seul (bonus de sourcing)."""
+    return await _fetch_listings("/token-boosts/top/v1")
+
+
+async def token_boosts_latest() -> list[TokenListing]:
+    """Boosts les plus RÉCENTS (#194) -- favorise la fraîcheur (« signaux qui
+    commencent à se former ») plutôt qu'un classement déjà bien avancé."""
+    return await _fetch_listings("/token-boosts/latest/v1")
+
+
+async def token_profiles_latest() -> list[TokenListing]:
+    """Profils projet les plus récemment créés/mis à jour (#194) -- sourcing
+    de tokens frais avec metadata renseignée, indépendant des boosts payants."""
+    return await _fetch_listings("/token-profiles/latest/v1")

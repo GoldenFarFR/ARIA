@@ -4,7 +4,14 @@ wallet-scoring). Aucun appel réseau réel, tout est mocké."""
 
 import pytest
 
-from aria_core.services.dexscreener import fetch_token_pairs, has_any_pair
+from aria_core.services.dexscreener import (
+    fetch_token_pairs,
+    has_any_pair,
+    search_pairs,
+    token_boosts_latest,
+    token_boosts_top,
+    token_profiles_latest,
+)
 
 
 class FakeResponse:
@@ -153,3 +160,131 @@ async def test_429_retries_then_succeeds(monkeypatch):
     result = await has_any_pair("0xtoken", chain="base")
 
     assert result is True
+
+
+# ── Nouveaux endpoints multi-chaînes (#194, sourcing momentum) ──────────────────────
+
+@pytest.mark.asyncio
+async def test_search_pairs_parses_real_shape(monkeypatch):
+    url = "https://api.dexscreener.com/latest/dex/search?q=PAMPU"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "schemaVersion": "1.0.0",
+                    "pairs": [
+                        {
+                            "chainId": "base",
+                            "pairAddress": "0xpool",
+                            "dexId": "uniswap",
+                            "liquidity": {"usd": 168632.44},
+                            "volume": {"h24": 758493.78},
+                            "priceUsd": "0.001741",
+                            "priceChange": {"h24": 71.54},
+                            "txns": {"h24": {"buys": 2617, "sells": 1339}},
+                            "pairCreatedAt": 1783663821000,
+                            "baseToken": {"symbol": "PAMPU"},
+                            "quoteToken": {"symbol": "ETH"},
+                        }
+                    ],
+                },
+            )
+        },
+    )
+
+    pairs = await search_pairs("PAMPU")
+
+    assert len(pairs) == 1
+    assert pairs[0].base_symbol == "PAMPU"
+    assert pairs[0].liquidity_usd == 168632.44
+
+
+@pytest.mark.asyncio
+async def test_search_pairs_empty_on_no_results(monkeypatch):
+    url = "https://api.dexscreener.com/latest/dex/search?q=zzz"
+    _patch_client(monkeypatch, {url: FakeResponse(200, {"schemaVersion": "1.0.0", "pairs": []})})
+
+    assert await search_pairs("zzz") == []
+
+
+@pytest.mark.asyncio
+async def test_search_pairs_degrades_softly_on_error(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    url = "https://api.dexscreener.com/latest/dex/search?q=zzz"
+    _patch_client(monkeypatch, {url: [FakeResponse(429), FakeResponse(429), FakeResponse(429)]})
+
+    assert await search_pairs("zzz") == []
+
+
+@pytest.mark.asyncio
+async def test_token_boosts_top_parses_real_shape(monkeypatch):
+    url = "https://api.dexscreener.com/token-boosts/top/v1"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                [
+                    {
+                        "chainId": "solana",
+                        "tokenAddress": "4LjLUvg56sBrzstX6Cw9YYr3k31PdZGQg5u2mCM4pump",
+                        "description": "THE BULLDOG WILL RULE THE SOLANA CHAIN",
+                        "links": [
+                            {"url": "https://the-bulldog.vercel.app/"},
+                            {"type": "telegram", "url": "https://t.me/THEBULLDOGSOL"},
+                        ],
+                        "totalAmount": 500,
+                    }
+                ],
+            )
+        },
+    )
+
+    listings = await token_boosts_top()
+
+    assert len(listings) == 1
+    assert listings[0].chain_id == "solana"
+    assert listings[0].token_address == "4LjLUvg56sBrzstX6Cw9YYr3k31PdZGQg5u2mCM4pump"
+    assert len(listings[0].links) == 2
+    assert listings[0].links[1]["label"] == "Telegram"
+
+
+@pytest.mark.asyncio
+async def test_token_boosts_latest_empty_on_error(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    url = "https://api.dexscreener.com/token-boosts/latest/v1"
+    _patch_client(monkeypatch, {url: [FakeResponse(429), FakeResponse(429), FakeResponse(429)]})
+
+    assert await token_boosts_latest() == []
+
+
+@pytest.mark.asyncio
+async def test_token_profiles_latest_filters_invalid_link_schemes(monkeypatch):
+    url = "https://api.dexscreener.com/token-profiles/latest/v1"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                [
+                    {
+                        "chainId": "solana",
+                        "tokenAddress": "5u46U15jtwfLSXVxum23gM1jgw7DUBivphQmFnXDpump",
+                        "description": "desc",
+                        "links": [
+                            {"type": "twitter", "url": "https://x.com/handle"},
+                            {"type": "sketchy", "url": "javascript:alert(1)"},
+                        ],
+                    }
+                ],
+            )
+        },
+    )
+
+    listings = await token_profiles_latest()
+
+    assert len(listings) == 1
+    assert len(listings[0].links) == 1  # le lien javascript: est exclu
+    assert listings[0].links[0]["url"] == "https://x.com/handle"
