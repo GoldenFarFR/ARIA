@@ -139,6 +139,36 @@ session VPS pourra exécuter le vrai test (`execute-sql` sur `dex.trades`
 filtré `blockchain = 'base'`, sur une adresse de token Base connue) et
 rapporter un résultat réel plutôt qu'une supposition.
 
+### 7bis. RÉSOLU le 15/07 (passage suivant) — test live exécuté avec succès
+
+La clé a été corrigée entre-temps (les outils `mcp__dune__*` sont apparus
+disponibles en cours de session). Test réel exécuté sur WETH Base
+(`0x4200000000000000000000000000000000000006`), les trois tables
+confirmées **vivantes et fiables** :
+
+- **`dex.trades`** — 10 trades Base réels des dernières minutes
+  (`block_time` jusqu'à 19:22:05 UTC, requête lancée ~19:2x UTC), projets
+  `uniswap` et `0x API` mélangés, paires WETH/USDC, WETH/ZORA, WETH/VIRTUAL,
+  WETH/BRIAN, etc. Coût réel : **0,015 crédit**. **Réserve qualité de
+  donnée trouvée** : `amount_usd` est `null` sur plusieurs lignes issues du
+  projet `0x API` (agrégateur) — la valorisation USD n'est pas garantie sur
+  100% des lignes, à filtrer/vérifier avant tout calcul agrégé qui
+  suppose `amount_usd` toujours renseigné.
+- **`prices.usd`** — prix WETH Base par minute confirmé à jour à la seconde
+  près (dernière minute avant l'appel, 1921,43$, cohérent minute par
+  minute sur 5 lignes). Coût : 0,104 crédit.
+- **`tokens.transfers`** — transferts WETH Base réels dans les dernières
+  24h, avec mint/burn visibles (`from`/`to` = adresse zéro). Coût : 0,042
+  crédit.
+
+**Total dépensé pour valider les trois tables : 0,161 crédit sur un quota
+mensuel de 2500** (`getUsage` confirmé) — négligeable, largement dans le
+budget d'un usage périodique décrit au §4. **Verdict : les trois tables
+sont bien fiables et à jour pour Base, le plan §3.2 peut être construit
+sans réserve technique restante — seule la réserve `amount_usd` null sur
+certaines lignes `0x API` doit être gérée dans le code futur
+(`COALESCE`/filtre, ne jamais supposer une valeur).**
+
 **Contraste utile** : par comparaison, deux services testés dans le radar de
 ce soir (GoPlus Security, Clanker — voir
 `docs/aria-learning-inbox/2026-07-15-radar-goplus-clanker-webacy.md`) ont pu
