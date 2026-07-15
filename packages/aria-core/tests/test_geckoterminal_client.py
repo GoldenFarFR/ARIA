@@ -89,7 +89,7 @@ async def test_get_ohlcv_delegates_to_wide_ohlcv_client(monkeypatch):
     from aria_core.services import ohlcv as ohlcv_module
     from aria_core.skills.ta_levels import Candle
 
-    async def _fake_wide_get_ohlcv(pool_address, *, network="base"):
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base"):
         assert pool_address == "0xpool"
         return ohlcv_module.OHLCVResult(
             pool_address=pool_address,
@@ -102,7 +102,7 @@ async def test_get_ohlcv_delegates_to_wide_ohlcv_client(monkeypatch):
             available=True,
         )
 
-    monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+    monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
 
     client = GeckoTerminalClient()
     result = await client.get_ohlcv("0xpool")
@@ -119,11 +119,11 @@ async def test_get_ohlcv_forwards_min_useful_candles_to_wide_client(monkeypatch)
 
     captured = {}
 
-    async def _fake_wide_get_ohlcv(pool_address, *, network="base", min_useful_candles=20):
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", min_useful_candles=20):
         captured["min_useful_candles"] = min_useful_candles
         return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
 
-    monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+    monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
 
     client = GeckoTerminalClient()
     await client.get_ohlcv("0xpool", min_useful_candles=1)
@@ -140,11 +140,11 @@ async def test_get_ohlcv_omits_min_useful_candles_when_not_passed(monkeypatch):
 
     captured_kwargs = {}
 
-    async def _fake_wide_get_ohlcv(pool_address, *, network="base", **kwargs):
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", **kwargs):
         captured_kwargs.update(kwargs)
         return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
 
-    monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+    monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
 
     client = GeckoTerminalClient()
     await client.get_ohlcv("0xpool")
@@ -156,10 +156,10 @@ async def test_get_ohlcv_omits_min_useful_candles_when_not_passed(monkeypatch):
 async def test_get_ohlcv_unavailable_when_wide_client_has_nothing(monkeypatch):
     from aria_core.services import ohlcv as ohlcv_module
 
-    async def _fake_wide_get_ohlcv(pool_address, *, network="base"):
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base"):
         return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, error="pool introuvable sur GeckoTerminal")
 
-    monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+    monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
 
     client = GeckoTerminalClient()
     result = await client.get_ohlcv("0xpool")
@@ -541,7 +541,7 @@ class TestWethPoolSelectionRegression:
             self._CORRUPTED_POOL: 244.664600282265,  # valeur mesurée en direct le 14/07, pool corrompu
         }
 
-        async def _fake_wide_get_ohlcv(pool_address, *, network="base"):
+        async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base"):
             close = prices_by_pool[pool_address]
             return ohlcv_module.OHLCVResult(
                 pool_address=pool_address,
@@ -551,7 +551,7 @@ class TestWethPoolSelectionRegression:
                 available=True,
             )
 
-        monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+        monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
 
         gecko_pools_url = f"{GeckoTerminalClient().base_url}/networks/base/tokens/0xweth/pools"
         client = GeckoTerminalClient()
@@ -591,11 +591,11 @@ class TestGetOhlcvNetworkParam:
 
         captured = {}
 
-        async def _fake_wide_get_ohlcv(pool_address, *, network="base"):
+        async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base"):
             captured["network"] = network
             return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
 
-        monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+        monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
 
         client = GeckoTerminalClient()
         await client.get_ohlcv("0xpool", network="bsc")

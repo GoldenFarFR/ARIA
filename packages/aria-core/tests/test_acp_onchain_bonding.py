@@ -311,21 +311,21 @@ async def test_scan_base_token_uses_bonding_data_when_no_dex_pair(monkeypatch):
     async def fake_pairs(contract):
         return []
 
-    async def fake_flags(contract):
+    async def fake_flags(self, contract):
         return ContractFlags(
             address=contract, is_verified=True, has_mint=False,
             has_blacklist=False, has_disable_transfers=False, available=True, error=None,
         )
 
-    async def fake_holders(contract):
+    async def fake_holders(self, contract):
         return TokenHoldersResult(holders=[], total_supply=None, available=False, error=None)
 
     async def fake_fetch_by_address(address, chain="BASE"):
         return _bonding_token()
 
     monkeypatch.setattr(scan, "_fetch_token_pairs", fake_pairs)
-    monkeypatch.setattr(scan.blockscout_client, "check_contract_flags", fake_flags)
-    monkeypatch.setattr(scan.blockscout_client, "get_token_holders", fake_holders)
+    monkeypatch.setattr(type(scan.blockscout_client), "check_contract_flags", fake_flags)
+    monkeypatch.setattr(type(scan.blockscout_client), "get_token_holders", fake_holders)
     monkeypatch.setattr(
         "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
     )
