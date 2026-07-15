@@ -24,6 +24,10 @@ class FakeListing:
     links: list = field(default_factory=list)
 
 
+async def _passthrough_prefilter(candidates, **kwargs):
+    return candidates
+
+
 @pytest.mark.asyncio
 async def test_discover_dedupes_across_sources(monkeypatch):
     async def fake_base_tokens(*, limit):
@@ -35,13 +39,15 @@ async def test_discover_dedupes_across_sources(monkeypatch):
     async def fake_boosts_latest():
         return [FakeListing(chain_id="solana", token_address="Sol1111111111111111111111111111111111111")]
 
-    async def fake_boosts_top():
+    async def empty_listings():
         return []
 
     monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
     monkeypatch.setattr(me, "token_profiles_latest", fake_profiles)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
     monkeypatch.setattr(me, "token_boosts_latest", fake_boosts_latest)
-    monkeypatch.setattr(me, "token_boosts_top", fake_boosts_top)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
 
     candidates = await me.discover_momentum_candidates()
 
@@ -60,10 +66,15 @@ async def test_discover_filters_unlisted_chains(monkeypatch):
     async def fake_listings():
         return [FakeListing(chain_id="ethereum", token_address="0xnotcovered")]
 
+    async def empty_listings():
+        return []
+
     monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
     monkeypatch.setattr(me, "token_profiles_latest", fake_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
     monkeypatch.setattr(me, "token_boosts_latest", fake_listings)
     monkeypatch.setattr(me, "token_boosts_top", fake_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
 
     candidates = await me.discover_momentum_candidates(chains=("base", "solana", "robinhood"))
 
@@ -83,12 +94,105 @@ async def test_discover_tolerates_source_failure(monkeypatch):
 
     monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", failing_base_tokens)
     monkeypatch.setattr(me, "token_profiles_latest", fake_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
     monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
     monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
 
     candidates = await me.discover_momentum_candidates()
 
     assert candidates == [{"contract": "sol222", "chain": "solana"}]
+
+
+@pytest.mark.asyncio
+async def test_discover_applies_batch_liquidity_prefilter(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return [CONTRACT]
+
+    async def empty_listings():
+        return []
+
+    async def fake_prefilter(candidates, **kwargs):
+        return [c for c in candidates if c["contract"] != CONTRACT]
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", fake_prefilter)
+
+    candidates = await me.discover_momentum_candidates()
+
+    assert candidates == []  # le pré-filtre a bien été appliqué au résultat du sourcing
+
+
+# ── _batch_liquidity_prefilter ───────────────────────────────────────────────────────
+
+def _batch_pair(base_address: str, liquidity_usd: float) -> PairSnapshot:
+    return PairSnapshot(pair_address="p", base_address=base_address.lower(), liquidity_usd=liquidity_usd)
+
+
+@pytest.mark.asyncio
+async def test_batch_prefilter_keeps_liquid_candidates(monkeypatch):
+    liquid = "0x" + "1" * 40
+    thin = "0x" + "2" * 40
+    candidates = [{"contract": liquid, "chain": "base"}, {"contract": thin, "chain": "base"}]
+
+    async def fake_batch(addrs, *, chain="base"):
+        return [_batch_pair(liquid, 50_000.0), _batch_pair(thin, 100.0)]
+
+    monkeypatch.setattr(me, "fetch_tokens_batch", fake_batch)
+    kept = await me._batch_liquidity_prefilter(candidates)
+
+    assert {c["contract"] for c in kept} == {liquid}
+
+
+@pytest.mark.asyncio
+async def test_batch_prefilter_keeps_candidates_absent_from_response(monkeypatch):
+    """Un candidat non trouvé dans la réponse batch (chaîne mal couverte, etc.)
+    n'est jamais rejeté par excès de prudence."""
+    unknown = "0x" + "3" * 40
+    candidates = [{"contract": unknown, "chain": "base"}]
+
+    async def fake_batch(addrs, *, chain="base"):
+        return []
+
+    monkeypatch.setattr(me, "fetch_tokens_batch", fake_batch)
+    kept = await me._batch_liquidity_prefilter(candidates)
+
+    assert kept == candidates
+
+
+@pytest.mark.asyncio
+async def test_batch_prefilter_chunks_by_thirty(monkeypatch):
+    candidates = [{"contract": f"0x{i:040x}", "chain": "base"} for i in range(35)]
+    calls = []
+
+    async def fake_batch(addrs, *, chain="base"):
+        calls.append(list(addrs))
+        return [_batch_pair(a, 50_000.0) for a in addrs]
+
+    monkeypatch.setattr(me, "fetch_tokens_batch", fake_batch)
+    kept = await me._batch_liquidity_prefilter(candidates)
+
+    assert len(calls) == 2
+    assert len(calls[0]) == 30
+    assert len(calls[1]) == 5
+    assert len(kept) == 35
+
+
+@pytest.mark.asyncio
+async def test_batch_prefilter_tolerates_call_failure(monkeypatch):
+    candidates = [{"contract": "0x" + "4" * 40, "chain": "base"}]
+
+    async def failing_batch(addrs, *, chain="base"):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(me, "fetch_tokens_batch", failing_batch)
+    kept = await me._batch_liquidity_prefilter(candidates)
+
+    assert kept == candidates  # jamais un rejet sur une panne du pré-filtre lui-même
 
 
 # ── _best_pair ──────────────────────────────────────────────────────────────────────

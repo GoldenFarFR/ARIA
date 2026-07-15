@@ -6,11 +6,15 @@ import pytest
 
 from aria_core.services.dexscreener import (
     fetch_token_pairs,
+    fetch_tokens_batch,
     has_any_pair,
+    meta_by_slug,
+    metas_trending,
     search_pairs,
     token_boosts_latest,
     token_boosts_top,
     token_profiles_latest,
+    token_profiles_recent_updates,
 )
 
 
@@ -288,3 +292,161 @@ async def test_token_profiles_latest_filters_invalid_link_schemes(monkeypatch):
     assert len(listings) == 1
     assert len(listings[0].links) == 1  # le lien javascript: est exclu
     assert listings[0].links[0]["url"] == "https://x.com/handle"
+
+
+# ── Endpoints ajoutés après vérification de la spec OpenAPI officielle (#194) ────────
+
+@pytest.mark.asyncio
+async def test_token_profiles_recent_updates_parses_real_shape(monkeypatch):
+    url = "https://api.dexscreener.com/token-profiles/recent-updates/v1"
+    _patch_client(
+        monkeypatch,
+        {url: FakeResponse(200, [{"chainId": "base", "tokenAddress": "0xabc", "links": []}])},
+    )
+
+    listings = await token_profiles_recent_updates()
+
+    assert len(listings) == 1
+    assert listings[0].chain_id == "base"
+
+
+@pytest.mark.asyncio
+async def test_fetch_tokens_batch_parses_real_shape(monkeypatch):
+    addrs = ["0x" + "a" * 40, "0x" + "b" * 40]
+    url = f"https://api.dexscreener.com/tokens/v1/base/{','.join(addrs)}"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                [
+                    {
+                        "chainId": "base",
+                        "pairAddress": "0xpool1",
+                        "liquidity": {"usd": 10000.0},
+                        "priceUsd": "1.0",
+                        "baseToken": {"symbol": "AAA"},
+                    },
+                    {
+                        "chainId": "base",
+                        "pairAddress": "0xpool2",
+                        "liquidity": {"usd": 20000.0},
+                        "priceUsd": "2.0",
+                        "baseToken": {"symbol": "BBB"},
+                    },
+                ],
+            )
+        },
+    )
+
+    pairs = await fetch_tokens_batch(addrs, chain="base")
+
+    assert len(pairs) == 2
+    assert {p.base_symbol for p in pairs} == {"AAA", "BBB"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_tokens_batch_truncates_over_30_addresses(monkeypatch):
+    addrs = [f"0x{i:040x}" for i in range(35)]
+    expected_url = f"https://api.dexscreener.com/tokens/v1/base/{','.join(addrs[:30])}"
+    _patch_client(monkeypatch, {expected_url: FakeResponse(200, [])})
+
+    result = await fetch_tokens_batch(addrs, chain="base")
+
+    assert result == []  # ne lève pas -- l'URL tronquée à 30 a bien été appelée
+
+
+@pytest.mark.asyncio
+async def test_fetch_tokens_batch_empty_list_short_circuits():
+    assert await fetch_tokens_batch([], chain="base") == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_tokens_batch_degrades_softly_on_error(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    url = "https://api.dexscreener.com/tokens/v1/base/0xtoken"
+    _patch_client(monkeypatch, {url: [FakeResponse(429), FakeResponse(429), FakeResponse(429)]})
+
+    assert await fetch_tokens_batch(["0xtoken"], chain="base") == []
+
+
+@pytest.mark.asyncio
+async def test_metas_trending_parses_real_shape(monkeypatch):
+    url = "https://api.dexscreener.com/metas/trending/v1"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                [
+                    {
+                        "description": "pspspspspsp",
+                        "name": "Cat",
+                        "slug": "cat",
+                        "marketCap": 376197136,
+                        "liquidity": 39334441.94,
+                        "volume": 90687696.75,
+                        "tokenCount": 60,
+                        "marketCapChange": {"m5": -0.03, "h1": 2.9, "h6": 1.76, "h24": -17.0},
+                    }
+                ],
+            )
+        },
+    )
+
+    metas = await metas_trending()
+
+    assert len(metas) == 1
+    assert metas[0].slug == "cat"
+    assert metas[0].token_count == 60
+    assert metas[0].market_cap_change_24h == -17.0
+
+
+@pytest.mark.asyncio
+async def test_meta_by_slug_parses_real_shape(monkeypatch):
+    url = "https://api.dexscreener.com/metas/meta/v1/ai"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "description": "Artificial intelligence and agents",
+                    "name": "AI",
+                    "slug": "ai",
+                    "marketCap": 100000,
+                    "liquidity": 100000,
+                    "volume": 100000,
+                    "tokenCount": 5,
+                    "marketCapChange": {"m5": 0.0, "h1": 0.0, "h6": 0.0, "h24": 0.0},
+                    "pairs": [
+                        {
+                            "chainId": "base",
+                            "pairAddress": "0xpool",
+                            "liquidity": {"usd": 5000.0},
+                            "priceUsd": "0.5",
+                            "baseToken": {"symbol": "AIT"},
+                        }
+                    ],
+                },
+            )
+        },
+    )
+
+    meta, pairs = await meta_by_slug("ai")
+
+    assert meta.name == "AI"
+    assert len(pairs) == 1
+    assert pairs[0].base_symbol == "AIT"
+
+
+@pytest.mark.asyncio
+async def test_meta_by_slug_none_on_error(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    url = "https://api.dexscreener.com/metas/meta/v1/unknown"
+    _patch_client(monkeypatch, {url: [FakeResponse(429), FakeResponse(429), FakeResponse(429)]})
+
+    meta, pairs = await meta_by_slug("unknown")
+
+    assert meta is None
+    assert pairs == []
