@@ -1656,6 +1656,45 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   détection de menaces temps réel sur smart contracts, même famille que
   GoPlus, hors sujet Sybil direct. Coût 0,111 crédit. Détail complet :
   `docs/aria-learning-inbox/2026-07-15-labels-owner-addresses-algorithm-name-verdict-negatif.md`.
+- **15/07 (nuit) — VPS Secondaire : Tier 1 du balayage code mort traité, 3
+  câblages + 1 suppression, décision par cas (même rigueur que /whoami).**
+  1. `self_maintenance_context_for_brain()` -- CÂBLÉ (vrai gap) : le
+  classifieur regex strict qui intercepte les ordres opérateur (profil X/
+  bannière/avatar) laisse passer les formulations non couvertes, qui
+  rejoignent le flux LLM général sans le filet prévu -- câblé au même
+  point d'insertion que les directives dans `build_verified_facts_block`
+  (`grounding.py`), admin-only. 2. `welcome_site_access()` vs
+  `welcome_site_return()` -- CÂBLÉ (vrai bug UX) : `privy_login` disait
+  TOUJOURS "bienvenue de retour", même à la toute première connexion d'un
+  nouveau membre -- `login_with_privy` réutilise le flag `existing`
+  (`user_links`) déjà interrogé pour une autre vérification comme signal
+  `is_new_member` (3e valeur du tuple retourné, propagée à la route). 3.
+  `workflow_active()` -- SUPPRIMÉ (pas un bug) : le vrai garde-fou anti-
+  double-démarrage est déjà en dur dans `handle_workflow_message`
+  (`phase == IDLE.value`) -- pire, la sémantique de `workflow_active()`
+  (SCHEDULED = "inactif") ne correspond PAS au comportement réel du
+  dispatcher (bloque aussi pendant SCHEDULED), le câbler tel quel aurait
+  changé un comportement plutôt que neutraliser un manque. 4.
+  `suppressed_journal_preview()` -- CÂBLÉ (vrai bug, symétrique au cas 1) :
+  le rappel vectoriel supprimé par l'arbitrage était déjà filtré avant
+  injection LLM (`llm_context.py`), mais la couche journal ne l'était
+  pas -- câblé en miroir exact du filtre vectoriel existant. **Bug de
+  test trouvé et corrigé par la relecture cloud avant merge** (pas une
+  régression de la logique livrée) : le nouveau test du filtre journal
+  entrait en collision avec un mécanisme PRÉEXISTANT de
+  `_assemble_context` (troncature à `max_chars`) -- quand le contenu
+  total dépasse la limite, les sections prioritaires sont préservées
+  dans un ORDRE FIXE (`priority_markers`), et "Journal récent" est LA
+  DERNIÈRE du tuple -- donc la première sacrifiée si le total préservé
+  dépasse encore la limite. Le test ne mockait pas les autres
+  générateurs de contenu réel (valeurs/objectifs/état des capacités/
+  réflexions), laissant le total varier et parfois dépasser 8000
+  caractères, faisant disparaître la section journal AVANT même
+  d'atteindre le filtre testé -- un faux négatif du test, pas un bug du
+  correctif lui-même (vérifié par isolation complète : le filtre
+  fonctionne correctement une fois le contenu total maîtrisé). Corrigé en
+  mockant ces générateurs à vide dans le test, suite complète reverte
+  (5020 passed).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
