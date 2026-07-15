@@ -1983,15 +1983,15 @@ service en tâche de fond persistante (différent d'un cycle heartbeat
 classique), une vraie brique d'architecture à poser proprement une fois
 #194 stabilisé.
 
-## Clôture de session (15/07 nuit) — plus de questions que de réponses,
-comme prévu par l'opérateur ("théoriquement maintenant... tu devrais te
-retrouver avec plus de question que de réponse")
+## Clôture de session (15/07 nuit, mise à jour finale) — plus de questions
+que de réponses, comme prévu par l'opérateur ("théoriquement maintenant...
+tu devrais te retrouver avec plus de question que de réponse")
 
 **Fait et fusionné sur `main` ce segment** : #186 (coupe-circuit drawdown +
 sizing par risque, `cf3eef57`), #195 (cadence 180→15min, `a16ae20b`), le
 correctif d'injection texte caché CSS (`0fb1a14`, #192), la fonction Dune
 `first_funded_by` (`c95feed`). **Rien de tout ça n'est encore déployé sur
-le VPS** — ~6400 lignes accumulées, seuil de rappel (4000) dépassé depuis
+le VPS** — ~6500 lignes accumulées, seuil de rappel (4000) dépassé depuis
 plusieurs heures.
 
 **En vol, pas encore livré** :
@@ -2000,21 +2000,46 @@ plusieurs heures.
   clôture de ce segment.
 - **#196** — écoute WebSocket temps réel (vérifiée fonctionnelle en direct
   ce soir), en file après #194.
-- **#197** — poster l'activité de trading dans le sujet Telegram dédié de
-  l'opérateur (BS Cabal), demandé ce soir, pas commencé.
+- **#197 (ÉLARGI plusieurs fois ce soir, dispatché à Principal, rien reçu
+  en retour)** : poster dans le sujet Telegram "TRADING TEST" (BS Cabal,
+  chat `-1003949048605`, thread `67`) — mais bien plus qu'une alerte terse :
+  (a) support `message_thread_id` ; (b) thèse complète persistée dans
+  `paper_position` (`VCResult.these`, calculée mais aujourd'hui jamais
+  transmise à `open_position`/jamais sauvegardée — vrai gap trouvé ce
+  soir) ; (c) alerte de suivi périodique des positions ouvertes, pas
+  seulement achat/vente ; (d) nouvelle commande `/feedback` (tableau
+  départ/PnL total/résultat, données déjà dans `portfolio_summary()`,
+  jamais câblées à une commande). **Risque de collision de fichier
+  signalé à Principal** : ce chantier touche `_default_analyzer`/
+  `open_position`/le schéma `paper_position` dans `paper_trader.py` —
+  EXACTEMENT le même fichier que Secondaire pour #194. Pas encore su si
+  géré proprement (branches séparées, à vérifier à la fusion).
+  **Objectif explicite derrière ce chantier** : que la session cloud
+  puisse vérifier après coup, contre les vraies données on-chain
+  (contrat/prix/horodatage), ce qu'ARIA a réellement fait — donc la
+  persistance en base prime sur l'affichage Telegram lui-même.
 - **#187** — surveillance continue positions + concentration, en pause
   depuis le pivot #194.
 - **#189** — diligence Research (frais réels $10 Coinbase + validation
   statistique du protocole 30j/7j/14j), dispatché, pas de rapport reçu.
 - **#191/#192** — mandat permanent Research (psychologie + atouts/points
   faibles IA), actif, continue en boucle sans intervention nécessaire.
+  Trouvailles déjà remontées : injection texte caché (corrigé),
+  `verify_external_claim` ne raisonne jamais sur les preuves (documenté),
+  aucun module de backtest historique (documenté).
+
+**État VPS à la clôture** : l'opérateur n'était pas sûr que VPS Principal
+soit encore actif — aucun moyen pour la session cloud de vérifier
+l'activité d'une session VPS directement (pas d'outil de "ping"). Une
+vraie tâche (#197 élargi) lui a été redonnée pour combler l'attente ET
+servir de test de réactivité — pas de confirmation reçue à la clôture.
 
 **Questions réellement ouvertes, à trancher avec l'opérateur à la reprise** :
 1. Tension jamais résolue entre le protocole 30j/7j/14j (ce segment) et le
    barème `protocole-argent-reel.md` (≥80 trades/≥180j) — lequel prime, ou
    coexistent-ils (test préliminaire poche 15% vs grand barème) ?
 2. Date de démarrage réelle du compteur 30 jours — pas encore fixée
-   concrètement (dépend du déploiement de #194+#186+#195).
+   concrètement (dépend du déploiement de #194+#186+#195+#197).
 3. `verify_external_claim` (trouvé par Research, #192) : verdict par liste
    figée de 5 cas, ne raisonne jamais sur les preuves récupérées — proposition
    de fix documentée, pas implémentée (nécessite un test LLM réel).
@@ -2025,11 +2050,19 @@ plusieurs heures.
 6. #194 : le comportement multi-chaînes (Solana/Robinhood au-delà de Base)
    n'a encore jamais été testé de bout en bout, seulement vérifié brique
    par brique (GoPlus, DexScreener).
+7. **Nouveau** : #194 (Secondaire) et #197 (Principal) touchent tous les
+   deux `paper_trader.py` en parallèle — à vérifier attentivement à la
+   fusion des deux branches (conflits probables, pas juste de forme).
+8. **Nouveau** : `/feedback` doit-elle rester admin-only ou s'ouvrir plus
+   tard (décision prise par Principal par défaut, pas encore confirmée par
+   l'opérateur) ?
 
-**Prochaine reprise, dans l'ordre** : attendre/relire #194 (Secondaire) →
-merger → demander le "go" déploiement groupé (#186+#195+#194+correctif
-injection+Dune) → vérifier sur Telegram/cockpit que le compteur bouge →
-trancher les 6 questions ci-dessus avec l'opérateur → #197 → reprendre #187.
+**Prochaine reprise, dans l'ordre** : vérifier si Principal/Secondaire ont
+répondu → relire #194 ET #197 ensemble en faisant attention aux conflits
+sur `paper_trader.py` → merger → demander le "go" déploiement groupé
+(#186+#195+#194+#197+correctif injection+Dune) → vérifier sur Telegram
+(topic BS Cabal + `/feedback`)/cockpit que le compteur bouge → trancher
+les 8 questions ci-dessus avec l'opérateur → reprendre #187.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
