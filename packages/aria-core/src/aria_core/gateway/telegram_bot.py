@@ -1650,6 +1650,7 @@ async def _register_bot_commands() -> None:
     commands = [
         BotCommand("stop", "⏸ Pause immédiate des actions sortantes (kill-switch)"),
         BotCommand("resume", "▶️ Reprendre les actions sortantes"),
+        BotCommand("whoami", "Ton identité/rôle Telegram (ID, admin ou non)"),
         BotCommand("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
         BotCommand("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
         BotCommand("vc", "Analyse VC complète d'un contrat"),
