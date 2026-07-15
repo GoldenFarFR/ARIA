@@ -1906,16 +1906,27 @@ vérifié compatible), honeypot GoPlus seul garde-fou dur, 100% du capital 1M$
 pour ce test. C'est LE bloc central — rien d'autre ne compte tant que ça
 n'est pas fini.
 
-**2. Accélérer la cadence (nouveau, trouvé ce soir en préparant ce plan)** —
-`paper_trade_cycle` tourne aujourd'hui toutes les **180 minutes**
-(`heartbeat.py`), beaucoup trop lent pour "voir le compteur bouger" ou pour
-l'exigence "ARIA doit être là avant tout le monde". Le nouveau pipeline
-#194 est conçu pour être rapide (déterministe d'abord, LLM en confirmation
-seulement) et DexScreener tolère 300 req/min — largement de quoi tourner
-bien plus souvent. **Réduire l'intervalle à 15-20 minutes** pour la durée de
-ce test diagnostique (pas nécessairement permanent — à réévaluer une fois
-le comportement observé). À inclure dans la livraison #194 ou en tâche
-séparée immédiate si #194 est déjà trop avancé pour l'inclure proprement.
+**2. Accélérer la cadence — FAIT (#195, 15/07, `heartbeat.py`, branche temp
+`claude/paper-cycle-interval-temp`, en attente de fusion).**
+`paper_trade_cycle` tournait à **180 minutes**, beaucoup trop lent pour
+"voir le compteur bouger" ou pour l'exigence "ARIA doit être là avant tout
+le monde". **Réduit à 15 minutes.** Vérifié avant de baisser : le seul débit
+externe qui compte pour ce cycle est **GeckoTerminal** (OHLCV, via
+`analyze_vc_with_context` pour chaque candidat analysé côté nouvelles
+entrées — la gestion des positions déjà ouvertes passe par DexScreener, pas
+GeckoTerminal) — throttlé à 2.1s/appel (~28.5 req/min, sous le palier
+gratuit ~30 req/min documenté), appliqué PAR APPEL sur un client partagé au
+niveau du process : la charge instantanée reste bornée quelle que soit la
+fréquence du cycle, seul le VOLUME agrégé monte (12x plus de cycles/heure
+qu'à 180min) — pas de plafond mensuel documenté côté GeckoTerminal, donc pas
+de raison technique de rester au-dessus de 15min. Pas descendu plus bas :
+`MAX_POSITIONS=15` + jusqu'à 20 candidats analysés par cycle laissent une
+marge raisonnable avant d'approcher le palier gratuit en cas de pic. Aucun
+conflit avec le futur usage TA de #194 (même client partagé, même throttle,
+juste une file d'attente plus longue si les deux tournent en même temps).
+**Diff scopé à cette seule constante** (+ commentaire) dans `heartbeat.py`
+— `paper_trader.py` (terrain de #194, Secondaire) non touché. Suite
+complète verte (5062 aria-core + 108 vanguard/backend).
 
 **3. Visibilité — DÉJÀ CÂBLÉE, vérifié dans le code ce soir, rien à
 construire** : `paper_trader.run_paper_cycle` notifie déjà Telegram sur
