@@ -143,7 +143,8 @@ async def upsert_screened(
 
 async def record_rejected(
     *, contract: str, reason: str = "", symbol: str = "", network: str = "base",
-    source: str = "",
+    source: str = "", liquidity_usd: float = 0.0, security_score: int = 0,
+    verdict: str = "", top_holder_pct: float | None = None,
 ) -> None:
     """Marque un contrat comme rejeté (« jeté pour toujours »), avec sa raison.
 
@@ -152,6 +153,13 @@ async def record_rejected(
     **résurrection** ciblée si un bruit réapparaît (cf. ``reconsider``). Upsert :
     ``first_screened_at`` préservé. ``source`` : même logique que ``upsert_screened``
     (préservé si non précisé au ré-enregistrement).
+
+    ``liquidity_usd``/``security_score``/``verdict``/``top_holder_pct`` (optionnels,
+    15/07, même correctif que ``record_pending``) : transmettre les vraies valeurs du
+    scan quand l'appelant les a déjà (rejet APRÈS un scan complet), plutôt que les
+    laisser à 0/''/NULL — sinon un rejet dur (honeypot, score catastrophique) est
+    indiscernable d'un rejet dont on n'a jamais su le score. Défauts préservés pour
+    l'appelant sans scan.
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -162,13 +170,20 @@ async def record_rejected(
               (contract, symbol, liquidity_usd, security_score, top_holder_pct,
                verdict, pool_address, network, status, first_screened_at,
                last_checked_at, screen_reason, source)
-            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'rejected', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, '', ?, 'rejected', ?, ?, ?, ?)
             ON CONFLICT(contract) DO UPDATE SET
               status='rejected', last_checked_at=excluded.last_checked_at,
               screen_reason=excluded.screen_reason,
+              liquidity_usd=excluded.liquidity_usd,
+              security_score=excluded.security_score,
+              verdict=excluded.verdict,
+              top_holder_pct=excluded.top_holder_pct,
               source=CASE WHEN excluded.source != '' THEN excluded.source ELSE screened_token.source END
             """,
-            (contract, symbol, network, now, now, reason, source),
+            (
+                contract, symbol, liquidity_usd, security_score, top_holder_pct,
+                verdict, network, now, now, reason, source,
+            ),
         )
         await db.commit()
 
@@ -176,7 +191,7 @@ async def record_rejected(
 async def record_pending(
     *, contract: str, reason: str = "", symbol: str = "", network: str = "base",
     source: str = "", liquidity_usd: float = 0.0, security_score: int = 0,
-    verdict: str = "",
+    verdict: str = "", top_holder_pct: float | None = None,
 ) -> None:
     """Marque un contrat comme « à revoir » (échec MOU, donnée indisponible), avec sa
     raison — jamais un rejet définitif.
@@ -213,17 +228,21 @@ async def record_pending(
               (contract, symbol, liquidity_usd, security_score, top_holder_pct,
                verdict, pool_address, network, status, first_screened_at,
                last_checked_at, screen_reason, retry_count, source)
-            VALUES (?, ?, ?, ?, NULL, ?, '', ?, 'pending', ?, ?, ?, 1, ?)
+            VALUES (?, ?, ?, ?, ?, ?, '', ?, 'pending', ?, ?, ?, 1, ?)
             ON CONFLICT(contract) DO UPDATE SET
               status='pending', last_checked_at=excluded.last_checked_at,
               screen_reason=excluded.screen_reason,
               liquidity_usd=excluded.liquidity_usd,
               security_score=excluded.security_score,
               verdict=excluded.verdict,
+              top_holder_pct=excluded.top_holder_pct,
               retry_count=screened_token.retry_count + 1,
               source=CASE WHEN excluded.source != '' THEN excluded.source ELSE screened_token.source END
             """,
-            (contract, symbol, liquidity_usd, security_score, verdict, network, now, now, reason, source),
+            (
+                contract, symbol, liquidity_usd, security_score, top_holder_pct,
+                verdict, network, now, now, reason, source,
+            ),
         )
         await db.commit()
 

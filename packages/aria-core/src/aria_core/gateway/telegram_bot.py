@@ -2026,17 +2026,21 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
     from datetime import datetime, timezone
 
     from aria_core import vc_predictions
-    from aria_core.skills.vc_analysis import analyze_vc, analyze_vc_with_context, format_telegram_order
+    from aria_core.skills.vc_analysis import analyze_vc_with_context, format_telegram_order
     from aria_core.skills.vc_delivery import send_vc_report
     from aria_core.skills.vc_report import report_integrity
 
     await _reply(message, s["analyzing"])
-    if test_mode:
-        # Mode test : on récupère aussi le contexte de scan pour l'audit du juge.
-        result, ctx = await analyze_vc_with_context(address, lang=lang)
-    else:
-        result = await analyze_vc(address, lang=lang)
-        ctx = None
+    # analyze_vc() n'est qu'un fin wrapper autour de analyze_vc_with_context() qui jette
+    # le ctx (`result, _ctx = await analyze_vc_with_context(...)`) -- appeler directement
+    # la version avec contexte ici est donc un coût réseau/LLM strictement identique, pas
+    # un calcul supplémentaire. Corrige un bug réel (15/07) : sans ctx, le chemin
+    # opérateur réel ne pouvait pas renseigner entry_price/pool_address (ci-dessous),
+    # ce qui excluait silencieusement TOUTES les vraies analyses /vc de l'opérateur du
+    # chiffre "wallet ARIA" public (`vc_predictions.live_wallet`) -- seuls les tirages
+    # automatiques du tirage hebdomadaire (`weekly_training.py`, déjà correct) y
+    # apparaissaient.
+    result, ctx = await analyze_vc_with_context(address, lang=lang)
     capital_raw = os.environ.get("ARIA_CAPITAL_USD", "").strip()
     try:
         capital_usd = float(capital_raw) if capital_raw else None
@@ -2091,6 +2095,7 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
     try:
         report_number = await vc_predictions.count_predictions_for_contract(result.contract) + 1
         series_number = await vc_predictions.total_predictions_count() + 1
+        best = ctx.best_pair if ctx else None
         pred_id = await vc_predictions.record_prediction(
             contract=result.contract,
             recommandation=result.recommandation,
@@ -2100,6 +2105,10 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
             security_score=result.security_score,
             llm_used=result.llm_used,
             report_ref=ref_id,
+            strategy="vc",
+            entry_price=(best.price_usd if best else None),
+            pool_address=(best.pair_address if best else ""),
+            network="base",
         )
         await record_operator_vc(result, prediction_id=pred_id, telegram_summary=order_text)
         try:

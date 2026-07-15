@@ -5,6 +5,7 @@ validation d'adresse, et le formatage de l'ordre (proposition, jamais exécution
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -185,8 +186,8 @@ async def test_vc_first_asks_language_before_analyzing(monkeypatch):
 @pytest.mark.asyncio
 async def test_vc_valid_runs_analysis_and_sends_order(monkeypatch):
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
-    analyze = AsyncMock(return_value=_result())
-    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", analyze)
+    analyze = AsyncMock(return_value=(_result(), SimpleNamespace(best_pair=None)))
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", analyze)
     # Auto-log prédiction mocké (pas de DB dans ce test).
     monkeypatch.setattr("aria_core.vc_predictions.record_prediction", AsyncMock(return_value=42))
     monkeypatch.setattr("aria_core.vc_predictions.count_predictions_for_contract", AsyncMock(return_value=1))
@@ -215,9 +216,64 @@ async def test_vc_valid_runs_analysis_and_sends_order(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vc_real_production_analysis_records_entry_price_and_pool(monkeypatch):
+    """15/07 -- régression : le chemin /vc réel (hors mode test) doit renseigner
+    entry_price/pool_address/network sur la prédiction, sinon vc_predictions.live_wallet()
+    (le chiffre "wallet ARIA" public) exclut silencieusement toute vraie analyse
+    opérateur, alors que le tirage hebdomadaire automatique (weekly_training.py), lui,
+    les renseigne déjà -- asymétrie corrigée en branchant analyze_vc_with_context ici."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+    fake_pair = SimpleNamespace(price_usd=0.00042, pair_address="0xrealpool")
+    analyze = AsyncMock(return_value=(_result(), SimpleNamespace(best_pair=fake_pair)))
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", analyze)
+    record = AsyncMock(return_value=99)
+    monkeypatch.setattr("aria_core.vc_predictions.record_prediction", record)
+    monkeypatch.setattr("aria_core.vc_predictions.count_predictions_for_contract", AsyncMock(return_value=0))
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", AsyncMock(return_value=0))
+    monkeypatch.setattr("aria_core.skills.vc_delivery.send_vc_report", AsyncMock(return_value=(True, None)))
+
+    update = FakeUpdate(f"/vc {ADDR}")
+    await telegram_bot._handle_vc(update, FakeContext())
+    await _pick_vc_lang(update, lang="fr")
+
+    record.assert_awaited_once()
+    _, kwargs = record.call_args
+    assert kwargs["entry_price"] == 0.00042
+    assert kwargs["pool_address"] == "0xrealpool"
+    assert kwargs["network"] == "base"
+    assert kwargs["strategy"] == "vc"
+
+
+@pytest.mark.asyncio
+async def test_vc_real_production_analysis_handles_no_pair_gracefully(monkeypatch):
+    """Sans paire DEX trouvée (best_pair=None), pas de crash -- entry_price/pool_address
+    restent à leurs défauts honnêtes (None/''), jamais une donnée inventée."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+    analyze = AsyncMock(return_value=(_result(), SimpleNamespace(best_pair=None)))
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", analyze)
+    record = AsyncMock(return_value=99)
+    monkeypatch.setattr("aria_core.vc_predictions.record_prediction", record)
+    monkeypatch.setattr("aria_core.vc_predictions.count_predictions_for_contract", AsyncMock(return_value=0))
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", AsyncMock(return_value=0))
+    monkeypatch.setattr("aria_core.skills.vc_delivery.send_vc_report", AsyncMock(return_value=(True, None)))
+
+    update = FakeUpdate(f"/vc {ADDR}")
+    await telegram_bot._handle_vc(update, FakeContext())
+    await _pick_vc_lang(update, lang="fr")
+
+    record.assert_awaited_once()
+    _, kwargs = record.call_args
+    assert kwargs["entry_price"] is None
+    assert kwargs["pool_address"] == ""
+
+
+@pytest.mark.asyncio
 async def test_vc_uses_capital_env_var_for_dollar_amount(monkeypatch):
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
-    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", AsyncMock(return_value=_result(taille_pct=5.0)))
+    monkeypatch.setattr(
+        "aria_core.skills.vc_analysis.analyze_vc_with_context",
+        AsyncMock(return_value=(_result(taille_pct=5.0), SimpleNamespace(best_pair=None))),
+    )
     monkeypatch.setattr("aria_core.vc_predictions.record_prediction", AsyncMock(return_value=1))
     monkeypatch.setattr("aria_core.vc_predictions.count_predictions_for_contract", AsyncMock(return_value=0))
     monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", AsyncMock(return_value=0))
@@ -238,11 +294,11 @@ def _test_mode_mocks(monkeypatch, reasoning: str = "Analyse détaillée : Techno
     """Câble tous les mocks + renvoie les mocks sensibles (email + track-record)."""
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
     result = _result(rapport_detaille=reasoning)
-    # Mode test : le handler passe par analyze_vc_with_context (→ result + ctx).
-    analyze = AsyncMock(return_value=(result, object()))
+    # Les deux modes (test ET normal, 15/07) passent par analyze_vc_with_context
+    # (→ result + ctx) -- ctx.best_pair=None ici, ces tests ne portent pas sur le
+    # suivi wallet (entry_price/pool_address).
+    analyze = AsyncMock(return_value=(result, SimpleNamespace(best_pair=None)))
     monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", analyze)
-    # Mode normal (réutilisé par un test) : analyze_vc renvoie juste le result.
-    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc", AsyncMock(return_value=result))
     # Proof engine mocké (testé à part) — verdict neutre pour ne rien casser.
     monkeypatch.setattr(
         "aria_core.skills.vc_judge.judge_analysis",
