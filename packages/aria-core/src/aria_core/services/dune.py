@@ -270,6 +270,20 @@ async def run_sql_and_wait(
 # 4. Résultat : liste de wallets distincts ayant acheté un token qui a
 #    ensuite fait ≥ N x, avec le multiple observé et le token concerné.
 #
+# CORRECTIF DE REVUE (15/07, avant merge) : `token_launch` calculait MIN(block_time)
+# sur des lignes DÉJÀ filtrées à la fenêtre `lookback_days` -- un token ÉTABLI depuis
+# longtemps dont le premier trade DANS la fenêtre tombait par hasard il y a
+# `lookback_days` jours aurait été à tort classé "vient de naître", polluant tout le
+# signal (le but est de trouver des acheteurs précoces de VRAIS nouveaux tokens, pas
+# des acheteurs d'un token ancien pendant une remontée récente). Corrigé : l'agrégat
+# MIN(block_time) porte maintenant sur l'historique COMPLET de `dex.trades` (aucun
+# filtre de date dans le WHERE), et seul le résultat agrégé est filtré via HAVING --
+# ne garde que les tokens dont la PREMIÈRE transaction jamais vue tombe bien dans la
+# fenêtre récente. Coût plus élevé (scan complet de la table pour cette CTE), mais
+# nécessaire pour la correction -- `token_peak`/`token_launch_price` restent bornées
+# à la fenêtre, cohérent puisque tout trade d'un token réellement nouveau (launch_time
+# dans la fenêtre) tombe forcément aussi dans la fenêtre.
+#
 # Paramètres attendus par l'appelant (substitution simple avant l'envoi --
 # CE MODULE NE FAIT AUCUNE VALIDATION/ÉCHAPPEMENT, l'appelant doit s'assurer
 # que `min_multiple`/`lookback_days` sont des valeurs numériques de confiance,
@@ -284,8 +298,8 @@ WITH token_launch AS (
         MIN(block_time) AS launch_time
     FROM dex.trades
     WHERE blockchain = 'base'
-      AND block_time >= NOW() - INTERVAL '{lookback_days}' day
     GROUP BY token_bought_address
+    HAVING MIN(block_time) >= NOW() - INTERVAL '{lookback_days}' day
 ),
 early_buyers AS (
     SELECT DISTINCT

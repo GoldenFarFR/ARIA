@@ -356,6 +356,18 @@ class TestBuildEarlyBuyerMultipleQuery:
         assert "dex.trades" in sql
         assert "blockchain = 'base'" in sql
 
+    def test_token_launch_filters_via_having_not_where(self):
+        """Correctif de revue (15/07, avant merge) : un token ÉTABLI dont le
+        premier trade DANS la fenêtre lookback_days tombe par hasard il y a
+        `lookback_days` jours ne doit JAMAIS être classé comme "vient de
+        naître" -- l'agrégat MIN(block_time) doit porter sur l'historique
+        complet (aucun filtre de date dans le WHERE de token_launch), et
+        seul le résultat agrégé est filtré via HAVING."""
+        sql = dune.build_early_buyer_multiple_query(min_multiple=5.0, lookback_days=30)
+        token_launch_cte = sql.split("token_launch AS (")[1].split("early_buyers AS (")[0]
+        assert "HAVING MIN(block_time) >= NOW() - INTERVAL '30' day" in token_launch_cte
+        assert "WHERE blockchain = 'base'\n    GROUP BY" in token_launch_cte
+
     def test_rejects_non_numeric_min_multiple(self):
         with pytest.raises(ValueError):
             dune.build_early_buyer_multiple_query(min_multiple="5x", lookback_days=30)
