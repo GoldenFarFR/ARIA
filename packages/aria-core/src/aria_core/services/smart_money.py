@@ -328,6 +328,42 @@ async def analyze_smart_money(
 #   4. Journalisation prête pour calibration continue (pas de recalibration
 #      construite maintenant, juste l'écriture).
 # ============================================================================
+#
+# LIMITES STRUCTURELLES CONNUES (15/07, angles morts on-chain identifiés via
+# revue externe croisée -- délibérément DOCUMENTÉES, pas corrigées, pour ne
+# pas faire exploser la complexité du moteur FIFO central) :
+#
+# - DeFi (dépôt en collatéral / apport de liquidité) : `_analyze_wallet_multi_token`
+#   traite TOUT transfert sortant d'un token suivi comme une jambe de vente
+#   FIFO valorisée au marché (cf. `sells` ci-dessous, symétrique de `buys` par
+#   construction -- ni l'un ni l'autre ne distingue "vendu" de "déplacé").
+#   Un dépôt Aave (collatéral) ou Uniswap (LP) fait donc apparaître un PnL
+#   réalisé fictif au moment du dépôt (rien n'a été vendu), et un retrait
+#   ultérieur (le token revient) s'enregistre comme un rachat à un tout
+#   nouveau prix d'entrée, déconnecté du prix réel initial. Pas de signal bon
+#   marché et fiable pour distinguer un jeton de reçu (aToken/LP token) d'un
+#   swap réel sans registre de protocoles codé en dur (charge de maintenance
+#   permanente, faux positifs probables) -- non construit.
+# - Ponts cross-chain : le scan multi-chaînes (`chain_clients`, clé composite
+#   "{chaîne}:{adresse}") consolide un score PAR WALLET mais ne relie jamais
+#   une sortie sur une chaîne à l'arrivée correspondante sur une autre. Un
+#   bridge Ethereum->Arbitrum s'enregistre comme une vente FIFO côté source
+#   (prix marché au transfert sortant) ET un rachat FIFO indépendant côté
+#   destination (prix marché à l'arrivée) -- même défaut structurel que le
+#   cas DeFi ci-dessus, avec en plus la difficulté de corréler deux jambes sur
+#   deux jeux de données de chaînes différentes (montant net des frais de
+#   pont, fenêtre de temps plausible, registre des contrats de pont connus).
+#
+# Impact commun aux deux : les trades FIFO fictifs ainsi créés polluent
+# TOUTES les métriques dérivées de `cumulative_trades` (win_rate, PnL,
+# Sortino, drawdown, tendance de santé) à égalité avec de vrais trades --
+# pas une marge d'erreur isolée sur un seul chiffre. Population concernée :
+# plus significative chez les wallets qui font aussi du yield/LP/multi-L2 que
+# chez un pur trader memecoin Base -- pas négligeable pour autant chez une
+# vraie "smart money" sérieuse. Aucune correction prévue à court terme --
+# à rouvrir si un besoin business précis (ex. dossier funding, due diligence
+# poussée sur un wallet donné) le justifie.
+# ============================================================================
 
 # Tous les poids/seuils tunables de ce chantier vivent dans
 # wallet_scoring_weights.py (isolé à la demande opérateur, 14/07 -- statut
