@@ -452,6 +452,62 @@ async def relay_reply(body: RelayReplyRequest, request: Request):
     return {"ok": True}
 
 
+@router.get("/diagnostics/pool-status")
+async def diagnostics_pool_status(request: Request):
+    """Diagnostic lecture seule du pool de sourcing (`screened_token`) — pensé pour
+    être appelé directement depuis une session Claude Code (y compris depuis le
+    cloud, qui n'a pas d'accès VPS/base direct), sans dispatcher vers une session
+    VPS ouverte à chaque fois. Gaté par un accès DÉDIÉ (`ARIA_DIAGNOSTIC_TOKEN`),
+    distinct du secret admin et du token relay — ne donne accès qu'à ce diagnostic,
+    rien d'autre.
+    """
+    from aria_core import screened_pool
+    from aria_core.diagnostics_access import verify_diagnostic_access
+
+    if not verify_diagnostic_access(request.headers.get("X-Diagnostic-Access")):
+        raise HTTPException(status_code=403, detail="Diagnostic access required")
+
+    result: dict = {}
+    for network in ("base", "base-bonding"):
+        counts = {
+            status: await screened_pool.count_pool(status=status, network=network)
+            for status in ("active", "pending", "rejected")
+        }
+        closest = await screened_pool.list_closest_to_passing(network=network, limit=3)
+        result[network] = {
+            "counts": counts,
+            "closest_to_passing": [
+                {
+                    "contract": c.get("contract"),
+                    "symbol": c.get("symbol"),
+                    "security_score": c.get("security_score"),
+                    "liquidity_usd": c.get("liquidity_usd"),
+                    "verdict": c.get("verdict"),
+                    "screen_reason": c.get("screen_reason"),
+                    "retry_count": c.get("retry_count"),
+                }
+                for c in closest
+            ],
+        }
+    return result
+
+
+@router.get("/diagnostics/agent-wallet-ledger")
+async def diagnostics_agent_wallet_ledger(request: Request, limit: int = 100):
+    """Journal des transactions du futur pilote agent-wallet (seam — reste vide tant
+    qu'aucun produit n'est choisi/câblé, cf. CLAUDE.md 15/07). Même gate dédié que
+    `/diagnostics/pool-status`.
+    """
+    from aria_core import agent_wallet_log
+    from aria_core.diagnostics_access import verify_diagnostic_access
+
+    if not verify_diagnostic_access(request.headers.get("X-Diagnostic-Access")):
+        raise HTTPException(status_code=403, detail="Diagnostic access required")
+
+    limit = max(1, min(limit, 1000))
+    return {"transactions": await agent_wallet_log.list_transactions(limit=limit)}
+
+
 @router.get("/dossier/{contract}")
 async def token_dossier(contract: str, request: Request):
     """Dossier par token (opérateur) : chronologie de TOUT ce qu'ARIA a consigné sur un CA.

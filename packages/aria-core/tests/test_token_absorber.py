@@ -139,6 +139,22 @@ async def test_soft_fail_leaves_a_pending_trace_with_reason():
 
 
 @pytest.mark.asyncio
+async def test_soft_fail_persists_real_score_and_liquidity():
+    """15/07 (#158) : un échec mou APRÈS un scan complet doit persister le vrai
+    score/liquidité/verdict -- avant ce correctif, un candidat pending prometteur
+    (score 78, liquidité 50k) était indiscernable d'un candidat sans aucun signal
+    (0/0 codé en dur)."""
+    ctx = _clean_ctx("0xpromising")
+    ctx.top_holder_pct = None
+    scan = _scanner({"0xpromising": ctx})
+    assert await ta.absorb("0xpromising", scanner=scan) == "skip_incomplete"
+    row = (await sp.list_pool(status="pending"))[0]
+    assert row["liquidity_usd"] == 50_000.0
+    assert row["security_score"] == 78
+    assert row["verdict"] == "SAFE"
+
+
+@pytest.mark.asyncio
 async def test_soft_fail_pending_is_still_rescanned_next_cycle():
     # 'pending' ne doit PAS court-circuiter comme 'rejected'/'active' : le prochain
     # cycle doit re-scanner normalement (c'est tout le point d'un echec mou).

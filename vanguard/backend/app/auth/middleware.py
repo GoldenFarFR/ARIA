@@ -32,6 +32,11 @@ VANGUARD_PUBLIC_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/api/aria/sepolia-status"),
     ("GET", "/api/aria/relay/recent"),
     ("POST", "/api/aria/relay/reply"),
+    # Diagnostics Claude Code (pool-status, agent-wallet-ledger) : même famille que
+    # relay/* ci-dessus — gate dédié ARIA_DIAGNOSTIC_TOKEN interne à la route,
+    # exempté ici du gate Privy/opérateur pour ne pas superposer deux logiques.
+    ("GET", "/api/aria/diagnostics/pool-status"),
+    ("GET", "/api/aria/diagnostics/agent-wallet-ledger"),
 )
 
 

@@ -155,11 +155,17 @@ async def absorb(
         logger.info("absorb %s : échec mou (%s) — non banni, à réessayer", contract, reason)
         # Trace consultable (status='pending', ne court-circuite pas le re-scan) : avant
         # ce correctif, un échec mou ne laissait AUCUNE donnée nulle part (audit #77).
+        # liquidity_usd/security_score/verdict transmis (15/07) : le scan complet a déjà
+        # tourné ici (contrairement au pré-filtre Volet C ci-dessus), ne pas laisser un
+        # candidat pending prometteur indiscernable d'un candidat sans aucun signal.
         await screened_pool.record_pending(
             contract=contract,
             reason=reason,
             symbol=(ctx.best_pair.base_symbol if ctx.best_pair else ""),
             source=source,
+            liquidity_usd=result.liquidity_usd,
+            security_score=result.security_score,
+            verdict=result.verdict,
         )
         return "skip_incomplete"
 

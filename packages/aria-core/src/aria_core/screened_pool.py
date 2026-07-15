@@ -175,7 +175,8 @@ async def record_rejected(
 
 async def record_pending(
     *, contract: str, reason: str = "", symbol: str = "", network: str = "base",
-    source: str = "",
+    source: str = "", liquidity_usd: float = 0.0, security_score: int = 0,
+    verdict: str = "",
 ) -> None:
     """Marque un contrat comme « à revoir » (échec MOU, donnée indisponible), avec sa
     raison — jamais un rejet définitif.
@@ -185,6 +186,16 @@ async def record_pending(
     retenté au prochain cycle. Objectif : que la raison d'un échec mou (holders non
     renvoyés, contrat non vérifié, etc.) laisse une trace consultable plutôt que de
     disparaître sans aucune donnée, en base ou ailleurs (cf. audit #77).
+
+    ``liquidity_usd``/``security_score``/``verdict`` (optionnels, 15/07) : quand
+    l'appelant a déjà un scan complet en main (échec mou APRÈS le scan, ex.
+    ``token_absorber.absorb`` sur holders inconnus), transmettre les vraies valeurs
+    calculées plutôt que de les laisser à 0 — avant ce correctif, un candidat pending
+    prometteur (score/liquidité corrects, juste une donnée annexe manquante) était
+    indiscernable d'un candidat pending sans aucun signal, empêchant tout classement
+    par proximité du seuil (cf. ``list_closest_to_passing``). Défaut 0/'' préservé
+    pour l'appelant qui n'a PAS encore de scan (ex. pré-filtre Volet C) — jamais une
+    donnée inventée.
 
     ``retry_count`` s'incrémente à chaque appel (1 au premier échec mou, +1 à chaque
     repassage — que ce soit une redécouverte fortuite ou un retry délibéré, même
@@ -202,14 +213,17 @@ async def record_pending(
               (contract, symbol, liquidity_usd, security_score, top_holder_pct,
                verdict, pool_address, network, status, first_screened_at,
                last_checked_at, screen_reason, retry_count, source)
-            VALUES (?, ?, 0, 0, NULL, '', '', ?, 'pending', ?, ?, ?, 1, ?)
+            VALUES (?, ?, ?, ?, NULL, ?, '', ?, 'pending', ?, ?, ?, 1, ?)
             ON CONFLICT(contract) DO UPDATE SET
               status='pending', last_checked_at=excluded.last_checked_at,
               screen_reason=excluded.screen_reason,
+              liquidity_usd=excluded.liquidity_usd,
+              security_score=excluded.security_score,
+              verdict=excluded.verdict,
               retry_count=screened_token.retry_count + 1,
               source=CASE WHEN excluded.source != '' THEN excluded.source ELSE screened_token.source END
             """,
-            (contract, symbol, network, now, now, reason, source),
+            (contract, symbol, liquidity_usd, security_score, verdict, network, now, now, reason, source),
         )
         await db.commit()
 
@@ -384,3 +398,31 @@ async def draw_lottery(n: int = 20, *, status: str = "active", network: str = "b
         random.shuffle(pool)
         return pool
     return random.sample(pool, n)
+
+
+_LIQUIDITY_TARGET_USD = 30_000.0
+
+
+async def list_closest_to_passing(*, network: str = "base", limit: int = 3) -> list[dict]:
+    """Classe les candidats ``pending`` par proximité du seuil de sécurité — de vrais
+    points d'entrée à surveiller plutôt qu'un simple comptage binaire actif/pas actif
+    (demande opérateur 14/07, cf. CLAUDE.md). Heuristique informationnelle, pas un
+    score officiel : score de sécurité le plus haut d'abord (le plus proche de passer
+    le seuil ``safety_screen`` par en-dessous), puis liquidité la plus proche de
+    30 000$ (le plancher usuel) en cas d'égalité. Une valeur manquante (``None``) est
+    reléguée en fin de classement plutôt que de fausser le tri.
+    """
+    pool = await list_pool(status="pending", limit=100_000, network=network)
+
+    def _rank(entry: dict) -> tuple[float, float]:
+        score = entry.get("security_score")
+        score_component = -float(score) if isinstance(score, (int, float)) else 0.0
+        liquidity = entry.get("liquidity_usd")
+        liquidity_gap = (
+            abs(_LIQUIDITY_TARGET_USD - float(liquidity))
+            if isinstance(liquidity, (int, float))
+            else float("inf")
+        )
+        return (score_component, liquidity_gap)
+
+    return sorted(pool, key=_rank)[:limit]
