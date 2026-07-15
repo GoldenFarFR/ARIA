@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 
 import httpx
@@ -501,3 +502,135 @@ def build_recent_base_pairs_query(*, min_volume_usd: float, lookback_hours: int)
     if not isinstance(lookback_hours, int) or lookback_hours <= 0:
         raise ValueError("lookback_hours doit être un entier positif")
     return RECENT_BASE_PAIRS_QUERY_TEMPLATE.format(min_volume_usd=min_volume_usd, lookback_hours=lookback_hours)
+
+
+# ---------------------------------------------------------------------------
+# Requête SQL dédiée -- renforcement du signal de financement partagé déjà
+# existant (`_pairwise_convergence`/funding source dans smart_money.py) avec
+# `addresses.stats.first_funded_by` (15/07, cf.
+# docs/aria-learning-inbox/2026-07-15-graphsense-verifie-negatif-dune-labels-pivot.md
+# §2.1 -- table testée en direct ce soir par Research, PAS une supposition de
+# schéma). Portée EXACTE de cette tâche : fonction + requête + tests
+# SEULEMENT -- PAS de branchement dans smart_money.py (décision opérateur du
+# 15/07 ; le chantier Sybil complet -- Louvain/K-means -- reste séparé et plus
+# lourd, cf. le même rapport).
+#
+# Colonnes confirmées PAR TEST RÉEL (pas la doc publique) : `address`,
+# `first_funded_by`, `first_funded_at`, `is_eoa`, `is_smart_contract` --
+# couverture confirmée Base + 11 autres chaînes. RÉSERVE reprise du rapport
+# Research : `is_smart_contract`/`is_eoa` peuvent se tromper sur des adresses
+# prédéployées spécifiques à Base (ex. WETH `0x4200...0006` classée `is_eoa:
+# true` à tort) -- ces deux champs sont donc renvoyés tels quels, jamais
+# réinterprétés ou filtrés par ce module.
+#
+# RÉSERVE COÛT (reprise du même rapport) : 0,963 crédit observé pour 2
+# adresses SANS filtre de colonne de partition -- `addresses.stats` n'a pas
+# de fenêtre temporelle naturelle côté appelant ici (contrairement à
+# `dex.trades`), donc aucun filtre de date n'est ajouté ; l'appelant doit
+# donc BORNER la taille de `addresses` lui-même (ne jamais envoyer une liste
+# non bornée) -- pas la responsabilité de ce module de deviner une limite
+# arbitraire.
+#
+# CORRECTIF DE VÉRIFICATION LIVE (15/07, avant merge -- bug réel trouvé, pas
+# une supposition) : `address` est de type `varbinary` dans `addresses.stats`
+# (confirmé par `resultMetadata` sur l'exécution réelle), PAS `varchar`.
+# Un premier essai avec des littéraux entre guillemets simples
+# (``address IN ('0x...', '0x...')``) a ÉCHOUÉ en exécution réelle :
+# « Cannot find common type between varbinary and varchar(42) » -- DuneSQL ne
+# caste PAS implicitement une chaîne vers varbinary dans un IN, contrairement
+# à d'autres contextes SQL. Corrigé en émettant les adresses comme littéraux
+# hexadécimaux NUS (``0x...`` sans guillemets, syntaxe varbinary native de
+# Trino/DuneSQL) -- reverifié en exécution réelle après correctif (cf.
+# docs/dune-integration-plan.md), résultat identique à l'essai avec
+# guillemets simples sur `dex.trades.taker` (varchar, lui, cast implicite ok)
+# -- ce module confirme donc qu'il ne faut JAMAIS supposer qu'un type
+# d'adresse Dune est uniformément `varchar` d'une table à l'autre.
+_EVM_ADDRESS_RE_SOURCE = r"^0x[a-fA-F0-9]{40}$"
+
+ADDRESSES_STATS_QUERY_TEMPLATE = """
+SELECT address, first_funded_by, first_funded_at, is_eoa, is_smart_contract
+FROM addresses.stats
+WHERE blockchain = '{blockchain}'
+  AND address IN ({address_list})
+"""
+
+
+def build_addresses_stats_query(addresses: list[str], *, blockchain: str = "base") -> str:
+    """Construit la requête ``addresses.stats`` pour une liste d'adresses.
+    Valide chaque adresse contre un format EVM strict (``0x`` + 40 hex) AVANT
+    toute substitution -- ces adresses peuvent provenir de wallets suivis
+    dynamiquement (pas une constante interne comme les autres paramètres de ce
+    module), donc une vraie validation anti-injection est nécessaire ici,
+    contrairement aux `build_*` numériques ci-dessus. Émet des littéraux
+    hexadécimaux NUS (``0x...``, pas entre guillemets) -- `address` est
+    `varbinary` dans `addresses.stats`, confirmé en exécution réelle (cf.
+    réserve ci-dessus) ; un littéral entre guillemets simples y échoue."""
+    if not addresses:
+        raise ValueError("addresses ne peut pas être vide")
+    if not blockchain or not re.fullmatch(r"[a-z0-9_-]+", blockchain):
+        raise ValueError("blockchain invalide")
+
+    address_re = re.compile(_EVM_ADDRESS_RE_SOURCE)
+    normalized: list[str] = []
+    for addr in addresses:
+        if not isinstance(addr, str) or not address_re.fullmatch(addr):
+            raise ValueError(f"adresse EVM invalide : {addr!r}")
+        normalized.append(addr.lower())
+
+    address_list = ", ".join(normalized)  # littéraux hex NUS -- cf. réserve varbinary ci-dessus
+    return ADDRESSES_STATS_QUERY_TEMPLATE.format(blockchain=blockchain, address_list=address_list)
+
+
+@dataclass
+class FundedByRecord:
+    address: str
+    first_funded_by: str | None = None
+    first_funded_at: str | None = None
+    is_eoa: bool | None = None
+    is_smart_contract: bool | None = None
+
+
+@dataclass
+class FundedByResult:
+    records: list[FundedByRecord] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+async def get_first_funded_by(
+    addresses: list[str], *, blockchain: str = "base", performance: str = "medium",
+) -> FundedByResult:
+    """Interroge `addresses.stats` pour une liste d'adresses et retourne leur
+    `first_funded_by` (et les autres champs confirmés de la table). Même
+    doctrine dôme que le reste de ce module : sans clé -- ou en cas d'échec à
+    n'importe quelle étape (exécution/statut/résultat) -- `available=False`,
+    jamais une exception, jamais un enregistrement inventé. Liste vide :
+    résultat vide immédiat, aucun appel réseau (pas d'aller-retour Dune inutile)."""
+    if not addresses:
+        return FundedByResult(records=[], available=True, error=None)
+
+    try:
+        sql = build_addresses_stats_query(addresses, blockchain=blockchain)
+    except ValueError as exc:
+        return FundedByResult(available=False, error=f"{UNAVAILABLE} ({exc})")
+
+    exec_result = await run_sql_and_wait(sql, performance=performance)
+    if not exec_result.available:
+        return FundedByResult(available=False, error=exec_result.error)
+
+    records: list[FundedByRecord] = []
+    for row in exec_result.rows:
+        address = row.get("address")
+        if not isinstance(address, str) or not address:
+            continue
+        records.append(
+            FundedByRecord(
+                address=address,
+                first_funded_by=row.get("first_funded_by") if isinstance(row.get("first_funded_by"), str) else None,
+                first_funded_at=row.get("first_funded_at") if isinstance(row.get("first_funded_at"), str) else None,
+                is_eoa=row.get("is_eoa") if isinstance(row.get("is_eoa"), bool) else None,
+                is_smart_contract=row.get("is_smart_contract") if isinstance(row.get("is_smart_contract"), bool) else None,
+            )
+        )
+
+    return FundedByResult(records=records, available=True, error=None)
