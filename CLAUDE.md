@@ -1759,6 +1759,25 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   position, indépendant de Kelly (règle PTJ). Rien construit -- décision
   opérateur nécessaire sur les seuils exacts avant tout code.
 
+## Échéance gravée (décision opérateur explicite, 15/07 — ne pas laisser dériver)
+**Le test de gestion du 1M$ (protocole décrit ci-dessus : 30j visant au minimum
+±1M$, +7j de confirmation si bénéfice → réel 10$ Coinbase Agent Wallet, ou
+réajustement + cycles de 14j jusqu'à réussite si échec) doit démarrer pour de
+vrai dans les 7 jours (cible : 22/07), avec une marge de 7 jours en cas
+d'imprévu (dernier délai raisonnable : 29/07).** Objectif de ce délai :
+finaliser et déployer #186 (coupe-circuit drawdown + plafond de risque par
+position) et #187 (surveillance continue + plafond de concentration) AVANT
+que le compteur des 30 jours ne commence à courir pour de vrai — sinon le
+test mesurerait un ARIA encore sans ces garde-fous. Rappel à vérifier à
+chaque session tant que cette échéance n'est pas atteinte : où en est le
+déploiement de #186/#187, et la date de démarrage officielle du compteur
+30 jours a-t-elle été fixée et communiquée à l'opérateur ? **Tension non
+résolue, à trancher avec l'opérateur avant le démarrage** : ce protocole
+(30j/7j/14j) est plus court que le barème déjà écrit dans
+`docs/protocole-argent-reel.md` (≥80 trades clôturés ET ≥180 jours avant de
+même mesurer les 8 cases) -- clarifier si celui-ci est un test préliminaire
+sur la seule poche 15% trading avant le grand barème, ou un remplacement.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
