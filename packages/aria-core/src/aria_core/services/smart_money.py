@@ -578,6 +578,96 @@ async def analyze_smart_money(
 #   asymétrie de couverture protocolaire : reconfirmés par la revue round 2/3
 #   (Grok) comme toujours non résolus -- aucun élément nouveau qui changerait
 #   l'évaluation déjà écrite plus haut, pas de duplication de l'entrée.
+#
+# QUATRIÈME PASSAGE (15/07, revue round 4 -- ChatGPT + Grok). Précision
+# apportée (pas un nouveau mécanisme, une clarification de portée) :
+#
+# - Migrations de token (v1->v2), redénominations, fusions/splits, airdrops de
+#   remplacement (revue ChatGPT) : vérifié -- ces événements ne créent PAS un
+#   troisième mécanisme de trou, ils se ramènent aux DEUX catégories déjà
+#   documentées ci-dessus selon leur implémentation on-chain : (a) migration
+#   via un NOUVEAU contrat (cas le plus courant, ex. un v1 envoyé/brûlé +
+#   un v2 reçu séparément) = exactement le même défaut que le dépôt DeFi/pont
+#   cross-chain (deux jambes sur deux adresses de token différentes, jamais
+#   reliées, PnL fictif des deux côtés) ; (b) redénomination/split SANS
+#   changement d'adresse (réinterprétation du solde sur le même contrat) =
+#   exactement le même défaut que le rebasing (déjà capté, sans être crédité,
+#   par `unmatched_sell_events`). Documenté ici comme exemples concrets
+#   supplémentaires des deux limites déjà écrites, pas une nouvelle limite.
+# - Le drapeau "suspect positif" comme cible de manipulation inversée (revue
+#   Grok) : parce que ce drapeau est VISIBLE et peut être lu comme un signal
+#   fort, un acteur sophistiqué peut délibérément calibrer son activité pour
+#   franchir simultanément les seuils sur ≥3 axes (win rate, Sortino,
+#   diversification, récurrence) sans avoir de vrai edge -- le drapeau devient
+#   alors lui-même un objectif à optimiser plutôt qu'un signal fiable. Limite
+#   inhérente à tout indicateur seuil VISIBLE (le rendre visible sert la
+#   transparence mais crée la cible) -- pas de parade sans le rendre plus
+#   coûteux à déclencher artificiellement (ex. exiger une confirmation
+#   indépendante), non construit.
+# - Biais de sélection de la couche 2 (revue Grok) : la priorité "round-trip
+#   confirmé -> récence -> nombre de trades" (`_select_tokens_for_deep_
+#   analysis`) sous-représente structurellement, à un instant T (avant
+#   `full_coverage=True`), les holders long-terme de nombreuses petites
+#   positions au profit des traders très actifs sur peu de tokens -- pas un
+#   bug, un ordre de priorité assumé (round-trip d'abord parce qu'une position
+#   encore ouverte ne peut jamais produire de trade clôturé), mais un vrai
+#   biais tant que la couverture n'est pas complète. Le scan incrémental
+#   cumulatif finit par tout couvrir, mais un score consulté AVANT couverture
+#   complète reste construit sur un sous-ensemble non représentatif -- déjà
+#   partiellement divulgué (`full_coverage`/`tokens_scanned_cumulative`
+#   affichés), pas éliminé pour autant.
+#
+# CINQUIÈME PASSAGE (15/07, revue Gemini -- audit final). Deux points, TRAITÉS
+# DIFFÉREMMENT après vérification :
+#
+# - Distorsion FIFO sur fluctuations de supply HORS-TRANSACTION -- rebases
+#   POSITIFS **ET NÉGATIFS** (renommage explicite demandé par Gemini, limite
+#   déjà en partie gérée) : le cas positif (solde qui augmente sans transfert,
+#   ex. rendement stETH) était déjà documenté et capté sans être crédité
+#   (`unmatched_sell_events`). Le cas NÉGATIF (solde divisé sans transfert,
+#   ex. rebase négatif AMPL-like) est le miroir exact et n'était PAS nommé
+#   explicitement : la file d'attente FIFO continue de porter les jetons
+#   "fantômes" (jamais purgés faute d'événement on-chain pour réagir), qui se
+#   font consommer par une vente ultérieure à un prix d'achat obsolète -- un
+#   trade économiquement neutre peut alors s'enregistrer comme un profit
+#   fictif. Même famille de cause que le cas positif (solde qui change hors-
+#   transaction), symétrique en direction. Documenté ici tel quel, non
+#   corrigé -- même arbitrage que le reste des cas rebasing/DeFi/ponts.
+# - "Effondrement par perte fictive" via dusting ciblé sur pool manipulé
+#   (revue Gemini) -- VÉRIFIÉ COMME RÉEL contre le code : un pool créé juste
+#   au-dessus du plancher de liquidité ($35k > $30k) avec un prix ponctuel
+#   manipulé peut faire accepter un coût d'acquisition démesuré (OHLCV) sur
+#   un token dusté, puis un prix de sortie normal/crashé clôture le trade en
+#   perte fictive massive -- confirmé plausible ligne par ligne (le plancher
+#   de liquidité seul ne protège QUE contre un pool durablement thin, pas
+#   contre un pic de prix ponctuel sur un pool qui clarifie le plancher).
+#   **Première piste de correctif testée et REJETÉE après vérification** :
+#   réutiliser `_pool_is_plausible` (déjà existant, geckoterminal.py) pour
+#   filtrer aussi ce cas -- ne fonctionne PAS ici : cette fonction renvoie
+#   délibérément `True` (plausible) quand le volume 24h est nul ou quasi nul
+#   ("un token légitime peut simplement n'avoir eu aucun trade récent", cf.
+#   sa docstring) -- exactement le profil d'un pool de scam peu/jamais
+#   tradé par personne d'autre que l'attaquant. Une règle de correction
+#   robuste (comparer le prix d'une bougie précise à ses voisines temporelles
+#   pour détecter un pic isolé, ou exiger une corroboration de marché
+#   indépendante avant de faire confiance à un cost-basis OHLCV sur un
+#   transfert non-swap) reste un vrai chantier de conception -- risque de
+#   nouveaux faux positifs (un memecoin légitimement volatil, ou un retrait
+#   CEX légitime dont la contrepartie n'est jamais le pool) non résolu ce
+#   soir avec la rigueur que ce point mérite. **Non corrigé, signalé comme
+#   la limite la plus sérieuse actuellement ouverte** (coût d'attaque ~50$ de
+#   gas, déterministe, ciblable sur n'importe quel wallet suivi) -- à traiter
+#   comme un chantier dédié, pas un correctif de fin de soirée.
+# ============================================================================
+#
+# CONSTAT DE PALIER (15/07) : à ce stade, les rounds successifs de revue
+# externe reconfirment très majoritairement les mêmes limites structurelles
+# déjà écrites (Sybil, benchmark marché, MEV, gaming des seuils/tests) plutôt
+# que d'en révéler de nouvelles -- signal que le fond du sujet est correctement
+# cartographié. Les items encore ouverts sont, par nature, des PROJETS séparés
+# (clustering d'entité, série de rendement de référence, détection
+# d'atomicité de transaction), pas des correctifs ponctuels supplémentaires --
+# à rouvrir sur décision explicite si l'un d'eux devient prioritaire.
 # ============================================================================
 
 # Tous les poids/seuils tunables de ce chantier vivent dans
