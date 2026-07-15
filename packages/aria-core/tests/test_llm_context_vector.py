@@ -111,11 +111,21 @@ async def test_build_llm_context_filters_suppressed_journal_entries(monkeypatch)
     écrite mais jamais appliquée ici -- un extrait de journal marqué supprimé par
     l'arbitrage (conflit avec une couche prioritaire) restait quand même injecté dans
     le contexte LLM tel quel via get_journal_summary(). Même patron de test que
-    test_build_llm_context_injects_vector_section pour la couche "vector"."""
+    test_build_llm_context_injects_vector_section pour la couche "vector".
+
+    Les autres générateurs de contenu réel (valeurs/objectifs/état des capacités/
+    réflexions) sont mockés à vide ici -- sans ça, `_assemble_context` (troncature à
+    `max_chars`) peut dépasser le budget total et découper la section "Journal récent"
+    (dernière de `priority_markers`, donc la première sacrifiée) avant même d'atteindre
+    le filtre testé ici -- un faux négatif du test, pas un bug du filtre lui-même."""
     monkeypatch.setattr("aria_core.memory._legacy_journal.get_persona_text", lambda: "persona courte")
     monkeypatch.setattr("aria_core.memory._legacy_journal.get_doctrine_text", lambda: "")
     monkeypatch.setattr("aria_core.memory._legacy_journal.get_launchpad_doctrine_text", lambda: "")
     monkeypatch.setattr("aria_core.directives.get_directives_text", lambda: "")
+    monkeypatch.setattr("aria_core.memory.values.get_values_text", lambda: "")
+    monkeypatch.setattr("aria_core.memory.goals.get_goals_text", lambda: "")
+    monkeypatch.setattr("aria_core.memory.capability_state.get_capability_state_text", lambda: "")
+    monkeypatch.setattr("aria_core.memory.reflection.get_reflections_text", lambda: "")
 
     async def fake_messages(*args, **kwargs):
         return [{"role": "user", "content": "rappelle le journal"}]
