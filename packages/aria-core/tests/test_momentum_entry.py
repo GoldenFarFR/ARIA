@@ -1,0 +1,364 @@
+"""Pipeline momentum multi-chaînes (#194) -- honeypot hard gate, R/R obligatoire,
+alignement technique en bonus. Aucun appel réseau réel, tout est mocké."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import pytest
+
+from aria_core import momentum_entry as me
+from aria_core.services.dexscreener import PairSnapshot
+from aria_core.skills.entry_signals import EntrySignal
+from aria_core.skills.ta_levels import Candle
+
+CONTRACT = "0x" + "a" * 40
+
+
+# ── discover_momentum_candidates ───────────────────────────────────────────────────
+
+@dataclass
+class FakeListing:
+    chain_id: str
+    token_address: str
+    description: str = ""
+    links: list = field(default_factory=list)
+
+
+@pytest.mark.asyncio
+async def test_discover_dedupes_across_sources(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return [CONTRACT, "0x" + "b" * 40]
+
+    async def fake_profiles():
+        return [FakeListing(chain_id="base", token_address=CONTRACT)]  # doublon avec base_crawler
+
+    async def fake_boosts_latest():
+        return [FakeListing(chain_id="solana", token_address="Sol1111111111111111111111111111111111111")]
+
+    async def fake_boosts_top():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", fake_profiles)
+    monkeypatch.setattr(me, "token_boosts_latest", fake_boosts_latest)
+    monkeypatch.setattr(me, "token_boosts_top", fake_boosts_top)
+
+    candidates = await me.discover_momentum_candidates()
+
+    keys = {(c["contract"], c["chain"]) for c in candidates}
+    assert (CONTRACT, "base") in keys
+    assert ("0x" + "b" * 40, "base") in keys
+    assert ("sol1111111111111111111111111111111111111", "solana") in keys
+    assert len(candidates) == 3  # le doublon CONTRACT/base n'apparaît qu'une fois
+
+
+@pytest.mark.asyncio
+async def test_discover_filters_unlisted_chains(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return []
+
+    async def fake_listings():
+        return [FakeListing(chain_id="ethereum", token_address="0xnotcovered")]
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", fake_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", fake_listings)
+    monkeypatch.setattr(me, "token_boosts_top", fake_listings)
+
+    candidates = await me.discover_momentum_candidates(chains=("base", "solana", "robinhood"))
+
+    assert candidates == []  # "ethereum" n'est pas dans DEFAULT_CHAINS -- garde-fou honeypot non couvert
+
+
+@pytest.mark.asyncio
+async def test_discover_tolerates_source_failure(monkeypatch):
+    async def failing_base_tokens(*, limit):
+        raise RuntimeError("boom")
+
+    async def fake_listings():
+        return [FakeListing(chain_id="solana", token_address="Sol222")]
+
+    async def empty_listings():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", failing_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", fake_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+
+    candidates = await me.discover_momentum_candidates()
+
+    assert candidates == [{"contract": "sol222", "chain": "solana"}]
+
+
+# ── _best_pair ──────────────────────────────────────────────────────────────────────
+
+def test_best_pair_prefers_liquid_pairs_above_floor():
+    thin = PairSnapshot(pair_address="thin", liquidity_usd=100.0, price_usd=1.0)
+    liquid = PairSnapshot(pair_address="liquid", liquidity_usd=50_000.0, price_usd=2.0)
+    assert me._best_pair([thin, liquid]).pair_address == "liquid"
+
+
+def test_best_pair_falls_back_when_all_below_floor():
+    only = PairSnapshot(pair_address="thin", liquidity_usd=100.0, price_usd=1.0)
+    assert me._best_pair([only]).pair_address == "thin"
+
+
+def test_best_pair_none_when_empty():
+    assert me._best_pair([]) is None
+
+
+# ── _check_honeypot ─────────────────────────────────────────────────────────────────
+
+@dataclass
+class FakeSecurity:
+    available: bool = True
+    is_honeypot: bool | None = False
+    cannot_sell_all: bool | None = False
+    error: str | None = None
+
+
+@pytest.mark.asyncio
+async def test_honeypot_clear(monkeypatch):
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        assert chain_id == "8453"
+        return FakeSecurity()
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    clear, _reason = await me._check_honeypot(CONTRACT, "base")
+    assert clear is True
+
+
+@pytest.mark.asyncio
+async def test_honeypot_confirmed_rejects(monkeypatch):
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        return FakeSecurity(is_honeypot=True)
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    clear, reason = await me._check_honeypot(CONTRACT, "base")
+    assert clear is False
+    assert "honeypot" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_honeypot_unavailable_fails_closed(monkeypatch):
+    """Contrairement au reste du pipeline (permissif), le SEUL garde-fou dur doit
+    rejeter -- jamais un pari sans protection quand GoPlus ne répond pas."""
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        return FakeSecurity(available=False, error="timeout")
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    clear, reason = await me._check_honeypot(CONTRACT, "base")
+    assert clear is False
+    assert "indisponible" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_honeypot_unmapped_chain_fails_closed():
+    clear, reason = await me._check_honeypot(CONTRACT, "ethereum")
+    assert clear is False
+    assert "non couverte" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_honeypot_translates_chain_id_for_solana(monkeypatch):
+    from aria_core.services import goplus as gp
+
+    seen = {}
+
+    async def fake_get_token_security(address, *, chain_id):
+        seen["chain_id"] = chain_id
+        return FakeSecurity()
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    await me._check_honeypot(CONTRACT, "solana")
+    assert seen["chain_id"] == "solana"
+
+
+# ── _technical_alignment ────────────────────────────────────────────────────────────
+
+def _rising_candles(n: int = 40) -> list[Candle]:
+    """Série strictement montante -- EMA courte > EMA longue, MACD au-dessus du
+    signal une fois la période de chauffe passée."""
+    return [Candle(ts=i, open=1.0 + i * 0.05, high=1.05 + i * 0.05, low=0.98 + i * 0.05,
+                    close=1.02 + i * 0.05, volume=1000.0) for i in range(n)]
+
+
+def _flat_candles(n: int = 40) -> list[Candle]:
+    return [Candle(ts=i, open=1.0, high=1.01, low=0.99, close=1.0, volume=1000.0) for i in range(n)]
+
+
+def test_technical_alignment_scores_rising_series():
+    score, reasons = me._technical_alignment(_rising_candles())
+    assert score >= 1
+    assert any("EMA12" in r for r in reasons)
+
+
+def test_technical_alignment_zero_on_flat_series():
+    score, _reasons = me._technical_alignment(_flat_candles())
+    assert score == 0
+
+
+def test_technical_alignment_never_crashes_on_short_series():
+    score, reasons = me._technical_alignment([Candle(ts=0, open=1, high=1, low=1, close=1)])
+    assert score == 0
+    assert reasons == []
+
+
+# ── evaluate_momentum_entry (bout en bout, tout mocké) ───────────────────────────────
+
+def _pair(**overrides) -> PairSnapshot:
+    base = {"pair_address": "0xpool", "price_usd": 1.5, "liquidity_usd": 50_000.0, "base_symbol": "TOK"}
+    base.update(overrides)
+    return PairSnapshot(**base)
+
+
+def _patch_pipeline(monkeypatch, *, honeypot_clear=True, pairs=None, candles=None, signal=None, align=(0, [])):
+    async def fake_honeypot(contract, chain):
+        return honeypot_clear, "honeypot clear (GoPlus)" if honeypot_clear else "honeypot confirmé (GoPlus)"
+
+    async def fake_fetch_pairs(contract, *, chain="base"):
+        return pairs if pairs is not None else [_pair()]
+
+    async def fake_candles(pool_address, chain):
+        return candles if candles is not None else [Candle(ts=0, open=1, high=1, low=1, close=1)] * 20
+
+    def fake_detect_entry(candles_arg):
+        return signal if signal is not None else EntrySignal(present=False, reasons=["setup non réuni"])
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_honeypot)
+    monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_pairs)
+    monkeypatch.setattr(me, "_fetch_candles", fake_candles)
+    monkeypatch.setattr(me, "detect_entry", fake_detect_entry)
+    monkeypatch.setattr(me, "_technical_alignment", lambda candles_arg: align)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_on_honeypot(monkeypatch):
+    _patch_pipeline(monkeypatch, honeypot_clear=False)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert "honeypot" in result["reasons"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_none_when_no_liquid_pair(monkeypatch):
+    _patch_pipeline(monkeypatch, pairs=[])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_evaluate_holds_when_ohlcv_unavailable(monkeypatch):
+    _patch_pipeline(monkeypatch, candles=[])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert any("OHLCV indisponible" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_evaluate_holds_when_no_entry_signal(monkeypatch):
+    _patch_pipeline(monkeypatch, signal=EntrySignal(present=False, reasons=["setup non réuni"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_buys_on_strong_rr_with_alignment(monkeypatch):
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(1, ["EMA12 > EMA26"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["price"] == 1.5
+    assert result["target"] == 2.5
+    assert result["invalidation"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_evaluate_holds_strong_rr_without_any_alignment(monkeypatch):
+    """R/R franc mais AUCUN signal technique en soutien -- pas de décision directe."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(0, []))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"  # tombe dans la branche ambiguë -> LLM (mocké absent -> HOLD)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_ambiguous_rr_confirmed_by_llm(monkeypatch):
+    weak = EntrySignal(present=True, entry=1.5, invalidation=1.2, target=1.8, rr=1.2)
+    _patch_pipeline(monkeypatch, signal=weak)
+
+    async def fake_llm_confirm(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(me, "_llm_confirm", fake_llm_confirm)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert any("confirmé par le LLM" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_evaluate_ambiguous_rr_rejected_by_llm(monkeypatch):
+    weak = EntrySignal(present=True, entry=1.5, invalidation=1.2, target=1.8, rr=1.2)
+    _patch_pipeline(monkeypatch, signal=weak)
+
+    async def fake_llm_confirm(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(me, "_llm_confirm", fake_llm_confirm)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_low_rr_never_calls_llm(monkeypatch):
+    tiny = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
+    _patch_pipeline(monkeypatch, signal=tiny)
+
+    called = False
+
+    async def fake_llm_confirm(*args, **kwargs):
+        nonlocal called
+        called = True
+        return True
+
+    monkeypatch.setattr(me, "_llm_confirm", fake_llm_confirm)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_llm_confirm_defaults_to_hold_when_unavailable(monkeypatch):
+    async def fake_chat_with_context(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    confirmed = await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+    assert confirmed is False
+
+
+@pytest.mark.asyncio
+async def test_llm_confirm_parses_buy(monkeypatch):
+    async def fake_chat_with_context(*args, **kwargs):
+        return "BUY"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    confirmed = await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+    assert confirmed is True
+
+
+@pytest.mark.asyncio
+async def test_llm_confirm_tolerates_exception(monkeypatch):
+    async def fake_chat_with_context(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    confirmed = await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+    assert confirmed is False
