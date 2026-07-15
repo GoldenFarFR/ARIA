@@ -467,6 +467,9 @@ async def test_get_token_transfers_single_page_default_unchanged(monkeypatch):
     result = await client.get_token_transfers("0xabc", limit=50)
 
     assert len(result.transfers) == 1
+    # 15/07, revue externe -- next_page_params existait encore quand on s'est
+    # arrêté (max_pages=1 par défaut) : historique PAS réellement épuisé.
+    assert result.truncated is True
 
 
 @pytest.mark.asyncio
@@ -499,6 +502,8 @@ async def test_get_token_transfers_paginates_across_max_pages(monkeypatch):
 
     assert result.available is True
     assert [t.tx_hash for t in result.transfers] == ["0x1", "0x2", "0x3"]
+    # Dernière page sans next_page_params -> historique RÉELLEMENT épuisé.
+    assert result.truncated is False
 
 
 @pytest.mark.asyncio
@@ -529,6 +534,9 @@ async def test_get_token_transfers_respects_max_pages_cap(monkeypatch):
     result = await client.get_token_transfers("0xabc", limit=50, max_pages=2)
 
     assert [t.tx_hash for t in result.transfers] == ["0x1", "0x2"]
+    # 15/07, revue externe -- plafond max_pages atteint alors que next_page_params
+    # existait toujours (page 3 jamais tentée) : historique tronqué, pas épuisé.
+    assert result.truncated is True
 
 
 @pytest.mark.asyncio

@@ -133,6 +133,14 @@ class TokenTransfersResult:
     transfers: list[TokenTransfer] = field(default_factory=list)
     available: bool = True
     error: str | None = None
+    # 15/07, revue externe -- wallet-scoring : ``True`` si l'API Blockscout
+    # avait ENCORE de la donnée (``next_page_params`` présent) quand la
+    # pagination s'est arrêtée à cause du plafond ``max_pages``/``limit``,
+    # jamais quand elle s'arrête parce que l'historique est réellement épuisé
+    # (``next_page_params`` absent). Défaut ``False`` -- rétrocompatible avec
+    # tout appelant existant (``get_transaction_token_transfers`` une page
+    # unique, jamais concerné).
+    truncated: bool = False
 
 
 @dataclass
@@ -384,16 +392,26 @@ class BlockscoutClient:
         params: dict = {"type": token_type} if token_type else {}
         transfers: list[TokenTransfer] = []
         pages_fetched = 0
+        # 15/07, revue externe -- distingue "historique réellement épuisé"
+        # (API n'a plus de `next_page_params`) de "on a arrêté avant la fin"
+        # (erreur réseau, réponse malformée, ou plafond max_pages/limit
+        # atteint alors que `next_page_params` existait encore) -- seul ce
+        # 2e cas doit remonter `truncated=True`, jamais un signal perdu en
+        # silence pour un wallet très actif dont l'historique dépasse le
+        # plafond (2000 transferts / 10 pages côté wallet-scoring).
+        truncated = False
 
         while True:
             data, error = await self._get_json(f"/addresses/{address}/token-transfers", params=params)
             if error is not None:
                 if pages_fetched == 0:
                     return TokenTransfersResult(available=False, error=error)
+                truncated = True
                 break
             if not isinstance(data, dict):
                 if pages_fetched == 0:
                     return TokenTransfersResult(available=False, error=UNAVAILABLE)
+                truncated = True
                 break
 
             items = data.get("items") or []
@@ -406,11 +424,14 @@ class BlockscoutClient:
 
             pages_fetched += 1
             next_page = data.get("next_page_params")
-            if not next_page or pages_fetched >= max_pages or len(transfers) >= limit:
+            if not next_page:
+                break
+            if pages_fetched >= max_pages or len(transfers) >= limit:
+                truncated = True
                 break
             params = {**({"type": token_type} if token_type else {}), **next_page}
 
-        return TokenTransfersResult(transfers=transfers[:limit], available=True, error=None)
+        return TokenTransfersResult(transfers=transfers[:limit], available=True, error=None, truncated=truncated)
 
     async def get_transaction_token_transfers(self, tx_hash: str) -> TokenTransfersResult:
         """Tous les transferts ERC-20 d'UNE transaction précise (14/07,

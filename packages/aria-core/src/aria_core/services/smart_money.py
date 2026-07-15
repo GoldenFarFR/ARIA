@@ -908,6 +908,62 @@ async def analyze_smart_money(
 #   type de donnée jamais fetché ici, coût réseau significatif sur un wallet
 #   actif -- chantier séparé si jamais entrepris, pas un correctif ponctuel.
 # ============================================================================
+#
+# DIXIÈME PASSAGE (15/07, revue externe -- 2 lots). Un vrai bug corrigé, trois
+# fausses alertes vérifiées et RÉFUTÉES, deux nuances documentées :
+#
+# - **Historique de transferts tronqué sans signal (CORRIGÉ)** : `client.
+#   get_token_transfers(wallet, limit=2000, max_pages=10, ...)` peut arrêter
+#   la pagination alors que Blockscout avait ENCORE de la donnée
+#   (`next_page_params` présent) -- un wallet très actif (plus de 2000
+#   transferts ERC-20 vie entière) voyait ses transferts les plus anciens
+#   silencieusement absents, avec un risque de biais sur TOUS les axes
+#   (W/PnL/S/D) et le percentile, pas seulement `unmatched_sell_events`
+#   (déjà documenté plus haut, mais qui ne dit pas SI l'historique lui-même
+#   était complet). `TokenTransfersResult.truncated` (nouveau champ, défaut
+#   `False`, rétrocompatible) distingue désormais "historique réellement
+#   épuisé" (pas de `next_page_params`) de "arrêté avant la fin" (erreur
+#   réseau/réponse malformée en cours de pagination, OU plafond max_pages/
+#   limit atteint alors qu'il restait de la donnée) -- `card.transfer_
+#   history_truncated` l'affiche en ATTENTION à côté du reste.
+# - **RÉFUTÉ (revue externe) -- "évasion du trim par désynchronisation
+#   d'unités"** : l'affirmation que le trim anti-chance (trié en $) laisserait
+#   passer un micro-trade à rendement % extrême qui viendrait ensuite
+#   "contaminer" le Sortino. Vérifié contre le code : `_robust_pnl_check`
+#   (le trim) et `card.sortino` sont deux calculs INDÉPENDANTS sur la MÊME
+#   liste de trades clôturés -- le trim ne filtre jamais les trades utilisés
+#   pour Sortino/win_rate/PnL, c'est un verdict de robustesse à PART
+#   (`robust_pnl_positive`), jamais un préfiltre. Il n'y a donc rien de
+#   "laissé passer" par le trim vers le Sortino -- Sortino voit TOUJOURS
+#   100% des trades, trim ou pas. **Le sous-jacent réel derrière cette
+#   critique reste valide, lui** : un trade dust (ex. achat 0,10$, vente 10$,
+#   +9900% de rendement, +9,90$ de PnL) peut à lui seul dominer mean(return_i)
+#   et donc le Sortino -- même famille que "Sortino jamais pondéré par la
+#   taille" déjà documenté (revue ChatGPT/#178), ce sous-cas dust/airdrop-like
+#   en est un exemple concret supplémentaire, pas un 3e mécanisme.
+# - **RÉFUTÉ -- division par zéro sur `return_i` si `buy_price<=0`** : déjà
+#   gardé. `ClosedTrade.return_pct` retourne `None` explicitement si
+#   `buy_price <= 0`, AVANT toute division -- jamais un crash ni un infini.
+#   Un token reçu gratuitement (buy_price=0, ex. airdrop) et revendu produit
+#   un `pnl_usd` positif correct (`qty * sell_price`, tout le produit de la
+#   vente est un profit réel) mais un `return_pct=None` -- exclu du calcul de
+#   Sortino, jamais une valeur aberrante qui s'y invite.
+# - **RÉFUTÉ -- division par zéro du percentile sur population vide** : déjà
+#   doublement gardé. `_apply_comparative_ranking` retourne tôt si `others`
+#   est vide (`if not others: return`), ET `_percentile` lui-même revérifie
+#   `if value is None or not population: return None` -- aucun chemin
+#   n'atteint la division. Comportement documenté et VERROUILLÉ par un test
+#   dédié (`test_first_wallet_ever_scored_has_no_comparison_population`) --
+#   pas seulement un hasard de conception.
+# - Documenté (nuance mineure, pas un bug) : le lissage des ex-æquo (#178)
+#   suppose des ex-æquo l'EXCEPTION -- sur une population aux valeurs très
+#   arrondies ou discrètes (ex. beaucoup de wallets à win_rate pile 0,5), les
+#   ex-æquo peuvent devenir la NORME, rendant le percentile moins
+#   discriminant (toujours correct, juste moins granulaire). Propriété
+#   statistique inhérente au rang moyen sur petite population/valeurs
+#   discrètes -- pas un défaut du code, aucune meilleure alternative
+#   simple sans changer fondamentalement de méthode de classement.
+# ============================================================================
 
 # Tous les poids/seuils tunables de ce chantier vivent dans
 # wallet_scoring_weights.py (isolé à la demande opérateur, 14/07 -- statut
@@ -2041,6 +2097,13 @@ class WalletScoreCard:
     tokens_analyzed: int = 0
     tokens_skipped_capped: bool = False
     chains_scanned: list[str] = field(default_factory=list)  # chaînes où une activité réelle a été trouvée (#157, 14/07)
+    # 15/07, revue externe -- historique tronqué par le plafond de pagination
+    # Blockscout (2000 transferts/10 pages) : l'API avait ENCORE de la donnée
+    # au-delà de ce qui a été récupéré (jamais quand l'historique est
+    # réellement épuisé). Un wallet très actif peut donc manquer ses
+    # transferts les plus anciens -- risque de biais sur TOUS les axes
+    # (W/PnL/S/D) et le percentile, pas seulement `unmatched_sell_events`.
+    transfer_history_truncated: bool = False
 
     # Scan incrémental persistant (#157 suite, 15/07) : `tokens_analyzed` ci-dessus
     # reste "analysés CETTE passe" -- ces deux champs donnent la vue cumulative
@@ -2204,6 +2267,12 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         else f"Scan progressif en cours ({card.tokens_scanned_cumulative}/{card.tokens_found} tokens couverts à ce jour) -- "
              "relancer /walletscore plus tard pour poursuivre et affiner la note."
     )
+    if card.transfer_history_truncated:
+        lines.append(
+            "ATTENTION : historique de transferts tronqué par le plafond de pagination -- ce wallet est très "
+            "actif, des transferts plus anciens que ceux récupérés existent peut-être encore et ne sont pas "
+            "couverts (risque de biais sur le PnL/win rate/Sortino/diversification)."
+        )
     lines.append(
         f"Trades clôturés valorisés (cumulé) : {card.closed_trades_count} (jambes sans prix cette passe : "
         f"{card.unpriced_legs}, tokens sans pool GeckoTerminal résolu cette passe : {card.pool_lookup_errors})"
@@ -2451,6 +2520,16 @@ async def score_wallets(
         funding_source_chain: str | None = None
         any_chain_available = False
         last_error: str | None = None
+        # 15/07, revue externe -- historique tronqué par le plafond de
+        # pagination (2000 transferts/10 pages) : `TokenTransfersResult.
+        # truncated` signale quand Blockscout avait ENCORE de la donnée
+        # (`next_page_params`) alors qu'on a arrêté à cause du plafond, jamais
+        # quand l'historique est réellement épuisé. Sans ce signal, un wallet
+        # très actif (> 2000 transferts ERC-20 vie entière) verrait ses
+        # premiers achats silencieusement absents du FIFO -- des ventes plus
+        # tard dans l'historique deviendraient des `unmatched_sell_events` à
+        # tort, biaisant potentiellement W/PnL/S/D et le percentile.
+        transfers_truncated = False
 
         for chain, chain_client in chain_clients.items():
             transfers_result = await chain_client.get_token_transfers(
@@ -2460,6 +2539,7 @@ async def score_wallets(
                 last_error = transfers_result.error or UNAVAILABLE
                 continue
             any_chain_available = True
+            transfers_truncated = transfers_truncated or transfers_result.truncated
             if transfers_result.transfers:
                 chains_with_data.append(chain)
                 all_flat_transfers.extend(transfers_result.transfers)
@@ -2488,6 +2568,7 @@ async def score_wallets(
 
         card.display_name = primary_info.ens_domain_name if primary_info else None
         card.chains_scanned = chains_with_data
+        card.transfer_history_truncated = transfers_truncated
 
         # Scan incrémental persistant (#157 suite, 15/07) : ne ré-analyse QUE les
         # tokens jamais vus, ou dont l'activité a évolué depuis le dernier scan

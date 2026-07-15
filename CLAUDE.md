@@ -1248,6 +1248,37 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   un outlier ne change rien au percentile des autres, cette classe de distorsion ne
   s'appliquerait qu'à une moyenne/normalisation par la valeur brute. 5 nouveaux tests,
   suite complète verte (4930/4930).
+- **15/07 (nuit, suite) — un vrai bug corrigé, trois fausses alertes réfutées avec
+  preuve (division par zéro ×3), deux nuances documentées.** La même équation, revue
+  une 3e et 4e fois, a fait remonter un vrai trou opérationnel : `client.
+  get_token_transfers(wallet, limit=2000, max_pages=10, ...)` peut arrêter la
+  pagination alors que Blockscout avait ENCORE de la donnée au-delà -- un wallet très
+  actif (plus de 2000 transferts ERC-20 vie entière) voyait ses transferts les plus
+  anciens silencieusement absents, avec un risque de biais sur TOUS les axes (pas
+  seulement `unmatched_sell_events`, qui ne dit pas SI l'historique lui-même était
+  complet). Corrigé : nouveau champ `TokenTransfersResult.truncated` (distingue
+  "historique réellement épuisé" de "arrêté avant la fin par le plafond ou une
+  erreur réseau en cours de route"), affiché en ATTENTION sur la fiche wallet
+  (`card.transfer_history_truncated`).
+  **Trois affirmations vérifiées et RÉFUTÉES avec preuve, pas juste une intuition** :
+  (1) "le trim anti-chance (trié en $) laisserait passer un micro-trade dust à
+  rendement % extrême qui contaminerait le Sortino" -- faux : le trim et le calcul
+  du Sortino sont deux calculs INDÉPENDANTS sur la même liste de trades, le trim ne
+  filtre jamais ce qui alimente Sortino (c'est un verdict de robustesse À PART,
+  jamais un préfiltre) -- rien n'est "laissé passer" puisqu'il n'y a pas de filtre
+  entre les deux. Le sous-jacent reste réel (un trade dust à +9900% peut dominer la
+  moyenne des rendements) mais c'est un exemple concret du biais Sortino DÉJÀ
+  documenté (#178), pas un 3e mécanisme ; (2) division par zéro sur le rendement si
+  le prix d'achat est nul (ex. airdrop) -- déjà gardé, `return_pct` retourne `None`
+  explicitement avant toute division, jamais un crash ; (3) division par zéro du
+  percentile sur une population de comparaison vide (cold start) -- déjà DOUBLEMENT
+  gardé (le code appelant ET la fonction elle-même vérifient une population vide) et
+  déjà verrouillé par un test dédié depuis le début du chantier. **Documenté (nuance
+  mineure)** : le lissage des ex-æquo (#178) suppose les ex-æquo rares -- sur une
+  population aux valeurs très arrondies/discrètes, ils peuvent devenir la norme,
+  rendant le percentile moins discriminant (toujours correct, juste moins granulaire
+  -- propriété statistique inhérente, pas un défaut de code). 3 nouveaux tests, suite
+  complète verte.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
