@@ -379,3 +379,59 @@ class TestBuildEarlyBuyerMultipleQuery:
     def test_rejects_non_int_lookback_days(self):
         with pytest.raises(ValueError):
             dune.build_early_buyer_multiple_query(min_multiple=5.0, lookback_days=30.5)
+
+
+class TestBuildRecentBasePairsQuery:
+    """Deuxième source de découverte de tokens Base (#134, 15/07) -- même
+    Execute SQL API, aucun nouveau client. Portée de cette tâche : la
+    requête et sa validation SEULEMENT (pas de branchement pipeline)."""
+
+    def test_substitutes_parameters(self):
+        sql = dune.build_recent_base_pairs_query(min_volume_usd=5000.0, lookback_hours=48)
+        assert "5000.0" in sql
+        assert "48" in sql
+        assert "dex.trades" in sql
+        assert "blockchain = 'base'" in sql
+
+    def test_token_launch_filters_via_having_not_where(self):
+        """Même piège que celui corrigé (15/07, avant merge) sur
+        build_early_buyer_multiple_query : un token ÉTABLI dont le premier
+        trade DANS la fenêtre lookback_hours tombe par hasard il y a
+        `lookback_hours` heures ne doit JAMAIS être classé comme "vient de
+        naître" -- l'agrégat MIN(block_time) doit porter sur l'historique
+        complet (aucun filtre de date dans le WHERE de token_launch), et
+        seul le résultat agrégé est filtré via HAVING."""
+        sql = dune.build_recent_base_pairs_query(min_volume_usd=5000.0, lookback_hours=48)
+        token_launch_cte = sql.split("token_launch AS (")[1].split("recent_volume AS (")[0]
+        assert "HAVING MIN(block_time) >= NOW() - INTERVAL '48' hour" in token_launch_cte
+        assert "WHERE blockchain = 'base'\n    GROUP BY" in token_launch_cte
+
+    def test_recent_volume_bounded_by_window_not_a_regression(self):
+        """recent_volume PEUT être borné directement par lookback_hours dans
+        son WHERE (contrairement à token_launch) -- un token dont le
+        launch_time tombe dans la fenêtre a par construction tous ses trades
+        dans la fenêtre aussi, même raisonnement déjà appliqué à
+        token_peak/token_launch_price dans build_early_buyer_multiple_query."""
+        sql = dune.build_recent_base_pairs_query(min_volume_usd=5000.0, lookback_hours=48)
+        recent_volume_cte = sql.split("recent_volume AS (")[1].split("SELECT\n    tl.token_address")[0]
+        assert "block_time >= NOW() - INTERVAL '48' hour" in recent_volume_cte
+
+    def test_min_volume_applied_in_outer_where(self):
+        sql = dune.build_recent_base_pairs_query(min_volume_usd=5000.0, lookback_hours=48)
+        assert "WHERE rv.volume_usd >= 5000.0" in sql
+
+    def test_rejects_non_numeric_min_volume_usd(self):
+        with pytest.raises(ValueError):
+            dune.build_recent_base_pairs_query(min_volume_usd="lots", lookback_hours=48)
+
+    def test_rejects_non_positive_min_volume_usd(self):
+        with pytest.raises(ValueError):
+            dune.build_recent_base_pairs_query(min_volume_usd=0, lookback_hours=48)
+
+    def test_rejects_non_positive_lookback_hours(self):
+        with pytest.raises(ValueError):
+            dune.build_recent_base_pairs_query(min_volume_usd=5000.0, lookback_hours=0)
+
+    def test_rejects_non_int_lookback_hours(self):
+        with pytest.raises(ValueError):
+            dune.build_recent_base_pairs_query(min_volume_usd=5000.0, lookback_hours=48.5)
