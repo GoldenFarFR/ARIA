@@ -152,6 +152,43 @@ class TestFifoMatch:
         sm._fifo_match(TOKEN_X, buys, sells, _price_lookup)
         assert seen_hashes == ["0xbuy", "0xsell"]
 
+    def test_unmatched_sell_beyond_buy_queue_counted_never_credited(self):
+        # 15/07, revue Gemini -- signal possible de rebase/rendement DeFi
+        # (stETH, aTokens) : le solde augmente sans transfert entrant
+        # équivalent. Le surplus vendu (12 - 10 = 2) ne doit jamais être
+        # crédité comme profit -- juste compté.
+        buys = [(_dt(0), 10.0, "0xbuy")]
+        sells = [(_dt(1), 12.0, "0xsell")]
+        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts, _h: 1.0)
+
+        assert len(result.closed_trades) == 1
+        assert result.closed_trades[0].token_amount == pytest.approx(10.0)  # jamais 12
+        assert result.unmatched_sell_events == 1
+
+    def test_exact_hashes_mark_confidence_per_leg(self):
+        # 15/07, revue Gemini -- price_confirmation_ratio : chaque bord d'un
+        # ClosedTrade porte sa propre confiance (achat exact, vente estimée,
+        # ou l'inverse), indépendamment l'un de l'autre.
+        buys = [(_dt(0), 10.0, "0xbuy")]
+        sells = [(_dt(1), 10.0, "0xsell")]
+        result = sm._fifo_match(
+            TOKEN_X, buys, sells, lambda ts, _h: 1.0, exact_hashes=frozenset({"0xbuy"}),
+        )
+        trade = result.closed_trades[0]
+        assert trade.buy_price_exact is True
+        assert trade.sell_price_exact is False
+
+    def test_exact_hashes_default_empty_backward_compatible(self):
+        # Rétrocompatibilité : un appelant qui ne fournit pas exact_hashes
+        # (tout le code/tests existants avant #157 suite 15/07) obtient
+        # buy_price_exact/sell_price_exact=False, jamais une erreur.
+        buys = [(_dt(0), 10.0, "0xbuy")]
+        sells = [(_dt(1), 10.0, "0xsell")]
+        result = sm._fifo_match(TOKEN_X, buys, sells, lambda ts, _h: 1.0)
+        trade = result.closed_trades[0]
+        assert trade.buy_price_exact is False
+        assert trade.sell_price_exact is False
+
 
 class TestSortinoRatio:
     def test_below_min_trades_unavailable(self):
@@ -221,26 +258,67 @@ class TestWalletAgeAndSwapCount:
         unrelated = _transfer(from_addr=FUNDER, to_addr=WALLET_B, token=TOKEN_X, ts=_dt(1), tx_hash="0xu")
         assert sm._count_total_swaps([buy, sell, unrelated], WALLET_A) == 2
 
+    def test_wrap_unwrap_excluded_from_swap_count(self):
+        # Exploit identifié (15/07, revue Gemini) : un script qui wrap/unwrap du
+        # ETH<->WETH des centaines de fois débloquerait min_total_swaps sans
+        # jamais prendre de risque de trading réel -- ces jambes (mint/burn
+        # depuis/vers l'adresse zéro sur le WETH Base) ne doivent plus compter.
+        weth_base = "0x4200000000000000000000000000000000000006"
+        zero = "0x" + "0" * 40
+        wrap = _transfer(from_addr=zero, to_addr=WALLET_A, token=weth_base, ts=_dt(0), tx_hash="0xw1")
+        unwrap = _transfer(from_addr=WALLET_A, to_addr=zero, token=weth_base, ts=_dt(1), tx_hash="0xw2")
+        real_buy = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(2), tx_hash="0xr")
+        assert sm._count_total_swaps([wrap, unwrap, real_buy], WALLET_A) == 1
+
+    def test_wrap_unwrap_of_unrelated_token_still_counted(self):
+        # Un mint/burn depuis/vers l'adresse zéro sur un token QUELCONQUE (pas
+        # le wrapped-native connu) n'est pas exclu -- seule l'adresse WETH/wrapped-
+        # native enregistrée déclenche l'exclusion, jamais un token arbitraire.
+        zero = "0x" + "0" * 40
+        mint = _transfer(from_addr=zero, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), tx_hash="0xm")
+        assert sm._count_total_swaps([mint], WALLET_A) == 1
+
 
 class TestRobustPnlCheck:
     def test_below_minimum_unavailable(self):
         trades = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 1.0, 2.0) for _ in range(5)]
-        assert sm._robust_pnl_check(trades, trim_count=10, min_required=30) is None
+        assert sm._robust_pnl_check(trades, trim_pct=0.10, min_required=30) is None
 
     def test_trims_both_tails_and_stays_positive(self):
         # 30 trades : 10 très négatifs, 10 neutres/légèrement positifs, 10 très positifs.
-        # Retrait des 10 meilleurs ET 10 pires -> il ne reste que les 10 neutres/positifs.
+        # trim_pct=1/3 retire exactement 10 de chaque extrémité (même comportement
+        # que l'ancien compte fixe de 10, pour ce cas précis) -> il ne reste que
+        # les 10 neutres/positifs.
         losers = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 10.0, 1.0) for _ in range(10)]  # pnl -9 chacun
         middle = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 1.0, 1.1) for _ in range(10)]  # pnl +0.1 chacun
         winners = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 1.0, 100.0) for _ in range(10)]  # pnl +99 chacun
-        result = sm._robust_pnl_check(losers + middle + winners, trim_count=10, min_required=30)
+        result = sm._robust_pnl_check(losers + middle + winners, trim_pct=1 / 3, min_required=30)
         assert result is True
 
     def test_all_losses_remain_negative_after_trim(self):
         # sell < buy pour chaque trade -> pnl toujours négatif, peu importe la magnitude.
+        # trim_pct=0.25 sur 40 trades retire exactement 10 de chaque extrémité.
         trades = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 10.0, 10.0 - i * 0.1) for i in range(1, 41)]
-        result = sm._robust_pnl_check(trades, trim_count=10, min_required=30)
+        result = sm._robust_pnl_check(trades, trim_pct=0.25, min_required=30)
         assert result is False
+
+    def test_percentage_trim_closes_dilution_vector_fixed_count_missed(self):
+        # Vecteur d'exploitation identifié par revue croisée externe (15/07,
+        # Gemini/ChatGPT/Grok convergents) : 15 trades "chanceux" (+10000$
+        # chacun) noyés dans 185 trades normaux légèrement perdants (-10$
+        # chacun). L'ANCIEN compte fixe de 10 n'aurait retiré que 10 des 15
+        # trades chanceux -- les 5 restants (+50000$) suffisaient à faire
+        # paraître le reste "robuste" à tort (48250$ > 0). Le trim en
+        # POURCENTAGE (10% de 200 = 20 >= 15) les retire TOUS -- révèle
+        # correctement que le wallet n'est pas robuste sans ses coups de chance.
+        lucky = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 1.0, 10_001.0) for _ in range(15)]
+        normal = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 10.0, 0.0) for _ in range(185)]
+        result = sm._robust_pnl_check(lucky + normal, trim_pct=0.10, min_required=30)
+        assert result is False
+
+    def test_trim_too_large_relative_to_sample_returns_none(self):
+        trades = [sm.ClosedTrade(TOKEN_X, _dt(0), _dt(1), 1.0, 1.0, 2.0) for _ in range(30)]
+        assert sm._robust_pnl_check(trades, trim_pct=0.6, min_required=30) is None
 
 
 class TestHealthTrend:
@@ -806,12 +884,15 @@ class FakeBlockscoutClient:
 class FakeGeckoTerminalClient:
     """``pool_for_token`` mappe token -> pool résolu (peut différer, comme en
     réalité) ; ``ohlcv`` est keyé par POOL address (jamais le token), reflétant
-    le comportement réel post-correctif de `resolve_primary_pool`."""
+    le comportement réel post-correctif de `resolve_primary_pool`. ``reserve_usd_for_token``
+    (15/07, défense anti-dust/scam-pool) : liquidité confirmée du pool résolu --
+    absente/``None`` par défaut (fail-open, comportement historique inchangé)."""
 
-    def __init__(self, *, pool_for_token=None, pool_created_at=None, ohlcv=None):
+    def __init__(self, *, pool_for_token=None, pool_created_at=None, ohlcv=None, reserve_usd_for_token=None):
         self._pool_for_token = pool_for_token or {}
         self._pool_created_at = pool_created_at or {}
         self._ohlcv = ohlcv or {}
+        self._reserve_usd_for_token = reserve_usd_for_token or {}
 
     async def resolve_primary_pool(self, token_address, **kwargs):
         pool_address = self._pool_for_token.get(token_address)
@@ -820,6 +901,7 @@ class FakeGeckoTerminalClient:
         return PoolMetadata(
             pool_address=pool_address,
             created_at=self._pool_created_at.get(token_address),
+            reserve_usd=self._reserve_usd_for_token.get(token_address),
             available=True,
         )
 
@@ -1571,6 +1653,215 @@ class TestHashPriceRealSwapRegression:
         # confirme le repli silencieux OHLCV pour ce hash précis.
         assert "0xbuy-not-mocked" in client.tx_token_transfers_calls
         assert self._TX in client.tx_token_transfers_calls
+
+
+class TestLiquidityFloorForPricing:
+    """15/07, revue Gemini -- défense anti-dust/scam-pool : un pool résolu mais
+    dont la liquidité confirmée est sous le plancher ne doit pas valoriser de
+    PnL (pool trivialement manipulable, ex. dust envoyé par un scammeur)."""
+
+    @pytest.mark.asyncio
+    async def test_thin_pool_skips_pricing_and_is_reported(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        async def _fake_has_any_pair(contract, *, chain="base"):
+            return False
+
+        monkeypatch.setattr("aria_core.services.dexscreener.has_any_pair", _fake_has_any_pair)
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=100.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(1), amount=100.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: _flat_ohlcv(1.0, start=_dt(-2))},
+            reserve_usd_for_token={TOKEN_X: 1_500.0},  # sous le plancher par défaut (30 000$)
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.available is True
+        assert card.closed_trades_count == 0
+        assert card.unpriced_legs == 2  # achat + vente, jamais valorisés sur ce pool trop peu liquide
+        assert card.thin_liquidity_pricing_skipped_count == 1
+        assert card.pool_lookup_errors == 0  # le pool EST résolu -- ce n'est pas un échec de résolution
+
+    @pytest.mark.asyncio
+    async def test_liquid_pool_prices_normally(self, tmp_path, monkeypatch):
+        # Régression : une liquidité confirmée AU-DESSUS du plancher continue
+        # de valoriser normalement (comportement historique inchangé).
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=100.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(1), amount=100.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: _flat_ohlcv(1.0, start=_dt(-2))},
+            reserve_usd_for_token={TOKEN_X: 50_000.0},  # au-dessus du plancher
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.closed_trades_count == 1
+        assert card.thin_liquidity_pricing_skipped_count == 0
+
+
+class TestPriceConfirmationRatio:
+    """15/07, revue Gemini -- transparence sur la confiance du cost-basis :
+    part des jambes valorisées par un prix d'exécution EXACT (tx_hash +
+    stablecoin) plutôt que par le repli marché OHLCV."""
+
+    def _hash_leg_pair(self, *, wallet, pool, token, token_amount, stable_amount, is_buy: bool):
+        if is_buy:
+            token_leg = _transfer(from_addr=pool, to_addr=wallet, token=token, ts=_dt(0), amount=token_amount)
+            stable_leg = _transfer(from_addr=wallet, to_addr=pool, token=_STABLE, ts=_dt(0), amount=stable_amount)
+        else:
+            token_leg = _transfer(from_addr=wallet, to_addr=pool, token=token, ts=_dt(0), amount=token_amount)
+            stable_leg = _transfer(from_addr=pool, to_addr=wallet, token=_STABLE, ts=_dt(0), amount=stable_amount)
+        return TokenTransfersResult(transfers=[token_leg, stable_leg], available=True)
+
+    @pytest.mark.asyncio
+    async def test_mixed_exact_and_estimated_legs_computes_ratio(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                # Achat -- AUCUN hash mocké -> retombe sur pool+OHLCV (estimé).
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0, tx_hash="0xbuy"),
+                # Vente -- hash mocké avec jambe stablecoin -> prix exact.
+                _transfer(from_addr=WALLET_A, to_addr=POOL_X, token=TOKEN_X, ts=_dt(1), amount=10.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(
+            transfers={WALLET_A: transfers},
+            tx_token_transfers={
+                "0xsell": self._hash_leg_pair(
+                    wallet=WALLET_A, pool=POOL_X, token=TOKEN_X, token_amount=10.0, stable_amount=110.0, is_buy=False,
+                ),
+            },
+        )
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: _flat_ohlcv(1.0, start=_dt(-2))},
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.closed_trades_count == 1
+        # 1 jambe exacte (vente) sur 2 jambes au total (achat estimé + vente exacte).
+        assert card.price_confirmation_ratio == pytest.approx(0.5)
+        assert card.price_confidence_low is False  # 50% >= seuil par défaut (30%)
+
+    @pytest.mark.asyncio
+    async def test_fully_estimated_pricing_flags_low_confidence(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(1), amount=10.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})  # aucun hash mocké
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: _flat_ohlcv(1.0, start=_dt(-2))},
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.price_confirmation_ratio == pytest.approx(0.0)
+        assert card.price_confidence_low is True
+
+
+class TestCapitalWeightedDiversification:
+    """15/07, revue ChatGPT -- complète (remplace pas) le ratio par comptage :
+    mesure la concentration réelle du capital plutôt que la largeur des paris."""
+
+    @pytest.mark.asyncio
+    async def test_capital_weighted_ratio_diverges_from_count_ratio(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        def _pair(token, pool, *, token_amount, buy_stable, sell_stable, buy_hash, sell_hash):
+            return [
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=token, ts=_dt(0), amount=token_amount, tx_hash=buy_hash),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=token, ts=_dt(1), amount=token_amount, tx_hash=sell_hash),
+            ], {
+                buy_hash: self._pair_result(pool, token, token_amount, buy_stable, is_buy=True),
+                sell_hash: self._pair_result(pool, token, token_amount, sell_stable, is_buy=False),
+            }
+
+        # TOKEN_X : grosse capitalisation (1000$ engagés), profitable (+100$).
+        x_transfers, x_hashes = _pair(
+            TOKEN_X, POOL_X, token_amount=100.0, buy_stable=1000.0, sell_stable=1100.0,
+            buy_hash="0xbuyX", sell_hash="0xsellX",
+        )
+        # TOKEN_Y : capital minuscule (1$ engagé), perdant (-0.5$).
+        y_transfers, y_hashes = _pair(
+            TOKEN_Y, POOL_Y, token_amount=1.0, buy_stable=1.0, sell_stable=0.5,
+            buy_hash="0xbuyY", sell_hash="0xsellY",
+        )
+
+        transfers = TokenTransfersResult(transfers=[*x_transfers, *y_transfers], available=True)
+        client = FakeBlockscoutClient(
+            transfers={WALLET_A: transfers}, tx_token_transfers={**x_hashes, **y_hashes},
+        )
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X, TOKEN_Y: POOL_Y},
+            pool_created_at={TOKEN_X: _dt(-1), TOKEN_Y: _dt(-1)},
+            ohlcv={},  # OHLCV vide -- force le pricing par hash exact sur les deux tokens
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.closed_trades_count == 2
+        # Comptage : 1 profitable / 2 tokens = 50%.
+        assert card.diversification_profitable_tokens == 1
+        assert card.diversification_total_tokens == 2
+        # Pondéré par capital : 1000$ profitables / 1001$ engagés au total ~= 99.9%.
+        assert card.diversification_capital_weighted_ratio == pytest.approx(1000.0 / 1001.0, rel=1e-4)
+
+    @staticmethod
+    def _pair_result(pool, token, token_amount, stable_amount, *, is_buy):
+        if is_buy:
+            token_leg = _transfer(from_addr=pool, to_addr=WALLET_A, token=token, ts=_dt(0), amount=token_amount)
+            stable_leg = _transfer(from_addr=WALLET_A, to_addr=pool, token=_STABLE, ts=_dt(0), amount=stable_amount)
+        else:
+            token_leg = _transfer(from_addr=WALLET_A, to_addr=pool, token=token, ts=_dt(1), amount=token_amount)
+            stable_leg = _transfer(from_addr=pool, to_addr=WALLET_A, token=_STABLE, ts=_dt(1), amount=stable_amount)
+        return TokenTransfersResult(transfers=[token_leg, stable_leg], available=True)
 
 
 def test_wallet_scoring_gate_off_by_default(monkeypatch):
