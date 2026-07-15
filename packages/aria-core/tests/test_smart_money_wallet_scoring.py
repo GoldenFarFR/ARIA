@@ -2252,6 +2252,180 @@ class TestTransientPricingErrorRetry:
         assert len(checkpoint.scanned_tokens) == 1
 
 
+class TestPercentileTieSmoothing:
+    """15/07, revue externe -- lissage des ex-æquo : un wallet dont la valeur
+    est EX-ÆQUO avec la majorité de la population (pas strictement pire) ne
+    doit jamais tomber au 0e percentile comme s'il était pire que tout le
+    monde."""
+
+    def test_tied_value_gets_half_credit_not_zero(self):
+        # 4 wallets à 0.5 pile dans la population -> un wallet ÉGALEMENT à 0.5
+        # doit être crédité à 50% (ex-æquo avec 100% de la population), jamais 0%.
+        population = [0.5, 0.5, 0.5, 0.5]
+
+        def _percentile(value, pop):
+            below = sum(1 for p in pop if p < value)
+            tied = sum(1 for p in pop if p == value)
+            return round(100.0 * (below + 0.5 * tied) / len(pop), 1)
+
+        assert _percentile(0.5, population) == pytest.approx(50.0)
+
+    def test_strictly_greater_still_gets_full_credit(self):
+        population = [0.1, 0.2, 0.3]
+
+        def _percentile(value, pop):
+            below = sum(1 for p in pop if p < value)
+            tied = sum(1 for p in pop if p == value)
+            return round(100.0 * (below + 0.5 * tied) / len(pop), 1)
+
+        assert _percentile(0.4, population) == pytest.approx(100.0)
+
+    @pytest.mark.asyncio
+    async def test_tied_win_rate_scored_at_fifty_not_zero_end_to_end(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        # WALLET_A (déjà noté) : win_rate exactement 0.5 (1 gagnant / 1 perdant).
+        # Jambes hash-exactes (tx_hash + jambe stablecoin) -- sinon WALLET_A serait
+        # `price_confidence_low=True` (100% estimé OHLCV) et exclu de la population
+        # de comparaison (#175), ce qui n'est PAS ce que ce test veut vérifier.
+        loser_leg = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0, tx_hash="0xlbuy")
+        loser_sell = _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0, tx_hash="0xlsell")
+        winner_leg = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_Y, ts=_dt(0), amount=10.0, tx_hash="0xwbuy")
+        winner_sell = _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_Y, ts=_dt(2), amount=10.0, tx_hash="0xwsell")
+        transfers_a = TokenTransfersResult(transfers=[loser_leg, loser_sell, winner_leg, winner_sell], available=True)
+        client_a = FakeBlockscoutClient(
+            transfers={WALLET_A: transfers_a},
+            tx_token_transfers={
+                "0xlbuy": TokenTransfersResult(transfers=[
+                    _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0, tx_hash="0xlbuy"),
+                    _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=_STABLE, ts=_dt(0), amount=10.0, tx_hash="0xlbuy"),
+                ], available=True),
+                "0xlsell": TokenTransfersResult(transfers=[
+                    _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0, tx_hash="0xlsell"),
+                    _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=_STABLE, ts=_dt(2), amount=5.0, tx_hash="0xlsell"),
+                ], available=True),
+                "0xwbuy": TokenTransfersResult(transfers=[
+                    _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_Y, ts=_dt(0), amount=10.0, tx_hash="0xwbuy"),
+                    _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=_STABLE, ts=_dt(0), amount=10.0, tx_hash="0xwbuy"),
+                ], available=True),
+                "0xwsell": TokenTransfersResult(transfers=[
+                    _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_Y, ts=_dt(2), amount=10.0, tx_hash="0xwsell"),
+                    _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=_STABLE, ts=_dt(2), amount=20.0, tx_hash="0xwsell"),
+                ], available=True),
+            },
+        )
+        gecko_a = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X, TOKEN_Y: POOL_Y},
+            pool_created_at={TOKEN_X: _dt(-1), TOKEN_Y: _dt(-1)},
+            ohlcv={
+                POOL_X: OHLCVResult(candles=TestComparativeRanking._candles(0.5), available=True),  # perte
+                POOL_Y: OHLCVResult(candles=TestComparativeRanking._candles(2.0), available=True),  # gain
+            },
+        )
+        await sm.score_wallets([WALLET_A], client=client_a, gecko=gecko_a, llm=_fake_llm, goplus=_clean_goplus())
+
+        # WALLET_B : EXACTEMENT le même win_rate (0.5) -- ex-æquo, pas pire.
+        transfers_b = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_B, token=TOKEN_X, ts=_dt(0), amount=10.0),
+                _transfer(from_addr=WALLET_B, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0),
+                _transfer(from_addr=FUNDER, to_addr=WALLET_B, token=TOKEN_Y, ts=_dt(0), amount=10.0),
+                _transfer(from_addr=WALLET_B, to_addr=FUNDER, token=TOKEN_Y, ts=_dt(2), amount=10.0),
+            ],
+            available=True,
+        )
+        client_b = FakeBlockscoutClient(transfers={WALLET_B: transfers_b})
+        gecko_b = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X, TOKEN_Y: POOL_Y},
+            pool_created_at={TOKEN_X: _dt(-1), TOKEN_Y: _dt(-1)},
+            ohlcv={
+                POOL_X: OHLCVResult(candles=TestComparativeRanking._candles(0.5), available=True),
+                POOL_Y: OHLCVResult(candles=TestComparativeRanking._candles(2.0), available=True),
+            },
+        )
+        report_b = await sm.score_wallets(
+            [WALLET_B], client=client_b, gecko=gecko_b, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+        card_b = report_b.wallets[0]
+        assert card_b.win_rate == pytest.approx(0.5)
+        # Ex-æquo avec WALLET_A (0.5 pile) -> 50%, jamais 0%.
+        assert card_b.percentile_win_rate == pytest.approx(50.0)
+
+
+class TestSortinoPnlContradiction:
+    """15/07, revue externe -- biais d'asymétrie de taille : `sortino` se
+    calcule sur le rendement EN % par trade, jamais pondéré par le capital
+    engagé -- un wallet peut afficher un Sortino positif alors que son PnL
+    réalisé en DOLLARS est négatif (beaucoup de petits gains en % sur des
+    mises minuscules, une grosse perte en % plus faible mais en $ dominante)."""
+
+    @pytest.mark.asyncio
+    async def test_flagged_when_sortino_positive_but_pnl_negative(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+
+        # 4 micro-trades gagnants (+100% sur une mise de 1$ chacun, +4$ au total)
+        # + 1 trade majeur perdant (-50% sur une mise de 1000$, -500$) :
+        # mean(return) = (4*1.0 - 0.5) / 5 = 0.7 ; downside_dev = sqrt(mean([0.25])) = 0.5
+        # -> Sortino = 0.7/0.5 = 1.4 (positif) alors que PnL réel = 4 - 500 = -496$ (négatif).
+        transfers = []
+        gecko_pools = {}
+        gecko_ohlcv = {}
+        for i in range(4):
+            token = "0x" + f"{i+10}".rjust(40, "0")
+            pool = "0x" + f"{i+50}".rjust(40, "0")
+            transfers.append(_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=token, ts=_dt(0), amount=1.0))
+            transfers.append(_transfer(from_addr=WALLET_A, to_addr=FUNDER, token=token, ts=_dt(2), amount=1.0))
+            gecko_pools[token] = pool
+            gecko_ohlcv[pool] = OHLCVResult(candles=TestComparativeRanking._candles(2.0), available=True)  # buy 1 -> sell 2
+
+        major_token = "0x" + "99".rjust(40, "0")
+        major_pool = "0x" + "88".rjust(40, "0")
+        transfers.append(_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=major_token, ts=_dt(0), amount=1000.0))
+        transfers.append(_transfer(from_addr=WALLET_A, to_addr=FUNDER, token=major_token, ts=_dt(2), amount=1000.0))
+        gecko_pools[major_token] = major_pool
+        # buy 1.0 -> sell 0.5 : perte de 50% sur une mise de 1000$ (candles bâties pour un prix
+        # UNITAIRE de 1.0 puis 0.5 -- l'amount=1000 porte la taille de la mise, pas le prix).
+        gecko_ohlcv[major_pool] = OHLCVResult(candles=TestComparativeRanking._candles(0.5), available=True)
+
+        client = FakeBlockscoutClient(transfers={WALLET_A: TokenTransfersResult(transfers=transfers, available=True)})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token=gecko_pools,
+            pool_created_at={t: _dt(-1) for t in gecko_pools},
+            ohlcv=gecko_ohlcv,
+        )
+
+        report = await sm.score_wallets([WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus())
+        card = report.wallets[0]
+
+        assert card.closed_trades_count == 5
+        assert card.realized_pnl_usd == pytest.approx(4.0 - 500.0)  # -496$, réellement négatif
+        assert card.sortino is not None and card.sortino > 0  # "honorable" en apparence
+        assert card.sortino_pnl_contradiction is True
+
+        text = sm._format_card_for_prompt(card)
+        assert "ATTENTION" in text
+        assert "Sortino positif mais PnL réalisé négatif" in text
+
+    @pytest.mark.asyncio
+    async def test_not_flagged_when_sortino_and_pnl_agree(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=10.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=_dt(2), amount=10.0),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: _dt(-1)},
+            ohlcv={POOL_X: OHLCVResult(candles=TestComparativeRanking._candles(2.0), available=True)},
+        )
+        report = await sm.score_wallets([WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus())
+        card = report.wallets[0]
+        assert card.sortino_pnl_contradiction is False  # sortino indisponible ici (1 seul trade, sous le seuil)
+
+
 def test_wallet_scoring_gate_off_by_default(monkeypatch):
     monkeypatch.delenv("ARIA_WALLET_SCORING_ENABLED", raising=False)
     assert sm.wallet_scoring_enabled() is False
