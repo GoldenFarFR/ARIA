@@ -924,6 +924,14 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   confirmée à l'opérateur AVANT d'être programmée, pas découverte après coup dans l'UI — pas
   fait correctement ici. **Décision opérateur toujours en attente** : garder cette Routine
   (à reconfigurer pour appeler le nouvel endpoint une fois déployé) ou la supprimer.
+- **15/07 — opérateur SANS accès VPS pour l'instant, tout passe par la session cloud
+  (commandement) jusqu'à nouvel ordre.** Conséquence directe : la génération de
+  `ARIA_DIAGNOSTIC_TOKEN` + son ajout au `.env` + le déploiement de #158/#159 ci-dessus
+  restent en attente (nécessitent un accès VPS réel) — noté ici pour ne pas le perdre au
+  prochain compactage, à reprendre dès qu'une session VPS (Principal/Secondaire/Research)
+  ou un accès opérateur direct redevient disponible. En attendant, toute nouvelle demande
+  se traite depuis cette session cloud avec ses limites connues (pas d'accès réseau
+  direct au VPS/`aria.db`, curl/WebFetch seulement vers l'extérieur).
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
