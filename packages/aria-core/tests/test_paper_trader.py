@@ -103,9 +103,10 @@ async def test_run_cycle_opens_then_stages_take_profit(tmp_db):
 
     pos = await pt._get_open(D)
     assert pos["tp_stage_hit"] == 1
-    # Alloc par défaut (candidat ouvert via run_paper_cycle, pas d'alloc_usd explicite) =
-    # ALLOC_PCT * capital = 50 000 $ -> qty initiale 50 000 ; 1/3 vendu au palier 1.
-    assert round(pos["qty"]) == round(50_000 * (2.0 / 3.0))
+    # #186 -- invalidation=0.5 sur entrée=1.0 -> risque 50 % de l'alloc flat (ALLOC_PCT *
+    # capital = 50 000 $), plafonné par size_position_by_risk à RISK_CAP_PCT (2 %) * capital
+    # = 20 000 $ / 0.5 = 40 000 $ -> qty initiale 40 000 ; 1/3 vendu au palier 1.
+    assert round(pos["qty"]) == round(40_000 * (2.0 / 3.0))
 
 
 @pytest.mark.asyncio
