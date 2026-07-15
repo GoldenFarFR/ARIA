@@ -10,8 +10,12 @@ async def test_privy_login_creates_member(tmp_path, monkeypatch):
     monkeypatch.setattr("app.auth.access_code.DB_PATH", str(db))
     monkeypatch.setattr("app.auth.privy_sessions.DB_PATH", str(db))
 
-    token, _ = await login_with_privy(privy_did="did:privy:new", twitter_username="newuser")
+    token, _, is_new_member = await login_with_privy(privy_did="did:privy:new", twitter_username="newuser")
     assert token
+    assert is_new_member is True
+
+    _, _, is_new_member_again = await login_with_privy(privy_did="did:privy:new", twitter_username="newuser")
+    assert is_new_member_again is False
 
     handle = await lookup_linked_handle("did:privy:new")
     assert handle == "newuser"

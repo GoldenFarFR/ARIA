@@ -53,7 +53,10 @@ async def login_with_privy(
     privy_did: str,
     twitter_username: str,
     ttl_hours: int = 24,
-) -> tuple[str, datetime]:
+) -> tuple[str, datetime, bool]:
+    """Returns (token, expires, is_new_member) -- `is_new_member` is True only on this
+    privy_did's very first link (no prior `user_links` row), used to pick between
+    welcome_site_access()/welcome_site_return() (narrative.py) at the call site."""
     await _ensure_session_columns()
     now = datetime.now(timezone.utc).isoformat()
 
@@ -63,6 +66,7 @@ async def login_with_privy(
             (privy_did,),
         )
         existing = await cursor.fetchone()
+        is_new_member = existing is None
         if existing and existing[0] != twitter_username:
             raise ValueError("This X account is already linked to another member profile")
 
@@ -89,4 +93,4 @@ async def login_with_privy(
             (privy_did, twitter_username, token),
         )
         await db.commit()
-    return token, expires
+    return token, expires, is_new_member
