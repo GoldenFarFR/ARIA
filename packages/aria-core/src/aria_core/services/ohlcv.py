@@ -193,15 +193,25 @@ class OHLCVClient:
             return response.json(), None
 
     async def get_ohlcv(
-        self, pool_address: str, *, network: str = DEFAULT_NETWORK
+        self, pool_address: str, *, network: str = DEFAULT_NETWORK, min_useful_candles: int = _MIN_USEFUL_CANDLES,
     ) -> OHLCVResult:
         """Récupère la meilleure série OHLCV disponible pour un pool.
 
         Parcourt l'échelle 1D → 4H → 1H et s'arrête au premier timeframe qui
-        fournit assez de bougies (`_MIN_USEFUL_CANDLES`). Si aucun n'atteint le
-        seuil, renvoie la plus fournie obtenue ; si rien n'est obtenu, un
-        `OHLCVResult(available=False)` explicite.
-        """
+        fournit assez de bougies (`min_useful_candles`, défaut
+        `_MIN_USEFUL_CANDLES`). Si aucun n'atteint le seuil, renvoie la plus
+        fournie obtenue ; si rien n'est obtenu, un `OHLCVResult(available=False)`
+        explicite.
+
+        ``min_useful_candles`` (#182, 15/07, correctif de vitesse wallet-scoring) :
+        le seuil par défaut (20 bougies) a du sens pour `ta_levels`/`chart_render`
+        (besoin d'assez de bougies pour calculer support/résistance), mais AUCUN
+        sens pour un appelant qui n'utilise que `price_at` (une seule bougie la
+        plus proche d'un timestamp) -- ce cas se contente d'UNE bougie et n'a
+        jamais besoin d'escalader jusqu'à 2 appels GeckoTerminal supplémentaires
+        (jour insuffisant -> 4h -> 1h) pour un token jeune/microcap qui n'a pas
+        encore 20 bougies journalières. Défaut inchangé (`_MIN_USEFUL_CANDLES`)
+        pour tous les appelants existants -- aucune régression sur `/vc`."""
         pool = (pool_address or "").strip()
         if not pool:
             return OHLCVResult(pool_address="", network=network, error=f"{UNAVAILABLE} (pool absent)")
@@ -229,7 +239,7 @@ class OHLCVClient:
                 available=True,
                 error=None,
             )
-            if len(candles) >= _MIN_USEFUL_CANDLES:
+            if len(candles) >= min_useful_candles:
                 return result
             # Fenêtre maigre : on la garde en repli mais on tente plus fin.
             if best is None or len(candles) > len(best.candles):

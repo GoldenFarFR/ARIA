@@ -112,6 +112,47 @@ async def test_get_ohlcv_delegates_to_wide_ohlcv_client(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_ohlcv_forwards_min_useful_candles_to_wide_client(monkeypatch):
+    # #182, 15/07, correctif de vitesse wallet-scoring -- min_useful_candles
+    # doit atteindre services.ohlcv.ohlcv_client quand explicitement passé.
+    from aria_core.services import ohlcv as ohlcv_module
+
+    captured = {}
+
+    async def _fake_wide_get_ohlcv(pool_address, *, network="base", min_useful_candles=20):
+        captured["min_useful_candles"] = min_useful_candles
+        return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
+
+    monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+
+    client = GeckoTerminalClient()
+    await client.get_ohlcv("0xpool", min_useful_candles=1)
+
+    assert captured["min_useful_candles"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_ohlcv_omits_min_useful_candles_when_not_passed(monkeypatch):
+    # Aucune régression pour les appelants existants -- ne passe rien de
+    # nouveau au client sous-jacent quand le paramètre n'est pas fourni,
+    # le défaut de ohlcv_client.get_ohlcv reste seul maître.
+    from aria_core.services import ohlcv as ohlcv_module
+
+    captured_kwargs = {}
+
+    async def _fake_wide_get_ohlcv(pool_address, *, network="base", **kwargs):
+        captured_kwargs.update(kwargs)
+        return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
+
+    monkeypatch.setattr(ohlcv_module.ohlcv_client, "get_ohlcv", _fake_wide_get_ohlcv)
+
+    client = GeckoTerminalClient()
+    await client.get_ohlcv("0xpool")
+
+    assert "min_useful_candles" not in captured_kwargs
+
+
+@pytest.mark.asyncio
 async def test_get_ohlcv_unavailable_when_wide_client_has_nothing(monkeypatch):
     from aria_core.services import ohlcv as ohlcv_module
 
