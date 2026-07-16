@@ -1915,6 +1915,27 @@ avec de vrais chiffres (`docs/base-funding-dossier.md` + cockpit
 track-record + vitrine) et regarder vers Base/Coinbase pour un
 investissement — pas avant.
 
+**Graver au fur et à mesure, jamais attendre un point d'étape (décision
+opérateur explicite, 16/07 : "je veux que tu manges Base, dormes Base,
+chies Base")** : chaque nouvelle information/décision/analyse stratégique
+sur Base/Jesse Pollak/Base Build qui émerge en session (recherche, lien
+partagé par l'opérateur, dispatch VPS Research) est gravée IMMÉDIATEMENT
+dans ce fichier — jamais laissée en simple réponse de chat qui se perd au
+prochain compactage. Plan complet d'installation Base (5 phases, gravé
+16/07) : Phase 0 fondations déjà là (sourcing #194, honeypot, cockpit,
+`docs/base-funding-dossier.md`) → Phase 1 finir la priorité absolue en
+cours (#194→#186→#187→déploiement→compteur 1M$, ne bouge pas) → Phase 2
+parler le langage natif de Base pendant que le test tourne (réactiver
+`services/x402.py`, poursuivre le pilote 10$ Coinbase Agentic Wallet — ne
+retardent jamais #194, mais **aucun gate argent/paiement n'est activé en
+prod sans un "go" opérateur explicite séparé**, même une fois le code prêt)
+→ Phase 3 preuve chiffrée + image une fois le test concluant → Phase 4
+canaux officiels (CDP Builder Grants, Base Batches, Base Ecosystem Fund) →
+Phase 5 visibilité passive, jamais de démarchage (veille #198 + profil X
+déjà actifs). Recherche agents IA concurrents + différenciation ARIA
+dispatchée à VPS Research le 16/07 (sortie attendue dans
+`docs/aria-learning-inbox/`).
+
 ## 🎯 PLAN MAÎTRE — ARIA prête à trader (priorité absolue, décision opérateur
 explicite, 15/07, gravé) : "je veux voir ce compteur des 1 million bouger"
 
