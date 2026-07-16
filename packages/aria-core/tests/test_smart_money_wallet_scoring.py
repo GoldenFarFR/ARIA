@@ -1225,6 +1225,59 @@ class TestScoreWalletsEndToEnd:
         assert any("plafond" in rec.message for rec in caplog.records)
 
     @pytest.mark.asyncio
+    async def test_tokens_found_total_never_regresses_across_scans(self, tmp_path, monkeypatch):
+        """16/07 : `get_token_transfers` est plafonné (2000 transferts/10 pages) --
+        pour un wallet très actif, la fenêtre des N derniers transferts capturée à
+        un passage peut différer du passage précédent (nouvelle activité qui pousse
+        d'anciens tokens hors de la fenêtre), faisant apparaître MOINS de tokens
+        distincts qu'avant. Le total affiché ne doit jamais redescendre -- sinon la
+        progression semble incohérente ET une fausse "couverture 100%" pourrait se
+        déclencher à tort (cf. commentaire dans smart_money.py)."""
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        # 25 tokens, timestamps croissants avec l'indice (_dt(i) = 1er jan 2026 + i
+        # jours) -- donc plus l'indice est haut, plus c'est RÉCENT. Sans round-trip
+        # (achat seul), le tri de sélection ne départage que par récence : avec
+        # cap=10, le round 1 sélectionne les 10 plus récents (indices 15-24),
+        # laissant les 15 plus anciens (0-14) non scannés.
+        client = FakeBlockscoutClient(transfers={
+            WALLET_A: TokenTransfersResult(
+                transfers=[
+                    _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=f"0x{i:040d}", ts=_dt(i))
+                    for i in range(25)
+                ],
+                available=True,
+            )
+        })
+        gecko = FakeGeckoTerminalClient()
+
+        first = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(), max_tokens=10,
+        )
+        assert first.wallets[0].tokens_found == 25
+        assert first.wallets[0].full_coverage is False  # 10/25 scannés, pas encore complet
+
+        # Passage suivant : la fenêtre de pagination "recule" et ne montre plus que
+        # les 10 tokens les PLUS RÉCENTS (15-24) -- exactement ceux déjà scannés au
+        # round 1. Les 15 plus anciens (0-14, jamais scannés) sont désormais
+        # invisibles dans TOUTE fenêtre, passée ou présente -- ils ne seront plus
+        # jamais retentés. Sans le correctif, `total_found` serait écrasé à 10 (ce
+        # que CE round voit) -- et comme ces 10 sont déjà dans `scanned_tokens`,
+        # 10 >= 10 déclencherait à tort une couverture 100%, alors qu'il manque
+        # réellement 15 tokens jamais vus.
+        client._transfers[WALLET_A] = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=f"0x{i:040d}", ts=_dt(i))
+                for i in range(15, 25)
+            ],
+            available=True,
+        )
+        second = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(), max_tokens=10,
+        )
+        assert second.wallets[0].tokens_found == 25
+        assert second.wallets[0].full_coverage is False
+
+    @pytest.mark.asyncio
     async def test_active_multi_token_wallet_via_shared_routers_not_falsely_disqualified(self, tmp_path, monkeypatch):
         """Test dédié demandé par l'opérateur (14/07) : un wallet actif sur
         plusieurs tokens (jusqu'au plafond) via les MÊMES 1-2 routeurs/pools DEX

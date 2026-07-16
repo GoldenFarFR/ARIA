@@ -2676,7 +2676,16 @@ async def score_wallets(
         from aria_core.services import wallet_scan_state
 
         checkpoint = await wallet_scan_state.get_checkpoint(wallet)
-        total_found = len(grouped)
+        # `get_token_transfers` est plafonné (2000 transferts/10 pages) -- pour un
+        # wallet très actif, la fenêtre des "N derniers transferts" capturée à CE
+        # passage peut différer du passage précédent (nouvelle activité qui pousse
+        # d'anciens tokens hors de la fenêtre), faisant apparaître un total PLUS
+        # PETIT qu'avant. Jamais laisser ce total redescendre : (1) ça rendrait la
+        # progression affichée ("X/Y tokens couverts") incohérente d'un cycle à
+        # l'autre, (2) surtout, ça pourrait déclencher une fausse "couverture 100%"
+        # si le total apparent tombe sous ce qui est déjà scanné, alors qu'il reste
+        # en réalité des tokens jamais vus, juste hors de cette fenêtre-ci.
+        total_found = max(len(grouped), checkpoint.tokens_found_total)
 
         def _needs_scan(key: str, transfers: list[TokenTransfer]) -> bool:
             if key not in checkpoint.scanned_tokens:
