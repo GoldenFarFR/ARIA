@@ -621,6 +621,8 @@ async def test_default_analyzer_surfaces_these(monkeypatch):
     remontée par _default_analyzer avant ce chantier -- vrai gap trouvé (15/07)."""
     from types import SimpleNamespace
 
+    from aria_core import paper_trader_risk as risk
+
     class FakePair:
         base_symbol = "AAA"
         price_usd = 2.0
@@ -628,6 +630,8 @@ async def test_default_analyzer_surfaces_these(monkeypatch):
     class FakeCtx:
         best_pair = FakePair()
         ta_entry = None
+        launchpad = None
+        bonding_phase = False
 
     fake_result = SimpleNamespace(
         recommandation="BUY", these="Thèse de test : forte traction sociale.",
@@ -637,7 +641,11 @@ async def test_default_analyzer_surfaces_these(monkeypatch):
     async def fake_analyze(contract, lang="fr"):
         return fake_result, FakeCtx()
 
+    async def fake_snapshot(contract, ctx):
+        return risk.EntrySecuritySnapshot()
+
     monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", fake_analyze)
+    monkeypatch.setattr(risk, "capture_entry_snapshot", fake_snapshot)
 
     sig = await pt._default_analyzer(A)
 
