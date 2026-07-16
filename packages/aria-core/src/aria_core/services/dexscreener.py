@@ -222,7 +222,12 @@ class TokenListing:
     links: list[dict] = field(default_factory=list)
 
 
-def _parse_listing(raw: dict) -> TokenListing:
+def parse_listing(raw: dict) -> TokenListing:
+    """Rendu public (#196, était ``_parse_listing``) : réutilisé tel quel par
+    ``aria_core.momentum_websocket`` -- les frames WebSocket DexScreener (vérifié
+    en direct 16/07) portent EXACTEMENT la même forme par élément que la réponse
+    REST (``chainId``/``tokenAddress``/``description``/``links``), aucun parsing
+    dupliqué."""
     links: list[dict] = []
     for link in raw.get("links") or []:
         if not isinstance(link, dict):
@@ -248,7 +253,7 @@ async def _fetch_listings(path: str) -> list[TokenListing]:
         return []
     if not isinstance(data, list):
         return []
-    return [_parse_listing(row) for row in data if isinstance(row, dict)]
+    return [parse_listing(row) for row in data if isinstance(row, dict)]
 
 
 async def token_boosts_top() -> list[TokenListing]:

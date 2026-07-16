@@ -26,6 +26,7 @@ register_aria_host_integrations()
 from aria_core import repertoire_db
 from aria_core.gateway.telegram_bot import start_telegram_bot, stop_telegram_bot
 from aria_core.heartbeat import aria_heartbeat
+from aria_core.momentum_websocket import momentum_websocket_listener
 from app.api.routes import (
     alerts,
     analysis,
@@ -106,6 +107,7 @@ async def _background_startup() -> None:
         boot = bootstrap_style_schedule()
         logger.info("Avatar style schedule: %s", boot.get("action"))
         await aria_heartbeat.start()
+        await momentum_websocket_listener.start()
         logger.info("Aria Vanguard core services started")
     except Exception as exc:
         logger.exception("Core startup failed: %s", exc)
@@ -132,6 +134,7 @@ async def lifespan(_: FastAPI):
     except Exception as exc:
         logger.warning("Telegram shutdown: %s", exc)
     await aria_heartbeat.stop()
+    await momentum_websocket_listener.stop()
     await pair_indexer.stop()
     await realtime_scanner.stop()
 

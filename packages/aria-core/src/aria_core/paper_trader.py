@@ -15,6 +15,7 @@ les ordres sont fictifs.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -30,6 +31,13 @@ STARTING_CAPITAL_USD = 1_000_000.0
 ALLOC_PCT = 0.05          # 5 % du capital de départ par position (~50 000 $) — mode trading
 MAX_POSITIONS = 15        # coussin de cash + diversification
 MODE = "trading"
+
+# #196 -- verrou PARTAGÉ, quel que soit l'appelant (heartbeat paper_trade_cycle OU le
+# service websocket momentum #196) : sans lui, deux exécutions concurrentes de
+# run_paper_cycle() liraient le capital disponible/le nombre de positions ouvertes AVANT
+# que l'une des deux n'écrive -- risque réel de double-allocation ou de dépassement de
+# MAX_POSITIONS. Un seul cycle à la fois, jamais deux en parallèle.
+_run_cycle_lock = asyncio.Lock()
 
 # Gestion de position (stop suiveur + prise de profit échelonnée) — remplace la sortie
 # binaire (100 % à la cible OU à l'invalidation) par une gestion qui protège les gains
@@ -657,6 +665,7 @@ async def run_paper_cycle(
     notifier=None,
     max_new: int = 3,
     depeg_check=None,
+    skip_position_management: bool = False,
 ) -> dict:
     """Un tour de simulation, appliquant les VRAIS rapports :
       1. positions ouvertes : surveillance de sécurité continue (#187) puis gestion par
@@ -668,14 +677,50 @@ async def run_paper_cycle(
     Tout est injectable (candidates/analyzer/price_lookup/notifier/depeg_check) → testable
     hors-ligne, sans appel réseau caché.
     Aucune exécution réelle, jamais un ordre : de la simulation.
+
+    ``skip_position_management`` (#196, défaut ``False`` -- comportement historique
+    inchangé) : saute l'étape 1 (re-scan sécurité + stop suiveur/TP sur les positions déjà
+    ouvertes) -- réservé au service websocket momentum, déclenché bien plus souvent
+    (~30s) que le cycle heartbeat normal (15 min), pour ne pas re-scanner GoPlus/Blockscout
+    sur chaque position ouverte à chaque poussée. L'étape 1ter (photo de risque
+    portefeuille, #186) reste TOUJOURS exécutée -- l'étape 2 (nouvelles entrées) en dépend
+    (plafond/coupe-circuit), quel que soit l'appelant.
+
+    Toute exécution passe par ``_run_cycle_lock`` (#196) -- jamais deux cycles en
+    parallèle (heartbeat + websocket), qui liraient sinon le capital/le nombre de
+    positions ouvertes avant que l'un des deux n'écrive (double-allocation possible).
     """
+    async with _run_cycle_lock:
+        return await _run_paper_cycle_locked(
+            candidates=candidates,
+            analyzer=analyzer,
+            price_lookup=price_lookup,
+            notifier=notifier,
+            max_new=max_new,
+            depeg_check=depeg_check,
+            skip_position_management=skip_position_management,
+        )
+
+
+async def _run_paper_cycle_locked(
+    *,
+    candidates=None,
+    analyzer=None,
+    price_lookup=None,
+    notifier=None,
+    max_new: int = 3,
+    depeg_check=None,
+    skip_position_management: bool = False,
+) -> dict:
+    """Corps réel de ``run_paper_cycle`` -- appelé UNIQUEMENT sous ``_run_cycle_lock``,
+    jamais directement (pas de garde-fou de concurrence sinon)."""
     await _ensure_tables()
     price_lookup = price_lookup or _default_price_lookup
     # #194 -- le défaut sait suivre la chaîne persistée d'une position (multi-chaînes) ;
     # tout price_lookup INJECTÉ (tests, ou le pipeline momentum qui fournit le sien via
     # une fermeture propre) garde son contrat d'appel historique à un seul argument.
     using_default_price_lookup = price_lookup is _default_price_lookup
-    actions: dict = {"opened": [], "closed": [], "partial": [], "checked": 0}
+    actions: dict = {"opened": [], "closed": [], "partial": [], "checked": 0, "tracked": []}
     # #197 (15/07) -- suivi périodique : une entrée par position encore ouverte à la fin
     # du cycle (prix courant déjà récupéré ci-dessous, aucun appel réseau supplémentaire).
     tracked: list[dict] = []
@@ -684,125 +729,129 @@ async def run_paper_cycle(
     #    (#187 -- honeypot/ownership apparus après l'entrée, jamais vérifiés qu'une seule
     #    fois avant), qui prime sur toute gestion par prix ; puis stop suiveur (ne se
     #    relâche jamais) et prise de profit échelonnée sur ce qui reste ouvert.
+    #    #196 -- sautée si ``skip_position_management`` (service websocket momentum,
+    #    déclenché bien plus souvent que le cycle heartbeat normal) : ne re-scanne pas
+    #    GoPlus/Blockscout sur chaque position ouverte à chaque poussée de candidat.
     from aria_core import paper_trader_risk as risk
 
-    for p in await get_open_positions():
-        actions["checked"] += 1
-        try:
-            if using_default_price_lookup:
-                price = await price_lookup(p["contract"], chain=p.get("chain") or "base")
-            else:
-                price = await price_lookup(p["contract"])
-        except Exception:  # noqa: BLE001
-            price = None
+    if not skip_position_management:
+        for p in await get_open_positions():
+            actions["checked"] += 1
+            try:
+                if using_default_price_lookup:
+                    price = await price_lookup(p["contract"], chain=p.get("chain") or "base")
+                else:
+                    price = await price_lookup(p["contract"])
+            except Exception:  # noqa: BLE001
+                price = None
 
-        try:
-            security_flag = await risk.rescan_open_position(p)
-        except Exception as exc:  # noqa: BLE001 — la surveillance ne doit jamais casser le cycle
-            logger.info("paper_cycle: re-scan sécurité %s échoué (%s)", p["contract"], exc)
-            security_flag = None
-        if security_flag:
-            # Position paper -> fermeture automatique sans risque, ça teste la RÉACTION.
-            # Avec du capital RÉEL ceci deviendrait une ALERTE seule (doctrine
-            # wallet_guard -- jamais de vente automatique sans confirmation opérateur),
-            # voir paper_trader_risk.py.
-            exit_price = price if (price and price > 0) else p["entry_price"]
-            closed = await close_position(p["contract"], exit_price, reason="sécurité re-scan")
-            if closed:
-                actions["closed"].append(closed)
-                actions.setdefault("security_alerts", []).append(security_flag)
-                if notifier:
-                    try:
-                        alert = format_sell_alert(closed) + "\n⚠️ " + "; ".join(security_flag["reasons"])
-                        await notifier(alert)
-                    except Exception:  # noqa: BLE001
-                        pass
-            continue
+            try:
+                security_flag = await risk.rescan_open_position(p)
+            except Exception as exc:  # noqa: BLE001 — la surveillance ne doit jamais casser le cycle
+                logger.info("paper_cycle: re-scan sécurité %s échoué (%s)", p["contract"], exc)
+                security_flag = None
+            if security_flag:
+                # Position paper -> fermeture automatique sans risque, ça teste la RÉACTION.
+                # Avec du capital RÉEL ceci deviendrait une ALERTE seule (doctrine
+                # wallet_guard -- jamais de vente automatique sans confirmation opérateur),
+                # voir paper_trader_risk.py.
+                exit_price = price if (price and price > 0) else p["entry_price"]
+                closed = await close_position(p["contract"], exit_price, reason="sécurité re-scan")
+                if closed:
+                    actions["closed"].append(closed)
+                    actions.setdefault("security_alerts", []).append(security_flag)
+                    if notifier:
+                        try:
+                            alert = format_sell_alert(closed) + "\n⚠️ " + "; ".join(security_flag["reasons"])
+                            await notifier(alert)
+                        except Exception:  # noqa: BLE001
+                            pass
+                continue
 
-        if not price or price <= 0:
-            continue
+            if not price or price <= 0:
+                continue
 
-        # #197 -- provisoire : retiré ci-dessous si la position se clôture (totalement)
-        # dans ce même tour, pour ne jamais dupliquer avec format_sell_alert.
-        tracked.append({
-            "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
-            "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price,
-        })
+            # #197 -- provisoire : retiré ci-dessous si la position se clôture (totalement)
+            # dans ce même tour, pour ne jamais dupliquer avec format_sell_alert.
+            tracked.append({
+                "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
+                "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price,
+            })
 
-        high_water = max(p.get("high_water_price") or p["entry_price"], price)
-        if high_water != (p.get("high_water_price") or p["entry_price"]):
-            await _update_high_water(p["id"], high_water)
-        trailing_stop = high_water * (1 - TRAIL_STOP_PCT)
-        invalidation = p.get("invalidation_price")
-        active_stop = max(trailing_stop, invalidation) if invalidation else trailing_stop
-        stop_is_trailing = not invalidation or trailing_stop > invalidation
+            high_water = max(p.get("high_water_price") or p["entry_price"], price)
+            if high_water != (p.get("high_water_price") or p["entry_price"]):
+                await _update_high_water(p["id"], high_water)
+            trailing_stop = high_water * (1 - TRAIL_STOP_PCT)
+            invalidation = p.get("invalidation_price")
+            active_stop = max(trailing_stop, invalidation) if invalidation else trailing_stop
+            stop_is_trailing = not invalidation or trailing_stop > invalidation
 
-        if active_stop and price <= active_stop:
-            closed = await close_position(
-                p["contract"], price, reason="stop suiveur" if stop_is_trailing else "invalidation",
-            )
-            if closed:
-                actions["closed"].append(closed)
-                if notifier:
-                    try:
-                        await notifier(format_sell_alert(closed))
-                    except Exception:  # noqa: BLE001 — l'alerte ne casse pas le cycle
-                        pass
-            continue  # position fermée, rien d'autre à évaluer ce tour
-
-        # Prise de profit échelonnée : vend une fraction de la quantité INITIALE à chaque
-        # palier de gain franchi. Dernier palier (ou reliquat négligeable) -> clôture complète.
-        initial_qty = p.get("initial_qty") or p["qty"]
-        stage_hit = int(p.get("tp_stage_hit") or 0)
-        remaining_qty = p["qty"]
-        entry_price = p["entry_price"]
-        gain_pct = (price / entry_price - 1.0) if entry_price else 0.0
-
-        while stage_hit < len(TP_STAGES) and gain_pct >= TP_STAGES[stage_hit]:
-            stage_hit += 1
-            sell_qty = min(initial_qty * TP_STAGE_FRACTION, remaining_qty)
-            is_last_stage = stage_hit >= len(TP_STAGES) or remaining_qty - sell_qty <= TP_QTY_EPSILON
-            if is_last_stage:
+            if active_stop and price <= active_stop:
                 closed = await close_position(
-                    p["contract"], price, reason=f"palier {stage_hit}/{len(TP_STAGES)} (clôture)",
+                    p["contract"], price, reason="stop suiveur" if stop_is_trailing else "invalidation",
                 )
                 if closed:
                     actions["closed"].append(closed)
                     if notifier:
                         try:
                             await notifier(format_sell_alert(closed))
+                        except Exception:  # noqa: BLE001 — l'alerte ne casse pas le cycle
+                            pass
+                continue  # position fermée, rien d'autre à évaluer ce tour
+
+            # Prise de profit échelonnée : vend une fraction de la quantité INITIALE à chaque
+            # palier de gain franchi. Dernier palier (ou reliquat négligeable) -> clôture complète.
+            initial_qty = p.get("initial_qty") or p["qty"]
+            stage_hit = int(p.get("tp_stage_hit") or 0)
+            remaining_qty = p["qty"]
+            entry_price = p["entry_price"]
+            gain_pct = (price / entry_price - 1.0) if entry_price else 0.0
+
+            while stage_hit < len(TP_STAGES) and gain_pct >= TP_STAGES[stage_hit]:
+                stage_hit += 1
+                sell_qty = min(initial_qty * TP_STAGE_FRACTION, remaining_qty)
+                is_last_stage = stage_hit >= len(TP_STAGES) or remaining_qty - sell_qty <= TP_QTY_EPSILON
+                if is_last_stage:
+                    closed = await close_position(
+                        p["contract"], price, reason=f"palier {stage_hit}/{len(TP_STAGES)} (clôture)",
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    break
+
+                partial = await reduce_position(
+                    p["contract"], price, sell_qty, stage=stage_hit,
+                    reason=f"palier {stage_hit}/{len(TP_STAGES)}",
+                )
+                if partial:
+                    actions["partial"].append(partial)
+                    remaining_qty = partial["remaining_qty"]
+                    if notifier:
+                        try:
+                            await notifier(format_partial_exit_alert(partial))
                         except Exception:  # noqa: BLE001
                             pass
-                break
 
-            partial = await reduce_position(
-                p["contract"], price, sell_qty, stage=stage_hit,
-                reason=f"palier {stage_hit}/{len(TP_STAGES)}",
-            )
-            if partial:
-                actions["partial"].append(partial)
-                remaining_qty = partial["remaining_qty"]
-                if notifier:
-                    try:
-                        await notifier(format_partial_exit_alert(partial))
-                    except Exception:  # noqa: BLE001
-                        pass
-
-    # 1bis) Suivi périodique des positions ENCORE ouvertes (#197, 15/07) -- pas seulement
-    # à l'achat/la vente. Retire celles fermées CE tour (déjà couvertes par
-    # format_sell_alert, jamais dupliquées). Un seul message consolidé, pas un par
-    # position (évite le bruit Telegram) -- persistance en base (thesis, prix, contrat)
-    # prime de toute façon sur cet affichage, qui reste best-effort.
-    closed_contracts_this_cycle = {c["contract"] for c in actions["closed"]}
-    tracked = [t for t in tracked if t["contract"] not in closed_contracts_this_cycle]
-    actions["tracked"] = tracked
-    if tracked and notifier:
-        msg = format_position_tracking_alert(tracked)
-        if msg:
-            try:
-                await notifier(msg)
-            except Exception:  # noqa: BLE001 — l'alerte ne casse pas le cycle
-                pass
+        # 1bis) Suivi périodique des positions ENCORE ouvertes (#197, 15/07) -- pas seulement
+        # à l'achat/la vente. Retire celles fermées CE tour (déjà couvertes par
+        # format_sell_alert, jamais dupliquées). Un seul message consolidé, pas un par
+        # position (évite le bruit Telegram) -- persistance en base (thesis, prix, contrat)
+        # prime de toute façon sur cet affichage, qui reste best-effort.
+        closed_contracts_this_cycle = {c["contract"] for c in actions["closed"]}
+        tracked = [t for t in tracked if t["contract"] not in closed_contracts_this_cycle]
+        actions["tracked"] = tracked
+        if tracked and notifier:
+            msg = format_position_tracking_alert(tracked)
+            if msg:
+                try:
+                    await notifier(msg)
+                except Exception:  # noqa: BLE001 — l'alerte ne casse pas le cycle
+                    pass
 
     # 1ter) Photo du risque portefeuille (#186) -- une seule fois par cycle, APRÈS la gestion
     # des positions déjà ouvertes (qui doit continuer normalement même coupe-circuit armé) et
