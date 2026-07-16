@@ -1,0 +1,242 @@
+"""Mécanisme générique d'exécution d'un paiement x402 (#202) -- indépendant de la
+ressource finale (#199 pas encore tranché). Sert de couche commune quel que soit le
+premier service payé (Nansen pay-per-call, x402stock.xyz, CoinGecko premium, ...) --
+poser cette infrastructure maintenant plutôt que de la coupler au premier choix.
+
+Décision opérateur explicite (16/07, CLAUDE.md) sur l'autonomie des micropaiements x402 :
+pas de clic Telegram par appel (incompatible avec le machine-speed du protocole, ~200ms/
+appel) -- modèle "vérifier après" au lieu de "valider avant" : plafond de dépense dur dans
+le code (``x402_budget.py``, 5$/semaine), coupe-circuit ``/stop`` dessus, chaque appel
+loggé et auditable. Scope STRICTEMENT limité aux micropaiements de données/API (centimes)
+-- ne touche PAS et ne redéfinit PAS la règle absolue de validation humaine sur le trading
+avec du capital réel (swaps, positions), qui reste sur son propre chemin séparé, inchangé
+(``agent_wallet_pilot.py``, ``wallet_guard.py``).
+
+Ordre strict de chaque tentative (fail-closed à chaque étape) :
+  1. Requête HTTP à la ressource. Si la réponse n'est PAS 402 -> renvoyée telle quelle,
+     RIEN loggé dans ``x402_budget`` (aucun paiement en jeu, dégradation gracieuse).
+  2. Si 402 : coupe-circuit ``/stop`` (``outgoing_pause.is_paused(strict=True)``) --
+     même doctrine que ``agent_wallet_pilot.py``. Vérifié EN PREMIER, avant même de
+     savoir combien coûte la ressource -- c'est la porte la plus large, elle ne dépend
+     d'aucune donnée déjà lue.
+  3. Corps 402 parsé défensivement (schéma x402 v1, cf. ``services/x402.py``) -- actif
+     non-USDC ou montant illisible -> bloqué (le plafond ``x402_budget`` est dénominé en
+     dollars, il ne veut rien dire pour un autre actif).
+  4. Plafond hebdomadaire (``x402_budget.can_spend(montant)``) -- refuse et logge si le
+     montant dépasserait le budget restant de la semaine calendaire.
+  5. Solde RÉEL du wallet (``balance_fn`` injecté, même patron que
+     ``agent_wallet_pilot.attempt_swap``) -- fail-closed si indisponible ou insuffisant.
+  6. Signature + construction du header de paiement (``pay_fn`` injecté -- jamais un
+     vrai appel SDK ici ; voir ``x402_cdp_signer.py`` pour l'implémentation réelle CDP).
+  7. Nouvelle requête HTTP avec le header ``X-PAYMENT``.
+  8. ``x402_budget.record_spend()`` avec le résultat RÉEL (ok/failed/blocked) -- jamais
+     seulement les succès, un refus ou un échec doit rester tracé et auditable.
+
+Aucune clé privée ici (même doctrine que tout le dôme) : ``pay_fn``/``balance_fn`` sont
+injectés par l'appelant -- l'exécution réelle (signature CDP, lecture de solde) tourne
+côté adaptateur dédié, jamais dans ce module. Zéro appel réseau dans la suite de tests
+(``http_fetch_fn``/``balance_fn``/``pay_fn`` toujours des fakes en test)."""
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable
+
+import httpx
+
+from aria_core import outgoing_pause, x402_budget
+
+logger = logging.getLogger(__name__)
+
+_HTTP_TIMEOUT = 12.0
+X_PAYMENT_HEADER = "X-PAYMENT"
+_SUPPORTED_ASSET = "USDC"
+_USDC_DECIMALS = 1_000_000  # USDC natif Base -- 6 décimales
+# Réseau déclaré par le 402 jamais pris pour argent comptant (même doctrine que le
+# slippage forcé, 09/07 -- ne jamais faire confiance à une valeur fournie par un tiers) :
+# formes acceptées pour Base mainnet, plate (schéma v1, services/x402.py) ou CAIP-2 (v2).
+_ALLOWED_NETWORKS = {"base", "eip155:8453"}
+
+
+@dataclass(frozen=True)
+class HttpResult:
+    """Réponse HTTP minimale, découplée d'``httpx`` -- trivialement fakeable en test."""
+
+    status_code: int
+    headers: dict[str, str] = field(default_factory=dict)
+    body: bytes = b""
+
+
+@dataclass(frozen=True)
+class X402ExecutionResult:
+    status: str  # "ok" | "blocked" | "failed"
+    reason: str = ""
+    amount_usd: float = 0.0
+    http_status: int | None = None
+    body: bytes = b""
+
+
+BalanceFn = Callable[[], Awaitable[float | None]]
+PayFn = Callable[[dict[str, Any]], Awaitable[str]]
+HttpFetchFn = Callable[..., Awaitable[HttpResult]]
+
+
+async def _default_http_fetch(
+    url: str, *, method: str = "GET", headers: dict[str, str] | None = None
+) -> HttpResult:
+    """Implémentation réelle par défaut (httpx). Jamais utilisée dans les tests --
+    toujours remplacée par un fake (cf. test_x402_executor.py)."""
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        r = await client.request(method, url, headers=headers or {})
+    return HttpResult(status_code=r.status_code, headers=dict(r.headers), body=r.content)
+
+
+def _extract_payment_requirement(body: bytes) -> dict[str, Any] | None:
+    """Parse défensif du corps 402 (schéma x402 v1 : ``{"accepts": [...]}``, cf.
+    ``services/x402.py::payment_required_response``) -- renvoie le premier ``accepts[0]``
+    si présent et bien formé, sinon ``None`` (dégradation gracieuse, jamais d'exception)."""
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except Exception:  # noqa: BLE001 — corps illisible, jamais une exception qui remonte
+        return None
+    accepts = data.get("accepts") if isinstance(data, dict) else None
+    if not isinstance(accepts, list) or not accepts:
+        return None
+    first = accepts[0]
+    return first if isinstance(first, dict) else None
+
+
+def _amount_to_usd(requirement: dict[str, Any]) -> float | None:
+    """Convertit le montant (plus petite unité, ex. 6 décimales USDC) en dollars.
+    Fail-closed : actif non-USDC ou montant malformé -> ``None``."""
+    asset = str(requirement.get("asset") or "").upper()
+    if asset != _SUPPORTED_ASSET:
+        return None
+    raw = requirement.get("amount")
+    try:
+        return float(raw) / _USDC_DECIMALS
+    except (TypeError, ValueError):
+        return None
+
+
+async def fetch_paid_resource(
+    url: str,
+    *,
+    resource: str,
+    provider: str = "",
+    method: str = "GET",
+    balance_fn: BalanceFn,
+    pay_fn: PayFn,
+    http_fetch_fn: HttpFetchFn = _default_http_fetch,
+) -> X402ExecutionResult:
+    """Tente de récupérer ``url``, payant automatiquement si la ressource répond 402.
+
+    ``resource``/``provider`` identifient l'appel dans le journal ``x402_budget``
+    (auditabilité -- jamais un paiement anonyme). ``balance_fn``/``pay_fn`` sont
+    injectés par l'appelant : en production, ``x402_cdp_signer.py`` fournit
+    l'implémentation réelle (wallet CDP dédié) ; en test, toujours des fakes."""
+    try:
+        first = await http_fetch_fn(url, method=method, headers=None)
+    except Exception as exc:  # noqa: BLE001
+        return X402ExecutionResult(status="failed", reason=f"requête initiale échouée : {exc}")
+
+    if first.status_code != 402:
+        # Pas de paiement en jeu -- dégradation gracieuse, rien à journaliser.
+        return X402ExecutionResult(status="ok", http_status=first.status_code, body=first.body)
+
+    # Coupe-circuit /stop : porte la plus large, vérifiée avant même de savoir combien
+    # coûte la ressource -- même doctrine que agent_wallet_pilot.py.
+    if outgoing_pause.is_paused(strict=True):
+        return await _blocked(
+            resource, provider, 0.0,
+            reason=outgoing_pause.blocked_notice("Ce paiement x402"),
+        )
+
+    requirement = _extract_payment_requirement(first.body)
+    if requirement is None:
+        return await _blocked(resource, provider, 0.0, reason="corps 402 illisible/mal formé")
+
+    amount_usd = _amount_to_usd(requirement)
+    if amount_usd is None:
+        return await _blocked(
+            resource, provider, 0.0,
+            reason=f"actif non supporté ou montant illisible ({requirement.get('asset')!r})",
+        )
+
+    network = str(requirement.get("network") or "").lower()
+    if network not in _ALLOWED_NETWORKS:
+        return await _blocked(
+            resource, provider, amount_usd,
+            reason=f"réseau non autorisé ({network!r}) -- jamais signer hors de l'allowlist",
+        )
+
+    if not await x402_budget.can_spend(amount_usd):
+        return await _blocked(
+            resource, provider, amount_usd,
+            reason=f"plafond hebdomadaire x402 dépassé ({amount_usd}$ demandé)",
+        )
+
+    try:
+        balance_usd = await balance_fn()
+    except Exception as exc:  # noqa: BLE001
+        return await _blocked(
+            resource, provider, amount_usd,
+            reason=f"solde réel indisponible (fail-closed) : {exc}",
+        )
+    if balance_usd is None:
+        return await _blocked(
+            resource, provider, amount_usd,
+            reason="solde réel indisponible (fail-closed) : balance_fn a renvoyé None",
+        )
+    if amount_usd > balance_usd:
+        return await _blocked(
+            resource, provider, amount_usd,
+            reason=f"montant {amount_usd}$ > solde réel {balance_usd}$",
+        )
+
+    try:
+        payment_header = await pay_fn(requirement)
+    except Exception as exc:  # noqa: BLE001
+        await x402_budget.record_spend(
+            resource=resource, provider=provider, amount_usd=amount_usd,
+            status="failed", reason=f"signature échouée : {exc}",
+        )
+        return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
+
+    try:
+        paid = await http_fetch_fn(url, method=method, headers={X_PAYMENT_HEADER: payment_header})
+    except Exception as exc:  # noqa: BLE001
+        await x402_budget.record_spend(
+            resource=resource, provider=provider, amount_usd=amount_usd,
+            status="failed", reason=f"requête payée échouée : {exc}",
+        )
+        return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
+
+    if paid.status_code == 402:
+        await x402_budget.record_spend(
+            resource=resource, provider=provider, amount_usd=amount_usd,
+            status="failed", reason="toujours 402 après paiement (règlement refusé)",
+        )
+        return X402ExecutionResult(
+            status="failed", reason="toujours 402 après paiement", amount_usd=amount_usd,
+            http_status=402,
+        )
+
+    await x402_budget.record_spend(
+        resource=resource, provider=provider, amount_usd=amount_usd, status="ok",
+    )
+    return X402ExecutionResult(
+        status="ok", amount_usd=amount_usd, http_status=paid.status_code, body=paid.body,
+    )
+
+
+async def _blocked(
+    resource: str, provider: str, amount_usd: float, *, reason: str
+) -> X402ExecutionResult:
+    logger.warning("x402 paiement bloqué (%s) : %s", resource, reason)
+    await x402_budget.record_spend(
+        resource=resource, provider=provider, amount_usd=amount_usd,
+        status="blocked", reason=reason,
+    )
+    return X402ExecutionResult(status="blocked", reason=reason, amount_usd=amount_usd)
