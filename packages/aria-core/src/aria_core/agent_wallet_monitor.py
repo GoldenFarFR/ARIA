@@ -265,12 +265,18 @@ async def get_wallet_balance_summary(
         logger.warning("agent_wallet_monitor: lecture des soldes tokens echouee: %s", exc)
         tokens = None
 
+    cdp_eth_fallback: float | None = None
     if tokens is not None:
         usdc = 0.0
         other_tokens = []
         for t in tokens:
             if t["address"].lower() == USDC_BASE_ADDRESS.lower():
                 usdc = t["amount"]
+            elif (t.get("symbol") or "").strip().upper() == "ETH":
+                # CDP list_token_balances renvoie aussi l'ETH natif (confirmé en
+                # direct le 16/07, /agentwallet) -- jamais un "autre token" acheté,
+                # utilisé comme repli si Blockscout échoue, jamais affiché deux fois.
+                cdp_eth_fallback = t["amount"]
             else:
                 other_tokens.append(t)
         if other_tokens:
@@ -284,6 +290,9 @@ async def get_wallet_balance_summary(
             eth = info.balance_native
     except Exception as exc:  # noqa: BLE001 -- une panne Blockscout ne doit jamais casser l'appelant
         logger.warning("agent_wallet_monitor: lecture solde ETH echouee: %s", exc)
+
+    if eth is None and cdp_eth_fallback is not None:
+        eth = cdp_eth_fallback
 
     return {
         "wallet_address": wallet_address, "chain": chain,

@@ -444,6 +444,41 @@ async def test_get_wallet_balance_summary_defaults_to_monitored_address(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_get_wallet_balance_summary_uses_cdp_eth_as_fallback_when_blockscout_fails(monkeypatch):
+    """Confirme en direct le 16/07 (/agentwallet) : list_all_token_balances renvoie
+    aussi l'ETH natif -- jamais affiché comme "autre token", utilisé en repli
+    quand Blockscout echoue."""
+    monkeypatch.setattr(
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
+        _fake_list_all_token_balances([
+            {"address": adapter.USDC_BASE_ADDRESS, "symbol": "USDC", "amount": 1.0},
+            {"address": "0xeth", "symbol": "ETH", "amount": 0.001},
+        ]),
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
+        AddressInfo(address=WALLET, available=False, error="indisponible"),
+    ))
+    result = await monitor.get_wallet_balance_summary(wallet_address=WALLET)
+    assert result["eth"] == 0.001
+    assert result["other_tokens"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_wallet_balance_summary_prefers_blockscout_eth_over_cdp_fallback(monkeypatch):
+    monkeypatch.setattr(
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
+        _fake_list_all_token_balances([
+            {"address": "0xeth", "symbol": "ETH", "amount": 0.001},
+        ]),
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
+        AddressInfo(address=WALLET, balance_native=0.002, available=True),
+    ))
+    result = await monitor.get_wallet_balance_summary(wallet_address=WALLET)
+    assert result["eth"] == 0.002
+
+
+@pytest.mark.asyncio
 async def test_get_wallet_balance_summary_degrades_honestly_when_usdc_unavailable(monkeypatch):
     monkeypatch.setattr(
         "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
