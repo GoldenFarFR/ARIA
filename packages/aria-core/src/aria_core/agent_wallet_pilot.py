@@ -9,8 +9,8 @@ partout ailleurs (mainnet Vanguard ZHC, tout futur palier au-delà de ce pilote)
 Garde-fous non négociables (doc §3, tous appliqués ici) :
   1. Plafond dur vérifié contre le solde RÉEL du wallet avant chaque tentative
      (jamais un réglage UI de l'outil) -- fail-closed si le solde est indisponible.
-  2. Aucune capacité de transfert/retrait générique -- seule l'action `swap` existe
-     dans ce module.
+  2. Aucune capacité de transfert/retrait GÉNÉRIQUE -- voir §9 ci-dessous pour
+     l'exception nommée du 16/07 qui ajoute UN SEUL transfert autorisé.
   3. Slippage TOUJOURS forcé à `MAX_SLIPPAGE_BPS` (10%), quel que soit ce que
      l'appelant fournit -- jamais la valeur par défaut d'un outil externe.
   4. Kill-switch `/stop` (`outgoing_pause.is_paused(strict=True)`) vérifié avant
@@ -24,9 +24,25 @@ Garde-fous non négociables (doc §3, tous appliqués ici) :
   8. Wallet dédié et isolé -- ce module ne connaît qu'une adresse/un solde fournis
      par l'appelant, jamais le wallet Vanguard ZHC principal.
 
+  9. **Exception nommée #4 (transfert, décision opérateur explicite, 16/07)** :
+     le pilote gagne UNE capacité de transfert USDC, structurellement bornée pour
+     ne jamais devenir un vecteur de vol générique :
+       - Adresse de destination UNIQUE, codée EN DUR ci-dessous
+         (`ALLOWED_TRANSFER_ADDRESS`) -- jamais un paramètre libre, jamais lue
+         depuis une variable d'environnement modifiable sans revue de code.
+         Tout appel vers une autre adresse est bloqué et journalisé.
+       - Gate SUPPLÉMENTAIRE et distinct (`ARIA_AGENT_WALLET_TRANSFER_ENABLED`),
+         OFF par défaut, EN PLUS du gate pilote global -- un transfert exige les
+         DEUX flags actifs, jamais un seul.
+       - Même plafond dur `MAX_TRANSACTION_USD`, même vérification de solde réel,
+         même kill-switch, même journalisation systématique que le swap.
+       - Aucune fonction de retrait vers une adresse d'exchange/CEX -- seulement
+         ce wallet précis, choisi et communiqué explicitement par l'opérateur.
+
 Aucune clé privée ici (même doctrine que tout le reste du dôme) : l'exécution
-réelle (`swap_fn`) est injectée par l'appelant -- le vrai appel au SDK CDP tourne
-côté VPS/opérateur, jamais dans ce module ni dans une session cloud.
+réelle (`swap_fn`/`transfer_fn`) est injectée par l'appelant -- le vrai appel au
+SDK CDP tourne côté VPS/opérateur, jamais dans ce module ni dans une session
+cloud.
 """
 from __future__ import annotations
 
@@ -43,8 +59,22 @@ WALLET_PRODUCT = "coinbase_agentic_wallet"
 MAX_TRANSACTION_USD = 15.0
 MAX_SLIPPAGE_BPS = 1000  # 10% -- règle absolue, jamais la valeur par défaut d'un outil.
 
+# Exception nommée #4 (16/07) -- SEULE adresse vers laquelle un transfert peut être
+# tenté. Codée en dur (pas une variable d'environnement) : tout changement exige un
+# commit revu, jamais un simple réglage `.env` modifiable sans trace.
+ALLOWED_TRANSFER_ADDRESS = "0x33783cCb570Cb279C25F836806B5c4C3C8309777"
+
 BalanceFn = Callable[[], Awaitable[float | None]]
 SwapFn = Callable[..., Awaitable[dict[str, Any]]]
+TransferFn = Callable[..., Awaitable[dict[str, Any]]]
+
+
+def agent_wallet_transfer_enabled() -> bool:
+    """Gate DISTINCT du gate pilote global -- un transfert exige les DEUX actifs
+    (§9, exception nommée du 16/07). Fail-closed tant que non posé explicitement."""
+    return os.environ.get("ARIA_AGENT_WALLET_TRANSFER_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def agent_wallet_pilot_enabled() -> bool:
@@ -60,6 +90,13 @@ class SwapAttemptResult:
     reason: str = ""
     tx_hash: str = ""
     amount_out: float = 0.0
+
+
+@dataclass(frozen=True)
+class TransferAttemptResult:
+    status: str  # "ok" | "blocked" | "failed"
+    reason: str = ""
+    tx_hash: str = ""
 
 
 async def attempt_swap(
@@ -184,3 +221,121 @@ async def _blocked(
         reason=reason,
     )
     return SwapAttemptResult(status="blocked", reason=reason)
+
+
+async def attempt_transfer(
+    *,
+    chain: str,
+    to_address: str,
+    amount_usd: float,
+    balance_fn: BalanceFn,
+    transfer_fn: TransferFn,
+) -> TransferAttemptResult:
+    """Tente un transfert USDC borné (exception nommée #4, §9). Ordre strict, même
+    doctrine que ``attempt_swap`` : gate dédié -> allowlist d'adresse -> kill-switch
+    -> plafond (solde réel) -> exécution -> journalisation systématique.
+
+    ``to_address`` DOIT correspondre exactement à ``ALLOWED_TRANSFER_ADDRESS``
+    (insensible à la casse -- une adresse EVM checksummée différemment reste la
+    même adresse) -- toute autre valeur est bloquée AVANT même de vérifier le
+    solde ou le kill-switch, c'est la porte la plus étroite et la plus critique.
+    """
+    if not agent_wallet_transfer_enabled():
+        return await _blocked_transfer(
+            chain, to_address, amount_usd,
+            reason="ARIA_AGENT_WALLET_TRANSFER_ENABLED désactivé (fail-closed par défaut)",
+        )
+
+    if not agent_wallet_pilot_enabled():
+        return await _blocked_transfer(
+            chain, to_address, amount_usd,
+            reason="ARIA_AGENT_WALLET_PILOT_ENABLED désactivé (fail-closed par défaut)",
+        )
+
+    if (to_address or "").strip().lower() != ALLOWED_TRANSFER_ADDRESS.lower():
+        return await _blocked_transfer(
+            chain, to_address, amount_usd,
+            reason=(
+                f"adresse de destination {to_address!r} hors allowlist -- "
+                f"seule {ALLOWED_TRANSFER_ADDRESS} est autorisée"
+            ),
+        )
+
+    if outgoing_pause.is_paused(strict=True):
+        return await _blocked_transfer(
+            chain, to_address, amount_usd,
+            reason=outgoing_pause.blocked_notice("Ce transfert agent-wallet"),
+        )
+
+    if amount_usd <= 0:
+        return await _blocked_transfer(
+            chain, to_address, amount_usd, reason="montant nul ou négatif",
+        )
+
+    try:
+        balance_usd = await balance_fn()
+    except Exception as exc:
+        return await _blocked_transfer(
+            chain, to_address, amount_usd,
+            reason=f"solde réel indisponible (fail-closed) : {exc}",
+        )
+    if balance_usd is None:
+        return await _blocked_transfer(
+            chain, to_address, amount_usd,
+            reason="solde réel indisponible (fail-closed) : balance_fn a renvoyé None",
+        )
+
+    if amount_usd > MAX_TRANSACTION_USD:
+        return await _blocked_transfer(
+            chain, to_address, amount_usd,
+            reason=f"montant {amount_usd}$ > plafond dur {MAX_TRANSACTION_USD}$",
+        )
+    if amount_usd > balance_usd:
+        return await _blocked_transfer(
+            chain, to_address, amount_usd,
+            reason=f"montant {amount_usd}$ > solde réel {balance_usd}$",
+        )
+
+    try:
+        result = await transfer_fn(
+            chain=chain, to_address=ALLOWED_TRANSFER_ADDRESS, amount_usd=amount_usd,
+        )
+    except Exception as exc:
+        await agent_wallet_log.record_transaction(
+            wallet_product=WALLET_PRODUCT,
+            chain=chain,
+            action_type="transfer",
+            amount_in=amount_usd,
+            to_address=ALLOWED_TRANSFER_ADDRESS,
+            status="failed",
+            reason=str(exc),
+        )
+        return TransferAttemptResult(status="failed", reason=str(exc))
+
+    tx_hash = str(result.get("tx_hash") or "")
+    await agent_wallet_log.record_transaction(
+        wallet_product=WALLET_PRODUCT,
+        chain=chain,
+        action_type="transfer",
+        amount_in=amount_usd,
+        tx_hash=tx_hash,
+        to_address=ALLOWED_TRANSFER_ADDRESS,
+        status="ok",
+    )
+    return TransferAttemptResult(status="ok", tx_hash=tx_hash)
+
+
+async def _blocked_transfer(
+    chain: str, to_address: str, amount_usd: float, *, reason: str
+) -> TransferAttemptResult:
+    logger.warning("agent_wallet_pilot transfert bloqué : %s", reason)
+    await agent_wallet_log.record_transaction(
+        wallet_product=WALLET_PRODUCT,
+        chain=chain,
+        action_type="transfer",
+        amount_in=amount_usd,
+        to_address=to_address,
+        status="blocked",
+        reason=reason,
+    )
+    return TransferAttemptResult(status="blocked", reason=reason)

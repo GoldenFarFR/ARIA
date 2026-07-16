@@ -10,7 +10,9 @@ import pytest
 from aria_core import agent_wallet_cdp_adapter as adapter
 
 
-def _install_fake_cdp_module(monkeypatch, *, balances_result, swap_result=None, raise_on="none"):
+def _install_fake_cdp_module(
+    monkeypatch, *, balances_result, swap_result=None, transfer_result=None, raise_on="none",
+):
     """Injecte un faux module `cdp` dans sys.modules pour intercepter
     `from cdp import CdpClient` sans dépendre du vrai package installé."""
 
@@ -21,6 +23,11 @@ def _install_fake_cdp_module(monkeypatch, *, balances_result, swap_result=None, 
             if raise_on == "swap":
                 raise RuntimeError("facilitator timeout")
             return swap_result
+
+        async def transfer(self, **kwargs):
+            if raise_on == "transfer":
+                raise RuntimeError("réseau indisponible")
+            return transfer_result
 
     class FakeEvm:
         async def get_or_create_account(self, name):
@@ -45,6 +52,7 @@ def _install_fake_cdp_module(monkeypatch, *, balances_result, swap_result=None, 
 
     fake_cdp = types.ModuleType("cdp")
     fake_cdp.CdpClient = FakeCdpClient
+    fake_cdp.parse_units = lambda amount, decimals: int(float(amount) * (10**decimals))
     fake_swap_module = types.ModuleType("cdp.actions.evm.swap")
     fake_swap_module.AccountSwapOptions = lambda **kwargs: kwargs
     fake_actions = types.ModuleType("cdp.actions")
@@ -166,4 +174,24 @@ async def test_execute_swap_propagates_exception_on_failure(monkeypatch):
         await adapter.execute_swap(
             chain="base", token_in="USDC", token_out="WETH", amount_in_usd=5.0,
             wallet_address="0xabc123", slippage_bps=1000,
+        )
+
+
+@pytest.mark.asyncio
+async def test_transfer_usdc_returns_tx_hash(monkeypatch):
+    _install_fake_cdp_module(
+        monkeypatch, balances_result=None, transfer_result="0xt2ansferhash",
+    )
+    result = await adapter.transfer_usdc(
+        chain="base", to_address="0x33783cCb570Cb279C25F836806B5c4C3C8309777", amount_usd=1.0,
+    )
+    assert result["tx_hash"] == "0xt2ansferhash"
+
+
+@pytest.mark.asyncio
+async def test_transfer_usdc_propagates_exception_on_failure(monkeypatch):
+    _install_fake_cdp_module(monkeypatch, balances_result=None, raise_on="transfer")
+    with pytest.raises(RuntimeError):
+        await adapter.transfer_usdc(
+            chain="base", to_address="0x33783cCb570Cb279C25F836806B5c4C3C8309777", amount_usd=1.0,
         )

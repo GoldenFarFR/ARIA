@@ -39,6 +39,7 @@ _COLUMNS = [
     "status",
     "reason",
     "created_at",
+    "to_address",
 ]
 
 
@@ -63,6 +64,13 @@ async def _ensure_table() -> None:
             )
             """
         )
+        # Migration à chaud idempotente (même patron que vc_predictions.py/exam.py) --
+        # to_address ajouté le 16/07 pour l'exception nommée #4 (transfert USDC vers
+        # une adresse unique autorisée) : jamais dans la définition CREATE TABLE
+        # ci-dessus pour ne pas casser une base déjà existante sans cette colonne.
+        cols = [row[1] async for row in await db.execute("PRAGMA table_info(agent_wallet_tx_log)")]
+        if "to_address" not in cols:
+            await db.execute("ALTER TABLE agent_wallet_tx_log ADD COLUMN to_address TEXT NOT NULL DEFAULT ''")
         await db.commit()
 
 
@@ -79,11 +87,14 @@ async def record_transaction(
     tx_hash: str = "",
     status: str,
     reason: str = "",
+    to_address: str = "",
 ) -> None:
     """Enregistre une tentative de transaction (``status`` in {"ok", "failed",
     "blocked"}). ``wallet_product`` identifie le produit utilisé (ex.
     "metamask_agent_wallet", "coinbase_agentic_wallet", "trust_wallet_agent_kit")
     — laissé libre plutôt qu'un enum fermé, le pilote n'étant pas encore choisi.
+    ``to_address`` (16/07, exception nommée #4) : adresse de destination d'un
+    transfert -- vide pour tout autre type d'action (ex. swap).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -92,12 +103,14 @@ async def record_transaction(
             """
             INSERT INTO agent_wallet_tx_log
                 (wallet_product, chain, action_type, token_in, token_out,
-                 amount_in, amount_out, slippage_bps, tx_hash, status, reason, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 amount_in, amount_out, slippage_bps, tx_hash, status, reason,
+                 created_at, to_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 wallet_product, chain, action_type, token_in, token_out,
                 amount_in, amount_out, slippage_bps, tx_hash, status, reason, now,
+                to_address,
             ),
         )
         await db.commit()

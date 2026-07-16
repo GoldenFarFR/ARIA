@@ -123,3 +123,29 @@ async def execute_swap(
     except (TypeError, ValueError):
         amount_out = 0.0
     return {"tx_hash": str(tx_hash), "amount_out": amount_out}
+
+
+async def transfer_usdc(*, chain: str, to_address: str, amount_usd: float) -> dict[str, Any]:
+    """``transfer_fn`` injectable pour `agent_wallet_pilot.attempt_transfer`
+    (exception nommée #4, 16/07) -- transfère de l'USDC réel vers ``to_address``.
+
+    API vérifiée dans la doc officielle CDP SDK avant d'écrire cette fonction
+    (jamais devinée) : ``account.transfer(to=, amount=, token="usdc", network=)``,
+    montant en unités atomiques via ``cdp.parse_units(str(montant), 6)`` (USDC =
+    6 décimales) -- https://docs.cdp.coinbase.com/server-wallets/v2/using-the-wallet-api/transfers.
+
+    ``to_address`` n'est JAMAIS un paramètre libre côté appelant réel : c'est
+    `agent_wallet_pilot.ALLOWED_TRANSFER_ADDRESS` (allowlist codée en dur, vérifiée
+    AVANT que cette fonction ne soit jamais appelée) -- ce module ne revérifie pas
+    l'allowlist lui-même, il exécute ce qu'on lui donne, la garde est en amont."""
+    from cdp import CdpClient, parse_units
+
+    async with CdpClient() as cdp:
+        account = await cdp.evm.get_or_create_account(name=WALLET_NAME)
+        tx_hash = await account.transfer(
+            to=to_address,
+            amount=parse_units(str(amount_usd), 6),
+            token="usdc",
+            network=chain,
+        )
+    return {"tx_hash": str(tx_hash)}
