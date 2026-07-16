@@ -55,11 +55,11 @@ def _get(obj: Any, *names: str) -> Any:
     return None
 
 
-async def usdc_balance_usd(*, network: str = "base") -> float | None:
-    """``balance_fn`` injectable -- solde RÉEL en USDC du wallet dédié, traité
-    comme un montant en dollars (1 USDC ~= 1$, aucune conversion de prix
-    nécessaire). Renvoie ``None`` si indisponible -- ``agent_wallet_pilot``
-    traite ça en fail-closed (refuse la transaction plutôt que de deviner)."""
+async def _fetch_raw_balance_entries(*, network: str) -> list[Any] | None:
+    """Un seul appel CDP partagé (``list_token_balances``) -- réutilisé par
+    ``usdc_balance_usd`` (filtre USDC) et ``list_all_token_balances`` (tout).
+    Renvoie ``None`` si le SDK est absent ou l'appel échoue (fail-closed,
+    jamais une liste vide déguisée en "aucun token détenu")."""
     try:
         from cdp import CdpClient
     except ImportError:
@@ -70,23 +70,58 @@ async def usdc_balance_usd(*, network: str = "base") -> float | None:
             result = await cdp.evm.list_token_balances(address=account.address, network=network)
     except Exception:
         return None
+    return _get(result, "balances") or (result if isinstance(result, list) else []) or []
 
-    entries = _get(result, "balances") or (result if isinstance(result, list) else []) or []
+
+def _parse_balance_entry(entry: Any) -> dict[str, Any] | None:
+    """Extrait ``{address, symbol, amount}`` d'une entrée brute CDP -- ``None``
+    si le montant n'est pas exploitable (jamais un 0 inventé sur une donnée
+    illisible)."""
+    token = _get(entry, "token")
+    address = _get(token, "contract_address", "contractAddress") or ""
+    symbol = _get(token, "symbol") or "?"
+    amount = _get(entry, "amount")
+    raw = _get(amount, "amount")
+    decimals = _get(amount, "decimals")
+    if raw is None:
+        return None
+    try:
+        value = float(raw) / (10 ** int(decimals if decimals is not None else 18))
+    except (TypeError, ValueError):
+        return None
+    return {"address": address, "symbol": symbol, "amount": value}
+
+
+async def usdc_balance_usd(*, network: str = "base") -> float | None:
+    """``balance_fn`` injectable -- solde RÉEL en USDC du wallet dédié, traité
+    comme un montant en dollars (1 USDC ~= 1$, aucune conversion de prix
+    nécessaire). Renvoie ``None`` si indisponible -- ``agent_wallet_pilot``
+    traite ça en fail-closed (refuse la transaction plutôt que de deviner)."""
+    entries = await _fetch_raw_balance_entries(network=network)
+    if entries is None:
+        return None
     for entry in entries:
-        token = _get(entry, "token")
-        address = _get(token, "contract_address", "contractAddress")
-        if (address or "").lower() != USDC_BASE_ADDRESS.lower():
+        parsed = _parse_balance_entry(entry)
+        if parsed is None:
             continue
-        amount = _get(entry, "amount")
-        raw = _get(amount, "amount")
-        decimals = _get(amount, "decimals")
-        if raw is None:
-            return None
-        try:
-            return float(raw) / (10 ** int(decimals if decimals is not None else 6))
-        except (TypeError, ValueError):
-            return None
+        if parsed["address"].lower() != USDC_BASE_ADDRESS.lower():
+            continue
+        return parsed["amount"]
     return 0.0  # USDC jamais trouvé dans les soldes -- wallet vide en USDC, pas une erreur.
+
+
+async def list_all_token_balances(*, network: str = "base") -> list[dict[str, Any]] | None:
+    """Tous les tokens réellement détenus par le wallet (#204 suite, demande
+    opérateur 16/07 : "je veux tous voir meme les futurs token achetés") --
+    généralise ``usdc_balance_usd`` au lieu de le dupliquer (même appel CDP
+    partagé). Chaque entrée : ``{"address", "symbol", "amount"}``. ``None`` si
+    indisponible (SDK absent/appel échoué), ``[]`` si le wallet est
+    réellement vide -- jamais confondu."""
+    entries = await _fetch_raw_balance_entries(network=network)
+    if entries is None:
+        return None
+    parsed = [_parse_balance_entry(e) for e in entries]
+    return [p for p in parsed if p is not None]
 
 
 async def execute_swap(

@@ -178,6 +178,45 @@ async def test_execute_swap_propagates_exception_on_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_all_token_balances_returns_every_token(monkeypatch):
+    _install_fake_cdp_module(
+        monkeypatch,
+        balances_result={
+            "balances": [
+                {
+                    "token": {"contractAddress": adapter.USDC_BASE_ADDRESS, "symbol": "USDC"},
+                    "amount": {"amount": "5000000", "decimals": 6},
+                },
+                {
+                    "token": {"contractAddress": "0xdeadbeef", "symbol": "SOMEGEM"},
+                    "amount": {"amount": "1500000000000000000", "decimals": 18},
+                },
+            ]
+        },
+    )
+    result = await adapter.list_all_token_balances()
+    assert result == [
+        {"address": adapter.USDC_BASE_ADDRESS, "symbol": "USDC", "amount": 5.0},
+        {"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 1.5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_all_token_balances_none_when_cdp_missing(monkeypatch):
+    monkeypatch.delitem(sys.modules, "cdp", raising=False)
+    monkeypatch.setattr("builtins.__import__", _raise_import_error_for("cdp"))
+    result = await adapter.list_all_token_balances()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_list_all_token_balances_empty_list_when_wallet_empty(monkeypatch):
+    _install_fake_cdp_module(monkeypatch, balances_result={"balances": []})
+    result = await adapter.list_all_token_balances()
+    assert result == []
+
+
+@pytest.mark.asyncio
 async def test_transfer_usdc_returns_tx_hash(monkeypatch):
     _install_fake_cdp_module(
         monkeypatch, balances_result=None, transfer_result="0xt2ansferhash",

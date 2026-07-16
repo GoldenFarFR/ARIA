@@ -72,6 +72,7 @@ async def test_agentwallet_shows_both_balances(monkeypatch):
             "chain": "base",
             "usdc_usd": 1.0,
             "eth": 0.0009,
+            "other_tokens": [{"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0}],
         }
 
     monkeypatch.setattr(
@@ -85,6 +86,7 @@ async def test_agentwallet_shows_both_balances(monkeypatch):
     assert "1.0000 USDC" in reply
     assert "0.000900 ETH" in reply
     assert "0xF04625162b616c5ad9788811b7be8CDd425B37Ef" in reply
+    assert "42.0 SOMEGEM" in reply
 
 
 @pytest.mark.asyncio

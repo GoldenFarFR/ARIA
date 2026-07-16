@@ -204,20 +204,35 @@ async def check_wallet_activity(
 async def get_wallet_balance_summary(
     *, wallet_address: str = "", chain: str = "base",
 ) -> dict[str, Any]:
-    """Solde RÉEL courant du wallet agent (#204, demande opérateur) -- USDC via
-    l'adaptateur CDP déjà vérifié en direct (16/07, #157), ETH natif via
+    """Solde RÉEL courant du wallet agent (#204, suite 16/07 : demande
+    opérateur "je veux tous voir meme les futurs token achetés") -- TOUS les
+    tokens réellement détenus via l'adaptateur CDP (``list_all_token_balances``,
+    même appel déjà vérifié en direct pour USDC, 16/07, #157), ETH natif via
     Blockscout (déjà construit, déjà utilisé ailleurs dans ARIA -- lecture
-    seule, aucune dépendance au SDK CDP ni à ses identifiants). Chaque valeur
-    dégrade honnêtement à ``None`` si indisponible, jamais un solde inventé."""
+    seule, aucune dépendance au SDK CDP). Chaque valeur dégrade honnêtement à
+    ``None`` si indisponible, jamais un solde inventé -- si le pilote swap un
+    jour vers un nouveau token, il apparaît ici automatiquement, sans liste
+    à maintenir à la main."""
     wallet_address = wallet_address or MONITORED_WALLET_ADDRESS
 
+    usdc: float | None = None
+    other_tokens: list[dict[str, Any]] | None = None
     try:
-        from aria_core.agent_wallet_cdp_adapter import usdc_balance_usd
+        from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS, list_all_token_balances
 
-        usdc = await usdc_balance_usd(network=chain)
+        tokens = await list_all_token_balances(network=chain)
     except Exception as exc:  # noqa: BLE001 -- l'extra cdp-sdk peut manquer, jamais casser l'appelant
-        logger.warning("agent_wallet_monitor: lecture solde USDC echouee: %s", exc)
-        usdc = None
+        logger.warning("agent_wallet_monitor: lecture des soldes tokens echouee: %s", exc)
+        tokens = None
+
+    if tokens is not None:
+        usdc = 0.0
+        other_tokens = []
+        for t in tokens:
+            if t["address"].lower() == USDC_BASE_ADDRESS.lower():
+                usdc = t["amount"]
+            else:
+                other_tokens.append(t)
 
     eth: float | None = None
     try:
@@ -228,7 +243,10 @@ async def get_wallet_balance_summary(
     except Exception as exc:  # noqa: BLE001 -- une panne Blockscout ne doit jamais casser l'appelant
         logger.warning("agent_wallet_monitor: lecture solde ETH echouee: %s", exc)
 
-    return {"wallet_address": wallet_address, "chain": chain, "usdc_usd": usdc, "eth": eth}
+    return {
+        "wallet_address": wallet_address, "chain": chain,
+        "usdc_usd": usdc, "eth": eth, "other_tokens": other_tokens,
+    }
 
 
 async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
@@ -301,15 +319,27 @@ def format_movement_alert(m: WalletMovement) -> str:
 
 def format_wallet_balance_summary(summary: dict[str, Any]) -> str:
     """Formate le résultat de ``get_wallet_balance_summary`` pour Telegram
-    (#204) -- chaque solde indisponible s'affiche honnêtement comme tel,
-    jamais un 0 silencieux qui laisserait croire à un wallet vide."""
+    (#204, suite : "je veux tous voir meme les futurs token achetés") --
+    chaque solde indisponible s'affiche honnêtement comme tel, jamais un 0
+    silencieux qui laisserait croire à un wallet vide. Tout autre token
+    détenu (ex. après un futur swap du pilote) s'affiche automatiquement,
+    sans liste à maintenir à la main."""
     usdc = summary.get("usdc_usd")
     eth = summary.get("eth")
+    other_tokens = summary.get("other_tokens")
     usdc_line = f"{usdc:.4f} USDC" if usdc is not None else "indisponible (SDK/identifiants CDP absents)"
     eth_line = f"{eth:.6f} ETH" if eth is not None else "indisponible (Blockscout hors service)"
-    return (
-        f"💼 Wallet agent CDP ({summary.get('chain', 'base')})\n"
-        f"Adresse : {summary.get('wallet_address', '?')}\n"
-        f"USDC : {usdc_line}\n"
-        f"ETH (gas) : {eth_line}"
-    )
+    lines = [
+        f"💼 Wallet agent CDP ({summary.get('chain', 'base')})",
+        f"Adresse : {summary.get('wallet_address', '?')}",
+        f"USDC : {usdc_line}",
+        f"ETH (gas) : {eth_line}",
+    ]
+    if other_tokens is None:
+        lines.append("Autres tokens : indisponible (SDK/identifiants CDP absents)")
+    elif other_tokens:
+        lines.append("Autres tokens :")
+        lines.extend(f"  - {t['amount']} {t['symbol']}" for t in other_tokens)
+    else:
+        lines.append("Autres tokens : aucun")
+    return "\n".join(lines)

@@ -2312,8 +2312,41 @@ qualité globale).
   au menu Telegram. 4 nouveaux tests Telegram + 6 nouveaux tests sur
   `agent_wallet_monitor.py` (33 au total sur ce fichier), suite complète
   revérifiée verte (5291 passed, mêmes 5 échecs pré-existants sans rapport).
-  **Rien déployé** — nécessite un nouveau `./vanguard/deploy.sh` après ce
-  commit pour apparaître dans le menu Telegram et répondre.
+  **DÉPLOYÉ ET CONFIRMÉ (16/07, commit `4c521e37c29e`)** : `/status` a d'abord
+  montré l'ancien commit (`16d2a505ce9c`) juste après le premier essai
+  `/agentwallet` sans réponse -- webhook et déploiement ne partagent pas le
+  même instant, symptôme normal d'un pull pas encore fait, pas un bug. Repull
+  + redeploy confirmés (blue-green, health check `4c521e37c29e` en prod),
+  `/agentwallet` répond ensuite correctement au format attendu.
+- **16/07 (suite) — #204, généralisation à TOUS les tokens détenus, réponse à
+  la demande opérateur explicite ("je veux tous voir meme les futurs token
+  achetés") — CODÉ, TESTÉ, PAS ENCORE DÉPLOYÉ.** Premier test réel de
+  `/agentwallet` en prod : `USDC : indisponible (SDK/identifiants CDP
+  absents)` -- cause root trouvée, pas supposée : `vanguard/Dockerfile`
+  installe `aria-core` SANS l'extra `[agent_wallet]`
+  (`pyproject.toml: agent_wallet = ["cdp-sdk>=1.0.0"]`), donc `cdp-sdk` est
+  réellement absent du conteneur de prod -- `usdc_balance_usd()` ne peut
+  littéralement pas s'exécuter (`ImportError` interne, capté, `None`).
+  Corrigé : `RUN pip install --no-cache-dir "/packages/aria-core[agent_wallet]"`.
+  Lecture seule uniquement -- n'active AUCUNE capacité d'exécution (swap/
+  transfert restent gatés séparément OFF par défaut, `ARIA_AGENT_WALLET_
+  PILOT_ENABLED`/`ARIA_AGENT_WALLET_TRANSFER_ENABLED`, inchangés). **Refactor
+  `agent_wallet_cdp_adapter.py`** : nouveau `_fetch_raw_balance_entries()` +
+  `_parse_balance_entry()` partagés (un seul appel CDP `list_token_balances`,
+  jamais dupliqué) ; `usdc_balance_usd()` réécrit dessus (comportement
+  inchangé, mêmes tests) ; nouveau `list_all_token_balances()` renvoie TOUS
+  les tokens détenus (`{address, symbol, amount}`), `None` si indisponible
+  (jamais confondu avec un wallet réellement vide, `[]`). `get_wallet_balance_
+  summary()`/`format_wallet_balance_summary()` généralisés : `other_tokens`
+  s'affiche automatiquement pour tout token au-delà d'USDC -- si le pilote
+  swap un jour vers un nouveau token, il apparaît sans code à retoucher, sans
+  liste à maintenir à la main. ETH "indisponible (Blockscout hors service)"
+  au même essai jugé probablement transitoire (le client base.blockscout.com
+  gratuit ne nécessite aucune clé, déjà robuste avec retry/backoff intégré)
+  -- à reconfirmer par un second essai après ce déploiement. 6 nouveaux tests
+  adapter + tests monitor/Telegram mis à jour, suite complète revérifiée
+  verte. **Rien déployé** — nécessite un rebuild Docker complet (nouvel
+  extra pip) + `./vanguard/deploy.sh`.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
