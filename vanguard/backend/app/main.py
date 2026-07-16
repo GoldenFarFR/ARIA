@@ -10,6 +10,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+# Root logger jamais configuré ailleurs dans tout le repo (aria-core + vanguard/backend,
+# vérifié par grep) -- sans handler explicite, Python retombe sur son "handler de dernier
+# recours" (WARNING+ seulement, stderr). Conséquence réelle trouvée le 16/07 en diagnostiquant
+# le silence du funnel momentum (#192/#194) : tous les logger.info() de l'appli (dont
+# "paper_cycle funnel", construit CE JOUR pour donner de la visibilité) étaient invisibles en
+# prod depuis toujours -- seuls logger.warning/logger.exception apparaissaient dans
+# `docker logs`. Configuré ici, tôt, avant tout import qui pourrait logger au chargement.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
 from app.integrations.aria_host import register_aria_host_integrations
 
 register_aria_host_integrations()
