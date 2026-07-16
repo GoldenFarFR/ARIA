@@ -1964,6 +1964,29 @@ règle absolue de validation humaine sur le trading avec du capital réel
 Rien codé — attend la décision #199 (quelle ressource/quel service payer
 en premier) avant tout wrapper.
 
+**16/07 (suite) — Pollak cède la direction de l'app Base à Cobie, aveu
+d'échec public du pari social.** Confirmé par 7+ sources indépendantes
+(crypto.news, cryptotimes.io, cointribune, chaincatcher, decrypt,
+cointelegraph/coinspectator, bitpush — article X original non lisible
+directement, paywall JS) : Pollak admet publiquement que la stratégie
+sociale/consumer de l'app Base a échoué ("I was wrong... whether it was
+timing wrong or fully wrong"), cède la direction de l'app à Cobie, recentre
+Base sur 3 priorités 2026 déjà notées ci-dessus : **trading, paiements,
+agents IA**. Durcit (pas un nouveau pivot) l'annonce du 15/07 déjà gravée.
+
+**16/07 (suite) — Cybercentry, candidat concret pour #199, vérifié
+légitime.** `cybercentry.co.uk` : API de vérification sécurité
+(wallet/contrat/app) **pay-per-call 0,02$, réglée en x402 sur Base et
+Solana**, PR mergée dans le repo officiel `coinbase/x402` (#884), doc
+GitBook officielle, adresse on-chain réelle (BaseScan), skills d'agent
+packagées pour **Virtuals Protocol ACP** (repéré par l'opérateur comme
+"lancé depuis Virtuals", confirmé). Même famille que GoPlus/Webacy déjà
+diligencés, mais nativement réglé en x402 -- tombe pile sur l'infra
+`x402_executor.py`/`x402_budget.py` déjà construite (#202). Piste sérieuse
+pour renforcer le garde-fou honeypot du pipeline momentum ou le pilote
+agent-wallet à 2 centimes/appel, jamais encore branché -- décision #199
+toujours à trancher par l'opérateur.
+
 ## 🎯 PLAN MAÎTRE — ARIA prête à trader (priorité absolue, décision opérateur
 explicite, 15/07, gravé) : "je veux voir ce compteur des 1 million bouger"
 
