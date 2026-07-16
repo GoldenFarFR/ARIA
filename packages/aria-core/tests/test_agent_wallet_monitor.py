@@ -324,6 +324,13 @@ async def test_get_wallet_balance_summary_returns_both_balances(monkeypatch):
     assert result["other_tokens"] == []
 
 
+class _FakePairSnapshot:
+    def __init__(self, *, base_address, price_usd, liquidity_usd=100_000.0):
+        self.base_address = base_address
+        self.price_usd = price_usd
+        self.liquidity_usd = liquidity_usd
+
+
 @pytest.mark.asyncio
 async def test_get_wallet_balance_summary_includes_other_tokens(monkeypatch):
     monkeypatch.setattr(
@@ -336,9 +343,91 @@ async def test_get_wallet_balance_summary_includes_other_tokens(monkeypatch):
     _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
         AddressInfo(address=WALLET, balance_native=0.0, available=True),
     ))
+
+    async def fake_fetch_tokens_batch(addresses, *, chain="base"):
+        return [_FakePairSnapshot(base_address="0xdeadbeef", price_usd=2.5)]
+
+    monkeypatch.setattr(
+        "aria_core.services.dexscreener.fetch_tokens_batch", fake_fetch_tokens_batch,
+    )
     result = await monitor.get_wallet_balance_summary(wallet_address=WALLET)
     assert result["usdc_usd"] == 5.0
-    assert result["other_tokens"] == [{"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0}]
+    assert result["other_tokens"] == [
+        {"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0, "price_usd": 2.5, "value_usd": 105.0}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_wallet_balance_summary_other_tokens_price_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
+        _fake_list_all_token_balances([
+            {"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0},
+        ]),
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
+        AddressInfo(address=WALLET, balance_native=0.0, available=True),
+    ))
+
+    async def fake_fetch_tokens_batch(addresses, *, chain="base"):
+        return []  # aucun pool trouve pour ce token
+
+    monkeypatch.setattr(
+        "aria_core.services.dexscreener.fetch_tokens_batch", fake_fetch_tokens_batch,
+    )
+    result = await monitor.get_wallet_balance_summary(wallet_address=WALLET)
+    token = result["other_tokens"][0]
+    assert token["price_usd"] is None
+    assert token["value_usd"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_wallet_balance_summary_picks_highest_liquidity_pair(monkeypatch):
+    monkeypatch.setattr(
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
+        _fake_list_all_token_balances([
+            {"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 10.0},
+        ]),
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
+        AddressInfo(address=WALLET, balance_native=0.0, available=True),
+    ))
+
+    async def fake_fetch_tokens_batch(addresses, *, chain="base"):
+        return [
+            _FakePairSnapshot(base_address="0xdeadbeef", price_usd=1.0, liquidity_usd=500.0),
+            _FakePairSnapshot(base_address="0xdeadbeef", price_usd=9.0, liquidity_usd=999_999.0),
+        ]
+
+    monkeypatch.setattr(
+        "aria_core.services.dexscreener.fetch_tokens_batch", fake_fetch_tokens_batch,
+    )
+    result = await monitor.get_wallet_balance_summary(wallet_address=WALLET)
+    assert result["other_tokens"][0]["price_usd"] == 9.0
+
+
+@pytest.mark.asyncio
+async def test_get_wallet_balance_summary_degrades_when_price_lookup_raises(monkeypatch):
+    monkeypatch.setattr(
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
+        _fake_list_all_token_balances([
+            {"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0},
+        ]),
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
+        AddressInfo(address=WALLET, balance_native=0.0, available=True),
+    ))
+
+    async def fake_fetch_tokens_batch(addresses, *, chain="base"):
+        raise RuntimeError("dexscreener down")
+
+    monkeypatch.setattr(
+        "aria_core.services.dexscreener.fetch_tokens_batch", fake_fetch_tokens_batch,
+    )
+    result = await monitor.get_wallet_balance_summary(wallet_address=WALLET)
+    token = result["other_tokens"][0]
+    assert token["amount"] == 42.0
+    assert token["value_usd"] is None
 
 
 @pytest.mark.asyncio
@@ -403,12 +492,26 @@ def test_format_wallet_balance_summary_shows_both_balances():
     assert "Autres tokens : aucun" in text
 
 
-def test_format_wallet_balance_summary_lists_other_tokens():
+def test_format_wallet_balance_summary_lists_other_tokens_with_usd_value():
     text = monitor.format_wallet_balance_summary({
         "wallet_address": WALLET, "chain": "base", "usdc_usd": 3.5, "eth": 0.0021,
-        "other_tokens": [{"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0}],
+        "other_tokens": [
+            {"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0, "price_usd": 2.5, "value_usd": 105.0}
+        ],
     })
     assert "42.0 SOMEGEM" in text
+    assert "105.00 $" in text
+
+
+def test_format_wallet_balance_summary_shows_price_unavailable_per_token():
+    text = monitor.format_wallet_balance_summary({
+        "wallet_address": WALLET, "chain": "base", "usdc_usd": 3.5, "eth": 0.0021,
+        "other_tokens": [
+            {"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0, "price_usd": None, "value_usd": None}
+        ],
+    })
+    assert "42.0 SOMEGEM" in text
+    assert "prix indisponible" in text
 
 
 def test_format_wallet_balance_summary_degrades_honestly():
