@@ -380,6 +380,7 @@ async def close_position(contract: str, exit_price: float, *, reason: str = "man
     proceeds = pos["qty"] * exit_price
     pnl_usd = proceeds - pos["cost_usd"]
     pnl_pct = (exit_price / pos["entry_price"] - 1.0) * 100.0 if pos["entry_price"] else 0.0
+    closed_at = _now()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
@@ -388,11 +389,11 @@ async def close_position(contract: str, exit_price: float, *, reason: str = "man
                    pnl_pct = ?, close_reason = ?
              WHERE id = ?
             """,
-            (exit_price, _now(), pnl_usd, pnl_pct, reason, pos["id"]),
+            (exit_price, closed_at, pnl_usd, pnl_pct, reason, pos["id"]),
         )
         await db.commit()
-    return {**pos, "status": "closed", "exit_price": exit_price, "pnl_usd": pnl_usd,
-            "pnl_pct": pnl_pct, "close_reason": reason}
+    return {**pos, "status": "closed", "exit_price": exit_price, "closed_at": closed_at,
+            "pnl_usd": pnl_usd, "pnl_pct": pnl_pct, "close_reason": reason}
 
 
 async def reduce_position(
