@@ -151,6 +151,37 @@ to deploy real capital. That decision follows our own proof, not a grant calenda
 - **Then**: open the verifiable track record publicly, small real capital by tiers, always human
   gated.
 
+## Base Ecosystem Fund — official thesis (reference only, not yet pitched)
+Source: Base Build (@buildonbase), published article, confirmed by the operator directly
+(16/07) after this session could not render the X article page (JS-only, 403 on
+automated fetch). High-conviction focus stated as "global onchain finance": tokenization,
+stablecoins & emerging markets, credit, prediction markets, legacy & institutional
+markets, and agentic commerce. Six named theses, verbatim summary:
+1. **Tokenization** — yield-bearing real-world assets onchain; tokenized brokerage
+   portfolios as DeFi-backed collateral (SBLOC alternative).
+2. **Stablecoins & emerging markets** — cash-to-stablecoin distribution rails in
+   dollarized-but-cash-centric markets (Argentina, Cambodia, Ecuador, Lebanon,
+   Venezuela); local (non-USD) stablecoins as first-class assets.
+3. **Credit** — zkTLS-verified unsecured consumer credit; multi-party/merged-profile
+   credit (family lending, remittance-backed credit).
+4. **Prediction markets** — conditional asset markets (state-contingent hedging);
+   verticalized markets beyond sports (politics, culture/media, institutional
+   risk/insurance, clinical trials).
+5. **Legacy & institutional markets** — onchain FX (spot/forwards/NDFs/futures/options);
+   onchain bilateral OTC agreements (repos, TRS, CDS).
+6. **Agentic commerce** — agents that complete everyday consumer transactions
+   (shopping/checkout, booking, ticketing, coupons) driving stablecoin/x402 volume;
+   SKU tokenization (merchant catalogues as composable onchain assets for agents).
+
+**Honest fit assessment**: ARIA does not sit cleanly in any of the six buckets as
+published. The closest, "agentic commerce", is scoped by the fund to consumer
+transaction-completion agents (shopping, booking, tickets) — not an autonomous
+trading/VC research agent. Applying will need a pitch that bridges ARIA's actual
+category (onchain intelligence + autonomous trading, proof-before-promise) to one or
+more of these theses, not an assumption that an existing bucket already fits. Revisit
+this once Phase 3 (proof from the 1M$ test) is reached — this is reference material for
+that pitch, not an application in progress.
+
 ## Links
 - Site: https://ariavanguardzhc.com
 - X: https://x.com/Aria_ZHC (agent), https://x.com/GoldenFarFR (builder)
