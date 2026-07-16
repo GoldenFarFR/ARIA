@@ -2199,6 +2199,44 @@ ET la personnalité/présence. À garder en tête comme étalon quand ce
 chantier sera repris (pas une fonctionnalité de plus, une exigence de
 qualité globale).
 
+- **16/07 — Relais Spark (fin des crédits gratuits Virtuals, 18/07) : premier pas
+  codé, PAS un cutover complet.** `llm.py` gagne un provider direct **DeepSeek**
+  (`api.deepseek.com`, indépendant de Virtuals) — au passage, un vrai bug latent
+  trouvé et corrigé : `_resolve_model()` renvoyait, pour TOUT provider direct
+  sans modèle explicite (xai/grok/deepseek/openai), l'ID catalogue Virtuals
+  (`resolve_primary_llm_model()`, ex. `"x-ai-grok-4-3"`) — un format que ces
+  vraies API ne connaissent pas. Jamais exercé jusqu'ici (aucun appelant n'a
+  encore utilisé ces providers en direct, Virtuals a toujours été primaire) :
+  latent, pas une régression. **Piège trouvé, pas encore résolu** : même une
+  fois `LLM_PROVIDER=deepseek` posé sur le VPS, `spark_config.resolve_provider()`
+  force `"virtuals"` tant que `VIRTUALS_API_KEY` fait ≥10 caractères — la vraie
+  bascule exige de VIDER cette clé, pas seulement de changer `LLM_PROVIDER`.
+  `ecosystem_registry.yaml` (SSOT des modèles par profondeur) est aussi
+  consommé par `aria-ops/letta-orchestrator/*` et des scripts PowerShell hors
+  de ce repo — tout changement des IDs par défaut (standard/develop/brief) a
+  un rayon d'action cross-repo non vérifiable depuis cette session seule.
+  **Décision à prendre avec l'opérateur avant la bascule réelle** : soit
+  couper `VIRTUALS_API_KEY` sur le VPS + poser `LLM_PROVIDER=deepseek` +
+  `DEEPSEEK_API_KEY` (standard) et `LLM_FALLBACK_PROVIDER=grok`/`GROK_API_KEY`
+  (develop, remplace Opus), soit conserver Virtuals si le programme Spark est
+  "tokenisé" pour 2 semaines de plus. 12 nouveaux tests, suite complète verte
+  (5190 passed). Rien déployé.
+- **16/07 — Plafond de dépense x402 : 5$/semaine, décision opérateur explicite
+  ("dépenser stratégiquement pour ne jamais être à court, mais assez pour
+  optimiser la vitesse d'accumulation de données").** Nouveau module
+  `x402_budget.py` — plafond dur calendaire (lundi 00:00 UTC), **aucun
+  throttle artificiel en dessous du plafond** (choix délibéré : la vitesse
+  d'accumulation est l'objectif, le seul frein légitime est la discipline
+  "un fait, une fois" déjà actée, pas un goutte-à-goutte imposé par le code).
+  Append-only (même doctrine que `agent_wallet_log`/`aria_directive_log`),
+  seules les dépenses `status="ok"` consomment le plafond (un refus/échec
+  reste tracé mais ne compte pas). Structurellement séparé de
+  `wallet_guard.py`, portée strictement limitée aux micropaiements x402
+  (jamais le trading capital réel). 9 tests. **Pas encore branché à un vrai
+  appel x402** — attend la décision #199 (quelle ressource payer en
+  premier) et le wallet CDP que l'opérateur prépare lui-même
+  (portal.cdp.coinbase.com, jamais de clé dans cette session).
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
