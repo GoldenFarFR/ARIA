@@ -285,6 +285,126 @@ async def test_honeypot_translates_chain_id_for_solana(monkeypatch):
     assert seen["chain_id"] == "solana"
 
 
+# ── _fetch_candles (cascade OHLCV : GeckoTerminal → CoinMarketCap → DexScreener → Dune) ──
+
+def _plain_candles(n: int = 5) -> list[Candle]:
+    return [Candle(ts=i, open=1.0, high=1.0, low=1.0, close=1.0, volume=0.0) for i in range(n)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_uses_geckoterminal_first(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+
+    gt_candles = _plain_candles(3)
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=gt_candles, available=True, error=None)
+
+    cmc_called = False
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        nonlocal cmc_called
+        cmc_called = True
+        return cmc.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+
+    result = await me._fetch_candles("0xpool", "base")
+    assert result == gt_candles
+    assert cmc_called is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_falls_back_to_coinmarketcap(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    cmc_candles = _plain_candles(4)
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=cmc_candles, available=True, error=None)
+
+    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+
+    result = await me._fetch_candles("0xpool", "base")
+    assert result == cmc_candles
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_falls_back_to_dexscreener_synthesis(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+
+    pair = _pair(price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1)
+    result = await me._fetch_candles("0xpool", "base", pair=pair)
+    assert result  # synthèse dégradée non vide
+    assert result[-1].close == 2.0  # dernier point = prix courant
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_falls_back_to_dune_as_last_resort(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import dune
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    dune_candles = _plain_candles(2)
+
+    async def fake_dune_price_history(contract_address, *, blockchain="base", lookback_hours=48, performance="medium"):
+        return dune.DunePriceHistoryResult(candles=dune_candles, available=True, error=None)
+
+    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(dune, "get_price_history", fake_dune_price_history)
+
+    # pas de `pair` fourni -> saute l'étage DexScreener, tombe directement sur Dune
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
+    assert result == dune_candles
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_returns_empty_when_everything_fails(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import dune
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        raise RuntimeError("boom")
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    async def fake_dune_price_history(contract_address, *, blockchain="base", lookback_hours=48, performance="medium"):
+        return dune.DunePriceHistoryResult(candles=[], available=False, error="DUNE_API_KEY absente")
+
+    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(dune, "get_price_history", fake_dune_price_history)
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
+    assert result == []
+
+
 # ── _technical_alignment ────────────────────────────────────────────────────────────
 
 def _rising_candles(n: int = 40) -> list[Candle]:
@@ -330,7 +450,7 @@ def _patch_pipeline(monkeypatch, *, honeypot_clear=True, pairs=None, candles=Non
     async def fake_fetch_pairs(contract, *, chain="base"):
         return pairs if pairs is not None else [_pair()]
 
-    async def fake_candles(pool_address, chain):
+    async def fake_candles(pool_address, chain, *, contract="", pair=None):
         return candles if candles is not None else [Candle(ts=0, open=1, high=1, low=1, close=1)] * 20
 
     def fake_detect_entry(candles_arg):

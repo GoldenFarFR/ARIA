@@ -450,3 +450,66 @@ async def test_meta_by_slug_none_on_error(monkeypatch):
 
     assert meta is None
     assert pairs == []
+
+
+# ── priceChange multi-fenêtres + synthèse dégradée (16/07, cascade OHLCV #194) ──
+
+@pytest.mark.asyncio
+async def test_fetch_token_pairs_parses_all_price_change_windows(monkeypatch):
+    url = "https://api.dexscreener.com/token-pairs/v1/base/0xtoken"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                [
+                    {
+                        "pairAddress": "0xpool",
+                        "priceUsd": "2.0",
+                        "priceChange": {"m5": 0.1, "h1": 1.0, "h6": 5.0, "h24": 10.0},
+                        "baseToken": {"symbol": "TOK"},
+                    }
+                ],
+            )
+        },
+    )
+
+    pairs = await fetch_token_pairs("0xtoken", chain="base")
+
+    assert pairs[0].price_change_m5 == 0.1
+    assert pairs[0].price_change_h1 == 1.0
+    assert pairs[0].price_change_h6 == 5.0
+    assert pairs[0].price_change_24h == 10.0
+
+
+def test_synthesize_candles_from_pair_builds_five_points():
+    from aria_core.services.dexscreener import PairSnapshot, synthesize_candles_from_pair
+
+    pair = PairSnapshot(
+        price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1,
+    )
+    candles = synthesize_candles_from_pair(pair)
+
+    assert len(candles) == 5
+    assert candles[-1].close == 2.0  # dernier point = prix courant
+    assert candles[0].ts < candles[-1].ts  # ordre chronologique croissant
+
+
+def test_synthesize_candles_from_pair_empty_when_no_price():
+    from aria_core.services.dexscreener import PairSnapshot, synthesize_candles_from_pair
+
+    assert synthesize_candles_from_pair(PairSnapshot(price_usd=0.0)) == []
+    assert synthesize_candles_from_pair(None) == []
+
+
+def test_synthesize_candles_from_pair_degrades_on_impossible_pct_change():
+    """Une variation de -100% (prix passé à zéro/négatif implicite) est
+    ignorée plutôt que de produire un point de prix négatif/infini -- jamais
+    une bougie inventée non plausible."""
+    from aria_core.services.dexscreener import PairSnapshot, synthesize_candles_from_pair
+
+    pair = PairSnapshot(price_usd=2.0, price_change_24h=-100.0, price_change_h6=0.0, price_change_h1=0.0, price_change_m5=0.0)
+    candles = synthesize_candles_from_pair(pair)
+
+    assert all(c.close > 0 for c in candles)
+    assert len(candles) == 4  # le point h24 impossible est exclu, les 4 autres restent

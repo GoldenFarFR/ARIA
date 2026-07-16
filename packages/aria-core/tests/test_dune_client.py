@@ -614,3 +614,135 @@ class TestGetFirstFundedBy:
 
         assert result.available is False
         assert result.error
+
+
+class TestBuildPriceHistoryQuery:
+    """Dernier recours de la cascade OHLCV #194 (16/07) -- reconstruit des
+    bougies horaires depuis `prices.usd` (granularité minute), utilisée
+    UNIQUEMENT quand GeckoTerminal ET CoinMarketCap ont échoué."""
+
+    def test_substitutes_parameters(self):
+        sql = dune.build_price_history_query(WETH_BASE, blockchain="base", lookback_hours=48)
+        assert "48" in sql
+        assert "prices.usd" in sql
+        assert "blockchain = 'base'" in sql
+
+    def test_address_emitted_as_bare_hex_literal_not_quoted(self):
+        sql = dune.build_price_history_query(WETH_BASE)
+        assert f"contract_address = {WETH_BASE}" in sql
+        assert f"'{WETH_BASE}'" not in sql
+
+    def test_rejects_malformed_address(self):
+        with pytest.raises(ValueError):
+            dune.build_price_history_query("not-an-address")
+
+    def test_rejects_invalid_blockchain(self):
+        with pytest.raises(ValueError):
+            dune.build_price_history_query(WETH_BASE, blockchain="base; DROP TABLE x")
+
+    def test_rejects_non_positive_lookback_hours(self):
+        with pytest.raises(ValueError):
+            dune.build_price_history_query(WETH_BASE, lookback_hours=0)
+
+    def test_rejects_non_int_lookback_hours(self):
+        with pytest.raises(ValueError):
+            dune.build_price_history_query(WETH_BASE, lookback_hours=48.5)
+
+
+class TestGetPriceHistory:
+    @pytest.mark.asyncio
+    async def test_no_key_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DUNE_API_KEY", raising=False)
+
+        result = await dune.get_price_history(WETH_BASE)
+
+        assert result.available is False
+
+    @pytest.mark.asyncio
+    async def test_invalid_address_unavailable_no_network_call(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        holder = _patch_client(monkeypatch, [])
+
+        result = await dune.get_price_history("not-an-address")
+
+        assert result.available is False
+        assert holder["calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_happy_path_parses_candles(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"bucket": "2026-07-15 10:00:00", "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1},
+                                {"bucket": "2026-07-15 11:00:00", "open": 1.1, "high": 1.3, "low": 1.0, "close": 1.25},
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_price_history(WETH_BASE)
+
+        assert result.available is True
+        assert len(result.candles) == 2
+        assert result.candles[0].close == 1.1
+        assert result.candles[1].open == 1.1
+        assert result.candles[0].volume == 0.0
+
+    @pytest.mark.asyncio
+    async def test_malformed_rows_skipped_not_a_crash(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"bucket": "2026-07-15 10:00:00", "open": None, "high": 1.2, "low": 0.9, "close": 1.1},
+                                {"bucket": "not-a-date", "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1},
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_price_history(WETH_BASE)
+
+        assert result.available is True
+        assert len(result.candles) == 1  # la 1re ligne (open=None) est ignorée, la 2e garde ts=0
+        assert result.candles[0].ts == 0
+
+    @pytest.mark.asyncio
+    async def test_execution_failure_propagates_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500)])
+
+        result = await dune.get_price_history(WETH_BASE)
+
+        assert result.available is False
+        assert result.error
