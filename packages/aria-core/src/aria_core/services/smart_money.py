@@ -1952,11 +1952,41 @@ async def refresh_chain_ranking_cache() -> bool:
     return True
 
 
+# Restriction d'urgence Base-only (16/07, décision opérateur explicite) -- le
+# balayage 13-chaînes de DEFAULT_SCAN_CHAINS() (ci-dessous) a été identifié comme
+# la cause principale quantifiée de l'épuisement du quota Blockscout Pro (100k
+# crédits/4h) : chaque wallet en rattrapage refait le balayage complet des 13
+# chaînes à CHAQUE passage, jusqu'à ~14 passages pour un wallet très actif --
+# chiffré à ~5 460 crédits pour la seule boucle `get_token_transfers` d'UN wallet
+# (docs/HANDOFF, échange opérateur 16/07). Vérifié avant ce correctif : ni
+# `momentum_entry.py` ni `paper_trader.py` ne consomment le signal multi-chaînes
+# du wallet-scoring aujourd'hui -- aucune décision de trading n'en dépend (le
+# seuil #199 exige ~500 wallets scorés avant même d'envisager de l'utiliser).
+# Zéro perte fonctionnelle réelle à couper ici, entièrement réversible.
+#
+# Court-circuit EXPLICITE, pas via `_MAX_RANKED_CHAINS` (qui donnerait la
+# chaîne #1 par TVL DefiLlama -- très probablement Ethereum, pas Base) : le
+# classement TVL dynamique n'est PAS supprimé, juste jamais consulté tant que
+# ce flag est actif. À lever quand le signal multi-chaînes sera réellement
+# consommé par une décision de trading (#199, pas encore tranché) -- repasser
+# `_BASE_ONLY_OVERRIDE` à `False` restaure le classement TVL existant sans
+# rien réécrire. Le plan de retenue des chaînes confirmées vides (#157 suite,
+# conçu le 16/07) reste valide tel quel pour ce jour-là, juste différé.
+_BASE_ONLY_OVERRIDE = True
+_BASE_ONLY_CHAINS: tuple[str, ...] = ("base",)
+
+
 async def DEFAULT_SCAN_CHAINS() -> tuple[str, ...]:
     """Chaînes scannées par défaut par `/walletscore` -- lit le classement TVL
     en cache (#157, 14/07), trié par rang. Repli sur `_FALLBACK_SCAN_CHAINS`
     si le cache est vide (jamais tourné) OU inaccessible -- jamais une
-    exception qui casse un scan faute de classement à jour."""
+    exception qui casse un scan faute de classement à jour.
+
+    Restriction Base-only (16/07) en tête de fonction : retour anticipé avant
+    toute lecture du cache TVL tant que `_BASE_ONLY_OVERRIDE` est actif (voir
+    commentaire ci-dessus)."""
+    if _BASE_ONLY_OVERRIDE:
+        return _BASE_ONLY_CHAINS
     try:
         await _ensure_wallet_scoring_tables()
         async with aiosqlite.connect(DB_PATH) as db:
