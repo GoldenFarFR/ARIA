@@ -1933,8 +1933,36 @@ prod sans un "go" opérateur explicite séparé**, même une fois le code prêt)
 canaux officiels (CDP Builder Grants, Base Batches, Base Ecosystem Fund) →
 Phase 5 visibilité passive, jamais de démarchage (veille #198 + profil X
 déjà actifs). Recherche agents IA concurrents + différenciation ARIA
-dispatchée à VPS Research le 16/07 (sortie attendue dans
-`docs/aria-learning-inbox/`).
+dispatchée à VPS Research le 16/07, livrée et fusionnée le jour même
+(`docs/aria-learning-inbox/2026-07-16-cartographie-agents-ia-concurrents-differenciation.md`,
+commit `f1a0d4a`) : 6 agents cartographiés (AIXBT, Luna, KellyClaude,
+ai16z/ElizaOS, Freysa, Wayfinder) — AIXBT a perdu ~106k$ (mars 2025) sur
+exactement la classe de faille corrigée le même jour dans
+`momentum_entry.py` (symbole ERC-20 non neutralisé), ai16z/ElizaOS fait
+face à une plainte fédérale (04/2026) alléguant un agent en réalité opéré
+par des humains. Constat transversal : aucun des 6 ne documente de
+validation humaine obligatoire par transaction sur capital réel — vendu
+comme un argument, pas géré comme un risque.
+
+**x402 — écosystème réel vérifié (16/07), pas un concept.** Marché actif :
+Agentic.Market / x402 Bazaar, 480k+ agents, 165M+ transactions, ~50M$ de
+volume cumulé (avril 2026). Pertinent pour ARIA : **Nansen vend son accès
+smart-money/wallet en pay-per-call** (quelques centimes/appel) — change le
+calcul face au refus déjà tranché d'un abonnement Nansen fixe, à chiffrer
+pour enrichir `/walletscore` ; **x402stock.xyz** (data macro/sentiment/SEC
+filings/congressional trades en pay-per-call) — signal additionnel
+possible pour #194 ; CoinGecko vend aussi du premium via x402.
+**Décision opérateur explicite (16/07) sur l'autonomie des micropaiements
+x402** : pas de clic Telegram par appel (incompatible avec le
+machine-speed du protocole, ~200ms/appel dans tout l'écosystème) — modèle
+"vérifier après" au lieu de "valider avant" : pool de dépense plafonné dur
+dans le code (ex. 5-10$/mois), coupe-circuit `/stop` dessus, chaque appel
+loggé et auditable. **Scope strictement limité aux micropaiements de
+données/API** (x402, centimes) — ne touche PAS et ne redéfinit PAS la
+règle absolue de validation humaine sur le trading avec du capital réel
+(swaps, positions), qui reste sur son propre chemin séparé, inchangé.
+Rien codé — attend la décision #199 (quelle ressource/quel service payer
+en premier) avant tout wrapper.
 
 ## 🎯 PLAN MAÎTRE — ARIA prête à trader (priorité absolue, décision opérateur
 explicite, 15/07, gravé) : "je veux voir ce compteur des 1 million bouger"
