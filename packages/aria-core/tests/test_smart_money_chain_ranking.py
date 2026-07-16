@@ -70,15 +70,53 @@ class TestRefreshChainRankingCache:
         assert rows == [("base",)]  # le dernier bon classement sert toujours
 
 
-class TestDefaultScanChains:
+class TestBaseOnlyOverride:
+    """Restriction d'urgence Base-only (16/07, décision opérateur) -- verrouille
+    l'invariant actif par défaut : `DEFAULT_SCAN_CHAINS()` ne doit JAMAIS renvoyer
+    autre chose que `("base",)` tant que `_BASE_ONLY_OVERRIDE` est actif, quel
+    que soit l'état du cache TVL (même un cache multi-chaînes déjà peuplé ne
+    doit rien changer -- le court-circuit doit intervenir AVANT toute lecture
+    du cache, jamais après). À lever quand #199 réactivera le signal
+    multi-chaînes."""
+
     @pytest.mark.asyncio
-    async def test_empty_cache_falls_back_to_static_tuple(self):
+    async def test_override_is_active_by_default(self):
+        assert sm._BASE_ONLY_OVERRIDE is True
+        assert await sm.DEFAULT_SCAN_CHAINS() == ("base",)
+
+    @pytest.mark.asyncio
+    async def test_override_short_circuits_even_with_populated_multichain_cache(self, monkeypatch):
+        async def _fake_ranking():
+            return [("ethereum", 900.0), ("arbitrum", 500.0), ("base", 100.0)]
+
+        monkeypatch.setattr("aria_core.services.defillama.fetch_chain_tvl_ranking", _fake_ranking)
+        await sm.refresh_chain_ranking_cache()
+
+        # Le cache TVL est bien peuplé multi-chaînes (vérifié) -- mais le
+        # court-circuit doit primer dessus tant que l'override est actif.
+        chains = await sm.DEFAULT_SCAN_CHAINS()
+
+        assert chains == ("base",)
+
+
+class TestDefaultScanChains:
+    """Logique de classement TVL dynamique sous-jacente (#157, 14/07) -- non
+    supprimée, juste court-circuitée par `_BASE_ONLY_OVERRIDE` (16/07). Ces
+    tests désactivent explicitement l'override pour prouver que le mécanisme
+    reste correct et prêt à être réactivé pour #199, sans rien à déboguer
+    ce jour-là."""
+
+    @pytest.mark.asyncio
+    async def test_empty_cache_falls_back_to_static_tuple(self, monkeypatch):
+        monkeypatch.setattr(sm, "_BASE_ONLY_OVERRIDE", False)
         chains = await sm.DEFAULT_SCAN_CHAINS()
 
         assert chains == sm._FALLBACK_SCAN_CHAINS
 
     @pytest.mark.asyncio
     async def test_populated_cache_respected_in_rank_order(self, monkeypatch):
+        monkeypatch.setattr(sm, "_BASE_ONLY_OVERRIDE", False)
+
         async def _fake_ranking():
             # Déjà trié décroissant par TVL, comme le fait le vrai
             # defillama.fetch_chain_tvl_ranking() -- refresh_chain_ranking_cache
@@ -94,6 +132,8 @@ class TestDefaultScanChains:
 
     @pytest.mark.asyncio
     async def test_db_error_falls_back_never_raises(self, monkeypatch):
+        monkeypatch.setattr(sm, "_BASE_ONLY_OVERRIDE", False)
+
         def _broken_connect(*args, **kwargs):
             raise OSError("simulated DB failure")
 
