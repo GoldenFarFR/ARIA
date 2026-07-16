@@ -1891,6 +1891,30 @@ portrait de gagnants — biais du survivant écarté) :
 reprendre la recherche sur l'angle suivant. Le seul critère d'arrêt est la
 confirmation opérateur qu'ARIA est prête.
 
+**Veille permanente Base / Jesse Pollak / Base Build (décision opérateur
+explicite, 16/07, gravé) : à vérifier en début de session, jamais un
+one-shot.** Contexte : Base vient d'annoncer (Pollak, 15/07, tweet + repris
+par Coindesk/The Block/crypto.news) un pivot 2026 vers trading + paiements
++ agents IA — exactement l'axe où ARIA se construit. Décision opérateur :
+construire dans le même sens que Base, exploiter ce qu'elle expose
+publiquement (atouts à saisir, failles à couvrir — cf. échange du 16/07),
+**sans démarcher personne pour l'instant** (pas de contact, pas de
+candidature) — l'opérateur veut d'abord avoir un agent qui trade bien avec
+une belle image à présenter, être fier de le montrer, et voir alors si
+Base/Coinbase veut investir dans ARIA. Tant que ce moment n'est pas venu,
+la seule action requise est la **veille** : à chaque nouvelle session (cloud
+en priorité, VPS Research en renfort), vérifier s'il y a du nouveau sur (1)
+les annonces/décisions publiques de Jesse Pollak, (2) la stratégie Base
+2026 (trading/paiements/agents IA), (3) les programmes "Base Build" (CDP
+Builder Grants, Base Batches, Base Ecosystem Fund) — round ouvert,
+nouvelles conditions, nouveaux exemples financés. Tout fait durable trouvé
+va dans `docs/aria-learning-inbox/` (méthode habituelle, jamais un jugement
+sur une rumeur). **Jalon de déverrouillage** : une fois le test 1M$
+concluant (ou un vrai momentum visible sur #194), préparer le dossier/pitch
+avec de vrais chiffres (`docs/base-funding-dossier.md` + cockpit
+track-record + vitrine) et regarder vers Base/Coinbase pour un
+investissement — pas avant.
+
 ## 🎯 PLAN MAÎTRE — ARIA prête à trader (priorité absolue, décision opérateur
 explicite, 15/07, gravé) : "je veux voir ce compteur des 1 million bouger"
 
