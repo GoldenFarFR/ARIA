@@ -16,6 +16,27 @@ goals:
       promesse (track-record VC/trading prouvé avant tout capital réel, cf.
       docs/protocole-argent-reel.md) — jamais un raccourci qui saute cette étape.
 
+  - id: full_personality_memory
+    title: Personnalité à 100% via la mémoire — plus un robot oui/non
+    horizon: continu
+    priority: 98
+    status: pending
+    text: >
+      Objectif opérateur (16/07) : aujourd'hui ARIA répond de façon
+      binaire/robotique — la mémoire (journal, valeurs, objectifs, futur
+      vecteur) doit la rendre personnalisée à 100%, une vraie personnalité
+      cohérente (attitude, ton, image visuelle) et pas une fonctionnalité
+      de plus. Lié à l'ambition "perle rare, une des meilleures IA avec
+      raisonnement, que tout le monde veuille l'avoir" (CLAUDE.md 15/07).
+      Inclut : construire dans le sens du pivot Base 2026 (trading/
+      paiements/agents IA, Jesse Pollak) pour être digne d'être montrée
+      avec fierté à Base/Coinbase une fois le résultat prouvé — sans
+      démarcher personne avant. Chantier technique (mémoire vectorielle
+      activée pour le comportement, pas seulement l'infra) explicitement
+      différé tant que la priorité absolue (test 1M$, cf. échéance 22/07)
+      n'est pas résolue — capturé ici pour ne pas être perdu, pas pour être
+      construit maintenant.
+
   - id: marketing_autonomy
     title: Décisions marketing autonomes
     horizon: 2026-Q3
