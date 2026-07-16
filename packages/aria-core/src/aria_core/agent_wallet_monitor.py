@@ -201,6 +201,46 @@ async def check_wallet_activity(
     return fresh
 
 
+async def _attach_usd_values(other_tokens: list[dict[str, Any]], *, chain: str) -> None:
+    """Ajoute ``price_usd``/``value_usd`` à chaque entrée de ``other_tokens``
+    (#204 suite, demande opérateur : "si j'achète du Virtual ou une small cap
+    il faut qu'il s'affiche avec la quantité de tokens et sa valeur en $") --
+    réutilise ``services/dexscreener.fetch_tokens_batch`` (déjà construit,
+    #194, jusqu'à 30 adresses en un seul appel), jamais un nouveau client de
+    prix dupliqué. Si plusieurs pools existent pour un même token, retient
+    celui de plus forte liquidité (même heuristique que
+    ``acp_onchain_scan.py``) -- prix le plus fiable, pas le premier venu.
+    Mute chaque entrée en place ; ``price_usd``/``value_usd`` restent ``None``
+    si le prix est introuvable, jamais une valeur inventée."""
+    for t in other_tokens:
+        t["price_usd"] = None
+        t["value_usd"] = None
+
+    try:
+        from aria_core.services.dexscreener import fetch_tokens_batch
+
+        pairs = await fetch_tokens_batch([t["address"] for t in other_tokens], chain=chain)
+    except Exception as exc:  # noqa: BLE001 -- une panne de prix n'efface jamais le solde déjà connu
+        logger.warning("agent_wallet_monitor: lecture des prix tokens echouee: %s", exc)
+        return
+
+    best_by_address: dict[str, Any] = {}
+    for p in pairs:
+        addr = (p.base_address or "").lower()
+        if not addr or not p.price_usd:
+            continue
+        current = best_by_address.get(addr)
+        if current is None or p.liquidity_usd > current.liquidity_usd:
+            best_by_address[addr] = p
+
+    for t in other_tokens:
+        pair = best_by_address.get(t["address"].lower())
+        if pair is None:
+            continue
+        t["price_usd"] = pair.price_usd
+        t["value_usd"] = t["amount"] * pair.price_usd
+
+
 async def get_wallet_balance_summary(
     *, wallet_address: str = "", chain: str = "base",
 ) -> dict[str, Any]:
@@ -233,6 +273,8 @@ async def get_wallet_balance_summary(
                 usdc = t["amount"]
             else:
                 other_tokens.append(t)
+        if other_tokens:
+            await _attach_usd_values(other_tokens, chain=chain)
 
     eth: float | None = None
     try:
@@ -339,7 +381,10 @@ def format_wallet_balance_summary(summary: dict[str, Any]) -> str:
         lines.append("Autres tokens : indisponible (SDK/identifiants CDP absents)")
     elif other_tokens:
         lines.append("Autres tokens :")
-        lines.extend(f"  - {t['amount']} {t['symbol']}" for t in other_tokens)
+        for t in other_tokens:
+            value_usd = t.get("value_usd")
+            value_label = f"(~{value_usd:,.2f} $)" if value_usd is not None else "(prix indisponible)"
+            lines.append(f"  - {t['amount']} {t['symbol']} {value_label}")
     else:
         lines.append("Autres tokens : aucun")
     return "\n".join(lines)

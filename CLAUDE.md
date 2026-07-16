@@ -2340,13 +2340,32 @@ qualité globale).
   summary()`/`format_wallet_balance_summary()` généralisés : `other_tokens`
   s'affiche automatiquement pour tout token au-delà d'USDC -- si le pilote
   swap un jour vers un nouveau token, il apparaît sans code à retoucher, sans
-  liste à maintenir à la main. ETH "indisponible (Blockscout hors service)"
-  au même essai jugé probablement transitoire (le client base.blockscout.com
-  gratuit ne nécessite aucune clé, déjà robuste avec retry/backoff intégré)
-  -- à reconfirmer par un second essai après ce déploiement. 6 nouveaux tests
-  adapter + tests monitor/Telegram mis à jour, suite complète revérifiée
-  verte. **Rien déployé** — nécessite un rebuild Docker complet (nouvel
-  extra pip) + `./vanguard/deploy.sh`.
+  liste à maintenir à la main. **DÉPLOYÉ ET CONFIRMÉ (16/07, commit
+  `04356b851744`)** : `/agentwallet` affiche désormais `1.0000 USDC` en
+  conditions réelles (avant : "indisponible"). **ETH "indisponible" PAS
+  transitoire, confirmé sur 2 essais réels consécutifs (20:27 et 20:44)** --
+  hypothèse initiale erronée, corrigée : un `curl` direct depuis la session
+  cloud vers `base.blockscout.com/api/v2/addresses/{wallet}` répond `200`
+  avec `coin_balance: "1000000000000000"` (= exactement 0.001 ETH, cohérent
+  avec le montant envoyé par l'opérateur) -- Blockscout n'est PAS en panne,
+  la cause est spécifique au VPS (clé Pro configurée mais invalide/expirée ?
+  réseau sortant du conteneur ? DNS ?). Diagnostic demandé à l'opérateur :
+  `grep BLOCKSCOUT_PRO_API_KEY .env` + `docker exec aria-api curl -sv
+  https://base.blockscout.com/...` pour voir la vraie erreur -- résultat pas
+  encore reçu à ce stade, ne pas supposer résolu.
+- **16/07 (suite) — #204, valeur en $ de chaque token détenu, réponse à la
+  demande opérateur explicite ("si j'achète du Virtual ou une small cap il
+  faut qu'il s'affiche avec la quantité de tokens et sa valeur en $") — CODÉ,
+  TESTÉ, PAS ENCORE DÉPLOYÉ.** Nouvelle fonction `_attach_usd_values()` dans
+  `agent_wallet_monitor.py` : réutilise `services/dexscreener.fetch_tokens_batch`
+  (déjà construit, #194, jusqu'à 30 adresses en un seul appel) -- jamais un
+  nouveau client de prix. Si plusieurs pools existent pour un token, retient
+  celui de plus forte liquidité (même heuristique que `acp_onchain_scan.py`).
+  `other_tokens` gagne `price_usd`/`value_usd` par entrée, `None` si le prix
+  est introuvable (jamais une valeur inventée) -- affiché "(~X,XX $)" ou
+  "(prix indisponible)" selon le cas. 4 nouveaux tests (pool multiple,
+  panne dexscreener, prix introuvable), suite complète revérifiée verte
+  (5300 passed, mêmes 5 échecs pré-existants). **Rien déployé.**
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
