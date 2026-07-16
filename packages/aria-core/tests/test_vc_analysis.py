@@ -964,10 +964,10 @@ async def test_fetch_polymarket_signals_degrades_on_error(monkeypatch):
     """Une erreur réseau/import ne doit jamais bloquer l'analyse VC."""
     import aria_core.services.polymarket as pm
 
-    async def _boom(tag: str):
+    async def _boom(_self, tag: str):
         raise RuntimeError("réseau indisponible")
 
-    monkeypatch.setattr(pm.polymarket_client, "fetch_top_event_by_tag", _boom)
+    monkeypatch.setattr(type(pm.polymarket_client), "fetch_top_event_by_tag", _boom)
 
     result = await vc._fetch_polymarket_signals()
     assert result == []
