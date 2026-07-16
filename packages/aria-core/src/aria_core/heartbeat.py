@@ -403,6 +403,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=1440,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="agent_wallet_monitor_cycle",
+        name="Surveillance temps reel du wallet agent (depots/retraits)",
+        description="Demande operateur (16/07) : detection automatique des mouvements reels du wallet agent CDP, registre complet. Lecture seule via Blockscout (agent_wallet_monitor.py, aucune cle, aucune execution) -- alerte immediate sur tout depot externe ou, plus critique, toute sortie non initiee par ARIA elle-meme (classee via agent_wallet_log). Gate dedie ARIA_AGENT_WALLET_MONITOR_ENABLED, OFF par defaut -- independant des gates pilote/swap/transfert (la surveillance peut tourner meme si l'execution reste desactivee).",
+        interval_minutes=10,
+        enabled=False,
+    ),
 ]
 
 
@@ -524,6 +531,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.memory.consolidation import consolidation_enabled
 
                 task.enabled = consolidation_enabled()
+            if task.id == "agent_wallet_monitor_cycle":
+                from aria_core.agent_wallet_monitor import agent_wallet_monitor_enabled
+
+                task.enabled = agent_wallet_monitor_enabled()
             if task.id == "wallet_scan_queue_cycle":
                 from aria_core.services.wallet_scan_queue import wallet_scan_queue_enabled
 
@@ -1155,6 +1166,17 @@ class AriaHeartbeat:
                     "heartbeat",
                     f"[memory_consolidation] {len(result['consolidated'])} categorie(s) "
                     f"consolidee(s) : {', '.join(result['consolidated'])}",
+                )
+
+        elif task_id == "agent_wallet_monitor_cycle":
+            from aria_core.agent_wallet_monitor import run_agent_wallet_monitor_cycle
+
+            result = await run_agent_wallet_monitor_cycle(notifier=self._notify_telegram)
+            if result.get("detected"):
+                append_memory(
+                    "agent_wallet_monitor",
+                    f"[agent_wallet_monitor] {result['detected']} mouvement(s) detecte(s), "
+                    f"{result.get('unexpected_outflows', 0)} sortie(s) non initiee(s) par ARIA",
                 )
 
         elif task_id == "wallet_scan_queue_cycle":
