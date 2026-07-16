@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from aria_core import agent_wallet_cdp_adapter as adapter
 from aria_core import agent_wallet_monitor as monitor
 from aria_core.services.blockscout import (
     AddressInfo,
@@ -299,13 +300,19 @@ async def test_run_cycle_error_on_check_activity_failure(monkeypatch):
     assert result["outcome"] == "error"
 
 
+def _fake_list_all_token_balances(tokens):
+    async def _fake(*, network="base"):
+        return tokens
+    return _fake
+
+
 @pytest.mark.asyncio
 async def test_get_wallet_balance_summary_returns_both_balances(monkeypatch):
-    async def fake_usdc_balance_usd(*, network="base"):
-        return 12.5
-
     monkeypatch.setattr(
-        "aria_core.agent_wallet_cdp_adapter.usdc_balance_usd", fake_usdc_balance_usd,
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
+        _fake_list_all_token_balances(
+            [{"address": adapter.USDC_BASE_ADDRESS, "symbol": "USDC", "amount": 12.5}]
+        ),
     )
     _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
         AddressInfo(address=WALLET, balance_native=0.002, available=True),
@@ -314,15 +321,31 @@ async def test_get_wallet_balance_summary_returns_both_balances(monkeypatch):
     assert result["usdc_usd"] == 12.5
     assert result["eth"] == 0.002
     assert result["wallet_address"] == WALLET
+    assert result["other_tokens"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_wallet_balance_summary_includes_other_tokens(monkeypatch):
+    monkeypatch.setattr(
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
+        _fake_list_all_token_balances([
+            {"address": adapter.USDC_BASE_ADDRESS, "symbol": "USDC", "amount": 5.0},
+            {"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0},
+        ]),
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
+        AddressInfo(address=WALLET, balance_native=0.0, available=True),
+    ))
+    result = await monitor.get_wallet_balance_summary(wallet_address=WALLET)
+    assert result["usdc_usd"] == 5.0
+    assert result["other_tokens"] == [{"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0}]
 
 
 @pytest.mark.asyncio
 async def test_get_wallet_balance_summary_defaults_to_monitored_address(monkeypatch):
-    async def fake_usdc_balance_usd(*, network="base"):
-        return 0.0
-
     monkeypatch.setattr(
-        "aria_core.agent_wallet_cdp_adapter.usdc_balance_usd", fake_usdc_balance_usd,
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
+        _fake_list_all_token_balances([]),
     )
     _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
         AddressInfo(address=monitor.MONITORED_WALLET_ADDRESS, balance_native=0.0, available=True),
@@ -333,11 +356,9 @@ async def test_get_wallet_balance_summary_defaults_to_monitored_address(monkeypa
 
 @pytest.mark.asyncio
 async def test_get_wallet_balance_summary_degrades_honestly_when_usdc_unavailable(monkeypatch):
-    async def fake_usdc_balance_usd(*, network="base"):
-        return None
-
     monkeypatch.setattr(
-        "aria_core.agent_wallet_cdp_adapter.usdc_balance_usd", fake_usdc_balance_usd,
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances",
+        _fake_list_all_token_balances(None),
     )
     _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
         AddressInfo(address=WALLET, available=False, error="indisponible"),
@@ -345,15 +366,16 @@ async def test_get_wallet_balance_summary_degrades_honestly_when_usdc_unavailabl
     result = await monitor.get_wallet_balance_summary(wallet_address=WALLET)
     assert result["usdc_usd"] is None
     assert result["eth"] is None
+    assert result["other_tokens"] is None
 
 
 @pytest.mark.asyncio
 async def test_get_wallet_balance_summary_degrades_when_cdp_adapter_raises(monkeypatch):
-    async def fake_usdc_balance_usd(*, network="base"):
+    async def fake_list_all_token_balances(*, network="base"):
         raise RuntimeError("cdp-sdk not installed")
 
     monkeypatch.setattr(
-        "aria_core.agent_wallet_cdp_adapter.usdc_balance_usd", fake_usdc_balance_usd,
+        "aria_core.agent_wallet_cdp_adapter.list_all_token_balances", fake_list_all_token_balances,
     )
     _patch_client(monkeypatch, FakeBlockscoutClientWithAddressInfo(
         AddressInfo(address=WALLET, balance_native=0.001, available=True),
@@ -373,15 +395,24 @@ class FakeBlockscoutClientWithAddressInfo:
 
 def test_format_wallet_balance_summary_shows_both_balances():
     text = monitor.format_wallet_balance_summary(
-        {"wallet_address": WALLET, "chain": "base", "usdc_usd": 3.5, "eth": 0.0021}
+        {"wallet_address": WALLET, "chain": "base", "usdc_usd": 3.5, "eth": 0.0021, "other_tokens": []}
     )
     assert "3.5000 USDC" in text
     assert "0.002100 ETH" in text
     assert WALLET in text
+    assert "Autres tokens : aucun" in text
+
+
+def test_format_wallet_balance_summary_lists_other_tokens():
+    text = monitor.format_wallet_balance_summary({
+        "wallet_address": WALLET, "chain": "base", "usdc_usd": 3.5, "eth": 0.0021,
+        "other_tokens": [{"address": "0xdeadbeef", "symbol": "SOMEGEM", "amount": 42.0}],
+    })
+    assert "42.0 SOMEGEM" in text
 
 
 def test_format_wallet_balance_summary_degrades_honestly():
     text = monitor.format_wallet_balance_summary(
-        {"wallet_address": WALLET, "chain": "base", "usdc_usd": None, "eth": None}
+        {"wallet_address": WALLET, "chain": "base", "usdc_usd": None, "eth": None, "other_tokens": None}
     )
     assert "indisponible" in text.lower()

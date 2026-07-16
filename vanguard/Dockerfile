@@ -21,7 +21,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY packages/aria-core /packages/aria-core
-RUN pip install --no-cache-dir /packages/aria-core
+# Extra [agent_wallet] (cdp-sdk) : lecture des soldes reels du wallet agent CDP
+# (agent_wallet_cdp_adapter.py, /agentwallet #204, 16/07) -- demande operateur
+# explicite ("je veux tous voir"). Lecture seule ici (usdc_balance_usd/
+# list_all_token_balances) : n'active PAS l'execution (swap/transfert restent
+# gates separement OFF par defaut, cf. CLAUDE.md).
+RUN pip install --no-cache-dir "/packages/aria-core[agent_wallet]"
 
 # Chromium headless (Playwright) : captures d'ecran reelles du site pour ux_watch
 # (tache #155, skills/ux_watch.py) -- +300-500 Mo mesures, accepte tel quel (decision
