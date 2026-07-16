@@ -2286,8 +2286,34 @@ qualité globale).
   l'app Coinbase directement sera classé "external_deposit"/"unexpected_outflow"
   même si c'est bien lui qui agit (faux positif assumé, jamais un faux négatif
   silencieux). 29 tests (`test_agent_wallet_monitor.py`), suite complète
-  vérifiée verte (5281 passed, 5 échecs pré-existants sans rapport). **Rien
-  déployé** — attend le prochain déploiement groupé.
+  vérifiée verte (5281 passed, 5 échecs pré-existants sans rapport).
+  **DÉPLOYÉ ET CONFIRMÉ (16/07, commit `16d2a505ce9c`)** : health check
+  opérateur après déploiement confirme `"commit":"16d2a505ce9c"` en prod.
+  Gate `ARIA_AGENT_WALLET_MONITOR_ENABLED` activé dans le `.env` par
+  l'opérateur au même moment. Note vérifiée après coup : un `grep
+  agent_wallet_monitor` sur les logs juste après déploiement ne montre rien
+  — normal, pas un signe de panne (le conteneur venait de redémarrer,
+  premier passage du cycle 10 min pas encore atteint ; et même en
+  fonctionnement sain le cycle ne journalise RIEN quand aucun mouvement
+  n'est détecté, silence assumé par design, pas une preuve d'inactivité).
+- **16/07 (suite) — #204, commande Telegram `/agentwallet` (solde réel du
+  wallet agent, USDC + ETH gas) — CODÉ, TESTÉ, PAS ENCORE DÉPLOYÉ.** Nouvelle
+  fonction `agent_wallet_monitor.get_wallet_balance_summary()` : USDC via
+  `agent_wallet_cdp_adapter.usdc_balance_usd()` (même chemin déjà vérifié en
+  direct le 16/07, #157) ; ETH natif via `services/blockscout.py`
+  (`get_address_info().balance_native`, client déjà construit et éprouvé
+  ailleurs dans ARIA) — délibérément PAS via le SDK CDP pour l'ETH (la
+  représentation exacte de l'ETH natif dans `list_token_balances` n'a pas pu
+  être vérifiée contre un vrai appel depuis cette session cloud sans accès
+  réseau CDP ; Blockscout donne le même résultat sans ce risque, même
+  adresse on-chain de toute façon). Chaque solde dégrade honnêtement à
+  "indisponible" s'il ne peut pas être lu, jamais un 0 silencieux. Commande
+  `/agentwallet` admin-only (même garde que `/status`/`/feedback`), ajoutée
+  au menu Telegram. 4 nouveaux tests Telegram + 6 nouveaux tests sur
+  `agent_wallet_monitor.py` (33 au total sur ce fichier), suite complète
+  revérifiée verte (5291 passed, mêmes 5 échecs pré-existants sans rapport).
+  **Rien déployé** — nécessite un nouveau `./vanguard/deploy.sh` après ce
+  commit pour apparaître dans le menu Telegram et répondre.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
