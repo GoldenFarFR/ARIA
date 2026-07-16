@@ -190,24 +190,35 @@ def _best_pair(pairs: list[PairSnapshot]) -> PairSnapshot | None:
     return max(pool, key=lambda p: p.liquidity_usd)
 
 
-async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str]:
-    """Seul garde-fou DUR de ce pipeline. ``(clear, reason)`` -- ``clear=False``
+async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
+    """Seul garde-fou DUR de ce pipeline. ``(clear, reason, code)`` -- ``clear=False``
     doit TOUJOURS rejeter, y compris si GoPlus est indisponible (fail-closed sur
-    LE garde-fou, contrairement au reste du pipeline qui dégrade en douceur)."""
+    LE garde-fou, contrairement au reste du pipeline qui dégrade en douceur).
+
+    ``code`` (mandat #192, 16/07) distingue machine-readable un VRAI signal de danger
+    (``honeypot_rejected``) d'une PANNE D'INFRASTRUCTURE (``honeypot_unavailable``/
+    ``chain_not_covered``) -- GoPlus est le SEUL fournisseur de ce garde-fou, aucun
+    repli. Sans ce code, une panne GoPlus prolongée produit exactement le même
+    symptôme observable (zéro nouvelle position) qu'un marché sans candidat valable
+    -- indiscernables sans lire les logs applicatifs un par un."""
     goplus_chain = _DEXSCREENER_TO_GOPLUS_CHAIN_ID.get(chain)
     if not goplus_chain:
-        return False, f"chaîne {chain} non couverte par le garde-fou honeypot -- rejet par prudence"
+        return False, f"chaîne {chain} non couverte par le garde-fou honeypot -- rejet par prudence", "chain_not_covered"
 
     from aria_core.services.goplus import goplus_client
 
     security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
     if not security.available:
-        return False, f"GoPlus indisponible ({security.error}) -- rejet par prudence, jamais un pari sans garde-fou"
+        return (
+            False,
+            f"GoPlus indisponible ({security.error}) -- rejet par prudence, jamais un pari sans garde-fou",
+            "honeypot_unavailable",
+        )
     if security.is_honeypot:
-        return False, "honeypot confirmé (GoPlus)"
+        return False, "honeypot confirmé (GoPlus)", "honeypot_rejected"
     if security.cannot_sell_all:
-        return False, "revente totale bloquée (GoPlus)"
-    return True, "honeypot clear (GoPlus)"
+        return False, "revente totale bloquée (GoPlus)", "honeypot_rejected"
+    return True, "honeypot clear (GoPlus)", "honeypot_clear"
 
 
 async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None) -> list[Candle]:
@@ -368,13 +379,19 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
          R/R faible (1.0-1.5) -> confirmation LLM légère. Sinon HOLD.
     Retourne un dict compatible avec ``paper_trader.run_paper_cycle``'s ``analyzer``
     (``action``/``symbol``/``price``/``target``/``invalidation``/``chain``), ou
-    ``None`` si aucune donnée de prix exploitable (jamais un signal fabriqué)."""
+    ``None`` si aucune donnée de prix exploitable (jamais un signal fabriqué).
+
+    Tout dict HOLD porte aussi ``hold_reason`` (code machine-readable, mandat #192,
+    16/07) -- ``paper_trader.run_paper_cycle`` l'agrège en un funnel par cycle pour
+    rendre visible la cause dominante d'inactivité (ex. panne GoPlus prolongée vs
+    marché réellement sans candidat), jamais laissé invisible dans des logs debug
+    épars."""
     contract = (contract or "").strip().lower()
     chain = (chain or "").strip().lower()
 
-    clear, honeypot_reason = await _check_honeypot(contract, chain)
+    clear, honeypot_reason, honeypot_code = await _check_honeypot(contract, chain)
     if not clear:
-        return {"action": "HOLD", "chain": chain, "reasons": [honeypot_reason]}
+        return {"action": "HOLD", "chain": chain, "reasons": [honeypot_reason], "hold_reason": honeypot_code}
 
     pairs = await fetch_token_pairs(contract, chain=chain)
     best = _best_pair(pairs)
@@ -387,7 +404,7 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
         reasons.append("OHLCV indisponible sur cette chaîne -- R/R non calculable, pas d'entrée")
         return {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd, "reasons": reasons,
+            "price": best.price_usd, "reasons": reasons, "hold_reason": "ohlcv_unavailable",
         }
 
     signal = detect_entry(candles)
@@ -396,13 +413,14 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
         reasons.append("pas de setup golden pocket + divergence RSI avec R/R positif")
         return {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd, "reasons": reasons,
+            "price": best.price_usd, "reasons": reasons, "hold_reason": "no_entry_signal",
         }
 
     align_score, align_reasons = _technical_alignment(candles)
     reasons.extend(align_reasons)
 
     action = "HOLD"
+    hold_reason = None
     if signal.rr >= _RR_MIN_FOR_DIRECT_BUY and align_score >= 1:
         action = "BUY"
         reasons.append(f"R/R franc ({signal.rr:.1f}) + alignement technique -- décision directe")
@@ -413,8 +431,10 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
             reasons.append(f"R/R faible ({signal.rr:.1f}) mais confirmé par le LLM")
         else:
             reasons.append(f"R/R faible ({signal.rr:.1f}), non confirmé -- HOLD")
+            hold_reason = "llm_not_confirmed"
     else:
         reasons.append(f"R/R positif mais sous le seuil ambigu ({signal.rr:.1f} < {_RR_AMBIGUOUS_FLOOR})")
+        hold_reason = "rr_below_ambiguous_floor"
 
     return {
         "action": action,
@@ -425,4 +445,5 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
         "invalidation": signal.invalidation,
         "rr": signal.rr,
         "reasons": reasons,
+        "hold_reason": hold_reason,
     }
