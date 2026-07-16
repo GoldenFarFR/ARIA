@@ -1968,18 +1968,24 @@ pipeline momentum n'ont ni `category` ni `entry_security_json` (pas de
 (`docs/gestion-risque-portefeuille.md`), jamais un signal fabriqué. 5151
 tests passés (aria-core) + 108 (vanguard/backend).
 
-**6. DÉPLOIEMENT — LE VRAI GOULOT FINAL, plus rien ne bloque côté code, tout
-attend maintenant le "go" opérateur.** #194 ET #187 (les deux derniers blocs)
-sont mergés sur `main` (16/07, `39c27f3` puis `99f925b`) — avec eux, tout ce
-qui était accumulé depuis le 15/07 (sourcing #105-109/#136-138, suivi wallet
-permanent, fix `/whoami`, vitesse OHLCV #182, `risk_guard` #186, cadence
-#195, Dune `first_funded_by`, pipeline momentum #194, surveillance continue
-+ concentration #187) est sur `main`, testé (5151 passed aria-core + 108
-vanguard/backend), prêt. **Rien de tout ça ne fait bouger le compteur tant
-que `deploy.sh` n'a pas tourné sur le VPS.** Prochaine étape concrète :
-demander le "go" opérateur pour un déploiement groupé complet, puis
-vérifier sur Telegram/cockpit que le
-compteur bouge réellement.
+**6. DÉPLOIEMENT — FAIT, confirmé sur le VPS (16/07, commit `3b975a07`, feu vert
+opérateur explicite "on deploy ?").** `deploy.sh` exécuté en blue-green (health-
+check du nouveau conteneur sur le port 8001 pendant que l'ancien tourne encore,
+bascule nginx, **vérification du trafic RÉEL à travers nginx avec retry** avant
+suppression de l'ancien conteneur) — succès confirmé bout en bout, cache Docker
+purgé (2.356GB récupérés). Un vrai obstacle rencontré en route et résolu : le
+checkout `/opt/aria` était resté sur une branche de travail temporaire
+(`claude/monkeypatch-instance-vs-class-fix-temp`, reliquat d'une session VPS
+antérieure) au lieu de `main` — `git checkout main && git pull origin main`
+avant de relancer `deploy.sh`. `.claude/last-deployed-ref` mis à jour
+(`3b975a0795c3146434db0209fab0b38551e57864`, commit `79113c3`), compteur de
+rappel de déploiement remis à zéro. Tout ce qui était accumulé depuis le 15/07
+(sourcing #105-109/#136-138, suivi wallet permanent, fix `/whoami`, vitesse
+OHLCV #182, `risk_guard` #186, cadence #195, Dune `first_funded_by`, pipeline
+momentum #194, surveillance continue + concentration #187, correctif comptage
+tokens wallet #157 suite) est maintenant EN PROD. **Prochaine étape concrète** :
+vérifier sur Telegram/cockpit que le compteur du paper-trading 1M$ bouge
+réellement avec le nouveau pipeline momentum — pas encore fait à ce stade.
 
 **7. #193 (diagnostic live sur tokens réels) — en cours, Principal.** Sert
 à vérifier concrètement ce qui passait/échouait avant #194 — alimente le
