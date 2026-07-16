@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 import httpx
 
@@ -46,6 +47,7 @@ class PairSnapshot:
     buys_24h: int = 0
     sells_24h: int = 0
     pair_created_at: int | None = None
+    base_address: str = ""  # adresse du token de base (#194) -- pour corréler un lot
     base_symbol: str = ""
     quote_symbol: str = ""
     project_links: list[dict] = field(default_factory=list)
@@ -102,6 +104,7 @@ def _parse_pair(raw: dict) -> PairSnapshot:
         buys_24h=int(h24.get("buys") or 0) if isinstance(h24, dict) else 0,
         sells_24h=int(h24.get("sells") or 0) if isinstance(h24, dict) else 0,
         pair_created_at=int(raw.get("pairCreatedAt") or 0) or None,
+        base_address=str(base.get("address") or "").lower(),
         base_symbol=str(base.get("symbol") or ""),
         quote_symbol=str(quote.get("symbol") or ""),
         project_links=_extract_project_links(raw),
@@ -177,3 +180,172 @@ async def has_any_pair(contract: str, *, chain: str = "base") -> bool | None:
     if not isinstance(data, list):
         return None
     return len(data) > 0
+
+
+async def search_pairs(query: str) -> list[PairSnapshot]:
+    """Recherche libre DexScreener (``/latest/dex/search``, #194, 15/07) -- couvre
+    TOUTES les chaînes indexées (pas un endpoint par chaîne), source de sourcing
+    multi-chaînes vérifiée en direct (curl, HTTP 200) avant construction. Même
+    forme de paire que ``token-pairs/v1`` (``_parse_pair`` réutilisé tel quel).
+    Liste vide si aucun résultat OU si l'appel échoue -- jamais une exception."""
+    url = f"{BASE_URL}/latest/dex/search?q={quote(query)}"
+    data, error = await _get_json(url)
+    if error is not None:
+        logger.warning("dexscreener: search '%s' -> %s", query[:30], error)
+        return []
+    if not isinstance(data, dict):
+        return []
+    pairs = data.get("pairs")
+    if not isinstance(pairs, list):
+        return []
+    return [_parse_pair(row) for row in pairs if isinstance(row, dict)]
+
+
+@dataclass
+class TokenListing:
+    """Entrée « boost » ou « profil » DexScreener (#194) -- métadonnées de
+    découverte SANS donnée de prix/liquidité (contrairement à ``PairSnapshot``) :
+    juste de quoi identifier un contrat + chaîne à passer ensuite au vrai pipeline
+    de décision (honeypot + TA + R/R), jamais utilisé seul comme signal d'achat."""
+
+    chain_id: str = ""
+    token_address: str = ""
+    description: str = ""
+    links: list[dict] = field(default_factory=list)
+
+
+def _parse_listing(raw: dict) -> TokenListing:
+    links: list[dict] = []
+    for link in raw.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        url = str(link.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        kind = str(link.get("type") or "").strip().lower()
+        label = str(link.get("label") or "") or _SOCIAL_LABELS.get(kind, kind.capitalize() or "Lien")
+        links.append({"label": label, "url": url})
+    return TokenListing(
+        chain_id=str(raw.get("chainId") or ""),
+        token_address=str(raw.get("tokenAddress") or ""),
+        description=str(raw.get("description") or ""),
+        links=links,
+    )
+
+
+async def _fetch_listings(path: str) -> list[TokenListing]:
+    data, error = await _get_json(f"{BASE_URL}{path}")
+    if error is not None:
+        logger.warning("dexscreener: %s -> %s", path, error)
+        return []
+    if not isinstance(data, list):
+        return []
+    return [_parse_listing(row) for row in data if isinstance(row, dict)]
+
+
+async def token_boosts_top() -> list[TokenListing]:
+    """Tokens actuellement les plus « boostés » (promotion payante DexScreener,
+    #194) -- signal « quelqu'un investit pour la visibilité de CE token
+    maintenant », jamais un signal d'achat à lui seul (bonus de sourcing)."""
+    return await _fetch_listings("/token-boosts/top/v1")
+
+
+async def token_boosts_latest() -> list[TokenListing]:
+    """Boosts les plus RÉCENTS (#194) -- favorise la fraîcheur (« signaux qui
+    commencent à se former ») plutôt qu'un classement déjà bien avancé."""
+    return await _fetch_listings("/token-boosts/latest/v1")
+
+
+async def token_profiles_latest() -> list[TokenListing]:
+    """Profils projet les plus récemment CRÉÉS (#194) -- sourcing de tokens frais
+    avec metadata renseignée, indépendant des boosts payants."""
+    return await _fetch_listings("/token-profiles/latest/v1")
+
+
+async def token_profiles_recent_updates() -> list[TokenListing]:
+    """Profils projet les plus récemment MIS À JOUR (#194, distinct de
+    ``token_profiles_latest`` qui couvre les créations) -- capture un projet qui
+    vient de retoucher ses métadonnées, signal d'activité récente."""
+    return await _fetch_listings("/token-profiles/recent-updates/v1")
+
+
+async def fetch_tokens_batch(addresses: list[str], *, chain: str = "base") -> list[PairSnapshot]:
+    """``/tokens/v1/{chainId}/{tokenAddresses}`` (#194, spec OpenAPI officielle
+    vérifiée -- docs/aria-learning-inbox/2026-07-15-dexscreener-openapi-spec-verifiee.yaml) :
+    jusqu'à 30 adresses séparées par des virgules en UN SEUL appel (300 req/min),
+    bien plus efficace que N appels ``token-pairs/v1`` individuels pour pré-filtrer
+    un lot de candidats sourcés (liquidité) avant le pipeline de décision complet.
+    Adresses au-delà de 30 silencieusement tronquées (limite documentée de l'API,
+    jamais un appel qui échouerait silencieusement sur un lot trop grand)."""
+    addrs = [a.strip() for a in addresses if a and a.strip()][:30]
+    if not addrs:
+        return []
+    url = f"{BASE_URL}/tokens/v1/{chain}/{','.join(addrs)}"
+    data, error = await _get_json(url)
+    if error is not None:
+        logger.warning("dexscreener: tokens/v1 batch (%s, %d adresses) -> %s", chain, len(addrs), error)
+        return []
+    if not isinstance(data, list):
+        return []
+    return [_parse_pair(row) for row in data if isinstance(row, dict)]
+
+
+@dataclass
+class MetaTrend:
+    """Narratif/méta tendance DexScreener (#194, ``/metas/*``) -- ex. « AI »,
+    regroupe plusieurs tokens sous un thème. Signal de CONTEXTE (un narratif chaud
+    peut porter plusieurs candidats à la fois), jamais un signal d'achat isolé."""
+
+    slug: str = ""
+    name: str = ""
+    description: str = ""
+    market_cap: float = 0.0
+    liquidity: float = 0.0
+    volume: float = 0.0
+    token_count: int = 0
+    market_cap_change_24h: float = 0.0
+
+
+def _parse_meta(raw: dict) -> MetaTrend:
+    change = raw.get("marketCapChange")
+    change_24h = float(change.get("h24") or 0) if isinstance(change, dict) else 0.0
+    return MetaTrend(
+        slug=str(raw.get("slug") or ""),
+        name=str(raw.get("name") or ""),
+        description=str(raw.get("description") or ""),
+        market_cap=float(raw.get("marketCap") or 0),
+        liquidity=float(raw.get("liquidity") or 0),
+        volume=float(raw.get("volume") or 0),
+        token_count=int(raw.get("tokenCount") or 0),
+        market_cap_change_24h=change_24h,
+    )
+
+
+async def metas_trending() -> list[MetaTrend]:
+    """Narratifs tendance (#194, ``/metas/trending/v1``)."""
+    data, error = await _get_json(f"{BASE_URL}/metas/trending/v1")
+    if error is not None:
+        logger.warning("dexscreener: metas/trending -> %s", error)
+        return []
+    if not isinstance(data, list):
+        return []
+    return [_parse_meta(row) for row in data if isinstance(row, dict)]
+
+
+async def meta_by_slug(slug: str) -> tuple[MetaTrend | None, list[PairSnapshot]]:
+    """Détail d'un narratif + ses paires (#194, ``/metas/meta/v1/{slug}``).
+    ``(None, [])`` si indisponible -- jamais une paire inventée."""
+    data, error = await _get_json(f"{BASE_URL}/metas/meta/v1/{quote(slug)}")
+    if error is not None:
+        logger.warning("dexscreener: metas/meta %s -> %s", slug, error)
+        return None, []
+    if not isinstance(data, dict):
+        return None, []
+    meta = _parse_meta(data)
+    pairs_raw = data.get("pairs")
+    pairs = (
+        [_parse_pair(row) for row in pairs_raw if isinstance(row, dict)]
+        if isinstance(pairs_raw, list)
+        else []
+    )
+    return meta, pairs
