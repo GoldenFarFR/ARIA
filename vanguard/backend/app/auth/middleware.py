@@ -37,6 +37,7 @@ VANGUARD_PUBLIC_ROUTES: tuple[tuple[str, str], ...] = (
     # exempté ici du gate Privy/opérateur pour ne pas superposer deux logiques.
     ("GET", "/api/aria/diagnostics/pool-status"),
     ("GET", "/api/aria/diagnostics/agent-wallet-ledger"),
+    ("GET", "/api/aria/diagnostics/paper-ledger"),
 )
 
 
