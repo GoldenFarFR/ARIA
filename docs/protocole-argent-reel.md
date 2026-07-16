@@ -24,27 +24,31 @@
   small-cap filtrée on-chain** (jamais du hype à l'aveugle — cf. $HOLO = archétype du
   15 % *qui passe le filtre*, pas d'un pari au hasard).
 
-## 2. Les 8 cases à cocher AVANT tout argent réel (toutes requises)
+## 2. Les 7 cases à cocher AVANT tout argent réel (toutes requises)
 
-1. **Échantillon suffisant** : ≥ **80 verdicts résolus**, étalés sur ≥ **6 mois**.
-   (En dessous, c'est de la chance, pas de la compétence.)
-2. **Track record complet et inviolable** : **aucun** verdict effacé ou caché ; chaque
+> **Ex-case « échantillon suffisant » (≥80 verdicts résolus / ≥6 mois) supprimée**
+> (décision opérateur explicite, 16/07) — remplacée par le protocole 30j/7j/14j
+> décrit ailleurs (paper-trading 1M$, cf. `CLAUDE.md`) : ce protocole fixe désormais
+> lui-même la durée/le volume de preuve exigés avant tout palier réel, ce barème-ci
+> ne fixe plus son propre seuil d'échantillon séparé.
+
+1. **Track record complet et inviolable** : **aucun** verdict effacé ou caché ; chaque
    appel horodaté + **empreinte SHA-256**, idéalement **ancrée on-chain** (hash sur Base).
    Reproductible par un tiers.
-3. **Calibration prouvée** : la courbe de calibration est **monotone** (un « 8/10 »
+2. **Calibration prouvée** : la courbe de calibration est **monotone** (un « 8/10 »
    surperforme réellement un « 5/10 ») et le **hit-rate BUY est nettement supérieur au
    hasard APRÈS frais** (gas, slippage).
-4. **Bat un benchmark honnête** : la stratégie 85/15 bat, sur la même période, à la fois
+3. **Bat un benchmark honnête** : la stratégie 85/15 bat, sur la même période, à la fois
    (a) « hold ETH » et (b) une **sélection aléatoire** de tokens comparables.
-5. **Robustesse anti-chance** : on **retire les 2 meilleurs coups** → la performance
+4. **Robustesse anti-chance** : on **retire les 2 meilleurs coups** → la performance
    reste positive. Pas de survivorship, pas de cherry-pick, pas « un moonshot qui sauve
    tout ».
-6. **Risque maîtrisé** : le sleeve 15 % **n'a pas explosé** ; drawdown maximum
+5. **Risque maîtrisé** : le sleeve 15 % **n'a pas explosé** ; drawdown maximum
    raisonnable ; et surtout les **AVOID ont réellement évité des pertes** (le token
    déconseillé a bien chuté).
-7. **Proof engine cohérent** : l'auto-audit (juge adverse) est **bien calibré**, pas
+6. **Proof engine cohérent** : l'auto-audit (juge adverse) est **bien calibré**, pas
    complaisant — il attrape réellement les erreurs d'ARIA.
-8. **Feu vert avocat** sur la structure d'argent réel retenue (le tien vs. tiers ; cf.
+7. **Feu vert avocat** sur la structure d'argent réel retenue (le tien vs. tiers ; cf.
    `docs/conformite-dossier-avocat.md`). Un fonds pour compte de tiers reste le mur le
    plus lourd et n'est pas le point de départ.
 
@@ -54,12 +58,12 @@ L'argent réel ne se déploie **pas d'un coup sur les deux poches**. Il se débl
 poche par poche, dans cet ordre, et **chaque étape rejoue le barème complet du §2**
 sur son propre track-record (pas une seule fois au global) :
 
-- **Étape A — VC réel (poche 85 %) débloqué en premier.** Une fois les 8 cases du §2
+- **Étape A — VC réel (poche 85 %) débloqué en premier.** Une fois les 7 cases du §2
   cochées sur le track-record **paper**, l'argent réel démarre **uniquement** sur la
   poche VC (positions moyen/long terme). La poche spéculation (15 %) **reste en paper**
   pendant toute cette étape, même si le VC réel tourne déjà.
 - **Étape B — Trading réel (poche 15 %) débloqué ensuite, jamais avant.** Ne s'ouvre
-  que lorsque l'étape A a, à son tour, **rejoué les 8 cases du §2** — cette fois sur le
+  que lorsque l'étape A a, à son tour, **rejoué les 7 cases du §2** — cette fois sur le
   track-record du **VC réel** (pas le paper d'origine). Même rigueur, deuxième passage,
   sur de l'argent réel cette fois. Tant que ce second barème n'est pas rempli, la poche
   15 % reste paper.

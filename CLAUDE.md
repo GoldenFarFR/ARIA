@@ -1771,12 +1771,12 @@ que le compteur des 30 jours ne commence à courir pour de vrai — sinon le
 test mesurerait un ARIA encore sans ces garde-fous. Rappel à vérifier à
 chaque session tant que cette échéance n'est pas atteinte : où en est le
 déploiement de #186/#187, et la date de démarrage officielle du compteur
-30 jours a-t-elle été fixée et communiquée à l'opérateur ? **Tension non
-résolue, à trancher avec l'opérateur avant le démarrage** : ce protocole
-(30j/7j/14j) est plus court que le barème déjà écrit dans
-`docs/protocole-argent-reel.md` (≥80 trades clôturés ET ≥180 jours avant de
-même mesurer les 8 cases) -- clarifier si celui-ci est un test préliminaire
-sur la seule poche 15% trading avant le grand barème, ou un remplacement.
+30 jours a-t-elle été fixée et communiquée à l'opérateur ?
+**Tension résolue (décision opérateur explicite, 16/07)** : le critère
+« ≥80 trades clôturés ET ≥180 jours » (ex-case #1 du barème
+`docs/protocole-argent-reel.md`) est **supprimé** -- le protocole 30j/7j/14j
+remplace ce seuil, il ne coexiste plus avec lui. Le barème ne compte
+désormais plus que 7 cases (renumérotées), doc mise à jour au même commit.
 
 **Priorité unique jusqu'au démarrage (décision opérateur explicite, 15/07)** :
 plus aucune tâche annexe tant que cette échéance n'est pas atteinte — tout
