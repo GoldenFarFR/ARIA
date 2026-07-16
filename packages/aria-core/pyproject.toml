@@ -25,6 +25,7 @@ dependencies = [
     "pypdf>=6.13.3",
     "web3>=7.15.0",
     "playwright>=1.48.0",
+    "websockets>=14.0",  # #196 -- client WS DexScreener (momentum_websocket.py), lecture seule
 ]
 
 [project.optional-dependencies]

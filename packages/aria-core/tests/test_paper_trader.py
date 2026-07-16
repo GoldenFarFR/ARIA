@@ -1,6 +1,8 @@
 """Portefeuille papier 1 M$ (simulation) — moteur déterministe, DB temporaire isolée."""
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from aria_core import paper_trader as pt
@@ -19,6 +21,13 @@ async def _no_depeg() -> float | None:
 @pytest.fixture()
 def tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(pt, "DB_PATH", str(tmp_path / "paper.db"))
+    # #196 -- pytest-asyncio donne une boucle événementielle FRAÎCHE à chaque test ;
+    # _run_cycle_lock est un singleton créé une seule fois à l'import du module
+    # (correct en production, un seul process/une seule boucle pendant toute sa vie),
+    # mais réutiliser le MÊME objet Lock d'un test à l'autre le lierait à une boucle déjà
+    # fermée -> RuntimeError. Un Lock frais par test, jamais un changement de comportement
+    # en production.
+    monkeypatch.setattr(pt, "_run_cycle_lock", asyncio.Lock())
     return tmp_path
 
 
@@ -743,3 +752,116 @@ async def test_run_cycle_tracking_alert_excludes_positions_closed_this_cycle(tmp
     assert len(act["closed"]) == 1
     assert act["tracked"] == []
     assert not any("suivi positions ouvertes" in a for a in alerts)
+
+
+@pytest.mark.asyncio
+async def test_skip_position_management_leaves_open_positions_untouched(tmp_db):
+    """#196 -- avec skip_position_management=True, une position qui aurait
+    normalement déclenché le stop suiveur/invalidation reste INTOUCHÉE (ni
+    re-scan sécurité, ni clôture) -- réservé au service websocket momentum,
+    qui ne doit gérer QUE les nouvelles entrées, jamais les positions déjà
+    ouvertes (ça reste le rôle du cycle heartbeat normal)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000)
+
+    async def price_lookup(contract):
+        return 0.5  # bien sous l'invalidation -- se fermerait normalement ce tour
+
+    act = await pt.run_paper_cycle(
+        candidates=[], price_lookup=price_lookup, depeg_check=_no_depeg,
+        skip_position_management=True,
+    )
+
+    assert act["closed"] == []
+    assert act["checked"] == 0
+    assert act["tracked"] == []
+    assert await pt.has_open(D)  # toujours ouverte, rien touché
+
+
+@pytest.mark.asyncio
+async def test_skip_position_management_still_opens_new_positions(tmp_db):
+    """#196 -- skip_position_management=True saute UNIQUEMENT l'étape 1 (gestion des
+    positions déjà ouvertes) ; l'étape 2 (nouvelles entrées) et la photo de risque
+    portefeuille (#186, étape 1ter) continuent de s'appliquer normalement."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def analyzer(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 1.0, "target": 2.0, "invalidation": 0.5}
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+        skip_position_management=True,
+    )
+
+    assert len(act["opened"]) == 1
+    assert await pt.has_open(A)
+    assert "risk_state" in act  # 1ter (#186) reste exécutée même en mode skip
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cycles_never_overlap(tmp_db):
+    """#196 -- correctif obligatoire (relecture opérateur) : deux appels concurrents à
+    run_paper_cycle() (heartbeat + service websocket, par ex.) ne doivent JAMAIS
+    s'exécuter en parallèle -- sinon risque réel de double-allocation de capital ou de
+    dépassement de MAX_POSITIONS (les deux liraient l'état avant que l'un des deux
+    n'écrive). Un analyzer qui dort prouve la sérialisation : si le verrou ne
+    fonctionnait pas, les deux exécutions se chevaucheraient dans la fenêtre de sommeil."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    in_progress = False
+    overlap_detected = False
+
+    async def analyzer(contract):
+        nonlocal in_progress, overlap_detected
+        if in_progress:
+            overlap_detected = True
+        in_progress = True
+        await asyncio.sleep(0.05)
+        in_progress = False
+        return None  # HOLD -- le test porte sur la sérialisation, pas sur l'achat
+
+    async def price_lookup(contract):
+        return 1.0
+
+    await asyncio.gather(
+        pt.run_paper_cycle(candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg),
+        pt.run_paper_cycle(candidates=[B], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg),
+    )
+
+    assert overlap_detected is False
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cycles_lock_serializes_websocket_and_heartbeat_style_calls(tmp_db):
+    """#196 -- même garde-fou que ci-dessus, mais avec un mélange réaliste : un appel
+    ``skip_position_management=True`` (style websocket) et un appel normal (style
+    heartbeat) déclenchés en même temps ne doivent jamais se chevaucher non plus."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    in_progress = False
+    overlap_detected = False
+
+    async def analyzer(contract):
+        nonlocal in_progress, overlap_detected
+        if in_progress:
+            overlap_detected = True
+        in_progress = True
+        await asyncio.sleep(0.05)
+        in_progress = False
+        return None
+
+    async def price_lookup(contract):
+        return 1.0
+
+    await asyncio.gather(
+        pt.run_paper_cycle(
+            candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+            skip_position_management=True,
+        ),
+        pt.run_paper_cycle(candidates=[B], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg),
+    )
+
+    assert overlap_detected is False
