@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 _START_TIME = datetime.now(timezone.utc)
 _LAST_HEARTBEAT: datetime | None = None
 
+# Plafond dur par tâche de heartbeat (16/07, #tick-blocking) -- aucune tâche unique
+# ne doit pouvoir bloquer tout le tick (et donc tout ARIA) au-delà de cette durée,
+# même en cas de panne externe prolongée (GeckoTerminal/CoinMarketCap down en même
+# temps, ex. observé ce soir sur wallet_scan_queue_cycle). Généreux (5 min) pour ne
+# pas couper une tâche légitimement lente en conditions normales.
+_TASK_TIMEOUT_SECONDS = 300
+
 HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="portfolio_scan",
@@ -688,11 +695,32 @@ class AriaHeartbeat:
             if not _task_due(hb_task.id, hb_task.interval_minutes, self._last_runs):
                 continue
 
-            await self._run_task(hb_task.id)
-            self._last_runs[hb_task.id] = now
-            hb_task.last_run = now
+            # Plafond dur par tâche (16/07, incident diagnostiqué en direct par VPS
+            # Principal) : `wallet_scan_queue_cycle` est resté bloqué ~8+ minutes en
+            # échec continu GeckoTerminal (429) puis CoinMarketCap (500) pendant une
+            # panne externe -- avant ce correctif, AUCUN try/except n'entourait
+            # `_run_task` ici, donc une tâche lente ou en exception bloquait/annulait
+            # tout le reste du tick (y compris `paper_trade_cycle`, qui n'a jamais pu
+            # persister son état tant que le tick entier n'était pas terminé).
+            # `asyncio.wait_for` borne chaque tâche individuellement ; `finally`
+            # persiste l'état ET marque la tâche "tentée" (jamais retentée en boucle
+            # serrée toutes les 60s -- son `interval_minutes` normal s'applique, que
+            # la tentative ait réussi, expiré ou levé une exception).
+            try:
+                await asyncio.wait_for(self._run_task(hb_task.id), timeout=_TASK_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Heartbeat: tâche %s a dépassé %ss -- abandonnée pour ce tick, "
+                    "les autres tâches ne sont jamais bloquées.",
+                    hb_task.id, _TASK_TIMEOUT_SECONDS,
+                )
+            except Exception as exc:  # noqa: BLE001 — une tâche cassée ne coupe plus tout le cycle
+                logger.exception("Heartbeat: tâche %s a échoué: %s", hb_task.id, exc)
+            finally:
+                self._last_runs[hb_task.id] = now
+                hb_task.last_run = now
+                _save_heartbeat_state(self._last_runs)
 
-        _save_heartbeat_state(self._last_runs)
         _LAST_HEARTBEAT = now
 
     async def _notify_telegram(self, text: str) -> None:
