@@ -1,9 +1,19 @@
-# Pilote agent-wallet réel ~10$ — plan (15/07, PAS ENCORE implémenté)
+# Pilote agent-wallet réel ~10-15$ — EXCEPTION NOMMÉE (16/07)
 
-> **Statut : PLAN SEULEMENT.** Rien de ce document n'est codé ni activé. Conforme à la
-> méthode « Analyser → Proposer un plan → attendre "go" → Implémenter » (CLAUDE.md) —
-> ce pilote toucherait du capital réel mainnet sans clic Telegram par transaction, donc
-> le même niveau de rigueur que l'exception Sepolia s'applique avant tout code.
+> **Statut : §4 tranché par l'opérateur (16/07, explicite et répété).** Le modèle
+> "plafond dur + wallet isolé + swap uniquement, vérifié après coup" est accepté
+> pour CE pilote précisément borné — exécution réelle sans clic Telegram par
+> transaction. Même rigueur que l'exception Sepolia : nommée ici, jamais une
+> dérogation silencieuse à la règle absolue de validation humaine, qui reste
+> pleinement en vigueur partout ailleurs (mainnet Vanguard ZHC, tout capital au-delà
+> de ce pilote). Code construit : `packages/aria-core/src/aria_core/
+> agent_wallet_pilot.py` (commit `0d3f593`), garde-fous §3 tous appliqués et
+> testés (20 tests). **Encore en attente** : les identifiants CDP réels
+> (`CDP_API_KEY_ID`/`CDP_API_KEY_SECRET`/`CDP_WALLET_SECRET`, wallet Coinbase
+> Agentic créé par l'opérateur lui-même) et le branchement du vrai SDK CDP
+> (balance_fn/swap_fn injectés, aucune clé ne transite jamais par une session
+> cloud) — rien n'est activé (`ARIA_AGENT_WALLET_PILOT_ENABLED` reste OFF) tant
+> que ce câblage réel n'est pas fait, testé sur le VPS.
 
 ## 1. Pourquoi ce document existe
 
