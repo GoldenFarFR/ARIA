@@ -119,6 +119,61 @@ async def test_run_cycle_opens_then_stages_take_profit(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_run_paper_cycle_reports_momentum_funnel_by_reason_code(tmp_db):
+    """Mandat #192 (16/07) -- ``run_paper_cycle`` doit agréger POURQUOI chaque
+    candidat évalué n'a pas mené à un achat. Sans ça, une panne prolongée du seul
+    garde-fou dur (GoPlus, aucun repli, cf. ``momentum_entry.py``) produit exactement
+    le même symptôme observable (zéro nouvelle position) qu'un marché réellement sans
+    candidat valable -- indiscernables sans lire les logs applicatifs un par un."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    A_ = "0x" + "1" * 40
+    B_ = "0x" + "2" * 40
+    C_ = "0x" + "3" * 40
+    E_ = "0x" + "5" * 40  # exception côté analyzer
+    F_ = "0x" + "6" * 40  # HOLD sans hold_reason (ex. pilote VC-thesis historique)
+
+    async def analyzer(contract):
+        if contract == A_:
+            return {"action": "HOLD", "hold_reason": "honeypot_unavailable"}
+        if contract == B_:
+            return {"action": "HOLD", "hold_reason": "honeypot_unavailable"}
+        if contract == C_:
+            return None  # pas de paire liquide avec un prix exploitable
+        if contract == E_:
+            raise RuntimeError("boom")
+        if contract == F_:
+            return {"action": "HOLD"}  # aucun hold_reason fourni
+        return None
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(
+        candidates=[A_, B_, C_, E_, F_], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert act["momentum_funnel"] == {
+        "honeypot_unavailable": 2,
+        "no_price_data": 1,
+        "analyzer_error": 1,
+        "unspecified": 1,
+    }
+    assert act["opened"] == []
+
+
+@pytest.mark.asyncio
+async def test_run_paper_cycle_omits_funnel_key_when_nothing_evaluated(tmp_db):
+    """Pas de bruit inutile dans ``actions`` quand il n'y a rien à évaluer ce tour."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, depeg_check=_no_depeg)
+    assert "momentum_funnel" not in act
+
+
+@pytest.mark.asyncio
 async def test_all_tp_stages_hit_in_one_jump_closes_fully(tmp_db):
     """Un bond de prix qui dépasse TOUS les paliers d'un coup ne laisse jamais une
     position résiduelle ouverte -- le dernier palier clôture ce qui reste."""

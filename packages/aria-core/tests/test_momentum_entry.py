@@ -231,8 +231,9 @@ async def test_honeypot_clear(monkeypatch):
         return FakeSecurity()
 
     monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
-    clear, _reason = await me._check_honeypot(CONTRACT, "base")
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
     assert clear is True
+    assert code == "honeypot_clear"
 
 
 @pytest.mark.asyncio
@@ -243,31 +244,39 @@ async def test_honeypot_confirmed_rejects(monkeypatch):
         return FakeSecurity(is_honeypot=True)
 
     monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
-    clear, reason = await me._check_honeypot(CONTRACT, "base")
+    clear, reason, code = await me._check_honeypot(CONTRACT, "base")
     assert clear is False
     assert "honeypot" in reason.lower()
+    assert code == "honeypot_rejected"
 
 
 @pytest.mark.asyncio
 async def test_honeypot_unavailable_fails_closed(monkeypatch):
     """Contrairement au reste du pipeline (permissif), le SEUL garde-fou dur doit
-    rejeter -- jamais un pari sans protection quand GoPlus ne répond pas."""
+    rejeter -- jamais un pari sans protection quand GoPlus ne répond pas.
+
+    ``code == "honeypot_unavailable"`` (mandat #192, 16/07) distingue cette PANNE
+    D'INFRASTRUCTURE d'un vrai rejet de sécurité -- sans ce code, une panne GoPlus
+    prolongée serait indiscernable d'un marché sans candidat valable au niveau du
+    cycle (cf. ``test_paper_trader.py::test_run_paper_cycle_reports_momentum_funnel_by_reason_code``)."""
     from aria_core.services import goplus as gp
 
     async def fake_get_token_security(address, *, chain_id):
         return FakeSecurity(available=False, error="timeout")
 
     monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
-    clear, reason = await me._check_honeypot(CONTRACT, "base")
+    clear, reason, code = await me._check_honeypot(CONTRACT, "base")
     assert clear is False
     assert "indisponible" in reason.lower()
+    assert code == "honeypot_unavailable"
 
 
 @pytest.mark.asyncio
 async def test_honeypot_unmapped_chain_fails_closed():
-    clear, reason = await me._check_honeypot(CONTRACT, "ethereum")
+    clear, reason, code = await me._check_honeypot(CONTRACT, "ethereum")
     assert clear is False
     assert "non couverte" in reason.lower()
+    assert code == "chain_not_covered"
 
 
 @pytest.mark.asyncio
@@ -445,7 +454,9 @@ def _pair(**overrides) -> PairSnapshot:
 
 def _patch_pipeline(monkeypatch, *, honeypot_clear=True, pairs=None, candles=None, signal=None, align=(0, [])):
     async def fake_honeypot(contract, chain):
-        return honeypot_clear, "honeypot clear (GoPlus)" if honeypot_clear else "honeypot confirmé (GoPlus)"
+        if honeypot_clear:
+            return True, "honeypot clear (GoPlus)", "honeypot_clear"
+        return False, "honeypot confirmé (GoPlus)", "honeypot_rejected"
 
     async def fake_fetch_pairs(contract, *, chain="base"):
         return pairs if pairs is not None else [_pair()]
@@ -469,6 +480,23 @@ async def test_evaluate_rejects_on_honeypot(monkeypatch):
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert "honeypot" in result["reasons"][0].lower()
+    assert result["hold_reason"] == "honeypot_rejected"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hold_reason_distinguishes_goplus_outage_from_real_honeypot(monkeypatch):
+    """Mandat #192 (16/07) -- une panne GoPlus (infrastructure) et un honeypot
+    confirmé (vrai danger) produisent la même action HOLD, mais doivent rester
+    distinguables machine-readable pour que ``paper_trader`` puisse agréger un
+    funnel par cycle -- sinon une panne prolongée est indiscernable d'un marché
+    sans candidat valable."""
+    async def fake_honeypot_unavailable(contract, chain):
+        return False, "GoPlus indisponible (timeout) -- rejet par prudence", "honeypot_unavailable"
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_honeypot_unavailable)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "honeypot_unavailable"
 
 
 @pytest.mark.asyncio
@@ -484,6 +512,7 @@ async def test_evaluate_holds_when_ohlcv_unavailable(monkeypatch):
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert any("OHLCV indisponible" in r for r in result["reasons"])
+    assert result["hold_reason"] == "ohlcv_unavailable"
 
 
 @pytest.mark.asyncio
@@ -491,6 +520,7 @@ async def test_evaluate_holds_when_no_entry_signal(monkeypatch):
     _patch_pipeline(monkeypatch, signal=EntrySignal(present=False, reasons=["setup non réuni"]))
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "no_entry_signal"
 
 
 @pytest.mark.asyncio
@@ -511,6 +541,7 @@ async def test_evaluate_holds_strong_rr_without_any_alignment(monkeypatch):
     _patch_pipeline(monkeypatch, signal=strong, align=(0, []))
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"  # tombe dans la branche ambiguë -> LLM (mocké absent -> HOLD)
+    assert result["hold_reason"] == "llm_not_confirmed"
 
 
 @pytest.mark.asyncio
@@ -538,6 +569,7 @@ async def test_evaluate_ambiguous_rr_rejected_by_llm(monkeypatch):
     monkeypatch.setattr(me, "_llm_confirm", fake_llm_confirm)
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "llm_not_confirmed"
 
 
 @pytest.mark.asyncio
@@ -556,6 +588,7 @@ async def test_evaluate_low_rr_never_calls_llm(monkeypatch):
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert called is False
+    assert result["hold_reason"] == "rr_below_ambiguous_floor"
 
 
 @pytest.mark.asyncio

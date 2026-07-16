@@ -802,6 +802,18 @@ async def run_paper_cycle(
     # son propre plafond de risque par trade (défense en profondeur, cf. size_position_by_risk).
     new_entry_alloc_usd = risk_state.alloc_multiplier * ALLOC_PCT * start
 
+    # Funnel par cycle (mandat #192, 16/07) : agrège POURQUOI chaque candidat évalué
+    # n'a pas mené à un achat. Sans ça, une panne prolongée du seul garde-fou dur
+    # (GoPlus, aucun repli -- cf. momentum_entry.py) produit exactement le même
+    # symptôme observable (zéro nouvelle position) qu'un marché réellement sans
+    # candidat valable -- indiscernables sans lire les logs applicatifs un par un,
+    # ce qui va à l'encontre de l'objectif diagnostique du test 1M$ (comprendre
+    # COMMENT ARIA trade, pas juste SI elle trade). Additif pur : ne change aucun
+    # comportement de décision, seulement la visibilité. Le champ ``hold_reason``
+    # (momentum_entry.py) alimente ce compteur ; un analyzer qui ne le fournit pas
+    # (ex. le pilote VC-thesis historique, ``_default_analyzer``) tombe dans le
+    # seau générique "unspecified", sans erreur.
+    funnel: dict[str, int] = {}
     opened = 0
     for contract in candidates:
         if opened >= max_new:
@@ -816,8 +828,14 @@ async def run_paper_cycle(
             sig = await analyzer(contract)
         except Exception as exc:  # noqa: BLE001 — une analyse qui plante n'arrête pas le cycle
             logger.info("paper_cycle: analyse %s échouée (%s)", contract, exc)
+            funnel["analyzer_error"] = funnel.get("analyzer_error", 0) + 1
             continue
-        if not sig or sig.get("action") != "BUY":
+        if not sig:
+            funnel["no_price_data"] = funnel.get("no_price_data", 0) + 1
+            continue
+        if sig.get("action") != "BUY":
+            reason_code = sig.get("hold_reason") or "unspecified"
+            funnel[reason_code] = funnel.get(reason_code, 0) + 1
             continue
         price = sig.get("price")
         if not price:
@@ -849,5 +867,9 @@ async def run_paper_cycle(
                     await notifier(format_buy_alert(pos))
                 except Exception:  # noqa: BLE001
                     pass
+
+    if funnel:
+        actions["momentum_funnel"] = funnel
+        logger.info("paper_cycle funnel (nouvelles entrées, %d candidats) : %s", len(candidates), funnel)
 
     return actions
