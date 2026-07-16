@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     llm_provider: str = "none"
     llm_api_key: str = ""
     virtuals_api_key: str = ""  # Virtuals Compute Spark — LLM_PROVIDER=virtuals
+    deepseek_api_key: str = ""  # DeepSeek direct (api.deepseek.com) — LLM_PROVIDER=deepseek
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"

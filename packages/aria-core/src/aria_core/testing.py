@@ -39,6 +39,7 @@ class AriaRuntimeSettings(BaseSettings):
     llm_provider: str = "none"
     llm_api_key: str = ""
     virtuals_api_key: str = ""
+    deepseek_api_key: str = ""
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"

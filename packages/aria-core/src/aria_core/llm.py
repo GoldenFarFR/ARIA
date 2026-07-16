@@ -17,6 +17,7 @@ PROVIDER_URLS = {
     "groq": "https://api.groq.com/openai/v1/chat/completions",
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
     "virtuals": "https://compute.virtuals.io/v1/chat/completions",
+    "deepseek": "https://api.deepseek.com/v1/chat/completions",
 }
 
 DEFAULT_MODELS = {
@@ -26,6 +27,7 @@ DEFAULT_MODELS = {
     "groq": "llama-3.3-70b-versatile",
     "openrouter": "openrouter/free",
     "ollama": "llama3.2",
+    "deepseek": "deepseek-chat",
 }
 
 
@@ -42,13 +44,20 @@ def _resolve_model(provider: str, explicit: str) -> str:
     if model in BANNED_VIRTUALS_PRIMARY_MODELS:
         model = ""
     p = provider.lower()
-    if not model:
-        if p == "virtuals":
-            return resolve_primary_llm_model()
-        if p == "groq":
-            return _setting_str("llm_fallback_model") or DEFAULT_FALLBACK_MODEL
-        return _setting_str("llm_model") or resolve_primary_llm_model() or DEFAULT_MODEL_STANDARD
-    return model
+    if model:
+        return model
+    if p == "virtuals":
+        return resolve_primary_llm_model()
+    if p == "groq":
+        return _setting_str("llm_fallback_model") or DEFAULT_FALLBACK_MODEL
+    # Providers directs (xai/grok/deepseek/openai/...) : jamais l'ID catalogue Virtuals
+    # (resolve_primary_llm_model renvoie des formes "x-ai-grok-4-3" propres à Spark) —
+    # une vraie API tierce ne connaît pas ce format. Bug latent trouvé le 16/07 en cablant
+    # le relais Spark (aucun appelant direct n'existait encore pour l'exercer).
+    configured = _setting_str("llm_model")
+    if configured and configured not in BANNED_VIRTUALS_PRIMARY_MODELS:
+        return configured
+    return DEFAULT_MODELS.get(p, DEFAULT_MODEL_STANDARD)
 
 
 @dataclass(frozen=True)
@@ -70,6 +79,8 @@ def _auth_key_for_provider(provider: str) -> str:
         return _setting_str("virtuals_api_key")
     if p == "grok" or p == "xai":
         return _setting_str("grok_api_key") or _setting_str("llm_api_key")
+    if p == "deepseek":
+        return _setting_str("deepseek_api_key") or _setting_str("llm_api_key")
     return _setting_str("llm_api_key")
 
 

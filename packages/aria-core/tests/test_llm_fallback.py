@@ -47,6 +47,48 @@ def test_virtuals_never_uses_groq_llm_api_key():
     assert routes == []
 
 
+def test_deepseek_direct_route_no_virtuals_dependency():
+    """DeepSeek en provider primaire direct (api.deepseek.com) — indépendant de Virtuals/
+    Spark, aucune clé Virtuals nécessaire (16/07, seam relais Spark)."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "deepseek"
+    settings.deepseek_api_key = "sk-deepseek-key"
+    settings.virtuals_api_key = ""
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes()
+    assert len(routes) == 1
+    assert routes[0].provider == "deepseek"
+    assert routes[0].url == "https://api.deepseek.com/v1/chat/completions"
+    assert routes[0].auth_key == "sk-deepseek-key"
+    assert routes[0].model == "deepseek-chat"
+    assert is_llm_configured() is True
+
+
+def test_deepseek_never_uses_generic_llm_api_key_when_own_key_set():
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "deepseek"
+    settings.deepseek_api_key = "sk-real-deepseek"
+    settings.llm_api_key = "should-not-win"
+
+    routes = _resolve_routes()
+    assert routes[0].auth_key == "sk-real-deepseek"
+
+
+def test_deepseek_falls_back_to_generic_llm_api_key_when_unset():
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "deepseek"
+    settings.deepseek_api_key = ""
+    settings.llm_api_key = "generic-key"
+
+    routes = _resolve_routes()
+    assert routes[0].auth_key == "generic-key"
+
+
 def test_groq_only_no_duplicate_fallback():
     settings = get_settings()
     settings.aria_llm_enabled = True
