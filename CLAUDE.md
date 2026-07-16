@@ -1897,17 +1897,29 @@ explicite, 15/07, gravé) : "je veux voir ce compteur des 1 million bouger"
 Ceci prime sur tout le reste tant que le compteur n'a pas bougé pour de vrai.
 Ordre exact à suivre, chaque étape déverrouille la suivante :
 
-**1. Construire #194 (en cours, VPS Secondaire)** — nouveau pipeline
-d'entrée momentum/technique (remplace le filtre VC-thesis pour ce test),
-sourcing élargi DexScreener (spec officielle sauvegardée :
-`docs/aria-learning-inbox/2026-07-15-dexscreener-openapi-spec-verifiee.yaml`)
-+ `discover_top_pools`, multi-chaînes (Base/Solana/Robinhood/au-delà, GoPlus
-vérifié compatible), honeypot GoPlus seul garde-fou dur, 100% du capital 1M$
-pour ce test. C'est LE bloc central — rien d'autre ne compte tant que ça
-n'est pas fini.
+**1. #194 — FAIT, mergé sur `main` (16/07, `39c27f3`, session cloud).** Nouveau
+module `aria_core/momentum_entry.py` (honeypot GoPlus seul garde-fou dur
+fail-closed, R/R obligatoire via golden pocket + divergence RSI, alignement
+technique EMA/MACD/bougies en bonus, confirmation LLM légère sur R/R ambigu),
+sourcing multi-chaînes (`discover_momentum_candidates`, base/solana/robinhood —
+les seules vérifiées GoPlus+DexScreener), nouveaux endpoints DexScreener
+construits sur la vraie spec OpenAPI récupérée en direct (`token-boosts`/
+`token-profiles`/`tokens-batch` pour le pré-filtre de liquidité par lot).
+`paper_trader.py` généralisé multi-chaînes (colonne `chain`, `_default_price_lookup`
+via DexScreener direct) sans changer le contrat d'appel historique — le pivot
+remplace `candidate_ranking.top_candidates()`/`_default_analyzer` (VC-thesis)
+comme SEUL défaut de `run_paper_cycle` quand ni `candidates` ni `analyzer` ne
+sont fournis (le cas réel du heartbeat) ; tout appelant qui fournit le sien
+garde le comportement historique. `safety_screen`/`screened_pool` non touchés
+(poche VC 85% intacte). **Limite connue documentée** (`docs/pivot-momentum-1m-test.md`
+§6, territoire #187) : `risk_guard.evaluate_portfolio_risk` ne propage pas
+encore le kwarg `chain` à `price_lookup` pour les positions non-Base —
+dégradation sûre vers `cost_usd`, jamais un prix inventé, pas corrigée ici.
+5118 tests passés (suite complète, vérifiée en isolation avant merge ET après
+merge sur `main`). C'était LE bloc central — la voie est libre pour le
+déploiement (étape 6).
 
-**2. Accélérer la cadence — FAIT (#195, 15/07, `heartbeat.py`, branche temp
-`claude/paper-cycle-interval-temp`, en attente de fusion).**
+**2. Accélérer la cadence — FAIT et MERGÉ sur `main` (#195, 15/07, `heartbeat.py`).**
 `paper_trade_cycle` tournait à **180 minutes**, beaucoup trop lent pour
 "voir le compteur bouger" ou pour l'exigence "ARIA doit être là avant tout
 le monde". **Réduit à 15 minutes.** Vérifié avant de baisser : le seul débit
@@ -1946,14 +1958,16 @@ quelle que soit la source de candidats, aucun changement nécessaire.
 important pour la suite (positions déjà ouvertes re-scannées, pas de
 sur-concentration).
 
-**6. DÉPLOIEMENT — LE VRAI GOULOT FINAL, rien de tout ça ne compte tant que
-ce n'est pas sur le VPS.** ~5900 lignes accumulées non déployées à ce stade
-(sourcing #105-109/#136-138, suivi wallet permanent, fix `/whoami`, vitesse
-OHLCV #182, `risk_guard` #186, Dune `first_funded_by`, bientôt #194) — tout
-ça peut être parfaitement construit et testé, ça ne fait RIEN bouger tant
-que `deploy.sh` n'a pas tourné sur le VPS. **Dès que #194 est mergé et
-vert : demander le "go" opérateur pour un déploiement groupé complet**,
-pas d'attente inutile après.
+**6. DÉPLOIEMENT — LE VRAI GOULOT FINAL, plus rien ne bloque côté code, tout
+attend maintenant le "go" opérateur.** #194 (le bloc central) est mergé sur
+`main` (16/07, `39c27f3`) — avec lui, tout ce qui était accumulé depuis le
+15/07 (sourcing #105-109/#136-138, suivi wallet permanent, fix `/whoami`,
+vitesse OHLCV #182, `risk_guard` #186, cadence #195, Dune `first_funded_by`,
+pipeline momentum #194) est sur `main`, testé (5118 passed), prêt. **Rien de
+tout ça ne fait bouger le compteur tant que `deploy.sh` n'a pas tourné sur le
+VPS.** Prochaine étape concrète : demander le "go" opérateur pour un
+déploiement groupé complet, puis vérifier sur Telegram/cockpit que le
+compteur bouge réellement.
 
 **7. #193 (diagnostic live sur tokens réels) — en cours, Principal.** Sert
 à vérifier concrètement ce qui passait/échouait avant #194 — alimente le
@@ -1965,10 +1979,13 @@ dès que ça touche du réel, ce plan ne concerne QUE le paper 1M$ "sans
 approbation humaine, test pur"), #189/#191/#192 (recherche continue,
 utile mais pas bloquante pour voir le compteur bouger une première fois).
 
-**Prochaine action concrète, dans l'ordre** : attendre le rapport #194 de
-Secondaire → relire/merger/tester → ajouter la réduction de cadence si pas
-déjà incluse → demander le "go" déploiement → vérifier sur Telegram/cockpit
-que le compteur bouge réellement → seulement ensuite reprendre #187.
+**Prochaine action concrète, dans l'ordre (mise à jour 16/07)** : #194 mergé
+et testé → demander le "go" opérateur pour le déploiement groupé complet →
+vérifier sur Telegram/cockpit que le compteur bouge réellement → seulement
+ensuite reprendre #187. Étape encore en attente également : relire/merger
+#197 (topic Telegram BS Cabal) une fois son rapport reçu — vérifier
+attentivement les conflits avec #194 sur `paper_trader.py` (les deux
+touchaient ce fichier en parallèle, cf. clôture de session ci-dessous).
 
 **8. #196 (fast-follow #194, WebSocket temps réel DexScreener) — vérifié en
 direct ce soir (handshake `101 Switching Protocols` réel, flux live reçu
