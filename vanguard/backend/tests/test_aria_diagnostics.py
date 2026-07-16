@@ -96,3 +96,69 @@ async def test_agent_wallet_ledger_returns_recorded_transactions(tmp_path, monke
     txs = res.json()["transactions"]
     assert len(txs) == 1
     assert txs[0]["tx_hash"] == "0xdeadbeef"
+
+
+@pytest.mark.asyncio
+async def test_paper_ledger_requires_diagnostic_token(monkeypatch):
+    monkeypatch.setenv("ARIA_DIAGNOSTIC_TOKEN", "diagsecret")
+    async with await _client() as client:
+        no_header = await client.get("/api/aria/diagnostics/paper-ledger")
+        wrong_header = await client.get(
+            "/api/aria/diagnostics/paper-ledger", headers={"X-Diagnostic-Access": "wrong"}
+        )
+    assert no_header.status_code == 403
+    assert wrong_header.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_paper_ledger_returns_open_and_closed_positions_with_entry_exit_plan(
+    tmp_path, monkeypatch
+):
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "DB_PATH", str(tmp_path / "paper.db"))
+    monkeypatch.setenv("ARIA_DIAGNOSTIC_TOKEN", "diagsecret")
+
+    await paper_trader.open_position(
+        "0xopen", "OPEN", 1.0,
+        target_price=2.0, invalidation_price=0.8, chain="base", thesis="momentum + R/R 2.4",
+    )
+    await paper_trader.open_position(
+        "0xclosed", "CLOSED", 1.0,
+        target_price=1.5, invalidation_price=0.9, chain="base", thesis="golden pocket",
+    )
+    await paper_trader.close_position("0xclosed", 1.5, reason="cible atteinte")
+
+    async with await _client() as client:
+        res = await client.get(
+            "/api/aria/diagnostics/paper-ledger", headers={"X-Diagnostic-Access": "diagsecret"}
+        )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["starting_capital"] == paper_trader.STARTING_CAPITAL_USD
+    assert len(body["open_positions"]) == 1
+    assert body["open_positions"][0]["contract"] == "0xopen"
+    assert body["open_positions"][0]["thesis"] == "momentum + R/R 2.4"
+    assert body["open_positions"][0]["invalidation_price"] == 0.8
+    assert len(body["closed_positions"]) == 1
+    assert body["closed_positions"][0]["contract"] == "0xclosed"
+    assert body["closed_positions"][0]["close_reason"] == "cible atteinte"
+    assert body["closed_positions"][0]["thesis"] == "golden pocket"
+
+
+@pytest.mark.asyncio
+async def test_paper_ledger_empty_seam_before_any_trade(tmp_path, monkeypatch):
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "DB_PATH", str(tmp_path / "paper_empty.db"))
+    monkeypatch.setenv("ARIA_DIAGNOSTIC_TOKEN", "diagsecret")
+
+    async with await _client() as client:
+        res = await client.get(
+            "/api/aria/diagnostics/paper-ledger", headers={"X-Diagnostic-Access": "diagsecret"}
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["open_positions"] == []
+    assert body["closed_positions"] == []

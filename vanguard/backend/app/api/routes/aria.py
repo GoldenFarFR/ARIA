@@ -508,6 +508,52 @@ async def diagnostics_agent_wallet_ledger(request: Request, limit: int = 100):
     return {"transactions": await agent_wallet_log.list_transactions(limit=limit)}
 
 
+@router.get("/diagnostics/paper-ledger")
+async def diagnostics_paper_ledger(request: Request, closed_limit: int = 100):
+    """Registre du paper-trading 1M$ (#194) : positions ouvertes ET clôturées, avec
+    le plan d'entrée/sortie complet (thèse, cible, invalidation) — pensé pour qu'une
+    session Claude Code (y compris cloud, sans accès VPS/base direct) puisse suivre
+    le test sans dépendre d'un relais manuel (capture Telegram/cockpit). Même gate
+    dédié que `/diagnostics/pool-status`/`/diagnostics/agent-wallet-ledger`.
+    """
+    from aria_core import paper_trader
+    from aria_core.diagnostics_access import verify_diagnostic_access
+
+    if not verify_diagnostic_access(request.headers.get("X-Diagnostic-Access")):
+        raise HTTPException(status_code=403, detail="Diagnostic access required")
+
+    closed_limit = max(1, min(closed_limit, 1000))
+
+    def _fmt(p: dict) -> dict:
+        return {
+            "contract": p.get("contract"),
+            "symbol": p.get("symbol"),
+            "chain": p.get("chain"),
+            "status": p.get("status"),
+            "entry_price": p.get("entry_price"),
+            "target_price": p.get("target_price"),
+            "invalidation_price": p.get("invalidation_price"),
+            "cost_usd": p.get("cost_usd"),
+            "opened_at": p.get("opened_at"),
+            "exit_price": p.get("exit_price"),
+            "closed_at": p.get("closed_at"),
+            "pnl_usd": p.get("pnl_usd"),
+            "pnl_pct": p.get("pnl_pct"),
+            "close_reason": p.get("close_reason"),
+            "thesis": p.get("thesis"),
+        }
+
+    open_positions = await paper_trader.get_open_positions()
+    closed_positions = await paper_trader.get_closed_positions(limit=closed_limit)
+    starting_capital = await paper_trader.starting_capital()
+
+    return {
+        "starting_capital": starting_capital,
+        "open_positions": [_fmt(p) for p in open_positions],
+        "closed_positions": [_fmt(p) for p in closed_positions],
+    }
+
+
 @router.get("/dossier/{contract}")
 async def token_dossier(contract: str, request: Request):
     """Dossier par token (opérateur) : chronologie de TOUT ce qu'ARIA a consigné sur un CA.
