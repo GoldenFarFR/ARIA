@@ -35,6 +35,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 import aiosqlite
 
@@ -200,6 +201,36 @@ async def check_wallet_activity(
     return fresh
 
 
+async def get_wallet_balance_summary(
+    *, wallet_address: str = "", chain: str = "base",
+) -> dict[str, Any]:
+    """Solde RÉEL courant du wallet agent (#204, demande opérateur) -- USDC via
+    l'adaptateur CDP déjà vérifié en direct (16/07, #157), ETH natif via
+    Blockscout (déjà construit, déjà utilisé ailleurs dans ARIA -- lecture
+    seule, aucune dépendance au SDK CDP ni à ses identifiants). Chaque valeur
+    dégrade honnêtement à ``None`` si indisponible, jamais un solde inventé."""
+    wallet_address = wallet_address or MONITORED_WALLET_ADDRESS
+
+    try:
+        from aria_core.agent_wallet_cdp_adapter import usdc_balance_usd
+
+        usdc = await usdc_balance_usd(network=chain)
+    except Exception as exc:  # noqa: BLE001 -- l'extra cdp-sdk peut manquer, jamais casser l'appelant
+        logger.warning("agent_wallet_monitor: lecture solde USDC echouee: %s", exc)
+        usdc = None
+
+    eth: float | None = None
+    try:
+        client = get_blockscout_client(chain)
+        info = await client.get_address_info(wallet_address)
+        if info.available:
+            eth = info.balance_native
+    except Exception as exc:  # noqa: BLE001 -- une panne Blockscout ne doit jamais casser l'appelant
+        logger.warning("agent_wallet_monitor: lecture solde ETH echouee: %s", exc)
+
+    return {"wallet_address": wallet_address, "chain": chain, "usdc_usd": usdc, "eth": eth}
+
+
 async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     """Un tour de heartbeat : lit les mouvements réels du wallet agent CDP
     (``MONITORED_WALLET_ADDRESS``), notifie immédiatement chaque mouvement
@@ -265,4 +296,20 @@ def format_movement_alert(m: WalletMovement) -> str:
         f"{direction_label} : {m.amount} {m.asset}\n"
         f"{counterparty_label} : {m.counterparty}\n"
         f"Tx : {m.tx_hash}"
+    )
+
+
+def format_wallet_balance_summary(summary: dict[str, Any]) -> str:
+    """Formate le résultat de ``get_wallet_balance_summary`` pour Telegram
+    (#204) -- chaque solde indisponible s'affiche honnêtement comme tel,
+    jamais un 0 silencieux qui laisserait croire à un wallet vide."""
+    usdc = summary.get("usdc_usd")
+    eth = summary.get("eth")
+    usdc_line = f"{usdc:.4f} USDC" if usdc is not None else "indisponible (SDK/identifiants CDP absents)"
+    eth_line = f"{eth:.6f} ETH" if eth is not None else "indisponible (Blockscout hors service)"
+    return (
+        f"💼 Wallet agent CDP ({summary.get('chain', 'base')})\n"
+        f"Adresse : {summary.get('wallet_address', '?')}\n"
+        f"USDC : {usdc_line}\n"
+        f"ETH (gas) : {eth_line}"
     )
