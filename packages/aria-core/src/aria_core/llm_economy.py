@@ -174,7 +174,7 @@ def resolve_budget(
             include_context_conversations=False,
             include_context_extras=False,
             collegue_max_chars=0,
-            model_override=_brief_model_if(depth),
+            model_override=_spark_model_for_depth(depth),
             enhance_max_tokens=300,
         )
 
@@ -195,12 +195,12 @@ def resolve_budget(
             include_context_conversations=False,
             include_context_extras=False,
             collegue_max_chars=900,
-            model_override=_brief_model_if(depth),
+            model_override=_spark_model_for_depth(depth),
             enhance_max_tokens=280,
         )
     spark_boost = _spark_aggressive() or _founder_mode()
-    std_model = _spark_model_for_depth(LlmDepth.STANDARD) if _spark_active() else None
-    dev_model = _spark_model_for_depth(LlmDepth.DEVELOP) if _spark_active() else None
+    std_model = _spark_model_for_depth(LlmDepth.STANDARD)
+    dev_model = _spark_model_for_depth(LlmDepth.DEVELOP)
     if depth == LlmDepth.STANDARD:
         return LlmEconomyBudget(
             depth=depth,
@@ -237,24 +237,44 @@ def _spark_active() -> bool:
     return (settings.llm_provider or "").strip().lower() == "virtuals"
 
 
-def _spark_model_for_depth(depth: LlmDepth) -> str | None:
-    if not _spark_active():
-        return None
+def _virtuals_catalog_default(depth: LlmDepth) -> str:
+    """SSOT spark_config — les 3 valeurs par défaut du catalogue Virtuals, jamais des
+    IDs de modèle valides pour un provider tiers (Groq, DeepSeek direct, xAI...)."""
+    from aria_core.spark_config import (
+        DEFAULT_MODEL_BRIEF,
+        DEFAULT_MODEL_DEVELOP,
+        DEFAULT_MODEL_STANDARD,
+    )
+
     if depth == LlmDepth.DEVELOP:
-        return (getattr(settings, "aria_llm_model_develop", None) or "").strip() or None
+        return DEFAULT_MODEL_DEVELOP
     if depth == LlmDepth.STANDARD:
-        return (getattr(settings, "aria_llm_model_standard", None) or "").strip() or None
-    return (getattr(settings, "aria_llm_model_brief", None) or "").strip() or None
+        return DEFAULT_MODEL_STANDARD
+    return DEFAULT_MODEL_BRIEF
 
 
-def _brief_model_if(depth: LlmDepth) -> str | None:
-    spark_model = _spark_model_for_depth(depth)
-    if spark_model:
-        return spark_model
-    if depth != LlmDepth.BRIEF:
+def _spark_model_for_depth(depth: LlmDepth) -> str | None:
+    """Modèle par profondeur (#201, 16/07) -- lu indépendamment du provider actif,
+    pas seulement sur Virtuals : dès que le fallback Groq ou un provider direct
+    (DeepSeek, xAI...) devient le provider actif, standard/develop/brief doivent
+    quand même pouvoir différer si l'opérateur les a configurés pour CE provider.
+
+    Garde-fou : si la valeur lue est encore le défaut catalogue Virtuals (jamais
+    surchargée pour le nouveau provider) ET que Virtuals n'est pas actif, on la
+    rejette plutôt que de l'envoyer telle quelle à une vraie API tierce -- un ID
+    comme "x-ai-grok-4-3" n'existe que dans le catalogue Spark, jamais côté
+    api.groq.com/api.deepseek.com/api.x.ai."""
+    if depth == LlmDepth.DEVELOP:
+        raw = (getattr(settings, "aria_llm_model_develop", None) or "").strip()
+    elif depth == LlmDepth.STANDARD:
+        raw = (getattr(settings, "aria_llm_model_standard", None) or "").strip()
+    else:
+        raw = (getattr(settings, "aria_llm_model_brief", None) or "").strip()
+    if not raw:
         return None
-    override = (getattr(settings, "aria_llm_model_brief", None) or "").strip()
-    return override or None
+    if not _spark_active() and raw == _virtuals_catalog_default(depth):
+        return None
+    return raw
 
 
 def _spark_aggressive() -> bool:
