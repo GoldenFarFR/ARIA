@@ -44,7 +44,7 @@ _POS_FIELDS = (
     "target_price", "invalidation_price", "opened_at", "status",
     "exit_price", "closed_at", "pnl_usd", "pnl_pct", "close_reason",
     "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
-    "chain",
+    "category", "entry_security_json", "chain",
 )
 
 _ADDED_COLUMNS = [
@@ -52,6 +52,9 @@ _ADDED_COLUMNS = [
     ("tp_stage_hit", "INTEGER NOT NULL DEFAULT 0"),
     ("initial_qty", "REAL"),
     ("realized_pnl_partial", "REAL NOT NULL DEFAULT 0"),
+    # #187 -- surveillance continue + plafond de concentration (voir paper_trader_risk.py)
+    ("category", "TEXT NOT NULL DEFAULT ''"),
+    ("entry_security_json", "TEXT"),
     # #194 -- pivot momentum multi-chaînes, chaque position se souvient de sa chaîne
     # (Base historiquement implicite -- défaut 'base' pour les positions déjà ouvertes)
     ("chain", "TEXT NOT NULL DEFAULT 'base'"),
@@ -109,6 +112,8 @@ async def _ensure_tables() -> None:
                 tp_stage_hit INTEGER NOT NULL DEFAULT 0,
                 initial_qty REAL,
                 realized_pnl_partial REAL NOT NULL DEFAULT 0,
+                category TEXT NOT NULL DEFAULT '',
+                entry_security_json TEXT,
                 chain TEXT NOT NULL DEFAULT 'base'
             )
             """
@@ -279,13 +284,17 @@ async def open_position(
     target_price: float | None = None,
     invalidation_price: float | None = None,
     alloc_usd: float | None = None,
+    category: str = "",
+    entry_security_json: str = "",
     chain: str = "base",
 ) -> dict | None:
     """Ouvre une position FICTIVE au prix d'entrée réel. Refuse si déjà ouverte, plafond de
-    positions atteint, coupe-circuit de risque armé, prix invalide ou cash insuffisant.
-    ``chain`` (#194, pivot momentum multi-chaînes) persiste la chaîne d'origine pour que la
-    gestion ultérieure de la position (prix, re-scan) sache quelle chaîne interroger.
-    Retourne la position ou None."""
+    positions atteint, coupe-circuit de risque armé, prix invalide, cash insuffisant, ou
+    plafond de concentration de ``category`` dépassé sans place suffisante (#187, voir
+    paper_trader_risk.py -- l'alloc est RÉDUITE pour tenir sous le plafond quand la place
+    restante est significative, sinon la position est skippée). ``chain`` (#194, pivot
+    momentum multi-chaînes) persiste la chaîne d'origine pour que la gestion ultérieure de
+    la position (prix, re-scan) sache quelle chaîne interroger. Retourne la position ou None."""
     await _ensure_tables()
     contract = (contract or "").lower()
     if not contract or not entry_price or entry_price <= 0:
@@ -316,17 +325,34 @@ async def open_position(
     if alloc <= 0:
         return None
 
+    if category:
+        from aria_core import paper_trader_risk as risk
+
+        opens = await get_open_positions()
+        already = risk.category_exposure_usd(category, opens)
+        alloc = risk.fit_alloc_to_concentration_cap(
+            category=category,
+            alloc=alloc,
+            already_deployed_usd=already,
+            starting_capital=start,
+            min_alloc=ALLOC_PCT * start * risk.MIN_CONCENTRATION_ALLOC_FRACTION,
+        )
+        if alloc <= 0:
+            return None
+
     qty = alloc / entry_price
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """
             INSERT INTO paper_position
               (contract, symbol, cost_usd, entry_price, qty, target_price,
-               invalidation_price, opened_at, status, high_water_price, initial_qty, chain)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+               invalidation_price, opened_at, status, high_water_price, initial_qty,
+               category, entry_security_json, chain)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, entry_price, qty, target_price, invalidation_price,
-             _now(), entry_price, qty, (chain or "base").lower()),
+             _now(), entry_price, qty, category or "", entry_security_json or None,
+             (chain or "base").lower()),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -522,6 +548,7 @@ async def _default_price_lookup(contract: str, *, chain: str = "base") -> float 
 async def _default_analyzer(contract: str) -> dict | None:
     """Signal d'un contrat à partir de la VRAIE analyse VC. Retourne action + niveaux."""
     from aria_core.skills.vc_analysis import analyze_vc_with_context
+    from aria_core import paper_trader_risk as risk
 
     result, ctx = await analyze_vc_with_context(contract)
     action = "BUY" if getattr(result, "recommandation", "") == "BUY" else "HOLD"
@@ -530,12 +557,16 @@ async def _default_analyzer(contract: str) -> dict | None:
     inval = _num(getattr(result, "invalidation", None)) or (
         ctx.ta_entry.invalidation if ctx.ta_entry else None
     )
+    category = risk.derive_category(ctx.launchpad, bonding_phase=ctx.bonding_phase)
+    entry_snapshot = await risk.capture_entry_snapshot(contract, ctx)
     return {
         "action": action,
         "symbol": ctx.best_pair.base_symbol if ctx.best_pair else "",
         "price": price,
         "target": target,
         "invalidation": inval,
+        "category": category,
+        "entry_security_json": entry_snapshot.to_json(),
     }
 
 
@@ -574,14 +605,17 @@ async def run_paper_cycle(
     price_lookup=None,
     notifier=None,
     max_new: int = 3,
+    depeg_check=None,
 ) -> dict:
     """Un tour de simulation, appliquant les VRAIS rapports :
-      1. positions ouvertes : gestion par stop suiveur + prise de profit échelonnée
-         (voir ``TRAIL_STOP_PCT``/``TP_STAGES``) — protège les gains acquis sans couper le
-         potentiel restant, au lieu d'une sortie binaire 100 % cible OU 100 % invalidation ;
-      2. nouveaux achats : sur les candidats classés avec un signal d'ACHAT réel, ouvre une
-         position fictive et émet une alerte d'achat fictive.
-    Tout est injectable (candidates/analyzer/price_lookup/notifier) → testable hors-ligne.
+      1. positions ouvertes : surveillance de sécurité continue (#187) puis gestion par
+         stop suiveur + prise de profit échelonnée (voir ``TRAIL_STOP_PCT``/``TP_STAGES``)
+         — protège les gains acquis sans couper le potentiel restant, au lieu d'une sortie
+         binaire 100 % cible OU 100 % invalidation ;
+      2. nouveaux achats : sur les candidats classés avec un signal d'ACHAT réel (bloqué si
+         USDC est dépeg, #187), ouvre une position fictive et émet une alerte d'achat fictive.
+    Tout est injectable (candidates/analyzer/price_lookup/notifier/depeg_check) → testable
+    hors-ligne, sans appel réseau caché.
     Aucune exécution réelle, jamais un ordre : de la simulation.
     """
     await _ensure_tables()
@@ -592,8 +626,12 @@ async def run_paper_cycle(
     using_default_price_lookup = price_lookup is _default_price_lookup
     actions: dict = {"opened": [], "closed": [], "partial": [], "checked": 0}
 
-    # 1) Gérer les positions ouvertes : stop suiveur (ne se relâche jamais) puis prise de
-    #    profit échelonnée sur ce qui reste ouvert.
+    # 1) Gérer les positions ouvertes : d'abord une surveillance continue de SÉCURITÉ
+    #    (#187 -- honeypot/ownership apparus après l'entrée, jamais vérifiés qu'une seule
+    #    fois avant), qui prime sur toute gestion par prix ; puis stop suiveur (ne se
+    #    relâche jamais) et prise de profit échelonnée sur ce qui reste ouvert.
+    from aria_core import paper_trader_risk as risk
+
     for p in await get_open_positions():
         actions["checked"] += 1
         try:
@@ -603,6 +641,30 @@ async def run_paper_cycle(
                 price = await price_lookup(p["contract"])
         except Exception:  # noqa: BLE001
             price = None
+
+        try:
+            security_flag = await risk.rescan_open_position(p)
+        except Exception as exc:  # noqa: BLE001 — la surveillance ne doit jamais casser le cycle
+            logger.info("paper_cycle: re-scan sécurité %s échoué (%s)", p["contract"], exc)
+            security_flag = None
+        if security_flag:
+            # Position paper -> fermeture automatique sans risque, ça teste la RÉACTION.
+            # Avec du capital RÉEL ceci deviendrait une ALERTE seule (doctrine
+            # wallet_guard -- jamais de vente automatique sans confirmation opérateur),
+            # voir paper_trader_risk.py.
+            exit_price = price if (price and price > 0) else p["entry_price"]
+            closed = await close_position(p["contract"], exit_price, reason="sécurité re-scan")
+            if closed:
+                actions["closed"].append(closed)
+                actions.setdefault("security_alerts", []).append(security_flag)
+                if notifier:
+                    try:
+                        alert = format_sell_alert(closed) + "\n⚠️ " + "; ".join(security_flag["reasons"])
+                        await notifier(alert)
+                    except Exception:  # noqa: BLE001
+                        pass
+            continue
+
         if not price or price <= 0:
             continue
 
@@ -689,7 +751,10 @@ async def run_paper_cycle(
         # déjà ouvertes ont déjà été gérées normalement ci-dessus (étape 1).
         return actions
 
-    # 2) Ouvrir de nouvelles positions depuis les candidats classés (signal d'achat réel).
+    # 2) Ouvrir de nouvelles positions depuis les candidats classés (signal d'achat réel) --
+    #    sauf si USDC est dépeg (#187) : le pricing de tout ce portefeuille suppose un USD
+    #    stable, on bloque les NOUVELLES entrées (les positions déjà ouvertes ne sont pas
+    #    touchées) tant que le dépeg n'est pas résorbé.
     # #194 -- pivot momentum multi-chaînes : quand NI candidates NI analyzer ne sont
     # fournis (le cas réel du heartbeat, run_paper_cycle(notifier=...) sans arguments),
     # remplace le défaut candidate_ranking.top_candidates()/_default_analyzer (VC-thesis,
@@ -703,6 +768,29 @@ async def run_paper_cycle(
         from aria_core.skills.candidate_ranking import top_candidates
 
         candidates = [c.contract for c in await top_candidates(20)]
+
+    # Rien à acheter -> pas la peine de vérifier le dépeg (évite un appel réseau inutile
+    # à chaque cycle, y compris quand aucun candidat n'est proposé ce tour).
+    depeg_pct = None
+    depegged = False
+    if candidates:
+        depeg_check = depeg_check or risk.usdc_depeg_pct
+        try:
+            depeg_pct = await depeg_check()
+        except Exception as exc:  # noqa: BLE001
+            logger.info("paper_cycle: vérif dépeg USDC échouée (%s)", exc)
+            depeg_pct = None
+        depegged = depeg_pct is not None and depeg_pct > risk.USDC_DEPEG_THRESHOLD_PCT
+    actions["usdc_depeg_pct"] = depeg_pct
+    actions["depeg_blocked"] = depegged
+
+    if depegged:
+        logger.warning(
+            "paper_cycle: USDC dépeg %.2f%% (> seuil %.2f%%) -- nouvelles entrées bloquées ce cycle",
+            (depeg_pct or 0.0) * 100, risk.USDC_DEPEG_THRESHOLD_PCT * 100,
+        )
+        return actions
+
     analyzer = analyzer or _default_analyzer
     # On ne re-rentre pas un nom qu'on vient de SORTIR ce tour (évite le churn : une sortie
     # sur stop suiveur/dernier palier exige un nouveau signal au tour suivant, pas un rachat
@@ -749,6 +837,8 @@ async def run_paper_cycle(
             target_price=sig.get("target"),
             invalidation_price=sig.get("invalidation"),
             alloc_usd=new_entry_alloc_usd,
+            category=sig.get("category", ""),
+            entry_security_json=sig.get("entry_security_json", ""),
             chain=sig.get("chain") or "base",
         )
         if pos:
