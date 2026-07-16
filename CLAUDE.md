@@ -1986,6 +1986,23 @@ diligencés, mais nativement réglé en x402 -- tombe pile sur l'infra
 pour renforcer le garde-fou honeypot du pipeline momentum ou le pilote
 agent-wallet à 2 centimes/appel, jamais encore branché -- décision #199
 toujours à trancher par l'opérateur.
+- **16/07 (suite) — #202, tests manquants comblés (session cloud).** Le
+  commit `c7d84ef` (VPS Secondaire) avait mergé `x402_executor.py`/
+  `x402_cdp_signer.py` sans suite de tests dédiée (noté explicitement dans
+  le message de commit). 22 nouveaux tests écrits et vérifiés verts :
+  `test_x402_executor.py` (15, cascade fail-closed complète -- passthrough
+  non-402, coupe-circuit /stop en premier, corps 402 illisible, actif non-USDC,
+  réseau hors allowlist (Base plat + CAIP-2), plafond hebdomadaire dépassé,
+  solde indisponible/insuffisant fail-closed, pay_fn en échec, toujours 402
+  après paiement, succès complet avec vérification du montant/`resource`/
+  `provider` journalisés) ; `test_x402_cdp_signer.py` (7, faux modules `cdp`/
+  `x402` injectés dans `sys.modules` -- même patron que
+  `test_agent_wallet_cdp_adapter.py` -- succès, panne CDP, corps mal formé,
+  échec de construction du paiement, échec d'encodage, header manquant).
+  Suite complète revérifiée verte (5324 passed, mêmes 5 échecs pré-existants
+  sans rapport), garde-fou `test_coherence.py` (79/79) OK. `#202` peut
+  passer en `completed` -- reste `#199` (quelle ressource payer en premier)
+  avant tout branchement réel à un appelant.
 
 ## 🎯 PLAN MAÎTRE — ARIA prête à trader (priorité absolue, décision opérateur
 explicite, 15/07, gravé) : "je veux voir ce compteur des 1 million bouger"
@@ -2366,6 +2383,18 @@ qualité globale).
   "(prix indisponible)" selon le cas. 4 nouveaux tests (pool multiple,
   panne dexscreener, prix introuvable), suite complète revérifiée verte
   (5300 passed, mêmes 5 échecs pré-existants). **Rien déployé.**
+- **16/07 (suite) — bug trouvé en testant en réel : ETH dédoublonné + utilisé
+  en repli, CODÉ, TESTÉ, PAS ENCORE DÉPLOYÉ.** Test réel sur Telegram après
+  le déploiement précédent : `/agentwallet` affichait ETH (gas) toujours
+  "indisponible" (Blockscout, cause encore non identifiée côté VPS) MAIS
+  listait "0.001 ETH (prix indisponible)" sous "Autres tokens" -- révèle que
+  `list_all_token_balances()` (CDP) retourne AUSSI l'ETH natif, jamais
+  filtré. Corrigé : toute entrée `symbol.upper() == "ETH"` est retirée de
+  `other_tokens` (jamais affichée deux fois, jamais comme "token acheté") et
+  son montant sert de repli pour le champ `eth` quand Blockscout échoue --
+  Blockscout reste prioritaire quand disponible (vérifié par test dédié).
+  2 nouveaux tests, suite complète revérifiée verte (5324 passed, mêmes 5
+  échecs pré-existants). **Rien déployé.**
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
