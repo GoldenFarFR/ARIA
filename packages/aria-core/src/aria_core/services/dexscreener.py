@@ -22,6 +22,8 @@ from urllib.parse import quote
 
 import httpx
 
+from aria_core.skills.ta_levels import Candle
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.dexscreener.com"
@@ -44,6 +46,9 @@ class PairSnapshot:
     volume_24h_usd: float = 0.0
     price_usd: float = 0.0
     price_change_24h: float = 0.0
+    price_change_h6: float = 0.0
+    price_change_h1: float = 0.0
+    price_change_m5: float = 0.0
     buys_24h: int = 0
     sells_24h: int = 0
     pair_created_at: int | None = None
@@ -92,15 +97,18 @@ def _parse_pair(raw: dict) -> PairSnapshot:
     h24 = txns.get("h24") if isinstance(txns, dict) else {}
     base = raw.get("baseToken") or {}
     quote = raw.get("quoteToken") or {}
+    change = raw.get("priceChange")
+    change = change if isinstance(change, dict) else {}
     return PairSnapshot(
         pair_address=str(raw.get("pairAddress") or ""),
         dex_id=str(raw.get("dexId") or ""),
         liquidity_usd=float(liq.get("usd") or 0),
         volume_24h_usd=float(vol.get("h24") or 0),
         price_usd=float(raw.get("priceUsd") or 0),
-        price_change_24h=float(raw.get("priceChange", {}).get("h24") or 0)
-        if isinstance(raw.get("priceChange"), dict)
-        else 0.0,
+        price_change_24h=float(change.get("h24") or 0),
+        price_change_h6=float(change.get("h6") or 0),
+        price_change_h1=float(change.get("h1") or 0),
+        price_change_m5=float(change.get("m5") or 0),
         buys_24h=int(h24.get("buys") or 0) if isinstance(h24, dict) else 0,
         sells_24h=int(h24.get("sells") or 0) if isinstance(h24, dict) else 0,
         pair_created_at=int(raw.get("pairCreatedAt") or 0) or None,
@@ -349,3 +357,62 @@ async def meta_by_slug(slug: str) -> tuple[MetaTrend | None, list[PairSnapshot]]
         else []
     )
     return meta, pairs
+
+
+# ---------------------------------------------------------------------------
+# Synthèse dégradée de bougies (16/07, cascade OHLCV #194 -- demande opérateur
+# explicite : "je veux que tous soit branchés meme si ils font la meme chose
+# je veux une autoroute pas un departemental" / "cables les tous je veux une
+# toile complete avec dexscreener et dune").
+#
+# DexScreener N'EXPOSE AUCUN endpoint OHLCV public (vérifié dans ce fichier --
+# seulement des instantanés de paire + des fenêtres de variation agrégées
+# m5/h1/h6/h24, jamais une vraie série de bougies). Ce n'est donc PAS un
+# troisième fournisseur OHLCV au même titre que GeckoTerminal/CoinMarketCap --
+# c'est une RECONSTRUCTION APPROXIMATIVE à partir de ce qui est déjà en main
+# (``PairSnapshot`` déjà récupéré par ``evaluate_momentum_entry`` pour le prix
+# courant, AUCUN appel réseau supplémentaire) : 5 points de prix (maintenant,
+# -5m, -1h, -6h, -24h) dérivés à rebours du prix courant via les % de
+# variation. Chaque "bougie" est un simple point OHLC dégénéré (open=high=
+# low=close, volume=0) -- jamais un vrai chandelier avec mèches réelles.
+#
+# PORTÉE HONNÊTE : suffisant pour un biais de tendance grossier (EMA/MACD sur
+# 5 points reste calculable mais peu significatif), quasiment inutile pour
+# ``entry_signals.detect_entry`` (golden pocket + divergence RSI exige un
+# vrai historique de prix, pas 5 points synthétiques) -- HOLD restera l'issue
+# la plus probable même avec cette synthèse, ce qui est le comportement
+# honnête attendu (jamais un R/R fabriqué sur une donnée aussi pauvre).
+# Utilisé UNIQUEMENT en dernier recours après l'échec de GeckoTerminal ET
+# CoinMarketCap -- gratuit et instantané, donc sans coût à essayer avant Dune
+# (exécuteur SQL, lent, coûte des crédits).
+def synthesize_candles_from_pair(pair: PairSnapshot) -> list[Candle]:
+    """Reconstruction dégradée (voir commentaire ci-dessus) -- jamais un
+    substitut d'un vrai OHLCV, seulement un dernier recours gratuit."""
+    if not pair or not pair.price_usd or pair.price_usd <= 0:
+        return []
+
+    now_price = pair.price_usd
+    windows = (
+        ("h24", pair.price_change_24h),
+        ("h6", pair.price_change_h6),
+        ("h1", pair.price_change_h1),
+        ("m5", pair.price_change_m5),
+    )
+
+    points: list[tuple[int, float]] = []
+    for offset_seconds, (_label, pct_change) in zip((86_400, 21_600, 3_600, 300), windows):
+        try:
+            past_price = now_price / (1.0 + (pct_change / 100.0))
+        except ZeroDivisionError:
+            continue
+        if past_price <= 0:
+            continue
+        points.append((-offset_seconds, past_price))
+
+    points.append((0, now_price))
+    points.sort(key=lambda p: p[0])
+
+    return [
+        Candle(ts=ts, open=price, high=price, low=price, close=price, volume=0.0)
+        for ts, price in points
+    ]

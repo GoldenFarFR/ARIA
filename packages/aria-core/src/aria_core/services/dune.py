@@ -634,3 +634,113 @@ async def get_first_funded_by(
         )
 
     return FundedByResult(records=records, available=True, error=None)
+
+
+# ---------------------------------------------------------------------------
+# Requête SQL dédiée -- dernier recours de la cascade OHLCV du pipeline momentum
+# (#194, 16/07, demande opérateur explicite : "cables les tous je veux une
+# toile complete avec dexscreener et dune"). Reconstruit des bougies HORAIRES
+# depuis `prices.usd` (table spellbook prix, granularité minute) -- SEULEMENT
+# utilisée quand GeckoTerminal ET CoinMarketCap ont tous les deux échoué, car
+# une exécution Dune (`run_sql_and_wait`) prend potentiellement plusieurs
+# dizaines de secondes ET consomme des crédits, contrairement aux deux
+# premiers fournisseurs (rapides, gratuits) -- jamais utilisée en premier,
+# jamais en parallèle des deux autres (un dernier recours, pas une course).
+#
+# RÉSERVE HONNÊTE (même doctrine que le reste de ce module) : `prices.usd` est
+# documentée publiquement avec les colonnes `blockchain`, `contract_address`,
+# `symbol`, `price`, `decimals`, `minute` -- PAS vérifiées par un appel réel
+# cette session. Le type de `contract_address` n'est pas confirmé (varchar ou
+# varbinary selon la table, cf. la réserve déjà documentée pour
+# `addresses.stats.address` plus haut dans ce fichier, qui s'est révélée
+# varbinary contrairement à `dex.trades.taker`) -- ce module émet un littéral
+# hexadécimal NU (``0x...``, syntaxe varbinary) par prudence, à reconfirmer
+# via une requête réelle avant tout usage en prod (norme du 14/07).
+#
+# Reconstruction OHLC horaire depuis des points de prix par minute (pas déjà
+# des bougies) : `MIN`/`MAX` du prix sur l'heure pour low/high, et
+# `array_agg(price ORDER BY minute)` + `element_at(..., 1)`/`element_at(..., -1)`
+# (syntaxe Trino/DuneSQL) pour open/close -- premier et dernier prix
+# chronologique de l'heure. Aucun volume dans `prices.usd` -- `volume=0.0`
+# assumé (dégradation honnête, jamais une valeur inventée).
+PRICE_HISTORY_QUERY_TEMPLATE = """
+SELECT
+    date_trunc('hour', minute) AS bucket,
+    MIN(price) AS low,
+    MAX(price) AS high,
+    element_at(array_agg(price ORDER BY minute), 1) AS open,
+    element_at(array_agg(price ORDER BY minute), -1) AS close
+FROM prices.usd
+WHERE blockchain = '{blockchain}'
+  AND contract_address = {contract_address}
+  AND minute >= NOW() - INTERVAL '{lookback_hours}' hour
+GROUP BY 1
+ORDER BY 1
+"""
+
+
+def build_price_history_query(contract_address: str, *, blockchain: str = "base", lookback_hours: int = 48) -> str:
+    """Construit la requête ci-dessus. Valide l'adresse (format EVM strict) et
+    `lookback_hours` AVANT toute substitution -- même garantie anti-injection
+    que ``build_addresses_stats_query`` (l'adresse peut venir d'un candidat
+    momentum arbitraire, jamais une constante interne)."""
+    if not contract_address or not re.fullmatch(_EVM_ADDRESS_RE_SOURCE, contract_address):
+        raise ValueError(f"adresse EVM invalide : {contract_address!r}")
+    if not blockchain or not re.fullmatch(r"[a-z0-9_-]+", blockchain):
+        raise ValueError("blockchain invalide")
+    if not isinstance(lookback_hours, int) or lookback_hours <= 0:
+        raise ValueError("lookback_hours doit être un entier positif")
+    return PRICE_HISTORY_QUERY_TEMPLATE.format(
+        blockchain=blockchain,
+        contract_address=contract_address.lower(),  # littéral hex NU -- cf. réserve varbinary ci-dessus
+        lookback_hours=lookback_hours,
+    )
+
+
+@dataclass
+class DunePriceHistoryResult:
+    candles: list = field(default_factory=list)  # list[Candle], import différé -- évite un cycle avec ta_levels
+    available: bool = True
+    error: str | None = None
+
+
+async def get_price_history(
+    contract_address: str, *, blockchain: str = "base", lookback_hours: int = 48, performance: str = "medium",
+) -> DunePriceHistoryResult:
+    """Bougies horaires reconstruites depuis Dune (dernier recours de la
+    cascade OHLCV, #194) -- ``available=False`` sans clé, sur adresse
+    invalide, ou en cas d'échec à n'importe quelle étape de l'exécution.
+    Chaîne non supportée par ``prices.usd`` ou aucun trade sur la fenêtre :
+    liste vide, jamais un prix inventé."""
+    from aria_core.skills.ta_levels import Candle
+
+    try:
+        sql = build_price_history_query(contract_address, blockchain=blockchain, lookback_hours=lookback_hours)
+    except ValueError as exc:
+        return DunePriceHistoryResult(available=False, error=f"{UNAVAILABLE} ({exc})")
+
+    exec_result = await run_sql_and_wait(sql, performance=performance)
+    if not exec_result.available:
+        return DunePriceHistoryResult(available=False, error=exec_result.error)
+
+    candles: list[Candle] = []
+    for row in exec_result.rows:
+        try:
+            open_ = float(row.get("open"))
+            high = float(row.get("high"))
+            low = float(row.get("low"))
+            close = float(row.get("close"))
+        except (TypeError, ValueError):
+            continue
+        bucket = row.get("bucket")
+        ts = 0
+        if isinstance(bucket, str):
+            import datetime
+
+            try:
+                ts = int(datetime.datetime.fromisoformat(bucket.replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                ts = 0
+        candles.append(Candle(ts=ts, open=open_, high=high, low=low, close=close, volume=0.0))
+
+    return DunePriceHistoryResult(candles=candles, available=True, error=None)
