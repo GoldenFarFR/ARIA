@@ -17,13 +17,18 @@ Réservé à une exécution où les 3 variables sont posées dans un `.env` loca
 l'intérieur des fonctions (lazy) pour que le reste du codebase ne casse pas si
 l'extra `agent_wallet` n'est pas installé.
 
-**Non testé contre un vrai appel CDP à ce stade** (aucun identifiant dans cette
-session, conformément à la doctrine secrets). Avant toute activation réelle
-(`ARIA_AGENT_WALLET_PILOT_ENABLED=true`), norme de process du 15/07 (#157) :
-vérifier au moins une fois `usdc_balance_usd()` contre un vrai appel sur le
-VPS et confirmer que la forme exacte de `list_token_balances()` correspond à
-ce que ce module suppose -- ne jamais faire confiance à une supposition de
-schéma non confrontée à la réalité au moins une fois.
+**Vérifié contre un vrai appel CDP le 16/07 (VPS Principal, norme #157)** :
+`usdc_balance_usd()` a été appelée seule (jamais `execute_swap`) contre le
+wallet dédié réel (`aria-agent-wallet-pilot`, adresse Base mainnet publique
+`0xF04625162b616c5ad9788811b7be8CDd425B37Ef`) -- `cdp.evm.get_or_create_account`
+et `cdp.evm.list_token_balances` répondent sans erreur, `list_token_balances`
+renvoie bien un objet Pydantic `ListTokenBalancesResult` avec un attribut
+`.balances` (forme exactement celle supposée par `_get(result, "balances")`,
+aucune correction nécessaire). Résultat `0.0` confirmé structurellement comme
+un wallet réellement vide (`len(entries) == 0`, pas un artefact du repli
+`or []` sur une réponse mal formée) -- normal, le pilote #10$ n'a pas encore
+été financé. Le chemin `execute_swap` (transaction réelle) reste, lui, non
+exercé -- seule la lecture a été vérifiée à ce stade.
 """
 from __future__ import annotations
 
