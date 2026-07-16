@@ -1953,20 +1953,32 @@ plus ici.
 **4. #186 (coupe-circuit + sizing) — FAIT, mergé (`cf3eef57`).** Reste actif
 quelle que soit la source de candidats, aucun changement nécessaire.
 
-**5. #187 (surveillance continue + concentration) — EN PAUSE, reprend après
-#194.** Non-bloquant pour voir le compteur bouger une première fois, mais
-important pour la suite (positions déjà ouvertes re-scannées, pas de
-sur-concentration).
+**5. #187 (surveillance continue + concentration) — FAIT, mergé sur `main`
+(16/07, `99f925b`, session cloud).** Nouveau `paper_trader_risk.py` : re-scan
+de sécurité continu par position ouverte (GoPlus/Blockscout contre
+l'instantané d'entrée, ferme sur signal NOUVEAU) + plafond de concentration
+par catégorie (40% max du capital de poche par `launchpad`) + garde dépeg
+USDC (bloque les nouvelles entrées, jamais les positions ouvertes). **Conflit
+réel résolu avec #194** (même fichier `paper_trader.py` touché en parallèle
+par les deux chantiers, branché avant le merge de #194) : risk_guard (#186),
+dépeg/concentration (#187) et le pivot momentum (#194) coexistent maintenant
+dans le bon ordre dans `run_paper_cycle`. Les positions sourcées par le
+pipeline momentum n'ont ni `category` ni `entry_security_json` (pas de
+`TokenScanContext`) — dégradation honnête documentée
+(`docs/gestion-risque-portefeuille.md`), jamais un signal fabriqué. 5151
+tests passés (aria-core) + 108 (vanguard/backend).
 
 **6. DÉPLOIEMENT — LE VRAI GOULOT FINAL, plus rien ne bloque côté code, tout
-attend maintenant le "go" opérateur.** #194 (le bloc central) est mergé sur
-`main` (16/07, `39c27f3`) — avec lui, tout ce qui était accumulé depuis le
-15/07 (sourcing #105-109/#136-138, suivi wallet permanent, fix `/whoami`,
-vitesse OHLCV #182, `risk_guard` #186, cadence #195, Dune `first_funded_by`,
-pipeline momentum #194) est sur `main`, testé (5118 passed), prêt. **Rien de
-tout ça ne fait bouger le compteur tant que `deploy.sh` n'a pas tourné sur le
-VPS.** Prochaine étape concrète : demander le "go" opérateur pour un
-déploiement groupé complet, puis vérifier sur Telegram/cockpit que le
+attend maintenant le "go" opérateur.** #194 ET #187 (les deux derniers blocs)
+sont mergés sur `main` (16/07, `39c27f3` puis `99f925b`) — avec eux, tout ce
+qui était accumulé depuis le 15/07 (sourcing #105-109/#136-138, suivi wallet
+permanent, fix `/whoami`, vitesse OHLCV #182, `risk_guard` #186, cadence
+#195, Dune `first_funded_by`, pipeline momentum #194, surveillance continue
++ concentration #187) est sur `main`, testé (5151 passed aria-core + 108
+vanguard/backend), prêt. **Rien de tout ça ne fait bouger le compteur tant
+que `deploy.sh` n'a pas tourné sur le VPS.** Prochaine étape concrète :
+demander le "go" opérateur pour un déploiement groupé complet, puis
+vérifier sur Telegram/cockpit que le
 compteur bouge réellement.
 
 **7. #193 (diagnostic live sur tokens réels) — en cours, Principal.** Sert
