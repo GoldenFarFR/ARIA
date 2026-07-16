@@ -2396,6 +2396,191 @@ qualité globale).
   2 nouveaux tests, suite complète revérifiée verte (5324 passed, mêmes 5
   échecs pré-existants). **Rien déployé.**
 
+## Clôture de session (16/07 nuit, cloud) — transfert du commandement vers une session VPS
+
+**Pourquoi ce transfert** : cette session cloud n'a ni accès réseau direct au
+VPS/`aria.db`, ni connecteur navigateur (`Claude in Chrome` absent de cette
+session — vérifié 3x, `ListConnectors`/recherche d'outils différés/
+`ListPlugins`+`SearchPlugins`, tous négatifs ; le toggle "activé" au niveau du
+compte ne suffit pas, il faut un vrai navigateur+extension appairés à LA
+session dès son démarrage). `WebFetch` vers le site public est bloqué en 403
+par le pare-feu anti-bot (#22, Cloudflare) — confirmé sur `/api/pulse`. Une
+session VPS a un accès direct à `127.0.0.1:8000` (aucun pare-feu, même patron
+que Principal/Secondaire) : c'est la vraie solution, pas un contournement.
+
+**Test paper-trading 1M$ — LANCÉ CE SOIR (16/07), le compteur tourne.**
+Séquence exécutée en direct par l'opérateur sur le VPS, confirmée par capture
+terminal : `git checkout main && git pull && ./vanguard/deploy.sh` (déploiement
+blue-green réussi, commit `a75acef65a89` confirmé servi par nginx), puis
+`docker exec aria-api python -c "import asyncio; from aria_core import
+paper_trader; asyncio.run(paper_trader.reset_portfolio())"` — capital remis à
+1 000 000 $, tout l'historique de positions effacé, `created_at` = maintenant.
+**Décision opérateur explicite** : on repart à zéro plutôt que de laisser filer
+les 8 jours écoulés depuis le 08/07 (0% de conversion sous l'ancien sourcing,
+documenté précédemment) — le "jour 1" officiel du protocole 30j/7j/14j est
+donc le **16/07 au soir**, pas le 08/07. Vérifié sur le cockpit juste après :
+capital 1 000 000 $, 0 position, +0.0%, conforme au reset.
+**Tension protocole 30j/7j/14j vs barème `protocole-argent-reel.md` (≥80
+trades/≥180j) — RÉSOLUE (décision opérateur explicite, 16/07)** : la case
+"échantillon suffisant" (80 trades/6 mois) est **supprimée** du barème, qui ne
+compte plus que **7 cases** (renumérotées, doc mise à jour au même segment) —
+le protocole 30j/7j/14j remplace ce seuil, il ne coexiste plus avec lui.
+
+**Incident Blockscout Pro — cause trouvée, chiffrée, corrigée (déployée).**
+Le quota (100k crédits, très probablement par JOUR et non par 4h comme le
+laissait penser l'affichage du dashboard -- jamais confirmé avec certitude)
+s'épuisait plusieurs fois par jour. Root cause quantifiée par VPS Secondaire,
+avec la vraie table de coût par endpoint (`docs.blockscout.com/devs/
+pro-api-responses-and-routes`, header `x-credits-remaining` sur chaque
+réponse) : le wallet-scoring (`smart_money.py`, #157) refait le balayage
+complet des **13 chaînes** à CHAQUE passage de rattrapage (jusqu'à ~14 passages
+pour un wallet très actif) -- chiffré à ~5 460 crédits pour la seule boucle
+`get_token_transfers` d'UN wallet. Le screening de tokens (Base uniquement)
+pèse beaucoup moins (~6-9k crédits/4h au total). **Vérifié avant de corriger** :
+aucune fonction de trading (`momentum_entry.py`/`paper_trader.py`) ne consomme
+le signal multi-chaînes du wallet-scoring aujourd'hui -- zéro perte
+fonctionnelle réelle à couper. **Correctif déployé** (`a75acef`, même commit
+que le lancement du test 1M$) : `DEFAULT_SCAN_CHAINS()` (`smart_money.py`)
+retourne désormais `("base",)` via un court-circuit EXPLICITE en tête de
+fonction (`_BASE_ONLY_OVERRIDE = True`) -- PAS via `_MAX_RANKED_CHAINS` (qui
+aurait donné la chaîne #1 par TVL DefiLlama, très probablement Ethereum, pas
+Base). Le classement TVL dynamique (#157) n'est pas supprimé, juste jamais
+consulté tant que le flag est actif -- à lever quand #199 (quelle ressource
+premium x402) réactivera le signal multi-chaînes. Le plan plus fin ("mémoriser
+les chaînes confirmées vides par wallet", conçu en détail par Secondaire avec
+verrou de concurrence et distinction rattrapage/surveillance) reste **valide
+mais différé**, prêt à reprendre ce jour-là.
+
+**Trois secrets exposés en clair pendant ce diagnostic — rotation demandée,
+statut final non reconfirmé.** (1) `BLOCKSCOUT_PRO_API_KEY` exposée **3 fois**
+sur 2 sessions VPS différentes (`grep` brut sur `.env`, puis `docker logs`
+non filtré, puis à nouveau `docker logs`) ; (2) `TELEGRAM_BOT_TOKEN` exposé
+1 fois (URL de log affichée en clair) ; (3) la nouvelle clé **Etherscan V2**
+également montrée en clair dans une capture d'écran du dashboard collée en
+chat cloud. Rotation recommandée pour les 3 (même doctrine que l'incident
+`connect.ts`), l'opérateur a confirmé avoir donné les 3 nouvelles valeurs
+directement à VPS Secondaire (jamais via le relais cloud, procédure respectée)
+-- **mais aucune confirmation finale reçue côté cloud que le remplacement
+`.env` + redémarrage ont bien été exécutés**. À vérifier en priorité par la
+prochaine session : `.env` contient-il les nouvelles valeurs, l'ancien
+`BLOCKSCOUT_PRO_API_KEY`/`TELEGRAM_BOT_TOKEN`/clé Etherscan sont-ils bien
+révoqués côté fournisseur (Blockscout dashboard, BotFather, Etherscan) ?
+**Réflexe à généraliser** (déjà redit plusieurs fois ce segment à Secondaire) :
+ne jamais `grep`/`cat`/`docker logs` sans filtre sur un fichier contenant un
+secret -- toujours une vérification de présence (`grep -q`), jamais un
+affichage de la valeur.
+
+**Etherscan V2 (clé "ARIA" créée par l'opérateur) — stockée, INERTE, rien ne
+la consomme.** Confirmé par Secondaire : aucun code ARIA ne lit
+`ETHERSCAN_API_KEY` aujourd'hui (même statut que `COINBASE_CDP_API_KEY_NAME`
+déjà dans le `.env`). Décision explicite de ne PAS construire de client
+maintenant (le correctif Base-only rend le repli multi-chaînes non-urgent) --
+gardée en réserve pour le jour où #199 réactive le multi-chaînes.
+
+**#196 (écoute WebSocket DexScreener temps réel) — FAIT, mergé (`0174cd0`),
+PAS encore déployé au moment de la clôture (le déploiement du soir a suivi,
+donc il EST en fait en prod depuis le reset -- confirmé par le commit déployé
+`a75acef` qui inclut `0174cd0` comme ancêtre).** Relu intégralement avant
+merge (diff réel, pas seulement le rapport) : `momentum_websocket.py`
+(nouveau), gate `ARIA_MOMENTUM_WEBSOCKET_ENABLED` (OFF), verrou de concurrence
+partagé `paper_trader._run_cycle_lock` (empêche un cycle heartbeat et un cycle
+websocket de tourner en parallèle sur le même portefeuille -- risque de
+double-allocation sinon), nouveau paramètre `run_paper_cycle(skip_position_
+management=)` pour que le service websocket (déclenché toutes les 30s) ne
+re-scanne pas GoPlus/Blockscout sur chaque position ouverte à chaque poussée.
+23 nouveaux tests, 5352 passed au moment du merge.
+
+**Nouveau : `GET /api/aria/diagnostics/paper-ledger` — FAIT, mergé (`d81ba5a`),
+PAS testé en conditions réelles (déploiement + accès Cloudflare non
+confirmés).** Réponse directe à la demande opérateur explicite ("je veux que
+toi tu puisses accéder au registre des achats et des ventes avec le plan
+d'entrée et de sortie d'ARIA, je ne veux rien te relayer") : renvoie positions
+ouvertes ET clôturées avec le plan complet (thèse, prix d'entrée, cible,
+invalidation, prix/raison de sortie, P&L) -- réutilise `paper_trader.
+get_open_positions()`/`get_closed_positions()` tels quels, aucune logique
+dupliquée. Même patron que `/diagnostics/pool-status`/`/diagnostics/
+agent-wallet-ledger` (#158/#159) : gate dédié `ARIA_DIAGNOSTIC_TOKEN` (header
+`X-Diagnostic-Access`), exempté du gate Privy/opérateur (`VANGUARD_PUBLIC_
+ROUTES`), pensé pour être appelable depuis une session cloud sans risque
+(pire cas : quelqu'un lit le registre des trades, jamais un risque financier).
+4 nouveaux tests, suite backend complète verte (111 passed). **Inconnue
+réelle, jamais tranchée** : le pare-feu anti-bot (#22) pourrait bloquer cet
+appel MÊME avec le bon token (Cloudflare filtre au niveau de l'edge, avant
+d'atteindre l'appli) -- jamais testé, la session s'est arrêtée avant que
+l'opérateur ne fournisse le token + confirme le déploiement. **Si ça bloque
+depuis une session cloud** : la vraie solution reste `curl localhost:8000/...`
+depuis une session VPS (aucun Cloudflare sur ce chemin), pas une bataille avec
+le pare-feu.
+
+**Pilote agent-wallet réel (~10-15$) — déclencheur Telegram swap/transfert en
+cours de conception avec VPS Secondaire, PAS codé.** Décision opérateur
+explicite qui a fait avancer le plan : un transfert ne doit jamais s'exécuter
+sur des fonds engagés dans une opération en cours (verrou de concurrence
+`_agent_wallet_lock`, même patron que `paper_trader._run_cycle_lock` #196) --
+et le transfert USDC reste strictement scopé à l'exception nommée #4
+(`ALLOWED_TRANSFER_ADDRESS` en dur, jamais un paramètre libre). **Deux vrais
+bugs trouvés par Secondaire en vérifiant AVANT de coder (pas supposés)** :
+(1) composition `balance_fn` initiale pour le swap cassait sur `token_in`=ETH
+natif (adresse CDP non pricable via DexScreener) -- corrigé dans le plan en
+réutilisant `get_wallet_balance_summary()` (gère déjà ETH/USDC/autres tokens),
+ETH natif comme jambe de swap explicitement REJETÉ pour cette première version
+(pas de convention CDP documentée pour un sentinel ETH, mieux vaut refuser que
+deviner sur du capital réel) ; (2) **bug préexistant dans le code déjà mergé**
+(`agent_wallet_cdp_adapter.execute_swap`) : envoie `from_amount=str(amount_in_
+usd)` (un montant en dollars) alors que l'API CDP attend une quantité en plus
+petite unité du token (ex. wei pour un token 18 décimales) -- jamais exercé
+contre un vrai appel, aurait fait échouer/mal-interpréter CHAQUE swap réel dès
+le premier essai. À corriger dans le même chantier que le déclencheur, pas
+séparément. **En attente du feu vert opérateur** sur ces deux points avant que
+Secondaire écrive le code.
+
+**Confabulation trouvée en conditions réelles sur Telegram (16/07) -- PAS
+corrigée, juste documentée.** Question opérateur juste après le lancement du
+test ("tu es prête ?") a reçu une réponse LLM payante (18882 tokens) décrivant
+**l'ancienne méthodologie VC-thesis** ("sécu contrat, holders, liquidité,
+volume réel vs bots") au lieu du pipeline RÉELLEMENT branché depuis #194
+(honeypot GoPlus seul garde-fou dur + TA/R-R, LLM seulement en confirmation
+d'un cas ambigu). Même famille que les incidents #105/#110 déjà documentés et
+partiellement corrigés (détecteurs déterministes pour des questions
+spécifiques) -- celle-ci est passée à travers parce que la formulation
+("tu es prête ?") ne matche aucun détecteur existant, elle est partie en
+conversation générale. Confirme la limite structurelle déjà actée : une
+réponse LLM grounded n'est jamais une preuve de ce qu'ARIA fait réellement.
+**Piste de correctif proposée, pas construite** : élargir `is_analysis_
+methodology_question`/mettre à jour le contexte grounded pour refléter #194.
+
+**VPS Research -- démo `claude-in-chrome` sur DexScreener (token JUNO),
+verdict négatif documenté (16/07).** Fibonacci retracement/RSI/Bollinger tracés
+à la main dans l'UI DexScreener via navigateur piloté -- **aucune plus-value**
+trouvée pour `momentum_entry.py` : c'est une reproduction manuelle, plus lente
+(navigation+rendu+capture), moins précise (premier essai imprécis, corrigé
+après coup), plus fragile (l'extension s'est déconnectée seule pendant la
+démo) et plus chère (vision par capture) de ce qu'`entry_signals.detect_entry`
+fait déjà en millisecondes sur de vraies données OHLCV. **Seul acquis** :
+`claude-in-chrome` peut lire des pages bloquées par un pare-feu anti-bot
+(testé sur BeInCrypto, 403 via `WebFetch` classique) -- utile pour de la
+diligence ponctuelle Research, jamais pour la boucle de décision de trading.
+Rien à changer dans le pipeline momentum sur la base de cette exploration.
+**Idée adjacente banquée, pas construite** : croiser les acheteurs récents
+d'un token (flux Txns DexScreener) avec le smart-money déjà scoré par ARIA
+(`wallet_score_log`, #157) -- faisable proprement via Blockscout
+(`get_token_transfers`), PAS via navigateur, si repris un jour.
+
+**État réel à la clôture, pour la session VPS qui reprend le commandement** :
+1. Le compteur des 30 jours tourne depuis ce soir -- vérifier sur Telegram/
+   cockpit qu'un premier trade s'est bien déclenché (aucune confirmation reçue
+   avant la fin de ce segment).
+2. Rotation des 3 secrets à reconfirmer (valeurs `.env` + révocation côté
+   fournisseur).
+3. `/api/aria/diagnostics/paper-ledger` à tester (token + éventuel blocage
+   Cloudflare) -- ou, mieux, accès direct `127.0.0.1:8000` depuis la session
+   VPS, qui rend ce détour inutile.
+4. Plan agent-wallet swap/transfert en attente du feu vert opérateur sur les
+   2 bugs trouvés par Secondaire (ETH natif exclu, `execute_swap` à corriger)
+   avant tout code.
+5. Confabulation méthodologie ("tu es prête ?") documentée, pas corrigée --
+   piste proposée ci-dessus si repris.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
