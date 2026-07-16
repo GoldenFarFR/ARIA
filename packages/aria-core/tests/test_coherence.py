@@ -169,6 +169,26 @@ def test_sepolia_autonomous_registered_in_heartbeat_and_never_uses_wallet_guard(
     )
 
 
+def test_agent_wallet_pilot_never_uses_wallet_guard_and_gated_off():
+    """Pilote agent-wallet réel (Coinbase Agentic Wallet, exception nommée 16/07,
+    docs/pilote-agent-wallet-10usd.md) : structurellement séparé de
+    wallet_guard.escalate_spend/resolve_spend (même doctrine que sepolia_autonomous),
+    gate dédié OFF par défaut, aucune fonction de transfert générique."""
+    path = CORE / "agent_wallet_pilot.py"
+    assert path.is_file(), "agent_wallet_pilot.py manquant"
+    module = path.read_text(encoding="utf-8")
+    assert "escalate_spend(" not in module and "resolve_spend(" not in module, (
+        "agent_wallet_pilot.py ne doit JAMAIS appeler wallet_guard.escalate_spend/resolve_spend "
+        "— exception bornée au pilote 10-15$, structurellement séparée du garde-fou partagé."
+    )
+    assert "import wallet_guard" not in module and "from aria_core.wallet_guard" not in module, (
+        "agent_wallet_pilot.py ne doit jamais importer wallet_guard.py."
+    )
+    assert "def transfer(" not in module and "def withdraw(" not in module, (
+        "aucune fonction de transfert/retrait générique -- seulement swap (doc §3.2)."
+    )
+
+
 def test_acp_conversational_routing_gated_off():
     """L'ACP (abandonné) ne doit PAS détourner la conversation libre par défaut."""
     brain = _read_core("brain.py")
