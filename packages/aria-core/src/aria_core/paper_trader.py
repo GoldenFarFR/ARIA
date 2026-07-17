@@ -712,18 +712,29 @@ def format_summary(summary: dict) -> str:
 
 # ── Défauts prod (réseau/LLM), injectables en test ───────────────────────────────────
 
+async def _default_pair_lookup(contract: str, *, chain: str = "base"):
+    """17/07 -- factorisé hors de ``_default_price_lookup`` pour que la boucle de gestion
+    des positions ouvertes puisse réutiliser la MÊME paire DexScreener à la fois pour le
+    prix courant ET le re-scan du ratio volume/liquidité (``paper_trader_risk.
+    rescan_open_position``), sans dupliquer l'appel réseau. Renvoie ``None`` si aucune
+    paire liquide n'est trouvée -- jamais une paire inventée."""
+    from aria_core.services.dexscreener import fetch_token_pairs
+
+    pairs = await fetch_token_pairs(contract, chain=chain)
+    if not pairs:
+        return None
+    return max(pairs, key=lambda p: p.liquidity_usd)
+
+
 async def _default_price_lookup(contract: str, *, chain: str = "base") -> float | None:
     """Généralisé multi-chaînes (#194) -- DexScreener directement (déjà multi-chaînes,
     services/dexscreener.py) plutôt que scan_base_token (spécifique Base, et surtout
     bien plus lourd : honeypot + TA + mint-authority complets pour juste un prix de
     suivi). ``chain`` par défaut ``"base"`` -- comportement inchangé pour tout appelant
     qui ne le précise pas."""
-    from aria_core.services.dexscreener import fetch_token_pairs
-
-    pairs = await fetch_token_pairs(contract, chain=chain)
-    if not pairs:
+    best = await _default_pair_lookup(contract, chain=chain)
+    if best is None:
         return None
-    best = max(pairs, key=lambda p: p.liquidity_usd)
     return best.price_usd if best.price_usd > 0 else None
 
 
@@ -864,16 +875,24 @@ async def _run_paper_cycle_locked(
     if not skip_position_management:
         for p in await get_open_positions():
             actions["checked"] += 1
+            # 17/07 -- avec le price_lookup PAR DÉFAUT, la paire DexScreener est
+            # récupérée UNE SEULE FOIS et réutilisée à la fois pour le prix et pour le
+            # re-scan du ratio volume/liquidité ci-dessous (jamais un second appel
+            # réseau dupliqué). Un price_lookup INJECTÉ (tests, pipeline momentum) ne
+            # fournit pas cette paire -- le check ratio est alors simplement sauté
+            # (dégradation honnête, cf. paper_trader_risk.rescan_open_position).
+            pair = None
             try:
                 if using_default_price_lookup:
-                    price = await price_lookup(p["contract"], chain=p.get("chain") or "base")
+                    pair = await _default_pair_lookup(p["contract"], chain=p.get("chain") or "base")
+                    price = pair.price_usd if pair and pair.price_usd and pair.price_usd > 0 else None
                 else:
                     price = await price_lookup(p["contract"])
             except Exception:  # noqa: BLE001
                 price = None
 
             try:
-                security_flag = await risk.rescan_open_position(p)
+                security_flag = await risk.rescan_open_position(p, pair=pair)
             except Exception as exc:  # noqa: BLE001 — la surveillance ne doit jamais casser le cycle
                 logger.info("paper_cycle: re-scan sécurité %s échoué (%s)", p["contract"], exc)
                 security_flag = None

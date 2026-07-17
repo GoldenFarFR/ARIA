@@ -148,18 +148,40 @@ async def capture_entry_snapshot(contract: str, ctx) -> EntrySecuritySnapshot:
     )
 
 
-async def rescan_open_position(position: dict) -> dict | None:
+async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
     """Re-vérifie une position OUVERTE contre son instantané d'entrée. Renvoie
     ``{"contract": ..., "reasons": [...]}`` si un signal dur NOUVEAU est détecté, sinon
     ``None``. Positions ouvertes avant ce mécanisme (pas d'``entry_security_json``) :
     aucune référence à comparer -- on ne réinvente pas une base, on saute silencieusement
-    (dégradation honnête, jamais un signal fabriqué)."""
+    (dégradation honnête, jamais un signal fabriqué).
+
+    ``pair`` (17/07, angle mort trouvé le même soir) : ``PairSnapshot`` DexScreener déjà
+    récupéré par l'appelant (``paper_trader.py``, qui le récupère de toute façon pour
+    connaître le prix courant -- jamais un second appel réseau dupliqué). ``None`` par
+    défaut -- le check ratio volume/liquidité est alors simplement SAUTÉ (même doctrine
+    de dégradation honnête que le reste de cette fonction), jamais un appel réseau
+    autonome déclenché depuis ici. Sans ce check, un token pouvait entrer proprement
+    (ratio sain à l'ouverture, cf. ``momentum_entry.py``) puis dériver vers un pool
+    manipulé PENDANT la détention sans jamais être re-contrôlé -- le stop suiveur
+    suivrait alors un prix de wash-trading en toute confiance."""
     snapshot = EntrySecuritySnapshot.from_json(position.get("entry_security_json"))
-    if snapshot is None:
-        return None
 
     contract = position["contract"]
     reasons: list[str] = []
+
+    if pair is not None and pair.liquidity_usd and pair.liquidity_usd > 0:
+        from aria_core.momentum_entry import MAX_VOLUME_TO_LIQUIDITY_RATIO
+
+        volume_to_liq = (pair.volume_24h_usd or 0.0) / pair.liquidity_usd
+        if volume_to_liq > MAX_VOLUME_TO_LIQUIDITY_RATIO:
+            reasons.append(
+                f"ratio volume 24h/liquidité extrême détecté en cours de détention "
+                f"({volume_to_liq:.0f}x > {MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x) -- "
+                f"signal de wash-trading, absent ou non détecté à l'entrée"
+            )
+
+    if snapshot is None:
+        return {"contract": contract, "reasons": reasons} if reasons else None
 
     from aria_core.services.goplus import goplus_client
 

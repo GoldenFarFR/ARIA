@@ -246,6 +246,61 @@ async def test_rescan_detects_verification_lost(monkeypatch):
     assert any("plus vérifié" in r for r in result["reasons"])
 
 
+# ── ratio volume/liquidité re-vérifié sur une position OUVERTE (17/07) ──────────────
+
+def _pair(**overrides):
+    from aria_core.services.dexscreener import PairSnapshot
+
+    base = {"pair_address": "0xpool", "price_usd": 1.0, "liquidity_usd": 50_000.0, "base_symbol": "TOK"}
+    base.update(overrides)
+    return PairSnapshot(**base)
+
+
+@pytest.mark.asyncio
+async def test_rescan_flags_extreme_volume_to_liquidity_ratio_on_open_position(monkeypatch):
+    """Angle mort trouvé le 17/07 : le garde-fou anti-wash-trading n'existait qu'à
+    l'entrée (momentum_entry.py) -- un token pouvait entrer proprement puis dériver
+    vers un pool manipulé en cours de détention sans jamais être re-contrôlé."""
+    _patch_clients(monkeypatch)
+    pair = _pair(liquidity_usd=372_766.0, volume_24h_usd=33_859_669.0)  # cas réel BRIAN, ~91x
+    result = await risk.rescan_open_position(_position(), pair=pair)
+    assert result is not None
+    assert any("wash-trading" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_rescan_ignores_reasonable_volume_to_liquidity_ratio(monkeypatch):
+    _patch_clients(monkeypatch)
+    pair = _pair(liquidity_usd=50_000.0, volume_24h_usd=400_000.0)  # 8x, raisonnable
+    assert await risk.rescan_open_position(_position(), pair=pair) is None
+
+
+@pytest.mark.asyncio
+async def test_rescan_skips_ratio_check_when_pair_absent(monkeypatch):
+    """Un price_lookup INJECTÉ (tests, pipeline momentum) ne fournit pas de paire --
+    dégradation honnête, le check est sauté, jamais un appel réseau autonome."""
+    _patch_clients(monkeypatch)
+    assert await risk.rescan_open_position(_position(), pair=None) is None
+
+
+@pytest.mark.asyncio
+async def test_rescan_ratio_check_never_divides_by_zero_liquidity(monkeypatch):
+    _patch_clients(monkeypatch)
+    pair = _pair(liquidity_usd=0.0, volume_24h_usd=1_000.0)
+    assert await risk.rescan_open_position(_position(), pair=pair) is None
+
+
+@pytest.mark.asyncio
+async def test_rescan_ratio_flag_survives_even_without_entry_baseline(monkeypatch):
+    """Même sans entry_security_json (position pré-#187), un ratio extrême détecté MAINTENANT
+    reste un vrai signal -- ne pas le perdre juste parce qu'il n'y a pas de référence
+    honeypot/ownership à comparer."""
+    pair = _pair(liquidity_usd=372_766.0, volume_24h_usd=33_859_669.0)
+    result = await risk.rescan_open_position({"contract": CONTRACT}, pair=pair)
+    assert result is not None
+    assert any("wash-trading" in r for r in result["reasons"])
+
+
 @pytest.mark.asyncio
 async def test_rescan_tolerates_goplus_failure(monkeypatch):
     from aria_core.services import goplus as gp

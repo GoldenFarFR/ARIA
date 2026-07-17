@@ -515,7 +515,7 @@ async def test_run_cycle_closes_position_on_new_security_signal(tmp_db, monkeypa
         entry_security_json=risk.EntrySecuritySnapshot(is_honeypot=False).to_json(),
     )
 
-    async def fake_rescan(position):
+    async def fake_rescan(position, *, pair=None):
         return {"contract": position["contract"], "reasons": ["honeypot détecté (absent à l'entrée)"]}
 
     monkeypatch.setattr(risk, "rescan_open_position", fake_rescan)
@@ -536,6 +536,36 @@ async def test_run_cycle_closes_position_on_new_security_signal(tmp_db, monkeypa
     assert any("⚠️" in a and "honeypot" in a for a in alerts)
     # 17/07 -- la justification persistée (close_notes) reprend la vraie raison du re-scan
     assert "honeypot détecté" in act["closed"][0]["close_notes"]
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_closes_position_on_wash_trading_ratio_detected_post_entry(tmp_db, monkeypatch):
+    """Bout en bout, chemin RÉEL (price_lookup PAR DÉFAUT, pas injecté) : un token entré
+    proprement dont le pool bascule en wash-trading pendant la détention doit être fermé,
+    pas suivi aveuglément par le stop suiveur."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)  # sans entry_security_json
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        from aria_core.services.dexscreener import PairSnapshot
+
+        return PairSnapshot(
+            pair_address="0xpool", price_usd=1.2, liquidity_usd=372_766.0,
+            volume_24h_usd=33_859_669.0, base_symbol="AAA",
+        )
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    act = await pt.run_paper_cycle(candidates=[], notifier=notifier)  # price_lookup PAR DÉFAUT
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "sécurité re-scan"
+    assert not await pt.has_open(A)
+    assert any("wash-trading" in r for r in act["security_alerts"][0]["reasons"])
 
 
 @pytest.mark.asyncio

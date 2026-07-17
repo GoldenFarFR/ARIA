@@ -90,7 +90,12 @@ _TOKENS_BATCH_SIZE = 30  # limite documentée de /tokens/v1/{chainId}/{tokenAddr
 # seuil fixé à 20x : capture le pattern confirmé sans bloquer un pic de volume
 # organique raisonnable (une entrée légitime très demandée peut monter à quelques x
 # la liquidité en une journée, 20x reste un multiple extrême, pas un jour normal).
-_MAX_VOLUME_TO_LIQUIDITY_RATIO = 20.0
+# Rendue PUBLIQUE (pas de préfixe _) le 17/07 : réutilisée telle quelle par
+# paper_trader_risk.rescan_open_position() pour re-vérifier ce même signal sur une
+# position déjà OUVERTE (angle mort trouvé le même soir -- le garde-fou n'existait
+# qu'à l'entrée, une position pouvait dériver vers un pool manipulé après coup sans
+# aucun re-contrôle) -- SSOT unique, jamais un second seuil dupliqué.
+MAX_VOLUME_TO_LIQUIDITY_RATIO = 20.0
 
 # 17/07 -- plafond sur le mouvement de prix déjà réalisé (demande opérateur explicite,
 # après TSG : +533 % sur 24h, -48,6 % sur 6h, +56,6 % sur 1h -- un vrai pump PUIS dump
@@ -443,13 +448,13 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
 
     if best.liquidity_usd and best.liquidity_usd > 0:
         volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
-        if volume_to_liq > _MAX_VOLUME_TO_LIQUIDITY_RATIO:
+        if volume_to_liq > MAX_VOLUME_TO_LIQUIDITY_RATIO:
             return {
                 "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
                 "price": best.price_usd,
                 "reasons": [
                     f"volume 24h/liquidité extrême ({volume_to_liq:.0f}x > "
-                    f"{_MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x) -- signal de wash-trading"
+                    f"{MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x) -- signal de wash-trading"
                 ],
                 "hold_reason": "wash_trading_ratio",
             }
