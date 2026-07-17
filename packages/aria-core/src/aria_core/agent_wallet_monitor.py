@@ -33,12 +33,14 @@ from __future__ import annotations
 
 import logging
 import os
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
 
+from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
 from aria_core.paths import aria_db_path
 from aria_core.services.blockscout import get_blockscout_client
 
@@ -69,7 +71,7 @@ class WalletMovement:
     asset: str
     amount: float
     counterparty: str
-    classification: str  # "known" | "external_deposit" | "unexpected_outflow"
+    classification: str  # "known" | "external_deposit" | "unexpected_outflow" | "suspicious_token"
     timestamp: str | None = None
 
 
@@ -126,6 +128,47 @@ def _classify(tx_hash: str, direction: str, known_tx_hashes: set[str]) -> str:
     return "external_deposit" if direction == "in" else "unexpected_outflow"
 
 
+# Adresses officielles des SEULS actifs que l'opérateur suit par NOM dans les alertes
+# (ETH natif, sans contrat -- toute "ETH" en ERC-20 est un imposteur par construction ;
+# USDC, réutilise la même adresse que l'exécution réelle -- jamais deux sources de
+# vérité). Trouvé en conditions réelles (17/07) : deux dépôts "poussière" reçus le même
+# jour usurpaient ETH/USDC via un homoglyphe Unicode (ex. "EṬH", T à point souscrit,
+# visuellement indiscernable de "ETH" sur un petit écran Telegram) depuis des contrats
+# ERC-20 à 0 holder -- l'alerte affichait le symbole tel quel, sans le confronter à
+# l'adresse réelle du token, risque réel pour un opérateur qui doit décider vite si un
+# dépôt est légitime.
+_CANONICAL_ASSET_ADDRESSES: dict[str, str | None] = {
+    "ETH": None,  # natif seulement -- aucun contrat ERC-20 légitime ne peut porter ce nom
+    "USDC": USDC_BASE_ADDRESS,
+}
+
+
+def _normalize_symbol(symbol: str) -> str:
+    """Décompose les diacritiques Unicode (NFKD) et les retire -- ``"EṬH"`` (T +
+    U+0323 combining dot below) redevient ``"ETH"``, exactement l'attaque qu'un
+    simple ``.upper()`` ne détecte PAS (les caractères combinants ne sont pas des
+    lettres, ``.upper()`` les laisse tels quels)."""
+    decomposed = unicodedata.normalize("NFKD", symbol or "")
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return stripped.strip().upper()
+
+
+def _lookalike_target(symbol: str | None, token_address: str | None) -> str | None:
+    """Renvoie le nom du VRAI actif imité (``"ETH"``/``"USDC"``) si le symbole du
+    transfert ressemble à l'un des actifs suivis une fois les diacritiques retirés,
+    mais que le contrat ne correspond PAS à l'adresse officielle -- ``None`` si le
+    symbole ne ressemble à rien de suivi, ou si c'est authentiquement le bon contrat."""
+    normalized = _normalize_symbol(symbol or "")
+    if normalized not in _CANONICAL_ASSET_ADDRESSES:
+        return None
+    real_address = _CANONICAL_ASSET_ADDRESSES[normalized]
+    if real_address is None:
+        return normalized  # imite ETH natif -- un transfert ERC-20 ne peut jamais l'être légitimement
+    if (token_address or "").lower() != real_address.lower():
+        return normalized
+    return None
+
+
 async def list_recent_movements(limit: int = 100) -> list[dict]:
     """Registre complet persisté (append-only en pratique -- `INSERT OR IGNORE`
     ne réécrit jamais une ligne existante), le plus récent d'abord."""
@@ -169,10 +212,16 @@ async def check_wallet_activity(
                 continue
             direction = "in" if (t.to_address or "").lower() == address_lower else "out"
             counterparty = (t.from_address if direction == "in" else t.to_address) or ""
+            asset_label = t.token_symbol or "token"
+            classification = _classify(t.tx_hash, direction, known_tx_hashes)
+            lookalike = _lookalike_target(t.token_symbol, t.token_address)
+            if lookalike:
+                asset_label = f"{asset_label} (FAUX {lookalike} -- contrat non officiel)"
+                classification = "suspicious_token"
             movement = WalletMovement(
-                tx_hash=t.tx_hash, direction=direction, asset=t.token_symbol or "token",
+                tx_hash=t.tx_hash, direction=direction, asset=asset_label,
                 amount=t.amount or 0.0, counterparty=counterparty,
-                classification=_classify(t.tx_hash, direction, known_tx_hashes),
+                classification=classification,
                 timestamp=t.timestamp,
             )
             await _record_movement(movement)
@@ -350,13 +399,15 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
 
 
 def format_movement_alert(m: WalletMovement) -> str:
-    icon = {"known": "✅", "external_deposit": "💰", "unexpected_outflow": "🚨"}.get(
-        m.classification, "•",
-    )
+    icon = {
+        "known": "✅", "external_deposit": "💰", "unexpected_outflow": "🚨",
+        "suspicious_token": "🎣",
+    }.get(m.classification, "•")
     label = {
         "known": "Mouvement initié par ARIA (attendu)",
         "external_deposit": "Dépôt externe détecté",
         "unexpected_outflow": "SORTIE NON INITIÉE PAR ARIA — à vérifier immédiatement",
+        "suspicious_token": "TOKEN SUSPECT — imite un actif suivi, PAS un dépôt réel, ne jamais interagir avec ce contrat",
     }.get(m.classification, m.classification)
     direction_label = "Entrée" if m.direction == "in" else "Sortie"
     counterparty_label = "De" if m.direction == "in" else "Vers"

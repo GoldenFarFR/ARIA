@@ -16,6 +16,7 @@ from aria_core.services.blockscout import (
 )
 
 WALLET = "0xF04625162b616c5ad9788811b7be8CDd425B37Ef"
+USDC_ADDR = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"  # vraie adresse Base -- cf. agent_wallet_cdp_adapter.USDC_BASE_ADDRESS
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +52,7 @@ async def test_no_movement_when_blockscout_has_nothing(monkeypatch):
 async def test_incoming_usdc_transfer_classified_external_deposit(monkeypatch):
     transfer = TokenTransfer(
         tx_hash="0xdeposit1", from_address="0xoperator", to_address=WALLET,
-        token_address="0xusdc", token_symbol="USDC", token_name="USD Coin",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
         amount=1.0, timestamp="2026-07-16T19:00:00Z",
     )
     _patch_client(monkeypatch, FakeBlockscoutClient(
@@ -73,7 +74,7 @@ async def test_outgoing_usdc_transfer_classified_unexpected_by_default(monkeypat
     doit être signalée comme suspecte, jamais silencieuse."""
     transfer = TokenTransfer(
         tx_hash="0xoutflow1", from_address=WALLET, to_address="0xunknown",
-        token_address="0xusdc", token_symbol="USDC", token_name="USD Coin",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
         amount=5.0, timestamp="2026-07-16T19:05:00Z",
     )
     _patch_client(monkeypatch, FakeBlockscoutClient(
@@ -89,7 +90,7 @@ async def test_outgoing_usdc_transfer_classified_unexpected_by_default(monkeypat
 async def test_outgoing_transfer_classified_known_when_tx_hash_matches(monkeypatch):
     transfer = TokenTransfer(
         tx_hash="0xariainitiated", from_address=WALLET, to_address="0x33783cCb570Cb279C25F836806B5c4C3C8309777",
-        token_address="0xusdc", token_symbol="USDC", token_name="USD Coin",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
         amount=5.0, timestamp="2026-07-16T19:10:00Z",
     )
     _patch_client(monkeypatch, FakeBlockscoutClient(
@@ -100,6 +101,72 @@ async def test_outgoing_transfer_classified_known_when_tx_hash_matches(monkeypat
     )
     assert len(result) == 1
     assert result[0].classification == "known"
+
+
+@pytest.mark.asyncio
+async def test_fake_eth_erc20_homoglyph_flagged_suspicious(monkeypatch):
+    """Trouvé en conditions réelles (17/07) : un token ERC-20 nommé "EṬH" (T à
+    point souscrit Unicode, U+0323) reçu sur le wallet agent -- visuellement
+    indiscernable de "ETH" dans Telegram, mais ETH natif n'a JAMAIS de contrat
+    ERC-20 légitime. Doit être classé suspect, jamais confondu avec un vrai dépôt."""
+    transfer = TokenTransfer(
+        tx_hash="0xfaketh", from_address="0xscammer", to_address=WALLET,
+        token_address="0x7bbEa45b0ee287A5f9ce25eefEb0FFC334DA4be8",
+        token_symbol="EṬH", token_name="EṬH",
+        amount=0.001, timestamp="2026-07-17T00:15:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert len(result) == 1
+    assert result[0].classification == "suspicious_token"
+    assert "FAUX ETH" in result[0].asset
+
+
+@pytest.mark.asyncio
+async def test_fake_usdc_wrong_contract_flagged_suspicious(monkeypatch):
+    """Même attaque que le token ETH, sur USDC (contrat différent du vrai
+    ``USDC_BASE_ADDRESS`` malgré un symbole identique/similaire)."""
+    transfer = TokenTransfer(
+        tx_hash="0xfakeusdc", from_address="0xscammer2", to_address=WALLET,
+        token_address="0x48FfB148167894E2aB1e273fDcd1aACA705bd6Ff",
+        token_symbol="USḌC", token_name="USḌ Coin",
+        amount=1.0, timestamp="2026-07-17T00:00:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert len(result) == 1
+    assert result[0].classification == "suspicious_token"
+    assert "FAUX USDC" in result[0].asset
+
+
+@pytest.mark.asyncio
+async def test_real_usdc_correct_contract_not_flagged(monkeypatch):
+    """Non-régression : le vrai contrat USDC ne doit jamais être signalé suspect."""
+    transfer = TokenTransfer(
+        tx_hash="0xrealusdc", from_address="0xoperator", to_address=WALLET,
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=1.0, timestamp="2026-07-17T00:00:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert result[0].classification == "external_deposit"
+    assert result[0].asset == "USDC"
+
+
+def test_format_movement_alert_suspicious_token_uses_distinct_icon():
+    m = monitor.WalletMovement(
+        tx_hash="0xfaketh", direction="in", asset="EṬH (FAUX ETH -- contrat non officiel)",
+        amount=0.001, counterparty="0xscammer", classification="suspicious_token",
+    )
+    text = monitor.format_movement_alert(m)
+    assert "🎣" in text
+    assert "ne jamais interagir" in text.lower()
 
 
 @pytest.mark.asyncio
@@ -136,7 +203,7 @@ async def test_native_tx_with_zero_value_ignored(monkeypatch):
 async def test_same_tx_hash_never_detected_twice(monkeypatch):
     transfer = TokenTransfer(
         tx_hash="0xrepeat", from_address="0xoperator", to_address=WALLET,
-        token_address="0xusdc", token_symbol="USDC", token_name="USD Coin",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
         amount=1.0, timestamp="2026-07-16T19:25:00Z",
     )
     client = FakeBlockscoutClient(
@@ -163,7 +230,7 @@ async def test_blockscout_unavailable_degrades_gracefully(monkeypatch):
 async def test_movements_persisted_and_listable(monkeypatch):
     transfer = TokenTransfer(
         tx_hash="0xpersisted", from_address="0xoperator", to_address=WALLET,
-        token_address="0xusdc", token_symbol="USDC", token_name="USD Coin",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
         amount=2.5, timestamp="2026-07-16T19:30:00Z",
     )
     _patch_client(monkeypatch, FakeBlockscoutClient(
@@ -222,7 +289,7 @@ async def test_run_cycle_notifies_on_fresh_deposit(monkeypatch):
     monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
     transfer = TokenTransfer(
         tx_hash="0xcycle1", from_address="0xoperator", to_address=monitor.MONITORED_WALLET_ADDRESS,
-        token_address="0xusdc", token_symbol="USDC", token_name="USD Coin",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
         amount=1.0, timestamp="2026-07-16T20:00:00Z",
     )
     _patch_client(monkeypatch, FakeBlockscoutClient(
@@ -248,7 +315,7 @@ async def test_run_cycle_does_not_notify_when_killswitch_paused(monkeypatch):
     monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
     transfer = TokenTransfer(
         tx_hash="0xcycle2", from_address="0xoperator", to_address=monitor.MONITORED_WALLET_ADDRESS,
-        token_address="0xusdc", token_symbol="USDC", token_name="USD Coin",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
         amount=1.0, timestamp="2026-07-16T20:05:00Z",
     )
     _patch_client(monkeypatch, FakeBlockscoutClient(
@@ -277,7 +344,7 @@ async def test_run_cycle_flags_unexpected_outflow_count(monkeypatch):
     monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
     transfer = TokenTransfer(
         tx_hash="0xcycle3", from_address=monitor.MONITORED_WALLET_ADDRESS, to_address="0xunknown",
-        token_address="0xusdc", token_symbol="USDC", token_name="USD Coin",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
         amount=5.0, timestamp="2026-07-16T20:10:00Z",
     )
     _patch_client(monkeypatch, FakeBlockscoutClient(
