@@ -131,6 +131,19 @@ def test_resolve_provider_defaults_to_grok_when_nothing_configured():
     assert sc.resolve_provider(vault={}) == "grok"
 
 
+def test_resolve_provider_env_llm_provider_overrides_stale_vault_default(monkeypatch):
+    """17/07, bug réel : sur le VPS (aucun local.env/production.env, concept Windows),
+    le vault mergé == les défauts du registre ({"LLM_PROVIDER": "virtuals", ...}) --
+    un `.env` posant LLM_PROVIDER=grok doit gagner, jamais rester sans effet. Reproduit
+    exactement le scénario prod (VIRTUALS_API_KEY absente, ARIA_OUVRIER_CLOUD=grok en
+    env, mais le vault -- simulant le registre -- dit encore "virtuals"/"spark")."""
+    monkeypatch.delenv("VIRTUALS_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "grok")
+    monkeypatch.setenv("ARIA_OUVRIER_CLOUD", "grok")
+    stale_vault = {"LLM_PROVIDER": "virtuals", "ARIA_OUVRIER_CLOUD": "spark"}
+    assert sc.resolve_provider(vault=stale_vault) == "grok"
+
+
 def test_apply_spark_to_environ_sets_defaults_without_overwriting(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "already-set")
     cfg = sc.SparkRuntimeConfig(

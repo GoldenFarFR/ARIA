@@ -141,8 +141,17 @@ def resolve_provider(vault: dict[str, str] | None = None) -> str:
     ouvrier_cloud = (
         os.environ.get("ARIA_OUVRIER_CLOUD") or merged.get("ARIA_OUVRIER_CLOUD") or ""
     ).strip().lower()
-    vault_provider = (merged.get("LLM_PROVIDER") or "").strip().lower()
-    provider = (os.environ.get("LLM_PROVIDER") or vault_provider or "").strip().lower()
+    # 17/07 -- bug réel trouvé en basculant hors de Virtuals (expiration crédits Spark
+    # 18/07) : ce contrôle ne lisait QUE ``merged`` (le vault, vide sur ce VPS Linux --
+    # local.env/production.env sont un concept Windows/%LOCALAPPDATA%), retombant donc
+    # systématiquement sur le défaut statique du registre ("virtuals") -- ``os.environ``
+    # (donc `.env` en prod) n'était JAMAIS consulté pour CE check précis, contrairement à
+    # ``ouvrier_cloud`` juste au-dessus qui vérifie déjà ``os.environ`` en premier. Un
+    # `LLM_PROVIDER` posé dans `.env` restait donc sans effet sur cette bascule, alors que
+    # `LLM_PROVIDER` figure explicitement dans `prod_overlay_keys` (ecosystem_registry.yaml)
+    # -- censé être surchargeable en prod. Corrigé sur le même patron que `ouvrier_cloud`.
+    vault_provider = (os.environ.get("LLM_PROVIDER") or merged.get("LLM_PROVIDER") or "").strip().lower()
+    provider = vault_provider
     if (
         ouvrier_cloud in ("spark", "virtuals")
         or vault_provider == "virtuals"
