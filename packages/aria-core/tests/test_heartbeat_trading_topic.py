@@ -25,8 +25,11 @@ class FakeBot:
     def __init__(self):
         self.calls = []
 
-    async def send_message(self, *, chat_id, text, message_thread_id=None):
-        self.calls.append({"chat_id": chat_id, "text": text, "message_thread_id": message_thread_id})
+    async def send_message(self, *, chat_id, text, message_thread_id=None, link_preview_options=None):
+        self.calls.append({
+            "chat_id": chat_id, "text": text, "message_thread_id": message_thread_id,
+            "link_preview_options": link_preview_options,
+        })
 
 
 class FakeApp:
@@ -46,8 +49,23 @@ async def test_send_message_threads_message_thread_id(monkeypatch):
 
     assert ok is True
     assert telegram_bot._bot_app.bot.calls == [
-        {"chat_id": -100123, "text": "hello", "message_thread_id": 67}
+        {"chat_id": -100123, "text": "hello", "message_thread_id": 67, "link_preview_options": None}
     ]
+
+
+@pytest.mark.asyncio
+async def test_send_message_disable_preview_sets_link_preview_options(monkeypatch):
+    """17/07 -- la carte d'aperçu Telegram peut être périmée (cache plateforme) sur un
+    lien DexScreener posté après un token qui vient de prendre +1000 %+ ; le lien
+    cliquable reste correct, seule la carte est désactivée."""
+    monkeypatch.setattr(telegram_bot, "_bot_app", FakeApp())
+    monkeypatch.setattr(settings, "telegram_bot_token", "x", raising=False)
+
+    await telegram_bot.send_message("hello", chat_id=-100123, disable_preview=True)
+
+    opts = telegram_bot._bot_app.bot.calls[0]["link_preview_options"]
+    assert opts is not None
+    assert opts.is_disabled is True
 
 
 @pytest.mark.asyncio
@@ -66,12 +84,29 @@ async def test_send_message_default_thread_id_none_no_regression(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_trading_dm_disables_preview(monkeypatch):
+    """17/07 -- le DM admin des alertes de trading désactive aussi la carte d'aperçu
+    (pas seulement l'envoi topic), même raison : lien DexScreener potentiellement
+    accompagné d'une carte périmée."""
+    calls = []
+
+    async def fake_notify_telegram(self, text, *, disable_preview=False):
+        calls.append((text, disable_preview))
+
+    monkeypatch.setattr(heartbeat.AriaHeartbeat, "_notify_telegram", fake_notify_telegram)
+
+    await heartbeat.aria_heartbeat._notify_telegram_trading("achat fictif XYZ")
+
+    assert calls == [("achat fictif XYZ", True)]
+
+
+@pytest.mark.asyncio
 async def test_no_topic_config_dm_only_no_regression(monkeypatch):
     """Sans configuration (défaut) -- identique à _notify_telegram seul, aucun appel
     supplémentaire tenté."""
     dm_calls = []
 
-    async def fake_notify_telegram(self, text):
+    async def fake_notify_telegram(self, text, *, disable_preview=False):
         dm_calls.append(text)
 
     monkeypatch.setattr(heartbeat.AriaHeartbeat, "_notify_telegram", fake_notify_telegram)
@@ -88,7 +123,7 @@ async def test_no_topic_config_dm_only_no_regression(monkeypatch):
 async def test_both_configured_sends_dm_and_topic(monkeypatch):
     dm_calls = []
 
-    async def fake_notify_telegram(self, text):
+    async def fake_notify_telegram(self, text, *, disable_preview=False):
         dm_calls.append(text)
 
     monkeypatch.setattr(heartbeat.AriaHeartbeat, "_notify_telegram", fake_notify_telegram)
@@ -101,7 +136,7 @@ async def test_both_configured_sends_dm_and_topic(monkeypatch):
 
     assert dm_calls == ["achat fictif XYZ"]  # le DM admin reste envoyé, en plus
     send_mock.assert_awaited_once_with(
-        "achat fictif XYZ", chat_id=-1003949048605, message_thread_id=67,
+        "achat fictif XYZ", chat_id=-1003949048605, message_thread_id=67, disable_preview=True,
     )
 
 
@@ -139,7 +174,7 @@ async def test_topic_send_exception_never_raises(monkeypatch):
     planter le cycle -- même doctrine que _notify_telegram (jamais bloquant)."""
     dm_calls = []
 
-    async def fake_notify_telegram(self, text):
+    async def fake_notify_telegram(self, text, *, disable_preview=False):
         dm_calls.append(text)
 
     monkeypatch.setattr(heartbeat.AriaHeartbeat, "_notify_telegram", fake_notify_telegram)

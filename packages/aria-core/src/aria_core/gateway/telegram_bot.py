@@ -182,20 +182,36 @@ async def apply_bot_profile_photo(image_path: Path) -> tuple[bool, str | None]:
             await bot.shutdown()
 
 
-async def send_message(text: str, chat_id: int | None = None, *, message_thread_id: int | None = None) -> bool:
+async def send_message(
+    text: str, chat_id: int | None = None, *, message_thread_id: int | None = None,
+    disable_preview: bool = False,
+) -> bool:
     """``message_thread_id`` (#197, 15/07) : sujet ("topic") d'un supergroupe Telegram
     avec « Sujets » activés -- paramètre natif de l'API Bot, déjà supporté par
     python-telegram-bot (``Bot.send_message``). ``None`` (défaut) préserve le
     comportement existant à l'identique (message posté à la racine du chat, aucune
-    régression pour les 20+ appelants actuels)."""
+    régression pour les 20+ appelants actuels).
+
+    ``disable_preview`` (17/07) : Telegram met en cache la carte d'aperçu (image +
+    stats) d'une URL la première fois qu'elle est vue sur la plateforme -- pour un
+    lien DexScreener posté juste après une entrée momentum sur un token qui vient de
+    prendre +1000 %+ en quelques heures, cette carte peut afficher des chiffres
+    (mcap/liquidité) très périmés alors que le LIEN LUI-MÊME reste correct et mène
+    bien à la page live. Constaté en conditions réelles (17/07, token BRIAN : carte
+    Telegram "mcap 7 019 $" vs page live "mcap 11,1 M$", même contrat, même lien).
+    Désactive juste la carte, jamais le lien cliquable."""
     if not _bot_app or not settings.telegram_bot_token:
         return False
     target = chat_id or settings.telegram_group_id or (settings.admin_ids[0] if settings.admin_ids else None)
     if not target:
         return False
     try:
+        kwargs = {}
+        if disable_preview:
+            from telegram import LinkPreviewOptions
+            kwargs["link_preview_options"] = LinkPreviewOptions(is_disabled=True)
         await _bot_app.bot.send_message(
-            chat_id=target, text=_format_tg(text), message_thread_id=message_thread_id,
+            chat_id=target, text=_format_tg(text), message_thread_id=message_thread_id, **kwargs,
         )
         return True
     except Exception as exc:

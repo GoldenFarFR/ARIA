@@ -734,10 +734,10 @@ class AriaHeartbeat:
 
         _LAST_HEARTBEAT = now
 
-    async def _notify_telegram(self, text: str) -> None:
+    async def _notify_telegram(self, text: str, *, disable_preview: bool = False) -> None:
         try:
             from aria_core.gateway.telegram_bot import send_message
-            await send_message(text)
+            await send_message(text, disable_preview=disable_preview)
         except Exception as exc:
             logger.warning("Telegram notify failed: %s", exc)
 
@@ -748,15 +748,20 @@ class AriaHeartbeat:
         configurées. Aucune des deux configurée (défaut) -> identique à
         ``_notify_telegram`` seul, aucune régression. Usage volontairement RÉSERVÉ à
         ``paper_trade_cycle`` (pas un changement global de ``_notify_telegram``, qui reste
-        utilisé tel quel par les 20+ autres tâches heartbeat)."""
-        await self._notify_telegram(text)
+        utilisé tel quel par les 20+ autres tâches heartbeat).
+
+        ``disable_preview=True`` (17/07) : ces messages contiennent systématiquement un
+        lien DexScreener (#194) dont la carte d'aperçu Telegram peut être périmée (cache
+        de la plateforme, constaté en réel sur un token qui venait de prendre +1600 %) --
+        désactivé UNIQUEMENT sur ce chemin, jamais sur ``_notify_telegram`` générique."""
+        await self._notify_telegram(text, disable_preview=True)
         chat_id = getattr(settings, "aria_trading_topic_chat_id", None)
         thread_id = getattr(settings, "aria_trading_topic_thread_id", None)
         if not chat_id or not thread_id:
             return
         try:
             from aria_core.gateway.telegram_bot import send_message
-            await send_message(text, chat_id=chat_id, message_thread_id=thread_id)
+            await send_message(text, chat_id=chat_id, message_thread_id=thread_id, disable_preview=True)
         except Exception as exc:
             logger.warning("Telegram trading-topic notify failed: %s", exc)
 
