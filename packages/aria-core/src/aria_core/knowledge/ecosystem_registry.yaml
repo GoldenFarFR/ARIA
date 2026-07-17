@@ -90,8 +90,11 @@ spark_profiles:
     aria_llm_max_tokens_develop: "1600"
 
 banned_values:
-  LLM_MODEL:
-    - deepseek-deepseek-v4-pro
+  # 17/07 -- deepseek-deepseek-v4-pro retiré (décision opérateur explicite : "il n'y a
+  # aucune raison qu'il le soit") -- interdiction jamais documentée, posée le 04/07 avant
+  # même cette session, aucune trace de la raison dans l'historique. V4-Pro (lancé mars
+  # 2026) est en réalité un des modèles de raisonnement les mieux notés actuellement.
+  LLM_MODEL: []
 
 # When a key changes, derived keys align (propagate_operator_env)
 propagations:

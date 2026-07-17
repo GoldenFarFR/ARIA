@@ -15,6 +15,9 @@ def test_virtuals_with_groq_fallback_chain():
     settings.aria_llm_enabled = True
     settings.llm_provider = "virtuals"
     settings.virtuals_api_key = "spark-key"
+    # 17/07 -- deepseek-deepseek-v4-pro n'est plus banni (décision opérateur explicite,
+    # "il n'y a aucune raison qu'il le soit") -- un modèle non banni est désormais utilisé
+    # tel quel, jamais remplacé par le défaut "grok".
     settings.llm_model = "deepseek-deepseek-v4-pro"
     settings.llm_fallback_provider = "groq"
     settings.llm_fallback_api_key = "gsk-fallback"
@@ -25,11 +28,34 @@ def test_virtuals_with_groq_fallback_chain():
     assert routes[0].provider == "virtuals"
     assert routes[0].url == "https://compute.virtuals.io/v1/chat/completions"
     assert routes[0].auth_key == "spark-key"
-    assert routes[0].model not in ("deepseek-deepseek-v4-pro", "")
-    assert "grok" in routes[0].model.lower()
+    assert routes[0].model == "deepseek-deepseek-v4-pro"
     assert routes[1].provider == "groq"
     assert routes[1].auth_key == "gsk-fallback"
     assert is_llm_configured() is True
+
+
+def test_virtuals_skips_a_genuinely_banned_model(monkeypatch):
+    """Le mécanisme de ban lui-même reste fonctionnel -- testé sur une valeur SYNTHÉTIQUE
+    plutôt que sur un vrai nom de modèle (17/07 : le seul exemple réel utilisé jusqu'ici,
+    deepseek-deepseek-v4-pro, n'a plus de raison d'être banni)."""
+    from aria_core import spark_config
+
+    # ``_resolve_model`` (llm.py) réimporte BANNED_VIRTUALS_PRIMARY_MODELS depuis
+    # spark_config à chaque appel (import local) -- patcher ici suffit, aucun besoin de
+    # toucher llm.py.
+    monkeypatch.setattr(spark_config, "BANNED_VIRTUALS_PRIMARY_MODELS", frozenset({"synthetic-banned-model"}))
+
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "virtuals"
+    settings.virtuals_api_key = "spark-key"
+    settings.llm_model = "synthetic-banned-model"
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes()
+    assert len(routes) == 1
+    assert routes[0].model != "synthetic-banned-model"
 
 
 def test_virtuals_never_uses_groq_llm_api_key():
@@ -38,7 +64,7 @@ def test_virtuals_never_uses_groq_llm_api_key():
     settings.llm_provider = "virtuals"
     settings.virtuals_api_key = ""
     settings.llm_api_key = "gsk-should-not-be-used"
-    settings.llm_model = "deepseek-deepseek-v4-pro"
+    settings.llm_model = "some-model"
     settings.llm_fallback_provider = ""
     settings.llm_fallback_api_key = ""
     settings.llm_fallback_model = ""

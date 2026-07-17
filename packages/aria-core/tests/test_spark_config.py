@@ -58,8 +58,11 @@ def test_resolve_primary_llm_model_uses_env_first(monkeypatch):
 
 
 def test_resolve_primary_llm_model_skips_banned_model(monkeypatch):
-    banned = next(iter(sc.BANNED_VIRTUALS_PRIMARY_MODELS))
-    monkeypatch.setenv("LLM_MODEL", banned)
+    # 17/07 -- BANNED_VIRTUALS_PRIMARY_MODELS est vide par défaut désormais (décision
+    # opérateur explicite : plus aucun modèle réel n'a de raison documentée d'être banni)
+    # -- le mécanisme lui-même reste testé via une valeur synthétique.
+    monkeypatch.setattr(sc, "BANNED_VIRTUALS_PRIMARY_MODELS", frozenset({"synthetic-banned-model"}))
+    monkeypatch.setenv("LLM_MODEL", "synthetic-banned-model")
     result = sc.resolve_primary_llm_model(vault={"ARIA_LLM_MODEL_STANDARD": "safe-model"})
     assert result == "safe-model"
     assert result not in sc.BANNED_VIRTUALS_PRIMARY_MODELS

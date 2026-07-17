@@ -30,9 +30,11 @@ VIRTUALS_CHAT_URL = "https://compute.virtuals.io/v1/chat/completions"
 from aria_core.ecosystem_config import banned_values as _banned_values
 
 # Virtuals returns empty on these models as primary (ecosystem_registry.yaml)
-BANNED_VIRTUALS_PRIMARY_MODELS = _banned_values().get(
-    "LLM_MODEL", frozenset({"deepseek-deepseek-v4-pro"})
-)
+# 17/07 -- repli codé en dur vidé (décision opérateur explicite, "il n'y a aucune raison
+# qu'il le soit") -- deepseek-deepseek-v4-pro n'a plus de justification documentée pour
+# être banni. Vidé ici EN PLUS du registre (ecosystem_registry.yaml) pour qu'aucun des
+# deux ne puisse silencieusement réintroduire le ban si l'autre est modifié seul.
+BANNED_VIRTUALS_PRIMARY_MODELS = _banned_values().get("LLM_MODEL", frozenset())
 
 _DEVELOP_HINT = re.compile(
     r"(?i)\b(?:développe|develop|architecture|roadmap|analyse\s+complète|full\s+analysis|"
