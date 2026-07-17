@@ -712,6 +712,27 @@ def test_format_position_tracking_alert_shows_latent_pnl():
     assert "SIMULATION" in msg
 
 
+def test_format_position_tracking_alert_without_cash_equity_uses_generic_label():
+    """Trouvé en conditions réelles (17/07) : l'opérateur ne pouvait pas savoir combien
+    il restait de capital, l'en-tête affichait "1 M$" en dur peu importe la vraie valeur.
+    Sans cash/equity fournis (dégradation), l'ancien libellé générique reste affiché --
+    jamais un chiffre inventé."""
+    msg = pt.format_position_tracking_alert([
+        {"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 1000.0, "cost_usd": 1000.0}
+    ])
+    assert "portefeuille papier 1 M$" in msg
+
+
+def test_format_position_tracking_alert_shows_real_equity_when_provided():
+    msg = pt.format_position_tracking_alert(
+        [{"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 1000.0, "cost_usd": 1000.0}],
+        cash=998_415.0, equity=999_915.0,
+    )
+    assert "998,415" in msg or "998415" in msg
+    assert "999,915" in msg or "999915" in msg
+    assert "portefeuille papier 1 M$" not in msg  # jamais le libelle generique si le vrai chiffre est connu
+
+
 @pytest.mark.asyncio
 async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
@@ -730,6 +751,29 @@ async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp
     assert act["closed"] == []
     assert len(act["tracked"]) == 1
     assert any("suivi positions ouvertes" in a for a in alerts)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_tracking_alert_shows_real_equity_not_generic_1m(tmp_db):
+    """Non-régression du bug réel (17/07) : le cycle doit calculer et transmettre le
+    cash/equity RÉELS à l'alerte de suivi, jamais le libellé générique "1 M$"."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000)
+
+    async def price_lookup(contract):
+        return 1.1  # petit mouvement, position reste ouverte
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+
+    tracking_alerts = [a for a in alerts if "suivi positions ouvertes" in a]
+    assert len(tracking_alerts) == 1
+    assert "portefeuille papier 1 M$" not in tracking_alerts[0]
+    assert "équité" in tracking_alerts[0].lower()
 
 
 @pytest.mark.asyncio

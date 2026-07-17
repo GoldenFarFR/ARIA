@@ -517,17 +517,31 @@ def format_buy_alert(pos: dict) -> str:
     return "\n".join(lines)
 
 
-def format_position_tracking_alert(tracked: list[dict]) -> str:
+def format_position_tracking_alert(
+    tracked: list[dict], *, cash: float | None = None, equity: float | None = None,
+) -> str:
     """Suivi PÉRIODIQUE des positions déjà ouvertes (#197, 15/07) -- pas seulement à
     l'achat/la vente. ``tracked`` : liste de dicts {contract, symbol, entry_price, price,
     qty, cost_usd}, une entrée par position ENCORE ouverte à la fin du cycle (les
     positions fermées CE tour sont déjà couvertes par format_sell_alert, pas dupliquées
-    ici). Liste vide -> chaîne vide (rien à envoyer, l'appelant ne notifie pas)."""
+    ici). Liste vide -> chaîne vide (rien à envoyer, l'appelant ne notifie pas).
+
+    ``cash``/``equity`` (17/07) : trouvé en conditions réelles -- l'en-tête affichait
+    "portefeuille papier 1 M$" en dur sur CHAQUE alerte, quelle que soit la valeur RÉELLE
+    du moment (déjà 998 415 $ après la première perte) -- l'opérateur ne pouvait pas savoir
+    combien il restait sans aller consulter /feedback ou /ledger à part. Optionnels
+    (``None`` -> ancien libellé générique, dégradation honnête plutôt qu'un chiffre
+    inventé si l'appelant ne les calcule pas)."""
     if not tracked:
         return ""
-    lines = [
-        "🧪 SIMULATION — suivi positions ouvertes (portefeuille papier 1 M$)",
-    ]
+    if equity is not None and cash is not None:
+        header = (
+            f"🧪 SIMULATION — suivi positions ouvertes "
+            f"(portefeuille papier : équité {equity:,.0f} $, cash {cash:,.0f} $)"
+        )
+    else:
+        header = "🧪 SIMULATION — suivi positions ouvertes (portefeuille papier 1 M$)"
+    lines = [header]
     for t in tracked:
         name = t.get("symbol") or (t.get("contract") or "")[:10]
         entry = t.get("entry_price") or 0.0
@@ -846,7 +860,17 @@ async def _run_paper_cycle_locked(
         tracked = [t for t in tracked if t["contract"] not in closed_contracts_this_cycle]
         actions["tracked"] = tracked
         if tracked and notifier:
-            msg = format_position_tracking_alert(tracked)
+            # Équité/cash RÉELS (17/07) -- réutilise le prix déjà récupéré cette boucle pour
+            # chaque position (``t["price"]``), aucun nouvel appel réseau ; ``cash_available``
+            # est une simple lecture DB (déjà utilisée ailleurs), jamais un doublon de calcul.
+            tracking_cash = tracking_equity = None
+            try:
+                tracking_cash = await cash_available()
+                open_value = sum((t.get("qty") or 0.0) * (t.get("price") or 0.0) for t in tracked)
+                tracking_equity = tracking_cash + open_value
+            except Exception:  # noqa: BLE001 -- l'alerte degrade au libelle generique, jamais fatale
+                pass
+            msg = format_position_tracking_alert(tracked, cash=tracking_cash, equity=tracking_equity)
             if msg:
                 try:
                     await notifier(msg)
