@@ -681,6 +681,30 @@ async def test_run_cycle_threads_thesis_from_analyzer_to_open_position(tmp_db):
     assert pos["thesis"] == "Raisonnement complet de test."
 
 
+@pytest.mark.asyncio
+async def test_run_cycle_threads_momentum_reasons_into_thesis_when_no_these(tmp_db):
+    """Bug du 17/07 : evaluate_momentum_entry() (#194) ne pose jamais "these" (clé
+    propre à l'ancien analyseur VC-thesis) -- ses "reasons" doivent quand même remonter
+    dans `thesis`, sinon toute décision momentum reste silencieusement sans rationnel."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "DDD", "price": 1.0, "target": 2.0,
+            "invalidation": 0.5,
+            "reasons": ["R/R franc (4.0) + alignement technique -- décision directe"],
+        }
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(candidates=[D], analyzer=analyzer, price_lookup=price_lookup)
+
+    assert act["opened"][0]["thesis"] == "R/R franc (4.0) + alignement technique -- décision directe"
+    pos = await pt._get_open(D)
+    assert pos["thesis"] == "R/R franc (4.0) + alignement technique -- décision directe"
+
+
 def test_format_buy_alert_includes_thesis_and_contract():
     buy = pt.format_buy_alert(
         {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000,

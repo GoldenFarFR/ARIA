@@ -1008,7 +1008,12 @@ async def _run_paper_cycle_locked(
             category=sig.get("category", ""),
             entry_security_json=sig.get("entry_security_json", ""),
             chain=sig.get("chain") or "base",
-            thesis=sig.get("these"),
+            # bug trouvé le 17/07 : ``sig.get("these")`` seul ne couvrait que l'ancien
+            # analyseur VC-thesis (_default_analyzer, clé "these") -- l'analyseur momentum
+            # (#194, evaluate_momentum_entry) construit une vraie liste "reasons" (setup
+            # golden pocket/RSI, alignement technique, R/R) mais ne pose jamais "these",
+            # donc `thesis` restait silencieusement None sur tous les trades momentum.
+            thesis=sig.get("these") or "; ".join(sig.get("reasons") or []) or None,
         )
         if pos:
             opened += 1
