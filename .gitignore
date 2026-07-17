@@ -50,9 +50,15 @@ __pycache__/
 packages/aria-core/.aria-test-data/
 packages/aria-core/acp_provider_state.json
 packages/aria-core/GoldenFar/
+packages/aria-core/.coverage
+.coverage
 /.aria-test-data/
 /GoldenFar/
 /data/
+
+# Claude Code local (worktrees d'agents, verrou de déploiement)
+.claude/worktrees/
+.deploy.lock
 
 # Ops privés — vivent dans GoldenFarFR/aria-ops (ne pas re-ajouter)
 collegue-memoire/
