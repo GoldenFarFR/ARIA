@@ -135,8 +135,21 @@ async def execute_swap(
 ) -> dict[str, Any]:
     """``swap_fn`` injectable -- exécute le swap réel. ``slippage_bps`` est
     TOUJOURS celui forcé par `agent_wallet_pilot.attempt_swap` (jamais un
-    défaut d'outil, règle absolue 09/07)."""
-    from cdp import CdpClient
+    défaut d'outil, règle absolue 09/07).
+
+    Bug réel corrigé le 17/07 (trouvé par Secondaire en vérifiant AVANT de coder,
+    jamais exercé contre un vrai appel jusqu'ici -- ce chemin reste non exercé en
+    réel, seule la lecture (`usdc_balance_usd`) l'a été le 16/07) : `from_amount`
+    attend un montant en UNITÉS ATOMIQUES (confirmé dans le SDK installé,
+    `cdp/actions/evm/swap/types.py::AccountSwapOptions.from_amount`, "Amount to
+    swap in smallest units") -- passer `str(amount_in_usd)` (ex. "10.5") aurait
+    fait échouer ou mal-interpréter CHAQUE swap réel dès le premier essai.
+    Corrigé avec `cdp.parse_units`, même patron que `transfer_usdc` ci-dessus.
+    Hypothèse assumée (documentée, pas cachée) : `amount_in_usd` est une quantité
+    d'USDC (6 décimales) -- cohérent avec la doctrine du plan (ETH natif comme
+    `token_in` explicitement rejeté pour cette première version, aucun autre
+    `token_in` que USDC n'est envisagé)."""
+    from cdp import CdpClient, parse_units
     from cdp.actions.evm.swap import AccountSwapOptions
 
     async with CdpClient() as cdp:
@@ -146,7 +159,7 @@ async def execute_swap(
                 network=chain,
                 from_token=token_in,
                 to_token=token_out,
-                from_amount=str(amount_in_usd),
+                from_amount=parse_units(str(amount_in_usd), 6),
                 slippage_bps=slippage_bps,
             )
         )

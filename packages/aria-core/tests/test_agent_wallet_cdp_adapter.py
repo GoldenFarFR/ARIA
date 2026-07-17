@@ -168,6 +168,34 @@ async def test_execute_swap_returns_tx_hash_and_amount_out(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_swap_converts_amount_to_atomic_units(monkeypatch):
+    """Bug réel corrigé le 17/07 : from_amount attend des unités atomiques
+    ("smallest units", confirmé dans le SDK installé), pas un montant en dollars
+    passé tel quel -- aurait fait échouer/mal-interpréter chaque swap réel."""
+    _install_fake_cdp_module(
+        monkeypatch,
+        balances_result=None,
+        swap_result={"transaction_hash": "0xdeadbeef", "to_amount": "0.0015"},
+    )
+    captured = {}
+    real_options = sys.modules["cdp.actions.evm.swap"].AccountSwapOptions
+
+    def spy_options(**kwargs):
+        captured.update(kwargs)
+        return real_options(**kwargs)
+
+    monkeypatch.setattr(sys.modules["cdp.actions.evm.swap"], "AccountSwapOptions", spy_options)
+
+    await adapter.execute_swap(
+        chain="base", token_in="USDC", token_out="WETH", amount_in_usd=5.0,
+        wallet_address="0xabc123", slippage_bps=1000,
+    )
+
+    # 5.0 USDC (6 décimales) -> 5 000 000 unités atomiques, jamais "5.0" tel quel.
+    assert captured["from_amount"] == 5_000_000
+
+
+@pytest.mark.asyncio
 async def test_execute_swap_propagates_exception_on_failure(monkeypatch):
     _install_fake_cdp_module(monkeypatch, balances_result=None, raise_on="swap")
     with pytest.raises(RuntimeError):
