@@ -245,7 +245,7 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   `active` (seulement `pending`/réseau `base` standard, pas de contamination du pool
   bonding). **Gate `ARIA_BONDING_DISCOVERY_ENABLED` toujours pas activé au 11/07** —
   décision d'activation en continu reste à l'opérateur.
-- **Vision (images en chat Telegram) — EN LIGNE, gate ON, testé en conditions réelles (10/07).** Handler photo manquant corrigé (`telegram_bot.py` n'enregistrait aucun `MessageHandler(filters.PHOTO)`, toute image ignorée en silence) — un seul point d'entrée `_handle_photo` créé. Lecture visuelle admin-only, gate OFF par défaut (`ARIA_VISION_ENABLED`), testé en direct sur un vrai graphique DexScreener avec succès (chiffres lus correctement, distinction rug/dump). Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
+- **Vision (images en chat Telegram) — EN LIGNE, gate ON (activé 17/07), testé en conditions réelles (10/07).** Handler photo manquant corrigé (`telegram_bot.py` n'enregistrait aucun `MessageHandler(filters.PHOTO)`, toute image ignorée en silence) — un seul point d'entrée `_handle_photo` créé. Lecture visuelle admin-only, `ARIA_VISION_ENABLED=true` en prod, testé en direct sur un vrai graphique DexScreener avec succès (chiffres lus correctement, distinction rug/dump). Détail complet : `docs/HANDOFF-2026-07-10-detail-archive.md`.
 - **Note de calibration (10/07) — la règle « zéro trace IA » ne couvre PAS le chat Telegram
   opérateur.** Vérifié dans le code : la règle absolue dit explicitement « sur les surfaces
   client (rapport, vitrine) » — la conversation Telegram avec l'opérateur n'est ni un rapport ni
@@ -938,14 +938,15 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   ou un accès opérateur direct redevient disponible. En attendant, toute nouvelle demande
   se traite depuis cette session cloud avec ses limites connues (pas d'accès réseau
   direct au VPS/`aria.db`, curl/WebFetch seulement vers l'extérieur).
-- **15/07 — activer `ARIA_VISION_ENABLED` en attente d'accès VPS (demande opérateur
-  explicite, même segment).** Aucun code à changer — la fonctionnalité vision (lecture
-  d'images Telegram, admin-only) est déjà livrée et testée en conditions réelles (10/07,
-  vrai graphique DexScreener, chiffres lus correctement). Juste ajouter
-  `ARIA_VISION_ENABLED=true` au `.env` du conteneur `aria-api` puis redémarrer (pas besoin
-  de rebuild, une variable d'environnement lue à l'appel, pas au chargement du module) —
-  bloqué par le même manque d'accès VPS que ci-dessus. Coût : un appel LLM vision par
-  image envoyée, mais admin-only donc maîtrisé.
+- **17/07 — `ARIA_VISION_ENABLED` ACTIVÉ en prod.** Aucun code à changer (déjà livré et
+  testé 10/07) — juste ajouté au `.env` + redéployé, vérifié présent dans le conteneur
+  (`docker exec ... os.environ.get`). Coût : un appel LLM vision par image envoyée, mais
+  admin-only donc maîtrisé.
+- **17/07 — `ARIA_CANONICAL_FACTS_SYNC_ENABLED` ACTIVÉ en prod.** Idem (déjà livré et
+  testé 11/07) — activé + redéployé, ET vérifié par un vrai appel `sync_canonical_facts()`
+  contre la base de prod réelle (25 faits lus, 0 erreur, 0 changement nécessaire — déjà
+  cohérent). `faq.yaml` ne dérivera plus jamais de `canonical_facts.yaml` sans correction
+  automatique (cycle heartbeat 180 min).
 - **15/07 — #157 suite : scan `/walletscore` incrémental + formule composite de
   classement, EN LIGNE (codé, testé, poussé sur main, PAS déployé).** Trois commits :
   `128556d` (scan persistant), `0125c74` (formule composite). Le plafond
