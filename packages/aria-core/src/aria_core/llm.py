@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -215,11 +216,16 @@ async def _post_chat(
             payload["options"] = {"num_ctx": num_ctx}
 
     async with httpx.AsyncClient(timeout=timeout) as client:
+        # 17/07 -- demande opérateur explicite : arbitrer Grok vs Gemini (et tout futur
+        # provider) sur une latence RÉELLEMENT mesurée, pas une supposition. Chronomètre
+        # uniquement l'aller-retour réseau (pas le parsing JSON en aval, négligeable).
+        _t0 = time.monotonic()
         response = await client.post(
             route.url,
             headers=_headers_for_route(route),
             json=payload,
         )
+        latency_ms = (time.monotonic() - _t0) * 1000.0
         if not _http_ok(response.status_code):
             logger.warning(
                 "LLM error provider=%s model=%s status=%s: %s",
@@ -238,6 +244,7 @@ async def _post_chat(
                 kind="chat",
                 estimated=True,
                 depth=depth,
+                latency_ms=latency_ms,
             )
             return None
         data: dict[str, Any] = response.json()
@@ -272,6 +279,7 @@ async def _post_chat(
             estimated=estimated,
             depth=depth,
             truncated=truncated,
+            latency_ms=latency_ms,
         )
         return reply
 

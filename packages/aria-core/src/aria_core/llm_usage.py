@@ -116,9 +116,15 @@ def record_llm_usage(
     estimated: bool = False,
     depth: str | None = None,
     truncated: bool = False,
+    latency_ms: float | None = None,
     at: datetime | None = None,
 ) -> None:
-    """Append une ligne dans data/llm-usage/YYYY-MM.jsonl."""
+    """Append une ligne dans data/llm-usage/YYYY-MM.jsonl.
+
+    ``latency_ms`` (17/07, demande opérateur -- arbitrer Grok vs Gemini sur des données
+    RÉELLES plutôt qu'une supposition) : temps de réponse mesuré côté appelant (envoi de
+    la requête jusqu'à réception de la réponse HTTP), jamais estimé. Absent -> pas de
+    champ écrit (dégradation honnête, jamais une valeur inventée)."""
     try:
         now = at or datetime.now(timezone.utc)
         day = now.strftime("%Y-%m-%d")
@@ -141,6 +147,8 @@ def record_llm_usage(
             row["depth"] = str(depth)
         if truncated:
             row["truncated"] = True
+        if latency_ms is not None:
+            row["latency_ms"] = round(float(latency_ms), 1)
         path = _month_path(day)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
