@@ -52,7 +52,7 @@ _POS_FIELDS = (
     "target_price", "invalidation_price", "opened_at", "status",
     "exit_price", "closed_at", "pnl_usd", "pnl_pct", "close_reason",
     "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
-    "category", "entry_security_json", "chain", "thesis",
+    "category", "entry_security_json", "chain", "thesis", "close_notes",
 )
 
 _ADDED_COLUMNS = [
@@ -72,6 +72,14 @@ _ADDED_COLUMNS = [
     # survivaient. Objectif opérateur explicite : la session cloud doit pouvoir vérifier
     # après coup, en base, POURQUOI ARIA est entrée -- pas seulement à quel prix.
     ("thesis", "TEXT"),
+    # 17/07 -- demande opérateur explicite : chaque VENTE (pas seulement l'achat) doit se
+    # justifier avec des chiffres concrets, pour maximiser la donnée exploitable à des fins
+    # de calibration -- pas juste un tag court ("stop suiveur"/"invalidation") déjà utilisé
+    # par du code/des tests existants (jamais touché ici), un texte séparé qui explique le
+    # POURQUOI avec les niveaux réels. Alimenté à chaque clôture totale ET à chaque prise de
+    # profit partielle (dans ce dernier cas, sur la ligne encore ouverte -- dernière note en
+    # date, pas un historique cumulé).
+    ("close_notes", "TEXT"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -85,6 +93,24 @@ _STATE_ADDED_COLUMNS = [
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _hours_since(opened_at: str | None) -> float | None:
+    """Durée de détention en heures depuis ``opened_at`` (ISO), pour les notes de sortie
+    (17/07) -- ``None`` si absent/invalide, jamais une valeur inventée."""
+    if not opened_at:
+        return None
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(opened_at)).total_seconds() / 3600.0
+    except ValueError:
+        return None
+
+
+def _duration_phrase(opened_at: str | None) -> str:
+    hours = _hours_since(opened_at)
+    if hours is None:
+        return "durée de détention inconnue"
+    return f"détenue {hours:.1f}h" if hours < 24 else f"détenue {hours / 24:.1f}j"
 
 
 def _num(v) -> float | None:
@@ -129,7 +155,8 @@ async def _ensure_tables() -> None:
                 category TEXT NOT NULL DEFAULT '',
                 entry_security_json TEXT,
                 chain TEXT NOT NULL DEFAULT 'base',
-                thesis TEXT
+                thesis TEXT,
+                close_notes TEXT
             )
             """
         )
@@ -379,8 +406,13 @@ async def open_position(
     return await _get_open(contract) or {"id": pid, "contract": contract}
 
 
-async def close_position(contract: str, exit_price: float, *, reason: str = "manuel") -> dict | None:
-    """Ferme une position FICTIVE au prix de sortie réel et enregistre le P&L."""
+async def close_position(
+    contract: str, exit_price: float, *, reason: str = "manuel", notes: str | None = None,
+) -> dict | None:
+    """Ferme une position FICTIVE au prix de sortie réel et enregistre le P&L. ``reason``
+    reste un tag court stable (comparé par égalité ailleurs/dans les tests) ; ``notes``
+    (17/07) porte la justification chiffrée complète -- séparés pour ne jamais casser un
+    appelant qui dépend du tag exact."""
     await _ensure_tables()
     pos = await _get_open(contract)
     if not pos or not exit_price or exit_price <= 0:
@@ -394,24 +426,27 @@ async def close_position(contract: str, exit_price: float, *, reason: str = "man
             """
             UPDATE paper_position
                SET status = 'closed', exit_price = ?, closed_at = ?, pnl_usd = ?,
-                   pnl_pct = ?, close_reason = ?
+                   pnl_pct = ?, close_reason = ?, close_notes = ?
              WHERE id = ?
             """,
-            (exit_price, closed_at, pnl_usd, pnl_pct, reason, pos["id"]),
+            (exit_price, closed_at, pnl_usd, pnl_pct, reason, notes, pos["id"]),
         )
         await db.commit()
     return {**pos, "status": "closed", "exit_price": exit_price, "closed_at": closed_at,
-            "pnl_usd": pnl_usd, "pnl_pct": pnl_pct, "close_reason": reason}
+            "pnl_usd": pnl_usd, "pnl_pct": pnl_pct, "close_reason": reason, "close_notes": notes}
 
 
 async def reduce_position(
-    contract: str, exit_price: float, sell_qty: float, *, stage: int, reason: str = "prise de profit",
+    contract: str, exit_price: float, sell_qty: float, *, stage: int,
+    reason: str = "prise de profit", notes: str | None = None,
 ) -> dict | None:
     """Prise de profit PARTIELLE : vend une fraction de la position et garde le reste
     ouvert avec une base de coût réduite proportionnellement (même ``entry_price``, moins
     de ``qty``/``cost_usd``). Le P&L de la tranche vendue est accumulé dans
     ``realized_pnl_partial`` -- il reste visible dans ``cash_available``/``portfolio_summary``
-    sans attendre la clôture complète de la position."""
+    sans attendre la clôture complète de la position. ``notes`` (17/07) : justification
+    chiffrée de CETTE prise partielle, persistée sur la ligne encore ouverte (remplace la
+    précédente -- dernière note en date, pas un historique cumulé)."""
     await _ensure_tables()
     pos = await _get_open(contract)
     if not pos or not exit_price or exit_price <= 0 or sell_qty <= 0:
@@ -428,16 +463,16 @@ async def reduce_position(
         await db.execute(
             """
             UPDATE paper_position
-               SET qty = ?, cost_usd = ?, realized_pnl_partial = ?, tp_stage_hit = ?
+               SET qty = ?, cost_usd = ?, realized_pnl_partial = ?, tp_stage_hit = ?, close_notes = ?
              WHERE id = ?
             """,
-            (new_qty, new_cost, new_realized_partial, stage, pos["id"]),
+            (new_qty, new_cost, new_realized_partial, stage, notes, pos["id"]),
         )
         await db.commit()
     pnl_pct = (exit_price / pos["entry_price"] - 1.0) * 100.0 if pos["entry_price"] else 0.0
     return {
         **pos, "sold_qty": sell_qty, "exit_price": exit_price, "pnl_usd": pnl_usd,
-        "pnl_pct": pnl_pct, "close_reason": reason, "remaining_qty": new_qty,
+        "pnl_pct": pnl_pct, "close_reason": reason, "close_notes": notes, "remaining_qty": new_qty,
         "tp_stage_hit": stage,
     }
 
@@ -562,12 +597,16 @@ def format_sell_alert(closed: dict) -> str:
     pnl = closed.get("pnl_usd") or 0.0
     pct = closed.get("pnl_pct") or 0.0
     sign = "+" if pnl >= 0 else ""
-    return "\n".join([
+    lines = [
         "🧪 SIMULATION — portefeuille papier 1 M$ (mode trading)",
         f"VENTE FICTIVE {name} ({closed.get('close_reason', '')})",
         f"Sortie {closed['exit_price']:.6g} · P&L {sign}{pnl:,.0f} $ ({sign}{pct:.1f}%)",
-        "Aucun argent réel.",
-    ])
+    ]
+    notes = (closed.get("close_notes") or "").strip()
+    if notes:
+        lines.append(f"Pourquoi : {notes}")
+    lines.append("Aucun argent réel.")
+    return "\n".join(lines)
 
 
 def format_partial_exit_alert(partial: dict) -> str:
@@ -575,13 +614,17 @@ def format_partial_exit_alert(partial: dict) -> str:
     pnl = partial.get("pnl_usd") or 0.0
     pct = partial.get("pnl_pct") or 0.0
     sign = "+" if pnl >= 0 else ""
-    return "\n".join([
+    lines = [
         "🧪 SIMULATION — portefeuille papier 1 M$ (mode trading)",
         f"PRISE DE PROFIT PARTIELLE FICTIVE {name} ({partial.get('close_reason', '')})",
         f"Sortie {partial['exit_price']:.6g} · {sign}{pnl:,.0f} $ ({sign}{pct:.1f}%) sur la tranche vendue",
         f"Position restante : {partial.get('remaining_qty', 0):.6g} unités",
-        "Aucun argent réel.",
-    ])
+    ]
+    notes = (partial.get("close_notes") or "").strip()
+    if notes:
+        lines.append(f"Pourquoi : {notes}")
+    lines.append("Aucun argent réel.")
+    return "\n".join(lines)
 
 
 def format_summary(summary: dict) -> str:
@@ -770,7 +813,14 @@ async def _run_paper_cycle_locked(
                 # wallet_guard -- jamais de vente automatique sans confirmation opérateur),
                 # voir paper_trader_risk.py.
                 exit_price = price if (price and price > 0) else p["entry_price"]
-                closed = await close_position(p["contract"], exit_price, reason="sécurité re-scan")
+                sec_notes = (
+                    f"Re-scan sécurité déclenché en cours de détention ({_duration_phrase(p.get('opened_at'))}) : "
+                    + "; ".join(security_flag["reasons"])
+                    + " -- fermeture immédiate (position fictive, teste la réaction)."
+                )
+                closed = await close_position(
+                    p["contract"], exit_price, reason="sécurité re-scan", notes=sec_notes,
+                )
                 if closed:
                     actions["closed"].append(closed)
                     actions.setdefault("security_alerts", []).append(security_flag)
@@ -801,8 +851,24 @@ async def _run_paper_cycle_locked(
             stop_is_trailing = not invalidation or trailing_stop > invalidation
 
             if active_stop and price <= active_stop:
+                exit_gain_pct = (price / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0
+                if stop_is_trailing:
+                    peak_gain_pct = (high_water / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0
+                    exit_notes = (
+                        f"Stop suiveur déclenché : plus haut {high_water:.6g} ({peak_gain_pct:+.1f}% vs entrée), "
+                        f"retracement de {TRAIL_STOP_PCT * 100:.0f}% depuis ce sommet a activé la protection -- "
+                        f"sortie {price:.6g} ({exit_gain_pct:+.1f}% net vs entrée), {_duration_phrase(p.get('opened_at'))}."
+                    )
+                else:
+                    exit_notes = (
+                        f"Invalidation technique atteinte : prix {price:.6g} <= seuil {invalidation:.6g} "
+                        f"({exit_gain_pct:+.1f}% vs entrée) -- thèse invalidée, sortie immédiate, "
+                        f"{_duration_phrase(p.get('opened_at'))}."
+                    )
                 closed = await close_position(
-                    p["contract"], price, reason="stop suiveur" if stop_is_trailing else "invalidation",
+                    p["contract"], price,
+                    reason="stop suiveur" if stop_is_trailing else "invalidation",
+                    notes=exit_notes,
                 )
                 if closed:
                     actions["closed"].append(closed)
@@ -825,9 +891,16 @@ async def _run_paper_cycle_locked(
                 stage_hit += 1
                 sell_qty = min(initial_qty * TP_STAGE_FRACTION, remaining_qty)
                 is_last_stage = stage_hit >= len(TP_STAGES) or remaining_qty - sell_qty <= TP_QTY_EPSILON
+                stage_target_pct = TP_STAGES[stage_hit - 1] * 100.0
                 if is_last_stage:
+                    tp_notes = (
+                        f"Dernier palier de profit {stage_hit}/{len(TP_STAGES)} atteint "
+                        f"(+{gain_pct * 100:.0f}% vs entrée, seuil visé +{stage_target_pct:.0f}%) -- "
+                        f"clôture du reliquat, {_duration_phrase(p.get('opened_at'))}."
+                    )
                     closed = await close_position(
-                        p["contract"], price, reason=f"palier {stage_hit}/{len(TP_STAGES)} (clôture)",
+                        p["contract"], price,
+                        reason=f"palier {stage_hit}/{len(TP_STAGES)} (clôture)", notes=tp_notes,
                     )
                     if closed:
                         actions["closed"].append(closed)
@@ -838,9 +911,17 @@ async def _run_paper_cycle_locked(
                                 pass
                     break
 
+                partial_pct = TP_STAGE_FRACTION * 100.0
+                remaining_after_pct = max(0.0, 100.0 - stage_hit * TP_STAGE_FRACTION * 100.0)
+                partial_notes = (
+                    f"Palier de profit {stage_hit}/{len(TP_STAGES)} atteint "
+                    f"(+{gain_pct * 100:.0f}% vs entrée, seuil visé +{stage_target_pct:.0f}%) -- "
+                    f"prise de {partial_pct:.0f}% de la position initiale, "
+                    f"~{remaining_after_pct:.0f}% restant en jeu."
+                )
                 partial = await reduce_position(
                     p["contract"], price, sell_qty, stage=stage_hit,
-                    reason=f"palier {stage_hit}/{len(TP_STAGES)}",
+                    reason=f"palier {stage_hit}/{len(TP_STAGES)}", notes=partial_notes,
                 )
                 if partial:
                     actions["partial"].append(partial)

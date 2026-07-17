@@ -197,6 +197,11 @@ async def test_all_tp_stages_hit_in_one_jump_closes_fully(tmp_db):
     assert len(act["closed"]) == 1    # palier 3 (dernier) : clôture du reliquat
     assert not await pt.has_open(D)
     assert act["closed"][0]["close_reason"] == "palier 3/3 (clôture)"
+    # 17/07 -- justification chiffrée présente sur chaque palier (partiel ET clôture finale)
+    assert "Palier de profit 1/3" in act["partial"][0]["close_notes"]
+    assert "+50%" in act["partial"][0]["close_notes"]
+    assert "Dernier palier de profit 3/3" in act["closed"][0]["close_notes"]
+    assert "+200%" in act["closed"][0]["close_notes"]
 
 
 @pytest.mark.asyncio
@@ -214,6 +219,8 @@ async def test_stop_before_any_rise_uses_original_invalidation_label(tmp_db):
     assert len(act["closed"]) == 1
     assert act["closed"][0]["close_reason"] == "invalidation"
     assert not await pt.has_open(D)
+    # 17/07 -- la note doit nommer le vrai déclencheur ("invalidation"), pas "stop suiveur"
+    assert "Invalidation technique atteinte" in act["closed"][0]["close_notes"]
 
 
 @pytest.mark.asyncio
@@ -247,6 +254,9 @@ async def test_trailing_stop_tightens_then_closes_remainder(tmp_db):
     assert len(act3["closed"]) == 1
     assert act3["closed"][0]["close_reason"] == "stop suiveur"
     assert not await pt.has_open(D)
+    # 17/07 -- la note cite le vrai plus haut atteint (2.5), pas l'invalidation d'origine
+    assert "Stop suiveur déclenché" in act3["closed"][0]["close_notes"]
+    assert "2.5" in act3["closed"][0]["close_notes"]
 
 
 @pytest.mark.asyncio
@@ -434,6 +444,8 @@ async def test_run_cycle_closes_position_on_new_security_signal(tmp_db, monkeypa
     assert not await pt.has_open(A)
     assert act["security_alerts"][0]["reasons"] == ["honeypot détecté (absent à l'entrée)"]
     assert any("⚠️" in a and "honeypot" in a for a in alerts)
+    # 17/07 -- la justification persistée (close_notes) reprend la vraie raison du re-scan
+    assert "honeypot détecté" in act["closed"][0]["close_notes"]
 
 
 @pytest.mark.asyncio
@@ -721,6 +733,31 @@ def test_format_buy_alert_no_thesis_no_crash():
         {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000}
     )
     assert "Thèse" not in buy
+
+
+def test_format_sell_alert_includes_close_notes():
+    sell = pt.format_sell_alert(
+        {"symbol": "AAA", "contract": A, "exit_price": 1.5, "pnl_usd": -500, "pnl_pct": -2.0,
+         "close_reason": "invalidation", "close_notes": "Invalidation technique atteinte : détail précis."}
+    )
+    assert "Pourquoi : Invalidation technique atteinte : détail précis." in sell
+
+
+def test_format_sell_alert_no_close_notes_no_crash():
+    sell = pt.format_sell_alert(
+        {"symbol": "AAA", "contract": A, "exit_price": 1.5, "pnl_usd": -500, "pnl_pct": -2.0,
+         "close_reason": "invalidation"}
+    )
+    assert "Pourquoi" not in sell
+
+
+def test_format_partial_exit_alert_includes_close_notes():
+    partial = pt.format_partial_exit_alert(
+        {"symbol": "AAA", "contract": A, "exit_price": 1.5, "pnl_usd": 500, "pnl_pct": 50.0,
+         "close_reason": "palier 1/3", "close_notes": "Palier de profit 1/3 atteint : détail précis.",
+         "remaining_qty": 20_000}
+    )
+    assert "Pourquoi : Palier de profit 1/3 atteint : détail précis." in partial
 
 
 def test_format_position_tracking_alert_empty_list():

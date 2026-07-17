@@ -62,6 +62,9 @@ def _render_open(p: dict) -> str:
         lines.append(f"    P&L réalisé (prises de profit partielles) {_fmt_money(p['realized_pnl_partial'])}")
     thesis = (p.get("thesis") or "").strip()
     lines.append(f"    Thèse : {thesis}" if thesis else "    Thèse : (aucune — position pré-#197 ou non renseignée)")
+    close_notes = (p.get("close_notes") or "").strip()
+    if close_notes:
+        lines.append(f"    Dernière prise de profit partielle : {close_notes}")
     return "\n".join(lines)
 
 
@@ -79,6 +82,11 @@ def _render_closed(p: dict) -> str:
     ]
     thesis = (p.get("thesis") or "").strip()
     lines.append(f"    Thèse : {thesis}" if thesis else "    Thèse : (aucune — position pré-#197 ou non renseignée)")
+    close_notes = (p.get("close_notes") or "").strip()
+    lines.append(
+        f"    Pourquoi cette sortie : {close_notes}" if close_notes
+        else "    Pourquoi cette sortie : (aucune note — clôture pré-17/07 ou non renseignée)"
+    )
     return "\n".join(lines)
 
 
