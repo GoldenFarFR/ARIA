@@ -860,6 +860,42 @@ async def test_run_cycle_tracking_alert_excludes_positions_closed_this_cycle(tmp
 
 
 @pytest.mark.asyncio
+async def test_run_cycle_tracking_alert_throttled_to_every_other_cycle(tmp_db):
+    """17/07, demande opérateur explicite : réduire de moitié le bruit Telegram de
+    l'alerte de suivi -- un cycle qui suit de trop près le précédent (même position
+    ouverte, rien d'autre ne change) ne renvoie pas l'alerte."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000)
+
+    async def price_lookup(contract):
+        return 1.1  # petit mouvement, aucun palier/stop franchi -- reste ouverte
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+    assert sum(1 for a in alerts if "suivi positions ouvertes" in a) == 1
+
+    # cycle immédiatement suivant : trop tôt, l'alerte est sautée (mais act["tracked"]
+    # reste calculé normalement -- seule la NOTIFICATION est throttlée, jamais la donnée)
+    act2 = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+    assert len(act2["tracked"]) == 1
+    assert sum(1 for a in alerts if "suivi positions ouvertes" in a) == 1
+
+    # on recule artificiellement le dernier envoi au-delà de la fenêtre -> ré-autorisé
+    from datetime import datetime, timedelta, timezone
+    old_ts = (
+        datetime.now(timezone.utc) - timedelta(minutes=pt.TRACKING_ALERT_MIN_INTERVAL_MINUTES + 1)
+    ).isoformat()
+    await pt.set_last_tracking_alert_at(old_ts)
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+    assert sum(1 for a in alerts if "suivi positions ouvertes" in a) == 2
+
+
+@pytest.mark.asyncio
 async def test_skip_position_management_leaves_open_positions_untouched(tmp_db):
     """#196 -- avec skip_position_management=True, une position qui aurait
     normalement déclenché le stop suiveur/invalidation reste INTOUCHÉE (ni

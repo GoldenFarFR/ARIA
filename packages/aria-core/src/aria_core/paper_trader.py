@@ -47,6 +47,12 @@ TP_STAGES = (0.5, 1.0, 2.0)   # paliers de gain vs entrée (+50 %, +100 %, +200 
 TP_STAGE_FRACTION = 1.0 / 3.0  # fraction de la quantité INITIALE vendue à chaque palier
 TP_QTY_EPSILON = 1e-9         # reliquat négligeable après le dernier palier -> clôture complète
 
+# 17/07 -- demande opérateur explicite : réduire de moitié le bruit Telegram de l'alerte de
+# suivi périodique (#197, une par cycle heartbeat -- ~15 min -- tant qu'une position reste
+# ouverte). Fenêtre glissante par le TEMPS écoulé (pas un compteur de cycles) : robuste si la
+# cadence heartbeat change un jour sans qu'il faille retoucher cette constante.
+TRACKING_ALERT_MIN_INTERVAL_MINUTES = 30
+
 _POS_FIELDS = (
     "id", "contract", "symbol", "cost_usd", "entry_price", "qty",
     "target_price", "invalidation_price", "opened_at", "status",
@@ -88,6 +94,9 @@ _ADDED_COLUMNS = [
 # appel de `get_equity_high_water_mark` -- initialisé au capital de départ).
 _STATE_ADDED_COLUMNS = [
     ("equity_high_water_mark", "REAL"),
+    # 17/07 -- horodatage de la dernière alerte de suivi périodique envoyée (voir
+    # TRACKING_ALERT_MIN_INTERVAL_MINUTES) -- NULL tant qu'aucune n'a encore été envoyée.
+    ("last_tracking_alert_at", "TEXT"),
 ]
 
 
@@ -234,6 +243,23 @@ async def set_equity_high_water_mark(value: float) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE paper_state SET equity_high_water_mark = ? WHERE id = 1", (value,),
+        )
+        await db.commit()
+
+
+async def get_last_tracking_alert_at() -> str | None:
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT last_tracking_alert_at FROM paper_state WHERE id = 1") as cur:
+            row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def set_last_tracking_alert_at(value: str) -> None:
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE paper_state SET last_tracking_alert_at = ? WHERE id = 1", (value,),
         )
         await db.commit()
 
@@ -951,10 +977,23 @@ async def _run_paper_cycle_locked(
                 tracking_equity = tracking_cash + open_value
             except Exception:  # noqa: BLE001 -- l'alerte degrade au libelle generique, jamais fatale
                 pass
+            # 17/07 -- réduit le bruit Telegram de moitié : n'envoie que si le dernier
+            # envoi remonte à au moins TRACKING_ALERT_MIN_INTERVAL_MINUTES. Ne bloque jamais
+            # une vraie alerte d'achat/vente (celles-ci ont leur propre notifier plus haut,
+            # jamais soumises à cette fenêtre) -- seul ce suivi périodique est throttlé.
+            should_notify = True
+            try:
+                last_at = await get_last_tracking_alert_at()
+                if last_at:
+                    elapsed_min = (datetime.now(timezone.utc) - datetime.fromisoformat(last_at)).total_seconds() / 60.0
+                    should_notify = elapsed_min >= TRACKING_ALERT_MIN_INTERVAL_MINUTES
+            except Exception:  # noqa: BLE001 -- en cas de doute, on notifie (dégradation douce)
+                should_notify = True
             msg = format_position_tracking_alert(tracked, cash=tracking_cash, equity=tracking_equity)
-            if msg:
+            if msg and should_notify:
                 try:
                     await notifier(msg)
+                    await set_last_tracking_alert_at(_now())
                 except Exception:  # noqa: BLE001 — l'alerte ne casse pas le cycle
                     pass
 
