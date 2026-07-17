@@ -37,6 +37,7 @@ class AriaRuntimeSettings(BaseSettings):
     access_code_enabled: bool = False
     site_base_url: str = ""
     holding_domain: str = "ariavanguardzhc.com"
+    admin_api_secret: str = ""
 
     llm_provider: str = "none"
     llm_api_key: str = ""

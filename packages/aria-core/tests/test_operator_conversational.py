@@ -4,10 +4,13 @@ from aria_core.community_feedback import is_roadmap_partnership_question
 from aria_core.llm_routing_meta import is_llm_routing_question
 from aria_core.operator_conversational import (
     is_injected_factual_claim,
+    llm_preference_reply,
     operator_improvement_reply,
     unverified_claim_reply,
+    verify_external_claim,
     wants_capability_improvement,
     wants_claim_verification,
+    wants_more_detail_followup,
 )
 from aria_core.skills.acp_conversational import is_conversational_acp_question
 
@@ -183,3 +186,126 @@ async def test_acp_plan_not_help_wall(monkeypatch):
     reply, data = await execute_acp_marketplace("tu a prevu de faire quoi sur acp ?", lang="fr")
     assert data.get("acp") in ("revenue_plan", "conversational_status", "plan_natural")
     assert "acp status —" not in reply[:80] or "Plan revenus" in reply
+
+
+def test_wants_more_detail_followup_matches_short_cues():
+    assert wants_more_detail_followup("développe")
+    assert wants_more_detail_followup("plus d'arguments")
+    assert wants_more_detail_followup("continue")
+    assert wants_more_detail_followup("précise.")
+
+
+def test_wants_more_detail_followup_requires_whole_message():
+    # Ancré sur le message ENTIER (^...$) -- une phrase qui contient le mot au milieu
+    # d'une vraie question distincte ne doit pas être confondue avec un simple "dis m'en plus".
+    assert not wants_more_detail_followup("développe ton avis sur le marché crypto aujourd'hui")
+    assert not wants_more_detail_followup("")
+
+
+def test_operator_improvement_reply_english_branch():
+    text = operator_improvement_reply(lang="en")
+    assert "Global index" in text
+    assert "P(vrai)" not in text
+
+
+def test_llm_preference_reply_french_cites_all_three_engines(monkeypatch):
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "llm_provider", "virtuals")
+    monkeypatch.setattr(settings, "llm_model", "spark-1")
+    text = llm_preference_reply(lang="fr")
+    assert "Spark" in text
+    assert "Groq" in text
+    assert "Qwen" in text
+    assert "spark-1" in text
+
+
+def test_llm_preference_reply_english_branch(monkeypatch):
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "llm_provider", "groq")
+    monkeypatch.setattr(settings, "llm_model", "")
+    text = llm_preference_reply(lang="en")
+    assert "Spark" in text
+    assert "défaut" in text  # pas de traduction du fallback -- comportement réel, pas un bug à masquer
+
+
+@pytest.mark.asyncio
+async def test_verify_external_claim_github_pr_count_dependabot(monkeypatch):
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "github_token", "ghp_x")
+    monkeypatch.setattr(settings, "github_owner", "GoldenFarFR")
+
+    class _FakeGitHubClient:
+        def __init__(self, token):
+            pass
+
+        async def count_merged_prs(self, owner, repo, *, author=None, days=7):
+            return 25
+
+    monkeypatch.setattr("aria_core.github_client.GitHubClient", _FakeGitHubClient)
+
+    async def _no_web(query, max_snippets=4):
+        return []
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _no_web)
+
+    reply, meta = await verify_external_claim(
+        "vérifie que dependabot a mergé 25 PRs sur GoldenFarFR/ARIA cette semaine", lang="fr",
+    )
+    assert meta["github_prs"] == 25
+    assert meta["verdict"] == "VRAI"
+    assert "GitHub" in reply
+
+
+@pytest.mark.asyncio
+async def test_verify_external_claim_without_github_token_skips_pr_count(monkeypatch):
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "github_token", "")
+
+    async def _no_web(query, max_snippets=4):
+        return []
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _no_web)
+
+    _reply, meta = await verify_external_claim("vérifie ce PR mergé sur GoldenFarFR/ARIA", lang="fr")
+    assert meta.get("github_prs", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_verify_external_claim_includes_web_snippets(monkeypatch):
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "github_token", "")
+
+    class _Snippet:
+        def __init__(self, text, url):
+            self.text = text
+            self.url = url
+
+    async def _fake_web(query, max_snippets=4):
+        return [_Snippet("Cursor Pro reste à 20$/mois selon leur site", "https://cursor.sh")]
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _fake_web)
+
+    reply, meta = await verify_external_claim("vérifie que cursor pro passe à 49$/mois", lang="fr")
+    assert meta["web_snippets"] == 1
+    assert "cursor.sh" in reply
+
+
+@pytest.mark.asyncio
+async def test_verify_external_claim_english_branch_is_concise(monkeypatch):
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "github_token", "")
+
+    async def _no_web(query, max_snippets=4):
+        return []
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _no_web)
+
+    reply, meta = await verify_external_claim("check this random claim", lang="en")
+    assert "Checked the claim" in reply
+    assert meta["verdict"] in reply
