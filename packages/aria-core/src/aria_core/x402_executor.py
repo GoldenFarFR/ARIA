@@ -38,6 +38,7 @@ côté adaptateur dédié, jamais dans ce module. Zéro appel réseau dans la su
 (``http_fetch_fn``/``balance_fn``/``pay_fn`` toujours des fakes en test)."""
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from dataclasses import dataclass, field
@@ -93,13 +94,42 @@ async def _default_http_fetch(
     return HttpResult(status_code=r.status_code, headers=dict(r.headers), body=r.content)
 
 
-def _extract_payment_requirement(body: bytes) -> dict[str, Any] | None:
-    """Parse défensif du corps 402 (schéma x402 v1 : ``{"accepts": [...]}``, cf.
+def _extract_payment_requirement(
+    body: bytes, headers: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    """Parse défensif du 402 (schéma x402 : ``{"accepts": [...]}``, cf.
     ``services/x402.py::payment_required_response``) -- renvoie le premier ``accepts[0]``
-    si présent et bien formé, sinon ``None`` (dégradation gracieuse, jamais d'exception)."""
+    si présent et bien formé, sinon ``None`` (dégradation gracieuse, jamais d'exception).
+
+    Bug réel corrigé le 17/07 (trouvé en testant 3 fournisseurs réels du catalogue
+    x402 Bazaar) : plusieurs fournisseurs (ottoai, lonestaroracle -- vérifié en
+    direct) ne mettent PAS l'offre dans le corps JSON (souvent vide ``{}`` ou un
+    format custom sans ``accepts``) mais dans un HEADER de réponse
+    ``payment-required``, en base64 -- confirmé conforme au schéma x402 v2
+    standard une fois décodé. Le corps reste tenté EN PREMIER (plus rapide, pas
+    de décodage) ; le header n'est essayé QUE si le corps n'a pas donné de
+    résultat exploitable -- jamais l'inverse, pour ne pas régresser les
+    fournisseurs (ex. Cybercentry) qui utilisent bien le corps."""
     try:
         data = json.loads(body.decode("utf-8"))
-    except Exception:  # noqa: BLE001 — corps illisible, jamais une exception qui remonte
+        accepts = data.get("accepts") if isinstance(data, dict) else None
+        if isinstance(accepts, list) and accepts and isinstance(accepts[0], dict):
+            return accepts[0]
+    except Exception:  # noqa: BLE001 — corps illisible, on retente via le header
+        pass
+
+    header_value = None
+    for key, value in (headers or {}).items():
+        if key.lower() == "payment-required":
+            header_value = value
+            break
+    if not header_value:
+        return None
+    try:
+        padded = header_value + "=" * (-len(header_value) % 4)
+        decoded = base64.b64decode(padded)
+        data = json.loads(decoded.decode("utf-8"))
+    except Exception:  # noqa: BLE001 — header illisible, dégradation gracieuse
         return None
     accepts = data.get("accepts") if isinstance(data, dict) else None
     if not isinstance(accepts, list) or not accepts:
@@ -166,7 +196,7 @@ async def fetch_paid_resource(
             reason=outgoing_pause.blocked_notice("Ce paiement x402"),
         )
 
-    requirement = _extract_payment_requirement(first.body)
+    requirement = _extract_payment_requirement(first.body, first.headers)
     if requirement is None:
         return await _blocked(resource, provider, 0.0, reason="corps 402 illisible/mal formé")
 

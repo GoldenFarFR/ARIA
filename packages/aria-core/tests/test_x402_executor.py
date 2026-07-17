@@ -3,6 +3,7 @@ signature (#202, 16/07). Aucun appel reseau reel : http_fetch_fn/balance_fn/pay_
 toujours des fakes injectes, meme patron que test_agent_wallet_pilot.py."""
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -309,6 +310,85 @@ async def test_real_cybercentry_402_schema_parsed_correctly(monkeypatch):
     assert result.status == "ok"
     assert result.amount_usd == 0.02
     assert result.body == b'{"risk": "low"}'
+
+
+def _payment_required_header(*, amount="50000", pay_to="0xheaderpayto") -> str:
+    """Corps x402 encodé en base64, forme réelle capturée le 17/07 contre
+    macro.lonestaroracle.xyz et x402.ottoai.services (deux fournisseurs réels
+    du catalogue x402 Bazaar) -- le corps JSON lui-même est vide/custom, l'offre
+    complète vit dans ce header ``payment-required``."""
+    payload = json.dumps({
+        "x402Version": 2,
+        "accepts": [{
+            "scheme": "exact", "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": amount, "payTo": pay_to, "maxTimeoutSeconds": 300,
+        }],
+    }).encode("utf-8")
+    return base64.b64encode(payload).decode("ascii")
+
+
+@pytest.mark.asyncio
+async def test_payment_offer_read_from_header_when_body_empty(monkeypatch):
+    """Bug réel corrigé le 17/07 (trouvé en testant 3 fournisseurs réels du
+    catalogue x402 Bazaar) : plusieurs fournisseurs ne mettent PAS l'offre dans
+    le corps JSON (souvent ``{}`` ou un format custom) mais dans le header de
+    réponse ``payment-required``, en base64 -- sans ce correctif, chaque appel
+    réel contre ces fournisseurs échouait avec "corps 402 illisible/mal formé"."""
+    async def fake_fetch(url, *, method="GET", headers=None):
+        if headers and executor.X_PAYMENT_HEADER in headers:
+            return HttpResult(status_code=200, body=b'{"macro": "data"}')
+        return HttpResult(
+            status_code=402, body=b"{}",
+            headers={"payment-required": _payment_required_header(amount="50000", pay_to="0xmacro")},
+        )
+
+    async def sufficient_balance():
+        return 1.0
+
+    async def working_pay(requirement):
+        assert requirement["payTo"] == "0xmacro"
+        return "base64-payment-header"
+
+    result = await executor.fetch_paid_resource(
+        "https://macro.lonestaroracle.xyz/macro", resource="macro-us", provider="lonestaroracle",
+        balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+    )
+    assert result.status == "ok"
+    assert result.amount_usd == 0.05
+    assert result.body == b'{"macro": "data"}'
+
+
+@pytest.mark.asyncio
+async def test_body_accepts_still_preferred_over_header_when_both_present():
+    """Le corps reste tenté en premier -- ne jamais régresser un fournisseur
+    (ex. Cybercentry) qui utilise déjà correctement le corps."""
+    body_offer = _payment_required_body(amount="10000", asset="USDC")
+
+    async def fake_fetch(url, *, method="GET", headers=None):
+        if headers and executor.X_PAYMENT_HEADER in headers:
+            return HttpResult(status_code=200, body=b"ok")
+        return HttpResult(
+            status_code=402, body=body_offer,
+            headers={"payment-required": _payment_required_header(amount="999999", pay_to="0xshouldnotbeused")},
+        )
+
+    async def sufficient_balance():
+        return 5.0
+
+    captured = {}
+
+    async def working_pay(requirement):
+        captured["payTo"] = requirement.get("payTo")
+        return "base64-payment-header"
+
+    result = await executor.fetch_paid_resource(
+        "https://example.com/data", resource="r", provider="p",
+        balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+    )
+    assert result.status == "ok"
+    assert result.amount_usd == 0.01  # celui du corps, pas 0.999999 du header
+    assert captured["payTo"] == "0xrecipient"  # celui du corps
 
 
 @pytest.mark.asyncio
