@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from aria_core.services.goplus import GoPlusClient, TokenSecurity, _tax, _tri
+from aria_core.services.goplus import UNAVAILABLE, GoPlusClient, TokenSecurity, _tax, _tri
 from aria_core.skills.acp_onchain_scan import (
     PairSnapshot,
     TokenScanContext,
@@ -41,6 +41,100 @@ def _client_returning(payload):
 
     c._get_json = fake_get_json  # type: ignore[method-assign]
     return c
+
+
+# ── retry sur le rate-limit déguisé en HTTP 200 (code 4029), 17/07 ────────────
+
+class _FakeResponse:
+    def __init__(self, status_code, payload=None):
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import httpx
+            raise httpx.HTTPStatusError("error", request=None, response=self)
+
+
+class _FakeHttpClient:
+    def __init__(self, responses):
+        self._responses = responses
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def get(self, url, params=None):
+        queue = self._responses[url]
+        return queue.pop(0) if isinstance(queue, list) else queue
+
+
+def _patch_goplus_http(monkeypatch, responses: dict):
+    monkeypatch.setattr(
+        "aria_core.services.goplus.httpx.AsyncClient", lambda **kw: _FakeHttpClient(responses),
+    )
+
+
+def _patch_goplus_no_sleep(monkeypatch):
+    async def _fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("aria_core.services.goplus.asyncio.sleep", _fake_sleep)
+
+
+@pytest.mark.asyncio
+async def test_code_4029_disguised_as_http_200_is_retried_then_succeeds(monkeypatch):
+    """Bug réel trouvé le 17/07 en creusant le faible débit d'achats du test 1M$ :
+    GoPlus signale son rate-limit via un HTTP 200 avec code=4029 dans le corps, pas
+    un vrai HTTP 429 -- sans ce correctif, ce candidat tombait silencieusement en
+    "aucune donnée pour ce contrat" au lieu de retenter."""
+    _patch_goplus_no_sleep(monkeypatch)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    _patch_goplus_http(
+        monkeypatch,
+        {
+            url: [
+                _FakeResponse(200, {"code": 4029, "message": "too many requests"}),
+                _FakeResponse(200, {"code": 4029, "message": "too many requests"}),
+                _FakeResponse(200, ok_payload),
+            ]
+        },
+    )
+
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert security.available is True
+    assert security.is_honeypot is False
+
+
+@pytest.mark.asyncio
+async def test_code_4029_gives_up_after_three_attempts(monkeypatch):
+    _patch_goplus_no_sleep(monkeypatch)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    _patch_goplus_http(
+        monkeypatch,
+        {
+            url: [
+                _FakeResponse(200, {"code": 4029, "message": "too many requests"}),
+                _FakeResponse(200, {"code": 4029, "message": "too many requests"}),
+                _FakeResponse(200, {"code": 4029, "message": "too many requests"}),
+            ]
+        },
+    )
+
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert security.available is False
+    assert UNAVAILABLE in security.error
+    assert "rate limit" in security.error
 
 
 # ── client GoPlus ─────────────────────────────────────────────────────────────

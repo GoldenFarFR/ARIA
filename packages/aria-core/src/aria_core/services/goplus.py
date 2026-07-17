@@ -170,6 +170,27 @@ class GoPlusClient:
                 await asyncio.sleep(0.5 * (2**attempt_429))
                 continue
 
+            # 17/07 -- bug réel trouvé en investiguant le faible débit d'achats du test 1M$ :
+            # GoPlus signale son rate-limit via un HTTP 200 avec {"code":4029,"message":"too
+            # many requests"} dans le corps, PAS un vrai HTTP 429 -- la branche ci-dessus ne se
+            # déclenchait donc jamais pour ce cas précis, confirmé par appel réel (20 candidats
+            # d'affilée : les 9 premiers OK, les 11 suivants code=4029). Sans retry, chaque
+            # candidat touché tombait silencieusement en "aucune donnée pour ce contrat" (faux
+            # négatif de couverture, pas un vrai verdict de sécurité) -- même politique de
+            # backoff que le vrai 429, sur le même compteur `attempt_429`.
+            if response.status_code == 200:
+                try:
+                    probe = response.json()
+                except ValueError:
+                    probe = None
+                if isinstance(probe, dict) and probe.get("code") == 4029:
+                    attempt_429 += 1
+                    if attempt_429 >= 3:
+                        self._record_failure(f"{url} -> code 4029 apres {attempt_429} tentatives")
+                        return None, f"{UNAVAILABLE} (rate limit GoPlus)"
+                    await asyncio.sleep(0.5 * (2**attempt_429))
+                    continue
+
             if response.status_code >= 500:
                 if not retried:
                     retried = True
