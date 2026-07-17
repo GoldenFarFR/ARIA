@@ -360,6 +360,38 @@ async def test_payment_offer_read_from_header_when_body_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_requirement_normalized_with_max_amount_required_and_resource(monkeypatch):
+    """Bug réel corrigé le 17/07 : le SDK x402 officiel (PaymentRequiredV1) exige
+    maxAmountRequired ET resource DANS chaque objet accepts[0] pour signer --
+    le fil x402 v2 réel (macro.lonestaroracle.xyz, vérifié en direct) n'envoie
+    que "amount", sans "resource" à ce niveau. pay_fn doit recevoir les deux."""
+    async def fake_fetch(url, *, method="GET", headers=None):
+        if headers and executor.X_PAYMENT_HEADER in headers:
+            return HttpResult(status_code=200, body=b"ok")
+        return HttpResult(
+            status_code=402, body=b"{}",
+            headers={"payment-required": _payment_required_header(amount="50000", pay_to="0xmacro")},
+        )
+
+    async def sufficient_balance():
+        return 1.0
+
+    captured = {}
+
+    async def working_pay(requirement):
+        captured.update(requirement)
+        return "base64-payment-header"
+
+    await executor.fetch_paid_resource(
+        "https://macro.lonestaroracle.xyz/macro", resource="macro-us", provider="lonestaroracle",
+        balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+    )
+
+    assert captured["maxAmountRequired"] == "50000"
+    assert captured["resource"] == "https://macro.lonestaroracle.xyz/macro"
+
+
+@pytest.mark.asyncio
 async def test_body_accepts_still_preferred_over_header_when_both_present():
     """Le corps reste tenté en premier -- ne jamais régresser un fournisseur
     (ex. Cybercentry) qui utilise déjà correctement le corps."""

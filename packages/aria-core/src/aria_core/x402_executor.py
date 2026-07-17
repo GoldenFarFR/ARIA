@@ -200,6 +200,18 @@ async def fetch_paid_resource(
     if requirement is None:
         return await _blocked(resource, provider, 0.0, reason="corps 402 illisible/mal formé")
 
+    # 17/07 -- bug réel trouvé en testant des fournisseurs x402 v2 réels (Bazaar) :
+    # le SDK Python officiel x402 (x402_cdp_signer.py, PaymentRequiredV1) exige
+    # "maxAmountRequired" (jamais "amount") ET "resource" (l'URL) DANS chaque objet
+    # accepts[0] pour construire la signature -- mais le fil (v2, confirmé en
+    # direct) envoie "amount" sans "resource" à ce niveau (le champ resource vit
+    # au niveau racine du 402, pas par offre). Sans cette normalisation, pay_fn
+    # échouait avec "Field required" sur les deux champs pour CHAQUE fournisseur
+    # v2 -- Cybercentry (v1, a déjà "maxAmountRequired") n'est pas affecté,
+    # setdefault ne touche jamais un champ déjà présent.
+    requirement.setdefault("maxAmountRequired", requirement.get("amount"))
+    requirement.setdefault("resource", url)
+
     amount_usd = _amount_to_usd(requirement)
     if amount_usd is None:
         return await _blocked(
