@@ -13,23 +13,69 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 INBOX_PATH = "docs/aria-learning-inbox"
 TARGET_REPO = "ARIA"
 
+# Trouvé en conditions réelles (17/07, issue #31) : une note écrite le 13/07 décrivant un
+# gap dans vanguard/deploy.sh a été transformée en proposition d'issue GitHub le 17/07 --
+# SANS jamais revérifier que le gap existait encore, alors qu'il avait été corrigé le jour
+# même de l'écriture de la note (la file d'attente traite une note par cycle, dans l'ordre
+# de la liste GitHub, pas par fraîcheur -- un simple backlog suffit à créer ce décalage).
+# `_REFERENCED_PATH_RE`/`_current_file_states` réinjectent l'état RÉEL des fichiers cités
+# entre backticks dans la note (ex. `` `vanguard/deploy.sh` ``) pour que le LLM puisse
+# juger si la note est encore d'actualité avant de la publier, au lieu de lui faire
+# confiance aveuglément sur son seul contenu figé.
+_REFERENCED_PATH_RE = re.compile(r"`([A-Za-z0-9_\-./]+\.[A-Za-z0-9]+)`")
+_MAX_REFERENCED_FILES = 3
+_REFERENCED_FILE_CHARS = 2000
+
 _PROPOSAL_SYSTEM = (
     "Tu es ARIA. On te montre une note brute déposée par l'opérateur, destinée à enrichir "
-    "ta connaissance. Ta tâche : proposer PRÉCISÉMENT comment l'intégrer dans tes vrais "
-    "fichiers de connaissance (knowledge/*.yaml pour les règles/méthodologie, "
-    "truth_ledger/canonical_facts.yaml pour les faits établis) -- JAMAIS dans CLAUDE.md "
-    "(ce fichier ne te concerne pas, il brief Claude Code, pas toi). Rédige une "
-    "proposition d'issue GitHub structurée : Résumé de la note, Fichier(s) cible(s) "
-    "précis, Contenu proposé (extrait exact à ajouter), Risques (contradiction avec un "
-    "fait existant ?). Si la note ne contient rien d'assez concret/vérifiable pour "
-    "devenir une connaissance durable, dis-le clairement (actionable=false) plutôt que "
-    "d'inventer une proposition creuse."
+    "ta connaissance, ET l'état ACTUEL des fichiers qu'elle cite (si trouvés). Ta tâche : "
+    "proposer PRÉCISÉMENT comment l'intégrer dans tes vrais fichiers de connaissance "
+    "(knowledge/*.yaml pour les règles/méthodologie, truth_ledger/canonical_facts.yaml "
+    "pour les faits établis) -- JAMAIS dans CLAUDE.md (ce fichier ne te concerne pas, il "
+    "brief Claude Code, pas toi). Rédige une proposition d'issue GitHub structurée : "
+    "Résumé de la note, Fichier(s) cible(s) précis, Contenu proposé (extrait exact à "
+    "ajouter), Risques (contradiction avec un fait existant ?). Si la note ne contient "
+    "rien d'assez concret/vérifiable pour devenir une connaissance durable, dis-le "
+    "clairement (actionable=false) plutôt que d'inventer une proposition creuse. "
+    "IMPORTANT -- fraîcheur : si l'état actuel des fichiers montré ci-dessous contredit "
+    "ou a déjà résolu ce que décrit la note (ex. la note signale une absence, mais le "
+    "code actuel le contient déjà), la note est OBSOLÈTE -- réponds actionable=false et "
+    "explique brièvement pourquoi dans 'body' plutôt que de proposer une connaissance "
+    "périmée comme si elle était neuve."
 )
+
+
+def _extract_referenced_paths(content: str) -> list[str]:
+    """Chemins entre backticks ressemblant à un fichier réel (ex. `` `vanguard/deploy.sh` ``),
+    dans l'ordre d'apparition, sans doublon -- simple heuristique, pas un parseur de repo."""
+    seen: list[str] = []
+    for match in _REFERENCED_PATH_RE.finditer(content or ""):
+        path = match.group(1)
+        if path not in seen:
+            seen.append(path)
+    return seen
+
+
+async def _current_file_states(github_client, owner: str, paths: list[str]) -> str:
+    """Récupère le contenu ACTUEL (tronqué) des chemins cités par la note, au mieux --
+    un chemin introuvable/mal formé (ex. relatif, hors racine) est silencieusement ignoré,
+    jamais une erreur qui bloque le cycle. Chaîne vide si rien de récupérable."""
+    sections: list[str] = []
+    for path in paths[:_MAX_REFERENCED_FILES]:
+        try:
+            text, _sha = await github_client.get_file_text(owner, TARGET_REPO, path)
+        except Exception:  # noqa: BLE001 -- un chemin cité qui ne resout a rien de reel, jamais fatal
+            continue
+        if not (text or "").strip():
+            continue
+        sections.append(f"--- {path} (état actuel) ---\n{text[:_REFERENCED_FILE_CHARS]}")
+    return "\n\n".join(sections)
 
 
 def knowledge_inbox_enabled() -> bool:
@@ -137,8 +183,18 @@ async def run_knowledge_inbox_cycle(*, llm=None, github_client=None, notifier=No
     if llm is None:
         from aria_core.llm import chat_with_context as llm
 
+    referenced_paths = _extract_referenced_paths(content)
+    current_state = await _current_file_states(github_client, owner, referenced_paths)
+    current_state_block = (
+        f"\n\nÉtat actuel des fichiers cités par la note (vérifie la fraîcheur avant de "
+        f"proposer) :\n\n{current_state}\n"
+        if current_state
+        else ""
+    )
+
     prompt = (
-        f"Note déposée dans {path} :\n\n{content[:4000]}\n\n"
+        f"Note déposée dans {path} :\n\n{content[:4000]}\n"
+        f"{current_state_block}\n"
         'Réponds STRICTEMENT en JSON : {"title": "<titre court>", '
         '"body": "<proposition structurée en markdown>", "actionable": true|false}'
     )

@@ -179,6 +179,125 @@ async def test_cycle_generation_failure_does_not_open_issue(monkeypatch):
     assert fake_client.calls == []
 
 
+def test_extract_referenced_paths_finds_backtick_file_paths():
+    content = "Gap dans `vanguard/deploy.sh` et `deploy-vitrine.sh`, voir `knowledge/x.yaml`."
+    assert ki._extract_referenced_paths(content) == [
+        "vanguard/deploy.sh", "deploy-vitrine.sh", "knowledge/x.yaml",
+    ]
+
+
+def test_extract_referenced_paths_ignores_non_path_backticks():
+    content = "Utilise `grep` pour chercher `TODO` dans le code, pas de fichier ici."
+    assert ki._extract_referenced_paths(content) == []
+
+
+def test_extract_referenced_paths_deduplicates_preserving_order():
+    content = "`a/b.py` puis encore `a/b.py` puis `c/d.py`."
+    assert ki._extract_referenced_paths(content) == ["a/b.py", "c/d.py"]
+
+
+@pytest.mark.asyncio
+async def test_current_file_states_fetches_and_labels_each_path():
+    client = _FakeGitHubClient(files={
+        "vanguard/deploy.sh": ("#!/bin/bash\nblue-green rollback", "sha1"),
+        "deploy-vitrine.sh": ("#!/bin/bash\n.old restore", "sha2"),
+    })
+    result = await ki._current_file_states(
+        client, "GoldenFarFR", ["vanguard/deploy.sh", "deploy-vitrine.sh"],
+    )
+    assert "vanguard/deploy.sh" in result
+    assert "blue-green rollback" in result
+    assert "deploy-vitrine.sh" in result
+    assert ".old restore" in result
+
+
+@pytest.mark.asyncio
+async def test_current_file_states_skips_unfetchable_path_gracefully():
+    class _PartialFailClient(_FakeGitHubClient):
+        async def get_file_text(self, owner, repo, path):
+            if path == "chemin/inexistant.sh":
+                raise RuntimeError("404")
+            return await super().get_file_text(owner, repo, path)
+
+    client = _PartialFailClient(files={"vrai/fichier.sh": ("contenu reel", "sha1")})
+    result = await ki._current_file_states(
+        client, "GoldenFarFR", ["chemin/inexistant.sh", "vrai/fichier.sh"],
+    )
+    assert "chemin/inexistant.sh" not in result
+    assert "contenu reel" in result
+
+
+@pytest.mark.asyncio
+async def test_current_file_states_caps_number_of_files_fetched():
+    client = _FakeGitHubClient(files={
+        f"f{i}.sh": (f"contenu{i}", "sha") for i in range(5)
+    })
+    result = await ki._current_file_states(
+        client, "GoldenFarFR", [f"f{i}.sh" for i in range(5)],
+    )
+    fetched = sum(1 for i in range(5) if f"contenu{i}" in result)
+    assert fetched == ki._MAX_REFERENCED_FILES
+
+
+@pytest.mark.asyncio
+async def test_cycle_prompt_includes_current_file_state_when_note_references_files(monkeypatch):
+    """Reproduit le scenario reel de l'issue #31 : une note cite un fichier precis --
+    l'etat ACTUEL de ce fichier doit atteindre le prompt envoye au LLM."""
+    monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: True)
+    monkeypatch.setenv("ARIA_KNOWLEDGE_INBOX_ENABLED", "1")
+    note_path = "docs/aria-learning-inbox/2026-07-13-rollback-gap.md"
+    fake_client = _FakeGitHubClient(
+        entries=[{"name": "2026-07-13-rollback-gap.md"}],
+        files={
+            note_path: (
+                "Gap trouve : `vanguard/deploy.sh` supprime l'ancien conteneur avant "
+                "health-check, pas de rollback automatique.",
+                "sha1",
+            ),
+            "vanguard/deploy.sh": (
+                "# blue-green par alternance de ports (#154), rollback automatique "
+                "si le health-check echoue avant toute suppression.",
+                "sha2",
+            ),
+        },
+    )
+    captured = {}
+
+    async def llm(prompt, system, max_tokens=700):
+        captured["prompt"] = prompt
+        return json.dumps({
+            "title": "Gap rollback",
+            "body": "La note decrit un gap deja corrige par #154 -- obsolete.",
+            "actionable": False,
+        })
+
+    result = await ki.run_knowledge_inbox_cycle(llm=llm, github_client=fake_client)
+
+    assert "vanguard/deploy.sh" in captured["prompt"]
+    assert "blue-green par alternance de ports" in captured["prompt"]
+    assert result["outcome"] == "not_actionable"
+    assert fake_client.calls == []  # note perimee -> jamais publiee comme issue
+
+
+@pytest.mark.asyncio
+async def test_cycle_prompt_has_no_current_state_block_when_note_cites_nothing(monkeypatch):
+    monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: True)
+    monkeypatch.setenv("ARIA_KNOWLEDGE_INBOX_ENABLED", "1")
+    path = "docs/aria-learning-inbox/idee-generale.md"
+    fake_client = _FakeGitHubClient(
+        entries=[{"name": "idee-generale.md"}],
+        files={path: ("Une idee generale sans fichier cite.", "sha1")},
+    )
+    captured = {}
+
+    async def llm(prompt, system, max_tokens=700):
+        captured["prompt"] = prompt
+        return json.dumps({"title": "t", "body": "b", "actionable": True})
+
+    await ki.run_knowledge_inbox_cycle(llm=llm, github_client=fake_client)
+    assert "État actuel des fichiers cités" not in captured["prompt"]
+
+
 @pytest.mark.asyncio
 async def test_cycle_list_directory_error_is_logged_not_raised(monkeypatch):
     monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: True)
