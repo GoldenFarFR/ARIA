@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from aria_core import paper_trader
+from aria_core.services.dexscreener import token_url
 
 
 def _fmt_price(v) -> str:
@@ -65,6 +66,8 @@ def _render_open(p: dict) -> str:
     close_notes = (p.get("close_notes") or "").strip()
     if close_notes:
         lines.append(f"    Dernière prise de profit partielle : {close_notes}")
+    if p.get("contract"):
+        lines.append(f"    DexScreener : {token_url(p['contract'], chain=p.get('chain') or 'base')}")
     return "\n".join(lines)
 
 
@@ -87,6 +90,8 @@ def _render_closed(p: dict) -> str:
         f"    Pourquoi cette sortie : {close_notes}" if close_notes
         else "    Pourquoi cette sortie : (aucune note — clôture pré-17/07 ou non renseignée)"
     )
+    if p.get("contract"):
+        lines.append(f"    DexScreener : {token_url(p['contract'], chain=p.get('chain') or 'base')}")
     return "\n".join(lines)
 
 

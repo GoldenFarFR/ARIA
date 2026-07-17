@@ -27,6 +27,7 @@ from aria_core.skills.ta_levels import Candle
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.dexscreener.com"
+WEB_BASE_URL = "https://dexscreener.com"
 
 _SOCIAL_LABELS = {
     "twitter": "X (Twitter)",
@@ -175,6 +176,17 @@ async def fetch_token_pairs(contract: str, *, chain: str = "base") -> list[PairS
     if not isinstance(data, list):
         return []
     return [_parse_pair(row) for row in data if isinstance(row, dict)]
+
+
+def token_url(contract: str, *, chain: str = "base") -> str:
+    """URL DexScreener publique (page web, pas l'API) pour ``contract`` sur ``chain`` --
+    17/07, demande opérateur : chaque position ARIA doit être reliée au vrai graphique.
+    Construction pure (aucun appel réseau) : DexScreener utilise le même identifiant de
+    chaîne dans ses URLs web que dans son API (``chain`` tel que déjà stocké sur une
+    position), pas de table de correspondance à maintenir. Forme "adresse du token" (pas
+    une paire précise) -- DexScreener choisit lui-même la paire la plus liquide à
+    afficher, cohérent avec ``_best_pair`` côté scan (liquidité la plus haute)."""
+    return f"{WEB_BASE_URL}/{(chain or 'base').strip().lower()}/{(contract or '').strip().lower()}"
 
 
 async def has_any_pair(contract: str, *, chain: str = "base") -> bool | None:

@@ -760,6 +760,35 @@ def test_format_partial_exit_alert_includes_close_notes():
     assert "Pourquoi : Palier de profit 1/3 atteint : détail précis." in partial
 
 
+def test_format_buy_alert_includes_dexscreener_link():
+    """17/07, demande opérateur : chaque position reliée à son vrai graphique DexScreener."""
+    buy = pt.format_buy_alert(
+        {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000, "chain": "solana"}
+    )
+    assert f"https://dexscreener.com/solana/{A}" in buy
+
+
+def test_format_buy_alert_defaults_to_base_chain_for_dexscreener_link():
+    buy = pt.format_buy_alert({"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000})
+    assert f"https://dexscreener.com/base/{A}" in buy
+
+
+def test_format_sell_alert_includes_dexscreener_link():
+    sell = pt.format_sell_alert(
+        {"symbol": "AAA", "contract": A, "exit_price": 1.5, "pnl_usd": -500, "pnl_pct": -2.0,
+         "close_reason": "invalidation", "chain": "robinhood"}
+    )
+    assert f"https://dexscreener.com/robinhood/{A}" in sell
+
+
+def test_format_partial_exit_alert_includes_dexscreener_link():
+    partial = pt.format_partial_exit_alert(
+        {"symbol": "AAA", "contract": A, "exit_price": 1.5, "pnl_usd": 500, "pnl_pct": 50.0,
+         "close_reason": "palier 1/3", "remaining_qty": 20_000, "chain": "base"}
+    )
+    assert f"https://dexscreener.com/base/{A}" in partial
+
+
 def test_format_position_tracking_alert_empty_list():
     assert pt.format_position_tracking_alert([]) == ""
 
@@ -812,6 +841,8 @@ async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp
     assert act["closed"] == []
     assert len(act["tracked"]) == 1
     assert any("suivi positions ouvertes" in a for a in alerts)
+    # 17/07 -- lien DexScreener présent dans le suivi périodique aussi, pas seulement achat/vente
+    assert any(f"https://dexscreener.com/base/{D}" in a for a in alerts)
 
 
 @pytest.mark.asyncio

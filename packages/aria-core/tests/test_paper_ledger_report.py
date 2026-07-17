@@ -48,6 +48,15 @@ async def test_build_report_shows_open_position_with_thesis(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_build_report_shows_dexscreener_link_for_open_position(tmp_db):
+    """17/07, demande opérateur : chaque position doit être reliée à son vrai graphique."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, chain="solana")
+    text, _machine = await report.build_report()
+    assert f"https://dexscreener.com/solana/{A}" in text
+
+
+@pytest.mark.asyncio
 async def test_build_report_missing_thesis_shows_honest_placeholder(tmp_db):
     """Position ouverte AVANT #197 (thesis jamais renseignée) -- jamais un texte inventé."""
     await pt.reset_portfolio(1_000_000.0)
@@ -75,6 +84,8 @@ async def test_build_report_computes_winrate_and_expectancy_over_closed_trades(t
     assert "GAGNANTE" in text
     assert "PERDANTE" in text
     assert "raison de sortie : invalidation".lower() in text.lower()
+    assert f"https://dexscreener.com/base/{A}" in text
+    assert f"https://dexscreener.com/base/{B}" in text
 
 
 @pytest.mark.asyncio

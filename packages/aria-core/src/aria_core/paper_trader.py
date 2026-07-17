@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from aria_core.paths import aria_db_path
+from aria_core.services.dexscreener import token_url
 
 logger = logging.getLogger(__name__)
 
@@ -574,6 +575,8 @@ def format_buy_alert(pos: dict) -> str:
     thesis = (pos.get("thesis") or "").strip()
     if thesis:
         lines.append(f"Thèse : {thesis[:500]}")
+    if pos.get("contract"):
+        lines.append(f"DexScreener : {token_url(pos['contract'], chain=pos.get('chain') or 'base')}")
     lines.append("Aucun argent réel — preuve de performance en cours.")
     return "\n".join(lines)
 
@@ -614,6 +617,8 @@ def format_position_tracking_alert(
         pnl_pct = (price / entry - 1.0) * 100.0 if entry else 0.0
         sign = "+" if pnl >= 0 else ""
         lines.append(f"{name} : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $")
+        if t.get("contract"):
+            lines.append(f"  {token_url(t['contract'], chain=t.get('chain') or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
 
@@ -631,6 +636,8 @@ def format_sell_alert(closed: dict) -> str:
     notes = (closed.get("close_notes") or "").strip()
     if notes:
         lines.append(f"Pourquoi : {notes}")
+    if closed.get("contract"):
+        lines.append(f"DexScreener : {token_url(closed['contract'], chain=closed.get('chain') or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
 
@@ -649,6 +656,8 @@ def format_partial_exit_alert(partial: dict) -> str:
     notes = (partial.get("close_notes") or "").strip()
     if notes:
         lines.append(f"Pourquoi : {notes}")
+    if partial.get("contract"):
+        lines.append(f"DexScreener : {token_url(partial['contract'], chain=partial.get('chain') or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
 
@@ -865,7 +874,7 @@ async def _run_paper_cycle_locked(
             # dans ce même tour, pour ne jamais dupliquer avec format_sell_alert.
             tracked.append({
                 "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
-                "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price,
+                "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price, "chain": p.get("chain") or "base",
             })
 
             high_water = max(p.get("high_water_price") or p["entry_price"], price)

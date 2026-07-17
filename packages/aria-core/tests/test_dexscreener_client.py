@@ -513,3 +513,17 @@ def test_synthesize_candles_from_pair_degrades_on_impossible_pct_change():
 
     assert all(c.close > 0 for c in candles)
     assert len(candles) == 4  # le point h24 impossible est exclu, les 4 autres restent
+
+
+def test_token_url_builds_web_link_from_chain_and_contract():
+    from aria_core.services.dexscreener import token_url
+
+    assert token_url("0xABCDEF", chain="base") == "https://dexscreener.com/base/0xabcdef"
+    assert token_url("SomeMixedCaseAddr", chain="Solana") == "https://dexscreener.com/solana/somemixedcaseaddr"
+
+
+def test_token_url_defaults_to_base_when_chain_missing():
+    from aria_core.services.dexscreener import token_url
+
+    assert token_url("0xabc", chain="") == "https://dexscreener.com/base/0xabc"
+    assert token_url("0xabc") == "https://dexscreener.com/base/0xabc"
