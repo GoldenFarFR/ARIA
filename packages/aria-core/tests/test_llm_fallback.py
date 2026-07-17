@@ -47,6 +47,33 @@ def test_virtuals_never_uses_groq_llm_api_key():
     assert routes == []
 
 
+def test_grok_direct_route_ignores_virtuals_catalog_llm_model():
+    """17/07, bug réel trouvé en basculant hors de Virtuals (expiration crédits Spark
+    18/07, test bout en bout réel sur le VPS) : ``settings.llm_model`` porte en
+    permanence un ID catalogue Virtuals (ex. "x-ai-grok-4-3", dérivé de
+    ARIA_LLM_MODEL_STANDARD) -- un provider direct (grok/xai) qui hérite de ce
+    réglage envoie ce format à la vraie API x.ai, qui le rejette en 400 "Model not
+    found". ``_route_for_provider`` ne doit proposer ``llm_model`` comme repli QUE
+    pour le provider "virtuals"."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "grok"
+    # ``grok_api_key`` n'existe pas comme champ de settings dédié (ni ici ni dans
+    # app.config.Settings réel, vérifié en prod le 17/07) -- _auth_key_for_provider
+    # retombe sur llm_api_key, comportement RÉEL déjà en place, pas simulé ici.
+    settings.llm_api_key = "xai-real-key"
+    settings.llm_model = "x-ai-grok-4-3"  # ID catalogue Virtuals, jamais un vrai modèle x.ai
+    settings.virtuals_api_key = ""
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes()
+    assert len(routes) == 1
+    assert routes[0].provider == "grok"
+    assert routes[0].model == "grok-4.3"  # DEFAULT_MODELS["grok"], jamais l'ID catalogue
+    assert routes[0].auth_key == "xai-real-key"
+
+
 def test_deepseek_direct_route_no_virtuals_dependency():
     """DeepSeek en provider primaire direct (api.deepseek.com) — indépendant de Virtuals/
     Spark, aucune clé Virtuals nécessaire (16/07, seam relais Spark)."""

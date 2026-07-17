@@ -53,10 +53,12 @@ def _resolve_model(provider: str, explicit: str) -> str:
     # Providers directs (xai/grok/deepseek/openai/...) : jamais l'ID catalogue Virtuals
     # (resolve_primary_llm_model renvoie des formes "x-ai-grok-4-3" propres à Spark) —
     # une vraie API tierce ne connaît pas ce format. Bug latent trouvé le 16/07 en cablant
-    # le relais Spark (aucun appelant direct n'existait encore pour l'exercer).
-    configured = _setting_str("llm_model")
-    if configured and configured not in BANNED_VIRTUALS_PRIMARY_MODELS:
-        return configured
+    # le relais Spark, RÉELLEMENT exercé le 17/07 en basculant hors de Virtuals (test bout
+    # en bout réel sur le VPS -> 400 "Model not found: x-ai-grok-4-3" côté x.ai) : ce
+    # ``configured`` lisait ``settings.llm_model`` directement, qui porte TOUJOURS un ID
+    # catalogue Virtuals dans ce système (dérivé de ARIA_LLM_MODEL_STANDARD) — jamais un
+    # nom de modèle valide pour une vraie API tierce. Supprimé : un provider direct sans
+    # modèle explicite utilise toujours son défaut connu, jamais ce réglage générique.
     return DEFAULT_MODELS.get(p, DEFAULT_MODEL_STANDARD)
 
 
@@ -88,9 +90,17 @@ def _route_for_provider(provider: str, model: str) -> LlmRoute | None:
     p = provider.lower()
     if p in ("", "none"):
         return None
+    # 17/07 -- bug réel trouvé en basculant hors de Virtuals (expiration crédits Spark
+    # 18/07, test bout en bout réel sur le VPS) : ``settings.llm_model`` porte un ID
+    # catalogue Virtuals (ex. "x-ai-grok-4-3") -- ne le proposer comme repli QUE pour le
+    # provider "virtuals" lui-même, jamais pour un provider direct (xai/grok/deepseek/
+    # ollama/...), sinon `_resolve_model` le renvoie tel quel (son 1er check `if model:
+    # return model` ne filtre que `BANNED_VIRTUALS_PRIMARY_MODELS`, pas la forme
+    # catalogue Virtuals) et la vraie API tierce le rejette (400 "Model not found").
+    llm_model_fallback = settings.llm_model if p == "virtuals" else ""
     if p == "ollama":
         base = settings.ollama_base_url.rstrip("/")
-        resolved_model = _resolve_model(p, model or settings.llm_model) or DEFAULT_MODELS["ollama"]
+        resolved_model = _resolve_model(p, model or llm_model_fallback) or DEFAULT_MODELS["ollama"]
         return LlmRoute(p, f"{base}/v1/chat/completions", resolved_model, "ollama")
     url = PROVIDER_URLS.get(p)
     if not url:
@@ -98,7 +108,7 @@ def _route_for_provider(provider: str, model: str) -> LlmRoute | None:
     auth_key = _auth_key_for_provider(p)
     if p != "ollama" and not auth_key:
         return None
-    resolved_model = _resolve_model(p, model or settings.llm_model) or DEFAULT_MODELS.get(
+    resolved_model = _resolve_model(p, model or llm_model_fallback) or DEFAULT_MODELS.get(
         p, "grok-3-mini"
     )
     return LlmRoute(p, url, resolved_model, auth_key)
