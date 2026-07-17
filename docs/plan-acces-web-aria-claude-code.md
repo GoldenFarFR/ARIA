@@ -40,11 +40,15 @@ l'application.
 ## 3. Décision — commandement transféré vers une session VPS
 
 Une session VPS (comme Principal/Secondaire/Research) a un accès réseau direct à
-`http://127.0.0.1:8000` (l'API locale du conteneur `aria-api`, derrière nginx et
-Cloudflare, jamais filtrée). C'est la solution structurelle, pas un contournement :
+l'API locale du conteneur `aria-api`, derrière nginx et Cloudflare, jamais filtrée.
+**Correctif (17/07)** : le port n'est PAS toujours 8000 — le déploiement blue-green
+(`deploy.sh`, #154) alterne 8000⟷8001 à chaque déploiement, et le conteneur actif
+est celui pointé par `/etc/nginx/conf.d/aria-api-upstream.conf` (jamais deviné). Lire
+ce fichier avant de coder le port en dur :
 
 ```bash
-curl -s http://127.0.0.1:8000/api/aria/diagnostics/paper-ledger \
+ACTIVE_PORT="$(grep -oE '127\.0\.0\.1:[0-9]+' /etc/nginx/conf.d/aria-api-upstream.conf | head -1 | cut -d: -f2)"
+curl -s "http://127.0.0.1:${ACTIVE_PORT}/api/aria/diagnostics/paper-ledger" \
   -H "X-Diagnostic-Access: $ARIA_DIAGNOSTIC_TOKEN"
 ```
 
