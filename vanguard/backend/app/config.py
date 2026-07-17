@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     # llm_api_key générique (même doctrine que les autres providers directs -- éviter la
     # confusion de clé déjà constatée sur grok_api_key ce soir).
     openai_api_key: str = ""
+    # 17/07 -- OpenRouter direct (openrouter.ai, déjà câblé en URL/en-têtes) -- agrège de
+    # nombreux providers (Anthropic, DeepSeek, OpenAI, ...) derrière un seul compte payé
+    # en USDC, plutôt que de multiplier les comptes fiat par provider. Clé dédiée, même
+    # doctrine que les autres.
+    openrouter_api_key: str = ""
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"

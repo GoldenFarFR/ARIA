@@ -107,6 +107,8 @@ def _auth_key_for_provider(provider: str) -> str:
         return _setting_str("mistral_api_key") or _setting_str("llm_api_key")
     if p == "openai":
         return _setting_str("openai_api_key") or _setting_str("llm_api_key")
+    if p == "openrouter":
+        return _setting_str("openrouter_api_key") or _setting_str("llm_api_key")
     return _setting_str("llm_api_key")
 
 

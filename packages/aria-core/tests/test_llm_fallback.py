@@ -296,6 +296,27 @@ def test_openai_direct_route_uses_dedicated_key_and_current_default_model():
     assert is_llm_configured() is True
 
 
+def test_openrouter_direct_route_uses_dedicated_key():
+    """17/07 -- OpenRouter agrège plusieurs providers derrière un seul compte payé en
+    USDC (plutôt que multiplier les comptes fiat par provider) -- clé dédiée
+    openrouter_api_key, même doctrine que les autres providers directs."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "openrouter"
+    settings.openrouter_api_key = "or-real-key"
+    settings.llm_api_key = "should-not-win"
+    settings.virtuals_api_key = ""
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes()
+    assert len(routes) == 1
+    assert routes[0].provider == "openrouter"
+    assert routes[0].url == "https://openrouter.ai/api/v1/chat/completions"
+    assert routes[0].auth_key == "or-real-key"
+    assert is_llm_configured() is True
+
+
 def test_groq_only_no_duplicate_fallback():
     settings = get_settings()
     settings.aria_llm_enabled = True
