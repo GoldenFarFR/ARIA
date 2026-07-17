@@ -2585,16 +2585,24 @@ d'un token (flux Txns DexScreener) avec le smart-money déjà scoré par ARIA
 Chantier sécurité distinct de la priorité #194/1M$ (ne la retarde pas, traité en
 parallèle sur demande explicite de l'opérateur). Objectif : empêcher un vol de clé
 SSH (même avec passphrase) de donner accès au VPS, via Duo Security (push bloquant
-à chaque connexion, pas seulement les IP inconnues) + une couche d'escalade
-(SMS/email/Telegram, bannissement IP permanent, déblocage uniquement par commande
-Telegram sans expiration). Contexte complet, décisions actées et plan détaillé en
-12 étapes : **`aria-ops/runbooks/ssh-hardening-duo-pending.md`** (privé, jamais
-dupliqué ici — infra/accès VPS = doctrine "privés, dans aria-ops"). **Rien encore
-exécuté sur le VPS** : en attente (1) de la vérification pare-feu (fail2ban/ufw/
-iptables, lecture seule) et (2) de la création du compte Duo Security par
-l'opérateur (gratuit ≤10 users, hors VPS). L'opérateur n'a pas d'accès VPS direct
-actuellement — l'exécution passera par une session VPS (Principal/Secondaire) sur
-dispatch de la session cloud.
+à chaque connexion, pas seulement les IP inconnues) + un TOTP indépendant
+(`pam_google_authenticator`, offline, sans dépendance cloud) + une couche
+d'escalade (SMS/email/Telegram, bannissement IP permanent, déblocage uniquement
+par commande Telegram sans expiration, TOTP requis dessus). Contexte complet,
+décisions actées et plan détaillé étape par étape :
+**`aria-ops/runbooks/ssh-hardening-duo-pending.md`** (privé, jamais dupliqué ici —
+infra/accès VPS = doctrine "privés, dans aria-ops"). **Rien encore exécuté sur le
+VPS** : en attente (1) de la vérification pare-feu (fail2ban/ufw/iptables, lecture
+seule) et (2) de la création du compte Duo Security par l'opérateur (gratuit ≤10
+users, hors VPS). L'opérateur n'a pas d'accès VPS direct actuellement —
+l'exécution passera par une session VPS (Principal/Secondaire) sur dispatch de la
+session cloud.
+
+## Backlog basse priorité — audit sécurité non-SSH (site web/app)
+Signalé le 17/07 en marge du durcissement SSH ci-dessus : le dispositif Duo/TOTP
+protège la porte SSH, pas une éventuelle faille côté app web exposée, dépendances,
+ou secrets ailleurs que dans la clé SSH. **À traiter quand l'opérateur a le temps
+— pas urgent, pas de délai fixé, ne bloque rien d'autre.**
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
