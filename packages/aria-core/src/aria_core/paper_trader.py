@@ -54,6 +54,18 @@ TP_QTY_EPSILON = 1e-9         # reliquat négligeable après le dernier palier -
 # cadence heartbeat change un jour sans qu'il faille retoucher cette constante.
 TRACKING_ALERT_MIN_INTERVAL_MINUTES = 30
 
+# 17/07 -- demande opérateur explicite après une perte réelle : "une position doit être
+# achetée 1 seule fois sauf si cas extrême de très très bons signaux". Constaté en
+# conditions réelles le jour même : BRIAN rachetée 2 fois de suite après deux stop suiveur
+# (19-22 min d'écart), -18 561 $ cumulés sur les 3 entrées -- rien n'empêchait de racheter
+# un contrat dont ARIA venait tout juste de se faire sortir. Barre volontairement bien plus
+# haute que l'entrée normale (R/R >= 1.5 + au moins 1 signal technique, cf. momentum_entry.py)
+# -- double R/R + alignement technique COMPLET (les 3 signaux à la fois, pas "au moins un").
+# Un analyzer qui ne fournit ni "rr" ni "align_score" (ex. l'ancien pilote VC-thesis) est
+# bloqué par défaut -- absence de preuve d'un signal extrême, jamais traité comme extrême.
+REENTRY_RR_MIN = 3.0
+REENTRY_ALIGN_SCORE_MIN = 3
+
 _POS_FIELDS = (
     "id", "contract", "symbol", "cost_usd", "entry_price", "qty",
     "target_price", "invalidation_price", "opened_at", "status",
@@ -324,6 +336,15 @@ async def _get_open(contract: str) -> dict | None:
 
 async def has_open(contract: str) -> bool:
     return (await _get_open(contract)) is not None
+
+
+async def _has_prior_close(contract: str) -> bool:
+    """Le contrat a-t-il déjà eu AU MOINS une position clôturée (gain ou perte, peu
+    importe la raison -- stop suiveur, invalidation, palier de profit, re-scan sécurité) ?
+    Réutilise ``list_positions_for_contract`` (aucune requête dupliquée) -- distinct de
+    ``has_open`` qui ne regarde que le présent, jamais l'historique."""
+    positions = await list_positions_for_contract(contract)
+    return any(p["status"] == "closed" for p in positions)
 
 
 async def cash_available() -> float:
@@ -1116,6 +1137,26 @@ async def _run_paper_cycle_locked(
             reason_code = sig.get("hold_reason") or "unspecified"
             funnel[reason_code] = funnel.get(reason_code, 0) + 1
             continue
+
+        # 17/07 -- une position déjà clôturée une fois sur ce contrat ne se rachète pas par
+        # défaut (demande opérateur explicite, cf. REENTRY_RR_MIN ci-dessus) -- seule une
+        # nouvelle preuve de signal EXTRÊME (pas juste "encore positif") l'autorise.
+        if await _has_prior_close(contract):
+            rr = sig.get("rr")
+            align_score = sig.get("align_score")
+            is_extreme = (
+                rr is not None and rr >= REENTRY_RR_MIN
+                and align_score is not None and align_score >= REENTRY_ALIGN_SCORE_MIN
+            )
+            if not is_extreme:
+                funnel["reentry_blocked_not_extreme"] = funnel.get("reentry_blocked_not_extreme", 0) + 1
+                continue
+            sig.setdefault("reasons", []).append(
+                f"re-entrée exceptionnelle autorisée après une clôture précédente -- "
+                f"R/R {rr:.1f} >= {REENTRY_RR_MIN:.1f} et alignement technique complet "
+                f"({align_score}/{REENTRY_ALIGN_SCORE_MIN})"
+            )
+
         price = sig.get("price")
         if not price:
             try:

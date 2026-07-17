@@ -484,6 +484,11 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
         "target": signal.target,
         "invalidation": signal.invalidation,
         "rr": signal.rr,
+        # 17/07 -- exposé pour que paper_trader.py puisse juger une éventuelle re-entrée
+        # (demande opérateur explicite : "une position doit être achetée 1 seule fois sauf
+        # si cas extrême de très très bons signaux") -- ce module ne connaît pas l'historique
+        # du portefeuille, seule la force du signal technique lui appartient.
+        "align_score": align_score,
         "reasons": reasons,
         "hold_reason": hold_reason,
     }

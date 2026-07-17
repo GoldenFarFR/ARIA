@@ -182,6 +182,96 @@ async def test_run_paper_cycle_omits_funnel_key_when_nothing_evaluated(tmp_db):
     assert "momentum_funnel" not in act
 
 
+# ── garde-fou de re-entrée (17/07, perte réelle BRIAN -- "une position doit être achetée
+# 1 seule fois sauf si cas extrême de très très bons signaux") ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_reentry_blocked_after_prior_close_with_normal_signal(tmp_db):
+    """Un contrat déjà clôturé une fois ne se rachète pas sur un signal simplement
+    positif (celui qui aurait suffi pour une PREMIÈRE entrée) -- cas réel BRIAN."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.close_position(A, 0.8, reason="stop suiveur")
+
+    async def normal_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 0.9, "rr": 1.6, "align_score": 1}
+
+    async def price_lookup(contract):
+        return 0.9
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert act["opened"] == []
+    assert act["momentum_funnel"] == {"reentry_blocked_not_extreme": 1}
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_reentry_allowed_after_prior_close_with_extreme_signal(tmp_db):
+    """Un signal EXTRÊME (R/R doublé + alignement technique complet) débloque la
+    re-entrée -- l'exception nommée par l'opérateur, pas une porte toujours fermée."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.close_position(A, 0.8, reason="stop suiveur")
+
+    async def extreme_signal(contract):
+        return {
+            "action": "BUY", "symbol": "AAA", "price": 0.9,
+            "rr": pt.REENTRY_RR_MIN, "align_score": pt.REENTRY_ALIGN_SCORE_MIN,
+            "reasons": ["setup exceptionnel"],
+        }
+
+    async def price_lookup(contract):
+        return 0.9
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=extreme_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert len(act["opened"]) == 1
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_reentry_blocked_by_default_when_analyzer_omits_signal_strength(tmp_db):
+    """Un analyzer qui ne fournit ni "rr" ni "align_score" (ex. l'ancien pilote
+    VC-thesis) est bloqué par défaut sur une re-entrée -- absence de preuve d'un
+    signal extrême, jamais traitée comme une preuve d'extrême."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.close_position(A, 1.2, reason="cible")  # même une SORTIE GAGNANTE ne rouvre pas la porte
+
+    async def these_only_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 1.3, "these": "nouvelle thèse VC"}
+
+    async def price_lookup(contract):
+        return 1.3
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=these_only_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert act["opened"] == []
+    assert act["momentum_funnel"] == {"reentry_blocked_not_extreme": 1}
+
+
+@pytest.mark.asyncio
+async def test_first_entry_unaffected_by_reentry_gate(tmp_db):
+    """Non-régression : un contrat JAMAIS clôturé auparavant s'ouvre normalement sur
+    un signal simplement positif -- le garde-fou ne concerne que les re-entrées."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def normal_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 0.9, "rr": 1.6, "align_score": 1}
+
+    async def price_lookup(contract):
+        return 0.9
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert len(act["opened"]) == 1
+
+
 @pytest.mark.asyncio
 async def test_all_tp_stages_hit_in_one_jump_closes_fully(tmp_db):
     """Un bond de prix qui dépasse TOUS les paliers d'un coup ne laisse jamais une
