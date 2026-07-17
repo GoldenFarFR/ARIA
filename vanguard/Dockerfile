@@ -26,7 +26,11 @@ COPY packages/aria-core /packages/aria-core
 # explicite ("je veux tous voir"). Lecture seule ici (usdc_balance_usd/
 # list_all_token_balances) : n'active PAS l'execution (swap/transfert restent
 # gates separement OFF par defaut, cf. CLAUDE.md).
-RUN pip install --no-cache-dir "/packages/aria-core[agent_wallet]"
+# extra x402 (17/07, #199) : le package `x402` (x402_cdp_signer.py, construction
+# du header de paiement) n'etait pas installe -- meme categorie de bug que
+# `[agent_wallet]` avant sa correction (#204) : extra jamais ajoute au build,
+# trouve en testant le tout premier vrai paiement x402 en conditions reelles.
+RUN pip install --no-cache-dir "/packages/aria-core[agent_wallet,x402]"
 
 # Chromium headless (Playwright) : captures d'ecran reelles du site pour ux_watch
 # (tache #155, skills/ux_watch.py) -- +300-500 Mo mesures, accepte tel quel (decision
