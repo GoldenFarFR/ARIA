@@ -7,6 +7,14 @@ https://cybercentry.gitbook.io/cybercentry/documents/x402-cybercentry —
 `ethereum-token-verification` était en panne (502 Railway) au moment du test,
 `wallet-verification` répond correctement, câblé en premier ici. Les autres
 endpoints (Solidity/Solana/token) suivent le même patron si besoin un jour.
+Retesté le 17/07 (session suivante) : `ethereum-token-verification` toujours
+indisponible -- mode de panne différent cette fois (TCP/TLS ouvert, requête
+envoyée, aucune réponse, timeout après 15s -- pas un 502 immédiat), pendant que
+`wallet-verification` répond toujours correctement (402) sur la même infra
+Railway au même instant. Confirme que ce n'est ni un blocage réseau/allowlist
+côté ARIA ni une panne Cybercentry globale -- ce service précis reste cassé.
+Ne pas construire `verify_and_remember_token` avant qu'un nouveau test confirme
+une vraie réponse (402 ou 200), pour ne pas coder contre une API injoignable.
 
 Chaque appel passe par `x402_executor.fetch_paid_resource` (plafond hebdo
 `x402_budget`, coupe-circuit `/stop`, wallet CDP dédié) -- aucune clé, aucun
