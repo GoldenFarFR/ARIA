@@ -103,6 +103,106 @@ async def test_outgoing_transfer_classified_known_when_tx_hash_matches(monkeypat
     assert result[0].classification == "known"
 
 
+# ── corrélation x402 (17/07) -- bug réel : le tout premier paiement x402 réel
+# (Cybercentry, 0,02$) a déclenché une fausse alerte "SORTIE NON INITIÉE PAR
+# ARIA" car x402_cdp_signer.py ne journalise jamais dans agent_wallet_log ────
+
+
+@pytest.mark.asyncio
+async def test_outgoing_transfer_classified_known_x402_when_correlated(monkeypatch):
+    """Le cas réel vécu : même destinataire, même montant, dans la fenêtre de
+    temps -- doit être reconnu comme un paiement x402 d'ARIA, pas une sortie
+    suspecte, même sans tx_hash correspondant dans agent_wallet_log."""
+    transfer = TokenTransfer(
+        tx_hash="0xcybercentrypayment", from_address=WALLET,
+        to_address="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.02, timestamp="2026-07-17T16:43:55+00:00",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    known_x402_spends = [{
+        "pay_to": "0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+        "amount_usd": 0.02, "status": "ok",
+        "created_at": "2026-07-17T16:43:52.325464+00:00",
+    }]
+
+    result = await monitor.check_wallet_activity(
+        wallet_address=WALLET, known_x402_spends=known_x402_spends,
+    )
+
+    assert len(result) == 1
+    assert result[0].classification == "known_x402"
+
+
+@pytest.mark.asyncio
+async def test_outgoing_transfer_not_correlated_when_amount_differs(monkeypatch):
+    transfer = TokenTransfer(
+        tx_hash="0xoutflow2", from_address=WALLET,
+        to_address="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=50.0, timestamp="2026-07-17T16:43:55+00:00",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    known_x402_spends = [{
+        "pay_to": "0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+        "amount_usd": 0.02, "status": "ok",
+        "created_at": "2026-07-17T16:43:52.325464+00:00",
+    }]
+
+    result = await monitor.check_wallet_activity(
+        wallet_address=WALLET, known_x402_spends=known_x402_spends,
+    )
+
+    assert result[0].classification == "unexpected_outflow"
+
+
+@pytest.mark.asyncio
+async def test_outgoing_transfer_not_correlated_when_outside_time_window(monkeypatch):
+    transfer = TokenTransfer(
+        tx_hash="0xoutflow3", from_address=WALLET,
+        to_address="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.02, timestamp="2026-07-17T20:00:00+00:00",  # >30 min plus tard
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    known_x402_spends = [{
+        "pay_to": "0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+        "amount_usd": 0.02, "status": "ok",
+        "created_at": "2026-07-17T16:43:52.325464+00:00",
+    }]
+
+    result = await monitor.check_wallet_activity(
+        wallet_address=WALLET, known_x402_spends=known_x402_spends,
+    )
+
+    assert result[0].classification == "unexpected_outflow"
+
+
+def test_matches_known_x402_false_on_unparseable_timestamp():
+    """Doute -> jamais de correspondance (fail-closed vers l'alerte, pas vers le
+    silence) -- même doctrine que le reste du module."""
+    assert monitor._matches_known_x402(
+        counterparty="0xabc", amount=0.02, timestamp="pas une date",
+        known_x402_spends=[{"pay_to": "0xabc", "amount_usd": 0.02, "created_at": "2026-07-17T16:43:52Z"}],
+    ) is False
+
+
+def test_format_movement_alert_known_x402_uses_dedicated_label():
+    from aria_core.agent_wallet_monitor import WalletMovement, format_movement_alert
+
+    msg = format_movement_alert(WalletMovement(
+        tx_hash="0xabc", direction="out", asset="USDC", amount=0.02,
+        counterparty="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6", classification="known_x402",
+    ))
+    assert "Paiement x402 initié par ARIA (attendu)" in msg
+
+
 @pytest.mark.asyncio
 async def test_fake_eth_erc20_homoglyph_flagged_suspicious(monkeypatch):
     """Trouvé en conditions réelles (17/07) : un token ERC-20 nommé "EṬH" (T à

@@ -122,10 +122,65 @@ async def _record_movement(m: WalletMovement) -> None:
         await db.commit()
 
 
-def _classify(tx_hash: str, direction: str, known_tx_hashes: set[str]) -> str:
+# 17/07 -- fenêtre de tolérance pour corréler un mouvement on-chain détecté à un
+# paiement x402 déjà journalisé (signature -> règlement -> indexation Blockscout
+# introduit un délai réel, jamais instantané) -- généreuse mais bornée, jamais
+# assez large pour rapprocher deux paiements sans rapport.
+_X402_MATCH_WINDOW_MINUTES = 30
+_X402_MATCH_AMOUNT_EPSILON = 0.001  # USDC -- tolère l'arrondi flottant, pas plus
+
+
+def _parse_timestamp(value: str | None):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _matches_known_x402(
+    *, counterparty: str, amount: float, timestamp: str | None, known_x402_spends: list[dict],
+) -> bool:
+    """Un mouvement de sortie correspond à un paiement x402 déjà journalisé (même
+    destinataire, même montant à l'arrondi près, dans la fenêtre de temps) --
+    échoue TOUJOURS vers "pas de correspondance" en cas de doute (donnée manquante,
+    timestamp illisible) : mieux vaut un faux positif d'alerte qu'un faux négatif
+    silencieux, même doctrine que le reste de ce module."""
+    counterparty_lower = (counterparty or "").lower()
+    if not counterparty_lower:
+        return False
+    movement_ts = _parse_timestamp(timestamp)
+    if movement_ts is None:
+        return False
+    for spend in known_x402_spends:
+        if (spend.get("pay_to") or "").lower() != counterparty_lower:
+            continue
+        if abs(float(spend.get("amount_usd") or 0.0) - amount) > _X402_MATCH_AMOUNT_EPSILON:
+            continue
+        spend_ts = _parse_timestamp(spend.get("created_at"))
+        if spend_ts is None:
+            continue
+        if abs((movement_ts - spend_ts).total_seconds()) <= _X402_MATCH_WINDOW_MINUTES * 60:
+            return True
+    return False
+
+
+def _classify(
+    tx_hash: str, direction: str, known_tx_hashes: set[str],
+    *, counterparty: str = "", amount: float = 0.0, timestamp: str | None = None,
+    known_x402_spends: list[dict] | None = None,
+) -> str:
     if tx_hash in known_tx_hashes:
         return "known"
-    return "external_deposit" if direction == "in" else "unexpected_outflow"
+    if direction == "in":
+        return "external_deposit"
+    if known_x402_spends and _matches_known_x402(
+        counterparty=counterparty, amount=amount, timestamp=timestamp,
+        known_x402_spends=known_x402_spends,
+    ):
+        return "known_x402"
+    return "unexpected_outflow"
 
 
 # Adresses officielles des SEULS actifs que l'opérateur suit par NOM dans les alertes
@@ -186,6 +241,7 @@ async def list_recent_movements(limit: int = 100) -> list[dict]:
 
 async def check_wallet_activity(
     *, wallet_address: str, chain: str = "base", known_tx_hashes: set[str] | None = None,
+    known_x402_spends: list[dict] | None = None,
 ) -> list[WalletMovement]:
     """Interroge Blockscout (lecture seule) pour les transferts USDC (ERC-20) ET
     les mouvements ETH natifs récents de ``wallet_address``, journalise chaque
@@ -196,9 +252,15 @@ async def check_wallet_activity(
 
     ``known_tx_hashes`` : hashes déjà journalisés par ``agent_wallet_log``
     (transactions initiées par ARIA elle-même, ok uniquement) -- typiquement
-    ``{row['tx_hash'] for row in await agent_wallet_log.list_transactions() if row['status'] == 'ok'}``."""
+    ``{row['tx_hash'] for row in await agent_wallet_log.list_transactions() if row['status'] == 'ok'}``.
+
+    ``known_x402_spends`` (17/07) : dépenses x402 réglées (``status='ok'``) --
+    typiquement ``await x402_budget.list_spends()`` filtré -- corrélées par
+    destinataire+montant+fenêtre de temps (pas par ``tx_hash``, jamais garanti
+    disponible côté payeur dans le protocole x402, cf. ``_matches_known_x402``)."""
     await _ensure_table()
     known_tx_hashes = known_tx_hashes or set()
+    known_x402_spends = known_x402_spends or []
     address_lower = wallet_address.lower()
     client = get_blockscout_client(chain)
     fresh: list[WalletMovement] = []
@@ -213,7 +275,11 @@ async def check_wallet_activity(
             direction = "in" if (t.to_address or "").lower() == address_lower else "out"
             counterparty = (t.from_address if direction == "in" else t.to_address) or ""
             asset_label = t.token_symbol or "token"
-            classification = _classify(t.tx_hash, direction, known_tx_hashes)
+            classification = _classify(
+                t.tx_hash, direction, known_tx_hashes,
+                counterparty=counterparty, amount=t.amount or 0.0, timestamp=t.timestamp,
+                known_x402_spends=known_x402_spends,
+            )
             lookalike = _lookalike_target(t.token_symbol, t.token_address)
             if lookalike:
                 asset_label = f"{asset_label} (FAUX {lookalike} -- contrat non officiel)"
@@ -361,7 +427,7 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     if not agent_wallet_monitor_enabled():
         return {"outcome": "skipped_disabled"}
 
-    from aria_core import agent_wallet_log, outgoing_pause
+    from aria_core import agent_wallet_log, outgoing_pause, x402_budget
 
     try:
         logged = await agent_wallet_log.list_transactions(limit=500)
@@ -371,8 +437,16 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     known_tx_hashes = {row["tx_hash"] for row in logged if row.get("status") == "ok" and row.get("tx_hash")}
 
     try:
+        x402_spends = await x402_budget.list_spends()
+    except Exception as exc:  # noqa: BLE001 -- une panne du log x402 ne doit jamais bloquer la surveillance
+        x402_spends = []
+        logger.warning("agent_wallet_monitor: lecture x402_budget echouee: %s", exc)
+    known_x402_spends = [s for s in x402_spends if s.get("status") == "ok" and s.get("pay_to")]
+
+    try:
         movements = await check_wallet_activity(
             wallet_address=MONITORED_WALLET_ADDRESS, known_tx_hashes=known_tx_hashes,
+            known_x402_spends=known_x402_spends,
         )
     except Exception as exc:  # noqa: BLE001 -- jamais casser le heartbeat sur une panne de lecture
         return {"outcome": "error", "error": str(exc)[:300]}
@@ -401,13 +475,14 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
 def format_movement_alert(m: WalletMovement) -> str:
     icon = {
         "known": "✅", "external_deposit": "💰", "unexpected_outflow": "🚨",
-        "suspicious_token": "🎣",
+        "suspicious_token": "🎣", "known_x402": "🧾",
     }.get(m.classification, "•")
     label = {
         "known": "Mouvement initié par ARIA (attendu)",
         "external_deposit": "Dépôt externe détecté",
         "unexpected_outflow": "SORTIE NON INITIÉE PAR ARIA — à vérifier immédiatement",
         "suspicious_token": "TOKEN SUSPECT — imite un actif suivi, PAS un dépôt réel, ne jamais interagir avec ce contrat",
+        "known_x402": "Paiement x402 initié par ARIA (attendu)",
     }.get(m.classification, m.classification)
     direction_label = "Entrée" if m.direction == "in" else "Sortie"
     counterparty_label = "De" if m.direction == "in" else "Vers"

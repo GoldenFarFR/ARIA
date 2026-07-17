@@ -42,6 +42,18 @@ _COLUMNS = [
     "status",
     "reason",
     "created_at",
+    "pay_to",
+]
+
+# 17/07 -- ajouté après un vrai faux positif de agent_wallet_monitor.py (une alerte
+# "SORTIE NON INITIÉE PAR ARIA" sur le tout premier paiement x402 réel, jamais
+# reconnu comme "known" car x402_cdp_signer.py ne passe pas par agent_wallet_log).
+# `pay_to` (adresse de règlement du 402, déjà connue au moment de record_spend --
+# jamais un nouvel appel réseau) permet au moniteur de corréler un mouvement
+# on-chain détecté à une dépense x402 déjà journalisée, sans dépendre d'un
+# éventuel header X-PAYMENT-RESPONSE (optionnel dans le protocole, jamais garanti).
+_ADDED_COLUMNS = [
+    ("pay_to", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -56,10 +68,18 @@ async def _ensure_table() -> None:
                 amount_usd REAL NOT NULL DEFAULT 0,
                 status TEXT NOT NULL,
                 reason TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                pay_to TEXT NOT NULL DEFAULT ''
             )
             """
         )
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(x402_spend_log)")).fetchall()
+        }
+        for name, ddl in _ADDED_COLUMNS:
+            if name not in existing:
+                await db.execute(f"ALTER TABLE x402_spend_log ADD COLUMN {name} {ddl}")
         await db.commit()
 
 
@@ -111,18 +131,21 @@ async def record_spend(
     amount_usd: float,
     status: str,
     reason: str = "",
+    pay_to: str = "",
 ) -> None:
     """Enregistre une tentative de paiement x402 (``status`` in {"ok", "blocked",
-    "failed"}) -- jamais seulement les succès, un refus de plafond doit rester tracé."""
+    "failed"}) -- jamais seulement les succès, un refus de plafond doit rester tracé.
+    ``pay_to`` (17/07) : adresse de règlement déclarée par le 402, pour corrélation
+    par ``agent_wallet_monitor.py`` (cf. commentaire sur ``_ADDED_COLUMNS``)."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
-            INSERT INTO x402_spend_log (resource, provider, amount_usd, status, reason, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO x402_spend_log (resource, provider, amount_usd, status, reason, created_at, pay_to)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (resource, provider, amount_usd, status, reason, now),
+            (resource, provider, amount_usd, status, reason, now, pay_to),
         )
         await db.commit()
 

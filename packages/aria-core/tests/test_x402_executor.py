@@ -257,6 +257,8 @@ async def test_successful_payment_returns_ok_and_records_spend():
     assert spends[0]["resource"] == "premium-data"
     assert spends[0]["provider"] == "acme"
     assert spends[0]["amount_usd"] == 0.01
+    # 17/07 -- pay_to journalisé (corrélation agent_wallet_monitor.py)
+    assert spends[0]["pay_to"] == "0xrecipient"
 
 
 def _real_cybercentry_402_body() -> bytes:

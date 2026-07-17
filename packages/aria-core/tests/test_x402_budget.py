@@ -105,3 +105,23 @@ async def test_list_spends_order_most_recent_first():
     await budget.record_spend(resource="r2", amount_usd=0.5, status="ok")
     rows = await budget.list_spends()
     assert [r["resource"] for r in rows] == ["r2", "r1"]
+
+
+@pytest.mark.asyncio
+async def test_record_spend_persists_pay_to():
+    """17/07 -- pay_to permet à agent_wallet_monitor.py de corréler un mouvement
+    on-chain à ce paiement (cf. le faux positif réel qui a motivé cet ajout)."""
+    await budget.record_spend(
+        resource="wallet-verification", provider="cybercentry", amount_usd=0.02,
+        status="ok", pay_to="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+    )
+    rows = await budget.list_spends()
+    assert rows[0]["pay_to"] == "0xfEE13309251B632317ea2d475d6ABa7E7E0219e6"
+
+
+@pytest.mark.asyncio
+async def test_record_spend_pay_to_defaults_empty_no_regression():
+    """Les appelants existants (aucun pay_to fourni) ne cassent pas."""
+    await budget.record_spend(resource="r1", amount_usd=0.5, status="ok")
+    rows = await budget.list_spends()
+    assert rows[0]["pay_to"] == ""

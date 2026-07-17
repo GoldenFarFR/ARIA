@@ -177,17 +177,26 @@ async def fetch_paid_resource(
             reason=f"actif non supporté ou montant illisible ({requirement.get('asset')!r})",
         )
 
+    # 17/07 -- adresse de règlement du 402, déjà connue ici (aucun appel réseau
+    # supplémentaire) : journalisée avec chaque tentative pour qu'agent_wallet_monitor.py
+    # puisse corréler un mouvement on-chain détecté à un paiement x402 déjà connu
+    # (cf. commentaire x402_budget.py::_ADDED_COLUMNS -- trouvé après un vrai faux
+    # positif "SORTIE NON INITIÉE PAR ARIA" sur le tout premier paiement réel).
+    pay_to = str(requirement.get("payTo") or "")
+
     network = str(requirement.get("network") or "").lower()
     if network not in _ALLOWED_NETWORKS:
         return await _blocked(
             resource, provider, amount_usd,
             reason=f"réseau non autorisé ({network!r}) -- jamais signer hors de l'allowlist",
+            pay_to=pay_to,
         )
 
     if not await x402_budget.can_spend(amount_usd):
         return await _blocked(
             resource, provider, amount_usd,
             reason=f"plafond hebdomadaire x402 dépassé ({amount_usd}$ demandé)",
+            pay_to=pay_to,
         )
 
     try:
@@ -196,16 +205,19 @@ async def fetch_paid_resource(
         return await _blocked(
             resource, provider, amount_usd,
             reason=f"solde réel indisponible (fail-closed) : {exc}",
+            pay_to=pay_to,
         )
     if balance_usd is None:
         return await _blocked(
             resource, provider, amount_usd,
             reason="solde réel indisponible (fail-closed) : balance_fn a renvoyé None",
+            pay_to=pay_to,
         )
     if amount_usd > balance_usd:
         return await _blocked(
             resource, provider, amount_usd,
             reason=f"montant {amount_usd}$ > solde réel {balance_usd}$",
+            pay_to=pay_to,
         )
 
     try:
@@ -213,7 +225,7 @@ async def fetch_paid_resource(
     except Exception as exc:  # noqa: BLE001
         await x402_budget.record_spend(
             resource=resource, provider=provider, amount_usd=amount_usd,
-            status="failed", reason=f"signature échouée : {exc}",
+            status="failed", reason=f"signature échouée : {exc}", pay_to=pay_to,
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
 
@@ -222,14 +234,14 @@ async def fetch_paid_resource(
     except Exception as exc:  # noqa: BLE001
         await x402_budget.record_spend(
             resource=resource, provider=provider, amount_usd=amount_usd,
-            status="failed", reason=f"requête payée échouée : {exc}",
+            status="failed", reason=f"requête payée échouée : {exc}", pay_to=pay_to,
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
 
     if paid.status_code == 402:
         await x402_budget.record_spend(
             resource=resource, provider=provider, amount_usd=amount_usd,
-            status="failed", reason="toujours 402 après paiement (règlement refusé)",
+            status="failed", reason="toujours 402 après paiement (règlement refusé)", pay_to=pay_to,
         )
         return X402ExecutionResult(
             status="failed", reason="toujours 402 après paiement", amount_usd=amount_usd,
@@ -237,7 +249,7 @@ async def fetch_paid_resource(
         )
 
     await x402_budget.record_spend(
-        resource=resource, provider=provider, amount_usd=amount_usd, status="ok",
+        resource=resource, provider=provider, amount_usd=amount_usd, status="ok", pay_to=pay_to,
     )
     return X402ExecutionResult(
         status="ok", amount_usd=amount_usd, http_status=paid.status_code, body=paid.body,
@@ -245,11 +257,11 @@ async def fetch_paid_resource(
 
 
 async def _blocked(
-    resource: str, provider: str, amount_usd: float, *, reason: str
+    resource: str, provider: str, amount_usd: float, *, reason: str, pay_to: str = "",
 ) -> X402ExecutionResult:
     logger.warning("x402 paiement bloqué (%s) : %s", resource, reason)
     await x402_budget.record_spend(
         resource=resource, provider=provider, amount_usd=amount_usd,
-        status="blocked", reason=reason,
+        status="blocked", reason=reason, pay_to=pay_to,
     )
     return X402ExecutionResult(status="blocked", reason=reason, amount_usd=amount_usd)
