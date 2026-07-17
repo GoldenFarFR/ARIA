@@ -309,3 +309,160 @@ async def test_verify_external_claim_english_branch_is_concise(monkeypatch):
     reply, meta = await verify_external_claim("check this random claim", lang="en")
     assert "Checked the claim" in reply
     assert meta["verdict"] in reply
+
+
+# ── Raisonnement LLM réel sur les preuves (correctif 17/07) ─────────────────────
+#
+# Bug trouvé par VPS Research puis corrigé : l'ancienne version de verify_external_claim
+# décidait le verdict via une liste figée de ~5 groupes de mots-clés matchés contre la
+# CLAIM elle-même — jamais contre le contenu de web_bits/github_detail réellement
+# récupéré. Les tests ci-dessous verrouillent le nouveau comportement : le verdict
+# dépend du CONTENU des preuves, pas des mots de la claim (test de régression direct :
+# la même claim + deux preuves opposées doivent produire deux verdicts opposés).
+
+
+class _FakeSnippet:
+    def __init__(self, text: str, url: str = ""):
+        self.text = text
+        self.url = url
+
+
+@pytest.mark.asyncio
+async def test_verify_external_claim_reasons_false_when_evidence_contradicts(monkeypatch):
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "github_token", "")
+
+    async def _fake_web(query, max_snippets=4):
+        return [_FakeSnippet("Cursor Pro reste à 20$/mois selon leur site officiel", "https://cursor.sh")]
+
+    async def _fake_llm(user_message, system_context, *args, **kwargs):
+        return "FAIT: FAUX\nRAISON: le site officiel indique toujours 20$/mois\nP_VRAI: 0.05\nP_FAUX: 0.90"
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _fake_web)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_llm)
+
+    reply, meta = await verify_external_claim("vérifie que cursor pro passe à 49$/mois", lang="fr")
+    assert meta["llm_reasoned"] is True
+    assert meta["verdict"].startswith("FAUX")
+    assert meta["p_false"] == 0.90
+    assert "FAUX" in reply
+
+
+@pytest.mark.asyncio
+async def test_verify_external_claim_reasons_true_when_evidence_confirms(monkeypatch):
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "github_token", "")
+
+    async def _fake_web(query, max_snippets=4):
+        return [_FakeSnippet(
+            "Render a confirmé la suppression du plan gratuit Python le 3 juillet 2026",
+            "https://render.com/blog",
+        )]
+
+    async def _fake_llm(user_message, system_context, *args, **kwargs):
+        return "FAIT: VRAI\nRAISON: annonce officielle confirmée sur le blog Render\nP_VRAI: 0.92\nP_FAUX: 0.03"
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _fake_web)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_llm)
+
+    reply, meta = await verify_external_claim(
+        "vérifie que Render a supprimé le plan gratuit pour les web services Python le 3 juillet 2026",
+        lang="fr",
+    )
+    assert meta["llm_reasoned"] is True
+    assert meta["verdict"].startswith("VRAI")
+
+
+@pytest.mark.asyncio
+async def test_verify_external_claim_same_claim_opposite_evidence_opposite_verdict(monkeypatch):
+    """Régression directe du bug corrigé le 17/07 : la MÊME claim, confrontée à deux
+    preuves opposées, doit produire deux verdicts opposés. Sous l'ancien code (motif
+    figé sur les mots de la claim), le verdict aurait été identique dans les deux cas."""
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "github_token", "")
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+
+    claim = "vérifie que cursor pro passe à 49$/mois"
+
+    async def _confirm(query, max_snippets=4):
+        return [_FakeSnippet("Cursor a confirmé le passage à 49$/mois pour tous les comptes existants")]
+
+    async def _contradict(query, max_snippets=4):
+        return [_FakeSnippet("Cursor Pro reste à 20$/mois, aucun changement de prix annoncé")]
+
+    async def _llm_confirm(user_message, system_context, *args, **kwargs):
+        return "FAIT: VRAI\nRAISON: hausse confirmée par la source\nP_VRAI: 0.90\nP_FAUX: 0.05"
+
+    async def _llm_contradict(user_message, system_context, *args, **kwargs):
+        return "FAIT: FAUX\nRAISON: prix inchangé selon la source\nP_VRAI: 0.05\nP_FAUX: 0.90"
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _confirm)
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _llm_confirm)
+    _, meta_true = await verify_external_claim(claim, lang="fr")
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _contradict)
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _llm_contradict)
+    _, meta_false = await verify_external_claim(claim, lang="fr")
+
+    assert meta_true["verdict"].startswith("VRAI")
+    assert meta_false["verdict"].startswith("FAUX")
+
+
+@pytest.mark.asyncio
+async def test_verify_external_claim_degrades_honestly_when_llm_unavailable(monkeypatch):
+    """Preuves web trouvées mais LLM non configuré : jamais un verdict inventé,
+    toujours INCERTAIN — dégradation honnête plutôt qu'une fausse certitude."""
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "github_token", "")
+
+    async def _fake_web(query, max_snippets=4):
+        return [_FakeSnippet("Un extrait quelconque, sans rapport prouvé")]
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _fake_web)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: False)
+
+    reply, meta = await verify_external_claim("vérifie une affirmation quelconque ici", lang="fr")
+    assert "INCERTAIN" in meta["verdict"]
+    assert meta.get("llm_reasoned") is not True
+
+
+@pytest.mark.asyncio
+async def test_verify_external_claim_no_evidence_stays_uncertain_without_llm_call(monkeypatch):
+    """Aucune preuve récupérée (web vide, pas de claim GitHub) : jamais d'appel LLM
+    inutile, verdict INCERTAIN explicite."""
+    from aria_core.runtime import settings
+
+    monkeypatch.setattr(settings, "github_token", "")
+
+    async def _no_web(query, max_snippets=4):
+        return []
+
+    called = {"n": 0}
+
+    async def _should_not_be_called(*args, **kwargs):
+        called["n"] += 1
+        return "FAIT: VRAI\nRAISON: x\nP_VRAI: 0.9\nP_FAUX: 0.1"
+
+    monkeypatch.setattr("aria_core.knowledge.web_verify.fetch_web_snippets", _no_web)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _should_not_be_called)
+
+    reply, meta = await verify_external_claim("vérifie un truc sans aucune preuve dispo", lang="fr")
+    assert called["n"] == 0
+    assert "INCERTAIN" in meta["verdict"]
+
+
+def test_parse_claim_verdict_returns_none_on_malformed_response():
+    from aria_core.operator_conversational import _parse_claim_verdict
+
+    assert _parse_claim_verdict("") is None
+    assert _parse_claim_verdict(None) is None
+    assert _parse_claim_verdict("some garbage without the expected format") is None
+    parsed = _parse_claim_verdict("FAIT: VRAI\nRAISON: ok\nP_VRAI: 0.8\nP_FAUX: 0.1")
+    assert parsed == {"fait": "VRAI", "raison": "ok", "p_vrai": 0.8, "p_faux": 0.1}
