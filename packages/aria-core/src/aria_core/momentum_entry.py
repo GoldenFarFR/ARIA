@@ -8,7 +8,13 @@ pensé pour repérer un builder caché — c'est un pari technique différent.
 
 Doctrine de ce module (gravée dans CLAUDE.md, section « Pivot critère d'entrée pour
 le test 1M$ (#194) », à lire avant toute modification) :
-  - **Seul garde-fou dur** : honeypot GoPlus. Rejet immédiat, sans exception.
+  - **Garde-fous durs, rejet immédiat sans exception** : honeypot GoPlus (détection
+    technique) ; liste noire persistée (``momentum_blacklist.py``, contrats déjà
+    confirmés problématiques) ; plafond ratio volume 24h/liquidité (signal de
+    wash-trading, ajouté 17/07 après une perte réelle -17,9 % sur un token qui
+    passait le honeypot GoPlus mais faisait partie d'un essaim de décoys narratifs
+    -- le honeypot seul ne détecte pas ce pattern, un token peut être techniquement
+    "propre" tout en étant un piège de visibilité).
   - **R/R positif obligatoire** (cible/invalidation dérivés de niveaux RÉELS via
     ``entry_signals.detect_entry`` -- golden pocket + divergence RSI) : sans lui,
     HOLD. Jamais un objectif fabriqué quand l'OHLCV est indisponible.
@@ -35,6 +41,7 @@ from __future__ import annotations
 
 import logging
 
+from aria_core import momentum_blacklist
 from aria_core.services.dexscreener import (
     PairSnapshot,
     fetch_token_pairs,
@@ -74,6 +81,16 @@ _MIN_LIQUIDITY_USD = 5_000.0  # plancher bas -- pipeline permissif, pas un filtr
 _RR_MIN_FOR_DIRECT_BUY = 1.5  # R/R franc -> décision déterministe sans appel LLM
 _RR_AMBIGUOUS_FLOOR = 1.0     # sous ce seuil, R/R positif mais faible -> LLM tranche
 _TOKENS_BATCH_SIZE = 30  # limite documentée de /tokens/v1/{chainId}/{tokenAddresses}
+
+# 17/07 -- plafond ratio volume24h/liquidité (signal de wash-trading), ajouté après
+# une perte réelle (-17,9 %, -8 962 $) sur BRIAN : liquidité 372 766 $, volume 24h
+# 33 859 669 $ -> ratio ~91x, honeypot GoPlus pourtant "clear" (le token n'est pas un
+# honeypot technique, juste un piège de visibilité -- cf. momentum_blacklist.py).
+# VPS Research a trouvé 20-27x sur les décoys cousins (COBIE/EMILIE) le même soir --
+# seuil fixé à 20x : capture le pattern confirmé sans bloquer un pic de volume
+# organique raisonnable (une entrée légitime très demandée peut monter à quelques x
+# la liquidité en une journée, 20x reste un multiple extrême, pas un jour normal).
+_MAX_VOLUME_TO_LIQUIDITY_RATIO = 20.0
 
 
 async def _batch_liquidity_prefilter(
@@ -370,12 +387,15 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
     """Décision d'entrée momentum (#194) pour ``contract`` sur ``chain``.
 
     Ordre, du plus rapide/bloquant au plus lent/optionnel :
-      1. Honeypot (GoPlus) -- rejet immédiat si non clear.
-      2. Prix + meilleure paire (DexScreener) -- rejet si aucune paire liquide.
-      3. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
+      1. Liste noire (``momentum_blacklist.py``) -- rejet immédiat, aucun appel réseau.
+      2. Honeypot (GoPlus) -- rejet immédiat si non clear.
+      3. Prix + meilleure paire (DexScreener) -- rejet si aucune paire liquide.
+      4. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
+         des données déjà en main (aucun appel réseau supplémentaire).
+      5. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
          HOLD si absent (jamais un objectif fabriqué).
-      4. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
-      5. R/R franc (>= 1.5) + au moins 1 signal technique -> BUY déterministe.
+      6. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
+      7. R/R franc (>= 1.5) + au moins 1 signal technique -> BUY déterministe.
          R/R faible (1.0-1.5) -> confirmation LLM légère. Sinon HOLD.
     Retourne un dict compatible avec ``paper_trader.run_paper_cycle``'s ``analyzer``
     (``action``/``symbol``/``price``/``target``/``invalidation``/``chain``), ou
@@ -389,6 +409,13 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
     contract = (contract or "").strip().lower()
     chain = (chain or "").strip().lower()
 
+    if await momentum_blacklist.is_blacklisted(contract, chain):
+        return {
+            "action": "HOLD", "chain": chain,
+            "reasons": ["contrat sur liste noire -- déjà confirmé problématique"],
+            "hold_reason": "blacklisted",
+        }
+
     clear, honeypot_reason, honeypot_code = await _check_honeypot(contract, chain)
     if not clear:
         return {"action": "HOLD", "chain": chain, "reasons": [honeypot_reason], "hold_reason": honeypot_code}
@@ -397,6 +424,19 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
     best = _best_pair(pairs)
     if best is None or not best.price_usd or best.price_usd <= 0:
         return None
+
+    if best.liquidity_usd and best.liquidity_usd > 0:
+        volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
+        if volume_to_liq > _MAX_VOLUME_TO_LIQUIDITY_RATIO:
+            return {
+                "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+                "price": best.price_usd,
+                "reasons": [
+                    f"volume 24h/liquidité extrême ({volume_to_liq:.0f}x > "
+                    f"{_MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x) -- signal de wash-trading"
+                ],
+                "hold_reason": "wash_trading_ratio",
+            }
 
     reasons: list[str] = [honeypot_reason]
     candles = await _fetch_candles(best.pair_address, chain, contract=contract, pair=best)

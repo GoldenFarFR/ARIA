@@ -14,6 +14,17 @@ from aria_core.skills.ta_levels import Candle
 CONTRACT = "0x" + "a" * 40
 
 
+@pytest.fixture(autouse=True)
+def _isolated_blacklist_db(tmp_path, monkeypatch):
+    """``evaluate_momentum_entry`` consulte désormais ``momentum_blacklist`` en tout
+    premier -- sans cette isolation, TOUS les tests de ce fichier partageraient la
+    même base réelle par défaut (``momentum_blacklist.DB_PATH`` calculé une fois à
+    l'import), même piège que ``test_momentum_blacklist.py``."""
+    from aria_core import momentum_blacklist as bl
+
+    monkeypatch.setattr(bl, "DB_PATH", str(tmp_path / "momentum_blacklist_test.db"))
+
+
 # ── discover_momentum_candidates ───────────────────────────────────────────────────
 
 @dataclass
@@ -481,6 +492,58 @@ async def test_evaluate_rejects_on_honeypot(monkeypatch):
     assert result["action"] == "HOLD"
     assert "honeypot" in result["reasons"][0].lower()
     assert result["hold_reason"] == "honeypot_rejected"
+
+
+# ── liste noire + ratio wash-trading (17/07, perte réelle BRIAN) ────────────────────
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_blacklisted_contract_before_any_network_call(monkeypatch):
+    from aria_core import momentum_blacklist
+
+    # Isolation DB déjà assurée par la fixture autouse _isolated_blacklist_db --
+    # CONTRACT n'est banni que dans CETTE base temporaire, jamais pour les autres
+    # tests de ce fichier.
+    async def _never_called(*args, **kwargs):
+        raise AssertionError("aucun appel réseau ne doit être tenté sur un contrat banni")
+
+    monkeypatch.setattr(me, "_check_honeypot", _never_called)
+    monkeypatch.setattr(me, "fetch_token_pairs", _never_called)
+
+    await momentum_blacklist.add_to_blacklist(CONTRACT, "base", reason="test")
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "blacklisted"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_extreme_volume_to_liquidity_ratio(monkeypatch):
+    """Cas réel du 17/07 : BRIAN passait le honeypot GoPlus (technique "propre")
+    mais affichait ~91x volume/liquidité (wash-trading) -- ce garde-fou l'aurait
+    rejeté avant même le calcul R/R, sans perte."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=372_766.0, volume_24h_usd=33_859_669.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "wash_trading_ratio"
+    assert "wash-trading" in result["reasons"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_allows_reasonable_volume_to_liquidity_ratio(monkeypatch):
+    """Non-régression : un ratio élevé mais raisonnable (pic de demande organique)
+    ne doit jamais être bloqué par ce garde-fou -- seul un multiple extrême l'est."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=50_000.0, volume_24h_usd=400_000.0)])  # 8x
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "wash_trading_ratio"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_ratio_check_skipped_when_liquidity_zero(monkeypatch):
+    """Pas de division par zéro -- une liquidité nulle/inconnue ne doit jamais
+    planter, ni être traitée comme un ratio infini."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=0.0, volume_24h_usd=1_000.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "wash_trading_ratio"
 
 
 @pytest.mark.asyncio
