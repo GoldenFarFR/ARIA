@@ -25,14 +25,17 @@ def _extract_target_name(message: str) -> str:
     patterns = [
         rf"{verb}\s+(?:du\s+)?(?:répertoire|repertoire)\s+(.+)",
         rf"(?:répertoire|repertoire)\s+{verb}\s+(.+)",
-        rf"{verb}\s+(?:le\s+la\s+les\s+)?(?:projet|project|entrée|entry|filiale|venture)\s+(.+)",
+        rf"{verb}\s+(?:(?:le|la|les|the)\s+)?(?:projet|project|entrée|entry|filiale|venture)\s+(.+)",
         rf"{verb}\s+(.+)",
     ]
     for pat in patterns:
         m = re.search(pat, message, re.I)
         if m:
             target = m.group(1).strip()
-            target = re.sub(r"\s*(du répertoire|from repertoire|please|s'il te plaît)\s*$", "", target, flags=re.I)
+            target = re.sub(
+                r"\s*(du répertoire|from (?:the\s+)?repertoire|please|s'il te plaît)\s*$",
+                "", target, flags=re.I,
+            )
             return target.strip(" \"'")
     return ""
 
