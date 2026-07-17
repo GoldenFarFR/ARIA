@@ -58,10 +58,7 @@ def test_grok_direct_route_ignores_virtuals_catalog_llm_model():
     settings = get_settings()
     settings.aria_llm_enabled = True
     settings.llm_provider = "grok"
-    # ``grok_api_key`` n'existe pas comme champ de settings dédié (ni ici ni dans
-    # app.config.Settings réel, vérifié en prod le 17/07) -- _auth_key_for_provider
-    # retombe sur llm_api_key, comportement RÉEL déjà en place, pas simulé ici.
-    settings.llm_api_key = "xai-real-key"
+    settings.grok_api_key = "xai-real-key"
     settings.llm_model = "x-ai-grok-4-3"  # ID catalogue Virtuals, jamais un vrai modèle x.ai
     settings.virtuals_api_key = ""
     settings.llm_fallback_provider = ""
@@ -72,6 +69,23 @@ def test_grok_direct_route_ignores_virtuals_catalog_llm_model():
     assert routes[0].provider == "grok"
     assert routes[0].model == "grok-4.3"  # DEFAULT_MODELS["grok"], jamais l'ID catalogue
     assert routes[0].auth_key == "xai-real-key"
+
+
+def test_grok_direct_route_uses_dedicated_grok_api_key_not_llm_api_key():
+    """17/07 -- grok_api_key doit gagner sur llm_api_key (souvent une clé Groq, service
+    différent malgré le nom proche) quand les deux sont présents."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "grok"
+    settings.grok_api_key = "xai-dedicated-key"
+    settings.llm_api_key = "gsk-groq-key-wrong-service"
+    settings.virtuals_api_key = ""
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes()
+    assert len(routes) == 1
+    assert routes[0].auth_key == "xai-dedicated-key"
 
 
 def test_deepseek_direct_route_no_virtuals_dependency():

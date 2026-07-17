@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     virtuals_api_key: str = ""  # Virtuals Compute Spark — LLM_PROVIDER=virtuals
     deepseek_api_key: str = ""  # DeepSeek direct (api.deepseek.com) — LLM_PROVIDER=deepseek
+    # 17/07 -- champ absent alors que aria_core.llm._auth_key_for_provider le référence
+    # déjà (_setting_str("grok_api_key")) : GROK_API_KEY (85 car., déjà dans .env) restait
+    # donc totalement inutilisé, le provider "grok" retombait silencieusement sur
+    # llm_api_key (souvent une clé Groq, pas x.ai -- 401 réel constaté sur le VPS).
+    grok_api_key: str = ""  # x.ai direct (api.x.ai) — LLM_PROVIDER=grok/xai
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"
