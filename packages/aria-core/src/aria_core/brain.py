@@ -382,6 +382,12 @@ class AriaBrain:
             if vc_followup is not None:
                 return vc_followup
 
+            trade_status = await self._try_trade_status_response(
+                user_message, route_msg, lang, visitor_id=vid,
+            )
+            if trade_status is not None:
+                return trade_status
+
         if not public:
             from aria_core.skills.acp_conversational import is_conversational_acp_question
             from aria_core.tweet_compose_workflow import handle_workflow_message
@@ -882,6 +888,56 @@ class AriaBrain:
             skill_used=None,
             actions_taken=["Suivi rapport /vc (mémoire locale)"],
             data={"vc_followup": True, "skip_web": True},
+        )
+
+    async def _try_trade_status_response(
+        self,
+        user_message: str,
+        route_msg: str,
+        lang: str,
+        *,
+        visitor_id: str = "",
+    ) -> ChatResponse | None:
+        """Répond aux questions en langage naturel sur l'état d'un trade/du portefeuille
+        (17/07) -- même patron que ``_try_vc_followup_response``, appelé AVANT tout
+        routage skill/web. Incident réel (16/07) : une telle question posée juste après
+        une perte réelle est tombée dans la conversation LLM générale sans accès au
+        registre -- ARIA a honnêtement dit ne rien voir plutôt que d'inventer, mais
+        l'opérateur restait sans réponse. Réutilise
+        ``paper_ledger_report.build_trade_status_context`` tel quel (aucune requête
+        dupliquée) -- admin-only par construction (appelé uniquement côté ``not public``,
+        même doctrine que ``/feedback``/``/ledger``)."""
+        from aria_core.grounding import is_trade_status_question
+        from aria_core.llm import is_llm_configured
+
+        if not is_trade_status_question(route_msg):
+            return None
+        if not is_llm_configured():
+            return None
+        from aria_core.paper_ledger_report import build_trade_status_context
+
+        try:
+            ledger_block = await build_trade_status_context()
+        except Exception:  # noqa: BLE001 -- une panne de lecture registre ne casse jamais la conversation
+            return None
+        llm_reply = await self._llm_response(
+            user_message,
+            lang,
+            public=False,
+            visitor_id=visitor_id,
+            extra_system_context=ledger_block,
+        )
+        if not llm_reply:
+            return None
+        await repertoire_db.save_message(
+            "agent", llm_reply, skill_used="trade_status", visitor_id=visitor_id,
+        )
+        append_memory("chat", f"User: {user_message[:100]}\nARIA: {llm_reply[:200]}")
+        return ChatResponse(
+            reply=llm_reply,
+            skill_used=None,
+            actions_taken=["État trade/portefeuille (registre réel — sans confabulation)"],
+            data={"trade_status": True, "skip_web": True},
         )
 
     async def _enhance_with_llm(

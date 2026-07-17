@@ -598,6 +598,39 @@ def unknown_reply(lang: str = "en") -> str:
     )
 
 
+_TRADE_TRIGGER_RE = re.compile(
+    r"\b(?:trade|position|portefeuille|portfolio|capital|AERO|stop[- ]loss|"
+    r"invalidation|vendu|vente|achet[ée]|perdu|perdant|perdante|perte|gagn[ée]|"
+    r"gagnant|clôtur[ée]|closed|sold|bought|profit|loss|winrate|pnl|p&l|p&amp;l)\b",
+    re.IGNORECASE,
+)
+_TRADE_QUESTION_RE = re.compile(
+    r"(?:"
+    r"qu['’]est[- ]ce\s+qui\s+[cs]['’]est\s+pass[ée]|qu['’]est[- ]ce\s+qui\s+se\s+passe|"
+    r"pourquoi|comment\s+va|combien\s+(?:il\s+)?(?:me\s+)?reste|"
+    r"what\s+happened|why\s+did|how['’]?s|how\s+much"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_trade_status_question(message: str) -> bool:
+    """True pour une question en langage naturel sur l'ÉTAT d'un trade/du portefeuille
+    (« qu'est-ce qui s'est passé sur ce trade ? », « pourquoi t'as vendu ? », « combien
+    il reste ? ») -- PAS une commande explicite (``/ledger``/``/feedback`` existent déjà
+    pour ça). Incident réel (16/07) : une telle question, posée juste après une perte
+    réelle, est tombée dans la conversation LLM générale SANS accès au registre --
+    ARIA a honnêtement dit ne rien voir plutôt que d'inventer (bon réflexe), mais
+    l'opérateur restait sans réponse alors que la donnée existe réellement en base.
+    Exige un mot-clé de trading ET une tournure de question dans le MÊME message
+    (jamais l'un seul) -- sinon "qu'est-ce qui s'est passé" seul, sur un tout autre
+    sujet, déclencherait une injection de données de trading hors-propos."""
+    text = (message or "").strip()
+    if len(text) < 6:
+        return False
+    return bool(_TRADE_TRIGGER_RE.search(text) and _TRADE_QUESTION_RE.search(text))
+
+
 def strict_rephrase_rules(lang: str = "en") -> str:
     if lang == "fr":
         return (

@@ -13,6 +13,7 @@ from aria_core.grounding import (
     is_llm_identity_question,
     is_social_chitchat,
     is_pure_casual_smalltalk,
+    is_trade_status_question,
     llm_identity_reply,
     should_skip_llm_enhance,
     social_ack_reply,
@@ -68,6 +69,29 @@ def test_analysis_methodology_question_detects_real_incident_phrasing():
     assert is_analysis_methodology_question("quels outils utilises-tu pour analyser")
     assert not is_analysis_methodology_question("bonjour")
     assert not is_analysis_methodology_question("quel est le prix du token")
+
+
+def test_trade_status_question_detects_real_incident_phrasing():
+    # Incident réel 16/07 : question posée juste après une clôture en perte, tombée
+    # dans la conversation générale sans accès au registre paper-trading.
+    assert is_trade_status_question(
+        "tu viens de réaliser un trade perdant qu'est-ce qui c'est passé ?"
+    )
+    assert is_trade_status_question("pourquoi t'as vendu AERO ?")
+    assert is_trade_status_question("comment va le portefeuille ?")
+    assert is_trade_status_question("combien il me reste de capital ?")
+    assert is_trade_status_question("what happened with this trade?")
+    assert is_trade_status_question("why did you sell that position?")
+
+
+def test_trade_status_question_requires_both_trigger_and_question_form():
+    # Un mot-clé de trading seul, sans tournure de question -> pas de faux positif.
+    assert not is_trade_status_question("j'ai ouvert une position AERO hier")
+    # Une tournure de question générique, sans rapport avec le trading -> pas de
+    # faux positif non plus (ne doit jamais injecter le registre hors-propos).
+    assert not is_trade_status_question("qu'est-ce qui s'est passé avec le déploiement ?")
+    assert not is_trade_status_question("pourquoi le ciel est bleu ?")
+    assert not is_trade_status_question("bonjour")
 
 
 def test_analysis_methodology_reply_cites_real_tools():

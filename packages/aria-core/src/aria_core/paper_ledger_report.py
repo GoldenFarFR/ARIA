@@ -137,3 +137,17 @@ async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
         "closed_positions": closed,
     }
     return text, machine
+
+
+async def build_trade_status_context() -> str:
+    """Bloc de contexte compact pour injection dans un prompt LLM (``brain.py``,
+    ``_try_trade_status_response``, 17/07) -- réutilise ``build_report`` tel quel
+    (aucune requête dupliquée), borné à 5 positions clôturées pour rester lisible
+    dans un contexte LLM déjà contraint en tokens. Préfixé pour qu'un LLM comprenne
+    immédiatement qu'il s'agit de données RÉELLES, pas d'un exemple à broder."""
+    text, _machine = await build_report(closed_limit=5)
+    return (
+        "# Registre paper-trading RÉEL (portefeuille papier 1 M$, aucun argent réel) "
+        "-- utilise ces vrais chiffres pour répondre, n'en invente aucun autre\n"
+        f"{text}"
+    )
