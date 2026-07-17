@@ -119,6 +119,11 @@ class Settings(BaseSettings):
     # LLM_PROVIDER=gemini. Palier gratuit Flash/Flash-Lite vérifié à la source
     # (ai.google.dev/gemini-api/docs/pricing) avant tout câblage.
     gemini_api_key: str = ""
+    # 17/07 -- Mistral Small 4 direct (api.mistral.ai, vérifié compatible OpenAI à la
+    # source docs.mistral.ai/api) -- LLM_PROVIDER=mistral. reasoning_effort forcé "none"
+    # dans llm.py (évite le piège Gemini du soir même : budget de tokens englouti par un
+    # raisonnement invisible).
+    mistral_api_key: str = ""
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"

@@ -23,6 +23,9 @@ PROVIDER_URLS = {
     # docs/openai), vérifié à la source avant câblage -- même format Bearer token que les
     # autres providers directs, aucun parseur sur-mesure nécessaire.
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    # 17/07 -- vérifié à la source (docs.mistral.ai/api) : nativement compatible OpenAI,
+    # même en-tête Bearer.
+    "mistral": "https://api.mistral.ai/v1/chat/completions",
 }
 
 DEFAULT_MODELS = {
@@ -36,6 +39,10 @@ DEFAULT_MODELS = {
     # 17/07 -- Flash confirmé "Free of charge" sur la page tarifs officielle vérifiée ce
     # soir (contrairement à Gemini 3.1 Pro Preview, explicitement "Not available" gratuit).
     "gemini": "gemini-3.5-flash",
+    # 17/07 -- ID daté (pas l'alias "-latest") pour un comportement stable et reproductible
+    # dans le temps, même doctrine que le reste de ce fichier -- vérifié réel via
+    # OpenRouter/docs Mistral (sorti mars 2026, hybride raisonnement configurable).
+    "mistral": "mistral-small-2603",
 }
 
 
@@ -93,6 +100,8 @@ def _auth_key_for_provider(provider: str) -> str:
         return _setting_str("deepseek_api_key") or _setting_str("llm_api_key")
     if p == "gemini":
         return _setting_str("gemini_api_key") or _setting_str("llm_api_key")
+    if p == "mistral":
+        return _setting_str("mistral_api_key") or _setting_str("llm_api_key")
     return _setting_str("llm_api_key")
 
 
@@ -223,6 +232,14 @@ async def _post_chat(
         num_ctx = int(getattr(settings, "aria_ollama_num_ctx", 0) or 0)
         if num_ctx > 0:
             payload["options"] = {"num_ctx": num_ctx}
+    if route.provider == "mistral":
+        # 17/07 -- Mistral Small 4 est hybride (raisonnement configurable, vérifié à la
+        # source docs.mistral.ai/api). Forcé "none" par défaut : sans ça, même piège que
+        # Gemini 3.5 Flash constaté ce soir (budget de tokens entièrement consommé par un
+        # raisonnement invisible, réponse vide). Contrairement à Gemini, Mistral expose un
+        # vrai levier documenté pour l'éviter -- appliqué systématiquement, pas seulement
+        # pour ce cas d'usage précis.
+        payload["reasoning_effort"] = "none"
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         # 17/07 -- demande opérateur explicite : arbitrer Grok vs Gemini (et tout futur

@@ -45,6 +45,7 @@ class AriaRuntimeSettings(BaseSettings):
     deepseek_api_key: str = ""
     grok_api_key: str = ""  # 17/07 -- parité avec app.config.Settings (LLM_PROVIDER=grok/xai)
     gemini_api_key: str = ""  # 17/07 -- parité avec app.config.Settings (LLM_PROVIDER=gemini)
+    mistral_api_key: str = ""  # 17/07 -- parité avec app.config.Settings (LLM_PROVIDER=mistral)
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"

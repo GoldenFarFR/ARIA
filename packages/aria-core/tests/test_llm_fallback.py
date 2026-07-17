@@ -200,6 +200,80 @@ def test_gemini_ignores_virtuals_catalog_llm_model():
     assert routes[0].model == "gemini-3.5-flash"
 
 
+def test_mistral_direct_route_no_virtuals_dependency():
+    """17/07 -- Mistral en provider primaire direct, même patron que gemini/deepseek."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "mistral"
+    settings.mistral_api_key = "ms-real-key"
+    settings.virtuals_api_key = ""
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes()
+    assert len(routes) == 1
+    assert routes[0].provider == "mistral"
+    assert routes[0].url == "https://api.mistral.ai/v1/chat/completions"
+    assert routes[0].auth_key == "ms-real-key"
+    assert routes[0].model == "mistral-small-2603"
+    assert is_llm_configured() is True
+
+
+def test_mistral_never_uses_generic_llm_api_key_when_own_key_set():
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "mistral"
+    settings.mistral_api_key = "ms-real-key"
+    settings.llm_api_key = "should-not-win"
+
+    routes = _resolve_routes()
+    assert routes[0].auth_key == "ms-real-key"
+
+
+@pytest.mark.asyncio
+async def test_mistral_payload_forces_reasoning_effort_none(monkeypatch):
+    """17/07 -- même piège que Gemini le même soir (budget de tokens englouti par un
+    raisonnement invisible) : Mistral expose un vrai levier documenté
+    (reasoning_effort="none", docs.mistral.ai/api) -- forcé systématiquement sur ce
+    provider, jamais laissé au défaut de l'API."""
+    import aria_core.llm as llm_mod
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "HOLD"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+
+    route = llm_mod.LlmRoute("mistral", "https://api.mistral.ai/v1/chat/completions", "mistral-small-2603", "ms-key")
+    reply = await llm_mod._post_chat(
+        route, messages=[{"role": "user", "content": "BUY ou HOLD ?"}],
+        temperature=0.0, max_tokens=10, prompt_est=10, depth="brief",
+    )
+    assert reply == "HOLD"
+    assert captured["json"]["reasoning_effort"] == "none"
+
+
 def test_groq_only_no_duplicate_fallback():
     settings = get_settings()
     settings.aria_llm_enabled = True
