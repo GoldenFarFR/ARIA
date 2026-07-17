@@ -31,7 +31,10 @@ PROVIDER_URLS = {
 DEFAULT_MODELS = {
     "xai": "grok-4.3",
     "grok": "grok-4.3",
-    "openai": "gpt-4o-mini",
+    # 17/07 -- gpt-4o-mini (avril 2025) remplacé par gpt-5-mini (août 2025, positionné
+    # explicitement par OpenAI pour "cost-sensitive, low-latency, high-volume workloads"
+    # -- exactement notre cas d'usage, vérifié par recherche avant mise à jour).
+    "openai": "gpt-5-mini",
     "groq": "llama-3.3-70b-versatile",
     "openrouter": "openrouter/free",
     "ollama": "llama3.2",
@@ -102,6 +105,8 @@ def _auth_key_for_provider(provider: str) -> str:
         return _setting_str("gemini_api_key") or _setting_str("llm_api_key")
     if p == "mistral":
         return _setting_str("mistral_api_key") or _setting_str("llm_api_key")
+    if p == "openai":
+        return _setting_str("openai_api_key") or _setting_str("llm_api_key")
     return _setting_str("llm_api_key")
 
 

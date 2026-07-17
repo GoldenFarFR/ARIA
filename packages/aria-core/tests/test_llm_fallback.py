@@ -274,6 +274,28 @@ async def test_mistral_payload_forces_reasoning_effort_none(monkeypatch):
     assert captured["json"]["reasoning_effort"] == "none"
 
 
+def test_openai_direct_route_uses_dedicated_key_and_current_default_model():
+    """17/07 -- gpt-4o-mini (avril 2025) remplacé par gpt-5-mini (août 2025, positionné
+    par OpenAI pour les workloads low-latency/high-volume) ; clé dédiée openai_api_key
+    plutôt que llm_api_key générique (même doctrine que grok/gemini/mistral)."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "openai"
+    settings.openai_api_key = "oa-real-key"
+    settings.llm_api_key = "should-not-win"
+    settings.virtuals_api_key = ""
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes()
+    assert len(routes) == 1
+    assert routes[0].provider == "openai"
+    assert routes[0].url == "https://api.openai.com/v1/chat/completions"
+    assert routes[0].auth_key == "oa-real-key"
+    assert routes[0].model == "gpt-5-mini"
+    assert is_llm_configured() is True
+
+
 def test_groq_only_no_duplicate_fallback():
     settings = get_settings()
     settings.aria_llm_enabled = True

@@ -124,6 +124,10 @@ class Settings(BaseSettings):
     # dans llm.py (évite le piège Gemini du soir même : budget de tokens englouti par un
     # raisonnement invisible).
     mistral_api_key: str = ""
+    # 17/07 -- OpenAI direct (api.openai.com) -- LLM_PROVIDER=openai. Clé dédiée, jamais
+    # llm_api_key générique (même doctrine que les autres providers directs -- éviter la
+    # confusion de clé déjà constatée sur grok_api_key ce soir).
+    openai_api_key: str = ""
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"
