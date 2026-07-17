@@ -913,6 +913,25 @@ def test_format_position_tracking_alert_shows_real_equity_when_provided():
     assert "portefeuille papier 1 M$" not in msg  # jamais le libelle generique si le vrai chiffre est connu
 
 
+def test_format_position_tracking_alert_shows_capital_and_pct_of_starting_capital():
+    """17/07, demande opérateur explicite : "sur le suivi je veux aussi le capital
+    investi avec le % sur le capital total au moment de l'achat" -- STARTING_CAPITAL_USD,
+    pas l'équité courante (c'est la base réelle sur laquelle new_entry_alloc_usd
+    dimensionne chaque position à l'ouverture)."""
+    msg = pt.format_position_tracking_alert([
+        {"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 50_000.0, "cost_usd": 50_000.0}
+    ])
+    assert "50,000" in msg or "50000" in msg
+    assert "5.0%" in msg  # 50 000 $ / 1 000 000 $ de capital de départ
+
+
+def test_format_buy_alert_shows_pct_of_starting_capital():
+    buy = pt.format_buy_alert(
+        {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 25_000}
+    )
+    assert "2.5%" in buy  # 25 000 $ / 1 000 000 $ de capital de départ
+
+
 @pytest.mark.asyncio
 async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp_db):
     await pt.reset_portfolio(1_000_000.0)

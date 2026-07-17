@@ -579,11 +579,17 @@ async def portfolio_summary(*, price_lookup=None) -> dict:
 
 def format_buy_alert(pos: dict) -> str:
     name = pos.get("symbol") or (pos.get("contract") or "")[:10]
+    # 17/07 -- demande opérateur explicite : voir le % du capital de départ (STARTING_
+    # CAPITAL_USD, jamais l'équité courante -- c'est exactement la base sur laquelle
+    # new_entry_alloc_usd dimensionne chaque position, cf. run_paper_cycle) engagé par
+    # CETTE position, pas seulement le montant brut en $.
+    cost = pos.get("cost_usd") or 0.0
+    pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
     lines = [
         "🧪 SIMULATION — portefeuille papier 1 M$ (mode trading)",
         f"ACHAT FICTIF {name}",
         f"Contrat {pos.get('contract', '')}",
-        f"Entrée {pos['entry_price']:.6g} · taille {pos['cost_usd']:,.0f} $",
+        f"Entrée {pos['entry_price']:.6g} · taille {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)",
     ]
     if pos.get("target_price"):
         lines.append(f"Cible {pos['target_price']:.6g}")
@@ -637,7 +643,15 @@ def format_position_tracking_alert(
         pnl = value - cost
         pnl_pct = (price / entry - 1.0) * 100.0 if entry else 0.0
         sign = "+" if pnl >= 0 else ""
-        lines.append(f"{name} : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $")
+        # 17/07 -- demande opérateur explicite : capital investi + % du capital de départ
+        # (STARTING_CAPITAL_USD, la base fixe sur laquelle new_entry_alloc_usd dimensionne
+        # chaque position à l'ouverture -- jamais l'équité courante, qui bougerait après
+        # coup et ne représenterait plus fidèlement la taille décidée AU MOMENT de l'achat).
+        pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
+        lines.append(
+            f"{name} : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $ · "
+            f"capital {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)"
+        )
         if t.get("contract"):
             lines.append(f"  {token_url(t['contract'], chain=t.get('chain') or 'base')}")
     lines.append("Aucun argent réel.")
