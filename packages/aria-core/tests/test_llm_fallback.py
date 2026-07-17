@@ -156,6 +156,50 @@ def test_deepseek_falls_back_to_generic_llm_api_key_when_unset():
     assert routes[0].auth_key == "generic-key"
 
 
+def test_gemini_direct_route_no_virtuals_dependency():
+    """17/07 -- Gemini en provider primaire direct (point d'accès compatible OpenAI
+    officiel Google), même patron que deepseek/grok."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "gemini"
+    settings.gemini_api_key = "gm-real-key"
+    settings.virtuals_api_key = ""
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes()
+    assert len(routes) == 1
+    assert routes[0].provider == "gemini"
+    assert routes[0].url == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    assert routes[0].auth_key == "gm-real-key"
+    assert routes[0].model == "gemini-3.5-flash"
+    assert is_llm_configured() is True
+
+
+def test_gemini_never_uses_generic_llm_api_key_when_own_key_set():
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "gemini"
+    settings.gemini_api_key = "gm-real-key"
+    settings.llm_api_key = "should-not-win"
+
+    routes = _resolve_routes()
+    assert routes[0].auth_key == "gm-real-key"
+
+
+def test_gemini_ignores_virtuals_catalog_llm_model():
+    """Même bug que grok/x.ai corrigé le 17/07 (ef65ce92) : settings.llm_model porte un
+    ID catalogue Virtuals -- un provider direct ne doit jamais l'hériter."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "gemini"
+    settings.gemini_api_key = "gm-real-key"
+    settings.llm_model = "x-ai-grok-4-3"
+
+    routes = _resolve_routes()
+    assert routes[0].model == "gemini-3.5-flash"
+
+
 def test_groq_only_no_duplicate_fallback():
     settings = get_settings()
     settings.aria_llm_enabled = True

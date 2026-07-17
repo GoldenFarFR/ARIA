@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     # donc totalement inutilisé, le provider "grok" retombait silencieusement sur
     # llm_api_key (souvent une clé Groq, pas x.ai -- 401 réel constaté sur le VPS).
     grok_api_key: str = ""  # x.ai direct (api.x.ai) — LLM_PROVIDER=grok/xai
+    # 17/07 -- Gemini direct (point d'accès compatible OpenAI officiel Google), candidat
+    # pour le départage rapide de la zone grise (momentum_entry._llm_confirm) --
+    # LLM_PROVIDER=gemini. Palier gratuit Flash/Flash-Lite vérifié à la source
+    # (ai.google.dev/gemini-api/docs/pricing) avant tout câblage.
+    gemini_api_key: str = ""
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"

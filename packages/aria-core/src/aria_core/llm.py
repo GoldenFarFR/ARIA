@@ -19,6 +19,10 @@ PROVIDER_URLS = {
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
     "virtuals": "https://compute.virtuals.io/v1/chat/completions",
     "deepseek": "https://api.deepseek.com/v1/chat/completions",
+    # 17/07 -- point d'accès compatible OpenAI OFFICIEL Google (ai.google.dev/gemini-api/
+    # docs/openai), vérifié à la source avant câblage -- même format Bearer token que les
+    # autres providers directs, aucun parseur sur-mesure nécessaire.
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
 }
 
 DEFAULT_MODELS = {
@@ -29,6 +33,9 @@ DEFAULT_MODELS = {
     "openrouter": "openrouter/free",
     "ollama": "llama3.2",
     "deepseek": "deepseek-chat",
+    # 17/07 -- Flash confirmé "Free of charge" sur la page tarifs officielle vérifiée ce
+    # soir (contrairement à Gemini 3.1 Pro Preview, explicitement "Not available" gratuit).
+    "gemini": "gemini-3.5-flash",
 }
 
 
@@ -84,6 +91,8 @@ def _auth_key_for_provider(provider: str) -> str:
         return _setting_str("grok_api_key") or _setting_str("llm_api_key")
     if p == "deepseek":
         return _setting_str("deepseek_api_key") or _setting_str("llm_api_key")
+    if p == "gemini":
+        return _setting_str("gemini_api_key") or _setting_str("llm_api_key")
     return _setting_str("llm_api_key")
 
 
