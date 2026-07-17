@@ -456,6 +456,24 @@ async def _handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+async def _handle_ledger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """#210 (17/07) : détail PAR POSITION du paper-trading (thèse, entrée, sortie,
+    raison, R:R) -- comble le trou trouvé en conditions réelles : un opérateur qui
+    demande en langage naturel "qu'est-ce qui s'est passé sur ce trade ?" tombe sur la
+    conversation LLM générale (aria_core.brain), qui n'a PAS accès au registre et le dit
+    honnêtement plutôt que d'inventer -- correct, mais laissait l'opérateur sans réponse.
+    `/feedback` existait déjà mais seulement en agrégé (départ/pnl total/positions
+    ouvertes), jamais le détail par trade. Déterministe, sans appel LLM (gratuit),
+    réutilise aria_core.paper_ledger_report (même code que le script VPS). Admin-only,
+    même doctrine que /status et /feedback."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.paper_ledger_report import build_report
+
+    text, _ = await build_report(closed_limit=10)
+    await _reply(update.message, text)
+
+
 async def _handle_agent_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """#204 (16/07) : solde RÉEL du wallet agent CDP (USDC + ETH gas), lecture
     seule -- même doctrine que /status. Admin-only, aucune exécution possible
@@ -2674,6 +2692,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("whoami", _handle_whoami))
     app.add_handler(CommandHandler("status", _handle_status))
     app.add_handler(CommandHandler("feedback", _handle_feedback))
+    app.add_handler(CommandHandler("ledger", _handle_ledger))
     app.add_handler(CommandHandler("agentwallet", _handle_agent_wallet))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
