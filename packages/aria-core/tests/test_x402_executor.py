@@ -259,6 +259,56 @@ async def test_successful_payment_returns_ok_and_records_spend():
     assert spends[0]["amount_usd"] == 0.01
 
 
+def _real_cybercentry_402_body() -> bytes:
+    """Corps 402 RÉEL capturé le 17/07 contre https://x402-cybercentry-wallet-
+    verification.up.railway.app/verify (facilitator Coinbase CDP officiel) --
+    non un exemple inventé. ``maxAmountRequired`` (pas ``amount``), ``asset`` =
+    adresse de contrat USDC sur Base (pas la chaîne "USDC")."""
+    return json.dumps({
+        "error": "X-PAYMENT header is required",
+        "accepts": [{
+            "scheme": "exact", "network": "base", "maxAmountRequired": "20000",
+            "resource": "https://x402-cybercentry-wallet-verification.up.railway.app/verify",
+            "description": "Verify wallet addresses for sanctions, fraud, and risk using "
+                            "Cybercentry Wallet Verification (CWV) API",
+            "mimeType": "application/json",
+            "payTo": "0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+            "maxTimeoutSeconds": 300,
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "outputSchema": {"input": {"type": "http", "method": "GET"}, "output": {"type": "object"}},
+            "extra": {"name": "USD Coin", "version": "2"},
+        }],
+        "x402Version": 1,
+    }).encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_real_cybercentry_402_schema_parsed_correctly(monkeypatch):
+    """Bug réel corrigé le 17/07 : le schéma x402 v1 RÉEL (maxAmountRequired,
+    asset = adresse de contrat) faisait échouer CHAQUE appel réel avec l'ancien
+    parsing (fail-closed, donc sans risque, mais jamais fonctionnel). Verrouille
+    le vrai corps capturé contre le vrai facilitator, pas un exemple inventé."""
+    async def fake_fetch(url, *, method="GET", headers=None):
+        if headers and executor.X_PAYMENT_HEADER in headers:
+            return HttpResult(status_code=200, body=b'{"risk": "low"}')
+        return HttpResult(status_code=402, body=_real_cybercentry_402_body())
+
+    async def sufficient_balance():
+        return 1.0
+
+    async def working_pay(requirement):
+        return "base64-payment-header"
+
+    result = await executor.fetch_paid_resource(
+        "https://x402-cybercentry-wallet-verification.up.railway.app/verify",
+        resource="wallet-verification", provider="cybercentry",
+        balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+    )
+    assert result.status == "ok"
+    assert result.amount_usd == 0.02
+    assert result.body == b'{"risk": "low"}'
+
+
 @pytest.mark.asyncio
 async def test_pay_fn_never_called_when_balance_insufficient():
     """Verifie explicitement l'ordre : balance_fn avant pay_fn -- jamais de

@@ -46,6 +46,7 @@ from typing import Any, Awaitable, Callable
 import httpx
 
 from aria_core import outgoing_pause, x402_budget
+from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
 
 logger = logging.getLogger(__name__)
 
@@ -109,11 +110,23 @@ def _extract_payment_requirement(body: bytes) -> dict[str, Any] | None:
 
 def _amount_to_usd(requirement: dict[str, Any]) -> float | None:
     """Convertit le montant (plus petite unité, ex. 6 décimales USDC) en dollars.
-    Fail-closed : actif non-USDC ou montant malformé -> ``None``."""
-    asset = str(requirement.get("asset") or "").upper()
-    if asset != _SUPPORTED_ASSET:
+    Fail-closed : actif non-USDC ou montant malformé -> ``None``.
+
+    Bug réel corrigé le 17/07 (jamais exercé contre un vrai facilitator jusqu'ici,
+    ``x402_executor.py`` le dit lui-même en tête de fichier -- premier vrai appel
+    fait ce soir contre Cybercentry, réglé via le facilitator Coinbase CDP officiel) :
+    le schéma x402 v1 RÉEL n'a pas de champ ``amount`` (``maxAmountRequired``,
+    string en plus petite unité) et ``asset`` est l'ADRESSE DE CONTRAT du token
+    (ex. USDC sur Base = ``0x8335...``), jamais la chaîne littérale ``"USDC"`` --
+    avec l'ancien code, CHAQUE appel réel aurait été rejeté par ce garde-fou
+    (fail-closed, donc sans risque, mais aussi sans jamais fonctionner). Les deux
+    anciennes conventions restent acceptées en repli, au cas où un autre facilitator
+    les utilise un jour -- jamais une régression pour un futur appelant."""
+    asset = str(requirement.get("asset") or "").strip()
+    is_usdc = asset.upper() == _SUPPORTED_ASSET or asset.lower() == USDC_BASE_ADDRESS.lower()
+    if not is_usdc:
         return None
-    raw = requirement.get("amount")
+    raw = requirement.get("maxAmountRequired", requirement.get("amount"))
     try:
         return float(raw) / _USDC_DECIMALS
     except (TypeError, ValueError):
