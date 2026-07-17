@@ -92,6 +92,20 @@ _TOKENS_BATCH_SIZE = 30  # limite documentée de /tokens/v1/{chainId}/{tokenAddr
 # la liquidité en une journée, 20x reste un multiple extrême, pas un jour normal).
 _MAX_VOLUME_TO_LIQUIDITY_RATIO = 20.0
 
+# 17/07 -- plafond sur le mouvement de prix déjà réalisé (demande opérateur explicite,
+# après TSG : +533 % sur 24h, -48,6 % sur 6h, +56,6 % sur 1h -- un vrai pump PUIS dump
+# PUIS re-pump, pas une simple hausse organique). Le ratio wash-trading ne capte pas ce
+# cas (liquidité réelle ~390 000 $, ratio volume/liq ~7,8x, largement sous le seuil de
+# 20x) -- un token déjà parabolique sur 24h reste un pari sur une extension encore plus
+# extrême, jamais un signal fiable, quel que soit le setup technique intraday. Doctrine
+# opérateur explicite (17/07) : "je préfère que ARIA passe à côté si il y a un doute" --
+# seuil volontairement conservateur (200 % = le token a plus que triplé en 24h), jamais
+# sur un mouvement NÉGATIF (la stratégie golden pocket/divergence RSI achète
+# délibérément des rétracements, un repli récent fait PARTIE du setup recherché, pas un
+# signal de danger). Absence de donnée (défaut 0.0 de PairSnapshot) -> jamais bloquant,
+# même doctrine dégradation douce que le reste du pipeline.
+_MAX_PRICE_CHANGE_24H_PCT = 200.0
+
 
 async def _batch_liquidity_prefilter(
     candidates: list[dict], *, min_liquidity_usd: float = _MIN_LIQUIDITY_USD,
@@ -392,10 +406,12 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
       3. Prix + meilleure paire (DexScreener) -- rejet si aucune paire liquide.
       4. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
          des données déjà en main (aucun appel réseau supplémentaire).
-      5. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
+      5. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
+         extrême, même donnée déjà en main.
+      6. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
          HOLD si absent (jamais un objectif fabriqué).
-      6. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
-      7. R/R franc (>= 1.5) + au moins 1 signal technique -> BUY déterministe.
+      7. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
+      8. R/R franc (>= 1.5) + au moins 1 signal technique -> BUY déterministe.
          R/R faible (1.0-1.5) -> confirmation LLM légère. Sinon HOLD.
     Retourne un dict compatible avec ``paper_trader.run_paper_cycle``'s ``analyzer``
     (``action``/``symbol``/``price``/``target``/``invalidation``/``chain``), ou
@@ -437,6 +453,17 @@ async def evaluate_momentum_entry(contract: str, chain: str) -> dict | None:
                 ],
                 "hold_reason": "wash_trading_ratio",
             }
+
+    if best.price_change_24h and best.price_change_24h > _MAX_PRICE_CHANGE_24H_PCT:
+        return {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd,
+            "reasons": [
+                f"prix déjà parabolique sur 24h (+{best.price_change_24h:.0f}% > "
+                f"+{_MAX_PRICE_CHANGE_24H_PCT:.0f}%) -- doute, on passe à côté"
+            ],
+            "hold_reason": "already_parabolic",
+        }
 
     reasons: list[str] = [honeypot_reason]
     candles = await _fetch_candles(best.pair_address, chain, contract=contract, pair=best)

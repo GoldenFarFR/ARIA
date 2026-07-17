@@ -546,6 +546,49 @@ async def test_evaluate_ratio_check_skipped_when_liquidity_zero(monkeypatch):
     assert result.get("hold_reason") != "wash_trading_ratio"
 
 
+# ── plafond prix déjà parabolique sur 24h (17/07, cas réel TSG) ─────────────────────
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_already_parabolic_24h_move(monkeypatch):
+    """Cas réel du 17/07 : TSG affichait +533% sur 24h (-48,6% sur 6h, +56,6% sur 1h --
+    pump puis dump puis re-pump), ratio wash-trading pourtant sous le seuil (~7,8x,
+    liquidité réelle ~390 000$). Demande opérateur explicite : "je préfère que ARIA
+    passe à côté si il y a un doute"."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(price_change_24h=533.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "already_parabolic"
+    assert "parabolique" in result["reasons"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_allows_reasonable_24h_move(monkeypatch):
+    """Non-régression : une hausse organique raisonnable (bien sous le seuil) ne doit
+    jamais être bloquée par ce garde-fou."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(price_change_24h=45.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "already_parabolic"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_parabolic_check_never_blocks_on_a_recent_dip(monkeypatch):
+    """La stratégie golden pocket/divergence RSI achète délibérément des
+    RÉTRACEMENTS -- un mouvement 24h NÉGATIF fait partie du setup recherché, jamais
+    un signal de danger, même très marqué."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(price_change_24h=-70.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "already_parabolic"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_parabolic_check_skipped_when_data_absent(monkeypatch):
+    """Absence de donnée (défaut 0.0 de PairSnapshot) -- jamais bloquant, même
+    doctrine de dégradation douce que le reste du pipeline."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(price_change_24h=0.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "already_parabolic"
+
+
 @pytest.mark.asyncio
 async def test_evaluate_hold_reason_distinguishes_goplus_outage_from_real_honeypot(monkeypatch):
     """Mandat #192 (16/07) -- une panne GoPlus (infrastructure) et un honeypot
