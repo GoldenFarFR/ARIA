@@ -721,6 +721,21 @@ async def test_llm_confirm_parses_buy(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_llm_confirm_uses_zero_temperature_for_consistency(monkeypatch):
+    """17/07, demande opérateur : le départage doit rendre la MÊME sentence à chaque
+    itération sur un signal identique, jamais dépendre de l'aléa d'échantillonnage."""
+    captured = {}
+
+    async def fake_chat_with_context(*args, **kwargs):
+        captured.update(kwargs)
+        return "BUY"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+    assert captured.get("temperature") == 0.0
+
+
+@pytest.mark.asyncio
 async def test_llm_confirm_tolerates_exception(monkeypatch):
     async def fake_chat_with_context(*args, **kwargs):
         raise RuntimeError("boom")

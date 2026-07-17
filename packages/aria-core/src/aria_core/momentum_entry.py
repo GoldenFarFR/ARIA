@@ -393,7 +393,12 @@ async def _llm_confirm(contract: str, symbol: str, chain: str, rr: float, reason
         "BUY ou HOLD ?"
     )
     try:
-        reply = await chat_with_context(user, system, max_tokens=10)
+        # 17/07 -- temperature=0.0 explicite (demande opérateur) : ce départage doit
+        # rendre la MÊME sentence à chaque itération sur un signal identique, jamais
+        # dépendre d'un aléa d'échantillonnage. Sans effet mesurable sur la latence
+        # (la température agit sur le sampling, pas sur le forward pass) -- gain de
+        # cohérence, pas de vitesse.
+        reply = await chat_with_context(user, system, max_tokens=10, temperature=0.0)
     except Exception as exc:  # noqa: BLE001 — jamais bloquant, dégrade vers HOLD
         logger.info("_llm_confirm: appel LLM échoué (%s)", exc)
         return False
