@@ -389,6 +389,11 @@ async def test_requirement_normalized_with_max_amount_required_and_resource(monk
 
     assert captured["maxAmountRequired"] == "50000"
     assert captured["resource"] == "https://macro.lonestaroracle.xyz/macro"
+    # 17/07 -- bug réel : x402Version vit à la racine de l'enveloppe (jamais dans
+    # accepts[0]) -- sans le réinjecter, x402_cdp_signer.py retombait sur son
+    # défaut (1) et routait la signature vers le mauvais schéma du SDK (V1, qui
+    # ne connaît pas le format réseau CAIP-2 "eip155:8453" des offres v2 réelles).
+    assert captured["x402Version"] == 2
 
 
 @pytest.mark.asyncio

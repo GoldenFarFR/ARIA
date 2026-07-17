@@ -109,12 +109,22 @@ def _extract_payment_requirement(
     standard une fois décodé. Le corps reste tenté EN PREMIER (plus rapide, pas
     de décodage) ; le header n'est essayé QUE si le corps n'a pas donné de
     résultat exploitable -- jamais l'inverse, pour ne pas régresser les
-    fournisseurs (ex. Cybercentry) qui utilisent bien le corps."""
+    fournisseurs (ex. Cybercentry) qui utilisent bien le corps.
+
+    ``x402Version`` (RACINE de l'enveloppe, PAS dans ``accepts[0]``) réinjecté
+    explicitement dans le dict renvoyé -- bug réel trouvé le 17/07 : sans ça,
+    ``x402_cdp_signer.py`` retombait sur son défaut (1) pour CHAQUE fournisseur
+    v2, routant la signature vers le mauvais schéma du SDK officiel (V1, qui ne
+    connaît que des noms de réseau à plat comme "base", jamais le format CAIP-2
+    "eip155:8453" utilisé par les vraies offres v2) -- échec systématique
+    "No payment requirements match registered schemes" sur tout fournisseur v2."""
     try:
         data = json.loads(body.decode("utf-8"))
         accepts = data.get("accepts") if isinstance(data, dict) else None
         if isinstance(accepts, list) and accepts and isinstance(accepts[0], dict):
-            return accepts[0]
+            first = dict(accepts[0])
+            first.setdefault("x402Version", data.get("x402Version", 1))
+            return first
     except Exception:  # noqa: BLE001 — corps illisible, on retente via le header
         pass
 
@@ -135,7 +145,11 @@ def _extract_payment_requirement(
     if not isinstance(accepts, list) or not accepts:
         return None
     first = accepts[0]
-    return first if isinstance(first, dict) else None
+    if not isinstance(first, dict):
+        return None
+    first = dict(first)
+    first.setdefault("x402Version", data.get("x402Version", 1))
+    return first
 
 
 def _amount_to_usd(requirement: dict[str, Any]) -> float | None:
