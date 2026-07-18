@@ -201,16 +201,15 @@ async def _autopsy_one(prediction: dict, *, ohlcv_fetch=None, llm=None, github_c
     if llm is None:
         from aria_core.llm import chat_with_context as llm
 
-    from aria_core.runtime import settings
-    from aria_core.spark_config import DEFAULT_MODEL_DEVELOP
-
-    develop_model = (
-        getattr(settings, "aria_llm_model_develop", None) or ""
-    ).strip() or DEFAULT_MODEL_DEVELOP
-
     prompt = _format_case_for_prompt(prediction, pattern)
+    # 17/07 -- même bascule que claude_mentor.py (voir son commentaire pour le détail de
+    # la revue) : Sonnet 5 via OpenRouter, secours explicite Haiku 4.5, puis repli global
+    # existant (Grok/Groq). max_tokens porté à 900 -- 500 tronquait systématiquement les
+    # autopsies Opus/Sonnet lors du test réel du 17/07 (finish_reason=length en plein mot).
     raw = await llm(
-        prompt, _AUTOPSY_SYSTEM, max_tokens=500, model=develop_model, depth="pump_dump_autopsy",
+        prompt, _AUTOPSY_SYSTEM, max_tokens=900, depth="pump_dump_autopsy",
+        provider="openrouter", model="anthropic/claude-sonnet-5",
+        fallback_provider="openrouter", fallback_model="anthropic/claude-haiku-4.5",
     )
 
     lesson = ""

@@ -133,6 +133,12 @@ class Settings(BaseSettings):
     # en USDC, plutôt que de multiplier les comptes fiat par provider. Clé dédiée, même
     # doctrine que les autres.
     openrouter_api_key: str = ""
+    # 17/07 -- Anthropic direct (api.anthropic.com/v1/messages, format natif -- PAS
+    # compatible OpenAI, contrairement à tous les autres providers ci-dessus). Prête à
+    # être utilisée dès que le compte Anthropic Console a du crédit (0 au 17/07) -- la
+    # bascule OpenRouter -> Anthropic direct pour Haiku/Sonnet 5 sera un changement de
+    # provider/model d'une ligne par appelant, pas un nouveau chantier.
+    anthropic_api_key: str = ""
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"

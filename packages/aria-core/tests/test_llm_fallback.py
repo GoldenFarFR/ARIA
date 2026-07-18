@@ -454,3 +454,265 @@ async def test_truncated_response_logged_and_recorded(monkeypatch):
     assert out == "réponse coupée en plein mot..."
     assert recorded.get("truncated") is True
     assert any("truncated" in w.lower() for w in warnings)
+
+
+# ── Anthropic direct, format natif (17/07) ──────────────────────────────────────────
+
+def test_anthropic_direct_route_uses_dedicated_key():
+    """Préparé pour la bascule OpenRouter -> Anthropic direct (0 crédit au 17/07,
+    testé en direct contre api.anthropic.com : clé authentifiée, 400 billing-only)."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "anthropic"
+    settings.anthropic_api_key = "sk-ant-real-key"
+    settings.virtuals_api_key = ""
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes()
+    assert len(routes) == 1
+    assert routes[0].provider == "anthropic"
+    assert routes[0].url == "https://api.anthropic.com/v1/messages"
+    assert routes[0].auth_key == "sk-ant-real-key"
+    assert routes[0].model == "claude-haiku-4-5-20251001"
+    assert is_llm_configured() is True
+
+
+def test_anthropic_never_falls_back_to_generic_llm_api_key():
+    """Contrairement aux autres providers directs (grok/deepseek/gemini/mistral/openai/
+    openrouter), Anthropic n'a délibérément AUCUN repli sur ``llm_api_key`` -- c'est un
+    provider tout neuf, mieux vaut échouer explicitement (pas de route) que risquer une
+    mauvaise clé générique silencieuse (même famille de bug que l'incident grok_api_key
+    du 17/07)."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "anthropic"
+    settings.anthropic_api_key = ""
+    settings.llm_api_key = "should-not-be-used"
+
+    routes = _resolve_routes()
+    assert routes == []
+
+
+def test_anthropic_headers_use_x_api_key_not_bearer():
+    import aria_core.llm as llm_mod
+
+    route = llm_mod.LlmRoute("anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001", "sk-ant-key")
+    headers = llm_mod._headers_for_route(route)
+    assert headers["x-api-key"] == "sk-ant-key"
+    assert headers["anthropic-version"] == "2023-06-01"
+    assert "Authorization" not in headers
+
+
+@pytest.mark.asyncio
+async def test_anthropic_payload_extracts_system_top_level_and_parses_content_blocks(monkeypatch):
+    """Le point clé qui distingue Anthropic de tous les autres providers de ce fichier
+    (tous compatibles OpenAI) : ``system`` est un champ top-level, PAS un message de
+    rôle "system" ; la réponse est un tableau ``content`` de blocs typés, PAS
+    ``choices[0].message.content``. Vérifié en direct contre api.anthropic.com le
+    17/07 (auth OK, 400 billing-only -- juste 0 crédit sur le compte)."""
+    import aria_core.llm as llm_mod
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "HOLD"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 42, "output_tokens": 3},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+
+    recorded: dict = {}
+    import aria_core.llm_usage as llm_usage_mod
+    monkeypatch.setattr(llm_usage_mod, "record_llm_usage", lambda **kw: recorded.update(kw))
+
+    route = llm_mod.LlmRoute("anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001", "sk-ant-key")
+    reply = await llm_mod._post_chat(
+        route,
+        messages=[
+            {"role": "system", "content": "Tu es un juge BUY/HOLD."},
+            {"role": "user", "content": "BUY ou HOLD ?"},
+        ],
+        temperature=0.0, max_tokens=10, prompt_est=20, depth="brief",
+    )
+    assert reply == "HOLD"
+    assert captured["url"] == "https://api.anthropic.com/v1/messages"
+    # system extrait, jamais un message de rôle "system" dans le tableau messages
+    assert captured["json"]["system"] == "Tu es un juge BUY/HOLD."
+    assert all(m["role"] != "system" for m in captured["json"]["messages"])
+    assert captured["json"]["messages"] == [{"role": "user", "content": "BUY ou HOLD ?"}]
+    assert recorded.get("input_tokens") == 42
+    assert recorded.get("output_tokens") == 3
+    assert recorded.get("truncated") is False
+
+
+@pytest.mark.asyncio
+async def test_anthropic_truncation_detected_via_stop_reason_max_tokens(monkeypatch):
+    """Anthropic signale une réponse tronquée via ``stop_reason=max_tokens`` (pas
+    ``finish_reason=length`` comme les providers compatibles OpenAI) -- même garde-fou
+    de télémétrie (#incident 12/07) doit s'appliquer ici aussi."""
+    import aria_core.llm as llm_mod
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "réponse coupée en plein"}],
+                "stop_reason": "max_tokens",
+                "usage": {"input_tokens": 900, "output_tokens": 900},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+
+    recorded: dict = {}
+    import aria_core.llm_usage as llm_usage_mod
+    monkeypatch.setattr(llm_usage_mod, "record_llm_usage", lambda **kw: recorded.update(kw))
+
+    route = llm_mod.LlmRoute("anthropic", "https://api.anthropic.com/v1/messages", "claude-sonnet-5", "sk-ant-key")
+    reply = await llm_mod._post_chat(
+        route, messages=[{"role": "user", "content": "prompt"}],
+        temperature=0.0, max_tokens=900, prompt_est=900, depth="develop",
+    )
+    assert reply == "réponse coupée en plein"
+    assert recorded.get("truncated") is True
+
+
+# ── routage explicite par appel (17/07, tie-breaker Haiku + develop Sonnet 5) ───────
+
+def test_resolve_routes_explicit_provider_overrides_global():
+    """L'appelant qui a besoin d'un modèle précis (ex. le tie-breaker momentum sur
+    Haiku via OpenRouter) ne doit pas dépendre du LLM_PROVIDER global (Grok/Spark) --
+    tout le reste d'ARIA continue d'utiliser ce dernier normalement."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "grok"
+    settings.grok_api_key = "grok-key"
+    settings.openrouter_api_key = "or-key"
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes(
+        "anthropic/claude-haiku-4.5", provider="openrouter", require_llm_enabled=True,
+    )
+    assert len(routes) == 1
+    assert routes[0].provider == "openrouter"
+    assert routes[0].model == "anthropic/claude-haiku-4.5"
+
+    # Un appel SANS provider explicite reste sur le comportement global inchangé.
+    default_routes = _resolve_routes(require_llm_enabled=True)
+    assert default_routes[0].provider == "grok"
+
+
+def test_resolve_routes_explicit_fallback_same_provider_as_primary_not_deduped():
+    """Bug trouvé en construisant ce chantier : le dédoublonnage EXISTANT (fallback
+    global) compare par provider seul -- correct pour son usage d'origine, mais aurait
+    supprimé à tort un secours explicite Sonnet 5 -> Haiku (même provider OpenRouter,
+    modèle différent). Corrigé : le secours explicite se dédoublonne par (provider,
+    model), jamais provider seul."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "openrouter"
+    settings.openrouter_api_key = "or-key"
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes(
+        "anthropic/claude-sonnet-5",
+        provider="openrouter",
+        fallback_provider="openrouter",
+        fallback_model="anthropic/claude-haiku-4.5",
+        require_llm_enabled=True,
+    )
+    assert len(routes) == 2
+    assert routes[0].provider == "openrouter" and routes[0].model == "anthropic/claude-sonnet-5"
+    assert routes[1].provider == "openrouter" and routes[1].model == "anthropic/claude-haiku-4.5"
+
+
+def test_resolve_routes_explicit_fallback_plus_global_fallback_as_third_tier():
+    """Décision opérateur explicite (17/07) : si OpenRouter entier tombe (pas juste un
+    modèle), le repli global existant (Grok/Groq, infrastructure totalement
+    différente) reste un 3e filet -- réutilisé tel quel, aucune nouvelle config."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "openrouter"
+    settings.openrouter_api_key = "or-key"
+    settings.llm_fallback_provider = "groq"
+    settings.llm_fallback_api_key = "gsk-fallback"
+
+    routes = _resolve_routes(
+        "anthropic/claude-sonnet-5",
+        provider="openrouter",
+        fallback_provider="openrouter",
+        fallback_model="anthropic/claude-haiku-4.5",
+        require_llm_enabled=True,
+    )
+    assert len(routes) == 3
+    assert [r.provider for r in routes] == ["openrouter", "openrouter", "groq"]
+    assert routes[2].auth_key == "gsk-fallback"
+
+
+@pytest.mark.asyncio
+async def test_chat_with_context_forwards_provider_and_fallback_kwargs(monkeypatch):
+    """Bout-en-bout : ``chat_with_context`` transmet bien provider/fallback_provider/
+    fallback_model à ``_resolve_routes`` -- pas seulement testé au niveau interne."""
+    import aria_core.llm as llm_mod
+
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "grok"
+    settings.grok_api_key = "grok-key"
+    settings.openrouter_api_key = "or-key"
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    captured_routes = {}
+
+    async def fake_post_chat(route, **kwargs):
+        captured_routes["provider"] = route.provider
+        captured_routes["model"] = route.model
+        return "HOLD"
+
+    monkeypatch.setattr(llm_mod, "_post_chat", fake_post_chat)
+
+    out = await llm_mod.chat_with_context(
+        "user", "system", max_tokens=10, temperature=0.0,
+        provider="openrouter", model="anthropic/claude-haiku-4.5",
+    )
+    assert out == "HOLD"
+    assert captured_routes["provider"] == "openrouter"
+    assert captured_routes["model"] == "anthropic/claude-haiku-4.5"
