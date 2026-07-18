@@ -162,6 +162,26 @@ pitfalls:
     verify: "build-local OK + deploy-log.jsonl entree avec raison"
     never: "Deployer sans build-local ni raison documentee dans deploy-render."
 
+  - id: clawhub-marketplace-malware-2026-04
+    severity: critical
+    lesson: >
+      ClawHub (marketplace de skills pour OpenClaw, framework agent IA concurrent open-source,
+      ex-Clawdbot) a purge 2419 skills suspects fin avril 2026, dont 1184 distribuaient un
+      malware voleur de wallet -- deguises en bots Polymarket, integrations ByBit, outils
+      "crypto wallet" (The Register, 29/04/2026). Straiker (recherche securite) documente une
+      chaine d'attaque agent-a-agent construite sur ClawHub et propagee via un site tiers.
+      Exactement la categorie (crypto/wallet/finance) ou ARIA opere.
+    fix: >
+      Ne jamais installer ni executer un package/skill tiers touchant au capital d'ARIA sans
+      revue humaine complete du code source -- renforce la doctrine deja en place (aucune
+      dependance non auditee sur un chemin qui touche au wallet). Si une idee d'architecture
+      d'un tel marketplace est jugee utile (ex. detecteur deterministe de regressions sans LLM),
+      la recoder en interne, jamais importer le package d'origine.
+    verify: "grep -rn 'clawhub\\|openclaw' packages/ -- doit rester vide"
+    never: >
+      Installer un skill/package depuis ClawHub ou tout marketplace de skills tiers non audite,
+      meme hors categorie finance.
+
 new_pc_checklist:
   - "git clone GoldenFarFR/collegue-memoire → %USERPROFILE%\\projets\\collegue-memoire"
 
