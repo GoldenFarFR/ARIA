@@ -1807,6 +1807,16 @@ async def _register_bot_commands() -> None:
         BotCommand("canal", "Contrôle du canal ARIA → Claude Code"),
         BotCommand("test_spend", "Test wallet_guard (aucune dépense réelle)"),
         BotCommand("start", "Message de bienvenue / lever la pause"),
+        # 18/07 -- 9 commandes trouvées écrites mais jamais enregistrées (audit).
+        BotCommand("x", "Statut/profil/publication X (status, profile, compose, post)"),
+        BotCommand("avatar", "Photo de profil ARIA (identity, scene, style, apply)"),
+        BotCommand("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
+        BotCommand("qi", "QI actuel d'ARIA (capacités)"),
+        BotCommand("level", "Niveaux/paliers de compétence ARIA"),
+        BotCommand("learn", "Ajoute une leçon manuelle (topic | contenu)"),
+        BotCommand("calibrate", "Calibre une affirmation (vrai/faux/incertain)"),
+        BotCommand("experiment", "Crée un sandbox d'expérimentation GitHub"),
+        BotCommand("handles", "Registre des handles X (add/remove/alias/pack)"),
     ]
     await _bot_app.bot.set_my_commands(commands)
     logger.info("Telegram command menu registered (%d commands)", len(commands))
@@ -2780,6 +2790,20 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("theses", _handle_theses))
     app.add_handler(CommandHandler("github", _handle_github))
     app.add_handler(CommandHandler("canal", _handle_aria_channel))
+    # 18/07 -- audit systématique (grep _handle_* vs add_handler) : ces 9 commandes
+    # étaient entièrement écrites (backend réel, admin-gated) mais JAMAIS enregistrées
+    # -- inaccessibles depuis toujours malgré une doc CLAUDE.md qui les traite comme
+    # actives (ex. "/x profile sync" mentionné à plusieurs reprises). /learn était déjà
+    # noté orphelin lors de l'audit #206 (18/07) sans jamais avoir été câblé depuis.
+    app.add_handler(CommandHandler("x", _handle_x))
+    app.add_handler(CommandHandler("avatar", _handle_avatar))
+    app.add_handler(CommandHandler("repertoire", _handle_repertoire))
+    app.add_handler(CommandHandler("qi", _handle_qi))
+    app.add_handler(CommandHandler("level", _handle_level))
+    app.add_handler(CommandHandler("learn", _handle_learn))
+    app.add_handler(CommandHandler("calibrate", _handle_calibrate))
+    app.add_handler(CommandHandler("experiment", _handle_experiment))
+    app.add_handler(CommandHandler("handles", _handle_handles))
 
     # Inline keyboard buttons (approve/reject/explain — approvals + wallet spend flow)
     app.add_handler(CallbackQueryHandler(_handle_callback))
