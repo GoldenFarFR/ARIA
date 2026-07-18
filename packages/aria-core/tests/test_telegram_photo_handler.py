@@ -284,6 +284,28 @@ async def test_vision_analysis_methodology_caption_short_circuits_without_llm_ca
 
 
 @pytest.mark.asyncio
+async def test_vision_scan_scope_caption_short_circuits_without_llm_call(monkeypatch):
+    llm_called = {"value": False}
+
+    async def fake_llm_response(*a, **kw):
+        llm_called["value"] = True
+        return "ne devrait jamais être appelé"
+
+    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
+
+    caption = "je croyais que tu scanner tous les jetons sur base dans dexscreener ?"
+    update = FakeUpdate(caption=caption, user_id=42)
+    await telegram_bot._handle_vision_photo(update, FakeContext(), caption)
+
+    assert llm_called["value"] is False
+    assert len(update.message.replies) == 1
+    reply = update.message.replies[0].lower()
+    assert "momentum_entry" in reply
+    assert "dexscreener" in reply
+
+
+@pytest.mark.asyncio
 async def test_vision_ordinary_caption_still_reaches_llm(monkeypatch):
     """Non-régression : une légende qui ne matche aucun détecteur déterministe continue
     de suivre le chemin LLM normal (comportement historique inchangé)."""

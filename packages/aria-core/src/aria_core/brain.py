@@ -352,8 +352,10 @@ class AriaBrain:
             analysis_methodology_reply,
             is_analysis_methodology_question,
             is_llm_identity_question,
+            is_scan_scope_question,
             is_why_not_bought_question,
             llm_identity_reply,
+            scan_scope_reply,
             why_not_bought_reply,
         )
 
@@ -384,6 +386,15 @@ class AriaBrain:
                 skill_used=None,
                 actions_taken=["Pourquoi pas d'achat (template — sans confabulation)"],
                 data={"why_not_bought": True, "skip_web": True},
+            )
+        if is_scan_scope_question(route_msg):
+            early_reply = scan_scope_reply(lang_key_early)
+            await repertoire_db.save_message("agent", early_reply, visitor_id=vid)
+            return ChatResponse(
+                reply=early_reply,
+                skill_used=None,
+                actions_taken=["Portée du scan (template — sans confabulation)"],
+                data={"scan_scope": True, "skip_web": True},
             )
 
         if not public:
@@ -1028,9 +1039,11 @@ class AriaBrain:
             is_factual_question,
             is_general_qa,
             is_llm_identity_question,
+            is_scan_scope_question,
             is_short_ack,
             is_why_not_bought_question,
             llm_identity_reply,
+            scan_scope_reply,
             why_not_bought_reply,
         )
         from aria_core.knowledge.epistemic import resolve_calibrated_answer
@@ -1139,6 +1152,14 @@ class AriaBrain:
                 None,
                 ["Pourquoi pas d'achat (template — sans confabulation)"],
                 {"why_not_bought": True, "skip_web": True},
+                None,
+            )
+        if is_scan_scope_question(route):
+            return (
+                scan_scope_reply(lang_key),
+                None,
+                ["Portée du scan (template — sans confabulation)"],
+                {"scan_scope": True, "skip_web": True},
                 None,
             )
 

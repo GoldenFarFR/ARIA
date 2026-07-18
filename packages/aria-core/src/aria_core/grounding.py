@@ -652,6 +652,70 @@ def should_skip_llm_enhance(skill_name: str | None) -> bool:
     return skill_name in FACTUAL_SKILLS
 
 
+_SCAN_SCOPE_RE = re.compile(
+    r"(?:"
+    r"(?:token|jeton)s?\s+.{0,30}(?:scann|refus[ée]|rejet)|"
+    r"(?:scann|refus[ée]|rejet)\w*\s+.{0,30}(?:token|jeton|meilleur|r[ée]sultat)|"
+    r"combien\s+de\s+(?:token|jeton)s?\s+.{0,15}scann|"
+    r"tu\s+scann\w*\s+tous\s+les\s+(?:token|jeton)s?|"
+    r"which\s+(?:token|coin)s?\s+.{0,30}(?:scan|reject)|"
+    r"how\s+many\s+(?:tokens?|coins?)\s+.{0,15}scan|"
+    r"do\s+you\s+scan\s+(?:all|every)\s+(?:tokens?|coins?)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_scan_scope_question(message: str) -> bool:
+    """True pour une question sur CE QUE le pipeline momentum scanne/refuse réellement
+    (« quel token refusé avait le meilleur résultat ? », « tu scannes tous les jetons sur
+    Base ? »). **Incident réel (18/07, même soirée que #110-momentum ci-dessus)** : deux
+    questions de ce type, posées juste après le déploiement du premier correctif, ont
+    de nouveau confabulé -- l'une en attribuant TOUT le scan au moteur bonding (quasi
+    inactif, cf. `bonding_discovery_cycle`), l'autre en affirmant que la découverte est
+    "limitée aux tokens en phase bonding sur Virtuals" alors que
+    ``discover_momentum_candidates`` source RÉELLEMENT via un crawler Base dédié +
+    les flux de découverte DexScreener (profils/boosts récents, multi-chaînes) -- la
+    confusion bonding/momentum, déjà corrigée une fois dans ``analysis_methodology_reply``,
+    revient sous une formulation différente à chaque fois. Contrairement à
+    ``is_analysis_methodology_question`` (méthode d'analyse), celle-ci cible spécifiquement
+    la PORTÉE du scan (quoi/combien), d'où un détecteur et un template séparés."""
+    text = (message or "").strip()
+    if len(text) < 6:
+        return False
+    return bool(_SCAN_SCOPE_RE.search(text))
+
+
+def scan_scope_reply(lang: str = "en") -> str:
+    """Réponse déterministe (pas d'appel LLM) -- décrit la VRAIE portée de
+    ``discover_momentum_candidates`` (momentum_entry.py) et admet honnêtement l'absence
+    de détail par candidat plutôt que d'inventer un "meilleur refus"."""
+    if lang == "fr":
+        return (
+            "Le scan réel (momentum_entry.py) source via un crawler Base dédié + les flux "
+            "de découverte DexScreener (profils et boosts récents, multi-chaînes Base/Solana/"
+            "Robinhood) — pas un balayage exhaustif de tous les jetons, pas non plus limité à "
+            "la phase bonding Virtuals (ça, c'est un pipeline séparé et aujourd'hui quasi "
+            "inactif, bonding_discovery_cycle). ~20 candidats sont évalués toutes les 15-20 min "
+            "(honeypot GoPlus puis ratio risque/rendement). Je ne peux pas te dire quel token "
+            "refusé était « le plus proche » de passer — je journalise seulement des compteurs "
+            "agrégés par cycle (combien ont échoué pour quelle raison), jamais le détail par "
+            "candidat, et ces compteurs ne sont pas conservés au-delà des logs. C'est une vraie "
+            "limite, pas une esquive."
+        )
+    return (
+        "The real scan (momentum_entry.py) sources via a dedicated Base crawler + DexScreener "
+        "discovery feeds (recent profiles and boosts, multi-chain Base/Solana/Robinhood) — not "
+        "an exhaustive sweep of every token, and not limited to the Virtuals bonding phase "
+        "either (that's a separate, mostly inactive pipeline, bonding_discovery_cycle). ~20 "
+        "candidates get evaluated every 15-20 min (GoPlus honeypot check then risk/reward "
+        "ratio). I can't tell you which rejected token was \"closest\" to passing — I only log "
+        "aggregate counts per cycle (how many failed for which reason), never per-candidate "
+        "detail, and those counts aren't kept beyond the logs. That's a real limitation, not a "
+        "dodge."
+    )
+
+
 def unknown_reply(lang: str = "en") -> str:
     if lang == "fr":
         return (

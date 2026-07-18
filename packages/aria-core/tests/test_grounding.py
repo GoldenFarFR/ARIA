@@ -13,9 +13,11 @@ from aria_core.grounding import (
     is_llm_identity_question,
     is_social_chitchat,
     is_pure_casual_smalltalk,
+    is_scan_scope_question,
     is_trade_status_question,
     is_why_not_bought_question,
     llm_identity_reply,
+    scan_scope_reply,
     should_skip_llm_enhance,
     social_ack_reply,
     unknown_reply,
@@ -144,6 +146,32 @@ def test_why_not_bought_reply_never_denies_live_capability():
         assert "aucun capital réel" not in reply
         assert "track-record" not in reply
         assert "no real capital" not in reply
+
+
+def test_scan_scope_question_detects_real_incident_phrasing():
+    # Incident réel (18/07, même soirée que le déploiement du premier correctif) :
+    # deux questions distinctes ont de nouveau confabulé, en ré-attribuant tout le scan
+    # au pipeline bonding (quasi inactif) au lieu de momentum_entry.py.
+    assert is_scan_scope_question(
+        "parmis tous se que tu a scanner et refuser lequel avait le meilleur resultat ?"
+    )
+    assert is_scan_scope_question("je croyais que tu scanner tous les jetons sur base dans dexscreener ?")
+    assert is_scan_scope_question("combien de tokens as-tu scanné aujourd'hui ?")
+    assert is_scan_scope_question("do you scan all tokens on Base?")
+    assert is_scan_scope_question("which token did you reject with the best result?")
+    assert not is_scan_scope_question("bonjour")
+    assert not is_scan_scope_question("quel est le prix du token")
+
+
+def test_scan_scope_reply_names_real_mechanism_and_admits_data_gap():
+    for lang in ("fr", "en"):
+        reply = scan_scope_reply(lang).lower()
+        assert "momentum_entry" in reply
+        assert "dexscreener" in reply
+        assert "bonding_discovery_cycle" in reply
+        # Ne doit jamais inventer un "meilleur refus" -- doit admettre l'absence de
+        # détail par candidat plutôt que de confabuler une réponse plausible.
+        assert "closest" in reply or "proche" in reply
 
 
 def test_faq_direct_answer_high_confidence():

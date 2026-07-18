@@ -1291,8 +1291,10 @@ async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             analysis_methodology_reply,
             is_analysis_methodology_question,
             is_llm_identity_question,
+            is_scan_scope_question,
             is_why_not_bought_question,
             llm_identity_reply,
+            scan_scope_reply,
             why_not_bought_reply,
         )
         from aria_core.locale import detect_operator_lang
@@ -1306,6 +1308,9 @@ async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         if is_why_not_bought_question(caption):
             await _reply(message, why_not_bought_reply(early_lang_key))
+            return
+        if is_scan_scope_question(caption):
+            await _reply(message, scan_scope_reply(early_lang_key))
             return
 
     import base64
