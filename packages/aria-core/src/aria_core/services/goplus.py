@@ -5,12 +5,19 @@ lecture de COMPORTEMENT dynamique que l'ABI seule ne révèle pas : le token est
 honeypot (revente bloquée), quelles sont les taxes d'achat/vente RÉELLES, l'owner est-il
 caché, peut-il reprendre la propriété, les transferts sont-ils suspendables, etc.
 
-API publique GoPlus, sans clé requise (chain Base = 8453). Lecture seule, aucun appel
-autre que GET. Même politique d'erreurs que blockscout.py (dôme) :
+API GoPlus, chain Base = 8453. Lecture seule, aucun appel autre que GET/POST-token.
+Authentification OPTIONNELLE (#207, 18/07) : si `GOPLUS_APP_KEY`/`GOPLUS_APP_SECRET`
+sont présentes dans l'environnement, un access_token (JWT, valide 2h, renouvelé
+automatiquement) est joint en en-tête `access-token` sur chaque appel -- sépare le
+quota d'ARIA de la limite anonyme par IP (~30 req/min, cause directe des `code 4029`
+observés le 17-18/07). Sans ces identifiants, comportement historique inchangé
+(API publique sans clé). Même politique d'erreurs que blockscout.py (dôme) :
 - 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
 - Timeout / 5xx : 1 retry après 5s, puis fallback explicite.
 - Donnée manquante JAMAIS remplacée par une supposition : `available=False` + `error`,
   et chaque drapeau vaut None (inconnu) plutôt que False quand GoPlus ne répond pas.
+- Échec d'authentification (token, réseau) : jamais bloquant, repli silencieux sur
+  l'appel sans en-tête (même comportement que si aucune clé n'était configurée).
 
 Un drapeau None (inconnu) ne bloque jamais à lui seul : seul un signal POSITIVEMENT
 confirmé (honeypot=1, cannot_sell=1, taxe élevée…) pénalise. Cohérent avec la doctrine :
@@ -19,7 +26,10 @@ une panne réseau ne bannit pas un bon token.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import os
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -32,6 +42,12 @@ BASE_CHAIN_ID = "8453"  # Base mainnet
 UNAVAILABLE = "donnée GoPlus indisponible"
 
 _FAIL_STREAK_WARN_THRESHOLD = 3
+_TOKEN_REFRESH_MARGIN_S = 300  # renouvelle 5 min avant l'expiration annoncée par GoPlus
+
+
+def goplus_authenticated() -> bool:
+    """True si les identifiants app_key/app_secret sont configurés dans l'environnement."""
+    return bool(os.environ.get("GOPLUS_APP_KEY", "").strip() and os.environ.get("GOPLUS_APP_SECRET", "").strip())
 
 
 @dataclass
@@ -115,6 +131,48 @@ class GoPlusClient:
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
+        self._access_token: str | None = None
+        self._token_expires_at: float = 0.0
+        self._token_lock = asyncio.Lock()
+
+    async def _ensure_access_token(self) -> str | None:
+        """Renouvelle l'access_token si absent/proche expiration. Retourne None sans
+        identifiants configurés (chemin public inchangé) ou en cas d'échec réseau --
+        jamais bloquant, jamais une exception propagée vers l'appelant."""
+        app_key = os.environ.get("GOPLUS_APP_KEY", "").strip()
+        app_secret = os.environ.get("GOPLUS_APP_SECRET", "").strip()
+        if not app_key or not app_secret:
+            return None
+
+        async with self._token_lock:
+            now = time.time()
+            if self._access_token and now < self._token_expires_at - _TOKEN_REFRESH_MARGIN_S:
+                return self._access_token
+
+            t = int(now)
+            sign = hashlib.sha1(f"{app_key}{t}{app_secret}".encode()).hexdigest()
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.post(
+                        f"{self.base_url}/token",
+                        data={"app_key": app_key, "time": t, "sign": sign},
+                    )
+                body = response.json()
+            except Exception as exc:  # réseau, timeout, JSON invalide -- jamais bloquant
+                logger.warning("goplus: echec renouvellement access_token (%s) — repli sur l'API publique", exc)
+                return self._access_token
+
+            result = body.get("result") if isinstance(body, dict) else None
+            token = result.get("access_token") if isinstance(result, dict) else None
+            expires_in = result.get("expires_in") if isinstance(result, dict) else None
+            if not token:
+                logger.warning("goplus: reponse /token sans access_token — repli sur l'API publique")
+                return self._access_token
+
+            self._access_token = token
+            self._token_expires_at = now + float(expires_in or 0)
+            logger.info("goplus: access_token renouvele (expire dans %ss)", expires_in)
+            return self._access_token
 
     async def _throttle(self) -> None:
         async with self._lock:
@@ -148,12 +206,14 @@ class GoPlusClient:
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         retried = False
+        token = await self._ensure_access_token()
+        headers = {"access-token": token} if token else None
 
         while True:
             await self._throttle()
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.get(url, params=params)
+                    response = await client.get(url, params=params, headers=headers)
             except httpx.TransportError as exc:
                 if not retried:
                     retried = True

@@ -2,6 +2,9 @@
 et barrières du filtre de sécurité. 100 % hors-ligne (aucun appel réseau réel)."""
 from __future__ import annotations
 
+import time
+
+import httpx
 import pytest
 
 from aria_core.services.goplus import UNAVAILABLE, GoPlusClient, TokenSecurity, _tax, _tri
@@ -69,7 +72,7 @@ class _FakeHttpClient:
     async def __aexit__(self, *args):
         return None
 
-    async def get(self, url, params=None):
+    async def get(self, url, params=None, headers=None):
         queue = self._responses[url]
         return queue.pop(0) if isinstance(queue, list) else queue
 
@@ -135,6 +138,168 @@ async def test_code_4029_gives_up_after_three_attempts(monkeypatch):
     assert security.available is False
     assert UNAVAILABLE in security.error
     assert "rate limit" in security.error
+
+
+# ── authentification optionnelle app_key/app_secret (#207, 18/07) ────────────
+# Sépare le quota d'ARIA de la limite anonyme par IP (~30 req/min), cause directe
+# des code 4029 observés le 17-18/07. Sans identifiants -> comportement historique
+# inchangé (chemin public sans clé).
+
+class _FakeAuthHttpClient:
+    """Fake httpx.AsyncClient supportant get() ET post() -- nécessaire pour tester
+    le renouvellement de l'access_token (POST /token) suivi d'un appel authentifié
+    (GET token_security). Les listes d'appels sont partagées entre instances (une
+    nouvelle instance est créée à chaque `async with httpx.AsyncClient(...)`)."""
+
+    def __init__(self, *, post_response=None, post_raises=None, get_responses=None, post_calls, get_calls):
+        self._post_response = post_response
+        self._post_raises = post_raises
+        self._get_responses = get_responses or {}
+        self._post_calls = post_calls
+        self._get_calls = get_calls
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def post(self, url, data=None):
+        self._post_calls.append({"url": url, "data": data})
+        if self._post_raises is not None:
+            raise self._post_raises
+        return self._post_response
+
+    async def get(self, url, params=None, headers=None):
+        self._get_calls.append({"url": url, "params": params, "headers": headers})
+        queue = self._get_responses[url]
+        return queue.pop(0) if isinstance(queue, list) else queue
+
+
+def _patch_goplus_auth_http(monkeypatch, *, post_response=None, post_raises=None, get_responses=None):
+    post_calls: list = []
+    get_calls: list = []
+    monkeypatch.setattr(
+        "aria_core.services.goplus.httpx.AsyncClient",
+        lambda **kw: _FakeAuthHttpClient(
+            post_response=post_response,
+            post_raises=post_raises,
+            get_responses=get_responses,
+            post_calls=post_calls,
+            get_calls=get_calls,
+        ),
+    )
+    return post_calls, get_calls
+
+
+def test_goplus_authenticated_reflects_env_vars(monkeypatch):
+    from aria_core.services.goplus import goplus_authenticated
+
+    monkeypatch.delenv("GOPLUS_APP_KEY", raising=False)
+    monkeypatch.delenv("GOPLUS_APP_SECRET", raising=False)
+    assert goplus_authenticated() is False
+
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    assert goplus_authenticated() is False  # une seule des deux valeurs ne suffit pas
+
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    assert goplus_authenticated() is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_access_token_returns_none_without_credentials(monkeypatch):
+    monkeypatch.delenv("GOPLUS_APP_KEY", raising=False)
+    monkeypatch.delenv("GOPLUS_APP_SECRET", raising=False)
+    post_calls, _ = _patch_goplus_auth_http(monkeypatch)
+    client = GoPlusClient()
+
+    token = await client._ensure_access_token()
+
+    assert token is None
+    assert post_calls == []  # aucun appel réseau tenté sans identifiants
+
+
+@pytest.mark.asyncio
+async def test_ensure_access_token_fetches_and_caches(monkeypatch):
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    post_calls, _ = _patch_goplus_auth_http(
+        monkeypatch,
+        post_response=_FakeResponse(200, {"result": {"access_token": "tok-1", "expires_in": 7200}}),
+    )
+    client = GoPlusClient()
+
+    first = await client._ensure_access_token()
+    second = await client._ensure_access_token()
+
+    assert first == "tok-1"
+    assert second == "tok-1"
+    assert len(post_calls) == 1  # mise en cache -- pas de second appel réseau
+
+
+@pytest.mark.asyncio
+async def test_ensure_access_token_refreshes_near_expiry(monkeypatch):
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    post_calls, _ = _patch_goplus_auth_http(
+        monkeypatch,
+        post_response=_FakeResponse(200, {"result": {"access_token": "tok-2", "expires_in": 7200}}),
+    )
+    client = GoPlusClient()
+    await client._ensure_access_token()
+    # Force l'état comme si le jeton expirait dans 1 seconde (sous la marge de 300s).
+    client._token_expires_at = time.time() + 1
+
+    await client._ensure_access_token()
+
+    assert len(post_calls) == 2  # renouvelé car sous la marge de sécurité
+
+
+@pytest.mark.asyncio
+async def test_ensure_access_token_network_failure_falls_back_silently(monkeypatch):
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    _patch_goplus_auth_http(monkeypatch, post_raises=httpx.ConnectError("boom"))
+    client = GoPlusClient()
+
+    token = await client._ensure_access_token()  # ne doit jamais lever
+
+    assert token is None
+
+
+@pytest.mark.asyncio
+async def test_get_json_sends_access_token_header_when_authenticated(monkeypatch):
+    _patch_goplus_no_sleep(monkeypatch)
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    _, get_calls = _patch_goplus_auth_http(
+        monkeypatch,
+        post_response=_FakeResponse(200, {"result": {"access_token": "tok-3", "expires_in": 7200}}),
+        get_responses={url: [_FakeResponse(200, ok_payload)]},
+    )
+
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert security.available is True
+    assert get_calls[0]["headers"] == {"access-token": "tok-3"}
+
+
+@pytest.mark.asyncio
+async def test_get_json_sends_no_header_without_credentials(monkeypatch):
+    _patch_goplus_no_sleep(monkeypatch)
+    monkeypatch.delenv("GOPLUS_APP_KEY", raising=False)
+    monkeypatch.delenv("GOPLUS_APP_SECRET", raising=False)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    _patch_goplus_http(monkeypatch, {url: [_FakeResponse(200, ok_payload)]})
+
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert security.available is True  # comportement historique inchangé sans clé
 
 
 # ── client GoPlus ─────────────────────────────────────────────────────────────
