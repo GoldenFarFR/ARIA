@@ -243,3 +243,35 @@ recherche s'appuie sur une lecture (grep) des commentaires existants dans
 fichier. Recherche externe + appels `curl` en lecture seule sur l'API
 publique GitHub. Aucune approche de `wallet_guard`/`permission_mode`/
 `config.toml`/auto-modification/capital réel.
+
+## Mise à jour 18/07 (promotion veille Research — session commandement)
+
+Nouvelle piste remontée par la veille continue : **Sybil-Defender**, un
+service tournant en production sur le réseau **Forta** depuis novembre
+2023, labellise déjà des clusters Sybil en temps réel sur 7 chaînes EVM
+(Ethereum, Arbitrum, Optimism, Polygon, BSC, Avalanche, Fantom) via
+détection de communauté (même famille Louvain/K-Core que TrustaLabs §2
+ci-dessus) sur un graphe de transferts + "premier apport de gas" — même
+heuristique forte déjà identifiée au §1/§3. **Vérifié avant de le prendre
+pour argent comptant** (WebSearch, 18/07) : deux incohérences trouvées,
+pas juste une confirmation propre du journal de veille —
+1. **Statut gratuit à reconfirmer** : le dépôt GitHub `forkoooor/
+   Sybil-Defender` (celui cité par le journal, licence ouverte) semble
+   distinct du produit officiel documenté sur le blog Forta lui-même
+   ("Sybil Defender: Tackling Identity Challenges via Forta's Latest
+   **Premium API Feed**", développé par frwd labs) — même nom, statut
+   commercial pas clair (dépôt communautaire librement réutilisable vs.
+   produit payant packagé). À vérifier lequel des deux (ou les deux) est
+   réellement utilisable gratuitement avant toute intégration.
+2. **Base non confirmé** : aucune source trouvée ce soir ne liste Base
+   parmi les 7 chaînes couvertes — à revérifier explicitement (documentation
+   Forta à jour, ou test direct) avant de compter dessus pour ARIA, dont
+   toute la thèse de sourcing est centrée sur Base.
+Verdict : reste une piste réelle et sérieuse pour le chantier Sybil
+(toujours la limite structurelle #1 de `smart_money.py`, jamais résolue),
+mais moins immédiatement "clé en main gratuite" que le titre du journal de
+veille le laissait entendre — les deux inconnues ci-dessus doivent être
+levées avant toute décision d'intégration. Ne change rien à la
+recommandation déjà écrite plus haut (chemin fait-maison Louvain/K-means
+sur données Blockscout/Dune déjà collectées reste le point de départ le
+plus sûr, ce service reste une option de secours/complément à évaluer).

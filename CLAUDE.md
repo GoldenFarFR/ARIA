@@ -1811,6 +1811,25 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   bullet (choix de licence/langage/intégration) — diligence déposée en
   fiche plutôt qu'actionnée directement, à trancher avec l'opérateur si le
   gap backtest devient prioritaire.
+- **#208 (promotion veille Research 18/07, fait vérifié PARTIELLEMENT — deux
+  inconnues non levées)** — Sybil-Defender (réseau Forta) tourne déjà en
+  production temps réel sur 7 chaînes EVM, même famille d'heuristique
+  (Louvain/K-Core sur graphe funder/sweep) que la piste déjà diligenciée le
+  15/07 pour le chantier Sybil de `smart_money.py`. Vérifié avant promotion :
+  statut gratuit ambigu (dépôt GitHub communautaire vs. produit officiel
+  Forta documenté comme "Premium API Feed" payant) et couverture Base non
+  confirmée — addendum déposé dans
+  `docs/aria-learning-inbox/2026-07-15-radar-sybil-clustering-entite-gratuit.md`
+  (section « Mise à jour 18/07 »). Ne change pas la recommandation déjà
+  actée (fait-maison Louvain/K-means sur données déjà collectées reste le
+  point de départ), simple option de secours à requalifier avant usage.
+  Ledger « Agent Stack » (hardware-enforced plafond/liste blanche) et
+  Robinhood « Agentic Trading » (canal de distribution tiers futur, hors
+  priorité #194) vérifiés le même soir : purement informationnels,
+  n'ouvrent aucune action immédiate — écartés sans bullet dédié (le premier
+  confirme juste que le design déjà choisi pour le pilote agent-wallet est
+  la référence du secteur ; le second reste une piste à réévaluer plus tard
+  si le sujet Base/Coinbase #198 progresse).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
