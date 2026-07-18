@@ -62,8 +62,17 @@ EXPOSE 8000
 # HTTP externe de deploy.sh (commit cassé -> pas de bascule, jamais de restart en boucle).
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -f http://127.0.0.1:8000/api/health || exit 1
-# --proxy-headers + --forwarded-allow-ips=127.0.0.1 : nginx (seul en façade, sur le
-# loopback) fournit X-Forwarded-For ; uvicorn ne fait confiance qu'à lui pour reconstituer
-# l'IP client réelle. Sans ça, request.client.host reste le loopback et le plafond anti-abus
-# par IP ne peut pas fonctionner.
-CMD ["sh", "-c", "echo \"aria-api boot commit=${GIT_COMMIT} PORT=${PORT:-8000}\" && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info --proxy-headers --forwarded-allow-ips=127.0.0.1"]
+# --proxy-headers + --forwarded-allow-ips : nginx (seul en façade) fournit
+# X-Forwarded-For ; uvicorn ne fait confiance qu'à un peer listé pour reconstituer l'IP
+# client réelle. 18/07 (audit sécurité) -- bug réel trouvé et corrigé : la liste ne
+# contenait QUE 127.0.0.1, mais nginx tourne sur l'HOTE et se connecte au port publié du
+# conteneur (127.0.0.1:8000 côté host) -- le NAT Docker fait apparaître ce trafic, DANS le
+# conteneur, comme venant de la passerelle du bridge Docker (172.17.0.1 par défaut), jamais
+# 127.0.0.1. Résultat avant correctif : --forwarded-allow-ips=127.0.0.1 ne matchait JAMAIS
+# le vrai peer, X-Forwarded-For était donc ignoré même une fois nginx corrigé pour
+# l'envoyer -- request.client.host restait la passerelle bridge, identique pour TOUS les
+# visiteurs, transformant le plafond anti-abus par IP en un seul bucket partagé mondial.
+# Les deux valeurs sont listées (127.0.0.1 aussi) pour rester robuste à un appel local
+# direct (tests, health-check) sans dépendre d'une IP de passerelle qui pourrait varier si
+# la topologie réseau change un jour.
+CMD ["sh", "-c", "echo \"aria-api boot commit=${GIT_COMMIT} PORT=${PORT:-8000}\" && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info --proxy-headers --forwarded-allow-ips=127.0.0.1,172.17.0.1"]
