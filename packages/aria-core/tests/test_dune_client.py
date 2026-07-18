@@ -178,6 +178,20 @@ class TestExecuteSql:
         assert body == {"sql": "SELECT 1", "performance": "medium"}
 
     @pytest.mark.asyncio
+    async def test_default_performance_tier_is_small(self, monkeypatch):
+        """18/07 -- bug réel trouvé en testant en direct avec une vraie clé (compte
+        gratuit) : "medium" ET "large" sont rejetés par l'API ("Invalid performance
+        tier"), contrairement à ce que suggérait la doc générale -- seul "small"
+        fonctionne sur ce compte. Verrouille le défaut corrigé pour ne pas régresser."""
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        holder = _patch_client(monkeypatch, [FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"})])
+
+        await dune.execute_sql("SELECT 1")
+
+        _, _, body, _ = holder["calls"][0]
+        assert body["performance"] == "small"
+
+    @pytest.mark.asyncio
     async def test_missing_execution_id_unavailable(self, monkeypatch):
         monkeypatch.setenv("DUNE_API_KEY", "k")
         _patch_client(monkeypatch, [FakeResponse(200, {"state": "QUERY_STATE_PENDING"})])

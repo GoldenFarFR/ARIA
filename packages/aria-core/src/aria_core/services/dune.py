@@ -144,10 +144,13 @@ async def _request(method: str, path: str, *, json_body: dict | None = None) -> 
         return response.json(), None
 
 
-async def execute_sql(sql: str, *, performance: str = "medium") -> ExecutionHandle:
+async def execute_sql(sql: str, *, performance: str = "small") -> ExecutionHandle:
     """Lance une requête SQL brute (Execute SQL API, jamais besoin de la
-    sauvegarder dans l'UI Dune d'abord). ``performance`` : "small"/"medium"
-    (défaut, 10 crédits)/"large" (20 crédits) -- cf. docs/dune-integration-plan.md §4."""
+    sauvegarder dans l'UI Dune d'abord). 18/07 -- bug réel trouvé en testant en
+    direct avec une vraie clé (compte gratuit) : "medium" ET "large" sont TOUS LES
+    DEUX rejetés par l'API ("Invalid performance tier"), contrairement à ce que la
+    doc générale suggère -- seul "small" fonctionne sur ce compte. Défaut corrigé en
+    conséquence. Cf. docs/dune-integration-plan.md §4 (à mettre à jour)."""
     data, error = await _request("POST", "/v1/sql/execute", json_body={"sql": sql, "performance": performance})
     if error is not None:
         return ExecutionHandle(available=False, error=error)
@@ -210,7 +213,7 @@ async def get_execution_result(execution_id: str) -> ExecutionResult:
 
 
 async def run_sql_and_wait(
-    sql: str, *, performance: str = "medium", poll_interval: float = 3.0, max_wait: float = 300.0,
+    sql: str, *, performance: str = "small", poll_interval: float = 3.0, max_wait: float = 300.0,
 ) -> ExecutionResult:
     """Orchestration complète : lance la requête, sonde le statut (gratuit)
     jusqu'à un état terminal, puis lit le résultat une seule fois. Bornée par
@@ -598,7 +601,7 @@ class FundedByResult:
 
 
 async def get_first_funded_by(
-    addresses: list[str], *, blockchain: str = "base", performance: str = "medium",
+    addresses: list[str], *, blockchain: str = "base", performance: str = "small",
 ) -> FundedByResult:
     """Interroge `addresses.stats` pour une liste d'adresses et retourne leur
     `first_funded_by` (et les autres champs confirmés de la table). Même
@@ -705,7 +708,7 @@ class DunePriceHistoryResult:
 
 
 async def get_price_history(
-    contract_address: str, *, blockchain: str = "base", lookback_hours: int = 48, performance: str = "medium",
+    contract_address: str, *, blockchain: str = "base", lookback_hours: int = 48, performance: str = "small",
 ) -> DunePriceHistoryResult:
     """Bougies horaires reconstruites depuis Dune (dernier recours de la
     cascade OHLCV, #194) -- ``available=False`` sans clé, sur adresse

@@ -69,11 +69,16 @@ esprit que l'overlay macro déjà existant (`btc_cycles.py`). Rien d'urgent, ban
 
 ## 4. Coût et limites
 
-- Palier Free : 2 500 crédits/mois. Exécution de requête : 10 crédits (medium,
-  défaut) à 20 crédits (large). Export/lecture de résultats : 1 crédit ≈ 1 000
-  points de données sur Free. Donc un budget de l'ordre de quelques centaines
-  d'exécutions de requêtes moyennes par mois — largement suffisant pour un usage
-  périodique (pas un usage temps réel à haute fréquence).
+- Palier Free : 2 500 crédits/mois. **Correction du 18/07, vérifiée en direct avec
+  une vraie clé sur un compte gratuit** : les paliers "medium" et "large" sont TOUS
+  LES DEUX rejetés par l'API (`{"error":"Invalid performance tier"}`) — seul
+  "small" fonctionne sur ce type de compte, contrairement à ce que suggérait la doc
+  générale Dune (qui documente small/medium/large sans préciser cette restriction
+  par palier de compte). Coût observé sur un `SELECT 1` : ~0.014 crédit. Défaut du
+  client (`services/dune.py`) corrigé en conséquence (était `"medium"`, silencieusement
+  jamais exercé contre un vrai appel avant ce jour). Export/lecture de résultats :
+  1 crédit ≈ 1 000 points de données sur Free. Budget large pour un usage périodique
+  (pas un usage temps réel à haute fréquence).
 - Toujours vérifier le nom exact des champs contre un vrai appel réel avant de
   considérer une intégration terminée (norme de process actée le 14/07, incident
   Blockscout `address_hash`) — ne jamais faire confiance à un schéma deviné de
