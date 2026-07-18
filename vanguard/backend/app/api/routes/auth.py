@@ -4,6 +4,7 @@ from starlette.responses import RedirectResponse
 from aria_core.holding import holding_name
 from aria_core.narrative import welcome_site_access, welcome_site_return
 from app.auth.access_code import create_session, purge_expired, verify_session
+from app.auth.privy_sessions import bearer_token as _bearer_token
 from app.auth.privy_sessions import login_with_privy, lookup_linked_handle
 from app.auth.privy_verify import (
     PrivyAuthError,
@@ -34,12 +35,6 @@ class PrivyLoginResponse(BaseModel):
     expires_at: str
     twitter_username: str | None = None
     message: str
-
-
-def _bearer_token(authorization: str | None) -> str | None:
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return None
 
 
 def _session_token(request: Request, authorization: str | None = None) -> str | None:

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.auth.privy_sessions import bearer_token as _bearer
 from app.games.pot import get_pot_status, register_deposit
 from app.games.scores import get_session_identity
 
@@ -19,12 +20,6 @@ class PotStatusResponse(BaseModel):
 class PotDepositBody(BaseModel):
     wallet: str = Field(min_length=42, max_length=42)
     tx_hash: str = Field(min_length=66, max_length=66)
-
-
-def _bearer(authorization: str | None) -> str | None:
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return None
 
 
 @router.get("/{site_slug}/current", response_model=PotStatusResponse)

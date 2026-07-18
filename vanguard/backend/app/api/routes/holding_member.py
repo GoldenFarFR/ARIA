@@ -16,17 +16,12 @@ from aria_core.member_memory import (
     touch_member,
 )
 from aria_core.models import ChatResponse
+from app.auth.privy_sessions import bearer_token as _bearer
 from app.auth.rate_limit import check_rate_limit
 from app.config import settings
 from app.games.scores import get_session_identity
 
 router = APIRouter(prefix="/aria/holding/member", tags=["aria-holding-member"])
-
-
-def _bearer(authorization: str | None) -> str | None:
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return None
 
 
 async def _require_member(authorization: str | None) -> tuple[str, str]:

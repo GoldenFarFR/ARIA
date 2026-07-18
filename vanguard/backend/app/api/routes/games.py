@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.auth.privy_sessions import bearer_token as _bearer
 from app.games.scores import get_score, get_session_identity, leaderboard, upsert_score
 
 router = APIRouter(prefix="/games/scores", tags=["games"])
@@ -21,12 +22,6 @@ class LeaderboardEntry(BaseModel):
     score: int
     handle: str
     updated_at: str
-
-
-def _bearer(authorization: str | None) -> str | None:
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return None
 
 
 async def _require_identity(authorization: str | None) -> tuple[str, str]:

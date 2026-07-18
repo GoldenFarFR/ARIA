@@ -9,6 +9,17 @@ import aiosqlite
 from app.auth.access_code import DB_PATH, create_session, init_auth_db
 
 
+def bearer_token(authorization: str | None) -> str | None:
+    """Extrait le jeton d'un header ``Authorization: Bearer <token>``.
+
+    18/07 -- consolidé depuis 4 copies identiques (games.py, auth.py, pot.py,
+    holding_member.py, trouvé par audit VPS Secondaire) -- un seul endroit
+    désormais, jamais 4 à garder en synchro."""
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return None
+
+
 async def _ensure_session_columns() -> None:
     await init_auth_db()
     async with aiosqlite.connect(DB_PATH) as db:
