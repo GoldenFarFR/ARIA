@@ -160,4 +160,6 @@ async def test_x_profile_sync_reports_skip_reason(monkeypatch):
 
     reply = update.message.replies[0]
     assert "rien à faire" in reply
-    assert "xnotconfigured" in reply  # _format_tg strippe les underscores (markdown Telegram)
+    # 18/07 -- _format_tg ne strippe plus les underscores internes à un identifiant
+    # (cf. test_telegram_format.py::test_plain_telegram_preserves_snake_case_identifiers).
+    assert "x_not_configured" in reply

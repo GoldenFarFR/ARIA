@@ -352,7 +352,9 @@ class AriaBrain:
             analysis_methodology_reply,
             is_analysis_methodology_question,
             is_llm_identity_question,
+            is_why_not_bought_question,
             llm_identity_reply,
+            why_not_bought_reply,
         )
 
         lang_key_early = "fr" if lang == LANG_FR else "en"
@@ -373,6 +375,15 @@ class AriaBrain:
                 skill_used=None,
                 actions_taken=["Méthode d'analyse (template — sans confabulation)"],
                 data={"analysis_methodology": True, "skip_web": True},
+            )
+        if is_why_not_bought_question(route_msg):
+            early_reply = why_not_bought_reply(lang_key_early)
+            await repertoire_db.save_message("agent", early_reply, visitor_id=vid)
+            return ChatResponse(
+                reply=early_reply,
+                skill_used=None,
+                actions_taken=["Pourquoi pas d'achat (template — sans confabulation)"],
+                data={"why_not_bought": True, "skip_web": True},
             )
 
         if not public:
@@ -1018,7 +1029,9 @@ class AriaBrain:
             is_general_qa,
             is_llm_identity_question,
             is_short_ack,
+            is_why_not_bought_question,
             llm_identity_reply,
+            why_not_bought_reply,
         )
         from aria_core.knowledge.epistemic import resolve_calibrated_answer
         from aria_core.knowledge.web_verify import is_explicit_web_request, is_live_info_question
@@ -1118,6 +1131,14 @@ class AriaBrain:
                 None,
                 ["Méthode d'analyse (template — sans confabulation)"],
                 {"analysis_methodology": True, "skip_web": True},
+                None,
+            )
+        if is_why_not_bought_question(route):
+            return (
+                why_not_bought_reply(lang_key),
+                None,
+                ["Pourquoi pas d'achat (template — sans confabulation)"],
+                {"why_not_bought": True, "skip_web": True},
                 None,
             )
 

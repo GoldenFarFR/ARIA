@@ -233,6 +233,77 @@ async def test_vision_enabled_admin_calls_llm_with_data_uri(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vision_why_not_bought_caption_short_circuits_without_llm_call(monkeypatch):
+    """Incident réel (18/07) : "pourquoi tu n'as pas acheté cette divergence sur aeon ?"
+    envoyé avec une image a reçu une réponse LLM confabulée ("aucun capital réel
+    déployé... pas achat live") -- _handle_vision_photo appelle _llm_response()
+    DIRECTEMENT, contournant tous les interceptors déterministes de process(). Ce test
+    verrouille le correctif : la légende doit être interceptée AVANT tout téléchargement
+    d'image ou appel LLM."""
+    llm_called = {"value": False}
+
+    async def fake_llm_response(*a, **kw):
+        llm_called["value"] = True
+        return "ne devrait jamais être appelé"
+
+    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
+
+    caption = "pourquoi tu n'as pas acheté cette divergence sur aeon ?"
+    update = FakeUpdate(caption=caption, user_id=42)
+    await telegram_bot._handle_vision_photo(update, FakeContext(), caption)
+
+    assert llm_called["value"] is False
+    assert len(update.message.replies) == 1
+    reply = update.message.replies[0].lower()
+    assert "momentum_entry" in reply
+    assert "aucun capital réel" not in reply
+    assert "track-record" not in reply
+
+
+@pytest.mark.asyncio
+async def test_vision_analysis_methodology_caption_short_circuits_without_llm_call(monkeypatch):
+    llm_called = {"value": False}
+
+    async def fake_llm_response(*a, **kw):
+        llm_called["value"] = True
+        return "ne devrait jamais être appelé"
+
+    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
+
+    caption = "quelles sont les conditions pour qu'un token t'intéresse ?"
+    update = FakeUpdate(caption=caption, user_id=42)
+    await telegram_bot._handle_vision_photo(update, FakeContext(), caption)
+
+    assert llm_called["value"] is False
+    assert len(update.message.replies) == 1
+    reply = update.message.replies[0].lower()
+    assert "momentum_entry" in reply
+    assert "goplus" in reply
+
+
+@pytest.mark.asyncio
+async def test_vision_ordinary_caption_still_reaches_llm(monkeypatch):
+    """Non-régression : une légende qui ne matche aucun détecteur déterministe continue
+    de suivre le chemin LLM normal (comportement historique inchangé)."""
+    captured = {}
+
+    async def fake_llm_response(message, lang, *, public=False, image_data_uri=None, **kw):
+        captured["called"] = True
+        return "voici ma lecture"
+
+    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
+
+    update = FakeUpdate(caption="juge cette situation", user_id=42)
+    await telegram_bot._handle_vision_photo(update, FakeContext(), "juge cette situation")
+
+    assert captured.get("called") is True
+    assert update.message.replies == ["voici ma lecture"]
+
+
+@pytest.mark.asyncio
 async def test_vision_download_failure_replies_honestly(monkeypatch):
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
     bot = FakeBot(raise_on_get_file=True)

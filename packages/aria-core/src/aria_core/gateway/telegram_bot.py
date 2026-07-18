@@ -1278,6 +1278,36 @@ async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
+    # Ancrage anti-confabulation (18/07) -- ce handler appelle _llm_response() DIRECTEMENT,
+    # pas process() : aucun des interceptors déterministes (is_llm_identity_question,
+    # is_analysis_methodology_question, is_why_not_bought_question) ne s'applique par défaut
+    # ici. Incident réel : "pourquoi tu n'as pas acheté cette divergence ?" (posé sur une
+    # image) a reçu une réponse LLM confabulée ("aucun capital réel déployé... pas achat
+    # live") alors que le pipeline momentum achète RÉELLEMENT en autonomie sur le test 1M$.
+    # Vérifié sur la LÉGENDE (caption) avant même de télécharger l'image -- si ça matche,
+    # aucun appel réseau/LLM n'est nécessaire.
+    if caption:
+        from aria_core.grounding import (
+            analysis_methodology_reply,
+            is_analysis_methodology_question,
+            is_llm_identity_question,
+            is_why_not_bought_question,
+            llm_identity_reply,
+            why_not_bought_reply,
+        )
+        from aria_core.locale import detect_operator_lang
+
+        early_lang_key = detect_operator_lang(caption)
+        if is_llm_identity_question(caption):
+            await _reply(message, llm_identity_reply(early_lang_key))
+            return
+        if is_analysis_methodology_question(caption):
+            await _reply(message, analysis_methodology_reply(early_lang_key))
+            return
+        if is_why_not_bought_question(caption):
+            await _reply(message, why_not_bought_reply(early_lang_key))
+            return
+
     import base64
 
     photo = message.photo[-1]

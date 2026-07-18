@@ -14,10 +14,12 @@ from aria_core.grounding import (
     is_social_chitchat,
     is_pure_casual_smalltalk,
     is_trade_status_question,
+    is_why_not_bought_question,
     llm_identity_reply,
     should_skip_llm_enhance,
     social_ack_reply,
     unknown_reply,
+    why_not_bought_reply,
 )
 
 
@@ -71,6 +73,16 @@ def test_analysis_methodology_question_detects_real_incident_phrasing():
     assert not is_analysis_methodology_question("quel est le prix du token")
 
 
+def test_analysis_methodology_question_detects_second_incident_phrasing():
+    # Incident réel (18/07) : cette formulation a échappé au regex d'origine et est
+    # partie en LLM payant, qui a décrit l'ancien pipeline VC-thesis exclusivement.
+    assert is_analysis_methodology_question(
+        "quelles sont les conditions alors pour qu'un token t'interesse ?"
+    )
+    assert is_analysis_methodology_question("what makes a token interesting to you?")
+    assert not is_analysis_methodology_question("bonjour")
+
+
 def test_trade_status_question_detects_real_incident_phrasing():
     # Incident réel 16/07 : question posée juste après une clôture en perte, tombée
     # dans la conversation générale sans accès au registre paper-trading.
@@ -101,6 +113,37 @@ def test_analysis_methodology_reply_cites_real_tools():
         assert "blockscout" in reply
         assert "rsi" in reply
         assert "geckoterminal" in reply
+
+
+def test_analysis_methodology_reply_describes_both_pipelines():
+    # Incident réel (18/07) : la réponse ne décrivait QUE l'ancien pipeline VC-thesis
+    # (safety_screen) alors que le pipeline momentum décide 100% du test live 1M$.
+    for lang in ("fr", "en"):
+        reply = analysis_methodology_reply(lang).lower()
+        assert "safety_screen" in reply
+        assert "momentum_entry" in reply
+
+
+def test_why_not_bought_question_detects_real_incident_phrasing():
+    # Incident réel (18/07, chat vision) : "pourquoi tu n'as pas acheté cette
+    # divergence sur aeon ?" a reçu une réponse confabulée ("aucun capital réel
+    # déployé... pas achat live") alors que le pipeline momentum achète réellement.
+    assert is_why_not_bought_question("pourquoi tu n'as pas acheté cette divergence sur aeon ?")
+    assert is_why_not_bought_question("pourquoi tu n'achetes pas ce token ?")
+    assert is_why_not_bought_question("why didn't you buy that dip?")
+    assert is_why_not_bought_question("why haven't you bought this token?")
+    assert not is_why_not_bought_question("bonjour")
+    assert not is_why_not_bought_question("pourquoi t'as vendu AERO ?")
+
+
+def test_why_not_bought_reply_never_denies_live_capability():
+    for lang in ("fr", "en"):
+        reply = why_not_bought_reply(lang).lower()
+        assert "momentum_entry" in reply
+        assert "goplus" in reply
+        assert "aucun capital réel" not in reply
+        assert "track-record" not in reply
+        assert "no real capital" not in reply
 
 
 def test_faq_direct_answer_high_confidence():

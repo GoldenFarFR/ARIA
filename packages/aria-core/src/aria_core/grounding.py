@@ -533,7 +533,11 @@ _ANALYSIS_METHOD_RE = re.compile(
     r"quels?\s+outils?\s+(?:utilises?[- ]?tu|as[- ]?tu)\s+(?:pour\s+)?(?:l['’]|)analys|"
     r"what\s+tools?\s+do\s+you\s+use\s+to\s+analyz[e]|"
     r"tu\s+utilises?\s+(?:de\s+l['’])?ia\s+g[ée]n[ée]rative\s+pour\s+analys|"
-    r"m[ée]thode\s+d['’]analyse"
+    r"m[ée]thode\s+d['’]analyse|"
+    r"quelles?\s+(?:sont\s+les\s+)?conditions?\s+.{0,40}(?:token|jeton)|"
+    r"qu['’]est[- ]ce\s+qui\s+(?:te\s+|t['’])?(?:rend|fait|int[ée]resse)|"
+    r"what\s+makes\s+a\s+token\s+interest|"
+    r"conditions?\s+pour\s+qu['’]un\s+token"
     r")",
     re.IGNORECASE,
 )
@@ -541,11 +545,16 @@ _ANALYSIS_METHOD_RE = re.compile(
 
 def is_analysis_methodology_question(message: str) -> bool:
     """True pour une question sur la MÉTHODE d'analyse d'un token (« comment tu analyses,
-    IA générative ? »). Incident réel (11/07) : réponse générique en 6 points ne citant AUCUN
-    vrai outil (GoPlus, RSI/EMA/MACD, Blockscout, GeckoTerminal, safety_screen) — pas
-    techniquement faux, mais non ancré sur le code réel (même famille de risque que
-    ``is_llm_identity_question`` : confabulation sur ses propres capacités). Route vers une
-    réponse déterministe listant les VRAIS outils, quel que soit `public`.
+    IA générative ? », « quelles sont tes conditions pour qu'un token t'intéresse ? »).
+    Incident réel (11/07) : réponse générique en 6 points ne citant AUCUN vrai outil (GoPlus,
+    RSI/EMA/MACD, Blockscout, GeckoTerminal, safety_screen) — pas techniquement faux, mais non
+    ancré sur le code réel (même famille de risque que ``is_llm_identity_question`` :
+    confabulation sur ses propres capacités). **Second incident réel (18/07)** : une formulation
+    différente (« quelles sont les conditions... ») a échappé au regex d'origine et est partie en
+    LLM payant, qui a répondu en décrivant EXCLUSIVEMENT l'ancien pipeline VC-thesis (bonding
+    Virtuals + safety_screen) alors que le pipeline momentum (#194) décide 100% du capital du
+    test live -- regex élargi + réponse réécrite pour couvrir les deux. Route vers une réponse
+    déterministe listant les VRAIS outils, quel que soit `public`.
     """
     text = (message or "").strip()
     if len(text) < 6:
@@ -554,27 +563,86 @@ def is_analysis_methodology_question(message: str) -> bool:
 
 
 def analysis_methodology_reply(lang: str = "en") -> str:
-    """Réponse déterministe (pas d'appel LLM) listant les vrais outils du pipeline VC —
-    cf. `skills/safety_screen.py`, `services/goplus.py`, `skills/indicators.py`,
-    `services/blockscout.py`, `services/ohlcv.py`. Tenue à jour si le pipeline change."""
+    """Réponse déterministe (pas d'appel LLM) listant les vrais outils des DEUX pipelines --
+    cf. `skills/safety_screen.py` (VC-thesis, 85%) et `momentum_entry.py` (momentum, 100% du
+    test live 1M$ en cours). Tenue à jour si l'un des deux pipelines change."""
     if lang == "fr":
         return (
-            "L'analyse n'est pas de l'IA générative de bout en bout — les signaux sont calculés, "
-            "pas devinés : filtre de sécurité (contrat vérifié, autorité du mint, concentration "
-            "des holders, verdict SAFE/CAUTION/DANGER), honeypot/taxes/owner caché via GoPlus, "
-            "analyse technique réelle (RSI, EMA/MACD, Bollinger, golden pocket, divergence RSI), "
-            "holders et code via Blockscout, prix/liquidité/OHLCV via DexScreener et GeckoTerminal. "
-            "Le LLM n'intervient qu'à la fin, pour rédiger la thèse (cible/invalidation) à partir "
-            "de ces signaux déjà calculés — jamais pour inventer un chiffre."
+            "Ça dépend de la poche de capital. Pipeline VC-thesis (safety_screen.py, 85% long "
+            "terme) : filtre de sécurité (contrat, mint, holders, verdict SAFE/CAUTION/DANGER) + "
+            "honeypot/taxes via GoPlus + analyse technique (RSI, EMA/MACD, golden pocket, "
+            "divergence) via Blockscout et GeckoTerminal — le LLM rédige juste la thèse finale. "
+            "Pipeline momentum (momentum_entry.py, décide 100% du test live 1M$ en cours) : plus "
+            "léger — seul un honeypot GoPlus bloque (mint/ownership pas bloquants, souvent une "
+            "convention de launchpad), entrée sur un vrai ratio risque/rendement, sourcing "
+            "Base/Solana/Robinhood via DexScreener — le LLM arbitre juste un R/R ambigu. Aucun "
+            "chiffre inventé."
         )
     return (
-        "The analysis isn't end-to-end generative AI — signals are computed, not guessed: a "
-        "security filter (contract verified, mint authority, holder concentration, SAFE/CAUTION/"
-        "DANGER verdict), honeypot/taxes/hidden owner via GoPlus, real technical analysis (RSI, "
-        "EMA/MACD, Bollinger, golden pocket, RSI divergence), holders and code via Blockscout, "
-        "price/liquidity/OHLCV via DexScreener and GeckoTerminal. The LLM only steps in at the end "
-        "to write up the thesis (target/invalidation) from these already-computed signals — never "
-        "to invent a number."
+        "Depends on the capital sleeve. VC-thesis pipeline (safety_screen.py, 85% long-term "
+        "sleeve): security filter (contract, mint, holders, SAFE/CAUTION/DANGER verdict) + "
+        "honeypot/taxes via GoPlus + technical analysis (RSI, EMA/MACD, golden pocket, "
+        "divergence) via Blockscout and GeckoTerminal — the LLM only writes the final thesis. "
+        "Momentum pipeline (momentum_entry.py, currently deciding 100% of the live 1M$ test): "
+        "lighter — only a GoPlus honeypot check gates entry (mint/ownership not gated, often a "
+        "launchpad convention), entry requires a real risk/reward setup, sourcing "
+        "Base/Solana/Robinhood via DexScreener — the LLM only arbitrates an ambiguous R/R. No "
+        "invented numbers."
+    )
+
+
+_WHY_NOT_BOUGHT_RE = re.compile(
+    r"(?:"
+    r"pourquoi\s+(?:tu\s+|elle\s+)?(?:n['’]as|n['’]a)\s+pas\s+achet|"
+    r"pourquoi\s+(?:tu\s+|elle\s+)?n['’]ach[eè]tes?\s+pas|"
+    r"pourquoi\s+(?:pas|aucun)\s+d['’]achat|"
+    r"why\s+(?:didn['’]t|haven['’]t)\s+you\s+(?:buy|bought)|"
+    r"why\s+(?:no|not)\s+buy"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_why_not_bought_question(message: str) -> bool:
+    """True pour « pourquoi tu n'as pas acheté X ? ». Incident réel (18/07, chat vision) :
+    ARIA a répondu « je n'ai aucun capital réel déployé... mode track-record, pas achat live »
+    à une question posée sur une IMAGE de graphique -- faux et trompeur, le pipeline momentum
+    achète RÉELLEMENT en paper-trading sans validation humaine. La vraie réponse ne dépend
+    jamais du token précis demandé (toujours la même mécanique), donc couvrable par un
+    template déterministe -- contrairement à "pourquoi CE token a échoué", qui dépendrait des
+    vraies données de scan et resterait un appel LLM légitime."""
+    text = (message or "").strip()
+    if len(text) < 6:
+        return False
+    return bool(_WHY_NOT_BOUGHT_RE.search(text))
+
+
+def why_not_bought_reply(lang: str = "en") -> str:
+    """Réponse déterministe (pas d'appel LLM) -- jamais une décision d'achat depuis une
+    lecture visuelle, toujours le pipeline momentum automatisé (momentum_entry.py)."""
+    if lang == "fr":
+        return (
+            "Je ne décide jamais un achat à partir d'une seule lecture visuelle d'un graphique "
+            "envoyé en chat — même en paper-trading. Les vraies décisions viennent du pipeline "
+            "momentum automatisé (momentum_entry.py), qui tourne en continu (~toutes les 15-20 "
+            "min) sur des candidats sourcés en direct (Base en priorité, Solana/Robinhood en "
+            "best-effort) : garde-fou honeypot GoPlus, puis un vrai ratio risque/rendement "
+            "(golden pocket + divergence RSI, alignement EMA/MACD) au moment du scan — jamais "
+            "une impression sur une image. Si un token n'est pas en position, c'est soit qu'il "
+            "n'a pas encore été scanné par ce pipeline, soit qu'il a échoué un critère (pas de "
+            "signal d'entrée valide, ratio de wash-trading suspect, déjà trop monté, liste "
+            "noire) — jamais parce que je l'ai « regardé » et décidé de passer."
+        )
+    return (
+        "I never decide to buy from a single visual read of a chart sent in chat — even in "
+        "paper-trading. Real decisions come from the automated momentum pipeline "
+        "(momentum_entry.py), running continuously (~every 15-20 min) on candidates sourced "
+        "live (Base first, Solana/Robinhood best-effort): a GoPlus honeypot gate, then a real "
+        "risk/reward check (golden pocket + RSI divergence, EMA/MACD alignment) at scan time — "
+        "never an impression from an image. If a token isn't held, it's either not yet been "
+        "scanned by that pipeline, or it failed a criterion (no valid entry signal, suspect "
+        "wash-trading ratio, already up too much, blacklisted) — never because I \"looked\" at "
+        "it and passed."
     )
 
 
