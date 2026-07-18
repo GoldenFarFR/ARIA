@@ -2457,24 +2457,22 @@ les chaînes confirmées vides par wallet", conçu en détail par Secondaire ave
 verrou de concurrence et distinction rattrapage/surveillance) reste **valide
 mais différé**, prêt à reprendre ce jour-là.
 
-**Trois secrets exposés en clair pendant ce diagnostic — rotation demandée,
-statut final non reconfirmé.** (1) `BLOCKSCOUT_PRO_API_KEY` exposée **3 fois**
-sur 2 sessions VPS différentes (`grep` brut sur `.env`, puis `docker logs`
-non filtré, puis à nouveau `docker logs`) ; (2) `TELEGRAM_BOT_TOKEN` exposé
-1 fois (URL de log affichée en clair) ; (3) la nouvelle clé **Etherscan V2**
-également montrée en clair dans une capture d'écran du dashboard collée en
-chat cloud. Rotation recommandée pour les 3 (même doctrine que l'incident
-`connect.ts`), l'opérateur a confirmé avoir donné les 3 nouvelles valeurs
-directement à VPS Secondaire (jamais via le relais cloud, procédure respectée)
--- **mais aucune confirmation finale reçue côté cloud que le remplacement
-`.env` + redémarrage ont bien été exécutés**. À vérifier en priorité par la
-prochaine session : `.env` contient-il les nouvelles valeurs, l'ancien
-`BLOCKSCOUT_PRO_API_KEY`/`TELEGRAM_BOT_TOKEN`/clé Etherscan sont-ils bien
-révoqués côté fournisseur (Blockscout dashboard, BotFather, Etherscan) ?
-**Réflexe à généraliser** (déjà redit plusieurs fois ce segment à Secondaire) :
-ne jamais `grep`/`cat`/`docker logs` sans filtre sur un fichier contenant un
-secret -- toujours une vérification de présence (`grep -q`), jamais un
-affichage de la valeur.
+**Trois secrets exposés en clair pendant ce diagnostic (16/07).** (1)
+`BLOCKSCOUT_PRO_API_KEY` exposée **3 fois** sur 2 sessions VPS différentes
+(`grep` brut sur `.env`, puis `docker logs` non filtré, puis à nouveau
+`docker logs`) ; (2) `TELEGRAM_BOT_TOKEN` exposé 1 fois (URL de log affichée
+en clair) ; (3) la nouvelle clé **Etherscan V2** également montrée en clair
+dans une capture d'écran du dashboard collée en chat cloud. Rotation
+recommandée pour les 3 (même doctrine que l'incident `connect.ts`).
+**Rotation Blockscout + Telegram confirmée par l'opérateur (18/07)** — les
+deux tournent désormais sur les nouvelles valeurs. **Etherscan V2 : statut de
+rotation toujours pas confirmé** (clé de toute façon inerte, cf. note
+ci-dessous — aucun code ne la lit, donc aucun risque actif tant qu'elle
+reste inutilisée, mais la révocation côté fournisseur de l'ancienne valeur
+n'a jamais été confirmée). **Réflexe à généraliser** (déjà redit plusieurs
+fois ce segment à Secondaire) : ne jamais `grep`/`cat`/`docker logs` sans
+filtre sur un fichier contenant un secret -- toujours une vérification de
+présence (`grep -q`), jamais un affichage de la valeur.
 
 **Etherscan V2 (clé "ARIA" créée par l'opérateur) — stockée, INERTE, rien ne
 la consomme.** Confirmé par Secondaire : aucun code ARIA ne lit
@@ -2576,8 +2574,9 @@ d'un token (flux Txns DexScreener) avec le smart-money déjà scoré par ARIA
 1. Le compteur des 30 jours tourne depuis ce soir -- vérifier sur Telegram/
    cockpit qu'un premier trade s'est bien déclenché (aucune confirmation reçue
    avant la fin de ce segment).
-2. Rotation des 3 secrets à reconfirmer (valeurs `.env` + révocation côté
-   fournisseur).
+2. ~~Rotation des 3 secrets à reconfirmer~~ — **Blockscout + Telegram confirmés
+   par l'opérateur (18/07)**, cf. note datée plus haut dans cette section.
+   Etherscan V2 reste non confirmé (clé inerte, risque non actif).
 3. `/api/aria/diagnostics/paper-ledger` à tester (token + éventuel blocage
    Cloudflare) -- ou, mieux, accès direct `127.0.0.1:8000` depuis la session
    VPS, qui rend ce détour inutile.
