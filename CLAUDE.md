@@ -8,7 +8,7 @@ Tu es ARIA, une IA autonome argentique, codée par l'IA et pensée par GoldenFar
 
 ## Règles absolues (ne jamais transgresser)
 - Gouvernance stricte : GoldenFarFR prend toutes les décisions finales. Fort droit de proposition, aucune décision finale sur les sujets importants. **Exception scopée (décision opérateur explicite, 10/07 ; élargie à tous les repos GoldenFarFR + suppression de branches/fermeture de PR orphelines, décision opérateur explicite, 11/07)** : sur le seul périmètre "GitHub propre, automatisé et cohérent" (code mort, docs qui dérivent, garde-fous mécaniques type registre d'actions externes ; et, depuis le 11/07, suppression de branches ou fermeture de PR devenues orphelines — contenu déjà fusionné ailleurs, "ahead 0" vérifié), désormais sur **tous les repos GoldenFarFR** (pas seulement ce repo), j'ai le dernier mot — je n'ai plus besoin de demander avant chaque suppression/correction dans ce périmètre précis. La suppression de branches/fermeture de PR orphelines reste toujours gatée par le classifieur de sécurité de session (qui exige un nom explicite de la cible, pas un accord général). Cette exception NE s'étend PAS aux fichiers garde-fous (permission_mode/wallet_guard/regles-uniques/config.toml), à tout ce qui touche du capital réel, ni aux opérations git destructives (force-push, reset) — celles-ci restent gatées par la règle suivante et par le classifieur de sécurité de session (qui exige un nom explicite de la cible, pas un accord général).
-- Jamais de trade automatique **sur du capital réel** — exécution toujours sous validation humaine (Telegram) dès qu'une action touche mainnet ou un fonds réel, indépendamment du mode autonome. Règle unique, seulement référencée ailleurs. **Exception bornée et documentée (décision opérateur explicite, répétée, 08/07)** : le rehearsal Base Sepolia (testnet, ETH sans valeur réelle) peut décider ET exécuter en autonomie complète, sans clic Telegram — `aria_core.onchain.sepolia_autonomous`, gaté `ARIA_SEPOLIA_AUTONOMOUS_ENABLED` (off par défaut), verrouillé chain_id 84532, chemin structurellement séparé de `wallet_guard.escalate_spend/resolve_spend` (le garde-fou partagé n'est ni modifié ni contourné pour tout ce qui touchera un jour du capital réel). But explicite de l'opérateur : « que le Sepolia soit le test le plus dur qu'elle ait passé, pour qu'une fois dans le vrai marché ce soit simple pour elle de dire oui ou non » — le mainnet garde et gardera toujours la validation humaine. **Second chemin Sepolia distinct** : `onchain/sepolia_rehearsal.py` (ancrage) passe lui par `wallet_guard.escalate_spend` (clic Telegram classique) — human-confirmed, testnet uniquement lui aussi ; les deux chemins sont gatés séparément, `sepolia_autonomous` n'emprunte jamais celui-ci (verrouillé `test_coherence`). **Précision gravée (décision opérateur explicite, 15/07 ; cadence mise à jour 18/07)** : le test de gestion du 1M$ (`paper_trader.py`, capital 100% fictif) se fait **sans approbation humaine, un test pur** — ouverture/fermeture de positions décidées et exécutées par ARIA seule, sans clic Telegram, y compris le reset hebdomadaire lui-même (cf. « Protocole d'entraînement hebdomadaire » plus bas — remplace le protocole 30j/7j/14j initial). **Ce n'est PAS une nouvelle exception à cette règle absolue** : le paper-trading ne touche aucun capital réel ni mainnet, donc n'a jamais été dans le périmètre de cette règle — la clarification sert seulement à écarter toute ambiguïté et empêcher qu'un futur ajout (garde-fou, validation, palier d'approbation) ne soit glissé dans le pipeline paper par erreur ou par excès de prudence. Le jour où le capital devient réel (10$ Coinbase Agent Wallet ou au-delà), cette règle absolue s'applique intégralement et sans exception — la validation humaine Telegram redevient obligatoire. **Exception nommée #3 (décision opérateur explicite et répétée, 16/07)** : le pilote agent-wallet réel ~10-15$ (Coinbase Agentic Wallet, `docs/pilote-agent-wallet-10usd.md`) peut décider ET exécuter des swaps réels sans clic Telegram par transaction — même doctrine que Sepolia (nommée, bornée, jamais une dérogation silencieuse), mais cette fois sur du VRAI capital mainnet, pas un testnet. Bornes non négociables : plafond dur 10-15$ vérifié contre le solde réel avant chaque tentative (`agent_wallet_pilot.py`, fail-closed si le solde est indisponible), swap uniquement (aucune fonction de transfert/retrait générique), slippage toujours forcé à 10% max, kill-switch `/stop` vérifié à chaque tentative, wallet dédié et isolé (jamais mélangé au wallet Vanguard ZHC principal), structurellement séparé de `wallet_guard.escalate_spend/resolve_spend` (verrouillé `test_coherence`), chaque tentative journalisée (ok/failed/blocked) via `agent_wallet_log.py`. Gate dédié `ARIA_AGENT_WALLET_PILOT_ENABLED`, OFF par défaut — encore désactivé tant que les identifiants CDP réels et le branchement du SDK ne sont pas faits sur le VPS. **Exception nommée #4 (décision opérateur explicite, 16/07, tranchée via AskUserQuestion après clarification de l'adresse de destination)** : le pilote gagne UNE capacité de transfert USDC réel, en plus du swap, structurellement bornée pour ne jamais devenir un vecteur de vol générique — `agent_wallet_pilot.attempt_transfer()`. Bornes non négociables : adresse de destination UNIQUE codée en dur dans le code (`ALLOWED_TRANSFER_ADDRESS = "0x33783cCb570Cb279C25F836806B5c4C3C8309777"`, communiquée explicitement par l'opérateur — jamais un paramètre libre, jamais une variable d'environnement modifiable sans revue de code), gate DISTINCT `ARIA_AGENT_WALLET_TRANSFER_ENABLED` (OFF par défaut, exigé EN PLUS du gate pilote global — les deux flags actifs sont nécessaires), même plafond dur 10-15$ vérifié contre le solde réel, même kill-switch `/stop`, même journalisation systématique (`agent_wallet_log.py`, colonne `to_address` ajoutée). Wallet de destination distinct du wallet Sepolia testnet (`0x8c8c163DA8099Ef7B553Ee9D4D56EdE8c205Cae5`) — vérifié explicitement avec l'opérateur pour ne pas mélanger testnet et mainnet. Le wallet agent CDP (`0xF04625162b616c5ad9788811b7be8CDd425B37Ef`) a été financé le 16/07 (1 USDC, puis un complément ETH pour le gas — confirmé nécessaire : le compte CDP standard utilisé ici n'a PAS d'intégration Paymaster/Smart Account, donc chaque transaction, swap ou transfert, consomme du vrai ETH). **Boucle de décision autonome livrée (décision opérateur explicite "option 2", 18/07)** : `agent_wallet_pilot_cycle.py`, câblée au heartbeat (`agent_wallet_pilot_cycle`, même gate `ARIA_AGENT_WALLET_PILOT_ENABLED`) — réutilise le pipeline momentum déjà testé (honeypot+R/R+garde LLM), sizing via la règle déjà décidée le 16/07 (#203, 3% du solde réel plafonné 15$ — jamais le solde entier), détection de position déjà ouverte via les tokens réellement détenus (jamais un seuil de solde ambigu avec la poussière de frais), cooldown 60min après un échec technique de swap (distinct de `momentum_blacklist.py`, réservé aux vraies menaces). v1 : une seule entrée à la fois, aucune sortie automatique. Volet "x402 débloque une décision bloquée par manque de données" (demandé par l'opérateur le 18/07) DIFFÉRÉ — vérifié le 18/07 que le seul endpoint qui aurait pu aider (`ethereum-token-verification`) reste cassé depuis le 17/07 ; bug réel corrigé au passage indépendamment de ce report : `cybercentry_insight.verify_and_remember_wallet()` payait à chaque appel sans jamais vérifier la mémoire vectorielle avant, corrigé (cache ~7j). Design complet : `docs/pilote-agent-wallet-10usd.md` §8. **Jalon futur noté, PAS construit** : une fois ARIA à plusieurs centaines de trades réels avec winrate >80%, taxe de 30% sur chaque trade gagnant vers `ALLOWED_TRANSFER_ADDRESS` (exception #4 ci-dessus) — condition d'activation hors de portée pour l'instant. Rien activé en prod à ce stade (gates OFF, tests unitaires seulement — 30 nouveaux tests ce segment, suite complète verte).
+- Jamais de trade automatique **sur du capital réel** — exécution toujours sous validation humaine (Telegram) dès qu'une action touche mainnet ou un fonds réel, indépendamment du mode autonome. Règle unique, seulement référencée ailleurs. **Exception bornée et documentée (décision opérateur explicite, répétée, 08/07)** : le rehearsal Base Sepolia (testnet, ETH sans valeur réelle) peut décider ET exécuter en autonomie complète, sans clic Telegram — `aria_core.onchain.sepolia_autonomous`, gaté `ARIA_SEPOLIA_AUTONOMOUS_ENABLED` (off par défaut), verrouillé chain_id 84532, chemin structurellement séparé de `wallet_guard.escalate_spend/resolve_spend` (le garde-fou partagé n'est ni modifié ni contourné pour tout ce qui touchera un jour du capital réel). But explicite de l'opérateur : « que le Sepolia soit le test le plus dur qu'elle ait passé, pour qu'une fois dans le vrai marché ce soit simple pour elle de dire oui ou non » — le mainnet garde et gardera toujours la validation humaine. **Second chemin Sepolia distinct** : `onchain/sepolia_rehearsal.py` (ancrage) passe lui par `wallet_guard.escalate_spend` (clic Telegram classique) — human-confirmed, testnet uniquement lui aussi ; les deux chemins sont gatés séparément, `sepolia_autonomous` n'emprunte jamais celui-ci (verrouillé `test_coherence`). **Précision gravée (décision opérateur explicite, 15/07 ; cadence mise à jour 18/07)** : le test de gestion du 1M$ (`paper_trader.py`, capital 100% fictif) se fait **sans approbation humaine, un test pur** — ouverture/fermeture de positions décidées et exécutées par ARIA seule, sans clic Telegram, y compris le reset hebdomadaire lui-même (cf. « Protocole d'entraînement hebdomadaire » plus bas — remplace le protocole 30j/7j/14j initial). **Ce n'est PAS une nouvelle exception à cette règle absolue** : le paper-trading ne touche aucun capital réel ni mainnet, donc n'a jamais été dans le périmètre de cette règle — la clarification sert seulement à écarter toute ambiguïté et empêcher qu'un futur ajout (garde-fou, validation, palier d'approbation) ne soit glissé dans le pipeline paper par erreur ou par excès de prudence. Le jour où le capital devient réel (10$ Coinbase Agent Wallet ou au-delà), cette règle absolue s'applique intégralement et sans exception — la validation humaine Telegram redevient obligatoire. **Exception nommée #3 (décision opérateur explicite et répétée, 16/07)** : le pilote agent-wallet réel ~10-15$ (Coinbase Agentic Wallet, `docs/pilote-agent-wallet-10usd.md`) peut décider ET exécuter des swaps réels sans clic Telegram par transaction — même doctrine que Sepolia (nommée, bornée, jamais une dérogation silencieuse), mais cette fois sur du VRAI capital mainnet, pas un testnet. Bornes non négociables : plafond dur 10-15$ vérifié contre le solde réel avant chaque tentative (`agent_wallet_pilot.py`, fail-closed si le solde est indisponible), swap uniquement (aucune fonction de transfert/retrait générique), slippage toujours forcé à 10% max, kill-switch `/stop` vérifié à chaque tentative, wallet dédié et isolé (jamais mélangé au wallet Vanguard ZHC principal), structurellement séparé de `wallet_guard.escalate_spend/resolve_spend` (verrouillé `test_coherence`), chaque tentative journalisée (ok/failed/blocked) via `agent_wallet_log.py`. Gate dédié `ARIA_AGENT_WALLET_PILOT_ENABLED` — **ACTIVÉ en prod le 18/07 (décision opérateur explicite, confirmée en direct sur le conteneur), identifiants CDP réels et branchement SDK confirmés opérationnels.** **Exception nommée #4 (décision opérateur explicite, 16/07, tranchée via AskUserQuestion après clarification de l'adresse de destination)** : le pilote gagne UNE capacité de transfert USDC réel, en plus du swap, structurellement bornée pour ne jamais devenir un vecteur de vol générique — `agent_wallet_pilot.attempt_transfer()`. Bornes non négociables : adresse de destination UNIQUE codée en dur dans le code (`ALLOWED_TRANSFER_ADDRESS = "0x33783cCb570Cb279C25F836806B5c4C3C8309777"`, communiquée explicitement par l'opérateur — jamais un paramètre libre, jamais une variable d'environnement modifiable sans revue de code), gate DISTINCT `ARIA_AGENT_WALLET_TRANSFER_ENABLED` (OFF par défaut, exigé EN PLUS du gate pilote global — les deux flags actifs sont nécessaires), même plafond dur 10-15$ vérifié contre le solde réel, même kill-switch `/stop`, même journalisation systématique (`agent_wallet_log.py`, colonne `to_address` ajoutée). Wallet de destination distinct du wallet Sepolia testnet (`0x8c8c163DA8099Ef7B553Ee9D4D56EdE8c205Cae5`) — vérifié explicitement avec l'opérateur pour ne pas mélanger testnet et mainnet. Le wallet agent CDP (`0xF04625162b616c5ad9788811b7be8CDd425B37Ef`) a été financé le 16/07 (1 USDC, puis un complément ETH pour le gas — confirmé nécessaire : le compte CDP standard utilisé ici n'a PAS d'intégration Paymaster/Smart Account, donc chaque transaction, swap ou transfert, consomme du vrai ETH). **Boucle de décision autonome livrée (décision opérateur explicite "option 2", 18/07)** : `agent_wallet_pilot_cycle.py`, câblée au heartbeat (`agent_wallet_pilot_cycle`, même gate `ARIA_AGENT_WALLET_PILOT_ENABLED`) — réutilise le pipeline momentum déjà testé (honeypot+R/R+garde LLM), sizing via la règle déjà décidée le 16/07 (#203, 3% du solde réel plafonné 15$ — jamais le solde entier), détection de position déjà ouverte via les tokens réellement détenus (jamais un seuil de solde ambigu avec la poussière de frais), cooldown 60min après un échec technique de swap (distinct de `momentum_blacklist.py`, réservé aux vraies menaces). v1 : une seule entrée à la fois, aucune sortie automatique. Volet "x402 débloque une décision bloquée par manque de données" (demandé par l'opérateur le 18/07) DIFFÉRÉ — vérifié le 18/07 que le seul endpoint qui aurait pu aider (`ethereum-token-verification`) reste cassé depuis le 17/07 ; bug réel corrigé au passage indépendamment de ce report : `cybercentry_insight.verify_and_remember_wallet()` payait à chaque appel sans jamais vérifier la mémoire vectorielle avant, corrigé (cache ~7j). Design complet : `docs/pilote-agent-wallet-10usd.md` §8. **Jalon futur noté, PAS construit** : une fois ARIA à plusieurs centaines de trades réels avec winrate >80%, taxe de 30% sur chaque trade gagnant vers `ALLOWED_TRANSFER_ADDRESS` (exception #4 ci-dessus) — condition d'activation hors de portée pour l'instant. **MISE À JOUR CRITIQUE (18/07, même segment) : `ARIA_AGENT_WALLET_PILOT_ENABLED` est maintenant ACTIVÉ EN PROD, vérifié en direct (`agent_wallet_pilot_enabled() == True` sur le conteneur réel après redéploiement).** Ce n'est PLUS un pilote dormant — ARIA peut décider ET exécuter un swap réel dès le prochain cycle heartbeat (jusqu'à 60 min), sans validation humaine. État au moment de l'activation : wallet à 0,98 USDC + 0,001 ETH (gas), 0 position ouverte, kill-switch `/stop` vérifié inactif. Toute session qui reprend ce fil doit vérifier l'état RÉEL du wallet/journal (`agent_wallet_log.list_transactions()`, `/api/aria/diagnostics/agent-wallet-ledger`) avant de supposer quoi que ce soit — ne jamais se fier à cette note au-delà de sa date, l'état évolue en continu maintenant que c'est actif.
 - Ne jamais modifier son propre code ni les fichiers de garde-fous (permission_mode, wallet_guard, regles-uniques, config.toml) sans validation explicite — même pour « normaliser ». Proposer et attendre « ok ».
 - Raisonner uniquement sur des faits vérifiables. Sans données : le dire clairement + la raison.
 - Ne jamais annoncer un fait (déploiement, commit, « c'est connecté ») sans preuve concrète (health check, sortie de commande, hash, URL).
@@ -2644,6 +2644,170 @@ d'un token (flux Txns DexScreener) avec le smart-money déjà scoré par ARIA
   2. **Un provider direct recevait l'ID catalogue Virtuals** (`ef65ce92`) — deux fuites indépendantes de `settings.llm_model` (ex. `"x-ai-grok-4-3"`, format propre à Spark) vers `_route_for_provider`/`_resolve_model`, provoquant un 400 "Model not found" côté x.ai. Corrigé : `llm_model` réservé au provider "virtuals" uniquement, un provider direct sans modèle explicite utilise toujours son défaut connu (`DEFAULT_MODELS`).
   3. **`GROK_API_KEY` (85 car., déjà dans `.env`) totalement inutilisée** (`60b0c6f6`) — `_auth_key_for_provider` référençait déjà `settings.grok_api_key`, mais ce champ n'existait dans AUCUNE des deux classes de settings (`app.config.Settings` prod, `aria_core.testing.AriaRuntimeSettings` test) — 401 "Incorrect API key" réel constaté (retombait sur `llm_api_key`, souvent une clé Groq, service différent malgré le nom proche). Champ ajouté aux deux classes, pydantic-settings mappe automatiquement.
   **Vérifié en conditions réelles après chaque étape** (jamais juste "ça devrait marcher") : `resolve_provider() == "grok"` → 400 model-not-found → 401 mauvaise clé → **200 OK, réponse LLM réelle reçue, sans repli Groq**. Suite complète verte à chaque commit (5574→5576 passed, mêmes 5 échecs pré-existants `test_proactive*`), `test_coherence.py` vert. Un secret (`LLM_FALLBACK_API_KEY`, clé Groq de secours) a été affiché en clair dans une sortie d'outil pendant le diagnostic (jamais dans le chat) — **rotation recommandée par précaution**, pas encore faite. Fallback Groq (`llama-3.3-70b-versatile`) reste configuré et fonctionnel en secours si x.ai tombe.
+
+## Session 18/07 — récap complet (protocole hebdo, tuning momentum, sécurité GitHub/comptes, pilote agent-wallet ACTIVÉ)
+
+Session dense, beaucoup de décisions opérateur en rafale — récap volontairement complet
+pour ne rien perdre au prochain compactage de contexte.
+
+**1. Protocole d'entraînement hebdomadaire** — déjà détaillé dans sa propre section
+plus haut (« Protocole d'entraînement hebdomadaire », remplace le 30j/7j/14j). Cycle #1
+(16/07 soir → 18/07) clôturé manuellement à la demande opérateur (pas le cycle naturel
+de 7j) : **-1,98%, 25% de réussite sur 8 trades, objectif +10% NON atteint.** Cycle #2
+relancé aussitôt (18/07, ~12h17 UTC), capital 1M$, prochain point le 25/07. Précision
+opérateur gravée : pas de seuil chiffré pour le passage au capital réel tant qu'ARIA
+n'a pas réussi le test hebdo de façon répétée — revue de chaque semaine avec
+l'opérateur, correction des failles trouvées, boucle diagnostique explicite.
+
+**2. Cadence de déploiement direct vs. batch** — gravée dans sa propre section
+« Cadence de déploiement » sous Déploiement (public-safe). Résumé : sécurité/bug actif
+en prod/changement que l'opérateur attend de voir = direct ; doc seule/itération
+rapide en cours/refactor à comportement identique = batch.
+
+**3. Tuning du pipeline momentum (#194) — 5 leviers livrés et déployés, réponse à
+"rendre ARIA plus agressive et plus sélective/intelligente".**
+  - **Sélectivité relevée** (`momentum_entry.py`) : achat direct désormais R/R ≥ 2.0
+    (avant 1.5) ET alignement technique ≥ 2/3 (avant 1/3). En dessous, zone ambiguë →
+    tie-breaker LLM (`_llm_confirm`, Haiku 4.5), jamais un achat aveugle.
+  - **Taille pilotée par la conviction** (`risk_guard.conviction_size_multiplier`) :
+    5%→8% du capital de départ UNIQUEMENT sur un setup exceptionnel (R/R≥2.5 ET
+    alignement parfait 3/3). Le plafond de perte au pire cas (2%, `size_position_
+    by_risk`) s'applique ensuite dessus, inchangé — jamais un pari sans filet (prouvé
+    par test : setup 8% avec stop large plafonné à 40k$ au lieu de 80k$).
+  - **Conscience du rythme hebdomadaire** : `weekly_context` (jour X/7, équité vs
+    objectif, distance en points de % via `remaining_pct` — un LLM manipule mieux un
+    ratio de progression qu'une soustraction entre grands nombres) transmis à
+    `_llm_confirm` (calibre son exigence) ET `_llm_security_gate` (information SEULE,
+    prompt interdit explicitement que ça influence le verdict — testé qu'un contexte
+    "en retard" ne transforme jamais un REJECT en PROCEED).
+  - **Frein à main déterministe** (`risk_guard.weekly_pacing_size_multiplier`) : une
+    fois l'objectif hebdo déjà atteint, nouvelles entrées réduites de moitié (jamais à
+    zéro — le marché ne sait pas qu'"ARIA a fait sa semaine", un skip total serait un
+    biais psychologique). RÈGLE : jamais un LLM pour cette décision (séparation des
+    rôles délibérée — le garde de sécurité détecte des pièges, il ne dimensionne
+    jamais une position). Composé avec la conviction : 8%→4%, 5%→2.5%.
+  - Revue croisée (externe, style Gemini/ChatGPT) faite à chaque étape, chaque
+    suggestion VÉRIFIÉE contre le code avant acceptation (pas prise pour argent
+    comptant) — ex. la suggestion "LanceDB sert déjà de cache" pour un usage x402 non
+    lié (point 8 ci-dessous) s'est révélée fausse à la vérification.
+  - Commits `a3719df0`/`9bb28600`, 25 nouveaux tests, suite complète verte, déployés
+    et vérifiés en direct sur le conteneur (pas seulement via le health check).
+
+**4. Sécurité GitHub — 3 volets bouclés.**
+  - **Rotation `GITHUB_TOKEN`** : ancien token OAuth classique (`gho_...`, large accès,
+    issu de "GitHub CLI") remplacé par un fine-grained PAT scopé (`aria-backend`,
+    UNIQUEMENT `GoldenFarFR/ARIA`, Issues+PR en lecture/écriture, Contents+Metadata en
+    lecture seule, expiration 90j). Migration faite en direct avec l'opérateur (accès
+    VPS via son propre terminal, jamais le secret dans le chat). **Bug de config réel
+    trouvé et corrigé en route** : `GITHUB_TOKEN` était défini DEUX FOIS dans le
+    `.env` (ligne 1 nouvelle valeur, ligne 60 ancienne) — la dernière occurrence dans
+    un fichier `.env` l'emporte en général, donc l'ancien token serait resté actif
+    malgré l'ajout du nouveau si la ligne dupliquée n'avait pas été supprimée
+    (`sed -i '/^GITHUB_TOKEN=gho_/d'`). Nouveau token vérifié par un vrai appel API
+    (lecture repo + issues, HTTP 200) avant ET après révocation de l'ancien. Ancien
+    token OAuth ("GitHub CLI") révoqué via Settings→Applications→Authorized OAuth
+    Apps ; un 2e token fine-grained inutilisé ("Claude", jamais servi, expirait le
+    23/07) supprimé en même temps. Preuve incidente que le scope du nouveau token
+    est bien respecté (pas juste cosmétique) : une lecture du détail de la règle de
+    protection de branche a été refusée en 403 "Resource not accessible" (permission
+    Administration non accordée), confirmant que le token n'a QUE ce qui a été coché.
+  - **Protection de branche `main`** : force-push et suppression de branche bloqués
+    pour tout le monde (opérateur inclus, sessions VPS incluses, moi incluse) — PAS de
+    "require PR before merge" (aurait cassé le workflow de push direct de toutes les
+    sessions). Activée via l'UI GitHub par l'opérateur (le classifieur de sécurité de
+    session avait refusé que je le fasse via API), confirmée via l'API
+    (`branches/main` → `protected: true`).
+  - **Repos archivés (`template-grok-cursor`, `aria-acp-showcase`)** : décision
+    explicite de NE PAS les désarchiver. Les deux ont une raison d'archivage
+    documentée dans leur propre historique Git (ACP déprioritisé 10/07 ; Cursor/Grok
+    abandonnés au profit de Claude Code) — 2 fixes mineurs de doc restent en local,
+    non poussés, jamais très utiles vu que ce sont des archives figées volontairement.
+    Suppression du repo (pas juste archivage) explicitement écartée aussi — la
+    banière "Conservé pour preuve/historique" d'`aria-acp-showcase` montre que
+    l'intention était la préservation, pas un futur nettoyage plus poussé.
+
+**5. 2FA — les 3 comptes vérifiés, 2 déjà bons, 1 corrigé.**
+  IONOS : déjà "Entièrement configurée", rien à faire. Email (Gmail
+  `[email operateur retire]`) : 4 passkeys déjà présents (protection forte), mais
+  adresse de récupération `[email operateur retire]` non validée (corrigé) et
+  validation en 2 étapes classique absente malgré les passkeys (ajoutée via Google
+  Authenticator, en plus). X (`@GoldenFarFR`) : déjà bon (2FA app + 1 passkey +
+  protection de réinitialisation de mot de passe). Note en passant : l'app "Grok"
+  reste autorisée sur le compte Google de l'opérateur — usage personnel confirmé,
+  gardée volontairement (aucun rapport avec l'abandon de Grok dans le pipeline ARIA).
+
+**6. Nettoyage `aria-ops` — 4 dossiers + 5 scripts abandonnés (chantier PC-local
+Cursor/collegue-memoire/Letta, remplacé par Claude Code direct sur le VPS).**
+  Supprimés entièrement : `collegue-memoire/`, `letta-orchestrator/`, `local-sync/`,
+  `memory/` (173 fichiers, -35 188 lignes), + 3 scripts qui n'existaient QUE pour ce
+  workflow (`scripts/aria-paths.ps1`, `vanguard/operator/new-pc.ps1`,
+  `vanguard/operator/start-acp-local.ps1`). **Trim chirurgical (PAS supprimés en
+  bloc)** sur 3 scripts opérateur plus larges et toujours utiles, qui ne référençaient
+  ces dossiers que pour UNE fonctionnalité annexe : `import-secure-keys.ps1` (retire
+  le bloc "Letta orchestrator .env"), `verify-spark-routing.ps1` (retire l'étape
+  "Routage Python" qui dépendait du venv Letta), `check-aria-status.ps1` (retire le
+  déclenchement du script de gap d'auto-amélioration). Vérifié AVANT de supprimer en
+  bloc (l'audit initial "rien n'en dépend" était inexact) — leçon déjà retenue en
+  mémoire (`check-repo-status-before-fixing`).
+  Commit `6fae21a` sur `aria-ops`.
+
+**7. Session cloud → auto memory** : nouvelle mémoire persistante créée ce segment
+(`check-repo-status-before-fixing`, type feedback) — vérifier le statut d'un repo
+(archivé/actif) avant d'y créer un correctif, pas seulement avant de demander l'action
+à l'opérateur. Déclenchée par l'incident du point 4 ci-dessus côté ARIA (avant la
+découverte sur aria-ops, deux occurrences du même type d'erreur le même jour).
+
+**8. Pilote agent-wallet réel — boucle de décision autonome construite ET ACTIVÉE EN
+PROD (le plus important de cette session).** Design complet déjà détaillé dans les
+Règles absolues (Exception nommée #3/#4, section rallongée ce segment) et
+`docs/pilote-agent-wallet-10usd.md` §8. Résumé des décisions opérateur qui ont façonné
+le design, dans l'ordre où elles sont tombées :
+  - "Option 2" : ARIA décide ET exécute SEULE, aucune commande Telegram, même pas pour
+    déclencher un essai (contrairement à l'option 1 envisagée un instant, rejetée).
+  - Jalon futur noté (PAS construit) : taxe de 30% sur chaque trade gagnant une fois
+    plusieurs centaines de trades réels avec winrate >80%, vers `ALLOWED_TRANSFER_
+    ADDRESS` (déjà l'unique adresse de l'exception #4) — hors de portée pour l'instant.
+  - x402 pour débloquer une décision faute de données : DEMANDÉ par l'opérateur, puis
+    DIFFÉRÉ après vérification — le seul endpoint qui aurait pu aider
+    (`ethereum-token-verification`) reste cassé depuis le 17/07 (revérifié le 18/07,
+    aucune URL alternative documentée à tester). `wallet-verification` (le seul
+    fonctionnel) ne résout pas ce type de blocage (vérifie une adresse, pas des
+    données de token manquantes) — construire dessus aurait été bricoler un outil
+    inadapté. Correctif fait quand même, indépendamment : `cybercentry_insight.
+    verify_and_remember_wallet()` payait à CHAQUE appel sans jamais vérifier la
+    mémoire vectorielle avant (bug réel, pas juste théorique) — corrigé, cache ~7j.
+  - 3 points de revue externe traités avant de coder : seuil de poussière (résolu en
+    détectant une position via les tokens réellement détenus, pas un seuil en
+    dollars — la règle de sizing déjà actée le 16/07, #203, produit des trades de
+    quelques centimes PAR DESIGN, un seuil dollar aurait bloqué le fonctionnement
+    voulu) ; cooldown x402 (le vrai bug trouvé ci-dessus) ; cooldown après échec de
+    swap (60 min, nouvelle fonction `agent_wallet_log.recent_failed_swap`, réutilise
+    le journal existant, jamais confondu avec `momentum_blacklist.py`).
+  - **Bug de casse réel trouvé par mon propre test avant même d'écrire le code final**
+    : la requête cooldown ne matchait pas `token_out` case-insensitive au niveau SQL —
+    corrigé (`LOWER(token_out) = ?`), jamais supposer qu'un appelant historique a
+    lowercasé la donnée.
+  - `agent_wallet_pilot_cycle.py` (nouveau module) : réutilise le pipeline momentum
+    déjà testé, sizing `agent_wallet_sizing.size_trade_usd` (3%, #203), Base
+    uniquement (l'adaptateur CDP est structurellement Base-only), v1 = une seule
+    entrée à la fois, AUCUNE sortie automatique. 30 nouveaux tests, suite complète
+    verte (5685 passed). Commit `c9550624`, câblé au heartbeat (`agent_wallet_pilot_
+    cycle`, 60 min).
+  - **ACTIVÉ EN PROD le 18/07** (confirmation opérateur explicite via AskUserQuestion
+    après une demande ambiguë "envoie le .env" — clarifiée avant d'agir, jamais
+    supposé). `ARIA_AGENT_WALLET_PILOT_ENABLED=true` ajouté au `.env`, redéployé,
+    **vérifié en direct sur le conteneur réel** (`agent_wallet_pilot_enabled() ==
+    True`, pas seulement supposé depuis le texte de sortie du déploiement). État au
+    moment de l'activation : wallet `0xF04625162b616c5ad9788811b7be8CDd425B37Ef` à
+    0,98 USDC + 0,001 ETH (gas), 0 position ouverte, kill-switch `/stop` vérifié
+    inactif. **Toute session future doit revérifier l'état réel du wallet/journal
+    avant de supposer quoi que ce soit — ça bouge maintenant en autonomie complète.**
+  - Note technique découverte en passant, jamais suivie d'effet ce segment : plusieurs
+    worktrees Git orphelins sous `/opt/aria/.claude/worktrees/` (`general-discussion-*`,
+    `rc-3d34c4`) contiennent déjà des copies (probablement obsolètes) de ces mêmes
+    fichiers agent-wallet — reliquats de runs d'agents isolés jamais nettoyés
+    automatiquement. Pas de risque (`.claude/` hors du repo git suivi), juste un
+    disque qui se remplit — à nettoyer un jour si ça devient gênant, pas urgent.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
