@@ -212,6 +212,30 @@ def test_agent_wallet_pilot_never_uses_wallet_guard_and_gated_off():
     )
 
 
+def test_agent_wallet_pilot_cycle_registered_in_heartbeat_and_isolated():
+    """Boucle de décision autonome du pilote agent-wallet (18/07, "option 2" --
+    ARIA décide ET exécute SEULE) : câblée au heartbeat, structurellement séparée
+    de wallet_guard (même doctrine que le reste du pilote), et dimensionne
+    TOUJOURS via agent_wallet_sizing (règle 3%/#203) -- jamais le solde entier."""
+    path = CORE / "agent_wallet_pilot_cycle.py"
+    assert path.is_file(), "agent_wallet_pilot_cycle.py manquant"
+    module = path.read_text(encoding="utf-8")
+    assert "escalate_spend(" not in module and "resolve_spend(" not in module, (
+        "agent_wallet_pilot_cycle.py ne doit JAMAIS appeler wallet_guard.escalate_spend/resolve_spend."
+    )
+    assert "import wallet_guard" not in module and "from aria_core.wallet_guard" not in module, (
+        "agent_wallet_pilot_cycle.py ne doit jamais importer wallet_guard.py."
+    )
+    assert "agent_wallet_sizing" in module, (
+        "le dimensionnement doit passer par agent_wallet_sizing.size_trade_usd (règle 3%, #203) "
+        "-- jamais un montant inventé ou le solde entier."
+    )
+
+    hb = _read_core("heartbeat.py")
+    assert 'id="agent_wallet_pilot_cycle"' in hb, "tâche agent_wallet_pilot_cycle absente de HEARTBEAT_TASKS"
+    assert 'task_id == "agent_wallet_pilot_cycle"' in hb, "dispatch de agent_wallet_pilot_cycle absent de _run_task"
+
+
 def test_acp_conversational_routing_gated_off():
     """L'ACP (abandonné) ne doit PAS détourner la conversation libre par défaut."""
     brain = _read_core("brain.py")

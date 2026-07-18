@@ -126,3 +126,41 @@ async def list_transactions(limit: int = 200) -> list[dict]:
             )
         ).fetchall()
     return [dict(zip(_COLUMNS, row)) for row in rows]
+
+
+async def recent_failed_swap(token_out: str, *, within_minutes: int) -> bool:
+    """Vrai si la DERNIÈRE tentative de swap vers ``token_out`` (n'importe
+    quelle jambe d'entrée) est un échec technique (``status="failed"``) survenu
+    il y a moins de ``within_minutes`` -- cooldown léger après une panne
+    transitoire (RPC, slippage dépassé), pour la boucle de décision autonome du
+    pilote agent-wallet (18/07). Réutilise le journal déjà existant, aucune
+    nouvelle table -- jamais confondu avec ``momentum_blacklist.py`` (réservé
+    aux vraies menaces de sécurité confirmées, jamais une panne technique).
+    Si le DERNIER essai pour ce token a réussi ou a été bloqué (pas 'failed'),
+    ou n'existe pas du tout, le token n'est jamais mis en cooldown ici."""
+    await _ensure_table()
+    token = (token_out or "").strip().lower()
+    if not token:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute(
+                # LOWER() des deux côtés : token_out est stocké TEL QUE fourni par
+                # l'appelant (record_transaction ne normalise pas la casse) --
+                # jamais supposer que tout appelant historique a déjà lowercasé.
+                "SELECT status, created_at FROM agent_wallet_tx_log "
+                "WHERE action_type = 'swap' AND LOWER(token_out) = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (token,),
+            )
+        ).fetchone()
+    if not row or row[0] != "failed":
+        return False
+    try:
+        ts = datetime.fromisoformat(row[1])
+    except (ValueError, TypeError):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    elapsed_min = (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
+    return elapsed_min < within_minutes

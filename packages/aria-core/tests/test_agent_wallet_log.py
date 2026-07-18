@@ -1,6 +1,9 @@
 """Journal append-only du futur pilote agent-wallet (seam, cf. CLAUDE.md 15/07)."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
+import aiosqlite
 import pytest
 
 from aria_core import agent_wallet_log as awl
@@ -77,3 +80,80 @@ async def test_list_transactions_respects_limit():
         )
     rows = await awl.list_transactions(limit=2)
     assert len(rows) == 2
+
+
+# ── recent_failed_swap (18/07, cooldown boucle de décision autonome) ────────
+
+async def _backdate_last_row(minutes_ago: float) -> None:
+    ts = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    async with aiosqlite.connect(awl.DB_PATH) as db:
+        await db.execute(
+            "UPDATE agent_wallet_tx_log SET created_at = ? "
+            "WHERE id = (SELECT MAX(id) FROM agent_wallet_tx_log)",
+            (ts,),
+        )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_false_with_no_history():
+    assert await awl.recent_failed_swap("0xabc", within_minutes=60) is False
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_true_just_after_failure():
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_out="0xTokenA", status="failed", reason="slippage dépassé",
+    )
+    assert await awl.recent_failed_swap("0xTokenA", within_minutes=60) is True
+    assert await awl.recent_failed_swap("0xtokena", within_minutes=60) is True  # insensible à la casse
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_false_after_cooldown_window_elapsed():
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_out="0xTokenB", status="failed", reason="RPC timeout",
+    )
+    await _backdate_last_row(120)  # 2h -- au-delà du cooldown de 60 min
+    assert await awl.recent_failed_swap("0xTokenB", within_minutes=60) is False
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_false_when_last_attempt_succeeded():
+    """Un succès (position ouverte) n'est jamais un cooldown -- c'est le check
+    'position déjà en cours' (other_tokens) qui bloque, pas celui-ci."""
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_out="0xTokenC", status="ok", tx_hash="0xdeadbeef",
+    )
+    assert await awl.recent_failed_swap("0xTokenC", within_minutes=60) is False
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_false_when_last_attempt_blocked():
+    """Un refus de garde-fou (plafond, kill-switch) n'est pas un échec technique --
+    jamais le même cooldown que 'failed'."""
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_out="0xTokenD", status="blocked", reason="kill-switch actif",
+    )
+    assert await awl.recent_failed_swap("0xTokenD", within_minutes=60) is False
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_uses_only_the_most_recent_attempt():
+    """Un échec ancien suivi d'un succès récent -- pas de cooldown fantôme."""
+    await awl.record_transaction(
+        wallet_product="p", action_type="swap", token_out="0xTokenE", status="failed",
+    )
+    await awl.record_transaction(
+        wallet_product="p", action_type="swap", token_out="0xTokenE", status="ok", tx_hash="0x1",
+    )
+    assert await awl.recent_failed_swap("0xTokenE", within_minutes=60) is False
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_empty_token_returns_false():
+    assert await awl.recent_failed_swap("", within_minutes=60) is False

@@ -306,6 +306,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="agent_wallet_pilot_cycle",
+        name="Pilote agent-wallet reel (~10-15$, CAPITAL REEL)",
+        description="Decide ET execute SEULE un swap USDC->token reel sur le wallet agent CDP dedie (Base) -- sans clic Telegram. Reutilise le pipeline momentum deja teste (honeypot+R/R+garde LLM). Sizing 3% du solde reel plafonne 15$ (#203). Une seule entree a la fois, aucune sortie automatique en v1. Gate ARIA_AGENT_WALLET_PILOT_ENABLED, meme gate que le reste du pilote (exception nommee, doc pilote-agent-wallet-10usd.md).",
+        interval_minutes=60,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="relay_conversation_cycle",
         name="Conversation relay ARIA <-> Claude Code",
         description="Repond dans sa propre voix (LLM) quand le dernier message du relay Telegram vient de Claude Code -- jamais l'operateur. Aucune action/competence declenchable depuis cet echange, uniquement de la discussion. Plafond quotidien, respecte le kill-switch. Gate OFF par defaut.",
@@ -503,6 +510,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.onchain.sepolia_autonomous import sepolia_autonomous_enabled
 
                 task.enabled = sepolia_autonomous_enabled()
+            if task.id == "agent_wallet_pilot_cycle":
+                from aria_core.agent_wallet_pilot import agent_wallet_pilot_enabled
+
+                task.enabled = agent_wallet_pilot_enabled()
             if task.id == "relay_conversation_cycle":
                 from aria_core.relay_chat import relay_autoreply_enabled
 
@@ -1090,6 +1101,21 @@ class AriaHeartbeat:
                     f"[rehearsal] {result.get('contract', '?')[:10]} -> {outcome} "
                     f"(hesitant={result.get('hesitant', False)})",
                 )
+
+        elif task_id == "agent_wallet_pilot_cycle":
+            from aria_core import agent_wallet_pilot_cycle
+
+            result = await agent_wallet_pilot_cycle.run_agent_wallet_pilot_cycle()
+            outcome = result.get("outcome")
+            if outcome in ("ok", "failed", "blocked"):
+                append_memory(
+                    "agent_wallet_pilot",
+                    f"[pilot RÉEL] {result.get('symbol', '?')} -> {outcome} "
+                    f"({result.get('amount_usd', 0):.2f}$)",
+                )
+                alert = agent_wallet_pilot_cycle.format_agent_wallet_swap_alert(result)
+                if alert:
+                    await self._notify_telegram(alert)
 
         elif task_id == "relay_conversation_cycle":
             from aria_core.relay_conversation import run_relay_conversation_cycle

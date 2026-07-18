@@ -8,12 +8,55 @@
 > pleinement en vigueur partout ailleurs (mainnet Vanguard ZHC, tout capital au-delà
 > de ce pilote). Code construit : `packages/aria-core/src/aria_core/
 > agent_wallet_pilot.py` (commit `0d3f593`), garde-fous §3 tous appliqués et
-> testés (20 tests). **Encore en attente** : les identifiants CDP réels
-> (`CDP_API_KEY_ID`/`CDP_API_KEY_SECRET`/`CDP_WALLET_SECRET`, wallet Coinbase
-> Agentic créé par l'opérateur lui-même) et le branchement du vrai SDK CDP
-> (balance_fn/swap_fn injectés, aucune clé ne transite jamais par une session
-> cloud) — rien n'est activé (`ARIA_AGENT_WALLET_PILOT_ENABLED` reste OFF) tant
-> que ce câblage réel n'est pas fait, testé sur le VPS.
+> testés (20 tests). Identifiants CDP réels configurés sur le VPS (vérifié 18/07),
+> SDK installé, lecture de solde déjà vérifiée contre un vrai appel (16/07).
+
+> **§8 -- Boucle de décision autonome (décision opérateur explicite, 18/07, "option
+> 2") : ARIA décide ET exécute SEULE, sans qu'aucune commande Telegram ne soit
+> nécessaire.** Design v1 :
+> 1. Nouveau cycle heartbeat `agent_wallet_pilot_cycle`, gaté par
+>    `ARIA_AGENT_WALLET_PILOT_ENABLED` (déjà existant, reste OFF).
+>    Sourcing Base uniquement (`agent_wallet_cdp_adapter.py` est structurellement
+>    Base-only -- `USDC_BASE_ADDRESS` codé en dur -- cohérent aussi avec la
+>    décision opérateur du 17/07 de garder Solana au même standard de sécurité,
+>    plus restrictif en pratique).
+> 2. **Position déjà en cours** détectée via `other_tokens` non vide
+>    (`agent_wallet_monitor.get_wallet_balance_summary()`, ETH déjà filtré) --
+>    pas via un seuil de solde USDC (ambigu avec la poussière laissée par les
+>    frais/arrondis). Si une position existe déjà, le cycle ne fait rien --
+>    **aucune sortie automatique dans cette v1**, seulement l'entrée.
+> 3. **Sizing = règle déjà décidée le 16/07 (#203)** :
+>    `agent_wallet_sizing.size_trade_usd()` (3% du solde réel, plafonné à
+>    `MAX_TRANSACTION_USD`) -- jamais "tout le solde disponible". Sur le solde
+>    actuel (~1$), ça produit des trades de quelques centimes, voulu.
+> 4. Candidat sourcé et évalué via le pipeline momentum déjà construit et testé
+>    (`momentum_entry.discover_momentum_candidates`/`evaluate_momentum_entry`,
+>    honeypot + R/R + garde LLM -- identique au paper-trading, rien de nouveau
+>    inventé pour la décision elle-même).
+> 5. Si BUY confirmé : `attempt_swap()` avec le montant sizé.
+> 6. **Cooldown après échec technique** (RPC, slippage dépassé) : si le dernier
+>    swap tenté vers un token a `status="failed"` et date de moins de 60 min
+>    (requête sur `agent_wallet_log.agent_wallet_tx_log`, déjà existant --
+>    aucune nouvelle table), le candidat est sauté ce cycle. Jamais confondu
+>    avec `momentum_blacklist.py` (réservé aux vraies menaces de sécurité
+>    confirmées) -- un échec RPC n'est pas un signal de danger.
+> 7. **x402 pour débloquer une décision (demande opérateur 18/07) : DIFFÉRÉ.**
+>    Vérifié le 18/07 : seul `wallet-verification` Cybercentry fonctionne,
+>    `ethereum-token-verification` (le seul qui aurait pu aider sur un token
+>    dont les données manquent) reste confirmé cassé depuis le 17/07 (testé 2
+>    fois, deux pannes différentes). Pas d'URL alternative documentée à tester.
+>    Construire ce volet contre le mauvais outil (wallet-verification ne
+>    résout pas un OHLCV manquant) serait bricoler une solution qui ne
+>    fonctionne pas -- différé jusqu'à ce que `ethereum-token-verification`
+>    soit retesté et confirmé. Correctif fait au passage, indépendant de ce
+>    report : `cybercentry_insight.verify_and_remember_wallet()` ne vérifiait
+>    jamais la mémoire vectorielle AVANT de payer -- corrigé (cache ~7j).
+> 8. **Jalon futur, noté mais PAS construit (18/07)** : une fois ARIA à
+>    plusieurs centaines de trades réels avec un winrate >80%, l'opérateur
+>    prendra une taxe de 30% sur chaque trade gagnant, transférée vers
+>    `ALLOWED_TRANSFER_ADDRESS` (déjà l'unique adresse de l'exception nommée
+>    #4). Aucune condition d'activation atteignable avant longtemps -- rien à
+>    coder maintenant, gravé ici pour ne pas perdre l'intention.
 
 ## 1. Pourquoi ce document existe
 
