@@ -854,15 +854,17 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 20) -> tuple[list[s
     return [c["contract"] for c in found[:limit]], chain_by_contract
 
 
-def _default_momentum_analyzer(chain_by_contract: dict[str, str]):
+def _default_momentum_analyzer(chain_by_contract: dict[str, str], weekly_context: dict | None = None):
     """Ferme sur la table contrat→chaîne construite au sourcing (#194) -- garde la
     signature ``analyzer(contract)`` historique inchangée, aucun appelant existant
-    (tests, autres pilotes) n'est affecté."""
+    (tests, autres pilotes) n'est affecté. ``weekly_context`` (18/07, optionnel) :
+    calculé UNE FOIS par cycle par l'appelant (cf. ``_run_paper_cycle_locked``), transmis
+    tel quel à chaque candidat -- jamais un recalcul par candidat."""
     from aria_core import momentum_entry
 
     async def analyzer(contract: str) -> dict | None:
         chain = chain_by_contract.get(contract, "base")
-        return await momentum_entry.evaluate_momentum_entry(contract, chain)
+        return await momentum_entry.evaluate_momentum_entry(contract, chain, weekly_context=weekly_context)
 
     return analyzer
 
@@ -1323,6 +1325,31 @@ async def _run_paper_cycle_locked(
         # déjà ouvertes ont déjà été gérées normalement ci-dessus (étape 1).
         return actions
 
+    # 18/07 -- décision opérateur explicite ("la rendre plus intelligente") : contexte de
+    # rythme du cycle hebdomadaire (jour X/7, équité vs objectif +10%), calculé UNE FOIS
+    # par cycle et réutilisant risk_state.equity déjà calculé ci-dessus (aucun appel
+    # réseau supplémentaire). Transmis au pipeline momentum (tie-breaker + garde de
+    # sécurité LLM) -- best-effort, jamais bloquant pour le cycle de trading lui-même.
+    weekly_context: dict | None = None
+    try:
+        cap = await starting_capital()
+        target = weekly_target_equity(cap)
+        started_dt = datetime.fromisoformat(await cycle_started_at())
+        if started_dt.tzinfo is None:
+            started_dt = started_dt.replace(tzinfo=timezone.utc)
+        elapsed_days = (datetime.now(timezone.utc) - started_dt).total_seconds() / 86400.0
+        weekly_context = {
+            "cycle_number": await get_current_cycle_number(),
+            "day": min(WEEKLY_CYCLE_DAYS, int(elapsed_days) + 1),
+            "days_total": WEEKLY_CYCLE_DAYS,
+            "equity": risk_state.equity,
+            "target_equity": target,
+            "progress_pct": (risk_state.equity / cap - 1.0) * 100.0 if cap else 0.0,
+        }
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant, dégrade en absence de contexte
+        logger.info("paper_cycle: contexte de rythme hebdo indisponible (%s)", exc)
+        weekly_context = None
+
     # 2) Ouvrir de nouvelles positions depuis les candidats classés (signal d'achat réel) --
     #    sauf si USDC est dépeg (#187) : le pricing de tout ce portefeuille suppose un USD
     #    stable, on bloque les NOUVELLES entrées (les positions déjà ouvertes ne sont pas
@@ -1335,7 +1362,7 @@ async def _run_paper_cycle_locked(
     # SON PROPRE candidates ou analyzer garde le comportement historique inchangé.
     if candidates is None and analyzer is None:
         candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=20)
-        analyzer = _default_momentum_analyzer(_momentum_chain_by_contract)
+        analyzer = _default_momentum_analyzer(_momentum_chain_by_contract, weekly_context=weekly_context)
     elif candidates is None:
         from aria_core.skills.candidate_ranking import top_candidates
 
@@ -1440,13 +1467,22 @@ async def _run_paper_cycle_locked(
                 price = None
         if not price or price <= 0:
             continue
+        # 18/07 -- décision opérateur explicite ("plus agressive" = plus gros sur les
+        # MEILLEURS setups, pas plus gros partout) : multiplie l'allocation de CETTE
+        # entrée sur un setup exceptionnel (R/R >= 2.5 ET alignement parfait 3/3, cf.
+        # risk_guard.conviction_size_multiplier) -- 1.0 (inchangé) sur tout le reste.
+        # size_position_by_risk (déjà appliqué DANS open_position) reste le vrai plafond
+        # de perte au pire cas, appliqué ENSUITE sur cette allocation potentiellement
+        # gonflée -- jamais un pari sans filet.
+        conviction_mult = risk_guard.conviction_size_multiplier(sig.get("rr"), sig.get("align_score"))
+        entry_alloc_usd = new_entry_alloc_usd * conviction_mult
         pos = await open_position(
             contract,
             sig.get("symbol", ""),
             price,
             target_price=sig.get("target"),
             invalidation_price=sig.get("invalidation"),
-            alloc_usd=new_entry_alloc_usd,
+            alloc_usd=entry_alloc_usd,
             category=sig.get("category", ""),
             entry_security_json=sig.get("entry_security_json", ""),
             chain=sig.get("chain") or "base",

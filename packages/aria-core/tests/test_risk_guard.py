@@ -62,6 +62,35 @@ class TestSizePositionByRisk:
         assert alloc == 50_000.0
 
 
+# ── 1bis. conviction_size_multiplier (18/07, "plus agressive" = plus gros sur les
+#          MEILLEURS setups, pas plus gros partout) ─────────────────────────────────
+
+class TestConvictionSizeMultiplier:
+    def test_exceptional_setup_gets_boosted(self):
+        mult = risk_guard.conviction_size_multiplier(2.5, 3)
+        assert mult == risk_guard.CONVICTION_SIZE_MULTIPLIER
+
+    def test_above_threshold_still_boosted(self):
+        mult = risk_guard.conviction_size_multiplier(4.0, 3)
+        assert mult == risk_guard.CONVICTION_SIZE_MULTIPLIER
+
+    def test_correct_but_not_exceptional_stays_default(self):
+        """R/R correct mais pas exceptionnel -- jamais un bonus sans les DEUX conditions."""
+        assert risk_guard.conviction_size_multiplier(2.0, 3) == 1.0
+        assert risk_guard.conviction_size_multiplier(2.5, 2) == 1.0
+        assert risk_guard.conviction_size_multiplier(1.5, 3) == 1.0
+
+    def test_missing_data_defaults_to_baseline(self):
+        """Jamais un bonus sans preuve du signal -- absence de donnée -> 1.0, pas un
+        multiplicateur inventé."""
+        assert risk_guard.conviction_size_multiplier(None, 3) == 1.0
+        assert risk_guard.conviction_size_multiplier(2.5, None) == 1.0
+        assert risk_guard.conviction_size_multiplier(None, None) == 1.0
+
+    def test_never_reduces_below_baseline(self):
+        assert risk_guard.conviction_size_multiplier(0.1, 0) == 1.0
+
+
 # ── 2. Coupe-circuit dédié : persistance, robustesse, distinction avec outgoing_pause ──
 
 

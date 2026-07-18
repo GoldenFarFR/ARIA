@@ -79,6 +79,30 @@ def size_position_by_risk(
     return min(alloc_usd, capped_alloc)
 
 
+# 18/07 -- décision opérateur explicite : "plus agressive" veut dire plus gros sur les
+# MEILLEURS setups, pas plus gros partout (jamais un bonus flat). Deuxième fonction PURE,
+# aucun état -- s'applique en AMONT de size_position_by_risk ci-dessus, qui reste le vrai
+# plafond de perte au pire cas (2 % du capital) : une allocation gonflée par conviction
+# reste plafonnée exactement comme avant sur un stop large, ce n'est jamais un pari sans
+# filet.
+CONVICTION_RR_THRESHOLD = 2.5
+CONVICTION_ALIGN_SCORE_THRESHOLD = 3
+CONVICTION_SIZE_MULTIPLIER = 1.6  # 5 % -> 8 % du capital de départ (ALLOC_PCT, paper_trader.py)
+
+
+def conviction_size_multiplier(rr: float | None, align_score: int | None) -> float:
+    """1.0 par défaut (comportement inchangé) -- ``CONVICTION_SIZE_MULTIPLIER`` UNIQUEMENT
+    sur un setup EXCEPTIONNEL : R/R >= ``CONVICTION_RR_THRESHOLD`` ET alignement technique
+    PARFAIT (``CONVICTION_ALIGN_SCORE_THRESHOLD``, cf. ``momentum_entry._technical_alignment``,
+    score 0-3). Jamais un bonus sur un setup seulement correct. Données absentes/incomplètes
+    (``None``) -> 1.0, jamais un bonus sans preuve du signal."""
+    if rr is None or align_score is None:
+        return 1.0
+    if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
+        return CONVICTION_SIZE_MULTIPLIER
+    return 1.0
+
+
 # ── 2. Coupe-circuit de portefeuille (état persisté, fichier dédié) ────────
 
 SOFT_DRAWDOWN_PCT = 0.10       # -10 % depuis le plus haut d'équité -> alloc réduite de moitié

@@ -694,7 +694,7 @@ async def test_run_cycle_defaults_to_momentum_pipeline_when_nothing_injected(tmp
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "solana"}]
 
-    async def fake_evaluate(contract, chain):
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
         assert chain == "solana"
         return {"action": "BUY", "symbol": "DDD", "price": 1.0, "target": 2.0,
                 "invalidation": 0.5, "chain": chain}
@@ -712,6 +712,94 @@ async def test_run_cycle_defaults_to_momentum_pipeline_when_nothing_injected(tmp
     assert top_candidates_called is False
     assert len(act["opened"]) == 1
     assert act["opened"][0]["chain"] == "solana"
+
+
+# ── #194+18/07 : contexte de rythme hebdo + sizing par conviction (pipeline momentum) ──
+
+@pytest.mark.asyncio
+async def test_run_cycle_threads_weekly_context_to_momentum_analyzer(tmp_db, monkeypatch):
+    """Le contexte de rythme (jour X/7, équité vs objectif) est calculé UNE FOIS par
+    cycle et transmis au pipeline momentum -- valeurs cohérentes avec un portefeuille
+    tout juste réinitialisé (cycle #1, jour 1, équité == capital de départ)."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    captured = {}
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        captured["weekly_context"] = weekly_context
+        return {"action": "HOLD", "chain": chain, "hold_reason": "test"}
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    ctx = captured["weekly_context"]
+    assert ctx is not None
+    assert ctx["cycle_number"] == 1
+    assert ctx["day"] == 1
+    assert ctx["days_total"] == pt.WEEKLY_CYCLE_DAYS
+    assert ctx["equity"] == 1_000_000.0
+    assert ctx["target_equity"] == 1_100_000.0
+    assert ctx["progress_pct"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_sizes_exceptional_conviction_signal_bigger(tmp_db, monkeypatch):
+    """R/R >= 2.5 ET alignement parfait (3/3) -> allocation 8 % (1.6x la base 5 %) au
+    lieu de 5 % du capital de départ -- le plafond de perte (risk_guard) reste appliqué
+    par-dessus, inchangé."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.5, "rr": 3.0, "align_score": 3,
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    # 5 % * 1.6 (CONVICTION_SIZE_MULTIPLIER) * 1M = 80 000 $ -- invalidation à 0.5 sur
+    # une entrée à 1.0 (risque 50 %) reste sous le plafond risk_guard (2 % * 1M = 20k /
+    # 0.5 = 40k) -> PLAFONNÉ à 40 000 $, pas 80 000 $ : le garde-fou de perte prime.
+    assert round(act["opened"][0]["cost_usd"]) == 40_000
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_correct_but_not_exceptional_signal_uses_default_size(tmp_db, monkeypatch):
+    """R/R correct (2.0) mais pas exceptionnel -- allocation par défaut (5 %),
+    jamais le bonus de conviction."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 2.0, "align_score": 2,
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["cost_usd"] == 50_000.0  # ALLOC_PCT (5 %) * 1M, multiplicateur 1.0
 
 
 @pytest.mark.asyncio

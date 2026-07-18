@@ -643,8 +643,13 @@ async def test_evaluate_holds_when_no_entry_signal(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_evaluate_buys_on_strong_rr_with_alignment(monkeypatch):
+    # 18/07 -- seuils relevés (plus sélective) : R/R franc >= 2.0 ET alignement >= 2/3
+    # pour un achat direct, cf. _RR_MIN_FOR_DIRECT_BUY/_ALIGN_SCORE_MIN_FOR_DIRECT_BUY.
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
-    _patch_pipeline(monkeypatch, signal=strong, align=(1, ["EMA12 > EMA26"]))
+    _patch_pipeline(
+        monkeypatch, signal=strong,
+        align=(2, ["EMA12 > EMA26", "MACD au-dessus de sa ligne de signal"]),
+    )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "BUY"
     assert result["price"] == 1.5
@@ -652,7 +657,7 @@ async def test_evaluate_buys_on_strong_rr_with_alignment(monkeypatch):
     assert result["invalidation"] == 1.0
     # 17/07 -- exposé pour que paper_trader.py puisse juger une éventuelle re-entrée
     # (REENTRY_RR_MIN/REENTRY_ALIGN_SCORE_MIN) sans recalculer l'alignement.
-    assert result["align_score"] == 1
+    assert result["align_score"] == 2
 
 
 @pytest.mark.asyncio
@@ -886,6 +891,128 @@ async def test_security_gate_routes_to_haiku_via_openrouter_at_zero_temperature(
     assert captured.get("temperature") == 0.0
 
 
+# ── contexte de rythme hebdomadaire (18/07, "la rendre plus intelligente") ──────────
+
+def test_weekly_pacing_line_formats_context():
+    ctx = {
+        "cycle_number": 3, "day": 5, "days_total": 7,
+        "equity": 1_050_000.0, "target_equity": 1_100_000.0, "progress_pct": 5.0,
+    }
+    line = me._weekly_pacing_line(ctx)
+    assert "semaine #3" in line
+    assert "jour 5/7" in line
+    assert "+5.0%" in line
+
+
+def test_weekly_pacing_line_empty_when_absent():
+    assert me._weekly_pacing_line(None) == ""
+    assert me._weekly_pacing_line({}) == ""
+
+
+def test_weekly_pacing_line_empty_on_incomplete_context():
+    assert me._weekly_pacing_line({"cycle_number": 1}) == ""
+
+
+@pytest.mark.asyncio
+async def test_llm_confirm_includes_weekly_pacing_when_provided(monkeypatch):
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        captured["system"] = system
+        return "HOLD"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    ctx = {"cycle_number": 2, "day": 3, "days_total": 7, "equity": 900_000.0,
+           "target_equity": 1_100_000.0, "progress_pct": -10.0}
+    await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"], weekly_context=ctx)
+    assert "semaine #2" in captured["user"]
+    assert "CALIBRER" in captured["system"]
+
+
+@pytest.mark.asyncio
+async def test_llm_confirm_omits_pacing_line_when_absent(monkeypatch):
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        return "HOLD"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+    assert "semaine #" not in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_security_gate_includes_weekly_pacing_but_never_sways_verdict(monkeypatch):
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        captured["system"] = system
+        return "REJECT"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    ctx = {"cycle_number": 4, "day": 6, "days_total": 7, "equity": 800_000.0,
+           "target_equity": 1_100_000.0, "progress_pct": -20.0}
+    proceed, reason = await me._llm_security_gate(
+        CONTRACT, "TOK", "base", 2.0, ["reason"], weekly_context=ctx,
+    )
+    assert "semaine #4" in captured["user"]
+    assert "JAMAIS influencer" in captured["system"]
+    # Le pacing "en retard" ne doit jamais transformer un REJECT en PROCEED.
+    assert proceed is False
+    assert reason == "security_gate_rejected"
+
+
+@pytest.mark.asyncio
+async def test_security_gate_omits_pacing_line_when_absent(monkeypatch):
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        return "PROCEED"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_security_gate(CONTRACT, "TOK", "base", 2.0, ["reason"])
+    assert "semaine #" not in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_threads_weekly_context_to_llm_confirm(monkeypatch):
+    weak = EntrySignal(present=True, entry=1.5, invalidation=1.2, target=1.8, rr=1.2)
+    _patch_pipeline(monkeypatch, signal=weak)
+    captured = {}
+
+    async def fake_llm_confirm(*args, **kwargs):
+        captured["weekly_context"] = kwargs.get("weekly_context")
+        return True
+
+    monkeypatch.setattr(me, "_llm_confirm", fake_llm_confirm)
+    ctx = {"cycle_number": 1, "day": 1, "days_total": 7, "equity": 1_000_000.0,
+           "target_equity": 1_100_000.0, "progress_pct": 0.0}
+    await me.evaluate_momentum_entry(CONTRACT, "base", weekly_context=ctx)
+    assert captured["weekly_context"] == ctx
+
+
+@pytest.mark.asyncio
+async def test_evaluate_threads_weekly_context_to_security_gate(monkeypatch):
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    captured = {}
+
+    async def fake_security_gate(*args, **kwargs):
+        captured["weekly_context"] = kwargs.get("weekly_context")
+        return True, ""
+
+    monkeypatch.setattr(me, "_llm_security_gate", fake_security_gate)
+    ctx = {"cycle_number": 2, "day": 4, "days_total": 7, "equity": 1_050_000.0,
+           "target_equity": 1_100_000.0, "progress_pct": 5.0}
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", weekly_context=ctx)
+    assert result["action"] == "BUY"
+    assert captured["weekly_context"] == ctx
+
+
 @pytest.mark.asyncio
 async def test_security_gate_neutralizes_malicious_symbol(monkeypatch):
     """Même défense que ``_llm_confirm`` -- le symbole reste une donnée non fiable,
@@ -911,7 +1038,10 @@ async def test_evaluate_security_gate_rejects_strong_rr_buy(monkeypatch):
     """Le cas BRIAN : R/R franc + alignement complet + honeypot clair, mais le garde
     final trouve un piège -- l'achat déterministe est annulé, pas laissé passer."""
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
-    _patch_pipeline(monkeypatch, signal=strong, align=(1, ["EMA12 > EMA26"]), security_gate=(False, "security_gate_rejected"))
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(3, ["EMA12 > EMA26", "MACD", "pattern bullish"]),
+        security_gate=(False, "security_gate_rejected"),
+    )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert result["hold_reason"] == "security_gate_rejected"
