@@ -379,15 +379,20 @@ async def get_closed_positions(limit: int = 500) -> list[dict]:
 async def list_positions_for_contract(contract: str, limit: int = 100) -> list[dict]:
     """Toutes les positions papier (ouvertes + clôturées) d'un contrat, récentes d'abord.
 
-    Alimente le « dossier par token ». La clé contrat est stockée en minuscules
-    (cf. open_position) — on normalise donc la recherche de la même façon.
+    Alimente le « dossier par token ». La clé contrat est stockée EN MINUSCULES pour
+    Base/Robinhood mais dans sa CASSE D'ORIGINE pour Solana (18/07, bug réel : un
+    ``.lower()`` uniforme corrompait toute adresse base58 avant qu'elle atteigne
+    GoPlus/RugCheck -- cf. ``momentum_entry.normalize_contract_case``/``open_position``
+    ci-dessous). Cette fonction ne connaît pas la chaîne de l'appelant -- recherche
+    donc insensible à la casse (``LOWER(contract) = ?``) plutôt que de supposer une
+    normalisation qu'elle ne peut pas reproduire elle-même.
     """
     await _ensure_tables()
     contract = (contract or "").lower()
     cols = ", ".join(_POS_FIELDS)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            f"SELECT {cols} FROM paper_position WHERE contract = ? ORDER BY id DESC LIMIT ?",
+            f"SELECT {cols} FROM paper_position WHERE LOWER(contract) = ? ORDER BY id DESC LIMIT ?",
             (contract, limit),
         ) as cur:
             rows = await cur.fetchall()
@@ -395,11 +400,13 @@ async def list_positions_for_contract(contract: str, limit: int = 100) -> list[d
 
 
 async def _get_open(contract: str) -> dict | None:
+    """Recherche insensible à la casse -- même raison que ``list_positions_for_contract``
+    ci-dessus (pas de paramètre ``chain`` ici pour reconstruire la vraie normalisation)."""
     contract = (contract or "").lower()
     cols = ", ".join(_POS_FIELDS)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            f"SELECT {cols} FROM paper_position WHERE contract = ? AND status = 'open' LIMIT 1",
+            f"SELECT {cols} FROM paper_position WHERE LOWER(contract) = ? AND status = 'open' LIMIT 1",
             (contract,),
         ) as cur:
             row = await cur.fetchone()
@@ -461,9 +468,17 @@ async def open_position(
     raisonnement VC complet (``VCResult.these``) persisté tel quel -- pourquoi ARIA entre,
     pas seulement à quel prix. La persistance prime sur l'affichage Telegram : sauvegardée
     ICI, indépendamment de tout notifier/topic configuré ou non. Retourne la position ou
-    None."""
+    None.
+
+    Casse du contrat (18/07, bug réel) : préservée pour Solana (base58, la casse fait
+    partie de la valeur), lowercase pour Base/Robinhood (hex EVM, comme avant) --
+    ``momentum_entry.normalize_contract_case``. Stocker une adresse Solana corrompue
+    aurait rendu tout re-scan/prix ultérieur (``paper_trader_risk.py``) inopérant sur
+    la vraie chaîne, silencieusement."""
     await _ensure_tables()
-    contract = (contract or "").lower()
+    from aria_core.momentum_entry import normalize_contract_case
+
+    contract = normalize_contract_case(contract, chain)
     if not contract or not entry_price or entry_price <= 0:
         return None
     if await has_open(contract):

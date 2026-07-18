@@ -640,6 +640,50 @@ async def test_open_position_defaults_chain_to_base(tmp_db):
     assert pos["chain"] == "base"
 
 
+# ── 18/07 : bug réel -- casse Solana corrompue avant stockage ────────────────────────
+# Trouvé en diagnostic live (RugCheck rejetait en 400 "Bad Request" une adresse
+# lowercased -- confirmé que la vraie casse fonctionne). Un .lower() uniforme dans
+# open_position() aurait défait le correctif de momentum_entry.py une couche plus
+# bas : la position se serait stockée avec une adresse corrompue, rendant tout
+# re-scan/prix ultérieur (paper_trader_risk.py) inopérant sur la vraie chaîne.
+SOL_MIXED_CASE = "Sol1111111111111111111111111111111111111"
+
+
+@pytest.mark.asyncio
+async def test_open_position_preserves_solana_case(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(SOL_MIXED_CASE, "SOL", 1.0, alloc_usd=50_000, chain="solana")
+    assert pos["contract"] == SOL_MIXED_CASE  # jamais lowercased
+
+
+@pytest.mark.asyncio
+async def test_open_position_still_lowercases_base_contract(tmp_db):
+    """Comportement EVM inchangé -- seul Solana est exempté du lowercase."""
+    await pt.reset_portfolio(1_000_000.0)
+    mixed = "0x" + "A" * 40
+    pos = await pt.open_position(mixed, "AAA", 1.0, alloc_usd=50_000, chain="base")
+    assert pos["contract"] == mixed.lower()
+
+
+@pytest.mark.asyncio
+async def test_has_open_finds_solana_position_case_insensitively(tmp_db):
+    """_get_open (via has_open) n'a pas de paramètre chain -- doit retrouver une
+    position Solana stockée en casse mixte même en cherchant en minuscules."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(SOL_MIXED_CASE, "SOL", 1.0, alloc_usd=50_000, chain="solana")
+    assert await pt.has_open(SOL_MIXED_CASE) is True
+    assert await pt.has_open(SOL_MIXED_CASE.lower()) is True
+
+
+@pytest.mark.asyncio
+async def test_list_positions_for_contract_finds_solana_case_insensitively(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(SOL_MIXED_CASE, "SOL", 1.0, alloc_usd=50_000, chain="solana")
+    found = await pt.list_positions_for_contract(SOL_MIXED_CASE.lower())
+    assert len(found) == 1
+    assert found[0]["contract"] == SOL_MIXED_CASE  # la valeur stockée garde sa vraie casse
+
+
 @pytest.mark.asyncio
 async def test_default_price_lookup_uses_chain_aware_dexscreener(monkeypatch):
     from aria_core.services.dexscreener import PairSnapshot

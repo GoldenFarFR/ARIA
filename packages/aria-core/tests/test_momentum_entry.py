@@ -65,7 +65,9 @@ async def test_discover_dedupes_across_sources(monkeypatch):
     keys = {(c["contract"], c["chain"]) for c in candidates}
     assert (CONTRACT, "base") in keys
     assert ("0x" + "b" * 40, "base") in keys
-    assert ("sol1111111111111111111111111111111111111", "solana") in keys
+    # Casse PRÉSERVÉE pour Solana (18/07, bug réel : un .lower() uniforme corrompait
+    # l'adresse base58 avant qu'elle atteigne GoPlus/RugCheck) -- jamais "sol111...".
+    assert ("Sol1111111111111111111111111111111111111", "solana") in keys
     assert len(candidates) == 3  # le doublon CONTRACT/base n'apparaît qu'une fois
 
 
@@ -112,7 +114,8 @@ async def test_discover_tolerates_source_failure(monkeypatch):
 
     candidates = await me.discover_momentum_candidates()
 
-    assert candidates == [{"contract": "sol222", "chain": "solana"}]
+    # Casse préservée pour Solana (18/07) -- "Sol222" reste "Sol222", jamais "sol222".
+    assert candidates == [{"contract": "Sol222", "chain": "solana"}]
 
 
 @pytest.mark.asyncio
@@ -221,6 +224,28 @@ def test_best_pair_falls_back_when_all_below_floor():
 
 def test_best_pair_none_when_empty():
     assert me._best_pair([]) is None
+
+
+# ── normalize_contract_case (18/07, bug réel) ────────────────────────────────────────
+
+def test_normalize_contract_case_lowercases_evm_chains():
+    assert me.normalize_contract_case("0xABCDEF", "base") == "0xabcdef"
+    assert me.normalize_contract_case("0xABCDEF", "robinhood") == "0xabcdef"
+
+
+def test_normalize_contract_case_preserves_solana_case():
+    mixed = "Sol1111111111111111111111111111111111111"
+    assert me.normalize_contract_case(mixed, "solana") == mixed
+
+
+def test_normalize_contract_case_strips_whitespace_both_chains():
+    assert me.normalize_contract_case("  0xABC  ", "base") == "0xabc"
+    assert me.normalize_contract_case("  SolABC  ", "solana") == "SolABC"
+
+
+def test_normalize_contract_case_handles_empty_and_none():
+    assert me.normalize_contract_case("", "solana") == ""
+    assert me.normalize_contract_case(None, "solana") == ""
 
 
 # ── _check_honeypot ─────────────────────────────────────────────────────────────────

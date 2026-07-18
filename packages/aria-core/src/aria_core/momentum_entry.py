@@ -125,6 +125,23 @@ MAX_VOLUME_TO_LIQUIDITY_RATIO = 20.0
 _MAX_PRICE_CHANGE_24H_PCT = 200.0
 
 
+def normalize_contract_case(contract: str, chain: str) -> str:
+    """Casse d'une adresse -- JAMAIS un simple ``.lower()`` uniforme (bug réel
+    trouvé le 18/07 en diagnostiquant pourquoi RugCheck rejetait systématiquement
+    les candidats Solana en 400 "Bad Request" malgré une couverture confirmée en
+    direct sur les mêmes tokens quand on préserve la casse). Base/Robinhood = hex
+    EVM, insensible à la casse, lowercase sûr (cohérent avec le reste du codebase,
+    ex. GoPlus/dict-keying). Solana = base58, la casse fait PARTIE de la valeur --
+    la mettre en minuscule ne "normalise" rien, ça CORROMPT l'adresse en une
+    chaîne qui ne correspond plus à aucun token réel (confirmé : GoPlus renvoyait
+    silencieusement "aucune donnée" sur l'adresse corrompue -- indiscernable d'une
+    vraie absence de couverture -- et RugCheck, plus strict, le révèle en 400)."""
+    contract = (contract or "").strip()
+    if (chain or "").strip().lower() != "solana":
+        contract = contract.lower()
+    return contract
+
+
 async def _batch_liquidity_prefilter(
     candidates: list[dict], *, min_liquidity_usd: float = _MIN_LIQUIDITY_USD,
 ) -> list[dict]:
@@ -154,6 +171,11 @@ async def _batch_liquidity_prefilter(
                 logger.info("_batch_liquidity_prefilter: %s (%d adresses) échoué (%s)", chain, len(chunk), exc)
                 continue
             for p in pairs:
+                # p.base_address vient de PairSnapshot (dexscreener.py), toujours
+                # lowercase -- infrastructure partagée EVM, non retouchée ici (large
+                # rayon d'action). Comparaison insensible à la casse UNIQUEMENT pour
+                # cette clé de correspondance -- c["contract"] lui-même (ci-dessous)
+                # garde sa vraie casse, jamais corrompu par ce détour.
                 addr = (p.base_address or "").lower()
                 if not addr:
                     continue
@@ -163,7 +185,7 @@ async def _batch_liquidity_prefilter(
 
     kept: list[dict] = []
     for c in candidates:
-        key = (c["contract"], c["chain"])
+        key = (c["contract"].lower(), c["chain"])
         if key not in seen_in_batch:
             kept.append(c)  # pas de donnée -- on ne rejette jamais sur l'absence
             continue
@@ -175,8 +197,8 @@ async def _batch_liquidity_prefilter(
 def _add_candidate(
     out: list[dict], seen: set[tuple[str, str]], chains: tuple[str, ...], contract: str, chain: str,
 ) -> None:
-    contract = (contract or "").strip().lower()
     chain = (chain or "").strip().lower()
+    contract = normalize_contract_case(contract, chain)
     if not contract or not chain or chain not in chains:
         return
     key = (contract, chain)
@@ -633,8 +655,8 @@ async def evaluate_momentum_entry(
     rendre visible la cause dominante d'inactivité (ex. panne GoPlus prolongée vs
     marché réellement sans candidat), jamais laissé invisible dans des logs debug
     épars."""
-    contract = (contract or "").strip().lower()
     chain = (chain or "").strip().lower()
+    contract = normalize_contract_case(contract, chain)
 
     if await momentum_blacklist.is_blacklisted(contract, chain):
         return {

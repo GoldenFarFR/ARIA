@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
+
+def _normalize_contract(contract: str, chain: str) -> str:
+    """Même correctif que ``momentum_entry._normalize_contract`` (18/07, bug réel) :
+    Base/Robinhood (hex EVM) tolèrent le lowercase, Solana (base58) non -- la casse
+    y fait partie de la valeur. Dupliqué ici (pas importé de momentum_entry, qui
+    importe déjà ce module -- éviterait un cycle) : aucune entrée Solana n'existe
+    encore dans ce garde-fou, mais l'écriture ET la lecture doivent rester
+    cohérentes dès la première, pour ne jamais introduire silencieusement le même
+    piège que celui trouvé côté GoPlus/RugCheck."""
+    contract = (contract or "").strip()
+    if (chain or "").strip().lower() != "solana":
+        contract = contract.lower()
+    return contract
+
 # Amorçage idempotent (INSERT OR IGNORE) -- un contrat déjà présent n'est jamais
 # réécrit, une nouvelle session ne perd jamais un ban déjà décidé ailleurs.
 _SEED_ENTRIES = [
@@ -62,14 +76,20 @@ async def _ensure_table() -> None:
 
 async def is_blacklisted(contract: str, chain: str) -> bool:
     """Vérifié EN PREMIER dans ``evaluate_momentum_entry`` -- aucun appel réseau,
-    le check le plus rapide et le plus définitif du pipeline."""
+    le check le plus rapide et le plus définitif du pipeline.
+
+    Comparaison insensible à la casse (18/07) -- même si le seul appelant réel
+    aujourd'hui (``evaluate_momentum_entry``) préserve déjà une casse cohérente de
+    bout en bout, un garde-fou de SÉCURITÉ ne doit jamais dépendre d'une casse
+    identique par convention : un futur appelant (commande manuelle, import) qui
+    passerait une casse différente ne doit jamais produire un FAUX NÉGATIF silencieux."""
     await _ensure_table()
-    contract = (contract or "").strip().lower()
     chain = (chain or "").strip().lower()
+    contract = _normalize_contract(contract, chain).lower()
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
             await db.execute(
-                "SELECT 1 FROM momentum_blacklist WHERE contract = ? AND chain = ?",
+                "SELECT 1 FROM momentum_blacklist WHERE LOWER(contract) = ? AND chain = ?",
                 (contract, chain),
             )
         ).fetchone()
@@ -81,8 +101,8 @@ async def add_to_blacklist(contract: str, chain: str, reason: str) -> None:
     contrat banni le reste ; une levée de ban, si jamais nécessaire, serait une
     décision opérateur explicite à tracer séparément, pas une fonction ici)."""
     await _ensure_table()
-    contract = (contract or "").strip().lower()
     chain = (chain or "").strip().lower()
+    contract = _normalize_contract(contract, chain)
     if not contract or not chain:
         return
     async with aiosqlite.connect(DB_PATH) as db:

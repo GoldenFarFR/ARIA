@@ -71,3 +71,29 @@ async def test_add_to_blacklist_empty_contract_no_crash():
 async def test_is_blacklisted_case_insensitive():
     await bl.add_to_blacklist(CONTRACT.upper(), "base", reason="test casse")
     assert await bl.is_blacklisted(CONTRACT.lower(), "BASE") is True
+
+
+# ── 18/07 : bug réel -- même correctif que momentum_entry.normalize_contract_case ────
+
+@pytest.mark.asyncio
+async def test_solana_contract_case_preserved_on_write():
+    """Base58 (Solana) : la casse fait partie de la valeur -- add_to_blacklist ne doit
+    JAMAIS la lowercaser, contrairement à Base/Robinhood."""
+    mixed = "Sol1111111111111111111111111111111111111"
+    await bl.add_to_blacklist(mixed, "solana", reason="test")
+    entries = await bl.list_blacklist()
+    matching = [e for e in entries if e["chain"] == "solana"]
+    assert matching[0]["contract"] == mixed
+
+
+@pytest.mark.asyncio
+async def test_is_blacklisted_finds_solana_entry_case_insensitively_on_lookup():
+    """Le stockage préserve la casse d'origine, mais is_blacklisted() compare en
+    insensible à la casse (défense en profondeur, 18/07) -- un futur appelant qui
+    chercherait avec une casse différente de celle stockée ne doit jamais produire
+    un faux négatif silencieux sur ce garde-fou de sécurité."""
+    mixed = "Sol1111111111111111111111111111111111111"
+    await bl.add_to_blacklist(mixed, "solana", reason="test")
+    assert await bl.is_blacklisted(mixed, "solana") is True
+    assert await bl.is_blacklisted(mixed.lower(), "solana") is True
+    assert await bl.is_blacklisted(mixed.upper(), "solana") is True
