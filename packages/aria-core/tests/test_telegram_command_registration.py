@@ -72,3 +72,51 @@ def test_all_nine_recovered_commands_specifically_registered():
         "_handle_handles",
     ):
         assert fn in registered, f"{fn} toujours non enregistré"
+
+
+def _menu_command_names() -> list[str]:
+    """Extrait l'ordre exact des BotCommand(...) dans _register_bot_commands."""
+    src = inspect.getsource(telegram_bot._register_bot_commands)
+    return re.findall(r'BotCommand\(\s*"([a-z_0-9]+)"', src)
+
+
+def _registered_primary_command_names() -> set[str]:
+    """Extrait le nom de commande RÉEL passé à CommandHandler (1er argument) --
+    pas dérivé du nom de la fonction _handle_*, qui diverge souvent (ex.
+    "agentwallet" -> _handle_agent_wallet, "canal" -> _handle_aria_channel,
+    "these" -> _handle_thesis). Pour un alias multiple (ex.
+    CommandHandler(["langue", "lang", "language"], ...)), seul le premier
+    (canonique) est retenu -- les alias ne sont pas censés apparaître dans le
+    menu visible."""
+    src = inspect.getsource(telegram_bot._register_handlers)
+    pairs = re.findall(r'CommandHandler\(\s*(?:\[\s*"([a-z_0-9]+)"|"([a-z_0-9]+)")', src)
+    return {a or b for a, b in pairs}
+
+
+def test_menu_commands_are_alphabetically_sorted():
+    """18/07 -- demande opérateur explicite : le menu doit rester trié a-z pour
+    rester repérable malgré une extension navigateur tierce qui mélange ses
+    propres suggestions "/" par-dessus celles d'ARIA dans Telegram Web. Toute
+    nouvelle commande doit s'insérer à sa place alphabétique, jamais en fin de
+    liste -- ce test le rappelle mécaniquement plutôt que de compter sur la
+    mémoire d'une future session."""
+    names = _menu_command_names()
+    assert names == sorted(names), (
+        "Le menu Telegram n'est plus trié alphabétiquement -- "
+        f"attendu {sorted(names)}, trouvé {names}"
+    )
+
+
+def test_menu_commands_match_registered_handlers():
+    """Le menu (_register_bot_commands) et les commandes réellement enregistrées
+    (_register_handlers, comparées par NOM DE COMMANDE réel, pas par nom de
+    fonction) ne doivent jamais diverger -- sinon une commande apparaît dans le
+    menu sans répondre, ou répond sans jamais apparaître dans le menu (incident
+    /ledger, #210, trouvé le 18/07 en écrivant ce test : handler fonctionnel
+    depuis le 17/07, absent du menu depuis toujours)."""
+    menu = set(_menu_command_names())
+    registered = _registered_primary_command_names()
+    assert menu == registered, (
+        f"Divergence menu vs commandes enregistrées -- dans le menu seul : {sorted(menu - registered)} ; "
+        f"enregistrée seule (jamais dans le menu) : {sorted(registered - menu)}"
+    )

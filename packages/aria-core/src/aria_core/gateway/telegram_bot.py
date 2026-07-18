@@ -1776,47 +1776,59 @@ async def _register_bot_commands() -> None:
     ex. /walletqueue absent alors que déjà utilisé). Le menu liste maintenant
     TOUTES les commandes enregistrées (cf. `add_handler(CommandHandler(...))`
     plus bas) -- une seule source de vérité, plus de liste séparée à tenir à
-    jour à la main à chaque nouvelle commande."""
+    jour à la main à chaque nouvelle commande.
+
+    18/07 -- trié par ordre alphabétique (constat opérateur : une extension
+    navigateur tierce injecte ses propres suggestions "/" par-dessus celles
+    d'ARIA dans Telegram Web, mélange visuel impossible à démêler sinon).
+    L'ordre alphabétique ne influence PAS le mélange lui-même (hors de portée
+    du code ARIA, propre à l'extension) mais rend les vraies commandes d'ARIA
+    reconnaissables au premier coup d'oeil dès qu'on sait qu'elles sont
+    alphabétiques. Garder ce tri à jour : toute nouvelle commande s'insère à
+    sa place alphabétique, jamais ajoutée en fin de liste. Au passage : /ledger
+    (#210, 17/07, _handle_ledger) trouvée enregistrée comme handler mais absente
+    du menu depuis sa création -- même famille que l'audit des 9 commandes du
+    18/07, ajoutée ici. Verrouillé par test_menu_commands_match_registered_handlers."""
     if not _bot_app:
         return
     from telegram import BotCommand
 
     commands = [
-        BotCommand("stop", "⏸ Pause immédiate des actions sortantes (kill-switch)"),
-        BotCommand("resume", "▶️ Reprendre les actions sortantes"),
-        BotCommand("whoami", "Ton identité/rôle Telegram (ID, admin ou non)"),
-        BotCommand("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
-        BotCommand("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
-        BotCommand("vc", "Analyse VC complète d'un contrat"),
-        BotCommand("scan", "Scan rapide de risque on-chain d'un contrat"),
-        BotCommand("status", "État système (santé, capacités actives)"),
-        BotCommand("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
         BotCommand("agentwallet", "Solde réel du wallet agent CDP (USDC + ETH gas)"),
         BotCommand("api", "Inventaire de toutes les API (URL, configurée, quota en direct)"),
-        BotCommand("watchlist", "Top candidats du pool screené"),
-        BotCommand("track", "Pertinence du track-record (hit-rate, calibration)"),
-        BotCommand("feuvert", "Scorecard avant argent réel (8 cases)"),
-        BotCommand("sentiment", "Dernière lecture de sentiment marché"),
+        BotCommand("avatar", "Photo de profil ARIA (identity, scene, style, apply)"),
+        BotCommand("calibrate", "Calibre une affirmation (vrai/faux/incertain)"),
+        BotCommand("canal", "Contrôle du canal ARIA → Claude Code"),
         BotCommand("cycles", "Les 3 derniers cycles Bitcoin (macro)"),
+        BotCommand("experiment", "Crée un sandbox d'expérimentation GitHub"),
+        BotCommand("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
+        BotCommand("feuvert", "Scorecard avant argent réel (8 cases)"),
+        BotCommand("github", "Réparer/éditer une réponse showcase PR"),
+        BotCommand("handles", "Registre des handles X (add/remove/alias/pack)"),
+        BotCommand("issue", "Clôture une thèse avec son résultat"),
+        BotCommand("langue", "Langue des analyses (fr/en)"),
+        BotCommand("learn", "Ajoute une leçon manuelle (topic | contenu)"),
+        BotCommand("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
+        BotCommand("level", "Niveaux/paliers de compétence ARIA"),
+        BotCommand("qi", "QI actuel d'ARIA (capacités)"),
+        BotCommand("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
+        BotCommand("resume", "▶️ Reprendre les actions sortantes"),
+        BotCommand("scan", "Scan rapide de risque on-chain d'un contrat"),
+        BotCommand("sentiment", "Dernière lecture de sentiment marché"),
+        BotCommand("start", "Message de bienvenue / lever la pause"),
+        BotCommand("status", "État système (santé, capacités actives)"),
+        BotCommand("stop", "⏸ Pause immédiate des actions sortantes (kill-switch)"),
+        BotCommand("test_spend", "Test wallet_guard (aucune dépense réelle)"),
         BotCommand("these", "Journalise une thèse (BUY/WATCH/SELL/AVOID)"),
         BotCommand("theses", "Liste des thèses encore ouvertes"),
-        BotCommand("issue", "Clôture une thèse avec son résultat"),
+        BotCommand("track", "Pertinence du track-record (hit-rate, calibration)"),
+        BotCommand("vc", "Analyse VC complète d'un contrat"),
         BotCommand("vcresult", "Attribue un résultat réel à une prédiction VC"),
-        BotCommand("langue", "Langue des analyses (fr/en)"),
-        BotCommand("github", "Réparer/éditer une réponse showcase PR"),
-        BotCommand("canal", "Contrôle du canal ARIA → Claude Code"),
-        BotCommand("test_spend", "Test wallet_guard (aucune dépense réelle)"),
-        BotCommand("start", "Message de bienvenue / lever la pause"),
-        # 18/07 -- 9 commandes trouvées écrites mais jamais enregistrées (audit).
+        BotCommand("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
+        BotCommand("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
+        BotCommand("watchlist", "Top candidats du pool screené"),
+        BotCommand("whoami", "Ton identité/rôle Telegram (ID, admin ou non)"),
         BotCommand("x", "Statut/profil/publication X (status, profile, compose, post)"),
-        BotCommand("avatar", "Photo de profil ARIA (identity, scene, style, apply)"),
-        BotCommand("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
-        BotCommand("qi", "QI actuel d'ARIA (capacités)"),
-        BotCommand("level", "Niveaux/paliers de compétence ARIA"),
-        BotCommand("learn", "Ajoute une leçon manuelle (topic | contenu)"),
-        BotCommand("calibrate", "Calibre une affirmation (vrai/faux/incertain)"),
-        BotCommand("experiment", "Crée un sandbox d'expérimentation GitHub"),
-        BotCommand("handles", "Registre des handles X (add/remove/alias/pack)"),
     ]
     await _bot_app.bot.set_my_commands(commands)
     logger.info("Telegram command menu registered (%d commands)", len(commands))
