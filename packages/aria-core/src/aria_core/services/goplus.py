@@ -76,6 +76,12 @@ class TokenSecurity:
     is_proxy: bool | None = None
     available: bool = False
     error: str | None = None
+    # #207, 18/07 : True UNIQUEMENT quand GoPlus a répondu proprement (pas de panne
+    # réseau/HTTP) mais n'a AUCUNE donnée pour ce contrat (`result` vide/null --
+    # fréquent sur Solana pour un token tout juste lancé, vérifié en direct). Distinct
+    # d'une vraie panne (timeout, 5xx, rate limit) -- seul ce cas précis autorise un
+    # second avis (services/rugcheck.py) dans momentum_entry._check_honeypot.
+    no_data: bool = False
 
 
 @dataclass
@@ -287,11 +293,13 @@ class GoPlusClient:
         # GoPlus : {"code":1,"message":"OK","result":{"<addr_lower>":{...}}}
         result = data.get("result")
         if not isinstance(result, dict) or not result:
-            # code != 1 ou résultat vide = GoPlus n'a pas (encore) la donnée pour ce token.
+            # code != 1 ou résultat vide = GoPlus n'a pas (encore) la donnée pour ce
+            # token -- réponse HTTP propre, pas une panne (no_data=True, #207).
             msg = str(data.get("message") or "").strip()
             return TokenSecurity(
                 address=addr,
                 available=False,
+                no_data=True,
                 error=f"{UNAVAILABLE} (aucune donnée pour ce contrat{': ' + msg if msg else ''})",
             )
 

@@ -231,6 +231,19 @@ class FakeSecurity:
     is_honeypot: bool | None = False
     cannot_sell_all: bool | None = False
     error: str | None = None
+    no_data: bool = False
+
+
+@dataclass
+class FakeRugCheckResult:
+    available: bool = True
+    rugged: bool | None = False
+    danger_risks: list = field(default_factory=list)
+    error: str | None = None
+
+    @property
+    def confirmed_clean(self) -> bool:
+        return self.available and self.rugged is False and not self.danger_risks
 
 
 @pytest.mark.asyncio
@@ -303,6 +316,130 @@ async def test_honeypot_translates_chain_id_for_solana(monkeypatch):
     monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
     await me._check_honeypot(CONTRACT, "solana")
     assert seen["chain_id"] == "solana"
+
+
+# ── #207 (18/07) : repli RugCheck sur Solana quand GoPlus n'a AUCUNE donnée ──────────
+
+@pytest.mark.asyncio
+async def test_rugcheck_fallback_only_fires_on_solana_no_data(monkeypatch):
+    """GoPlus sans donnée sur Base (chain != solana) -- reste honeypot_unavailable,
+    RugCheck n'est jamais consulté (portée du repli strictement Solana)."""
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        return FakeSecurity(available=False, no_data=True, error="aucune donnée")
+
+    called = {"rugcheck": False}
+
+    async def fake_rugcheck(mint):
+        called["rugcheck"] = True
+        return FakeRugCheckResult()
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
+    clear, reason, code = await me._check_honeypot(CONTRACT, "base")
+    assert clear is False
+    assert code == "honeypot_unavailable"
+    assert called["rugcheck"] is False
+
+
+@pytest.mark.asyncio
+async def test_rugcheck_fallback_not_used_on_real_goplus_outage(monkeypatch):
+    """Vraie panne GoPlus (timeout/5xx, no_data=False) sur Solana -- ne déclenche PAS
+    le repli RugCheck, fail-closed inchangé (le repli est réservé à "aucune donnée",
+    jamais à une panne d'infrastructure)."""
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        return FakeSecurity(available=False, no_data=False, error="timeout")
+
+    called = {"rugcheck": False}
+
+    async def fake_rugcheck(mint):
+        called["rugcheck"] = True
+        return FakeRugCheckResult()
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
+    clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
+    assert clear is False
+    assert code == "honeypot_unavailable"
+    assert called["rugcheck"] is False
+
+
+@pytest.mark.asyncio
+async def test_rugcheck_fallback_clears_when_confirmed_clean(monkeypatch):
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        return FakeSecurity(available=False, no_data=True, error="aucune donnée")
+
+    async def fake_rugcheck(mint):
+        assert mint == CONTRACT
+        return FakeRugCheckResult(available=True, rugged=False, danger_risks=[])
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
+    clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
+    assert clear is True
+    assert code == "honeypot_clear"
+    assert "RugCheck" in reason
+
+
+@pytest.mark.asyncio
+async def test_rugcheck_fallback_rejects_on_danger_risk(monkeypatch):
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        return FakeSecurity(available=False, no_data=True, error="aucune donnée")
+
+    async def fake_rugcheck(mint):
+        return FakeRugCheckResult(
+            available=True, rugged=False, danger_risks=["Creator history of rugged tokens"]
+        )
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
+    clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
+    assert clear is False
+    assert code == "honeypot_rejected"
+    assert "Creator history of rugged tokens" in reason
+
+
+@pytest.mark.asyncio
+async def test_rugcheck_fallback_rejects_on_rugged_flag(monkeypatch):
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        return FakeSecurity(available=False, no_data=True, error="aucune donnée")
+
+    async def fake_rugcheck(mint):
+        return FakeRugCheckResult(available=True, rugged=True, danger_risks=[])
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
+    clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
+    assert clear is False
+    assert code == "honeypot_rejected"
+
+
+@pytest.mark.asyncio
+async def test_rugcheck_fallback_fails_closed_when_also_unavailable(monkeypatch):
+    """GoPlus ET RugCheck n'ont ni l'un ni l'autre de donnée -- fail-closed inchangé,
+    jamais traité comme "clean par défaut"."""
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        return FakeSecurity(available=False, no_data=True, error="aucune donnée")
+
+    async def fake_rugcheck(mint):
+        return FakeRugCheckResult(available=False, rugged=None, danger_risks=[])
+
+    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
+    clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
+    assert clear is False
+    assert code == "honeypot_unavailable"
 
 
 # ── _fetch_candles (cascade OHLCV : GeckoTerminal → CoinMarketCap → DexScreener → Dune) ──

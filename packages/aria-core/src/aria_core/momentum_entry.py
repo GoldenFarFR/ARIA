@@ -14,7 +14,10 @@ le test 1M$ (#194) », à lire avant toute modification) :
     wash-trading, ajouté 17/07 après une perte réelle -17,9 % sur un token qui
     passait le honeypot GoPlus mais faisait partie d'un essaim de décoys narratifs
     -- le honeypot seul ne détecte pas ce pattern, un token peut être techniquement
-    "propre" tout en étant un piège de visibilité).
+    "propre" tout en étant un piège de visibilité). Sur Solana, quand GoPlus n'a
+    explicitement AUCUNE donnée (pas une panne), ``services/rugcheck.py`` sert de
+    second avis (#207, 18/07) -- ouvre de la couverture, n'assouplit jamais le
+    garde-fou (fail-closed inchangé si RugCheck non plus n'a rien ou confirmé rugged).
   - **R/R positif obligatoire** (cible/invalidation dérivés de niveaux RÉELS via
     ``entry_signals.detect_entry`` -- golden pocket + divergence RSI) : sans lui,
     HOLD. Jamais un objectif fabriqué quand l'OHLCV est indisponible.
@@ -246,7 +249,16 @@ async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
     ``chain_not_covered``) -- GoPlus est le SEUL fournisseur de ce garde-fou, aucun
     repli. Sans ce code, une panne GoPlus prolongée produit exactement le même
     symptôme observable (zéro nouvelle position) qu'un marché sans candidat valable
-    -- indiscernables sans lire les logs applicatifs un par un."""
+    -- indiscernables sans lire les logs applicatifs un par un.
+
+    #207 (18/07) : SEULE exception au "aucun repli" ci-dessus -- quand GoPlus répond
+    proprement mais n'a explicitement AUCUNE donnée (``no_data``, pas une panne) POUR
+    UN TOKEN SOLANA, ``services/rugcheck.py`` est consulté en second avis (vérifié en
+    direct : coverage réelle là où GoPlus est vide, y compris un signal de danger
+    -- "Creator history of rugged tokens" -- que GoPlus ne peut structurellement pas
+    voir). Le token doit revenir CONFIRMÉ propre par RugCheck pour passer ; s'il n'a
+    pas non plus la donnée, ou trouve un risque "danger"/``rugged``, le fail-closed
+    reste inchangé. Base/Robinhood non concernés (GoPlus les couvre déjà)."""
     goplus_chain = _DEXSCREENER_TO_GOPLUS_CHAIN_ID.get(chain)
     if not goplus_chain:
         return False, f"chaîne {chain} non couverte par le garde-fou honeypot -- rejet par prudence", "chain_not_covered"
@@ -255,6 +267,8 @@ async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
 
     security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
     if not security.available:
+        if chain == "solana" and security.no_data:
+            return await _check_honeypot_rugcheck_fallback(contract)
         return (
             False,
             f"GoPlus indisponible ({security.error}) -- rejet par prudence, jamais un pari sans garde-fou",
@@ -265,6 +279,32 @@ async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
     if security.cannot_sell_all:
         return False, "revente totale bloquée (GoPlus)", "honeypot_rejected"
     return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+
+async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, str]:
+    """Second avis Solana (#207) -- appelé UNIQUEMENT par ``_check_honeypot`` quand
+    GoPlus n'a aucune donnée pour ce contrat. Fail-closed inchangé si RugCheck non
+    plus n'a rien, ou trouve un signal de danger confirmé."""
+    from aria_core.services.rugcheck import get_report_summary
+
+    rc = await get_report_summary(contract)
+    if not rc.available:
+        return (
+            False,
+            f"GoPlus sans donnée, RugCheck indisponible ({rc.error}) -- rejet par prudence",
+            "honeypot_unavailable",
+        )
+    if rc.rugged:
+        return False, "rug confirmé (RugCheck)", "honeypot_rejected"
+    if rc.danger_risks:
+        return False, f"risque danger confirmé (RugCheck) : {', '.join(rc.danger_risks)}", "honeypot_rejected"
+    if rc.confirmed_clean:
+        return True, "honeypot clear (RugCheck, GoPlus sans donnée)", "honeypot_clear"
+    return (
+        False,
+        "RugCheck disponible mais verdict non concluant -- rejet par prudence",
+        "honeypot_unavailable",
+    )
 
 
 async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None) -> list[Candle]:
