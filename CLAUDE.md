@@ -1761,6 +1761,56 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (sweep vers réserve, pas encore écrite) ; 5) plafond dur % capital par
   position, indépendant de Kelly (règle PTJ). Rien construit -- décision
   opérateur nécessaire sur les seuils exacts avant tout code.
+- **#205 (promotion veille Research 18/07, fait vérifié indépendamment)** —
+  x402 transféré à une fondation dédiée sous Linux Foundation, opérations
+  lancées le 14/07/2026 : 40 membres (17 Premier/18 General/5 Associate)
+  dont Visa, Mastercard, Stripe, Amex, AWS, Google, Cloudflare, Coinbase,
+  Circle, Ripple, Solana Foundation, Stellar — gouvernance neutre, plus un
+  protocole propriétaire d'un seul acteur (confirmé via Linux Foundation,
+  CoinDesk, CryptoTimes, pas juste le journal de veille). Signal de
+  légitimité/pérennité concret pour le rail déjà engagé (pilote x402 #199,
+  budget 5$/semaine) — rien de cassé, aucune action technique requise,
+  mais point à évoquer avec l'opérateur pour juger si l'ambition/le budget
+  du pilote x402 doit monter d'un cran vu cette adoption large.
+- **#206 (promotion veille Research 18/07, fait vérifié PARTIELLEMENT — à
+  ne pas prendre pour argent comptant en entier)** — risque confirmé de
+  « memory poisoning » sur mémoire vectorielle d'agents IA : instructions
+  malveillantes injectées dans une base vectorielle long-terme, dormantes
+  jusqu'à un déclencheur (recherche indépendante confirme le phénomène,
+  >45M$ d'incidents cumulés 2026 et 88% des organisations utilisant des
+  agents IA touchées par au moins un incident, source KuCoin/Beam AI).
+  **Correction importante** : les pourcentages précis de réussite
+  d'injection cités par l'entrée du journal de veille (86% / 79% /
+  41,7-68,2%) n'ont PAS été retrouvés dans les sources primaires
+  (Zscaler cite 4/26 et 2/26 LLMs testés selon les campagnes, pas ces
+  chiffres) — ne jamais les citer comme un fait établi, seul le phénomène
+  et les $45M/88% sont vérifiés. Pertinent pour ARIA : la mémoire
+  vectorielle LanceDB a été activée le 17/07. **Action pour une session de
+  dev (rattachée au mandat permanent #192)** : auditer le chemin
+  d'écriture de la mémoire vectorielle pour vérifier qu'aucun contenu non
+  fiable (résultat web scrapé, réponse d'un tiers/API externe) n'y est
+  jamais écrit sans validation/sanitisation.
+- **#207 (promotion veille Research 18/07, fait vérifié — API réellement
+  en ligne)** — `RugCheck.xyz` (`api.rugcheck.xyz`, API gratuite,
+  confirmée active) est un outil de détection rug-pull spécifique
+  Solana/pump.fun (mint/freeze authority, concentration holders, lock LP,
+  détection de réseaux d'insiders). Réponse potentielle concrète à la
+  limite déjà documentée le 17/07 : GoPlus manque de couverture sur les
+  tokens pump.fun tout juste lancés (`token_security/solana` renvoie
+  souvent `result: null`), rejetant des candidats Solana faute de donnée
+  plutôt que sur un vrai signal de danger. **Action pour une session de
+  dev** : évaluer l'API RugCheck comme source COMPLÉMENTAIRE (jamais un
+  remplacement) dans `safety_screen.py` pour les tokens Solana sans
+  couverture GoPlus — doctrine « aussi stricte que sur Base » inchangée,
+  ceci ouvre de la couverture, ça ne l'assouplit pas.
+- **Fiche déposée `docs/aria-learning-inbox/2026-07-18-backtesting-freqtrade-nautilustrader.md`
+  (promotion veille Research 18/07)** — Freqtrade et NautilusTrader comme
+  architectures de référence pour un futur module de backtest historique
+  (gap déjà documenté ci-dessus et sous mandat #192 : ARIA ne fait que du
+  paper-trading forward). Sujet jugé trop structurant pour un simple
+  bullet (choix de licence/langage/intégration) — diligence déposée en
+  fiche plutôt qu'actionnée directement, à trancher avec l'opérateur si le
+  gap backtest devient prioritaire.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
