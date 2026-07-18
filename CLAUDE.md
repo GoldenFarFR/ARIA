@@ -2796,9 +2796,9 @@ rapide en cours/refactor à comportement identique = batch.
     l'intention était la préservation, pas un futur nettoyage plus poussé.
 
 **5. 2FA — les 3 comptes vérifiés, 2 déjà bons, 1 corrigé.**
-  IONOS : déjà "Entièrement configurée", rien à faire. Email (Gmail
-  `[email operateur retire]`) : 4 passkeys déjà présents (protection forte), mais
-  adresse de récupération `[email operateur retire]` non validée (corrigé) et
+  IONOS : déjà "Entièrement configurée", rien à faire. Email (Gmail principal,
+  adresse privée dans `aria-ops`) : 4 passkeys déjà présents (protection forte), mais
+  adresse de récupération (privée, non listée ici) non validée (corrigé) et
   validation en 2 étapes classique absente malgré les passkeys (ajoutée via Google
   Authenticator, en plus). X (`@GoldenFarFR`) : déjà bon (2FA app + 1 passkey +
   protection de réinitialisation de mot de passe). Note en passant : l'app "Grok"
