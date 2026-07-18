@@ -1,6 +1,6 @@
 # HANDOFF — Nuit du 07/07/2026 (session autonome)
 
-> Pour operateur, au réveil. Simple, factuel. **Rien n'a été déployé en prod** : tout est
+> Pour l'opérateur, au réveil. Simple, factuel. **Rien n'a été déployé en prod** : tout est
 > poussé sur la branche `claude/session-context-files-ofl85l`. Le déploiement VPS reste ton
 > geste (`git pull → ./vanguard/deploy.sh` après fusion dans `main`). Aucun garde-fou touché,
 > aucune campagne armée, aucun argent réel.
