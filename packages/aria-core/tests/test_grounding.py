@@ -85,6 +85,18 @@ def test_analysis_methodology_question_detects_second_incident_phrasing():
     assert not is_analysis_methodology_question("bonjour")
 
 
+def test_analysis_methodology_question_tolerates_real_typo():
+    # Incident réel (18/07, même soirée) : le premier élargissement exigeait
+    # l'orthographe exacte "quelles" -- la vraie question de l'opérateur contenait
+    # une faute de frappe ("quuelles") ET un mot supplémentaire ("alors") entre
+    # "conditions" et "pour", ratant les DEUX branches du regex d'origine. Le fix
+    # ne doit plus dépendre du mot interrogatif exact, seulement de la co-occurrence
+    # "condition(s)" + "token/jeton" dans une fenêtre raisonnable.
+    assert is_analysis_methodology_question(
+        "quuelles sont les conditions alors pour qu'un token tinteresse ?"
+    )
+
+
 def test_trade_status_question_detects_real_incident_phrasing():
     # Incident réel 16/07 : question posée juste après une clôture en perte, tombée
     # dans la conversation générale sans accès au registre paper-trading.

@@ -534,10 +534,9 @@ _ANALYSIS_METHOD_RE = re.compile(
     r"what\s+tools?\s+do\s+you\s+use\s+to\s+analyz[e]|"
     r"tu\s+utilises?\s+(?:de\s+l['’])?ia\s+g[ée]n[ée]rative\s+pour\s+analys|"
     r"m[ée]thode\s+d['’]analyse|"
-    r"quelles?\s+(?:sont\s+les\s+)?conditions?\s+.{0,40}(?:token|jeton)|"
+    r"conditions?\s+.{0,45}(?:token|jeton)|"
     r"qu['’]est[- ]ce\s+qui\s+(?:te\s+|t['’])?(?:rend|fait|int[ée]resse)|"
-    r"what\s+makes\s+a\s+token\s+interest|"
-    r"conditions?\s+pour\s+qu['’]un\s+token"
+    r"what\s+makes\s+a\s+token\s+interest"
     r")",
     re.IGNORECASE,
 )
