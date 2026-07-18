@@ -100,8 +100,16 @@ async def recent_messages(since_id: int = 0, limit: int = 50) -> list[dict]:
 async def send_relay_reply(text: str, *, sender=None) -> bool:
     """Envoie un message à l'opérateur à travers le bot ARIA existant (préfixé), et le
     journalise. `sender` injectable (tests hors-ligne) ; par défaut
-    `aria_core.gateway.telegram_bot.send_message`."""
-    if not relay_enabled() or not text.strip():
+    `aria_core.gateway.telegram_bot.send_message`.
+
+    18/07 -- trouvé par audit de sécurité : contrairement aux 20+ tâches heartbeat
+    (couvertes centralement par `outgoing_pause.is_paused()` dans `heartbeat._tick`),
+    ce chemin est atteint directement via `POST /api/aria/relay/reply` (token relay
+    dédié, hors heartbeat) et ne vérifiait jamais le kill-switch -- un appel
+    authentifié pouvait donc poster sur Telegram même pendant un `/stop`."""
+    from aria_core import outgoing_pause
+
+    if outgoing_pause.is_paused() or not relay_enabled() or not text.strip():
         return False
     if sender is None:
         from aria_core.gateway.telegram_bot import send_message as sender

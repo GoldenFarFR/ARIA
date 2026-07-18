@@ -111,6 +111,27 @@ async def test_send_relay_reply_sender_exception_does_not_raise(monkeypatch):
     assert ok is False
 
 
+@pytest.mark.asyncio
+async def test_send_relay_reply_respects_kill_switch(monkeypatch):
+    """18/07 -- trouvé par audit de sécurité : ce chemin (POST /api/aria/relay/reply,
+    hors heartbeat) ne vérifiait jamais outgoing_pause.is_paused() -- un appel
+    authentifié par le token relay dédié pouvait donc poster sur Telegram même
+    pendant un /stop."""
+    monkeypatch.setenv("ARIA_RELAY_ACCESS_TOKEN", "secret123")
+    from aria_core import outgoing_pause
+
+    monkeypatch.setattr(outgoing_pause, "is_paused", lambda **kw: True)
+    called = []
+
+    async def fake_sender(text):
+        called.append(text)
+        return True
+
+    ok = await relay_chat.send_relay_reply("test", sender=fake_sender)
+    assert ok is False
+    assert called == []
+
+
 def test_autoreply_disabled_without_token(monkeypatch):
     monkeypatch.delenv("ARIA_RELAY_ACCESS_TOKEN", raising=False)
     monkeypatch.setenv("ARIA_RELAY_AUTOREPLY_ENABLED", "true")

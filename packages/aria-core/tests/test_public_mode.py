@@ -76,6 +76,14 @@ def test_operator_skills_blocked_in_public():
     assert skill_allowed_in_public("marketing_comms") is False
 
 
+def test_ingest_repo_blocked_in_public():
+    """18/07 -- trouvé par audit de sécurité : absent de OPERATOR_SKILLS, un
+    visiteur non-admin pouvait déclencher execute_ingest_repo() (écriture dans
+    la mémoire cognitive d'ARIA) via le routeur d'intent générique, malgré le
+    docstring de la skill elle-même disant "never public"."""
+    assert skill_allowed_in_public("ingest_repo") is False
+
+
 def test_operator_blocked_reply_mentions_code():
     fr = operator_action_blocked_reply("fr")
     assert "code" in fr.lower()

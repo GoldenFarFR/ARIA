@@ -27,6 +27,13 @@ OPERATOR_SKILLS = frozenset({
     "holding_site",
     "entrepreneur_cultivation",
     "acp_marketplace",
+    # 18/07 -- trouvé par audit de sécurité : absent de cette liste noire, un
+    # visiteur non-admin pouvait déclencher execute_ingest_repo() (écrit dans
+    # la mémoire cognitive/vectorielle d'ARIA, add_knowledge(source="operator",
+    # approved=True, ...)) via texte libre ("ingest repo", "alimente ma
+    # mémoire"...) -- contournait explicitement l'esprit du garde-fou (son
+    # propre docstring dit "never public").
+    "ingest_repo",
 })
 
 
