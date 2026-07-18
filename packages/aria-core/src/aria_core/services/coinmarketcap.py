@@ -31,12 +31,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
 from datetime import datetime
 
 import httpx
 
 from aria_core.skills.ta_levels import Candle
+
+# 18/07 -- PoolMetadata/OHLCVResult étaient dupliquées à l'identique depuis
+# geckoterminal.py (trouvé par audit VPS Secondaire), sauf PoolMetadata qui
+# avait divergé : geckoterminal.py a reçu ``reserve_usd`` (15/07, défense
+# anti-dust/scam-pool, #157) que cette copie n'a jamais reçue. Réutilisation
+# directe au lieu d'une 2e copie à maintenir en synchro -- élimine la
+# duplication ET la divergence en un seul geste, sans inventer de nouvelle
+# logique (CMC ne peuple pas ``reserve_usd`` pour l'instant, il reste
+# ``None`` -- comportement fail-open déjà documenté dans geckoterminal.py).
+from aria_core.services.geckoterminal import OHLCVResult, PoolMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -76,21 +85,6 @@ CMC_NETWORK_SLUGS: dict[str, str] = {
 
 def _api_key() -> str | None:
     return os.environ.get("COINMARKETCAP_API_KEY", "").strip() or None
-
-
-@dataclass
-class PoolMetadata:
-    pool_address: str
-    created_at: datetime | None = None
-    available: bool = True
-    error: str | None = None
-
-
-@dataclass
-class OHLCVResult:
-    candles: list[Candle] = field(default_factory=list)
-    available: bool = True
-    error: str | None = None
 
 
 async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | None]:
