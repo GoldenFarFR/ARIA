@@ -897,11 +897,23 @@ def test_weekly_pacing_line_formats_context():
     ctx = {
         "cycle_number": 3, "day": 5, "days_total": 7,
         "equity": 1_050_000.0, "target_equity": 1_100_000.0, "progress_pct": 5.0,
+        "remaining_pct": 5.0,
     }
     line = me._weekly_pacing_line(ctx)
     assert "semaine #3" in line
     assert "jour 5/7" in line
     assert "+5.0%" in line
+    assert "encore 5.0 pt avant l'objectif" in line
+
+
+def test_weekly_pacing_line_shows_target_already_reached():
+    ctx = {
+        "cycle_number": 3, "day": 6, "days_total": 7,
+        "equity": 1_120_000.0, "target_equity": 1_100_000.0, "progress_pct": 12.0,
+        "remaining_pct": -2.0,
+    }
+    line = me._weekly_pacing_line(ctx)
+    assert "objectif déjà atteint (dépassé de 2.0 pt)" in line
 
 
 def test_weekly_pacing_line_empty_when_absent():
@@ -924,7 +936,7 @@ async def test_llm_confirm_includes_weekly_pacing_when_provided(monkeypatch):
 
     monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
     ctx = {"cycle_number": 2, "day": 3, "days_total": 7, "equity": 900_000.0,
-           "target_equity": 1_100_000.0, "progress_pct": -10.0}
+           "target_equity": 1_100_000.0, "progress_pct": -10.0, "remaining_pct": 20.0}
     await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"], weekly_context=ctx)
     assert "semaine #2" in captured["user"]
     assert "CALIBRER" in captured["system"]
@@ -954,7 +966,7 @@ async def test_security_gate_includes_weekly_pacing_but_never_sways_verdict(monk
 
     monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
     ctx = {"cycle_number": 4, "day": 6, "days_total": 7, "equity": 800_000.0,
-           "target_equity": 1_100_000.0, "progress_pct": -20.0}
+           "target_equity": 1_100_000.0, "progress_pct": -20.0, "remaining_pct": 30.0}
     proceed, reason = await me._llm_security_gate(
         CONTRACT, "TOK", "base", 2.0, ["reason"], weekly_context=ctx,
     )
@@ -990,7 +1002,7 @@ async def test_evaluate_threads_weekly_context_to_llm_confirm(monkeypatch):
 
     monkeypatch.setattr(me, "_llm_confirm", fake_llm_confirm)
     ctx = {"cycle_number": 1, "day": 1, "days_total": 7, "equity": 1_000_000.0,
-           "target_equity": 1_100_000.0, "progress_pct": 0.0}
+           "target_equity": 1_100_000.0, "progress_pct": 0.0, "remaining_pct": 10.0}
     await me.evaluate_momentum_entry(CONTRACT, "base", weekly_context=ctx)
     assert captured["weekly_context"] == ctx
 
@@ -1007,7 +1019,7 @@ async def test_evaluate_threads_weekly_context_to_security_gate(monkeypatch):
 
     monkeypatch.setattr(me, "_llm_security_gate", fake_security_gate)
     ctx = {"cycle_number": 2, "day": 4, "days_total": 7, "equity": 1_050_000.0,
-           "target_equity": 1_100_000.0, "progress_pct": 5.0}
+           "target_equity": 1_100_000.0, "progress_pct": 5.0, "remaining_pct": 5.0}
     result = await me.evaluate_momentum_entry(CONTRACT, "base", weekly_context=ctx)
     assert result["action"] == "BUY"
     assert captured["weekly_context"] == ctx

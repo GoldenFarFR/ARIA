@@ -379,11 +379,19 @@ def _weekly_pacing_line(weekly_context: dict | None) -> str:
     if not weekly_context:
         return ""
     try:
+        # 18/07 (suite, revue croisée) -- distance à l'objectif en points de %, en plus
+        # des dollars bruts : plus fiable à manipuler pour un LLM qu'une soustraction
+        # mentale entre deux grands nombres.
+        remaining = weekly_context["remaining_pct"]
+        distance = (
+            f"encore {remaining:.1f} pt avant l'objectif" if remaining > 0
+            else f"objectif déjà atteint (dépassé de {abs(remaining):.1f} pt)"
+        )
         return (
             f"Contexte de rythme (information seulement) : semaine #{weekly_context['cycle_number']}, "
             f"jour {weekly_context['day']}/{weekly_context['days_total']}. Équité "
             f"{weekly_context['equity']:,.0f}$ vs objectif {weekly_context['target_equity']:,.0f}$ "
-            f"({weekly_context['progress_pct']:+.1f}%)."
+            f"({weekly_context['progress_pct']:+.1f}%, {distance})."
         )
     except (KeyError, TypeError, ValueError):
         return ""

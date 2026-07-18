@@ -91,6 +91,41 @@ class TestConvictionSizeMultiplier:
         assert risk_guard.conviction_size_multiplier(0.1, 0) == 1.0
 
 
+# ── 1ter. weekly_pacing_size_multiplier (18/07, "frein à main" déterministe validé
+#          après revue croisée -- jamais un LLM, jamais 0 %) ───────────────────────────
+
+class TestWeeklyPacingSizeMultiplier:
+    def test_objective_already_reached_dampens_by_half(self):
+        ctx = {"equity": 1_100_000.0, "target_equity": 1_100_000.0}
+        assert risk_guard.weekly_pacing_size_multiplier(ctx) == risk_guard.WEEKLY_PACING_DAMPENING_MULTIPLIER
+        assert risk_guard.weekly_pacing_size_multiplier(ctx) == 0.5
+
+    def test_objective_exceeded_still_dampens_never_zero(self):
+        ctx = {"equity": 1_200_000.0, "target_equity": 1_100_000.0}
+        mult = risk_guard.weekly_pacing_size_multiplier(ctx)
+        assert mult == 0.5
+        assert mult > 0.0  # jamais 0 % -- le marché ne sait pas qu'on "a fait sa semaine"
+
+    def test_objective_not_yet_reached_stays_default(self):
+        ctx = {"equity": 1_050_000.0, "target_equity": 1_100_000.0}
+        assert risk_guard.weekly_pacing_size_multiplier(ctx) == 1.0
+
+    def test_missing_context_defaults_to_baseline(self):
+        assert risk_guard.weekly_pacing_size_multiplier(None) == 1.0
+        assert risk_guard.weekly_pacing_size_multiplier({}) == 1.0
+        assert risk_guard.weekly_pacing_size_multiplier({"equity": 1_100_000.0}) == 1.0
+        assert risk_guard.weekly_pacing_size_multiplier({"target_equity": 1_100_000.0}) == 1.0
+
+    def test_composes_with_conviction_multiplier_as_expected(self):
+        """Le cas décrit par la revue : 8 % (conviction) -> 4 %, 5 % (défaut) -> 2.5 %."""
+        conviction = risk_guard.conviction_size_multiplier(3.0, 3)  # setup exceptionnel
+        pacing = risk_guard.weekly_pacing_size_multiplier(
+            {"equity": 1_100_000.0, "target_equity": 1_100_000.0}
+        )
+        assert round(0.05 * conviction * pacing, 4) == 0.04
+        assert round(0.05 * 1.0 * pacing, 4) == 0.025
+
+
 # ── 2. Coupe-circuit dédié : persistance, robustesse, distinction avec outgoing_pause ──
 
 

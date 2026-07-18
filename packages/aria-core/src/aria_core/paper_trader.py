@@ -1338,13 +1338,20 @@ async def _run_paper_cycle_locked(
         if started_dt.tzinfo is None:
             started_dt = started_dt.replace(tzinfo=timezone.utc)
         elapsed_days = (datetime.now(timezone.utc) - started_dt).total_seconds() / 86400.0
+        progress_pct = (risk_state.equity / cap - 1.0) * 100.0 if cap else 0.0
+        # 18/07 (suite, revue croisée) -- distance à l'objectif en points de %, en plus
+        # des dollars bruts : un LLM manipule plus fiablement un ratio de progression
+        # ("encore 0.5 pt avant l'objectif") qu'une soustraction mentale entre deux
+        # grands nombres. positif = encore du chemin, <=0 = objectif déjà atteint/dépassé.
+        target_pct = (WEEKLY_TARGET_MULTIPLIER - 1.0) * 100.0
         weekly_context = {
             "cycle_number": await get_current_cycle_number(),
             "day": min(WEEKLY_CYCLE_DAYS, int(elapsed_days) + 1),
             "days_total": WEEKLY_CYCLE_DAYS,
             "equity": risk_state.equity,
             "target_equity": target,
-            "progress_pct": (risk_state.equity / cap - 1.0) * 100.0 if cap else 0.0,
+            "progress_pct": progress_pct,
+            "remaining_pct": target_pct - progress_pct,
         }
     except Exception as exc:  # noqa: BLE001 — jamais bloquant, dégrade en absence de contexte
         logger.info("paper_cycle: contexte de rythme hebdo indisponible (%s)", exc)
@@ -1475,7 +1482,14 @@ async def _run_paper_cycle_locked(
         # de perte au pire cas, appliqué ENSUITE sur cette allocation potentiellement
         # gonflée -- jamais un pari sans filet.
         conviction_mult = risk_guard.conviction_size_multiplier(sig.get("rr"), sig.get("align_score"))
-        entry_alloc_usd = new_entry_alloc_usd * conviction_mult
+        # 18/07 (suite, "frein à main" validé après revue) -- une fois l'objectif hebdo
+        # déjà atteint, réduit de moitié les NOUVELLES entrées (jamais à zéro) : protège
+        # le gain acquis sans jamais bloquer un setup exceptionnel doublement vérifié.
+        # Règle DÉTERMINISTE (risk_guard), jamais confiée au LLM -- cf. discussion
+        # opérateur 18/07 (séparation des rôles : le garde de sécurité détecte des
+        # pièges, il ne dimensionne jamais une position).
+        pacing_mult = risk_guard.weekly_pacing_size_multiplier(weekly_context)
+        entry_alloc_usd = new_entry_alloc_usd * conviction_mult * pacing_mult
         pos = await open_position(
             contract,
             sig.get("symbol", ""),

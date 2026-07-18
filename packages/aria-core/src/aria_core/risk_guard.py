@@ -103,6 +103,33 @@ def conviction_size_multiplier(rr: float | None, align_score: int | None) -> flo
     return 1.0
 
 
+# 18/07 (suite, revue croisée validée par l'opérateur) -- "frein à main" DÉTERMINISTE,
+# jamais un LLM : une fois l'objectif hebdomadaire (+10 %) DÉJÀ atteint, les NOUVELLES
+# entrées sont réduites de moitié plutôt que laissées pleine taille -- protège le gain
+# déjà acquis sans jamais couper les nouvelles entrées à zéro (le marché ne sait pas
+# qu'on a "fait sa semaine" ; un setup exceptionnel doublement vérifié garde une
+# asymétrie positive, juste avec une mise réduite). Composé APRÈS conviction_size_
+# multiplier (8 % -> 4 %, 5 % -> 2.5 %), lui-même plafonné ENSUITE par
+# size_position_by_risk (2 % de perte max) -- jamais un contournement du plafond.
+WEEKLY_PACING_DAMPENING_MULTIPLIER = 0.5
+
+
+def weekly_pacing_size_multiplier(weekly_context: dict | None) -> float:
+    """1.0 par défaut (comportement inchangé, y compris si ``weekly_context`` est absent
+    ou incomplet -- jamais un frein sans preuve du contexte). ``WEEKLY_PACING_DAMPENING_
+    MULTIPLIER`` UNIQUEMENT quand l'équité courante a déjà atteint/dépassé l'objectif de
+    la semaine (``weekly_context["equity"] >= weekly_context["target_equity"]``)."""
+    if not weekly_context:
+        return 1.0
+    equity = weekly_context.get("equity")
+    target = weekly_context.get("target_equity")
+    if equity is None or target is None:
+        return 1.0
+    if equity >= target:
+        return WEEKLY_PACING_DAMPENING_MULTIPLIER
+    return 1.0
+
+
 # ── 2. Coupe-circuit de portefeuille (état persisté, fichier dédié) ────────
 
 SOFT_DRAWDOWN_PCT = 0.10       # -10 % depuis le plus haut d'équité -> alloc réduite de moitié
