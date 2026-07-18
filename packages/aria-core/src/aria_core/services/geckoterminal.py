@@ -1,4 +1,4 @@
-"""Client GeckoTerminal (lecture seule, public, sans clé) -- côté aria-core (#157).
+"""Client GeckoTerminal (lecture seule, public, clé optionnelle) -- côté aria-core (#157).
 
 Un client GeckoTerminal existe déjà côté ``vanguard/backend`` (chart data pour le
 produit), mais aria-core (Telegram/CLI, tourne aussi standalone sans le backend
@@ -18,12 +18,26 @@ wallet-scoring #157, 14/07 -- seule capacité multi-chaînes EVM à ce jour, cf.
 ``services/blockscout.py`` pour le même registre de chaînes). Aucune donnée
 manquante n'est jamais remplacée par une supposition -- ``available=False``/
 ``error`` portent l'absence de donnée, même politique que ``blockscout.py``.
+
+Authentification OPTIONNELLE (18/07, #211) : si ``COINGECKO_DEMO_API_KEY`` est
+présente dans l'environnement (clé gratuite CoinGecko "Demo", aucun coût --
+https://www.coingecko.com/en/api/pricing), jointe en en-tête ``x-cg-demo-api-key``
+sur chaque appel -- fait passer le plafond de ~30 req/min (IP anonyme, partagé par
+TOUS les consommateurs GeckoTerminal d'ARIA : /vc, momentum #194, wallet-scoring
+#157, weekly_training, pump_dump_autopsy) à 100 req/min (vérifié via la doc
+officielle CoinGecko, 18/07 -- même URL de base, aucun changement d'endpoint).
+Trouvé en diagnostiquant un vrai HTTP 429 en conditions réelles ce soir sur le
+pipeline momentum (cf. entrée CLAUDE.md du 18/07). Sans cette clé, comportement
+historique inchangé (throttle 2.1s/appel). Si un jour un plan payant est pris
+(Basic $35/mois -> 300 req/min), ce même en-tête suffit -- CoinGecko n'exige
+``x-cg-pro-api-key`` que pour les endpoints spécifiquement Pro, pas /onchain.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -34,6 +48,23 @@ from aria_core.skills.ta_levels import Candle
 logger = logging.getLogger(__name__)
 
 UNAVAILABLE = "donnée GeckoTerminal indisponible"
+
+# Plafond authentifié (clé Demo gratuite) : 100 req/min -- throttle à 0.65s/appel
+# (~92/min), marge sous le plafond exact pour absorber la latence réseau propre.
+_AUTHENTICATED_MIN_INTERVAL = 0.65
+
+
+def geckoterminal_authenticated() -> bool:
+    """True si ``COINGECKO_DEMO_API_KEY`` est configurée (clé Demo gratuite ou
+    payante CoinGecko) -- détermine le throttle appliqué par le client module-level."""
+    return bool(os.environ.get("COINGECKO_DEMO_API_KEY", "").strip())
+
+
+def _resolve_min_interval() -> float:
+    """Throttle du client module-level -- fonction séparée (plutôt qu'inline à
+    l'instanciation) pour rester directement testable sans recharger le module."""
+    return _AUTHENTICATED_MIN_INTERVAL if geckoterminal_authenticated() else _MIN_INTERVAL
+
 
 BASE_URL = "https://api.geckoterminal.com/api/v2"
 NETWORK = "base"
@@ -145,11 +176,16 @@ class GeckoTerminalClient:
         attempt_429 = 0
         timeout_retried = False
 
+        headers = {"Accept": "application/json"}
+        api_key = os.environ.get("COINGECKO_DEMO_API_KEY", "").strip()
+        if api_key:
+            headers["x-cg-demo-api-key"] = api_key
+
         while True:
             await self._throttle()
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.get(url, params=params, headers={"Accept": "application/json"})
+                    response = await client.get(url, params=params, headers=headers)
             except httpx.TransportError as exc:
                 if not timeout_retried:
                     timeout_retried = True
@@ -343,4 +379,4 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-geckoterminal_client = GeckoTerminalClient()
+geckoterminal_client = GeckoTerminalClient(min_interval=_resolve_min_interval())

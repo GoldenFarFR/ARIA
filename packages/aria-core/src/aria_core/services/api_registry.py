@@ -116,8 +116,11 @@ def _static_entries() -> list[ApiEntry]:
         # ── Données marché / on-chain ──────────────────────────────────────
         ApiEntry("DexScreener", "Données marché", "https://api.dexscreener.com", True, note="sans clé"),
         ApiEntry(
-            "GeckoTerminal", "Données marché", "https://api.geckoterminal.com", True,
-            note="sans clé — ~30 req/min documenté (throttlé à 2.1s/appel côté ARIA)",
+            "GeckoTerminal", "Données marché", "https://api.geckoterminal.com",
+            _env_present("COINGECKO_DEMO_API_KEY"),
+            note="authentifié (#211, 18/07, clé Demo CoinGecko partagée) — 100 req/min, throttle 0.65s/appel"
+            if _env_present("COINGECKO_DEMO_API_KEY")
+            else "sans clé — ~30 req/min documenté (throttlé à 2.1s/appel côté ARIA)",
         ),
         ApiEntry("DefiLlama", "Données marché", "https://api.llama.fi", True, note="sans clé"),
         ApiEntry(

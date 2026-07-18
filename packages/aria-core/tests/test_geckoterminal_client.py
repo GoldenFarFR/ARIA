@@ -3,7 +3,12 @@ réel, tout est mocké."""
 
 import pytest
 
-from aria_core.services.geckoterminal import GeckoTerminalClient, _pool_is_plausible, price_at
+from aria_core.services.geckoterminal import (
+    GeckoTerminalClient,
+    _pool_is_plausible,
+    geckoterminal_authenticated,
+    price_at,
+)
 
 
 class FakeResponse:
@@ -601,3 +606,81 @@ class TestGetOhlcvNetworkParam:
         await client.get_ohlcv("0xpool", network="bsc")
 
         assert captured["network"] == "bsc"
+
+
+# ── Authentification optionnelle (18/07, #211) ───────────────────────────────────────
+
+class _HeaderCapturingClient(FakeClient):
+    """Variante de FakeClient qui journalise les en-têtes reçus, pour vérifier
+    que la clé Demo est bien jointe (ou absente) selon la config."""
+
+    def __init__(self, responses: dict, captured_headers: list):
+        super().__init__(responses)
+        self._captured_headers = captured_headers
+
+    async def get(self, url, params=None, headers=None):
+        self._captured_headers.append(headers)
+        return await super().get(url, params=params, headers=headers)
+
+
+def _patch_header_capturing_client(monkeypatch, responses: dict, captured_headers: list):
+    monkeypatch.setattr(
+        "aria_core.services.geckoterminal.httpx.AsyncClient",
+        lambda **kw: _HeaderCapturingClient(responses, captured_headers),
+    )
+
+
+def test_geckoterminal_authenticated_false_when_no_key(monkeypatch):
+    monkeypatch.delenv("COINGECKO_DEMO_API_KEY", raising=False)
+    assert geckoterminal_authenticated() is False
+
+
+def test_geckoterminal_authenticated_true_when_key_present(monkeypatch):
+    monkeypatch.setenv("COINGECKO_DEMO_API_KEY", "cg-demo-abc123")
+    assert geckoterminal_authenticated() is True
+
+
+@pytest.mark.asyncio
+async def test_request_attaches_demo_header_when_key_configured(monkeypatch):
+    monkeypatch.setenv("COINGECKO_DEMO_API_KEY", "cg-demo-abc123")
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/base/pools/0xpool"
+    captured: list = []
+    _patch_header_capturing_client(
+        monkeypatch, {url: FakeResponse(200, {"data": {"attributes": {}}})}, captured
+    )
+
+    await client.get_pool_created_at("0xpool")
+
+    assert captured[0]["x-cg-demo-api-key"] == "cg-demo-abc123"
+
+
+@pytest.mark.asyncio
+async def test_request_omits_header_when_no_key_configured(monkeypatch):
+    monkeypatch.delenv("COINGECKO_DEMO_API_KEY", raising=False)
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/base/pools/0xpool"
+    captured: list = []
+    _patch_header_capturing_client(
+        monkeypatch, {url: FakeResponse(200, {"data": {"attributes": {}}})}, captured
+    )
+
+    await client.get_pool_created_at("0xpool")
+
+    assert "x-cg-demo-api-key" not in captured[0]
+
+
+def test_resolve_min_interval_faster_when_authenticated(monkeypatch):
+    """Le throttle appliqué au client module-level (partagé par tous les
+    consommateurs GeckoTerminal d'ARIA) doit accélérer dès que la clé est
+    configurée -- sans ça, l'authentification ne sert à rien : le débit
+    resterait plafonné à l'ancien throttle anonyme malgré un plafond
+    serveur plus haut."""
+    from aria_core.services import geckoterminal as gt
+
+    monkeypatch.delenv("COINGECKO_DEMO_API_KEY", raising=False)
+    assert gt._resolve_min_interval() == gt._MIN_INTERVAL
+
+    monkeypatch.setenv("COINGECKO_DEMO_API_KEY", "cg-demo-abc123")
+    assert gt._resolve_min_interval() == gt._AUTHENTICATED_MIN_INTERVAL
+    assert gt._AUTHENTICATED_MIN_INTERVAL < gt._MIN_INTERVAL
