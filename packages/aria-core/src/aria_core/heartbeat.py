@@ -271,6 +271,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="paper_weekly_review_cycle",
+        name="Bilan hebdo paper-trading 1M$ (reset)",
+        description="Remplace le protocole 30j/7j/14j (decision operateur, 18/07) : chaque semaine (7j), cloture forcee de toute position ouverte au prix reel, verdict objectif +10% (1,1M$) valide/non atteint, archive l'historique (jamais detruit), repart a 1M$ frais. Meme gate que paper_trade_cycle -- aucun argent reel.",
+        interval_minutes=60,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="aria_exam_cycle",
         name="Examen trading ARIA (rehearsal pedagogique)",
         description="Genere ~25 questions de trading/jour (curriculum 50 concepts), les pose au raisonnement d'ARIA, note via juge LLM. 20 jours, en parallele du paper-trading. Aucune action financiere.",
@@ -471,6 +478,15 @@ def _sync_x_curiosity_enabled() -> None:
                 task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
                     "1", "true", "yes", "on",
                 )
+            if task.id == "paper_weekly_review_cycle":
+                # 18/07 -- meme gate que paper_trade_cycle : c'est le meme test, pas une
+                # fonctionnalite separee. Le dispatch (_run_task) ne fait rien tant que
+                # paper_trader.weekly_cycle_due() est faux -- cadence horaire ci-dessus,
+                # pas hebdomadaire, uniquement pour ne jamais rater le seuil de 7j de plus
+                # d'une heure.
+                task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                    "1", "true", "yes", "on",
+                )
             if task.id == "aria_exam_cycle":
                 from aria_core.exam import exam_enabled
 
@@ -615,7 +631,7 @@ def heartbeat_pulse() -> dict:
     last_tick = times[-1] if times else None
     safe_keys = (
         "vc_crawl", "vc_weekly_forecast", "vc_radar_x", "vc_thesis_review", "paper_trade_cycle",
-        "market_sentiment_cycle",
+        "paper_weekly_review_cycle", "market_sentiment_cycle",
     )
     cycles = {k: state[k] for k in safe_keys if state.get(k)}
     return {"alive": last_tick is not None, "last_tick": last_tick, "cycles": cycles}
@@ -1020,6 +1036,20 @@ class AriaHeartbeat:
                     f"[paper_trade] fictif 1M$ : +{len(actions.get('opened', []))} achats / "
                     f"-{len(actions.get('closed', []))} ventes",
                 )
+
+        elif task_id == "paper_weekly_review_cycle":
+            from aria_core import paper_trader
+
+            if not await paper_trader.weekly_cycle_due():
+                return
+            report = await paper_trader.run_weekly_reset()
+            append_memory(
+                "paper",
+                f"[paper_weekly] cycle #{report['cycle_number']} -> "
+                f"{'validé' if report['validated'] else 'échoué'} "
+                f"({report['return_pct']:+.2f}%, objectif +10%) -- nouveau cycle #{report['next_cycle_number']}",
+            )
+            await self._notify_telegram_trading(paper_trader.format_weekly_cycle_report(report))
 
         elif task_id == "aria_exam_cycle":
             from aria_core import exam

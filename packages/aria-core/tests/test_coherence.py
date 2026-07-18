@@ -149,6 +149,29 @@ def test_paper_trader_registered_in_heartbeat():
     assert 'task_id == "paper_trade_cycle"' in hb, "dispatch de paper_trade_cycle absent de _run_task"
 
 
+def test_paper_weekly_cycle_registered_in_heartbeat():
+    """18/07 -- boucle d'entraînement hebdomadaire (remplace le protocole 30j/7j/14j) :
+    doit être une tâche heartbeat, avoir un dispatch, ET utiliser paper_trader.run_weekly_reset
+    (pas une réimplémentation parallèle qui divergerait de reset_portfolio)."""
+    hb = _read_core("heartbeat.py")
+    assert 'id="paper_weekly_review_cycle"' in hb, (
+        "tâche paper_weekly_review_cycle absente de HEARTBEAT_TASKS"
+    )
+    assert 'task_id == "paper_weekly_review_cycle"' in hb, (
+        "dispatch de paper_weekly_review_cycle absent de _run_task"
+    )
+    assert "run_weekly_reset" in hb, "run_weekly_reset jamais appelé depuis le heartbeat"
+
+    pt_src = _read_core("paper_trader.py")
+    assert "async def run_weekly_reset(" in pt_src, "run_weekly_reset manquant dans paper_trader.py"
+    assert "async def weekly_cycle_due(" in pt_src, "weekly_cycle_due manquant dans paper_trader.py"
+    # Le reset hebdo ne doit JAMAIS DROP la table (contrairement à reset_portfolio,
+    # destructif par design) -- il archive puis vide, cf. docstring de run_weekly_reset.
+    assert "paper_position_archive" in pt_src, (
+        "run_weekly_reset doit archiver l'historique avant de vider la table live"
+    )
+
+
 def test_sepolia_autonomous_registered_in_heartbeat_and_never_uses_wallet_guard():
     """Rehearsal Sepolia autonome : câblé au heartbeat, ET structurellement séparé de
     wallet_guard.escalate_spend/resolve_spend (le garde-fou Telegram partagé — utilisé par

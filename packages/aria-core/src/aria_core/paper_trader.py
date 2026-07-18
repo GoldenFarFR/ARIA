@@ -33,6 +33,14 @@ ALLOC_PCT = 0.05          # 5 % du capital de départ par position (~50 000 $) �
 MAX_POSITIONS = 15        # coussin de cash + diversification
 MODE = "trading"
 
+# 18/07 -- décision opérateur explicite : remplace le protocole 30j/7j/14j. ARIA repart à
+# 1M$ CHAQUE semaine, objectif +10% (1,1M$) VALIDÉ chaque semaine -- une boucle
+# d'ENTRAÎNEMENT répétée (jamais une porte de sortie unique à franchir une fois). Le reset
+# a lieu que la semaine ait été validée ou non -- même philosophie diagnostique que #194
+# (pousser ARIA à se tromper/apprendre plutôt que sur-filtrer par excès de prudence).
+WEEKLY_CYCLE_DAYS = 7
+WEEKLY_TARGET_MULTIPLIER = 1.10
+
 # #196 -- verrou PARTAGÉ, quel que soit l'appelant (heartbeat paper_trade_cycle OU le
 # service websocket momentum #196) : sans lui, deux exécutions concurrentes de
 # run_paper_cycle() liraient le capital disponible/le nombre de positions ouvertes AVANT
@@ -110,6 +118,11 @@ _STATE_ADDED_COLUMNS = [
     # 17/07 -- horodatage de la dernière alerte de suivi périodique envoyée (voir
     # TRACKING_ALERT_MIN_INTERVAL_MINUTES) -- NULL tant qu'aucune n'a encore été envoyée.
     ("last_tracking_alert_at", "TEXT"),
+    # 18/07 -- décision opérateur explicite : remplace le protocole 30j/7j/14j par une
+    # boucle d'ENTRAÎNEMENT hebdomadaire (voir WEEKLY_CYCLE_DAYS/run_weekly_reset ci-dessous).
+    # Numéro du cycle courant, incrémenté à chaque reset -- jamais NULL après le premier
+    # appel de _ensure_tables (démarre à 1, même valeur par défaut que la colonne SQL).
+    ("cycle_number", "INTEGER NOT NULL DEFAULT 1"),
 ]
 
 
@@ -210,6 +223,65 @@ async def _ensure_tables() -> None:
         await db.execute(
             "INSERT OR IGNORE INTO paper_state (id, starting_capital, created_at) VALUES (1, ?, ?)",
             (STARTING_CAPITAL_USD, _now()),
+        )
+        # 18/07 -- verdict par semaine (une ligne par cycle clos par run_weekly_reset).
+        # Jamais de DELETE/UPDATE destructif ailleurs que le upsert du reset lui-même --
+        # c'est le vrai track record du protocole hebdo, doit survivre indéfiniment.
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_weekly_cycle (
+                cycle_number INTEGER PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                target_equity REAL NOT NULL,
+                start_capital REAL NOT NULL,
+                end_equity REAL,
+                return_pct REAL,
+                validated INTEGER,
+                closed_trades INTEGER,
+                win_rate REAL
+            )
+            """
+        )
+        # 18/07 -- historique COMPLET jamais détruit : contrairement à reset_portfolio()
+        # (DROP TABLE, destructif par design), run_weekly_reset() archive ICI chaque
+        # position de la semaine (ouverte-puis-force-close comprise) avant de vider la
+        # table live -- le track record hebdo reste consultable pour toujours. Types
+        # copiés un-à-un depuis paper_position (jamais générés dynamiquement -- l'affinité
+        # TEXT de SQLite convertirait silencieusement un nombre en chaîne si le mapping
+        # se trompait), colonnes dans le même ordre que _POS_FIELDS pour que l'INSERT...
+        # SELECT de run_weekly_reset reste un simple alignement positionnel.
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_position_archive (
+                archive_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cycle_number INTEGER NOT NULL,
+                id INTEGER,
+                contract TEXT,
+                symbol TEXT,
+                cost_usd REAL,
+                entry_price REAL,
+                qty REAL,
+                target_price REAL,
+                invalidation_price REAL,
+                opened_at TEXT,
+                status TEXT,
+                exit_price REAL,
+                closed_at TEXT,
+                pnl_usd REAL,
+                pnl_pct REAL,
+                close_reason TEXT,
+                high_water_price REAL,
+                tp_stage_hit INTEGER,
+                initial_qty REAL,
+                realized_pnl_partial REAL,
+                category TEXT,
+                entry_security_json TEXT,
+                chain TEXT,
+                thesis TEXT,
+                close_notes TEXT
+            )
+            """
         )
         await db.commit()
 
@@ -793,6 +865,173 @@ def _default_momentum_analyzer(chain_by_contract: dict[str, str]):
         return await momentum_entry.evaluate_momentum_entry(contract, chain)
 
     return analyzer
+
+
+# ── Cycle d'entraînement hebdomadaire (18/07, remplace le protocole 30j/7j/14j) ──────
+
+async def get_current_cycle_number() -> int:
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT cycle_number FROM paper_state WHERE id = 1") as cur:
+            row = await cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 1
+
+
+async def cycle_started_at() -> str:
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT created_at FROM paper_state WHERE id = 1") as cur:
+            row = await cur.fetchone()
+    return row[0] if row and row[0] else _now()
+
+
+def weekly_target_equity(start_capital: float) -> float:
+    return start_capital * WEEKLY_TARGET_MULTIPLIER
+
+
+async def weekly_cycle_due() -> bool:
+    """Vrai si ``WEEKLY_CYCLE_DAYS`` se sont écoulés depuis le début du cycle courant
+    (``paper_state.created_at``). Jamais anticipé, même si l'objectif est déjà atteint --
+    une boucle d'entraînement RÉPÉTÉE, pas une porte de sortie qu'on franchit une fois."""
+    started = await cycle_started_at()
+    try:
+        started_dt = datetime.fromisoformat(started)
+    except ValueError:
+        return False
+    if started_dt.tzinfo is None:
+        started_dt = started_dt.replace(tzinfo=timezone.utc)
+    elapsed = datetime.now(timezone.utc) - started_dt
+    return elapsed.total_seconds() >= WEEKLY_CYCLE_DAYS * 86400
+
+
+async def run_weekly_reset(*, price_lookup=None) -> dict:
+    """Bilan + reset du cycle hebdomadaire (décision opérateur explicite, 18/07) --
+    remplace intégralement le protocole 30j/7j/14j comme méthode d'ENTRAÎNEMENT et de
+    DÉCISION vers le capital réel : ARIA repart à 1M$ CHAQUE semaine, objectif +10%
+    (1,1M$) VALIDÉ chaque semaine, que la précédente ait réussi ou non.
+
+    Contrairement à ``reset_portfolio`` (DROP TABLE, destructif par design, réservé à un
+    déclenchement opérateur explicite), cette fonction ne détruit JAMAIS l'historique :
+    1. force-clôture mark-to-market (prix RÉEL, jamais inventé -- dégrade sur le coût
+       d'entrée si le prix est introuvable) de toute position encore ouverte -- une
+       semaine se juge sur elle-même, rien ne reste "à cheval" sur la suivante ;
+    2. photo finale (``portfolio_summary``, equity == cash après l'étape 1) -> verdict
+       ``validated`` = équité finale >= objectif ;
+    3. archive TOUT l'historique de la semaine dans ``paper_position_archive`` (jamais
+       perdu) puis vide la table live -- la prochaine semaine démarre à 0 position ;
+    4. enregistre le verdict dans ``paper_weekly_cycle`` (track record permanent, une
+       ligne par semaine, jamais réécrit après coup sauf par cette fonction elle-même) ;
+    5. repart à neuf : capital 1M$, horodatage, plus-haut d'équité, cycle_number+1 ;
+    6. lève le coupe-circuit de risque dédié (``risk_guard``) -- fraîche semaine, fraîche
+       discipline, jamais un ancien palier dur qui bloquerait la semaine suivante.
+    """
+    await _ensure_tables()
+    price_lookup = price_lookup or _default_price_lookup
+    using_default_price_lookup = price_lookup is _default_price_lookup
+    cycle_number = await get_current_cycle_number()
+    started_at = await cycle_started_at()
+    start_capital = await starting_capital()
+    target_equity = weekly_target_equity(start_capital)
+
+    force_closed: list[dict] = []
+    for pos in await get_open_positions():
+        try:
+            if using_default_price_lookup:
+                price = await _default_price_lookup(pos["contract"], chain=pos.get("chain") or "base")
+            else:
+                price = await price_lookup(pos["contract"])
+        except Exception:  # noqa: BLE001 — un prix indispo ne bloque jamais le reset
+            price = None
+        exit_price = price if (price and price > 0) else pos["entry_price"]
+        closed = await close_position(
+            pos["contract"], exit_price,
+            reason="reset_hebdomadaire",
+            notes=(
+                f"Clôture forcée -- fin du cycle #{cycle_number} ({_duration_phrase(pos.get('opened_at'))}), "
+                f"prix {'de marché' if (price and price > 0) else 'indisponible, valorisé au coût d’entrée'}."
+            ),
+        )
+        if closed:
+            force_closed.append(closed)
+
+    summary = await portfolio_summary()
+    end_equity = summary["equity"]
+    return_pct = summary["return_pct"]
+    validated = end_equity >= target_equity
+    ended_at = _now()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cols = ", ".join(_POS_FIELDS)
+        await db.execute(
+            f"INSERT INTO paper_position_archive (cycle_number, {cols}) "
+            f"SELECT ?, {cols} FROM paper_position",
+            (cycle_number,),
+        )
+        await db.execute("DELETE FROM paper_position")
+        await db.execute(
+            """
+            INSERT INTO paper_weekly_cycle
+              (cycle_number, started_at, ended_at, target_equity, start_capital,
+               end_equity, return_pct, validated, closed_trades, win_rate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(cycle_number) DO UPDATE SET
+              ended_at = excluded.ended_at, target_equity = excluded.target_equity,
+              start_capital = excluded.start_capital, end_equity = excluded.end_equity,
+              return_pct = excluded.return_pct, validated = excluded.validated,
+              closed_trades = excluded.closed_trades, win_rate = excluded.win_rate
+            """,
+            (cycle_number, started_at, ended_at, target_equity, start_capital,
+             end_equity, return_pct, int(validated), summary["closed_trades"], summary["win_rate"]),
+        )
+        next_cycle = cycle_number + 1
+        await db.execute(
+            "UPDATE paper_state SET starting_capital = ?, created_at = ?, "
+            "equity_high_water_mark = ?, cycle_number = ?, last_tracking_alert_at = NULL "
+            "WHERE id = 1",
+            (STARTING_CAPITAL_USD, ended_at, STARTING_CAPITAL_USD, next_cycle),
+        )
+        await db.commit()
+
+    # Fraîche semaine, fraîche discipline -- import local (risk_guard importe déjà
+    # paper_trader, jamais l'inverse au niveau module, cf. open_position ci-dessus).
+    from aria_core import risk_guard
+
+    risk_guard.resume_new_entries(by="weekly_reset_auto")
+
+    return {
+        "cycle_number": cycle_number,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "start_capital": start_capital,
+        "target_equity": target_equity,
+        "end_equity": end_equity,
+        "return_pct": return_pct,
+        "validated": validated,
+        "closed_trades": summary["closed_trades"],
+        "win_rate": summary["win_rate"],
+        "force_closed": len(force_closed),
+        "next_cycle_number": next_cycle,
+    }
+
+
+def format_weekly_cycle_report(report: dict) -> str:
+    wr = report.get("win_rate")
+    wr_str = f"{wr:.0f}%" if wr is not None else "n/a"
+    verdict = "✅ VALIDÉ" if report["validated"] else "❌ non atteint"
+    lines = [
+        "🧪 SIMULATION — bilan hebdomadaire (cycle d'entraînement 1M$)",
+        f"Semaine #{report['cycle_number']} : {verdict} (objectif {report['target_equity']:,.0f} $)",
+        f"Départ {report['start_capital']:,.0f} $ → clôture {report['end_equity']:,.0f} $ "
+        f"({report['return_pct']:+.2f}%)",
+        f"Trades clôturés {report['closed_trades']} · réussite {wr_str}",
+    ]
+    if report.get("force_closed"):
+        lines.append(f"{report['force_closed']} position(s) encore ouverte(s) clôturée(s) au prix du marché.")
+    lines.append(
+        f"Nouvelle semaine #{report['next_cycle_number']} : capital remis à "
+        f"{STARTING_CAPITAL_USD:,.0f} $, 0 position. Aucun argent réel."
+    )
+    return "\n".join(lines)
 
 
 async def run_paper_cycle(
