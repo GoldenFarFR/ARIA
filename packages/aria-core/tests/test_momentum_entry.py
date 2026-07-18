@@ -467,7 +467,7 @@ async def test_rugcheck_fallback_fails_closed_when_also_unavailable(monkeypatch)
     assert code == "honeypot_unavailable"
 
 
-# ── _fetch_candles (cascade OHLCV : GeckoTerminal → CoinMarketCap → DexScreener → Dune) ──
+# ── _fetch_candles (cascade OHLCV : GeckoTerminal → CoinMarketCap → Mobula → DexScreener → Dune) ──
 
 def _plain_candles(n: int = 5) -> list[Candle]:
     return [Candle(ts=i, open=1.0, high=1.0, low=1.0, close=1.0, volume=0.0) for i in range(n)]
@@ -531,11 +531,136 @@ async def test_fetch_candles_falls_back_to_dexscreener_synthesis(monkeypatch):
 
     monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
 
     pair = _pair(price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1)
     result = await me._fetch_candles("0xpool", "base", pair=pair)
     assert result  # synthèse dégradée non vide
     assert result[-1].close == 2.0  # dernier point = prix courant
+
+
+# ── #212, 18/07 : étage Mobula (entre CoinMarketCap et la synthèse DexScreener) ──
+
+@pytest.mark.asyncio
+async def test_fetch_candles_falls_back_to_mobula_when_configured(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    mobula_candles = _plain_candles(6)
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        assert contract == CONTRACT
+        assert blockchain == "base"
+        return gt.OHLCVResult(candles=mobula_candles, available=True, error=None)
+
+    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
+    assert result == mobula_candles
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_skips_mobula_when_not_configured(monkeypatch):
+    """Sans MOBULA_API_KEY, l'étage est sauté SANS appel réseau -- tombe
+    directement sur la synthèse DexScreener/Dune, jamais un blocage."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    called = {"mobula": False}
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        called["mobula"] = True
+        return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.delenv("MOBULA_API_KEY", raising=False)
+
+    pair = _pair(price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1)
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, pair=pair)
+    assert called["mobula"] is False
+    assert result  # tombe sur la synthèse DexScreener
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_skips_mobula_without_contract(monkeypatch):
+    """Mobula interroge par adresse de TOKEN (comme Dune), pas de POOL -- sans
+    ``contract``, l'étage est sauté même si la clé est configurée."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    called = {"mobula": False}
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        called["mobula"] = True
+        return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    pair = _pair(price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1)
+    result = await me._fetch_candles("0xpool", "base", pair=pair)  # pas de contract=
+    assert called["mobula"] is False
+    assert result  # tombe sur la synthèse DexScreener
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_mobula_not_tried_when_coinmarketcap_succeeds(monkeypatch):
+    """Ordre de cascade respecté -- Mobula n'est jamais appelé si un étage
+    plus rapide/moins cher a déjà réussi."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    cmc_candles = _plain_candles(4)
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=cmc_candles, available=True, error=None)
+
+    called = {"mobula": False}
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        called["mobula"] = True
+        return gt.OHLCVResult(candles=[], available=False, error="ne devrait jamais être appelé")
+
+    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
+    assert result == cmc_candles
+    assert called["mobula"] is False
 
 
 @pytest.mark.asyncio
@@ -558,6 +683,7 @@ async def test_fetch_candles_falls_back_to_dune_as_last_resort(monkeypatch):
     monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(dune, "get_price_history", fake_dune_price_history)
+    monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
 
     # pas de `pair` fourni -> saute l'étage DexScreener, tombe directement sur Dune
     result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
@@ -582,6 +708,7 @@ async def test_fetch_candles_returns_empty_when_everything_fails(monkeypatch):
     monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(dune, "get_price_history", fake_dune_price_history)
+    monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
 
     result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
     assert result == []

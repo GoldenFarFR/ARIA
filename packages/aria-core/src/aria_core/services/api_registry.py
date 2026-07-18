@@ -138,6 +138,12 @@ def _static_entries() -> list[ApiEntry]:
         ),
         ApiEntry("CoinGecko", "Données marché", "https://api.coingecko.com", _env_present("COINGECKO_DEMO_API_KEY"), note="Demo key" if _env_present("COINGECKO_DEMO_API_KEY") else "chemin public sans clé"),
         ApiEntry("Dune Analytics", "Données on-chain", "https://api.dune.com", _env_present("DUNE_API_KEY"), note="DUNE_API_KEY absente du backend prod — utilisée jusqu'ici uniquement via MCP en session Claude Code, jamais par ARIA elle-même" if not _env_present("DUNE_API_KEY") else ""),
+        ApiEntry(
+            "Mobula", "Données on-chain", "https://api.mobula.io", _env_present("MOBULA_API_KEY"),
+            note="authentifié (#212, 18/07) — 3e étage cascade OHLCV momentum (vraies bougies, Base+Solana), 10K crédits/mois, 1 req/s (Free)"
+            if _env_present("MOBULA_API_KEY")
+            else "MOBULA_API_KEY absente — aucun chemin public chez Mobula (429 dès le 1er appel sans clé), étage cascade neutralisé",
+        ),
 
         # ── Web / recherche ─────────────────────────────────────────────────
         ApiEntry("Tavily (recherche web)", "Web", "https://api.tavily.com", _env_present("TAVILY_API_KEY")),

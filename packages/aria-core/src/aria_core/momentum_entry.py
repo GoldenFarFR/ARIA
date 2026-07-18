@@ -330,28 +330,37 @@ async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, s
 
 
 async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None) -> list[Candle]:
-    """OHLCV en cascade à QUATRE étages (16/07, demande opérateur explicite :
+    """OHLCV en cascade à CINQ étages (16/07, demande opérateur explicite :
     "je veux que tout soit branché même s'ils font la même chose, une
     autoroute pas un départemental" puis "cables les tous je veux une toile
-    complete avec dexscreener et dune") -- chaque étage n'est tenté QUE si le
-    précédent échoue ou ne renvoie rien (jamais en parallèle, pour ne pas
-    doubler la charge sur des API déjà sous tension), et l'ordre suit
-    strictement rapidité/coût croissants :
+    complete avec dexscreener et dune"; Mobula ajouté le 18/07, même demande
+    élargie -- "il nous faut plus de marge d'appel on est trop restreint") --
+    chaque étage n'est tenté QUE si le précédent échoue ou ne renvoie rien
+    (jamais en parallèle, pour ne pas doubler la charge sur des API déjà sous
+    tension), et l'ordre suit strictement rapidité/coût croissants :
       1. GeckoTerminal -- le plus rapide, déjà la source historique.
       2. CoinMarketCap -- même forme de résultat, aucune conversion nécessaire.
-      3. DexScreener (synthèse dégradée, GRATUITE et INSTANTANÉE -- aucun appel
+      3. Mobula (#212, 18/07) -- VRAIES bougies (pas une synthèse), interroge
+         par adresse de TOKEN (comme Dune, pas par POOL) -- seulement si
+         ``contract`` est fourni ET ``MOBULA_API_KEY`` configurée. Ajouté après
+         un vrai blocage diagnostiqué en direct : GeckoTerminal (429) et
+         CoinMarketCap (500) indisponibles simultanément le même soir ->
+         cascade retombée sur la synthèse DexScreener (étage 4) -> HOLD
+         systématique (``no_entry_signal``, aucun setup R/R trouvable sur des
+         données aussi pauvres). Mobula comble cet écart AVANT de dégrader.
+      4. DexScreener (synthèse dégradée, GRATUITE et INSTANTANÉE -- aucun appel
          réseau supplémentaire si ``pair`` est déjà en main) -- 5 points de prix
          approximatifs, jamais un vrai chandelier (cf.
          ``dexscreener.synthesize_candles_from_pair``). Suffisant pour un biais
          de tendance grossier, quasi jamais assez pour un vrai setup R/R --
          HOLD reste l'issue honnête la plus probable même ici.
-      4. Dune (``prices.usd``, dernier recours) -- vraies bougies horaires
+      5. Dune (``prices.usd``, dernier recours) -- vraies bougies horaires
          reconstruites, mais LENT (exécution SQL, potentiellement dizaines de
-         secondes) ET payant en crédits -- jamais tenté avant l'échec des 3
+         secondes) ET payant en crédits -- jamais tenté avant l'échec des 4
          étages précédents, et seulement si ``contract`` est fourni (Dune
          interroge par adresse de TOKEN, pas par adresse de POOL).
     Chaque fournisseur dégrade honnêtement (aucune bougie inventée) ; si les
-    quatre échouent, `[]` -- le pipeline sait déjà gérer ce cas (HOLD, "OHLCV
+    cinq échouent, `[]` -- le pipeline sait déjà gérer ce cas (HOLD, "OHLCV
     indisponible")."""
     from aria_core.services.geckoterminal import geckoterminal_client
 
@@ -372,6 +381,19 @@ async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", p
         cmc_result = None
     if cmc_result is not None and cmc_result.available and cmc_result.candles:
         return cmc_result.candles
+
+    if contract:
+        from aria_core.services import mobula
+
+        if mobula.mobula_configured():
+            try:
+                mobula_result = await mobula.get_ohlcv(contract, blockchain=chain)
+            except Exception as exc:  # noqa: BLE001
+                logger.info("_fetch_candles: Mobula %s/%s échoué (%s)", chain, pool_address[:10], exc)
+                mobula_result = None
+            if mobula_result is not None and mobula_result.available and mobula_result.candles:
+                logger.info("_fetch_candles: repli Mobula (vraies bougies) %s/%s", chain, pool_address[:10])
+                return mobula_result.candles
 
     if pair is not None:
         from aria_core.services.dexscreener import synthesize_candles_from_pair
