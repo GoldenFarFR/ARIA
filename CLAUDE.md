@@ -1774,6 +1774,16 @@ protocole 30j/7j/14j **comme méthode d'entraînement ET de décision** vers le 
 semaines validées d'affilée) reste à définir une fois plusieurs semaines de résultats
 réels observées, pas encore tranché.
 
+**Précision opérateur explicite (18/07)** : pas de seuil chiffré fixé pour l'instant, et
+volontairement -- l'objectif immédiat est qu'ARIA réussisse D'ABORD le test +10%
+CHAQUE semaine, de façon répétée. Le processus, tant que ce n'est pas encore le cas :
+à la fin de chaque semaine, revoir le résultat (validé ou non) AVEC l'opérateur,
+diagnostiquer les vraies failles trouvées (comme l'incident BRIAN du 17/07, ou les 3
+leviers sélectivité/conviction/rythme + le frein à main ajoutés le 18/07), les corriger,
+puis observer la semaine suivante -- même boucle diagnostique déjà en place, formalisée
+comme la méthode explicite jusqu'à nouvel ordre. Le critère de passage au réel ne sera
+discuté qu'une fois qu'ARIA valide la semaine de façon fiable, pas avant.
+
 **Mécanique (`packages/aria-core/src/aria_core/paper_trader.py`)** : `weekly_cycle_due()`
 détecte les 7 jours écoulés depuis `paper_state.created_at` ; `run_weekly_reset()` (1)
 force-clôture au prix RÉEL du marché toute position encore ouverte (mark-to-market,
