@@ -114,6 +114,13 @@ class Settings(BaseSettings):
     # donc totalement inutilisé, le provider "grok" retombait silencieusement sur
     # llm_api_key (souvent une clé Groq, pas x.ai -- 401 réel constaté sur le VPS).
     grok_api_key: str = ""  # x.ai direct (api.x.ai) — LLM_PROVIDER=grok/xai
+    # 18/07 -- clé DISTINCTE de grok_api_key : la Management API x.ai (solde prépayé,
+    # https://management-api.x.ai) exige une "management key" séparée de la clé
+    # d'inférence classique -- vérifié à la source (docs.x.ai) avant de câbler quoi que
+    # ce soit. Vide tant que l'opérateur ne l'a pas générée sur console.x.ai -- le
+    # disjoncteur (llm_circuit_breaker.py) reste manuel jusque-là.
+    xai_management_key: str = ""
+    xai_team_id: str = ""
     # 17/07 -- Gemini direct (point d'accès compatible OpenAI officiel Google), candidat
     # pour le départage rapide de la zone grise (momentum_entry._llm_confirm) --
     # LLM_PROVIDER=gemini. Palier gratuit Flash/Flash-Lite vérifié à la source

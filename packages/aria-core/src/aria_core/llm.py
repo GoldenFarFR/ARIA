@@ -191,7 +191,24 @@ def _resolve_routes(
     if require_llm_enabled and not settings.aria_llm_enabled:
         return []
     effective_model = (model or "").strip()
-    primary = (provider or settings.llm_provider).lower()
+
+    # 18/07 -- disjoncteur (llm_circuit_breaker.py) : ne s'applique QUE quand l'appelant
+    # n'a pas déjà fixé son propre provider (ex. le tie-breaker momentum sur Haiku via
+    # OpenRouter reste inchangé, armé ou non -- il ne dépend jamais de Grok). N'affecte
+    # que le routage PAR DÉFAUT (aucun provider explicite passé par l'appelant).
+    breaker_override = None
+    if provider is None:
+        from aria_core.llm_circuit_breaker import get_override
+
+        breaker_override = get_override()
+
+    if breaker_override:
+        primary = breaker_override["provider"]
+        if not effective_model:
+            effective_model = breaker_override.get("model", "")
+    else:
+        primary = (provider or settings.llm_provider).lower()
+
     routes: list[LlmRoute] = []
     primary_route = _route_for_provider(primary, effective_model)
     if primary_route:
@@ -207,6 +224,14 @@ def _resolve_routes(
             (r.provider, r.model) != (explicit_fb.provider, explicit_fb.model) for r in routes
         ):
             routes.append(explicit_fb)
+    elif breaker_override and breaker_override.get("fallback_model"):
+        # Le disjoncteur porte son propre secours désigné (Haiku via OpenRouter, même
+        # provider que le primaire) -- pas besoin que l'appelant le précise.
+        breaker_fb = _route_for_provider(breaker_override["provider"], breaker_override["fallback_model"])
+        if breaker_fb and all(
+            (r.provider, r.model) != (breaker_fb.provider, breaker_fb.model) for r in routes
+        ):
+            routes.append(breaker_fb)
 
     fallback = _fallback_route(effective_model)
     if fallback and all(r.provider != fallback.provider for r in routes):

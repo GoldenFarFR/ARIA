@@ -424,6 +424,13 @@ HEARTBEAT_TASKS = [
         interval_minutes=10,
         enabled=False,
     ),
+    HeartbeatTask(
+        id="xai_balance_monitor_cycle",
+        name="Surveillance solde x.ai (Grok) + disjoncteur automatique",
+        description="Demande operateur (18/07) : alerte Telegram quand le solde prepaye x.ai passe sous 1$, bascule automatique du disjoncteur LLM (llm_circuit_breaker.py) vers OpenRouter (Sonnet 5 principal, Haiku 4.5 en secours) sous 0,10$ -- plus de redeploiement necessaire, le routage par defaut change immediatement. Auto-gate via xai_billing_configured() (XAI_MANAGEMENT_KEY + XAI_TEAM_ID, cle Management x.ai DISTINCTE de GROK_API_KEY, absente au 18/07) -- ce cycle ne fait rien tant que l'operateur ne les a pas generees sur console.x.ai, jamais un solde invente. Pas de gate ARIA_*_ENABLED supplementaire : entierement lecture seule + alerte tant que le solde reste sain, aucun risque a le laisser actif par defaut.",
+        interval_minutes=60,
+        enabled=True,
+    ),
 ]
 
 
@@ -1238,6 +1245,17 @@ class AriaHeartbeat:
                     "agent_wallet_monitor",
                     f"[agent_wallet_monitor] {result['detected']} mouvement(s) detecte(s), "
                     f"{result.get('unexpected_outflows', 0)} sortie(s) non initiee(s) par ARIA",
+                )
+
+        elif task_id == "xai_balance_monitor_cycle":
+            from aria_core.xai_balance_monitor import run_balance_check_cycle
+
+            result = await run_balance_check_cycle(notifier=self._notify_telegram)
+            if result.get("action") == "circuit_breaker_armed":
+                append_memory(
+                    "xai_balance_monitor",
+                    f"[xai_balance_monitor] disjoncteur arme automatiquement, "
+                    f"solde={result.get('balance_usd')}$ -> bascule OpenRouter",
                 )
 
         elif task_id == "wallet_scan_queue_cycle":
