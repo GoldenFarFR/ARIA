@@ -1830,6 +1830,31 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   confirme juste que le design déjà choisi pour le pilote agent-wallet est
   la référence du secteur ; le second reste une piste à réévaluer plus tard
   si le sujet Base/Coinbase #198 progresse).
+- **#206 résolu — garde anti-injection sur l'écriture en mémoire vectorielle (18/07),
+  EN LIGNE.** Audit demandé par l'opérateur suite à la promotion #206 ci-dessus. Deux
+  trous réels trouvés en traçant tous les chemins d'écriture vers `lancedb_store.store()` :
+  (1) `cybercentry_insight.py` écrivait directement, sans AUCUN triage (0 appelant en
+  prod aujourd'hui, mais aucune garantie pour demain) ; (2) le triage Groq existant
+  (`x_insight_relevance.py`, utilisé par `curiosity.py`/`x_engagement.py`/
+  `memory_triage.py` — dont `/learn`, confirmé orphelin/jamais enregistré comme
+  commande Telegram au passage) vérifie pertinence et véracité, jamais l'injection de
+  prompt spécifiquement. Corrigé structurellement (pas un patch par appelant) :
+  `lancedb_store.contains_injection_marker()` — garde regex (FR+EN) à la couche de
+  PERSISTANCE elle-même (`store()`), protège tout appelant présent ET futur sans les
+  modifier individuellement ; `x_insight_relevance.py` gagne un 5e critère `INJECTION`
+  dans le même prompt Groq (aucun nouvel appel LLM), prime sur PERTINENT/FAIT si
+  détecté, plus le même filtre regex en pré-filtre (`_prefilter_junk`) et dans le
+  fallback sans LLM. **`ARIA_AUTONOMOUS=true` confirmé en prod** (vérifié dans le vrai
+  `.env`, pas supposé) — l'auto-approbation des insights X (si jamais réactivés,
+  toujours inertes depuis 03/07) dépend entièrement de ce triage, d'où l'importance du
+  correctif malgré une exposition quasi nulle aujourd'hui. 14 nouveaux tests, suite
+  complète + `test_coherence.py` vertes. **Trouvaille annexe, corrigée dans la foulée** :
+  en vérifiant la suite complète après ce correctif, `test_coherence.py` a détecté deux
+  adresses email personnelles de l'opérateur exposées dans la section 2FA du récap
+  18/07 (introduites par `a1725c93`, déjà réintroduites une fois par le passé après un
+  premier scrub) — redigées immédiatement (commit `8640c8c9`), historique git passé
+  volontairement pas réécrit (même précédent que l'incident `goldenfar-vault.gfv` du
+  11/07 et le nom réel #114).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
