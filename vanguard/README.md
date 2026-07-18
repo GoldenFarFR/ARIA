@@ -1,26 +1,26 @@
-﻿# Aria Vanguard ZHC ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â holding stack
+# Aria Vanguard ZHC — holding stack
 
-> **Vision ÃƒÆ’Ã‚Â©cosystÃƒÆ’Ã‚Â¨me :** [`VISION.md`](./VISION.md) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â carte repos : [`docs/ECOSYSTEM-REPOS.md`](./docs/ECOSYSTEM-REPOS.md)
+> **Vision écosystème :** [`VISION.md`](./VISION.md) — carte repos : [`docs/ECOSYSTEM-REPOS.md`](./docs/ECOSYSTEM-REPOS.md)
 
-Code source dans le monorepo **GoldenFarFR/ARIA** (sous-dossier vanguard/). Le site + API Aria Telegram sont dÃ©ployÃ©s depuis ici. (Ancien repo sÃ©parÃ© aria-vanguard supprimÃ©.)
+Code source dans le monorepo **GoldenFarFR/ARIA** (sous-dossier vanguard/). Le site + API Aria Telegram sont déployés depuis ici. (Ancien repo séparé aria-vanguard supprimé.)
 
-| Surface | URL | DÃƒÆ’Ã‚Â©ploiement |
+| Surface | URL | Déploiement |
 |---------|-----|-------------|
 | Vitrine | [ariavanguardzhc.com](https://ariavanguardzhc.com) | Render static (depuis ARIA/vanguard dans le monorepo) |
 | API ARIA | [api.ariavanguardzhc.com](https://api.ariavanguardzhc.com) | Render Docker (`aria-api`) |
 
-L'ancien repo `dexpulse` est **dÃƒÆ’Ã‚Â©prÃƒÆ’Ã‚Â©ciÃƒÆ’Ã‚Â©** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â tout vit ici.
+L'ancien repo `dexpulse` est **déprécié** — tout vit ici.
 
 ## Structure
 
 ```
 ARIA/vanguard/ (monorepo) 
-ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ src/                 # Vitrine holding (React)
-ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ product-frontend/    # App marchÃƒÆ’Ã‚Â© servie par l'API (build Docker)
-ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ backend/           # API FastAPI (auth, billing, Telegram, ARIA)
-ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ operator/          # Scripts opÃƒÆ’Ã‚Â©rateur (sync Render, audit, coffre)
-ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Dockerfile         # Build API + product-frontend
-ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ render.yaml        # Blueprint Render (static + docker)
+├── src/                 # Vitrine holding (React)
+├── product-frontend/    # App marché servie par l'API (build Docker)
+├── backend/           # API FastAPI (auth, billing, Telegram, ARIA)
+├── operator/          # Scripts opérateur (sync Render, audit, coffre)
+├── Dockerfile         # Build API + product-frontend
+└── render.yaml        # Blueprint Render (static + docker)
 ```
 
 ## Dev local
