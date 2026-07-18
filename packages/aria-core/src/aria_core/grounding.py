@@ -196,26 +196,40 @@ def _faq_scored(query: str) -> list[tuple[dict, int]]:
     return scored
 
 
+_VERIFIED_FACTS_MAX_CHARS = 6000
+
+
 async def build_verified_facts_block(
     query: str,
     *,
     public: bool = True,
     lang: str = "en",
 ) -> str:
-    """Assemble verified facts for LLM context — not persona/opinion."""
-    parts: list[str] = ["# VERIFIED FACTS (only source of truth)"]
+    """Assemble verified facts for LLM context — not persona/opinion.
+
+    18/07 -- bug de troncature trouvé en testant (le texte plus long d'un autre
+    correctif du même jour a fait dépasser 6000 caractères, effaçant SILENCIEUSEMENT
+    la section self-maintenance) : un `[:6000]` naïf en toute fin coupait toujours le
+    dernier morceau ajouté au tuple, jamais le moins important. Les sections
+    admin-only (directives + self-maintenance -- des filets de sécurité, pas du
+    contenu discrétionnaire) réservent maintenant leur budget EN PREMIER ; seules
+    les sections discrétionnaires (FAQ/Knowledge/Epistemic/Truth Ledger) sont
+    tronquées si la place manque."""
+    header = "# VERIFIED FACTS (only source of truth)"
+
+    discretionary: list[str] = []
 
     faq_matches = search_faq(query, limit=5)
     if faq_matches:
-        parts.append("\n## [FAQ]")
+        discretionary.append("\n## [FAQ]")
         for item in faq_matches:
-            parts.append(f"Q: {item['question']}\nA: {item['answer'].strip()}")
+            discretionary.append(f"Q: {item['question']}\nA: {item['answer'].strip()}")
 
     # Give operator the holding context so she can keep her objectives in mind and make good reparties when relevant.
     # For public, we still include it (she needs to know who she represents).
-    parts.append("\n## [Holding]")
-    parts.append(f"Name: {holding_name()}")
-    parts.append(f"Summary: {one_liner(lang)}")
+    discretionary.append("\n## [Holding]")
+    discretionary.append(f"Name: {holding_name()}")
+    discretionary.append(f"Summary: {one_liner(lang)}")
 
     try:
         from aria_core.knowledge.cognitive import get_approved
@@ -225,9 +239,9 @@ async def build_verified_facts_block(
             identity = [k for k in knowledge if k.topic.startswith("zhc-")]
             other = [k for k in knowledge if not k.topic.startswith("zhc-")]
             ordered = identity + other
-            parts.append("\n## [Knowledge] (approved only)")
+            discretionary.append("\n## [Knowledge] (approved only)")
             for item in ordered:
-                parts.append(f"- [{item.topic}] {item.content[:220]}")
+                discretionary.append(f"- [{item.topic}] {item.content[:220]}")
     except Exception:
         pass
 
@@ -236,7 +250,7 @@ async def build_verified_facts_block(
 
         epistemic_block = epistemic_context_block(query, limit=3)
         if epistemic_block:
-            parts.append(f"\n{epistemic_block}")
+            discretionary.append(f"\n{epistemic_block}")
     except Exception:
         pass
 
@@ -245,23 +259,24 @@ async def build_verified_facts_block(
 
         ledger_hits = await search_verified(query, limit=4)
         if ledger_hits:
-            parts.append("\n## [Truth Ledger] (verified exchanges only)")
+            discretionary.append("\n## [Truth Ledger] (verified exchanges only)")
             for hit in ledger_hits:
-                parts.append(
+                discretionary.append(
                     f"Q: {hit['user_message'][:180]}\n"
                     f"A: {hit['agent_reply'][:280]}"
                 )
     except Exception:
         pass
 
+    critical: list[str] = []
     if not public:
         try:
             from aria_core.directives import get_directives_text
 
             directives = get_directives_text()
             if directives:
-                parts.append("\n## [Operator directives] (internal)")
-                parts.append(directives[:1500])
+                critical.append("\n## [Operator directives] (internal)")
+                critical.append(directives[:1500])
         except Exception:
             pass
 
@@ -275,11 +290,16 @@ async def build_verified_facts_block(
             # est censé prévenir (cf. self_maintenance.py). Trouvé écrit mais jamais injecté
             # ici (balayage code mort du 15/07) -- même point d'insertion que "directives"
             # juste au-dessus, admin-only comme lui.
-            parts.append(f"\n{self_maintenance_context_for_brain()}")
+            critical.append(f"\n{self_maintenance_context_for_brain()}")
         except Exception:
             pass
 
-    return "\n".join(parts)[:6000]
+    critical_text = "\n".join(critical)
+    reserved = len(header) + len(critical_text) + 2  # 2 = séparateurs \n
+    discretionary_budget = max(0, _VERIFIED_FACTS_MAX_CHARS - reserved)
+    discretionary_text = "\n".join(discretionary)[:discretionary_budget]
+
+    return f"{header}\n{discretionary_text}\n{critical_text}"[:_VERIFIED_FACTS_MAX_CHARS]
 
 
 def is_factual_question(message: str) -> bool:

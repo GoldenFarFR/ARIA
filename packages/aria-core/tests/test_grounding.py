@@ -276,3 +276,27 @@ async def test_build_verified_facts_block_includes_self_maintenance_when_not_pub
 async def test_build_verified_facts_block_omits_self_maintenance_when_public():
     block = await build_verified_facts_block("test query", public=True, lang="fr")
     assert "Operator self-directive" not in block
+
+
+async def test_build_verified_facts_block_protects_critical_section_when_oversized(monkeypatch):
+    """Incident réel (18/07) : un contenu discrétionnaire plus long (une FAQ élargie
+    par un autre correctif le même jour) a fait dépasser 6000 caractères, effaçant
+    SILENCIEUSEMENT self-maintenance -- un [:6000] naïf en toute fin coupait toujours
+    le DERNIER morceau ajouté, jamais le moins important. Verrouille la priorité :
+    même avec un bloc discrétionnaire artificiellement énorme, la section critique
+    (admin-only) doit toujours survivre intacte."""
+    import aria_core.knowledge.cognitive as cognitive_mod
+
+    class _HugeKnowledgeItem:
+        topic = "zhc-test"
+        content = "x" * 500
+
+    async def fake_get_approved(limit=16):
+        return [_HugeKnowledgeItem() for _ in range(50)]  # largement > 6000 car.
+
+    monkeypatch.setattr(cognitive_mod, "get_approved", fake_get_approved)
+
+    block = await build_verified_facts_block("test query", public=False, lang="fr")
+
+    assert "Operator self-directive" in block
+    assert len(block) <= 6000

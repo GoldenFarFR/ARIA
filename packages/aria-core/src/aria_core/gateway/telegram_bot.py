@@ -505,6 +505,20 @@ async def _handle_agent_wallet(update: Update, context: ContextTypes.DEFAULT_TYP
     await _reply(update.message, format_wallet_balance_summary(summary))
 
 
+async def _handle_api(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """18/07 : inventaire de toutes les API externes (URL + configurée), quota en
+    direct pour le sous-ensemble qui expose réellement un endpoint (GitHub,
+    CoinMarketCap, x.ai Management, x402 interne) -- jamais un chiffre inventé pour
+    les autres. Admin-only, lecture seule."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.services.api_registry import build_api_inventory, format_api_inventory
+
+    entries = await build_api_inventory()
+    for msg in format_api_inventory(entries):
+        await _reply(update.message, msg)
+
+
 async def _reply_handles_registry(message, args: list[str]) -> None:
     """Liste ou modifie le registre handles X (args = action + paramètres)."""
     from aria_core.handle_registry import (
@@ -1778,6 +1792,7 @@ async def _register_bot_commands() -> None:
         BotCommand("status", "État système (santé, capacités actives)"),
         BotCommand("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
         BotCommand("agentwallet", "Solde réel du wallet agent CDP (USDC + ETH gas)"),
+        BotCommand("api", "Inventaire de toutes les API (URL, configurée, quota en direct)"),
         BotCommand("watchlist", "Top candidats du pool screené"),
         BotCommand("track", "Pertinence du track-record (hit-rate, calibration)"),
         BotCommand("feuvert", "Scorecard avant argent réel (8 cases)"),
@@ -2745,6 +2760,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("feedback", _handle_feedback))
     app.add_handler(CommandHandler("ledger", _handle_ledger))
     app.add_handler(CommandHandler("agentwallet", _handle_agent_wallet))
+    app.add_handler(CommandHandler("api", _handle_api))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
