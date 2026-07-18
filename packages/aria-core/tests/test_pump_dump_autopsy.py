@@ -126,7 +126,8 @@ async def test_full_cycle_autopsies_and_proposes_playbook(monkeypatch):
     async def fake_ohlcv(pool, network):
         return [_candle(_now_ts(), high=1.0, close=1.0), _candle(_now_ts() + 60, high=4.0, close=1.1)]
 
-    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None):
+    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None,
+                        provider=None, fallback_provider=None, fallback_model=None):
         assert "4.0x" in prompt or "4.0" in prompt
         return json.dumps({
             "lesson": "Le risque MODÉRÉ annoncé n'anticipait pas un pic à 4x suivi d'un crash.",
@@ -155,7 +156,8 @@ async def test_non_durable_lesson_does_not_open_github_issue(monkeypatch):
     async def fake_ohlcv(pool, network):
         return [_candle(_now_ts(), high=1.0, close=1.0), _candle(_now_ts() + 60, high=3.0, close=1.0)]
 
-    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None):
+    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None,
+                        provider=None, fallback_provider=None, fallback_model=None):
         return json.dumps({"lesson": "Cas isolé, rien de généralisable.", "durable": False, "proposal_title": "", "proposal_body": ""})
 
     fake_github = _FakeGitHubClient()
@@ -177,7 +179,8 @@ async def test_no_pattern_does_not_call_llm(monkeypatch):
 
     llm_calls = []
 
-    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None):
+    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None,
+                        provider=None, fallback_provider=None, fallback_model=None):
         llm_calls.append(prompt)
         return json.dumps({"lesson": "should not be called", "durable": False, "proposal_title": "", "proposal_body": ""})
 
@@ -198,7 +201,8 @@ async def test_never_autopsies_same_prediction_twice(monkeypatch):
         call_count["n"] += 1
         return [_candle(_now_ts(), high=1.0, close=1.0), _candle(_now_ts() + 60, high=3.0, close=1.0)]
 
-    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None):
+    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None,
+                        provider=None, fallback_provider=None, fallback_model=None):
         return json.dumps({"lesson": "leçon", "durable": False, "proposal_title": "", "proposal_body": ""})
 
     await pda.run_pump_dump_autopsy_cycle(ohlcv_fetch=fake_ohlcv, llm=fake_llm)
@@ -219,7 +223,8 @@ async def test_one_failing_case_does_not_break_the_others(monkeypatch):
             raise RuntimeError("OHLCV indisponible")
         return [_candle(_now_ts(), high=1.0, close=1.0), _candle(_now_ts() + 60, high=3.0, close=1.0)]
 
-    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None):
+    async def fake_llm(prompt, system, *, max_tokens=500, model=None, depth=None,
+                        provider=None, fallback_provider=None, fallback_model=None):
         return json.dumps({"lesson": "leçon", "durable": False, "proposal_title": "", "proposal_body": ""})
 
     result = await pda.run_pump_dump_autopsy_cycle(ohlcv_fetch=fake_ohlcv, llm=fake_llm)
@@ -241,3 +246,29 @@ async def test_missing_pool_or_entry_price_is_skipped_not_crashed(monkeypatch):
     result = await pda.run_pump_dump_autopsy_cycle()
 
     assert result["results"][0]["outcome"] == "skipped_no_pool_or_entry"
+
+
+# ── routage explicite Sonnet 5 + secours Haiku (17/07) ──────────────────────
+
+@pytest.mark.asyncio
+async def test_cycle_routes_to_sonnet5_via_openrouter_with_haiku_fallback(monkeypatch):
+    """Même bascule que claude_mentor.py -- voir son test jumeau pour le détail de
+    la revue de raisonnement profond ayant motivé ce choix."""
+    monkeypatch.setenv("ARIA_PUMP_DUMP_AUTOPSY_ENABLED", "1")
+    await _record_and_close(contract="0x" + "b" * 40, entry_price=1.0, pool="0xpool2")
+
+    async def fake_ohlcv(pool, network):
+        return [_candle(_now_ts(), high=1.0, close=1.0), _candle(_now_ts() + 60, high=4.0, close=1.1)]
+
+    captured = {}
+
+    async def capturing_llm(prompt, system, **kwargs):
+        captured.update(kwargs)
+        return json.dumps({"lesson": "leçon", "durable": False, "proposal_title": "", "proposal_body": ""})
+
+    await pda.run_pump_dump_autopsy_cycle(ohlcv_fetch=fake_ohlcv, llm=capturing_llm)
+    assert captured.get("provider") == "openrouter"
+    assert captured.get("model") == "anthropic/claude-sonnet-5"
+    assert captured.get("fallback_provider") == "openrouter"
+    assert captured.get("fallback_model") == "anthropic/claude-haiku-4.5"
+    assert captured.get("max_tokens") == 900

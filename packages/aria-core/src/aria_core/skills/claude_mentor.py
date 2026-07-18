@@ -1,8 +1,8 @@
 """Revue de performance ARIA par Claude -- ancrée sur ses VRAIES données mesurées
 (calibration des prédictions VC, paper-trading, télémétrie du rehearsal Sepolia), jamais
-sur du bavardage libre. Appelle le vrai Claude Opus 4.8 déjà câblé en prod via la
-profondeur "develop" de la passerelle Virtuals (`spark_config.DEFAULT_MODEL_DEVELOP`) --
-aucun nouveau secret, aucun processus externe, réutilise le client LLM existant.
+sur du bavardage libre. Appelle Claude Sonnet 5 via OpenRouter (17/07, provider/model
+explicites -- voir le commentaire dans `run_claude_mentor_cycle`), secours Haiku 4.5 puis repli
+global existant -- aucun nouveau secret, réutilise le client LLM existant (`llm.py`).
 
 Deux canaux de sortie, jamais un troisième créé pour l'occasion :
   1. Remarque immédiate postée dans le relais Telegram existant (`relay_chat.py`) --
@@ -211,16 +211,20 @@ async def run_claude_mentor_cycle(*, llm=None, github_client=None) -> dict:
     if llm is None:
         from aria_core.llm import chat_with_context as llm
 
-    from aria_core.runtime import settings
-    from aria_core.spark_config import DEFAULT_MODEL_DEVELOP
-
-    develop_model = (
-        getattr(settings, "aria_llm_model_develop", None) or ""
-    ).strip() or DEFAULT_MODEL_DEVELOP
-
     prompt = _format_snapshot_for_prompt(snapshot)
+    # 17/07 -- Claude Sonnet 5 via OpenRouter (provider/model explicites, indépendants du
+    # LLM_PROVIDER global Grok/Spark) : retenu après une revue de raisonnement profond
+    # réelle (autopsie multi-facteurs notée sur 5 critères -- Sonnet 5 a fini complet et
+    # correct sur les 5, moins cher ET plus rapide que tous les Opus testés une fois le
+    # budget de tokens réaliste appliqué). Secours explicite sur Haiku 4.5 (même provider,
+    # OpenRouter) si Sonnet 5 échoue ponctuellement -- puis repli global existant
+    # (Grok/Groq) si OpenRouter entier est injoignable. Remplace l'ancienne résolution via
+    # ``aria_llm_model_develop``/``DEFAULT_MODEL_DEVELOP`` (ID catalogue Virtuals, devenu
+    # incohérent depuis la bascule hors Virtuals du 17/07 -- cf. llm.py).
     raw = await llm(
-        prompt, _MENTOR_SYSTEM, max_tokens=700, model=develop_model, depth="claude_mentor",
+        prompt, _MENTOR_SYSTEM, max_tokens=900, depth="claude_mentor",
+        provider="openrouter", model="anthropic/claude-sonnet-5",
+        fallback_provider="openrouter", fallback_model="anthropic/claude-haiku-4.5",
     )
     if not raw:
         await _log_run("llm_unavailable")

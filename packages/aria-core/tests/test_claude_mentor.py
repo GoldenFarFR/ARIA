@@ -45,7 +45,8 @@ def _good_snapshot_mocks(monkeypatch):
 
 def _good_llm(remark="Ton hit-rate BUY est de 62% mais tes pertes moyennes dépassent tes gains.",
               durable=False, title="", body=""):
-    async def llm(prompt, system, *, max_tokens=700, model=None, depth=None):
+    async def llm(prompt, system, *, max_tokens=700, model=None, depth=None,
+                  provider=None, fallback_provider=None, fallback_model=None):
         return json.dumps({
             "remark": remark, "durable": durable,
             "proposal_title": title, "proposal_body": body,
@@ -246,3 +247,28 @@ async def test_cycle_throttled_after_a_successful_run(monkeypatch):
     second = await cm.run_claude_mentor_cycle(llm=_good_llm())
     assert second["outcome"] == "throttled"
     assert second["hours_since_last"] < cm.MIN_INTERVAL_HOURS
+
+
+# ── routage explicite Sonnet 5 + secours Haiku (17/07) ──────────────────────
+
+@pytest.mark.asyncio
+async def test_cycle_routes_to_sonnet5_via_openrouter_with_haiku_fallback(monkeypatch):
+    """Retenu après une revue de raisonnement profond réelle (autopsie notée sur 5
+    critères, complet et correct sur les 5 -- moins cher ET plus rapide que tous les
+    Opus testés une fois le budget de tokens réaliste appliqué). Secours explicite
+    sur Haiku 4.5 (même provider) plutôt que de dépendre uniquement du repli global."""
+    monkeypatch.setenv("ARIA_CLAUDE_MENTOR_ENABLED", "1")
+    _good_snapshot_mocks(monkeypatch)
+
+    captured = {}
+
+    async def capturing_llm(prompt, system, **kwargs):
+        captured.update(kwargs)
+        return json.dumps({"remark": "ok", "durable": False, "proposal_title": "", "proposal_body": ""})
+
+    await cm.run_claude_mentor_cycle(llm=capturing_llm)
+    assert captured.get("provider") == "openrouter"
+    assert captured.get("model") == "anthropic/claude-sonnet-5"
+    assert captured.get("fallback_provider") == "openrouter"
+    assert captured.get("fallback_model") == "anthropic/claude-haiku-4.5"
+    assert captured.get("max_tokens") == 900

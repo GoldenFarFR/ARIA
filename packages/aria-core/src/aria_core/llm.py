@@ -26,6 +26,9 @@ PROVIDER_URLS = {
     # 17/07 -- vérifié à la source (docs.mistral.ai/api) : nativement compatible OpenAI,
     # même en-tête Bearer.
     "mistral": "https://api.mistral.ai/v1/chat/completions",
+    # 17/07 -- Anthropic direct, endpoint natif Messages API (PAS /chat/completions,
+    # PAS compatible OpenAI) -- voir la branche dédiée dans _post_chat/_headers_for_route.
+    "anthropic": "https://api.anthropic.com/v1/messages",
 }
 
 DEFAULT_MODELS = {
@@ -46,6 +49,9 @@ DEFAULT_MODELS = {
     # dans le temps, même doctrine que le reste de ce fichier -- vérifié réel via
     # OpenRouter/docs Mistral (sorti mars 2026, hybride raisonnement configurable).
     "mistral": "mistral-small-2603",
+    # 17/07 -- ID daté vérifié en direct contre /v1/models (api.anthropic.com) --
+    # "claude-sonnet-5" n'a lui-même pas de suffixe daté côté Anthropic (alias canonique).
+    "anthropic": "claude-haiku-4-5-20251001",
 }
 
 
@@ -109,6 +115,8 @@ def _auth_key_for_provider(provider: str) -> str:
         return _setting_str("openai_api_key") or _setting_str("llm_api_key")
     if p == "openrouter":
         return _setting_str("openrouter_api_key") or _setting_str("llm_api_key")
+    if p == "anthropic":
+        return _setting_str("anthropic_api_key")
     return _setting_str("llm_api_key")
 
 
@@ -162,15 +170,44 @@ def _fallback_route(primary_model: str) -> LlmRoute | None:
     return LlmRoute(p, url, fb_model, fb_key)
 
 
-def _resolve_routes(model: str | None = None, *, require_llm_enabled: bool = False) -> list[LlmRoute]:
+def _resolve_routes(
+    model: str | None = None,
+    *,
+    provider: str | None = None,
+    fallback_provider: str | None = None,
+    fallback_model: str | None = None,
+    require_llm_enabled: bool = False,
+) -> list[LlmRoute]:
+    """``provider``/``fallback_provider``+``fallback_model`` (17/07) : routage explicite
+    PAR APPEL, pour des appelants précis qui ont besoin d'un modèle donné indépendamment
+    du ``LLM_PROVIDER`` global (ex. le tie-breaker momentum sur Haiku via OpenRouter,
+    pendant que le reste d'ARIA reste sur Grok/Spark) -- comportement de tous les autres
+    appelants strictement inchangé quand ces paramètres sont absents (mêmes deux routes
+    qu'avant : provider global primaire, puis ``llm_fallback_*``).
+
+    Ordre des routes obtenu quand les deux sont fournis : provider explicite -> secours
+    explicite -> secours global existant (``llm_fallback_*``, ex. Groq) en dernier filet,
+    seulement si son provider diffère des deux précédents -- jamais un doublon."""
     if require_llm_enabled and not settings.aria_llm_enabled:
         return []
     effective_model = (model or "").strip()
-    primary = settings.llm_provider.lower()
+    primary = (provider or settings.llm_provider).lower()
     routes: list[LlmRoute] = []
     primary_route = _route_for_provider(primary, effective_model)
     if primary_route:
         routes.append(primary_route)
+
+    if fallback_provider:
+        explicit_fb = _route_for_provider(fallback_provider.lower(), (fallback_model or "").strip())
+        # Dédoublonnage par (provider, model), PAS provider seul : le cas visé (Sonnet 5
+        # primaire -> Haiku secours, tous deux "openrouter") a délibérément le MÊME
+        # provider avec un modèle différent -- un dédoublonnage par provider seul aurait
+        # supprimé à tort ce secours explicite.
+        if explicit_fb and all(
+            (r.provider, r.model) != (explicit_fb.provider, explicit_fb.model) for r in routes
+        ):
+            routes.append(explicit_fb)
+
     fallback = _fallback_route(effective_model)
     if fallback and all(r.provider != fallback.provider for r in routes):
         routes.append(fallback)
@@ -201,6 +238,13 @@ def _http_ok(status_code: int) -> bool:
 
 def _headers_for_route(route: LlmRoute) -> dict[str, str]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
+    if route.provider == "anthropic":
+        # Messages API natif -- PAS de Bearer. Format vérifié en direct le 17/07 contre
+        # api.anthropic.com (GET /v1/models 200, POST /v1/messages 400 billing -- donc
+        # authentifié correctement, juste 0 crédit sur le compte à ce stade).
+        headers["x-api-key"] = route.auth_key
+        headers["anthropic-version"] = "2023-06-01"
+        return headers
     if route.provider == "ollama":
         headers["Authorization"] = "Bearer ollama"
     elif route.auth_key:
@@ -227,6 +271,16 @@ async def _post_chat(
         parse_usage_from_response,
         record_llm_usage,
     )
+
+    if route.provider == "anthropic":
+        return await _post_chat_anthropic(
+            route,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            prompt_est=prompt_est,
+            depth=depth,
+        )
 
     timeout = 120.0 if route.provider == "ollama" else 90.0
     payload: dict[str, Any] = {
@@ -317,6 +371,116 @@ async def _post_chat(
         return reply
 
 
+async def _post_chat_anthropic(
+    route: LlmRoute,
+    *,
+    messages: list[dict[str, Any]],
+    temperature: float,
+    max_tokens: int,
+    prompt_est: int,
+    depth: str | None,
+) -> str | None:
+    """Messages API Anthropic native (17/07) -- schéma totalement différent des autres
+    providers de ce fichier (tous compatibles OpenAI) : ``system`` est un champ top-level
+    (pas un message de rôle "system"), la réponse renvoie des blocs ``content`` typés
+    (pas ``choices[0].message.content``). Format vérifié en direct contre api.anthropic.com
+    le 17/07 (401->200 sur /v1/models, 400 billing-only sur /v1/messages -- donc bien
+    authentifié). Vision (``image_data_uri``) non gérée ici : aucun appelant actuel ne
+    l'exerce sur ce provider -- un contenu multimodal OpenAI-style serait transmis tel
+    quel et très probablement rejeté (schéma image différent chez Anthropic), jamais
+    silencieusement ignoré."""
+    from aria_core.llm_usage import (
+        estimate_tokens_from_text,
+        parse_usage_from_response,
+        record_llm_usage,
+    )
+
+    system_text = ""
+    anthropic_messages: list[dict[str, Any]] = []
+    for m in messages:
+        if m.get("role") == "system":
+            content = m.get("content", "")
+            system_text = content if isinstance(content, str) else ""
+            continue
+        anthropic_messages.append(m)
+
+    payload: dict[str, Any] = {
+        "model": route.model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": anthropic_messages,
+    }
+    if system_text:
+        payload["system"] = system_text
+
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        _t0 = time.monotonic()
+        response = await client.post(
+            route.url,
+            headers=_headers_for_route(route),
+            json=payload,
+        )
+        latency_ms = (time.monotonic() - _t0) * 1000.0
+        if not _http_ok(response.status_code):
+            logger.warning(
+                "LLM error provider=%s model=%s status=%s: %s",
+                route.provider,
+                route.model,
+                response.status_code,
+                response.text[:300],
+            )
+            record_llm_usage(
+                provider=route.provider,
+                model=route.model,
+                input_tokens=prompt_est,
+                output_tokens=0,
+                ok=False,
+                status_code=response.status_code,
+                kind="chat",
+                estimated=True,
+                depth=depth,
+                latency_ms=latency_ms,
+            )
+            return None
+        data: dict[str, Any] = response.json()
+        blocks = data.get("content") or []
+        reply = "".join(
+            b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"
+        ).strip()
+        stop_reason = data.get("stop_reason")
+        truncated = stop_reason == "max_tokens"
+        if truncated:
+            logger.warning(
+                "LLM response truncated (stop_reason=max_tokens) provider=%s model=%s "
+                "depth=%s max_tokens=%s — la réponse envoyée est incomplète.",
+                route.provider,
+                route.model,
+                depth,
+                max_tokens,
+            )
+        usage = parse_usage_from_response(data)
+        estimated = usage["total_tokens"] <= 0
+        if estimated:
+            usage = {
+                "input_tokens": prompt_est,
+                "output_tokens": estimate_tokens_from_text(reply),
+                "total_tokens": prompt_est + estimate_tokens_from_text(reply),
+            }
+        record_llm_usage(
+            provider=route.provider,
+            model=route.model,
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+            ok=True,
+            kind="chat",
+            estimated=estimated,
+            depth=depth,
+            truncated=truncated,
+            latency_ms=latency_ms,
+        )
+        return reply
+
+
 async def chat_with_context(
     user_message: str,
     system_context: str,
@@ -325,6 +489,9 @@ async def chat_with_context(
     temperature: float | None = None,
     max_tokens: int = 400,
     model: str | None = None,
+    provider: str | None = None,
+    fallback_provider: str | None = None,
+    fallback_model: str | None = None,
     depth: str | None = None,
     image_data_uri: str | None = None,
 ) -> str | None:
@@ -337,8 +504,19 @@ async def chat_with_context(
     Aucune garantie que le modèle/route actif accepte la vision : un modèle qui ne
     la supporte pas répond en général en ignorant l'image, jamais une exception ;
     aucune vérité inventée sur ce point tant que non testé en direct.
+
+    ``provider``/``fallback_provider``+``fallback_model`` (17/07) : routage explicite
+    par appel, pour des appelants précis (ex. tie-breaker momentum sur Haiku via
+    OpenRouter) indépendamment du ``LLM_PROVIDER`` global -- voir ``_resolve_routes``.
+    Absents -> comportement strictement inchangé pour tous les autres appelants.
     """
-    routes = _resolve_routes(model, require_llm_enabled=True)
+    routes = _resolve_routes(
+        model,
+        provider=provider,
+        fallback_provider=fallback_provider,
+        fallback_model=fallback_model,
+        require_llm_enabled=True,
+    )
     if not routes:
         return None
 
