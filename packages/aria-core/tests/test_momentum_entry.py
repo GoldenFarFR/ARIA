@@ -190,7 +190,7 @@ async def test_batch_prefilter_keeps_liquid_candidates(monkeypatch):
     candidates = [{"contract": liquid, "chain": "base"}, {"contract": thin, "chain": "base"}]
 
     async def fake_batch(addrs, *, chain="base"):
-        return [_batch_pair(liquid, 50_000.0), _batch_pair(thin, 100.0)]
+        return [_batch_pair(liquid, 150_000.0), _batch_pair(thin, 100.0)]
 
     monkeypatch.setattr(me, "fetch_tokens_batch", fake_batch)
     kept = await me._batch_liquidity_prefilter(candidates)
@@ -221,7 +221,7 @@ async def test_batch_prefilter_chunks_by_thirty(monkeypatch):
 
     async def fake_batch(addrs, *, chain="base"):
         calls.append(list(addrs))
-        return [_batch_pair(a, 50_000.0) for a in addrs]
+        return [_batch_pair(a, 150_000.0) for a in addrs]
 
     monkeypatch.setattr(me, "fetch_tokens_batch", fake_batch)
     kept = await me._batch_liquidity_prefilter(candidates)
@@ -921,8 +921,12 @@ def test_technical_alignment_never_crashes_on_short_series():
 # ── evaluate_momentum_entry (bout en bout, tout mocké) ───────────────────────────────
 
 def _pair(**overrides) -> PairSnapshot:
+    # 19/07 -- liquidité par défaut confortablement au-dessus du nouveau plancher
+    # (_MIN_LIQUIDITY_USD, 100 000$) : les tests qui ne testent pas spécifiquement ce
+    # gate (R/R, alignement, LLM confirm/security gate, potential_score...) doivent
+    # continuer à traverser le nouveau rejet dur sans avoir à l'overrider un par un.
     base = {
-        "pair_address": "0xpool", "price_usd": 1.5, "liquidity_usd": 50_000.0,
+        "pair_address": "0xpool", "price_usd": 1.5, "liquidity_usd": 150_000.0,
         "base_symbol": "TOK", "base_address": CONTRACT.lower(),
     }
     base.update(overrides)
@@ -975,6 +979,46 @@ async def test_evaluate_rejects_on_honeypot(monkeypatch):
     assert result["hold_reason"] == "honeypot_rejected"
 
 
+# ── plancher de liquidité (19/07, décision opérateur explicite anti-scam) ───────────
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_liquidity_below_floor(monkeypatch):
+    """Décision opérateur explicite (19/07) : "liquidité minimum c 100k je veut
+    eviter a aria de se faire scam, meme si tout est ok en dessous il peut y avoir x
+    ou y risques" -- rejet SYSTÉMATIQUE, même si honeypot/R-R/alignement seraient par
+    ailleurs tous propres (le mock ``signal``/``align`` par défaut n'est jamais
+    atteint : ce gate doit couper avant)."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=80_000.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "insufficient_liquidity"
+    assert "liquidité insuffisante" in result["reasons"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_unknown_liquidity_as_insufficient(monkeypatch):
+    """Une liquidité inconnue (0.0, jamais observée en pratique côté DexScreener mais
+    traitée par prudence) doit être rejetée comme insuffisante, jamais traitée comme
+    "OK par défaut" -- même doctrine que le reste des garde-fous durs du pipeline."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=0.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["hold_reason"] == "insufficient_liquidity"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_allows_liquidity_at_or_above_floor(monkeypatch):
+    """Non-régression : une liquidité au-dessus du plancher (100k$) ne doit jamais
+    être bloquée par ce gate précis -- un achat correctement qualifié par ailleurs
+    doit rester possible."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, pairs=[_pair(liquidity_usd=100_000.0)], signal=strong, align=(3, []),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "insufficient_liquidity"
+    assert result["action"] == "BUY"
+
+
 # ── liste noire + ratio wash-trading (17/07, perte réelle BRIAN) ────────────────────
 
 @pytest.mark.asyncio
@@ -1012,8 +1056,10 @@ async def test_evaluate_rejects_extreme_volume_to_liquidity_ratio(monkeypatch):
 @pytest.mark.asyncio
 async def test_evaluate_allows_reasonable_volume_to_liquidity_ratio(monkeypatch):
     """Non-régression : un ratio élevé mais raisonnable (pic de demande organique)
-    ne doit jamais être bloqué par ce garde-fou -- seul un multiple extrême l'est."""
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=50_000.0, volume_24h_usd=400_000.0)])  # 8x
+    ne doit jamais être bloqué par ce garde-fou -- seul un multiple extrême l'est.
+    Liquidité 150k$ (au-dessus du plancher, 19/07) -- sinon ce test serait rejeté par
+    le nouveau gate ``insufficient_liquidity`` avant même d'atteindre le ratio."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=150_000.0, volume_24h_usd=1_200_000.0)])  # 8x
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "wash_trading_ratio"
 
@@ -1021,7 +1067,11 @@ async def test_evaluate_allows_reasonable_volume_to_liquidity_ratio(monkeypatch)
 @pytest.mark.asyncio
 async def test_evaluate_ratio_check_skipped_when_liquidity_zero(monkeypatch):
     """Pas de division par zéro -- une liquidité nulle/inconnue ne doit jamais
-    planter, ni être traitée comme un ratio infini."""
+    planter, ni être traitée comme un ratio infini. Plancher de liquidité (19/07)
+    désactivé ici pour isoler VRAIMENT ce garde-fou précis -- sinon une liquidité à
+    0.0 serait de toute façon rejetée en amont par ``insufficient_liquidity`` avant
+    même d'atteindre le calcul de ratio, et ce test ne prouverait plus rien."""
+    monkeypatch.setattr(me, "_MIN_LIQUIDITY_USD", 0.0)
     _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=0.0, volume_24h_usd=1_000.0)])
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "wash_trading_ratio"

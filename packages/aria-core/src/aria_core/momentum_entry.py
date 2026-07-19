@@ -10,14 +10,17 @@ Doctrine de ce module (gravée dans CLAUDE.md, section « Pivot critère d'entr�
 le test 1M$ (#194) », à lire avant toute modification) :
   - **Garde-fous durs, rejet immédiat sans exception** : honeypot GoPlus (détection
     technique) ; liste noire persistée (``momentum_blacklist.py``, contrats déjà
-    confirmés problématiques) ; plafond ratio volume 24h/liquidité (signal de
-    wash-trading, ajouté 17/07 après une perte réelle -17,9 % sur un token qui
-    passait le honeypot GoPlus mais faisait partie d'un essaim de décoys narratifs
-    -- le honeypot seul ne détecte pas ce pattern, un token peut être techniquement
-    "propre" tout en étant un piège de visibilité). Sur Solana, quand GoPlus n'a
-    explicitement AUCUNE donnée (pas une panne), ``services/rugcheck.py`` sert de
-    second avis (#207, 18/07) -- ouvre de la couverture, n'assouplit jamais le
-    garde-fou (fail-closed inchangé si RugCheck non plus n'a rien ou confirmé rugged).
+    confirmés problématiques) ; plancher de liquidité (``_MIN_LIQUIDITY_USD``,
+    100 000$ depuis le 19/07 -- décision opérateur explicite, anti-scam : même un
+    contrat propre peut cacher un risque sur un pool trop mince, rejet même si tout
+    le reste est OK) ; plafond ratio volume 24h/liquidité (signal de wash-trading,
+    ajouté 17/07 après une perte réelle -17,9 % sur un token qui passait le honeypot
+    GoPlus mais faisait partie d'un essaim de décoys narratifs -- le honeypot seul ne
+    détecte pas ce pattern, un token peut être techniquement "propre" tout en étant un
+    piège de visibilité). Sur Solana, quand GoPlus n'a explicitement AUCUNE donnée
+    (pas une panne), ``services/rugcheck.py`` sert de second avis (#207, 18/07) --
+    ouvre de la couverture, n'assouplit jamais le garde-fou (fail-closed inchangé si
+    RugCheck non plus n'a rien ou confirmé rugged).
   - **R/R positif obligatoire** (cible/invalidation dérivés de niveaux RÉELS via
     ``entry_signals.detect_entry`` -- golden pocket + divergence RSI) : sans lui,
     HOLD. Jamais un objectif fabriqué quand l'OHLCV est indisponible.
@@ -81,7 +84,17 @@ _DEXSCREENER_TO_GOPLUS_CHAIN_ID: dict[str, str] = {
 }
 
 _SOURCE_LIMIT_PER_CHANNEL = 30
-_MIN_LIQUIDITY_USD = 5_000.0  # plancher bas -- pipeline permissif, pas un filtre VC
+# 19/07 -- relevé 5 000$ -> 100 000$ (décision opérateur explicite : "je veut eviter a
+# aria de se faire scam, meme si tout est ok en dessous il peut y avoir x ou y risques").
+# Jusqu'ici ce plancher ne servait QUE de préférence à la découverte (pré-filtre par lot)
+# et à la sélection de la meilleure paire (_best_pair) -- aucun REJET dur n'existait
+# réellement dans evaluate_momentum_entry si un token en dessous du plancher passait
+# quand même (candidat absent de la réponse batch, ou pré-filtre jamais appliqué) : un
+# honeypot clear + R/R correct sur un pool à 6 000$ de liquidité pouvait être acheté sans
+# qu'aucun garde-fou ne s'y oppose. Corrigé par un rejet dur explicite dans
+# evaluate_momentum_entry (cf. plus bas) -- désormais appliqué SYSTÉMATIQUEMENT, jamais
+# contournable, même si honeypot/R-R/alignement sont par ailleurs tous propres.
+_MIN_LIQUIDITY_USD = 100_000.0
 # 18/07 -- relevé 1.5->2.0 (décision opérateur explicite : "plus sélective") : seul un
 # R/R VRAIMENT franc, pas juste positif, qualifie pour un achat déterministe sans passer
 # par le LLM. _RR_AMBIGUOUS_FLOOR (1.0) INCHANGÉ -- la zone [1.0, 2.0) élargie tombe
@@ -802,14 +815,16 @@ async def evaluate_momentum_entry(
       1. Liste noire (``momentum_blacklist.py``) -- rejet immédiat, aucun appel réseau.
       2. Honeypot (GoPlus) -- rejet immédiat si non clear.
       3. Prix + meilleure paire (DexScreener) -- rejet si aucune paire liquide.
-      4. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
+      4. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 100 000$, 19/07) -- rejet
+         SYSTÉMATIQUE si le pool est trop mince, même si tout le reste est propre.
+      5. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
          des données déjà en main (aucun appel réseau supplémentaire).
-      5. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
+      6. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
          extrême, même donnée déjà en main.
-      6. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
+      7. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
          HOLD si absent (jamais un objectif fabriqué).
-      7. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
-      8. R/R franc (>= 2.0) + alignement technique >= 2/3 -> BUY déterministe (18/07,
+      8. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
+      9. R/R franc (>= 2.0) + alignement technique >= 2/3 -> BUY déterministe (18/07,
          "plus sélective" : relevé depuis 1.5/1 signal). R/R positif mais sous ce seuil
          (1.0-2.0) -> confirmation LLM légère (calibrée sur le rythme hebdo, cf.
          ``weekly_context``). Sinon HOLD.
@@ -840,6 +855,23 @@ async def evaluate_momentum_entry(
     best = _best_pair(pairs, contract)
     if best is None or not best.price_usd or best.price_usd <= 0:
         return None
+
+    # 19/07 -- garde-fou dur (décision opérateur explicite, cf. commentaire sur
+    # _MIN_LIQUIDITY_USD ci-dessus) : rejet SYSTÉMATIQUE si la liquidité du pool est
+    # sous le plancher, jamais contournable même si le reste (honeypot/R-R/alignement)
+    # est propre -- une liquidité inconnue (``None``/0, jamais observée en pratique mais
+    # traitée par prudence) est traitée comme insuffisante, pas comme "OK par défaut".
+    liquidity_usd = best.liquidity_usd or 0.0
+    if liquidity_usd < _MIN_LIQUIDITY_USD:
+        return {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd,
+            "reasons": [
+                f"liquidité insuffisante ({liquidity_usd:,.0f}$ < {_MIN_LIQUIDITY_USD:,.0f}$) "
+                "-- risque de scam/manipulation, rejet même si le reste est propre"
+            ],
+            "hold_reason": "insufficient_liquidity",
+        }
 
     if best.liquidity_usd and best.liquidity_usd > 0:
         volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
