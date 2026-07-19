@@ -319,6 +319,30 @@ async def run_market_sentiment_cycle() -> dict:
     return {"updated": updated, "failed": failed}
 
 
+def format_sentiment_prompt_lines(readings: list[dict]) -> list[str]:
+    """Lignes compactes pour injection dans un prompt LLM (distinct de
+    ``format_sentiment_report``, destiné à l'affichage Telegram/cockpit) --
+    extrait le 19/07 depuis ``vc_analysis.py`` (logique inline dupliquée en
+    substance) pour que ``momentum_entry.py`` bénéficie de la MÊME profondeur
+    d'analyse que ``/vc`` sans réimplémenter le filtrage/sanitisation. Ignore les
+    lectures ``donnees_insuffisantes`` (rien d'exploitable), sanitise chaque champ
+    (mandat #192 -- ``detail``/``pair`` viennent in fine d'un calcul sur des prix
+    de marché réels, pas du contenu tiers arbitraire, mais la même discipline
+    s'applique par défaut)."""
+    from aria_core.sanitize import sanitize_untrusted_text
+
+    lines: list[str] = []
+    for r in readings:
+        regime = r.get("regime")
+        if not regime or regime == "donnees_insuffisantes":
+            continue
+        label = sanitize_untrusted_text(REGIME_LABELS.get(regime, regime), 120)
+        pair = sanitize_untrusted_text(r.get("pair"), 10)
+        detail = sanitize_untrusted_text(r.get("detail"), 200)
+        lines.append(f"- {pair} : {label} ({detail})")
+    return lines
+
+
 def format_sentiment_report(readings: list[dict]) -> str:
     if not readings:
         return "Sentiment de marché : aucune lecture encore disponible (le cycle heartbeat n'a pas encore tourné)."

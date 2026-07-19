@@ -218,6 +218,7 @@ def _build_untrusted_context(
     polymarket_signals: list[dict] | None = None,
     product_diligence: dict | None = None,
     market_alerts_digest: str | None = None,
+    conviction_research: "ConvictionResearch | None" = None,
 ) -> str:
     """Assemble le bloc factuel (données non fiables) à partir de faits déjà collectés.
 
@@ -236,7 +237,14 @@ def _build_untrusted_context(
     mesurable comme sentiment_readings) — déjà sanitisé à l'écriture par
     ``market_alerts.upsert_reading`` (jamais brut), mais re-sanitisé ICI par
     précaution (point d'étranglement unique, jamais confiance en une seule couche
-    de défense pour du contenu tiers non fiable, mandat #192)."""
+    de défense pour du contenu tiers non fiable, mandat #192).
+
+    ``conviction_research`` (optionnel, 19/07, #134, ``conviction_research.py`` —
+    MÊME source canonique que le pipeline momentum) : site officiel réel, buzz X,
+    cadence de publication, GitHub/Farcaster/Telegram vérifiés, corroboration du
+    contrat annoncé, processus de diligence documenté. Déjà sanitisé à l'écriture
+    (``_trail_note``/``sanitize_untrusted_text`` dans conviction_research.py), mais
+    re-sanitisé ICI aussi par précaution, même discipline que ``market_alerts_digest``."""
     lines = [
         f"Adresse du contrat : {_sanitize(ctx.contract, 60)}",
         f"Score de risque on-chain (0-95, plus haut = plus sûr) : {ctx.security_score}",
@@ -323,15 +331,14 @@ def _build_untrusted_context(
             "chiffre fiable (liquidité, prix DexScreener) les rend estimables."
         )
     if sentiment_readings:
-        sent_lines = []
-        for r in sentiment_readings:
-            regime = r.get("regime")
-            if not regime or regime == "donnees_insuffisantes":
-                continue
-            label = _sanitize(REGIME_LABELS.get(regime, regime), 120)
-            pair = _sanitize(r.get("pair"), 10)
-            detail = _sanitize(r.get("detail"), 200)
-            sent_lines.append(f"- {pair} : {label} ({detail})")
+        # 19/07 (#135/#137, revue croisée) -- délègue au formatteur PARTAGÉ avec
+        # momentum_entry.py (skills/market_sentiment.py::format_sentiment_prompt_lines)
+        # au lieu d'une copie inline -- jusque-là dupliquée en substance, trouvé en
+        # revue adversariale : un futur changement de filtrage/troncature n'aurait
+        # sinon appliqué qu'à un seul des deux pipelines.
+        from aria_core.skills.market_sentiment import format_sentiment_prompt_lines
+
+        sent_lines = format_sentiment_prompt_lines(sentiment_readings)
         if sent_lines:
             lines.append(
                 "Sentiment de marché continu (macro court/moyen terme, PAS spécifique à ce "
@@ -351,17 +358,12 @@ def _build_untrusted_context(
             )
             lines.append(safe_digest)
     if polymarket_signals:
-        poly_lines = []
-        for event in polymarket_signals:
-            title = _sanitize(event.get("title") or "", 120)
-            for outcome in (event.get("outcomes") or [])[:3]:  # 3 outcomes max par événement
-                label = _sanitize(outcome.get("label") or "", 160)
-                prob = outcome.get("probability")
-                if label and prob is not None:
-                    try:
-                        poly_lines.append(f"- [{title}] {label} : {float(prob):.0%}")
-                    except (TypeError, ValueError):
-                        pass
+        # 19/07 (#135/#137, revue croisée) -- même consolidation que sentiment_readings
+        # ci-dessus, délègue à services/polymarket.py::format_polymarket_prompt_lines
+        # (déjà utilisé par momentum_entry.py), jamais une 2e copie de la même logique.
+        from aria_core.services.polymarket import format_polymarket_prompt_lines
+
+        poly_lines = format_polymarket_prompt_lines(polymarket_signals)
         if poly_lines:
             lines.append(
                 "Marchés de prédiction Polymarket (probabilités implicites sur événements macro "
@@ -369,15 +371,7 @@ def _build_untrusted_context(
             )
             lines += poly_lines
     if product_diligence:
-        website_snapshot = product_diligence.get("website_snapshot")
-        github = product_diligence.get("github")
         virtuals = product_diligence.get("virtuals")
-        if website_snapshot:
-            lines.append(
-                "Site officiel du projet (texte extrait automatiquement -- DÉCLARATIF, "
-                "le projet parle de lui-même, aucune vérification indépendante) :"
-            )
-            lines.append(f"- {_sanitize(website_snapshot, 620)}")
         if virtuals:
             v_bits = []
             if virtuals.get("description"):
@@ -391,28 +385,48 @@ def _build_untrusted_context(
             if v_bits:
                 lines.append(
                     "Fiche Virtuals du projet (texte fourni par l'équipe sur virtuals.io -- "
-                    "DÉCLARATIF, même prudence que le site officiel ci-dessus : le projet "
+                    "DÉCLARATIF, même prudence que le site officiel ci-dessous : le projet "
                     "parle de lui-même, aucune vérification indépendante) :"
                 )
                 lines.append(f"- {'; '.join(v_bits)}")
-        if github:
-            gh_bits = []
-            if github.get("description"):
-                gh_bits.append(f"description \"{_sanitize(github['description'], 200)}\"")
-            if github.get("stars") is not None:
-                gh_bits.append(f"{github['stars']} étoiles")
-            if github.get("open_issues") is not None:
-                gh_bits.append(f"{github['open_issues']} issues ouvertes")
-            if github.get("days_since_push") is not None:
-                gh_bits.append(f"dernier push il y a {github['days_since_push']} j")
-            if github.get("archived"):
-                gh_bits.append("ARCHIVÉ")
-            if github.get("fork"):
-                gh_bits.append("fork (pas le dépôt d'origine)")
-            if gh_bits:
-                lines.append(
-                    f"Dépôt GitHub du projet (métadonnées vérifiables) : {'; '.join(gh_bits)}"
-                )
+    if conviction_research and conviction_research.available:
+        cr = conviction_research
+        if cr.website_snapshot:
+            lines.append(
+                "Site officiel du projet (texte extrait automatiquement -- DÉCLARATIF, "
+                "le projet parle de lui-même, aucune vérification indépendante) :"
+            )
+            lines.append(f"- {_sanitize(cr.website_snapshot, 620)}")
+        if cr.other_known_link_lines:
+            lines.append(
+                "Autres liens officiels déclarés (GitHub/Farcaster/Telegram/etc., contenu "
+                "réel vérifié quand un client dédié existe) :"
+            )
+            lines += [f"- {_sanitize(line, 300)}" for line in cr.other_known_link_lines]
+        if cr.buzz_lines:
+            cadence_txt = _sanitize(cr.posting_cadence, 20)
+            handle_txt = f"@{_sanitize(cr.x_handle, 30)}" if cr.x_handle else "handle inconnu"
+            lines.append(
+                f"Buzz X récent sur ce token précis ({handle_txt}, cadence de publication "
+                f"{cadence_txt}) -- texte libre d'un tiers, jamais un fait vérifié :"
+            )
+            lines += [f"- {_sanitize(line, 300)}" for line in cr.buzz_lines]
+        corrob_txt = {
+            True: "CONFIRMÉE (le contrat scanné correspond au contrat annoncé par le projet)",
+            False: "CONTRAT DIFFÉRENT ANNONCÉ PAR LE PROJET -- signal d'usurpation possible",
+            None: "non trouvée (aucune adresse officielle mentionnée dans les sources)",
+        }[cr.contract_corroborated]
+        lines.append(f"Corroboration du contrat annoncé par le projet lui-même : {corrob_txt}")
+        if cr.potential_score is not None:
+            lines.append(
+                f"Score de potentiel fondamental (diligence de conviction automatisée, 0-10) : "
+                f"{cr.potential_score:.1f} -- {_sanitize(cr.rationale, 300)}"
+            )
+        if cr.process_trail:
+            lines.append("Processus de diligence de conviction réellement exécuté (pour audit) :")
+            lines += [f"- {_sanitize(step, 250)}" for step in cr.process_trail]
+    elif conviction_research and not conviction_research.available and conviction_research.reason:
+        lines.append(f"Diligence de conviction automatisée indisponible : {_sanitize(conviction_research.reason, 200)}")
     # Contexte de légitimité (drapeaux JUGÉS, pas bruts) : autorité du mint,
     # launchpad, profondeur de liquidité, comportement du wallet du dev.
     legit: list[str] = []
@@ -903,14 +917,6 @@ async def _fetch_sentiment_readings() -> list[dict]:
         return []
 
 
-# Tags Polymarket à interroger pour le contexte macro (#59).
-# Uniquement ``fed-rates`` pour l'instant : testé en direct le 10/07, donne le
-# marché de prédiction le plus liquide sur les décisions de taux Fed — signal
-# complémentaire à ``btc_cycles`` (cycle halving) et ``market_sentiment``
-# (court/moyen terme technique). Extension à d'autres tags = décision opérateur.
-_POLYMARKET_TAGS: list[str] = ["fed-rates"]
-
-
 async def _fetch_polymarket_signals() -> list[dict]:
     """Lit les événements macro Polymarket les plus liquides (#59, signal pré-LLM).
 
@@ -919,12 +925,17 @@ async def _fetch_polymarket_signals() -> list[dict]:
     jamais bloquant). Retourne une liste de dicts ``{title, outcomes}`` où
     ``outcomes`` est une liste de ``{label, probability}`` — probabilités implicites
     de marché (0.0-1.0), jamais inventées.
+
+    19/07 (#135/#137, revue croisée) -- les tags interrogés vivent désormais
+    UNIQUEMENT dans ``services/polymarket.DEFAULT_TAGS`` (partagé avec
+    momentum_entry.py) -- l'ancienne constante locale ``_POLYMARKET_TAGS``
+    dupliquait la même valeur/le même commentaire, retirée.
     """
     try:
-        from aria_core.services.polymarket import polymarket_client
+        from aria_core.services.polymarket import DEFAULT_TAGS, polymarket_client
 
         results = []
-        for tag in _POLYMARKET_TAGS:
+        for tag in DEFAULT_TAGS:
             event = await polymarket_client.fetch_top_event_by_tag(tag)
             if not event.available or not event.outcomes:
                 continue
@@ -989,36 +1000,40 @@ async def _fetch_virtuals_product_diligence(ctx: TokenScanContext) -> dict | Non
 
 
 async def _fetch_product_diligence(ctx: TokenScanContext) -> dict | None:
-    """Diligence produit légère (site + GitHub + fiche Virtuals) -- trou qu'ARIA a
-    elle-même identifié en conditions réelles (capture opérateur 10/07) : ``/vc``
-    couvrait l'on-chain et la traction marché, jamais le produit (équipe, roadmap,
-    usage réel). Même doctrine que ``_fetch_sentiment_readings``/
-    ``_fetch_polymarket_signals`` : best-effort, dégradation douce, jamais bloquant.
-    None si aucun lien projet exploitable, aucune fiche Virtuals et aucune donnée
-    récupérée."""
-    links = ctx.best_pair.project_links if ctx.best_pair else []
+    """Diligence produit -- fiche Virtuals UNIQUEMENT désormais (19/07, #134). Le
+    site officiel / GitHub / Farcaster / Telegram / X étaient auparavant récupérés
+    ICI en doublon d'une logique équivalente construite ensuite pour le pipeline
+    momentum -- consolidés dans ``conviction_research.research_project_potential``
+    (source canonique UNIQUE, consommée par les deux pipelines via
+    ``_fetch_conviction_research`` ci-dessous), jamais réimplémentés deux fois.
+    None si aucune fiche Virtuals trouvée."""
     virtuals = await _fetch_virtuals_product_diligence(ctx)
-    if not links and not virtuals:
+    if not virtuals:
         return None
-    try:
-        from aria_core.services.project_activity import (
-            fetch_github_diligence_snapshot,
-            github_url_from_links,
-            website_url_from_links,
-        )
-        from aria_core.services.site_snapshot import fetch_site_text_snapshot
+    return {"virtuals": virtuals}
 
-        github_url = github_url_from_links(links)
-        website_url = website_url_from_links(links)
-        website_snapshot = await fetch_site_text_snapshot(website_url) if website_url else None
-        github_snapshot = (
-            await fetch_github_diligence_snapshot(github_url) if github_url else None
-        )
-        if not website_snapshot and not github_snapshot and not virtuals:
-            return None
-        return {"website_snapshot": website_snapshot, "github": github_snapshot, "virtuals": virtuals}
+
+async def _fetch_conviction_research(ctx: TokenScanContext) -> "ConvictionResearch | None":
+    """Diligence de conviction (19/07, #134) -- MÊME source canonique que le
+    pipeline momentum (``conviction_research.research_project_potential``, jamais
+    une seconde implémentation) : site officiel (texte réel), buzz X (officiel +
+    repli x402 twit.sh), cadence de publication, GitHub/Farcaster/Telegram
+    vérifiés, corroboration du contrat annoncé par le projet, ``process_trail``
+    documentant chaque étape réellement tentée. Retour opérateur explicite (19/07) :
+    "les analyses sont autant poussées l'une que l'autre" -- `/vc` gagne ici EXACTEMENT
+    la même profondeur que momentum, la seule différence restant le rapport écrit.
+
+    Gate dédié (``ARIA_CONVICTION_RESEARCH_ENABLED``) -- ``available=False`` si
+    désactivé (dégradation douce, jamais bloquant pour l'analyse VC, même doctrine
+    que ``_fetch_sentiment_readings``/``_fetch_polymarket_signals``)."""
+    try:
+        from aria_core.conviction_research import research_project_potential
+
+        links = ctx.best_pair.project_links if ctx.best_pair else []
+        symbol = ctx.best_pair.base_symbol if ctx.best_pair else ctx.contract[:10]
+        return await research_project_potential(ctx.contract, symbol, "base", known_links=links)
     except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.warning("analyze_vc: diligence produit échouée (%s)", exc)
+        logger.warning("analyze_vc: diligence de conviction échouée (%s)", exc)
         return None
 
 
@@ -1066,10 +1081,11 @@ async def analyze_vc_with_context(
     sentiment_readings = await _fetch_sentiment_readings()
     polymarket_signals = await _fetch_polymarket_signals()
     product_diligence = await _fetch_product_diligence(ctx)
+    conviction_research = await _fetch_conviction_research(ctx)
     market_alerts_digest = await _fetch_market_alerts_digest()
     untrusted = _build_untrusted_context(
         ctx, history, sentiment_readings, polymarket_signals, product_diligence,
-        market_alerts_digest,
+        market_alerts_digest, conviction_research,
     )
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"

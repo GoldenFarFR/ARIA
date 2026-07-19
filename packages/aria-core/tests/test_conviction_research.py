@@ -45,11 +45,10 @@ def _stub_link_verifiers_unavailable(monkeypatch):
     api.warpcast.com/t.me). Les tests dédiés à ces vérifications remplacent ce
     stub explicitement pour exercer le vrai contenu."""
     from aria_core.services.farcaster import FarcasterProfileVerification
-    from aria_core.services.github_verify import GitHubRepoVerification
     from aria_core.services.telegram_channel_verify import TelegramChannelVerification
 
-    async def _github_unavailable(url):
-        return GitHubRepoVerification(available=False)
+    async def _github_unavailable(url, **kwargs):
+        return None
 
     async def _farcaster_unavailable(url):
         return FarcasterProfileVerification(available=False)
@@ -57,9 +56,23 @@ def _stub_link_verifiers_unavailable(monkeypatch):
     async def _telegram_unavailable(url):
         return TelegramChannelVerification(available=False)
 
-    monkeypatch.setattr("aria_core.services.github_verify.verify_repo", _github_unavailable)
+    monkeypatch.setattr(
+        "aria_core.services.project_activity.fetch_github_diligence_snapshot", _github_unavailable,
+    )
     monkeypatch.setattr("aria_core.services.farcaster.verify_profile", _farcaster_unavailable)
     monkeypatch.setattr("aria_core.services.telegram_channel_verify.verify_channel", _telegram_unavailable)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _stub_site_snapshot_unavailable(monkeypatch):
+    """Instantané réel du site (19/07) mocké à vide par défaut -- sans ce stub,
+    tout test qui résout un website_url déclencherait un vrai appel réseau via
+    site_snapshot.fetch_site_text_snapshot. Les tests dédiés remplacent ce stub."""
+    async def _unavailable(url):
+        return None
+
+    monkeypatch.setattr("aria_core.services.site_snapshot.fetch_site_text_snapshot", _unavailable)
     yield
 
 
@@ -212,6 +225,9 @@ async def test_x_handle_extracted_from_tavily_snippets(test_settings, monkeypatc
     assert result.x_handle == "cobot_official"
     assert calls["search_query"] == "from:cobot_official"
     assert calls["cadence_handle"] == "cobot_official"
+    # 19/07 (#134) -- exposé sur le dataclass, pas seulement dans le prompt de
+    # synthèse interne : vc_analysis.py doit pouvoir reprendre le buzz brut.
+    assert any("COBOT to the moon" in line for line in result.buzz_lines)
 
 
 @pytest.mark.asyncio
@@ -887,12 +903,12 @@ async def test_process_trail_documents_link_verifications(test_settings, monkeyp
 
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
 
-    from aria_core.services.github_verify import GitHubRepoVerification
+    async def _fake_github_snapshot(url):
+        return {"age_days": 10, "stars": 5, "days_since_push": None, "open_issues": None, "archived": False, "fork": False}
 
-    async def _fake_verify_repo(url):
-        return GitHubRepoVerification(available=True, exists=True, age_days=10, stargazers=5)
-
-    monkeypatch.setattr("aria_core.services.github_verify.verify_repo", _fake_verify_repo)
+    monkeypatch.setattr(
+        "aria_core.services.project_activity.fetch_github_diligence_snapshot", _fake_github_snapshot,
+    )
 
     async def _fake_chat(user, system, **kwargs):
         return "SCORE: 5\nRAISON: ok."
@@ -905,6 +921,97 @@ async def test_process_trail_documents_link_verifications(test_settings, monkeyp
     result = await cr.research_project_potential(CONTRACT, "COBOT", "base", known_links=known_links)
 
     assert any("GitHub" in line and "10j" in line for line in result.process_trail)
+
+
+# ── Instantané réel du site (19/07, unification /vc <-> momentum -- retour
+#    opérateur : "les analyses sont autant poussées de l'un vers l'autre") ────────
+
+@pytest.mark.asyncio
+async def test_website_real_text_snapshot_fetched_when_url_known(test_settings, monkeypatch):
+    """Même profondeur que /vc désormais : le vrai contenu du site est récupéré
+    (pas seulement une recherche Tavily À PROPOS du site)."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    async def _fake_snapshot(url):
+        assert url == "https://cobot.xyz"
+        return "COBOT — Le token qui révolutionne la finance décentralisée."
+
+    monkeypatch.setattr("aria_core.services.site_snapshot.fetch_site_text_snapshot", _fake_snapshot)
+
+    captured = {}
+
+    async def _fake_chat(user, system, **kwargs):
+        captured["user"] = user
+        return "SCORE: 6\nRAISON: Site réel cohérent."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        await x_research_budget.record_request(purpose="buzz_search", status="ok")
+
+    known_links = [{"label": "Site officiel", "url": "https://cobot.xyz"}]
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base", known_links=known_links)
+
+    assert "révolutionne la finance décentralisée" in captured["user"]
+    assert any("Contenu réel du site officiel récupéré" in line for line in result.process_trail)
+    assert result.potential_score == 6.0
+    # 19/07 (#134) -- exposé sur le dataclass, pas seulement injecté dans le
+    # prompt de synthèse interne : vc_analysis.py doit pouvoir le reprendre.
+    assert result.website_snapshot is not None
+    assert "révolutionne la finance décentralisée" in result.website_snapshot
+
+
+@pytest.mark.asyncio
+async def test_website_snapshot_unreachable_logged_honestly(test_settings, monkeypatch):
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    async def _fake_snapshot(url):
+        return None
+
+    monkeypatch.setattr("aria_core.services.site_snapshot.fetch_site_text_snapshot", _fake_snapshot)
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 4\nRAISON: ok."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        await x_research_budget.record_request(purpose="buzz_search", status="ok")
+
+    known_links = [{"label": "Site officiel", "url": "https://cobot.xyz"}]
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base", known_links=known_links)
+
+    assert any("injoignable" in line for line in result.process_trail)
+
+
+@pytest.mark.asyncio
+async def test_website_snapshot_not_fetched_when_no_url(test_settings, monkeypatch):
+    """Aucun site connu -- pas de tentative de fetch, jamais un appel superflu."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    async def _fail_if_called(url):
+        raise AssertionError("ne doit jamais être appelé, aucun site connu")
+
+    monkeypatch.setattr("aria_core.services.site_snapshot.fetch_site_text_snapshot", _fail_if_called)
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        await x_research_budget.record_request(purpose="buzz_search", status="ok")
+
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+
+    assert result.potential_score is None  # aucune source -- comportement inchangé
 
 
 # ── Sécurité (mandat #192, bug BLOQUANT trouvé en revue croisée 19/07) : une URL
@@ -1039,6 +1146,49 @@ async def test_process_trail_survives_cache_roundtrip(test_settings, monkeypatch
     result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
 
     assert result.process_trail == ["Recherche web Tavily tentée", "Tavily : 2 extraits reçus"]
+
+
+@pytest.mark.asyncio
+async def test_raw_diligence_content_survives_cache_roundtrip(test_settings, monkeypatch):
+    """19/07 (#134) -- website_snapshot/other_known_link_lines/buzz_lines doivent
+    survivre au round-trip cache, exactement comme process_trail déjà couvert
+    ci-dessus -- sinon vc_analysis.py verrait une richesse différente selon que
+    la recherche vient d'un cache hit ou d'une exécution fraîche."""
+    test_settings.aria_conviction_research_enabled = True
+    today = cr.datetime.now(cr.timezone.utc).date().isoformat()
+
+    source_id = cr._source_id(CONTRACT, "base", on=today)
+    cached_row = {
+        "id": f"doc-{source_id}",
+        "content": "x",
+        "metadata": {
+            "source": "conviction_research", "topic": "project-diligence", "source_id": source_id,
+            "contract": CONTRACT.lower(), "chain": "base",
+            "website_url": "https://cobot.xyz",
+            "website_snapshot": "COBOT est un token réel avec une vraie roadmap.",
+            "x_handle": "cobot_token", "posting_cadence": "active",
+            "contract_corroborated": "True", "potential_score": "7.0", "rationale": "ok",
+            "other_known_link_lines": cr.json.dumps(["- GitHub : https://github.com/cobot/cobot (créé il y a 90j)"]),
+            "buzz_lines": cr.json.dumps(["- COBOT is launching a new feature soon"]),
+            "process_trail": cr.json.dumps(["Recherche web Tavily tentée"]),
+        },
+        "distance": 0.01,
+    }
+
+    async def _fake_search(query, *, entry_type=None, limit=8):
+        return [cached_row]
+
+    async def _fail_if_called(*a, **k):
+        raise AssertionError("ne doit jamais re-rechercher, résultat en cache")
+
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fake_search)
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fail_if_called))
+
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+
+    assert result.website_snapshot == "COBOT est un token réel avec une vraie roadmap."
+    assert result.other_known_link_lines == ["- GitHub : https://github.com/cobot/cobot (créé il y a 90j)"]
+    assert result.buzz_lines == ["- COBOT is launching a new feature soon"]
 
 
 @pytest.mark.asyncio
@@ -1267,15 +1417,16 @@ async def test_known_links_github_enriched_with_real_verification(test_settings,
 
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
 
-    from aria_core.services.github_verify import GitHubRepoVerification
-
-    async def _fake_verify_repo(url):
+    async def _fake_github_snapshot(url):
         assert url == "https://github.com/cobot/cobot"
-        return GitHubRepoVerification(
-            available=True, exists=True, age_days=159, days_since_last_push=2, stargazers=340,
-        )
+        return {
+            "age_days": 159, "days_since_push": 2, "stars": 340,
+            "open_issues": None, "archived": False, "fork": False,
+        }
 
-    monkeypatch.setattr("aria_core.services.github_verify.verify_repo", _fake_verify_repo)
+    monkeypatch.setattr(
+        "aria_core.services.project_activity.fetch_github_diligence_snapshot", _fake_github_snapshot,
+    )
 
     captured = {}
 
@@ -1293,6 +1444,9 @@ async def test_known_links_github_enriched_with_real_verification(test_settings,
     assert "GitHub : https://github.com/cobot/cobot (créé il y a 159j" in captured["user"]
     assert "340 étoiles" in captured["user"]
     assert result.potential_score == 9.0
+    # 19/07 (#134) -- exposé sur le dataclass (vc_analysis.py en a besoin en plus
+    # du score synthétisé), pas seulement injecté dans le prompt de synthèse.
+    assert any("GitHub : https://github.com/cobot/cobot" in line for line in result.other_known_link_lines)
 
 
 @pytest.mark.asyncio
@@ -1368,8 +1522,13 @@ async def test_known_links_telegram_enriched_with_real_verification(test_setting
 
 @pytest.mark.asyncio
 async def test_known_links_github_not_found_flagged_as_negative_signal(test_settings, monkeypatch):
-    """Un lien GitHub déclaré mais dont le dépôt n'existe pas (404 confirmé) doit
-    remonter comme signal négatif explicite au LLM, jamais silencieusement ignoré."""
+    """Un lien GitHub déclaré mais dont le dépôt n'existe pas (ou n'est pas
+    vérifiable) doit remonter un signal explicite au LLM, jamais silencieusement
+    ignoré. Note (19/07, consolidation avec project_activity.py) : ce client
+    canonique, contrairement à l'ancien github_verify.py retiré, ne distingue plus
+    "dépôt confirmé introuvable" de "vérification indisponible" -- les deux
+    renvoient None -- accepté comme simplification mineure (cf. docstring
+    format_github_diligence)."""
     test_settings.aria_conviction_research_enabled = True
 
     async def _fake_tavily(query, **kwargs):
@@ -1377,12 +1536,12 @@ async def test_known_links_github_not_found_flagged_as_negative_signal(test_sett
 
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
 
-    from aria_core.services.github_verify import GitHubRepoVerification
+    async def _fake_github_snapshot(url):
+        return None
 
-    async def _fake_verify_repo(url):
-        return GitHubRepoVerification(available=True, exists=False)
-
-    monkeypatch.setattr("aria_core.services.github_verify.verify_repo", _fake_verify_repo)
+    monkeypatch.setattr(
+        "aria_core.services.project_activity.fetch_github_diligence_snapshot", _fake_github_snapshot,
+    )
 
     captured = {}
 

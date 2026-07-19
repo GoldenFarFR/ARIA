@@ -1,15 +1,27 @@
-"""Diligence de conviction pour le pipeline momentum (19/07, demande opérateur
-explicite : "je veut une recherche active sur x qui permet a aria de voir aussi le
-contexte complet... en dehors des graphiques").
+"""Diligence de conviction -- SOURCE CANONIQUE UNIQUE pour les DEUX pipelines
+d'analyse d'ARIA (19/07, demande opérateur explicite : "je veut une recherche
+active sur x qui permet a aria de voir aussi le contexte complet... en dehors
+des graphiques", puis élargi le même soir, #134 : "les analyses sont autant
+poussées l'une que l'autre, la seule différence c'est un rapport écrit en
+plus"). Cherche le contexte au-delà du graphique : site officiel, buzz X récent,
+cadence de publication, GitHub/Farcaster/Telegram vérifiés, corroboration du
+contrat annoncé par le projet.
 
-Enrichit un candidat qui a DÉJÀ passé tous les filtres rapides (honeypot, R/R,
-alignement technique, tie-breaker/garde de sécurité LLM) -- jamais avant, pour ne
-jamais ralentir le tri de masse (raison d'être du pivot #194, cf. CLAUDE.md
-« Vitesse »). Cherche le contexte au-delà du graphique : site officiel, buzz X
-récent, cadence de publication, corroboration du contrat annoncé par le projet --
-puis synthétise un score de potentiel borné qui influence la TAILLE de la position
-par conviction (``risk_guard.conviction_size_multiplier``), jamais un gate d'achat
-séparé (portée exacte demandée par l'opérateur : "influe sur la taille").
+**Momentum** (``momentum_entry.evaluate_momentum_entry``, via
+``_fetch_conviction_research`` du même fichier) : enrichit un candidat qui a
+DÉJÀ passé tous les filtres rapides (honeypot, R/R, alignement technique,
+tie-breaker/garde de sécurité LLM) -- jamais avant, pour ne jamais ralentir le
+tri de masse (raison d'être du pivot #194, cf. CLAUDE.md « Vitesse »). Le score
+synthétisé influence la TAILLE de la position par conviction
+(``risk_guard.conviction_size_multiplier``), jamais un gate d'achat séparé
+(portée exacte demandée par l'opérateur : "influe sur la taille").
+
+**`/vc`** (``vc_analysis._fetch_conviction_research``, #134) : appelé
+INCONDITIONNELLEMENT à chaque scan complet (aucun concept de "filtres rapides
+déjà passés" ici) -- le résultat (score, rationale, liens vérifiés, process_trail)
+est injecté tel quel dans le contexte factuel du rapport `/vc`, à côté de tout
+le reste (sécurité, TA, sentiment, Polymarket), jamais comme un gate séparé
+non plus.
 
 Réactive la lecture X (coupée le 11/07 pour maîtrise du coût pay-per-use) mais
 BORNÉE par ``x_research_budget.py`` (plafond hebdo de requêtes, jamais illimité).
@@ -25,7 +37,7 @@ jamais la source primaire.
 Vérification de contenu (19/07, retour opérateur : "est-ce qu'elle est capable de
 fouiller ?") : les liens GitHub/Farcaster/Telegram déclarés via ``known_links``
 (DexScreener) ne sont plus juste affichés bruts -- ``_describe_other_known_link``
-appelle ``services/github_verify.py``/``services/farcaster.py``/
+appelle ``services/project_activity.py``/``services/farcaster.py``/
 ``services/telegram_channel_verify.py`` (dôme standard, aucune clé) pour vérifier
 le CONTENU réel derrière le lien (âge/activité d'un dépôt, abonnés/label spam
 Warpcast, abonnés/dernier message d'un canal). Discord explicitement écarté
@@ -90,10 +102,23 @@ def _source_id_prefix(contract: str, chain: str) -> str:
     return f"conviction-research-{chain}-{contract.strip().lower()}-"
 
 
+def _json_list(value: list[str]) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _parse_json_list(raw: str | None) -> list[str]:
+    try:
+        parsed = json.loads(raw) if raw else []
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 def _research_to_metadata(research: "ConvictionResearch") -> dict[str, str]:
     corrob = "" if research.contract_corroborated is None else str(research.contract_corroborated)
     return {
         "website_url": research.website_url or "",
+        "website_snapshot": research.website_snapshot or "",
         "x_handle": research.x_handle or "",
         "posting_cadence": research.posting_cadence,
         "contract_corroborated": corrob,
@@ -102,8 +127,11 @@ def _research_to_metadata(research: "ConvictionResearch") -> dict[str, str]:
         # 19/07, revue croisée : un séparateur littéral (" | ") n'est pas sûr --
         # une entrée peut légitimement contenir cette sous-chaîne (ex. une URL
         # déclarée), corrompant le round-trip cache. JSON encode/decode, jamais
-        # de séparateur naïf.
-        "process_trail": json.dumps(research.process_trail, ensure_ascii=False),
+        # de séparateur naïf. Même traitement pour les 2 listes ajoutées le 19/07
+        # (#134) -- other_known_link_lines/buzz_lines.
+        "other_known_link_lines": _json_list(research.other_known_link_lines),
+        "buzz_lines": _json_list(research.buzz_lines),
+        "process_trail": _json_list(research.process_trail),
     }
 
 
@@ -115,22 +143,18 @@ def _research_from_metadata(meta: dict) -> "ConvictionResearch":
         score = float(score_raw) if score_raw else None
     except ValueError:
         score = None
-    trail_raw = meta.get("process_trail") or ""
-    try:
-        trail = json.loads(trail_raw) if trail_raw else []
-        if not isinstance(trail, list):
-            trail = []
-    except (json.JSONDecodeError, TypeError):
-        trail = []
     return ConvictionResearch(
         available=True,
         website_url=meta.get("website_url") or None,
+        website_snapshot=meta.get("website_snapshot") or None,
         x_handle=meta.get("x_handle") or None,
         posting_cadence=meta.get("posting_cadence") or "unknown",
         contract_corroborated=corrob,
         potential_score=score,
         rationale=meta.get("rationale") or "",
-        process_trail=trail,
+        other_known_link_lines=_parse_json_list(meta.get("other_known_link_lines")),
+        buzz_lines=_parse_json_list(meta.get("buzz_lines")),
+        process_trail=_parse_json_list(meta.get("process_trail")),
     )
 
 
@@ -247,12 +271,22 @@ _IGNORED_X_HANDLES = {"i", "home", "search", "intent", "share", "hashtag"}
 class ConvictionResearch:
     available: bool
     website_url: str | None = None
+    website_snapshot: str | None = None  # texte réel du site (sanitisé), si récupéré
     x_handle: str | None = None
     posting_cadence: str = "unknown"  # "active" | "low" | "dormant" | "unknown"
     contract_corroborated: bool | None = None  # None = aucune mention trouvée
     potential_score: float | None = None  # 0-10, None = indisponible/inconnu
     rationale: str = ""
     reason: str = ""  # pourquoi indisponible/inconnu, si applicable
+    # 19/07 (#134) -- contenu brut déjà collecté (déjà sanitisé, lignes "- ..."
+    # prêtes à afficher), exposé en plus du score synthétisé pour que
+    # vc_analysis.py (/vc) puisse en reprendre la MÊME profondeur que le rapport
+    # écrit détaillé -- momentum_entry.py n'en a pas besoin (sa décision ne
+    # dépend que du score synthétisé) mais rien n'empêche un futur appelant de
+    # les lire aussi. Toujours des listes déjà formatées, jamais des dicts bruts
+    # (source canonique unique, aucune re-formatage dupliqué côté appelant).
+    other_known_link_lines: list[str] = field(default_factory=list)
+    buzz_lines: list[str] = field(default_factory=list)
     process_trail: list[str] = field(default_factory=list)
     # 19/07 -- retour opérateur explicite : "meme si elle a utiliser x402, meme si
     # elle a fait des recherche sur tous les liens... pour que toi tu puisse au
@@ -362,10 +396,18 @@ async def _describe_other_known_link(label: str, url: str) -> str:
     safe_label = sanitize_untrusted_text(label, 40)
     safe_url = sanitize_untrusted_text(url, 200)
     if label == "GitHub":
-        from aria_core.services.github_verify import format_repo_verification, verify_repo
+        # 19/07 -- réutilise services/project_activity.py, DÉJÀ le client GitHub
+        # canonique consommé par vc_analysis.py/thesis_journal.py/
+        # simulate_lifecycle.py -- un doublon (services/github_verify.py) avait
+        # été construit par erreur avant la découverte de ce module pré-existant,
+        # retiré au profit de celui-ci.
+        from aria_core.services.project_activity import (
+            fetch_github_diligence_snapshot,
+            format_github_diligence,
+        )
 
-        verification = await verify_repo(url)
-        return f"- GitHub : {safe_url} ({format_repo_verification(verification)})"
+        snapshot = await fetch_github_diligence_snapshot(url)
+        return f"- GitHub : {safe_url} ({format_github_diligence(snapshot)})"
     if label == "Farcaster":
         from aria_core.services.farcaster import format_profile_verification, verify_profile
 
@@ -422,6 +464,7 @@ async def research_project_potential(
     safe_symbol = sanitize_untrusted_text(symbol or contract[:10], 30)
 
     website_url: str | None = None
+    website_snapshot: str | None = None
     x_handle: str | None = None
     contract_corroborated: bool | None = None
     snippet_lines: list[str] = []
@@ -504,6 +547,22 @@ async def research_project_potential(
     elif tavily_result is not None:
         _trail_note(trail, f"Tavily indisponible ({tavily_result.error or 'raison inconnue'})")
 
+    if website_url:
+        # 19/07 -- réutilise services/site_snapshot.py (déjà construit pour
+        # vc_analysis.py, défenses anti-texte-caché mandat #192) : jusqu'ici
+        # momentum ne voyait le site qu'INDIRECTEMENT via une recherche Tavily
+        # (résultats DE TIERS À PROPOS du site), jamais son vrai contenu -- même
+        # profondeur que /vc désormais, aucun nouveau client construit.
+        from aria_core.services.site_snapshot import fetch_site_text_snapshot
+
+        raw_snapshot_text = await fetch_site_text_snapshot(website_url)
+        if raw_snapshot_text:
+            _trail_note(trail, "Contenu réel du site officiel récupéré")
+            website_snapshot = sanitize_untrusted_text(raw_snapshot_text, _MAX_SNIPPET_CHARS)
+            snippet_lines.append(f"- (contenu réel du site officiel) {website_snapshot}")
+        else:
+            _trail_note(trail, "Site officiel injoignable ou contenu non exploitable")
+
     buzz_lines: list[str] = []
     posting_cadence = "unknown"
     query = f"from:{x_handle}" if x_handle else f"{safe_symbol} {contract[:10]}"
@@ -578,6 +637,7 @@ async def research_project_potential(
             available=True, x_handle=x_handle, posting_cadence=posting_cadence,
             contract_corroborated=None, potential_score=None,
             reason="aucune source externe trouvée (site web/X)",
+            other_known_link_lines=other_known_link_lines, buzz_lines=buzz_lines,
             process_trail=trail,
         )
         await _store_research(contract, chain, safe_symbol, result)
@@ -588,9 +648,11 @@ async def research_project_potential(
         other_known_link_lines,
     )
     result = ConvictionResearch(
-        available=True, website_url=website_url, x_handle=x_handle,
-        posting_cadence=posting_cadence, contract_corroborated=contract_corroborated,
-        potential_score=score, rationale=rationale, process_trail=trail,
+        available=True, website_url=website_url, website_snapshot=website_snapshot,
+        x_handle=x_handle, posting_cadence=posting_cadence,
+        contract_corroborated=contract_corroborated, potential_score=score, rationale=rationale,
+        other_known_link_lines=other_known_link_lines, buzz_lines=buzz_lines,
+        process_trail=trail,
     )
     await _store_research(contract, chain, safe_symbol, result)
     return result

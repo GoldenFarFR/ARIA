@@ -10,10 +10,11 @@ identique à `services/coingecko.py` (cf. AGENTS.md) :
 - Aucune donnée manquante n'est jamais remplacée par une supposition — le
   champ `error` (et `available=False`) porte l'absence de donnée.
 
-Seam DORMANT, volontairement pas branché dans le rapport `/vc` (déjà validé
-visuellement par l'opérateur) : ajouter une section à un rapport premium
-approuvé est une décision produit, pas un choix technique unilatéral (même
-prudence que la tâche #11 cette même nuit). Prêt à câbler sur décision.
+Câblé dans le contexte LLM de `/vc` (`vc_analysis._fetch_polymarket_signals`)
+depuis le 10/07 -- note "seam dormant" ci-dessus périmée, corrigée le 19/07
+(dérive doc/code trouvée en auditant l'unification /vc<->momentum). Depuis le
+19/07, `momentum_entry.py` réutilise le MÊME client + le MÊME formatteur
+(`format_polymarket_prompt_lines`) pour la même profondeur d'analyse.
 """
 from __future__ import annotations
 
@@ -28,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://gamma-api.polymarket.com"
 UNAVAILABLE = "signal Polymarket indisponible"
+
+# Tags Polymarket à interroger pour le contexte macro (#59). Uniquement
+# ``fed-rates`` pour l'instant : testé en direct le 10/07, donne le marché de
+# prédiction le plus liquide sur les décisions de taux Fed -- signal
+# complémentaire à ``btc_cycles`` (cycle halving) et ``market_sentiment``
+# (court/moyen terme technique). Extension à d'autres tags = décision opérateur.
+DEFAULT_TAGS: list[str] = ["fed-rates"]
 
 
 @dataclass
@@ -141,6 +149,33 @@ class PolymarketClient:
             outcomes=outcomes,
             volume_usd=float(event["volume"]) if event.get("volume") is not None else None,
         )
+
+
+def format_polymarket_prompt_lines(events: list[dict]) -> list[str]:
+    """Lignes compactes pour injection dans un prompt LLM (19/07) -- extrait depuis
+    la logique inline de ``vc_analysis.py`` (jusque-là dupliquée en substance à
+    chaque appelant) pour que ``momentum_entry.py`` bénéficie de la MÊME diligence
+    macro que `/vc` sans réimplémenter le filtrage/troncature/sanitisation.
+
+    Entrée : la forme produite par une boucle sur ``fetch_top_event_by_tag`` --
+    ``[{"title": str, "outcomes": [{"label": str, "probability": float}, ...]}]``.
+    3 outcomes max par événement (même plafond que ``vc_analysis.py``), jamais une
+    probabilité inventée -- une entrée malformée est simplement ignorée, jamais une
+    exception qui remonterait à l'appelant."""
+    from aria_core.sanitize import sanitize_untrusted_text
+
+    lines: list[str] = []
+    for event in events:
+        title = sanitize_untrusted_text(event.get("title") or "", 120)
+        for outcome in (event.get("outcomes") or [])[:3]:
+            label = sanitize_untrusted_text(outcome.get("label") or "", 160)
+            prob = outcome.get("probability")
+            if label and prob is not None:
+                try:
+                    lines.append(f"- [{title}] {label} : {float(prob):.0%}")
+                except (TypeError, ValueError):
+                    pass
+    return lines
 
 
 polymarket_client = PolymarketClient()

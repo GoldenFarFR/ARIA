@@ -805,13 +805,25 @@ async def _default_pair_lookup(contract: str, *, chain: str = "base"):
     des positions ouvertes puisse réutiliser la MÊME paire DexScreener à la fois pour le
     prix courant ET le re-scan du ratio volume/liquidité (``paper_trader_risk.
     rescan_open_position``), sans dupliquer l'appel réseau. Renvoie ``None`` si aucune
-    paire liquide n'est trouvée -- jamais une paire inventée."""
+    paire liquide n'est trouvée -- jamais une paire inventée.
+
+    19/07 -- même correctif que ``momentum_entry._best_pair`` (bug réel, position
+    PLAZM #21 == en fait ESHARE) : ``fetch_token_pairs`` renvoie TOUTE paire
+    impliquant ``contract``, y compris comme simple QUOTE du pool d'un AUTRE token
+    -- sans filtre sur ``PairSnapshot.base_address``, cette fonction pouvait
+    retourner le prix/volume/liquidité d'un token totalement différent (celui qui
+    utilise ``contract`` comme quote d'un pool plus liquide que le sien). C'est
+    CETTE fonction qui alimente le suivi périodique Telegram des positions
+    ouvertes -- le prix erroné affiché pour la position #21 (~0,0176 au lieu du
+    vrai prix ESHARE, ~5,84$) en découlait directement, pas seulement l'entrée."""
     from aria_core.services.dexscreener import fetch_token_pairs
 
+    contract_lower = (contract or "").strip().lower()
     pairs = await fetch_token_pairs(contract, chain=chain)
-    if not pairs:
+    own_pairs = [p for p in pairs if (p.base_address or "").lower() == contract_lower]
+    if not own_pairs:
         return None
-    return max(pairs, key=lambda p: p.liquidity_usd)
+    return max(own_pairs, key=lambda p: p.liquidity_usd)
 
 
 async def _default_price_lookup(contract: str, *, chain: str = "base") -> float | None:

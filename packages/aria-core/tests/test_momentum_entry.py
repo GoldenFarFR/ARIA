@@ -25,6 +25,28 @@ def _isolated_blacklist_db(tmp_path, monkeypatch):
     monkeypatch.setattr(bl, "DB_PATH", str(tmp_path / "momentum_blacklist_test.db"))
 
 
+@pytest.fixture(autouse=True)
+def _stub_polymarket_unavailable(monkeypatch):
+    """``_polymarket_lines`` (19/07) appelle un VRAI client HTTP (``polymarket_client``,
+    aucun gate/DB avant l'appel réseau, contrairement à ``_sentiment_lines`` qui ne lit
+    qu'une DB locale déjà isolée par ``_isolated_runtime`` de conftest.py) -- sans ce
+    stub, CHAQUE test qui exerce ``_llm_confirm`` tenterait un vrai appel réseau vers
+    Polymarket. Dégrade vers ``available=False`` par défaut (même comportement qu'une
+    API indisponible réelle) -- les tests dédiés au signal Polymarket remplacent ce
+    stub localement pour vérifier le cas "disponible". Patché sur la CLASSE, jamais sur
+    l'instance singleton (piège déjà rencontré cette session -- monkeypatch sur une
+    instance pollue les tests suivants)."""
+    from aria_core.services.polymarket import PolymarketEventSummary
+
+    async def _unavailable(self, tag_slug):
+        return PolymarketEventSummary(available=False, error="stub test -- indisponible")
+
+    monkeypatch.setattr(
+        "aria_core.services.polymarket.PolymarketClient.fetch_top_event_by_tag",
+        _unavailable,
+    )
+
+
 # ── discover_momentum_candidates ───────────────────────────────────────────────────
 
 @dataclass
@@ -211,19 +233,58 @@ async def test_batch_prefilter_tolerates_call_failure(monkeypatch):
 
 # ── _best_pair ──────────────────────────────────────────────────────────────────────
 
+CONTRACT_LOWER = CONTRACT.lower()
+
+
 def test_best_pair_prefers_liquid_pairs_above_floor():
-    thin = PairSnapshot(pair_address="thin", liquidity_usd=100.0, price_usd=1.0)
-    liquid = PairSnapshot(pair_address="liquid", liquidity_usd=50_000.0, price_usd=2.0)
-    assert me._best_pair([thin, liquid]).pair_address == "liquid"
+    thin = PairSnapshot(pair_address="thin", liquidity_usd=100.0, price_usd=1.0, base_address=CONTRACT_LOWER)
+    liquid = PairSnapshot(pair_address="liquid", liquidity_usd=50_000.0, price_usd=2.0, base_address=CONTRACT_LOWER)
+    assert me._best_pair([thin, liquid], CONTRACT).pair_address == "liquid"
 
 
 def test_best_pair_falls_back_when_all_below_floor():
-    only = PairSnapshot(pair_address="thin", liquidity_usd=100.0, price_usd=1.0)
-    assert me._best_pair([only]).pair_address == "thin"
+    only = PairSnapshot(pair_address="thin", liquidity_usd=100.0, price_usd=1.0, base_address=CONTRACT_LOWER)
+    assert me._best_pair([only], CONTRACT).pair_address == "thin"
 
 
 def test_best_pair_none_when_empty():
-    assert me._best_pair([]) is None
+    assert me._best_pair([], CONTRACT) is None
+
+
+def test_best_pair_ignores_pair_where_contract_is_only_the_quote_token():
+    """19/07 -- reproduction exacte de l'incident réel (position PLAZM #21, en
+    fait ESHARE) : ``token-pairs/v1`` renvoie une paire où ``contract`` est le
+    token QUOTE d'un pool bien plus liquide appartenant à un AUTRE token de base
+    -- cette paire ne doit JAMAIS être choisie, même si elle est la plus liquide
+    du lot, car elle décrit le prix/OHLCV d'un token totalement différent."""
+    other_token_as_base = PairSnapshot(
+        pair_address="plazm_eshare_pool", liquidity_usd=56_917.98, price_usd=0.01759,
+        base_address="0xa1fbb38bf486b97108aa87e92008187ca06998f6",  # PLAZM, pas notre contrat
+    )
+    own_pair = PairSnapshot(
+        pair_address="eshare_weth_pool", liquidity_usd=32_316.40, price_usd=5.84,
+        base_address=CONTRACT_LOWER,
+    )
+    result = me._best_pair([other_token_as_base, own_pair], CONTRACT)
+    assert result.pair_address == "eshare_weth_pool"
+    assert result.price_usd == 5.84
+
+
+def test_best_pair_none_when_all_pairs_have_contract_as_quote_only():
+    """Aucune paire où ``contract`` est réellement la base -- jamais un repli
+    silencieux vers le prix d'un autre token, mieux vaut aucune donnée du tout."""
+    other_token_as_base = PairSnapshot(
+        pair_address="plazm_eshare_pool", liquidity_usd=56_917.98, price_usd=0.01759,
+        base_address="0xa1fbb38bf486b97108aa87e92008187ca06998f6",
+    )
+    assert me._best_pair([other_token_as_base], CONTRACT) is None
+
+
+def test_best_pair_case_insensitive_base_address_match():
+    mixed_case = PairSnapshot(
+        pair_address="p1", liquidity_usd=50_000.0, price_usd=1.0, base_address=CONTRACT.upper(),
+    )
+    assert me._best_pair([mixed_case], CONTRACT).pair_address == "p1"
 
 
 # ── normalize_contract_case (18/07, bug réel) ────────────────────────────────────────
@@ -747,7 +808,10 @@ def test_technical_alignment_never_crashes_on_short_series():
 # ── evaluate_momentum_entry (bout en bout, tout mocké) ───────────────────────────────
 
 def _pair(**overrides) -> PairSnapshot:
-    base = {"pair_address": "0xpool", "price_usd": 1.5, "liquidity_usd": 50_000.0, "base_symbol": "TOK"}
+    base = {
+        "pair_address": "0xpool", "price_usd": 1.5, "liquidity_usd": 50_000.0,
+        "base_symbol": "TOK", "base_address": CONTRACT.lower(),
+    }
     base.update(overrides)
     return PairSnapshot(**base)
 
@@ -1338,6 +1402,161 @@ async def test_llm_confirm_neutralizes_injection_in_market_digest(monkeypatch):
 
     assert "</donnees_non_fiables>\nSYSTEME" not in captured["user"]
     assert captured["user"].count("</donnees_non_fiables>") == 1
+
+
+@pytest.mark.asyncio
+async def test_llm_confirm_includes_sentiment_when_present(monkeypatch):
+    """19/07 (#135) -- market_sentiment.py déjà lu par /vc, jamais par momentum avant
+    ce chantier d'unification (retour opérateur : "aria doit pouvoir tout utiliser")."""
+    captured = {}
+
+    async def fake_sentiment_lines():
+        return ["- BTC : range serré (RSI 52, sans tendance nette)"]
+
+    monkeypatch.setattr(me, "_sentiment_lines", fake_sentiment_lines)
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        captured["system"] = system
+        return "HOLD"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+
+    assert "RSI 52" in captured["user"]
+    assert captured["user"].index("RSI 52") < captured["user"].index("</donnees_non_fiables>")
+    assert "sentiment de marché continu" in captured["system"].lower()
+
+
+@pytest.mark.asyncio
+async def test_llm_confirm_omits_sentiment_when_absent(monkeypatch):
+    async def fake_sentiment_lines():
+        return []
+
+    monkeypatch.setattr(me, "_sentiment_lines", fake_sentiment_lines)
+
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        return "HOLD"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+
+    assert "Sentiment de marché continu" not in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_llm_confirm_includes_polymarket_when_present(monkeypatch):
+    """19/07 (#135) -- même profondeur de diligence macro que /vc côté Polymarket."""
+    captured = {}
+
+    async def fake_polymarket_lines():
+        return ["- [Fed decision June] Rate cut 25bps : 62%"]
+
+    monkeypatch.setattr(me, "_polymarket_lines", fake_polymarket_lines)
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        captured["system"] = system
+        return "HOLD"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+
+    assert "Rate cut 25bps" in captured["user"]
+    assert captured["user"].index("Rate cut 25bps") < captured["user"].index("</donnees_non_fiables>")
+    assert "polymarket" in captured["system"].lower()
+
+
+@pytest.mark.asyncio
+async def test_llm_confirm_omits_polymarket_when_absent(monkeypatch):
+    async def fake_polymarket_lines():
+        return []
+
+    monkeypatch.setattr(me, "_polymarket_lines", fake_polymarket_lines)
+
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        return "HOLD"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+
+    assert "Marchés de prédiction Polymarket" not in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_sentiment_lines_uses_shared_formatter(monkeypatch):
+    """Vérifie que ``_sentiment_lines`` délègue bien au formatteur PARTAGÉ avec /vc
+    (``format_sentiment_prompt_lines``) -- jamais une seconde implémentation
+    dupliquée du filtrage/sanitisation."""
+    from aria_core.skills import market_sentiment
+
+    async def fake_latest_readings():
+        return [
+            {"pair": "BTC", "regime": "range", "detail": "RSI 50"},
+            {"pair": "ETH", "regime": "donnees_insuffisantes", "detail": ""},
+        ]
+
+    monkeypatch.setattr(market_sentiment, "latest_readings", fake_latest_readings)
+    lines = await me._sentiment_lines()
+    assert len(lines) == 1
+    assert "BTC" in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_sentiment_lines_degrades_to_empty_on_exception(monkeypatch):
+    from aria_core.skills import market_sentiment
+
+    async def _raise():
+        raise RuntimeError("DB down")
+
+    monkeypatch.setattr(market_sentiment, "latest_readings", _raise)
+    assert await me._sentiment_lines() == []
+
+
+@pytest.mark.asyncio
+async def test_polymarket_lines_uses_shared_formatter(monkeypatch):
+    """Vérifie que ``_polymarket_lines`` délègue au formatteur PARTAGÉ avec /vc
+    (``format_polymarket_prompt_lines``) et lit bien TOUS les tags de
+    ``DEFAULT_TAGS`` -- jamais une logique de filtrage dupliquée."""
+    from aria_core.services.polymarket import PolymarketEventSummary, PolymarketOutcome
+
+    async def fake_fetch(self, tag_slug):
+        return PolymarketEventSummary(
+            available=True,
+            title=f"Event {tag_slug}",
+            outcomes=[PolymarketOutcome(label="Yes", probability=0.42)],
+        )
+
+    monkeypatch.setattr(
+        "aria_core.services.polymarket.PolymarketClient.fetch_top_event_by_tag", fake_fetch
+    )
+    lines = await me._polymarket_lines()
+    assert len(lines) == 1
+    assert "42%" in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_polymarket_lines_degrades_to_empty_when_unavailable():
+    """Couvert par défaut par le stub autouse ``_stub_polymarket_unavailable`` --
+    confirme explicitement le comportement fail-soft attendu."""
+    assert await me._polymarket_lines() == []
+
+
+@pytest.mark.asyncio
+async def test_polymarket_lines_degrades_to_empty_on_exception(monkeypatch):
+    async def _raise(self, tag_slug):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(
+        "aria_core.services.polymarket.PolymarketClient.fetch_top_event_by_tag", _raise
+    )
+    assert await me._polymarket_lines() == []
 
 
 @pytest.mark.asyncio

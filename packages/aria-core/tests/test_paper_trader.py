@@ -764,7 +764,7 @@ async def test_default_price_lookup_uses_chain_aware_dexscreener(monkeypatch):
 
     async def fake_fetch_token_pairs(contract, *, chain="base"):
         seen["chain"] = chain
-        return [PairSnapshot(pair_address="p", price_usd=3.5, liquidity_usd=10_000.0)]
+        return [PairSnapshot(pair_address="p", price_usd=3.5, liquidity_usd=10_000.0, base_address=A)]
 
     monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", fake_fetch_token_pairs)
     price = await pt._default_price_lookup(A, chain="solana")
@@ -786,12 +786,55 @@ async def test_run_cycle_prices_open_position_with_its_own_chain(tmp_db, monkeyp
 
     async def fake_fetch_token_pairs(contract, *, chain="base"):
         seen_chains.append(chain)
-        return [PairSnapshot(pair_address="p", price_usd=1.0, liquidity_usd=10_000.0)]
+        return [PairSnapshot(pair_address="p", price_usd=1.0, liquidity_usd=10_000.0, base_address=A)]
 
     monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", fake_fetch_token_pairs)
     await pt.run_paper_cycle(candidates=[])
 
     assert "solana" in seen_chains
+
+
+@pytest.mark.asyncio
+async def test_default_pair_lookup_ignores_pair_where_contract_is_only_quote(monkeypatch):
+    """19/07 -- même correctif que ``momentum_entry._best_pair`` (reproduction de
+    l'incident réel PLAZM #21, en fait ESHARE) : ``fetch_token_pairs`` peut renvoyer
+    une paire où ``contract`` est le token QUOTE d'un pool bien plus liquide
+    appartenant à un AUTRE token de base -- cette fonction alimente le suivi
+    périodique Telegram des positions ouvertes, elle ne doit JAMAIS retourner le
+    prix d'un token différent de celui réellement détenu."""
+    from aria_core.services.dexscreener import PairSnapshot
+
+    other_token_as_base = PairSnapshot(
+        pair_address="other_pool", price_usd=0.01759, liquidity_usd=56_917.98,
+        base_address="0xa1fbb38bf486b97108aa87e92008187ca06998f6",
+    )
+    own_pair = PairSnapshot(
+        pair_address="own_pool", price_usd=5.84, liquidity_usd=32_316.40, base_address=A,
+    )
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        return [other_token_as_base, own_pair]
+
+    monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", fake_fetch_token_pairs)
+    result = await pt._default_pair_lookup(A)
+    assert result.pair_address == "own_pool"
+    assert result.price_usd == 5.84
+
+
+@pytest.mark.asyncio
+async def test_default_pair_lookup_none_when_contract_never_the_base(monkeypatch):
+    from aria_core.services.dexscreener import PairSnapshot
+
+    other_token_as_base = PairSnapshot(
+        pair_address="other_pool", price_usd=0.01759, liquidity_usd=56_917.98,
+        base_address="0xa1fbb38bf486b97108aa87e92008187ca06998f6",
+    )
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        return [other_token_as_base]
+
+    monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", fake_fetch_token_pairs)
+    assert await pt._default_pair_lookup(A) is None
 
 
 @pytest.mark.asyncio

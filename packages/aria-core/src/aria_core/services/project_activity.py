@@ -84,47 +84,23 @@ async def _fetch_github(path: str) -> object | None:
     return r.json()
 
 
-def github_url_from_links(links: list[dict] | None) -> str | None:
-    """Trouve l'URL GitHub officielle dans les liens projet extraits au scan."""
-    for link in links or []:
-        url = str((link or {}).get("url") or "")
-        if "github.com" in url.lower() and parse_github_repo(url):
-            return url
-    return None
-
-
-# Domaines sociaux/dev connus -- jamais le "site" du projet lui-même, donc exclus
-# de la recherche du site officiel ci-dessous.
-_NON_WEBSITE_DOMAINS = (
-    "github.com", "twitter.com", "x.com", "t.me", "telegram.me",
-    "discord.gg", "discord.com", "medium.com", "youtube.com", "youtu.be",
-    "instagram.com", "tiktok.com", "reddit.com", "warpcast.com", "farcaster.xyz",
-)
-
-
-def website_url_from_links(links: list[dict] | None) -> str | None:
-    """Premier lien qui n'est PAS un réseau social/dev connu -- heuristique simple
-    pour retrouver le site officiel du projet parmi les liens DexScreener
-    (`info.websites` + `info.socials`, jamais distingués autrement en amont)."""
-    for link in links or []:
-        url = str((link or {}).get("url") or "").strip()
-        if not url:
-            continue
-        low = url.lower()
-        if any(domain in low for domain in _NON_WEBSITE_DOMAINS):
-            continue
-        return url
-    return None
-
-
 async def fetch_github_diligence_snapshot(
     repo_url: str | None, *, fetch=None, now: datetime | None = None
 ) -> dict | None:
     """Instantané GitHub pour la diligence produit pré-investissement (description,
-    étoiles, issues ouvertes, fraîcheur) -- même client/doctrine que
+    étoiles, issues ouvertes, fraîcheur, âge) -- même client/doctrine que
     ``github_days_since_commit`` (best-effort, jamais bloquant, ``fetch`` injectable
     pour les tests). Distinct de ce dernier : lit `/repos/{owner}/{repo}` (métadonnées),
-    pas `/commits` (historique)."""
+    pas `/commits` (historique).
+
+    19/07 -- source CANONIQUE unique pour le contenu GitHub, consommée par
+    ``conviction_research.py`` (via ``_describe_other_known_link``) -- lui-même
+    la source canonique unique de diligence de conviction pour LES DEUX
+    pipelines (``vc_analysis.py``/`/vc` ET ``momentum_entry.py``, #134). Un
+    doublon (``services/github_verify.py``) avait été construit par erreur le
+    même soir avant que ce module pré-existant ne soit découvert ; retiré au
+    profit de celui-ci plutôt que de laisser deux clients sur le même
+    endpoint (doctrine « jamais dupliquer un client existant »)."""
     parsed = parse_github_repo(repo_url)
     if not parsed:
         return None
@@ -138,11 +114,38 @@ async def fetch_github_diligence_snapshot(
     if not isinstance(data, dict) or "id" not in data:
         return None
     pushed_at = data.get("pushed_at") or data.get("updated_at")
+    created_at = data.get("created_at")
     return {
         "description": str(data.get("description") or "")[:200],
         "stars": data.get("stargazers_count"),
         "open_issues": data.get("open_issues_count"),
         "days_since_push": _days_since(pushed_at, now=now) if pushed_at else None,
+        "age_days": _days_since(created_at, now=now) if created_at else None,
         "archived": bool(data.get("archived")),
         "fork": bool(data.get("fork")),
     }
+
+
+def format_github_diligence(snapshot: dict | None) -> str:
+    """Ligne courte pour contexte LLM (19/07) -- jamais un fait fabriqué : dégrade
+    honnêtement si ``snapshot`` est ``None`` (dépôt introuvable OU vérification
+    indisponible -- ``fetch_github_diligence_snapshot`` ne distingue pas les deux,
+    contrairement à l'ancien ``github_verify.py`` retiré -- accepté comme
+    simplification mineure au profit d'un client unique déjà éprouvé/consommé par
+    3 autres modules, plutôt que d'étendre un client partagé pour une seule nuance)."""
+    if not snapshot:
+        return "vérification indisponible ou dépôt introuvable"
+    parts = []
+    if snapshot.get("age_days") is not None:
+        parts.append(f"créé il y a {snapshot['age_days']}j")
+    if snapshot.get("days_since_push") is not None:
+        parts.append(f"dernière activité il y a {snapshot['days_since_push']}j")
+    if snapshot.get("stars") is not None:
+        parts.append(f"{snapshot['stars']} étoiles")
+    if snapshot.get("open_issues") is not None:
+        parts.append(f"{snapshot['open_issues']} issues ouvertes")
+    if snapshot.get("fork"):
+        parts.append("fork (pas un dépôt original)")
+    if snapshot.get("archived"):
+        parts.append("ARCHIVÉ")
+    return ", ".join(parts) if parts else "dépôt trouvé, détails indisponibles"

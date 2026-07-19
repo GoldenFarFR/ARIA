@@ -8,9 +8,7 @@ import pytest
 from aria_core.services.project_activity import (
     fetch_github_diligence_snapshot,
     github_days_since_commit,
-    github_url_from_links,
     parse_github_repo,
-    website_url_from_links,
 )
 
 NOW = datetime(2026, 7, 7, tzinfo=timezone.utc)
@@ -22,12 +20,6 @@ def test_parse_github_repo_variants():
     assert parse_github_repo("http://github.com/foo/bar/tree/main") == ("foo", "bar")
     assert parse_github_repo("https://x.com/foo") is None
     assert parse_github_repo(None) is None
-
-
-def test_github_url_from_links():
-    links = [{"url": "https://x.com/proj"}, {"url": "https://github.com/o/r"}]
-    assert github_url_from_links(links) == "https://github.com/o/r"
-    assert github_url_from_links([{"url": "https://t.me/x"}]) is None
 
 
 @pytest.mark.asyncio
@@ -64,22 +56,10 @@ async def test_fetch_failure_degrades():
     assert await github_days_since_commit("https://github.com/o/r", fetch=fetch) is None
 
 
-# ── Diligence produit (site + GitHub, 10/07) ──────────────────────
-
-def test_website_url_from_links_skips_socials_and_github():
-    links = [
-        {"url": "https://x.com/proj"},
-        {"url": "https://t.me/proj"},
-        {"url": "https://myproject.xyz"},
-        {"url": "https://github.com/o/r"},
-    ]
-    assert website_url_from_links(links) == "https://myproject.xyz"
-
-
-def test_website_url_from_links_none_when_only_socials():
-    links = [{"url": "https://x.com/proj"}, {"url": "https://discord.gg/proj"}]
-    assert website_url_from_links(links) is None
-
+# ── Diligence produit (GitHub, 10/07) ──────────────────────
+# (le site officiel/website_url_from_links a été retiré le 19/07, #134 --
+# conviction_research.py couvre désormais le site officiel pour les deux
+# pipelines via known_links, jamais dupliqué ici.)
 
 @pytest.mark.asyncio
 async def test_github_diligence_snapshot_returns_structured_facts():
@@ -95,8 +75,26 @@ async def test_github_diligence_snapshot_returns_structured_facts():
     )
     assert snap == {
         "description": "A cool repo", "stars": 42, "open_issues": 3,
-        "days_since_push": 6, "archived": False, "fork": False,
+        "days_since_push": 6, "archived": False, "fork": False, "age_days": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_github_diligence_snapshot_computes_age_from_created_at():
+    """19/07 -- age_days ajouté (consolidation avec l'ancien github_verify.py,
+    doublon retiré) : réutilise le MÊME appel /repos/{owner}/{repo} déjà fait,
+    aucun coût réseau supplémentaire."""
+    async def fetch(path):
+        return {
+            "id": 1, "description": "", "stargazers_count": 0, "open_issues_count": 0,
+            "pushed_at": "2026-07-01T00:00:00Z", "created_at": "2026-02-01T00:00:00Z",
+            "archived": False, "fork": False,
+        }
+
+    snap = await fetch_github_diligence_snapshot(
+        "https://github.com/o/r", fetch=fetch, now=NOW
+    )
+    assert snap["age_days"] is not None and snap["age_days"] > 0
 
 
 @pytest.mark.asyncio
