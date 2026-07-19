@@ -1971,6 +1971,73 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   pour une session de dev** : auditer le SDK CDP pour confirmer l'absence d'allowance
   illimitée, et évaluer l'ajout d'une simulation pré-signature — capital réel déjà
   engagé, deux couches de défense concrètes et non redondantes avec l'existant.
+- **19/07 (suite) — plancher de liquidité momentum relevé 5k$ -> 100k$ + vrai rejet
+  dur ajouté (décision opérateur explicite, anti-scam : "liquidité minimum c 100k je
+  veut eviter a aria de se faire scam, meme si tout est ok en dessous il peut y avoir
+  x ou y risques") — DÉPLOYÉ ET VÉRIFIÉ (`63a0d825`).** Trou réel trouvé en
+  répondant à la question opérateur « explique le processus complet » : `_MIN_
+  LIQUIDITY_USD` (`momentum_entry.py`) ne servait QUE de préférence à la découverte
+  (pré-filtre par lot) et à la sélection de la meilleure paire (`_best_pair`) --
+  AUCUN rejet dur n'existait réellement dans `evaluate_momentum_entry` si un token
+  sous le plancher passait quand même (candidat absent de la réponse batch, ou
+  pré-filtre jamais appliqué) : un honeypot clear + R/R correct sur un pool à 6 000$
+  de liquidité pouvait être acheté sans qu'aucun garde-fou ne s'y oppose. Corrigé par
+  un nouveau rejet dur explicite (`hold_reason="insufficient_liquidity"`), positionné
+  juste après la résolution de la meilleure paire -- avant même le ratio wash-trading
+  et le plafond parabolique -- SYSTÉMATIQUE, jamais contournable même si honeypot/
+  R-R/alignement sont par ailleurs tous propres. Une liquidité inconnue (`None`/0) est
+  traitée comme insuffisante, jamais comme "OK par défaut". Constante relevée 5 000$
+  -> 100 000$ (même valeur, un seul SSOT réutilisé par le pré-filtre de découverte ET
+  le nouveau gate). Fixtures de tests mises à jour (défaut `_pair()` 50k -> 150k, 2
+  tests `_batch_liquidity_prefilter` bump à 150k) + 3 nouveaux tests dédiés au gate.
+  Suite complète verte (6140 passed, mêmes 7 échecs pré-existants sans rapport #142),
+  `test_coherence.py` vert (81 passed).
+- **19/07 (suite) — revue croisée Gemini sur le pipeline momentum, relayée par
+  l'opérateur : 3 vrais points confirmés (2 déjà couverts par le correctif
+  ci-dessus + le sizing conscient de la cadence hebdo déjà existant, 2 nouveaux
+  trous réels non couverts), 1 erreur factuelle corrigée (sourcée), plusieurs
+  points déjà des arbitrages opérateur assumés, pas des oublis.** Méthode
+  identique aux revues croisées précédentes (Gemini/ChatGPT/DeepSeek sur le
+  wallet-scoring, 15/07) : chaque point vérifié contre le vrai code avant
+  d'accepter ou de réfuter. **2 vrais trous NON couverts, confirmés par grep
+  exhaustif, PAS encore construits (en attente du "go" opérateur)** : (1)
+  aucune fonction du pipeline (`risk_guard.py`/`paper_trader.py`/
+  `paper_trader_risk.py`) ne plafonne une position en % de la LIQUIDITÉ DU
+  POOL ciblé (seul un plancher absolu existe, `_MIN_LIQUIDITY_USD`) -- avec le
+  plancher à 100k$, un palier « fort » (50k$, 5% du capital de départ) sur un
+  pool qui vient tout juste de passer le seuil représenterait la moitié de sa
+  liquidité totale, un price impact que le paper-trading ne modélise jamais ;
+  (2) le stop suiveur (`TRAIL_STOP_PCT=15%`, `paper_trader.py`) est un
+  pourcentage FIXE identique pour tous les tokens -- confirmé par grep qu'AUCUN
+  calcul d'ATR (Average True Range) n'existe nulle part dans le codebase,
+  aucune prise en compte de la volatilité réelle du token dans la largeur du
+  stop. **1 erreur factuelle corrigée** : Gemini juge la mention de la chaîne
+  "Robinhood" aux côtés de Base/Solana incohérente avec un scan de pools
+  décentralisés, en confondant avec l'app de courtage centralisée -- vérifié
+  par recherche web sourcée (`docs.robinhood.com/chain/`, lancement
+  01/07/2026) : "Robinhood" ici est **Robinhood Chain**, une vraie blockchain
+  L2 EVM (Arbitrum Orbit, chainId 4663) permissionless pour actifs
+  tokenisés/RWA -- déjà vérifiée par un appel API réel avant intégration le
+  15/07, pas une confusion de code. **Points déjà des arbitrages opérateur
+  assumés, pas des oublis** : le filtre "moyen terme" que Gemini attend est
+  celui de la poche VC 85% (`safety_screen`/`screened_pool`, intacte, jamais
+  touchée par ce pipeline) -- ce pipeline EST la poche trading 15%, et pour ce
+  test précis l'opérateur a explicitement basculé 100% du capital dessus le
+  15/07 (#194) ; le plafond +200%/24h (cas TSG, 17/07) est une décision
+  explicite ("je préfère que ARIA passe à côté si il y a un doute"), pas une
+  rigidité non voulue ; la fraîcheur des tokens scannés (vs. un historique
+  éprouvé) est le choix délibéré "être là avant tout le monde" (15/07), pas un
+  oubli de filtre d'âge. **Déjà couvert** : l'injection de prompt via contenu
+  social (site/X/Farcaster/Telegram) est activement défendue
+  (`sanitize_untrusted_text` + balises `<donnees_non_fiables>`, mandat #192) --
+  une fuite précise a même été trouvée et corrigée dans ce même pipeline plus
+  tôt le 19/07 (URL "Site officiel" non sanitisée dans `process_trail`). Le
+  "mirage du buzz" (bots d'engagement) reste un vrai point, déjà documenté
+  comme limite structurelle connue et non résolue ailleurs dans le projet
+  (wallet-scoring, 15/07) -- pas une découverte nouvelle. **Décision à
+  prendre** : construire les 2 trous confirmés (plafond position/liquidité du
+  pool, stop suiveur adaptatif à la volatilité) -- proposé à l'opérateur,
+  réponse en attente.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
