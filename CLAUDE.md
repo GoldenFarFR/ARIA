@@ -3172,6 +3172,39 @@ et corrigé au passage — TOUT DÉPLOYÉ ET VÉRIFIÉ (`9062f0a7`).**
   `test_proactive*` pré-existants) — jugé suffisant plutôt que d'insister sur un run
   redondant bloqué sur autre chose. Déployé et vérifié via nginx (pas juste le port direct).
 
+**19/07 (suite) — x402scan.com (Merit Systems) exploré + `twit.sh` trouvé et validé en
+conditions réelles, RÉPONSE FORTE à la question opérateur initiale sur x402/lecture X —
+RECHERCHE SEULEMENT, RIEN CÂBLÉ EN PROD.** Liens partagés par l'opérateur (captures
+`x402scan.com/marché`+`/découvrir`, `x402scan.com/resources`, `github.com/Merit-
+Systems/x402scan`, `docs.cdp.coinbase.com/x402/quickstart-for-buyers`).
+- **x402scan.com vérifié légitime mais pas exploitable comme source de données** : dépôt
+  GitHub réel et actif (361★, 260 forks, mis à jour la veille, licence Apache 2.0) — un
+  explorateur d'écosystème x402 (frontend Next.js + service de synchronisation propre,
+  PAS une API publique documentée pour consommation externe). Riche pour la découverte
+  visuelle par l'opérateur, rien à construire dessus côté ARIA (déjà couvert par
+  `services/x402_bazaar.py`, l'API officielle Coinbase).
+- **`twit.sh` (repéré dans les captures x402scan, 667$ volume/24h) — testé et VALIDÉ en
+  conditions réelles, 2 paiements réels réussis** : `x402.twit.sh/tweets/search`
+  (0,006$/appel) a retourné un vrai tweet récent (quelques heures) avec un schéma JSON
+  **compatible X API v2** (id/text/created_at/author/public_metrics/entities) — et surtout,
+  c'est le service X du Bazaar le PLUS UTILISÉ de tout l'écosystème par une marge énorme :
+  **91 520 appels sur 30 jours**, très loin devant tout ce qui a été testé la nuit
+  précédente (ottoai 32, glim.sh listing périmé/404, sociavault format non supporté).
+  `x402.twit.sh/tweets/user` (0,01$/appel, cadence de publication) testé aussi — paiement
+  réussi mais résultat vide sur le handle testé, pas creusé plus loin (signal suffisant
+  déjà obtenu via `tweets/search`, le besoin principal). GET simple + `queryParams`
+  (`words`/`from`/`minLikes`/etc.), directement compatible avec `x402_executor.
+  fetch_paid_resource` existant (contrairement à `sociavault`, qui exige un corps JSON
+  sur GET, non supporté aujourd'hui). Total dépensé cette nuit sur les tests de qualité
+  x402 (lionx402/ottoai/glim.sh/twit.sh) : 0,047$/5$ hebdomadaire, marge 4,953$.
+- **Répond directement à la question opérateur du début de session** ("x402 propose une
+  lecture sur x ? car lapi coute vraiment chere pour sa") : OUI, concrètement, via
+  `twit.sh` — 0,006-0,01$/appel contre le coût de l'API X officielle jamais vérifié mais
+  notoirement cher, et déjà couvert par le plafond `x402_budget.py` existant (5$/semaine).
+  **Décision opérateur nécessaire (#111)** : câbler `twit.sh` dans `conviction_research.py`
+  en remplacement ou en complément de `aria_core.gateway.x_twitter` (API X officielle,
+  `x_research_budget.py`, 100 req/semaine) — rien câblé ce soir, juste validé.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
