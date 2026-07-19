@@ -1422,6 +1422,118 @@ async def _handle_public_message(update: Update, text: str) -> None:
     await _reply(message, response.reply)
 
 
+# ── Routage langage naturel -> commandes en lecture seule (18/07, #213) ──────────────
+#
+# Demande opérateur explicite : "si je demande a aria pour lui demander sa watchlist
+# elle lance elle meme /watchlist et pareil pour les autres [...] la liste des / elle
+# me la donne comme toi au dessus". Scope validé ("1. ok") : SEULEMENT des commandes
+# en LECTURE SEULE, sans paramètre requis -- jamais une commande qui écrit/dépense/
+# publie (/these, /issue, /canal, /x, /stop...) ni qui prend une adresse en paramètre
+# libre (/vc, /scan, /walletscore -- une reformulation mal comprise ne doit jamais
+# mal-interpréter un contrat). Câblé UNIQUEMENT ici, dans _handle_message, APRÈS le
+# garde admin (ligne ~1434 ci-dessous) -- jamais dans aria_core.brain.process(),
+# partagé avec la surface publique du site : ces 7 commandes sont des outils internes
+# opérateur, aucun sens pour un visiteur, aucun risque de fuite même mal câblé puisque
+# ce fichier garantit déjà qu'un non-admin ne dépasse jamais la ligne 1434.
+#
+# /qi et /level NE sont PAS dans ce registre : déjà couverts par un mécanisme distinct
+# et préexistant (brain.py::detect_intent -> capability_skill.wants_capability ->
+# execute_capability), qui route déjà le texte libre en production. /status différé
+# (aucun agrégateur réutilisable existant -- toute la logique est inline dans
+# _handle_status, ~64 lignes ; extraction = chantier séparé, pas fait ce soir).
+#
+# Zéro appel LLM, déterministe -- même doctrine que grounding.py (is_why_not_bought_
+# question et consorts) : un détecteur regex spécifique par intention, jamais un mot
+# générique isolé qui risquerait un faux positif sur une conversation normale.
+
+_NL_WATCHLIST_RE = re.compile(
+    r"\b(ta|ton|la)\s+watchlist\b|candidats?\s+(que\s+tu\s+)?surveilles?\b|"
+    r"liste\s+de\s+surveillance\b|contrats?\s+(que\s+tu\s+)?suis\b",
+    re.IGNORECASE,
+)
+_NL_FEUVERT_RE = re.compile(
+    r"\bfeu\s*vert\b|\bscorecard\b|\b8\s+cases\b|"
+    r"pr[êe]te?\s+pour\s+l['’]argent\s+r[ée]el\b",
+    re.IGNORECASE,
+)
+_NL_SENTIMENT_RE = re.compile(
+    r"sentiment\s+(du\s+|de\s+)?march[ée]\b|r[ée]gime\s+de\s+march[ée]\b",
+    re.IGNORECASE,
+)
+_NL_TRACK_RE = re.compile(
+    r"track[\s-]?record\b|ta\s+pertinence\b|ton\s+hit-rate\b|ton\s+taux\s+de\s+r[ée]ussite\b",
+    re.IGNORECASE,
+)
+_NL_AGENTWALLET_RE = re.compile(
+    r"solde\s+du\s+wallet\s+agent\b|wallet\s+agent\b.{0,20}\bsolde\b|"
+    r"combien\s+(a|il\s+y\s+a)\s+(le\s+|ton\s+|dans\s+le\s+)?wallet\s+agent\b",
+    re.IGNORECASE,
+)
+_NL_LEDGER_RE = re.compile(
+    r"d[ée]tail\s+(des\s+|par\s+)?positions?\b|registre\s+des\s+trades?\b|"
+    r"d[ée]tail\s+du\s+paper[\s-]?trading\b",
+    re.IGNORECASE,
+)
+_NL_COMMANDS_LIST_RE = re.compile(
+    r"liste\s+(de\s+)?tes\s+commandes\b|quelles\s+commandes\s+as-tu\b|"
+    r"liste\s+des\s+(slash|/)\b|tous?\s+tes\s+slash\b|"
+    r"envoie.{0,20}liste\s+des\s+/",
+    re.IGNORECASE,
+)
+
+
+def _format_commands_list_reply() -> str:
+    """Liste réelle des commandes -- lit TELEGRAM_MENU_COMMANDS (source unique
+    partagée avec le menu Telegram natif, jamais une 2e liste qui pourrait
+    diverger)."""
+    lines = [f"{len(TELEGRAM_MENU_COMMANDS)} commandes réelles (triées a-z) :", ""]
+    for name, desc in TELEGRAM_MENU_COMMANDS:
+        lines.append(f"/{name} — {desc}")
+    return "\n".join(lines)
+
+
+async def _try_nl_readonly_command(text: str) -> str | None:
+    """Détecte une question en langage naturel qui correspond à l'une des
+    commandes en lecture seule ci-dessus, et renvoie la VRAIE réponse
+    (identique à ce que produirait la commande slash) -- ``None`` si aucune
+    ne correspond, laisse alors le message tomber dans le reste du pipeline.
+
+    Vérifié dans l'ordre déclaré -- pas de recouvrement attendu entre ces
+    regex (chacune cible un vocabulaire distinct), mais l'ordre garde un
+    comportement déterministe si jamais deux matchaient un jour."""
+    if _NL_COMMANDS_LIST_RE.search(text):
+        return _format_commands_list_reply()
+    if _NL_WATCHLIST_RE.search(text):
+        from aria_core.skills.candidate_ranking import format_watchlist_report
+
+        return await format_watchlist_report()
+    if _NL_FEUVERT_RE.search(text):
+        from aria_core.skills.real_money_readiness import (
+            compute_readiness_scorecard,
+            format_readiness_report,
+        )
+
+        return format_readiness_report(await compute_readiness_scorecard())
+    if _NL_SENTIMENT_RE.search(text):
+        from aria_core.skills.market_sentiment import format_sentiment_report, latest_readings
+
+        return format_sentiment_report(await latest_readings())
+    if _NL_TRACK_RE.search(text):
+        from aria_core import vc_predictions
+
+        return await vc_predictions.format_track_report()
+    if _NL_AGENTWALLET_RE.search(text):
+        from aria_core.agent_wallet_monitor import format_wallet_balance_summary, get_wallet_balance_summary
+
+        return format_wallet_balance_summary(await get_wallet_balance_summary())
+    if _NL_LEDGER_RE.search(text):
+        from aria_core.paper_ledger_report import build_report
+
+        report_text, _machine = await build_report(closed_limit=10)
+        return report_text
+    return None
+
+
 async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
     if not message or not message.text:
@@ -1433,6 +1545,11 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if not user or not is_admin(user.id):
         await _handle_public_message(update, text)
+        return
+
+    nl_reply = await _try_nl_readonly_command(text)
+    if nl_reply is not None:
+        await _reply(message, nl_reply)
         return
 
     if re.match(r"^@claude\b", text, re.IGNORECASE):
@@ -1768,6 +1885,50 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
 
+# Source unique des commandes réelles d'ARIA -- triée alphabétiquement (18/07,
+# cf. docstring de _register_bot_commands ci-dessous pour le pourquoi). Extraite
+# en constante (18/07, #213) pour être réutilisable ailleurs que le menu Telegram
+# -- ex. répondre "quelles commandes as-tu" en langage naturel avec la MÊME
+# liste, jamais une seconde copie qui pourrait diverger (cf. _nl_command_router.py).
+TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
+    ("agentwallet", "Solde réel du wallet agent CDP (USDC + ETH gas)"),
+    ("api", "Inventaire de toutes les API (URL, configurée, quota en direct)"),
+    ("avatar", "Photo de profil ARIA (identity, scene, style, apply)"),
+    ("calibrate", "Calibre une affirmation (vrai/faux/incertain)"),
+    ("canal", "Contrôle du canal ARIA → Claude Code"),
+    ("cycles", "Les 3 derniers cycles Bitcoin (macro)"),
+    ("experiment", "Crée un sandbox d'expérimentation GitHub"),
+    ("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
+    ("feuvert", "Scorecard avant argent réel (8 cases)"),
+    ("github", "Réparer/éditer une réponse showcase PR"),
+    ("handles", "Registre des handles X (add/remove/alias/pack)"),
+    ("issue", "Clôture une thèse avec son résultat"),
+    ("langue", "Langue des analyses (fr/en)"),
+    ("learn", "Ajoute une leçon manuelle (topic | contenu)"),
+    ("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
+    ("level", "Niveaux/paliers de compétence ARIA"),
+    ("qi", "QI actuel d'ARIA (capacités)"),
+    ("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
+    ("resume", "▶️ Reprendre les actions sortantes"),
+    ("scan", "Scan rapide de risque on-chain d'un contrat"),
+    ("sentiment", "Dernière lecture de sentiment marché"),
+    ("start", "Message de bienvenue / lever la pause"),
+    ("status", "État système (santé, capacités actives)"),
+    ("stop", "⏸ Pause immédiate des actions sortantes (kill-switch)"),
+    ("test_spend", "Test wallet_guard (aucune dépense réelle)"),
+    ("these", "Journalise une thèse (BUY/WATCH/SELL/AVOID)"),
+    ("theses", "Liste des thèses encore ouvertes"),
+    ("track", "Pertinence du track-record (hit-rate, calibration)"),
+    ("vc", "Analyse VC complète d'un contrat"),
+    ("vcresult", "Attribue un résultat réel à une prédiction VC"),
+    ("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
+    ("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
+    ("watchlist", "Top candidats du pool screené"),
+    ("whoami", "Ton identité/rôle Telegram (ID, admin ou non)"),
+    ("x", "Statut/profil/publication X (status, profile, compose, post)"),
+]
+
+
 async def _register_bot_commands() -> None:
     """Enregistre le menu / visible dans Telegram (bouton Menu du bot).
 
@@ -1793,43 +1954,7 @@ async def _register_bot_commands() -> None:
         return
     from telegram import BotCommand
 
-    commands = [
-        BotCommand("agentwallet", "Solde réel du wallet agent CDP (USDC + ETH gas)"),
-        BotCommand("api", "Inventaire de toutes les API (URL, configurée, quota en direct)"),
-        BotCommand("avatar", "Photo de profil ARIA (identity, scene, style, apply)"),
-        BotCommand("calibrate", "Calibre une affirmation (vrai/faux/incertain)"),
-        BotCommand("canal", "Contrôle du canal ARIA → Claude Code"),
-        BotCommand("cycles", "Les 3 derniers cycles Bitcoin (macro)"),
-        BotCommand("experiment", "Crée un sandbox d'expérimentation GitHub"),
-        BotCommand("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
-        BotCommand("feuvert", "Scorecard avant argent réel (8 cases)"),
-        BotCommand("github", "Réparer/éditer une réponse showcase PR"),
-        BotCommand("handles", "Registre des handles X (add/remove/alias/pack)"),
-        BotCommand("issue", "Clôture une thèse avec son résultat"),
-        BotCommand("langue", "Langue des analyses (fr/en)"),
-        BotCommand("learn", "Ajoute une leçon manuelle (topic | contenu)"),
-        BotCommand("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
-        BotCommand("level", "Niveaux/paliers de compétence ARIA"),
-        BotCommand("qi", "QI actuel d'ARIA (capacités)"),
-        BotCommand("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
-        BotCommand("resume", "▶️ Reprendre les actions sortantes"),
-        BotCommand("scan", "Scan rapide de risque on-chain d'un contrat"),
-        BotCommand("sentiment", "Dernière lecture de sentiment marché"),
-        BotCommand("start", "Message de bienvenue / lever la pause"),
-        BotCommand("status", "État système (santé, capacités actives)"),
-        BotCommand("stop", "⏸ Pause immédiate des actions sortantes (kill-switch)"),
-        BotCommand("test_spend", "Test wallet_guard (aucune dépense réelle)"),
-        BotCommand("these", "Journalise une thèse (BUY/WATCH/SELL/AVOID)"),
-        BotCommand("theses", "Liste des thèses encore ouvertes"),
-        BotCommand("track", "Pertinence du track-record (hit-rate, calibration)"),
-        BotCommand("vc", "Analyse VC complète d'un contrat"),
-        BotCommand("vcresult", "Attribue un résultat réel à une prédiction VC"),
-        BotCommand("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
-        BotCommand("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
-        BotCommand("watchlist", "Top candidats du pool screené"),
-        BotCommand("whoami", "Ton identité/rôle Telegram (ID, admin ou non)"),
-        BotCommand("x", "Statut/profil/publication X (status, profile, compose, post)"),
-    ]
+    commands = [BotCommand(name, desc) for name, desc in TELEGRAM_MENU_COMMANDS]
     await _bot_app.bot.set_my_commands(commands)
     logger.info("Telegram command menu registered (%d commands)", len(commands))
 
@@ -2398,29 +2523,7 @@ async def _handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     from aria_core import vc_predictions
 
-    m = await vc_predictions.metrics()
-    if m["total"] == 0:
-        await _reply(message, "Aucune prédiction enregistrée. Lance des analyses avec /vc.")
-        return
-
-    lines = [
-        "📈 Pertinence ARIA — track record VC",
-        f"Prédictions : {m['total']} ({m['closed']} clôturées, {m['open']} ouvertes)",
-    ]
-    if m["hit_rate"] is not None:
-        lines.append(f"Hit-rate BUY : {m['hit_rate']:.0%} sur {m['buy_count']} BUY clôturés")
-        lines.append(f"P&L moyen BUY : {m['avg_pnl_buy']:+.1f}%")
-    else:
-        lines.append("Pas encore de BUY clôturé — clôture avec /vcresult pour mesurer.")
-
-    if m["calibration"]:
-        lines.append("")
-        lines.append("Calibration (Potentiel → P&L moyen réel) :")
-        for b in m["calibration"]:
-            lines.append(f"  {b['bucket']}/10 : {b['avg_pnl']:+.1f}% (n={b['count']})")
-        lines.append("Idéal : le P&L croît avec le potentiel.")
-
-    await _reply(message, "\n".join(lines))
+    await _reply(message, await vc_predictions.format_track_report())
 
 
 async def _handle_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2442,27 +2545,9 @@ async def _handle_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except ValueError:
         n = 10
 
-    from aria_core.skills.candidate_ranking import top_candidates
+    from aria_core.skills.candidate_ranking import format_watchlist_report
 
-    tops = await top_candidates(n)
-    if not tops:
-        await _reply(
-            message,
-            "Pool de surveillance vide pour l'instant — aucun contrat suivi actuellement.",
-        )
-        return
-
-    lines = [f"👀 Contrats suivis de près ({len(tops)}/{n} demandés) :", ""]
-    for i, c in enumerate(tops, start=1):
-        name = c.symbol or f"{c.contract[:6]}…{c.contract[-4:]}"
-        lines.append(
-            f"{i}. {name} — score {c.rank_score:.0f} · sécurité {c.security_score} · "
-            f"liq ${c.liquidity_usd:,.0f} · {c.verdict}"
-        )
-        lines.append(f"   {c.contract}")
-    lines.append("")
-    lines.append("Classement de priorité (jamais un ordre) — analyse complète : /vc <adresse>")
-    await _reply(message, "\n".join(lines))
+    await _reply(message, await format_watchlist_report(n))
 
 
 async def _handle_cycles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

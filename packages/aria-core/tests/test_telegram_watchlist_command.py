@@ -82,7 +82,7 @@ async def test_watchlist_lists_ranked_candidates(monkeypatch):
     update = FakeUpdate("/watchlist")
     await telegram_bot._handle_watchlist(update, FakeContext())
 
-    top_mock.assert_awaited_once_with(10)
+    top_mock.assert_awaited_once_with(10, lister=None)
     reply = update.message.replies[0]
     assert "ZHC" in reply and "BLD" in reply
     assert A in reply and B in reply
@@ -99,7 +99,7 @@ async def test_watchlist_custom_n_bounded(monkeypatch):
     update = FakeUpdate("/watchlist 500")
     await telegram_bot._handle_watchlist(update, FakeContext())
 
-    top_mock.assert_awaited_once_with(30)  # borné au plafond
+    top_mock.assert_awaited_once_with(30, lister=None)  # borné au plafond
 
 
 @pytest.mark.asyncio
@@ -111,4 +111,4 @@ async def test_watchlist_non_numeric_arg_defaults_to_ten(monkeypatch):
     update = FakeUpdate("/watchlist abc")
     await telegram_bot._handle_watchlist(update, FakeContext())
 
-    top_mock.assert_awaited_once_with(10)
+    top_mock.assert_awaited_once_with(10, lister=None)

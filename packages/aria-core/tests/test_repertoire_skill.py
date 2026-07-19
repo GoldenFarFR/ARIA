@@ -59,16 +59,21 @@ async def test_get_repertoire_summary_only_holding_seeded():
 
 
 @pytest.mark.asyncio
-async def test_get_repertoire_summary_empty_when_no_items_at_all():
+async def test_get_repertoire_summary_empty_when_no_items_at_all(monkeypatch):
     """delete_item() protège la holding (deletion_blocked_reason) -- un répertoire
     réellement vide n'est donc pas atteignable via l'API publique en usage normal.
-    Suppression SQL directe ici, uniquement pour exercer la branche "aucune
-    filiale" côté skill (défense en profondeur, jamais sensée arriver seule)."""
-    import aiosqlite
+    Un répertoire réellement vide au niveau DB ne l'est plus non plus (18/07,
+    #213) : get_all() garantit maintenant que la holding existe (auto-guérison,
+    _ensure_initialized() -> init_repertoire_db() -> _seed_holding_group() à
+    CHAQUE appel) -- une suppression SQL directe ne suffit plus à le contourner,
+    la holding revient dès le prochain get_all(). Mock direct de get_all() pour
+    exercer la branche "aucune filiale" côté skill (défense en profondeur,
+    jamais sensée arriver seule en usage réel)."""
 
-    async with aiosqlite.connect(repertoire_db.DB_PATH) as db:
-        await db.execute("DELETE FROM repertoire")
-        await db.commit()
+    async def fake_empty_get_all():
+        return []
+
+    monkeypatch.setattr(repertoire_db, "get_all", fake_empty_get_all)
     text_fr = await get_repertoire_summary(lang="fr")
     text_en = await get_repertoire_summary(lang="en")
     assert "Aucune filiale live" in text_fr

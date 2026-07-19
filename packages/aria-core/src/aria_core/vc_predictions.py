@@ -351,6 +351,34 @@ async def metrics() -> dict:
     return compute_metrics(await list_all_predictions())
 
 
+async def format_track_report() -> str:
+    """Rapport texte de pertinence VC -- extrait de _handle_track (telegram_bot.py,
+    18/07, #213) pour être réutilisable par le routeur langage-naturel, une seule
+    source de vérité pour "track record" quel que soit le déclencheur."""
+    m = await metrics()
+    if m["total"] == 0:
+        return "Aucune prédiction enregistrée. Lance des analyses avec /vc."
+
+    lines = [
+        "📈 Pertinence ARIA — track record VC",
+        f"Prédictions : {m['total']} ({m['closed']} clôturées, {m['open']} ouvertes)",
+    ]
+    if m["hit_rate"] is not None:
+        lines.append(f"Hit-rate BUY : {m['hit_rate']:.0%} sur {m['buy_count']} BUY clôturés")
+        lines.append(f"P&L moyen BUY : {m['avg_pnl_buy']:+.1f}%")
+    else:
+        lines.append("Pas encore de BUY clôturé — clôture avec /vcresult pour mesurer.")
+
+    if m["calibration"]:
+        lines.append("")
+        lines.append("Calibration (Potentiel → P&L moyen réel) :")
+        for b in m["calibration"]:
+            lines.append(f"  {b['bucket']}/10 : {b['avg_pnl']:+.1f}% (n={b['count']})")
+        lines.append("Idéal : le P&L croît avec le potentiel.")
+
+    return "\n".join(lines)
+
+
 def _sleeve_return(holdings: list[dict], current_prices: dict[int, float]) -> tuple[float, int]:
     """Rendement moyen (equal-weight) d'une poche + nombre de positions valorisées."""
     rets = []

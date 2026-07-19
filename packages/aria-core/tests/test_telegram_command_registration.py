@@ -75,9 +75,10 @@ def test_all_nine_recovered_commands_specifically_registered():
 
 
 def _menu_command_names() -> list[str]:
-    """Extrait l'ordre exact des BotCommand(...) dans _register_bot_commands."""
-    src = inspect.getsource(telegram_bot._register_bot_commands)
-    return re.findall(r'BotCommand\(\s*"([a-z_0-9]+)"', src)
+    """Ordre exact du menu -- lit directement TELEGRAM_MENU_COMMANDS (18/07, #213,
+    extraite en constante réelle plutôt que scrapée du source de
+    _register_bot_commands, qui ne contient plus de littéraux BotCommand(...))."""
+    return [name for name, _desc in telegram_bot.TELEGRAM_MENU_COMMANDS]
 
 
 def _registered_primary_command_names() -> set[str]:

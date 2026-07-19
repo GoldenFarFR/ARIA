@@ -108,6 +108,29 @@ async def top_candidates(n: int = 10, *, lister=None) -> list[RankedCandidate]:
     return rank_candidates(rows)[: max(0, n)]
 
 
+async def format_watchlist_report(n: int = 10, *, lister=None) -> str:
+    """Rapport texte du pool de surveillance -- extrait de _handle_watchlist
+    (telegram_bot.py, 18/07, #213) pour être réutilisable par le routeur
+    langage-naturel (`_nl_command_router.py`) SANS dupliquer le formatage --
+    une seule source de vérité pour "watchlist" quel que soit le déclencheur
+    (/watchlist ou une question en français)."""
+    tops = await top_candidates(n, lister=lister)
+    if not tops:
+        return "Pool de surveillance vide pour l'instant — aucun contrat suivi actuellement."
+
+    lines = [f"👀 Contrats suivis de près ({len(tops)}/{n} demandés) :", ""]
+    for i, c in enumerate(tops, start=1):
+        name = c.symbol or f"{c.contract[:6]}…{c.contract[-4:]}"
+        lines.append(
+            f"{i}. {name} — score {c.rank_score:.0f} · sécurité {c.security_score} · "
+            f"liq ${c.liquidity_usd:,.0f} · {c.verdict}"
+        )
+        lines.append(f"   {c.contract}")
+    lines.append("")
+    lines.append("Classement de priorité (jamais un ordre) — analyse complète : /vc <adresse>")
+    return "\n".join(lines)
+
+
 async def draw_top(n: int = 20, *, lister=None) -> list[dict]:
     """Drawer alternatif pour ``run_weekly_forecasts`` : les N meilleurs candidats classés
     au lieu d'un tirage aléatoire — pour bâtir le track-record sur le haut du panier.

@@ -31,6 +31,30 @@ from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
 
+# Garde d'initialisation (18/07, #213, bug réel) : chaque fonction publique de ce
+# module ouvrait sa propre connexion et faisait une requête brute SANS jamais
+# garantir que init_repertoire_db() avait tourné -- fonctionnait uniquement parce
+# qu'en prod, le boot FastAPI l'appelle une fois avant tout trafic réel. Trouvé en
+# testant un chemin isolé (nouveau fichier de test) où ce n'était plus vrai :
+# `no such table: agent_messages` PUIS, une fois ce cas corrigé isolément,
+# `no such table: repertoire` -- même famille de bug sur DEUX tables distinctes du
+# même module (déjà documentée pour un 3e module, auth_db_path, #149 le 13/07 --
+# jamais fermée ici).
+#
+# PREMIÈRE version de ce correctif : un flag booléen process-wide (n'appeler
+# init_repertoire_db() qu'une fois). RETIRÉE après un 2e tour de tests réel :
+# le flag mentait dès qu'un test antérieur avait initialisé PUIS que son
+# tmp_path avait été nettoyé par pytest entre-temps -- le flag restait `True`
+# en mémoire alors que le fichier SQLite (et sa table) n'existait plus sur
+# disque, un FAUX négatif pire que l'absence de garde. `_ensure_initialized()`
+# rejoue donc systématiquement init_repertoire_db() (schéma + seed/purge, tous
+# idempotents -- CREATE TABLE IF NOT EXISTS, INSERT-si-absent, DELETE
+# no-op si déjà absent) : jamais de cache qui peut mentir sur l'état réel du
+# disque, même patron que ``momentum_blacklist._ensure_table()`` (appelé sans
+# mise en cache à chaque is_blacklisted()/add_to_blacklist()).
+async def _ensure_initialized() -> None:
+    await init_repertoire_db()
+
 
 async def init_repertoire_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -53,23 +77,38 @@ async def init_repertoire_db() -> None:
             )
             """
         )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS agent_messages (
-                id TEXT PRIMARY KEY,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                skill_used TEXT,
-                metadata TEXT DEFAULT '{}',
-                created_at TEXT NOT NULL
-            )
-            """
-        )
         await db.commit()
         await _migrate_repertoire_columns(db)
-        await _migrate_agent_messages_columns(db)
+        await _ensure_agent_messages_table(db)
         await _seed_holding_group(db)
         await _purge_retired_subsidiaries(db)
+
+
+async def _ensure_agent_messages_table(db: aiosqlite.Connection) -> None:
+    """Idempotent (18/07, #213, bug réel trouvé en testant) : ``save_message``/
+    ``get_messages`` faisaient un INSERT/SELECT brut sur ``agent_messages`` SANS
+    jamais garantir son existence -- ne fonctionnait que si ``init_repertoire_db()``
+    avait déjà tourné ailleurs dans le process (vrai en prod au boot FastAPI,
+    mais pas garanti dans un contexte isolé, ex. un test dont c'est le tout
+    premier appel à ce module). Extrait en fonction séparée (plutôt que
+    dupliquer le schéma) -- appelée à la fois par ``init_repertoire_db()`` ET
+    directement par ``save_message``/``get_messages``, jamais deux schémas à
+    tenir en synchro. ``CREATE TABLE IF NOT EXISTS`` reste bon marché même
+    appelé à chaque message (SQLite court-circuite si la table existe déjà)."""
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_messages (
+            id TEXT PRIMARY KEY,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            skill_used TEXT,
+            metadata TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    await db.commit()
+    await _migrate_agent_messages_columns(db)
 
 
 async def _migrate_agent_messages_columns(db: aiosqlite.Connection) -> None:
@@ -218,6 +257,7 @@ def _row_to_item(row: tuple) -> RepertoireItem:
 
 
 async def get_all() -> list[RepertoireItem]:
+    await _ensure_initialized()
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT * FROM repertoire ORDER BY priority DESC, updated_at DESC"
@@ -227,6 +267,7 @@ async def get_all() -> list[RepertoireItem]:
 
 
 async def get_by_id(item_id: str) -> RepertoireItem | None:
+    await _ensure_initialized()
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("SELECT * FROM repertoire WHERE id = ?", (item_id,))
         row = await cursor.fetchone()
@@ -259,6 +300,7 @@ async def delete_item(item_id: str) -> tuple[bool, str, RepertoireItem | None]:
     blocked = deletion_blocked_reason(item)
     if blocked:
         return False, blocked, item
+    await _ensure_initialized()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM repertoire WHERE id = ?", (item_id,))
         await db.commit()
@@ -283,6 +325,7 @@ async def archive_item(item_id: str) -> tuple[bool, str, RepertoireItem | None]:
     if blocked:
         return False, blocked, item
     now = datetime.now(timezone.utc).isoformat()
+    await _ensure_initialized()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE repertoire SET status = ?, updated_at = ? WHERE id = ?",
@@ -294,6 +337,7 @@ async def archive_item(item_id: str) -> tuple[bool, str, RepertoireItem | None]:
 
 
 async def get_holding_id() -> str | None:
+    await _ensure_initialized()
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT id FROM repertoire WHERE slug = ? OR entity_type = 'holding' LIMIT 1",
@@ -333,6 +377,7 @@ async def create(
     parent_id: str | None = None,
     slug: str | None = None,
 ) -> RepertoireItem:
+    await _ensure_initialized()
     if entity_type != EntityType.HOLDING and not parent_id:
         parent_id = await get_holding_id()
 
@@ -413,7 +458,9 @@ async def save_message(
 ) -> str:
     msg_id = str(uuid4())
     now = datetime.now(timezone.utc).isoformat()
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_agent_messages_table(db)
         await db.execute(
             """
             INSERT INTO agent_messages
@@ -427,7 +474,9 @@ async def save_message(
 
 
 async def get_messages(limit: int = 50, visitor_id: str | None = None) -> list[dict]:
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_agent_messages_table(db)
         if visitor_id:
             cursor = await db.execute(
                 """

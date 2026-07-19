@@ -75,8 +75,8 @@ async def test_api_command_sends_formatted_inventory(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_command_registered_in_menu():
     """Non-régression : /api doit rester découvrable (menu bot), pas seulement
-    fonctionnel si on connaît déjà la commande."""
-    import inspect
-
-    src = inspect.getsource(telegram_bot._register_bot_commands)
-    assert '"api"' in src
+    fonctionnel si on connaît déjà la commande. Lit TELEGRAM_MENU_COMMANDS
+    directement (18/07, #213 -- la liste a été extraite en constante, ne vit
+    plus comme littéraux dans le source de _register_bot_commands)."""
+    names = [name for name, _desc in telegram_bot.TELEGRAM_MENU_COMMANDS]
+    assert "api" in names
