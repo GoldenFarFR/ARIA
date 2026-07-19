@@ -12,6 +12,8 @@ A = "0x" + "a" * 40
 B = "0x" + "b" * 40
 C = "0x" + "c" * 40
 D = "0x" + "d" * 40
+E = "0x" + "e" * 40
+F = "0x" + "f" * 40
 
 
 async def _no_depeg() -> float | None:
@@ -550,7 +552,11 @@ async def test_momentum_positions_now_respect_concentration_cap(tmp_db, monkeypa
         call_index["n"] += 1
         return {
             "action": "BUY", "chain": "base", "symbol": f"T{call_index['n']}", "price": 1.0,
-            "target": 1.5, "invalidation": 0.9, "rr": 2.0, "align_score": 1,
+            # 19/07 -- rr=3.0/align=3 (palier FORT, redesign 3 paliers) pour préserver
+            # le calcul documenté ci-dessous (50k$/position) -- ce test vérifie le
+            # plafond de CONCENTRATION, pas le sizing par conviction (déjà couvert
+            # ailleurs, cf. test_run_cycle_conviction_tiers_scale_alloc_...).
+            "target": 1.5, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
             "category": "momentum-base",
         }
 
@@ -860,10 +866,12 @@ async def test_run_cycle_threads_weekly_context_to_momentum_analyzer(tmp_db, mon
 
 
 @pytest.mark.asyncio
-async def test_run_cycle_sizes_exceptional_conviction_signal_bigger(tmp_db, monkeypatch):
-    """R/R >= 2.5 ET alignement parfait (3/3) -> allocation 8 % (1.6x la base 5 %) au
-    lieu de 5 % du capital de départ -- le plafond de perte (risk_guard) reste appliqué
-    par-dessus, inchangé."""
+async def test_run_cycle_sizes_strong_conviction_signal_at_hard_cap(tmp_db, monkeypatch):
+    """19/07 -- redesign 3 paliers (feedback opérateur direct : "les positions sont
+    trop grosses, l'achat maxi doit etre de 5% et mini de 2%") : R/R >= 2.5 ET
+    alignement parfait (3/3) -> palier FORT, 5 % du capital de départ EXACTEMENT (le
+    plafond dur désormais, plus jamais 8 % -- ``CONVICTION_SIZE_MULTIPLIER=1.6``
+    retiré). Le plafond de perte (risk_guard) reste appliqué PAR-DESSUS, inchangé."""
     from aria_core import momentum_entry
 
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
@@ -882,43 +890,57 @@ async def test_run_cycle_sizes_exceptional_conviction_signal_bigger(tmp_db, monk
     act = await pt.run_paper_cycle(depeg_check=_no_depeg)
 
     assert len(act["opened"]) == 1
-    # 5 % * 1.6 (CONVICTION_SIZE_MULTIPLIER) * 1M = 80 000 $ -- invalidation à 0.5 sur
-    # une entrée à 1.0 (risque 50 %) reste sous le plafond risk_guard (2 % * 1M = 20k /
-    # 0.5 = 40k) -> PLAFONNÉ à 40 000 $, pas 80 000 $ : le garde-fou de perte prime.
+    # 5 % * 1.0 (MAX_ALLOC_MULTIPLIER, palier fort) * 1M = 50 000 $ demandés -- mais
+    # invalidation à 0.5 sur une entrée à 1.0 (risque 50 %) dépasse le plafond risk_guard
+    # (2 % * 1M = 20k / 0.5 = 40k) -> PLAFONNÉ à 40 000 $ : le garde-fou de perte prime
+    # (même résultat numérique qu'avant ce chantier -- le plafond de perte dominait déjà).
     assert round(act["opened"][0]["cost_usd"]) == 40_000
 
 
 @pytest.mark.asyncio
-async def test_run_cycle_correct_but_not_exceptional_signal_uses_default_size(tmp_db, monkeypatch):
-    """R/R correct (2.0) mais pas exceptionnel -- allocation par défaut (5 %),
-    jamais le bonus de conviction."""
+async def test_run_cycle_conviction_tiers_scale_alloc_when_risk_cap_not_binding(tmp_db, monkeypatch):
+    """19/07 -- isole l'effet RÉEL des 3 paliers de conviction, avec une invalidation
+    assez proche de l'entrée pour que le plafond de perte (risk_guard) ne masque jamais
+    la différence entre paliers (contrairement au test ci-dessus, où il domine)."""
     from aria_core import momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    tiers = [
+        (D, 3.0, 3, 50_000.0),   # palier FORT (R/R>=2.5, align>=2) -> 5 %
+        (E, 2.0, 3, 35_000.0),   # palier MODÉRÉ (R/R>=2.0, sous le seuil fort) -> 3.5 %
+        (F, 1.0, 1, 20_000.0),   # palier FAIBLE (sous le plancher d'achat direct) -> 2 %
+    ]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
-        return {
-            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
-            "target": 2.0, "invalidation": 0.9, "rr": 2.0, "align_score": 2,
-        }
+    for contract, rr, align_score, expected_cost in tiers:
+        async def fake_discover(
+            *, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30, _c=contract,
+        ):
+            return [{"contract": _c, "chain": "base"}]
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
-    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+        async def fake_evaluate(
+            contract, chain, *, weekly_context=None, _rr=rr, _align=align_score,
+        ):
+            return {
+                "action": "BUY", "chain": chain, "symbol": "TIER", "price": 1.0,
+                "target": 2.0, "invalidation": 0.9, "rr": _rr, "align_score": _align,
+            }
 
-    await pt.reset_portfolio(1_000_000.0)
-    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+        monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+        monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
-    assert len(act["opened"]) == 1
-    assert act["opened"][0]["cost_usd"] == 50_000.0  # ALLOC_PCT (5 %) * 1M, multiplicateur 1.0
+        await pt.reset_portfolio(1_000_000.0)
+        act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+        assert len(act["opened"]) == 1, f"palier {rr}/{align_score} n'a pas ouvert de position"
+        assert act["opened"][0]["cost_usd"] == expected_cost, f"palier {rr}/{align_score}"
 
 
 @pytest.mark.asyncio
-async def test_run_cycle_weak_fundamental_blocks_exceptional_technical_bonus(tmp_db, monkeypatch):
-    """19/07 -- même setup technique exceptionnel que test_run_cycle_sizes_exceptional_
-    conviction_signal_bigger, mais avec un potential_score CONFIRMÉ faible
-    (conviction_research.py) -- le bonus 8% est refusé, retombe à l'allocation par
-    défaut (5%), jamais un pari sans corroboration fondamentale."""
+async def test_run_cycle_weak_fundamental_downgrades_strong_tier_to_moderate(tmp_db, monkeypatch):
+    """19/07 -- même setup technique fort que test_run_cycle_sizes_strong_conviction_
+    signal_at_hard_cap, mais avec un potential_score CONFIRMÉ faible
+    (conviction_research.py) -- le palier fort (5%) est refusé, RÉTROGRADE au palier
+    modéré (3.5%), jamais directement au plancher faible (la conviction technique reste
+    réelle, seul le bonus maximal est refusé)."""
     from aria_core import momentum_entry
 
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
@@ -928,7 +950,7 @@ async def test_run_cycle_weak_fundamental_blocks_exceptional_technical_bonus(tmp
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
-            "potential_score": 1.5,  # confirmé faible -- bloque le bonus
+            "potential_score": 1.5,  # confirmé faible -- rétrograde le palier fort
         }
 
     monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
@@ -938,7 +960,7 @@ async def test_run_cycle_weak_fundamental_blocks_exceptional_technical_bonus(tmp
     act = await pt.run_paper_cycle(depeg_check=_no_depeg)
 
     assert len(act["opened"]) == 1
-    assert act["opened"][0]["cost_usd"] == 50_000.0  # jamais 80 000$ -- fondamental faible confirmé
+    assert act["opened"][0]["cost_usd"] == 35_000.0  # palier modéré (3.5%) -- jamais 50 000$ (fort)
 
 
 @pytest.mark.asyncio
@@ -977,9 +999,11 @@ async def _reach_weekly_target(min_equity: float = 1_100_000.0) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_cycle_dampens_default_size_once_weekly_target_reached(tmp_db, monkeypatch):
+async def test_run_cycle_dampens_moderate_tier_once_weekly_target_reached(tmp_db, monkeypatch):
     """Frein à main (18/07, revue croisée validée) : objectif hebdo déjà atteint ->
-    allocation par défaut réduite de moitié (5 % -> 2.5 %), jamais bloquée à zéro."""
+    allocation du palier MODÉRÉ (3.5 %) réduite de moitié (-> 1.75 %), jamais bloquée
+    à zéro. 19/07 -- rr=2.0/align=2 est désormais le palier MODÉRÉ (redesign 3
+    paliers), plus le "défaut" flat 5% d'avant ce chantier."""
     from aria_core import momentum_entry
 
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
@@ -1000,13 +1024,13 @@ async def test_run_cycle_dampens_default_size_once_weekly_target_reached(tmp_db,
     act = await pt.run_paper_cycle(depeg_check=_no_depeg)
 
     assert len(act["opened"]) == 1
-    assert act["opened"][0]["cost_usd"] == 25_000.0  # 5 % * 1M * 0.5 (frein à main)
+    assert act["opened"][0]["cost_usd"] == 17_500.0  # 3.5 % (palier modéré) * 1M * 0.5 (frein à main)
 
 
 @pytest.mark.asyncio
-async def test_run_cycle_dampens_conviction_size_once_weekly_target_reached(tmp_db, monkeypatch):
-    """Le cas décrit par la revue : setup exceptionnel (8 % de conviction) + objectif
-    déjà atteint -> 4 %, jamais 8 % plein ni 0 %."""
+async def test_run_cycle_dampens_strong_tier_once_weekly_target_reached(tmp_db, monkeypatch):
+    """Le cas décrit par la revue : setup fort (5 % de conviction, plafond dur depuis
+    le redesign 19/07) + objectif hebdo déjà atteint -> 2.5 %, jamais 5 % plein ni 0 %."""
     from aria_core import momentum_entry
 
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
@@ -1027,7 +1051,7 @@ async def test_run_cycle_dampens_conviction_size_once_weekly_target_reached(tmp_
     act = await pt.run_paper_cycle(depeg_check=_no_depeg)
 
     assert len(act["opened"]) == 1
-    assert act["opened"][0]["cost_usd"] == 40_000.0  # 5 % * 1.6 (conviction) * 1M * 0.5 (frein)
+    assert act["opened"][0]["cost_usd"] == 25_000.0  # 5 % (palier fort) * 1M * 0.5 (frein à main)
 
 
 @pytest.mark.asyncio

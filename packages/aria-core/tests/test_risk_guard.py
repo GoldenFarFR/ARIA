@@ -63,40 +63,62 @@ class TestSizePositionByRisk:
 
 
 # ── 1bis. conviction_size_multiplier (18/07, "plus agressive" = plus gros sur les
-#          MEILLEURS setups, pas plus gros partout) ─────────────────────────────────
+#          MEILLEURS setups, pas plus gros partout ; redesign 3 paliers 19/07, feedback
+#          opérateur direct : "l'achat maxi doit etre de 5% et mini de 2%") ────────────
 
 class TestConvictionSizeMultiplier:
-    def test_exceptional_setup_gets_boosted(self):
+    def test_strong_setup_gets_max_tier(self):
         mult = risk_guard.conviction_size_multiplier(2.5, 3)
-        assert mult == risk_guard.CONVICTION_SIZE_MULTIPLIER
+        assert mult == risk_guard.MAX_ALLOC_MULTIPLIER
 
-    def test_above_threshold_still_boosted(self):
-        mult = risk_guard.conviction_size_multiplier(4.0, 3)
-        assert mult == risk_guard.CONVICTION_SIZE_MULTIPLIER
+    def test_above_threshold_still_max_tier(self):
+        """Un R/R énorme (ex. 20+) ne dépasse jamais le plafond dur à 5 % -- le palier
+        FORT est un plafond, pas une échelle sans fin proportionnelle au R/R brut."""
+        mult = risk_guard.conviction_size_multiplier(20.0, 3)
+        assert mult == risk_guard.MAX_ALLOC_MULTIPLIER
 
-    def test_correct_but_not_exceptional_stays_default(self):
-        """R/R correct mais pas exceptionnel -- jamais un bonus sans les DEUX conditions."""
-        assert risk_guard.conviction_size_multiplier(2.0, 3) == 1.0
-        # 19/07 -- seuil abaissé à 2 (décision opérateur) : align_score=1 est le nouveau
-        # cas "pas assez", align_score=2 qualifie désormais (cf. test dédié ci-dessous).
-        assert risk_guard.conviction_size_multiplier(2.5, 1) == 1.0
-        assert risk_guard.conviction_size_multiplier(1.5, 3) == 1.0
+    def test_moderate_tier_between_direct_buy_floor_and_strong_threshold(self):
+        """R/R >= 2.0 (plancher d'achat direct) mais sous 2.5 (palier fort), ou
+        alignement insuffisant pour le palier fort -- palier MODÉRÉ (3.5 %), jamais le
+        palier fort (5 %) ni le plancher faible (2 %)."""
+        assert risk_guard.conviction_size_multiplier(2.0, 3) == risk_guard.MODERATE_ALLOC_MULTIPLIER
+        # 19/07 -- seuil d'alignement abaissé à 2 (décision opérateur) : align_score=1
+        # ne qualifie plus pour le palier fort même à R/R élevé -- retombe en modéré.
+        assert risk_guard.conviction_size_multiplier(2.5, 1) == risk_guard.MODERATE_ALLOC_MULTIPLIER
 
-    def test_two_of_three_alignment_now_qualifies(self):
+    def test_weak_tier_below_direct_buy_floor(self):
+        """R/R sous le plancher d'achat direct (2.0, typiquement un achat confirmé par
+        LLM sur un R/R plus faible) -- palier FAIBLE (2 %), le plancher dur."""
+        assert risk_guard.conviction_size_multiplier(1.5, 3) == risk_guard.MIN_ALLOC_MULTIPLIER
+        assert risk_guard.conviction_size_multiplier(0.1, 0) == risk_guard.MIN_ALLOC_MULTIPLIER
+
+    def test_two_of_three_alignment_now_qualifies_for_strong_tier(self):
         """19/07 -- seuil abaissé de 3 à 2 (décision opérateur, via AskUserQuestion) :
         align_score=2 (MACD + pattern de bougie, sans EMA -- le cas réel observé sur les
-        5 premiers trades momentum) qualifie désormais pour le bonus."""
-        assert risk_guard.conviction_size_multiplier(2.5, 2) == risk_guard.CONVICTION_SIZE_MULTIPLIER
+        5 premiers trades momentum) qualifie désormais pour le palier fort."""
+        assert risk_guard.conviction_size_multiplier(2.5, 2) == risk_guard.MAX_ALLOC_MULTIPLIER
 
-    def test_missing_data_defaults_to_baseline(self):
-        """Jamais un bonus sans preuve du signal -- absence de donnée -> 1.0, pas un
-        multiplicateur inventé."""
-        assert risk_guard.conviction_size_multiplier(None, 3) == 1.0
-        assert risk_guard.conviction_size_multiplier(2.5, None) == 1.0
-        assert risk_guard.conviction_size_multiplier(None, None) == 1.0
+    def test_missing_data_defaults_to_max_tier(self):
+        """Comportement INCHANGÉ pour tout appelant qui ne fournit pas rr/align_score
+        (ex. l'ancien pilote VC-thesis, dormant) -- jamais réduit sous ce qu'il avait
+        avant ce chantier. Seul le pipeline momentum (qui fournit toujours ces deux
+        champs sur un BUY) est concerné par le nouveau plafond/plancher."""
+        assert risk_guard.conviction_size_multiplier(None, 3) == risk_guard.MAX_ALLOC_MULTIPLIER
+        assert risk_guard.conviction_size_multiplier(2.5, None) == risk_guard.MAX_ALLOC_MULTIPLIER
+        assert risk_guard.conviction_size_multiplier(None, None) == risk_guard.MAX_ALLOC_MULTIPLIER
 
-    def test_never_reduces_below_baseline(self):
-        assert risk_guard.conviction_size_multiplier(0.1, 0) == 1.0
+    def test_never_goes_below_min_tier(self):
+        """Le plancher (2 %) est un vrai plancher -- aucune combinaison de R/R/alignement
+        mesurés (même un R/R négatif/nul, défensif) ne descend en dessous."""
+        assert risk_guard.conviction_size_multiplier(0.1, 0) == risk_guard.MIN_ALLOC_MULTIPLIER
+        assert risk_guard.conviction_size_multiplier(-1.0, 0) == risk_guard.MIN_ALLOC_MULTIPLIER
+        assert risk_guard.conviction_size_multiplier(0.0, 0) == risk_guard.MIN_ALLOC_MULTIPLIER
+
+    def test_never_exceeds_max_tier(self):
+        """Le plafond (5 %) est un vrai plafond -- aucune combinaison ne le dépasse,
+        c'est précisément le point du feedback opérateur ("maxi doit etre de 5%")."""
+        for rr in (2.5, 5.0, 20.0, 100.0):
+            assert risk_guard.conviction_size_multiplier(rr, 3) <= risk_guard.MAX_ALLOC_MULTIPLIER
 
 
 # ── 1ter. fundamental_score (19/07, décision opérateur "s'ajoute en ET") ────────────
@@ -105,33 +127,38 @@ class TestConvictionSizeMultiplierFundamental:
     def test_backward_compatible_no_fundamental_arg(self):
         """Aucun appelant existant ne passe fundamental_score -- comportement
         identique à avant ce chantier."""
-        assert risk_guard.conviction_size_multiplier(2.5, 3) == risk_guard.CONVICTION_SIZE_MULTIPLIER
+        assert risk_guard.conviction_size_multiplier(2.5, 3) == risk_guard.MAX_ALLOC_MULTIPLIER
 
     def test_unknown_fundamental_never_blocks_technical_bonus(self):
         """Fail-open sur inconnu (None) : recherche non menée/indisponible -- jamais
         réduit sous ce que le setup technique seul aurait eu."""
         mult = risk_guard.conviction_size_multiplier(2.5, 3, fundamental_score=None)
-        assert mult == risk_guard.CONVICTION_SIZE_MULTIPLIER
+        assert mult == risk_guard.MAX_ALLOC_MULTIPLIER
 
     def test_strong_fundamental_keeps_technical_bonus(self):
         mult = risk_guard.conviction_size_multiplier(2.5, 3, fundamental_score=8.0)
-        assert mult == risk_guard.CONVICTION_SIZE_MULTIPLIER
+        assert mult == risk_guard.MAX_ALLOC_MULTIPLIER
 
-    def test_confirmed_weak_fundamental_blocks_bonus(self):
+    def test_confirmed_weak_fundamental_downgrades_to_moderate(self):
         """Fail-closed sur une donnée CONFIRMÉE mauvaise (pas juste inconnue) : le
-        potentiel fondamental contredit activement la conviction technique."""
+        potentiel fondamental contredit activement la conviction technique -- rétrograde
+        au palier MODÉRÉ (jamais directement au plancher FAIBLE, la conviction technique
+        reste réelle, seul le bonus maximal est refusé)."""
         mult = risk_guard.conviction_size_multiplier(2.5, 3, fundamental_score=2.0)
-        assert mult == 1.0
+        assert mult == risk_guard.MODERATE_ALLOC_MULTIPLIER
 
-    def test_fundamental_exactly_at_threshold_still_blocks(self):
+    def test_fundamental_exactly_at_threshold_still_downgrades(self):
         below = risk_guard.FUNDAMENTAL_WEAK_THRESHOLD - 0.01
-        assert risk_guard.conviction_size_multiplier(2.5, 3, fundamental_score=below) == 1.0
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, fundamental_score=below)
+        assert mult == risk_guard.MODERATE_ALLOC_MULTIPLIER
 
     def test_weak_fundamental_never_creates_a_bonus_on_mediocre_technical(self):
-        """Le fondamental ne peut JAMAIS déclencher le bonus seul -- il ne fait que
-        potentiellement le BLOQUER quand la technique est déjà exceptionnelle."""
+        """Le fondamental ne peut JAMAIS déclencher un meilleur palier seul -- il ne
+        s'applique QUE dans le garde du palier fort, jamais pour un setup qui n'a même
+        pas atteint ce palier techniquement (retombe simplement en palier faible,
+        indépendamment du fondamental)."""
         mult = risk_guard.conviction_size_multiplier(1.0, 1, fundamental_score=10.0)
-        assert mult == 1.0
+        assert mult == risk_guard.MIN_ALLOC_MULTIPLIER
 
 
 # ── 1ter. weekly_pacing_size_multiplier (18/07, "frein à main" déterministe validé
@@ -160,13 +187,18 @@ class TestWeeklyPacingSizeMultiplier:
         assert risk_guard.weekly_pacing_size_multiplier({"target_equity": 1_100_000.0}) == 1.0
 
     def test_composes_with_conviction_multiplier_as_expected(self):
-        """Le cas décrit par la revue : 8 % (conviction) -> 4 %, 5 % (défaut) -> 2.5 %."""
-        conviction = risk_guard.conviction_size_multiplier(3.0, 3)  # setup exceptionnel
+        """19/07 -- redesign 3 paliers (feedback opérateur : "maxi 5%, mini 2%") : le
+        frein à main hebdo compose avec CHAQUE palier, jamais un cas isolé. Palier fort
+        (5 %) -> 2.5 % ; palier modéré (3.5 %) -> 1.75 % ; palier faible (2 %) -> 1 %."""
         pacing = risk_guard.weekly_pacing_size_multiplier(
             {"equity": 1_100_000.0, "target_equity": 1_100_000.0}
         )
-        assert round(0.05 * conviction * pacing, 4) == 0.04
-        assert round(0.05 * 1.0 * pacing, 4) == 0.025
+        strong = risk_guard.conviction_size_multiplier(3.0, 3)  # setup fort
+        moderate = risk_guard.conviction_size_multiplier(2.0, 3)  # setup modéré
+        weak = risk_guard.conviction_size_multiplier(1.0, 1)  # setup faible
+        assert round(0.05 * strong * pacing, 4) == 0.025
+        assert round(0.05 * moderate * pacing, 4) == 0.0175
+        assert round(0.05 * weak * pacing, 4) == 0.01
 
 
 # ── 2. Coupe-circuit dédié : persistance, robustesse, distinction avec outgoing_pause ──

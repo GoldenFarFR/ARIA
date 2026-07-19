@@ -729,7 +729,15 @@ async def evaluate_momentum_entry(
             "price": best.price_usd, "reasons": reasons, "hold_reason": "ohlcv_unavailable",
         }
 
-    signal = detect_entry(candles)
+    # 19/07 -- passe le prix RÉELLEMENT exécutable (DexScreener temps réel, best.price_usd)
+    # comme référence d'entrée pour le R/R -- trouvaille réelle en vérifiant la légitimité
+    # d'un trade (GITLAWB, demande opérateur) : sans ça, le R/R utilise le close de la
+    # dernière bougie OHLCV (une AUTRE source de prix que best.price_usd, peut diverger de
+    # plusieurs % au même instant nominal) -- le R/R affiché peut alors significativement
+    # sur/sous-estimer celui du trade RÉELLEMENT pris (cf. entry_signals.detect_entry
+    # docstring). invalidation/target restent dérivés des niveaux Fibonacci/RSI réels,
+    # inchangés.
+    signal = detect_entry(candles, execution_price=best.price_usd)
     reasons.extend(signal.reasons)
     if not signal.present or signal.rr is None or signal.rr <= 0:
         reasons.append("pas de setup golden pocket + divergence RSI avec R/R positif")

@@ -96,16 +96,32 @@ CONVICTION_RR_THRESHOLD = 2.5
 # seuil à 3, le bonus de conviction technique était donc quasi inatteignable pour ce
 # style d'entrée précis, jamais un pari sans filet pour autant (R/R minimum inchangé).
 CONVICTION_ALIGN_SCORE_THRESHOLD = 2
-CONVICTION_SIZE_MULTIPLIER = 1.6  # 5 % -> 8 % du capital de départ (ALLOC_PCT, paper_trader.py)
+
+# 19/07 (suite) -- REDESIGN complet du sizing (feedback opérateur direct, après avoir vu
+# le portefeuille réel : "les position sont trop grosse, l'achat maxi doit etre de 5% et
+# mini de 2%"). Remplace le binaire précédent (base flat 5 % / bonus exceptionnel -> 8 %,
+# ``CONVICTION_SIZE_MULTIPLIER=1.6`` -- RETIRÉ, l'opérateur plafonne explicitement à 5 %
+# max désormais) par 3 paliers de conviction, mappés directement sur le pourcentage réel
+# du capital de départ (jamais un multiplicateur > 1.0 -- 5 % EST le plafond, pas un
+# multiplicateur d'un multiplicateur). ``MODERATE_RR_THRESHOLD`` reprend exactement le
+# R/R minimum du chemin d'achat DIRECT (``momentum_entry._RR_MIN_FOR_DIRECT_BUY``, 2.0) --
+# volontairement une constante indépendante ici (pas un import cross-module) pour garder
+# ``risk_guard`` autonome de ``momentum_entry``, même doctrine que ``CONVICTION_RR_
+# THRESHOLD`` déjà indépendant depuis l'origine de ce chantier.
+MODERATE_RR_THRESHOLD = 2.0
+
+MIN_ALLOC_MULTIPLIER = 0.4       # 5 % * 0.4 = 2 % du capital de départ (palier faible)
+MODERATE_ALLOC_MULTIPLIER = 0.7  # 5 % * 0.7 = 3.5 % du capital de départ (palier modéré)
+MAX_ALLOC_MULTIPLIER = 1.0       # 5 % * 1.0 = 5 % du capital de départ (palier fort, plafond dur)
 
 # 19/07 -- décision opérateur explicite (choix confirmé via AskUserQuestion, "s'ajoute
 # en ET") : le potentiel fondamental (conviction_research.py -- site web/X/cadence de
-# publication/corroboration de contrat) devient un TROISIÈME critère du bonus de
-# conviction, EN PLUS du R/R+alignement technique déjà exigés -- jamais à leur place.
-# Seuil sous lequel un score fondamental CONFIRMÉ (pas absent) bloque le bonus --
+# publication/corroboration de contrat) devient un TROISIÈME critère du palier fort,
+# EN PLUS du R/R+alignement technique déjà exigés -- jamais à leur place.
+# Seuil sous lequel un score fondamental CONFIRMÉ (pas absent) rétrograde le palier --
 # fail-closed sur une donnée confirmée mauvaise, fail-open sur une donnée INCONNUE
 # (``fundamental_score=None``, ex. recherche indisponible/gate OFF) : un setup
-# technique parfait sans recherche fondamentale disponible garde EXACTEMENT le bonus
+# technique parfait sans recherche fondamentale disponible garde EXACTEMENT le palier
 # qu'il aurait eu avant ce chantier -- jamais réduit sous ce qu'il a aujourd'hui, même
 # doctrine fail-open/fail-closed déjà validée sur le wallet-scoring (smart_money.py).
 FUNDAMENTAL_WEAK_THRESHOLD = 4.0
@@ -114,25 +130,38 @@ FUNDAMENTAL_WEAK_THRESHOLD = 4.0
 def conviction_size_multiplier(
     rr: float | None, align_score: int | None, *, fundamental_score: float | None = None,
 ) -> float:
-    """1.0 par défaut (comportement inchangé) -- ``CONVICTION_SIZE_MULTIPLIER`` UNIQUEMENT
-    sur un setup EXCEPTIONNEL : R/R >= ``CONVICTION_RR_THRESHOLD`` ET alignement technique
-    PARFAIT (``CONVICTION_ALIGN_SCORE_THRESHOLD``, cf. ``momentum_entry._technical_alignment``,
-    score 0-3). Jamais un bonus sur un setup seulement correct. Données absentes/incomplètes
-    (``None``) -> 1.0, jamais un bonus sans preuve du signal.
+    """Multiplicateur appliqué sur ``ALLOC_PCT`` (5 %, ``paper_trader.py``) -- jamais
+    au-delà de ``MAX_ALLOC_MULTIPLIER`` (1.0 = 5 % du capital, le plafond dur demandé
+    par l'opérateur), jamais en dessous de ``MIN_ALLOC_MULTIPLIER`` (0.4 = 2 %) pour
+    tout signal réellement mesuré. 3 paliers, sur le R/R (le seul signal qui discrimine
+    encore une fois l'alignement technique passé à un seuil de 2/3 -- cf. ci-dessus) :
+    - FORT (``MAX_ALLOC_MULTIPLIER``, 5 %) : R/R >= ``CONVICTION_RR_THRESHOLD`` (2.5) ET
+      alignement >= ``CONVICTION_ALIGN_SCORE_THRESHOLD`` (2/3) -- le setup le plus solide.
+    - MODÉRÉ (``MODERATE_ALLOC_MULTIPLIER``, 3.5 %) : R/R >= ``MODERATE_RR_THRESHOLD``
+      (2.0, le plancher même du chemin d'achat direct) sans atteindre le palier fort.
+    - FAIBLE (``MIN_ALLOC_MULTIPLIER``, 2 %) : tout le reste avec un signal mesuré
+      (typiquement un achat confirmé par LLM sur R/R sous le plancher direct).
 
-    ``fundamental_score`` (19/07, optionnel -- comportement inchangé pour tout appelant
-    existant qui ne le fournit pas) : si le setup technique est déjà exceptionnel MAIS
-    qu'une recherche fondamentale a été menée ET a CONFIRMÉ un potentiel faible
-    (< ``FUNDAMENTAL_WEAK_THRESHOLD``), le bonus est refusé -- la conviction technique
-    seule ne suffit plus si le fondamental la contredit activement. ``None`` (recherche
-    non menée/indisponible) ne bloque JAMAIS le bonus technique."""
+    Données absentes/incomplètes (``rr`` ou ``align_score`` = ``None``) ->
+    ``MAX_ALLOC_MULTIPLIER`` : comportement INCHANGÉ pour tout appelant qui ne fournit
+    pas ces signaux (ex. l'ancien pilote VC-thesis, dormant) -- jamais réduit sous ce
+    qu'il avait avant ce chantier, seul le pipeline momentum (qui fournit toujours ces
+    deux champs sur un BUY) est concerné par le nouveau plafond à 5 %.
+
+    ``fundamental_score`` (19/07, optionnel) : si le palier FORT est atteint MAIS qu'une
+    recherche fondamentale a CONFIRMÉ un potentiel faible (< ``FUNDAMENTAL_WEAK_
+    THRESHOLD``), rétrograde au palier MODÉRÉ (jamais directement au plancher FAIBLE --
+    la conviction technique reste réelle, seul le bonus maximal est refusé). ``None``
+    (recherche non menée/indisponible) ne rétrograde JAMAIS le palier technique."""
     if rr is None or align_score is None:
-        return 1.0
+        return MAX_ALLOC_MULTIPLIER
     if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
         if fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD:
-            return 1.0
-        return CONVICTION_SIZE_MULTIPLIER
-    return 1.0
+            return MODERATE_ALLOC_MULTIPLIER
+        return MAX_ALLOC_MULTIPLIER
+    if rr >= MODERATE_RR_THRESHOLD:
+        return MODERATE_ALLOC_MULTIPLIER
+    return MIN_ALLOC_MULTIPLIER
 
 
 # 18/07 (suite, revue croisée validée par l'opérateur) -- "frein à main" DÉTERMINISTE,

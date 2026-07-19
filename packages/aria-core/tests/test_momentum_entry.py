@@ -767,7 +767,10 @@ def _patch_pipeline(
     async def fake_candles(pool_address, chain, *, contract="", pair=None):
         return candles if candles is not None else [Candle(ts=0, open=1, high=1, low=1, close=1)] * 20
 
-    def fake_detect_entry(candles_arg):
+    def fake_detect_entry(candles_arg, **kwargs):
+        # 19/07 -- accepte execution_price (kwarg réel ajouté à detect_entry) sans le
+        # consommer : ce fichier teste le pipeline momentum autour du signal, pas le
+        # calcul R/R lui-même (couvert par test_entry_signals.py).
         return signal if signal is not None else EntrySignal(present=False, reasons=["setup non réuni"])
 
     async def fake_security_gate(*args, **kwargs):
@@ -947,6 +950,30 @@ async def test_evaluate_buys_on_strong_rr_with_alignment(monkeypatch):
     # 17/07 -- exposé pour que paper_trader.py puisse juger une éventuelle re-entrée
     # (REENTRY_RR_MIN/REENTRY_ALIGN_SCORE_MIN) sans recalculer l'alignement.
     assert result["align_score"] == 2
+
+
+@pytest.mark.asyncio
+async def test_evaluate_threads_live_price_as_execution_price_to_detect_entry(monkeypatch):
+    """19/07 -- trouvaille réelle en vérifiant la légitimité d'un trade (GITLAWB, demande
+    opérateur) : le prix RÉELLEMENT exécutable (best.price_usd, DexScreener temps réel)
+    doit être passé à detect_entry comme execution_price -- sans ça, le R/R affiché
+    reflète une AUTRE source de prix (close OHLCV) qui peut diverger de plusieurs % au
+    même instant nominal (cf. entry_signals.detect_entry docstring)."""
+    captured = {}
+
+    def spy_detect_entry(candles_arg, **kwargs):
+        captured["execution_price"] = kwargs.get("execution_price")
+        return EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+
+    _patch_pipeline(
+        monkeypatch, pairs=[_pair(price_usd=1.5)],
+        align=(2, ["EMA12 > EMA26", "MACD au-dessus de sa ligne de signal"]),
+    )
+    monkeypatch.setattr(me, "detect_entry", spy_detect_entry)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert captured["execution_price"] == 1.5  # best.price_usd, jamais un close OHLCV distinct
 
 
 @pytest.mark.asyncio

@@ -127,13 +127,27 @@ def detect_entry(
     *,
     lookback: int = _DEFAULT_LOOKBACK,
     tolerance: float = 0.03,
+    execution_price: float | None = None,
 ) -> EntrySignal:
     """Détecte le setup « golden pocket + divergence RSI » sur ≤ ``lookback`` bougies.
 
     ``present`` seulement si le prix courant est dans (ou tout près de) la zone
     Fibonacci profonde ET qu'une divergence haussière RSI est présente. Fournit alors
     entrée/invalidation/cible dérivées des niveaux réels + le R/R.
-    """
+
+    ``execution_price`` (19/07, optionnel -- comportement inchangé sans lui, ex.
+    ``acp_onchain_scan.py``/``/vc`` où il n'y a pas d'exécution imminente à un prix
+    précis) : trouvaille réelle en vérifiant la légitimité d'un trade (GITLAWB) à la
+    demande de l'opérateur -- le R/R affiché (149,1) venait du ``close`` de la dernière
+    bougie OHLCV (une source), alors que le prix RÉELLEMENT exécuté vient d'une AUTRE
+    source (DexScreener temps réel, ``momentum_entry.py``) qui peut diverger de
+    quelques % au même instant nominal (pas juste une dérive temporelle -- deux
+    fournisseurs différents). Résultat : le R/R affiché peut significativement
+    sur/sous-estimer celui du trade RÉELLEMENT pris. Quand fourni (et cohérent --
+    ``execution_price > invalidation``), remplace le ``close`` comme référence
+    d'entrée pour le R/R (ET le champ ``entry`` renvoyé) -- ``invalidation``/``target``
+    restent dérivés des niveaux Fibonacci/RSI réels, inchangés (ils décrivent la
+    STRUCTURE du setup, pas un prix de remplissage)."""
     if len(candles) < _RSI_PERIOD + 2:
         return EntrySignal(present=False, reasons=["série trop courte pour un signal fiable"])
 
@@ -160,7 +174,12 @@ def detect_entry(
 
     # Zone dérivée des niveaux réels : invalidation sous le support profond, cible =
     # retour vers le haut du range (retest du swing haut) → R/R généreux par construction.
+    # 19/07 -- ``execution_price`` (si fourni et cohérent) remplace le close comme
+    # référence d'entrée pour le R/R -- le R/R doit refléter le trade RÉELLEMENT pris,
+    # pas une estimation basée sur une autre source de prix (cf. docstring).
     entry = close
+    if execution_price is not None and execution_price > 0:
+        entry = execution_price
     invalidation = fib["gp_low"] * (1 - 0.02)
     target = fib["high"]
     rr = None
