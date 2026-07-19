@@ -193,14 +193,27 @@ class TestConvictionSizeMultiplierVolume:
         mult_weak = risk_guard.conviction_size_multiplier(1.0, 1, volume_confirmed=False)
         assert mult_weak == risk_guard.MIN_ALLOC_MULTIPLIER
 
-    def test_composes_with_fundamental_veto_no_stacking_below_moderate(self):
-        """Les deux vétos (fondamental faible ET volume non confirmé) composent sur
-        le MÊME palier fort -- jamais un 3e palier en dessous de modéré, pas de
-        cumul punitif."""
+    def test_composes_with_fundamental_veto_stacks_to_weak_tier(self):
+        """Les deux vétos EN MÊME TEMPS (fondamental faible ET volume non confirmé)
+        cumulent jusqu'au palier FAIBLE (19/07, revue croisée Gemini round 5 -- deux
+        drapeaux rouges indépendants = risque cumulé, jamais traité comme un seul)."""
         mult = risk_guard.conviction_size_multiplier(
             2.5, 3, fundamental_score=1.0, volume_confirmed=False,
         )
-        assert mult == risk_guard.MODERATE_ALLOC_MULTIPLIER
+        assert mult == risk_guard.MIN_ALLOC_MULTIPLIER
+
+    def test_single_veto_still_only_reaches_moderate(self):
+        """Un seul drapeau (fondamental faible SEUL, ou volume non confirmé SEUL) ->
+        palier MODÉRÉ, jamais directement FAIBLE -- le cumul ne se déclenche que si
+        les DEUX signaux d'alerte sont présents simultanément."""
+        mult_fundamental_only = risk_guard.conviction_size_multiplier(
+            2.5, 3, fundamental_score=1.0, volume_confirmed=True,
+        )
+        assert mult_fundamental_only == risk_guard.MODERATE_ALLOC_MULTIPLIER
+        mult_volume_only = risk_guard.conviction_size_multiplier(
+            2.5, 3, fundamental_score=10.0, volume_confirmed=False,
+        )
+        assert mult_volume_only == risk_guard.MODERATE_ALLOC_MULTIPLIER
 
 
 # ── 1ter. weekly_pacing_size_multiplier (18/07, "frein à main" déterministe validé

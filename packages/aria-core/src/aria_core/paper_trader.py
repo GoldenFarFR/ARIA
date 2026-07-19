@@ -85,6 +85,38 @@ def _effective_trail_pct(entry_atr_pct: float | None) -> float:
         return TRAIL_STOP_PCT
     return max(MIN_ATR_TRAIL_PCT, min(MAX_ATR_TRAIL_PCT, ATR_TRAIL_MULTIPLIER * entry_atr_pct))
 
+
+def _effective_tp_stages(target_price: float | None, entry_price: float | None) -> tuple[float, ...]:
+    """Paliers de prise de profit pour UNE position -- corrige un vrai défaut trouvé en
+    revue croisée (19/07, Gemini round 5) : le R/R calculé à l'entrée (``entry_signals.
+    detect_entry``) s'appuie sur un ``target`` TECHNIQUE réel (le haut de la fenêtre
+    golden pocket -- le niveau que le setup visait). Mais l'ancienne gestion de sortie
+    ignorait totalement ce niveau : TP1 tombait toujours sur un pourcentage FIXE
+    (``TP_STAGES[0]``, +50%), sans rapport avec la cible qui avait justifié l'entrée --
+    un setup au R/R élevé mais dont la cible technique était plus proche (ex. +25%)
+    pouvait se retourner et toucher le stop suiveur sans qu'aucun profit n'ait été pris
+    au niveau réellement visé.
+
+    TP1 s'ancre désormais sur ``target_price`` (converti en % de gain depuis
+    ``entry_price``) quand les deux sont connus et cohérents (``target_price >
+    entry_price``) -- sinon repli sur ``TP_STAGES`` inchangé (ex. positions ouvertes
+    avant ce correctif, ou tout analyzer qui ne fournit pas de cible technique, comme
+    l'ancien pilote VC-thesis dormant). TP2/TP3 restent des paliers additionnels
+    au-dessus de TP1 pour le "moonbag" (même ÉCART qu'avant entre les paliers --
+    50->100 = +50pt, 100->200 = +100pt -- simplement décalés pour partir de TP1 au lieu
+    de partir de +50% fixe), garantissant par construction une séquence strictement
+    croissante quel que soit le niveau de TP1 (y compris un TP1 > 100%, plausible sur un
+    retracement profond où la remontée vers le haut du range représente un gain
+    important)."""
+    if target_price and entry_price and target_price > entry_price:
+        stage1_pct = target_price / entry_price - 1.0
+        return (
+            stage1_pct,
+            stage1_pct + (TP_STAGES[1] - TP_STAGES[0]),
+            stage1_pct + (TP_STAGES[2] - TP_STAGES[0]),
+        )
+    return TP_STAGES
+
 # 17/07 -- demande opérateur explicite : réduire de moitié le bruit Telegram de l'alerte de
 # suivi périodique (#197, une par cycle heartbeat -- ~15 min -- tant qu'une position reste
 # ouverte). Fenêtre glissante par le TEMPS écoulé (pas un compteur de cycles) : robuste si la
@@ -1171,9 +1203,11 @@ async def run_paper_cycle(
 ) -> dict:
     """Un tour de simulation, appliquant les VRAIS rapports :
       1. positions ouvertes : surveillance de sécurité continue (#187) puis gestion par
-         stop suiveur + prise de profit échelonnée (voir ``TRAIL_STOP_PCT``/``TP_STAGES``)
-         — protège les gains acquis sans couper le potentiel restant, au lieu d'une sortie
-         binaire 100 % cible OU 100 % invalidation ;
+         stop suiveur + prise de profit échelonnée (voir ``TRAIL_STOP_PCT``/``TP_STAGES``/
+         ``_effective_tp_stages`` -- TP1 ancré sur le target technique de la position quand
+         connu, TP2/TP3 fixes au-dessus pour le moonbag) — protège les gains acquis sans
+         couper le potentiel restant, au lieu d'une sortie binaire 100 % cible OU 100 %
+         invalidation ;
       2. nouveaux achats : sur les candidats classés avec un signal d'ACHAT réel (bloqué si
          USDC est dépeg, #187), ouvre une position fictive et émet une alerte d'achat fictive.
     Tout est injectable (candidates/analyzer/price_lookup/notifier/depeg_check) → testable
@@ -1337,26 +1371,29 @@ async def _run_paper_cycle_locked(
 
             # Prise de profit échelonnée : vend une fraction de la quantité INITIALE à chaque
             # palier de gain franchi. Dernier palier (ou reliquat négligeable) -> clôture complète.
+            # ``stages`` (19/07) : TP1 ancré sur le target technique de CETTE position si
+            # connu et cohérent, sinon repli TP_STAGES fixe -- cf. _effective_tp_stages().
             initial_qty = p.get("initial_qty") or p["qty"]
             stage_hit = int(p.get("tp_stage_hit") or 0)
             remaining_qty = p["qty"]
             entry_price = p["entry_price"]
             gain_pct = (price / entry_price - 1.0) if entry_price else 0.0
+            stages = _effective_tp_stages(p.get("target_price"), entry_price)
 
-            while stage_hit < len(TP_STAGES) and gain_pct >= TP_STAGES[stage_hit]:
+            while stage_hit < len(stages) and gain_pct >= stages[stage_hit]:
                 stage_hit += 1
                 sell_qty = min(initial_qty * TP_STAGE_FRACTION, remaining_qty)
-                is_last_stage = stage_hit >= len(TP_STAGES) or remaining_qty - sell_qty <= TP_QTY_EPSILON
-                stage_target_pct = TP_STAGES[stage_hit - 1] * 100.0
+                is_last_stage = stage_hit >= len(stages) or remaining_qty - sell_qty <= TP_QTY_EPSILON
+                stage_target_pct = stages[stage_hit - 1] * 100.0
                 if is_last_stage:
                     tp_notes = (
-                        f"Dernier palier de profit {stage_hit}/{len(TP_STAGES)} atteint "
+                        f"Dernier palier de profit {stage_hit}/{len(stages)} atteint "
                         f"(+{gain_pct * 100:.0f}% vs entrée, seuil visé +{stage_target_pct:.0f}%) -- "
                         f"clôture du reliquat, {_duration_phrase(p.get('opened_at'))}."
                     )
                     closed = await close_position(
                         p["contract"], price,
-                        reason=f"palier {stage_hit}/{len(TP_STAGES)} (clôture)", notes=tp_notes,
+                        reason=f"palier {stage_hit}/{len(stages)} (clôture)", notes=tp_notes,
                     )
                     if closed:
                         actions["closed"].append(closed)
@@ -1370,14 +1407,14 @@ async def _run_paper_cycle_locked(
                 partial_pct = TP_STAGE_FRACTION * 100.0
                 remaining_after_pct = max(0.0, 100.0 - stage_hit * TP_STAGE_FRACTION * 100.0)
                 partial_notes = (
-                    f"Palier de profit {stage_hit}/{len(TP_STAGES)} atteint "
+                    f"Palier de profit {stage_hit}/{len(stages)} atteint "
                     f"(+{gain_pct * 100:.0f}% vs entrée, seuil visé +{stage_target_pct:.0f}%) -- "
                     f"prise de {partial_pct:.0f}% de la position initiale, "
                     f"~{remaining_after_pct:.0f}% restant en jeu."
                 )
                 partial = await reduce_position(
                     p["contract"], price, sell_qty, stage=stage_hit,
-                    reason=f"palier {stage_hit}/{len(TP_STAGES)}", notes=partial_notes,
+                    reason=f"palier {stage_hit}/{len(stages)}", notes=partial_notes,
                 )
                 if partial:
                     actions["partial"].append(partial)

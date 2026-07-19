@@ -151,26 +151,34 @@ def conviction_size_multiplier(
 
     ``fundamental_score`` (19/07, optionnel) : si le palier FORT est atteint MAIS qu'une
     recherche fondamentale a CONFIRMÉ un potentiel faible (< ``FUNDAMENTAL_WEAK_
-    THRESHOLD``), rétrograde au palier MODÉRÉ (jamais directement au plancher FAIBLE --
-    la conviction technique reste réelle, seul le bonus maximal est refusé). ``None``
-    (recherche non menée/indisponible) ne rétrograde JAMAIS le palier technique.
+    THRESHOLD``), rétrograde le palier (voir cumul ci-dessous). ``None`` (recherche non
+    menée/indisponible) ne rétrograde JAMAIS le palier technique.
 
     ``volume_confirmed`` (19/07, revue croisée Gemini, optionnel) : même doctrine de
     véto que ``fundamental_score`` -- ``False`` (le volume relatif de la bougie
     d'entrée n'a pas pu être vérifié, cf. ``momentum_entry._check_volume_confirmation``,
-    état "unknown") rétrograde le palier FORT vers MODÉRÉ (malus de conviction demandé
-    par Gemini : un rebond sans preuve de capital réel derrière ne mérite jamais
-    l'allocation maximale, même si le reste du setup est parfait). ``None``/``True``
-    ne rétrogradent jamais -- un ``False`` avec DONNÉE RÉELLE confirmant l'absence de
+    état "unknown") rétrograde le palier (voir cumul ci-dessous). ``None``/``True`` ne
+    rétrogradent jamais -- un ``False`` avec DONNÉE RÉELLE confirmant l'absence de
     volume (état "not_confirmed") n'atteint jamais cette fonction : ce cas-là est déjà
     un rejet dur en amont (``hold_reason="volume_not_confirmed"``), jamais une question
-    de taille."""
+    de taille.
+
+    Cumul des deux vétos (19/07, revue croisée Gemini, round 5 -- corrige un vrai défaut
+    de gestion du risque : composer les deux drapeaux au MÊME palier MODÉRÉ traitait un
+    setup avec DEUX signaux d'alerte indépendants (fondamentaux faibles ET volume non
+    vérifié) comme équivalent à un setup avec un seul -- sous-estimant le risque cumulé)
+    -- un seul drapeau -> palier MODÉRÉ (3.5 %) ; les DEUX en même temps -> chute directe
+    au palier FAIBLE (2 %), jamais un 3e palier en dessous (le plancher ``MIN_ALLOC_
+    MULTIPLIER`` reste le vrai plancher, quel que soit le nombre de vétos)."""
     if rr is None or align_score is None:
         return MAX_ALLOC_MULTIPLIER
     if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
-        if fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD:
-            return MODERATE_ALLOC_MULTIPLIER
-        if volume_confirmed is False:
+        weak_fundamentals = fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD
+        unconfirmed_volume = volume_confirmed is False
+        flags = int(weak_fundamentals) + int(unconfirmed_volume)
+        if flags >= 2:
+            return MIN_ALLOC_MULTIPLIER
+        if flags == 1:
             return MODERATE_ALLOC_MULTIPLIER
         return MAX_ALLOC_MULTIPLIER
     if rr >= MODERATE_RR_THRESHOLD:

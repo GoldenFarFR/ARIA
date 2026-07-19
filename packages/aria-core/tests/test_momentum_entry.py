@@ -1046,12 +1046,46 @@ async def test_evaluate_rejects_volume_below_floor(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_evaluate_allows_volume_at_or_above_floor(monkeypatch):
-    """Non-régression : un volume au-dessus du plancher (5k$) ne doit jamais être
-    bloqué par ce gate précis."""
+async def test_evaluate_allows_volume_at_or_above_required_floor(monkeypatch):
+    """Non-régression : un volume qui satisfait le plancher RÉELLEMENT requis pour sa
+    liquidité (le plus haut de l'absolu et du ratio, cf. section dédiée ci-dessous) ne
+    doit jamais être bloqué par ce gate précis."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    # Liquidité 150k$ (défaut ``_pair``) -> plancher requis = max(5k, 150k*10% = 15k).
+    _patch_pipeline(
+        monkeypatch, pairs=[_pair(liquidity_usd=150_000.0, volume_24h_usd=15_000.0)],
+        signal=strong, align=(3, []),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "volume_too_low"
+    assert result["action"] == "BUY"
+
+
+# ── plancher volume/liquidité en RATIO (19/07, revue croisée Gemini round 5) --------
+# corrige l'angle mort du plancher purement absolu ci-dessus : il devient trivial à
+# mesure que la liquidité grossit (5k$ de volume sur un pool de 10M$ = 0,05% de
+# turnover, toujours "au-dessus du plancher absolu" mais un marché structurellement
+# mort). Le plancher EFFECTIF est le plus haut de l'absolu et du ratio.
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_zombie_market_on_a_large_pool(monkeypatch):
+    """Un gros pool (10M$) avec un volume au-dessus du plancher ABSOLU (5k$) mais
+    représentant un turnover dérisoire (0,05%) doit quand même être rejeté."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=10_000_000.0, volume_24h_usd=5_000.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "volume_too_low"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_allows_volume_meeting_ratio_on_large_pool(monkeypatch):
+    """Non-régression : sur un gros pool, un volume qui satisfait le RATIO (10%) reste
+    accepté même s'il dépasse très largement le plancher absolu."""
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(
-        monkeypatch, pairs=[_pair(volume_24h_usd=5_000.0)], signal=strong, align=(3, []),
+        monkeypatch,
+        pairs=[_pair(liquidity_usd=10_000_000.0, volume_24h_usd=1_000_000.0)],  # 10 % pile
+        signal=strong, align=(3, []),
     )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "volume_too_low"

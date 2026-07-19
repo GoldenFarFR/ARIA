@@ -166,6 +166,17 @@ _MAX_PRICE_CHANGE_24H_PCT = 200.0
 # permissive que le reste du pipeline, jamais un filtre de conviction déguisé en garde-fou.
 _MIN_VOLUME_24H_USD = 5_000.0
 
+# 19/07 -- plancher PROPORTIONNEL à la liquidité, EN PLUS du plancher absolu ci-dessus
+# (revue croisée Gemini round 5) : un plancher absolu seul devient trivial à mesure que
+# la liquidité grossit -- 5 000$ de volume sur un pool de 10M$ passe le plancher absolu
+# tout en représentant 0,05% de turnover, un marché structurellement mort malgré un
+# volume nominal "positif". Le plancher EFFECTIF exigé est le plus haut des deux
+# (``max``), jamais un remplacement de l'absolu -- pour un pool tout juste au-dessus du
+# plancher de liquidité (100 000$), 10% (10 000$) relève déjà légèrement la barre
+# au-dessus du strict minimum absolu ; pour un gros pool, le ratio devient dominant et
+# fait le vrai travail que l'absolu seul ne pouvait pas faire.
+_MIN_VOLUME_TO_LIQUIDITY_RATIO = 0.10
+
 # 19/07 -- concentration des top holders (revue croisée Gemini, validée par l'opérateur
 # "fais-le"). Même en dehors d'une thèse moyen terme, un token où une poignée de wallets
 # détient l'essentiel de l'offre reste exposé à un dump d'initié massif qu'aucun R/R ni
@@ -1027,14 +1038,19 @@ async def evaluate_momentum_entry(
     # présente, quasi aucune activité réelle) peut passer le plancher de liquidité ET le
     # ratio volume/liquidité (trivialement bas, jamais suspect de wash-trading) -- ce
     # plancher garantit un minimum d'activité de marché réelle avant de chercher un setup.
-    if (best.volume_24h_usd or 0.0) < _MIN_VOLUME_24H_USD:
+    # 19/07 (round 5) -- le vrai plancher exigé est le plus haut de l'absolu et du ratio
+    # proportionnel à la liquidité (``_MIN_VOLUME_TO_LIQUIDITY_RATIO``) -- ferme l'angle
+    # mort signalé par Gemini où l'absolu seul devient trivial sur un gros pool.
+    min_volume_required = max(_MIN_VOLUME_24H_USD, liquidity_usd * _MIN_VOLUME_TO_LIQUIDITY_RATIO)
+    if (best.volume_24h_usd or 0.0) < min_volume_required:
         return {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd,
             "reasons": [
                 f"volume 24h insuffisant ({(best.volume_24h_usd or 0.0):,.0f}$ < "
-                f"{_MIN_VOLUME_24H_USD:,.0f}$) -- marché quasi inactif, signal technique "
-                "non fiable"
+                f"{min_volume_required:,.0f}$ requis -- max({_MIN_VOLUME_24H_USD:,.0f}$ "
+                f"absolu, {_MIN_VOLUME_TO_LIQUIDITY_RATIO:.0%} de la liquidité)) -- "
+                "marché quasi inactif, signal technique non fiable"
             ],
             "hold_reason": "volume_too_low",
         }

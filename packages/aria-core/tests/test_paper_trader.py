@@ -95,7 +95,9 @@ async def test_summary_marks_to_market(tmp_db):
 @pytest.mark.asyncio
 async def test_run_cycle_opens_then_stages_take_profit(tmp_db):
     """Remplace l'ancien tout-ou-rien à la cible : une hausse au-delà du 1er palier
-    (+50 %) déclenche une prise de profit PARTIELLE, la position reste ouverte."""
+    déclenche une prise de profit PARTIELLE, la position reste ouverte. 19/07 -- le
+    1er palier est désormais ancré sur le target technique (2.0 pour une entrée à
+    1.0 -> +100%, cf. ``_effective_tp_stages``), plus le fixe +50% historique."""
     await pt.reset_portfolio(1_000_000.0)
 
     async def analyzer(contract):
@@ -118,7 +120,7 @@ async def test_run_cycle_opens_then_stages_take_profit(tmp_db):
     assert await pt.has_open(D)
     assert any("ACHAT FICTIF" in a for a in alerts)
 
-    prices["v"] = 1.5  # +50 % -> franchit le 1er palier (TP_STAGES[0])
+    prices["v"] = 2.0  # +100 % -> franchit le 1er palier, ancré sur target=2.0 (19/07)
     act2 = await pt.run_paper_cycle(
         candidates=[D], analyzer=analyzer, price_lookup=price_lookup, notifier=notifier, depeg_check=_no_depeg,
     )
@@ -398,6 +400,73 @@ class TestEffectiveTrailPct:
     def test_high_atr_clamped_to_ceiling(self):
         # 50 % d'ATR * 2.5 = 125 %, largement au-dessus du plafond 40 % -> clampé.
         assert pt._effective_trail_pct(0.50) == pt.MAX_ATR_TRAIL_PCT
+
+
+# ── TP1 ancré sur le target technique (19/07, revue croisée Gemini round 5) ─────────
+
+
+class TestEffectiveTpStages:
+    def test_none_target_falls_back_to_fixed(self):
+        assert pt._effective_tp_stages(None, 1.0) == pt.TP_STAGES
+
+    def test_none_entry_falls_back_to_fixed(self):
+        assert pt._effective_tp_stages(1.5, None) == pt.TP_STAGES
+
+    def test_target_below_entry_falls_back_to_fixed(self):
+        assert pt._effective_tp_stages(0.9, 1.0) == pt.TP_STAGES
+
+    def test_target_equal_entry_falls_back_to_fixed(self):
+        assert pt._effective_tp_stages(1.0, 1.0) == pt.TP_STAGES
+
+    def test_target_above_entry_anchors_stage1_and_shifts_the_rest(self):
+        # Cible +20 % -> TP1 = 0.20 ; TP2/TP3 gardent le même ÉCART qu'avant
+        # (50->100 = +50pt, 100->200 = +150pt), juste décalés depuis TP1.
+        stages = pt._effective_tp_stages(1.2, 1.0)
+        assert stages == pytest.approx((0.2, 0.7, 1.7))
+
+    def test_large_target_gain_keeps_strictly_increasing_stages(self):
+        """Un target technique généreux (retracement profond, remontée vers le haut
+        du range) peut impliquer un gain > aux paliers fixes historiques -- la
+        séquence reste strictement croissante par construction, jamais un palier
+        2/3 qui retomberait en dessous de TP1."""
+        stages = pt._effective_tp_stages(4.0, 1.0)  # +300 % de cible
+        assert stages == pytest.approx((3.0, 3.5, 4.5))
+        assert stages[0] < stages[1] < stages[2]
+
+
+@pytest.mark.asyncio
+async def test_tp1_anchors_on_technical_target_not_fixed_percentage(tmp_db):
+    """19/07 (Gemini round 5) : un R/R calculé sur un target technique proche (+20 %)
+    ne doit plus jamais attendre le +50% fixe historique pour prendre le premier
+    profit -- sinon un retournement entre les deux fait manquer la cible qui avait
+    justifié l'entrée."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.2, invalidation_price=0.5, alloc_usd=90_000)
+
+    async def price_lookup(contract):
+        return 1.2  # exactement la cible technique -- +20 % seulement
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["partial"]) == 1
+    assert "+20%" in act["partial"][0]["close_notes"]
+    assert await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_tp1_without_target_price_falls_back_to_fixed_50pct(tmp_db):
+    """Non-régression : une position SANS target_price connu (ex. ancien pilote
+    VC-thesis dormant) garde le comportement historique -- TP1 fixe +50%, donc un
+    gain de seulement +20% ne déclenche encore rien."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000)
+
+    async def price_lookup(contract):
+        return 1.2  # +20 % -- sous le fixe +50%, ne doit rien déclencher
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["partial"] == []
+    assert act["closed"] == []
+    assert await pt.has_open(D)
 
 
 @pytest.mark.asyncio
