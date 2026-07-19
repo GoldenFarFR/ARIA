@@ -2177,6 +2177,48 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   malus s'applique réellement au `cost_usd` persisté). Suite complète verte (6200
   passed, mêmes 7 échecs pré-existants sans rapport #142), `test_coherence.py` vert
   (81 passed). Déployé et vérifié (commit `24b4243c3e2d` confirmé servi par nginx).
+- **19/07 (suite) — revue croisée Gemini round 5 sur le pipeline momentum, 3 vrais
+  défauts confirmés et corrigés, DÉPLOYÉ (`7ac9b0c1f051`).** Chaque point vérifié
+  contre le vrai code avant d'agir (même méthode que les rounds précédents) :
+  1. **TP1 était déconnecté du R/R calculé à l'entrée** — `entry_signals.detect_entry`
+     calcule un `target` technique réel (le haut de la fenêtre golden pocket, niveau
+     qui a validé le R/R), mais la gestion de sortie (`paper_trader.py`) ignorait
+     totalement ce niveau : TP1 tombait toujours sur un pourcentage FIXE (`TP_STAGES[0]`,
+     +50%) — un setup dont la cible technique était plus proche (ex. +20%) pouvait se
+     retourner et toucher le stop suiveur sans qu'aucun profit n'ait été pris au niveau
+     réellement visé par l'analyse. Corrigé : nouvelle `_effective_tp_stages()` — TP1
+     s'ancre sur `target_price` (converti en % de gain) quand connu et cohérent
+     (`target_price > entry_price`), TP2/TP3 restent des paliers fixes AU-DESSUS de TP1
+     pour le "moonbag" (même écart qu'avant : 50→100 = +50pt, 100→200 = +100pt, juste
+     décalés) — séquence garantie strictement croissante par construction, y compris
+     si TP1 > 100% (retracement profond, remontée vers le haut du range = gain
+     important). Repli sur `TP_STAGES` fixe si `target_price` absent (positions sans
+     cible technique connue, ex. l'ancien pilote VC-thesis dormant — comportement
+     historique inchangé).
+  2. **Plancher de volume absolu (5 000$) trivial sur un gros pool** — 5 000$ de volume
+     sur 10M$ de liquidité passe le plancher tout en représentant 0,05% de turnover, un
+     marché structurellement mort. Ajouté `_MIN_VOLUME_TO_LIQUIDITY_RATIO = 0.10` —
+     plancher effectif = `max(absolu, liquidité × 10%)`. Conséquence structurelle
+     assumée : comme le plancher de liquidité (100 000$, #144) implique déjà un
+     plancher ratio ≥ 10 000$ pour tout candidat valide, l'absolu (5 000$) ne redevient
+     jamais la contrainte liante en pratique tant que #144 reste à 100k$ — gardé
+     volontairement comme filet de sécurité indépendant (si #144 est un jour abaissé,
+     ce plancher reprend seul son rôle sans qu'il faille s'en souvenir).
+  3. **Les deux malus de conviction ne cumulaient pas** — `conviction_size_multiplier`
+     plafonnait fondamentaux faibles ET volume RVOL non confirmé au MÊME palier MODÉRÉ
+     (3.5%), même si les deux étaient présents simultanément — sous-estimant le risque
+     cumulé de deux signaux d'alerte indépendants. Corrigé : un seul drapeau → MODÉRÉ
+     (3.5%), les DEUX en même temps → chute au palier FAIBLE (2%), jamais en dessous.
+     **Corrige/remplace la doctrine "composent sans cumul punitif" actée dans l'entrée
+     RVOL juste au-dessus (18/07 tard/19/07 tôt)** — celle-ci reste dans l'historique
+     telle quelle (jamais réécrite), seule cette nouvelle entrée fait foi désormais.
+  11 nouveaux tests (`TestEffectiveTpStages` + 2 tests d'intégration TP1 dans
+  `test_paper_trader.py`, 4 dans `test_momentum_entry.py` pour le ratio volume/
+  liquidité, 2 dans `test_risk_guard.py` pour le cumul des malus — remplace le test
+  qui vérifiait explicitement l'ANCIEN comportement non-cumulatif). Suite complète
+  verte (6211 passed, mêmes 7 échecs pré-existants sans rapport #142, 0 régression),
+  `test_coherence.py` vert (81 passed). Déployé et vérifié (commit `7ac9b0c1f051`
+  confirmé servi par nginx).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
