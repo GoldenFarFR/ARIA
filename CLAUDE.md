@@ -3918,7 +3918,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **Direct, problème → solution (consigne opérateur explicite, 16/07)** : annoncer le problème puis la solution/action directement, sans argumenter ni justifier en détail par défaut. Toujours proposer ensuite à l'opérateur s'il veut plus de détail (raisonnement, alternatives écartées, preuves) plutôt que de les dérouler d'office.
 **Réponse type « la thèse sur l'achat » (consigne opérateur explicite, 19/07)** : quand l'opérateur demande « la thèse sur l'achat » (ou une formulation proche : « renvoie la thèse », « explique le processus d'achat ») SANS nommer un contrat précis, répondre avec EXACTEMENT le processus détaillé de la section « Processus d'achat momentum — réponse de référence » ci-dessous, jamais la thèse d'une position individuelle. Si l'opérateur nomme un contrat/token précis, donner plutôt SA thèse réelle (champ `thesis` en base, via `paper_trader.get_open_positions()`/`get_closed_positions()` ou l'historique `/feedback`), pas le processus général.
 
-## Processus d'achat momentum — réponse de référence (à jour 19/07, commit `24b4243c`)
+## Processus d'achat momentum — réponse de référence (à jour 19/07, commit `7ac9b0c1f051`)
 **⚠️ Instantané daté du pipeline momentum (`momentum_entry.py` + `risk_guard.py` + `paper_trader.py`) — norme « vérifier avant d'affirmer » (Règles absolues) : si une session reprend ce fil après une évolution du pipeline, RECONFIRMER ce texte contre le code réel avant de le renvoyer tel quel plutôt que de le réciter de mémoire. Mettre à jour ce bloc DANS LE MÊME COMMIT que tout changement touchant l'ordre/les seuils du pipeline momentum, pour qu'il ne dérive jamais.**
 
 **1. Découverte** — Scan continu DexScreener (Base, Solana, Robinhood Chain) + flux WebSocket temps réel, en plus du scan classique toutes les 15 min.
@@ -3927,7 +3927,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Liste noire (contrats déjà confirmés piégeux)
 - Honeypot (GoPlus, + RugCheck en second avis sur Solana)
 - Liquidité minimum 100 000$
-- Volume minimum 5 000$ sur 24h (empêche un marché "zombie" — liquidité présente mais personne ne trade — de fabriquer un faux setup)
+- Volume minimum : le plus haut entre 5 000$ (plancher absolu) et 10% de la liquidité du pool (empêche un marché "zombie" — liquidité présente mais personne ne trade — de fabriquer un faux setup, y compris sur un gros pool où un plancher purement absolu deviendrait trivial)
 - Ratio volume/liquidité > 20x (wash-trading)
 - Déjà monté de +200% en 24h
 - Concentration des holders : si les 10 plus gros détenteurs (hors pool et adresses brûlées) possèdent 80% ou plus de l'offre → rejet (seul garde-fou de cette liste qui coûte un appel réseau, placé en dernier)
@@ -3944,7 +3944,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 
 **8. Taille de la position** :
 - 3 paliers : 5% (fort), 3.5% (modéré), 2% (faible) du capital de départ selon R/R + alignement
-- Redescend au palier modéré si le potentiel fondamental est confirmé faible OU si le volume n'a pas pu être vérifié (étape 6) — deux vétos indépendants, jamais cumulés en dessous du palier modéré
+- Redescend au palier modéré si le potentiel fondamental est confirmé faible OU si le volume n'a pas pu être vérifié (étape 6) — un seul de ces deux signaux d'alerte suffit ; si les DEUX sont présents en même temps, chute directe au palier faible (2%)
 - Plafond auto-calibré par impact de prix : ARIA calcule combien SON PROPRE achat ferait bouger le prix sur ce pool précis, et réduit le montant si besoin
 - Plafond dur : jamais plus de 2% du capital risqué au pire cas
 - Réduite de moitié si l'objectif hebdomadaire est déjà atteint, ou si le portefeuille est en drawdown -10% ; plus aucun achat si -20% ou 5 pertes d'affilée
@@ -3955,7 +3955,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **10. Gestion de la position** :
 - Re-scan de sécurité continu
 - Stop suiveur adaptatif à la volatilité : largeur calculée depuis l'ATR mesuré à l'entrée (bornée entre 5% et 40%), jamais un pourcentage fixe pour tous les tokens. Le niveau du stop monte à chaque nouveau sommet, ne redescend jamais.
-- Prise de profit par tiers à +50%/+100%/+200%
+- Prise de profit par tiers : le 1er palier (TP1) s'ancre sur la cible technique réelle de la position (le niveau golden pocket qui a validé le R/R à l'entrée), pas un pourcentage fixe — les 2 paliers suivants restent des crans fixes au-dessus (même écart qu'avant : +50pt puis +100pt). Repli sur +50%/+100%/+200% fixes si aucune cible technique n'est connue pour la position.
 - Re-achat autorisé sur un contrat déjà clôturé dès qu'un nouveau point d'entrée se profile
 
 **11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$.
