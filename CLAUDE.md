@@ -2139,6 +2139,44 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   soir. Suite complète verte (6184 passed, mêmes 7 échecs pré-existants sans
   rapport #142), `test_coherence.py` vert (81 passed). Déployé et vérifié
   (commit `380e726f4616` confirmé servi par nginx).
+- **19/07 (suite) — 4e round de la revue croisée Gemini, volume relatif (RVOL)
+  construit, testé et DÉPLOYÉ (`24b4243c`).** Question directe de Gemini ("comment tes
+  indicateurs réagissent-ils mathématiquement lors de ces phases d'assèchement pour
+  éviter d'envoyer de faux signaux de divergence ?") -- vérifié précisément avant de
+  répondre : `grep volume` sur tout le moteur d'analyse technique (R/R, golden pocket,
+  divergence RSI, alignement) -- AUCUN module ne lit le champ volume, confirmé, pas une
+  supposition. Réponse à la question de Gemini sur "quelle bougie de cassure" : ARIA
+  n'a pas de détection de cassure de figure (flag/triangle) -- c'est une stratégie de
+  RECHARGEMENT PROFOND, réévaluée à neuf à chaque cycle sur `candles[-1]` (la bougie la
+  plus récente), jamais une bougie de cassure séparée à identifier.
+  **Découverte décisive AVANT d'implémenter la proposition de Gemini** (SMA volume +
+  plancher anti-division-par-zéro) : vérifié que 3 des 5 étages de la cascade OHLCV
+  (GeckoTerminal/CoinMarketCap/Mobula) ont un vrai volume par bougie, mais les 2
+  derniers recours (synthèse DexScreener, Dune `prices.usd`) codent `volume=0.0` EN DUR
+  sur CHAQUE bougie (vérifié dans leurs modules respectifs, pas une supposition) --
+  jamais une vraie donnée. La rustine initialement proposée par Gemini
+  (`SMA=max(SMA,1)`) aurait produit un RVOL de 0 sur ces deux replis à CHAQUE fois,
+  rejetant systématiquement tout candidat dont le prix vient de ces sources, non pas
+  parce que le marché est mort mais parce qu'ARIA n'a pas eu accès à un vrai historique
+  de volume -- même piège "donnée absente confondue avec signal faux" déjà évité sur
+  tous les autres garde-fous ce soir.
+  **Design final en 3 états** (`_check_volume_confirmation`) : "confirmed" (RVOL réel
+  >= 3,0x la moyenne des 10 bougies précédentes) -- aucune pénalité ; "not_confirmed"
+  (donnée réelle mais RVOL < 3,0x) -- REJET DUR (`hold_reason="volume_not_confirmed"`),
+  la proposition initiale de Gemini ; "unknown" (référence structurellement à zéro) --
+  JAMAIS un rejet, mais Gemini a proposé un 2e mécanisme une fois ce risque signalé :
+  un **malus de conviction** -- `risk_guard.conviction_size_multiplier` gagne un
+  paramètre `volume_confirmed` qui plafonne le sizing au palier modéré (3,5%) au lieu
+  du palier fort (5%) quand le volume n'a pas pu être vérifié, même patron de véto que
+  `fundamental_score` déjà existant (composent sans cumul punitif en dessous de
+  modéré). Placé juste après le garde de sécurité LLM final, avant le calcul ATR.
+  18 nouveaux tests (5 unitaires sur `_check_volume_confirmation` incl. le cas
+  "baseline structurellement à zéro" reproduisant exactement la construction des
+  replis synthèse/Dune, 4 d'intégration `evaluate_momentum_entry`, 6 sur
+  `conviction_size_multiplier`, 1 bout-en-bout `run_paper_cycle` vérifiant que le
+  malus s'applique réellement au `cost_usd` persisté). Suite complète verte (6200
+  passed, mêmes 7 échecs pré-existants sans rapport #142), `test_coherence.py` vert
+  (81 passed). Déployé et vérifié (commit `24b4243c3e2d` confirmé servi par nginx).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
