@@ -43,6 +43,7 @@ le test 1M$ (#194) », à lire avant toute modification) :
 from __future__ import annotations
 
 import logging
+import time
 
 from aria_core import momentum_blacklist
 from aria_core.services.dexscreener import (
@@ -345,6 +346,43 @@ async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, s
     )
 
 
+# 19/07 -- coupe-circuit adaptatif par fournisseur (#95, évalué après l'incident #211 :
+# 79% de HTTP 429 sur GeckoTerminal un soir, ET reproduit en direct le même jour en
+# diagnostiquant #94 -- chaque candidat continuait de retenter GeckoTerminal en premier
+# même pendant une rafale de 429, gaspillant la latence du throttle partagé (2.1s/appel)
+# sur un appel très probablement voué à l'échec, avant de retomber sur l'étage suivant.
+# État PROCESS-LOCAL (pas persisté -- optimisation de latence best-effort, jamais une
+# question de correction : perdre l'état à un redémarrage ne fausse rien, le pire cas
+# est de retenter un fournisseur qui a eu le temps de se rétablir). Ne compte comme
+# « échec » que ``available=False`` (panne/rate-limit/erreur confirmée) ou une exception
+# réseau -- JAMAIS une réponse ``available=True, candles=[]`` (ce token précis n'a
+# simplement pas de données, ce n'est pas un signal de santé du fournisseur).
+_PROVIDER_COOLDOWN_SECONDS = 180.0
+_PROVIDER_FAIL_THRESHOLD = 3
+_provider_fail_counts: dict[str, int] = {}
+_provider_cooldown_until: dict[str, float] = {}
+
+
+def _provider_in_cooldown(name: str) -> bool:
+    until = _provider_cooldown_until.get(name)
+    return until is not None and time.monotonic() < until
+
+
+def _record_provider_outcome(name: str, *, ok: bool) -> None:
+    if ok:
+        _provider_fail_counts[name] = 0
+        _provider_cooldown_until.pop(name, None)
+        return
+    count = _provider_fail_counts.get(name, 0) + 1
+    _provider_fail_counts[name] = count
+    if count >= _PROVIDER_FAIL_THRESHOLD:
+        _provider_cooldown_until[name] = time.monotonic() + _PROVIDER_COOLDOWN_SECONDS
+        logger.warning(
+            "_fetch_candles: %s mis en pause %.0fs après %d échecs consécutifs (coupe-circuit adaptatif)",
+            name, _PROVIDER_COOLDOWN_SECONDS, count,
+        )
+
+
 async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None) -> list[Candle]:
     """OHLCV en cascade à CINQ étages (16/07, demande opérateur explicite :
     "je veux que tout soit branché même s'ils font la même chose, une
@@ -380,36 +418,51 @@ async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", p
     indisponible")."""
     from aria_core.services.geckoterminal import geckoterminal_client
 
-    try:
-        result = await geckoterminal_client.get_ohlcv(pool_address, network=chain)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("_fetch_candles: GeckoTerminal %s/%s échoué (%s)", chain, pool_address[:10], exc)
-        result = None
-    if result is not None and result.available and result.candles:
-        return result.candles
+    if not _provider_in_cooldown("geckoterminal"):
+        try:
+            result = await geckoterminal_client.get_ohlcv(pool_address, network=chain)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("_fetch_candles: GeckoTerminal %s/%s échoué (%s)", chain, pool_address[:10], exc)
+            result = None
+        if result is not None and result.available and result.candles:
+            _record_provider_outcome("geckoterminal", ok=True)
+            return result.candles
+        if result is None or not result.available:
+            _record_provider_outcome("geckoterminal", ok=False)
+    else:
+        logger.info("_fetch_candles: GeckoTerminal en pause (coupe-circuit adaptatif), repli direct")
 
     from aria_core.services import coinmarketcap
 
-    try:
-        cmc_result = await coinmarketcap.get_ohlcv(pool_address, network_slug=chain)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("_fetch_candles: CoinMarketCap (repli) %s/%s échoué (%s)", chain, pool_address[:10], exc)
-        cmc_result = None
-    if cmc_result is not None and cmc_result.available and cmc_result.candles:
-        return cmc_result.candles
+    if not _provider_in_cooldown("coinmarketcap"):
+        try:
+            cmc_result = await coinmarketcap.get_ohlcv(pool_address, network_slug=chain)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("_fetch_candles: CoinMarketCap (repli) %s/%s échoué (%s)", chain, pool_address[:10], exc)
+            cmc_result = None
+        if cmc_result is not None and cmc_result.available and cmc_result.candles:
+            _record_provider_outcome("coinmarketcap", ok=True)
+            return cmc_result.candles
+        if cmc_result is None or not cmc_result.available:
+            _record_provider_outcome("coinmarketcap", ok=False)
+    else:
+        logger.info("_fetch_candles: CoinMarketCap en pause (coupe-circuit adaptatif), repli direct")
 
     if contract:
         from aria_core.services import mobula
 
-        if mobula.mobula_configured():
+        if mobula.mobula_configured() and not _provider_in_cooldown("mobula"):
             try:
                 mobula_result = await mobula.get_ohlcv(contract, blockchain=chain)
             except Exception as exc:  # noqa: BLE001
                 logger.info("_fetch_candles: Mobula %s/%s échoué (%s)", chain, pool_address[:10], exc)
                 mobula_result = None
             if mobula_result is not None and mobula_result.available and mobula_result.candles:
+                _record_provider_outcome("mobula", ok=True)
                 logger.info("_fetch_candles: repli Mobula (vraies bougies) %s/%s", chain, pool_address[:10])
                 return mobula_result.candles
+            if mobula_result is None or not mobula_result.available:
+                _record_provider_outcome("mobula", ok=False)
 
     if pair is not None:
         from aria_core.services.dexscreener import synthesize_candles_from_pair
@@ -419,13 +472,14 @@ async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", p
             logger.info("_fetch_candles: repli DexScreener (synthèse dégradée) %s/%s", chain, pool_address[:10])
             return synthetic
 
-    if contract:
+    if contract and not _provider_in_cooldown("dune"):
         from aria_core.services import dune
 
         try:
             dune_result = await dune.get_price_history(contract, blockchain=chain)
         except Exception as exc:  # noqa: BLE001
             logger.info("_fetch_candles: Dune (dernier recours) %s/%s échoué (%s)", chain, pool_address[:10], exc)
+            _record_provider_outcome("dune", ok=False)
             return []
         if dune_result.available and dune_result.candles:
             logger.info("_fetch_candles: repli Dune (dernier recours) %s/%s", chain, pool_address[:10])

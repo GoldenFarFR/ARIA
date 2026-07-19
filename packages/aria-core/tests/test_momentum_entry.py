@@ -47,6 +47,20 @@ def _stub_polymarket_unavailable(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_provider_circuit_breaker():
+    """19/07 (#95) -- ``_provider_fail_counts``/``_provider_cooldown_until`` sont des
+    dicts module-level (état process-local délibéré, cf. docstring). Sans ce reset,
+    un test qui fait échouer GeckoTerminal pourrait faire déclencher le coupe-circuit
+    et polluer un test SUIVANT qui s'attend à ce que GeckoTerminal soit réellement
+    appelé -- même piège que ``_isolated_blacklist_db`` ci-dessus."""
+    me._provider_fail_counts.clear()
+    me._provider_cooldown_until.clear()
+    yield
+    me._provider_fail_counts.clear()
+    me._provider_cooldown_until.clear()
+
+
 # ── discover_momentum_candidates ───────────────────────────────────────────────────
 
 @dataclass
@@ -773,6 +787,105 @@ async def test_fetch_candles_returns_empty_when_everything_fails(monkeypatch):
 
     result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
     assert result == []
+
+
+# ── _fetch_candles : coupe-circuit adaptatif par fournisseur (#95, 19/07) ───────────
+
+@pytest.mark.asyncio
+async def test_fetch_candles_provider_cooldown_skips_after_threshold_failures(monkeypatch):
+    """Après _PROVIDER_FAIL_THRESHOLD échecs consécutifs, GeckoTerminal n'est plus
+    appelé DU TOUT (repli direct sur CoinMarketCap) -- vérifie l'ÉCONOMIE de latence
+    visée, pas juste le résultat final déjà couvert par le test de repli existant."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+
+    gt_calls = 0
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        nonlocal gt_calls
+        gt_calls += 1
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    cmc_candles = _plain_candles(2)
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=cmc_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+
+    assert me._PROVIDER_FAIL_THRESHOLD == 3
+    for _ in range(3):
+        await me._fetch_candles("0xpool", "base")
+    assert gt_calls == 3  # les 3 premiers échecs déclenchent bien la pause
+
+    result = await me._fetch_candles("0xpool", "base")
+    assert result == cmc_candles
+    assert gt_calls == 3  # 4e appel : GeckoTerminal sauté, pas retenté
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_provider_recovers_after_success(monkeypatch):
+    """Un succès réinitialise le compteur d'échecs -- 2 échecs + 1 succès + 2 échecs
+    ne doivent JAMAIS déclencher le coupe-circuit (seuil = 3 échecs CONSÉCUTIFS)."""
+    from aria_core.services import geckoterminal as gt
+
+    outcomes = iter([False, False, True, False, False])
+    gt_calls = 0
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        nonlocal gt_calls
+        gt_calls += 1
+        ok = next(outcomes)
+        return gt.OHLCVResult(
+            candles=_plain_candles(1) if ok else [], available=ok,
+            error=None if ok else "rate limit",
+        )
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    for _ in range(5):
+        await me._fetch_candles("0xpool", "base")
+    assert gt_calls == 5  # jamais sauté -- le succès du milieu a remis le compteur à zéro
+    assert not me._provider_in_cooldown("geckoterminal")
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_empty_result_not_counted_as_provider_failure(monkeypatch):
+    """``available=True, candles=[]`` (ce token précis n'a pas de données) n'est PAS
+    un signal de panne fournisseur -- ne doit jamais déclencher le coupe-circuit,
+    contrairement à ``available=False`` (rate limit/panne confirmée)."""
+    from aria_core.services import geckoterminal as gt
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=[], available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    for _ in range(5):
+        await me._fetch_candles("0xpool", "base")
+    assert me._provider_fail_counts.get("geckoterminal", 0) == 0
+    assert not me._provider_in_cooldown("geckoterminal")
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_provider_cooldown_expires(monkeypatch):
+    """La pause n'est pas permanente -- une fois ``_PROVIDER_COOLDOWN_SECONDS``
+    écoulées, GeckoTerminal est retenté normalement."""
+    from aria_core.services import geckoterminal as gt
+
+    async def fake_gt_ohlcv(pool_address, *, network):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    for _ in range(me._PROVIDER_FAIL_THRESHOLD):
+        await me._fetch_candles("0xpool", "base")
+    assert me._provider_in_cooldown("geckoterminal")
+
+    # simule l'écoulement du délai de pause sans dépendre d'un vrai sleep
+    me._provider_cooldown_until["geckoterminal"] -= (me._PROVIDER_COOLDOWN_SECONDS + 1)
+    assert not me._provider_in_cooldown("geckoterminal")
 
 
 # ── _technical_alignment ────────────────────────────────────────────────────────────

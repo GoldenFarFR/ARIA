@@ -3378,6 +3378,109 @@ BLOQUANT trouvé et corrigé en revue croisée avant déploiement.**
   focalisé sur la détection de tromperie, pas la météo de marché générale), mais à
   reconfirmer avec l'opérateur si l'intention était plus large.
 
+**19/07 (suite, nuit) — balayage complet du bug de mislabeling quote-token (2 nouveaux
+endroits corrigés, `a122b522`, DÉPLOYÉ) + correction manuelle du capital paper-trading
+(position #21 neutralisée, coupe-circuit dur qui était armé sur un faux drawdown de
+-61% -- levé).**
+- **Root cause déjà identifiée plus tôt (position #21, "PLAZM" en réalité ESHARE) :**
+  `_best_pair`/`_default_pair_lookup` (`momentum_entry.py`/`paper_trader.py`, déjà
+  corrigés et déployés) sélectionnaient la paire la plus liquide parmi TOUTES les
+  paires renvoyées par `fetch_token_pairs(contrat)`, y compris celles où le contrat
+  n'est que le simple QUOTE du pool d'un AUTRE token de base plus liquide. Sur
+  demande opérateur explicite ("donc PLAZM sa se reproduira plus jamais jespere"),
+  grep exhaustif du même pattern (`max(pairs, key=lambda p: p.liquidity_usd)` sans
+  filtre `base_address`) dans tout le codebase -- **2 instances supplémentaires
+  trouvées et corrigées** : `acp_onchain_scan.scan_base_token` (le pipeline `/vc`
+  lui-même -- sans le fix, `/vc` pouvait analyser et publier, PDF envoyé par email
+  inclus, le prix/OHLCV/liens projet d'un token totalement différent de celui
+  réellement demandé) et `vanguard/backend` `dexscreener.resolve_token_to_best_pair`
+  (flux public de la vitrine -- graphiques tendance). Deux endroits structurellement
+  similaires (`pairs.py::discover_pairs`, `market_feed._seed_search_pairs`) examinés
+  et volontairement laissés intacts : curent des résultats de recherche
+  multi-tokens pour un flux de découverte, pas une résolution d'identité d'un seul
+  contrat -- pas la même classe de bug. Exécution swap réelle
+  (`agent_wallet_pilot_cycle`) confirmée non affectée : utilise toujours le contrat
+  original, jamais la sortie de ce chemin de résolution de paire. Suite complète
+  verte (6121 passed) à chaque étape, déployé et vérifié (health check indépendant,
+  commit `a122b522` confirmé servi).
+- **Correction manuelle du capital, suite directe ("remet le capital a jour sans le
+  bug de plasm")** : investigation de la position #21 réelle a révélé l'ampleur
+  exacte -- P&L final `+3 844 153,44 $` + `realized_pnl_partial` (paliers 1-2)
+  `+7 688 307 $`, soit ~11,5M$ de gain fictif n'ayant jamais reflété un vrai
+  mouvement de prix (le "+32950%" affiché venait de comparer le prix d'ENTRÉE de
+  PLAZM au prix de SORTIE d'ESHARE, deux actifs différents). **Découverte annexe
+  critique en creusant** : ce pic fictif avait figé `equity_high_water_mark` à
+  12,5M$, ce qui **bloquait déjà toutes les nouvelles positions** en prod
+  (`risk_guard` coupe-circuit dur armé sur un faux drawdown de -61%, vérifié via
+  `blocks_new_entries()` AVANT toute correction -- un problème actif, pas
+  cosmétique). Sauvegarde de `aria.db` prise avant toute écriture
+  (`/opt/aria-data/backups/`). Correctif en 3 volets, aucune modification de code,
+  uniquement les DONNÉES de cette position précise : (1) `pnl_usd`/`pnl_pct`/
+  `realized_pnl_partial` de la ligne #21 mis à 0 (jamais supprimée -- annotation
+  claire ajoutée dans `close_notes`, traçabilité préservée) ; (2)
+  `equity_high_water_mark` réinitialisé à `1 000 000 $` (même convention que
+  `run_weekly_reset()` au démarrage d'un cycle) ; (3) `risk_guard.resume_new_entries()`
+  appelé (fonction dédiée, jamais un hand-edit de fichier JSON). Capital réel
+  vérifié après coup : équité `997 685 $` (-0,23%), 5 trades clôturés (4 vraies
+  petites pertes + celui-ci neutralisé à 0), winrate 0%, 11 positions encore
+  ouvertes -- photo honnête, coupe-circuit levé.
+- **Bug de comptabilité DISTINCT trouvé en creusant la correction ci-dessus, corrigé
+  (`5365b643`, PAS déployé -- consigne opérateur explicite "ne deploie pas" ce
+  segment)** : `portfolio_summary()` ne lit `realized_pnl_partial` QUE pour les
+  positions encore `open` -- une fois `closed`, seul `pnl_usd` compte dans
+  l'agrégat. `close_position()` ne sommait que le P&L du DERNIER palier, donc le
+  P&L des paliers de prise de profit déjà réalisés (`reduce_position`) disparaissait
+  silencieusement du capital total pile au moment de la clôture finale. Vérifié par
+  calcul sur la position #21 réelle : contribution au cash avant clôture finale
+  `+7 688 306,88 $` (via `realized_pnl_partial`), après clôture seulement
+  `+3 844 153,44 $` (via `pnl_usd`). **Affecte toute position LÉGITIME avec prise de
+  profit échelonnée**, pas seulement PLAZM -- sous-estimait le vrai capital à chaque
+  fois que ça arrivait. Fix : `pnl_usd` final = P&L de la dernière tranche +
+  `realized_pnl_partial` déjà accumulé (`realized_pnl_partial` reste inchangé sur la
+  ligne, toujours visible séparément). Nouveau test de régression
+  (`test_close_position_includes_prior_partial_pnl`), suite complète verte (6122
+  passed).
+- **#94 (ventiler `honeypot_unavailable` par chaîne) -- vérifié en direct, verdict
+  confirmé, aucune action corrective nécessaire.** Échantillon live (12 candidats
+  fraîchement découverts par chaîne, `evaluate_momentum_entry` réellement appelé) :
+  Base = 0/12 `honeypot_unavailable` (funnel dominé par `no_entry_signal`, rejet de
+  marché légitime) ; Solana = 9/12 `honeypot_unavailable` + 3/12 `honeypot_rejected`
+  (0% de la couverture passe le honeypot proprement). Confirme exactement la
+  doctrine déjà décidée le 17/07 ("Solana reste au même standard de sécurité, jamais
+  assoupli") -- le gros du compteur agrégé `honeypot_unavailable` (735/~1555 sur 48h
+  glissantes, `/funnel`) est un phénomène Solana accepté par design, pas un problème
+  Base à corriger.
+- **#95 (coupe-circuit adaptatif par fournisseur, cascade OHLCV) -- évalué, construit,
+  testé, PAS déployé.** Root cause du besoin : `_fetch_candles` retente TOUJOURS
+  GeckoTerminal en premier, même en pleine rafale de 429 (observé en direct en
+  diagnostiquant #94 le même soir) -- gaspille la latence du throttle partagé
+  (2.1s/appel) sur un appel voué à l'échec avant de retomber sur l'étage suivant.
+  Nouveau : état process-local (jamais persisté -- optimisation de latence
+  best-effort, perdre l'état à un redémarrage ne fausse rien) `_provider_fail_counts`/
+  `_provider_cooldown_until`, appliqué aux 4 étages réseau de la cascade
+  (GeckoTerminal/CoinMarketCap/Mobula/Dune -- DexScreener-synthèse exclu, aucun appel
+  réseau). Seuil 3 échecs consécutifs -> pause 180s, avant repli direct sur l'étage
+  suivant. Ne compte comme échec que `available=False` (panne/rate-limit confirmée)
+  ou une exception réseau -- **jamais** `available=True, candles=[]` (ce token
+  précis n'a simplement pas de données, pas un signal de santé du fournisseur). Un
+  succès réinitialise le compteur à zéro. 4 nouveaux tests dédiés + fixture autouse
+  de reset (état module-level partagé entre tests, même piège que
+  `momentum_blacklist` déjà rencontré cette session). Suite `test_momentum_entry.py`
+  vérifiée verte (114 passed).
+- **Issue GitHub #36 (radar EAS/Ponder/ERC-8004, `aria-knowledge-proposal`) fermée
+  avec verdict explicite** (même protocole que la diligence Flaunch/Zora du 15/07) :
+  portée/schéma non adaptés à `truth_ledger/canonical_facts.yaml` (identité/produit
+  d'ARIA, pas de la diligence technologique externe), aucune des trois pistes n'avait
+  atteint un statut de fait stable/actionnable au moment de la recherche -- contenu
+  déjà préservé à sa place naturelle (`docs/aria-learning-inbox/2026-07-14-scan-
+  large-spectre-radar-technologique.md`), rien à graver.
+- **Recherche opérateur banquée** : `docs/aria-learning-inbox/2026-07-19-recherche-
+  taux-de-succes-blockchains.md` -- taux de succès Web2-crossover par blockchain
+  (demande opérateur directe), récupérée depuis le transcript d'un agent resté
+  orphelin côté UI (fini d'écrire sa réponse mais jamais retourné à l'orchestrateur --
+  `TaskStop` confirmait la tâche introuvable). Confirme indépendamment la doctrine
+  Solana déjà actée. Rien sur `/vc`/momentum, recherche informative pour l'opérateur.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
