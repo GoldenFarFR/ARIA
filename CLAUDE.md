@@ -3284,6 +3284,100 @@ via AskUserQuestion) — TOUT DÉPLOYÉ ET VÉRIFIÉ (`e4262044`).**
   comportement sur un pipeline déjà actif en prod, `ARIA_CONVICTION_RESEARCH_ENABLED=
   true` depuis ce même segment), vérifié par health check indépendant.
 
+**19/07 (suite) — GitHub/Discord/Telegram/Farcaster exploités (pas seulement site+X,
+`6477bcd0`), puis Otto AI câblé dans le pipeline momentum réel + vérification de
+CONTENU des liens + transparence complète de la thèse (`100b2087`), avec un vrai bug
+BLOQUANT trouvé et corrigé en revue croisée avant déploiement.**
+- **Retour opérateur (conversation Telegram, capture) : DexScreener affiche quasi
+  toujours GitHub/web/X/Discord/Farcaster (rarement absents, "c'est une erreur" quand
+  ils manquent)** -- `conviction_research.py` n'exploitait jusque-là que "Site
+  officiel"/"X (Twitter)", tous les autres liens déjà extraits par `dexscreener.py`
+  étaient silencieusement jetés. Corrigé : farcaster ajouté à `_SOCIAL_LABELS`
+  (dexscreener.py), tout lien "autre plateforme" désormais passé en contexte
+  supplémentaire au LLM de synthèse. Deux vrais bugs trouvés en revue croisée avant ce
+  premier commit : un 2e site "Site officiel" (label générique par défaut sur toute
+  entrée `websites` non labellée) était mal classé sous "Autres liens" -- corrigé,
+  jamais mélangé ; le garde "aucune source trouvée" ignorait les autres liens connus
+  -- un projet avec SEULEMENT GitHub/Discord (pas de site/X) retournait à tort "aucune
+  source" sans jamais appeler le LLM -- corrigé.
+- **Deux décisions opérateur tranchées via AskUserQuestion, suite à "je veut que vc et
+  les analyse de aria soit identique et la seul difference c juste le rapport"** :
+  (1) portée de l'unification -- **"unifier seulement la profondeur d'analyse"**
+  (garder le gate rapide de momentum honeypot+R/R pour DÉCIDER, mais une fois retenu
+  un token doit passer par la même profondeur de diligence que `/vc`), PAS le gate
+  d'entrée lui-même (aurait annulé le pivot #194 du 15/07, délibérément permissif pour
+  la vitesse) ; (2) sur "ARIA doit pouvoir tout utiliser... même si elle a utilisé
+  x402, même si elle a fait des recherches sur tous les liens, tout de chez tout,
+  pour que toi tu puisse au mieux la paramétrer" et "discord pas besoin, telegram
+  c'est possible ? et le reste oui" -- GitHub + Farcaster construits, Telegram
+  construit après confirmation de faisabilité réelle (feasibility testée en direct
+  AVANT tout code, norme du 14/07), Discord explicitement écarté.
+- **Faisabilité vérifiée en direct (norme du 14/07, jamais coder contre un schéma
+  supposé)** : GitHub `api.github.com/repos/{owner}/{repo}` (public, sans clé, 60
+  req/h/IP -- volontairement PAS authentifié avec `GITHUB_TOKEN`, scopé à un usage
+  sans rapport, #114) ; Farcaster via **Warpcast** (`api.warpcast.com/v2/
+  user-by-username`, public gratuit -- Neynar retesté le même soir exige désormais un
+  paiement x402 ou une clé, écarté) ; Telegram via `t.me/s/<canal>` (page d'aperçu
+  HTML publique, aucun bot token -- un canal inexistant/privé redirige vers
+  `t.me/<canal>` SANS le `/s/`, signal fiable confirmé empiriquement).
+- **Trois nouveaux clients dôme standard** (`services/github_verify.py`,
+  `services/farcaster.py`, `services/telegram_channel_verify.py`) -- vérifient le
+  CONTENU réel derrière un lien déclaré (âge/dernière activité/étoiles d'un dépôt,
+  abonnés + label anti-spam Warpcast d'un profil, abonnés + dernier message d'un
+  canal), pas seulement son existence. Câblés via `_describe_other_known_link`.
+- **`ConvictionResearch.process_trail` (nouveau champ)** : documente CHAQUE étape
+  RÉELLEMENT exécutée (Tavily tenté, X officiel vs repli x402 twit.sh, vérifications
+  de liens), TOUJOURS peuplé même sur "aucune source trouvée" -- threadé dans
+  `momentum_entry.py`'s `reasons` (donc dans la thèse persistée par `paper_trader.py`,
+  visible via `/feedback`/`/ledger` et le registre de trades).
+- **Otto AI (market_alerts) câblé dans `momentum_entry._llm_confirm`** (le
+  tie-breaker R/R ambigu) via `_market_alerts_line()` -- jusqu'ici branché
+  UNIQUEMENT sur `/vc`, jamais observable dans le test 1M$ réel qui fait tourner
+  momentum. **Nuance importante** : la lecture est câblée, mais `ARIA_MARKET_ALERTS_
+  ENABLED` (le cycle heartbeat qui ALIMENTE la table lue) reste OFF -- tant qu'il
+  n'est pas activé, `_market_alerts_line()` renvoie systématiquement vide et Otto AI
+  n'a AUCUN effet réel sur les décisions momentum malgré le câblage. Activer ce gate
+  reste une décision opérateur distincte, pas prise ce soir.
+- **INCIDENT SÉCURITÉ TROUVÉ ET CORRIGÉ AVANT DÉPLOIEMENT (revue croisée
+  adversariale, 4 lenses, ~1650 lignes de diff)** : une URL "Site officiel"
+  attaquant-contrôlée (déclarée par le projet sur DexScreener, jamais validée
+  au-delà de `http(s)://`) était ajoutée BRUTE (non sanitisée) à `process_trail` --
+  tracé bout en bout, ce texte atteignait le prompt SYSTÈME Telegram de l'opérateur
+  (`conviction_research.py` -> `momentum_entry.py`'s `reasons` -> `paper_trader.py`'s
+  `thesis` persisté -> `paper_ledger_report.build_trade_status_context()` ->
+  `brain.py::_try_trade_status_response`, splicé BRUT dans le system prompt SANS
+  balise `<donnees_non_fiables>` à ce dernier maillon) -- en violation directe du
+  mandat #192 pourtant appliqué méticuleusement partout ailleurs dans ce même
+  fichier. **Corrigé à deux niveaux (défense en profondeur)** : (1) à la SOURCE --
+  nouvelle fonction `_trail_note()` qui sanitise SYSTÉMATIQUEMENT chaque entrée de
+  `process_trail`, plus aucun `trail.append()` brut nulle part dans le fichier ; (2)
+  au POINT D'INJECTION -- `build_trade_status_context()` enveloppe désormais tout le
+  bloc dans `<donnees_non_fiables>` + `sanitize_untrusted_text`, protégeant contre
+  toute future source de contenu non fiable dans une thèse, pas seulement celle-ci.
+  Testé bout en bout avec une vraie tentative d'injection reproduite (thèse
+  malveillante -> contexte final neutralisé, vérifié explicitement). **Trois autres
+  bugs réels trouvés dans la même revue, corrigés au passage** : le séparateur
+  littéral `" | "` utilisé pour stocker `process_trail` en cache n'était pas sûr
+  (une URL contenant cette sous-chaîne aurait corrompu le round-trip) -- remplacé par
+  un encodage JSON ; au-delà du plafond de 6 liens connus, un lien déclaré
+  disparaissait silencieusement du processus documenté -- corrigé, une note explicite
+  apparaît désormais ; la regex GitHub échouait sur des variantes très courantes
+  d'URL copiée-collée (query string, fragment `#readme`, texte de phrase autour) --
+  corrigée (retrait de l'ancrage de fin de chaîne).
+- Suite complète vérifiée verte (6122 passed, mêmes 5 échecs `test_proactive*`
+  pré-existants sans rapport) + `test_coherence.py` (81 passed). Déployé et vérifié
+  par health check indépendant (`100b2087`).
+- **Points restés ouverts, signalés mais pas construits ce soir** (per la revue
+  "completeness-vs-request", jugement délibéré de ne pas étendre unilatéralement une
+  portée déjà large) : la demande opérateur "tout de chez tout" reste partiellement
+  satisfaite -- `market_sentiment.py`, `radar_x.py`, `smart_money.py` (wallet-scoring),
+  `cybercentry_insight.py`, `services/x402_bazaar.py` restent tous inatteignables
+  depuis le pipeline momentum réel ; Otto AI, une fois activé, ne s'exercera que sur
+  la branche R/R ambiguë (`_llm_confirm`), jamais sur l'achat direct ni le garde de
+  sécurité final (`_llm_security_gate`) -- délibéré (le garde de sécurité doit rester
+  focalisé sur la détection de tromperie, pas la météo de marché générale), mais à
+  reconfirmer avec l'opérateur si l'intention était plus large.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
