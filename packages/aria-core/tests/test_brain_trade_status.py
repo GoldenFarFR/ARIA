@@ -70,6 +70,46 @@ async def test_trade_status_question_injects_real_ledger_into_llm_context(monkey
 
 
 @pytest.mark.asyncio
+async def test_thesis_question_on_open_position_injects_real_thesis(monkeypatch, tmp_db):
+    """19/07 -- reproduit le 2e incident réel : "c'est quoi ta these sur lachat de
+    cobot ?" (formulation directe de l'opérateur, "achat" pas "acheté", "c'est quoi"
+    pas dans l'ancienne liste de tournures) a reçu "je n'ai pas de thèse -- je ne l'ai
+    pas passé dans le pipeline" alors que la thèse COBOT était réellement stockée en
+    base -- confabulation confirmée par capture opérateur."""
+    await pt.reset_portfolio(1_000_000.0)
+    real_thesis = (
+        "honeypot clear (GoPlus); prix dans la zone Fibonacci 0,618-0,786; "
+        "divergence haussière RSI; R/R franc (2.5) + alignement technique"
+    )
+    await pt.open_position(
+        A, "COBOT", 0.0001439,
+        target_price=0.000165774, invalidation_price=0.000137165,
+        alloc_usd=50_000, thesis=real_thesis,
+    )
+
+    captured = {}
+
+    async def _fake_llm(self, message, lang, *, public=False, visitor_id="", extra_system_context=None, **k):
+        captured["extra_system_context"] = extra_system_context
+        return "Thèse COBOT : honeypot clear, golden pocket + divergence RSI, R/R 2.5."
+
+    monkeypatch.setattr("aria_core.brain.AriaBrain._llm_response", _fake_llm)
+    monkeypatch.setattr("aria_core.llm.is_llm_configured", lambda: True)
+    monkeypatch.setattr("aria_core.repertoire_db.save_message", _noop_save)
+    monkeypatch.setattr("aria_core.memory.append_memory", lambda *a, **k: None)
+
+    brain = AriaBrain()
+    response = await brain.process(
+        "c'est quoi ta these sur lachat de cobot ?", lang="fr", public_mode=False,
+    )
+
+    assert response.data.get("trade_status") is True
+    assert "COBOT" in captured["extra_system_context"]
+    assert "divergence" in captured["extra_system_context"].lower()
+    assert "RÉEL" in captured["extra_system_context"]
+
+
+@pytest.mark.asyncio
 async def test_non_trade_question_never_reaches_trade_status_path(monkeypatch, tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     llm_calls = {"n": 0, "extra": "sentinel"}

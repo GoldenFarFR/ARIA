@@ -118,6 +118,23 @@ def test_trade_status_question_requires_both_trigger_and_question_form():
     assert not is_trade_status_question("qu'est-ce qui s'est passé avec le déploiement ?")
     assert not is_trade_status_question("pourquoi le ciel est bleu ?")
     assert not is_trade_status_question("bonjour")
+    # Le repli "?" seul ne suffit toujours pas sans mot-clé de trading -- le garde-fou
+    # réel reste le mot-clé, pas la présence d'un point d'interrogation.
+    assert not is_trade_status_question("tu as vu le nouveau design du site ?")
+
+
+def test_trade_status_question_detects_second_real_incident_phrasing():
+    """19/07 -- 2e incident réel : "c'est quoi ta these sur lachat de cobot ?" ne
+    matchait ni le mot-clé ("achat" != "acheté", "thèse" absent, "AERO" codé en dur
+    au lieu d'un vrai mot générique) ni la tournure ("c'est quoi" absente). ARIA a
+    répondu "je n'ai pas de thèse" alors que la thèse COBOT était réellement stockée
+    en base -- confabulation confirmée par capture opérateur."""
+    assert is_trade_status_question("c'est quoi ta these sur lachat de cobot ?")
+    assert is_trade_status_question("quelle est ta thèse sur ce trade ?")
+    # Le repli "?" seul (sans tournure connue) couvre toute future formulation directe
+    # tant qu'un vrai mot-clé de trading est présent.
+    assert is_trade_status_question("tu as une thèse là-dessus ?")
+    assert is_trade_status_question("t'as acheté combien de tokens ?")
 
 
 def test_analysis_methodology_reply_cites_real_tools():
