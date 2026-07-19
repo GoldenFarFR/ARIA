@@ -26,7 +26,6 @@ class SkillName(str, Enum):
     TRAINING_PORTFOLIO = "training_portfolio"
     HOLDING_SITE = "holding_site"
     ENTREPRENEUR_CULTIVATION = "entrepreneur_cultivation"
-    CAPABILITY_QI = "capability_qi"
     EPISTEMIC_CHECK = "epistemic_check"
     EXTERNAL_CLAIM_VERIFY = "external_claim_verify"
     ACP_MARKETPLACE = "acp_marketplace"

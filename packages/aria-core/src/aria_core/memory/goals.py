@@ -32,14 +32,6 @@ def _load_goals() -> list[dict]:
 def _dynamic_state_lines() -> list[str]:
     lines: list[str] = []
     try:
-        from aria_core.capability_levels import global_index
-
-        idx = global_index()
-        if idx > 0:
-            lines.append(f"- **QI global** : {idx:.0f} / 1000")
-    except Exception:
-        pass
-    try:
         from aria_core.revenue_goals import goal_progress, total_revenue_usd
 
         p = goal_progress()

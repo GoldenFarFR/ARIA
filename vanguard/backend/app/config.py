@@ -253,9 +253,6 @@ class Settings(BaseSettings):
     aria_acp_provider_enabled: bool = False
     aria_acp_events_file: str = ""
     aria_acp_workflow_used_tweet: bool = True
-    aria_qi_shadow_judge_enabled: bool = True
-    aria_qi_judge_force_aria: bool = False
-    aria_qi_judge_force_ouvrier: bool = False
     aria_vector_memory: bool = False
     aria_ddg_search_cache: bool = False
     # Fournisseur de recherche web : "ddg" (gratuit, défaut) ou "tavily" (opt-in, clé env

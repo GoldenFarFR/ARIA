@@ -3,17 +3,7 @@ from __future__ import annotations
 
 import re
 
-from aria_core.capability_levels import CATEGORY_ORDER, check_auto_completions, full_status
 from aria_core.runtime import settings
-
-_COMPETENCE_IMPROVE_RE = re.compile(
-    r"(?:"
-    r"il te faut quoi|de quoi as[- ]?tu besoin|what do you need|"
-    r"am[eé]liorer tes comp(?:[eé]tences?)?|improve your (?:skills|capabilities)|"
-    r"renforcer tes comp|tes lacunes|tes faiblesses"
-    r")",
-    re.IGNORECASE,
-)
 
 _INJECTED_CLAIM_RE = re.compile(
     r"(?:"
@@ -38,7 +28,7 @@ _OPERATOR_COMMAND_RE = re.compile(
     # \bsupprime\b/\bsupprimer\b (pas juste "supprim") : n'attrape que l'impératif/infinitif
     # ("supprime X"), jamais le participe passé narratif ("Render a supprimé...") qui doit
     # rester détectable comme affirmation externe collée, pas comme commande opérateur.
-    r"(?:^/|crée|créer|creer|create\s+repo|level\s+up|montre\s+qi|check-aria|sync-render|"
+    r"(?:^/|crée|créer|creer|create\s+repo|check-aria|sync-render|"
     r"deploy|worker\s+delegate|/learn|/directive|\bsupprime\b|\bsupprimer\b|"
     r"delete.*(?:workflow|offering|offre))",
     re.IGNORECASE,
@@ -96,10 +86,6 @@ def _has_structured_multistep_task(text: str) -> bool:
     return len(_STRUCTURED_LIST_LINE_RE.findall(text)) >= _STRUCTURED_TASK_MIN_ITEMS
 
 
-def wants_capability_improvement(message: str) -> bool:
-    return bool(_COMPETENCE_IMPROVE_RE.search((message or "").strip()))
-
-
 def wants_more_detail_followup(message: str) -> bool:
     return bool(_MORE_DETAIL_RE.match((message or "").strip()))
 
@@ -116,8 +102,6 @@ def is_injected_factual_claim(message: str) -> bool:
     if _ANALYSIS_REQUEST_RE.search(text):
         return False
     if _has_structured_multistep_task(text):
-        return False
-    if wants_capability_improvement(text):
         return False
     return bool(_INJECTED_CLAIM_RE.search(text))
 
@@ -147,47 +131,6 @@ def unverified_claim_reply(message: str, *, lang: str = "fr") -> str:
         f"Hmm, « {snippet}… » — nothing in my logs or GitHub confirms it. "
         "Won't just nod along without checking. Say « verify » (or include the cue) and I'll dig with web + GitHub, then tell you true/false like a normal chat."
     )
-
-
-def operator_improvement_reply(*, lang: str = "fr") -> str:
-    """Ce dont ARIA a besoin pour monter en compétence — lecture locale QI."""
-    check_auto_completions()
-    status = full_status(lang)
-    by_cat = status.get("categories") or {}
-    ordered = sorted(
-        CATEGORY_ORDER,
-        key=lambda c: int((by_cat.get(c) or {}).get("level") or 0),
-    )
-    weak = ordered[:3]
-
-    if lang == "fr":
-        lines = [
-            "Pour monter en compétence, il me faut surtout de l'exécution réelle, pas plus de théorie :",
-        ]
-        tips = {
-            "codage": "plus de cycles ouvrier (PR mergées, tests verts) sur aria-core et aria-vanguard",
-            "fiabilite": "moins d'incidents ops — health Render, secrets sync, runbook à jour",
-            "autonomie": "heartbeat qui tourne sans que tu relances, aucun raccourci ACP/revenu",
-            "business": "track-record VC/trading qui grandit (aucun produit payant aujourd'hui)",
-            "intelligence": "mémoire ops (COLLEGUE, JOURNAL) tenue à jour multi-PC",
-            "social": "X/Telegram réguliers sans promesses vides",
-        }
-        for cat in weak:
-            lvl = int((by_cat.get(cat) or {}).get("level") or 0)
-            hint = tips.get(cat, "pratique ciblée + validation opérateur")
-            lines.append(f"• {cat} ({lvl}/1000) — {hint}")
-        lines.append(
-            f"\nIndice global : {status.get('global_index', '?')}/1000. "
-            "Dis « montre qi » pour le tableau complet."
-        )
-        return "\n".join(lines)
-
-    lines = ["To level up I need shipped work, not more theory:"]
-    for cat in weak:
-        lvl = int((by_cat.get(cat) or {}).get("level") or 0)
-        lines.append(f"• {cat} ({lvl}/1000) — targeted practice + operator validation")
-    lines.append(f"\nGlobal index: {status.get('global_index', '?')}/1000. Say « show qi » for full board.")
-    return "\n".join(lines)
 
 
 def llm_preference_reply(*, lang: str = "fr") -> str:

@@ -1192,10 +1192,12 @@ async def test_llm_confirm_system_prompt_labels_symbol_as_data(monkeypatch):
 # ── routage explicite Haiku 4.5 / OpenRouter (17/07) ────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_llm_confirm_routes_to_haiku_via_openrouter(monkeypatch):
-    """Retenu après une batterie de tests réels (pièges R/R, injection, volume,
-    donnée manquante, narratif) contre 200+ modèles -- doit rester CE modèle précis,
-    indépendamment du LLM_PROVIDER global (Grok/Spark)."""
+async def test_llm_confirm_uses_global_provider_no_openrouter_override(monkeypatch):
+    """19/07 -- décision opérateur explicite ("bascule sur spark et quand spark sera
+    vide en valeur on passera sur anthropique comme prévu") : l'override Haiku/
+    OpenRouter (retenu le 17/07 après une batterie de tests réels contre 200+
+    modèles) a été retiré -- ce départage utilise désormais le provider/fallback
+    global (Spark), comme tout le reste d'ARIA."""
     captured = {}
 
     async def fake_chat_with_context(*args, **kwargs):
@@ -1204,8 +1206,8 @@ async def test_llm_confirm_routes_to_haiku_via_openrouter(monkeypatch):
 
     monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
     await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
-    assert captured.get("provider") == "openrouter"
-    assert captured.get("model") == "anthropic/claude-haiku-4.5"
+    assert "provider" not in captured
+    assert "model" not in captured
 
 
 # ── garde de sécurité final (17/07, réponse à l'incident BRIAN) ─────────────────────
@@ -1257,7 +1259,10 @@ async def test_security_gate_fails_closed_on_exception(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_security_gate_routes_to_haiku_via_openrouter_at_zero_temperature(monkeypatch):
+async def test_security_gate_uses_global_provider_at_zero_temperature(monkeypatch):
+    """19/07 -- même retrait d'override que _llm_confirm ci-dessus (décision opérateur
+    explicite), la température 0.0 reste inchangée (toujours voulue pour la
+    cohérence du verdict)."""
     captured = {}
 
     async def fake_chat_with_context(*args, **kwargs):
@@ -1266,8 +1271,8 @@ async def test_security_gate_routes_to_haiku_via_openrouter_at_zero_temperature(
 
     monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
     await me._llm_security_gate(CONTRACT, "TOK", "base", 2.0, ["reason"])
-    assert captured.get("provider") == "openrouter"
-    assert captured.get("model") == "anthropic/claude-haiku-4.5"
+    assert "provider" not in captured
+    assert "model" not in captured
     assert captured.get("temperature") == 0.0
 
 

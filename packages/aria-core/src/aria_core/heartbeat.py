@@ -196,13 +196,6 @@ HEARTBEAT_TASKS = [
         enabled=True,
     ),
     HeartbeatTask(
-        id="qi_promote",
-        name="QI promotion check",
-        description="Propose palier suivant si gaps resolus / metriques OK",
-        interval_minutes=1440,
-        enabled=True,
-    ),
-    HeartbeatTask(
         id="vc_crawl",
         name="BASE token crawl",
         description="Decouvre les tokens Base -> filtre securite -> base propriataire",
@@ -1461,11 +1454,6 @@ class AriaHeartbeat:
                     "Health Render regression — issue ouverte\n\n"
                     f"{result.get('detail', '')[:500]}"
                 )
-
-        elif task_id == "qi_promote":
-            from aria_core.qi_promote import run_qi_promotion_check
-
-            await run_qi_promotion_check(lang="fr")
 
     def get_status(self) -> dict:
         return {

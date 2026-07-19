@@ -125,9 +125,6 @@ class AriaRuntimeSettings(BaseSettings):
     aria_acp_provider_enabled: bool = False
     aria_acp_events_file: str = ""
     aria_acp_workflow_used_tweet: bool = True
-    aria_qi_shadow_judge_enabled: bool = True
-    aria_qi_judge_force_aria: bool = False
-    aria_qi_judge_force_ouvrier: bool = False
     # Mémoire vectorielle Chroma — opt-in, désactivé par défaut (Phase B stub)
     aria_vector_memory: bool = False
     # Cache DDG — opt-in, évite requêtes répétées (gratuit, fichier local)

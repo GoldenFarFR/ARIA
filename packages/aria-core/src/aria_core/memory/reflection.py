@@ -94,31 +94,10 @@ def _synthesize_from_journal() -> list[str]:
     return lines[:cap]
 
 
-def _synthesize_from_qi_history() -> list[str]:
-    try:
-        from aria_core.capability_levels import CATEGORY_ORDER, load_progress
-
-        progress = load_progress()
-        lines: list[str] = []
-        for cat in CATEGORY_ORDER:
-            hist = (progress.get("categories") or {}).get(cat, {}).get("history") or []
-            if not hist:
-                continue
-            last = hist[-1]
-            if not isinstance(last, dict):
-                continue
-            note = sanitize_recall_text(str(last.get("note") or "")[:160])
-            if note and "juge:" in note.lower():
-                lines.append(f"[qi/{cat}] {note}")
-        return lines[-3:]
-    except Exception:
-        return []
-
-
 def get_reflections_text(*, budget_chars: int = _REFLECTION_BUDGET, lang: str = "fr") -> str:
     """Bloc markdown réflexions pour le contexte LLM (opérateur)."""
     explicit = read_explicit_reflections()
-    synthesized = _synthesize_from_journal() + _synthesize_from_qi_history()
+    synthesized = _synthesize_from_journal()
     if not explicit and not synthesized:
         return ""
 

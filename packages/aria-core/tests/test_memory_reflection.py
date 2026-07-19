@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from aria_core.memory.reflection import (
@@ -72,20 +70,3 @@ async def test_build_llm_context_public_excludes_reflection():
     append_reflection("Secret operator reflection")
     ctx = await build_llm_context(public=True)
     assert "Réflexion opérationnelle ARIA" not in ctx
-
-
-@pytest.mark.asyncio
-async def test_qi_judge_appends_reflection(tmp_path, monkeypatch):
-    from aria_core import capability_levels as cl
-    from aria_core.qi_auto_judge import run_qi_auto_judge
-
-    monkeypatch.setattr(cl, "PROGRESS_PATH", tmp_path / "capability_progress.json")
-    monkeypatch.setattr(
-        "aria_core.qi_self_judge_shadow.run_qi_judge_with_shadow",
-        lambda **_: (_ for _ in ()).throw(RuntimeError("skip shadow")),
-    )
-    await run_qi_auto_judge(source="test", lang="fr")
-    log = tmp_path / "memory" / "reflections.jsonl"
-    if log.is_file():
-        entry = json.loads(log.read_text(encoding="utf-8").strip().splitlines()[-1])
-        assert entry.get("context") == "qi-judge"

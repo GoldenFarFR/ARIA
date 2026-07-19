@@ -5,10 +5,8 @@ from aria_core.llm_routing_meta import is_llm_routing_question
 from aria_core.operator_conversational import (
     is_injected_factual_claim,
     llm_preference_reply,
-    operator_improvement_reply,
     unverified_claim_reply,
     verify_external_claim,
-    wants_capability_improvement,
     wants_claim_verification,
     wants_more_detail_followup,
 )
@@ -18,10 +16,6 @@ from aria_core.skills.acp_conversational import is_conversational_acp_question
 def test_acp_plan_is_conversational():
     assert is_conversational_acp_question("tu a prevu de faire quoi sur acp ?")
     assert is_conversational_acp_question("et concernant acp ?")
-
-
-def test_capability_improvement_detected():
-    assert wants_capability_improvement("il te faut quoi pour ameliorer tes competence ?")
 
 
 def test_injected_claims_virtuals_and_telegram():
@@ -170,12 +164,6 @@ def test_unverified_reply_no_p_true():
     assert "vérifie" in text.lower() or "check" in text.lower() or "affirmer" in text.lower()
 
 
-def test_improvement_reply_no_probability():
-    text = operator_improvement_reply(lang="fr")
-    assert "P(vrai)" not in text
-    assert "compétence" in text.lower() or "Indice global" in text
-
-
 @pytest.mark.asyncio
 async def test_acp_plan_not_help_wall(monkeypatch):
     from aria_core.skills import acp_cli
@@ -200,12 +188,6 @@ def test_wants_more_detail_followup_requires_whole_message():
     # d'une vraie question distincte ne doit pas être confondue avec un simple "dis m'en plus".
     assert not wants_more_detail_followup("développe ton avis sur le marché crypto aujourd'hui")
     assert not wants_more_detail_followup("")
-
-
-def test_operator_improvement_reply_english_branch():
-    text = operator_improvement_reply(lang="en")
-    assert "Global index" in text
-    assert "P(vrai)" not in text
 
 
 def test_llm_preference_reply_french_cites_all_three_engines(monkeypatch):

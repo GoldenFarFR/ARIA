@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aria-core"
 version = "0.1.0"
-description = "ARIA ZHC brain — skills, memory, Telegram, capability index (SSOT runtime)"
+description = "ARIA ZHC brain — skills, memory, Telegram (SSOT runtime)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

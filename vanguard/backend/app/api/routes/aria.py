@@ -681,28 +681,6 @@ async def add_knowledge_item(body: KnowledgeCreateRequest, request: Request):
     }
 
 
-@router.get("/capability")
-async def get_capability(lang: str = "fr"):
-    from aria_core.capability_levels import check_auto_completions, full_status
-
-    check_auto_completions()
-    return full_status("fr" if lang.startswith("fr") else "en")
-
-
-class CapabilityLevelUpRequest(BaseModel):
-    category: str = Field(..., min_length=3, max_length=32)
-    note: str = Field(default="", max_length=300)
-
-
-@router.post("/capability/level-up")
-async def capability_level_up(body: CapabilityLevelUpRequest, request: Request):
-    require_operator(request)
-    from aria_core.capability_levels import complete_level
-
-    cat = body.category.lower().replace("fiabilité", "fiabilite")
-    return complete_level(cat, note=body.note or "operator API")
-
-
 @router.get("/directives")
 async def get_directives(request: Request):
     if is_public_mode():

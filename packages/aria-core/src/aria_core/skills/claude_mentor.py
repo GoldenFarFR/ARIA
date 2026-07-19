@@ -212,20 +212,11 @@ async def run_claude_mentor_cycle(*, llm=None, github_client=None) -> dict:
         from aria_core.llm import chat_with_context as llm
 
     prompt = _format_snapshot_for_prompt(snapshot)
-    # 17/07 -- Claude Sonnet 5 via OpenRouter (provider/model explicites, indépendants du
-    # LLM_PROVIDER global Grok/Spark) : retenu après une revue de raisonnement profond
-    # réelle (autopsie multi-facteurs notée sur 5 critères -- Sonnet 5 a fini complet et
-    # correct sur les 5, moins cher ET plus rapide que tous les Opus testés une fois le
-    # budget de tokens réaliste appliqué). Secours explicite sur Haiku 4.5 (même provider,
-    # OpenRouter) si Sonnet 5 échoue ponctuellement -- puis repli global existant
-    # (Grok/Groq) si OpenRouter entier est injoignable. Remplace l'ancienne résolution via
-    # ``aria_llm_model_develop``/``DEFAULT_MODEL_DEVELOP`` (ID catalogue Virtuals, devenu
-    # incohérent depuis la bascule hors Virtuals du 17/07 -- cf. llm.py).
-    raw = await llm(
-        prompt, _MENTOR_SYSTEM, max_tokens=900, depth="claude_mentor",
-        provider="openrouter", model="anthropic/claude-sonnet-5",
-        fallback_provider="openrouter", fallback_model="anthropic/claude-haiku-4.5",
-    )
+    # 17/07 -- Claude Sonnet 5 via OpenRouter retenu après une revue de raisonnement
+    # profond réelle. 19/07 -- décision opérateur explicite ("bascule sur spark et
+    # quand spark sera vide en valeur on passera sur anthropique comme prévu") :
+    # override retiré, utilise désormais le provider/fallback global (Spark).
+    raw = await llm(prompt, _MENTOR_SYSTEM, max_tokens=900, depth="claude_mentor")
     if not raw:
         await _log_run("llm_unavailable")
         return {"outcome": "llm_unavailable"}

@@ -5,6 +5,9 @@ JAMAIS enregistrées via add_handler(CommandHandler(...)) -- inaccessibles depui
 toujours malgré une doc CLAUDE.md qui les traitait comme actives. Ce test empêche
 un futur `_handle_*` d'être écrit puis oublié de _register_handlers, sans avoir à
 se souvenir de le vérifier à la main à chaque nouvelle commande.
+
+19/07 -- _handle_qi/_handle_level retirés entièrement (avec tout le système "Indice
+ARIA", décision opérateur explicite) : 7 des 9 noms originaux restent vérifiés ici.
 """
 from __future__ import annotations
 
@@ -63,12 +66,13 @@ def test_registered_targets_all_exist_as_real_functions():
 
 
 def test_all_nine_recovered_commands_specifically_registered():
-    """Verrouille précisément l'incident du 18/07 -- ces 9 noms doivent apparaître,
-    pas seulement "le compte total colle par coïncidence"."""
+    """Verrouille précisément l'incident du 18/07 -- ces noms doivent apparaître,
+    pas seulement "le compte total colle par coïncidence". 7 des 9 originaux
+    (_handle_qi/_handle_level retirés le 19/07, cf. docstring module)."""
     registered = _registered_command_handler_targets()
     for fn in (
-        "_handle_x", "_handle_avatar", "_handle_repertoire", "_handle_qi",
-        "_handle_level", "_handle_learn", "_handle_calibrate", "_handle_experiment",
+        "_handle_x", "_handle_avatar", "_handle_repertoire",
+        "_handle_learn", "_handle_calibrate", "_handle_experiment",
         "_handle_handles",
     ):
         assert fn in registered, f"{fn} toujours non enregistré"

@@ -65,7 +65,6 @@ from aria_core.skills.launchpad_skill import execute_launchpad_select, wants_lau
 from aria_core.skills.holding_site_skill import execute_holding_site, wants_holding_site
 from aria_core.skills.training_skill import execute_training, wants_training
 from aria_core.skills.entrepreneur_skill import execute_entrepreneur, wants_entrepreneur
-from aria_core.skills.capability_skill import execute_capability, wants_capability
 from aria_core.skills.zhc_bridge import execute_zhc_bridge
 from aria_core.skills.acp_client_skill import execute_acp_marketplace, wants_acp_marketplace
 from aria_core.skills.ingest_repo_skill import execute_ingest_repo, wants_ingest_repo
@@ -176,11 +175,6 @@ INTENT_PATTERNS: list[tuple[SkillName, list[str]]] = [
         r"génér.*revenu", r"generer.*revenu", r"premier\s+dollar",
         r"s['']?active", r"active[- ]toi", r"commence.*agir",
     ]),
-    (SkillName.CAPABILITY_QI, [
-        r"\bqi\b", r"indice aria", r"niveau aria", r"niveaux aria",
-        r"score aria", r"capability", r"progression aria",
-        r"montre.*niveau", r"level up", r"/level",
-    ]),
 ]
 
 
@@ -266,8 +260,6 @@ def detect_intent(message: str) -> SkillName | None:
         return SkillName.INGEST_REPO
     if _acp_intent_enabled() and wants_acp_marketplace(message):
         return SkillName.ACP_MARKETPLACE
-    if wants_capability(message):
-        return SkillName.CAPABILITY_QI
     if _is_strategic_conversation(message):
         return None
     lower = message.lower()
@@ -545,22 +537,6 @@ class AriaBrain:
         lang_key = "fr" if lang == LANG_FR else "en"
         if not public:
             from aria_core.operator_conversational import (
-                operator_improvement_reply,
-                wants_capability_improvement,
-            )
-
-            if wants_capability_improvement(route_msg):
-                imp = operator_improvement_reply(lang=lang_key)
-                await repertoire_db.save_message("agent", imp, visitor_id=vid)
-                append_memory("chat", f"User: {user_message[:100]}\nARIA: {imp[:200]}")
-                return ChatResponse(
-                    reply=imp,
-                    skill_used=SkillName.CAPABILITY_QI,
-                    actions_taken=["Compétences ARIA (local — sans épistémique)"],
-                    data={"capability_improvement": True, "skip_web": True},
-                )
-
-            from aria_core.operator_conversational import (
                 is_injected_factual_claim,
                 unverified_claim_reply,
                 verify_external_claim,
@@ -728,11 +704,6 @@ class AriaBrain:
             actions.append("Entrepreneur cultivation — sector watch + revenue goal")
             skill = SkillName.ENTREPRENEUR_CULTIVATION
 
-        elif intent == SkillName.CAPABILITY_QI:
-            skill_output, data = await execute_capability(user_message, lang)
-            actions.append("Capability index — levels 0→1000")
-            skill = SkillName.CAPABILITY_QI
-
         elif intent == SkillName.ACP_MARKETPLACE:
             skill_output, data = await execute_acp_marketplace(user_message, lang)
             actions.append("ACP v2 marketplace — status/browse/provider")
@@ -755,7 +726,6 @@ class AriaBrain:
                     SkillName.GITHUB_SANDBOX.value,
                     SkillName.HOLDING_SITE.value,
                     SkillName.ENTREPRENEUR_CULTIVATION.value,
-                    SkillName.CAPABILITY_QI.value,
                     SkillName.MANAGE_REPERTOIRE.value,
                     SkillName.ACP_MARKETPLACE.value,
                 }
@@ -1068,25 +1038,14 @@ class AriaBrain:
 
                     from aria_core.operator_conversational import (
                         llm_preference_reply,
-                        operator_improvement_reply,
-                        wants_capability_improvement,
                         wants_more_detail_followup,
                     )
 
-                    # #144 : ces 4 checks utilisent des noms importés juste au-dessus --
+                    # #144 : ces checks utilisent des noms importés juste au-dessus --
                     # doivent rester DANS ce else (sinon un message contenant "ton",
                     # "sérieux(se)", "personnalité" ou "humour" comme mot isolé prend la
                     # branche if/pass ci-dessus sans jamais importer ces noms, et le bloc
                     # ci-dessous levait UnboundLocalError -- incident réel #144, 12/07).
-                    if wants_capability_improvement(route):
-                        return (
-                            operator_improvement_reply(lang=lang_key),
-                            SkillName.CAPABILITY_QI,
-                            ["Compétences ARIA (local QI — sans épistémique)"],
-                            {"capability_improvement": True, "skip_web": True},
-                            None,
-                        )
-
                     if wants_more_detail_followup(route) and is_llm_configured():
                         llm_reply = await self._llm_response(
                             "Développe ta réponse précédente avec plus d'arguments concrets.",

@@ -120,14 +120,6 @@
   - comms
   question: How do I talk to ARIA?
   answer: 'Chat on https://ariavanguardzhc.com (holding). X: @Aria_ZHC. Telegram: @Aria_ZHC_Bot.'
-- id: aria-capability-index
-  tags:
-  - aria
-  - capability
-  - qi
-  - levels
-  question: What is the ARIA capability index (QI)?
-  answer: The ARIA Index measures capability across 6 axes (coding, social, intelligence, reliability, autonomy, business), each from level 0 to 1000. Level 1 objectives can be completed in about one day; level 1000 takes years. Progress is evidence-based — operator validates via /level up on Telegram or POST /api/aria/capability/level-up. Business levels auto-advance when real revenue in revenue_ledger meets targets. SSOT rubric capability_rubric.yaml.
 - id: peer-competition-policy
   tags:
   - policy

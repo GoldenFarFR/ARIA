@@ -624,20 +624,17 @@ async def _llm_confirm(
         # dépendre d'un aléa d'échantillonnage. Sans effet mesurable sur la latence
         # (la température agit sur le sampling, pas sur le forward pass) -- gain de
         # cohérence, pas de vitesse.
-        # 17/07 (suite) -- provider/model explicites : Claude Haiku 4.5 via OpenRouter,
-        # retenu après une batterie de tests réels (pièges R/R falsifié, injection
-        # agressive, cassure sans volume, donnée manquante, buzz narratif -- 0 échec sur
-        # l'ensemble) contre Grok/Gemini/DeepSeek/Mistral/GPT et 200+ autres modèles.
-        # Indépendant du ``LLM_PROVIDER`` global (Grok/Spark) -- ce départage a besoin de
-        # CE modèle précis, pas de celui réglé pour le reste d'ARIA. max_tokens=20 (pas
-        # 10) -- vérifié en direct : Haiku écrit toujours le verdict EN PREMIER (donc
-        # 10 aurait suffi pour la décision elle-même), mais ajoute systématiquement une
-        # justification qui se fait couper (finish_reason=length, log warning bruyant
-        # pour rien) -- marge de sécurité, jamais une correction de bug de fond.
-        reply = await chat_with_context(
-            user, system, max_tokens=20, temperature=0.0,
-            provider="openrouter", model="anthropic/claude-haiku-4.5",
-        )
+        # 17/07 -- provider/model explicites (Claude Haiku 4.5 via OpenRouter) retenus
+        # après une batterie de tests réels contre 200+ modèles, indépendants du
+        # ``LLM_PROVIDER`` global. 19/07 -- décision opérateur explicite ("bascule sur
+        # spark et quand spark sera vide en valeur on passera sur anthropique comme
+        # prévu") : override retiré, ce départage utilise désormais le provider/
+        # fallback global comme tout le reste d'ARIA. max_tokens=20 (pas 10) -- vérifié
+        # en direct : le verdict arrive toujours EN PREMIER (donc 10 aurait suffi pour
+        # la décision elle-même), mais une justification systématique se fait couper
+        # (finish_reason=length, log warning bruyant pour rien) -- marge de sécurité,
+        # jamais une correction de bug de fond.
+        reply = await chat_with_context(user, system, max_tokens=20, temperature=0.0)
     except Exception as exc:  # noqa: BLE001 — jamais bloquant, dégrade vers HOLD
         logger.info("_llm_confirm: appel LLM échoué (%s)", exc)
         return False
@@ -720,10 +717,11 @@ async def _llm_security_gate(
         "un rejet basé sur une impression vague ou parce que le setup semble déjà bon."
     )
     try:
-        reply = await chat_with_context(
-            user, system, max_tokens=20, temperature=0.0,
-            provider="openrouter", model="anthropic/claude-haiku-4.5",
-        )
+        # 19/07 -- décision opérateur explicite ("bascule sur spark et quand spark
+        # sera vide en valeur on passera sur anthropique comme prévu") : override
+        # Haiku/OpenRouter retiré (même raison que _llm_confirm ci-dessus), utilise
+        # désormais le provider/fallback global.
+        reply = await chat_with_context(user, system, max_tokens=20, temperature=0.0)
     except Exception as exc:  # noqa: BLE001
         logger.info("_llm_security_gate: appel LLM échoué (%s) -- fail-closed, rejet", exc)
         return False, "security_gate_unavailable"

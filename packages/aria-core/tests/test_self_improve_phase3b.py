@@ -45,24 +45,6 @@ async def test_health_watch_files_after_threshold(monkeypatch, tmp_path):
     assert hw._FAIL_STREAK == 0
 
 
-@pytest.mark.asyncio
-async def test_qi_promote_no_notify_when_idle(monkeypatch):
-    from aria_core import qi_promote as qp
-
-    monkeypatch.setattr("aria_core.capability_levels.check_auto_completions", lambda: [])
-    monkeypatch.setattr(qp, "count_resolved_gaps", lambda **k: 0)
-    monkeypatch.setattr("aria_core.capability_levels.full_status", lambda lang: {
-        "global_index": 0,
-        "categories": {
-            c: {"completed_level": 0, "next_level": 1, "auto_ready": False}
-            for c in ("codage", "social", "intelligence", "fiabilite", "autonomie", "business")
-        },
-    })
-
-    result = await qp.run_qi_promotion_check(lang="fr")
-    assert result["notified"] is False
-
-
 def test_append_pitfall_if_new(tmp_path, monkeypatch):
     from aria_core.knowledge import operator_runbook as orb
 

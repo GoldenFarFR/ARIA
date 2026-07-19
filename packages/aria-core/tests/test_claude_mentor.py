@@ -252,11 +252,12 @@ async def test_cycle_throttled_after_a_successful_run(monkeypatch):
 # ── routage explicite Sonnet 5 + secours Haiku (17/07) ──────────────────────
 
 @pytest.mark.asyncio
-async def test_cycle_routes_to_sonnet5_via_openrouter_with_haiku_fallback(monkeypatch):
-    """Retenu après une revue de raisonnement profond réelle (autopsie notée sur 5
-    critères, complet et correct sur les 5 -- moins cher ET plus rapide que tous les
-    Opus testés une fois le budget de tokens réaliste appliqué). Secours explicite
-    sur Haiku 4.5 (même provider) plutôt que de dépendre uniquement du repli global."""
+async def test_cycle_uses_global_provider_no_openrouter_override(monkeypatch):
+    """19/07 -- décision opérateur explicite ("bascule sur spark et quand spark sera
+    vide en valeur on passera sur anthropique comme prévu") : l'override Haiku/Sonnet
+    via OpenRouter (retenu le 17/07 après une revue de raisonnement profond réelle)
+    a été retiré -- ce cycle utilise désormais le provider/fallback global (Spark),
+    comme tout le reste d'ARIA."""
     monkeypatch.setenv("ARIA_CLAUDE_MENTOR_ENABLED", "1")
     _good_snapshot_mocks(monkeypatch)
 
@@ -267,8 +268,8 @@ async def test_cycle_routes_to_sonnet5_via_openrouter_with_haiku_fallback(monkey
         return json.dumps({"remark": "ok", "durable": False, "proposal_title": "", "proposal_body": ""})
 
     await cm.run_claude_mentor_cycle(llm=capturing_llm)
-    assert captured.get("provider") == "openrouter"
-    assert captured.get("model") == "anthropic/claude-sonnet-5"
-    assert captured.get("fallback_provider") == "openrouter"
-    assert captured.get("fallback_model") == "anthropic/claude-haiku-4.5"
+    assert "provider" not in captured
+    assert "model" not in captured
+    assert "fallback_provider" not in captured
+    assert "fallback_model" not in captured
     assert captured.get("max_tokens") == 900

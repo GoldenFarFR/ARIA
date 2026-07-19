@@ -714,10 +714,10 @@ async def _synthesize_potential(
         "actif et cohérent) ?"
     )
     try:
-        reply = await chat_with_context(
-            user, system, max_tokens=150, temperature=0.0,
-            provider="openrouter", model="anthropic/claude-haiku-4.5",
-        )
+        # 19/07 -- décision opérateur explicite ("bascule sur spark et quand spark
+        # sera vide en valeur on passera sur anthropique comme prévu") : override
+        # Haiku/OpenRouter retiré, utilise désormais le provider/fallback global.
+        reply = await chat_with_context(user, system, max_tokens=150, temperature=0.0)
     except Exception as exc:  # noqa: BLE001
         logger.info("conviction_research: synthèse LLM échouée (%s)", exc)
         return None, ""

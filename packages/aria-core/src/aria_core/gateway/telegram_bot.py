@@ -389,9 +389,14 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     hb = aria_heartbeat.get_status()
     last = hb.get("last_heartbeat")
     last_str = last.strftime("%H:%M UTC") if last else "never"
-    llm_switch = "on" if settings.aria_llm_enabled else "off"
     provider = settings.llm_provider or "none"
     provider_ok = is_llm_provider_configured()
+    # 19/07 -- fusionné avec la ligne "ARIA_LLM_ENABLED" ci-dessous (retour opérateur :
+    # "pourquoi il y a deux lignes de llm actif ?"). is_llm_configured() EST déjà un
+    # sur-ensemble strict de settings.aria_llm_enabled (gate ET route résolue, cf.
+    # llm.py::is_llm_configured) -- la ligne "Provider (...)" juste après couvre déjà
+    # la résolvabilité séparément, donc rien n'est perdu : chat_llm=off + Provider=
+    # configured suffit à déduire sans ambiguïté que c'est le gate qui est coupé.
     chat_llm = "active" if is_llm_configured() else "off"
     gh = "unlimited ✅" if github_configured() and github_unlimited_access() else (
         "configured" if github_configured() else "missing"
@@ -409,10 +414,6 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else "coupée — bearer only" if is_x_read_configured()
         else "off"
     )
-    from aria_core.capability_levels import global_index, check_auto_completions
-
-    check_auto_completions()
-    qi = global_index()
     pst = outgoing_pause.pause_status()
     if not pst["readable"]:
         sorties = "⚠️ état illisible — dépenses gelées (fail-closed), tweets/jobs actifs"
@@ -426,12 +427,10 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"Build commit: {commit}\n"
         f"Your ID: {user.id if user else '?'} — admin ✅\n"
         f"Sorties (tweets/X/dépenses/jobs): {sorties}\n"
-        f"Indice ARIA: {qi} / 1000 (demande en texte libre)\n"
         f"Heartbeat: {last_str}\n"
         f"Telegram: {get_mode()} ✅\n"
         f"X {x_at()}: post {x_post} · read {x_read}\n"
         f"LLM chat: {chat_llm}\n"
-        f"ARIA_LLM_ENABLED: {llm_switch}\n"
         f"Provider ({provider}): {'configured' if provider_ok else 'missing'}\n"
         f"GitHub: {gh}\n"
         f"Web: {str(getattr(settings, 'aria_web_search_provider', 'ddg') or 'ddg')}"
@@ -876,40 +875,6 @@ async def _handle_repertoire(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     await _reply(message, "Usage: /repertoire list | delete <nom> | archive <nom>")
-
-
-async def _handle_qi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-    from aria_core.skills.capability_skill import execute_capability
-
-    out, _ = await execute_capability("montre qi aria", lang="fr")
-    await _reply(message, out)
-
-
-async def _handle_level(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-    text = (message.text or "").strip()
-    if text in ("/level", "/level@Aria_ZHC_Bot") or text.split()[0] == "/level" and len(text.split()) == 1:
-        from aria_core.skills.capability_skill import execute_capability
-
-        out, _ = await execute_capability("niveaux aria", lang="fr")
-        await _reply(
-            message,
-            out + "\n\nUsage: /level up codage [note optionnelle]",
-        )
-        return
-    from aria_core.skills.capability_skill import execute_capability
-
-    out, _ = await execute_capability(text, lang="fr")
-    await _reply(message, out)
 
 
 async def _handle_learn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1479,9 +1444,7 @@ async def _handle_public_message(update: Update, text: str) -> None:
 # opérateur, aucun sens pour un visiteur, aucun risque de fuite même mal câblé puisque
 # ce fichier garantit déjà qu'un non-admin ne dépasse jamais la ligne 1434.
 #
-# /qi et /level NE sont PAS dans ce registre : déjà couverts par un mécanisme distinct
-# et préexistant (brain.py::detect_intent -> capability_skill.wants_capability ->
-# execute_capability), qui route déjà le texte libre en production. /status différé
+# /status différé
 # (aucun agrégateur réutilisable existant -- toute la logique est inline dans
 # _handle_status, ~64 lignes ; extraction = chantier séparé, pas fait ce soir).
 #
@@ -1960,8 +1923,6 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("langue", "Langue des analyses (fr/en)"),
     ("learn", "Ajoute une leçon manuelle (topic | contenu)"),
     ("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
-    ("level", "Niveaux/paliers de compétence ARIA"),
-    ("qi", "QI actuel d'ARIA (capacités)"),
     ("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
     ("resume", "▶️ Reprendre les actions sortantes"),
     ("scan", "Scan rapide de risque on-chain d'un contrat"),
@@ -2962,16 +2923,16 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("theses", _handle_theses))
     app.add_handler(CommandHandler("github", _handle_github))
     app.add_handler(CommandHandler("canal", _handle_aria_channel))
-    # 18/07 -- audit systématique (grep _handle_* vs add_handler) : ces 9 commandes
+    # 18/07 -- audit systématique (grep _handle_* vs add_handler) : ces 7 commandes
     # étaient entièrement écrites (backend réel, admin-gated) mais JAMAIS enregistrées
     # -- inaccessibles depuis toujours malgré une doc CLAUDE.md qui les traite comme
     # actives (ex. "/x profile sync" mentionné à plusieurs reprises). /learn était déjà
     # noté orphelin lors de l'audit #206 (18/07) sans jamais avoir été câblé depuis.
+    # (/qi et /level, initialement câblés le même jour, retirés le 19/07 avec tout le
+    # reste du système "Indice ARIA" -- décision opérateur explicite, plus utile.)
     app.add_handler(CommandHandler("x", _handle_x))
     app.add_handler(CommandHandler("avatar", _handle_avatar))
     app.add_handler(CommandHandler("repertoire", _handle_repertoire))
-    app.add_handler(CommandHandler("qi", _handle_qi))
-    app.add_handler(CommandHandler("level", _handle_level))
     app.add_handler(CommandHandler("learn", _handle_learn))
     app.add_handler(CommandHandler("calibrate", _handle_calibrate))
     app.add_handler(CommandHandler("experiment", _handle_experiment))
