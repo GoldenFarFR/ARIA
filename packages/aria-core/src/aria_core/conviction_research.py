@@ -22,12 +22,34 @@ via AskUserQuestion) : quand la recherche X officielle gratuite est épuisée
 PARTAGÉ ``x402_budget.py``, 5$/semaine) prend le relais -- toujours en COMPLÉMENT,
 jamais la source primaire.
 
-Sécurité (mandat #192) : le contenu externe (site web, tweets) est ATTAQUABLE -- un
-projet malveillant peut façonner son site/ses tweets pour manipuler le score et
-gonfler la taille de la position qu'ARIA prendrait contre lui. Même patron que
+Vérification de contenu (19/07, retour opérateur : "est-ce qu'elle est capable de
+fouiller ?") : les liens GitHub/Farcaster/Telegram déclarés via ``known_links``
+(DexScreener) ne sont plus juste affichés bruts -- ``_describe_other_known_link``
+appelle ``services/github_verify.py``/``services/farcaster.py``/
+``services/telegram_channel_verify.py`` (dôme standard, aucune clé) pour vérifier
+le CONTENU réel derrière le lien (âge/activité d'un dépôt, abonnés/label spam
+Warpcast, abonnés/dernier message d'un canal). Discord explicitement écarté
+(décision opérateur), Reddit et tout autre réseau restent un lien déclaré brut.
+
+Processus complet (19/07, retour opérateur explicite : "meme si elle a utiliser
+x402, meme si elle a fait des recherche sur tous les liens... pour que toi tu
+puisse au mieux la parametrer") : ``ConvictionResearch.process_trail`` documente
+CHAQUE étape réellement exécutée (Tavily tenté, X officiel vs repli x402 twit.sh,
+vérifications de liens), TOUJOURS peuplé même sur "aucune source trouvée" --
+threadé jusque dans la thèse persistée par ``momentum_entry.py``, visible dans
+``/feedback`` et le registre de trades.
+
+Sécurité (mandat #192) : le contenu externe (site web, tweets, liens
+GitHub/Farcaster/Telegram déclarés) est ATTAQUABLE -- un projet malveillant peut
+façonner son site/ses tweets/ses liens sociaux pour manipuler le score et gonfler
+la taille de la position qu'ARIA prendrait contre lui. Même patron que
 ``momentum_entry._llm_confirm``/``_llm_security_gate`` : ``sanitize_untrusted_text``
-sur CHAQUE fragment externe, balise ``<donnees_non_fiables>``, règle système
-explicite d'ignorer toute instruction trouvée dedans, longueur totale plafonnée.
+sur CHAQUE fragment externe (y compris CHAQUE entrée de ``process_trail``, via
+``_trail_note`` -- jamais un ``trail.append`` direct, bug réel trouvé en revue
+croisée 19/07 où une URL non sanitisée atteignait le prompt système Telegram de
+l'opérateur via la thèse persistée), balise ``<donnees_non_fiables>``, règle
+système explicite d'ignorer toute instruction trouvée dedans, longueur totale
+plafonnée.
 
 Dégradation honnête à chaque étape (jamais un score inventé) : ``available=False``
 seulement si le gate est OFF ; sinon toujours ``available=True`` même si aucune
@@ -35,9 +57,10 @@ source n'a rien donné (``potential_score=None`` dans ce cas -- ``None`` veut di
 « inconnu », jamais confondu avec un score bas mesuré)."""
 from __future__ import annotations
 
+import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -76,6 +99,11 @@ def _research_to_metadata(research: "ConvictionResearch") -> dict[str, str]:
         "contract_corroborated": corrob,
         "potential_score": "" if research.potential_score is None else str(research.potential_score),
         "rationale": research.rationale,
+        # 19/07, revue croisée : un séparateur littéral (" | ") n'est pas sûr --
+        # une entrée peut légitimement contenir cette sous-chaîne (ex. une URL
+        # déclarée), corrompant le round-trip cache. JSON encode/decode, jamais
+        # de séparateur naïf.
+        "process_trail": json.dumps(research.process_trail, ensure_ascii=False),
     }
 
 
@@ -87,6 +115,13 @@ def _research_from_metadata(meta: dict) -> "ConvictionResearch":
         score = float(score_raw) if score_raw else None
     except ValueError:
         score = None
+    trail_raw = meta.get("process_trail") or ""
+    try:
+        trail = json.loads(trail_raw) if trail_raw else []
+        if not isinstance(trail, list):
+            trail = []
+    except (json.JSONDecodeError, TypeError):
+        trail = []
     return ConvictionResearch(
         available=True,
         website_url=meta.get("website_url") or None,
@@ -95,6 +130,7 @@ def _research_from_metadata(meta: dict) -> "ConvictionResearch":
         contract_corroborated=corrob,
         potential_score=score,
         rationale=meta.get("rationale") or "",
+        process_trail=trail,
     )
 
 
@@ -217,6 +253,16 @@ class ConvictionResearch:
     potential_score: float | None = None  # 0-10, None = indisponible/inconnu
     rationale: str = ""
     reason: str = ""  # pourquoi indisponible/inconnu, si applicable
+    process_trail: list[str] = field(default_factory=list)
+    # 19/07 -- retour opérateur explicite : "meme si elle a utiliser x402, meme si
+    # elle a fait des recherche sur tous les liens... pour que toi tu puisse au
+    # mieux la parametrer". TOUJOURS peuplé (même sur "aucune source trouvée" --
+    # prouve que la diligence a réellement été tentée, pas juste le résultat
+    # final) -- chaque étape RÉELLEMENT exécutée (Tavily, X officiel vs repli x402
+    # twit.sh, vérifications GitHub/Farcaster/Telegram), jamais une étape qui n'a
+    # pas eu lieu. Threadé jusque dans la thèse persistée par
+    # momentum_entry.evaluate_momentum_entry -- visible dans /feedback et le
+    # registre de trades, pas seulement le score final.
 
 
 def _is_conviction_research_enabled() -> bool:
@@ -282,6 +328,57 @@ def _posting_cadence_from_tweets(tweets: list[dict]) -> str:
     return "dormant"
 
 
+_MAX_TRAIL_ENTRY_CHARS = 250
+
+
+def _trail_note(trail: list[str], text: str) -> None:
+    """Ajoute une entrée au processus documenté (``process_trail``), TOUJOURS
+    sanitisée -- bug réel trouvé en revue croisée (19/07) : une URL "Site
+    officiel" non sanitisée atteignait le prompt SYSTÈME Telegram de l'opérateur
+    (via la thèse persistée -- ``momentum_entry.py`` -> ``paper_trader.py`` ->
+    ``paper_ledger_report.build_trade_status_context`` -> ``brain.py``, SANS
+    balise ``<donnees_non_fiables>`` à ce dernier maillon), en violation du
+    mandat #192 pourtant appliqué partout ailleurs dans ce fichier. Appliqué
+    UNIFORMÉMENT à CHAQUE entrée (même celles qui semblent "internes", ex. un
+    message d'erreur de service tiers) -- plus simple et plus sûr que de deviner
+    au cas par cas ce qui est "sûr"."""
+    from aria_core.sanitize import sanitize_untrusted_text
+
+    trail.append(sanitize_untrusted_text(text, _MAX_TRAIL_ENTRY_CHARS))
+
+
+async def _describe_other_known_link(label: str, url: str) -> str:
+    """Pour GitHub/Farcaster/Telegram (19/07, retour opérateur : "est-ce qu'elle est
+    capable de fouiller ?") : vérifie le CONTENU réel derrière le lien déclaré --
+    âge/activité d'un dépôt, abonnés/label anti-spam Warpcast, abonnés/dernier
+    message d'un canal -- pas seulement le fait qu'il existe. Discord explicitement
+    écarté (décision opérateur) ; Reddit et tout autre réseau restent un lien
+    déclaré brut (aucun client de vérification construit). Chaque client dédié
+    contraint lui-même l'appel réseau à son propre domaine officiel
+    (api.github.com/api.warpcast.com/t.me) quel que soit le contenu de ``url`` --
+    jamais un relais vers un hôte arbitraire choisi par le déployeur du token."""
+    from aria_core.sanitize import sanitize_untrusted_text
+
+    safe_label = sanitize_untrusted_text(label, 40)
+    safe_url = sanitize_untrusted_text(url, 200)
+    if label == "GitHub":
+        from aria_core.services.github_verify import format_repo_verification, verify_repo
+
+        verification = await verify_repo(url)
+        return f"- GitHub : {safe_url} ({format_repo_verification(verification)})"
+    if label == "Farcaster":
+        from aria_core.services.farcaster import format_profile_verification, verify_profile
+
+        verification = await verify_profile(url)
+        return f"- Farcaster : {safe_url} ({format_profile_verification(verification)})"
+    if label == "Telegram":
+        from aria_core.services.telegram_channel_verify import format_channel_verification, verify_channel
+
+        verification = await verify_channel(url)
+        return f"- Telegram : {safe_url} ({format_channel_verification(verification)})"
+    return f"- {safe_label} : {safe_url}"
+
+
 async def research_project_potential(
     contract: str, symbol: str, chain: str, *,
     cache_max_age_days: int = DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS,
@@ -329,6 +426,7 @@ async def research_project_potential(
     contract_corroborated: bool | None = None
     snippet_lines: list[str] = []
     other_known_link_lines: list[str] = []
+    trail: list[str] = []  # 19/07 -- processus complet, cf. docstring ConvictionResearch
 
     _MAX_OTHER_KNOWN_LINKS = 6  # même discipline que snippet_lines[:4]/buzz_lines[:5]
 
@@ -349,21 +447,32 @@ async def research_project_potential(
             # sous "Autres liens officiels déclarés (GitHub/Discord/Telegram/etc.)").
             if website_url is None:
                 website_url = url
+                _trail_note(trail, f"Site officiel trouvé via DexScreener : {url}")
         elif label == "X (Twitter)":
             if x_handle is None:
                 x_handle = _extract_x_handle(url)
-        elif label and len(other_known_link_lines) < _MAX_OTHER_KNOWN_LINKS:
-            # 19/07 -- GitHub/Discord/Telegram/Farcaster/Reddit etc. (retour opérateur :
-            # DexScreener les affiche quasi systématiquement, déjà extraits par
-            # dexscreener.py, jamais consultés jusqu'ici -- même angle mort que le
-            # bug SOGNI, cette fois sur des réseaux au-delà du site+X). Jamais un
-            # nouveau champ persisté par plateforme -- un dépôt GitHub/serveur Discord
-            # DÉCLARÉ est un signal de légitimité en plus, pesé par le LLM au même
-            # titre qu'un extrait de site web, pas un fait structuré séparé.
-            other_known_link_lines.append(
-                f"- {sanitize_untrusted_text(label, 40)} : {sanitize_untrusted_text(url, 200)}"
-            )
+                if x_handle:
+                    _trail_note(trail, f"Handle X trouvé via DexScreener : @{x_handle}")
+        elif label:
+            if len(other_known_link_lines) < _MAX_OTHER_KNOWN_LINKS:
+                # 19/07 -- GitHub/Discord/Telegram/Farcaster/Reddit etc. (retour
+                # opérateur : DexScreener les affiche quasi systématiquement, déjà
+                # extraits par dexscreener.py, jamais consultés jusqu'ici -- même
+                # angle mort que le bug SOGNI, cette fois sur des réseaux au-delà du
+                # site+X). Jamais un nouveau champ persisté par plateforme -- un
+                # dépôt GitHub/serveur Discord DÉCLARÉ est un signal de légitimité
+                # en plus, pesé par le LLM au même titre qu'un extrait de site web,
+                # pas un fait structuré séparé.
+                described = await _describe_other_known_link(label, url)
+                other_known_link_lines.append(described)
+                _trail_note(trail, described.lstrip("- "))
+            else:
+                # Bug réel trouvé en revue croisée (19/07) : au-delà du plafond, un
+                # lien déclaré disparaissait silencieusement -- jamais un lien
+                # jamais mentionné dans le processus documenté.
+                _trail_note(trail, f"{label} ignoré (plafond de {_MAX_OTHER_KNOWN_LINKS} liens atteint)")
 
+    _trail_note(trail, "Recherche web Tavily tentée")
     try:
         tavily_result = await tavily_client.search(
             f"{safe_symbol} crypto token official website contract address {chain}",
@@ -372,19 +481,28 @@ async def research_project_potential(
     except Exception as exc:  # noqa: BLE001 -- jamais bloquant
         logger.info("conviction_research: recherche Tavily échouée (%s)", exc)
         tavily_result = None
+        _trail_note(trail, "Tavily indisponible (exception)")
 
     if tavily_result is not None and tavily_result.available:
+        _trail_note(trail, f"Tavily : {len(tavily_result.snippets)} extraits reçus")
         if website_url is None:
             website_url = _extract_website(tavily_result.snippets)
+            if website_url:
+                _trail_note(trail, f"Site officiel trouvé via Tavily : {website_url}")
         combined = " ".join(f"{text} {published or ''}" for text, _url, published in tavily_result.snippets)
         if tavily_result.answer:
             combined = f"{tavily_result.answer} {combined}"
         if x_handle is None:
             x_handle = _extract_x_handle(combined)
+            if x_handle:
+                _trail_note(trail, f"Handle X trouvé via Tavily : @{x_handle}")
         contract_corroborated = _contract_mentioned(combined, contract)
+        _trail_note(trail, f"Corroboration du contrat via Tavily : {contract_corroborated}")
         for text, url, _published in tavily_result.snippets[:4]:
             safe_content = sanitize_untrusted_text(text or "", _MAX_SNIPPET_CHARS)
             snippet_lines.append(f"- ({url}) {safe_content}")
+    elif tavily_result is not None:
+        _trail_note(trail, f"Tavily indisponible ({tavily_result.error or 'raison inconnue'})")
 
     buzz_lines: list[str] = []
     posting_cadence = "unknown"
@@ -394,6 +512,7 @@ async def research_project_potential(
     if await x_research_budget.can_spend():
         from aria_core.gateway.x_twitter import search_recent_tweets
 
+        _trail_note(trail, "Recherche X officielle utilisée (budget disponible)")
         try:
             tweets = await search_recent_tweets(query, max_results=10)
         except Exception as exc:  # noqa: BLE001
@@ -401,6 +520,7 @@ async def research_project_potential(
             tweets = []
         await x_research_budget.record_request(purpose="buzz_search", contract=contract, status="ok")
     else:
+        _trail_note(trail, "Recherche X officielle sautée (plafond hebdomadaire de 100 req atteint)")
         await x_research_budget.record_request(
             purpose="buzz_search", contract=contract, status="blocked", reason="plafond hebdo atteint",
         )
@@ -415,7 +535,10 @@ async def research_project_potential(
         # PARTAGÉ (5$/semaine, déjà fail-closed) -- aucun nouveau plafond dédié.
         from aria_core.services.twitsh import search_tweets as twitsh_search_tweets
 
+        _trail_note(trail, "Repli x402 twit.sh utilisé pour le buzz (recherche X officielle vide/sautée)")
         tweets = await twitsh_search_tweets(query, max_results=10)
+        if tweets:
+            _trail_note(trail, f"twit.sh : {len(tweets)} tweets trouvés")
 
     for t in tweets[:_MAX_TWEETS_IN_PROMPT]:
         buzz_lines.append(f"- {sanitize_untrusted_text(t.get('text', ''), _MAX_TWEET_TEXT_CHARS)}")
@@ -425,6 +548,7 @@ async def research_project_potential(
         if await x_research_budget.can_spend():
             from aria_core.gateway.x_twitter import fetch_user_recent_tweets
 
+            _trail_note(trail, "Cadence de publication X officielle utilisée (budget disponible)")
             try:
                 cadence_tweets = await fetch_user_recent_tweets(x_handle, max_results=20)
             except Exception as exc:  # noqa: BLE001
@@ -432,6 +556,7 @@ async def research_project_potential(
                 cadence_tweets = []
             await x_research_budget.record_request(purpose="posting_cadence", contract=contract, status="ok")
         else:
+            _trail_note(trail, "Cadence de publication X officielle sautée (plafond hebdomadaire atteint)")
             await x_research_budget.record_request(
                 purpose="posting_cadence", contract=contract, status="blocked", reason="plafond hebdo atteint",
             )
@@ -439,9 +564,11 @@ async def research_project_potential(
         if not cadence_tweets:
             from aria_core.services.twitsh import fetch_user_tweets as twitsh_fetch_user_tweets
 
+            _trail_note(trail, "Repli x402 twit.sh utilisé pour la cadence de publication")
             cadence_tweets = await twitsh_fetch_user_tweets(x_handle, max_results=20)
 
         posting_cadence = _posting_cadence_from_tweets(cadence_tweets)
+        _trail_note(trail, f"Cadence de publication déterminée : {posting_cadence}")
 
     if (
         not website_url and not x_handle and not buzz_lines
@@ -451,6 +578,7 @@ async def research_project_potential(
             available=True, x_handle=x_handle, posting_cadence=posting_cadence,
             contract_corroborated=None, potential_score=None,
             reason="aucune source externe trouvée (site web/X)",
+            process_trail=trail,
         )
         await _store_research(contract, chain, safe_symbol, result)
         return result
@@ -462,7 +590,7 @@ async def research_project_potential(
     result = ConvictionResearch(
         available=True, website_url=website_url, x_handle=x_handle,
         posting_cadence=posting_cadence, contract_corroborated=contract_corroborated,
-        potential_score=score, rationale=rationale,
+        potential_score=score, rationale=rationale, process_trail=trail,
     )
     await _store_research(contract, chain, safe_symbol, result)
     return result
