@@ -324,3 +324,15 @@ l'exécution disciplinée (sizing, slippage, stop-logic, rapidité d'entrée). V
 philosophie déjà actée pour #194 ("ARIA doit être là avant tout le monde", pipeline léger/
 rapide plutôt qu'une analyse lourde par candidat) et donne un chiffre concret citable dans un
 futur dossier Base ou une synthèse de ce mandat.
+
+**Second point de repère externe, vérifié (WebSearch, 19/07)** : benchmarks académiques 2026
+de trading LLM (TradeRank Arena, TraderBench, PortBench, CryptoBench, Agent Market Arena).
+Confirmé en direct — TradeRank Arena (44 modèles, plusieurs saisons, capital simulé) : sur la
+saison 5 (23/05-20/06/2026), seuls 2 des 10 modèles premium (Claude et Mistral) avaient un P&L
+réalisé positif — chiffre exact du journal de veille confirmé, pas approximatif. TraderBench
+trouve que le raisonnement étendu ("extended thinking") améliore la planification d'usage
+d'outils mais n'a AUCUN impact mesuré sur la performance de trading elle-même. **Pertinent
+pour le Volet B** (overfitting/fragilité de régime, pas encore traité dans ce mandat) et pour
+situer objectivement le protocole hebdomadaire d'ARIA face à d'autres agents — piste de
+benchmark externe à consulter, pas un chantier à construire (ARIA n'a pas besoin de s'inscrire
+à ces arènes, juste de s'en servir comme repère de lecture).
