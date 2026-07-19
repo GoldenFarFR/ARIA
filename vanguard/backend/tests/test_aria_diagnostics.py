@@ -127,7 +127,9 @@ async def test_paper_ledger_returns_open_and_closed_positions_with_entry_exit_pl
         "0xclosed", "CLOSED", 1.0,
         target_price=1.5, invalidation_price=0.9, chain="base", thesis="golden pocket",
     )
-    await paper_trader.close_position("0xclosed", 1.5, reason="cible atteinte")
+    await paper_trader.close_position(
+        "0xclosed", 1.5, reason="cible atteinte", notes="Cible atteinte : +50% vs entrée.",
+    )
 
     async with await _client() as client:
         res = await client.get(
@@ -145,6 +147,12 @@ async def test_paper_ledger_returns_open_and_closed_positions_with_entry_exit_pl
     assert body["closed_positions"][0]["contract"] == "0xclosed"
     assert body["closed_positions"][0]["close_reason"] == "cible atteinte"
     assert body["closed_positions"][0]["thesis"] == "golden pocket"
+    # 19/07 -- régression : ces deux champs manquaient totalement de la sérialisation,
+    # rendant la vraie justification de sortie invisible pour tout appelant de cet
+    # endpoint (watchdog inclus -- fausse alerte "close_notes vide" alors que la ligne
+    # DB était bien remplie).
+    assert body["closed_positions"][0]["close_notes"] == "Cible atteinte : +50% vs entrée."
+    assert body["closed_positions"][0]["realized_pnl_partial"] == 0.0
 
 
 @pytest.mark.asyncio

@@ -540,6 +540,14 @@ async def diagnostics_paper_ledger(request: Request, closed_limit: int = 100):
             "pnl_usd": p.get("pnl_usd"),
             "pnl_pct": p.get("pnl_pct"),
             "close_reason": p.get("close_reason"),
+            # 19/07 -- trouvé en investiguant une fausse alerte du watchdog paper-trading
+            # ("close_notes vide" sur des positions dont la vraie ligne DB est bien
+            # remplie) : cet endpoint omettait close_notes/realized_pnl_partial, la
+            # seule vraie justification chiffrée de sortie (cf. paper_trader.close_position/
+            # reduce_position) restait invisible pour toute session sans accès direct à
+            # aria.db (watchdog inclus).
+            "close_notes": p.get("close_notes"),
+            "realized_pnl_partial": p.get("realized_pnl_partial"),
             "thesis": p.get("thesis"),
         }
 
