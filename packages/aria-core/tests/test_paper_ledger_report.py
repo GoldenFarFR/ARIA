@@ -118,3 +118,44 @@ async def test_build_trade_status_context_caps_closed_positions_at_five(tmp_db):
         await pt.close_position(contract, 1.1, reason="manuel")
     context = await report.build_trade_status_context()
     assert context.count("CLÔTURÉE") == 5
+
+
+# ── build_positions_detail_block (19/07, demande opérateur : détail sous /feedback) ──
+
+@pytest.mark.asyncio
+async def test_positions_detail_block_empty_portfolio(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    text = await report.build_positions_detail_block()
+    assert "Positions ouvertes (0)" in text
+    assert "Positions clôturées récentes (0)" in text
+    assert "(aucune)" in text
+
+
+@pytest.mark.asyncio
+async def test_positions_detail_block_shows_open_position_thesis_and_url(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=1.5, invalidation_price=0.8,
+        alloc_usd=50_000, thesis="Golden pocket + divergence RSI, R/R 2.5.",
+    )
+    text = await report.build_positions_detail_block()
+    assert "Positions ouvertes (1)" in text
+    assert "AAA" in text
+    assert "Golden pocket + divergence RSI, R/R 2.5." in text
+    assert f"https://dexscreener.com/base/{A}" in text
+    # N'inclut PAS le header agrégé (départ/équité/winrate) -- ça reste le rôle de
+    # build_report/portfolio_summary, jamais dupliqué ici.
+    assert "Capital de départ" not in text
+    assert "Score de winrate" not in text
+
+
+@pytest.mark.asyncio
+async def test_positions_detail_block_respects_closed_limit(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    for i in range(7):
+        contract = f"0x{i:040d}"
+        await pt.open_position(contract, f"T{i}", 1.0, invalidation_price=0.5, alloc_usd=5_000)
+        await pt.close_position(contract, 1.1, reason="manuel")
+    text = await report.build_positions_detail_block(closed_limit=3)
+    assert "Positions clôturées récentes (3)" in text
+    assert text.count("CLÔTURÉE") == 3

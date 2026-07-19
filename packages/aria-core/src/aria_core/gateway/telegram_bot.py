@@ -447,10 +447,19 @@ async def _handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """#197 (15/07) : bilan paper-trading (départ / PnL total / résultat) -- données déjà
     calculées par paper_trader.portfolio_summary(), jamais câblées à une commande
     Telegram avant ce chantier. Admin-only : le suivi de trading reste privé pour
-    l'instant, même doctrine que /status."""
+    l'instant, même doctrine que /status.
+
+    19/07, demande opérateur explicite : le bilan agrégé seul ne suffisait pas --
+    l'opérateur veut voir le détail de CHAQUE position en cours (thèse, cible,
+    invalidation, URL DexScreener) directement sous cette commande, pas seulement
+    sous /ledger. Ajouté via paper_ledger_report.build_positions_detail_block()
+    (même rendu que /ledger, aucun format dupliqué) -- le header agrégé garde son
+    calcul au prix LIVE (price_lookup explicite, contrairement à build_report qui
+    marque au coût), le détail par position vient s'ajouter après, jamais à la place."""
     if not await _admin_check_reply(update):
         return
     from aria_core import paper_trader
+    from aria_core.paper_ledger_report import build_positions_detail_block
 
     # price_lookup explicite : sans lui, portfolio_summary() marque chaque position
     # ouverte à son COÛT (unrealized_pnl toujours à 0) -- le PnL "en cours" demandé
@@ -460,16 +469,17 @@ async def _handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     pnl_total = summary["realized_pnl"] + summary["unrealized_pnl"]
     resultat = summary["equity"]  # = départ + pnl_total par construction (portfolio_summary)
     sign = "+" if pnl_total >= 0 else ""
-    await _reply(
-        update.message,
+    header = (
         "🧪 SIMULATION — bilan paper-trading (portefeuille papier 1 M$)\n\n"
         f"Départ    : {depart:,.0f} $\n"
         f"PnL total : {sign}{pnl_total:,.0f} $\n"
         f"Résultat  : {resultat:,.0f} $\n\n"
         f"(réalisé {summary['realized_pnl']:+,.0f} $ · latent {summary['unrealized_pnl']:+,.0f} $ · "
         f"{summary['open_positions']} positions ouvertes)\n"
-        "Aucun argent réel — track record de preuve.",
+        "Aucun argent réel — track record de preuve."
     )
+    detail = await build_positions_detail_block()
+    await _reply(update.message, f"{header}\n\n{detail}")
 
 
 async def _handle_ledger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

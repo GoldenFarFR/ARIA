@@ -152,6 +152,29 @@ async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
     return text, machine
 
 
+async def build_positions_detail_block(*, closed_limit: int = 5) -> str:
+    """Bloc « détail des positions » seul (ouvertes + N dernières clôturées, avec
+    URL DexScreener/thèse/R:R) -- SANS le header agrégé (départ/équité/winrate) de
+    ``build_report``, pour un appelant qui calcule déjà ses propres chiffres agrégés
+    ailleurs et veut juste ajouter le détail sans le dupliquer.
+
+    19/07, demande opérateur explicite : ``/feedback`` ne montrait qu'un bilan agrégé
+    (départ/PnL/résultat), jamais le détail par position -- l'opérateur veut voir
+    « toutes les positions en cours, l'URL et tout aussi » directement sous cette
+    commande, pas seulement sous ``/ledger``. Réutilise ``_render_open``/
+    ``_render_closed`` tels quels (même rendu que ``/ledger``, jamais un 2e format qui
+    pourrait diverger)."""
+    opens = await paper_trader.get_open_positions()
+    closed = await paper_trader.get_closed_positions(limit=closed_limit)
+    open_section = [f"--- Positions ouvertes ({len(opens)}) ---"] + (
+        [_render_open(p) for p in opens] or ["  (aucune)"]
+    )
+    closed_section = [f"--- Positions clôturées récentes ({len(closed)}) ---"] + (
+        [_render_closed(p) for p in closed] or ["  (aucune)"]
+    )
+    return "\n".join(open_section + [""] + closed_section)
+
+
 async def build_trade_status_context() -> str:
     """Bloc de contexte compact pour injection dans un prompt LLM (``brain.py``,
     ``_try_trade_status_response``, 17/07) -- réutilise ``build_report`` tel quel
