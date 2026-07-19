@@ -548,13 +548,23 @@ async def close_position(
     """Ferme une position FICTIVE au prix de sortie réel et enregistre le P&L. ``reason``
     reste un tag court stable (comparé par égalité ailleurs/dans les tests) ; ``notes``
     (17/07) porte la justification chiffrée complète -- séparés pour ne jamais casser un
-    appelant qui dépend du tag exact."""
+    appelant qui dépend du tag exact.
+
+    ``pnl_usd`` final = P&L de la dernière tranche + ``realized_pnl_partial`` déjà
+    accumulé par d'éventuelles prises de profit partielles (19/07, bug réel trouvé sur
+    la position #21) : ``portfolio_summary()`` ne lit ``realized_pnl_partial`` QUE pour
+    les positions encore ``open`` -- une fois ``closed``, seul ``pnl_usd`` compte dans
+    l'agrégat de capital. Sans cette addition, le P&L des paliers de prise de profit
+    déjà réalisés disparaissait silencieusement du capital total pile au moment de la
+    clôture finale. ``realized_pnl_partial`` reste inchangé sur la ligne (part du P&L
+    total venue des paliers antérieurs, toujours visible séparément)."""
     await _ensure_tables()
     pos = await _get_open(contract)
     if not pos or not exit_price or exit_price <= 0:
         return None
     proceeds = pos["qty"] * exit_price
-    pnl_usd = proceeds - pos["cost_usd"]
+    final_leg_pnl = proceeds - pos["cost_usd"]
+    pnl_usd = final_leg_pnl + (pos.get("realized_pnl_partial") or 0.0)
     pnl_pct = (exit_price / pos["entry_price"] - 1.0) * 100.0 if pos["entry_price"] else 0.0
     closed_at = _now()
     async with aiosqlite.connect(DB_PATH) as db:

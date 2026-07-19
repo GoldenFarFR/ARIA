@@ -402,6 +402,30 @@ async def test_reduce_position_accounting(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_close_position_includes_prior_partial_pnl(tmp_db):
+    """19/07 -- reproduction du bug réel trouvé sur la position #21 (paper-trading 1M$) :
+    close_position() ne devait sommer que le dernier palier, alors que
+    portfolio_summary() ne lit realized_pnl_partial QUE pour les positions encore
+    'open' -- une fois 'closed', le P&L des paliers déjà réalisés disparaissait
+    silencieusement du capital agrégé pile au moment de la clôture finale."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(E, "EEE", 1.0, alloc_usd=90_000)  # qty = 90_000
+
+    partial = await pt.reduce_position(E, 1.5, 30_000, stage=1, reason="palier 1/3")
+    assert round(partial["pnl_usd"]) == 15_000  # (30000*1.5) - (90000*(30000/90000))
+
+    closed = await pt.close_position(E, 2.0, reason="cible")
+    # dernière tranche seule : (60000*2.0) - 60000 = 60_000 -- mais le P&L final
+    # DOIT inclure le palier 1 déjà réalisé (15_000), soit un total de 75_000.
+    assert round(closed["pnl_usd"]) == 75_000
+    assert round(closed["realized_pnl_partial"]) == 15_000  # historique préservé, inchangé
+
+    s = await pt.portfolio_summary()
+    assert round(s["equity"]) == round(1_000_000 + 75_000)
+    assert round(s["realized_pnl"]) == 75_000
+
+
+@pytest.mark.asyncio
 async def test_migration_adds_position_management_columns(tmp_db):
     """Une DB créée AVANT ces colonnes (ancien schéma) doit migrer sans planter et sans
     perdre les positions déjà ouvertes."""
