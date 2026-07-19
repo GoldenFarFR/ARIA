@@ -18,6 +18,16 @@ logger = logging.getLogger(__name__)
 WORKFLOW_PATH = data_dir() / "tweet_compose_workflow.json"
 INTEL_PATH = data_dir() / "tweet_compose_intel.json"
 
+# 19/07 -- incident réel : un workflow démarré une fois restait actif SANS EXPIRATION,
+# absorbant silencieusement tout message opérateur ultérieur (même complètement hors
+# sujet -- ex. "Ton portefeuille est composé de quoi ?", ou un prompt technique long
+# collé pour une tout autre tâche) tant qu'il n'était pas explicitement validé/annulé.
+# Trouvé bloqué depuis ~9h40 en prod, ayant avalé au moins deux messages opérateur
+# majeurs. Même famille que le bug #110 (vc_followup) déjà corrigé -- un intercepteur
+# "sticky" doit toujours avoir une sortie automatique, jamais dépendre uniquement d'une
+# action explicite de l'opérateur pour se désactiver.
+_WORKFLOW_STALE_MINUTES = 20
+
 # Angles d'apprentissage — rotation pour éviter le même tweet générique
 _LEARN_ANGLES: tuple[str, ...] = (
     "autonomie ZHC concrète : quelles décisions marketing sans l'opérateur ?",
@@ -69,8 +79,27 @@ def _load() -> dict[str, Any]:
 
 
 def _save(state: dict[str, Any]) -> None:
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
     WORKFLOW_PATH.parent.mkdir(parents=True, exist_ok=True)
     WORKFLOW_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _is_stale(state: dict[str, Any]) -> bool:
+    """Un workflow non-idle sans interaction depuis `_WORKFLOW_STALE_MINUTES` est abandonné.
+
+    Fail-safe : un état sans `updated_at` (format antérieur à ce correctif, ou fichier
+    corrompu) est traité comme périmé -- mieux vaut réinitialiser un workflow non-idle
+    d'origine inconnue que risquer qu'il reste bloqué indéfiniment."""
+    raw = state.get("updated_at")
+    if not raw:
+        return True
+    try:
+        updated = datetime.fromisoformat(raw)
+    except Exception:
+        return True
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - updated > timedelta(minutes=_WORKFLOW_STALE_MINUTES)
 
 
 def reset_workflow() -> str:
@@ -1098,9 +1127,24 @@ async def start_role_coaching_workflow(operator_message: str) -> str:
 
 
 async def handle_workflow_message(text: str) -> str | None:
-    """Traite un message opérateur si workflow actif. None si inactif."""
+    """Traite un message opérateur si workflow actif. None si inactif.
+
+    Un workflow non-idle expiré (>_WORKFLOW_STALE_MINUTES sans interaction) est
+    réinitialisé silencieusement AVANT traitement -- incident réel 19/07 : sans ça, un
+    workflow oublié en phase intermédiaire absorbait tout message ultérieur, même
+    complètement hors sujet, indéfiniment (cf. commentaire sur _WORKFLOW_STALE_MINUTES)."""
     state = _load()
     phase = state.get("phase", TweetComposePhase.IDLE.value)
+    if phase != TweetComposePhase.IDLE.value and _is_stale(state):
+        logger.info(
+            "tweet_compose_workflow: expired after %smin idle (phase=%s) -> reset to idle",
+            _WORKFLOW_STALE_MINUTES, phase,
+        )
+        state = {"phase": TweetComposePhase.IDLE.value, "draft": "", "history": (state.get("history") or [])[:29]}
+        _append_history(state, f"workflow expiré (>{_WORKFLOW_STALE_MINUTES}min inactif) -> réinitialisé")
+        _save(state)
+        phase = TweetComposePhase.IDLE.value
+
     if phase == TweetComposePhase.IDLE.value:
         if wants_role_coaching(text):
             return await start_role_coaching_workflow(text)

@@ -1,6 +1,8 @@
 """Crawler Base — découverte + absorption (déterministe, réseau injecté)."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from aria_core import base_crawler as bc
@@ -149,12 +151,18 @@ async def test_top_pools_min_age_days_none_is_noop():
 
 @pytest.mark.asyncio
 async def test_top_pools_min_age_days_filters_fresh_pools():
+    # 19/07 -- corrigé : les deux dates étaient codées EN DUR (2026-06-01/2026-07-12),
+    # bombe à retardement pure -- "fresh" (12/07) a fini par dépasser le seuil de 7j
+    # simplement parce que le temps a passé, faisant échouer le test sans aucun
+    # rapport avec le comportement testé. Calculées relativement à `now` désormais :
+    # le test reste valide indéfiniment, peu importe quand il tourne.
     old, fresh = "0x" + "f" * 40, "0x" + "1" * 40
+    now = datetime.now(timezone.utc)
+    old_iso = (now - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fresh_iso = (now - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     async def fetch(path):
-        return _pool_payload_with_age(
-            [(old, 80_000, "2026-06-01T00:00:00Z"), (fresh, 80_000, "2026-07-12T08:00:00Z")]
-        )
+        return _pool_payload_with_age([(old, 80_000, old_iso), (fresh, 80_000, fresh_iso)])
 
     got = await bc.discover_top_pools(fetch=fetch, min_liquidity_usd=1, min_age_days=7)
     assert got == [old]

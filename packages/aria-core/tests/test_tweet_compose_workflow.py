@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -441,3 +441,106 @@ def test_parse_schedule_hour():
     paris = when.astimezone(ZoneInfo("Europe/Paris"))
     assert paris.hour == 18
     assert paris.minute == 30
+
+
+# ── 19/07 -- expiration du workflow (incident réel : bloqué depuis minuit, a englouti
+# au moins deux messages opérateur sans rapport, dont "Ton portefeuille est composé de
+# quoi ?") ──────────────────────────────────────────────────────────────────────────
+
+
+def test_is_stale_true_when_updated_at_missing():
+    from aria_core.tweet_compose_workflow import _is_stale
+
+    assert _is_stale({"phase": "add_more"}) is True
+
+
+def test_is_stale_false_when_recently_updated():
+    from aria_core.tweet_compose_workflow import _is_stale
+
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    assert _is_stale({"phase": "add_more", "updated_at": recent}) is False
+
+
+def test_is_stale_true_past_threshold():
+    from aria_core.tweet_compose_workflow import _WORKFLOW_STALE_MINUTES, _is_stale
+
+    old = (
+        datetime.now(timezone.utc) - timedelta(minutes=_WORKFLOW_STALE_MINUTES + 1)
+    ).isoformat()
+    assert _is_stale({"phase": "add_more", "updated_at": old}) is True
+
+
+def test_save_stamps_updated_at():
+    from aria_core.tweet_compose_workflow import _load, _save
+
+    _save({"phase": TweetComposePhase.IDLE.value, "draft": "", "history": []})
+    reloaded = _load()
+    assert "updated_at" in reloaded
+    # Doit être parseable et récent.
+    stamp = datetime.fromisoformat(reloaded["updated_at"])
+    assert datetime.now(timezone.utc) - stamp < timedelta(seconds=10)
+
+
+@pytest.mark.asyncio
+async def test_stuck_legacy_workflow_expires_and_releases_unrelated_message():
+    """Reproduit l'incident réel 19/07 : un workflow oublié en phase add_more, sans
+    updated_at (format antérieur à ce correctif -- exactement l'état trouvé bloqué en
+    prod), doit se réinitialiser tout seul et laisser passer une question totalement
+    hors sujet vers le routage normal (None), au lieu de l'absorber dans le brouillon."""
+    from aria_core.tweet_compose_workflow import WORKFLOW_PATH
+
+    legacy_state = {
+        "phase": TweetComposePhase.ADD_MORE.value,
+        "mode": "learn",
+        "draft": "Testing fixed-weight scoring on BASE launchpads with public feeds.",
+        "learn_topic": "scoring pondéré des launchpads",
+        "operator_notes": "un message opérateur totalement différent, collé ici",
+        "history": [{"at": "2026-07-19T00:08:48+00:00", "note": "draft created"}],
+    }
+    WORKFLOW_PATH.parent.mkdir(parents=True, exist_ok=True)
+    WORKFLOW_PATH.write_text(json.dumps(legacy_state), encoding="utf-8")
+
+    reply = await handle_workflow_message("Ton portefeuille est composé de quoi ?")
+    assert reply is None
+
+    from aria_core.tweet_compose_workflow import _load
+
+    assert _load()["phase"] == TweetComposePhase.IDLE.value
+
+
+@pytest.mark.asyncio
+async def test_expired_dated_workflow_resets_before_processing():
+    """Même scénario mais avec un updated_at explicitement ancien (>seuil) plutôt
+    qu'absent -- couvre le chemin de comparaison de dates, pas seulement le fail-safe
+    sur absence de champ."""
+    from aria_core.tweet_compose_workflow import _WORKFLOW_STALE_MINUTES, _save
+
+    old = (
+        datetime.now(timezone.utc) - timedelta(minutes=_WORKFLOW_STALE_MINUTES + 5)
+    ).isoformat()
+    state = {
+        "phase": TweetComposePhase.AWAIT_APPROVAL.value,
+        "draft": "Some old draft from a much earlier session.",
+        "history": [],
+    }
+    _save(state)
+    # _save() vient d'écraser updated_at avec "maintenant" -- on le force ensuite à
+    # une valeur périmée pour isoler précisément le chemin testé.
+    from aria_core.tweet_compose_workflow import WORKFLOW_PATH
+
+    state["updated_at"] = old
+    WORKFLOW_PATH.write_text(json.dumps(state), encoding="utf-8")
+
+    reply = await handle_workflow_message("est-ce que tu as mangé aujourd'hui ?")
+    assert reply is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_workflow_still_absorbs_next_message():
+    """Non-régression : un workflow actif récemment (dans les _WORKFLOW_STALE_MINUTES)
+    continue de fonctionner normalement -- l'expiration ne casse pas l'usage courant."""
+    await start_compose_workflow()
+    reply = await handle_workflow_message("crée un tweet")
+    assert reply is not None
+    reply2 = await handle_workflow_message("quelque chose de totalement différent")
+    assert reply2 is not None
