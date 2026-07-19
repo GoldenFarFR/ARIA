@@ -27,7 +27,16 @@ le test 1M$ (#194) », à lire avant toute modification) :
     volume/liquidité ne s'en aperçoive) ; concentration des holders
     (``_check_holder_concentration``, top 10 hors pool/burn >= 80%, 19/07 -- un R/R
     et un ATR parfaits ne protègent jamais contre un dump d'initié massif, signal que
-    l'analyse technique ne peut structurellement pas voir).
+    l'analyse technique ne peut structurellement pas voir) ; volume relatif de la
+    bougie d'entrée (``_check_volume_confirmation``, RVOL >= 3.0x la moyenne des 10
+    bougies précédentes, 19/07 -- revue croisée Gemini : golden pocket + divergence
+    RSI sont de PURES formules mathématiques sur le prix, aveugles à si un vrai
+    capital soutient le rebond ou si 1-2 transactions isolées suffisent à dessiner le
+    même signal sur un token abandonné -- REJET DUR uniquement quand un vrai volume
+    par bougie est disponible et l'infirme ; fail-open, jamais un rejet, quand la
+    donnée est structurellement absente, ex. repli synthèse DexScreener/Dune -- mais
+    alors un malus de conviction s'applique au sizing, cf. risk_guard.
+    conviction_size_multiplier).
   - **R/R positif obligatoire** (cible/invalidation dérivés de niveaux RÉELS via
     ``entry_signals.detect_entry`` -- golden pocket + divergence RSI) : sans lui,
     HOLD. Jamais un objectif fabriqué quand l'OHLCV est indisponible.
@@ -169,6 +178,60 @@ _MIN_VOLUME_24H_USD = 5_000.0
 _TOP_N_HOLDERS_FOR_CONCENTRATION = 10
 _MAX_TOP_HOLDERS_CONCENTRATION_PCT = 80.0
 _BURN_ADDRESSES = ("0x" + "0" * 40, "0x000000000000000000000000000000000000dead")
+
+# 19/07 -- volume relatif (RVOL, revue croisée Gemini, 4e round). Vise le risque
+# spécifique du "rechargement profond" (golden pocket + divergence RSI) : un creux
+# technique peut être purement mathématique, produit par 1-2 transactions isolées sur
+# un token abandonné, sans qu'aucun capital réel ne défende ce niveau -- « acheter le
+# couteau qui tombe ». Compare le volume de la bougie d'ENTRÉE (la plus récente, celle
+# évaluée par ``detect_entry``) à la moyenne des ``_RVOL_BASELINE_WINDOW`` bougies
+# précédentes -- auto-calibré par token, même doctrine que le plafond d'impact de prix
+# (``risk_guard.cap_alloc_to_price_impact``), jamais un seuil en dollars.
+#
+# Design en 3 ÉTATS, pas un simple bool (vérifié AVANT de coder : 3 des 5 étages de la
+# cascade OHLCV -- GeckoTerminal/CoinMarketCap/Mobula -- ont un vrai volume par bougie ;
+# les 2 derniers recours -- synthèse DexScreener, Dune ``prices.usd`` -- codent
+# ``volume=0.0`` EN DUR sur chaque bougie, jamais une vraie donnée, cf. leurs modules
+# respectifs) :
+#   - "confirmed" (RVOL réel >= 3.0x) -- rebond soutenu par du capital réel, aucune
+#     pénalité.
+#   - "not_confirmed" (donnée réelle mais RVOL < 3.0x) -- REJET DUR, la proposition
+#     initiale de Gemini ("RVOL < 3.0 -> signal invalidé, position non ouverte").
+#   - "unknown" (référence structurellement à zéro -- sources de secours ci-dessus, ou
+#     historique insuffisant) -- JAMAIS un rejet (confondre "cette source ne fournit
+#     pas cette donnée" avec "ce signal est faux" rejetterait systématiquement tout
+#     candidat dont le prix vient de ces deux replis, indépendamment de la santé
+#     réelle du marché) -- mais applique le MALUS DE CONVICTION demandé par Gemini
+#     (2e passe) : plafonne le sizing au palier modéré, jamais le palier fort, tant
+#     qu'aucune preuve de volume réel ne soutient l'entrée.
+_RVOL_BASELINE_WINDOW = 10
+_RVOL_CONFIRMATION_MULTIPLIER = 3.0
+
+
+def _check_volume_confirmation(candles: list[Candle]) -> tuple[str, str]:
+    """``(statut, raison)`` -- ``statut`` in {"confirmed", "not_confirmed", "unknown"},
+    cf. commentaire ci-dessus pour la doctrine complète des 3 états."""
+    if len(candles) < _RVOL_BASELINE_WINDOW + 1:
+        return "unknown", "historique insuffisant pour établir une référence de volume"
+
+    baseline = candles[-(_RVOL_BASELINE_WINDOW + 1) : -1]
+    baseline_avg = sum(c.volume for c in baseline) / _RVOL_BASELINE_WINDOW
+    trigger_volume = candles[-1].volume
+    if baseline_avg <= 0:
+        return "unknown", "aucun volume réel disponible sur cette source (repli synthèse/Dune)"
+
+    rvol = trigger_volume / baseline_avg
+    if rvol >= _RVOL_CONFIRMATION_MULTIPLIER:
+        return (
+            "confirmed",
+            f"volume relatif {rvol:.1f}x >= {_RVOL_CONFIRMATION_MULTIPLIER:.0f}x -- "
+            "rebond soutenu par du capital réel",
+        )
+    return (
+        "not_confirmed",
+        f"volume relatif {rvol:.1f}x < {_RVOL_CONFIRMATION_MULTIPLIER:.0f}x -- "
+        "rebond sans confirmation de volume",
+    )
 
 
 def normalize_contract_case(contract: str, chain: str) -> str:
@@ -907,6 +970,14 @@ async def evaluate_momentum_entry(
           (18/07, "plus sélective" : relevé depuis 1.5/1 signal). R/R positif mais
           sous ce seuil (1.0-2.0) -> confirmation LLM légère (calibrée sur le rythme
           hebdo, cf. ``weekly_context``). Sinon HOLD.
+      12. Garde de sécurité final (LLM, ``_llm_security_gate``) -- peut encore annuler
+          un BUY déjà décidé.
+      13. Volume relatif (RVOL, ``_check_volume_confirmation``, 19/07) -- sur un BUY
+          encore valide : REJET si un vrai volume par bougie est disponible et
+          l'infirme (< 3.0x la moyenne des 10 bougies précédentes) ; fail-open (jamais
+          un rejet) si la donnée est structurellement absente, mais ``volume_confirmed
+          =False`` est alors exposé pour que ``risk_guard.conviction_size_multiplier``
+          plafonne le sizing au palier modéré.
     Retourne un dict compatible avec ``paper_trader.run_paper_cycle``'s ``analyzer``
     (``action``/``symbol``/``price``/``target``/``invalidation``/``chain``), ou
     ``None`` si aucune donnée de prix exploitable (jamais un signal fabriqué).
@@ -1064,6 +1135,24 @@ async def evaluate_momentum_entry(
             hold_reason = gate_hold_reason
             reasons.append("garde de sécurité final (LLM) -- piège probable, achat annulé")
 
+    # 19/07 -- volume relatif (RVOL, revue croisée Gemini) -- cf. doctrine complète des
+    # 3 états sur _check_volume_confirmation ci-dessus. "not_confirmed" (donnée réelle,
+    # rebond non soutenu) annule l'achat ; "unknown" (donnée absente) laisse passer mais
+    # le malus de conviction est appliqué au sizing via ce champ.
+    volume_confirmed: bool | None = None
+    if action == "BUY":
+        volume_status, volume_reason = _check_volume_confirmation(candles)
+        if volume_status == "not_confirmed":
+            action = "HOLD"
+            hold_reason = "volume_not_confirmed"
+            reasons.append(volume_reason)
+        elif volume_status == "confirmed":
+            volume_confirmed = True
+            reasons.append(volume_reason)
+        else:
+            volume_confirmed = False
+            reasons.append(f"volume relatif non vérifiable ({volume_reason}) -- taille plafonnée par prudence")
+
     # 19/07 -- ATR (Average True Range, indicators.atr_series) au moment de la décision
     # -- revue croisée Gemini : le stop suiveur (paper_trader.py, TRAIL_STOP_PCT) était
     # un pourcentage fixe (15 %) identique pour tous les tokens, aucune prise en compte
@@ -1136,6 +1225,12 @@ async def evaluate_momentum_entry(
         # calculable (HOLD, période de chauffe insuffisante) -- paper_trader.py retombe
         # sur TRAIL_STOP_PCT (pourcentage fixe) dans ce cas, jamais un stop inventé.
         "entry_atr_pct": entry_atr_pct,
+        # 19/07 -- True (RVOL confirmé) / False (donnée de volume absente, malus de
+        # conviction à appliquer au sizing) / None (jamais atteint le stade BUY) --
+        # risk_guard.conviction_size_multiplier traite False comme un plafond au palier
+        # modéré, jamais un rejet (déjà tranché par le HOLD "volume_not_confirmed"
+        # ci-dessus quand une vraie donnée existe et infirme le rebond).
+        "volume_confirmed": volume_confirmed,
         # 17/07 -- exposé pour que paper_trader.py puisse juger une éventuelle re-entrée
         # (demande opérateur explicite : "une position doit être achetée 1 seule fois sauf
         # si cas extrême de très très bons signaux") -- ce module ne connaît pas l'historique

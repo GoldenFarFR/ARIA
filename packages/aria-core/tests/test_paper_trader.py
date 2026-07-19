@@ -489,6 +489,29 @@ async def test_run_paper_cycle_threads_entry_atr_pct_from_analyzer(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_run_paper_cycle_volume_not_confirmed_caps_sizing_at_moderate(tmp_db):
+    """Bout en bout : volume_confirmed=False (RVOL non vérifiable, revue croisée
+    Gemini) plafonne le sizing au palier modéré même si R/R+alignement mériteraient
+    le palier fort -- vérifié via run_paper_cycle, pas seulement risk_guard en
+    isolation."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "NOVOL", "price": 1.0, "target": 2.0,
+            "invalidation": 0.5, "rr": 3.0, "align_score": 3, "chain": "base",
+            "volume_confirmed": False, "reasons": ["setup test"],
+        }
+
+    await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer)
+    opens = await pt.get_open_positions()
+    assert len(opens) == 1
+    # Palier modéré (3.5 % = 35 000$), pas le palier fort (5 % = 50 000$) qu'un
+    # R/R=3.0 + alignement=3 auraient normalement mérité.
+    assert opens[0]["cost_usd"] == pytest.approx(35_000.0)
+
+
+@pytest.mark.asyncio
 async def test_reduce_position_accounting(tmp_db):
     """Vérifie la base de coût réduite proportionnellement et le P&L partiel accumulé,
     indépendamment du cycle heartbeat."""

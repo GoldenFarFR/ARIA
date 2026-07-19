@@ -1600,8 +1600,12 @@ async def _run_paper_cycle_locked(
         # 19/07 -- potential_score (conviction_research.py) : None si la diligence
         # fondamentale n'a rien trouvé/est désactivée -- fail-open sur inconnu, ne
         # bloque jamais le bonus technique seul (cf. risk_guard docstring).
+        # volume_confirmed (momentum_entry._check_volume_confirmation, revue croisée
+        # Gemini) : False -> malus de conviction (palier fort refusé), None/True ->
+        # aucun effet.
         conviction_mult = risk_guard.conviction_size_multiplier(
             sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+            volume_confirmed=sig.get("volume_confirmed"),
         )
         # 18/07 (suite, "frein à main" validé après revue) -- une fois l'objectif hebdo
         # déjà atteint, réduit de moitié les NOUVELLES entrées (jamais à zéro) : protège

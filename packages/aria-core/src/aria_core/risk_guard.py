@@ -128,7 +128,8 @@ FUNDAMENTAL_WEAK_THRESHOLD = 4.0
 
 
 def conviction_size_multiplier(
-    rr: float | None, align_score: int | None, *, fundamental_score: float | None = None,
+    rr: float | None, align_score: int | None, *,
+    fundamental_score: float | None = None, volume_confirmed: bool | None = None,
 ) -> float:
     """Multiplicateur appliqué sur ``ALLOC_PCT`` (5 %, ``paper_trader.py``) -- jamais
     au-delà de ``MAX_ALLOC_MULTIPLIER`` (1.0 = 5 % du capital, le plafond dur demandé
@@ -152,11 +153,24 @@ def conviction_size_multiplier(
     recherche fondamentale a CONFIRMÉ un potentiel faible (< ``FUNDAMENTAL_WEAK_
     THRESHOLD``), rétrograde au palier MODÉRÉ (jamais directement au plancher FAIBLE --
     la conviction technique reste réelle, seul le bonus maximal est refusé). ``None``
-    (recherche non menée/indisponible) ne rétrograde JAMAIS le palier technique."""
+    (recherche non menée/indisponible) ne rétrograde JAMAIS le palier technique.
+
+    ``volume_confirmed`` (19/07, revue croisée Gemini, optionnel) : même doctrine de
+    véto que ``fundamental_score`` -- ``False`` (le volume relatif de la bougie
+    d'entrée n'a pas pu être vérifié, cf. ``momentum_entry._check_volume_confirmation``,
+    état "unknown") rétrograde le palier FORT vers MODÉRÉ (malus de conviction demandé
+    par Gemini : un rebond sans preuve de capital réel derrière ne mérite jamais
+    l'allocation maximale, même si le reste du setup est parfait). ``None``/``True``
+    ne rétrogradent jamais -- un ``False`` avec DONNÉE RÉELLE confirmant l'absence de
+    volume (état "not_confirmed") n'atteint jamais cette fonction : ce cas-là est déjà
+    un rejet dur en amont (``hold_reason="volume_not_confirmed"``), jamais une question
+    de taille."""
     if rr is None or align_score is None:
         return MAX_ALLOC_MULTIPLIER
     if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
         if fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD:
+            return MODERATE_ALLOC_MULTIPLIER
+        if volume_confirmed is False:
             return MODERATE_ALLOC_MULTIPLIER
         return MAX_ALLOC_MULTIPLIER
     if rr >= MODERATE_RR_THRESHOLD:

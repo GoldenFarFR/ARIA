@@ -161,6 +161,48 @@ class TestConvictionSizeMultiplierFundamental:
         assert mult == risk_guard.MIN_ALLOC_MULTIPLIER
 
 
+# ── 1quinquies. conviction_size_multiplier + volume_confirmed (19/07, revue croisée
+#                Gemini -- malus de conviction sur RVOL indisponible) ──────────────────
+
+
+class TestConvictionSizeMultiplierVolume:
+    def test_backward_compatible_no_volume_arg(self):
+        assert risk_guard.conviction_size_multiplier(2.5, 3) == risk_guard.MAX_ALLOC_MULTIPLIER
+
+    def test_none_never_downgrades(self):
+        """Comportement historique (avant ce chantier) pour tout appelant qui ne
+        fournit pas ce signal."""
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, volume_confirmed=None)
+        assert mult == risk_guard.MAX_ALLOC_MULTIPLIER
+
+    def test_true_never_downgrades(self):
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, volume_confirmed=True)
+        assert mult == risk_guard.MAX_ALLOC_MULTIPLIER
+
+    def test_false_downgrades_strong_tier_to_moderate(self):
+        """Malus de conviction demandé par Gemini : RVOL non vérifiable (donnée
+        absente) -> jamais le palier fort, même si R/R + alignement le mériteraient."""
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, volume_confirmed=False)
+        assert mult == risk_guard.MODERATE_ALLOC_MULTIPLIER
+
+    def test_false_never_creates_a_bonus_or_further_penalty_below_strong_tier(self):
+        """Le malus ne s'applique QUE dans le garde du palier fort -- un setup déjà
+        modéré ou faible n'est jamais rétrogradé davantage."""
+        mult_moderate = risk_guard.conviction_size_multiplier(2.0, 3, volume_confirmed=False)
+        assert mult_moderate == risk_guard.MODERATE_ALLOC_MULTIPLIER
+        mult_weak = risk_guard.conviction_size_multiplier(1.0, 1, volume_confirmed=False)
+        assert mult_weak == risk_guard.MIN_ALLOC_MULTIPLIER
+
+    def test_composes_with_fundamental_veto_no_stacking_below_moderate(self):
+        """Les deux vétos (fondamental faible ET volume non confirmé) composent sur
+        le MÊME palier fort -- jamais un 3e palier en dessous de modéré, pas de
+        cumul punitif."""
+        mult = risk_guard.conviction_size_multiplier(
+            2.5, 3, fundamental_score=1.0, volume_confirmed=False,
+        )
+        assert mult == risk_guard.MODERATE_ALLOC_MULTIPLIER
+
+
 # ── 1ter. weekly_pacing_size_multiplier (18/07, "frein à main" déterministe validé
 #          après revue croisée -- jamais un LLM, jamais 0 %) ───────────────────────────
 

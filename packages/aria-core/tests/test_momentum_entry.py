@@ -936,7 +936,7 @@ def _pair(**overrides) -> PairSnapshot:
 
 def _patch_pipeline(
     monkeypatch, *, honeypot_clear=True, pairs=None, candles=None, signal=None, align=(0, []),
-    security_gate=(True, ""), concentration=(False, ""),
+    security_gate=(True, ""), concentration=(False, ""), volume_status=("confirmed", ""),
 ):
     async def fake_honeypot(contract, chain):
         if honeypot_clear:
@@ -966,6 +966,10 @@ def _patch_pipeline(
     monkeypatch.setattr(me, "_fetch_candles", fake_candles)
     monkeypatch.setattr(me, "detect_entry", fake_detect_entry)
     monkeypatch.setattr(me, "_technical_alignment", lambda candles_arg: align)
+    # 19/07 -- RVOL mocké "confirmed" par défaut (aucun rejet, aucun malus de sizing) :
+    # ce fichier teste le pipeline déterministe/R-R en amont, pas ce garde (couvert par
+    # ses propres tests dédiés plus bas).
+    monkeypatch.setattr(me, "_check_volume_confirmation", lambda candles_arg: volume_status)
     # 17/07 -- garde de sécurité final mocké PASS par défaut : ce fichier teste le
     # pipeline déterministe/R-R en amont, pas ce garde (couvert par ses propres tests
     # dédiés plus bas) -- sans ce mock, chaque test BUY échouerait en environnement de
@@ -1171,6 +1175,104 @@ class TestCheckHolderConcentration:
         monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
         too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert too_concentrated is False
+
+
+# ── volume relatif -- RVOL (19/07, revue croisée Gemini, 4e round) ──────────────────
+
+def _volume_candles(baseline_volumes: list[float], trigger_volume: float) -> list[Candle]:
+    candles = [
+        Candle(ts=i, open=1.0, high=1.0, low=1.0, close=1.0, volume=v)
+        for i, v in enumerate(baseline_volumes)
+    ]
+    candles.append(Candle(ts=len(baseline_volumes), open=1.0, high=1.0, low=1.0, close=1.0, volume=trigger_volume))
+    return candles
+
+
+class TestCheckVolumeConfirmation:
+    def test_unknown_when_history_too_short(self):
+        candles = _volume_candles([100.0] * 5, 500.0)  # seulement 6 bougies, fenêtre = 10
+        status, _reason = me._check_volume_confirmation(candles)
+        assert status == "unknown"
+
+    def test_unknown_when_baseline_structurally_zero(self):
+        """Même construction que synthesize_candles_from_pair (DexScreener) et
+        dune.get_price_history -- volume=0.0 codé en dur sur chaque bougie, jamais un
+        vrai marché mort. Ne doit JAMAIS rejeter (confondrait donnée absente et signal
+        faux)."""
+        candles = _volume_candles([0.0] * 10, 0.0)
+        status, reason = me._check_volume_confirmation(candles)
+        assert status == "unknown"
+        assert "aucun volume réel" in reason.lower()
+
+    def test_confirmed_when_rvol_at_or_above_threshold(self):
+        # moyenne=100, déclencheur=300 -> RVOL exactement 3.0x (borne incluse)
+        candles = _volume_candles([100.0] * 10, 300.0)
+        status, reason = me._check_volume_confirmation(candles)
+        assert status == "confirmed"
+        assert "3.0x" in reason
+
+    def test_not_confirmed_when_rvol_below_threshold_with_real_data(self):
+        # moyenne=100, déclencheur=200 -> RVOL 2.0x, donnée réelle mais insuffisante
+        candles = _volume_candles([100.0] * 10, 200.0)
+        status, reason = me._check_volume_confirmation(candles)
+        assert status == "not_confirmed"
+        assert "2.0x" in reason
+
+    def test_confirmed_well_above_threshold(self):
+        candles = _volume_candles([50.0] * 10, 1_000.0)  # RVOL 20x
+        status, _reason = me._check_volume_confirmation(candles)
+        assert status == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_on_volume_not_confirmed(monkeypatch):
+    """Donnée de volume réelle disponible mais RVOL insuffisant -- REJET DUR (proposition
+    initiale de Gemini : "RVOL < 3.0 -> signal invalidé, position non ouverte")."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(3, []),
+        volume_status=("not_confirmed", "volume relatif 1.5x < 3x -- rebond sans confirmation de volume"),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "volume_not_confirmed"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_buy_survives_unknown_volume_but_flags_it(monkeypatch):
+    """Donnée de volume absente (repli synthèse/Dune) -- JAMAIS un rejet (fail-open),
+    mais volume_confirmed=False est exposé pour le malus de conviction en aval."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(3, []),
+        volume_status=("unknown", "aucun volume réel disponible sur cette source"),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["volume_confirmed"] is False
+
+
+@pytest.mark.asyncio
+async def test_evaluate_buy_with_confirmed_volume_flags_true(monkeypatch):
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(3, []),
+        volume_status=("confirmed", "volume relatif 5x >= 3x"),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["volume_confirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hold_has_no_volume_confirmed(monkeypatch):
+    """Un HOLD (R/R sous le seuil ambigu) ne calcule jamais le RVOL -- même doctrine
+    que entry_atr_pct, une info de sizing sans objet tant qu'aucun achat n'est décidé."""
+    weak = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
+    _patch_pipeline(monkeypatch, signal=weak)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result.get("volume_confirmed") is None
 
 
 # ── liste noire + ratio wash-trading (17/07, perte réelle BRIAN) ────────────────────
