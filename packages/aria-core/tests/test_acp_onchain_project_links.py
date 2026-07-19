@@ -42,10 +42,21 @@ def test_extract_project_links_rejects_non_http_scheme():
     assert _extract_project_links(raw) == []
 
 
-def test_extract_project_links_unknown_social_type_capitalized():
+def test_extract_project_links_farcaster_mapped_explicitly():
+    """Farcaster (retour opérateur 19/07 : présent quasi systématiquement sur
+    DexScreener, au même titre que GitHub/Discord) -- mappé explicitement dans
+    _SOCIAL_LABELS, pas seulement via le repli .capitalize()."""
     raw = {"info": {"socials": [{"type": "farcaster", "url": "https://warpcast.com/atlas"}]}}
     links = _extract_project_links(raw)
     assert links == [{"label": "Farcaster", "url": "https://warpcast.com/atlas"}]
+
+
+def test_extract_project_links_unknown_social_type_capitalized():
+    """Un type de réseau vraiment inconnu (jamais ajouté à _SOCIAL_LABELS) ne doit
+    jamais être perdu -- repli sur son nom capitalisé plutôt qu'un libellé vide."""
+    raw = {"info": {"socials": [{"type": "lens", "url": "https://hey.xyz/atlas"}]}}
+    links = _extract_project_links(raw)
+    assert links == [{"label": "Lens", "url": "https://hey.xyz/atlas"}]
 
 
 def test_extract_project_links_missing_url_skipped():

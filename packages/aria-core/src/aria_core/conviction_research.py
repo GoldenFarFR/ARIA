@@ -306,7 +306,11 @@ async def research_project_potential(
     supplémentaire) sert de source PRIMAIRE pour le site officiel/handle X, plus
     fiable qu'une extraction heuristique depuis des snippets Tavily. Tavily reste
     appelé même quand ces liens existent (buzz/contexte/corroboration du contrat),
-    mais ne les écrase jamais si déjà trouvés ici."""
+    mais ne les écrase jamais si déjà trouvés ici. Tout autre lien connu
+    (GitHub/Discord/Telegram/Farcaster/Reddit -- retour opérateur : quasi toujours
+    présents sur DexScreener, leur absence est l'exception) n'est pas ignoré non
+    plus : passé comme contexte supplémentaire au LLM de synthèse (jamais un nouveau
+    champ persisté par plateforme)."""
     if not _is_conviction_research_enabled():
         return ConvictionResearch(available=False, reason="ARIA_CONVICTION_RESEARCH_ENABLED désactivé")
 
@@ -324,6 +328,9 @@ async def research_project_potential(
     x_handle: str | None = None
     contract_corroborated: bool | None = None
     snippet_lines: list[str] = []
+    other_known_link_lines: list[str] = []
+
+    _MAX_OTHER_KNOWN_LINKS = 6  # même discipline que snippet_lines[:4]/buzz_lines[:5]
 
     for link in known_links or []:
         if not isinstance(link, dict):
@@ -332,10 +339,30 @@ async def research_project_potential(
         url = str(link.get("url") or "")
         if not url:
             continue
-        if label == "Site officiel" and website_url is None:
-            website_url = url
-        elif label == "X (Twitter)" and x_handle is None:
-            x_handle = _extract_x_handle(url)
+        if label == "Site officiel":
+            # dexscreener.py::_extract_project_links défaut TOUTE entrée `websites`
+            # sans label explicite à ce libellé générique -- un 2e site "Site
+            # officiel" (ex. docs, whitepaper) n'est jamais un réseau différent,
+            # jamais mélangé dans other_known_link_lines. Comportement pré-diff pour
+            # ce cas précis : silencieusement ignoré au-delà du premier (bug réel
+            # trouvé en revue croisée, 19/07 -- un 2e "Site officiel" tombait à tort
+            # sous "Autres liens officiels déclarés (GitHub/Discord/Telegram/etc.)").
+            if website_url is None:
+                website_url = url
+        elif label == "X (Twitter)":
+            if x_handle is None:
+                x_handle = _extract_x_handle(url)
+        elif label and len(other_known_link_lines) < _MAX_OTHER_KNOWN_LINKS:
+            # 19/07 -- GitHub/Discord/Telegram/Farcaster/Reddit etc. (retour opérateur :
+            # DexScreener les affiche quasi systématiquement, déjà extraits par
+            # dexscreener.py, jamais consultés jusqu'ici -- même angle mort que le
+            # bug SOGNI, cette fois sur des réseaux au-delà du site+X). Jamais un
+            # nouveau champ persisté par plateforme -- un dépôt GitHub/serveur Discord
+            # DÉCLARÉ est un signal de légitimité en plus, pesé par le LLM au même
+            # titre qu'un extrait de site web, pas un fait structuré séparé.
+            other_known_link_lines.append(
+                f"- {sanitize_untrusted_text(label, 40)} : {sanitize_untrusted_text(url, 200)}"
+            )
 
     try:
         tavily_result = await tavily_client.search(
@@ -416,7 +443,10 @@ async def research_project_potential(
 
         posting_cadence = _posting_cadence_from_tweets(cadence_tweets)
 
-    if not website_url and not x_handle and not buzz_lines and contract_corroborated is None:
+    if (
+        not website_url and not x_handle and not buzz_lines
+        and not other_known_link_lines and contract_corroborated is None
+    ):
         result = ConvictionResearch(
             available=True, x_handle=x_handle, posting_cadence=posting_cadence,
             contract_corroborated=None, potential_score=None,
@@ -427,6 +457,7 @@ async def research_project_potential(
 
     score, rationale = await _synthesize_potential(
         safe_symbol, chain, snippet_lines, buzz_lines, posting_cadence, contract_corroborated,
+        other_known_link_lines,
     )
     result = ConvictionResearch(
         available=True, website_url=website_url, x_handle=x_handle,
@@ -444,11 +475,18 @@ async def _synthesize_potential(
     buzz_lines: list[str],
     posting_cadence: str,
     contract_corroborated: bool | None,
+    other_known_link_lines: list[str] | None = None,
 ) -> tuple[float | None, str]:
     """Un seul appel LLM léger (même modèle/provider que ``_llm_confirm`` --
     Haiku 4.5 via OpenRouter, déjà validé sur des tentatives d'injection réelles)
     synthétise tout le contexte collecté en un score borné + une phrase. Fail-closed
-    sur (None, "") -- jamais un score fabriqué faute de réponse exploitable."""
+    sur (None, "") -- jamais un score fabriqué faute de réponse exploitable.
+
+    ``other_known_link_lines`` (19/07, retour opérateur) -- GitHub/Discord/Telegram/
+    Farcaster/Reddit DÉCLARÉS par le projet lui-même sur DexScreener (déjà extraits,
+    jamais un nouveau champ persisté par plateforme) : un signal de légitimité
+    additionnel pesé par le LLM au même titre qu'un extrait de site web, jamais un
+    fait vérifié en soi -- un lien peut être déclaré sans jamais être authentique."""
     from aria_core.llm import chat_with_context
     from aria_core.sanitize import sanitize_untrusted_text
 
@@ -461,6 +499,8 @@ async def _synthesize_potential(
     external = "\n".join(
         ["Extraits site web :"] + (snippet_lines or ["(aucun)"])
         + ["", "Tweets récents :"] + (buzz_lines or ["(aucun)"])
+        + ["", "Autres liens officiels déclarés (GitHub/Discord/Telegram/etc.) :"]
+        + (other_known_link_lines or ["(aucun)"])
     )
     safe_external = sanitize_untrusted_text(external, _MAX_EXTERNAL_CONTENT_CHARS)
 

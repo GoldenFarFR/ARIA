@@ -36,6 +36,7 @@ _SOCIAL_LABELS = {
     "discord": "Discord",
     "github": "GitHub",
     "reddit": "Reddit",
+    "farcaster": "Farcaster",
 }
 
 
