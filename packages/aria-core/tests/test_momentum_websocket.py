@@ -88,6 +88,32 @@ async def test_ingest_frame_queues_new_candidate_on_allowed_chain():
 
 
 @pytest.mark.asyncio
+async def test_ingest_frame_preserves_solana_address_case():
+    """19/07 -- bug réel trouvé en activant ce chemin pour la première fois : un
+    .lower() aveugle corrompait toute adresse Solana (base58, sensible à la casse),
+    cassant silencieusement la couverture RugCheck/GoPlus en aval (400 "invalid
+    length" observé en prod). Base reste insensible à la casse -- vérifié séparément
+    ci-dessous, non-régression."""
+    listener = mw.MomentumWebsocketListener()
+    mixed_case = "GuSBoRgzPo6HC7msoRouqYPj3psxGAhm4amc9idHpump"
+    await listener._ingest_frame(
+        _listing_frame([_item(chain_id="solana", token_address=mixed_case)])
+    )
+    assert (mixed_case, "solana") in listener._pending
+    assert (mixed_case.lower(), "solana") not in listener._pending
+
+
+@pytest.mark.asyncio
+async def test_ingest_frame_lowercases_base_address():
+    listener = mw.MomentumWebsocketListener()
+    mixed_case = "0xAbCdEf0000000000000000000000000000000000"
+    await listener._ingest_frame(
+        _listing_frame([_item(chain_id="base", token_address=mixed_case)])
+    )
+    assert (mixed_case.lower(), "base") in listener._pending
+
+
+@pytest.mark.asyncio
 async def test_ingest_frame_ignores_heartbeat_frame():
     listener = mw.MomentumWebsocketListener()
     await listener._ingest_frame(json.dumps({"type": "heartbeat"}))

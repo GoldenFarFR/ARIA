@@ -67,7 +67,11 @@ import os
 import time
 
 from aria_core import outgoing_pause
-from aria_core.momentum_entry import DEFAULT_CHAINS, _batch_liquidity_prefilter
+from aria_core.momentum_entry import (
+    DEFAULT_CHAINS,
+    _batch_liquidity_prefilter,
+    normalize_contract_case,
+)
 from aria_core.services.dexscreener import parse_listing
 
 logger = logging.getLogger(__name__)
@@ -221,8 +225,16 @@ class MomentumWebsocketListener:
                 if not isinstance(raw, dict):
                     continue
                 listing = parse_listing(raw)
-                contract = listing.token_address.strip().lower()
                 chain = listing.chain_id.strip().lower()
+                # 19/07 -- bug réel trouvé en activant ce chemin pour la première fois
+                # (jamais exercé jusqu'ici) : un .lower() aveugle corrompait toute adresse
+                # Solana (base58, sensible à la casse -- contrairement à Base/Robinhood en
+                # hex EVM). Même bug déjà corrigé le 18/07 côté REST
+                # (momentum_entry.normalize_contract_case), jamais reporté ici -- ce module
+                # avait été écrit AVANT cette découverte. Symptôme observé en prod : RugCheck
+                # (repli honeypot Solana, #207) rejetait en 400 "invalid length" des adresses
+                # dont la couverture réelle n'a jamais été vérifiée avec la bonne casse.
+                contract = normalize_contract_case(listing.token_address.strip(), chain)
                 if not contract or not chain or chain not in _ALLOWED_CHAINS:
                     continue
                 key = (contract, chain)
