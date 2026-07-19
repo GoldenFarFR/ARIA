@@ -921,13 +921,14 @@ def test_technical_alignment_never_crashes_on_short_series():
 # ── evaluate_momentum_entry (bout en bout, tout mocké) ───────────────────────────────
 
 def _pair(**overrides) -> PairSnapshot:
-    # 19/07 -- liquidité par défaut confortablement au-dessus du nouveau plancher
-    # (_MIN_LIQUIDITY_USD, 100 000$) : les tests qui ne testent pas spécifiquement ce
-    # gate (R/R, alignement, LLM confirm/security gate, potential_score...) doivent
-    # continuer à traverser le nouveau rejet dur sans avoir à l'overrider un par un.
+    # 19/07 -- liquidité ET volume par défaut confortablement au-dessus des nouveaux
+    # planchers (_MIN_LIQUIDITY_USD 100 000$, _MIN_VOLUME_24H_USD 5 000$) ET sous le
+    # ratio wash-trading (50k/150k = 0,33x, largement < 20x) : les tests qui ne testent
+    # pas spécifiquement ces gates doivent continuer à les traverser sans avoir à
+    # overrider quoi que ce soit un par un.
     base = {
         "pair_address": "0xpool", "price_usd": 1.5, "liquidity_usd": 150_000.0,
-        "base_symbol": "TOK", "base_address": CONTRACT.lower(),
+        "volume_24h_usd": 50_000.0, "base_symbol": "TOK", "base_address": CONTRACT.lower(),
     }
     base.update(overrides)
     return PairSnapshot(**base)
@@ -935,7 +936,7 @@ def _pair(**overrides) -> PairSnapshot:
 
 def _patch_pipeline(
     monkeypatch, *, honeypot_clear=True, pairs=None, candles=None, signal=None, align=(0, []),
-    security_gate=(True, ""),
+    security_gate=(True, ""), concentration=(False, ""),
 ):
     async def fake_honeypot(contract, chain):
         if honeypot_clear:
@@ -957,6 +958,9 @@ def _patch_pipeline(
     async def fake_security_gate(*args, **kwargs):
         return security_gate
 
+    async def fake_concentration(*args, **kwargs):
+        return concentration
+
     monkeypatch.setattr(me, "_check_honeypot", fake_honeypot)
     monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_pairs)
     monkeypatch.setattr(me, "_fetch_candles", fake_candles)
@@ -968,6 +972,9 @@ def _patch_pipeline(
     # test (LLM désactivé par défaut -> fail-closed -> HOLD), un faux négatif, pas un
     # vrai bug.
     monkeypatch.setattr(me, "_llm_security_gate", fake_security_gate)
+    # 19/07 -- même doctrine que security_gate ci-dessus : mocké "pas concentré" par
+    # défaut (aucun appel Blockscout réel en test), couvert par ses propres tests dédiés.
+    monkeypatch.setattr(me, "_check_holder_concentration", fake_concentration)
 
 
 @pytest.mark.asyncio
@@ -1019,6 +1026,153 @@ async def test_evaluate_allows_liquidity_at_or_above_floor(monkeypatch):
     assert result["action"] == "BUY"
 
 
+# ── plancher de volume 24h (19/07, revue croisée Gemini -- anti token zombie) ───────
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_volume_below_floor(monkeypatch):
+    """150k$ de liquidité (au-dessus du plancher) mais seulement 400$ de volume/24h --
+    exactement le cas "token zombie" décrit par Gemini : le ratio volume/liquidité
+    (400/150000 ~ 0,003x) est bien trop bas pour jamais être suspect de wash-trading,
+    donc sans plancher de volume dédié rien ne l'aurait arrêté."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=150_000.0, volume_24h_usd=400.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "volume_too_low"
+    assert "volume 24h insuffisant" in result["reasons"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_allows_volume_at_or_above_floor(monkeypatch):
+    """Non-régression : un volume au-dessus du plancher (5k$) ne doit jamais être
+    bloqué par ce gate précis."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, pairs=[_pair(volume_24h_usd=5_000.0)], signal=strong, align=(3, []),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "volume_too_low"
+    assert result["action"] == "BUY"
+
+
+# ── concentration des holders (19/07, revue croisée Gemini) ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_on_holder_concentration(monkeypatch):
+    _patch_pipeline(monkeypatch, concentration=(True, "concentration des 10 plus gros détenteurs : 85% >= 80%"))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "holder_concentration"
+    assert "concentration" in result["reasons"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_allows_low_holder_concentration(monkeypatch):
+    """Non-régression : le mock par défaut de _patch_pipeline (pas concentré) ne doit
+    jamais bloquer un achat correctement qualifié par ailleurs."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(3, []))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "holder_concentration"
+    assert result["action"] == "BUY"
+
+
+class _FakeHoldersClient:
+    def __init__(self, result):
+        self._result = result
+
+    async def get_token_holders(self, token_address):
+        return self._result
+
+
+def _holder(address, percentage):
+    from aria_core.services.blockscout import TokenHolder
+
+    return TokenHolder(address=address, balance=None, percentage=percentage)
+
+
+class TestCheckHolderConcentration:
+    @pytest.mark.asyncio
+    async def test_fail_open_when_data_unavailable(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is False
+        assert reason == ""
+
+    @pytest.mark.asyncio
+    async def test_fail_open_when_no_total_supply(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        result = TokenHoldersResult(holders=[_holder("0xabc", 90.0)], total_supply=None, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is False
+
+    @pytest.mark.asyncio
+    async def test_excludes_pool_and_burn_addresses_from_concentration(self, monkeypatch):
+        """Le pool (90%) et l'adresse burn (5%) détiennent l'essentiel de l'offre --
+        mais ce sont des détenteurs LÉGITIMES (liquidité verrouillée, tokens brûlés),
+        jamais des "initiés". Une fois exclus, les vrais holders restants (2% + 1%)
+        sont largement sous le seuil -- ne doit PAS rejeter."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [
+            _holder("0xPOOL", 90.0),
+            _holder("0x000000000000000000000000000000000000dead", 5.0),
+            _holder("0xreal1", 2.0),
+            _holder("0xreal2", 1.0),
+        ]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is False
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_real_holders_exceed_threshold(self, monkeypatch):
+        """Hors pool/burn, 10 vrais détenteurs cumulent 85% -- au-dessus du seuil
+        (80%) -- doit rejeter."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [_holder("0xPOOL", 10.0)] + [_holder(f"0xreal{i}", 8.5) for i in range(10)]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is True
+        assert "85%" in reason
+
+    @pytest.mark.asyncio
+    async def test_allows_when_real_holders_below_threshold(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [_holder("0xPOOL", 60.0)] + [_holder(f"0xreal{i}", 3.0) for i in range(10)]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is False
+
+    @pytest.mark.asyncio
+    async def test_only_top_n_holders_counted(self, monkeypatch):
+        """21 détenteurs à 4% chacun (hors pool) = 84% au total, mais seuls les 10
+        PLUS GROS comptent (40%) -- sous le seuil, ne doit pas rejeter."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [_holder("0xPOOL", 16.0)] + [_holder(f"0xreal{i}", 4.0) for i in range(21)]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is False
+
+
 # ── liste noire + ratio wash-trading (17/07, perte réelle BRIAN) ────────────────────
 
 @pytest.mark.asyncio
@@ -1067,11 +1221,13 @@ async def test_evaluate_allows_reasonable_volume_to_liquidity_ratio(monkeypatch)
 @pytest.mark.asyncio
 async def test_evaluate_ratio_check_skipped_when_liquidity_zero(monkeypatch):
     """Pas de division par zéro -- une liquidité nulle/inconnue ne doit jamais
-    planter, ni être traitée comme un ratio infini. Plancher de liquidité (19/07)
-    désactivé ici pour isoler VRAIMENT ce garde-fou précis -- sinon une liquidité à
-    0.0 serait de toute façon rejetée en amont par ``insufficient_liquidity`` avant
-    même d'atteindre le calcul de ratio, et ce test ne prouverait plus rien."""
+    planter, ni être traitée comme un ratio infini. Plancher de liquidité ET de
+    volume (19/07) désactivés ici pour isoler VRAIMENT ce garde-fou précis -- sinon
+    une liquidité/un volume à 0/1000$ serait de toute façon rejeté en amont par
+    ``insufficient_liquidity``/``volume_too_low`` avant même d'atteindre le calcul
+    de ratio, et ce test ne prouverait plus rien."""
     monkeypatch.setattr(me, "_MIN_LIQUIDITY_USD", 0.0)
+    monkeypatch.setattr(me, "_MIN_VOLUME_24H_USD", 0.0)
     _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=0.0, volume_24h_usd=1_000.0)])
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "wash_trading_ratio"

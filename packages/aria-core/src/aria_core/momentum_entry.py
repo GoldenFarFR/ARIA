@@ -20,7 +20,14 @@ le test 1M$ (#194) », à lire avant toute modification) :
     piège de visibilité). Sur Solana, quand GoPlus n'a explicitement AUCUNE donnée
     (pas une panne), ``services/rugcheck.py`` sert de second avis (#207, 18/07) --
     ouvre de la couverture, n'assouplit jamais le garde-fou (fail-closed inchangé si
-    RugCheck non plus n'a rien ou confirmé rugged).
+    RugCheck non plus n'a rien ou confirmé rugged) ; plancher de volume 24h
+    (``_MIN_VOLUME_24H_USD``, 5 000$ depuis le 19/07 -- revue croisée Gemini : un
+    marché "zombie", liquidité présente mais quasi aucune activité réelle, peut
+    fabriquer un setup technique via une seule transaction isolée sans que le ratio
+    volume/liquidité ne s'en aperçoive) ; concentration des holders
+    (``_check_holder_concentration``, top 10 hors pool/burn >= 80%, 19/07 -- un R/R
+    et un ATR parfaits ne protègent jamais contre un dump d'initié massif, signal que
+    l'analyse technique ne peut structurellement pas voir).
   - **R/R positif obligatoire** (cible/invalidation dérivés de niveaux RÉELS via
     ``entry_signals.detect_entry`` -- golden pocket + divergence RSI) : sans lui,
     HOLD. Jamais un objectif fabriqué quand l'OHLCV est indisponible.
@@ -137,6 +144,31 @@ MAX_VOLUME_TO_LIQUIDITY_RATIO = 20.0
 # signal de danger). Absence de donnée (défaut 0.0 de PairSnapshot) -> jamais bloquant,
 # même doctrine dégradation douce que le reste du pipeline.
 _MAX_PRICE_CHANGE_24H_PCT = 200.0
+
+# 19/07 -- plancher de volume 24h minimum (revue croisée Gemini, validée par l'opérateur
+# "gemini a verifier... construis-le"). Angle mort réel identifié : le ratio volume/
+# liquidité (MAX_VOLUME_TO_LIQUIDITY_RATIO ci-dessus) ne détecte qu'un volume TROP HAUT
+# par rapport à la liquidité (wash-trading) -- rien ne détecte l'inverse, un token "zombie"
+# (liquidité verrouillée mais quasi aucune activité réelle, ex. 150 000$ de liquidité pour
+# 400$ de volume/24h -- ratio ~0,003x, largement sous tout seuil de suspicion). Sur un tel
+# token, un setup golden pocket/RSI peut être fabriqué par une seule transaction isolée
+# (une bougie artificielle), sans qu'aucun autre garde-fou ne s'en aperçoive. 5 000$ =
+# seuil bas volontaire ("le marché est vivant", pas un filtre de qualité) -- même doctrine
+# permissive que le reste du pipeline, jamais un filtre de conviction déguisé en garde-fou.
+_MIN_VOLUME_24H_USD = 5_000.0
+
+# 19/07 -- concentration des top holders (revue croisée Gemini, validée par l'opérateur
+# "fais-le"). Même en dehors d'une thèse moyen terme, un token où une poignée de wallets
+# détient l'essentiel de l'offre reste exposé à un dump d'initié massif qu'aucun R/R ni
+# ATR ne peut anticiper -- l'analyse technique ne voit que le PRIX, jamais QUI peut le
+# faire s'effondrer d'un seul coup. 80% chez les 10 plus gros détenteurs (hors pool de
+# liquidité et adresses de burn/mort) = seuil extrême explicitement proposé par Gemini et
+# confirmé par l'opérateur, pas une calibration fine -- une barrière sur un cas déjà
+# manifeste, dans le même esprit que le ratio wash-trading (20x) et le plafond parabolique
+# (200%) ci-dessus : rejeter l'évident, jamais sur-filtrer par excès de prudence.
+_TOP_N_HOLDERS_FOR_CONCENTRATION = 10
+_MAX_TOP_HOLDERS_CONCENTRATION_PCT = 80.0
+_BURN_ADDRESSES = ("0x" + "0" * 40, "0x000000000000000000000000000000000000dead")
 
 
 def normalize_contract_case(contract: str, chain: str) -> str:
@@ -357,6 +389,47 @@ async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, s
         "RugCheck disponible mais verdict non concluant -- rejet par prudence",
         "honeypot_unavailable",
     )
+
+
+async def _check_holder_concentration(contract: str, chain: str, pool_address: str) -> tuple[bool, str]:
+    """``(trop_concentré, raison)`` -- rejette si les ``_TOP_N_HOLDERS_FOR_CONCENTRATION``
+    plus gros détenteurs (hors pool de liquidité et adresses de burn/mort) détiennent
+    ensemble >= ``_MAX_TOP_HOLDERS_CONCENTRATION_PCT`` % de l'offre.
+
+    FAIL-OPEN si la donnée est indisponible (jamais un rejet) -- seul le honeypot est
+    fail-closed dans ce pipeline. Couverture limitée aux chaînes EVM indexées par
+    Blockscout (Base confirmée ; Solana n'est structurellement pas couvert, Blockscout
+    étant un explorateur EVM -- dégradation honnête via ``get_blockscout_client``, jamais
+    un blocage sur ce que l'outil ne sait pas lire).
+
+    Limite honnête assumée (pas une garantie) : n'exclut que le pool de liquidité
+    PRINCIPAL (``pool_address``, celui déjà résolu par ``_best_pair``) et les adresses de
+    burn connues -- un token avec plusieurs pools actifs ou un contrat de vesting/staking
+    légitime pourrait être mal classé comme concentration d'initiés."""
+    from aria_core.services.blockscout import get_blockscout_client
+
+    client = get_blockscout_client(chain)
+    result = await client.get_token_holders(contract)
+    if not result.available or not result.holders or not result.total_supply:
+        return False, ""
+
+    excluded = {a.lower() for a in _BURN_ADDRESSES} | {(pool_address or "").lower()}
+    ranked = sorted(
+        (
+            h for h in result.holders
+            if h.percentage is not None and (h.address or "").lower() not in excluded
+        ),
+        key=lambda h: h.percentage,
+        reverse=True,
+    )
+    top_pct = sum(h.percentage for h in ranked[:_TOP_N_HOLDERS_FOR_CONCENTRATION])
+    if top_pct >= _MAX_TOP_HOLDERS_CONCENTRATION_PCT:
+        return True, (
+            f"concentration des {_TOP_N_HOLDERS_FOR_CONCENTRATION} plus gros détenteurs "
+            f"(hors pool/burn) : {top_pct:.0f}% >= {_MAX_TOP_HOLDERS_CONCENTRATION_PCT:.0f}% "
+            "-- risque de dump d'initié"
+        )
+    return False, ""
 
 
 # 19/07 -- coupe-circuit adaptatif par fournisseur (#95, évalué après l'incident #211 :
@@ -817,17 +890,23 @@ async def evaluate_momentum_entry(
       3. Prix + meilleure paire (DexScreener) -- rejet si aucune paire liquide.
       4. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 100 000$, 19/07) -- rejet
          SYSTÉMATIQUE si le pool est trop mince, même si tout le reste est propre.
-      5. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
+      5. Plancher de volume 24h (``_MIN_VOLUME_24H_USD``, 5 000$, 19/07) -- rejet si
+         le marché est quasi mort, sur des données déjà en main.
+      6. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
          des données déjà en main (aucun appel réseau supplémentaire).
-      6. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
+      7. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
          extrême, même donnée déjà en main.
-      7. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
+      8. Concentration des holders (``_check_holder_concentration``, top 10 hors
+         pool/burn >= 80%, 19/07) -- rejet si un dump d'initié massif reste possible ;
+         seul garde-fou dur qui coûte un appel réseau (Blockscout), placé en dernier
+         parmi les garde-fous durs pour ça.
+      9. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
          HOLD si absent (jamais un objectif fabriqué).
-      8. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
-      9. R/R franc (>= 2.0) + alignement technique >= 2/3 -> BUY déterministe (18/07,
-         "plus sélective" : relevé depuis 1.5/1 signal). R/R positif mais sous ce seuil
-         (1.0-2.0) -> confirmation LLM légère (calibrée sur le rythme hebdo, cf.
-         ``weekly_context``). Sinon HOLD.
+      10. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
+      11. R/R franc (>= 2.0) + alignement technique >= 2/3 -> BUY déterministe
+          (18/07, "plus sélective" : relevé depuis 1.5/1 signal). R/R positif mais
+          sous ce seuil (1.0-2.0) -> confirmation LLM légère (calibrée sur le rythme
+          hebdo, cf. ``weekly_context``). Sinon HOLD.
     Retourne un dict compatible avec ``paper_trader.run_paper_cycle``'s ``analyzer``
     (``action``/``symbol``/``price``/``target``/``invalidation``/``chain``), ou
     ``None`` si aucune donnée de prix exploitable (jamais un signal fabriqué).
@@ -873,6 +952,22 @@ async def evaluate_momentum_entry(
             "hold_reason": "insufficient_liquidity",
         }
 
+    # 19/07 -- plancher de volume (revue croisée Gemini) : un marché "mort" (liquidité
+    # présente, quasi aucune activité réelle) peut passer le plancher de liquidité ET le
+    # ratio volume/liquidité (trivialement bas, jamais suspect de wash-trading) -- ce
+    # plancher garantit un minimum d'activité de marché réelle avant de chercher un setup.
+    if (best.volume_24h_usd or 0.0) < _MIN_VOLUME_24H_USD:
+        return {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd,
+            "reasons": [
+                f"volume 24h insuffisant ({(best.volume_24h_usd or 0.0):,.0f}$ < "
+                f"{_MIN_VOLUME_24H_USD:,.0f}$) -- marché quasi inactif, signal technique "
+                "non fiable"
+            ],
+            "hold_reason": "volume_too_low",
+        }
+
     if best.liquidity_usd and best.liquidity_usd > 0:
         volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
         if volume_to_liq > MAX_VOLUME_TO_LIQUIDITY_RATIO:
@@ -895,6 +990,21 @@ async def evaluate_momentum_entry(
                 f"+{_MAX_PRICE_CHANGE_24H_PCT:.0f}%) -- doute, on passe à côté"
             ],
             "hold_reason": "already_parabolic",
+        }
+
+    # 19/07 -- concentration des holders (revue croisée Gemini) -- dernier des garde-fous
+    # durs, positionné après les vérifications gratuites (aucun appel réseau supplémentaire)
+    # puisque celui-ci en coûte un (Blockscout). Un R/R et un ATR parfaits ne protègent
+    # jamais contre un dump d'initié massif -- signal que l'analyse technique ne peut
+    # structurellement pas voir.
+    too_concentrated, concentration_reason = await _check_holder_concentration(
+        contract, chain, best.pair_address,
+    )
+    if too_concentrated:
+        return {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd, "reasons": [concentration_reason],
+            "hold_reason": "holder_concentration",
         }
 
     reasons: list[str] = [honeypot_reason]
