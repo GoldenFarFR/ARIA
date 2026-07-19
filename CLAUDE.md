@@ -3249,6 +3249,41 @@ raté observé en direct sur Telegram — TOUT DÉPLOYÉ ET VÉRIFIÉ (`0c2990ed
   restent ouvertes, prochaine étape logique de la même directive opérateur
   (« integre tous se qui permet que aria soit plus efficace »).
 
+**19/07 (suite) — #111/#112 tranché et câblé : twit.sh (x402) en COMPLÉMENT de la
+recherche X officielle, jamais un remplacement (décision opérateur explicite, tranchée
+via AskUserQuestion) — TOUT DÉPLOYÉ ET VÉRIFIÉ (`e4262044`).**
+- **Endpoints/schéma revérifiés en direct AVANT d'écrire le code** (norme du 14/07,
+  jamais coder contre un schéma supposé) : `x402.twit.sh/tweets/search?words=<query>`
+  (0,006$, payé réellement lors du test) confirme le param `words` déjà noté ; le
+  premier essai sur `x402.twit.sh/tweets/user?from=<handle>` a révélé un vrai piège
+  (`400 "Missing required query parameter: username"`, pas de paiement prélevé —
+  `fetch_paid_resource` traite un non-402 comme un passthrough) — le VRAI param est
+  `username`, confirmé par un second appel réel (0,01$, payé). **Découverte non
+  documentée jusqu'ici** : `created_at` est au format Twitter v1.1 legacy (`"Sun Jul
+  19 15:48:00 +0000 2026"`), pas l'ISO 8601 de l'API X officielle — sans
+  normalisation, `_posting_cadence_from_tweets` (`conviction_research.py`) aurait
+  échoué silencieusement à parser CHAQUE tweet twit.sh (`ValueError` capté, ignoré),
+  rendant la cadence de publication systématiquement "unknown" malgré des données
+  réelles. Corrigé dans `services/twitsh.py::_normalize_created_at` — le résultat est
+  un DROP-IN du même shape que `x_twitter.search_recent_tweets`/
+  `fetch_user_recent_tweets` ({"text", "created_at", ...}), `conviction_research.py`
+  n'a besoin d'aucune branche de parsing séparée.
+- **Repli, pas remplacement** : `conviction_research.py` tente d'abord la recherche X
+  officielle (gratuite, `x_research_budget.py`, 100 req/semaine) ; twit.sh ne prend le
+  relais que si le budget officiel est épuisé OU si la recherche officielle ne renvoie
+  rien (silence réel et panne indiscernables — `x_twitter.py` dégrade toujours en
+  liste vide, jamais une exception distincte). Même logique indépendamment appliquée
+  au buzz search ET à la cadence de publication (deux replis séparés). Coût borné par
+  le plafond `x402_budget.py` PARTAGÉ (5$/semaine, déjà fail-closed) — aucun nouveau
+  plafond dédié construit, le pire cas est déjà couvert par un garde-fou existant.
+- 17 nouveaux tests (`test_twitsh.py`, 11 ; `test_conviction_research.py`, 6 dédiés au
+  repli + une fixture autouse qui neutralise le repli par défaut sur tous les tests
+  existants pour éviter tout appel réseau réel en test). Suite complète vérifiée verte
+  (6063 passed, mêmes 5 échecs `test_proactive*` pré-existants sans rapport) +
+  `test_coherence.py` (81 passed). **Déployé directement** (pas batché — correctif de
+  comportement sur un pipeline déjà actif en prod, `ARIA_CONVICTION_RESEARCH_ENABLED=
+  true` depuis ce même segment), vérifié par health check indépendant.
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
