@@ -2093,6 +2093,52 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   séparément (113 passed, `/diagnostics/paper-ledger` mis à jour en
   parallèle). Déployé et vérifié (commit `f539ab5d3609` confirmé servi par
   nginx).
+- **19/07 (suite) — 3e round de la revue croisée Gemini sur le pipeline momentum,
+  2 nouveaux points construits, testés et DÉPLOYÉS (`380e726f`).** Après validation
+  explicite de Gemini sur les 5 points du round précédent (stop suiveur confirmé
+  correct, latence/Dune/injection confirmés maîtrisés, entonnoir de découverte
+  confirmé sain) -- Gemini a soulevé une 3e vague, toujours sur la même erreur de
+  cadrage "moyen terme" pour les points 4/5 (déjà tranchée, redite mais reconnue par
+  Gemini une fois clarifiée : "le malentendu... faussait la grille de lecture").
+  **2 vrais trous confirmés et construits** :
+  1. **Plancher de volume 24h minimum** (`_MIN_VOLUME_24H_USD`, 5 000$) --
+     angle mort réel : le ratio volume/liquidité (`MAX_VOLUME_TO_LIQUIDITY_RATIO`)
+     ne détecte qu'un volume TROP HAUT (wash-trading) ; rien ne détectait
+     l'inverse -- un token "zombie" (liquidité verrouillée, quasi aucune activité
+     réelle, ex. 150 000$ de liquidité pour 400$ de volume/24h) pouvait passer ce
+     ratio trivialement (bien trop bas pour être suspect) tout en affichant un
+     setup technique fabriqué par une seule transaction isolée. Câblé juste avant
+     le ratio wash-trading, sur des données déjà en main (aucun appel réseau
+     supplémentaire).
+  2. **Rejet sur concentration des holders** (`_check_holder_concentration`) --
+     top 10 détenteurs (hors pool de liquidité et adresses de burn/mort) >= 80%
+     de l'offre -> HOLD. Réutilise `blockscout_client.get_token_holders` déjà
+     existant (aucun nouveau client construit). Justification de Gemini retenue
+     même en écartant le cadrage "moyen terme" : un R/R et un ATR parfaits ne
+     protègent jamais contre un dump d'initié massif, signal que l'analyse
+     technique ne peut structurellement pas voir, quel que soit l'horizon.
+     **Fail-open si la donnée est indisponible** (Solana non couvert -- Blockscout
+     est un explorateur EVM, `CHAIN_IDS` confirmé sans entrée Solana -- dégradation
+     honnête, jamais un blocage sur ce que l'outil ne sait pas lire) -- seul le
+     honeypot reste fail-closed dans ce pipeline. Placé en DERNIER parmi les
+     garde-fous durs (seul à coûter un appel réseau, après tous les checks
+     gratuits déjà en main). Limite honnête assumée (documentée dans le code) :
+     n'exclut que le pool de liquidité PRINCIPAL et les adresses de burn connues
+     -- un token multi-pools ou un contrat de vesting/staking légitime pourrait
+     être mal classé comme concentration d'initiés.
+  **Vesting/déblocage de tokens (idée de Gemini) explicitement écarté, des deux
+  côtés** : aucune source de données fiable et généralisable pour ça sur des
+  tokens quelconques -- pas faisable proprement, Gemini a validé ce constat à
+  100%. 10 nouveaux tests (2 d'intégration par garde-fou + 6 unitaires sur
+  `_check_holder_concentration`, incl. exclusion pool/burn et plafond top-N --
+  vérifie explicitement qu'un token avec 21 "vrais" détenteurs à 4% chacun
+  n'est PAS rejeté puisque seuls les 10 plus gros comptent). `_pair()` (fixture
+  de test) gagne un volume par défaut sûr pour ne jamais casser silencieusement
+  les tests existants qui ne testent pas ce gate spécifiquement -- même piège
+  déjà rencontré et déjà corrigé pour le plancher de liquidité plus tôt ce
+  soir. Suite complète verte (6184 passed, mêmes 7 échecs pré-existants sans
+  rapport #142), `test_coherence.py` vert (81 passed). Déployé et vérifié
+  (commit `380e726f4616` confirmé servi par nginx).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
