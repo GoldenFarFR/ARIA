@@ -16,6 +16,12 @@ BORNÉE par ``x_research_budget.py`` (plafond hebdo de requêtes, jamais illimit
 Gate dédié ``ARIA_CONVICTION_RESEARCH_ENABLED`` (OFF par défaut, comme toute
 nouvelle capacité).
 
+Repli x402 (``services/twitsh.py``, #111/#112, 19/07, décision opérateur tranchée
+via AskUserQuestion) : quand la recherche X officielle gratuite est épuisée
+(plafond hebdo) ou ne renvoie rien, un appel payant twit.sh (0,006-0,01$, plafond
+PARTAGÉ ``x402_budget.py``, 5$/semaine) prend le relais -- toujours en COMPLÉMENT,
+jamais la source primaire.
+
 Sécurité (mandat #192) : le contenu externe (site web, tweets) est ATTAQUABLE -- un
 projet malveillant peut façonner son site/ses tweets pour manipuler le score et
 gonfler la taille de la position qu'ARIA prendrait contre lui. Même patron que
@@ -355,31 +361,60 @@ async def research_project_potential(
 
     buzz_lines: list[str] = []
     posting_cadence = "unknown"
-    if await x_research_budget.can_spend():
-        from aria_core.gateway.x_twitter import fetch_user_recent_tweets, search_recent_tweets
+    query = f"from:{x_handle}" if x_handle else f"{safe_symbol} {contract[:10]}"
 
-        query = f"from:{x_handle}" if x_handle else f"{safe_symbol} {contract[:10]}"
+    tweets: list[dict] = []
+    if await x_research_budget.can_spend():
+        from aria_core.gateway.x_twitter import search_recent_tweets
+
         try:
             tweets = await search_recent_tweets(query, max_results=10)
         except Exception as exc:  # noqa: BLE001
             logger.info("conviction_research: recherche X échouée (%s)", exc)
             tweets = []
         await x_research_budget.record_request(purpose="buzz_search", contract=contract, status="ok")
-        for t in tweets[:_MAX_TWEETS_IN_PROMPT]:
-            buzz_lines.append(f"- {sanitize_untrusted_text(t.get('text', ''), _MAX_TWEET_TEXT_CHARS)}")
+    else:
+        await x_research_budget.record_request(
+            purpose="buzz_search", contract=contract, status="blocked", reason="plafond hebdo atteint",
+        )
 
-        if x_handle and await x_research_budget.can_spend():
+    if not tweets:
+        # 19/07 -- repli x402 (twit.sh, #111/#112, décision opérateur via
+        # AskUserQuestion : COMPLÉMENT, jamais un remplacement). Déclenché soit
+        # parce que le plafond X officiel gratuit est épuisé (100 req/semaine), soit
+        # parce que la recherche officielle n'a rien renvoyé -- silence réel et panne
+        # sont indiscernables ici (x_twitter.py dégrade toujours en liste vide,
+        # jamais une exception distincte). Coût borné par le plafond x402_budget.py
+        # PARTAGÉ (5$/semaine, déjà fail-closed) -- aucun nouveau plafond dédié.
+        from aria_core.services.twitsh import search_tweets as twitsh_search_tweets
+
+        tweets = await twitsh_search_tweets(query, max_results=10)
+
+    for t in tweets[:_MAX_TWEETS_IN_PROMPT]:
+        buzz_lines.append(f"- {sanitize_untrusted_text(t.get('text', ''), _MAX_TWEET_TEXT_CHARS)}")
+
+    if x_handle:
+        cadence_tweets: list[dict] = []
+        if await x_research_budget.can_spend():
+            from aria_core.gateway.x_twitter import fetch_user_recent_tweets
+
             try:
                 cadence_tweets = await fetch_user_recent_tweets(x_handle, max_results=20)
             except Exception as exc:  # noqa: BLE001
                 logger.info("conviction_research: cadence X échouée (%s)", exc)
                 cadence_tweets = []
             await x_research_budget.record_request(purpose="posting_cadence", contract=contract, status="ok")
-            posting_cadence = _posting_cadence_from_tweets(cadence_tweets)
-    else:
-        await x_research_budget.record_request(
-            purpose="buzz_search", contract=contract, status="blocked", reason="plafond hebdo atteint",
-        )
+        else:
+            await x_research_budget.record_request(
+                purpose="posting_cadence", contract=contract, status="blocked", reason="plafond hebdo atteint",
+            )
+
+        if not cadence_tweets:
+            from aria_core.services.twitsh import fetch_user_tweets as twitsh_fetch_user_tweets
+
+            cadence_tweets = await twitsh_fetch_user_tweets(x_handle, max_results=20)
+
+        posting_cadence = _posting_cadence_from_tweets(cadence_tweets)
 
     if not website_url and not x_handle and not buzz_lines and contract_corroborated is None:
         result = ConvictionResearch(

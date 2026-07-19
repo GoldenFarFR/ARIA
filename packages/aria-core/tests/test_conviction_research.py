@@ -22,6 +22,21 @@ def _isolated_budget_db(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _stub_twitsh_fallback_empty(monkeypatch):
+    """Repli x402 (19/07, #111/#112) mocké à vide par défaut pour TOUS les tests
+    existants -- sans ce stub, chaque test où la recherche X officielle reste vide
+    (le cas par défaut : x_bearer_token vide en test_settings) déclencherait un vrai
+    appel réseau via twitsh.search_tweets/fetch_user_tweets. Les tests dédiés au
+    repli lui-même (plus bas) remplacent ce stub explicitement."""
+    async def _empty(*a, **k):
+        return []
+
+    monkeypatch.setattr("aria_core.services.twitsh.search_tweets", _empty)
+    monkeypatch.setattr("aria_core.services.twitsh.fetch_user_tweets", _empty)
+    yield
+
+
 def _fake_tavily_result(*, available=True, snippets=None, answer=None, error=None):
     return tavily_mod.TavilyResult(
         query="q", snippets=snippets or [], answer=answer, available=available, error=error,
@@ -263,6 +278,194 @@ async def test_budget_exhausted_skips_x_calls_and_records_blocked(test_settings,
     assert result.available is True  # site web seul suffit à produire un résultat
     status = await x_research_budget.weekly_status()
     assert status["used_requests"] == x_research_budget.WEEKLY_REQUEST_CAP  # rien de plus consommé
+
+
+# -- Repli x402 twit.sh (19/07, #111/#112) -- COMPLEMENT, jamais un remplacement,
+#    decision operateur tranchee via AskUserQuestion --------------------------------
+
+@pytest.mark.asyncio
+async def test_twitsh_fallback_used_when_official_budget_exhausted(test_settings, monkeypatch):
+    """Budget X officiel épuisé -> la recherche officielle n'est jamais tentée, le
+    repli twit.sh prend le relais directement."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    async def _fail_if_called(*a, **k):
+        raise AssertionError("ne doit jamais appeler X officiel, budget épuisé")
+
+    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _fail_if_called)
+
+    twitsh_calls = []
+
+    async def _fake_twitsh_search(query, **kwargs):
+        twitsh_calls.append(query)
+        return [{"text": "buzz via twit.sh", "created_at": None}]
+
+    monkeypatch.setattr("aria_core.services.twitsh.search_tweets", _fake_twitsh_search)
+
+    async def _fake_chat(user, system, **kwargs):
+        assert "buzz via twit.sh" in user
+        return "SCORE: 6\nRAISON: Buzz trouvé via le repli x402."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        await x_research_budget.record_request(purpose="buzz_search", status="ok")
+
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+    assert twitsh_calls == ["COBOT " + CONTRACT[:10]]
+    assert result.potential_score == 6.0
+
+
+@pytest.mark.asyncio
+async def test_twitsh_fallback_used_when_official_search_returns_empty(test_settings, monkeypatch):
+    """Budget officiel encore disponible, mais la recherche officielle ne renvoie
+    rien (silence réel ou panne, indiscernables) -> repli twit.sh déclenché."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    async def _official_empty(query, **kwargs):
+        return []
+
+    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _official_empty)
+
+    async def _fake_twitsh_search(query, **kwargs):
+        return [{"text": "trouvé par twit.sh seulement", "created_at": None}]
+
+    monkeypatch.setattr("aria_core.services.twitsh.search_tweets", _fake_twitsh_search)
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 4\nRAISON: Signal faible mais présent."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+    assert result.potential_score == 4.0
+    # Le budget X officiel a bien été consommé (tentative réelle, pas sautée).
+    status = await x_research_budget.weekly_status()
+    assert status["used_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_twitsh_not_called_when_official_search_succeeds(test_settings, monkeypatch):
+    """La recherche X officielle trouve déjà du buzz -> le repli payant ne doit
+    JAMAIS être sollicité (complément, pas un doublon systématique)."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    async def _official_success(query, **kwargs):
+        return [{"text": "buzz officiel réel", "created_at": None}]
+
+    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _official_success)
+
+    async def _fail_if_called(*a, **k):
+        raise AssertionError("ne doit jamais payer twit.sh, l'officiel a déjà réussi")
+
+    monkeypatch.setattr("aria_core.services.twitsh.search_tweets", _fail_if_called)
+
+    async def _fake_chat(user, system, **kwargs):
+        assert "buzz officiel réel" in user
+        return "SCORE: 7\nRAISON: Buzz officiel suffisant."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+    assert result.potential_score == 7.0
+
+
+@pytest.mark.asyncio
+async def test_twitsh_fallback_used_for_posting_cadence_when_official_empty(test_settings, monkeypatch):
+    """Même repli, côté cadence de publication (fetch_user_recent_tweets) --
+    indépendant du repli buzz_search."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        return _fake_tavily_result(snippets=[("x.com/cobot_official official", "https://cobot.xyz", None)])
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    async def _official_empty(*a, **k):
+        return []
+
+    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _official_empty)
+    monkeypatch.setattr("aria_core.gateway.x_twitter.fetch_user_recent_tweets", _official_empty)
+
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    twitsh_cadence_tweets = [
+        {"text": f"tweet {i}", "created_at": (now - timedelta(days=i)).isoformat(), "tweet_id": str(i)}
+        for i in range(5)
+    ]
+
+    twitsh_user_calls = []
+
+    async def _fake_twitsh_user(username, **kwargs):
+        twitsh_user_calls.append(username)
+        return twitsh_cadence_tweets
+
+    monkeypatch.setattr("aria_core.services.twitsh.fetch_user_tweets", _fake_twitsh_user)
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 8\nRAISON: Cadence active via le repli."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+    assert twitsh_user_calls == ["cobot_official"]
+    assert result.posting_cadence == "active"
+
+
+@pytest.mark.asyncio
+async def test_twitsh_not_called_for_cadence_when_official_succeeds(test_settings, monkeypatch):
+    """Cadence officielle déjà trouvée -> pas de repli payant."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        return _fake_tavily_result(snippets=[("x.com/cobot_official official", "https://cobot.xyz", None)])
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    official_tweets = [
+        {"text": f"tweet {i}", "created_at": (now - timedelta(days=i)).isoformat(), "tweet_id": str(i)}
+        for i in range(5)
+    ]
+
+    async def _official_empty(*a, **k):
+        return []
+
+    async def _official_success(username, **kwargs):
+        return official_tweets
+
+    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _official_empty)
+    monkeypatch.setattr("aria_core.gateway.x_twitter.fetch_user_recent_tweets", _official_success)
+
+    async def _fail_if_called(*a, **k):
+        raise AssertionError("ne doit jamais payer twit.sh, la cadence officielle a réussi")
+
+    monkeypatch.setattr("aria_core.services.twitsh.fetch_user_tweets", _fail_if_called)
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 8\nRAISON: Cadence active officielle."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+    assert result.posting_cadence == "active"
 
 
 @pytest.mark.asyncio

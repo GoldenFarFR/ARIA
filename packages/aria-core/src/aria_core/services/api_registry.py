@@ -161,6 +161,7 @@ def _static_entries() -> list[ApiEntry]:
         ApiEntry("Coinbase CDP (agent wallet)", "Paiements", "https://api.cdp.coinbase.com", _env_present("COINBASE_CDP_API_KEY_PRIVATE_KEY")),
         ApiEntry("Cybercentry", "Paiements", "https://api.cybercentry.co.uk", True, note="pay-per-call via x402 — voir le budget hebdo x402 ci-dessous"),
         ApiEntry("Otto AI (digest Twitter)", "Paiements", "https://x402.ottoai.services", True, note="pay-per-call via x402 (0,001$/appel) — voir le budget hebdo x402 ci-dessous, gate ARIA_MARKET_ALERTS_ENABLED (19/07)"),
+        ApiEntry("twit.sh (recherche/timeline X)", "Paiements", "https://x402.twit.sh", True, note="pay-per-call via x402 (0,006-0,01$/appel) — repli conviction_research.py quand l'X officiel échoue/est épuisé, #111/#112, voir le budget hebdo x402 ci-dessous"),
         ApiEntry("x402 Bazaar (découverte CDP)", "Paiements", "https://api.cdp.coinbase.com", True, note="lecture seule, sans clé — découverte de services x402, jamais un paiement"),
         ApiEntry("Etherscan V2", "Données on-chain", "https://api.etherscan.io", _env_present("ETHERSCAN_API_KEY"), note="clé stockée, inerte — aucun code ne la consomme encore"),
         ApiEntry("Stripe", "Paiements", "https://api.stripe.com", _env_present("STRIPE_SECRET_KEY")),
