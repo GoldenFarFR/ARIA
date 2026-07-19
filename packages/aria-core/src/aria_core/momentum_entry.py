@@ -787,7 +787,9 @@ async def evaluate_momentum_entry(
     if action == "BUY":
         from aria_core.conviction_research import research_project_potential
 
-        research = await research_project_potential(contract, best.base_symbol, chain)
+        research = await research_project_potential(
+            contract, best.base_symbol, chain, known_links=best.project_links,
+        )
         if research.available and research.potential_score is not None:
             potential_score = research.potential_score
             potential_rationale = research.rationale

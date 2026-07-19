@@ -277,7 +277,9 @@ def _posting_cadence_from_tweets(tweets: list[dict]) -> str:
 
 
 async def research_project_potential(
-    contract: str, symbol: str, chain: str, *, cache_max_age_days: int = DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS,
+    contract: str, symbol: str, chain: str, *,
+    cache_max_age_days: int = DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS,
+    known_links: list[dict] | None = None,
 ) -> ConvictionResearch:
     """Orchestre site web (Tavily) + X (buzz + cadence) + corroboration de contrat ->
     score de potentiel borné. Point d'entrée unique appelé par
@@ -288,7 +290,17 @@ async def research_project_potential(
     re-recherché (demande opérateur explicite : "eviter de tout recommencer").
     Sur un résultat FRAIS (pas de cache), stocke systématiquement -- même un "rien
     trouvé" -- pour bâtir l'historique accumulatif ET éviter de re-taper un contrat
-    mort à chaque cycle."""
+    mort à chaque cycle.
+
+    ``known_links`` (19/07, optionnel -- trouvaille réelle en conversation Telegram
+    opérateur, SOGNI : ARIA a répondu « handle X introuvable » alors que le lien X
+    officiel était DÉJÀ affiché sur DexScreener) : ``PairSnapshot.project_links``
+    (``services/dexscreener.py``, ``info.websites``/``socials`` -- DÉCLARÉ par le
+    projet lui-même, déjà fetché par ``momentum_entry.py``, zéro appel réseau
+    supplémentaire) sert de source PRIMAIRE pour le site officiel/handle X, plus
+    fiable qu'une extraction heuristique depuis des snippets Tavily. Tavily reste
+    appelé même quand ces liens existent (buzz/contexte/corroboration du contrat),
+    mais ne les écrase jamais si déjà trouvés ici."""
     if not _is_conviction_research_enabled():
         return ConvictionResearch(available=False, reason="ARIA_CONVICTION_RESEARCH_ENABLED désactivé")
 
@@ -307,6 +319,18 @@ async def research_project_potential(
     contract_corroborated: bool | None = None
     snippet_lines: list[str] = []
 
+    for link in known_links or []:
+        if not isinstance(link, dict):
+            continue
+        label = str(link.get("label") or "")
+        url = str(link.get("url") or "")
+        if not url:
+            continue
+        if label == "Site officiel" and website_url is None:
+            website_url = url
+        elif label == "X (Twitter)" and x_handle is None:
+            x_handle = _extract_x_handle(url)
+
     try:
         tavily_result = await tavily_client.search(
             f"{safe_symbol} crypto token official website contract address {chain}",
@@ -317,11 +341,13 @@ async def research_project_potential(
         tavily_result = None
 
     if tavily_result is not None and tavily_result.available:
-        website_url = _extract_website(tavily_result.snippets)
+        if website_url is None:
+            website_url = _extract_website(tavily_result.snippets)
         combined = " ".join(f"{text} {published or ''}" for text, _url, published in tavily_result.snippets)
         if tavily_result.answer:
             combined = f"{tavily_result.answer} {combined}"
-        x_handle = _extract_x_handle(combined)
+        if x_handle is None:
+            x_handle = _extract_x_handle(combined)
         contract_corroborated = _contract_mentioned(combined, contract)
         for text, url, _published in tavily_result.snippets[:4]:
             safe_content = sanitize_untrusted_text(text or "", _MAX_SNIPPET_CHARS)
@@ -355,7 +381,7 @@ async def research_project_potential(
             purpose="buzz_search", contract=contract, status="blocked", reason="plafond hebdo atteint",
         )
 
-    if not website_url and not buzz_lines and contract_corroborated is None:
+    if not website_url and not x_handle and not buzz_lines and contract_corroborated is None:
         result = ConvictionResearch(
             available=True, x_handle=x_handle, posting_cadence=posting_cadence,
             contract_corroborated=None, potential_score=None,

@@ -605,6 +605,141 @@ async def test_get_research_history_sorted_most_recent_first():
     assert [h.potential_score for h in history] == [6.0, 4.0, 3.0]  # plus récent en premier
 
 
+# ── known_links (19/07, trouvaille réelle en conversation Telegram opérateur, SOGNI) --
+# DexScreener project_links (déclaré par le projet lui-même, déjà fetché par
+# momentum_entry.py) sert de source PRIMAIRE pour le site/handle X, sans appel réseau
+# supplémentaire, avant même que Tavily ne soit consulté ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_known_links_provides_website_and_handle_without_tavily(test_settings, monkeypatch):
+    """Le cas réel signalé par l'opérateur : DexScreener affiche déjà un lien X
+    officiel -- ARIA ne doit plus jamais dire "handle introuvable" dans ce cas."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_search(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")  # Tavily indisponible
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_search))
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        await x_research_budget.record_request(purpose="buzz_search", status="ok")
+
+    known_links = [
+        {"label": "Site officiel", "url": "https://sogni.example"},
+        {"label": "X (Twitter)", "url": "https://x.com/sogni_official"},
+    ]
+    result = await cr.research_project_potential(CONTRACT, "SOGNI", "base", known_links=known_links)
+
+    assert result.website_url == "https://sogni.example"
+    assert result.x_handle == "sogni_official"
+    # Un handle connu via DexScreener suffit à ne PAS retomber sur "aucune source".
+    assert result.reason != "aucune source externe trouvée (site web/X)"
+
+
+@pytest.mark.asyncio
+async def test_known_links_handle_used_as_buzz_search_query(test_settings, monkeypatch):
+    """Le handle connu (DexScreener) doit être utilisé pour une recherche X ciblée
+    (from:handle), pas une recherche générique par symbole."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_search(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_search))
+
+    captured = {}
+
+    async def _fake_search_recent_tweets(query, **kwargs):
+        captured["query"] = query
+        return []
+
+    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _fake_search_recent_tweets)
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 5\nRAISON: handle connu, pas de buzz trouvé."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    known_links = [{"label": "X (Twitter)", "url": "https://x.com/sogni_official"}]
+    await cr.research_project_potential(CONTRACT, "SOGNI", "base", known_links=known_links)
+
+    assert captured["query"] == "from:sogni_official"
+
+
+@pytest.mark.asyncio
+async def test_known_links_never_overridden_by_tavily(test_settings, monkeypatch):
+    """DexScreener (déclaré par le projet) reste prioritaire même si Tavily trouve
+    un AUTRE lien -- jamais écrasé une fois trouvé."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_search(query, **kwargs):
+        return _fake_tavily_result(
+            snippets=[("Follow https://x.com/some_other_account for news.", "https://other-site.example", None)],
+        )
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_search))
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 5\nRAISON: ok."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        await x_research_budget.record_request(purpose="buzz_search", status="ok")
+
+    known_links = [
+        {"label": "Site officiel", "url": "https://sogni.example"},
+        {"label": "X (Twitter)", "url": "https://x.com/sogni_official"},
+    ]
+    result = await cr.research_project_potential(CONTRACT, "SOGNI", "base", known_links=known_links)
+
+    assert result.website_url == "https://sogni.example"
+    assert result.x_handle == "sogni_official"
+
+
+@pytest.mark.asyncio
+async def test_no_known_links_falls_back_to_tavily_exactly_as_before(test_settings, monkeypatch):
+    """Comportement INCHANGÉ sans known_links (None ou []) -- non-régression pure."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_search(query, **kwargs):
+        return _fake_tavily_result(
+            snippets=[("Follow us at https://x.com/cobot_official for updates.", "https://cobot.xyz", None)],
+        )
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_search))
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 6\nRAISON: ok."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        await x_research_budget.record_request(purpose="buzz_search", status="ok")
+
+    without = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+    with_empty = await cr.research_project_potential(CONTRACT, "COBOT", "base", known_links=[])
+
+    assert without.website_url == with_empty.website_url == "https://cobot.xyz"
+    assert without.x_handle == with_empty.x_handle == "cobot_official"
+
+
+@pytest.mark.asyncio
+async def test_known_links_malformed_entries_ignored_safely(test_settings, monkeypatch):
+    """Défensif : des entrées mal formées (pas un dict, url absente) ne doivent
+    jamais faire planter la diligence -- ignorées silencieusement."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_search(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_search))
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        await x_research_budget.record_request(purpose="buzz_search", status="ok")
+
+    known_links = [None, {}, {"label": "Site officiel"}, {"url": ""}, "not-a-dict"]
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base", known_links=known_links)
+
+    assert result.available is True  # jamais une exception
+
+
 @pytest.mark.asyncio
 async def test_get_research_history_empty_when_never_researched():
     async def _fake_lancedb_search(query, *, entry_type=None, limit=8):

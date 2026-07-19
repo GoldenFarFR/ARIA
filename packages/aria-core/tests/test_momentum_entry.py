@@ -1431,7 +1431,7 @@ async def test_potential_score_threaded_into_result_when_buy_confirmed(monkeypat
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain):
+    async def fake_research(contract, symbol, chain, known_links=None):
         return ConvictionResearch(
             available=True, website_url="https://x.example", posting_cadence="active",
             contract_corroborated=True, potential_score=8.5, rationale="Projet réel actif.",
@@ -1451,7 +1451,7 @@ async def test_conviction_research_never_called_when_action_stays_hold(monkeypat
     test_settings.aria_conviction_research_enabled = True
     called = False
 
-    async def fake_research(contract, symbol, chain):
+    async def fake_research(contract, symbol, chain, known_links=None):
         nonlocal called
         called = True
         return None
@@ -1470,7 +1470,7 @@ async def test_conviction_research_never_called_when_security_gate_rejects(monke
     test_settings.aria_conviction_research_enabled = True
     called = False
 
-    async def fake_research(contract, symbol, chain):
+    async def fake_research(contract, symbol, chain, known_links=None):
         nonlocal called
         called = True
         return None
@@ -1494,7 +1494,7 @@ async def test_potential_score_none_when_research_unavailable(monkeypatch, test_
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain):
+    async def fake_research(contract, symbol, chain, known_links=None):
         return ConvictionResearch(available=True, potential_score=None, reason="aucune source externe trouvée")
 
     monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
