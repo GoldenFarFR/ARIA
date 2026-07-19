@@ -670,12 +670,15 @@ async def test_request_omits_header_when_no_key_configured(monkeypatch):
     assert "x-cg-demo-api-key" not in captured[0]
 
 
-def test_resolve_min_interval_faster_when_authenticated(monkeypatch):
-    """Le throttle appliqué au client module-level (partagé par tous les
-    consommateurs GeckoTerminal d'ARIA) doit accélérer dès que la clé est
-    configurée -- sans ça, l'authentification ne sert à rien : le débit
-    resterait plafonné à l'ancien throttle anonyme malgré un plafond
-    serveur plus haut."""
+def test_resolve_min_interval_authenticated_branch_still_selected(monkeypatch):
+    """Corrigé le 19/07 (incident réel -- ~79% de HTTP 429 en prod causés par un
+    throttle authentifié trop agressif, basé sur un plafond de 100 req/min jamais
+    vérifié en conditions réelles, alors que la doc officielle documente ~30 req/min
+    pour le palier Demo gratuit sur /onchain). Le mécanisme de distinction
+    authentifié/anonyme reste testé -- la bonne branche est bien sélectionnée --
+    mais n'affirme plus que le throttle authentifié soit PLUS RAPIDE : il est
+    aujourd'hui aligné sur le même rythme que l'anonyme, par prudence, tant que le
+    vrai plafond soutenu n'est pas revérifié en conditions réelles."""
     from aria_core.services import geckoterminal as gt
 
     monkeypatch.delenv("COINGECKO_DEMO_API_KEY", raising=False)
@@ -683,4 +686,4 @@ def test_resolve_min_interval_faster_when_authenticated(monkeypatch):
 
     monkeypatch.setenv("COINGECKO_DEMO_API_KEY", "cg-demo-abc123")
     assert gt._resolve_min_interval() == gt._AUTHENTICATED_MIN_INTERVAL
-    assert gt._AUTHENTICATED_MIN_INTERVAL < gt._MIN_INTERVAL
+    assert gt._AUTHENTICATED_MIN_INTERVAL <= gt._MIN_INTERVAL

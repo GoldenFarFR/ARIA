@@ -118,7 +118,9 @@ def _static_entries() -> list[ApiEntry]:
         ApiEntry(
             "GeckoTerminal", "Données marché", "https://api.geckoterminal.com",
             _env_present("COINGECKO_DEMO_API_KEY"),
-            note="authentifié (#211, 18/07, clé Demo CoinGecko partagée) — 100 req/min, throttle 0.65s/appel"
+            note="authentifié (#211, 18/07, clé Demo CoinGecko partagée) — throttle 2.1s/appel "
+            "(corrigé 19/07 : le vrai plafond Demo est ~30 req/min, pas 100 -- la clé reste "
+            "envoyée pour le quota mensuel, jamais revérifié pour accélérer le débit)"
             if _env_present("COINGECKO_DEMO_API_KEY")
             else "sans clé — ~30 req/min documenté (throttlé à 2.1s/appel côté ARIA)",
         ),

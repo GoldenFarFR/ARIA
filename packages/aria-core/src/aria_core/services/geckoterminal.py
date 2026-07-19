@@ -22,15 +22,26 @@ manquante n'est jamais remplacée par une supposition -- ``available=False``/
 Authentification OPTIONNELLE (18/07, #211) : si ``COINGECKO_DEMO_API_KEY`` est
 présente dans l'environnement (clé gratuite CoinGecko "Demo", aucun coût --
 https://www.coingecko.com/en/api/pricing), jointe en en-tête ``x-cg-demo-api-key``
-sur chaque appel -- fait passer le plafond de ~30 req/min (IP anonyme, partagé par
-TOUS les consommateurs GeckoTerminal d'ARIA : /vc, momentum #194, wallet-scoring
-#157, weekly_training, pump_dump_autopsy) à 100 req/min (vérifié via la doc
-officielle CoinGecko, 18/07 -- même URL de base, aucun changement d'endpoint).
-Trouvé en diagnostiquant un vrai HTTP 429 en conditions réelles ce soir sur le
-pipeline momentum (cf. entrée CLAUDE.md du 18/07). Sans cette clé, comportement
-historique inchangé (throttle 2.1s/appel). Si un jour un plan payant est pris
-(Basic $35/mois -> 300 req/min), ce même en-tête suffit -- CoinGecko n'exige
-``x-cg-pro-api-key`` que pour les endpoints spécifiquement Pro, pas /onchain.
+sur chaque appel. L'en-tête reste envoyé (peut légitimement débloquer un quota
+MENSUEL plus large et l'accès à des endpoints premium même sans accélérer le
+débit PAR MINUTE), mais le throttle authentifié a été réaligné le 19/07 sur le
+même rythme que le mode non-authentifié -- **correction d'une erreur réelle**,
+pas un durcissement préventif.
+
+**Incident du 19/07** : la première version de ce commentaire (18/07) affirmait
+« fait passer le plafond ... à 100 req/min (vérifié via la doc officielle
+CoinGecko) » -- ce chiffre était FAUX, confondu avec un autre palier CoinGecko
+(probablement l'API keyless générale, pas les endpoints ``/onchain`` de
+GeckoTerminal qui ont leur propre grille tarifaire). Une vraie recherche web le
+19/07 (apiguide.geckoterminal.com/faq, support.coingecko.com) confirme : Public
+API gratuite (avec clé Demo) = **~30 req/min**, keyless sans clé = ~10 req/min,
+payant = jusqu'à 250 req/min (25x le keyless). Le throttle à 0.65s/appel
+(~92 req/min) déployé sur cette fausse prémisse a produit un taux d'échec HTTP
+429 de ~79% en production pendant plus d'une heure (666 échecs / 176 succès
+observés) -- explique une bonne partie du silence du pipeline momentum ce
+soir-là. Revenu à ``_MIN_INTERVAL`` (2.1s, le rythme déjà éprouvé en prod avant
+ce changement) même en mode authentifié, le temps de vérifier le VRAI plafond
+soutenu en conditions réelles avant de retenter une accélération.
 """
 
 from __future__ import annotations
@@ -49,9 +60,11 @@ logger = logging.getLogger(__name__)
 
 UNAVAILABLE = "donnée GeckoTerminal indisponible"
 
-# Plafond authentifié (clé Demo gratuite) : 100 req/min -- throttle à 0.65s/appel
-# (~92/min), marge sous le plafond exact pour absorber la latence réseau propre.
-_AUTHENTICATED_MIN_INTERVAL = 0.65
+# Corrigé le 19/07 (incident réel, cf. docstring du module) : le vrai plafond
+# gratuit/Demo documenté pour /onchain est ~30 req/min, pas 100 -- réaligné sur
+# _MIN_INTERVAL (2.1s) par prudence, jamais revérifié en conditions réelles
+# soutenues avant de retenter un throttle plus agressif.
+_AUTHENTICATED_MIN_INTERVAL = 2.1
 
 
 def geckoterminal_authenticated() -> bool:
