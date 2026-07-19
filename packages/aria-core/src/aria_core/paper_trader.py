@@ -52,10 +52,38 @@ _run_cycle_lock = asyncio.Lock()
 # Gestion de position (stop suiveur + prise de profit échelonnée) — remplace la sortie
 # binaire (100 % à la cible OU à l'invalidation) par une gestion qui protège les gains
 # ACQUIS sans couper le potentiel restant.
-TRAIL_STOP_PCT = 0.15         # stop suiveur : 15 % sous le plus haut atteint depuis l'entrée
+TRAIL_STOP_PCT = 0.15         # stop suiveur PAR DÉFAUT : 15 % sous le plus haut atteint
+# depuis l'entrée -- repli pour toute position SANS entry_atr_pct connu (positions
+# ouvertes avant le 19/07, ou tout analyzer qui ne le fournit pas, ex. l'ancien pilote
+# VC-thesis). Cf. ATR_TRAIL_MULTIPLIER ci-dessous pour le calcul adaptatif par défaut.
 TP_STAGES = (0.5, 1.0, 2.0)   # paliers de gain vs entrée (+50 %, +100 %, +200 %)
 TP_STAGE_FRACTION = 1.0 / 3.0  # fraction de la quantité INITIALE vendue à chaque palier
 TP_QTY_EPSILON = 1e-9         # reliquat négligeable après le dernier palier -> clôture complète
+
+# 19/07 -- stop suiveur adaptatif à la volatilité (revue croisée Gemini, confirmé "oui à
+# 100%" par l'opérateur) : remplace le pourcentage fixe (TRAIL_STOP_PCT) par une largeur
+# calibrée sur la volatilité RÉELLE de chaque token (ATR, ``entry_atr_pct`` calculé une
+# seule fois à l'entrée par momentum_entry.py -- jamais recalculé en cours de détention,
+# préserve l'effet cliquet et évite toute désynchronisation de timeframe). Multiplicateur
+# 2,5x -- milieu de la fourchette standard 2-3x citée par Gemini ("2×ATR à 3×ATR : le
+# standard de l'industrie"). Bornes défensives : un token quasi sans volatilité (ATR
+# proche de 0) ne doit jamais produire un stop si serré qu'il se déclenche sur le
+# moindre bruit (plancher 5 %) ; un token extrêmement volatil ne doit jamais produire un
+# stop si large qu'il ne protège plus rien (plafond 40 %, même valeur que le plafond de
+# concentration #187 -- coïncidence, pas un lien fonctionnel).
+ATR_TRAIL_MULTIPLIER = 2.5
+MIN_ATR_TRAIL_PCT = 0.05
+MAX_ATR_TRAIL_PCT = 0.40
+
+
+def _effective_trail_pct(entry_atr_pct: float | None) -> float:
+    """Largeur du stop suiveur pour UNE position : ``TRAIL_STOP_PCT`` fixe si
+    ``entry_atr_pct`` est absent/invalide (comportement historique inchangé), sinon
+    ``ATR_TRAIL_MULTIPLIER * entry_atr_pct`` borné à ``[MIN_ATR_TRAIL_PCT,
+    MAX_ATR_TRAIL_PCT]``."""
+    if entry_atr_pct is None or entry_atr_pct <= 0:
+        return TRAIL_STOP_PCT
+    return max(MIN_ATR_TRAIL_PCT, min(MAX_ATR_TRAIL_PCT, ATR_TRAIL_MULTIPLIER * entry_atr_pct))
 
 # 17/07 -- demande opérateur explicite : réduire de moitié le bruit Telegram de l'alerte de
 # suivi périodique (#197, une par cycle heartbeat -- ~15 min -- tant qu'une position reste
@@ -82,6 +110,7 @@ _POS_FIELDS = (
     "exit_price", "closed_at", "pnl_usd", "pnl_pct", "close_reason",
     "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
     "category", "entry_security_json", "chain", "thesis", "close_notes",
+    "entry_atr_pct",
 )
 
 _ADDED_COLUMNS = [
@@ -109,6 +138,21 @@ _ADDED_COLUMNS = [
     # profit partielle (dans ce dernier cas, sur la ligne encore ouverte -- dernière note en
     # date, pas un historique cumulé).
     ("close_notes", "TEXT"),
+    # 19/07 -- ATR (Average True Range) en % du prix d'entrée, calculé UNE SEULE FOIS à
+    # l'ouverture par momentum_entry.evaluate_momentum_entry (mêmes candles que la
+    # décision d'entrée -- jamais recalculé en cours de détention). ``NULL`` pour toute
+    # position ouverte avant ce chantier, ou par un analyzer qui ne le fournit pas (ex.
+    # l'ancien pilote VC-thesis) -- le stop suiveur retombe alors sur TRAIL_STOP_PCT
+    # (pourcentage fixe), jamais une valeur inventée.
+    ("entry_atr_pct", "REAL"),
+]
+
+# 19/07 -- migration à chaud DÉDIÉE pour paper_position_archive (voir _ensure_tables) --
+# cette table était créée complète dès l'origine (jamais de colonne ajoutée après coup
+# avant ce jour), doit maintenant rester en parité EXACTE avec _POS_FIELDS/_ADDED_COLUMNS
+# ci-dessus sur toute base déjà existante.
+_ARCHIVE_ADDED_COLUMNS = [
+    ("entry_atr_pct", "REAL"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -281,10 +325,29 @@ async def _ensure_tables() -> None:
                 entry_security_json TEXT,
                 chain TEXT,
                 thesis TEXT,
-                close_notes TEXT
+                close_notes TEXT,
+                entry_atr_pct REAL
             )
             """
         )
+        # 19/07 -- même patron de migration à chaud que paper_position/paper_state
+        # ci-dessus : cette table est créée COMPLÈTE dès la première fois (pas de
+        # colonnes ajoutées incrémentalement avant ce jour), donc jamais eu besoin
+        # d'une liste de colonnes additives -- mais _POS_FIELDS (partagé avec
+        # paper_position pour l'INSERT...SELECT positionnel de run_weekly_reset)
+        # vient de gagner entry_atr_pct, et cette table doit rester en parité EXACTE
+        # avec _POS_FIELDS sur toute base déjà existante (le CREATE TABLE IF NOT
+        # EXISTS ci-dessus ne touche jamais une table déjà créée -- bug réel trouvé
+        # en faisant tourner la suite complète : sqlite3.OperationalError sur
+        # run_weekly_reset() dès que la table archive préexistait sans cette
+        # colonne).
+        archive_existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(paper_position_archive)")).fetchall()
+        }
+        for name, ddl in _ARCHIVE_ADDED_COLUMNS:
+            if name not in archive_existing:
+                await db.execute(f"ALTER TABLE paper_position_archive ADD COLUMN {name} {ddl}")
         await db.commit()
 
 
@@ -459,6 +522,8 @@ async def open_position(
     entry_security_json: str = "",
     chain: str = "base",
     thesis: str | None = None,
+    pool_liquidity_usd: float | None = None,
+    entry_atr_pct: float | None = None,
 ) -> dict | None:
     """Ouvre une position FICTIVE au prix d'entrée réel. Refuse si déjà ouverte, plafond de
     positions atteint, coupe-circuit de risque armé, prix invalide, cash insuffisant, ou
@@ -476,7 +541,19 @@ async def open_position(
     partie de la valeur), lowercase pour Base/Robinhood (hex EVM, comme avant) --
     ``momentum_entry.normalize_contract_case``. Stocker une adresse Solana corrompue
     aurait rendu tout re-scan/prix ultérieur (``paper_trader_risk.py``) inopérant sur
-    la vraie chaîne, silencieusement."""
+    la vraie chaîne, silencieusement.
+
+    ``pool_liquidity_usd`` (19/07, revue croisée Gemini) : liquidité RÉELLE du pool
+    ciblé -- utilisée pour réduire ``alloc`` si l'impact de prix de CET ordre sur CE
+    pool ferait tomber le R/R structurel sous son plancher (``risk_guard.
+    cap_alloc_to_price_impact``). ``None`` par défaut -- comportement inchangé pour
+    tout appelant qui ne le fournit pas (ex. l'ancien pilote VC-thesis, dormant).
+
+    ``entry_atr_pct`` (19/07, revue croisée Gemini) : ATR (volatilité) en % du prix
+    d'entrée, calculé une seule fois à l'ouverture -- persisté tel quel, utilisé par la
+    gestion de position (stop suiveur adaptatif) plutôt que ``TRAIL_STOP_PCT`` fixe.
+    ``None`` par défaut -- comportement inchangé (stop suiveur à pourcentage fixe) pour
+    tout appelant qui ne le fournit pas."""
     await _ensure_tables()
     from aria_core.momentum_entry import normalize_contract_case
 
@@ -505,6 +582,13 @@ async def open_position(
     # #186 -- plafond de risque : ne réduit jamais alloc au-delà de sa valeur d'entrée,
     # jamais un bonus. Sans invalidation_price connue, inchangé (stop suiveur seul garde-fou).
     alloc = risk_guard.size_position_by_risk(alloc, entry_price, invalidation_price, start)
+    # 19/07 -- plafond auto-calibré par impact de prix (revue croisée Gemini) : réduit
+    # encore alloc si CET ordre sur CE pool précis ferait tomber le R/R structurel sous
+    # son plancher -- fail-open sans pool_liquidity_usd/target/invalidation connus (même
+    # doctrine que size_position_by_risk juste au-dessus).
+    alloc = risk_guard.cap_alloc_to_price_impact(
+        alloc, entry_price, target_price, invalidation_price, pool_liquidity_usd,
+    )
     alloc = min(alloc, cash)
     if alloc <= 0:
         return None
@@ -531,12 +615,12 @@ async def open_position(
             INSERT INTO paper_position
               (contract, symbol, cost_usd, entry_price, qty, target_price,
                invalidation_price, opened_at, status, high_water_price, initial_qty,
-               category, entry_security_json, chain, thesis)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+               category, entry_security_json, chain, thesis, entry_atr_pct)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, entry_price, qty, target_price, invalidation_price,
              _now(), entry_price, qty, category or "", entry_security_json or None,
-             (chain or "base").lower(), thesis),
+             (chain or "base").lower(), thesis, entry_atr_pct),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -1214,7 +1298,8 @@ async def _run_paper_cycle_locked(
             high_water = max(p.get("high_water_price") or p["entry_price"], price)
             if high_water != (p.get("high_water_price") or p["entry_price"]):
                 await _update_high_water(p["id"], high_water)
-            trailing_stop = high_water * (1 - TRAIL_STOP_PCT)
+            trail_pct = _effective_trail_pct(p.get("entry_atr_pct"))
+            trailing_stop = high_water * (1 - trail_pct)
             invalidation = p.get("invalidation_price")
             active_stop = max(trailing_stop, invalidation) if invalidation else trailing_stop
             stop_is_trailing = not invalidation or trailing_stop > invalidation
@@ -1223,10 +1308,12 @@ async def _run_paper_cycle_locked(
                 exit_gain_pct = (price / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0
                 if stop_is_trailing:
                     peak_gain_pct = (high_water / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0
+                    trail_origin = "adapté à l'ATR" if p.get("entry_atr_pct") else "fixe"
                     exit_notes = (
                         f"Stop suiveur déclenché : plus haut {high_water:.6g} ({peak_gain_pct:+.1f}% vs entrée), "
-                        f"retracement de {TRAIL_STOP_PCT * 100:.0f}% depuis ce sommet a activé la protection -- "
-                        f"sortie {price:.6g} ({exit_gain_pct:+.1f}% net vs entrée), {_duration_phrase(p.get('opened_at'))}."
+                        f"retracement de {trail_pct * 100:.0f}% ({trail_origin}) depuis ce sommet a activé la "
+                        f"protection -- sortie {price:.6g} ({exit_gain_pct:+.1f}% net vs entrée), "
+                        f"{_duration_phrase(p.get('opened_at'))}."
                     )
                 else:
                     exit_notes = (
@@ -1540,6 +1627,8 @@ async def _run_paper_cycle_locked(
             # golden pocket/RSI, alignement technique, R/R) mais ne pose jamais "these",
             # donc `thesis` restait silencieusement None sur tous les trades momentum.
             thesis=sig.get("these") or "; ".join(sig.get("reasons") or []) or None,
+            pool_liquidity_usd=sig.get("liquidity_usd"),
+            entry_atr_pct=sig.get("entry_atr_pct"),
         )
         if pos:
             opened += 1

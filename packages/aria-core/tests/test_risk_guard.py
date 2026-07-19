@@ -201,6 +201,73 @@ class TestWeeklyPacingSizeMultiplier:
         assert round(0.05 * weak * pacing, 4) == 0.01
 
 
+# ── 1quater. cap_alloc_to_price_impact (19/07, revue croisée Gemini) ────────────────
+
+
+class TestCapAllocToPriceImpact:
+    def test_negligible_impact_on_deep_pool_unchanged(self):
+        """Un pool profond (100M$) face à une allocation modeste (20k$) -- impact
+        estimé (0,04 %) bien trop faible pour jamais faire tomber le R/R dégradé
+        sous le plancher -- alloc renvoyée inchangée."""
+        alloc = risk_guard.cap_alloc_to_price_impact(20_000.0, 1.0, 1.5, 0.9, 100_000_000.0)
+        assert alloc == 20_000.0
+
+    def test_shrinks_on_thin_pool_matches_hand_computed_breakeven(self):
+        """entry=1.0, target=1.5, invalidation=0.9 (R/R brut 5.0), pool=100k$,
+        alloc demandée 50k$ (la moitié du pool -- absurde). Solution fermée
+        attendue : 10 000$ (vérifié à la main -- à cette taille, impact 20 %,
+        prix dégradé 1.2, R/R dégradé = (1.5-1.2)/(1.2-0.9) = 1.0, exactement
+        PRICE_IMPACT_MIN_RR)."""
+        alloc = risk_guard.cap_alloc_to_price_impact(50_000.0, 1.0, 1.5, 0.9, 100_000.0)
+        assert alloc == pytest.approx(10_000.0, rel=1e-6)
+
+    def test_stronger_raw_rr_tolerates_more_size_not_less(self):
+        """Non-régression du piège identifié en concevant cette fonction : un R/R
+        brut TRÈS élevé (25, entry=1.0/invalidation=0.96/target=2.0) doit tolérer
+        PLUS de taille avant de heurter le plancher, jamais moins -- confirmé :
+        24 000$ ici contre 10 000$ pour le cas R/R=5.0 ci-dessus, sur le même pool
+        100k$."""
+        alloc = risk_guard.cap_alloc_to_price_impact(50_000.0, 1.0, 2.0, 0.96, 100_000.0)
+        assert alloc == pytest.approx(24_000.0, rel=1e-6)
+
+    def test_returns_zero_when_raw_rr_already_below_floor(self):
+        """Garde défensive : un R/R brut déjà sous PRICE_IMPACT_MIN_RR (1.0) avant
+        même tout impact ne devrait jamais arriver via le pipeline momentum réel
+        (qui garantit rr >= _RR_AMBIGUOUS_FLOOR == 1.0 pour tout BUY), mais la
+        fonction doit rester sûre pour tout appelant futur : 0.0, jamais une
+        exception ni un alloc laissé tel quel."""
+        alloc = risk_guard.cap_alloc_to_price_impact(10_000.0, 1.0, 1.05, 0.9, 100_000.0)
+        assert alloc == 0.0
+
+    def test_never_raises_above_entry_value(self):
+        """Un plafond, jamais un bonus -- même doctrine que size_position_by_risk."""
+        alloc = risk_guard.cap_alloc_to_price_impact(1_000.0, 1.0, 1.5, 0.9, 50_000.0)
+        assert alloc <= 1_000.0
+
+    @pytest.mark.parametrize(
+        "alloc,entry,target,invalidation,liquidity",
+        [
+            (0.0, 1.0, 1.5, 0.9, 100_000.0),      # alloc nulle
+            (-100.0, 1.0, 1.5, 0.9, 100_000.0),   # alloc négative
+            (10_000.0, 0.0, 1.5, 0.9, 100_000.0), # prix d'entrée invalide
+            (10_000.0, 1.0, None, 0.9, 100_000.0),   # cible absente
+            (10_000.0, 1.0, 1.5, None, 100_000.0),   # invalidation absente
+            (10_000.0, 1.0, 1.5, 0.9, None),         # liquidité du pool inconnue
+            (10_000.0, 1.0, 1.5, 0.9, 0.0),          # liquidité du pool nulle
+            (10_000.0, 1.0, 0.8, 0.9, 100_000.0),    # cible sous le prix d'entrée
+            (10_000.0, 1.0, 1.5, 1.1, 100_000.0),    # invalidation au-dessus du prix d'entrée
+        ],
+    )
+    def test_fail_open_on_missing_or_incoherent_data(
+        self, alloc, entry, target, invalidation, liquidity,
+    ):
+        """Donnée manquante/incohérente -> alloc inchangée (fail-open) -- le
+        garde-fou dur sur la liquidité vit dans momentum_entry._MIN_LIQUIDITY_USD,
+        pas ici."""
+        result = risk_guard.cap_alloc_to_price_impact(alloc, entry, target, invalidation, liquidity)
+        assert result == alloc
+
+
 # ── 2. Coupe-circuit dédié : persistance, robustesse, distinction avec outgoing_pause ──
 
 

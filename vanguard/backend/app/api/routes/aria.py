@@ -549,6 +549,10 @@ async def diagnostics_paper_ledger(request: Request, closed_limit: int = 100):
             "close_notes": p.get("close_notes"),
             "realized_pnl_partial": p.get("realized_pnl_partial"),
             "thesis": p.get("thesis"),
+            # 19/07 -- revue croisée Gemini : ATR en % du prix d'entrée (paper_trader.
+            # _effective_trail_pct), la vraie largeur de stop suiveur appliquée à CETTE
+            # position -- ``None`` = stop fixe (TRAIL_STOP_PCT), sinon adaptatif.
+            "entry_atr_pct": p.get("entry_atr_pct"),
         }
 
     open_positions = await paper_trader.get_open_positions()

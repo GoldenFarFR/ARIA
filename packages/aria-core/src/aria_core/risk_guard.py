@@ -191,6 +191,77 @@ def weekly_pacing_size_multiplier(weekly_context: dict | None) -> float:
     return 1.0
 
 
+# 19/07 -- plafond de position auto-calibré par IMPACT DE PRIX (revue croisée Gemini,
+# relayée par l'opérateur, 19/07). Remplace le débat sur "quel % fixe du pool" par un
+# calcul qui s'auto-ajuste à CHAQUE pool réel, sans nouveau seuil arbitraire de taille à
+# choisir. Rien ne plafonnait jusqu'ici une position en fonction de la liquidité RÉELLE
+# du pool ciblé (seul un plancher absolu existe, ``momentum_entry._MIN_LIQUIDITY_USD``)
+# -- un ordre trop gros pour un pool mince fait bouger le prix artificiellement (ARIA se
+# ferait son propre "price impact"), une réalité que le paper-trading ne modélisait pas.
+#
+# Principe (approximation AMM standard, citée par Gemini) : un ordre représentant X % de
+# la liquidité totale du pool produit environ 2*X % d'impact de prix sur un pool
+# équilibré (constant-product, x*y=k). Cette fonction DÉGRADE le prix d'entrée par cet
+# impact estimé, recalcule le R/R structurel (cible/invalidation restent des niveaux
+# Fibonacci/RSI fixes, indépendants de la taille de l'ordre) avec ce prix dégradé, et
+# réduit ``alloc_usd`` (solution fermée, aucune itération) jusqu'à ce que le R/R dégradé
+# revienne au moins à ``PRICE_IMPACT_MIN_RR`` -- volontairement un plancher FIXE et non
+# le R/R brut du trade lui-même (piste envisagée puis écartée par le calcul : un R/R brut
+# très élevé rendrait le plancher quasi inatteignable à N'IMPORTE QUELLE taille -- car
+# tout impact positif fait strictement baisser le R/R en dessous de sa propre valeur de
+# départ -- l'inverse de l'effet recherché : un signal plus fort doit tolérer PLUS de
+# taille, pas moins).
+PRICE_IMPACT_RATIO = 2.0  # règle AMM standard : X % du pool -> ~2*X % d'impact de prix
+# Reprend délibérément la même valeur que ``momentum_entry._RR_AMBIGUOUS_FLOOR`` (R/R
+# structurel minimum pour qu'un signal soit ne serait-ce que considéré comme un achat)
+# SANS importer ce module -- même doctrine d'autonomie déjà appliquée à
+# ``CONVICTION_RR_THRESHOLD``/``MODERATE_RR_THRESHOLD`` ci-dessus (constante
+# indépendante, jamais un import cross-module).
+PRICE_IMPACT_MIN_RR = 1.0
+
+
+def cap_alloc_to_price_impact(
+    alloc_usd: float, entry_price: float, target_price: float | None,
+    invalidation_price: float | None, pool_liquidity_usd: float | None,
+) -> float:
+    """Réduit ``alloc_usd`` si l'impact de prix de CET ordre sur CE pool ferait tomber le
+    R/R structurel sous ``PRICE_IMPACT_MIN_RR`` -- jamais une hausse au-delà de la valeur
+    d'entrée (même doctrine que ``size_position_by_risk``). Peut renvoyer ``0.0`` (aucune
+    taille viable, même infinitésimale, sur ce pool avec cette structure de trade).
+    Données manquantes/incohérentes (cible, invalidation ou liquidité absentes, ou
+    structure non haussière) -> inchangé, fail-open -- le garde-fou dur sur la liquidité
+    du pool vit déjà dans ``momentum_entry._MIN_LIQUIDITY_USD``, ce n'est pas le rôle de
+    cette fonction."""
+    if alloc_usd <= 0 or entry_price <= 0:
+        return alloc_usd
+    if not pool_liquidity_usd or pool_liquidity_usd <= 0:
+        return alloc_usd
+    if not target_price or not invalidation_price:
+        return alloc_usd
+    if target_price <= entry_price or invalidation_price >= entry_price:
+        return alloc_usd  # structure non haussière -- pas le rôle de cette fonction
+
+    impact_pct = PRICE_IMPACT_RATIO * (alloc_usd / pool_liquidity_usd)
+    degraded_entry = entry_price * (1.0 + impact_pct)
+    if degraded_entry < target_price:
+        degraded_rr = (target_price - degraded_entry) / (degraded_entry - invalidation_price)
+        if degraded_rr >= PRICE_IMPACT_MIN_RR:
+            return alloc_usd  # impact négligeable à cette taille, rien à réduire
+
+    # Solution fermée : prix d'entrée dégradé exact pour lequel R/R == PRICE_IMPACT_MIN_RR
+    # (dérivé de (target - e) / (e - invalidation) = PRICE_IMPACT_MIN_RR), puis remontée
+    # vers l'allocation qui produit ce prix dégradé (impact_pct linéaire en alloc_usd).
+    target_degraded_entry = (
+        target_price + PRICE_IMPACT_MIN_RR * invalidation_price
+    ) / (1.0 + PRICE_IMPACT_MIN_RR)
+    if target_degraded_entry <= entry_price:
+        return 0.0  # même une taille infinitésimale ne tiendrait pas ce plancher ici
+
+    k = PRICE_IMPACT_RATIO / pool_liquidity_usd
+    capped_alloc = (target_degraded_entry / entry_price - 1.0) / k
+    return max(0.0, min(alloc_usd, capped_alloc))
+
+
 # ── 2. Coupe-circuit de portefeuille (état persisté, fichier dédié) ────────
 
 SOFT_DRAWDOWN_PCT = 0.10       # -10 % depuis le plus haut d'équité -> alloc réduite de moitié

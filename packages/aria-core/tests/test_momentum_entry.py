@@ -1179,6 +1179,37 @@ async def test_evaluate_buys_on_strong_rr_with_alignment(monkeypatch):
     assert result["align_score"] == 2
 
 
+# ── entry_atr_pct (19/07, revue croisée Gemini -- stop suiveur adaptatif) ───────────
+
+@pytest.mark.asyncio
+async def test_evaluate_buy_exposes_entry_atr_pct(monkeypatch):
+    """14 bougies de True Range constant (haut-bas=2.0, aucun gap -- même construction
+    que test_indicators.py::test_atr_series_constant_true_range_stays_constant) ->
+    ATR=2.0 exactement. Prix _pair() par défaut = 1.5 -> entry_atr_pct = 2.0/1.5."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    atr_candles = [
+        Candle(ts=i, open=10.0, high=11.0, low=9.0, close=10.0) for i in range(14)
+    ]
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(2, []), candles=atr_candles,
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["entry_atr_pct"] == pytest.approx(2.0 / 1.5, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hold_has_no_entry_atr_pct(monkeypatch):
+    """Un HOLD (ici : R/R sous le seuil ambigu, chemin qui atteint bien le dict de
+    retour final) ne calcule jamais l'ATR -- c'est une info de SIZING, sans objet tant
+    qu'aucun achat n'est décidé."""
+    weak = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
+    _patch_pipeline(monkeypatch, signal=weak)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result.get("entry_atr_pct") is None
+
+
 @pytest.mark.asyncio
 async def test_evaluate_threads_live_price_as_execution_price_to_detect_entry(monkeypatch):
     """19/07 -- trouvaille réelle en vérifiant la légitimité d'un trade (GITLAWB, demande

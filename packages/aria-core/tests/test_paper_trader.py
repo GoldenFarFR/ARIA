@@ -376,6 +376,118 @@ async def test_trailing_stop_tightens_then_closes_remainder(tmp_db):
     assert "2.5" in act3["closed"][0]["close_notes"]
 
 
+# ── stop suiveur adaptatif à la volatilité (19/07, revue croisée Gemini) ────────────
+
+
+class TestEffectiveTrailPct:
+    def test_none_falls_back_to_fixed_default(self):
+        assert pt._effective_trail_pct(None) == pt.TRAIL_STOP_PCT
+
+    def test_zero_or_negative_falls_back_to_fixed_default(self):
+        assert pt._effective_trail_pct(0.0) == pt.TRAIL_STOP_PCT
+        assert pt._effective_trail_pct(-0.05) == pt.TRAIL_STOP_PCT
+
+    def test_mid_range_atr_multiplied_by_2_5(self):
+        # 10 % d'ATR -> 25 %, dans les bornes [5 %, 40 %], aucun clamp.
+        assert pt._effective_trail_pct(0.10) == pytest.approx(0.25)
+
+    def test_low_atr_clamped_to_floor(self):
+        # 1 % d'ATR * 2.5 = 2.5 %, sous le plancher 5 % -> clampé.
+        assert pt._effective_trail_pct(0.01) == pt.MIN_ATR_TRAIL_PCT
+
+    def test_high_atr_clamped_to_ceiling(self):
+        # 50 % d'ATR * 2.5 = 125 %, largement au-dessus du plafond 40 % -> clampé.
+        assert pt._effective_trail_pct(0.50) == pt.MAX_ATR_TRAIL_PCT
+
+
+@pytest.mark.asyncio
+async def test_high_volatility_position_survives_a_retracement_that_would_stop_out_flat(tmp_db):
+    """entry_atr_pct=0.10 (10 %) -> stop suiveur adaptatif 25 % (2,5x, dans les bornes)
+    au lieu du 15 % fixe. Plus haut atteint 2.0 -> stop fixe aurait été 1.70 (2.0*0.85),
+    stop adaptatif est 1.50 (2.0*0.75). Un repli à 1.6 reste au-dessus du stop adaptatif
+    mais SOUS le stop fixe -- non-régression : la position doit rester ouverte avec
+    l'ATR, alors qu'elle aurait clôturé sans lui."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, entry_atr_pct=0.10,
+    )
+
+    prices = {"v": 2.0}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)  # établit le plus haut à 2.0
+
+    prices["v"] = 1.6  # sous le stop fixe (1.70), au-dessus du stop adaptatif (1.50)
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
+    assert await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_low_volatility_position_stops_out_tighter_than_flat(tmp_db):
+    """entry_atr_pct=0.01 (1 %) -> stop suiveur adaptatif clampé au plancher 5 % (2,5x
+    donnerait 2,5 %, trop serré) au lieu du 15 % fixe. Plus haut atteint 2.0 -> stop
+    adaptatif 1.90 (2.0*0.95), stop fixe aurait été 1.70. Un repli à 1.89 déclenche le
+    stop adaptatif (plus serré) alors que le stop fixe ne l'aurait pas fait."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, entry_atr_pct=0.01,
+    )
+
+    prices = {"v": 2.0}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+
+    prices["v"] = 1.89  # sous le stop adaptatif (1.90), au-dessus du stop fixe (1.70)
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "stop suiveur"
+    assert "adapté à l'ATR" in act["closed"][0]["close_notes"]
+    assert not await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_open_position_persists_entry_atr_pct(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, entry_atr_pct=0.08)
+    assert pos["entry_atr_pct"] == pytest.approx(0.08)
+
+
+@pytest.mark.asyncio
+async def test_open_position_entry_atr_pct_defaults_to_none(tmp_db):
+    """Non-régression : positions ouvertes sans ATR (ex. ancien pilote VC-thesis) --
+    ``entry_atr_pct`` reste ``None``, comportement de stop suiveur inchangé."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    assert pos["entry_atr_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_paper_cycle_threads_entry_atr_pct_from_analyzer(tmp_db):
+    """Bout en bout : un analyzer momentum-style (avec ``entry_atr_pct``, comme
+    ``momentum_entry.evaluate_momentum_entry`` en fournit désormais) voit sa valeur
+    réellement persistée par ``run_paper_cycle``, pas seulement testable via
+    ``open_position`` directement."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "VOLA", "price": 1.0, "target": 2.0,
+            "invalidation": 0.5, "rr": 3.0, "align_score": 3, "chain": "base",
+            "entry_atr_pct": 0.12, "reasons": ["setup test"],
+        }
+
+    await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer)
+    opens = await pt.get_open_positions()
+    assert len(opens) == 1
+    assert opens[0]["entry_atr_pct"] == pytest.approx(0.12)
+
+
 @pytest.mark.asyncio
 async def test_reduce_position_accounting(tmp_db):
     """Vérifie la base de coût réduite proportionnellement et le P&L partiel accumulé,
@@ -1157,6 +1269,55 @@ async def test_open_position_thesis_defaults_to_none(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
     assert pos["thesis"] is None
+
+
+# ── pool_liquidity_usd -> risk_guard.cap_alloc_to_price_impact (19/07, revue Gemini) ──
+
+
+@pytest.mark.asyncio
+async def test_open_position_shrinks_alloc_on_thin_pool(tmp_db):
+    """50k$ demandés sur un pool à 100k$ (la moitié du pool) -- même cas que
+    TestCapAllocToPriceImpact.test_shrinks_on_thin_pool_matches_hand_computed_
+    breakeven (test_risk_guard.py) : réduit à 10 000$ (vérifié à la main)."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(
+        A, "AAA", 1.0, target_price=1.5, invalidation_price=0.9,
+        alloc_usd=50_000, pool_liquidity_usd=100_000.0,
+    )
+    assert pos["cost_usd"] == pytest.approx(10_000.0, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_open_position_pool_liquidity_none_unchanged(tmp_db):
+    """Non-régression : ``pool_liquidity_usd`` non fourni (défaut ``None``, ex. l'ancien
+    pilote VC-thesis) -- comportement inchangé, aucun rétrécissement lié à l'impact de
+    prix."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(
+        A, "AAA", 1.0, target_price=1.5, invalidation_price=0.9, alloc_usd=50_000,
+    )
+    assert pos["cost_usd"] == 50_000.0
+
+
+@pytest.mark.asyncio
+async def test_run_paper_cycle_threads_liquidity_usd_from_analyzer_to_sizing(tmp_db):
+    """Bout en bout : un analyzer momentum-style (dict avec ``liquidity_usd``, comme
+    ``momentum_entry.evaluate_momentum_entry`` en fournit désormais) voit sa taille de
+    position réellement réduite par ``run_paper_cycle`` -- pas seulement testable en
+    appelant ``open_position`` directement."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "THIN", "price": 1.0, "target": 1.5,
+            "invalidation": 0.9, "rr": 5.0, "align_score": 3, "chain": "base",
+            "liquidity_usd": 100_000.0, "reasons": ["setup test"],
+        }
+
+    await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer)
+    opens = await pt.get_open_positions()
+    assert len(opens) == 1
+    assert opens[0]["cost_usd"] == pytest.approx(10_000.0, rel=1e-6)
 
 
 @pytest.mark.asyncio

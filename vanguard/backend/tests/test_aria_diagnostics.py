@@ -122,6 +122,7 @@ async def test_paper_ledger_returns_open_and_closed_positions_with_entry_exit_pl
     await paper_trader.open_position(
         "0xopen", "OPEN", 1.0,
         target_price=2.0, invalidation_price=0.8, chain="base", thesis="momentum + R/R 2.4",
+        entry_atr_pct=0.09,
     )
     await paper_trader.open_position(
         "0xclosed", "CLOSED", 1.0,
@@ -143,6 +144,8 @@ async def test_paper_ledger_returns_open_and_closed_positions_with_entry_exit_pl
     assert body["open_positions"][0]["contract"] == "0xopen"
     assert body["open_positions"][0]["thesis"] == "momentum + R/R 2.4"
     assert body["open_positions"][0]["invalidation_price"] == 0.8
+    # 19/07 -- revue croisée Gemini : ATR persisté, exposé par cet endpoint diagnostic.
+    assert body["open_positions"][0]["entry_atr_pct"] == pytest.approx(0.09)
     assert len(body["closed_positions"]) == 1
     assert body["closed_positions"][0]["contract"] == "0xclosed"
     assert body["closed_positions"][0]["close_reason"] == "cible atteinte"

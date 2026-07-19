@@ -1,4 +1,4 @@
-"""Indicateurs techniques généraux (facts-only, déterministe) — EMA, MACD, Bollinger.
+"""Indicateurs techniques généraux (facts-only, déterministe) — EMA, MACD, Bollinger, ATR.
 
 Complète `entry_signals.rsi_series` (RSI de Wilder) et `ta_levels` (niveaux/tendance).
 `CLAUDE.md` annonce depuis longtemps un "Moteur TA (RSI/MACD/EMA/fibo/divergences)" —
@@ -6,21 +6,27 @@ MACD et EMA n'étaient en réalité jamais calculés nulle part avant ce module 
 découvert le 10/07 en vérifiant le code réel avant d'écrire quoi que ce soit). Les
 bandes de Bollinger, elles, n'ont jamais été annoncées mais manquaient pour couvrir
 la demande opérateur du 10/07 (RSI + Bollinger + volumes + bougies comme entrées d'un
-futur moteur de backtest — cf. `docs/architecture-extensibilite.md`).
+futur moteur de backtest — cf. `docs/architecture-extensibilite.md`). L'ATR (Average
+True Range, 19/07) répond au même constat qu'EMA/MACD à l'origine : annoncé nulle part
+mais absent du codebase (confirmé par grep exhaustif) jusqu'à la revue croisée Gemini
+qui a signalé qu'un stop suiveur à pourcentage fixe ignore la volatilité réelle du token.
 
-Tout est dérivé de la série de closes fournie (mêmes closes → même résultat). Aucune
-valeur inventée : période de chauffe insuffisante → ``None`` à ces positions, jamais
-une estimation.
+Tout est dérivé de la série de closes (ou, pour l'ATR, des bougies complètes haut/bas/
+clôture) fournie — mêmes entrées → même résultat. Aucune valeur inventée : période de
+chauffe insuffisante → ``None`` à ces positions, jamais une estimation.
 """
 from __future__ import annotations
 
 import math
+
+from aria_core.skills.ta_levels import Candle
 
 _EMA_FAST = 12
 _EMA_SLOW = 26
 _MACD_SIGNAL = 9
 _BOLLINGER_PERIOD = 20
 _BOLLINGER_NUM_STD = 2.0
+_ATR_PERIOD = 14
 
 
 def ema_series(closes: list[float], period: int) -> list[float | None]:
@@ -109,3 +115,41 @@ def bollinger_bands(
         upper[i] = mean + num_std * std
         lower[i] = mean - num_std * std
     return middle, upper, lower
+
+
+def atr_series(candles: list[Candle], *, period: int = _ATR_PERIOD) -> list[float | None]:
+    """Average True Range (ATR) de Wilder, alignée sur ``candles`` — mesure la
+    VOLATILITÉ BRUTE d'un actif (amplitude de "respiration" normale), sans indiquer de
+    direction (19/07, revue croisée Gemini : remplace un stop suiveur à pourcentage
+    fixe par une largeur qui s'adapte à chaque token).
+
+    True Range d'une bougie = max(haut-bas, |haut - clôture précédente|,
+    |bas - clôture précédente|) — capte aussi les gaps, pas seulement l'amplitude
+    intra-bougie. La toute première bougie n'a pas de clôture précédente, utilise
+    haut-bas seul (convention standard, aucune donnée inventée).
+
+    Amorçage par moyenne simple des ``period`` premiers True Range, puis lissage de
+    Wilder (``atr = (atr_précédent * (period-1) + tr) / period`` — alpha = 1/period,
+    délibérément PAS le 2/(period+1) d'une EMA classique : c'est la convention ATR
+    historique, différente de ``ema_series`` ci-dessus). ``None`` pendant la période de
+    chauffe, jamais une valeur inventée."""
+    n = len(candles)
+    out: list[float | None] = [None] * n
+    if period <= 0 or n < period:
+        return out
+
+    true_ranges: list[float] = [0.0] * n
+    for i, c in enumerate(candles):
+        high_low = c.high - c.low
+        if i == 0:
+            true_ranges[i] = high_low
+        else:
+            prev_close = candles[i - 1].close
+            true_ranges[i] = max(high_low, abs(c.high - prev_close), abs(c.low - prev_close))
+
+    atr = sum(true_ranges[:period]) / period
+    out[period - 1] = atr
+    for i in range(period, n):
+        atr = (atr * (period - 1) + true_ranges[i]) / period
+        out[i] = atr
+    return out

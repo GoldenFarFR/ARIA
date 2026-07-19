@@ -6,7 +6,8 @@ import math
 
 import pytest
 
-from aria_core.skills.indicators import bollinger_bands, ema_series, macd_series
+from aria_core.skills.indicators import atr_series, bollinger_bands, ema_series, macd_series
+from aria_core.skills.ta_levels import Candle
 
 
 def test_ema_series_too_short_all_none():
@@ -104,3 +105,68 @@ def test_bollinger_upper_always_above_lower_when_defined():
     for u, l in zip(upper, lower):
         if u is not None and l is not None:
             assert u >= l
+
+
+# ── atr_series (19/07, revue croisée Gemini -- stop suiveur adaptatif à la volatilité) ─
+
+
+def test_atr_series_too_short_all_none():
+    candles = [Candle(ts=0, open=1, high=1, low=1, close=1)]
+    assert atr_series(candles, period=3) == [None]
+
+
+def test_atr_series_matches_hand_computed_wilder_smoothing():
+    """4 bougies construites pour produire des True Range connus à la main
+    (2, 4, 6, 12) -- vérifie SÉPARÉMENT l'amorçage (moyenne simple des ``period``
+    premiers TR) ET le lissage de Wilder (alpha = 1/period, PAS le 2/(period+1)
+    d'une EMA classique -- une série à TR variable est nécessaire pour distinguer
+    les deux formules, une série constante les rendrait indiscernables) :
+      TR[0]=10-8=2 (pas de clôture précédente -- haut-bas seul)
+      TR[1]=max(11-7=4, |11-9|=2, |7-9|=2)=4
+      TR[2]=max(13-7=6, |13-9|=4, |7-9|=2)=6
+      TR[3]=max(20-8=12, |20-10|=10, |8-10|=2)=12
+      ATR[2] (amorçage, period=3) = moyenne(2,4,6) = 4.0
+      ATR[3] (Wilder) = (4.0*(3-1) + 12) / 3 = 20/3
+    """
+    candles = [
+        Candle(ts=0, open=9, high=10, low=8, close=9),
+        Candle(ts=1, open=9, high=11, low=7, close=9),
+        Candle(ts=2, open=9, high=13, low=7, close=10),
+        Candle(ts=3, open=10, high=20, low=8, close=14),
+    ]
+    result = atr_series(candles, period=3)
+    assert result[0] is None
+    assert result[1] is None
+    assert result[2] == pytest.approx(4.0)
+    assert result[3] == pytest.approx(20.0 / 3.0)
+
+
+def test_atr_series_constant_true_range_stays_constant():
+    """Bougies de largeur constante (haut-bas=2, clôtures alignées -- aucun gap) :
+    ATR doit rester exactement 2.0 à partir de la période de chauffe, quel que soit
+    le nombre de pas de lissage -- non-régression simple sur la stabilité du
+    lissage."""
+    candles = [
+        Candle(ts=i, open=10.0, high=11.0, low=9.0, close=10.0) for i in range(20)
+    ]
+    result = atr_series(candles, period=5)
+    for v in result[4:]:
+        assert v == pytest.approx(2.0)
+
+
+def test_atr_series_never_negative():
+    candles = [
+        Candle(ts=i, open=100.0 + i, high=105.0 + i * 0.3, low=98.0 - i * 0.2, close=101.0 + i * 0.1)
+        for i in range(30)
+    ]
+    result = atr_series(candles, period=14)
+    for v in result:
+        if v is not None:
+            assert v >= 0.0
+
+
+def test_atr_series_default_period_is_fourteen():
+    candles = [Candle(ts=i, open=1, high=1.1, low=0.9, close=1.0) for i in range(20)]
+    default_result = atr_series(candles)
+    explicit_result = atr_series(candles, period=14)
+    assert default_result == explicit_result

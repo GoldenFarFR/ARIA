@@ -954,6 +954,28 @@ async def evaluate_momentum_entry(
             hold_reason = gate_hold_reason
             reasons.append("garde de sécurité final (LLM) -- piège probable, achat annulé")
 
+    # 19/07 -- ATR (Average True Range, indicators.atr_series) au moment de la décision
+    # -- revue croisée Gemini : le stop suiveur (paper_trader.py, TRAIL_STOP_PCT) était
+    # un pourcentage fixe (15 %) identique pour tous les tokens, aucune prise en compte
+    # de la volatilité réelle. Calculé UNE SEULE FOIS ici, sur les MÊMES candles que la
+    # décision d'entrée (jamais recalculé en cours de détention -- évite toute
+    # désynchronisation de timeframe signalée par Gemini, et préserve trivialement
+    # l'effet cliquet du stop suiveur puisque le pourcentage appliqué reste constant
+    # pour la durée de vie de la position, exactement comme TRAIL_STOP_PCT l'était avant
+    # ce chantier). Exprimé en % du prix d'entrée RÉELLEMENT exécutable (best.price_usd,
+    # même référence que le R/R lui-même, cf. detect_entry(execution_price=...) plus
+    # haut) -- jamais une valeur absolue, qui n'aurait aucun sens comparée entre deux
+    # tokens à des ordres de grandeur de prix totalement différents. Aucun appel réseau
+    # (calcul local sur des candles déjà en main) -- pas besoin d'un gate dédié.
+    entry_atr_pct = None
+    if action == "BUY":
+        from aria_core.skills.indicators import atr_series
+
+        atr_values = atr_series(candles)
+        last_atr = atr_values[-1] if atr_values else None
+        if last_atr is not None and best.price_usd:
+            entry_atr_pct = last_atr / best.price_usd
+
     # 19/07 -- diligence de conviction (conviction_research.py, demande opérateur
     # explicite), APRÈS tout le reste : ne tourne que sur les candidats déjà sur le
     # point d'être achetés, jamais sur la masse rejetée par les filtres rapides
@@ -996,6 +1018,14 @@ async def evaluate_momentum_entry(
         "target": signal.target,
         "invalidation": signal.invalidation,
         "rr": signal.rr,
+        # 19/07 -- exposé pour risk_guard.cap_alloc_to_price_impact (revue croisée
+        # Gemini) : la liquidité RÉELLE du pool ciblé, nécessaire pour estimer l'impact
+        # de prix de l'ordre sur CE pool précis avant de dimensionner la position.
+        "liquidity_usd": best.liquidity_usd,
+        # 19/07 -- ATR en % du prix d'entrée (revue croisée Gemini) -- ``None`` si non
+        # calculable (HOLD, période de chauffe insuffisante) -- paper_trader.py retombe
+        # sur TRAIL_STOP_PCT (pourcentage fixe) dans ce cas, jamais un stop inventé.
+        "entry_atr_pct": entry_atr_pct,
         # 17/07 -- exposé pour que paper_trader.py puisse juger une éventuelle re-entrée
         # (demande opérateur explicite : "une position doit être achetée 1 seule fois sauf
         # si cas extrême de très très bons signaux") -- ce module ne connaît pas l'historique
