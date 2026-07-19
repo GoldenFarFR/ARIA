@@ -28,6 +28,7 @@ def _pair() -> PairSnapshot:
         sells_24h=30,
         base_symbol="TOK",
         quote_symbol="WETH",
+        base_address=ADDR,
     )
 
 
@@ -182,3 +183,37 @@ async def test_scan_base_token_wires_blockscout_calls(monkeypatch):
 
     assert ctx.security_score == _baseline_score() - 30
     assert any("mint" in f.lower() for f in ctx.risk_flags)
+
+
+@pytest.mark.asyncio
+async def test_scan_base_token_ignores_pair_where_contract_is_only_the_quote_token(monkeypatch):
+    """19/07 -- même correctif que momentum_entry._best_pair/paper_trader.
+    _default_pair_lookup (reproduction de l'incident réel PLAZM #21, en fait
+    ESHARE) : /vc ne doit JAMAIS analyser/publier le prix d'un token différent
+    de celui réellement scanné, même si ``ca`` apparaît comme quote d'un pool
+    plus liquide appartenant à un autre token de base."""
+    other_token_as_base = PairSnapshot(
+        pair_address="other_pool", liquidity_usd=999_999.0, price_usd=0.01759,
+        base_address="0x" + "b" * 40, base_symbol="OTHER",
+    )
+    own_pair = PairSnapshot(
+        pair_address="own_pool", liquidity_usd=100.0, price_usd=5.84,
+        base_address=ADDR, base_symbol="TOK",
+    )
+    monkeypatch.setattr(
+        scan, "_fetch_token_pairs", AsyncMock(return_value=[other_token_as_base, own_pair])
+    )
+    monkeypatch.setattr(
+        type(scan.blockscout_client), "check_contract_flags",
+        AsyncMock(return_value=ContractFlags(address=ADDR, available=False, error="skip")),
+    )
+    monkeypatch.setattr(
+        type(scan.blockscout_client), "get_token_holders",
+        AsyncMock(return_value=TokenHoldersResult(available=False, error="skip")),
+    )
+
+    ctx = await scan.scan_base_token(ADDR)
+
+    assert ctx.best_pair.pair_address == "own_pool"
+    assert ctx.best_pair.price_usd == 5.84
+    assert ctx.pairs_found == 1

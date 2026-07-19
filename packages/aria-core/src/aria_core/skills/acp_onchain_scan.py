@@ -615,9 +615,18 @@ async def scan_base_token(
         blockscout_client.check_contract_flags(ca),
         blockscout_client.get_token_holders(ca),
     )
-    ctx.pairs_found = len(pairs)
-    if pairs:
-        best = max(pairs, key=lambda p: p.liquidity_usd)
+    # 19/07 -- même correctif que momentum_entry._best_pair/paper_trader.
+    # _default_pair_lookup (bug réel trouvé en conditions réelles, position
+    # PLAZM #21 == en fait ESHARE) : ``fetch_token_pairs`` renvoie TOUTE paire
+    # impliquant ``ca``, y compris comme simple QUOTE du pool d'un AUTRE token.
+    # Sans ce filtre, /vc pourrait analyser et publier (rapport PDF envoyé par
+    # email) le prix/OHLCV/liens projet d'un token totalement différent de
+    # celui réellement scanné.
+    ca_lower = ca.strip().lower()
+    own_pairs = [p for p in pairs if (p.base_address or "").lower() == ca_lower]
+    ctx.pairs_found = len(own_pairs)
+    if own_pairs:
+        best = max(own_pairs, key=lambda p: p.liquidity_usd)
         ctx.best_pair = best
         ctx.data_source = "dexscreener"
     else:

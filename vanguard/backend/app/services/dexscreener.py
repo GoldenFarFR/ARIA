@@ -72,10 +72,18 @@ class DexScreenerClient:
         *,
         min_liquidity: float = 1_000,
     ) -> PairSummary | None:
+        # 19/07 -- bug réel trouvé côté aria-core (position paper-trading PLAZM,
+        # en fait ESHARE) et corrigé au même endroit ici : /token-pairs/v1
+        # renvoie TOUTE paire impliquant ``token_address``, y compris comme
+        # simple QUOTE du pool d'un autre token de base. Sans ce filtre, la
+        # vitrine publique pourrait afficher le prix/graphique d'un token
+        # totalement différent de celui demandé.
         pairs = await self.get_token_pairs(chain_id, token_address)
-        eligible = [p for p in pairs if (p.liquidity_usd or 0) >= min_liquidity]
+        token_lower = (token_address or "").strip().lower()
+        own_pairs = [p for p in pairs if (p.base_token.address or "").lower() == token_lower]
+        eligible = [p for p in own_pairs if (p.liquidity_usd or 0) >= min_liquidity]
         if not eligible:
-            eligible = pairs
+            eligible = own_pairs
         if not eligible:
             return None
         return max(eligible, key=lambda p: p.liquidity_usd or 0)
