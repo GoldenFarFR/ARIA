@@ -133,6 +133,31 @@ async def test_ledger_nl_trigger_returns_real_data(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ledger_nl_trigger_matches_operator_exact_phrasing(monkeypatch):
+    """19/07 -- reproduit l'incident réel : "tu a des positions ouverte ?"
+    (formulation directe de l'opérateur sur Telegram, sans "détail") tombait
+    dans la conversation LLM générale et confabulait (mauvais capital,
+    "aucune position" alors qu'une position était réellement ouverte)."""
+
+    async def fake_build_report(*, closed_limit=500):
+        return ("Ledger FAKE", {"machine": "dict"})
+
+    monkeypatch.setattr("aria_core.paper_ledger_report.build_report", fake_build_report)
+    reply = await telegram_bot._try_nl_readonly_command("tu a des positions ouverte ?")
+    assert reply == "Ledger FAKE"
+
+
+@pytest.mark.asyncio
+async def test_ledger_nl_trigger_not_confused_with_opinion_sense_of_position():
+    """"position" seul (sans "ouverte") reste ambigu en français (avis/opinion
+    vs. position de trading) -- ne doit PAS déclencher le ledger."""
+    reply = await telegram_bot._try_nl_readonly_command(
+        "tu as une position sur ce sujet politique ?"
+    )
+    assert reply is None
+
+
+@pytest.mark.asyncio
 async def test_no_match_returns_none():
     reply = await telegram_bot._try_nl_readonly_command("salut, comment ça va aujourd'hui ?")
     assert reply is None

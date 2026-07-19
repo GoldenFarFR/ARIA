@@ -1504,7 +1504,16 @@ _NL_AGENTWALLET_RE = re.compile(
 )
 _NL_LEDGER_RE = re.compile(
     r"d[ée]tail\s+(des\s+|par\s+)?positions?\b|registre\s+des\s+trades?\b|"
-    r"d[ée]tail\s+du\s+paper[\s-]?trading\b",
+    r"d[ée]tail\s+du\s+paper[\s-]?trading\b|"
+    # 19/07 -- trou réel trouvé en conditions réelles : "tu a des positions
+    # ouverte ?" (formulation directe, sans "détail") ne matchait aucun des
+    # 7 déclencheurs -- tombait dans la conversation LLM générale, qui a
+    # confabulé (mélange de l'ancien système watchlist VC-thesis avec un
+    # chiffre de capital inventé, "1000$" au lieu du vrai 1 000 000$).
+    # Ancré sur "ouverte(s)" (jamais bare "position", ambigu en français
+    # avec "opinion/avis") -- zéro risque de faux positif sur une
+    # conversation normale.
+    r"positions?\s+ouvertes?\b",
     re.IGNORECASE,
 )
 _NL_COMMANDS_LIST_RE = re.compile(
