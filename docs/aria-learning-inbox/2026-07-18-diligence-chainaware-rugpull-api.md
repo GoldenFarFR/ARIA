@@ -98,3 +98,19 @@ d'intégration tant que Solana (le vrai angle mort) n'est pas couvert.
 - Si un accès navigateur (`claude-in-chrome`) devient disponible, revérifier
   `chainaware.ai/pricing` pour des chiffres réels plutôt qu'une source
   tierce non confirmée.
+
+## Addendum 19/07 (promotion veille Research — session commandement)
+
+Deux frameworks académiques 2026 trouvés (LROO Rug Pull Detector, arXiv 2603.11324 ;
+TM-RugPull, arXiv 2602.21529), pertinents SEULEMENT si ARIA construit un jour un
+classifieur maison de rug-pull au-delà de GoPlus/ChainAware/RugCheck (pas le cas
+aujourd'hui — cf. recommandation ci-dessus, banqué, rien branché). Point méthodologique
+à retenir pour ce jour-là : les deux papiers insistent sur la **"leakage-resistance"
+temporelle** — un piège classique est d'entraîner/tester un modèle avec des features
+qui ont fuité des données POST-retrait-de-liquidité, gonflant artificiellement la
+précision mesurée sans que ça marche en conditions réelles ; toutes les features
+doivent être extraites STRICTEMENT avant tout retrait de liquidité. `safety_screen.py`/
+`momentum_entry.py` n'ont pas ce problème aujourd'hui (ils tournent déjà en temps réel
+pré-décision), mais un futur modèle entraîné sur l'historique devrait suivre cette
+discipline dès sa conception plutôt que la découvrir après coup. Rien à construire
+maintenant — noté pour la prochaine fois que ce sujet est repris.

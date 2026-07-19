@@ -1855,6 +1855,122 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   premier scrub) — redigées immédiatement (commit `8640c8c9`), historique git passé
   volontairement pas réécrit (même précédent que l'incident `goldenfar-vault.gfv` du
   11/07 et le nom réel #114).
+- **#215 (promotion veille Research 18-19/07, fait vérifié — doc officielle CDP + lancement
+  Coinbase confirmés)** — Coinbase expose **Spend Permissions** (Smart Account) : un
+  « spender » de confiance (l'agent) est autorisé à dépenser dans des limites par
+  token/période/montant, signées une fois, **appliquées au niveau du smart contract
+  lui-même** — hors d'atteinte d'un bug applicatif Python ou d'une hallucination LLM.
+  Coinbase a aussi lancé publiquement « Coinbase for Agents » (11/06/2026, confirmé
+  CoinDesk/TechCrunch/blog officiel) avec plafonds de dépense/liste blanche d'actifs
+  « bientôt » configurables en UI — même patron que le plafond dur déjà codé pour le
+  pilote agent-wallet (`agent_wallet_pilot.py`, ACTIF EN PROD depuis le 18/07, capital
+  réel). **Action pour une session de dev** : vérifier si le wallet CDP actuel du
+  pilote est un Smart Account compatible Spend Permissions, et si oui évaluer l'ajout
+  de cette couche de défense on-chain EN PLUS (jamais en remplacement) du plafond
+  Python déjà codé — capital réel déjà engagé, priorité de sécurité légitime.
+- **#216 (promotion veille Research 18-19/07, fait vérifié — 1inch MCP réellement lancé
+  30/03/2026, dRPC MEV confirmé sur Base)** — Deux gaps liés, non résolus sur
+  `agent_wallet_cdp_adapter.execute_swap` (pilote agent-wallet, capital réel actif) :
+  (1) rien ne confirme que le swap route via un agrégateur best-execution (Aerodrome/
+  Slipstream = plus gros DEX natif Base, 1inch Pathfinder route sur 200+ sources)
+  plutôt qu'une seule pool — 1inch a lancé un MCP dédié aux agents IA avec plafonds de
+  slippage/paires imposés par le développeur, conçu nativement pour ce cas d'usage ;
+  (2) le swap part sur un RPC public standard, cible facile pour un bot sandwich sur un
+  achat à faible liquidité — dRPC propose un RPC Base avec protection MEV native
+  (mempool privé, confirmé). **Action pour une session de dev** : évaluer 1inch MCP (ou
+  confirmer que le SDK CDP route déjà correctement) + basculer l'URL RPC du pilote vers
+  un endpoint protégé MEV — changement de configuration/dépendance, pas une réécriture
+  de la logique de garde-fou existante.
+- **#217 (promotion veille Research 18-19/07, fait vérifié — playbook OpenAI et OWASP
+  Agent Memory Guard réels)** — Deux angles complémentaires pour durcir le mandat #192
+  (vulnérabilité IA à l'injection) : (1) le playbook anti-injection d'OpenAI (04/2026)
+  recommande de contraindre chaque sortie LLM à enjeu à un schéma JSON validé plutôt
+  qu'un texte libre parsé après coup — à auditer : `momentum_entry._llm_confirm`/
+  `_llm_security_gate` et `x_insight_relevance` forcent-ils déjà une sortie structurée
+  validée ? (2) le correctif #206 (`lancedb_store.contains_injection_marker`, garde
+  regex FR/EN à l'écriture) est une défense au moment de l'écriture seulement — OWASP
+  Agent Memory Guard (projet officiel OWASP, incubateur ASI06, `pypi.org/project/
+  agent-memory-guard`, Apache-2.0) est une pipeline de détecteurs plus large (injection,
+  fuite secret/PII, anomalie de taille, boucle d'auto-renforcement) ; deux papiers arXiv
+  2026 (Forensic Trajectory Signatures, MemAudit) couvrent en plus l'audit POST-HOC (et
+  si un contenu empoisonné est déjà passé ?). **Action pour une session de dev** :
+  comparer #206 à ces références et évaluer les angles morts réels — jamais une
+  adoption automatique de dépendance tierce non auditée.
+- **#218 (promotion veille Research 19/07, fait vérifié — endpoint CoinGecko déjà
+  utilisé par ARIA)** — Le garde dépeg USDC de `paper_trader_risk.py` (#187, bloque les
+  nouvelles entrées) pourrait être formalisé sans nouveau vendor :
+  `/coins/markets?category=stablecoins` (CoinGecko, client déjà construit
+  `services/coingecko.py`, jusqu'à 515 IDs/requête, 390+ stablecoins) + polling 10-30s +
+  seuil de déviation vs 1,00$ configurable. Webacy (déjà diligencié le 15/07 pour la
+  réputation wallet) propose un produit dépeg dédié cross-chain plus riche (corrèle
+  liquidité/contamination multi-chaînes) — piste payante de secours si le seuil simple
+  CoinGecko s'avère insuffisant en pratique. **Action pour une session de dev** :
+  formaliser le seuil de déviation avec `services/coingecko.py` plutôt qu'un seuil
+  ad hoc.
+- **#219 (promotion veille Research 19/07, piste à chiffrer — tarif API non confirmé)** —
+  LunarCrush API v3 (Galaxy Score/AltRank, agrégé X/Reddit/YouTube/TikTok en continu)
+  est une source de « buzz social » déjà API-isée, jamais évaluée pour ARIA — répond
+  directement au bonus « signaux positifs additionnels (buzz/anticipation d'annonce) »
+  déjà prévu par #194 mais jamais couvert que par le radar interne (`radar_x.py`/
+  `market_sentiment.py`). **Action pour une session de dev** : chiffrer le tarif API
+  réel avant tout branchement (jamais confirmé dans cette recherche).
+- **#220 (promotion veille Research 19/07, fait vérifié — doc officielle Clanker/GitHub
+  `clanker-devco/v4-contracts`)** — Clanker v4 (Uniswap v4 Hooks) permet à un créateur
+  de vault jusqu'à 90% de l'offre (`ClankerVault`) et propose des modules MEV natifs qui
+  retardent le trading ou enchérissent les premiers swaps (`ClankerMevModule2BlockDelay`,
+  `ClankerSniperAuctionV0`). Un token légitimement vaulté pourrait ressembler à tort à
+  un red flag de concentration pour un filtre naïf de holders ; un délai anti-sniping
+  change la fenêtre réelle où `momentum_entry`/`base_crawler` peuvent observer un prix
+  fiable dans les premières minutes. **Action pour une session de dev** : vérifier si
+  `services/clanker.py` (déjà construit, #10) expose ces deux métadonnées (vault/module
+  MEV actif) ou les ignore silencieusement.
+- **#221 (promotion veille Research 19/07, fait vérifié — incident réel confirmé,
+  ~150-200k$ drainés, mai 2026, Cointelegraph/NeuralTrust/OECD.AI)** — L'attaque
+  Grok/Bankr (wallet drainé via une NFT gratuite reçue passivement, qui a débloqué des
+  permissions « Executive » côté agent, PUIS un message encodé Morse dans une réponse
+  publique X qui a fait exécuter l'ordre malveillant) montre qu'un actif reçu
+  PASSIVEMENT peut à lui seul élargir ce qu'un agent IA « croit » être autorisé à
+  faire. Directement pertinent : le pilote agent-wallet réel (`agent_wallet_pilot.py`,
+  ACTIF EN PROD, capital réel) a un moniteur de dépôts externes
+  (`agent_wallet_monitor.py`) mais n'a jamais été vérifié explicitement contre CE
+  scénario précis. **Action pour une session de dev** : auditer
+  `agent_wallet_pilot.py`/`agent_wallet_cdp_adapter.py` pour confirmer qu'aucune
+  logique conditionnelle sur un actif détenu ne peut élargir le périmètre swap-only/
+  adresse-de-transfert-unique déjà codé en dur — le design actuel semble déjà immunisé
+  par construction, mais jamais explicitement prouvé contre ce cas précis.
+- **#222 (promotion veille Research 18/07, fait vérifié — Agentic.Market confirmé,
+  Bloomberg listé comme fournisseur)** — Bloomberg vend des données financières
+  pay-per-call via x402 sur Agentic.Market (marketplace déjà connue, aux côtés
+  d'OpenAI/CoinGecko/AWS Lambda). **Action pour une session de dev** : ajouter
+  Bloomberg à la liste de candidats déjà commencée (Cybercentry #199, Nansen,
+  x402stock, CoinGecko) pour une éventuelle 2e ressource x402 — budget 5$/semaine déjà
+  posé, pas encore élargi au-delà de Cybercentry.
+- **#223 (promotion veille Research 19/07, fait vérifié — lancement confirmé
+  16/06/2026, statut RIA + CFTC/NFA)** — Coinbase Advisor est le premier agent IA de
+  conseil en investissement crypto enregistré SEC (statut RIA, fiduciaire) +
+  CFTC/NFA (Commodity Trading Adviser). Référence directe pour
+  `docs/conformite-dossier-avocat.md` (aucun encaissement avant validation d'un avocat,
+  règle absolue déjà en place) — premier comparable réel montrant qu'un chemin de
+  conformité existe pour un agent IA qui décide de vrais investissements. **Action pour
+  une session de dev/juridique** : citer ce précédent le jour où le dossier avocat est
+  monté pour de vrai — rien à faire avant ce moment.
+- **#224 (promotion veille Research 19/07, fait vérifié — $7,5-15M confirmés drainés,
+  20-21/06/2026, Chainalysis/CoinDesk/Decrypt/Cointelegraph)** — Le bot MEV
+  `JaredFromSubway.eth` (le plus actif d'Ethereum) a été vidé via un piège inversé :
+  66 faux contrats de token/pools ont amené le bot à accorder des **approbations de
+  dépense ERC-20** à des contrats malveillants, puis siphonné via ces autorisations
+  ouvertes. Convergent avec une checklist sécurité 2026 (MetaMask/Halborn/Cobo) sur les
+  wallets agentiques, qui identifie deux défenses qu'ARIA n'a pas encore explicitement
+  vérifiées/construites : (1) que le SDK CDP du pilote agent-wallet
+  (`agent_wallet_cdp_adapter.execute_swap`, capital réel actif) n'accorde jamais une
+  allowance illimitée (`MaxUint256`) à un routeur — seulement un montant borné à la
+  taille exacte du trade (per-use approval) ; (2) une **simulation de transaction
+  pré-signature** (`eth_call`/dry-run) avant tout swap réel, jamais construite à ce
+  jour — distincte du plafond de dépense déjà codé (qui limite CE QU'ARIA décide de
+  dépenser, pas CE QUE LE CONTRAT PEUT PRENDRE si l'allowance est mal scopée). **Action
+  pour une session de dev** : auditer le SDK CDP pour confirmer l'absence d'allowance
+  illimitée, et évaluer l'ajout d'une simulation pré-signature — capital réel déjà
+  engagé, deux couches de défense concrètes et non redondantes avec l'existant.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**

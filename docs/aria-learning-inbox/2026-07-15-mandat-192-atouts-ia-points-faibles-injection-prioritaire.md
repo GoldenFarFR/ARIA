@@ -309,3 +309,18 @@ non-régression vérifiée, pas de changement de comportement pour du
 contenu normal) — tout le reste est diligence en lecture seule. Aucune
 approche de `wallet_guard`/`permission_mode`/`config.toml`/capital réel/
 exécution autonome.
+
+## Addendum 19/07 (promotion veille Research — session commandement)
+
+**Donnée externe chiffrée pour le Volet A** (atouts structurels d'une IA-trader) : une étude
+citée sur les données réelles Polymarket début 2026 trouve que 37% des agents IA ont un
+rendement positif contre seulement 7-13% des traders humains sur la MÊME plateforme — mais
+que les humains choisissent en réalité plus souvent le bon résultat. Les bots gagnent parce
+qu'ils entrent plus tôt, à meilleur prix, et exécutent sans relâche (89 trades/jour vs 2,2 en
+moyenne, couverture parallèle de tous les marchés, 24/7 sans pause). **Renforce directement
+le point A.2 déjà documenté ci-dessus** (cohérence des critères d'un cycle à l'autre) : la
+preuve externe converge — l'avantage réel d'un agent IA-trader n'est pas "voir juste" mais
+l'exécution disciplinée (sizing, slippage, stop-logic, rapidité d'entrée). Valide aussi la
+philosophie déjà actée pour #194 ("ARIA doit être là avant tout le monde", pipeline léger/
+rapide plutôt qu'une analyse lourde par candidat) et donne un chiffre concret citable dans un
+futur dossier Base ou une synthèse de ce mandat.

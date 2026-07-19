@@ -275,3 +275,35 @@ levées avant toute décision d'intégration. Ne change rien à la
 recommandation déjà écrite plus haut (chemin fait-maison Louvain/K-means
 sur données Blockscout/Dune déjà collectées reste le point de départ le
 plus sûr, ce service reste une option de secours/complément à évaluer).
+
+## Mise à jour 19/07 (promotion veille Research — session commandement)
+
+Deux nouvelles pistes remontées, complémentaires au chemin déjà retenu (fait-maison
+Louvain/K-means sur graphe funder/sweep) — ni l'une ni l'autre ne remplace la
+recommandation existante, elles couvrent un angle différent du même problème :
+
+1. **Détection ML du wash-trading à l'échelle transaction** (recherche académique 2026,
+   ScienceDirect + un papier arXiv sur les NFT) — features au niveau transaction (activité
+   acheteur inhabituelle, temps depuis le dernier trade, écart de prix) entraînées sur des
+   modèles arbres/deep learning, entièrement sur données on-chain PUBLIQUES (pas de données
+   privées d'exchange) — 38% des trades/60% du volume flaggés wash sur 3 marketplaces NFT
+   étudiées, méthode explicitement démontrée transposable aux tokens fongibles (jeu de
+   données Mt. Gox). Angle DIFFÉRENT du clustering d'identité (§1-4 ci-dessus) : ici on
+   détecte le COMPORTEMENT de wash-trading directement dans les features de transaction,
+   sans avoir besoin de d'abord regrouper les adresses en entités.
+2. **Propagation et fusion de features sur sous-graphe** (arXiv 2505.09313, déjà référencé
+   au §4 ci-dessus comme piste ML avancée "hors de portée d'un premier chantier") — remontée
+   une seconde fois par la veille continue du 19/07, confirmant qu'il s'agit bien du même
+   papier déjà écarté (LightGBM, code non confirmé open-source, nécessiterait un
+   entraînement supervisé complet). Pas d'information nouvelle, juste une confirmation de
+   non-doublon — le verdict du §4 reste inchangé.
+
+**Recommandation inchangée** : le chemin fait-maison (Louvain/K-means sur funder/sweep)
+reste le point de départ le plus sûr. Le classifieur ML de wash-trading (point 1) est une
+piste sérieuse et complémentaire à évaluer EN PLUS si/quand ce chantier est repris — traite
+un signal différent (comportement de trade) du clustering d'identité (qui contrôle quelle
+adresse), les deux pourraient se renforcer plutôt que se substituer l'un à l'autre.
+
+**Sources ajoutées** : recherche ScienceDirect + arXiv sur la détection ML de wash-trading
+NFT/tokens fongibles (référence exacte non capturée dans le journal de veille brut, à
+retrouver si ce chantier est repris pour de vrai).
