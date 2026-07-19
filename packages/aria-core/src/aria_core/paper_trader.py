@@ -1497,7 +1497,12 @@ async def _run_paper_cycle_locked(
         # size_position_by_risk (déjà appliqué DANS open_position) reste le vrai plafond
         # de perte au pire cas, appliqué ENSUITE sur cette allocation potentiellement
         # gonflée -- jamais un pari sans filet.
-        conviction_mult = risk_guard.conviction_size_multiplier(sig.get("rr"), sig.get("align_score"))
+        # 19/07 -- potential_score (conviction_research.py) : None si la diligence
+        # fondamentale n'a rien trouvé/est désactivée -- fail-open sur inconnu, ne
+        # bloque jamais le bonus technique seul (cf. risk_guard docstring).
+        conviction_mult = risk_guard.conviction_size_multiplier(
+            sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+        )
         # 18/07 (suite, "frein à main" validé après revue) -- une fois l'objectif hebdo
         # déjà atteint, réduit de moitié les NOUVELLES entrées (jamais à zéro) : protège
         # le gain acquis sans jamais bloquer un setup exceptionnel doublement vérifié.

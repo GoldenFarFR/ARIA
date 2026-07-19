@@ -1380,3 +1380,124 @@ async def test_evaluate_security_gate_never_called_when_action_stays_hold(monkey
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert called is False
+
+
+# ── diligence de conviction (19/07, conviction_research.py) ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_potential_score_absent_when_gate_off(monkeypatch, test_settings):
+    """Gate OFF par défaut -- comportement inchangé, potential_score reste None,
+    aucun appel réseau supplémentaire (vérifié par l'absence de mock nécessaire)."""
+    test_settings.aria_conviction_research_enabled = False
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["potential_score"] is None
+
+
+@pytest.mark.asyncio
+async def test_potential_score_threaded_into_result_when_buy_confirmed(monkeypatch, test_settings):
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    from aria_core.conviction_research import ConvictionResearch
+
+    async def fake_research(contract, symbol, chain):
+        return ConvictionResearch(
+            available=True, website_url="https://x.example", posting_cadence="active",
+            contract_corroborated=True, potential_score=8.5, rationale="Projet réel actif.",
+        )
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["potential_score"] == 8.5
+    assert any("potentiel fondamental" in r.lower() for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_conviction_research_never_called_when_action_stays_hold(monkeypatch, test_settings):
+    """Même doctrine que le garde de sécurité : ne coûte un appel QUE quand un achat
+    est sur le point d'être exécuté, jamais sur un signal déjà rejeté en amont."""
+    test_settings.aria_conviction_research_enabled = True
+    called = False
+
+    async def fake_research(contract, symbol, chain):
+        nonlocal called
+        called = True
+        return None
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+    _patch_pipeline(monkeypatch, signal=EntrySignal(present=False, reasons=["setup non réuni"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_conviction_research_never_called_when_security_gate_rejects(monkeypatch, test_settings):
+    """Le garde de sécurité final annule le BUY -- la diligence de conviction ne doit
+    jamais tourner sur un achat déjà annulé."""
+    test_settings.aria_conviction_research_enabled = True
+    called = False
+
+    async def fake_research(contract, symbol, chain):
+        nonlocal called
+        called = True
+        return None
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(3, ["EMA12 > EMA26", "MACD", "pattern bullish"]),
+        security_gate=(False, "security_gate_rejected"),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_potential_score_none_when_research_unavailable(monkeypatch, test_settings):
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    from aria_core.conviction_research import ConvictionResearch
+
+    async def fake_research(contract, symbol, chain):
+        return ConvictionResearch(available=True, potential_score=None, reason="aucune source externe trouvée")
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["potential_score"] is None
+    # Aucune ligne "potentiel fondamental" ajoutée si le score reste inconnu -- jamais
+    # un texte de reason inventé sur une absence de donnée.
+    assert not any("potentiel fondamental" in r.lower() for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_result_includes_chain_scoped_category(monkeypatch):
+    """19/07 -- trou réel trouvé (revue croisée externe, confirmé dans le code) : sans
+    catégorie, le plafond de concentration (#187, paper_trader_risk.py) ne s'appliquait
+    JAMAIS aux positions momentum -- categorise désormais par chaîne, jamais mélangé
+    avec les catégories launchpad de l'ancien pipeline VC-thesis."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["category"] == "momentum-base"
+
+
+@pytest.mark.asyncio
+async def test_category_absent_on_early_hold_before_alignment_computed(monkeypatch):
+    """Un rejet précoce (avant même le calcul d'alignement technique -- ici "pas de
+    setup") sort par un return séparé, distinct du return final qui porte "category"
+    -- ce chemin précis ne l'inclut jamais."""
+    _patch_pipeline(monkeypatch, signal=EntrySignal(present=False, reasons=["setup non réuni"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert "category" not in result

@@ -529,6 +529,43 @@ async def test_concentration_cap_does_not_affect_other_categories(tmp_db):
         c = "0x" + f"{i:040x}"
         assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=50_000, category="clanker") is not None
 
+
+@pytest.mark.asyncio
+async def test_momentum_positions_now_respect_concentration_cap(tmp_db, monkeypatch):
+    """19/07 -- trou réel trouvé (revue croisée externe, confirmé dans le code) : les
+    positions momentum n'avaient JAMAIS de catégorie -> le plafond de concentration
+    (#187) ne s'appliquait jamais à elles, contrairement au pipeline VC-thesis. Fix :
+    evaluate_momentum_entry renvoie désormais "category": "momentum-{chain}" -- ce
+    test vérifie le câblage bout en bout (funnel momentum réel -> plafond appliqué),
+    pas juste open_position() en isolation (déjà couvert ci-dessus)."""
+    from aria_core import momentum_entry
+
+    contracts = [f"0x{i:040x}" for i in range(9)]
+    call_index = {"n": 0}
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": c, "chain": "base"} for c in contracts]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        call_index["n"] += 1
+        return {
+            "action": "BUY", "chain": "base", "symbol": f"T{call_index['n']}", "price": 1.0,
+            "target": 1.5, "invalidation": 0.9, "rr": 2.0, "align_score": 1,
+            "category": "momentum-base",
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    # Plafond 40% de 1M = 400k, allocation standard 50k/position -> 8 positions max
+    # (400k), la 9e doit être refusée par le plafond de concentration.
+    total_deployed = sum(p["cost_usd"] for p in act["opened"])
+    assert total_deployed <= 400_000
+    assert len(act["opened"]) <= 8
+
     other = await pt.open_position("0x" + "9" * 40, "OTHER", 1.0, alloc_usd=50_000, category="virtuals_bonding")
     assert other is not None
     assert other["cost_usd"] == 50_000
@@ -874,6 +911,60 @@ async def test_run_cycle_correct_but_not_exceptional_signal_uses_default_size(tm
 
     assert len(act["opened"]) == 1
     assert act["opened"][0]["cost_usd"] == 50_000.0  # ALLOC_PCT (5 %) * 1M, multiplicateur 1.0
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_weak_fundamental_blocks_exceptional_technical_bonus(tmp_db, monkeypatch):
+    """19/07 -- même setup technique exceptionnel que test_run_cycle_sizes_exceptional_
+    conviction_signal_bigger, mais avec un potential_score CONFIRMÉ faible
+    (conviction_research.py) -- le bonus 8% est refusé, retombe à l'allocation par
+    défaut (5%), jamais un pari sans corroboration fondamentale."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+            "potential_score": 1.5,  # confirmé faible -- bloque le bonus
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["cost_usd"] == 50_000.0  # jamais 80 000$ -- fondamental faible confirmé
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_unknown_fundamental_never_blocks_technical_bonus(tmp_db, monkeypatch):
+    """potential_score absent (None) -- fail-open sur inconnu, le bonus technique reste
+    intact, exactement comme avant ce chantier (jamais réduit sous la baseline)."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.5, "rr": 3.0, "align_score": 3,
+            "potential_score": None,
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    assert round(act["opened"][0]["cost_usd"]) == 40_000  # même plafonnement risk_guard qu'avant
 
 
 async def _reach_weekly_target(min_equity: float = 1_100_000.0) -> None:

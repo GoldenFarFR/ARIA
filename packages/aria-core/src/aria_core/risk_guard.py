@@ -86,19 +86,51 @@ def size_position_by_risk(
 # reste plafonnée exactement comme avant sur un stop large, ce n'est jamais un pari sans
 # filet.
 CONVICTION_RR_THRESHOLD = 2.5
-CONVICTION_ALIGN_SCORE_THRESHOLD = 3
+# 19/07 -- abaissé de 3 à 2 (décision opérateur explicite, via AskUserQuestion) : sur
+# les 5 premiers trades réels du pipeline momentum (#194), align_score n'a JAMAIS
+# atteint 3/3 -- toujours "MACD au-dessus de sa ligne de signal" + "pattern de bougie
+# bullish", jamais "EMA12 > EMA26" en même temps. Hypothèse vérifiée dans le code (pas
+# un bug) : un achat golden-pocket (rechargement PROFOND) est structurellement en
+# tension avec "EMA courte déjà repassée au-dessus de la longue" -- au moment où le
+# prix recharge en profondeur, l'EMA rapide est souvent encore sous la lente. Avec le
+# seuil à 3, le bonus de conviction technique était donc quasi inatteignable pour ce
+# style d'entrée précis, jamais un pari sans filet pour autant (R/R minimum inchangé).
+CONVICTION_ALIGN_SCORE_THRESHOLD = 2
 CONVICTION_SIZE_MULTIPLIER = 1.6  # 5 % -> 8 % du capital de départ (ALLOC_PCT, paper_trader.py)
 
+# 19/07 -- décision opérateur explicite (choix confirmé via AskUserQuestion, "s'ajoute
+# en ET") : le potentiel fondamental (conviction_research.py -- site web/X/cadence de
+# publication/corroboration de contrat) devient un TROISIÈME critère du bonus de
+# conviction, EN PLUS du R/R+alignement technique déjà exigés -- jamais à leur place.
+# Seuil sous lequel un score fondamental CONFIRMÉ (pas absent) bloque le bonus --
+# fail-closed sur une donnée confirmée mauvaise, fail-open sur une donnée INCONNUE
+# (``fundamental_score=None``, ex. recherche indisponible/gate OFF) : un setup
+# technique parfait sans recherche fondamentale disponible garde EXACTEMENT le bonus
+# qu'il aurait eu avant ce chantier -- jamais réduit sous ce qu'il a aujourd'hui, même
+# doctrine fail-open/fail-closed déjà validée sur le wallet-scoring (smart_money.py).
+FUNDAMENTAL_WEAK_THRESHOLD = 4.0
 
-def conviction_size_multiplier(rr: float | None, align_score: int | None) -> float:
+
+def conviction_size_multiplier(
+    rr: float | None, align_score: int | None, *, fundamental_score: float | None = None,
+) -> float:
     """1.0 par défaut (comportement inchangé) -- ``CONVICTION_SIZE_MULTIPLIER`` UNIQUEMENT
     sur un setup EXCEPTIONNEL : R/R >= ``CONVICTION_RR_THRESHOLD`` ET alignement technique
     PARFAIT (``CONVICTION_ALIGN_SCORE_THRESHOLD``, cf. ``momentum_entry._technical_alignment``,
     score 0-3). Jamais un bonus sur un setup seulement correct. Données absentes/incomplètes
-    (``None``) -> 1.0, jamais un bonus sans preuve du signal."""
+    (``None``) -> 1.0, jamais un bonus sans preuve du signal.
+
+    ``fundamental_score`` (19/07, optionnel -- comportement inchangé pour tout appelant
+    existant qui ne le fournit pas) : si le setup technique est déjà exceptionnel MAIS
+    qu'une recherche fondamentale a été menée ET a CONFIRMÉ un potentiel faible
+    (< ``FUNDAMENTAL_WEAK_THRESHOLD``), le bonus est refusé -- la conviction technique
+    seule ne suffit plus si le fondamental la contredit activement. ``None`` (recherche
+    non menée/indisponible) ne bloque JAMAIS le bonus technique."""
     if rr is None or align_score is None:
         return 1.0
     if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
+        if fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD:
+            return 1.0
         return CONVICTION_SIZE_MULTIPLIER
     return 1.0
 

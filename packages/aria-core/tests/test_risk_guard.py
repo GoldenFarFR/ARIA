@@ -77,8 +77,16 @@ class TestConvictionSizeMultiplier:
     def test_correct_but_not_exceptional_stays_default(self):
         """R/R correct mais pas exceptionnel -- jamais un bonus sans les DEUX conditions."""
         assert risk_guard.conviction_size_multiplier(2.0, 3) == 1.0
-        assert risk_guard.conviction_size_multiplier(2.5, 2) == 1.0
+        # 19/07 -- seuil abaissé à 2 (décision opérateur) : align_score=1 est le nouveau
+        # cas "pas assez", align_score=2 qualifie désormais (cf. test dédié ci-dessous).
+        assert risk_guard.conviction_size_multiplier(2.5, 1) == 1.0
         assert risk_guard.conviction_size_multiplier(1.5, 3) == 1.0
+
+    def test_two_of_three_alignment_now_qualifies(self):
+        """19/07 -- seuil abaissé de 3 à 2 (décision opérateur, via AskUserQuestion) :
+        align_score=2 (MACD + pattern de bougie, sans EMA -- le cas réel observé sur les
+        5 premiers trades momentum) qualifie désormais pour le bonus."""
+        assert risk_guard.conviction_size_multiplier(2.5, 2) == risk_guard.CONVICTION_SIZE_MULTIPLIER
 
     def test_missing_data_defaults_to_baseline(self):
         """Jamais un bonus sans preuve du signal -- absence de donnée -> 1.0, pas un
@@ -89,6 +97,41 @@ class TestConvictionSizeMultiplier:
 
     def test_never_reduces_below_baseline(self):
         assert risk_guard.conviction_size_multiplier(0.1, 0) == 1.0
+
+
+# ── 1ter. fundamental_score (19/07, décision opérateur "s'ajoute en ET") ────────────
+
+class TestConvictionSizeMultiplierFundamental:
+    def test_backward_compatible_no_fundamental_arg(self):
+        """Aucun appelant existant ne passe fundamental_score -- comportement
+        identique à avant ce chantier."""
+        assert risk_guard.conviction_size_multiplier(2.5, 3) == risk_guard.CONVICTION_SIZE_MULTIPLIER
+
+    def test_unknown_fundamental_never_blocks_technical_bonus(self):
+        """Fail-open sur inconnu (None) : recherche non menée/indisponible -- jamais
+        réduit sous ce que le setup technique seul aurait eu."""
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, fundamental_score=None)
+        assert mult == risk_guard.CONVICTION_SIZE_MULTIPLIER
+
+    def test_strong_fundamental_keeps_technical_bonus(self):
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, fundamental_score=8.0)
+        assert mult == risk_guard.CONVICTION_SIZE_MULTIPLIER
+
+    def test_confirmed_weak_fundamental_blocks_bonus(self):
+        """Fail-closed sur une donnée CONFIRMÉE mauvaise (pas juste inconnue) : le
+        potentiel fondamental contredit activement la conviction technique."""
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, fundamental_score=2.0)
+        assert mult == 1.0
+
+    def test_fundamental_exactly_at_threshold_still_blocks(self):
+        below = risk_guard.FUNDAMENTAL_WEAK_THRESHOLD - 0.01
+        assert risk_guard.conviction_size_multiplier(2.5, 3, fundamental_score=below) == 1.0
+
+    def test_weak_fundamental_never_creates_a_bonus_on_mediocre_technical(self):
+        """Le fondamental ne peut JAMAIS déclencher le bonus seul -- il ne fait que
+        potentiellement le BLOQUER quand la technique est déjà exceptionnelle."""
+        mult = risk_guard.conviction_size_multiplier(1.0, 1, fundamental_score=10.0)
+        assert mult == 1.0
 
 
 # ── 1ter. weekly_pacing_size_multiplier (18/07, "frein à main" déterministe validé

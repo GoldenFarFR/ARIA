@@ -45,7 +45,8 @@ def is_x_configured() -> bool:
 
 def is_x_reading_active() -> bool:
     """True only when a real read actually happens: bearer configured AND at least
-    one read-consuming gate is on (curiosity feed, auto-reply, mentions learn).
+    one read-consuming gate is on (curiosity feed, auto-reply, mentions learn,
+    diligence de conviction).
 
     Bearer presence alone is NOT enough — reading can be (and, per opérateur
     decision 11/07, currently is) deliberately cut for cost control while the
@@ -58,6 +59,7 @@ def is_x_reading_active() -> bool:
         getattr(settings, "x_curiosity_enabled", False)
         or settings.x_allow_replies
         or getattr(settings, "x_mentions_learn_enabled", False)
+        or getattr(settings, "aria_conviction_research_enabled", False)
     )
 
 
@@ -441,6 +443,91 @@ async def fetch_curiosity_feed() -> list[dict]:
                 logger.warning("X fetch failed for %s: %s", account, exc)
 
     return items
+
+
+async def search_recent_tweets(query: str, *, max_results: int = 10) -> list[dict]:
+    """Recherche X par requête libre (ticker, adresse de contrat, mot-clé) --
+    ``GET /tweets/search/recent`` (X API v2, fenêtre glissante 7 jours). Utilisée par
+    ``conviction_research.py`` (19/07, demande opérateur explicite) pour voir le buzz
+    récent sur un token avant achat -- distincte de ``fetch_curiosity_feed`` (comptes
+    fixes suivis pour la curiosité générale d'ARIA, pas une recherche par sujet).
+
+    Dôme standard : requête vide/bearer absent -> liste vide sans appel réseau ; toute
+    panne HTTP dégrade en liste vide (jamais une exception remontée à l'appelant, jamais
+    un tweet inventé)."""
+    q = (query or "").strip()
+    if not q or not is_x_read_configured():
+        return []
+
+    headers = {"Authorization": f"Bearer {settings.x_bearer_token.strip()}"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.get(
+                f"{X_API_BASE}/tweets/search/recent",
+                headers=headers,
+                params={
+                    "query": q[:500],
+                    "max_results": max(10, min(int(max_results), 100)),
+                    "tweet.fields": "created_at,public_metrics,author_id",
+                },
+            )
+            if res.status_code != 200:
+                logger.warning("X search_recent_tweets HTTP %s pour %r", res.status_code, q)
+                return []
+            data = res.json().get("data", [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("X search_recent_tweets échec pour %r: %s", q, exc)
+        return []
+
+    return [
+        {
+            "text": t.get("text", ""),
+            "created_at": t.get("created_at"),
+            "tweet_id": t.get("id"),
+            "author_id": t.get("author_id"),
+            "public_metrics": t.get("public_metrics", {}),
+        }
+        for t in data
+        if (t.get("text") or "").strip()
+    ]
+
+
+async def fetch_user_recent_tweets(username: str, *, max_results: int = 10) -> list[dict]:
+    """Timeline récente d'un compte X par son handle -- réutilisé pour évaluer la
+    cadence de publication d'un projet (actif vs quasi-mort, 19/07) via
+    ``conviction_research.py``. Même dôme que ``search_recent_tweets`` : dégrade en
+    liste vide sur toute panne, jamais une exception ni une donnée inventée."""
+    handle = (username or "").lstrip("@").strip()
+    if not handle or not is_x_read_configured():
+        return []
+
+    headers = {"Authorization": f"Bearer {settings.x_bearer_token.strip()}"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            user_res = await client.get(f"{X_API_BASE}/users/by/username/{handle}", headers=headers)
+            if user_res.status_code != 200:
+                return []
+            user_id = user_res.json().get("data", {}).get("id")
+            if not user_id:
+                return []
+
+            tweets_res = await client.get(
+                f"{X_API_BASE}/users/{user_id}/tweets",
+                headers=headers,
+                params={"max_results": max(5, min(int(max_results), 100)), "tweet.fields": "created_at"},
+            )
+            if tweets_res.status_code != 200:
+                return []
+            data = tweets_res.json().get("data", [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("X fetch_user_recent_tweets échec pour @%s: %s", handle, exc)
+        return []
+
+    return [
+        {"text": t.get("text", ""), "created_at": t.get("created_at"), "tweet_id": t.get("id")}
+        for t in data
+        if (t.get("text") or "").strip()
+    ]
 
 
 def _coerce_media_paths(

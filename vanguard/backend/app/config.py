@@ -219,6 +219,12 @@ class Settings(BaseSettings):
     x_curiosity_enabled: bool = False
     x_mentions_learn_enabled: bool = False
 
+    # 19/07 : diligence de conviction du pipeline momentum (#194) -- recherche X +
+    # site web sur un candidat déjà passé les filtres techniques, avant achat final.
+    # Réactive la lecture X (coupée le 11/07 pour coût) mais bornée par
+    # x_research_budget.py (plafond hebdo de requêtes, jamais illimité).
+    aria_conviction_research_enabled: bool = False
+
     # ARIA entrepreneur goal — real revenue (not training sim)
     aria_revenue_goal_monthly_usd: float = 50.0
 

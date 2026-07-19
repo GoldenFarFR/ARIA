@@ -88,6 +88,8 @@ class AriaRuntimeSettings(BaseSettings):
     x_curiosity_enabled: bool = False
     x_mentions_learn_enabled: bool = False
 
+    aria_conviction_research_enabled: bool = False
+
     aria_revenue_goal_monthly_usd: float = 50.0
     aria_telegram_lang: str = "en"
     aria_autonomous: bool = True

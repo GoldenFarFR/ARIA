@@ -149,6 +149,17 @@ def _extract_payment_requirement(
         return None
     first = dict(first)
     first.setdefault("x402Version", data.get("x402Version", 1))
+    # 19/07 -- bug réel trouvé en testant 2 fournisseurs v2 réels du catalogue
+    # Bazaar (lionx402, sociavault) : x402_cdp_signer.py reconstruisait un corps
+    # synthétique et passait un getter de header no-op au SDK officiel, qui exige
+    # STRICTEMENT le header brut pour décoder une offre v2 (son repli "corps"
+    # n'accepte QUE x402Version==1) -- échec systématique "Invalid payment
+    # required response" sur tout fournisseur v2 malgré une offre parfaitement
+    # valide. Clé interne (préfixe "_") transportant le header BRUT tel quel --
+    # jamais dans PayFn (signature inchangée, aucun faux pay_fn existant cassé),
+    # x402_cdp_signer.py la lit si présente et l'ignore sinon (V1/Cybercentry
+    # inchangé).
+    first["_raw_v2_header"] = header_value
     return first
 
 

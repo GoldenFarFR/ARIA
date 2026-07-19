@@ -394,6 +394,38 @@ async def test_requirement_normalized_with_max_amount_required_and_resource(monk
     # défaut (1) et routait la signature vers le mauvais schéma du SDK (V1, qui
     # ne connaît pas le format réseau CAIP-2 "eip155:8453" des offres v2 réelles).
     assert captured["x402Version"] == 2
+    # 19/07 -- bug réel trouvé en testant 2 fournisseurs v2 réels (lionx402,
+    # sociavault) : le SDK exige le header BRUT pour décoder une offre v2 (son
+    # repli "corps synthétique" n'accepte que x402Version==1) -- le header original
+    # doit être transporté jusqu'à pay_fn, jamais perdu après le parsing.
+    assert captured["_raw_v2_header"] == _payment_required_header(amount="50000", pay_to="0xmacro")
+
+
+@pytest.mark.asyncio
+async def test_raw_v2_header_absent_when_offer_comes_from_body():
+    """Chemin V1 (corps JSON, ex. Cybercentry) -- jamais de _raw_v2_header, pour ne
+    jamais faire dévier x402_cdp_signer.py vers le chemin v2 sur un fournisseur v1."""
+    body_offer = _payment_required_body(amount="10000", asset="USDC")
+
+    async def fake_fetch(url, *, method="GET", headers=None):
+        if headers and executor.X_PAYMENT_HEADER in headers:
+            return HttpResult(status_code=200, body=b"ok")
+        return HttpResult(status_code=402, body=body_offer)
+
+    async def sufficient_balance():
+        return 1.0
+
+    captured = {}
+
+    async def working_pay(requirement):
+        captured.update(requirement)
+        return "base64-payment-header"
+
+    await executor.fetch_paid_resource(
+        "https://cybercentry.example/verify", resource="wallet-verification", provider="cybercentry",
+        balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+    )
+    assert "_raw_v2_header" not in captured
 
 
 @pytest.mark.asyncio

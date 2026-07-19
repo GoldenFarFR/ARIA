@@ -43,10 +43,24 @@ async def build_x402_payment_header(payment_required: dict[str, Any]) -> str:
 
     Lève une exception sur tout échec (import manquant, panne CDP, panne de
     construction du paiement) -- ``x402_executor`` journalise déjà ``status="failed"``
-    sur exception, aucune gestion d'erreur silencieuse nécessaire ici."""
+    sur exception, aucune gestion d'erreur silencieuse nécessaire ici.
+
+    19/07 -- bug réel trouvé en testant 2 fournisseurs v2 réels du catalogue
+    Bazaar (lionx402, sociavault, vérifié en direct) : le SDK officiel
+    (``get_payment_required_response``) EXIGE le header brut pour décoder une
+    offre v2 -- son repli "corps synthétique" n'accepte QUE ``x402Version==1``
+    (lu dans le code source du SDK installé, pas deviné) -- échouait
+    systématiquement en "Invalid payment required response" sur tout
+    fournisseur v2 malgré une offre parfaitement valide, alors que Cybercentry
+    (v1) n'était jamais affecté. Si ``x402_executor._extract_payment_requirement``
+    a transporté le header brut (clé interne ``_raw_v2_header``, offre v2),
+    on appelle directement ``decode_payment_required_header`` dessus -- même
+    fonction que le SDK utilise en interne, jamais réinventée. Sinon (v1,
+    header absent), comportement HISTORIQUE inchangé (corps synthétique)."""
     from cdp import CdpClient
     from cdp.evm_local_account import EvmLocalAccount
     from x402 import x402Client
+    from x402.http.utils import decode_payment_required_header
     from x402.http.x402_http_client import x402HTTPClient
     from x402.mechanisms.evm.exact import register_exact_evm_client
     from x402.mechanisms.evm.signers import EthAccountSigner
@@ -60,15 +74,19 @@ async def build_x402_payment_header(payment_required: dict[str, Any]) -> str:
     register_exact_evm_client(client, signer)
     http_client = x402HTTPClient(client)
 
-    # ``payment_required`` ici = un seul ``accepts[0]`` (dict brut) -- le SDK x402
-    # attend l'enveloppe complète pour la reconstruction du type ``PaymentRequired``.
-    # ``x402Version`` par défaut 1 si absent (protocole v1 -- même défaut que
-    # services/x402.py::payment_required_response).
-    body = {
-        "x402Version": payment_required.get("x402Version", 1),
-        "accepts": [payment_required],
-    }
-    parsed = http_client.get_payment_required_response(lambda _name: None, body)
+    raw_v2_header = payment_required.get("_raw_v2_header")
+    if raw_v2_header:
+        parsed = decode_payment_required_header(raw_v2_header)
+    else:
+        # ``payment_required`` ici = un seul ``accepts[0]`` (dict brut) -- le SDK
+        # x402 attend l'enveloppe complète pour la reconstruction du type
+        # ``PaymentRequired``. ``x402Version`` par défaut 1 si absent (protocole
+        # v1 -- même défaut que services/x402.py::payment_required_response).
+        body = {
+            "x402Version": payment_required.get("x402Version", 1),
+            "accepts": [payment_required],
+        }
+        parsed = http_client.get_payment_required_response(lambda _name: None, body)
     payload = await client.create_payment_payload(parsed)
     headers = http_client.encode_payment_signature_header(payload)
     header_value = headers.get("X-PAYMENT")

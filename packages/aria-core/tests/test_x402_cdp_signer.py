@@ -71,6 +71,11 @@ def _install_fake_x402_modules(
                 return {}
             return {"X-PAYMENT": header_value}
 
+    def fake_decode_payment_required_header(raw_header):
+        if raise_on == "decode_v2":
+            raise RuntimeError("header v2 illisible")
+        return {"decoded_from_header": raw_header}
+
     fake_cdp = types.ModuleType("cdp")
     fake_cdp.CdpClient = FakeCdpClient
     fake_cdp_evm_local_account = types.ModuleType("cdp.evm_local_account")
@@ -81,6 +86,8 @@ def _install_fake_x402_modules(
     fake_x402_http = types.ModuleType("x402.http")
     fake_x402_http_client = types.ModuleType("x402.http.x402_http_client")
     fake_x402_http_client.x402HTTPClient = Fakex402HTTPClient
+    fake_x402_http_utils = types.ModuleType("x402.http.utils")
+    fake_x402_http_utils.decode_payment_required_header = fake_decode_payment_required_header
     fake_x402_mechanisms = types.ModuleType("x402.mechanisms")
     fake_x402_mechanisms_evm = types.ModuleType("x402.mechanisms.evm")
     fake_x402_mechanisms_evm_exact = types.ModuleType("x402.mechanisms.evm.exact")
@@ -93,6 +100,7 @@ def _install_fake_x402_modules(
     monkeypatch.setitem(sys.modules, "x402", fake_x402)
     monkeypatch.setitem(sys.modules, "x402.http", fake_x402_http)
     monkeypatch.setitem(sys.modules, "x402.http.x402_http_client", fake_x402_http_client)
+    monkeypatch.setitem(sys.modules, "x402.http.utils", fake_x402_http_utils)
     monkeypatch.setitem(sys.modules, "x402.mechanisms", fake_x402_mechanisms)
     monkeypatch.setitem(sys.modules, "x402.mechanisms.evm", fake_x402_mechanisms_evm)
     monkeypatch.setitem(sys.modules, "x402.mechanisms.evm.exact", fake_x402_mechanisms_evm_exact)
@@ -151,3 +159,36 @@ async def test_defaults_x402_version_to_1_when_absent(monkeypatch):
     # par defaut documente dans le module).
     result = await signer.build_x402_payment_header({"asset": "USDC", "amount": "10000"})
     assert result
+
+
+# ── 19/07 : chemin v2 (header brut) -- bug réel trouvé sur 2 fournisseurs Bazaar réels ──
+
+@pytest.mark.asyncio
+async def test_v2_header_present_uses_decode_payment_required_header_directly(monkeypatch):
+    """Quand _raw_v2_header est présent (offre v2, ex. lionx402/sociavault), le SDK
+    decode_payment_required_header doit être appelé DIRECTEMENT sur le header brut --
+    jamais via get_payment_required_response (dont le repli "corps" n'accepte que v1,
+    cf. commentaire du module -- lu dans le vrai code source du SDK installé)."""
+    _install_fake_x402_modules(monkeypatch, header_value="the-real-header")
+    result = await signer.build_x402_payment_header(
+        {"asset": "0x8335...", "amount": "12000", "x402Version": 2, "_raw_v2_header": "b64rawheader"}
+    )
+    assert result == "the-real-header"
+
+
+@pytest.mark.asyncio
+async def test_v2_header_absent_falls_back_to_legacy_body_path(monkeypatch):
+    """Sans _raw_v2_header (v1, ex. Cybercentry) -- comportement HISTORIQUE inchangé,
+    jamais de régression sur le fournisseur déjà validé en conditions réelles."""
+    _install_fake_x402_modules(monkeypatch, header_value="the-real-header")
+    result = await signer.build_x402_payment_header({"asset": "USDC", "amount": "10000"})
+    assert result == "the-real-header"
+
+
+@pytest.mark.asyncio
+async def test_v2_header_decode_failure_raises(monkeypatch):
+    _install_fake_x402_modules(monkeypatch, raise_on="decode_v2")
+    with pytest.raises(RuntimeError, match="header v2 illisible"):
+        await signer.build_x402_payment_header(
+            {"asset": "0x8335...", "amount": "12000", "_raw_v2_header": "b64rawheader"}
+        )

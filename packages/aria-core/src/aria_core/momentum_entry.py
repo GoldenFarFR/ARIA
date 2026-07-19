@@ -769,6 +769,28 @@ async def evaluate_momentum_entry(
             hold_reason = gate_hold_reason
             reasons.append("garde de sécurité final (LLM) -- piège probable, achat annulé")
 
+    # 19/07 -- diligence de conviction (conviction_research.py, demande opérateur
+    # explicite), APRÈS tout le reste : ne tourne que sur les candidats déjà sur le
+    # point d'être achetés, jamais sur la masse rejetée par les filtres rapides
+    # (préserve la vitesse du pipeline -- raison d'être du pivot #194). No-op immédiat
+    # (aucun appel réseau) si ARIA_CONVICTION_RESEARCH_ENABLED est OFF (défaut).
+    potential_score = None
+    potential_rationale = ""
+    if action == "BUY":
+        from aria_core.conviction_research import research_project_potential
+
+        research = await research_project_potential(contract, best.base_symbol, chain)
+        if research.available and research.potential_score is not None:
+            potential_score = research.potential_score
+            potential_rationale = research.rationale
+            reasons.append(
+                f"potentiel fondamental {potential_score:.1f}/10 "
+                f"(site {'trouvé' if research.website_url else 'introuvable'}, "
+                f"cadence X {research.posting_cadence}"
+                + (f" : {potential_rationale}" if potential_rationale else "")
+                + ")"
+            )
+
     return {
         "action": action,
         "chain": chain,
@@ -782,6 +804,21 @@ async def evaluate_momentum_entry(
         # si cas extrême de très très bons signaux") -- ce module ne connaît pas l'historique
         # du portefeuille, seule la force du signal technique lui appartient.
         "align_score": align_score,
+        # 19/07 -- None si la diligence de conviction n'a rien trouvé/est désactivée
+        # (jamais un score inventé) -- risk_guard.conviction_size_multiplier traite
+        # ça comme "inconnu", jamais comme "faible" (fail-open sur inconnu).
+        "potential_score": potential_score,
+        # 19/07 -- trou réel trouvé (revue croisée externe, vérifié dans le code) :
+        # sans catégorie, paper_trader_risk.fit_alloc_to_concentration_cap() (#187)
+        # renvoie l'allocation TELLE QUELLE (son garde `if not category: return alloc`)
+        # -- le plafond de concentration à 40% n'a donc JAMAIS été appliqué aux
+        # positions momentum, qui pouvaient s'empiler sans limite sur la même chaîne.
+        # Catégorise par chaîne (seule dimension pertinente disponible ici -- la thèse
+        # est volontairement la même pour toutes, catégoriser par thèse recréerait un
+        # seul gros seau qui ne protégerait de rien) -- jamais mélangé avec les
+        # catégories launchpad de l'ancien pipeline VC-thesis (derive_category), le
+        # préfixe "momentum-" les distingue structurellement.
+        "category": f"momentum-{chain}",
         "reasons": reasons,
         "hold_reason": hold_reason,
     }
