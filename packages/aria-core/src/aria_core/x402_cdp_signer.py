@@ -89,7 +89,14 @@ async def build_x402_payment_header(payment_required: dict[str, Any]) -> str:
         parsed = http_client.get_payment_required_response(lambda _name: None, body)
     payload = await client.create_payment_payload(parsed)
     headers = http_client.encode_payment_signature_header(payload)
-    header_value = headers.get("X-PAYMENT")
+    # 19/07 -- bug réel trouvé juste après le précédent (même appel réel, lionx402) :
+    # le SDK renvoie la valeur signée sous des CLÉS DIFFÉRENTES selon la version --
+    # "PAYMENT-SIGNATURE" pour v2, "X-PAYMENT" pour v1 (explicitement commenté
+    # "V1 legacy" dans x402/http/constants.py du SDK installé) -- ne cherchait avant
+    # que "X-PAYMENT", donc échouait toujours sur v2 malgré une signature réussie.
+    # Renvoie la VALEUR seule (jamais le nom de header) -- x402_executor.py choisit
+    # déjà le bon nom de header pour la requête payée à partir de x402Version.
+    header_value = headers.get("PAYMENT-SIGNATURE") or headers.get("X-PAYMENT")
     if not header_value:
-        raise RuntimeError(f"encode_payment_signature_header n'a pas produit de X-PAYMENT : {headers!r}")
+        raise RuntimeError(f"encode_payment_signature_header n'a produit ni PAYMENT-SIGNATURE ni X-PAYMENT : {headers!r}")
     return header_value

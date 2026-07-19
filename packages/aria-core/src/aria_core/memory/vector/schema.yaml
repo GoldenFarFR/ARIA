@@ -24,6 +24,15 @@ entry_types:
     required_metadata: [outcome, at]
     retention_days: null
 
+  conviction_research:
+    description: >
+      Diligence de conviction sur un projet crypto (site web/X/cadence de
+      publication/corroboration de contrat -> score de potentiel, 19/07,
+      conviction_research.py) -- une entrée par recherche, jamais écrasée
+      (append-only), pour suivre l'évolution d'un projet dans le temps.
+    required_metadata: [source, contract, chain, source_id]
+    retention_days: null
+
 collection:
   name: aria_cognitive_vectors
   distance: cosine

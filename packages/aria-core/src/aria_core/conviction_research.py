@@ -32,8 +32,157 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+# 19/07 -- mémoire des recherches (demande opérateur explicite : "toute recherche
+# doit etre enregistrer dans la memoire pour eviter de tout recommencer... des
+# recherche accumulativbe dans le temp pour un suivie... je veux pas que la mémoire
+# dans 2 ans soit un foutoir"). Même patron EXACT que cybercentry_insight.py (déjà
+# le seul appelant réel de lancedb_store.py à ce jour) -- jamais un système parallèle
+# inventé. Deux usages distincts de la MÊME table (``conviction_research``, déclarée
+# dans memory/vector/schema.yaml, retention_days=null -- jamais purgée) :
+#   1. Cache avant paiement/appel (``_find_cached_research``) -- évite de refaire une
+#      recherche déjà fraîche (< DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS).
+#   2. Historique complet (``get_research_history``) -- chaque recherche reste une
+#      entrée SÉPARÉE et datée (append-only, jamais écrasée) -- suivre l'évolution
+#      d'un projet (cadence de publication qui se dégrade, score qui change) est
+#      la raison même de l'"accumulation" demandée, pas juste un cache à 1 valeur.
+DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS = 7
+
+
+def _source_id(contract: str, chain: str, *, on: str | None = None) -> str:
+    date = on or datetime.now(timezone.utc).date().isoformat()
+    return f"conviction-research-{chain}-{contract.strip().lower()}-{date}"
+
+
+def _source_id_prefix(contract: str, chain: str) -> str:
+    return f"conviction-research-{chain}-{contract.strip().lower()}-"
+
+
+def _research_to_metadata(research: "ConvictionResearch") -> dict[str, str]:
+    corrob = "" if research.contract_corroborated is None else str(research.contract_corroborated)
+    return {
+        "website_url": research.website_url or "",
+        "x_handle": research.x_handle or "",
+        "posting_cadence": research.posting_cadence,
+        "contract_corroborated": corrob,
+        "potential_score": "" if research.potential_score is None else str(research.potential_score),
+        "rationale": research.rationale,
+    }
+
+
+def _research_from_metadata(meta: dict) -> "ConvictionResearch":
+    corrob_raw = meta.get("contract_corroborated") or ""
+    corrob = {"True": True, "False": False}.get(corrob_raw)
+    score_raw = meta.get("potential_score") or ""
+    try:
+        score = float(score_raw) if score_raw else None
+    except ValueError:
+        score = None
+    return ConvictionResearch(
+        available=True,
+        website_url=meta.get("website_url") or None,
+        x_handle=meta.get("x_handle") or None,
+        posting_cadence=meta.get("posting_cadence") or "unknown",
+        contract_corroborated=corrob,
+        potential_score=score,
+        rationale=meta.get("rationale") or "",
+    )
+
+
+def _format_research_summary(contract: str, chain: str, symbol: str, research: "ConvictionResearch") -> str:
+    """Texte lisible stocké en mémoire -- sert À LA FOIS de contenu pour la recherche
+    sémantique (cache-check) ET de rappel exploitable par ARIA en conversation (même
+    doctrine que _format_wallet_insight, cybercentry_insight.py)."""
+    corrob_txt = {True: "confirmée", False: "CONTRAT DIFFÉRENT ANNONCÉ (signal d'usurpation)", None: "non trouvée"}[
+        research.contract_corroborated
+    ]
+    lines = [
+        f"Diligence de conviction — {symbol} ({chain}) {contract}",
+        f"Site officiel : {research.website_url or 'introuvable'}",
+        f"Handle X : {research.x_handle or 'introuvable'}",
+        f"Cadence de publication X : {research.posting_cadence}",
+        f"Corroboration du contrat : {corrob_txt}",
+    ]
+    if research.potential_score is not None:
+        lines.append(f"Score de potentiel : {research.potential_score:.1f}/10 — {research.rationale}")
+    else:
+        lines.append("Score de potentiel : inconnu (aucune source exploitable)")
+    return "\n".join(lines)
+
+
+async def _find_cached_research(contract: str, chain: str, *, max_age_days: int) -> "ConvictionResearch | None":
+    """Même patron que cybercentry_insight._find_cached_insight -- recherche
+    sémantique filtrée par ``source_id`` EXACT (jamais un faux positif sur un
+    contrat voisin) puis par fraîcheur. ``None`` si rien d'assez récent."""
+    from aria_core.memory.vector import lancedb_store
+
+    prefix = _source_id_prefix(contract, chain)
+    matches = await lancedb_store.search(contract, entry_type="conviction_research", limit=10)
+    best_date, best_meta = None, None
+    for m in matches:
+        meta = m.get("metadata") or {}
+        source_id = str(meta.get("source_id") or "")
+        if not source_id.startswith(prefix):
+            continue
+        date_str = source_id[len(prefix):]
+        try:
+            found_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        age_days = (datetime.now(timezone.utc).date() - found_date).days
+        if age_days < 0 or age_days > max_age_days:
+            continue
+        if best_date is None or found_date > best_date:
+            best_date, best_meta = found_date, meta
+    return _research_from_metadata(best_meta) if best_meta is not None else None
+
+
+async def _store_research(contract: str, chain: str, symbol: str, research: "ConvictionResearch") -> None:
+    """Persiste TOUJOURS une nouvelle entrée datée (jamais un UPDATE) -- même un
+    résultat "rien trouvé" (``potential_score=None``) est stocké pour éviter de
+    re-rechercher inutilement un contrat mort dans le budget de cache, et pour que
+    l'historique reste honnête sur ce qui a réellement été tenté."""
+    from aria_core.memory.vector import lancedb_store
+
+    text = _format_research_summary(contract, chain, symbol, research)
+    metadata = {
+        "source": "conviction_research",
+        "topic": "project-diligence",
+        "source_id": _source_id(contract, chain),
+        "contract": contract.strip().lower(),
+        "chain": chain,
+        **_research_to_metadata(research),
+    }
+    await lancedb_store.store("conviction_research", text, metadata=metadata)
+
+
+async def get_research_history(contract: str, chain: str, *, limit: int = 20) -> list["ConvictionResearch"]:
+    """Historique COMPLET des recherches passées pour ce contrat (pas seulement le
+    cache récent) -- pour suivre l'évolution dans le temps (demande opérateur 19/07 :
+    "des recherches accumulatives... pour un suivi"). Trié du plus récent au plus
+    ancien. ``[]`` si rien n'a jamais été recherché, jamais une exception."""
+    from aria_core.memory.vector import lancedb_store
+
+    prefix = _source_id_prefix(contract, chain)
+    matches = await lancedb_store.search(contract, entry_type="conviction_research", limit=max(limit * 3, 30))
+    dated: list[tuple] = []
+    for m in matches:
+        meta = m.get("metadata") or {}
+        source_id = str(meta.get("source_id") or "")
+        if not source_id.startswith(prefix):
+            continue
+        date_str = source_id[len(prefix):]
+        try:
+            found_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        dated.append((found_date, _research_from_metadata(meta)))
+    dated.sort(key=lambda t: t[0], reverse=True)
+    return [r for _d, r in dated[:limit]]
+
 
 _POSTING_ACTIVE_MIN_TWEETS_30D = 4
 _POSTING_LOOKBACK_DAYS = 30
@@ -127,12 +276,25 @@ def _posting_cadence_from_tweets(tweets: list[dict]) -> str:
     return "dormant"
 
 
-async def research_project_potential(contract: str, symbol: str, chain: str) -> ConvictionResearch:
+async def research_project_potential(
+    contract: str, symbol: str, chain: str, *, cache_max_age_days: int = DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS,
+) -> ConvictionResearch:
     """Orchestre site web (Tavily) + X (buzz + cadence) + corroboration de contrat ->
     score de potentiel borné. Point d'entrée unique appelé par
-    ``momentum_entry.evaluate_momentum_entry`` juste avant l'achat final."""
+    ``momentum_entry.evaluate_momentum_entry`` juste avant l'achat final.
+
+    19/07 -- vérifie D'ABORD la mémoire (gratuit, LanceDB local) avant tout appel
+    Tavily/X : un résultat de moins de ``cache_max_age_days`` sert directement, jamais
+    re-recherché (demande opérateur explicite : "eviter de tout recommencer").
+    Sur un résultat FRAIS (pas de cache), stocke systématiquement -- même un "rien
+    trouvé" -- pour bâtir l'historique accumulatif ET éviter de re-taper un contrat
+    mort à chaque cycle."""
     if not _is_conviction_research_enabled():
         return ConvictionResearch(available=False, reason="ARIA_CONVICTION_RESEARCH_ENABLED désactivé")
+
+    cached = await _find_cached_research(contract, chain, max_age_days=cache_max_age_days)
+    if cached is not None:
+        return cached
 
     from aria_core import x_research_budget
     from aria_core.sanitize import sanitize_untrusted_text
@@ -194,20 +356,24 @@ async def research_project_potential(contract: str, symbol: str, chain: str) -> 
         )
 
     if not website_url and not buzz_lines and contract_corroborated is None:
-        return ConvictionResearch(
+        result = ConvictionResearch(
             available=True, x_handle=x_handle, posting_cadence=posting_cadence,
             contract_corroborated=None, potential_score=None,
             reason="aucune source externe trouvée (site web/X)",
         )
+        await _store_research(contract, chain, safe_symbol, result)
+        return result
 
     score, rationale = await _synthesize_potential(
         safe_symbol, chain, snippet_lines, buzz_lines, posting_cadence, contract_corroborated,
     )
-    return ConvictionResearch(
+    result = ConvictionResearch(
         available=True, website_url=website_url, x_handle=x_handle,
         posting_cadence=posting_cadence, contract_corroborated=contract_corroborated,
         potential_score=score, rationale=rationale,
     )
+    await _store_research(contract, chain, safe_symbol, result)
+    return result
 
 
 async def _synthesize_potential(

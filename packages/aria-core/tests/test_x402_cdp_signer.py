@@ -147,7 +147,7 @@ async def test_raises_when_header_encoding_fails(monkeypatch):
 @pytest.mark.asyncio
 async def test_raises_when_no_x_payment_header_produced(monkeypatch):
     _install_fake_x402_modules(monkeypatch, raise_on="missing_header")
-    with pytest.raises(RuntimeError, match="n'a pas produit de X-PAYMENT"):
+    with pytest.raises(RuntimeError, match="n'a produit ni PAYMENT-SIGNATURE ni X-PAYMENT"):
         await signer.build_x402_payment_header({"asset": "USDC", "amount": "10000"})
 
 

@@ -53,6 +53,13 @@ logger = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = 12.0
 X_PAYMENT_HEADER = "X-PAYMENT"
+# 19/07 -- bug réel trouvé en testant lionx402 (fournisseur v2 réel) : le protocole
+# x402 v2 attend le paiement réglé sous un nom de header DIFFÉRENT ("PAYMENT-SIGNATURE",
+# confirmé dans x402/http/constants.py du SDK officiel installé) -- envoyer toujours
+# "X-PAYMENT" (v1 legacy) faisait échouer la requête payée sur tout fournisseur v2,
+# même après une signature réussie. `requirement["x402Version"]` (déjà réinjecté par
+# `_extract_payment_requirement`) dit quel nom utiliser -- jamais deviné.
+PAYMENT_SIGNATURE_HEADER = "PAYMENT-SIGNATURE"
 _SUPPORTED_ASSET = "USDC"
 _USDC_DECIMALS = 1_000_000  # USDC natif Base -- 6 décimales
 # Réseau déclaré par le 402 jamais pris pour argent comptant (même doctrine que le
@@ -296,8 +303,11 @@ async def fetch_paid_resource(
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
 
+    payment_header_name = (
+        PAYMENT_SIGNATURE_HEADER if requirement.get("x402Version") == 2 else X_PAYMENT_HEADER
+    )
     try:
-        paid = await http_fetch_fn(url, method=method, headers={X_PAYMENT_HEADER: payment_header})
+        paid = await http_fetch_fn(url, method=method, headers={payment_header_name: payment_header})
     except Exception as exc:  # noqa: BLE001
         await x402_budget.record_spend(
             resource=resource, provider=provider, amount_usd=amount_usd,

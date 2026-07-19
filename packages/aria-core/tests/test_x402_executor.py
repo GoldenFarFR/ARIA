@@ -336,7 +336,9 @@ async def test_payment_offer_read_from_header_when_body_empty(monkeypatch):
     réponse ``payment-required``, en base64 -- sans ce correctif, chaque appel
     réel contre ces fournisseurs échouait avec "corps 402 illisible/mal formé"."""
     async def fake_fetch(url, *, method="GET", headers=None):
-        if headers and executor.X_PAYMENT_HEADER in headers:
+        # 19/07 -- l'offre vient du header -> x402Version=2 -> la requête payée est
+        # envoyée sous PAYMENT-SIGNATURE, jamais X-PAYMENT (v1 legacy uniquement).
+        if headers and executor.PAYMENT_SIGNATURE_HEADER in headers:
             return HttpResult(status_code=200, body=b'{"macro": "data"}')
         return HttpResult(
             status_code=402, body=b"{}",
@@ -426,6 +428,60 @@ async def test_raw_v2_header_absent_when_offer_comes_from_body():
         balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
     )
     assert "_raw_v2_header" not in captured
+
+
+@pytest.mark.asyncio
+async def test_v2_offer_sends_payment_under_payment_signature_header_not_x_payment():
+    """19/07 -- 2e bug réel trouvé sur le MÊME appel réel (lionx402) juste après le
+    précédent : le protocole v2 attend le paiement réglé sous "PAYMENT-SIGNATURE"
+    (confirmé dans x402/http/constants.py du SDK officiel installé, "X-PAYMENT" y est
+    explicitement commenté "V1 legacy") -- envoyer toujours X-PAYMENT faisait échouer
+    la requête payée sur tout fournisseur v2, même après une signature réussie."""
+    async def fake_fetch(url, *, method="GET", headers=None):
+        if headers and executor.PAYMENT_SIGNATURE_HEADER in headers:
+            assert executor.X_PAYMENT_HEADER not in headers
+            return HttpResult(status_code=200, body=b"ok")
+        return HttpResult(
+            status_code=402, body=b"{}",
+            headers={"payment-required": _payment_required_header(amount="50000", pay_to="0xv2")},
+        )
+
+    async def sufficient_balance():
+        return 1.0
+
+    async def working_pay(requirement):
+        return "signed-payload"
+
+    result = await executor.fetch_paid_resource(
+        "https://v2provider.example/data", resource="v2-test", provider="v2provider",
+        balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+    )
+    assert result.status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_v1_offer_still_sends_payment_under_x_payment_header():
+    """Comportement HISTORIQUE inchangé pour un fournisseur v1 (ex. Cybercentry) --
+    jamais de régression sur le header déjà validé en conditions réelles."""
+    body_offer = _payment_required_body(amount="10000", asset="USDC")
+
+    async def fake_fetch(url, *, method="GET", headers=None):
+        if headers and executor.X_PAYMENT_HEADER in headers:
+            assert executor.PAYMENT_SIGNATURE_HEADER not in headers
+            return HttpResult(status_code=200, body=b"ok")
+        return HttpResult(status_code=402, body=body_offer)
+
+    async def sufficient_balance():
+        return 1.0
+
+    async def working_pay(requirement):
+        return "signed-payload"
+
+    result = await executor.fetch_paid_resource(
+        "https://cybercentry.example/verify", resource="wallet-verification", provider="cybercentry",
+        balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+    )
+    assert result.status == "ok"
 
 
 @pytest.mark.asyncio
