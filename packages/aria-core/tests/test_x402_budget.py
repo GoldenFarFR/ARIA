@@ -125,3 +125,28 @@ async def test_record_spend_pay_to_defaults_empty_no_regression():
     await budget.record_spend(resource="r1", amount_usd=0.5, status="ok")
     rows = await budget.list_spends()
     assert rows[0]["pay_to"] == ""
+
+
+@pytest.mark.asyncio
+async def test_record_spend_persists_contract_and_token_symbol():
+    """19/07, #143 -- trouvé en répondant à une question opérateur directe ("détaille
+    chaque paiement, quel token") : sans ces deux champs, la seule façon de savoir quel
+    token a motivé un paiement était de reconstruire la corrélation à la main via les
+    horodatages -- fragile (un cas réel resté non identifiable)."""
+    await budget.record_spend(
+        resource="tweets-search", provider="twitsh", amount_usd=0.006, status="ok",
+        contract="0x" + "a" * 40, token_symbol="GIZA",
+    )
+    rows = await budget.list_spends()
+    assert rows[0]["contract"] == "0x" + "a" * 40
+    assert rows[0]["token_symbol"] == "GIZA"
+
+
+@pytest.mark.asyncio
+async def test_record_spend_contract_defaults_empty_no_regression():
+    """Un paiement non lié à un token précis (ex. Cybercentry wallet-verification)
+    reste valide -- champs vides, jamais une valeur inventée."""
+    await budget.record_spend(resource="wallet-verification", amount_usd=0.02, status="ok")
+    rows = await budget.list_spends()
+    assert rows[0]["contract"] == ""
+    assert rows[0]["token_symbol"] == ""

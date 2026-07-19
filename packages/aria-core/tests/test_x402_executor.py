@@ -262,6 +262,45 @@ async def test_successful_payment_returns_ok_and_records_spend():
     assert spends[0]["pay_to"] == "0xrecipient"
 
 
+@pytest.mark.asyncio
+async def test_contract_and_token_symbol_recorded_on_success_and_when_blocked():
+    """19/07, #143 -- transmis tel quel jusqu'au journal, sur le succès ET sur un
+    blocage (ex. plafond hebdo dépassé) -- un paiement REFUSÉ pour un token doit
+    rester tout aussi traçable qu'un paiement réussi."""
+    async def fake_fetch(url, *, method="GET", headers=None):
+        if headers and executor.X_PAYMENT_HEADER in headers:
+            return HttpResult(status_code=200, body=b"paid content")
+        return HttpResult(status_code=402, body=_payment_required_body(amount="10000"))
+
+    async def sufficient_balance():
+        return 5.0
+
+    async def working_pay(requirement):
+        return "base64-payment-header"
+
+    await executor.fetch_paid_resource(
+        "https://example.com/data", resource="premium-data", provider="acme",
+        balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+        contract="0x" + "b" * 40, token_symbol="GIZA",
+    )
+    spends = await budget.list_spends()
+    assert spends[0]["contract"] == "0x" + "b" * 40
+    assert spends[0]["token_symbol"] == "GIZA"
+
+    async def unaffordable_balance():
+        return 0.0
+
+    await executor.fetch_paid_resource(
+        "https://example.com/data2", resource="premium-data", provider="acme",
+        balance_fn=unaffordable_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+        contract="0x" + "c" * 40, token_symbol="MCADE",
+    )
+    spends = await budget.list_spends()
+    assert spends[0]["status"] == "blocked"
+    assert spends[0]["contract"] == "0x" + "c" * 40
+    assert spends[0]["token_symbol"] == "MCADE"
+
+
 def _real_cybercentry_402_body() -> bytes:
     """Corps 402 RÉEL capturé le 17/07 contre https://x402-cybercentry-wallet-
     verification.up.railway.app/verify (facilitator Coinbase CDP officiel) --

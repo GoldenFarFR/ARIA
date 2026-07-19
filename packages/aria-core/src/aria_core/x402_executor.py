@@ -204,13 +204,18 @@ async def fetch_paid_resource(
     balance_fn: BalanceFn,
     pay_fn: PayFn,
     http_fetch_fn: HttpFetchFn = _default_http_fetch,
+    contract: str = "",
+    token_symbol: str = "",
 ) -> X402ExecutionResult:
     """Tente de récupérer ``url``, payant automatiquement si la ressource répond 402.
 
     ``resource``/``provider`` identifient l'appel dans le journal ``x402_budget``
     (auditabilité -- jamais un paiement anonyme). ``balance_fn``/``pay_fn`` sont
     injectés par l'appelant : en production, ``x402_cdp_signer.py`` fournit
-    l'implémentation réelle (wallet CDP dédié) ; en test, toujours des fakes."""
+    l'implémentation réelle (wallet CDP dédié) ; en test, toujours des fakes.
+    ``contract``/``token_symbol`` (19/07, #143) : token concerné si applicable --
+    transmis tel quel jusqu'à ``x402_budget.record_spend`` pour que chaque paiement
+    soit traçable jusqu'au token sans reconstitution forensique après coup."""
     try:
         first = await http_fetch_fn(url, method=method, headers=None)
     except Exception as exc:  # noqa: BLE001
@@ -226,11 +231,15 @@ async def fetch_paid_resource(
         return await _blocked(
             resource, provider, 0.0,
             reason=outgoing_pause.blocked_notice("Ce paiement x402"),
+            contract=contract, token_symbol=token_symbol,
         )
 
     requirement = _extract_payment_requirement(first.body, first.headers)
     if requirement is None:
-        return await _blocked(resource, provider, 0.0, reason="corps 402 illisible/mal formé")
+        return await _blocked(
+            resource, provider, 0.0, reason="corps 402 illisible/mal formé",
+            contract=contract, token_symbol=token_symbol,
+        )
 
     # 17/07 -- bug réel trouvé en testant des fournisseurs x402 v2 réels (Bazaar) :
     # le SDK Python officiel x402 (x402_cdp_signer.py, PaymentRequiredV1) exige
@@ -249,6 +258,7 @@ async def fetch_paid_resource(
         return await _blocked(
             resource, provider, 0.0,
             reason=f"actif non supporté ou montant illisible ({requirement.get('asset')!r})",
+            contract=contract, token_symbol=token_symbol,
         )
 
     # 17/07 -- adresse de règlement du 402, déjà connue ici (aucun appel réseau
@@ -263,14 +273,14 @@ async def fetch_paid_resource(
         return await _blocked(
             resource, provider, amount_usd,
             reason=f"réseau non autorisé ({network!r}) -- jamais signer hors de l'allowlist",
-            pay_to=pay_to,
+            pay_to=pay_to, contract=contract, token_symbol=token_symbol,
         )
 
     if not await x402_budget.can_spend(amount_usd):
         return await _blocked(
             resource, provider, amount_usd,
             reason=f"plafond hebdomadaire x402 dépassé ({amount_usd}$ demandé)",
-            pay_to=pay_to,
+            pay_to=pay_to, contract=contract, token_symbol=token_symbol,
         )
 
     try:
@@ -279,19 +289,19 @@ async def fetch_paid_resource(
         return await _blocked(
             resource, provider, amount_usd,
             reason=f"solde réel indisponible (fail-closed) : {exc}",
-            pay_to=pay_to,
+            pay_to=pay_to, contract=contract, token_symbol=token_symbol,
         )
     if balance_usd is None:
         return await _blocked(
             resource, provider, amount_usd,
             reason="solde réel indisponible (fail-closed) : balance_fn a renvoyé None",
-            pay_to=pay_to,
+            pay_to=pay_to, contract=contract, token_symbol=token_symbol,
         )
     if amount_usd > balance_usd:
         return await _blocked(
             resource, provider, amount_usd,
             reason=f"montant {amount_usd}$ > solde réel {balance_usd}$",
-            pay_to=pay_to,
+            pay_to=pay_to, contract=contract, token_symbol=token_symbol,
         )
 
     try:
@@ -300,6 +310,7 @@ async def fetch_paid_resource(
         await x402_budget.record_spend(
             resource=resource, provider=provider, amount_usd=amount_usd,
             status="failed", reason=f"signature échouée : {exc}", pay_to=pay_to,
+            contract=contract, token_symbol=token_symbol,
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
 
@@ -312,6 +323,7 @@ async def fetch_paid_resource(
         await x402_budget.record_spend(
             resource=resource, provider=provider, amount_usd=amount_usd,
             status="failed", reason=f"requête payée échouée : {exc}", pay_to=pay_to,
+            contract=contract, token_symbol=token_symbol,
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
 
@@ -319,6 +331,7 @@ async def fetch_paid_resource(
         await x402_budget.record_spend(
             resource=resource, provider=provider, amount_usd=amount_usd,
             status="failed", reason="toujours 402 après paiement (règlement refusé)", pay_to=pay_to,
+            contract=contract, token_symbol=token_symbol,
         )
         return X402ExecutionResult(
             status="failed", reason="toujours 402 après paiement", amount_usd=amount_usd,
@@ -327,6 +340,7 @@ async def fetch_paid_resource(
 
     await x402_budget.record_spend(
         resource=resource, provider=provider, amount_usd=amount_usd, status="ok", pay_to=pay_to,
+        contract=contract, token_symbol=token_symbol,
     )
     return X402ExecutionResult(
         status="ok", amount_usd=amount_usd, http_status=paid.status_code, body=paid.body,
@@ -335,10 +349,12 @@ async def fetch_paid_resource(
 
 async def _blocked(
     resource: str, provider: str, amount_usd: float, *, reason: str, pay_to: str = "",
+    contract: str = "", token_symbol: str = "",
 ) -> X402ExecutionResult:
     logger.warning("x402 paiement bloqué (%s) : %s", resource, reason)
     await x402_budget.record_spend(
         resource=resource, provider=provider, amount_usd=amount_usd,
         status="blocked", reason=reason, pay_to=pay_to,
+        contract=contract, token_symbol=token_symbol,
     )
     return X402ExecutionResult(status="blocked", reason=reason, amount_usd=amount_usd)

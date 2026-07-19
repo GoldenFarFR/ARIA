@@ -396,6 +396,56 @@ async def test_twitsh_fallback_used_when_official_search_returns_empty(test_sett
 
 
 @pytest.mark.asyncio
+async def test_twitsh_fallback_forwards_contract_and_symbol_for_x402_traceability(
+    test_settings, monkeypatch,
+):
+    """19/07, #143 -- trouvé en répondant à une question opérateur directe ("détaille
+    chaque paiement, quel token"). contract/token_symbol doivent être transmis jusqu'à
+    twitsh.search_tweets/fetch_user_tweets pour que le paiement x402 reste traçable
+    jusqu'au token sans reconstitution forensique après coup."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    async def _official_empty(query, **kwargs):
+        return []
+
+    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _official_empty)
+    monkeypatch.setattr("aria_core.gateway.x_twitter.fetch_user_recent_tweets", _official_empty)
+
+    captured = {}
+
+    async def _fake_twitsh_search(query, *, contract="", token_symbol="", **kwargs):
+        captured["search_contract"] = contract
+        captured["search_symbol"] = token_symbol
+        return [{"text": "buzz", "created_at": None}]
+
+    async def _fake_twitsh_user(username, *, contract="", token_symbol="", **kwargs):
+        captured["user_contract"] = contract
+        captured["user_symbol"] = token_symbol
+        return []
+
+    monkeypatch.setattr("aria_core.services.twitsh.search_tweets", _fake_twitsh_search)
+    monkeypatch.setattr("aria_core.services.twitsh.fetch_user_tweets", _fake_twitsh_user)
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 5\nRAISON: ok."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    known_links = [{"label": "X (Twitter)", "url": "https://x.com/cobot_official"}]
+    await cr.research_project_potential(CONTRACT, "COBOT", "base", known_links=known_links)
+
+    assert captured["search_contract"] == CONTRACT
+    assert captured["search_symbol"] == "COBOT"
+    assert captured["user_contract"] == CONTRACT
+    assert captured["user_symbol"] == "COBOT"
+
+
+@pytest.mark.asyncio
 async def test_twitsh_not_called_when_official_search_succeeds(test_settings, monkeypatch):
     """La recherche X officielle trouve déjà du buzz -> le repli payant ne doit
     JAMAIS être sollicité (complément, pas un doublon systématique)."""

@@ -3480,6 +3480,39 @@ endroits corrigés, `a122b522`, DÉPLOYÉ) + correction manuelle du capital pape
   orphelin côté UI (fini d'écrire sa réponse mais jamais retourné à l'orchestrateur --
   `TaskStop` confirmait la tâche introuvable). Confirme indépendamment la doctrine
   Solana déjà actée. Rien sur `/vc`/momentum, recherche informative pour l'opérateur.
+- **#143 -- traçabilité token sur chaque paiement x402, codé/testé, déploiement en
+  cours au moment de l'écriture.** Trouvé en
+  répondant à une question opérateur directe ("détaille chaque paiement, quel token,
+  achat ou abandon") : `x402_budget.py` n'enregistrait ni contrat ni symbole -- la
+  corrélation a dû être reconstruite à la main via les horodatages contre
+  `paper_position` (fragile : un paiement orphelin trouvé sur 10, contrat resté
+  non identifiable, logs du conteneur d'alors disparus au redéploiement suivant).
+  Fix vérifié en même temps que le constat : x402 ne peut PAS causer un abandon
+  (`research_project_potential` ne se déclenche qu'APRÈS que le BUY soit déjà
+  décidé, dans `momentum_entry.py`) -- un paiement orphelin vient forcément d'un
+  échec APRÈS-COUP (plafond de positions, cash, concentration), jamais de la
+  recherche elle-même. Nouveaux champs `contract`/`token_symbol` (optionnels,
+  vides par défaut) threadés `x402_budget.record_spend` -> `x402_executor.
+  fetch_paid_resource`/`_blocked` -> `services/twitsh.py` -> `conviction_research.py`
+  (contract/safe_symbol déjà en scope à l'appel). Chaque futur paiement -- succès
+  ET blocage -- reste désormais traçable jusqu'au token sans reconstitution
+  forensique. 6 nouveaux tests.
+- **Re-entrée assouplie (décision opérateur explicite, 19/07, déploiement en cours au
+  moment de l'écriture)** --
+  remplace la restriction "signal extrême uniquement" du 17/07 (BRIAN). En
+  observant le vrai portefeuille (15 positions ouvertes simultanément, cap
+  `MAX_POSITIONS`), l'opérateur a clarifié : "achat unique pour les positions EN
+  COURS [seulement] -- ça ne me dérange pas de rouvrir une position si il n'en
+  existe pas déjà une, si un nouveau point d'entrée se profile". `REENTRY_RR_MIN`/
+  `REENTRY_ALIGN_SCORE_MIN` retirés -- un contrat déjà clôturé redevient un
+  candidat comme un autre dès qu'un signal BUY normal se profile (même barre
+  qu'une première entrée), la seule protection restante contre une double
+  détention étant `has_open` (jamais deux positions SIMULTANÉES). Le pattern
+  wash-trading/décoy type BRIAN reste couvert par deux gardes DURS distincts et
+  non retirés (`momentum_blacklist.py`, plafond ratio volume24h/liquidité) --
+  construits spécifiquement pour ce pattern, jamais dépendants de ce gate de
+  re-entrée. Note "re-entrée" ajoutée à la thèse pour traçabilité (jamais un
+  filtre). 3 tests réécrits pour refléter le nouveau comportement.
 
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.

@@ -63,17 +63,18 @@ TP_QTY_EPSILON = 1e-9         # reliquat négligeable après le dernier palier -
 # cadence heartbeat change un jour sans qu'il faille retoucher cette constante.
 TRACKING_ALERT_MIN_INTERVAL_MINUTES = 30
 
-# 17/07 -- demande opérateur explicite après une perte réelle : "une position doit être
-# achetée 1 seule fois sauf si cas extrême de très très bons signaux". Constaté en
-# conditions réelles le jour même : BRIAN rachetée 2 fois de suite après deux stop suiveur
-# (19-22 min d'écart), -18 561 $ cumulés sur les 3 entrées -- rien n'empêchait de racheter
-# un contrat dont ARIA venait tout juste de se faire sortir. Barre volontairement bien plus
-# haute que l'entrée normale (R/R >= 1.5 + au moins 1 signal technique, cf. momentum_entry.py)
-# -- double R/R + alignement technique COMPLET (les 3 signaux à la fois, pas "au moins un").
-# Un analyzer qui ne fournit ni "rr" ni "align_score" (ex. l'ancien pilote VC-thesis) est
-# bloqué par défaut -- absence de preuve d'un signal extrême, jamais traité comme extrême.
-REENTRY_RR_MIN = 3.0
-REENTRY_ALIGN_SCORE_MIN = 3
+# 17/07 -- demande opérateur explicite après une perte réelle (BRIAN rachetée 2 fois de
+# suite après deux stop suiveur, -18 561 $ cumulés sur 3 entrées) : re-achat bloqué par
+# défaut sauf signal EXTRÊME. Assoupli le 19/07 (décision opérateur explicite, suite à
+# l'observation directe du portefeuille réel) : "achat unique pour les positions EN COURS
+# [seulement] -- ça ne me dérange pas de rouvrir une position si il n'en existe pas déjà
+# une, si un nouveau point d'entrée se profile". La seule protection contre une double
+# détention reste ``has_open`` (jamais deux positions SIMULTANÉES sur le même contrat) --
+# une fois clôturée, un contrat redevient un candidat comme un autre, même barre que
+# n'importe quelle entrée normale (déjà passée avant d'atteindre ce point du pipeline).
+# Le wash-trading/décoy type BRIAN reste couvert par deux gardes DURS distincts et non
+# retirés ici (`momentum_blacklist.py`, plafond ratio volume24h/liquidité) -- construits
+# spécifiquement pour ce pattern, jamais dépendants de ce gate de re-entrée.
 
 _POS_FIELDS = (
     "id", "contract", "symbol", "cost_usd", "entry_price", "qty",
@@ -1482,23 +1483,13 @@ async def _run_paper_cycle_locked(
             funnel[reason_code] = funnel.get(reason_code, 0) + 1
             continue
 
-        # 17/07 -- une position déjà clôturée une fois sur ce contrat ne se rachète pas par
-        # défaut (demande opérateur explicite, cf. REENTRY_RR_MIN ci-dessus) -- seule une
-        # nouvelle preuve de signal EXTRÊME (pas juste "encore positif") l'autorise.
+        # 19/07 -- assoupli (décision opérateur explicite, cf. commentaire sur l'ancien
+        # REENTRY_RR_MIN ci-dessus) : un contrat déjà clôturé redevient un candidat comme
+        # un autre dès qu'un nouveau signal BUY se profile -- aucune barre supplémentaire.
+        # Note informative seule (traçabilité de la thèse), jamais un filtre.
         if await _has_prior_close(contract):
-            rr = sig.get("rr")
-            align_score = sig.get("align_score")
-            is_extreme = (
-                rr is not None and rr >= REENTRY_RR_MIN
-                and align_score is not None and align_score >= REENTRY_ALIGN_SCORE_MIN
-            )
-            if not is_extreme:
-                funnel["reentry_blocked_not_extreme"] = funnel.get("reentry_blocked_not_extreme", 0) + 1
-                continue
             sig.setdefault("reasons", []).append(
-                f"re-entrée exceptionnelle autorisée après une clôture précédente -- "
-                f"R/R {rr:.1f} >= {REENTRY_RR_MIN:.1f} et alignement technique complet "
-                f"({align_score}/{REENTRY_ALIGN_SCORE_MIN})"
+                "re-entrée -- ce contrat a déjà eu une position clôturée précédemment"
             )
 
         price = sig.get("price")

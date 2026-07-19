@@ -43,6 +43,8 @@ _COLUMNS = [
     "reason",
     "created_at",
     "pay_to",
+    "contract",
+    "token_symbol",
 ]
 
 # 17/07 -- ajouté après un vrai faux positif de agent_wallet_monitor.py (une alerte
@@ -52,8 +54,18 @@ _COLUMNS = [
 # jamais un nouvel appel réseau) permet au moniteur de corréler un mouvement
 # on-chain détecté à une dépense x402 déjà journalisée, sans dépendre d'un
 # éventuel header X-PAYMENT-RESPONSE (optionnel dans le protocole, jamais garanti).
+#
+# `contract`/`token_symbol` (19/07, #143) -- trouvé en répondant à une question
+# opérateur directe ("détaille chaque paiement, quel token") : sans ces deux champs,
+# la seule façon de savoir QUEL token a motivé un paiement était de reconstruire la
+# corrélation à la main via les horodatages contre paper_position -- fragile (un cas
+# réel resté non identifiable, logs du conteneur d'alors disparus au redéploiement
+# suivant). Optionnels (chaîne vide) : tout paiement non lié à un token précis
+# (Otto AI market_alerts, vérification de wallet Cybercentry) reste valide.
 _ADDED_COLUMNS = [
     ("pay_to", "TEXT NOT NULL DEFAULT ''"),
+    ("contract", "TEXT NOT NULL DEFAULT ''"),
+    ("token_symbol", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -132,20 +144,25 @@ async def record_spend(
     status: str,
     reason: str = "",
     pay_to: str = "",
+    contract: str = "",
+    token_symbol: str = "",
 ) -> None:
     """Enregistre une tentative de paiement x402 (``status`` in {"ok", "blocked",
     "failed"}) -- jamais seulement les succès, un refus de plafond doit rester tracé.
     ``pay_to`` (17/07) : adresse de règlement déclarée par le 402, pour corrélation
-    par ``agent_wallet_monitor.py`` (cf. commentaire sur ``_ADDED_COLUMNS``)."""
+    par ``agent_wallet_monitor.py`` (cf. commentaire sur ``_ADDED_COLUMNS``).
+    ``contract``/``token_symbol`` (19/07, #143) : token concerné si applicable,
+    laissés vides pour tout paiement non lié à un token précis."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
-            INSERT INTO x402_spend_log (resource, provider, amount_usd, status, reason, created_at, pay_to)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO x402_spend_log
+              (resource, provider, amount_usd, status, reason, created_at, pay_to, contract, token_symbol)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (resource, provider, amount_usd, status, reason, now, pay_to),
+            (resource, provider, amount_usd, status, reason, now, pay_to, contract, token_symbol),
         )
         await db.commit()
 

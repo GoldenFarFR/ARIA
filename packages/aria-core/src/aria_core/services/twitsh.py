@@ -81,9 +81,13 @@ def _parse_tweets(body: bytes) -> list[dict]:
     return tweets
 
 
-async def search_tweets(query: str, *, max_results: int = 10) -> list[dict]:
+async def search_tweets(
+    query: str, *, max_results: int = 10, contract: str = "", token_symbol: str = "",
+) -> list[dict]:
     """Recherche X par requête libre (ticker/adresse/mot-clé), x402 (0,006$/appel).
-    Dôme standard : jamais une exception qui remonte, liste vide sur toute panne."""
+    Dôme standard : jamais une exception qui remonte, liste vide sur toute panne.
+    ``contract``/``token_symbol`` (19/07, #143) : transmis tel quel jusqu'au journal
+    x402_budget, pour que le paiement reste traçable jusqu'au token concerné."""
     q = (query or "").strip()
     if not q:
         return []
@@ -99,6 +103,8 @@ async def search_tweets(query: str, *, max_results: int = 10) -> list[dict]:
             provider="twitsh",
             balance_fn=usdc_balance_usd,
             pay_fn=build_x402_payment_header,
+            contract=contract,
+            token_symbol=token_symbol,
         )
     except Exception as exc:  # noqa: BLE001
         logger.info("twitsh: search_tweets échoué (%s)", exc)
@@ -108,9 +114,11 @@ async def search_tweets(query: str, *, max_results: int = 10) -> list[dict]:
     return _parse_tweets(result.body)
 
 
-async def fetch_user_tweets(username: str, *, max_results: int = 10) -> list[dict]:
+async def fetch_user_tweets(
+    username: str, *, max_results: int = 10, contract: str = "", token_symbol: str = "",
+) -> list[dict]:
     """Timeline récente d'un compte X par son handle, x402 (0,01$/appel). Même dôme
-    que ``search_tweets``."""
+    que ``search_tweets``, mêmes paramètres ``contract``/``token_symbol``."""
     handle = (username or "").lstrip("@").strip()
     if not handle:
         return []
@@ -126,6 +134,8 @@ async def fetch_user_tweets(username: str, *, max_results: int = 10) -> list[dic
             provider="twitsh",
             balance_fn=usdc_balance_usd,
             pay_fn=build_x402_payment_header,
+            contract=contract,
+            token_symbol=token_symbol,
         )
     except Exception as exc:  # noqa: BLE001
         logger.info("twitsh: fetch_user_tweets échoué (%s)", exc)

@@ -595,7 +595,9 @@ async def research_project_potential(
         from aria_core.services.twitsh import search_tweets as twitsh_search_tweets
 
         _trail_note(trail, "Repli x402 twit.sh utilisé pour le buzz (recherche X officielle vide/sautée)")
-        tweets = await twitsh_search_tweets(query, max_results=10)
+        tweets = await twitsh_search_tweets(
+            query, max_results=10, contract=contract, token_symbol=safe_symbol,
+        )
         if tweets:
             _trail_note(trail, f"twit.sh : {len(tweets)} tweets trouvés")
 
@@ -624,7 +626,9 @@ async def research_project_potential(
             from aria_core.services.twitsh import fetch_user_tweets as twitsh_fetch_user_tweets
 
             _trail_note(trail, "Repli x402 twit.sh utilisé pour la cadence de publication")
-            cadence_tweets = await twitsh_fetch_user_tweets(x_handle, max_results=20)
+            cadence_tweets = await twitsh_fetch_user_tweets(
+                x_handle, max_results=20, contract=contract, token_symbol=safe_symbol,
+            )
 
         posting_cadence = _posting_cadence_from_tweets(cadence_tweets)
         _trail_note(trail, f"Cadence de publication déterminée : {posting_cadence}")

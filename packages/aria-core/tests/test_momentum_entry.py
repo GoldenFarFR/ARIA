@@ -1124,8 +1124,8 @@ async def test_evaluate_buys_on_strong_rr_with_alignment(monkeypatch):
     assert result["price"] == 1.5
     assert result["target"] == 2.5
     assert result["invalidation"] == 1.0
-    # 17/07 -- exposé pour que paper_trader.py puisse juger une éventuelle re-entrée
-    # (REENTRY_RR_MIN/REENTRY_ALIGN_SCORE_MIN) sans recalculer l'alignement.
+    # 17/07 -- exposé pour que risk_guard.conviction_size_multiplier puisse doser
+    # l'allocation sans recalculer l'alignement (#194/#203).
     assert result["align_score"] == 2
 
 

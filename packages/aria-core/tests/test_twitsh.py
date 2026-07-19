@@ -27,7 +27,7 @@ _REAL_SEARCH_BODY = (
 
 @pytest.mark.asyncio
 async def test_search_tweets_parses_real_response_shape(monkeypatch):
-    async def fake_fetch(url, *, resource, provider, balance_fn, pay_fn):
+    async def fake_fetch(url, *, resource, provider, balance_fn, pay_fn, **kwargs):
         assert url == "https://x402.twit.sh/tweets/search?words=base&maxResults=10"
         assert resource == "tweets-search"
         assert provider == "twitsh"
@@ -126,7 +126,7 @@ _REAL_USER_BODY = (
 
 @pytest.mark.asyncio
 async def test_fetch_user_tweets_uses_username_param(monkeypatch):
-    async def fake_fetch(url, *, resource, provider, balance_fn, pay_fn):
+    async def fake_fetch(url, *, resource, provider, balance_fn, pay_fn, **kwargs):
         assert url == "https://x402.twit.sh/tweets/user?username=cobot_official&maxResults=20"
         assert resource == "tweets-user"
         assert provider == "twitsh"
