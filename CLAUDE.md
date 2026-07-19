@@ -2038,6 +2038,61 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   prendre** : construire les 2 trous confirmés (plafond position/liquidité du
   pool, stop suiveur adaptatif à la volatilité) -- proposé à l'opérateur,
   réponse en attente.
+- **19/07 (suite) — les 2 trous confirmés ci-dessus construits, testés et
+  DÉPLOYÉS (`f539ab5d`).** Opérateur non-technique, deux allers-retours
+  nécessaires pour calibrer le plafond de pool avant d'aboutir à la bonne
+  solution (jamais un % arbitraire) :
+  1. **Plafond de position auto-calibré par impact de prix**
+     (`risk_guard.cap_alloc_to_price_impact`) -- Gemini a d'abord proposé un
+     % fixe du pool (0,5% "norme pro" vs 2% "reste utilisable"), mais un calcul
+     concret a montré que 0,5% + le seuil poussière existant tuerait quasiment
+     tout le volume de trades du test (positions viables seulement au-delà de
+     ~2M$ de liquidité de pool, très au-dessus du plancher 100k$ qu'on vient de
+     fixer). **Solution finale retenue** (2e réponse Gemini, la plus
+     rigoureuse) : au lieu d'un % fixe, ARIA estime l'impact de prix RÉEL de
+     SON ordre sur LE pool ciblé (règle AMM standard : ordre = X% du pool ->
+     ~2X% d'impact), dégrade le prix d'entrée en conséquence, recalcule le R/R
+     structurel avec ce prix dégradé, et réduit `alloc_usd` (solution fermée,
+     aucune itération) si le R/R dégradé tombe sous 1.0 (même valeur que
+     `_RR_AMBIGUOUS_FLOOR`, pas un nouveau chiffre stratégique inventé). Piège
+     identifié et évité en concevant la fonction : utiliser le R/R BRUT du
+     trade comme plancher (au lieu d'un plancher fixe) rendait le mécanisme
+     auto-contradictoire -- un R/R brut très élevé le rendait quasi inatteignable
+     à N'IMPORTE QUELLE taille (l'inverse de l'effet recherché : un signal plus
+     fort doit tolérer PLUS de taille, pas moins) -- vérifié par calcul avant
+     d'écrire le code, pas après. Câblé juste après `size_position_by_risk`
+     dans `paper_trader.open_position` (nouveau kwarg `pool_liquidity_usd`,
+     `None` par défaut -- fail-open, comportement inchangé pour tout appelant
+     qui ne le fournit pas).
+  2. **Stop suiveur adaptatif à la volatilité** (`indicators.atr_series`, ATR
+     de Wilder -- vraie lacune confirmée par grep, aucun calcul d'ATR
+     n'existait nulle part dans le codebase avant ce soir) -- remplace le
+     `TRAIL_STOP_PCT` fixe (15%) par une largeur calibrée sur la volatilité
+     RÉELLE de chaque token : 2,5x l'ATR (milieu de la fourchette standard
+     2-3x citée par Gemini), bornée `[5%, 40%]` (jamais un stop si serré qu'il
+     se déclenche sur le moindre bruit, jamais si large qu'il ne protège plus
+     rien). Calculé UNE SEULE FOIS à l'entrée (mêmes candles que la décision
+     R/R, jamais recalculé en détention) -- préserve trivialement l'effet
+     cliquet et évite toute désynchronisation de timeframe. Nouveau champ
+     `entry_atr_pct` persisté sur la position (`None` = repli sur le stop fixe,
+     comportement historique inchangé), exposé par `/diagnostics/paper-ledger`.
+  **Bug réel trouvé et corrigé en cours de route, pas en prod** : `paper_
+  position_archive` (table séparée utilisée par `run_weekly_reset`, jamais
+  eu de migration à chaud dédiée car créée complète dès l'origine) a cassé
+  en suite complète (`sqlite3.OperationalError`) dès que `entry_atr_pct` a
+  rejoint `_POS_FIELDS` -- l'INSERT...SELECT positionnel du reset hebdo exige
+  une parité EXACTE de colonnes entre les deux tables. Corrigé par une
+  migration à chaud dédiée (`_ARCHIVE_ADDED_COLUMNS`, même patron
+  `PRAGMA table_info` + `ALTER TABLE` que `paper_position`/`paper_state`) --
+  trouvé et corrigé AVANT le déploiement (suite complète relancée après
+  coup, confirmée verte), jamais un risque réel sur la base de prod (le
+  premier `run_weekly_reset()` de la semaine n'aurait sinon planté qu'au
+  prochain reset hebdomadaire, silencieusement jusque-là). Suite complète
+  verte (6174 passed, mêmes 7 échecs pré-existants sans rapport #142),
+  `test_coherence.py` vert (81 passed), suite vanguard/backend vérifiée
+  séparément (113 passed, `/diagnostics/paper-ledger` mis à jour en
+  parallèle). Déployé et vérifié (commit `f539ab5d3609` confirmé servi par
+  nginx).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
