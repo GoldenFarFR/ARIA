@@ -33,3 +33,13 @@ def test_pulse_includes_market_sentiment_cycle(monkeypatch):
     })
     p = heartbeat.heartbeat_pulse()
     assert "market_sentiment_cycle" in p["cycles"]
+
+
+def test_pulse_includes_market_alerts_cycle(monkeypatch):
+    """19/07 -- même patron que market_sentiment_cycle ci-dessus, module jumeau
+    (digest Otto AI, x402)."""
+    monkeypatch.setattr(heartbeat, "_load_heartbeat_state", lambda: {
+        "market_alerts_cycle": "2026-07-19T15:00:00Z",
+    })
+    p = heartbeat.heartbeat_pulse()
+    assert "market_alerts_cycle" in p["cycles"]

@@ -217,6 +217,7 @@ def _build_untrusted_context(
     sentiment_readings: list[dict] | None = None,
     polymarket_signals: list[dict] | None = None,
     product_diligence: dict | None = None,
+    market_alerts_digest: str | None = None,
 ) -> str:
     """Assemble le bloc factuel (données non fiables) à partir de faits déjà collectés.
 
@@ -229,7 +230,13 @@ def _build_untrusted_context(
     (``_attach_market_context``) qui n'agit qu'APRÈS coup sur le rapport déjà généré
     et n'influence jamais le raisonnement du LLM. Demande opérateur explicite (10/07) :
     cette donnée doit réellement « ajuster la stratégie », pas seulement s'afficher.
-    """
+
+    ``market_alerts_digest`` (optionnel, 19/07, ``skills/market_alerts.py`` — digest
+    crypto-Twitter payant Otto AI, x402) : QUALITATIF (texte libre, PAS un chiffre
+    mesurable comme sentiment_readings) — déjà sanitisé à l'écriture par
+    ``market_alerts.upsert_reading`` (jamais brut), mais re-sanitisé ICI par
+    précaution (point d'étranglement unique, jamais confiance en une seule couche
+    de défense pour du contenu tiers non fiable, mandat #192)."""
     lines = [
         f"Adresse du contrat : {_sanitize(ctx.contract, 60)}",
         f"Score de risque on-chain (0-95, plus haut = plus sûr) : {ctx.security_score}",
@@ -332,6 +339,17 @@ def _build_untrusted_context(
                 "lui-même) :"
             )
             lines += sent_lines
+    if market_alerts_digest:
+        from aria_core.skills.market_alerts import _MAX_DIGEST_CHARS
+
+        safe_digest = _sanitize(market_alerts_digest, _MAX_DIGEST_CHARS)
+        if safe_digest:
+            lines.append(
+                "Digest crypto-Twitter récent (Otto AI, chatter de marché général — PAS "
+                "spécifique à ce token, texte libre d'un tiers, jamais un fait vérifié, "
+                "à peser comme contexte de timing uniquement) :"
+            )
+            lines.append(safe_digest)
     if polymarket_signals:
         poly_lines = []
         for event in polymarket_signals:
@@ -857,6 +875,21 @@ def _attach_roi(result: VCResult, ctx: TokenScanContext) -> VCResult:
     return result
 
 
+async def _fetch_market_alerts_digest() -> str | None:
+    """Lit la dernière lecture de ``market_alerts`` (jamais de recalcul ici, c'est
+    le heartbeat qui rafraîchit). Dégradation douce : gate OFF, rien encore écrit
+    ou erreur -> ``None``, jamais bloquant pour l'analyse VC. Même doctrine que
+    ``_fetch_sentiment_readings`` juste en dessous."""
+    try:
+        from aria_core.skills.market_alerts import latest_reading
+
+        reading = await latest_reading()
+        return reading.digest_text if reading is not None else None
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.warning("analyze_vc: lecture market_alerts échouée (%s)", exc)
+        return None
+
+
 async def _fetch_sentiment_readings() -> list[dict]:
     """Lit les dernières lectures de ``market_sentiment`` (jamais de recalcul ici,
     c'est le heartbeat qui rafraîchit). Dégradation douce : gate OFF, DB vide ou
@@ -1033,8 +1066,10 @@ async def analyze_vc_with_context(
     sentiment_readings = await _fetch_sentiment_readings()
     polymarket_signals = await _fetch_polymarket_signals()
     product_diligence = await _fetch_product_diligence(ctx)
+    market_alerts_digest = await _fetch_market_alerts_digest()
     untrusted = _build_untrusted_context(
-        ctx, history, sentiment_readings, polymarket_signals, product_diligence
+        ctx, history, sentiment_readings, polymarket_signals, product_diligence,
+        market_alerts_digest,
     )
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"

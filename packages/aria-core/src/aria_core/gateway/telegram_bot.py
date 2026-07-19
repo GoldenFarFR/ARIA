@@ -1944,6 +1944,7 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # liste, jamais une seconde copie qui pourrait diverger (cf. _nl_command_router.py).
 TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("agentwallet", "Solde réel du wallet agent CDP (USDC + ETH gas)"),
+    ("alerts", "Dernier digest crypto-Twitter (Otto AI, x402)"),
     ("api", "Inventaire de toutes les API (URL, configurée, quota en direct)"),
     ("avatar", "Photo de profil ARIA (identity, scene, style, apply)"),
     ("calibrate", "Calibre une affirmation (vrai/faux/incertain)"),
@@ -2657,6 +2658,23 @@ async def _handle_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _reply(message, format_sentiment_report(readings))
 
 
+async def _handle_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/alerts — dernier digest crypto-Twitter (Otto AI, x402), complémentaire à
+    /sentiment (chiffres purs) avec un signal QUALITATIF (chatter de marché récent).
+    Lit ce que le cycle heartbeat `market_alerts_cycle` a déjà calculé -- ne recalcule
+    rien ici (jamais un paiement x402 déclenché par une simple lecture Telegram)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core.skills.market_alerts import format_alerts_report, latest_reading
+
+    reading = await latest_reading()
+    await _reply(message, format_alerts_report(reading))
+
+
 async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/these <adresse> <BUY|WATCH|SELL|AVOID> <thèse...> — journalise un pari (aucune exécution)."""
     if not await _admin_check_reply(update):
@@ -2937,6 +2955,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("cycles", _handle_cycles))
     app.add_handler(CommandHandler("feuvert", _handle_readiness))
     app.add_handler(CommandHandler("sentiment", _handle_sentiment))
+    app.add_handler(CommandHandler("alerts", _handle_alerts))
     app.add_handler(CommandHandler(["langue", "lang", "language"], _handle_langue))
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))

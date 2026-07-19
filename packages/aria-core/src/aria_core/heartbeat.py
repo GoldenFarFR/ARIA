@@ -369,6 +369,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="market_alerts_cycle",
+        name="Alertes de marche (digest crypto-Twitter Otto AI, x402)",
+        description="Rafraichit SANS expiration un digest crypto-Twitter general (alertes critiques, whale/institutionnel, DeFi, autre actu) via Otto AI (x402, 0.001$/appel, plafond x402_budget.py partage). QUALITATIF (texte libre sanitise), complementaire a market_sentiment_cycle (QUANTITATIF, chiffres purs) -- module jumeau separe, jamais une modification de market_sentiment.py. Un echec de paiement/reseau laisse la derniere lecture connue en place. Gate OFF par defaut.",
+        interval_minutes=60,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="bonding_discovery_cycle",
         name="Decouverte multi-launchpad (bonding + gradues)",
         description="Decouvre des candidats sur les launchpads Base actifs (services/launchpad_discovery.py) : tokens ENCORE en courbe de bonding (Virtuals, niche 15% -- filtre dedie bonding_screen.py, jamais le filtre standard qui exigerait a tort une paire DEX) ET tokens a liquidite DEX reelle (Clanker, Virtuals gradues -- rejoignent le pipeline d'absorption standard, pool 85% VC). Launchpads sans client verifie (Flaunch/Zora/Bankr/Ape.store/Mint.club) restent des seams vides, pas appeles. Gate OFF par defaut.",
@@ -553,6 +560,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.market_sentiment import market_sentiment_enabled
 
                 task.enabled = market_sentiment_enabled()
+            if task.id == "market_alerts_cycle":
+                from aria_core.skills.market_alerts import market_alerts_enabled
+
+                task.enabled = market_alerts_enabled()
             if task.id == "bonding_discovery_cycle":
                 from aria_core.skills.bonding_absorber import bonding_discovery_enabled
 
@@ -649,7 +660,7 @@ def heartbeat_pulse() -> dict:
     last_tick = times[-1] if times else None
     safe_keys = (
         "vc_crawl", "vc_weekly_forecast", "vc_radar_x", "vc_thesis_review", "paper_trade_cycle",
-        "paper_weekly_review_cycle", "market_sentiment_cycle",
+        "paper_weekly_review_cycle", "market_sentiment_cycle", "market_alerts_cycle",
     )
     cycles = {k: state[k] for k in safe_keys if state.get(k)}
     return {"alive": last_tick is not None, "last_tick": last_tick, "cycles": cycles}
@@ -1212,6 +1223,13 @@ class AriaHeartbeat:
                     f"[sentiment] {', '.join(result['updated'])} rafraichi(s)"
                     + (f" ; echec : {', '.join(result['failed'])}" if result.get("failed") else ""),
                 )
+
+        elif task_id == "market_alerts_cycle":
+            from aria_core.skills.market_alerts import run_market_alerts_cycle
+
+            result = await run_market_alerts_cycle()
+            if result.get("updated"):
+                append_memory("market_alerts", "[alertes marché] digest Otto AI rafraîchi")
 
         elif task_id == "canonical_facts_sync_cycle":
             from aria_core.truth_ledger.canonical import sync_canonical_facts
