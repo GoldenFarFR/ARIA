@@ -139,7 +139,7 @@ async def test_no_candidate_when_all_hold(monkeypatch):
     async def fake_evaluate(contract, chain):
         return _hold()
 
-    async def fake_cooldown(contract, *, within_minutes):
+    async def fake_cooldown(contract, *, within_minutes, structural_within_minutes=None):
         return False
 
     monkeypatch.setattr(cycle, "get_wallet_balance_summary", fake_summary)
@@ -167,7 +167,7 @@ async def test_evaluate_exception_on_one_candidate_does_not_stop_cycle(monkeypat
             raise RuntimeError("scan cassé")
         return _buy(contract=contract)
 
-    async def fake_cooldown(contract, *, within_minutes):
+    async def fake_cooldown(contract, *, within_minutes, structural_within_minutes=None):
         return False
 
     captured = {}
@@ -204,7 +204,7 @@ async def test_swap_attempted_on_buy_signal_with_correct_args(monkeypatch):
         assert chain == "base"
         return _buy(contract=contract)
 
-    async def fake_cooldown(contract, *, within_minutes):
+    async def fake_cooldown(contract, *, within_minutes, structural_within_minutes=None):
         return False
 
     captured = {}
@@ -252,9 +252,12 @@ async def test_cooldown_skips_recently_failed_candidate(monkeypatch):
         evaluate_called = True
         return _buy(contract=contract)
 
-    async def fake_cooldown(contract, *, within_minutes):
+    async def fake_cooldown(contract, *, within_minutes, structural_within_minutes=None):
         assert contract == "0xoncooldown"
         assert within_minutes == cycle.SWAP_FAILURE_COOLDOWN_MINUTES
+        # 19/07 -- le cooldown structurel étendu (incident URANUS) doit être transmis
+        # à chaque appel, pas seulement documenté en constante inutilisée.
+        assert structural_within_minutes == cycle.STRUCTURAL_SWAP_FAILURE_COOLDOWN_MINUTES
         return True
 
     monkeypatch.setattr(cycle, "get_wallet_balance_summary", fake_summary)
@@ -285,7 +288,7 @@ async def test_respects_max_candidates_per_cycle(monkeypatch):
         checked_contracts.append(contract)
         return _hold()
 
-    async def fake_cooldown(contract, *, within_minutes):
+    async def fake_cooldown(contract, *, within_minutes, structural_within_minutes=None):
         return False
 
     monkeypatch.setattr(cycle, "get_wallet_balance_summary", fake_summary)

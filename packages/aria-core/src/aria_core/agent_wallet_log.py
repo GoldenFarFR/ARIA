@@ -128,7 +128,27 @@ async def list_transactions(limit: int = 200) -> list[dict]:
     return [dict(zip(_COLUMNS, row)) for row in rows]
 
 
-async def recent_failed_swap(token_out: str, *, within_minutes: int) -> bool:
+# 19/07 -- incident réel (URANUS, 2 échecs 05:42/06:44 UTC) : une `ValidationError`
+# Pydantic sur la réponse du SDK CDP (`CommonSwapResponseFees.gasFee` requis mais
+# `None` -- bug confirmé côté SDK Coinbase, cf. CLAUDE.md) est DÉTERMINISTE : le même
+# token échouera identiquement à chaque nouvelle tentative tant que ce bug SDK n'est
+# pas corrigé en amont, contrairement à une panne réseau/RPC transitoire qui peut
+# réussir au coup suivant. Détection par sous-chaîne du message d'erreur -- jamais
+# une nouvelle table, jamais touché à `momentum_blacklist.py` (réservé aux vraies
+# menaces de sécurité, pas aux pannes techniques, doctrine actée le 17/07).
+_STRUCTURAL_FAILURE_MARKERS = ("validation error", "pydantic")
+
+
+def is_structural_swap_failure(reason: str) -> bool:
+    """Vrai si ``reason`` porte la signature d'un échec STRUCTUREL (va se
+    reproduire identiquement), pas un aléa transitoire (réseau, slippage)."""
+    lower = (reason or "").lower()
+    return any(marker in lower for marker in _STRUCTURAL_FAILURE_MARKERS)
+
+
+async def recent_failed_swap(
+    token_out: str, *, within_minutes: int, structural_within_minutes: int | None = None,
+) -> bool:
     """Vrai si la DERNIÈRE tentative de swap vers ``token_out`` (n'importe
     quelle jambe d'entrée) est un échec technique (``status="failed"``) survenu
     il y a moins de ``within_minutes`` -- cooldown léger après une panne
@@ -137,7 +157,14 @@ async def recent_failed_swap(token_out: str, *, within_minutes: int) -> bool:
     nouvelle table -- jamais confondu avec ``momentum_blacklist.py`` (réservé
     aux vraies menaces de sécurité confirmées, jamais une panne technique).
     Si le DERNIER essai pour ce token a réussi ou a été bloqué (pas 'failed'),
-    ou n'existe pas du tout, le token n'est jamais mis en cooldown ici."""
+    ou n'existe pas du tout, le token n'est jamais mis en cooldown ici.
+
+    ``structural_within_minutes`` (19/07, optionnel) : si fourni ET que le
+    DERNIER échec est structurel (``is_structural_swap_failure``), ce cooldown
+    plus long remplace ``within_minutes`` pour ce cas précis -- évite de
+    retenter indéfiniment, toutes les ``within_minutes``, un token qui échouera
+    toujours pour la MÊME raison déterministe. ``None`` (défaut) préserve le
+    comportement historique (un seul cooldown, peu importe la cause)."""
     await _ensure_table()
     token = (token_out or "").strip().lower()
     if not token:
@@ -148,7 +175,7 @@ async def recent_failed_swap(token_out: str, *, within_minutes: int) -> bool:
                 # LOWER() des deux côtés : token_out est stocké TEL QUE fourni par
                 # l'appelant (record_transaction ne normalise pas la casse) --
                 # jamais supposer que tout appelant historique a déjà lowercasé.
-                "SELECT status, created_at FROM agent_wallet_tx_log "
+                "SELECT status, created_at, reason FROM agent_wallet_tx_log "
                 "WHERE action_type = 'swap' AND LOWER(token_out) = ? "
                 "ORDER BY id DESC LIMIT 1",
                 (token,),
@@ -163,4 +190,7 @@ async def recent_failed_swap(token_out: str, *, within_minutes: int) -> bool:
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
     elapsed_min = (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
-    return elapsed_min < within_minutes
+    effective_minutes = within_minutes
+    if structural_within_minutes is not None and is_structural_swap_failure(row[2]):
+        effective_minutes = structural_within_minutes
+    return elapsed_min < effective_minutes

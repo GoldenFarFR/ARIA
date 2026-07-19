@@ -157,3 +157,100 @@ async def test_recent_failed_swap_uses_only_the_most_recent_attempt():
 @pytest.mark.asyncio
 async def test_recent_failed_swap_empty_token_returns_false():
     assert await awl.recent_failed_swap("", within_minutes=60) is False
+
+
+# ── is_structural_swap_failure / cooldown structurel (19/07, incident réel URANUS) ──
+
+
+def test_is_structural_swap_failure_detects_pydantic_validation_error():
+    reason = (
+        "1 validation error for CommonSwapResponseFees\ngasFee\n"
+        "  Input should be a valid dictionary or instance of TokenFee "
+        "[type=model_type, input_value=None, input_type=NoneType]"
+    )
+    assert awl.is_structural_swap_failure(reason) is True
+
+
+def test_is_structural_swap_failure_case_insensitive():
+    assert awl.is_structural_swap_failure("PYDANTIC VALIDATION ERROR occurred") is True
+
+
+def test_is_structural_swap_failure_false_on_transient_reasons():
+    assert awl.is_structural_swap_failure("RPC timeout") is False
+    assert awl.is_structural_swap_failure("slippage dépassé") is False
+    assert awl.is_structural_swap_failure("") is False
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_structural_cooldown_extends_beyond_normal_window():
+    """Reproduit l'incident réel : échec structurel vieux de 2h (au-delà du cooldown
+    normal de 60min) doit rester en cooldown si structural_within_minutes est fourni."""
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_out="0xUranus",
+        status="failed",
+        reason="1 validation error for CommonSwapResponseFees\ngasFee\n  ...",
+    )
+    await _backdate_last_row(120)  # 2h -- dépasse le cooldown normal de 60min
+
+    # Sans cooldown structurel (comportement historique) : le cooldown normal a expiré.
+    assert await awl.recent_failed_swap("0xUranus", within_minutes=60) is False
+    # Avec cooldown structurel (7j) : toujours en cooldown malgré les 2h écoulées.
+    assert (
+        await awl.recent_failed_swap(
+            "0xUranus", within_minutes=60, structural_within_minutes=7 * 24 * 60,
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_structural_cooldown_eventually_expires():
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_out="0xUranus2",
+        status="failed",
+        reason="pydantic validation error on gasFee",
+    )
+    await _backdate_last_row(8 * 24 * 60)  # 8 jours -- dépasse même le cooldown structurel de 7j
+
+    assert (
+        await awl.recent_failed_swap(
+            "0xUranus2", within_minutes=60, structural_within_minutes=7 * 24 * 60,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_transient_failure_ignores_structural_cooldown():
+    """Un échec TRANSITOIRE (pas structurel) continue d'utiliser within_minutes
+    classique, même quand structural_within_minutes est fourni -- pas de sur-cooldown
+    injustifié sur une simple panne réseau."""
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_out="0xTransient", status="failed", reason="RPC timeout",
+    )
+    await _backdate_last_row(120)  # 2h -- au-delà du cooldown normal de 60min
+
+    assert (
+        await awl.recent_failed_swap(
+            "0xTransient", within_minutes=60, structural_within_minutes=7 * 24 * 60,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_recent_failed_swap_defaults_preserve_historical_behavior():
+    """Non-régression explicite : sans structural_within_minutes (défaut None), un
+    échec structurel se comporte EXACTEMENT comme avant ce correctif."""
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_out="0xLegacy",
+        status="failed",
+        reason="1 validation error for CommonSwapResponseFees",
+    )
+    assert await awl.recent_failed_swap("0xLegacy", within_minutes=60) is True
+    await _backdate_last_row(120)
+    assert await awl.recent_failed_swap("0xLegacy", within_minutes=60) is False

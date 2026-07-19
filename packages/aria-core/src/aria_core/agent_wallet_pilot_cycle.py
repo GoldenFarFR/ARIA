@@ -37,6 +37,17 @@ logger = logging.getLogger(__name__)
 
 CHAIN = "base"
 SWAP_FAILURE_COOLDOWN_MINUTES = 60
+# 19/07 -- incident réel URANUS (2 échecs consécutifs, `ValidationError` Pydantic sur
+# `CommonSwapResponseFees.gasFee`, bug confirmé côté SDK CDP Coinbase, cf. CLAUDE.md) :
+# le cooldown de 60min coïncide avec la cadence du cycle heartbeat, donc un échec
+# STRUCTUREL (va se reproduire identiquement, contrairement à une panne réseau
+# transitoire) pouvait faire retenter le même token indéfiniment, une fois par cycle,
+# sans jamais progresser vers un autre candidat. 7 jours -- assez long pour ne pas
+# gaspiller un cycle par heure sur un token structurellement cassé, assez court pour
+# redonner sa chance si Coinbase corrige son SDK entretemps. Aucune perte de fonds
+# possible dans les deux cas (le swap échoue AVANT toute signature) -- amélioration de
+# PROGRÈS, pas un changement de garde-fou de sécurité.
+STRUCTURAL_SWAP_FAILURE_COOLDOWN_MINUTES = 7 * 24 * 60
 MAX_CANDIDATES_PER_CYCLE = 5
 
 # Raisons de HOLD qui signalent un manque de DONNÉES plutôt qu'un rejet dur --
@@ -90,7 +101,9 @@ async def run_agent_wallet_pilot_cycle() -> dict:
         checked += 1
 
         if await agent_wallet_log.recent_failed_swap(
-            contract, within_minutes=SWAP_FAILURE_COOLDOWN_MINUTES,
+            contract,
+            within_minutes=SWAP_FAILURE_COOLDOWN_MINUTES,
+            structural_within_minutes=STRUCTURAL_SWAP_FAILURE_COOLDOWN_MINUTES,
         ):
             continue
 
