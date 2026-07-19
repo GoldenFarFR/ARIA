@@ -3205,6 +3205,50 @@ Systems/x402scan`, `docs.cdp.coinbase.com/x402/quickstart-for-buyers`).
   en remplacement ou en complément de `aria_core.gateway.x_twitter` (API X officielle,
   `x_research_budget.py`, 100 req/semaine) — rien câblé ce soir, juste validé.
 
+**19/07 (suite) — Otto AI (#107) tranché et câblé, correctif `known_links` sur un vrai
+raté observé en direct sur Telegram — TOUT DÉPLOYÉ ET VÉRIFIÉ (`0c2990ed`).**
+- **`ARIA_CONVICTION_RESEARCH_ENABLED` activé en prod** sur demande opérateur explicite
+  ("active aria conviction et evallue otoo") — vérifié via `docker exec aria-api env`,
+  pas juste supposé depuis le texte de sortie du déploiement.
+- **Otto AI (#107) livré : `services/ottoai.py` + `skills/market_alerts.py`, gate
+  `ARIA_MARKET_ALERTS_ENABLED` OFF par défaut.** Module JUMEAU de `market_sentiment.py`
+  (même doctrine « sans expiration », même dôme) mais signal QUALITATIF (chatter/alertes
+  de marché général, texte libre d'un tiers) plutôt que quantitatif (RSI/Bollinger) — à
+  distinguer de `conviction_research.py` (diligence PAR PROJET, décision séparée #111/#112).
+  Câblé sur 3 surfaces : contexte LLM de `/vc` (sanitisé, `<donnees_non_fiables>`, mandat
+  #192), cycle heartbeat horaire, commande Telegram `/alerts` (admin-only). Coût 0,001$/appel
+  (le moins cher testé du catalogue Bazaar), couvert par le plafond `x402_budget.py`
+  existant. Otto AI + RugCheck.xyz (#207, déjà construit mais jamais enregistré) ajoutés à
+  `api_registry.py`/`/api` au passage — même gap pattern, corrigés ensemble.
+- **Bug réel trouvé et corrigé, pas un simple raffinement — `conviction_research.py`
+  ignorait `project_links` (DexScreener, site/X DÉCLARÉS par le projet, déjà fetché, zéro
+  appel réseau supplémentaire) et cherchait le handle X uniquement via une recherche
+  Tavily indépendante.** Trouvé en direct sur Telegram (capture opérateur) : question
+  sur les projets à forte conviction du moment, ARIA répond deux scores faibles (ZRO,
+  SOGNI 2.0/10 « corroboration non trouvée / handle introuvable ») — l'opérateur montre
+  que SOGNI a pourtant un lien X bien visible sur DexScreener, et pousse directement
+  (« c'est a toi de trouver seul le handle, pourquoi tu le trouve pas ? »). Root cause
+  confirmée en lisant le code : le pipeline ne consultait jamais `PairSnapshot.
+  project_links` (`services/dexscreener.py`, `_extract_project_links`, parse déjà
+  `info.websites`/`info.socials`), uniquement Tavily. Corrigé : `research_project_
+  potential()` gagne un paramètre `known_links` — les liens DexScreener sont extraits en
+  PRIORITÉ (site/X), jamais écrasés par un résultat Tavily ultérieur (Tavily ne comble
+  que ce qui manque encore). `momentum_entry.py` transmet `best.project_links` au point
+  d'appel. Portée : ne corrige que le cas où DexScreener a bien le lien (un projet qui ne
+  le déclare nulle part reste non trouvé, comportement inchangé, jamais un lien inventé).
+  **Correctif de comportement sur un pipeline déjà actif en prod** (gate ON depuis ce
+  segment) — déployé directement, pas batché, conforme à la doctrine de cadence de
+  déploiement déjà gravée (bug qui pollue une capacité en cours d'exécution).
+- Suite complète vérifiée verte (6046 passed, mêmes 5 échecs `test_proactive*`
+  pré-existants sans rapport) + `test_coherence.py` (81 passed) après les deux
+  chantiers. Deux commits séparés (`2f2c4cf2` Otto AI, `0c2990ed` fix `known_links`),
+  poussés et déployés ensemble (un seul rebuild Docker, doctrine de cadence de
+  déploiement respectée — le fix `known_links` étant le dernier changement d'une série
+  cohérente touchant `conviction_research.py`/`momentum_entry.py`).
+- **Tâche #107 close.** Tâches #111/#112 (câbler `twit.sh` dans `conviction_research.py`)
+  restent ouvertes, prochaine étape logique de la même directive opérateur
+  (« integre tous se qui permet que aria soit plus efficace »).
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
