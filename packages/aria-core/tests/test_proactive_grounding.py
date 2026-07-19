@@ -305,3 +305,188 @@ async def test_run_founder_ping_no_last_initiative_no_accountability_block(monke
         await proactive.run_founder_ping(lang="fr")
 
     assert "DERNIÈRE initiative" not in captured["system"]
+
+
+# ── Garde de qualité déterministe post-génération (#141, 19/07) ────────────────────
+# Réponse au feedback opérateur direct sur une initiative confabulée ("si c'est des
+# initiatives pourries autant qu'elle ne le dise pas") -- 2e récurrence du même bug
+# de fond que le 14/07 (finaliser un pronostic non échu), cette fois sous la forme
+# d'un "verdict chiffré sur la fiabilité" de pronostics tous non résolus, plus une
+# initiative ACP relancée alors qu'ACP est abandonné par décision.
+
+@pytest.mark.asyncio
+async def test_real_state_snapshot_flags_zero_resolved_predictions(monkeypatch):
+    async def fake_top_candidates(n):
+        return []
+
+    async def fake_total_count():
+        return 14
+
+    async def fake_open_preds(limit=1000):
+        return []
+
+    async def fake_metrics():
+        return {"closed": 0, "open": 14}
+
+    monkeypatch.setattr("aria_core.skills.candidate_ranking.top_candidates", fake_top_candidates)
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", fake_total_count)
+    monkeypatch.setattr("aria_core.vc_predictions.list_open_predictions", fake_open_preds)
+    monkeypatch.setattr("aria_core.vc_predictions.metrics", fake_metrics)
+
+    snapshot = await proactive._real_state_snapshot()
+    assert "0 pronostic RÉSOLU" in snapshot
+    assert "aucun taux de réussite/fiabilité" in snapshot
+
+
+@pytest.mark.asyncio
+async def test_real_state_snapshot_omits_zero_resolved_flag_once_some_resolve(monkeypatch):
+    async def fake_top_candidates(n):
+        return []
+
+    async def fake_total_count():
+        return 14
+
+    async def fake_open_preds(limit=1000):
+        return []
+
+    async def fake_metrics():
+        return {"closed": 3, "open": 11}
+
+    monkeypatch.setattr("aria_core.skills.candidate_ranking.top_candidates", fake_top_candidates)
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", fake_total_count)
+    monkeypatch.setattr("aria_core.vc_predictions.list_open_predictions", fake_open_preds)
+    monkeypatch.setattr("aria_core.vc_predictions.metrics", fake_metrics)
+
+    snapshot = await proactive._real_state_snapshot()
+    assert "0 pronostic RÉSOLU" not in snapshot
+
+
+def test_quality_violation_blocks_reliability_claim_with_zero_resolved():
+    reply = "Je propose un verdict chiffré sur la fiabilité de mes 14 derniers pronostics."
+    violation = proactive._founder_ping_quality_violation(reply, resolved_count=0)
+    assert violation is not None
+    assert "fiabilit" in violation
+
+
+def test_quality_violation_allows_reliability_claim_once_some_resolved():
+    reply = "Je propose un verdict chiffré sur la fiabilité de mes 14 derniers pronostics."
+    violation = proactive._founder_ping_quality_violation(reply, resolved_count=3)
+    assert violation is None
+
+
+def test_quality_violation_blocks_abandoned_acp_mention():
+    reply = "Je propose de relancer l'initiative ACP marketplace, restée sans suite."
+    violation = proactive._founder_ping_quality_violation(reply, resolved_count=0)
+    assert violation is not None
+    assert "abandonné" in violation
+
+
+def test_quality_violation_blocks_dexpulse_mention_even_with_resolved_predictions():
+    """Le sujet abandonné reste bloqué indépendamment du compte de pronostics résolus
+    -- les deux règles sont indépendantes, pas un seul garde combiné."""
+    reply = "On pourrait relancer DEXPulse comme produit phare."
+    violation = proactive._founder_ping_quality_violation(reply, resolved_count=5)
+    assert violation is not None
+
+
+def test_quality_violation_passes_clean_reply():
+    reply = "Je propose d'analyser le token 0xabc... via /vc, thèse basée sur la liquidité réelle."
+    assert proactive._founder_ping_quality_violation(reply, resolved_count=0) is None
+
+
+@pytest.mark.asyncio
+async def test_run_founder_ping_suppresses_reply_that_violates_quality_gate(monkeypatch):
+    """Bout en bout : si le LLM produit malgré tout un texte qui viole le garde
+    (ici : relance ACP), run_founder_ping ne renvoie RIEN -- jamais envoyé à
+    Telegram -- plutôt qu'un message avec un défaut connu.
+
+    ``monkeypatch.setattr`` (jamais une mutation directe de ``get_settings()``,
+    singleton partagé sans nettoyage entre tests -- cause probable des échecs
+    déjà connus et indépendants de ce correctif sur les 4 autres tests
+    ``run_founder_ping`` de ce fichier, visibles seulement en suite complète)."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "aria_proactive_ideas", True)
+    monkeypatch.setattr(settings, "aria_llm_enabled", True)
+    monkeypatch.setattr(settings, "llm_api_key", "x")
+    monkeypatch.setattr(settings, "llm_provider", "groq")
+    monkeypatch.setattr(settings, "telegram_bot_token", "t")
+    monkeypatch.setattr(settings, "telegram_admin_ids", "1")
+
+    async def fake_top_candidates(n):
+        return []
+
+    async def fake_total_count():
+        return 0
+
+    async def fake_open_preds(limit=1000):
+        return []
+
+    async def fake_metrics():
+        return {"closed": 0}
+
+    async def fake_build_context(public=False):
+        return "contexte"
+
+    async def fake_chat(user, system, **kwargs):
+        return "Je propose de relancer l'initiative ACP marketplace, restée sans suite."
+
+    logged = []
+
+    monkeypatch.setattr("aria_core.skills.candidate_ranking.top_candidates", fake_top_candidates)
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", fake_total_count)
+    monkeypatch.setattr("aria_core.vc_predictions.list_open_predictions", fake_open_preds)
+    monkeypatch.setattr("aria_core.vc_predictions.metrics", fake_metrics)
+    monkeypatch.setattr("aria_core.proactive.read_recent_memory", lambda category, limit: [])
+    monkeypatch.setattr("aria_core.proactive.build_llm_context", fake_build_context)
+    monkeypatch.setattr("aria_core.proactive.chat_with_context", fake_chat)
+    monkeypatch.setattr(
+        "aria_core.proactive.append_memory",
+        lambda category, text: logged.append(text),
+    )
+
+    reply = await proactive.run_founder_ping(lang="fr")
+
+    assert reply is None
+    assert any("[founder_ping][BLOQUÉ" in entry for entry in logged)
+
+
+@pytest.mark.asyncio
+async def test_run_founder_ping_allows_clean_reply_through(monkeypatch):
+    """Contraste direct : un texte propre (aucune violation) passe normalement."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "aria_proactive_ideas", True)
+    monkeypatch.setattr(settings, "aria_llm_enabled", True)
+    monkeypatch.setattr(settings, "llm_api_key", "x")
+    monkeypatch.setattr(settings, "llm_provider", "groq")
+    monkeypatch.setattr(settings, "telegram_bot_token", "t")
+    monkeypatch.setattr(settings, "telegram_admin_ids", "1")
+
+    async def fake_top_candidates(n):
+        return []
+
+    async def fake_total_count():
+        return 0
+
+    async def fake_open_preds(limit=1000):
+        return []
+
+    async def fake_metrics():
+        return {"closed": 0}
+
+    async def fake_build_context(public=False):
+        return "contexte"
+
+    async def fake_chat(user, system, **kwargs):
+        return "Je propose d'analyser un nouveau candidat via /vc dès qu'un token émerge."
+
+    monkeypatch.setattr("aria_core.skills.candidate_ranking.top_candidates", fake_top_candidates)
+    monkeypatch.setattr("aria_core.vc_predictions.total_predictions_count", fake_total_count)
+    monkeypatch.setattr("aria_core.vc_predictions.list_open_predictions", fake_open_preds)
+    monkeypatch.setattr("aria_core.vc_predictions.metrics", fake_metrics)
+    monkeypatch.setattr("aria_core.proactive.read_recent_memory", lambda category, limit: [])
+    monkeypatch.setattr("aria_core.proactive.build_llm_context", fake_build_context)
+    monkeypatch.setattr("aria_core.proactive.chat_with_context", fake_chat)
+
+    reply = await proactive.run_founder_ping(lang="fr")
+
+    assert reply == "Je propose d'analyser un nouveau candidat via /vc dès qu'un token émerge."

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from aria_core.llm import chat_with_context, is_llm_configured
 from aria_core.memory import append_memory, build_llm_context, read_recent_memory
@@ -58,10 +59,48 @@ async def _real_state_snapshot() -> str:
         else:
             status = "aucun pronostic ouvert"
         lines.append(f"Track-record : {total} pronostic(s) au total, {status}.")
+        # 19/07 -- même famille que la distinction due_now/open_total ci-dessus (2e
+        # récurrence du même bug de fond, formulation différente : une initiative a
+        # proposé un "verdict chiffré sur la fiabilité" de pronostics tous encore
+        # ouverts). Rendre le fait explicite ICI, dans le contexte, pour que le LLM
+        # n'ait jamais à le déduire lui-même.
+        resolved = (await vc_predictions.metrics())["closed"]
+        if resolved == 0:
+            lines.append(
+                "0 pronostic RÉSOLU à ce jour -- aucun taux de réussite/fiabilité "
+                "réel n'est calculable, ne propose jamais un verdict chiffré là-dessus."
+            )
     except Exception as exc:  # noqa: BLE001
         logger.info("founder_ping: snapshot vc_predictions échoué (%s)", exc)
 
     return "\n".join(lines)
+
+
+# 19/07 -- garde déterministe POST-génération (#141), suite au feedback opérateur
+# direct sur une initiative confabulée ("si c'est des initiatives pourries autant
+# qu'elle ne le dise pas"). C'est la 2e récurrence du même bug de fond sous une
+# formulation différente (14/07 : proposait de "finaliser" un pronostic non échu ;
+# 19/07 : proposait un "verdict chiffré sur la fiabilité" de pronostics tous non
+# résolus, ET a relancé "l'initiative ACP marketplace" comme si elle était encore
+# ouverte alors qu'ACP est abandonné par décision). Le contexte/prompt (ci-dessus)
+# donne déjà les bons faits au LLM -- cette garde est le filet de sécurité si,
+# malgré tout, il les ignore : dans ce cas, le message n'est JAMAIS envoyé (retourne
+# None) plutôt que d'atterrir sur Telegram avec un défaut connu.
+_RESOLUTION_DEPENDENT_CLAIM_RE = re.compile(
+    r"fiabilit[ée]|taux de r[ée]ussite|win\s*rate|pr[ée]cision|reliability|accuracy|"
+    r"finaliser[^.]{0,30}pronostic",
+    re.IGNORECASE,
+)
+_ABANDONED_TOPIC_RE = re.compile(r"\bACP\b|marketplace|DEXPulse|Aria Market", re.IGNORECASE)
+
+
+def _founder_ping_quality_violation(reply: str, *, resolved_count: int) -> str | None:
+    """Retourne une courte raison si ``reply`` viole une garde connue, sinon None."""
+    if resolved_count == 0 and _RESOLUTION_DEPENDENT_CLAIM_RE.search(reply):
+        return "revendique une fiabilité/un taux de réussite alors qu'aucun pronostic n'est résolu"
+    if _ABANDONED_TOPIC_RE.search(reply):
+        return "mentionne un sujet déjà abandonné (ACP/marketplace/DEXPulse/Aria Market)"
+    return None
 
 
 def _last_initiative_recap() -> str:
@@ -98,7 +137,12 @@ async def run_founder_ping(lang: str = "fr") -> str | None:
         accountability_rule = (
             "\nTa DERNIÈRE initiative (ci-dessous) — commence par vérifier si tu l'as "
             "réellement tenue avant d'en proposer une nouvelle. Si non tenue, dis-le "
-            "honnêtement en une phrase plutôt que d'enchaîner une promesse déconnectée :\n"
+            "honnêtement en une phrase plutôt que d'enchaîner une promesse déconnectée. "
+            "ATTENTION (19/07, incident réel) : si cette dernière initiative portait sur "
+            "ACP/marketplace/Stripe/DEXPulse/Aria Market — ce sont des sujets DÉJÀ "
+            "ABANDONNÉS par décision (pas un oubli à corriger, pas une promesse à "
+            "tenir) — ne la traite JAMAIS comme un engagement encore ouvert, ignore-la "
+            "et propose autre chose :\n"
             f"{last_initiative}\n"
         )
 
@@ -147,5 +191,19 @@ async def run_founder_ping(lang: str = "fr") -> str | None:
     )
     if not reply or not reply.strip():
         return None
+    reply = reply.strip()
+
+    try:
+        from aria_core import vc_predictions
+
+        resolved_count = (await vc_predictions.metrics())["closed"]
+    except Exception:  # noqa: BLE001 — fail-closed : compte inconnu = traité comme 0
+        resolved_count = 0
+    violation = _founder_ping_quality_violation(reply, resolved_count=resolved_count)
+    if violation:
+        logger.warning("founder_ping: initiative bloquée par le garde de qualité (%s)", violation)
+        append_memory("proactive", f"[founder_ping][BLOQUÉ: {violation}] {reply[:300]}")
+        return None
+
     append_memory("proactive", f"[founder_ping] {reply[:300]}")
-    return reply.strip()
+    return reply
