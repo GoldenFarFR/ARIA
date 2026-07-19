@@ -159,6 +159,7 @@ def _static_entries() -> list[ApiEntry]:
         ApiEntry("Telegram Bot API", "Infra", "https://api.telegram.org", _env_present("TELEGRAM_BOT_TOKEN")),
         ApiEntry("Coinbase CDP (agent wallet)", "Paiements", "https://api.cdp.coinbase.com", _env_present("COINBASE_CDP_API_KEY_PRIVATE_KEY")),
         ApiEntry("Cybercentry", "Paiements", "https://api.cybercentry.co.uk", True, note="pay-per-call via x402 — voir le budget hebdo x402 ci-dessous"),
+        ApiEntry("x402 Bazaar (découverte CDP)", "Paiements", "https://api.cdp.coinbase.com", True, note="lecture seule, sans clé — découverte de services x402, jamais un paiement"),
         ApiEntry("Etherscan V2", "Données on-chain", "https://api.etherscan.io", _env_present("ETHERSCAN_API_KEY"), note="clé stockée, inerte — aucun code ne la consomme encore"),
         ApiEntry("Stripe", "Paiements", "https://api.stripe.com", _env_present("STRIPE_SECRET_KEY")),
 

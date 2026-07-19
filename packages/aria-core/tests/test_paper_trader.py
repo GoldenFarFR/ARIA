@@ -5,6 +5,7 @@ import asyncio
 
 import pytest
 
+from aria_core import momentum_funnel_log
 from aria_core import paper_trader as pt
 
 A = "0x" + "a" * 40
@@ -28,6 +29,11 @@ def tmp_db(tmp_path, monkeypatch):
     # fermée -> RuntimeError. Un Lock frais par test, jamais un changement de comportement
     # en production.
     monkeypatch.setattr(pt, "_run_cycle_lock", asyncio.Lock())
+    # 19/07 -- run_paper_cycle persiste désormais le funnel via momentum_funnel_log.py,
+    # dont le DB_PATH est calculé UNE FOIS à l'import (même piège que momentum_blacklist.py,
+    # cf. test_momentum_blacklist.py) : sans cette isolation, tous les tests de ce fichier
+    # écriraient silencieusement dans le même chemin figé au premier import du module.
+    monkeypatch.setattr(momentum_funnel_log, "DB_PATH", str(tmp_path / "momentum_funnel.db"))
     return tmp_path
 
 
@@ -168,6 +174,29 @@ async def test_run_paper_cycle_reports_momentum_funnel_by_reason_code(tmp_db):
         "unspecified": 1,
     }
     assert act["opened"] == []
+
+
+@pytest.mark.asyncio
+async def test_run_paper_cycle_persists_funnel_to_momentum_funnel_log(tmp_db):
+    """19/07 -- le funnel calculé par run_paper_cycle doit aussi être PERSISTÉ (pas
+    seulement retourné dans ``actions`` puis loggué et perdu, cf. commentaire dans
+    paper_trader.py) -- réponse à la proposition d'ARIA de cumuler ce compteur dans
+    le temps plutôt que de le voir disparaître à chaque cycle."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    A_ = "0x" + "1" * 40
+
+    async def analyzer(contract):
+        return {"action": "HOLD", "hold_reason": "no_entry_signal"}
+
+    async def price_lookup(contract):
+        return 1.0
+
+    await pt.run_paper_cycle(
+        candidates=[A_], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    summary = await momentum_funnel_log.summarize_since(48)
+    assert summary == {"no_entry_signal": 1}
 
 
 @pytest.mark.asyncio

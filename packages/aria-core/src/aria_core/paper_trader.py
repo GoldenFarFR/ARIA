@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from aria_core import momentum_funnel_log
 from aria_core.paths import aria_db_path
 from aria_core.services.dexscreener import token_url
 
@@ -1534,5 +1535,15 @@ async def _run_paper_cycle_locked(
     if funnel:
         actions["momentum_funnel"] = funnel
         logger.info("paper_cycle funnel (nouvelles entrées, %d candidats) : %s", len(candidates), funnel)
+        # 19/07 -- persiste ce cycle pour un cumul consultable dans le temps
+        # (momentum_funnel_log.py) : sans ça, ce funnel n'existait QUE dans les logs
+        # applicatifs, jamais accumulé -- répond à la proposition d'ARIA elle-même
+        # ("on log pendant 48h le compteur par étape... preuve avant opinion").
+        # Best-effort : une panne d'écriture ne doit jamais casser un cycle de
+        # trading réel pour une simple persistance de télémétrie.
+        try:
+            await momentum_funnel_log.record_funnel(funnel)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("paper_cycle: persistance du funnel échouée (%s)", exc)
 
     return actions

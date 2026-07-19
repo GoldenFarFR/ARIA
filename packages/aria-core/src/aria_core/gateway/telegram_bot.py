@@ -519,6 +519,39 @@ async def _handle_api(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _reply(update.message, msg)
 
 
+async def _handle_funnel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/funnel [heures] -- 19/07 : cumul du funnel de rejet momentum (pourquoi un
+    candidat n'a pas mené à un achat -- honeypot/R-R/liquidité/etc.), persisté par
+    momentum_funnel_log.py. Réponse à la proposition d'ARIA elle-même en conversation
+    Telegram ("preuve avant opinion"). Défaut 48h, admin-only, lecture seule."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.momentum_funnel_log import format_funnel_summary, summarize_since
+
+    hours = 48.0
+    if context.args:
+        try:
+            hours = float(context.args[0])
+        except ValueError:
+            pass
+    summary = await summarize_since(hours=hours)
+    await _reply(update.message, format_funnel_summary(summary, hours=hours))
+
+
+async def _handle_x402_trending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/x402trending [mots-clés] -- 19/07 : découverte de services x402 (registre CDP
+    officiel), triés par volume d'appels réel sur 30j -- réponse à "il n'existe pas un
+    top tendance des meilleurs outils x402 ?". Lecture seule : ne déclenche AUCUN
+    paiement, jamais un remplacement du plafond x402_budget existant (5$/semaine)."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.services.x402_bazaar import discover_trending, format_trending_report
+
+    query = " ".join(context.args).strip() if context.args else ""
+    result = await discover_trending(query=query)
+    await _reply(update.message, format_trending_report(result, query=query))
+
+
 async def _reply_handles_registry(message, args: list[str]) -> None:
     """Liste ou modifie le registre handles X (args = action + paramètres)."""
     from aria_core.handle_registry import (
@@ -1900,6 +1933,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("experiment", "Crée un sandbox d'expérimentation GitHub"),
     ("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
     ("feuvert", "Scorecard avant argent réel (8 cases)"),
+    ("funnel", "Cumul du funnel de rejet momentum (48h par défaut)"),
     ("github", "Réparer/éditer une réponse showcase PR"),
     ("handles", "Registre des handles X (add/remove/alias/pack)"),
     ("issue", "Clôture une thèse avec son résultat"),
@@ -1926,6 +1960,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("watchlist", "Top candidats du pool screené"),
     ("whoami", "Ton identité/rôle Telegram (ID, admin ou non)"),
     ("x", "Statut/profil/publication X (status, profile, compose, post)"),
+    ("x402trending", "Top tendance des services x402 (volume 30j, découverte seule)"),
 ]
 
 
@@ -2868,6 +2903,8 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("ledger", _handle_ledger))
     app.add_handler(CommandHandler("agentwallet", _handle_agent_wallet))
     app.add_handler(CommandHandler("api", _handle_api))
+    app.add_handler(CommandHandler("funnel", _handle_funnel))
+    app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
