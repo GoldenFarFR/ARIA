@@ -168,7 +168,9 @@ async def test_fetch_web_snippets_tavily_reorders_by_published_date(monkeypatch)
             available=True,
         )
 
-    monkeypatch.setattr("aria_core.services.tavily.tavily_client.search", _fake_search)
+    from aria_core.services import tavily
+
+    monkeypatch.setattr(type(tavily.tavily_client), "search", staticmethod(_fake_search))
 
     sources = await web_verify.fetch_web_snippets("le prix du bitcoin monte ou descend ?", max_snippets=1)
     assert len(sources) == 1

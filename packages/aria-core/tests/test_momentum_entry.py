@@ -279,7 +279,7 @@ async def test_honeypot_clear(monkeypatch):
         assert chain_id == "8453"
         return FakeSecurity()
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
     assert clear is True
     assert code == "honeypot_clear"
@@ -292,7 +292,7 @@ async def test_honeypot_confirmed_rejects(monkeypatch):
     async def fake_get_token_security(address, *, chain_id):
         return FakeSecurity(is_honeypot=True)
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     clear, reason, code = await me._check_honeypot(CONTRACT, "base")
     assert clear is False
     assert "honeypot" in reason.lower()
@@ -313,7 +313,7 @@ async def test_honeypot_unavailable_fails_closed(monkeypatch):
     async def fake_get_token_security(address, *, chain_id):
         return FakeSecurity(available=False, error="timeout")
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     clear, reason, code = await me._check_honeypot(CONTRACT, "base")
     assert clear is False
     assert "indisponible" in reason.lower()
@@ -338,7 +338,7 @@ async def test_honeypot_translates_chain_id_for_solana(monkeypatch):
         seen["chain_id"] = chain_id
         return FakeSecurity()
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     await me._check_honeypot(CONTRACT, "solana")
     assert seen["chain_id"] == "solana"
 
@@ -360,7 +360,7 @@ async def test_rugcheck_fallback_only_fires_on_solana_no_data(monkeypatch):
         called["rugcheck"] = True
         return FakeRugCheckResult()
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
     clear, reason, code = await me._check_honeypot(CONTRACT, "base")
     assert clear is False
@@ -384,7 +384,7 @@ async def test_rugcheck_fallback_not_used_on_real_goplus_outage(monkeypatch):
         called["rugcheck"] = True
         return FakeRugCheckResult()
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
     clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
     assert clear is False
@@ -403,7 +403,7 @@ async def test_rugcheck_fallback_clears_when_confirmed_clean(monkeypatch):
         assert mint == CONTRACT
         return FakeRugCheckResult(available=True, rugged=False, danger_risks=[])
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
     clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
     assert clear is True
@@ -423,7 +423,7 @@ async def test_rugcheck_fallback_rejects_on_danger_risk(monkeypatch):
             available=True, rugged=False, danger_risks=["Creator history of rugged tokens"]
         )
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
     clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
     assert clear is False
@@ -441,7 +441,7 @@ async def test_rugcheck_fallback_rejects_on_rugged_flag(monkeypatch):
     async def fake_rugcheck(mint):
         return FakeRugCheckResult(available=True, rugged=True, danger_risks=[])
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
     clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
     assert clear is False
@@ -460,7 +460,7 @@ async def test_rugcheck_fallback_fails_closed_when_also_unavailable(monkeypatch)
     async def fake_rugcheck(mint):
         return FakeRugCheckResult(available=False, rugged=None, danger_risks=[])
 
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
     clear, reason, code = await me._check_honeypot(CONTRACT, "solana")
     assert clear is False
@@ -490,7 +490,7 @@ async def test_fetch_candles_uses_geckoterminal_first(monkeypatch):
         cmc_called = True
         return cmc.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
 
-    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
 
     result = await me._fetch_candles("0xpool", "base")
@@ -511,7 +511,7 @@ async def test_fetch_candles_falls_back_to_coinmarketcap(monkeypatch):
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
         return cmc.OHLCVResult(candles=cmc_candles, available=True, error=None)
 
-    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
 
     result = await me._fetch_candles("0xpool", "base")
@@ -529,7 +529,7 @@ async def test_fetch_candles_falls_back_to_dexscreener_synthesis(monkeypatch):
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
         return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
 
-    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
 
@@ -560,7 +560,7 @@ async def test_fetch_candles_falls_back_to_mobula_when_configured(monkeypatch):
         assert blockchain == "base"
         return gt.OHLCVResult(candles=mobula_candles, available=True, error=None)
 
-    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
     monkeypatch.setenv("MOBULA_API_KEY", "test-key")
@@ -589,7 +589,7 @@ async def test_fetch_candles_skips_mobula_when_not_configured(monkeypatch):
         called["mobula"] = True
         return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
 
-    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)
@@ -620,7 +620,7 @@ async def test_fetch_candles_skips_mobula_without_contract(monkeypatch):
         called["mobula"] = True
         return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
 
-    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
     monkeypatch.setenv("MOBULA_API_KEY", "test-key")
@@ -653,7 +653,7 @@ async def test_fetch_candles_mobula_not_tried_when_coinmarketcap_succeeds(monkey
         called["mobula"] = True
         return gt.OHLCVResult(candles=[], available=False, error="ne devrait jamais être appelé")
 
-    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
     monkeypatch.setenv("MOBULA_API_KEY", "test-key")
@@ -680,7 +680,7 @@ async def test_fetch_candles_falls_back_to_dune_as_last_resort(monkeypatch):
     async def fake_dune_price_history(contract_address, *, blockchain="base", lookback_hours=48, performance="medium"):
         return dune.DunePriceHistoryResult(candles=dune_candles, available=True, error=None)
 
-    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(dune, "get_price_history", fake_dune_price_history)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
@@ -705,7 +705,7 @@ async def test_fetch_candles_returns_empty_when_everything_fails(monkeypatch):
     async def fake_dune_price_history(contract_address, *, blockchain="base", lookback_hours=48, performance="medium"):
         return dune.DunePriceHistoryResult(candles=[], available=False, error="DUNE_API_KEY absente")
 
-    monkeypatch.setattr(gt.geckoterminal_client, "get_ohlcv", fake_gt_ohlcv)
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(dune, "get_price_history", fake_dune_price_history)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)

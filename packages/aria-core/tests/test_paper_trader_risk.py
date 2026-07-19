@@ -123,7 +123,7 @@ async def test_capture_entry_snapshot_reuses_ctx_and_adds_owner(monkeypatch):
     # par un AUTRE fichier de test plus tôt dans la suite (gotcha connu de
     # monkeypatch.setattr sur un attribut qui ne résout QUE via la classe : au undo, il
     # se restaure comme attribut d'INSTANCE, ce qui masque tout futur patch de classe).
-    monkeypatch.setattr(bs.blockscout_client, "read_owner", fake_read_owner)
+    monkeypatch.setattr(type(bs.blockscout_client), "read_owner", staticmethod(fake_read_owner))
 
     ctx = FakeCtx(is_honeypot=False, cannot_sell=False, hidden_owner=False,
                   can_take_back_ownership=False, contract_verified=True)
@@ -183,9 +183,9 @@ def _patch_clients(monkeypatch, *, security=None, flags=None, owner=("0x" + "0" 
     # classes -- voir le commentaire de test_capture_entry_snapshot_reuses_ctx_and_adds_owner
     # sur le gotcha monkeypatch classe-vs-instance qui rend un patch de classe silencieusement
     # sans effet si un AUTRE fichier de test a déjà patché l'instance plus tôt dans la suite.
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", fake_get_token_security)
-    monkeypatch.setattr(bs.blockscout_client, "check_contract_flags", fake_check_contract_flags)
-    monkeypatch.setattr(bs.blockscout_client, "read_owner", fake_read_owner)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    monkeypatch.setattr(type(bs.blockscout_client), "check_contract_flags", staticmethod(fake_check_contract_flags))
+    monkeypatch.setattr(type(bs.blockscout_client), "read_owner", staticmethod(fake_read_owner))
 
 
 @pytest.mark.asyncio
@@ -309,7 +309,7 @@ async def test_rescan_tolerates_goplus_failure(monkeypatch):
         raise RuntimeError("boom")
 
     _patch_clients(monkeypatch)
-    monkeypatch.setattr(gp.goplus_client, "get_token_security", failing_security)
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(failing_security))
 
     # Ne doit jamais lever -- dégrade juste ce sous-signal.
     result = await risk.rescan_open_position(_position())
@@ -331,7 +331,7 @@ async def test_usdc_depeg_pct_computes_deviation(monkeypatch):
     async def fake_get_simple_price(coin_ids, *, vs_currencies=None):
         return FakePriceResult(available=True, prices={"usd-coin": {"usd": 0.97}})
 
-    monkeypatch.setattr(cg.coingecko_client, "get_simple_price", fake_get_simple_price)
+    monkeypatch.setattr(type(cg.coingecko_client), "get_simple_price", staticmethod(fake_get_simple_price))
     pct = await risk.usdc_depeg_pct()
     assert round(pct, 3) == 0.03
 
@@ -343,7 +343,7 @@ async def test_usdc_depeg_pct_none_when_unavailable(monkeypatch):
     async def fake_get_simple_price(coin_ids, *, vs_currencies=None):
         return FakePriceResult(available=False, prices={})
 
-    monkeypatch.setattr(cg.coingecko_client, "get_simple_price", fake_get_simple_price)
+    monkeypatch.setattr(type(cg.coingecko_client), "get_simple_price", staticmethod(fake_get_simple_price))
     assert await risk.usdc_depeg_pct() is None
 
 
@@ -354,7 +354,7 @@ async def test_is_usdc_depegged_threshold(monkeypatch):
     async def fake_get_simple_price(coin_ids, *, vs_currencies=None):
         return FakePriceResult(available=True, prices={"usd-coin": {"usd": 0.985}})  # 1.5% écart
 
-    monkeypatch.setattr(cg.coingecko_client, "get_simple_price", fake_get_simple_price)
+    monkeypatch.setattr(type(cg.coingecko_client), "get_simple_price", staticmethod(fake_get_simple_price))
     assert await risk.is_usdc_depegged() is True
 
 
@@ -365,5 +365,5 @@ async def test_is_usdc_not_depegged_within_threshold(monkeypatch):
     async def fake_get_simple_price(coin_ids, *, vs_currencies=None):
         return FakePriceResult(available=True, prices={"usd-coin": {"usd": 0.996}})  # 0.4% écart
 
-    monkeypatch.setattr(cg.coingecko_client, "get_simple_price", fake_get_simple_price)
+    monkeypatch.setattr(type(cg.coingecko_client), "get_simple_price", staticmethod(fake_get_simple_price))
     assert await risk.is_usdc_depegged() is False

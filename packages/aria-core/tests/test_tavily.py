@@ -142,7 +142,7 @@ async def test_fetch_web_snippets_uses_tavily_when_provider_set(monkeypatch):
             available=True,
         )
 
-    monkeypatch.setattr("aria_core.services.tavily.tavily_client.search", _fake_search)
+    monkeypatch.setattr(type(tavily.tavily_client), "search", staticmethod(_fake_search))
     # Neutralise le cache pour un test déterministe.
     monkeypatch.setattr("aria_core.knowledge.ddg_cache.get_cached", lambda q: None)
     monkeypatch.setattr("aria_core.knowledge.ddg_cache.set_cached", lambda q, s: None)
@@ -203,7 +203,7 @@ async def test_tavily_query_translated_to_english_before_search(monkeypatch):
 
         return TavilyResult(query=query, snippets=[], answer=None, available=True)
 
-    monkeypatch.setattr("aria_core.services.tavily.tavily_client.search", _fake_search)
+    monkeypatch.setattr(type(tavily.tavily_client), "search", staticmethod(_fake_search))
 
     await web_verify._fetch_tavily_snippets("quelles sont les dernières news crypto importantes ?", 4)
 
@@ -227,7 +227,7 @@ async def test_tavily_query_translation_degrades_softly_without_llm(monkeypatch)
 
         return TavilyResult(query=query, snippets=[], answer=None, available=True)
 
-    monkeypatch.setattr("aria_core.services.tavily.tavily_client.search", _fake_search)
+    monkeypatch.setattr(type(tavily.tavily_client), "search", staticmethod(_fake_search))
 
     await web_verify._fetch_tavily_snippets("prix du bitcoin", 4)
 

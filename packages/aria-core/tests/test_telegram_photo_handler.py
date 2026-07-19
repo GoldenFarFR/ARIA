@@ -188,7 +188,7 @@ async def test_vision_non_admin_declines_without_llm_call(monkeypatch):
     async def fail_llm(*a, **kw):
         raise AssertionError("ne doit jamais appeler le LLM pour un visiteur public")
 
-    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fail_llm)
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fail_llm))
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
 
     update = FakeUpdate(caption="analyse ce graphique", user_id=999)
@@ -203,7 +203,7 @@ async def test_vision_gated_off_declines_honestly(monkeypatch):
     async def fail_llm(*a, **kw):
         raise AssertionError("gate OFF ne doit jamais appeler le LLM")
 
-    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fail_llm)
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fail_llm))
 
     update = FakeUpdate(caption="analyse ce graphique", user_id=42)
     await telegram_bot._handle_vision_photo(update, FakeContext(), "analyse ce graphique")
@@ -221,7 +221,7 @@ async def test_vision_enabled_admin_calls_llm_with_data_uri(monkeypatch):
         captured["image_data_uri"] = image_data_uri
         return "voici ma lecture"
 
-    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
 
     update = FakeUpdate(caption="juge cette situation", user_id=42)
@@ -246,7 +246,7 @@ async def test_vision_why_not_bought_caption_short_circuits_without_llm_call(mon
         llm_called["value"] = True
         return "ne devrait jamais être appelé"
 
-    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
 
     caption = "pourquoi tu n'as pas acheté cette divergence sur aeon ?"
@@ -269,7 +269,7 @@ async def test_vision_analysis_methodology_caption_short_circuits_without_llm_ca
         llm_called["value"] = True
         return "ne devrait jamais être appelé"
 
-    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
 
     caption = "quelles sont les conditions pour qu'un token t'intéresse ?"
@@ -291,7 +291,7 @@ async def test_vision_scan_scope_caption_short_circuits_without_llm_call(monkeyp
         llm_called["value"] = True
         return "ne devrait jamais être appelé"
 
-    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
 
     caption = "je croyais que tu scanner tous les jetons sur base dans dexscreener ?"
@@ -315,7 +315,7 @@ async def test_vision_ordinary_caption_still_reaches_llm(monkeypatch):
         captured["called"] = True
         return "voici ma lecture"
 
-    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
 
     update = FakeUpdate(caption="juge cette situation", user_id=42)
@@ -342,7 +342,7 @@ async def test_vision_llm_none_replies_honestly(monkeypatch):
     async def fake_llm_response(*a, **kw):
         return None
 
-    monkeypatch.setattr(brain_mod.aria_brain, "_llm_response", fake_llm_response)
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
 
     update = FakeUpdate(caption="juge cette situation", user_id=42)
