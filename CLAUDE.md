@@ -3480,8 +3480,8 @@ endroits corrigés, `a122b522`, DÉPLOYÉ) + correction manuelle du capital pape
   orphelin côté UI (fini d'écrire sa réponse mais jamais retourné à l'orchestrateur --
   `TaskStop` confirmait la tâche introuvable). Confirme indépendamment la doctrine
   Solana déjà actée. Rien sur `/vc`/momentum, recherche informative pour l'opérateur.
-- **#143 -- traçabilité token sur chaque paiement x402, codé/testé, déploiement en
-  cours au moment de l'écriture.** Trouvé en
+- **#143 -- traçabilité token sur chaque paiement x402, EN LIGNE (commit `382565f5`).**
+  Trouvé en
   répondant à une question opérateur directe ("détaille chaque paiement, quel token,
   achat ou abandon") : `x402_budget.py` n'enregistrait ni contrat ni symbole -- la
   corrélation a dû être reconstruite à la main via les horodatages contre
@@ -3497,8 +3497,8 @@ endroits corrigés, `a122b522`, DÉPLOYÉ) + correction manuelle du capital pape
   (contract/safe_symbol déjà en scope à l'appel). Chaque futur paiement -- succès
   ET blocage -- reste désormais traçable jusqu'au token sans reconstitution
   forensique. 6 nouveaux tests.
-- **Re-entrée assouplie (décision opérateur explicite, 19/07, déploiement en cours au
-  moment de l'écriture)** --
+- **Re-entrée assouplie (décision opérateur explicite, 19/07, EN LIGNE, commit
+  `382565f5`)** --
   remplace la restriction "signal extrême uniquement" du 17/07 (BRIAN). En
   observant le vrai portefeuille (15 positions ouvertes simultanément, cap
   `MAX_POSITIONS`), l'opérateur a clarifié : "achat unique pour les positions EN
