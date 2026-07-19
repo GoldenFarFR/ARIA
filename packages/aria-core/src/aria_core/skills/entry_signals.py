@@ -90,8 +90,15 @@ def bullish_rsi_divergence(
 ) -> tuple[bool, str]:
     """Divergence haussière : prix fait un plus-bas plus BAS, RSI fait un creux plus HAUT.
 
-    Compare les deux derniers creux (minima locaux) de la fenêtre. Signal classique
-    d'essoufflement de la baisse. Retourne (present, base factuelle).
+    Compare le DERNIER creux (minimum local) de la fenêtre à chaque creux ANTÉRIEUR,
+    en partant du plus récent -- pas seulement l'avant-dernier immédiat (19/07,
+    corrigé après investigation empirique sur candidats réels du pipeline momentum :
+    0 divergence détectée sur 8 candidats avec données exploitables, contre 4 golden
+    pocket atteints seuls -- la comparaison n'examinait QUE la paire de creux
+    immédiatement adjacente, ratant toute divergence formée sur une jambe plus large
+    de la même fenêtre). Même DÉFINITION stricte du signal (prix plus bas + RSI plus
+    haut) qu'avant -- seule la PORTÉE de la recherche est élargie, pas le critère.
+    Signal classique d'essoufflement de la baisse. Retourne (present, base factuelle).
     """
     # RSI calculé sur la série COMPLÈTE (chauffé avant la fenêtre), puis on ne
     # cherche les creux que dans les `lookback` dernières bougies. Ainsi un setup
@@ -108,9 +115,10 @@ def bullish_rsi_divergence(
             pivots.append((i, candles[i].low, r))
     if len(pivots) < 2:
         return False, ""
-    (_, l1, r1), (_, l2, r2) = pivots[-2], pivots[-1]
-    if l2 < l1 and r2 > r1:
-        return True, f"plus-bas prix {l2:.6g} < {l1:.6g} mais RSI remonte ({r1:.0f} → {r2:.0f})"
+    _, l2, r2 = pivots[-1]
+    for _, l1, r1 in reversed(pivots[:-1]):
+        if l2 < l1 and r2 > r1:
+            return True, f"plus-bas prix {l2:.6g} < {l1:.6g} mais RSI remonte ({r1:.0f} → {r2:.0f})"
     return False, ""
 
 

@@ -60,6 +60,7 @@ Périmètre strictement respecté (16/07, plan validé opérateur) :
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -89,6 +90,20 @@ MAX_NEW_PER_DRAIN = 3             # même pacing que le défaut heartbeat (run_p
                                   # plus prudent qu'un simple len(candidats), pour ne pas dumper plus
                                   # de nouvelles entrées par vidange que le cycle heartbeat n'en
                                   # ouvrirait lui-même en 15 minutes).
+
+# 19/07 -- plafond de débit ajouté AVANT activation (question opérateur légitime : "ça ne
+# va pas casser les rouages des API ?"). Sans lui, le pire cas théorique est
+# MAX_CANDIDATES_PER_DRAIN (20) toutes les DRAIN_INTERVAL_SECONDS (30s) = jusqu'à
+# ~2400 candidats évalués/heure -- un facteur ~30x le débit du cycle heartbeat classique
+# (20 candidats x 4 cycles/heure = 80/heure). GeckoTerminal/GoPlus ont un throttle CLIENT
+# partagé (protège contre un vrai 429 -- les appels sont sérialisés, pas parallélisés),
+# mais CoinMarketCap n'a AUCUN throttle client, et aucun des trois n'a de plafond de
+# QUOTA horaire/journalier codé quelque part : un débit soutenu pourrait épuiser un
+# quota payant mensuel en quelques jours sans jamais déclencher un seul 429 individuel
+# qui alerterait quelqu'un. Ramène le débit WebSocket au MÊME ORDRE DE GRANDEUR que le
+# régime actuel (80/heure) -- garde l'avantage de LATENCE (détection quasi-immédiate)
+# sans exploser le VOLUME total consommé par les API en aval.
+MAX_EVALUATIONS_PER_HOUR = 80
 
 _CONNECT_TIMEOUT_SECONDS = 8
 _RECV_TIMEOUT_SECONDS = 15
@@ -126,6 +141,16 @@ class MomentumWebsocketListener:
         self._lock = asyncio.Lock()  # protège _pending/_seen entre les boucles par endpoint et la vidange
         self._pending: dict[tuple[str, str], float] = {}  # (contract, chain) -> first_seen ts
         self._seen: dict[tuple[str, str], float] = {}      # (contract, chain) -> last_triggered ts (TTL)
+        # 19/07 -- fenêtre glissante 1h pour MAX_EVALUATIONS_PER_HOUR (un timestamp par
+        # candidat réellement évalué, pas par vidange -- une vidange à 20 candidats compte
+        # pour 20, pas pour 1).
+        self._evaluation_timestamps: collections.deque[float] = collections.deque()
+
+    def _evaluation_budget_remaining(self, now: float) -> int:
+        cutoff = now - 3600.0
+        while self._evaluation_timestamps and self._evaluation_timestamps[0] < cutoff:
+            self._evaluation_timestamps.popleft()
+        return max(0, MAX_EVALUATIONS_PER_HOUR - len(self._evaluation_timestamps))
 
     async def start(self) -> None:
         if self._running:
@@ -247,6 +272,24 @@ class MomentumWebsocketListener:
         from aria_core import paper_trader
 
         candidates = [c["contract"] for c in filtered]
+
+        # 19/07 -- plafond de débit horaire (cf. MAX_EVALUATIONS_PER_HOUR) : tronque la
+        # liste plutôt que d'annuler toute la vidange -- dégradation progressive, jamais
+        # tout-ou-rien. Les candidats tronqués restent marqués "vus" (_seen, ci-dessus) :
+        # ils ne seront pas réévalués avant DEDUP_TTL_SECONDS, compromis volontaire pour
+        # ne pas créer un pic de rattrapage au drain suivant.
+        now = time.time()
+        budget = self._evaluation_budget_remaining(now)
+        if budget <= 0:
+            logger.info(
+                "momentum_websocket: plafond horaire atteint (%d/h) -- vidange ignorée",
+                MAX_EVALUATIONS_PER_HOUR,
+            )
+            return
+        if len(candidates) > budget:
+            candidates = candidates[:budget]
+        self._evaluation_timestamps.extend([now] * len(candidates))
+
         chain_by_contract = {c["contract"]: c["chain"] for c in filtered}
         analyzer = paper_trader._default_momentum_analyzer(chain_by_contract)
         try:

@@ -72,6 +72,34 @@ def test_no_divergence_on_plain_downtrend():
     assert ok is False
 
 
+def _non_adjacent_divergence_series() -> list[float]:
+    """19/07 -- reproduit le vrai cas trouvé en investiguant 8 candidats réels du
+    pipeline momentum (0/8 divergence détectée, alors que 4/8 étaient dans le golden
+    pocket) : 3 creux, où seule la paire NON-adjacente (le premier et le dernier)
+    forme une vraie divergence -- la paire immédiate (2e et 3e creux) n'en forme
+    aucune (RSI continue de baisser d'un creux à l'autre juste avant le rebond final).
+    """
+    lead_in = [100.0] * 15
+    trough1 = [95, 92, 90]      # creux 1 = 90, RSI très bas (chauffe juste après lead_in)
+    bounce1 = [96, 103, 108]
+    trough2 = [104, 99, 95]     # creux 2 = 95, retracement léger, RSI encore assez haut
+    bounce2 = [100, 105]
+    trough3 = [98, 85, 70]      # creux 3 = 70, nouveau plus bas marqué
+    tail = [75]                 # confirme le creux 3 comme pivot (minimum local)
+    return lead_in + trough1 + bounce1 + trough2 + bounce2 + trough3 + tail
+
+
+def test_bullish_divergence_detected_across_non_adjacent_pivots():
+    """La paire de creux IMMÉDIATEMENT adjacente (2e, 3e) ne forme PAS de divergence
+    ici (vérifié : RSI y baisse) -- seule la comparaison avec un creux plus ancien
+    (1er, 3e) la révèle. L'ancien code (limité à pivots[-2]/pivots[-1]) aurait raté
+    ce cas -- verrou de non-régression sur le correctif du 19/07."""
+    ok, base = bullish_rsi_divergence(_candles(_non_adjacent_divergence_series()), lookback=25)
+    assert ok is True
+    assert "RSI remonte" in base
+    assert "70" in base  # ancré sur le creux le plus récent (3e), pas un pivot intermédiaire
+
+
 def test_detect_entry_fires_on_setup():
     sig = detect_entry(_candles(_setup_series()), lookback=25)
     assert sig.present is True

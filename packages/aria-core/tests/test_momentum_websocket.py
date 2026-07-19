@@ -6,6 +6,7 @@ test_momentum_entry.py/test_paper_trader.py)."""
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -241,6 +242,99 @@ async def test_drain_respects_max_candidates_per_drain_cap(monkeypatch):
 
     assert len(captured["candidates"]) == mw.MAX_CANDIDATES_PER_DRAIN
     assert len(listener._pending) == 5  # le reste attend la prochaine vidange
+
+
+def test_evaluation_budget_remaining_full_when_no_history():
+    listener = mw.MomentumWebsocketListener()
+    assert listener._evaluation_budget_remaining(1_000_000.0) == mw.MAX_EVALUATIONS_PER_HOUR
+
+
+def test_evaluation_budget_remaining_decreases_with_recent_evaluations():
+    listener = mw.MomentumWebsocketListener()
+    now = 1_000_000.0
+    listener._evaluation_timestamps.extend([now - 10] * 30)
+    assert listener._evaluation_budget_remaining(now) == mw.MAX_EVALUATIONS_PER_HOUR - 30
+
+
+def test_evaluation_budget_remaining_purges_entries_older_than_one_hour():
+    listener = mw.MomentumWebsocketListener()
+    now = 1_000_000.0
+    listener._evaluation_timestamps.extend([now - 3700] * 50)  # >1h -- périmé
+    listener._evaluation_timestamps.extend([now - 10] * 5)     # récent -- compte
+    assert listener._evaluation_budget_remaining(now) == mw.MAX_EVALUATIONS_PER_HOUR - 5
+    assert len(listener._evaluation_timestamps) == 5  # les 50 périmés purgés
+
+
+def test_evaluation_budget_remaining_never_negative():
+    listener = mw.MomentumWebsocketListener()
+    now = 1_000_000.0
+    listener._evaluation_timestamps.extend([now - 10] * (mw.MAX_EVALUATIONS_PER_HOUR + 50))
+    assert listener._evaluation_budget_remaining(now) == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_truncates_candidates_to_remaining_budget(monkeypatch):
+    """19/07 -- réponse à la question opérateur sur le risque de saturer les API.
+    Le budget horaire tronque la liste, dégradation progressive plutôt que tout-ou-rien."""
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    for i in range(10):
+        contract = f"0x{i:040x}"
+        listener._pending[(contract, "base")] = 0.0
+    # Ne laisse que 3 évaluations de budget restant.
+    listener._evaluation_timestamps.extend([time.time()] * (mw.MAX_EVALUATIONS_PER_HOUR - 3))
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    captured: dict = {}
+
+    async def _fake_run_paper_cycle(**kwargs):
+        captured.update(kwargs)
+        return {"opened": []}
+
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+
+    await listener._drain_once()
+
+    assert len(captured["candidates"]) == 3
+    # Le budget consommé se reflète immédiatement -- prochaine vidange à 0 restant.
+    assert listener._evaluation_budget_remaining(time.time()) == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_skips_entirely_when_hourly_budget_exhausted(monkeypatch):
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    listener._pending[(A, "base")] = 0.0
+    listener._evaluation_timestamps.extend([time.time()] * mw.MAX_EVALUATIONS_PER_HOUR)
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    called = False
+
+    async def _fake_run_paper_cycle(**kwargs):
+        nonlocal called
+        called = True
+        return {"opened": []}
+
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+
+    await listener._drain_once()
+
+    assert called is False
+    # Le candidat en attente est déjà marqué "vu" (retiré de _pending côté verrou) --
+    # comportement voulu : jamais retenté immédiatement au drain suivant.
+    assert listener._pending == {}
 
 
 @pytest.mark.asyncio
