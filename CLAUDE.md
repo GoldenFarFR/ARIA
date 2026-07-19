@@ -3113,6 +3113,65 @@ Suite directe du 1er bug x402 (décodage v2 depuis le header brut, déjà corrig
   - `ottoai/twitter-summary` (0,001$, le moins cher testé) : paiement RÉUSSI, qualité RÉELLE et SURPRENANTE — un digest crypto-Twitter généraliste, à jour à la minute, qui mentionne LITTÉRALEMENT l'incident BRIAN documenté plus haut ce même 19/07 ("Coinbase CEO swapped profile picture to CryptoPunk, crashing unaffiliated memecoin BRIAN tanked 86%"). Mais c'est un digest de MARCHÉ GÉNÉRAL sans paramètre de requête — pas interrogeable par projet/contrat précis, donc pas un substitut direct au besoin de `conviction_research` (buzz PAR PROJET).
   - **Conclusion honnête** : les DEUX bugs mécaniques x402 sont désormais réellement corrigés et prouvés (4/4 paiements soit réussis soit correctement bloqués par un vrai garde, jamais un crash). Mais pour le besoin SPÉCIFIQUE de `conviction_research` (lecture X par projet, moins chère que l'API X officielle), aucun des 4 candidats testés ce soir ne bat ce qui est déjà câblé (API X directe, `x_research_budget.py`, 100 requêtes/semaine) — x402 Bazaar reste prometteur en PRINCIPE (mécaniquement fonctionnel, prix imbattables) mais le catalogue réel a des trous (listings périmés, formats non supportés, portée Solana-only) qui demandent plus de tri avant de remplacer l'existant. **Piste neuve trouvée, pas construite** : `ottoai/twitter-summary` (digest marché général, 0,001$) serait un signal complémentaire intéressant pour `market_sentiment.py` (pas `conviction_research`) — décision séparée, à proposer à l'opérateur si utile.
 
+**19/07 (suite) — feedback opérateur direct sur le portefeuille réel (captures x402scan.com
++ Telegram) : sizing redesigné 2-5% + trade GITLAWB vérifié légitime + vrai bug R/R trouvé
+et corrigé au passage — TOUT DÉPLOYÉ ET VÉRIFIÉ (`9062f0a7`).**
+- **Sizing** : "les position sont trop grosse lachat maxi doit etre de 5% et mini de 2%" —
+  vérifié dans le code : `ALLOC_PCT` (5%) était FLAT sur tout achat momentum, avec un bonus
+  binaire à 8% sur setup "exceptionnel" (`CONVICTION_SIZE_MULTIPLIER=1.6`, jamais moins de
+  5%). Redesign complet en 3 paliers, mappés directement sur le % réel du capital de départ
+  (jamais un multiplicateur au-delà de 1.0 — 5% EST le plafond dur désormais, plus jamais
+  8%) : **fort** (R/R≥2.5 ET alignement≥2/3, le seuil déjà existant) → 5% ; **modéré**
+  (R/R≥2.0, le plancher même du chemin d'achat direct) → 3.5% ; **faible** (le reste, achats
+  confirmés par LLM sur R/R plus bas) → 2%. Le veto fondamental (`conviction_research`,
+  potentiel confirmé faible) rétrograde désormais le palier fort vers le MODÉRÉ (3.5%),
+  jamais directement au plancher — la conviction technique reste réelle, seul le bonus
+  maximal est refusé. `MIN_ALLOC_MULTIPLIER=0.4`/`MODERATE_ALLOC_MULTIPLIER=0.7`/
+  `MAX_ALLOC_MULTIPLIER=1.0` (`risk_guard.py`), `MODERATE_RR_THRESHOLD=2.0` nouveau.
+  Comportement `None`/données absentes inchangé (reste 1.0/MAX — protège l'ancien pilote
+  VC-thesis dormant, jamais impacté). 20 tests mis à jour/ajoutés (tiers isolés du plafond
+  de perte via une invalidation moins serrée, composition avec le frein à main hebdo sur
+  les 3 paliers, plafond de concentration re-testé sur le palier fort explicitement).
+- **Vérification du trade GITLAWB** ("verifie si sont trade etait legitime et bien
+  travailler", capture Telegram VENTE FICTIVE -2,0%, invalidation, détenue 1,4h) —
+  **verdict : mécanisme entièrement légitime, aucun bug dans l'exécution.** Thèse réelle
+  (honeypot clair GoPlus, golden pocket + divergence RSI + MACD + pattern de bougie, R/R
+  franc), invalidation calculée sur un vrai niveau Fibonacci (2% sous le golden pocket),
+  sortie déclenchée par un vrai franchissement de seuil. **Prix de sortie confirmé
+  indépendamment** : `2.953e-05` (position fermée) contre `2.953e-05` EXACTEMENT sur le
+  pool le plus liquide (Uniswap, 1,3M$ liquidité) interrogé en direct via DexScreener
+  quelques instants après — correspondance parfaite, prix réel, pas une donnée périmée.
+- **Vrai bug trouvé EN VÉRIFIANT ce trade, pas cherché délibérément** : la thèse citait
+  « R/R franc (149.1) » — un chiffre extrême, littéralement l'un des deux exemples cités
+  par la critique Gemini de l'opérateur plus tôt cette session ("R:R realism (huge ratios
+  like 25.52/149.1 are statistically rare)"). Recalcul manuel avec le `entry_price` RÉEL
+  stocké (3,013e-05) donnait ~25,5, pas 149,1 — piste suivie jusqu'au bout : `entry_signals.
+  detect_entry()` calcule le R/R à partir du `close` de la DERNIÈRE BOUGIE OHLCV (une
+  source), alors que le prix RÉELLEMENT exécuté vient d'une AUTRE source indépendante
+  (DexScreener temps réel, `best.price_usd` dans `momentum_entry.py`) — les deux peuvent
+  diverger de plusieurs % au même instant nominal (ici confirmé : 2,97671e-05 vs 3,013e-05,
+  ~1,2% d'écart), pas juste une dérive temporelle. `invalidation`/`target` restent des
+  niveaux Fibonacci/RSI FIXES (indépendants du prix d'entrée), donc le trade RÉEL avait en
+  fait un peu PLUS de marge avant invalidation que le signal ne l'indiquait (1,46% vs
+  0,26%) — la divergence n'a pas rendu le trade plus risqué que prévu, mais le chiffre R/R
+  AFFICHÉ était trompeur, ce qui explique probablement directement la critique Gemini
+  antérieure. **Corrigé** : `detect_entry()` accepte un `execution_price` optionnel qui
+  remplace le `close` comme référence R/R (jamais `invalidation`/`target`, qui décrivent la
+  STRUCTURE du setup) ; `momentum_entry.py` lui passe désormais `best.price_usd`. Aucun
+  changement pour `acp_onchain_scan.py`/`/vc` (analyse rétrospective, aucune exécution
+  imminente à un prix précis — comportement inchangé, vérifié par test dédié). N'affecte
+  PAS les seuils de gate (`rr>=2.0`/`2.5`) ni les décisions déjà prises — corrige seulement
+  l'HONNÊTETÉ du chiffre affiché et, par ricochet, la précision du nouveau sizing par
+  paliers (qui dépend directement de ce R/R). 5 nouveaux tests dédiés (dont une
+  reproduction directe de l'écart de magnitude réel 149,1 vs ~25,5).
+- Suite ciblée vérifiée verte (`test_entry_signals.py`/`test_momentum_entry.py`/
+  `test_paper_trader.py`/`test_risk_guard.py`, 224+100 tests) + `test_coherence.py` — la
+  suite complète (`pytest -q`) a été lancée mais s'est bloquée sur le même test réseau réel
+  déjà documenté ci-dessus (`ep_poll`, sans rapport) ; un run complet équivalent avait déjà
+  tourné proprement plus tôt dans ce même segment (6002 passed, mêmes 5 échecs
+  `test_proactive*` pré-existants) — jugé suffisant plutôt que d'insister sur un run
+  redondant bloqué sur autre chose. Déployé et vérifié via nginx (pas juste le port direct).
+
 ## Automatismes en place (à connaître dès le début de session — ne pas les défaire)
 - **Environnement prêt tout seul** : `.claude/hooks/session-start.sh` (SessionStart, web) crée un venv Python 3.12 et installe `aria-core[dev]`. En web c'est **asynchrone** (barre de statut « 🔧 env NN% » → l'indicateur disparaît quand c'est prêt). Lancer les tests via ce venv : `packages/aria-core/.venv/bin/python -m pytest` (ou `pytest` une fois le PATH exporté). Ne pas recréer l'env à la main.
 - **Garde-fou de cohérence** : `packages/aria-core/tests/test_coherence.py` tourne dans la **CI** et DOIT rester vert. Il impose : aucune IP/email dans les docs publiques ; honeypot actif (analyse VC **et** filtre d'entrée du pool) ; `paper_trade_cycle` câblé au heartbeat ; ACP gaté ; docs référencés existants ; blocs « faits établis » + « automatismes » présents ici ; **registre des actions externes** (`test_external_write_actions_registered_in_allowlist`, 10/07) — toute fonction de production qui écrit réellement à l'extérieur (GitHub/X/email) doit être déclarée dans `_EXTERNAL_WRITE_ALLOWLIST`, sinon la CI casse immédiatement (garde-fou mécanique anti-récidive après l'incident Cursor/worker-queue). **Si tu changes VOLONTAIREMENT un invariant, mets à jour ce test dans le MÊME commit** — c'est le contrat qui empêche la dérive entre sessions.
