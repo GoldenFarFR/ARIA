@@ -2803,6 +2803,35 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (18 régime + 37 contrefactuel + 7 wiring), suite complète verte (6409
   passed, mêmes 7 échecs pré-existants sans rapport #142), `test_coherence.py`
   vert (81 passed).
+- **20/07 (suite) — revue croisée externe sur la thèse d'achat momentum
+  envoyée telle quelle, 3 correctifs vérifiés puis construits (`e222f3e9`).**
+  Méthode identique aux rounds Gemini précédents : chaque point de la
+  critique vérifié contre le vrai code avant d'agir, 2 points affinés en
+  aller-retour (définition de "perte" = `pnl_usd < 0`, pas de comparaison
+  au R/R théorique ; confirmation temporelle plutôt que "2 cycles" —
+  ambigu entre heartbeat 15min et WebSocket 30s, piège déjà documenté
+  ailleurs dans ce fichier pour `HIGH_WATER_CONFIRMATION_SECONDS`, reproduit
+  sans y penser dans ma propre proposition initiale). Trois correctifs :
+  (1) compteur de pertes consécutives par CONTRAT (`paper_trader.
+  _consecutive_losses_for_contract`, seuil 2 — motif exact de l'incident
+  BRIAN du 17/07) ; (2) confirmation temporelle sur le Breakeven Hard Floor
+  (`_advance_breakeven_pending`, réutilise `HIGH_WATER_CONFIRMATION_SECONDS`
+  telle quelle, nouvelle colonne `breakeven_pending_since`) ; (3)
+  confirmation temporelle sur le ratio wash-trading
+  (`momentum_entry._wash_trading_ratio_confirmed`, état en mémoire process
+  comme le coupe-circuit fournisseur déjà existant). **Bug réel trouvé par
+  mes propres tests avant tout commit** : le point d'appel du correctif (3)
+  utilisait un `and` court-circuitant (`volume_to_liq > SEUIL and
+  _wash_trading_ratio_confirmed(...)`) qui empêchait la fonction d'être
+  appelée du tout quand le ratio redevenait sain — rendant sa propre
+  logique de réinitialisation de candidature inatteignable. Corrigé avant
+  commit (jamais poussé cassé). 4 tests existants sur le Breakeven Hard
+  Floor entièrement réécrits (l'ancien comportement "verrouille sur un seul
+  tick" est maintenant le bug corrigé, pas le comportement attendu) + ~35
+  nouveaux tests. Suite complète verte (6425 passed, mêmes 7 échecs
+  pré-existants sans rapport #142, reconfirmés indépendants en isolation),
+  `test_coherence.py` vert (81 passed). Bloc de référence momentum (étapes
+  2/10/11) mis à jour dans le même commit que la norme l'exige.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4526,7 +4555,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **Direct, problème → solution (consigne opérateur explicite, 16/07)** : annoncer le problème puis la solution/action directement, sans argumenter ni justifier en détail par défaut. Toujours proposer ensuite à l'opérateur s'il veut plus de détail (raisonnement, alternatives écartées, preuves) plutôt que de les dérouler d'office.
 **Réponse type « la thèse sur l'achat » (consigne opérateur explicite, 19/07 ; précisée 20/07)** : quand l'opérateur demande « la thèse sur l'achat » (ou une formulation proche : « renvoie la thèse », « explique le processus d'achat ») SANS nommer un contrat précis ET SANS préciser VC, répondre avec EXACTEMENT le processus détaillé de la section « Processus d'achat momentum — réponse de référence » ci-dessous (c'est le pipeline qui tourne réellement sur le test 1M$ en cours). Si l'opérateur demande spécifiquement « la thèse VC »/« la thèse d'achat du VC »/une formulation équivalente, répondre avec EXACTEMENT la section « Thèse d'achat VC — réponse de référence » (plus bas, juste avant Formule B — son pendant sortie). Si l'opérateur nomme un contrat/token précis, donner plutôt SA thèse réelle (champ `thesis` en base, via `paper_trader.get_open_positions()`/`get_closed_positions()` ou l'historique `/feedback`), pas un processus général.
 
-## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `2927e50e`)
+## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `e222f3e9`)
 **⚠️ Instantané daté du pipeline momentum (`momentum_entry.py` + `risk_guard.py` + `paper_trader.py`) — norme « vérifier avant d'affirmer » (Règles absolues) : si une session reprend ce fil après une évolution du pipeline, RECONFIRMER ce texte contre le code réel avant de le renvoyer tel quel plutôt que de le réciter de mémoire. Mettre à jour ce bloc DANS LE MÊME COMMIT que tout changement touchant l'ordre/les seuils du pipeline momentum, pour qu'il ne dérive jamais.**
 
 **1. Découverte** — Scan continu DexScreener (Base uniquement depuis le 20/07, décision opérateur — Ethereum natif + 1-2 chaînes de plus prévues plus tard, pas encore décidées) + flux WebSocket temps réel, en plus du scan classique toutes les 15 min.
@@ -4536,7 +4565,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Honeypot (GoPlus, + RugCheck en second avis sur Solana)
 - Liquidité minimum 100 000$ — **doublée à 200 000$ en régime macro Peur confirmé** (Regime Switch, 20/07 — voir section dédiée plus bas)
 - Volume minimum : le plus haut entre 5 000$ (plancher absolu) et 10% de la liquidité du pool (empêche un marché "zombie" — liquidité présente mais personne ne trade — de fabriquer un faux setup, y compris sur un gros pool où un plancher purement absolu deviendrait trivial)
-- Ratio volume/liquidité > 20x (wash-trading)
+- Ratio volume/liquidité > 20x, **soutenu** (au moins 75s de confirmation — une lecture isolée ne rejette plus seule, un token en pleine actualité légitime peut dépasser le seuil brièvement sans être du wash-trading)
 - Déjà monté de +200% en 24h — **plafond levé en régime macro Euphorie confirmé** (Regime Switch, 20/07)
 - Âge minimum de la paire : 14 jours (décision opérateur explicite, 20/07). Une paire trop jeune n'a pas assez d'historique de bougies pour un signal Fibonacci/RSI fiable. Âge inconnu → rejet (même doctrine que la liquidité, jamais "OK par défaut" sur une donnée manquante).
 - Profil projet établi : profil DexScreener payant (Enhanced Token Info, ~299$, détecté via les liens officiels déjà déclarés sur la paire, gratuit) OU listing CoinGecko (réseau, interrogé seulement si DexScreener n'a rien). Aucun des deux → rejet (décision opérateur explicite, 20/07 : "il faut que le profil soit payé que ce soit sur dexscreener ou coingecko").
@@ -4568,11 +4597,11 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Stop suiveur adaptatif à la volatilité : largeur calculée depuis l'ATR mesuré à l'entrée (bornée entre 5% et 40%), jamais un pourcentage fixe pour tous les tokens. Le niveau du stop monte à chaque nouveau sommet, ne redescend jamais.
 - Prise de profit par tiers : le 1er palier (TP1) s'ancre sur la cible technique réelle de la position (le niveau golden pocket qui a validé le R/R à l'entrée), pas un pourcentage fixe. Les 2 paliers suivants sont des MULTIPLES de cette même distance (TP2 = 2x la distance entrée→TP1, TP3 = 3x) — dynamique de bout en bout, un setup serré garde des paliers proportionnellement proches. Repli sur +50%/+100%/+200% fixes si aucune cible technique n'est connue pour la position.
 - Anti-mèche : un nouveau plus-haut n'est retenu pour le stop qu'après être resté au-dessus de l'ancien plus-haut confirmé pendant au moins 75 secondes (durée absolue, pas un nombre de cycles) — empêche une seule lecture de prix aberrante (mèche, bot d'arbitrage) de figer un plus-haut fictif qui déclencherait le stop sur un simple retour au calme. Aucune limite sur l'AMPLEUR du mouvement : une fois confirmé, le vrai pic est retenu d'un coup, jamais une reconnaissance progressive.
-- Point mort verrouillé (Breakeven Hard Floor, 20/07) : mécanisme SÉPARÉ de l'anti-mèche ci-dessus, répond à l'angle mort qu'elle laisse ouvert — un pump-puis-dump qui retombe AVANT les 75 secondes de confirmation ne laisse aucune trace dans le plus-haut confirmé (aucun crédit partiel, par design). Dès que le prix INSTANTANÉ (pas le plus-haut confirmé) touche, même un seul cycle, un seuil flash (50% de la distance entrée→TP1, plancher absolu 8%), le stop est IRRÉVOCABLEMENT remonté au prix d'entrée — ce verrou ne redescend jamais, même si le prix retombe aussitôt sous le seuil qui l'a déclenché. N'entre en jeu que si le stop suiveur classique est encore SOUS le point mort (un rally soutenu qui fait naturellement monter le stop suiveur au-dessus continue de gouverner la sortie, jamais une régression).
+- Point mort verrouillé (Breakeven Hard Floor, 20/07 ; confirmation temporelle ajoutée le 20/07 suite à une revue croisée externe) : mécanisme SÉPARÉ de l'anti-mèche du stop suiveur, mais qui en réutilise désormais la MÊME confirmation temporelle (75s, `HIGH_WATER_CONFIRMATION_SECONDS`) — corrige l'asymétrie initiale (un seul tick pouvait verrouiller à tort sur un pool fin manipulé). Le prix doit toucher ET tenir un seuil flash (50% de la distance entrée→TP1, plancher absolu 8%) au moins 75s avant que le stop soit IRRÉVOCABLEMENT remonté au prix d'entrée — une candidature qui retombe sous le seuil avant confirmation est abandonnée, repart de zéro si le prix redépasse plus tard. Une fois verrouillé, ce verrou ne redescend jamais. N'entre en jeu que si le stop suiveur classique est encore SOUS le point mort (un rally soutenu qui fait naturellement monter le stop suiveur au-dessus continue de gouverner la sortie, jamais une régression).
 - **Regime Switch (20/07)** : en régime Peur, le 3e palier de prise de profit est écrasé — tout le reliquat se vend au niveau de l'ancien TP2 (sortie ultra-rapide). En régime Euphorie, le 3e palier est neutralisé — le dernier tiers devient un moon bag pur, guidé uniquement par le stop suiveur ATR, jamais vendu par un palier mécanique. Voir section dédiée plus bas pour le détail complet (mapping des régimes, ratchet, calibration).
-- Re-achat autorisé sur un contrat déjà clôturé dès qu'un nouveau point d'entrée se profile
+- Re-achat autorisé sur un contrat déjà clôturé dès qu'un nouveau point d'entrée se profile — **sauf si ce contrat a déjà accumulé 2 pertes consécutives** (20/07, revue croisée externe, motif exact de l'incident BRIAN) : dans ce cas, la re-entrée est suspendue pour LUI SEUL (jamais un autre token) jusqu'à ce qu'un gain sur ce contrat casse la série
 
-**11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$. Prix de clôture ROBUSTE (#173, 20/07) : médiane des 5 dernières bougies OHLCV (même cascade à 5 étages que la découverte, `momentum_entry._fetch_candles`) plutôt qu'un simple tick spot instantané — une mèche isolée survenant pile au moment du reset ne peut plus fausser le verdict de la semaine. Repli sur le prix spot déjà en main si bougies indisponibles, puis sur le prix d'entrée si tout échoue (jamais un prix inventé, jamais bloquant).
+**11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$. Prix de clôture ROBUSTE (#173, 20/07) : médiane des 5 dernières bougies OHLCV (même cascade à 5 étages que la découverte, `momentum_entry._fetch_candles`) plutôt qu'un simple tick spot instantané — une mèche isolée survenant pile au moment du reset ne peut plus fausser le verdict de la semaine. **Granularité précisée (20/07, revue croisée externe — le document ne le précisait pas)** : la cascade n'a PAS un intervalle de bougie fixe, elle escalade jour(120 bougies) → 4h(180) → 1h(240) selon la disponibilité pour ce token précis, jamais en dessous de 1h (donc jamais une mèche de quelques secondes/minutes qui fausserait la médiane — mais un repli sur 1h reste possible sur un token peu couvert, à garder en tête). Repli sur le prix spot déjà en main si bougies indisponibles, puis sur le prix d'entrée si tout échoue (jamais un prix inventé, jamais bloquant).
 
 ## Thèse d'achat VC — réponse de référence (à jour 20/07, construite suite à une question opérateur directe : « c'est important que la these dachat du vc existe sinon sa sert a quoi la vente ? »)
 **⚠️ Même norme que le bloc momentum ci-dessus (Règles absolues, « vérifier avant d'affirmer ») : instantané daté, RECONFIRMER contre `vc_analysis.py`/`safety_screen.py`/`acp_onchain_scan.py` avant de le réciter de mémoire si une session reprend ce fil après une évolution du pipeline.** Structurellement DIFFÉRENT du momentum (poche 15%/test 1M$ en cours) — comparaison actée le 20/07 : ici le LLM juge sur des faits riches, là-bas des seuils déterministes décident seuls (le LLM n'intervient qu'en tie-breaker/second avis).
