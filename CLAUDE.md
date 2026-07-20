@@ -3132,6 +3132,42 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   corrigé). Limite honnête : les positions DÉJÀ ouvertes silencieusement avant ce
   correctif (dont MAGIC, déjà clôturée) ne recevront jamais leur alerte d'achat
   manquante rétroactivement -- seulement les achats futurs par ce chemin.
+- **20/07 (suite) — investigation des 7 échecs `test_run_founder_ping_*`/
+  `test_proactive_ideas_*` (déjà notés "pré-existants, sans rapport" toute la
+  session) : root cause précise identifiée, 2 vrais bugs de test corrigés, 1 cause
+  plus profonde documentée mais PAS résolue (aucun impact prod confirmé).**
+  Déclenché par l'opérateur montrant une "Initiative ARIA" réelle sur Telegram
+  (`run_founder_ping`) -- vérifié d'abord que ce message live est bien formé
+  (conditionnel correct "je propose"/"à valider", ligne `/learn` -- conforme au
+  prompt système, aucun signe du bug que les tests visent). **2 vrais bugs de test
+  trouvés et corrigés** : `test_proactive.py::test_proactive_ideas_requires_llm_and_
+  telegram` et `test_llm_switch.py` (les deux) mutaient le singleton `settings`
+  DIRECTEMENT (`settings.x = y`) au lieu de `monkeypatch.setattr` -- ne respectaient
+  pas la fixture autouse `_isolated_runtime` (`conftest.py`), un vrai angle mort de
+  ces 2 fichiers seulement. **N'a pas suffi à faire disparaître les 7 échecs** --
+  diagnostic poussé plus loin via un `print` temporaire (retiré avant commit) dans
+  `run_founder_ping` : au moment de l'échec, `settings.aria_llm_enabled=False` et
+  `settings.telegram_bot_token=''` -- les valeurs par DÉFAUT de la classe
+  `AriaRuntimeSettings` (`testing.py`), pas celles que le test vient de monkeypatcher
+  quelques lignes plus haut sur l'objet renvoyé par `get_settings()`. Confirme que
+  `run_founder_ping`/`is_llm_configured` (accès via `settings` = `_SettingsProxy()`,
+  `runtime.py`, qui relit `get_settings()` à CHAQUE accès -- pas un problème de cache
+  de la proxy elle-même) lisent, au moment de l'appel, une instance
+  `AriaRuntimeSettings` DIFFÉRENTE de celle que le test a monkeypatchée -- quelque
+  chose reconfigure `_settings` (`runtime.configure()`) entre le monkeypatch et
+  l'appel à `run_founder_ping`, uniquement quand la suite COMPLÈTE tourne (jamais
+  reproduit en isolant ces 2 fichiers seuls, dans les deux ordres testés). **Piste
+  la plus probable, pas encore vérifiée** : une interaction fixture autouse
+  (`_isolated_runtime`, `conftest.py`) x pytest-asyncio sur l'ordonnancement
+  async -- à creuser en priorité si repris (chercher un AUTRE appel à
+  `configure_test_runtime()`/`bootstrap.configure()` ailleurs dans la suite qui
+  pourrait s'exécuter de façon asynchrone chevauchante). **Confirmé sans impact
+  production** : ce mécanisme (plusieurs instances `AriaRuntimeSettings` se
+  succédant via une fixture autouse) n'existe que dans le contexte de la suite de
+  tests -- la prod configure `_settings` UNE SEULE FOIS au boot
+  (`bootstrap.configure`), jamais rejoué en cours de vie du process. Suite complète
+  reverifiée après les 2 fixes (6443 passed, toujours les mêmes 7 échecs -- désormais
+  compris, plus un mystère aveugle). Rien à déployer (tests seuls).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
