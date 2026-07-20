@@ -350,8 +350,15 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="aria_brain_cycle",
         name="Memoire libre (aria-brain)",
-        description="Ecrit librement dans son propre repo GitHub prive (GoldenFarFR/aria-brain, token dedie, jamais celui qui touche ARIA) -- aucun format impose, aucune approbation humaine par entree, decision operateur explicite (20/07). Commit direct, jamais une proposition d'issue. Gate OFF par defaut.",
-        interval_minutes=240,
+        description="Ecrit librement dans son propre repo GitHub prive (GoldenFarFR/aria-brain, token dedie, jamais celui qui touche ARIA) -- aucun format impose, aucune approbation humaine par entree, decision operateur explicite (20/07). Une page par jour maximum (decision operateur explicite, 20/07) -- la choisit avec soin, jamais un flot continu. Commit direct, jamais une proposition d'issue. Gate OFF par defaut.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
+        id="trade_devils_advocate_cycle",
+        name="Le Diable d'ARIA (trading)",
+        description="Relit chaque position papier CLOTUREE jamais encore examinee -- un modele different (DeepSeek R1) juge la DECISION au moment de l'entree, jamais le resultat. Une leçon confirmee (faille de raisonnement reelle, jamais juste une perte) est injectee dans le garde de securite du pipeline momentum -- sens unique, ne relache jamais rien. Suite directe de la these ecrite par ARIA elle-meme (aria-brain, chapitre 1). Gate OFF par defaut.",
+        interval_minutes=180,
         enabled=False,
     ),
     HeartbeatTask(

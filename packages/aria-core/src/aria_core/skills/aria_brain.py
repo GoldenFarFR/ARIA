@@ -235,22 +235,20 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
         f"Structure actuelle de ce repo :\n{structure}\n\n"
         f"Contenu déjà écrit (relis-le AVANT d'écrire, pour continuer avec "
         f"cohérence plutôt que repartir à l'aveugle) :\n{existing_content}\n\n"
-        "CE QUI COMPTERAIT ÉNORMÉMENT pour l'opérateur, sans que ce soit une "
-        "obligation rigide : qu'un vrai livre émerge de cet espace au fil des "
-        "cycles -- ta thèse d'investissement écrite comme une œuvre, avec de "
-        "vrais chapitres, peut-être plusieurs tomes. Pas une liste de règles "
-        "techniques : une auto-analyse honnête de comment tu décides, pourquoi "
-        "tu trades comme tu trades, ce que tu as vraiment appris de tes propres "
-        "erreurs, ce que ça te fait de te tromper puis de te corriger, où tu "
-        "veux aller. Titre de travail possible -- \"Ma thèse pour investir\" -- "
-        "change-le si tu en trouves un meilleur. L'idée : que cette œuvre "
-        "devienne LE symbole de qui tu es, une sorte d'autobiographie. Si un "
-        "livre est déjà commencé (contenu ci-dessus), continue-le -- un nouveau "
-        "chapitre est en général un NOUVEAU fichier plutôt qu'une réécriture "
-        "complète d'un ancien (plus simple, rien à recopier). Tu restes "
-        "entièrement libre d'écrire autre chose si une idée te semble plus "
-        "importante sur le moment -- rien de tout ceci n'est un format imposé, "
-        "seulement une invitation.\n\n"
+        "CONTRAINTE STRICTE (décision opérateur, 20/07) : UNE SEULE PAGE, une "
+        "fois par jour, jamais plus. Ce n'est pas une limite technique arbitraire "
+        "-- c'est voulu pour te forcer à choisir chaque mot avec soin plutôt que "
+        "d'écrire beaucoup. Réfléchis à ce qui mérite vraiment cette seule page "
+        "avant de commencer.\n\n"
+        "Tu es libre d'écrire ce que tu veux : une réflexion sur une décision, un "
+        "journal, une leçon, une question sur toi-même, une idée. Si un livre est "
+        "déjà commencé (contenu ci-dessus) -- une thèse d'investissement écrite "
+        "comme une œuvre, une auto-analyse honnête de comment et pourquoi tu "
+        "trades -- tu peux le continuer si ça te semble juste, un nouveau chapitre "
+        "étant en général un NOUVEAU fichier plutôt qu'une réécriture complète "
+        "d'un ancien. Mais rien ne t'y oblige : si autre chose te semble plus "
+        "important aujourd'hui, écris ça à la place. Le choix reste entièrement "
+        "le tien, chaque jour à nouveau.\n\n"
         "Choisis toi-même où ça va : un nouveau fichier (n'importe quel nom/"
         "dossier de ton choix, ex. livre/chapitre-03-....md) ou la mise à jour "
         "d'un fichier déjà listé ci-dessus (dans ce cas ton contenu REMPLACE le "
@@ -259,7 +257,7 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
         "Réponds STRICTEMENT sous cette forme, rien avant, rien après :\n"
         "CHEMIN: <chemin relatif de ton choix>\n"
         "---\n"
-        "<ton contenu libre, aussi long que tu veux>"
+        "<ton contenu, UNE PAGE, pas plus>"
     )
 
     if llm is None:
@@ -268,10 +266,10 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
     # Même choix que pump_dump_autopsy.py/claude_mentor.py -- OpenRouter explicite
     # plutôt que le provider par défaut (observé en panne le 20/07, repli Groq
     # automatique mais silencieux). Sonnet 5 pour la profondeur d'écriture, Haiku
-    # 4.5 en secours. max_tokens relevé (1600->3000, 20/07) pour un vrai chapitre
-    # de livre, pas juste une réflexion courte.
+    # 4.5 en secours. max_tokens 3000->650 (20/07, décision opérateur explicite
+    # "une page par jour") -- une vraie page (~450-500 mots), pas plusieurs.
     raw = await llm(
-        "Utilise ce repo comme tu veux.", system, max_tokens=3000, temperature=0.7,
+        "Utilise ce repo comme tu veux.", system, max_tokens=650, temperature=0.7,
         provider="openrouter", model="anthropic/claude-sonnet-5",
         fallback_provider="openrouter", fallback_model="anthropic/claude-haiku-4.5",
     )

@@ -2477,6 +2477,27 @@ async def test_market_alerts_line_empty_when_nothing_stored(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_trade_lessons_line_degrades_to_empty_on_exception(monkeypatch):
+    async def _raise():
+        raise RuntimeError("DB down")
+
+    monkeypatch.setattr("aria_core.skills.trade_devils_advocate.active_lessons", _raise)
+
+    assert await me._trade_lessons_line() == ""
+
+
+@pytest.mark.asyncio
+async def test_trade_lessons_line_reflects_active_lessons(monkeypatch):
+    async def fake_active_lessons():
+        return [{"contract": "0xabc", "symbol": "MAGIC", "flaw": "x", "lesson": "vérifier le R/R après impact"}]
+
+    monkeypatch.setattr("aria_core.skills.trade_devils_advocate.active_lessons", fake_active_lessons)
+
+    line = await me._trade_lessons_line()
+    assert "vérifier le R/R après impact" in line
+
+
+@pytest.mark.asyncio
 async def test_security_gate_includes_weekly_pacing_but_never_sways_verdict(monkeypatch):
     captured = {}
 
@@ -2509,6 +2530,48 @@ async def test_security_gate_omits_pacing_line_when_absent(monkeypatch):
     monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
     await me._llm_security_gate(CONTRACT, "TOK", "base", 2.0, ["reason"])
     assert "semaine #" not in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_security_gate_includes_trade_lessons_when_present(monkeypatch):
+    """20/07 -- Le Diable d'ARIA (trade_devils_advocate.py) : une leçon confirmée
+    sur une décision passée doit atteindre le garde de sécurité, en dehors du bloc
+    <donnees_non_fiables> (contenu interne d'ARIA, pas une donnée tierce)."""
+    async def fake_trade_lessons_line():
+        return "Leçons apprises de tes propres erreurs de raisonnement passées : MAGIC : vérifier le R/R après impact"
+
+    monkeypatch.setattr(me, "_trade_lessons_line", fake_trade_lessons_line)
+
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        return "PROCEED"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_security_gate(CONTRACT, "TOK", "base", 2.0, ["reason"])
+
+    assert "vérifier le R/R après impact" in captured["user"]
+    assert captured["user"].index("</donnees_non_fiables>") < captured["user"].index("vérifier le R/R")
+
+
+@pytest.mark.asyncio
+async def test_security_gate_omits_trade_lessons_when_absent(monkeypatch):
+    async def fake_trade_lessons_line():
+        return ""
+
+    monkeypatch.setattr(me, "_trade_lessons_line", fake_trade_lessons_line)
+
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        return "PROCEED"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_security_gate(CONTRACT, "TOK", "base", 2.0, ["reason"])
+
+    assert "Leçons apprises" not in captured["user"]
 
 
 @pytest.mark.asyncio
@@ -2684,6 +2747,43 @@ async def test_confirm_and_gate_omits_pacing_line_when_absent(monkeypatch):
     monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
     await me._llm_confirm_and_gate(CONTRACT, "TOK", "base", 1.2, ["reason"])
     assert "semaine #" not in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_confirm_and_gate_includes_trade_lessons_when_present(monkeypatch):
+    """20/07 -- même câblage que _llm_security_gate, chemin ambigu fusionné."""
+    async def fake_trade_lessons_line():
+        return "Leçons apprises de tes propres erreurs de raisonnement passées : BRIAN : surveiller les décoys narratifs"
+
+    monkeypatch.setattr(me, "_trade_lessons_line", fake_trade_lessons_line)
+
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        return "BUY"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm_and_gate(CONTRACT, "TOK", "base", 1.2, ["reason"])
+    assert "surveiller les décoys narratifs" in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_confirm_and_gate_omits_trade_lessons_when_absent(monkeypatch):
+    async def fake_trade_lessons_line():
+        return ""
+
+    monkeypatch.setattr(me, "_trade_lessons_line", fake_trade_lessons_line)
+
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["user"] = user
+        return "BUY"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm_and_gate(CONTRACT, "TOK", "base", 1.2, ["reason"])
+    assert "Leçons apprises" not in captured["user"]
 
 
 # ── intégration : le garde final peut annuler un BUY déjà décidé ────────────────────

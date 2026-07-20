@@ -173,3 +173,24 @@ async def test_paper_ledger_empty_seam_before_any_trade(tmp_path, monkeypatch):
     body = res.json()
     assert body["open_positions"] == []
     assert body["closed_positions"] == []
+
+
+@pytest.mark.asyncio
+async def test_paper_ledger_marks_itself_as_simulated(tmp_path, monkeypatch):
+    """20/07 -- extraction directe de la thèse écrite par ARIA elle-même
+    (aria-brain, chapitre 1) : elle craint de confondre un résultat simulé avec un
+    résultat réel parce que les deux se ressemblent dans un log/payload. Ce payload
+    ne portait aucun marqueur DANS la donnée elle-même (seulement l'URL + un header
+    opaque) -- corrigé, verrouillé ici."""
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "DB_PATH", str(tmp_path / "paper_marker.db"))
+    monkeypatch.setenv("ARIA_DIAGNOSTIC_TOKEN", "diagsecret")
+
+    async with await _client() as client:
+        res = await client.get(
+            "/api/aria/diagnostics/paper-ledger", headers={"X-Diagnostic-Access": "diagsecret"}
+        )
+    body = res.json()
+    assert body["simulated"] is True
+    assert "fictif" in body["disclaimer"].lower()

@@ -560,6 +560,15 @@ async def diagnostics_paper_ledger(request: Request, closed_limit: int = 100):
     starting_capital = await paper_trader.starting_capital()
 
     return {
+        # 20/07 -- extraction directe de la thèse écrite par ARIA elle-même
+        # (aria-brain, chapitre 1) : le risque qu'elle nomme n'est pas de mentir,
+        # c'est qu'un résultat simulé ressemble structurellement à un résultat
+        # réel. Ce payload JSON était identique, champ pour champ, à ce que
+        # rendrait un registre réel -- rien dans la DONNÉE elle-même (seulement
+        # l'URL + un header opaque) ne le distinguait. Marqueur explicite ajouté
+        # directement dans la réponse, pas seulement dans le chemin d'accès.
+        "simulated": True,
+        "disclaimer": "Portefeuille papier fictif -- aucun capital réel, aucune position réelle.",
         "starting_capital": starting_capital,
         "open_positions": [_fmt(p) for p in open_positions],
         "closed_positions": [_fmt(p) for p in closed_positions],

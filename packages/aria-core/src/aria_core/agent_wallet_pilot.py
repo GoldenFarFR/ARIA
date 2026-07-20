@@ -59,6 +59,15 @@ WALLET_PRODUCT = "coinbase_agentic_wallet"
 MAX_TRANSACTION_USD = 15.0
 MAX_SLIPPAGE_BPS = 1000  # 10% -- règle absolue, jamais la valeur par défaut d'un outil.
 
+# 20/07 -- extraction directe de la thèse qu'ARIA a écrite elle-même (aria-brain,
+# chapitre 1) : « la tentation la plus dangereuse... c'est de confondre un résultat
+# simulé avec un résultat réel parce que les deux ressemblent à la même ligne dans
+# un log ». Audit confirmé : les logs de CE module (seul chemin qui touche du vrai
+# capital) ne disaient jamais "réel" nulle part -- indiscernables d'un module de
+# test. Préfixe systématique sur CHAQUE ligne de log de ce fichier, jamais sur
+# paper_trader.py (qui a déjà son propre marqueur "🧪 SIMULATION").
+_REAL_MONEY_LOG_PREFIX = "[ARGENT RÉEL] pilote agent-wallet"
+
 # Exception nommée #4 (16/07) -- SEULE adresse vers laquelle un transfert peut être
 # tenté. Codée en dur (pas une variable d'environnement) : tout changement exige un
 # commit revu, jamais un simple réglage `.env` modifiable sans trace.
@@ -118,9 +127,8 @@ async def attempt_swap(
     """
     if slippage_bps is not None and slippage_bps != MAX_SLIPPAGE_BPS:
         logger.warning(
-            "attempt_swap: slippage_bps=%s ignoré, forcé à %s (règle absolue 09/07)",
-            slippage_bps,
-            MAX_SLIPPAGE_BPS,
+            "%s -- slippage_bps=%s ignoré, forcé à %s (règle absolue 09/07)",
+            _REAL_MONEY_LOG_PREFIX, slippage_bps, MAX_SLIPPAGE_BPS,
         )
 
     if not agent_wallet_pilot_enabled():
@@ -175,6 +183,7 @@ async def attempt_swap(
             slippage_bps=MAX_SLIPPAGE_BPS,
         )
     except Exception as exc:
+        logger.error("%s -- échec d'exécution du swap : %s", _REAL_MONEY_LOG_PREFIX, exc)
         await agent_wallet_log.record_transaction(
             wallet_product=WALLET_PRODUCT,
             chain=chain,
@@ -190,6 +199,10 @@ async def attempt_swap(
 
     tx_hash = str(result.get("tx_hash") or "")
     amount_out = float(result.get("amount_out") or 0.0)
+    logger.info(
+        "%s -- swap RÉUSSI : %s -> %s (%.2f$ -> %.6g), tx=%s",
+        _REAL_MONEY_LOG_PREFIX, token_in, token_out, amount_in_usd, amount_out, tx_hash,
+    )
     await agent_wallet_log.record_transaction(
         wallet_product=WALLET_PRODUCT,
         chain=chain,
@@ -208,7 +221,7 @@ async def attempt_swap(
 async def _blocked(
     chain: str, token_in: str, token_out: str, amount_in_usd: float, *, reason: str
 ) -> SwapAttemptResult:
-    logger.warning("agent_wallet_pilot swap bloqué : %s", reason)
+    logger.warning("%s -- swap bloqué : %s", _REAL_MONEY_LOG_PREFIX, reason)
     await agent_wallet_log.record_transaction(
         wallet_product=WALLET_PRODUCT,
         chain=chain,
@@ -301,6 +314,7 @@ async def attempt_transfer(
             chain=chain, to_address=ALLOWED_TRANSFER_ADDRESS, amount_usd=amount_usd,
         )
     except Exception as exc:
+        logger.error("%s -- échec d'exécution du transfert : %s", _REAL_MONEY_LOG_PREFIX, exc)
         await agent_wallet_log.record_transaction(
             wallet_product=WALLET_PRODUCT,
             chain=chain,
@@ -313,6 +327,10 @@ async def attempt_transfer(
         return TransferAttemptResult(status="failed", reason=str(exc))
 
     tx_hash = str(result.get("tx_hash") or "")
+    logger.info(
+        "%s -- transfert RÉUSSI : %.2f$ -> %s, tx=%s",
+        _REAL_MONEY_LOG_PREFIX, amount_usd, ALLOWED_TRANSFER_ADDRESS, tx_hash,
+    )
     await agent_wallet_log.record_transaction(
         wallet_product=WALLET_PRODUCT,
         chain=chain,
@@ -328,7 +346,7 @@ async def attempt_transfer(
 async def _blocked_transfer(
     chain: str, to_address: str, amount_usd: float, *, reason: str
 ) -> TransferAttemptResult:
-    logger.warning("agent_wallet_pilot transfert bloqué : %s", reason)
+    logger.warning("%s -- transfert bloqué : %s", _REAL_MONEY_LOG_PREFIX, reason)
     await agent_wallet_log.record_transaction(
         wallet_product=WALLET_PRODUCT,
         chain=chain,
