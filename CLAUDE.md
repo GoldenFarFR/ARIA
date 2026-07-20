@@ -2476,6 +2476,20 @@ builder précoce.
   blocage. Base reste la priorité #1 (tout existe déjà), Solana en second
   (couverture GoPlus/DexScreener confirmée), "Robinhood" et au-delà en best-
   effort selon ce que les mêmes clients couvrent réellement.
+- **⚠️ Rappel pour la transition capital réel (décision opérateur explicite, 20/07) :
+  désactiver Solana avant tout passage en réel.** "on scanne Solana mais quand on
+  passera au réel il faudra pensé a le désactiver car je ne vais pas alimenté en sol"
+  — le multi-chaînes ci-dessus (15/07) reste voulu et actif pour le PAPIER (valeur
+  diagnostique, aucun capital réel en jeu, cf. philosophie du volume de données
+  juste en dessous). Mais l'opérateur ne compte PAS financer de wallet en SOL —
+  donc le jour où le pipeline momentum (ou une extension de lui) alimente une
+  EXÉCUTION réelle au-delà du pilote agent-wallet actuel (déjà structurellement
+  Base-only, `agent_wallet_cdp_adapter.py`, aucun changement nécessaire de ce
+  côté-là), le sourcing Solana devra être coupé explicitement AVANT ce
+  basculement — jamais suppposer que "multi-chaînes" survit tel quel au passage
+  papier → réel. Aucune action requise maintenant (rien à construire, gate déjà
+  scopé au paper-trading) — seulement un point à revérifier explicitement au
+  moment de préparer la transition, pour ne pas le découvrir après coup.
 - **Philosophie du volume de données (décision opérateur explicite, 15/07)** :
   "plus on a de données à traiter, plus on peut réparer" — cohérent avec
   l'objectif diagnostique du test (pousser ARIA à agir/se tromper pour
