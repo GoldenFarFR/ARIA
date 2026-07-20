@@ -305,11 +305,20 @@ class MomentumWebsocketListener:
         chain_by_contract = {c["contract"]: c["chain"] for c in filtered}
         analyzer = paper_trader._default_momentum_analyzer(chain_by_contract)
         try:
+            from aria_core.gateway.telegram_bot import send_trading_notification
+
+            # 20/07 -- bug réel trouvé en conditions réelles (position MAGIC achetée
+            # sans jamais notifier Telegram, seule sa vente par le heartbeat suivant
+            # est arrivée) : ce chemin n'avait jamais transmis de notifier à
+            # run_paper_cycle -- toute position ouverte via le WebSocket temps réel
+            # restait silencieuse jusqu'à sa clôture (gérée par le heartbeat, qui
+            # notifie déjà). Même fonction que le heartbeat, jamais une 2e implémentation.
             await paper_trader.run_paper_cycle(
                 candidates=candidates,
                 analyzer=analyzer,
                 max_new=MAX_NEW_PER_DRAIN,
                 skip_position_management=True,
+                notifier=send_trading_notification,
             )
         except Exception as exc:  # noqa: BLE001 -- une vidange qui plante ne tue pas le service
             logger.exception("momentum_websocket: run_paper_cycle échoué (%s)", exc)

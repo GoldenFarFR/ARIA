@@ -244,6 +244,13 @@ async def test_drain_triggers_run_paper_cycle_with_skip_position_management(monk
     assert listener._pending == {}
     assert (A, "base") in listener._seen
     assert (B, "solana") in listener._seen
+    # 20/07 -- non-régression du vrai bug trouvé en conditions réelles (position MAGIC
+    # achetée via ce chemin sans jamais notifier Telegram, seule sa vente -- gérée par
+    # le heartbeat -- est arrivée) : ce chemin doit désormais passer le MÊME notifier
+    # que le heartbeat, jamais un achat silencieux.
+    from aria_core.gateway.telegram_bot import send_trading_notification
+
+    assert captured["notifier"] is send_trading_notification
 
 
 @pytest.mark.asyncio

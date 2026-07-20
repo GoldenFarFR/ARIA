@@ -219,6 +219,40 @@ async def send_message(
         return False
 
 
+async def send_trading_notification(text: str) -> None:
+    """20/07 -- extrait de ``Heartbeat._notify_telegram_trading`` (fonction libre,
+    plus une méthode liée) : un vrai bug trouvé en conditions réelles (position MAGIC
+    achetée par ``momentum_websocket.py`` sans jamais notifier Telegram, seule sa
+    vente par le cycle heartbeat suivant est arrivée) -- ``momentum_websocket.py`` ne
+    pouvait pas réutiliser la méthode liée `self._notify_telegram_trading` (pas
+    d'accès à l'instance ``Heartbeat``), donc son appel à ``run_paper_cycle`` ne
+    passait tout simplement AUCUN notifier. Extraite ici pour que les deux sources
+    d'achat (heartbeat 15min ET WebSocket temps réel) envoient EXACTEMENT le même
+    message, au même endroit (DM admin + sujet Telegram dédié #197 si configuré),
+    jamais une seconde implémentation divergente.
+
+    ``disable_preview=True`` (17/07, cf. ``send_message``) : ces messages contiennent
+    systématiquement un lien DexScreener (#194) dont la carte d'aperçu peut être
+    périmée.
+
+    Les deux envois sont protégés individuellement -- ``_notify_telegram`` (méthode
+    d'origine) enveloppait déjà le DM principal dans un try/except ; cette fonction
+    libre reproduit exactement le même filet des deux côtés, jamais une exception
+    Telegram qui remonterait casser un cycle de trading réel."""
+    try:
+        await send_message(text, disable_preview=True)
+    except Exception as exc:
+        logger.warning("Telegram notify failed: %s", exc)
+    chat_id = getattr(settings, "aria_trading_topic_chat_id", None)
+    thread_id = getattr(settings, "aria_trading_topic_thread_id", None)
+    if not chat_id or not thread_id:
+        return
+    try:
+        await send_message(text, chat_id=chat_id, message_thread_id=thread_id, disable_preview=True)
+    except Exception as exc:
+        logger.warning("Telegram trading-topic notify failed: %s", exc)
+
+
 async def send_photo(path, *, caption: str = "", chat_id: int | None = None) -> bool:
     from pathlib import Path
 

@@ -799,20 +799,13 @@ class AriaHeartbeat:
         ``paper_trade_cycle`` (pas un changement global de ``_notify_telegram``, qui reste
         utilisé tel quel par les 20+ autres tâches heartbeat).
 
-        ``disable_preview=True`` (17/07) : ces messages contiennent systématiquement un
-        lien DexScreener (#194) dont la carte d'aperçu Telegram peut être périmée (cache
-        de la plateforme, constaté en réel sur un token qui venait de prendre +1600 %) --
-        désactivé UNIQUEMENT sur ce chemin, jamais sur ``_notify_telegram`` générique."""
-        await self._notify_telegram(text, disable_preview=True)
-        chat_id = getattr(settings, "aria_trading_topic_chat_id", None)
-        thread_id = getattr(settings, "aria_trading_topic_thread_id", None)
-        if not chat_id or not thread_id:
-            return
-        try:
-            from aria_core.gateway.telegram_bot import send_message
-            await send_message(text, chat_id=chat_id, message_thread_id=thread_id, disable_preview=True)
-        except Exception as exc:
-            logger.warning("Telegram trading-topic notify failed: %s", exc)
+        20/07 -- déléguée à ``telegram_bot.send_trading_notification`` (fonction libre,
+        pas une méthode liée) pour que ``momentum_websocket.py`` puisse envoyer
+        EXACTEMENT le même message par le même chemin, sans dupliquer cette logique
+        (bug réel trouvé : le WebSocket n'avait aucun moyen de réutiliser une méthode
+        liée à CETTE instance ``Heartbeat``, donc n'envoyait jamais rien)."""
+        from aria_core.gateway.telegram_bot import send_trading_notification
+        await send_trading_notification(text)
 
     async def _run_task(self, task_id: str) -> None:
         if task_id == "portfolio_scan":
