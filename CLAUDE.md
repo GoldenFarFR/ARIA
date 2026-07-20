@@ -2331,6 +2331,21 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   total ce segment. Suite complète verte (6240 passed, mêmes 7 échecs pré-existants
   sans rapport #142, 0 régression), `test_coherence.py` vert (81 passed). Déployé et
   vérifié (commit `d54c3513a235` confirmé servi par nginx).
+- **20/07 (suite) — reset manuel du portefeuille papier, décision opérateur explicite
+  ("reset le portfolio"), après le marathon de correctifs round 5/6/7 (TP1 technique,
+  ratio volume/liquidité, cumul des malus, EOA/contrat vérifié, plancher RVOL nominal,
+  TP en R-multiples, anti-mèche temporel, sizing risque/ATR).** But implicite : repartir
+  sur une base propre pour que le prochain lot de trades reflète UNIQUEMENT les règles
+  déployées aujourd'hui, sans mélanger avec les positions ouvertes sous les anciennes
+  règles au fil de la journée. Sauvegarde de `aria.db` prise avant écriture
+  (`/opt/aria-data/backups/aria-pre-reset-20260720T041833Z.db`) -- même discipline que
+  la correction manuelle du 19/07. État juste avant reset : équité 995 317$ (-0,47%),
+  13 positions ouvertes, 7 clôturées, PnL réalisé -4 683$ (aucun re-achat trouvé dans
+  cet historique, cf. vérification du même segment). `reset_portfolio(1_000_000.0)`
+  exécuté via `docker exec`, vérifié après coup : équité 1 000 000$, cash 1 000 000$,
+  0 position ouverte/clôturée, PnL réalisé 0. Comportement de `reset_portfolio()`
+  inchangé (DROP + recréation, aucun archivage -- distinct de `run_weekly_reset()`, qui
+  archive tout dans `paper_position_archive` avant de repartir).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
