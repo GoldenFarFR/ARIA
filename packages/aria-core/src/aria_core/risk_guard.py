@@ -368,6 +368,15 @@ PRICE_IMPACT_RATIO = 2.0  # règle AMM standard : X % du pool -> ~2*X % d'impact
 PRICE_IMPACT_MIN_RR = 1.0
 
 
+def _price_impact_pct(alloc_usd: float, pool_liquidity_usd: float) -> float:
+    """Impact de prix estimé (fraction) d'un ordre de ``alloc_usd`` sur un pool de
+    ``pool_liquidity_usd`` -- règle AMM standard (``PRICE_IMPACT_RATIO``), extraite ici
+    pour être réutilisée à l'identique par ``cap_alloc_to_price_impact`` (dimensionnement)
+    ET ``simulated_fill_price`` (#175, prix de remplissage réel) -- jamais un second
+    calcul divergent entre les deux."""
+    return PRICE_IMPACT_RATIO * (alloc_usd / pool_liquidity_usd)
+
+
 def cap_alloc_to_price_impact(
     alloc_usd: float, entry_price: float, target_price: float | None,
     invalidation_price: float | None, pool_liquidity_usd: float | None,
@@ -389,8 +398,7 @@ def cap_alloc_to_price_impact(
     if target_price <= entry_price or invalidation_price >= entry_price:
         return alloc_usd  # structure non haussière -- pas le rôle de cette fonction
 
-    impact_pct = PRICE_IMPACT_RATIO * (alloc_usd / pool_liquidity_usd)
-    degraded_entry = entry_price * (1.0 + impact_pct)
+    degraded_entry = entry_price * (1.0 + _price_impact_pct(alloc_usd, pool_liquidity_usd))
     if degraded_entry < target_price:
         degraded_rr = (target_price - degraded_entry) / (degraded_entry - invalidation_price)
         if degraded_rr >= PRICE_IMPACT_MIN_RR:
@@ -408,6 +416,35 @@ def cap_alloc_to_price_impact(
     k = PRICE_IMPACT_RATIO / pool_liquidity_usd
     capped_alloc = (target_degraded_entry / entry_price - 1.0) / k
     return max(0.0, min(alloc_usd, capped_alloc))
+
+
+# 20/07 -- #175 : ``cap_alloc_to_price_impact`` ci-dessus calcule déjà un ``degraded_
+# entry`` en interne pour DIMENSIONNER la position (réduire ``alloc_usd`` si besoin),
+# mais ne le retourne jamais -- une fois la taille figée, ``open_position`` remplissait
+# encore la position au prix spot EXACT coté, jamais au prix réellement "payé" par un
+# ordre de cette taille sur ce pool. Cette fonction comble l'écart : même modèle
+# d'impact (``_price_impact_pct``, jamais un second calcul divergent), appliqué au prix
+# de REMPLISSAGE simulé plutôt qu'à la taille -- appelée séparément par ``paper_trader.
+# open_position`` sur l'allocation FINALE (après TOUTES les réductions -- risque/impact/
+# concentration), jamais l'allocation intermédiaire de ``cap_alloc_to_price_impact``, qui
+# peut avoir été encore réduite depuis. ``target_price``/``invalidation_price`` ne
+# bougent jamais : ce sont des niveaux techniques externes au graphique (Fibonacci/RSI),
+# notre propre ordre ne déplace pas le support/la résistance, seulement le prix que NOUS
+# payons.
+def simulated_fill_price(
+    entry_price: float, alloc_usd: float, pool_liquidity_usd: float | None,
+) -> float:
+    """Prix de remplissage RÉEL simulé pour un achat de ``alloc_usd`` sur un pool de
+    ``pool_liquidity_usd`` -- toujours >= ``entry_price`` (un achat pousse le prix vers
+    le haut, jamais vers le bas). Données manquantes/invalides (alloc/prix nuls,
+    liquidité du pool inconnue) -> ``entry_price`` inchangé, fail-open -- même doctrine
+    que ``cap_alloc_to_price_impact`` (le garde-fou dur sur la liquidité vit dans
+    ``momentum_entry._MIN_LIQUIDITY_USD``, pas ici)."""
+    if entry_price <= 0 or alloc_usd <= 0:
+        return entry_price
+    if not pool_liquidity_usd or pool_liquidity_usd <= 0:
+        return entry_price
+    return entry_price * (1.0 + _price_impact_pct(alloc_usd, pool_liquidity_usd))
 
 
 # ── 2. Coupe-circuit de portefeuille (état persisté, fichier dédié) ────────

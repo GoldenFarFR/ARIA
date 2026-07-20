@@ -2802,9 +2802,13 @@ async def test_vc_thesis_position_never_stopped_out_on_a_deep_pullback(tmp_db, m
     haut, normale pour une thèse VC moyen terme, ne doit JAMAIS déclencher de sortie --
     contrairement à la discipline momentum (stop suiveur ATR)."""
     await pt.reset_portfolio(1_000_000.0)
+    # #175 (20/07) -- pool_liquidity_usd VOLONTAIREMENT omis : ce test isole le
+    # comportement Take Seed/pullback (gain_mult = price/entry_price), qui n'a rien à
+    # voir avec le prix de remplissage simulé (risk_guard.simulated_fill_price) -- le
+    # fournir aurait dégradé entry_price loin de 1.0 et cassé le narratif "3x"/"-50%
+    # depuis l'entrée" ci-dessous sans rien apporter à ce qui est réellement testé ici.
     await pt.open_position(
-        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000,
-        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis",
     )
     # Premier cycle : le prix monte à 3x (au-dessus du seuil Take Seed) -- laisse la
     # sortie partielle se déclencher pour isoler ensuite le seul comportement de
@@ -2831,9 +2835,11 @@ async def test_vc_thesis_position_never_stopped_out_on_a_deep_pullback(tmp_db, m
 @pytest.mark.asyncio
 async def test_vc_thesis_take_seed_recovers_exactly_initial_cost(tmp_db, monkeypatch):
     await pt.reset_portfolio(1_000_000.0)
+    # #175 -- pool_liquidity_usd omis, cf. commentaire de test_vc_thesis_position_never_
+    # stopped_out_on_a_deep_pullback (le "exactement 2x" ci-dessous exige entry_price
+    # non dégradé).
     await pt.open_position(
-        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000,
-        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -2852,9 +2858,9 @@ async def test_vc_thesis_take_seed_recovers_exactly_initial_cost(tmp_db, monkeyp
 @pytest.mark.asyncio
 async def test_vc_thesis_take_seed_never_fires_twice(tmp_db, monkeypatch):
     await pt.reset_portfolio(1_000_000.0)
+    # #175 -- pool_liquidity_usd omis, même raison que ci-dessus.
     await pt.open_position(
-        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000,
-        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -2875,9 +2881,9 @@ async def test_vc_thesis_take_seed_never_fires_twice(tmp_db, monkeypatch):
 @pytest.mark.asyncio
 async def test_vc_thesis_position_untouched_below_take_seed_threshold(tmp_db, monkeypatch):
     await pt.reset_portfolio(1_000_000.0)
+    # #175 -- pool_liquidity_usd omis, même raison que ci-dessus.
     await pt.open_position(
-        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000,
-        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",

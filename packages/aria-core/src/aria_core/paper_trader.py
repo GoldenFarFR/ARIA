@@ -830,6 +830,10 @@ async def open_position(
     pool ferait tomber le R/R structurel sous son plancher (``risk_guard.
     cap_alloc_to_price_impact``). ``None`` par défaut -- comportement inchangé pour
     tout appelant qui ne le fournit pas (ex. l'ancien pilote VC-thesis, dormant).
+    Sert AUSSI (#175, 20/07) à dégrader le prix de REMPLISSAGE simulé lui-même
+    (``risk_guard.simulated_fill_price``, sur l'alloc FINALE) -- ``entry_price`` persisté
+    (et ``qty`` calculée) reflète désormais le prix réellement "payé" par un ordre de
+    cette taille sur ce pool, pas le prix spot coté avant impact.
 
     ``entry_atr_pct`` (19/07, revue croisée Gemini) : ATR (volatilité) en % du prix
     d'entrée, calculé une seule fois à l'ouverture -- persisté tel quel, utilisé par la
@@ -890,7 +894,22 @@ async def open_position(
         if alloc <= 0:
             return None
 
-    qty = alloc / entry_price
+    # 20/07 -- #175 : prix de REMPLISSAGE simulé, dégradé par le même modèle d'impact de
+    # prix que celui déjà utilisé pour dimensionner ``alloc`` ci-dessus
+    # (``cap_alloc_to_price_impact``) -- avant ce correctif, l'impact de prix réduisait
+    # la taille mais la position se remplissait quand même au prix spot EXACT coté,
+    # jamais le prix réellement "payé" par un ordre de cette taille sur ce pool. Calculé
+    # sur l'alloc FINALE (après TOUTES les réductions -- risque/impact/concentration),
+    # jamais l'alloc intermédiaire de ``cap_alloc_to_price_impact``, qui peut avoir
+    # depuis été encore réduite. ``target_price``/``invalidation_price`` restent
+    # inchangés (niveaux techniques externes au graphique -- notre propre ordre ne
+    # déplace pas le support/la résistance, seulement le prix que NOUS payons).
+    # Fail-open à ``entry_price`` sans ``pool_liquidity_usd`` connu (ex. l'ancien pilote
+    # VC-thesis, dormant) -- comportement historique inchangé pour tout appelant qui ne
+    # le fournit pas.
+    fill_price = risk_guard.simulated_fill_price(entry_price, alloc, pool_liquidity_usd)
+
+    qty = alloc / fill_price
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """
@@ -901,8 +920,8 @@ async def open_position(
                strategy, entry_liquidity_usd, entry_regime)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (contract, symbol or "", alloc, entry_price, qty, target_price, invalidation_price,
-             _now(), entry_price, qty, category or "", entry_security_json or None,
+            (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
+             _now(), fill_price, qty, category or "", entry_security_json or None,
              (chain or "base").lower(), thesis, entry_atr_pct,
              strategy or "momentum", pool_liquidity_usd, entry_regime),
         )

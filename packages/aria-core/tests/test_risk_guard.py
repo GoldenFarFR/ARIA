@@ -458,6 +458,49 @@ class TestCapAllocToPriceImpact:
         assert result == alloc
 
 
+# ── 1quinquies. simulated_fill_price (20/07, #175 -- prix d'exécution dégradé) ──────
+
+
+class TestSimulatedFillPrice:
+    def test_matches_cap_alloc_internal_degraded_entry(self):
+        """Même modèle d'impact que cap_alloc_to_price_impact -- vérifié sur le cas
+        déjà validé à la main dans TestCapAllocToPriceImpact (entry=1.0, alloc
+        capée à 10 000$ sur un pool de 100k$ -> impact 20%, prix dégradé 1.2)."""
+        price = risk_guard.simulated_fill_price(1.0, 10_000.0, 100_000.0)
+        assert price == pytest.approx(1.2, rel=1e-6)
+
+    def test_negligible_impact_on_deep_pool_barely_moves_price(self):
+        price = risk_guard.simulated_fill_price(1.0, 20_000.0, 100_000_000.0)
+        assert price == pytest.approx(1.0, rel=1e-3)
+        assert price > 1.0  # jamais exactement égal -- toujours un impact, même infime
+
+    def test_always_at_or_above_entry_price_never_below(self):
+        """Un achat pousse le prix vers le haut, jamais vers le bas -- quelle que
+        soit la taille."""
+        for alloc in (100.0, 10_000.0, 100_000.0):
+            price = risk_guard.simulated_fill_price(1.0, alloc, 50_000.0)
+            assert price >= 1.0
+
+    def test_scales_with_alloc_bigger_order_worse_fill(self):
+        small = risk_guard.simulated_fill_price(1.0, 5_000.0, 100_000.0)
+        big = risk_guard.simulated_fill_price(1.0, 50_000.0, 100_000.0)
+        assert big > small
+
+    @pytest.mark.parametrize(
+        "entry,alloc,liquidity",
+        [
+            (0.0, 10_000.0, 100_000.0),   # prix d'entrée invalide
+            (1.0, 0.0, 100_000.0),        # alloc nulle
+            (1.0, -100.0, 100_000.0),     # alloc négative
+            (1.0, 10_000.0, None),        # liquidité du pool inconnue
+            (1.0, 10_000.0, 0.0),         # liquidité du pool nulle
+        ],
+    )
+    def test_fail_open_returns_entry_price_unchanged(self, entry, alloc, liquidity):
+        result = risk_guard.simulated_fill_price(entry, alloc, liquidity)
+        assert result == entry
+
+
 # ── 2. Coupe-circuit dédié : persistance, robustesse, distinction avec outgoing_pause ──
 
 
