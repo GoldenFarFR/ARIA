@@ -191,3 +191,82 @@ async def test_positions_detail_block_respects_closed_limit(tmp_db):
     text = await report.build_positions_detail_block(closed_limit=3)
     assert "Positions clôturées récentes (3)" in text
     assert text.count("CLÔTURÉE") == 3
+
+
+# ── build_regime_report (20/07, #176 -- volet apprentissage) ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_regime_report_empty_portfolio_shows_no_trades(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    text, machine = await report.build_regime_report()
+    assert "aucun trade clôturé" in text
+    assert machine["closed_trades_considered"] == 0
+    assert machine["by_regime"] == {}
+
+
+@pytest.mark.asyncio
+async def test_regime_report_segments_by_entry_regime(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, invalidation_price=0.5, alloc_usd=10_000, entry_regime="peur")
+    await pt.close_position(A, 1.5, reason="manuel")  # +5000, peur
+    await pt.open_position(B, "BBB", 1.0, invalidation_price=0.5, alloc_usd=10_000, entry_regime="euphorie")
+    await pt.close_position(B, 0.5, reason="manuel")  # -5000, euphorie
+
+    text, machine = await report.build_regime_report()
+    assert machine["by_regime"]["peur"]["count"] == 1
+    assert machine["by_regime"]["peur"]["wins"] == 1
+    assert machine["by_regime"]["peur"]["total_pnl_usd"] == pytest.approx(5000.0, abs=1.0)
+    assert machine["by_regime"]["euphorie"]["count"] == 1
+    assert machine["by_regime"]["euphorie"]["losses"] == 1
+    assert machine["by_regime"]["euphorie"]["total_pnl_usd"] == pytest.approx(-5000.0, abs=1.0)
+    assert "Peur" in text
+    assert "Euphorie" in text
+    # Ordre d'affichage = échelle ordinale du Regime Switch (Peur avant Euphorie).
+    assert text.index("Peur") < text.index("Euphorie")
+
+
+@pytest.mark.asyncio
+async def test_regime_report_groups_pre_regime_positions_separately(tmp_db):
+    """Position ouverte AVANT #172 (entry_regime jamais renseigné) -- jamais mélangée
+    aux 3 régimes réels, ni silencieusement ignorée."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, invalidation_price=0.5, alloc_usd=10_000)  # pas de entry_regime
+    await pt.close_position(A, 1.2, reason="manuel")
+
+    text, machine = await report.build_regime_report()
+    assert machine["by_regime"]["pré-régime"]["count"] == 1
+    assert "peur" not in machine["by_regime"]
+    assert "euphorie" not in machine["by_regime"]
+    assert "neutre" not in machine["by_regime"]
+    assert "Pré-régime (avant #172, 20/07)" in text
+
+
+@pytest.mark.asyncio
+async def test_regime_report_win_rate_and_average_pnl_computed_correctly(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, invalidation_price=0.5, alloc_usd=10_000, entry_regime="neutre")
+    await pt.close_position(A, 2.0, reason="manuel")  # +10000
+    await pt.open_position(B, "BBB", 1.0, invalidation_price=0.5, alloc_usd=10_000, entry_regime="neutre")
+    await pt.close_position(B, 0.5, reason="manuel")  # -5000
+
+    _text, machine = await report.build_regime_report()
+    neutre = machine["by_regime"]["neutre"]
+    assert neutre["count"] == 2
+    assert neutre["win_rate_pct"] == 50.0
+    assert neutre["total_pnl_usd"] == pytest.approx(5000.0, abs=1.0)
+    assert neutre["avg_pnl_usd"] == pytest.approx(2500.0, abs=1.0)
+
+
+@pytest.mark.asyncio
+async def test_regime_report_closed_limit_bounds_history(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    for i in range(3):
+        contract = f"0x{i:040d}"
+        await pt.open_position(
+            contract, f"T{i}", 1.0, invalidation_price=0.5, alloc_usd=5_000, entry_regime="neutre",
+        )
+        await pt.close_position(contract, 1.1, reason="manuel")
+    _text, machine = await report.build_regime_report(closed_limit=2)
+    assert machine["closed_trades_considered"] == 2
+    assert machine["by_regime"]["neutre"]["count"] == 2

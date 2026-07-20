@@ -557,6 +557,20 @@ async def _handle_funnel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(update.message, format_funnel_summary(summary, hours=hours))
 
 
+async def _handle_regime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/regime -- 20/07 (#176, volet apprentissage) : win-rate/PnL des trades
+    clôturés segmenté par régime macro à l'entrée (Peur/Neutre/Euphorie, Regime
+    Switch #172) -- objective si un régime dégrade réellement la performance ou si
+    la segmentation ne montre aucun écart significatif. Admin-only, lecture seule,
+    aucun nouvel appel réseau (donnée déjà persistée sur chaque position)."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.paper_ledger_report import build_regime_report
+
+    text, _machine = await build_regime_report()
+    await _reply(update.message, text)
+
+
 async def _handle_x402_trending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/x402trending [mots-clés] -- 19/07 : découverte de services x402 (registre CDP
     officiel), triés par volume d'appels réel sur 30j -- réponse à "il n'existe pas un
@@ -2019,6 +2033,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("langue", "Langue des analyses (fr/en)"),
     ("learn", "Ajoute une leçon manuelle (topic | contenu)"),
     ("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
+    ("regime", "Win-rate/PnL des trades clôturés par régime macro (Peur/Neutre/Euphorie)"),
     ("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
     ("resume", "▶️ Reprendre les actions sortantes"),
     ("scan", "Scan rapide de risque on-chain d'un contrat"),
@@ -2998,6 +3013,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("agentwallet", _handle_agent_wallet))
     app.add_handler(CommandHandler("api", _handle_api))
     app.add_handler(CommandHandler("funnel", _handle_funnel))
+    app.add_handler(CommandHandler("regime", _handle_regime))
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))

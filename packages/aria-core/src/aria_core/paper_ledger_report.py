@@ -152,6 +152,85 @@ async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
     return text, machine
 
 
+# 20/07 -- #176, volet apprentissage (question opérateur : "et concernant
+# l'apprentissage ?"). L'ordre d'affichage suit l'échelle ordinale du Regime Switch
+# (Peur < Neutre < Euphorie, market_sentiment.py) -- volontairement PAS un import
+# croisé vers ce module (même doctrine d'autonomie que risk_guard.py), juste une
+# liste de labels connus dans le bon ordre.
+_REGIME_DISPLAY_ORDER = ("peur", "neutre", "euphorie")
+_REGIME_LABELS = {"peur": "Peur", "neutre": "Neutre", "euphorie": "Euphorie"}
+_PRE_REGIME_KEY = "pré-régime"
+
+
+def _regime_bucket_stats(positions: list[dict]) -> dict:
+    wins = [p for p in positions if (p.get("pnl_usd") or 0.0) > 0]
+    losses = [p for p in positions if (p.get("pnl_usd") or 0.0) < 0]
+    total_pnl = sum((p.get("pnl_usd") or 0.0) for p in positions)
+    return {
+        "count": len(positions),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate_pct": (len(wins) / len(positions) * 100.0) if positions else None,
+        "total_pnl_usd": total_pnl,
+        "avg_pnl_usd": (total_pnl / len(positions)) if positions else None,
+    }
+
+
+async def build_regime_report(closed_limit: int = 500) -> tuple[str, dict]:
+    """Win-rate/PnL des trades clôturés, segmenté par régime macro-crypto À L'ENTRÉE
+    (Peur/Neutre/Euphorie, ``market_sentiment.resolve_meta_regime`` -- #172, 20/07).
+    La donnée (``entry_regime``) est déjà persistée sur chaque position depuis #172,
+    jamais agrégée dans un rapport avant ce chantier (#176) -- pur calcul de lecture,
+    aucune nouvelle colonne, aucun nouvel appel réseau.
+
+    But : objectiver si un régime macro donné dégrade réellement la performance
+    d'ARIA (auquel cas les seuils déjà durcis en régime Peur -- #172 -- sont
+    justifiés) ou si la segmentation ne montre aucun écart significatif (auquel cas
+    ne pas sur-interpréter un signal qui n'existe pas).
+
+    Positions ouvertes AVANT #172 n'ont pas de ``entry_regime`` (``None`` en base) --
+    regroupées sous ``"pré-régime"``, JAMAIS mélangées aux 3 régimes réels ni
+    silencieusement ignorées (un trade sans régime connu reste un trade réel, compté
+    quelque part)."""
+    closed = await paper_trader.get_closed_positions(limit=closed_limit)
+
+    buckets: dict[str, list[dict]] = {}
+    for p in closed:
+        regime = p.get("entry_regime") or _PRE_REGIME_KEY
+        buckets.setdefault(regime, []).append(p)
+
+    ordered_keys = [r for r in _REGIME_DISPLAY_ORDER if r in buckets]
+    if _PRE_REGIME_KEY in buckets:
+        ordered_keys.append(_PRE_REGIME_KEY)
+    ordered_keys += [r for r in buckets if r not in ordered_keys]  # régime inconnu futur, jamais perdu
+
+    now = datetime.now(timezone.utc).isoformat()
+    lines = [f"=== Performance par régime macro (Peur/Neutre/Euphorie) — {now} ===", ""]
+    machine_regimes: dict[str, dict] = {}
+    for key in ordered_keys:
+        stats = _regime_bucket_stats(buckets[key])
+        machine_regimes[key] = stats
+        label = _REGIME_LABELS.get(key, "Pré-régime (avant #172, 20/07)" if key == _PRE_REGIME_KEY else key)
+        wr = f"{stats['win_rate_pct']:.1f} %" if stats["win_rate_pct"] is not None else "n/a"
+        avg = _fmt_money(stats["avg_pnl_usd"]) if stats["avg_pnl_usd"] is not None else "n/a"
+        lines.append(
+            f"{label} : {stats['count']} trade(s) · {stats['wins']}G/{stats['losses']}P"
+            f" · winrate {wr} · PnL total {_fmt_money(stats['total_pnl_usd'])} · PnL moyen {avg}"
+        )
+    if not closed:
+        lines.append("(aucun trade clôturé pour l'instant -- rien à segmenter)")
+    lines.append("")
+    lines.append(
+        "Lecture prudente : un écart de winrate/PnL entre régimes ne devient un signal "
+        "fiable qu'avec assez de trades par case -- ne pas sur-interpréter sur un petit "
+        "échantillon (même doctrine que le seuil ≥100 swaps du wallet-scoring)."
+    )
+
+    text = "\n".join(lines)
+    machine = {"generated_at": now, "closed_trades_considered": len(closed), "by_regime": machine_regimes}
+    return text, machine
+
+
 async def build_positions_detail_block(*, closed_limit: int = 5) -> str:
     """Bloc « détail des positions » seul (ouvertes + N dernières clôturées, avec
     URL DexScreener/thèse/R:R) -- SANS le header agrégé (départ/équité/winrate) de
