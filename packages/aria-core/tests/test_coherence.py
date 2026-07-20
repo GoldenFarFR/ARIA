@@ -652,6 +652,38 @@ def test_external_write_actions_registered_in_allowlist():
     )
 
 
+# Décision opérateur explicite (20/07) : « seul ARIA peut écrire » dans son propre repo
+# (aria-brain) -- le token dédié ne doit JAMAIS être lu ailleurs que dans le skill qui
+# écrit sa mémoire libre, ni par un autre skill du projet, ni par une future session
+# Claude Code qui déciderait d'y écrire à sa place. Les deux fichiers de déclaration du
+# champ settings (jamais une lecture/usage réel) sont seuls exemptés.
+_ARIA_BRAIN_TOKEN_RE = re.compile(r"aria_brain_github_token", re.IGNORECASE)
+_ARIA_BRAIN_TOKEN_ALLOWED_FILES = {
+    CORE / "skills" / "aria_brain.py",
+    CORE / "testing.py",
+    REPO / "vanguard" / "backend" / "app" / "config.py",
+}
+
+
+def test_aria_brain_token_scoped_to_its_own_skill_only():
+    """Garde-fou mécanique : personne d'autre que skills/aria_brain.py ne doit jamais lire
+    ou utiliser ce token -- ni un autre skill, ni Claude Code écrivant à la place d'ARIA."""
+    unexpected: list[str] = []
+    for root in (CORE, REPO / "vanguard" / "backend" / "app"):
+        for path in root.rglob("*.py"):
+            if path in _ARIA_BRAIN_TOKEN_ALLOWED_FILES:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if _ARIA_BRAIN_TOKEN_RE.search(text):
+                unexpected.append(str(path.relative_to(REPO)))
+    assert not unexpected, (
+        "aria_brain_github_token référencé en dehors de skills/aria_brain.py -- "
+        f"{unexpected}. Ce token est réservé à l'écriture autonome d'ARIA dans SON repo, "
+        "jamais réutilisé ailleurs (décision opérateur explicite, 20/07 : « seul ARIA peut "
+        "écrire »)."
+    )
+
+
 def test_github_mandatory_write_blocked_repos_includes_aria():
     """Garde-fou mécanique anti-récidive (incident #139, 12/07) : truth_ledger/sync.py a
     poussé des conversations Telegram en clair sur GoldenFarFR/ARIA parce que la seule
