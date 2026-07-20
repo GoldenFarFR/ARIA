@@ -21,9 +21,12 @@ le test 1M$ (#194) », à lire avant toute modification) :
     (pas une panne), ``services/rugcheck.py`` sert de second avis (#207, 18/07) --
     ouvre de la couverture, n'assouplit jamais le garde-fou (fail-closed inchangé si
     RugCheck non plus n'a rien ou confirmé rugged) ; plancher de volume 24h
-    (``_MIN_VOLUME_24H_USD``, 5 000$ depuis le 19/07 -- revue croisée Gemini : un
-    marché "zombie", liquidité présente mais quasi aucune activité réelle, peut
-    fabriquer un setup technique via une seule transaction isolée sans que le ratio
+    (``_MIN_VOLUME_24H_USD``, 1 000$ depuis le 20/07 -- ESSAI EN COURS, décision
+    opérateur explicite ("abaisse le volume à 1000 et voyons"), abaissé du plancher
+    initial 5 000$ posé le 19/07 après le constat que 0 achat en 24h reflétait un
+    empilement de gates trop strict -- revue croisée Gemini d'origine : un marché
+    "zombie", liquidité présente mais quasi aucune activité réelle, peut fabriquer
+    un setup technique via une seule transaction isolée sans que le ratio
     volume/liquidité ne s'en aperçoive) ; concentration des holders
     (``_check_holder_concentration``, top 10 hors pool/burn >= 80%, 19/07 -- un R/R
     et un ATR parfaits ne protègent jamais contre un dump d'initié massif, signal que
@@ -177,21 +180,30 @@ _MAX_PRICE_CHANGE_24H_PCT = 200.0
 # (liquidité verrouillée mais quasi aucune activité réelle, ex. 150 000$ de liquidité pour
 # 400$ de volume/24h -- ratio ~0,003x, largement sous tout seuil de suspicion). Sur un tel
 # token, un setup golden pocket/RSI peut être fabriqué par une seule transaction isolée
-# (une bougie artificielle), sans qu'aucun autre garde-fou ne s'en aperçoive. 5 000$ =
-# seuil bas volontaire ("le marché est vivant", pas un filtre de qualité) -- même doctrine
+# (une bougie artificielle), sans qu'aucun autre garde-fou ne s'en aperçoive.
+# 20/07 -- ESSAI EN COURS (décision opérateur explicite, "abaisse le volume à 1000 et
+# voyons") : abaissé de 5 000$ à 1 000$ après un diagnostic chiffré (funnel 24h) montrant
+# que l'empilement des gates du 19-20/07 avait fait chuter le nombre de candidats
+# atteignant le stade R/R de ~26/24h à 4/24h, soit 0 achat réel. Reste un seuil bas
+# volontaire ("le marché est vivant", pas un filtre de qualité) -- même doctrine
 # permissive que le reste du pipeline, jamais un filtre de conviction déguisé en garde-fou.
-_MIN_VOLUME_24H_USD = 5_000.0
+# À réévaluer une fois l'effet observé sur le débit réel d'achats.
+_MIN_VOLUME_24H_USD = 1_000.0
 
 # 19/07 -- plancher PROPORTIONNEL à la liquidité, EN PLUS du plancher absolu ci-dessus
 # (revue croisée Gemini round 5) : un plancher absolu seul devient trivial à mesure que
 # la liquidité grossit -- 5 000$ de volume sur un pool de 10M$ passe le plancher absolu
 # tout en représentant 0,05% de turnover, un marché structurellement mort malgré un
 # volume nominal "positif". Le plancher EFFECTIF exigé est le plus haut des deux
-# (``max``), jamais un remplacement de l'absolu -- pour un pool tout juste au-dessus du
-# plancher de liquidité (100 000$), 10% (10 000$) relève déjà légèrement la barre
-# au-dessus du strict minimum absolu ; pour un gros pool, le ratio devient dominant et
-# fait le vrai travail que l'absolu seul ne pouvait pas faire.
-_MIN_VOLUME_TO_LIQUIDITY_RATIO = 0.10
+# (``max``), jamais un remplacement de l'absolu.
+# 20/07 -- ESSAI EN COURS (même décision opérateur que ci-dessus) : abaissé de 10% à 1%
+# -- à 10%, ce ratio dominait TOUJOURS l'absolu dès que la liquidité dépassait son propre
+# plancher (100 000$ x 10% = 10 000$ > n'importe quel absolu sous ce seuil), rendant tout
+# abaissement du seul plancher absolu inopérant en pratique. À 1%, le plancher effectif au
+# minimum de liquidité (100 000$) redevient exactement 1 000$ (les deux composantes se
+# rejoignent), et continue de scaler avec la taille du pool au-delà (protection anti
+# "marché zombie" toujours active sur un gros pool, juste moins stricte qu'avant).
+_MIN_VOLUME_TO_LIQUIDITY_RATIO = 0.01
 
 # 19/07 -- concentration des top holders (revue croisée Gemini, validée par l'opérateur
 # "fais-le"). Même en dehors d'une thèse moyen terme, un token où une poignée de wallets
@@ -275,8 +287,12 @@ _RVOL_CONFIRMATION_MULTIPLIER = 3.0
 # Plancher nominal sur la bougie DÉCLENCHANTE elle-même, en plus du ratio -- sert surtout
 # de filet sur les bougies de faible granularité (1h/4h, tokens trop récents pour 20
 # bougies journalières -- cf. cascade ``_fetch_candles``) ; sur une bougie journalière,
-# le plancher d'entrée (volume 24h, `_MIN_VOLUME_24H_USD`/ratio liquidité) a déjà
-# quasiment toujours validé un ordre de grandeur supérieur avant d'atteindre ce point.
+# le plancher d'entrée (volume 24h, `_MIN_VOLUME_24H_USD`/ratio liquidité) validait
+# jusqu'ici quasiment toujours un ordre de grandeur supérieur avant d'atteindre ce
+# point -- marge réduite depuis l'abaissement du 20/07 (essai en cours, plancher 24h
+# désormais 1 000$ au minimum de liquidité, sous ce seuil de 2 500$ sur UNE bougie) --
+# ce garde reste donc un vrai filet indépendant, pas juste une redite, tant que
+# l'essai est actif.
 _RVOL_MIN_TRIGGER_VOLUME_USD = 2_500.0
 
 
@@ -1219,8 +1235,9 @@ async def evaluate_momentum_entry(
       4. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 100 000$, 19/07 -- doublé à
          ``_MIN_LIQUIDITY_USD_FEAR`` en régime Peur, 20/07) -- rejet SYSTÉMATIQUE si
          le pool est trop mince, même si tout le reste est propre.
-      5. Plancher de volume 24h (``_MIN_VOLUME_24H_USD``, 5 000$, 19/07) -- rejet si
-         le marché est quasi mort, sur des données déjà en main.
+      5. Plancher de volume 24h (``_MIN_VOLUME_24H_USD``, 1 000$ + ratio 1% de la
+         liquidité, 19/07, abaissé 20/07 -- essai en cours) -- rejet si le marché est
+         quasi mort, sur des données déjà en main.
       6. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
          des données déjà en main (aucun appel réseau supplémentaire).
       7. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
