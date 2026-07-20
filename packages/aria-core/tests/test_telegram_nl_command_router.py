@@ -173,6 +173,128 @@ async def test_ordinary_price_question_not_confused_with_watchlist():
     assert reply is None
 
 
+# ── alias mots-clés nus (20/07, trou réel : "Watchlist" tapé seul = 11857 tokens) ────
+
+@pytest.mark.asyncio
+async def test_bare_watchlist_word_matches_exactly_the_operator_incident(monkeypatch):
+    """Reproduit l'incident réel (capture Telegram) : le mot "Watchlist" tapé SEUL
+    (capitalisé, aucune phrase autour) ne matchait aucun des 7 déclencheurs de
+    phrase -- tombait dans la conversation LLM générale, payante (11857 tokens)."""
+    async def fake_report(n=10, *, lister=None):
+        return "WATCHLIST FAKE"
+
+    monkeypatch.setattr("aria_core.skills.candidate_ranking.format_watchlist_report", fake_report)
+    reply = await telegram_bot._try_nl_readonly_command("Watchlist")
+    assert reply == "WATCHLIST FAKE"
+
+
+@pytest.mark.asyncio
+async def test_bare_watchlist_tolerates_case_and_trailing_punctuation(monkeypatch):
+    async def fake_report(n=10, *, lister=None):
+        return "WATCHLIST FAKE"
+
+    monkeypatch.setattr("aria_core.skills.candidate_ranking.format_watchlist_report", fake_report)
+    for variant in ("watchlist", "WATCHLIST", "  watchlist  ", "watchlist ?", "watchlist!"):
+        reply = await telegram_bot._try_nl_readonly_command(variant)
+        assert reply == "WATCHLIST FAKE", f"échec sur la variante {variant!r}"
+
+
+@pytest.mark.asyncio
+async def test_bare_portfolio_word_routes_to_feedback(monkeypatch):
+    """"Portfolio" n'avait aucun déclencheur du tout avant ce correctif (ni phrase,
+    ni alias) -- mappé sur le bilan agrégé (départ/PnL/résultat), la lecture la
+    plus proche de ce mot."""
+    async def fake_feedback_reply():
+        return "FEEDBACK FAKE"
+
+    monkeypatch.setattr(telegram_bot, "_feedback_reply", fake_feedback_reply)
+    for variant in ("Portfolio", "portfolio", "feedback", "Bilan"):
+        reply = await telegram_bot._try_nl_readonly_command(variant)
+        assert reply == "FEEDBACK FAKE", f"échec sur la variante {variant!r}"
+
+
+@pytest.mark.asyncio
+async def test_feedback_sentence_trigger_returns_real_data(monkeypatch):
+    async def fake_feedback_reply():
+        return "FEEDBACK FAKE"
+
+    monkeypatch.setattr(telegram_bot, "_feedback_reply", fake_feedback_reply)
+    reply = await telegram_bot._try_nl_readonly_command("c'est quoi le résultat du portefeuille ?")
+    assert reply == "FEEDBACK FAKE"
+
+
+@pytest.mark.asyncio
+async def test_bare_alias_covers_the_other_five_commands(monkeypatch):
+    """Non-régression généralisée : chaque commande NL déjà sûre gagne aussi son
+    alias mot-nu, pas seulement watchlist/feedback."""
+    monkeypatch.setattr(
+        "aria_core.skills.real_money_readiness.compute_readiness_scorecard",
+        lambda: _async_return({"fake": "scorecard"}),
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.real_money_readiness.format_readiness_report", lambda s: "FEUVERT FAKE"
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.market_sentiment.latest_readings", lambda: _async_return([{"fake": 1}])
+    )
+    monkeypatch.setattr("aria_core.skills.market_sentiment.format_sentiment_report", lambda r: "SENTIMENT FAKE")
+    monkeypatch.setattr("aria_core.vc_predictions.format_track_report", lambda: _async_return("TRACK FAKE"))
+    monkeypatch.setattr(
+        "aria_core.agent_wallet_monitor.get_wallet_balance_summary", lambda: _async_return({"fake": 1})
+    )
+    monkeypatch.setattr(
+        "aria_core.agent_wallet_monitor.format_wallet_balance_summary", lambda s: "AGENTWALLET FAKE"
+    )
+    monkeypatch.setattr(
+        "aria_core.paper_ledger_report.build_report",
+        lambda *, closed_limit=500: _async_return(("LEDGER FAKE", {})),
+    )
+
+    assert await telegram_bot._try_nl_readonly_command("feu vert") == "FEUVERT FAKE"
+    assert await telegram_bot._try_nl_readonly_command("Sentiment") == "SENTIMENT FAKE"
+    assert await telegram_bot._try_nl_readonly_command("track") == "TRACK FAKE"
+    assert await telegram_bot._try_nl_readonly_command("wallet agent") == "AGENTWALLET FAKE"
+    assert await telegram_bot._try_nl_readonly_command("ledger") == "LEDGER FAKE"
+
+
+def _async_return(value):
+    async def _inner(*_args, **_kwargs):
+        return value
+
+    return _inner()
+
+
+@pytest.mark.asyncio
+async def test_word_containing_watchlist_substring_in_a_longer_sentence_does_not_bare_match():
+    """L'alias nu exige une correspondance EXACTE du texte normalisé entier --
+    "watchlist" simplement présent au milieu d'une phrase ne doit jamais matcher
+    par ce chemin (protège contre un faux positif trop large)."""
+    reply = await telegram_bot._try_nl_readonly_command("je regarde watchlist plus tard peut-être")
+    assert reply is None
+
+
+@pytest.mark.asyncio
+async def test_handle_message_short_circuits_on_bare_watchlist_word(monkeypatch):
+    """Intégration bout en bout de l'incident réel : "Watchlist" tapé seul ne doit
+    jamais atteindre le LLM payant."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+
+    async def fake_report(n=10, *, lister=None):
+        return "WATCHLIST FAKE"
+
+    monkeypatch.setattr("aria_core.skills.candidate_ranking.format_watchlist_report", fake_report)
+
+    async def fake_process(*args, **kwargs):
+        raise AssertionError("le LLM ne doit jamais être appelé sur ce chemin")
+
+    monkeypatch.setattr(type(telegram_bot.aria_brain), "process", fake_process)
+
+    update = FakeUpdate("Watchlist")
+    await telegram_bot._handle_message(update, context=None)
+
+    assert update.message.replies == ["WATCHLIST FAKE"]
+
+
 # ── Intégration : _handle_message court-circuite bien AVANT le pipeline LLM ──────────
 
 @pytest.mark.asyncio

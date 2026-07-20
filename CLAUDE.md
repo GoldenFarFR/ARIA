@@ -2439,6 +2439,31 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   évalué par le pipeline momentum (`tweets-search` 0,006$ + `tweets-user` 0,01$)
   — confirmé sur TIBBIR/LAUKI/AVA/ROBA, contract/token_symbol correctement
   enregistrés (#143 fonctionne en prod). Budget hebdo 5$ largement respecté.
+- **20/07 (suite) — bug réel trouvé en conditions réelles (capture opérateur) : le
+  mot "Watchlist" tapé SEUL a coûté 11857 tokens LLM au lieu de router vers le
+  rapport gratuit (#66/#213).** Root cause : les 7 détecteurs NL existants ciblent
+  tous des PHRASES complètes (`\b(ta|ton|la)\s+watchlist\b`...), aucun ne matche le
+  nom nu de la commande tapé seul — pourtant le cas le plus direct possible
+  (quasiment un slash sans le slash). Fix généralisé (même doctrine que #97,
+  19/07, "anticipe") plutôt que rapiécé mot à mot : `_NL_BARE_ALIASES` (dict texte
+  normalisé -> clé d'action, vérifié EN PREMIER, avant les regex de phrase) couvre
+  les 7 commandes déjà sûres. **8e commande ajoutée** : "Portfolio" (mot envoyé par
+  l'opérateur juste après, n'avait AUCUN déclencheur, ni phrase ni alias) mappé sur
+  `/feedback` (bilan départ/PnL/résultat, la lecture la plus proche) — `_handle_
+  feedback` extrait en `_feedback_reply()` réutilisable, partagé entre la commande
+  slash et le routeur NL. **Piège trouvé et corrigé en écrivant les tests** : un
+  premier design stockait les fonctions d'action dans un dict construit à l'import
+  (`_NL_ACTIONS = {"feedback": _feedback_reply, ...}`) — capture la RÉFÉRENCE de
+  fonction une seule fois, donc un `monkeypatch.setattr(telegram_bot,
+  "_feedback_reply", fake)` en test n'était jamais vu (le dict gardait l'ancienne
+  fonction pour toujours). Corrigé par un dispatch explicite (`_dispatch_nl_action`,
+  if/elif sur la clé) qui résout chaque nom À L'APPEL, jamais figé à l'import —
+  cohérent avec le reste du fichier (les imports locaux dans les fonctions font
+  déjà ça). 7 nouveaux tests (dont une reproduction exacte de l'incident, bare
+  "Watchlist" + intégration bout en bout confirmant zéro appel LLM, + non-régression
+  qu'un "watchlist" simplement présent au milieu d'une phrase ne matche jamais par
+  ce chemin). Suite complète verte (6261 passed, mêmes 7 échecs pré-existants sans
+  rapport #142, 0 régression), `test_coherence.py` vert (81 passed).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**

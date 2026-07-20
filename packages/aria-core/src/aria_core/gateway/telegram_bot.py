@@ -442,11 +442,10 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
-async def _handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _feedback_reply() -> str:
     """#197 (15/07) : bilan paper-trading (départ / PnL total / résultat) -- données déjà
     calculées par paper_trader.portfolio_summary(), jamais câblées à une commande
-    Telegram avant ce chantier. Admin-only : le suivi de trading reste privé pour
-    l'instant, même doctrine que /status.
+    Telegram avant ce chantier.
 
     19/07, demande opérateur explicite : le bilan agrégé seul ne suffisait pas --
     l'opérateur veut voir le détail de CHAQUE position en cours (thèse, cible,
@@ -454,9 +453,11 @@ async def _handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     sous /ledger. Ajouté via paper_ledger_report.build_positions_detail_block()
     (même rendu que /ledger, aucun format dupliqué) -- le header agrégé garde son
     calcul au prix LIVE (price_lookup explicite, contrairement à build_report qui
-    marque au coût), le détail par position vient s'ajouter après, jamais à la place."""
-    if not await _admin_check_reply(update):
-        return
+    marque au coût), le détail par position vient s'ajouter après, jamais à la place.
+
+    20/07 -- extrait de ``_handle_feedback`` (qui l'appelle désormais) pour être
+    réutilisable par le routeur NL (``_try_nl_readonly_command``, "Portfolio" tapé
+    seul repérait avant ce fix vers la conversation LLM générale, payante)."""
     from aria_core import paper_trader
     from aria_core.paper_ledger_report import build_positions_detail_block
 
@@ -478,7 +479,16 @@ async def _handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "Aucun argent réel — track record de preuve."
     )
     detail = await build_positions_detail_block()
-    await _reply(update.message, f"{header}\n\n{detail}")
+    return f"{header}\n\n{detail}"
+
+
+async def _handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin-only : le suivi de trading reste privé pour l'instant, même doctrine
+    que /status. Formatage délégué à ``_feedback_reply()`` (partagé avec le
+    routeur NL, 20/07)."""
+    if not await _admin_check_reply(update):
+        return
+    await _reply(update.message, await _feedback_reply())
 
 
 async def _handle_ledger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1495,6 +1505,14 @@ _NL_COMMANDS_LIST_RE = re.compile(
     r"envoie.{0,20}liste\s+des\s+/",
     re.IGNORECASE,
 )
+# 20/07 -- 8e commande NL (réponse à un trou réel, cf. _NL_BARE_ALIASES ci-dessous) :
+# "Portfolio" tapé seul ne matchait rien -- le bilan agrégé (départ/PnL/résultat) est
+# la lecture la plus proche de ce mot, distincte du détail par position (_NL_LEDGER_RE).
+_NL_FEEDBACK_RE = re.compile(
+    r"bilan\s+(du\s+)?paper[\s-]?trading\b|r[ée]sultat\s+du\s+portefeuille\b|"
+    r"pnl\s+total\b",
+    re.IGNORECASE,
+)
 
 
 def _format_commands_list_reply() -> str:
@@ -1507,45 +1525,123 @@ def _format_commands_list_reply() -> str:
     return "\n".join(lines)
 
 
-async def _try_nl_readonly_command(text: str) -> str | None:
-    """Détecte une question en langage naturel qui correspond à l'une des
-    commandes en lecture seule ci-dessus, et renvoie la VRAIE réponse
-    (identique à ce que produirait la commande slash) -- ``None`` si aucune
-    ne correspond, laisse alors le message tomber dans le reste du pipeline.
+async def _watchlist_nl_reply() -> str:
+    from aria_core.skills.candidate_ranking import format_watchlist_report
 
-    Vérifié dans l'ordre déclaré -- pas de recouvrement attendu entre ces
-    regex (chacune cible un vocabulaire distinct), mais l'ordre garde un
-    comportement déterministe si jamais deux matchaient un jour."""
-    if _NL_COMMANDS_LIST_RE.search(text):
+    return await format_watchlist_report()
+
+
+async def _feuvert_nl_reply() -> str:
+    from aria_core.skills.real_money_readiness import (
+        compute_readiness_scorecard,
+        format_readiness_report,
+    )
+
+    return format_readiness_report(await compute_readiness_scorecard())
+
+
+async def _sentiment_nl_reply() -> str:
+    from aria_core.skills.market_sentiment import format_sentiment_report, latest_readings
+
+    return format_sentiment_report(await latest_readings())
+
+
+async def _track_nl_reply() -> str:
+    from aria_core import vc_predictions
+
+    return await vc_predictions.format_track_report()
+
+
+async def _agentwallet_nl_reply() -> str:
+    from aria_core.agent_wallet_monitor import format_wallet_balance_summary, get_wallet_balance_summary
+
+    return format_wallet_balance_summary(await get_wallet_balance_summary())
+
+
+async def _ledger_nl_reply() -> str:
+    from aria_core.paper_ledger_report import build_report
+
+    report_text, _machine = await build_report(closed_limit=10)
+    return report_text
+
+
+# 20/07 -- trou réel trouvé en conditions réelles (capture opérateur : "Watchlist"
+# tapé SEUL a coûté 11857 tokens LLM, tombé dans la conversation générale au lieu du
+# rapport gratuit) : les 7 regex ci-dessus ciblent des PHRASES complètes ("ta
+# watchlist", "feu vert"...), aucune ne matche le nom NU de la commande tapé seul --
+# pourtant le cas le plus direct possible, quasiment un slash sans le slash. Alias
+# exact (texte normalisé -- ponctuation retirée, espaces/casse aplatis) vérifié EN
+# PREMIER, avant les regex de phrase -- généralisé à toutes les commandes NL déjà
+# sûres plutôt que rapiécé une par une (même doctrine que #97, 19/07 : "anticipe").
+_NL_BARE_ALIASES: dict[str, str] = {
+    "watchlist": "watchlist",
+    "feu vert": "feuvert", "feuvert": "feuvert", "scorecard": "feuvert",
+    "sentiment": "sentiment",
+    "track record": "track", "track": "track",
+    "wallet agent": "agentwallet", "agentwallet": "agentwallet", "agent wallet": "agentwallet",
+    "ledger": "ledger", "positions": "ledger",
+    "commandes": "commands_list", "commands": "commands_list",
+    "portfolio": "feedback", "feedback": "feedback", "bilan": "feedback",
+}
+_NL_BARE_STRIP_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+async def _dispatch_nl_action(action_key: str) -> str:
+    """Résout ``action_key`` vers la VRAIE réponse. Appels directs par nom (jamais
+    un dict de références de fonctions construit une seule fois à l'import) --
+    chaque nom est résolu à l'appel, donc un monkeypatch sur le module (tests)
+    est bien pris en compte, contrairement à un dict figé qui capturerait
+    l'ancienne fonction pour toujours."""
+    if action_key == "commands_list":
         return _format_commands_list_reply()
+    if action_key == "watchlist":
+        return await _watchlist_nl_reply()
+    if action_key == "feuvert":
+        return await _feuvert_nl_reply()
+    if action_key == "sentiment":
+        return await _sentiment_nl_reply()
+    if action_key == "track":
+        return await _track_nl_reply()
+    if action_key == "agentwallet":
+        return await _agentwallet_nl_reply()
+    if action_key == "ledger":
+        return await _ledger_nl_reply()
+    if action_key == "feedback":
+        return await _feedback_reply()
+    raise ValueError(f"clé d'action NL inconnue : {action_key!r}")
+
+
+async def _try_nl_readonly_command(text: str) -> str | None:
+    """Détecte une question en langage naturel (ou un mot-clé nu) qui correspond à
+    l'une des commandes en lecture seule ci-dessus, et renvoie la VRAIE réponse
+    (identique à ce que produirait la commande slash) -- ``None`` si aucune ne
+    correspond, laisse alors le message tomber dans le reste du pipeline.
+
+    Alias nus vérifiés EN PREMIER (le cas le plus direct et le moins ambigu),
+    PUIS les regex de phrase dans l'ordre déclaré -- pas de recouvrement attendu
+    entre elles (chacune cible un vocabulaire distinct), mais l'ordre garde un
+    comportement déterministe si jamais deux matchaient un jour."""
+    bare = _NL_BARE_STRIP_RE.sub("", text).strip().lower()
+    action_key = _NL_BARE_ALIASES.get(bare)
+    if action_key is not None:
+        return await _dispatch_nl_action(action_key)
+
+    if _NL_COMMANDS_LIST_RE.search(text):
+        return await _dispatch_nl_action("commands_list")
     if _NL_WATCHLIST_RE.search(text):
-        from aria_core.skills.candidate_ranking import format_watchlist_report
-
-        return await format_watchlist_report()
+        return await _dispatch_nl_action("watchlist")
     if _NL_FEUVERT_RE.search(text):
-        from aria_core.skills.real_money_readiness import (
-            compute_readiness_scorecard,
-            format_readiness_report,
-        )
-
-        return format_readiness_report(await compute_readiness_scorecard())
+        return await _dispatch_nl_action("feuvert")
     if _NL_SENTIMENT_RE.search(text):
-        from aria_core.skills.market_sentiment import format_sentiment_report, latest_readings
-
-        return format_sentiment_report(await latest_readings())
+        return await _dispatch_nl_action("sentiment")
     if _NL_TRACK_RE.search(text):
-        from aria_core import vc_predictions
-
-        return await vc_predictions.format_track_report()
+        return await _dispatch_nl_action("track")
     if _NL_AGENTWALLET_RE.search(text):
-        from aria_core.agent_wallet_monitor import format_wallet_balance_summary, get_wallet_balance_summary
-
-        return format_wallet_balance_summary(await get_wallet_balance_summary())
+        return await _dispatch_nl_action("agentwallet")
     if _NL_LEDGER_RE.search(text):
-        from aria_core.paper_ledger_report import build_report
-
-        report_text, _machine = await build_report(closed_limit=10)
-        return report_text
+        return await _dispatch_nl_action("ledger")
+    if _NL_FEEDBACK_RE.search(text):
+        return await _dispatch_nl_action("feedback")
     return None
 
 
