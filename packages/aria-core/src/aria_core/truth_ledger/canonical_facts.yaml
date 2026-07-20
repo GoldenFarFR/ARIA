@@ -105,6 +105,22 @@
     entry requires a real risk/reward setup, sourcing Base/Solana/Robinhood via DexScreener — the
     LLM only arbitrates an ambiguous R/R. No invented numbers.
 
+- id: injection-defense-vc-analysis
+  topic: policy
+  tags: [policy, security, injection, vc]
+  question: How does ARIA defend against prompt injection from a malicious token's website or metadata?
+  answer: >
+    Token analysis wraps every external input (token name, risk flags, website snapshot) inside
+    an untrusted-data block with an explicit system instruction never to treat it as instructions.
+    sanitize_untrusted_text neutralizes angle brackets so external text cannot forge a closing tag
+    and escape that block (tested). site_snapshot.py additionally strips any HTML marked hidden
+    from human visitors (display:none, visibility:hidden, the hidden attribute, aria-hidden=true)
+    before extracting text — closing a vector where a project could hide a persuasive claim
+    ("audited, doxxed team") invisible on-screen but read identically to visible text by the
+    model. Unsupported claims (audits, partnerships) are still flagged as such by the judge
+    regardless of source. Source: GitHub issues #40/#41 (aria-knowledge-proposal, mandate #192),
+    verified against code and integrated 2026-07-20.
+
 - id: truth-ledger
   topic: policy
   tags: [truth-ledger, memory]

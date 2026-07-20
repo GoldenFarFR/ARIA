@@ -49,6 +49,24 @@
   benefit: "2e dimension de juge : audit factuel indépendant des affirmations du rapport"
   seam: "services/factcheck.py -> include_factcheck ou dimension de juge"
 
+- title: "Fact-check indépendant (Loki / OpenFactVerification)"
+  category: tool
+  source: "github.com/Libr-AI/OpenFactVerification (arXiv 2410.01794, MIT) ; docs/aria-learning-inbox/2026-07-13-scan-large-spectre-cinq-branches.md"
+  benefit: "2e candidat pour le même seam que Facticity/ArAIstotle ci-dessus : pipeline MIT en 5 étapes (décomposition en claims -> check-worthiness -> requêtes -> preuves -> verdict), conçu pour la latence/le coût plutôt qu'une automatisation complète -- alternative open-source vérifiée (13k+ étoiles catégorie proche, licence MIT confirmée) à comparer avant de choisir un fournisseur de fact-check indépendant."
+  seam: "services/factcheck.py -> include_factcheck ou dimension de juge (même seam que Facticity/ArAIstotle)"
+
+- title: "Instructor (567-labs/instructor) — extraction structurée LLM durcie"
+  category: tool
+  source: "github.com/567-labs/instructor ; docs/aria-learning-inbox/2026-07-11-scan-large-spectre.md"
+  benefit: "aria_core/llm.py::_post_chat construit un payload chat/completions brut sans response_format/tool_choice, et skills/vc_analysis.py parse la réponse à la main (slice sur accolades + json.loads, erreurs capturées largement) -- point de fragilité reconfirmé dans le code actuel (20/07). Instructor (Pydantic, ~3M téléchargements/mois, 13k+ étoiles, MIT) formaliserait ce contrat avec validation + retry automatique au niveau de l'appel LLM lui-même. Réserve : vérifier quelles routes (xai/grok/openai/groq/openrouter/virtuals/ollama) supportent tool/function-calling ou JSON-mode avant de généraliser -- repli manuel probable pour celles qui ne l'exposent pas."
+  seam: "aria_core/llm.py (chat_with_context/_post_chat) -> skills/vc_analysis.py (parsing du verdict structuré)"
+
+- title: "Anti-fuite de mémorisation LLM pour un futur backtest historique du juge"
+  category: fix
+  source: "docs/aria-learning-inbox/2026-07-11-calibration-juge-sans-attendre-volume.md ; docs/aria-learning-inbox/2026-07-18-backtesting-freqtrade-nautilustrader.md"
+  benefit: "AUCUN module de backtest historique n'existe encore (reconfirmé 20/07) -- ceci n'est pas un correctif à appliquer aujourd'hui mais une discipline à respecter LE JOUR où un tel module est construit : un juge LLM a pu voir l'issue réelle d'un token célèbre (x50, rug) dans son corpus d'entraînement -- un backtest naïf sur des cas emblématiques surestimerait sa qualité en mesurant de la mémorisation, pas du raisonnement. Mitigation proposée : choisir des tokens obscurs, anonymiser nom/ticker/date avant transmission au juge (ne garder que faits on-chain + OHLCV bruts), et ne jamais compter un backtest comme équivalent à un pronostic forward pour le seuil sample_size (n>=80) du pacte argent réel -- un backtest reste un signal complémentaire, jamais un substitut. NB : l'autre recommandation de cette même note (intervalle de crédibilité bayésien Beta-Binomial sur le hit-rate à petit échantillon) est déjà implémentée (real_money_readiness.py::_hit_rate_credible_note, commit 2bc6651f) -- seule cette discipline anti-fuite reste non construite."
+  seam: "futur module de backtest historique (aucun aujourd'hui) -> qi_judge_calibration.py / vc_judge.py, réutilisant services/ohlcv.py + le motif déterministe de pump_dump_autopsy.py comme vérité terrain"
+
 - title: "Investiguer les outils/repos de gitlawb (GitHub)"
   category: tool
   source: "github.com/gitlawb (transmis par l'opérateur)"
