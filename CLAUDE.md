@@ -3074,6 +3074,29 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   "pas déployé" périmées corrigées dans ce fichier, 12 issues de connaissance triées.
   Rien touché aux garde-fous, à la liste noire, ni à du capital réel — tout dans le
   périmètre déjà délégué.
+- **20/07 (suite) — 2 vulnérabilités Dependabot modérées (axios, GHSA-xj6q-8x83-jv6g)
+  corrigées et DÉPLOYÉES (backend Docker inchangé, vitrine redéployée).** L'opérateur
+  a partagé une capture du dashboard GitHub Security -- vérifié en détail avant de
+  corriger (avis officiel `axios/axios` lu directement, pas seulement le titre de
+  l'alerte) : `config.auth.username`/`password` lus sans garde `hasOwnProperty`,
+  affecte axios >=1.15.2 <1.18.0, corrigé en 1.18.0+. Les deux fichiers touchés
+  (`vanguard/package-lock.json` + `template-grok-cursor/.grok/references/scaffold/
+  package-lock.json`, ce dernier un simple gabarit de scaffolding dormant, jamais
+  exécuté) épinglaient axios 1.16.0 via la MÊME chaîne transitive :
+  `@coinbase/cdp-sdk` (via `@wagmi/connectors` -> `@base-org/account`) épingle axios
+  EXACTEMENT à 1.16.0 dans son propre `package.json` -- axios n'est importé
+  directement nulle part dans le code vanguard, seulement transitif. **Vulnérabilité
+  de type "amplificateur"** : exploitable seulement si une AUTRE pollution de
+  prototype existe déjà ailleurs dans le même process -- pas un trou isolé
+  directement exploitable. Corrigé via `"overrides"` npm (mécanisme déjà utilisé
+  dans ces 2 fichiers pour `ws`/`uuid`) plutôt que d'attendre que Coinbase mette à
+  jour son propre pin. Vérifié avant de committer : axios résolu à 1.18.1 dans les
+  deux lockfiles, diff du lockfile contrôlé (seulement axios + 2 nouvelles
+  sous-dépendances mineures de sa propre chaîne, `https-proxy-agent`/`agent-base` --
+  rien d'autre bougé), `npm run build` de `vanguard/` toujours vert. **Déployé** :
+  vitrine reconstruite et servie (commit `347cebe743dd`, vérifié indépendamment via
+  curl) -- backend Docker non concerné (dépendance Node/frontend uniquement, aucun
+  redéploiement `aria-api` nécessaire).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
