@@ -10,6 +10,9 @@ def _clean_env(monkeypatch):
         ("ARIA_WALLET_SCORING_ENABLED", None),
         ("ARIA_VISION_ENABLED", None),
         ("ARIA_WEB_SEARCH_PROVIDER", None),
+        ("ARIA_AGENT_WALLET_PILOT_ENABLED", None),
+        ("ARIA_AGENT_WALLET_TRANSFER_ENABLED", None),
+        ("ARIA_AGENT_WALLET_MONITOR_ENABLED", None),
     ]:
         monkeypatch.delenv(var, raising=False)
     yield
@@ -49,6 +52,23 @@ def test_web_search_provider_reflects_tavily(monkeypatch):
     monkeypatch.setenv("ARIA_WEB_SEARCH_PROVIDER", "tavily")
     text = get_capability_state_text()
     assert "tavily" in text.lower()
+
+
+def test_agent_wallet_pilot_marked_as_real_money_when_active(monkeypatch):
+    """20/07 -- gap réel trouvé en auditant une auto-description d'ARIA affirmant
+    "zéro capital réel, capital ensuite" alors que le pilote agent-wallet est actif
+    en prod depuis le 18/07 : ce registre ne le mentionnait nulle part. Le libellé
+    doit dire explicitement ARGENT RÉEL, pas juste le nom technique du gate."""
+    text = get_capability_state_text()
+    lines = [ln for ln in text.splitlines() if "ARIA_AGENT_WALLET_PILOT_ENABLED" in ln]
+    assert lines and "inactive" in lines[0]
+    assert "ARGENT RÉEL" in lines[0]
+
+    monkeypatch.setenv("ARIA_AGENT_WALLET_PILOT_ENABLED", "true")
+    text = get_capability_state_text()
+    lines = [ln for ln in text.splitlines() if "ARIA_AGENT_WALLET_PILOT_ENABLED" in ln]
+    assert lines and "ACTIVE" in lines[0]
+    assert "ARGENT RÉEL" in lines[0]
 
 
 @pytest.mark.asyncio

@@ -34,6 +34,14 @@ _CAPABILITY_GATES: tuple[tuple[str, str], ...] = (
     ("ARIA_RELAY_AUTOREPLY_ENABLED", "Réponse autonome sur le canal relay Claude Code"),
     ("ARIA_EXAM_ENABLED", "Exam pédagogique"),
     ("X_CURIOSITY_ENABLED", "Lecture de X (curiosité/radar)"),
+    # 20/07 -- gap réel trouvé en auditant une auto-description d'ARIA qui affirmait
+    # "zéro capital réel, capital ensuite" : ce registre ne mentionnait NULLE PART le
+    # pilote agent-wallet, alors qu'il est ACTIF EN PROD (décide ET exécute des swaps
+    # RÉELS sans validation Telegram) depuis le 18/07. Sans cette ligne, elle n'a
+    # structurellement aucun moyen de savoir que ce capital réel existe déjà.
+    ("ARIA_AGENT_WALLET_PILOT_ENABLED", "ARGENT RÉEL -- pilote agent-wallet (Coinbase, ~10-15$) : décide ET exécute des swaps réels, sans validation Telegram"),
+    ("ARIA_AGENT_WALLET_TRANSFER_ENABLED", "ARGENT RÉEL -- pilote agent-wallet : capacité de transfert USDC vers une adresse unique autorisée"),
+    ("ARIA_AGENT_WALLET_MONITOR_ENABLED", "Surveillance du wallet agent réel (dépôts/sorties, lecture seule)"),
 )
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
