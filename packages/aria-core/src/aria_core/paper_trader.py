@@ -280,8 +280,11 @@ def _breakeven_floor_threshold(target_price: float | None, entry_price: float | 
 # absolue si. 75s = milieu de la fourchette 60-90s proposée par la revue croisée
 # (assez pour laisser un bot d'arbitrage se désengager, assez court pour ne pas
 # retarder la confirmation d'un vrai pump de façon perceptible à l'échelle des cycles
-# de gestion).
-HIGH_WATER_CONFIRMATION_SECONDS = 75
+# de gestion). Sourcée depuis momentum_timing.py (20/07, revue croisée externe) --
+# momentum_entry._WASH_TRADING_CONFIRMATION_SECONDS utilise la MÊME constante
+# partagée (import direct impossible dans l'autre sens : ce module importe déjà
+# depuis momentum_entry.py, cf. commentaire de momentum_timing.py).
+from aria_core.momentum_timing import MOMENTUM_CONFIRMATION_SECONDS as HIGH_WATER_CONFIRMATION_SECONDS
 
 
 def _advance_high_water(

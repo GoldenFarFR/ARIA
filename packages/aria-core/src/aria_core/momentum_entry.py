@@ -661,13 +661,15 @@ def _record_provider_outcome(name: str, *, ok: bool) -> None:
 # un token légitimement en pleine actualité (listing CEX, annonce) pouvait dépasser le
 # seuil une heure sans être du wash-trading, et se faire rejeter sur ce seul instant.
 # Même mécanique de confirmation temporelle que ``paper_trader.HIGH_WATER_CONFIRMATION_
-# SECONDS``/``_advance_high_water`` (même valeur, même philosophie "un vrai mouvement
-# dure, une mèche non") -- pas réutilisée par import direct (paper_trader.py importe
-# DÉJÀ depuis ce module, l'inverse créerait un risque d'import circulaire pour une
-# simple constante), une copie locale documentée suffit. État en mémoire process
-# (comme le coupe-circuit fournisseur ci-dessus) -- perdre l'état à un redémarrage ne
-# fausse rien vers le fail-safe (repart juste une confirmation à zéro, jamais l'inverse).
-_WASH_TRADING_CONFIRMATION_SECONDS = 75.0
+# SECONDS``/``_advance_high_water`` (même philosophie "un vrai mouvement dure, une mèche
+# non") -- 20/07, revue croisée externe : sourcée depuis ``momentum_timing.py`` (module
+# neutre, importable des deux côtés sans cycle -- paper_trader.py importe déjà depuis ce
+# module-ci, l'inverse aurait créé un cycle direct). Une seule constante partagée
+# désormais, plus deux copies qui pourraient diverger silencieusement. État en mémoire
+# process (comme le coupe-circuit fournisseur ci-dessus) -- perdre l'état à un
+# redémarrage ne fausse rien vers le fail-safe (repart juste une confirmation à zéro,
+# jamais l'inverse).
+from aria_core.momentum_timing import MOMENTUM_CONFIRMATION_SECONDS as _WASH_TRADING_CONFIRMATION_SECONDS
 _ratio_breach_since: dict[tuple[str, str], float] = {}
 
 

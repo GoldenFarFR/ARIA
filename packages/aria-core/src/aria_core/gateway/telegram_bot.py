@@ -27,7 +27,7 @@ from aria_core.identity import (
     official_telegram_bot_username,
     official_x_url,
 )
-from aria_core import outgoing_pause
+from aria_core import outgoing_pause, risk_guard
 from aria_core.integrations.host_hooks import check_rate_limit
 from aria_core.runtime import settings
 # Formatage de carte/rapport wallet (#157 suite, 15/07) -- factorisé dans
@@ -2051,6 +2051,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("regime", "Win-rate/PnL des trades clôturés par régime macro (Peur/Neutre/Euphorie)"),
     ("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
     ("resume", "▶️ Reprendre les actions sortantes"),
+    ("riskresume", "▶️ Lever le coupe-circuit portefeuille (drawdown/5 pertes)"),
     ("scan", "Scan rapide de risque on-chain d'un contrat"),
     ("sentiment", "Dernière lecture de sentiment marché"),
     ("start", "Message de bienvenue / lever la pause"),
@@ -3016,6 +3017,38 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(update.message, "▶️ ARIA reprend — actions sortantes réactivées.")
 
 
+async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/riskresume — lève le coupe-circuit dur du portefeuille paper (drawdown -20%
+    ou 5 pertes consécutives, propriétaire uniquement).
+
+    20/07, revue croisée externe (trouvaille confirmée par lecture du code) : sans
+    cette commande, ``risk_guard.resume_new_entries()`` n'était appelable QUE par le
+    reset hebdomadaire automatique (``run_weekly_reset``, seul appelant dans tout le
+    code) -- si le coupe-circuit s'arme un mardi, le bot restait bloqué en nouvelles
+    entrées jusqu'au reset suivant, sans aucun moyen d'intervenir. Le docstring de
+    ``resume_new_entries`` prévoyait déjà une "action humaine explicite (ex. commande
+    opérateur)" -- cette commande ferme l'écart entre l'intention documentée et la
+    surface réellement exposée. Même gate que /stop /resume (kill-switch) : le
+    coupe-circuit de risque protège aussi du capital (fictif ici), même bar de
+    confiance."""
+    if not await _owner_only(update):
+        return
+    status = risk_guard.new_entry_block_status()
+    if not status["blocked"]:
+        await _reply(update.message, "▶️ Coupe-circuit inactif — rien à reprendre.")
+        return
+    since = status["since"]
+    since_txt = since.strftime("%Y-%m-%d %H:%M UTC") if since else "date inconnue"
+    reason = status["reason"] or "raison non enregistrée"
+    user = update.effective_user
+    risk_guard.resume_new_entries(by=user.id if user else None)
+    await _reply(
+        update.message,
+        f"▶️ Coupe-circuit levé (était armé depuis {since_txt} — {reason}).\n"
+        "Les nouvelles entrées momentum reprennent au prochain cycle.",
+    )
+
+
 def _register_handlers(app: Application) -> None:
     from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
@@ -3033,6 +3066,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
+    app.add_handler(CommandHandler("riskresume", _handle_risk_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))
     app.add_handler(CommandHandler("walletscore", _handle_walletscore))

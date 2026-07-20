@@ -2873,6 +2873,44 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   eux aussi encore en attente), même doctrine de cadence (bug qui pollue une
   capacité déjà en cours d'exécution en prod — le bot Telegram est utilisé en
   continu par l'opérateur).
+- **20/07 (suite) — 2 correctifs issus de la revue croisée sur la thèse momentum (#5
+  et #6 de la liste), décision opérateur "fait ce qu'il faut, je te fais confiance".**
+  1. **Constante 75s dupliquée éliminée** (`momentum_timing.py`, nouveau module
+     neutre) : `paper_trader.HIGH_WATER_CONFIRMATION_SECONDS` et `momentum_entry.
+     _WASH_TRADING_CONFIRMATION_SECONDS` importent désormais la MÊME constante
+     (`MOMENTUM_CONFIRMATION_SECONDS`) depuis un module tiers sans dépendance vers
+     l'un ou l'autre — élimine le risque de dérive silencieuse déjà documenté
+     (changer l'une sans penser à l'autre). Aucun changement de comportement (même
+     valeur, 75.0), juste une seule source de vérité désormais. Alias d'import
+     (`as HIGH_WATER_CONFIRMATION_SECONDS`/`as _WASH_TRADING_CONFIRMATION_SECONDS`)
+     pour ne toucher aucune des ~15 références internes existantes dans les deux
+     fichiers.
+  2. **Commande Telegram `/riskresume`** (`telegram_bot.py`) — trouvaille confirmée
+     en vérifiant le code pendant la revue : `risk_guard.resume_new_entries()`
+     (lève le coupe-circuit dur, drawdown -20% ou 5 pertes consécutives TOUS
+     CONTRATS confondus) n'était appelable QUE depuis `run_weekly_reset` — grep
+     exhaustif confirmé, aucun autre appelant dans tout le code, et **aucune
+     commande Telegram n'existait** malgré le docstring de la fonction qui
+     promettait déjà "réservé à une action humaine explicite (ex. commande
+     opérateur)". Si le coupe-circuit s'armait un mardi, le bot restait
+     structurellement bloqué en nouvelles entrées jusqu'au reset hebdomadaire —
+     confirmé en conditions réelles qu'un déblocage manuel n'était possible
+     QUE via un accès direct au conteneur (`docker exec`, déjà utilisé une fois par
+     une session antérieure — `by="operator_plazm_bug_correction_19_07"` retrouvé
+     dans l'état persisté). Nouvelle commande, même gate que `/stop`/`/resume`
+     (`_owner_only`, pas `is_admin` — le coupe-circuit protège du capital, même
+     fictif ici, même barre de confiance que le kill-switch) : affiche
+     "rien à reprendre" si déjà inactif, sinon montre depuis quand/pourquoi il est
+     armé et le lève. Vérifié en prod au moment du correctif : coupe-circuit
+     inactif (`blocked: False`), donc pas un incident actif, une fermeture
+     préventive d'un vrai trou.
+  9 nouveaux tests (`test_momentum_timing.py` : 4, dont un qui verrouille
+  explicitement que les deux constantes restent `is`-identiques ; `test_telegram_
+  risk_resume_command.py` : 5, dont le garde-fou mécanique d'enregistrement déjà
+  existant — `test_telegram_command_registration.py` — passe automatiquement
+  sans modification). Suite complète verte (6438 passed, mêmes 7 échecs
+  pré-existants `test_proactive*` sans rapport #142), `test_coherence.py` vert
+  (81 passed).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
