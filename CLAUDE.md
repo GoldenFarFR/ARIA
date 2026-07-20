@@ -2346,6 +2346,25 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   0 position ouverte/clôturée, PnL réalisé 0. Comportement de `reset_portfolio()`
   inchangé (DROP + recréation, aucun archivage -- distinct de `run_weekly_reset()`, qui
   archive tout dans `paper_position_archive` avant de repartir).
+- **20/07 (suite) — bug réel du sizing risque/ATR trouvé en répondant à une question
+  opérateur ("donc cette formule fonctionne dans tout type de market cap ?"), corrigé
+  et DÉPLOYÉ (`3555309adeb6`).** En vérifiant plutôt que de répondre "oui" par
+  réflexe : le plafond (`ceiling_usd`) passé à `risk_guard.size_by_risk_budget()`
+  était TOUJOURS `MAX_ALLOC_MULTIPLIER` (5%), quel que soit le palier de conviction
+  RÉEL du signal (FORT/MODÉRÉ/FAIBLE) — un reliquat du round 7 jamais testé sur les
+  paliers MODÉRÉ/FAIBLE (les 2 seuls tests d'intégration écrits ce jour-là étaient
+  tous les deux en palier FORT). Conséquence chiffrée : un signal MODÉRÉ (budget de
+  risque 1%) sur un stop ATR sous ~20% atteignait 5% au lieu de son vrai plafond
+  (3.5%) ; un signal FAIBLE (budget 0.5%) sur un stop sous ~10% atteignait aussi 5%
+  au lieu de 2% — un signal moins convaincant pouvant recevoir la MÊME mise qu'un
+  signal fort, l'inverse exact de l'intention des paliers de conviction (18/07).
+  Corrigé : `conviction_mult` (déjà calculé pour le repli sans ATR) sert désormais de
+  plafond pour les DEUX chemins — le nouveau système ne peut plus jamais dépasser ce
+  que l'ancien système à paliers fixes aurait donné pour ce MÊME palier, seulement
+  réduire en dessous. 2 nouveaux tests (MODÉRÉ et FAIBLE + stop serré, auraient
+  échoué avant ce correctif — vérifié). Suite complète verte (6242 passed, mêmes 7
+  échecs pré-existants sans rapport #142, 0 régression), `test_coherence.py` vert (81
+  passed). Déployé et vérifié (commit `3555309adeb6` confirmé servi par nginx).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4084,7 +4103,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **7. Volatilité (ATR) et diligence de conviction** — ARIA mesure la volatilité réelle du token (servira au stop, étape 10) et vérifie site officiel, X, GitHub, Farcaster, Telegram — buzz réel, cadence de publication, cohérence du contrat annoncé. N'influence jamais l'achat lui-même, seulement la taille.
 
 **8. Taille de la position** :
-- Sizing hybride risque-cible/ATR : chaque palier de conviction devient un budget de risque (1.5% fort / 1% modéré / 0.5% faible, du capital de départ), divisé par la largeur RÉELLE du stop suiveur ATR de ce token précis — un token nerveux (stop large) reçoit une allocation réduite, un token calme (stop serré) peut en recevoir plus, toujours plafonné au même maximum historique (5%, jamais dépassé). Repli sur les anciens paliers fixes (5%/3.5%/2%) si la volatilité du token n'est pas connue.
+- Sizing hybride risque-cible/ATR : chaque palier de conviction devient un budget de risque (1.5% fort / 1% modéré / 0.5% faible, du capital de départ), divisé par la largeur RÉELLE du stop suiveur ATR de ce token précis — un token nerveux (stop large) reçoit une allocation réduite, un token calme (stop serré) peut en recevoir plus, toujours plafonné au maximum historique DU MÊME PALIER (5% fort / 3.5% modéré / 2% faible — jamais un plafond partagé qui laisserait un palier faible atteindre la mise d'un palier fort). Repli sur les anciens paliers fixes (5%/3.5%/2%) si la volatilité du token n'est pas connue.
 - Redescend d'un palier de conviction si le potentiel fondamental est confirmé faible OU si le volume n'a pas pu être vérifié (étape 6) — un seul de ces deux signaux d'alerte suffit ; si les DEUX sont présents en même temps, chute directe au palier faible
 - Plafond auto-calibré par impact de prix : ARIA calcule combien SON PROPRE achat ferait bouger le prix sur ce pool précis, et réduit le montant si besoin
 - Plafond dur : jamais plus de 2% du capital risqué au pire cas (basé sur la distance à l'invalidation technique — reste appliqué en dernier filet, indépendamment du sizing par risque/ATR ci-dessus)
