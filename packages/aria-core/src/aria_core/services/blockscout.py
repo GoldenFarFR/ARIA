@@ -126,6 +126,12 @@ class TokenHolder:
     address: str
     balance: float | None
     percentage: float | None
+    # 19/07 -- revue croisée Gemini : déjà présents dans la réponse RÉELLE de
+    # ``/tokens/{address}/holders`` (vérifié par appel direct, aucun coût réseau
+    # supplémentaire) -- l'objet ``address`` de chaque holder embarque son propre
+    # statut de contrat/vérification, exactement comme ``/addresses/{address}``.
+    is_contract: bool | None = None
+    is_verified: bool | None = None
 
 
 @dataclass
@@ -596,11 +602,14 @@ class BlockscoutClient:
                 percentage = (balance / total_supply) * 100
 
             holder_address = item.get("address")
+            is_addr_dict = isinstance(holder_address, dict)
             holders.append(
                 TokenHolder(
-                    address=str((holder_address or {}).get("hash") if isinstance(holder_address, dict) else holder_address or ""),
+                    address=str((holder_address or {}).get("hash") if is_addr_dict else holder_address or ""),
                     balance=balance,
                     percentage=percentage,
+                    is_contract=bool(holder_address.get("is_contract")) if is_addr_dict else None,
+                    is_verified=bool(holder_address.get("is_verified")) if is_addr_dict else None,
                 )
             )
 

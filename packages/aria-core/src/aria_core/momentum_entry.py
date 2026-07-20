@@ -218,6 +218,17 @@ _BURN_ADDRESSES = ("0x" + "0" * 40, "0x000000000000000000000000000000000000dead"
 _RVOL_BASELINE_WINDOW = 10
 _RVOL_CONFIRMATION_MULTIPLIER = 3.0
 
+# 19/07 -- revue croisée Gemini : le ratio SEUL est aveugle aux petits nombres -- en
+# phase de consolidation profonde, la moyenne des 10 bougies précédentes peut s'effondrer
+# à quelques centaines de dollars ; une seule transaction retail de 1 500$ suffit alors à
+# valider RVOL >= 3x sans représenter un vrai flux de capital confirmant le rebond.
+# Plancher nominal sur la bougie DÉCLENCHANTE elle-même, en plus du ratio -- sert surtout
+# de filet sur les bougies de faible granularité (1h/4h, tokens trop récents pour 20
+# bougies journalières -- cf. cascade ``_fetch_candles``) ; sur une bougie journalière,
+# le plancher d'entrée (volume 24h, `_MIN_VOLUME_24H_USD`/ratio liquidité) a déjà
+# quasiment toujours validé un ordre de grandeur supérieur avant d'atteindre ce point.
+_RVOL_MIN_TRIGGER_VOLUME_USD = 2_500.0
+
 
 def _check_volume_confirmation(candles: list[Candle]) -> tuple[str, str]:
     """``(statut, raison)`` -- ``statut`` in {"confirmed", "not_confirmed", "unknown"},
@@ -232,6 +243,13 @@ def _check_volume_confirmation(candles: list[Candle]) -> tuple[str, str]:
         return "unknown", "aucun volume réel disponible sur cette source (repli synthèse/Dune)"
 
     rvol = trigger_volume / baseline_avg
+    if rvol >= _RVOL_CONFIRMATION_MULTIPLIER and trigger_volume < _RVOL_MIN_TRIGGER_VOLUME_USD:
+        return (
+            "not_confirmed",
+            f"volume relatif {rvol:.1f}x >= {_RVOL_CONFIRMATION_MULTIPLIER:.0f}x MAIS bougie "
+            f"déclenchante {trigger_volume:,.0f}$ < {_RVOL_MIN_TRIGGER_VOLUME_USD:,.0f}$ -- "
+            "ratio élevé sur une référence trop effondrée, pas un vrai flux de capital",
+        )
     if rvol >= _RVOL_CONFIRMATION_MULTIPLIER:
         return (
             "confirmed",
@@ -467,8 +485,9 @@ async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, s
 
 async def _check_holder_concentration(contract: str, chain: str, pool_address: str) -> tuple[bool, str]:
     """``(trop_concentré, raison)`` -- rejette si les ``_TOP_N_HOLDERS_FOR_CONCENTRATION``
-    plus gros détenteurs (hors pool de liquidité et adresses de burn/mort) détiennent
-    ensemble >= ``_MAX_TOP_HOLDERS_CONCENTRATION_PCT`` % de l'offre.
+    plus gros détenteurs EOA (hors pool de liquidité, adresses de burn/mort, ET contrats
+    intelligents VÉRIFIÉS) détiennent ensemble >= ``_MAX_TOP_HOLDERS_CONCENTRATION_PCT`` %
+    de l'offre.
 
     FAIL-OPEN si la donnée est indisponible (jamais un rejet) -- seul le honeypot est
     fail-closed dans ce pipeline. Couverture limitée aux chaînes EVM indexées par
@@ -476,10 +495,25 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     étant un explorateur EVM -- dégradation honnête via ``get_blockscout_client``, jamais
     un blocage sur ce que l'outil ne sait pas lire).
 
-    Limite honnête assumée (pas une garantie) : n'exclut que le pool de liquidité
-    PRINCIPAL (``pool_address``, celui déjà résolu par ``_best_pair``) et les adresses de
-    burn connues -- un token avec plusieurs pools actifs ou un contrat de vesting/staking
-    légitime pourrait être mal classé comme concentration d'initiés."""
+    19/07 -- revue croisée Gemini : un contrat intelligent LÉGITIME (staking communautaire,
+    multi-sig de trésorerie DAO, vesting) peut détenir 40-60% de l'offre sans être un
+    risque de dump d'initié -- l'ancienne version ne distinguait pas ce cas d'un vrai
+    insider EOA, produisant un faux positif sur des projets pourtant sains. Les holders
+    dont l'adresse est un contrat ET vérifié (``is_contract`` ET ``is_verified``, déjà
+    présents dans la même réponse ``/holders``, AUCUN appel réseau supplémentaire -- vérifié
+    par appel réel avant de construire) sont désormais exclus du classement. Un contrat
+    NON vérifié reste compté comme un EOA (impossible de confirmer que c'est un mécanisme
+    légitime -- fail-CLOSED sur ce point précis, cohérent avec la doctrine du reste du
+    pipeline) -- seule la légitimité VÉRIFIABLE (code source publié) donne le bénéfice du
+    doute, jamais la simple qualité de contrat.
+
+    Limite honnête assumée (pas une garantie) : (1) n'exclut que le pool de liquidité
+    PRINCIPAL (``pool_address``) et les adresses de burn connues -- un token multi-pools
+    reste un angle mort ; (2) un contrat VÉRIFIÉ peut publier un code source qui semble
+    légitime (staking) mais contenir une fonction de retrait que seul le déployeur peut
+    actionner -- ce garde-fou ne fait AUCUNE analyse sémantique du code, seulement une
+    vérification de statut "vérifié/non vérifié", cohérent avec le reste du pipeline qui
+    ne lit jamais le contenu d'un contrat non plus."""
     from aria_core.services.blockscout import get_blockscout_client
 
     client = get_blockscout_client(chain)
@@ -491,7 +525,9 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     ranked = sorted(
         (
             h for h in result.holders
-            if h.percentage is not None and (h.address or "").lower() not in excluded
+            if h.percentage is not None
+            and (h.address or "").lower() not in excluded
+            and not (h.is_contract and h.is_verified)
         ),
         key=lambda h: h.percentage,
         reverse=True,
@@ -500,8 +536,8 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     if top_pct >= _MAX_TOP_HOLDERS_CONCENTRATION_PCT:
         return True, (
             f"concentration des {_TOP_N_HOLDERS_FOR_CONCENTRATION} plus gros détenteurs "
-            f"(hors pool/burn) : {top_pct:.0f}% >= {_MAX_TOP_HOLDERS_CONCENTRATION_PCT:.0f}% "
-            "-- risque de dump d'initié"
+            f"(hors pool/burn/contrats vérifiés) : {top_pct:.0f}% >= "
+            f"{_MAX_TOP_HOLDERS_CONCENTRATION_PCT:.0f}% -- risque de dump d'initié"
         )
     return False, ""
 

@@ -101,21 +101,67 @@ def _effective_tp_stages(target_price: float | None, entry_price: float | None) 
     ``entry_price``) quand les deux sont connus et cohérents (``target_price >
     entry_price``) -- sinon repli sur ``TP_STAGES`` inchangé (ex. positions ouvertes
     avant ce correctif, ou tout analyzer qui ne fournit pas de cible technique, comme
-    l'ancien pilote VC-thesis dormant). TP2/TP3 restent des paliers additionnels
-    au-dessus de TP1 pour le "moonbag" (même ÉCART qu'avant entre les paliers --
-    50->100 = +50pt, 100->200 = +100pt -- simplement décalés pour partir de TP1 au lieu
-    de partir de +50% fixe), garantissant par construction une séquence strictement
-    croissante quel que soit le niveau de TP1 (y compris un TP1 > 100%, plausible sur un
-    retracement profond où la remontée vers le haut du range représente un gain
-    important)."""
+    l'ancien pilote VC-thesis dormant).
+
+    TP2/TP3 (19/07, revue croisée Gemini round 6) -- première version : des crans FIXES
+    au-dessus de TP1 (+50pt/+100pt, même écart que ``TP_STAGES``). Défaut réel trouvé par
+    Gemini : ces crans restaient des points fixes en % du capital, jamais proportionnels
+    à l'AMPLEUR du setup lui-même -- un TP1 modeste (setup serré) gardait quand même un
+    TP2 très loin (souvent au-delà de ce qu'un token atteint avant de se retourner),
+    laissant filer un profit déjà acquis. Remplacé par des MULTIPLES de la distance
+    entrée->TP1 elle-même (``reward_distance``) : TP2 = 2x cette distance, TP3 = 3x --
+    dynamique de bout en bout, un setup ambitieux (TP1 loin) obtient des paliers 2/3
+    proportionnellement plus loin, un setup serré (TP1 proche) les obtient proportionnellement
+    plus proches, jamais un point fixe arbitraire. Séquence strictement croissante par
+    construction (``stage1_pct > 0`` garanti par le test ci-dessus)."""
     if target_price and entry_price and target_price > entry_price:
         stage1_pct = target_price / entry_price - 1.0
-        return (
-            stage1_pct,
-            stage1_pct + (TP_STAGES[1] - TP_STAGES[0]),
-            stage1_pct + (TP_STAGES[2] - TP_STAGES[0]),
-        )
+        return (stage1_pct, 2.0 * stage1_pct, 3.0 * stage1_pct)
     return TP_STAGES
+
+
+# Plafond du saut de high_water par cycle -- cf. _clamp_high_water(). PREMIÈRE version
+# testée (19/07) : réutiliser trail_pct TEL QUEL comme plafond -- rejetée avant même
+# d'être commise, après simulation manuelle : sur un token peu volatil (entry_atr_pct
+# proche de 0 -> trail_pct clampé au plancher MIN_ATR_TRAIL_PCT=5%), le plafond devient
+# si étroit qu'un DOUBLEMENT DE PRIX RÉEL ET SOUTENU prend ~8 cycles (2h à 15 min/cycle)
+# à être reconnu -- écraserait la réactivité du stop exactement sur les setups les plus
+# rentables (le pipeline #194 existe pour être rapide sur du momentum réel). Le plafond
+# ci-dessous découple le saut autorisé de la largeur STEADY-STATE du stop : au moins 3x
+# cette largeur, avec un plancher absolu de 30 points de %, jamais plus étroit -- réduit
+# la convergence au pire cas à 2-3 cycles tout en amortissant encore une mèche extrême.
+# Calibrage assumé comme un jugement, pas une valeur dérivée empiriquement (même famille
+# que ATR_TRAIL_MULTIPLIER/MAX_VOLUME_TO_LIQUIDITY_RATIO ailleurs dans ce fichier) -- à
+# recalibrer si l'observation réelle du portefeuille papier montre une sur/sous-réaction.
+HIGH_WATER_JUMP_CAP_MULTIPLE = 3.0
+HIGH_WATER_JUMP_CAP_FLOOR_PCT = 0.30
+
+
+def _clamp_high_water(prev_high_water: float, price: float, trail_pct: float) -> float:
+    """Plafonne le saut de ``high_water`` (plus-haut retenu pour le stop suiveur) sur UN
+    cycle -- corrige un vrai risque trouvé en revue croisée (19/07, Gemini round 6) : ARIA
+    relit un prix SPOT (DexScreener, dernière transaction) à chaque cycle pour la gestion
+    de position -- PAS le "High" d'une bougie OHLCV comme le décrivait Gemini (aucune
+    bougie n'est relue dans cette boucle), mais le risque sous-jacent est le même : une
+    seule lecture instantanée anormale (mèche/manipulation ponctuelle sur un pool à
+    faible liquidité, bot d'arbitrage, erreur de slippage d'un gros acheteur) peut figer
+    un plus-haut fictif dans ``high_water`` -- le ratchet ne redescend JAMAIS, donc le
+    stop suiveur resterait durablement calé sur un prix qui n'a peut-être existé qu'une
+    fraction de seconde.
+
+    Plafond = ``max(trail_pct * HIGH_WATER_JUMP_CAP_MULTIPLE, HIGH_WATER_JUMP_CAP_FLOOR_PCT)``
+    -- voir le commentaire au-dessus de cette fonction pour l'historique de calibrage (une
+    première version, plus stricte, a été testée et rejetée avant d'être commise). Une
+    hausse RÉELLE et soutenue sur plusieurs cycles reste rattrapée en 2-3 cycles ; une
+    mèche isolée qui revient au niveau précédent au cycle suivant n'a jamais eu le temps
+    de faire monter le stop jusqu'à son niveau. N'affecte QUE l'état ``high_water`` (le
+    ratchet) -- la comparaison de déclenchement du stop utilise toujours le ``price``
+    RÉEL non plafonné, jamais une valeur fictive (une lecture aberrante à la BAISSE, elle,
+    déclenche donc bien le stop si elle franchit le seuil -- choix délibéré, plus prudent
+    pour du capital simulé de réagir à un signal ambigu que de l'ignorer)."""
+    max_jump_pct = max(trail_pct * HIGH_WATER_JUMP_CAP_MULTIPLE, HIGH_WATER_JUMP_CAP_FLOOR_PCT)
+    max_jump = prev_high_water * max_jump_pct
+    return max(prev_high_water, min(price, prev_high_water + max_jump))
 
 # 17/07 -- demande opérateur explicite : réduire de moitié le bruit Telegram de l'alerte de
 # suivi périodique (#197, une par cycle heartbeat -- ~15 min -- tant qu'une position reste
@@ -1329,10 +1375,11 @@ async def _run_paper_cycle_locked(
                 "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price, "chain": p.get("chain") or "base",
             })
 
-            high_water = max(p.get("high_water_price") or p["entry_price"], price)
-            if high_water != (p.get("high_water_price") or p["entry_price"]):
-                await _update_high_water(p["id"], high_water)
             trail_pct = _effective_trail_pct(p.get("entry_atr_pct"))
+            prev_high_water = p.get("high_water_price") or p["entry_price"]
+            high_water = _clamp_high_water(prev_high_water, price, trail_pct)
+            if high_water != prev_high_water:
+                await _update_high_water(p["id"], high_water)
             trailing_stop = high_water * (1 - trail_pct)
             invalidation = p.get("invalidation_price")
             active_stop = max(trailing_stop, invalidation) if invalidation else trailing_stop

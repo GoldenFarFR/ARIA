@@ -1122,10 +1122,13 @@ class _FakeHoldersClient:
         return self._result
 
 
-def _holder(address, percentage):
+def _holder(address, percentage, *, is_contract=None, is_verified=None):
     from aria_core.services.blockscout import TokenHolder
 
-    return TokenHolder(address=address, balance=None, percentage=percentage)
+    return TokenHolder(
+        address=address, balance=None, percentage=percentage,
+        is_contract=is_contract, is_verified=is_verified,
+    )
 
 
 class TestCheckHolderConcentration:
@@ -1210,6 +1213,62 @@ class TestCheckHolderConcentration:
         too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert too_concentrated is False
 
+    # ── EOA vs contrat vérifié (19/07, revue croisée Gemini round 6) ────────────────
+
+    @pytest.mark.asyncio
+    async def test_excludes_verified_contract_holder_staking_or_vesting(self, monkeypatch):
+        """55% détenus par un contrat VÉRIFIÉ (staking communautaire/vesting/trésorerie
+        DAO plausible) ne doit PAS être traité comme une concentration d'initié -- même
+        angle mort que pool/burn, mais pour un mécanisme légitime distinct du pool."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [
+            _holder("0xPOOL", 20.0),
+            _holder("0xSTAKING", 55.0, is_contract=True, is_verified=True),
+            _holder("0xreal1", 3.0),
+            _holder("0xreal2", 2.0),
+        ]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is False
+
+    @pytest.mark.asyncio
+    async def test_keeps_unverified_contract_in_the_count(self, monkeypatch):
+        """Un contrat NON vérifié (code source jamais publié -- impossible de confirmer
+        que c'est un mécanisme légitime) reste compté comme un risque de concentration,
+        exactement comme un EOA -- seule la vérifiabilité donne le bénéfice du doute."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [
+            _holder("0xPOOL", 10.0),
+            _holder("0xSUSPECT", 85.0, is_contract=True, is_verified=False),
+        ]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is True
+        assert "85%" in reason
+
+    @pytest.mark.asyncio
+    async def test_keeps_eoa_holder_in_the_count(self, monkeypatch):
+        """Non-régression explicite : un EOA (``is_contract=False``) reste compté
+        normalement -- seule l'exclusion des contrats VÉRIFIÉS change de comportement."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [
+            _holder("0xPOOL", 10.0),
+            _holder("0xWHALE", 85.0, is_contract=False, is_verified=None),
+        ]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is True
+        assert "85%" in reason
+
 
 # ── volume relatif -- RVOL (19/07, revue croisée Gemini, 4e round) ──────────────────
 
@@ -1239,8 +1298,9 @@ class TestCheckVolumeConfirmation:
         assert "aucun volume réel" in reason.lower()
 
     def test_confirmed_when_rvol_at_or_above_threshold(self):
-        # moyenne=100, déclencheur=300 -> RVOL exactement 3.0x (borne incluse)
-        candles = _volume_candles([100.0] * 10, 300.0)
+        # moyenne=1000, déclencheur=3000 -> RVOL exactement 3.0x (borne incluse), et
+        # bien au-dessus du plancher nominal (2 500$).
+        candles = _volume_candles([1_000.0] * 10, 3_000.0)
         status, reason = me._check_volume_confirmation(candles)
         assert status == "confirmed"
         assert "3.0x" in reason
@@ -1253,7 +1313,28 @@ class TestCheckVolumeConfirmation:
         assert "2.0x" in reason
 
     def test_confirmed_well_above_threshold(self):
-        candles = _volume_candles([50.0] * 10, 1_000.0)  # RVOL 20x
+        candles = _volume_candles([500.0] * 10, 10_000.0)  # RVOL 20x, trigger 10 000$
+        status, _reason = me._check_volume_confirmation(candles)
+        assert status == "confirmed"
+
+    # ── plancher nominal sur la bougie déclenchante (19/07, revue croisée Gemini,
+    #    round 6 -- "piège des petits nombres") ──────────────────────────────────────
+
+    def test_not_confirmed_when_ratio_high_but_trigger_below_absolute_floor(self):
+        """Gemini : en phase de consolidation profonde, la moyenne peut s'effondrer à
+        quelques centaines de dollars -- une seule transaction retail de 1 500$ valide
+        alors RVOL >= 3x sans représenter un vrai flux de capital. moyenne=100,
+        déclencheur=1500 -> RVOL 15x (largement au-dessus du seuil) MAIS 1500$ < 2500$
+        -- doit rester "not_confirmed", pas un faux positif."""
+        candles = _volume_candles([100.0] * 10, 1_500.0)
+        status, reason = me._check_volume_confirmation(candles)
+        assert status == "not_confirmed"
+        assert "2" in reason and "500" in reason  # mentionne le plancher, pas juste le ratio
+
+    def test_confirmed_when_trigger_exactly_at_the_floor(self):
+        # moyenne=800, déclencheur=2500 -> RVOL 3.125x (>=3x) ET trigger=2500 (>=2500,
+        # borne incluse) -- doit passer.
+        candles = _volume_candles([800.0] * 10, 2_500.0)
         status, _reason = me._check_volume_confirmation(candles)
         assert status == "confirmed"
 

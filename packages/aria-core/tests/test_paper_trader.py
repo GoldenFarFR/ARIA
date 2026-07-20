@@ -359,16 +359,20 @@ async def test_trailing_stop_tightens_then_closes_remainder(tmp_db):
     assert len(act1["partial"]) == 1
     assert await pt.has_open(D)
 
-    prices["v"] = 2.5  # cycle 2 : nouveau plus haut, franchit aussi le palier 2
-    act2 = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
-    assert len(act2["partial"]) == 1
+    prices["v"] = 2.5  # nouveau plus haut, franchit aussi le palier 2
+    # 19/07 round 6 -- le clamp anti-mèche (_clamp_high_water) plafonne le saut de
+    # high_water par cycle : plusieurs cycles à prix constant sont nécessaires pour
+    # qu'il rattrape le vrai plus-haut (le palier de profit, lui, réagit toujours
+    # instantanément au prix RÉEL -- gain_pct n'est jamais affecté par ce clamp).
+    for _ in range(5):
+        await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     assert await pt.has_open(D)
     pos = await pt._get_open(D)
-    assert pos["high_water_price"] == 2.5
+    assert pos["high_water_price"] == pytest.approx(2.5)
     assert pos["tp_stage_hit"] == 2
 
-    prices["v"] = 2.0  # cycle 3 : repli sous le stop suiveur (2.5 * 0.85 = 2.125) mais
-    # largement au-dessus de l'invalidation d'origine (0.5) -> c'est bien le stop suiveur
+    prices["v"] = 2.0  # repli sous le stop suiveur (2.5 * 0.85 = 2.125) mais largement
+    # au-dessus de l'invalidation d'origine (0.5) -> c'est bien le stop suiveur
     act3 = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     assert len(act3["closed"]) == 1
     assert act3["closed"][0]["close_reason"] == "stop suiveur"
@@ -418,11 +422,11 @@ class TestEffectiveTpStages:
     def test_target_equal_entry_falls_back_to_fixed(self):
         assert pt._effective_tp_stages(1.0, 1.0) == pt.TP_STAGES
 
-    def test_target_above_entry_anchors_stage1_and_shifts_the_rest(self):
-        # Cible +20 % -> TP1 = 0.20 ; TP2/TP3 gardent le même ÉCART qu'avant
-        # (50->100 = +50pt, 100->200 = +150pt), juste décalés depuis TP1.
+    def test_target_above_entry_anchors_stage1_and_scales_the_rest(self):
+        # 19/07 round 6 (Gemini) -- Cible +20 % -> TP1 = 0.20 ; TP2/TP3 sont désormais
+        # des MULTIPLES (2x/3x) de cette distance, pas des crans absolus fixes.
         stages = pt._effective_tp_stages(1.2, 1.0)
-        assert stages == pytest.approx((0.2, 0.7, 1.7))
+        assert stages == pytest.approx((0.2, 0.4, 0.6))
 
     def test_large_target_gain_keeps_strictly_increasing_stages(self):
         """Un target technique généreux (retracement profond, remontée vers le haut
@@ -430,8 +434,78 @@ class TestEffectiveTpStages:
         séquence reste strictement croissante par construction, jamais un palier
         2/3 qui retomberait en dessous de TP1."""
         stages = pt._effective_tp_stages(4.0, 1.0)  # +300 % de cible
-        assert stages == pytest.approx((3.0, 3.5, 4.5))
+        assert stages == pytest.approx((3.0, 6.0, 9.0))
         assert stages[0] < stages[1] < stages[2]
+
+    def test_small_target_gain_scales_stages_proportionally_smaller(self):
+        """19/07 round 6 (Gemini) -- un setup SERRÉ (TP1 proche) doit obtenir des
+        paliers 2/3 proportionnellement proches aussi, jamais tirés vers un cran
+        absolu lointain qui laisserait filer un profit déjà acquis."""
+        stages = pt._effective_tp_stages(1.05, 1.0)  # cible +5 % seulement
+        assert stages == pytest.approx((0.05, 0.10, 0.15))
+
+
+# ── clamp anti-mèche sur le ratchet high_water (19/07, revue croisée Gemini round 6) ──
+
+
+class TestClampHighWater:
+    def test_move_within_cap_passes_through_unclamped(self):
+        # trail_pct=0.15 -> plafond = max(0.45, 0.30) = 0.45 (45 pts) ; un saut de
+        # 30 pts (1.0 -> 1.30) reste dans le plafond, aucun écrêtage.
+        assert pt._clamp_high_water(1.0, 1.30, 0.15) == pytest.approx(1.30)
+
+    def test_extreme_spike_gets_clamped_not_trusted_raw(self):
+        # Même plafond (0.45) ; un saut à +150 % (1.0 -> 2.5) doit être écrêté à 1.45,
+        # jamais pris pour argent comptant.
+        result = pt._clamp_high_water(1.0, 2.5, 0.15)
+        assert result == pytest.approx(1.45)
+        assert result < 2.5
+
+    def test_never_ratchets_below_previous_high(self):
+        # Un prix EN DESSOUS du plus-haut déjà connu ne doit jamais le faire redescendre
+        # -- le ratchet reste monotone, le clamp ne change que la VITESSE de montée.
+        assert pt._clamp_high_water(2.0, 1.5, 0.15) == pytest.approx(2.0)
+
+    def test_floor_applies_when_trail_pct_is_tiny(self):
+        # trail_pct=0.01 -> 3x = 0.03, sous le plancher HIGH_WATER_JUMP_CAP_FLOOR_PCT
+        # (0.30) -- le plancher l'emporte, jamais un plafond de 3% ridiculement serré.
+        result = pt._clamp_high_water(1.0, 2.0, 0.01)
+        assert result == pytest.approx(1.30)
+
+    def test_sustained_move_converges_within_a_few_cycles(self):
+        """Une hausse RÉELLE et soutenue (prix cible tenu constant sur plusieurs
+        cycles) doit être intégralement reconnue en 2-3 cycles, pas des dizaines --
+        le clamp amortit une lecture isolée, il ne doit jamais paralyser un vrai
+        mouvement de plusieurs cycles."""
+        high_water = 1.0
+        for _ in range(3):
+            high_water = pt._clamp_high_water(high_water, 2.0, 0.15)
+        assert high_water == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_wick_does_not_poison_the_trailing_stop(tmp_db):
+    """19/07 round 6 (Gemini) : une mèche isolée (+60% en un seul cycle, décrite par
+    Gemini comme un bot d'arbitrage/une erreur de slippage sur un pool peu liquide)
+    suivie d'un retour proche de son niveau réel (+35%) ne doit pas figer un plus-haut
+    fictif qui stopperait la position sur ce simple retour au calme."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000)
+
+    prices = {"v": 1.6}  # cycle 1 : mèche isolée, +60 % en un seul cycle
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] < 1.6  # la mèche n'a pas été prise pour argent comptant
+    assert pos["high_water_price"] == pytest.approx(1.45)
+
+    prices["v"] = 1.35  # cycle 2 : la mèche se résorbe, le prix se stabilise à +35 %
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
+    assert await pt.has_open(D)  # sans le clamp : stop 1.6*0.85=1.36 > 1.35 -> aurait clôturé
 
 
 @pytest.mark.asyncio
@@ -486,7 +560,14 @@ async def test_high_volatility_position_survives_a_retracement_that_would_stop_o
     async def price_lookup(contract):
         return prices["v"]
 
-    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)  # établit le plus haut à 2.0
+    # 19/07 round 6 -- le clamp anti-mèche (_clamp_high_water) plafonne le saut de
+    # high_water par cycle ; plusieurs cycles à prix constant établissent le plus haut
+    # à 2.0 avant de tester le repli (comportement voulu -- une seule lecture ne doit
+    # plus jamais figer un plus-haut instantanément).
+    for _ in range(5):
+        await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] == pytest.approx(2.0)
 
     prices["v"] = 1.6  # sous le stop fixe (1.70), au-dessus du stop adaptatif (1.50)
     act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
@@ -510,7 +591,12 @@ async def test_low_volatility_position_stops_out_tighter_than_flat(tmp_db):
     async def price_lookup(contract):
         return prices["v"]
 
-    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    # 19/07 round 6 -- clamp anti-mèche : plusieurs cycles nécessaires pour établir le
+    # plus haut à 2.0 avant de tester le repli (cf. test précédent, même raison).
+    for _ in range(5):
+        await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] == pytest.approx(2.0)
 
     prices["v"] = 1.89  # sous le stop adaptatif (1.90), au-dessus du stop fixe (1.70)
     act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
