@@ -12,19 +12,20 @@ from aria_core import paper_trader as pt
 # 20/07 -- capturée à l'import, AVANT tout monkeypatch de session : permet aux tests
 # dédiés à la re-vérification de fraîcheur (cf. plus bas) de restaurer le VRAI
 # comportement pour eux-mêmes, malgré le bypass autouse ci-dessous.
-_REAL_PRICE_MOVED_TOO_MUCH = pt._price_moved_too_much
+_REAL_EXECUTION_RR_STILL_VALID = pt._execution_rr_still_valid
 
 
 @pytest.fixture(autouse=True)
 def _bypass_price_staleness_check(monkeypatch):
-    """20/07 -- ``run_paper_cycle`` re-vérifie désormais le prix juste avant
-    ``open_position`` (revue croisée Gemini, cf. ``_price_moved_too_much``) via un
-    appel à ``price_lookup`` -- ce fichier teste le sizing/le pipeline en amont, pas
-    ce garde spécifique (couvert par ses propres tests dédiés plus bas). Sans ce
-    bypass, TOUT test qui atteint un BUY sans mocker explicitement ``price_lookup``
-    verrait le second appel (véritable, réseau) échouer en sandbox -> prix jugé
-    obsolète par défaut -> position jamais ouverte, un faux négatif, pas un vrai bug."""
-    monkeypatch.setattr(pt, "_price_moved_too_much", lambda *_a, **_kw: False)
+    """20/07 -- ``run_paper_cycle`` re-vérifie désormais le R/R au prix frais juste
+    avant ``open_position`` (revue croisée Gemini, cf. ``_execution_rr_still_valid``)
+    via un appel à ``price_lookup`` -- ce fichier teste le sizing/le pipeline en
+    amont, pas ce garde spécifique (couvert par ses propres tests dédiés plus bas).
+    Sans ce bypass, TOUT test qui atteint un BUY sans mocker explicitement
+    ``price_lookup`` verrait le second appel (véritable, réseau) échouer en sandbox
+    -> R/R frais impossible à calculer -> position jamais ouverte, un faux négatif,
+    pas un vrai bug."""
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", lambda *_a, **_kw: True)
 
 
 async def _backdate_pending_since(contract: str, seconds: float) -> None:
@@ -628,6 +629,152 @@ async def test_sustained_move_ratchets_the_full_peak_once_confirmed(tmp_db):
     await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     pos = await pt._get_open(D)
     assert pos["high_water_price"] == pytest.approx(2.5)  # le pic RÉEL, d'un seul coup
+
+
+# ── Breakeven Hard Floor (20/07, revue croisée Gemini "Piste B") ────────────────────
+
+def test_breakeven_floor_threshold_half_of_tp1_distance_when_above_floor():
+    """target_price loin -> 50% de la distance entrée->TP1, sans plafonnement."""
+    threshold = pt._breakeven_floor_threshold(1.4, 1.0)  # TP1 = +40%
+    assert threshold == pytest.approx(0.20)  # 50% * 40%
+
+
+def test_breakeven_floor_threshold_clamped_to_absolute_floor_when_tp1_close():
+    """target_price proche (TP1 = +10%) -> 50% donnerait +5%, trop serré (bruit de
+    marché normal) -> le plancher absolu de bon sens (8%) prend le relais."""
+    threshold = pt._breakeven_floor_threshold(1.1, 1.0)  # TP1 = +10%
+    assert threshold == pytest.approx(pt.BREAKEVEN_FLOOR_MIN_PCT)
+
+
+def test_breakeven_floor_threshold_falls_back_to_fixed_tp_stage_without_target():
+    """Aucun target_price connu (ex. ancien pilote VC-thesis) -> repli sur
+    TP_STAGES[0] (+50% fixe) comme _effective_tp_stages -> seuil flash +25%."""
+    threshold = pt._breakeven_floor_threshold(None, 1.0)
+    assert threshold == pytest.approx(0.5 * pt.TP_STAGES[0])
+
+
+def test_breakeven_floor_threshold_none_without_entry_price():
+    assert pt._breakeven_floor_threshold(1.4, None) is None
+    assert pt._breakeven_floor_threshold(1.4, 0.0) is None
+
+
+@pytest.mark.asyncio
+async def test_breakeven_floor_locks_on_flash_touch_and_protects_against_deeper_crash(tmp_db):
+    """Cas central (Gemini, Point 2, Piste B) : un pump-puis-dump rapide qui retombe
+    AVANT la confirmation temporelle du plus-haut (75s) n'aurait laissé AUCUNE trace
+    dans high_water_price (cf. test_wick_never_ratchets_the_confirmed_high_water) --
+    le stop suiveur serait resté calé sur l'entrée -0.85 (-15%). Le point mort
+    verrouillé protège malgré tout : une fois le seuil flash touché, même un seul
+    cycle, un crash qui suit ne peut plus faire perdre plus que ~le prix d'entrée."""
+    await pt.reset_portfolio(1_000_000.0)
+    # TP1 = +40% -> seuil flash = 50%*40% = +20% (prix 1.20), au-dessus du plancher 8%.
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+
+    prices = {"v": 1.25}  # touche le seuil flash (+20%), mèche isolée -- jamais confirmée
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []  # 1.25 > tout stop actif ce cycle, position reste ouverte
+    pos = await pt._get_open(D)
+    assert pos["breakeven_locked"] == 1
+    assert pos["high_water_price"] == pytest.approx(1.0)  # jamais confirmé (comme la mèche)
+
+    prices["v"] = 0.95  # crash -- SOUS le point mort (1.0), au-dessus de l'ancien stop (0.85)
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1
+    closed = act["closed"][0]
+    assert closed["close_reason"] == "breakeven hard floor"
+    assert closed["exit_price"] == pytest.approx(0.95)
+    assert "Point mort verrouillé" in closed["close_notes"]
+    assert "+20%" in closed["close_notes"]
+
+
+@pytest.mark.asyncio
+async def test_breakeven_floor_never_triggers_when_price_never_touches_flash_threshold(tmp_db):
+    """Non-régression : une position dont le prix ne dépasse jamais le seuil flash se
+    comporte exactement comme avant ce correctif (stop suiveur classique)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+
+    prices = {"v": 1.05}  # +5% -- sous le seuil flash (+20%)
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["breakeven_locked"] == 0
+
+    prices["v"] = 0.86  # au-dessus du stop suiveur fixe (0.85), position doit rester ouverte
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
+    assert await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_breakeven_floor_does_not_override_a_higher_trailing_stop(tmp_db):
+    """Le point mort est un PLANCHER, jamais un plafond : une fois le stop suiveur
+    naturellement remonté AU-DESSUS du point mort (rally confirmé et soutenu), il doit
+    continuer de gouverner la sortie -- jamais une régression vers un stop plus bas.
+    Prix choisi sous TP1 (+40%) pour ne pas interférer avec la prise de profit par
+    tiers (même piège déjà rencontré et corrigé sur d'autres tests de ce fichier)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+
+    prices = {"v": 1.30}  # +30% -- au-dessus du seuil flash (+20%), sous TP1 (+40%)
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["breakeven_locked"] == 1
+
+    await _backdate_pending_since(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] == pytest.approx(1.30)  # confirmé
+
+    # Stop suiveur = 1.30*0.85 = 1.105, déjà au-dessus du point mort (1.0) -- un repli
+    # à 1.10 doit déclencher le STOP SUIVEUR, jamais le point mort verrouillé.
+    prices["v"] = 1.10
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "stop suiveur"
+
+
+@pytest.mark.asyncio
+async def test_breakeven_floor_stays_locked_across_multiple_cycles(tmp_db):
+    """Irrévocabilité : une fois verrouillé, le point mort reste actif plusieurs
+    cycles plus tard même si le prix reste au-dessus entre-temps (jamais réinitialisé
+    par un cycle qui ne le retouche pas)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+
+    prices = {"v": 1.25}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["breakeven_locked"] == 1
+
+    # Plusieurs cycles où le prix reste au-dessus du point mort -- ne doit jamais
+    # réinitialiser le verrou (aucune fonction ne remet breakeven_locked à 0).
+    for v in (1.10, 1.15, 1.05):
+        prices["v"] = v
+        act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+        assert act["closed"] == []
+        pos = await pt._get_open(D)
+        assert pos["breakeven_locked"] == 1
+
+    prices["v"] = 0.97  # enfin sous le point mort, plusieurs cycles après le verrouillage
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "breakeven hard floor"
 
 
 @pytest.mark.asyncio
@@ -2417,3 +2564,133 @@ async def test_momentum_strategy_position_unaffected_by_vc_thesis_branch(tmp_db)
     act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     assert len(act["closed"]) == 1
     assert act["closed"][0]["close_reason"] == "stop suiveur"
+
+
+# ── Fraîcheur d'exécution -- recalcul R/R au prix frais (20/07, remplace le 1er design
+#    à seuil % aveugle, revue croisée Gemini) ──────────────────────────────────────────
+
+def test_fresh_rr_computes_correctly():
+    # target=3.0, invalidation=0.5, prix frais=1.0 -> (3.0-1.0)/(1.0-0.5) = 4.0
+    assert pt._fresh_rr(1.0, 3.0, 0.5) == pytest.approx(4.0)
+
+
+def test_fresh_rr_none_when_setup_already_resolved():
+    assert pt._fresh_rr(3.5, 3.0, 0.5) is None  # au-delà de la cible
+    assert pt._fresh_rr(0.4, 3.0, 0.5) is None  # sous l'invalidation
+    assert pt._fresh_rr(0.5, 3.0, 0.5) is None  # pile sur l'invalidation, plus de marge
+
+
+def test_fresh_rr_none_on_missing_data():
+    assert pt._fresh_rr(None, 3.0, 0.5) is None
+    assert pt._fresh_rr(1.0, None, 0.5) is None
+    assert pt._fresh_rr(1.0, 3.0, None) is None
+    assert pt._fresh_rr(0.0, 3.0, 0.5) is None
+
+
+def test_execution_rr_still_valid_uses_direct_buy_bar_when_signal_was_direct(monkeypatch):
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    # signal_rr=2.5 >= _RR_MIN_FOR_DIRECT_BUY (2.0) -> barre = 2.0
+    assert pt._execution_rr_still_valid(2.5, 2.1) is True
+    assert pt._execution_rr_still_valid(2.5, 1.9) is False
+
+
+def test_execution_rr_still_valid_uses_ambiguous_bar_when_signal_was_ambiguous(monkeypatch):
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    # signal_rr=1.3 < _RR_MIN_FOR_DIRECT_BUY -> barre = _RR_AMBIGUOUS_FLOOR (1.0)
+    assert pt._execution_rr_still_valid(1.3, 1.05) is True
+    assert pt._execution_rr_still_valid(1.3, 0.95) is False
+
+
+def test_execution_rr_still_valid_fail_closed_on_missing_fresh_rr(monkeypatch):
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    assert pt._execution_rr_still_valid(2.5, None) is False
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_executes_when_price_pumped_favorably_and_rr_still_valid(tmp_db, monkeypatch):
+    """LE scénario central de la revue Gemini : un token qui continue de pomper
+    PENDANT la réflexion du LLM (+30%, aurait été rejeté par l'ancien seuil % de 3%)
+    doit quand même s'exécuter si le R/R recalculé au prix réel tient encore la
+    barre -- l'ancien design aurait filtré exactement les meilleurs setups."""
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        # R/R au signal (prix 1.0) = (3.0-1.0)/(1.0-0.5) = 4.0
+        return {
+            "action": "BUY", "symbol": "HOT", "price": 1.0, "target": 3.0,
+            "invalidation": 0.5, "rr": 4.0, "align_score": 3, "chain": "base",
+        }
+
+    async def price_lookup(contract):
+        return 1.3  # +30% depuis le signal -- aurait été rejeté par l'ancien seuil 3%
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
+    assert len(act["opened"]) == 1
+    # Exécuté au prix FRAIS (1.3), pas au prix du signal (1.0).
+    assert act["opened"][0]["entry_price"] == pytest.approx(1.3)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_gets_a_discount_when_price_dipped_without_touching_invalidation(tmp_db, monkeypatch):
+    """Symétrique : un léger repli SANS toucher l'invalidation améliore mécaniquement
+    le R/R ("rabais" sur la thèse) -- doit aussi s'exécuter, au prix réduit."""
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "DIP", "price": 1.0, "target": 3.0,
+            "invalidation": 0.5, "rr": 4.0, "align_score": 3, "chain": "base",
+        }
+
+    async def price_lookup(contract):
+        return 0.98  # -2%, loin de l'invalidation (0.5)
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["entry_price"] == pytest.approx(0.98)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_rejects_when_fresh_rr_collapses_below_the_original_bar(tmp_db, monkeypatch):
+    """Le vrai cas à rejeter : le prix a couru si près de la cible que le R/R
+    structurel ne tient plus la barre franchie à l'origine -- ARIA n'achète pas un
+    setup dégradé, contrairement à ce qu'un simple seuil % aurait pu laisser passer
+    ou rejeter arbitrairement."""
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        # R/R au signal (prix 1.0) = (3.0-1.0)/(1.0-0.5) = 4.0 -- achat direct (>= 2.0)
+        return {
+            "action": "BUY", "symbol": "RUN", "price": 1.0, "target": 3.0,
+            "invalidation": 0.5, "rr": 4.0, "align_score": 3, "chain": "base",
+        }
+
+    async def price_lookup(contract):
+        return 2.7  # tout près de la cible -- R/R frais = (3.0-2.7)/(2.7-0.5) = 0.136
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
+    assert act["opened"] == []
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_rejects_when_fresh_price_lookup_fails(tmp_db, monkeypatch):
+    """Fail-closed : une panne réseau sur la re-vérification ne doit jamais forcer
+    une exécution sur l'ancien prix du signal."""
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "ERR", "price": 1.0, "target": 3.0,
+            "invalidation": 0.5, "rr": 4.0, "align_score": 3, "chain": "base",
+        }
+
+    async def failing_price_lookup(contract):
+        raise RuntimeError("panne réseau simulée")
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=failing_price_lookup)
+    assert act["opened"] == []

@@ -2516,6 +2516,96 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
      remainder`, montée progressive + `_backdate_pending_since`).
   Suite complète verte (6274 passed, mêmes 7 échecs pré-existants sans rapport #142,
   0 régression), `test_coherence.py` vert (81 passed).
+- **20/07 (suite) — 3 chantiers de plus issus du MÊME fil de revue croisée Gemini
+  (#169/#170/#171), décision opérateur explicite "des maintenant" sur les 2 premiers,
+  "Piste B" tranchée par l'opérateur pour le 3e.**
+  1. **Recalcul du R/R au prix frais** (`_execution_rr_still_valid`, remplace le
+     seuil brut `_price_moved_too_much` du point 2 ci-dessus) — vrai défaut trouvé
+     par Gemini dans le mécanisme qu'il venait lui-même de faire construire : un
+     seuil de dérive de prix (%) rejette un mouvement FAVORABLE aussi sûrement
+     qu'un mouvement défavorable, alors que la latence des 1-2 appels LLM
+     séquentiels (étapes 4/5) laisse largement le temps à un token en plein
+     momentum de bouger de plus de 3% avant l'exécution — exactement le type de
+     trade qu'ARIA doit le mieux capter, rejeté par excès de prudence. Remplacé
+     par un recalcul du R/R structurel au prix frais, sur les MÊMES niveaux
+     Fibonacci fixes (`target`/`invalidation`) déjà établis à l'étape 3 — le
+     setup doit encore tenir la barre qu'il avait initialement franchie (2.0
+     achat direct, 1.0 achat confirmé), jamais un seuil de mouvement de prix en
+     tant que tel. Une évolution favorable ne bloque donc plus jamais l'achat
+     tant que le R/R structurel reste solide. `paper_trader.py` : nouvelles
+     `_fresh_rr()`/`_execution_rr_still_valid()`, câblées juste avant
+     `open_position` (remplace `_price_moved_too_much` intégralement, aucun code
+     mort laissé). 13 nouveaux tests, dont l'intégration centrale
+     (`test_run_cycle_executes_when_price_pumped_favorably_and_rr_still_valid`)
+     qui aurait échoué contre l'ancien mécanisme.
+  2. **Fusion des prompts LLM étapes 4+5 sur le chemin ambigu** (nouvelle
+     `_llm_confirm_and_gate`, `momentum_entry.py`) — le chemin R/R ambigu
+     (1.0-2.0) posait auparavant DEUX questions en SÉQUENCE (`_llm_confirm` puis,
+     si confirmé, `_llm_security_gate`) : ~2-4s cumulés sur le chemin déjà le
+     plus lent du pipeline. Un seul appel synchrone répond désormais aux deux
+     questions à la fois (verdict `BUY`/`HOLD_WEAK`/`HOLD_TRAP`, même granularité
+     de `hold_reason` que les 2 appels séparés — rien perdu côté funnel de
+     rejet). Le chemin achat DIRECT (R/R franc) reste inchangé : un seul appel à
+     `_llm_security_gate` SEUL, puisqu'il n'a jamais posé la question de
+     confirmation, rien à fusionner. Les deux fonctions d'origine
+     (`_llm_confirm`/`_llm_security_gate`) sont conservées telles quelles,
+     toujours utilisées seules sur le chemin direct — `_llm_confirm_and_gate`
+     est un 3e chemin, pas un remplacement. Nouveau flag local
+     `security_already_checked` empêche tout appel redondant (le garde unifié
+     après le bloc de décision ne se redéclenche jamais si le chemin ambigu a
+     déjà tranché les deux questions). 10 nouveaux tests dédiés à la fonction
+     fusionnée + 2 tests d'intégration corrigés (mockaient encore `_llm_confirm`
+     seul, devenu mort sur ce chemin) + 1 test explicite vérifiant qu'aucun appel
+     résiduel à `_llm_confirm`/`_llm_security_gate` ne se produit plus sur le
+     chemin ambigu.
+  3. **Breakeven Hard Floor** (`paper_trader.py`, nouvelle colonne
+     `breakeven_locked`) — répond à l'angle mort trouvé par Gemini dans le
+     mécanisme anti-mèche du 20/07 (point 3 précédent) : une confirmation
+     TEMPORELLE de 75s protège contre une mèche isolée, mais un vrai
+     pump-puis-dump RAPIDE (+50% en <75s, qui retombe avant la confirmation) ne
+     laisse ABSOLUMENT AUCUNE trace dans `high_water_price` (par design, aucun
+     crédit partiel) -- le stop suiveur reste calé sur son niveau d'AVANT le
+     pic, alors que la position a réellement flirté avec un gain significatif.
+     Mécanisme séparé et indépendant du ratchet high_water : lit le prix
+     INSTANTANÉ de CHAQUE cycle (jamais le plus-haut confirmé/en attente), dès
+     qu'il touche, même un seul cycle, un seuil "flash" le stop est
+     IRRÉVOCABLEMENT remonté au prix d'entrée (jamais réinitialisé). Calibration
+     du seuil tranchée par l'opérateur ("Piste B" -- ratio de la cible technique,
+     pas un % de gain brut fixe) : `max(50% de la distance entrée→TP1,
+     8% plancher absolu)` -- réutilise `_effective_tp_stages` déjà existant
+     (aucune nouvelle notion de cible), le plancher absolu évite un
+     déclenchement sur un setup au TP1 très serré où 50% de sa distance serait
+     plus étroit que le bruit de marché normal. `active_stop` devient un
+     maximum explicite à 3 sources (stop suiveur / invalidation / point mort
+     verrouillé) au lieu de 2 -- le point mort est un PLANCHER, jamais un
+     plafond : un stop suiveur déjà remonté naturellement au-dessus continue de
+     gouverner la sortie, aucune régression vers un stop plus bas. Nouveau
+     `close_reason="breakeven hard floor"` (aucune autre fonction ne pattern-
+     matche `close_reason`, vérifié par grep avant d'ajouter la valeur -- sans
+     risque de casser un consommateur existant). 8 nouveaux tests (seuil pur +
+     déclenchement/protection + non-régression + priorité sur le stop suiveur +
+     persistance sur plusieurs cycles).
+  Suite complète verte, `test_coherence.py` vert (81 passed).
+- **20/07 (suite) — Regime Switch dynamique (Peur/Neutre/Euphorie), proposé par
+  Gemini pour faire varier les seuils durs (étapes 2/8/10) selon le climat macro --
+  DESIGN EN COURS, RIEN CODÉ, en attente d'un chiffre opérateur.** Vérifié avant
+  de répondre (jamais supposé) : `market_sentiment.py` (6 régimes RSI+Bollinger+
+  momentum+retracement sur BTC/ETH, **déjà en prod**, `ARIA_MARKET_SENTIMENT_
+  ENABLED=1` confirmé) est déjà la brique déterministe "sans que le LLM n'invente
+  une tendance" que Gemini demandait -- pas besoin d'un nouvel indicateur, juste
+  d'un mapping. Le label natif du régime `complaisance` ("euphorie qui ralentit,
+  signal d'alerte", condition RSI extrême + momentum qui décélère) confirme dans
+  le CODE une correction Gemini : ne jamais le classer en Euphorie (activerait les
+  paramètres les plus agressifs pile au moment où le marché se retourne) -- classé
+  Neutre. Design de transition pour une position déjà ouverte (question directe de
+  l'opérateur) : régime relu à CHAQUE cycle de gestion, mais ne peut jamais
+  ASSOUPLIR ce qui est déjà verrouillé -- `min(régime à l'entrée, régime courant)`
+  sur une échelle ordinale Peur < Neutre < Euphorie, même philosophie que le stop
+  suiveur/le point mort irrévocable (#171) : ratchet vers plus de prudence
+  uniquement, jamais l'inverse. **Point encore en suspens** : écart chiffré entre
+  deux messages Gemini sur le plancher de liquidité en régime Peur (300-500k$ vs
+  200k$) -- signalé à l'opérateur, réponse pas encore reçue. Tâche #172 créée,
+  aucun code écrit tant que ce chiffre n'est pas confirmé.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4247,9 +4337,9 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 
 **3. Analyse technique** — Cascade de récupération de prix à 5 étages, avec pause automatique sur un fournisseur qui échoue en boucle. Recherche d'un setup golden pocket Fibonacci + divergence RSI pour calculer le R/R ; vérification de 3 signaux additionnels (EMA, MACD, pattern de bougie).
 
-**4. Décision** — R/R ≥ 2.0 et au moins 2/3 signaux alignés → achat direct. R/R entre 1.0 et 2.0 → un LLM tranche (avec le contexte du rythme hebdomadaire, sentiment de marché, Polymarket). En dessous → HOLD.
+**4. Décision** — R/R ≥ 2.0 et au moins 2/3 signaux alignés → achat direct, confirmé par un second avis LLM de sécurité (étape 5) qui reste un appel séparé sur ce chemin. R/R entre 1.0 et 2.0 → un SEUL appel LLM tranche À LA FOIS la confirmation ET la sécurité (fusionné le 20/07 pour diviser par deux la latence sur ce chemin déjà le plus lent — auparavant 2 appels séquentiels), avec le contexte du rythme hebdomadaire, sentiment de marché, Polymarket. En dessous → HOLD.
 
-**5. Dernier filtre avant achat** — Un second avis LLM indépendant cherche un piège concret que les seuils numériques ne voient pas.
+**5. Dernier filtre avant achat** — Sur le chemin achat direct (R/R franc) : un second avis LLM indépendant, séparé, cherche un piège concret que les seuils numériques ne voient pas. Sur le chemin ambigu, ce filtre est déjà inclus dans l'appel unique de l'étape 4 (fusion du 20/07) — jamais un appel redondant.
 
 **6. Volume relatif (RVOL)** — ARIA compare le volume de la bougie qui déclenche l'achat à la moyenne des 10 bougies précédentes. Vraie donnée disponible et volume < 3x la moyenne → rejet, le rebond n'est pas soutenu par du vrai capital. Même si le ratio est élevé, la bougie déclenchante doit aussi représenter au moins 2 500$ en valeur absolue (sinon un simple pari retail sur un marché déjà quasi-mort peut artificiellement valider le ratio) → rejet aussi dans ce cas. Donnée de volume absente (sources de prix de secours) → jamais de rejet, mais la taille de la position sera plafonnée (étape 8). Volume ≥ 3x la moyenne ET ≥ 2 500$ → confirmé, aucune pénalité.
 
@@ -4263,13 +4353,14 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Réduite de moitié si l'objectif hebdomadaire est déjà atteint, ou si le portefeuille est en drawdown -10% ; plus aucun achat si -20% ou 5 pertes d'affilée
 - Jamais plus de 40% du capital sur une même chaîne
 
-**9. Exécution** — Achat papier simulé, toute la thèse persistée (chaque signal, chaque vérification) — aucun argent réel.
+**9. Exécution** — Juste avant d'ouvrir la position, ARIA revérifie le prix en temps réel et recalcule le R/R à ce prix frais (sur les mêmes niveaux Fibonacci fixes établis à l'étape 3) — si le setup ne tient plus la barre qu'il avait initialement franchie (2.0 pour un achat direct, 1.0 pour un achat confirmé), l'achat est annulé (20/07, remplace un ancien seuil brut "prix pas trop bougé de 3%" qui aurait rejeté à tort un mouvement favorable). Une évolution de prix FAVORABLE (le token continue de monter) ne bloque donc jamais l'achat tant que le R/R structurel reste solide — seule une dégradation réelle du setup l'annule. Achat papier simulé, toute la thèse persistée (chaque signal, chaque vérification) — aucun argent réel.
 
 **10. Gestion de la position** :
 - Re-scan de sécurité continu
 - Stop suiveur adaptatif à la volatilité : largeur calculée depuis l'ATR mesuré à l'entrée (bornée entre 5% et 40%), jamais un pourcentage fixe pour tous les tokens. Le niveau du stop monte à chaque nouveau sommet, ne redescend jamais.
 - Prise de profit par tiers : le 1er palier (TP1) s'ancre sur la cible technique réelle de la position (le niveau golden pocket qui a validé le R/R à l'entrée), pas un pourcentage fixe. Les 2 paliers suivants sont des MULTIPLES de cette même distance (TP2 = 2x la distance entrée→TP1, TP3 = 3x) — dynamique de bout en bout, un setup serré garde des paliers proportionnellement proches. Repli sur +50%/+100%/+200% fixes si aucune cible technique n'est connue pour la position.
 - Anti-mèche : un nouveau plus-haut n'est retenu pour le stop qu'après être resté au-dessus de l'ancien plus-haut confirmé pendant au moins 75 secondes (durée absolue, pas un nombre de cycles) — empêche une seule lecture de prix aberrante (mèche, bot d'arbitrage) de figer un plus-haut fictif qui déclencherait le stop sur un simple retour au calme. Aucune limite sur l'AMPLEUR du mouvement : une fois confirmé, le vrai pic est retenu d'un coup, jamais une reconnaissance progressive.
+- Point mort verrouillé (Breakeven Hard Floor, 20/07) : mécanisme SÉPARÉ de l'anti-mèche ci-dessus, répond à l'angle mort qu'elle laisse ouvert — un pump-puis-dump qui retombe AVANT les 75 secondes de confirmation ne laisse aucune trace dans le plus-haut confirmé (aucun crédit partiel, par design). Dès que le prix INSTANTANÉ (pas le plus-haut confirmé) touche, même un seul cycle, un seuil flash (50% de la distance entrée→TP1, plancher absolu 8%), le stop est IRRÉVOCABLEMENT remonté au prix d'entrée — ce verrou ne redescend jamais, même si le prix retombe aussitôt sous le seuil qui l'a déclenché. N'entre en jeu que si le stop suiveur classique est encore SOUS le point mort (un rally soutenu qui fait naturellement monter le stop suiveur au-dessus continue de gouverner la sortie, jamais une régression).
 - Re-achat autorisé sur un contrat déjà clôturé dès qu'un nouveau point d'entrée se profile
 
 **11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$.

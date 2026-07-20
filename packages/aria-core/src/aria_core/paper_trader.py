@@ -75,24 +75,51 @@ ATR_TRAIL_MULTIPLIER = 2.5
 MIN_ATR_TRAIL_PCT = 0.05
 MAX_ATR_TRAIL_PCT = 0.40
 
-# 20/07 -- fraîcheur du prix à l'exécution (revue croisée Gemini, décision opérateur
-# "ok") : ``sig["price"]`` est capturé tout au début de ``evaluate_momentum_entry``
-# (avant honeypot/concentration holders/cascade OHLCV/jusqu'à 2 appels LLM
-# séquentiels) -- sur un token très volatile, plusieurs secondes peuvent s'écouler
-# avant que ce prix ne soit réellement utilisé pour ouvrir la position, rendant le
-# R/R calculé à l'entrée potentiellement obsolète. 3 % -- assez large pour ne pas
-# rejeter le bruit normal d'un microcap (quelques % en quelques secondes est courant),
-# assez strict pour capter un vrai mouvement qui invaliderait le setup entre-temps.
-PRICE_STALENESS_MAX_DRIFT_PCT = 0.03
+# 20/07 -- fraîcheur du prix à l'exécution (revue croisée Gemini, remplace un premier
+# design à seuil % aveugle -- corrigé le MÊME soir après un 2e passage de revue).
+# ``sig["price"]`` est capturé tout au début de ``evaluate_momentum_entry`` (avant
+# honeypot/concentration holders/cascade OHLCV/jusqu'à 2 appels LLM séquentiels) --
+# sur un token volatile, plusieurs secondes peuvent s'écouler avant que ce prix ne
+# soit réellement utilisé pour ouvrir la position.
+#
+# Root cause du 1er design (rejeté) : un seuil % de mouvement aveugle (3%) traite
+# TOUT mouvement comme mauvais, alors que la vraie question n'est jamais "le prix
+# a-t-il bougé" mais "le trade reste-t-il bon". Un token qui pompe encore plus fort
+# pendant la réflexion du LLM (exactement le profil que l'étape 3 recherche) se
+# ferait rejeter par un seuil % -- adverse selection qui filtrerait les MEILLEURS
+# setups, ne laissant passer que les configurations "molles" qui ne bougent pas.
+#
+# Fix : recalcule le R/R au prix FRAIS avec les MÊMES niveaux structurels (target/
+# invalidation, Fibonacci -- fixes, jamais recalculés) que la décision d'entrée, et
+# vérifie qu'il tient encore la barre que CE signal avait franchie à l'origine (2.0
+# pour un achat direct, 1.0 pour un ambigu confirmé par LLM). Si le prix a monté
+# mais que la cible est encore loin, le R/R reste bon -> exécution. Si le prix a
+# légèrement baissé sans toucher l'invalidation, le R/R s'améliore mécaniquement
+# (« rabais » sur la thèse) -> exécution. Rejette seulement un setup RÉELLEMENT
+# dégradé (prix trop proche de la cible ou de l'invalidation), jamais un mouvement
+# simplement présent.
+def _fresh_rr(fresh_price: float | None, target: float | None, invalidation: float | None) -> float | None:
+    """R/R recalculé au prix frais. ``None`` si la config ne permet pas un calcul
+    valide (donnée absente, ou le setup est déjà résolu -- prix au-delà de la cible
+    ou déjà sous l'invalidation, plus un R/R à mesurer à ce stade)."""
+    if not fresh_price or fresh_price <= 0 or not target or not invalidation:
+        return None
+    if fresh_price <= invalidation or fresh_price >= target:
+        return None
+    return (target - fresh_price) / (fresh_price - invalidation)
 
 
-def _price_moved_too_much(signal_price: float | None, fresh_price: float | None) -> bool:
-    """``True`` si le prix a trop bougé depuis la capture du signal (ou si l'un des
-    deux est indisponible/invalide -- fail-closed, jamais une exécution sur une
-    donnée fraîche manquante)."""
-    if not signal_price or signal_price <= 0 or not fresh_price or fresh_price <= 0:
-        return True
-    return abs(fresh_price - signal_price) / signal_price > PRICE_STALENESS_MAX_DRIFT_PCT
+def _execution_rr_still_valid(signal_rr: float | None, fresh_rr: float | None) -> bool:
+    """``True`` si ``fresh_rr`` tient encore la barre que le signal ORIGINAL avait
+    franchie -- 2.0 (achat direct) si ``signal_rr`` l'avait déjà atteint, sinon 1.0
+    (le plancher ambigu, franchi via confirmation LLM). ``fresh_rr is None`` ->
+    fail-closed (jamais une exécution sans donnée pour juger)."""
+    if fresh_rr is None:
+        return False
+    from aria_core.momentum_entry import _RR_AMBIGUOUS_FLOOR, _RR_MIN_FOR_DIRECT_BUY
+
+    bar = _RR_MIN_FOR_DIRECT_BUY if (signal_rr and signal_rr >= _RR_MIN_FOR_DIRECT_BUY) else _RR_AMBIGUOUS_FLOOR
+    return fresh_rr >= bar
 
 
 # 20/07 -- Formule B, discipline de sortie VC (``strategy="vc_thesis"``, revue croisée
@@ -166,6 +193,39 @@ def _effective_tp_stages(target_price: float | None, entry_price: float | None) 
         stage1_pct = target_price / entry_price - 1.0
         return (stage1_pct, 2.0 * stage1_pct, 3.0 * stage1_pct)
     return TP_STAGES
+
+
+# 20/07 -- Breakeven Hard Floor (revue croisée Gemini, "Piste B" validée par
+# l'opérateur) : mécanisme SÉPARÉ de la confirmation temporelle du plus-haut
+# ci-dessous, répond à l'angle mort qu'elle laisse ouvert. `_advance_high_water`
+# abandonne ENTIÈREMENT une candidature de plus-haut si le prix retombe sous le
+# dernier plus-haut CONFIRMÉ avant d'avoir tenu HIGH_WATER_CONFIRMATION_SECONDS
+# (75s, par design -- aucun crédit partiel) : un pump-puis-dump rapide (ex. +50% en
+# moins de 75s) laisse donc le stop calé sur son niveau D'AVANT le pic, alors que la
+# position a réellement flirté avec un gain significatif.
+#
+# Ce filet est INDÉPENDANT du ratchet high_water -- il lit le prix INSTANTANÉ de
+# CHAQUE cycle (jamais le plus-haut confirmé), et dès qu'il touche, même un seul
+# cycle, un seuil "flash" calibré sur la cible technique du setup, le stop est
+# IRRÉVOCABLEMENT remonté au point mort (`entry_price`) -- ce verrou ne redescend
+# JAMAIS, même si le prix retombe aussitôt sous le seuil qui l'a déclenché.
+#
+# Seuil = BREAKEVEN_FLOOR_TP1_RATIO de la distance entrée->TP1 (la cible technique
+# déjà utilisée par _effective_tp_stages), avec un plancher absolu BREAKEVEN_FLOOR_
+# MIN_PCT pour ne jamais déclencher sur un setup au TP1 très serré, où une fraction
+# de sa distance serait plus étroite que le bruit de marché normal.
+BREAKEVEN_FLOOR_TP1_RATIO = 0.5
+BREAKEVEN_FLOOR_MIN_PCT = 0.08
+
+
+def _breakeven_floor_threshold(target_price: float | None, entry_price: float | None) -> float | None:
+    """Seuil de gain (fraction, ex. ``0.08`` = +8%) au-delà duquel le point mort se
+    verrouille -- ``None`` si aucun prix d'entrée valide (jamais un calcul sur une
+    donnée absente)."""
+    if not entry_price or entry_price <= 0:
+        return None
+    stage1_pct = _effective_tp_stages(target_price, entry_price)[0]
+    return max(BREAKEVEN_FLOOR_TP1_RATIO * stage1_pct, BREAKEVEN_FLOOR_MIN_PCT)
 
 
 # 20/07 -- confirmation TEMPORELLE du plus-haut (remplace le plafond de vitesse
@@ -264,7 +324,7 @@ _POS_FIELDS = (
     "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
     "category", "entry_security_json", "chain", "thesis", "close_notes",
     "entry_atr_pct", "pending_high_water", "pending_high_water_since",
-    "strategy", "entry_liquidity_usd",
+    "strategy", "entry_liquidity_usd", "breakeven_locked",
 )
 
 _ADDED_COLUMNS = [
@@ -315,6 +375,12 @@ _ADDED_COLUMNS = [
     # référence pour détecter une chute structurelle en cours de détention.
     ("strategy", "TEXT NOT NULL DEFAULT 'momentum'"),
     ("entry_liquidity_usd", "REAL"),
+    # 20/07 -- Breakeven Hard Floor (cf. _breakeven_floor_threshold ci-dessus). 0/1 --
+    # une fois passé à 1, ne redescend JAMAIS (verrou irrévocable, vérifié par test).
+    # 0 par défaut, jamais une valeur inventée pour une position ouverte avant ce
+    # chantier (comportement inchangé : le point mort ne se verrouille pas tant que le
+    # prix n'a pas réellement touché le seuil flash APRÈS l'activation de ce correctif).
+    ("breakeven_locked", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # 19/07 -- migration à chaud DÉDIÉE pour paper_position_archive (voir _ensure_tables) --
@@ -327,6 +393,7 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("pending_high_water_since", "TEXT"),
     ("strategy", "TEXT NOT NULL DEFAULT 'momentum'"),
     ("entry_liquidity_usd", "REAL"),
+    ("breakeven_locked", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -897,6 +964,17 @@ async def _update_high_water(
             "UPDATE paper_position SET high_water_price = ?, pending_high_water = ?, "
             "pending_high_water_since = ? WHERE id = ?",
             (price, pending_high_water, pending_since, position_id),
+        )
+        await db.commit()
+
+
+async def _lock_breakeven_floor(position_id: int) -> None:
+    """Verrouille le point mort (Breakeven Hard Floor, cf. ``_breakeven_floor_
+    threshold``) -- irrévocable, jamais réinitialisé ailleurs (aucune fonction
+    UPDATE ne remet ``breakeven_locked`` à 0)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE paper_position SET breakeven_locked = 1 WHERE id = ?", (position_id,),
         )
         await db.commit()
 
@@ -1606,14 +1684,33 @@ async def _run_paper_cycle_locked(
                 or pending_since != prev_pending_since
             ):
                 await _update_high_water(p["id"], high_water, pending_hw, pending_since)
+
+            # 20/07 -- Breakeven Hard Floor (cf. constantes/docstring ci-dessus) : lit le
+            # prix INSTANTANÉ de ce cycle (pas high_water, qui peut encore être en attente
+            # de confirmation) -- un seul cycle où le prix touche le seuil flash suffit à
+            # verrouiller, indépendamment du sort de la candidature high_water en cours.
+            entry_price = p["entry_price"]
+            flash_threshold = _breakeven_floor_threshold(p.get("target_price"), entry_price)
+            breakeven_locked = bool(p.get("breakeven_locked"))
+            if not breakeven_locked and entry_price and flash_threshold is not None:
+                if price >= entry_price * (1.0 + flash_threshold):
+                    breakeven_locked = True
+                    await _lock_breakeven_floor(p["id"])
+
             trailing_stop = high_water * (1 - trail_pct)
             invalidation = p.get("invalidation_price")
-            active_stop = max(trailing_stop, invalidation) if invalidation else trailing_stop
-            stop_is_trailing = not invalidation or trailing_stop > invalidation
+            active_stop = trailing_stop
+            stop_source = "stop suiveur"
+            if invalidation and invalidation > active_stop:
+                active_stop = invalidation
+                stop_source = "invalidation"
+            if breakeven_locked and entry_price and entry_price > active_stop:
+                active_stop = entry_price
+                stop_source = "point mort verrouillé"
 
             if active_stop and price <= active_stop:
                 exit_gain_pct = (price / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0
-                if stop_is_trailing:
+                if stop_source == "stop suiveur":
                     peak_gain_pct = (high_water / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0
                     trail_origin = "adapté à l'ATR" if p.get("entry_atr_pct") else "fixe"
                     exit_notes = (
@@ -1622,15 +1719,27 @@ async def _run_paper_cycle_locked(
                         f"protection -- sortie {price:.6g} ({exit_gain_pct:+.1f}% net vs entrée), "
                         f"{_duration_phrase(p.get('opened_at'))}."
                     )
+                    close_reason = "stop suiveur"
+                elif stop_source == "point mort verrouillé":
+                    threshold_pct = (flash_threshold or 0.0) * 100.0
+                    exit_notes = (
+                        f"Point mort verrouillé (Breakeven Hard Floor) : le prix a touché au moins "
+                        f"+{threshold_pct:.0f}% à un moment de la détention (seuil flash, indépendant "
+                        f"de la confirmation temporelle du plus haut) -- le stop a été remonté "
+                        f"irrévocablement au prix d'entrée {entry_price:.6g} -- sortie {price:.6g} "
+                        f"({exit_gain_pct:+.1f}% net vs entrée), {_duration_phrase(p.get('opened_at'))}."
+                    )
+                    close_reason = "breakeven hard floor"
                 else:
                     exit_notes = (
                         f"Invalidation technique atteinte : prix {price:.6g} <= seuil {invalidation:.6g} "
                         f"({exit_gain_pct:+.1f}% vs entrée) -- thèse invalidée, sortie immédiate, "
                         f"{_duration_phrase(p.get('opened_at'))}."
                     )
+                    close_reason = "invalidation"
                 closed = await close_position(
                     p["contract"], price,
-                    reason="stop suiveur" if stop_is_trailing else "invalidation",
+                    reason=close_reason,
                     notes=exit_notes,
                 )
                 if closed:
@@ -1958,13 +2067,14 @@ async def _run_paper_cycle_locked(
         entry_alloc_usd = base_alloc_usd * risk_state.alloc_multiplier * pacing_mult
 
         # 20/07 -- re-vérification de fraîcheur juste avant l'exécution (revue croisée
-        # Gemini, décision opérateur "ok") : ``price`` ci-dessus a été capturé tout au
-        # début de l'évaluation (avant honeypot/concentration holders/cascade OHLCV/
-        # jusqu'à 2 appels LLM séquentiels) -- sur un token volatile, plusieurs
-        # secondes peuvent s'être écoulées. Un prix qui a trop bougé invalide le R/R
-        # calculé à l'entrée -- on ne force jamais une exécution sur une donnée
-        # obsolète, on passe simplement au tour suivant (le candidat pourra être
-        # réévalué au prochain cycle avec des données fraîches).
+        # Gemini, cf. _fresh_rr/_execution_rr_still_valid plus haut) : ``price``
+        # ci-dessus a été capturé tout au début de l'évaluation (avant honeypot/
+        # concentration holders/cascade OHLCV/jusqu'à 2 appels LLM séquentiels) --
+        # sur un token volatile, plusieurs secondes peuvent s'être écoulées. On
+        # recalcule le R/R au prix RÉEL plutôt que de rejeter sur un simple % de
+        # mouvement (root cause détaillée dans le commentaire de _fresh_rr) -- un
+        # setup toujours bon au prix frais s'exécute, un setup dégradé passe au tour
+        # suivant (jamais forcé sur une donnée obsolète ou un R/R qui ne tient plus).
         try:
             if using_default_price_lookup:
                 fresh_price = await price_lookup(contract, chain=sig.get("chain") or "base")
@@ -1972,14 +2082,15 @@ async def _run_paper_cycle_locked(
                 fresh_price = await price_lookup(contract)
         except Exception:  # noqa: BLE001 — une panne réseau ne doit jamais planter le cycle
             fresh_price = None
-        if _price_moved_too_much(price, fresh_price):
+        fresh_rr = _fresh_rr(fresh_price, sig.get("target"), sig.get("invalidation"))
+        if not _execution_rr_still_valid(sig.get("rr"), fresh_rr):
             funnel["price_stale_at_execution"] = funnel.get("price_stale_at_execution", 0) + 1
             continue
-        # ``fresh_price`` est garanti valide ici dans le fonctionnement réel (sinon
-        # ``_price_moved_too_much`` aurait déjà renvoyé True ci-dessus, fail-closed) --
-        # ce garde supplémentaire protège seulement contre un ``_price_moved_too_much``
-        # explicitement neutralisé (ex. tests dédiés au sizing, sans rapport avec ce
-        # garde précis), jamais atteint en production.
+        # ``fresh_price`` est garanti valide ici dans le fonctionnement réel (``_fresh_rr``
+        # renvoie None sur un prix manquant/invalide, donc ``_execution_rr_still_valid``
+        # aurait déjà fail-closed ci-dessus) -- ce garde protège seulement contre un
+        # ``_execution_rr_still_valid`` explicitement neutralisé (tests dédiés au sizing,
+        # sans rapport avec ce garde précis), jamais atteint en production.
         if fresh_price and fresh_price > 0:
             price = fresh_price
 
