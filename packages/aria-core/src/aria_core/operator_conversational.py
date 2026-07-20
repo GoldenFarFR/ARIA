@@ -39,8 +39,17 @@ _QUESTION_RE = re.compile(
     # définitive.") se terminait par un "." et échappait au garde -- incident réel
     # 12/07, routé à tort vers verify_external_claim (recherche web littérale sur
     # un scénario de raisonnement hypothétique).
+    # "quand" est délibérément SANS ancrage ^ (contrairement aux autres mots de
+    # cette liste) -- incident réel 20/07 : "ok et c quand que tu gagne du pognon"
+    # / "c'est prévu pour quand ce gain" placent "quand" au milieu de la phrase,
+    # une construction interrogative courante en français familier ("c'est quand
+    # que...", "prévu pour quand"). Résidu assumé (même doctrine que le reste de ce
+    # fichier) : une vraie affirmation collée qui utiliserait "quand" comme simple
+    # conjonction ("annoncé quand la SEC validera...") échapperait aussi au routage
+    # claim-verify -- coût limité, retombe sur la conversation LLM normale plutôt
+    # que d'être perdue.
     r"(?:\?|^(?:est-ce|qu'?en\s+penses|tu\s+penses|comment|pourquoi|quoi|qui|quel|"
-    r"as-tu|tu\s+as\s+prevu|tu\s+pref))",
+    r"as-tu|tu\s+as\s+prevu|tu\s+pref)|\bquand\b)",
     re.IGNORECASE,
 )
 
@@ -332,6 +341,7 @@ async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict
     web_bits: list[str] = []
     try:
         from aria_core.knowledge.web_verify import fetch_web_snippets
+        from aria_core.sanitize import sanitize_untrusted_text
 
         # craft a search query from the claim (remove "vérifie" cue)
         q = re.sub(r"\b(vérifie|verifie|check|creuse)\b[:\s]*", "", text, flags=re.I).strip()[:200]
@@ -339,7 +349,14 @@ async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict
             q = text[:200]
         snippets = await fetch_web_snippets(q, max_snippets=4)
         for s in snippets:
-            web_bits.append(f"- {s.text[:160]}{' ('+s.url+')' if s.url else ''}")
+            # 20/07 -- trou réel trouvé en conditions réelles (incident opérateur) :
+            # contrairement à web_verify._tag_untrusted_snippets, ces extraits ne
+            # passaient jamais par sanitize_untrusted_text (mandat #192) -- un extrait
+            # hostile aurait pu forger une fausse balise de fermeture. Corrigé, même
+            # discipline que web_verify.py.
+            safe_text = sanitize_untrusted_text(s.text, 160)
+            safe_url = sanitize_untrusted_text(s.url, 300) if s.url else ""
+            web_bits.append(f"- {safe_text}{' ('+safe_url+')' if safe_url else ''}")
         if web_bits:
             actions.append("web_ddg")
             meta["web_snippets"] = len(web_bits)
@@ -379,11 +396,18 @@ async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict
             else:
                 verdict = "INCERTAIN (preuves trouvées, raisonnement LLM indisponible ou en échec)"
 
+    # 20/07 -- incident réel : une question conversationnelle sans preuve pertinente
+    # (routage corrigé ci-dessus, mais ce garde reste utile pour tout AUTRE cas où la
+    # recherche web ramène du bruit) affichait quand même les extraits bruts, même
+    # hors-sujet, tant que web_bits n'était pas vide -- résultat incohérent montré à
+    # l'opérateur. Les extraits ne s'affichent plus que si le verdict a réellement
+    # tranché (VRAI/FAUX) sur cette preuve -- un INCERTAIN ne montre plus de bruit.
+    show_snippets = web_bits and not verdict.startswith("INCERTAIN")
     if lang == "fr":
         lines = [
             f"OK, j'ai checké « {snippet} » ({now}).",
         ]
-        if web_bits:
+        if show_snippets:
             lines.append("Web (DDG) :")
             lines.extend(web_bits[:3])
         if github_detail:

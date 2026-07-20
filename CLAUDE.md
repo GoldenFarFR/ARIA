@@ -2832,6 +2832,47 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   pré-existants sans rapport #142, reconfirmés indépendants en isolation),
   `test_coherence.py` vert (81 passed). Bloc de référence momentum (étapes
   2/10/11) mis à jour dans le même commit que la norme l'exige.
+- **20/07 (suite) — bug conversationnel Telegram réel trouvé sur capture opérateur
+  (message casual "ok et c quand que tu gagne du pognon"), 3 causes empilées dans
+  `operator_conversational.py`, corrigées.** Aucune instruction explicite
+  accompagnait la capture — investigation lancée sur le même réflexe que les
+  incidents de confabulation déjà documentés (#96/#97, 19/07) : grep de chaînes
+  distinctives de la réponse buggée plutôt que de supposer le fichier en cause par
+  similarité de sujet (`web_verify.py`, déjà durci, s'est révélé PAS le coupable
+  cette fois). **Chaîne de causes, les trois dans `operator_conversational.py`** :
+  (1) `_QUESTION_RE` ne reconnaissait "quand" qu'en tout DÉBUT de chaîne (`^quand`)
+  — un message informel où "quand" arrive au milieu ("...c quand que...", "prévu
+  pour quand...") échappait donc au garde anti-mauvais-routage, et matchait
+  `_INJECTED_CLAIM_RE` via "gagne" (motif conçu pour "on a gagné 50 abonnés") —
+  routé à tort vers `verify_external_claim` (recherche web littérale) au lieu
+  d'une conversation normale ; (2) les extraits web (`web_bits`) construits dans
+  `verify_external_claim` n'étaient JAMAIS passés par `sanitize_untrusted_text`
+  (mandat #192) avant d'être affichés BRUTS dans la réponse Telegram — chemin
+  distinct et non couvert par le `sanitize_untrusted_text(evidence, 2000)` déjà
+  existant dans `_reason_over_evidence` (celui-ci protège uniquement le PROMPT
+  LLM, jamais l'affichage direct de `web_bits[:3]` dans `lines`) ; (3) les
+  extraits s'affichaient même quand le verdict LLM était `INCERTAIN` (preuve
+  hors-sujet, non concluante) — bruit incohérent montré à l'opérateur comme si
+  c'était une preuve validée. **Corrigé** : (1) `\bquand\b` ajouté SANS ancrage
+  `^` (délibérément distinct des autres mots de `_QUESTION_RE`, tous ancrés) —
+  résidu assumé et documenté en commentaire : une vraie affirmation collée qui
+  utiliserait "quand" comme simple conjonction échapperait aussi désormais au
+  routage claim-verify, coût jugé faible (retombe sur la conversation LLM
+  normale, jamais une donnée perdue) ; (2) chaque `s.text`/`s.url` sanitisé
+  individuellement avant d'alimenter `web_bits`, même discipline que
+  `web_verify.py` ; (3) nouveau `show_snippets = web_bits and not
+  verdict.startswith("INCERTAIN")`, snippets masqués sur un verdict non tranché.
+  4 nouveaux tests dédiés (reproduction exacte de l'incident, sanitisation d'un
+  extrait hostile forgeant une fausse balise de fermeture — isolé sur le chemin
+  AFFICHAGE spécifiquement, puisque le chemin LLM était déjà protégé avant ce
+  correctif —, suppression sur INCERTAIN + non-régression sur un verdict
+  tranché). Suite complète verte (6429 passed, mêmes 7 échecs pré-existants
+  `test_proactive*` sans rapport #142, reconfirmés indépendants en isolation),
+  `test_coherence.py` vert (81 passed). **Codé, testé, PAS ENCORE déployé** —
+  à déployer avec les 3 correctifs momentum ci-dessus (`e222f3e9`/`1b362b94`,
+  eux aussi encore en attente), même doctrine de cadence (bug qui pollue une
+  capacité déjà en cours d'exécution en prod — le bot Telegram est utilisé en
+  continu par l'opérateur).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
