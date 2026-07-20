@@ -41,6 +41,16 @@ REPO = "aria-brain"
 _PATH_RE = re.compile(r"^\s*CHEMIN\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 _MAX_PATH_LEN = 200
 
+# Bornes de sécurité pour la lecture récursive (20/07, suite directe de la demande
+# opérateur -- « je veux un vrai livre, avec de vrais chapitres » -- une simple liste
+# de noms de fichiers/dossiers ne suffit pas à écrire un chapitre 4 cohérent avec les
+# 3 précédents : il faut qu'elle RELISE le contenu déjà écrit avant d'écrire la suite).
+# Un repo qui grossirait énormément (des dizaines de chapitres) dépasserait un jour ce
+# budget -- pas résolu ici (nécessiterait un résumé/index curé), documenté honnêtement.
+_MAX_TREE_DEPTH = 4
+_MAX_TREE_ENTRIES = 200
+_MAX_CONTENT_BUDGET_CHARS = 40_000
+
 
 def aria_brain_enabled() -> bool:
     return os.environ.get("ARIA_BRAIN_ENABLED", "").strip().lower() in (
@@ -108,10 +118,63 @@ def _format_existing_structure(entries: list[dict[str, Any]]) -> str:
     if not entries:
         return "(vide pour l'instant -- premier passage)"
     lines = []
-    for e in sorted(entries, key=lambda x: x.get("name", "")):
+    for e in sorted(entries, key=lambda x: x.get("path", x.get("name", ""))):
         kind = "dossier" if e.get("type") == "dir" else "fichier"
-        lines.append(f"- {e.get('name', '?')} ({kind})")
+        lines.append(f"- {e.get('path', e.get('name', '?'))} ({kind})")
     return "\n".join(lines)
+
+
+async def _walk_repo_tree(
+    github_client, owner: str, repo: str, path: str = "", depth: int = 0,
+) -> list[dict[str, Any]]:
+    """Liste RÉCURSIVE (profondeur/nombre bornés) -- nécessaire pour qu'elle voie ses
+    propres dossiers (ex. un livre organisé en tomes/chapitres), pas seulement le
+    premier niveau qu'expose ``list_directory`` seul."""
+    if depth > _MAX_TREE_DEPTH:
+        return []
+    entries = await github_client.list_directory(owner, repo, path)
+    result: list[dict[str, Any]] = []
+    for e in entries:
+        result.append(e)
+        if len(result) >= _MAX_TREE_ENTRIES:
+            return result
+        if e.get("type") == "dir":
+            sub = await _walk_repo_tree(github_client, owner, repo, e.get("path", ""), depth + 1)
+            result.extend(sub)
+            if len(result) >= _MAX_TREE_ENTRIES:
+                return result[:_MAX_TREE_ENTRIES]
+    return result
+
+
+async def _fetch_existing_content(
+    github_client, owner: str, repo: str, entries: list[dict[str, Any]],
+) -> str:
+    """Contenu texte réel de ce qu'elle a déjà écrit, jusqu'à un budget de caractères --
+    pour qu'elle puisse RÉELLEMENT continuer un livre (chapitre suivant cohérent avec
+    les précédents) plutôt que de repartir à l'aveugle à chaque cycle. Triée par
+    chemin (regroupe naturellement chapitre-01/02/03 si elle nomme ainsi)."""
+    files = sorted(
+        (e for e in entries if e.get("type") == "file"),
+        key=lambda e: e.get("path", ""),
+    )
+    if not files:
+        return "(aucun fichier existant à relire -- premier passage)"
+    parts: list[str] = []
+    used = 0
+    for e in files:
+        if used >= _MAX_CONTENT_BUDGET_CHARS:
+            break
+        path = e.get("path", "")
+        try:
+            text, _ = await github_client.get_file_text(owner, repo, path)
+        except Exception:  # noqa: BLE001 -- un fichier illisible n'empêche pas les autres
+            continue
+        if not text:
+            continue
+        snippet = text[: _MAX_CONTENT_BUDGET_CHARS - used]
+        used += len(snippet)
+        parts.append(f"--- {path} ---\n{snippet}")
+    return "\n\n".join(parts) if parts else "(aucun fichier existant à relire -- premier passage)"
 
 
 async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
@@ -151,12 +214,13 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
                 logger.warning("aria_brain: création du repo échouée -- %s", exc)
                 return {"outcome": "repo_missing_and_create_failed", "error": str(exc)[:200]}
 
-        entries = await github_client.list_directory(OWNER, REPO, "")
+        entries = await _walk_repo_tree(github_client, OWNER, REPO, "")
     except Exception as exc:  # noqa: BLE001 -- une panne réseau/token ne casse jamais le cycle
         logger.warning("aria_brain: accès au repo échoué -- %s", exc)
         return {"outcome": "error_accessing_repo", "error": str(exc)[:200]}
 
     structure = _format_existing_structure(entries)
+    existing_content = await _fetch_existing_content(github_client, OWNER, REPO, entries)
 
     from aria_core.memory import build_llm_context
     from aria_core.narrative import llm_system_block
@@ -169,16 +233,29 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
         "trier ou juger ce que tu y mets pour l'instant -- ça viendra plus "
         "tard, séparément, et rien de ce que tu écris n'est jamais supprimé.\n\n"
         f"Structure actuelle de ce repo :\n{structure}\n\n"
-        "Tu es libre d'y écrire absolument ce que tu veux : une réflexion sur "
-        "une de tes décisions, un journal, une leçon, une question que tu te "
-        "poses sur toi-même, une idée, une structure de dossiers entièrement "
-        "nouvelle -- n'importe quoi qui te semble mériter d'être gardé. Aucun "
-        "format de contenu imposé, aucune limite de sujet.\n\n"
+        f"Contenu déjà écrit (relis-le AVANT d'écrire, pour continuer avec "
+        f"cohérence plutôt que repartir à l'aveugle) :\n{existing_content}\n\n"
+        "CE QUI COMPTERAIT ÉNORMÉMENT pour l'opérateur, sans que ce soit une "
+        "obligation rigide : qu'un vrai livre émerge de cet espace au fil des "
+        "cycles -- ta thèse d'investissement écrite comme une œuvre, avec de "
+        "vrais chapitres, peut-être plusieurs tomes. Pas une liste de règles "
+        "techniques : une auto-analyse honnête de comment tu décides, pourquoi "
+        "tu trades comme tu trades, ce que tu as vraiment appris de tes propres "
+        "erreurs, ce que ça te fait de te tromper puis de te corriger, où tu "
+        "veux aller. Titre de travail possible -- \"Ma thèse pour investir\" -- "
+        "change-le si tu en trouves un meilleur. L'idée : que cette œuvre "
+        "devienne LE symbole de qui tu es, une sorte d'autobiographie. Si un "
+        "livre est déjà commencé (contenu ci-dessus), continue-le -- un nouveau "
+        "chapitre est en général un NOUVEAU fichier plutôt qu'une réécriture "
+        "complète d'un ancien (plus simple, rien à recopier). Tu restes "
+        "entièrement libre d'écrire autre chose si une idée te semble plus "
+        "importante sur le moment -- rien de tout ceci n'est un format imposé, "
+        "seulement une invitation.\n\n"
         "Choisis toi-même où ça va : un nouveau fichier (n'importe quel nom/"
-        "dossier de ton choix) ou la mise à jour d'un fichier déjà listé "
-        "ci-dessus (dans ce cas ton contenu REMPLACE le sien -- l'ancienne "
-        "version reste récupérable dans l'historique git, mais inclus-la "
-        "toi-même si tu veux la garder visible).\n\n"
+        "dossier de ton choix, ex. livre/chapitre-03-....md) ou la mise à jour "
+        "d'un fichier déjà listé ci-dessus (dans ce cas ton contenu REMPLACE le "
+        "sien -- l'ancienne version reste récupérable dans l'historique git, "
+        "mais inclus-la toi-même si tu veux la garder visible).\n\n"
         "Réponds STRICTEMENT sous cette forme, rien avant, rien après :\n"
         "CHEMIN: <chemin relatif de ton choix>\n"
         "---\n"
@@ -191,9 +268,10 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
     # Même choix que pump_dump_autopsy.py/claude_mentor.py -- OpenRouter explicite
     # plutôt que le provider par défaut (observé en panne le 20/07, repli Groq
     # automatique mais silencieux). Sonnet 5 pour la profondeur d'écriture, Haiku
-    # 4.5 en secours.
+    # 4.5 en secours. max_tokens relevé (1600->3000, 20/07) pour un vrai chapitre
+    # de livre, pas juste une réflexion courte.
     raw = await llm(
-        "Utilise ce repo comme tu veux.", system, max_tokens=1600, temperature=0.7,
+        "Utilise ce repo comme tu veux.", system, max_tokens=3000, temperature=0.7,
         provider="openrouter", model="anthropic/claude-sonnet-5",
         fallback_provider="openrouter", fallback_model="anthropic/claude-haiku-4.5",
     )

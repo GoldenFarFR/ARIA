@@ -11,12 +11,15 @@ from aria_core.skills import aria_brain
 
 class _FakeGitHubClient:
     def __init__(
-        self, *, repo_exists=True, create_fails=False, existing_files=None,
+        self, *, repo_exists=True, create_fails=False, files=None,
         existing_sha=None, put_fails=False,
     ):
+        """``files`` : dict {chemin complet: contenu} -- simule l'arbre réel du repo,
+        ``list_directory``/``get_file_text`` en dérivent dynamiquement (même
+        comportement qu'un vrai repo GitHub avec des dossiers imbriqués)."""
         self._repo_exists = repo_exists
         self._create_fails = create_fails
-        self._existing_files = existing_files or []
+        self._files: dict[str, str] = files or {}
         self._existing_sha = existing_sha
         self._put_fails = put_fails
         self.created = False
@@ -32,9 +35,26 @@ class _FakeGitHubClient:
         return {"full_name": f"{owner}/{repo}"}
 
     async def list_directory(self, owner, repo, path=""):
-        return self._existing_files
+        prefix = f"{path}/" if path else ""
+        seen_dirs: set[str] = set()
+        result = []
+        for full_path in self._files:
+            if not full_path.startswith(prefix):
+                continue
+            rest = full_path[len(prefix):]
+            if "/" in rest:
+                dirname = rest.split("/")[0]
+                dir_path = f"{prefix}{dirname}"
+                if dir_path not in seen_dirs:
+                    seen_dirs.add(dir_path)
+                    result.append({"name": dirname, "path": dir_path, "type": "dir"})
+            else:
+                result.append({"name": rest, "path": full_path, "type": "file"})
+        return result
 
     async def get_file_text(self, owner, repo, path):
+        if path in self._files:
+            return self._files[path], self._existing_sha
         return "", self._existing_sha
 
     async def put_file(self, owner, repo, path, content, message, branch="main", sha=None):
@@ -129,6 +149,69 @@ def test_parse_brain_entry_none_or_empty_raw():
     assert aria_brain.parse_brain_entry(None) is None
 
 
+# ── _walk_repo_tree / _fetch_existing_content ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_walk_repo_tree_recurses_into_subdirectories():
+    client = _FakeGitHubClient(files={
+        "README.md": "racine",
+        "livre/tome-1/chapitre-01.md": "chapitre 1",
+        "livre/tome-1/chapitre-02.md": "chapitre 2",
+    })
+    entries = await aria_brain._walk_repo_tree(client, "o", "r")
+    paths = {e["path"] for e in entries}
+    assert "README.md" in paths
+    assert "livre" in paths
+    assert "livre/tome-1" in paths
+    assert "livre/tome-1/chapitre-01.md" in paths
+    assert "livre/tome-1/chapitre-02.md" in paths
+
+
+@pytest.mark.asyncio
+async def test_walk_repo_tree_empty_repo():
+    client = _FakeGitHubClient(files={})
+    assert await aria_brain._walk_repo_tree(client, "o", "r") == []
+
+
+@pytest.mark.asyncio
+async def test_walk_repo_tree_stops_at_entry_cap(monkeypatch):
+    monkeypatch.setattr(aria_brain, "_MAX_TREE_ENTRIES", 3)
+    client = _FakeGitHubClient(files={f"note-{i}.md": "x" for i in range(10)})
+    entries = await aria_brain._walk_repo_tree(client, "o", "r")
+    assert len(entries) <= 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_existing_content_includes_real_text_sorted_by_path():
+    client = _FakeGitHubClient(files={
+        "livre/chapitre-02.md": "Deuxième chapitre.",
+        "livre/chapitre-01.md": "Premier chapitre.",
+    })
+    entries = await aria_brain._walk_repo_tree(client, "o", "r")
+    content = await aria_brain._fetch_existing_content(client, "o", "r", entries)
+    assert "Premier chapitre." in content
+    assert "Deuxième chapitre." in content
+    assert content.index("Premier chapitre.") < content.index("Deuxième chapitre.")
+
+
+@pytest.mark.asyncio
+async def test_fetch_existing_content_empty_repo_says_so():
+    client = _FakeGitHubClient(files={})
+    content = await aria_brain._fetch_existing_content(client, "o", "r", [])
+    assert "premier passage" in content
+
+
+@pytest.mark.asyncio
+async def test_fetch_existing_content_respects_character_budget(monkeypatch):
+    monkeypatch.setattr(aria_brain, "_MAX_CONTENT_BUDGET_CHARS", 10)
+    client = _FakeGitHubClient(files={"a.md": "x" * 50, "b.md": "y" * 50})
+    entries = await aria_brain._walk_repo_tree(client, "o", "r")
+    content = await aria_brain._fetch_existing_content(client, "o", "r", entries)
+    # Seul le premier fichier (ordre alphabétique) passe avant que le budget soit atteint.
+    assert "x" in content
+    assert "y" not in content
+
+
 # ── run_aria_brain_cycle ─────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -196,7 +279,7 @@ async def test_run_cycle_existing_repo_lists_structure_and_writes(monkeypatch):
     monkeypatch.setattr(get_settings(), "aria_brain_github_token", "fake-token")
     client = _FakeGitHubClient(
         repo_exists=True,
-        existing_files=[{"name": "README.md", "type": "file"}, {"name": "journal", "type": "dir"}],
+        files={"README.md": "# aria-brain", "journal/premiere-note.md": "Une note."},
     )
     seen_system_prompt = {}
 
@@ -208,7 +291,33 @@ async def test_run_cycle_existing_repo_lists_structure_and_writes(monkeypatch):
 
     assert result["outcome"] == "written"
     assert "README.md" in seen_system_prompt["system"]
-    assert "journal" in seen_system_prompt["system"]
+    assert "journal/premiere-note.md" in seen_system_prompt["system"]
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_lets_her_reread_previous_chapter_content(monkeypatch):
+    """Suite directe de la demande opérateur (« un vrai livre, avec de vrais
+    chapitres ») : elle doit voir le CONTENU déjà écrit, pas seulement les noms de
+    fichiers, pour pouvoir écrire un chapitre suivant cohérent."""
+    monkeypatch.setenv("ARIA_BRAIN_ENABLED", "true")
+    from aria_core.runtime import get_settings
+
+    monkeypatch.setattr(get_settings(), "aria_brain_github_token", "fake-token")
+    client = _FakeGitHubClient(
+        repo_exists=True,
+        files={
+            "livre/chapitre-01.md": "Chapitre 1 : je suis née pour analyser Base.",
+        },
+    )
+    seen_system_prompt = {}
+
+    async def fake_llm(user_message, system, **kwargs):
+        seen_system_prompt["system"] = system
+        return "CHEMIN: livre/chapitre-02.md\n---\nChapitre 2 : la suite logique."
+
+    await aria_brain.run_aria_brain_cycle(github_client=client, llm=fake_llm)
+
+    assert "je suis née pour analyser Base" in seen_system_prompt["system"]
 
 
 @pytest.mark.asyncio
