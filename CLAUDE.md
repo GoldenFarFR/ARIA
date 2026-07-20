@@ -2911,6 +2911,45 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   sans modification). Suite complète verte (6438 passed, mêmes 7 échecs
   pré-existants `test_proactive*` sans rapport #142), `test_coherence.py` vert
   (81 passed).
+- **20/07 (suite) — revue croisée externe sur la thèse momentum : 1 vrai bug confirmé et
+  corrigé (plafond de concentration devenu global de facto), DÉPLOYÉ.** Vérifié point par
+  point contre le code avant d'agir (méthode habituelle) : sur 6 points soulevés, 1 vrai
+  bug, 2 arbitrages déjà assumés (reset hebdo qui coupe un moonbag/une position VC sans
+  exception — `run_weekly_reset()` confirmé sans filtre sur `strategy`/`entry_regime`,
+  tension réelle mais délibérée, cf. protocole d'entraînement hebdo plus bas ; seuil
+  concentration holders 80% vs 50-60%, vrai choix de tolérance au risque, pas un défaut),
+  1 risque déjà mitigé (latence LLM avant achat — `_fresh_rr`/`_execution_rr_still_valid`,
+  20/07 plus haut, recalcule déjà le R/R au prix frais APRÈS les appels LLM, juste avant
+  `open_position` — la correction proposée par le reviewer, LLM en tâche de fond dès
+  l'étape 2/3, n'est de toute façon pas cohérente : le prompt du garde de sécurité a besoin
+  du R/R/de la thèse calculés à l'étape 3), et 1 point réfuté par contresens (ratio
+  volume/liquidité 20x lu comme une exigence minimum de volume — faux, c'est un PLAFOND de
+  rejet anti-wash-trading, `if volume_to_liq <= MAX_VOLUME_TO_LIQUIDITY_RATIO` confirmé
+  dans le code, la quasi-totalité des tokens sains tourne bien en dessous).
+  **Le vrai bug** : deux décisions indépendantes et chacune correcte se percutent —
+  `CONCENTRATION_CAP_PCT = 0.40` (#187, 19/07) plafonne chaque catégorie à 40% du capital
+  de départ, et les positions momentum sont catégorisées `f"momentum-{chain}"` (19/07,
+  correctif d'un vrai trou où le plafond ne s'appliquait jamais faute de catégorie) — mais
+  `DEFAULT_CHAINS` s'est resserré à Base seule le jour même (20/07, plus haut dans ce
+  fichier), donc TOUTES les positions retombent dans le même seau `"momentum-base"` :
+  le plafond de diversification par chaîne devient de facto un plafond global du
+  portefeuille de trading à 400 000$ (40% × 1M$), bien avant `MAX_POSITIONS` (15 × jusqu'à
+  5% = 750 000$ potentiels) ou le cash disponible — vérifié dans `fit_alloc_to_
+  concentration_cap` (renvoie 0.0 et bloque l'achat une fois le seau plein). Corrigé
+  (`momentum_entry.py`) : catégorie vide (`""`) tant qu'une seule chaîne est active
+  (`len(DEFAULT_CHAINS) <= 1`) — neutralise le plafond via le garde déjà existant
+  `if not category` (`fit_alloc_to_concentration_cap`/`category_exposure_usd`), sans
+  toucher au mécanisme lui-même. S'auto-résout dès que `DEFAULT_CHAINS` retrouve plus
+  d'une chaîne (feuille de route opérateur déjà notée : Ethereum + 1-2 chaînes de plus à
+  venir) — aucun interrupteur à se souvenir de repasser. 1 test existant renommé/adapté
+  (`DEFAULT_CHAINS` monkeypatché à 2 chaînes pour verrouiller la catégorisation le jour où
+  elle redevient pertinente) + 1 nouveau test verrouillant le comportement réel actuel
+  (catégorie vide en config par défaut). Suite complète vérifiée verte (6439 passed, mêmes
+  7 échecs pré-existants `test_proactive*` sans rapport, confirmés indépendants de ce
+  diff — scope vérifié à 2 fichiers), `test_coherence.py` vert (81 passed). **Déployé
+  directement** (cadence "bug qui pollue une capacité déjà en cours d'exécution en prod" —
+  le test 1M$ tourne live depuis le reset de ce matin, chaque cycle avec ce plafond fantôme
+  est du potentiel de test perdu).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4667,7 +4706,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Plafond dur : jamais plus de 2% du capital risqué au pire cas (basé sur la distance à l'invalidation technique — reste appliqué en dernier filet, indépendamment du sizing par risque/ATR ci-dessus)
 - Réduite de moitié si l'objectif hebdomadaire est déjà atteint, ou si le portefeuille est en drawdown -10% ; plus aucun achat si -20% ou 5 pertes d'affilée (`risk_guard.HARD_CONSECUTIVE_LOSSES`, compteur **global** sur les 5 dernières positions clôturées TOUS CONTRATS confondus — indépendant du compteur par-contrat de l'étape 10, une perte alimente toujours les deux à la fois)
 - **Réduite de moitié en régime macro Peur confirmé** (Regime Switch, 20/07 — préserve le capital, composé avec les autres réducteurs ci-dessus)
-- Jamais plus de 40% du capital sur une même chaîne
+- Jamais plus de 40% du capital sur une même chaîne — **neutralisé tant qu'une seule chaîne est active** (20/07, revue croisée externe : avec `DEFAULT_CHAINS` resserré à Base seule, ce plafond de diversification devenait de facto un plafond global à 400 000$ sur tout le portefeuille de trading ; catégorie vide en config mono-chaîne, la protection reprend automatiquement dès qu'une 2e chaîne rejoint le sourcing)
 
 **9. Exécution** — Juste avant d'ouvrir la position, ARIA revérifie le prix en temps réel et recalcule le R/R à ce prix frais (sur les mêmes niveaux Fibonacci fixes établis à l'étape 3) — si le setup ne tient plus la barre qu'il avait initialement franchie (2.0 pour un achat direct, 1.0 pour un achat confirmé), l'achat est annulé (20/07, remplace un ancien seuil brut "prix pas trop bougé de 3%" qui aurait rejeté à tort un mouvement favorable). Une évolution de prix FAVORABLE (le token continue de monter) ne bloque donc jamais l'achat tant que le R/R structurel reste solide — seule une dégradation réelle du setup l'annule. Prix de remplissage simulé (#175, 20/07) : le prix réellement "payé" est dégradé par l'impact estimé de CET ordre sur CE pool précis (même modèle que le plafonnement de taille de l'étape 8 — un ordre qui pousse plus le prix reçoit moins de tokens pour le même montant), jamais le prix spot exact affiché avant impact. Approximation assumée : `simulated_fill_price()` est toujours >= au prix spot par construction (achat = toujours plus cher, jamais un scénario MEV-favorable ou fee-rebate simulé) — biais volontairement conservateur, ne surestime donc jamais un gain. Achat papier simulé, toute la thèse persistée (chaque signal, chaque vérification) — aucun argent réel.
 
