@@ -173,3 +173,87 @@ def test_format_sentiment_prompt_lines_sanitizes_malicious_detail():
     lines = format_sentiment_prompt_lines(rows)
     assert len(lines) == 1
     assert "</donnees_non_fiables>" not in lines[0]
+
+
+# ── Regime Switch dynamique (20/07, revue croisée Gemini) ───────────────────────────
+
+def _reading(pair: str, regime: str) -> SentimentReading:
+    return SentimentReading(
+        pair=pair, regime=regime, detail="test", rsi=50.0, bollinger_position=0.5,
+        momentum_pct=0.0, drawdown_from_high_pct=0.0, rally_from_low_pct=0.0, trend_up=None,
+    )
+
+
+def test_meta_regime_rank_orders_fear_below_neutral_below_euphoria():
+    assert ms.meta_regime_rank("peur") < ms.meta_regime_rank("neutre") < ms.meta_regime_rank("euphorie")
+
+
+def test_meta_regime_rank_unknown_or_none_defaults_to_neutral():
+    assert ms.meta_regime_rank(None) == ms.meta_regime_rank("neutre")
+    assert ms.meta_regime_rank("regime_inconnu") == ms.meta_regime_rank("neutre")
+
+
+def test_more_cautious_meta_regime_picks_lower_rank():
+    assert ms.more_cautious_meta_regime("euphorie", "peur") == "peur"
+    assert ms.more_cautious_meta_regime("peur", "euphorie") == "peur"
+    assert ms.more_cautious_meta_regime("neutre", "euphorie") == "neutre"
+    assert ms.more_cautious_meta_regime("euphorie", "euphorie") == "euphorie"
+
+
+def test_more_cautious_meta_regime_none_input_treated_as_neutral():
+    # None (jamais observé/position ouverte avant ce chantier) vaut Neutre -- un Peur
+    # réel reste plus prudent, un Euphorie réel ne l'emporte jamais sur ce défaut.
+    assert ms.more_cautious_meta_regime(None, "peur") == "peur"
+    assert ms.more_cautious_meta_regime(None, "euphorie") == "neutre"
+
+
+@pytest.mark.asyncio
+async def test_resolve_meta_regime_no_readings_is_neutral():
+    assert await ms.resolve_meta_regime() == "neutre"
+
+
+@pytest.mark.asyncio
+async def test_resolve_meta_regime_any_fear_wins_even_with_one_euphoric_pair():
+    await upsert_reading(_reading("BTC", "capitulation_peur"))
+    await upsert_reading(_reading("ETH", "euphorie"))
+    assert await ms.resolve_meta_regime() == "peur"
+
+
+@pytest.mark.asyncio
+async def test_resolve_meta_regime_requires_both_pairs_euphoric():
+    await upsert_reading(_reading("BTC", "euphorie"))
+    await upsert_reading(_reading("ETH", "neutre"))
+    assert await ms.resolve_meta_regime() == "neutre"
+
+
+@pytest.mark.asyncio
+async def test_resolve_meta_regime_both_euphoric_is_euphoria():
+    await upsert_reading(_reading("BTC", "euphorie"))
+    await upsert_reading(_reading("ETH", "optimisme_conviction"))
+    assert await ms.resolve_meta_regime() == "euphorie"
+
+
+@pytest.mark.asyncio
+async def test_resolve_meta_regime_single_euphoric_reading_is_neutral_not_euphoric():
+    # Une seule lecture exploitable (ex. l'autre "donnees_insuffisantes") ne suffit
+    # jamais à elle seule à justifier un relâchement de garde-fou.
+    await upsert_reading(_reading("BTC", "euphorie"))
+    await upsert_reading(_reading("ETH", "donnees_insuffisantes"))
+    assert await ms.resolve_meta_regime() == "neutre"
+
+
+@pytest.mark.asyncio
+async def test_resolve_meta_regime_complaisance_maps_to_neutral_not_euphoria():
+    # Correction Gemini vérifiée contre le code (label natif : "euphorie qui
+    # ralentit, signal d'alerte") -- complaisance ne doit jamais armer les paramètres
+    # les plus agressifs pile au moment où le marché commence à se retourner.
+    await upsert_reading(_reading("BTC", "complaisance"))
+    await upsert_reading(_reading("ETH", "euphorie"))
+    assert await ms.resolve_meta_regime() == "neutre"
+
+
+@pytest.mark.asyncio
+async def test_resolve_meta_regime_anxiete_distribution_maps_to_fear():
+    await upsert_reading(_reading("BTC", "anxiete_distribution"))
+    await upsert_reading(_reading("ETH", "neutre"))
+    assert await ms.resolve_meta_regime() == "peur"

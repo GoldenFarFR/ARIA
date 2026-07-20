@@ -195,6 +195,38 @@ def _effective_tp_stages(target_price: float | None, entry_price: float | None) 
     return TP_STAGES
 
 
+def _apply_regime_to_tp_stages(
+    stages: tuple[float, ...], effective_regime: str | None,
+) -> tuple[float, ...]:
+    """Transforme les paliers de prise de profit selon le méta-régime EFFECTIF déjà
+    ratché pour cette position (cf. ``market_sentiment.more_cautious_meta_regime``,
+    jamais le régime courant brut -- une position ne redevient jamais plus permissive
+    qu'à son pire moment observé). Revue croisée Gemini, feu vert opérateur explicite
+    (20/07, "200k mais à garder à l'œil") :
+
+    - Peur : écrase le 3e palier -- sortie ultra-rapide, TOUT le reliquat se vend au
+      niveau de l'ancien TP2 (verrouille les gains avant un retracement pendant que la
+      liquidité se regroupe sur les gros actifs). ``stages[:2]`` suffit : la boucle
+      appelante traite déjà tout dépassement du DERNIER palier comme une clôture
+      complète (``is_last_stage``), aucune logique supplémentaire nécessaire.
+    - Euphorie : neutralise le 3e palier (``float("inf")``, jamais atteignable) --
+      TP1/TP2 continuent de prendre leurs tiers normalement, mais le dernier tiers
+      devient un moon bag PUR, guidé uniquement par le stop suiveur ATR, jamais forcé
+      à la vente par un palier mécanique ("elle va chercher les x10").
+    - Neutre/inconnu : ``stages`` inchangé -- comportement historique par défaut.
+
+    Si ``stages`` a moins de 3 éléments (ne devrait jamais arriver, ``TP_STAGES``/
+    ``_effective_tp_stages`` en fournissent toujours 3) -> inchangé, jamais un index
+    hors limites."""
+    if len(stages) < 3:
+        return stages
+    if effective_regime == "peur":
+        return stages[:2]
+    if effective_regime == "euphorie":
+        return (stages[0], stages[1], float("inf"))
+    return stages
+
+
 # 20/07 -- Breakeven Hard Floor (revue croisée Gemini, "Piste B" validée par
 # l'opérateur) : mécanisme SÉPARÉ de la confirmation temporelle du plus-haut
 # ci-dessous, répond à l'angle mort qu'elle laisse ouvert. `_advance_high_water`
@@ -324,7 +356,7 @@ _POS_FIELDS = (
     "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
     "category", "entry_security_json", "chain", "thesis", "close_notes",
     "entry_atr_pct", "pending_high_water", "pending_high_water_since",
-    "strategy", "entry_liquidity_usd", "breakeven_locked",
+    "strategy", "entry_liquidity_usd", "breakeven_locked", "entry_regime",
 )
 
 _ADDED_COLUMNS = [
@@ -381,6 +413,12 @@ _ADDED_COLUMNS = [
     # chantier (comportement inchangé : le point mort ne se verrouille pas tant que le
     # prix n'a pas réellement touché le seuil flash APRÈS l'activation de ce correctif).
     ("breakeven_locked", "INTEGER NOT NULL DEFAULT 0"),
+    # 20/07 -- Regime Switch dynamique (cf. market_sentiment.resolve_meta_regime).
+    # Méta-régime macro AU MOMENT DE L'OUVERTURE -- ``NULL`` pour toute position
+    # ouverte avant ce chantier ou tout analyzer qui ne le fournit pas (ex. l'ancien
+    # pilote VC-thesis) -- traité comme "neutre" par le ratchet en gestion, jamais un
+    # régime inventé.
+    ("entry_regime", "TEXT"),
 ]
 
 # 19/07 -- migration à chaud DÉDIÉE pour paper_position_archive (voir _ensure_tables) --
@@ -394,6 +432,7 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("strategy", "TEXT NOT NULL DEFAULT 'momentum'"),
     ("entry_liquidity_usd", "REAL"),
     ("breakeven_locked", "INTEGER NOT NULL DEFAULT 0"),
+    ("entry_regime", "TEXT"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -766,6 +805,7 @@ async def open_position(
     pool_liquidity_usd: float | None = None,
     entry_atr_pct: float | None = None,
     strategy: str = "momentum",
+    entry_regime: str | None = None,
 ) -> dict | None:
     """Ouvre une position FICTIVE au prix d'entrée réel. Refuse si déjà ouverte, plafond de
     positions atteint, coupe-circuit de risque armé, prix invalide, cash insuffisant, ou
@@ -858,13 +898,13 @@ async def open_position(
               (contract, symbol, cost_usd, entry_price, qty, target_price,
                invalidation_price, opened_at, status, high_water_price, initial_qty,
                category, entry_security_json, chain, thesis, entry_atr_pct,
-               strategy, entry_liquidity_usd)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               strategy, entry_liquidity_usd, entry_regime)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, entry_price, qty, target_price, invalidation_price,
              _now(), entry_price, qty, category or "", entry_security_json or None,
              (chain or "base").lower(), thesis, entry_atr_pct,
-             strategy or "momentum", pool_liquidity_usd),
+             strategy or "momentum", pool_liquidity_usd, entry_regime),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -1252,17 +1292,23 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 20) -> tuple[list[s
     return [c["contract"] for c in found[:limit]], chain_by_contract
 
 
-def _default_momentum_analyzer(chain_by_contract: dict[str, str], weekly_context: dict | None = None):
+def _default_momentum_analyzer(
+    chain_by_contract: dict[str, str], weekly_context: dict | None = None,
+    current_regime: str | None = None,
+):
     """Ferme sur la table contrat→chaîne construite au sourcing (#194) -- garde la
     signature ``analyzer(contract)`` historique inchangée, aucun appelant existant
-    (tests, autres pilotes) n'est affecté. ``weekly_context`` (18/07, optionnel) :
-    calculé UNE FOIS par cycle par l'appelant (cf. ``_run_paper_cycle_locked``), transmis
-    tel quel à chaque candidat -- jamais un recalcul par candidat."""
+    (tests, autres pilotes) n'est affecté. ``weekly_context`` (18/07)/``current_regime``
+    (20/07, Regime Switch), tous deux optionnels : calculés UNE FOIS par cycle par
+    l'appelant (cf. ``_run_paper_cycle_locked``), transmis tels quels à chaque candidat
+    -- jamais un recalcul par candidat."""
     from aria_core import momentum_entry
 
     async def analyzer(contract: str) -> dict | None:
         chain = chain_by_contract.get(contract, "base")
-        return await momentum_entry.evaluate_momentum_entry(contract, chain, weekly_context=weekly_context)
+        return await momentum_entry.evaluate_momentum_entry(
+            contract, chain, weekly_context=weekly_context, current_regime=current_regime,
+        )
 
     return analyzer
 
@@ -1503,6 +1549,24 @@ async def _run_paper_cycle_locked(
     # #197 (15/07) -- suivi périodique : une entrée par position encore ouverte à la fin
     # du cycle (prix courant déjà récupéré ci-dessous, aucun appel réseau supplémentaire).
     tracked: list[dict] = []
+
+    # 20/07 -- Regime Switch dynamique : méta-régime résolu UNE SEULE FOIS par cycle
+    # (pure lecture DB locale, ``market_sentiment.resolve_meta_regime()``, zéro appel
+    # réseau) -- réutilisé à la fois par la gestion des positions déjà ouvertes
+    # ci-dessous (ratchet vers le régime le plus prudent) et par le sourcing de
+    # nouvelles entrées plus bas (``_default_momentum_analyzer``). Import hissé HORS du
+    # try (pas seulement l'appel) pour que ``market_sentiment`` reste toujours lié dans
+    # ce scope, même si la résolution elle-même échoue -- les usages plus bas de
+    # ``market_sentiment.more_cautious_meta_regime``/``META_REGIME_NEUTRAL`` ne
+    # dépendent alors jamais du chemin de succès. Best-effort, jamais bloquant : une
+    # panne dégrade vers "neutre" (comportement historique inchangé).
+    from aria_core.skills import market_sentiment
+
+    try:
+        current_regime = await market_sentiment.resolve_meta_regime()
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant, dégrade vers "neutre"
+        logger.info("paper_cycle: méta-régime indisponible (%s) -- neutre par défaut", exc)
+        current_regime = market_sentiment.META_REGIME_NEUTRAL
 
     # 1) Gérer les positions ouvertes : d'abord une surveillance continue de SÉCURITÉ
     #    (#187 -- honeypot/ownership apparus après l'entrée, jamais vérifiés qu'une seule
@@ -1760,7 +1824,16 @@ async def _run_paper_cycle_locked(
             remaining_qty = p["qty"]
             entry_price = p["entry_price"]
             gain_pct = (price / entry_price - 1.0) if entry_price else 0.0
-            stages = _effective_tp_stages(p.get("target_price"), entry_price)
+            # 20/07 -- Regime Switch : le régime EFFECTIF pour la sortie ratche vers le
+            # plus prudent entre celui observé à l'entrée et celui observé maintenant --
+            # jamais un assouplissement, même si le marché est redevenu plus optimiste
+            # depuis (cf. docstring de _apply_regime_to_tp_stages/more_cautious_meta_regime).
+            effective_exit_regime = market_sentiment.more_cautious_meta_regime(
+                p.get("entry_regime"), current_regime,
+            )
+            stages = _apply_regime_to_tp_stages(
+                _effective_tp_stages(p.get("target_price"), entry_price), effective_exit_regime,
+            )
 
             while stage_hit < len(stages) and gain_pct >= stages[stage_hit]:
                 stage_hit += 1
@@ -1914,7 +1987,9 @@ async def _run_paper_cycle_locked(
     # SON PROPRE candidates ou analyzer garde le comportement historique inchangé.
     if candidates is None and analyzer is None:
         candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=20)
-        analyzer = _default_momentum_analyzer(_momentum_chain_by_contract, weekly_context=weekly_context)
+        analyzer = _default_momentum_analyzer(
+            _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
+        )
     elif candidates is None:
         from aria_core.skills.candidate_ranking import top_candidates
 
@@ -2064,7 +2139,11 @@ async def _run_paper_cycle_locked(
         # (palier souple #186) et ce sizing par risque/ATR sont deux dampeners
         # orthogonaux (portefeuille vs. par-trade) -- toujours composés multiplicativement.
         pacing_mult = risk_guard.weekly_pacing_size_multiplier(weekly_context)
-        entry_alloc_usd = base_alloc_usd * risk_state.alloc_multiplier * pacing_mult
+        # 20/07 -- Regime Switch : divise par 2 en régime macro Peur confirmé (préserve
+        # le capital quand la liquidité se regroupe sur les gros actifs) -- même point
+        # de composition que pacing_mult ci-dessus, 1.0 par défaut (Neutre/Euphorie).
+        regime_mult = risk_guard.regime_size_multiplier(sig.get("regime"))
+        entry_alloc_usd = base_alloc_usd * risk_state.alloc_multiplier * pacing_mult * regime_mult
 
         # 20/07 -- re-vérification de fraîcheur juste avant l'exécution (revue croisée
         # Gemini, cf. _fresh_rr/_execution_rr_still_valid plus haut) : ``price``
@@ -2117,6 +2196,9 @@ async def _run_paper_cycle_locked(
             # flag indépendant. "momentum" par défaut -- comportement inchangé pour tout
             # analyzer qui ne fournit pas ce champ.
             strategy=sig.get("strategy") or "momentum",
+            # 20/07 -- Regime Switch : régime macro à l'entrée, verrouillé pour la vie
+            # de la position (ratchet en gestion, cf. plus bas).
+            entry_regime=sig.get("regime"),
         )
         if pos:
             opened += 1

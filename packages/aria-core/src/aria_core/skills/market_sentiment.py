@@ -90,6 +90,84 @@ REGIME_LABELS = {
     "donnees_insuffisantes": "Données insuffisantes pour une lecture fiable",
 }
 
+# 20/07 -- Regime Switch dynamique (revue croisée Gemini, feu vert opérateur explicite
+# sur le chiffre de liquidité Peur "200k mais à garder à l'œil") : 3 méta-états qui
+# pilotent les seuils durs du pipeline momentum (liquidité/sizing/discipline de sortie
+# -- momentum_entry.py/risk_guard.py/paper_trader.py), dérivés des 6 régimes ci-dessus
+# (déterministe, zéro LLM, déjà en prod -- exactement l'indicateur "objectif, sans que
+# le LLM n'invente une tendance" demandé). ``complaisance`` classé Neutre (PAS
+# Euphorie) -- son propre label le dit : "euphorie qui ralentit, signal d'alerte" --
+# l'activer en Euphorie armerait les paramètres les plus agressifs pile au moment où
+# le marché commence à se retourner (correction Gemini, vérifiée contre le code réel
+# avant d'être acceptée).
+META_REGIME_FEAR = "peur"
+META_REGIME_NEUTRAL = "neutre"
+META_REGIME_EUPHORIA = "euphorie"
+
+_META_REGIME_MAP: dict[str, str] = {
+    "euphorie": META_REGIME_EUPHORIA,
+    "optimisme_conviction": META_REGIME_EUPHORIA,
+    "complaisance": META_REGIME_NEUTRAL,
+    "doute_accumulation": META_REGIME_NEUTRAL,
+    "neutre": META_REGIME_NEUTRAL,
+    "capitulation_peur": META_REGIME_FEAR,
+    "anxiete_distribution": META_REGIME_FEAR,
+}
+
+_META_REGIME_RANK = {META_REGIME_FEAR: 0, META_REGIME_NEUTRAL: 1, META_REGIME_EUPHORIA: 2}
+
+
+def meta_regime_rank(regime: str | None) -> int:
+    """Rang ordinal (Peur < Neutre < Euphorie) -- un régime inconnu/absent vaut Neutre
+    (comportement par défaut inchangé, jamais un rang inventé plus extrême)."""
+    return _META_REGIME_RANK.get(regime or META_REGIME_NEUTRAL, _META_REGIME_RANK[META_REGIME_NEUTRAL])
+
+
+def more_cautious_meta_regime(a: str | None, b: str | None) -> str:
+    """Le plus prudent des deux méta-régimes (rang le plus bas) -- fondement du ratchet
+    "jamais d'assouplissement" pour une position déjà ouverte (cf. paper_trader.py) :
+    une fois qu'un régime plus prudent a été observé (à l'entrée OU en cours de
+    détention), la discipline de sortie ne redevient jamais plus permissive.
+
+    Normalise ``None`` en Neutre AVANT de choisir -- ``meta_regime_rank(None)`` vaut
+    déjà le rang de Neutre, mais sans cette normalisation la comparaison pouvait
+    retourner le ``None`` d'origine tel quel (rang égal ou inférieur à Neutre/Euphorie)
+    au lieu de la chaîne "neutre" -- toujours une des 3 valeurs valides en sortie,
+    jamais ``None``."""
+    a_norm = a or META_REGIME_NEUTRAL
+    b_norm = b or META_REGIME_NEUTRAL
+    return a_norm if meta_regime_rank(a_norm) <= meta_regime_rank(b_norm) else b_norm
+
+
+async def resolve_meta_regime() -> str:
+    """Combine les lectures BTC/ETH (``latest_readings()``, pure lecture DB locale,
+    ZÉRO appel réseau -- le heartbeat rafraîchit à part, même propriété que
+    ``_sentiment_lines()`` déjà utilisé par ``momentum_entry.py``) en UN SEUL
+    méta-régime, avec un biais délibérément ASYMÉTRIQUE ("vite effrayé, lentement
+    gourmand") :
+    - si NE SERAIT-CE QU'UNE paire lit Peur -> méta-régime Peur (un seul actif en
+      capitulation est déjà un signal de stress large sur un marché crypto très
+      corrélé -- la direction PRUDENTE ne coûte rien à déclencher tôt) ;
+    - il faut que LES DEUX paires (BTC ET ETH) lisent Euphorie -> méta-régime
+      Euphorie (relâcher des garde-fous durs est la direction RISQUÉE, un signal
+      isolé ne suffit jamais seul à la justifier) ;
+    - sinon (dont : aucune lecture exploitable -- gate OFF, pas encore de données,
+      ``donnees_insuffisantes`` partout) -> Neutre, le comportement PAR DÉFAUT déjà
+      en place avant ce chantier -- jamais un Peur/Euphorie inventé faute de signal,
+      cette fonction dégrade alors vers un no-op complet pour tout appelant."""
+    readings = await latest_readings()
+    metas = [
+        _META_REGIME_MAP.get(r.get("regime") or "")
+        for r in readings
+        if r.get("regime") and r.get("regime") != "donnees_insuffisantes"
+    ]
+    metas = [m for m in metas if m]
+    if any(m == META_REGIME_FEAR for m in metas):
+        return META_REGIME_FEAR
+    if len(metas) >= 2 and all(m == META_REGIME_EUPHORIA for m in metas):
+        return META_REGIME_EUPHORIA
+    return META_REGIME_NEUTRAL
+
 
 @dataclass(frozen=True)
 class SentimentReading:

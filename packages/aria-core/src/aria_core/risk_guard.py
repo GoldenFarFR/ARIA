@@ -292,6 +292,30 @@ def weekly_pacing_size_multiplier(weekly_context: dict | None) -> float:
     return 1.0
 
 
+# 20/07 -- Regime Switch dynamique (revue croisée Gemini, feu vert opérateur explicite
+# sur 200k$ en régime Peur) : "Peur" divise par 2 les budgets de risque/paliers de
+# conviction -- préserve le capital quand la liquidité se regroupe sur les gros actifs
+# et que les micro-caps s'effondrent les unes après les autres. Composé exactement
+# comme ``weekly_pacing_size_multiplier`` ci-dessus (même point d'appel, multiplié sur
+# l'allocation finale) -- jamais intégré dans ``conviction_size_multiplier``/
+# ``conviction_risk_budget_pct`` eux-mêmes, qui restent des fonctions PURES sur le
+# signal technique seul, indépendantes du régime macro (séparation des responsabilités
+# déjà établie entre ces couches).
+REGIME_FEAR_SIZE_MULTIPLIER = 0.5
+
+
+def regime_size_multiplier(regime: str | None) -> float:
+    """1.0 par défaut (Neutre/Euphorie/inconnu -- comportement inchangé). ``REGIME_
+    FEAR_SIZE_MULTIPLIER`` UNIQUEMENT en régime Peur confirmé -- jamais un frein sans
+    signal (``None``/régime absent -> 1.0, même doctrine fail-open que ``weekly_
+    pacing_size_multiplier`` sur un ``weekly_context`` absent)."""
+    from aria_core.skills.market_sentiment import META_REGIME_FEAR
+
+    if regime == META_REGIME_FEAR:
+        return REGIME_FEAR_SIZE_MULTIPLIER
+    return 1.0
+
+
 # 19/07 -- plafond de position auto-calibré par IMPACT DE PRIX (revue croisée Gemini,
 # relayée par l'opérateur, 19/07). Remplace le débat sur "quel % fixe du pool" par un
 # calcul qui s'auto-ajuste à CHAQUE pool réel, sans nouveau seuil arbitraire de taille à

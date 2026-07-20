@@ -1044,6 +1044,90 @@ async def test_evaluate_allows_liquidity_at_or_above_floor(monkeypatch):
     assert result["action"] == "BUY"
 
 
+# ── Regime Switch dynamique (20/07, revue croisée Gemini, feu vert opérateur
+#    explicite "200k mais à garder à l'œil") ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_evaluate_liquidity_floor_doubles_in_fear_regime(monkeypatch):
+    """150k$ passe le plancher nominal (100k$) mais pas le plancher Peur (200k$) --
+    le gate doit rejeter dès que ``current_regime="peur"`` est fourni."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=150_000.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime="peur")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "insufficient_liquidity"
+    assert "peur" in result["reasons"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_liquidity_floor_stays_nominal_outside_fear(monkeypatch):
+    """Non-régression : 150k$ (au-dessus du plancher nominal) ne doit jamais être
+    rejeté par ce gate en régime Neutre/Euphorie/non fourni."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    for regime in (None, "neutre", "euphorie"):
+        _patch_pipeline(
+            monkeypatch, pairs=[_pair(liquidity_usd=150_000.0)], signal=strong, align=(3, []),
+        )
+        result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime=regime)
+        assert result.get("hold_reason") != "insufficient_liquidity", f"régime {regime}"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_liquidity_floor_200k_still_enforced_in_fear(monkeypatch):
+    """Le plancher Peur (200k$) reste un vrai plancher -- pas juste levé/désactivé --
+    150k$ reste rejeté même s'il aurait suffi en régime nominal."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=199_000.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime="peur")
+    assert result["hold_reason"] == "insufficient_liquidity"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_parabolic_cap_skipped_in_euphoria(monkeypatch):
+    """+250% sur 24h franchit le plafond nominal (+200%) mais le régime Euphorie lève
+    ce plafond spécifique -- le reste du pipeline (honeypot/R-R/alignement propres)
+    doit pouvoir aboutir à un BUY."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, pairs=[_pair(price_change_24h=250.0)], signal=strong, align=(3, []),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime="euphorie")
+    assert result.get("hold_reason") != "already_parabolic"
+    assert result["action"] == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_parabolic_cap_still_active_outside_euphoria(monkeypatch):
+    """Non-régression : le plafond +200%/24h reste actif en régime Neutre/Peur/non
+    fourni -- seule l'Euphorie confirmée le lève. Liquidité 250k$ (au-dessus des DEUX
+    planchers, nominal ET Peur) pour isoler ce gate précis -- sinon le plancher de
+    liquidité doublé en régime Peur couperait avant même d'atteindre ce gate-ci."""
+    for regime in (None, "neutre", "peur"):
+        _patch_pipeline(
+            monkeypatch, pairs=[_pair(liquidity_usd=250_000.0, price_change_24h=250.0)],
+        )
+        result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime=regime)
+        assert result["hold_reason"] == "already_parabolic", f"régime {regime}"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_buy_result_includes_regime_when_provided(monkeypatch):
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(3, []))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime="euphorie")
+    assert result["action"] == "BUY"
+    assert result["regime"] == "euphorie"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_buy_result_defaults_regime_to_neutral_when_not_provided(monkeypatch):
+    """Comportement historique inchangé pour tout appelant qui ne fournit pas
+    ``current_regime`` (ex. tests existants, appelants directs hors run_paper_cycle)."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(3, []))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["regime"] == "neutre"
+
+
 @pytest.mark.asyncio
 async def test_evaluate_buy_signal_tags_strategy_momentum(monkeypatch):
     """20/07 -- Formule B (paper_trader.py) : un BUY momentum doit toujours porter

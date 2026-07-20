@@ -8,6 +8,7 @@ import pytest
 
 from aria_core import momentum_funnel_log
 from aria_core import paper_trader as pt
+from aria_core.skills import market_sentiment
 
 # 20/07 -- capturée à l'import, AVANT tout monkeypatch de session : permet aux tests
 # dédiés à la re-vérification de fraîcheur (cf. plus bas) de restaurer le VRAI
@@ -76,6 +77,12 @@ def tmp_db(tmp_path, monkeypatch):
     # cf. test_momentum_blacklist.py) : sans cette isolation, tous les tests de ce fichier
     # écriraient silencieusement dans le même chemin figé au premier import du module.
     monkeypatch.setattr(momentum_funnel_log, "DB_PATH", str(tmp_path / "momentum_funnel.db"))
+    # 20/07 -- Regime Switch : run_paper_cycle appelle désormais market_sentiment.
+    # resolve_meta_regime() une fois par cycle -- MÊME piège que momentum_funnel_log
+    # ci-dessus (DB_PATH calculé une seule fois à l'import du module), sans cette
+    # isolation tous les tests de ce fichier liraient/écriraient silencieusement au
+    # même chemin figé au premier import, potentiellement partagé entre tests.
+    monkeypatch.setattr(market_sentiment, "DB_PATH", str(tmp_path / "market_sentiment.db"))
     return tmp_path
 
 
@@ -777,6 +784,188 @@ async def test_breakeven_floor_stays_locked_across_multiple_cycles(tmp_db):
     assert act["closed"][0]["close_reason"] == "breakeven hard floor"
 
 
+# ── Regime Switch dynamique (20/07, revue croisée Gemini, feu vert opérateur
+#    explicite "200k mais à garder à l'œil") ────────────────────────────────────────
+
+class TestApplyRegimeToTpStages:
+    """_apply_regime_to_tp_stages -- fonction pure, aucun DB requis."""
+
+    def test_fear_truncates_to_two_stages(self):
+        assert pt._apply_regime_to_tp_stages((0.2, 0.4, 0.6), "peur") == (0.2, 0.4)
+
+    def test_euphoria_neutralizes_third_stage(self):
+        stages = pt._apply_regime_to_tp_stages((0.2, 0.4, 0.6), "euphorie")
+        assert stages[:2] == (0.2, 0.4)
+        assert stages[2] == float("inf")
+
+    def test_neutral_or_unknown_or_none_unchanged(self):
+        base = (0.2, 0.4, 0.6)
+        for regime in ("neutre", None, "regime_inconnu"):
+            assert pt._apply_regime_to_tp_stages(base, regime) == base
+
+    def test_short_tuple_never_indexed_out_of_range(self):
+        """Défensif : TP_STAGES/_effective_tp_stages fournissent toujours 3 éléments
+        en pratique, mais cette fonction ne doit jamais planter si ce n'est pas le cas."""
+        assert pt._apply_regime_to_tp_stages((0.5,), "peur") == (0.5,)
+        assert pt._apply_regime_to_tp_stages((), "euphorie") == ()
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_fear_regime_halves_new_entry_allocation(tmp_db, monkeypatch):
+    """Feu vert opérateur explicite (20/07) : régime macro Peur confirmé -> allocation
+    des NOUVELLES entrées divisée par 2 (préserve le capital)."""
+    from aria_core import momentum_entry
+
+    async def fake_resolve():
+        return "peur"
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", fake_resolve)
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+            "regime": "peur",
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+    assert len(act["opened"]) == 1
+    # Palier fort (5%) * régime Peur (0.5) = 2.5% du capital de départ = 25 000$.
+    assert act["opened"][0]["cost_usd"] == pytest.approx(25_000.0, rel=0.01)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_persists_entry_regime_on_open_position(tmp_db, monkeypatch):
+    from aria_core import momentum_entry
+
+    async def fake_resolve():
+        return "euphorie"
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", fake_resolve)
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+            "regime": "euphorie",
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.run_paper_cycle(depeg_check=_no_depeg)
+    pos = await pt._get_open(D)
+    assert pos["entry_regime"] == "euphorie"
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_fear_exit_sells_everything_at_old_tp2_level(tmp_db, monkeypatch):
+    """Sortie ultra-rapide en régime Peur : TP1 prend son tiers normalement, puis TOUT
+    le reliquat se vend au niveau de l'ancien TP2 -- jamais de 3e palier."""
+    async def fake_resolve():
+        return "peur"
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", fake_resolve)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000,
+        entry_regime="peur",
+    )
+    # TP1 (target technique) = +40%, TP2 = 2x cette distance = +80%.
+    prices = {"v": 1.4}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["partial"]) == 1  # TP1 -- vente partielle normale
+    assert await pt.has_open(D)
+
+    prices["v"] = 1.8  # niveau de l'ancien TP2 (+80%)
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1  # clôture COMPLÈTE, pas une 2e vente partielle
+    assert not await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_euphoria_exit_never_force_closes_at_old_tp3(tmp_db, monkeypatch):
+    """Moon bag pur : régime Euphorie confirmé À L'ENTRÉE ET EN GESTION -- le dernier
+    tiers ne se vend JAMAIS via un palier mécanique, même à un gain massif au-delà de
+    l'ancien TP3 -- seul le stop suiveur ATR peut encore le sortir."""
+    async def fake_resolve():
+        return "euphorie"
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", fake_resolve)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000,
+        entry_regime="euphorie",
+    )
+    # TP1 = +40%, TP2 = +80% (2x) -- les deux prennent leur tiers normalement.
+    prices = {"v": 1.4}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    prices["v"] = 1.8
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert await pt.has_open(D)  # TP1+TP2 pris, reliquat encore ouvert
+
+    # Bien au-delà de l'ancien TP3 (+120%, prix 2.2) -- jamais vendu par un palier.
+    prices["v"] = 5.0
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["partial"] == []
+    assert act["closed"] == []
+    assert await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_ratchet_keeps_fear_discipline_even_if_regime_later_improves(tmp_db, monkeypatch):
+    """Le ratchet ne s'assouplit JAMAIS : une position ouverte en Peur garde sa
+    discipline de sortie à 2 paliers même si le régime courant redevient Euphorie
+    plus tard -- jamais une réactivation d'un 3e palier ou d'un moon bag."""
+    current = {"regime": "peur"}
+
+    async def fake_resolve():
+        return current["regime"]
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", fake_resolve)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000,
+        entry_regime="peur",
+    )
+
+    current["regime"] = "euphorie"  # le marché s'est retourné après l'ouverture
+    prices = {"v": 1.4}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    prices["v"] = 1.8  # niveau de l'ancien TP2
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    # Toujours le comportement Peur (clôture complète au niveau TP2) malgré le
+    # régime COURANT désormais Euphorie -- le ratchet retient le pire (Peur) observé.
+    assert len(act["closed"]) == 1
+    assert not await pt.has_open(D)
+
+
 @pytest.mark.asyncio
 async def test_tp1_anchors_on_technical_target_not_fixed_percentage(tmp_db):
     """19/07 (Gemini round 5) : un R/R calculé sur un target technique proche (+20 %)
@@ -1128,7 +1317,7 @@ async def test_momentum_positions_now_respect_concentration_cap(tmp_db, monkeypa
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": c, "chain": "base"} for c in contracts]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         call_index["n"] += 1
         return {
             "action": "BUY", "chain": "base", "symbol": f"T{call_index['n']}", "price": 1.0,
@@ -1433,7 +1622,7 @@ async def test_run_cycle_defaults_to_momentum_pipeline_when_nothing_injected(tmp
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "solana"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         assert chain == "solana"
         return {"action": "BUY", "symbol": "DDD", "price": 1.0, "target": 2.0,
                 "invalidation": 0.5, "chain": chain}
@@ -1467,7 +1656,7 @@ async def test_run_cycle_threads_weekly_context_to_momentum_analyzer(tmp_db, mon
 
     captured = {}
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         captured["weekly_context"] = weekly_context
         return {"action": "HOLD", "chain": chain, "hold_reason": "test"}
 
@@ -1500,7 +1689,7 @@ async def test_run_cycle_sizes_strong_conviction_signal_at_hard_cap(tmp_db, monk
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "base"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.5, "rr": 3.0, "align_score": 3,
@@ -1540,7 +1729,7 @@ async def test_run_cycle_conviction_tiers_scale_alloc_when_risk_cap_not_binding(
             return [{"contract": _c, "chain": "base"}]
 
         async def fake_evaluate(
-            contract, chain, *, weekly_context=None, _rr=rr, _align=align_score,
+            contract, chain, *, weekly_context=None, _rr=rr, _align=align_score, **_kwargs,
         ):
             return {
                 "action": "BUY", "chain": chain, "symbol": "TIER", "price": 1.0,
@@ -1570,7 +1759,7 @@ async def test_run_cycle_wide_atr_stop_reduces_allocation_below_flat_tier(tmp_db
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "base"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
@@ -1603,7 +1792,7 @@ async def test_run_cycle_tight_atr_stop_is_capped_at_the_historical_ceiling(tmp_
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "base"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
@@ -1633,7 +1822,7 @@ async def test_run_cycle_moderate_tier_tight_atr_capped_at_moderate_ceiling_not_
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "base"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.9, "rr": 2.0, "align_score": 3,
@@ -1660,7 +1849,7 @@ async def test_run_cycle_weak_tier_tight_atr_capped_at_weak_ceiling_not_strong(t
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "base"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.9, "rr": 1.0, "align_score": 1,
@@ -1689,7 +1878,7 @@ async def test_run_cycle_weak_fundamental_downgrades_strong_tier_to_moderate(tmp
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "base"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
@@ -1715,7 +1904,7 @@ async def test_run_cycle_unknown_fundamental_never_blocks_technical_bonus(tmp_db
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "base"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.5, "rr": 3.0, "align_score": 3,
@@ -1752,7 +1941,7 @@ async def test_run_cycle_dampens_moderate_tier_once_weekly_target_reached(tmp_db
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "base"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.95, "rr": 2.0, "align_score": 2,
@@ -1779,7 +1968,7 @@ async def test_run_cycle_dampens_strong_tier_once_weekly_target_reached(tmp_db, 
     async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
         return [{"contract": D, "chain": "base"}]
 
-    async def fake_evaluate(contract, chain, *, weekly_context=None):
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.95, "rr": 3.0, "align_score": 3,

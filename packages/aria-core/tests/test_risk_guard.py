@@ -330,6 +330,32 @@ class TestWeeklyPacingSizeMultiplier:
         assert round(0.05 * weak * pacing, 4) == 0.01
 
 
+# ── 1quater. regime_size_multiplier (20/07, Regime Switch, feu vert opérateur
+#             explicite "200k mais à garder à l'œil") ──────────────────────────────
+
+class TestRegimeSizeMultiplier:
+    def test_fear_halves_the_allocation(self):
+        assert risk_guard.regime_size_multiplier("peur") == risk_guard.REGIME_FEAR_SIZE_MULTIPLIER
+        assert risk_guard.regime_size_multiplier("peur") == 0.5
+
+    def test_neutral_and_euphoria_stay_at_baseline(self):
+        assert risk_guard.regime_size_multiplier("neutre") == 1.0
+        assert risk_guard.regime_size_multiplier("euphorie") == 1.0
+
+    def test_missing_or_unknown_regime_defaults_to_baseline(self):
+        assert risk_guard.regime_size_multiplier(None) == 1.0
+        assert risk_guard.regime_size_multiplier("regime_inconnu") == 1.0
+
+    def test_composes_with_conviction_and_pacing_multipliers(self):
+        """Même patron que test_composes_with_conviction_multiplier_as_expected --
+        les 3 multiplicateurs (conviction/pacing/régime) sont indépendants et
+        composés multiplicativement, jamais l'un à la place de l'autre."""
+        strong = risk_guard.conviction_size_multiplier(3.0, 3)
+        pacing = risk_guard.weekly_pacing_size_multiplier(None)  # objectif pas encore atteint -> 1.0
+        regime = risk_guard.regime_size_multiplier("peur")
+        assert round(0.05 * strong * pacing * regime, 4) == 0.025
+
+
 # ── 1quater. cap_alloc_to_price_impact (19/07, revue croisée Gemini) ────────────────
 
 

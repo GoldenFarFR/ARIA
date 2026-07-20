@@ -120,6 +120,13 @@ _SOURCE_LIMIT_PER_CHANNEL = 30
 # evaluate_momentum_entry (cf. plus bas) -- désormais appliqué SYSTÉMATIQUEMENT, jamais
 # contournable, même si honeypot/R-R/alignement sont par ailleurs tous propres.
 _MIN_LIQUIDITY_USD = 100_000.0
+# 20/07 -- Regime Switch dynamique (revue croisée Gemini, feu vert opérateur explicite
+# "200k mais à garder à l'œil pour vérifier dans les années qui suivent") : en régime
+# macro Peur (``market_sentiment.resolve_meta_regime``), la liquidité se regroupe sur
+# les gros actifs et les micro-caps s'effondrent en premier -- le plancher double.
+# Remplace ``_MIN_LIQUIDITY_USD`` UNIQUEMENT quand le régime résolu est Peur, sinon le
+# plancher nominal ci-dessus s'applique inchangé (comportement historique par défaut).
+_MIN_LIQUIDITY_USD_FEAR = 200_000.0
 # 18/07 -- relevé 1.5->2.0 (décision opérateur explicite : "plus sélective") : seul un
 # R/R VRAIMENT franc, pas juste positif, qualifie pour un achat déterministe sans passer
 # par le LLM. _RR_AMBIGUOUS_FLOOR (1.0) INCHANGÉ -- la zone [1.0, 2.0) élargie tombe
@@ -1149,28 +1156,43 @@ async def _llm_confirm_and_gate(
 
 async def evaluate_momentum_entry(
     contract: str, chain: str, *, weekly_context: dict | None = None,
+    current_regime: str | None = None,
 ) -> dict | None:
     """Décision d'entrée momentum (#194) pour ``contract`` sur ``chain``.
 
     ``weekly_context`` (18/07, optionnel) : contexte de rythme du cycle hebdomadaire
     d'entraînement (calculé par ``paper_trader.py``), transmis au tie-breaker LLM
-    (``_llm_confirm``, calibre son exigence) ET au garde de sécurité final
-    (``_llm_security_gate``, information seulement -- ne peut jamais assouplir un
-    rejet). ``None`` par défaut -- comportement inchangé pour tout appelant qui ne le
-    fournit pas (ex. tests existants).
+    (``_llm_confirm``/``_llm_confirm_and_gate``, calibre son exigence) ET au garde de
+    sécurité final (``_llm_security_gate``, information seulement -- ne peut jamais
+    assouplir un rejet). ``None`` par défaut -- comportement inchangé pour tout
+    appelant qui ne le fournit pas (ex. tests existants).
+
+    ``current_regime`` (20/07, optionnel) : méta-régime macro déjà résolu
+    (``market_sentiment.resolve_meta_regime()``, "peur"/"neutre"/"euphorie" -- calculé
+    UNE FOIS par cycle par l'appelant, cf. ``paper_trader._run_paper_cycle_locked``,
+    même patron que ``weekly_context``) -- PAS résolu ici (cette fonction reste une
+    lecture pure sur le signal, aucun appel DB caché supplémentaire). ``None`` (défaut)
+    -> traité comme "neutre", comportement inchangé pour tout appelant qui ne le
+    fournit pas. Pilote 2 garde-fous durs ci-dessous (liquidité, plafond parabolique)
+    ET, sur un BUY confirmé, est propagé dans le dict retourné (clé ``"regime"``) pour
+    être persisté comme ``entry_regime`` de la position (verrou ratchet en gestion,
+    cf. ``paper_trader.py``).
 
     Ordre, du plus rapide/bloquant au plus lent/optionnel :
       1. Liste noire (``momentum_blacklist.py``) -- rejet immédiat, aucun appel réseau.
       2. Honeypot (GoPlus) -- rejet immédiat si non clear.
       3. Prix + meilleure paire (DexScreener) -- rejet si aucune paire liquide.
-      4. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 100 000$, 19/07) -- rejet
-         SYSTÉMATIQUE si le pool est trop mince, même si tout le reste est propre.
+      4. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 100 000$, 19/07 -- doublé à
+         ``_MIN_LIQUIDITY_USD_FEAR`` en régime Peur, 20/07) -- rejet SYSTÉMATIQUE si
+         le pool est trop mince, même si tout le reste est propre.
       5. Plancher de volume 24h (``_MIN_VOLUME_24H_USD``, 5 000$, 19/07) -- rejet si
          le marché est quasi mort, sur des données déjà en main.
       6. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
          des données déjà en main (aucun appel réseau supplémentaire).
       7. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
-         extrême, même donnée déjà en main.
+         extrême, même donnée déjà en main. SAUTÉ en régime Euphorie confirmé (20/07) --
+         le RVOL (étape 15) reste un rejet dur indépendant qui continue de filtrer un
+         mouvement non soutenu par du vrai volume, même quand ce plafond est levé.
       8. Âge minimum de la paire (``_MIN_PAIR_AGE_DAYS``, 14 jours, 20/07) -- rejet si
          trop jeune ou âge inconnu, sur donnée déjà en main (``pair_created_at``).
       9. Profil projet établi (``_check_project_profile``, 20/07) -- profil DexScreener
@@ -1228,14 +1250,21 @@ async def evaluate_momentum_entry(
     # sous le plancher, jamais contournable même si le reste (honeypot/R-R/alignement)
     # est propre -- une liquidité inconnue (``None``/0, jamais observée en pratique mais
     # traitée par prudence) est traitée comme insuffisante, pas comme "OK par défaut".
+    # 20/07 -- Regime Switch : plancher doublé en régime Peur confirmé (cf. _MIN_
+    # LIQUIDITY_USD_FEAR ci-dessus) -- ``current_regime`` non fourni/Neutre/Euphorie
+    # laisse le plancher nominal inchangé.
     liquidity_usd = best.liquidity_usd or 0.0
-    if liquidity_usd < _MIN_LIQUIDITY_USD:
+    effective_min_liquidity = (
+        _MIN_LIQUIDITY_USD_FEAR if current_regime == "peur" else _MIN_LIQUIDITY_USD
+    )
+    if liquidity_usd < effective_min_liquidity:
         return {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd,
             "reasons": [
-                f"liquidité insuffisante ({liquidity_usd:,.0f}$ < {_MIN_LIQUIDITY_USD:,.0f}$) "
-                "-- risque de scam/manipulation, rejet même si le reste est propre"
+                f"liquidité insuffisante ({liquidity_usd:,.0f}$ < {effective_min_liquidity:,.0f}$"
+                + (" -- plancher doublé, régime macro Peur" if current_regime == "peur" else "")
+                + ") -- risque de scam/manipulation, rejet même si le reste est propre"
             ],
             "hold_reason": "insufficient_liquidity",
         }
@@ -1274,7 +1303,19 @@ async def evaluate_momentum_entry(
                 "hold_reason": "wash_trading_ratio",
             }
 
-    if best.price_change_24h and best.price_change_24h > _MAX_PRICE_CHANGE_24H_PCT:
+    # 20/07 -- Regime Switch : plafond levé en régime Euphorie confirmé ("si le RVOL
+    # suit, on monte dans le train" -- revue croisée Gemini). Simplification assumée
+    # par rapport à une conditionnalité stricte sur le RVOL à CE gate précis : les
+    # candles nécessaires au RVOL (étape 15) ne sont récupérées que plus loin dans le
+    # pipeline (coût réseau), restructurer l'ordre pour les avancer ici aurait été un
+    # changement bien plus invasif pour un gain marginal -- le RVOL reste un rejet dur
+    # INDÉPENDANT plus loin, donc un mouvement +200% non soutenu par du vrai volume
+    # est encore filtré, juste un peu plus tard dans le pipeline.
+    if (
+        current_regime != "euphorie"
+        and best.price_change_24h
+        and best.price_change_24h > _MAX_PRICE_CHANGE_24H_PCT
+    ):
         return {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd,
@@ -1519,4 +1560,10 @@ async def evaluate_momentum_entry(
         # un flag indépendant qui pourrait mal assortir un token purement spéculatif à
         # une discipline "sans stop" pensée pour une thèse fondamentale.
         "strategy": "momentum",
+        # 20/07 -- Regime Switch : régime macro AU MOMENT DE L'ENTRÉE, persisté comme
+        # ``entry_regime`` (paper_trader.py) -- fondement du ratchet "jamais
+        # d'assouplissement" en gestion de position (cf. market_sentiment.
+        # more_cautious_meta_regime). "neutre" si non fourni par l'appelant (comportement
+        # par défaut, jamais un régime inventé).
+        "regime": current_regime or "neutre",
     }
