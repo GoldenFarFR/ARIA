@@ -2773,7 +2773,36 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   mêmes 7 échecs pré-existants sans rapport #142), `test_coherence.py` vert
   (81 passed). **Les 4 items du plan initial sont désormais tous traités** :
   reset hebdo (#173) → sizing Formule B (#174) → slippage simulé (#175) →
-  apprentissage (régime + contrefactuel, prochain).
+  apprentissage (régime + contrefactuel, #176 ci-dessous).
+- **20/07 (suite) — #176 (apprentissage, les DEUX volets) tranché et livré,
+  DÉPLOYÉ (commit `fde227dc38f8`) — ferme le plan initial en 4 items.**
+  **Volet a (win-rate par régime)** : nouveau `paper_ledger_report.
+  build_regime_report()` — segmente les trades clôturés par `entry_regime`
+  (Peur/Neutre/Euphorie, donnée déjà persistée depuis #172, jamais agrégée
+  dans un rapport avant ce chantier) ; positions pré-#172 (`entry_regime`
+  absent) groupées sous "pré-régime", jamais mélangées ni ignorées. Commande
+  `/regime` (admin-only, lecture seule, zéro appel réseau). **Volet b
+  (contrefactuel des rejets)** : nouveau `counterfactual_tracker.py` —
+  enregistre chaque rejet par un seuil dur momentum (contrat/chaîne/raison/
+  prix), EXCLUT délibérément `no_entry_signal`/`ohlcv_unavailable` (aucune
+  donnée exploitable) et `blacklisted`/tout code `honeypot_*` (menace
+  CONFIRMÉE — un gain de prix sur le papier serait trompeur, on ne peut
+  jamais vendre un vrai honeypot) — fail-open à l'INCLUSION pour toute autre
+  raison, y compris un futur garde-fou jamais vu (jamais besoin de mettre à
+  jour une allowlist). Nouveau cycle heartbeat `counterfactual_revisit_cycle`
+  (180min, gate OFF `ARIA_COUNTERFACTUAL_TRACKER_ENABLED`) qui revisite après
+  7 jours et refetch le prix RÉEL (`paper_trader._default_pair_lookup`,
+  aucun second client) — une simple comparaison de prix, jamais une
+  resimulation du pipeline d'entrée. **L'enregistrement lui-même reste
+  inconditionnel** (même doctrine que `momentum_funnel_log.py` — aucun appel
+  réseau, additif pur) ; seul le cycle de REVISITE (réseau) est gaté. Hook
+  unique dans `paper_trader.run_paper_cycle`, même choke point que le funnel
+  déjà existant — couvre le heartbeat ET `momentum_websocket.py` sans code
+  dupliqué (les deux routent par `run_paper_cycle`, vérifié). Commande
+  `/counterfactual` (admin-only, lecture seule). 62 nouveaux tests au total
+  (18 régime + 37 contrefactuel + 7 wiring), suite complète verte (6409
+  passed, mêmes 7 échecs pré-existants sans rapport #142), `test_coherence.py`
+  vert (81 passed).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
