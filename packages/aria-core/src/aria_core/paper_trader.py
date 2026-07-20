@@ -330,6 +330,39 @@ def _advance_high_water(
         return pending_high_water, None, None
     return confirmed_high_water, pending_high_water, pending_since
 
+
+def _advance_breakeven_pending(
+    pending_since: str | None, price: float, entry_price: float, flash_threshold: float, now: datetime,
+) -> tuple[str | None, bool]:
+    """``(nouvel horodatage de candidature, verrouillage confirmé CE cycle ?)`` -- même
+    mécanique de confirmation temporelle que ``_advance_high_water`` ci-dessus (20/07,
+    revue croisée externe : le point mort se verrouillait sur UNE SEULE lecture de prix
+    instantanée -- asymétrie relevée face au ratchet high_water, qui a déjà
+    ``HIGH_WATER_CONFIRMATION_SECONDS`` de confirmation avant de ratcher). Réutilise la
+    MÊME constante -- même philosophie "un vrai mouvement dure, une mèche non", aucune
+    2e durée magique à justifier séparément.
+
+    Tant que ``price`` reste au-dessus du seuil flash (``entry_price * (1+flash_
+    threshold)``), une candidature reste ouverte. Dès qu'elle a tenu au moins
+    ``HIGH_WATER_CONFIRMATION_SECONDS``, verrouillage confirmé. Si ``price`` retombe
+    SOUS le seuil à un moment quelconque avant confirmation, la candidature est
+    abandonnée entièrement (preuve qu'elle n'était pas soutenue) -- repart de zéro si
+    le prix redépasse le seuil plus tard. Contrairement à ``_advance_high_water``, pas
+    d'amplitude à mémoriser : une fois confirmé, le verrou est un booléen (``breakeven_
+    locked``), jamais une valeur numérique à ratcher plus haut."""
+    threshold_price = entry_price * (1.0 + flash_threshold)
+    if price < threshold_price:
+        return None, False
+    if not pending_since:
+        return now.isoformat(), False
+    try:
+        elapsed = (now - datetime.fromisoformat(pending_since)).total_seconds()
+    except ValueError:
+        return now.isoformat(), False
+    if elapsed >= HIGH_WATER_CONFIRMATION_SECONDS:
+        return pending_since, True
+    return pending_since, False
+
 # 17/07 -- demande opérateur explicite : réduire de moitié le bruit Telegram de l'alerte de
 # suivi périodique (#197, une par cycle heartbeat -- ~15 min -- tant qu'une position reste
 # ouverte). Fenêtre glissante par le TEMPS écoulé (pas un compteur de cycles) : robuste si la
@@ -357,6 +390,7 @@ _POS_FIELDS = (
     "category", "entry_security_json", "chain", "thesis", "close_notes",
     "entry_atr_pct", "pending_high_water", "pending_high_water_since",
     "strategy", "entry_liquidity_usd", "breakeven_locked", "entry_regime",
+    "breakeven_pending_since",
 )
 
 _ADDED_COLUMNS = [
@@ -419,6 +453,15 @@ _ADDED_COLUMNS = [
     # pilote VC-thesis) -- traité comme "neutre" par le ratchet en gestion, jamais un
     # régime inventé.
     ("entry_regime", "TEXT"),
+    # 20/07 -- revue croisée externe : le verrouillage du point mort réagissait à UNE
+    # SEULE lecture de prix instantanée, sans la confirmation temporelle que le ratchet
+    # high_water applique déjà (asymétrie relevée -- un tick aberrant sur un pool fin
+    # pouvait verrouiller le point mort à tort). Même patron que
+    # pending_high_water_since : NULL = aucune candidature en cours, posé à la première
+    # lecture qui franchit le seuil flash, effacé si le prix retombe sous ce seuil avant
+    # confirmation (HIGH_WATER_CONFIRMATION_SECONDS, réutilisée telle quelle -- même
+    # philosophie "un vrai mouvement dure, une mèche non", pas de 2e constante magique).
+    ("breakeven_pending_since", "TEXT"),
 ]
 
 # 19/07 -- migration à chaud DÉDIÉE pour paper_position_archive (voir _ensure_tables) --
@@ -433,6 +476,7 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("entry_liquidity_usd", "REAL"),
     ("breakeven_locked", "INTEGER NOT NULL DEFAULT 0"),
     ("entry_regime", "TEXT"),
+    ("breakeven_pending_since", "TEXT"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -771,6 +815,35 @@ async def _has_prior_close(contract: str) -> bool:
     return any(p["status"] == "closed" for p in positions)
 
 
+# 20/07 -- revue croisée externe : la re-entrée assouplie du 19/07 (cf. commentaire sur
+# l'ancien REENTRY_RR_MIN plus haut dans ce fichier) n'a aucune garde contre un contrat
+# qui boucle perte->rachat->perte sur LUI-MÊME -- exactement le motif de l'incident BRIAN
+# (17/07, "rachetée 2 fois de suite après deux stop suiveur", -18 561$ cumulés). Distinct
+# du coupe-circuit global de risk_guard.HARD_CONSECUTIVE_LOSSES (portefeuille entier) --
+# celui-ci est scopé à UN SEUL contrat, chirurgical, ne bloque jamais un autre token.
+MAX_CONSECUTIVE_LOSSES_PER_CONTRACT = 2
+
+
+async def _consecutive_losses_for_contract(contract: str, *, limit: int = 20) -> int:
+    """Pertes consécutives (``pnl_usd < 0``) sur LE MÊME contrat, les plus récentes
+    d'abord -- même patron que ``risk_guard.evaluate_portfolio_risk`` (portefeuille
+    entier), scopé à un seul contrat via ``list_positions_for_contract`` (déjà
+    insensible à la casse, aucune requête dupliquée). S'arrête au premier gain
+    rencontré (une perte suivie d'un gain remet le compteur à zéro) -- ``pnl_usd``
+    inclut déjà les prises de profit partielles (cf. ``close_position``), jamais une
+    métrique séparée à maintenir."""
+    positions = await list_positions_for_contract(contract, limit=limit)
+    streak = 0
+    for p in positions:
+        if p["status"] != "closed":
+            continue
+        if (p.get("pnl_usd") or 0.0) < 0:
+            streak += 1
+        else:
+            break
+    return streak
+
+
 async def cash_available() -> float:
     """Cash = capital de départ − coût des positions ouvertes + P&L réalisé des clôturées
     + P&L réalisé des prises de profit PARTIELLES sur des positions encore ouvertes (le
@@ -1027,13 +1100,28 @@ async def _update_high_water(
         await db.commit()
 
 
+async def _update_breakeven_pending(position_id: int, pending_since: str | None) -> None:
+    """Persiste la candidature de verrouillage du point mort (cf. ``_advance_breakeven_
+    pending``) -- ``None`` efface toute candidature en cours (prix retombé sous le
+    seuil flash avant confirmation)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE paper_position SET breakeven_pending_since = ? WHERE id = ?",
+            (pending_since, position_id),
+        )
+        await db.commit()
+
+
 async def _lock_breakeven_floor(position_id: int) -> None:
     """Verrouille le point mort (Breakeven Hard Floor, cf. ``_breakeven_floor_
     threshold``) -- irrévocable, jamais réinitialisé ailleurs (aucune fonction
-    UPDATE ne remet ``breakeven_locked`` à 0)."""
+    UPDATE ne remet ``breakeven_locked`` à 0). Efface aussi la candidature en attente
+    (devenue sans objet une fois le verrou définitif posé)."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE paper_position SET breakeven_locked = 1 WHERE id = ?", (position_id,),
+            "UPDATE paper_position SET breakeven_locked = 1, breakeven_pending_since = NULL "
+            "WHERE id = ?",
+            (position_id,),
         )
         await db.commit()
 
@@ -1825,17 +1913,23 @@ async def _run_paper_cycle_locked(
             ):
                 await _update_high_water(p["id"], high_water, pending_hw, pending_since)
 
-            # 20/07 -- Breakeven Hard Floor (cf. constantes/docstring ci-dessus) : lit le
-            # prix INSTANTANÉ de ce cycle (pas high_water, qui peut encore être en attente
-            # de confirmation) -- un seul cycle où le prix touche le seuil flash suffit à
-            # verrouiller, indépendamment du sort de la candidature high_water en cours.
+            # 20/07 -- Breakeven Hard Floor, confirmation temporelle (cf.
+            # _advance_breakeven_pending ci-dessus -- corrige l'asymétrie relevée par une
+            # revue croisée externe : verrouillage sur une lecture instantanée, sans la
+            # confirmation que le ratchet high_water applique déjà).
             entry_price = p["entry_price"]
             flash_threshold = _breakeven_floor_threshold(p.get("target_price"), entry_price)
             breakeven_locked = bool(p.get("breakeven_locked"))
             if not breakeven_locked and entry_price and flash_threshold is not None:
-                if price >= entry_price * (1.0 + flash_threshold):
+                prev_be_pending = p.get("breakeven_pending_since")
+                new_be_pending, be_confirmed = _advance_breakeven_pending(
+                    prev_be_pending, price, entry_price, flash_threshold, datetime.now(timezone.utc),
+                )
+                if be_confirmed:
                     breakeven_locked = True
                     await _lock_breakeven_floor(p["id"])
+                elif new_be_pending != prev_be_pending:
+                    await _update_breakeven_pending(p["id"], new_be_pending)
 
             trailing_stop = high_water * (1 - trail_pct)
             invalidation = p.get("invalidation_price")
@@ -2150,6 +2244,21 @@ async def _run_paper_cycle_locked(
             await counterfactual_tracker.record_rejection(
                 contract, sig.get("chain") or "base", sig.get("symbol", ""),
                 reason_code, sig.get("price"),
+            )
+            continue
+
+        # 20/07 -- garde chirurgicale AVANT la note informative de re-entrée ci-dessous :
+        # au-delà de MAX_CONSECUTIVE_LOSSES_PER_CONTRACT pertes d'affilée sur CE contrat
+        # précis, la re-entrée assouplie du 19/07 est suspendue pour lui (jamais pour un
+        # autre token, jamais le coupe-circuit global de risk_guard).
+        loss_streak = await _consecutive_losses_for_contract(contract)
+        if loss_streak >= MAX_CONSECUTIVE_LOSSES_PER_CONTRACT:
+            funnel["contract_loss_streak"] = funnel.get("contract_loss_streak", 0) + 1
+            from aria_core import counterfactual_tracker
+
+            await counterfactual_tracker.record_rejection(
+                contract, sig.get("chain") or "base", sig.get("symbol", ""),
+                "contract_loss_streak", sig.get("price"),
             )
             continue
 

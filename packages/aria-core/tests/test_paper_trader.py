@@ -49,6 +49,27 @@ async def _backdate_pending_since(contract: str, seconds: float) -> None:
         )
         await db.commit()
 
+
+async def _backdate_breakeven_pending(contract: str, seconds: float) -> None:
+    """Recule ``breakeven_pending_since`` de ``seconds`` -- même patron que
+    ``_backdate_pending_since`` ci-dessus, pour la confirmation temporelle du
+    Breakeven Hard Floor (20/07, revue croisée externe)."""
+    import aiosqlite
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT breakeven_pending_since FROM paper_position WHERE contract = ?", (contract,)
+            )
+        ).fetchone()
+        assert row and row[0], "aucune candidature breakeven_pending_since à reculer"
+        backdated = datetime.fromisoformat(row[0]) - timedelta(seconds=seconds)
+        await db.execute(
+            "UPDATE paper_position SET breakeven_pending_since = ? WHERE contract = ?",
+            (backdated.isoformat(), contract),
+        )
+        await db.commit()
+
 A = "0x" + "a" * 40
 B = "0x" + "b" * 40
 C = "0x" + "c" * 40
@@ -346,6 +367,128 @@ async def test_first_entry_unaffected_by_reentry_gate(tmp_db):
         candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
     )
     assert len(act["opened"]) == 1
+
+
+# ── compteur de pertes consécutives par contrat (20/07, revue croisée externe --
+# angle mort réel dans le garde-fou de re-entrée assoupli ci-dessus : rien n'empêchait
+# une boucle perte->rachat->perte sur LE MÊME contrat, exactement le motif de
+# l'incident BRIAN) ──────────────────────────────────────────────────────────────────
+
+class TestConsecutiveLossesForContract:
+    """Tests unitaires purs -- même patron que risk_guard.evaluate_portfolio_risk
+    (portefeuille entier), scopé à un seul contrat."""
+
+    @pytest.mark.asyncio
+    async def test_no_positions_zero_streak(self, tmp_db):
+        await pt.reset_portfolio(1_000_000.0)
+        assert await pt._consecutive_losses_for_contract(A) == 0
+
+    @pytest.mark.asyncio
+    async def test_two_losses_in_a_row(self, tmp_db):
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+        await pt.close_position(A, 0.8, reason="stop suiveur")
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+        await pt.close_position(A, 0.6, reason="stop suiveur")
+        assert await pt._consecutive_losses_for_contract(A) == 2
+
+    @pytest.mark.asyncio
+    async def test_win_resets_streak_to_zero(self, tmp_db):
+        """Perte, puis gain, puis perte -- le compteur s'arrête au gain le plus
+        récent (une seule perte comptée, pas deux)."""
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+        await pt.close_position(A, 0.8, reason="stop suiveur")  # perte
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+        await pt.close_position(A, 1.2, reason="cible")  # gain -- remet à zéro
+        await pt.open_position(A, "AAA", 1.2, alloc_usd=50_000)
+        await pt.close_position(A, 1.0, reason="stop suiveur")  # perte
+        assert await pt._consecutive_losses_for_contract(A) == 1
+
+    @pytest.mark.asyncio
+    async def test_open_position_ignored_never_counted(self, tmp_db):
+        """Une position encore OUVERTE n'a pas de pnl_usd définitif -- ignorée par le
+        compteur (robuste même appelée avant le has_open() du chemin normal)."""
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+        await pt.close_position(A, 0.8, reason="stop suiveur")
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)  # encore ouverte
+        assert await pt._consecutive_losses_for_contract(A) == 1
+
+
+@pytest.mark.asyncio
+async def test_reentry_blocked_after_max_consecutive_losses_on_same_contract(tmp_db):
+    """20/07 -- exactement le motif de l'incident BRIAN (17/07, rachetée 2 fois de
+    suite après deux stop suiveur, -18 561$ cumulés) : au-delà de
+    MAX_CONSECUTIVE_LOSSES_PER_CONTRACT pertes d'affilée sur CE contrat, un nouveau
+    signal BUY par ailleurs valide est rejeté."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.close_position(A, 0.8, reason="stop suiveur")
+    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+    await pt.close_position(A, 0.6, reason="stop suiveur")
+
+    async def normal_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 0.7, "rr": 2.5, "align_score": 3}
+
+    async def price_lookup(contract):
+        return 0.7
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert act["opened"] == []
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_reentry_allowed_again_after_a_win_breaks_the_streak(tmp_db):
+    """Non-régression : un gain entre deux pertes remet le compteur à zéro -- la
+    garde ne se déclenche pas si la dernière perte est isolée."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.close_position(A, 0.8, reason="stop suiveur")  # perte
+    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+    await pt.close_position(A, 1.2, reason="cible")  # gain -- casse la série
+    await pt.open_position(A, "AAA", 1.2, alloc_usd=50_000)
+    await pt.close_position(A, 1.0, reason="stop suiveur")  # perte isolée (1 seule)
+
+    async def normal_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 1.0, "rr": 2.5, "align_score": 3}
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert len(act["opened"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_loss_streak_gate_scoped_to_one_contract_only(tmp_db):
+    """Chirurgical : le blocage de A (2 pertes d'affilée) ne doit jamais affecter B,
+    un contrat totalement différent, jamais touché."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.close_position(A, 0.8, reason="stop suiveur")
+    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+    await pt.close_position(A, 0.6, reason="stop suiveur")
+
+    async def both_signals(contract):
+        if contract == A:
+            return {"action": "BUY", "symbol": "AAA", "price": 0.7, "rr": 2.5, "align_score": 3}
+        return {"action": "BUY", "symbol": "BBB", "price": 1.0, "rr": 2.5, "align_score": 3}
+
+    async def price_lookup(contract):
+        return 0.7 if contract == A else 1.0
+
+    act = await pt.run_paper_cycle(
+        candidates=[A, B], analyzer=both_signals, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert [o["contract"] for o in act["opened"]] == [B]
+    assert not await pt.has_open(A)
+    assert await pt.has_open(B)
 
 
 @pytest.mark.asyncio
@@ -666,27 +809,70 @@ def test_breakeven_floor_threshold_none_without_entry_price():
 
 
 @pytest.mark.asyncio
-async def test_breakeven_floor_locks_on_flash_touch_and_protects_against_deeper_crash(tmp_db):
-    """Cas central (Gemini, Point 2, Piste B) : un pump-puis-dump rapide qui retombe
-    AVANT la confirmation temporelle du plus-haut (75s) n'aurait laissé AUCUNE trace
-    dans high_water_price (cf. test_wick_never_ratchets_the_confirmed_high_water) --
-    le stop suiveur serait resté calé sur l'entrée -0.85 (-15%). Le point mort
-    verrouillé protège malgré tout : une fois le seuil flash touché, même un seul
-    cycle, un crash qui suit ne peut plus faire perdre plus que ~le prix d'entrée."""
+async def test_breakeven_floor_single_touch_starts_candidacy_not_yet_locked(tmp_db):
+    """20/07 -- confirmation temporelle (revue croisée externe, corrige l'asymétrie
+    face au ratchet high_water) : une SEULE lecture qui touche le seuil flash démarre
+    seulement la candidature, ne verrouille plus l'instant d'après."""
     await pt.reset_portfolio(1_000_000.0)
     # TP1 = +40% -> seuil flash = 50%*40% = +20% (prix 1.20), au-dessus du plancher 8%.
     await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
 
-    prices = {"v": 1.25}  # touche le seuil flash (+20%), mèche isolée -- jamais confirmée
+    prices = {"v": 1.25}  # touche le seuil flash (+20%)
 
     async def price_lookup(contract):
         return prices["v"]
 
     act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
-    assert act["closed"] == []  # 1.25 > tout stop actif ce cycle, position reste ouverte
+    assert act["closed"] == []
+    pos = await pt._get_open(D)
+    assert pos["breakeven_locked"] == 0  # pas encore -- candidature seulement
+    assert pos["breakeven_pending_since"] is not None
+
+
+@pytest.mark.asyncio
+async def test_breakeven_floor_resets_if_price_drops_before_confirmation(tmp_db):
+    """20/07 -- exactement le scénario que la revue croisée visait à corriger : un
+    pump-puis-dump rapide qui retombe AVANT la confirmation ne doit PLUS verrouiller
+    le point mort (candidature abandonnée, preuve qu'elle n'était pas soutenue)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+
+    prices = {"v": 1.25}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["breakeven_pending_since"] is not None
+
+    prices["v"] = 1.05  # retombé sous le seuil flash (+20%), AVANT confirmation
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["breakeven_locked"] == 0
+    assert pos["breakeven_pending_since"] is None  # candidature abandonnée
+
+
+@pytest.mark.asyncio
+async def test_breakeven_floor_locks_after_sustained_touch_and_protects_against_deeper_crash(tmp_db):
+    """Cas central (Gemini, Point 2, Piste B), version confirmée (20/07) : une fois le
+    seuil flash tenu au moins HIGH_WATER_CONFIRMATION_SECONDS, le point mort se
+    verrouille pour de bon et protège malgré un crash qui suit."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+
+    prices = {"v": 1.25}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    await _backdate_breakeven_pending(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
     pos = await pt._get_open(D)
     assert pos["breakeven_locked"] == 1
-    assert pos["high_water_price"] == pytest.approx(1.0)  # jamais confirmé (comme la mèche)
+    assert pos["breakeven_pending_since"] is None  # effacée une fois verrouillée
 
     prices["v"] = 0.95  # crash -- SOUS le point mort (1.0), au-dessus de l'ancien stop (0.85)
     act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
@@ -737,12 +923,17 @@ async def test_breakeven_floor_does_not_override_a_higher_trailing_stop(tmp_db):
 
     await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     pos = await pt._get_open(D)
-    assert pos["breakeven_locked"] == 1
+    assert pos["breakeven_locked"] == 0  # candidature seulement (20/07, confirmation temporelle)
 
+    # Recule les DEUX candidatures (high_water ET breakeven) démarrées par le cycle
+    # ci-dessus -- même durée de confirmation, aucune raison de les décaler l'une de
+    # l'autre pour ce test.
     await _backdate_pending_since(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    await _backdate_breakeven_pending(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
     await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     pos = await pt._get_open(D)
     assert pos["high_water_price"] == pytest.approx(1.30)  # confirmé
+    assert pos["breakeven_locked"] == 1  # confirmé aussi
 
     # Stop suiveur = 1.30*0.85 = 1.105, déjà au-dessus du point mort (1.0) -- un repli
     # à 1.10 doit déclencher le STOP SUIVEUR, jamais le point mort verrouillé.
@@ -765,6 +956,8 @@ async def test_breakeven_floor_stays_locked_across_multiple_cycles(tmp_db):
     async def price_lookup(contract):
         return prices["v"]
 
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    await _backdate_breakeven_pending(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
     await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     pos = await pt._get_open(D)
     assert pos["breakeven_locked"] == 1

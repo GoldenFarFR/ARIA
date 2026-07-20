@@ -63,6 +63,16 @@ def _reset_provider_circuit_breaker():
     me._provider_cooldown_until.clear()
 
 
+@pytest.fixture(autouse=True)
+def _reset_wash_trading_confirmation():
+    """20/07 -- même piège que ``_reset_provider_circuit_breaker`` ci-dessus :
+    ``_ratio_breach_since`` est un dict module-level, une candidature laissée par un
+    test pourrait polluer le suivant."""
+    me._ratio_breach_since.clear()
+    yield
+    me._ratio_breach_since.clear()
+
+
 # ── discover_momentum_candidates ───────────────────────────────────────────────────
 
 @dataclass
@@ -1661,12 +1671,74 @@ async def test_evaluate_rejects_blacklisted_contract_before_any_network_call(mon
 async def test_evaluate_rejects_extreme_volume_to_liquidity_ratio(monkeypatch):
     """Cas réel du 17/07 : BRIAN passait le honeypot GoPlus (technique "propre")
     mais affichait ~91x volume/liquidité (wash-trading) -- ce garde-fou l'aurait
-    rejeté avant même le calcul R/R, sans perte."""
+    rejeté avant même le calcul R/R, sans perte.
+
+    20/07 -- confirmation temporelle ajoutée (revue croisée externe) : la 1ère
+    lecture démarre seulement la candidature, ne rejette plus sur l'instant --
+    backdate la candidature pour simuler la fenêtre de confirmation écoulée, comme
+    le patron déjà établi pour le coupe-circuit fournisseur."""
     _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=372_766.0, volume_24h_usd=33_859_669.0)])
+    first = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert first.get("hold_reason") != "wash_trading_ratio"
+
+    me._ratio_breach_since[(CONTRACT, "base")] -= (me._WASH_TRADING_CONFIRMATION_SECONDS + 1)
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert result["hold_reason"] == "wash_trading_ratio"
     assert "wash-trading" in result["reasons"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_wash_trading_ratio_not_rejected_on_single_reading(monkeypatch):
+    """20/07 -- correctif direct du point relevé par la revue croisée externe : un
+    token en pleine actualité légitime (listing CEX, annonce) peut dépasser le ratio
+    UNE fois sans être du wash-trading -- la première lecture ne doit jamais rejeter
+    seule."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=372_766.0, volume_24h_usd=33_859_669.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "wash_trading_ratio"
+    assert (CONTRACT, "base") in me._ratio_breach_since  # candidature bien démarrée
+
+
+@pytest.mark.asyncio
+async def test_evaluate_wash_trading_ratio_resets_below_threshold(monkeypatch):
+    """20/07 -- une candidature en cours doit être abandonnée si une lecture
+    ultérieure repasse sous le seuil (preuve que la dérive n'était pas soutenue),
+    même après plusieurs lectures au-dessus."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=372_766.0, volume_24h_usd=33_859_669.0)])
+    await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert (CONTRACT, "base") in me._ratio_breach_since
+
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=150_000.0, volume_24h_usd=1_200_000.0)])  # 8x, sain
+    await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert (CONTRACT, "base") not in me._ratio_breach_since
+
+
+class TestWashTradingRatioConfirmed:
+    """Tests unitaires purs de ``_wash_trading_ratio_confirmed`` -- pas besoin de
+    passer par tout le pipeline pour vérifier la mécanique de confirmation elle-même."""
+
+    def test_below_threshold_never_confirmed(self):
+        assert me._wash_trading_ratio_confirmed(CONTRACT, "base", 5.0) is False
+        assert (CONTRACT, "base") not in me._ratio_breach_since
+
+    def test_first_breach_starts_candidacy_not_confirmed(self):
+        assert me._wash_trading_ratio_confirmed(CONTRACT, "base", 25.0) is False
+        assert (CONTRACT, "base") in me._ratio_breach_since
+
+    def test_confirmed_after_window_elapsed(self):
+        me._wash_trading_ratio_confirmed(CONTRACT, "base", 25.0)
+        me._ratio_breach_since[(CONTRACT, "base")] -= (me._WASH_TRADING_CONFIRMATION_SECONDS + 1)
+        assert me._wash_trading_ratio_confirmed(CONTRACT, "base", 25.0) is True
+
+    def test_not_yet_confirmed_before_window_elapsed(self):
+        me._wash_trading_ratio_confirmed(CONTRACT, "base", 25.0)
+        me._ratio_breach_since[(CONTRACT, "base")] -= (me._WASH_TRADING_CONFIRMATION_SECONDS - 10)
+        assert me._wash_trading_ratio_confirmed(CONTRACT, "base", 25.0) is False
+
+    def test_distinct_chains_never_share_state(self):
+        me._wash_trading_ratio_confirmed(CONTRACT, "base", 25.0)
+        assert (CONTRACT, "solana") not in me._ratio_breach_since
 
 
 @pytest.mark.asyncio

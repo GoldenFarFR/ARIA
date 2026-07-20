@@ -656,6 +656,38 @@ def _record_provider_outcome(name: str, *, ok: bool) -> None:
         )
 
 
+# 20/07 -- revue croisée externe : le ratio volume/liquidité (garde wash-trading,
+# MAX_VOLUME_TO_LIQUIDITY_RATIO ci-dessous) rejetait sur UNE SEULE lecture instantanée --
+# un token légitimement en pleine actualité (listing CEX, annonce) pouvait dépasser le
+# seuil une heure sans être du wash-trading, et se faire rejeter sur ce seul instant.
+# Même mécanique de confirmation temporelle que ``paper_trader.HIGH_WATER_CONFIRMATION_
+# SECONDS``/``_advance_high_water`` (même valeur, même philosophie "un vrai mouvement
+# dure, une mèche non") -- pas réutilisée par import direct (paper_trader.py importe
+# DÉJÀ depuis ce module, l'inverse créerait un risque d'import circulaire pour une
+# simple constante), une copie locale documentée suffit. État en mémoire process
+# (comme le coupe-circuit fournisseur ci-dessus) -- perdre l'état à un redémarrage ne
+# fausse rien vers le fail-safe (repart juste une confirmation à zéro, jamais l'inverse).
+_WASH_TRADING_CONFIRMATION_SECONDS = 75.0
+_ratio_breach_since: dict[tuple[str, str], float] = {}
+
+
+def _wash_trading_ratio_confirmed(contract: str, chain: str, volume_to_liq: float) -> bool:
+    """``True`` si le ratio volume/liquidité dépasse le seuil de façon SOUTENUE (au
+    moins ``_WASH_TRADING_CONFIRMATION_SECONDS``), pas juste sur cette lecture. Repart
+    de zéro dès qu'une lecture repasse sous le seuil (preuve que la dérive n'était pas
+    soutenue) -- clé ``(contract, chain)`` pour ne jamais confondre deux chaînes."""
+    key = (contract, chain)
+    if volume_to_liq <= MAX_VOLUME_TO_LIQUIDITY_RATIO:
+        _ratio_breach_since.pop(key, None)
+        return False
+    now = time.monotonic()
+    breach_since = _ratio_breach_since.get(key)
+    if breach_since is None:
+        _ratio_breach_since[key] = now
+        return False
+    return (now - breach_since) >= _WASH_TRADING_CONFIRMATION_SECONDS
+
+
 async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None) -> list[Candle]:
     """OHLCV en cascade à CINQ étages (16/07, demande opérateur explicite :
     "je veux que tout soit branché même s'ils font la même chose, une
@@ -1292,13 +1324,18 @@ async def evaluate_momentum_entry(
 
     if best.liquidity_usd and best.liquidity_usd > 0:
         volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
-        if volume_to_liq > MAX_VOLUME_TO_LIQUIDITY_RATIO:
+        # Appelée à CHAQUE lecture (pas seulement quand volume_to_liq dépasse le seuil) --
+        # la fonction doit voir une lecture SAINE pour réinitialiser une candidature en
+        # cours (cf. son propre "if volume_to_liq <= MAX_VOLUME_TO_LIQUIDITY_RATIO").
+        # Un ``and`` court-circuitant ici rendrait cette branche de reset inatteignable.
+        if _wash_trading_ratio_confirmed(contract, chain, volume_to_liq):
             return {
                 "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
                 "price": best.price_usd,
                 "reasons": [
-                    f"volume 24h/liquidité extrême ({volume_to_liq:.0f}x > "
-                    f"{MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x) -- signal de wash-trading"
+                    f"volume 24h/liquidité extrême et SOUTENU ({volume_to_liq:.0f}x > "
+                    f"{MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x depuis "
+                    f"≥{_WASH_TRADING_CONFIRMATION_SECONDS:.0f}s) -- signal de wash-trading"
                 ],
                 "hold_reason": "wash_trading_ratio",
             }
