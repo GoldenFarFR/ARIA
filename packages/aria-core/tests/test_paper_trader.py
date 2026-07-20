@@ -1457,6 +1457,63 @@ async def test_run_cycle_tight_atr_stop_is_capped_at_the_historical_ceiling(tmp_
 
 
 @pytest.mark.asyncio
+async def test_run_cycle_moderate_tier_tight_atr_capped_at_moderate_ceiling_not_strong(tmp_db, monkeypatch):
+    """20/07 (suite) -- bug réel trouvé en répondant à une question opérateur : le
+    ceiling utilisait TOUJOURS le plafond FORT (5%), quel que soit le palier réel du
+    signal. Un stop serré sur un signal MODÉRÉ (R/R=2.0) doit être plafonné à 3.5%
+    (35 000$), jamais remonter jusqu'à 5% (50 000$, le plafond du palier FORT) --
+    sinon un signal moins convaincant peut recevoir la même mise qu'un signal plus
+    fort, inversant l'intention des paliers de conviction."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 2.0, "align_score": 3,
+            "entry_atr_pct": 0.01,  # -> trail_pct clampé au plancher ATR (5%)
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    assert round(act["opened"][0]["cost_usd"]) == 35_000  # plafond MODÉRÉ, jamais 50 000$
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_weak_tier_tight_atr_capped_at_weak_ceiling_not_strong(tmp_db, monkeypatch):
+    """20/07 (suite) -- même bug, palier FAIBLE (R/R=1.0). Un stop serré ne doit
+    jamais laisser un signal FAIBLE atteindre 5% (le plafond du palier FORT) -- doit
+    rester plafonné à 2% (20 000$)."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 1.0, "align_score": 1,
+            "entry_atr_pct": 0.01,  # -> trail_pct clampé au plancher ATR (5%)
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    assert round(act["opened"][0]["cost_usd"]) == 20_000  # plafond FAIBLE, jamais 50 000$
+
+
+@pytest.mark.asyncio
 async def test_run_cycle_weak_fundamental_downgrades_strong_tier_to_moderate(tmp_db, monkeypatch):
     """19/07 -- même setup technique fort que test_run_cycle_sizes_strong_conviction_
     signal_at_hard_cap, mais avec un potential_score CONFIRMÉ faible

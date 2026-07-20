@@ -1739,14 +1739,27 @@ async def _run_paper_cycle_locked(
         # conviction (``conviction_risk_budget_pct``) est divisé par la largeur RÉELLE
         # du stop suiveur pour CE token (même fonction ``_effective_trail_pct`` que la
         # gestion de position -- jamais une largeur recalculée séparément, qui
-        # pourrait diverger). Plafonné au même maximum absolu que l'ancien système
-        # (``MAX_ALLOC_MULTIPLIER`` * ``ALLOC_PCT``, 5 %) -- ce mécanisme ne fait
-        # jamais grossir une position au-delà de ce plafond historique, il la réduit
-        # sur les setups à stop large. Repli sur l'ancien système à paliers fixes
+        # pourrait diverger). Repli sur l'ancien système à paliers fixes
         # (``conviction_size_multiplier``) si ``entry_atr_pct`` est inconnu (analyzer
         # qui ne le fournit pas, ex. l'ancien pilote VC-thesis dormant) -- jamais un
         # budget de risque calculé sur une largeur de stop inventée.
+        #
+        # 20/07 (suite, bug réel trouvé en répondant à une question opérateur sur la
+        # proportionnalité à la market cap) : le plafond ne doit PAS être le maximum
+        # absolu (5 %) pour TOUS les paliers -- un ceiling partagé laissait un signal
+        # MODÉRÉ ou FAIBLE sur un stop serré atteindre la même mise qu'un signal FORT
+        # (dès que le stop tombe sous ~20 %/10 % respectivement), inversant l'intention
+        # même des paliers de conviction. Le plafond de CHAQUE palier doit rester celui
+        # de l'ancien système à paliers fixes (5 %/3.5 %/2 %) -- ``conviction_mult``
+        # calculé une seule fois ci-dessous et réutilisé pour les DEUX chemins (plafond
+        # du sizing par risque/ATR, ET multiplicateur direct du repli) garantit que le
+        # nouveau système ne peut jamais dépasser ce que l'ancien aurait donné pour ce
+        # MÊME palier -- seulement réduire en dessous, jamais égaliser vers le haut.
         risk_budget_pct = risk_guard.conviction_risk_budget_pct(
+            sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+            volume_confirmed=sig.get("volume_confirmed"),
+        )
+        conviction_mult = risk_guard.conviction_size_multiplier(
             sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
             volume_confirmed=sig.get("volume_confirmed"),
         )
@@ -1755,13 +1768,9 @@ async def _run_paper_cycle_locked(
             trail_pct = _effective_trail_pct(entry_atr_pct)
             base_alloc_usd = risk_guard.size_by_risk_budget(
                 risk_budget_pct, trail_pct, start,
-                ceiling_usd=risk_guard.MAX_ALLOC_MULTIPLIER * ALLOC_PCT * start,
+                ceiling_usd=conviction_mult * ALLOC_PCT * start,
             )
         else:
-            conviction_mult = risk_guard.conviction_size_multiplier(
-                sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
-                volume_confirmed=sig.get("volume_confirmed"),
-            )
             base_alloc_usd = ALLOC_PCT * start * conviction_mult
         # 18/07 (suite, "frein à main" validé après revue) -- une fois l'objectif hebdo
         # déjà atteint, réduit de moitié les NOUVELLES entrées (jamais à zéro) : protège
