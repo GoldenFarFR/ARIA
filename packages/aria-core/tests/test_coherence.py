@@ -609,6 +609,7 @@ _EXTERNAL_WRITE_ALLOWLIST = {
     "skills/github_skill.py",
     "skills/telegram_conversation_miner.py",
     "skills/pump_dump_autopsy.py",
+    "skills/aria_brain.py",
     "skills/code_proposal.py",
     "skills/ux_watch.py",
     "truth_ledger/sync.py",

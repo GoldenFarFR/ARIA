@@ -267,6 +267,10 @@ class Settings(BaseSettings):
     github_owner: str = "GoldenFarFR"
     github_sandbox_repo: str = "aria-sandbox"
     github_token_repo: str = ""  # optional dedicated token R&D repo (was aria-token-base)
+    # Dedicated token, distinct from github_token (scoped to ARIA only) -- "aria-brain"
+    # repo (ARIA's own free-write memory, self-managed, 20/07): never the same credential
+    # that touches trading code, structurally isolated.
+    aria_brain_github_token: str = ""
     github_read_repos: str = ""  # comma-separated owner/repo, or * for unlimited read
     github_write_repos: str = ""  # comma-separated owner/repo, or * for unlimited write
     github_excluded_repos: str = ""  # repo names Aria must not touch via GitHub API

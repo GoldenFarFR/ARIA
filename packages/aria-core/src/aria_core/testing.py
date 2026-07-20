@@ -140,6 +140,10 @@ class AriaRuntimeSettings(BaseSettings):
     github_owner: str = "GoldenFarFR"
     github_sandbox_repo: str = "aria-sandbox"
     github_token_repo: str = ""
+    # Token dédié, distinct de github_token (scopé ARIA uniquement) -- repo "aria-brain"
+    # (mémoire libre d'ARIA, auto-gérée, 20/07) : jamais le même credential que celui qui
+    # touche le code de trading, structurellement isolé.
+    aria_brain_github_token: str = ""
     github_read_repos: str = ""
     github_write_repos: str = ""
     github_excluded_repos: str = ""

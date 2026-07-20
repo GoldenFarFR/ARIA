@@ -348,6 +348,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="aria_brain_cycle",
+        name="Memoire libre (aria-brain)",
+        description="Ecrit librement dans son propre repo GitHub prive (GoldenFarFR/aria-brain, token dedie, jamais celui qui touche ARIA) -- aucun format impose, aucune approbation humaine par entree, decision operateur explicite (20/07). Commit direct, jamais une proposition d'issue. Gate OFF par defaut.",
+        interval_minutes=240,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="ux_watch_cycle",
         name="Veille UX visuelle du site",
         description="Capture le site reel (Playwright, desktop+mobile) et le lit visuellement (llm_vision.vision_analyze, brique deja cablee pour l'avatar -- pas ARIA_VISION_ENABLED, gate propre a la fonctionnalite photo Telegram admin-only, sans rapport). Compare au referentiel UX gamme luxe (CLAUDE.md, Normes permanentes). PROPOSE des micro-details concrets via ISSUE GitHub (aria-ux-proposal) -- jamais une refonte, jamais un changement de code direct, jamais un commit ni une fusion autonome. Un cycle par jour maximum. Gate OFF par defaut.",
@@ -572,6 +579,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.truth_ledger.canonical import canonical_facts_sync_enabled
 
                 task.enabled = canonical_facts_sync_enabled()
+            if task.id == "aria_brain_cycle":
+                from aria_core.skills.aria_brain import aria_brain_enabled
+
+                task.enabled = aria_brain_enabled()
             if task.id == "counterfactual_revisit_cycle":
                 from aria_core.counterfactual_tracker import counterfactual_tracker_enabled
 
@@ -1209,6 +1220,19 @@ class AriaHeartbeat:
                     "pump_dump_autopsy",
                     f"[autopsie] {result['autopsied']} cas sur {result.get('checked', 0)} clotures verifiees",
                 )
+
+        elif task_id == "aria_brain_cycle":
+            from aria_core.skills.aria_brain import format_brain_alert, run_aria_brain_cycle
+
+            result = await run_aria_brain_cycle()
+            if result.get("outcome") == "written":
+                append_memory(
+                    "aria_brain",
+                    f"[cerveau libre] écrit -- {result.get('path', '?')}",
+                )
+                alert = format_brain_alert(result)
+                if alert:
+                    await self._notify_telegram(alert)
 
         elif task_id == "market_sentiment_cycle":
             from aria_core.skills.market_sentiment import run_market_sentiment_cycle
