@@ -2751,6 +2751,29 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   non-régression momentum croisée). Suite complète verte (6358 passed, mêmes
   7 échecs pré-existants `test_proactive*` sans rapport #142), `test_coherence.py`
   vert (81 passed).
+- **20/07 (suite) — #175 (slippage simulé) tranché et livré, DÉPLOYÉ (commit
+  `2927e50edb9a`).** `risk_guard.cap_alloc_to_price_impact` dégradait déjà un
+  `degraded_entry` en interne pour DIMENSIONNER la position, mais ne le
+  retournait jamais — la position se remplissait ensuite au prix spot EXACT
+  coté, jamais le prix réellement "payé". Nouveau `risk_guard.
+  simulated_fill_price()` (même modèle d'impact, factorisé via
+  `_price_impact_pct` — jamais un second calcul divergent), appelé dans
+  `paper_trader.open_position` sur l'alloc FINALE (après risque/impact/
+  concentration), juste avant de persister `entry_price`/calculer `qty` —
+  `target_price`/`invalidation_price` restent inchangés (niveaux techniques
+  externes, notre ordre ne déplace pas le support/la résistance). **4 tests
+  vc_thesis (Take Seed) cassés en écrivant les tests d'intégration, corrigés**
+  — leur fixture `alloc_usd=50_000`/`pool_liquidity_usd=200_000.0` (ratio 25%
+  du pool, choisi comme chiffre rond pour tester le seuil de liquidité,
+  jamais pensé pour un ratio réaliste) produisait un impact de prix énorme
+  (50%) qui décalait `entry_price` loin de `1.0` et cassait le seuil
+  "exactement 2x" testé — `pool_liquidity_usd` retiré de ces 4 tests (isolent
+  le comportement Take Seed lui-même, pas le fill-price, même patron que le
+  fix #174 sur `size_position_by_risk`). Suite complète verte (6367 passed,
+  mêmes 7 échecs pré-existants sans rapport #142), `test_coherence.py` vert
+  (81 passed). **Les 4 items du plan initial sont désormais tous traités** :
+  reset hebdo (#173) → sizing Formule B (#174) → slippage simulé (#175) →
+  apprentissage (régime + contrefactuel, prochain).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4470,7 +4493,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **Direct, problème → solution (consigne opérateur explicite, 16/07)** : annoncer le problème puis la solution/action directement, sans argumenter ni justifier en détail par défaut. Toujours proposer ensuite à l'opérateur s'il veut plus de détail (raisonnement, alternatives écartées, preuves) plutôt que de les dérouler d'office.
 **Réponse type « la thèse sur l'achat » (consigne opérateur explicite, 19/07 ; précisée 20/07)** : quand l'opérateur demande « la thèse sur l'achat » (ou une formulation proche : « renvoie la thèse », « explique le processus d'achat ») SANS nommer un contrat précis ET SANS préciser VC, répondre avec EXACTEMENT le processus détaillé de la section « Processus d'achat momentum — réponse de référence » ci-dessous (c'est le pipeline qui tourne réellement sur le test 1M$ en cours). Si l'opérateur demande spécifiquement « la thèse VC »/« la thèse d'achat du VC »/une formulation équivalente, répondre avec EXACTEMENT la section « Thèse d'achat VC — réponse de référence » (plus bas, juste avant Formule B — son pendant sortie). Si l'opérateur nomme un contrat/token précis, donner plutôt SA thèse réelle (champ `thesis` en base, via `paper_trader.get_open_positions()`/`get_closed_positions()` ou l'historique `/feedback`), pas un processus général.
 
-## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `0470e62e`)
+## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `2927e50e`)
 **⚠️ Instantané daté du pipeline momentum (`momentum_entry.py` + `risk_guard.py` + `paper_trader.py`) — norme « vérifier avant d'affirmer » (Règles absolues) : si une session reprend ce fil après une évolution du pipeline, RECONFIRMER ce texte contre le code réel avant de le renvoyer tel quel plutôt que de le réciter de mémoire. Mettre à jour ce bloc DANS LE MÊME COMMIT que tout changement touchant l'ordre/les seuils du pipeline momentum, pour qu'il ne dérive jamais.**
 
 **1. Découverte** — Scan continu DexScreener (Base uniquement depuis le 20/07, décision opérateur — Ethereum natif + 1-2 chaînes de plus prévues plus tard, pas encore décidées) + flux WebSocket temps réel, en plus du scan classique toutes les 15 min.
@@ -4505,7 +4528,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - **Réduite de moitié en régime macro Peur confirmé** (Regime Switch, 20/07 — préserve le capital, composé avec les autres réducteurs ci-dessus)
 - Jamais plus de 40% du capital sur une même chaîne
 
-**9. Exécution** — Juste avant d'ouvrir la position, ARIA revérifie le prix en temps réel et recalcule le R/R à ce prix frais (sur les mêmes niveaux Fibonacci fixes établis à l'étape 3) — si le setup ne tient plus la barre qu'il avait initialement franchie (2.0 pour un achat direct, 1.0 pour un achat confirmé), l'achat est annulé (20/07, remplace un ancien seuil brut "prix pas trop bougé de 3%" qui aurait rejeté à tort un mouvement favorable). Une évolution de prix FAVORABLE (le token continue de monter) ne bloque donc jamais l'achat tant que le R/R structurel reste solide — seule une dégradation réelle du setup l'annule. Achat papier simulé, toute la thèse persistée (chaque signal, chaque vérification) — aucun argent réel.
+**9. Exécution** — Juste avant d'ouvrir la position, ARIA revérifie le prix en temps réel et recalcule le R/R à ce prix frais (sur les mêmes niveaux Fibonacci fixes établis à l'étape 3) — si le setup ne tient plus la barre qu'il avait initialement franchie (2.0 pour un achat direct, 1.0 pour un achat confirmé), l'achat est annulé (20/07, remplace un ancien seuil brut "prix pas trop bougé de 3%" qui aurait rejeté à tort un mouvement favorable). Une évolution de prix FAVORABLE (le token continue de monter) ne bloque donc jamais l'achat tant que le R/R structurel reste solide — seule une dégradation réelle du setup l'annule. Prix de remplissage simulé (#175, 20/07) : le prix réellement "payé" est dégradé par l'impact estimé de CET ordre sur CE pool précis (même modèle que le plafonnement de taille de l'étape 8 — un ordre qui pousse plus le prix reçoit moins de tokens pour le même montant), jamais le prix spot exact affiché avant impact. Achat papier simulé, toute la thèse persistée (chaque signal, chaque vérification) — aucun argent réel.
 
 **10. Gestion de la position** :
 - Re-scan de sécurité continu
