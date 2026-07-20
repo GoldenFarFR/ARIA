@@ -432,6 +432,36 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   session cloud après coup plutôt qu'en blocage avant écriture) ; déploiement groupé plutôt qu'un
   rebuild Docker par correctif. Productif : 3 correctifs réels livrés et déployés en un segment
   (#105/#108/#110) grâce à ce parallélisme.
+- **Convention `claude --worktree` + risque de contention de lock à isolation concurrente
+  (13/07, veille Research ; promu ici le 20/07 après triage de l'issue GitHub #30
+  `aria-knowledge-proposal` — rejetée pour `knowledge/*.yaml`/`canonical_facts.yaml` car ce
+  sont des fichiers qui façonnent ce qu'ARIA sait/fait au runtime, pas de la méthodologie de
+  session Claude Code ; pertinente ici comme complément direct de l'isolation par worktree
+  déjà actée juste au-dessus).** Convention officielle de la CLI
+  (`code.claude.com/docs/en/worktrees`) : `claude --worktree <nom>` crée automatiquement le
+  worktree sous `.claude/worktrees/<nom>/` à la racine du dépôt (branche `worktree-<nom>`) —
+  déjà le pattern utilisé par les sessions récentes (ex. celle-ci,
+  `.claude/worktrees/recursing-ramanujan-ee4dba`) et déjà exclu du suivi git
+  (`.gitignore:60`, vérifié — rien à changer ici). **Risque amont non résolu, documenté sur
+  `anthropics/claude-code#55724`** : chaque worktree a son propre index, mais certaines
+  opérations (mise à jour de refs, packing d'objets) touchent quand même le `.git/` partagé
+  du dépôt principal — à 5+ agents concurrents sur la même machine, contention intermittente
+  sur `.git/index.lock` (`fatal: Unable to create '.git/index.lock': File exists`), à 10+
+  échec quasi certain sur au moins un agent. **Le vrai danger n'est pas l'erreur elle-même
+  mais son mode d'échec silencieux** : si un `git commit` échoue sur ce lock et que l'agent
+  s'arrête sans avoir commité, un nettoyage automatique de worktree qui suit (comportement
+  natif Claude Code : un worktree sans changement non commité/fichier non suivi/nouveau
+  commit est supprimé automatiquement à la sortie de session — mais **pas** en session
+  non-interactive `-p`, le cas des sessions VPS, qui exige un nettoyage manuel
+  `git worktree remove`) peut détruire le travail non commité de façon permanente.
+  Correctifs (retry+backoff exponentiel, préserver le worktree si `git status --porcelain`
+  montre des changements avant tout nettoyage) proposés dans le ticket mais **non confirmés
+  livrés** au 13/07 — en attendant, **committer tôt et souvent dans chaque worktree**
+  plutôt que d'accumuler du travail non commité reste la seule protection fiable disponible
+  aujourd'hui contre cette classe de perte silencieuse, à réévaluer si ce ticket amont est
+  un jour marqué résolu. Détail complet (dont l'audit `git worktree list` qui a motivé cette
+  veille) :
+  `docs/aria-learning-inbox/2026-07-13-git-worktree-isolation-sessions-concurrentes.md`.
 - **Rôles VPS fixes + jamais d'inactivité (12/07, décision opérateur explicite).** Chaque VPS
   reste utilisé selon le rôle de sa création, jamais interchangé : **Principal/Secondaire =
   ouvriers** (exécutent réparations/améliorations concrètes sur le code réel, backlog numéroté) ;
