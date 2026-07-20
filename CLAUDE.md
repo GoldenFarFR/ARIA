@@ -2275,6 +2275,62 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   passed, mêmes 7 échecs pré-existants sans rapport #142, 0 régression),
   `test_coherence.py` vert (81 passed). Déployé et vérifié (commit `b50c686f77e9`
   confirmé servi par nginx).
+- **20/07 — revue croisée Gemini round 7 : verdict "go" opérateur explicite sur 2
+  points, "on garde tel quel" sur les 2 autres, DÉPLOYÉ (`d54c3513a235`).** Après
+  vérification systématique des 4 points (dont un test où l'opérateur a explicitement
+  vérifié ma rigueur -- "donc tu est daccord sans bronché ? ta verifier ?" -- avant
+  cette réponse), verdict tranché explicitement par l'opérateur :
+  1. **Anti-mèche : le plafond de vitesse (round 6) avait lui-même un défaut,
+     confirmé par simulation manuelle AVANT de coder** — brider l'AMPLEUR du saut de
+     `high_water` par cycle pénalise aussi bien une mèche qu'un vrai mouvement
+     parabolique légitime (une bougie de découverte de prix peut faire +50% en un
+     cycle). Remplacé par une confirmation TEMPORELLE (`_advance_high_water`) : un
+     nouveau plus-haut n'est ratché qu'après avoir tenu `HIGH_WATER_CONFIRMATION_
+     SECONDS` (75s — durée ABSOLUE, pas un nombre de cycles, puisque le heartbeat
+     (~15 min) et le WebSocket (~30s, #196) gèrent les mêmes positions à des cadences
+     totalement différentes). L'amplitude n'est plus jamais plafonnée — une fois
+     confirmé, le pic RÉEL de toute la fenêtre est ratché d'un coup, pas une
+     convergence progressive sur plusieurs cycles comme l'ancien clamp. Nouvelles
+     colonnes `pending_high_water`/`pending_high_water_since` (migration à chaud,
+     même patron `_ADDED_COLUMNS`/`_ARCHIVE_ADDED_COLUMNS` que `entry_atr_pct`).
+  2. **RVOL fail-open : confirmé correct, aucun changement.** Le raisonnement
+     (liquidité/volume 24h déjà validés par un gate DexScreener indépendant AVANT
+     d'atteindre le RVOL) a été jugé "irréprochable" par la revue -- le filet de
+     sécurité existe déjà, une panne ponctuelle de la cascade OHLCV ne doit pas
+     paralyser le sourcing.
+  3. **Sizing hybride risque-cible/ATR ("Ta proposition de composition est
+     brillante") : construit.** `risk_guard.conviction_risk_budget_pct` convertit les
+     paliers de conviction (5%/3.5%/2% du capital) en budgets de RISQUE
+     (1.5%/1%/0.5%), et `size_by_risk_budget` les divise par la largeur RÉELLE du
+     stop suiveur ATR (`_effective_trail_pct`, la MÊME fonction que la gestion de
+     position réelle -- jamais une largeur recalculée séparément qui pourrait
+     diverger) pour obtenir l'allocation $ -- un stop large (token nerveux) réduit
+     l'allocation, un stop serré peut l'augmenter, toujours plafonné au même maximum
+     historique (5%, jamais grossi au-delà). `size_position_by_risk` (invalidation
+     Fibonacci, plafond de PERTE) reste appliqué ENSUITE, inchangé, comme filet de
+     sécurité final -- les deux mécanismes coexistent, aucun ne remplace l'autre.
+     Repli intégral sur l'ancien système à paliers fixes (`conviction_size_
+     multiplier`) si `entry_atr_pct` est inconnu (ex. l'ancien pilote VC-thesis
+     dormant) -- comportement historique préservé à l'identique pour tout appelant
+     qui ne fournit pas ce signal.
+  4. **Cooldown de re-entrée (revenge trading) : maintenu refusé, aucun changement.**
+     La lecture de l'architecture de défense existante (`momentum_blacklist.py` +
+     plafond ratio volume/liquidité comme barrière suffisante contre les contrats
+     manipulés) a été jugée correcte -- confirme la décision du 19/07, pas de
+     cooldown artificiel ajouté.
+  **Trou de couverture de test trouvé et comblé avant de committer** : la suite
+  complète passait déjà à 100% après le câblage du point 3, mais uniquement parce
+  que les DEUX tests d'intégration existants sur les paliers de conviction
+  n'exercaient jamais le nouveau chemin ATR (leurs signaux ne fournissent pas
+  `entry_atr_pct`, tombant correctement dans le repli historique) -- suite verte
+  sans jamais avoir réellement testé le NOUVEAU comportement. Ajout de 9 tests
+  unitaires dédiés (`TestConvictionRiskBudgetPct`/`TestSizeByRiskBudget`) + 2 tests
+  d'intégration bout-en-bout via `run_paper_cycle` qui fournissent `entry_atr_pct`
+  et vérifient le montant exact attendu (stop large -> 37 500$ au lieu de 50 000$ ;
+  stop très serré -> plafonné à 50 000$, jamais 300 000$ brut). 33 nouveaux tests au
+  total ce segment. Suite complète verte (6240 passed, mêmes 7 échecs pré-existants
+  sans rapport #142, 0 régression), `test_coherence.py` vert (81 passed). Déployé et
+  vérifié (commit `d54c3513a235` confirmé servi par nginx).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -3974,7 +4030,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **Direct, problème → solution (consigne opérateur explicite, 16/07)** : annoncer le problème puis la solution/action directement, sans argumenter ni justifier en détail par défaut. Toujours proposer ensuite à l'opérateur s'il veut plus de détail (raisonnement, alternatives écartées, preuves) plutôt que de les dérouler d'office.
 **Réponse type « la thèse sur l'achat » (consigne opérateur explicite, 19/07)** : quand l'opérateur demande « la thèse sur l'achat » (ou une formulation proche : « renvoie la thèse », « explique le processus d'achat ») SANS nommer un contrat précis, répondre avec EXACTEMENT le processus détaillé de la section « Processus d'achat momentum — réponse de référence » ci-dessous, jamais la thèse d'une position individuelle. Si l'opérateur nomme un contrat/token précis, donner plutôt SA thèse réelle (champ `thesis` en base, via `paper_trader.get_open_positions()`/`get_closed_positions()` ou l'historique `/feedback`), pas le processus général.
 
-## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `b50c686f77e9`)
+## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `d54c3513a235`)
 **⚠️ Instantané daté du pipeline momentum (`momentum_entry.py` + `risk_guard.py` + `paper_trader.py`) — norme « vérifier avant d'affirmer » (Règles absolues) : si une session reprend ce fil après une évolution du pipeline, RECONFIRMER ce texte contre le code réel avant de le renvoyer tel quel plutôt que de le réciter de mémoire. Mettre à jour ce bloc DANS LE MÊME COMMIT que tout changement touchant l'ordre/les seuils du pipeline momentum, pour qu'il ne dérive jamais.**
 
 **1. Découverte** — Scan continu DexScreener (Base, Solana, Robinhood Chain) + flux WebSocket temps réel, en plus du scan classique toutes les 15 min.
@@ -3999,10 +4055,10 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **7. Volatilité (ATR) et diligence de conviction** — ARIA mesure la volatilité réelle du token (servira au stop, étape 10) et vérifie site officiel, X, GitHub, Farcaster, Telegram — buzz réel, cadence de publication, cohérence du contrat annoncé. N'influence jamais l'achat lui-même, seulement la taille.
 
 **8. Taille de la position** :
-- 3 paliers : 5% (fort), 3.5% (modéré), 2% (faible) du capital de départ selon R/R + alignement
-- Redescend au palier modéré si le potentiel fondamental est confirmé faible OU si le volume n'a pas pu être vérifié (étape 6) — un seul de ces deux signaux d'alerte suffit ; si les DEUX sont présents en même temps, chute directe au palier faible (2%)
+- Sizing hybride risque-cible/ATR : chaque palier de conviction devient un budget de risque (1.5% fort / 1% modéré / 0.5% faible, du capital de départ), divisé par la largeur RÉELLE du stop suiveur ATR de ce token précis — un token nerveux (stop large) reçoit une allocation réduite, un token calme (stop serré) peut en recevoir plus, toujours plafonné au même maximum historique (5%, jamais dépassé). Repli sur les anciens paliers fixes (5%/3.5%/2%) si la volatilité du token n'est pas connue.
+- Redescend d'un palier de conviction si le potentiel fondamental est confirmé faible OU si le volume n'a pas pu être vérifié (étape 6) — un seul de ces deux signaux d'alerte suffit ; si les DEUX sont présents en même temps, chute directe au palier faible
 - Plafond auto-calibré par impact de prix : ARIA calcule combien SON PROPRE achat ferait bouger le prix sur ce pool précis, et réduit le montant si besoin
-- Plafond dur : jamais plus de 2% du capital risqué au pire cas
+- Plafond dur : jamais plus de 2% du capital risqué au pire cas (basé sur la distance à l'invalidation technique — reste appliqué en dernier filet, indépendamment du sizing par risque/ATR ci-dessus)
 - Réduite de moitié si l'objectif hebdomadaire est déjà atteint, ou si le portefeuille est en drawdown -10% ; plus aucun achat si -20% ou 5 pertes d'affilée
 - Jamais plus de 40% du capital sur une même chaîne
 
@@ -4012,7 +4068,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Re-scan de sécurité continu
 - Stop suiveur adaptatif à la volatilité : largeur calculée depuis l'ATR mesuré à l'entrée (bornée entre 5% et 40%), jamais un pourcentage fixe pour tous les tokens. Le niveau du stop monte à chaque nouveau sommet, ne redescend jamais.
 - Prise de profit par tiers : le 1er palier (TP1) s'ancre sur la cible technique réelle de la position (le niveau golden pocket qui a validé le R/R à l'entrée), pas un pourcentage fixe. Les 2 paliers suivants sont des MULTIPLES de cette même distance (TP2 = 2x la distance entrée→TP1, TP3 = 3x) — dynamique de bout en bout, un setup serré garde des paliers proportionnellement proches. Repli sur +50%/+100%/+200% fixes si aucune cible technique n'est connue pour la position.
-- Anti-mèche : le plus-haut retenu pour calculer le stop ne peut pas sauter plus vite qu'un plafond par cycle (au moins 3x la largeur du stop, ou 30 points de %, le plus grand des deux) — empêche une seule lecture de prix aberrante (mèche, bot d'arbitrage) de figer un plus-haut fictif qui déclencherait le stop sur un simple retour au calme. Une hausse réelle et soutenue reste rattrapée en 2-3 cycles.
+- Anti-mèche : un nouveau plus-haut n'est retenu pour le stop qu'après être resté au-dessus de l'ancien plus-haut confirmé pendant au moins 75 secondes (durée absolue, pas un nombre de cycles) — empêche une seule lecture de prix aberrante (mèche, bot d'arbitrage) de figer un plus-haut fictif qui déclencherait le stop sur un simple retour au calme. Aucune limite sur l'AMPLEUR du mouvement : une fois confirmé, le vrai pic est retenu d'un coup, jamais une reconnaissance progressive.
 - Re-achat autorisé sur un contrat déjà clôturé dès qu'un nouveau point d'entrée se profile
 
 **11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$.
