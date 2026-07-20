@@ -3097,6 +3097,41 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   vitrine reconstruite et servie (commit `347cebe743dd`, vérifié indépendamment via
   curl) -- backend Docker non concerné (dépendance Node/frontend uniquement, aucun
   redéploiement `aria-api` nécessaire).
+- **20/07 (suite) — vrai bug de visibilité trouvé sur capture opérateur Telegram
+  (position MAGIC vendue mais jamais vue à l'achat) : `momentum_websocket.py`
+  n'envoyait AUCUN notifier Telegram sur ses achats, DÉPLOYÉ.** Diagnostic direct :
+  la position MAGIC (`opened_at` 19:39:06 UTC) a bien une thèse complète en base
+  (honeypot clear, R/R 16,8, diligence de conviction x402/twit.sh) -- réellement
+  achetée, pas un artefact -- mais aucune alerte Telegram d'achat n'est jamais
+  arrivée, seule sa vente (stop suiveur, -12,4%) l'a été. **Root cause confirmée** :
+  `heartbeat.py` passe `notifier=self._notify_telegram_trading` à `run_paper_cycle()`
+  (méthode LIÉE à l'instance `Heartbeat`), mais `momentum_websocket.py::_drain_once`
+  (#196, le service temps réel) appelle le MÊME `run_paper_cycle()` sans jamais
+  transmettre de notifier -- ce chemin ne pouvait pas réutiliser une méthode liée à
+  une instance à laquelle il n'a pas accès. Toute position ouverte via le WebSocket
+  (et non le heartbeat 15 min) reste donc muette à l'achat ; sa gestion ultérieure
+  (stop suiveur, TP, clôture) reste, elle, gérée exclusivement par le heartbeat
+  (`skip_position_management=True` côté WebSocket), qui notifie normalement --
+  d'où l'asymétrie exacte observée (achat silencieux, vente notifiée).
+  **Corrigé structurellement** (pas un patch dupliqué) : extrait
+  `_notify_telegram_trading` en fonction LIBRE `telegram_bot.send_trading_notification`
+  (DM + sujet dédié #197 si configuré), réutilisable sans instance -- `heartbeat.py`
+  délègue désormais dessus (comportement identique), `momentum_websocket.py` la
+  passe enfin comme notifier. **Second vrai bug trouvé en écrivant les tests** : ma
+  première version de la fonction libre ne protégeait QUE le second envoi (topic)
+  par un try/except, pas le premier (DM) -- contrairement à l'ancienne
+  `_notify_telegram` qui protégeait déjà ce DM ; une exception sur le DM aurait pu
+  remonter et casser un cycle de trading réel. Corrigé avant tout commit (attrapé
+  par les tests existants qui mockaient encore l'ancien chemin, mis à jour dans la
+  foulée pour mocker `send_message` directement). 1 nouveau test de non-régression
+  dédié à cette protection + 1 assertion ajoutée au test de câblage WebSocket
+  existant. Suite complète vérifiée verte (6443 passed, mêmes 7 échecs pré-existants
+  sans rapport), `test_coherence.py` vert (81 passed). **Déployé directement**
+  (bug qui pollue une capacité déjà en cours d'exécution -- le WebSocket tourne live
+  depuis plusieurs heures, chaque achat par ce chemin reste invisible tant que non
+  corrigé). Limite honnête : les positions DÉJÀ ouvertes silencieusement avant ce
+  correctif (dont MAGIC, déjà clôturée) ne recevront jamais leur alerte d'achat
+  manquante rétroactivement -- seulement les achats futurs par ce chemin.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
