@@ -2554,6 +2554,169 @@ async def test_default_analyzer_tags_strategy_vc_thesis(monkeypatch):
     assert sig["liquidity_usd"] == 50_000.0
 
 
+@pytest.mark.asyncio
+async def test_default_analyzer_surfaces_taille_pct(monkeypatch):
+    """#174 -- taille_pct (0-10%, jugement LLM) doit être remonté jusqu'au sizing réel,
+    même patron que le fix ``these`` du 15/07 (#197) déjà commenté juste au-dessus."""
+    from types import SimpleNamespace
+
+    class FakePair:
+        base_symbol = "AAA"
+        price_usd = 2.0
+        liquidity_usd = 50_000.0
+
+    class FakeCtx:
+        best_pair = FakePair()
+        ta_entry = None
+        launchpad = None
+        bonding_phase = False
+
+    fake_result = SimpleNamespace(
+        recommandation="BUY", these="Thèse test.", cible="3.0", invalidation="1.5", taille_pct=7.5,
+    )
+
+    async def fake_analyze(contract, lang="fr"):
+        return fake_result, FakeCtx()
+
+    async def fake_snapshot(contract, ctx):
+        from aria_core import paper_trader_risk as risk
+
+        return risk.EntrySecuritySnapshot()
+
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", fake_analyze)
+    monkeypatch.setattr("aria_core.paper_trader_risk.capture_entry_snapshot", fake_snapshot)
+
+    sig = await pt._default_analyzer(A)
+    assert sig["taille_pct"] == pytest.approx(7.5)
+
+
+@pytest.mark.asyncio
+async def test_default_analyzer_taille_pct_none_when_absent(monkeypatch):
+    """Non-régression -- un VCResult sans l'attribut (ex. ancien mock/version de
+    vc_analysis) ne doit jamais planter, juste dégrader vers None (repli conviction-tier)."""
+    from types import SimpleNamespace
+
+    class FakePair:
+        base_symbol = "AAA"
+        price_usd = 2.0
+        liquidity_usd = 50_000.0
+
+    class FakeCtx:
+        best_pair = FakePair()
+        ta_entry = None
+        launchpad = None
+        bonding_phase = False
+
+    fake_result = SimpleNamespace(recommandation="BUY", these="Thèse test.", cible="3.0", invalidation="1.5")
+
+    async def fake_analyze(contract, lang="fr"):
+        return fake_result, FakeCtx()
+
+    async def fake_snapshot(contract, ctx):
+        from aria_core import paper_trader_risk as risk
+
+        return risk.EntrySecuritySnapshot()
+
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", fake_analyze)
+    monkeypatch.setattr("aria_core.paper_trader_risk.capture_entry_snapshot", fake_snapshot)
+
+    sig = await pt._default_analyzer(A)
+    assert sig["taille_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_vc_thesis_taille_pct_drives_sizing(tmp_db):
+    """#174 -- avant ce correctif, une position vc_thesis retombait TOUJOURS sur le
+    plafond MAX (5%, 50 000$) quel que soit le jugement réel du LLM -- ici 7.5% doit
+    produire 75 000$, pas 50 000$."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "AAA", "price": 1.0,
+            "target": 3.0, "invalidation": 0.99,
+            "strategy": "vc_thesis", "taille_pct": 7.5,
+        }
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg)
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["cost_usd"] == pytest.approx(75_000.0, rel=0.01)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_vc_thesis_without_taille_pct_falls_back_to_max_tier(tmp_db):
+    """Non-régression -- un analyzer vc_thesis qui ne fournit pas ``taille_pct``
+    (ex. ancien mock, ou VCResult sans l'attribut) garde EXACTEMENT le comportement
+    historique (palier MAX, 5% -> 50 000$), jamais un changement de comportement pour
+    un appelant qui ne fournit pas le nouveau champ."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "AAA", "price": 1.0,
+            "target": 3.0, "invalidation": 0.99,
+            "strategy": "vc_thesis",
+        }
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg)
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["cost_usd"] == pytest.approx(50_000.0, rel=0.01)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_vc_thesis_taille_pct_above_ten_is_clamped(tmp_db):
+    """Défensif -- ne devrait jamais arriver (déjà clampé à la source par
+    vc_analysis.MAX_POSITION_SIZE_PCT), mais un LLM à 25% ne doit jamais produire
+    2.5x le plafond produit (100 000$, pas 250 000$)."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "AAA", "price": 1.0,
+            "target": 3.0, "invalidation": 0.99,
+            "strategy": "vc_thesis", "taille_pct": 25.0,
+        }
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg)
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["cost_usd"] == pytest.approx(100_000.0, rel=0.01)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_momentum_signal_unaffected_by_taille_pct_branch(tmp_db, monkeypatch):
+    """Non-régression croisée -- un signal momentum (rr/align_score fournis, jamais
+    taille_pct) continue de suivre le système de paliers de conviction existant,
+    totalement inchangé par ce chantier."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": A, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "AAA", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+    assert len(act["opened"]) == 1
+    # Palier fort (rr=3.0>=2.5, align=3>=2) -> 5% flat, comportement historique inchangé.
+    assert act["opened"][0]["cost_usd"] == pytest.approx(50_000.0, rel=0.01)
+
+
 def _vc_position_pair_lookup(*, price, liquidity_usd):
     async def fake_pair_lookup(contract, *, chain="base"):
         from aria_core.services.dexscreener import PairSnapshot

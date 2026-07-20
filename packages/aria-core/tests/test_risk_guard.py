@@ -356,6 +356,41 @@ class TestRegimeSizeMultiplier:
         assert round(0.05 * strong * pacing * regime, 4) == 0.025
 
 
+# ── 1ter. vc_thesis_alloc_usd (20/07, #174 -- Formule B, sizing câblé) ──────────────
+
+
+class TestVcThesisAllocUsd:
+    def test_none_taille_pct_signals_fallback(self):
+        assert risk_guard.vc_thesis_alloc_usd(None, 1_000_000.0) is None
+
+    def test_zero_taille_pct_signals_fallback(self):
+        """0 est la valeur que le LLM pose explicitement quand recommandation != BUY
+        (cf. vc_analysis.py) -- jamais une allocation nulle, un signal de repli."""
+        assert risk_guard.vc_thesis_alloc_usd(0.0, 1_000_000.0) is None
+
+    def test_negative_taille_pct_signals_fallback(self):
+        """Défensif -- ne devrait jamais arriver (déjà clampé >=0 par vc_analysis.py),
+        mais une valeur aberrante ne doit jamais produire une allocation négative."""
+        assert risk_guard.vc_thesis_alloc_usd(-5.0, 1_000_000.0) is None
+
+    def test_mid_range_taille_pct_computes_exact_fraction(self):
+        assert risk_guard.vc_thesis_alloc_usd(5.0, 1_000_000.0) == pytest.approx(50_000.0)
+        assert risk_guard.vc_thesis_alloc_usd(2.5, 1_000_000.0) == pytest.approx(25_000.0)
+
+    def test_max_taille_pct_ten_percent(self):
+        assert risk_guard.vc_thesis_alloc_usd(10.0, 1_000_000.0) == pytest.approx(100_000.0)
+
+    def test_taille_pct_above_ten_is_clamped_not_rejected(self):
+        """Ne devrait jamais arriver (déjà clampé à la source par MAX_POSITION_SIZE_PCT
+        dans vc_analysis.py), mais une valeur aberrante > 10 doit être bornée, jamais
+        traitée comme un signal de repli (contrairement à 0/négatif ci-dessus) --
+        un LLM confiant à 25% ne doit jamais tripler le plafond produit."""
+        assert risk_guard.vc_thesis_alloc_usd(25.0, 1_000_000.0) == pytest.approx(100_000.0)
+
+    def test_scales_with_capital_total_not_a_fixed_constant(self):
+        assert risk_guard.vc_thesis_alloc_usd(5.0, 500_000.0) == pytest.approx(25_000.0)
+
+
 # ── 1quater. cap_alloc_to_price_impact (19/07, revue croisée Gemini) ────────────────
 
 

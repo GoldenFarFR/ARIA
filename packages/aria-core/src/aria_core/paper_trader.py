@@ -1310,6 +1310,11 @@ async def _default_analyzer(contract: str) -> dict | None:
         # cf. _momentum_candidates_and_chain_map ci-dessous) -- infrastructure prête pour
         # quand la poche VC 85% reprendra.
         "strategy": "vc_thesis",
+        # 20/07 -- #174 : remonté jusqu'au sizing réel (run_paper_cycle,
+        # risk_guard.vc_thesis_alloc_usd) -- avant ce correctif, jamais transmis à
+        # open_position, donc chaque position vc_thesis retombait silencieusement sur
+        # le plafond MAX (5% du capital) quel que soit le jugement réel du LLM (0-10%).
+        "taille_pct": _num(getattr(result, "taille_pct", None)),
         # ``liquidity_usd`` -- référence pour l'invalidation fondamentale en cours de
         # détention (chute structurelle vs. entrée). None si aucune paire résolue -- jamais
         # une donnée inventée, le check % ci-dessous est alors simplement fail-open (seul
@@ -2165,23 +2170,32 @@ async def _run_paper_cycle_locked(
         # du sizing par risque/ATR, ET multiplicateur direct du repli) garantit que le
         # nouveau système ne peut jamais dépasser ce que l'ancien aurait donné pour ce
         # MÊME palier -- seulement réduire en dessous, jamais égaliser vers le haut.
-        risk_budget_pct = risk_guard.conviction_risk_budget_pct(
-            sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
-            volume_confirmed=sig.get("volume_confirmed"),
-        )
-        conviction_mult = risk_guard.conviction_size_multiplier(
-            sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
-            volume_confirmed=sig.get("volume_confirmed"),
-        )
-        entry_atr_pct = sig.get("entry_atr_pct")
-        if risk_budget_pct is not None and entry_atr_pct:
-            trail_pct = _effective_trail_pct(entry_atr_pct)
-            base_alloc_usd = risk_guard.size_by_risk_budget(
-                risk_budget_pct, trail_pct, start,
-                ceiling_usd=conviction_mult * ALLOC_PCT * start,
-            )
+        # 20/07 -- #174 (Formule B) : une position vc_thesis fournit ``taille_pct``
+        # (jugement LLM riche, 0-10% du capital) mais jamais ``rr``/``align_score``
+        # (seuils déterministes propres au momentum) -- vérifié en PREMIER, avant tout
+        # calcul de palier de conviction, pour ne jamais laisser ce dernier dégrader
+        # silencieusement vers son repli MAX (5% flat) faute de signal à lire.
+        vc_alloc_usd = risk_guard.vc_thesis_alloc_usd(sig.get("taille_pct"), start)
+        if vc_alloc_usd is not None:
+            base_alloc_usd = vc_alloc_usd
         else:
-            base_alloc_usd = ALLOC_PCT * start * conviction_mult
+            risk_budget_pct = risk_guard.conviction_risk_budget_pct(
+                sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+                volume_confirmed=sig.get("volume_confirmed"),
+            )
+            conviction_mult = risk_guard.conviction_size_multiplier(
+                sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+                volume_confirmed=sig.get("volume_confirmed"),
+            )
+            entry_atr_pct = sig.get("entry_atr_pct")
+            if risk_budget_pct is not None and entry_atr_pct:
+                trail_pct = _effective_trail_pct(entry_atr_pct)
+                base_alloc_usd = risk_guard.size_by_risk_budget(
+                    risk_budget_pct, trail_pct, start,
+                    ceiling_usd=conviction_mult * ALLOC_PCT * start,
+                )
+            else:
+                base_alloc_usd = ALLOC_PCT * start * conviction_mult
         # 18/07 (suite, "frein à main" validé après revue) -- une fois l'objectif hebdo
         # déjà atteint, réduit de moitié les NOUVELLES entrées (jamais à zéro) : protège
         # le gain acquis sans jamais bloquer un setup exceptionnel doublement vérifié.

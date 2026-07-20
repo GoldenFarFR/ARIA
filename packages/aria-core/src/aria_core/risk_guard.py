@@ -316,6 +316,29 @@ def regime_size_multiplier(regime: str | None) -> float:
     return 1.0
 
 
+# 20/07 -- #174 : sizing Formule B (VC-thesis, ``vc_analysis.VCResult.taille_pct``,
+# 0-10% du capital déjà clampé à la source par ``MAX_POSITION_SIZE_PCT``). Ce chemin
+# n'a ni ``rr`` ni ``align_score`` (jugement LLM riche, pas de seuils déterministes) --
+# c'est précisément pourquoi ``conviction_size_multiplier``/``conviction_risk_budget_
+# pct`` ci-dessus, appelés avec ces deux valeurs à ``None``, dégradaient silencieusement
+# vers le plafond MAX (5% flat) pour TOUTE position vc_thesis, quel que soit ce que le
+# LLM avait réellement jugé (0 à 10%). Borne dupliquée volontairement (pas un import
+# croisé vers ``vc_analysis`` -- risk_guard reste un module bas niveau, pur, sans
+# dépendance sur les skills).
+VC_THESIS_MAX_TAILLE_PCT = 10.0
+
+
+def vc_thesis_alloc_usd(taille_pct: float | None, capital_total: float) -> float | None:
+    """Alloue ``taille_pct`` % du capital total pour une position Formule B (VC-thesis)
+    -- ``None`` si ``taille_pct`` est absent/nul/négatif, signal à l'appelant de retomber
+    sur le système de paliers de conviction ci-dessus (comportement historique, inchangé
+    pour le momentum qui ne fournit jamais ce champ)."""
+    if taille_pct is None or taille_pct <= 0:
+        return None
+    bounded = max(0.0, min(taille_pct, VC_THESIS_MAX_TAILLE_PCT))
+    return capital_total * bounded / 100.0
+
+
 # 19/07 -- plafond de position auto-calibré par IMPACT DE PRIX (revue croisée Gemini,
 # relayée par l'opérateur, 19/07). Remplace le débat sur "quel % fixe du pool" par un
 # calcul qui s'auto-ajuste à CHAQUE pool réel, sans nouveau seuil arbitraire de taille à
