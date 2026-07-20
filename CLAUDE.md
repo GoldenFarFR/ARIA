@@ -2728,6 +2728,29 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   comparaison de prix pour juger si les seuils durs coûtent de vrais gains
   manqués). Plan de travail acté : reset hebdo (fait, #173) → sizing Formule B
   → slippage simulé → apprentissage (régime + contrefactuel).
+- **20/07 (suite) — #174 (sizing Formule B) tranché et livré, DÉPLOYÉ (commit
+  `76b6826da42f`).** `paper_trader._default_analyzer` remonte désormais
+  `taille_pct` (0-10%, déjà clampé par `vc_analysis.MAX_POSITION_SIZE_PCT`) ;
+  nouveau `risk_guard.vc_thesis_alloc_usd()` vérifié en PREMIER dans
+  `run_paper_cycle`, avant tout calcul de palier de conviction (`rr`/
+  `align_score`, que ce chemin n'a jamais — c'était précisément la cause du
+  bug : ces deux `None` faisaient dégrader `conviction_size_multiplier` vers
+  son repli `MAX_ALLOC_MULTIPLIER`, 5% flat, quel que soit le jugement réel du
+  LLM). Repli intact et testé sur le comportement historique (5%) si
+  `taille_pct` est absent/nul — comportement momentum totalement inchangé
+  (`sig.get("taille_pct")` n'existe que pour l'analyzer vc_thesis). Bug de
+  conception de test trouvé et corrigé EN COURS DE ROUTE : les 3 premiers
+  tests d'intégration utilisaient une invalidation à 50% de l'entrée, qui
+  déclenchait à tort un garde-fou PRÉEXISTANT sans rapport
+  (`risk_guard.size_position_by_risk`, plafond dur "jamais plus de 2% du
+  capital risqué au pire cas") — plafonnait tout à 40 000$ quel que soit
+  `taille_pct`, masquant le VRAI comportement testé. Corrigé en resserrant
+  l'invalidation des fixtures (1% de risque), qui ne heurte plus ce plafond
+  orthogonal. 11 nouveaux tests (`TestVcThesisAllocUsd` + 2 tests
+  `_default_analyzer` + 4 tests d'intégration `run_paper_cycle`, dont un de
+  non-régression momentum croisée). Suite complète verte (6358 passed, mêmes
+  7 échecs pré-existants `test_proactive*` sans rapport #142), `test_coherence.py`
+  vert (81 passed).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4511,7 +4534,7 @@ Une donnée manquante/non confirmable bloque aussi — jamais "OK par défaut", 
 
 **5. Veto dur, le SEUL déterministe de ce pipeline** : si le scan de sécurité frais (étape 3, au moment de CETTE analyse, pas au moment d'une éventuelle découverte passée) classe DANGER, la recommandation est forcée à `AVOID` quoi que dise le LLM — aucun BUY n'est possible.
 
-**Limite honnête, trouvée en vérifiant le code pour cette réponse (20/07), pas corrigée** : la taille suggérée par le LLM (`taille_pct`, étape 4) est écrite dans la thèse mais n'est PAS câblée dans le sizing réel d'une position `vc_thesis` ouverte automatiquement (`paper_trader._default_analyzer` ne transmet ni `rr` ni `align_score` ni `taille_pct` à `open_position`) — le sizing retombe alors sur le comportement par défaut de `risk_guard.conviction_size_multiplier` en absence de signal (`MAX_ALLOC_MULTIPLIER`, palier plein), pas sur la conviction réellement exprimée par le LLM. Sans conséquence aujourd'hui (chemin dormant, aucune position `vc_thesis` ouverte automatiquement sur le test en cours) — mais à corriger avant toute réactivation de la poche VC 85% en automatique.
+**Sizing câblé (#174, 20/07, commit `76b6826da42f`)** : la taille suggérée par le LLM (`taille_pct`, étape 4, 0-10% du capital déjà clampé à la source) est désormais transmise jusqu'au sizing réel — `paper_trader._default_analyzer` la remonte, `risk_guard.vc_thesis_alloc_usd()` est vérifié en PREMIER dans `run_paper_cycle` (avant tout calcul de palier de conviction rr/align_score, que ce chemin n'a jamais). Avant ce correctif, toute position `vc_thesis` retombait silencieusement sur `MAX_ALLOC_MULTIPLIER` (5% flat) quel que soit le jugement réel du LLM (0-10%) — corrigé, sans conséquence pratique à ce jour (chemin toujours dormant, aucune position `vc_thesis` ouverte automatiquement sur le test 1M$ en cours, 100% momentum). Repli intact et testé sur le comportement historique (MAX 5%) si `taille_pct` est absent/nul.
 
 **Formule B — discipline de sortie VC (`strategy="vc_thesis"`, construite le 20/07, infrastructure prête mais DORMANTE sur le test 1M$ en cours).** Le test 1M$ actuel tourne à 100% sur la discipline momentum ci-dessus (décision opérateur du 15/07, inchangée) — la Formule B ne s'active que pour une position ouverte par l'ancienne pipeline VC-thesis (`safety_screen`/`vc_analysis`, fondamentaux + sécurité, jamais Fibonacci/RSI), qui ne source aucune position sur ce test. Construite par anticipation pour le jour où la poche VC 85% reprendra, distincte de la discipline momentum sur 3 points :
 - **Aucun stop suiveur qui ratchet** — jamais de sortie sur un simple retracement de prix, même profond (-50% depuis un plus haut reste toléré si les fondamentaux tiennent).
