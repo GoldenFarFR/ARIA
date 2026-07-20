@@ -2672,6 +2672,36 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   deux messages Gemini sur le plancher de liquidité en régime Peur (300-500k$ vs
   200k$) -- signalé à l'opérateur, réponse pas encore reçue. Tâche #172 créée,
   aucun code écrit tant que ce chiffre n'est pas confirmé.
+- **20/07 (suite) — #172 tranché et livré : opérateur confirme "200k mais a garder
+  a l'oeil pour verifier dans les annees qui suivent" -- CODÉ, TESTÉ, DÉPLOYÉ
+  (commit `fb665af48da2`).** `market_sentiment.resolve_meta_regime()` (combinaison
+  BTC/ETH asymétrique, "vite effrayé lentement gourmand") + `more_cautious_meta_
+  regime()` (ratchet) + `risk_guard.regime_size_multiplier()` (0.5x en Peur) +
+  `paper_trader._apply_regime_to_tp_stages()` (Peur : 3e palier écrasé, tout vendu
+  au niveau de l'ancien TP2 ; Euphorie : 3e palier neutralisé à `float("inf")`, moon
+  bag pur ATR seul). `entry_regime` persisté par position (nouvelle colonne
+  `paper_position`), résolu UNE FOIS par cycle (`_run_paper_cycle_locked`, pure
+  lecture DB, zéro latence ajoutée) et réutilisé pour entrées ET gestion. 38
+  nouveaux tests, dont un vrai bug trouvé et corrigé PAR les tests avant tout
+  déploiement : `more_cautious_meta_regime(None, "euphorie")` retournait `None`
+  au lieu de `"neutre"` (comparaison de rangs correcte, mais retournait l'input
+  BRUT au lieu de la valeur normalisée) -- `paper_trader._apply_regime_to_tp_
+  stages` aurait silencieusement dégradé vers le comportement Neutre par défaut
+  dans ce cas précis (fallback `else: return stages` sur un `None` non reconnu),
+  jamais un crash, mais un signal muet plutôt que le "neutre" explicite voulu.
+  Suite complète verte (6333 passed, mêmes 7 échecs pré-existants sans rapport
+  #142), `test_coherence.py` vert (81 passed). Bloc de référence momentum (steps
+  2/8/10) + section dédiée mis à jour dans le MÊME commit, comme la norme
+  l'exige. **Section "Thèse d'achat VC — réponse de référence" ajoutée le même
+  soir** (question opérateur directe : "c'est important que la these dachat du
+  vc existe sinon sa sert a quoi la vente ?", en miroir de Formule B déjà
+  documentée) -- vérifié contre `vc_analysis.py`/`safety_screen.py` : le VC-thesis
+  est un pipeline LLM-jugé (contrairement au momentum, déterministe), avec un
+  SEUL veto dur (DANGER → AVOID forcé). **Vrai gap trouvé en vérifiant, pas
+  corrigé** : `taille_pct` suggéré par le LLM (0-10%) n'est PAS câblé dans le
+  sizing réel d'une position `vc_thesis` (`_default_analyzer` ne le transmet
+  jamais à `open_position`) — sans conséquence aujourd'hui (chemin dormant), mais
+  à corriger avant toute réactivation automatique de la poche VC 85%.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4383,7 +4413,7 @@ restent privés, dans `aria-ops`** — cette procédure est volontairement gén�
 ## Format de réponse
 Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le mot « Verdict » comme label. À chaque fin de tâche, proposer un prochain pas (dans le respect de la validation explicite). Commits : `Co-Authored-By: Claude <noreply@anthropic.com>` ; jamais d'identifiant de modèle dans commit/PR/artefact ; pas de PR sans demande explicite.
 **Direct, problème → solution (consigne opérateur explicite, 16/07)** : annoncer le problème puis la solution/action directement, sans argumenter ni justifier en détail par défaut. Toujours proposer ensuite à l'opérateur s'il veut plus de détail (raisonnement, alternatives écartées, preuves) plutôt que de les dérouler d'office.
-**Réponse type « la thèse sur l'achat » (consigne opérateur explicite, 19/07)** : quand l'opérateur demande « la thèse sur l'achat » (ou une formulation proche : « renvoie la thèse », « explique le processus d'achat ») SANS nommer un contrat précis, répondre avec EXACTEMENT le processus détaillé de la section « Processus d'achat momentum — réponse de référence » ci-dessous, jamais la thèse d'une position individuelle. Si l'opérateur nomme un contrat/token précis, donner plutôt SA thèse réelle (champ `thesis` en base, via `paper_trader.get_open_positions()`/`get_closed_positions()` ou l'historique `/feedback`), pas le processus général.
+**Réponse type « la thèse sur l'achat » (consigne opérateur explicite, 19/07 ; précisée 20/07)** : quand l'opérateur demande « la thèse sur l'achat » (ou une formulation proche : « renvoie la thèse », « explique le processus d'achat ») SANS nommer un contrat précis ET SANS préciser VC, répondre avec EXACTEMENT le processus détaillé de la section « Processus d'achat momentum — réponse de référence » ci-dessous (c'est le pipeline qui tourne réellement sur le test 1M$ en cours). Si l'opérateur demande spécifiquement « la thèse VC »/« la thèse d'achat du VC »/une formulation équivalente, répondre avec EXACTEMENT la section « Thèse d'achat VC — réponse de référence » (plus bas, juste avant Formule B — son pendant sortie). Si l'opérateur nomme un contrat/token précis, donner plutôt SA thèse réelle (champ `thesis` en base, via `paper_trader.get_open_positions()`/`get_closed_positions()` ou l'historique `/feedback`), pas un processus général.
 
 ## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `fb665af4`)
 **⚠️ Instantané daté du pipeline momentum (`momentum_entry.py` + `risk_guard.py` + `paper_trader.py`) — norme « vérifier avant d'affirmer » (Règles absolues) : si une session reprend ce fil après une évolution du pipeline, RECONFIRMER ce texte contre le code réel avant de le renvoyer tel quel plutôt que de le réciter de mémoire. Mettre à jour ce bloc DANS LE MÊME COMMIT que tout changement touchant l'ordre/les seuils du pipeline momentum, pour qu'il ne dérive jamais.**
@@ -4432,6 +4462,30 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Re-achat autorisé sur un contrat déjà clôturé dès qu'un nouveau point d'entrée se profile
 
 **11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$.
+
+## Thèse d'achat VC — réponse de référence (à jour 20/07, construite suite à une question opérateur directe : « c'est important que la these dachat du vc existe sinon sa sert a quoi la vente ? »)
+**⚠️ Même norme que le bloc momentum ci-dessus (Règles absolues, « vérifier avant d'affirmer ») : instantané daté, RECONFIRMER contre `vc_analysis.py`/`safety_screen.py`/`acp_onchain_scan.py` avant de le réciter de mémoire si une session reprend ce fil après une évolution du pipeline.** Structurellement DIFFÉRENT du momentum (poche 15%/test 1M$ en cours) — comparaison actée le 20/07 : ici le LLM juge sur des faits riches, là-bas des seuils déterministes décident seuls (le LLM n'intervient qu'en tie-breaker/second avis).
+
+**1. Deux points d'entrée, deux logiques distinctes** :
+- **Manuel** (`/vc <contrat>` sur Telegram, opérateur) — n'importe quel contrat, tourne toujours, aucun pré-filtre de découverte ne bloque l'analyse elle-même.
+- **Automatique** (poche VC 85%, dormante sur le test 1M$ en cours — décision opérateur du 15/07, inchangée) — ne source que depuis `screened_pool`, alimenté par le crible de découverte ci-dessous.
+
+**2. Crible de découverte** (`safety_screen.py`, gate le SOURCING automatique uniquement — n'affecte jamais une analyse manuelle `/vc`, qui peut porter sur un contrat qui n'a jamais passé ce crible) — passe seulement si TOUT est réuni :
+- Contrat vérifié (code public, sinon opaque → bloquant)
+- Pas de mint contrôlé par un dev (renoncé/piloté par un launchpad connu/timelock = neutralisé, jamais bloquant en soi), pas de fonction blacklist, pas de désactivation des transferts possible
+- Concentration : aucun wallet hors LP/burn au-dessus de 30% de l'offre (holder inconnu = bloquant aussi, fail-closed)
+- Liquidité ≥ 30 000$
+- Score de sécurité ≥ 70/95
+- Verdict de scan SAFE (honeypot GoPlus négatif, vente totale possible, taxe de vente ≤15%, pas d'owner caché, pas de reprise de propriété possible)
+Une donnée manquante/non confirmable bloque aussi — jamais "OK par défaut", même doctrine que les garde-fous momentum.
+
+**3. Collecte de contexte** (`scan_base_token`, avant tout jugement LLM, un scan FRAIS à chaque analyse — jamais une donnée de sécurité périmée réutilisée pour le veto de l'étape 5) : score de sécurité + verdict, liquidité/holders, indicateurs techniques (EMA/MACD, golden pocket + divergence RSI — informationnel ici, contrairement au momentum où le R/R technique décide seul), tokenomics, diligence produit (site officiel, description, docs), diligence de conviction (X via twit.sh, GitHub, Farcaster, Telegram — buzz réel, cadence de publication, cohérence du contrat annoncé face à une usurpation possible), sentiment de marché continu + Polymarket (macro, contexte seulement), historique des thèses déjà écrites par ARIA sur ce même token.
+
+**4. Jugement LLM** — un seul appel (`chat_with_context`, depth "develop", ~1800 tokens), verdict `BUY|WATCH|SELL|AVOID` + taille suggérée (0-10% du capital, forcée à 0 si la reco n'est pas BUY) + niveaux entrée/invalidation/cible + thèse rédigée + liste explicite des données manquantes (jamais masquées). Le prompt pousse activement la CONVICTION sur un vrai signal ("chasseuse de performance", jamais tiède par défaut) mais toujours ancrée sur les faits fournis, jamais sur l'envie ou une opportunité inventée. Réponse illisible/hors schéma → repli sûr (`AVOID`, risque `EXTRÊME`, confiance `faible`).
+
+**5. Veto dur, le SEUL déterministe de ce pipeline** : si le scan de sécurité frais (étape 3, au moment de CETTE analyse, pas au moment d'une éventuelle découverte passée) classe DANGER, la recommandation est forcée à `AVOID` quoi que dise le LLM — aucun BUY n'est possible.
+
+**Limite honnête, trouvée en vérifiant le code pour cette réponse (20/07), pas corrigée** : la taille suggérée par le LLM (`taille_pct`, étape 4) est écrite dans la thèse mais n'est PAS câblée dans le sizing réel d'une position `vc_thesis` ouverte automatiquement (`paper_trader._default_analyzer` ne transmet ni `rr` ni `align_score` ni `taille_pct` à `open_position`) — le sizing retombe alors sur le comportement par défaut de `risk_guard.conviction_size_multiplier` en absence de signal (`MAX_ALLOC_MULTIPLIER`, palier plein), pas sur la conviction réellement exprimée par le LLM. Sans conséquence aujourd'hui (chemin dormant, aucune position `vc_thesis` ouverte automatiquement sur le test en cours) — mais à corriger avant toute réactivation de la poche VC 85% en automatique.
 
 **Formule B — discipline de sortie VC (`strategy="vc_thesis"`, construite le 20/07, infrastructure prête mais DORMANTE sur le test 1M$ en cours).** Le test 1M$ actuel tourne à 100% sur la discipline momentum ci-dessus (décision opérateur du 15/07, inchangée) — la Formule B ne s'active que pour une position ouverte par l'ancienne pipeline VC-thesis (`safety_screen`/`vc_analysis`, fondamentaux + sécurité, jamais Fibonacci/RSI), qui ne source aucune position sur ce test. Construite par anticipation pour le jour où la poche VC 85% reprendra, distincte de la discipline momentum sur 3 points :
 - **Aucun stop suiveur qui ratchet** — jamais de sortie sur un simple retracement de prix, même profond (-50% depuis un plus haut reste toléré si les fondamentaux tiennent).
