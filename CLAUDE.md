@@ -2702,6 +2702,32 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   sizing réel d'une position `vc_thesis` (`_default_analyzer` ne le transmet
   jamais à `open_position`) — sans conséquence aujourd'hui (chemin dormant), mais
   à corriger avant toute réactivation automatique de la poche VC 85%.
+- **20/07 (suite) — revue croisée du document de thèse complet (opérateur relaie
+  une critique externe style Gemini) : 1 affirmation fausse corrigée avec preuve
+  (kill switch), plusieurs nuancées, 3 vrais gaps confirmés — décision opérateur
+  "oui met tous a jour" sur les 3 (+ apprentissage confirmé inclus).** Vérifié
+  systématiquement contre le code avant d'accepter/réfuter chaque point du
+  reviewer (même discipline que les rounds Gemini précédents) : « 🔴 Manque
+  critique : pas de kill switch opérateur » — **faux**, `/stop`
+  (`outgoing_pause.is_paused()`) vérifié dans `heartbeat.py` ET
+  `momentum_websocket.py`, plus le coupe-circuit de drawdown à 2 paliers
+  (`risk_guard.py`, 10%/20% ou 5 pertes d'affilée) — le reviewer a lui-même
+  révisé son verdict après cette correction sourcée. **3 gaps réels confirmés** :
+  (1) `taille_pct` Formule B non câblé (déjà noté ci-dessus) ; (2) **#173 — reset
+  hebdomadaire sur tick spot brut** (CORRIGÉ et DÉPLOYÉ le même segment, voir
+  step 11 ci-dessus, commit `0470e62eaf41`) ; (3) simulation de slippage/
+  impact-prix qui réduit la TAILLE (`risk_guard.cap_alloc_to_price_impact`,
+  existant) mais ne dégrade jamais le PRIX D'EXÉCUTION simulé lui-même
+  (`open_position` remplit toujours au prix spot exact coté) — reste à
+  corriger. **Apprentissage confirmé dans le même périmètre** ("et concernant
+  lapprentissage ?") : deux trous réels, pas encore corrigés — win-rate/PnL
+  segmenté par `entry_regime` (donnée déjà persistée depuis #172, juste jamais
+  agrégée dans un rapport) et un tracker contrefactuel minimal pour les
+  candidats REJETÉS (prix au moment du rejet vs. prix N heures/jours plus tard
+  — jamais une resimulation complète du pipeline d'entrée, juste une
+  comparaison de prix pour juger si les seuils durs coûtent de vrais gains
+  manqués). Plan de travail acté : reset hebdo (fait, #173) → sizing Formule B
+  → slippage simulé → apprentissage (régime + contrefactuel).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4415,7 +4441,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **Direct, problème → solution (consigne opérateur explicite, 16/07)** : annoncer le problème puis la solution/action directement, sans argumenter ni justifier en détail par défaut. Toujours proposer ensuite à l'opérateur s'il veut plus de détail (raisonnement, alternatives écartées, preuves) plutôt que de les dérouler d'office.
 **Réponse type « la thèse sur l'achat » (consigne opérateur explicite, 19/07 ; précisée 20/07)** : quand l'opérateur demande « la thèse sur l'achat » (ou une formulation proche : « renvoie la thèse », « explique le processus d'achat ») SANS nommer un contrat précis ET SANS préciser VC, répondre avec EXACTEMENT le processus détaillé de la section « Processus d'achat momentum — réponse de référence » ci-dessous (c'est le pipeline qui tourne réellement sur le test 1M$ en cours). Si l'opérateur demande spécifiquement « la thèse VC »/« la thèse d'achat du VC »/une formulation équivalente, répondre avec EXACTEMENT la section « Thèse d'achat VC — réponse de référence » (plus bas, juste avant Formule B — son pendant sortie). Si l'opérateur nomme un contrat/token précis, donner plutôt SA thèse réelle (champ `thesis` en base, via `paper_trader.get_open_positions()`/`get_closed_positions()` ou l'historique `/feedback`), pas un processus général.
 
-## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `fb665af4`)
+## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `0470e62e`)
 **⚠️ Instantané daté du pipeline momentum (`momentum_entry.py` + `risk_guard.py` + `paper_trader.py`) — norme « vérifier avant d'affirmer » (Règles absolues) : si une session reprend ce fil après une évolution du pipeline, RECONFIRMER ce texte contre le code réel avant de le renvoyer tel quel plutôt que de le réciter de mémoire. Mettre à jour ce bloc DANS LE MÊME COMMIT que tout changement touchant l'ordre/les seuils du pipeline momentum, pour qu'il ne dérive jamais.**
 
 **1. Découverte** — Scan continu DexScreener (Base uniquement depuis le 20/07, décision opérateur — Ethereum natif + 1-2 chaînes de plus prévues plus tard, pas encore décidées) + flux WebSocket temps réel, en plus du scan classique toutes les 15 min.
@@ -4461,7 +4487,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - **Regime Switch (20/07)** : en régime Peur, le 3e palier de prise de profit est écrasé — tout le reliquat se vend au niveau de l'ancien TP2 (sortie ultra-rapide). En régime Euphorie, le 3e palier est neutralisé — le dernier tiers devient un moon bag pur, guidé uniquement par le stop suiveur ATR, jamais vendu par un palier mécanique. Voir section dédiée plus bas pour le détail complet (mapping des régimes, ratchet, calibration).
 - Re-achat autorisé sur un contrat déjà clôturé dès qu'un nouveau point d'entrée se profile
 
-**11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$.
+**11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$. Prix de clôture ROBUSTE (#173, 20/07) : médiane des 5 dernières bougies OHLCV (même cascade à 5 étages que la découverte, `momentum_entry._fetch_candles`) plutôt qu'un simple tick spot instantané — une mèche isolée survenant pile au moment du reset ne peut plus fausser le verdict de la semaine. Repli sur le prix spot déjà en main si bougies indisponibles, puis sur le prix d'entrée si tout échoue (jamais un prix inventé, jamais bloquant).
 
 ## Thèse d'achat VC — réponse de référence (à jour 20/07, construite suite à une question opérateur directe : « c'est important que la these dachat du vc existe sinon sa sert a quoi la vente ? »)
 **⚠️ Même norme que le bloc momentum ci-dessus (Règles absolues, « vérifier avant d'affirmer ») : instantané daté, RECONFIRMER contre `vc_analysis.py`/`safety_screen.py`/`acp_onchain_scan.py` avant de le réciter de mémoire si une session reprend ce fil après une évolution du pipeline.** Structurellement DIFFÉRENT du momentum (poche 15%/test 1M$ en cours) — comparaison actée le 20/07 : ici le LLM juge sur des faits riches, là-bas des seuils déterministes décident seuls (le LLM n'intervient qu'en tie-breaker/second avis).
