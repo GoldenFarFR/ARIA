@@ -9,6 +9,23 @@ import pytest
 from aria_core import momentum_funnel_log
 from aria_core import paper_trader as pt
 
+# 20/07 -- capturée à l'import, AVANT tout monkeypatch de session : permet aux tests
+# dédiés à la re-vérification de fraîcheur (cf. plus bas) de restaurer le VRAI
+# comportement pour eux-mêmes, malgré le bypass autouse ci-dessous.
+_REAL_PRICE_MOVED_TOO_MUCH = pt._price_moved_too_much
+
+
+@pytest.fixture(autouse=True)
+def _bypass_price_staleness_check(monkeypatch):
+    """20/07 -- ``run_paper_cycle`` re-vérifie désormais le prix juste avant
+    ``open_position`` (revue croisée Gemini, cf. ``_price_moved_too_much``) via un
+    appel à ``price_lookup`` -- ce fichier teste le sizing/le pipeline en amont, pas
+    ce garde spécifique (couvert par ses propres tests dédiés plus bas). Sans ce
+    bypass, TOUT test qui atteint un BUY sans mocker explicitement ``price_lookup``
+    verrait le second appel (véritable, réseau) échouer en sandbox -> prix jugé
+    obsolète par défaut -> position jamais ouverte, un faux négatif, pas un vrai bug."""
+    monkeypatch.setattr(pt, "_price_moved_too_much", lambda *_a, **_kw: False)
+
 
 async def _backdate_pending_since(contract: str, seconds: float) -> None:
     """Recule ``pending_high_water_since`` de ``seconds`` -- simule l'écoulement du
@@ -1735,6 +1752,7 @@ async def test_default_analyzer_surfaces_these(monkeypatch):
     class FakePair:
         base_symbol = "AAA"
         price_usd = 2.0
+        liquidity_usd = 50_000.0
 
     class FakeCtx:
         best_pair = FakePair()
@@ -2144,3 +2162,258 @@ async def test_concurrent_cycles_lock_serializes_websocket_and_heartbeat_style_c
     )
 
     assert overlap_detected is False
+
+
+# ── Formule B (discipline de sortie VC, 20/07) ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_open_position_defaults_strategy_to_momentum(tmp_db):
+    """Rétrocompatibilité : tout appelant qui ne précise pas ``strategy`` (positions déjà
+    ouvertes, appels directs) reste "momentum" -- comportement historique inchangé."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    assert pos["strategy"] == "momentum"
+
+
+@pytest.mark.asyncio
+async def test_open_position_persists_vc_thesis_strategy_and_entry_liquidity(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=80_000.0,
+    )
+    assert pos["strategy"] == "vc_thesis"
+    assert pos["entry_liquidity_usd"] == 80_000.0
+
+
+@pytest.mark.asyncio
+async def test_default_analyzer_tags_strategy_vc_thesis(monkeypatch):
+    from types import SimpleNamespace
+
+    class FakePair:
+        base_symbol = "AAA"
+        price_usd = 2.0
+        liquidity_usd = 50_000.0
+
+    class FakeCtx:
+        best_pair = FakePair()
+        ta_entry = None
+        launchpad = None
+        bonding_phase = False
+
+    fake_result = SimpleNamespace(recommandation="BUY", these="Thèse test.", cible="3.0", invalidation="1.5")
+
+    async def fake_analyze(contract, lang="fr"):
+        return fake_result, FakeCtx()
+
+    async def fake_snapshot(contract, ctx):
+        from aria_core import paper_trader_risk as risk
+
+        return risk.EntrySecuritySnapshot()
+
+    monkeypatch.setattr("aria_core.skills.vc_analysis.analyze_vc_with_context", fake_analyze)
+    monkeypatch.setattr("aria_core.paper_trader_risk.capture_entry_snapshot", fake_snapshot)
+
+    sig = await pt._default_analyzer(A)
+    assert sig["strategy"] == "vc_thesis"
+    assert sig["liquidity_usd"] == 50_000.0
+
+
+def _vc_position_pair_lookup(*, price, liquidity_usd):
+    async def fake_pair_lookup(contract, *, chain="base"):
+        from aria_core.services.dexscreener import PairSnapshot
+
+        return PairSnapshot(
+            pair_address="0xpool", price_usd=price, liquidity_usd=liquidity_usd,
+            volume_24h_usd=10_000.0, base_symbol="AAA",
+        )
+
+    return fake_pair_lookup
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_closes_on_absolute_liquidity_floor(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=80_000.0,
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.1, liquidity_usd=25_000.0),  # < VC_MIN_LIQUIDITY_FLOOR_USD
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "invalidation fondamentale (liquidité)"
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_closes_on_relative_liquidity_drop(tmp_db, monkeypatch):
+    """Liquidité toujours au-dessus du plancher absolu (30k$) mais en chute de plus de
+    50% depuis l'entrée -- doit quand même invalider la thèse (signal structurel réel,
+    pas juste 'encore au-dessus d'un seuil arbitraire')."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.1, liquidity_usd=90_000.0),  # 55% de chute, > plancher absolu
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "invalidation fondamentale (liquidité)"
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_survives_a_minor_liquidity_dip(tmp_db, monkeypatch):
+    """Non-régression : une baisse de liquidité modeste (bruit normal, pas une chute
+    structurelle) ne doit jamais déclencher l'invalidation."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.05, liquidity_usd=170_000.0),  # -15%, bruit normal
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_closes_on_full_target(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=3.0, alloc_usd=50_000,
+        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=3.2, liquidity_usd=200_000.0),
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "cible thèse VC"
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_never_stopped_out_on_a_deep_pullback(tmp_db, monkeypatch):
+    """Le point central de la Formule B (Gemini) : une correction de -50% depuis le plus
+    haut, normale pour une thèse VC moyen terme, ne doit JAMAIS déclencher de sortie --
+    contrairement à la discipline momentum (stop suiveur ATR)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000,
+        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    # Premier cycle : le prix monte à 3x (au-dessus du seuil Take Seed) -- laisse la
+    # sortie partielle se déclencher pour isoler ensuite le seul comportement de
+    # non-stop sur la suite.
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=3.0, liquidity_usd=200_000.0),
+    )
+    await pt.run_paper_cycle(candidates=[])
+    assert await pt.has_open(A)
+
+    # Deuxième cycle : correction de -50% depuis ce plus haut (1.5, encore largement
+    # au-dessus de l'entrée à 1.0) -- liquidité restée saine (pas d'invalidation
+    # fondamentale). Une discipline momentum aurait stoppé sur ce retracement.
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.5, liquidity_usd=200_000.0),
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_take_seed_recovers_exactly_initial_cost(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000,
+        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=2.0, liquidity_usd=200_000.0),  # exactement 2x
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["partial"]) == 1
+    partial = act["partial"][0]
+    assert partial["close_reason"] == "take seed 2x"
+    # Recouvre exactement la mise initiale (50 000$) au prix de vente (2.0) -> 25 000 qty.
+    assert partial["sold_qty"] == pytest.approx(25_000.0)
+    assert partial["pnl_usd"] == pytest.approx(25_000.0)  # vendu 50k$, coût 25k$ sur cette tranche
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_take_seed_never_fires_twice(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000,
+        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=2.5, liquidity_usd=200_000.0),
+    )
+    first = await pt.run_paper_cycle(candidates=[])
+    assert len(first["partial"]) == 1
+
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=4.0, liquidity_usd=200_000.0),  # toujours >= 2x
+    )
+    second = await pt.run_paper_cycle(candidates=[])
+    assert second["partial"] == []  # déjà "seedé", jamais une 2e fois
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_untouched_below_take_seed_threshold(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000,
+        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.3, liquidity_usd=200_000.0),  # < 2x, saine
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert act["partial"] == []
+    assert await pt.has_open(A)
+    assert act["tracked"] and act["tracked"][0]["contract"] == A
+
+
+@pytest.mark.asyncio
+async def test_momentum_strategy_position_unaffected_by_vc_thesis_branch(tmp_db):
+    """Non-régression explicite : une position "momentum" (défaut) reste gérée par le
+    stop suiveur ATR/fixe -- la nouvelle branche Formule B ne doit jamais s'appliquer
+    à elle. Même patron que test_trailing_stop_tightens_then_closes_remainder (prix
+    modéré, sous le premier palier TP, pour isoler le seul comportement de stop)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=50_000)
+
+    prices = {"v": 1.3}  # +30 %, sous le premier palier TP (+50 %) -- pas de prise de profit
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert await pt.has_open(D)
+
+    await _backdate_pending_since(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)  # confirme le plus haut à 1.3
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] == pytest.approx(1.3)
+
+    prices["v"] = 1.05  # sous le stop suiveur (1.3 * 0.85 = 1.105), au-dessus de l'invalidation (0.5)
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "stop suiveur"

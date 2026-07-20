@@ -98,7 +98,9 @@ async def test_discover_dedupes_across_sources(monkeypatch):
     monkeypatch.setattr(me, "token_boosts_top", empty_listings)
     monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
 
-    candidates = await me.discover_momentum_candidates()
+    # 20/07 -- DEFAULT_CHAINS resserré à Base seul (décision opérateur) ; ce test
+    # exerce le dédoublonnage inter-sources, indépendant du périmètre par défaut.
+    candidates = await me.discover_momentum_candidates(chains=("base", "solana"))
 
     keys = {(c["contract"], c["chain"]) for c in candidates}
     assert (CONTRACT, "base") in keys
@@ -150,7 +152,10 @@ async def test_discover_tolerates_source_failure(monkeypatch):
     monkeypatch.setattr(me, "token_boosts_top", empty_listings)
     monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
 
-    candidates = await me.discover_momentum_candidates()
+    # 20/07 -- DEFAULT_CHAINS resserré à Base seul (décision opérateur) ; ce test
+    # exerce la tolérance de panne + la casse Solana, indépendant du périmètre
+    # par défaut.
+    candidates = await me.discover_momentum_candidates(chains=("base", "solana"))
 
     # Casse préservée pour Solana (18/07) -- "Sol222" reste "Sol222", jamais "sol222".
     assert candidates == [{"contract": "Sol222", "chain": "solana"}]
@@ -1037,6 +1042,19 @@ async def test_evaluate_allows_liquidity_at_or_above_floor(monkeypatch):
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "insufficient_liquidity"
     assert result["action"] == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_buy_signal_tags_strategy_momentum(monkeypatch):
+    """20/07 -- Formule B (paper_trader.py) : un BUY momentum doit toujours porter
+    ``strategy="momentum"``, pour que la discipline de sortie appliquée (stop suiveur
+    ATR + TP par tiers) soit dérivée de CETTE pipeline d'entrée, jamais un flag
+    indépendant qu'on pourrait mal assortir."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(3, []))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["strategy"] == "momentum"
 
 
 # ── plancher de volume 24h (19/07, revue croisée Gemini -- anti token zombie) ───────

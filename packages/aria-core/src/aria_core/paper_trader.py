@@ -75,6 +75,54 @@ ATR_TRAIL_MULTIPLIER = 2.5
 MIN_ATR_TRAIL_PCT = 0.05
 MAX_ATR_TRAIL_PCT = 0.40
 
+# 20/07 -- fraîcheur du prix à l'exécution (revue croisée Gemini, décision opérateur
+# "ok") : ``sig["price"]`` est capturé tout au début de ``evaluate_momentum_entry``
+# (avant honeypot/concentration holders/cascade OHLCV/jusqu'à 2 appels LLM
+# séquentiels) -- sur un token très volatile, plusieurs secondes peuvent s'écouler
+# avant que ce prix ne soit réellement utilisé pour ouvrir la position, rendant le
+# R/R calculé à l'entrée potentiellement obsolète. 3 % -- assez large pour ne pas
+# rejeter le bruit normal d'un microcap (quelques % en quelques secondes est courant),
+# assez strict pour capter un vrai mouvement qui invaliderait le setup entre-temps.
+PRICE_STALENESS_MAX_DRIFT_PCT = 0.03
+
+
+def _price_moved_too_much(signal_price: float | None, fresh_price: float | None) -> bool:
+    """``True`` si le prix a trop bougé depuis la capture du signal (ou si l'un des
+    deux est indisponible/invalide -- fail-closed, jamais une exécution sur une
+    donnée fraîche manquante)."""
+    if not signal_price or signal_price <= 0 or not fresh_price or fresh_price <= 0:
+        return True
+    return abs(fresh_price - signal_price) / signal_price > PRICE_STALENESS_MAX_DRIFT_PCT
+
+
+# 20/07 -- Formule B, discipline de sortie VC (``strategy="vc_thesis"``, revue croisée
+# Gemini, décision opérateur explicite "des maintenant") : distincte de la discipline
+# momentum ci-dessus (stop suiveur ATR + TP par tiers), réservée aux positions qui
+# viendraient un jour de la poche VC 85% (``safety_screen``/``vc_analysis``, PAS le
+# pipeline momentum actif sur le test 1M$ en cours -- ``strategy`` par défaut reste
+# "momentum" pour toute position/tout appelant existant, comportement inchangé tant que
+# rien ne source explicitement du "vc_thesis"). Points affinés par 3 allers-retours
+# avec Gemini (relayés par l'opérateur) :
+#   1. Paradoxe entrée/sortie résolu STRUCTURELLEMENT : ``strategy`` est dérivé de la
+#      pipeline d'ENTRÉE réelle (momentum_entry.py -> "momentum" ; l'ancien
+#      _default_analyzer, qui vient de safety_screen/vc_analysis -- déjà fondamentaux +
+#      sécurité, JAMAIS Fibonacci/RSI -- -> "vc_thesis"), jamais un flag indépendant
+#      qu'on pourrait mal assortir à un token purement spéculatif.
+#   2. Invalidation FONDAMENTALE plutôt que technique : un niveau de support graphique
+#      sur une paire jeune et peu liquide peut être traversé par une simple mèche de
+#      volatilité nocturne. La liquidité du pool (donnée déjà en main à chaque cycle,
+#      aucun appel réseau supplémentaire) est un signal plus robuste -- un pool ne perd
+#      pas 50% de sa liquidité sur un seul trade isolé, seulement sur un vrai retrait/rug.
+#      30 000$ = même plancher absolu que safety_screen.py (poche VC 85%), pas un chiffre
+#      inventé pour l'occasion.
+#   3. "Take Seed" (pas de TP par tiers mécanique) : une SEULE sortie partielle, dès que
+#      la position double (2x), qui récupère EXACTEMENT la mise initiale -- sécurise le
+#      capital pour le redéployer, laisse le reste (moonbag) courir SANS stop vers la
+#      cible complète de la thèse (Power Law du VC : un x50 paie pour tous les zéros).
+VC_MIN_LIQUIDITY_FLOOR_USD = 30_000.0
+VC_LIQUIDITY_DROP_INVALIDATION_PCT = 0.5
+VC_TAKE_SEED_MULTIPLE = 2.0
+
 
 def _effective_trail_pct(entry_atr_pct: float | None) -> float:
     """Largeur du stop suiveur pour UNE position : ``TRAIL_STOP_PCT`` fixe si
@@ -216,6 +264,7 @@ _POS_FIELDS = (
     "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
     "category", "entry_security_json", "chain", "thesis", "close_notes",
     "entry_atr_pct", "pending_high_water", "pending_high_water_since",
+    "strategy", "entry_liquidity_usd",
 )
 
 _ADDED_COLUMNS = [
@@ -257,6 +306,15 @@ _ADDED_COLUMNS = [
     # candidature en cours (comportement par défaut, jamais une valeur inventée).
     ("pending_high_water", "REAL"),
     ("pending_high_water_since", "TEXT"),
+    # 20/07 -- Formule B (discipline de sortie VC, cf. VC_MIN_LIQUIDITY_FLOOR_USD/
+    # VC_LIQUIDITY_DROP_INVALIDATION_PCT/VC_TAKE_SEED_MULTIPLE ci-dessus). "momentum" par
+    # défaut -- comportement inchangé (stop suiveur ATR + TP par tiers) pour TOUTE
+    # position déjà ouverte ou toute nouvelle position dont l'analyzer ne fournit pas ce
+    # champ explicitement. entry_liquidity_usd : liquidité du pool à l'entrée, réutilise
+    # pool_liquidity_usd déjà transmis pour le sizing (aucun nouvel appel réseau) --
+    # référence pour détecter une chute structurelle en cours de détention.
+    ("strategy", "TEXT NOT NULL DEFAULT 'momentum'"),
+    ("entry_liquidity_usd", "REAL"),
 ]
 
 # 19/07 -- migration à chaud DÉDIÉE pour paper_position_archive (voir _ensure_tables) --
@@ -267,6 +325,8 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("entry_atr_pct", "REAL"),
     ("pending_high_water", "REAL"),
     ("pending_high_water_since", "TEXT"),
+    ("strategy", "TEXT NOT NULL DEFAULT 'momentum'"),
+    ("entry_liquidity_usd", "REAL"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -638,6 +698,7 @@ async def open_position(
     thesis: str | None = None,
     pool_liquidity_usd: float | None = None,
     entry_atr_pct: float | None = None,
+    strategy: str = "momentum",
 ) -> dict | None:
     """Ouvre une position FICTIVE au prix d'entrée réel. Refuse si déjà ouverte, plafond de
     positions atteint, coupe-circuit de risque armé, prix invalide, cash insuffisant, ou
@@ -729,12 +790,14 @@ async def open_position(
             INSERT INTO paper_position
               (contract, symbol, cost_usd, entry_price, qty, target_price,
                invalidation_price, opened_at, status, high_water_price, initial_qty,
-               category, entry_security_json, chain, thesis, entry_atr_pct)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)
+               category, entry_security_json, chain, thesis, entry_atr_pct,
+               strategy, entry_liquidity_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, entry_price, qty, target_price, invalidation_price,
              _now(), entry_price, qty, category or "", entry_security_json or None,
-             (chain or "base").lower(), thesis, entry_atr_pct),
+             (chain or "base").lower(), thesis, entry_atr_pct,
+             strategy or "momentum", pool_liquidity_usd),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -1081,6 +1144,18 @@ async def _default_analyzer(contract: str) -> dict | None:
         # perdue dès la sortie de cette fonction. Remontée jusqu'à open_position() par
         # run_paper_cycle ci-dessous.
         "these": getattr(result, "these", "") or "",
+        # 20/07 -- Formule B : cette pipeline (safety_screen/vc_analysis, fondamentaux +
+        # sécurité, jamais Fibonacci/RSI) source des positions "vc_thesis" -- sortie sans
+        # stop suiveur, invalidation fondamentale (liquidité), cf. paper_trader.py. Aucune
+        # position n'est ouverte via ce chemin sur le test 1M$ en cours (défaut momentum,
+        # cf. _momentum_candidates_and_chain_map ci-dessous) -- infrastructure prête pour
+        # quand la poche VC 85% reprendra.
+        "strategy": "vc_thesis",
+        # ``liquidity_usd`` -- référence pour l'invalidation fondamentale en cours de
+        # détention (chute structurelle vs. entrée). None si aucune paire résolue -- jamais
+        # une donnée inventée, le check % ci-dessous est alors simplement fail-open (seul
+        # le plancher absolu reste actif).
+        "liquidity_usd": ctx.best_pair.liquidity_usd if ctx.best_pair else None,
     }
 
 
@@ -1418,6 +1493,105 @@ async def _run_paper_cycle_locked(
                 "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
                 "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price, "chain": p.get("chain") or "base",
             })
+
+            # 20/07 -- Formule B (discipline de sortie VC, cf. VC_MIN_LIQUIDITY_FLOOR_USD/
+            # VC_LIQUIDITY_DROP_INVALIDATION_PCT/VC_TAKE_SEED_MULTIPLE plus haut) --
+            # branche ENTIÈREMENT séparée de la gestion momentum ci-dessous (stop suiveur
+            # ATR + TP par tiers), jamais atteinte pour "strategy" == "momentum" (défaut,
+            # comportement historique inchangé).
+            if (p.get("strategy") or "momentum") == "vc_thesis":
+                entry_price = p["entry_price"]
+                entry_liq = p.get("entry_liquidity_usd")
+                current_liq = pair.liquidity_usd if pair is not None else None
+
+                liquidity_invalidated = False
+                liq_reason = ""
+                if current_liq is not None:
+                    if current_liq < VC_MIN_LIQUIDITY_FLOOR_USD:
+                        liquidity_invalidated = True
+                        liq_reason = (
+                            f"liquidité tombée sous le plancher absolu "
+                            f"({current_liq:,.0f}$ < {VC_MIN_LIQUIDITY_FLOOR_USD:,.0f}$)"
+                        )
+                    elif (
+                        entry_liq and entry_liq > 0
+                        and current_liq < entry_liq * VC_LIQUIDITY_DROP_INVALIDATION_PCT
+                    ):
+                        liquidity_invalidated = True
+                        drop_pct = (1 - current_liq / entry_liq) * 100.0
+                        liq_reason = (
+                            f"liquidité en chute de {drop_pct:.0f}% depuis l'entrée "
+                            f"({entry_liq:,.0f}$ -> {current_liq:,.0f}$)"
+                        )
+
+                if liquidity_invalidated:
+                    exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                    exit_notes = (
+                        f"Invalidation fondamentale VC : {liq_reason} -- thèse invalidée "
+                        f"({exit_gain_pct:+.1f}% vs entrée), sortie complète, "
+                        f"{_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price, reason="invalidation fondamentale (liquidité)",
+                        notes=exit_notes,
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
+
+                target = p.get("target_price")
+                if target and price >= target:
+                    exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                    exit_notes = (
+                        f"Cible complète de la thèse VC atteinte ({price:.6g} >= {target:.6g}, "
+                        f"{exit_gain_pct:+.1f}% vs entrée) -- clôture complète, "
+                        f"{_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price, reason="cible thèse VC", notes=exit_notes,
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
+
+                # "Take Seed" -- UNE SEULE sortie partielle, dès que la position double,
+                # récupère EXACTEMENT la mise initiale (``cost_usd``). ``tp_stage_hit``
+                # réutilisé comme simple marqueur booléen (0/1) -- cette branche ne
+                # rejoint jamais la boucle de paliers momentum ci-dessous, aucun risque
+                # de collision de sémantique.
+                already_seeded = bool(p.get("tp_stage_hit"))
+                gain_mult = (price / entry_price) if entry_price else 0.0
+                if not already_seeded and gain_mult >= VC_TAKE_SEED_MULTIPLE:
+                    cost_usd = p["cost_usd"]
+                    sell_qty = min(cost_usd / price, p["qty"]) if price > 0 else 0.0
+                    if sell_qty > 0:
+                        seed_notes = (
+                            f"Take Seed : position à {gain_mult:.1f}x l'entrée -- vente de "
+                            f"{sell_qty:.6g} (récupère la mise initiale {cost_usd:,.0f}$), "
+                            f"reste couru sans stop vers la cible complète de la thèse."
+                        )
+                        partial = await reduce_position(
+                            p["contract"], price, sell_qty, stage=1,
+                            reason="take seed 2x", notes=seed_notes,
+                        )
+                        if partial:
+                            actions["partial"].append(partial)
+                            if notifier:
+                                try:
+                                    await notifier(format_partial_exit_alert(partial))
+                                except Exception:  # noqa: BLE001
+                                    pass
+                continue
 
             trail_pct = _effective_trail_pct(p.get("entry_atr_pct"))
             prev_high_water = p.get("high_water_price") or p["entry_price"]
@@ -1782,6 +1956,33 @@ async def _run_paper_cycle_locked(
         # orthogonaux (portefeuille vs. par-trade) -- toujours composés multiplicativement.
         pacing_mult = risk_guard.weekly_pacing_size_multiplier(weekly_context)
         entry_alloc_usd = base_alloc_usd * risk_state.alloc_multiplier * pacing_mult
+
+        # 20/07 -- re-vérification de fraîcheur juste avant l'exécution (revue croisée
+        # Gemini, décision opérateur "ok") : ``price`` ci-dessus a été capturé tout au
+        # début de l'évaluation (avant honeypot/concentration holders/cascade OHLCV/
+        # jusqu'à 2 appels LLM séquentiels) -- sur un token volatile, plusieurs
+        # secondes peuvent s'être écoulées. Un prix qui a trop bougé invalide le R/R
+        # calculé à l'entrée -- on ne force jamais une exécution sur une donnée
+        # obsolète, on passe simplement au tour suivant (le candidat pourra être
+        # réévalué au prochain cycle avec des données fraîches).
+        try:
+            if using_default_price_lookup:
+                fresh_price = await price_lookup(contract, chain=sig.get("chain") or "base")
+            else:
+                fresh_price = await price_lookup(contract)
+        except Exception:  # noqa: BLE001 — une panne réseau ne doit jamais planter le cycle
+            fresh_price = None
+        if _price_moved_too_much(price, fresh_price):
+            funnel["price_stale_at_execution"] = funnel.get("price_stale_at_execution", 0) + 1
+            continue
+        # ``fresh_price`` est garanti valide ici dans le fonctionnement réel (sinon
+        # ``_price_moved_too_much`` aurait déjà renvoyé True ci-dessus, fail-closed) --
+        # ce garde supplémentaire protège seulement contre un ``_price_moved_too_much``
+        # explicitement neutralisé (ex. tests dédiés au sizing, sans rapport avec ce
+        # garde précis), jamais atteint en production.
+        if fresh_price and fresh_price > 0:
+            price = fresh_price
+
         pos = await open_position(
             contract,
             sig.get("symbol", ""),
@@ -1800,6 +2001,11 @@ async def _run_paper_cycle_locked(
             thesis=sig.get("these") or "; ".join(sig.get("reasons") or []) or None,
             pool_liquidity_usd=sig.get("liquidity_usd"),
             entry_atr_pct=sig.get("entry_atr_pct"),
+            # 20/07 -- Formule B : la discipline de sortie appliquée dépend de la pipeline
+            # d'ENTRÉE réelle (cf. commentaire sur VC_MIN_LIQUIDITY_FLOOR_USD), jamais un
+            # flag indépendant. "momentum" par défaut -- comportement inchangé pour tout
+            # analyzer qui ne fournit pas ce champ.
+            strategy=sig.get("strategy") or "momentum",
         )
         if pos:
             opened += 1

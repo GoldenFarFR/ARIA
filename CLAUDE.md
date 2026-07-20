@@ -2464,6 +2464,58 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   qu'un "watchlist" simplement présent au milieu d'une phrase ne matche jamais par
   ce chemin). Suite complète verte (6261 passed, mêmes 7 échecs pré-existants sans
   rapport #142, 0 régression), `test_coherence.py` vert (81 passed).
+- **20/07 (suite) — 3 chantiers issus d'une revue croisée Gemini relayée par l'opérateur
+  sur la thèse d'achat momentum (#166/#167/#168), décision opérateur explicite
+  "des maintenant".**
+  1. **Chaînes actives resserrées à Base seul** (`DEFAULT_CHAINS`) — Solana (actif
+     depuis le 15/07) et Robinhood (jamais vraiment couvert) retirés du sourcing par
+     défaut. Feuille de route opérateur pour plus tard : Ethereum natif + 1-2 chaînes
+     de plus où les projets réussissent le mieux, pas encore décidées. Couverture
+     technique (GoPlus/CoinGecko) volontairement laissée intacte dans le code (retirer
+     une entrée casserait le repli pour rien) — seul le périmètre de découverte change.
+     3 tests décorrélés du périmètre par défaut (chains explicites), 1 test WebSocket
+     avec `_ALLOWED_CHAINS` monkeypatché.
+  2. **Re-vérification de fraîcheur du prix juste avant l'exécution** (`_price_moved_
+     too_much`, seuil 3%) — trou réel confirmé en creusant la critique Gemini sur la
+     latence LLM (1-2 appels séquentiels possibles, cf. `_llm_confirm`/`_llm_security_
+     gate`) : `sig["price"]` est capturé tout au DÉBUT de `evaluate_momentum_entry`
+     (avant honeypot/concentration holders/cascade OHLCV/LLM), jamais re-vérifié avant
+     `open_position`. Fix : re-fetch juste avant exécution via `price_lookup`, rejeté
+     (`price_stale_at_execution`) si l'écart dépasse 3% ou si la donnée fraîche est
+     indisponible (fail-closed). Bug trouvé en écrivant les tests : `price = fresh_price`
+     inconditionnel écrasait `price` par `None` sur tout test qui ne mockait pas
+     `price_lookup` explicitement — corrigé (n'écrase que si `fresh_price` valide) +
+     fixture autouse `_bypass_price_staleness_check` dans `test_paper_trader.py`
+     (mêmes doctrine que les autres gates ajoutés cette session, mocké "pass" par
+     défaut, testé en isolation par ses propres tests dédiés).
+  3. **Formule B — discipline de sortie VC** (`strategy="vc_thesis"`, cf. section
+     dédiée juste au-dessus) — répond au point central de Gemini (appliquer la même
+     discipline momentum aux 2 poches 85%/15% serait une erreur structurelle) en
+     construisant PROACTIVEMENT la discipline VC, alors que rien ne source encore de
+     position par ce chemin sur le test 1M$ en cours (100% momentum, décision du
+     15/07 inchangée). Affiné par 3 points Gemini : (a) `strategy` dérivé de la
+     pipeline d'ENTRÉE réelle (`_default_analyzer`/safety_screen → "vc_thesis",
+     `momentum_entry` → "momentum"), jamais un flag indépendant — résout
+     structurellement le "paradoxe" que Gemini soulevait (un token purement
+     spéculatif screené par TA ne peut jamais hériter de la discipline "sans stop") ;
+     (b) invalidation FONDAMENTALE (liquidité du pool, 30 000$ plancher absolu =
+     même valeur que `safety_screen`, ou chute >50% depuis l'entrée) plutôt qu'un
+     niveau graphique vulnérable à une mèche isolée ; (c) "Take Seed" — sortie
+     partielle unique à 2x qui récupère exactement `cost_usd`, jamais de TP par
+     tiers mécanique, le reste couru sans stop vers la cible complète.
+     `_POS_FIELDS`/`_ADDED_COLUMNS`/`_ARCHIVE_ADDED_COLUMNS` gagnent `strategy`
+     (défaut `'momentum'`, rétrocompatible) et `entry_liquidity_usd` (réutilise
+     `pool_liquidity_usd` déjà transmis pour le sizing, aucun nouvel appel réseau).
+     Branche VC entièrement séparée en tête de boucle (`if strategy == "vc_thesis":
+     ... continue`), zéro ligne touchée dans la logique momentum existante (stop
+     ATR/TP tiers) — risque de régression minimisé par construction plutôt que par
+     test seul. Bug de conception de test trouvé et corrigé : un premier test de
+     non-régression sautait le prix direct à +200%, déclenchant à tort TOUS les
+     paliers TP momentum d'un coup (comportement correct et non lié) — corrigé en
+     suivant le patron déjà établi (`test_trailing_stop_tightens_then_closes_
+     remainder`, montée progressive + `_backdate_pending_since`).
+  Suite complète verte (6274 passed, mêmes 7 échecs pré-existants sans rapport #142,
+  0 régression), `test_coherence.py` vert (81 passed).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4180,7 +4232,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 ## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `f0df8ff9`)
 **⚠️ Instantané daté du pipeline momentum (`momentum_entry.py` + `risk_guard.py` + `paper_trader.py`) — norme « vérifier avant d'affirmer » (Règles absolues) : si une session reprend ce fil après une évolution du pipeline, RECONFIRMER ce texte contre le code réel avant de le renvoyer tel quel plutôt que de le réciter de mémoire. Mettre à jour ce bloc DANS LE MÊME COMMIT que tout changement touchant l'ordre/les seuils du pipeline momentum, pour qu'il ne dérive jamais.**
 
-**1. Découverte** — Scan continu DexScreener (Base, Solana, Robinhood Chain) + flux WebSocket temps réel, en plus du scan classique toutes les 15 min.
+**1. Découverte** — Scan continu DexScreener (Base uniquement depuis le 20/07, décision opérateur — Ethereum natif + 1-2 chaînes de plus prévues plus tard, pas encore décidées) + flux WebSocket temps réel, en plus du scan classique toutes les 15 min.
 
 **2. Garde-fous durs — rejet immédiat, sans exception**, dans l'ordre (du plus rapide/gratuit au plus lent) :
 - Liste noire (contrats déjà confirmés piégeux)
@@ -4221,6 +4273,11 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Re-achat autorisé sur un contrat déjà clôturé dès qu'un nouveau point d'entrée se profile
 
 **11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$.
+
+**Formule B — discipline de sortie VC (`strategy="vc_thesis"`, construite le 20/07, infrastructure prête mais DORMANTE sur le test 1M$ en cours).** Le test 1M$ actuel tourne à 100% sur la discipline momentum ci-dessus (décision opérateur du 15/07, inchangée) — la Formule B ne s'active que pour une position ouverte par l'ancienne pipeline VC-thesis (`safety_screen`/`vc_analysis`, fondamentaux + sécurité, jamais Fibonacci/RSI), qui ne source aucune position sur ce test. Construite par anticipation pour le jour où la poche VC 85% reprendra, distincte de la discipline momentum sur 3 points :
+- **Aucun stop suiveur qui ratchet** — jamais de sortie sur un simple retracement de prix, même profond (-50% depuis un plus haut reste toléré si les fondamentaux tiennent).
+- **Invalidation FONDAMENTALE, pas technique** : sortie complète si la liquidité du pool tombe sous 30 000$ (même plancher absolu que `safety_screen`) OU chute de plus de 50% depuis l'entrée — un signal structurel réel (retrait de LP/rug), pas une mèche de prix isolée.
+- **"Take Seed"** — une seule sortie partielle, dès que la position double (2x), qui récupère exactement la mise initiale ; le reste (moonbag) est ensuite tenu sans stop jusqu'à la cible complète de la thèse ou l'invalidation fondamentale.
 
 **Dispatch VPS (session cloud « commandement », 11/07, complété 12/07) — règle permanente, ne jamais oublier.** Toute consigne destinée à un VPS (Principal/Secondaire/Research) doit TOUJOURS être formatée : en-tête coloré hors bloc (🟠 **Pour VPS Principal :** / 🔵 **Pour VPS Secondaire :** / 🟣 **Pour VPS Research :**) suivi d'un bloc de code (\`\`\`) contenant le texte exact à coller — jamais en texte normal, même pour une simple confirmation ou un "vas-y". Le bloc de code déclenche le bouton copier natif du chat ; sans lui l'opérateur doit sélectionner le texte à la main. Se relire avant d'envoyer tout message qui mentionne une prochaine étape pour un VPS. Incident vécu (11/07) : plusieurs consignes envoyées en texte simple, l'opérateur a dû relancer manuellement, VPS Research est resté à l'arrêt en attendant un dispatch jamais réellement formaté/envoyé. **Trois rappels obligatoires dans CHAQUE bloc dispatché (décision opérateur explicite, 12/07 ; 3e ajouté 13/07 après un deuxième incident du même type)** : (1) auto-identification — le VPS doit commencer son prochain rapport par `[VPS Principal]`/`[VPS Secondaire]`/`[VPS Research]` (oublié une fois par Research le 12/07) ; (2) autorité de commit — seule la session cloud commit/pousse sur `main`, le VPS prépare et pousse uniquement sur une branche temporaire dédiée (cf. entrée "Autorité de commit centralisée" ci-dessus) ; (3) **push exclusivement via `scripts/safe-push.sh <ARIA|aria-ops> <nom-de-branche>`, jamais `git push origin ...` à la main** — le script (livré 13/07) vérifie lui-même que le remote local correspond bien au dépôt visé avant de pousser (refus bloquant et visible sinon) et pousse toujours vers une URL explicite, jamais l'alias `origin`. Exemple à coller dans le dispatch : `bash scripts/safe-push.sh ARIA claude/mon-sujet-temp`. Un alias `origin` mal configuré rendait un push "réussi" totalement silencieux sur le mauvais dépôt (vécu le 12/07 : VPS Research sur `aria-ops` au lieu d'`ARIA`) — le script rend cette classe d'erreur impossible plutôt que de compter sur la mémoire d'un agent pressé. Ces trois rappels vont dans le bloc de code lui-même (pas seulement en préambule hors bloc), pour survivre au copier-coller tel quel.
 

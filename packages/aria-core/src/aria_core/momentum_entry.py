@@ -87,14 +87,17 @@ from aria_core.skills.ta_levels import Candle
 
 logger = logging.getLogger(__name__)
 
-# Chaînes vérifiées en direct ce soir (15/07) : GoPlus honeypot check confirmé
-# fonctionnel (curl réel, HTTP 200) ET DexScreener couvre nativement (chainId
-# accepté tel quel). Base = priorité #1 (tout existe déjà, OHLCV confirmé via
-# GeckoTerminal). Solana = couverture GoPlus/DexScreener confirmée, OHLCV
-# best-effort (GeckoTerminal ne liste pas "solana" dans GECKO_NETWORK_SLUGS --
-# tenté quand même, dégradation honnête si indisponible). Robinhood = best-effort
-# total (chain récente, couverture OHLCV incertaine).
-DEFAULT_CHAINS: tuple[str, ...] = ("base", "solana", "robinhood")
+# 20/07 -- décision opérateur explicite (suite revue croisée Gemini) : concentration
+# sur Base SEULEMENT pour l'instant -- Solana (actif depuis le 15/07) et Robinhood
+# (jamais vraiment couvert, OHLCV incertain) retirés. Feuille de route déclarée par
+# l'opérateur pour plus tard : Ethereum natif, puis 1-2 chaînes de plus où les
+# projets réussissent le mieux -- pas encore décidées, pas encore construites.
+# Historique (15/07-19/07) : GoPlus honeypot check confirmé fonctionnel sur les 3
+# (curl réel) ET DexScreener couvre nativement -- la couverture technique existe
+# toujours dans `_DEXSCREENER_TO_GOPLUS_CHAIN_ID`/`_COINGECKO_PLATFORM_BY_CHAIN`
+# ci-dessous (retirer une entrée casserait le repli CoinGecko pour rien) ; seul le
+# périmètre de DÉCOUVERTE (`DEFAULT_CHAINS`) est resserré.
+DEFAULT_CHAINS: tuple[str, ...] = ("base",)
 
 # DexScreener utilise des slugs lisibles ("base", "solana", "robinhood") ; GoPlus
 # attend son propre identifiant de chaîne (numérique pour la plupart des EVM, ou
@@ -1405,4 +1408,9 @@ async def evaluate_momentum_entry(
         "category": f"momentum-{chain}",
         "reasons": reasons,
         "hold_reason": hold_reason,
+        # 20/07 -- Formule B (paper_trader.py) : dérive la discipline de sortie appliquée
+        # (stop suiveur ATR + TP par tiers) de CETTE pipeline d'entrée précise -- jamais
+        # un flag indépendant qui pourrait mal assortir un token purement spéculatif à
+        # une discipline "sans stop" pensée pour une thèse fondamentale.
+        "strategy": "momentum",
     }

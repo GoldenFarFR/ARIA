@@ -88,12 +88,17 @@ async def test_ingest_frame_queues_new_candidate_on_allowed_chain():
 
 
 @pytest.mark.asyncio
-async def test_ingest_frame_preserves_solana_address_case():
+async def test_ingest_frame_preserves_solana_address_case(monkeypatch):
     """19/07 -- bug réel trouvé en activant ce chemin pour la première fois : un
     .lower() aveugle corrompait toute adresse Solana (base58, sensible à la casse),
     cassant silencieusement la couverture RugCheck/GoPlus en aval (400 "invalid
     length" observé en prod). Base reste insensible à la casse -- vérifié séparément
-    ci-dessous, non-régression."""
+    ci-dessous, non-régression.
+
+    20/07 -- ``_ALLOWED_CHAINS`` monkeypatché explicitement : ``DEFAULT_CHAINS`` est
+    resserré à Base seul (décision opérateur), ce test exerce la préservation de
+    casse elle-même, indépendante du périmètre par défaut du moment."""
+    monkeypatch.setattr(mw, "_ALLOWED_CHAINS", frozenset({"base", "solana"}))
     listener = mw.MomentumWebsocketListener()
     mixed_case = "GuSBoRgzPo6HC7msoRouqYPj3psxGAhm4amc9idHpump"
     await listener._ingest_frame(
