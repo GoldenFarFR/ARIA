@@ -2950,6 +2950,36 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   directement** (cadence "bug qui pollue une capacité déjà en cours d'exécution en prod" —
   le test 1M$ tourne live depuis le reset de ce matin, chaque cycle avec ce plafond fantôme
   est du potentiel de test perdu).
+- **20/07 (suite) — diagnostic "0 achat en 24h" demandé par l'opérateur, funnel de rejet
+  ventilé et classé par impact, puis ESSAI EN COURS (décision opérateur explicite : "abaisse
+  le volume à 1000 et voyons") sur le plancher de volume, DÉPLOYÉ.** Comparaison funnel
+  24h/48h : le nombre de candidats atteignant le stade R/R (LLM ambigu ou rejet R/R faible)
+  est tombé de ~26/24h à 4/24h, corrélé précisément avec 2 gates ajoutés le jour même (âge
+  14j : 0→187 rejets ; concentration holders : 0→14) + le plancher de volume durci (2→779
+  rejets). Classement par impact (24h) : volume trop faible (779) > honeypot indisponible/
+  Solana (473, doctrine déjà actée, non touché) > aucun setup technique (393, pattern rare
+  par nature, non touché) > âge paire <14j (187) > pas de données de prix (171) > liste
+  noire (47) > RVOL non confirmé (23) > déjà parabolique (15) = honeypot confirmé (15,
+  sécurité dure, jamais touché) > concentration holders (14) > LLM non confirmé (3) > R/R
+  trop faible (1). **Vrai piège trouvé avant d'agir** : abaisser SEULEMENT le plancher
+  absolu (`_MIN_VOLUME_24H_USD`, 5 000$→1 000$ comme demandé littéralement) n'aurait eu
+  AUCUN effet — le second volet, le ratio 10% de la liquidité, dominait déjà systématiquement
+  dès que la liquidité dépassait son propre plancher (100 000$ × 10% = 10 000$, toujours
+  au-dessus de n'importe quel absolu sous ce seuil) — vérifié dans le code
+  (`min_volume_required = max(_MIN_VOLUME_24H_USD, liquidity_usd * _MIN_VOLUME_TO_LIQUIDITY_
+  RATIO)`) avant de toucher quoi que ce soit. Corrigé pour que l'essai soit réel : les DEUX
+  constantes abaissées ensemble (`momentum_entry.py`) — absolu 5 000$→1 000$, ratio 10%→1%
+  (au minimum de liquidité, 100 000$, les deux composantes se rejoignent exactement à
+  1 000$ ; au-delà, le ratio continue de scaler avec la taille du pool, protection anti
+  "marché zombie" toujours active, juste moins stricte). 3 tests de frontière mis à jour
+  avec les nouvelles valeurs exactes (150k liquidité/1 500 volume ; 10M liquidité/100 000
+  volume "1% pile") pour continuer à tester la vraie limite, pas juste une valeur qui
+  passe par coïncidence. Suite complète vérifiée verte (6439 passed, mêmes 7 échecs
+  pré-existants sans rapport), `test_coherence.py` vert (81 passed). **Déployé directement**
+  (même cadence que ci-dessus — test 1M$ live). **Explicitement un essai, pas une décision
+  gravée** : à réévaluer selon le débit d'achats observé dans les heures/jours qui suivent —
+  si ça ouvre trop la porte (tokens de mauvaise qualité achetés), remonter ; si ça ne suffit
+  toujours pas à générer des trades, regarder le prochain plus gros poste (âge 14j, #187).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4682,7 +4712,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Liste noire (contrats déjà confirmés piégeux)
 - Honeypot (GoPlus, + RugCheck en second avis sur Solana)
 - Liquidité minimum 100 000$ — **doublée à 200 000$ en régime macro Peur confirmé** (Regime Switch, 20/07 — voir section dédiée plus bas)
-- Volume minimum : le plus haut entre 5 000$ (plancher absolu) et 10% de la liquidité du pool (empêche un marché "zombie" — liquidité présente mais personne ne trade — de fabriquer un faux setup, y compris sur un gros pool où un plancher purement absolu deviendrait trivial)
+- Volume minimum : le plus haut entre 1 000$ (plancher absolu, **essai en cours depuis le 20/07**, abaissé de 5 000$) et 1% de la liquidité du pool (empêche un marché "zombie" — liquidité présente mais personne ne trade — de fabriquer un faux setup, y compris sur un gros pool où un plancher purement absolu deviendrait trivial ; ratio lui aussi abaissé de 10% le 20/07, même essai)
 - Ratio volume/liquidité > 20x, **soutenu** (au moins 75s de confirmation — une lecture isolée ne rejette plus seule, un token en pleine actualité légitime peut dépasser le seuil brièvement sans être du wash-trading. Constante `_WASH_TRADING_CONFIRMATION_SECONDS` propre à `momentum_entry.py`, même valeur que `HIGH_WATER_CONFIRMATION_SECONDS` (étape 10) mais copie indépendante et non importée — évite un import circulaire, documenté en commentaire dans le code ; les deux doivent être changées ensemble si jamais la durée évolue)
 - Déjà monté de +200% en 24h — **plafond levé en régime macro Euphorie confirmé** (Regime Switch, 20/07)
 - Âge minimum de la paire : 14 jours (décision opérateur explicite, 20/07). Une paire trop jeune n'a pas assez d'historique de bougies pour un signal Fibonacci/RSI fiable. Âge inconnu → rejet (même doctrine que la liquidité, jamais "OK par défaut" sur une donnée manquante).
