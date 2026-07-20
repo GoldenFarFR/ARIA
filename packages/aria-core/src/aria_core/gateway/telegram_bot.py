@@ -571,6 +571,20 @@ async def _handle_regime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(update.message, text)
 
 
+async def _handle_counterfactual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/counterfactual -- 20/07 (#176, volet apprentissage b) : évolution de prix des
+    candidats REJETÉS par un seuil dur momentum, revisités 7 jours après rejet -- objective
+    si les seuils durs coûtent de vrais gains manqués. Admin-only, lecture seule. Ne
+    déclenche jamais de revisite elle-même (ça reste le rôle du cycle heartbeat gaté) --
+    affiche uniquement ce qui a déjà été résolu."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.counterfactual_tracker import format_counterfactual_summary, summarize_revisited
+
+    summary = await summarize_revisited()
+    await _reply(update.message, format_counterfactual_summary(summary))
+
+
 async def _handle_x402_trending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/x402trending [mots-clés] -- 19/07 : découverte de services x402 (registre CDP
     officiel), triés par volume d'appels réel sur 30j -- réponse à "il n'existe pas un
@@ -2022,6 +2036,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("avatar", "Photo de profil ARIA (identity, scene, style, apply)"),
     ("calibrate", "Calibre une affirmation (vrai/faux/incertain)"),
     ("canal", "Contrôle du canal ARIA → Claude Code"),
+    ("counterfactual", "Évolution de prix des candidats rejetés (seuils durs momentum)"),
     ("cycles", "Les 3 derniers cycles Bitcoin (macro)"),
     ("experiment", "Crée un sandbox d'expérimentation GitHub"),
     ("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
@@ -3014,6 +3029,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("api", _handle_api))
     app.add_handler(CommandHandler("funnel", _handle_funnel))
     app.add_handler(CommandHandler("regime", _handle_regime))
+    app.add_handler(CommandHandler("counterfactual", _handle_counterfactual))
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))

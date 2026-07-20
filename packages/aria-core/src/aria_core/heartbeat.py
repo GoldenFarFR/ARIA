@@ -383,6 +383,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="counterfactual_revisit_cycle",
+        name="Contrefactuel des candidats rejetes (momentum)",
+        description="Revisite les candidats REJETES par un seuil dur momentum (liquidite/volume/wash-trading/parabolique/age/profil/concentration/RVOL -- jamais no_entry_signal/ohlcv_unavailable/honeypot/blacklist, aucun contrefactuel utile pour ceux-la) apres 7 jours, refetch le prix reel actuel, enregistre l'evolution -- une simple comparaison de prix, jamais une resimulation du pipeline d'entree. But : objectiver si les seuils durs coutent de vrais gains manques (#176, 20/07). L'ENREGISTREMENT des rejets (counterfactual_tracker.record_rejection, depuis paper_trader.run_paper_cycle) reste inconditionnel, non gate -- seul ce cycle de REVISITE (appel reseau) est gate. Gate OFF par defaut.",
+        interval_minutes=180,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="marketing_video_cycle",
         name="Video marketing verdict (pilote)",
         description="Consomme un candidat vc_video_snapshot deja capture (aucun recalcul du verdict/graphique) et genere une courte video (texte + graphique deja rendu + portrait ARIA, V1 sans voix, tache #23). Ne publie jamais rien -- cree une approvals.create_approval, revue humaine requise avant toute diffusion TikTok/X. Gate OFF par defaut.",
@@ -565,6 +572,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.truth_ledger.canonical import canonical_facts_sync_enabled
 
                 task.enabled = canonical_facts_sync_enabled()
+            if task.id == "counterfactual_revisit_cycle":
+                from aria_core.counterfactual_tracker import counterfactual_tracker_enabled
+
+                task.enabled = counterfactual_tracker_enabled()
             if task.id == "memory_consolidation":
                 from aria_core.memory.consolidation import consolidation_enabled
 
@@ -1234,6 +1245,17 @@ class AriaHeartbeat:
                     f"[canonical] {result.get('synced', 0)} synchronise(s), "
                     f"{result.get('superseded', 0)} remplace(s), "
                     f"{result.get('unchanged', 0)} inchange(s) sur {result.get('total_facts', 0)}",
+                )
+
+        elif task_id == "counterfactual_revisit_cycle":
+            from aria_core.counterfactual_tracker import run_revisit_cycle
+
+            result = await run_revisit_cycle()
+            if result.get("revisited"):
+                append_memory(
+                    "counterfactual_tracker",
+                    f"[contrefactuel] {result.get('revisited', 0)} rejet(s) revisite(s), "
+                    f"{result.get('price_unavailable', 0)} prix introuvable(s)",
                 )
 
         elif task_id == "memory_consolidation":

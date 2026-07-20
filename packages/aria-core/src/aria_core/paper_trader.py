@@ -2139,6 +2139,18 @@ async def _run_paper_cycle_locked(
         if sig.get("action") != "BUY":
             reason_code = sig.get("hold_reason") or "unspecified"
             funnel[reason_code] = funnel.get(reason_code, 0) + 1
+            # 20/07 -- #176 (volet apprentissage b) : même choke point que le funnel
+            # ci-dessus (déjà LE seul endroit qui voit chaque HOLD, momentum ET
+            # websocket -- momentum_websocket.py route par ce même run_paper_cycle).
+            # Filtre/gate déjà appliqués DANS record_rejection (raisons sans
+            # contrefactuel utile écartées, jamais gaté ici -- enregistrement passif,
+            # aucun appel réseau).
+            from aria_core import counterfactual_tracker
+
+            await counterfactual_tracker.record_rejection(
+                contract, sig.get("chain") or "base", sig.get("symbol", ""),
+                reason_code, sig.get("price"),
+            )
             continue
 
         # 19/07 -- assoupli (décision opérateur explicite, cf. commentaire sur l'ancien
