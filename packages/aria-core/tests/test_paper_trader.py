@@ -2,11 +2,33 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from aria_core import momentum_funnel_log
 from aria_core import paper_trader as pt
+
+
+async def _backdate_pending_since(contract: str, seconds: float) -> None:
+    """Recule ``pending_high_water_since`` de ``seconds`` -- simule l'écoulement du
+    temps pour la confirmation temporelle du plus-haut (20/07) sans attendre pour de
+    vrai dans les tests."""
+    import aiosqlite
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT pending_high_water_since FROM paper_position WHERE contract = ?", (contract,)
+            )
+        ).fetchone()
+        assert row and row[0], "aucune candidature pending_high_water_since à reculer"
+        backdated = datetime.fromisoformat(row[0]) - timedelta(seconds=seconds)
+        await db.execute(
+            "UPDATE paper_position SET pending_high_water_since = ? WHERE contract = ?",
+            (backdated.isoformat(), contract),
+        )
+        await db.commit()
 
 A = "0x" + "a" * 40
 B = "0x" + "b" * 40
@@ -360,16 +382,23 @@ async def test_trailing_stop_tightens_then_closes_remainder(tmp_db):
     assert await pt.has_open(D)
 
     prices["v"] = 2.5  # nouveau plus haut, franchit aussi le palier 2
-    # 19/07 round 6 -- le clamp anti-mèche (_clamp_high_water) plafonne le saut de
-    # high_water par cycle : plusieurs cycles à prix constant sont nécessaires pour
-    # qu'il rattrape le vrai plus-haut (le palier de profit, lui, réagit toujours
-    # instantanément au prix RÉEL -- gain_pct n'est jamais affecté par ce clamp).
-    for _ in range(5):
-        await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    # 20/07 round 7 -- confirmation TEMPORELLE (_advance_high_water) : ce nouveau pic
+    # ouvre une candidature mais ne ratche pas high_water tant qu'il n'a pas tenu
+    # HIGH_WATER_CONFIRMATION_SECONDS (le palier de profit, lui, réagit toujours
+    # instantanément au prix RÉEL -- gain_pct n'est jamais affecté par cette
+    # confirmation, qui ne concerne que le stop suiveur).
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     assert await pt.has_open(D)
     pos = await pt._get_open(D)
+    assert pos["high_water_price"] == pytest.approx(1.0)  # pas encore confirmé
+    assert pos["pending_high_water"] == pytest.approx(2.5)
+    assert pos["tp_stage_hit"] == 2  # le palier de profit, lui, a bien réagi au prix réel
+
+    await _backdate_pending_since(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)  # confirme
+    pos = await pt._get_open(D)
     assert pos["high_water_price"] == pytest.approx(2.5)
-    assert pos["tp_stage_hit"] == 2
+    assert pos["pending_high_water"] is None
 
     prices["v"] = 2.0  # repli sous le stop suiveur (2.5 * 0.85 = 2.125) mais largement
     # au-dessus de l'invalidation d'origine (0.5) -> c'est bien le stop suiveur
@@ -445,50 +474,97 @@ class TestEffectiveTpStages:
         assert stages == pytest.approx((0.05, 0.10, 0.15))
 
 
-# ── clamp anti-mèche sur le ratchet high_water (19/07, revue croisée Gemini round 6) ──
+# ── confirmation temporelle du plus-haut (20/07, revue croisée Gemini round 7,
+#    remplace le clamp de vitesse du round 6) ─────────────────────────────────────────
 
 
-class TestClampHighWater:
-    def test_move_within_cap_passes_through_unclamped(self):
-        # trail_pct=0.15 -> plafond = max(0.45, 0.30) = 0.45 (45 pts) ; un saut de
-        # 30 pts (1.0 -> 1.30) reste dans le plafond, aucun écrêtage.
-        assert pt._clamp_high_water(1.0, 1.30, 0.15) == pytest.approx(1.30)
+class TestAdvanceHighWater:
+    def test_price_at_or_below_confirmed_high_clears_any_pending(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        result = pt._advance_high_water(2.0, 2.5, "2026-01-01T00:00:00+00:00", 1.9, now)
+        assert result == (2.0, None, None)
 
-    def test_extreme_spike_gets_clamped_not_trusted_raw(self):
-        # Même plafond (0.45) ; un saut à +150 % (1.0 -> 2.5) doit être écrêté à 1.45,
-        # jamais pris pour argent comptant.
-        result = pt._clamp_high_water(1.0, 2.5, 0.15)
-        assert result == pytest.approx(1.45)
-        assert result < 2.5
+    def test_new_high_opens_a_pending_candidacy_without_ratcheting(self):
+        now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        confirmed, pending, since = pt._advance_high_water(1.0, None, None, 1.5, now)
+        assert confirmed == 1.0  # pas encore ratché -- seule une candidature s'ouvre
+        assert pending == pytest.approx(1.5)
+        assert since == now.isoformat()
 
-    def test_never_ratchets_below_previous_high(self):
-        # Un prix EN DESSOUS du plus-haut déjà connu ne doit jamais le faire redescendre
-        # -- le ratchet reste monotone, le clamp ne change que la VITESSE de montée.
-        assert pt._clamp_high_water(2.0, 1.5, 0.15) == pytest.approx(2.0)
+    def test_pending_candidacy_tracks_the_running_max(self):
+        since = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        confirmed, pending, kept_since = pt._advance_high_water(1.0, 1.3, since.isoformat(), 1.5, since)
+        assert confirmed == 1.0
+        assert pending == pytest.approx(1.5)  # le nouveau pic remplace l'ancien candidat
+        assert kept_since == since.isoformat()  # l'horodatage de départ ne bouge pas
 
-    def test_floor_applies_when_trail_pct_is_tiny(self):
-        # trail_pct=0.01 -> 3x = 0.03, sous le plancher HIGH_WATER_JUMP_CAP_FLOOR_PCT
-        # (0.30) -- le plancher l'emporte, jamais un plafond de 3% ridiculement serré.
-        result = pt._clamp_high_water(1.0, 2.0, 0.01)
-        assert result == pytest.approx(1.30)
+    def test_candidacy_confirmed_after_the_delay_ratchets_the_real_peak(self):
+        since = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        now = since + timedelta(seconds=pt.HIGH_WATER_CONFIRMATION_SECONDS)
+        # le PIC réel de toute la fenêtre (1.6) est ratché, pas juste le prix de cet
+        # instant précis (1.55, un léger repli en cours de confirmation).
+        confirmed, pending, kept_since = pt._advance_high_water(1.0, 1.6, since.isoformat(), 1.55, now)
+        assert confirmed == pytest.approx(1.6)
+        assert pending is None
+        assert kept_since is None
 
-    def test_sustained_move_converges_within_a_few_cycles(self):
-        """Une hausse RÉELLE et soutenue (prix cible tenu constant sur plusieurs
-        cycles) doit être intégralement reconnue en 2-3 cycles, pas des dizaines --
-        le clamp amortit une lecture isolée, il ne doit jamais paralyser un vrai
-        mouvement de plusieurs cycles."""
-        high_water = 1.0
-        for _ in range(3):
-            high_water = pt._clamp_high_water(high_water, 2.0, 0.15)
-        assert high_water == pytest.approx(2.0)
+    def test_candidacy_not_yet_confirmed_stays_pending(self):
+        since = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        now = since + timedelta(seconds=pt.HIGH_WATER_CONFIRMATION_SECONDS - 1)
+        confirmed, pending, kept_since = pt._advance_high_water(1.0, 1.6, since.isoformat(), 1.6, now)
+        assert confirmed == 1.0
+        assert pending == pytest.approx(1.6)
+        assert kept_since == since.isoformat()
+
+    def test_partial_pullback_above_confirmed_high_keeps_candidacy_and_its_peak(self):
+        """Reproduit le scénario Gemini : mèche à +60%, repli à +10% -- tant que le
+        repli reste AU-DESSUS du dernier plus-haut confirmé, la candidature n'est pas
+        abandonnée (le chrono continue), et son pic RÉEL observé (1.6) n'est jamais
+        écrasé par le repli (1.1)."""
+        since = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        confirmed1, pending1, since1 = pt._advance_high_water(1.0, None, None, 1.6, since)
+        assert confirmed1 == 1.0 and pending1 == pytest.approx(1.6)
+
+        now2 = since + timedelta(seconds=10)
+        confirmed2, pending2, since2 = pt._advance_high_water(confirmed1, pending1, since1, 1.1, now2)
+        assert confirmed2 == 1.0  # toujours pas confirmé -- 10s << 75s
+        assert pending2 == pytest.approx(1.6)  # le max observé n'a pas bougé
+        assert since2 == since.isoformat()  # le chrono n'a pas été relancé
+
+    def test_price_dropping_back_to_or_below_confirmed_discards_the_candidacy(self):
+        since = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        now2 = since + timedelta(seconds=10)
+        confirmed, pending, kept_since = pt._advance_high_water(1.0, 1.6, since.isoformat(), 0.95, now2)
+        assert confirmed == 1.0
+        assert pending is None
+        assert kept_since is None
+
+    def test_corrupted_timestamp_restarts_a_fresh_candidacy(self):
+        """Un horodatage illisible ne doit jamais planter ni bloquer -- repart d'une
+        candidature fraîche plutôt que de faire confiance à une durée incalculable."""
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        confirmed, pending, since = pt._advance_high_water(1.0, 1.5, "pas-un-horodatage", 1.6, now)
+        assert confirmed == 1.0
+        assert pending == pytest.approx(1.6)
+        assert since == now.isoformat()
+
+    def test_amplitude_is_never_capped_only_duration_is_checked(self):
+        """20/07 (Gemini round 7) : contrairement à l'ancien clamp de vitesse, un
+        mouvement RÉEL et confirmé de n'importe quelle ampleur est ratché intégralement
+        -- jamais de convergence progressive sur plusieurs cycles."""
+        since = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        now = since + timedelta(seconds=pt.HIGH_WATER_CONFIRMATION_SECONDS)
+        confirmed, _pending, _since = pt._advance_high_water(1.0, 10.0, since.isoformat(), 10.0, now)
+        assert confirmed == pytest.approx(10.0)  # +900%, ratché d'un coup
 
 
 @pytest.mark.asyncio
-async def test_wick_does_not_poison_the_trailing_stop(tmp_db):
-    """19/07 round 6 (Gemini) : une mèche isolée (+60% en un seul cycle, décrite par
-    Gemini comme un bot d'arbitrage/une erreur de slippage sur un pool peu liquide)
-    suivie d'un retour proche de son niveau réel (+35%) ne doit pas figer un plus-haut
-    fictif qui stopperait la position sur ce simple retour au calme."""
+async def test_wick_never_ratchets_the_confirmed_high_water(tmp_db):
+    """20/07 (Gemini round 7) : une mèche isolée (+60% en un seul cycle, décrite comme
+    un bot d'arbitrage/une erreur de slippage sur un pool peu liquide) qui se résorbe
+    AVANT la fenêtre de confirmation ne doit jamais avoir touché le plus-haut confirmé
+    -- le stop suiveur reste donc calé sur l'entrée pendant toute la mèche, jamais sur
+    un prix qui n'a existé qu'un instant."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000)
 
@@ -499,13 +575,42 @@ async def test_wick_does_not_poison_the_trailing_stop(tmp_db):
 
     await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     pos = await pt._get_open(D)
-    assert pos["high_water_price"] < 1.6  # la mèche n'a pas été prise pour argent comptant
-    assert pos["high_water_price"] == pytest.approx(1.45)
+    assert pos["high_water_price"] == pytest.approx(1.0)  # jamais touché par la mèche
+    assert pos["pending_high_water"] == pytest.approx(1.6)  # candidature ouverte, pas confirmée
 
-    prices["v"] = 1.35  # cycle 2 : la mèche se résorbe, le prix se stabilise à +35 %
+    prices["v"] = 1.05  # cycle 2 (quelques secondes plus tard) : la mèche se résorbe
     act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     assert act["closed"] == []
-    assert await pt.has_open(D)  # sans le clamp : stop 1.6*0.85=1.36 > 1.35 -> aurait clôturé
+    assert await pt.has_open(D)  # le stop, calé sur l'entrée, n'a jamais été menacé
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_sustained_move_ratchets_the_full_peak_once_confirmed(tmp_db):
+    """20/07 (Gemini round 7) : un mouvement RÉEL qui tient toute la fenêtre de
+    confirmation est ratché à son pic RÉEL d'un seul coup une fois confirmé -- jamais
+    une convergence progressive sur plusieurs cycles (contrairement à l'ancien clamp de
+    vitesse du round 6)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000)
+
+    # +150 % -- massif mais sous le dernier palier de profit (+200%, TP_STAGES[2]) pour
+    # que la position reste ouverte (2 prises de profit partielles, pas une clôture
+    # totale) et permette d'observer la confirmation du plus-haut.
+    prices = {"v": 2.5}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] == pytest.approx(1.0)  # pas encore confirmé
+
+    await _backdate_pending_since(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] == pytest.approx(2.5)  # le pic RÉEL, d'un seul coup
 
 
 @pytest.mark.asyncio
@@ -560,12 +665,13 @@ async def test_high_volatility_position_survives_a_retracement_that_would_stop_o
     async def price_lookup(contract):
         return prices["v"]
 
-    # 19/07 round 6 -- le clamp anti-mèche (_clamp_high_water) plafonne le saut de
-    # high_water par cycle ; plusieurs cycles à prix constant établissent le plus haut
-    # à 2.0 avant de tester le repli (comportement voulu -- une seule lecture ne doit
-    # plus jamais figer un plus-haut instantanément).
-    for _ in range(5):
-        await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    # 20/07 round 7 -- confirmation TEMPORELLE (_advance_high_water) : le nouveau pic
+    # ouvre une candidature, confirmée seulement après avoir tenu
+    # HIGH_WATER_CONFIRMATION_SECONDS -- simulé ici en reculant l'horodatage plutôt
+    # qu'en attendant pour de vrai.
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    await _backdate_pending_since(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     pos = await pt._get_open(D)
     assert pos["high_water_price"] == pytest.approx(2.0)
 
@@ -591,10 +697,10 @@ async def test_low_volatility_position_stops_out_tighter_than_flat(tmp_db):
     async def price_lookup(contract):
         return prices["v"]
 
-    # 19/07 round 6 -- clamp anti-mèche : plusieurs cycles nécessaires pour établir le
-    # plus haut à 2.0 avant de tester le repli (cf. test précédent, même raison).
-    for _ in range(5):
-        await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    # 20/07 round 7 -- confirmation temporelle : cf. test précédent, même raison.
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    await _backdate_pending_since(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
     pos = await pt._get_open(D)
     assert pos["high_water_price"] == pytest.approx(2.0)
 
@@ -1285,6 +1391,69 @@ async def test_run_cycle_conviction_tiers_scale_alloc_when_risk_cap_not_binding(
 
         assert len(act["opened"]) == 1, f"palier {rr}/{align_score} n'a pas ouvert de position"
         assert act["opened"][0]["cost_usd"] == expected_cost, f"palier {rr}/{align_score}"
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_wide_atr_stop_reduces_allocation_below_flat_tier(tmp_db, monkeypatch):
+    """20/07 (Gemini round 7) : le coeur du sizing hybride risque-cible/ATR, bout en
+    bout via run_paper_cycle. Palier FORT (R/R=3.0, align=3) avec un ATR large
+    (entry_atr_pct=0.20 -> stop suiveur adaptatif clampé au plafond 40%) doit réduire
+    l'allocation SOUS le plancher historique 5% (50 000$) -- jamais la même allocation
+    qu'un token calme au même palier de conviction (cf. test ci-dessus, 50 000$ sans
+    ATR connu)."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+            "entry_atr_pct": 0.20,
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    # trail_pct = _effective_trail_pct(0.20) = min(0.40, 2.5*0.20) = 0.40 (plafond ATR).
+    # budget de risque FORT (1.5%) / 0.40 = 37 500$ -- sous le plafond absolu (50 000$,
+    # jamais atteint ici) ET sous le plafond de perte invalidation (37 500*10% = 3 750$
+    # << 20 000$ de plafond) -- la réduction observée vient BIEN du sizing par
+    # risque/ATR, pas d'un des deux autres garde-fous.
+    assert round(act["opened"][0]["cost_usd"]) == 37_500
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_tight_atr_stop_is_capped_at_the_historical_ceiling(tmp_db, monkeypatch):
+    """20/07 -- un stop ATR très serré donnerait une allocation brute énorme (1.5% /
+    5% = 30% du capital) -- le plafond absolu (5%, même maximum que l'ancien système à
+    paliers fixes) doit toujours l'emporter, ce mécanisme ne fait jamais GROSSIR une
+    position au-delà du maximum historique."""
+    from aria_core import momentum_entry
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": D, "chain": "base"}]
+
+    async def fake_evaluate(contract, chain, *, weekly_context=None):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+            "entry_atr_pct": 0.01,  # -> trail_pct clampé au plancher ATR (5%)
+        }
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    assert round(act["opened"][0]["cost_usd"]) == 50_000  # plafonné, jamais 300 000$ brut
 
 
 @pytest.mark.asyncio

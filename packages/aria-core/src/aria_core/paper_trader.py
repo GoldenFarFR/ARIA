@@ -120,48 +120,75 @@ def _effective_tp_stages(target_price: float | None, entry_price: float | None) 
     return TP_STAGES
 
 
-# Plafond du saut de high_water par cycle -- cf. _clamp_high_water(). PREMIÈRE version
-# testée (19/07) : réutiliser trail_pct TEL QUEL comme plafond -- rejetée avant même
-# d'être commise, après simulation manuelle : sur un token peu volatil (entry_atr_pct
-# proche de 0 -> trail_pct clampé au plancher MIN_ATR_TRAIL_PCT=5%), le plafond devient
-# si étroit qu'un DOUBLEMENT DE PRIX RÉEL ET SOUTENU prend ~8 cycles (2h à 15 min/cycle)
-# à être reconnu -- écraserait la réactivité du stop exactement sur les setups les plus
-# rentables (le pipeline #194 existe pour être rapide sur du momentum réel). Le plafond
-# ci-dessous découple le saut autorisé de la largeur STEADY-STATE du stop : au moins 3x
-# cette largeur, avec un plancher absolu de 30 points de %, jamais plus étroit -- réduit
-# la convergence au pire cas à 2-3 cycles tout en amortissant encore une mèche extrême.
-# Calibrage assumé comme un jugement, pas une valeur dérivée empiriquement (même famille
-# que ATR_TRAIL_MULTIPLIER/MAX_VOLUME_TO_LIQUIDITY_RATIO ailleurs dans ce fichier) -- à
-# recalibrer si l'observation réelle du portefeuille papier montre une sur/sous-réaction.
-HIGH_WATER_JUMP_CAP_MULTIPLE = 3.0
-HIGH_WATER_JUMP_CAP_FLOOR_PCT = 0.30
+# 20/07 -- confirmation TEMPORELLE du plus-haut (remplace le plafond de vitesse
+# HIGH_WATER_JUMP_CAP_MULTIPLE du 19/07, revue croisée Gemini round 7). Le plafond de
+# vitesse avait lui-même un vrai défaut, trouvé par Gemini : brider l'AMPLEUR du saut
+# autorisé par cycle pénalise aussi bien une mèche qu'un vrai mouvement parabolique
+# légitime (une vraie bougie de découverte de prix peut faire +50% en un seul cycle) --
+# la largeur du mouvement n'est structurellement PAS le bon signal pour distinguer les
+# deux. La DURÉE l'est : une mèche isolée (bot d'arbitrage, manipulation ponctuelle sur
+# pool peu liquide) ne dure jamais plus de quelques secondes/dizaines de secondes ; un
+# vrai mouvement parabolique, si. Un nouveau plus-haut n'est donc ratché dans le stop
+# suiveur qu'après être resté au-dessus du dernier plus-haut CONFIRMÉ pendant au moins
+# HIGH_WATER_CONFIRMATION_SECONDS -- son AMPLEUR n'est jamais plafonnée (une fois
+# confirmé, le plus-haut RÉEL de toute la fenêtre est ratché d'un coup, pas juste le
+# prix de l'instant de confirmation).
+#
+# Durée en SECONDES, pas en nombre de cycles -- le pipeline momentum a deux boucles de
+# gestion de position à des cadences différentes (heartbeat ~15 min, WebSocket ~30s,
+# #196) : "2 cycles" n'a aucun sens commun entre les deux (30s vs 30 min), une durée
+# absolue si. 75s = milieu de la fourchette 60-90s proposée par la revue croisée
+# (assez pour laisser un bot d'arbitrage se désengager, assez court pour ne pas
+# retarder la confirmation d'un vrai pump de façon perceptible à l'échelle des cycles
+# de gestion).
+HIGH_WATER_CONFIRMATION_SECONDS = 75
 
 
-def _clamp_high_water(prev_high_water: float, price: float, trail_pct: float) -> float:
-    """Plafonne le saut de ``high_water`` (plus-haut retenu pour le stop suiveur) sur UN
-    cycle -- corrige un vrai risque trouvé en revue croisée (19/07, Gemini round 6) : ARIA
-    relit un prix SPOT (DexScreener, dernière transaction) à chaque cycle pour la gestion
-    de position -- PAS le "High" d'une bougie OHLCV comme le décrivait Gemini (aucune
-    bougie n'est relue dans cette boucle), mais le risque sous-jacent est le même : une
-    seule lecture instantanée anormale (mèche/manipulation ponctuelle sur un pool à
-    faible liquidité, bot d'arbitrage, erreur de slippage d'un gros acheteur) peut figer
-    un plus-haut fictif dans ``high_water`` -- le ratchet ne redescend JAMAIS, donc le
-    stop suiveur resterait durablement calé sur un prix qui n'a peut-être existé qu'une
-    fraction de seconde.
+def _advance_high_water(
+    confirmed_high_water: float,
+    pending_high_water: float | None,
+    pending_since: str | None,
+    price: float,
+    now: datetime,
+) -> tuple[float, float | None, str | None]:
+    """``(nouveau plus-haut confirmé, plus-haut en attente, horodatage de la
+    candidature)`` pour UN cycle. Corrige un vrai risque (19/07, Gemini round 6) : ARIA
+    relit un prix SPOT (DexScreener, dernière transaction) à chaque cycle pour la
+    gestion de position -- une seule lecture instantanée anormale (mèche, bot
+    d'arbitrage, erreur de slippage d'un gros acheteur) peut figer un plus-haut fictif
+    dans ``high_water`` -- le ratchet ne redescend JAMAIS, donc le stop suiveur
+    resterait durablement calé sur un prix qui n'a peut-être existé qu'un instant.
 
-    Plafond = ``max(trail_pct * HIGH_WATER_JUMP_CAP_MULTIPLE, HIGH_WATER_JUMP_CAP_FLOOR_PCT)``
-    -- voir le commentaire au-dessus de cette fonction pour l'historique de calibrage (une
-    première version, plus stricte, a été testée et rejetée avant d'être commise). Une
-    hausse RÉELLE et soutenue sur plusieurs cycles reste rattrapée en 2-3 cycles ; une
-    mèche isolée qui revient au niveau précédent au cycle suivant n'a jamais eu le temps
-    de faire monter le stop jusqu'à son niveau. N'affecte QUE l'état ``high_water`` (le
-    ratchet) -- la comparaison de déclenchement du stop utilise toujours le ``price``
-    RÉEL non plafonné, jamais une valeur fictive (une lecture aberrante à la BAISSE, elle,
-    déclenche donc bien le stop si elle franchit le seuil -- choix délibéré, plus prudent
-    pour du capital simulé de réagir à un signal ambigu que de l'ignorer)."""
-    max_jump_pct = max(trail_pct * HIGH_WATER_JUMP_CAP_MULTIPLE, HIGH_WATER_JUMP_CAP_FLOOR_PCT)
-    max_jump = prev_high_water * max_jump_pct
-    return max(prev_high_water, min(price, prev_high_water + max_jump))
+    Mécanique : tant que ``price`` reste au-dessus du dernier plus-haut CONFIRMÉ, une
+    candidature reste "ouverte" (``pending_high_water``/``pending_since``), mise à jour
+    au RÉEL maximum observé pendant qu'elle est ouverte. Dès qu'elle a tenu au moins
+    ``HIGH_WATER_CONFIRMATION_SECONDS``, elle est confirmée d'un coup (le plus-haut
+    RÉEL de toute la fenêtre, pas juste le prix de cet instant) et le plus-haut confirmé
+    ratche. Si ``price`` retombe SOUS le dernier plus-haut confirmé à un moment
+    quelconque, la candidature en cours est abandonnée entièrement (preuve qu'elle
+    n'était pas soutenue) -- une nouvelle candidature repart de zéro si le prix
+    redépasse plus tard.
+
+    N'affecte QUE l'état ``high_water`` (le ratchet) -- la comparaison de déclenchement
+    du stop utilise toujours le ``price`` RÉEL, jamais une valeur en attente de
+    confirmation (une lecture aberrante à la BAISSE déclenche donc bien le stop si elle
+    franchit le seuil -- choix délibéré, plus prudent pour du capital simulé de réagir à
+    un signal ambigu que de l'ignorer)."""
+    if price <= confirmed_high_water:
+        return confirmed_high_water, None, None
+
+    if pending_high_water is None or not pending_since:
+        return confirmed_high_water, price, now.isoformat()
+
+    pending_high_water = max(pending_high_water, price)
+    try:
+        elapsed = (now - datetime.fromisoformat(pending_since)).total_seconds()
+    except ValueError:
+        return confirmed_high_water, price, now.isoformat()
+
+    if elapsed >= HIGH_WATER_CONFIRMATION_SECONDS:
+        return pending_high_water, None, None
+    return confirmed_high_water, pending_high_water, pending_since
 
 # 17/07 -- demande opérateur explicite : réduire de moitié le bruit Telegram de l'alerte de
 # suivi périodique (#197, une par cycle heartbeat -- ~15 min -- tant qu'une position reste
@@ -188,7 +215,7 @@ _POS_FIELDS = (
     "exit_price", "closed_at", "pnl_usd", "pnl_pct", "close_reason",
     "high_water_price", "tp_stage_hit", "initial_qty", "realized_pnl_partial",
     "category", "entry_security_json", "chain", "thesis", "close_notes",
-    "entry_atr_pct",
+    "entry_atr_pct", "pending_high_water", "pending_high_water_since",
 )
 
 _ADDED_COLUMNS = [
@@ -223,6 +250,13 @@ _ADDED_COLUMNS = [
     # l'ancien pilote VC-thesis) -- le stop suiveur retombe alors sur TRAIL_STOP_PCT
     # (pourcentage fixe), jamais une valeur inventée.
     ("entry_atr_pct", "REAL"),
+    # 20/07 -- confirmation temporelle du plus-haut (remplace le clamp de vitesse
+    # HIGH_WATER_JUMP_CAP_MULTIPLE, cf. _advance_high_water) : un nouveau plus-haut
+    # candidat, pas encore confirmé (le prix doit rester au-dessus du dernier plus-haut
+    # CONFIRMÉ pendant HIGH_WATER_CONFIRMATION_SECONDS avant de ratcher). NULL = aucune
+    # candidature en cours (comportement par défaut, jamais une valeur inventée).
+    ("pending_high_water", "REAL"),
+    ("pending_high_water_since", "TEXT"),
 ]
 
 # 19/07 -- migration à chaud DÉDIÉE pour paper_position_archive (voir _ensure_tables) --
@@ -231,6 +265,8 @@ _ADDED_COLUMNS = [
 # ci-dessus sur toute base déjà existante.
 _ARCHIVE_ADDED_COLUMNS = [
     ("entry_atr_pct", "REAL"),
+    ("pending_high_water", "REAL"),
+    ("pending_high_water_since", "TEXT"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -786,10 +822,18 @@ async def reduce_position(
     }
 
 
-async def _update_high_water(position_id: int, price: float) -> None:
+async def _update_high_water(
+    position_id: int, price: float,
+    pending_high_water: float | None = None, pending_since: str | None = None,
+) -> None:
+    """``pending_high_water``/``pending_since`` (20/07) persistent la candidature de
+    plus-haut en attente de confirmation temporelle (cf. ``_advance_high_water``) --
+    ``None`` (défaut, rétrocompatible) efface toute candidature en cours."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE paper_position SET high_water_price = ? WHERE id = ?", (price, position_id),
+            "UPDATE paper_position SET high_water_price = ?, pending_high_water = ?, "
+            "pending_high_water_since = ? WHERE id = ?",
+            (price, pending_high_water, pending_since, position_id),
         )
         await db.commit()
 
@@ -842,8 +886,8 @@ def format_buy_alert(pos: dict) -> str:
     name = pos.get("symbol") or (pos.get("contract") or "")[:10]
     # 17/07 -- demande opérateur explicite : voir le % du capital de départ (STARTING_
     # CAPITAL_USD, jamais l'équité courante -- c'est exactement la base sur laquelle
-    # new_entry_alloc_usd dimensionne chaque position, cf. run_paper_cycle) engagé par
-    # CETTE position, pas seulement le montant brut en $.
+    # chaque position est dimensionnée, cf. run_paper_cycle) engagé par CETTE position,
+    # pas seulement le montant brut en $.
     cost = pos.get("cost_usd") or 0.0
     pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
     lines = [
@@ -905,9 +949,9 @@ def format_position_tracking_alert(
         pnl_pct = (price / entry - 1.0) * 100.0 if entry else 0.0
         sign = "+" if pnl >= 0 else ""
         # 17/07 -- demande opérateur explicite : capital investi + % du capital de départ
-        # (STARTING_CAPITAL_USD, la base fixe sur laquelle new_entry_alloc_usd dimensionne
-        # chaque position à l'ouverture -- jamais l'équité courante, qui bougerait après
-        # coup et ne représenterait plus fidèlement la taille décidée AU MOMENT de l'achat).
+        # (STARTING_CAPITAL_USD, la base fixe sur laquelle chaque position est dimensionnée
+        # à l'ouverture -- jamais l'équité courante, qui bougerait après coup et ne
+        # représenterait plus fidèlement la taille décidée AU MOMENT de l'achat).
         pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
         lines.append(
             f"{name} : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $ · "
@@ -1377,9 +1421,17 @@ async def _run_paper_cycle_locked(
 
             trail_pct = _effective_trail_pct(p.get("entry_atr_pct"))
             prev_high_water = p.get("high_water_price") or p["entry_price"]
-            high_water = _clamp_high_water(prev_high_water, price, trail_pct)
-            if high_water != prev_high_water:
-                await _update_high_water(p["id"], high_water)
+            prev_pending = p.get("pending_high_water")
+            prev_pending_since = p.get("pending_high_water_since")
+            high_water, pending_hw, pending_since = _advance_high_water(
+                prev_high_water, prev_pending, prev_pending_since, price, datetime.now(timezone.utc),
+            )
+            if (
+                high_water != prev_high_water
+                or pending_hw != prev_pending
+                or pending_since != prev_pending_since
+            ):
+                await _update_high_water(p["id"], high_water, pending_hw, pending_since)
             trailing_stop = high_water * (1 - trail_pct)
             invalidation = p.get("invalidation_price")
             active_stop = max(trailing_stop, invalidation) if invalidation else trailing_stop
@@ -1614,9 +1666,10 @@ async def _run_paper_cycle_locked(
     closed_this_cycle = {c["contract"] for c in actions["closed"]}
     start = await starting_capital()
     # #186 -- palier souple : réduit de moitié l'allocation des NOUVELLES entrées (jamais
-    # les positions déjà ouvertes). Passé explicitement à open_position, qui applique ENSUITE
-    # son propre plafond de risque par trade (défense en profondeur, cf. size_position_by_risk).
-    new_entry_alloc_usd = risk_state.alloc_multiplier * ALLOC_PCT * start
+    # les positions déjà ouvertes) via ``risk_state.alloc_multiplier``, composé plus bas
+    # avec le sizing par risque/ATR (ou son repli à paliers fixes). open_position applique
+    # ENSUITE son propre plafond de risque par trade (défense en profondeur, cf.
+    # size_position_by_risk).
 
     # Funnel par cycle (mandat #192, 16/07) : agrège POURQUOI chaque candidat évalué
     # n'a pas mené à un achat. Sans ça, une panne prolongée du seul garde-fou dur
@@ -1675,30 +1728,51 @@ async def _run_paper_cycle_locked(
         if not price or price <= 0:
             continue
         # 18/07 -- décision opérateur explicite ("plus agressive" = plus gros sur les
-        # MEILLEURS setups, pas plus gros partout) : multiplie l'allocation de CETTE
-        # entrée sur un setup exceptionnel (R/R >= 2.5 ET alignement parfait 3/3, cf.
-        # risk_guard.conviction_size_multiplier) -- 1.0 (inchangé) sur tout le reste.
-        # size_position_by_risk (déjà appliqué DANS open_position) reste le vrai plafond
-        # de perte au pire cas, appliqué ENSUITE sur cette allocation potentiellement
-        # gonflée -- jamais un pari sans filet.
-        # 19/07 -- potential_score (conviction_research.py) : None si la diligence
-        # fondamentale n'a rien trouvé/est désactivée -- fail-open sur inconnu, ne
-        # bloque jamais le bonus technique seul (cf. risk_guard docstring).
-        # volume_confirmed (momentum_entry._check_volume_confirmation, revue croisée
-        # Gemini) : False -> malus de conviction (palier fort refusé), None/True ->
-        # aucun effet.
-        conviction_mult = risk_guard.conviction_size_multiplier(
+        # MEILLEURS setups, pas plus gros partout). 19/07 -- potential_score
+        # (conviction_research.py) : None si la diligence fondamentale n'a rien
+        # trouvé/est désactivée -- fail-open sur inconnu, ne bloque jamais le bonus
+        # technique seul. volume_confirmed (momentum_entry._check_volume_confirmation,
+        # revue croisée Gemini) : False -> malus de conviction, None/True -> aucun effet.
+        #
+        # 20/07 -- sizing HYBRIDE risque-cible/ATR (revue croisée Gemini round 7) :
+        # quand ``entry_atr_pct`` est connu, le budget de risque du palier de
+        # conviction (``conviction_risk_budget_pct``) est divisé par la largeur RÉELLE
+        # du stop suiveur pour CE token (même fonction ``_effective_trail_pct`` que la
+        # gestion de position -- jamais une largeur recalculée séparément, qui
+        # pourrait diverger). Plafonné au même maximum absolu que l'ancien système
+        # (``MAX_ALLOC_MULTIPLIER`` * ``ALLOC_PCT``, 5 %) -- ce mécanisme ne fait
+        # jamais grossir une position au-delà de ce plafond historique, il la réduit
+        # sur les setups à stop large. Repli sur l'ancien système à paliers fixes
+        # (``conviction_size_multiplier``) si ``entry_atr_pct`` est inconnu (analyzer
+        # qui ne le fournit pas, ex. l'ancien pilote VC-thesis dormant) -- jamais un
+        # budget de risque calculé sur une largeur de stop inventée.
+        risk_budget_pct = risk_guard.conviction_risk_budget_pct(
             sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
             volume_confirmed=sig.get("volume_confirmed"),
         )
+        entry_atr_pct = sig.get("entry_atr_pct")
+        if risk_budget_pct is not None and entry_atr_pct:
+            trail_pct = _effective_trail_pct(entry_atr_pct)
+            base_alloc_usd = risk_guard.size_by_risk_budget(
+                risk_budget_pct, trail_pct, start,
+                ceiling_usd=risk_guard.MAX_ALLOC_MULTIPLIER * ALLOC_PCT * start,
+            )
+        else:
+            conviction_mult = risk_guard.conviction_size_multiplier(
+                sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+                volume_confirmed=sig.get("volume_confirmed"),
+            )
+            base_alloc_usd = ALLOC_PCT * start * conviction_mult
         # 18/07 (suite, "frein à main" validé après revue) -- une fois l'objectif hebdo
         # déjà atteint, réduit de moitié les NOUVELLES entrées (jamais à zéro) : protège
         # le gain acquis sans jamais bloquer un setup exceptionnel doublement vérifié.
         # Règle DÉTERMINISTE (risk_guard), jamais confiée au LLM -- cf. discussion
         # opérateur 18/07 (séparation des rôles : le garde de sécurité détecte des
-        # pièges, il ne dimensionne jamais une position).
+        # pièges, il ne dimensionne jamais une position). ``risk_state.alloc_multiplier``
+        # (palier souple #186) et ce sizing par risque/ATR sont deux dampeners
+        # orthogonaux (portefeuille vs. par-trade) -- toujours composés multiplicativement.
         pacing_mult = risk_guard.weekly_pacing_size_multiplier(weekly_context)
-        entry_alloc_usd = new_entry_alloc_usd * conviction_mult * pacing_mult
+        entry_alloc_usd = base_alloc_usd * risk_state.alloc_multiplier * pacing_mult
         pos = await open_position(
             contract,
             sig.get("symbol", ""),

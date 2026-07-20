@@ -216,6 +216,80 @@ class TestConvictionSizeMultiplierVolume:
         assert mult_volume_only == risk_guard.MODERATE_ALLOC_MULTIPLIER
 
 
+# ── 1quater. sizing HYBRIDE risque-cible/ATR (20/07, revue croisée Gemini round 7,
+#             go explicite opérateur) -- même tiering/cumul de vétos que
+#             conviction_size_multiplier ci-dessus, mais en BUDGET DE RISQUE %,
+#             divisé par la largeur ATR pour obtenir l'allocation $ -────────────────────
+
+
+class TestConvictionRiskBudgetPct:
+    def test_none_signal_returns_none(self):
+        """Signale à l'appelant de retomber sur conviction_size_multiplier -- jamais
+        un budget inventé faute de signal."""
+        assert risk_guard.conviction_risk_budget_pct(None, None) is None
+        assert risk_guard.conviction_risk_budget_pct(2.5, None) is None
+        assert risk_guard.conviction_risk_budget_pct(None, 3) is None
+
+    def test_strong_setup_gets_strong_budget(self):
+        budget = risk_guard.conviction_risk_budget_pct(2.5, 3)
+        assert budget == risk_guard.CONVICTION_RISK_BUDGET_STRONG_PCT
+
+    def test_moderate_setup_gets_moderate_budget(self):
+        budget = risk_guard.conviction_risk_budget_pct(2.0, 3)
+        assert budget == risk_guard.CONVICTION_RISK_BUDGET_MODERATE_PCT
+
+    def test_weak_setup_gets_weak_budget(self):
+        budget = risk_guard.conviction_risk_budget_pct(1.0, 1)
+        assert budget == risk_guard.CONVICTION_RISK_BUDGET_WEAK_PCT
+
+    def test_single_veto_downgrades_strong_to_moderate_budget(self):
+        budget = risk_guard.conviction_risk_budget_pct(2.5, 3, fundamental_score=1.0)
+        assert budget == risk_guard.CONVICTION_RISK_BUDGET_MODERATE_PCT
+
+    def test_both_vetoes_stack_to_weak_budget(self):
+        """Même cumul que conviction_size_multiplier -- les DEUX drapeaux en même
+        temps chutent au palier faible, jamais plafonnés à modéré."""
+        budget = risk_guard.conviction_risk_budget_pct(
+            2.5, 3, fundamental_score=1.0, volume_confirmed=False,
+        )
+        assert budget == risk_guard.CONVICTION_RISK_BUDGET_WEAK_PCT
+
+
+class TestSizeByRiskBudget:
+    def test_wide_stop_reduces_allocation_vs_tight_stop(self):
+        """Le coeur du correctif Gemini round 7 : à budget de risque IDENTIQUE, un
+        stop plus large (token nerveux) doit réduire l'allocation par rapport à un
+        stop plus serré (token calme) -- jamais la même allocation quelle que soit
+        la volatilité."""
+        wide = risk_guard.size_by_risk_budget(0.01, 0.35, 1_000_000.0)   # stop 35%
+        tight = risk_guard.size_by_risk_budget(0.01, 0.08, 1_000_000.0)  # stop 8%
+        assert wide < tight
+        assert wide == pytest.approx(1_000_000.0 * 0.01 / 0.35)
+        assert tight == pytest.approx(1_000_000.0 * 0.01 / 0.08)
+
+    def test_ceiling_caps_the_allocation_never_grows_beyond_it(self):
+        """Un budget de risque élevé sur un stop très serré peut donner une allocation
+        brute énorme (0.015 / 0.05 = 30 % du capital) -- le plafond absolu doit
+        toujours l'emporter, ce mécanisme ne fait jamais grossir une position au-delà
+        du maximum historique."""
+        raw = risk_guard.size_by_risk_budget(0.015, 0.05, 1_000_000.0)
+        assert raw == pytest.approx(300_000.0)  # sans plafond, bien au-delà de l'ancien max
+        capped = risk_guard.size_by_risk_budget(0.015, 0.05, 1_000_000.0, ceiling_usd=50_000.0)
+        assert capped == pytest.approx(50_000.0)
+
+    def test_ceiling_never_raises_an_already_smaller_allocation(self):
+        """Le plafond ne relève JAMAIS une allocation déjà sous ce plafond -- un
+        plafond, jamais un bonus."""
+        result = risk_guard.size_by_risk_budget(0.005, 0.40, 1_000_000.0, ceiling_usd=50_000.0)
+        assert result == pytest.approx(1_000_000.0 * 0.005 / 0.40)
+        assert result < 50_000.0
+
+    def test_zero_or_negative_trail_pct_or_capital_returns_zero(self):
+        assert risk_guard.size_by_risk_budget(0.01, 0.0, 1_000_000.0) == 0.0
+        assert risk_guard.size_by_risk_budget(0.01, -0.1, 1_000_000.0) == 0.0
+        assert risk_guard.size_by_risk_budget(0.01, 0.15, 0.0) == 0.0
+
+
 # ── 1ter. weekly_pacing_size_multiplier (18/07, "frein à main" déterministe validé
 #          après revue croisée -- jamais un LLM, jamais 0 %) ───────────────────────────
 

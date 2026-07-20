@@ -186,6 +186,85 @@ def conviction_size_multiplier(
     return MIN_ALLOC_MULTIPLIER
 
 
+# 20/07 -- sizing HYBRIDE risque-cible/ATR (revue croisée Gemini round 7, go explicite
+# opérateur : "Ta proposition de composition est brillante... tu peux coder cette
+# logique"). Corrige un vrai défaut de ``conviction_size_multiplier`` ci-dessus : ses
+# paliers sont des % FIXES du capital (5/3.5/2%), totalement indépendants de la largeur
+# du stop suiveur ATR -- un token très nerveux (stop large, ex. 35%) et un token calme
+# (stop serré, ex. 8%) reçoivent la MÊME allocation au même palier de conviction, alors
+# que le premier risque mathématiquement beaucoup plus de dollars si le stop est
+# touché. ``size_position_by_risk`` (basé sur l'invalidation Fibonacci, fixée à
+# l'entrée) plafonne déjà la perte au pire cas à 2% -- mais l'ATR gouverne l'ESPACE
+# RÉEL dans lequel le stop suiveur évolue une fois la position ouverte, jamais pris en
+# compte par le sizing initial jusqu'ici.
+#
+# Les paliers de conviction deviennent des BUDGETS DE RISQUE (fraction du capital qu'on
+# accepte de perdre SI le stop suiveur ATR est touché), divisés par la largeur ATR
+# effective pour obtenir l'allocation $ -- un stop large réduit mécaniquement
+# l'allocation, un stop serré l'augmente, à risque $ constant pour un palier de
+# conviction donné. ``size_position_by_risk`` (invalidation) reste appliqué ENSUITE
+# dans ``open_position``, inchangé, comme filet de sécurité final -- jamais retiré ni
+# contourné par ce nouveau mécanisme.
+CONVICTION_RISK_BUDGET_STRONG_PCT = 0.015    # 1.5 % du capital -- palier FORT
+CONVICTION_RISK_BUDGET_MODERATE_PCT = 0.010  # 1.0 % -- palier MODÉRÉ
+CONVICTION_RISK_BUDGET_WEAK_PCT = 0.005      # 0.5 % -- palier FAIBLE
+
+
+def conviction_risk_budget_pct(
+    rr: float | None, align_score: int | None, *,
+    fundamental_score: float | None = None, volume_confirmed: bool | None = None,
+) -> float | None:
+    """Budget de risque (fraction du capital) pour le palier de conviction de CE
+    signal -- même tiering et même cumul des deux vétos que ``conviction_size_
+    multiplier`` ci-dessus (identiques mot pour mot, seuls les paliers de SORTIE
+    changent : un budget de risque en %, pas un multiplicateur sur une allocation
+    flat). ``None`` si ``rr``/``align_score`` manquent -- signale à l'appelant de
+    retomber sur ``conviction_size_multiplier`` (comportement historique), jamais un
+    budget inventé faute de signal."""
+    if rr is None or align_score is None:
+        return None
+    if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
+        weak_fundamentals = fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD
+        unconfirmed_volume = volume_confirmed is False
+        flags = int(weak_fundamentals) + int(unconfirmed_volume)
+        if flags >= 2:
+            return CONVICTION_RISK_BUDGET_WEAK_PCT
+        if flags == 1:
+            return CONVICTION_RISK_BUDGET_MODERATE_PCT
+        return CONVICTION_RISK_BUDGET_STRONG_PCT
+    if rr >= MODERATE_RR_THRESHOLD:
+        return CONVICTION_RISK_BUDGET_MODERATE_PCT
+    return CONVICTION_RISK_BUDGET_WEAK_PCT
+
+
+def size_by_risk_budget(
+    risk_budget_pct: float, trail_pct: float, capital_total: float, *, ceiling_usd: float | None = None,
+) -> float:
+    """Alloue ``risk_budget_pct * capital_total / trail_pct`` -- traduit un budget de
+    risque en $ (combien on accepte de perdre si le stop suiveur ATR est touché) en
+    allocation $ compte tenu de la largeur RÉELLE du stop pour CE token précis. Plus le
+    stop est large (token nerveux), plus l'allocation est réduite pour maintenir le
+    même risque $ ; plus il est serré (token calme), plus elle peut monter -- jamais un
+    % fixe identique quelle que soit la volatilité.
+
+    ``ceiling_usd`` (optionnel) : plafond absolu -- ce mécanisme ne fait jamais grossir
+    une position au-delà de ce plafond (typiquement le même maximum historique que
+    l'ancien système à paliers fixes, ex. 5 % du capital), il ne fait que la RÉDUIRE sur
+    les setups où le stop est large. Sans lui, aucun plafond ici (l'appelant est
+    responsable d'en fournir un -- ``size_position_by_risk``, basé sur l'invalidation
+    Fibonacci et appliqué séparément par l'appelant, reste le vrai filet de sécurité
+    final sur la PERTE, indépendant de ce plafond sur l'ALLOCATION).
+
+    ``trail_pct``/``capital_total`` <= 0 -> 0.0 (jamais une division par zéro, jamais
+    une allocation inventée)."""
+    if trail_pct <= 0 or capital_total <= 0:
+        return 0.0
+    raw = risk_budget_pct * capital_total / trail_pct
+    if ceiling_usd is not None:
+        return min(raw, ceiling_usd)
+    return raw
+
+
 # 18/07 (suite, revue croisée validée par l'opérateur) -- "frein à main" DÉTERMINISTE,
 # jamais un LLM : une fois l'objectif hebdomadaire (+10 %) DÉJÀ atteint, les NOUVELLES
 # entrées sont réduites de moitié plutôt que laissées pleine taille -- protège le gain
