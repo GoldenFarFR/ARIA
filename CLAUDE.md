@@ -3012,6 +3012,38 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   fail-open faute de donnée). Reste factuel non résolu : rien ne peut recharger les
   crédits Pro sans action opérateur sur le dashboard Blockscout — ce correctif restaure
   la couverture Base gratuite en attendant, pas les crédits Pro eux-mêmes.
+- **20/07 (suite, opérateur absent, "trouve toi une check list et bosse") — triage complet
+  des 12 issues GitHub `aria-knowledge-proposal` en attente, EN LIGNE (commit `7f893e2c`).**
+  Délégué à un agent en arrière-plan suivant le protocole établi le 15/07 (vérifier par
+  recherche externe/code → juger le fichier cible → intégrer/contre-proposer/rejeter →
+  clore avec explication). **Vrai bug méthodologique trouvé, qui expliquait pourquoi
+  les 12 étaient encore ouvertes** : `canonical_facts.yaml` a un schéma réel
+  `id/topic/tags/question/answer` (vérifié dans `sync_canonical_facts()` — un fait sans
+  `question`/`answer` est silencieusement ignoré par le loader), mais les 12 propositions
+  générées automatiquement utilisaient toutes un schéma `fact/source/verified` qui
+  n'aurait jamais chargé, même acceptées telles quelles. Résultat du triage : 2 issues
+  fusionnées et intégrées (`#40`/`#41`, même correctif hidden-CSS `_HIDDEN_ELEMENT_RE`
+  de `site_snapshot.py`, reformaté au bon schéma) ; 3 graines vérifiées ajoutées à
+  `knowledge/improvement_seeds.yaml` (`#32` Loki/OpenFactVerification, `#24` Instructor,
+  `#23` discipline anti-fuite de mémorisation pour un futur backtest — contre-proposition
+  car `#23` visait un fichier `judge_calibration.yaml` inexistant pour un fait qui n'existe
+  pas encore, cf. le module de backtest lui-même absent) ; 6 rejetées avec justification
+  (périmées, hors-sujet, déjà couvertes) ; 1 fermée avec suggestion de suivi distincte
+  (`#30`, contenu valable mais destiné à `CLAUDE.md`, hors périmètre de cette tâche —
+  signalé via `spawn_task`, pas intégré à la volée). **Vérifié avant de considérer fait**
+  (pas juste le résumé de l'agent) : commit réel confirmé sur `origin/main`, diff relu
+  intégralement (34 lignes, 2 fichiers, aucun code fonctionnel touché), les 12 issues
+  confirmées `closed` via l'API GitHub, 2 commentaires de clôture relus en détail
+  (non silencieux, raisonnement complet) — tout concorde avec le résumé rapporté.
+  **Rien déployé** — fichiers de connaissance, pas de comportement runtime urgent,
+  regroupé avec le prochain déploiement plutôt qu'un rebuild dédié.
+- **Bilan de la session autonome du 20/07 (opérateur absent)** : 402 Blockscout
+  corrigé et déployé (repli auto vers l'endpoint gratuit), essai du plancher de volume
+  observé sur 2 cycles réels supplémentaires, hausse de `no_price_data` investiguée et
+  attribuée à l'activité de diagnostic du jour plutôt qu'à une panne active, 4 mentions
+  "pas déployé" périmées corrigées dans ce fichier, 12 issues de connaissance triées.
+  Rien touché aux garde-fous, à la liste noire, ni à du capital réel — tout dans le
+  périmètre déjà délégué.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
