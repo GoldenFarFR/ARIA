@@ -2219,6 +2219,62 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   verte (6211 passed, mêmes 7 échecs pré-existants sans rapport #142, 0 régression),
   `test_coherence.py` vert (81 passed). Déployé et vérifié (commit `7ac9b0c1f051`
   confirmé servi par nginx).
+- **19/07-20/07 (suite) — revue croisée Gemini round 6, 4 nouveaux défauts confirmés
+  et corrigés, DÉPLOYÉ (`b50c686f77e9`). Opérateur a explicitement testé la rigueur
+  de vérification ("donc tu est daccord sans bronché ? ta verifier ?") avant ce
+  round — chaque point ci-dessous a été vérifié contre le vrai code (dont un appel
+  curl réel à l'API Blockscout) avant d'accepter ou corriger Gemini.**
+  1. **Concentration des holders confondait contrat vérifié et insider EOA** —
+     confirmé réel : `_check_holder_concentration` n'excluait que pool+burn, jamais
+     un contrat de staking/vesting/trésorerie DAO légitime (souvent 40-60% de
+     l'offre sur un projet sain). **Vérifié par appel curl réel à l'API Blockscout**
+     (`base.blockscout.com/api/v2/tokens/.../holders`) : `is_contract`/`is_verified`
+     sont DÉJÀ dans la réponse existante (objet `address` de chaque holder), aucun
+     appel réseau supplémentaire nécessaire — meilleur marché que prévu. Corrigé :
+     `blockscout.py::TokenHolder` gagne `is_contract`/`is_verified` ; les holders
+     `is_contract AND is_verified` sont exclus du top-10 ; un contrat NON vérifié
+     reste compté comme un EOA (impossible de confirmer sa légitimité sans code
+     source publié — fail-CLOSED sur ce point précis, cohérent avec la doctrine du
+     reste du pipeline).
+  2. **RVOL aveugle aux petits nombres** — confirmé réel : `_check_volume_confirmation`
+     ne vérifiait que le RATIO, jamais la magnitude absolue. En consolidation
+     profonde, une moyenne effondrée à quelques centaines de dollars laisse une
+     seule transaction retail valider RVOL≥3x sans représenter un vrai flux de
+     capital. Ajouté `_RVOL_MIN_TRIGGER_VOLUME_USD=2500` — un ratio élevé sur une
+     bougie déclenchante sous ce plancher devient `"not_confirmed"`, plus un faux
+     positif "confirmed".
+  3. **TP2/TP3 restaient des crans fixes, pas dynamiques de bout en bout** — confirmé
+     en relisant mon propre correctif de la veille (`_effective_tp_stages`) : TP2/TP3
+     ajoutaient des points FIXES (+50pt/+100pt) au-dessus de TP1, jamais
+     proportionnels à l'ampleur du setup — un TP1 serré (setup modeste) gardait un
+     TP2 disproportionnellement loin. Remplacé par des R-multiples (TP2=2x la
+     distance entrée→TP1, TP3=3x) — Gemini proposait deux options (extensions
+     Fibonacci 1.618/2.618, ou multiples de distance) ; la seconde a été retenue
+     (plus simple, aucune nouvelle donnée à calculer, dynamique par construction).
+  4. **Ratchet high_water vulnérable à une lecture de prix aberrante** — le
+     MÉCANISME décrit par Gemini ("lit le High d'une bougie") est **faux pour ce
+     code** (vérifié : `_default_price_lookup` relit un prix SPOT DexScreener,
+     aucune bougie n'est relue dans cette boucle de gestion de position) — mais le
+     RISQUE sous-jacent est réel via ce mécanisme différent (une lecture instantanée
+     anormale peut figer un plus-haut fictif, jamais redescendu). Nouveau
+     `_clamp_high_water()`. **Calibrage revu avant de committer, pas au premier
+     jet** : un premier essai (plafond = largeur du stop suiveur telle quelle)
+     simulé à la main AVANT de coder a révélé qu'un token peu volatil (ATR→stop
+     5%) mettrait ~8 cycles (2h) à reconnaître un doublement de prix RÉEL et
+     soutenu — écraserait la réactivité exactement sur les setups les plus
+     rentables. Rejeté avant d'être commis, remplacé par `max(3x la largeur du
+     stop, 30 points de %)` — converge en 2-3 cycles au pire cas. Un test dédié
+     (`test_wick_does_not_poison_the_trailing_stop`) reproduit le scénario exact de
+     Gemini (mèche +60% en un cycle, retour à +35% au suivant) : sans le clamp la
+     position aurait clôturé sur un stop calé à 1.36 (2.5% de perte de gains
+     évitable), avec le clamp elle survit.
+  20 nouveaux tests (`TestClampHighWater` + intégration mèche + 3 tests
+  `_check_holder_concentration` EOA/contrat + 2 tests plancher RVOL + 3 tests
+  `_effective_tp_stages` R-multiples + réajustement des 3 tests ATR/trailing-stop
+  existants à la convergence multi-cycles du clamp). Suite complète verte (6223
+  passed, mêmes 7 échecs pré-existants sans rapport #142, 0 régression),
+  `test_coherence.py` vert (81 passed). Déployé et vérifié (commit `b50c686f77e9`
+  confirmé servi par nginx).
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -3918,7 +3974,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **Direct, problème → solution (consigne opérateur explicite, 16/07)** : annoncer le problème puis la solution/action directement, sans argumenter ni justifier en détail par défaut. Toujours proposer ensuite à l'opérateur s'il veut plus de détail (raisonnement, alternatives écartées, preuves) plutôt que de les dérouler d'office.
 **Réponse type « la thèse sur l'achat » (consigne opérateur explicite, 19/07)** : quand l'opérateur demande « la thèse sur l'achat » (ou une formulation proche : « renvoie la thèse », « explique le processus d'achat ») SANS nommer un contrat précis, répondre avec EXACTEMENT le processus détaillé de la section « Processus d'achat momentum — réponse de référence » ci-dessous, jamais la thèse d'une position individuelle. Si l'opérateur nomme un contrat/token précis, donner plutôt SA thèse réelle (champ `thesis` en base, via `paper_trader.get_open_positions()`/`get_closed_positions()` ou l'historique `/feedback`), pas le processus général.
 
-## Processus d'achat momentum — réponse de référence (à jour 19/07, commit `7ac9b0c1f051`)
+## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `b50c686f77e9`)
 **⚠️ Instantané daté du pipeline momentum (`momentum_entry.py` + `risk_guard.py` + `paper_trader.py`) — norme « vérifier avant d'affirmer » (Règles absolues) : si une session reprend ce fil après une évolution du pipeline, RECONFIRMER ce texte contre le code réel avant de le renvoyer tel quel plutôt que de le réciter de mémoire. Mettre à jour ce bloc DANS LE MÊME COMMIT que tout changement touchant l'ordre/les seuils du pipeline momentum, pour qu'il ne dérive jamais.**
 
 **1. Découverte** — Scan continu DexScreener (Base, Solana, Robinhood Chain) + flux WebSocket temps réel, en plus du scan classique toutes les 15 min.
@@ -3930,7 +3986,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Volume minimum : le plus haut entre 5 000$ (plancher absolu) et 10% de la liquidité du pool (empêche un marché "zombie" — liquidité présente mais personne ne trade — de fabriquer un faux setup, y compris sur un gros pool où un plancher purement absolu deviendrait trivial)
 - Ratio volume/liquidité > 20x (wash-trading)
 - Déjà monté de +200% en 24h
-- Concentration des holders : si les 10 plus gros détenteurs (hors pool et adresses brûlées) possèdent 80% ou plus de l'offre → rejet (seul garde-fou de cette liste qui coûte un appel réseau, placé en dernier)
+- Concentration des holders : si les 10 plus gros détenteurs (hors pool, adresses brûlées, ET contrats intelligents VÉRIFIÉS — staking/vesting/trésorerie DAO légitimes) possèdent 80% ou plus de l'offre → rejet. Un contrat non vérifié reste compté comme un détenteur normal. (Seul garde-fou de cette liste qui coûte un appel réseau, placé en dernier.)
 
 **3. Analyse technique** — Cascade de récupération de prix à 5 étages, avec pause automatique sur un fournisseur qui échoue en boucle. Recherche d'un setup golden pocket Fibonacci + divergence RSI pour calculer le R/R ; vérification de 3 signaux additionnels (EMA, MACD, pattern de bougie).
 
@@ -3938,7 +3994,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 
 **5. Dernier filtre avant achat** — Un second avis LLM indépendant cherche un piège concret que les seuils numériques ne voient pas.
 
-**6. Volume relatif (RVOL)** — ARIA compare le volume de la bougie qui déclenche l'achat à la moyenne des 10 bougies précédentes. Vraie donnée disponible et volume < 3x la moyenne → rejet, le rebond n'est pas soutenu par du vrai capital. Donnée de volume absente (sources de prix de secours) → jamais de rejet, mais la taille de la position sera plafonnée (étape 8). Volume ≥ 3x la moyenne → confirmé, aucune pénalité.
+**6. Volume relatif (RVOL)** — ARIA compare le volume de la bougie qui déclenche l'achat à la moyenne des 10 bougies précédentes. Vraie donnée disponible et volume < 3x la moyenne → rejet, le rebond n'est pas soutenu par du vrai capital. Même si le ratio est élevé, la bougie déclenchante doit aussi représenter au moins 2 500$ en valeur absolue (sinon un simple pari retail sur un marché déjà quasi-mort peut artificiellement valider le ratio) → rejet aussi dans ce cas. Donnée de volume absente (sources de prix de secours) → jamais de rejet, mais la taille de la position sera plafonnée (étape 8). Volume ≥ 3x la moyenne ET ≥ 2 500$ → confirmé, aucune pénalité.
 
 **7. Volatilité (ATR) et diligence de conviction** — ARIA mesure la volatilité réelle du token (servira au stop, étape 10) et vérifie site officiel, X, GitHub, Farcaster, Telegram — buzz réel, cadence de publication, cohérence du contrat annoncé. N'influence jamais l'achat lui-même, seulement la taille.
 
@@ -3955,7 +4011,8 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **10. Gestion de la position** :
 - Re-scan de sécurité continu
 - Stop suiveur adaptatif à la volatilité : largeur calculée depuis l'ATR mesuré à l'entrée (bornée entre 5% et 40%), jamais un pourcentage fixe pour tous les tokens. Le niveau du stop monte à chaque nouveau sommet, ne redescend jamais.
-- Prise de profit par tiers : le 1er palier (TP1) s'ancre sur la cible technique réelle de la position (le niveau golden pocket qui a validé le R/R à l'entrée), pas un pourcentage fixe — les 2 paliers suivants restent des crans fixes au-dessus (même écart qu'avant : +50pt puis +100pt). Repli sur +50%/+100%/+200% fixes si aucune cible technique n'est connue pour la position.
+- Prise de profit par tiers : le 1er palier (TP1) s'ancre sur la cible technique réelle de la position (le niveau golden pocket qui a validé le R/R à l'entrée), pas un pourcentage fixe. Les 2 paliers suivants sont des MULTIPLES de cette même distance (TP2 = 2x la distance entrée→TP1, TP3 = 3x) — dynamique de bout en bout, un setup serré garde des paliers proportionnellement proches. Repli sur +50%/+100%/+200% fixes si aucune cible technique n'est connue pour la position.
+- Anti-mèche : le plus-haut retenu pour calculer le stop ne peut pas sauter plus vite qu'un plafond par cycle (au moins 3x la largeur du stop, ou 30 points de %, le plus grand des deux) — empêche une seule lecture de prix aberrante (mèche, bot d'arbitrage) de figer un plus-haut fictif qui déclencherait le stop sur un simple retour au calme. Une hausse réelle et soutenue reste rattrapée en 2-3 cycles.
 - Re-achat autorisé sur un contrat déjà clôturé dès qu'un nouveau point d'entrée se profile
 
 **11. Reset hebdomadaire** — Tous les 7 jours : clôture forcée au prix réel, historique archivé, verdict contre l'objectif +10%, redémarrage à 1M$.
