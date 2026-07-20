@@ -224,6 +224,16 @@ class BlockscoutClient:
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
+        # 20/07 -- trouvé en conditions réelles (crédits Pro épuisés en cours de session,
+        # "Out of credits" en HTTP 402) : une clé Pro CONFIGURÉE mais À SEC n'est pas
+        # équivalente à une clé ABSENTE dans ce __init__ -- une fois construit sur la
+        # branche Pro, ce client restait engagé dessus pour toujours, sans jamais
+        # retomber sur l'endpoint gratuit base.blockscout.com pourtant fonctionnel et
+        # déjà implémenté juste pour ce cas (clé absente). Ce flag n'est utilisé QUE pour
+        # ne logger l'avertissement de repli qu'une seule fois (pas à chaque appel) --
+        # le vrai état de repli vit dans base_url/_api_key, mutés en place par
+        # _get_json dès le premier 402 rencontré sur la chaîne "base".
+        self._pro_credits_exhausted = False
 
     async def _throttle(self) -> None:
         async with self._lock:
@@ -252,14 +262,21 @@ class BlockscoutClient:
         if not self.base_url:
             return None, f"{UNAVAILABLE} (clé Blockscout Pro requise pour la chaîne '{self.chain}')"
 
-        url = f"{self.base_url}{path}"
-        call_params = dict(params or {})
-        if self._api_key:
-            call_params["apikey"] = self._api_key
         attempt_429 = 0
         timeout_retried = False
+        pro_fallback_attempted = False
 
         while True:
+            # url/call_params recalculés à CHAQUE itération (pas une seule fois avant la
+            # boucle) -- nécessaire depuis le 20/07 : le repli 402 ci-dessous mute
+            # self.base_url/self._api_key EN PLACE, un calcul figé avant la boucle
+            # aurait retenté indéfiniment l'ancienne URL Pro. Comportement identique
+            # pour tous les autres chemins de retry (429/5xx/timeout), qui ne changent
+            # jamais base_url/_api_key.
+            url = f"{self.base_url}{path}"
+            call_params = dict(params or {})
+            if self._api_key:
+                call_params["apikey"] = self._api_key
             await self._throttle()
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
@@ -272,6 +289,36 @@ class BlockscoutClient:
                 detail = f"{url} -> {exc}"
                 self._record_failure(detail)
                 return None, f"{UNAVAILABLE} (timeout Blockscout)"
+
+            # 20/07 -- trouvé en conditions réelles (crédits Pro épuisés en session,
+            # "Out of credits" en 402) : repli automatique vers l'endpoint GRATUIT
+            # base.blockscout.com, déjà implémenté pour le cas "pas de clé configurée"
+            # mais jamais exercé pour le cas "clé configurée mais à sec" -- les deux
+            # situations laissent pourtant le même vrai choix (Base uniquement, sans
+            # clé). Repli PERMANENT pour la durée de vie de ce process (une clé à sec
+            # ne se recharge pas toute seule) -- ne s'applique QUE sur "base" (seule
+            # chaîne avec un endpoint gratuit connu) et seulement si on utilisait
+            # encore la clé Pro (jamais une boucle si le gratuit lui-même échouait).
+            if (
+                response.status_code == 402
+                and self._api_key
+                and self.chain == "base"
+                and not pro_fallback_attempted
+            ):
+                pro_fallback_attempted = True
+                if not self._pro_credits_exhausted:
+                    self._pro_credits_exhausted = True
+                    logger.warning(
+                        "blockscout: Pro API en 402 (%s) sur %s -- repli PERMANENT (ce "
+                        "process) vers l'endpoint gratuit base.blockscout.com -- "
+                        "signaler à l'opérateur pour recharger les crédits Pro",
+                        response.text[:200],
+                        url,
+                    )
+                self.base_url = BASE_URL
+                self._api_key = None
+                self._min_interval = 0.35
+                continue
 
             if response.status_code == 429:
                 attempt_429 += 1

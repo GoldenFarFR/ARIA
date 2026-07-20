@@ -6,9 +6,10 @@ from aria_core.services.blockscout import BlockscoutClient, UNAVAILABLE
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, payload=None):
+    def __init__(self, status_code: int, payload=None, text: str = ""):
         self.status_code = status_code
         self._payload = payload
+        self.text = text
 
     def json(self):
         return self._payload
@@ -751,3 +752,76 @@ class TestMultiChainProApi:
         b = get_blockscout_client("ethereum")
         assert a is b
         assert get_blockscout_client("base") is not a
+
+    # ── 20/07 -- repli automatique sur 402 "Pro à sec" (trouvé en conditions réelles,
+    # crédits Pro épuisés en session réelle) --------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_402_on_base_falls_back_to_free_endpoint_and_succeeds(self, monkeypatch):
+        """Une clé Pro CONFIGURÉE mais À SEC (402 "Out of credits") doit retomber sur
+        l'endpoint gratuit base.blockscout.com -- déjà implémenté pour le cas "pas de
+        clé", jamais exercé jusqu'ici pour le cas "clé présente mais épuisée"."""
+        _patch_no_sleep(monkeypatch)
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "test-key")
+        client = BlockscoutClient(chain="base")
+        pro_url = f"{client.base_url}/addresses/0xabc"
+        free_url = "https://base.blockscout.com/api/v2/addresses/0xabc"
+        _patch_client(
+            monkeypatch,
+            {
+                pro_url: FakeResponse(402, text='{"error":"Out of credits"}'),
+                free_url: FakeResponse(200, {"is_contract": False}),
+            },
+        )
+
+        info = await client.get_address_info("0xabc")
+
+        assert info.available is True
+        # L'état du client a bien basculé -- toute future requête ira directement
+        # sur le gratuit, plus jamais sur l'URL Pro.
+        assert client.base_url == "https://base.blockscout.com/api/v2"
+        assert client._api_key is None
+
+    @pytest.mark.asyncio
+    async def test_402_fallback_persists_across_subsequent_calls(self, monkeypatch):
+        """Une fois le repli déclenché, les appels SUIVANTS vont directement sur le
+        gratuit -- jamais un nouveau coup sur l'URL Pro à chaque appel."""
+        _patch_no_sleep(monkeypatch)
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "test-key")
+        client = BlockscoutClient(chain="base")
+        pro_url = f"{client.base_url}/addresses/0xabc"
+        free_url_abc = "https://base.blockscout.com/api/v2/addresses/0xabc"
+        free_url_def = "https://base.blockscout.com/api/v2/addresses/0xdef"
+        _patch_client(
+            monkeypatch,
+            {
+                pro_url: FakeResponse(402, text='{"error":"Out of credits"}'),
+                free_url_abc: FakeResponse(200, {"is_contract": False}),
+                free_url_def: FakeResponse(200, {"is_contract": True}),
+            },
+        )
+
+        first = await client.get_address_info("0xabc")
+        second = await client.get_address_info("0xdef")
+
+        assert first.available is True
+        assert second.available is True
+        assert second.is_contract is True
+
+    @pytest.mark.asyncio
+    async def test_402_on_non_base_chain_never_falls_back_no_free_endpoint(self, monkeypatch):
+        """Aucun endpoint gratuit connu hors Base -- un 402 sur une autre chaîne dégrade
+        proprement (comportement historique), jamais une URL devinée/un repli inventé."""
+        _patch_no_sleep(monkeypatch)
+        monkeypatch.setenv("BLOCKSCOUT_PRO_API_KEY", "test-key")
+        client = BlockscoutClient(chain="ethereum")
+        url = f"{client.base_url}/addresses/0xabc"
+        _patch_client(monkeypatch, {url: FakeResponse(402, text='{"error":"Out of credits"}')})
+
+        info = await client.get_address_info("0xabc")
+
+        assert info.available is False
+        assert UNAVAILABLE in info.error
+        # Le client reste engagé sur la Pro API -- aucun repli possible pour cette chaîne.
+        assert client.base_url == "https://api.blockscout.com/1/api/v2"
+        assert client._api_key == "test-key"
