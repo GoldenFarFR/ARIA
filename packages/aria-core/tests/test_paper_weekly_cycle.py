@@ -11,6 +11,8 @@ import pytest
 
 from aria_core import paper_trader as pt, risk_guard
 from aria_core.paths import configure_data_dir
+from aria_core.services.dexscreener import PairSnapshot
+from aria_core.skills.ta_levels import Candle
 
 A = "0x" + "a" * 40
 B = "0x" + "b" * 40
@@ -198,22 +200,182 @@ async def test_run_weekly_reset_clears_circuit_breaker_for_fresh_week(tmp_db):
 
 @pytest.mark.asyncio
 async def test_run_weekly_reset_default_price_lookup_signature(tmp_db, monkeypatch):
-    """Le price_lookup PAR DÉFAUT (_default_price_lookup) est appelé avec ``chain=`` --
-    un price_lookup INJECTÉ garde le contrat d'appel historique à un seul argument (même
-    convention que run_paper_cycle, cf. paper_trader.py)."""
+    """Le mécanisme de prix PAR DÉFAUT (#173 -- ``_default_pair_lookup``, plus
+    ``_default_price_lookup`` directement depuis le 20/07) est appelé avec ``chain=``
+    -- un price_lookup INJECTÉ garde le contrat d'appel historique à un seul argument
+    (même convention que run_paper_cycle, cf. paper_trader.py)."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, chain="solana")
 
     calls = []
 
-    async def fake_default(contract, *, chain="base"):
+    async def fake_pair_lookup(contract, *, chain="base"):
         calls.append((contract, chain))
-        return 2.0
+        return PairSnapshot(pair_address="0xpool", price_usd=2.0, liquidity_usd=100_000.0, base_symbol="AAA")
 
-    monkeypatch.setattr(pt, "_default_price_lookup", fake_default)
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
     await pt.run_weekly_reset()
 
     assert calls == [(A, "solana")]
+
+
+# ── #173 (20/07) : prix de clôture ROBUSTE (médiane bougies) au reset hebdomadaire ──
+
+def _candles(*closes: float) -> list[Candle]:
+    return [Candle(ts=i, open=c, high=c, low=c, close=c) for i, c in enumerate(closes)]
+
+
+class TestRobustClosePrice:
+    """_robust_close_price -- fonction quasi pure (un seul appel réseau mocké),
+    testée directement sans passer par tout le cycle de reset."""
+
+    @pytest.mark.asyncio
+    async def test_odd_count_uses_middle_value(self, monkeypatch):
+        async def fake_fetch(pool_address, chain, *, contract="", pair=None):
+            return _candles(1.0, 1.1, 5.0)  # 5.0 = mèche isolée -- médiane ignore l'extrême
+
+        monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch)
+        pair = PairSnapshot(pair_address="0xpool", price_usd=5.0)
+        price = await pt._robust_close_price(A, "base", pair)
+        assert price == pytest.approx(1.1)
+
+    @pytest.mark.asyncio
+    async def test_even_count_averages_two_middle_values(self, monkeypatch):
+        async def fake_fetch(pool_address, chain, *, contract="", pair=None):
+            return _candles(1.0, 1.2, 1.4, 1.6)
+
+        monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch)
+        pair = PairSnapshot(pair_address="0xpool", price_usd=1.6)
+        price = await pt._robust_close_price(A, "base", pair)
+        assert price == pytest.approx((1.2 + 1.4) / 2.0)
+
+    @pytest.mark.asyncio
+    async def test_too_few_candles_returns_none(self, monkeypatch):
+        async def fake_fetch(pool_address, chain, *, contract="", pair=None):
+            return _candles(1.0, 1.1)  # sous _RESET_PRICE_MIN_CANDLES (3)
+
+        monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch)
+        pair = PairSnapshot(pair_address="0xpool", price_usd=1.1)
+        assert await pt._robust_close_price(A, "base", pair) is None
+
+    @pytest.mark.asyncio
+    async def test_invalid_closes_filtered_before_counting(self, monkeypatch):
+        async def fake_fetch(pool_address, chain, *, contract="", pair=None):
+            return _candles(1.0, 0.0, 1.2, -1.0, 1.4)  # 2 invalides -> seulement 3 valides
+
+        monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch)
+        pair = PairSnapshot(pair_address="0xpool", price_usd=1.4)
+        price = await pt._robust_close_price(A, "base", pair)
+        assert price == pytest.approx(1.2)
+
+    @pytest.mark.asyncio
+    async def test_empty_candles_returns_none(self, monkeypatch):
+        async def fake_fetch(pool_address, chain, *, contract="", pair=None):
+            return []
+
+        monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch)
+        pair = PairSnapshot(pair_address="0xpool", price_usd=1.0)
+        assert await pt._robust_close_price(A, "base", pair) is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_exception_degrades_to_none_never_raises(self, monkeypatch):
+        async def fake_fetch(pool_address, chain, *, contract="", pair=None):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch)
+        pair = PairSnapshot(pair_address="0xpool", price_usd=1.0)
+        assert await pt._robust_close_price(A, "base", pair) is None
+
+    @pytest.mark.asyncio
+    async def test_none_pair_returns_none(self):
+        assert await pt._robust_close_price(A, "base", None) is None
+
+    @pytest.mark.asyncio
+    async def test_pair_without_address_returns_none(self):
+        pair = PairSnapshot(pair_address="", price_usd=1.0)
+        assert await pt._robust_close_price(A, "base", pair) is None
+
+    @pytest.mark.asyncio
+    async def test_only_last_window_considered(self, monkeypatch):
+        """Une vieille mèche hors fenêtre ne doit jamais influencer la médiane."""
+        async def fake_fetch(pool_address, chain, *, contract="", pair=None):
+            return _candles(50.0, 50.0, 1.0, 1.1, 1.2)  # fenêtre par défaut = 5 dernières
+
+        monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch)
+        pair = PairSnapshot(pair_address="0xpool", price_usd=1.2)
+        price = await pt._robust_close_price(A, "base", pair)
+        # Toutes les 5 sont dans la fenêtre par défaut (exactement 5) -- médiane sur les 5.
+        assert price == pytest.approx(1.2)
+
+
+@pytest.mark.asyncio
+async def test_run_weekly_reset_uses_robust_median_over_raw_spot(tmp_db, monkeypatch):
+    """Cas central (#173) : le spot instantané reflète une mèche (5.0$) mais les
+    bougies récentes montrent un prix stable (~1.1$) -- le reset doit clôturer sur la
+    médiane robuste, pas sur le tick de mèche."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return PairSnapshot(pair_address="0xpool", price_usd=5.0, liquidity_usd=100_000.0, base_symbol="AAA")
+
+    async def fake_fetch(pool_address, chain, *, contract="", pair=None):
+        return _candles(1.0, 1.1, 1.05)  # aucune trace de la mèche à 5.0$ dans l'historique
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+    monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch)
+
+    report = await pt.run_weekly_reset()
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        async with db.execute(
+            "SELECT exit_price, close_notes FROM paper_position_archive WHERE contract = ?", (A,),
+        ) as cur:
+            row = await cur.fetchone()
+    assert row is not None
+    assert row[0] == pytest.approx(1.05)  # médiane, jamais le spot à 5.0$
+    assert "médiane" in row[1].lower() or "anti-mèche" in row[1].lower()
+    assert report["force_closed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_weekly_reset_falls_back_to_spot_when_no_candles(tmp_db, monkeypatch):
+    """Non-régression : sans bougies exploitables, le reset retombe sur le prix spot
+    déjà en main (comportement historique), jamais un échec bloquant."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return PairSnapshot(pair_address="0xpool", price_usd=1.3, liquidity_usd=100_000.0, base_symbol="AAA")
+
+    async def fake_fetch(pool_address, chain, *, contract="", pair=None):
+        return []
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+    monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch)
+
+    await pt.run_weekly_reset()
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        async with db.execute(
+            "SELECT exit_price FROM paper_position_archive WHERE contract = ?", (A,),
+        ) as cur:
+            row = await cur.fetchone()
+    assert row[0] == pytest.approx(1.3)
+
+
+@pytest.mark.asyncio
+async def test_run_weekly_reset_falls_back_to_entry_price_when_pair_unavailable(tmp_db, monkeypatch):
+    """Non-régression totale : aucune paire trouvée du tout -> comportement historique
+    inchangé, repli sur le prix d'entrée (jamais un prix inventé)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return None
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+
+    report = await pt.run_weekly_reset()
+    assert round(report["end_equity"]) == 1_000_000  # pnl == 0, valorisé au coût d'entrée
 
 
 def test_format_weekly_cycle_report_shows_verdict():

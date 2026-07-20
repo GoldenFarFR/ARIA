@@ -1236,6 +1236,47 @@ async def _default_price_lookup(contract: str, *, chain: str = "base") -> float 
     return best.price_usd if best.price_usd > 0 else None
 
 
+# 20/07 -- #173, revue croisée : le reset hebdomadaire force-clôturait chaque position
+# encore ouverte sur un SEUL tick spot instantané (``_default_price_lookup``) --
+# vulnérable à une mèche isolée survenant pile au moment du reset (même classe de
+# risque déjà traitée ailleurs pour la gestion continue -- anti-mèche du stop suiveur,
+# Breakeven Hard Floor -- mais jamais pour CET événement ponctuel précis). Fenêtre
+# courte : le reset est hebdomadaire, pas besoin d'un historique long, juste résister
+# à UN tick aberrant.
+_RESET_PRICE_CANDLE_WINDOW = 5
+_RESET_PRICE_MIN_CANDLES = 3
+
+
+async def _robust_close_price(contract: str, chain: str, pair) -> float | None:
+    """Prix de clôture ROBUSTE pour le reset hebdomadaire (#173) -- médiane des
+    ``_RESET_PRICE_CANDLE_WINDOW`` dernières bougies OHLCV (même cascade à 5 étages
+    que le pipeline momentum, ``momentum_entry._fetch_candles`` -- jamais un second
+    client dupliqué) plutôt qu'un tick spot unique : une mèche isolée sur UNE bougie
+    ne domine pas une médiane sur plusieurs. Sous ``_RESET_PRICE_MIN_CANDLES`` bougies
+    exploitables (chandelles absentes/invalides) -> ``None``, l'appelant retombe alors
+    sur le prix spot déjà en main (``pair.price_usd``, zéro appel réseau
+    supplémentaire) -- jamais pire que le comportement historique, jamais bloquant."""
+    if pair is None or not pair.pair_address:
+        return None
+    from aria_core import momentum_entry
+
+    try:
+        candles = await momentum_entry._fetch_candles(
+            pair.pair_address, chain, contract=contract, pair=pair,
+        )
+    except Exception:  # noqa: BLE001 — jamais bloquant, l'appelant dégrade vers le spot
+        return None
+    closes = sorted(
+        c.close for c in candles[-_RESET_PRICE_CANDLE_WINDOW:] if c.close and c.close > 0
+    )
+    if len(closes) < _RESET_PRICE_MIN_CANDLES:
+        return None
+    mid = len(closes) // 2
+    if len(closes) % 2 == 1:
+        return closes[mid]
+    return (closes[mid - 1] + closes[mid]) / 2.0
+
+
 async def _default_analyzer(contract: str) -> dict | None:
     """Signal d'un contrat à partir de la VRAIE analyse VC. Retourne action + niveaux."""
     from aria_core.skills.vc_analysis import analyze_vc_with_context
@@ -1381,11 +1422,22 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
 
     force_closed: list[dict] = []
     for pos in await get_open_positions():
+        price = None
+        price_source = "indisponible"
         try:
             if using_default_price_lookup:
-                price = await _default_price_lookup(pos["contract"], chain=pos.get("chain") or "base")
+                chain = pos.get("chain") or "base"
+                pair = await _default_pair_lookup(pos["contract"], chain=chain)
+                robust = await _robust_close_price(pos["contract"], chain, pair)
+                if robust and robust > 0:
+                    price = robust
+                    price_source = "médiane bougies (anti-mèche, #173)"
+                elif pair is not None and pair.price_usd and pair.price_usd > 0:
+                    price = pair.price_usd
+                    price_source = "spot (bougies indisponibles)"
             else:
                 price = await price_lookup(pos["contract"])
+                price_source = "de marché" if (price and price > 0) else "indisponible"
         except Exception:  # noqa: BLE001 — un prix indispo ne bloque jamais le reset
             price = None
         exit_price = price if (price and price > 0) else pos["entry_price"]
@@ -1394,7 +1446,7 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
             reason="reset_hebdomadaire",
             notes=(
                 f"Clôture forcée -- fin du cycle #{cycle_number} ({_duration_phrase(pos.get('opened_at'))}), "
-                f"prix {'de marché' if (price and price > 0) else 'indisponible, valorisé au coût d’entrée'}."
+                f"prix {price_source if (price and price > 0) else 'indisponible, valorisé au coût d’entrée'}."
             ),
         )
         if closed:
