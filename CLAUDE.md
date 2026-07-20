@@ -2365,6 +2365,80 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   échoué avant ce correctif — vérifié). Suite complète verte (6242 passed, mêmes 7
   échecs pré-existants sans rapport #142, 0 régression), `test_coherence.py` vert (81
   passed). Déployé et vérifié (commit `3555309adeb6` confirmé servi par nginx).
+- **20/07 — 2 nouveaux gates durs momentum (âge 14j + profil payé) + fix conflation
+  volume/liquidité dans /vc, décision opérateur explicite ("minimum 14 jours et il
+  faut que le profil soit payer que se soit sur dexscreener ou coingecko").**
+  1. **Âge minimum de la paire (`_MIN_PAIR_AGE_DAYS = 14.0`)** — répond à un angle
+     mort documenté par la revue croisée Kiwi du 19/07 (Fibonacci/RSI sur une paire
+     de quelques heures = pattern matching sur du bruit, pas assez de bougies).
+     `_pair_age_days()` calcule l'âge depuis `pair_created_at` (DexScreener, ms
+     epoch — confirmé via l'usage `pair_created_at_ms` déjà présent dans
+     `acp_onchain_scan.py`), gratuit (donnée déjà en main). Fail-closed si absent.
+  2. **Profil projet établi (`_check_project_profile`)** — vérifié en réel avant de
+     coder (jamais supposé) : DexScreener "Enhanced Token Info" est un VRAI produit
+     payant (~299$, confirmé via `marketplace.dexscreener.com/product/token-info`)
+     qui remplit `info.websites`/`socials` — déjà extrait sans coût réseau via
+     `PairSnapshot.project_links` (aucun nouvel appel). CoinGecko en repli
+     court-circuité (interrogé SEULEMENT si DexScreener n'a rien) — **précision
+     honnête donnée à l'opérateur** : contrairement à DexScreener, le listing
+     CoinGecko de base est GRATUIT (nécessite un post de vérification publique +
+     revue éditoriale, seule l'expédition — CoinGecko Fast Pass, 200$ — est payante)
+     ; traité comme un signal de légitimité équivalent malgré la nuance ("un projet
+     sans aucun des deux n'a investi nulle part dans une présence vérifiable").
+     Plateformes CoinGecko confirmées par appel réel à `/api/v3/asset_platforms`
+     (20/07) : base/solana/robinhood ont TOUTES les 3 un `platform_id` direct
+     (`"base"`/`"solana"`/`"robinhood"`) — aucune chaîne du pipeline momentum n'est
+     structurellement privée du repli. OR logique, jamais AND.
+  3. **Fix conflation volume/liquidité (`vc_analysis.py`, découvert sur un rapport
+     réel LAUKI, capture opérateur)** — la thèse LLM affirmait "le volume 24h de
+     697 USD signalent une liquidité insuffisante" alors que la vraie liquidité
+     était de 136K$ (saine) : deux métriques distinctes correctement séparées en
+     entrée (`Liquidité USD`/`Volume 24h USD`, deux lignes), mais le LLM les a
+     conflées dans sa rédaction. Le verdict final (AVOID) restait justifié par
+     d'autres signaux réels (mint autorité inconnue, 83% ventes, EMA baissier,
+     pas de listing CoinGecko) — l'erreur n'a pas inversé la décision, mais minait
+     la confiance dans le texte. Nouvelle règle 6 dans `_SYSTEM_PROMPT` : interdit
+     explicitement de présenter l'une comme preuve/conséquence de l'autre.
+  4 nouveaux gates ajoutés à `evaluate_momentum_entry` (positionnés après le
+  plafond parabolique, avant la concentration des holders — dans l'ordre : âge
+  gratuit, profil éventuellement réseau court-circuité, concentration toujours
+  réseau). `_pair()` (fixture de test) gagne des défauts sûrs (`pair_created_at`
+  fixé à une constante passée immuable, `project_links` non vide) — même piège
+  déjà rencontré sur chaque nouveau gate précédent (liquidité/volume/RVOL),
+  évité cette fois en anticipant dès l'écriture des tests. 15 nouveaux tests
+  dédiés (âge + profil, dont le court-circuit CoinGecko et le mapping par
+  chaîne), suite complète verte (6254 passed, mêmes 7 échecs pré-existants
+  `test_proactive*` sans rapport #142, 0 régression), `test_coherence.py` vert
+  (81 passed).
+- **20/07 (suite) — trouvaille réelle en répondant à une question opérateur sur un
+  `/scan` DANGER (27/100, TSG, capture opérateur) : la pénalité mint (-30) n'est
+  jamais contextualisée par l'autorité réelle, alors que le code le documente comme
+  intention.** Math vérifiée et confirmée exacte : 50 (base) + 10 (liquidité) + 5
+  (volume) - 8 (prix -24.8%) - 30 (mint détecté) = 27. Sur CE token, le DANGER est
+  justifié (mint_authority résolu en direct = "unknown", pas renoncé, pas un
+  launchpad connu). Mais `_apply_onchain_signals` (score) applique le -30 flat dès
+  que `contract_flags.has_mint=True`, AVANT que `_resolve_mint_authority` (qui
+  calcule renoncé/launchpad/eoa/unknown, commentaire explicite dans le code :
+  "un mint légitime ne doit pas faire rejeter un bon token") ne tourne — son
+  résultat n'est jamais relu pour ajuster le score/flag déjà figés. Un mint
+  renoncé ou tenu par un launchpad connu recevrait donc la même pénalité et le
+  même texte alarmiste qu'un mint eoa suspect. **Piste de correction affinée par
+  une capture opérateur (DexScreener, token SAIRI, GoPlus + Quick Intel comme
+  référence "sécurité propre")** : GoPlus affiche déjà "Ownership renounced: Yes"
+  directement dans sa réponse — signal gratuit (même appel que le honeypot check
+  déjà fait), mais `services/goplus.py` ne capture PAS ce champ aujourd'hui.
+  Meilleure base que le plan initial (Blockscout `read_owner`, résolu "unknown"
+  sur TSG) pour corriger #164. Quick Intel (2e avis sécurité payant, visible sur
+  la capture) reste une piste déjà notée le 15/07 ("banqué, pas d'arbitrage
+  coût/bénéfice tranché") — pas retranchée par cette découverte. **Proposition
+  faite à l'opérateur, PAS encore codée** (#164, en attente du go).
+- **20/07 (suite) — paiements x402 réels confirmés sur le registre de prod, en
+  réponse à une question opérateur directe (captures Telegram, 3 reçus wallet
+  agent).** `x402_budget.list_spends()` interrogé en direct : les paiements sont
+  tous `provider=twitsh` (recherche X payante, #111/#112), 2 appels par token
+  évalué par le pipeline momentum (`tweets-search` 0,006$ + `tweets-user` 0,01$)
+  — confirmé sur TIBBIR/LAUKI/AVA/ROBA, contract/token_symbol correctement
+  enregistrés (#143 fonctionne en prod). Budget hebdo 5$ largement respecté.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -4078,7 +4152,7 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 **Direct, problème → solution (consigne opérateur explicite, 16/07)** : annoncer le problème puis la solution/action directement, sans argumenter ni justifier en détail par défaut. Toujours proposer ensuite à l'opérateur s'il veut plus de détail (raisonnement, alternatives écartées, preuves) plutôt que de les dérouler d'office.
 **Réponse type « la thèse sur l'achat » (consigne opérateur explicite, 19/07)** : quand l'opérateur demande « la thèse sur l'achat » (ou une formulation proche : « renvoie la thèse », « explique le processus d'achat ») SANS nommer un contrat précis, répondre avec EXACTEMENT le processus détaillé de la section « Processus d'achat momentum — réponse de référence » ci-dessous, jamais la thèse d'une position individuelle. Si l'opérateur nomme un contrat/token précis, donner plutôt SA thèse réelle (champ `thesis` en base, via `paper_trader.get_open_positions()`/`get_closed_positions()` ou l'historique `/feedback`), pas le processus général.
 
-## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `d54c3513a235`)
+## Processus d'achat momentum — réponse de référence (à jour 20/07, commit `9062f0a7`)
 **⚠️ Instantané daté du pipeline momentum (`momentum_entry.py` + `risk_guard.py` + `paper_trader.py`) — norme « vérifier avant d'affirmer » (Règles absolues) : si une session reprend ce fil après une évolution du pipeline, RECONFIRMER ce texte contre le code réel avant de le renvoyer tel quel plutôt que de le réciter de mémoire. Mettre à jour ce bloc DANS LE MÊME COMMIT que tout changement touchant l'ordre/les seuils du pipeline momentum, pour qu'il ne dérive jamais.**
 
 **1. Découverte** — Scan continu DexScreener (Base, Solana, Robinhood Chain) + flux WebSocket temps réel, en plus du scan classique toutes les 15 min.
@@ -4090,7 +4164,9 @@ Court, clair, sans remplissage, sans exposer le raisonnement interne. Jamais le 
 - Volume minimum : le plus haut entre 5 000$ (plancher absolu) et 10% de la liquidité du pool (empêche un marché "zombie" — liquidité présente mais personne ne trade — de fabriquer un faux setup, y compris sur un gros pool où un plancher purement absolu deviendrait trivial)
 - Ratio volume/liquidité > 20x (wash-trading)
 - Déjà monté de +200% en 24h
-- Concentration des holders : si les 10 plus gros détenteurs (hors pool, adresses brûlées, ET contrats intelligents VÉRIFIÉS — staking/vesting/trésorerie DAO légitimes) possèdent 80% ou plus de l'offre → rejet. Un contrat non vérifié reste compté comme un détenteur normal. (Seul garde-fou de cette liste qui coûte un appel réseau, placé en dernier.)
+- Âge minimum de la paire : 14 jours (décision opérateur explicite, 20/07). Une paire trop jeune n'a pas assez d'historique de bougies pour un signal Fibonacci/RSI fiable. Âge inconnu → rejet (même doctrine que la liquidité, jamais "OK par défaut" sur une donnée manquante).
+- Profil projet établi : profil DexScreener payant (Enhanced Token Info, ~299$, détecté via les liens officiels déjà déclarés sur la paire, gratuit) OU listing CoinGecko (réseau, interrogé seulement si DexScreener n'a rien). Aucun des deux → rejet (décision opérateur explicite, 20/07 : "il faut que le profil soit payé que ce soit sur dexscreener ou coingecko").
+- Concentration des holders : si les 10 plus gros détenteurs (hors pool, adresses brûlées, ET contrats intelligents VÉRIFIÉS — staking/vesting/trésorerie DAO légitimes) possèdent 80% ou plus de l'offre → rejet. Un contrat non vérifié reste compté comme un détenteur normal. (Seul garde-fou de cette liste qui coûte TOUJOURS un appel réseau, placé en dernier.)
 
 **3. Analyse technique** — Cascade de récupération de prix à 5 étages, avec pause automatique sur un fournisseur qui échoue en boucle. Recherche d'un setup golden pocket Fibonacci + divergence RSI pour calculer le R/R ; vérification de 3 signaux additionnels (EMA, MACD, pattern de bougie).
 

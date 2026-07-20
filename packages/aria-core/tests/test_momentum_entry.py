@@ -2,11 +2,13 @@
 alignement technique en bonus. Aucun appel réseau réel, tout est mocké."""
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 import pytest
 
 from aria_core import momentum_entry as me
+from aria_core.services.coingecko import TokenFundamentals
 from aria_core.services.dexscreener import PairSnapshot
 from aria_core.skills.entry_signals import EntrySignal
 from aria_core.skills.ta_levels import Candle
@@ -926,9 +928,16 @@ def _pair(**overrides) -> PairSnapshot:
     # ratio wash-trading (50k/150k = 0,33x, largement < 20x) : les tests qui ne testent
     # pas spécifiquement ces gates doivent continuer à les traverser sans avoir à
     # overrider quoi que ce soit un par un.
+    # 20/07 -- pair_created_at fixé à une constante passée (~nov. 2023, en ms epoch) :
+    # toujours > _MIN_PAIR_AGE_DAYS (14j) quel que soit le moment où le test tourne
+    # (le temps ne recule jamais). project_links non vide par défaut (profil DexScreener
+    # "payant" déjà présent) -- même doctrine que les autres planchers ci-dessus, aucun
+    # appel réseau CoinGecko déclenché par défaut.
     base = {
         "pair_address": "0xpool", "price_usd": 1.5, "liquidity_usd": 150_000.0,
         "volume_24h_usd": 50_000.0, "base_symbol": "TOK", "base_address": CONTRACT.lower(),
+        "pair_created_at": 1_700_000_000_000,
+        "project_links": [{"label": "Site officiel", "url": "https://example.test"}],
     }
     base.update(overrides)
     return PairSnapshot(**base)
@@ -1089,6 +1098,140 @@ async def test_evaluate_allows_volume_meeting_ratio_on_large_pool(monkeypatch):
     )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "volume_too_low"
+    assert result["action"] == "BUY"
+
+
+# ── plancher d'âge minimum de la paire (20/07, décision opérateur explicite) ────────
+
+def test_pair_age_days_none_on_missing_timestamp():
+    assert me._pair_age_days(None) is None
+    assert me._pair_age_days(0) is None
+
+
+def test_pair_age_days_none_on_timestamp_in_the_future():
+    future_ms = int(time.time() * 1000) + 3_600_000
+    assert me._pair_age_days(future_ms) is None
+
+
+def test_pair_age_days_computes_real_age():
+    thirty_days_ago_ms = int(time.time() * 1000) - 30 * 86_400_000
+    age = me._pair_age_days(thirty_days_ago_ms)
+    assert age is not None
+    assert 29.9 < age < 30.1
+
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_pair_younger_than_floor(monkeypatch):
+    """Décision opérateur explicite (20/07) : "minimum 14 jours" -- une paire de
+    quelques heures n'a pas assez d'historique pour un signal Fibonacci/RSI fiable."""
+    recent_ms = int(time.time() * 1000) - 2 * 86_400_000  # 2 jours
+    _patch_pipeline(monkeypatch, pairs=[_pair(pair_created_at=recent_ms)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "pair_too_young"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_unknown_pair_age_as_too_young(monkeypatch):
+    """Âge inconnu (``pair_created_at=None``) -- fail-closed, même doctrine que la
+    liquidité : jamais "OK par défaut" sur une donnée manquante."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(pair_created_at=None)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "pair_too_young"
+
+
+# ── profil projet établi -- DexScreener payant OU CoinGecko (20/07, décision opérateur
+# explicite : "il faut que le profil soit payé que ce soit sur dexscreener ou coingecko") ─
+
+@pytest.mark.asyncio
+async def test_check_project_profile_true_on_dexscreener_links_no_network_call(monkeypatch):
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("CoinGecko ne doit jamais être appelé si DexScreener a déjà un profil")
+
+    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fail_if_called)
+    pair = _pair(project_links=[{"label": "Site officiel", "url": "https://example.test"}])
+    ok, reason = await me._check_project_profile("base", CONTRACT, pair)
+    assert ok is True
+    assert "dexscreener" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_check_project_profile_true_on_coingecko_listing_fallback(monkeypatch):
+    async def fake_fundamentals(contract, *, platform_id="base"):
+        assert platform_id == "base"
+        return TokenFundamentals(contract=contract, available=True)
+
+    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    pair = _pair(project_links=[])
+    ok, reason = await me._check_project_profile("base", CONTRACT, pair)
+    assert ok is True
+    assert "coingecko" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_check_project_profile_uses_the_right_platform_per_chain(monkeypatch):
+    seen = {}
+
+    async def fake_fundamentals(contract, *, platform_id="base"):
+        seen["platform_id"] = platform_id
+        return TokenFundamentals(contract=contract, available=True)
+
+    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    pair = _pair(project_links=[])
+    await me._check_project_profile("solana", CONTRACT, pair)
+    assert seen["platform_id"] == "solana"
+    await me._check_project_profile("robinhood", CONTRACT, pair)
+    assert seen["platform_id"] == "robinhood"
+
+
+@pytest.mark.asyncio
+async def test_check_project_profile_false_when_neither_available(monkeypatch):
+    async def fake_fundamentals(contract, *, platform_id="base"):
+        return TokenFundamentals(contract=contract, available=False)
+
+    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    pair = _pair(project_links=[])
+    ok, reason = await me._check_project_profile("base", CONTRACT, pair)
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_check_project_profile_false_on_unmapped_chain_without_network_call():
+    """Une chaîne non couverte par CoinGecko (aucune entrée dans
+    ``_COINGECKO_PLATFORM_BY_CHAIN``) ne doit jamais tenter d'appel réseau -- repli
+    honnête sur DexScreener seul, jamais un blocage sur ce qu'on ne peut pas vérifier
+    ailleurs."""
+    pair = _pair(project_links=[])
+    ok, reason = await me._check_project_profile("some-unmapped-chain", CONTRACT, pair)
+    assert ok is False
+    assert "non couvert" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_when_no_verified_profile(monkeypatch):
+    async def fake_fundamentals(contract, *, platform_id="base"):
+        return TokenFundamentals(contract=contract, available=False)
+
+    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    _patch_pipeline(monkeypatch, pairs=[_pair(project_links=[])])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "no_verified_profile"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_allows_buy_via_coingecko_fallback_when_dexscreener_has_no_profile(monkeypatch):
+    """Non-régression bout en bout : un token sans profil DexScreener mais listé sur
+    CoinGecko doit quand même pouvoir passer jusqu'au BUY (OR logique, pas AND)."""
+    async def fake_fundamentals(contract, *, platform_id="base"):
+        return TokenFundamentals(contract=contract, available=True)
+
+    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, pairs=[_pair(project_links=[])], signal=strong, align=(3, []))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "no_verified_profile"
     assert result["action"] == "BUY"
 
 

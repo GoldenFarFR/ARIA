@@ -36,7 +36,12 @@ le test 1M$ (#194) », à lire avant toute modification) :
     par bougie est disponible et l'infirme ; fail-open, jamais un rejet, quand la
     donnée est structurellement absente, ex. repli synthèse DexScreener/Dune -- mais
     alors un malus de conviction s'applique au sizing, cf. risk_guard.
-    conviction_size_multiplier).
+    conviction_size_multiplier) ; âge minimum de la paire (``_MIN_PAIR_AGE_DAYS``,
+    14 jours depuis le 20/07 -- décision opérateur explicite, ferme l'angle mort
+    Fibonacci-sur-du-bruit d'une paire trop jeune pour un historique de bougies
+    fiable ; fail-closed si l'âge est inconnu) ; profil projet établi
+    (``_check_project_profile``, 20/07 -- décision opérateur explicite : profil
+    DexScreener payant OU listing CoinGecko, aucun des deux -> rejet).
   - **R/R positif obligatoire** (cible/invalidation dérivés de niveaux RÉELS via
     ``entry_signals.detect_entry`` -- golden pocket + divergence RSI) : sans lui,
     HOLD. Jamais un objectif fabriqué quand l'OHLCV est indisponible.
@@ -65,6 +70,7 @@ import logging
 import time
 
 from aria_core import momentum_blacklist
+from aria_core.services.coingecko import coingecko_client
 from aria_core.services.dexscreener import (
     PairSnapshot,
     fetch_token_pairs,
@@ -189,6 +195,40 @@ _MIN_VOLUME_TO_LIQUIDITY_RATIO = 0.10
 _TOP_N_HOLDERS_FOR_CONCENTRATION = 10
 _MAX_TOP_HOLDERS_CONCENTRATION_PCT = 80.0
 _BURN_ADDRESSES = ("0x" + "0" * 40, "0x000000000000000000000000000000000000dead")
+
+# 20/07 -- plancher d'âge minimum de la paire (décision opérateur explicite). Angle
+# mort documenté par la revue croisée Kiwi du 19/07 : golden pocket + divergence RSI
+# sont des formules Fibonacci calculées sur un historique de bougies -- sur une paire
+# vieille de quelques heures, ce signal est du pattern matching sur du bruit (pas
+# assez de bougies pour distinguer un vrai retracement d'une fluctuation de lancement).
+# ``pair_created_at`` (DexScreener, ms epoch -- confirmé via l'usage ``pair_created_at_ms``
+# dans acp_onchain_scan.py) donne l'âge réel sans appel réseau supplémentaire (déjà sur
+# ``best``). Fail-closed si l'horodatage est absent -- même doctrine que la liquidité :
+# une donnée manquante n'est jamais traitée comme "OK par défaut".
+_MIN_PAIR_AGE_DAYS = 14.0
+
+# 20/07 -- profil projet établi sur au moins UNE plateforme reconnue (décision opérateur
+# explicite : "il faut que le profil soit payé que ce soit sur dexscreener ou coingecko").
+# Deux signaux distincts, vérifiés en réel (recherche + appel API direct, jamais supposés) :
+# - DexScreener "Enhanced Token Info" (~299$, produit payant confirmé) remplit
+#   `info.websites`/`info.socials` sur la paire -- déjà extrait sans coût réseau
+#   supplémentaire via `PairSnapshot.project_links` (aucun nouvel appel).
+# - CoinGecko listing (`/coins/{platform}/contract/{contract}`) : PRÉCISION HONNÊTE --
+#   contrairement à DexScreener, le listing de base est GRATUIT (nécessite un post de
+#   vérification publique + revue éditoriale, seule l'expédition du traitement est
+#   payante). Même ordre de légitimité que "payé" du point de vue opérateur : un projet
+#   qui n'a NI l'un NI l'autre n'a investi nulle part dans une présence vérifiable.
+# OR logique, court-circuité : CoinGecko n'est interrogé QUE si DexScreener n'a rien
+# (préserve la vitesse du pipeline, doctrine #194 -- la majorité des projets légitimes ont
+# déjà des project_links, donc le chemin réseau reste rare en pratique). Plateformes
+# CoinGecko confirmées par appel réel à /api/v3/asset_platforms (20/07) : base/solana/
+# robinhood ont TOUTES les 3 un platform_id direct -- aucune chaîne du pipeline momentum
+# n'est structurellement privée du repli CoinGecko.
+_COINGECKO_PLATFORM_BY_CHAIN: dict[str, str] = {
+    "base": "base",
+    "solana": "solana",
+    "robinhood": "robinhood",
+}
 
 # 19/07 -- volume relatif (RVOL, revue croisée Gemini, 4e round). Vise le risque
 # spécifique du "rechargement profond" (golden pocket + divergence RSI) : un creux
@@ -481,6 +521,33 @@ async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, s
         "RugCheck disponible mais verdict non concluant -- rejet par prudence",
         "honeypot_unavailable",
     )
+
+
+def _pair_age_days(pair_created_at_ms: int | None) -> float | None:
+    """Âge de la paire en jours depuis ``pairCreatedAt`` (DexScreener, ms epoch).
+    ``None`` si l'horodatage est absent, invalide ou dans le futur (horloge
+    incohérente) -- jamais un âge inventé."""
+    if not pair_created_at_ms or pair_created_at_ms <= 0:
+        return None
+    age_ms = (time.time() * 1000.0) - pair_created_at_ms
+    if age_ms < 0:
+        return None
+    return age_ms / 86_400_000.0
+
+
+async def _check_project_profile(chain: str, contract: str, pair: PairSnapshot) -> tuple[bool, str]:
+    """``(a_un_profil, raison)`` -- profil DexScreener payant (``project_links``,
+    gratuit) OU listing CoinGecko (réseau, court-circuité si DexScreener suffit déjà).
+    Cf. commentaire sur ``_COINGECKO_PLATFORM_BY_CHAIN`` pour la doctrine complète."""
+    if pair.project_links:
+        return True, "profil DexScreener payant (liens projet déclarés)"
+    platform_id = _COINGECKO_PLATFORM_BY_CHAIN.get(chain)
+    if not platform_id:
+        return False, f"aucun profil DexScreener et CoinGecko non couvert pour '{chain}'"
+    fundamentals = await coingecko_client.get_token_fundamentals(contract, platform_id=platform_id)
+    if fundamentals.available:
+        return True, "listé sur CoinGecko"
+    return False, "aucun profil DexScreener ni listing CoinGecko"
 
 
 async def _check_holder_concentration(contract: str, chain: str, pool_address: str) -> tuple[bool, str]:
@@ -1006,20 +1073,25 @@ async def evaluate_momentum_entry(
          des données déjà en main (aucun appel réseau supplémentaire).
       7. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
          extrême, même donnée déjà en main.
-      8. Concentration des holders (``_check_holder_concentration``, top 10 hors
-         pool/burn >= 80%, 19/07) -- rejet si un dump d'initié massif reste possible ;
-         seul garde-fou dur qui coûte un appel réseau (Blockscout), placé en dernier
-         parmi les garde-fous durs pour ça.
-      9. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
-         HOLD si absent (jamais un objectif fabriqué).
-      10. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
-      11. R/R franc (>= 2.0) + alignement technique >= 2/3 -> BUY déterministe
+      8. Âge minimum de la paire (``_MIN_PAIR_AGE_DAYS``, 14 jours, 20/07) -- rejet si
+         trop jeune ou âge inconnu, sur donnée déjà en main (``pair_created_at``).
+      9. Profil projet établi (``_check_project_profile``, 20/07) -- profil DexScreener
+         payant (gratuit, déjà en main) OU listing CoinGecko (réseau, court-circuité
+         si DexScreener suffit) ; rejet dur si aucun des deux.
+      10. Concentration des holders (``_check_holder_concentration``, top 10 hors
+          pool/burn >= 80%, 19/07) -- rejet si un dump d'initié massif reste possible ;
+          seul garde-fou dur qui coûte TOUJOURS un appel réseau (Blockscout), placé en
+          dernier parmi les garde-fous durs pour ça.
+      11. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
+          HOLD si absent (jamais un objectif fabriqué).
+      12. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
+      13. R/R franc (>= 2.0) + alignement technique >= 2/3 -> BUY déterministe
           (18/07, "plus sélective" : relevé depuis 1.5/1 signal). R/R positif mais
           sous ce seuil (1.0-2.0) -> confirmation LLM légère (calibrée sur le rythme
           hebdo, cf. ``weekly_context``). Sinon HOLD.
-      12. Garde de sécurité final (LLM, ``_llm_security_gate``) -- peut encore annuler
+      14. Garde de sécurité final (LLM, ``_llm_security_gate``) -- peut encore annuler
           un BUY déjà décidé.
-      13. Volume relatif (RVOL, ``_check_volume_confirmation``, 19/07) -- sur un BUY
+      15. Volume relatif (RVOL, ``_check_volume_confirmation``, 19/07) -- sur un BUY
           encore valide : REJET si un vrai volume par bougie est disponible et
           l'infirme (< 3.0x la moyenne des 10 bougies précédentes) ; fail-open (jamais
           un rejet) si la donnée est structurellement absente, mais ``volume_confirmed
@@ -1113,6 +1185,34 @@ async def evaluate_momentum_entry(
                 f"+{_MAX_PRICE_CHANGE_24H_PCT:.0f}%) -- doute, on passe à côté"
             ],
             "hold_reason": "already_parabolic",
+        }
+
+    # 20/07 -- plancher d'âge minimum (décision opérateur explicite, cf. _MIN_PAIR_AGE_DAYS
+    # ci-dessus) -- gratuit (donnée déjà sur `best`), rejet SYSTÉMATIQUE si la paire est trop
+    # jeune OU si son âge est inconnu (fail-closed, même doctrine que la liquidité).
+    age_days = _pair_age_days(best.pair_created_at)
+    if age_days is None or age_days < _MIN_PAIR_AGE_DAYS:
+        age_desc = f"{age_days:.1f}j" if age_days is not None else "inconnu"
+        return {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd,
+            "reasons": [
+                f"paire trop jeune ou âge inconnu ({age_desc} < {_MIN_PAIR_AGE_DAYS:.0f}j requis) "
+                "-- pas assez d'historique de prix pour un signal Fibonacci/RSI fiable"
+            ],
+            "hold_reason": "pair_too_young",
+        }
+
+    # 20/07 -- profil projet établi (décision opérateur explicite, cf. _check_project_profile
+    # ci-dessus) -- DexScreener gratuit (déjà sur `best`) en premier, CoinGecko (réseau) en
+    # repli seulement si DexScreener n'a rien. Rejet dur si aucun des deux.
+    has_profile, profile_reason = await _check_project_profile(chain, contract, best)
+    if not has_profile:
+        return {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd,
+            "reasons": [f"{profile_reason} -- pas de présence projet vérifiable"],
+            "hold_reason": "no_verified_profile",
         }
 
     # 19/07 -- concentration des holders (revue croisée Gemini) -- dernier des garde-fous
