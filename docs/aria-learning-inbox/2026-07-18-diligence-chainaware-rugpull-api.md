@@ -114,3 +114,17 @@ doivent être extraites STRICTEMENT avant tout retrait de liquidité. `safety_sc
 pré-décision), mais un futur modèle entraîné sur l'historique devrait suivre cette
 discipline dès sa conception plutôt que la découvrir après coup. Rien à construire
 maintenant — noté pour la prochaine fois que ce sujet est repris.
+
+## Addendum 20/07 (promotion veille Research — session commandement)
+
+Le journal de veille signale « Rug Pull Detector V3, 90,1% de précision » — **vérifié
+réel** (`chainaware.ai/blog/rugpull-detector-v3-pancakev2-2026`) : v3 ajoute un pipeline
+d'analyse de bytecode/AST en parallèle du score comportemental, entraîné sur 103 695
+rug pulls confirmés. **Nuance trouvée en vérifiant** : ce jeu d'entraînement est
+spécifiquement **PancakeSwap V2 (BSC)** — aucune preuve que la précision se transfère
+telle quelle à Base. Le formule de credit score citée dans le journal
+(`1000×(expérience+1)×(risque+1)×(1−fraude)`) appartient en réalité à un **produit
+séparé** (Credit Scoring Agent), pas au Rug Pull Detector — les deux ont été conflés
+dans l'entrée du journal. Ne change rien au verdict ci-dessus (banqué, pas de valeur
+ajoutée démontrée sur Base au-delà de GoPlus, coût toujours non confirmé) — traité ici
+uniquement pour garder la fiche exacte, aucune nouvelle action.

@@ -1971,6 +1971,72 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   pour une session de dev** : auditer le SDK CDP pour confirmer l'absence d'allowance
   illimitée, et évaluer l'ajout d'une simulation pré-signature — capital réel déjà
   engagé, deux couches de défense concrètes et non redondantes avec l'existant.
+- **#225 (promotion veille Research 19-20/07, fait vérifié — CDP Paymaster et Base MCP
+  confirmés réels, chiffres recoupés via docs.base.org/coinbase.com)** — Coinbase
+  Developer Platform sponsorise le gas d'un Smart Account (ERC-4337) sur Base : palier
+  gratuit 15$/mois de gas sponsorisé par app, puis 0,0001$/tx au-delà. Base MCP
+  (`mcp.base.org`, doc officielle `docs.base.org/agents`) documente ce sponsoring comme
+  option native de son wallet piloté. Répond directement à la limite déjà documentée le
+  16/07 du pilote agent-wallet réel : « le compte CDP standard n'a PAS d'intégration
+  Paymaster/Smart Account, chaque transaction consomme du vrai ETH ». **Action pour une
+  session de dev** : évaluer si le wallet CDP du pilote (`agent_wallet_cdp_adapter.py`)
+  peut migrer vers un Smart Account compatible Paymaster sans casser le SDK d'exécution
+  déjà câblé — capital réel déjà engagé, à valider avant tout changement, jamais activé
+  à l'aveugle.
+- **#226 (promotion veille Research 19/07, fait vérifié — CertiK Hack3D H1 2026
+  chiffré)** — La compromission de wallet/clé est désormais le vecteur d'attaque #1 sur
+  les agents on-chain (807,5M$ de pertes au Q2 2026 rien que sur ce vecteur ; Kelp DAO +
+  Drift Protocol, deux pannes d'infra/gestion de clé — pas des bugs de contrat —
+  représentent 44% des pertes du semestre). Converge avec une checklist sécurité
+  indépendante (« traiter les agents IA comme des systèmes non fiables ») qui ajoute deux
+  points non encore vérifiés côté pilote agent-wallet d'ARIA : les permissions doivent
+  expirer par défaut (pas persister indéfiniment), et toute escalade de privilège doit
+  passer par un canal de confirmation séparé du canal d'interaction principal. **Action
+  pour une session de dev** : vérifier si la clé API CDP du wallet agent (restreinte à
+  "View" le 15/07) a une expiration configurée, et si un futur élargissement de périmètre
+  (ex. exception #4, transfert USDC) devrait passer par un canal distinct du flux
+  Telegram principal — capital réel déjà actif sur ce pilote (#204).
+- **#227 (promotion veille Research 20/07, fait vérifié par recherche ciblée — endpoint
+  CoinGecko `/onchain/networks/{network}/pools/{address}` confirmé réel)** — CoinGecko
+  (client déjà intégré, `services/coingecko.py`) expose nativement la progression de
+  graduation (pourcentage + adresse du pool migré) pour plusieurs launchpads de bonding
+  curve — Pump.fun, Raydium Launchpad, Meteora DBC — pas seulement Base.
+  `graduation_progress()` (11/07) ne couvre aujourd'hui qu'UNE seule instance de contrat
+  Bonding V5 trouvée manuellement sur Base. **Action pour une session de dev** : vérifier
+  par un vrai appel (norme du 14/07, jamais un schéma supposé) si cette couverture
+  CoinGecko inclut le Bonding Virtuals sur Base — si oui, étendrait la détection actuelle
+  au-delà de la seule instance connue, sans nouveau vendor à intégrer.
+- **#228 (promotion veille Research 20/07, fait vérifié — B20 confirmé réel, upgrade
+  Beryl actif en mainnet depuis le 25/06/2026)** — Base a un nouveau standard de token
+  natif, B20 : un "superset" ERC-20 implémenté en precompile Rust (pas un contrat
+  déployé classique), avec des fonctions que l'ABI ERC-20 standard n'a pas — mint/burn,
+  policy gating, pause granulaire. Une "policy" de transfert configurable peut faire
+  échouer un transfert alors que tous les checks ERC-20 classiques passent — angle mort
+  potentiel pour un scan honeypot basé sur l'ABI standard. **Action pour une session de
+  dev** : vérifier si GoPlus/Blockscout distinguent déjà un token B20 d'un contrat
+  ERC-20 classique avant qu'ARIA n'en scanne un via le pipeline momentum ou `/vc` —
+  risque qu'un honeypot check standard passe à côté d'un blocage natif au niveau
+  precompile.
+- **#229 (promotion veille Research 20/07, idée quant vérifiée légitime — VPIN,
+  Easley/López de Prado/O'Hara, implémentations open-source publiées)** — Métrique
+  académique de "toxicité du flux" (probabilité qu'un trader informé soit actif),
+  calculée par "volume clock" (buckets à volume fixe) plutôt qu'à temps fixe.
+  Complément direct au RVOL tout juste câblé (19/07) : RVOL détecte un volume
+  anormalement haut mais ne distingue pas un flux informé/toxique d'un simple pic
+  retail bruyant. **Action pour une session de dev** : évaluer VPIN comme signal de
+  confirmation supplémentaire (jamais un remplacement de RVOL) dans `momentum_entry.py`,
+  calculable sur les mêmes données OHLCV déjà récupérées par la cascade existante — pas
+  urgent, prochaine amélioration quant candidate une fois le pipeline actuel stabilisé.
+- **#230 (promotion veille Research 19/07, fait vérifié — Polymarket Agents framework
+  open-source confirmé réel, Gamma/Data/CLOB API publiques sans authentification)** —
+  Framework officiel (`github.com/Polymarket/agents`) pour qu'un agent IA lise
+  l'actualité, interroge les carnets d'ordres et place des paris sur des marchés de
+  prédiction (élections, macro, sport, actu crypto). Piste de diversification pour la
+  poche 15% trading : un pari de prédiction est un pari sur un ÉVÉNEMENT, structurellement
+  peu corrélé au momentum d'un token Base/Solana — ARIA lit déjà l'actualité via
+  Tavily/web_verify, socle réutilisable. **Hors de la priorité absolue actuelle** (#194,
+  protocole hebdomadaire 1M$) — à garder en réserve comme axe de diversification futur,
+  pas à construire maintenant.
 - **19/07 (suite) — plancher de liquidité momentum relevé 5k$ -> 100k$ + vrai rejet
   dur ajouté (décision opérateur explicite, anti-scam : "liquidité minimum c 100k je
   veut eviter a aria de se faire scam, meme si tout est ok en dessous il peut y avoir
