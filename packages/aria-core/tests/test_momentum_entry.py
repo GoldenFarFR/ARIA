@@ -2937,16 +2937,40 @@ async def test_potential_score_none_when_research_unavailable(monkeypatch, test_
 
 
 @pytest.mark.asyncio
-async def test_result_includes_chain_scoped_category(monkeypatch):
+async def test_result_includes_chain_scoped_category_when_multi_chain_active(monkeypatch):
     """19/07 -- trou réel trouvé (revue croisée externe, confirmé dans le code) : sans
     catégorie, le plafond de concentration (#187, paper_trader_risk.py) ne s'appliquait
-    JAMAIS aux positions momentum -- categorise désormais par chaîne, jamais mélangé
-    avec les catégories launchpad de l'ancien pipeline VC-thesis."""
+    JAMAIS aux positions momentum -- categorise par chaîne quand ça protège vraiment de
+    quelque chose (plusieurs chaînes actives), jamais mélangé avec les catégories
+    launchpad de l'ancien pipeline VC-thesis.
+
+    20/07 -- ``DEFAULT_CHAINS`` monkeypatché explicitement à 2 chaînes : depuis le
+    resserrement à Base seule (même jour), le comportement par défaut est couvert par
+    ``test_category_empty_when_single_chain_active`` ci-dessous -- ce test verrouille
+    la catégorisation par chaîne pour le jour où plusieurs chaînes seront réactivées."""
+    monkeypatch.setattr(me, "DEFAULT_CHAINS", ("base", "solana"))
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "BUY"
     assert result["category"] == "momentum-base"
+
+
+@pytest.mark.asyncio
+async def test_category_empty_when_single_chain_active(monkeypatch):
+    """20/07 -- angle mort trouvé par une revue croisée externe, confirmé dans le code :
+    catégoriser par chaîne (19/07) ne protège plus de rien depuis que ``DEFAULT_CHAINS``
+    s'est resserré à Base seule (même jour) -- toutes les positions retombaient dans le
+    même seau "momentum-base", transformant le plafond de diversification (#187, 40%) en
+    plafond global de facto à 400 000$ sur tout le portefeuille de trading, bien avant
+    ``MAX_POSITIONS`` ou le cash disponible. Catégorie vide (comportement par défaut réel
+    aujourd'hui, ``DEFAULT_CHAINS = ("base",)``) neutralise le plafond via le garde déjà
+    existant ``if not category`` -- ce test aurait échoué avant le correctif."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["category"] == ""
 
 
 @pytest.mark.asyncio

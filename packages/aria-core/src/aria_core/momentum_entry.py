@@ -1591,7 +1591,19 @@ async def evaluate_momentum_entry(
         # seul gros seau qui ne protégerait de rien) -- jamais mélangé avec les
         # catégories launchpad de l'ancien pipeline VC-thesis (derive_category), le
         # préfixe "momentum-" les distingue structurellement.
-        "category": f"momentum-{chain}",
+        #
+        # 20/07 -- angle mort trouvé par une revue croisée externe, confirmé dans le
+        # code : catégoriser par chaîne ne protège plus de rien depuis que
+        # DEFAULT_CHAINS s'est resserré à Base seule (même jour) -- toutes les
+        # positions retombent dans LE MÊME seau "momentum-base", et le plafond de
+        # diversification devient de facto un plafond global du portefeuille de
+        # trading à 400 000$ (40% x 1M$) -- bien avant MAX_POSITIONS ou le cash
+        # disponible. Catégorie vide tant qu'une seule chaîne est active (le garde
+        # `if not category` de fit_alloc_to_concentration_cap/category_exposure_usd
+        # neutralise alors le plafond proprement, sans y toucher) -- s'auto-résout
+        # dès que DEFAULT_CHAINS retrouve plus d'une chaîne, aucun interrupteur à se
+        # souvenir de repasser.
+        "category": f"momentum-{chain}" if len(DEFAULT_CHAINS) > 1 else "",
         "reasons": reasons,
         "hold_reason": hold_reason,
         # 20/07 -- Formule B (paper_trader.py) : dérive la discipline de sortie appliquée
