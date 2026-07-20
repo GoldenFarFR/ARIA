@@ -2980,6 +2980,38 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   gravée** : à réévaluer selon le débit d'achats observé dans les heures/jours qui suivent —
   si ça ouvre trop la porte (tokens de mauvaise qualité achetés), remonter ; si ça ne suffit
   toujours pas à générer des trades, regarder le prochain plus gros poste (âge 14j, #187).
+- **20/07 (suite, opérateur absent, travail autonome sur checklist) — Blockscout Pro à sec
+  (402 "Out of credits") trouvé en conditions réelles pendant un cycle forcé, repli
+  automatique vers l'endpoint gratuit construit et DÉPLOYÉ.** Découverte pendant un
+  `run_paper_cycle()` manuel : 11 échecs consécutifs sur Blockscout, dégradés proprement
+  (aucun crash, doctrine dôme respectée) mais sans aucune donnée. `curl` direct confirme
+  `{"error":"Out of credits"}` — la clé Pro (`BLOCKSCOUT_PRO_API_KEY`) est configurée mais
+  a épuisé son forfait ; premier 402 dans les logs à 18:35:21 UTC ce jour, donc un incident
+  très récent (probablement précipité par l'intensité des vérifications manuelles de ce
+  segment) — **à recharger côté dashboard Blockscout, hors de ma portée (facturation)**.
+  **Vrai trou architectural trouvé et corrigé (`services/blockscout.py`)** : le client
+  décide UNE FOIS, à la construction, s'il utilise la Pro API (clé présente) ou l'endpoint
+  gratuit `base.blockscout.com` (clé absente, chaîne Base uniquement) — une clé CONFIGURÉE
+  mais À SEC n'a jamais été traitée comme équivalente à une clé ABSENTE, alors que dans les
+  deux cas la vraie option qui reste est identique (Base, sans clé). Résultat : dès que les
+  crédits Pro s'épuisent, TOUTE requête Blockscout échoue, sans jamais retomber sur
+  l'endpoint gratuit pourtant fonctionnel et déjà écrit pour l'autre cas — vérifié en
+  direct que ce même endpoint gratuit répond `200 OK` avec de vraies données au moment du
+  correctif. Corrigé : `_get_json` détecte un 402 alors que la clé Pro est encore active
+  ET que la chaîne est `"base"` (seule chaîne avec un repli gratuit connu) → bascule
+  `self.base_url`/`self._api_key`/`self._min_interval` EN PLACE vers le gratuit et retente
+  la MÊME requête immédiatement — repli PERMANENT pour la durée de vie du process (une clé
+  à sec ne se recharge pas toute seule), un seul warning loggé (pas un spam par appel).
+  Aucun repli inventé pour les autres chaînes (pas d'endpoint gratuit connu) — comportement
+  historique inchangé là, dégradation propre confirmée par test dédié. 3 nouveaux tests
+  (402→repli réussi, persistance du repli sur l'appel suivant, non-régression hors Base).
+  Suite complète vérifiée verte (6442 passed, mêmes 7 échecs pré-existants sans rapport),
+  `test_coherence.py` vert (81 passed). **Déployé directement** (dégradation active en
+  cours d'exécution sur le test 1M$ live — chaque appel Blockscout raté pendant que les
+  crédits Pro restent épuisés est un check de sécurité/concentration qui tombe en
+  fail-open faute de donnée). Reste factuel non résolu : rien ne peut recharger les
+  crédits Pro sans action opérateur sur le dashboard Blockscout — ce correctif restaure
+  la couverture Base gratuite en attendant, pas les crédits Pro eux-mêmes.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
