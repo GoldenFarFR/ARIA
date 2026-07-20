@@ -11,7 +11,17 @@ _INJECTED_CLAIM_RE = re.compile(
     r"depuis\s+(?:hier|aujourd|ce\s+matin)|entre\s+hier|effective|impos[ée]|obligatoire|"
     r"augment|baisse|gagn[ée]|abonn[ée]s?|nouveaux?\s+abonn|dependabot|pr\s+merg|"
     r"gratuit\s+illimit|étoiles?|note\s+5|pourboire|uptime|contribut|"
-    r"tweets?\s+automatiques|\blivr[ée](?:e|s|ment)?\b|usdc|2fa|catalogue\s+spark|reste\s+dispo|"
+    # 20/07 -- incident réel : "écris-le dans ton livre" (aria-brain, le vrai livre
+    # qu'elle écrit désormais) routé à tort vers verify_external_claim -- \blivr[ée]
+    # matchait "livre" (le nom commun, sans accent) en plus de "livré/livrée" (le
+    # participe passé visé, "une fonctionnalité livrée"). Accent RENDU OBLIGATOIRE
+    # (livr**é** strict, plus le [ée] qui tolérait les deux) -- "livre"/"livres" (le
+    # livre qu'elle écrit) ne matchent plus jamais, "livré/livrée/livrés" toujours
+    # capturés. Résidu assumé : un "livré" tapé sans accent (l'opérateur en tape
+    # parfois) échapperait aussi désormais -- retombe sur la conversation normale,
+    # jamais perdu, coût jugé bien inférieur au risque de reproduire cet incident à
+    # chaque mention du livre.
+    r"tweets?\s+automatiques|\blivré(?:e|s|ment)?\b|usdc|2fa|catalogue\s+spark|reste\s+dispo|"
     r"merg[ée]|déploy[ée]|commit\s+[a-f0-9]{6,}|class[ée]|"
     r"\d+\s*%|\d+[\s,.]?\d*\s*(?:\$|€|usd|usdc)|"
     r"le\s+\d{1,2}\s+(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|"

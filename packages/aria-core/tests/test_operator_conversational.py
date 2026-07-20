@@ -64,6 +64,22 @@ def test_casual_question_with_quand_not_routed_as_claim():
     assert not is_injected_factual_claim("c'est prévu pour quand ce gain")
 
 
+def test_book_instruction_not_routed_as_claim():
+    """20/07 -- incident réel (capture opérateur) : "ecris le dans ton livre tu a
+    droit a une page par jour" partait en recherche web littérale (DDG) au lieu
+    d'être traité comme une instruction normale -- \\blivr[ée] matchait "livre" (le
+    nom commun, le vrai livre qu'ARIA écrit dans aria-brain) en plus de
+    "livré/livrée" (participe passé, "une fonctionnalité livrée") visé à l'origine.
+    Accent rendu obligatoire -- "livré/livrée/livrés" toujours détectés, "livre/
+    livres" (le livre) ne le sont plus jamais."""
+    assert not is_injected_factual_claim("ecris le dans ton livre tu a droit a une page par jour")
+    assert not is_injected_factual_claim("comment avance ton livre aujourd'hui")
+    assert not is_injected_factual_claim("j'ai lu le premier chapitre de ton livre hier soir")
+    # Le vrai motif visé (participe passé "livré/livrée") doit rester détecté.
+    assert is_injected_factual_claim("la fonctionnalité X a été livrée hier par l'équipe")
+    assert is_injected_factual_claim("la nouvelle version est livrée depuis ce matin")
+
+
 def test_injected_claim_multi_sentence_question_not_misrouted():
     # Incident réel (12/07) : un scénario trading multi-phrases contenant "2%"/"15%"
     # (matche _INJECTED_CLAIM_RE) et une vraie question au milieu ("... Short ?")
