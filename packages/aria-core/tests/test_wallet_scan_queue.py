@@ -179,6 +179,9 @@ class _FakeCard:
     # Suivi permanent (#157 suite 2, 15/07) : dernière activité on-chain réelle
     # observée -- utilisée par le cycle pour trancher l'inactivité de 3 mois.
     last_activity_at: datetime | None = None
+    # Détenteur croisé (21/07, token_holder_intel.py) -- cf. smart_money.py.
+    cross_token_holdings: list = field(default_factory=list)
+    cross_token_holder_count: int = 0
 
 
 @dataclass

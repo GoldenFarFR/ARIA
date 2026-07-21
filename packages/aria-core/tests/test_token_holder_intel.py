@@ -119,3 +119,40 @@ async def test_list_extracted_contracts_scoped_to_chain():
     await intel.store_holders("0xTOKEN", "base", _HOLDERS)
     rows = await intel.list_extracted_contracts("solana")
     assert rows == []
+
+
+# ── wallet_cross_token_holdings (21/07, signal Sybil/coordination pour smart_money.py) ──
+
+@pytest.mark.asyncio
+async def test_wallet_cross_token_holdings_finds_wallet_across_tokens():
+    await intel.store_holders("0xTOKEN_A", "base", _HOLDERS)  # contient 0xPool et 0xEOA
+    await intel.store_holders("0xTOKEN_B", "base", _HOLDERS[:1])  # contient 0xPool seul
+
+    rows = await intel.wallet_cross_token_holdings("0xPool", chain="base")
+    assert {r["contract"] for r in rows} == {"0xTOKEN_A", "0xTOKEN_B"}
+    assert rows[0]["tags"] == ["UniswapV3Pool", "DEX"]
+
+
+@pytest.mark.asyncio
+async def test_wallet_cross_token_holdings_case_insensitive():
+    await intel.store_holders("0xTOKEN_A", "base", _HOLDERS)
+    rows = await intel.wallet_cross_token_holdings("0XPOOL", chain="base")
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_wallet_cross_token_holdings_unknown_wallet_returns_empty():
+    await intel.store_holders("0xTOKEN_A", "base", _HOLDERS)
+    assert await intel.wallet_cross_token_holdings("0xNeverSeen", chain="base") == []
+
+
+@pytest.mark.asyncio
+async def test_wallet_cross_token_holdings_empty_address_no_query():
+    assert await intel.wallet_cross_token_holdings("", chain="base") == []
+    assert await intel.wallet_cross_token_holdings("   ", chain="base") == []
+
+
+@pytest.mark.asyncio
+async def test_wallet_cross_token_holdings_scoped_to_chain():
+    await intel.store_holders("0xTOKEN_A", "base", _HOLDERS)
+    assert await intel.wallet_cross_token_holdings("0xPool", chain="solana") == []

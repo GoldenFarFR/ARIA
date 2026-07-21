@@ -2221,6 +2221,17 @@ class WalletScoreCard:
     funding_source: str | None = None
     funding_source_truncated: bool = False
 
+    # Détenteur croisé (21/07, pipeline d'extraction Blockscout Pro x402,
+    # `token_holder_intel.py`) : sur combien de tokens DÉJÀ EXTRAITS par ARIA
+    # (couverture partielle -- 147 tokens Base au 21/07, jamais un scan
+    # exhaustif de la chaîne) ce wallet apparaît comme détenteur notable.
+    # Signal de coordination POSSIBLE (market maker légitime OU cluster
+    # Sybil) -- catégorie différente d'une compétence de trading, jamais
+    # mélangé au `composite_percentile` (même doctrine que `funding_source`/
+    # `convergence_pairs` : informationnel, jamais un score).
+    cross_token_holdings: list[dict] = field(default_factory=list)
+    cross_token_holder_count: int = 0
+
     # Échantillon minimum + robustesse anti-chance + tendance dans le temps
     # (15/07, décision opérateur). Tous calculés sur `cumulative_trades`
     # (l'historique complet archivé, pas seulement ce lot) -- s'affinent au
@@ -2318,6 +2329,13 @@ def format_wallet_score_card_lines(card: WalletScoreCard) -> list[str]:
         f"  Sortino : {card.sortino:.2f}" if card.sortino is not None else "  Sortino : indisponible"
     )
     lines.append(f"  Récurrence entrée précoce (multi-lancements) : {card.early_entry_recurrence_count} token(s)")
+    if card.cross_token_holder_count > 0:
+        tags = sorted({t for h in card.cross_token_holdings for t in (h.get("tags") or [])})
+        lines.append(
+            f"  🔎 Détenteur croisé : présent parmi les gros holders de {card.cross_token_holder_count} "
+            "autre(s) token(s) déjà couvert(s) par ARIA"
+            + (f" (labels connus : {', '.join(tags[:4])})" if tags else " (aucun label d'entité connu)")
+        )
     if card.suspect_positive:
         lines.append("  🟢 Suspect positif (exceptionnel sur plusieurs axes à la fois) — à surveiller de près.")
     if card.thesis:
@@ -2530,6 +2548,14 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
             lines.append(f"Percentile durée de détention (contextuel, hors composite) : {card.percentile_holding_period:.0f}e")
     else:
         lines.append("Classement comparatif : indisponible (aucun autre wallet encore suivi pour comparer)")
+    if card.cross_token_holder_count > 0:
+        tags = sorted({t for h in card.cross_token_holdings for t in (h.get("tags") or [])})
+        lines.append(
+            f"Détenteur croisé (hors composite, jamais un score de performance) : présent parmi les gros "
+            f"holders de {card.cross_token_holder_count} autre(s) token(s) déjà couvert(s) par ARIA"
+            + (f" -- labels connus : {', '.join(tags[:4])}" if tags else " -- aucun label d'entité connu, "
+               "coordination anonyme possible")
+        )
     return "\n".join(lines)
 
 
@@ -2697,6 +2723,19 @@ async def score_wallets(
         card.display_name = primary_info.ens_domain_name if primary_info else None
         card.chains_scanned = chains_with_data
         card.transfer_history_truncated = transfers_truncated
+
+        # Détenteur croisé (21/07) -- lecture locale pure (aucun appel réseau,
+        # jamais bloquant : une panne de lecture SQLite ne doit jamais casser
+        # un scoring déjà en cours). Import différé, même patron que
+        # wallet_scan_state ci-dessus (anti-cycle).
+        from aria_core import token_holder_intel
+
+        try:
+            card.cross_token_holdings = await token_holder_intel.wallet_cross_token_holdings(wallet)
+        except Exception:  # noqa: BLE001 -- informationnel, jamais bloquant
+            logger.warning("score_wallets: lecture cross_token_holdings échouée pour %s", wallet)
+            card.cross_token_holdings = []
+        card.cross_token_holder_count = len(card.cross_token_holdings)
 
         # Scan incrémental persistant (#157 suite, 15/07) : ne ré-analyse QUE les
         # tokens jamais vus, ou dont l'activité a évolué depuis le dernier scan

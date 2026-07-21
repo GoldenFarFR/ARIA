@@ -26,6 +26,7 @@ from aria_core.services.goplus import AddressSecurity
 from aria_core.skills.ta_levels import Candle
 from aria_core.services import smart_money as sm
 from aria_core.services import wallet_scan_state
+from aria_core import token_holder_intel
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +37,14 @@ def _isolated_wallet_scan_state_db(tmp_path, monkeypatch):
     base par défaut et polluerait les tests suivants (un wallet/token de test
     "déjà scanné" resterait marqué comme tel entre deux tests sans rapport)."""
     monkeypatch.setattr(wallet_scan_state, "DB_PATH", str(tmp_path / "wallet_scan_state.db"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_token_holder_intel_db(tmp_path, monkeypatch):
+    """21/07 : même patron que ci-dessus pour token_holder_intel.py (lu par
+    `score_wallets` pour `cross_token_holdings`) -- isole chaque test, sinon
+    un `score_wallets` de test lirait la vraie base par défaut."""
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel.db"))
 
 
 WALLET_A = "0x" + "a" * 40
@@ -1040,6 +1049,68 @@ class TestScoreWalletsEndToEnd:
         )
         assert report.available is True
         assert report.wallets[0].available is False
+
+    @pytest.mark.asyncio
+    async def test_cross_token_holdings_surfaced_on_available_wallet(self, tmp_path, monkeypatch):
+        """21/07 -- signal Sybil/coordination depuis le pipeline d'extraction
+        Blockscout x402 (`token_holder_intel.py`), câblé dans score_wallets."""
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        await token_holder_intel.store_holders(
+            TOKEN_X, "base",
+            [{
+                "holder_address": WALLET_A, "holder_name": None, "is_contract": False,
+                "is_verified": False, "is_scam": False, "reputation": None,
+                "tags": ["Aerodrome"], "value": "123",
+            }],
+        )
+        await token_holder_intel.store_holders(
+            TOKEN_Y, "base",
+            [{
+                "holder_address": WALLET_A, "holder_name": None, "is_contract": False,
+                "is_verified": False, "is_scam": False, "reputation": None,
+                "tags": [], "value": "50",
+            }],
+        )
+        transfers = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=5.0)],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.available is True
+        assert card.cross_token_holder_count == 2
+        assert {h["contract"] for h in card.cross_token_holdings} == {TOKEN_X, TOKEN_Y}
+
+        lines = sm.format_wallet_score_card_lines(card)
+        assert any("Détenteur croisé" in line and "2 autre(s) token(s)" in line for line in lines)
+        assert any("Aerodrome" in line for line in lines)
+
+        prompt_text = sm._format_card_for_prompt(card)
+        assert "Détenteur croisé" in prompt_text
+
+    @pytest.mark.asyncio
+    async def test_cross_token_holdings_absent_when_wallet_unknown(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        transfers = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=_dt(0), amount=5.0)],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=FakeGeckoTerminalClient(), llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.cross_token_holder_count == 0
+        assert card.cross_token_holdings == []
+        lines = sm.format_wallet_score_card_lines(card)
+        assert not any("Détenteur croisé" in line for line in lines)
 
     @pytest.mark.asyncio
     async def test_profitable_wallet_scored_and_thesis_attached(self, tmp_path, monkeypatch):

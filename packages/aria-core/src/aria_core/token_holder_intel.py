@@ -158,3 +158,39 @@ async def list_extracted_contracts(chain: str = "base") -> list[dict]:
             )
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+async def wallet_cross_token_holdings(address: str, *, chain: str = "base") -> list[dict]:
+    """Sur QUELS tokens déjà extraits (couverture partielle d'ARIA, jamais un
+    scan exhaustif de la chaîne) cette adresse apparaît comme détenteur notable
+    -- réponse au 21/07 : signal de coordination possible (market maker
+    légitime OU cluster Sybil) pour `smart_money.py`, jamais un score de
+    performance -- catégorie différente, voir ``WalletScoreCard.
+    cross_token_holdings``, jamais mélangé au ``composite_percentile``.
+
+    Un résultat vide ne veut jamais dire "ce wallet n'est nulle part" --
+    seulement "pas trouvé dans les tokens qu'ARIA a déjà extraits à ce jour"."""
+    await _ensure_table()
+    address = (address or "").strip()
+    chain = (chain or "").strip().lower()
+    if not address:
+        return []
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (
+            await db.execute(
+                "SELECT contract, is_contract, is_verified, tags, value, fetched_at "
+                "FROM token_holder_intel WHERE LOWER(holder_address) = LOWER(?) AND chain = ? "
+                "ORDER BY fetched_at DESC",
+                (address, chain),
+            )
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["tags"] = json.loads(d.get("tags") or "[]")
+        except Exception:  # noqa: BLE001
+            d["tags"] = []
+        out.append(d)
+    return out
