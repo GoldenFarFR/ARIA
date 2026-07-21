@@ -73,6 +73,19 @@ def _reset_wash_trading_confirmation():
     me._ratio_breach_since.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    """21/07 -- ``_check_honeypot`` peut désormais attendre réellement
+    (``_HONEYPOT_NO_DATA_RETRY_DELAY_S``) avant un retry ciblé sur ``no_data`` --
+    sans ce patch, chaque test ``no_data=True`` existant (repli RugCheck) dormirait
+    pour de vrai. Patché globalement (autouse) plutôt que test par test, protège
+    aussi tout futur test qui exercerait ce chemin sans y penser."""
+    async def _fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("aria_core.momentum_entry.asyncio.sleep", _fake_sleep)
+
+
 # ── discover_momentum_candidates ───────────────────────────────────────────────────
 
 @dataclass
@@ -410,6 +423,69 @@ async def test_honeypot_unavailable_fails_closed(monkeypatch):
     assert clear is False
     assert "indisponible" in reason.lower()
     assert code == "honeypot_unavailable"
+
+
+# ── retry ciblé sur no_data (21/07) ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_honeypot_no_data_retries_once_and_succeeds_on_second_attempt(monkeypatch):
+    """Audit funnel (21/07) : ~100% des verdicts honeypot_unavailable observés sur 6h
+    se sont révélés être de vrais tokens valides en re-testant quelques instants
+    après -- un candidat qui obtient ``no_data`` une première fois doit être retenté
+    une fois avant d'être abandonné."""
+    from aria_core.services import goplus as gp
+
+    calls = {"count": 0}
+
+    async def fake_get_token_security(address, *, chain_id):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return FakeSecurity(available=False, no_data=True, error="aucune donnée")
+        return FakeSecurity()
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
+    assert clear is True
+    assert code == "honeypot_clear"
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_honeypot_no_data_gives_up_after_single_retry(monkeypatch):
+    """Toujours no_data au 2e essai -- abandon définitif, jamais une boucle."""
+    from aria_core.services import goplus as gp
+
+    calls = {"count": 0}
+
+    async def fake_get_token_security(address, *, chain_id):
+        calls["count"] += 1
+        return FakeSecurity(available=False, no_data=True, error="aucune donnée")
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
+    assert clear is False
+    assert code == "honeypot_unavailable"
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_honeypot_genuine_failure_is_never_retried(monkeypatch):
+    """Une vraie panne (timeout/5xx, no_data=False) est déjà retentée PLUSIEURS fois
+    à l'intérieur de goplus.py -- ce retry-ci, ciblé sur no_data uniquement, ne doit
+    jamais s'y ajouter (gaspillage de temps sur un cas déjà couvert ailleurs)."""
+    from aria_core.services import goplus as gp
+
+    calls = {"count": 0}
+
+    async def fake_get_token_security(address, *, chain_id):
+        calls["count"] += 1
+        return FakeSecurity(available=False, no_data=False, error="timeout")
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
+    assert clear is False
+    assert code == "honeypot_unavailable"
+    assert calls["count"] == 1
 
 
 @pytest.mark.asyncio

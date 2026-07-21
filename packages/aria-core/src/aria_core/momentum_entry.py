@@ -69,6 +69,7 @@ le test 1M$ (#194) », à lire avant toute modification) :
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -481,6 +482,13 @@ def _best_pair(pairs: list[PairSnapshot], contract: str) -> PairSnapshot | None:
     return max(pool, key=lambda p: p.liquidity_usd)
 
 
+# 21/07 -- délai avant le retry ciblé "no_data" (cf. commentaire dans _check_honeypot).
+# Pas un chiffre GoPlus officiel (aucune doc ne documente un délai d'indexation) --
+# une pause raisonnable choisie pour donner une chance réelle sans casser la vitesse
+# du pipeline (une seule tentative, jamais en boucle).
+_HONEYPOT_NO_DATA_RETRY_DELAY_S = 8.0
+
+
 async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
     """Seul garde-fou DUR de ce pipeline. ``(clear, reason, code)`` -- ``clear=False``
     doit TOUJOURS rejeter, y compris si GoPlus est indisponible (fail-closed sur
@@ -508,6 +516,19 @@ async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
     from aria_core.services.goplus import goplus_client
 
     security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
+    # 21/07 -- retry ciblé sur ``no_data`` (audit funnel : ~100% des verdicts
+    # ``honeypot_unavailable`` observés sur une fenêtre de 6h se sont révélés être de
+    # VRAIS tokens valides en re-testant le même contrat quelques instants après --
+    # cohérent avec un délai d'indexation GoPlus sur un token frais, pas un vrai manque
+    # de couverture). Distinct du retry déjà existant dans ``_get_json`` (429/code 4029/
+    # 5xx/timeout, plusieurs tentatives en quelques secondes) : celui-ci cible
+    # spécifiquement une réponse PROPRE mais VIDE (``no_data``), jamais retentée
+    # jusqu'ici. Une seule tentative supplémentaire, jamais en boucle -- protège la
+    # vitesse du pipeline sur le cas majoritaire (couverture réelle absente).
+    if not security.available and security.no_data:
+        await asyncio.sleep(_HONEYPOT_NO_DATA_RETRY_DELAY_S)
+        security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
+
     if not security.available:
         if chain == "solana" and security.no_data:
             return await _check_honeypot_rugcheck_fallback(contract)
