@@ -150,6 +150,12 @@ def _static_entries() -> list[ApiEntry]:
             if _env_present("MOBULA_API_KEY")
             else "MOBULA_API_KEY absente — aucun chemin public chez Mobula (429 dès le 1er appel sans clé), étage cascade neutralisé",
         ),
+        ApiEntry(
+            "Webacy (Contract Risk)", "Sécurité", "https://api.webacy.com", _env_present("WEBACY_API_KEY"),
+            note="21/07 -- 2e avis sécurité contrat, complément à GoPlus (Base full support, Demo gratuit 2 req/s / 2000 req/mois) — client construit et testé (mock), PAS ENCORE branché dans momentum_entry.py, schéma de réponse pas encore confirmé contre un vrai appel"
+            if _env_present("WEBACY_API_KEY")
+            else "WEBACY_API_KEY absente — client prêt (services/webacy.py), en attente d'une clé Demo pour test réel avant tout branchement",
+        ),
 
         # ── Web / recherche ─────────────────────────────────────────────────
         ApiEntry("Tavily (recherche web)", "Web", "https://api.tavily.com", _env_present("TAVILY_API_KEY")),
