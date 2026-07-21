@@ -1014,6 +1014,42 @@ async def test_evaluate_rejects_on_honeypot(monkeypatch):
     assert result["hold_reason"] == "honeypot_rejected"
 
 
+@pytest.mark.asyncio
+async def test_evaluate_transfers_confirmed_honeypot_to_blacklist(monkeypatch):
+    """21/07 -- proposition opérateur : un honeypot CONFIRMÉ (jamais un simple échec
+    technique) est transféré vers momentum_blacklist.py, pour qu'une future
+    redécouverte du MÊME contrat soit rejetée gratuitement à l'étape 1 (liste noire),
+    sans jamais redépenser un appel GoPlus/RugCheck sur un verdict déjà tranché."""
+    from aria_core import momentum_blacklist as bl
+
+    _patch_pipeline(monkeypatch, honeypot_clear=False)
+    assert await bl.is_blacklisted(CONTRACT, "base") is False
+
+    await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert await bl.is_blacklisted(CONTRACT, "base") is True
+
+
+@pytest.mark.asyncio
+async def test_evaluate_does_not_blacklist_on_honeypot_unavailable(monkeypatch):
+    """Distinction critique (mandat #192) : ``honeypot_unavailable`` est un échec
+    technique/une donnée absente, JAMAIS une menace confirmée -- blacklister sur ce
+    code bannirait à tort des tokens légitimes juste parce que GoPlus n'a pas encore
+    la donnée (cas réel observé le 21/07 : délai d'indexation transitoire, le même
+    contrat répond proprement quelques minutes plus tard)."""
+    from aria_core import momentum_blacklist as bl
+
+    async def fake_honeypot_unavailable(contract, chain):
+        return False, "GoPlus indisponible (timeout) -- rejet par prudence", "honeypot_unavailable"
+
+    _patch_pipeline(monkeypatch)
+    monkeypatch.setattr(me, "_check_honeypot", fake_honeypot_unavailable)
+
+    await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert await bl.is_blacklisted(CONTRACT, "base") is False
+
+
 # ── plancher de liquidité (19/07, décision opérateur explicite anti-scam) ───────────
 
 @pytest.mark.asyncio

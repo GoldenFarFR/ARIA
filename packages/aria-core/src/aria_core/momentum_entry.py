@@ -1465,6 +1465,17 @@ async def evaluate_momentum_entry(
     # R/R.
     clear, honeypot_reason, honeypot_code = await _check_honeypot(contract, chain)
     if not clear:
+        # 21/07 -- proposition opérateur : un honeypot CONFIRMÉ (jamais un simple
+        # échec technique/indisponibilité, cf. distinction honeypot_rejected vs
+        # honeypot_unavailable, mandat #192) est transféré vers la liste noire
+        # (momentum_blacklist.py) -- une future redécouverte du MÊME contrat est
+        # alors rejetée gratuitement à l'étape 1 (liste noire), sans jamais
+        # redépenser un appel GoPlus/RugCheck sur un verdict déjà tranché.
+        # honeypot_unavailable/chain_not_covered ne sont jamais blacklistés --
+        # ce ne sont pas des menaces confirmées, juste une donnée absente ou une
+        # chaîne non couverte, qui peuvent changer.
+        if honeypot_code == "honeypot_rejected":
+            await momentum_blacklist.add_to_blacklist(contract, chain, honeypot_reason)
         return {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd, "reasons": [honeypot_reason], "hold_reason": honeypot_code,
