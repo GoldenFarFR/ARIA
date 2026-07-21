@@ -92,11 +92,21 @@ HttpFetchFn = Callable[..., Awaitable[HttpResult]]
 
 
 async def _default_http_fetch(
-    url: str, *, method: str = "GET", headers: dict[str, str] | None = None
+    url: str, *, method: str = "GET", headers: dict[str, str] | None = None,
+    timeout: float = _HTTP_TIMEOUT,
 ) -> HttpResult:
     """Implémentation réelle par défaut (httpx). Jamais utilisée dans les tests --
-    toujours remplacée par un fake (cf. test_x402_executor.py)."""
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+    toujours remplacée par un fake (cf. test_x402_executor.py).
+
+    21/07 -- ``timeout`` rendu configurable (défaut inchangé, ``_HTTP_TIMEOUT``) :
+    trouvé en testant Blockscout en conditions réelles qu'un ``httpx.ReadTimeout``
+    (silencieux -- son ``str()`` est vide, d'où un ``reason=""`` fantôme dans
+    ``X402ExecutionResult``) frappait le tour de règlement du paiement, plus
+    lent qu'un simple appel API (vérification on-chain côté fournisseur). Le
+    défaut de 12s reste inchangé pour tous les fournisseurs déjà en prod
+    (Cybercentry/Otto AI/twit.sh, jamais un souci observé) -- seul un appelant
+    qui passe explicitement un ``timeout`` plus long change de comportement."""
+    async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.request(method, url, headers=headers or {})
     return HttpResult(status_code=r.status_code, headers=dict(r.headers), body=r.content)
 
@@ -206,6 +216,7 @@ async def fetch_paid_resource(
     http_fetch_fn: HttpFetchFn = _default_http_fetch,
     contract: str = "",
     token_symbol: str = "",
+    timeout: float | None = None,
 ) -> X402ExecutionResult:
     """Tente de récupérer ``url``, payant automatiquement si la ressource répond 402.
 
@@ -215,9 +226,18 @@ async def fetch_paid_resource(
     l'implémentation réelle (wallet CDP dédié) ; en test, toujours des fakes.
     ``contract``/``token_symbol`` (19/07, #143) : token concerné si applicable --
     transmis tel quel jusqu'à ``x402_budget.record_spend`` pour que chaque paiement
-    soit traçable jusqu'au token sans reconstitution forensique après coup."""
+    soit traçable jusqu'au token sans reconstitution forensique après coup.
+
+    ``timeout`` (21/07) : ``None`` par défaut -- comportement HISTORIQUE inchangé
+    (``http_fetch_fn`` gère son propre timeout par défaut, jamais un kwarg
+    supplémentaire envoyé à un ``http_fetch_fn`` custom qui ne l'attend pas, ex.
+    les fakes de test). Seulement transmis si explicitement fourni par
+    l'appelant -- cf. Blockscout, dont le règlement de paiement s'est révélé
+    plus lent que le défaut de 12s (``httpx.ReadTimeout`` silencieux, son
+    ``str()`` est vide -- expliquait un ``reason=""`` fantôme)."""
+    fetch_kwargs: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
     try:
-        first = await http_fetch_fn(url, method=method, headers=None)
+        first = await http_fetch_fn(url, method=method, headers=None, **fetch_kwargs)
     except Exception as exc:  # noqa: BLE001
         return X402ExecutionResult(status="failed", reason=f"requête initiale échouée : {exc}")
 
@@ -318,7 +338,9 @@ async def fetch_paid_resource(
         PAYMENT_SIGNATURE_HEADER if requirement.get("x402Version") == 2 else X_PAYMENT_HEADER
     )
     try:
-        paid = await http_fetch_fn(url, method=method, headers={payment_header_name: payment_header})
+        paid = await http_fetch_fn(
+            url, method=method, headers={payment_header_name: payment_header}, **fetch_kwargs,
+        )
     except Exception as exc:  # noqa: BLE001
         await x402_budget.record_spend(
             resource=resource, provider=provider, amount_usd=amount_usd,
