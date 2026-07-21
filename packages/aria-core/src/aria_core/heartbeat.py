@@ -439,6 +439,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="token_holder_extraction_cycle",
+        name="Extraction reguliere des holders (Blockscout x402) -- coordonne vers le classement smart-money",
+        description="Demande operateur (21/07) : fait grossir token_holder_intel.py en continu (jusqu'a 2 tokens Base jamais encore extraits/cycle, tries par liquidite deja connue), profondeur par capitalisation (500/300/200/100 holders selon mcap CoinGecko >=1000M/>=500M/>=100M/sinon). Alimente automatiquement la decouverte smart_money_leaderboard_discovery_cycle (meme table). Cout reel x402 (Blockscout, 0,002$/page), borne par le plafond hebdomadaire partage (x402_budget.py, 5$/semaine, deja fail-closed) -- aucun plafond dedie supplementaire. Gate ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED, OFF par defaut.",
+        interval_minutes=180,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="memory_consolidation",
         name="Consolidation memoire episodique",
         description="Consolide memory_dir() (fichiers {categorie}_{date}.md) categorie par categorie, un seul appel LLM en depth=brief par categorie qualifiee (seuil >=3 nouvelles entrees). Archive-then-rewrite : instantane brut avant toute reecriture, aucune suppression physique. Perimetre verrouille en dur -- jamais le truth-ledger, jamais cognitive_knowledge WHERE approved=1. Gate OFF par defaut (#128).",
@@ -1359,6 +1366,18 @@ class AriaHeartbeat:
                     "smart_money_leaderboard",
                     f"[smart_money_leaderboard] {result['added_to_queue']} wallet(s) candidat(s) "
                     f"ajoute(s) a la file (sur {result.get('candidates_found')} detectes)",
+                )
+
+        elif task_id == "token_holder_extraction_cycle":
+            from aria_core.services.token_holder_extraction_cycle import run_token_holder_extraction_cycle
+
+            result = await run_token_holder_extraction_cycle(notifier=self._notify_telegram)
+            if result.get("outcome") == "ok" and result.get("tokens_processed"):
+                total = sum(p["holders_stored"] for p in result["tokens_processed"])
+                append_memory(
+                    "token_holder_extraction",
+                    f"[token_holder_extraction] {total} holder(s) stocke(s) sur "
+                    f"{len(result['tokens_processed'])} token(s)",
                 )
 
         elif task_id == "marketing_video_cycle":
