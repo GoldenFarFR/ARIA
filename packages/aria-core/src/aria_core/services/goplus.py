@@ -131,15 +131,22 @@ def _tax(value: object) -> float | None:
 class GoPlusClient:
     """Client HTTP async, lecture seule, throttle modéré (API publique sans clé)."""
 
-    # 21/07 -- la doc officielle GoPlus est contradictoire selon la page
-    # consultée (100 vs 150 call credits/min, gopluslabs.io/en/token-security-api
-    # vs gopluslabs.io/en/security-api) -- un test empirique en rafale contrôlée
-    # (20 requêtes back-to-back, adresses distinctes) fait plus autorité : bloqué
-    # dès la 11e requête (2.7s), ~11s pour récupérer -- débit soutenu réel
-    # empirique ~55/min, nettement en dessous des deux chiffres officiels.
-    # Doctrine CLAUDE.md "Débit calibré à 90%" : 90% de 55/min = 49.5/min =
-    # 1.212s. Remplace 0.5s (120/min), qui dépassait déjà le débit réel soutenu.
-    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 1.212) -> None:
+    # 21/07 -- CORRECTION d'un premier calibrage erroné fait le même jour (1.212s,
+    # basé sur un test empirique en rafale mal interprété -- le "blocage à la 11e
+    # requête" observé n'était pas un plafond ambigu à ~55/min, c'est EXACTEMENT
+    # 150 CU / 15 CU-par-token = 10 requêtes, confirmé une fois la vraie structure
+    # de facturation connue). Root cause : GoPlus facture PAR TOKEN VÉRIFIÉ (15 CU
+    # pour Token Security API sur EVM, 30 CU pour Solana), pas par appel HTTP --
+    # `get_token_security()` ci-dessous interroge TOUJOURS un seul contrat par
+    # appel, donc 1 appel = 15 CU sur Base. Vraie limite du compte CONFIRMÉE en
+    # DIRECT sur le dashboard GoPlus réel (gopluslabs.io/dashboard, palier Free,
+    # "Rate Limit: 150 CU/Min") -- source la plus fiable possible, au-dessus même
+    # d'un test empirique : 150 CU/min / 15 CU/token = **10 req/min réelles**.
+    # Doctrine CLAUDE.md "Débit calibré à 90%" : 90% de 10/min = 9/min = 6.667s.
+    # Si un jour ce client interroge Solana (30 CU/token) sans passer par
+    # `_check_honeypot_rugcheck_fallback`, la vraie limite tomberait à 5 req/min --
+    # non géré ici, ce client ne fait actuellement que des appels 1-token/EVM.
+    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 6.667) -> None:
         self.base_url = base_url.rstrip("/")
         self._min_interval = min_interval
         self._lock = asyncio.Lock()

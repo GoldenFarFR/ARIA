@@ -1253,31 +1253,37 @@ async def evaluate_momentum_entry(
     être persisté comme ``entry_regime`` de la position (verrou ratchet en gestion,
     cf. ``paper_trader.py``).
 
-    Ordre, du plus rapide/bloquant au plus lent/optionnel :
+    Ordre, du plus abondant/gratuit au plus rare (21/07, réordonné -- décision opérateur
+    explicite, cf. docs/api-rate-limit-calibration.md) :
       1. Liste noire (``momentum_blacklist.py``) -- rejet immédiat, aucun appel réseau.
-      2. Honeypot (GoPlus) -- rejet immédiat si non clear.
-      3. Prix + meilleure paire (DexScreener) -- rejet si aucune paire liquide.
-      4. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 100 000$, 19/07 -- doublé à
+      2. Prix + meilleure paire (DexScreener) -- rejet si aucune paire liquide.
+      3. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 100 000$, 19/07 -- doublé à
          ``_MIN_LIQUIDITY_USD_FEAR`` en régime Peur, 20/07) -- rejet SYSTÉMATIQUE si
          le pool est trop mince, même si tout le reste est propre.
-      5. Plancher de volume 24h (``_MIN_VOLUME_24H_USD``, 1 000$ + ratio 1% de la
+      4. Plancher de volume 24h (``_MIN_VOLUME_24H_USD``, 1 000$ + ratio 1% de la
          liquidité, 19/07, abaissé 20/07 -- essai en cours) -- rejet si le marché est
          quasi mort, sur des données déjà en main.
-      6. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
+      5. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
          des données déjà en main (aucun appel réseau supplémentaire).
-      7. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
+      6. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
          extrême, même donnée déjà en main. SAUTÉ en régime Euphorie confirmé (20/07) --
          le RVOL (étape 15) reste un rejet dur indépendant qui continue de filtrer un
          mouvement non soutenu par du vrai volume, même quand ce plafond est levé.
-      8. Âge minimum de la paire (``_MIN_PAIR_AGE_DAYS``, 14 jours, 20/07) -- rejet si
+      7. Âge minimum de la paire (``_MIN_PAIR_AGE_DAYS``, 14 jours, 20/07) -- rejet si
          trop jeune ou âge inconnu, sur donnée déjà en main (``pair_created_at``).
-      9. Profil projet établi (``_check_project_profile``, 20/07) -- profil DexScreener
+      8. Profil projet établi (``_check_project_profile``, 20/07) -- profil DexScreener
          payant (gratuit, déjà en main) OU listing CoinGecko (réseau, court-circuité
          si DexScreener suffit) ; rejet dur si aucun des deux.
-      10. Concentration des holders (``_check_holder_concentration``, top 10 hors
-          pool/burn >= 80%, 19/07) -- rejet si un dump d'initié massif reste possible ;
-          seul garde-fou dur qui coûte TOUJOURS un appel réseau (Blockscout), placé en
-          dernier parmi les garde-fous durs pour ça.
+      9. Concentration des holders (``_check_holder_concentration``, top 10 hors
+         pool/burn >= 80%, 19/07) -- Blockscout, débit généreux (~270/min) -- rejet si
+         un dump d'initié massif reste possible.
+      10. Honeypot (GoPlus, ~55/min soutenu -- la ressource la PLUS rare de tout le
+          pipeline, cf. calibration 21/07) -- déplacé en DERNIER parmi les garde-fous
+          durs (avant honeypot était vérifié en 2e position, avant même les filtres
+          gratuits) : un candidat qui atteint cette étape a déjà survécu à tous les
+          filtres gratuits ET aux deux autres garde-fous réseau, GoPlus n'est donc
+          jamais dépensée sur un candidat qui allait de toute façon être rejeté pour
+          une autre raison. Comportement fail-closed inchangé -- seul l'ordre change.
       11. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
           HOLD si absent (jamais un objectif fabriqué).
       12. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
@@ -1311,10 +1317,6 @@ async def evaluate_momentum_entry(
             "reasons": ["contrat sur liste noire -- déjà confirmé problématique"],
             "hold_reason": "blacklisted",
         }
-
-    clear, honeypot_reason, honeypot_code = await _check_honeypot(contract, chain)
-    if not clear:
-        return {"action": "HOLD", "chain": chain, "reasons": [honeypot_reason], "hold_reason": honeypot_code}
 
     pairs = await fetch_token_pairs(contract, chain=chain)
     best = _best_pair(pairs, contract)
@@ -1448,6 +1450,24 @@ async def evaluate_momentum_entry(
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd, "reasons": [concentration_reason],
             "hold_reason": "holder_concentration",
+        }
+
+    # 21/07 -- réordonné après tous les autres garde-fous durs (décision opérateur
+    # explicite, cf. docs/api-rate-limit-calibration.md) : GoPlus est la ressource la
+    # plus rare de tout le pipeline (~55/min soutenu, empirique -- plus serré que
+    # Blockscout ~270/min ou DexScreener ~54-270/min selon l'endpoint). Vérifiée en
+    # DERNIER parmi les garde-fous durs pour ne jamais la dépenser sur un candidat qui
+    # allait de toute façon être rejeté gratuitement (liquidité/volume/âge/wash-trading/
+    # profil) ou par un garde-fou plus généreux (holder-concentration, Blockscout).
+    # Comportement fail-closed strictement inchangé -- seul l'ORDRE change, jamais la
+    # rigueur de la décision : un candidat qui atteint ce point a déjà survécu à tous
+    # les autres garde-fous durs, GoPlus reste la toute dernière porte avant le calcul
+    # R/R.
+    clear, honeypot_reason, honeypot_code = await _check_honeypot(contract, chain)
+    if not clear:
+        return {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd, "reasons": [honeypot_reason], "hold_reason": honeypot_code,
         }
 
     reasons: list[str] = [honeypot_reason]

@@ -1821,6 +1821,14 @@ async def test_evaluate_hold_reason_distinguishes_goplus_outage_from_real_honeyp
     distinguables machine-readable pour que ``paper_trader`` puisse agréger un
     funnel par cycle -- sinon une panne prolongée est indiscernable d'un marché
     sans candidat valable."""
+    # 21/07 -- honeypot vérifié en DERNIER parmi les garde-fous durs (réordonnancement,
+    # cf. docs/api-rate-limit-calibration.md) : il faut désormais passer tous les
+    # garde-fous précédents (DexScreener/liquidité/volume/.../holder-concentration)
+    # pour atteindre ce point -- _patch_pipeline() les fait tous passer par défaut,
+    # puis l'override ci-dessous remplace SPÉCIFIQUEMENT le honeypot par le cas
+    # "indisponible" que ce test vérifie.
+    _patch_pipeline(monkeypatch)
+
     async def fake_honeypot_unavailable(contract, chain):
         return False, "GoPlus indisponible (timeout) -- rejet par prudence", "honeypot_unavailable"
 
