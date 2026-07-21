@@ -6,19 +6,19 @@ from pathlib import Path
 
 import yaml
 
-_GOALS_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "aria_goals.yaml"
+_DNA_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "dna.yaml"
 _GOALS_BUDGET = 1600
 
 
 @lru_cache(maxsize=1)
 def _load_goals() -> list[dict]:
-    if not _GOALS_PATH.is_file():
+    if not _DNA_PATH.is_file():
         return []
     try:
-        raw = yaml.safe_load(_GOALS_PATH.read_text(encoding="utf-8")) or {}
+        raw = yaml.safe_load(_DNA_PATH.read_text(encoding="utf-8")) or {}
     except Exception:
         return []
-    items = raw.get("goals") or []
+    items = (raw.get("dna") or {}).get("objectifs") or []
     if not isinstance(items, list):
         return []
     out: list[dict] = []

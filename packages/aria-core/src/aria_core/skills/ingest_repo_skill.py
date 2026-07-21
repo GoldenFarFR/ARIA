@@ -29,8 +29,7 @@ _PRIORITY_REL = (
     "collegue-memoire/sessions/HANDOFF.md",
     "VISION.md",
     "vanguard/VISION.md",
-    "packages/aria-core/src/aria_core/knowledge/aria_values.yaml",
-    "packages/aria-core/src/aria_core/knowledge/aria_goals.yaml",
+    "packages/aria-core/src/aria_core/knowledge/dna.yaml",
     "packages/aria-core/docs/ARCHITECTURE.md",
 )
 

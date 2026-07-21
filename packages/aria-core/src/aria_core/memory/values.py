@@ -6,19 +6,19 @@ from pathlib import Path
 
 import yaml
 
-_VALUES_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "aria_values.yaml"
+_DNA_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "dna.yaml"
 _VALUES_BUDGET = 1400
 
 
 @lru_cache(maxsize=1)
 def _load_values() -> list[dict]:
-    if not _VALUES_PATH.is_file():
+    if not _DNA_PATH.is_file():
         return []
     try:
-        raw = yaml.safe_load(_VALUES_PATH.read_text(encoding="utf-8")) or {}
+        raw = yaml.safe_load(_DNA_PATH.read_text(encoding="utf-8")) or {}
     except Exception:
         return []
-    items = raw.get("values") or []
+    items = (raw.get("dna") or {}).get("valeurs") or []
     if not isinstance(items, list):
         return []
     out: list[dict] = []

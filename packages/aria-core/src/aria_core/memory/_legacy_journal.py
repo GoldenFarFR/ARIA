@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 from aria_core.paths import memory_dir
 
 _PKG_ROOT = Path(__file__).resolve().parent.parent
@@ -63,13 +65,86 @@ def get_journal_summary() -> str:
     return "\n---\n".join(entries)
 
 
-def get_persona_text() -> str:
-    persona_path = _PKG_ROOT / "persona.md"
-    if persona_path.exists():
-        return persona_path.read_text(encoding="utf-8")[:3000]
-    from aria_core.narrative import memory_identity_fallback
+_DNA_PATH = _PKG_ROOT / "knowledge" / "dna.yaml"
+_PERSONA_BUDGET = 2600
 
-    return memory_identity_fallback()
+
+def get_persona_text(*, budget_chars: int = _PERSONA_BUDGET) -> str:
+    """Identité + personnalité ARIA pour le contexte LLM opérateur (privé —
+    jamais utilisé côté public, cf. narrative.public_llm_system_block qui a
+    son propre mécanisme indépendant). Composé depuis knowledge/dna.yaml
+    (racine + personnalite) depuis le 21/07 -- remplace l'ancien persona.md
+    statique, fusionné dans le même ADN que valeurs/objectifs/réflexion."""
+    if not _DNA_PATH.is_file():
+        from aria_core.narrative import memory_identity_fallback
+
+        return memory_identity_fallback()
+    try:
+        raw = yaml.safe_load(_DNA_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        raw = {}
+    dna = raw.get("dna") if isinstance(raw, dict) else None
+    if not isinstance(dna, dict):
+        from aria_core.narrative import memory_identity_fallback
+
+        return memory_identity_fallback()
+
+    racine = dna.get("racine") or {}
+    personnalite = dna.get("personnalite") or {}
+
+    lines: list[str] = ["# ARIA — identité & personnalité"]
+    used = len(lines[0])
+
+    def _add(line: str) -> bool:
+        nonlocal used
+        if used + len(line) + 1 > budget_chars:
+            return False
+        lines.append(line)
+        used += len(line) + 1
+        return True
+
+    nom = racine.get("nom") or "ARIA"
+    titre = racine.get("titre") or ""
+    holding = racine.get("holding") or ""
+    _add(f"{nom} — {titre}, opère {holding}.".strip())
+    nature = " ".join(str(racine.get("nature") or "").split())
+    if nature:
+        _add(nature)
+
+    archetype = racine.get("archetype") or {}
+    if archetype.get("nom"):
+        _add(f"## Archétype : {archetype['nom']}")
+        for pilier in archetype.get("piliers") or []:
+            if isinstance(pilier, dict) and pilier.get("text"):
+                if not _add(f"- {pilier['text']}"):
+                    break
+
+    if personnalite.get("jugement_de_machine"):
+        _add("## Personnalité")
+        _add(" ".join(str(personnalite["jugement_de_machine"]).split()))
+        for trait in personnalite.get("caractere_humain_garde") or []:
+            if not _add(f"- {trait}"):
+                break
+        for trait in personnalite.get("avantages_ia_en_trait_de_caractere") or []:
+            if not _add(f"- {trait}"):
+                break
+
+    voix = personnalite.get("voix") or []
+    if voix:
+        _add("## Voix")
+        for item in voix:
+            if isinstance(item, dict) and item.get("comportement"):
+                if not _add(f"- **{item.get('trait', '')}** : {item['comportement']}"):
+                    break
+
+    mission = racine.get("mission") or []
+    if mission:
+        _add("## Mission")
+        for point in mission:
+            if not _add(f"- {point}"):
+                break
+
+    return "\n".join(lines)
 
 
 def get_doctrine_text() -> str:

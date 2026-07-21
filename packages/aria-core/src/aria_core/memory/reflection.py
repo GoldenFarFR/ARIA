@@ -12,18 +12,19 @@ import yaml
 from aria_core.memory.llm_context import sanitize_recall_text
 from aria_core.paths import memory_dir
 
-_REFLECTION_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "aria_reflection.yaml"
+_DNA_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "dna.yaml"
 _LOG_FILE = "reflections.jsonl"
 _REFLECTION_BUDGET = 1400
 
 
 @lru_cache(maxsize=1)
 def _load_config() -> dict[str, Any]:
-    if not _REFLECTION_PATH.is_file():
+    if not _DNA_PATH.is_file():
         return {}
     try:
-        raw = yaml.safe_load(_REFLECTION_PATH.read_text(encoding="utf-8")) or {}
-        return raw if isinstance(raw, dict) else {}
+        raw = yaml.safe_load(_DNA_PATH.read_text(encoding="utf-8")) or {}
+        section = (raw.get("dna") or {}).get("reflexion") if isinstance(raw, dict) else {}
+        return section if isinstance(section, dict) else {}
     except Exception:
         return {}
 
