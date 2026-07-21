@@ -1020,11 +1020,11 @@ def _pair(**overrides) -> PairSnapshot:
     # le ratio wash-trading (50k/150k = 0,33x, largement < 20x) : les tests qui ne testent
     # pas spécifiquement ces gates doivent continuer à les traverser sans avoir à
     # overrider quoi que ce soit un par un.
-    # 20/07 -- pair_created_at fixé à une constante passée (~nov. 2023, en ms epoch) :
-    # toujours > _MIN_PAIR_AGE_DAYS (14j) quel que soit le moment où le test tourne
-    # (le temps ne recule jamais). project_links non vide par défaut (profil DexScreener
-    # "payant" déjà présent) -- même doctrine que les autres planchers ci-dessus, aucun
-    # appel réseau CoinGecko déclenché par défaut.
+    # 20/07 -- pair_created_at fixé à une constante passée (~nov. 2023, en ms epoch),
+    # reliquat du gate d'âge minimum supprimé le 21/07 -- gardé tel quel (données
+    # réalistes, aucune raison de le retirer). project_links non vide par défaut
+    # (profil DexScreener "payant" déjà présent) -- même doctrine que les autres
+    # planchers ci-dessus, aucun appel réseau CoinGecko déclenché par défaut.
     base = {
         "pair_address": "0xpool", "price_usd": 1.5, "liquidity_usd": 150_000.0,
         "volume_24h_usd": 50_000.0, "base_symbol": "TOK", "base_address": CONTRACT.lower(),
@@ -1328,46 +1328,6 @@ async def test_evaluate_allows_volume_meeting_ratio_on_large_pool(monkeypatch):
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "volume_too_low"
     assert result["action"] == "BUY"
-
-
-# ── plancher d'âge minimum de la paire (20/07, décision opérateur explicite) ────────
-
-def test_pair_age_days_none_on_missing_timestamp():
-    assert me._pair_age_days(None) is None
-    assert me._pair_age_days(0) is None
-
-
-def test_pair_age_days_none_on_timestamp_in_the_future():
-    future_ms = int(time.time() * 1000) + 3_600_000
-    assert me._pair_age_days(future_ms) is None
-
-
-def test_pair_age_days_computes_real_age():
-    thirty_days_ago_ms = int(time.time() * 1000) - 30 * 86_400_000
-    age = me._pair_age_days(thirty_days_ago_ms)
-    assert age is not None
-    assert 29.9 < age < 30.1
-
-
-@pytest.mark.asyncio
-async def test_evaluate_rejects_pair_younger_than_floor(monkeypatch):
-    """Décision opérateur explicite (20/07) : "minimum 14 jours" -- une paire de
-    quelques heures n'a pas assez d'historique pour un signal Fibonacci/RSI fiable."""
-    recent_ms = int(time.time() * 1000) - 2 * 86_400_000  # 2 jours
-    _patch_pipeline(monkeypatch, pairs=[_pair(pair_created_at=recent_ms)])
-    result = await me.evaluate_momentum_entry(CONTRACT, "base")
-    assert result["action"] == "HOLD"
-    assert result["hold_reason"] == "pair_too_young"
-
-
-@pytest.mark.asyncio
-async def test_evaluate_rejects_unknown_pair_age_as_too_young(monkeypatch):
-    """Âge inconnu (``pair_created_at=None``) -- fail-closed, même doctrine que la
-    liquidité : jamais "OK par défaut" sur une donnée manquante."""
-    _patch_pipeline(monkeypatch, pairs=[_pair(pair_created_at=None)])
-    result = await me.evaluate_momentum_entry(CONTRACT, "base")
-    assert result["action"] == "HOLD"
-    assert result["hold_reason"] == "pair_too_young"
 
 
 # ── profil projet établi -- DexScreener payant OU CoinGecko (20/07, décision opérateur

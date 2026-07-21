@@ -45,10 +45,12 @@ le test 1M$ (#194) », à lire avant toute modification) :
     par bougie est disponible et l'infirme ; fail-open, jamais un rejet, quand la
     donnée est structurellement absente, ex. repli synthèse DexScreener/Dune -- mais
     alors un malus de conviction s'applique au sizing, cf. risk_guard.
-    conviction_size_multiplier) ; âge minimum de la paire (``_MIN_PAIR_AGE_DAYS``,
-    14 jours depuis le 20/07 -- décision opérateur explicite, ferme l'angle mort
-    Fibonacci-sur-du-bruit d'une paire trop jeune pour un historique de bougies
-    fiable ; fail-closed si l'âge est inconnu) ; profil projet établi
+    conviction_size_multiplier) ; âge minimum de la paire (posé le 20/07, SUPPRIMÉ le
+    21/07 -- décision opérateur explicite, "il fonctionne mal sur dexscreener" : ~22%
+    des candidats réels n'ont aucun ``pairCreatedAt`` DexScreener, le gate fail-closed
+    rejetait ces paires comme "trop jeunes" alors que l'âge était simplement inconnu,
+    une lacune de couverture de données plutôt qu'un vrai signal de fraîcheur) ; profil
+    projet établi
     (``_check_project_profile``, 20/07 -- décision opérateur explicite : profil
     DexScreener payant OU listing CoinGecko, aucun des deux -> rejet).
   - **R/R positif obligatoire** (cible/invalidation dérivés de niveaux RÉELS via
@@ -242,17 +244,6 @@ _MIN_VOLUME_TO_LIQUIDITY_RATIO = 0.01
 _TOP_N_HOLDERS_FOR_CONCENTRATION = 10
 _MAX_TOP_HOLDERS_CONCENTRATION_PCT = 80.0
 _BURN_ADDRESSES = ("0x" + "0" * 40, "0x000000000000000000000000000000000000dead")
-
-# 20/07 -- plancher d'âge minimum de la paire (décision opérateur explicite). Angle
-# mort documenté par la revue croisée Kiwi du 19/07 : golden pocket + divergence RSI
-# sont des formules Fibonacci calculées sur un historique de bougies -- sur une paire
-# vieille de quelques heures, ce signal est du pattern matching sur du bruit (pas
-# assez de bougies pour distinguer un vrai retracement d'une fluctuation de lancement).
-# ``pair_created_at`` (DexScreener, ms epoch -- confirmé via l'usage ``pair_created_at_ms``
-# dans acp_onchain_scan.py) donne l'âge réel sans appel réseau supplémentaire (déjà sur
-# ``best``). Fail-closed si l'horodatage est absent -- même doctrine que la liquidité :
-# une donnée manquante n'est jamais traitée comme "OK par défaut".
-_MIN_PAIR_AGE_DAYS = 14.0
 
 # 20/07 -- profil projet établi sur au moins UNE plateforme reconnue (décision opérateur
 # explicite : "il faut que le profil soit payé que ce soit sur dexscreener ou coingecko").
@@ -601,18 +592,6 @@ async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, s
         "RugCheck disponible mais verdict non concluant -- rejet par prudence",
         "honeypot_unavailable",
     )
-
-
-def _pair_age_days(pair_created_at_ms: int | None) -> float | None:
-    """Âge de la paire en jours depuis ``pairCreatedAt`` (DexScreener, ms epoch).
-    ``None`` si l'horodatage est absent, invalide ou dans le futur (horloge
-    incohérente) -- jamais un âge inventé."""
-    if not pair_created_at_ms or pair_created_at_ms <= 0:
-        return None
-    age_ms = (time.time() * 1000.0) - pair_created_at_ms
-    if age_ms < 0:
-        return None
-    return age_ms / 86_400_000.0
 
 
 async def _check_project_profile(chain: str, contract: str, pair: PairSnapshot) -> tuple[bool, str]:
@@ -1354,40 +1333,39 @@ async def evaluate_momentum_entry(
       3. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 50 000$ depuis le 21/07 --
          doublé à ``_MIN_LIQUIDITY_USD_FEAR`` en régime Peur) -- rejet SYSTÉMATIQUE si
          le pool est trop mince, même si tout le reste est propre.
-      4. Plancher de volume 24h (``_MIN_VOLUME_24H_USD``, 1 000$ + ratio 1% de la
-         liquidité, 19/07, abaissé 20/07 -- essai en cours) -- rejet si le marché est
-         quasi mort, sur des données déjà en main.
+      4. Plancher de volume 24h (``_MIN_VOLUME_24H_USD``, 500$ + ratio 1% de la
+         liquidité, 19/07, abaissé 20/07 puis 21/07 -- essai en cours) -- rejet si le
+         marché est quasi mort, sur des données déjà en main.
       5. Ratio volume 24h/liquidité (wash-trading, 17/07) -- rejet si extrême, sur
          des données déjà en main (aucun appel réseau supplémentaire).
       6. Mouvement de prix déjà parabolique sur 24h (17/07, cas TSG) -- rejet si
          extrême, même donnée déjà en main. SAUTÉ en régime Euphorie confirmé (20/07) --
          le RVOL (étape 15) reste un rejet dur indépendant qui continue de filtrer un
          mouvement non soutenu par du vrai volume, même quand ce plafond est levé.
-      7. Âge minimum de la paire (``_MIN_PAIR_AGE_DAYS``, 14 jours, 20/07) -- rejet si
-         trop jeune ou âge inconnu, sur donnée déjà en main (``pair_created_at``).
-      8. Profil projet établi (``_check_project_profile``, 20/07) -- profil DexScreener
+      7. Profil projet établi (``_check_project_profile``, 20/07) -- profil DexScreener
          payant (gratuit, déjà en main) OU listing CoinGecko (réseau, court-circuité
          si DexScreener suffit) ; rejet dur si aucun des deux.
-      9. Concentration des holders (``_check_holder_concentration``, top 10 hors
-         pool/burn >= 80%, 19/07) -- Blockscout, débit généreux (~270/min) -- rejet si
-         un dump d'initié massif reste possible.
-      10. Honeypot (GoPlus, ~55/min soutenu -- la ressource la PLUS rare de tout le
-          pipeline, cf. calibration 21/07) -- déplacé en DERNIER parmi les garde-fous
-          durs (avant honeypot était vérifié en 2e position, avant même les filtres
-          gratuits) : un candidat qui atteint cette étape a déjà survécu à tous les
-          filtres gratuits ET aux deux autres garde-fous réseau, GoPlus n'est donc
-          jamais dépensée sur un candidat qui allait de toute façon être rejeté pour
-          une autre raison. Comportement fail-closed inchangé -- seul l'ordre change.
-      11. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
+      8. Concentration des holders (``_check_holder_concentration``, top 10 hors
+         pool/burn >= 80%, 19/07) -- Blockscout, débit généreux (~270/min), repli x402
+         payant (21/07) si le chemin gratuit/Pro échoue -- rejet si un dump d'initié
+         massif reste possible.
+      9. Honeypot (GoPlus, ~55/min soutenu -- la ressource la PLUS rare de tout le
+         pipeline, cf. calibration 21/07) -- déplacé en DERNIER parmi les garde-fous
+         durs (avant honeypot était vérifié en 2e position, avant même les filtres
+         gratuits) : un candidat qui atteint cette étape a déjà survécu à tous les
+         filtres gratuits ET aux deux autres garde-fous réseau, GoPlus n'est donc
+         jamais dépensée sur un candidat qui allait de toute façon être rejeté pour
+         une autre raison. Comportement fail-closed inchangé -- seul l'ordre change.
+      10. R/R (golden pocket + divergence RSI, ``entry_signals.detect_entry``) --
           HOLD si absent (jamais un objectif fabriqué).
-      12. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
-      13. R/R franc (>= 2.0) + alignement technique >= 2/3 -> BUY déterministe
+      11. Alignement technique (bonus, jamais bloquant) -- renforce la confiance.
+      12. R/R franc (>= 2.0) + alignement technique >= 2/3 -> BUY déterministe
           (18/07, "plus sélective" : relevé depuis 1.5/1 signal). R/R positif mais
           sous ce seuil (1.0-2.0) -> confirmation LLM légère (calibrée sur le rythme
           hebdo, cf. ``weekly_context``). Sinon HOLD.
-      14. Garde de sécurité final (LLM, ``_llm_security_gate``) -- peut encore annuler
+      13. Garde de sécurité final (LLM, ``_llm_security_gate``) -- peut encore annuler
           un BUY déjà décidé.
-      15. Volume relatif (RVOL, ``_check_volume_confirmation``, 19/07) -- sur un BUY
+      14. Volume relatif (RVOL, ``_check_volume_confirmation``, 19/07) -- sur un BUY
           encore valide : REJET si un vrai volume par bougie est disponible et
           l'infirme (< 3.0x la moyenne des 10 bougies précédentes) ; fail-open (jamais
           un rejet) si la donnée est structurellement absente, mais ``volume_confirmed
@@ -1503,21 +1481,16 @@ async def evaluate_momentum_entry(
             "hold_reason": "already_parabolic",
         }
 
-    # 20/07 -- plancher d'âge minimum (décision opérateur explicite, cf. _MIN_PAIR_AGE_DAYS
-    # ci-dessus) -- gratuit (donnée déjà sur `best`), rejet SYSTÉMATIQUE si la paire est trop
-    # jeune OU si son âge est inconnu (fail-closed, même doctrine que la liquidité).
-    age_days = _pair_age_days(best.pair_created_at)
-    if age_days is None or age_days < _MIN_PAIR_AGE_DAYS:
-        age_desc = f"{age_days:.1f}j" if age_days is not None else "inconnu"
-        return {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd,
-            "reasons": [
-                f"paire trop jeune ou âge inconnu ({age_desc} < {_MIN_PAIR_AGE_DAYS:.0f}j requis) "
-                "-- pas assez d'historique de prix pour un signal Fibonacci/RSI fiable"
-            ],
-            "hold_reason": "pair_too_young",
-        }
+    # 20/07 -- plancher d'âge minimum SUPPRIMÉ le 21/07 (décision opérateur explicite,
+    # "enlève le filtre pair age il fonctionne mal sur dexscreener" -- confirmé "on
+    # enlève pair age" après diagnostic partagé). Root cause : ~22% des candidats réels
+    # n'ont AUCUN `pairCreatedAt` renvoyé par DexScreener (vérifié en direct sur un
+    # échantillon de 18), et le gate fail-closed rejetait ces paires comme "trop
+    # jeunes" alors que l'âge était simplement inconnu -- pas un signal de fraîcheur
+    # réel, une lacune de couverture de données. `_pair_age_days`/`_MIN_PAIR_AGE_DAYS`
+    # supprimés avec ce gate (plus aucun appelant, cf. `git log` pour l'historique
+    # complet si ce garde-fou doit être reconstruit un jour sur une source de données
+    # plus fiable).
 
     # 20/07 -- profil projet établi (décision opérateur explicite, cf. _check_project_profile
     # ci-dessus) -- DexScreener gratuit (déjà sur `best`) en premier, CoinGecko (réseau) en
