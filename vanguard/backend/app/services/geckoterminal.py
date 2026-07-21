@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-
 import httpx
 
 from app.config import settings
 from app.models.schemas import Candle, Timeframe
 from app.services.candle_aggregator import resample_candles
 from app.services.chain_mapping import to_gecko_network
+from aria_core.services.geckoterminal import wait_for_shared_rate_limit
 
 # Timeframes récupérés directement depuis GeckoTerminal
 DIRECT_FETCH: dict[Timeframe, tuple[str, int]] = {
@@ -26,18 +25,17 @@ RESAMPLED_FROM: dict[Timeframe, Timeframe] = {
 
 
 class GeckoTerminalClient:
+    """21/07 : le throttle n'est plus géré ici -- délègue à ``aria_core.services.
+    geckoterminal.wait_for_shared_rate_limit()`` pour que ce client et celui d'aria-core
+    respectent un seul et même débit cumulé envers GeckoTerminal (cf. docstring de cette
+    fonction pour la root cause du taux de 429 corrigé ce jour-là). Logique de fetch/
+    resampling par timeframe inchangée -- seul le point de coordination du débit change."""
+
     def __init__(self) -> None:
         self.base_url = settings.geckoterminal_base_url
-        self._lock = asyncio.Lock()
-        self._last_request = 0.0
 
     async def _throttle(self) -> None:
-        async with self._lock:
-            now = asyncio.get_event_loop().time()
-            wait = 2.1 - (now - self._last_request)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_request = asyncio.get_event_loop().time()
+        await wait_for_shared_rate_limit()
 
     async def _fetch_raw(
         self,

@@ -393,3 +393,19 @@ def now_utc() -> datetime:
 
 
 geckoterminal_client = GeckoTerminalClient(min_interval=_resolve_min_interval())
+
+
+async def wait_for_shared_rate_limit() -> None:
+    """Point d'entrée public pour un appelant EXTERNE à ce module (``vanguard/backend``,
+    seul autorisé -- aria-core ne dépend jamais de vanguard, cf. docstring du module) qui
+    a besoin de respecter le MÊME débit envers GeckoTerminal sans dupliquer son propre
+    verrou de throttle. 21/07 : root cause d'un taux de 429 soutenu de 55% -- deux clients
+    GeckoTerminal indépendants (celui-ci + ``vanguard/backend/app/services/geckoterminal.py``)
+    coexistaient dans le même conteneur, chacun respectant son propre intervalle de 2.1s
+    SANS jamais se coordonner -- leur débit cumulé dépassait le vrai plafond du compte.
+    Cette fonction fait partager le MÊME verrou/état (``geckoterminal_client._throttle``)
+    aux deux clients, sans fusionner leurs logiques de fetch/parsing (volontairement
+    distinctes : celui-ci sert le pricing FIFO large-fenêtre, l'autre sert des graphiques
+    à granularité de timeframe précise -- pas le même besoin, pas le même format de
+    retour)."""
+    await geckoterminal_client._throttle()
