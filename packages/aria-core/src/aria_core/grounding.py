@@ -765,9 +765,16 @@ def is_aria_brain_question(message: str) -> bool:
 
 
 async def aria_brain_status_reply(lang: str = "en") -> str:
-    """Réponse déterministe (pas d'appel LLM) sur l'état RÉEL de la mémoire libre --
-    lit `ARIA_BRAIN_ENABLED` + la dernière ligne `outcome='written'` de
-    `aria_brain_log`, jamais une affirmation depuis la mémoire conversationnelle."""
+    """Réponse déterministe (pas d'appel LLM) sur l'état RÉEL de la mémoire libre.
+
+    Vérifie D'ABORD le journal local (`aria_brain_log`, gratuit, pas de réseau) --
+    si vide, ne conclut PAS "rien écrit" directement : un vrai écart trouvé le 21/07
+    (migration VPS le 20/07) a laissé le repo GitHub avec du contenu RÉEL
+    (``livre/chapitre-01-le-point-zero.md``) alors que le journal local, recréé à
+    zéro sur le nouveau serveur, ne le savait pas. Le journal seul aurait donc
+    produit une AUTRE confabulation, dans le sens inverse de l'incident d'origine.
+    Repli sur une lecture RÉELLE du repo (source de vérité, ``_walk_repo_tree``,
+    même fonction que le cycle d'écriture) avant de conclure quoi que ce soit."""
     from aria_core.skills import aria_brain
 
     if not aria_brain.aria_brain_enabled():
@@ -797,15 +804,50 @@ async def aria_brain_status_reply(lang: str = "en") -> str:
     except Exception:
         row = None
 
-    if not row:
+    if row:
+        run_at, path = row
         if lang == "fr":
-            return "Ma mémoire libre est activée mais je n'y ai encore rien écrit (0 entrée dans le journal)."
-        return "My free memory is enabled but I haven't written anything there yet (0 log entries)."
+            return f"Ma mémoire libre est active -- dernière écriture le {run_at} ({path})."
+        return f"My free memory is active -- last write on {run_at} ({path})."
 
-    run_at, path = row
+    # Journal local vide -- vérifie le VRAI repo avant de conclure "rien écrit".
+    # Passe par aria_brain.check_real_repo_content() plutôt que de toucher le jeton
+    # d'accès GitHub d'ARIA nous-mêmes : ce nom de champ settings est verrouillé par
+    # test_coherence.py, seul skills/aria_brain.py peut le référencer (décision
+    # opérateur 20/07, "seul ARIA peut écrire").
+    entries = await aria_brain.check_real_repo_content()
+
+    files = [e for e in (entries or []) if e.get("type") == "file"]
+    if files:
+        latest = sorted((e.get("path", "") for e in files), reverse=True)[0]
+        if lang == "fr":
+            return (
+                f"Ma mémoire libre contient déjà du contenu réel ({latest}) -- mon "
+                "journal local n'a pas la date exacte de cette écriture (probablement "
+                "perdue lors d'une migration serveur), mais je ne vais pas prétendre "
+                "que c'est vide alors que ce n'est pas le cas."
+            )
+        return (
+            f"My free memory already has real content ({latest}) -- my local log "
+            "doesn't have the exact write date (likely lost during a server "
+            "migration), but I won't claim it's empty when it isn't."
+        )
+
+    if entries is None:
+        if lang == "fr":
+            return (
+                "Ma mémoire libre est activée, mais je ne peux pas confirmer son "
+                "contenu réel maintenant (vérification du repo indisponible) -- je "
+                "ne vais pas deviner."
+            )
+        return (
+            "My free memory is enabled, but I can't confirm its real content right "
+            "now (repo check unavailable) -- I won't guess."
+        )
+
     if lang == "fr":
-        return f"Ma mémoire libre est active -- dernière écriture le {run_at} ({path})."
-    return f"My free memory is active -- last write on {run_at} ({path})."
+        return "Ma mémoire libre est activée mais je n'y ai encore rien écrit (repo vide, vérifié)."
+    return "My free memory is enabled but I haven't written anything there yet (repo confirmed empty)."
 
 
 def unknown_reply(lang: str = "en") -> str:

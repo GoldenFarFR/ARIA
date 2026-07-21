@@ -349,13 +349,60 @@ async def test_aria_brain_status_reply_disabled(monkeypatch, _isolated_aria_brai
 
 
 @pytest.mark.asyncio
-async def test_aria_brain_status_reply_enabled_but_empty(monkeypatch, _isolated_aria_brain_db):
-    """Reproduit l'incident réel (21/07) : gate désactivé au moment du test, mais
-    même activé et vide, jamais une prétention d'avoir écrit."""
+async def test_aria_brain_status_reply_enabled_empty_log_no_token_admits_uncertainty(
+    monkeypatch, _isolated_aria_brain_db,
+):
+    """Journal local vide ET aucun token pour vérifier le vrai repo (cas par défaut
+    en test -- ``aria_brain_github_token`` vaut "" tant que rien ne l'a configuré) --
+    ne doit JAMAIS conclure "rien écrit" sans avoir pu vérifier (incident réel 21/07 :
+    un journal local vidé par une migration serveur ne prouve rien sur le vrai repo)."""
     monkeypatch.setenv("ARIA_BRAIN_ENABLED", "true")
     reply = await aria_brain_status_reply("fr")
+    assert "indisponible" in reply.lower()
+    assert "rien écrit" not in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_aria_brain_status_reply_enabled_empty_log_but_repo_has_real_content(
+    monkeypatch, _isolated_aria_brain_db,
+):
+    """Reproduit exactement l'écart réel trouvé le 21/07 : migration VPS le 20/07 a
+    vidé le journal local, mais le repo GitHub contenait déjà
+    livre/chapitre-01-le-point-zero.md -- le garde ne doit jamais dire "rien écrit"
+    dans ce cas, sous peine de confabuler dans le sens inverse."""
+    from aria_core.skills import aria_brain
+
+    monkeypatch.setenv("ARIA_BRAIN_ENABLED", "true")
+
+    async def fake_check():
+        return [
+            {"path": "livre", "type": "dir"},
+            {"path": "livre/chapitre-01-le-point-zero.md", "type": "file"},
+        ]
+
+    monkeypatch.setattr(aria_brain, "check_real_repo_content", fake_check)
+
+    reply = await aria_brain_status_reply("fr")
+    assert "rien écrit" not in reply.lower()
+    assert "chapitre-01-le-point-zero.md" in reply
+
+
+@pytest.mark.asyncio
+async def test_aria_brain_status_reply_enabled_repo_confirmed_empty(monkeypatch, _isolated_aria_brain_db):
+    """Le repo est réellement vide (vérifié en direct, pas juste le journal local) --
+    seul ce cas doit produire "rien écrit"."""
+    from aria_core.skills import aria_brain
+
+    monkeypatch.setenv("ARIA_BRAIN_ENABLED", "true")
+
+    async def fake_check_empty():
+        return []
+
+    monkeypatch.setattr(aria_brain, "check_real_repo_content", fake_check_empty)
+
+    reply = await aria_brain_status_reply("fr")
     assert "rien écrit" in reply.lower()
-    assert "0 entrée" in reply.lower()
+    assert "vérifié" in reply.lower()
 
 
 @pytest.mark.asyncio

@@ -177,6 +177,33 @@ async def _fetch_existing_content(
     return "\n\n".join(parts) if parts else "(aucun fichier existant à relire -- premier passage)"
 
 
+async def check_real_repo_content() -> list[dict[str, Any]] | None:
+    """Lecture seule du VRAI contenu du repo -- pour ``grounding.aria_brain_status_reply``
+    (garde anti-confabulation, 21/07), qui doit vérifier l'état réel SANS jamais
+    référencer ``aria_brain_github_token`` lui-même (verrouillé par
+    ``test_coherence.py::test_aria_brain_token_scoped_to_its_own_skill_only`` -- seul
+    ce fichier peut toucher ce token, décision opérateur du 20/07 « seul ARIA peut
+    écrire »). Retourne ``None`` si le token est absent ou l'appel échoue (jamais
+    confondu avec ``[]`` = repo confirmé vide) ; ``[]`` si le repo n'existe pas encore
+    (jamais créé -- équivalent à "vide" pour un appelant en lecture seule)."""
+    from aria_core.runtime import settings
+
+    token = (getattr(settings, "aria_brain_github_token", "") or "").strip()
+    if not token:
+        return None
+
+    from aria_core.github_client import GitHubClient
+
+    client = GitHubClient(token)
+    try:
+        exists = await client.repo_exists(OWNER, REPO)
+        if not exists:
+            return []
+        return await _walk_repo_tree(client, OWNER, REPO, "")
+    except Exception:  # noqa: BLE001 -- lecture seule, jamais bloquant pour l'appelant
+        return None
+
+
 async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
     """Un tour : elle regarde ce qui existe déjà dans son repo, écrit librement,
     ARIA committe directement (aucune proposition, aucune validation humaine par
