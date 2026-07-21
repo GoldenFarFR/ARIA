@@ -3375,10 +3375,30 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   avant la coupure) se sont révélées correspondre exactement (même adresse,
   mêmes montants) à des paiements x402 twit.sh légitimes déjà connus juste
   avant -- très probablement un trou de reconnaissance du moniteur (pas un vrai
-  incident de sécurité), pas encore corrigé, à surveiller. **Permission "Export
-  private key" repérée sur la clé CDP** (en plus de Trade-View) -- capacité
-  sensible non nécessaire à l'usage actuel (swap/lecture), notée pour un
-  resserrement futur, pas encore fait.
+  incident de sécurité), pas encore corrigé, à surveiller. **Note du 21/07
+  ci-dessus erronée, corrigée le 21/07 (même soir, vérifié en conditions
+  réelles) : la clé CDP de prod ("ARIA") n'a PAS le scope Export** -- une
+  tentative réelle d'export de la clé privée du wallet a échoué en `403
+  forbidden, Missing required scope: accounts#export`. Bonne nouvelle en
+  creusant : le vrai "resserrement futur" évoqué ci-dessus n'a jamais été
+  nécessaire, la clé de prod n'a jamais porté ce pouvoir. Export réalisé
+  proprement via une clé API **temporaire séparée** (créée avec le seul
+  scope Export, jamais ajouté à la clé de prod), utilisée une fois via
+  `docker exec -it -e CDP_API_KEY_ID=... -e CDP_API_KEY_SECRET=...
+  aria-api python3 /app/backend/data/export_wallet_key.py` (script laissé
+  sur le VPS, `/opt/aria-data/export_wallet_key.py` -- ne contient aucun
+  secret, lit tout depuis l'environnement de l'appel), clé temporaire
+  supprimée par l'opérateur juste après. **Précision importante** : la
+  clé privée du wallet lui-même n'a jamais transité dans cette session
+  (récupérée directement dans le terminal de l'opérateur, jamais montrée
+  à Claude Code) -- c'est l'ID+Secret de la clé API CDP TEMPORAIRE (celle
+  qui a servi UNIQUEMENT à autoriser cet export, jamais la clé de prod
+  "ARIA") qui a été collé en clair dans le chat opérateur à 3 reprises
+  (captures d'écran) malgré un refus explicite et répété de Claude Code
+  d'intégrer ces valeurs dans un fichier -- traité comme compromis par
+  précaution dès la 1re occurrence (même doctrine que l'incident
+  `connect.ts` du 09/07), cette clé temporaire supprimée par l'opérateur
+  juste après usage, comme prévu dès le départ.
 
 - **21/07 — Intelligence wallet/entité propriétaire, chantier complet (extraction Blockscout
   x402 → classement "meilleurs investisseurs"), EN LIGNE, les 4 gates ACTIVÉS en prod.**
