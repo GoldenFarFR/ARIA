@@ -1014,9 +1014,9 @@ def test_technical_alignment_never_crashes_on_short_series():
 # ── evaluate_momentum_entry (bout en bout, tout mocké) ───────────────────────────────
 
 def _pair(**overrides) -> PairSnapshot:
-    # 19/07 -- liquidité ET volume par défaut confortablement au-dessus des nouveaux
-    # planchers (_MIN_LIQUIDITY_USD 100 000$, _MIN_VOLUME_24H_USD 5 000$) ET sous le
-    # ratio wash-trading (50k/150k = 0,33x, largement < 20x) : les tests qui ne testent
+    # 19/07 -- liquidité ET volume par défaut confortablement au-dessus des planchers
+    # (_MIN_LIQUIDITY_USD, 50 000$ depuis le 21/07 ; _MIN_VOLUME_24H_USD 1 000$) ET sous
+    # le ratio wash-trading (50k/150k = 0,33x, largement < 20x) : les tests qui ne testent
     # pas spécifiquement ces gates doivent continuer à les traverser sans avoir à
     # overrider quoi que ce soit un par un.
     # 20/07 -- pair_created_at fixé à une constante passée (~nov. 2023, en ms epoch) :
@@ -1130,12 +1130,12 @@ async def test_evaluate_does_not_blacklist_on_honeypot_unavailable(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_evaluate_rejects_liquidity_below_floor(monkeypatch):
-    """Décision opérateur explicite (19/07) : "liquidité minimum c 100k je veut
-    eviter a aria de se faire scam, meme si tout est ok en dessous il peut y avoir x
-    ou y risques" -- rejet SYSTÉMATIQUE, même si honeypot/R-R/alignement seraient par
-    ailleurs tous propres (le mock ``signal``/``align`` par défaut n'est jamais
-    atteint : ce gate doit couper avant)."""
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=80_000.0)])
+    """Décision opérateur explicite (19/07, plancher rebaissé 100k->50k le 21/07) :
+    "liquidité minimum ... je veut eviter a aria de se faire scam, meme si tout est ok
+    en dessous il peut y avoir x ou y risques" -- rejet SYSTÉMATIQUE, même si
+    honeypot/R-R/alignement seraient par ailleurs tous propres (le mock
+    ``signal``/``align`` par défaut n'est jamais atteint : ce gate doit couper avant)."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=35_000.0)])
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert result["hold_reason"] == "insufficient_liquidity"
@@ -1154,12 +1154,12 @@ async def test_evaluate_rejects_unknown_liquidity_as_insufficient(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_evaluate_allows_liquidity_at_or_above_floor(monkeypatch):
-    """Non-régression : une liquidité au-dessus du plancher (100k$) ne doit jamais
-    être bloquée par ce gate précis -- un achat correctement qualifié par ailleurs
-    doit rester possible."""
+    """Non-régression : une liquidité au-dessus du plancher (50k$ depuis le 21/07) ne
+    doit jamais être bloquée par ce gate précis -- un achat correctement qualifié par
+    ailleurs doit rester possible."""
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(
-        monkeypatch, pairs=[_pair(liquidity_usd=100_000.0)], signal=strong, align=(3, []),
+        monkeypatch, pairs=[_pair(liquidity_usd=50_000.0)], signal=strong, align=(3, []),
     )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "insufficient_liquidity"
@@ -1171,9 +1171,9 @@ async def test_evaluate_allows_liquidity_at_or_above_floor(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_evaluate_liquidity_floor_doubles_in_fear_regime(monkeypatch):
-    """150k$ passe le plancher nominal (100k$) mais pas le plancher Peur (200k$) --
-    le gate doit rejeter dès que ``current_regime="peur"`` est fourni."""
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=150_000.0)])
+    """75k$ passe le plancher nominal (50k$ depuis le 21/07) mais pas le plancher
+    Peur (100k$) -- le gate doit rejeter dès que ``current_regime="peur"`` est fourni."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=75_000.0)])
     result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime="peur")
     assert result["action"] == "HOLD"
     assert result["hold_reason"] == "insufficient_liquidity"
@@ -1194,10 +1194,10 @@ async def test_evaluate_liquidity_floor_stays_nominal_outside_fear(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_evaluate_liquidity_floor_200k_still_enforced_in_fear(monkeypatch):
-    """Le plancher Peur (200k$) reste un vrai plancher -- pas juste levé/désactivé --
-    150k$ reste rejeté même s'il aurait suffi en régime nominal."""
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=199_000.0)])
+async def test_evaluate_liquidity_floor_100k_still_enforced_in_fear(monkeypatch):
+    """Le plancher Peur (100k$ depuis le 21/07) reste un vrai plancher -- pas juste
+    levé/désactivé -- 99k$ reste rejeté même s'il aurait suffi en régime nominal."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=99_000.0)])
     result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime="peur")
     assert result["hold_reason"] == "insufficient_liquidity"
 

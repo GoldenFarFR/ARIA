@@ -11,9 +11,10 @@ le test 1M$ (#194) », à lire avant toute modification) :
   - **Garde-fous durs, rejet immédiat sans exception** : honeypot GoPlus (détection
     technique) ; liste noire persistée (``momentum_blacklist.py``, contrats déjà
     confirmés problématiques) ; plancher de liquidité (``_MIN_LIQUIDITY_USD``,
-    100 000$ depuis le 19/07 -- décision opérateur explicite, anti-scam : même un
-    contrat propre peut cacher un risque sur un pool trop mince, rejet même si tout
-    le reste est OK) ; plafond ratio volume 24h/liquidité (signal de wash-trading,
+    100 000$ du 19/07 au 21/07, rebaissé à 50 000$ le 21/07 (décision opérateur
+    explicite) -- décision anti-scam d'origine inchangée : même un contrat propre
+    peut cacher un risque sur un pool trop mince, rejet même si tout le reste est
+    OK) ; plafond ratio volume 24h/liquidité (signal de wash-trading,
     ajouté 17/07 après une perte réelle -17,9 % sur un token qui passait le honeypot
     GoPlus mais faisait partie d'un essaim de décoys narratifs -- le honeypot seul ne
     détecte pas ce pattern, un token peut être techniquement "propre" tout en étant un
@@ -123,14 +124,21 @@ _SOURCE_LIMIT_PER_CHANNEL = 30
 # qu'aucun garde-fou ne s'y oppose. Corrigé par un rejet dur explicite dans
 # evaluate_momentum_entry (cf. plus bas) -- désormais appliqué SYSTÉMATIQUEMENT, jamais
 # contournable, même si honeypot/R-R/alignement sont par ailleurs tous propres.
-_MIN_LIQUIDITY_USD = 100_000.0
+# 21/07 -- rebaissé 100 000$ -> 50 000$ (décision opérateur explicite -- corrigée le
+# même jour, un premier chiffre de 30 000$ avait été appliqué par erreur puis corrigé).
+# Le rejet dur systématique ci-dessus reste entier -- seul le SEUIL change, jamais la
+# garantie qu'il s'applique.
+_MIN_LIQUIDITY_USD = 50_000.0
 # 20/07 -- Regime Switch dynamique (revue croisée Gemini, feu vert opérateur explicite
 # "200k mais à garder à l'œil pour vérifier dans les années qui suivent") : en régime
 # macro Peur (``market_sentiment.resolve_meta_regime``), la liquidité se regroupe sur
 # les gros actifs et les micro-caps s'effondrent en premier -- le plancher double.
 # Remplace ``_MIN_LIQUIDITY_USD`` UNIQUEMENT quand le régime résolu est Peur, sinon le
 # plancher nominal ci-dessus s'applique inchangé (comportement historique par défaut).
-_MIN_LIQUIDITY_USD_FEAR = 200_000.0
+# 21/07 -- mis à l'échelle avec _MIN_LIQUIDITY_USD (100k->50k) en conservant le MÊME
+# multiplicateur x2 déjà décidé le 20/07 (préserve l'intention "le plancher double en
+# Peur", jamais un chiffre absolu figé indépendamment de la base).
+_MIN_LIQUIDITY_USD_FEAR = 100_000.0
 # 18/07 -- relevé 1.5->2.0 (décision opérateur explicite : "plus sélective") : seul un
 # R/R VRAIMENT franc, pas juste positif, qualifie pour un achat déterministe sans passer
 # par le LLM. _RR_AMBIGUOUS_FLOOR (1.0) INCHANGÉ -- la zone [1.0, 2.0) élargie tombe
@@ -199,11 +207,15 @@ _MIN_VOLUME_24H_USD = 1_000.0
 # (``max``), jamais un remplacement de l'absolu.
 # 20/07 -- ESSAI EN COURS (même décision opérateur que ci-dessus) : abaissé de 10% à 1%
 # -- à 10%, ce ratio dominait TOUJOURS l'absolu dès que la liquidité dépassait son propre
-# plancher (100 000$ x 10% = 10 000$ > n'importe quel absolu sous ce seuil), rendant tout
-# abaissement du seul plancher absolu inopérant en pratique. À 1%, le plancher effectif au
-# minimum de liquidité (100 000$) redevient exactement 1 000$ (les deux composantes se
-# rejoignent), et continue de scaler avec la taille du pool au-delà (protection anti
-# "marché zombie" toujours active sur un gros pool, juste moins stricte qu'avant).
+# plancher (au plancher de 100 000$ de l'époque : 100 000$ x 10% = 10 000$ > n'importe
+# quel absolu sous ce seuil), rendant tout abaissement du seul plancher absolu inopérant
+# en pratique. À 1%, le plancher effectif au minimum de liquidité redevenait exactement
+# 1 000$ (les deux composantes se rejoignaient au plancher de 100 000$ de l'époque), et
+# continue de scaler avec la taille du pool au-delà (protection anti "marché zombie"
+# toujours active sur un gros pool, juste moins stricte qu'avant).
+# 21/07 -- _MIN_LIQUIDITY_USD rebaissé à 50 000$ : au NOUVEAU plancher, le ratio 1%
+# redevient effectif dès 500$ (50 000$ x 1%) -- toujours le plus haut des deux
+# (``max``) qui gouverne, comportement inchangé, seul le point de jonction bouge.
 _MIN_VOLUME_TO_LIQUIDITY_RATIO = 0.01
 
 # 19/07 -- concentration des top holders (revue croisée Gemini, validée par l'opérateur
@@ -1278,8 +1290,8 @@ async def evaluate_momentum_entry(
     explicite, cf. docs/api-rate-limit-calibration.md) :
       1. Liste noire (``momentum_blacklist.py``) -- rejet immédiat, aucun appel réseau.
       2. Prix + meilleure paire (DexScreener) -- rejet si aucune paire liquide.
-      3. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 100 000$, 19/07 -- doublé à
-         ``_MIN_LIQUIDITY_USD_FEAR`` en régime Peur, 20/07) -- rejet SYSTÉMATIQUE si
+      3. Plancher de liquidité (``_MIN_LIQUIDITY_USD``, 50 000$ depuis le 21/07 --
+         doublé à ``_MIN_LIQUIDITY_USD_FEAR`` en régime Peur) -- rejet SYSTÉMATIQUE si
          le pool est trop mince, même si tout le reste est propre.
       4. Plancher de volume 24h (``_MIN_VOLUME_24H_USD``, 1 000$ + ratio 1% de la
          liquidité, 19/07, abaissé 20/07 -- essai en cours) -- rejet si le marché est
