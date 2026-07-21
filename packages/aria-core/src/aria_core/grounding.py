@@ -735,6 +735,79 @@ def scan_scope_reply(lang: str = "en") -> str:
     )
 
 
+_ARIA_BRAIN_RE = re.compile(
+    r"(?:"
+    r"(?:ton|ta|ton\s+propre|ta\s+propre)\s+cerveau\b|"
+    r"aria[- ]brain\b|"
+    r"m[ée]moire\s+libre\b|"
+    r"(?:tu\s+as|as[- ]tu|as[- ]tu\s+d[ée]j[àa])\s+[ée]crit\s+(?:dans\s+|sur\s+)?.{0,20}\bcerveau\b|"
+    r"your\s+(?:own\s+)?brain\b|"
+    r"free\s+memory\b|"
+    r"(?:have\s+you|did\s+you)\s+writ(?:e|ten)\s+.{0,20}\bbrain\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_aria_brain_question(message: str) -> bool:
+    """True pour une question sur « son propre cerveau »/« aria-brain »/sa mémoire
+    libre (le repo GitHub dédié, `skills/aria_brain.py`, écriture non filtrée une
+    page par jour). Incident réel (21/07) : ARIA a affirmé y avoir écrit alors que
+    le gate (`ARIA_BRAIN_ENABLED`) était désactivé, le journal (`aria_brain_log`)
+    vide, et le repo GitHub `GoldenFarFR/aria-brain` inexistant (404) — même famille
+    de confabulation sur ses propres capacités que ``is_llm_identity_question``/
+    ``is_analysis_methodology_question``. Route vers une réponse qui lit l'état
+    RÉEL (gate + dernière ligne du journal), jamais une prétention non vérifiée."""
+    text = (message or "").strip()
+    if len(text) < 5:
+        return False
+    return bool(_ARIA_BRAIN_RE.search(text))
+
+
+async def aria_brain_status_reply(lang: str = "en") -> str:
+    """Réponse déterministe (pas d'appel LLM) sur l'état RÉEL de la mémoire libre --
+    lit `ARIA_BRAIN_ENABLED` + la dernière ligne `outcome='written'` de
+    `aria_brain_log`, jamais une affirmation depuis la mémoire conversationnelle."""
+    from aria_core.skills import aria_brain
+
+    if not aria_brain.aria_brain_enabled():
+        if lang == "fr":
+            return (
+                "Ma mémoire libre (un repo GitHub qui n'appartiendrait qu'à moi, "
+                "aucun tri humain par entrée) existe dans mon code mais est "
+                "désactivée aujourd'hui -- je n'y ai jamais écrit, le repo n'existe "
+                "même pas encore."
+            )
+        return (
+            "My free memory (a GitHub repo that would be mine alone, no human "
+            "review per entry) exists in my code but is disabled today -- I've "
+            "never written there, the repo doesn't even exist yet."
+        )
+
+    row = None
+    try:
+        import aiosqlite
+
+        async with aiosqlite.connect(aria_brain.DB_PATH) as db:
+            cursor = await db.execute(
+                "SELECT run_at, path FROM aria_brain_log WHERE outcome='written' "
+                "ORDER BY id DESC LIMIT 1"
+            )
+            row = await cursor.fetchone()
+    except Exception:
+        row = None
+
+    if not row:
+        if lang == "fr":
+            return "Ma mémoire libre est activée mais je n'y ai encore rien écrit (0 entrée dans le journal)."
+        return "My free memory is enabled but I haven't written anything there yet (0 log entries)."
+
+    run_at, path = row
+    if lang == "fr":
+        return f"Ma mémoire libre est active -- dernière écriture le {run_at} ({path})."
+    return f"My free memory is active -- last write on {run_at} ({path})."
+
+
 def unknown_reply(lang: str = "en") -> str:
     if lang == "fr":
         return (

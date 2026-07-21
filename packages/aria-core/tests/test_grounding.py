@@ -1,14 +1,18 @@
+import pytest
+
 from aria_core.content.service import _score_faq, _load_faq
 from aria_core.grounding import (
     FAQ_DIRECT_SCORE,
     analysis_methodology_reply,
     anti_hallucination_rules,
+    aria_brain_status_reply,
     build_verified_facts_block,
     faq_direct_answer,
     format_greeting_reply,
     grounded_for_audience,
     grounded_llm_identity,
     is_analysis_methodology_question,
+    is_aria_brain_question,
     is_greeting,
     is_llm_identity_question,
     is_social_chitchat,
@@ -317,3 +321,59 @@ async def test_build_verified_facts_block_protects_critical_section_when_oversiz
 
     assert "Operator self-directive" in block
     assert len(block) <= 6000
+
+# ── aria-brain : confabulation sur sa propre mémoire libre (21/07) ─────────────
+
+def test_is_aria_brain_question_detects_real_incident_phrasing():
+    assert is_aria_brain_question("tu as écrit dans ton cerveau aujourd'hui ?")
+    assert is_aria_brain_question("montre-moi ton aria-brain")
+    assert is_aria_brain_question("c'est quoi ta mémoire libre ?")
+    assert is_aria_brain_question("have you written in your brain today?")
+    assert not is_aria_brain_question("bonjour")
+    assert not is_aria_brain_question("quel est le prix du token")
+
+
+@pytest.fixture
+def _isolated_aria_brain_db(tmp_path, monkeypatch):
+    from aria_core.skills import aria_brain
+
+    monkeypatch.setattr(aria_brain, "DB_PATH", str(tmp_path / "aria_brain_test.db"))
+
+
+@pytest.mark.asyncio
+async def test_aria_brain_status_reply_disabled(monkeypatch, _isolated_aria_brain_db):
+    monkeypatch.delenv("ARIA_BRAIN_ENABLED", raising=False)
+    reply = await aria_brain_status_reply("fr")
+    assert "désactivée" in reply.lower()
+    assert "jamais écrit" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_aria_brain_status_reply_enabled_but_empty(monkeypatch, _isolated_aria_brain_db):
+    """Reproduit l'incident réel (21/07) : gate désactivé au moment du test, mais
+    même activé et vide, jamais une prétention d'avoir écrit."""
+    monkeypatch.setenv("ARIA_BRAIN_ENABLED", "true")
+    reply = await aria_brain_status_reply("fr")
+    assert "rien écrit" in reply.lower()
+    assert "0 entrée" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_aria_brain_status_reply_enabled_with_real_entry(monkeypatch, _isolated_aria_brain_db):
+    import aiosqlite
+
+    from aria_core.skills import aria_brain
+
+    monkeypatch.setenv("ARIA_BRAIN_ENABLED", "true")
+    await aria_brain._ensure_table()
+    async with aiosqlite.connect(aria_brain.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO aria_brain_log (run_at, path, content_preview, commit_sha, outcome) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("2026-07-21T10:00:00+00:00", "livre/chapitre-01.md", "preview", "abc123", "written"),
+        )
+        await db.commit()
+
+    reply = await aria_brain_status_reply("fr")
+    assert "2026-07-21T10:00:00+00:00" in reply
+    assert "livre/chapitre-01.md" in reply

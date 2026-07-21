@@ -342,7 +342,9 @@ class AriaBrain:
         # Placé ici, tout en haut de `process()`, avant TOUT autre routage.
         from aria_core.grounding import (
             analysis_methodology_reply,
+            aria_brain_status_reply,
             is_analysis_methodology_question,
+            is_aria_brain_question,
             is_llm_identity_question,
             is_scan_scope_question,
             is_why_not_bought_question,
@@ -387,6 +389,15 @@ class AriaBrain:
                 skill_used=None,
                 actions_taken=["Portée du scan (template — sans confabulation)"],
                 data={"scan_scope": True, "skip_web": True},
+            )
+        if is_aria_brain_question(route_msg):
+            early_reply = await aria_brain_status_reply(lang_key_early)
+            await repertoire_db.save_message("agent", early_reply, visitor_id=vid)
+            return ChatResponse(
+                reply=early_reply,
+                skill_used=None,
+                actions_taken=["Mémoire libre / aria-brain (état réel — sans confabulation)"],
+                data={"aria_brain_status": True, "skip_web": True},
             )
 
         if not public:
@@ -1005,7 +1016,9 @@ class AriaBrain:
 
         from aria_core.grounding import (
             analysis_methodology_reply,
+            aria_brain_status_reply,
             is_analysis_methodology_question,
+            is_aria_brain_question,
             is_factual_question,
             is_general_qa,
             is_llm_identity_question,
@@ -1119,6 +1132,14 @@ class AriaBrain:
                 None,
                 ["Portée du scan (template — sans confabulation)"],
                 {"scan_scope": True, "skip_web": True},
+                None,
+            )
+        if is_aria_brain_question(route):
+            return (
+                await aria_brain_status_reply(lang_key),
+                None,
+                ["Mémoire libre / aria-brain (état réel — sans confabulation)"],
+                {"aria_brain_status": True, "skip_web": True},
                 None,
             )
 
