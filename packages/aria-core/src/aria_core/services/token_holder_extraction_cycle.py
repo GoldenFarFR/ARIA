@@ -18,11 +18,14 @@ PARTAGÉ (``x402_budget.py``, 5$/semaine, déjà fail-closed) bornent le pire
 cas -- aucun plafond dédié supplémentaire ici, cohérent avec le reste des
 consommateurs x402 (twit.sh/cybercentry/ottoai).
 
-Sélection des tokens : uniquement ceux JAMAIS ENCORE extraits
-(``token_holder_intel``), triés par liquidité connue décroissante
-(``screened_token.liquidity_usd``, déjà calculée par ``safety_screen``,
-aucun nouvel appel). LIMITE HONNÊTE : la ré-extraction des tokens déjà
-couverts (staleness -- holders qui évoluent dans le temps) n'est PAS
+Sélection des tokens (21/07, remplace l'ancienne source ``screened_token`` --
+cf. ``token_candidate_screening.screen_and_select_candidates``) : découverte
+DexScreener/GeckoTerminal continue (``momentum_entry.
+discover_momentum_candidates``), filtrée par honeypot GoPlus + liquidité
+≥50 000$ + volume 24h ≥1 000$, dédupliquée contre ``token_holder_intel``
+(jamais recompté) et contre une liste noire permanente dédiée (honeypot
+confirmé -> jamais retesté). LIMITE HONNÊTE : la ré-extraction des tokens
+déjà couverts (staleness -- holders qui évoluent dans le temps) n'est PAS
 construite ici -- avec >1300 tokens jamais encore touchés au 21/07, ça
 laisse une large marge avant que ça devienne pertinent."""
 from __future__ import annotations
@@ -30,13 +33,7 @@ from __future__ import annotations
 import logging
 import os
 
-import aiosqlite
-
-from aria_core.paths import aria_db_path
-
 logger = logging.getLogger(__name__)
-
-DB_PATH = str(aria_db_path())
 
 # Sobriété -- extraction en masse coûte du vrai argent (x402), contrairement
 # aux autres cycles de découverte/scoring smart-money. Bas par défaut, cf.
@@ -70,40 +67,6 @@ def target_holder_count(market_cap_usd: float | None) -> int:
     return _DEFAULT_TARGET_COUNT
 
 
-async def _select_next_tokens(limit: int) -> list[tuple[str, str]]:
-    """Contrats Base jamais encore extraits (``token_holder_intel``), triés
-    par liquidité déjà connue décroissante (aucun nouvel appel réseau).
-    Filtré côté Python (pas un anti-join SQL) -- passe par l'accesseur public
-    ``list_extracted_contracts`` plutôt que de dépendre du détail interne de
-    la table ``token_holder_intel`` (qui peut ne pas encore exister du tout
-    si aucune extraction n'a jamais eu lieu)."""
-    from aria_core import token_holder_intel
-
-    already_extracted = {
-        c["contract"].lower() for c in await token_holder_intel.list_extracted_contracts("base")
-    }
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            rows = await (
-                await db.execute(
-                    "SELECT contract, symbol FROM screened_token WHERE network = 'base' "
-                    "ORDER BY liquidity_usd DESC"
-                )
-            ).fetchall()
-    except Exception as exc:  # noqa: BLE001 -- ex. screened_token pas encore créée (aucun screening jamais fait)
-        logger.info("token_holder_extraction: lecture screened_token indisponible (%s)", exc)
-        return []
-
-    selected: list[tuple[str, str]] = []
-    for contract, symbol in rows:
-        if (contract or "").lower() in already_extracted:
-            continue
-        selected.append((contract, symbol or ""))
-        if len(selected) >= limit:
-            break
-    return selected
-
-
 async def run_token_holder_extraction_cycle(notifier=None) -> dict:
     """Un tour : sélectionne jusqu'à ``MAX_TOKENS_PER_CYCLE`` tokens jamais
     encore extraits, détermine leur profondeur cible via la capitalisation
@@ -120,7 +83,9 @@ async def run_token_holder_extraction_cycle(notifier=None) -> dict:
     if outgoing_pause.is_paused():
         return {"outcome": "skipped", "reason": "paused"}
 
-    candidates = await _select_next_tokens(MAX_TOKENS_PER_CYCLE)
+    from aria_core.token_candidate_screening import screen_and_select_candidates
+
+    candidates = await screen_and_select_candidates(MAX_TOKENS_PER_CYCLE)
     if not candidates:
         return {"outcome": "no_candidate"}
 

@@ -1,24 +1,22 @@
 """Extraction récurrente des holders (Blockscout x402), coordonnée vers le
 classement smart-money (21/07). Vérifie : gating, tiers de profondeur par
-capitalisation, sélection des tokens jamais encore extraits, kill-switch,
-dégradation propre sur panne CoinGecko/Blockscout."""
+capitalisation, sélection des tokens via le screening dédié (21/07 --
+``token_candidate_screening.screen_and_select_candidates``, mocké ici), kill-
+switch, dégradation propre sur panne CoinGecko/Blockscout."""
 from __future__ import annotations
 
 import pytest
 
-from aria_core import screened_pool, token_holder_intel
+from aria_core import token_holder_intel
 from aria_core.services import token_holder_extraction_cycle as cycle
 
 CONTRACT_A = "0x" + "a" * 40
 CONTRACT_B = "0x" + "b" * 40
-CONTRACT_C = "0x" + "c" * 40
 
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
     db_path = str(tmp_path / "shared_test.db")
-    monkeypatch.setattr(cycle, "DB_PATH", db_path)
-    monkeypatch.setattr(screened_pool, "DB_PATH", db_path)
     monkeypatch.setattr(token_holder_intel, "DB_PATH", db_path)
     yield
 
@@ -49,46 +47,6 @@ def test_target_holder_count_tiers(market_cap, expected):
     assert cycle.target_holder_count(market_cap) == expected
 
 
-# ── _select_next_tokens ──────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_select_next_tokens_excludes_already_extracted():
-    await screened_pool.upsert_screened(contract=CONTRACT_A, symbol="AAA", liquidity_usd=100_000.0)
-    await screened_pool.upsert_screened(contract=CONTRACT_B, symbol="BBB", liquidity_usd=50_000.0)
-    await token_holder_intel.store_holders(
-        CONTRACT_A, "base",
-        [{"holder_address": "0xHolder", "holder_name": None, "is_contract": False,
-          "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1"}],
-    )
-
-    selected = await cycle._select_next_tokens(10)
-    assert selected == [(CONTRACT_B, "BBB")]
-
-
-@pytest.mark.asyncio
-async def test_select_next_tokens_ordered_by_liquidity_desc():
-    await screened_pool.upsert_screened(contract=CONTRACT_A, symbol="AAA", liquidity_usd=10_000.0)
-    await screened_pool.upsert_screened(contract=CONTRACT_B, symbol="BBB", liquidity_usd=500_000.0)
-    await screened_pool.upsert_screened(contract=CONTRACT_C, symbol="CCC", liquidity_usd=100_000.0)
-
-    selected = await cycle._select_next_tokens(10)
-    assert [c for c, _ in selected] == [CONTRACT_B, CONTRACT_C, CONTRACT_A]
-
-
-@pytest.mark.asyncio
-async def test_select_next_tokens_respects_limit():
-    for i in range(5):
-        await screened_pool.upsert_screened(contract=f"0x{i:040d}", symbol=f"T{i}", liquidity_usd=float(i))
-    selected = await cycle._select_next_tokens(2)
-    assert len(selected) == 2
-
-
-@pytest.mark.asyncio
-async def test_select_next_tokens_scoped_to_base_network():
-    await screened_pool.upsert_screened(contract=CONTRACT_A, symbol="AAA", liquidity_usd=1.0, network="solana")
-    assert await cycle._select_next_tokens(10) == []
-
-
 # ── run_token_holder_extraction_cycle ───────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -109,6 +67,13 @@ async def test_cycle_respects_kill_switch(monkeypatch):
 async def test_cycle_no_candidate(monkeypatch):
     monkeypatch.setenv("ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED", "1")
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+
+    async def _fake_screen(limit):
+        return []
+
+    monkeypatch.setattr(
+        "aria_core.token_candidate_screening.screen_and_select_candidates", _fake_screen,
+    )
     result = await cycle.run_token_holder_extraction_cycle()
     assert result == {"outcome": "no_candidate"}
 
@@ -119,11 +84,20 @@ class _FakeFundamentals:
         self.market_cap_usd = market_cap_usd
 
 
+def _stub_screening(monkeypatch, candidates):
+    async def _fake_screen(limit):
+        return candidates[:limit]
+
+    monkeypatch.setattr(
+        "aria_core.token_candidate_screening.screen_and_select_candidates", _fake_screen,
+    )
+
+
 @pytest.mark.asyncio
 async def test_cycle_extracts_and_stores_with_correct_tier(monkeypatch):
     monkeypatch.setenv("ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED", "1")
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
-    await screened_pool.upsert_screened(contract=CONTRACT_A, symbol="AAA", liquidity_usd=1_000_000.0)
+    _stub_screening(monkeypatch, [(CONTRACT_A, "AAA")])
 
     async def _fake_fundamentals(contract, *, platform_id="base"):
         return _FakeFundamentals(available=True, market_cap_usd=2_000_000_000.0)  # tier 500
@@ -162,7 +136,7 @@ async def test_cycle_extracts_and_stores_with_correct_tier(monkeypatch):
 async def test_cycle_unknown_market_cap_falls_back_to_default_tier(monkeypatch):
     monkeypatch.setenv("ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED", "1")
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
-    await screened_pool.upsert_screened(contract=CONTRACT_A, symbol="AAA", liquidity_usd=1_000.0)
+    _stub_screening(monkeypatch, [(CONTRACT_A, "AAA")])
 
     async def _fake_fundamentals(contract, *, platform_id="base"):
         return _FakeFundamentals(available=False)  # panne CoinGecko / non listé
@@ -188,7 +162,7 @@ async def test_cycle_unknown_market_cap_falls_back_to_default_tier(monkeypatch):
 async def test_cycle_empty_extraction_stores_nothing_but_never_crashes(monkeypatch):
     monkeypatch.setenv("ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED", "1")
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
-    await screened_pool.upsert_screened(contract=CONTRACT_A, symbol="AAA", liquidity_usd=1_000.0)
+    _stub_screening(monkeypatch, [(CONTRACT_A, "AAA")])
 
     async def _fake_fundamentals(contract, *, platform_id="base"):
         return _FakeFundamentals(available=False)
@@ -212,8 +186,7 @@ async def test_cycle_empty_extraction_stores_nothing_but_never_crashes(monkeypat
 async def test_cycle_exception_on_one_token_never_blocks_the_others(monkeypatch):
     monkeypatch.setenv("ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED", "1")
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
-    await screened_pool.upsert_screened(contract=CONTRACT_A, symbol="AAA", liquidity_usd=2_000.0)
-    await screened_pool.upsert_screened(contract=CONTRACT_B, symbol="BBB", liquidity_usd=1_000.0)
+    _stub_screening(monkeypatch, [(CONTRACT_A, "AAA"), (CONTRACT_B, "BBB")])
 
     async def _fake_fundamentals(contract, *, platform_id="base"):
         return _FakeFundamentals(available=False)
@@ -243,7 +216,7 @@ async def test_cycle_exception_on_one_token_never_blocks_the_others(monkeypatch)
 async def test_cycle_notifies_summary_when_holders_stored(monkeypatch):
     monkeypatch.setenv("ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED", "1")
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
-    await screened_pool.upsert_screened(contract=CONTRACT_A, symbol="AAA", liquidity_usd=1_000.0)
+    _stub_screening(monkeypatch, [(CONTRACT_A, "AAA")])
 
     async def _fake_fundamentals(contract, *, platform_id="base"):
         return _FakeFundamentals(available=False)

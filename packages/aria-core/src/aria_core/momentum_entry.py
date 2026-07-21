@@ -556,6 +556,15 @@ async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
     return True, "honeypot clear (GoPlus)", "honeypot_clear"
 
 
+async def check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
+    """Alias public de ``_check_honeypot`` (21/07) -- même garde-fou dur (fail-closed,
+    retry ``no_data``, second avis RugCheck sur Solana), réutilisable hors de ce
+    module sans dupliquer ~50 lignes de logique déjà éprouvée (ex.
+    ``token_candidate_screening.py``, sélection de candidats pour l'extraction de
+    holders -- besoin du MÊME garde-fou, jamais une version allégée)."""
+    return await _check_honeypot(contract, chain)
+
+
 async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, str]:
     """Second avis Solana (#207) -- appelé UNIQUEMENT par ``_check_honeypot`` quand
     GoPlus n'a aucune donnée pour ce contrat. Fail-closed inchangé si RugCheck non
