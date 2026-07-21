@@ -184,3 +184,74 @@ async def test_wallet_cross_token_holdings_empty_address_no_query():
 async def test_wallet_cross_token_holdings_scoped_to_chain():
     await intel.store_holders("0xTOKEN_A", "base", _HOLDERS)
     assert await intel.wallet_cross_token_holdings("0xPool", chain="solana") == []
+
+
+# ── list_cross_token_candidates (21/07, classement "meilleurs investisseurs") ──
+
+_RECURRING_EOA = "0xRecurringInvestor"
+
+
+def _eoa_holder(addr: str, tags: list[str] | None = None) -> dict:
+    return {
+        "holder_address": addr, "holder_name": None, "is_contract": False,
+        "is_verified": False, "is_scam": False, "reputation": None,
+        "tags": tags or [], "value": "1000",
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_cross_token_candidates_finds_recurring_eoa():
+    await intel.store_holders("0xTOKEN_A", "base", [_eoa_holder(_RECURRING_EOA)])
+    await intel.store_holders("0xTOKEN_B", "base", [_eoa_holder(_RECURRING_EOA)])
+    await intel.store_holders("0xTOKEN_C", "base", [_eoa_holder(_RECURRING_EOA)])
+
+    candidates = await intel.list_cross_token_candidates(min_token_count=3)
+    assert len(candidates) == 1
+    assert candidates[0]["holder_address"] == _RECURRING_EOA
+    assert candidates[0]["token_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_list_cross_token_candidates_below_threshold_excluded():
+    await intel.store_holders("0xTOKEN_A", "base", [_eoa_holder(_RECURRING_EOA)])
+    await intel.store_holders("0xTOKEN_B", "base", [_eoa_holder(_RECURRING_EOA)])
+    assert await intel.list_cross_token_candidates(min_token_count=3) == []
+
+
+@pytest.mark.asyncio
+async def test_list_cross_token_candidates_excludes_contracts():
+    await intel.store_holders("0xTOKEN_A", "base", [_HOLDERS[0]])  # 0xPool, is_contract=True
+    await intel.store_holders("0xTOKEN_B", "base", [_HOLDERS[0]])
+    await intel.store_holders("0xTOKEN_C", "base", [_HOLDERS[0]])
+    assert await intel.list_cross_token_candidates(min_token_count=3) == []
+
+
+@pytest.mark.asyncio
+async def test_list_cross_token_candidates_excludes_known_infra_tags():
+    """21/07 -- vérifié en conditions réelles : sans ce filtre, le classement
+    est dominé par des hot wallets d'exchange, pas des investisseurs réels."""
+    exchange_eoa = "0xExchangeHotWallet"
+    for i, contract in enumerate(("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C")):
+        await intel.store_holders(contract, "base", [_eoa_holder(exchange_eoa, tags=["Coinbase Exchange: Hot Wallet"])])
+    assert await intel.list_cross_token_candidates(min_token_count=3) == []
+
+
+@pytest.mark.asyncio
+async def test_list_cross_token_candidates_sorted_by_token_count_desc():
+    top = "0xTopInvestor"
+    mid = "0xMidInvestor"
+    for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C", "0xTOKEN_D"):
+        await intel.store_holders(contract, "base", [_eoa_holder(top)])
+    for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C"):
+        await intel.store_holders(contract, "base", [_eoa_holder(top), _eoa_holder(mid)])
+
+    candidates = await intel.list_cross_token_candidates(min_token_count=3)
+    addrs = [c["holder_address"] for c in candidates]
+    assert addrs[0] == top  # le plus de tokens en premier
+
+
+@pytest.mark.asyncio
+async def test_list_cross_token_candidates_scoped_to_chain():
+    for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C"):
+        await intel.store_holders(contract, "base", [_eoa_holder(_RECURRING_EOA)])
+    assert await intel.list_cross_token_candidates(min_token_count=3, chain="solana") == []

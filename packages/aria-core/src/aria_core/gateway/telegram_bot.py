@@ -619,6 +619,25 @@ async def _handle_counterfactual(update: Update, context: ContextTypes.DEFAULT_T
     await _reply(update.message, format_counterfactual_summary(summary))
 
 
+async def _handle_topwallets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/topwallets -- 21/07 : classement "meilleurs investisseurs" (top 50,
+    composite_percentile réel -- jamais un score de coordination/Sybil,
+    smart_money_leaderboard.py). Admin-only, lecture seule, aucun nouvel appel
+    réseau (lit uniquement ce qui a déjà été classé par le cycle de fond)."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.services.smart_money_leaderboard import get_leaderboard
+
+    rows = await get_leaderboard()
+    if not rows:
+        await _reply(update.message, "Classement vide -- aucun wallet noté n'a encore rejoint le top 50.")
+        return
+    lines = ["🏆 Top investisseurs (classement réel par performance, jamais un signal de coordination)"]
+    for r in rows:
+        lines.append(f"  {r['rank']}. {r['wallet']} -- percentile {r['composite_percentile']:.0f}e")
+    await _reply(update.message, "\n".join(lines))
+
+
 async def _handle_x402_trending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/x402trending [mots-clés] -- 19/07 : découverte de services x402 (registre CDP
     officiel), triés par volume d'appels réel sur 30j -- réponse à "il n'existe pas un
@@ -2094,6 +2113,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("test_spend", "Test wallet_guard (aucune dépense réelle)"),
     ("these", "Journalise une thèse (BUY/WATCH/SELL/AVOID)"),
     ("theses", "Liste des thèses encore ouvertes"),
+    ("topwallets", "Classement top 50 meilleurs investisseurs (percentile réel)"),
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
     ("vc", "Analyse VC complète d'un contrat"),
     ("vcresult", "Attribue un résultat réel à une prédiction VC"),
@@ -3117,6 +3137,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))
     app.add_handler(CommandHandler("theses", _handle_theses))
+    app.add_handler(CommandHandler("topwallets", _handle_topwallets))
     app.add_handler(CommandHandler("github", _handle_github))
     app.add_handler(CommandHandler("canal", _handle_aria_channel))
     # 18/07 -- audit systématique (grep _handle_* vs add_handler) : ces 7 commandes

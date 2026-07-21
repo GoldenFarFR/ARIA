@@ -209,3 +209,50 @@ async def wallet_cross_token_holdings(address: str, *, chain: str = "base") -> l
             d["tags"] = []
         out.append(d)
     return out
+
+
+# Labels d'entité connue (exchanges, burn, incidents) -- un wallet qui revient
+# sur plusieurs tokens PARCE QU'IL EST une plateforme d'échange n'est pas un
+# signal de "bon investisseur", juste une infrastructure de marché normale.
+# Confirmé en conditions réelles (21/07) : sans ce filtre, le classement était
+# entièrement dominé par des hot wallets Coinbase/Binance/Kraken/etc.
+_INFRA_TAG_KEYWORDS = (
+    "exchange", "hot wallet", "coinbase", "binance", "kraken", "bybit", "gate",
+    "kucoin", "bitvavo", "mexc", "null", "burn", "phish", "hack",
+)
+
+
+def _has_infra_tag(tags_concat: str) -> bool:
+    lowered = (tags_concat or "").lower()
+    return any(kw in lowered for kw in _INFRA_TAG_KEYWORDS)
+
+
+async def list_cross_token_candidates(*, min_token_count: int = 3, chain: str = "base") -> list[dict]:
+    """Adresses (EOA) qui apparaissent comme détenteur notable sur au moins
+    ``min_token_count`` tokens DISTINCTS déjà extraits -- population-wide,
+    contrairement à ``wallet_cross_token_holdings`` qui répond pour UNE
+    adresse déjà connue. C'est la découverte de candidats pour le classement
+    "meilleurs investisseurs" (21/07, demande opérateur) -- exclut
+    systématiquement toute adresse porteuse d'un label d'infrastructure connu
+    (exchange/burn/incident), jamais un signal de conviction individuelle."""
+    await _ensure_table()
+    chain = (chain or "").strip().lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (
+            await db.execute(
+                "SELECT holder_address, COUNT(DISTINCT contract) AS token_count, "
+                "GROUP_CONCAT(DISTINCT tags) AS all_tags "
+                "FROM token_holder_intel WHERE chain = ? AND is_contract = 0 "
+                "GROUP BY LOWER(holder_address) "
+                "HAVING token_count >= ? "
+                "ORDER BY token_count DESC",
+                (chain, min_token_count),
+            )
+        ).fetchall()
+    out = []
+    for r in rows:
+        if _has_infra_tag(r["all_tags"]):
+            continue
+        out.append({"holder_address": r["holder_address"], "token_count": r["token_count"]})
+    return out

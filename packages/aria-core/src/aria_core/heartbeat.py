@@ -432,6 +432,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="smart_money_leaderboard_discovery_cycle",
+        name="Decouverte de candidats pour le classement smart-money (token_holder_intel)",
+        description="Demande operateur (21/07) : repere les wallets EOA qui reviennent comme detenteur notable sur au moins 3 tokens deja extraits via Blockscout x402 (token_holder_intel.py, lecture locale pure, zero cout), exclut les labels d'infrastructure connus (exchanges/burn), enfile ces adresses dans wallet_scan_queue.py pour un scoring reel. Le classement top-50 lui-meme se construit ensuite dans wallet_scan_queue_cycle (composite_percentile reel, jamais un score de coordination). Triple gate (ARIA_SMART_MONEY_LEADERBOARD_ENABLED + ARIA_WALLET_SCAN_QUEUE_ENABLED + ARIA_WALLET_SCORING_ENABLED), tous OFF par defaut.",
+        interval_minutes=180,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="memory_consolidation",
         name="Consolidation memoire episodique",
         description="Consolide memory_dir() (fichiers {categorie}_{date}.md) categorie par categorie, un seul appel LLM en depth=brief par categorie qualifiee (seuil >=3 nouvelles entrees). Archive-then-rewrite : instantane brut avant toute reecriture, aucune suppression physique. Perimetre verrouille en dur -- jamais le truth-ledger, jamais cognitive_knowledge WHERE approved=1. Gate OFF par defaut (#128).",
@@ -1341,6 +1348,17 @@ class AriaHeartbeat:
                     "wallet_candidate_sourcing",
                     f"[wallet_candidate_sourcing] {result['total_sourced']} wallet(s) source(s) "
                     f"depuis {len(result.get('tokens_processed') or [])} token(s)",
+                )
+
+        elif task_id == "smart_money_leaderboard_discovery_cycle":
+            from aria_core.services.smart_money_leaderboard import discover_and_enqueue_candidates
+
+            result = await discover_and_enqueue_candidates()
+            if result.get("outcome") == "ok" and result.get("added_to_queue"):
+                append_memory(
+                    "smart_money_leaderboard",
+                    f"[smart_money_leaderboard] {result['added_to_queue']} wallet(s) candidat(s) "
+                    f"ajoute(s) a la file (sur {result.get('candidates_found')} detectes)",
                 )
 
         elif task_id == "marketing_video_cycle":

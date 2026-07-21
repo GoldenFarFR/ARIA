@@ -182,6 +182,8 @@ class _FakeCard:
     # Détenteur croisé (21/07, token_holder_intel.py) -- cf. smart_money.py.
     cross_token_holdings: list = field(default_factory=list)
     cross_token_holder_count: int = 0
+    # Classement comparatif (21/07, smart_money_leaderboard.py).
+    composite_percentile: float | None = None
 
 
 @dataclass
@@ -283,6 +285,99 @@ async def test_cycle_first_completion_transitions_to_monitoring_never_removed(mo
     # Plus dû immédiatement (reprogrammé +7j) -- absent du prochain `list_pending`.
     pending = await wsq.list_pending(limit=10)
     assert [q.wallet for q in pending] == [B]
+
+
+@pytest.mark.asyncio
+async def test_cycle_first_completion_updates_leaderboard(monkeypatch):
+    """21/07 -- la couverture complète déclenche la mise à jour du classement
+    smart-money (jamais sur un score partiel, cf. smart_money_leaderboard.py)."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200,
+        full_coverage=True, composite_percentile=77.0,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    calls = []
+
+    async def _fake_update_leaderboard(wallet, percentile):
+        calls.append((wallet, percentile))
+        return "added"
+
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.update_leaderboard", _fake_update_leaderboard,
+    )
+
+    await wsq.run_wallet_scan_queue_cycle()
+    assert calls == [(A, 77.0)]
+
+
+@pytest.mark.asyncio
+async def test_cycle_monitoring_refresh_updates_leaderboard(monkeypatch):
+    """21/07 -- une passe de surveillance hebdomadaire (déjà à 100%) recalcule
+    aussi le classement, pas seulement la toute première complétion (un wallet
+    peut monter ou descendre dans le temps)."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+    past = datetime.now(timezone.utc) - timedelta(days=10)
+    await _force_monitoring_state(A, next_check_at=past)
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200,
+        full_coverage=True, tokens_analyzed=0, composite_percentile=22.0,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    calls = []
+
+    async def _fake_update_leaderboard(wallet, percentile):
+        calls.append((wallet, percentile))
+        return "evicted_low_score"
+
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.update_leaderboard", _fake_update_leaderboard,
+    )
+
+    await wsq.run_wallet_scan_queue_cycle()
+    assert calls == [(A, 22.0)]
+
+
+@pytest.mark.asyncio
+async def test_cycle_leaderboard_update_failure_never_crashes_the_cycle(monkeypatch):
+    """Best-effort (21/07) : une panne d'écriture du classement ne doit jamais
+    casser le cycle de scan lui-même."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200,
+        full_coverage=True, composite_percentile=55.0,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    async def _raise(*a, **k):
+        raise RuntimeError("panne d'écriture")
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+    monkeypatch.setattr("aria_core.services.smart_money_leaderboard.update_leaderboard", _raise)
+
+    result = await wsq.run_wallet_scan_queue_cycle()
+    assert result["completed_first_time"] == [A]  # le cycle a bien terminé normalement
 
 
 @pytest.mark.asyncio

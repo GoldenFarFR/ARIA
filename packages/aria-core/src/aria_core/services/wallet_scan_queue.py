@@ -26,6 +26,7 @@ notification de progression, et la cadence de surveillance post-100%.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,8 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 
 from aria_core.paths import aria_db_path
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
@@ -217,6 +220,22 @@ async def remove_from_queue(wallet: str) -> None:
         await db.commit()
 
 
+async def _update_leaderboard_best_effort(wallet: str, card) -> None:
+    """Classement "meilleurs investisseurs" (21/07) -- appelé UNIQUEMENT sur
+    un wallet à couverture complète (`full_coverage`), jamais sur un score
+    partiel (même exclusion que `full_coverage=False` ailleurs dans
+    `smart_money.py` pour la population de comparaison -- un score pas encore
+    fiable pour comparer ne l'est pas plus pour classer). Best-effort : une
+    panne d'écriture du classement ne doit jamais casser le cycle de scan
+    lui-même, gate propre vérifié à l'intérieur de la fonction appelée."""
+    from aria_core.services import smart_money_leaderboard
+
+    try:
+        await smart_money_leaderboard.update_leaderboard(wallet, card.composite_percentile)
+    except Exception:  # noqa: BLE001
+        logger.warning("wallet_scan_queue: mise à jour du classement échouée pour %s", wallet)
+
+
 async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
     """Fait avancer d'un passage chaque wallet DU (jusqu'à
     `MAX_WALLETS_PER_CYCLE`) :
@@ -295,6 +314,7 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
                 next_check_at=now + timedelta(days=MONITORING_INTERVAL_DAYS),
                 monitoring_since=now,
             )
+            await _update_leaderboard_best_effort(queued.wallet, card)
             if notifier is not None:
                 await notifier(
                     "✅ Scan en arrière-plan terminé (couverture complète) -- "
@@ -319,6 +339,7 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
 
         next_check = now + timedelta(days=MONITORING_INTERVAL_DAYS)
         await mark_attempt(queued.wallet, next_check_at=next_check)
+        await _update_leaderboard_best_effort(queued.wallet, card)
         if card.tokens_analyzed > 0 and notifier is not None:
             # Nouvelle activité repérée pendant la surveillance -- jamais un
             # bruit hebdomadaire silencieux si rien de neuf n'a été trouvé.
