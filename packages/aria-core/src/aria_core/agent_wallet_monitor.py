@@ -105,9 +105,25 @@ async def _already_seen(tx_hash: str) -> bool:
     return row is not None
 
 
-async def _record_movement(m: WalletMovement) -> None:
+async def _record_movement(m: WalletMovement) -> bool:
+    """Écrit le mouvement -- ``True`` seulement si CETTE tentative a réellement
+    créé la ligne (jamais notifier sur une classification qui a perdu la course).
+
+    20/07 -- bug réel trouvé en conditions réelles (capture opérateur, alerte
+    "SORTIE NON INITIÉE" sur un paiement x402 pourtant déjà connu) : l'ancien
+    ``_already_seen()`` (check) puis ``_record_movement()`` (act) n'était pas
+    atomique -- deux passages qui voient tous les deux ``_already_seen() ->
+    False`` avant que l'un des deux n'écrive peuvent chacun calculer LEUR PROPRE
+    classification (potentiellement différente si leur lecture de
+    ``known_x402_spends`` n'était pas au même instant) et NOTIFIER tous les
+    deux, alors que seule une des deux lignes gagne réellement l'écriture
+    (``INSERT OR IGNORE``, ``tx_hash`` unique). Le perdant notifiait quand même
+    avec sa classification potentiellement périmée. Corrigé : le résultat réel
+    de l'écriture (``rowcount``) décide maintenant si CETTE tentative a le
+    droit de notifier -- jamais la classification calculée en mémoire seule."""
+    await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
+        cur = await db.execute(
             """
             INSERT OR IGNORE INTO agent_wallet_movement_log
                 (tx_hash, direction, asset, amount, counterparty, classification,
@@ -120,6 +136,7 @@ async def _record_movement(m: WalletMovement) -> None:
             ),
         )
         await db.commit()
+        return cur.rowcount > 0
 
 
 # 17/07 -- fenêtre de tolérance pour corréler un mouvement on-chain détecté à un
@@ -290,8 +307,8 @@ async def check_wallet_activity(
                 classification=classification,
                 timestamp=t.timestamp,
             )
-            await _record_movement(movement)
-            fresh.append(movement)
+            if await _record_movement(movement):
+                fresh.append(movement)
 
     tx_result = await client.get_transactions(wallet_address, limit=50)
     if not tx_result.available:
@@ -310,8 +327,8 @@ async def check_wallet_activity(
                 classification=_classify(tx.tx_hash, direction, known_tx_hashes),
                 timestamp=tx.timestamp,
             )
-            await _record_movement(movement)
-            fresh.append(movement)
+            if await _record_movement(movement):
+                fresh.append(movement)
 
     return fresh
 

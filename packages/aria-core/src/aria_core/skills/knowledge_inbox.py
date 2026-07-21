@@ -124,6 +124,34 @@ async def _mark_processed(path: str) -> None:
         await db.commit()
 
 
+async def _try_claim(path: str) -> bool:
+    """Réclame ``path`` atomiquement -- ``True`` seulement si CETTE tentative a
+    réellement créé la ligne (jamais laisser deux passages concurrents traiter
+    la même note et produire deux issues différentes).
+
+    20/07 -- bug réel trouvé en conditions réelles : issues #42/#43 créées à 6
+    minutes d'écart à partir de la MÊME note (Note du 2026-07-15, Clanker/
+    GoPlus), avec des propositions différentes (fichiers cibles différents,
+    formulation différente) -- deux passages ont vu ``_already_processed() ->
+    False`` avant que l'un des deux n'écrive (l'ancien `_mark_processed`
+    n'arrivait qu'APRÈS tout le travail LLM, laissant une large fenêtre de
+    course). Corrigé : la réclamation se fait ICI, avant tout appel LLM --
+    ``_mark_processed``/l'ancien flux en aval sont retirés, cette fonction est
+    l'unique point d'écriture désormais."""
+    import aiosqlite
+
+    from aria_core.paths import aria_db_path
+
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        await _ensure_processed_table(db)
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO knowledge_inbox_processed (path, processed_at) VALUES (?, ?)",
+            (path, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 def _pick_next_candidate(entries: list[dict], already_processed: set[str]) -> str | None:
     for entry in entries:
         name = entry.get("name", "")
@@ -171,13 +199,20 @@ async def run_knowledge_inbox_cycle(*, llm=None, github_client=None, notifier=No
     if path is None:
         return {"outcome": "nothing_new"}
 
+    # 20/07 -- réclamation ATOMIQUE ici, avant tout travail (fetch/LLM) -- voir le
+    # commentaire de _try_claim pour l'incident réel (issues #42/#43 dupliquées)
+    # que ce réordonnancement corrige. Si un autre passage a déjà réclamé cette
+    # note (concurrence), on s'arrête immédiatement -- jamais un deuxième appel LLM
+    # ni une deuxième issue pour la même note.
+    if not await _try_claim(path):
+        return {"outcome": "lost_claim_race", "path": path}
+
     try:
         content, _sha = await github_client.get_file_text(owner, TARGET_REPO, path)
     except Exception as exc:  # noqa: BLE001
         return {"outcome": "error", "error": str(exc)[:300], "path": path}
 
     if not content.strip():
-        await _mark_processed(path)
         return {"outcome": "empty_skipped", "path": path}
 
     if llm is None:
@@ -209,8 +244,6 @@ async def run_knowledge_inbox_cycle(*, llm=None, github_client=None, notifier=No
         actionable = bool(data.get("actionable", True))
     except (json.JSONDecodeError, TypeError, ValueError):
         return {"outcome": "parse_failed", "path": path}
-
-    await _mark_processed(path)
 
     if not actionable or not title or not body:
         return {"outcome": "not_actionable", "path": path}

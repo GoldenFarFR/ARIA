@@ -317,6 +317,54 @@ async def test_same_tx_hash_never_detected_twice(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_record_movement_returns_true_only_for_the_winning_write():
+    """20/07 -- bug réel (capture opérateur) : alerte "SORTIE NON INITIÉE" sur un
+    paiement x402 pourtant déjà connu -- l'ancien _record_movement n'indiquait
+    jamais si CETTE tentative avait réellement gagné l'écriture, donc un passage
+    dont la classification avait été calculée sur une lecture périmée de
+    known_x402_spends notifiait quand même. Verrouille le contrat : True
+    seulement pour la première écriture d'un tx_hash donné."""
+    m1 = monitor.WalletMovement(
+        tx_hash="0xrace", direction="out", asset="USDC", amount=0.006,
+        counterparty="0xprovider", classification="known_x402",
+    )
+    m2 = monitor.WalletMovement(
+        tx_hash="0xrace", direction="out", asset="USDC", amount=0.006,
+        counterparty="0xprovider", classification="unexpected_outflow",
+    )
+    assert await monitor._record_movement(m1) is True
+    assert await monitor._record_movement(m2) is False
+    # La classification PERSISTÉE reste celle du gagnant -- jamais écrasée par
+    # le perdant, même si celui-ci tente d'écrire une classification différente.
+    rows = await monitor.list_recent_movements()
+    assert len(rows) == 1
+    assert rows[0]["classification"] == "known_x402"
+
+
+@pytest.mark.asyncio
+async def test_check_wallet_activity_never_returns_a_movement_that_lost_the_write(monkeypatch):
+    """Le contrat au niveau de check_wallet_activity : un mouvement qui perd la
+    course d'écriture ne doit jamais apparaître dans la liste renvoyée à
+    l'appelant (donc jamais notifié) -- même s'il a été détecté par Blockscout."""
+    transfer = TokenTransfer(
+        tx_hash="0xalreadyclaimed", from_address=WALLET, to_address="0xdest",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.006, timestamp="2026-07-20T19:38:55Z",
+    )
+    client = FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    )
+    _patch_client(monkeypatch, client)
+
+    async def fake_record_movement(m):
+        return False  # simule une course déjà perdue par un autre passage
+
+    monkeypatch.setattr(monitor, "_record_movement", fake_record_movement)
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert result == []
+
+
+@pytest.mark.asyncio
 async def test_blockscout_unavailable_degrades_gracefully(monkeypatch):
     _patch_client(monkeypatch, FakeBlockscoutClient(
         token_transfers=TokenTransfersResult(transfers=[], available=False, error="indisponible"),

@@ -177,6 +177,55 @@ async def test_cycle_generation_failure_does_not_open_issue(monkeypatch):
     result = await ki.run_knowledge_inbox_cycle(llm=broken_llm, github_client=fake_client)
     assert result["outcome"] == "generation_failed"
     assert fake_client.calls == []
+    # 20/07 -- changement de comportement assumé (voir _try_claim) : la réclamation
+    # se fait maintenant AVANT l'appel LLM, donc une panne LLM claime quand même
+    # la note (jamais retentée) -- le prix à payer pour fermer la fenêtre de
+    # course qui produisait des issues dupliquées. Un vrai miss est préférable à
+    # un doublon imprévisible.
+    assert await ki._already_processed(path) is True
+
+
+@pytest.mark.asyncio
+async def test_try_claim_true_only_for_the_winning_attempt():
+    """20/07 -- bug réel : issues #42/#43 créées 6 minutes d'écart depuis la MÊME
+    note (Note du 2026-07-15, Clanker/GoPlus) -- l'ancien _mark_processed n'était
+    appelé qu'APRÈS tout le travail LLM, laissant une large fenêtre de course où
+    deux passages concurrents voyaient tous les deux _already_processed() ->
+    False. Verrouille le contrat de base : True seulement pour le premier appel."""
+    path = "docs/aria-learning-inbox/x.md"
+    assert await ki._try_claim(path) is True
+    assert await ki._try_claim(path) is False
+
+
+@pytest.mark.asyncio
+async def test_cycle_never_opens_a_second_issue_when_race_already_claimed(monkeypatch):
+    """Reproduit l'incident exact (issues #42/#43) : au moment précis où CE cycle
+    tente de réclamer la note, un passage concurrent l'a déjà réclamée en premier
+    (``_try_claim`` renvoie False) -- même si _pick_next_candidate l'a choisie
+    croyant qu'elle était encore libre. Aucun appel LLM, aucune issue."""
+    monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: True)
+    monkeypatch.setenv("ARIA_KNOWLEDGE_INBOX_ENABLED", "1")
+    path = "docs/aria-learning-inbox/radar-clanker-goplus.md"
+    fake_client = _FakeGitHubClient(
+        entries=[{"name": "radar-clanker-goplus.md"}],
+        files={path: ("Note du 2026-07-15 sur Clanker/GoPlus.", "sha1")},
+    )
+
+    async def lost_the_race(claimed_path):
+        return False  # un autre passage a gagné la course entre-temps
+
+    monkeypatch.setattr(ki, "_try_claim", lost_the_race)
+
+    llm_calls = {"n": 0}
+
+    async def counting_llm(prompt, system, max_tokens=700):
+        llm_calls["n"] += 1
+        return json.dumps({"title": "x", "body": "y", "actionable": True})
+
+    result = await ki.run_knowledge_inbox_cycle(llm=counting_llm, github_client=fake_client)
+    assert result["outcome"] == "lost_claim_race"
+    assert llm_calls["n"] == 0
+    assert fake_client.calls == []
 
 
 def test_extract_referenced_paths_finds_backtick_file_paths():
