@@ -227,8 +227,16 @@ class GoPlusClient:
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         retried = False
+        # 21/07 -- bug réel trouvé en investiguant pourquoi le compte GoPlus n'affichait
+        # AUCUNE consommation même sur 30 jours malgré des appels authentifiés réussis :
+        # mauvais nom d'en-tête. La doc officielle (docs.gopluslabs.io/reference/
+        # tokensecurityusingget_1) exige "Authorization: Bearer <token>", jamais
+        # "access-token: <token>" -- l'ancien en-tête n'était simplement pas reconnu.
+        # L'endpoint reste tolérant (renvoie 200 même sans jeton valide, testé en
+        # direct), ce qui a masqué le bug pendant tout ce temps : les appels
+        # "réussissaient" mais n'étaient jamais rattachés au compte authentifié.
         token = await self._ensure_access_token()
-        headers = {"access-token": token} if token else None
+        headers = {"Authorization": f"Bearer {token}"} if token else None
 
         while True:
             await self._throttle()

@@ -268,7 +268,7 @@ async def test_ensure_access_token_network_failure_falls_back_silently(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_get_json_sends_access_token_header_when_authenticated(monkeypatch):
+async def test_get_json_sends_authorization_bearer_header_when_authenticated(monkeypatch):
     _patch_goplus_no_sleep(monkeypatch)
     monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
     monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
@@ -284,7 +284,7 @@ async def test_get_json_sends_access_token_header_when_authenticated(monkeypatch
     security = await client.get_token_security(ADDR, chain_id="8453")
 
     assert security.available is True
-    assert get_calls[0]["headers"] == {"access-token": "tok-3"}
+    assert get_calls[0]["headers"] == {"Authorization": "Bearer tok-3"}
 
 
 @pytest.mark.asyncio
