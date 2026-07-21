@@ -179,6 +179,21 @@ class TokenHoldersResult:
 
 
 @dataclass
+class TokenMetadataResult:
+    """21/07 -- extrait de ``get_token_holders`` (decimals + total_supply seuls,
+    sans la liste des holders) pour permettre à un appelant de combiner cette
+    métadonnée bon marché (endpoint ``/tokens/{address}``, peu de volume, résiste
+    bien au repli gratuit) avec une source de holders DIFFÉRENTE -- ex.
+    ``blockscout_x402.get_token_holders_x402`` (payé, jamais à sec de crédits),
+    cf. ``momentum_entry._check_holder_concentration``."""
+
+    decimals: int | None = None
+    total_supply: float | None = None
+    available: bool = True
+    error: str | None = None
+
+
+@dataclass
 class ContractFlags:
     address: str
     is_verified: bool | None = None
@@ -607,12 +622,16 @@ class BlockscoutClient:
     # ------------------------------------------------------------------
     # 4. Distribution des holders (top holders, %)
     # ------------------------------------------------------------------
-    async def get_token_holders(self, token_address: str) -> TokenHoldersResult:
+    async def get_token_metadata(self, token_address: str) -> TokenMetadataResult:
+        """21/07 -- extrait de ``get_token_holders`` (decimals + total_supply
+        seuls, endpoint ``/tokens/{address}``) pour permettre à un appelant de
+        combiner cette métadonnée avec une source de holders séparée (ex. x402,
+        cf. ``momentum_entry._check_holder_concentration``)."""
         token_data, token_error = await self._get_json(f"/tokens/{token_address}")
         if token_error is not None:
-            return TokenHoldersResult(available=False, error=token_error)
+            return TokenMetadataResult(available=False, error=token_error)
         if not isinstance(token_data, dict):
-            return TokenHoldersResult(available=False, error=UNAVAILABLE)
+            return TokenMetadataResult(available=False, error=UNAVAILABLE)
 
         decimals_raw = token_data.get("decimals")
         decimals: int | None
@@ -629,6 +648,18 @@ class BlockscoutClient:
                 total_supply = int(total_supply_raw) / (10**decimals)
             except (TypeError, ValueError):
                 total_supply = None
+
+        return TokenMetadataResult(
+            decimals=decimals, total_supply=total_supply, available=True, error=decimals_error,
+        )
+
+    async def get_token_holders(self, token_address: str) -> TokenHoldersResult:
+        metadata = await self.get_token_metadata(token_address)
+        if not metadata.available:
+            return TokenHoldersResult(available=False, error=metadata.error)
+        decimals = metadata.decimals
+        decimals_error = metadata.error
+        total_supply = metadata.total_supply
 
         holders_data, holders_error = await self._get_json(f"/tokens/{token_address}/holders")
         if holders_error is not None:

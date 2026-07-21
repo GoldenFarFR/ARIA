@@ -1015,7 +1015,8 @@ def test_technical_alignment_never_crashes_on_short_series():
 
 def _pair(**overrides) -> PairSnapshot:
     # 19/07 -- liquidité ET volume par défaut confortablement au-dessus des planchers
-    # (_MIN_LIQUIDITY_USD, 50 000$ depuis le 21/07 ; _MIN_VOLUME_24H_USD 1 000$) ET sous
+    # (_MIN_LIQUIDITY_USD, 50 000$ depuis le 21/07 ; _MIN_VOLUME_24H_USD 500$ depuis le
+    # 21/07) ET sous
     # le ratio wash-trading (50k/150k = 0,33x, largement < 20x) : les tests qui ne testent
     # pas spécifiquement ces gates doivent continuer à les traverser sans avoir à
     # overrider quoi que ce soit un par un.
@@ -1486,11 +1487,19 @@ async def test_evaluate_allows_low_holder_concentration(monkeypatch):
 
 
 class _FakeHoldersClient:
-    def __init__(self, result):
+    def __init__(self, result, *, metadata=None):
         self._result = result
+        self._metadata = metadata
 
     async def get_token_holders(self, token_address):
         return self._result
+
+    async def get_token_metadata(self, token_address):
+        if self._metadata is not None:
+            return self._metadata
+        from aria_core.services.blockscout import TokenMetadataResult
+
+        return TokenMetadataResult(available=False)
 
 
 def _holder(address, percentage, *, is_contract=None, is_verified=None):
@@ -1639,6 +1648,123 @@ class TestCheckHolderConcentration:
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert too_concentrated is True
         assert "85%" in reason
+
+    # ── repli x402 (21/07) -- déclenché quand le chemin gratuit/Pro échoue ──────────
+
+    @pytest.mark.asyncio
+    async def test_x402_fallback_not_used_when_regular_path_succeeds(self, monkeypatch):
+        """Le chemin gratuit/Pro fonctionne -- x402 ne doit JAMAIS être appelé
+        (zéro coût incrémental dans le cas normal)."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [_holder("0xPOOL", 10.0)] + [_holder(f"0xreal{i}", 3.0) for i in range(10)]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+
+        called = {"x402": False}
+
+        async def _fake_x402(contract, *, chain="base", token_symbol=""):
+            called["x402"] = True
+            return []
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+        )
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert called["x402"] is False
+
+    @pytest.mark.asyncio
+    async def test_x402_fallback_fails_open_when_metadata_unavailable(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=False), metadata=TokenMetadataResult(available=False),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is False
+        assert reason == ""
+
+    @pytest.mark.asyncio
+    async def test_x402_fallback_fails_open_when_no_holders_returned(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=False),
+            metadata=TokenMetadataResult(available=True, decimals=0, total_supply=1_000_000.0),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        async def _fake_x402(contract, *, chain="base", token_symbol=""):
+            return []
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+        )
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is False
+        assert reason == ""
+
+    @pytest.mark.asyncio
+    async def test_x402_fallback_computes_percentage_and_rejects_over_threshold(self, monkeypatch):
+        """Reproduit exactement le scénario réel (21/07) : crédits Pro épuisés sur le
+        chemin gratuit -- le repli x402 doit calculer les mêmes pourcentages et
+        appliquer la même exclusion pool/burn/contrat-vérifié que le chemin normal."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=False),
+            metadata=TokenMetadataResult(available=True, decimals=0, total_supply=1_000_000.0),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        raw_holders = [
+            {"holder_address": "0xPOOL", "value": "100000", "is_contract": False, "is_verified": False},
+            {"holder_address": "0xSTAKING", "value": "300000", "is_contract": True, "is_verified": True},
+            {"holder_address": "0xWHALE", "value": "850000", "is_contract": False, "is_verified": False},
+        ]
+
+        async def _fake_x402(contract, *, chain="base", token_symbol=""):
+            return raw_holders
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+        )
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xPOOL")
+        # pool (100%*... exclu) + contrat vérifié (exclu) -- seul 0xWHALE (85%) compte
+        assert too_concentrated is True
+        assert "85%" in reason
+
+    @pytest.mark.asyncio
+    async def test_x402_fallback_allows_when_under_threshold(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=False),
+            metadata=TokenMetadataResult(available=True, decimals=0, total_supply=1_000_000.0),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        raw_holders = [
+            {"holder_address": "0xPOOL", "value": "600000", "is_contract": False, "is_verified": False},
+        ] + [
+            {"holder_address": f"0xreal{i}", "value": "30000", "is_contract": False, "is_verified": False}
+            for i in range(10)
+        ]
+
+        async def _fake_x402(contract, *, chain="base", token_symbol=""):
+            return raw_holders
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+        )
+        too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xPOOL")
+        assert too_concentrated is False
 
 
 # ── volume relatif -- RVOL (19/07, revue croisée Gemini, 4e round) ──────────────────

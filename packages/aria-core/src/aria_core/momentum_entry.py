@@ -22,8 +22,13 @@ le test 1M$ (#194) », à lire avant toute modification) :
     (pas une panne), ``services/rugcheck.py`` sert de second avis (#207, 18/07) --
     ouvre de la couverture, n'assouplit jamais le garde-fou (fail-closed inchangé si
     RugCheck non plus n'a rien ou confirmé rugged) ; plancher de volume 24h
-    (``_MIN_VOLUME_24H_USD``, 1 000$ depuis le 20/07 -- ESSAI EN COURS, décision
-    opérateur explicite ("abaisse le volume à 1000 et voyons"), abaissé du plancher
+    (``_MIN_VOLUME_24H_USD``, 500$ depuis le 21/07 -- ESSAI EN COURS, décision
+    opérateur explicite ("baisse le volume à 500$ au lieu de 1000, voyons l'effet"),
+    lui-même abaissé du plancher 1 000$ posé le 20/07 après un premier diagnostic
+    chiffré (funnel 24h) montrant que l'empilement des gates du 19-20/07 avait fait
+    chuter le débit d'achats à zéro -- abaissé une 2e fois le 21/07 après un nouveau
+    diagnostic montrant que ``volume_too_low``/``pair_too_young`` restaient les 2
+    causes de rejet dominantes malgré le premier abaissement -- abaissé du plancher
     initial 5 000$ posé le 19/07 après le constat que 0 achat en 24h reflétait un
     empilement de gates trop strict -- revue croisée Gemini d'origine : un marché
     "zombie", liquidité présente mais quasi aucune activité réelle, peut fabriquer
@@ -196,8 +201,15 @@ _MAX_PRICE_CHANGE_24H_PCT = 200.0
 # atteignant le stade R/R de ~26/24h à 4/24h, soit 0 achat réel. Reste un seuil bas
 # volontaire ("le marché est vivant", pas un filtre de qualité) -- même doctrine
 # permissive que le reste du pipeline, jamais un filtre de conviction déguisé en garde-fou.
-# À réévaluer une fois l'effet observé sur le débit réel d'achats.
-_MIN_VOLUME_24H_USD = 1_000.0
+# 21/07 -- ESSAI ÉTENDU (décision opérateur explicite, "baisse le volume à 500$ au lieu
+# de 1000, voyons l'effet") : nouveau diagnostic chiffré (funnel 24h, portefeuille resté
+# à plat depuis le reset du 20/07) confirmant que ``volume_too_low`` (670/2336, 29%) et
+# ``pair_too_young`` (492/2336, 21%) restaient les deux causes de rejet dominantes malgré
+# le premier abaissement -- abaissé une 2e fois à 500$. À ce niveau, le plancher absolu
+# et le plancher proportionnel (ci-dessous) convergent EXACTEMENT au plancher de liquidité
+# actuel (50 000$ x 1% = 500$) -- aucune des deux composantes n'est plus jamais triviale
+# au minimum de liquidité. À réévaluer une fois l'effet observé sur le débit réel d'achats.
+_MIN_VOLUME_24H_USD = 500.0
 
 # 19/07 -- plancher PROPORTIONNEL à la liquidité, EN PLUS du plancher absolu ci-dessus
 # (revue croisée Gemini round 5) : un plancher absolu seul devient trivial à mesure que
@@ -648,26 +660,66 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     légitime (staking) mais contenir une fonction de retrait que seul le déployeur peut
     actionner -- ce garde-fou ne fait AUCUNE analyse sémantique du code, seulement une
     vérification de statut "vérifié/non vérifié", cohérent avec le reste du pipeline qui
-    ne lit jamais le contenu d'un contrat non plus."""
+    ne lit jamais le contenu d'un contrat non plus.
+
+    21/07 -- repli x402 payant (``blockscout_x402.get_token_holders_x402``) quand le
+    chemin gratuit/Pro échoue (crédits Pro épuisés, endpoint indisponible -- symptôme
+    réel observé le 21/07 : plusieurs tokens "holders indisponibles" malgré le repli
+    permanent déjà en place vers l'endpoint gratuit). Coûte 0,002$/appel MAIS
+    UNIQUEMENT dans ce cas précis -- le chemin gratuit/Pro reste toujours tenté en
+    premier, zéro coût incrémental tant qu'il fonctionne (cas normal). Évite de faire
+    reposer ce garde-fou de sécurité sur un pool de crédits qui s'épuise
+    régulièrement, sans pour autant payer systématiquement à chaque candidat."""
     from aria_core.services.blockscout import get_blockscout_client
 
     client = get_blockscout_client(chain)
     result = await client.get_token_holders(contract)
-    if not result.available or not result.holders or not result.total_supply:
+
+    entries: list[tuple[str, float, bool | None, bool | None]] = []
+    if result.available and result.holders and result.total_supply:
+        entries = [
+            (h.address or "", h.percentage, h.is_contract, h.is_verified)
+            for h in result.holders if h.percentage is not None
+        ]
+    else:
+        metadata = await client.get_token_metadata(contract)
+        if not metadata.available or not metadata.total_supply or metadata.decimals is None:
+            return False, ""
+
+        from aria_core.services.blockscout_x402 import get_token_holders_x402
+
+        raw_holders = await get_token_holders_x402(contract, chain=chain, token_symbol="")
+        if not raw_holders:
+            return False, ""
+
+        decimals = metadata.decimals
+        total_supply = metadata.total_supply
+        for h in raw_holders:
+            raw_value = h.get("value")
+            if raw_value is None:
+                continue
+            try:
+                balance = int(raw_value) / (10**decimals)
+            except (TypeError, ValueError):
+                continue
+            entries.append((
+                h.get("holder_address") or "", (balance / total_supply) * 100,
+                h.get("is_contract"), h.get("is_verified"),
+            ))
+
+    if not entries:
         return False, ""
 
     excluded = {a.lower() for a in _BURN_ADDRESSES} | {(pool_address or "").lower()}
     ranked = sorted(
         (
-            h for h in result.holders
-            if h.percentage is not None
-            and (h.address or "").lower() not in excluded
-            and not (h.is_contract and h.is_verified)
+            e for e in entries
+            if (e[0] or "").lower() not in excluded and not (e[2] and e[3])
         ),
-        key=lambda h: h.percentage,
+        key=lambda e: e[1],
         reverse=True,
     )
-    top_pct = sum(h.percentage for h in ranked[:_TOP_N_HOLDERS_FOR_CONCENTRATION])
+    top_pct = sum(e[1] for e in ranked[:_TOP_N_HOLDERS_FOR_CONCENTRATION])
     if top_pct >= _MAX_TOP_HOLDERS_CONCENTRATION_PCT:
         return True, (
             f"concentration des {_TOP_N_HOLDERS_FOR_CONCENTRATION} plus gros détenteurs "
