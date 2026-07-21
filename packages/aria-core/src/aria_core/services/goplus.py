@@ -8,16 +8,24 @@ caché, peut-il reprendre la propriété, les transferts sont-ils suspendables, 
 API GoPlus, chain Base = 8453. Lecture seule, aucun appel autre que GET/POST-token.
 Authentification OPTIONNELLE (#207, 18/07) : si `GOPLUS_APP_KEY`/`GOPLUS_APP_SECRET`
 sont présentes dans l'environnement, un access_token (JWT, valide 2h, renouvelé
-automatiquement) est joint en en-tête `access-token` sur chaque appel -- sépare le
-quota d'ARIA de la limite anonyme par IP (~30 req/min, cause directe des `code 4029`
-observés le 17-18/07). Sans ces identifiants, comportement historique inchangé
-(API publique sans clé). Même politique d'erreurs que blockscout.py (dôme) :
+automatiquement) est joint en en-tête `Authorization: Bearer <token>` sur chaque appel
+(corrigé le 21/07 -- l'ancien en-tête `access-token` n'était pas reconnu, cf. commentaire
+dans `_get_json`) -- sépare le quota d'ARIA de la limite anonyme par IP (~30 req/min,
+cause directe des `code 4029` observés le 17-18/07). Sans ces identifiants, comportement
+historique inchangé (API publique sans clé). Même politique d'erreurs que blockscout.py
+(dôme) :
 - 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
 - Timeout / 5xx : 1 retry après 5s, puis fallback explicite.
 - Donnée manquante JAMAIS remplacée par une supposition : `available=False` + `error`,
   et chaque drapeau vaut None (inconnu) plutôt que False quand GoPlus ne répond pas.
 - Échec d'authentification (token, réseau) : jamais bloquant, repli silencieux sur
   l'appel sans en-tête (même comportement que si aucune clé n'était configurée).
+- Coupe-circuit réactif (21/07, filet de sécurité quota) : au-delà de
+  `_CIRCUIT_FAIL_THRESHOLD` échecs consécutifs (429/code 4029/timeout/5xx), le client
+  arrête d'appeler le réseau pendant `_CIRCUIT_COOLDOWN_S` -- protège tout plafond
+  caché (mensuel/journalier, jamais confirmé par GoPlus, donc jamais chiffré en dur
+  ici) sans inventer de nombre. Purement réactif, même patron que le coupe-circuit
+  par fournisseur déjà construit sur la cascade OHLCV (`momentum_entry._fetch_candles`).
 
 Un drapeau None (inconnu) ne bloque jamais à lui seul : seul un signal POSITIVEMENT
 confirmé (honeypot=1, cannot_sell=1, taxe élevée…) pénalise. Cohérent avec la doctrine :
@@ -43,6 +51,16 @@ UNAVAILABLE = "donnée GoPlus indisponible"
 
 _FAIL_STREAK_WARN_THRESHOLD = 3
 _TOKEN_REFRESH_MARGIN_S = 300  # renouvelle 5 min avant l'expiration annoncée par GoPlus
+
+# 21/07 -- coupe-circuit réactif (filet de sécurité quota). Aucun plafond mensuel/
+# journalier GoPlus n'a jamais été confirmé (seul le débit 150 CU/min est vérifié au
+# dashboard) -- pas de chiffre inventé ici, seulement une pause défensive une fois
+# qu'un échec SOUTENU est observé, quelle qu'en soit la cause réelle (rate limit,
+# quota mensuel épuisé, panne côté GoPlus). 5 échecs consécutifs (au-delà du seuil de
+# simple log à 3) avant d'arrêter d'appeler le réseau pendant 5 minutes, plutôt que de
+# marteler un compte à sec candidat après candidat.
+_CIRCUIT_FAIL_THRESHOLD = 5
+_CIRCUIT_COOLDOWN_S = 300.0
 
 
 def goplus_authenticated() -> bool:
@@ -152,6 +170,7 @@ class GoPlusClient:
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
+        self._circuit_open_until = 0.0
         self._access_token: str | None = None
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()
@@ -208,9 +227,18 @@ class GoPlusClient:
 
     def _record_failure(self, detail: str) -> None:
         self._consecutive_failures += 1
-        if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
+        if self._consecutive_failures >= _CIRCUIT_FAIL_THRESHOLD:
+            self._circuit_open_until = time.time() + _CIRCUIT_COOLDOWN_S
             logger.warning(
-                "goplus: %s echecs consecutifs (dernier: %s) — pas de blocage, pas d'escalade",
+                "goplus: coupe-circuit ouvert apres %s echecs consecutifs (dernier: %s) — "
+                "pause %ss avant nouvel essai",
+                self._consecutive_failures,
+                detail,
+                _CIRCUIT_COOLDOWN_S,
+            )
+        elif self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
+            logger.warning(
+                "goplus: %s echecs consecutifs (dernier: %s) — pas encore de coupe-circuit",
                 self._consecutive_failures,
                 detail,
             )
@@ -222,8 +250,14 @@ class GoPlusClient:
                 detail,
             )
 
+    def circuit_open(self) -> bool:
+        return time.time() < self._circuit_open_until
+
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
         """GET avec la politique d'erreurs du dôme. Retourne (data, error)."""
+        if self.circuit_open():
+            return None, f"{UNAVAILABLE} (coupe-circuit ouvert, échecs consécutifs récents)"
+
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         retried = False

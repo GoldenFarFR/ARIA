@@ -140,6 +140,112 @@ async def test_code_4029_gives_up_after_three_attempts(monkeypatch):
     assert "rate limit" in security.error
 
 
+# ── coupe-circuit réactif (filet de sécurité quota, 21/07) ────────────────────
+# Aucun plafond mensuel/journalier GoPlus n'a jamais été confirmé -- le coupe-circuit
+# ne chiffre donc rien sur GoPlus lui-même, il protège juste contre le martèlement
+# d'un compte visiblement en échec soutenu (429/code 4029/5xx/timeout), quelle que
+# soit la cause réelle.
+
+@pytest.mark.asyncio
+async def test_circuit_opens_after_threshold_consecutive_failures(monkeypatch):
+    _patch_goplus_no_sleep(monkeypatch)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    # 5 tokens différents, chacun échoue définitivement (3 x 429 -> abandon) --
+    # 5 échecs consécutifs au niveau du compteur de circuit.
+    for i in range(5):
+        addr = f"0x{i:040x}"
+        _patch_goplus_http(monkeypatch, {url: [_FakeResponse(429), _FakeResponse(429), _FakeResponse(429)]})
+        security = await client.get_token_security(addr, chain_id="8453")
+        assert security.available is False
+
+    assert client.circuit_open() is True
+
+    # Un 6e appel ne doit PLUS jamais toucher le réseau -- court-circuité immédiatement.
+    called = {"network": False}
+
+    def _fail_if_called(**kw):
+        called["network"] = True
+        raise AssertionError("le réseau ne doit pas être appelé, circuit ouvert")
+
+    monkeypatch.setattr("aria_core.services.goplus.httpx.AsyncClient", _fail_if_called)
+
+    security = await client.get_token_security(f"0x{99:040x}", chain_id="8453")
+
+    assert security.available is False
+    assert "coupe-circuit" in security.error
+    assert called["network"] is False
+
+
+@pytest.mark.asyncio
+async def test_circuit_does_not_open_before_threshold(monkeypatch):
+    """4 échecs consécutifs (< 5) -- le circuit reste fermé, le prochain appel touche
+    toujours le réseau normalement."""
+    _patch_goplus_no_sleep(monkeypatch)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    for i in range(4):
+        addr = f"0x{i:040x}"
+        _patch_goplus_http(monkeypatch, {url: [_FakeResponse(429), _FakeResponse(429), _FakeResponse(429)]})
+        await client.get_token_security(addr, chain_id="8453")
+
+    assert client.circuit_open() is False
+
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    _patch_goplus_http(monkeypatch, {url: [_FakeResponse(200, ok_payload)]})
+    security = await client.get_token_security(ADDR, chain_id="8453")
+    assert security.available is True
+
+
+@pytest.mark.asyncio
+async def test_a_success_resets_the_failure_streak_and_prevents_circuit_opening(monkeypatch):
+    """4 échecs, puis un succès qui remet le compteur à zéro, puis 4 échecs de plus --
+    jamais 5 CONSÉCUTIFS -- le circuit ne doit jamais s'ouvrir."""
+    _patch_goplus_no_sleep(monkeypatch)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+
+    for i in range(4):
+        _patch_goplus_http(monkeypatch, {url: [_FakeResponse(429), _FakeResponse(429), _FakeResponse(429)]})
+        await client.get_token_security(f"0x{i:040x}", chain_id="8453")
+
+    _patch_goplus_http(monkeypatch, {url: [_FakeResponse(200, ok_payload)]})
+    await client.get_token_security(ADDR, chain_id="8453")
+    assert client.circuit_open() is False
+
+    for i in range(4):
+        _patch_goplus_http(monkeypatch, {url: [_FakeResponse(429), _FakeResponse(429), _FakeResponse(429)]})
+        await client.get_token_security(f"0x{i + 10:040x}", chain_id="8453")
+
+    assert client.circuit_open() is False
+
+
+@pytest.mark.asyncio
+async def test_circuit_closes_automatically_after_cooldown(monkeypatch):
+    _patch_goplus_no_sleep(monkeypatch)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    for i in range(5):
+        _patch_goplus_http(monkeypatch, {url: [_FakeResponse(429), _FakeResponse(429), _FakeResponse(429)]})
+        await client.get_token_security(f"0x{i:040x}", chain_id="8453")
+
+    assert client.circuit_open() is True
+
+    # Avance artificiellement l'horloge au-delà du cooldown (5 min).
+    real_time = time.time
+    monkeypatch.setattr(
+        "aria_core.services.goplus.time.time", lambda: real_time() + 301.0,
+    )
+
+    assert client.circuit_open() is False
+
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    _patch_goplus_http(monkeypatch, {url: [_FakeResponse(200, ok_payload)]})
+    security = await client.get_token_security(ADDR, chain_id="8453")
+    assert security.available is True
+
+
 # ── authentification optionnelle app_key/app_secret (#207, 18/07) ────────────
 # Sépare le quota d'ARIA de la limite anonyme par IP (~30 req/min), cause directe
 # des code 4029 observés le 17-18/07. Sans identifiants -> comportement historique
