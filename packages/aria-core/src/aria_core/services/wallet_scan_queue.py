@@ -236,6 +236,48 @@ async def _update_leaderboard_best_effort(wallet: str, card) -> None:
         logger.warning("wallet_scan_queue: mise à jour du classement échouée pour %s", wallet)
 
 
+async def _remove_from_leaderboard_best_effort(wallet: str, reason: str) -> None:
+    """21/07 -- un wallet qui sort de la surveillance (inactivité) ne doit
+    jamais garder sa dernière note figée indéfiniment dans le classement,
+    sans jamais être signalé comme "plus suivi". Best-effort, même doctrine
+    que ``_update_leaderboard_best_effort``."""
+    from aria_core.services import smart_money_leaderboard
+
+    try:
+        await smart_money_leaderboard.remove_and_archive(wallet, reason)
+    except Exception:  # noqa: BLE001
+        logger.warning("wallet_scan_queue: retrait du classement échoué pour %s", wallet)
+
+
+def _is_confirmed_underperformer(card) -> bool:
+    """21/07, demande opérateur explicite : un wallet dont le percentile est
+    réellement MESURÉ (jamais ``None`` -- un score pas encore comparable ne
+    doit jamais être jugé mauvais) et sous le seuil d'éviction du classement
+    est un mauvais investisseur confirmé -- inutile de continuer à le
+    rescanner chaque semaine pour toujours."""
+    from aria_core.services.smart_money_leaderboard import EVICTION_PERCENTILE_THRESHOLD
+
+    return card.composite_percentile is not None and card.composite_percentile < EVICTION_PERCENTILE_THRESHOLD
+
+
+async def _reject_wallet_permanently_best_effort(wallet: str, card) -> None:
+    """21/07 -- un wallet confirmé sous-performant (percentile mesuré < seuil
+    d'éviction) est marqué rejeté DÉFINITIVEMENT (``smart_money_leaderboard.
+    mark_rejected``) EN PLUS d'être retiré du classement -- empêche toute
+    redécouverte future même s'il réapparaît en détenant un nouveau token
+    (``discover_and_enqueue_candidates`` filtre déjà les wallets rejetés).
+    Best-effort, même doctrine que les autres écritures de classement."""
+    from aria_core.services import smart_money_leaderboard
+
+    try:
+        await smart_money_leaderboard.mark_rejected(
+            wallet, card.composite_percentile, "percentile sous 30 (confirmé à couverture complète)",
+        )
+        await smart_money_leaderboard.remove_and_archive(wallet, "percentile sous 30 (rejet permanent)")
+    except Exception:  # noqa: BLE001
+        logger.warning("wallet_scan_queue: rejet permanent échoué pour %s", wallet)
+
+
 async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
     """Fait avancer d'un passage chaque wallet DU (jusqu'à
     `MAX_WALLETS_PER_CYCLE`) :
@@ -278,6 +320,7 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
     processed: list[str] = []
     completed_first_time: list[str] = []
     dropped_inactive: list[str] = []
+    rejected_wallets: list[str] = []
     now = datetime.now(timezone.utc)
 
     for queued in pending:
@@ -306,6 +349,22 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
             continue
 
         if not queued.is_monitoring:
+            if _is_confirmed_underperformer(card):
+                # Percentile mesuré confirmé mauvais dès la 1ère couverture
+                # complète -- retiré ENTIÈREMENT (jamais la surveillance
+                # permanente) et rejeté pour toujours, pas juste évincé du
+                # classement (21/07, demande opérateur explicite).
+                await remove_from_queue(queued.wallet)
+                await _reject_wallet_permanently_best_effort(queued.wallet, card)
+                rejected_wallets.append(queued.wallet)
+                if notifier is not None:
+                    await notifier(
+                        f"🚫 {queued.wallet} confirmé sous-performant (percentile "
+                        f"{card.composite_percentile:.0f}e) -- retiré définitivement, "
+                        "ne sera plus jamais re-scanné ni redécouvert."
+                    )
+                continue
+
             # Première fois que ce wallet atteint 100% -- rapport complet,
             # bascule en surveillance permanente (jamais plus retiré ici).
             completed_first_time.append(queued.wallet)
@@ -330,10 +389,29 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
         ):
             await remove_from_queue(queued.wallet)
             dropped_inactive.append(queued.wallet)
+            await _remove_from_leaderboard_best_effort(
+                queued.wallet, f"wallet inactif (>{INACTIVITY_CUTOFF_DAYS}j sans activité on-chain)",
+            )
             if notifier is not None:
                 await notifier(
                     f"💤 Surveillance arrêtée -- {queued.wallet} inactif depuis plus de "
                     f"{INACTIVITY_CUTOFF_DAYS} jours (aucune activité on-chain détectée)."
+                )
+            continue
+
+        if _is_confirmed_underperformer(card):
+            # Un wallet déjà en surveillance peut se dégrader dans le temps --
+            # même traitement que la 1ère couverture complète : retiré
+            # ENTIÈREMENT et rejeté pour toujours, pas seulement évincé du
+            # classement (21/07, demande opérateur explicite).
+            await remove_from_queue(queued.wallet)
+            await _reject_wallet_permanently_best_effort(queued.wallet, card)
+            rejected_wallets.append(queued.wallet)
+            if notifier is not None:
+                await notifier(
+                    f"🚫 {queued.wallet} confirmé sous-performant (percentile "
+                    f"{card.composite_percentile:.0f}e) -- retiré définitivement de la "
+                    "surveillance, ne sera plus jamais re-scanné ni redécouvert."
                 )
             continue
 
@@ -354,4 +432,5 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
         "processed": processed,
         "completed_first_time": completed_first_time,
         "dropped_inactive": dropped_inactive,
+        "rejected_wallets": rejected_wallets,
     }

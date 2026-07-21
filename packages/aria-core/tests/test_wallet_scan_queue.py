@@ -332,7 +332,7 @@ async def test_cycle_monitoring_refresh_updates_leaderboard(monkeypatch):
 
     card = _FakeCard(
         address=A, tokens_scanned_cumulative=200, tokens_found=200,
-        full_coverage=True, tokens_analyzed=0, composite_percentile=22.0,
+        full_coverage=True, tokens_analyzed=0, composite_percentile=45.0,
     )
 
     async def _fake_score_wallets(addresses, **kwargs):
@@ -344,14 +344,14 @@ async def test_cycle_monitoring_refresh_updates_leaderboard(monkeypatch):
 
     async def _fake_update_leaderboard(wallet, percentile):
         calls.append((wallet, percentile))
-        return "evicted_low_score"
+        return "updated"
 
     monkeypatch.setattr(
         "aria_core.services.smart_money_leaderboard.update_leaderboard", _fake_update_leaderboard,
     )
 
     await wsq.run_wallet_scan_queue_cycle()
-    assert calls == [(A, 22.0)]
+    assert calls == [(A, 45.0)]
 
 
 @pytest.mark.asyncio
@@ -378,6 +378,122 @@ async def test_cycle_leaderboard_update_failure_never_crashes_the_cycle(monkeypa
 
     result = await wsq.run_wallet_scan_queue_cycle()
     assert result["completed_first_time"] == [A]  # le cycle a bien terminé normalement
+
+
+@pytest.mark.asyncio
+async def test_cycle_first_completion_underperformer_removed_entirely_not_monitored(monkeypatch):
+    """21/07, demande opérateur explicite : un wallet confirmé mauvais dès sa
+    1ère couverture complète n'entre JAMAIS en surveillance permanente -- il
+    est retiré de la file entièrement et rejeté pour toujours."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200,
+        full_coverage=True, composite_percentile=12.0,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    reject_calls = []
+
+    async def _fake_mark_rejected(wallet, percentile, reason):
+        reject_calls.append((wallet, percentile, reason))
+
+    async def _fake_remove_and_archive(wallet, reason):
+        return "removed"
+
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.mark_rejected", _fake_mark_rejected,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.remove_and_archive", _fake_remove_and_archive,
+    )
+
+    notified = []
+
+    async def _notifier(text):
+        notified.append(text)
+
+    result = await wsq.run_wallet_scan_queue_cycle(notifier=_notifier)
+    assert result["completed_first_time"] == []  # jamais entré en surveillance
+    assert result["rejected_wallets"] == [A]
+    assert await wsq.queue_size() == 0  # retiré ENTIÈREMENT, pas juste du classement
+    assert len(reject_calls) == 1
+    assert reject_calls[0][0] == A
+    assert reject_calls[0][1] == 12.0
+    assert "sous-performant" in notified[0]
+
+
+@pytest.mark.asyncio
+async def test_cycle_monitoring_refresh_underperformer_removed_entirely(monkeypatch):
+    """21/07 -- un wallet déjà en surveillance qui se dégrade sous le seuil
+    est lui aussi retiré ENTIÈREMENT de la file, pas seulement du classement."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+    past = datetime.now(timezone.utc) - timedelta(days=10)
+    await _force_monitoring_state(A, next_check_at=past)
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200,
+        full_coverage=True, tokens_analyzed=0, composite_percentile=18.0,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    reject_calls = []
+
+    async def _fake_mark_rejected(wallet, percentile, reason):
+        reject_calls.append((wallet, percentile, reason))
+
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.mark_rejected", _fake_mark_rejected,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.remove_and_archive",
+        lambda wallet, reason: _immediate("removed"),
+    )
+
+    result = await wsq.run_wallet_scan_queue_cycle()
+    assert result["rejected_wallets"] == [A]
+    assert await wsq.queue_size() == 0
+    assert len(reject_calls) == 1
+
+
+async def _immediate(value):
+    return value
+
+
+@pytest.mark.asyncio
+async def test_cycle_underperformer_with_none_percentile_stays_in_monitoring(monkeypatch):
+    """Jamais rejeté sur un percentile inconnu (``None``) -- seulement un
+    percentile réellement MESURÉ et confirmé mauvais."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200,
+        full_coverage=True, composite_percentile=None,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    result = await wsq.run_wallet_scan_queue_cycle()
+    assert result["rejected_wallets"] == []
+    assert result["completed_first_time"] == [A]
+    assert await wsq.queue_size() == 1  # toujours en file, bascule en surveillance normale
 
 
 @pytest.mark.asyncio
@@ -469,6 +585,71 @@ async def test_cycle_monitoring_inactive_over_90_days_is_dropped(monkeypatch):
     assert len(notified) == 1
     assert "inactif" in notified[0]
     assert await wsq.queue_size() == 0
+
+
+@pytest.mark.asyncio
+async def test_cycle_dropping_inactive_wallet_also_removes_it_from_leaderboard(monkeypatch):
+    """21/07 -- trou corrigé : un wallet retiré pour inactivité ne doit jamais
+    garder sa dernière note figée indéfiniment dans le classement smart-money."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+    past = datetime.now(timezone.utc) - timedelta(days=10)
+    await _force_monitoring_state(A, next_check_at=past)
+
+    stale_activity = datetime.now(timezone.utc) - timedelta(days=95)
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200, full_coverage=True,
+        tokens_analyzed=0, last_activity_at=stale_activity,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    calls = []
+
+    async def _fake_remove(wallet, reason):
+        calls.append((wallet, reason))
+        return "removed"
+
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.remove_and_archive", _fake_remove,
+    )
+
+    await wsq.run_wallet_scan_queue_cycle()
+    assert len(calls) == 1
+    assert calls[0][0] == A
+    assert "inactif" in calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_cycle_leaderboard_removal_failure_never_crashes_the_cycle(monkeypatch):
+    """Best-effort (21/07), même doctrine que la mise à jour du classement."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+    past = datetime.now(timezone.utc) - timedelta(days=10)
+    await _force_monitoring_state(A, next_check_at=past)
+
+    stale_activity = datetime.now(timezone.utc) - timedelta(days=95)
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200, full_coverage=True,
+        tokens_analyzed=0, last_activity_at=stale_activity,
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    async def _raise(*a, **k):
+        raise RuntimeError("panne d'écriture")
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+    monkeypatch.setattr("aria_core.services.smart_money_leaderboard.remove_and_archive", _raise)
+
+    result = await wsq.run_wallet_scan_queue_cycle()
+    assert result["dropped_inactive"] == [A]  # le cycle a bien terminé normalement
 
 
 @pytest.mark.asyncio

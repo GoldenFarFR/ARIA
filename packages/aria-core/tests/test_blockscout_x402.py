@@ -131,3 +131,115 @@ async def test_get_token_holders_missing_items_returns_empty(monkeypatch):
     monkeypatch.setattr("aria_core.x402_executor.fetch_paid_resource", fake_fetch)
 
     assert await blockscout_x402.get_token_holders_x402("0xWETH") == []
+
+
+# ── get_token_holders_x402_paginated (21/07) -- cursor next_page_params ─────
+
+def _page(n_holders: int, *, next_page: dict | None = None) -> bytes:
+    import json
+
+    items = [
+        {
+            "address": {
+                "hash": f"0xHolder{i}", "name": None, "is_contract": False,
+                "is_verified": False, "is_scam": False, "reputation": None, "metadata": {},
+            },
+            "value": str(1000 - i),
+        }
+        for i in range(n_holders)
+    ]
+    body = {"items": items}
+    if next_page:
+        body["next_page_params"] = next_page
+    return json.dumps(body).encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_paginated_accumulates_across_pages_until_target_reached(monkeypatch):
+    calls = []
+
+    async def fake_fetch(url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            return _FakeResult(status="ok", body=_page(50, next_page={"value": "1", "address_hash": "0xNext", "items_count": 50}))
+        return _FakeResult(status="ok", body=_page(30))  # dernière page, pas de next_page_params
+
+    monkeypatch.setattr("aria_core.x402_executor.fetch_paid_resource", fake_fetch)
+
+    holders = await blockscout_x402.get_token_holders_x402_paginated("0xWETH", target_count=70)
+    assert len(holders) == 70  # tronqué exactement au target, pas 80
+    assert len(calls) == 2
+    assert "value=1" in calls[1] and "address_hash=0xNext" in calls[1]
+
+
+@pytest.mark.asyncio
+async def test_paginated_stops_when_no_next_page(monkeypatch):
+    async def fake_fetch(url, **kwargs):
+        return _FakeResult(status="ok", body=_page(20))  # jamais de next_page_params
+
+    monkeypatch.setattr("aria_core.x402_executor.fetch_paid_resource", fake_fetch)
+
+    holders = await blockscout_x402.get_token_holders_x402_paginated("0xWETH", target_count=500)
+    assert len(holders) == 20  # une seule page réellement disponible
+
+
+@pytest.mark.asyncio
+async def test_paginated_returns_partial_result_on_page_failure(monkeypatch):
+    calls = []
+
+    async def fake_fetch(url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            return _FakeResult(status="ok", body=_page(50, next_page={"value": "1", "address_hash": "0xNext", "items_count": 50}))
+        return _FakeResult(status="blocked", reason="plafond hebdomadaire x402 dépassé")
+
+    monkeypatch.setattr("aria_core.x402_executor.fetch_paid_resource", fake_fetch)
+
+    holders = await blockscout_x402.get_token_holders_x402_paginated("0xWETH", target_count=200)
+    assert len(holders) == 50  # la 1ère page reste acquise, jamais perdue
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_paginated_respects_max_pages_cap(monkeypatch):
+    calls = []
+
+    async def fake_fetch(url, **kwargs):
+        calls.append(url)
+        return _FakeResult(status="ok", body=_page(50, next_page={"value": str(len(calls)), "address_hash": "0xNext", "items_count": 50}))
+
+    monkeypatch.setattr("aria_core.x402_executor.fetch_paid_resource", fake_fetch)
+
+    holders = await blockscout_x402.get_token_holders_x402_paginated("0xWETH", target_count=10_000)
+    assert len(calls) == blockscout_x402._MAX_PAGES_PER_EXTRACTION
+    assert len(holders) == blockscout_x402._MAX_PAGES_PER_EXTRACTION * 50
+
+
+@pytest.mark.asyncio
+async def test_paginated_empty_contract_no_call(monkeypatch):
+    async def _fail_if_called(*a, **k):
+        raise AssertionError("ne doit jamais être appelé, contrat vide")
+
+    monkeypatch.setattr("aria_core.x402_executor.fetch_paid_resource", _fail_if_called)
+
+    assert await blockscout_x402.get_token_holders_x402_paginated("", target_count=100) == []
+
+
+@pytest.mark.asyncio
+async def test_paginated_zero_target_no_call(monkeypatch):
+    async def _fail_if_called(*a, **k):
+        raise AssertionError("ne doit jamais être appelé, target_count<=0")
+
+    monkeypatch.setattr("aria_core.x402_executor.fetch_paid_resource", _fail_if_called)
+
+    assert await blockscout_x402.get_token_holders_x402_paginated("0xWETH", target_count=0) == []
+
+
+@pytest.mark.asyncio
+async def test_paginated_exception_never_raises(monkeypatch):
+    async def _raise(*a, **k):
+        raise RuntimeError("réseau down")
+
+    monkeypatch.setattr("aria_core.x402_executor.fetch_paid_resource", _raise)
+
+    assert await blockscout_x402.get_token_holders_x402_paginated("0xWETH", target_count=100) == []

@@ -18,14 +18,23 @@ plusieurs appels réels), très au-dessus du défaut 12s de ``fetch_paid_resourc
 -- ``_HOLDERS_TIMEOUT_S`` ci-dessous choisi avec marge généreuse au-dessus du pire
 cas observé, jamais le défaut implicite.
 
+Pagination (21/07) : chaque page renvoie ``next_page_params`` (cursor -- ``value``/
+``address_hash``/``items_count``), vérifié en conditions réelles sur l'endpoint
+GRATUIT (même schéma, zéro coût de vérification) avant d'y coder dessus --
+``get_token_holders_x402_paginated`` l'utilise pour aller au-delà des 50 premiers
+holders (page 1), un paiement PAR PAGE.
+
 Chaque appel passe par ``x402_executor.fetch_paid_resource`` (plafond hebdo PARTAGÉ
 ``x402_budget.py``, 5$/semaine, coupe-circuit ``/stop``, wallet CDP dédié) -- même
 dôme que ``services/twitsh.py``/``services/cybercentry.py``. Aucun plafond dédié
-supplémentaire ici : le plafond partagé, déjà fail-closed, borne le pire cas."""
+supplémentaire ici : le plafond partagé, déjà fail-closed, borne le pire cas (une
+extraction paginée qui dépasse le budget s'arrête net, retourne ce qui a déjà été
+payé, jamais une exception)."""
 from __future__ import annotations
 
 import json
 import logging
+from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
@@ -42,16 +51,19 @@ _CHAIN_IDS: dict[str, str] = {"base": "8453"}
 _HOLDERS_TIMEOUT_S = 75.0
 
 
-def _parse_holders(body: bytes) -> list[dict]:
-    """Parse défensif -- liste vide sur tout corps illisible/inattendu, jamais une
-    exception qui remonte (même dôme que le reste des clients externes)."""
+def _parse_holders_page(body: bytes) -> tuple[list[dict], dict | None]:
+    """Parse défensif -- ``([], None)`` sur tout corps illisible/inattendu,
+    jamais une exception qui remonte (même dôme que le reste des clients
+    externes). Retourne aussi ``next_page_params`` (cursor brut, tel que
+    Blockscout le renvoie -- à repasser en query string pour la page
+    suivante), ``None`` si c'est la dernière page."""
     try:
         raw = json.loads(body.decode("utf-8"))
     except Exception:  # noqa: BLE001
-        return []
+        return [], None
     items = raw.get("items") if isinstance(raw, dict) else None
     if not isinstance(items, list):
-        return []
+        return [], None
     holders: list[dict] = []
     for item in items:
         if not isinstance(item, dict):
@@ -72,6 +84,13 @@ def _parse_holders(body: bytes) -> list[dict]:
             "tags": tags,
             "value": item.get("value"),
         })
+    next_page = raw.get("next_page_params") if isinstance(raw, dict) else None
+    return holders, (next_page if isinstance(next_page, dict) and next_page else None)
+
+
+def _parse_holders(body: bytes) -> list[dict]:
+    """Compat -- page unique, cf. ``get_token_holders_x402``."""
+    holders, _next_page = _parse_holders_page(body)
     return holders
 
 
@@ -110,3 +129,69 @@ async def get_token_holders_x402(
     if result.status != "ok" or not result.body:
         return []
     return _parse_holders(result.body)
+
+
+# Garde-fou anti-boucle-infinie sur la pagination -- indépendant de
+# ``target_count`` (un token avec des millions de holders ne doit jamais
+# déclencher des dizaines de paiements sur un seul appel imprévu).
+_MAX_PAGES_PER_EXTRACTION = 10
+
+
+async def get_token_holders_x402_paginated(
+    contract: str, *, chain: str = "base", target_count: int = 50, token_symbol: str = "",
+) -> list[dict]:
+    """Comme ``get_token_holders_x402`` mais va au-delà de la première page
+    (50 holders) via le cursor ``next_page_params`` -- UN PAIEMENT PAR PAGE
+    (0,002$ chacune). S'arrête dès que ``target_count`` est atteint, qu'il n'y
+    a plus de page suivante, ou qu'une page échoue (budget épuisé, /stop
+    actif, panne réseau) -- retourne alors ce qui a déjà été payé et obtenu,
+    jamais une exception, jamais de perte du travail déjà accompli.
+
+    Plafonné à ``_MAX_PAGES_PER_EXTRACTION`` pages quel que soit
+    ``target_count`` -- protection anti-boucle-infinie, indépendante du
+    budget hebdomadaire partagé (``x402_budget.py``, déjà fail-closed de son
+    côté)."""
+    addr = (contract or "").strip()
+    chain_id = _CHAIN_IDS.get(chain)
+    if not addr or not chain_id or target_count <= 0:
+        return []
+
+    from aria_core import x402_executor
+    from aria_core.agent_wallet_cdp_adapter import usdc_balance_usd
+    from aria_core.x402_cdp_signer import build_x402_payment_header
+
+    all_holders: list[dict] = []
+    next_page_params: dict | None = None
+    pages_fetched = 0
+
+    while len(all_holders) < target_count and pages_fetched < _MAX_PAGES_PER_EXTRACTION:
+        url = _HOLDERS_URL.format(chain_id=chain_id, contract=addr)
+        if next_page_params:
+            url = f"{url}?{urlencode(next_page_params)}"
+        try:
+            result = await x402_executor.fetch_paid_resource(
+                url,
+                resource="token-holders",
+                provider="blockscout",
+                balance_fn=usdc_balance_usd,
+                pay_fn=build_x402_payment_header,
+                contract=addr,
+                token_symbol=token_symbol,
+                timeout=_HOLDERS_TIMEOUT_S,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info(
+                "blockscout_x402: page %s échouée pour %s (%s)", pages_fetched + 1, addr, exc,
+            )
+            break
+        if result.status != "ok" or not result.body:
+            break
+        page_holders, next_page_params = _parse_holders_page(result.body)
+        if not page_holders:
+            break
+        all_holders.extend(page_holders)
+        pages_fetched += 1
+        if next_page_params is None:
+            break
+
+    return all_holders[:target_count]

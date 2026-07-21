@@ -69,6 +69,51 @@ async def _ensure_table() -> None:
             )
             """
         )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS smart_money_rejected_wallets (
+                wallet TEXT PRIMARY KEY,
+                percentile_at_rejection REAL,
+                rejected_at TEXT NOT NULL,
+                reason TEXT NOT NULL
+            )
+            """
+        )
+        await db.commit()
+
+
+async def is_rejected(wallet: str) -> bool:
+    """Un wallet confirmé sous-performant (percentile mesuré < 30) une fois
+    est rejeté DÉFINITIVEMENT -- vérifié par ``discover_and_enqueue_candidates``
+    avant tout enfilement, pour qu'il ne réapparaisse jamais simplement parce
+    qu'il détient un NOUVEAU token découvert plus tard (21/07, demande
+    opérateur explicite)."""
+    await _ensure_table()
+    wallet = (wallet or "").strip().lower()
+    if not wallet:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute("SELECT 1 FROM smart_money_rejected_wallets WHERE wallet = ?", (wallet,))
+        ).fetchone()
+    return row is not None
+
+
+async def mark_rejected(wallet: str, percentile: float | None, reason: str) -> None:
+    """Rejet PERMANENT -- aucune fonction symétrique de dé-rejet, même doctrine
+    que ``momentum_blacklist.py`` (un contrat banni le reste ; ici, un wallet
+    confirmé mauvais le reste). Idempotent (``INSERT OR IGNORE`` -- un wallet
+    déjà rejeté n'est jamais réécrit)."""
+    await _ensure_table()
+    wallet = (wallet or "").strip().lower()
+    if not wallet:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO smart_money_rejected_wallets "
+            "(wallet, percentile_at_rejection, rejected_at, reason) VALUES (?, ?, ?, ?)",
+            (wallet, percentile, datetime.now(timezone.utc).isoformat(), reason),
+        )
         await db.commit()
 
 
@@ -145,6 +190,32 @@ async def update_leaderboard(wallet: str, composite_percentile: float | None) ->
         return action
 
 
+async def remove_and_archive(wallet: str, reason: str) -> str:
+    """Retrait EXPLICITE, indépendant du percentile (contrairement à
+    ``update_leaderboard``) -- réponse au trou trouvé le 21/07 : un wallet
+    retiré de ``wallet_scan_queue`` pour inactivité (90j+ sans activité
+    on-chain réelle) gardait sa dernière note pour toujours dans le
+    classement, jamais signalé comme "plus suivi". Retourne ``removed`` ou
+    ``not_present`` (jamais une erreur si le wallet n'était pas dans le
+    classement -- rien à faire de plus)."""
+    await _ensure_table()
+    wallet = (wallet or "").strip().lower()
+    if not wallet:
+        return "not_present"
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT composite_percentile FROM smart_money_leaderboard WHERE wallet = ?", (wallet,)
+            )
+        ).fetchone()
+        if not row:
+            return "not_present"
+        await db.execute("DELETE FROM smart_money_leaderboard WHERE wallet = ?", (wallet,))
+        await _archive(db, wallet, row[0], reason)
+        await db.commit()
+    return "removed"
+
+
 async def get_leaderboard() -> list[dict]:
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -207,6 +278,23 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
     if not candidates:
         return {"outcome": "no_candidate"}
 
-    addresses = [c["holder_address"] for c in candidates]
+    # Un wallet déjà rejeté DÉFINITIVEMENT (percentile confirmé < 30) ne doit
+    # jamais réapparaître simplement parce qu'il détient un nouveau token
+    # découvert plus tard (21/07, demande opérateur explicite).
+    addresses = []
+    already_rejected = 0
+    for c in candidates:
+        if await is_rejected(c["holder_address"]):
+            already_rejected += 1
+            continue
+        addresses.append(c["holder_address"])
+    if not addresses:
+        return {"outcome": "no_candidate", "already_rejected": already_rejected}
+
     added = await enqueue_wallets(addresses)
-    return {"outcome": "ok", "candidates_found": len(candidates), "added_to_queue": len(added)}
+    return {
+        "outcome": "ok",
+        "candidates_found": len(candidates),
+        "already_rejected": already_rejected,
+        "added_to_queue": len(added),
+    }

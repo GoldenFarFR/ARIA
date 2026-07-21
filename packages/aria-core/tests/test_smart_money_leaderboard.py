@@ -125,6 +125,72 @@ async def test_empty_wallet_is_noop():
     assert await lb.update_leaderboard("   ", 80.0) == "no_percentile"
 
 
+# ── remove_and_archive (21/07, retrait explicite -- ex. inactivité) ─────────
+
+@pytest.mark.asyncio
+async def test_remove_and_archive_removes_present_wallet():
+    await lb.update_leaderboard(WALLET_A, 70.0)
+    action = await lb.remove_and_archive(WALLET_A, "wallet inactif (>90j sans activité on-chain)")
+    assert action == "removed"
+    assert await lb.get_leaderboard() == []
+    archive = await lb.get_archive()
+    assert len(archive) == 1
+    assert archive[0]["wallet"] == WALLET_A.lower()
+    assert archive[0]["percentile_at_removal"] == 70.0
+    assert archive[0]["reason"] == "wallet inactif (>90j sans activité on-chain)"
+
+
+@pytest.mark.asyncio
+async def test_remove_and_archive_absent_wallet_is_noop():
+    action = await lb.remove_and_archive(WALLET_A, "wallet inactif")
+    assert action == "not_present"
+    assert await lb.get_archive() == []
+
+
+@pytest.mark.asyncio
+async def test_remove_and_archive_empty_wallet_is_noop():
+    assert await lb.remove_and_archive("", "raison") == "not_present"
+
+
+# ── mark_rejected / is_rejected (21/07, rejet permanent) ────────────────────
+
+@pytest.mark.asyncio
+async def test_is_rejected_false_by_default():
+    assert await lb.is_rejected(WALLET_A) is False
+
+
+@pytest.mark.asyncio
+async def test_mark_rejected_then_is_rejected_true():
+    await lb.mark_rejected(WALLET_A, 15.0, "percentile sous 30")
+    assert await lb.is_rejected(WALLET_A) is True
+
+
+@pytest.mark.asyncio
+async def test_mark_rejected_is_permanent_no_symmetric_unreject():
+    """Même doctrine que momentum_blacklist.py -- pas de fonction de
+    dé-rejet, un wallet confirmé mauvais le reste."""
+    await lb.mark_rejected(WALLET_A, 15.0, "percentile sous 30")
+    await lb.mark_rejected(WALLET_A, 90.0, "tentative de réécriture")  # idempotent, ignoré
+    assert await lb.is_rejected(WALLET_A) is True
+
+
+@pytest.mark.asyncio
+async def test_is_rejected_case_insensitive():
+    await lb.mark_rejected(WALLET_A.upper(), 10.0, "test")
+    assert await lb.is_rejected(WALLET_A.lower()) is True
+
+
+@pytest.mark.asyncio
+async def test_is_rejected_empty_wallet_is_false():
+    assert await lb.is_rejected("") is False
+    assert await lb.is_rejected("   ") is False
+
+
+@pytest.mark.asyncio
+async def test_mark_rejected_empty_wallet_is_noop():
+    await lb.mark_rejected("", 10.0, "raison")  # ne doit jamais lever
+
+
 # ── discover_and_enqueue_candidates (triple gate + kill-switch) ─────────────
 
 def _enable_all(monkeypatch):
@@ -176,6 +242,77 @@ async def test_discovery_enqueues_real_candidates(monkeypatch, tmp_path):
     result = await lb.discover_and_enqueue_candidates()
     assert result["outcome"] == "ok"
     assert result["candidates_found"] == 1
+    assert result["already_rejected"] == 0
+    assert result["added_to_queue"] == 1
+
+    from aria_core.services import wallet_scan_queue
+
+    assert await wallet_scan_queue.queue_size() == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_never_re_enqueues_a_permanently_rejected_wallet(monkeypatch, tmp_path):
+    """21/07, demande opérateur explicite : un wallet déjà rejeté ne doit
+    jamais réapparaître simplement parce qu'il détient un NOUVEAU token
+    découvert plus tard."""
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    await lb.mark_rejected(WALLET_A, 12.0, "percentile sous 30")
+
+    for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C"):
+        await token_holder_intel.store_holders(
+            contract, "base",
+            [{
+                "holder_address": WALLET_A, "holder_name": None, "is_contract": False,
+                "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1",
+            }],
+        )
+
+    result = await lb.discover_and_enqueue_candidates()
+    assert result == {"outcome": "no_candidate", "already_rejected": 1}
+
+    from aria_core.services import wallet_scan_queue
+
+    assert await wallet_scan_queue.queue_size() == 0
+
+
+@pytest.mark.asyncio
+async def test_discovery_filters_rejected_but_still_enqueues_the_rest(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    await lb.mark_rejected(WALLET_A, 12.0, "percentile sous 30")
+
+    for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C"):
+        await token_holder_intel.store_holders(
+            contract, "base",
+            [
+                {
+                    "holder_address": WALLET_A, "holder_name": None, "is_contract": False,
+                    "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1",
+                },
+                {
+                    "holder_address": WALLET_B, "holder_name": None, "is_contract": False,
+                    "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1",
+                },
+            ],
+        )
+
+    result = await lb.discover_and_enqueue_candidates()
+    assert result["outcome"] == "ok"
+    assert result["candidates_found"] == 2
+    assert result["already_rejected"] == 1
     assert result["added_to_queue"] == 1
 
     from aria_core.services import wallet_scan_queue
