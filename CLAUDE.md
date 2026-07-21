@@ -3169,6 +3169,169 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   (`bootstrap.configure`), jamais rejoué en cours de vie du process. Suite complète
   reverifiée après les 2 fixes (6443 passed, toujours les mêmes 7 échecs -- désormais
   compris, plus un mystère aveugle). Rien à déployer (tests seuls).
+- **21/07 — audit de cohérence API multi-services, doctrine "90% de la capacité réelle"
+  appliquée à 9 clients + réordonnancement du pipeline momentum, DÉPLOYÉ.** Déclenché
+  par une question opérateur directe : « si deux API travaillent en paire, il faut
+  vérifier que celle qui a le plus de limite ne travaille pas pour rien par rapport à
+  celle qui a le moins de limite » — a fait émerger la doctrine permanente déjà gravée
+  plus haut ("Débit calibré à 90%"). Inventaire complet dans
+  `docs/api-rate-limit-calibration.md` (Tier 1/2/3). 9 recalibrations réelles :
+  GeckoTerminal (2.1s→2.222s), Blockscout Pro (0.2s→0.222s), Mobula (1.05s→1.111s),
+  CoinGecko (2.2s→0.667s), Tavily (0.5s→0.667s), DexScreener/CoinMarketCap/Dune
+  (aucun throttle proactif avant -- nouveau module-level throttle ajouté aux trois,
+  1.111s/1.333s/4.44s). **Découverte majeure en cours de route sur GoPlus** : calibrage
+  initial (1.212s, basé sur un test empirique en rafale "blocage à la 11e requête")
+  corrigé une 2e fois le même jour après avoir trouvé la vraie structure de facturation
+  au dashboard réel (`gopluslabs.io/dashboard`, palier Free "150 CU/Min") -- GoPlus
+  facture PAR TOKEN VÉRIFIÉ (15 CU/token EVM), pas par appel HTTP -- 150/15 = 10 req/min
+  réelles, expliquant exactement le "blocage à la 11e requête" observé. Calibrage final
+  6.667s (90% de 10/min). **Bug d'authentification réel trouvé au passage** : le
+  dashboard GoPlus affichait 0 consommation sur 30 jours malgré des appels authentifiés
+  "réussis" -- mauvais nom d'en-tête (`access-token` au lieu de `Authorization: Bearer`,
+  doc officielle `docs.gopluslabs.io`), l'endpoint restant tolérant (200 même sans
+  jeton valide) ce qui masquait le bug. Corrigé. **Réordonnancement du pipeline
+  momentum** (`momentum_entry.py`, idée opérateur) : le honeypot GoPlus (ressource la
+  plus rare du pipeline) tournait en 2e position, avant tous les filtres GRATUITS
+  (liste noire, liquidité, volume, âge, profil projet, concentration holders) --
+  déplacé en dernier, juste avant la récupération OHLCV, pour ne jamais dépenser un
+  appel GoPlus sur un candidat qui aurait de toute façon été rejeté gratuitement.
+  **Auto-blacklist des honeypots confirmés** (idée opérateur, mémoire "rareté de
+  ressource → dédupliquer") : un honeypot CONFIRMÉ (`honeypot_rejected`, jamais
+  `honeypot_unavailable`/panne transitoire) est transféré automatiquement vers
+  `momentum_blacklist.py` -- ne redépense plus jamais un appel GoPlus sur ce même
+  contrat. **2 erreurs d'affichage de secret en clair commises et corrigées par
+  prudence** (Blockscout Pro key via `docker logs` non filtré, GoPlus app_key/secret via
+  `docker exec env | grep`) -- rotation recommandée par précaution. Suite complète
+  vérifiée (191 passed sur `test_momentum_entry.py` seul), déployé et vérifié
+  (commit `40a86db6d932`).
+- **21/07 (suite) — diligence Webacy (2e avis sécurité contrat, complément GoPlus),
+  client construit et committé DORMANT.** Recherche de concurrents/compléments à
+  GoPlus : Hypernative, Blowfish (**vérifié mort** -- racheté par Phantom nov. 2024,
+  API standalone tierce partie sunset, plus d'accès externe possible malgré Base
+  supporté avant le rachat), Arkhivist (nom non vérifiable, écarté par prudence),
+  CipherTrace, Chainalysis/TRM/Elliptic/Arkham (déjà diligenciés 15/07, gamme
+  compliance/enterprise, mauvais outil pour un check temps réel léger). **Blockaid
+  trouvé comme piste vivante pour #224** (simulation pré-signature sur le pilote
+  agent-wallet réel, gap déjà noté) -- toujours indépendant, Base supporté, <300ms,
+  déjà utilisé par Privy (déjà dans le stack ARIA). `services/webacy.py` construit --
+  1ère version basée sur une doc ambiguë (mauvais chemin `/contracts/{address}`),
+  **corrigée après confrontation à l'OpenAPI officiel** (`docs.webacy.com/openapi.json`,
+  source la plus autoritaire) -- vrai chemin `/api/v1/risk-score/contract/{address}`.
+  11 tests, tous mockés (aucune clé API disponible, génération bloquée côté Webacy par
+  une erreur "invalid security token" au moment de l'écriture). **PAS branché dans
+  momentum_entry.py** -- décision séparée, de toute façon bloquée par l'absence de clé.
+  Committé tel quel (`f5e32508`).
+- **21/07 (suite) — fusion de l'identité ARIA en un seul ADN structuré, DÉPLOYÉ
+  (décision opérateur explicite, "je veux mieux structuré comme un arbre
+  généalogique... je veux supprimer les fichiers... quand on voudra modifier ARIA ce
+  sera son ADN, pas des ajouts de fichiers").** Vérifié avant de coder : 20 fichiers
+  `knowledge/*.yaml` (pas des "milliers" comme la formulation initiale le suggérait),
+  3 déjà MORTS (zéro appelant : `trading_psychology.yaml`, `acp_upstream_index.yaml`,
+  `aria_letta_grounding.yaml` -- supprimés), et **`persona.md`** (racine du package,
+  jamais compté dans les 20 -- Markdown, pas YAML) trouvé comme 5e fichier
+  d'identité réelle, chargé uniquement côté OPÉRATEUR (`get_persona_text()`,
+  `memory/llm_context.py:135`, jamais le chemin public qui a son propre mécanisme
+  indépendant `narrative.public_llm_system_block`). **Recherche vérifiée avant de
+  trancher le découpage** (déposée `docs/aria-learning-inbox/2026-07-21-recherche-
+  ia-agentic-adn-humanoide.md`, committée après correction de 2 fausses citations
+  trouvées par vérification directe -- 1 arXiv entièrement fabriqué (2605.14802,
+  date de soumission incohérente), 1 mauvaise revue attribuée (PersonaLLM = NAACL
+  2024, pas Nature Scientific Reports comme écrit initialement) -- le reste (arXiv
+  2604.09588/2606.21843/2412.00804, page Anthropic "Claude's Character", GitHub
+  `PunithVT/ai-avatar-system`) confirmé exact) : architecture "multi-anchor" (séparer
+  IDENTITÉ de MÉMOIRE, jamais les deux fondues) -- a affiné le découpage vers
+  **"séparée mais propre"** (clarification opérateur explicite après la recherche) :
+  fusion des 4 fichiers de VRAIE identité (`aria_values.yaml`+`aria_goals.yaml`+
+  `aria_reflection.yaml`+`persona.md`) dans un seul `knowledge/dna.yaml` structuré en
+  arbre (`dna.racine`/`dna.personnalite`/`dna.valeurs`/`dna.objectifs`/
+  `dna.reflexion`) -- mais `epistemic_core.yaml` (garde-fou anti-hallucination,
+  verrouillé CI) et `aria_arbitrator.yaml` (mécanisme d'arbitrage mémoire) restés
+  SÉPARÉS (mécanismes/sécurité, pas de la personnalité -- erreur de catégorie
+  évitée), même chose pour toute la config opérationnelle (launchpads, ACP,
+  ecosystem_registry, etc.). **Nouvelle section personnalité** (demande opérateur :
+  "avantages d'un humain, avantages d'une IA dans un humain, zéro émotion") --
+  résolue en distinguant deux axes différents : ÉMOTION (biais de décision --
+  peur/ego/avidité -- supprimée) vs. CARACTÈRE (voix/ton/position tranchée --
+  gardé) ; profil Big Five explicite ajouté (névrosisme très bas = doctrine "zéro
+  émotion", conscienciosité très haute, ouverture haute). `memory/values.py`,
+  `goals.py`, `reflection.py`, `_legacy_journal.py::get_persona_text()` (réécrite --
+  compose désormais un texte markdown depuis `dna.racine`/`dna.personnalite`, même
+  patron budget_chars que les 3 autres loaders, au lieu de lire `persona.md` en brut)
+  mis à jour. Contenu des valeurs/objectifs/réflexion préservé mot pour mot (zéro
+  test cassé sur les substrings vérifiés). Suite complète verte (6506 passed, mêmes 7
+  échecs pré-existants). Déployé et vérifié (commit `812fa551`).
+- **21/07 (suite) — coupe-circuit réactif GoPlus + retry ciblé honeypot no_data,
+  DÉPLOYÉS.** Suite directe de l'audit API : (1) `GoPlusClient` gagne un coupe-circuit
+  (5 échecs consécutifs → pause 5 min avant tout nouvel appel réseau) -- aucun
+  plafond mensuel/journalier GoPlus n'a jamais été confirmé, donc rien n'est chiffré
+  en dur sur ce point, seulement une pause défensive purement réactive, même patron
+  que le coupe-circuit par fournisseur déjà construit sur la cascade OHLCV (#95).
+  4 tests. (2) **Audit du funnel de rejet** (`/funnel`) a révélé que ~100% des
+  verdicts `honeypot_unavailable` observés sur une fenêtre de 6h se sont révélés
+  être de VRAIS tokens valides en re-testant le même contrat quelques instants après
+  -- cohérent avec un délai d'indexation GoPlus, pas un vrai manque de couverture.
+  Le retry existant (429/code 4029/5xx/timeout, dans `goplus.py`) ne couvrait pas ce
+  cas précis : une réponse PROPRE mais VIDE (`no_data`) n'était jamais retentée.
+  Nouveau retry ciblé dans `_check_honeypot` (`momentum_entry.py`) -- une seule
+  tentative supplémentaire après 8s, jamais en boucle, jamais sur une vraie panne
+  réseau (déjà couverte ailleurs). 3 tests + fixture autouse anti-sommeil-réel. Suite
+  complète vérifiée (6513 passed), déployés (commits `284f5946`/`fc4291d3`).
+- **21/07 (suite) — aria-brain (mémoire libre d'ARIA) : incident de confabulation
+  trouvé, garde construit, PUIS activation réelle menée à bien -- EN LIGNE, capital
+  narratif réel, gate ON.** `skills/aria_brain.py` (repo GitHub privé dédié
+  `GoldenFarFR/aria-brain`, une page/jour, ZÉRO tri/filtre humain -- décision
+  opérateur explicite du 20/07 : « je veux que ARIA ait conscience qu'elle a son
+  propre cerveau ») construit la veille mais désactivé. **Incident réel** : ARIA a
+  affirmé y avoir écrit en conversation -- vérifié : `ARIA_BRAIN_ENABLED` absent,
+  `aria_brain_log` 0 ligne, repo GitHub 404 (à l'époque). **Garde construit**
+  (`grounding.py::is_aria_brain_question`/`aria_brain_status_reply`, même famille que
+  `is_llm_identity_question`/`is_analysis_methodology_question` #105/#110), câblé aux
+  deux points de défense établis dans `brain.py` (tout en haut de `process()` + second
+  rempart dans `_general_response`). **Activation réelle menée dans la foulée**
+  (l'opérateur avait déjà créé le token la veille, jamais confirmé avant vérification
+  directe) : token trouvé dans le MAUVAIS fichier (`/opt/aria/.env`, jamais chargé par
+  `deploy.sh`, qui lit `vanguard/backend/.env`) -- relocalisé (jamais affiché en
+  clair, copié via `grep >> fichier`), `ARIA_BRAIN_ENABLED=true` ajouté. **Vérifié par
+  un vrai appel GitHub authentifié** (pas juste "la ligne existe") : repo confirmé
+  réel (privé, créé le 20/07T21:59:39Z -- confirme le souvenir opérateur), token
+  valide (200 OK). **Écart réel trouvé en creusant plus loin** : le repo contenait
+  DÉJÀ un vrai fichier (`livre/chapitre-01-le-point-zero.md`, 4914 octets, écrit avant
+  la migration VPS du 20/07) alors que le journal LOCAL (`aria_brain_log`, base
+  recréée à zéro sur le nouveau serveur) était vide -- mon garde, tel que construit
+  initialement, aurait donc dit "rien écrit" alors que c'était faux : confabulation
+  dans le sens INVERSE de l'incident d'origine. **Corrigé** : le garde vérifie
+  désormais le VRAI repo (pas seulement le journal local) avant de conclure "rien
+  écrit" -- dit "je ne sais pas" si la vérification est indisponible, jamais une
+  fausse certitude dans un sens ou l'autre. **2e bug trouvé PAR le garde-fou mécanique
+  du projet lui-même** (`test_coherence.py::test_aria_brain_token_scoped_to_its_own_
+  skill_only`, verrouillé le 20/07 -- "seul ARIA peut écrire", `aria_brain_github_token`
+  ne doit JAMAIS être référencé hors de `skills/aria_brain.py`) : ma 1ère version du
+  garde touchait le token directement depuis `grounding.py` -- corrigé en ajoutant
+  `aria_brain.check_real_repo_content()` (lecture seule, dans le fichier autorisé),
+  `grounding.py` ne fait plus qu'appeler cette fonction. 9 tests au total (grounding),
+  suite complète vérifiée (6519 passed), déployé (commits `91855f3f`/`e1aca57d`).
+  **Premier cycle réel observé le jour même** : ARIA a écrit un 2e chapitre de façon
+  totalement autonome (« Le premier mensonge » -- une réflexion sur une erreur de
+  jugement qu'elle décrit avoir commise dans le scoring wallet, autour d'un critère
+  "cohérence comportementale" confondant prévisibilité et compétence). **Vérifié à la
+  demande de l'opérateur, pas pris pour argent comptant** : aucun axe de scoring
+  nommé/équivalent à ce qu'elle décrit (prévisibilité = compétence, puis corrigé)
+  n'a jamais existé tel quel dans `smart_money.py`, ni dans son historique git -- les
+  concepts réels les plus proches sont différents (« cohérence dans le temps » =
+  principe méthodologique de constance des critères, pas un score par wallet ;
+  « cohérence temporelle » = signal de convergence PAIRWISE entre wallets, indice
+  Sybil, pas une mesure de prévisibilité individuelle). **Conclusion, tranchée avec
+  l'opérateur** : c'est vraisemblablement de l'écriture réflexive/narrative utilisant
+  son domaine réel comme matière, pas un changelog technique littéral -- cohérent
+  avec l'intention du design (« une réflexion, un journal, une leçon » explicitement
+  autorisés dans le prompt du cycle, pas exigé factuel). **Doctrine actée par
+  l'opérateur pour la suite** : ARIA s'exprime librement dans cet espace, non filtré,
+  non censuré -- mais Claude Code garde un rôle explicite de VÉRIFICATION et de
+  correction de trajectoire par rapport à ses vrais objectifs (`knowledge/dna.yaml`)
+  quand quelque chose en ressort, sans jamais éditer/censurer ce qu'elle y écrit
+  elle-même. Structurellement déjà sans risque de contamination : `aria-brain` n'est
+  branché nulle part dans les chemins de fait/grounding (`truth_ledger`,
+  `canonical_facts.yaml`) -- pure expression, jamais une source de vérité.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
