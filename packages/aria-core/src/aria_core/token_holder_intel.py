@@ -30,6 +30,21 @@ logger = logging.getLogger(__name__)
 DB_PATH = str(aria_db_path())
 
 
+def _normalize_contract(contract: str, chain: str) -> str:
+    """Même correctif que ``momentum_entry.normalize_contract_case``/
+    ``momentum_blacklist._normalize_contract`` (18/07, bug réel) : Base/Robinhood
+    (hex EVM) tolèrent le lowercase, Solana (base58) non -- la casse y fait
+    partie de la valeur. Dupliqué ici plutôt qu'importé (module de stockage
+    générique, pas de dépendance vers un module momentum-spécifique) --
+    corrige un vrai bug trouvé le 21/07 : un même token (cbBTC) stocké une
+    fois en casse checksum et une fois en lowercase produisait DEUX lignes
+    distinctes pour le même contrat réel."""
+    contract = (contract or "").strip()
+    if (chain or "").strip().lower() != "solana":
+        contract = contract.lower()
+    return contract
+
+
 async def _ensure_table() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -62,8 +77,8 @@ async def store_holders(contract: str, chain: str, holders: list[dict]) -> int:
     if not holders:
         return 0
     await _ensure_table()
-    contract = (contract or "").strip()
     chain = (chain or "").strip().lower()
+    contract = _normalize_contract(contract, chain)
     if not contract or not chain:
         return 0
     async with aiosqlite.connect(DB_PATH) as db:
@@ -102,8 +117,8 @@ async def store_holders(contract: str, chain: str, holders: list[dict]) -> int:
 
 async def get_holders(contract: str, chain: str) -> list[dict]:
     await _ensure_table()
-    contract = (contract or "").strip()
     chain = (chain or "").strip().lower()
+    contract = _normalize_contract(contract, chain)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         rows = await (
@@ -130,8 +145,8 @@ async def last_extracted_at(contract: str, chain: str) -> str | None:
     d'extraction en masse s'appuie dessus pour ne jamais repayer deux fois le
     même token sans raison)."""
     await _ensure_table()
-    contract = (contract or "").strip()
     chain = (chain or "").strip().lower()
+    contract = _normalize_contract(contract, chain)
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
             await db.execute(

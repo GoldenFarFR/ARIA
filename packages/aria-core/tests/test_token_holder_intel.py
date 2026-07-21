@@ -59,6 +59,32 @@ async def test_get_holders_ordered_by_value_desc():
 
 
 @pytest.mark.asyncio
+async def test_store_holders_normalizes_case_no_duplicate_across_write_reads():
+    """21/07 -- bug réel trouvé en conditions réelles : cbBTC stocké une fois
+    en casse checksum, une fois en lowercase, produisait DEUX lignes distinctes
+    pour le MÊME contrat (Base/EVM, insensible à la casse par convention --
+    même correctif que momentum_entry.normalize_contract_case). Écrire puis
+    relire avec une casse différente doit toujours viser la même ligne."""
+    await intel.store_holders("0xCbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "base", _HOLDERS)
+    await intel.store_holders("0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf", "base", _HOLDERS[:1])
+
+    rows = await intel.get_holders("0xCBB7C0000AB88B473B1F5AFD9EF808440EED33BF", "base")
+    assert len(rows) == 1  # la 2e écriture a bien remplacé la 1ère, pas créé une 2e ligne
+    contracts = await intel.list_extracted_contracts("base")
+    assert len(contracts) == 1
+
+
+@pytest.mark.asyncio
+async def test_store_holders_preserves_case_on_solana():
+    """Solana (base58) est sensible à la casse -- jamais lowercasé, contrairement
+    à Base/EVM ci-dessus."""
+    mixed_case = "AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCD"
+    await intel.store_holders(mixed_case, "solana", _HOLDERS)
+    contracts = await intel.list_extracted_contracts("solana")
+    assert contracts[0]["contract"] == mixed_case
+
+
+@pytest.mark.asyncio
 async def test_store_holders_replaces_previous_snapshot():
     await intel.store_holders("0xTOKEN", "base", _HOLDERS)
     new_snapshot = [
@@ -111,7 +137,9 @@ async def test_list_extracted_contracts_reports_holder_count():
 
     rows = await intel.list_extracted_contracts("base")
     by_contract = {r["contract"]: r["holder_count"] for r in rows}
-    assert by_contract == {"0xTOKEN": 2, "0xOTHER": 1}
+    # Normalisé en lowercase (21/07, correctif casse -- même contrat EVM ne doit
+    # jamais produire deux lignes distinctes selon la casse reçue).
+    assert by_contract == {"0xtoken": 2, "0xother": 1}
 
 
 @pytest.mark.asyncio
@@ -129,7 +157,7 @@ async def test_wallet_cross_token_holdings_finds_wallet_across_tokens():
     await intel.store_holders("0xTOKEN_B", "base", _HOLDERS[:1])  # contient 0xPool seul
 
     rows = await intel.wallet_cross_token_holdings("0xPool", chain="base")
-    assert {r["contract"] for r in rows} == {"0xTOKEN_A", "0xTOKEN_B"}
+    assert {r["contract"] for r in rows} == {"0xtoken_a", "0xtoken_b"}
     assert rows[0]["tags"] == ["UniswapV3Pool", "DEX"]
 
 
