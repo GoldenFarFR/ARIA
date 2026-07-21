@@ -3380,6 +3380,93 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   sensible non nécessaire à l'usage actuel (swap/lecture), notée pour un
   resserrement futur, pas encore fait.
 
+- **21/07 — Intelligence wallet/entité propriétaire, chantier complet (extraction Blockscout
+  x402 → classement "meilleurs investisseurs"), EN LIGNE, les 4 gates ACTIVÉS en prod.**
+  Motivation initiale : réduire la dépendance à des services tiers payants (Nansen/Arkham,
+  diligenciés le 15/07, jamais achetés) en construisant l'équivalent en interne. Découverte
+  du jour : Blockscout expose un mécanisme x402 (paiement à l'appel, 0,002$) donnant accès à
+  des holders enrichis avec de vrais labels d'entité (Morpho, Uniswap, exchanges...) — bien
+  plus riche que le palier gratuit déjà utilisé. Vérifié en conditions réelles avant de
+  construire quoi que ce soit (paiement réel testé, timeout de règlement corrigé — le
+  règlement prend 28-45s, pas les 12s par défaut, sans quoi chaque appel échouait
+  silencieusement).
+  - **Pipeline de base** : `services/blockscout_x402.py` (client holders enrichis, pagination
+    via cursor `next_page_params` vérifiée en direct sur l'endpoint gratuit avant d'y coder
+    dessus) + `token_holder_intel.py` (stockage local SQLite dans `aria.db`, JAMAIS Git — un
+    dépôt sert le code, pas un jeu de données qui grossit). Normalisation de casse Base/EVM
+    ajoutée après un vrai bug trouvé (cbBTC stocké deux fois, casse différente selon le
+    moment de l'extraction).
+  - **Première extraction manuelle (147 tokens)** : deux lots — top 50 par volume 24h
+    (GeckoTerminal, `sort=h24_volume_usd_desc`, seul tri de volume réellement supporté,
+    vérifié : 400 sur toute variante 7j tentée) + top 100 supplémentaires par volume 7 jours
+    (Dune `dex.trades`, agrégé sur les deux côtés de chaque trade, dédupliqué contre le
+    1er lot). Coût réel : 0,294$. Tableau complet livré en artifact à l'opérateur.
+  - **Exploitation des données** : croisement des tokens pour repérer les wallets EOA qui
+    reviennent comme détenteur notable sur 3+ tokens (hors exchanges/burn, exclusion par
+    label) — signal de conviction/coordination, matière première pour le chantier Sybil
+    documenté comme jamais résolu depuis le 15/07 (clustering au-delà de la convergence
+    pairwise). `token_holder_intel.list_cross_token_candidates`.
+  - **Classement "meilleurs investisseurs"** (`smart_money_leaderboard.py`, nouveau) : les
+    wallets détectés rejoignent la file de scan existante (`wallet_scan_queue.py`), notés
+    avec la formule RÉELLE déjà existante (`smart_money.py::composite_percentile` — win
+    rate/PnL/Sortino/diversification en percentile contre la population, **jamais** une
+    deuxième note inventée pour la coordination, catégorie différente, vérifié avec
+    l'opérateur avant de construire). Capacité **600** (relevée depuis 50 le jour même,
+    demande opérateur), éviction si le percentile mesuré descend sous 30 — jamais un défaut
+    fixe type 50/100 tant que la population de comparaison est trop petite (doctrine
+    "indisponible plutôt qu'inventé" déjà en place partout ailleurs dans `smart_money.py`).
+  - **Deux trous de suivi trouvés et corrigés le même jour** : (1) un wallet devenu inactif
+    (90j+) gardait sa note figée pour toujours dans le classement sans jamais être signalé
+    comme "plus suivi" → `remove_and_archive` explicite ; (2) un wallet confirmé mauvais
+    continuait à être rescanné chaque semaine indéfiniment ET pouvait réapparaître en
+    détenant un nouveau token plus tard → retiré ENTIÈREMENT de la file (pas seulement du
+    classement) et **rejeté définitivement** (`smart_money_rejected_wallets`, même doctrine
+    que `momentum_blacklist.py` — aucune fonction symétrique de dé-rejet, terminologie
+    volontairement séparée : "classement"/"archivé" jamais "banni", pour ne jamais confondre
+    ce mécanisme de PERFORMANCE avec le mécanisme de SÉCURITÉ token déjà existant).
+  - **Capacité relevée à 600 → correctif structurel devenu nécessaire** : `wallet_scan_queue.
+    list_pending()` priorise désormais les nouveaux candidats en rattrapage sur les simples
+    rescans de surveillance hebdomadaire — à 600 wallets en surveillance, leur débit de
+    rescan (jusqu'à ~504/semaine à 1 wallet/20min) pouvait structurellement affamer la
+    découverte de nouveaux candidats. Toujours FIFO au sein de chaque groupe.
+  - **Coordination extraction ↔ découverte** (`token_holder_extraction_cycle.py`, nouveau
+    cycle heartbeat, 180min) : fait grossir `token_holder_intel` en continu (jusqu'à 2
+    tokens jamais encore extraits/cycle, triés par liquidité déjà connue), profondeur par
+    palier de capitalisation (500/300/200/100 holders selon mcap ≥1000M/≥500M/≥100M/sinon,
+    CoinGecko, jamais un tier supérieur inventé sur une mcap inconnue). Coordination = juste
+    partager la même table avec le cycle de découverte — aucun code de synchronisation
+    nécessaire.
+  - **Vrai bug DexScreener trouvé en discutant du classement des candidats d'extraction** :
+    le champ `marketCap`/`fdv` est bien présent dans la réponse réelle de l'API (vérifié en
+    direct), mais jamais extrait par `services/dexscreener.py::PairSnapshot` — un classement
+    par vraie market cap peut donc s'appuyer sur DexScreener (déjà utilisé, gratuit, 30
+    tokens/appel) au lieu de CoinGecko token par token (bien plus lent) — **pas encore câblé
+    ce jour**, piste ouverte pour la suite.
+  - **Plancher de liquidité momentum rebaissé le même jour** (`_MIN_LIQUIDITY_USD`, décision
+    opérateur explicite) : 100 000$ → 50 000$ (Peur : 200 000$ → 100 000$, même
+    multiplicateur x2 déjà décidé le 20/07). La décision anti-scam d'origine (19/07) reste
+    entière — seul le seuil bouge, jamais la garantie que le rejet dur s'applique. **Un
+    premier chiffre de 30 000$ avait été appliqué par erreur puis corrigé la même session**
+    — vérifié sur les deux commits successifs, aucune confusion résiduelle dans le code final.
+  - **4 gates activés et vérifiés en direct dans le conteneur réel** (`ARIA_WALLET_SCAN_
+    QUEUE_ENABLED`/`ARIA_WALLET_SCORING_ENABLED` déjà actifs depuis avant, `ARIA_SMART_
+    MONEY_LEADERBOARD_ENABLED`/`ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED` nouvellement activés)
+    — `/topwallets` (Telegram, admin-only) pour consulter le classement. **Ce n'est plus un
+    pilote dormant** : le cycle d'extraction va faire grossir la couverture toutes les 3h,
+    la découverte va y repérer des candidats, la file va les scorer, le classement va se
+    remplir — toute session qui reprend ce fil doit vérifier l'état RÉEL (`/topwallets`,
+    `token_holder_intel.list_extracted_contracts`) avant de supposer quoi que ce soit, ne
+    jamais se fier à cette note au-delà de sa date.
+  - **Reste ouvert, volontairement pas fait ce jour** : le total réel de tokens Base
+    ≥200 000$ de market cap n'a jamais été confirmé avec certitude (25 614 939 = TOTAL de
+    tous les contrats ERC-20 sur Base, vérifié via BaseScan, très majoritairement des tokens
+    auto-générés Zora "creator coins" sans valeur réelle — pas le nombre de tokens
+    qualifiés) ; le câblage du champ market cap DexScreener dans `PairSnapshot` (ci-dessus) ;
+    une éventuelle recalibration des paliers de profondeur d'extraction (actuellement
+    1000M/500M/100M) sur la base des vrais repères de distribution trouvés ce jour (médiane
+    empirique ~35M$ sur 69 tokens réels, plancher 200k$ discuté mais jamais gravé comme
+    critère de sélection codé).
+
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
 **ARIA repart à 1M$ CHAQUE semaine. Objectif : atteindre 1,1M$ (+10%), VALIDÉ chaque
