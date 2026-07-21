@@ -120,6 +120,36 @@ async def test_queue_counts_distinguishes_catching_up_from_monitoring():
 
 
 @pytest.mark.asyncio
+async def test_list_pending_prioritizes_catching_up_over_monitoring(monkeypatch):
+    """21/07 -- capacité du classement relevée à 600, la surveillance
+    hebdomadaire d'une grosse population ne doit jamais affamer la
+    découverte de nouveaux candidats. B (surveillance) est DUE DEPUIS PLUS
+    LONGTEMPS que A (rattrapage, un nouveau candidat jamais scoré), mais A
+    doit quand même sortir en premier."""
+    monkeypatch.setattr(wsq, "MAX_WALLETS_PER_CYCLE", 1)
+    now = datetime.now(timezone.utc)
+    await wsq.enqueue_wallets([A, B])
+    await _force_monitoring_state(B, next_check_at=now - timedelta(days=5))  # dû depuis longtemps
+    await wsq.mark_attempt(A, next_check_at=now - timedelta(minutes=1))  # rattrapage, dû aussi
+
+    pending = await wsq.list_pending(limit=1)
+    assert [q.wallet for q in pending] == [A]
+
+
+@pytest.mark.asyncio
+async def test_list_pending_fifo_within_the_same_group():
+    """Au sein du même groupe (deux wallets en rattrapage, ou deux wallets en
+    surveillance), le plus anciennement dû sort toujours en premier."""
+    now = datetime.now(timezone.utc)
+    await wsq.enqueue_wallets([A, B])
+    await wsq.mark_attempt(A, next_check_at=now - timedelta(minutes=1))
+    await wsq.mark_attempt(B, next_check_at=now - timedelta(minutes=10))  # plus ancien
+
+    pending = await wsq.list_pending(limit=10)
+    assert [q.wallet for q in pending] == [B, A]
+
+
+@pytest.mark.asyncio
 async def test_cycle_skipped_when_gate_off():
     await wsq.enqueue_wallets([A])
     result = await wsq.run_wallet_scan_queue_cycle()

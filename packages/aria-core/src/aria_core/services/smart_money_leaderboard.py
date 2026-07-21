@@ -1,5 +1,5 @@
 """Classement "meilleurs investisseurs" (21/07, demande opérateur explicite) --
-top 50 wallets EOA repérés par récurrence croisée (>=3 tokens détenus parmi
+top 600 wallets EOA repérés par récurrence croisée (>=3 tokens détenus parmi
 ceux déjà extraits, cf. ``token_holder_intel.list_cross_token_candidates``),
 classés par ``composite_percentile`` RÉEL (``smart_money.py``, performance de
 trading -- jamais un score de coordination/Sybil, catégorie différente, cf.
@@ -16,15 +16,23 @@ Règles (décision opérateur, 21/07, précisées après clarification) :
   un vrai nombre mesuré (jamais un défaut fixe type 50/100 le temps que la
   population de comparaison grossisse -- même doctrine "indisponible plutôt
   qu'inventé" que partout ailleurs dans ``smart_money.py``).
-- Capacité dure : 50. Au-delà, le(s) plus bas percentile(s) sont retirés et
-  archivés (motif "hors du top 50 -- capacité").
+- Capacité dure : 600 (relevée depuis 50 le 21/07). Au-delà, le(s) plus bas
+  percentile(s) sont retirés et archivés (motif "hors du top 600 --
+  capacité").
 - Éviction immédiate si ``composite_percentile < 30``, quelle que soit la
   taille actuelle du classement (motif "percentile sous 30").
 - Le classement est réévalué à CHAQUE nouveau score produit par
   ``wallet_scan_queue.run_wallet_scan_queue_cycle`` (couverture complète
   atteinte seulement -- un score partiel n'est pas plus fiable pour classer
   qu'il ne l'est pour comparer, même exclusion que ``full_coverage=False``
-  ailleurs dans ``smart_money.py``)."""
+  ailleurs dans ``smart_money.py``).
+
+À une capacité de 600, la file de scan (``wallet_scan_queue.py``) peut
+contenir presque autant de wallets en surveillance hebdomadaire que son
+propre débit hebdomadaire (1 wallet/20min ~= 504 scans/semaine) -- corrigé le
+même jour : ``list_pending()`` priorise désormais les nouveaux candidats
+(rattrapage) sur les simples rescans de surveillance, pour que la découverte
+ne soit jamais structurellement affamée."""
 from __future__ import annotations
 
 import os
@@ -36,7 +44,7 @@ from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
 
-MAX_LEADERBOARD_SIZE = 50
+MAX_LEADERBOARD_SIZE = 600
 EVICTION_PERCENTILE_THRESHOLD = 30.0
 
 
@@ -183,7 +191,7 @@ async def update_leaderboard(wallet: str, composite_percentile: float | None) ->
             overflow_wallets = {w for w, _ in overflow}
             for w, pct in overflow:
                 await db.execute("DELETE FROM smart_money_leaderboard WHERE wallet = ?", (w,))
-                await _archive(db, w, pct, "hors du top 50 (capacité)")
+                await _archive(db, w, pct, f"hors du top {MAX_LEADERBOARD_SIZE} (capacité)")
             await db.commit()
             if wallet in overflow_wallets:
                 action = "evicted_capacity"

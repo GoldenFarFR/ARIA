@@ -162,7 +162,14 @@ async def queue_counts() -> dict:
 
 async def list_pending(limit: int = MAX_WALLETS_PER_CYCLE) -> list[QueuedWallet]:
     """Les wallets DUS (rattrapage toujours dû immédiatement, surveillance due
-    chaque semaine), les plus anciennement dus d'abord (FIFO sur
+    chaque semaine). Priorité (21/07, demande opérateur -- capacité du
+    classement relevée à 600) : les nouveaux candidats en RATTRAPAGE
+    (`monitoring_since IS NULL`) passent TOUJOURS avant les simples rescans
+    de SURVEILLANCE hebdomadaire, quelle que soit leur date d'échéance
+    respective -- sinon une grosse population déjà notée en surveillance
+    (jusqu'à ~1 wallet/20min ~= 504 rescans/semaine de capacité totale)
+    pourrait structurellement affamer la découverte de nouveaux candidats.
+    Au sein de chaque groupe, les plus anciennement dus d'abord (FIFO sur
     `next_check_at`) -- jamais un ordre arbitraire."""
     await _ensure_table()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -171,7 +178,8 @@ async def list_pending(limit: int = MAX_WALLETS_PER_CYCLE) -> list[QueuedWallet]
             await db.execute(
                 "SELECT wallet, added_at, last_attempt_at, last_notified_milestone, "
                 "next_check_at, monitoring_since FROM wallet_scan_queue "
-                "WHERE next_check_at <= ? ORDER BY next_check_at ASC LIMIT ?",
+                "WHERE next_check_at <= ? "
+                "ORDER BY (monitoring_since IS NULL) DESC, next_check_at ASC LIMIT ?",
                 (now_iso, limit),
             )
         ).fetchall()

@@ -88,32 +88,34 @@ async def test_wallet_already_in_leaderboard_dropping_below_30_is_evicted_and_ar
 
 
 @pytest.mark.asyncio
-async def test_capacity_evicts_lowest_percentile_beyond_50():
-    for i in range(50):
-        await lb.update_leaderboard(f"0x{i:040d}", 50.0 + i)  # 50..99
+async def test_capacity_evicts_lowest_percentile_beyond_max():
+    n = lb.MAX_LEADERBOARD_SIZE
+    for i in range(n):
+        await lb.update_leaderboard(f"0x{i:040d}", 40.0 + i * (59.0 / n))  # spread 40..~99, strictement croissant
     rows = await lb.get_leaderboard()
-    assert len(rows) == 50
+    assert len(rows) == n
 
     action = await lb.update_leaderboard("0x" + "f" * 40, 200.0)  # nouveau plus haut que tous
     assert action == "added"
     rows = await lb.get_leaderboard()
-    assert len(rows) == 50  # toujours plafonné à 50
-    lowest_wallet = f"0x{0:040d}"  # percentile 50.0, le plus bas du lot initial
+    assert len(rows) == n  # toujours plafonné à MAX_LEADERBOARD_SIZE
+    lowest_wallet = f"0x{0:040d}"  # le plus bas percentile du lot initial
     assert not any(r["wallet"] == lowest_wallet for r in rows)
 
     archive = await lb.get_archive()
     reasons = {a["wallet"]: a["reason"] for a in archive}
-    assert reasons[lowest_wallet] == "hors du top 50 (capacité)"
+    assert reasons[lowest_wallet] == f"hors du top {n} (capacité)"
 
 
 @pytest.mark.asyncio
 async def test_capacity_eviction_can_evict_the_wallet_just_added():
-    for i in range(50):
-        await lb.update_leaderboard(f"0x{i:040d}", 50.0 + i)  # 50..99, le pire à 50.0
+    n = lb.MAX_LEADERBOARD_SIZE
+    for i in range(n):
+        await lb.update_leaderboard(f"0x{i:040d}", 40.0 + i * (59.0 / n))  # le pire à 40.0
 
     # Un score qui rejoint le classement mais reste sous tous les autres --
     # doit repartir immédiatement (évincé par sa propre capacité).
-    action = await lb.update_leaderboard("0x" + "e" * 40, 40.0)
+    action = await lb.update_leaderboard("0x" + "e" * 40, 35.0)
     assert action == "evicted_capacity"
     rows = await lb.get_leaderboard()
     assert not any(r["wallet"] == ("0x" + "e" * 40) for r in rows)

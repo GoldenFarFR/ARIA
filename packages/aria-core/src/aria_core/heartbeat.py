@@ -434,7 +434,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="smart_money_leaderboard_discovery_cycle",
         name="Decouverte de candidats pour le classement smart-money (token_holder_intel)",
-        description="Demande operateur (21/07) : repere les wallets EOA qui reviennent comme detenteur notable sur au moins 3 tokens deja extraits via Blockscout x402 (token_holder_intel.py, lecture locale pure, zero cout), exclut les labels d'infrastructure connus (exchanges/burn), enfile ces adresses dans wallet_scan_queue.py pour un scoring reel. Le classement top-50 lui-meme se construit ensuite dans wallet_scan_queue_cycle (composite_percentile reel, jamais un score de coordination). Triple gate (ARIA_SMART_MONEY_LEADERBOARD_ENABLED + ARIA_WALLET_SCAN_QUEUE_ENABLED + ARIA_WALLET_SCORING_ENABLED), tous OFF par defaut.",
+        description="Demande operateur (21/07) : repere les wallets EOA qui reviennent comme detenteur notable sur au moins 3 tokens deja extraits via Blockscout x402 (token_holder_intel.py, lecture locale pure, zero cout), exclut les labels d'infrastructure connus (exchanges/burn), enfile ces adresses dans wallet_scan_queue.py pour un scoring reel. Le classement lui-meme (capacite 600) se construit ensuite dans wallet_scan_queue_cycle (composite_percentile reel, jamais un score de coordination). Triple gate (ARIA_SMART_MONEY_LEADERBOARD_ENABLED + ARIA_WALLET_SCAN_QUEUE_ENABLED + ARIA_WALLET_SCORING_ENABLED), tous OFF par defaut.",
         interval_minutes=180,
         enabled=False,
     ),

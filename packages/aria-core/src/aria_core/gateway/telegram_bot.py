@@ -620,17 +620,21 @@ async def _handle_counterfactual(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _handle_topwallets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/topwallets -- 21/07 : classement "meilleurs investisseurs" (top 50,
-    composite_percentile réel -- jamais un score de coordination/Sybil,
-    smart_money_leaderboard.py). Admin-only, lecture seule, aucun nouvel appel
-    réseau (lit uniquement ce qui a déjà été classé par le cycle de fond)."""
+    """/topwallets -- 21/07 : classement "meilleurs investisseurs" (capacité
+    MAX_LEADERBOARD_SIZE, composite_percentile réel -- jamais un score de
+    coordination/Sybil, smart_money_leaderboard.py). Admin-only, lecture
+    seule, aucun nouvel appel réseau (lit uniquement ce qui a déjà été classé
+    par le cycle de fond)."""
     if not await _admin_check_reply(update):
         return
-    from aria_core.services.smart_money_leaderboard import get_leaderboard
+    from aria_core.services.smart_money_leaderboard import MAX_LEADERBOARD_SIZE, get_leaderboard
 
     rows = await get_leaderboard()
     if not rows:
-        await _reply(update.message, "Classement vide -- aucun wallet noté n'a encore rejoint le top 50.")
+        await _reply(
+            update.message,
+            f"Classement vide -- aucun wallet noté n'a encore rejoint le top {MAX_LEADERBOARD_SIZE}.",
+        )
         return
     lines = ["🏆 Top investisseurs (classement réel par performance, jamais un signal de coordination)"]
     for r in rows:
@@ -2113,7 +2117,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("test_spend", "Test wallet_guard (aucune dépense réelle)"),
     ("these", "Journalise une thèse (BUY/WATCH/SELL/AVOID)"),
     ("theses", "Liste des thèses encore ouvertes"),
-    ("topwallets", "Classement top 50 meilleurs investisseurs (percentile réel)"),
+    ("topwallets", "Classement des meilleurs investisseurs (percentile réel)"),
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
     ("vc", "Analyse VC complète d'un contrat"),
     ("vcresult", "Attribue un résultat réel à une prédiction VC"),
