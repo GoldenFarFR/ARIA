@@ -87,6 +87,28 @@ def _api_key() -> str | None:
     return os.environ.get("COINMARKETCAP_API_KEY", "").strip() or None
 
 
+# 21/07 -- premier throttle proactif pour ce client (il n'y en avait aucun --
+# seul un retry réactif après un 429 déjà reçu). Doctrine CLAUDE.md "Débit
+# calibré à 90%" : palier réel CONFIRMÉ EN DIRECT sur la vraie clé du VPS via
+# GET /v1/key/info (jamais deviné) -- palier Basic, rate_limit_minute=50. 90%
+# de 50/min = 45/min = 1.333s. Le tier keyless (sans clé) n'a pas de chiffre
+# séparé confirmé -- réutilise le même throttle prudent par défaut (fail-safe :
+# le keyless n'est structurellement pas plus généreux que le keyé).
+_MIN_INTERVAL = 1.333
+_last_request = 0.0
+_throttle_lock = asyncio.Lock()
+
+
+async def _throttle() -> None:
+    global _last_request
+    async with _throttle_lock:
+        now = asyncio.get_event_loop().time()
+        wait = _MIN_INTERVAL - (now - _last_request)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _last_request = asyncio.get_event_loop().time()
+
+
 async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | None]:
     """GET avec retry sur 429/5xx/timeout -- même politique que
     blockscout.py/geckoterminal.py/dexscreener.py. Bascule automatiquement sur
@@ -103,6 +125,7 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
     timeout_retried = False
 
     while True:
+        await _throttle()
         try:
             async with httpx.AsyncClient(timeout=18.0) as client:
                 response = await client.get(url, params=params, headers=headers)

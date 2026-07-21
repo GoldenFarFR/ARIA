@@ -131,7 +131,15 @@ def _tax(value: object) -> float | None:
 class GoPlusClient:
     """Client HTTP async, lecture seule, throttle modéré (API publique sans clé)."""
 
-    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 0.5) -> None:
+    # 21/07 -- la doc officielle GoPlus est contradictoire selon la page
+    # consultée (100 vs 150 call credits/min, gopluslabs.io/en/token-security-api
+    # vs gopluslabs.io/en/security-api) -- un test empirique en rafale contrôlée
+    # (20 requêtes back-to-back, adresses distinctes) fait plus autorité : bloqué
+    # dès la 11e requête (2.7s), ~11s pour récupérer -- débit soutenu réel
+    # empirique ~55/min, nettement en dessous des deux chiffres officiels.
+    # Doctrine CLAUDE.md "Débit calibré à 90%" : 90% de 55/min = 49.5/min =
+    # 1.212s. Remplace 0.5s (120/min), qui dépassait déjà le débit réel soutenu.
+    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 1.212) -> None:
         self.base_url = base_url.rstrip("/")
         self._min_interval = min_interval
         self._lock = asyncio.Lock()

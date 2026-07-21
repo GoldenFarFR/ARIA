@@ -44,7 +44,9 @@ UNAVAILABLE = "donnée Mobula indisponible"
 
 BASE_URL = "https://api.mobula.io/api"
 
-_MIN_INTERVAL = 1.05  # tier Free = 1 req/s documenté -- marge légère sous le plafond exact
+# 21/07 -- calibré à 90% de 1 req/s documenté (docs.mobula.io/pricing),
+# doctrine CLAUDE.md "Débit calibré à 90%" : 0.9 req/s = 1.111s.
+_MIN_INTERVAL = 1.111
 _last_call_at = 0.0
 _throttle_lock = asyncio.Lock()
 

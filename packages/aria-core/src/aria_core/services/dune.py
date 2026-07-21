@@ -87,6 +87,27 @@ class ExecutionResult:
     error: str | None = None
 
 
+# 21/07 -- premier throttle proactif pour ce client (il n'y en avait aucun --
+# seul un retry réactif après un 429 déjà reçu). Doctrine CLAUDE.md "Débit
+# calibré à 90%" : palier Free confirmé (docs.dune.com/api-reference/overview/
+# rate-limits) -- deux compteurs indépendants, 15/min (limite basse) et 40/min
+# (limite haute) ; la limite basse est la contrainte qui lie en premier. 90%
+# de 15/min = 13.5/min = 4.44s.
+_MIN_INTERVAL = 4.44
+_last_request = 0.0
+_throttle_lock = asyncio.Lock()
+
+
+async def _throttle() -> None:
+    global _last_request
+    async with _throttle_lock:
+        now = asyncio.get_event_loop().time()
+        wait = _MIN_INTERVAL - (now - _last_request)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _last_request = asyncio.get_event_loop().time()
+
+
 async def _request(method: str, path: str, *, json_body: dict | None = None) -> tuple[object | None, str | None]:
     """GET/POST avec retry sur 429/5xx/timeout -- même politique que les
     autres clients de ce dossier. Sans clé configurée : `available=False`
@@ -101,6 +122,7 @@ async def _request(method: str, path: str, *, json_body: dict | None = None) -> 
     timeout_retried = False
 
     while True:
+        await _throttle()
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 if method == "GET":

@@ -29,6 +29,35 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.dexscreener.com"
 WEB_BASE_URL = "https://dexscreener.com"
 
+# 21/07 -- premier throttle proactif pour ce client (il n'y en avait aucun --
+# seul un retry réactif après un 429 déjà reçu, cf. `_get_json`). Doctrine
+# CLAUDE.md "Débit calibré à 90%" : seul le chiffre "60 req/min" est confirmé
+# VERBATIM dans la doc officielle (docs.dexscreener.com/api/reference, pour les
+# endpoints token-profiles/token-boosts) -- un "300 req/min" pour les endpoints
+# pairs/tokens/search circule sur plusieurs sources indépendantes mais n'a pas
+# pu être confirmé mot pour mot malgré 3 tentatives de fetch direct de la doc.
+# Ce module partage UN SEUL point d'entrée (`_get_json`) pour tous les
+# endpoints -- calibré sur le chiffre le plus BAS confirmé (60/min) plutôt que
+# de risquer un dépassement sur les endpoints token-profiles/token-boosts avec
+# un throttle pensé pour le "300/min" non confirmé. 90% de 60/min = 54/min =
+# 1.111s. Un test empirique (25 requêtes back-to-back sur token-pairs, aucune
+# erreur en 1.1s) n'a pas contredit cette prudence -- juste montré que le vrai
+# plafond des endpoints pairs/tokens est probablement plus haut, sans le
+# confirmer précisément.
+_MIN_INTERVAL = 1.111
+_last_request = 0.0
+_throttle_lock = asyncio.Lock()
+
+
+async def _throttle() -> None:
+    global _last_request
+    async with _throttle_lock:
+        now = asyncio.get_event_loop().time()
+        wait = _MIN_INTERVAL - (now - _last_request)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _last_request = asyncio.get_event_loop().time()
+
 _SOCIAL_LABELS = {
     "twitter": "X (Twitter)",
     "x": "X (Twitter)",
@@ -129,6 +158,7 @@ async def _get_json(url: str) -> tuple[object | None, str | None]:
     timeout_retried = False
 
     while True:
+        await _throttle()
         try:
             async with httpx.AsyncClient(timeout=18.0) as client:
                 response = await client.get(url)

@@ -207,7 +207,11 @@ class BlockscoutClient:
         if api_key and chain_id is not None:
             self.base_url = f"{PRO_API_URL}/{chain_id}/api/v2"
             self._api_key: str | None = api_key
-            default_interval = 0.2  # Pro API : 5 req/s -- throttle légèrement en dessous.
+            # 21/07 -- calibré à 90% de 5 req/s confirmé (doc officielle +
+            # header x-ratelimit-limit:5 vérifié en direct), doctrine CLAUDE.md
+            # "Débit calibré à 90%" : 4.5 req/s = 0.222s. Remplace 0.2s (100%,
+            # zéro marge).
+            default_interval = 0.222
         elif chain == "base":
             self.base_url = BASE_URL
             self._api_key = None

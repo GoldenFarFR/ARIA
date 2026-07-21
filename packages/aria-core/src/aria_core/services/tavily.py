@@ -59,7 +59,12 @@ def is_tavily_configured() -> bool:
 class TavilyClient:
     """Client HTTP async, lecture seule, throttle modéré."""
 
-    def __init__(self, *, min_interval: float = 0.5) -> None:
+    # 21/07 -- calibré à 90% de 100 req/min confirmé (palier Development,
+    # confirmé sur le dashboard réel de la clé "ARIA" -- type "dev", préfixe
+    # "tvly-dev-" -- pas le palier Production à 1000/min). Doctrine CLAUDE.md
+    # "Débit calibré à 90%" : 90/min = 0.667s. Remplace 0.5s (120/min), qui
+    # dépassait déjà le plafond Dev réel.
+    def __init__(self, *, min_interval: float = 0.667) -> None:
         self._min_interval = min_interval
         self._lock = asyncio.Lock()
         self._last_request = 0.0

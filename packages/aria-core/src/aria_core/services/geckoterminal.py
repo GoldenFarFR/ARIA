@@ -60,11 +60,10 @@ logger = logging.getLogger(__name__)
 
 UNAVAILABLE = "donnée GeckoTerminal indisponible"
 
-# Corrigé le 19/07 (incident réel, cf. docstring du module) : le vrai plafond
-# gratuit/Demo documenté pour /onchain est ~30 req/min, pas 100 -- réaligné sur
-# _MIN_INTERVAL (2.1s) par prudence, jamais revérifié en conditions réelles
-# soutenues avant de retenter un throttle plus agressif.
-_AUTHENTICATED_MIN_INTERVAL = 2.1
+# 21/07 -- calibré à 90% de la vraie limite documentée (30 req/min Demo,
+# doctrine CLAUDE.md "Débit calibré à 90%") : 27 req/min = 2.222s. Remplace le
+# 2.1s (95%, marge insuffisante) posé le 19/07 par prudence après l'incident.
+_AUTHENTICATED_MIN_INTERVAL = 2.222
 
 
 def geckoterminal_authenticated() -> bool:
@@ -107,9 +106,11 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
     "mode": "mode",
 }
 
-# Palier gratuit GeckoTerminal ~30 req/min -- même throttle que le client existant
-# côté vanguard (2.1s), valeur déjà éprouvée en production.
-_MIN_INTERVAL = 2.1
+# 21/07 -- calibré à 90% de 30 req/min (doctrine CLAUDE.md "Débit calibré à
+# 90%") : 27 req/min = 2.222s. Le client vanguard/backend partage désormais ce
+# même throttle (wait_for_shared_rate_limit), plus besoin de garder les deux
+# alignés manuellement.
+_MIN_INTERVAL = 2.222
 
 # Seuil de plausibilité réserve/volume pour `resolve_primary_pool` (correctif
 # 14/07, cf. sa docstring) -- calibré sur données réelles (requête directe

@@ -80,7 +80,13 @@ class MarketChartResult:
 class CoinGeckoClient:
     """Client HTTP async, lecture seule, throttle prudent (API publique sans clé)."""
 
-    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 2.2) -> None:
+    # 21/07 -- calibré à 90% de 100 req/min confirmé (palier Demo, clé
+    # COINGECKO_DEMO_API_KEY déjà configurée et attachée ci-dessous -- deux
+    # sources officielles indépendantes : docs.coingecko.com/docs/common-errors-
+    # rate-limit et coingecko.com/en/api/pricing). Doctrine CLAUDE.md "Débit
+    # calibré à 90%" : 90/min = 0.667s. Remplace 2.2s (27/min, 27% de la
+    # capacité réelle -- sous-utilisé depuis l'origine).
+    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 0.667) -> None:
         self.base_url = base_url.rstrip("/")
         self._min_interval = min_interval
         self._lock = asyncio.Lock()
