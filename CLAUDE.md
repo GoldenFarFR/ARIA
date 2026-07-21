@@ -3332,6 +3332,53 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
   elle-même. Structurellement déjà sans risque de contamination : `aria-brain` n'est
   branché nulle part dans les chemins de fait/grounding (`truth_ledger`,
   `canonical_facts.yaml`) -- pure expression, jamais une source de vérité.
+- **21/07 (suite) — pile de sécurité/données finalisée à 5 outils : DexScreener +
+  GeckoTerminal + Blockscout + GoPlus + Alchemy.** Diligence Blockaid poussée
+  jusqu'au bout (2e couche de sécurité pour le pilote agent-wallet réel, #224 --
+  simulation d'UNE transaction précise avant signature, distincte de GoPlus qui
+  juge le TOKEN lui-même) -- verdict : produit réel (Transaction Security +
+  Token Scanning + Address Scanning + dApp Scanning), mais **aucun tarif public,
+  aucun accès self-service** (uniquement "Contact Sales"/démo, doc technique
+  elle-même verrouillée derrière une connexion) -- écarté pour l'instant, piste
+  banquée (même sort que Hypernative, déjà noté). **Remplacé par Alchemy** :
+  vérifié self-service réel (compte gratuit, palier "Pay As You Go" dès 1$/mois),
+  méthodes `alchemy_simulateAssetChanges`/`alchemy_simulateExecution` confirmées
+  (2500 CU/appel, chiffre exact tiré de leur doc officielle), coût réel estimé
+  largement sous 1$/mois vu la fréquence d'usage du pilote. Palier gratuit seul
+  insuffisant (erreur réelle rencontrée : "JS Tracer is not enabled" -- le
+  traceur JS nécessaire à la simulation n'est débloqué qu'à partir de "Pay As
+  You Go"). Compte créé, palier pas encore basculé, client pas encore construit
+  -- prochaine étape à reprendre. **Sur Blockscout** : clarifié au passage que
+  le débit utilisé par ARIA (5 req/s) correspond à leur **palier gratuit
+  authentifié** (100K crédits/jour, sans carte bancaire) et non à un abonnement
+  payant comme supposé un temps -- les vrais paliers payants (49$/199$ par mois)
+  n'existent que pour un débit bien supérieur (15/30 req/s). Blockscout supporte
+  aussi le paiement à l'appel via x402 (Base, USDC, quelques fractions de
+  centime) sur ce même point d'accès Pro, sans clé -- vérifié par un vrai appel
+  réel (`tokens/{adresse}/holders`), confirmé fonctionnel côté Blockscout (402
+  reçu, prix réel affiché) mais bloqué côté ARIA par l'incident ci-dessous.
+- **21/07 (suite) — incident réel découvert en testant : le wallet CDP de l'agent
+  (capital réel) rejetait toute authentification (401) depuis la migration VPS
+  du 20/07 -- cause trouvée et corrigée le jour même.** Le compte Coinbase CDP
+  restreint cette clé à une IP précise (allowlist IP, fonctionnalité réelle de
+  la plateforme) -- l'ancienne IP (celle du VPS avant migration) était encore
+  seule autorisée, jamais mise à jour après la bascule vers le nouveau serveur.
+  Toute authentification échouait donc silencieusement depuis la migration --
+  confirmé en reconstituant la chronologie réelle (`x402_spend_log`/
+  `agent_wallet_movement_log`) : dernier mouvement réel confirmé le 20/07 à
+  19:38, plus rien ensuite jusqu'à la découverte de l'incident. **Corrigé** :
+  allowlist mise à jour avec l'IP réelle du VPS actuel (détail exact -- dans
+  `aria-ops`, jamais ici). **Vraies IP/adresses de ce dossier volontairement
+  PAS gravées dans ce fichier public** -- à conserver dans `aria-ops` (privé)
+  si besoin d'une trace précise. **Trouvaille annexe au passage** : deux sorties
+  du wallet classées "unexpected_outflow" par `agent_wallet_monitor.py` (20/07,
+  avant la coupure) se sont révélées correspondre exactement (même adresse,
+  mêmes montants) à des paiements x402 twit.sh légitimes déjà connus juste
+  avant -- très probablement un trou de reconnaissance du moniteur (pas un vrai
+  incident de sécurité), pas encore corrigé, à surveiller. **Permission "Export
+  private key" repérée sur la clé CDP** (en plus de Trade-View) -- capacité
+  sensible non nécessaire à l'usage actuel (swap/lecture), notée pour un
+  resserrement futur, pas encore fait.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
