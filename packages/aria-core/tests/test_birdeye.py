@@ -43,7 +43,7 @@ class _FakeResponse:
 
 
 def _page(addresses):
-    return _FakeResponse(200, {"data": {"tokens": [{"address": a} for a in addresses]}})
+    return _FakeResponse(200, {"data": {"items": [{"address": a} for a in addresses]}})
 
 
 @pytest.mark.asyncio
@@ -154,12 +154,45 @@ async def test_discover_passes_through_liquidity_and_volume_thresholds(monkeypat
 
     async def fake_get(self, url, params=None, headers=None):
         captured.update(params)
-        return _FakeResponse(200, {"data": {"tokens": []}})
+        return _FakeResponse(200, {"data": {"items": []}})
 
     monkeypatch.setattr("httpx.AsyncClient.get", fake_get)
     await birdeye.discover_base_tokens_bulk(min_liquidity_usd=75_000.0, min_volume_24h_usd=1_234.0)
     assert captured["min_liquidity"] == 75_000.0
     assert captured["min_volume_24h_usd"] == 1_234.0
+
+
+@pytest.mark.asyncio
+async def test_discover_parses_real_items_field_not_tokens(monkeypatch):
+    """22/07 -- verrou de non-régression : bug réel trouvé en conditions réelles, le
+    client cherchait "data.tokens" alors que la vraie réponse Birdeye utilise
+    "data.items" -- retournait [] silencieusement depuis le déploiement, jamais
+    détecté avant un test manuel. Ce test échoue si quelqu'un réintroduit
+    "tokens" comme SEULE clé lue."""
+    monkeypatch.setenv("BIRDEYE_API_KEY", "test-key")
+    monkeypatch.setattr(birdeye, "_MIN_INTERVAL_S", 0.0)
+
+    async def fake_get(self, url, params=None, headers=None):
+        return _FakeResponse(200, {"data": {"items": [{"address": "0xREAL"}], "has_next": False}})
+
+    monkeypatch.setattr("httpx.AsyncClient.get", fake_get)
+    result = await birdeye.discover_base_tokens_bulk()
+    assert result == ["0xREAL"]
+
+
+@pytest.mark.asyncio
+async def test_discover_falls_back_to_tokens_field_if_ever_present(monkeypatch):
+    """Repli défensif -- jamais vu dans la vraie réponse à ce jour, gardé par
+    prudence sans coût."""
+    monkeypatch.setenv("BIRDEYE_API_KEY", "test-key")
+    monkeypatch.setattr(birdeye, "_MIN_INTERVAL_S", 0.0)
+
+    async def fake_get(self, url, params=None, headers=None):
+        return _FakeResponse(200, {"data": {"tokens": [{"address": "0xFALLBACK"}]}})
+
+    monkeypatch.setattr("httpx.AsyncClient.get", fake_get)
+    result = await birdeye.discover_base_tokens_bulk()
+    assert result == ["0xFALLBACK"]
 
 
 @pytest.mark.asyncio
@@ -171,7 +204,7 @@ async def test_discover_sends_base_chain_header(monkeypatch):
 
     async def fake_get(self, url, params=None, headers=None):
         captured_headers.update(headers or {})
-        return _FakeResponse(200, {"data": {"tokens": []}})
+        return _FakeResponse(200, {"data": {"items": []}})
 
     monkeypatch.setattr("httpx.AsyncClient.get", fake_get)
     await birdeye.discover_base_tokens_bulk()

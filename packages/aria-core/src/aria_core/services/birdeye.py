@@ -114,7 +114,15 @@ async def discover_base_tokens_bulk(
             except Exception:  # noqa: BLE001 -- réponse illisible, jamais une exception qui remonte
                 break
             data = body.get("data") if isinstance(body, dict) else None
-            items = (data or {}).get("tokens") if isinstance(data, dict) else None
+            # 22/07 -- bug réel trouvé en conditions réelles : la clé est "items",
+            # PAS "tokens" (le champ "tokens" n'existe jamais dans la vraie réponse,
+            # vérifié en direct -- ce module renvoyait silencieusement [] depuis le
+            # déploiement du 21/07, jamais une exception, jamais détecté avant un
+            # test manuel). Repli sur "tokens" gardé par prudence (aucun coût,
+            # jamais vu dans la vraie réponse à ce jour).
+            items = (data or {}).get("items") if isinstance(data, dict) else None
+            if not items:
+                items = (data or {}).get("tokens") if isinstance(data, dict) else None
             if not isinstance(items, list) or not items:
                 break
             for item in items:
