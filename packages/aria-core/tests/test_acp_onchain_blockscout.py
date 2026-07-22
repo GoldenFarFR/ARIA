@@ -63,6 +63,89 @@ def test_mint_detected_adds_flag_and_degrades_score():
     assert any("mint" in f.lower() for f in ctx.risk_flags)
 
 
+@pytest.mark.parametrize("authority", ["renounced", "launchpad", "contract"])
+def test_mint_penalty_neutralized_by_safe_authority(authority):
+    """#164 (corrigé 22/07) : un mint renoncé/launchpad/contrat (timelock/multisig)
+    ne doit plus subir le malus -30 -- le crible dur (safety_screen) neutralisait déjà
+    ce cas via mint_authority, mais le score composite l'ignorait avant ce correctif."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    ctx.mint_authority = authority
+    contract_flags = ContractFlags(
+        address=ADDR,
+        is_verified=True,
+        has_mint=True,
+        has_blacklist=False,
+        has_disable_transfers=False,
+        available=True,
+        error=None,
+    )
+
+    scan._score_and_verdict(ctx, _pair(), contract_flags=contract_flags)
+
+    assert ctx.security_score == _baseline_score()
+    assert any("neutralisée" in f.lower() for f in ctx.risk_flags)
+
+
+@pytest.mark.parametrize("authority", [None, "eoa", "unknown"])
+def test_mint_penalty_still_applies_for_unsafe_or_unresolved_authority(authority):
+    """Fail-closed : une autorité EOA (dev), inconnue, ou jamais résolue conserve le
+    malus -30 -- seule une autorité VÉRIFIÉE sûre (SAFE_AUTHORITIES) le neutralise."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    ctx.mint_authority = authority
+    contract_flags = ContractFlags(
+        address=ADDR,
+        is_verified=True,
+        has_mint=True,
+        has_blacklist=False,
+        has_disable_transfers=False,
+        available=True,
+        error=None,
+    )
+
+    scan._score_and_verdict(ctx, _pair(), contract_flags=contract_flags)
+
+    assert ctx.security_score == _baseline_score() - 30
+
+
+@pytest.mark.asyncio
+async def test_scan_base_token_resolves_mint_authority_before_scoring(monkeypatch):
+    """Intégration bout-en-bout : un mint renoncé (owner = adresse morte) ne doit
+    plus faire tomber security_score/lite_verdict -- verrouille l'ORDRE d'appel
+    (mint_authority doit être résolu AVANT _score_and_verdict, pas après), le vrai
+    bug derrière #164 (une simple relecture de la formule seule ne l'aurait pas
+    révélé, seul un scan complet le peut)."""
+    from aria_core.services.blockscout import AddressInfo
+
+    pair = _pair()
+    monkeypatch.setattr(scan, "_fetch_token_pairs", AsyncMock(return_value=[pair]))
+    monkeypatch.setattr(
+        type(scan.blockscout_client),
+        "check_contract_flags",
+        AsyncMock(return_value=ContractFlags(
+            address=ADDR, is_verified=True, has_mint=True,
+            has_blacklist=False, has_disable_transfers=False, available=True,
+        )),
+    )
+    monkeypatch.setattr(
+        type(scan.blockscout_client), "get_token_holders", AsyncMock(return_value=TokenHoldersResult())
+    )
+    monkeypatch.setattr(
+        type(scan.blockscout_client),
+        "get_address_info",
+        AsyncMock(return_value=AddressInfo(address=ADDR, available=True, creator_address=None)),
+    )
+    dead = "0x000000000000000000000000000000000000dead"
+    monkeypatch.setattr(
+        type(scan.blockscout_client), "read_owner", AsyncMock(return_value=(dead, None))
+    )
+
+    ctx = await scan.scan_base_token(ADDR)
+
+    assert ctx.mint_authority == "renounced"
+    assert ctx.security_score == _baseline_score()
+    assert not any("supply potentiellement inflatable" in f for f in ctx.risk_flags)
+
+
 def test_blacklist_and_disable_transfers_each_degrade_score():
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     contract_flags = ContractFlags(

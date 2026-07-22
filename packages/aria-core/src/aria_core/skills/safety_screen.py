@@ -19,10 +19,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from aria_core.momentum_entry import MAX_VOLUME_TO_LIQUIDITY_RATIO, _wash_trading_ratio_confirmed
 from aria_core.skills.acp_onchain_scan import TokenScanContext
-
-# Autorités où un mint externe est légitime (non contrôlé par un wallet de dev).
-_MINT_AUTHORITY_OK = frozenset({"renounced", "launchpad", "contract"})
+from aria_core.skills.mint_authority import SAFE_AUTHORITIES
 
 
 def _mint_is_dev_controlled(ctx: TokenScanContext) -> bool:
@@ -34,7 +33,23 @@ def _mint_is_dev_controlled(ctx: TokenScanContext) -> bool:
     """
     if ctx.has_mint is not True:
         return False
-    return (ctx.mint_authority or "unknown") not in _MINT_AUTHORITY_OK
+    return (ctx.mint_authority or "unknown") not in SAFE_AUTHORITIES
+
+
+def _wash_trading_confirmed(ctx: TokenScanContext) -> bool:
+    """22/07 -- item #1 (plan de renforcement post-stress-test) : réutilise TEL QUEL le
+    détecteur de wash-trading du pipeline momentum (`MAX_VOLUME_TO_LIQUIDITY_RATIO` +
+    `_wash_trading_ratio_confirmed`, fenêtre de confirmation soutenue partagée) --
+    jamais une deuxième constante/logique qui pourrait diverger. Le crible VC n'avait
+    jusqu'ici AUCUN garde-fou anti-manipulation de volume, alors que le scoring
+    `_score_and_verdict` ne regarde que sécurité/liquidité/concentration. Chaîne fixée
+    en dur à 'base' -- ce module (comme `acp_onchain_scan.py`) est scopé Base
+    uniquement, la clé partagée (contrat, chaîne) avec le pipeline momentum est donc
+    cohérente (même contrat = même réalité de marché, peu importe qui le scanne)."""
+    if ctx.best_pair is None or not ctx.best_pair.liquidity_usd:
+        return False
+    volume_to_liq = (ctx.best_pair.volume_24h_usd or 0.0) / ctx.best_pair.liquidity_usd
+    return _wash_trading_ratio_confirmed(ctx.contract, "base", volume_to_liq)
 
 # Seuils du pool entraînable (stricts par défaut : on veut du VRAIMENT tradeable,
 # pas juste « pas un scam »). Ajustables par appel.
@@ -89,17 +104,46 @@ def safety_screen(
     liq = ctx.best_pair.liquidity_usd if ctx.best_pair else 0.0
     reasons: list[str] = []
 
+    # Calculés en premier (réutilisés par plusieurs barrières ci-dessous, jamais
+    # recalculés deux fois avec un risque de divergence).
+    mint_blocks = _mint_is_dev_controlled(ctx)
+    wash_trading = _wash_trading_confirmed(ctx)
+
+    # 22/07 -- item #5 (plan de renforcement) : le plancher de liquidité unique
+    # pénalisait à tort un token dont le SCORE et le VERDICT sont déjà propres --
+    # le risque scam/rug est alors déjà écarté par le scoring lui-même. Assoupli
+    # SEULEMENT si tout le reste (score, verdict, mint) est irréprochable, jamais
+    # un blanc-seing générique sur la liquidité (qui reste le défaut partout ailleurs).
+    liquidity_low = ctx.best_pair is not None and liq < min_liquidity_usd
+    liquidity_bypass = (
+        liquidity_low
+        and ctx.security_score >= min_score
+        and ctx.lite_verdict == "SAFE"
+        and not mint_blocks
+    )
+
     # Barrières marché
     if not ctx.valid_address:
         reasons.append("adresse de contrat invalide")
     if ctx.best_pair is None:
         reasons.append("aucune paire DEX trouvée (illiquide ou inexistant)")
-    if ctx.best_pair is not None and liq < min_liquidity_usd:
-        reasons.append(f"liquidité ${liq:,.0f} < minimum ${min_liquidity_usd:,.0f}")
+    if liquidity_low:
+        if liquidity_bypass:
+            reasons.append(
+                f"liquidité faible ${liq:,.0f} < ${min_liquidity_usd:,.0f} -- tolérée "
+                f"(score {ctx.security_score}/95, verdict SAFE, mint propre)"
+            )
+        else:
+            reasons.append(f"liquidité ${liq:,.0f} < minimum ${min_liquidity_usd:,.0f}")
     if ctx.security_score < min_score:
         reasons.append(f"score de sécurité {ctx.security_score} < {min_score}")
     if ctx.lite_verdict != "SAFE":
         reasons.append(f"verdict de scan '{ctx.lite_verdict}' (SAFE requis)")
+    if wash_trading:
+        reasons.append(
+            f"volume 24h/liquidité extrême et SOUTENU (> {MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x) "
+            "-- signal de wash-trading"
+        )
 
     # Barrières « le dev garde le pouvoir » (prioritaires)
     if require_verified and ctx.contract_verified is not True:
@@ -107,7 +151,6 @@ def safety_screen(
     # Mint : bloquant seulement si un DEV en garde le contrôle. Un mint renoncé,
     # piloté par un launchpad connu (Virtuals/Flaunch...) ou par un contrat
     # (timelock/multisig/émission) est légitime -> neutralisé (cf. mint_authority).
-    mint_blocks = _mint_is_dev_controlled(ctx)
     if mint_blocks:
         detail = ctx.mint_authority_detail or "le dev peut créer des tokens"
         reasons.append(f"fonction mint contrôlée par un dev ({detail})")
@@ -130,6 +173,17 @@ def safety_screen(
         reasons.append("owner caché (GoPlus)")
     if ctx.can_take_back_ownership is True:
         reasons.append("reprise de propriété possible (GoPlus)")
+    # 22/07 -- item #2 (plan de renforcement) : même famille que hidden_owner/
+    # can_take_back_ownership -- un pouvoir CACHÉ que le dev garde sur le contrat,
+    # jamais réparé par le temps ou par un meilleur score de liquidité -> échec dur.
+    if ctx.slippage_modifiable is True:
+        reasons.append("taxe/slippage modifiable après coup (GoPlus) — pouvoir dissimulé")
+    # 22/07 -- trou trouvé en observant une position momentum RÉELLEMENT ouverte
+    # (CNX, owner_change_balance jamais consulté nulle part) : pouvoir DISTINCT du
+    # honeypot classique -- l'owner peut modifier directement le solde d'un wallet,
+    # vecteur de perte totale, jamais réparé par le temps -> échec dur.
+    if ctx.owner_change_balance is True:
+        reasons.append("owner peut modifier le solde d'un wallet (GoPlus) — vecteur de perte totale")
 
     # Barrière concentration (baleine)
     if ctx.top_holder_pct is None:
@@ -142,9 +196,10 @@ def safety_screen(
     passed = (
         ctx.valid_address
         and ctx.best_pair is not None
-        and liq >= min_liquidity_usd
+        and (liq >= min_liquidity_usd or liquidity_bypass)
         and ctx.security_score >= min_score
         and ctx.lite_verdict == "SAFE"
+        and not wash_trading
         and (ctx.contract_verified is True or not require_verified)
         and not mint_blocks
         and ctx.has_blacklist is not True
@@ -156,12 +211,21 @@ def safety_screen(
         and (ctx.sell_tax is None or ctx.sell_tax <= DEFAULT_MAX_SELL_TAX)
         and ctx.hidden_owner is not True
         and ctx.can_take_back_ownership is not True
+        and ctx.slippage_modifiable is not True
+        and ctx.owner_change_balance is not True
     )
     if passed:
         reasons = [
             f"screené : score {ctx.security_score}/95, liquidité ${liq:,.0f}, "
             f"vérifié, holder max {ctx.top_holder_pct:.0f}%, verdict SAFE"
         ]
+        # Jamais silencieux (item #5) : le franchissement du plancher de liquidité
+        # reste visible même sur un passage réussi, pas seulement sur un rejet.
+        if liquidity_bypass:
+            reasons.append(
+                f"liquidité faible ${liq:,.0f} < ${min_liquidity_usd:,.0f} tolérée "
+                "(score/verdict/mint propres)"
+            )
 
     # Échec DUR = un mécanisme MALVEILLANT confirmé dans le contrat lui-même (le code
     # ne "guérit" jamais avec le temps -- décision opérateur explicite, 10/07 : "si il y
@@ -182,6 +246,8 @@ def safety_screen(
         or (ctx.sell_tax is not None and ctx.sell_tax > DEFAULT_MAX_SELL_TAX)
         or (ctx.hidden_owner is True)
         or (ctx.can_take_back_ownership is True)
+        or (ctx.slippage_modifiable is True)
+        or (ctx.owner_change_balance is True)
     )
 
     return ScreenResult(

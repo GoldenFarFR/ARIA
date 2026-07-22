@@ -814,6 +814,30 @@ def test_apply_honeypot_signals_clean_no_penalty():
     assert ctx.security_score == 80
 
 
+def test_apply_honeypot_signals_slippage_modifiable_penalty():
+    # 22/07 -- item #2 (plan de renforcement) : pouvoir caché distinct de
+    # hidden_owner/can_take_back_ownership -- le dev peut changer taxe/slippage
+    # après coup, sans jamais reprendre la propriété visible.
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=ADDR, available=True, is_honeypot=False, slippage_modifiable=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.slippage_modifiable is True
+
+
+def test_apply_honeypot_signals_owner_change_balance_penalty_and_danger():
+    # 22/07 -- trou trouvé en observant une position momentum réellement ouverte
+    # (CNX) : owner_change_balance jamais consulté avant ce correctif. Pouvoir de
+    # MÊME gravité que le honeypot (perte totale directe) -> verdict DANGER forcé,
+    # pas juste un malus modéré comme hidden_owner/slippage_modifiable.
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=ADDR, available=True, is_honeypot=False, owner_change_balance=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.owner_change_balance is True
+    assert ctx.security_score == 40  # 80 - 40
+    assert ctx.lite_verdict == "DANGER"
+    assert any("owner_change_balance" in f or "solde d'un wallet" in f for f in ctx.risk_flags)
+
+
 # ── barrières du filtre de sécurité ───────────────────────────────────────────
 
 def _clean_ctx() -> TokenScanContext:
@@ -873,6 +897,38 @@ def test_screen_take_back_ownership_fails():
     c = _clean_ctx()
     c.can_take_back_ownership = True
     assert safety_screen(c).passed is False
+
+
+def test_screen_slippage_modifiable_fails_hard():
+    c = _clean_ctx()
+    c.slippage_modifiable = True
+    r = safety_screen(c)
+    assert r.passed is False
+    assert r.hard_fail is True
+    assert any("slippage modifiable" in x for x in r.reasons)
+
+
+def test_screen_slippage_modifiable_unknown_unaffected():
+    # None (non scanné / indisponible) -- comportement strictement inchangé.
+    c = _clean_ctx()
+    assert c.slippage_modifiable is None
+    assert safety_screen(c).passed is True
+
+
+def test_screen_owner_change_balance_fails_hard():
+    c = _clean_ctx()
+    c.owner_change_balance = True
+    r = safety_screen(c)
+    assert r.passed is False
+    assert r.hard_fail is True
+    assert any("solde d'un wallet" in x for x in r.reasons)
+
+
+def test_screen_owner_change_balance_unknown_unaffected():
+    # None (non scanné / indisponible) -- comportement strictement inchangé.
+    c = _clean_ctx()
+    assert c.owner_change_balance is None
+    assert safety_screen(c).passed is True
 
 
 # ── Malicious Address API (AML, #157) ──────────────────────────────────────

@@ -25,6 +25,7 @@ from aria_core.services.smart_money import analyze_smart_money
 from aria_core.skills.candlestick_patterns import CandlePattern, detect_patterns
 from aria_core.skills.entry_signals import EntrySignal, detect_entry
 from aria_core.skills.indicators import ema_series, macd_series
+from aria_core.skills.mint_authority import SAFE_AUTHORITIES
 from aria_core.skills.ta_levels import (
     Candle,
     EntryZone,
@@ -207,6 +208,27 @@ class TokenScanContext:
     # ne rejette pas d'office.
     dev_signal: str | None = None
     dev_points: list[str] = field(default_factory=list)
+    # 22/07 -- tâche #4 : part (0-100) de sa dotation reçue que le déployeur a déjà
+    # revendue, capturée telle quelle (DevWalletFacts.sold_pct_of_received) -- jamais
+    # dérivée de dev_signal (un simple label), pour permettre un instantané numérique
+    # comparable lors d'un re-scan pendant la détention d'une position VC (Formule B).
+    # None si non résolu (déployeur inconnu, aucun transfert) -- jamais une valeur inventée.
+    dev_sold_pct: float | None = None
+    # 22/07 -- signal "sortie de liquidité déguisée" (repris du stress-test) : wallets
+    # ayant reçu une part significative de la distribution initiale directement du
+    # déployeur/mint (via Dune, hors 'creator' déjà couvert par dev_signal ci-dessus)
+    # et ne détenant quasiment plus rien aujourd'hui -- un insider qui vend sans jamais
+    # porter l'étiquette 'creator'. Peuplé si include_insider_check ET donnée dispo.
+    # Voir skills/insider_wallets.py. Jamais un rejet d'office (consultatif LLM).
+    insider_signal: str | None = None
+    insider_points: list[str] = field(default_factory=list)
+    # 22/07 -- signal "réputation du déployeur" : a-t-il déjà créé un AUTRE contrat
+    # déjà confirmé scam par ARIA (momentum_blacklist.py) ? Distinct du comportement
+    # SUR ce token (dev_signal ci-dessus) -- regarde l'historique cross-token du même
+    # wallet. Peuplé si include_deployer_reputation ET donnée dispo. Voir
+    # services/deployer_history.py. Jamais un rejet d'office (consultatif LLM).
+    deployer_reputation_signal: str | None = None
+    deployer_reputation_points: list[str] = field(default_factory=list)
     # Sécurité dynamique GoPlus (peuplé si include_honeypot ET donnée dispo). Ce que
     # l'ABI statique de Blockscout ne voit pas : la revente est-elle RÉELLEMENT possible,
     # taxes réelles d'achat/vente, pouvoirs cachés. None = non scanné ou indisponible →
@@ -217,6 +239,20 @@ class TokenScanContext:
     sell_tax: float | None = None
     hidden_owner: bool | None = None
     can_take_back_ownership: bool | None = None
+    # 22/07 -- item #2 (plan de renforcement post-stress-test) : GoPlus expose un
+    # pouvoir caché supplémentaire, distinct de hidden_owner/can_take_back_ownership --
+    # le dev peut changer le taux de taxe/slippage APRÈS coup, sans reprendre la
+    # propriété. Un token "propre" au moment du scan peut devenir extractif plus tard
+    # sans qu'aucun autre signal GoPlus ne le détecte. None = non scanné/indisponible.
+    slippage_modifiable: bool | None = None
+    # 22/07 -- trou de sécurité trouvé en observant une position momentum RÉELLEMENT
+    # ouverte (CNX) : GoPlus "Owner can change balance" = Yes n'était consulté NULLE
+    # PART (ni VC ni momentum). Pouvoir DISTINCT du honeypot classique (qui bloque la
+    # REVENTE) -- ici l'owner peut modifier directement le solde d'un wallet, un
+    # vecteur de perte totale que is_honeypot/cannot_sell_all ne capturent pas. Même
+    # nom que le champ GoPlus source (services/goplus.py::TokenSecurity), jamais
+    # renommé pour rester traçable d'un bout à l'autre du pipeline.
+    owner_change_balance: bool | None = None
     # Niche Virtuals bonding (peuplé UNIQUEMENT si aucune paire DexScreener n'existe ET
     # que le contrat est réellement indexé par Virtuals en statut pré-graduation — voir
     # services/virtuals.py). Absence de paire DEX est NORMALE à ce stade (la liquidité
@@ -269,6 +305,8 @@ def _apply_onchain_signals(
     contract_flags: ContractFlags | None,
     holders: TokenHoldersResult | None,
     pair: PairSnapshot | None,
+    *,
+    mint_authority: str | None = None,
 ) -> int:
     """Signaux Blockscout additionnels — lecture seule, purement additifs.
 
@@ -276,6 +314,19 @@ def _apply_onchain_signals(
     dégrade jamais le score : le flag reflète l'absence de donnée, pas un
     risque. Seuls des signaux positivement confirmés (fonction sensible
     détectée, concentration whale) dégradent le score.
+
+    ``mint_authority`` (#164, corrigé 22/07) : un mint DÉTECTÉ dans l'ABI n'est un
+    risque que si un DEV en garde le contrôle — un mint renoncé/piloté par un
+    launchpad connu/verrouillé dans un contrat (timelock/multisig/émission) est
+    neutralisé par ``mint_authority.classify_authority``, exactement comme le
+    crible dur (``safety_screen._mint_is_dev_controlled``) le fait déjà. Avant ce
+    correctif, cette fonction ignorait totalement ``mint_authority`` (elle ne le
+    recevait même pas en paramètre) et appliquait -30 sur la seule présence de la
+    fonction — un projet avec un vesting sain (deployeur réputé, mint timelocké)
+    tombait sous le seuil de score 70 exigé par ``safety_screen`` et ratait le
+    sourcing automatique, malgré un crible dur qui le jugeait pourtant propre.
+    ``None``/``"unknown"``/``"eoa"`` restent fail-closed (malus appliqué) — seule
+    une autorité VÉRIFIÉE et sûre (``SAFE_AUTHORITIES``) neutralise la pénalité.
     """
     delta = 0
 
@@ -286,8 +337,14 @@ def _apply_onchain_signals(
             flags.append("Contrat non vérifié sur Blockscout — audit du code source impossible.")
         else:
             if contract_flags.has_mint:
-                flags.append("Fonction mint détectée dans le contrat — supply potentiellement inflatable.")
-                delta -= 30
+                if mint_authority in SAFE_AUTHORITIES:
+                    flags.append(
+                        f"Fonction mint détectée mais autorité neutralisée ({mint_authority}) "
+                        "— aucune pénalité."
+                    )
+                else:
+                    flags.append("Fonction mint détectée dans le contrat — supply potentiellement inflatable.")
+                    delta -= 30
             if contract_flags.has_blacklist:
                 flags.append("Fonction blacklist détectée — l'équipe peut bloquer des wallets.")
                 delta -= 30
@@ -389,7 +446,9 @@ def _score_and_verdict(
         return
 
     onchain_flags: list[str] = []
-    onchain_delta = _apply_onchain_signals(onchain_flags, contract_flags, holders, pair)
+    onchain_delta = _apply_onchain_signals(
+        onchain_flags, contract_flags, holders, pair, mint_authority=ctx.mint_authority,
+    )
 
     if not pair:
         if ctx.bonding_phase:
@@ -502,6 +561,8 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
     ctx.sell_tax = sec.sell_tax
     ctx.hidden_owner = sec.hidden_owner
     ctx.can_take_back_ownership = sec.can_take_back_ownership
+    ctx.slippage_modifiable = sec.slippage_modifiable
+    ctx.owner_change_balance = sec.owner_change_balance
 
     delta = 0
     if sec.is_honeypot is True:
@@ -522,12 +583,26 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
     if sec.can_take_back_ownership is True:
         ctx.risk_flags.append("Reprise de propriété possible (GoPlus) — renoncement réversible.")
         delta -= 20
+    if sec.slippage_modifiable is True:
+        ctx.risk_flags.append(
+            "Taxe/slippage modifiable après coup (GoPlus slippage_modifiable) — "
+            "peut devenir extractif sans reprise de propriété visible."
+        )
+        delta -= 15
+    if sec.owner_change_balance is True:
+        ctx.risk_flags.append(
+            "Owner peut modifier le solde d'un wallet (GoPlus owner_change_balance) — "
+            "vecteur de perte totale, distinct du honeypot classique."
+        )
+        delta -= 40
 
     if delta:
         ctx.security_score = max(5, min(95, ctx.security_score + delta))
     # Un honeypot / revente impossible confirmé = danger sans ambiguïté : on aligne le
-    # verdict lisible pour que l'analyse ET le filtre soient cohérents.
-    if sec.is_honeypot is True or sec.cannot_sell_all is True:
+    # verdict lisible pour que l'analyse ET le filtre soient cohérents. owner_change_
+    # balance (22/07) rejoint ce groupe -- pouvoir de MÊME gravité (perte totale
+    # directe), pas juste un signal de méfiance modéré comme hidden_owner/slippage.
+    if sec.is_honeypot is True or sec.cannot_sell_all is True or sec.owner_change_balance is True:
         ctx.lite_verdict = "DANGER"
 
 
@@ -582,6 +657,8 @@ async def scan_base_token(
     include_ta: bool = False,
     include_dev_behavior: bool = False,
     include_honeypot: bool = False,
+    include_insider_check: bool = False,
+    include_deployer_reputation: bool = False,
 ) -> TokenScanContext:
     """Fetch DexScreener + compute heuristic security score.
 
@@ -601,6 +678,17 @@ async def scan_base_token(
     Cable le 10/07 (decision operateur) : EMA/MACD (ctx.ta_ema_*/ctx.ta_macd_*)
     et le setup golden pocket + divergence RSI (ctx.ta_golden_pocket_signal),
     memes champs facts-only, meme garde `include_ta`.
+
+    `include_insider_check` est désactivé par défaut : un appel Dune Analytics
+    supplémentaire (facturé, latence de requête SQL) par scan. Repère les wallets
+    ayant reçu une distribution insider directe (hors 'creator') et vérifie s'ils
+    ont depuis tout revendu (skills/insider_wallets.py). Réutilise les holders déjà
+    récupérés ci-dessus -- zéro appel Blockscout supplémentaire.
+
+    `include_deployer_reputation` est désactivé par défaut : historique de
+    transactions borné (Blockscout, `get_transactions_bounded`) du wallet déployeur
+    à la recherche d'AUTRES contrats déjà créés, croisés contre la liste noire
+    propre d'ARIA (services/deployer_history.py). Signal consultatif, jamais un véto.
     """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
@@ -631,9 +719,12 @@ async def scan_base_token(
         ctx.data_source = "dexscreener"
     else:
         await _resolve_bonding_phase(ctx, ca)
-    _score_and_verdict(ctx, ctx.best_pair, contract_flags=contract_flags, holders=holders)
 
-    # Expose en clair les barrières de sécurité (le filtre binaire les lit).
+    # Expose en clair les barrières de sécurité (le filtre binaire les lit) — déplacé
+    # AVANT _score_and_verdict (22/07, corrige #164) : le score lisait auparavant
+    # has_mint aveuglément parce que contract_verified/has_mint/mint_authority
+    # n'étaient posés qu'APRÈS le calcul du score, donc ctx.mint_authority valait
+    # encore None (jamais résolu) au moment où le malus mint était appliqué.
     if contract_flags is not None and contract_flags.available:
         ctx.contract_verified = contract_flags.is_verified
         ctx.has_mint = contract_flags.has_mint
@@ -649,9 +740,12 @@ async def scan_base_token(
     # Autorité du mint : uniquement si un mint EXTERNE existe (rare depuis le fix ABI).
     # Un mint légitime (renoncé, launchpad connu, contrat) ne doit pas faire rejeter un
     # bon token ; seul un mint contrôlé par un wallet de dev est un danger. Best-effort :
-    # toute indisponibilité -> 'unknown' (prudent en aval), jamais bloquant.
+    # toute indisponibilité -> 'unknown' (prudent en aval), jamais bloquant. Doit
+    # impérativement s'exécuter avant _score_and_verdict (voir commentaire ci-dessus).
     if ctx.has_mint is True:
         await _resolve_mint_authority(ctx, ca)
+
+    _score_and_verdict(ctx, ctx.best_pair, contract_flags=contract_flags, holders=holders)
 
     if include_smart_money:
         smart_money = await analyze_smart_money(
@@ -716,6 +810,18 @@ async def scan_base_token(
     if include_dev_behavior:
         await _resolve_dev_behavior(ctx, ca)
 
+    # Signal "sortie de liquidité déguisée" (22/07) : wallets insiders hors 'creator'
+    # ayant reçu une distribution directe et déjà tout revendu. Best-effort, jamais
+    # bloquant ; réutilise `holders` déjà récupéré ci-dessus (aucun re-fetch).
+    if include_insider_check:
+        await _resolve_insider_wallets(ctx, ca, holders)
+
+    # Signal "réputation du déployeur" (22/07) : autres contrats déjà créés par le
+    # même wallet, croisés contre la liste noire propre d'ARIA. Best-effort, jamais
+    # bloquant.
+    if include_deployer_reputation:
+        await _resolve_deployer_reputation(ctx, ca)
+
     # Sécurité dynamique (honeypot / taxes réelles / pouvoirs cachés) via GoPlus. Désactivé
     # par défaut (un appel réseau de plus) ; activé sur le chemin d'analyse VC où une vraie
     # décision se prend. Additif : sans donnée, ctx inchangé.
@@ -754,10 +860,65 @@ async def _resolve_dev_behavior(ctx: "TokenScanContext", token_address: str) -> 
         verdict = judge_dev_wallet(facts, launchpad_team_norm=team_norm)
         ctx.dev_signal = verdict.signal
         ctx.dev_points = verdict.points
+        ctx.dev_sold_pct = facts.sold_pct_of_received
     except Exception as exc:  # noqa: BLE001 — le comportement dev est un bonus, jamais bloquant
         logger.info("dev_behavior: analyse %s échouée (%s)", token_address, exc)
         ctx.dev_signal = "unknown"
         ctx.dev_points = []
+
+
+async def _resolve_insider_wallets(ctx: "TokenScanContext", token_address: str, holders) -> None:
+    """Récolte + juge les wallets insiders hors 'creator'. Défensif, jamais bloquant.
+
+    Nécessite un déployeur connu (résolu par `_resolve_dev_behavior`, appelé juste
+    avant si `include_dev_behavior` est aussi actif -- sinon re-résolu ici) et une
+    date de création de paire (`ctx.best_pair.pair_created_at`, absente en bonding
+    pré-graduation -- signal simplement non peuplé dans ce cas, pas un blocage)."""
+    from aria_core.skills.insider_wallets import gather_insider_wallet_facts, judge_insider_wallets
+
+    try:
+        creator = None
+        info = await blockscout_client.get_address_info(token_address)
+        creator = info.creator_address if info.available else None
+        if not creator or not ctx.best_pair or not ctx.best_pair.pair_created_at:
+            ctx.insider_signal = "unknown"
+            ctx.insider_points = ["déployeur ou date de création de paire inconnus"]
+            return
+        facts = await gather_insider_wallet_facts(
+            token_address,
+            creator,
+            pair_created_at_ms=ctx.best_pair.pair_created_at,
+            lp_address=ctx.best_pair.pair_address if ctx.best_pair else None,
+            holders=holders,
+        )
+        verdict = judge_insider_wallets(facts)
+        ctx.insider_signal = verdict.signal
+        ctx.insider_points = verdict.points
+    except Exception as exc:  # noqa: BLE001 — signal bonus, jamais bloquant
+        logger.info("insider_wallets: analyse %s échouée (%s)", token_address, exc)
+        ctx.insider_signal = "unknown"
+        ctx.insider_points = []
+
+
+async def _resolve_deployer_reputation(ctx: "TokenScanContext", token_address: str) -> None:
+    """Récolte + juge la réputation cross-token du déployeur. Défensif, jamais bloquant."""
+    from aria_core.services.deployer_history import gather_deployer_history_facts, judge_deployer_history
+
+    try:
+        info = await blockscout_client.get_address_info(token_address)
+        creator = info.creator_address if info.available else None
+        if not creator:
+            ctx.deployer_reputation_signal = "unknown"
+            ctx.deployer_reputation_points = ["déployeur du contrat inconnu"]
+            return
+        facts = await gather_deployer_history_facts(creator, exclude_contract=token_address)
+        verdict = judge_deployer_history(facts)
+        ctx.deployer_reputation_signal = verdict.signal
+        ctx.deployer_reputation_points = verdict.points
+    except Exception as exc:  # noqa: BLE001 — signal bonus, jamais bloquant
+        logger.info("deployer_history: analyse %s échouée (%s)", token_address, exc)
+        ctx.deployer_reputation_signal = "unknown"
+        ctx.deployer_reputation_points = []
 
 
 def scan_base_token_sync(contract: str) -> TokenScanContext:

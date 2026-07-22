@@ -662,6 +662,211 @@ async def get_first_funded_by(
 
 
 # ---------------------------------------------------------------------------
+# 22/07 -- early buyers d'UN token précis (déjà jugé "gagnant" par ARIA en amont,
+# cf. wallet_candidate_sourcing.list_strong_performers) -- SOULAGE Blockscout
+# (get_token_holders, holders ACTUELS) sur le SOURCING de candidats wallet.
+# Portée EXACTE de cette tâche : requête + fonction + tests -- branchement dans
+# wallet_candidate_sourcing.py fait dans la MÊME session, décision opérateur
+# explicite ("soulageons au maximum Blockscout").
+#
+# VÉRIFIÉ PAR UN VRAI APPEL AUTHENTIFIÉ (22/07, pas la doc publique -- norme du
+# 14/07) : un premier essai avec ``token_bought_address = '0x...'`` (guillemets
+# simples, syntaxe qui fonctionne sur ``dex.trades.taker``) a ÉCHOUÉ en
+# exécution réelle -- ``Cannot apply operator: varbinary = varchar(42)``.
+# Piège confirmé : MÊME AU SEIN DE LA MÊME TABLE ``dex.trades``, ``taker`` est
+# ``varchar`` mais ``token_bought_address`` est ``varbinary`` -- exactement la
+# réserve déjà documentée plus haut dans ce fichier pour ``addresses.stats``,
+# reconfirmée ici sur une table différente. Corrigé en émettant un littéral
+# hexadécimal NU (``0x1234``, pas entre guillemets) pour ``token_bought_
+# address`` -- reverifié en exécution réelle après correctif (5 wallets
+# WETH réels retournés, triés par première transaction chronologique).
+TOKEN_EARLY_BUYERS_QUERY_TEMPLATE = """
+SELECT taker AS wallet_address, MIN(block_time) AS first_buy_at
+FROM dex.trades
+WHERE blockchain = '{blockchain}'
+  AND token_bought_address = {token_address}
+  AND block_time >= NOW() - INTERVAL '{lookback_days}' day
+GROUP BY taker
+ORDER BY first_buy_at ASC
+LIMIT {limit}
+"""
+
+
+def build_token_early_buyers_query(
+    contract: str, *, blockchain: str = "base", lookback_days: int = 90, limit: int = 40,
+) -> str:
+    """Construit la requête des premiers acheteurs (par timestamp) d'UN token
+    précis. Valide ``contract`` contre un format EVM strict (0x + 40 hex) AVANT
+    toute substitution -- ce paramètre vient d'un appelant qui traite des
+    contrats de tokens externes, jamais une constante interne, donc une vraie
+    validation anti-injection est nécessaire (même doctrine que
+    ``build_addresses_stats_query``). Émet un littéral hexadécimal NU pour
+    ``token_address`` (varbinary, cf. réserve ci-dessus) -- jamais entre
+    guillemets simples."""
+    if not contract or not re.fullmatch(_EVM_ADDRESS_RE_SOURCE, contract):
+        raise ValueError(f"adresse de contrat EVM invalide : {contract!r}")
+    if not blockchain or not re.fullmatch(r"[a-z0-9_-]+", blockchain):
+        raise ValueError("blockchain invalide")
+    if not isinstance(lookback_days, int) or lookback_days <= 0:
+        raise ValueError("lookback_days doit être un entier positif")
+    if not isinstance(limit, int) or limit <= 0:
+        raise ValueError("limit doit être un entier positif")
+
+    return TOKEN_EARLY_BUYERS_QUERY_TEMPLATE.format(
+        blockchain=blockchain, token_address=contract.lower(), lookback_days=lookback_days, limit=limit,
+    )
+
+
+@dataclass
+class TokenEarlyBuyersResult:
+    wallets: list[str] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+async def get_token_early_buyers(
+    contract: str, *, blockchain: str = "base", lookback_days: int = 90, limit: int = 40,
+    performance: str = "small",
+) -> TokenEarlyBuyersResult:
+    """Premiers acheteurs (par timestamp) d'un token précis, triés du plus
+    ancien au plus récent -- même doctrine dôme que le reste de ce module :
+    sans clé, adresse invalide, ou échec à n'importe quelle étape ->
+    ``available=False``, jamais une exception, jamais un wallet inventé."""
+    try:
+        sql = build_token_early_buyers_query(
+            contract, blockchain=blockchain, lookback_days=lookback_days, limit=limit,
+        )
+    except ValueError as exc:
+        return TokenEarlyBuyersResult(available=False, error=f"{UNAVAILABLE} ({exc})")
+
+    exec_result = await run_sql_and_wait(sql, performance=performance)
+    if not exec_result.available:
+        return TokenEarlyBuyersResult(available=False, error=exec_result.error)
+
+    wallets = [
+        row["wallet_address"] for row in exec_result.rows
+        if isinstance(row.get("wallet_address"), str) and row["wallet_address"]
+    ]
+    return TokenEarlyBuyersResult(wallets=wallets, available=True, error=None)
+
+
+# ---------------------------------------------------------------------------
+# 22/07 -- "sortie de liquidité déguisée" (repris du stress-test Partie 11 --
+# proposition évaluée hypothétiquement, jamais codée avant ce jour). Objectif :
+# repérer les wallets ayant reçu une distribution DIRECTE du déployeur (ou du
+# mint initial) peu après le lancement -- des "insiders" qui ne portent jamais
+# l'étiquette "creator" et échappent donc totalement à dev_wallet.py (qui ne
+# surveille QUE le wallet déployeur lui-même).
+#
+# VÉRIFIÉ par un vrai appel authentifié (22/07) sur un cas réel (CNX) : la
+# table brute `erc20_base.evt_transfer` (TOUS les transferts ERC-20 sur Base,
+# pas seulement les trades DEX comme `dex.trades`) confirme le schéma attendu
+# -- premier transfert = mint depuis l'adresse zéro vers le déployeur, puis
+# distribution du déployeur vers plusieurs wallets secondaires dans les heures
+# suivantes. Littéraux hex NUS (contract_address, adresse zéro/déployeur) --
+# confirmé fonctionnel en exécution réelle sur cette table, même syntaxe que
+# `dex.trades.token_bought_address` (varbinary).
+#
+# Fenêtre de temps OBLIGATOIRE (contrairement à `dex.trades` où certaines
+# requêtes existantes scannent sans borne) : un scan sans fenêtre sur
+# `erc20_base.evt_transfer` reste possible (testé, ~15s sur un token de 28
+# jours) mais coûte plus cher à mesure que l'historique du token grandit --
+# l'appelant doit fournir une fenêtre raisonnable (ex. les 14 jours suivant la
+# création de la paire, déjà connue via `PairSnapshot.pair_created_at`).
+_ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+INSIDER_RECIPIENTS_QUERY_TEMPLATE = """
+SELECT "to" AS recipient, SUM(CAST(value AS DOUBLE)) AS total_received_raw,
+       MIN(evt_block_time) AS first_received_at
+FROM erc20_base.evt_transfer
+WHERE contract_address = {token_address}
+  AND ("from" = {deployer_address} OR "from" = {zero_address})
+  AND evt_block_time >= TIMESTAMP '{window_start}'
+  AND evt_block_time <= TIMESTAMP '{window_end}'
+GROUP BY "to"
+ORDER BY total_received_raw DESC
+LIMIT {limit}
+"""
+
+
+def build_insider_recipients_query(
+    contract: str, deployer: str, *, window_start: str, window_end: str, limit: int = 15,
+) -> str:
+    """Construit la requête des wallets ayant reçu une distribution DIRECTE du
+    déployeur ou du mint initial (adresse zéro), dans une fenêtre de temps
+    donnée. Valide ``contract``/``deployer`` contre un format EVM strict AVANT
+    toute substitution (même doctrine que ``build_token_early_buyers_query``).
+    ``window_start``/``window_end`` : chaînes ISO ``YYYY-MM-DD`` ou
+    ``YYYY-MM-DD HH:MM:SS`` -- non validées ici au-delà d'un format de
+    caractères sûr (l'appelant est responsable de fournir des dates réelles,
+    jamais une entrée utilisateur libre)."""
+    if not contract or not re.fullmatch(_EVM_ADDRESS_RE_SOURCE, contract):
+        raise ValueError(f"adresse de contrat EVM invalide : {contract!r}")
+    if not deployer or not re.fullmatch(_EVM_ADDRESS_RE_SOURCE, deployer):
+        raise ValueError(f"adresse de déployeur EVM invalide : {deployer!r}")
+    if not isinstance(limit, int) or limit <= 0:
+        raise ValueError("limit doit être un entier positif")
+    date_re = re.compile(r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}:\d{2})?$")
+    if not window_start or not date_re.fullmatch(window_start):
+        raise ValueError(f"window_start invalide : {window_start!r}")
+    if not window_end or not date_re.fullmatch(window_end):
+        raise ValueError(f"window_end invalide : {window_end!r}")
+
+    return INSIDER_RECIPIENTS_QUERY_TEMPLATE.format(
+        token_address=contract.lower(), deployer_address=deployer.lower(),
+        zero_address=_ZERO_ADDRESS, window_start=window_start, window_end=window_end, limit=limit,
+    )
+
+
+@dataclass
+class InsiderRecipient:
+    address: str
+    total_received_raw: float
+    first_received_at: str | None = None
+
+
+@dataclass
+class InsiderRecipientsResult:
+    recipients: list[InsiderRecipient] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+async def get_insider_recipients(
+    contract: str, deployer: str, *, window_start: str, window_end: str,
+    limit: int = 15, performance: str = "small",
+) -> InsiderRecipientsResult:
+    """Wallets ayant reçu une distribution directe du déployeur/mint initial,
+    triés par montant décroissant. Même doctrine dôme que le reste du module :
+    sans clé, adresse invalide, ou échec à n'importe quelle étape ->
+    ``available=False``, jamais une exception, jamais un wallet inventé."""
+    try:
+        sql = build_insider_recipients_query(
+            contract, deployer, window_start=window_start, window_end=window_end, limit=limit,
+        )
+    except ValueError as exc:
+        return InsiderRecipientsResult(available=False, error=f"{UNAVAILABLE} ({exc})")
+
+    exec_result = await run_sql_and_wait(sql, performance=performance)
+    if not exec_result.available:
+        return InsiderRecipientsResult(available=False, error=exec_result.error)
+
+    recipients: list[InsiderRecipient] = []
+    for row in exec_result.rows:
+        addr = row.get("recipient")
+        if not isinstance(addr, str) or not addr:
+            continue
+        total = row.get("total_received_raw")
+        if not isinstance(total, (int, float)):
+            continue
+        recipients.append(InsiderRecipient(
+            address=addr, total_received_raw=float(total),
+            first_received_at=row.get("first_received_at") if isinstance(row.get("first_received_at"), str) else None,
+        ))
+    return InsiderRecipientsResult(recipients=recipients, available=True, error=None)
+
+
+# ---------------------------------------------------------------------------
 # Requête SQL dédiée -- dernier recours de la cascade OHLCV du pipeline momentum
 # (#194, 16/07, demande opérateur explicite : "cables les tous je veux une
 # toile complete avec dexscreener et dune"). Reconstruit des bougies HORAIRES

@@ -189,6 +189,51 @@ MAX_VOLUME_TO_LIQUIDITY_RATIO = 20.0
 # même doctrine dégradation douce que le reste du pipeline.
 _MAX_PRICE_CHANGE_24H_PCT = 200.0
 
+# 22/07 -- tâche #3, décision opérateur explicite : le plafond de 200% ci-dessus rejette
+# aussi de vrais breakouts légitimes (pas seulement des pump-and-dump comme TSG). Palier
+# de sauvetage : entre 200% et 350%, une convergence confirmée de smart money (wallets
+# historiquement performants, cf. services/smart_money.py déjà utilisé côté /vc) peut
+# lever le rejet -- au-delà de 350%, rejet dur SANS EXCEPTION, aucun sauvetage possible
+# quel que soit le signal (jamais un pari sur un mouvement qui a déjà x4.5).
+_PARABOLIC_RESCUE_MAX_PCT = 350.0
+
+
+async def _check_parabolic_smart_money_rescue(
+    contract: str, chain: str, pair: "PairSnapshot",
+) -> tuple[bool, str]:
+    """Sauvetage du rejet "déjà parabolique" (200-350%) par convergence smart money.
+
+    Coûte un appel Blockscout holders DÉDIÉ (le check de concentration, plus loin dans
+    l'ordre des gates, fetch aussi les holders mais APRÈS ce point -- rien à réutiliser
+    ici) -- borné : uniquement tenté pour les candidats déjà dans cette tranche rare,
+    jamais sur tous les candidats évalués. Couverture Blockscout limitée à Base à ce
+    jour (même limite que ``reference_tokens_excluded``/analyse smart money existante)
+    -- sur les autres chaînes, jamais de sauvetage tenté, le rejet dur reste inchangé.
+    """
+    if chain != "base":
+        return False, "sauvetage smart money non tenté (couverture limitée à Base)"
+
+    from aria_core.services.blockscout import get_blockscout_client
+    from aria_core.services.smart_money import analyze_smart_money
+
+    client = get_blockscout_client(chain)
+    try:
+        holders = await client.get_token_holders(contract)
+        signal = await analyze_smart_money(
+            contract, holders, client=client,
+            lp_address=pair.pair_address, pair_created_at_ms=pair.pair_created_at,
+        )
+    except Exception as exc:  # noqa: BLE001 -- une panne réseau ne doit jamais lever le rejet
+        logger.info("_check_parabolic_smart_money_rescue: %s échoué (%s)", contract, exc)
+        return False, "sauvetage smart money indisponible (panne réseau) -- rejet maintenu"
+
+    if signal.available and signal.score_delta > 0:
+        return True, (
+            f"mouvement parabolique (+{pair.price_change_24h:.0f}%) sauvé par convergence "
+            f"smart money ({len(signal.smart_wallets)} wallet(s) qualifié(s))"
+        )
+    return False, "sauvetage smart money non confirmé (aucune convergence de wallets qualifiés)"
+
 # 19/07 -- plancher de volume 24h minimum (revue croisée Gemini, validée par l'opérateur
 # "gemini a verifier... construis-le"). Angle mort réel identifié : le ratio volume/
 # liquidité (MAX_VOLUME_TO_LIQUIDITY_RATIO ci-dessus) ne détecte qu'un volume TROP HAUT
@@ -633,6 +678,15 @@ async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
         return False, "honeypot confirmé (GoPlus)", "honeypot_rejected"
     if security.cannot_sell_all:
         return False, "revente totale bloquée (GoPlus)", "honeypot_rejected"
+    # 22/07 -- trou trouvé en observant une position momentum RÉELLEMENT ouverte
+    # (CNX, owner_change_balance jamais consulté ici). Rejoint ce garde-fou dur
+    # -- PAS une extension du filtre VC-thesis (mint_authority/dev_wallet restent
+    # hors scope momentum, décision opérateur du 15/07 inchangée) -- ce signal est
+    # de MÊME NATURE que le honeypot lui-même : un pouvoir technique de vol direct
+    # des fonds (l'owner change le solde d'un wallet), pas un signal de conviction.
+    # Coût zéro appel supplémentaire (même lecture GoPlus déjà faite ci-dessus).
+    if security.owner_change_balance:
+        return False, "owner peut modifier le solde d'un wallet (GoPlus)", "honeypot_rejected"
     return True, "honeypot clear (GoPlus)", "honeypot_clear"
 
 
@@ -1462,20 +1516,34 @@ async def evaluate_hard_gates(
                 "hold_reason": "wash_trading_ratio",
             }
 
+    rescue_note: str | None = None
     if (
         current_regime != "euphorie"
         and best.price_change_24h
         and best.price_change_24h > _MAX_PRICE_CHANGE_24H_PCT
     ):
-        return None, None, {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd,
-            "reasons": [
-                f"prix déjà parabolique sur 24h (+{best.price_change_24h:.0f}% > "
-                f"+{_MAX_PRICE_CHANGE_24H_PCT:.0f}%) -- doute, on passe à côté"
-            ],
-            "hold_reason": "already_parabolic",
-        }
+        if best.price_change_24h > _PARABOLIC_RESCUE_MAX_PCT:
+            return None, None, {
+                "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+                "price": best.price_usd,
+                "reasons": [
+                    f"prix déjà parabolique sur 24h (+{best.price_change_24h:.0f}% > "
+                    f"+{_PARABOLIC_RESCUE_MAX_PCT:.0f}%, plafond dur) -- aucun sauvetage "
+                    "possible, on passe à côté"
+                ],
+                "hold_reason": "already_parabolic",
+            }
+        rescued, rescue_note = await _check_parabolic_smart_money_rescue(contract, chain, best)
+        if not rescued:
+            return None, None, {
+                "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+                "price": best.price_usd,
+                "reasons": [
+                    f"prix déjà parabolique sur 24h (+{best.price_change_24h:.0f}% > "
+                    f"+{_MAX_PRICE_CHANGE_24H_PCT:.0f}%) -- {rescue_note}"
+                ],
+                "hold_reason": "already_parabolic",
+            }
 
     has_profile, profile_reason = await _check_project_profile(chain, contract, best)
     if not has_profile:
@@ -1505,6 +1573,8 @@ async def evaluate_hard_gates(
             "price": best.price_usd, "reasons": [honeypot_reason], "hold_reason": honeypot_code,
         }
 
+    if rescue_note:
+        honeypot_reason = f"{honeypot_reason} ; {rescue_note}"
     return best, honeypot_reason, None
 
 
@@ -1548,6 +1618,9 @@ async def evaluate_momentum_entry(
          extrême, même donnée déjà en main. SAUTÉ en régime Euphorie confirmé (20/07) --
          le RVOL (étape 15) reste un rejet dur indépendant qui continue de filtrer un
          mouvement non soutenu par du vrai volume, même quand ce plafond est levé.
+         Palier de sauvetage (22/07, tâche #3) : entre 200% et 350%, une convergence
+         smart money confirmée (``_check_parabolic_smart_money_rescue``) peut lever le
+         rejet -- au-delà de 350%, rejet dur sans exception, aucun sauvetage possible.
       7. Profil projet établi (``_check_project_profile``, 20/07) -- profil DexScreener
          payant (gratuit, déjà en main) OU listing CoinGecko (réseau, court-circuité
          si DexScreener suffit) ; rejet dur si aucun des deux.

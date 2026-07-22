@@ -50,7 +50,10 @@ def _is_dead_address(addr: str) -> bool:
     return False
 
 # Verdicts d'autorité où le mint est considéré NEUTRALISÉ (non contrôlé par un dev).
-_SAFE_AUTHORITIES = frozenset({"renounced", "launchpad", "contract"})
+# Public (pas de préfixe _) : source unique importée par safety_screen.py (crible dur)
+# ET acp_onchain_scan.py (malus de score) — corrige #164, un mint timelocké/launchpad/
+# renoncé ne doit jamais être pénalisé deux fois avec deux listes qui pourraient diverger.
+SAFE_AUTHORITIES = frozenset({"renounced", "launchpad", "contract"})
 
 
 @dataclass(frozen=True)
@@ -68,7 +71,7 @@ class AuthorityVerdict:
 
         ``na`` (aucun mint externe) est trivialement neutralisé : rien à contrôler.
         """
-        return self.kind == "na" or self.kind in _SAFE_AUTHORITIES
+        return self.kind == "na" or self.kind in SAFE_AUTHORITIES
 
 
 @lru_cache(maxsize=1)

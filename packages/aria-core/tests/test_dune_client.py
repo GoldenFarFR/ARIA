@@ -630,6 +630,328 @@ class TestGetFirstFundedBy:
         assert result.error
 
 
+class TestBuildTokenEarlyBuyersQuery:
+    def test_substitutes_contract_lowercased(self):
+        checksummed = "0x" + WETH_BASE[2:].upper()
+        sql = dune.build_token_early_buyers_query(checksummed, blockchain="base")
+        assert WETH_BASE in sql
+        assert "blockchain = 'base'" in sql
+
+    def test_token_address_emitted_as_bare_hex_literal_not_quoted(self):
+        """``token_bought_address`` est ``varbinary`` dans ``dex.trades`` --
+        confirmé en exécution réelle (22/07) : un littéral entre guillemets
+        simples y échoue (« Cannot apply operator: varbinary = varchar »),
+        contrairement à ``taker`` (varchar) dans la MÊME table."""
+        sql = dune.build_token_early_buyers_query(WETH_BASE)
+        assert f"token_bought_address = {WETH_BASE}" in sql
+        assert f"token_bought_address = '{WETH_BASE}'" not in sql
+
+    def test_rejects_malformed_contract(self):
+        with pytest.raises(ValueError):
+            dune.build_token_early_buyers_query("not-an-address")
+
+    def test_rejects_invalid_blockchain(self):
+        with pytest.raises(ValueError):
+            dune.build_token_early_buyers_query(WETH_BASE, blockchain="base; DROP TABLE x")
+
+    def test_rejects_non_positive_lookback_days(self):
+        with pytest.raises(ValueError):
+            dune.build_token_early_buyers_query(WETH_BASE, lookback_days=0)
+
+    def test_rejects_non_positive_limit(self):
+        with pytest.raises(ValueError):
+            dune.build_token_early_buyers_query(WETH_BASE, limit=0)
+
+
+class TestGetTokenEarlyBuyers:
+    @pytest.mark.asyncio
+    async def test_no_key_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DUNE_API_KEY", raising=False)
+
+        result = await dune.get_token_early_buyers(WETH_BASE)
+
+        assert result.available is False
+
+    @pytest.mark.asyncio
+    async def test_invalid_contract_unavailable_no_network_call(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        holder = _patch_client(monkeypatch, [])
+
+        result = await dune.get_token_early_buyers("not-an-address")
+
+        assert result.available is False
+        assert holder["calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_happy_path_parses_wallets_in_order(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"wallet_address": FUNDER, "first_buy_at": "2026-06-22 20:25:35.000 UTC"},
+                                {"wallet_address": WETH_BASE, "first_buy_at": "2026-06-22 20:25:37.000 UTC"},
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_token_early_buyers(WETH_BASE, limit=5)
+
+        assert result.available is True
+        assert result.wallets == [FUNDER, WETH_BASE]
+
+    @pytest.mark.asyncio
+    async def test_malformed_rows_skipped_not_a_crash(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"wallet_address": ""},
+                                {"no_wallet_field": True},
+                                {"wallet_address": FUNDER},
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_token_early_buyers(WETH_BASE)
+
+        assert result.available is True
+        assert result.wallets == [FUNDER]
+
+    @pytest.mark.asyncio
+    async def test_execution_failure_propagates_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500)])
+
+        result = await dune.get_token_early_buyers(WETH_BASE)
+
+        assert result.available is False
+        assert result.error
+
+
+DEPLOYER = "0x1b4f6290434821211d8313aa19317449f80bbd89"
+
+
+class TestBuildInsiderRecipientsQuery:
+    def test_substitutes_contract_and_deployer_lowercased(self):
+        checksummed_contract = "0x" + WETH_BASE[2:].upper()
+        checksummed_deployer = "0x" + DEPLOYER[2:].upper()
+        sql = dune.build_insider_recipients_query(
+            checksummed_contract, checksummed_deployer,
+            window_start="2026-06-22", window_end="2026-06-30",
+        )
+        assert WETH_BASE in sql
+        assert DEPLOYER in sql
+
+    def test_addresses_emitted_as_bare_hex_literals_not_quoted(self):
+        """``contract_address``/``"from"`` sont ``varbinary`` dans
+        ``erc20_base.evt_transfer`` -- confirmé en exécution réelle (22/07,
+        contrat CNX) : un littéral entre guillemets échoue, contrairement à
+        ``taker`` dans ``dex.trades``."""
+        sql = dune.build_insider_recipients_query(
+            WETH_BASE, DEPLOYER, window_start="2026-06-22", window_end="2026-06-30",
+        )
+        assert f"contract_address = {WETH_BASE}" in sql
+        assert f"contract_address = '{WETH_BASE}'" not in sql
+        assert f'"from" = {DEPLOYER}' in sql
+        assert f'"from" = \'{DEPLOYER}\'' not in sql
+
+    def test_includes_zero_address_alongside_deployer(self):
+        """Le mint initial (adresse zéro) doit être couvert en plus du
+        déployeur -- un token peut distribuer directement depuis le mint
+        sans jamais transiter par le wallet 'creator' labellisé."""
+        sql = dune.build_insider_recipients_query(
+            WETH_BASE, DEPLOYER, window_start="2026-06-22", window_end="2026-06-30",
+        )
+        assert dune._ZERO_ADDRESS in sql
+
+    def test_rejects_malformed_contract(self):
+        with pytest.raises(ValueError):
+            dune.build_insider_recipients_query(
+                "not-an-address", DEPLOYER, window_start="2026-06-22", window_end="2026-06-30",
+            )
+
+    def test_rejects_malformed_deployer(self):
+        with pytest.raises(ValueError):
+            dune.build_insider_recipients_query(
+                WETH_BASE, "not-an-address", window_start="2026-06-22", window_end="2026-06-30",
+            )
+
+    def test_rejects_malformed_window_start(self):
+        with pytest.raises(ValueError):
+            dune.build_insider_recipients_query(
+                WETH_BASE, DEPLOYER, window_start="not-a-date", window_end="2026-06-30",
+            )
+
+    def test_rejects_malformed_window_end(self):
+        with pytest.raises(ValueError):
+            dune.build_insider_recipients_query(
+                WETH_BASE, DEPLOYER, window_start="2026-06-22", window_end="'; DROP TABLE x --",
+            )
+
+    def test_rejects_non_positive_limit(self):
+        with pytest.raises(ValueError):
+            dune.build_insider_recipients_query(
+                WETH_BASE, DEPLOYER, window_start="2026-06-22", window_end="2026-06-30", limit=0,
+            )
+
+    def test_accepts_full_timestamp_window(self):
+        sql = dune.build_insider_recipients_query(
+            WETH_BASE, DEPLOYER,
+            window_start="2026-06-22 08:00:00", window_end="2026-06-30 23:59:59",
+        )
+        assert "2026-06-22 08:00:00" in sql
+        assert "2026-06-30 23:59:59" in sql
+
+
+class TestGetInsiderRecipients:
+    @pytest.mark.asyncio
+    async def test_no_key_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DUNE_API_KEY", raising=False)
+
+        result = await dune.get_insider_recipients(
+            WETH_BASE, DEPLOYER, window_start="2026-06-22", window_end="2026-06-30",
+        )
+
+        assert result.available is False
+
+    @pytest.mark.asyncio
+    async def test_invalid_address_unavailable_no_network_call(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        holder = _patch_client(monkeypatch, [])
+
+        result = await dune.get_insider_recipients(
+            "not-an-address", DEPLOYER, window_start="2026-06-22", window_end="2026-06-30",
+        )
+
+        assert result.available is False
+        assert holder["calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_happy_path_parses_recipients_in_order(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {
+                                    "recipient": FUNDER,
+                                    "total_received_raw": 1.736724092e27,
+                                    "first_received_at": "2026-06-23 08:15:55.000 UTC",
+                                },
+                                {
+                                    "recipient": WETH_BASE,
+                                    "total_received_raw": 1.0e20,
+                                    "first_received_at": "2026-06-23 08:34:49.000 UTC",
+                                },
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_insider_recipients(
+            DEPLOYER, DEPLOYER, window_start="2026-06-22", window_end="2026-06-30",
+        )
+
+        assert result.available is True
+        assert [r.address for r in result.recipients] == [FUNDER, WETH_BASE]
+        assert result.recipients[0].total_received_raw == 1.736724092e27
+        assert result.recipients[0].first_received_at == "2026-06-23 08:15:55.000 UTC"
+
+    @pytest.mark.asyncio
+    async def test_malformed_rows_skipped_not_a_crash(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"recipient": "", "total_received_raw": 1.0},
+                                {"recipient": FUNDER, "total_received_raw": "not-a-number"},
+                                {"no_recipient_field": True},
+                                {"recipient": WETH_BASE, "total_received_raw": 5.0, "first_received_at": 12345},
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_insider_recipients(
+            DEPLOYER, DEPLOYER, window_start="2026-06-22", window_end="2026-06-30",
+        )
+
+        assert result.available is True
+        assert [r.address for r in result.recipients] == [WETH_BASE]
+        assert result.recipients[0].first_received_at is None
+
+    @pytest.mark.asyncio
+    async def test_execution_failure_propagates_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500)])
+
+        result = await dune.get_insider_recipients(
+            DEPLOYER, DEPLOYER, window_start="2026-06-22", window_end="2026-06-30",
+        )
+
+        assert result.available is False
+        assert result.error
+
+
 class TestBuildPriceHistoryQuery:
     """Dernier recours de la cascade OHLCV #194 (16/07) -- reconstruit des
     bougies horaires depuis `prices.usd` (granularité minute), utilisée

@@ -121,6 +121,11 @@ class Transaction:
     method: str | None
     timestamp: str | None
     block_number: int | None = None
+    # 22/07 -- réputation déployeur (services/deployer_history.py) : présent tel quel
+    # dans la réponse réelle de l'endpoint (`item.created_contract.hash`, confirmé par
+    # appel direct) sur une tx de création de contrat, ``None`` sinon -- aucun coût
+    # réseau supplémentaire, champ juste jamais mappé avant ce correctif.
+    created_contract: str | None = None
 
 
 @dataclass
@@ -590,6 +595,7 @@ class BlockscoutClient:
                     value_native = None
 
             to_field = item.get("to")
+            created_field = item.get("created_contract")
             transactions.append(
                 Transaction(
                     tx_hash=str(item.get("hash") or ""),
@@ -600,6 +606,7 @@ class BlockscoutClient:
                     method=item.get("method"),
                     timestamp=item.get("timestamp"),
                     block_number=item.get("block_number"),
+                    created_contract=(created_field or {}).get("hash") if isinstance(created_field, dict) else None,
                 )
             )
         return TransactionsResult(transactions=transactions, available=True, error=None)
@@ -633,6 +640,7 @@ class BlockscoutClient:
                 if not isinstance(item, dict):
                     continue
                 to_field = item.get("to")
+                created_field = item.get("created_contract")
                 value_native = None
                 raw_value = item.get("value")
                 if raw_value is not None:
@@ -650,6 +658,7 @@ class BlockscoutClient:
                         method=item.get("method"),
                         timestamp=item.get("timestamp"),
                         block_number=item.get("block_number"),
+                        created_contract=(created_field or {}).get("hash") if isinstance(created_field, dict) else None,
                     )
                 )
 

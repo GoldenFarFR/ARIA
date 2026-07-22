@@ -444,6 +444,14 @@ def _build_untrusted_context(
         legit.append(f"- Comportement du wallet du dev : {_sanitize(ctx.dev_signal, 20)}")
         for pt in ctx.dev_points[:5]:
             legit.append(f"  · {_sanitize(pt, 200)}")
+    if ctx.insider_signal:
+        legit.append(f"- Wallets insiders hors dev (sortie de liquidité déguisée) : {_sanitize(ctx.insider_signal, 20)}")
+        for pt in ctx.insider_points[:5]:
+            legit.append(f"  · {_sanitize(pt, 200)}")
+    if ctx.deployer_reputation_signal:
+        legit.append(f"- Réputation du déployeur (autres contrats créés) : {_sanitize(ctx.deployer_reputation_signal, 20)}")
+        for pt in ctx.deployer_reputation_points[:5]:
+            legit.append(f"  · {_sanitize(pt, 200)}")
     if legit:
         lines.append("Contexte de légitimité (à peser au cas par cas, jamais un rejet automatique) :")
         lines += legit
@@ -1071,7 +1079,8 @@ async def analyze_vc_with_context(
     t_start = time.monotonic()
     ctx = await scan_base_token(
         contract, include_smart_money=True, include_fundamentals=True, include_ta=True,
-        include_dev_behavior=True, include_honeypot=True,
+        include_dev_behavior=True, include_honeypot=True, include_insider_check=True,
+        include_deployer_reputation=True,
     )
     t_scan = time.monotonic() - t_start
 

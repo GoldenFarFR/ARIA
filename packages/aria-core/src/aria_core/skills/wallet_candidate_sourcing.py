@@ -127,9 +127,34 @@ async def list_strong_performers(min_outcome_pct: float = MIN_OUTCOME_PCT_STRONG
 
 
 async def _holders_for_token(contract: str, network: str) -> list[str]:
-    from aria_core.services.blockscout import get_blockscout_client
+    """22/07 -- décision opérateur explicite ("soulageons au maximum
+    Blockscout") : Dune (déjà construit et configuré, jamais branché ici
+    avant ce jour) essayé EN PREMIER via ``get_token_early_buyers`` -- retire
+    un appel Blockscout par token gagnant. Dégrade sur Blockscout
+    (``get_token_holders``, comportement historique inchangé) si Dune n'est
+    pas configuré ou échoue -- dôme classique, jamais bloquant.
+
+    Nuance sémantique DÉLIBÉRÉE, pas cachée : Dune renvoie les PREMIERS
+    ACHETEURS chronologiques (conviction précoce), Blockscout renvoie les plus
+    GROS DÉTENTEURS ACTUELS (position tenue aujourd'hui) -- deux définitions
+    différentes de "wallet intéressant" sur ce même token, toutes deux
+    valables comme candidats à scorer par le pipeline /walletscore en aval."""
+    from aria_core.services import dune
 
     chain = network or "base"
+
+    if dune.is_dune_configured():
+        dune_result = await dune.get_token_early_buyers(
+            contract, blockchain=chain, limit=MAX_HOLDERS_PER_TOKEN,
+        )
+        if dune_result.available and dune_result.wallets:
+            return [
+                w for w in dune_result.wallets
+                if w.lower() not in _DEAD_ADDRESSES
+            ][:MAX_HOLDERS_PER_TOKEN]
+
+    from aria_core.services.blockscout import get_blockscout_client
+
     client = get_blockscout_client(chain)
     result = await client.get_token_holders(contract)
     if not result.available:

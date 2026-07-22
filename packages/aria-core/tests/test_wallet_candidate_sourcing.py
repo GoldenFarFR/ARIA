@@ -283,3 +283,124 @@ async def test_cycle_processes_all_new_performers_in_one_pass(monkeypatch):
     assert await wcs._already_sourced(CONTRACT_A) is True
     assert await wcs._already_sourced(CONTRACT_B) is True
     assert len(notified) == 1  # une seule notification agrégée, pas une par token
+
+
+# ── 22/07, décision opérateur ("soulageons au maximum Blockscout") : Dune ──
+# essayé EN PREMIER sur le sourcing, retombe sur Blockscout si non configuré
+# ou en échec -- dôme classique, jamais bloquant.
+
+@dataclass
+class _FakeDuneEarlyBuyersResult:
+    wallets: list = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+class TestHoldersForTokenDuneFirst:
+    @pytest.mark.asyncio
+    async def test_dune_configured_and_available_skips_blockscout(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+
+        async def _fake_get_token_early_buyers(contract, *, blockchain="base", limit=15, **kw):
+            return _FakeDuneEarlyBuyersResult(wallets=[W1, W2])
+
+        monkeypatch.setattr(
+            "aria_core.services.dune.get_token_early_buyers", _fake_get_token_early_buyers
+        )
+
+        blockscout_called = []
+
+        class _FakeClient:
+            async def get_token_holders(self, token_address):
+                blockscout_called.append(token_address)
+                return _FakeHoldersResult(holders=[])
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout.get_blockscout_client", lambda chain: _FakeClient()
+        )
+
+        wallets = await wcs._holders_for_token(CONTRACT_A, "base")
+
+        assert wallets == [W1, W2]
+        assert blockscout_called == []  # Blockscout jamais appelé -- Dune a suffi
+
+    @pytest.mark.asyncio
+    async def test_dune_wallets_still_filtered_for_dead_addresses(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        dead = "0x000000000000000000000000000000000000dEaD"
+
+        async def _fake_get_token_early_buyers(contract, *, blockchain="base", limit=15, **kw):
+            return _FakeDuneEarlyBuyersResult(wallets=[W1, dead, W2])
+
+        monkeypatch.setattr(
+            "aria_core.services.dune.get_token_early_buyers", _fake_get_token_early_buyers
+        )
+
+        wallets = await wcs._holders_for_token(CONTRACT_A, "base")
+
+        assert wallets == [W1, W2]
+
+    @pytest.mark.asyncio
+    async def test_dune_not_configured_falls_back_to_blockscout(self, monkeypatch):
+        monkeypatch.delenv("DUNE_API_KEY", raising=False)
+
+        class _FakeClient:
+            async def get_token_holders(self, token_address):
+                return _FakeHoldersResult(holders=[_FakeHolder(address=POOL), _FakeHolder(address=W1)])
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout.get_blockscout_client", lambda chain: _FakeClient()
+        )
+
+        wallets = await wcs._holders_for_token(CONTRACT_A, "base")
+
+        assert wallets == [W1]  # POOL exclu (plus gros détenteur), comportement historique
+
+    @pytest.mark.asyncio
+    async def test_dune_configured_but_unavailable_falls_back_to_blockscout(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+
+        async def _fake_get_token_early_buyers(contract, *, blockchain="base", limit=15, **kw):
+            return _FakeDuneEarlyBuyersResult(available=False, error="panne")
+
+        monkeypatch.setattr(
+            "aria_core.services.dune.get_token_early_buyers", _fake_get_token_early_buyers
+        )
+
+        class _FakeClient:
+            async def get_token_holders(self, token_address):
+                return _FakeHoldersResult(holders=[_FakeHolder(address=POOL), _FakeHolder(address=W2)])
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout.get_blockscout_client", lambda chain: _FakeClient()
+        )
+
+        wallets = await wcs._holders_for_token(CONTRACT_A, "base")
+
+        assert wallets == [W2]
+
+    @pytest.mark.asyncio
+    async def test_dune_configured_but_empty_falls_back_to_blockscout(self, monkeypatch):
+        """Dune disponible mais aucun early buyer trouvé (token trop récent
+        pour la fenêtre de lookback, par ex.) -- jamais traité comme un échec,
+        mais ne doit pas non plus priver le sourcing du signal Blockscout."""
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+
+        async def _fake_get_token_early_buyers(contract, *, blockchain="base", limit=15, **kw):
+            return _FakeDuneEarlyBuyersResult(wallets=[], available=True)
+
+        monkeypatch.setattr(
+            "aria_core.services.dune.get_token_early_buyers", _fake_get_token_early_buyers
+        )
+
+        class _FakeClient:
+            async def get_token_holders(self, token_address):
+                return _FakeHoldersResult(holders=[_FakeHolder(address=POOL), _FakeHolder(address=W3)])
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout.get_blockscout_client", lambda chain: _FakeClient()
+        )
+
+        wallets = await wcs._holders_for_token(CONTRACT_A, "base")
+
+        assert wallets == [W3]

@@ -578,6 +578,7 @@ class FakeSecurity:
     available: bool = True
     is_honeypot: bool | None = False
     cannot_sell_all: bool | None = False
+    owner_change_balance: bool | None = False
     error: str | None = None
     no_data: bool = False
 
@@ -619,6 +620,25 @@ async def test_honeypot_confirmed_rejects(monkeypatch):
     clear, reason, code = await me._check_honeypot(CONTRACT, "base")
     assert clear is False
     assert "honeypot" in reason.lower()
+    assert code == "honeypot_rejected"
+
+
+@pytest.mark.asyncio
+async def test_honeypot_owner_change_balance_rejects(monkeypatch):
+    """22/07 -- trou trouvé en observant une position momentum réellement ouverte
+    (CNX, owner_change_balance jamais consulté avant ce correctif). Rejoint le
+    SEUL garde-fou dur du pipeline momentum -- même nature que le honeypot
+    classique (pouvoir de vol direct des fonds), pas une extension du filtre
+    VC-thesis (mint_authority/dev_wallet restent hors scope momentum)."""
+    from aria_core.services import goplus as gp
+
+    async def fake_get_token_security(address, *, chain_id):
+        return FakeSecurity(owner_change_balance=True)
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    clear, reason, code = await me._check_honeypot(CONTRACT, "base")
+    assert clear is False
+    assert "solde" in reason.lower()
     assert code == "honeypot_rejected"
 
 
@@ -1256,6 +1276,7 @@ def _pair(**overrides) -> PairSnapshot:
 def _patch_pipeline(
     monkeypatch, *, honeypot_clear=True, pairs=None, candles=None, signal=None, align=(0, []),
     security_gate=(True, ""), concentration=(False, ""), volume_status=("confirmed", ""),
+    parabolic_rescue=(False, "sauvetage smart money non confirmé (mock par défaut)"),
 ):
     async def fake_honeypot(contract, chain):
         if honeypot_clear:
@@ -1280,6 +1301,9 @@ def _patch_pipeline(
     async def fake_concentration(*args, **kwargs):
         return concentration
 
+    async def fake_parabolic_rescue(*args, **kwargs):
+        return parabolic_rescue
+
     monkeypatch.setattr(me, "_check_honeypot", fake_honeypot)
     monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_pairs)
     monkeypatch.setattr(me, "_fetch_candles", fake_candles)
@@ -1298,6 +1322,7 @@ def _patch_pipeline(
     # 19/07 -- même doctrine que security_gate ci-dessus : mocké "pas concentré" par
     # défaut (aucun appel Blockscout réel en test), couvert par ses propres tests dédiés.
     monkeypatch.setattr(me, "_check_holder_concentration", fake_concentration)
+    monkeypatch.setattr(me, "_check_parabolic_smart_money_rescue", fake_parabolic_rescue)
 
 
 # ── evaluate_hard_gates (22/07, extraction pour le crible unifié VC/Swing) ─────────
@@ -1482,13 +1507,63 @@ async def test_evaluate_parabolic_cap_still_active_outside_euphoria(monkeypatch)
     """Non-régression : le plafond +200%/24h reste actif en régime Neutre/Peur/non
     fourni -- seule l'Euphorie confirmée le lève. Liquidité 250k$ (au-dessus des DEUX
     planchers, nominal ET Peur) pour isoler ce gate précis -- sinon le plancher de
-    liquidité doublé en régime Peur couperait avant même d'atteindre ce gate-ci."""
+    liquidité doublé en régime Peur couperait avant même d'atteindre ce gate-ci.
+    250% est dans la tranche de sauvetage (200-350%, tâche #3, 22/07) -- le mock par
+    défaut de ``_patch_pipeline`` simule une convergence smart money NON confirmée,
+    donc le rejet reste actif (comportement historique préservé quand le sauvetage
+    échoue)."""
     for regime in (None, "neutre", "peur"):
         _patch_pipeline(
             monkeypatch, pairs=[_pair(liquidity_usd=250_000.0, price_change_24h=250.0)],
         )
         result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime=regime)
         assert result["hold_reason"] == "already_parabolic", f"régime {regime}"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_parabolic_rescue_succeeds_with_smart_money_confirmation(monkeypatch):
+    """Tâche #3 (22/07) : entre 200% et 350%, une convergence smart money confirmée
+    lève le rejet -- même en dehors du régime Euphorie."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, pairs=[_pair(liquidity_usd=250_000.0, price_change_24h=300.0)],
+        signal=strong, align=(3, []),
+        parabolic_rescue=(True, "mouvement parabolique sauvé par convergence smart money (2 wallet(s) qualifié(s))"),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime="neutre")
+    assert result.get("hold_reason") != "already_parabolic"
+    assert result["action"] == "BUY"
+    assert "sauvé par convergence smart money" in "; ".join(result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_evaluate_parabolic_hard_ceiling_above_350_never_rescued(monkeypatch):
+    """Au-delà de 350%, rejet dur SANS exception -- le sauvetage smart money n'est
+    même pas tenté (plafond absolu, pas un troisième palier négociable)."""
+    rescue_calls = []
+
+    async def fake_rescue(*args, **kwargs):
+        rescue_calls.append(args)
+        return True, "ne devrait jamais être atteint"
+
+    _patch_pipeline(
+        monkeypatch, pairs=[_pair(liquidity_usd=250_000.0, price_change_24h=400.0)],
+    )
+    monkeypatch.setattr(me, "_check_parabolic_smart_money_rescue", fake_rescue)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", current_regime="neutre")
+    assert result["hold_reason"] == "already_parabolic"
+    assert rescue_calls == [], "le sauvetage ne doit jamais être tenté au-dessus du plafond dur"
+
+
+@pytest.mark.asyncio
+async def test_parabolic_smart_money_rescue_skipped_off_base(monkeypatch):
+    """Couverture Blockscout limitée à Base à ce jour -- sur une autre chaîne, jamais
+    de sauvetage tenté (aucun appel réseau), le rejet reste actif."""
+    rescued, reason = await me._check_parabolic_smart_money_rescue(
+        CONTRACT, "solana", _pair(price_change_24h=250.0),
+    )
+    assert rescued is False
+    assert "Base" in reason
 
 
 @pytest.mark.asyncio
