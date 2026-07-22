@@ -170,6 +170,38 @@ async def test_resolve_bonding_phase_sets_fields_when_in_bonding(monkeypatch):
     assert ctx.bonding_holder_count == 120
 
 
+@pytest.mark.asyncio
+async def test_resolve_bonding_phase_sets_token_created_at_ms(monkeypatch):
+    """22/07 -- tâche #28 : repli pour insider_wallets, qui n'a autrement AUCUNE
+    date de référence en bonding pré-graduation (ctx.best_pair reste None)."""
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return _bonding_token(created_at="2026-07-06T12:00:00.000Z")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    await scan._resolve_bonding_phase(ctx, ADDR)
+
+    assert ctx.token_created_at_ms == 1783339200000
+
+
+@pytest.mark.asyncio
+async def test_resolve_bonding_phase_missing_created_at_stays_none(monkeypatch):
+    async def fake_fetch_by_address(address, chain="BASE"):
+        return _bonding_token(created_at=None)
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
+    )
+
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    await scan._resolve_bonding_phase(ctx, ADDR)
+
+    assert ctx.token_created_at_ms is None
+
+
 # ── _resolve_bonding_phase : repli on-chain (audit 11/07, gate OFF par défaut) ─────
 
 

@@ -50,6 +50,60 @@ async def test_resolve_insider_wallets_no_pair_created_at_is_unknown(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_resolve_insider_wallets_falls_back_to_token_created_at_when_no_pair(monkeypatch):
+    """22/07 -- tâche #28 : un token en bonding pré-graduation n'a AUCUNE paire
+    DexScreener (ctx.best_pair reste None), mais ctx.token_created_at_ms (repli
+    Virtuals) doit suffire à faire fonctionner le signal quand même."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    ctx.best_pair = None
+    ctx.bonding_phase = True
+    ctx.token_created_at_ms = 1782547200000
+    monkeypatch.setattr(
+        type(scan.blockscout_client), "get_address_info",
+        AsyncMock(return_value=AddressInfo(address=ADDR, creator_address=DEV, available=True)),
+    )
+    fake_facts = InsiderWalletFacts(examined=1, flagged=[], available=True)
+    gather_mock = AsyncMock(return_value=fake_facts)
+    monkeypatch.setattr(insider_wallets, "gather_insider_wallet_facts", gather_mock)
+    monkeypatch.setattr(
+        insider_wallets, "judge_insider_wallets",
+        lambda facts: InsiderWalletVerdict(signal="neutral", points=["ok"]),
+    )
+
+    await scan._resolve_insider_wallets(ctx, ADDR, TokenHoldersResult(available=True))
+
+    assert ctx.insider_signal == "neutral"
+    gather_mock.assert_awaited_once()
+    _, kwargs = gather_mock.await_args
+    assert kwargs["pair_created_at_ms"] == 1782547200000
+    assert kwargs["lp_address"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_insider_wallets_prefers_pair_created_at_over_token_created_at(monkeypatch):
+    """Un token GRADUÉ (paire DEX réelle) doit utiliser sa vraie date de paire,
+    jamais le repli bonding, même si les deux sont renseignés par accident."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True)
+    ctx.best_pair = _pair(created_at=999)
+    ctx.token_created_at_ms = 111  # ne doit jamais être utilisé ici
+    monkeypatch.setattr(
+        type(scan.blockscout_client), "get_address_info",
+        AsyncMock(return_value=AddressInfo(address=ADDR, creator_address=DEV, available=True)),
+    )
+    gather_mock = AsyncMock(return_value=InsiderWalletFacts(examined=0, available=True))
+    monkeypatch.setattr(insider_wallets, "gather_insider_wallet_facts", gather_mock)
+    monkeypatch.setattr(
+        insider_wallets, "judge_insider_wallets",
+        lambda facts: InsiderWalletVerdict(signal="neutral", points=[]),
+    )
+
+    await scan._resolve_insider_wallets(ctx, ADDR, TokenHoldersResult(available=True))
+
+    _, kwargs = gather_mock.await_args
+    assert kwargs["pair_created_at_ms"] == 999
+
+
+@pytest.mark.asyncio
 async def test_resolve_insider_wallets_wires_verdict_onto_context(monkeypatch):
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     ctx.best_pair = _pair()

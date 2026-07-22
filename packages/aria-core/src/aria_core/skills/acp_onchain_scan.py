@@ -5,6 +5,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -262,6 +263,14 @@ class TokenScanContext:
     bonding_progress: float | None = None  # 0.0-1.0, part du seuil de graduation atteint
     bonding_holder_count: int | None = None
     bonding_mcap_virtual: float | None = None  # dénominé en VIRTUAL, pas converti en USD
+    # 22/07 -- comble un trou trouvé en vérifiant la couverture bonding des signaux
+    # insider_wallets/deployer_history (tous deux ancrés sur ctx.best_pair.pair_created_at,
+    # qui reste None tant qu'aucune paire DEX n'existe -- NORMAL en bonding pré-graduation).
+    # `VirtualsToken.created_at` (déjà récolté par le même appel réseau que bonding_phase
+    # ci-dessus, zéro coût supplémentaire) sert de repli : date de création du PROTOTYPE
+    # bonding, pas d'une paire DEX, mais la même fenêtre temporelle reste pertinente pour
+    # repérer une distribution insider survenue au lancement.
+    token_created_at_ms: int | None = None
     # Diligence produit Virtuals (audit 11/07, cf. skills/vc_analysis.py). Peuplé DÈS
     # qu'un token est trouvé sur Virtuals via `_resolve_bonding_phase` (bonding ou non --
     # zéro coût réseau supplémentaire, même appel que ci-dessus) ; pour un token DÉJÀ
@@ -606,6 +615,19 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
         ctx.lite_verdict = "DANGER"
 
 
+def _iso_to_epoch_ms(iso_ts: str | None) -> int | None:
+    """``VirtualsToken.created_at`` (ISO 8601, ex. '2026-07-06T12:00:00.000Z')
+    -> ms epoch, même conversion que ``PairSnapshot.pair_created_at``. None si
+    illisible -- jamais une date inventée."""
+    if not iso_ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return int(dt.timestamp() * 1000)
+
+
 async def _resolve_bonding_phase(ctx: "TokenScanContext", contract: str) -> None:
     """Best-effort, appelé UNIQUEMENT quand aucune paire DexScreener n'a été trouvée : un
     contrat sans pool peut légitimement être un token Virtuals encore en courbe de bonding
@@ -634,6 +656,7 @@ async def _resolve_bonding_phase(ctx: "TokenScanContext", contract: str) -> None
         ctx.virtuals_description = token.description
         ctx.virtuals_tokenomics = token.tokenomics
         ctx.virtuals_additional_details = token.additional_details
+        ctx.token_created_at_ms = _iso_to_epoch_ms(token.created_at)
         if is_in_bonding(token):
             ctx.bonding_phase = True
             ctx.bonding_progress = graduation_progress(token)
@@ -872,22 +895,29 @@ async def _resolve_insider_wallets(ctx: "TokenScanContext", token_address: str, 
 
     Nécessite un déployeur connu (résolu par `_resolve_dev_behavior`, appelé juste
     avant si `include_dev_behavior` est aussi actif -- sinon re-résolu ici) et une
-    date de création de paire (`ctx.best_pair.pair_created_at`, absente en bonding
-    pré-graduation -- signal simplement non peuplé dans ce cas, pas un blocage)."""
+    date de référence pour borner la fenêtre : `ctx.best_pair.pair_created_at`
+    (paire DEX graduée) SINON `ctx.token_created_at_ms` (repli 22/07 -- date de
+    création du prototype bonding Virtuals, même appel réseau que bonding_phase,
+    zéro coût supplémentaire) -- sans aucune des deux (contrat ni gradué ni connu
+    de Virtuals), signal simplement non peuplé, jamais un blocage."""
     from aria_core.skills.insider_wallets import gather_insider_wallet_facts, judge_insider_wallets
 
     try:
         creator = None
         info = await blockscout_client.get_address_info(token_address)
         creator = info.creator_address if info.available else None
-        if not creator or not ctx.best_pair or not ctx.best_pair.pair_created_at:
+        reference_ts = (
+            ctx.best_pair.pair_created_at if ctx.best_pair and ctx.best_pair.pair_created_at
+            else ctx.token_created_at_ms
+        )
+        if not creator or not reference_ts:
             ctx.insider_signal = "unknown"
-            ctx.insider_points = ["déployeur ou date de création de paire inconnus"]
+            ctx.insider_points = ["déployeur ou date de création de référence inconnus"]
             return
         facts = await gather_insider_wallet_facts(
             token_address,
             creator,
-            pair_created_at_ms=ctx.best_pair.pair_created_at,
+            pair_created_at_ms=reference_ts,
             lp_address=ctx.best_pair.pair_address if ctx.best_pair else None,
             holders=holders,
         )
