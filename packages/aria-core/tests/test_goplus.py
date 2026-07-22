@@ -558,6 +558,144 @@ async def test_code_4012_never_triggers_fallback_without_credentials(monkeypatch
     assert security.no_data is True  # traité comme "pas de donnée", jamais une boucle
 
 
+# ── ownership_verifiably_renounced + cache par contrat, 22/07 ─────────────────
+# Dédup de ressource rare (observation opérateur : un token dont l'ownership est
+# renoncé ne peut structurellement plus voir son verdict de sécurité changer dans
+# le temps -- pas besoin de le rescanner à chaque cycle).
+
+def test_ownership_verifiably_renounced_true_when_no_owner_and_no_backdoor():
+    security = TokenSecurity(
+        address=ADDR, available=True, owner_address="",
+        can_take_back_ownership=False, hidden_owner=False, owner_change_balance=False,
+    )
+    assert security.ownership_verifiably_renounced is True
+
+
+def test_ownership_verifiably_renounced_false_with_active_owner():
+    security = TokenSecurity(
+        address=ADDR, available=True, owner_address="0x660eaaedebc968f8f3694354fa8ec0b4c5ba8d12",
+        can_take_back_ownership=False, hidden_owner=False, owner_change_balance=False,
+    )
+    assert security.ownership_verifiably_renounced is False
+
+
+def test_ownership_verifiably_renounced_false_with_backdoor_despite_empty_owner():
+    """Un contrat qui SEMBLE renoncé (owner_address vide) mais garde une porte
+    dérobée (`can_take_back_ownership`) n'est PAS considéré comme définitivement
+    sûr -- signal de scam connu, pas un cas théorique."""
+    security = TokenSecurity(
+        address=ADDR, available=True, owner_address="",
+        can_take_back_ownership=True, hidden_owner=False, owner_change_balance=False,
+    )
+    assert security.ownership_verifiably_renounced is False
+
+
+def test_ownership_verifiably_renounced_false_on_unknown_flag():
+    """Fail-closed sur l'incertitude : un drapeau `None` (inconnu, pas confirmé
+    absent) ne doit jamais compter comme "pas de porte dérobée"."""
+    security = TokenSecurity(
+        address=ADDR, available=True, owner_address="",
+        can_take_back_ownership=None, hidden_owner=False, owner_change_balance=False,
+    )
+    assert security.ownership_verifiably_renounced is False
+
+
+def test_ownership_verifiably_renounced_false_when_unavailable():
+    security = TokenSecurity(address=ADDR, available=False, owner_address="")
+    assert security.ownership_verifiably_renounced is False
+
+
+def _counting_client(payload):
+    """Comme `_client_returning` mais compte les appels réseau réellement faits --
+    nécessaire pour prouver qu'un second appel sur le même contrat ne retape pas
+    GoPlus quand le cache doit s'appliquer."""
+    c = GoPlusClient()
+    calls: list = []
+
+    async def fake_get_json(path, *, params=None):
+        calls.append((path, params))
+        return payload, None
+
+    c._get_json = fake_get_json  # type: ignore[method-assign]
+    return c, calls
+
+
+def _renounced_payload(addr=ADDR):
+    return {
+        "code": 1, "message": "OK",
+        "result": {addr.lower(): {
+            "is_honeypot": "0", "owner_address": "",
+            "can_take_back_ownership": "0", "hidden_owner": "0", "owner_change_balance": "0",
+        }},
+    }
+
+
+def _owned_payload(addr=ADDR):
+    return {
+        "code": 1, "message": "OK",
+        "result": {addr.lower(): {
+            "is_honeypot": "0", "owner_address": "0x660eaaedebc968f8f3694354fa8ec0b4c5ba8d12",
+        }},
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_token_security_caches_renounced_token_long_term(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: 1_000_000.0)
+    client, calls = _counting_client(_renounced_payload())
+
+    first = await client.get_token_security(ADDR, chain_id="8453")
+    second = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert first.ownership_verifiably_renounced is True
+    assert second is first  # même objet renvoyé depuis le cache
+    assert len(calls) == 1  # un seul appel réseau pour les deux lectures
+
+
+@pytest.mark.asyncio
+async def test_get_token_security_short_cache_for_active_owner(monkeypatch):
+    now = {"t": 1_000_000.0}
+    monkeypatch.setattr(time, "time", lambda: now["t"])
+    client, calls = _counting_client(_owned_payload())
+
+    first = await client.get_token_security(ADDR, chain_id="8453")
+    now["t"] += 30.0  # dans la fenêtre courte (120s)
+    second = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert first.ownership_verifiably_renounced is False
+    assert len(calls) == 1  # dédupliqué à l'intérieur de la fenêtre courte
+
+    now["t"] += 200.0  # au-delà de la fenêtre courte
+    third = await client.get_token_security(ADDR, chain_id="8453")
+    assert len(calls) == 2  # re-scanné une fois le TTL court expiré
+
+
+@pytest.mark.asyncio
+async def test_get_token_security_never_caches_unavailable_result(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: 1_000_000.0)
+    client, calls = _counting_client({"code": 1, "message": "OK", "result": {}})
+
+    first = await client.get_token_security(ADDR, chain_id="8453")
+    second = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert first.available is False
+    assert second.available is False
+    assert len(calls) == 2  # jamais mis en cache -- retenté à chaque appel
+
+
+@pytest.mark.asyncio
+async def test_get_token_security_cache_isolated_by_chain(monkeypatch):
+    """Le même contrat sur deux chaînes différentes ne doit jamais partager une
+    entrée de cache -- deux jetons distincts, deux vérités de sécurité distinctes."""
+    monkeypatch.setattr(time, "time", lambda: 1_000_000.0)
+    client, calls = _counting_client(_renounced_payload())
+
+    await client.get_token_security(ADDR, chain_id="8453")
+    await client.get_token_security(ADDR, chain_id="solana")
+
+    assert len(calls) == 2
+
+
 # ── client GoPlus ─────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

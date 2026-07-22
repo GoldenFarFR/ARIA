@@ -55,6 +55,16 @@ BASE_CHAIN_ID = "8453"  # Base mainnet
 # une fois les identifiants corrigés.
 _AUTH_BROKEN_COOLDOWN_S = 1800.0
 
+# 22/07 -- TTL du cache de sécurité par contrat (dédup de ressource rare, cf.
+# GoPlusClient.__init__ pour le raisonnement complet). Renoncé confirmé = 30 jours
+# (au-delà de la durée de vie normale d'un process, sert surtout de garde-fou
+# défensif en cas de process longue durée -- pas un TTL réellement significatif vu
+# l'invariant structurel). Sinon = 120s, calé sur la cadence WebSocket (~30s,
+# `momentum_websocket.py`) pour dédupliquer sans retarder la détection d'un vrai
+# changement de comportement.
+_RENOUNCED_CACHE_TTL_S = 30 * 24 * 3600.0
+_SHORT_CACHE_TTL_S = 120.0
+
 UNAVAILABLE = "donnée GoPlus indisponible"
 
 _FAIL_STREAK_WARN_THRESHOLD = 3
@@ -100,6 +110,12 @@ class TokenSecurity:
     is_mintable: bool | None = None
     is_open_source: bool | None = None       # 0 = code non vérifié
     is_proxy: bool | None = None
+    # 22/07 -- adresse de l'owner du contrat, vérifiée en direct sur 4 tokens réels :
+    # chaîne vide ("") ou absente (None) = aucun owner actif (renoncé/canonique, ex.
+    # WETH) ; une vraie adresse = owner actif (ex. proxy admin USDC). Sert de base à
+    # `ownership_verifiably_renounced` ci-dessous -- jamais affiché seul comme un
+    # verdict de sécurité.
+    owner_address: str | None = None
     available: bool = False
     error: str | None = None
     # #207, 18/07 : True UNIQUEMENT quand GoPlus a répondu proprement (pas de panne
@@ -108,6 +124,29 @@ class TokenSecurity:
     # d'une vraie panne (timeout, 5xx, rate limit) -- seul ce cas précis autorise un
     # second avis (services/rugcheck.py) dans momentum_entry._check_honeypot.
     no_data: bool = False
+
+    @property
+    def ownership_verifiably_renounced(self) -> bool:
+        """True UNIQUEMENT quand GoPlus confirme positivement qu'aucun owner actif ne
+        contrôle plus ce contrat -- aucune fonction ne peut alors changer son
+        comportement de sécurité dans le temps (22/07, observation opérateur).
+        Exige les DEUX signaux à la fois (jamais un seul) : (1) `owner_address` vide/
+        absent -- pas d'owner actif ; (2) aucun mécanisme de reprise confirmé
+        (`can_take_back_ownership`/`hidden_owner`/`owner_change_balance` tous
+        différents de True) -- un contrat qui SEMBLE renoncé mais garde une porte
+        dérobée n'est PAS considéré comme définitivement sûr. `None` (inconnu) sur
+        n'importe lequel de ces 3 drapeaux ne compte PAS comme "confirmé absent" --
+        fail-closed sur l'INCERTITUDE, cohérent avec la doctrine du reste du module."""
+        if not self.available:
+            return False
+        owner = (self.owner_address or "").strip()
+        if owner:
+            return False
+        return (
+            self.can_take_back_ownership is False
+            and self.hidden_owner is False
+            and self.owner_change_balance is False
+        )
 
 
 @dataclass
@@ -183,6 +222,21 @@ class GoPlusClient:
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()
         self._auth_broken_until: float = 0.0
+        # 22/07 -- cache de sécurité par contrat (dédup de ressource rare, cf. doctrine
+        # "rareté -> dédupliquer avant de recalibrer"). Clé (chain_id, adresse en
+        # minuscule) -> (TokenSecurity, expire_at epoch). Un token dont l'ownership
+        # est VÉRIFIABLEMENT renoncé (cf. TokenSecurity.ownership_verifiably_renounced)
+        # ne peut structurellement plus changer de comportement de sécurité dans le
+        # temps -- mis en cache très longtemps (`_RENOUNCED_CACHE_TTL_S`). Tout le
+        # reste (owner actif, ou statut de renonciation inconnu) reste en cache
+        # BRIEFVEMENT (`_SHORT_CACHE_TTL_S`) -- assez pour dédupliquer des
+        # réévaluations rapprochées du même candidat encore en attente (WebSocket
+        # ~30s), sans retarder significativement la détection d'un signal
+        # nouvellement malveillant sur un contrat dont l'owner garde le contrôle.
+        # Un résultat en panne (available=False) n'est JAMAIS mis en cache -- le
+        # retry `no_data` existant (`momentum_entry._check_honeypot`) doit toujours
+        # pouvoir retenter sans qu'un cache ne fige un "indisponible" transitoire.
+        self._security_cache: dict[tuple[str, str], tuple["TokenSecurity", float]] = {}
 
     async def _ensure_access_token(self) -> str | None:
         """Renouvelle l'access_token si absent/proche expiration. Retourne None sans
@@ -392,10 +446,23 @@ class GoPlusClient:
     async def get_token_security(
         self, address: str, *, chain_id: str = BASE_CHAIN_ID
     ) -> TokenSecurity:
-        """Interroge GoPlus Token Security pour un contrat. Best-effort, jamais bloquant."""
+        """Interroge GoPlus Token Security pour un contrat. Best-effort, jamais bloquant.
+
+        22/07 -- cache par (chain_id, adresse) avant tout appel réseau (dédup de
+        ressource rare, cf. commentaires `__init__`/`ownership_verifiably_renounced`).
+        Une entrée en cache n'est JAMAIS un résultat en panne (voir le point de
+        stockage plus bas) -- une absence de cache déclenche toujours un vrai appel."""
         addr = (address or "").strip()
         if not addr:
             return TokenSecurity(address=addr, available=False, error="adresse vide")
+
+        cache_key = (str(chain_id), addr.lower())
+        cached = self._security_cache.get(cache_key)
+        if cached is not None:
+            cached_security, expires_at = cached
+            if time.time() < expires_at:
+                return cached_security
+            del self._security_cache[cache_key]
 
         data, error = await self._get_json(
             f"/token_security/{chain_id}", params={"contract_addresses": addr}
@@ -425,7 +492,7 @@ class GoPlusClient:
         if not isinstance(row, dict):
             return TokenSecurity(address=addr, available=False, error=UNAVAILABLE)
 
-        return TokenSecurity(
+        security = TokenSecurity(
             address=addr,
             is_honeypot=_tri(row.get("is_honeypot")),
             cannot_sell_all=_tri(row.get("cannot_sell_all")),
@@ -442,9 +509,18 @@ class GoPlusClient:
             is_mintable=_tri(row.get("is_mintable")),
             is_open_source=_tri(row.get("is_open_source")),
             is_proxy=_tri(row.get("is_proxy")),
+            owner_address=(row.get("owner_address") or None),
             available=True,
             error=None,
         )
+        # 22/07 -- ne met en cache QUE les résultats disponibles (jamais un no_data/
+        # panne, retournés plus haut avant d'atteindre ce point). Ownership
+        # vérifiablement renoncé -> TTL long (rien ne peut plus changer) ; sinon ->
+        # TTL court (dédup des réévaluations rapprochées du même candidat encore en
+        # attente, sans retarder significativement la détection d'un vrai changement).
+        ttl = _RENOUNCED_CACHE_TTL_S if security.ownership_verifiably_renounced else _SHORT_CACHE_TTL_S
+        self._security_cache[cache_key] = (security, time.time() + ttl)
+        return security
 
 
     # ------------------------------------------------------------------
