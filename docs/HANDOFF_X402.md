@@ -56,3 +56,9 @@ Solution : twit.sh (x402.twit.sh/tweets/search + /tweets/user) validé en condit
 [DEPLOYE] Sujet    : Paiements x402 non traçables jusqu'au token/contrat concerné
 Date : 2026.07.19  /  Probleme : x402_budget.py n'enregistrait ni contrat ni symbole de token — une corrélation après coup entre un paiement orphelin et sa cause réelle exigeait une reconstitution manuelle fragile (horodatages contre paper_position, logs disparus au redéploiement suivant).
 Solution : champs optionnels contract/token_symbol threadés de bout en bout (x402_budget.record_spend -> x402_executor.fetch_paid_resource/_blocked -> services/twitsh.py -> conviction_research.py) — chaque paiement, succès ou blocage, reste désormais traçable sans reconstitution forensique — x402_budget.py (commit 382565f5, tâche #143).
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Alerte Telegram du wallet agent enrichie (token/raison/liens BaseScan+DexScreener)
+Date : 2026.07.22  /  Probleme : le contrat/token_symbol/resource/provider étaient déjà tracés (cf. entrée ci-dessus) mais jamais remontés jusqu'à l'alerte agent_wallet_monitor.format_movement_alert affichée à l'opérateur — impossible de savoir quel token a été scanné ni pourquoi sans aller lire la base à la main. Le tx_hash n'était pas non plus un lien cliquable.
+Solution : _matches_known_x402() retourne le spend matché complet (dict) au lieu d'un bool ; WalletMovement porte 4 champs optionnels (contract/token_symbol/resource/provider) ; l'alerte ajoute Token/DexScreener/Raison/BaseScan uniquement pour classification==known_x402 avec contract renseigné (dégradation douce sinon, jamais de ligne vide) ; nouveau helper basescan_tx_url (même patron pur que dexscreener.token_url) — agent_wallet_monitor.py (commit e258be12).
