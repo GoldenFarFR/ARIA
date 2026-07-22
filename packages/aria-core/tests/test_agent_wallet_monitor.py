@@ -186,11 +186,15 @@ async def test_outgoing_transfer_not_correlated_when_outside_time_window(monkeyp
 
 def test_matches_known_x402_false_on_unparseable_timestamp():
     """Doute -> jamais de correspondance (fail-closed vers l'alerte, pas vers le
-    silence) -- même doctrine que le reste du module."""
+    silence) -- même doctrine que le reste du module.
+
+    22/07 -- `_matches_known_x402` renvoie désormais le dict du spend matché (ou
+    `None`) plutôt qu'un bool (cf. enrichissement de l'alerte known_x402) : assertion
+    adaptée au nouveau contrat, logique de matching inchangée."""
     assert monitor._matches_known_x402(
         counterparty="0xabc", amount=0.02, timestamp="pas une date",
         known_x402_spends=[{"pay_to": "0xabc", "amount_usd": 0.02, "created_at": "2026-07-17T16:43:52Z"}],
-    ) is False
+    ) is None
 
 
 def test_format_movement_alert_known_x402_uses_dedicated_label():
@@ -201,6 +205,204 @@ def test_format_movement_alert_known_x402_uses_dedicated_label():
         counterparty="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6", classification="known_x402",
     ))
     assert "Paiement x402 initié par ARIA (attendu)" in msg
+
+
+# ── enrichissement token/service de l'alerte known_x402 (22/07) ────────────────
+
+
+@pytest.mark.asyncio
+async def test_outgoing_transfer_known_x402_enriched_with_matched_spend_contract(monkeypatch):
+    """Le mouvement known_x402 doit remonter contract/token_symbol/resource/provider
+    du spend matché, pour que l'alerte affiche QUEL token a été scanné et POURQUOI."""
+    transfer = TokenTransfer(
+        tx_hash="0xcybercentrypayment2", from_address=WALLET,
+        to_address="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.02, timestamp="2026-07-22T16:43:55+00:00",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    known_x402_spends = [{
+        "pay_to": "0xfEE13309251B632317ea2d475d6ABa7E7E0219e6",
+        "amount_usd": 0.02, "status": "ok",
+        "created_at": "2026-07-22T16:43:52.325464+00:00",
+        "contract": "0xdeadbeef00000000000000000000000000dead",
+        "token_symbol": "GEM", "resource": "honeypot_check", "provider": "GoPlus",
+    }]
+
+    result = await monitor.check_wallet_activity(
+        wallet_address=WALLET, known_x402_spends=known_x402_spends,
+    )
+
+    assert len(result) == 1
+    m = result[0]
+    assert m.classification == "known_x402"
+    assert m.contract == "0xdeadbeef00000000000000000000000000dead"
+    assert m.token_symbol == "GEM"
+    assert m.resource == "honeypot_check"
+    assert m.provider == "GoPlus"
+
+
+def test_format_movement_alert_known_x402_with_contract_shows_token_dexscreener_reason_basescan():
+    from aria_core.agent_wallet_monitor import WalletMovement, basescan_tx_url, format_movement_alert
+
+    m = WalletMovement(
+        tx_hash="0xcybercentrypayment2", direction="out", asset="USDC", amount=0.02,
+        counterparty="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6", classification="known_x402",
+        contract="0xdeadbeef00000000000000000000000000dead", token_symbol="GEM",
+        resource="honeypot_check", provider="GoPlus",
+    )
+    msg = format_movement_alert(m)
+    # 22/07 (revue croisée) -- token_symbol affiché à côté de l'adresse quand connu.
+    assert "Token : GEM (0xdeadbeef00000000000000000000000000dead)" in msg
+    assert "DexScreener : https://dexscreener.com/base/0xdeadbeef00000000000000000000000000dead" in msg
+    assert "Raison : honeypot_check via GoPlus" in msg
+    assert f"BaseScan : {basescan_tx_url('0xcybercentrypayment2')}" in msg
+
+
+def test_format_movement_alert_known_x402_without_token_symbol_shows_address_only():
+    """token_symbol inconnu (spend loggé sans symbole) -- repli sur l'adresse seule,
+    même format que le comportement historique avant l'ajout du symbole."""
+    from aria_core.agent_wallet_monitor import WalletMovement, format_movement_alert
+
+    m = WalletMovement(
+        tx_hash="0xnosymbol", direction="out", asset="USDC", amount=0.02,
+        counterparty="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6", classification="known_x402",
+        contract="0xdeadbeef00000000000000000000000000dead", resource="honeypot_check",
+    )
+    msg = format_movement_alert(m)
+    assert "Token : 0xdeadbeef00000000000000000000000000dead" in msg
+    assert "Token : GEM" not in msg
+
+
+def test_format_movement_alert_known_x402_empty_resource_omits_reason_line():
+    """22/07 (revue croisée) -- contract renseigné mais resource vide (théorique,
+    x402_budget.record_spend() l'exige en pratique, mais aucune garde ne le
+    supposait avant ce correctif) : aucune ligne 'Raison : ' à moitié vide."""
+    from aria_core.agent_wallet_monitor import WalletMovement, format_movement_alert
+
+    m = WalletMovement(
+        tx_hash="0xemptyreason", direction="out", asset="USDC", amount=0.02,
+        counterparty="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6", classification="known_x402",
+        contract="0xdeadbeef00000000000000000000000000dead", resource="", provider="GoPlus",
+    )
+    msg = format_movement_alert(m)
+    assert "Raison" not in msg
+    assert "Token : 0xdeadbeef00000000000000000000000000dead" in msg
+
+
+def test_format_movement_alert_known_x402_reason_without_provider():
+    from aria_core.agent_wallet_monitor import WalletMovement, format_movement_alert
+
+    m = WalletMovement(
+        tx_hash="0xabc", direction="out", asset="USDC", amount=0.02,
+        counterparty="0xfEE13309251B632317ea2d475d6ABa7E7E0219e6", classification="known_x402",
+        contract="0xdeadbeef00000000000000000000000000dead", resource="recherche web generique",
+        provider="",
+    )
+    msg = format_movement_alert(m)
+    assert "Raison : recherche web generique" in msg
+    assert " via " not in msg
+
+
+def test_format_movement_alert_known_x402_without_contract_adds_no_extra_lines():
+    """Paiement x402 générique (ex. recherche web) sans contract associé -- aucune
+    des 4 lignes (Token/DexScreener/Raison/BaseScan) ne doit apparaître, jamais un
+    "N/A" ou une ligne vide."""
+    from aria_core.agent_wallet_monitor import WalletMovement, format_movement_alert
+
+    m = WalletMovement(
+        tx_hash="0xwebpayment", direction="out", asset="USDC", amount=0.05,
+        counterparty="0xsomeprovider", classification="known_x402",
+        resource="recherche web generique", provider="Tavily",
+        # contract volontairement vide -- pas de token concerné par ce paiement
+    )
+    msg = format_movement_alert(m)
+    assert "Token :" not in msg
+    assert "DexScreener :" not in msg
+    assert "Raison :" not in msg
+    assert "BaseScan :" not in msg
+    assert "N/A" not in msg
+
+
+def test_matches_known_x402_returns_full_spend_dict_on_match():
+    spend = {
+        "pay_to": "0xabc", "amount_usd": 0.02, "created_at": "2026-07-17T16:43:52Z",
+        "contract": "0xgem", "token_symbol": "GEM", "resource": "honeypot_check", "provider": "GoPlus",
+    }
+    result = monitor._matches_known_x402(
+        counterparty="0xabc", amount=0.02, timestamp="2026-07-17T16:44:00Z",
+        known_x402_spends=[spend],
+    )
+    assert result == spend
+
+
+def test_matches_known_x402_returns_none_on_no_match():
+    result = monitor._matches_known_x402(
+        counterparty="0xabc", amount=0.02, timestamp="2026-07-17T16:44:00Z",
+        known_x402_spends=[{"pay_to": "0xdifferent", "amount_usd": 0.02, "created_at": "2026-07-17T16:43:52Z"}],
+    )
+    assert result is None
+
+
+def test_basescan_tx_url_builds_expected_url():
+    from aria_core.agent_wallet_monitor import basescan_tx_url
+
+    assert basescan_tx_url("0xabc123") == "https://basescan.org/tx/0xabc123"
+
+
+# ── non-régression : les autres classifications n'affichent RIEN de nouveau ────
+
+
+def test_format_movement_alert_known_shows_no_extra_lines():
+    m = monitor.WalletMovement(
+        tx_hash="0xariainitiated", direction="out", asset="USDC", amount=5.0,
+        counterparty="0x33783cCb570Cb279C25F836806B5c4C3C8309777", classification="known",
+    )
+    msg = monitor.format_movement_alert(m)
+    assert msg == (
+        "✅ Wallet agent — Mouvement initié par ARIA (attendu)\n"
+        "Sortie : 5.0 USDC\n"
+        "Vers : 0x33783cCb570Cb279C25F836806B5c4C3C8309777\n"
+        "Tx : 0xariainitiated"
+    )
+
+
+def test_format_movement_alert_external_deposit_shows_no_extra_lines():
+    m = monitor.WalletMovement(
+        tx_hash="0xgood", direction="in", asset="USDC", amount=1.0,
+        counterparty="0xoperator", classification="external_deposit",
+    )
+    msg = monitor.format_movement_alert(m)
+    assert "BaseScan :" not in msg
+    assert "Token :" not in msg
+    assert "DexScreener :" not in msg
+    assert "Raison :" not in msg
+
+
+def test_format_movement_alert_unexpected_outflow_shows_no_extra_lines():
+    m = monitor.WalletMovement(
+        tx_hash="0xbad", direction="out", asset="USDC", amount=5.0,
+        counterparty="0xunknown", classification="unexpected_outflow",
+    )
+    msg = monitor.format_movement_alert(m)
+    assert "BaseScan :" not in msg
+    assert "Token :" not in msg
+    assert "DexScreener :" not in msg
+    assert "Raison :" not in msg
+
+
+def test_format_movement_alert_suspicious_token_shows_no_extra_lines():
+    m = monitor.WalletMovement(
+        tx_hash="0xfaketh", direction="in", asset="EṬH (FAUX ETH -- contrat non officiel)",
+        amount=0.001, counterparty="0xscammer", classification="suspicious_token",
+    )
+    msg = monitor.format_movement_alert(m)
+    assert "BaseScan :" not in msg
+    assert "Token :" not in msg
+    assert "DexScreener :" not in msg
+    assert "Raison :" not in msg
 
 
 @pytest.mark.asyncio

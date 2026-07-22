@@ -119,3 +119,9 @@ Solution : services/blockscout_x402.py (holders enrichis payes a l'appel) -> tok
 [DEPLOYE] Sujet    : Deux trous de suivi du classement smart-money corriges
 Date : 2026.07.21 / Probleme : un wallet devenu inactif (90j+) gardait sa note figee dans le classement sans etre signale ; un wallet confirme mauvais continuait a etre rescanne indefiniment et pouvait reapparaitre.
 Solution : remove_and_archive explicite sur inactivite confirmee ; rejet definitif via smart_money_rejected_wallets (meme doctrine que momentum_blacklist.py, terminologie classement/archive jamais banni pour ne pas confondre performance et securite) - smart_money_leaderboard.py (cf. historique git 21/07)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : analyze_smart_money() -- signal qualite-prioritaire remplace le seuil binaire fixe
+Date : 2026.07.22 / Probleme : le score_delta applique a une paire scannee (acp_onchain_scan.py, include_smart_money) etait un forfait fixe (+8) des que >=2 wallets convergents etaient detectes parmi les top holders -- identique pour 2 ou 8 wallets, aucune prise en compte de la QUALITE du signal (composite_percentile deja calcule par le chantier /walletscore, ignore ici).
+Solution : nouvelle fonction latest_score_for_wallet() (lecture seule dans wallet_score_log, aucun nouveau calcul) + formule qualite-prioritaire (decision operateur explicite, exemple chiffre verifie : 2 wallets a score 95 -> delta 15, 10 wallets a score 45 -> delta 8 -- la qualite domine toujours la pure quantite). Porte d'entree binaire (>=2 wallets convergents) inchangee -- un seul wallet ne suffit toujours jamais. Fallback modeste (55) pour un wallet jamais score ailleurs - services/smart_money.py (commit 955dd615).

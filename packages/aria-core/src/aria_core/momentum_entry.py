@@ -1379,6 +1379,135 @@ async def _llm_confirm_and_gate(
     return "HOLD_WEAK", "llm_not_confirmed"
 
 
+async def evaluate_hard_gates(
+    contract: str, chain: str, *, current_regime: str | None = None,
+) -> tuple["PairSnapshot | None", str | None, dict | None]:
+    """Garde-fous durs ANTI-SCAM communs, extraits de ``evaluate_momentum_entry`` sans
+    aucun changement de comportement (22/07, pivot crible unifié VC/Swing) -- réutilisés
+    tels quels par ``unified_entry.py`` pour que la poche VC bénéficie EXACTEMENT de la
+    même protection que la poche Swing, sans dupliquer une seule ligne (doctrine
+    Sobriété). S'arrête délibérément AVANT le calcul du signal technique (candles/R-R,
+    ``detect_entry``) : ces garde-fous protègent contre l'arnaque quel que soit
+    l'horizon visé, mais une thèse VC peut légitimement se passer d'OHLCV (cf.
+    ``vc_analysis.py``, qui reste qualitatif sans série de prix) -- jamais bloquer le
+    jugement de conviction fondamentale faute de bougies techniques.
+
+    Retourne :
+    - ``(None, None, hold_dict)`` au premier rejet dur (même dict HOLD qu'avant) ;
+    - ``(None, None, None)`` si aucune paire liquide/prix exploitable (signal
+      structurellement absent, jamais fabriqué -- même sémantique que le ``None``
+      renvoyé par ``evaluate_momentum_entry`` dans ce cas) ;
+    - ``(best_pair, honeypot_reason, None)`` si TOUS les garde-fous durs sont passés --
+      ``honeypot_reason`` est le texte du dernier garde-fou (toujours "clear" à ce
+      stade), à reporter dans ``reasons`` par l'appelant, jamais recalculé.
+
+    Ordre et seuils STRICTEMENT identiques à avant cette extraction -- voir le
+    docstring de ``evaluate_momentum_entry`` pour le détail de chaque étape."""
+    chain = (chain or "").strip().lower()
+    contract = normalize_contract_case(contract, chain)
+
+    if await momentum_blacklist.is_blacklisted(contract, chain):
+        return None, None, {
+            "action": "HOLD", "chain": chain,
+            "reasons": ["contrat sur liste noire -- déjà confirmé problématique"],
+            "hold_reason": "blacklisted",
+        }
+
+    pairs = await fetch_token_pairs(contract, chain=chain)
+    best = _best_pair(pairs, contract)
+    if best is None or not best.price_usd or best.price_usd <= 0:
+        return None, None, None
+
+    liquidity_usd = best.liquidity_usd or 0.0
+    effective_min_liquidity = (
+        _MIN_LIQUIDITY_USD_FEAR if current_regime == "peur" else _MIN_LIQUIDITY_USD
+    )
+    if liquidity_usd < effective_min_liquidity:
+        return None, None, {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd,
+            "reasons": [
+                f"liquidité insuffisante ({liquidity_usd:,.0f}$ < {effective_min_liquidity:,.0f}$"
+                + (" -- plancher doublé, régime macro Peur" if current_regime == "peur" else "")
+                + ") -- risque de scam/manipulation, rejet même si le reste est propre"
+            ],
+            "hold_reason": "insufficient_liquidity",
+        }
+
+    min_volume_required = max(_MIN_VOLUME_24H_USD, liquidity_usd * _MIN_VOLUME_TO_LIQUIDITY_RATIO)
+    if (best.volume_24h_usd or 0.0) < min_volume_required:
+        return None, None, {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd,
+            "reasons": [
+                f"volume 24h insuffisant ({(best.volume_24h_usd or 0.0):,.0f}$ < "
+                f"{min_volume_required:,.0f}$ requis -- max({_MIN_VOLUME_24H_USD:,.0f}$ "
+                f"absolu, {_MIN_VOLUME_TO_LIQUIDITY_RATIO:.0%} de la liquidité)) -- "
+                "marché quasi inactif, signal technique non fiable"
+            ],
+            "hold_reason": "volume_too_low",
+        }
+
+    if best.liquidity_usd and best.liquidity_usd > 0:
+        volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
+        if _wash_trading_ratio_confirmed(contract, chain, volume_to_liq):
+            return None, None, {
+                "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+                "price": best.price_usd,
+                "reasons": [
+                    f"volume 24h/liquidité extrême et SOUTENU ({volume_to_liq:.0f}x > "
+                    f"{MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x depuis "
+                    f"≥{_WASH_TRADING_CONFIRMATION_SECONDS:.0f}s) -- signal de wash-trading"
+                ],
+                "hold_reason": "wash_trading_ratio",
+            }
+
+    if (
+        current_regime != "euphorie"
+        and best.price_change_24h
+        and best.price_change_24h > _MAX_PRICE_CHANGE_24H_PCT
+    ):
+        return None, None, {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd,
+            "reasons": [
+                f"prix déjà parabolique sur 24h (+{best.price_change_24h:.0f}% > "
+                f"+{_MAX_PRICE_CHANGE_24H_PCT:.0f}%) -- doute, on passe à côté"
+            ],
+            "hold_reason": "already_parabolic",
+        }
+
+    has_profile, profile_reason = await _check_project_profile(chain, contract, best)
+    if not has_profile:
+        return None, None, {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd,
+            "reasons": [f"{profile_reason} -- pas de présence projet vérifiable"],
+            "hold_reason": "no_verified_profile",
+        }
+
+    too_concentrated, concentration_reason = await _check_holder_concentration(
+        contract, chain, best.pair_address,
+    )
+    if too_concentrated:
+        return None, None, {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd, "reasons": [concentration_reason],
+            "hold_reason": "holder_concentration",
+        }
+
+    clear, honeypot_reason, honeypot_code = await _check_honeypot(contract, chain)
+    if not clear:
+        if honeypot_code == "honeypot_rejected":
+            await momentum_blacklist.add_to_blacklist(contract, chain, honeypot_reason)
+        return None, None, {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd, "reasons": [honeypot_reason], "hold_reason": honeypot_code,
+        }
+
+    return best, honeypot_reason, None
+
+
 async def evaluate_momentum_entry(
     contract: str, chain: str, *, weekly_context: dict | None = None,
     current_regime: str | None = None,
@@ -1456,174 +1585,22 @@ async def evaluate_momentum_entry(
     16/07) -- ``paper_trader.run_paper_cycle`` l'agrège en un funnel par cycle pour
     rendre visible la cause dominante d'inactivité (ex. panne GoPlus prolongée vs
     marché réellement sans candidat), jamais laissé invisible dans des logs debug
-    épars."""
+    épars.
+
+    22/07 -- les garde-fous durs (liste noire -> ... -> honeypot) vivent désormais
+    dans ``evaluate_hard_gates`` (extraction pure, cf. son docstring) -- comportement
+    de CETTE fonction strictement inchangé, seule la implémentation est factorisée
+    pour être réutilisée par le nouveau crible unifié VC/Swing (``unified_entry.py``)."""
     chain = (chain or "").strip().lower()
     contract = normalize_contract_case(contract, chain)
 
-    if await momentum_blacklist.is_blacklisted(contract, chain):
-        return {
-            "action": "HOLD", "chain": chain,
-            "reasons": ["contrat sur liste noire -- déjà confirmé problématique"],
-            "hold_reason": "blacklisted",
-        }
-
-    pairs = await fetch_token_pairs(contract, chain=chain)
-    best = _best_pair(pairs, contract)
-    if best is None or not best.price_usd or best.price_usd <= 0:
+    best, honeypot_reason, hard_gate_hold = await evaluate_hard_gates(
+        contract, chain, current_regime=current_regime,
+    )
+    if hard_gate_hold is not None:
+        return hard_gate_hold
+    if best is None:
         return None
-
-    # 19/07 -- garde-fou dur (décision opérateur explicite, cf. commentaire sur
-    # _MIN_LIQUIDITY_USD ci-dessus) : rejet SYSTÉMATIQUE si la liquidité du pool est
-    # sous le plancher, jamais contournable même si le reste (honeypot/R-R/alignement)
-    # est propre -- une liquidité inconnue (``None``/0, jamais observée en pratique mais
-    # traitée par prudence) est traitée comme insuffisante, pas comme "OK par défaut".
-    # 20/07 -- Regime Switch : plancher doublé en régime Peur confirmé (cf. _MIN_
-    # LIQUIDITY_USD_FEAR ci-dessus) -- ``current_regime`` non fourni/Neutre/Euphorie
-    # laisse le plancher nominal inchangé.
-    liquidity_usd = best.liquidity_usd or 0.0
-    effective_min_liquidity = (
-        _MIN_LIQUIDITY_USD_FEAR if current_regime == "peur" else _MIN_LIQUIDITY_USD
-    )
-    if liquidity_usd < effective_min_liquidity:
-        return {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd,
-            "reasons": [
-                f"liquidité insuffisante ({liquidity_usd:,.0f}$ < {effective_min_liquidity:,.0f}$"
-                + (" -- plancher doublé, régime macro Peur" if current_regime == "peur" else "")
-                + ") -- risque de scam/manipulation, rejet même si le reste est propre"
-            ],
-            "hold_reason": "insufficient_liquidity",
-        }
-
-    # 19/07 -- plancher de volume (revue croisée Gemini) : un marché "mort" (liquidité
-    # présente, quasi aucune activité réelle) peut passer le plancher de liquidité ET le
-    # ratio volume/liquidité (trivialement bas, jamais suspect de wash-trading) -- ce
-    # plancher garantit un minimum d'activité de marché réelle avant de chercher un setup.
-    # 19/07 (round 5) -- le vrai plancher exigé est le plus haut de l'absolu et du ratio
-    # proportionnel à la liquidité (``_MIN_VOLUME_TO_LIQUIDITY_RATIO``) -- ferme l'angle
-    # mort signalé par Gemini où l'absolu seul devient trivial sur un gros pool.
-    min_volume_required = max(_MIN_VOLUME_24H_USD, liquidity_usd * _MIN_VOLUME_TO_LIQUIDITY_RATIO)
-    if (best.volume_24h_usd or 0.0) < min_volume_required:
-        return {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd,
-            "reasons": [
-                f"volume 24h insuffisant ({(best.volume_24h_usd or 0.0):,.0f}$ < "
-                f"{min_volume_required:,.0f}$ requis -- max({_MIN_VOLUME_24H_USD:,.0f}$ "
-                f"absolu, {_MIN_VOLUME_TO_LIQUIDITY_RATIO:.0%} de la liquidité)) -- "
-                "marché quasi inactif, signal technique non fiable"
-            ],
-            "hold_reason": "volume_too_low",
-        }
-
-    if best.liquidity_usd and best.liquidity_usd > 0:
-        volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
-        # Appelée à CHAQUE lecture (pas seulement quand volume_to_liq dépasse le seuil) --
-        # la fonction doit voir une lecture SAINE pour réinitialiser une candidature en
-        # cours (cf. son propre "if volume_to_liq <= MAX_VOLUME_TO_LIQUIDITY_RATIO").
-        # Un ``and`` court-circuitant ici rendrait cette branche de reset inatteignable.
-        if _wash_trading_ratio_confirmed(contract, chain, volume_to_liq):
-            return {
-                "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-                "price": best.price_usd,
-                "reasons": [
-                    f"volume 24h/liquidité extrême et SOUTENU ({volume_to_liq:.0f}x > "
-                    f"{MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x depuis "
-                    f"≥{_WASH_TRADING_CONFIRMATION_SECONDS:.0f}s) -- signal de wash-trading"
-                ],
-                "hold_reason": "wash_trading_ratio",
-            }
-
-    # 20/07 -- Regime Switch : plafond levé en régime Euphorie confirmé ("si le RVOL
-    # suit, on monte dans le train" -- revue croisée Gemini). Simplification assumée
-    # par rapport à une conditionnalité stricte sur le RVOL à CE gate précis : les
-    # candles nécessaires au RVOL (étape 15) ne sont récupérées que plus loin dans le
-    # pipeline (coût réseau), restructurer l'ordre pour les avancer ici aurait été un
-    # changement bien plus invasif pour un gain marginal -- le RVOL reste un rejet dur
-    # INDÉPENDANT plus loin, donc un mouvement +200% non soutenu par du vrai volume
-    # est encore filtré, juste un peu plus tard dans le pipeline.
-    if (
-        current_regime != "euphorie"
-        and best.price_change_24h
-        and best.price_change_24h > _MAX_PRICE_CHANGE_24H_PCT
-    ):
-        return {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd,
-            "reasons": [
-                f"prix déjà parabolique sur 24h (+{best.price_change_24h:.0f}% > "
-                f"+{_MAX_PRICE_CHANGE_24H_PCT:.0f}%) -- doute, on passe à côté"
-            ],
-            "hold_reason": "already_parabolic",
-        }
-
-    # 20/07 -- plancher d'âge minimum SUPPRIMÉ le 21/07 (décision opérateur explicite,
-    # "enlève le filtre pair age il fonctionne mal sur dexscreener" -- confirmé "on
-    # enlève pair age" après diagnostic partagé). Root cause : ~22% des candidats réels
-    # n'ont AUCUN `pairCreatedAt` renvoyé par DexScreener (vérifié en direct sur un
-    # échantillon de 18), et le gate fail-closed rejetait ces paires comme "trop
-    # jeunes" alors que l'âge était simplement inconnu -- pas un signal de fraîcheur
-    # réel, une lacune de couverture de données. `_pair_age_days`/`_MIN_PAIR_AGE_DAYS`
-    # supprimés avec ce gate (plus aucun appelant, cf. `git log` pour l'historique
-    # complet si ce garde-fou doit être reconstruit un jour sur une source de données
-    # plus fiable).
-
-    # 20/07 -- profil projet établi (décision opérateur explicite, cf. _check_project_profile
-    # ci-dessus) -- DexScreener gratuit (déjà sur `best`) en premier, CoinGecko (réseau) en
-    # repli seulement si DexScreener n'a rien. Rejet dur si aucun des deux.
-    has_profile, profile_reason = await _check_project_profile(chain, contract, best)
-    if not has_profile:
-        return {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd,
-            "reasons": [f"{profile_reason} -- pas de présence projet vérifiable"],
-            "hold_reason": "no_verified_profile",
-        }
-
-    # 19/07 -- concentration des holders (revue croisée Gemini) -- dernier des garde-fous
-    # durs, positionné après les vérifications gratuites (aucun appel réseau supplémentaire)
-    # puisque celui-ci en coûte un (Blockscout). Un R/R et un ATR parfaits ne protègent
-    # jamais contre un dump d'initié massif -- signal que l'analyse technique ne peut
-    # structurellement pas voir.
-    too_concentrated, concentration_reason = await _check_holder_concentration(
-        contract, chain, best.pair_address,
-    )
-    if too_concentrated:
-        return {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd, "reasons": [concentration_reason],
-            "hold_reason": "holder_concentration",
-        }
-
-    # 21/07 -- réordonné après tous les autres garde-fous durs (décision opérateur
-    # explicite, cf. docs/api-rate-limit-calibration.md) : GoPlus est la ressource la
-    # plus rare de tout le pipeline (~55/min soutenu, empirique -- plus serré que
-    # Blockscout ~270/min ou DexScreener ~54-270/min selon l'endpoint). Vérifiée en
-    # DERNIER parmi les garde-fous durs pour ne jamais la dépenser sur un candidat qui
-    # allait de toute façon être rejeté gratuitement (liquidité/volume/âge/wash-trading/
-    # profil) ou par un garde-fou plus généreux (holder-concentration, Blockscout).
-    # Comportement fail-closed strictement inchangé -- seul l'ORDRE change, jamais la
-    # rigueur de la décision : un candidat qui atteint ce point a déjà survécu à tous
-    # les autres garde-fous durs, GoPlus reste la toute dernière porte avant le calcul
-    # R/R.
-    clear, honeypot_reason, honeypot_code = await _check_honeypot(contract, chain)
-    if not clear:
-        # 21/07 -- proposition opérateur : un honeypot CONFIRMÉ (jamais un simple
-        # échec technique/indisponibilité, cf. distinction honeypot_rejected vs
-        # honeypot_unavailable, mandat #192) est transféré vers la liste noire
-        # (momentum_blacklist.py) -- une future redécouverte du MÊME contrat est
-        # alors rejetée gratuitement à l'étape 1 (liste noire), sans jamais
-        # redépenser un appel GoPlus/RugCheck sur un verdict déjà tranché.
-        # honeypot_unavailable/chain_not_covered ne sont jamais blacklistés --
-        # ce ne sont pas des menaces confirmées, juste une donnée absente ou une
-        # chaîne non couverte, qui peuvent changer.
-        if honeypot_code == "honeypot_rejected":
-            await momentum_blacklist.add_to_blacklist(contract, chain, honeypot_reason)
-        return {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd, "reasons": [honeypot_reason], "hold_reason": honeypot_code,
-        }
 
     reasons: list[str] = [honeypot_reason]
     candles = await _fetch_candles(best.pair_address, chain, contract=contract, pair=best)

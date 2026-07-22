@@ -136,6 +136,8 @@ Monorepo `github.com/GoldenFarFR/ARIA`. Liés : `aria-ops` (privé), `template-g
 - **Intelligence wallet/entité propriétaire (21/07) — EN LIGNE, 4 gates ACTIVÉS.** Extraction des holders enrichis Blockscout (paiement x402 par appel) → `token_holder_intel` (stockage local, jamais git) → détection de wallets récurrents sur 3+ tokens (matière pour le chantier Sybil, toujours non résolu au-delà de la convergence pairwise) → classement « meilleurs investisseurs » `/topwallets` (capacité 600, même formule composite que `smart_money.py`, éviction sous percentile 30 ou inactivité 90j). Cycle d'extraction toutes les 3h. Toute session qui reprend ce fil doit vérifier l'état réel (`/topwallets`) plutôt que supposer. Détail/patrons de bugs corrigés : `docs/HANDOFF_WALLET_SCORING.md`.
 - **Deux incidents capital réel résolus sur le wallet agent CDP (21-22/07), aucune perte de fonds** — allowlist IP à remettre à jour après toute migration VPS ; collision de nom de wallet après régénération de clé API (`WALLET_NAME` désormais en dur, source unique importée par les deux clients qui en avaient besoin). Détail complet, patron réutilisable : `docs/HANDOFF_COINBASE_CDP.md`.
 - **Smart Account CDP (Spend Permissions) + Paymaster gas sponsorisé — direction actée par l'opérateur ("il nous faut ça"), RIEN construit.** Objectif : graver le plafond de dépense/périmètre swap-only directement dans le contrat du wallet (protection qui tient même si le code Python a un bug). Diligence et migration à faire dans une session dédiée, jamais à chaud juste après un incident capital réel.
+- **Signal smart money qualité-prioritaire (22/07), EN LIGNE.** `analyze_smart_money()` (déjà actif sur le chemin `/vc` manuel et `vc_analysis.analyze_vc_with_context`, `include_smart_money=True`) n'applique plus un forfait fixe (+8) dès 2 wallets convergents — la magnitude dépend désormais du meilleur score composite connu (`wallet_score_log`, chantier `/walletscore`) + un bonus de convergence plafonné : 2 wallets à gros score dominent toujours 10 wallets à score faible (exemple chiffré validé avec l'opérateur). Porte d'entrée binaire (≥2 wallets) inchangée. Détail : `docs/HANDOFF_WALLET_SCORING.md`.
+- **Alertes Telegram du wallet agent enrichies (22/07), EN LIGNE.** Un paiement x402 affiche désormais le token concerné (+ lien DexScreener), la raison du paiement (`resource`/`provider`), et un lien BaseScan cliquable pour le tx_hash — ces données étaient déjà tracées (`x402_budget.record_spend`) mais jamais remontées jusqu'à l'alerte affichée. Détail : `docs/HANDOFF_X402.md`.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
@@ -208,6 +210,24 @@ des "vrais builders cachés" pour la poche VC 85%) n'est PAS le bon critère
 pour la poche trading/spéculation — un pari technique/momentum sur un token
 déjà liquide qui bouge est un métier différent d'un pari de conviction sur un
 builder précoce.
+- **⚠️ Chantier de remplacement en cours (22/07, décision opérateur explicite) —
+  CODE, DORMANT, PAS ENCORE ACTIF.** Ce pivot #194 (critère purement technique)
+  est en train d'être amendé par un crible unifié VC/Swing (`unified_entry.py`)
+  qui juge conviction fondamentale ET setup technique sur le même candidat,
+  poches cumulables (option "fusion complète" choisie explicitement par
+  l'opérateur). Garde-fous durs extraits dans `momentum_entry.evaluate_hard_
+  gates` (réutilisés, zéro régression), `paper_trader.has_open()` accepte déjà
+  un paramètre `strategy` optionnel (rétrocompatible, prérequis du cumul).
+  **Tant que cette note n'est pas mise à jour vers DEPLOYE, le reste de cette
+  section (critère 100% technique ci-dessous) reste EXACT et actif en prod** —
+  `run_paper_cycle` utilise toujours `momentum_entry.evaluate_momentum_entry`
+  via `_default_momentum_analyzer`. Reste à faire avant activation : sizing par
+  poche + plafond de concentration partagé (cumul), câblage de la boucle
+  `_run_paper_cycle_locked` pour consommer 0-2 signaux par candidat,
+  observabilité (badge VC/Swing), tests d'intégration bout-en-bout, stress-test
+  multi-agents (reporté à une session dédiée, 10 agents répartis en 2 workflows
+  de 5 max chacun pour respecter le plafond ci-dessous). Détail complet :
+  `docs/HANDOFF_PIPELINE_MOMENTUM.md` (entrée du 22/07).
 - **Nouveau critère pour ce test** : alignement technique (EMA/MACD/Bollinger/
   patterns de bougies, golden pocket + divergence RSI — déjà tout construit
   dans `indicators.py`/`entry_signals.py`, jamais câblé comme porte d'entrée)

@@ -43,6 +43,7 @@ import aiosqlite
 from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
 from aria_core.paths import aria_db_path
 from aria_core.services.blockscout import get_blockscout_client
+from aria_core.services.dexscreener import token_url
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,14 @@ class WalletMovement:
     counterparty: str
     classification: str  # "known" | "external_deposit" | "unexpected_outflow" | "suspicious_token"
     timestamp: str | None = None
+    # 22/07 -- enrichissement de l'alerte "known_x402" (quel token a été scanné,
+    # quel service a été payé, cf. x402_budget.record_spend). Optionnels et vides
+    # par défaut : retrocompatible, aucun autre mouvement (known/external_deposit/
+    # unexpected_outflow/suspicious_token) ne les renseigne jamais.
+    contract: str = ""
+    token_symbol: str = ""
+    resource: str = ""
+    provider: str = ""
 
 
 async def _ensure_table() -> None:
@@ -158,18 +167,23 @@ def _parse_timestamp(value: str | None):
 
 def _matches_known_x402(
     *, counterparty: str, amount: float, timestamp: str | None, known_x402_spends: list[dict],
-) -> bool:
+) -> dict | None:
     """Un mouvement de sortie correspond à un paiement x402 déjà journalisé (même
     destinataire, même montant à l'arrondi près, dans la fenêtre de temps) --
     échoue TOUJOURS vers "pas de correspondance" en cas de doute (donnée manquante,
     timestamp illisible) : mieux vaut un faux positif d'alerte qu'un faux négatif
-    silencieux, même doctrine que le reste de ce module."""
+    silencieux, même doctrine que le reste de ce module.
+
+    22/07 -- renvoie désormais le dict du spend matché (contract/token_symbol/
+    resource/provider, cf. `x402_budget.record_spend`) plutôt qu'un simple bool,
+    pour permettre à l'alerte d'afficher QUEL token/service a été payé -- logique
+    de matching strictement inchangée, seule la valeur de retour change."""
     counterparty_lower = (counterparty or "").lower()
     if not counterparty_lower:
-        return False
+        return None
     movement_ts = _parse_timestamp(timestamp)
     if movement_ts is None:
-        return False
+        return None
     for spend in known_x402_spends:
         if (spend.get("pay_to") or "").lower() != counterparty_lower:
             continue
@@ -179,25 +193,43 @@ def _matches_known_x402(
         if spend_ts is None:
             continue
         if abs((movement_ts - spend_ts).total_seconds()) <= _X402_MATCH_WINDOW_MINUTES * 60:
-            return True
-    return False
+            return spend
+    return None
 
 
 def _classify(
     tx_hash: str, direction: str, known_tx_hashes: set[str],
     *, counterparty: str = "", amount: float = 0.0, timestamp: str | None = None,
     known_x402_spends: list[dict] | None = None,
-) -> str:
+) -> tuple[str, dict | None]:
+    """Renvoie ``(classification, spend_matché)`` -- ``spend_matché`` n'est jamais
+    ``None`` seulement quand la classification vaut ``"known_x402"`` (22/07, pour
+    enrichir l'alerte avec le token/service payé), ``None`` dans tous les autres cas."""
     if tx_hash in known_tx_hashes:
-        return "known"
+        return "known", None
     if direction == "in":
-        return "external_deposit"
-    if known_x402_spends and _matches_known_x402(
-        counterparty=counterparty, amount=amount, timestamp=timestamp,
-        known_x402_spends=known_x402_spends,
-    ):
-        return "known_x402"
-    return "unexpected_outflow"
+        return "external_deposit", None
+    if known_x402_spends:
+        matched = _matches_known_x402(
+            counterparty=counterparty, amount=amount, timestamp=timestamp,
+            known_x402_spends=known_x402_spends,
+        )
+        if matched is not None:
+            return "known_x402", matched
+    return "unexpected_outflow", None
+
+
+def _x402_movement_fields(spend: dict | None) -> dict[str, str]:
+    """Extrait contract/token_symbol/resource/provider d'un spend x402 matché pour
+    peupler un `WalletMovement` -- dict vide (donc "" partout) si `spend` est
+    `None`, jamais un champ à moitié rempli."""
+    spend = spend or {}
+    return {
+        "contract": spend.get("contract") or "",
+        "token_symbol": spend.get("token_symbol") or "",
+        "resource": spend.get("resource") or "",
+        "provider": spend.get("provider") or "",
+    }
 
 
 # Adresses officielles des SEULS actifs que l'opérateur suit par NOM dans les alertes
@@ -292,7 +324,7 @@ async def check_wallet_activity(
             direction = "in" if (t.to_address or "").lower() == address_lower else "out"
             counterparty = (t.from_address if direction == "in" else t.to_address) or ""
             asset_label = t.token_symbol or "token"
-            classification = _classify(
+            classification, matched_spend = _classify(
                 t.tx_hash, direction, known_tx_hashes,
                 counterparty=counterparty, amount=t.amount or 0.0, timestamp=t.timestamp,
                 known_x402_spends=known_x402_spends,
@@ -301,11 +333,13 @@ async def check_wallet_activity(
             if lookalike:
                 asset_label = f"{asset_label} (FAUX {lookalike} -- contrat non officiel)"
                 classification = "suspicious_token"
+                matched_spend = None  # un token usurpé n'hérite jamais des infos x402
             movement = WalletMovement(
                 tx_hash=t.tx_hash, direction=direction, asset=asset_label,
                 amount=t.amount or 0.0, counterparty=counterparty,
                 classification=classification,
                 timestamp=t.timestamp,
+                **_x402_movement_fields(matched_spend),
             )
             if await _record_movement(movement):
                 fresh.append(movement)
@@ -321,11 +355,18 @@ async def check_wallet_activity(
                 continue  # appel de contrat sans valeur transférée -- pas un mouvement de fonds
             direction = "in" if (tx.to_address or "").lower() == address_lower else "out"
             counterparty = (tx.from_address if direction == "in" else tx.to_address) or ""
+            # 22/07 -- pas de known_x402_spends ici : un paiement x402 se règle en
+            # USDC (cf. x402_budget), jamais en ETH natif -- classification/enrichissement
+            # x402 ne s'applique donc structurellement pas à cette branche, comportement
+            # inchangé (matched_spend toujours None, `_classify` reçoit les mêmes
+            # arguments qu'avant ce chantier).
+            classification, matched_spend = _classify(tx.tx_hash, direction, known_tx_hashes)
             movement = WalletMovement(
                 tx_hash=tx.tx_hash, direction=direction, asset="ETH",
                 amount=tx.value_native, counterparty=counterparty,
-                classification=_classify(tx.tx_hash, direction, known_tx_hashes),
+                classification=classification,
                 timestamp=tx.timestamp,
+                **_x402_movement_fields(matched_spend),
             )
             if await _record_movement(movement):
                 fresh.append(movement)
@@ -489,6 +530,12 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     }
 
 
+def basescan_tx_url(tx_hash: str) -> str:
+    """URL BaseScan publique pour une transaction -- construction pure (aucun appel
+    réseau), même patron que `dexscreener.token_url`."""
+    return f"https://basescan.org/tx/{tx_hash}"
+
+
 def format_movement_alert(m: WalletMovement) -> str:
     icon = {
         "known": "✅", "external_deposit": "💰", "unexpected_outflow": "🚨",
@@ -503,12 +550,31 @@ def format_movement_alert(m: WalletMovement) -> str:
     }.get(m.classification, m.classification)
     direction_label = "Entrée" if m.direction == "in" else "Sortie"
     counterparty_label = "De" if m.direction == "in" else "Vers"
-    return (
-        f"{icon} Wallet agent — {label}\n"
-        f"{direction_label} : {m.amount} {m.asset}\n"
-        f"{counterparty_label} : {m.counterparty}\n"
-        f"Tx : {m.tx_hash}"
-    )
+    lines = [
+        f"{icon} Wallet agent — {label}",
+        f"{direction_label} : {m.amount} {m.asset}",
+        f"{counterparty_label} : {m.counterparty}",
+        f"Tx : {m.tx_hash}",
+    ]
+    # 22/07 -- enrichissement QUE pour un paiement x402 dont le spend matché a pu
+    # être rattaché à un token précis (m.contract) : un paiement x402 générique
+    # (ex. recherche web) n'a pas de contract, dégradation douce = rien ajouté du
+    # tout, jamais une ligne vide ou "N/A".
+    if m.classification == "known_x402" and m.contract:
+        lines.append(f"BaseScan : {basescan_tx_url(m.tx_hash)}")
+        # 22/07 (revue croisée) -- token_symbol affiché à côté de l'adresse quand connu
+        # (ex. "GEM (0xdead...)") plutôt que laissé mort après avoir été capturé/propagé.
+        lines.append(f"Token : {m.token_symbol} ({m.contract})" if m.token_symbol else f"Token : {m.contract}")
+        lines.append(f"DexScreener : {token_url(m.contract, chain='base')}")
+        # 22/07 (revue croisée) -- garde explicite : x402_budget.record_spend() exige
+        # `resource` en paramètre obligatoire (jamais vide en pratique), mais sans cette
+        # garde une donnée corrompue produirait une ligne "Raison : " à moitié vide,
+        # contraire à la doctrine "jamais une ligne vide" déjà appliquée juste au-dessus.
+        if m.resource:
+            lines.append(
+                f"Raison : {m.resource} via {m.provider}" if m.provider else f"Raison : {m.resource}"
+            )
+    return "\n".join(lines)
 
 
 def format_wallet_balance_summary(summary: dict[str, Any]) -> str:

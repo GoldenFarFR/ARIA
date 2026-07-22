@@ -13,6 +13,12 @@ Solution : (1) DEDUP_TTL_SECONDS (15min, anti-spam de frame) inchangé, nouveau 
 
 ------------------------------------------------------------
 
+[CODE] Sujet    : Crible unifié VC/Swing (tâche #1) -- fusion complète, DORMANT, pas encore branché
+Date : 2026.07.22  /  Probleme : le pivot #194 (15/07) avait remplacé le filtre VC-thesis par un critère purement technique pour le test 1M$ -- décision opérateur du 22/07 : construire un jugement unique qui évalue conviction fondamentale (poche VC, 6 mois-2 ans, x20-x100) ET setup technique (poche Swing) sur le MÊME candidat, cumulables sur un même contrat (option "fusion complète" choisie explicitement après comparaison avec une alternative plus simple à deux jugements séparés).
+Solution : nouveau module unified_entry.py (evaluate_unified_entry) -- garde-fous durs extraits de momentum_entry dans une nouvelle fonction publique evaluate_hard_gates (honeypot inclus, zéro régression vérifiée sur 205+328 tests, evaluate_momentum_entry inchangé et toujours actif), contexte riche via scan_base_token (TA + smart money qualité-prioritaire + fondamentaux, include_honeypot=False pour ne jamais refaire l'appel GoPlus), nouveau prompt LLM qui juge horizon vc/swing/les_deux/aucun, sizing swing resté déterministe (risk_guard, LLM confirme seulement). paper_trader.has_open()/_get_open() acceptent un paramètre optionnel strategy (rétrocompatible) -- prérequis pour le cumul. **DORMANT** : run_paper_cycle utilise toujours momentum_entry.evaluate_momentum_entry via _default_momentum_analyzer, comportement de production inchangé pour l'instant. Reste à faire avant activation : sizing par poche + plafond de concentration partagé (cumul), boucle _run_paper_cycle_locked adaptée pour consommer 0-2 signaux par candidat, badge VC/Swing dans les 4 points d'affichage (alertes achat/vente + /feedback+/ledger + diagnostic API), tests d'intégration bout-en-bout, stress-test multi-agents (reporté à une session dédiée) — unified_entry.py, momentum_entry.py, paper_trader.py (commit cc8de148).
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : Incident réel BRIAN — triple-achat, -18 561$
 Date : 2026.07.17  /  Probleme : rien n'empêchait de racheter un contrat dont on venait de se faire sortir en perte — BRIAN racheté 3x en ~2h30, 92% des pertes réalisées sur ce seul contrat
 Solution : liste noire persistée (amorcée avec BRIAN) + plafond ratio volume24h/liquidité (20x, anti-wash-trading — BRIAN avait un ratio ~91x) — momentum_blacklist.py (d45b6c9e)

@@ -49,6 +49,26 @@ _WASH_TRADING_COUNTERPARTY_SHARE = 0.6
 _MIN_TRANSFERS_FOR_WASH_CHECK = 3
 _ZERO_ADDRESS = "0x" + "0" * 40
 
+# Signal qualité-prioritaire (22/07, décision opérateur explicite après exemple
+# chiffré vérifié : "2 wallets à gros score" doit dominer "10 wallets à faible
+# score", jamais l'inverse) -- remplace l'ancien forfait fixe (+8 dès 2 wallets
+# convergents, identique pour 2 ou 8 wallets). Le gate multi-wallets (>=2) reste
+# une porte D'ENTRÉE binaire (doctrine inchangée : un seul wallet convergent ne
+# prouve jamais rien, cf. `test_single_convergent_wallet_not_enough_concentration`)
+# -- une fois cette porte franchie, la MAGNITUDE du signal dépend de la qualité
+# (composite_percentile réel si connu, cf. `latest_score_for_wallet`) et du nombre
+# de wallets qualifiés, jamais d'un forfait unique.
+_CONVERGENCE_BONUS_PER_WALLET = 3.0
+_CONVERGENCE_BONUS_MAX_WALLETS = 3  # plafond du bonus = 3 * 3 = 9 points max
+# Score de repli pour un wallet SANS composite_percentile connu (jamais scoré par
+# le chantier wallet-scoring) mais jugé convergent par le jugement léger existant
+# (`is_smart_candidate`, comportement observé sur CE token précis) -- volontairement
+# modeste : ne doit jamais rivaliser avec un vrai score composite élevé (ex. 90+),
+# seulement permettre au signal de fonctionner avant que `wallet_score_log` soit
+# bien rempli (couverture progressive, cf. CLAUDE.md).
+_FALLBACK_QUALIFIED_SCORE = 55.0
+_MAX_SECURITY_SCORE_DELTA = 15  # plafond du delta appliqué au security_score composite
+
 # Prix par tx_hash exact (14/07, complément pool+OHLCV -- cf. _hash_based_price) :
 # stablecoins reconnus PAR ADRESSE DE CONTRAT (jamais par symbole -- un token
 # peut usurper un symbole "USDC"), pour transformer un ratio de deux jambes
@@ -152,6 +172,9 @@ class SmartMoneySignal:
     wallets_analyzed: int = 0
     smart_wallets: list[str] = field(default_factory=list)
     score_delta: int = 0
+    # Signal brut qualité+quantité (0-100, avant mise à l'échelle en score_delta) --
+    # transparence/debug, jamais utilisé directement pour décider (cf. score_delta).
+    quality_signal: float | None = None
     flags: list[str] = field(default_factory=list)
     available: bool = True
     error: str | None = None
@@ -294,6 +317,7 @@ async def analyze_smart_money(
 
     token_l = token_address.lower()
     smart_wallets: list[str] = []
+    qualified_scores: list[float] = []
     unavailable_count = 0
 
     for wallet in wallets:
@@ -317,10 +341,20 @@ async def analyze_smart_money(
             pair_created_at_ms=pair_created_at_ms,
             lp_address=lp_address,
         )
-        if behavior.is_smart_candidate:
-            smart_wallets.append(wallet)
+        if not behavior.is_smart_candidate:
+            continue
+        smart_wallets.append(wallet)
+        # Qualité prioritaire (22/07) : le score GLOBAL déjà connu de ce wallet
+        # (composite_percentile, indépendant de ce token précis) prime sur le
+        # simple jugement booléen sur CE token -- un bon trader historique qui
+        # vient d'entrer sur ce candidat est un signal plus riche qu'un jugement
+        # "convergent oui/non" limité à ce seul token. Fallback modeste si jamais
+        # scoré ailleurs (couverture partielle du chantier wallet-scoring).
+        known_score = await latest_score_for_wallet(wallet)
+        qualified_scores.append(known_score if known_score is not None else _FALLBACK_QUALIFIED_SCORE)
 
     flags: list[str] = []
+    quality_signal: float | None = None
     score_delta = 0
 
     if unavailable_count:
@@ -329,12 +363,20 @@ async def analyze_smart_money(
             f"({UNAVAILABLE})."
         )
 
-    if len(smart_wallets) >= 2:
-        score_delta = 8
+    if len(qualified_scores) >= 2:
+        # Porte d'entrée binaire inchangée (doctrine "1 seul wallet ne prouve rien") --
+        # au-delà, la magnitude dépend de la qualité (meilleur score connu) ET du
+        # nombre de wallets qualifiés (bonus de convergence PLAFONNÉ, jamais dominant :
+        # 10 wallets à score faible ne peuvent jamais dépasser 2 wallets à score élevé,
+        # cf. commentaire sur les constantes plus haut dans ce fichier).
+        top_score = max(qualified_scores)
+        convergence_bonus = min(len(qualified_scores) - 1, _CONVERGENCE_BONUS_MAX_WALLETS) * _CONVERGENCE_BONUS_PER_WALLET
+        quality_signal = min(100.0, top_score + convergence_bonus)
+        score_delta = round(quality_signal / 100.0 * _MAX_SECURITY_SCORE_DELTA)
         flags.append(
             f"Smart-money : {len(smart_wallets)} wallets parmi les top holders montrent un "
-            "comportement convergent (cohérence temporelle, entrées échelonnées) — "
-            "confirmation contextuelle, jamais un déclencheur."
+            "comportement convergent (cohérence temporelle, entrées échelonnées), meilleur "
+            f"score connu {top_score:.0f}/100 — confirmation contextuelle, jamais un déclencheur."
         )
     elif len(smart_wallets) == 1:
         flags.append(
@@ -346,6 +388,7 @@ async def analyze_smart_money(
         wallets_analyzed=len(wallets),
         smart_wallets=smart_wallets,
         score_delta=score_delta,
+        quality_signal=quality_signal,
         flags=flags,
         available=True,
         error=None,
@@ -1848,6 +1891,39 @@ async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
             continue
         parsed.append(entry)
     return parsed
+
+
+async def latest_score_for_wallet(wallet: str) -> float | None:
+    """Dernier ``composite_percentile`` connu pour CE wallet précis (lecture seule
+    dans ``wallet_score_log``, alimentée en continu par ``/walletqueue`` -- aucun
+    nouveau calcul réseau ici, juste un SELECT local).
+
+    Distinct de ``_latest_scored_wallets`` (qui exclut ce wallet pour construire la
+    POPULATION de comparaison des autres) -- ici on veut l'inverse : le score de CE
+    wallet lui-même, peu importe qu'il ait servi ou non de référence pour d'autres.
+    ``None`` si le wallet n'a jamais été scoré (couverture partielle du chantier
+    wallet-scoring, cf. CLAUDE.md) ou si son ``composite_percentile`` n'a pas encore
+    de valeur (population de comparaison vide au moment de son scan) -- jamais une
+    valeur inventée, fail-open sur inconnu (l'appelant retombe sur son propre
+    fallback)."""
+    await _ensure_wallet_scoring_tables()
+    wallet_l = wallet.lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT report_json FROM wallet_score_log WHERE wallet = ? "
+                "ORDER BY scored_at DESC LIMIT 1",
+                (wallet_l,),
+            )
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        entry = json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
+    percentile = entry.get("composite_percentile")
+    return float(percentile) if isinstance(percentile, (int, float)) else None
 
 
 def _diversification_ratio(entry: dict) -> float | None:
