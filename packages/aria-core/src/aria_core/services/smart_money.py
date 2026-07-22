@@ -1737,6 +1737,17 @@ async def _analyze_wallet_multi_token(
 
         if pool_meta.available and pool_meta.created_at:
             earliest_buy_ts = min(ts for ts, _amt, _hash in buys)
+            # 22/07 -- détection copy-trading/bot (skills/copy_trading_detection.py) :
+            # enregistre GRATUITEMENT l'horodatage de première entrée déjà calculé
+            # ci-dessus (zéro appel réseau supplémentaire). Jamais bloquant pour le
+            # scoring appelant -- une panne d'écriture ne doit jamais faire échouer
+            # une analyse smart-money par ailleurs valide.
+            try:
+                from aria_core.skills.copy_trading_detection import record_entry
+
+                await record_entry(wallet_l, token_addr, chain, earliest_buy_ts)
+            except Exception:  # noqa: BLE001
+                pass
             elapsed = (earliest_buy_ts - pool_meta.created_at).total_seconds()
             amounts = [a for _, a, _ in buys]
             largest_share = (max(amounts) / sum(amounts)) if amounts and sum(amounts) > 0 else None
@@ -2308,6 +2319,14 @@ class WalletScoreCard:
     cross_token_holdings: list[dict] = field(default_factory=list)
     cross_token_holder_count: int = 0
 
+    # Copy-trading/bot (22/07, skills/copy_trading_detection.py) : entre-t-il
+    # systématiquement 5-15 min après un AUTRE wallet déjà scoré, sur plusieurs
+    # tokens distincts ? Même doctrine que cross_token_holdings ci-dessus --
+    # informationnel, JAMAIS mélangé au composite_percentile (design validé
+    # opérateur 22/07 -- Option 1 : le composite reste pur performance).
+    copy_trading_flag: str | None = None  # copy_trading_suspected/independent/unknown
+    copy_trading_points: list[str] = field(default_factory=list)
+
     # Échantillon minimum + robustesse anti-chance + tendance dans le temps
     # (15/07, décision opérateur). Tous calculés sur `cumulative_trades`
     # (l'historique complet archivé, pas seulement ce lot) -- s'affinent au
@@ -2679,6 +2698,41 @@ def _valid_address(address: str) -> bool:
     return bool(address) and address.startswith("0x") and len(address) == 42
 
 
+async def _resolve_copy_trading(card: "WalletScoreCard") -> None:
+    """Corrèle les entrées de ce wallet sur CHAQUE chaîne où une activité réelle a
+    été trouvée (`card.chains_scanned`) et fusionne le résultat -- un wallet
+    multi-chaînes ne doit jamais être jugé sur une seule chaîne arbitraire. Best-
+    effort, jamais bloquant pour le scoring appelant."""
+    from aria_core.skills.copy_trading_detection import (
+        CopyTradingFacts,
+        gather_copy_trading_facts,
+        judge_copy_trading,
+    )
+
+    chains = card.chains_scanned or ["base"]
+    try:
+        total_distinct_tokens = 0
+        followed: set[str] = set()
+        any_available = False
+        for chain in chains:
+            facts = await gather_copy_trading_facts(card.address, chain)
+            if facts.available:
+                any_available = True
+                total_distinct_tokens += facts.distinct_tokens_followed
+                followed.update(facts.followed_wallets)
+        if not any_available:
+            card.copy_trading_flag = "unknown"
+            return
+        merged = CopyTradingFacts(
+            distinct_tokens_followed=total_distinct_tokens, followed_wallets=sorted(followed), available=True,
+        )
+        verdict = judge_copy_trading(merged)
+        card.copy_trading_flag = verdict.flag
+        card.copy_trading_points = verdict.points
+    except Exception:  # noqa: BLE001 — signal bonus, jamais bloquant
+        card.copy_trading_flag = "unknown"
+
+
 async def score_wallets(
     addresses: list[str],
     *,
@@ -2762,9 +2816,24 @@ async def score_wallets(
         transfers_truncated = False
 
         for chain, chain_client in chain_clients.items():
-            transfers_result = await chain_client.get_token_transfers(
-                wallet, limit=2000, max_pages=10, token_type="ERC-20",
-            )
+            # 22/07 -- décision opérateur explicite ("soulageons au maximum Blockscout") :
+            # essaie Alchemy/Moralis en premier sur "base" (seule chaîne vérifiée), retombe
+            # sur Blockscout (comportement historique STRICTEMENT inchangé) si le gate est
+            # OFF, la chaîne n'est pas "base", ou les deux fournisseurs rapides échouent --
+            # jamais un changement de comportement pour une session qui n'active pas le gate.
+            transfers_result = None
+            if chain == "base":
+                from aria_core.services import wallet_transfers_fast
+
+                fast_result = await wallet_transfers_fast.get_fast_token_transfers(
+                    wallet, chain, limit=2000, max_pages=10,
+                )
+                if fast_result.available:
+                    transfers_result = fast_result
+            if transfers_result is None:
+                transfers_result = await chain_client.get_token_transfers(
+                    wallet, limit=2000, max_pages=10, token_type="ERC-20",
+                )
             if not transfers_result.available:
                 last_error = transfers_result.error or UNAVAILABLE
                 continue
@@ -3011,6 +3080,8 @@ async def score_wallets(
         card.early_entry_recurrence_count = len(multi.early_entry_tokens)
         card.informed_entry_count = len(multi.informed_entry_tokens)
         card.suspect_positive = _suspect_positive_flag(card)
+
+        await _resolve_copy_trading(card)
 
         await _apply_comparative_ranking(card)
 

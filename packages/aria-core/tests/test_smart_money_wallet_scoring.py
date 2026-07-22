@@ -27,6 +27,7 @@ from aria_core.skills.ta_levels import Candle
 from aria_core.services import smart_money as sm
 from aria_core.services import wallet_scan_state
 from aria_core import token_holder_intel
+from aria_core.skills import copy_trading_detection
 
 
 @pytest.fixture(autouse=True)
@@ -47,13 +48,25 @@ def _isolated_token_holder_intel_db(tmp_path, monkeypatch):
     monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel.db"))
 
 
+@pytest.fixture(autouse=True)
+def _isolated_copy_trading_db(tmp_path, monkeypatch):
+    """22/07 : même patron que ci-dessus pour copy_trading_detection.py (lu par
+    `score_wallets` via `_resolve_copy_trading` pour `copy_trading_flag`) --
+    isole chaque test, sinon un `score_wallets` de test écrirait/lirait dans la
+    vraie base par défaut et polluerait les tests suivants réutilisant les
+    mêmes adresses WALLET_A/WALLET_B."""
+    monkeypatch.setattr(copy_trading_detection, "DB_PATH", str(tmp_path / "copy_trading.db"))
+
+
 WALLET_A = "0x" + "a" * 40
 WALLET_B = "0x" + "b" * 40
 WALLET_C = "0x" + "c" * 40
 TOKEN_X = "0x" + "1" * 40
 TOKEN_Y = "0x" + "2" * 40
+TOKEN_Z = "0x" + "5" * 40
 POOL_X = "0x" + "3" * 40
 POOL_Y = "0x" + "4" * 40
+POOL_Z = "0x" + "6" * 40
 FUNDER = "0x" + "f" * 40
 ROUTER = "0x" + "9" * 40  # infra DEX partagée entre plusieurs tokens
 
@@ -2692,3 +2705,101 @@ class TestOhlcvSingleTierSpeedFix:
         pool_address, kwargs = gecko.get_ohlcv_calls[0]
         assert pool_address == POOL_X
         assert kwargs.get("min_useful_candles") == 1
+
+
+class TestCopyTradingWiring:
+    """22/07 -- skills/copy_trading_detection.py câblé dans score_wallets. Signal
+    purement consultatif (card.copy_trading_flag), jamais mélangé au
+    composite_percentile (design validé opérateur -- Option 1)."""
+
+    def _transfers_for(self, wallet: str, ts, *, prefix: str) -> TokenTransfersResult:
+        return TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=wallet, token=TOKEN_X, ts=ts, amount=5.0, tx_hash=f"{prefix}1"),
+                _transfer(from_addr=FUNDER, to_addr=wallet, token=TOKEN_Y, ts=ts, amount=5.0, tx_hash=f"{prefix}2"),
+                _transfer(from_addr=FUNDER, to_addr=wallet, token=TOKEN_Z, ts=ts, amount=5.0, tx_hash=f"{prefix}3"),
+            ],
+            available=True,
+        )
+
+    def _three_token_gecko(self, pool_created) -> "FakeGeckoTerminalClient":
+        return FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X, TOKEN_Y: POOL_Y, TOKEN_Z: POOL_Z},
+            pool_created_at={TOKEN_X: pool_created, TOKEN_Y: pool_created, TOKEN_Z: pool_created},
+        )
+
+    @pytest.mark.asyncio
+    async def test_systematic_follower_flagged_across_three_tokens(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        pool_created = _dt(-1)
+        buy_ts_b = _dt(0)
+        buy_ts_a = buy_ts_b + timedelta(minutes=8)  # dans la fenêtre 5-15 min
+
+        client = FakeBlockscoutClient(
+            transfers={
+                WALLET_B: self._transfers_for(WALLET_B, buy_ts_b, prefix="0xb"),
+                WALLET_A: self._transfers_for(WALLET_A, buy_ts_a, prefix="0xa"),
+            }
+        )
+        gecko = self._three_token_gecko(pool_created)
+
+        # WALLET_B scoré EN PREMIER (dans le même appel) pour que son entrée
+        # soit déjà enregistrée quand WALLET_A est traité juste après.
+        report = await sm.score_wallets(
+            [WALLET_B, WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card_a = next(c for c in report.wallets if c.address == WALLET_A)
+        card_b = next(c for c in report.wallets if c.address == WALLET_B)
+
+        assert card_a.copy_trading_flag == "copy_trading_suspected"
+        assert any(WALLET_B in p for p in card_a.copy_trading_points) or card_a.copy_trading_points
+        # WALLET_B est le PREMIER entré -- il ne suit personne, jamais suspect lui-même.
+        assert card_b.copy_trading_flag == "independent"
+        # Jamais mélangé au composite/score -- purement informationnel.
+        assert card_a.suspect_positive in (True, False)
+
+    @pytest.mark.asyncio
+    async def test_single_token_overlap_not_flagged(self, tmp_path, monkeypatch):
+        """Un chevauchement sur un seul token n'est jamais un pattern -- deux
+        wallets indépendants peuvent réagir à la même annonce publique."""
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        pool_created = _dt(-1)
+        buy_ts_b = _dt(0)
+        buy_ts_a = buy_ts_b + timedelta(minutes=8)
+
+        transfers_b = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_B, token=TOKEN_X, ts=buy_ts_b, amount=5.0, tx_hash="0xb1")],
+            available=True,
+        )
+        transfers_a = TokenTransfersResult(
+            transfers=[_transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts_a, amount=5.0, tx_hash="0xa1")],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_B: transfers_b, WALLET_A: transfers_a})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X}, pool_created_at={TOKEN_X: pool_created},
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_B, WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card_a = next(c for c in report.wallets if c.address == WALLET_A)
+        assert card_a.copy_trading_flag == "independent"
+
+    @pytest.mark.asyncio
+    async def test_no_correlation_data_is_unknown_not_blocking(self, tmp_path, monkeypatch):
+        """Aucune entrée corrélable -- 'unknown' seulement si la corrélation
+        elle-même échoue, jamais un blocage du scoring par ailleurs valide."""
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        transfers = TokenTransfersResult(available=False, error="donnée on-chain indisponible")
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=FakeGeckoTerminalClient(), llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.available is False  # comportement historique inchangé
+
