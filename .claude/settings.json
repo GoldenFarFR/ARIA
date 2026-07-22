@@ -23,6 +23,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/french-reasoning-reminder.sh",
+            "timeout": 5
+          }
+        ]
       }
     ]
   }
