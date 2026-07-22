@@ -7,6 +7,12 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
+[CODE] Sujet    : Cooldown adaptatif WebSocket (4h) + fix WETH scanné en boucle (repli x402 gaspillé)
+Date : 2026.07.22  /  Probleme : décision opérateur ("un contrat n'a pas besoin d'être scanné toutes les 60 secondes, toutes les 4h suffit") + bug réel trouvé via le journal x402_spend_log — WETH (predeploy Base, jamais un candidat spéculatif) découvert et évalué en boucle toutes les 10-20 min depuis minuit, déclenchant un repli x402 payant (0,002$/appel) sur holder_concentration à chaque fois (Blockscout gratuit échoue systématiquement sur ce contrat précis).
+Solution : (1) DEDUP_TTL_SECONDS (15min, anti-spam de frame) inchangé, nouveau RESCAN_COOLDOWN_SECONDS (4h) — un candidat déjà vu ne redéclenche pas d'évaluation SAUF si son prix a bougé de plus de 10% (RESCAN_PRICE_MOVE_THRESHOLD_PCT) depuis le dernier passage, comparé sans appel réseau dédié (prix déjà en main via _batch_liquidity_prefilter, étendu pour le remonter) ; (2) reference_tokens_excluded() (momentum_entry.py) réutilise les registres déjà vérifiés de smart_money.py (stablecoins Base + wrapped natives) pour exclure WETH/USDC/etc. des DEUX points d'entrée de découverte (discover_momentum_candidates ET momentum_websocket._ingest_frame, qui a son propre chemin d'ajout de candidat) — momentum_entry.py, momentum_websocket.py (cf. historique git 22/07)
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : Incident réel BRIAN — triple-achat, -18 561$
 Date : 2026.07.17  /  Probleme : rien n'empêchait de racheter un contrat dont on venait de se faire sortir en perte — BRIAN racheté 3x en ~2h30, 92% des pertes réalisées sur ce seul contrat
 Solution : liste noire persistée (amorcée avec BRIAN) + plafond ratio volume24h/liquidité (20x, anti-wash-trading — BRIAN avait un ratio ~91x) — momentum_blacklist.py (d45b6c9e)

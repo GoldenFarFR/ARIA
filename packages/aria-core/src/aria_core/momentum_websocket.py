@@ -87,7 +87,21 @@ ENDPOINTS: tuple[str, ...] = (
 # Décisions opérateur explicites, 16/07 (#196).
 DRAIN_INTERVAL_SECONDS = 30       # borne basse de la fourchette proposée -- l'objectif est la vitesse
 MAX_CANDIDATES_PER_DRAIN = 20     # même ordre que le plafond déjà accepté pour paper_trade_cycle
-DEDUP_TTL_SECONDS = 15 * 60       # 15 minutes
+DEDUP_TTL_SECONDS = 15 * 60       # 15 minutes -- anti-spam de frames rapprochées sur
+                                  # un même candidat, PAS le cooldown de rescan (cf.
+                                  # RESCAN_COOLDOWN_SECONDS ci-dessous, 22/07).
+
+# 22/07 -- décision opérateur explicite : "un contrat n'a pas besoin d'être scanné
+# toutes les 60 secondes, toutes les 4h suffit" -- ADAPTATIF, pas rigide (précisé par
+# l'opérateur : "si c'est un token sans signal ou avec signal ça doit s'adapter") :
+# un candidat déjà vu dans les 4h ne redéclenche PAS une évaluation complète, SAUF si
+# son prix a bougé de plus de RESCAN_PRICE_MOVE_THRESHOLD_PCT depuis le dernier passage
+# -- un vrai mouvement de prix peut annoncer un nouveau setup qui mérite d'être regardé
+# tout de suite, pas dans 4h. Le prix de comparaison vient de _batch_liquidity_
+# prefilter (déjà appelé pour tout candidat frais, DexScreener par lot -- AUCUN appel
+# réseau supplémentaire dédié à ce mécanisme), jamais un nouvel appel juste pour ça.
+RESCAN_COOLDOWN_SECONDS = 4 * 3600  # 4h
+RESCAN_PRICE_MOVE_THRESHOLD_PCT = 0.10  # 10% -- valeur de départ proposée, ajustable
 MAX_NEW_PER_DRAIN = 3             # même pacing que le défaut heartbeat (run_paper_cycle max_new) --
                                   # MAX_CANDIDATES_PER_DRAIN borne les candidats ÉVALUÉS, pas le
                                   # nombre de nouvelles positions OUVERTES par vidange (délibérément
@@ -144,7 +158,10 @@ class MomentumWebsocketListener:
         self._tasks: list[asyncio.Task] = []
         self._lock = asyncio.Lock()  # protège _pending/_seen entre les boucles par endpoint et la vidange
         self._pending: dict[tuple[str, str], float] = {}  # (contract, chain) -> first_seen ts
-        self._seen: dict[tuple[str, str], float] = {}      # (contract, chain) -> last_triggered ts (TTL)
+        # 22/07 -- (last_drained_ts, last_known_price_usd|None) : le prix sert au
+        # cooldown adaptatif (RESCAN_COOLDOWN_SECONDS), jamais confondu avec le TTL
+        # anti-spam (DEDUP_TTL_SECONDS) qui bloque, lui, sans condition de prix.
+        self._seen: dict[tuple[str, str], tuple[float, float | None]] = {}
         # 19/07 -- fenêtre glissante 1h pour MAX_EVALUATIONS_PER_HOUR (un timestamp par
         # candidat réellement évalué, pas par vidange -- une vidange à 20 candidats compte
         # pour 20, pas pour 1).
@@ -237,10 +254,24 @@ class MomentumWebsocketListener:
                 contract = normalize_contract_case(listing.token_address.strip(), chain)
                 if not contract or not chain or chain not in _ALLOWED_CHAINS:
                     continue
+                # 22/07 -- même filtre que discover_momentum_candidates (momentum_entry.
+                # _add_candidate) : WETH/stablecoins ne sont jamais des candidats
+                # spéculatifs légitimes, et déclenchaient un repli x402 payant en boucle
+                # sur le check holder_concentration (cf. commentaire détaillé côté
+                # momentum_entry.py -- ce chemin WebSocket a son PROPRE ajout de candidat,
+                # jamais couvert par le filtre côté heartbeat classique).
+                from aria_core.momentum_entry import reference_tokens_excluded
+
+                if contract.lower() in reference_tokens_excluded(chain):
+                    continue
                 key = (contract, chain)
                 last = self._seen.get(key)
-                if last is not None and (now - last) < DEDUP_TTL_SECONDS:
+                if last is not None and (now - last[0]) < DEDUP_TTL_SECONDS:
                     continue  # déjà déclenché récemment -- jamais un re-déclenchement en boucle
+                # 22/07 -- au-delà du TTL anti-spam (15min), le candidat rejoint quand
+                # même _pending -- le VRAI cooldown adaptatif (4h sauf mouvement de
+                # prix) se décide dans _drain_once, où le prix est disponible sans
+                # coût réseau dédié (cf. RESCAN_COOLDOWN_SECONDS).
                 self._pending.setdefault(key, now)
 
     async def _drain_loop(self) -> None:
@@ -258,9 +289,13 @@ class MomentumWebsocketListener:
             if not self._pending:
                 return
             batch_keys = list(self._pending.keys())[:MAX_CANDIDATES_PER_DRAIN]
+            # 22/07 -- capture l'ANCIEN (timestamp, prix) AVANT de l'écraser -- c'est
+            # la référence du cooldown adaptatif ci-dessous. La mise à jour de _seen
+            # elle-même est différée après le prefilter (où le prix frais devient
+            # disponible), pour toujours écrire le prix le plus à jour connu.
+            previous_seen = {key: self._seen.get(key) for key in batch_keys}
             for key in batch_keys:
                 self._pending.pop(key, None)
-                self._seen[key] = time.time()
 
         if not batch_keys:
             return
@@ -277,6 +312,53 @@ class MomentumWebsocketListener:
         except Exception as exc:  # noqa: BLE001 -- le pré-filtre ne doit jamais bloquer la vidange
             logger.info("momentum_websocket: pré-filtre de liquidité échoué (%s)", exc)
             filtered = raw_candidates
+
+        # 22/07 -- met à jour _seen pour TOUT le batch (peu importe qui survit au
+        # cooldown ci-dessous) : un candidat qu'on vient de regarder, même rejeté,
+        # ne doit pas redéclencher une vérification avant le prochain cooldown réel.
+        now_ts = time.time()
+        price_by_key: dict[tuple[str, str], float | None] = {}
+        for c in filtered:
+            key = (c["contract"], c["chain"])
+            price_by_key[key] = c.get("price_usd")
+        for key in batch_keys:
+            # Prix inconnu à CE passage (prefilter sans donnée) -- conserve l'ancien
+            # prix de référence plutôt que de le perdre (jamais une régression
+            # d'information sous prétexte d'une panne ponctuelle du prefilter).
+            price = price_by_key.get(key)
+            if price is None:
+                old = previous_seen.get(key)
+                price = old[1] if old is not None else None
+            self._seen[key] = (now_ts, price)
+
+        # 22/07 -- cooldown adaptatif (RESCAN_COOLDOWN_SECONDS, 4h) : un candidat déjà
+        # vu récemment (au-delà du TTL anti-spam, sous le cooldown complet) ne
+        # redéclenche PAS d'évaluation, SAUF si son prix a bougé de plus de
+        # RESCAN_PRICE_MOVE_THRESHOLD_PCT depuis le dernier passage. Fail-open sur
+        # donnée manquante (prix ancien ou nouveau inconnu) -- ne bloque jamais sur
+        # une incertitude, seulement sur une comparaison réellement possible.
+        def _still_in_cooldown(c: dict) -> bool:
+            key = (c["contract"], c["chain"])
+            old = previous_seen.get(key)
+            if old is None:
+                return False  # jamais vu -- pas de cooldown possible
+            old_ts, old_price = old
+            if (now_ts - old_ts) >= RESCAN_COOLDOWN_SECONDS:
+                return False  # cooldown complet écoulé
+            new_price = price_by_key.get(key)
+            if old_price is None or new_price is None or old_price <= 0:
+                return False  # comparaison impossible -- fail-open, jamais bloquant
+            move_pct = abs(new_price - old_price) / old_price
+            return move_pct < RESCAN_PRICE_MOVE_THRESHOLD_PCT
+
+        before_cooldown_count = len(filtered)
+        filtered = [c for c in filtered if not _still_in_cooldown(c)]
+        if len(filtered) < before_cooldown_count:
+            logger.info(
+                "momentum_websocket: %d candidat(s) en cooldown adaptatif (déjà vus, "
+                "prix stable) -- vidange réduite à %d",
+                before_cooldown_count - len(filtered), len(filtered),
+            )
 
         if not filtered:
             return

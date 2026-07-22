@@ -381,6 +381,11 @@ async def _batch_liquidity_prefilter(
         by_chain.setdefault(c["chain"], []).append(c["contract"])
 
     best_liquidity: dict[tuple[str, str], float] = {}
+    # 22/07 -- prix de la paire la plus liquide retenue, MÊME logique que
+    # best_liquidity (le prix de la paire dominante, jamais une moyenne) -- utilisé
+    # par le cooldown adaptatif du WebSocket (momentum_websocket.py) pour comparer
+    # sans appel réseau dédié. Zéro coût incrémental : la donnée est déjà en main.
+    best_price: dict[tuple[str, str], float] = {}
     seen_in_batch: set[tuple[str, str]] = set()
     for chain, addrs in by_chain.items():
         for i in range(0, len(addrs), _TOKENS_BATCH_SIZE):
@@ -401,7 +406,10 @@ async def _batch_liquidity_prefilter(
                     continue
                 key = (addr, chain)
                 seen_in_batch.add(key)
-                best_liquidity[key] = max(best_liquidity.get(key, 0.0), p.liquidity_usd)
+                if p.liquidity_usd >= best_liquidity.get(key, 0.0):
+                    best_liquidity[key] = p.liquidity_usd
+                    if p.price_usd and p.price_usd > 0:
+                        best_price[key] = p.price_usd
 
     kept: list[dict] = []
     for c in candidates:
@@ -410,8 +418,31 @@ async def _batch_liquidity_prefilter(
             kept.append(c)  # pas de donnée -- on ne rejette jamais sur l'absence
             continue
         if best_liquidity.get(key, 0.0) >= min_liquidity_usd:
+            if key in best_price:
+                c = {**c, "price_usd": best_price[key]}
             kept.append(c)
     return kept
+
+
+# 22/07 -- bug réel trouvé en conditions réelles (journal x402_spend_log) : WETH
+# (predeploy Base, jamais un vrai candidat spéculatif) découvert et évalué en boucle
+# par le pipeline momentum toutes les 10-20 minutes depuis minuit -- aucun filtre ne
+# l'excluait de la découverte, donc il passait tous les gates gratuits jusqu'au check
+# holder_concentration, où l'appel Blockscout gratuit échoue systématiquement sur ce
+# contrat précis (des millions de holders, réponse trop lourde/timeout) et bascule
+# sur le repli x402 PAYANT (0,002$/appel) -- argent réel gaspillé sur un token dont la
+# "concentration de holders" n'a de toute façon aucun sens (distribution large par
+# construction). Réutilise les DEUX registres déjà vérifiés de smart_money.py
+# (stablecoins Base 14/07, wrapped natives 15/07) plutôt que d'en dupliquer un
+# troisième -- ces tokens de RÉFÉRENCE (quote currencies) ne sont jamais des
+# candidats d'achat légitimes pour ce pipeline, indépendamment de leur volume/
+# liquidité (qui sera de toute façon toujours énorme, donc ils passeraient tous les
+# filtres gratuits sans jamais être un vrai signal).
+def reference_tokens_excluded(chain: str) -> frozenset[str]:
+    from aria_core.services.smart_money import _STABLECOIN_ADDRESSES_BY_CHAIN, _WRAPPED_NATIVE_ADDRESSES
+
+    stables = _STABLECOIN_ADDRESSES_BY_CHAIN.get(chain, set())
+    return frozenset(stables) | _WRAPPED_NATIVE_ADDRESSES
 
 
 def _add_candidate(
@@ -420,6 +451,8 @@ def _add_candidate(
     chain = (chain or "").strip().lower()
     contract = normalize_contract_case(contract, chain)
     if not contract or not chain or chain not in chains:
+        return
+    if contract.lower() in reference_tokens_excluded(chain):
         return
     key = (contract, chain)
     if key in seen:

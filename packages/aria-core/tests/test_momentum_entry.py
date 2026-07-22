@@ -135,6 +135,52 @@ async def test_discover_dedupes_across_sources(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_discover_excludes_reference_tokens(monkeypatch):
+    """22/07 -- bug réel (journal x402_spend_log) : WETH découvert et évalué en
+    boucle, déclenchant un repli x402 payant sur holder_concentration alors que
+    ce n'est jamais un candidat spéculatif légitime. WETH/USDC ne doivent jamais
+    apparaître dans les candidats retournés, peu importe la source."""
+    weth = "0x4200000000000000000000000000000000000006"
+    usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+
+    async def fake_base_tokens(*, limit):
+        return [weth, CONTRACT]
+
+    async def fake_profiles():
+        return [FakeListing(chain_id="base", token_address=usdc)]
+
+    async def empty_listings():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", fake_profiles)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+
+    keys = {(c["contract"], c["chain"]) for c in candidates}
+    assert (weth, "base") not in keys
+    assert (usdc, "base") not in keys
+    assert (CONTRACT, "base") in keys  # un vrai candidat reste présent
+
+
+def test_reference_tokens_excluded_covers_weth_and_base_stablecoins():
+    excluded = me.reference_tokens_excluded("base")
+    assert "0x4200000000000000000000000000000000000006" in excluded  # WETH
+    assert "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" in excluded  # USDC
+
+
+def test_reference_tokens_excluded_empty_for_unlisted_chain():
+    # Chaîne sans registre stablecoin connu -- WETH mainnet Ethereum reste exclu
+    # (registre wrapped-native indépendant de la chaîne), mais aucun stablecoin.
+    excluded = me.reference_tokens_excluded("robinhood")
+    assert "0x4200000000000000000000000000000000000006" in excluded
+
+
+@pytest.mark.asyncio
 async def test_discover_filters_unlisted_chains(monkeypatch):
     async def fake_base_tokens(*, limit):
         return []

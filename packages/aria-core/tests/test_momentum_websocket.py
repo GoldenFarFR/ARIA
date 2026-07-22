@@ -88,6 +88,22 @@ async def test_ingest_frame_queues_new_candidate_on_allowed_chain():
 
 
 @pytest.mark.asyncio
+async def test_ingest_frame_excludes_reference_tokens():
+    """22/07 -- même bug/correctif que côté heartbeat classique (momentum_entry.
+    _add_candidate) : WETH ne doit jamais rejoindre _pending via ce chemin
+    WebSocket non plus -- il a son propre ajout de candidat, jamais couvert par
+    le filtre côté découverte classique."""
+    weth = "0x4200000000000000000000000000000000000006"
+    listener = mw.MomentumWebsocketListener()
+    await listener._ingest_frame(_listing_frame([
+        _item(chain_id="base", token_address=weth),
+        _item(chain_id="base", token_address=A),
+    ]))
+    assert (weth, "base") not in listener._pending
+    assert (A, "base") in listener._pending
+
+
+@pytest.mark.asyncio
 async def test_ingest_frame_preserves_solana_address_case(monkeypatch):
     """19/07 -- bug réel trouvé en activant ce chemin pour la première fois : un
     .lower() aveugle corrompait toute adresse Solana (base58, sensible à la casse),
@@ -155,7 +171,7 @@ async def test_ingest_frame_dedup_within_ttl_window(monkeypatch):
 
     await listener._ingest_frame(_listing_frame([_item(token_address=A)]))
     listener._pending.pop((A, "base"))
-    listener._seen[(A, "base")] = t[0]  # simule un déclenchement récent
+    listener._seen[(A, "base")] = (t[0], None)  # simule un déclenchement récent, prix inconnu
 
     t[0] += 60  # 1 minute plus tard -- toujours dans la fenêtre TTL (15 min)
     await listener._ingest_frame(_listing_frame([_item(token_address=A)]))
@@ -168,7 +184,7 @@ async def test_ingest_frame_requeues_after_ttl_expires(monkeypatch):
     t = [1000.0]
     monkeypatch.setattr(mw.time, "time", lambda: t[0])
 
-    listener._seen[(A, "base")] = t[0]
+    listener._seen[(A, "base")] = (t[0], None)
     t[0] += mw.DEDUP_TTL_SECONDS + 1  # TTL expirée
 
     await listener._ingest_frame(_listing_frame([_item(token_address=A)]))
@@ -251,6 +267,136 @@ async def test_drain_triggers_run_paper_cycle_with_skip_position_management(monk
     from aria_core.gateway.telegram_bot import send_trading_notification
 
     assert captured["notifier"] is send_trading_notification
+
+
+# ── cooldown adaptatif (22/07, décision opérateur explicite) ──────────────────
+
+@pytest.mark.asyncio
+async def test_drain_skips_candidate_in_cooldown_with_stable_price(monkeypatch):
+    """22/07 -- un candidat déjà vu il y a moins de 4h, avec un prix stable
+    (<10% de mouvement), ne redéclenche PAS d'évaluation -- économise l'appel,
+    conforme à "toutes les 4h suffit"."""
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    now = time.time()
+    listener._seen[(A, "base")] = (now - 3600.0, 1.0)  # vu il y a 1h, prix 1.0
+    listener._pending[(A, "base")] = now
+
+    async def _fake_prefilter(candidates):
+        return [{**c, "price_usd": 1.02} for c in candidates]  # +2%, sous le seuil
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _fake_prefilter)
+
+    called = False
+
+    async def _fake_run_paper_cycle(**kwargs):
+        nonlocal called
+        called = True
+        return {"opened": []}
+
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+
+    await listener._drain_once()
+
+    assert called is False  # aucune évaluation déclenchée
+    refreshed_ts, refreshed_price = listener._seen[(A, "base")]
+    assert refreshed_price == 1.02  # prix de référence rafraîchi
+    assert refreshed_ts >= now  # timestamp rafraîchi par ce passage
+
+
+@pytest.mark.asyncio
+async def test_drain_reevaluates_candidate_in_cooldown_on_significant_price_move(monkeypatch):
+    """22/07 -- même candidat en cooldown, mais le prix a bougé de plus de 10% --
+    un vrai mouvement peut annoncer un nouveau setup, réévalué immédiatement
+    malgré le cooldown de 4h."""
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    now = time.time()
+    listener._seen[(A, "base")] = (now - 3600.0, 1.0)  # vu il y a 1h, prix 1.0
+    listener._pending[(A, "base")] = now
+
+    async def _fake_prefilter(candidates):
+        return [{**c, "price_usd": 1.20} for c in candidates]  # +20%, au-delà du seuil
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _fake_prefilter)
+
+    captured: dict = {}
+
+    async def _fake_run_paper_cycle(**kwargs):
+        captured.update(kwargs)
+        return {"opened": []}
+
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+
+    await listener._drain_once()
+
+    assert captured.get("candidates") == [A]
+
+
+@pytest.mark.asyncio
+async def test_drain_reevaluates_candidate_after_full_cooldown_even_without_price_move(monkeypatch):
+    """22/07 -- au-delà des 4h complètes, réévaluation normale même si le prix
+    n'a pas bougé -- le cooldown protège contre un rescan RAPPROCHÉ, jamais un
+    blocage permanent."""
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    now = time.time()
+    listener._seen[(A, "base")] = (now - mw.RESCAN_COOLDOWN_SECONDS - 1.0, 1.0)
+    listener._pending[(A, "base")] = now
+
+    async def _fake_prefilter(candidates):
+        return [{**c, "price_usd": 1.0} for c in candidates]  # prix inchangé
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _fake_prefilter)
+
+    captured: dict = {}
+
+    async def _fake_run_paper_cycle(**kwargs):
+        captured.update(kwargs)
+        return {"opened": []}
+
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+
+    await listener._drain_once()
+
+    assert captured.get("candidates") == [A]
+
+
+@pytest.mark.asyncio
+async def test_drain_never_blocks_on_missing_price_data(monkeypatch):
+    """22/07 -- fail-open : si le prefilter ne renvoie aucun prix (panne,
+    donnée absente), la comparaison est impossible -- jamais un blocage sur une
+    incertitude, le candidat est réévalué normalement."""
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    now = time.time()
+    listener._seen[(A, "base")] = (now - 3600.0, 1.0)
+    listener._pending[(A, "base")] = now
+
+    async def _fake_prefilter(candidates):
+        return candidates  # aucun price_usd attaché
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _fake_prefilter)
+
+    captured: dict = {}
+
+    async def _fake_run_paper_cycle(**kwargs):
+        captured.update(kwargs)
+        return {"opened": []}
+
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+
+    await listener._drain_once()
+
+    assert captured.get("candidates") == [A]
 
 
 @pytest.mark.asyncio
