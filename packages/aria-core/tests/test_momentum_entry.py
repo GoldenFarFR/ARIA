@@ -207,6 +207,178 @@ async def test_discover_applies_batch_liquidity_prefilter(monkeypatch):
     assert candidates == []  # le pré-filtre a bien été appliqué au résultat du sourcing
 
 
+# ── découverte en masse Birdeye (21/07) -- repli/complément à DexScreener, cache 12h ─
+
+@pytest.fixture(autouse=True)
+def _reset_birdeye_cache():
+    me._birdeye_cache = None
+    me._birdeye_cache_at = 0.0
+    yield
+    me._birdeye_cache = None
+    me._birdeye_cache_at = 0.0
+
+
+@pytest.mark.asyncio
+async def test_birdeye_discovery_returns_empty_when_unavailable(monkeypatch):
+    monkeypatch.setattr("aria_core.services.birdeye.birdeye_available", lambda: False)
+    result = await me._discover_birdeye_base_tokens()
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_birdeye_discovery_fetches_and_caches(monkeypatch):
+    monkeypatch.setattr("aria_core.services.birdeye.birdeye_available", lambda: True)
+    calls = {"n": 0}
+
+    async def fake_bulk(*, min_liquidity_usd, min_volume_24h_usd):
+        calls["n"] += 1
+        return ["0xAAA", "0xBBB"]
+
+    monkeypatch.setattr("aria_core.services.birdeye.discover_base_tokens_bulk", fake_bulk)
+
+    first = await me._discover_birdeye_base_tokens()
+    second = await me._discover_birdeye_base_tokens()
+
+    assert first == ["0xAAA", "0xBBB"]
+    assert second == ["0xAAA", "0xBBB"]
+    assert calls["n"] == 1  # 2e appel servi depuis le cache, pas de refetch
+
+
+@pytest.mark.asyncio
+async def test_birdeye_discovery_passes_real_thresholds(monkeypatch):
+    """Les seuils transmis à Birdeye sont les MÊMES constantes que le reste du
+    pipeline momentum -- jamais un chiffre dupliqué en dur dans le client."""
+    monkeypatch.setattr("aria_core.services.birdeye.birdeye_available", lambda: True)
+    captured = {}
+
+    async def fake_bulk(*, min_liquidity_usd, min_volume_24h_usd):
+        captured["liquidity"] = min_liquidity_usd
+        captured["volume"] = min_volume_24h_usd
+        return []
+
+    monkeypatch.setattr("aria_core.services.birdeye.discover_base_tokens_bulk", fake_bulk)
+    await me._discover_birdeye_base_tokens()
+
+    assert captured["liquidity"] == me._MIN_LIQUIDITY_USD
+    assert captured["volume"] == me._MIN_VOLUME_24H_USD
+
+
+@pytest.mark.asyncio
+async def test_birdeye_discovery_refetches_after_ttl_expiry(monkeypatch):
+    monkeypatch.setattr("aria_core.services.birdeye.birdeye_available", lambda: True)
+    calls = {"n": 0}
+
+    async def fake_bulk(*, min_liquidity_usd, min_volume_24h_usd):
+        calls["n"] += 1
+        return [f"0x{calls['n']}"]
+
+    monkeypatch.setattr("aria_core.services.birdeye.discover_base_tokens_bulk", fake_bulk)
+
+    first = await me._discover_birdeye_base_tokens()
+    assert calls["n"] == 1
+
+    # Simule l'expiration du cache (12h) sans attendre pour de vrai.
+    me._birdeye_cache_at -= (me._BIRDEYE_CACHE_TTL_SECONDS + 1.0)
+
+    second = await me._discover_birdeye_base_tokens()
+    assert calls["n"] == 2
+    assert first != second
+
+
+@pytest.mark.asyncio
+async def test_birdeye_discovery_serves_stale_cache_on_transient_empty_result(monkeypatch):
+    """Un résultat vide (panne transitoire, déjà dégradé par le dôme du client) ne
+    doit jamais écraser un cache valide précédent -- sert le dernier connu plutôt
+    que de vider la découverte pour ce cycle."""
+    monkeypatch.setattr("aria_core.services.birdeye.birdeye_available", lambda: True)
+    responses = iter([["0xGOOD"], []])
+
+    async def fake_bulk(*, min_liquidity_usd, min_volume_24h_usd):
+        return next(responses)
+
+    monkeypatch.setattr("aria_core.services.birdeye.discover_base_tokens_bulk", fake_bulk)
+
+    first = await me._discover_birdeye_base_tokens()
+    assert first == ["0xGOOD"]
+
+    me._birdeye_cache_at -= (me._BIRDEYE_CACHE_TTL_SECONDS + 1.0)  # force le refetch
+    second = await me._discover_birdeye_base_tokens()
+    assert second == ["0xGOOD"]  # sert le cache périmé plutôt qu'une liste vide
+
+
+@pytest.mark.asyncio
+async def test_discover_momentum_candidates_includes_birdeye_contracts(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return []
+
+    async def empty_listings():
+        return []
+
+    async def fake_birdeye():
+        return ["0xBIRDEYE1", "0xBIRDEYE2"]
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "_discover_birdeye_base_tokens", fake_birdeye)
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+    keys = {(c["contract"], c["chain"]) for c in candidates}
+    # normalize_contract_case lowercase les adresses EVM (comportement existant,
+    # même patron que le reste des tests de découverte de ce fichier).
+    assert ("0xbirdeye1", "base") in keys
+    assert ("0xbirdeye2", "base") in keys
+
+
+@pytest.mark.asyncio
+async def test_discover_momentum_candidates_dedupes_birdeye_with_base_crawler(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return [CONTRACT]
+
+    async def empty_listings():
+        return []
+
+    async def fake_birdeye():
+        return [CONTRACT]  # même contrat que base_crawler -- ne doit pas dupliquer
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "_discover_birdeye_base_tokens", fake_birdeye)
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+    assert candidates == [{"contract": CONTRACT, "chain": "base"}]
+
+
+@pytest.mark.asyncio
+async def test_discover_momentum_candidates_tolerates_birdeye_failure(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return [CONTRACT]
+
+    async def empty_listings():
+        return []
+
+    async def failing_birdeye():
+        raise RuntimeError("panne birdeye")
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "_discover_birdeye_base_tokens", failing_birdeye)
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+    assert candidates == [{"contract": CONTRACT, "chain": "base"}]  # base_crawler survit à la panne
+
+
 # ── _batch_liquidity_prefilter ───────────────────────────────────────────────────────
 
 def _batch_pair(base_address: str, liquidity_usd: float) -> PairSnapshot:

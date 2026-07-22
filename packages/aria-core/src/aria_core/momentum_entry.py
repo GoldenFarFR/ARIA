@@ -428,6 +428,42 @@ def _add_candidate(
     out.append({"contract": contract, "chain": chain})
 
 
+# 21/07 -- cache process-local du scan Birdeye en masse (75 CU/appel, ~6 appels par
+# scan complet -- rappeler ceci à chaque cycle heartbeat, 96x/jour, dépasserait le
+# quota gratuit mensuel de plusieurs ordres de grandeur). TTL 12h = 2 scans/jour,
+# confortablement dans le budget gratuit (30 000 CU/mois, cf. services/birdeye.py).
+# Perdre le cache à un redémarrage ne coûte qu'un refetch immédiat -- jamais un
+# risque de correction, une simple question de fraîcheur de latence.
+_BIRDEYE_CACHE_TTL_SECONDS = 12.0 * 3600.0
+_birdeye_cache: list[str] | None = None
+_birdeye_cache_at: float = 0.0
+
+
+async def _discover_birdeye_base_tokens() -> list[str]:
+    """Repli/complément à DexScreener pour la découverte -- Birdeye a une vraie
+    recherche filtrée en masse (``/defi/v3/token/list``) que DexScreener n'a pas
+    (confirmé le 21/07 : ~520 tokens Base via Birdeye contre ~18 via le sourcing
+    DexScreener existant). Cache 12h -- voir constantes ci-dessus."""
+    global _birdeye_cache, _birdeye_cache_at
+    now = time.monotonic()
+    if _birdeye_cache is not None and (now - _birdeye_cache_at) < _BIRDEYE_CACHE_TTL_SECONDS:
+        return _birdeye_cache
+
+    from aria_core.services.birdeye import birdeye_available, discover_base_tokens_bulk
+
+    if not birdeye_available():
+        return _birdeye_cache or []
+
+    tokens = await discover_base_tokens_bulk(
+        min_liquidity_usd=_MIN_LIQUIDITY_USD, min_volume_24h_usd=_MIN_VOLUME_24H_USD,
+    )
+    if tokens:
+        _birdeye_cache = tokens
+        _birdeye_cache_at = now
+        return tokens
+    return _birdeye_cache or []
+
+
 async def discover_momentum_candidates(
     *, chains: tuple[str, ...] = DEFAULT_CHAINS, limit_per_chain: int = _SOURCE_LIMIT_PER_CHANNEL,
 ) -> list[dict]:
@@ -449,6 +485,14 @@ async def discover_momentum_candidates(
             logger.info("discover_momentum_candidates: base_crawler échoué (%s)", exc)
             base_contracts = []
         for addr in base_contracts:
+            _add_candidate(out, seen, chains, addr, "base")
+
+        try:
+            birdeye_contracts = await _discover_birdeye_base_tokens()
+        except Exception as exc:  # noqa: BLE001
+            logger.info("discover_momentum_candidates: birdeye échoué (%s)", exc)
+            birdeye_contracts = []
+        for addr in birdeye_contracts:
             _add_candidate(out, seen, chains, addr, "base")
 
     # Fraîcheur d'abord (profils créés/mis à jour, boosts récents), classement
