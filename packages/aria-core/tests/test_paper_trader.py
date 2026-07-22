@@ -3058,6 +3058,100 @@ async def test_vc_thesis_position_closes_on_full_target(tmp_db, monkeypatch):
     assert act["closed"][0]["close_reason"] == "cible thèse VC"
 
 
+# ── Tâche #4 (22/07) : monitoring post-entrée VC -- vente récente du déployeur ────────
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_closes_on_dev_wallet_recent_selling(tmp_db, monkeypatch):
+    """Une vente récente et significative du wallet déployeur (delta >=
+    VC_DEV_SOLD_DELTA_ALERT_PCT depuis l'instantané d'entrée) déclenche une sortie
+    d'urgence -- indépendamment de la liquidité, ici parfaitement saine."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        entry_dev_sold_pct=5.0,
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.1, liquidity_usd=200_000.0),  # liquidité saine
+    )
+
+    async def fake_dev_check(contract, chain, entry_sold_pct):
+        assert entry_sold_pct == 5.0
+        return True, "dev wallet a vendu 20.0 points de % supplémentaires depuis l'entrée (5.0%->25.0%)"
+
+    monkeypatch.setattr(pt, "_check_vc_dev_wallet_recent_selling", fake_dev_check)
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "vente déployeur détectée"
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_survives_without_entry_dev_snapshot(tmp_db, monkeypatch):
+    """Non-régression : sans instantané d'entrée (entry_dev_sold_pct=None, défaut
+    historique pour tout appelant qui ne le fournit pas), le check reste fail-open --
+    jamais de fausse alerte, jamais un appel réseau tenté (vérifié via un mock qui
+    lèverait si jamais atteint au-delà du garde `entry_sold_pct is None`)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.05, liquidity_usd=195_000.0),
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
+# ── Tâche #4 (22/07) : monitoring post-entrée VC -- chute de liquidité SOUDAINE ───────
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_closes_on_sudden_liquidity_drop_between_cycles(tmp_db, monkeypatch):
+    """Une chute de 30%+ entre deux cycles CONSÉCUTIFS déclenche l'invalidation même si
+    le cumulé depuis l'entrée reste sous 50% -- un retrait de LP étalé en petites
+    tranches doit être détecté cycle par cycle, pas seulement en cumulé depuis l'entrée."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    # Cycle 1 : 190k$ (-5% depuis l'entrée) -- établit last_liquidity_usd=190k$, aucune
+    # invalidation (ni absolue, ni cumulée, ni soudaine -- 1er cycle de gestion).
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=190_000.0),
+    )
+    act1 = await pt.run_paper_cycle(candidates=[])
+    assert act1["closed"] == []
+
+    # Cycle 2 : 120k$ -- chute de 36,8% depuis le DERNIER cycle (190k$->120k$, >30%),
+    # mais seulement 40% depuis l'ENTRÉE (200k$->120k$, <50%) -- le check cumulé seul ne
+    # suffirait pas, seul le nouveau check "soudain entre deux cycles" le détecte.
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup", _vc_position_pair_lookup(price=0.95, liquidity_usd=120_000.0),
+    )
+    act2 = await pt.run_paper_cycle(candidates=[])
+    assert len(act2["closed"]) == 1
+    assert act2["closed"][0]["close_reason"] == "invalidation fondamentale (liquidité)"
+    assert "SOUDAINE" in act2["closed"][0]["close_notes"]
+
+
+@pytest.mark.asyncio
+async def test_vc_thesis_position_survives_gradual_drop_no_sudden_trigger(tmp_db, monkeypatch):
+    """Non-régression : une baisse progressive, jamais >30% d'un cycle à l'autre ET
+    jamais >50% cumulé depuis l'entrée, ne déclenche aucune invalidation."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+    )
+    for liq in (185_000.0, 170_000.0, 155_000.0):
+        monkeypatch.setattr(
+            pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=liq),
+        )
+        act = await pt.run_paper_cycle(candidates=[])
+        assert act["closed"] == [], f"liquidité {liq} n'aurait pas dû déclencher une clôture"
+    assert await pt.has_open(A)
+
+
 @pytest.mark.asyncio
 async def test_vc_thesis_position_never_stopped_out_on_a_deep_pullback(tmp_db, monkeypatch):
     """Le point central de la Formule B (Gemini) : une correction de -50% depuis le plus

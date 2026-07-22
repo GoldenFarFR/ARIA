@@ -42,6 +42,20 @@ MODE = "trading"
 WEEKLY_CYCLE_DAYS = 7
 WEEKLY_TARGET_MULTIPLIER = 1.10
 
+# 22/07 -- Tâche 2 (option 3, confirmée explicitement par l'opérateur après proposition
+# de 3 options) : POCHE SATELLITE. Une position qui a encore un vrai potentiel intact au
+# moment du reset hebdomadaire (R/R restant solide, stop ATR pas touché, régime ratchet
+# toujours Euphorie) n'est plus force-clôturée comme le reste -- elle est mise de côté
+# dans une poche SÉPARÉE et PLAFONNÉE, exclue du calcul du verdict +10% de la semaine
+# PRINCIPALE (jamais un moyen de repousser artificiellement un échec hebdomadaire : la
+# poche satellite ne compte NI en bien NI en mal dans `validated`/`return_pct`) et
+# jamais wipée par l'archivage hebdomadaire -- elle continue sa vie sous la gestion
+# normale (stop suiveur ATR + TP par tiers) jusqu'à sa propre clôture, sur son propre
+# tempo, indépendant du calendrier des 7 jours. Seuils volontairement prudents pour un
+# premier tour (v1) -- à ajuster une fois observés en conditions réelles.
+SATELLITE_POCKET_MIN_RR = 1.5
+SATELLITE_POCKET_MAX_PCT_OF_CAPITAL = 0.05  # 5% du capital de départ fixe (1M$) -- plafond dur, jamais dépassé silencieusement
+
 # #196 -- verrou PARTAGÉ, quel que soit l'appelant (heartbeat paper_trade_cycle OU le
 # service websocket momentum #196) : sans lui, deux exécutions concurrentes de
 # run_paper_cycle() liraient le capital disponible/le nombre de positions ouvertes AVANT
@@ -150,6 +164,24 @@ VC_MIN_LIQUIDITY_FLOOR_USD = 30_000.0
 VC_LIQUIDITY_DROP_INVALIDATION_PCT = 0.5
 VC_TAKE_SEED_MULTIPLE = 2.0
 
+# 22/07 -- tâche #4, décision opérateur explicite : monitoring POST-ENTRÉE d'une position
+# vc_thesis (jusqu'ici seule la liquidité était re-vérifiée pendant la détention, cf.
+# VC_LIQUIDITY_DROP_INVALIDATION_PCT ci-dessus -- rien ne surveillait le comportement du
+# wallet du déployeur APRÈS l'ouverture). Deux signaux d'urgence, indépendants l'un de
+# l'autre, ajoutés AVANT les checks existants :
+#   1. Vente RÉCENTE du déployeur : delta du sold_pct_of_received (dev_wallet.py) entre
+#      l'instantané d'entrée et un re-scan frais -- 10 points de % suffisent (contrairement
+#      au seuil HEAVY_SELL_PCT=50% de dev_wallet.py, pensé pour un jugement UNIQUE à
+#      l'entrée -- ici c'est une DÉGRADATION pendant la détention qui compte, un seuil bien
+#      plus bas est donc justifié).
+#   2. Chute SOUDAINE de liquidité entre deux cycles consécutifs (30%) -- complète, ne
+#      remplace jamais, le check cumulé depuis l'entrée (50%) déjà en place : un retrait de
+#      LP étalé sur plusieurs semaines en petites tranches (jamais >50% d'un coup depuis
+#      l'entrée à aucun instant) peut quand même représenter un vrai retrait en cours,
+#      détecté ici cycle par cycle plutôt qu'en cumulé.
+VC_DEV_SOLD_DELTA_ALERT_PCT = 10.0
+VC_LIQUIDITY_SUDDEN_DROP_PCT = 0.3
+
 
 def _effective_trail_pct(entry_atr_pct: float | None) -> float:
     """Largeur du stop suiveur pour UNE position : ``TRAIL_STOP_PCT`` fixe si
@@ -159,6 +191,94 @@ def _effective_trail_pct(entry_atr_pct: float | None) -> float:
     if entry_atr_pct is None or entry_atr_pct <= 0:
         return TRAIL_STOP_PCT
     return max(MIN_ATR_TRAIL_PCT, min(MAX_ATR_TRAIL_PCT, ATR_TRAIL_MULTIPLIER * entry_atr_pct))
+
+
+def _compute_active_stop(
+    *, entry_price: float, entry_atr_pct: float | None, high_water_price: float | None,
+    invalidation_price: float | None, breakeven_locked: bool,
+) -> tuple[float, str]:
+    """Stop ACTIF d'une position -- le plus haut entre stop suiveur ATR, invalidation
+    d'origine, et point mort verrouillé (extrait de la boucle de gestion, 22/07, Tâche
+    2 poche satellite, pour être réutilisé SANS dupliquer une logique qui pourrait
+    diverger -- même philosophie que la réutilisation du détecteur wash-trading).
+
+    LECTURE SEULE, aucun effet de bord : utilise ``high_water_price`` TEL QUEL (le
+    dernier plus-haut CONFIRMÉ par le cycle de gestion normal), ne fait aucun ratchet
+    ni écriture DB ici -- l'appelant qui gère une position EN COURS (``_run_paper_cycle_
+    locked``) ratchet le plus-haut lui-même AVANT d'appeler cette fonction ; un
+    appelant en LECTURE SEULE (ex. l'éligibilité poche satellite au reset hebdomadaire)
+    l'utilise volontairement tel quel, sans avancer le ratchet."""
+    trail_pct = _effective_trail_pct(entry_atr_pct)
+    high_water = high_water_price or entry_price
+    trailing_stop = high_water * (1 - trail_pct)
+    active_stop = trailing_stop
+    stop_source = "stop suiveur"
+    if invalidation_price and invalidation_price > active_stop:
+        active_stop = invalidation_price
+        stop_source = "invalidation"
+    if breakeven_locked and entry_price and entry_price > active_stop:
+        active_stop = entry_price
+        stop_source = "point mort verrouillé"
+    return active_stop, stop_source
+
+
+def _remaining_reward_risk(
+    *, price: float, target_price: float | None, active_stop: float,
+) -> float | None:
+    """R/R RESTANT depuis le prix courant : (cible - prix) / (prix - stop actif).
+    ``None`` si la cible est inconnue/déjà dépassée, ou si le stop est déjà touché
+    (risque <= 0) -- jamais un ratio infini/négatif retourné silencieusement."""
+    if not target_price or target_price <= price:
+        return None
+    risk = price - active_stop
+    if risk <= 0:
+        return None
+    return (target_price - price) / risk
+
+
+def _satellite_pocket_eligible(
+    pos: dict, price: float | None, current_regime: str,
+) -> tuple[bool, float | None]:
+    """22/07 -- Tâche 2 (option 3, confirmée explicitement par l'opérateur). Une
+    position a un vrai potentiel encore intact si, TOUS ensemble :
+      1. stratégie 'momentum' -- Formule B (vc_thesis, dormante) n'a ni stop suiveur
+         ATR ni notion de régime pour l'instant, une extension distincte serait
+         nécessaire si ce chemin redevient actif un jour (jamais supposé identique) ;
+      2. le stop ATR n'est PAS déjà touché (``price`` au-dessus du stop actif,
+         cf. ``_compute_active_stop``) ;
+      3. le R/R RESTANT (pas celui de l'entrée -- ce qu'il reste à gagner/risquer
+         MAINTENANT) est encore >= ``SATELLITE_POCKET_MIN_RR`` ;
+      4. le régime RATCHET (le plus prudent entre celui observé à l'entrée et
+         maintenant -- jamais un assouplissement, cf.
+         ``market_sentiment.more_cautious_meta_regime``) est encore Euphorie.
+    Retourne (éligible, R/R restant) -- R/R ``None`` si non calculable (jamais un
+    ratio inventé). Prix manquant/invalide -> jamais éligible (fail-closed, même
+    doctrine que le reste du pipeline : une donnée absente ne débloque rien)."""
+    from aria_core.skills import market_sentiment
+
+    if (pos.get("strategy") or "momentum") != "momentum":
+        return False, None
+    entry_price = pos.get("entry_price")
+    if not entry_price or not price or price <= 0:
+        return False, None
+    effective_regime = market_sentiment.more_cautious_meta_regime(
+        pos.get("entry_regime"), current_regime,
+    )
+    if effective_regime != market_sentiment.META_REGIME_EUPHORIA:
+        return False, None
+    active_stop, _ = _compute_active_stop(
+        entry_price=entry_price,
+        entry_atr_pct=pos.get("entry_atr_pct"),
+        high_water_price=pos.get("high_water_price"),
+        invalidation_price=pos.get("invalidation_price"),
+        breakeven_locked=bool(pos.get("breakeven_locked")),
+    )
+    if price <= active_stop:
+        return False, None  # stop ATR déjà touché -- jamais éligible
+    remaining_rr = _remaining_reward_risk(price=price, target_price=pos.get("target_price"), active_stop=active_stop)
+    if remaining_rr is None or remaining_rr < SATELLITE_POCKET_MIN_RR:
+        return False, remaining_rr
+    return True, remaining_rr
 
 
 def _effective_tp_stages(target_price: float | None, entry_price: float | None) -> tuple[float, ...]:
@@ -393,7 +513,7 @@ _POS_FIELDS = (
     "category", "entry_security_json", "chain", "thesis", "close_notes",
     "entry_atr_pct", "pending_high_water", "pending_high_water_since",
     "strategy", "entry_liquidity_usd", "breakeven_locked", "entry_regime",
-    "breakeven_pending_since",
+    "breakeven_pending_since", "entry_dev_sold_pct", "last_liquidity_usd", "pocket",
 )
 
 _ADDED_COLUMNS = [
@@ -465,6 +585,24 @@ _ADDED_COLUMNS = [
     # confirmation (HIGH_WATER_CONFIRMATION_SECONDS, réutilisée telle quelle -- même
     # philosophie "un vrai mouvement dure, une mèche non", pas de 2e constante magique).
     ("breakeven_pending_since", "TEXT"),
+    # 22/07 -- tâche #4, monitoring post-entrée VC (Formule B). Instantané du wallet
+    # déployeur à l'ouverture (part de sa dotation déjà revendue, cf.
+    # ctx.dev_sold_pct) -- NULL si non résolu à l'entrée, le check en détention est
+    # alors fail-open (jamais un delta calculé sur une base absente).
+    ("entry_dev_sold_pct", "REAL"),
+    # Dernière liquidité OBSERVÉE (mise à jour à CHAQUE cycle, contrairement à
+    # entry_liquidity_usd qui reste figé à l'entrée) -- détecte une chute SOUDAINE
+    # entre deux cycles (30%), en plus de la chute cumulée depuis l'entrée (50%,
+    # VC_LIQUIDITY_DROP_INVALIDATION_PCT) déjà couverte. NULL tant qu'aucun cycle de
+    # gestion n'a encore tourné sur cette position -- initialisé à entry_liquidity_usd
+    # dès l'ouverture, jamais une valeur inventée.
+    ("last_liquidity_usd", "REAL"),
+    # 22/07 -- Tâche 2, poche satellite (cf. SATELLITE_POCKET_MIN_RR ci-dessus).
+    # 'main' par défaut (comportement inchangé : force-clôturée à chaque reset
+    # hebdomadaire) -- 'satellite' une fois promue par run_weekly_reset, jamais
+    # rétrogradée automatiquement (sort de la poche satellite seulement par sa PROPRE
+    # clôture normale -- stop suiveur, TP, ou invalidation -- jamais par un reset).
+    ("pocket", "TEXT NOT NULL DEFAULT 'main'"),
 ]
 
 # 19/07 -- migration à chaud DÉDIÉE pour paper_position_archive (voir _ensure_tables) --
@@ -480,6 +618,9 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("breakeven_locked", "INTEGER NOT NULL DEFAULT 0"),
     ("entry_regime", "TEXT"),
     ("breakeven_pending_since", "TEXT"),
+    ("entry_dev_sold_pct", "REAL"),
+    ("last_liquidity_usd", "REAL"),
+    ("pocket", "TEXT NOT NULL DEFAULT 'main'"),
 ]
 
 # Migration à chaud de `paper_state` (#186, 15/07) -- même patron idempotent que
@@ -893,6 +1034,7 @@ async def open_position(
     entry_atr_pct: float | None = None,
     strategy: str = "momentum",
     entry_regime: str | None = None,
+    entry_dev_sold_pct: float | None = None,
 ) -> dict | None:
     """Ouvre une position FICTIVE au prix d'entrée réel. Refuse si déjà ouverte, plafond de
     positions atteint, coupe-circuit de risque armé, prix invalide, cash insuffisant, ou
@@ -1004,13 +1146,18 @@ async def open_position(
               (contract, symbol, cost_usd, entry_price, qty, target_price,
                invalidation_price, opened_at, status, high_water_price, initial_qty,
                category, entry_security_json, chain, thesis, entry_atr_pct,
-               strategy, entry_liquidity_usd, entry_regime)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               strategy, entry_liquidity_usd, entry_regime, entry_dev_sold_pct,
+               last_liquidity_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              _now(), fill_price, qty, category or "", entry_security_json or None,
              (chain or "base").lower(), thesis, entry_atr_pct,
-             strategy or "momentum", pool_liquidity_usd, entry_regime),
+             strategy or "momentum", pool_liquidity_usd, entry_regime, entry_dev_sold_pct,
+             # 22/07 -- tâche #4 : initialisé à la même valeur que entry_liquidity_usd --
+             # la comparaison "chute soudaine" (cycle N vs cycle N-1) n'a de sens qu'à
+             # partir du 1er cycle de gestion ; avant ça, "dernier observé" == "entrée".
+             pool_liquidity_usd),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -1098,6 +1245,61 @@ async def reduce_position(
     }
 
 
+async def _update_vc_liquidity_watermark(position_id: int, current_liq: float) -> None:
+    """Tâche #4 (22/07) : met à jour ``last_liquidity_usd`` à CHAQUE cycle de gestion
+    d'une position ``vc_thesis`` -- jamais figé à l'entrée comme ``entry_liquidity_usd``,
+    c'est ce qui permet de détecter une chute SOUDAINE entre deux cycles consécutifs,
+    en plus (jamais à la place) de la chute cumulée depuis l'entrée déjà surveillée."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE paper_position SET last_liquidity_usd = ? WHERE id = ?",
+            (current_liq, position_id),
+        )
+        await db.commit()
+
+
+async def _check_vc_dev_wallet_recent_selling(
+    contract: str, chain: str, entry_sold_pct: float | None,
+) -> tuple[bool, str]:
+    """Tâche #4 (22/07) : re-vérifie le comportement du wallet déployeur PENDANT la
+    détention d'une position ``vc_thesis`` -- jusqu'ici, ``dev_wallet.py`` n'était
+    consulté qu'UNE FOIS, à l'entrée (via ``_default_analyzer``/``analyze_vc_with_context``).
+
+    Compare le ``sold_pct_of_received`` ACTUEL (frais, re-scanné) à l'instantané pris à
+    l'ouverture (``entry_sold_pct``, persisté sur la position) -- une hausse d'au moins
+    ``VC_DEV_SOLD_DELTA_ALERT_PCT`` points de pourcentage signale une vente RÉCENTE
+    significative, jamais visible dans le seul jugement d'entrée. ``entry_sold_pct is
+    None`` (déployeur/transferts jamais résolus à l'entrée) -> fail-open, aucune
+    comparaison inventée sans base de référence réelle. Toute panne réseau ->
+    fail-open (jamais bloquant, la surveillance normale du prix/liquidité continue)."""
+    if entry_sold_pct is None:
+        return False, ""
+    try:
+        from aria_core.services.blockscout import get_blockscout_client
+        from aria_core.skills.dev_wallet import gather_dev_wallet_facts
+
+        client = get_blockscout_client(chain)
+        info = await client.get_address_info(contract)
+        creator = info.creator_address if info.available else None
+        if not creator:
+            return False, ""
+        facts = await gather_dev_wallet_facts(contract, creator, client=client)
+    except Exception as exc:  # noqa: BLE001 -- jamais bloquant, la surveillance continue
+        logger.info("_check_vc_dev_wallet_recent_selling: %s échoué (%s)", contract, exc)
+        return False, ""
+
+    current = facts.sold_pct_of_received
+    if current is None:
+        return False, ""
+    delta = current - entry_sold_pct
+    if delta >= VC_DEV_SOLD_DELTA_ALERT_PCT:
+        return True, (
+            f"dev wallet a vendu {delta:.1f} points de % supplémentaires depuis l'entrée "
+            f"({entry_sold_pct:.1f}% -> {current:.1f}% de sa dotation reçue)"
+        )
+    return False, ""
+
+
 async def _update_high_water(
     position_id: int, price: float,
     pending_high_water: float | None = None, pending_since: str | None = None,
@@ -1136,6 +1338,18 @@ async def _lock_breakeven_floor(position_id: int) -> None:
             "UPDATE paper_position SET breakeven_locked = 1, breakeven_pending_since = NULL "
             "WHERE id = ?",
             (position_id,),
+        )
+        await db.commit()
+
+
+async def _set_position_pocket(position_id: int, pocket: str) -> None:
+    """22/07 -- Tâche 2, poche satellite. Promotion UNIDIRECTIONNELLE ('main' ->
+    'satellite') faite par ``run_weekly_reset`` -- aucune fonction ne repasse une
+    position de 'satellite' à 'main', la sortie de la poche satellite se fait
+    seulement par sa propre clôture (gestion normale), jamais par un reset."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE paper_position SET pocket = ? WHERE id = ?", (pocket, position_id),
         )
         await db.commit()
 
@@ -1441,6 +1655,12 @@ async def _default_analyzer(contract: str) -> dict | None:
         # une donnée inventée, le check % ci-dessous est alors simplement fail-open (seul
         # le plancher absolu reste actif).
         "liquidity_usd": ctx.best_pair.liquidity_usd if ctx.best_pair else None,
+        # 22/07 -- tâche #4 : instantané du wallet déployeur à l'entrée (part de sa
+        # dotation déjà revendue) -- référence pour détecter une vente RÉCENTE
+        # significative pendant la détention (Formule B, monitoring post-entrée).
+        # None si le déployeur ou ses transferts n'ont pas pu être résolus -- jamais
+        # une donnée inventée, le check en détention est alors simplement fail-open.
+        "dev_sold_pct": getattr(ctx, "dev_sold_pct", None),
     }
 
 
@@ -1525,18 +1745,41 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
 
     Contrairement à ``reset_portfolio`` (DROP TABLE, destructif par design, réservé à un
     déclenchement opérateur explicite), cette fonction ne détruit JAMAIS l'historique :
-    1. force-clôture mark-to-market (prix RÉEL, jamais inventé -- dégrade sur le coût
-       d'entrée si le prix est introuvable) de toute position encore ouverte -- une
-       semaine se juge sur elle-même, rien ne reste "à cheval" sur la suivante ;
-    2. photo finale (``portfolio_summary``, equity == cash après l'étape 1) -> verdict
-       ``validated`` = équité finale >= objectif ;
-    3. archive TOUT l'historique de la semaine dans ``paper_position_archive`` (jamais
-       perdu) puis vide la table live -- la prochaine semaine démarre à 0 position ;
-    4. enregistre le verdict dans ``paper_weekly_cycle`` (track record permanent, une
+    1. évalue chaque position ouverte pour la POCHE SATELLITE (22/07, Tâche 2, option 3
+       confirmée explicitement par l'opérateur) : une position au potentiel encore
+       intact (cf. ``_satellite_pocket_eligible`` -- régime ratchet Euphorie, stop ATR
+       pas touché, R/R RESTANT solide) est PROMUE 'satellite' plutôt que
+       force-clôturée, dans la limite d'un plafond dur
+       (``SATELLITE_POCKET_MAX_PCT_OF_CAPITAL``) -- priorité aux meilleurs R/R
+       restants si plusieurs candidats se disputent la place, jamais un ordre
+       arbitraire ;
+    2. force-clôture mark-to-market (prix RÉEL, jamais inventé -- dégrade sur le coût
+       d'entrée si le prix est introuvable) de TOUTE AUTRE position encore ouverte
+       (poche principale, ou candidate satellite refusée faute de place) -- une
+       semaine se juge sur elle-même, SAUF la poche satellite qui vit sur son propre
+       tempo par construction ;
+    3. photo finale (``portfolio_summary``) -> le verdict ``validated`` ne juge QUE la
+       poche PRINCIPALE (``summary["cash"]``, jamais ``summary["equity"]`` qui
+       inclurait la valorisation flottante de la poche satellite encore ouverte --
+       jamais un moyen de repousser artificiellement un échec, ni de se parer indûment
+       d'un succès, hebdomadaire) ;
+    4. archive l'historique de la semaine dans ``paper_position_archive`` (jamais
+       perdu) puis vide la table live -- SAUF les positions 'satellite' encore
+       ouvertes, qui survivent telles quelles pour la semaine suivante (gérées
+       ensuite par le cycle normal, sur leur propre tempo, jamais reclôturées ici) ;
+    5. enregistre le verdict dans ``paper_weekly_cycle`` (track record permanent, une
        ligne par semaine, jamais réécrit après coup sauf par cette fonction elle-même) ;
-    5. repart à neuf : capital 1M$, horodatage, plus-haut d'équité, cycle_number+1 ;
-    6. lève le coupe-circuit de risque dédié (``risk_guard``) -- fraîche semaine, fraîche
+    6. repart à neuf : capital 1M$, horodatage, plus-haut d'équité, cycle_number+1 ;
+    7. lève le coupe-circuit de risque dédié (``risk_guard``) -- fraîche semaine, fraîche
        discipline, jamais un ancien palier dur qui bloquerait la semaine suivante.
+
+    Limite connue (v1, documentée plutôt que cachée) : le coupe-circuit de drawdown de
+    ``risk_guard`` lit ``portfolio_summary()`` (équité COMPLÈTE, poche satellite
+    incluse) -- une poche satellite qui perd de la valeur peut donc contribuer à un
+    déclenchement de drawdown la semaine suivante, même si son résultat n'a pas compté
+    dans LE verdict hebdomadaire lui-même. Plafond volontairement bas (5% par défaut)
+    pour borner cet impact ; séparer les deux poches dans ``risk_guard`` resterait un
+    chantier distinct si le besoin se confirme en conditions réelles.
     """
     await _ensure_tables()
     price_lookup = price_lookup or _default_price_lookup
@@ -1546,8 +1789,27 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
     start_capital = await starting_capital()
     target_equity = weekly_target_equity(start_capital)
 
-    force_closed: list[dict] = []
-    for pos in await get_open_positions():
+    from aria_core.skills import market_sentiment
+
+    try:
+        current_regime = await market_sentiment.resolve_meta_regime()
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant, dégrade vers neutre
+        logger.info("run_weekly_reset: méta-régime indisponible (%s) -- neutre par défaut", exc)
+        current_regime = market_sentiment.META_REGIME_NEUTRAL
+
+    open_positions = await get_open_positions()
+    existing_satellite = [p for p in open_positions if (p.get("pocket") or "main") == "satellite"]
+    already_satellite_cost = sum(p["cost_usd"] for p in existing_satellite)
+    satellite_room = max(
+        0.0, SATELLITE_POCKET_MAX_PCT_OF_CAPITAL * STARTING_CAPITAL_USD - already_satellite_cost,
+    )
+
+    to_close: list[tuple[dict, float | None, str]] = []
+    candidates: list[tuple[dict, float, str, float]] = []
+    for pos in open_positions:
+        if (pos.get("pocket") or "main") == "satellite":
+            continue  # déjà satellite depuis une semaine précédente -- jamais reclôturée ni réévaluée ici
+
         price = None
         price_source = "indisponible"
         try:
@@ -1566,6 +1828,32 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
                 price_source = "de marché" if (price and price > 0) else "indisponible"
         except Exception:  # noqa: BLE001 — un prix indispo ne bloque jamais le reset
             price = None
+
+        eligible, remaining_rr = _satellite_pocket_eligible(pos, price, current_regime)
+        if eligible:
+            candidates.append((pos, price, price_source, remaining_rr))
+        else:
+            to_close.append((pos, price, price_source))
+
+    # Budget limité -- admet les MEILLEURS R/R restants en premier (défendable,
+    # jamais un ordre arbitraire de base de données pour départager un plafond dur).
+    candidates.sort(key=lambda c: c[3], reverse=True)
+    satellite_added: list[dict] = []
+    satellite_rejected_no_room = 0
+    for pos, price, price_source, remaining_rr in candidates:
+        if pos["cost_usd"] <= satellite_room:
+            await _set_position_pocket(pos["id"], "satellite")
+            satellite_room -= pos["cost_usd"]
+            satellite_added.append({
+                "contract": pos["contract"], "symbol": pos.get("symbol"),
+                "cost_usd": pos["cost_usd"], "remaining_rr": remaining_rr,
+            })
+        else:
+            satellite_rejected_no_room += 1
+            to_close.append((pos, price, price_source))
+
+    force_closed: list[dict] = []
+    for pos, price, price_source in to_close:
         exit_price = price if (price and price > 0) else pos["entry_price"]
         closed = await close_position(
             pos["contract"], exit_price,
@@ -1578,20 +1866,37 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
         if closed:
             force_closed.append(closed)
 
+    # 22/07 -- Tâche 2 : coût total désormais immobilisé dans la poche satellite
+    # (carried-over + nouvellement admise ce cycle) -- calculé AVANT la photo, pour
+    # neutraliser son effet sur le verdict de la poche PRINCIPALE (voir ci-dessous).
+    satellite_reserved_usd = already_satellite_cost + sum(a["cost_usd"] for a in satellite_added)
+
     summary = await portfolio_summary()
-    end_equity = summary["equity"]
-    return_pct = summary["return_pct"]
+    # Le verdict de la semaine ne juge QUE la poche PRINCIPALE. ``summary["cash"]``
+    # soustrait le coût de TOUTE position encore ouverte -- à ce stade, uniquement la
+    # poche satellite (tout le reste vient d'être force-clôturé ci-dessus) -- il faut
+    # donc RÉINJECTER ce coût pour neutraliser son effet : la poche satellite ne doit
+    # ni aider ni pénaliser CE verdict, comme si son capital avait été mis de côté
+    # avant le début de la semaine plutôt que dépensé par elle. ``open_value``
+    # (valorisation flottante de la poche satellite) n'entre JAMAIS dans ce calcul.
+    # Identique à l'ancien comportement quand aucune position satellite n'existe
+    # (cash == equity dès lors que tout est fermé, satellite_reserved_usd == 0) --
+    # rétrocompatible par construction.
+    end_equity = summary["cash"] + satellite_reserved_usd
+    return_pct = (end_equity / start_capital - 1.0) * 100.0 if start_capital else 0.0
     validated = end_equity >= target_equity
     ended_at = _now()
 
     async with aiosqlite.connect(DB_PATH) as db:
         cols = ", ".join(_POS_FIELDS)
+        # Archive + vide la table live -- SAUF la poche satellite (position encore
+        # OUVERTE par construction, gérée sur son propre tempo, jamais wipée ici).
         await db.execute(
             f"INSERT INTO paper_position_archive (cycle_number, {cols}) "
-            f"SELECT ?, {cols} FROM paper_position",
+            f"SELECT ?, {cols} FROM paper_position WHERE pocket != 'satellite'",
             (cycle_number,),
         )
-        await db.execute("DELETE FROM paper_position")
+        await db.execute("DELETE FROM paper_position WHERE pocket != 'satellite'")
         await db.execute(
             """
             INSERT INTO paper_weekly_cycle
@@ -1622,6 +1927,10 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
 
     risk_guard.resume_new_entries(by="weekly_reset_auto")
 
+    # 22/07 -- Tâche 2 : transparence complète sur la poche satellite, jamais un
+    # mécanisme silencieux (même doctrine que le reste du projet -- un franchissement
+    # de garde-fou ou une exemption reste toujours visible dans le rapport).
+    # ``satellite_reserved_usd`` déjà calculé plus haut (réinjecté dans end_equity).
     return {
         "cycle_number": cycle_number,
         "started_at": started_at,
@@ -1635,6 +1944,10 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
         "win_rate": summary["win_rate"],
         "force_closed": len(force_closed),
         "next_cycle_number": next_cycle,
+        "satellite_added_this_cycle": satellite_added,
+        "satellite_open_positions": len(existing_satellite) + len(satellite_added),
+        "satellite_reserved_usd": satellite_reserved_usd,
+        "satellite_rejected_no_room": satellite_rejected_no_room,
     }
 
 
@@ -1651,8 +1964,24 @@ def format_weekly_cycle_report(report: dict) -> str:
     ]
     if report.get("force_closed"):
         lines.append(f"{report['force_closed']} position(s) encore ouverte(s) clôturée(s) au prix du marché.")
+    # 22/07 -- Tâche 2 : la poche satellite (jamais wipée, jamais comptée dans le
+    # verdict ci-dessus) reste toujours visible dans le rapport -- jamais un
+    # mécanisme silencieux.
+    satellite_open = report.get("satellite_open_positions") or 0
+    if satellite_open:
+        added_this_cycle = len(report.get("satellite_added_this_cycle") or [])
+        lines.append(
+            f"🛰️ Poche satellite : {satellite_open} position(s) épargnée(s) du reset "
+            f"({added_this_cycle} nouvelle(s) cette semaine, "
+            f"{report.get('satellite_reserved_usd', 0.0):,.0f} $ réservés, hors verdict ci-dessus)."
+        )
+    if report.get("satellite_rejected_no_room"):
+        lines.append(
+            f"{report['satellite_rejected_no_room']} position(s) éligible(s) à la poche satellite "
+            "mais refusée(s) faute de place (plafond atteint) -- clôturée(s) normalement."
+        )
     lines.append(
-        f"Nouvelle semaine #{report['next_cycle_number']} : capital remis à "
+        f"Nouvelle semaine #{report['next_cycle_number']} : capital principal remis à "
         f"{STARTING_CAPITAL_USD:,.0f} $, 0 position. Aucun argent réel."
     )
     return "\n".join(lines)
@@ -1838,7 +2167,46 @@ async def _run_paper_cycle_locked(
             if (p.get("strategy") or "momentum") == "vc_thesis":
                 entry_price = p["entry_price"]
                 entry_liq = p.get("entry_liquidity_usd")
+                last_liq = p.get("last_liquidity_usd")
                 current_liq = pair.liquidity_usd if pair is not None else None
+
+                # 22/07 -- tâche #4 : met à jour le dernier observé AVANT tout check
+                # qui pourrait clôturer la position ce cycle-ci -- best-effort, jamais
+                # bloquant (une panne d'écriture ne casse jamais la gestion de position).
+                if current_liq is not None:
+                    try:
+                        await _update_vc_liquidity_watermark(p["id"], current_liq)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                # 22/07 -- tâche #4, signal SELL d'urgence #1 (monitoring post-entrée,
+                # décision opérateur explicite) : le wallet déployeur revend une part
+                # significative de sa dotation PENDANT la détention -- jusqu'ici, dev_wallet.py
+                # n'était consulté qu'UNE FOIS, à l'entrée. Coûte 2 appels Blockscout par
+                # cycle et par position vc_thesis ouverte (débit largement dans la marge
+                # calibrée, cf. docs/api-rate-limit-calibration.md) -- sans conséquence
+                # aujourd'hui, la poche VC restant à 0% (décision du 15/07 inchangée).
+                dev_sold_triggered, dev_sold_reason = await _check_vc_dev_wallet_recent_selling(
+                    p["contract"], p.get("chain") or "base", p.get("entry_dev_sold_pct"),
+                )
+                if dev_sold_triggered:
+                    exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                    exit_notes = (
+                        f"Signal SELL d'urgence (surveillance post-entrée VC) : {dev_sold_reason} "
+                        f"-- sortie complète ({exit_gain_pct:+.1f}% vs entrée), "
+                        f"{_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price, reason="vente déployeur détectée", notes=exit_notes,
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
 
                 liquidity_invalidated = False
                 liq_reason = ""
@@ -1858,6 +2226,23 @@ async def _run_paper_cycle_locked(
                         liq_reason = (
                             f"liquidité en chute de {drop_pct:.0f}% depuis l'entrée "
                             f"({entry_liq:,.0f}$ -> {current_liq:,.0f}$)"
+                        )
+                    # 22/07 -- tâche #4, signal SELL d'urgence #2 : chute SOUDAINE entre
+                    # deux cycles consécutifs (30%) -- complète, sans jamais remplacer, le
+                    # check cumulé depuis l'entrée ci-dessus (50%) : un retrait de LP étalé
+                    # en petites tranches sur plusieurs semaines peut ne jamais franchir le
+                    # seuil cumulé à aucun instant T, mais représenter un vrai retrait en
+                    # cours -- détecté ici cycle par cycle plutôt qu'en cumulé depuis l'entrée.
+                    elif (
+                        last_liq and last_liq > 0
+                        and current_liq < last_liq * (1 - VC_LIQUIDITY_SUDDEN_DROP_PCT)
+                    ):
+                        liquidity_invalidated = True
+                        sudden_drop_pct = (1 - current_liq / last_liq) * 100.0
+                        liq_reason = (
+                            f"chute SOUDAINE de liquidité entre deux cycles "
+                            f"({sudden_drop_pct:.0f}%, {last_liq:,.0f}$ -> {current_liq:,.0f}$) "
+                            "-- retrait de LP en formation"
                         )
 
                 if liquidity_invalidated:
@@ -1961,16 +2346,12 @@ async def _run_paper_cycle_locked(
                 elif new_be_pending != prev_be_pending:
                     await _update_breakeven_pending(p["id"], new_be_pending)
 
-            trailing_stop = high_water * (1 - trail_pct)
             invalidation = p.get("invalidation_price")
-            active_stop = trailing_stop
-            stop_source = "stop suiveur"
-            if invalidation and invalidation > active_stop:
-                active_stop = invalidation
-                stop_source = "invalidation"
-            if breakeven_locked and entry_price and entry_price > active_stop:
-                active_stop = entry_price
-                stop_source = "point mort verrouillé"
+            active_stop, stop_source = _compute_active_stop(
+                entry_price=entry_price, entry_atr_pct=p.get("entry_atr_pct"),
+                high_water_price=high_water, invalidation_price=invalidation,
+                breakeven_locked=breakeven_locked,
+            )
 
             if active_stop and price <= active_stop:
                 exit_gain_pct = (price / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0
@@ -2444,6 +2825,10 @@ async def _run_paper_cycle_locked(
             # 20/07 -- Regime Switch : régime macro à l'entrée, verrouillé pour la vie
             # de la position (ratchet en gestion, cf. plus bas).
             entry_regime=sig.get("regime"),
+            # 22/07 -- tâche #4 : instantané du wallet déployeur à l'entrée -- None pour
+            # tout analyzer qui ne le fournit pas (ex. momentum, qui n'a pas ce concept),
+            # jamais une valeur inventée.
+            entry_dev_sold_pct=sig.get("dev_sold_pct"),
         )
         if pos:
             opened += 1
