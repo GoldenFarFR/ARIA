@@ -253,3 +253,46 @@ async def test_sepolia_code_check_502_when_rpc_unavailable(client, monkeypatch):
         headers={"X-Admin-Secret": "s3cr3t"},
     )
     assert res.status_code == 502
+
+
+# ── 4. /api/aria/knowledge?approved_only=false -- items en attente (22/07) ────
+# Trou trouvé en audit sécurité (question opérateur sur le mode public) : les items
+# APPROUVÉS restent publics (voulu), mais les items EN ATTENTE (jamais revus par un
+# humain) étaient renvoyés sans aucune vérification -- seul endpoint "connaissance"
+# sans son pendant POST protégé.
+
+@pytest.mark.asyncio
+async def test_knowledge_approved_stays_public(client, monkeypatch):
+    from aria_core.knowledge import cognitive
+
+    async def _empty(*_a, **_kw):
+        return []
+
+    monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    monkeypatch.setattr(cognitive, "get_approved", _empty)
+    res = await client.get("/api/aria/knowledge")  # approved_only=True par défaut
+    assert res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pending_requires_operator_secret(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    res = await client.get("/api/aria/knowledge", params={"approved_only": "false"})
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pending_accepted_with_operator_secret(client, monkeypatch):
+    from aria_core.knowledge import cognitive
+
+    async def _empty(*_a, **_kw):
+        return []
+
+    monkeypatch.setattr(settings, "admin_api_secret", "s3cr3t")
+    monkeypatch.setattr(cognitive, "get_pending", _empty)
+    res = await client.get(
+        "/api/aria/knowledge",
+        params={"approved_only": "false"},
+        headers={"X-Admin-Secret": "s3cr3t"},
+    )
+    assert res.status_code == 200

@@ -662,7 +662,15 @@ async def aria_setup_guide(request: Request):
 
 
 @router.get("/knowledge")
-async def list_knowledge(approved_only: bool = True):
+async def list_knowledge(request: Request, approved_only: bool = True):
+    # 22/07 -- trou trouvé en audit sécurité (question opérateur sur le mode public) :
+    # les items APPROUVÉS restent publics (voulu, même esprit que /content/faq), mais
+    # ?approved_only=false renvoyait les items EN ATTENTE (jamais revus) sans aucune
+    # vérification -- seul endpoint "connaissance" de ce fichier sans son pendant
+    # POST/écriture protégé quelques lignes plus bas. Même patron require_operator que
+    # le reste du fichier, appliqué seulement sur la branche non-approuvée.
+    if not approved_only and is_public_mode():
+        require_operator(request)
     from aria_core.knowledge.cognitive import get_approved, get_pending
     items = await get_approved() if approved_only else await get_pending()
     return [
