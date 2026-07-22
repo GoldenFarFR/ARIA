@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from aria_core.services import blockscout_credit_budget
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://base.blockscout.com/api/v2"
@@ -285,6 +287,24 @@ class BlockscoutClient:
         timeout_retried = False
         pro_fallback_attempted = False
 
+        # 22/07 -- vérification PROACTIVE du budget de crédits Pro, avant même de
+        # tenter l'appel (le repli sur 402 ci-dessous reste le filet de sécurité
+        # réactif si ce budget se révélait mal calibré, jamais retiré). Seulement
+        # pertinent sur "base" (seule chaîne avec un repli gratuit connu) -- sur
+        # les autres chaînes, épuiser le budget proactivement n'aiderait à rien
+        # puisqu'il n'y a nulle part où basculer.
+        if self._api_key and self.chain == "base" and not await blockscout_credit_budget.can_spend():
+            if not self._pro_credits_exhausted:
+                self._pro_credits_exhausted = True
+                logger.warning(
+                    "blockscout: budget de crédits Pro proche de l'épuisement (90000/jour) "
+                    "-- repli PROACTIF (ce process) vers l'endpoint gratuit base.blockscout.com, "
+                    "avant même un 402 réel",
+                )
+            self.base_url = BASE_URL
+            self._api_key = None
+            self._min_interval = 0.35
+
         while True:
             # url/call_params recalculés à CHAQUE itération (pas une seule fois avant la
             # boucle) -- nécessaire depuis le 20/07 : le repli 402 ci-dessous mute
@@ -359,6 +379,7 @@ class BlockscoutClient:
 
             if response.status_code == 404:
                 self._record_success()
+                await self._record_pro_credit_spend(path)
                 return None, "adresse ou contrat introuvable"
 
             try:
@@ -369,7 +390,22 @@ class BlockscoutClient:
                 return None, f"{UNAVAILABLE} ({exc})"
 
             self._record_success()
+            await self._record_pro_credit_spend(path)
             return response.json(), None
+
+    async def _record_pro_credit_spend(self, path: str) -> None:
+        """N'enregistre que si CET appel a réellement traversé la Pro API (une
+        clé encore présente au moment du succès -- un repli 402/proactif déjà
+        déclenché EN COURS DE ROUTE aurait mis ``_api_key`` à ``None`` avant
+        d'atteindre ce point). Best-effort, jamais bloquant : un souci d'écriture
+        du compteur de budget ne doit jamais faire échouer un appel Blockscout
+        par ailleurs réussi."""
+        if not self._api_key:
+            return
+        try:
+            await blockscout_credit_budget.record_spend(endpoint=path)
+        except Exception:
+            logger.warning("blockscout: échec d'enregistrement du budget de crédits (non bloquant)", exc_info=True)
 
     # ------------------------------------------------------------------
     # 1. Info adresse (balance, contrat, verification, nom)

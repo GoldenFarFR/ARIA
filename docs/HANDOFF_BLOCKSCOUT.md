@@ -50,3 +50,9 @@ Solution : 5 req/s = palier gratuit AUTHENTIFIE (100K credits/jour, sans CB) - l
 [DEPLOYE] Sujet    : Quota Blockscout Pro epuise par le wallet-scoring (rescan 13 chaines/passage)
 Date : 2026.07.16  /  Probleme : smart_money.py (wallet-scoring, #157) re-scannait les 13 chaines supportees a chaque passage de rattrapage pour un wallet actif (~5460 credits/wallet), epuisant le quota Blockscout Pro (100k credits) plusieurs fois par jour, alors qu'aucune fonction de trading ne consommait ce signal multi-chaines.
 Solution : DEFAULT_SCAN_CHAINS() court-circuite en Base uniquement (_BASE_ONLY_OVERRIDE=True), classement TVL multi-chaines conserve dans le code mais inactif tant que non leve — smart_money.py (commit a75acef65a89)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Suivi proactif du budget de crédits Pro (débit ≠ budget cumulé)
+Date : 2026.07.22  /  Probleme : le throttle "90% de la capacité" (5 req/s → 4,5 req/s) protège du rate-limit instantané, mais aucun mécanisme ne suivait le budget CUMULÉ (100 000 crédits/jour, 20 crédits/appel standard, sourcé via la doc officielle Blockscout) — seul le repli RÉACTIF sur un vrai 402 déjà reçu existait, jamais de prévention.
+Solution : nouveau `blockscout_credit_budget.py` (même patron que `x402_budget.py`, fenêtre calendaire journalière minuit UTC, plafond dur 90 000/jour, append-only) — `_get_json` vérifie `can_spend()` AVANT même de tenter un appel Pro sur Base et bascule proactivement vers l'endpoint gratuit si le budget est sur le point d'être épuisé ; chaque appel Pro réussi enregistre sa consommation. Le repli réactif sur 402 reste en place comme filet de sécurité — services/blockscout.py, services/blockscout_credit_budget.py (cf. historique git 22/07)
