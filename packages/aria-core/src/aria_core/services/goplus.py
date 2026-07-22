@@ -218,6 +218,20 @@ class GoPlusClient:
                 logger.warning("goplus: reponse /token sans access_token — repli sur l'API publique")
                 return self._access_token
 
+            # 22/07 -- bug reel trouve en conditions reelles : GoPlus renvoie parfois
+            # access_token DEJA prefixe par "Bearer " dans la chaine elle-meme (verifie
+            # en direct : "Bearer eyJhY2NvdW50SWQi..."). _get_json construit ensuite
+            # "Authorization: Bearer {token}" -- sans ce garde, l'en-tete envoye devient
+            # "Bearer Bearer eyJ...", que GoPlus rejette (code 4012 "Wrong Signature",
+            # cf. table officielle des codes). Cause racine du code 4012 observe depuis
+            # le 21/07 10:37 (passage a l'en-tete Authorization: Bearer) -- PAS une
+            # rotation de credentials cote GoPlus comme suppose initialement. Normalise
+            # ici pour que self._access_token soit TOUJOURS le JWT nu, quel que soit le
+            # format renvoye par GoPlus.
+            token = str(token).strip()
+            if token.lower().startswith("bearer "):
+                token = token[len("bearer "):].strip()
+
             self._access_token = token
             self._token_expires_at = now + float(expires_in or 0)
             logger.info("goplus: access_token renouvele (expire dans %ss)", expires_in)

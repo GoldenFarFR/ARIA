@@ -344,6 +344,52 @@ async def test_ensure_access_token_fetches_and_caches(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ensure_access_token_strips_bearer_prefix_already_in_response(monkeypatch):
+    """Bug réel trouvé en conditions réelles (22/07) : GoPlus renvoie parfois
+    access_token DÉJÀ préfixé "Bearer " dans la chaîne elle-même. Sans ce garde,
+    _get_json construirait "Authorization: Bearer Bearer eyJ..." -- rejeté par
+    GoPlus (code 4012 "Wrong Signature", cf. table officielle des codes d'erreur).
+    self._access_token doit toujours rester le JWT nu, quel que soit le format
+    renvoyé."""
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    _patch_goplus_auth_http(
+        monkeypatch,
+        post_response=_FakeResponse(200, {"result": {"access_token": "Bearer tok-prefixed", "expires_in": 7200}}),
+    )
+    client = GoPlusClient()
+
+    token = await client._ensure_access_token()
+
+    assert token == "tok-prefixed"
+    assert client._access_token == "tok-prefixed"
+
+
+@pytest.mark.asyncio
+async def test_get_json_never_double_prefixes_bearer_header(monkeypatch):
+    """Bout en bout : même quand GoPlus renvoie un access_token déjà préfixé
+    "Bearer ", l'en-tête HTTP réellement envoyé ne doit contenir qu'un seul
+    "Bearer" -- reproduction directe de l'incident du 22/07 (dashboard GoPlus à
+    0 requête/30j malgré un pipeline momentum actif, cause: double préfixe)."""
+    _patch_goplus_no_sleep(monkeypatch)
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    _, get_calls = _patch_goplus_auth_http(
+        monkeypatch,
+        post_response=_FakeResponse(200, {"result": {"access_token": "Bearer tok-prefixed", "expires_in": 7200}}),
+        get_responses={url: [_FakeResponse(200, ok_payload)]},
+    )
+
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert security.available is True
+    assert get_calls[0]["headers"] == {"Authorization": "Bearer tok-prefixed"}  # jamais "Bearer Bearer ..."
+
+
+@pytest.mark.asyncio
 async def test_ensure_access_token_refreshes_near_expiry(monkeypatch):
     monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
     monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
