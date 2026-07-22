@@ -33,7 +33,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-WALLET_NAME = "aria-agent-wallet-pilot"  # même wallet dédié que agent_wallet_cdp_adapter.py
+# 22/07 -- importé depuis agent_wallet_cdp_adapter (SOURCE UNIQUE) plutôt que
+# dupliqué ici -- une constante dupliquée est exactement ce qui a permis
+# l'incident du 21/07 (une seule des deux copies corrigée, l'autre aurait
+# continué à signer via un wallet CDP vide sans que rien ne le signale).
+from aria_core.agent_wallet_cdp_adapter import WALLET_NAME
 
 
 async def build_x402_payment_header(payment_required: dict[str, Any]) -> str:

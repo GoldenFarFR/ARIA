@@ -36,7 +36,19 @@ from typing import Any
 
 # USDC natif sur Base mainnet (6 décimales) -- https://docs.base.org/base-chain/data-analytics/token-list
 USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-WALLET_NAME = "aria-agent-wallet-pilot"
+# 22/07 -- corrige un vrai incident capital reel : lors d'une regeneration de la
+# cle API CDP (21/07, suite au correctif d'IP autorisee), get_or_create_account
+# n'a plus retrouve le compte historique sous ce nom et en a cree un SECOND,
+# vide (0x584b2B35...), distinct de celui qui detient le solde reel
+# (0xF04625162b616c5ad9788811b7be8CDd425B37Ef). Verifie en direct sur le
+# dashboard CDP (Sylvain Rio) : ce dernier porte desormais le label "aria-wallet"
+# -- confirme empiriquement le 22/07 que get_or_create_account(name="aria-wallet")
+# resout exactement vers cette adresse, sans creer de 3e compte. Le nom
+# "aria-agent-wallet-pilot" reste associe au second compte (vide, orphelin) --
+# jamais reutilise, jamais renomme sur Coinbase (plus sur de le faire cote
+# code, verifiable et testable, plutot que de manipuler un wallet reel via
+# l'interface web).
+WALLET_NAME = "aria-wallet"
 
 
 def _get(obj: Any, *names: str) -> Any:
