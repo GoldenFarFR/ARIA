@@ -3487,6 +3487,48 @@ Ces points sont vérifiés (audit 07/07) et ne doivent pas redéclencher une que
     1000M/500M/100M) sur la base des vrais repères de distribution trouvés ce jour (médiane
     empirique ~35M$ sur 69 tokens réels, plancher 200k$ discuté mais jamais gravé comme
     critère de sélection codé).
+- **22/07 — incident capital réel résolu : le pilote agent-wallet visait un wallet CDP vide
+  depuis le 21/07, corrigé et déployé (`6cddf739`).** Découvert en répondant à une demande
+  opérateur de point complet ("tout est câblé ?") : `/agentwallet` affichait 0 USDC alors que
+  le vrai solde on-chain (vérifié via Blockscout, indépendamment de notre code) était de
+  0,76$ (puis 12,80$ après un dépôt du 21/07 23:31). **Cause racine** : lors de la
+  régénération de la clé API CDP le 21/07 (correctif d'IP autorisée, déjà documenté),
+  `get_or_create_account(name="aria-agent-wallet-pilot")` a résolu vers un SECOND compte,
+  vide, créé automatiquement le 21/07 23:54 — distinct du wallet historique
+  (`0xF04625162b616c5ad9788811b7be8CDd425B37Ef`) qui détient le vrai solde. **Vérifié en
+  direct avant toute conclusion** (capture du dashboard CDP fournie par l'opérateur +
+  `list_accounts()`/`get_account(address=...)` testés en direct) : la clé API actuelle a en
+  réalité accès aux DEUX comptes — ce n'était jamais un problème d'accès perdu, seulement un
+  nom de recherche qui ne matchait plus le bon compte (le wallet historique porte désormais
+  le label `aria-wallet` sur le dashboard, pas `aria-agent-wallet-pilot`). Fix : `WALLET_NAME
+  = "aria-wallet"` dans `agent_wallet_cdp_adapter.py` — confirmé empiriquement que ce nom
+  résout exactement vers la bonne adresse, sans en créer un 3e. **Bug annexe trouvé en
+  vérifiant les tests avant de committer** : `x402_cdp_signer.py` avait sa PROPRE copie
+  dupliquée de `WALLET_NAME`, jamais synchronisée avec l'autre — si seul
+  `agent_wallet_cdp_adapter.py` avait été corrigé, la lecture de solde aurait été juste mais
+  la signature des paiements x402 aurait continué à viser le mauvais wallet vide. Corrigé
+  structurellement : `x402_cdp_signer.py` importe désormais `WALLET_NAME` depuis
+  `agent_wallet_cdp_adapter.py` (source unique) plutôt que de dupliquer la correction — ne
+  peut plus se désynchroniser à l'avenir. **Décision opérateur explicite** : le second wallet
+  (vide, `0x584b2B35dac347B2317da0d21b95063de51257Ef`) reste volontairement en place comme
+  wallet de secours (déjà accessible avec la même clé API, aucun coût à le garder) — jamais
+  supprimé, jamais renommé sur Coinbase (correction faite côté code, testable et réversible,
+  plutôt que de manipuler un wallet réel via l'interface web). Suite complète des tests
+  agent-wallet/x402-signer vérifiée verte (142 passed, 0 régression). **Aucune perte de
+  fonds à aucun moment** — le solde est resté sur la blockchain tout du long, seule la
+  LECTURE/SIGNATURE de notre code pointait au mauvais endroit.
+- **22/07 (suite) — Smart Account CDP (Spend Permissions) : direction actée par l'opérateur
+  ("il nous faut ça"), RIEN construit, à reprendre dans une session dédiée.** Suite directe
+  de l'incident ci-dessus + des pistes déjà notées #215/#225 (18-19/07, veille Research) :
+  un Smart Account permettrait de graver un plafond de dépense/périmètre swap-only
+  directement dans le contrat du wallet lui-même (protection qui tient même si notre code
+  Python a un bug), en plus du CDP Paymaster (gas sponsorisé — répond à la marge de gas
+  serrée observée ce soir, 0,0166 ETH). **Explicitement différé au segment suivant** (décision
+  du même soir) : ne pas enchaîner un changement de type de wallet juste après avoir
+  corrigé un incident capital réel le même soir — laisser le système tourner stable
+  d'abord, puis reprendre avec une vraie diligence (produit exact CDP à utiliser, plan de
+  migration depuis le wallet EOA actuel, testé avant tout déploiement réel) plutôt qu'à
+  chaud.
 
 ## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
 **Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
