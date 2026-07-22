@@ -421,6 +421,18 @@ timing wrong or fully wrong"), cède la direction de l'app à Cobie, recentre
 Base sur 3 priorités 2026 déjà notées ci-dessus : **trading, paiements,
 agents IA**. Durcit (pas un nouveau pivot) l'annonce du 15/07 déjà gravée.
 
+**22/07 — veille Base, rien qui change le plan, deux faits notés.** (1) Pollak
+signale un lancement "imminent" d'actions tokenisées (tokenized equities,
+adossées 1:1) sur Base — Base reconnaît un retard face à Robinhood Chain qui
+en propose déjà en environnement EVM. Renforce encore la priorité "trading"
+déjà actée, aucune action ARIA requise (hors périmètre agent-wallet actuel).
+(2) Base Batches (programme toujours actif, "Base Batches 2026") : conditions
+précisées — équipes pré-produit/pré-seed ayant levé <250k$, top 15 reçoivent
+10k$ + programme 8 semaines + Demo Day San Francisco, au moins 3 équipes
+reçoivent 50k$ du Base Ecosystem Fund direct. Le jalon de déverrouillage reste
+inchangé (test 1M$ concluant + image/pitch chiffré avant de candidater) — noté
+ici pour mémoire, pas une raison d'avancer la date.
+
 **16/07 (suite) — Cybercentry, candidat concret pour #199, vérifié
 légitime.** `cybercentry.co.uk` : API de vérification sécurité
 (wallet/contrat/app) **pay-per-call 0,02$, réglée en x402 sur Base et
