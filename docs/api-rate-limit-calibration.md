@@ -30,7 +30,7 @@
 | Service | Débit réel (source) | Confiance | Throttle actuel | Cible 90% | Action |
 |---|---|---|---|---|---|
 | Dune Execute SQL (Free) | 15 req/min (limite basse, contraignante) + 40/min (limite haute, compteur séparé) | Confirmé (doc officielle) | aucun | 4,44s (13,5/min) | Nouveau throttle |
-| Tavily Search | Dev = 100/min, Prod = 1000/min (10x d'écart selon la clé) | Confirmé mais **tier réel de la clé à vérifier** | 0,5s (120/min — dépasse déjà le tier Dev si c'est le tier actif) | 0,667s (90/min) si Dev, 0,067s (900/min) si Prod | **Vérifier le tier réel avant de calibrer** |
+| Tavily Search | **22/07, corrigé sur dashboard réel (billing) : PAS de rate-limit en req/min publié nulle part** — structure réelle = budget MENSUEL en crédits (plan "Researcher"/gratuit = 1000 crédits/mois, 1 crédit/recherche basique, 2/avancée). L'ancien chiffre "Dev=100/min, Prod=1000/min" de ce tableau était une confusion (mélange type-de-clé vs plan d'abonnement), jamais confirmé sur un vrai relevé | **Corrigé (dashboard réel, 22/07)** — le "confirmé" précédent était faux | 0,5s (120/min) — **chiffre sans fondement réel, aucun débit connu à respecter** | — | Pas un sujet de débit du tout — voir plutôt la note "usage mensuel" ci-dessous |
 | RugCheck.xyz | Aucune limite publiée | Absence confirmée (Swagger officiel vérifié) | aucun | — | Backoff réactif seul, capacité inconnue |
 | Farcaster/Warpcast | Aucune limite publiée | Absence confirmée | aucun | — | Backoff réactif seul, capacité inconnue |
 | DefiLlama (gratuit) | Aucun chiffre publié (contrairement au tier payant, chiffré à 1000/min) | Absence confirmée | aucun | — | Backoff réactif seul, capacité inconnue |
@@ -59,3 +59,23 @@ test). Observation : code de statut, corps de réponse (certains fournisseurs co
 signalent leur rate-limit via un HTTP 200 avec un code d'erreur dans le corps, pas un vrai
 429 HTTP), et pour GoPlus un test de récupération (attente puis nouvelles requêtes
 espacées) pour mesurer le temps de reconstitution du quota.
+
+## Deux familles de contrainte, jamais confondues (22/07, découverte Blockscout + Tavily)
+
+Ce fichier a longtemps traité toute limite comme un DÉBIT (req/s ou req/min, protège
+contre un blocage 429 en cas de rafale). Deux fournisseurs révèlent une famille
+DIFFÉRENTE : un BUDGET CUMULÉ sur une période (crédits/jour pour Blockscout Pro,
+crédits/MOIS pour Tavily) — un débit "sage" ne protège en rien contre l'épuisement de ce
+budget si le VOLUME total dépasse ce qui est alloué sur la période. Pire, pour Tavily
+("Researcher"/gratuit), la doc du fournisseur confirme explicitement "unused credits do
+not roll over to the next month" -- un budget mensuel NON consommé est une capacité
+définitivement perdue, jamais reportée. Deux implications opérationnelles distinctes :
+un budget en CRÉDITS/JOUR (Blockscout) mérite un throttle proactif comme celui déjà
+construit (`blockscout_credit_budget.py`) pour ne jamais le DÉPASSER ; un budget en
+CRÉDITS/MOIS avec perte à la fin de période (Tavily) pose la question inverse -- s'assurer
+qu'une VRAIE utilité disponible n'est pas laissée de côté par manque de câblage, jamais en
+forçant une consommation artificielle sans valeur (bruit inutile, pollution de mémoire).
+Réflexe à généraliser : avant de calibrer un débit pour un nouveau fournisseur, vérifier
+D'ABORD sur son dashboard/sa doc de facturation s'il s'agit d'un débit instantané, d'un
+budget cumulé avec reset, ou d'un budget cumulé SANS report -- les trois se calibrent
+différemment.
