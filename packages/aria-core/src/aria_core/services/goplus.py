@@ -47,6 +47,14 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.gopluslabs.io/api/v1"
 BASE_CHAIN_ID = "8453"  # Base mainnet
 
+# 22/07 -- cooldown après une authentification rejetée (code 4012) malgré un
+# jeton émis avec succès -- évite de marteler un jeton cassé à chaque appel
+# suivant tant que ce n'est pas corrigé côté identifiants (action opérateur,
+# probable rotation GOPLUS_APP_SECRET nécessaire côté .env). 30 min : assez
+# long pour ne pas spammer, assez court pour se rétablir seul sans redéploiement
+# une fois les identifiants corrigés.
+_AUTH_BROKEN_COOLDOWN_S = 1800.0
+
 UNAVAILABLE = "donnée GoPlus indisponible"
 
 _FAIL_STREAK_WARN_THRESHOLD = 3
@@ -174,6 +182,7 @@ class GoPlusClient:
         self._access_token: str | None = None
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()
+        self._auth_broken_until: float = 0.0
 
     async def _ensure_access_token(self) -> str | None:
         """Renouvelle l'access_token si absent/proche expiration. Retourne None sans
@@ -269,8 +278,15 @@ class GoPlusClient:
         # L'endpoint reste tolérant (renvoie 200 même sans jeton valide, testé en
         # direct), ce qui a masqué le bug pendant tout ce temps : les appels
         # "réussissaient" mais n'étaient jamais rattachés au compte authentifié.
-        token = await self._ensure_access_token()
+        # 22/07 -- cooldown auth cassée (cf. commentaire code 4012 plus bas) : ne
+        # retente pas un jeton systématiquement cassé à chaque appel, repli direct
+        # sur le chemin public tant que le cooldown n'est pas écoulé.
+        if time.time() < self._auth_broken_until:
+            token = None
+        else:
+            token = await self._ensure_access_token()
         headers = {"Authorization": f"Bearer {token}"} if token else None
+        auth_fallback_done = False
 
         while True:
             await self._throttle()
@@ -312,6 +328,34 @@ class GoPlusClient:
                         self._record_failure(f"{url} -> code 4029 apres {attempt_429} tentatives")
                         return None, f"{UNAVAILABLE} (rate limit GoPlus)"
                     await asyncio.sleep(0.5 * (2**attempt_429))
+                    continue
+
+                # 22/07 -- bug réel trouvé en conditions réelles : le jeton est émis
+                # avec succès (/token renvoie code=1 "ok") mais REJETÉ par l'endpoint
+                # de données (code 4012 "signature verification failure") -- confirmé
+                # sur un contrat archi-connu (WETH), bloquait donc TOUT le pipeline
+                # momentum, pas seulement des tokens frais. Cause probable : rotation
+                # de GOPLUS_APP_SECRET côté GoPlus suite à l'exposition accidentelle
+                # du 21/07 (recommandation "rotation par précaution" jamais confirmée
+                # appliquée côté .env). Repli immédiat sur l'appel SANS jeton (API
+                # publique, comportement historique avant l'authentification #207)
+                # plutôt que de traiter chaque candidat comme "aucune donnée" -- +
+                # cooldown pour ne pas marteler un jeton cassé à chaque appel suivant
+                # tant que ce n'est pas corrigé côté identifiants (action opérateur).
+                if (
+                    headers is not None and not auth_fallback_done
+                    and isinstance(probe, dict) and probe.get("code") == 4012
+                ):
+                    logger.warning(
+                        "goplus: authentification rejetee (code 4012, signature "
+                        "verification failure malgre un jeton emis avec succes) -- "
+                        "repli sur l'API publique pour %ss, verifier GOPLUS_APP_KEY/"
+                        "GOPLUS_APP_SECRET",
+                        _AUTH_BROKEN_COOLDOWN_S,
+                    )
+                    self._auth_broken_until = time.time() + _AUTH_BROKEN_COOLDOWN_S
+                    auth_fallback_done = True
+                    headers = None
                     continue
 
             if response.status_code >= 500:

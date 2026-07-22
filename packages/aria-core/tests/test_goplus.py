@@ -408,6 +408,110 @@ async def test_get_json_sends_no_header_without_credentials(monkeypatch):
     assert security.available is True  # comportement historique inchangé sans clé
 
 
+# ── repli sur l'API publique après un jeton rejeté (code 4012), 22/07 ──────────
+# Bug réel trouvé en conditions réelles : le jeton est émis avec succès (POST
+# /token -> code=1 "ok") mais REJETÉ par l'endpoint de données (code 4012
+# "signature verification failure"), confirmé sur un contrat archi-connu (WETH)
+# -- bloquait TOUT le pipeline momentum, pas seulement des tokens frais.
+
+@pytest.mark.asyncio
+async def test_code_4012_falls_back_to_public_api_and_succeeds(monkeypatch):
+    _patch_goplus_no_sleep(monkeypatch)
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    _, get_calls = _patch_goplus_auth_http(
+        monkeypatch,
+        post_response=_FakeResponse(200, {"result": {"access_token": "tok-broken", "expires_in": 7200}}),
+        get_responses={
+            url: [
+                _FakeResponse(200, {"code": 4012, "message": "signature verification failure"}),
+                _FakeResponse(200, ok_payload),
+            ]
+        },
+    )
+
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert security.available is True
+    assert security.is_honeypot is False
+    assert len(get_calls) == 2
+    assert get_calls[0]["headers"] == {"Authorization": "Bearer tok-broken"}
+    assert get_calls[1]["headers"] is None  # repli sans jeton sur le second essai
+
+
+@pytest.mark.asyncio
+async def test_code_4012_sets_auth_broken_cooldown(monkeypatch):
+    _patch_goplus_no_sleep(monkeypatch)
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    _patch_goplus_auth_http(
+        monkeypatch,
+        post_response=_FakeResponse(200, {"result": {"access_token": "tok-broken", "expires_in": 7200}}),
+        get_responses={
+            url: [
+                _FakeResponse(200, {"code": 4012, "message": "signature verification failure"}),
+                _FakeResponse(200, ok_payload),
+            ]
+        },
+    )
+
+    assert client._auth_broken_until == 0.0
+    await client.get_token_security(ADDR, chain_id="8453")
+    assert client._auth_broken_until > time.time()
+
+
+@pytest.mark.asyncio
+async def test_auth_broken_cooldown_skips_token_request_on_next_call(monkeypatch):
+    """Une fois le cooldown armé, un appel suivant ne doit MÊME PAS tenter de
+    renouveler le jeton (aucun POST /token) -- repli direct sur le chemin public,
+    pour ne pas marteler une authentification déjà confirmée cassée."""
+    _patch_goplus_no_sleep(monkeypatch)
+    monkeypatch.setenv("GOPLUS_APP_KEY", "test-key")
+    monkeypatch.setenv("GOPLUS_APP_SECRET", "test-secret")
+    client = GoPlusClient()
+    client._auth_broken_until = time.time() + 1800.0  # cooldown déjà actif
+
+    url = f"{client.base_url}/token_security/8453"
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    post_calls, get_calls = _patch_goplus_auth_http(
+        monkeypatch,
+        post_response=_FakeResponse(200, {"result": {"access_token": "tok-x", "expires_in": 7200}}),
+        get_responses={url: [_FakeResponse(200, ok_payload)]},
+    )
+
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert security.available is True
+    assert post_calls == []  # aucun renouvellement de jeton tenté pendant le cooldown
+    assert get_calls[0]["headers"] is None
+
+
+@pytest.mark.asyncio
+async def test_code_4012_never_triggers_fallback_without_credentials(monkeypatch):
+    """Sans identifiants configurés, ``headers`` est déjà ``None`` dès le premier
+    appel -- le garde ``headers is not None`` ne doit jamais se déclencher sur un
+    faux positif (un code 4012 hypothétique sur le chemin déjà public)."""
+    _patch_goplus_no_sleep(monkeypatch)
+    monkeypatch.delenv("GOPLUS_APP_KEY", raising=False)
+    monkeypatch.delenv("GOPLUS_APP_SECRET", raising=False)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    _patch_goplus_http(
+        monkeypatch, {url: [_FakeResponse(200, {"code": 4012, "message": "signature verification failure"})]},
+    )
+
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert security.available is False
+    assert security.no_data is True  # traité comme "pas de donnée", jamais une boucle
+
+
 # ── client GoPlus ─────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
