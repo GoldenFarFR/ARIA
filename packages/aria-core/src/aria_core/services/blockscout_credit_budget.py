@@ -6,12 +6,33 @@ le "Out of credits" du 22/07) est GRATUIT — 0$, aucune carte bancaire, mais
 plafonné en CRÉDITS/JOUR par le fournisseur. Deux unités différentes, deux
 mécanismes de suivi différents, jamais à confondre.
 
-Forfait sourcé (vérifié via la doc officielle Blockscout, 22/07, pas un chiffre
-supposé) : palier gratuit authentifié = 100 000 crédits/jour, 5 req/s. La
-plupart des endpoints coûtent 20 crédits/appel (seuls deux endpoints identifiés
-comme "lourds" -- résumé/trace de transaction, ~50 crédits -- ne sont PAS
-utilisés par ``blockscout.py`` à ce jour). Doctrine "90% de la capacité réelle"
-déjà en place ailleurs (CLAUDE.md, 21/07) : plafond dur fixé à 90 000/jour.
+Forfait sourcé (vérifié via la doc officielle Blockscout, 22/07) : palier
+gratuit authentifié = 100 000 crédits/jour, 5 req/s. Doctrine "90% de la
+capacité réelle" déjà en place ailleurs (CLAUDE.md, 21/07) : plafond dur fixé
+à 90 000.
+
+22/07 (suite) -- coût RÉEL par endpoint corrigé après lecture directe du
+dashboard Blockscout (capture opérateur) : la doc générique ("most standard
+endpoints cost 20 credits") était incomplète -- ``token-transfers`` (sur
+``/transactions/:hash/`` ET ``/addresses/:address_hash/``) coûte en réalité
+**30 crédits/appel** (357810/11927 et 203460/6782 sur le relevé réel), pas 20.
+Les autres endpoints utilisés par ``blockscout.py`` (holders/tokens/
+transactions) sont bien à 20, confirmés par le même relevé. Même leçon déjà
+vécue avec GoPlus/Tavily : une doc officielle générique peut rester incomplète
+sur un cas précis, un relevé réel de dashboard prime. Fenêtre de renouvellement
+observée sur ce même relevé : ~12h glissantes depuis l'épuisement, PAS calée
+sur minuit UTC -- ``day_start()`` reste une approximation raisonnable (fenêtre
+calendaire simple, jamais vérifiée à l'heure près côté fournisseur), documentée
+comme telle plutôt que présentée comme exacte.
+
+DÉCOUVERTE IMPORTANTE (22/07, même capture) : les deux endpoints
+``token-transfers`` représentent à eux seuls 73,6% de toute la consommation du
+mois (561 270 / 762 850 crédits) -- et ils ne sont PAS appelés par le pipeline
+momentum (qui n'utilise que holders/tokens/smart-contracts pour le check de
+concentration). Ils appartiennent au wallet-scoring (historique de transferts
+d'un wallet, `smart_money.py`/`get_token_transfers`) -- la vraie source de
+pression sur ce budget, pas la découverte momentum que ce budget protège en
+premier lieu.
 
 Même patron que ``x402_budget.py`` : fenêtre CALENDAIRE (minuit UTC, pas un
 cumul glissant depuis toujours), append-only (aucune fonction UPDATE/DELETE),
@@ -38,11 +59,28 @@ DB_PATH = str(aria_db_path())
 # le 21/07 (docs/api-rate-limit-calibration.md).
 DAILY_CAP_CREDITS = 90_000
 
-# Tarif standard confirmé par la doc officielle -- tous les endpoints utilisés
-# par blockscout.py (adresses/tokens/holders/transferts/contrats) sont dans
-# cette catégorie, aucun des deux endpoints "lourds" (résumé/trace de
-# transaction, ~50 crédits) n'est appelé par notre client à ce jour.
+# Tarif par défaut (holders/tokens/transactions -- confirmé 20 crédits par le
+# relevé réel du dashboard, 22/07).
 DEFAULT_COST_PER_CALL = 20
+
+# 22/07 -- coût RÉEL par endpoint, lu directement sur le dashboard Blockscout
+# (pas la doc générique, incomplète sur ce point) : token-transfers coûte 30,
+# pas 20. Clé = sous-chaîne présente dans le path appelé (``path.endswith``),
+# jamais une correspondance exacte -- les endpoints réels contiennent l'adresse/
+# hash variable (ex. ``/addresses/0xabc.../token-transfers``).
+_ENDPOINT_COST_SUFFIXES: dict[str, int] = {
+    "/token-transfers": 30,
+}
+
+
+def cost_for_endpoint(path: str) -> int:
+    """Coût réel en crédits pour CET endpoint précis -- ``DEFAULT_COST_PER_CALL``
+    (20) si non listé dans ``_ENDPOINT_COST_SUFFIXES``."""
+    for suffix, cost in _ENDPOINT_COST_SUFFIXES.items():
+        if path.endswith(suffix):
+            return cost
+    return DEFAULT_COST_PER_CALL
+
 
 _COLUMNS = ["id", "endpoint", "credits", "created_at"]
 

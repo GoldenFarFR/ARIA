@@ -292,8 +292,15 @@ class BlockscoutClient:
         # réactif si ce budget se révélait mal calibré, jamais retiré). Seulement
         # pertinent sur "base" (seule chaîne avec un repli gratuit connu) -- sur
         # les autres chaînes, épuiser le budget proactivement n'aiderait à rien
-        # puisqu'il n'y a nulle part où basculer.
-        if self._api_key and self.chain == "base" and not await blockscout_credit_budget.can_spend():
+        # puisqu'il n'y a nulle part où basculer. Coût réel de CET endpoint précis
+        # (cost_for_endpoint, 22/07 -- token-transfers coûte 30, pas 20 comme le
+        # reste, vérifié sur le dashboard réel).
+        _pro_call_cost = blockscout_credit_budget.cost_for_endpoint(path)
+        if (
+            self._api_key
+            and self.chain == "base"
+            and not await blockscout_credit_budget.can_spend(_pro_call_cost)
+        ):
             if not self._pro_credits_exhausted:
                 self._pro_credits_exhausted = True
                 logger.warning(
@@ -403,7 +410,8 @@ class BlockscoutClient:
         if not self._api_key:
             return
         try:
-            await blockscout_credit_budget.record_spend(endpoint=path)
+            cost = blockscout_credit_budget.cost_for_endpoint(path)
+            await blockscout_credit_budget.record_spend(endpoint=path, credits=cost)
         except Exception:
             logger.warning("blockscout: échec d'enregistrement du budget de crédits (non bloquant)", exc_info=True)
 

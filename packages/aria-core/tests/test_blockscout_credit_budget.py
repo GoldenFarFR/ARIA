@@ -71,3 +71,18 @@ async def test_day_start_is_midnight_utc():
     ref = datetime(2026, 7, 22, 15, 30, tzinfo=timezone.utc)
     start = budget.day_start(ref)
     assert start == datetime(2026, 7, 22, 0, 0, tzinfo=timezone.utc)
+
+
+def test_cost_for_endpoint_token_transfers_is_30_credits():
+    """22/07 -- vérifié sur le relevé réel du dashboard Blockscout : token-transfers
+    coûte 30 crédits/appel, pas 20 comme le reste -- doc générique incomplète sur ce
+    point précis."""
+    assert budget.cost_for_endpoint("/addresses/0xabc.../token-transfers") == 30
+    assert budget.cost_for_endpoint("/transactions/0xdef.../token-transfers") == 30
+
+
+def test_cost_for_endpoint_default_is_20_credits():
+    assert budget.cost_for_endpoint("/tokens/0xabc.../holders") == 20
+    assert budget.cost_for_endpoint("/tokens/0xabc...") == 20
+    assert budget.cost_for_endpoint("/addresses/0xabc.../transactions") == 20
+    assert budget.cost_for_endpoint("/smart-contracts/0xabc...") == 20
