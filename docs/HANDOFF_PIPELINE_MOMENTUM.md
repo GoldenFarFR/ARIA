@@ -13,6 +13,10 @@ Solution : liste noire persistée (amorcée avec BRIAN) + plafond ratio volume24
 
 ------------------------------------------------------------
 
+[DEPLOYE] Sujet    : Cycle heartbeat de découverte découplé de la surveillance de position
+Date : 2026.07.22  /  Probleme : décision opérateur explicite ("un contrat n'a pas besoin d'être scanné toutes les 60 secondes, toutes les 4h suffit") — le cycle heartbeat unique (15min) mélangeait recherche de nouveaux candidats ET surveillance des positions déjà ouvertes (stop suiveur, re-scan sécurité), rendant impossible de ralentir l'un sans l'autre.
+Solution : nouveau paramètre `skip_new_entries` sur `run_paper_cycle` (symétrique de `skip_position_management` déjà existant côté WebSocket) — `paper_trade_cycle` (15min, inchangé) ne gère plus QUE les positions ouvertes ; nouveau cycle `momentum_discovery_cycle` (60min, même gate `ARIA_PAPER_TRADING_ENABLED`) ne cherche plus QUE de nouveaux candidats. Vérifié avant de choisir 1h : sur les 6 sources de découverte (`base_crawler`/Birdeye/4 flux DexScreener boosts+profiles), les 4 flux DexScreener sont déjà redondants avec le WebSocket temps réel (#196, push continu) — seuls `base_crawler`/Birdeye n'ont aucun équivalent temps réel, d'où le choix de ralentir plutôt que supprimer ce cycle — paper_trader.py, heartbeat.py (cf. historique git 22/07)
+
 [DEPLOYE] Sujet    : 2e cas TSG, pas capté par les garde-fous ci-dessus
 Date : 2026.07.17  /  Probleme : +533%/24h puis -48,6%/6h puis +56,6%/1h, ratio wash-trading sous le seuil
 Solution : plafond _MAX_PRICE_CHANGE_24H_PCT = 200% — rejette un token déjà monté de plus de 200%/24h, jamais sur un mouvement négatif (retracements achetés délibérément) — momentum_entry.py (cf. historique git 17/07)

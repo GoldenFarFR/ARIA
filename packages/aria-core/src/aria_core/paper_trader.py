@@ -1656,6 +1656,7 @@ async def run_paper_cycle(
     max_new: int = 3,
     depeg_check=None,
     skip_position_management: bool = False,
+    skip_new_entries: bool = False,
 ) -> dict:
     """Un tour de simulation, appliquant les VRAIS rapports :
       1. positions ouvertes : surveillance de sécurité continue (#187) puis gestion par
@@ -1678,9 +1679,22 @@ async def run_paper_cycle(
     portefeuille, #186) reste TOUJOURS exécutée -- l'étape 2 (nouvelles entrées) en dépend
     (plafond/coupe-circuit), quel que soit l'appelant.
 
+    ``skip_new_entries`` (22/07, défaut ``False`` -- comportement historique inchangé) :
+    l'inverse -- saute l'étape 2 (recherche de nouveaux candidats à acheter), garde
+    uniquement l'étape 1 (surveillance des positions déjà ouvertes). Décision opérateur
+    explicite (22/07) : découpler la cadence de DÉCOUVERTE (ralentie à 1h, le WebSocket
+    #196 couvre déjà la détection rapide en continu) de la cadence de SURVEILLANCE des
+    positions déjà ouvertes (reste à 15 min -- c'est ce qui protège contre une perte qui
+    s'aggrave entre deux passages, jamais ralenti sans décision explicite séparée). Le
+    cycle heartbeat classique (``paper_trade_cycle``) passe désormais ``skip_new_entries=
+    True`` ; un nouveau cycle dédié (``momentum_discovery_cycle``, 60min) passe
+    ``skip_position_management=True`` pour l'inverse -- les deux flags ne sont jamais
+    vrais en même temps par un même appelant (sinon le cycle ne ferait rien).
+
     Toute exécution passe par ``_run_cycle_lock`` (#196) -- jamais deux cycles en
-    parallèle (heartbeat + websocket), qui liraient sinon le capital/le nombre de
-    positions ouvertes avant que l'un des deux n'écrive (double-allocation possible).
+    parallèle (heartbeat + websocket + découverte horaire), qui liraient sinon le
+    capital/le nombre de positions ouvertes avant que l'un des deux n'écrive
+    (double-allocation possible).
     """
     async with _run_cycle_lock:
         return await _run_paper_cycle_locked(
@@ -1691,6 +1705,7 @@ async def run_paper_cycle(
             max_new=max_new,
             depeg_check=depeg_check,
             skip_position_management=skip_position_management,
+            skip_new_entries=skip_new_entries,
         )
 
 
@@ -1703,6 +1718,7 @@ async def _run_paper_cycle_locked(
     max_new: int = 3,
     depeg_check=None,
     skip_position_management: bool = False,
+    skip_new_entries: bool = False,
 ) -> dict:
     """Corps réel de ``run_paper_cycle`` -- appelé UNIQUEMENT sous ``_run_cycle_lock``,
     jamais directement (pas de garde-fou de concurrence sinon)."""
@@ -2114,6 +2130,15 @@ async def _run_paper_cycle_locked(
     if risk_state.blocked:
         # Palier dur (ou pause globale) : aucune NOUVELLE entrée ce tour -- les positions
         # déjà ouvertes ont déjà été gérées normalement ci-dessus (étape 1).
+        return actions
+
+    if skip_new_entries:
+        # 22/07 -- cycle heartbeat classique découplé de la découverte (décision
+        # opérateur explicite) : ne cherche jamais de nouveau candidat ici, la
+        # découverte vit désormais dans son propre cycle (momentum_discovery_cycle,
+        # 60min). La surveillance des positions déjà ouvertes ci-dessus (étape 1) et
+        # la photo de risque portefeuille (étape 1ter, juste au-dessus) restent
+        # inchangées à chaque passage.
         return actions
 
     # 18/07 -- décision opérateur explicite ("la rendre plus intelligente") : contexte de

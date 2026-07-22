@@ -2628,6 +2628,75 @@ async def test_skip_position_management_still_opens_new_positions(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_skip_new_entries_never_opens_new_positions(tmp_db):
+    """22/07 -- avec skip_new_entries=True (le cooldown heartbeat classique,
+    découplé de momentum_discovery_cycle), un candidat BUY parfaitement valide
+    n'ouvre JAMAIS de position -- réservé au cycle de découverte dédié (1h)."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def analyzer(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 1.0, "target": 2.0, "invalidation": 0.5}
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+        skip_new_entries=True,
+    )
+
+    assert act["opened"] == []
+    assert not await pt.has_open(A)
+    assert "risk_state" in act  # 1ter (#186) reste exécutée même en mode skip
+
+
+@pytest.mark.asyncio
+async def test_skip_new_entries_still_manages_open_positions(tmp_db):
+    """22/07 -- skip_new_entries=True saute UNIQUEMENT l'étape 2 (nouvelles
+    entrées) -- l'étape 1 (gestion des positions déjà ouvertes, stop suiveur/
+    invalidation) continue de s'appliquer normalement, jamais ralentie sans
+    décision explicite séparée."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000)
+
+    async def price_lookup(contract):
+        return 0.5  # bien sous l'invalidation -- doit se fermer ce tour
+
+    act = await pt.run_paper_cycle(
+        candidates=[], price_lookup=price_lookup, depeg_check=_no_depeg,
+        skip_new_entries=True,
+    )
+
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["contract"] == D
+    assert not await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_skip_new_entries_and_skip_position_management_together_is_a_noop(tmp_db):
+    """22/07 -- les deux flags à True en même temps (jamais fait par un appelant
+    réel, mais un contrat d'appel doit rester sûr) : ni gestion de position, ni
+    nouvelle entrée -- un cycle qui ne fait rien, jamais une erreur."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000)
+
+    async def analyzer(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 1.0, "target": 2.0, "invalidation": 0.5}
+
+    async def price_lookup(contract):
+        return 0.5
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+        skip_position_management=True, skip_new_entries=True,
+    )
+
+    assert act["opened"] == []
+    assert act["closed"] == []
+    assert await pt.has_open(D)  # toujours ouverte, rien touché
+
+
+@pytest.mark.asyncio
 async def test_concurrent_cycles_never_overlap(tmp_db):
     """#196 -- correctif obligatoire (relecture opérateur) : deux appels concurrents à
     run_paper_cycle() (heartbeat + service websocket, par ex.) ne doivent JAMAIS

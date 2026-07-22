@@ -239,28 +239,36 @@ HEARTBEAT_TASKS = [
     ),
     HeartbeatTask(
         id="paper_trade_cycle",
-        name="Paper trading 1M$ (simulation)",
-        description="Applique les VRAIS rapports a un portefeuille FICTIF de 1M$ (mode trading) : ouvre/ferme des positions simulees, alertes achat/vente fictives. Preuve sur ~20 jours. Aucun argent reel, aucune signature.",
+        name="Paper trading 1M$ (simulation) — surveillance des positions ouvertes",
+        description="Applique les VRAIS rapports a un portefeuille FICTIF de 1M$ (mode trading) : gere les positions DEJA OUVERTES (re-scan securite, stop suiveur, prise de profit). Aucun argent reel, aucune signature.",
         # #195 (15/07, plan maître étape 2) : 180min -> 15min -- 180 était beaucoup trop lent
-        # pour "voir le compteur bouger" côté opérateur. Vérifié avant de baisser : le seul
-        # débit externe qui compte ici est GeckoTerminal (OHLCV, appelé via analyze_vc_with_context
-        # pour chaque candidat analysé côté nouvelles entrées -- gestion des positions déjà
-        # ouvertes passe par DexScreener, pas GeckoTerminal). Client throttlé à 2.1s/appel
-        # (_MIN_INTERVAL dans services/geckoterminal.py, ~28.5 req/min, sous le palier gratuit
-        # documenté ~30 req/min) -- ce throttle est appliqué PAR APPEL sur un client partagé au
-        # niveau du process, donc la charge instantanée reste bornée quelle que soit la fréquence
-        # du cycle (un cycle de ~20 candidats analysés prend déjà ~42s de throttle Gecko à lui
-        # seul, indépendamment de l'intervalle entre deux cycles) -- seul le VOLUME agrégé monte
-        # (12x plus de cycles/heure qu'à 180min), pas le débit instantané. GeckoTerminal free tier
-        # n'a pas de plafond mensuel documenté, seulement req/min -- donc pas de raison technique
-        # de rester au-dessus de 15min. Risque de collision avec le futur usage TA de #194
-        # (Secondaire, paper_trader.py) : même client partagé au niveau process -> auto-filé par
-        # le même throttle, pas de conflit, juste une file d'attente plus longue si les deux
-        # tournent en même temps. Pas descendu sous 15min : MAX_POSITIONS=15 + jusqu'à 20
-        # candidats analysés par cycle laissent une marge de sécurité raisonnable avant de
-        # s'approcher du palier gratuit en cas de pic (plusieurs positions à gérer + plusieurs
-        # nouvelles analyses le même cycle).
+        # pour "voir le compteur bouger" côté opérateur.
+        # 22/07 -- décision opérateur explicite : DÉCOUPLÉ de la découverte de nouveaux
+        # candidats (déplacée vers momentum_discovery_cycle, 60min, ci-dessous). Ce
+        # cycle-ci ne fait plus QUE la surveillance des positions déjà ouvertes
+        # (skip_new_entries=True, cf. paper_trader.run_paper_cycle) -- protection contre
+        # une perte qui s'aggrave (stop suiveur/re-scan sécurité), jamais ralentie sans
+        # décision explicite séparée. Reste à 15min : c'est ce rythme qui a fait ses
+        # preuves (incident BRIAN, 17/07) pour réagir vite à un token qui se retourne.
         interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
+        id="momentum_discovery_cycle",
+        name="Paper trading 1M$ (simulation) — découverte de nouveaux candidats",
+        description="Cherche de nouveaux candidats a acheter (pipeline momentum #194) pour le portefeuille FICTIF de 1M$. Ne touche jamais aux positions deja ouvertes (gerees par paper_trade_cycle, 15min). Aucun argent reel, aucune signature.",
+        # 22/07 -- décision opérateur explicite : "un contrat n'a pas besoin d'être scanné
+        # toutes les 60 secondes, toutes les 4h suffit" (constat : le WebSocket #196
+        # redécouvre le marché en continu, ~30-60s, et peut réévaluer un même token à
+        # chaque passage tant qu'il reste dans les résultats de découverte). Ce cycle
+        # heartbeat classique de découverte -- redondant avec le WebSocket sur la
+        # DÉTECTION rapide, qui reste actif et inchangé -- est ralenti à 1h "pour
+        # commencer" (valeur de départ explicite, pas gravée -- à ajuster si besoin une
+        # fois observée en conditions réelles). Le cooldown adaptatif PAR CONTRAT
+        # (4h sauf mouvement de prix significatif), lui, reste à construire séparément
+        # côté momentum_websocket.py -- ceci ne fait que ralentir CE cycle-ci, pas
+        # encore le vrai mécanisme de cooldown demandé.
+        interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
@@ -527,6 +535,13 @@ def _sync_x_curiosity_enabled() -> None:
                 task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
                     "1", "true", "yes", "on",
                 )
+            if task.id == "momentum_discovery_cycle":
+                # 22/07 -- meme gate que paper_trade_cycle : c'est le meme test 1M$
+                # decouple en deux cycles (decouverte vs surveillance), pas une
+                # fonctionnalite separee.
+                task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                    "1", "true", "yes", "on",
+                )
             if task.id == "paper_weekly_review_cycle":
                 # 18/07 -- meme gate que paper_trade_cycle : c'est le meme test, pas une
                 # fonctionnalite separee. Le dispatch (_run_task) ne fait rien tant que
@@ -696,7 +711,8 @@ def heartbeat_pulse() -> dict:
     last_tick = times[-1] if times else None
     safe_keys = (
         "vc_crawl", "vc_weekly_forecast", "vc_radar_x", "vc_thesis_review", "paper_trade_cycle",
-        "paper_weekly_review_cycle", "market_sentiment_cycle", "market_alerts_cycle",
+        "momentum_discovery_cycle", "paper_weekly_review_cycle", "market_sentiment_cycle",
+        "market_alerts_cycle",
     )
     cycles = {k: state[k] for k in safe_keys if state.get(k)}
     return {"alive": last_tick is not None, "last_tick": last_tick, "cycles": cycles}
@@ -1087,12 +1103,32 @@ class AriaHeartbeat:
         elif task_id == "paper_trade_cycle":
             from aria_core import paper_trader
 
-            actions = await paper_trader.run_paper_cycle(notifier=self._notify_telegram_trading)
+            # 22/07 -- ne gère plus QUE les positions déjà ouvertes (skip_new_entries) --
+            # la découverte de nouveaux candidats vit désormais dans son propre cycle,
+            # momentum_discovery_cycle (60min), voir plus bas.
+            actions = await paper_trader.run_paper_cycle(
+                notifier=self._notify_telegram_trading, skip_new_entries=True,
+            )
             if actions.get("opened") or actions.get("closed"):
                 append_memory(
                     "paper",
                     f"[paper_trade] fictif 1M$ : +{len(actions.get('opened', []))} achats / "
                     f"-{len(actions.get('closed', []))} ventes",
+                )
+
+        elif task_id == "momentum_discovery_cycle":
+            from aria_core import paper_trader
+
+            # 22/07 -- ne cherche QUE de nouveaux candidats (skip_position_management) --
+            # la surveillance des positions déjà ouvertes reste sur paper_trade_cycle
+            # (15min, ci-dessus), jamais ralentie par ce cycle-ci.
+            actions = await paper_trader.run_paper_cycle(
+                notifier=self._notify_telegram_trading, skip_position_management=True,
+            )
+            if actions.get("opened"):
+                append_memory(
+                    "paper",
+                    f"[paper_trade] fictif 1M$ (découverte horaire) : +{len(actions.get('opened', []))} achats",
                 )
 
         elif task_id == "paper_weekly_review_cycle":
