@@ -9,7 +9,9 @@ from aria_core.memory.vector.lancedb_store import store
 
 logger = logging.getLogger(__name__)
 
-_INSIGHT_SOURCES = frozenset({"x_twitter", "curiosity", "zhc_api", "x_setup"})
+_INSIGHT_SOURCES = frozenset(
+    {"x_twitter", "curiosity", "zhc_api", "x_setup", "tavily_x", "tavily_learning"}
+)
 _LESSON_SOURCES = frozenset({"manual", "doctrine", "operator", "runbook"})
 
 

@@ -523,7 +523,7 @@ async def _fetch_tavily_snippets(query: str, max_snippets: int) -> list[WebSourc
     if not is_tavily_configured():
         return []
     english_query = await _translate_query_to_english(query)
-    result = await tavily_client.search(english_query, max_results=max_snippets)
+    result = await tavily_client.search(english_query, max_results=max_snippets, caller="web_verify")
     if not result.available:
         logger.info("web_verify tavily indisponible: %s", result.error)
         return []

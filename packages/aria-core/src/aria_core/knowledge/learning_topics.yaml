@@ -1,0 +1,37 @@
+# Sujets de recherche pour l'auto-formation continue d'ARIA (via Tavily,
+# skills/tavily_learning.py) -- macro-économie, psychologie de trading,
+# documentation/outils. Distinct de x_watchlist.yaml (comptes X à suivre,
+# personnes/entités) : ici ce sont des REQUÊTES de recherche web générale.
+#
+# Requêtes en anglais volontairement (même doctrine que web_verify.py --
+# _translate_query_to_english -- Tavily renvoie une meilleure couverture sur
+# des requêtes anglaises pour ce type de sujet).
+#
+# Macro-économie sur-représentée (priorité opérateur, 22/07) : le round-robin
+# de tavily_learning.py pioche dans l'ordre de cette liste -- plus d'entrées
+# macro = plus de passages macro, sans code de pondération dédié.
+#
+# Auto-curation par ARIA (proposition d'ajout via issue GitHub) : DIFFÉRÉE,
+# pas encore construite -- liste éditée manuellement pour l'instant.
+
+topics:
+  - query: "Federal Reserve interest rate decision impact crypto market"
+    category: macro
+  - query: "US inflation CPI data crypto market reaction"
+    category: macro
+  - query: "Bitcoin dominance macro market cycle analysis"
+    category: macro
+  - query: "crypto market liquidity conditions global macro outlook"
+    category: macro
+  - query: "dollar index DXY correlation crypto risk assets"
+    category: macro
+  - query: "trading psychology discipline risk management lessons"
+    category: psychology
+  - query: "cognitive biases trading FOMO loss aversion overconfidence"
+    category: psychology
+  - query: "how professional traders manage drawdown emotions"
+    category: psychology
+  - query: "on-chain analysis best practices smart money wallet tracking"
+    category: documentation
+  - query: "Base blockchain ecosystem new tools standards agent kit"
+    category: documentation

@@ -155,8 +155,23 @@ class TavilyClient:
         max_results: int = 4,
         search_depth: str = "basic",
         include_answer: bool = True,
+        include_domains: list[str] | None = None,
+        caller: str = "unknown",
     ) -> TavilyResult:
-        """Recherche Tavily pour une requête. Best-effort, jamais bloquant."""
+        """Recherche Tavily pour une requête. Best-effort, jamais bloquant.
+
+        ``include_domains`` (22/07) : restreint les résultats à des domaines précis --
+        vérifié en direct que ``["twitter.com", "x.com"]`` renvoie de vrais résultats
+        pertinents (posts/profils publics déjà indexés), sans passer par l'API X
+        officielle ni le repli x402 (twit.sh). Portée honnête : indexation web
+        classique, pas un flux temps réel -- adapté à de la veille, pas à une
+        décision urgente.
+
+        ``caller`` (22/07) : identifie qui dépense (ex. ``web_verify``,
+        ``tavily_learning``) -- sert la traçabilité (``tavily_budget.recent_searches``),
+        pas seulement le budget. Budget MENSUEL partagé (``tavily_budget.py``,
+        900/1000 crédits) vérifié PROACTIVEMENT ici, avant tout appel HTTP réel --
+        même doctrine que ``blockscout.py`` pour son budget Pro."""
         q = (query or "").strip()
         if not q:
             return TavilyResult(query=q, available=False, error="requête vide")
@@ -165,16 +180,27 @@ class TavilyClient:
         if not api_key:
             return TavilyResult(query=q, available=False, error=f"{UNAVAILABLE} (TAVILY_API_KEY absente)")
 
+        depth = search_depth if search_depth in ("basic", "advanced") else "basic"
+
+        from aria_core.services import tavily_budget
+
+        credit_cost = tavily_budget.cost_for_search(depth)
+        if not await tavily_budget.can_spend(credit_cost):
+            return TavilyResult(query=q, available=False, error=f"{UNAVAILABLE} (budget mensuel épuisé)")
+
         payload = {
             "api_key": api_key,
             "query": q[:400],
-            "search_depth": search_depth if search_depth in ("basic", "advanced") else "basic",
+            "search_depth": depth,
             "max_results": max(1, min(int(max_results), 10)),
             "include_answer": bool(include_answer),
         }
+        if include_domains:
+            payload["include_domains"] = list(include_domains)[:10]
         data, error = await self._post_json(payload)
         if error is not None:
             return TavilyResult(query=q, available=False, error=error)
+        await tavily_budget.record_spend(caller=caller, query=q, credits=credit_cost)
         if not isinstance(data, dict):
             return TavilyResult(query=q, available=False, error=UNAVAILABLE)
 

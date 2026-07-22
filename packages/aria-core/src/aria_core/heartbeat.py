@@ -328,6 +328,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="tavily_learning_cycle",
+        name="Auto-formation continue (Tavily)",
+        description="1 compte X (watchlist existante) + 1 sujet macro-economie/psychologie de trading/documentation (learning_topics.yaml) par passage, round-robin persiste. Reutilise integralement le pipeline curiosity existant (triage Groq, pending SQLite, approbation Telegram, ingestion LanceDB a l'approbation) -- comble le trou laisse par l'API X officielle coupee depuis juillet. Budget mensuel Tavily partage (tavily_budget.py), 2 recherches max par passage. Gate OFF par defaut.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="claude_mentor_cycle",
         name="Revue de performance ARIA par Claude",
         description="Claude (Opus 4.8, profondeur develop via Virtuals -- pas de nouveau secret) lit les vraies donnees mesurees d'ARIA (calibration VC, paper-trading, telemetrie Sepolia) et poste UNE observation ancree sur les chiffres dans le relais Telegram (ARIA y repond en vrai). Si le constat merite d'etre durable, PROPOSE une issue GitHub connaissance -- jamais un commit ni une fusion autonome. Throttle interne ~1x/jour. Gate OFF par defaut.",
@@ -579,6 +586,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.knowledge_inbox import knowledge_inbox_enabled
 
                 task.enabled = knowledge_inbox_enabled()
+            if task.id == "tavily_learning_cycle":
+                from aria_core.skills.tavily_learning import tavily_learning_enabled
+
+                task.enabled = tavily_learning_enabled()
             if task.id == "ux_watch_cycle":
                 from aria_core.skills.ux_watch import ux_watch_enabled
 
@@ -1215,6 +1226,16 @@ class AriaHeartbeat:
                 append_memory(
                     "knowledge_inbox",
                     f"[inbox] {result.get('path', '?')} -> proposition {result.get('title', '?')}",
+                )
+
+        elif task_id == "tavily_learning_cycle":
+            from aria_core.skills.tavily_learning import run_tavily_learning_cycle
+
+            result = await run_tavily_learning_cycle()
+            if result.get("insights", 0) > 0:
+                append_memory(
+                    "tavily_learning",
+                    f"[tavily_learning] {result['insights']} insight(s) pending -- {result.get('picked')}",
                 )
 
         elif task_id == "ux_watch_cycle":

@@ -520,6 +520,7 @@ async def research_project_potential(
         tavily_result = await tavily_client.search(
             f"{safe_symbol} crypto token official website contract address {chain}",
             max_results=5,
+            caller="conviction_research",
         )
     except Exception as exc:  # noqa: BLE001 -- jamais bloquant
         logger.info("conviction_research: recherche Tavily échouée (%s)", exc)
