@@ -1300,6 +1300,48 @@ def _patch_pipeline(
     monkeypatch.setattr(me, "_check_holder_concentration", fake_concentration)
 
 
+# ── evaluate_hard_gates (22/07, extraction pour le crible unifié VC/Swing) ─────────
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_passes_returns_pair_and_reason(monkeypatch):
+    """Tous les garde-fous durs passés -> (best_pair, honeypot_reason, None), jamais
+    de calcul de signal technique (aucun mock de detect_entry/candles nécessaire ici)."""
+    _patch_pipeline(monkeypatch)
+    best, honeypot_reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert hold is None
+    assert best is not None
+    assert best.price_usd == 1.5
+    assert "honeypot clear" in honeypot_reason
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_rejects_on_liquidity(monkeypatch):
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=35_000.0)])
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert best is None and reason is None
+    assert hold["hold_reason"] == "insufficient_liquidity"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_none_when_no_liquid_pair(monkeypatch):
+    _patch_pipeline(monkeypatch, pairs=[])
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert best is None and reason is None and hold is None
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_rejects_on_honeypot_and_blacklists(monkeypatch):
+    """Même comportement que evaluate_momentum_entry sur ce cas -- l'extraction ne
+    doit pas perdre l'effet de bord (ajout à la liste noire)."""
+    from aria_core import momentum_blacklist as bl
+
+    _patch_pipeline(monkeypatch, honeypot_clear=False)
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert best is None and reason is None
+    assert hold["hold_reason"] == "honeypot_rejected"
+    assert await bl.is_blacklisted(CONTRACT, "base") is True
+
+
 @pytest.mark.asyncio
 async def test_evaluate_rejects_on_honeypot(monkeypatch):
     _patch_pipeline(monkeypatch, honeypot_clear=False)

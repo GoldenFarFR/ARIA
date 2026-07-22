@@ -791,22 +791,33 @@ async def list_positions_for_contract(contract: str, limit: int = 100) -> list[d
     return [_row_to_pos(r) for r in rows]
 
 
-async def _get_open(contract: str) -> dict | None:
+async def _get_open(contract: str, *, strategy: str | None = None) -> dict | None:
     """Recherche insensible à la casse -- même raison que ``list_positions_for_contract``
-    ci-dessus (pas de paramètre ``chain`` ici pour reconstruire la vraie normalisation)."""
+    ci-dessus (pas de paramètre ``chain`` ici pour reconstruire la vraie normalisation).
+
+    ``strategy`` (22/07, tâche #4, optionnel) : ``None`` (défaut) préserve EXACTEMENT
+    le comportement historique (n'importe quelle position ouverte sur ce contrat, peu
+    importe sa stratégie) -- tous les appelants existants restent inchangés. Fourni,
+    filtre sur CETTE stratégie précise -- nécessaire pour permettre le cumul VC+Swing
+    (décision opérateur explicite, 22/07) : une position ``vc_thesis`` déjà ouverte ne
+    doit jamais bloquer l'ouverture d'une position ``momentum`` sur le MÊME contrat, et
+    réciproquement."""
     contract = (contract or "").lower()
     cols = ", ".join(_POS_FIELDS)
+    query = f"SELECT {cols} FROM paper_position WHERE LOWER(contract) = ? AND status = 'open'"
+    params: list = [contract]
+    if strategy is not None:
+        query += " AND strategy = ?"
+        params.append(strategy)
+    query += " LIMIT 1"
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            f"SELECT {cols} FROM paper_position WHERE LOWER(contract) = ? AND status = 'open' LIMIT 1",
-            (contract,),
-        ) as cur:
+        async with db.execute(query, params) as cur:
             row = await cur.fetchone()
     return _row_to_pos(row) if row else None
 
 
-async def has_open(contract: str) -> bool:
-    return (await _get_open(contract)) is not None
+async def has_open(contract: str, *, strategy: str | None = None) -> bool:
+    return (await _get_open(contract, strategy=strategy)) is not None
 
 
 async def _has_prior_close(contract: str) -> bool:
