@@ -44,3 +44,21 @@ Solution : Committer tôt et souvent dans chaque worktree — aucun correctif of
 [ETAT ACTUEL] Sujet    : Tâche cron programmée ne se déclenche pas si la session VPS reste active
 Date : 2026.07.12  /  Probleme : un job de vérification programmé n'a jamais tourné — la session VPS était restée active sans interruption sur un autre travail, et ce type de tâche ne se déclenche qu'en session inactive.
 Solution : Vérifier manuellement en cas de doute plutôt que de compter sur le déclenchement automatique d'une session qui pourrait rester active — cf. historique git 12/07.
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Nouveaux modules absents de la liste curatée de tests en CI
+Date : 2026.07.08  /  Probleme : 9 modules livrés la même nuit (relay_chat, relay_conversation, knowledge_inbox, sepolia_wallet, sepolia_autonomous, exam, btc_cycles, code_proposal, skill_projects) avaient chacun leur fichier de test mais n'étaient pas listés dans .github/workflows/ci.yml — une régression sur l'un d'eux serait passée inaperçue.
+Solution : les 9 fichiers de test ajoutés à la liste curatée de la CI — .github/workflows/ci.yml (cf. historique git 08/07)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Disque VPS saturé par le cache Docker jamais purgé
+Date : 2026.07.09→11  /  Probleme : deploy.sh ne nettoyait jamais les images/cache de build après un déploiement, disque monté à 79,8% (images 35GB + build cache 31,7GB, 90% récupérable) — nettoyage manuel one-shot 80%→11% le 10/07, cause racine non corrigée à ce moment-là.
+Solution : docker image prune -f + docker builder prune -f ajoutés à la fin de deploy.sh, exécutés UNIQUEMENT après confirmation du health check réussi (jamais en cas d'échec/rollback) — vanguard/deploy.sh (cf. historique git 11/07)
+
+------------------------------------------------------------
+
+[ETAT ACTUEL] Sujet    : VPS dispose d'un accès SSH écriture aux 7 repos GoldenFarFR
+Date : 2026.07.11  /  Probleme : une session Claude Code sur le VPS ne pouvait travailler que sur le repo courant, dépendait d'un poste Windows local pour les autres repos de l'écosystème (ARIA, aria-ops, aria-core, template-grok-cursor, aria-acp-showcase, acp-cli-demos, GoldenFarFR).
+Solution : 7 deploy keys SSH dédiées (une par repo, aucune partagée, toutes en écriture) configurées sur le VPS — détail complet et alias ~/.ssh/config dans aria-ops/runbooks/vps-github-access.md (repo privé)

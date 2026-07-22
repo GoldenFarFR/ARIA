@@ -54,3 +54,6 @@ vc_handles:
   - handle: IOSGVC
     role: vc_thesis
     note: "IOSG Ventures — fonds Web3 généraliste"
+  - handle: 100xDarren
+    role: angel_investor
+    note: "Investisseur individuel (immobilier + crypto), profil angel investor — ajouté sur demande opérateur, 22/07"

@@ -339,7 +339,7 @@ exemple testnet malgré la référence `baseSepolia` dans le fichier). Code corr
 `process.env`). **Rotation de clé côté plateforme Virtuals confirmée terminée par l'opérateur
 (09/07)** : nouvelle clé ajoutée en section "Signers", vérifiée active, PUIS ancienne clé (celle
 qui a fuité) supprimée — bon ordre respecté (jamais l'inverse, pour ne pas perdre l'accès). Détail
-complet : `docs/HANDOFF-2026-07-09-nuit3.md`.
+complet : `docs/HANDOFF_SECURITE.md`.
 
 ## Endpoint `arena-signal/btc` (#60) — EN LIGNE sur `api.ariavanguardzhc.com`, PAS sur la vitrine
 `GET /api/aria/arena-signal/btc` vit sur le sous-domaine backend (`api.ariavanguardzhc.com`,
@@ -360,8 +360,7 @@ segmentation des 3 cycles vérifiée en direct, réelle et complète. CoinGecko 
 RSI récent de `arena_signal.py` (fenêtre 90 jours, largement dans la limite des 365 jours) — **deux
 clients distincts, jamais interchangeables** (piège vécu : les confondre casse le typage silencieusement,
 verrouillé par test dédié). Clé `COINGECKO_DEMO_API_KEY` dans `vanguard/backend/.env` (PAS
-`/opt/aria/.env` racine — piège vécu, deux fichiers `.env` différents selon le composant). Détail
-complet : `docs/HANDOFF-2026-07-09-nuit7.md`.
+`/opt/aria/.env` racine — piège vécu, deux fichiers `.env` différents selon le composant).
 
 ## Mineur de conversations opérateur/ARIA (#57) — LIVRÉ, gate OFF (09/07 nuit 7)
 `skills/telegram_conversation_miner.py`, tâche heartbeat `telegram_miner_cycle` (60min, throttle

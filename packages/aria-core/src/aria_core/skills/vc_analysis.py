@@ -958,7 +958,7 @@ async def _fetch_virtuals_product_diligence(ctx: TokenScanContext) -> dict | Non
     le site externe : pour un token lancé sur Virtuals, l'équipe (doxxée ou non), la
     tokenomics et une description plus riche vivent sur la FICHE VIRTUALS elle-même
     (virtuals.io), pas forcément le site externe déclaré (trou identifié en conditions
-    réelles, cf. ``docs/HANDOFF-2026-07-10-nuit9.md``).
+    réelles, 10/07).
 
     Deux chemins, jamais un double appel réseau au même contrat :
     - Bonding (aucune paire DexScreener) : ``_resolve_bonding_phase`` a DÉJÀ interrogé

@@ -57,3 +57,9 @@ Solution : pnl_usd final = P&L de la dernière tranche + realized_pnl_partial d�
 [CONFIG] Sujet    : Correction manuelle du capital paper-trading après le gain fictif PLAZM/ESHARE
 Date : 2026.07.19  /  Probleme : le bug de mislabeling quote-token (cf. HANDOFF_PIPELINE_MOMENTUM) avait figé equity_high_water_mark à ~12,5M$ (faux pic), bloquant déjà toutes les nouvelles entrées en prod via le coupe-circuit dur de risk_guard (faux drawdown de -61%).
 Solution : correction en 3 volets, uniquement sur les DONNÉES de la position concernée (aucun changement de code) — sauvegarde de aria.db prise avant écriture ; pnl_usd/pnl_pct/realized_pnl_partial de la position remis à 0 (jamais supprimée, annotation dans close_notes) ; equity_high_water_mark réinitialisé à 1 000 000$ ; risk_guard.resume_new_entries() appelé. Capital vérifié après coup : 997 685$ (-0,23%), coupe-circuit levé — cf. historique git 19/07 (/opt/aria-data/backups/).
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Scorecard objective de readiness capital réel (/feuvert)
+Date : 2026.07.10  /  Probleme : question directe opérateur ("tu ferais confiance à ARIA pour 100k$ ?") sans outil pour y répondre objectivement plutôt que par avis subjectif.
+Solution : skills/real_money_readiness.py calcule les cases du barème docs/protocole-argent-reel.md depuis le vrai journal vc_predictions (integrity/robustness/sample_size/benchmark/risk/judge/lawyer) ; commande /feuvert Telegram admin-only — real_money_readiness.py (cf. historique git 10/07)

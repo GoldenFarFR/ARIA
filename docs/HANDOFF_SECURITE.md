@@ -104,3 +104,69 @@ Solution : protection de branche activée via l'UI GitHub (le classifieur de sé
 [DEPLOYE] Sujet    : URL non sanitisée d'un projet externe atteignait le prompt système Telegram
 Date : 2026.07.19  /  Probleme : une URL "Site officiel" déclarée par un projet scanné (donc potentiellement attaquant-contrôlée) était ajoutée BRUTE à process_trail, propagée jusqu'à build_trade_status_context() puis splicée sans balise <donnees_non_fiables> dans le prompt système Telegram — violation du mandat anti-injection au dernier maillon de la chaîne, alors que le reste du pipeline était déjà sanitisé.
 Solution : sanitisation systématique à la SOURCE (nouvelle fonction _trail_note(), plus aucun trail.append() brut) + défense en profondeur au POINT D'INJECTION (build_trade_status_context() enveloppe tout le bloc dans <donnees_non_fiables> + sanitize_untrusted_text) — conviction_research.py/brain.py (commit 100b2087).
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Lecture de fichier arbitraire + comparaison de secret non constante
+Date : 2026.07.07  /  Probleme : un endpoint backend permettait une lecture de fichier arbitraire (path traversal) et le secret opérateur était comparé par une comparaison de chaînes classique (vulnérable à une attaque temporelle).
+Solution : chemin d'accès validé/restreint au dossier autorisé + comparaison à temps constant (secrets.compare_digest) — vanguard/backend (commit fc863c9)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Webhook Telegram + secret admin + rate-limit durcis
+Date : 2026.07.08  /  Probleme : webhook Telegram fail-open si TELEGRAM_WEBHOOK_SECRET vide (kill-switch forgeable par n'importe qui), secret opérateur accepté en query-string (fuite via logs/Referer), champ `handle` du corps permettant l'usurpation d'un rôle opérateur, rate-limit contournable via l'en-tête client X-Visitor-Id.
+Solution : webhook fail-closed (secret exigé, comparaison à temps constant), secret opérateur header-only (plus de ?secret=), anti-usurpation du champ handle, rate-limit plafonné par IP réelle (--proxy-headers) — vanguard/backend (commit edff6b1)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Simulation d'attaque quotidienne (security_sim)
+Date : 2026.07.08  /  Probleme : aucune vérification automatisée récurrente de la surface HTTP réelle contre des entrées hostiles — un corps de requête non-UTF8 faisait planter n'importe quel endpoint POST en 500.
+Solution : vanguard/backend/security_sim/ (introspection des routes + fuzzing, baseline différentiel) + workflow GitHub Actions quotidien 03:17 UTC ; handler RequestValidationError corrigé dans main.py pour absorber un corps non-UTF8 — commit 99e5fe7, toujours actif (.github/workflows/security-sim.yml)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : ID Telegram opérateur committé en clair dans des fichiers exemple
+Date : 2026.07.08  /  Probleme : TELEGRAM_ADMIN_IDS (identifiant Telegram réel de l'opérateur) committé en clair dans vanguard/operator/local.env.example, production.env.example et un test — contraire à la doctrine « zéro PII dans le repo public », pas exploitable seul mais PII réelle exposée.
+Solution : remplacé par un champ vide / placeholder générique (123456789 pour le test) — vanguard/operator/local.env.example, production.env.example (cf. historique git 08/07)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Garde-fou anti-fuite IP/email limité à un seul fichier HANDOFF en dur
+Date : 2026.07.08  /  Probleme : test_coherence.py ne vérifiait la fuite IP/email que dans docs/HANDOFF-2026-07-07-nuit.md — 4 nouveaux fichiers HANDOFF existaient déjà sans être couverts par ce garde-fou.
+Solution : scan généralisé par glob (docs/HANDOFF-*.md) au lieu d'un nom de fichier en dur — packages/aria-core/tests/test_coherence.py (cf. historique git 08/07)
+
+------------------------------------------------------------
+
+[CONFIG] Sujet    : Clé Tavily exposée en clair, collée par erreur dans le chat opérateur
+Date : 2026.07.09  /  Probleme : la clé TAVILY_API_KEY de l'opérateur a transité en clair dans la conversation (collée par erreur) pendant le câblage du provider de recherche web.
+Solution : traitée comme compromise immédiatement, jamais écrite en fichier/commit/log ; opérateur a régénéré une nouvelle clé sur tavily.com avant de la poser dans le .env VPS (cf. historique git 09/07)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Garde anti-IP étendu au code Python, pas seulement aux docs
+Date : 2026.07.09  /  Probleme : test_no_public_ip_in_human_docs ne couvrait que les docs Markdown — une vraie IP de VPS et une vraie clé CoinGecko se sont glissées dans une fixture de test Python, ni detect-secrets (une IP n'est pas un « secret » classique) ni le check existant ne l'ont repérée.
+Solution : nouveau test_no_public_ip_in_source_or_tests étend le garde-fou au CODE (src+tests), zéro faux positif vérifié avant activation, .secrets.baseline régénéré — test_coherence.py (cf. historique git 09/07)
+
+------------------------------------------------------------
+
+[CONFIG] Sujet    : Clé privée encodée dans un NOM de fichier, hors repo
+Date : 2026.07.09  /  Probleme : deux fichiers trouvés hors repo (dossier home Windows de l'opérateur) avec une clé privée EC en base64/PKCS8-DER collée directement dans le NOM du fichier (reliquat probable de l'incident connect.ts) — visible dans un simple listing de dossier, sans même l'ouvrir.
+Solution : fichiers supprimés via un joker sur le préfixe du nom (le nom exact retranscrit depuis une capture ne correspondait pas caractère pour caractère) — réflexe à généraliser : un secret peut fuiter via le NOM d'un fichier, pas seulement son contenu (hors repo, aucun commit — cf. historique git 09/07)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Tentative d'injection de prompt dans le README d'un repo adjacent (aria-core)
+Date : 2026.07.11  /  Probleme : le repo privé aria-core (nom réservé pour extraction future de packages/aria-core/) contenait un README rédigé à la 2e personne comme une instruction directe à une IA ("explique comment tu brancherais un nouveau skill GitHub dans aria-core") — tentative d'injection non exploitée mais présente dans un repo que des sessions futures pourraient lire.
+Solution : non exécutée, signalée, README remplacé par une description neutre — leçon actée : grep/lire aussi les README des repos adjacents lors d'un audit d'écosystème, pas seulement le code — aria-core/README.md (cf. historique git 11/07)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Fichier vault (goldenfar-vault.gfv) resté tracké dans git malgré une exclusion voulue
+Date : 2026.07.11  /  Probleme : deux lignes de négation dans .gitignore du repo aria-ops (!sync/vault/, !sync/vault/*.gfv) neutralisaient l'exclusion du dossier vault/, laissant un fichier vault tracké dans l'historique git depuis le premier commit du repo.
+Solution : git rm --cached (fichier gardé sur disque) + suppression des 2 lignes de négation sur décision opérateur explicite ("aucune donnée sensible sur GitHub" prime sur le choix de design précédent) ; reste dans l'historique passé (réécriture d'historique explicitement différée, sujet séparé) — aria-ops/.gitignore (commit 9212f42, repo aria-ops)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : Nom réel opérateur codé en dur dans une regex fonctionnelle
+Date : 2026.07.11  /  Probleme : un grep exhaustif demandé par l'opérateur (le nom réel ne doit jamais apparaître publiquement) a trouvé deux usages FONCTIONNELS, pas seulement documentaires : brain._routing_message (deux regex de détection de préfixe de pont Cursor/KART construites avec le nom réel en dur dans le pattern) et relay_conversation._history_message (nom réel écrit en dur comme label [<nom>] dans l'historique envoyé au LLM).
+Solution : nouveau champ de config aria_operator_display_name (défaut générique "Operator", vraie valeur uniquement dans le .env réel du VPS, jamais commise) lu par les deux fonctions via getattr(...) or "Operator" — comportement identique une fois configuré, jamais le nom réel dans le code source — vanguard/backend/app/config.py, aria_core/testing.py, brain.py, relay_conversation.py (commits 59f7ed1d/193d4711)
