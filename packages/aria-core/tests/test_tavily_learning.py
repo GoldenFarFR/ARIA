@@ -9,8 +9,18 @@ from __future__ import annotations
 import pytest
 
 from aria_core.knowledge.x_insight_relevance import InsightAssessment
+from aria_core.services import tavily
 from aria_core.services.tavily import TavilyResult
 from aria_core.skills import tavily_learning
+
+
+def _patch_search(monkeypatch, fn):
+    """Patche la CLASSE, jamais l'instance singleton ``tavily_client`` -- un patch sur
+    l'instance forcerait ``monkeypatch`` à restaurer en RÉAFFECTANT (jamais en
+    supprimant) au teardown, ce qui fige la vraie méthode en attribut d'instance
+    permanent et masque tout futur patch de classe pour le reste de la session (fuite
+    réelle trouvée le 22/07, cassait ``test_web_verify_freshness.py`` en suite complète)."""
+    monkeypatch.setattr(type(tavily.tavily_client), "search", staticmethod(fn))
 
 
 @pytest.fixture(autouse=True)
@@ -88,8 +98,8 @@ async def test_rejects_insight_when_triage_declines(monkeypatch):
     monkeypatch.setattr(
         "aria_core.knowledge.x_insight_relevance.assess_market_knowledge_for_memory", _reject
     )
-    monkeypatch.setattr(
-        "aria_core.services.tavily.tavily_client.search",
+    _patch_search(
+        monkeypatch,
         _fake_search(
             TavilyResult(
                 query="q", snippets=[("some long enough snippet text here", "url", None)], available=True,
@@ -124,8 +134,8 @@ async def test_stores_insight_and_requests_approval_when_triage_accepts(monkeypa
     monkeypatch.setattr(
         "aria_core.knowledge.x_insight_relevance.assess_market_knowledge_for_memory", _accept
     )
-    monkeypatch.setattr(
-        "aria_core.services.tavily.tavily_client.search",
+    _patch_search(
+        monkeypatch,
         _fake_search(
             TavilyResult(
                 query="q",
@@ -175,7 +185,7 @@ async def test_search_failure_does_not_crash_cycle(monkeypatch):
     async def _boom(*args, **kwargs):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr("aria_core.services.tavily.tavily_client.search", _boom)
+    _patch_search(monkeypatch, _boom)
 
     result = await tavily_learning.run_tavily_learning_cycle()
     assert result["outcome"] == "ok"
@@ -188,8 +198,8 @@ async def test_round_robin_advances_through_handles(monkeypatch):
         "aria_core.knowledge.x_watchlist.all_curiosity_handles",
         lambda: ("alice", "bob", "carol"),
     )
-    monkeypatch.setattr(
-        "aria_core.services.tavily.tavily_client.search",
+    _patch_search(
+        monkeypatch,
         _fake_search(TavilyResult(query="q", snippets=[], available=False, error="no results")),
     )
 
