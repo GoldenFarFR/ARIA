@@ -230,6 +230,13 @@ class TokenScanContext:
     # services/deployer_history.py. Jamais un rejet d'office (consultatif LLM).
     deployer_reputation_signal: str | None = None
     deployer_reputation_points: list[str] = field(default_factory=list)
+    # 23/07 -- signal "cluster Sybil" : holders regroupés par source de financement
+    # commune, au-delà de la simple concentration individuelle (top_holder_pct ci-
+    # dessus). Peuplé si include_sybil_check ET donnée dispo. Coût réseau plus élevé
+    # que les autres signaux (1 appel Blockscout par holder vérifié) -- voir
+    # skills/sybil_cluster.py. Jamais un rejet d'office (consultatif LLM).
+    sybil_cluster_signal: str | None = None
+    sybil_cluster_points: list[str] = field(default_factory=list)
     # Sécurité dynamique GoPlus (peuplé si include_honeypot ET donnée dispo). Ce que
     # l'ABI statique de Blockscout ne voit pas : la revente est-elle RÉELLEMENT possible,
     # taxes réelles d'achat/vente, pouvoirs cachés. None = non scanné ou indisponible →
@@ -682,6 +689,7 @@ async def scan_base_token(
     include_honeypot: bool = False,
     include_insider_check: bool = False,
     include_deployer_reputation: bool = False,
+    include_sybil_check: bool = False,
 ) -> TokenScanContext:
     """Fetch DexScreener + compute heuristic security score.
 
@@ -712,6 +720,11 @@ async def scan_base_token(
     transactions borné (Blockscout, `get_transactions_bounded`) du wallet déployeur
     à la recherche d'AUTRES contrats déjà créés, croisés contre la liste noire
     propre d'ARIA (services/deployer_history.py). Signal consultatif, jamais un véto.
+
+    `include_sybil_check` est désactivé par défaut : regroupe les top holders déjà
+    récupérés par source de financement commune (skills/sybil_cluster.py) --
+    NETTEMENT plus coûteux en réseau que les autres signaux (jusqu'à 15 appels
+    Blockscout borné, un par holder vérifié). Signal consultatif, jamais un véto.
     """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
@@ -845,6 +858,13 @@ async def scan_base_token(
     if include_deployer_reputation:
         await _resolve_deployer_reputation(ctx, ca)
 
+    # Signal "cluster Sybil" (23/07) : holders regroupés par source de financement
+    # commune. Best-effort, jamais bloquant. Réutilise `holders` déjà récupéré --
+    # zéro re-fetch de la LISTE des holders (mais un appel réseau par holder vérifié
+    # pour sa source de financement, coût réel plus élevé que les autres signaux).
+    if include_sybil_check:
+        await _resolve_sybil_cluster(ctx, holders)
+
     # Sécurité dynamique (honeypot / taxes réelles / pouvoirs cachés) via GoPlus. Désactivé
     # par défaut (un appel réseau de plus) ; activé sur le chemin d'analyse VC où une vraie
     # décision se prend. Additif : sans donnée, ctx inchangé.
@@ -949,6 +969,28 @@ async def _resolve_deployer_reputation(ctx: "TokenScanContext", token_address: s
         logger.info("deployer_history: analyse %s échouée (%s)", token_address, exc)
         ctx.deployer_reputation_signal = "unknown"
         ctx.deployer_reputation_points = []
+
+
+async def _resolve_sybil_cluster(ctx: "TokenScanContext", holders: "TokenHoldersResult | None") -> None:
+    """Récolte + juge le clustering Sybil des holders. Défensif, jamais bloquant."""
+    from aria_core.skills.sybil_cluster import gather_sybil_cluster_facts, judge_sybil_cluster
+
+    if holders is None or not holders.available or not holders.holders:
+        ctx.sybil_cluster_signal = "unknown"
+        ctx.sybil_cluster_points = ["holders indisponibles"]
+        return
+
+    lp = (ctx.best_pair.pair_address if ctx.best_pair else "") or ""
+    exclude = {lp.lower()} | _BURN_ADDRESSES if lp else set(_BURN_ADDRESSES)
+    try:
+        facts = await gather_sybil_cluster_facts(holders.holders, exclude_addresses=exclude)
+        verdict = judge_sybil_cluster(facts)
+        ctx.sybil_cluster_signal = verdict.signal
+        ctx.sybil_cluster_points = verdict.points
+    except Exception as exc:  # noqa: BLE001 — signal bonus, jamais bloquant
+        logger.info("sybil_cluster: analyse %s échouée (%s)", ctx.contract, exc)
+        ctx.sybil_cluster_signal = "unknown"
+        ctx.sybil_cluster_points = []
 
 
 def scan_base_token_sync(contract: str) -> TokenScanContext:
