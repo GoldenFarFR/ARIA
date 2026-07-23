@@ -1,0 +1,22 @@
+title = "ARIA gitleaks config"
+
+# Extends the default gitleaks ruleset (hundreds of known secret patterns +
+# generic high-entropy detectors) -- we only add allowlist entries on top,
+# never replace the base rules.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known false positives, verified by hand (23/07 audit) -- never real secrets."
+paths = [
+  # detect-secrets baseline: contains SHA1 *hashes* of already-reviewed
+  # findings, never raw values (field name is literally `hashed_secret`,
+  # 40 hex chars = SHA1 digest) -- regenerated regularly by the
+  # detect-secrets tool, would otherwise re-trigger hundreds of false
+  # positives on every update to this file.
+  '''\.secrets\.baseline''',
+  # Deliberate corpus of attack payloads (forged JWTs, SQLi strings, auth
+  # bypass attempts) used to test our own security-sim detectors -- these
+  # are fabricated examples, not real credentials.
+  '''vanguard/backend/security_sim/corpus\.py''',
+]
