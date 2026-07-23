@@ -15,6 +15,14 @@ from dataclasses import dataclass
 
 # Plancher par défaut : la liquidité doit valoir >= 30 % de la market cap (intuition
 # opérateur : 100k mcap -> 30-40k liq mini). Surchargeable selon le launchpad.
+#
+# 23/07 -- tension structurelle identifiée par le stress-test (Codex Partie 11) :
+# ce seuil exclut mécaniquement une petite équipe honnête à faible trésorerie
+# (elle ne peut pas se permettre de verrouiller 30% de sa market cap en liquidité
+# DEX), en tension directe avec la thèse "builders sub-1M$". Escaladé
+# explicitement à l'opérateur -- décision confirmée : GARDER LE SEUIL TEL QUEL,
+# priorité à la sécurité anti-rug plutôt qu'un assouplissement qui affaiblirait
+# une protection anti-manipulation. Pas un oubli, un arbitrage tranché.
 DEFAULT_MIN_RATIO = 0.30
 
 
