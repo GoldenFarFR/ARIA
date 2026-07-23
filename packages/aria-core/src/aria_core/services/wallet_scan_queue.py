@@ -160,6 +160,63 @@ async def queue_counts() -> dict:
     return {"catching_up": row[0] or 0, "monitoring": row[1] or 0}
 
 
+async def queue_status_summary() -> dict:
+    """Vérité vérifiable sur l'avancement réel de la file (23/07, suite directe
+    de #29 -- avant ce correctif, aucune commande ne permettait de savoir si
+    la file avançait ou était bloquée sans une requête SQL manuelle).
+
+    Distingue explicitement : jamais tenté du tout (``last_attempt_at`` vide)
+    vs déjà tenté au moins une fois mais pas encore à 100% vs en surveillance
+    (100% déjà atteint). ``oldest_never_attempted_days`` -- combien de jours
+    le plus ancien wallet jamais touché attend déjà -- est le signal le plus
+    direct d'un vrai blocage (par opposition à une simple lenteur normale)."""
+    await _ensure_table()
+    now = datetime.now(timezone.utc)
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT "
+                "SUM(CASE WHEN last_attempt_at IS NULL THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN last_attempt_at IS NOT NULL AND monitoring_since IS NULL THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN monitoring_since IS NOT NULL THEN 1 ELSE 0 END), "
+                "COUNT(*) "
+                "FROM wallet_scan_queue"
+            )
+        ).fetchone()
+        never_attempted, in_progress, monitoring, total = (
+            row[0] or 0, row[1] or 0, row[2] or 0, row[3] or 0,
+        )
+
+        oldest_row = await (
+            await db.execute(
+                "SELECT wallet, added_at FROM wallet_scan_queue "
+                "WHERE last_attempt_at IS NULL ORDER BY added_at ASC LIMIT 1"
+            )
+        ).fetchone()
+        last_scored_row = await (
+            await db.execute(
+                "SELECT wallet, last_attempt_at FROM wallet_scan_queue "
+                "WHERE last_attempt_at IS NOT NULL ORDER BY last_attempt_at DESC LIMIT 1"
+            )
+        ).fetchone()
+
+    oldest_never_attempted_days = None
+    if oldest_row:
+        added = datetime.fromisoformat(oldest_row[1])
+        oldest_never_attempted_days = (now - added).total_seconds() / 86400
+
+    return {
+        "total": total,
+        "never_attempted": never_attempted,
+        "in_progress": in_progress,
+        "monitoring": monitoring,
+        "oldest_never_attempted_wallet": oldest_row[0] if oldest_row else None,
+        "oldest_never_attempted_days": oldest_never_attempted_days,
+        "last_scored_wallet": last_scored_row[0] if last_scored_row else None,
+        "last_scored_at": last_scored_row[1] if last_scored_row else None,
+    }
+
+
 async def list_pending(limit: int = MAX_WALLETS_PER_CYCLE) -> list[QueuedWallet]:
     """Les wallets DUS (rattrapage toujours dû immédiatement, surveillance due
     chaque semaine). Priorité (21/07, demande opérateur -- capacité du

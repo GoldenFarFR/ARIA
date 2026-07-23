@@ -742,3 +742,59 @@ async def test_cycle_unavailable_report_marks_attempt_and_keeps_in_queue(monkeyp
     assert await wsq.queue_size() == 1
     pending = await wsq.list_pending()
     assert pending[0].last_attempt_at is not None
+
+
+@pytest.mark.asyncio
+async def test_queue_status_summary_empty_queue():
+    status = await wsq.queue_status_summary()
+    assert status == {
+        "total": 0,
+        "never_attempted": 0,
+        "in_progress": 0,
+        "monitoring": 0,
+        "oldest_never_attempted_wallet": None,
+        "oldest_never_attempted_days": None,
+        "last_scored_wallet": None,
+        "last_scored_at": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_queue_status_summary_distinguishes_never_attempted_vs_in_progress_vs_monitoring(monkeypatch):
+    """The exact distinction the operator asked for (23/07, #29 follow-up):
+    "added to the queue" must never be confused with "already scanned"."""
+    await wsq.enqueue_wallets([A, B, C])
+
+    # A: never attempted at all.
+    # B: attempted once, still catching up (not yet full coverage).
+    await wsq.mark_attempt(B, next_check_at=datetime.now(timezone.utc))
+    # C: reached full coverage, now in weekly monitoring (mark_attempt sets
+    # last_attempt_at AND monitoring_since together, unlike the raw
+    # _force_monitoring_state test helper used elsewhere in this file, which
+    # bypasses last_attempt_at entirely -- not representative of the real
+    # code path here, where a monitoring wallet always has an attempt behind it).
+    await wsq.mark_attempt(C, next_check_at=datetime.now(timezone.utc) + timedelta(days=7), monitoring_since=datetime.now(timezone.utc))
+
+    status = await wsq.queue_status_summary()
+    assert status["total"] == 3
+    assert status["never_attempted"] == 1
+    assert status["in_progress"] == 1
+    assert status["monitoring"] == 1
+    assert status["oldest_never_attempted_wallet"] == A
+    assert status["last_scored_wallet"] == C  # C was marked fractionally after B
+
+
+@pytest.mark.asyncio
+async def test_queue_status_summary_oldest_never_attempted_age_in_days(monkeypatch):
+    old_added = datetime.now(timezone.utc) - timedelta(days=5)
+    await wsq.enqueue_wallets([A])
+    async with aiosqlite.connect(wsq.DB_PATH) as db:
+        await db.execute(
+            "UPDATE wallet_scan_queue SET added_at=?, next_check_at=? WHERE wallet=?",
+            (old_added.isoformat(), old_added.isoformat(), A),
+        )
+        await db.commit()
+
+    status = await wsq.queue_status_summary()
+    assert status["oldest_never_attempted_wallet"] == A
+    assert status["oldest_never_attempted_days"] == pytest.approx(5.0, abs=0.01)

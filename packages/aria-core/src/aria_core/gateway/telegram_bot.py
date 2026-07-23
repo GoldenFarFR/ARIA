@@ -2354,7 +2354,12 @@ async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     from aria_core.services.smart_money import wallet_scoring_enabled
-    from aria_core.services.wallet_scan_queue import enqueue_wallets, queue_size, wallet_scan_queue_enabled
+    from aria_core.services.wallet_scan_queue import (
+        enqueue_wallets,
+        queue_size,
+        queue_status_summary,
+        wallet_scan_queue_enabled,
+    )
 
     if not wallet_scoring_enabled():
         await _reply(message, "Évaluateur wallet désactivé (ARIA_WALLET_SCORING_ENABLED).")
@@ -2368,12 +2373,37 @@ async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not body and context.args:
         body = " ".join(context.args).strip()
 
+    if not body:
+        # /walletqueue sans argument -- statut de la file, jamais un simple
+        # message d'usage (23/07, suite #29 : avant ce correctif, aucune
+        # commande ne permettait de vérifier si la file avançait réellement).
+        status = await queue_status_summary()
+        lines = [
+            f"📋 File d'attente wallet — {status['total']} au total.",
+            f"Jamais tenté(s) : {status['never_attempted']}",
+            f"En rattrapage (déjà tenté, pas encore à 100%) : {status['in_progress']}",
+            f"En surveillance (déjà à 100%) : {status['monitoring']}",
+        ]
+        if status["oldest_never_attempted_wallet"]:
+            days = status["oldest_never_attempted_days"] or 0
+            lines.append(
+                f"Le plus ancien jamais tenté : {status['oldest_never_attempted_wallet']} "
+                f"(en attente depuis {days:.1f} jour(s))"
+            )
+        if status["last_scored_wallet"]:
+            lines.append(
+                f"Dernier scan réel : {status['last_scored_wallet']} à {status['last_scored_at']}"
+            )
+        await _reply(message, "\n".join(lines))
+        return
+
     addresses = [p.strip() for p in body.split() if p.strip()]
     if not addresses or not all(_SCAN_ADDR_RE.match(a) for a in addresses):
         await _reply(
             message,
             "Usage : /walletqueue <adresse_wallet> [adresse2] [adresse3] ...\n"
-            "Ajoute à la file d'attente de fond — attendu : 0x suivi de 40 caractères hexadécimaux.",
+            "Ajoute à la file d'attente de fond — attendu : 0x suivi de 40 caractères hexadécimaux.\n"
+            "Sans argument : affiche l'état actuel de la file.",
         )
         return
 
