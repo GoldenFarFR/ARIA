@@ -86,6 +86,7 @@ def safety_screen(
     min_score: int = DEFAULT_MIN_SCORE,
     max_top_holder_pct: float = DEFAULT_MAX_TOP_HOLDER_PCT,
     require_verified: bool = True,
+    liquidity_stability_confirmed: bool | None = None,
 ) -> ScreenResult:
     """Décide si un contrat entre dans le pool « screené ».
 
@@ -100,6 +101,13 @@ def safety_screen(
     SAFE. Passe seulement si TOUT est réuni. ``reasons`` liste chaque blocage
     (jamais un rejet opaque). Une donnée de sécurité **inconnue** bloque aussi : pour
     un pool d'entraînement, on n'inclut que ce qu'on peut confirmer (fail-closed).
+
+    ``liquidity_stability_confirmed`` (22/07, item #19 -- confirmation de stabilité
+    temporelle, `skills/liquidity_stability.py`) : ``False`` si une chute de liquidité
+    suspecte a été détectée depuis le dernier scan de ce même contrat (fenêtre
+    récente) -- soft-fail (comportement de marché, pas un mécanisme confirmé dans le
+    contrat, même famille que `wash_trading`). ``None`` (par défaut, ou premier scan
+    jamais vu) -> aucun effet, jamais un rejet sur une absence de comparaison.
     """
     liq = ctx.best_pair.liquidity_usd if ctx.best_pair else 0.0
     reasons: list[str] = []
@@ -143,6 +151,11 @@ def safety_screen(
         reasons.append(
             f"volume 24h/liquidité extrême et SOUTENU (> {MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x) "
             "-- signal de wash-trading"
+        )
+    if liquidity_stability_confirmed is False:
+        reasons.append(
+            "chute de liquidité suspecte depuis le dernier scan de ce contrat "
+            "-- possible manipulation synchronisée sur la fenêtre de scan"
         )
 
     # Barrières « le dev garde le pouvoir » (prioritaires)
@@ -200,6 +213,7 @@ def safety_screen(
         and ctx.security_score >= min_score
         and ctx.lite_verdict == "SAFE"
         and not wash_trading
+        and liquidity_stability_confirmed is not False
         and (ctx.contract_verified is True or not require_verified)
         and not mint_blocks
         and ctx.has_blacklist is not True

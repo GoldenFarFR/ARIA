@@ -21,6 +21,7 @@ import time
 from aria_core import screened_pool
 from aria_core.services.blockscout import blockscout_client
 from aria_core.skills.acp_onchain_scan import scan_base_token
+from aria_core.skills.liquidity_stability import record_and_check_liquidity_stability
 from aria_core.skills.safety_screen import safety_screen
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,19 @@ async def absorb(
             if age_days > max_age_days:
                 return "skip_too_old"
 
-    result = safety_screen(ctx, **screen_kwargs)
+    # 22/07 -- item #19 (stress-test) : confirmation de stabilité temporelle sur la
+    # liquidité avant le jugement du crible. Une manipulation synchronisée sur LA
+    # fenêtre de ce scan (liquidité gonflée puis retirée) ne serait jamais détectée
+    # par une lecture unique -- comparé au dernier scan connu de ce même contrat
+    # (fenêtre récente), jamais un rejet sur un premier scan sans antécédent.
+    liquidity_stability = None
+    if ctx.best_pair is not None and ctx.best_pair.liquidity_usd:
+        stability_result = await record_and_check_liquidity_stability(
+            contract, "base", ctx.best_pair.liquidity_usd, ctx.best_pair.volume_24h_usd,
+        )
+        liquidity_stability = stability_result.confirmed
+
+    result = safety_screen(ctx, liquidity_stability_confirmed=liquidity_stability, **screen_kwargs)
 
     if result.passed:
         best = ctx.best_pair

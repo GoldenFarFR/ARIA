@@ -8,12 +8,17 @@ import pytest
 from aria_core import screened_pool as sp
 from aria_core import token_absorber as ta
 from aria_core.services.blockscout import AddressInfo
+from aria_core.skills import liquidity_stability
 from aria_core.skills.acp_onchain_scan import PairSnapshot, TokenScanContext
 
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(sp, "DB_PATH", str(tmp_path / "absorb_test.db"))
+    # 22/07 -- item #19 : liquidity_stability.py a son PROPRE DB_PATH (module séparé),
+    # même piège d'isolation que screened_pool ci-dessus -- sans ça, `absorb()` de
+    # test écrirait dans la vraie base par défaut et polluerait les tests suivants.
+    monkeypatch.setattr(liquidity_stability, "DB_PATH", str(tmp_path / "vc_liquidity_test.db"))
     yield
 
 
@@ -324,3 +329,42 @@ async def test_prefilter_skipped_when_ctx_already_provided(monkeypatch):
     verdict = await ta.absorb("0xpreset", scanner=_boom_scan, known_age_days=5.0, ctx=_clean_ctx("0xpreset"))
 
     assert verdict == "kept"
+
+
+# ── Confirmation de stabilité temporelle sur la liquidité (22/07, item #19) ─────
+
+
+@pytest.mark.asyncio
+async def test_first_scan_kept_even_though_stability_unconfirmed():
+    """Premier scan d'un contrat -- aucun antécédent, jamais un rejet sur une
+    absence de comparaison (même doctrine fail-open que le reste du projet)."""
+    ctx = _clean_ctx("0xfirstscan")
+    verdict = await ta.absorb("0xfirstscan", scanner=_scanner({"0xfirstscan": ctx}))
+    assert verdict == "kept"
+
+
+@pytest.mark.asyncio
+async def test_stable_liquidity_across_rescans_stays_kept():
+    ctx1 = _clean_ctx("0xstable")
+    ctx2 = _clean_ctx("0xstable")  # même liquidité (50_000.0)
+    await ta.absorb("0xstable", scanner=_scanner({"0xstable": ctx1}))
+    verdict = await ta.absorb("0xstable", scanner=_scanner({"0xstable": ctx2}), force=True)
+    assert verdict == "kept"
+
+
+@pytest.mark.asyncio
+async def test_liquidity_drop_between_scans_is_rejected_soft():
+    """Une chute de liquidité suspecte entre deux scans du MÊME contrat -- soft-fail
+    (pending, jamais 'rejected pour toujours', comportement de marché)."""
+    ctx_high = _clean_ctx("0xdrop")  # liquidité 50_000.0
+    ctx_low = TokenScanContext(
+        contract="0xdrop", valid_address=True,
+        best_pair=PairSnapshot(pair_address="0xpool", liquidity_usd=10_000.0, base_symbol="GOOD"),
+        security_score=78, lite_verdict="SAFE",
+        contract_verified=True, has_mint=False, has_blacklist=False,
+        has_disable_transfers=False, top_holder_pct=12.0,
+    )
+    await ta.absorb("0xdrop", scanner=_scanner({"0xdrop": ctx_high}))
+    verdict = await ta.absorb("0xdrop", scanner=_scanner({"0xdrop": ctx_low}), force=True)
+    assert verdict != "kept"
+    assert await sp.get_status("0xdrop") != "rejected"  # soft-fail, jamais 'pour toujours'
