@@ -140,3 +140,45 @@ async def test_gather_detects_buy_from_pool():
 async def test_gather_dev_absent_from_holders_means_zero():
     facts = await gather_dev_wallet_facts(TOKEN, DEV, lp_address=LP, client=_FakeClient([], []))
     assert facts.holds_pct == 0.0
+
+
+# ── Calibration en live (23/07, tâche #26) : Uniswap V4 PoolManager singleton ──
+
+
+UNISWAP_V4_POOL_MANAGER = "0x498581ff718922c3f8e6a244956af099b2652b2b"
+
+
+@pytest.mark.asyncio
+async def test_gather_detects_buy_via_v4_pool_manager_without_lp_address():
+    """Vérifié en direct (contrat CNX réel) : sur un pool Uniswap V4, TOUS les
+    swaps transitent par le PoolManager SINGLETON, jamais par une adresse de
+    pool dédiée -- doit être détecté même sans lp_address fourni."""
+    holders = [_Holder(DEV, 5.0)]
+    transfers = [_Transfer(UNISWAP_V4_POOL_MANAGER, DEV, 500)]
+    facts = await gather_dev_wallet_facts(TOKEN, DEV, client=_FakeClient(holders, transfers))
+    assert facts.acquired == "bought"
+
+
+@pytest.mark.asyncio
+async def test_gather_detects_sell_via_v4_pool_manager():
+    holders = [_Holder(DEV, 5.0)]
+    transfers = [
+        _Transfer(ZERO, DEV, 1000),
+        _Transfer(DEV, UNISWAP_V4_POOL_MANAGER, 400),
+    ]
+    facts = await gather_dev_wallet_facts(TOKEN, DEV, client=_FakeClient(holders, transfers))
+    assert facts.sold_events == 1
+    assert facts.sold_pct_of_received == 40.0
+
+
+@pytest.mark.asyncio
+async def test_gather_v4_pool_manager_combined_with_real_lp_address():
+    """lp_address (pool V2/V3 classique) ET le PoolManager V4 doivent tous
+    les deux compter -- jamais l'un au détriment de l'autre."""
+    holders = [_Holder(DEV, 5.0)]
+    transfers = [
+        _Transfer(LP, DEV, 300),                    # achat via pool V2/V3 classique
+        _Transfer(UNISWAP_V4_POOL_MANAGER, DEV, 200),  # achat via PoolManager V4
+    ]
+    facts = await gather_dev_wallet_facts(TOKEN, DEV, lp_address=LP, client=_FakeClient(holders, transfers))
+    assert facts.acquired == "bought"  # 500 reçus, 500 achetés (300+200) -- aucune allocation

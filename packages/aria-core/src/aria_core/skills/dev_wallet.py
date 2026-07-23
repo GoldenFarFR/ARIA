@@ -128,6 +128,16 @@ def judge_dev_wallet(
 
 _ZERO = "0x0000000000000000000000000000000000000000"
 
+# 23/07 -- calibration en live (tâche #26) : contrat CNX (déjà scanné en prod)
+# vérifié comme un pool Uniswap V4 (dexId "uniswap" sans plus de précision côté
+# DexScreener). Sur V4, TOUS les swaps de TOUS les pools transitent par ce
+# PoolManager SINGLETON, jamais par une adresse de pool dédiée comme sur V2/V3
+# -- comparer `frm`/`to` au seul `lp_address` (l'identifiant logique de pool
+# renvoyé par DexScreener) ne capture donc JAMAIS un achat/vente réel sur un
+# pool V4, peu importe le token. Adresse officielle vérifiée (BaseScan, "Uniswap
+# V4: Pool Manager") -- Base uniquement, cohérent avec le reste de ce module.
+_UNISWAP_V4_POOL_MANAGER_BASE = "0x498581ff718922c3f8e6a244956af099b2652b2b"
+
 
 async def gather_dev_wallet_facts(
     contract: str,
@@ -140,20 +150,22 @@ async def gather_dev_wallet_facts(
 
     - **Détention** : part du déployeur dans la liste des holders du token.
     - **Achats / allocation / ventes** : classe les transferts du token impliquant le
-      déployeur — reçu depuis le zéro/contrat = allocation ; reçu depuis le pool LP =
-      achat ; envoyé vers le pool LP = vente.
+      déployeur — reçu depuis le zéro/contrat = allocation ; reçu depuis le pool LP
+      (ou le PoolManager Uniswap V4, cf. `_UNISWAP_V4_POOL_MANAGER_BASE`) = achat ;
+      envoyé vers l'un des deux = vente.
 
     ``client`` injectable (défaut : blockscout_client) pour les tests offline. Toute
     indisponibilité -> ``available=False`` (le juge renverra 'unknown'). La classification
-    est heuristique et À CALIBRER en live (adresses de routeur/pool réelles).
-    """
+    reste une heuristique — calibrée en live le 23/07 contre un cas réel (CNX, pool V4)."""
     if not creator:
         return DevWalletFacts(creator=None, available=False, error="déployeur inconnu")
     if client is None:
         from aria_core.services.blockscout import blockscout_client as client
 
     dev = creator.lower()
-    lp = (lp_address or "").lower()
+    lp_candidates = {_UNISWAP_V4_POOL_MANAGER_BASE}
+    if lp_address:
+        lp_candidates.add(lp_address.lower())
 
     holds_pct: float | None = None
     try:
@@ -183,10 +195,10 @@ async def gather_dev_wallet_facts(
             to = (getattr(t, "to_address", "") or "").lower()
             if to == dev:  # le dev reçoit
                 received += amt
-                if lp and frm == lp:
+                if frm in lp_candidates:
                     bought += amt
             elif frm == dev:  # le dev envoie
-                if lp and to == lp:
+                if to in lp_candidates:
                     sold += amt
                     sold_events += 1
     except Exception:  # noqa: BLE001 — les transferts sont un bonus, pas bloquant
