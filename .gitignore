@@ -55,6 +55,15 @@ packages/aria-core/.coverage
 /.aria-test-data/
 /GoldenFar/
 /data/
+# DB SQLite locale créée par une exécution de test hors isolation tmp_path
+# (trouvée committée par erreur le 23/07 -- vide, sans données réelles, mais
+# un fichier binaire runtime n'a jamais sa place dans le repo)
+/packages/aria-core/data/
+
+# Config Claude Code locale à CETTE session/environnement (permissions
+# outillage) -- jamais partagée entre sessions, trouvée committée par
+# erreur le 23/07
+.claude/settings.local.json
 
 # Claude Code local (worktrees d'agents, verrou de déploiement)
 .claude/worktrees/
