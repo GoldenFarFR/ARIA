@@ -501,6 +501,50 @@ class TestSimulatedFillPrice:
         assert result == entry
 
 
+class TestSimulatedExitPrice:
+    """22/07 -- item #18 (stress-test) : symétrique de simulated_fill_price, mais
+    une VENTE pousse le prix vers le BAS, jamais vers le haut."""
+
+    def test_matches_same_impact_model_as_fill_price(self):
+        # Même formule (_price_impact_pct), donc même magnitude -- ici une vente
+        # de 10 000$ sur un pool de 100k$ -> impact 20%, prix dégradé vers 0.8.
+        price = risk_guard.simulated_exit_price(1.0, 10_000.0, 100_000.0)
+        assert price == pytest.approx(0.8, rel=1e-6)
+
+    def test_negligible_impact_on_deep_pool_barely_moves_price(self):
+        price = risk_guard.simulated_exit_price(1.0, 20_000.0, 100_000_000.0)
+        assert price == pytest.approx(1.0, rel=1e-3)
+        assert price < 1.0  # jamais exactement égal -- toujours un impact, même infime
+
+    def test_always_at_or_below_current_price_never_above(self):
+        for value in (100.0, 10_000.0, 100_000.0):
+            price = risk_guard.simulated_exit_price(1.0, value, 50_000.0)
+            assert price <= 1.0
+
+    def test_scales_with_position_value_bigger_position_worse_exit(self):
+        small = risk_guard.simulated_exit_price(1.0, 5_000.0, 100_000.0)
+        big = risk_guard.simulated_exit_price(1.0, 50_000.0, 100_000.0)
+        assert big < small
+
+    def test_never_goes_negative_on_extreme_impact(self):
+        price = risk_guard.simulated_exit_price(1.0, 1_000_000.0, 10_000.0)  # impact >100%
+        assert price >= 0.0
+
+    @pytest.mark.parametrize(
+        "current,value,liquidity",
+        [
+            (0.0, 10_000.0, 100_000.0),
+            (1.0, 0.0, 100_000.0),
+            (1.0, -100.0, 100_000.0),
+            (1.0, 10_000.0, None),
+            (1.0, 10_000.0, 0.0),
+        ],
+    )
+    def test_fail_open_returns_current_price_unchanged(self, current, value, liquidity):
+        result = risk_guard.simulated_exit_price(current, value, liquidity)
+        assert result == current
+
+
 # ── 2. Coupe-circuit dédié : persistance, robustesse, distinction avec outgoing_pause ──
 
 

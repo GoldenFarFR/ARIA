@@ -447,6 +447,26 @@ def simulated_fill_price(
     return entry_price * (1.0 + _price_impact_pct(alloc_usd, pool_liquidity_usd))
 
 
+def simulated_exit_price(
+    current_price: float, position_value_usd: float, pool_liquidity_usd: float | None,
+) -> float:
+    """Prix de sortie RÉEL simulé pour une vente de ``position_value_usd`` sur un pool de
+    ``pool_liquidity_usd`` -- toujours <= ``current_price`` (une vente pousse le prix vers
+    le bas, jamais vers le haut). Symétrique à ``simulated_fill_price`` (achat), même
+    formule d'impact (``_price_impact_pct``), jamais un second calcul divergent.
+
+    22/07 -- item #18 (stress-test) : le PnL affiché d'une position OUVERTE utilisait le
+    prix spot exact, comme si sa taille pouvait toujours être liquidée sans aucun
+    glissement -- un x50 fictif était possible sur un pool devenu mince. Données
+    manquantes/invalides -> ``current_price`` inchangé, fail-open (même doctrine que
+    ``simulated_fill_price``)."""
+    if current_price <= 0 or position_value_usd <= 0:
+        return current_price
+    if not pool_liquidity_usd or pool_liquidity_usd <= 0:
+        return current_price
+    return current_price * max(0.0, 1.0 - _price_impact_pct(position_value_usd, pool_liquidity_usd))
+
+
 # ── 2. Coupe-circuit de portefeuille (état persisté, fichier dédié) ────────
 
 SOFT_DRAWDOWN_PCT = 0.10       # -10 % depuis le plus haut d'équité -> alloc réduite de moitié

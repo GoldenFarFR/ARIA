@@ -161,6 +161,42 @@ async def test_summary_marks_to_market(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_summary_applies_exit_impact_decote_on_thin_pool(tmp_db):
+    """22/07 -- item #18 (stress-test) : sur un pool devenu mince, le PnL affiché
+    ne doit plus supposer une liquidation sans aucun glissement -- le prix spot
+    seul (1.5) surestimerait la valeur réelle liquidable de cette position."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(C, "CCC", 1.0, alloc_usd=100_000, pool_liquidity_usd=50_000.0)
+
+    async def price_lookup(contract):
+        return 1.5
+
+    s = await pt.portfolio_summary(price_lookup=price_lookup)
+
+    # Position vaut 150k$ au prix spot -- impact de sortie sur un pool de 50k$
+    # (PRICE_IMPACT_RATIO=2.0 -> impact = 2*150000/50000 = 6.0 -> plafonné à 0%
+    # côté prix, jamais négatif). Vérifie seulement que la valeur affichée est
+    # RÉDUITE par rapport au calcul spot naïf (150k), jamais égale ou supérieure.
+    assert s["equity"] < 1_050_000
+    assert s["unrealized_pnl"] < 50_000
+
+
+@pytest.mark.asyncio
+async def test_summary_deep_pool_negligible_decote(tmp_db):
+    """Sur un pool très profond par rapport à la position, la décote doit rester
+    quasi imperceptible -- jamais une pénalité arbitraire hors de proportion."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(C, "CCC", 1.0, alloc_usd=100_000, pool_liquidity_usd=100_000_000.0)
+
+    async def price_lookup(contract):
+        return 1.5
+
+    s = await pt.portfolio_summary(price_lookup=price_lookup)
+
+    assert s["equity"] == pytest.approx(1_050_000, rel=1e-3)  # écart négligeable (<0.1%)
+
+
+@pytest.mark.asyncio
 async def test_run_cycle_opens_then_stages_take_profit(tmp_db):
     """Remplace l'ancien tout-ou-rien à la cible : une hausse au-delà du 1er palier
     déclenche une prise de profit PARTIELLE, la position reste ouverte. 19/07 -- le

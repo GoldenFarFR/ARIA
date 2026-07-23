@@ -1366,6 +1366,8 @@ async def portfolio_summary(*, price_lookup=None) -> dict:
     )
     cash = start - sum(p["cost_usd"] for p in opens) + realized
 
+    from aria_core.risk_guard import simulated_exit_price
+
     open_value = 0.0
     unrealized = 0.0
     for p in opens:
@@ -1375,7 +1377,20 @@ async def portfolio_summary(*, price_lookup=None) -> dict:
                 price = await price_lookup(p["contract"])
             except Exception:  # noqa: BLE001 — un prix indispo n'arrête pas la photo
                 price = None
-        value = p["qty"] * price if (price and price > 0) else p["cost_usd"]
+        if price and price > 0:
+            # 22/07 -- item #18 (stress-test) : le prix spot affiché seul suppose que
+            # TOUTE la position pourrait être liquidée sans aucun glissement -- un x50
+            # fictif était possible sur un pool devenu mince. Décote par impact de
+            # sortie simulé, même formule que l'achat (simulated_fill_price).
+            # Liquidité "vive" (last_liquidity_usd, vc_thesis uniquement pour l'instant)
+            # préférée si connue, sinon repli sur la liquidité D'ENTRÉE -- une
+            # approximation honnête, jamais aucune décote plutôt que ça.
+            liq = p.get("last_liquidity_usd") or p.get("entry_liquidity_usd")
+            position_value_at_spot = p["qty"] * price
+            exit_price = simulated_exit_price(price, position_value_at_spot, liq)
+            value = p["qty"] * exit_price
+        else:
+            value = p["cost_usd"]
         open_value += value
         unrealized += value - p["cost_usd"]
 
