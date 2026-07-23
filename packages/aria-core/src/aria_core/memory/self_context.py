@@ -1,4 +1,4 @@
-"""Questions identité / mission / objectifs ARIA — mémoire interne, pas de web."""
+"""ARIA identity / mission / goals questions — internal memory, no web."""
 from __future__ import annotations
 
 import os
@@ -25,7 +25,7 @@ _SELF_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Questions métier génériques — ne pas confondre avec l'identité ARIA
+# Generic career-type questions — do not confuse with ARIA's identity
 _EXTERNAL_OBJECTIVES_RE = re.compile(
     r"\b(?:carri[èe]re|entretien|recruteur|salaire|cv\b|linkedin)\b",
     re.IGNORECASE,
@@ -33,7 +33,7 @@ _EXTERNAL_OBJECTIVES_RE = re.compile(
 
 
 def is_self_context_question(message: str) -> bool:
-    """True si la question porte sur l'identité, la mission ou les objectifs d'ARIA."""
+    """True if the question is about ARIA's identity, mission, or goals."""
     text = (message or "").strip()
     if len(text) < 6:
         return False
@@ -71,7 +71,7 @@ def _vision_excerpt() -> str:
 
 
 def build_self_identity_context(*, lang: str = "fr") -> str:
-    """Contexte minimal identité — sans vector ni journal (évite dump ingest-repo)."""
+    """Minimal identity context — no vector or journal (avoids an ingest-repo dump)."""
     from aria_core.identity import x_identity_prompt
     from aria_core.memory.goals import get_goals_text
     from aria_core.memory.values import get_values_text

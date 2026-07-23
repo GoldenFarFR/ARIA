@@ -57,12 +57,12 @@ def aria_marketing_video_dir() -> Path:
 
 
 def vector_dir() -> Path:
-    """Persistance mémoire vectorielle embarquée — Phase C (opt-in via aria_vector_memory).
+    """Embedded vector memory persistence — Phase C (opt-in via aria_vector_memory).
 
-    Nom neutre (indépendant du moteur) — LanceDB depuis la migration CVE-2026-45829
-    (chromadb, RCE serveur non corrigée). L'ancien dossier ``chroma/`` d'un déploiement
-    précédent n'est pas migré : mémoire vectorielle désactivée par défaut, volume quasi
-    nul quand elle l'était (188 Ko), pas un vrai jeu de données à préserver.
+    Neutral name (engine-independent) — LanceDB since the CVE-2026-45829 migration
+    (chromadb, unpatched server RCE). The old ``chroma/`` folder from a previous
+    deployment is not migrated: vector memory disabled by default, near-zero volume
+    when it was (188 KB), not a real dataset worth preserving.
     """
     path = data_dir() / "vector"
     path.mkdir(parents=True, exist_ok=True)

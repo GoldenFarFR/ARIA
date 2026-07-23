@@ -408,9 +408,9 @@ class GitHubClient:
     async def list_review_comments(
         self, owner: str, repo: str, pull_number: int
     ) -> list[dict[str, Any]]:
-        """Commentaires INLINE sur une ligne de diff (distinct de list_pull_reviews, qui ne
-        renvoie que le corps global d'une review — souvent vide quand un relecteur laisse
-        uniquement des suggestions ligne par ligne, comme sur showcase.json)."""
+        """INLINE comments on a diff line (distinct from list_pull_reviews, which only
+        returns a review's global body — often empty when a reviewer leaves only
+        line-by-line suggestions, as on showcase.json)."""
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(
                 f"{API}/repos/{owner}/{repo}/pulls/{pull_number}/comments",
@@ -436,7 +436,7 @@ class GitHubClient:
     async def edit_issue_comment(
         self, owner: str, repo: str, comment_id: int, body: str
     ) -> dict[str, Any]:
-        """Edite un commentaire d'issue/PR existant (PATCH). Reserve a l'auteur du commentaire."""
+        """Edits an existing issue/PR comment (PATCH). Reserved for the comment's author."""
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.patch(
                 f"{API}/repos/{owner}/{repo}/issues/comments/{comment_id}",

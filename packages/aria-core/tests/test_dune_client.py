@@ -73,7 +73,7 @@ class TestApiKeyGate:
         data, error = await dune._request("GET", "/v1/execution/abc/status")
 
         assert data is None
-        assert "DUNE_API_KEY absente" in error
+        assert "DUNE_API_KEY missing" in error
         assert holder["calls"] == []  # aucun appel HTTP tenté
 
     def test_is_dune_configured(self, monkeypatch):
@@ -125,7 +125,7 @@ class TestDomeRetry:
         data, error = await dune._request("GET", "/v1/execution/abc/status")
 
         assert data is None
-        assert "erreur serveur" in error
+        assert "server error" in error
 
     @pytest.mark.asyncio
     async def test_timeout_retries_once_then_fails(self, monkeypatch):
@@ -159,7 +159,7 @@ class TestDomeRetry:
         data, error = await dune._request("GET", "/v1/execution/abc/status")
 
         assert data is None
-        assert "clé Dune invalide" in error
+        assert "invalid or rejected Dune key" in error
 
 
 class TestExecuteSql:
@@ -199,7 +199,7 @@ class TestExecuteSql:
         result = await dune.execute_sql("SELECT 1")
 
         assert result.available is False
-        assert "execution_id absent" in result.error
+        assert "execution_id missing" in result.error
 
     @pytest.mark.asyncio
     async def test_unexpected_shape_unavailable_never_raises(self, monkeypatch):
@@ -271,7 +271,7 @@ class TestGetExecutionResult:
         result = await dune.get_execution_result("exec-1")
 
         assert result.available is False
-        assert "result absent" in result.error
+        assert "result missing" in result.error
 
     @pytest.mark.asyncio
     async def test_missing_rows_unavailable(self, monkeypatch):
@@ -281,7 +281,7 @@ class TestGetExecutionResult:
         result = await dune.get_execution_result("exec-1")
 
         assert result.available is False
-        assert "rows absent" in result.error
+        assert "rows missing" in result.error
 
     @pytest.mark.asyncio
     async def test_malformed_rows_skipped_not_a_crash(self, monkeypatch):
@@ -359,7 +359,7 @@ class TestRunSqlAndWait:
         result = await dune.run_sql_and_wait("SELECT 1", poll_interval=1.0, max_wait=3.0)
 
         assert result.available is False
-        assert "délai d'exécution dépassé" in result.error
+        assert "execution timeout exceeded" in result.error
 
 
 class TestBuildEarlyBuyerMultipleQuery:

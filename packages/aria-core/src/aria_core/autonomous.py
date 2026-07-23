@@ -12,7 +12,7 @@ JUNO_CONTACT_COOLDOWN_DAYS = 7
 
 
 async def should_contact_juno() -> tuple[bool, str]:
-    """ARIA décide seule si un nouveau contact JUNO est pertinent."""
+    """ARIA decides on her own whether a new JUNO contact is relevant."""
     latest = await get_latest_juno()
     if not latest:
         return True, "Premier contact JUNO — initiation réseau ZHC."
@@ -31,7 +31,7 @@ async def should_contact_juno() -> tuple[bool, str]:
 
 
 async def execute_autonomous_action(action: str, context: str = "") -> str:
-    """Exécute une action ZHC sans gate humain — log + retourne un résumé FYI."""
+    """Executes a ZHC action without a human gate — logs + returns an FYI summary."""
     if action == "contact_juno":
         from aria_core.runtime import settings
 

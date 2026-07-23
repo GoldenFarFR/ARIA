@@ -1,4 +1,4 @@
-"""Classifie ordres operateur a ARIA vs questions d'information generale."""
+"""Classifies operator orders to ARIA vs general information questions."""
 
 from __future__ import annotations
 

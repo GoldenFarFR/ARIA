@@ -1,12 +1,13 @@
-"""Mémoire courte du dernier rapport /vc opérateur — suivi en chat Telegram.
+"""Short-term memory of the last operator /vc report — follow-up in Telegram chat.
 
-Un ``/vc`` ne passait pas par ``repertoire_db`` : l'ordre Telegram partait au bot
-mais n'entrait pas dans l'historique LLM. Résultat vécu : « +515 pourquoi ? » après
-une analyse → ARIA cherchait ailleurs (web/GitHub) au lieu de s'ancrer sur SON rapport.
+A ``/vc`` didn't go through ``repertoire_db``: the Telegram command went to the
+bot but never entered the LLM history. Real outcome: "+515 why?" after an
+analysis → ARIA would search elsewhere (web/GitHub) instead of anchoring on
+HER OWN report.
 
-Ce module persiste un résumé structuré du dernier /vc admin (TTL 4 h) et fournit un
-bloc factuel injecté dans le prompt quand l'opérateur pose une question de suivi.
-Lecture/écriture locales uniquement — jamais d'appel réseau.
+This module persists a structured summary of the last admin /vc (TTL 4h) and
+provides a factual block injected into the prompt when the operator asks a
+follow-up question. Local read/write only — never a network call.
 """
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ async def record_operator_vc(
     prediction_id: int | None = None,
     telegram_summary: str = "",
 ) -> None:
-    """Mémorise le dernier /vc opérateur (écrase toujours la ligne unique)."""
+    """Memoizes the last operator /vc (always overwrites the single row)."""
     await _ensure_table()
     payload = {
         "contract": result.contract,
@@ -99,10 +100,11 @@ async def _ensure_video_table() -> None:
 
 
 async def queue_video_candidate(result: VCResult) -> int:
-    """Capture TOUT ce dont la vidéo marketing (tâche #23) a besoin, au même
-    instant que ``record_operator_vc`` -- même objet ``result`` déjà en mémoire,
-    aucun recalcul. Statut 'pending' : un cycle heartbeat séparé (gate OFF par
-    défaut) viendra consommer cette ligne plus tard, jamais synchrone ici."""
+    """Captures EVERYTHING the marketing video (task #23) needs, at the same
+    moment as ``record_operator_vc`` -- same ``result`` object already in
+    memory, no recomputation. Status 'pending': a separate heartbeat cycle
+    (gate OFF by default) will consume this row later, never synchronously
+    here."""
     await _ensure_video_table()
     payload = {
         "contract": result.contract,
@@ -131,7 +133,7 @@ async def queue_video_candidate(result: VCResult) -> int:
 
 
 async def load_next_video_candidate() -> dict | None:
-    """Lecture seule : la plus ancienne ligne 'pending', ou None si la file est vide."""
+    """Read-only: the oldest 'pending' row, or None if the queue is empty."""
     await _ensure_video_table()
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
@@ -145,14 +147,14 @@ async def load_next_video_candidate() -> dict | None:
     try:
         data = json.loads(row[1])
     except (json.JSONDecodeError, TypeError):
-        logger.warning("vc_session_context: snapshot vidéo illisible (id=%s)", row[0])
+        logger.warning("vc_session_context: unreadable video snapshot (id=%s)", row[0])
         return None
     data["id"] = row[0]
     return data
 
 
 async def mark_video_candidate_done(candidate_id: int, *, status: str = "done") -> None:
-    """Marque une ligne 'pending' comme traitée (jamais de suppression -- trace conservée)."""
+    """Marks a 'pending' row as processed (never deleted -- trace kept)."""
     await _ensure_video_table()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -164,7 +166,7 @@ async def mark_video_candidate_done(candidate_id: int, *, status: str = "done") 
 
 
 async def load_operator_vc() -> dict | None:
-    """Charge le dernier /vc si encore dans la fenêtre TTL."""
+    """Loads the last /vc if still within the TTL window."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
@@ -186,7 +188,7 @@ async def load_operator_vc() -> dict | None:
         data["recorded_at"] = row[1]
         return data
     except (json.JSONDecodeError, ValueError, TypeError):
-        logger.warning("vc_session_context: payload illisible")
+        logger.warning("vc_session_context: unreadable payload")
         return None
 
 
@@ -209,7 +211,7 @@ _VC_TOPIC_RE = re.compile(
 
 
 def is_vc_followup_question(message: str) -> bool:
-    """Détecte une question de suivi sur le dernier rapport /vc (opérateur)."""
+    """Detects a follow-up question about the last /vc report (operator)."""
     text = (message or "").strip()
     if not text or len(text) > 500:
         return False
@@ -219,7 +221,7 @@ def is_vc_followup_question(message: str) -> bool:
 
 
 def build_followup_context_block(data: dict, *, lang: str = "fr") -> str:
-    """Bloc factuel pour le prompt LLM — jamais inventé, uniquement le payload persisté."""
+    """Factual block for the LLM prompt — never invented, only the persisted payload."""
     sym = data.get("symbol") or data.get("contract", "")[:10]
     lines_fr = [
         "DERNIER RAPPORT /vc (il y a quelques minutes — ancre-toi UNIQUEMENT sur ces faits) :",

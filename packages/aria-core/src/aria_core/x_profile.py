@@ -1,16 +1,16 @@
-"""Profil public X @Aria_ZHC -- aligne nom/bio/site sur la narrative Vanguard.
+"""Public X profile @Aria_ZHC -- aligns name/bio/site with the Vanguard narrative.
 
-Seam documenté dans `directives.md` (« Profil X »). Champ « lieu » volontairement
-absent de la cible : aucune source canonique dans le repo pour ce champ -- on ne
-synchronise pas une donnée inventée (dôme).
+Seam documented in `directives.md` ("X Profile"). The "location" field is
+deliberately absent from the target: no canonical source in the repo for this
+field -- an invented value is never synced (guardrail).
 
-Deux façons de déclencher une sync :
-- Commande Telegram admin `/x profile sync` (autorisation = l'admin qui tape la
-  commande, pas de garde supplémentaire ici -- même doctrine que les autres
-  commandes admin de `telegram_bot.py`).
-- Tâche heartbeat `x_profile_sync` (quotidienne) -- gardée par
-  `x_profile_sync_enabled()` dans `heartbeat.py`, car c'est le seul chemin
-  réellement autonome/outward-facing (aucun humain ne clique).
+Two ways to trigger a sync:
+- Admin Telegram command `/x profile sync` (authorization = the admin who types the
+  command, no additional guard here -- same doctrine as the other
+  admin commands in `telegram_bot.py`).
+- Heartbeat task `x_profile_sync` (daily) -- gated by
+  `x_profile_sync_enabled()` in `heartbeat.py`, since this is the only
+  genuinely autonomous/outward-facing path (no human clicks).
 """
 from __future__ import annotations
 
@@ -21,15 +21,15 @@ CANONICAL_FIELDS = ("name", "description", "url")
 
 
 def x_profile_sync_enabled() -> bool:
-    """Gate de la sync AUTOMATIQUE (heartbeat) uniquement -- la commande Telegram
-    admin reste toujours disponible, l'autorisation venant de l'admin lui-même."""
+    """Gate for the AUTOMATIC sync (heartbeat) only -- the admin Telegram
+    command always remains available, authorization coming from the admin themselves."""
     return os.environ.get("ARIA_X_PROFILE_SYNC_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
 
 def canonical_x_profile() -> dict[str, str]:
-    """Champs cibles, dérivés de la narrative existante (rien de nouveau à rédiger)."""
+    """Target fields, derived from the existing narrative (nothing new to write)."""
     from aria_core.identity import ARIA_DISPLAY_NAME
     from aria_core.narrative import holding_site_url, x_bio
 
@@ -70,7 +70,7 @@ def profile_fields_differ(live: dict[str, str], target: dict[str, str]) -> list[
 
 
 async def sync_x_profile(*, force: bool = False) -> dict[str, Any]:
-    """Compare le profil live au profil cible et applique si nécessaire (ou si `force`)."""
+    """Compares the live profile to the target profile and applies if needed (or if `force`)."""
     from aria_core.gateway.x_twitter import apply_x_profile_fields, is_x_post_configured
 
     if not is_x_post_configured():

@@ -1,18 +1,18 @@
-"""Journal append-only des transactions du futur pilote « agent wallet » (MetaMask
-Agent Wallet / Coinbase Agentic Wallets / Trust Wallet Agent Kit — capital réel
-étape 2, diligence CLAUDE.md 14-15/07). Seam construit AVANT le choix définitif du
-produit et AVANT tout dépôt réel : ce module n'est appelé par aucun code de
-production pour l'instant, il attend d'être câblé une fois le pilote décidé.
+"""Append-only transaction journal for the future "agent wallet" pilot (MetaMask
+Agent Wallet / Coinbase Agentic Wallets / Trust Wallet Agent Kit — real capital
+stage 2, CLAUDE.md diligence 14-15/07). Seam built BEFORE the product was
+finally chosen and BEFORE any real deposit: this module isn't called by any
+production code yet, it's waiting to be wired up once the pilot is decided.
 
-Même doctrine que `bonding_trade_log.py` (#60, Arena) : enregistre CHAQUE tentative
-d'exécution (`status` in {"ok", "failed", "blocked"}), jamais seulement les succès —
-un refus côté garde-fou (plafond dépassé, slippage hors tolérance, kill-switch
-désactivé) doit rester tracé, jamais silencieux.
+Same doctrine as `bonding_trade_log.py` (#60, Arena): logs EVERY execution
+attempt (`status` in {"ok", "failed", "blocked"}), never just successes —
+a guard-rail refusal (cap exceeded, slippage out of tolerance, kill-switch
+disabled) must stay traced, never silent.
 
-Structurellement séparé de `wallet_guard.py` — même principe que
-`sepolia_autonomous.py`/`bonding_trade_log.py` : jamais mélangé au garde-fou partagé
-qui protège tout ce qui touchera un jour du capital réel à plus grande échelle.
-Append-only : aucune fonction UPDATE/DELETE ici (même doctrine que
+Structurally separate from `wallet_guard.py` — same principle as
+`sepolia_autonomous.py`/`bonding_trade_log.py`: never mixed with the shared
+guard-rail that protects everything that will one day touch real capital at
+larger scale. Append-only: no UPDATE/DELETE function here (same doctrine as
 `aria_directives.py::aria_directive_log`).
 """
 from __future__ import annotations
@@ -64,10 +64,10 @@ async def _ensure_table() -> None:
             )
             """
         )
-        # Migration à chaud idempotente (même patron que vc_predictions.py/exam.py) --
-        # to_address ajouté le 16/07 pour l'exception nommée #4 (transfert USDC vers
-        # une adresse unique autorisée) : jamais dans la définition CREATE TABLE
-        # ci-dessus pour ne pas casser une base déjà existante sans cette colonne.
+        # Idempotent hot migration (same pattern as vc_predictions.py/exam.py) --
+        # to_address added on 16/07 for named exception #4 (USDC transfer to a
+        # single allowed address): never in the CREATE TABLE definition above so
+        # as not to break an already-existing database without this column.
         cols = [row[1] async for row in await db.execute("PRAGMA table_info(agent_wallet_tx_log)")]
         if "to_address" not in cols:
             await db.execute("ALTER TABLE agent_wallet_tx_log ADD COLUMN to_address TEXT NOT NULL DEFAULT ''")
@@ -89,12 +89,12 @@ async def record_transaction(
     reason: str = "",
     to_address: str = "",
 ) -> None:
-    """Enregistre une tentative de transaction (``status`` in {"ok", "failed",
-    "blocked"}). ``wallet_product`` identifie le produit utilisé (ex.
+    """Logs a transaction attempt (``status`` in {"ok", "failed",
+    "blocked"}). ``wallet_product`` identifies the product used (e.g.
     "metamask_agent_wallet", "coinbase_agentic_wallet", "trust_wallet_agent_kit")
-    — laissé libre plutôt qu'un enum fermé, le pilote n'étant pas encore choisi.
-    ``to_address`` (16/07, exception nommée #4) : adresse de destination d'un
-    transfert -- vide pour tout autre type d'action (ex. swap).
+    — left free-form rather than a closed enum, since the pilot hasn't been
+    chosen yet. ``to_address`` (16/07, named exception #4): destination
+    address of a transfer -- empty for any other action type (e.g. swap).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -128,20 +128,20 @@ async def list_transactions(limit: int = 200) -> list[dict]:
     return [dict(zip(_COLUMNS, row)) for row in rows]
 
 
-# 19/07 -- incident réel (URANUS, 2 échecs 05:42/06:44 UTC) : une `ValidationError`
-# Pydantic sur la réponse du SDK CDP (`CommonSwapResponseFees.gasFee` requis mais
-# `None` -- bug confirmé côté SDK Coinbase, cf. CLAUDE.md) est DÉTERMINISTE : le même
-# token échouera identiquement à chaque nouvelle tentative tant que ce bug SDK n'est
-# pas corrigé en amont, contrairement à une panne réseau/RPC transitoire qui peut
-# réussir au coup suivant. Détection par sous-chaîne du message d'erreur -- jamais
-# une nouvelle table, jamais touché à `momentum_blacklist.py` (réservé aux vraies
-# menaces de sécurité, pas aux pannes techniques, doctrine actée le 17/07).
+# 19/07 -- real incident (URANUS, 2 failures 05:42/06:44 UTC): a Pydantic
+# `ValidationError` on the CDP SDK response (`CommonSwapResponseFees.gasFee`
+# required but `None` -- confirmed bug on the Coinbase SDK side, cf. CLAUDE.md)
+# is DETERMINISTIC: the same token will fail identically on every new attempt
+# until this SDK bug is fixed upstream, unlike a transient network/RPC outage
+# which can succeed on the next try. Detected by substring match on the error
+# message -- never a new table, never touches `momentum_blacklist.py` (reserved
+# for real security threats, not technical failures, doctrine decided 17/07).
 _STRUCTURAL_FAILURE_MARKERS = ("validation error", "pydantic")
 
 
 def is_structural_swap_failure(reason: str) -> bool:
-    """Vrai si ``reason`` porte la signature d'un échec STRUCTUREL (va se
-    reproduire identiquement), pas un aléa transitoire (réseau, slippage)."""
+    """True if ``reason`` carries the signature of a STRUCTURAL failure (will
+    recur identically), not a transient hiccup (network, slippage)."""
     lower = (reason or "").lower()
     return any(marker in lower for marker in _STRUCTURAL_FAILURE_MARKERS)
 
@@ -149,22 +149,22 @@ def is_structural_swap_failure(reason: str) -> bool:
 async def recent_failed_swap(
     token_out: str, *, within_minutes: int, structural_within_minutes: int | None = None,
 ) -> bool:
-    """Vrai si la DERNIÈRE tentative de swap vers ``token_out`` (n'importe
-    quelle jambe d'entrée) est un échec technique (``status="failed"``) survenu
-    il y a moins de ``within_minutes`` -- cooldown léger après une panne
-    transitoire (RPC, slippage dépassé), pour la boucle de décision autonome du
-    pilote agent-wallet (18/07). Réutilise le journal déjà existant, aucune
-    nouvelle table -- jamais confondu avec ``momentum_blacklist.py`` (réservé
-    aux vraies menaces de sécurité confirmées, jamais une panne technique).
-    Si le DERNIER essai pour ce token a réussi ou a été bloqué (pas 'failed'),
-    ou n'existe pas du tout, le token n'est jamais mis en cooldown ici.
+    """True if the LATEST swap attempt toward ``token_out`` (whichever input
+    leg) is a technical failure (``status="failed"``) that happened less than
+    ``within_minutes`` ago -- light cooldown after a transient outage (RPC,
+    slippage exceeded), for the agent-wallet pilot's autonomous decision loop
+    (18/07). Reuses the already-existing journal, no new table -- never
+    confused with ``momentum_blacklist.py`` (reserved for real confirmed
+    security threats, never a technical failure). If the LATEST attempt for
+    this token succeeded or was blocked (not 'failed'), or doesn't exist at
+    all, the token is never put on cooldown here.
 
-    ``structural_within_minutes`` (19/07, optionnel) : si fourni ET que le
-    DERNIER échec est structurel (``is_structural_swap_failure``), ce cooldown
-    plus long remplace ``within_minutes`` pour ce cas précis -- évite de
-    retenter indéfiniment, toutes les ``within_minutes``, un token qui échouera
-    toujours pour la MÊME raison déterministe. ``None`` (défaut) préserve le
-    comportement historique (un seul cooldown, peu importe la cause)."""
+    ``structural_within_minutes`` (19/07, optional): if provided AND the
+    LATEST failure is structural (``is_structural_swap_failure``), this longer
+    cooldown replaces ``within_minutes`` for this specific case -- avoids
+    endlessly retrying, every ``within_minutes``, a token that will always
+    fail for the SAME deterministic reason. ``None`` (default) preserves the
+    historical behavior (a single cooldown, regardless of cause)."""
     await _ensure_table()
     token = (token_out or "").strip().lower()
     if not token:
@@ -172,9 +172,9 @@ async def recent_failed_swap(
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
             await db.execute(
-                # LOWER() des deux côtés : token_out est stocké TEL QUE fourni par
-                # l'appelant (record_transaction ne normalise pas la casse) --
-                # jamais supposer que tout appelant historique a déjà lowercasé.
+                # LOWER() on both sides: token_out is stored AS GIVEN by the
+                # caller (record_transaction doesn't normalize case) -- never
+                # assume every historical caller already lowercased it.
                 "SELECT status, created_at, reason FROM agent_wallet_tx_log "
                 "WHERE action_type = 'swap' AND LOWER(token_out) = ? "
                 "ORDER BY id DESC LIMIT 1",

@@ -1,4 +1,4 @@
-"""Workflow opérateur — tweet X en progression (apprendre → brouillon → validation → horaire)."""
+"""Operator workflow — X tweet in progress (learn → draft → approval → schedule)."""
 
 from __future__ import annotations
 
@@ -18,17 +18,18 @@ logger = logging.getLogger(__name__)
 WORKFLOW_PATH = data_dir() / "tweet_compose_workflow.json"
 INTEL_PATH = data_dir() / "tweet_compose_intel.json"
 
-# 19/07 -- incident réel : un workflow démarré une fois restait actif SANS EXPIRATION,
-# absorbant silencieusement tout message opérateur ultérieur (même complètement hors
-# sujet -- ex. "Ton portefeuille est composé de quoi ?", ou un prompt technique long
-# collé pour une tout autre tâche) tant qu'il n'était pas explicitement validé/annulé.
-# Trouvé bloqué depuis ~9h40 en prod, ayant avalé au moins deux messages opérateur
-# majeurs. Même famille que le bug #110 (vc_followup) déjà corrigé -- un intercepteur
-# "sticky" doit toujours avoir une sortie automatique, jamais dépendre uniquement d'une
-# action explicite de l'opérateur pour se désactiver.
+# 19/07 -- real incident: a workflow started once stayed active WITHOUT EXPIRING,
+# silently absorbing every subsequent operator message (even completely
+# unrelated -- e.g. "What's my portfolio made of?", or a long technical
+# prompt pasted for a totally different task) as long as it wasn't
+# explicitly validated/canceled. Found stuck for ~9h40 in prod, having
+# swallowed at least two major operator messages. Same family as bug #110
+# (vc_followup) already fixed -- a "sticky" interceptor must always have an
+# automatic exit, never depend solely on an explicit operator action to
+# deactivate.
 _WORKFLOW_STALE_MINUTES = 20
 
-# Angles d'apprentissage — rotation pour éviter le même tweet générique
+# Learning angles — rotated to avoid the same generic tweet
 _LEARN_ANGLES: tuple[str, ...] = (
     "autonomie ZHC concrète : quelles décisions marketing sans l'opérateur ?",
     "site Vanguard (ariavanguardzhc.com) : qu'est-ce qui manque aux visiteurs ?",
@@ -85,11 +86,11 @@ def _save(state: dict[str, Any]) -> None:
 
 
 def _is_stale(state: dict[str, Any]) -> bool:
-    """Un workflow non-idle sans interaction depuis `_WORKFLOW_STALE_MINUTES` est abandonné.
+    """A non-idle workflow with no interaction for `_WORKFLOW_STALE_MINUTES` is abandoned.
 
-    Fail-safe : un état sans `updated_at` (format antérieur à ce correctif, ou fichier
-    corrompu) est traité comme périmé -- mieux vaut réinitialiser un workflow non-idle
-    d'origine inconnue que risquer qu'il reste bloqué indéfiniment."""
+    Fail-safe: a state with no `updated_at` (format predating this fix, or a
+    corrupted file) is treated as stale -- better to reset a non-idle
+    workflow of unknown origin than risk it staying stuck indefinitely."""
     raw = state.get("updated_at")
     if not raw:
         return True
@@ -134,7 +135,7 @@ def _published_parent_key(entry: dict[str, Any]) -> str:
 
 
 def _sync_published_intel() -> list[dict[str, Any]]:
-    """Fusionne le ledger X dans l'intel compose — préserve follow_up_used."""
+    """Merges the X ledger into the compose intel — preserves follow_up_used."""
     from aria_core.x_publication_policy import list_published_tweets
 
     data = _load_intel()
@@ -164,7 +165,7 @@ def record_published_intel(
     tweet_id: str = "",
     at: str = "",
 ) -> None:
-    """Enregistre un tweet publié pour anti-répétition et chaînage follow-up."""
+    """Records a published tweet for anti-repetition and follow-up chaining."""
     data = _load_intel()
     posted_at = at or datetime.now(timezone.utc).isoformat()
     entry = {
@@ -231,7 +232,7 @@ async def _enrich_published_with_insights(
 
 
 async def _pick_follow_up_candidate() -> tuple[dict[str, Any], list[str]] | None:
-    """Tweet publié avec réponses X mémorisées — candidat à une seconde question."""
+    """Published tweet with memorized X replies — candidate for a second question."""
     published = await _enrich_published_with_insights(_sync_published_intel())
     candidates = [
         p for p in published
@@ -255,7 +256,7 @@ async def _store_compose_learning(
     topic: str,
     source: str = "compose_learning",
 ) -> None:
-    """Alimente la mémoire cognitive — carburant autonomie ZHC."""
+    """Feeds the cognitive memory — fuel for ZHC autonomy."""
     text = content.strip()
     if len(text) < 30:
         return
@@ -279,7 +280,7 @@ async def _distill_follow_up_learning(
     insights: list[str],
     draft: str,
 ) -> None:
-    """Condense tweet → réponses X → follow-up en leçon cognitive."""
+    """Condenses tweet → X replies → follow-up into a cognitive lesson."""
     signals = " | ".join(line[:90] for line in insights[:3])
     lesson = (
         f"Tweet published: {parent.get('text', '')[:200]}. "
@@ -331,7 +332,7 @@ def _pick_fallback_question() -> str:
 
 
 async def _gather_compose_context() -> str:
-    """Mémoire + anti-répétition pour brouillons variés et pertinents."""
+    """Memory + anti-repetition for varied, relevant drafts."""
     parts: list[str] = []
     published = await _enrich_published_with_insights(_sync_published_intel())
     intel = _load_intel()
@@ -472,7 +473,7 @@ _ROLE_COACHING = re.compile(
 
 
 def wants_role_coaching(text: str) -> bool:
-    """Opérateur aide ARIA à s'orienter — pas un brouillon FAQ/marketing."""
+    """Operator helps ARIA find her footing — not an FAQ/marketing draft."""
     return bool(_ROLE_COACHING.search(text))
 
 
@@ -508,7 +509,7 @@ async def _propose_role_questions(operator_message: str) -> str:
 
 
 async def _polish_english_tweet(text: str) -> str:
-    """Garantit un tweet 100 % anglais pour la politique @Aria_ZHC."""
+    """Guarantees a 100% English tweet for the @Aria_ZHC policy."""
     from aria_core.handle_registry import resolve_handles_in_text
     from aria_core.x_publication_policy import check_tweet_content, policy_rules_for_llm
 
@@ -640,7 +641,7 @@ async def _draft_tweet(state: dict[str, Any]) -> str:
 
 
 def is_tweet_operator_context(text: str) -> bool:
-    """Contexte publication X — ne pas router vers QI / création repo GitHub."""
+    """X publication context — do not route to QI / GitHub repo creation."""
     lower = text.lower()
     return bool(
         re.search(
@@ -653,7 +654,7 @@ def is_tweet_operator_context(text: str) -> bool:
 
 
 def extract_operator_supplied_tweet(text: str) -> str | None:
-    """Extrait un tweet déjà rédigé par l'opérateur (validation /x compose)."""
+    """Extracts a tweet already written by the operator (validation /x compose)."""
     stripped = text.strip()
     if not stripped:
         return None
@@ -687,7 +688,7 @@ def extract_operator_supplied_tweet(text: str) -> str | None:
 
 
 def _normalize_draft_text(raw: str) -> str:
-    """Extrait le tweet si le LLM ajoute un préambule."""
+    """Extracts the tweet if the LLM adds a preamble."""
     text = raw.strip().strip('"').strip("'")
     if not text:
         return ""
@@ -723,7 +724,7 @@ def _tz_label() -> str:
 
 
 def _parse_schedule(text: str) -> datetime | None:
-    """Parse heure locale opérateur → UTC."""
+    """Parses operator local time → UTC."""
     clean = text.strip().lower()
     tz = operator_tz()
     now_local = datetime.now(tz)
@@ -777,7 +778,7 @@ def _extract_handle_token(text: str) -> str | None:
 
 
 def _is_handle_addition_request(text: str) -> bool:
-    """Opérateur veut ajouter des @ (pas du texte libre)."""
+    """Operator wants to add @ mentions (not free-form text)."""
     clean = text.strip()
     if re.match(r"^\+[a-z0-9_]+$", clean, re.IGNORECASE):
         return True
@@ -794,7 +795,7 @@ def _is_handle_addition_request(text: str) -> bool:
 
 
 def _append_handles_to_draft(draft: str, user_text: str) -> tuple[str, bool]:
-    """Ajoute les mentions résolues depuis +pack ou @alias. Retourne (draft, appliqué)."""
+    """Adds mentions resolved from +pack or @alias. Returns (draft, applied)."""
     from aria_core.handle_registry import mentions_for_pack, resolve_handles_in_text
 
     token = _extract_handle_token(user_text)
@@ -863,7 +864,7 @@ def _wants_draft(text: str) -> bool:
 
 
 def _operator_wants_tweet_content(text: str) -> bool:
-    """L'opérateur veut le texte du tweet — pas des méta-consignes."""
+    """The operator wants the tweet text — not meta-instructions."""
     lower = text.lower()
     return bool(
         re.search(
@@ -1002,7 +1003,7 @@ def _fallback_ack_feedback(text: str) -> str:
 
 
 async def _acknowledge_operator_feedback(text: str, state: dict[str, Any]) -> str:
-    """Réponse intelligible quand l'opérateur affine le ton ou répond aux questions."""
+    """Intelligible reply when the operator refines the tone or answers the questions."""
     clean = text.strip()
     if _is_style_guidance(clean):
         prev = (state.get("style_guidance") or "").strip()
@@ -1101,7 +1102,7 @@ async def start_compose_workflow(*, operator_context: str = "") -> str:
 
 
 async def start_role_coaching_workflow(operator_message: str) -> str:
-    """ARIA pose ses questions sur son rôle ZHC — puis brouillon tweet sur demande."""
+    """ARIA asks her questions about her ZHC role — then a tweet draft on request."""
     state = _load()
     topic = await _propose_role_questions(operator_message)
     state.update(
@@ -1127,12 +1128,13 @@ async def start_role_coaching_workflow(operator_message: str) -> str:
 
 
 async def handle_workflow_message(text: str) -> str | None:
-    """Traite un message opérateur si workflow actif. None si inactif.
+    """Handles an operator message if the workflow is active. None if inactive.
 
-    Un workflow non-idle expiré (>_WORKFLOW_STALE_MINUTES sans interaction) est
-    réinitialisé silencieusement AVANT traitement -- incident réel 19/07 : sans ça, un
-    workflow oublié en phase intermédiaire absorbait tout message ultérieur, même
-    complètement hors sujet, indéfiniment (cf. commentaire sur _WORKFLOW_STALE_MINUTES)."""
+    An expired non-idle workflow (>_WORKFLOW_STALE_MINUTES with no
+    interaction) is silently reset BEFORE processing -- real incident 19/07:
+    without this, a workflow forgotten in an intermediate phase would absorb
+    every subsequent message, even completely unrelated, indefinitely (cf.
+    the comment on _WORKFLOW_STALE_MINUTES)."""
     state = _load()
     phase = state.get("phase", TweetComposePhase.IDLE.value)
     if phase != TweetComposePhase.IDLE.value and _is_stale(state):
@@ -1141,7 +1143,7 @@ async def handle_workflow_message(text: str) -> str | None:
             _WORKFLOW_STALE_MINUTES, phase,
         )
         state = {"phase": TweetComposePhase.IDLE.value, "draft": "", "history": (state.get("history") or [])[:29]}
-        _append_history(state, f"workflow expiré (>{_WORKFLOW_STALE_MINUTES}min inactif) -> réinitialisé")
+        _append_history(state, f"workflow expired (>{_WORKFLOW_STALE_MINUTES}min idle) -> reset")
         _save(state)
         phase = TweetComposePhase.IDLE.value
 
@@ -1350,7 +1352,7 @@ async def handle_workflow_message(text: str) -> str | None:
 
 
 async def process_scheduled_tweets() -> dict[str, Any]:
-    """Heartbeat — publie les tweets dont l'heure est passée."""
+    """Heartbeat — publishes tweets whose time has come."""
     state = _load()
     if state.get("phase") != TweetComposePhase.SCHEDULED.value:
         return {"published": 0}

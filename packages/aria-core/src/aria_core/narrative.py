@@ -19,7 +19,7 @@ AGENT_HANDLE_X = "@Aria_ZHC"
 TELEGRAM_BOT = "@Aria_ZHC_Bot"
 
 def peer_competition_policy(lang: str = "fr") -> str:
-    """Règle LLM interne — jamais affichée à l'opérateur ; zéro nom de concurrent."""
+    """Internal LLM rule — never shown to the operator; zero competitor names."""
     if lang == "fr":
         return (
             "Concurrence silencieuse : ne cite jamais d'autres entrepreneurs IA, agents pairs, "
@@ -35,14 +35,14 @@ def peer_competition_policy(lang: str = "fr") -> str:
 
 
 def no_unverified_search_state_claim_rule(lang: str = "fr") -> str:
-    """Règle LLM interne (14/07) — même famille que l'interdit GitHub existant
-    dans channel_rule (brain.py). Incident réel : sur une question sans aucun
-    mot-clé d'actu reconnu (ex. un défilé civil), aucune recherche web n'est
-    déclenchée, et le LLM a quand même affirmé un état technique précis
-    ("mon crawl web est à sec, mes derniers passages reviennent vides") --
-    une fabrication, puisque rien n'a été tenté ce tour-ci. Corrige
-    l'invariant plutôt qu'un mot-clé précis : ne jamais décrire un mécanisme
-    de recherche non utilisé, quel que soit le sujet."""
+    """Internal LLM rule (14/07) — same family as the existing GitHub
+    prohibition in channel_rule (brain.py). Real incident: on a question with
+    no recognized news keyword (e.g. a civil parade), no web search is
+    triggered, and the LLM still claimed a precise technical state
+    ("my web crawl is dry, my last passes come back empty") --
+    a fabrication, since nothing was attempted this turn. Fixes the
+    invariant rather than a specific keyword: never describe a search
+    mechanism that wasn't used, regardless of the topic."""
     if lang == "fr":
         return (
             "INTERDIT (même famille que les actions GitHub) : affirmer avoir vérifié un flux "
@@ -347,7 +347,7 @@ def telegram_online_notice(mode_label: str) -> str:
 
 
 def x_bio() -> str:
-    """Bio profil X (≤160) — identité, holding, site ↓, bot Telegram."""
+    """X profile bio (≤160) — identity, holding, site ↓, Telegram bot."""
     h = holding_name()
     text = (
         f"CAO · {h} — holding ZHC, site ↓. "

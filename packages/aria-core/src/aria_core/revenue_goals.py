@@ -104,8 +104,8 @@ def set_personal_objectives(objectives: list[str]) -> list[str]:
 
 
 def progress_summary(lang: str = "fr") -> str:
-    """Aucun mandat de revenu actif (pas de produit payant) -- affiche le total réel logué,
-    jamais un faux objectif/mandat."""
+    """No active revenue mandate (no paid product) -- shows the real logged
+    total, never a fake goal/mandate."""
     p = goal_progress()
     if lang == "en":
         return (

@@ -31,7 +31,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 8.0
-_MAX_RAW_HTML_CHARS = 40_000  # borne le travail de parsing, pas la taille réseau
+_MAX_RAW_HTML_CHARS = 40_000  # caps parsing work, not network size
 _MAX_SNAPSHOT_CHARS = 600
 _USER_AGENT = "Mozilla/5.0 (compatible; AriaVanguardBot/1.0; +https://ariavanguardzhc.com)"
 

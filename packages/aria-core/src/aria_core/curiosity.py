@@ -29,12 +29,12 @@ async def run_curiosity_cycle(*, notifier=None) -> dict:
     Fetch X volume → extract insights → store as pending knowledge → ask Telegram approval.
     Requires X API keys in .env. Without keys, returns setup instructions.
 
-    ``notifier`` (optionnel, ex. `Heartbeat._notify_telegram`) : si fourni ET
-    `opportunity_radar_enabled()`, mine aussi le MÊME fetch pour les comptes « opportunité »
-    (#52 -- tendances écosystème Base) et pousse un digest lecture-seule à l'opérateur. De
-    même pour `vc_intelligence_enabled()` (#58 -- thèses VC crypto) : synthèse LLM + proposition
-    d'issue si jugé durable. Jamais un appel X supplémentaire : réutilise `raw_items` déjà
-    récupéré ci-dessous, dans les deux cas.
+    ``notifier`` (optional, e.g. `Heartbeat._notify_telegram`): if provided AND
+    `opportunity_radar_enabled()`, also mines the SAME fetch for "opportunity"
+    accounts (#52 -- Base ecosystem trends) and pushes a read-only digest to
+    the operator. Same for `vc_intelligence_enabled()` (#58 -- crypto VC
+    theses): LLM synthesis + issue proposal if judged durable. Never an extra
+    X call: reuses `raw_items` already fetched below, in both cases.
     """
     if not settings.x_api_key and not settings.x_bearer_token:
         return {
@@ -118,7 +118,7 @@ async def run_curiosity_cycle(*, notifier=None) -> dict:
                         "curiosity",
                         f"[opportunity_radar] {opportunities_found} opportunité(s) surfacée(s)",
                     )
-                except Exception as exc:  # noqa: BLE001 -- un envoi raté ne bloque jamais le cycle
+                except Exception as exc:  # noqa: BLE001 -- a failed send never blocks the cycle
                     logger.warning("opportunity_radar notify failed: %s", exc)
 
     vc_intelligence_result = None

@@ -172,8 +172,8 @@ class SmartMoneySignal:
     wallets_analyzed: int = 0
     smart_wallets: list[str] = field(default_factory=list)
     score_delta: int = 0
-    # Signal brut qualité+quantité (0-100, avant mise à l'échelle en score_delta) --
-    # transparence/debug, jamais utilisé directement pour décider (cf. score_delta).
+    # Raw quality+quantity signal (0-100, before scaling into score_delta) --
+    # transparency/debug, never used directly to decide (cf. score_delta).
     quality_signal: float | None = None
     flags: list[str] = field(default_factory=list)
     available: bool = True
@@ -722,7 +722,7 @@ async def analyze_smart_money(
 #   handled as a dedicated project, not an end-of-evening fix.
 # ============================================================================
 #
-# SIXIÈME PASSAGE (15/07, revue Gemini + Grok convergentes). Corrigés ce
+# SIXTH PASS (15/07, converging Gemini + Grok review). Fixed this
 # pass: rug-pull immunity (the liquidity floor is now ASYMMETRIC -- gates
 # only the buy legs, never the sells, cf. the comment on
 # `pool_liquid_enough`/`_price_lookup` above -- a real bug in fix #160, not
@@ -1614,57 +1614,56 @@ async def _analyze_wallet_multi_token(
             # can never be exploited to fabricate a gain (it only reveals a
             # real price, possibly a bad one), so there's nothing to protect
             # on that side.
-            # min_useful_candles=1 (#182, 15/07, speed fix): the
-            # wallet-scoring ne consomme jamais qu'une seule bougie par
-            # `price_at` (la plus proche d'un timestamp donné) -- le seuil par
-            # défaut de 20 bougies (pensé pour /vc, qui a besoin d'assez de
-            # bougies pour du support/résistance) n'a aucun sens ici et coûte
-            # jusqu'à 2 appels GeckoTerminal supplémentaires par token pour un
-            # token jeune/microcap qui n'a pas encore 20 bougies journalières
-            # -- exactement le profil fréquent d'un wallet actif sur Base.
+            # min_useful_candles=1 (#182, 15/07, speed fix): wallet-scoring
+            # only ever consumes a single candle via `price_at` (the closest
+            # one to a given timestamp) -- the default threshold of 20
+            # candles (designed for /vc, which needs enough candles for
+            # support/resistance) makes no sense here and costs up to 2 extra
+            # GeckoTerminal calls per token for a young/microcap token that
+            # doesn't yet have 20 daily candles -- exactly the frequent
+            # profile of an active wallet on Base.
             ohlcv = await gecko.get_ohlcv(pool_meta.pool_address, network=network, min_useful_candles=1)
             if not pool_liquid_enough:
                 result.thin_liquidity_tokens.append(token_addr)
         else:
-            # `pool_liquid_enough` vaut toujours False ici (`pool_meta.available`
-            # est son premier facteur) -- mais ça ne veut PAS dire "trop peu
-            # liquide", ça veut dire "GeckoTerminal n'a trouvé AUCUN pool du
-            # tout", un cas DIFFÉRENT géré séparément ci-dessous (triangulation
-            # DexScreener/CMC). Si CMC recouvre un prix, `buy_blocked_thin_
-            # liquidity` (calculé après ce bloc) ne doit JAMAIS bloquer les
-            # achats sur cette base -- seul un pool GeckoTerminal RÉSOLU mais
-            # confirmé trop thin doit bloquer l'achat.
+            # `pool_liquid_enough` is always False here (`pool_meta.available`
+            # is its first factor) -- but that does NOT mean "too little
+            # liquidity", it means "GeckoTerminal found NO pool at all", a
+            # DIFFERENT case handled separately below (DexScreener/CMC
+            # triangulation). If CMC recovers a price, `buy_blocked_thin_
+            # liquidity` (computed after this block) must NEVER block buys on
+            # that basis -- only a GeckoTerminal pool that WAS RESOLVED but
+            # confirmed too thin should block the buy.
             ohlcv = None
-            # Gel des erreurs transitoires (15/07, revue Gemini) : `pool_meta.error`
-            # distingue déjà, en texte, un verdict de DONNÉE ("aucun pool trouvé
-            # pour ce token"/"aucun pool plausible...", cf. `resolve_primary_pool`)
-            # d'une panne D'INFRASTRUCTURE (`_get_json` préfixe TOUJOURS ces
-            # dernières par la constante `UNAVAILABLE` -- timeout/429/erreur
-            # serveur/réponse malformée, déjà retentées plusieurs fois avant
-            # d'abandonner). Seule la 2e catégorie doit empêcher ce token d'être
-            # marqué "scanné" dans le checkpoint incrémental (cf. `score_wallets`)
-            # -- un vrai "pas de pool" reste, lui, définitivement couvert (rien à
-            # re-tenter, le verdict ne changera pas tout seul).
+            # Freezing transient errors (15/07, Gemini review): `pool_meta.error`
+            # already distinguishes, in text, a DATA verdict ("no pool found
+            # for this token"/"no plausible pool...", cf. `resolve_primary_pool`)
+            # from an INFRASTRUCTURE failure (`_get_json` ALWAYS prefixes the
+            # latter with the `UNAVAILABLE` constant -- timeout/429/server
+            # error/malformed response, already retried several times before
+            # giving up). Only the 2nd category should prevent this token
+            # from being marked "scanned" in the incremental checkpoint (cf.
+            # `score_wallets`) -- a real "no pool" stays, itself, permanently
+            # covered (nothing to retry, the verdict won't change on its own).
             if pool_meta.error is not None and pool_meta.error.startswith(_gecko_unavailable):
                 result.transient_pricing_error_tokens.add(composite_key)
-            # Triangulation (#157, 14/07) : GeckoTerminal n'a pas résolu de
-            # pool -- avant de conclure "token illiquide", on croise avec
-            # DexScreener. `True` = écart réel entre les deux sources
-            # (DexScreener voit une paire que GeckoTerminal rate -- signal
-            # à creuser, pas un défaut du wallet) ; `False`/`None` (aucune
-            # paire confirmée, ou vérification elle-même indisponible)
-            # n'ajoute rien de plus que ce que `pool_lookup_errors` dit déjà.
+            # Triangulation (#157, 14/07): GeckoTerminal didn't resolve a
+            # pool -- before concluding "illiquid token", cross-check with
+            # DexScreener. `True` = a real gap between the two sources
+            # (DexScreener sees a pair that GeckoTerminal misses -- a signal
+            # worth digging into, not a wallet defect); `False`/`None` (no
+            # confirmed pair, or the check itself unavailable) adds nothing
+            # beyond what `pool_lookup_errors` already says.
             if await _dexscreener_has_any_pair(token_addr, chain=chain) is True:
                 result.gecko_dexscreener_gap_tokens.append(token_addr)
 
-            # 3e couche (#157, 14/07) : CoinMarketCap tente sa PROPRE
-            # résolution de pool, INDÉPENDAMMENT du résultat DexScreener
-            # ci-dessus -- le diagnostic "écart entre sources" et la
-            # tentative de pricing CMC ne sont pas la même chose. Même
-            # quand DexScreener confirme une paire (`True`), il ne fournit
-            # aucun prix historique (pas de méthode OHLCV dans ce client)
-            # -- CMC est quand même tenté, sinon le token reste non-valorisé
-            # alors qu'une paire est confirmée exister.
+            # 3rd tier (#157, 14/07): CoinMarketCap attempts its OWN pool
+            # resolution, INDEPENDENTLY of the DexScreener result above -- the
+            # "gap between sources" diagnostic and the CMC pricing attempt
+            # are not the same thing. Even when DexScreener confirms a pair
+            # (`True`), it provides no historical price (no OHLCV method on
+            # that client) -- CMC is still attempted, otherwise the token
+            # stays unpriced even though a pair is confirmed to exist.
             cmc_network = CMC_NETWORK_SLUGS.get(chain, "base")
             cmc_pool = await _cmc_resolve_primary_pool(token_addr, network_slug=cmc_network)
             if cmc_pool.available:
@@ -1673,12 +1672,12 @@ async def _analyze_wallet_multi_token(
                     ohlcv = cmc_ohlcv
                     result.cmc_recovered_tokens.append(token_addr)
 
-        # Prix par tx_hash exact (14/07) : tenté pour chaque tx_hash DISTINCT de
-        # ce token, dans l'ordre chronologique (cohérent avec le FIFO qui suit),
-        # plafonné à WEIGHTS.max_hash_priced_legs_per_token -- jamais une boucle
-        # non bornée sur un wallet très actif. Au-delà du plafond, les jambes
-        # restantes retombent directement sur pool+OHLCV (ci-dessous), jamais un
-        # abandon silencieux du reste du token.
+        # Exact tx_hash pricing (14/07): attempted for every DISTINCT tx_hash
+        # of this token, in chronological order (consistent with the FIFO
+        # that follows), capped at WEIGHTS.max_hash_priced_legs_per_token --
+        # never an unbounded loop on a very active wallet. Beyond the cap,
+        # the remaining legs fall straight back to pool+OHLCV (below), never
+        # a silent abandonment of the rest of the token.
         chain_client = chain_clients.get(chain)
         seen_hashes: set[str] = set()
         ordered_hashes: list[str] = []
@@ -1698,26 +1697,26 @@ async def _analyze_wallet_multi_token(
         else:
             from aria_core.services.geckoterminal import price_at
 
-            # Plancher asymétrique (15/07, revue Gemini -- immunité aux rug
-            # pulls) : `buy_tx_hashes` identifie les jambes d'ACHAT -- seules
-            # celles-ci sont bloquées si le pool GeckoTerminal a été RÉSOLU
-            # mais confirmé trop peu liquide (``pool_meta.available and not
-            # pool_liquid_enough`` -- PAS juste ``not pool_liquid_enough``,
-            # qui vaut aussi True quand GeckoTerminal n'a trouvé AUCUN pool
-            # du tout, un cas différent où CMC peut avoir recouvré un prix
-            # valide qu'il ne faut alors jamais bloquer). Une jambe de VENTE
-            # utilise l'OHLCV même si la liquidité actuelle du pool est sous
-            # le plancher (rug pull confirmé après un achat légitime) -- ce
-            # choix reste correct pour le cas qu'il vise (bloquer la vente
-            # aussi ferait juste réintroduire l'ancien bug d'immunité rug-pull
-            # dans l'autre sens). PRÉCISION (15/07, revue DeepSeek -- corrige
-            # une sur-affirmation de ce commentaire) : ça ne veut PAS dire que
-            # cette lecture est à l'abri de toute manipulation -- un prix de
-            # VENTE lu sur un pool à la liquidité manipulée (pump ponctuel
-            # plutôt que dump) peut tout aussi bien gonfler un PnL réalisé de
-            # façon fictive. C'est le miroir exact de la vulnérabilité dusting
-            # déjà documentée plus bas (perte fictive), symétrique côté gain --
-            # ni l'un ni l'autre n'est corrigé, cf. bloc de limites.
+            # Asymmetric floor (15/07, Gemini review -- rug-pull immunity):
+            # `buy_tx_hashes` identifies the BUY legs -- only those are
+            # blocked if the GeckoTerminal pool was RESOLVED but confirmed
+            # too illiquid (``pool_meta.available and not
+            # pool_liquid_enough`` -- NOT just ``not pool_liquid_enough``,
+            # which is also True when GeckoTerminal found NO pool at all, a
+            # different case where CMC may have recovered a valid price that
+            # must then never be blocked). A SELL leg uses OHLCV even if the
+            # pool's current liquidity is below the floor (rug pull confirmed
+            # after a legitimate buy) -- this choice remains correct for the
+            # case it targets (blocking the sell too would just reintroduce
+            # the old rug-pull immunity bug in the other direction).
+            # CLARIFICATION (15/07, DeepSeek review -- corrects an
+            # overstatement in this comment): this does NOT mean this
+            # reading is immune to any manipulation -- a SELL price read on a
+            # pool with manipulated liquidity (a one-off pump rather than a
+            # dump) can just as easily inflate a realized PnL fictitiously.
+            # This is the exact mirror of the dusting vulnerability already
+            # documented below (fictitious loss), symmetric on the gain side
+            # -- neither one is fixed, see the limitations block.
             buy_tx_hashes = {b_hash for _ts, _amt, b_hash in buys}
             buy_blocked_thin_liquidity = pool_meta.available and not pool_liquid_enough
 
@@ -1741,11 +1740,11 @@ async def _analyze_wallet_multi_token(
 
         if pool_meta.available and pool_meta.created_at:
             earliest_buy_ts = min(ts for ts, _amt, _hash in buys)
-            # 22/07 -- détection copy-trading/bot (skills/copy_trading_detection.py) :
-            # enregistre GRATUITEMENT l'horodatage de première entrée déjà calculé
-            # ci-dessus (zéro appel réseau supplémentaire). Jamais bloquant pour le
-            # scoring appelant -- une panne d'écriture ne doit jamais faire échouer
-            # une analyse smart-money par ailleurs valide.
+            # 22/07 -- copy-trading/bot detection (skills/copy_trading_detection.py):
+            # records the first-entry timestamp already computed above FOR FREE
+            # (zero extra network call). Never blocking for the calling scoring
+            # -- a write failure must never fail an otherwise valid smart-money
+            # analysis.
             try:
                 from aria_core.skills.copy_trading_detection import record_entry
 
@@ -1761,21 +1760,22 @@ async def _analyze_wallet_multi_token(
                 if ohlcv is not None and ohlcv.available and ohlcv.candles and _is_informed_entry(ohlcv, earliest_buy_ts):
                     result.informed_entry_tokens.append(token_addr)
         else:
-            # Diagnostic DexScreener (`gecko_dexscreener_gap_tokens`) et
-            # tentative CMC (`cmc_recovered_tokens`) sont déjà traités plus haut,
-            # au moment où l'échec GeckoTerminal est constaté -- ce compteur
-            # reste Gecko-only par construction (compte tout token sans pool
-            # Gecko résolu, que CMC ait ou non récupéré un prix ensuite).
+            # DexScreener diagnostic (`gecko_dexscreener_gap_tokens`) and CMC
+            # attempt (`cmc_recovered_tokens`) are already handled above, at
+            # the moment the GeckoTerminal failure is observed -- this
+            # counter stays Gecko-only by construction (counts every token
+            # with no resolved Gecko pool, whether or not CMC recovered a
+            # price afterwards).
             result.pool_lookup_errors += 1
 
     return result
 
 
 async def _funding_source(client: BlockscoutClient, wallet: str) -> tuple[str | None, bool]:
-    """Première entrée native trouvée dans l'historique borné du wallet -- une
-    BORNE, jamais garantie la vraie première transaction (Blockscout n'offre pas
-    de tri "plus ancien d'abord" bon marché, vérifié en direct). Renvoie
-    (source ou None, historique_tronqué)."""
+    """First native entry found in the wallet's bounded history -- a BOUND,
+    never a guarantee it's the real first transaction (Blockscout doesn't
+    offer a cheap "oldest first" sort, verified live). Returns
+    (source or None, history_truncated)."""
     result = await client.get_transactions_bounded(wallet, max_pages=WEIGHTS.funding_source_max_pages)
     if not result.available:
         return None, False
@@ -1795,9 +1795,9 @@ async def _funding_source(client: BlockscoutClient, wallet: str) -> tuple[str | 
 
 
 def _pairwise_convergence(addresses: list[str], funding_sources: dict[str, str]) -> list[tuple[str, str]]:
-    """Wallets soumis ENSEMBLE partageant la même source de financement initiale
-    (heuristique de réutilisation d'adresse de dépôt, Victor FC 2020) -- signal
-    croisé, jamais une éliminatoire automatique en dehors de ce contexte pairwise."""
+    """Wallets submitted TOGETHER that share the same initial funding source
+    (deposit-address reuse heuristic, Victor FC 2020) -- a cross-check
+    signal, never an automatic disqualifier outside this pairwise context."""
     pairs: list[tuple[str, str]] = []
     for i in range(len(addresses)):
         for j in range(i + 1, len(addresses)):
@@ -1821,10 +1821,10 @@ async def _ensure_wallet_scoring_tables() -> None:
             )
             """
         )
-        # Classement TVL dynamique des chaînes scannées (#157, 14/07) -- une
-        # ligne par chaîne (PRIMARY KEY), remplacée en bloc à chaque
-        # rafraîchissement réussi (cf. `refresh_chain_ranking_cache`), jamais
-        # un journal append-only comme `wallet_score_log` ci-dessus.
+        # Dynamic TVL ranking of scanned chains (#157, 14/07) -- one row per
+        # chain (PRIMARY KEY), replaced in bulk on every successful refresh
+        # (cf. `refresh_chain_ranking_cache`), never an append-only log like
+        # `wallet_score_log` above.
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS wallet_scoring_chain_ranking (
@@ -1839,9 +1839,8 @@ async def _ensure_wallet_scoring_tables() -> None:
 
 
 async def _log_wallet_score(wallet: str, report_json: str) -> None:
-    """Couche 4 (#157) -- écriture pure, aucune logique de scoring n'en dépend.
-    Permet une future recalibration contre le vrai track-record ARIA, non
-    construite maintenant."""
+    """Layer 4 (#157) -- pure write, no scoring logic depends on it. Enables
+    a future recalibration against ARIA's real track record, not built now."""
 
     await _ensure_wallet_scoring_tables()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1853,27 +1852,26 @@ async def _log_wallet_score(wallet: str, report_json: str) -> None:
 
 
 async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
-    """Dernière fiche connue de chaque AUTRE wallet déjà noté (`wallet_score_log`,
-    couche 4) -- une ligne par wallet, la plus récente. Base de comparaison du
-    classement percentile (15/07) : jamais le wallet contre lui-même.
+    """Latest known record of every OTHER already-scored wallet (`wallet_score_log`,
+    layer 4) -- one row per wallet, the most recent one. Comparison base for
+    the percentile ranking (15/07): never the wallet against itself.
 
-    Exclut les fiches `full_coverage=False` (15/07, revue Gemini -- pollution
-    asymétrique du percentile) : un wallet scanné une seule fois, dont seuls
-    quelques tokens prioritaires (récents/rentables, cf. `_select_tokens_for_
-    deep_analysis`) ont été analysés en profondeur, produit un score
-    temporairement plus favorable qu'un wallet à couverture complète -- le
-    comparer sur un pied d'égalité fausse la distribution (un wallet
-    moyennement actif mais entièrement couvert serait pénalisé face à des
-    fantômes de scans partiels chanceux). Une fiche sans champ `full_coverage`
-    du tout (format ancien, avant #157 suite) est traitée comme non couverte
-    -- exclue par prudence, jamais un défaut de donnée qui s'invite dans la
-    comparaison.
+    Excludes `full_coverage=False` records (15/07, Gemini review -- asymmetric
+    percentile pollution): a wallet scanned only once, of which only a few
+    priority tokens (recent/profitable, cf. `_select_tokens_for_
+    deep_analysis`) were analyzed in depth, produces a temporarily more
+    favorable score than a fully-covered wallet -- comparing them on equal
+    footing skews the distribution (a moderately active but fully covered
+    wallet would be penalized against lucky partial-scan ghosts). A record
+    with no `full_coverage` field at all (old format, before #157 follow-up)
+    is treated as uncovered -- excluded out of caution, never a data gap
+    that sneaks into the comparison.
 
-    Exclut aussi `price_confidence_low=True` (15/07, revue ChatGPT -- angle
-    mort de comparabilité) : un wallet dont le cost-basis repose majoritairement
-    sur des prix ESTIMÉS ne doit pas servir de référence pour juger un autre
-    wallet dont les prix sont majoritairement CONFIRMÉS -- même doctrine que
-    `full_coverage`, symétrique."""
+    Also excludes `price_confidence_low=True` (15/07, ChatGPT review --
+    comparability blind spot): a wallet whose cost-basis mostly relies on
+    ESTIMATED prices must not serve as a reference to judge another wallet
+    whose prices are mostly CONFIRMED -- same doctrine as `full_coverage`,
+    symmetric."""
     await _ensure_wallet_scoring_tables()
     exclude_l = exclude_wallet.lower()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1893,34 +1891,34 @@ async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
         try:
             entry = json.loads(report_json)
         except (TypeError, ValueError):
-            continue  # ligne corrompue/format ancien -- ignorée, jamais un crash du classement
+            continue  # corrupted row/old format -- skipped, never a ranking crash
         if not entry.get("full_coverage"):
             continue
         if entry.get("price_confidence_low"):
-            # Angle mort de comparabilité (15/07, revue ChatGPT) : un wallet dont
-            # le cost-basis repose majoritairement sur des prix ESTIMÉS (pas
-            # confirmés par exécution exacte) ne doit pas polluer la population
-            # de comparaison des AUTRES wallets -- même doctrine que full_coverage
-            # ci-dessus (une fiche à qualité de données douteuse n'est pas une
-            # référence fiable pour juger un autre wallet).
+            # Comparability blind spot (15/07, ChatGPT review): a wallet
+            # whose cost-basis mostly relies on ESTIMATED prices (not
+            # confirmed by exact execution) must not pollute the comparison
+            # population of OTHER wallets -- same doctrine as full_coverage
+            # above (a record with dubious data quality isn't a reliable
+            # reference to judge another wallet).
             continue
         parsed.append(entry)
     return parsed
 
 
 async def latest_score_for_wallet(wallet: str) -> float | None:
-    """Dernier ``composite_percentile`` connu pour CE wallet précis (lecture seule
-    dans ``wallet_score_log``, alimentée en continu par ``/walletqueue`` -- aucun
-    nouveau calcul réseau ici, juste un SELECT local).
+    """Latest known ``composite_percentile`` for THIS specific wallet
+    (read-only in ``wallet_score_log``, continuously fed by ``/walletqueue``
+    -- no new network computation here, just a local SELECT).
 
-    Distinct de ``_latest_scored_wallets`` (qui exclut ce wallet pour construire la
-    POPULATION de comparaison des autres) -- ici on veut l'inverse : le score de CE
-    wallet lui-même, peu importe qu'il ait servi ou non de référence pour d'autres.
-    ``None`` si le wallet n'a jamais été scoré (couverture partielle du chantier
-    wallet-scoring, cf. CLAUDE.md) ou si son ``composite_percentile`` n'a pas encore
-    de valeur (population de comparaison vide au moment de son scan) -- jamais une
-    valeur inventée, fail-open sur inconnu (l'appelant retombe sur son propre
-    fallback)."""
+    Distinct from ``_latest_scored_wallets`` (which excludes this wallet to
+    build the comparison POPULATION for others) -- here we want the
+    opposite: this wallet's OWN score, regardless of whether it served as a
+    reference for others. ``None`` if the wallet was never scored (partial
+    coverage of the wallet-scoring project, cf. CLAUDE.md) or if its
+    ``composite_percentile`` doesn't have a value yet (empty comparison
+    population at the time of its scan) -- never an invented value,
+    fail-open on unknown (the caller falls back to its own fallback)."""
     await _ensure_wallet_scoring_tables()
     wallet_l = wallet.lower()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1950,30 +1948,30 @@ def _diversification_ratio(entry: dict) -> float | None:
 
 
 async def _apply_comparative_ranking(card: WalletScoreCard) -> None:
-    """Classement comparatif (15/07, décision opérateur) : percentile de CE
-    wallet parmi tous les AUTRES wallets déjà notés, par axe puis composite.
-    Jamais un percentile sur une population vide -- `None` explicite, pas un
-    50% par défaut qui suggérerait une comparaison qui n'a pas eu lieu.
+    """Comparative ranking (15/07, operator decision): percentile of THIS
+    wallet among all OTHER already-scored wallets, by axis then composite.
+    Never a percentile on an empty population -- explicit `None`, not a
+    default 50% that would suggest a comparison that never happened.
 
-    `composite_percentile` ne moyenne QUE les axes de performance/skill
-    (win rate, Sortino, PnL, diversification) -- la durée de détention est un
-    trait comportemental (conviction vs. rotation), pas un axe "meilleur si
-    plus haut" sans ambiguïté (cf. recherche externe 15/07), donc affichée à
-    part, jamais fondue dans la moyenne composite."""
+    `composite_percentile` ONLY averages the performance/skill axes (win
+    rate, Sortino, PnL, diversification) -- holding period is a behavioral
+    trait (conviction vs. rotation), not an unambiguous "better if higher"
+    axis (cf. external research 15/07), so it's displayed separately, never
+    folded into the composite average."""
     others = await _latest_scored_wallets(card.address)
     card.compared_against_n_wallets = len(others)
     if not others:
         return
 
     def _percentile(value: float | None, population: list[float]) -> float | None:
-        """Percentile de rang MOYEN (15/07, revue externe -- lissage des
-        ex-æquo) : un wallet dont la valeur est comptée seulement contre les
-        AUTRES strictement inférieurs plaçait à tort tout wallet ex-æquo avec
-        la majorité au 0e percentile (ex. beaucoup de wallets à win_rate=0.5
-        pile) -- indiscernable d'un wallet réellement pire que tout le monde.
-        Convention statistique standard (percentile de rang moyen, cf.
-        `scipy.stats.percentileofscore(kind='mean')`) : les ex-æquo comptent
-        pour une demi-position plutôt que zéro."""
+        """AVERAGE rank percentile (15/07, external review -- tie smoothing):
+        a wallet whose value was counted only against OTHERS strictly lower
+        wrongly placed every wallet tied with the majority at the 0th
+        percentile (e.g. many wallets at exactly win_rate=0.5) --
+        indistinguishable from a wallet genuinely worse than everyone else.
+        Standard statistical convention (average rank percentile, cf.
+        `scipy.stats.percentileofscore(kind='mean')`): ties count for half a
+        position rather than zero."""
         if value is None or not population:
             return None
         below = sum(1 for p in population if p < value)
@@ -2001,30 +1999,30 @@ async def _apply_comparative_ranking(card: WalletScoreCard) -> None:
     card.composite_percentile = round(fmean(skill_axes), 1) if skill_axes else None
 
 
-# Plafond du classement TVL dynamique (#157, 14/07, décision opérateur) --
-# aujourd'hui inerte (13 chaînes confirmées au total, toutes < 20), gardé
-# générique si la liste confirmée grandit plus tard.
+# Cap on the dynamic TVL ranking (#157, 14/07, operator decision) --
+# inert today (13 confirmed chains in total, all < 20), kept generic in
+# case the confirmed list grows later.
 _MAX_RANKED_CHAINS = 20
 
-# Repli si le cache TVL n'a jamais tourné (premier déploiement) ou si
-# DefiLlama est indisponible -- jamais un /walletscore qui casse faute de
-# classement à jour. "bnb" absent (retiré de blockscout.CHAIN_IDS, 14/07,
-# Blockscout ne le sert pas).
+# Fallback if the TVL cache never ran (first deployment) or if
+# DefiLlama is unavailable -- never a /walletscore that breaks for lack of
+# an up-to-date ranking. "bnb" absent (removed from blockscout.CHAIN_IDS,
+# 14/07, Blockscout doesn't serve it).
 _FALLBACK_SCAN_CHAINS: tuple[str, ...] = ("base", "ethereum")
 
 
 async def refresh_chain_ranking_cache() -> bool:
-    """Rafraîchit `wallet_scoring_chain_ranking` depuis le classement TVL
-    DefiLlama (#157, 14/07) -- appelé par le heartbeat mensuel
-    (`wallet_scoring_chain_ranking_refresh`), jamais par un scan `/walletscore`
-    individuel. Sur échec DefiLlama, la table n'est JAMAIS vidée -- le dernier
-    classement réussi continue de servir jusqu'au prochain rafraîchissement
-    réussi. Retourne `True` si le cache a été mis à jour, `False` sinon."""
+    """Refreshes `wallet_scoring_chain_ranking` from the DefiLlama TVL
+    ranking (#157, 14/07) -- called by the monthly heartbeat
+    (`wallet_scoring_chain_ranking_refresh`), never by an individual
+    `/walletscore` scan. On DefiLlama failure, the table is NEVER cleared --
+    the last successful ranking keeps serving until the next successful
+    refresh. Returns `True` if the cache was updated, `False` otherwise."""
     from aria_core.services.defillama import fetch_chain_tvl_ranking
 
     ranking = await fetch_chain_tvl_ranking()
     if ranking is None:
-        logger.warning("refresh_chain_ranking_cache: DefiLlama indisponible -- cache TVL inchangé")
+        logger.warning("refresh_chain_ranking_cache: DefiLlama unavailable -- TVL cache unchanged")
         return False
 
     ranking = ranking[:_MAX_RANKED_CHAINS]
@@ -2039,43 +2037,45 @@ async def refresh_chain_ranking_cache() -> bool:
         )
         await db.commit()
 
-    logger.info("refresh_chain_ranking_cache: %s chaînes mises en cache (%s)", len(ranking), refreshed_at)
+    logger.info("refresh_chain_ranking_cache: %s chains cached (%s)", len(ranking), refreshed_at)
     return True
 
 
-# Restriction d'urgence Base-only (16/07, décision opérateur explicite) -- le
-# balayage 13-chaînes de DEFAULT_SCAN_CHAINS() (ci-dessous) a été identifié comme
-# la cause principale quantifiée de l'épuisement du quota Blockscout Pro (100k
-# crédits/4h) : chaque wallet en rattrapage refait le balayage complet des 13
-# chaînes à CHAQUE passage, jusqu'à ~14 passages pour un wallet très actif --
-# chiffré à ~5 460 crédits pour la seule boucle `get_token_transfers` d'UN wallet
-# (docs/HANDOFF, échange opérateur 16/07). Vérifié avant ce correctif : ni
-# `momentum_entry.py` ni `paper_trader.py` ne consomment le signal multi-chaînes
-# du wallet-scoring aujourd'hui -- aucune décision de trading n'en dépend (le
-# seuil #199 exige ~500 wallets scorés avant même d'envisager de l'utiliser).
-# Zéro perte fonctionnelle réelle à couper ici, entièrement réversible.
+# Emergency Base-only restriction (16/07, explicit operator decision) -- the
+# 13-chain sweep of DEFAULT_SCAN_CHAINS() (below) was identified as the main
+# quantified cause of Blockscout Pro quota exhaustion (100k credits/4h):
+# every wallet being caught up redoes the full 13-chain sweep on EVERY pass,
+# up to ~14 passes for a very active wallet -- quantified at ~5,460 credits
+# for the `get_token_transfers` loop alone for ONE wallet (docs/HANDOFF,
+# operator exchange 16/07). Verified before this fix: neither
+# `momentum_entry.py` nor `paper_trader.py` consume the wallet-scoring
+# multi-chain signal today -- no trading decision depends on it (threshold
+# #199 requires ~500 scored wallets before even considering using it).
+# Zero real functional loss from cutting this here, fully reversible.
 #
-# Court-circuit EXPLICITE, pas via `_MAX_RANKED_CHAINS` (qui donnerait la
-# chaîne #1 par TVL DefiLlama -- très probablement Ethereum, pas Base) : le
-# classement TVL dynamique n'est PAS supprimé, juste jamais consulté tant que
-# ce flag est actif. À lever quand le signal multi-chaînes sera réellement
-# consommé par une décision de trading (#199, pas encore tranché) -- repasser
-# `_BASE_ONLY_OVERRIDE` à `False` restaure le classement TVL existant sans
-# rien réécrire. Le plan de retenue des chaînes confirmées vides (#157 suite,
-# conçu le 16/07) reste valide tel quel pour ce jour-là, juste différé.
+# EXPLICIT short-circuit, not via `_MAX_RANKED_CHAINS` (which would give
+# chain #1 by DefiLlama TVL -- very likely Ethereum, not Base): the dynamic
+# TVL ranking is NOT removed, just never consulted while this flag is
+# active. To lift once the multi-chain signal is actually consumed by a
+# trading decision (#199, not yet decided) -- flipping
+# `_BASE_ONLY_OVERRIDE` back to `False` restores the existing TVL ranking
+# without rewriting anything. The plan to retain confirmed-empty chains
+# (#157 follow-up, designed 16/07) remains valid as-is for that day, just
+# deferred.
 _BASE_ONLY_OVERRIDE = True
 _BASE_ONLY_CHAINS: tuple[str, ...] = ("base",)
 
 
 async def DEFAULT_SCAN_CHAINS() -> tuple[str, ...]:
-    """Chaînes scannées par défaut par `/walletscore` -- lit le classement TVL
-    en cache (#157, 14/07), trié par rang. Repli sur `_FALLBACK_SCAN_CHAINS`
-    si le cache est vide (jamais tourné) OU inaccessible -- jamais une
-    exception qui casse un scan faute de classement à jour.
+    """Chains scanned by default by `/walletscore` -- reads the cached TVL
+    ranking (#157, 14/07), sorted by rank. Falls back to
+    `_FALLBACK_SCAN_CHAINS` if the cache is empty (never ran) OR
+    inaccessible -- never an exception that breaks a scan for lack of an
+    up-to-date ranking.
 
-    Restriction Base-only (16/07) en tête de fonction : retour anticipé avant
-    toute lecture du cache TVL tant que `_BASE_ONLY_OVERRIDE` est actif (voir
-    commentaire ci-dessus)."""
+    Base-only restriction (16/07) at the top of the function: early return
+    before any TVL cache read while `_BASE_ONLY_OVERRIDE` is active (see
+    comment above)."""
     if _BASE_ONLY_OVERRIDE:
         return _BASE_ONLY_CHAINS
     try:
@@ -2086,7 +2086,7 @@ async def DEFAULT_SCAN_CHAINS() -> tuple[str, ...]:
             )
             rows = await cursor.fetchall()
     except Exception:
-        logger.warning("DEFAULT_SCAN_CHAINS: cache TVL inaccessible -- repli sur %s", _FALLBACK_SCAN_CHAINS)
+        logger.warning("DEFAULT_SCAN_CHAINS: TVL cache inaccessible -- falling back to %s", _FALLBACK_SCAN_CHAINS)
         return _FALLBACK_SCAN_CHAINS
 
     if not rows:
@@ -2099,7 +2099,7 @@ class HardDisqualifiers:
     is_contract: bool = False
     wash_trading_suspected: bool = False
     financed_by_known_malicious: bool = False
-    financing_check_note: str | None = None  # info NON disqualifiante (ex. vérification GoPlus indisponible)
+    financing_check_note: str | None = None  # NON-disqualifying info (e.g. GoPlus check unavailable)
     reasons: list[str] = field(default_factory=list)
 
     @property
@@ -2130,51 +2130,50 @@ async def _hard_disqualifiers(
     if wash:
         reasons.append("Wash-trading suspecté (échanges concentrés sur une seule contrepartie, tous tokens confondus).")
 
-    # Financement par un wallet déjà connu comme malveillant -- GoPlus Malicious
-    # Address API (AML), #157 (14/07). RÉSERVE HONNÊTE (research doc du 14/07,
-    # vérifiée en direct, ÉTENDUE ce soir aux 13 chaînes du scan multi-chaînes) :
-    # les 13 chain_id confirmés répondent tous "code: 1, ok" avec le même format
-    # -- couverture FORMAT confirmée partout.
+    # Funding by a wallet already known to be malicious -- GoPlus Malicious
+    # Address API (AML), #157 (14/07). HONEST CAVEAT (research doc from
+    # 14/07, verified live, EXTENDED tonight to the 13 chains of the
+    # multi-chain scan): the 13 confirmed chain_ids all respond "code: 1, ok"
+    # with the same format -- FORMAT coverage confirmed everywhere.
     #
-    # Approfondi le même soir (2e test, adresses ACTIVES/connues cette fois --
-    # WETH predeploy sur unichain/soneium/mode, token CELO natif, WRBTC sur
-    # rootstock -- pas des adresses burn) sur celo/rootstock/unichain/soneium/
-    # mode :
-    # - `contract_address` reste "-1" (indéterminé) sur les 5 chaînes MÊME avec
-    #   une adresse très active et connue -- ce n'était donc PAS un artefact du
-    #   choix d'adresse burn du premier test : ce champ précis ne se résout
-    #   simplement jamais sur ces 5 chaînes, quelle que soit l'adresse.
-    # - MAIS `data_source`/`honeypot_related_address` (les champs réellement
-    #   liés à l'analyse de sécurité, pas `contract_address`) se comportent
-    #   différemment selon la chaîne : sur Unichain/Soneium/Mode, `data_source`
-    #   passe de `""` (adresse burn) à `"GoPlus"` (adresse active) et
-    #   `honeypot_related_address` de `"0"` à `"1"` -- une vraie analyse tourne
-    #   sur ces 3 chaînes une fois qu'il y a de l'activité à analyser. Sur
-    #   Celo/Rootstock, `data_source` reste `""` même avec une adresse active et
-    #   connue -- aucun signe d'analyse engagée sur ces 2 chaînes, sur les deux
-    #   adresses testées ce soir (burn et active).
-    # - Réserve à garder explicite : une seule adresse active testée par chaîne
-    #   ce soir, jamais une adresse effectivement flaggée malveillante nulle
-    #   part -- ceci documente un INDICE de couverture (Unichain/Soneium/Mode
-    #   probablement mieux couvertes que Celo/Rootstock), PAS une preuve
-    #   définitive d'absence de données sur Celo/Rootstock.
+    # Deepened the same night (2nd test, ACTIVE/known addresses this time --
+    # WETH predeploy on unichain/soneium/mode, native CELO token, WRBTC on
+    # rootstock -- not burn addresses) on celo/rootstock/unichain/soneium/mode:
+    # - `contract_address` stays "-1" (undetermined) on all 5 chains EVEN with
+    #   a very active, known address -- so this was NOT an artifact of the
+    #   burn-address choice in the first test: this specific field simply
+    #   never resolves on these 5 chains, whatever the address.
+    # - BUT `data_source`/`honeypot_related_address` (the fields actually
+    #   tied to security analysis, not `contract_address`) behave
+    #   differently depending on the chain: on Unichain/Soneium/Mode,
+    #   `data_source` goes from `""` (burn address) to `"GoPlus"` (active
+    #   address) and `honeypot_related_address` from `"0"` to `"1"` -- a real
+    #   analysis runs on these 3 chains once there's activity to analyze. On
+    #   Celo/Rootstock, `data_source` stays `""` even with an active, known
+    #   address -- no sign of analysis engaged on these 2 chains, on both
+    #   addresses tested tonight (burn and active).
+    # - Caveat to keep explicit: only one active address tested per chain
+    #   tonight, never an address actually flagged malicious anywhere -- this
+    #   documents a coverage HINT (Unichain/Soneium/Mode probably better
+    #   covered than Celo/Rootstock), NOT definitive proof of a lack of data
+    #   on Celo/Rootstock.
     #
-    # Conclusion pratique inchangée : filtre probabiliste supplémentaire,
-    # jamais présenté comme exhaustif, quelle que soit la chaîne -- la densité
-    # réelle des données malveillantes varie probablement par chaîne, avec un
-    # indice de couverture plus faible sur Celo/Rootstock. Fail-closed strict :
-    # une vérification indisponible reste "indisponible" (note informative, PAS
-    # une disqualification, PAS non plus un faux négatif silencieux qui dirait
-    # "non malveillant" sans le dire).
+    # Unchanged practical conclusion: an additional probabilistic filter,
+    # never presented as exhaustive, regardless of chain -- the real density
+    # of malicious-address data probably varies by chain, with a weaker
+    # coverage hint on Celo/Rootstock. Strict fail-closed: an unavailable
+    # check stays "unavailable" (an informative note, NOT a disqualification,
+    # NOR a silent false negative that would say "not malicious" without
+    # saying so).
     #
-    # `funding_source_chain` (#157, correction 14/07) : la chaîne où
-    # `funding_source` a RÉELLEMENT été trouvé (cf. score_wallets) -- jamais
-    # supposée Base par défaut désormais que le scan couvre 13 chaînes ; une
-    # adresse de financement peut légitimement vivre sur une chaîne différente
-    # de celle où le wallet trade. `CHAIN_IDS` (blockscout.py) est la SEULE
-    # source de vérité pour traduire le nom de chaîne en chain_id GoPlus --
-    # aucun registre dupliqué. Chaîne absente/inconnue : repli sur le défaut
-    # de `get_address_security` (Base), jamais un chain_id inventé.
+    # `funding_source_chain` (#157, fix 14/07): the chain where
+    # `funding_source` was ACTUALLY found (cf. score_wallets) -- never
+    # assumed to be Base by default now that the scan covers 13 chains; a
+    # funding address can legitimately live on a chain different from the
+    # one the wallet trades on. `CHAIN_IDS` (blockscout.py) is the ONLY
+    # source of truth for translating a chain name into a GoPlus chain_id --
+    # no duplicated registry. Missing/unknown chain: falls back to
+    # `get_address_security`'s default (Base), never an invented chain_id.
     financed_by_malicious = False
     financing_check_note: str | None = None
     if funding_source:
@@ -2214,96 +2213,97 @@ async def _hard_disqualifiers(
 @dataclass
 class WalletScoreCard:
     address: str
-    display_name: str | None = None  # ENS/Basename -- COSMÉTIQUE, jamais lu par aucun calcul de score
+    display_name: str | None = None  # ENS/Basename -- COSMETIC, never read by any score calculation
     available: bool = True
     error: str | None = None
 
     disqualified: bool = False
     disqualification_reasons: list[str] = field(default_factory=list)
-    financing_check_note: str | None = None  # info NON disqualifiante (ex. vérification GoPlus AML indisponible)
+    financing_check_note: str | None = None  # NON-disqualifying info (e.g. GoPlus AML check unavailable)
 
     tokens_found: int = 0
     tokens_analyzed: int = 0
     tokens_skipped_capped: bool = False
-    chains_scanned: list[str] = field(default_factory=list)  # chaînes où une activité réelle a été trouvée (#157, 14/07)
-    # 15/07, revue externe -- historique tronqué par le plafond de pagination
-    # Blockscout (2000 transferts/10 pages) : l'API avait ENCORE de la donnée
-    # au-delà de ce qui a été récupéré (jamais quand l'historique est
-    # réellement épuisé). Un wallet très actif peut donc manquer ses
-    # transferts les plus anciens -- risque de biais sur TOUS les axes
-    # (W/PnL/S/D) et le percentile, pas seulement `unmatched_sell_events`.
+    chains_scanned: list[str] = field(default_factory=list)  # chains where real activity was found (#157, 14/07)
+    # 15/07, external review -- history truncated by the Blockscout
+    # pagination cap (2000 transfers/10 pages): the API STILL had data
+    # beyond what was fetched (never when the history is genuinely
+    # exhausted). A very active wallet can therefore be missing its oldest
+    # transfers -- risk of bias on ALL axes (W/PnL/S/D) and the percentile,
+    # not just `unmatched_sell_events`.
     transfer_history_truncated: bool = False
 
-    # Scan incrémental persistant (#157 suite, 15/07) : `tokens_analyzed` ci-dessus
-    # reste "analysés CETTE passe" -- ces deux champs donnent la vue cumulative
-    # (couverture réelle du wallet au fil des appels successifs, cf.
-    # wallet_scan_state.py). `full_coverage=True` = tous les tokens connus à ce
-    # jour ont été vus au moins une fois ; un futur appel ne fait plus que
-    # rafraîchir l'activité nouvelle depuis le dernier scan.
+    # Persistent incremental scan (#157 follow-up, 15/07): `tokens_analyzed`
+    # above stays "analyzed THIS pass" -- these two fields give the
+    # cumulative view (real wallet coverage across successive calls, cf.
+    # wallet_scan_state.py). `full_coverage=True` = every token known as of
+    # today has been seen at least once; a future call then only refreshes
+    # new activity since the last scan.
     tokens_scanned_cumulative: int = 0
     full_coverage: bool = False
-    # Suivi permanent (15/07, #157 suite 2) : dernière activité on-chain RÉELLE
-    # jamais vue (max des timestamps de transferts observés), jamais régressée
-    # d'un passage à l'autre -- sert à mesurer une vraie inactivité (ex. wallet
-    # muet depuis 3 mois) pour `wallet_scan_queue.py`, distinct de la simple
-    # date du dernier SCAN (qui avance même sans nouvelle activité).
+    # Permanent tracking (15/07, #157 follow-up 2): last REAL on-chain
+    # activity ever seen (max of observed transfer timestamps), never
+    # regressed from one pass to the next -- used to measure genuine
+    # inactivity (e.g. wallet silent for 3 months) for `wallet_scan_queue.py`,
+    # distinct from the simple date of the last SCAN (which advances even
+    # without new activity).
     last_activity_at: datetime | None = None
 
     closed_trades_count: int = 0
     unpriced_legs: int = 0
-    pool_lookup_errors: int = 0  # tokens sans pool GeckoTerminal résolu (#157, 14/07 -- diagnostic)
-    gecko_dexscreener_gap_count: int = 0  # parmi eux, DexScreener voit une paire que GeckoTerminal a ratée (#157, 14/07)
-    cmc_price_recovery_count: int = 0  # parmi eux, valorisés via CoinMarketCap après échec GeckoTerminal (#157, 14/07)
-    # Défense anti-dust/scam-pool (15/07, revue Gemini) : tokens dont le pool a
-    # été résolu mais dont la liquidité confirmée est sous
-    # WEIGHTS.min_pool_liquidity_usd_for_pricing -- non valorisés (diagnostic
-    # PAR PASSE, même convention que les deux compteurs ci-dessus).
+    pool_lookup_errors: int = 0  # tokens with no resolved GeckoTerminal pool (#157, 14/07 -- diagnostic)
+    gecko_dexscreener_gap_count: int = 0  # among them, DexScreener sees a pair GeckoTerminal missed (#157, 14/07)
+    cmc_price_recovery_count: int = 0  # among them, priced via CoinMarketCap after GeckoTerminal failed (#157, 14/07)
+    # Anti-dust/scam-pool defense (15/07, Gemini review): tokens whose pool
+    # was resolved but whose confirmed liquidity is below
+    # WEIGHTS.min_pool_liquidity_usd_for_pricing -- not priced (diagnostic
+    # PER PASS, same convention as the two counters above).
     thin_liquidity_pricing_skipped_count: int = 0
-    # Ventes dont la queue FIFO d'achats s'est épuisée (15/07, revue Gemini) --
-    # signal possible de rebase/rendement DeFi jamais crédité comme profit,
-    # juste compté pour transparence. Diagnostic PAR PASSE (pas cumulatif).
+    # Sells whose FIFO buy queue ran dry (15/07, Gemini review) -- a possible
+    # rebase/DeFi-yield signal never credited as profit, just counted for
+    # transparency. Diagnostic PER PASS (not cumulative).
     unmatched_sell_events: int = 0
-    # Gel des erreurs transitoires (15/07, revue Gemini) : parmi les tokens de
-    # cette passe, combien ont échoué pour une cause d'infrastructure (jamais
-    # marqués "scanné" -- retentés au prochain appel). Diagnostic PAR PASSE.
+    # Freezing transient errors (15/07, Gemini review): among this pass's
+    # tokens, how many failed for an infrastructure reason (never marked
+    # "scanned" -- retried on the next call). Diagnostic PER PASS.
     transient_pricing_errors: int = 0
     win_rate: float | None = None
     realized_pnl_usd: float | None = None
     sortino: float | None = None
-    # Contradiction Sortino/PnL (15/07, revue externe -- biais d'asymétrie de
-    # taille) : `sortino` se calcule sur `return_i` (rendement EN %), jamais
-    # pondéré par le capital engagé sur le trade -- un wallet peut afficher un
-    # Sortino positif "honorable" (moyenne des % de rendement) alors que son
-    # PnL réalisé EN DOLLARS est négatif (une grosse perte en $ mais petite en
-    # %, plusieurs petits gains en % sur des mises minuscules). Ce drapeau
-    # capture le cas le plus flagrant et vérifiable À COUP SÛR (contradiction
-    # de SIGNE entre les deux, jamais une nuance à interpréter) -- il ne
-    # corrige pas le biais sous-jacent (non pondéré par la taille, cf. bloc de
-    # limites), il rend visible sa manifestation la plus trompeuse.
+    # Sortino/PnL contradiction (15/07, external review -- size-asymmetry
+    # bias): `sortino` is computed on `return_i` (return IN %), never
+    # weighted by capital committed on the trade -- a wallet can show an
+    # "honorable" positive Sortino (average of % returns) while its realized
+    # PnL IN DOLLARS is negative (a big loss in $ but small in %, several
+    # small % gains on tiny stakes). This flag captures the most flagrant
+    # case, reliably verifiable (a SIGN contradiction between the two, never
+    # a nuance to interpret) -- it doesn't fix the underlying bias (not
+    # weighted by size, cf. the limitations block), it makes its most
+    # misleading manifestation visible.
     sortino_pnl_contradiction: bool = False
     max_drawdown_pct: float | None = None
-    avg_holding_period_days: float | None = None  # 15/07 -- conviction vs. rotation rapide (méthodologie sourcée)
+    avg_holding_period_days: float | None = None  # 15/07 -- conviction vs. fast rotation (sourced methodology)
 
-    # Fenêtre récente (15/07, revue ChatGPT -- biais temporel) : en PLUS des
-    # métriques historiques complètes ci-dessus, jamais à leur place.
+    # Recent window (15/07, ChatGPT review -- temporal bias): IN ADDITION to
+    # the full historical metrics above, never in their place.
     win_rate_recent: float | None = None
     realized_pnl_usd_recent: float | None = None
     recent_window_trades_count: int = 0
 
-    # Confiance du cost-basis (15/07, revue Gemini) : part des jambes (achat +
-    # vente) valorisées par un prix d'exécution EXACT plutôt que par le repli
-    # marché OHLCV. Affiché À CÔTÉ du score (jamais en cachant win_rate/PnL),
-    # même doctrine que `sample_size_sufficient` -- pas le masquage complet de
+    # Cost-basis confidence (15/07, Gemini review): share of legs (buy +
+    # sell) priced by an EXACT execution price rather than the OHLCV market
+    # fallback. Displayed ALONGSIDE the score (never hiding win_rate/PnL),
+    # same doctrine as `sample_size_sufficient` -- not a full masking of
     # Sortino/robust_pnl/health_trend.
     price_confirmation_ratio: float | None = None
     price_confidence_low: bool = False
 
     diversification_profitable_tokens: int = 0
     diversification_total_tokens: int = 0
-    # Diversification pondérée par capital (15/07, revue ChatGPT) : part du
-    # capital total déployé qui a fini dans une position profitable -- complète
-    # (remplace pas) le ratio de comptage ci-dessus, mesure la CONCENTRATION du
-    # capital plutôt que la largeur des paris indépendants.
+    # Capital-weighted diversification (15/07, ChatGPT review): share of
+    # total deployed capital that ended up in a profitable position --
+    # complements (doesn't replace) the counting ratio above, measures
+    # capital CONCENTRATION rather than the breadth of independent bets.
     diversification_capital_weighted_ratio: float | None = None
 
     early_entry_recurrence_count: int = 0
@@ -2312,39 +2312,39 @@ class WalletScoreCard:
     funding_source: str | None = None
     funding_source_truncated: bool = False
 
-    # Détenteur croisé (21/07, pipeline d'extraction Blockscout Pro x402,
-    # `token_holder_intel.py`) : sur combien de tokens DÉJÀ EXTRAITS par ARIA
-    # (couverture partielle -- 147 tokens Base au 21/07, jamais un scan
-    # exhaustif de la chaîne) ce wallet apparaît comme détenteur notable.
-    # Signal de coordination POSSIBLE (market maker légitime OU cluster
-    # Sybil) -- catégorie différente d'une compétence de trading, jamais
-    # mélangé au `composite_percentile` (même doctrine que `funding_source`/
-    # `convergence_pairs` : informationnel, jamais un score).
+    # Cross-token holder (21/07, Blockscout Pro x402 extraction pipeline,
+    # `token_holder_intel.py`): on how many tokens ALREADY EXTRACTED by ARIA
+    # (partial coverage -- 147 Base tokens as of 21/07, never an exhaustive
+    # chain scan) does this wallet appear as a notable holder. POSSIBLE
+    # coordination signal (legitimate market maker OR Sybil cluster) -- a
+    # different category from trading skill, never mixed into
+    # `composite_percentile` (same doctrine as `funding_source`/
+    # `convergence_pairs`: informational, never a score).
     cross_token_holdings: list[dict] = field(default_factory=list)
     cross_token_holder_count: int = 0
 
-    # Copy-trading/bot (22/07, skills/copy_trading_detection.py) : entre-t-il
-    # systématiquement 5-15 min après un AUTRE wallet déjà scoré, sur plusieurs
-    # tokens distincts ? Même doctrine que cross_token_holdings ci-dessus --
-    # informationnel, JAMAIS mélangé au composite_percentile (design validé
-    # opérateur 22/07 -- Option 1 : le composite reste pur performance).
+    # Copy-trading/bot (22/07, skills/copy_trading_detection.py): does it
+    # systematically enter 5-15 min after ANOTHER already-scored wallet, on
+    # several distinct tokens? Same doctrine as cross_token_holdings above --
+    # informational, NEVER mixed into composite_percentile (design validated
+    # by the operator 22/07 -- Option 1: the composite stays pure performance).
     copy_trading_flag: str | None = None  # copy_trading_suspected/independent/unknown
     copy_trading_points: list[str] = field(default_factory=list)
 
-    # Échantillon minimum + robustesse anti-chance + tendance dans le temps
-    # (15/07, décision opérateur). Tous calculés sur `cumulative_trades`
-    # (l'historique complet archivé, pas seulement ce lot) -- s'affinent au
-    # fil des scans successifs, même doctrine que le reste du score cumulatif.
+    # Minimum sample size + anti-luck robustness + trend over time (15/07,
+    # operator decision). All computed on `cumulative_trades` (the full
+    # archived history, not just this batch) -- refine themselves over
+    # successive scans, same doctrine as the rest of the cumulative score.
     wallet_age_days: float | None = None
     total_swaps: int = 0
-    sample_size_sufficient: bool = False  # âge >= min_wallet_age_days ET swaps >= min_total_swaps
-    robust_pnl_positive: bool | None = None  # None = pas assez de trades pour ce test
-    health_trend: str | None = None  # "amélioration" / "stable" / "dégradation" / None (pas assez de trades)
+    sample_size_sufficient: bool = False  # age >= min_wallet_age_days AND swaps >= min_total_swaps
+    robust_pnl_positive: bool | None = None  # None = not enough trades for this test
+    health_trend: str | None = None  # "amélioration" / "stable" / "dégradation" / None (not enough trades)
 
-    # Classement comparatif (15/07) : percentile de CE wallet parmi tous les
-    # wallets déjà notés (wallet_score_log), par axe puis composite. None tant
-    # qu'il n'y a pas d'autres wallets notés pour comparer (jamais un
-    # percentile inventé sur une population vide/unitaire).
+    # Comparative ranking (15/07): percentile of THIS wallet among all
+    # already-scored wallets (wallet_score_log), by axis then composite. None
+    # as long as there are no other scored wallets to compare against (never
+    # an invented percentile on an empty/single-entry population).
     percentile_win_rate: float | None = None
     percentile_sortino: float | None = None
     percentile_pnl: float | None = None
@@ -2366,12 +2366,12 @@ class WalletScoringReport:
     error: str | None = None
 
 
-# Libellés d'affichage Telegram/heartbeat (15/07 suite -- factorisé depuis
-# telegram_bot.py pour que `wallet_scan_queue.py` réutilise EXACTEMENT le même
-# texte que `/walletscore`, jamais un second formatage divergent). Uniquement
-# pour les noms de chaîne où une simple capitalisation donne un résultat
-# trompeur/moche -- tout le reste dérive de blockscout.CHAIN_IDS.keys() via
-# .capitalize(), jamais une 2e liste statique des 13 noms à tenir à jour.
+# Telegram/heartbeat display labels (15/07 follow-up -- factored out of
+# telegram_bot.py so `wallet_scan_queue.py` reuses EXACTLY the same text as
+# `/walletscore`, never a second, diverging format). Only for chain names
+# where plain capitalization gives a misleading/ugly result -- everything
+# else derives from blockscout.CHAIN_IDS.keys() via .capitalize(), never a
+# 2nd static list of the 13 names to keep in sync.
 _CHAIN_LABEL_OVERRIDES = {"zksync": "zkSync Era"}
 
 
@@ -2380,9 +2380,10 @@ def chain_display_label(chain: str) -> str:
 
 
 def format_wallet_score_card_lines(card: WalletScoreCard) -> list[str]:
-    """Formate une fiche wallet pour affichage Telegram -- réutilisée par
-    `/walletscore` (analyse immédiate) ET `wallet_scan_queue.py` (analyse en
-    arrière-plan), jamais un second texte divergent pour le même contenu."""
+    """Formats a wallet record for Telegram display -- reused by
+    `/walletscore` (immediate analysis) AND `wallet_scan_queue.py`
+    (background analysis), never a second diverging text for the same
+    content."""
     lines = [f"\n— {card.address}" + (f" ({card.display_name})" if card.display_name else "")]
     if not card.available:
         lines.append(f"  Indisponible : {card.error}")
@@ -2443,9 +2444,9 @@ def format_wallet_score_card_lines(card: WalletScoreCard) -> list[str]:
 
 
 def format_wallet_scoring_report(report: WalletScoringReport) -> str:
-    """Texte Telegram complet pour un rapport `score_wallets` -- même contenu
-    que la réponse synchrone de `/walletscore`, réutilisable tel quel par le
-    cycle de fond (`wallet_scan_queue.py`)."""
+    """Full Telegram text for a `score_wallets` report -- same content as
+    the synchronous `/walletscore` reply, reusable as-is by the background
+    cycle (`wallet_scan_queue.py`)."""
     lines = ["🕵️ Évaluation smart-wallet — confirmation/contexte, JAMAIS un signal de copy-trade."]
     for card in report.wallets:
         lines.extend(format_wallet_score_card_lines(card))
@@ -2458,11 +2459,11 @@ def format_wallet_scoring_report(report: WalletScoringReport) -> str:
 
 
 def _suspect_positive_flag(card: WalletScoreCard) -> bool:
-    """Couche 3 (#157) -- SÉPARÉ du score composite, jamais fondu dans une
-    moyenne. Vrai si le wallet dépasse un seuil statique sur au moins
-    `WEIGHTS.suspect_positive_min_axes` axes indépendants simultanément. Seuils
-    statiques de départ (pas de vrais percentiles tant qu'il n'y a pas
-    d'historique ARIA -- cf. couche 4), révisables."""
+    """Layer 3 (#157) -- SEPARATE from the composite score, never folded into
+    an average. True if the wallet exceeds a static threshold on at least
+    `WEIGHTS.suspect_positive_min_axes` independent axes simultaneously.
+    Static starting thresholds (no real percentiles until there's an ARIA
+    track record -- cf. layer 4), revisable."""
     axes = 0
     if card.win_rate is not None and card.win_rate >= WEIGHTS.suspect_win_rate_min:
         axes += 1
@@ -2633,11 +2634,11 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
                  "autre(s) wallet(s) suivi(s)"
         )
         if card.composite_percentile is not None and card.price_confidence_low:
-            # Angle mort de comparabilité (15/07, revue ChatGPT) : le drapeau de
-            # confiance basse vivait ailleurs dans le rapport, jamais rattaché au
-            # chiffre du percentile lui-même -- un lecteur (humain ou LLM de
-            # synthèse) pouvait présenter un excellent classement comme fiable
-            # sans le relier à un cost-basis majoritairement estimé.
+            # Comparability blind spot (15/07, ChatGPT review): the
+            # low-confidence flag lived elsewhere in the report, never
+            # attached to the percentile figure itself -- a reader (human or
+            # synthesis LLM) could present an excellent ranking as reliable
+            # without linking it to a mostly-estimated cost-basis.
             lines.append(
                 "ATTENTION : ce percentile repose majoritairement sur des prix estimés "
                 f"(confiance du cost-basis {card.price_confirmation_ratio:.0%}, sous le seuil de "
@@ -2703,10 +2704,10 @@ def _valid_address(address: str) -> bool:
 
 
 async def _resolve_copy_trading(card: "WalletScoreCard") -> None:
-    """Corrèle les entrées de ce wallet sur CHAQUE chaîne où une activité réelle a
-    été trouvée (`card.chains_scanned`) et fusionne le résultat -- un wallet
-    multi-chaînes ne doit jamais être jugé sur une seule chaîne arbitraire. Best-
-    effort, jamais bloquant pour le scoring appelant."""
+    """Correlates this wallet's entries across EVERY chain where real
+    activity was found (`card.chains_scanned`) and merges the result -- a
+    multi-chain wallet must never be judged on a single arbitrary chain.
+    Best-effort, never blocking for the calling scoring."""
     from aria_core.skills.copy_trading_detection import (
         CopyTradingFacts,
         gather_copy_trading_facts,
@@ -2733,7 +2734,7 @@ async def _resolve_copy_trading(card: "WalletScoreCard") -> None:
         verdict = judge_copy_trading(merged)
         card.copy_trading_flag = verdict.flag
         card.copy_trading_points = verdict.points
-    except Exception:  # noqa: BLE001 — signal bonus, jamais bloquant
+    except Exception:  # noqa: BLE001 — bonus signal, never blocking
         card.copy_trading_flag = "unknown"
 
 
@@ -2747,35 +2748,35 @@ async def score_wallets(
     goplus=None,
     max_tokens: int | None = None,
 ) -> WalletScoringReport:
-    """Point d'entrée wallet-centrique (#157) : 1 à 3 adresses -> disqualifiants
-    durs, score composite, drapeau suspect positif, thèse LLM. Toujours un
-    signal de confirmation/contexte, jamais un déclencheur (même règle absolue
-    que `analyze_smart_money`).
+    """Wallet-centric entry point (#157): 1 to 3 addresses -> hard
+    disqualifiers, composite score, suspect-positive flag, LLM thesis.
+    Always a confirmation/context signal, never a trigger (same absolute
+    rule as `analyze_smart_money`).
 
-    Multi-chaînes EVM (#157, 14/07, décision opérateur explicite) : une même
-    adresse 0x est valide sur toutes les chaînes EVM -- ARIA essaie chaque
-    chaîne et CONSOLIDE en un seul score (pas un score par chaîne), plafond de
-    tokens analysés appliqué globalement sur l'ensemble consolidé. ``chains``
-    (dict chaîne -> client) permet d'injecter un registre explicite (tests, ou
-    un sous-ensemble de chaînes) ; à défaut, ``client`` seul retombe sur un
-    comportement mono-chaîne "base" STRICTEMENT inchangé (chemin historique,
-    tous les tests existants) ; si ni l'un ni l'autre n'est fourni, le
-    classement TVL dynamique (`DEFAULT_SCAN_CHAINS()`, #157 14/07 -- DefiLlama,
-    rafraîchi mensuellement par le heartbeat, repli sur Base/Ethereum si le
-    cache n'a jamais tourné) est utilisé. Solana n'est PAS EVM (chantier
-    séparé, hors scope) -- jamais dans ce registre.
+    EVM multi-chain (#157, 14/07, explicit operator decision): the same 0x
+    address is valid on every EVM chain -- ARIA tries each chain and
+    CONSOLIDATES into a single score (not one score per chain), the
+    analyzed-tokens cap applied globally on the consolidated whole.
+    ``chains`` (dict chain -> client) allows injecting an explicit registry
+    (tests, or a subset of chains); failing that, ``client`` alone falls
+    back to a STRICTLY unchanged single-chain "base" behavior (historical
+    path, all existing tests); if neither is provided, the dynamic TVL
+    ranking (`DEFAULT_SCAN_CHAINS()`, #157 14/07 -- DefiLlama, refreshed
+    monthly by the heartbeat, falls back to Base/Ethereum if the cache never
+    ran) is used. Solana is NOT EVM (separate project, out of scope) --
+    never in this registry.
 
-    PRÉCISION DE PORTÉE (15/07, revue ChatGPT -- incohérence relevée entre
-    cette docstring et la limite "ponts cross-chain" documentée plus haut) :
-    "consolidé" signifie ici que les trades/métriques de TOUTES les chaînes
-    scannées sont agrégés dans UN SEUL jeu de chiffres (win_rate/PnL/Sortino/
-    etc. mélangent les trades Base et Ethereum d'un même wallet, par exemple)
-    -- PAS que le cost-basis d'UNE position suit une continuité à travers un
-    bridge. Un achat sur Base puis un pont vers Arbitrum puis une vente sur
-    Arbitrum (économiquement UN seul trade) est vu comme DEUX événements
-    FIFO indépendants et non reliés (cf. limite "ponts cross-chain" plus
-    haut) -- consolidation des MÉTRIQUES par wallet, jamais continuité du
-    cost-basis à travers les bridges.
+    SCOPE CLARIFICATION (15/07, ChatGPT review -- inconsistency spotted
+    between this docstring and the "cross-chain bridges" limitation
+    documented above): "consolidated" here means that trades/metrics from
+    ALL scanned chains are aggregated into A SINGLE set of numbers
+    (win_rate/PnL/Sortino/etc. mix a given wallet's Base and Ethereum
+    trades, for instance) -- NOT that ONE position's cost-basis follows a
+    continuity across a bridge. A buy on Base then a bridge to Arbitrum then
+    a sell on Arbitrum (economically ONE single trade) is seen as TWO
+    independent, unlinked FIFO events (cf. "cross-chain bridges" limitation
+    above) -- consolidation of METRICS per wallet, never cost-basis
+    continuity across bridges.
     """
     if not addresses:
         return WalletScoringReport(available=False, error="aucune adresse fournie")
@@ -2808,23 +2809,24 @@ async def score_wallets(
         funding_source_chain: str | None = None
         any_chain_available = False
         last_error: str | None = None
-        # 15/07, revue externe -- historique tronqué par le plafond de
-        # pagination (2000 transferts/10 pages) : `TokenTransfersResult.
-        # truncated` signale quand Blockscout avait ENCORE de la donnée
-        # (`next_page_params`) alors qu'on a arrêté à cause du plafond, jamais
-        # quand l'historique est réellement épuisé. Sans ce signal, un wallet
-        # très actif (> 2000 transferts ERC-20 vie entière) verrait ses
-        # premiers achats silencieusement absents du FIFO -- des ventes plus
-        # tard dans l'historique deviendraient des `unmatched_sell_events` à
-        # tort, biaisant potentiellement W/PnL/S/D et le percentile.
+        # 15/07, external review -- history truncated by the pagination cap
+        # (2000 transfers/10 pages): `TokenTransfersResult.
+        # truncated` signals when Blockscout STILL had data
+        # (`next_page_params`) but we stopped because of the cap, never
+        # when the history is genuinely exhausted. Without this signal, a
+        # very active wallet (> 2000 lifetime ERC-20 transfers) would have
+        # its earliest buys silently missing from the FIFO -- later sells
+        # in the history would wrongly become `unmatched_sell_events`,
+        # potentially biasing W/PnL/S/D and the percentile.
         transfers_truncated = False
 
         for chain, chain_client in chain_clients.items():
-            # 22/07 -- décision opérateur explicite ("soulageons au maximum Blockscout") :
-            # essaie Alchemy/Moralis en premier sur "base" (seule chaîne vérifiée), retombe
-            # sur Blockscout (comportement historique STRICTEMENT inchangé) si le gate est
-            # OFF, la chaîne n'est pas "base", ou les deux fournisseurs rapides échouent --
-            # jamais un changement de comportement pour une session qui n'active pas le gate.
+            # 22/07 -- explicit operator decision ("let's relieve Blockscout
+            # as much as possible"): tries Alchemy/Moralis first on "base"
+            # (the only verified chain), falls back to Blockscout (STRICTLY
+            # unchanged historical behavior) if the gate is OFF, the chain
+            # isn't "base", or both fast providers fail -- never a behavior
+            # change for a session that doesn't enable the gate.
             transfers_result = None
             if chain == "base":
                 from aria_core.services import wallet_transfers_fast
@@ -2857,10 +2859,10 @@ async def score_wallets(
                 fs, trunc = await _funding_source(chain_client, wallet)
                 if fs:
                     funding_source, funding_truncated = fs, trunc
-                    # Chaîne RÉELLE où funding_source a été trouvé (#157,
-                    # correction 14/07) -- jamais supposée Base par défaut :
-                    # une adresse de financement peut vivre sur une chaîne
-                    # différente de celle où le wallet trade ses tokens.
+                    # REAL chain where funding_source was found (#157,
+                    # fix 14/07) -- never assumed to be Base by default: a
+                    # funding address can live on a chain different from the
+                    # one the wallet trades its tokens on.
                     funding_source_chain = chain
 
         if not any_chain_available:
@@ -2873,36 +2875,37 @@ async def score_wallets(
         card.chains_scanned = chains_with_data
         card.transfer_history_truncated = transfers_truncated
 
-        # Détenteur croisé (21/07) -- lecture locale pure (aucun appel réseau,
-        # jamais bloquant : une panne de lecture SQLite ne doit jamais casser
-        # un scoring déjà en cours). Import différé, même patron que
-        # wallet_scan_state ci-dessus (anti-cycle).
+        # Cross-token holder (21/07) -- pure local read (no network call,
+        # never blocking: a SQLite read failure must never break a scoring
+        # already in progress). Deferred import, same pattern as
+        # wallet_scan_state above (anti-cycle).
         from aria_core import token_holder_intel
 
         try:
             card.cross_token_holdings = await token_holder_intel.wallet_cross_token_holdings(wallet)
-        except Exception:  # noqa: BLE001 -- informationnel, jamais bloquant
-            logger.warning("score_wallets: lecture cross_token_holdings échouée pour %s", wallet)
+        except Exception:  # noqa: BLE001 -- informational, never blocking
+            logger.warning("score_wallets: cross_token_holdings read failed for %s", wallet)
             card.cross_token_holdings = []
         card.cross_token_holder_count = len(card.cross_token_holdings)
 
-        # Scan incrémental persistant (#157 suite, 15/07) : ne ré-analyse QUE les
-        # tokens jamais vus, ou dont l'activité a évolué depuis le dernier scan
-        # (nouveau transfert postérieur à `checkpoint.last_scan_at`) -- jamais les
-        # 680 tokens d'un coup, jamais non plus une re-analyse inutile d'un token
-        # déjà couvert et inchangé.
+        # Persistent incremental scan (#157 follow-up, 15/07): only
+        # re-analyzes tokens never seen, or whose activity evolved since the
+        # last scan (a new transfer later than `checkpoint.last_scan_at`) --
+        # never all 680 tokens at once, nor a useless re-analysis of a token
+        # already covered and unchanged.
         from aria_core.services import wallet_scan_state
 
         checkpoint = await wallet_scan_state.get_checkpoint(wallet)
-        # `get_token_transfers` est plafonné (2000 transferts/10 pages) -- pour un
-        # wallet très actif, la fenêtre des "N derniers transferts" capturée à CE
-        # passage peut différer du passage précédent (nouvelle activité qui pousse
-        # d'anciens tokens hors de la fenêtre), faisant apparaître un total PLUS
-        # PETIT qu'avant. Jamais laisser ce total redescendre : (1) ça rendrait la
-        # progression affichée ("X/Y tokens couverts") incohérente d'un cycle à
-        # l'autre, (2) surtout, ça pourrait déclencher une fausse "couverture 100%"
-        # si le total apparent tombe sous ce qui est déjà scanné, alors qu'il reste
-        # en réalité des tokens jamais vus, juste hors de cette fenêtre-ci.
+        # `get_token_transfers` is capped (2000 transfers/10 pages) -- for a
+        # very active wallet, the "N latest transfers" window captured on
+        # THIS pass may differ from the previous pass (new activity pushing
+        # older tokens out of the window), making the total appear SMALLER
+        # than before. Never let this total go down: (1) it would make the
+        # displayed progress ("X/Y tokens covered") inconsistent from one
+        # cycle to the next, (2) more importantly, it could trigger a false
+        # "100% coverage" if the apparent total drops below what's already
+        # scanned, even though tokens never seen still exist in reality,
+        # just outside this particular window.
         total_found = max(len(grouped), checkpoint.tokens_found_total)
 
         def _needs_scan(key: str, transfers: list[TokenTransfer]) -> bool:
@@ -2924,8 +2927,8 @@ async def score_wallets(
         card.tokens_skipped_capped = skipped > 0
         if card.tokens_skipped_capped:
             logger.info(
-                "score_wallets: wallet %s -- plafond de %s tokens atteint (%s restants à couvrir, "
-                "sélection par round-trip puis récence/nombre de trades, toutes chaînes confondues)",
+                "score_wallets: wallet %s -- cap of %s tokens reached (%s remaining to cover, "
+                "selection by round-trip then recency/trade count, all chains combined)",
                 wallet, cap, skipped,
             )
 
@@ -2936,9 +2939,9 @@ async def score_wallets(
         if funding_source:
             funding_sources[wallet.lower()] = funding_source
 
-        # Analyse multi-token AVANT les disqualifiants durs : fournit les pools
-        # réellement résolus par token, utilisés ci-dessous pour généraliser
-        # l'exclusion wash-trading sans faux positif (#157, correction 14/07).
+        # Multi-token analysis BEFORE hard disqualifiers: provides the pools
+        # actually resolved per token, used below to generalize the
+        # wash-trading exclusion without a false positive (#157, fix 14/07).
         multi = await _analyze_wallet_multi_token(wallet, selected_transfers, gecko=gecko, chain_clients=chain_clients)
         card.unpriced_legs = multi.unpriced_legs
         card.pool_lookup_errors = multi.pool_lookup_errors
@@ -2948,29 +2951,31 @@ async def score_wallets(
         card.unmatched_sell_events = multi.unmatched_sell_events
         card.transient_pricing_errors = len(multi.transient_pricing_error_tokens)
 
-        # Persistance : ce lot remplace les trades archivés des tokens qu'il
-        # couvre (le FIFO est recalculé en entier depuis l'historique complet du
-        # token, jamais un append qui dupliquerait les mêmes trades historiques).
+        # Persistence: this batch replaces the archived trades of the tokens
+        # it covers (the FIFO is fully recomputed from the token's complete
+        # history, never an append that would duplicate the same historical
+        # trades).
         batch_addresses = {key.partition(":")[2] for key in selected_tokens}
         await wallet_scan_state.replace_archived_trades(wallet, batch_addresses, multi.closed_trades)
 
         now = datetime.now(timezone.utc)
-        # Gel des erreurs transitoires (15/07, revue Gemini) : un token dont la
-        # résolution de pool a échoué CE PASSAGE pour une cause d'infrastructure
-        # (`transient_pricing_error_tokens`) n'est JAMAIS marqué "scanné" -- il
-        # reste éligible à une nouvelle tentative au prochain appel, même sans
-        # nouvelle activité on-chain (`_needs_scan` le re-sélectionnera). Sans
-        # ça, un simple timeout/429 ponctuel se serait figé en cicatrice
-        # permanente (jambe jamais reprix, jamais retentée) dans les archives.
+        # Freezing transient errors (15/07, Gemini review): a token whose
+        # pool resolution failed THIS PASS for an infrastructure reason
+        # (`transient_pricing_error_tokens`) is NEVER marked "scanned" -- it
+        # stays eligible for a new attempt on the next call, even without
+        # new on-chain activity (`_needs_scan` will re-select it). Without
+        # this, a one-off timeout/429 would have frozen into a permanent
+        # scar in the archives (a leg never re-priced, never retried).
         new_scanned = checkpoint.scanned_tokens | (set(selected_tokens) - multi.transient_pricing_error_tokens)
         full_coverage_at = checkpoint.full_coverage_at
         if full_coverage_at is None and len(new_scanned) >= total_found:
             full_coverage_at = now
 
-        # Suivi permanent (15/07, #157 suite 2) : max des timestamps de TOUS les
-        # transferts vus ce passage (pas seulement ceux du lot sélectionné) --
-        # `all_flat_transfers` couvre l'historique complet récupéré cette passe,
-        # jamais régressé (max avec la valeur déjà connue au checkpoint).
+        # Permanent tracking (15/07, #157 follow-up 2): max of the
+        # timestamps of ALL transfers seen this pass (not just the selected
+        # batch) -- `all_flat_transfers` covers the full history fetched
+        # this pass, never regressed (max with the value already known at
+        # the checkpoint).
         observed_activity = [
             ts for t in all_flat_transfers if (ts := _parse_timestamp(t.timestamp)) is not None
         ]
@@ -2989,9 +2994,10 @@ async def score_wallets(
         card.full_coverage = full_coverage_at is not None
         card.last_activity_at = last_activity_at
 
-        # Score final basé sur TOUS les trades clôturés jamais archivés pour ce
-        # wallet (cumulatif), pas seulement ceux de ce lot -- la note s'affine au
-        # fil des passages plutôt que de repartir de zéro à chaque appel.
+        # Final score based on ALL closed trades ever archived for this
+        # wallet (cumulative), not just this batch's -- the score refines
+        # itself over successive passes rather than starting from zero on
+        # every call.
         cumulative_trades = await wallet_scan_state.list_archived_trades(wallet)
         card.closed_trades_count = len(cumulative_trades)
 
@@ -3029,15 +3035,15 @@ async def score_wallets(
             card.diversification_total_tokens = len(by_token)
             card.diversification_profitable_tokens = sum(1 for v in by_token.values() if v > 0)
 
-            # Diversification pondérée par capital (15/07, revue ChatGPT) : le
-            # ratio de comptage ci-dessus traite un pari de 5$ comme un pari de
-            # 50 000$ -- un wallet peut gonfler artificiellement sa
-            # diversification "comptée" via 200 positions minuscules pendant
-            # qu'un seul gros pari domine réellement son capital. Complète
-            # (remplace pas) le ratio de comptage -- les deux mesurent des
-            # choses différentes (largeur des paris indépendants vs.
-            # concentration réelle du capital), même doctrine "axes séparés,
-            # jamais fondus" que le reste de ce module.
+            # Capital-weighted diversification (15/07, ChatGPT review): the
+            # counting ratio above treats a $5 bet like a $50,000 bet -- a
+            # wallet can artificially inflate its "counted" diversification
+            # via 200 tiny positions while a single big bet actually
+            # dominates its capital. Complements (doesn't replace) the
+            # counting ratio -- the two measure different things (breadth
+            # of independent bets vs. real capital concentration), same
+            # "separate axes, never merged" doctrine as the rest of this
+            # module.
             total_capital = sum(capital_by_token.values())
             card.diversification_capital_weighted_ratio = (
                 round(
@@ -3053,9 +3059,9 @@ async def score_wallets(
                 min_required=WEIGHTS.robust_trim_min_closed_trades,
             )
 
-            # Confiance du cost-basis (15/07, revue Gemini) : part des JAMBES
-            # (achat + vente comptées séparément) valorisées par un prix
-            # d'exécution exact plutôt que par le repli marché OHLCV.
+            # Cost-basis confidence (15/07, Gemini review): share of LEGS
+            # (buy + sell counted separately) priced by an exact execution
+            # price rather than the OHLCV market fallback.
             exact_legs = sum(
                 (1 if t.buy_price_exact else 0) + (1 if t.sell_price_exact else 0) for t in cumulative_trades
             )
@@ -3071,9 +3077,9 @@ async def score_wallets(
                 stable_band_pct=WEIGHTS.health_trend_stable_band_pct,
             )
 
-        # Échantillon minimum (15/07, décision opérateur) : sur `all_flat_transfers`
-        # (l'historique brut, pas seulement les trades clôturés) -- un wallet peut
-        # être "jeune" ou "peu actif" indépendamment d'avoir des trades clôturés.
+        # Minimum sample size (15/07, operator decision): on `all_flat_transfers`
+        # (the raw history, not just closed trades) -- a wallet can be
+        # "young" or "not very active" regardless of having closed trades.
         card.wallet_age_days = _wallet_age_days(all_flat_transfers)
         card.total_swaps = _count_total_swaps(all_flat_transfers, wallet)
         card.sample_size_sufficient = (
@@ -3100,8 +3106,8 @@ async def score_wallets(
     for card in cards:
         try:
             await _log_wallet_score(card.address, json.dumps(asdict(card), default=str))
-        except Exception:  # noqa: BLE001 -- le log ne doit jamais casser le scoring
-            logger.warning("score_wallets: échec écriture wallet_score_log pour %s", card.address)
+        except Exception:  # noqa: BLE001 -- the log must never break the scoring
+            logger.warning("score_wallets: wallet_score_log write failed for %s", card.address)
 
     return WalletScoringReport(
         wallets=cards, convergence_pairs=convergence_pairs, synthesis=synthesis, available=True, error=None,

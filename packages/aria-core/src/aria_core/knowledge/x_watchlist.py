@@ -18,7 +18,7 @@ def _load() -> dict[str, Any]:
 
 
 def operator_watch_handles() -> list[str]:
-    """YAML SSOT + ajouts opérateur (handle_registry.json)."""
+    """YAML SSOT + operator additions (handle_registry.json)."""
     try:
         from aria_core.handle_registry import known_handles
 
@@ -40,8 +40,8 @@ def default_watch_handles() -> list[str]:
 
 
 def opportunity_watch_handles() -> list[str]:
-    """Comptes suivis pour les OPPORTUNITÉS écosystème (ex. @base) — annonces produit /
-    standards / grants à évaluer pour ARIA, pas des candidats token."""
+    """Accounts followed for ecosystem OPPORTUNITIES (e.g. @base) — product
+    announcements / standards / grants to evaluate for ARIA, not token candidates."""
     data = _load()
     out: list[str] = []
     for entry in data.get("opportunity_handles") or []:
@@ -53,8 +53,8 @@ def opportunity_watch_handles() -> list[str]:
 
 
 def vc_watch_handles() -> list[str]:
-    """Comptes VC crypto reconnus (ex. @a16zcrypto, @paradigm) — thèse/conviction publique,
-    jamais une source de vérité en soi (tâche #58)."""
+    """Recognized crypto VC accounts (e.g. @a16zcrypto, @paradigm) — public thesis/conviction,
+    never a source of truth on its own (task #58)."""
     data = _load()
     out: list[str] = []
     for entry in data.get("vc_handles") or []:

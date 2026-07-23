@@ -1,1 +1,1 @@
-"""Clients de lecture seule vers des sources on-chain/marché publiques."""
+"""Read-only clients toward public on-chain/market data sources."""

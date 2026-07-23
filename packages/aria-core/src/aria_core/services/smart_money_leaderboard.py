@@ -1,38 +1,37 @@
-"""Classement "meilleurs investisseurs" (21/07, demande opérateur explicite) --
-top 600 wallets EOA repérés par récurrence croisée (>=3 tokens détenus parmi
-ceux déjà extraits, cf. ``token_holder_intel.list_cross_token_candidates``),
-classés par ``composite_percentile`` RÉEL (``smart_money.py``, performance de
-trading -- jamais un score de coordination/Sybil, catégorie différente, cf.
-``WalletScoreCard.cross_token_holder_count``, jamais mélangée ici).
+""""Top investors" leaderboard (21/07, explicit operator request) -- top 600
+EOA wallets spotted by cross-recurrence (>=3 tokens held among those already
+extracted, see ``token_holder_intel.list_cross_token_candidates``), ranked by
+REAL ``composite_percentile`` (``smart_money.py``, trading performance --
+never a coordination/Sybil score, a different category, see
+``WalletScoreCard.cross_token_holder_count``, never mixed in here).
 
-Distinct de ``momentum_blacklist.py`` (sécurité -- bannit des CONTRATS de
-token pour wash-trading confirmé, incident BRIAN) : ici on DÉMOTE des WALLETS
-pour sous-performance de trading, jamais une question de sécurité/fraude --
-terminologie volontairement séparée ("classement"/"archivé", jamais "banni")
-pour ne jamais confondre les deux mécanismes dans le code ni en le relisant.
+Distinct from ``momentum_blacklist.py`` (security -- bans token CONTRACTS for
+confirmed wash-trading, BRIAN incident): here we DEMOTE WALLETS for trading
+underperformance, never a security/fraud matter -- terminology deliberately
+kept separate ("leaderboard"/"archived", never "banned") so the two
+mechanisms are never confused in the code or when re-reading it.
 
-Règles (décision opérateur, 21/07, précisées après clarification) :
-- Un wallet ne rejoint le classement QUE si son ``composite_percentile`` est
-  un vrai nombre mesuré (jamais un défaut fixe type 50/100 le temps que la
-  population de comparaison grossisse -- même doctrine "indisponible plutôt
-  qu'inventé" que partout ailleurs dans ``smart_money.py``).
-- Capacité dure : 600 (relevée depuis 50 le 21/07). Au-delà, le(s) plus bas
-  percentile(s) sont retirés et archivés (motif "hors du top 600 --
-  capacité").
-- Éviction immédiate si ``composite_percentile < 30``, quelle que soit la
-  taille actuelle du classement (motif "percentile sous 30").
-- Le classement est réévalué à CHAQUE nouveau score produit par
-  ``wallet_scan_queue.run_wallet_scan_queue_cycle`` (couverture complète
-  atteinte seulement -- un score partiel n'est pas plus fiable pour classer
-  qu'il ne l'est pour comparer, même exclusion que ``full_coverage=False``
-  ailleurs dans ``smart_money.py``).
+Rules (operator decision, 21/07, clarified after follow-up):
+- A wallet only joins the leaderboard IF its ``composite_percentile`` is a
+  real measured number (never a fixed default like 50/100 while the
+  comparison population grows -- same "unavailable rather than fabricated"
+  doctrine as everywhere else in ``smart_money.py``).
+- Hard capacity: 600 (raised from 50 on 21/07). Beyond that, the lowest
+  percentile(s) are removed and archived (reason "outside top 600 --
+  capacity").
+- Immediate eviction if ``composite_percentile < 30``, regardless of the
+  leaderboard's current size (reason "percentile below 30").
+- The leaderboard is re-evaluated on EVERY new score produced by
+  ``wallet_scan_queue.run_wallet_scan_queue_cycle`` (full coverage reached
+  only -- a partial score is no more reliable for ranking than it is for
+  comparison, same exclusion as ``full_coverage=False`` elsewhere in
+  ``smart_money.py``).
 
-À une capacité de 600, la file de scan (``wallet_scan_queue.py``) peut
-contenir presque autant de wallets en surveillance hebdomadaire que son
-propre débit hebdomadaire (1 wallet/20min ~= 504 scans/semaine) -- corrigé le
-même jour : ``list_pending()`` priorise désormais les nouveaux candidats
-(rattrapage) sur les simples rescans de surveillance, pour que la découverte
-ne soit jamais structurellement affamée."""
+At a capacity of 600, the scan queue (``wallet_scan_queue.py``) can hold
+almost as many wallets in weekly monitoring as its own weekly throughput
+(1 wallet/20min ~= 504 scans/week) -- fixed the same day: ``list_pending()``
+now prioritizes new candidates (catch-up) over plain monitoring rescans, so
+discovery is never structurally starved."""
 from __future__ import annotations
 
 import os
@@ -91,11 +90,10 @@ async def _ensure_table() -> None:
 
 
 async def is_rejected(wallet: str) -> bool:
-    """Un wallet confirmé sous-performant (percentile mesuré < 30) une fois
-    est rejeté DÉFINITIVEMENT -- vérifié par ``discover_and_enqueue_candidates``
-    avant tout enfilement, pour qu'il ne réapparaisse jamais simplement parce
-    qu'il détient un NOUVEAU token découvert plus tard (21/07, demande
-    opérateur explicite)."""
+    """A wallet confirmed as underperforming (measured percentile < 30) once
+    is rejected PERMANENTLY -- checked by ``discover_and_enqueue_candidates``
+    before any enqueuing, so it never reappears simply because it holds a
+    NEW token discovered later (21/07, explicit operator request)."""
     await _ensure_table()
     wallet = (wallet or "").strip().lower()
     if not wallet:
@@ -108,10 +106,10 @@ async def is_rejected(wallet: str) -> bool:
 
 
 async def mark_rejected(wallet: str, percentile: float | None, reason: str) -> None:
-    """Rejet PERMANENT -- aucune fonction symétrique de dé-rejet, même doctrine
-    que ``momentum_blacklist.py`` (un contrat banni le reste ; ici, un wallet
-    confirmé mauvais le reste). Idempotent (``INSERT OR IGNORE`` -- un wallet
-    déjà rejeté n'est jamais réécrit)."""
+    """PERMANENT rejection -- no symmetric un-reject function, same doctrine
+    as ``momentum_blacklist.py`` (a banned contract stays banned; here, a
+    wallet confirmed bad stays bad). Idempotent (``INSERT OR IGNORE`` -- an
+    already-rejected wallet is never overwritten)."""
     await _ensure_table()
     wallet = (wallet or "").strip().lower()
     if not wallet:
@@ -134,13 +132,13 @@ async def _archive(db: aiosqlite.Connection, wallet: str, percentile: float | No
 
 
 async def update_leaderboard(wallet: str, composite_percentile: float | None) -> str:
-    """Insère/actualise/évince un wallet selon son ``composite_percentile``
-    RÉEL le plus récent. Retourne l'action effectuée (jamais un booléen
-    opaque) : ``no_percentile`` / ``not_eligible`` / ``added`` / ``updated`` /
+    """Inserts/updates/evicts a wallet based on its most recent REAL
+    ``composite_percentile``. Returns the action taken (never an opaque
+    boolean): ``no_percentile`` / ``not_eligible`` / ``added`` / ``updated`` /
     ``evicted_low_score`` / ``evicted_capacity``.
 
-    ``composite_percentile=None`` (pas assez de population pour comparer) :
-    NO-OP, jamais un score inventé pour forcer une entrée."""
+    ``composite_percentile=None`` (not enough population to compare):
+    NO-OP, never a fabricated score to force an entry."""
     if composite_percentile is None:
         return "no_percentile"
     await _ensure_table()
@@ -157,7 +155,7 @@ async def update_leaderboard(wallet: str, composite_percentile: float | None) ->
             if not existing:
                 return "not_eligible"
             await db.execute("DELETE FROM smart_money_leaderboard WHERE wallet = ?", (wallet,))
-            await _archive(db, wallet, composite_percentile, "percentile sous 30")
+            await _archive(db, wallet, composite_percentile, "percentile below 30")
             await db.commit()
             return "evicted_low_score"
 
@@ -179,7 +177,7 @@ async def update_leaderboard(wallet: str, composite_percentile: float | None) ->
             action = "added"
         await db.commit()
 
-        # Capacité dure : au-delà de 50, retire le(s) plus bas percentile(s).
+        # Hard capacity: beyond 50, remove the lowest percentile(s).
         rows = await (
             await db.execute(
                 "SELECT wallet, composite_percentile FROM smart_money_leaderboard "
@@ -191,7 +189,7 @@ async def update_leaderboard(wallet: str, composite_percentile: float | None) ->
             overflow_wallets = {w for w, _ in overflow}
             for w, pct in overflow:
                 await db.execute("DELETE FROM smart_money_leaderboard WHERE wallet = ?", (w,))
-                await _archive(db, w, pct, f"hors du top {MAX_LEADERBOARD_SIZE} (capacité)")
+                await _archive(db, w, pct, f"outside top {MAX_LEADERBOARD_SIZE} (capacity)")
             await db.commit()
             if wallet in overflow_wallets:
                 action = "evicted_capacity"
@@ -199,13 +197,13 @@ async def update_leaderboard(wallet: str, composite_percentile: float | None) ->
 
 
 async def remove_and_archive(wallet: str, reason: str) -> str:
-    """Retrait EXPLICITE, indépendant du percentile (contrairement à
-    ``update_leaderboard``) -- réponse au trou trouvé le 21/07 : un wallet
-    retiré de ``wallet_scan_queue`` pour inactivité (90j+ sans activité
-    on-chain réelle) gardait sa dernière note pour toujours dans le
-    classement, jamais signalé comme "plus suivi". Retourne ``removed`` ou
-    ``not_present`` (jamais une erreur si le wallet n'était pas dans le
-    classement -- rien à faire de plus)."""
+    """EXPLICIT removal, independent of the percentile (unlike
+    ``update_leaderboard``) -- fixes the gap found on 21/07: a wallet
+    removed from ``wallet_scan_queue`` for inactivity (90d+ without real
+    on-chain activity) kept its last score in the leaderboard forever, never
+    flagged as "no longer tracked". Returns ``removed`` or ``not_present``
+    (never an error if the wallet wasn't on the leaderboard -- nothing more
+    to do)."""
     await _ensure_table()
     wallet = (wallet or "").strip().lower()
     if not wallet:
@@ -257,15 +255,15 @@ async def get_archive(limit: int = 50) -> list[dict]:
 
 
 async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
-    """Repère les wallets EOA récurrents (``token_holder_intel``, gratuit --
-    lecture locale pure) et les enfile dans ``wallet_scan_queue.py`` pour un
-    scoring réel -- déclencheur du classement, jamais un score en lui-même.
-    Idempotent (``enqueue_wallets`` ignore déjà les doublons -- un wallet
-    déjà en file, en rattrapage ou en surveillance, n'est jamais réinjecté).
+    """Spots recurring EOA wallets (``token_holder_intel``, free -- pure
+    local read) and enqueues them into ``wallet_scan_queue.py`` for real
+    scoring -- a leaderboard trigger, never a score in itself. Idempotent
+    (``enqueue_wallets`` already ignores duplicates -- a wallet already in
+    the queue, catching up or monitored, is never re-enqueued).
 
-    Triple gate -- ``ARIA_SMART_MONEY_LEADERBOARD_ENABLED`` en plus de
-    ``ARIA_WALLET_SCAN_QUEUE_ENABLED``/``ARIA_WALLET_SCORING_ENABLED`` (tous
-    OFF par défaut), même patron que ``wallet_candidate_sourcing.py``."""
+    Triple gate -- ``ARIA_SMART_MONEY_LEADERBOARD_ENABLED`` on top of
+    ``ARIA_WALLET_SCAN_QUEUE_ENABLED``/``ARIA_WALLET_SCORING_ENABLED`` (all
+    OFF by default), same pattern as ``wallet_candidate_sourcing.py``."""
     if not smart_money_leaderboard_enabled():
         return {"outcome": "skipped", "reason": "gate_off"}
 
@@ -286,9 +284,9 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
     if not candidates:
         return {"outcome": "no_candidate"}
 
-    # Un wallet déjà rejeté DÉFINITIVEMENT (percentile confirmé < 30) ne doit
-    # jamais réapparaître simplement parce qu'il détient un nouveau token
-    # découvert plus tard (21/07, demande opérateur explicite).
+    # A wallet already rejected PERMANENTLY (confirmed percentile < 30) must
+    # never reappear simply because it holds a new token discovered later
+    # (21/07, explicit operator request).
     addresses = []
     already_rejected = 0
     for c in candidates:

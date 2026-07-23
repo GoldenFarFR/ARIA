@@ -1,4 +1,4 @@
-"""Vision LLM — analyse d'images (identité avatar, cohérence visage)."""
+"""Vision LLM — image analysis (avatar identity, face consistency)."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def _vision_model() -> str | None:
 
 
 async def vision_analyze(image_jpeg: bytes, instruction: str, *, max_tokens: int = 500) -> str | None:
-    """Analyse une image JPEG via le provider LLM configuré."""
+    """Analyzes a JPEG image via the configured LLM provider."""
     model = _vision_model()
     if not model:
         return None

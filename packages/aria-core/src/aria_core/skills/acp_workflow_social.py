@@ -42,7 +42,7 @@ def workflow_social_enabled() -> bool:
 
 
 def build_workflow_url(offering_name: str, offering_id: str = "") -> str:
-    """URL Virtuals vers l'agent ou l'offre (SSOT acp_config.yaml)."""
+    """Virtuals URL to the agent or offering (SSOT acp_config.yaml)."""
     cfg = _load_config()
     market = cfg.get("marketplace") or {}
     base_agent = str(market.get("agent_url") or "").strip()
@@ -68,7 +68,7 @@ def compose_workflow_used_tweet(
     workflow_key: str,
     job_id: str,
 ) -> str:
-    """Tweet EN — workflow used, sans URL (politique @Aria_ZHC)."""
+    """EN tweet — workflow used, no URL (@Aria_ZHC policy)."""
     name = (offering_name or workflow_key or "acp_workflow").strip()
     short_job = (job_id or "")[:12]
     body = (
@@ -91,7 +91,7 @@ def enqueue_workflow_used_tweet(
     job_id: str,
     offering_id: str = "",
 ) -> dict[str, Any]:
-    """File un tweet « workflow used » après livraison job."""
+    """Queues a "workflow used" tweet after job delivery."""
     if not workflow_social_enabled():
         return {"queued": False, "reason": "disabled"}
     url = build_workflow_url(offering_name, offering_id)
@@ -158,7 +158,7 @@ def _pop_queue_head() -> None:
 
 
 async def flush_workflow_used_tweet() -> dict[str, Any] | None:
-    """Publie le prochain tweet workflow-used si politique X OK."""
+    """Posts the next workflow-used tweet if the X policy allows it."""
     head = _peek_queue()
     if not head:
         return None

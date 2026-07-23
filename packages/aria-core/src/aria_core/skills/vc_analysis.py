@@ -1274,7 +1274,7 @@ async def analyze_vc_with_context(
             temperature=0.2,
             depth="develop",
         )
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant, on retombe sur le fallback
+    except Exception as exc:  # noqa: BLE001 — never blocking, falls back to the deterministic path
         logger.error("analyze_vc: LLM call failed (%s) — deterministic fallback", exc)
         raw = None
     t_llm = time.monotonic() - t_llm0

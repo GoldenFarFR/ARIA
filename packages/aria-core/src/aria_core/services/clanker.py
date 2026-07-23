@@ -1,40 +1,40 @@
-"""Client de lecture seule Clanker (Base) — launchpad « direct » (sans phase de bonding).
+"""Read-only Clanker client (Base) — a "direct" launchpad (no bonding phase).
 
-Contrairement à Virtuals (courbe de bonding puis graduation), un token Clanker reçoit
-une **vraie liquidité DEX dès son déploiement** (fair-launch Uniswap v3/v4 sur Base) —
-il n'y a pas de phase pré-graduation à distinguer. Ce client sert donc uniquement à la
-**découverte rapide** (les tokens les plus récents) ; l'absorption elle-même réutilise
-le pipeline standard (`token_absorber.absorb`, pool 85% VC), pas un chemin dédié comme
-la niche bonding.
+Unlike Virtuals (bonding curve then graduation), a Clanker token receives
+**real DEX liquidity right from deployment** (fair-launch Uniswap v3/v4 on Base) —
+there's no pre-graduation phase to distinguish. This client therefore only serves
+**fast discovery** (the most recent tokens); absorption itself reuses
+the standard pipeline (`token_absorber.absorb`, 85% VC pool), not a dedicated path like
+the bonding niche.
 
-Endpoint public documenté (``github.com/clanker-devco/DOCS``) : base
-``https://www.clanker.world/api``, ``GET /api/tokens`` (« Search and list Clanker
-tokens with filters, sorting, and cursor-based pagination »). Auth : aucune pour la
-lecture publique (clé partenaire ``x-api-key`` uniquement pour des quotas plus élevés,
-non requise ici).
+Documented public endpoint (``github.com/clanker-devco/DOCS``): base
+``https://www.clanker.world/api``, ``GET /api/tokens`` ("Search and list Clanker
+tokens with filters, sorting, and cursor-based pagination"). Auth: none for
+public reads (partner key ``x-api-key`` only for higher quotas,
+not required here).
 
-Paramètres de requête (``chainId``/``sort``/``sortBy``/``limit``) et forme de la
-réponse CONFIRMÉS EN DIRECT depuis le VPS le 10/07 (le sandbox cloud, lui, était
-bloqué en HTTP 403 — anti-bot générique côté Cloudflare, comportement propre à cet
-environnement, pas à l'API). Deux corrections faites grâce aux messages de validation
-de l'API elle-même (jamais de la doc, muette sur ces détails) : ``sortBy`` accepte une
-énumération stricte (cf. ``_VALID_SORT_BY`` — ``createdAt``, plausible, était faux) ;
-``limit`` a un plafond RÉEL de 20 (cf. ``_MAX_LIMIT`` — 100, plausible, était faux et
-faisait échouer TOUT l'appel en HTTP 400, pas juste sous-optimal). Réponse valide :
-``{"data": [...]}``, chaque item un dict à plat en ``snake_case`` (``id``,
-``created_at``, ``admin`` — le déployeur —, ``tx_hash``, ``contract_address``,
+Query parameters (``chainId``/``sort``/``sortBy``/``limit``) and response
+shape CONFIRMED LIVE from the VPS on 07/10 (the cloud sandbox, meanwhile, was
+blocked with HTTP 403 — generic Cloudflare anti-bot behavior specific to that
+environment, not the API). Two corrections made thanks to the API's own
+validation messages (never the docs, silent on these details): ``sortBy`` accepts a
+strict enum (cf. ``_VALID_SORT_BY`` — ``createdAt``, plausible, was wrong);
+``limit`` has a REAL cap of 20 (cf. ``_MAX_LIMIT`` — 100, plausible, was wrong and
+made the ENTIRE call fail with HTTP 400, not just suboptimal). Valid response:
+``{"data": [...]}``, each item a flat ``snake_case`` dict (``id``,
+``created_at``, ``admin`` — the deployer —, ``tx_hash``, ``contract_address``,
 ``name``, ``symbol``, ``description``, ``deployed_at``, ``starting_market_cap``,
-``chain_id``, ``platform``...). Le parsing ci-dessous reste délibérément tolérant
-(``_first`` sur plusieurs noms de champs, snake_case ET camelCase) pour dégrader
-proprement si la forme évolue, plutôt que de figer une dépendance fragile.
+``chain_id``, ``platform``...). The parsing below stays deliberately tolerant
+(``_first`` over several field names, snake_case AND camelCase) to degrade
+gracefully if the shape evolves, rather than locking in a fragile dependency.
 
-Mêmes politiques que les autres clients de ce dossier :
-- Aucune écriture, aucune signature, GET uniquement.
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer.
-- Timeout / 5xx : 1 retry après 5s, puis fallback explicite.
-- ``fetch_*`` ne lève JAMAIS sur erreur réseau : renvoient ``[]`` / ``None``.
-- Dôme : toute chaîne externe passe par ``_sanitize`` (retrait des caractères de
-  contrôle + neutralisation des chevrons ``<``/``>`` — anti prompt-injection).
+Same policies as the other clients in this folder:
+- No writes, no signing, GET only.
+- 429: exponential backoff, 3 attempts max, then give up without blocking.
+- Timeout / 5xx: 1 retry after 5s, then explicit fallback.
+- ``fetch_*`` NEVER raises on a network error: returns ``[]`` / ``None``.
+- Guardrail: any external string goes through ``_sanitize`` (control-character
+  stripping + neutralizing angle brackets ``<``/``>`` — anti prompt-injection).
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ _FIELD_MAX = 600
 
 @dataclass
 class ClankerToken:
-    """Un token Clanker indexé. Toutes les chaînes sont déjà sanitisées."""
+    """An indexed Clanker token. All strings are already sanitized."""
 
     name: str | None = None
     symbol: str | None = None
@@ -80,7 +80,7 @@ class ClankerToken:
 
 
 # ----------------------------------------------------------------------
-# Sanitisation (dôme) — identique à services/virtuals.py
+# Sanitization (guardrail) — identical to services/virtuals.py
 # ----------------------------------------------------------------------
 def _sanitize(text: object, max_len: int = _FIELD_MAX) -> str | None:
     if text is None:
@@ -117,35 +117,35 @@ def _first(mapping: dict, *keys: str) -> object:
 
 
 # ----------------------------------------------------------------------
-# Construction d'URL
+# URL construction
 # ----------------------------------------------------------------------
-#: Valeurs acceptées par ``sortBy``, CONFIRMÉES EN DIRECT le 10/07 depuis le VPS (le
-#: endpoint renvoie une erreur de validation explicite listant l'énumération exacte
-#: quand on envoie une valeur invalide — ``createdAt``, plausible mais faux, a été
-#: corrigé grâce à ce message d'erreur). Seule ``deployed-at`` correspond à « le plus
-#: récent d'abord », ce qu'on veut pour la découverte.
+#: Values accepted by ``sortBy``, CONFIRMED LIVE on 07/10 from the VPS (the
+#: endpoint returns an explicit validation error listing the exact enum
+#: when an invalid value is sent — ``createdAt``, plausible but wrong, was
+#: fixed thanks to this error message). Only ``deployed-at`` matches "most
+#: recent first", which is what we want for discovery.
 _VALID_SORT_BY = frozenset(
     {"market-cap", "tx-h24", "volume-h24", "price-percent-h24", "price-percent-h1", "deployed-at"}
 )
 
 
-#: Plafond RÉEL de ``limit``, CONFIRMÉ EN DIRECT le 10/07 depuis le VPS : un appel
-#: avec ``limit=50`` a échoué en HTTP 400 avec un message de validation explicite
-#: (``"maximum":20,"inclusive":true,"path":["limit"]``) — 100 (supposition initiale)
-#: était faux. Un ``limit`` hors bornes n'est plus juste "sous-optimal", il fait
-#: échouer TOUT l'appel (fetch_recent renvoie ``[]``) : ce plafond doit rester exact.
+#: REAL cap on ``limit``, CONFIRMED LIVE on 07/10 from the VPS: a call
+#: with ``limit=50`` failed with HTTP 400 and an explicit validation message
+#: (``"maximum":20,"inclusive":true,"path":["limit"]``) — 100 (initial assumption)
+#: was wrong. A ``limit`` out of bounds is no longer just "suboptimal", it makes
+#: the ENTIRE call fail (fetch_recent returns ``[]``): this cap must stay exact.
 _MAX_LIMIT = 20
 
 
 def build_recent_tokens_url(chain_id: int = 8453, limit: int = 50) -> str:
-    """URL des tokens les plus récents sur Base (``chain_id=8453``).
+    """URL for the most recent tokens on Base (``chain_id=8453``).
 
-    ``chainId``/``sort``/``sortBy``/``limit`` (``<=20``) CONFIRMÉS EN DIRECT le 10/07
-    (VPS, accès réseau réel — le sandbox cloud était bloqué en HTTP 403 anti-bot). La
-    forme d'une réponse VALIDE (``limit`` conforme) a aussi été confirmée en direct :
-    ``{"data": [...]}`` où chaque item est un dict à plat (``id``, ``created_at``,
+    ``chainId``/``sort``/``sortBy``/``limit`` (``<=20``) CONFIRMED LIVE on 07/10
+    (VPS, real network access — the cloud sandbox was blocked with HTTP 403 anti-bot). The
+    shape of a VALID response (``limit`` compliant) was also confirmed live:
+    ``{"data": [...]}`` where each item is a flat dict (``id``, ``created_at``,
     ``admin``, ``tx_hash``, ``contract_address``, ``name``, ``symbol``,
-    ``description``, ...) — voir ``parse_clanker_token`` pour les champs retenus.
+    ``description``, ...) — see ``parse_clanker_token`` for the fields kept.
     """
     try:
         size = int(limit)
@@ -162,29 +162,29 @@ def build_recent_tokens_url(chain_id: int = 8453, limit: int = 50) -> str:
 
 
 def build_token_by_address_url(token_address: str, chain_id: int = 8453) -> str:
-    """URL de filtre par adresse de contrat.
+    """URL filtering by contract address.
 
-    Adresse mise en minuscules (même correctif que ``virtuals.py``, 10/07) --
-    défensif : les adresses EVM sont insensibles à la casse, aucune perte
-    d'information, mais protège contre un filtre exact côté API qui ne
-    matcherait pas une adresse en casse mixte (checksum)."""
+    Address lowercased (same fix as ``virtuals.py``, 07/10) --
+    defensive: EVM addresses are case-insensitive, no information
+    loss, but this protects against an exact filter on the API side that wouldn't
+    match a mixed-case (checksum) address."""
     params = [("chainId", str(chain_id)), ("address", str(token_address).lower())]
     return f"{_TOKENS_ENDPOINT}?{urlencode(params)}"
 
 
 # ----------------------------------------------------------------------
-# Parsing (dégradation gracieuse)
+# Parsing (graceful degradation)
 # ----------------------------------------------------------------------
 def parse_clanker_token(raw: dict) -> ClankerToken | None:
-    """Parse un objet de réponse Clanker en ``ClankerToken``. Jamais d'exception.
+    """Parses a Clanker response object into a ``ClankerToken``. Never raises.
 
-    Champs réels CONFIRMÉS EN DIRECT le 10/07 (``contract_address``, ``admin``,
-    ``created_at``/``deployed_at``, ``starting_market_cap`` — snake_case) placés en
-    tête de chaque liste de fallback ; variantes camelCase gardées en repli tolérant
-    au cas où la forme évolue. Raw non-dict → ``None`` ; champ manquant → ``None``
-    (facts-only) — ``volume24h``/``liquidity_usd``/``holder_count`` restent
-    généralement ``None`` sur cet endpoint (feed de déploiement, pas de données de
-    marché live), sans qu'aucune donnée manquante ne soit jamais inventée.
+    Real fields CONFIRMED LIVE on 07/10 (``contract_address``, ``admin``,
+    ``created_at``/``deployed_at``, ``starting_market_cap`` — snake_case) placed at
+    the head of each fallback list; camelCase variants kept as a tolerant fallback
+    in case the shape evolves. Non-dict raw → ``None``; missing field → ``None``
+    (facts-only) — ``volume24h``/``liquidity_usd``/``holder_count`` generally stay
+    ``None`` on this endpoint (deployment feed, no live market
+    data), without any missing data ever being invented.
     """
     if not isinstance(raw, dict):
         return None
@@ -213,10 +213,10 @@ def parse_clanker_token(raw: dict) -> ClankerToken | None:
 
 
 # ----------------------------------------------------------------------
-# Client HTTP (lecture seule)
+# HTTP client (read-only)
 # ----------------------------------------------------------------------
 class ClankerClient:
-    """Client HTTP async, lecture seule, throttle prudent (API publique)."""
+    """Async HTTP client, read-only, cautious throttle (public API)."""
 
     def __init__(self, endpoint: str = _TOKENS_ENDPOINT, *, min_interval: float = 0.5) -> None:
         self.endpoint = endpoint
@@ -240,20 +240,20 @@ class ClankerClient:
         self._consecutive_failures += 1
         if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
             logger.warning(
-                "clanker: %s echecs consecutifs (dernier: %s) — pas de blocage, pas d'escalade",
+                "clanker: %s consecutive failures (last: %s) -- no blocking, no escalation",
                 self._consecutive_failures,
                 detail,
             )
         else:
             logger.info(
-                "clanker: echec appel (%s/%s) — %s",
+                "clanker: call failed (%s/%s) -- %s",
                 self._consecutive_failures,
                 _FAIL_STREAK_WARN_THRESHOLD,
                 detail,
             )
 
     async def _get_json(self, url: str) -> tuple[object | None, str | None]:
-        """GET avec la politique d'erreurs maison. Retourne ``(data, error)``."""
+        """GET with the in-house error policy. Returns ``(data, error)``."""
         attempt_429 = 0
         timeout_retried = False
 
@@ -274,7 +274,7 @@ class ClankerClient:
             if response.status_code == 429:
                 attempt_429 += 1
                 if attempt_429 >= 3:
-                    detail = f"{url} -> HTTP 429 apres {attempt_429} tentatives"
+                    detail = f"{url} -> HTTP 429 after {attempt_429} attempts"
                     self._record_failure(detail)
                     return None, f"{UNAVAILABLE} (rate limit Clanker)"
                 await asyncio.sleep(0.5 * (2**attempt_429))
@@ -290,8 +290,8 @@ class ClankerClient:
                 return None, f"{UNAVAILABLE} (erreur serveur Clanker)"
 
             if response.status_code in (403, 404):
-                # 403 : probable blocage anti-bot générique (constaté en test) — pas
-                # une escalade, une dégradation documentée (cf. avertissement module).
+                # 403: likely generic anti-bot blocking (observed in testing) -- not
+                # an escalation, a documented degradation (cf. module-level warning).
                 self._record_success()
                 return None, f"{UNAVAILABLE} (HTTP {response.status_code})"
 
@@ -306,7 +306,7 @@ class ClankerClient:
             return response.json(), None
 
     async def fetch_recent(self, chain_id: int = 8453, limit: int = 50) -> list[ClankerToken]:
-        """Tokens les plus récents sur Base. Toujours une liste (``[]`` sur erreur)."""
+        """Most recent tokens on Base. Always a list (``[]`` on error)."""
         try:
             url = build_recent_tokens_url(chain_id=chain_id, limit=limit)
             data, error = await self._get_json(url)
@@ -325,12 +325,12 @@ class ClankerClient:
                 if token is not None:
                     tokens.append(token)
             return tokens
-        except Exception as exc:  # dégradation ultime : jamais d'exception sortante
-            logger.info("clanker: fetch_recent echec inattendu — %s", exc)
+        except Exception as exc:  # ultimate degradation: never an outgoing exception
+            logger.info("clanker: fetch_recent unexpected failure -- %s", exc)
             return []
 
     async def fetch_by_address(self, token_address: str, chain_id: int = 8453) -> ClankerToken | None:
-        """Token Clanker par adresse de contrat. ``None`` sur erreur ou absence."""
+        """Clanker token by contract address. ``None`` on error or absence."""
         try:
             url = build_token_by_address_url(token_address, chain_id=chain_id)
             data, error = await self._get_json(url)
@@ -345,7 +345,7 @@ class ClankerClient:
                 return None
             return parse_clanker_token(items[0])
         except Exception as exc:
-            logger.info("clanker: fetch_by_address echec inattendu — %s", exc)
+            logger.info("clanker: fetch_by_address unexpected failure -- %s", exc)
             return None
 
 

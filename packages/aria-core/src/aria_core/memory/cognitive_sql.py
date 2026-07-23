@@ -1,4 +1,4 @@
-"""Mémoire cognitive SQLite — wrapper fin autour de ``aria_core.knowledge.cognitive``."""
+"""Cognitive SQLite memory — thin wrapper around ``aria_core.knowledge.cognitive``."""
 from __future__ import annotations
 
 from aria_core.knowledge import cognitive as _legacy

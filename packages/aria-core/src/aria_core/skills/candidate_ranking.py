@@ -1,20 +1,20 @@
-"""Classement des candidats du pool screené — le « tri » de l'analyse de masse.
+"""Ranking of candidates from the screened pool — the "sorting" of mass analysis.
 
-Le crawler absorbe en continu des milliers de contrats ; le filtre de sécurité garde
-les valables dans ``screened_pool``. Ce module TRIE ces gardés par un score composite
-TRANSPARENT (chaque point s'explique) pour faire remonter les meilleurs candidats vers
-l'analyse VC approfondie et le track-record.
+The crawler continuously absorbs thousands of contracts; the security filter keeps
+the valid ones in ``screened_pool``. This module RANKS those kept candidates by a
+TRANSPARENT composite score (every point is explainable) to surface the best candidates
+for in-depth VC analysis and the track record.
 
-Ce n'est PAS une décision d'achat : un classement de priorité, jamais un ordre. Pur et
-déterministe (mêmes lignes -> même classement), aucun appel réseau.
+This is NOT a buy decision: a priority ranking, never an order. Pure and
+deterministic (same rows -> same ranking), no network call.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import log10
 
-# Pondérations transparentes et bornées. La sécurité domine (0..100) ; la liquidité,
-# la concentration et le verdict ajustent à la marge. Documentées et ajustables.
+# Transparent, bounded weights. Security dominates (0..100); liquidity,
+# concentration and verdict adjust at the margin. Documented and adjustable.
 _VERDICT_BONUS = {"SAFE": 12.0, "CAUTION": 0.0, "DANGER": -40.0}
 
 
@@ -31,25 +31,25 @@ class RankedCandidate:
 
 
 def _liquidity_points(liq: float) -> float:
-    """Liquidité en points (log-échelle, saturée) : 30k -> 0, ~100k -> +6, ~1M -> +17, plafond 25."""
+    """Liquidity in points (log scale, saturating): 30k -> 0, ~100k -> +6, ~1M -> +17, cap 25."""
     if liq <= 30_000:
         return 0.0
     return min(25.0, 11.0 * log10(liq / 30_000.0))
 
 
 def _concentration_points(top_holder_pct: float | None) -> float:
-    """Moins un holder domine, mieux c'est. None (inconnu) = neutre. Borné -10..+10."""
+    """The less a holder dominates, the better. None (unknown) = neutral. Bounded -10..+10."""
     if top_holder_pct is None:
         return 0.0
     if top_holder_pct <= 10:
         return 10.0
     if top_holder_pct >= 30:
         return -10.0
-    return 10.0 - (top_holder_pct - 10.0)  # linéaire : 10% -> +10, 30% -> -10
+    return 10.0 - (top_holder_pct - 10.0)  # linear: 10% -> +10, 30% -> -10
 
 
 def score_candidate(row: dict) -> RankedCandidate:
-    """Score composite d'un candidat (une ligne de screened_pool). Transparent et borné."""
+    """Composite score for a candidate (one screened_pool row). Transparent and bounded."""
     sec = int(row.get("security_score") or 0)
     liq = float(row.get("liquidity_usd") or 0.0)
     raw_top = row.get("top_holder_pct")
@@ -80,9 +80,9 @@ def score_candidate(row: dict) -> RankedCandidate:
 
 
 def rank_candidates(rows: list[dict]) -> list[RankedCandidate]:
-    """Classe les candidats du meilleur au moins bon (score composite décroissant).
+    """Ranks candidates from best to worst (descending composite score).
 
-    Départage stable et déterministe : score, puis sécurité, puis liquidité.
+    Stable, deterministic tiebreak: score, then security, then liquidity.
     """
     ranked = [score_candidate(r) for r in rows if r]
     ranked.sort(
@@ -93,10 +93,10 @@ def rank_candidates(rows: list[dict]) -> list[RankedCandidate]:
 
 
 async def top_candidates(n: int = 10, *, lister=None) -> list[RankedCandidate]:
-    """Lit le pool actif et renvoie les N meilleurs candidats classés.
+    """Reads the active pool and returns the N best ranked candidates.
 
-    ``lister()`` (async) -> lignes du pool ; défaut : ``screened_pool.list_pool`` actif.
-    Injectable pour les tests hors-ligne.
+    ``lister()`` (async) -> pool rows; default: active ``screened_pool.list_pool``.
+    Injectable for offline tests.
     """
     if lister is None:
         from aria_core import screened_pool
@@ -109,11 +109,11 @@ async def top_candidates(n: int = 10, *, lister=None) -> list[RankedCandidate]:
 
 
 async def format_watchlist_report(n: int = 10, *, lister=None) -> str:
-    """Rapport texte du pool de surveillance -- extrait de _handle_watchlist
-    (telegram_bot.py, 18/07, #213) pour être réutilisable par le routeur
-    langage-naturel (`_nl_command_router.py`) SANS dupliquer le formatage --
-    une seule source de vérité pour "watchlist" quel que soit le déclencheur
-    (/watchlist ou une question en français)."""
+    """Text report of the watchlist pool -- extracted from _handle_watchlist
+    (telegram_bot.py, 18/07, #213) so it's reusable by the natural-language
+    router (`_nl_command_router.py`) WITHOUT duplicating the formatting --
+    a single source of truth for "watchlist" regardless of the trigger
+    (/watchlist or a question in French)."""
     tops = await top_candidates(n, lister=lister)
     if not tops:
         return "Pool de surveillance vide pour l'instant — aucun contrat suivi actuellement."
@@ -132,12 +132,12 @@ async def format_watchlist_report(n: int = 10, *, lister=None) -> str:
 
 
 async def draw_top(n: int = 20, *, lister=None) -> list[dict]:
-    """Drawer alternatif pour ``run_weekly_forecasts`` : les N meilleurs candidats classés
-    au lieu d'un tirage aléatoire — pour bâtir le track-record sur le haut du panier.
+    """Alternative drawer for ``run_weekly_forecasts``: the N best ranked candidates
+    instead of a random draw — to build the track record on the top of the pile.
 
-    Renvoie des lignes de pool (dicts) pour rester compatible avec le drawer par défaut
-    (``screened_pool.draw_lottery``). OPT-IN : à passer explicitement, ne change rien au
-    comportement existant tant qu'on ne l'utilise pas.
+    Returns pool rows (dicts) to stay compatible with the default drawer
+    (``screened_pool.draw_lottery``). OPT-IN: must be passed explicitly, changes nothing
+    to the existing behavior until it's used.
     """
     tops = await top_candidates(n, lister=lister)
     return [

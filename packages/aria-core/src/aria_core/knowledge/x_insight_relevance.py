@@ -81,8 +81,8 @@ def _prefilter_junk(text: str) -> tuple[bool, str]:
     if body.startswith("RT @"):
         return True, "retweet"
     if contains_injection_marker(body):
-        # Pattern grossier déjà détecté (#206) -- rejet immédiat, aucun besoin
-        # de dépenser un appel Groq pour confirmer l'évidence.
+        # Crude pattern already detected (#206) -- immediate rejection, no need
+        # to spend a Groq call to confirm the obvious.
         return True, "injection_marker"
     lower = body.lower()
     if any(off in lower for off in _OFF_TOPIC):
@@ -121,11 +121,11 @@ def _parse_groq_triage(raw: str) -> InsightAssessment:
         store = False
         reason = f"fait_faux: {reason}"
     if injection:
-        # Prime sur tout le reste -- même un contenu jugé pertinent/vrai par
-        # ailleurs ne doit jamais entrer en mémoire s'il porte une tentative
-        # d'injection (#206).
+        # Overrides everything else -- even content judged relevant/true
+        # elsewhere must never enter memory if it carries an injection
+        # attempt (#206).
         store = False
-        reason = f"injection_detectee: {reason}"
+        reason = f"injection_detected: {reason}"
 
     confidence = 0.55
     if store and truth == "true":
@@ -147,10 +147,10 @@ def _parse_groq_triage(raw: str) -> InsightAssessment:
 
 
 def _fallback_without_groq(text: str) -> InsightAssessment:
-    """Utilisé UNIQUEMENT si le LLM Groq est indisponible -- seule ligne de
-    défense dans ce cas, d'où la vérification injection explicite ici aussi
-    (#206) même si elle est déjà couverte en amont par _prefilter_junk pour le
-    chemin normal."""
+    """Used ONLY if the Groq LLM is unavailable -- the sole line of defense
+    in that case, hence the explicit injection check here too (#206) even
+    though it's already covered upstream by _prefilter_junk for the normal
+    path."""
     if contains_injection_marker(text):
         return InsightAssessment(
             store=False,
@@ -230,14 +230,14 @@ async def assess_market_knowledge_for_memory(
     *,
     source: str = "tavily_learning",
 ) -> InsightAssessment:
-    """Variante de ``assess_x_insight_for_memory`` pour du contenu de marché
-    général (macro-économie / psychologie de trading / documentation, 22/07,
-    ``tavily_learning.py``) -- même mécanique (prefilter/injection/parsing),
-    seul le critère de pertinence change (marché/trading plutôt que ZHC/X) --
-    le prompt existant parle explicitement de "ZHC, autonomie holding,
-    marketing/comms", pas de "contexte macro qui informe une décision de
-    trading", donc un contenu Fed/CPI/psychologie légitime risquerait d'être
-    rejeté à tort comme "non pertinent" avec le prompt d'origine."""
+    """Variant of ``assess_x_insight_for_memory`` for general market content
+    (macro-economics / trading psychology / documentation, 07/22,
+    ``tavily_learning.py``) -- same mechanics (prefilter/injection/parsing),
+    only the relevance criterion changes (market/trading rather than ZHC/X) --
+    the existing prompt talks explicitly about "ZHC, holding autonomy,
+    marketing/comms", not "macro context that informs a trading decision",
+    so legitimate Fed/CPI/psychology content would risk being wrongly
+    rejected as "not relevant" with the original prompt."""
     skip, reason = _prefilter_junk(text)
     if skip:
         return InsightAssessment(

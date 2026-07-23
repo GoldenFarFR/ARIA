@@ -1,4 +1,4 @@
-"""Audit « ok tout est prêt — qu'est-ce qu'il manque ? » — côté opérateur."""
+"""Audit "ok everything's ready — what's missing?" — operator side."""
 from __future__ import annotations
 
 import re
@@ -111,8 +111,8 @@ async def collect_readiness_gaps(
     else:
         ok_items.append("GitHub token présent")
 
-    # ACP volontairement abandonné (docs/acp-reactivation.md) -- acp-cli absent n'est pas
-    # un gap à combler, ne pas le signaler comme un manque.
+    # ACP deliberately abandoned (docs/acp-reactivation.md) -- a missing acp-cli isn't
+    # a gap to fill, don't report it as a shortcoming.
 
     health_ok, health_detail = await _probe_local_health()
     if health_ok:
@@ -154,7 +154,7 @@ async def collect_readiness_gaps(
 
 
 async def execute_operator_status_pulse(message: str, *, lang: str = "fr") -> tuple[str, dict[str, Any]]:
-    """Pulse opérateur — santé locale, JOURNAL.md ops (sans web)."""
+    """Operator pulse — local health, ops JOURNAL.md (no web)."""
     gaps, ok_items = await collect_readiness_gaps()
     lang_key = "fr" if lang == "fr" else "en"
     lines: list[str] = []

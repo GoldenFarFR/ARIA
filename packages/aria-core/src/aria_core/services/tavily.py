@@ -1,18 +1,18 @@
-"""Client de recherche web Tavily — fournisseur fiable pour la vérification de faits.
+"""Tavily web search client — a reliable provider for fact verification.
 
-Alternative à DuckDuckGo (qui renvoie des 403 systématiques sans throttle/backoff) pour
-le point d'entrée unique `web_verify.fetch_web_snippets`. Tavily est orienté LLM : il
-renvoie des extraits courts déjà taillés pour de la vérification de faits.
+An alternative to DuckDuckGo (which returns systematic 403s with no throttle/backoff) for
+the single entry point `web_verify.fetch_web_snippets`. Tavily is LLM-oriented: it
+returns short excerpts already tailored for fact verification.
 
-Doctrine « dôme » (identique à goplus.py / blockscout.py) :
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
-- Timeout / 5xx : 1 retry après 5s, puis dégradation explicite (liste vide, jamais une
-  donnée inventée).
-- La clé API vit UNIQUEMENT dans l'environnement (`TAVILY_API_KEY`) — jamais en dur, jamais
-  loguée. Sans clé, le client est simplement `available=False` et ne fait aucun appel.
+Guardrail doctrine (identical to goplus.py / blockscout.py):
+- 429: exponential backoff, 3 attempts max, then give up without blocking the pipeline.
+- Timeout / 5xx: 1 retry after 5s, then explicit degradation (empty list, never
+  invented data).
+- The API key lives ONLY in the environment (`TAVILY_API_KEY`) — never hardcoded, never
+  logged. Without a key, the client is simply `available=False` and makes no call.
 
-Lecture seule. Gaté en amont par `settings.aria_web_search_provider == "tavily"` : tant que
-l'opérateur n'a pas basculé le flag ET fourni une clé, DuckDuckGo reste le fournisseur.
+Read-only. Gated upstream by `settings.aria_web_search_provider == "tavily"`: until
+the operator flips the flag AND supplies a key, DuckDuckGo remains the provider.
 """
 from __future__ import annotations
 
@@ -26,14 +26,14 @@ import httpx
 logger = logging.getLogger(__name__)
 
 TAVILY_URL = "https://api.tavily.com/search"
-# 23/07 -- ajoutés pour router la lecture X vers Tavily (moins cher que le repli
-# x402 twit.sh) et pour l'extraction complète de site (Website/Docs Substance,
-# jamais possible avec le snapshot 600 caractères de site_snapshot.py, conçu
-# pour enrichir un prompt LLM, pas pour un audit de site). Authentification
-# vérifiée en conditions réelles (23/07) : ``Authorization: Bearer <clé>``
-# fonctionne sur LES TROIS endpoints (search/extract/crawl) -- utilisée ici
-# pour ces deux nouveaux endpoints ; ``search()`` garde son authentification
-# historique (clé dans le corps) inchangée, jamais retouchée sans raison.
+# 07/23 -- added to route X reading to Tavily (cheaper than the x402
+# twit.sh fallback) and for full site extraction (Website/Docs Substance,
+# never possible with site_snapshot.py's 600-character snapshot, designed
+# to enrich an LLM prompt, not for a site audit). Authentication
+# verified under real conditions (07/23): ``Authorization: Bearer <key>``
+# works on ALL THREE endpoints (search/extract/crawl) -- used here
+# for these two new endpoints; ``search()`` keeps its historical
+# authentication (key in the body) unchanged, never touched without reason.
 EXTRACT_URL = "https://api.tavily.com/extract"
 CRAWL_URL = "https://api.tavily.com/crawl"
 
@@ -44,14 +44,14 @@ _FAIL_STREAK_WARN_THRESHOLD = 3
 
 @dataclass
 class TavilyResult:
-    """Extraits web renvoyés par Tavily. `available=False` + `error` si indisponible ;
-    jamais de donnée inventée."""
+    """Web excerpts returned by Tavily. `available=False` + `error` if unavailable;
+    never invented data."""
 
     query: str
-    # Chaque snippet : (text, url, published_date brut ou None -- Tavily ne le fournit pas
-    # toujours, surtout hors recherche "news"; cf. #126).
+    # Each snippet: (text, url, raw published_date or None -- Tavily doesn't always
+    # provide it, especially outside "news" search; cf. #126).
     snippets: list[tuple[str, str, str | None]] = field(default_factory=list)
-    # Réponse synthétique optionnelle de Tavily (include_answer).
+    # Optional synthetic answer from Tavily (include_answer).
     answer: str | None = None
     available: bool = False
     error: str | None = None
@@ -59,8 +59,8 @@ class TavilyResult:
 
 @dataclass
 class TavilyPage:
-    """Une page extraite (par ``extract`` ou ``crawl``) -- contenu texte réel,
-    jamais un résumé synthétique."""
+    """An extracted page (via ``extract`` or ``crawl``) -- real text content,
+    never a synthetic summary."""
 
     url: str
     title: str = ""
@@ -84,7 +84,7 @@ class TavilyCrawlResult:
 
 
 def tavily_api_key() -> str:
-    """Clé Tavily depuis l'env UNIQUEMENT (jamais en dur, jamais loguée)."""
+    """Tavily key from the env ONLY (never hardcoded, never logged)."""
     return os.environ.get("TAVILY_API_KEY", "").strip()
 
 
@@ -93,13 +93,13 @@ def is_tavily_configured() -> bool:
 
 
 class TavilyClient:
-    """Client HTTP async, lecture seule, throttle modéré."""
+    """Async HTTP client, read-only, moderate throttle."""
 
-    # 21/07 -- calibré à 90% de 100 req/min confirmé (palier Development,
-    # confirmé sur le dashboard réel de la clé "ARIA" -- type "dev", préfixe
-    # "tvly-dev-" -- pas le palier Production à 1000/min). Doctrine CLAUDE.md
-    # "Débit calibré à 90%" : 90/min = 0.667s. Remplace 0.5s (120/min), qui
-    # dépassait déjà le plafond Dev réel.
+    # 07/21 -- calibrated to 90% of a confirmed 100 req/min (Development tier,
+    # confirmed on the real dashboard for the "ARIA" key -- "dev" type, prefix
+    # "tvly-dev-" -- not the Production tier at 1000/min). CLAUDE.md doctrine
+    # "Throughput calibrated to 90%": 90/min = 0.667s. Replaces 0.5s (120/min), which
+    # already exceeded the real Dev cap.
     def __init__(self, *, min_interval: float = 0.667) -> None:
         self._min_interval = min_interval
         self._lock = asyncio.Lock()
@@ -121,13 +121,13 @@ class TavilyClient:
         self._consecutive_failures += 1
         if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
             logger.warning(
-                "tavily: %s echecs consecutifs (dernier: %s) — pas de blocage",
+                "tavily: %s consecutive failures (last: %s) -- no blocking",
                 self._consecutive_failures,
                 detail,
             )
         else:
             logger.info(
-                "tavily: echec appel (%s/%s) — %s",
+                "tavily: call failed (%s/%s) -- %s",
                 self._consecutive_failures,
                 _FAIL_STREAK_WARN_THRESHOLD,
                 detail,
@@ -136,10 +136,10 @@ class TavilyClient:
     async def _post(
         self, url: str, payload: dict, *, headers: dict | None = None, timeout: float = 15.0,
     ) -> tuple[object | None, str | None]:
-        """POST générique avec la politique d'erreurs du dôme. Retourne (data, error).
+        """Generic POST with the guardrail's error policy. Returns (data, error).
 
-        NB : la clé API (corps OU header ``Authorization``) n'est jamais loguée --
-        on ne journalise que l'URL et le code d'erreur, jamais le payload/header."""
+        NB: the API key (body OR ``Authorization`` header) is never logged --
+        only the URL and the error code are logged, never the payload/header."""
         attempt_429 = 0
         retried = False
 
@@ -159,7 +159,7 @@ class TavilyClient:
             if response.status_code == 429:
                 attempt_429 += 1
                 if attempt_429 >= 3:
-                    self._record_failure(f"{url} -> HTTP 429 apres {attempt_429} tentatives")
+                    self._record_failure(f"{url} -> HTTP 429 after {attempt_429} attempts")
                     return None, f"{UNAVAILABLE} (rate limit)"
                 await asyncio.sleep(0.5 * (2**attempt_429))
                 continue
@@ -173,7 +173,7 @@ class TavilyClient:
                 return None, f"{UNAVAILABLE} (erreur serveur)"
 
             if response.status_code in (401, 403):
-                # Clé absente/invalide : dégradation douce, on ne loggue jamais la clé.
+                # Missing/invalid key: soft degradation, the key is never logged.
                 self._record_failure(f"{url} -> HTTP {response.status_code} (clé ?)")
                 return None, f"{UNAVAILABLE} (clé refusée ou absente)"
 
@@ -187,7 +187,7 @@ class TavilyClient:
             return response.json(), None
 
     async def _post_json(self, payload: dict) -> tuple[object | None, str | None]:
-        """Repli historique de ``search()`` -- clé dans le corps, jamais retouché."""
+        """Historical fallback for ``search()`` -- key in the body, never touched."""
         return await self._post(TAVILY_URL, payload)
 
     async def search(
@@ -200,20 +200,20 @@ class TavilyClient:
         include_domains: list[str] | None = None,
         caller: str = "unknown",
     ) -> TavilyResult:
-        """Recherche Tavily pour une requête. Best-effort, jamais bloquant.
+        """Tavily search for a query. Best-effort, never blocking.
 
-        ``include_domains`` (22/07) : restreint les résultats à des domaines précis --
-        vérifié en direct que ``["twitter.com", "x.com"]`` renvoie de vrais résultats
-        pertinents (posts/profils publics déjà indexés), sans passer par l'API X
-        officielle ni le repli x402 (twit.sh). Portée honnête : indexation web
-        classique, pas un flux temps réel -- adapté à de la veille, pas à une
-        décision urgente.
+        ``include_domains`` (07/22): restricts results to specific domains --
+        verified live that ``["twitter.com", "x.com"]`` returns real relevant
+        results (already-indexed public posts/profiles), without going through the
+        official X API nor the x402 fallback (twit.sh). Honest scope: classic
+        web indexing, not a real-time feed -- suited for monitoring, not an
+        urgent decision.
 
-        ``caller`` (22/07) : identifie qui dépense (ex. ``web_verify``,
-        ``tavily_learning``) -- sert la traçabilité (``tavily_budget.recent_searches``),
-        pas seulement le budget. Budget MENSUEL partagé (``tavily_budget.py``,
-        900/1000 crédits) vérifié PROACTIVEMENT ici, avant tout appel HTTP réel --
-        même doctrine que ``blockscout.py`` pour son budget Pro."""
+        ``caller`` (07/22): identifies who's spending (e.g. ``web_verify``,
+        ``tavily_learning``) -- serves traceability (``tavily_budget.recent_searches``),
+        not just the budget. Shared MONTHLY budget (``tavily_budget.py``,
+        900/1000 credits) checked PROACTIVELY here, before any real HTTP call --
+        same doctrine as ``blockscout.py`` for its Pro budget."""
         q = (query or "").strip()
         if not q:
             return TavilyResult(query=q, available=False, error="requête vide")
@@ -268,17 +268,17 @@ class TavilyClient:
     async def extract(
         self, urls: list[str], *, extract_depth: str = "basic", caller: str = "unknown",
     ) -> TavilyExtractResult:
-        """Contenu texte RÉEL d'une ou plusieurs pages -- contrairement à ``search``
-        (extraits DE TIERS à propos d'une page), ceci est le contenu de la page
-        elle-même, rendu par l'infrastructure Tavily (gère le JS côté serveur --
-        vérifié en conditions réelles le 23/07 : fonctionne sur une page X/Twitter
-        SPA, que ``site_snapshot.py`` -- simple GET httpx -- ne saurait pas rendre).
+        """REAL text content of one or several pages -- unlike ``search``
+        (THIRD-PARTY excerpts about a page), this is the content of the page
+        itself, rendered by Tavily's infrastructure (handles JS server-side --
+        verified under real conditions on 07/23: works on an X/Twitter
+        SPA page, which ``site_snapshot.py`` -- a plain httpx GET -- couldn't render).
 
-        23/07, #routage lecture X vers Tavily + Website/Docs Substance -- REMPLACE
-        ``twit.sh`` (x402, payant par appel) pour les profils X quand Tavily est
-        configuré, et remplace le snapshot 600 caractères de ``site_snapshot.py``
-        pour les signaux de substance (celui-ci reste inchangé pour son usage
-        historique -- enrichir le prompt LLM, pas un audit)."""
+        07/23, #routing X reads to Tavily + Website/Docs Substance -- REPLACES
+        ``twit.sh`` (x402, paid per call) for X profiles when Tavily is
+        configured, and replaces ``site_snapshot.py``'s 600-character snapshot
+        for substance signals (which stays unchanged for its
+        historical use -- enriching the LLM prompt, not an audit)."""
         clean_urls = [u.strip() for u in (urls or []) if u and u.strip()][:20]
         if not clean_urls:
             return TavilyExtractResult(available=False, error="aucune URL fournie")
@@ -323,17 +323,17 @@ class TavilyClient:
         self, root_url: str, *, max_depth: int = 2, limit: int = 15,
         extract_depth: str = "basic", caller: str = "unknown",
     ) -> TavilyCrawlResult:
-        """Parcourt un site à partir de ``root_url`` (suit les liens internes,
-        y compris les sous-domaines comme ``docs.<site>``) et renvoie le contenu
-        texte réel de chaque page trouvée -- seule façon de « tout extraire pour
-        noter » un site multi-pages (demande opérateur explicite, 23/07) ; le
-        snapshot homepage-only 600 caractères de ``site_snapshot.py`` ne couvre
-        jamais les sous-pages (Docs/Team/Tokenomics...).
+        """Crawls a site starting from ``root_url`` (follows internal links,
+        including subdomains like ``docs.<site>``) and returns the real
+        text content of every page found -- the only way to "extract everything to
+        score" a multi-page site (explicit operator request, 07/23); the
+        homepage-only 600-character snapshot from ``site_snapshot.py`` never covers
+        subpages (Docs/Team/Tokenomics...).
 
-        Coût variable (dépend du nombre RÉEL de pages renvoyées, connu seulement
-        après l'appel) -- vérification de budget AVANT l'appel sur le PIRE CAS
-        (``limit`` pages, Tavily n'en renvoie jamais plus), dépense RÉELLE
-        enregistrée après coup sur le nombre de pages effectivement reçues."""
+        Variable cost (depends on the REAL number of pages returned, known only
+        after the call) -- budget check BEFORE the call on the WORST CASE
+        (``limit`` pages, Tavily never returns more), REAL spend
+        recorded afterward based on the pages actually received."""
         url = (root_url or "").strip()
         if not url:
             return TavilyCrawlResult(available=False, error="URL racine vide")

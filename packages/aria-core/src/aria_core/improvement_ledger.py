@@ -1,23 +1,23 @@
-"""Carnet d'auto-amélioration d'ARIA — la mémoire de ses upgrades possibles.
+"""ARIA's self-improvement ledger — the memory of her possible upgrades.
 
-Quand ARIA repère un outil, une source de données, un produit ou une idée qui
-pourrait la rendre meilleure, elle le **consigne ici** plutôt que de l'oublier.
-Chaque candidat suit un cycle de vie honnête :
+When ARIA spots a tool, a data source, a product, or an idea that could make
+her better, she **logs it here** rather than forgetting it. Each candidate
+follows an honest lifecycle:
 
-    proposed  ->  testing  ->  grafted   (greffé : a PROUVÉ qu'il améliore la calibration)
-                           ->  rejected  (testé, n'apporte rien / échoue le dôme)
+    proposed  ->  testing  ->  grafted   (grafted: PROVED it improves calibration)
+                           ->  rejected  (tested, brings nothing / fails the dome)
 
-Principes (dôme) :
-- **La greffe passe TOUJOURS par une PR validée par un humain** (via la file de
-  tâches worker) — jamais d'auto-fusion de code dans le cœur. ARIA découvre,
-  propose, teste ; l'humain valide le merge.
-- **Preuve avant greffe** : un candidat ne passe `grafted` que s'il améliore la
-  calibration MESURÉE sur le track-record (`evidence` documente le gain). « Ça a
-  l'air bien » ne suffit pas.
-- Un candidat externe (outil/produit tiers) doit passer le dôme (sanitisation,
-  aucune exécution de code non fiable) avant tout test réel.
+Principles (dome):
+- **Grafting ALWAYS goes through a human-validated PR** (via the worker task
+  queue) — never an auto-merge of code into the core. ARIA discovers,
+  proposes, tests; the human validates the merge.
+- **Proof before grafting**: a candidate only moves to `grafted` if it
+  improves calibration as MEASURED on the track record (`evidence` documents
+  the gain). "It looks good" isn't enough.
+- An external candidate (third-party tool/product) must pass the dome
+  (sanitization, no untrusted code execution) before any real test.
 
-Stockage local SQLite `aria.db`, table `improvement_candidate` (ajout pur).
+Local SQLite storage `aria.db`, table `improvement_candidate` (append-only).
 """
 from __future__ import annotations
 
@@ -83,12 +83,13 @@ async def record_candidate(
     benefit: str = "",
     seam: str = "",
 ) -> int:
-    """Consigne un candidat d'amélioration (statut ``proposed``). Retourne son id.
+    """Logs an improvement candidate (status ``proposed``). Returns its id.
 
-    ``category`` ∈ {tool, data_source, product, artifact, idea} (repli 'idea').
-    ``seam`` = le point d'ancrage pressenti (ex. ``include_<x>``, ``services/<nom>``)
-    pour que la greffe future soit un simple branchement, pas une réécriture.
-    Dédoublonnage léger : un même ``title`` déjà non-rejeté n'est pas ré-inséré.
+    ``category`` in {tool, data_source, product, artifact, idea} (falls back
+    to 'idea'). ``seam`` = the anticipated anchor point (e.g. ``include_<x>``,
+    ``services/<name>``) so the future graft is a simple hook-up, not a
+    rewrite. Light dedup: a ``title`` that's already non-rejected isn't
+    re-inserted.
     """
     await _ensure_table()
     cat = category if category in _CATEGORIES else "idea"
@@ -122,10 +123,11 @@ async def update_candidate(
     evidence: str | None = None,
     worker_task_id: str | None = None,
 ) -> dict | None:
-    """Met à jour un candidat (avancée dans le cycle de vie). Retourne la ligne, ou None.
+    """Updates a candidate (advances its lifecycle). Returns the row, or None.
 
-    Un passage à ``grafted`` DOIT être adossé à une preuve (``evidence``) : sans elle,
-    la transition est refusée (retour None) — on ne greffe jamais sur une impression.
+    A transition to ``grafted`` MUST be backed by proof (``evidence``):
+    without it, the transition is refused (returns None) — we never graft on
+    a mere impression.
     """
     await _ensure_table()
     fields, values = [], []
@@ -133,7 +135,7 @@ async def update_candidate(
         if status not in _STATUSES:
             return None
         if status == "grafted" and not (evidence or "").strip():
-            return None  # pas de greffe sans preuve
+            return None  # no grafting without proof
         fields.append("status = ?")
         values.append(status)
     if evidence is not None:
@@ -169,7 +171,7 @@ async def get_candidate(candidate_id: int) -> dict | None:
 
 
 async def list_candidates(status: str | None = None, limit: int = 50) -> list[dict]:
-    """Liste les candidats, du plus récent au plus ancien, filtrable par statut."""
+    """Lists candidates, most recent to oldest, filterable by status."""
     await _ensure_table()
     query = "SELECT * FROM improvement_candidate"
     params: tuple = ()
@@ -184,22 +186,22 @@ async def list_candidates(status: str | None = None, limit: int = 50) -> list[di
 
 
 async def ingest_seeds(path: str | Path | None = None) -> int:
-    """Charge les graines d'amélioration (YAML) dans la mémoire d'ARIA.
+    """Loads improvement seeds (YAML) into ARIA's memory.
 
-    Idempotent : le dédoublonnage par titre de ``record_candidate`` fait qu'un
-    second appel n'ajoute rien (les graines déjà présentes ne sont pas dupliquées).
-    Appelé au démarrage pour qu'ARIA « se souvienne » des pistes repérées. Retourne
-    le nombre de graines traitées (existantes ou nouvelles). Dégradation gracieuse :
-    fichier absent ou YAML illisible → 0, jamais une exception qui casse le boot.
+    Idempotent: the title-based dedup in ``record_candidate`` means a second
+    call adds nothing (seeds already present aren't duplicated). Called at
+    startup so ARIA "remembers" the leads she's spotted. Returns the number of
+    seeds processed (existing or new). Graceful degradation: missing file or
+    unreadable YAML -> 0, never an exception that breaks the boot.
     """
     seeds_path = Path(path) if path else _SEEDS_PATH
     if not seeds_path.exists():
         return 0
     try:
-        import yaml  # dépendance déjà présente (config) ; import paresseux
+        import yaml  # dependency already present (config); lazy import
 
         seeds = yaml.safe_load(seeds_path.read_text(encoding="utf-8")) or []
-    except Exception:  # noqa: BLE001 — jamais bloquant au démarrage
+    except Exception:  # noqa: BLE001 — never blocking at startup
         return 0
     if not isinstance(seeds, list):
         return 0
@@ -220,7 +222,7 @@ async def ingest_seeds(path: str | Path | None = None) -> int:
 
 
 async def count_by_status() -> dict:
-    """Compteurs par statut (pour un tableau de bord « où en est l'auto-amélioration »)."""
+    """Counters by status (for a "where does self-improvement stand" dashboard)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (

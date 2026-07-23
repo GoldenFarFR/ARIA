@@ -1,18 +1,18 @@
-"""Persistance de la progression du scan `/walletscore` (#157 suite, 15/07).
+"""Persistence of `/walletscore` scan progress (#157 follow-up, 07/15).
 
-Constat opérateur : un plafond fixe de tokens analysés (`WEIGHTS.max_tokens_analyzed`)
-ne peut jamais couvrir un wallet très actif (ex. 680 tokens tradés) en un seul appel.
-Ce module permet de couvrir l'historique complet en PLUSIEURS passages : chaque appel
-`score_wallets` traite le prochain lot de tokens jamais encore vus (ou dont l'activité
-a évolué depuis le dernier passage), et le score final se base sur TOUS les trades
-clôturés jamais archivés pour ce wallet, pas seulement ceux du dernier lot.
+Operator observation: a fixed cap on analyzed tokens (`WEIGHTS.max_tokens_analyzed`)
+can never cover a very active wallet (e.g. 680 tokens traded) in a single call.
+This module allows covering the full history over SEVERAL passes: each
+`score_wallets` call processes the next batch of never-yet-seen tokens (or ones
+whose activity has changed since the last pass), and the final score is based on ALL
+closed trades ever archived for this wallet, not just the ones from the last batch.
 
-Deux tables :
-- `wallet_scan_checkpoint` : progression par wallet (tokens déjà vus, date du dernier
-  scan, couverture complète atteinte ou non).
-- `wallet_archived_trade` : trades clôturés (FIFO) archivés par token. Un token
-  re-scanné voit ses trades REMPLACÉS (jamais ajoutés en double) -- le FIFO est
-  recalculé en entier depuis l'historique complet du token à chaque scan.
+Two tables:
+- `wallet_scan_checkpoint`: per-wallet progress (tokens already seen, date of the last
+  scan, whether full coverage has been reached).
+- `wallet_archived_trade`: closed (FIFO) trades archived per token. A
+  re-scanned token has its trades REPLACED (never appended twice) -- the FIFO is
+  recomputed in full from the token's complete history on every scan.
 """
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ async def _ensure_tables() -> None:
             )
             """
         )
-        # Migration à chaud idempotente (15/07, suivi permanent -- #157 suite 2) --
-        # une base déjà déployée avant ce champ n'a pas cette colonne.
+        # Idempotent hot migration (07/15, permanent tracking -- #157 follow-up 2) --
+        # a database already deployed before this field doesn't have this column.
         checkpoint_cols = {
             row[1] for row in await (await db.execute("PRAGMA table_info(wallet_scan_checkpoint)")).fetchall()
         }
@@ -64,10 +64,10 @@ async def _ensure_tables() -> None:
             )
             """
         )
-        # Migration à chaud idempotente (15/07, revue Gemini -- price_confirmation_ratio)
-        # -- même patron que vc_predictions.py/exam.py : une base déjà déployée avant ce
-        # champ n'a pas ces colonnes, `CREATE TABLE IF NOT EXISTS` ne les ajoute pas
-        # rétroactivement.
+        # Idempotent hot migration (07/15, Gemini review -- price_confirmation_ratio)
+        # -- same pattern as vc_predictions.py/exam.py: a database already deployed before
+        # this field doesn't have these columns, `CREATE TABLE IF NOT EXISTS` doesn't add
+        # them retroactively.
         cursor = await db.execute("PRAGMA table_info(wallet_archived_trade)")
         existing_cols = {row[1] for row in await cursor.fetchall()}
         if "buy_price_exact" not in existing_cols:
@@ -83,11 +83,11 @@ class ScanCheckpoint:
     last_scan_at: datetime | None = None
     tokens_found_total: int = 0
     full_coverage_at: datetime | None = None
-    # Suivi permanent (15/07, #157 suite 2) : dernière activité on-chain RÉELLE
-    # jamais vue pour ce wallet (max des timestamps de transferts observés) --
-    # distinct de `last_scan_at` (qui avance à CHAQUE passage, même sans
-    # nouvelle activité). Sert à mesurer une vraie inactivité (ex. 3 mois)
-    # pour arrêter la surveillance hebdomadaire post-100%.
+    # Permanent tracking (07/15, #157 follow-up 2): last REAL on-chain activity
+    # ever seen for this wallet (max of observed transfer timestamps) --
+    # distinct from `last_scan_at` (which advances on EVERY pass, even with no
+    # new activity). Used to measure real inactivity (e.g. 3 months)
+    # to stop weekly post-100% monitoring.
     last_activity_at: datetime | None = None
 
     @property
@@ -153,14 +153,14 @@ async def save_checkpoint(
 
 
 async def replace_archived_trades(wallet: str, token_addresses: set[str], trades: list) -> None:
-    """Remplace les trades archivés pour CES adresses de token précisément.
+    """Replaces archived trades for THESE specific token addresses.
 
-    Jamais un simple append : le FIFO est recalculé en entier depuis l'historique
-    complet du token à chaque scan (cf. `_analyze_wallet_multi_token`), donc
-    ré-insérer sans purger d'abord dupliquerait les mêmes trades historiques à
-    chaque passage. ``token_addresses`` attend des adresses PLATES (pas de préfixe
-    chaîne) -- même tradeoff assumé qu'ailleurs dans ``smart_money.py`` (collision
-    entre deux chaînes différentes jugée négligeable, ~2^160 espaces d'adresses).
+    Never a plain append: the FIFO is recomputed in full from the token's
+    complete history on every scan (cf. `_analyze_wallet_multi_token`), so
+    re-inserting without purging first would duplicate the same historical trades on
+    every pass. ``token_addresses`` expects PLAIN addresses (no chain
+    prefix) -- same accepted tradeoff as elsewhere in ``smart_money.py`` (collision
+    between two different chains judged negligible, ~2^160 address space).
     """
     await _ensure_tables()
     wallet_l = wallet.lower()
@@ -193,8 +193,8 @@ async def replace_archived_trades(wallet: str, token_addresses: set[str], trades
 
 
 async def list_archived_trades(wallet: str) -> list:
-    """Reconstruit les ``ClosedTrade`` archivés (import différé -- évite un cycle
-    d'import avec ``smart_money.py``, qui importe ce module)."""
+    """Rebuilds the archived ``ClosedTrade`` records (deferred import -- avoids an
+    import cycle with ``smart_money.py``, which imports this module)."""
     from aria_core.services.smart_money import ClosedTrade
 
     await _ensure_tables()

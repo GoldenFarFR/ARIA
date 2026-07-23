@@ -1,4 +1,4 @@
-"""COLLEGUE.md — mémoire opérateur injectée dans build_llm_context."""
+"""COLLEGUE.md — operator memory injected into build_llm_context."""
 from __future__ import annotations
 
 import os
@@ -85,7 +85,7 @@ def is_collegue_recall_question(message: str) -> bool:
 
 
 def get_ops_journal_tail(*, lines: int = 3) -> list[str]:
-    """Dernières lignes de collegue-memoire/JOURNAL.md (ops opérateur)."""
+    """Last lines of collegue-memoire/JOURNAL.md (operator ops)."""
     for root in _ops_memoire_candidates():
         path = root / "JOURNAL.md"
         if not path.is_file():

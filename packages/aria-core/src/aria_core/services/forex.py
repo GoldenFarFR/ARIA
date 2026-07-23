@@ -1,29 +1,29 @@
-"""Client de lecture seule Frankfurter (taux de change) — devises majeures.
+"""Read-only Frankfurter client (exchange rates) — major currencies.
 
-Frankfurter (`frankfurter.dev`) republie les taux de référence quotidiens de la
-Banque Centrale Européenne (BCE) : gratuit, sans clé, sans limite de requêtes
-documentée, API stable et documentée depuis des années (contrairement à Clanker
-plus tôt aujourd'hui — même doctrine « profondeur proportionnelle à l'enjeu » :
-seuls des clients bien documentés/vérifiables sont câblés sans détour). Taux de
-référence BCE = quotidiens (jours ouvrés), pas tick-par-tick — largement suffisant
-pour une question conversationnelle « combien vaut le dollar en euro », très
-supérieur à une page web scrappée sans preuve de fraîcheur (cf. incident 10/07 :
-prix BTC/SOL cités depuis une page périmée comme si elle était « en direct »).
+Frankfurter (`frankfurter.dev`) republishes the European Central Bank's (ECB)
+daily reference rates: free, no key, no documented rate limit,
+stable and documented API for years (unlike Clanker
+earlier today — same "depth proportional to the stakes" doctrine:
+only well-documented/verifiable clients are wired without detour). ECB
+reference rates = daily (business days), not tick-by-tick — largely sufficient
+for a conversational question like "how much is the dollar in euros", far
+better than a scraped web page with no proof of freshness (cf. 10/07 incident:
+BTC/SOL prices cited from a stale page as if it were "live").
 
-Forme de requête/réponse (``/latest?base=X&symbols=Y`` → ``{"amount":1,"base":"USD",
-"date":"...","rates":{"EUR":...}}``) confirmée par recherche croisée (documentation
-tierce indépendante, cohérente entre plusieurs sources) — le fetch DIRECT depuis cet
-environnement cloud a été bloqué en HTTP 403 (même comportement anti-bot que
-Clanker/Virtuals plus tôt aujourd'hui), donc **pas testée en direct** ; à reconfirmer
-depuis le VPS avant un premier appel réel, même prudence que les autres clients de
-ce dossier.
+Request/response shape (``/latest?base=X&symbols=Y`` → ``{"amount":1,"base":"USD",
+"date":"...","rates":{"EUR":...}}``) confirmed by cross-checking (independent
+third-party documentation, consistent across several sources) — the DIRECT fetch from
+this cloud environment was blocked with HTTP 403 (same anti-bot behavior as
+Clanker/Virtuals earlier today), so **not tested live**; to be reconfirmed
+from the VPS before a first real call, same caution as the other clients in
+this folder.
 
-Mêmes politiques que les autres clients de ce dossier :
-- Aucune écriture, GET uniquement.
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer.
-- Timeout / 5xx : 1 retry après 5s, puis fallback explicite.
-- ``fetch_*`` ne lève JAMAIS sur erreur réseau : renvoient un résultat ``available=False``.
-- Aucune donnée manquante n'est jamais remplacée par une supposition.
+Same policies as the other clients in this folder:
+- No writes, GET only.
+- 429: exponential backoff, 3 attempts max, then give up without blocking.
+- Timeout / 5xx: 1 retry after 5s, then explicit fallback.
+- ``fetch_*`` NEVER raises on a network error: returns a result with ``available=False``.
+- Missing data is never replaced by a guess.
 """
 
 from __future__ import annotations
@@ -45,17 +45,17 @@ _FAIL_STREAK_WARN_THRESHOLD = 3
 
 @dataclass
 class ExchangeRateResult:
-    """Taux de référence BCE réel pour une paire, jamais un point inventé."""
+    """Real ECB reference rate for a pair, never an invented data point."""
 
     base: str
     rates: dict[str, float] = field(default_factory=dict)
-    date: str | None = None  # date de référence BCE (YYYY-MM-DD), fournie par l'API
+    date: str | None = None  # ECB reference date (YYYY-MM-DD), provided by the API
     available: bool = False
     error: str | None = None
 
 
 class ForexClient:
-    """Client HTTP async, lecture seule, throttle prudent (API publique sans clé)."""
+    """Async HTTP client, read-only, cautious throttle (public API, no key)."""
 
     def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 0.5) -> None:
         self.base_url = base_url.rstrip("/")
@@ -79,13 +79,13 @@ class ForexClient:
         self._consecutive_failures += 1
         if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
             logger.warning(
-                "forex: %s echecs consecutifs (dernier: %s) — pas de blocage, pas d'escalade",
+                "forex: %s consecutive failures (last: %s) — no blocking, no escalation",
                 self._consecutive_failures,
                 detail,
             )
         else:
             logger.info(
-                "forex: echec appel (%s/%s) — %s",
+                "forex: call failed (%s/%s) — %s",
                 self._consecutive_failures,
                 _FAIL_STREAK_WARN_THRESHOLD,
                 detail,
@@ -142,8 +142,8 @@ class ForexClient:
             return response.json(), None
 
     async def get_latest_rates(self, base: str, symbols: list[str]) -> ExchangeRateResult:
-        """Taux de référence BCE les plus récents pour ``base`` -> chaque devise de
-        ``symbols`` (ex. ``base="USD"``, ``symbols=["EUR"]``)."""
+        """Most recent ECB reference rates for ``base`` -> each currency in
+        ``symbols`` (e.g. ``base="USD"``, ``symbols=["EUR"]``)."""
         base_ccy = (base or "").strip().upper()
         syms = [s.strip().upper() for s in symbols if s and s.strip()]
         if not base_ccy or not syms:

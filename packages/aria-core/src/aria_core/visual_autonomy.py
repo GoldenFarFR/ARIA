@@ -1,4 +1,4 @@
-"""Identité visuelle autonome — ancre opérateur → Grok Imagine → avatar + bannière X."""
+"""Autonomous visual identity — operator anchor → Grok Imagine → avatar + X banner."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def visual_autonomy_enabled() -> bool:
-    """Cycle unifié avatar+bannière (remplace curiosité bannière + style séparés)."""
+    """Unified avatar+banner cycle (replaces separate banner curiosity + style)."""
     env = os.environ.get("ARIA_VISUAL_AUTONOMY", "").strip().lower()
     if env in ("0", "false", "off", "no"):
         return False
@@ -24,7 +24,7 @@ def visual_autonomy_enabled() -> bool:
 
 
 def visual_auto_apply_enabled() -> bool:
-    """Appliquer sans /avatar style apply (mode ZHC autonome)."""
+    """Apply without /avatar style apply (autonomous ZHC mode)."""
     env = os.environ.get("ARIA_VISUAL_AUTO_APPLY", "").strip().lower()
     if env in ("0", "false", "off", "no"):
         return False
@@ -65,9 +65,9 @@ async def run_visual_autonomy_cycle(
     *, lang: str = "fr", notify: bool = True, force: bool = False,
 ) -> dict[str, Any]:
     """
-    1. Ancre identité depuis current.jpg (photo de base opérateur)
-    2. Nouveau style Imagine si échéance → auto-apply + sync Telegram/X
-    3. Bannière 3:1 régénérée si absente ou avatar plus récent
+    1. Anchors identity from current.jpg (operator's base photo)
+    2. New Imagine style if due → auto-apply + Telegram/X sync
+    3. 3:1 banner regenerated if missing or avatar is more recent
     """
     from aria_core.avatar_identity import ensure_identity_anchor_from_current, has_identity_anchor
     from aria_core.avatar_style_refresh import is_image_generation_available, run_refresh_cycle
@@ -88,7 +88,7 @@ async def run_visual_autonomy_cycle(
     )
     out["avatar"] = avatar
 
-    # Banniere = asset brand separe — pas de regen auto quand l'avatar change (evite visage sur header)
+    # Banner = separate brand asset — no auto-regen when the avatar changes (avoids a face on the header)
     banner_refresh = (
         bool(getattr(__import__("aria_core.runtime", fromlist=["settings"]).settings, "aria_banner_auto_refresh", True))
         and is_image_generation_available()

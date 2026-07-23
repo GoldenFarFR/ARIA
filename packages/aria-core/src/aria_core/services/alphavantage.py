@@ -1,41 +1,41 @@
-"""Client de lecture seule Alpha Vantage — indices actions (proxy ETF), ETF,
-matières premières hors métaux précieux (tâche #14 suite, 13/07 -- overlay macro).
+"""Read-only Alpha Vantage client — equity indices (ETF proxy), ETFs,
+commodities excluding precious metals (task #14 follow-up, 07/13 -- macro overlay).
 
-Doctrine du dôme, même patron que ``forex.py`` : GET uniquement, aucune écriture,
-backoff exponentiel sur 429 (3 tentatives), 1 retry après 5s sur timeout/5xx,
-``fetch_*``/``get_*`` ne lèvent jamais sur erreur réseau, ``available=False``
-explicite, aucune donnée manquante jamais remplacée par une supposition.
+Guardrail doctrine, same pattern as ``forex.py``: GET only, no writes,
+exponential backoff on 429 (3 attempts), 1 retry after 5s on timeout/5xx,
+``fetch_*``/``get_*`` never raise on network error, explicit ``available=False``,
+no missing data ever replaced by a guess.
 
-Écart assumé par rapport à Frankfurter (cf. veille
+Deliberate divergence from Frankfurter (cf. research note
 ``docs/aria-learning-inbox/2026-07-13-veille-sources-donnees-actions-etf-matieres-
-premieres.md``) : clé API requise, plafond gratuit réel de seulement 25
-requêtes/jour. Deux conséquences structurelles :
+premieres.md``): API key required, real free cap of only 25
+requests/day. Two structural consequences:
 
-- **Pas d'endpoint indice natif** (``^GSPC``/``^IXIC``) : les "indices actions"
-  sont interrogés via leur ETF-réplique (``GLOBAL_QUOTE`` sur SPY/QQQ) --
-  ``QuoteResult.is_proxy`` le rend explicite pour tout appelant, jamais présenté
-  comme l'indice lui-même.
-- **Or/argent non couverts** : aucun endpoint documenté chez ce fournisseur pour
-  les métaux précieux (vérifié dans la veille) -- absence structurelle, pas un
-  choix de câblage. ``get_commodity`` refuse toute fonction hors de la liste
-  blanche ci-dessous, y compris si un appelant tentait "GOLD"/"SILVER".
+- **No native index endpoint** (``^GSPC``/``^IXIC``): "equity indices"
+  are queried via their ETF-replica (``GLOBAL_QUOTE`` on SPY/QQQ) --
+  ``QuoteResult.is_proxy`` makes this explicit to every caller, never presented
+  as the index itself.
+- **Gold/silver not covered**: no documented endpoint at this provider for
+  precious metals (verified in the research note) -- a structural absence, not a
+  wiring choice. ``get_commodity`` refuses any function outside the
+  whitelist below, even if a caller tried "GOLD"/"SILVER".
 
-Cache strict + budget quotidien : un cache en mémoire seul (cf.
-``btc_cycles._phase_cache``) perdrait le compte à chaque redémarrage du process
-et pourrait dépasser le plafond réel de 25/jour -- ici la persistance est
-nécessaire, pas juste une sobriété de bon goût. ``aiosqlite`` + ``aria_db_path()``
-(même infra que ``ux_watch.py``/``pump_dump_autopsy.py``), deux tables :
-``alphavantage_cache`` (payload JSON, TTL 24h) et ``alphavantage_daily_calls``
-(compteur par jour calendaire). Budget interne volontairement plus bas que le
-plafond réel (20 au lieu de 25) -- marge de sécurité pour absorber un test
-manuel/debug sans jamais toucher le mur.
+Strict cache + daily budget: an in-memory-only cache (cf.
+``btc_cycles._phase_cache``) would lose the count on every process restart
+and could exceed the real 25/day cap -- here persistence is
+necessary, not just good-taste frugality. ``aiosqlite`` + ``aria_db_path()``
+(same infra as ``ux_watch.py``/``pump_dump_autopsy.py``), two tables:
+``alphavantage_cache`` (JSON payload, 24h TTL) and ``alphavantage_daily_calls``
+(counter per calendar day). Internal budget deliberately lower than the
+real cap (20 instead of 25) -- safety margin to absorb a
+manual/debug test without ever hitting the wall.
 
-**Hypothèse assumée, à corriger si l'info exacte est connue** : le jour de
-reset du plafond Alpha Vantage n'est pas précisé dans la veille (probablement
-minuit heure du marché US, pas UTC). Faute de confirmation, le compteur utilise
-un jour calendaire UTC -- déterministe et simple, potentiellement décalé de
-quelques heures par rapport au vrai reset du fournisseur. Dans le pire cas ça
-sous-utilise légèrement le quota (jamais un dépassement), jamais l'inverse.
+**Assumed hypothesis, to correct if the exact info is known**: the reset
+day of the Alpha Vantage cap is not specified in the research note (probably
+midnight US market time, not UTC). Absent confirmation, the counter uses
+a UTC calendar day -- deterministic and simple, potentially offset by
+a few hours from the provider's real reset. In the worst case this
+slightly underuses the quota (never an overrun), never the reverse.
 """
 
 from __future__ import annotations
@@ -60,22 +60,22 @@ UNAVAILABLE = "donnée Alpha Vantage indisponible"
 
 DB_PATH = str(aria_db_path())
 
-# Budget interne < plafond réel (25/jour) -- marge de sécurité volontaire.
+# Internal budget < real cap (25/day) -- deliberate safety margin.
 DAILY_BUDGET = 20
 
-# TTL du cache : uniforme 24h pour tout (quotes ET matières premières), même si
-# la veille signale que les matières premières sont "proches du temps réel"
-# chez ce fournisseur -- le plafond de 25/jour domine de toute façon, pas de
-# traitement différencié qui compliquerait la logique sans gain réel.
+# Cache TTL: uniform 24h for everything (quotes AND commodities), even though
+# the research note flags commodities as "close to real-time" at this
+# provider -- the 25/day cap dominates anyway, no differentiated
+# handling that would complicate the logic without real benefit.
 _CACHE_TTL_SECONDS = 24 * 3600
 
-# Symboles ETF-proxy pour les indices actions (pas l'indice natif -- absent de
-# l'API). SPY = S&P 500, QQQ = Nasdaq 100.
+# ETF-proxy symbols for equity indices (not the native index -- absent from
+# the API). SPY = S&P 500, QQQ = Nasdaq 100.
 PROXY_SYMBOLS = {"SPY", "QQQ"}
 
-# Fonctions "commodities" documentées par Alpha Vantage et vérifiées par la
-# veille -- liste blanche stricte, aucun paramètre libre. Or/argent absents
-# (pas un oubli : aucun endpoint chez ce fournisseur).
+# "Commodities" functions documented by Alpha Vantage and verified in the
+# research note -- strict whitelist, no free parameter. Gold/silver absent
+# (not an oversight: no endpoint at this provider).
 COMMODITY_FUNCTIONS = {
     "WTI",
     "BRENT",
@@ -93,7 +93,7 @@ COMMODITY_FUNCTIONS = {
 
 @dataclass
 class QuoteResult:
-    """Cotation ETF réelle (``GLOBAL_QUOTE``), jamais un point inventé."""
+    """Real ETF quote (``GLOBAL_QUOTE``), never an invented data point."""
 
     symbol: str
     price: float | None = None
@@ -107,7 +107,7 @@ class QuoteResult:
 
 @dataclass
 class CommodityResult:
-    """Valeur matière première réelle, jamais un point inventé."""
+    """Real commodity value, never an invented data point."""
 
     function: str
     value: float | None = None
@@ -155,9 +155,9 @@ def _now() -> str:
 
 
 async def _get_cached(cache_key: str) -> tuple[dict | None, bool]:
-    """Renvoie ``(payload, stale)``. ``payload`` est ``None`` si jamais mis en
-    cache ; ``stale=True`` si présent mais expiré (encore utilisable en dernier
-    recours si le budget quotidien est épuisé)."""
+    """Returns ``(payload, stale)``. ``payload`` is ``None`` if never cached;
+    ``stale=True`` if present but expired (still usable as a last
+    resort if the daily budget is exhausted)."""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT payload, fetched_at FROM alphavantage_cache WHERE cache_key = ?",
@@ -206,7 +206,7 @@ async def _record_call() -> None:
 
 
 class AlphaVantageClient:
-    """Client HTTP async, lecture seule, cache + budget quotidien persistants."""
+    """Async HTTP client, read-only, persisted cache + daily budget."""
 
     def __init__(self, base_url: str = BASE_URL) -> None:
         self.base_url = base_url
@@ -234,7 +234,7 @@ class AlphaVantageClient:
             if response.status_code == 429:
                 attempt_429 += 1
                 if attempt_429 >= 3:
-                    logger.info("alphavantage: HTTP 429 apres %s tentatives", attempt_429)
+                    logger.info("alphavantage: HTTP 429 after %s attempts", attempt_429)
                     return None, f"{UNAVAILABLE} (rate limit)"
                 await asyncio.sleep(0.5 * (2**attempt_429))
                 continue
@@ -255,17 +255,17 @@ class AlphaVantageClient:
 
             data = response.json()
             if not isinstance(data, dict) or "Note" in data or "Information" in data:
-                # Alpha Vantage renvoie du 200 OK avec un message texte dans
-                # "Note"/"Information" quand le plafond est atteint côté serveur
-                # (pas un vrai payload) -- traité comme un échec explicite, jamais
-                # parsé comme une donnée réelle.
+                # Alpha Vantage returns a 200 OK with a text message in
+                # "Note"/"Information" when the cap is hit server-side
+                # (not a real payload) -- treated as an explicit failure, never
+                # parsed as real data.
                 return None, f"{UNAVAILABLE} (plafond fournisseur atteint)"
             return data, None
 
     async def _fetch_with_budget(self, cache_key: str, params: dict) -> tuple[dict | None, bool, str | None]:
-        """Renvoie ``(payload, stale, error)``. Sert le cache si valide ; sinon
-        consulte le budget quotidien avant tout appel réseau réel ; si le budget
-        est épuisé, retombe sur le cache même expiré plutôt que rien."""
+        """Returns ``(payload, stale, error)``. Serves the cache if valid; otherwise
+        checks the daily budget before any real network call; if the budget
+        is exhausted, falls back to the cache even if expired rather than nothing."""
         await _ensure_tables()
 
         cached, stale = await _get_cached(cache_key)
@@ -295,8 +295,8 @@ class AlphaVantageClient:
         return data, False, None
 
     async def get_quote(self, symbol: str) -> QuoteResult:
-        """Cotation ETF réelle via ``GLOBAL_QUOTE`` -- proxy pour l'indice qu'elle
-        réplique (SPY/QQQ), jamais présentée comme l'indice natif."""
+        """Real ETF quote via ``GLOBAL_QUOTE`` -- a proxy for the index it
+        replicates (SPY/QQQ), never presented as the native index."""
         sym = (symbol or "").strip().upper()
         if not sym:
             return QuoteResult(symbol=sym, available=False, error=UNAVAILABLE)
@@ -340,9 +340,9 @@ class AlphaVantageClient:
         )
 
     async def get_commodity(self, function: str) -> CommodityResult:
-        """Valeur matière première réelle -- fonction restreinte à la liste
-        blanche vérifiée par la veille (hors métaux précieux, absents chez ce
-        fournisseur)."""
+        """Real commodity value -- function restricted to the
+        whitelist verified in the research note (excluding precious metals, absent at this
+        provider)."""
         fn = (function or "").strip().upper()
         if fn not in COMMODITY_FUNCTIONS:
             return CommodityResult(function=fn, available=False, error=f"{UNAVAILABLE} (fonction non couverte)")
@@ -376,11 +376,11 @@ alphavantage_client = AlphaVantageClient()
 
 
 async def fetch_equities_commodities_context(*, client: AlphaVantageClient | None = None) -> dict | None:
-    """Point d'entrée compact pour l'overlay macro des rapports VC (tâche #14
-    suite, 13/07). Fail-closed (gate OFF par défaut) ET dégradation douce :
-    chaque source (SPY, QQQ, matières premières composite) est indépendante --
-    l'absence de l'une n'empêche jamais les autres. ``None`` seulement si les
-    TROIS échouent (rien à montrer), jamais une valeur inventée pour combler."""
+    """Compact entry point for the VC reports' macro overlay (task #14
+    follow-up, 07/13). Fail-closed (gate OFF by default) AND soft degradation:
+    each source (SPY, QQQ, composite commodities) is independent --
+    the absence of one never blocks the others. ``None`` only if all
+    THREE fail (nothing to show), never an invented value to fill in."""
     if not alphavantage_context_enabled():
         return None
 

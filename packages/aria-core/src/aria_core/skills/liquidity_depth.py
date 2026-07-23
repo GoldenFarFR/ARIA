@@ -1,37 +1,37 @@
-"""Profondeur de liquidité — un marché trop mince par rapport à la valorisation est fragile.
+"""Liquidity depth — a market too thin relative to its valuation is fragile.
 
-Intuition opérateur : « 100k de market cap pour 20k de liquidité, c'est pas ouf ;
-il faut au moins 30-40k ». Autrement dit, la liquidité doit représenter une **part
-saine** de la capitalisation (ratio liquidité / market cap). Un ratio faible = marché
-mince = slippage élevé, facile à dumper, facile à manipuler.
+Operator intuition: "100k market cap for 20k liquidity isn't great; you need
+at least 30-40k." In other words, liquidity should represent a **healthy
+share** of the capitalization (liquidity / market cap ratio). A low ratio = thin
+market = high slippage, easy to dump, easy to manipulate.
 
-Ce n'est PAS un seuil absolu : il se module **au cas par cas selon le launchpad**
-(une courbe de bonding démarre volontairement mince ; Bankr met énormément de
-liquidité). Pur et déterministe. Data-gated : sans market cap connu, pas de verdict.
+This is NOT an absolute threshold: it's modulated **case by case depending on the
+launchpad** (a bonding curve deliberately starts thin; Bankr puts a lot of
+liquidity in). Pure and deterministic. Data-gated: with no known market cap, no verdict.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Plancher par défaut : la liquidité doit valoir >= 30 % de la market cap (intuition
-# opérateur : 100k mcap -> 30-40k liq mini). Surchargeable selon le launchpad.
+# Default floor: liquidity must be worth >= 30% of market cap (operator
+# intuition: 100k mcap -> 30-40k liq minimum). Overridable per launchpad.
 #
-# 23/07 -- tension structurelle identifiée par le stress-test (Codex Partie 11) :
-# ce seuil exclut mécaniquement une petite équipe honnête à faible trésorerie
-# (elle ne peut pas se permettre de verrouiller 30% de sa market cap en liquidité
-# DEX), en tension directe avec la thèse "builders sub-1M$". Escaladé
-# explicitement à l'opérateur -- décision confirmée : GARDER LE SEUIL TEL QUEL,
-# priorité à la sécurité anti-rug plutôt qu'un assouplissement qui affaiblirait
-# une protection anti-manipulation. Pas un oubli, un arbitrage tranché.
+# 07/23 -- structural tension identified by the stress-test (Codex Part 11):
+# this threshold mechanically excludes a small honest team with a low treasury
+# (it can't afford to lock 30% of its market cap in DEX liquidity),
+# in direct tension with the "sub-$1M builders" thesis. Explicitly
+# escalated to the operator -- confirmed decision: KEEP THE THRESHOLD AS-IS,
+# priority to anti-rug security over a relaxation that would weaken an
+# anti-manipulation protection. Not an oversight, a settled tradeoff.
 DEFAULT_MIN_RATIO = 0.30
 
 
 @dataclass(frozen=True)
 class LiquidityDepth:
-    """Le marché est-il assez profond pour la valorisation ?"""
+    """Is the market deep enough for the valuation?"""
 
-    ratio: float | None            # liquidité / market cap
-    healthy: bool | None           # None si indéterminable (mcap inconnu)
+    ratio: float | None            # liquidity / market cap
+    healthy: bool | None           # None if undeterminable (unknown mcap)
     min_ratio: float
     note: str = ""
 
@@ -43,12 +43,12 @@ def assess_liquidity_depth(
     min_ratio: float = DEFAULT_MIN_RATIO,
     bonding_curve: bool = False,
 ) -> LiquidityDepth:
-    """Ratio liquidité/mcap et verdict de profondeur. ``healthy=None`` si non calculable.
+    """Liquidity/mcap ratio and depth verdict. ``healthy=None`` if not computable.
 
-    ``bonding_curve=True`` : sur une courbe de bonding (Virtuals...), la liquidité
-    croît EXPONENTIELLEMENT avec la progression — elle démarre volontairement mince.
-    Le ratio n'est donc PAS un signal de fragilité ici : on renvoie le ratio pour
-    info mais ``healthy=None`` (ne jamais pénaliser un token en bonding pour ça).
+    ``bonding_curve=True``: on a bonding curve (Virtuals...), liquidity
+    grows EXPONENTIALLY with progression — it deliberately starts thin.
+    The ratio is therefore NOT a fragility signal here: the ratio is returned for
+    info but ``healthy=None`` (never penalize a bonding token for this).
     """
     if not market_cap_usd or market_cap_usd <= 0 or liquidity_usd is None:
         return LiquidityDepth(ratio=None, healthy=None, min_ratio=min_ratio,

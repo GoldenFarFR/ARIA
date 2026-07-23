@@ -61,7 +61,7 @@ async def test_get_prepaid_balance_without_credentials_never_calls_network(monke
     result = await get_prepaid_balance()
     assert result.available is False
     assert result.balance_usd is None
-    assert "absents" in result.error
+    assert "missing" in result.error
 
 
 @pytest.mark.asyncio

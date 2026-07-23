@@ -1,4 +1,4 @@
-"""Curriculum d'exposition — questions d'entraînement épistémique pour l'opérateur."""
+"""Exposure curriculum — epistemic training questions for the operator."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from aria_core.knowledge.calibration_ledger import compute_stats
 from aria_core.knowledge.curriculum_cooldown import cooldown_minutes_remaining
 from aria_core.paths import data_dir
 
-EXPOSURE_INTERVAL_MINUTES = 1440  # 1× / jour
+EXPOSURE_INTERVAL_MINUTES = 1440  # 1x / day
 
 _CURRICULUM_DOMAINS = [
     ("holding", "Quelle est la relation entre Aria Vanguard ZHC et DEXPulse ?"),

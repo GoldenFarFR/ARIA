@@ -1,4 +1,4 @@
-"""Flags mémoire vectorielle — évite imports circulaires."""
+"""Vector memory flags — avoids circular imports."""
 from __future__ import annotations
 
 

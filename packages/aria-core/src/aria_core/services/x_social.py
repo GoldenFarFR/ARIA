@@ -1,17 +1,18 @@
-"""Écoute sociale X (Twitter) — service de sourcing pour le Radar (Voûte 4).
+"""X (Twitter) social listening — sourcing service for the Radar (Vault 4).
 
-Récolte les MENTIONS de contrats de token sur X et en tire un signal de **bruit**
-(combien de mentions, combien d'auteurs distincts). Ce bruit sert uniquement à
-**sourcer/réveiller** des candidats : il ne décide JAMAIS d'acheter ou de vendre.
+Collects token contract MENTIONS on X and derives a **buzz** signal from
+them (how many mentions, how many distinct authors). This buzz is only used
+to **source/wake up** candidates: it NEVER decides to buy or sell.
 
-DÔME (règle de fer) : la donnée sociale est **non fiable** et **hostile par défaut**
-(fermes de bots, shills payés, faux consensus). Elle est **sanitisée** ici (jamais
-interprétée comme une instruction), et en aval c'est l'analyse **on-chain** qui
-tranche (``token_absorber``). Le social FILTRE/RÉVEILLE, l'on-chain ARBITRE.
+DOME (iron rule): social data is **unreliable** and **hostile by default**
+(bot farms, paid shills, fake consensus). It is **sanitized** here (never
+interpreted as an instruction), and downstream it's the **on-chain**
+analysis that decides (``token_absorber``). Social FILTERS/WAKES UP,
+on-chain ARBITRATES.
 
-Le fetch réseau est **injectable** → testable hors-ligne. En prod, le défaut
-dégrade gracieusement (liste vide) tant que l'API X n'est pas configurée : aucune
-exception, aucun blocage. Lecture seule, aucune signature.
+The network fetch is **injectable** → testable offline. In prod, the default
+degrades gracefully (empty list) as long as the X API isn't configured: no
+exception, no blocking. Read-only, no signing.
 """
 from __future__ import annotations
 
@@ -21,19 +22,19 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-# Adresse EVM : 0x + 40 hexa. On borne par des non-hexa pour éviter d'attraper
-# un préfixe d'une chaîne plus longue (ex. hash de 64). Insensible à la casse.
+# EVM address: 0x + 40 hex. Bounded by non-hex characters to avoid catching
+# a prefix of a longer string (e.g. a 64-char hash). Case-insensitive.
 _CONTRACT_RE = re.compile(r"(?<![0-9a-fA-Fx])(0x[0-9a-fA-F]{40})(?![0-9a-fA-F])")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _HANDLE_MAX = 32
 
 
 def _sanitize(text: object, max_len: int = 280) -> str:
-    """Neutralise une donnée sociale (jamais une instruction) : contrôle + chevrons.
+    """Neutralizes a piece of social data (never an instruction): control chars + angle brackets.
 
-    Même doctrine que ``vc_analysis._sanitize`` : on retire les caractères de
-    contrôle et on neutralise ``<`` ``>`` pour qu'un post hostile ne puisse pas
-    forger une balise et s'échapper d'une zone non fiable en aval.
+    Same doctrine as ``vc_analysis._sanitize``: strips control characters and
+    neutralizes ``<`` ``>`` so a hostile post can't forge a tag and escape an
+    untrusted zone downstream.
     """
     s = _CONTROL_CHARS_RE.sub("", str(text or ""))
     s = s.replace("<", "‹").replace(">", "›")
@@ -41,7 +42,7 @@ def _sanitize(text: object, max_len: int = 280) -> str:
 
 
 def extract_contracts(text: str) -> list[str]:
-    """Adresses de contrat (0x + 40 hexa) trouvées dans un texte, en minuscules, dédupliquées."""
+    """Contract addresses (0x + 40 hex) found in a text, lowercased, deduplicated."""
     seen: dict[str, None] = {}
     for m in _CONTRACT_RE.findall(text or ""):
         addr = m.lower()
@@ -51,10 +52,10 @@ def extract_contracts(text: str) -> list[str]:
 
 @dataclass(frozen=True)
 class SocialSignal:
-    """Bruit social autour d'un contrat : combien de mentions, combien d'auteurs.
+    """Social buzz around a contract: how many mentions, how many authors.
 
-    C'est un signal de SOURCING, jamais un déclencheur. ``distinct_authors`` filtre
-    l'astroturf grossier (un seul auteur qui spamme n'est pas un consensus).
+    This is a SOURCING signal, never a trigger. ``distinct_authors`` filters
+    out crude astroturfing (a single author spamming isn't a consensus).
     """
 
     contract: str
@@ -64,10 +65,10 @@ class SocialSignal:
 
 
 class XSocialClient:
-    """Client d'écoute X (lecture seule). ``fetch`` injectable pour les tests offline.
+    """X listening client (read-only). ``fetch`` injectable for offline tests.
 
-    En prod, ``fetch`` interroge l'API X/Twitter (recherche récente). Non configuré →
-    défaut ``_fetch_stub`` qui renvoie ``[]`` (dégradation gracieuse, jamais bloquant).
+    In prod, ``fetch`` queries the X/Twitter API (recent search). Not configured →
+    defaults to ``_fetch_stub`` which returns ``[]`` (graceful degradation, never blocking).
     """
 
     def __init__(self, fetch=None) -> None:
@@ -76,16 +77,16 @@ class XSocialClient:
     async def scan_mentions(
         self, query: str = "base token 0x", *, limit: int = 100
     ) -> list[SocialSignal]:
-        """Récolte des posts et agrège le bruit PAR contrat mentionné.
+        """Collects posts and aggregates buzz PER mentioned contract.
 
-        ``fetch(query, limit)`` doit renvoyer une liste de posts
-        ``{"text": str, "author": str}``. Toute forme inattendue est ignorée
-        silencieusement (jamais d'exception : la donnée sociale est hostile).
+        ``fetch(query, limit)`` must return a list of posts
+        ``{"text": str, "author": str}``. Any unexpected shape is silently
+        ignored (never an exception: social data is hostile).
         """
         try:
             posts = await self._fetch(query, limit)
-        except Exception as exc:  # noqa: BLE001 — jamais bloquant
-            logger.info("x_social: fetch échoué (%s) — radar vide ce tour", exc)
+        except Exception as exc:  # noqa: BLE001 — never blocking
+            logger.info("x_social: fetch failed (%s) — radar empty this round", exc)
             return []
 
         agg: dict[str, dict] = {}
@@ -113,16 +114,16 @@ class XSocialClient:
             )
             for contract, slot in agg.items()
         ]
-        # Le plus bruyant d'abord (mentions puis auteurs distincts).
+        # Loudest first (mentions then distinct authors).
         signals.sort(key=lambda s: (s.mentions, s.distinct_authors), reverse=True)
         return signals
 
 
 async def _fetch_stub(query: str, limit: int) -> list[dict]:
-    """Défaut hors-ligne / non configuré : aucune donnée sociale (jamais d'erreur)."""
-    logger.info("x_social: aucune source configurée — radar en veille (fetch stub)")
+    """Offline / not-configured default: no social data (never an error)."""
+    logger.info("x_social: no source configured — radar idle (fetch stub)")
     return []
 
 
-# Singleton pratique (fetch par défaut = stub tant que l'API X n'est pas branchée).
+# Convenience singleton (default fetch = stub as long as the X API isn't wired up).
 x_social_client = XSocialClient()

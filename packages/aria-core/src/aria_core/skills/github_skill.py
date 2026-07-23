@@ -12,16 +12,17 @@ from aria_core.runtime import settings
 
 WILDCARD = "*"
 
-# Incident #139 (12/07) : truth_ledger/sync.py a poussé des conversations Telegram en
-# clair sur GoldenFarFR/ARIA parce que GITHUB_SANDBOX_REPO=ARIA en prod + un bug dans
-# repo_write_allowed() autorisait l'écriture dès que GITHUB_READ_REPOS=* était actif.
-# Le bug de fond est corrigé (01475c42), mais la protection reposait ENTIÈREMENT sur
-# une config .env correcte -- rien n'empêchait une future config VPS de reproduire
-# l'oubli sans qu'un test le signale à la revue de code. Ces repos ne doivent JAMAIS
-# être écrits par une action automatisée, quelle que soit la config .env : bloqué en
-# dur, indépendant de GITHUB_WRITE_REPOS/GITHUB_EXCLUDED_REPOS. Scopé à l'ÉCRITURE
-# SEULE (pas à _excluded_repo_names(), partagé avec la LECTURE) : ARIA doit rester
-# lisible pour son propre auto-amélioration (ex. holding_site_skill.py, code_proposal.py).
+# Incident #139 (12/07): truth_ledger/sync.py pushed Telegram conversations in
+# plaintext to GoldenFarFR/ARIA because GITHUB_SANDBOX_REPO=ARIA in prod + a
+# bug in repo_write_allowed() allowed writing as soon as GITHUB_READ_REPOS=*
+# was active. The underlying bug is fixed (01475c42), but the protection
+# relied ENTIRELY on a correct .env config -- nothing prevented a future VPS
+# config from reproducing the oversight without a test flagging it at code
+# review. These repos must NEVER be written to by an automated action,
+# regardless of the .env config: hardcoded block, independent of
+# GITHUB_WRITE_REPOS/GITHUB_EXCLUDED_REPOS. Scoped to WRITE ONLY (not
+# _excluded_repo_names(), shared with READ): ARIA must stay readable for her
+# own self-improvement (e.g. holding_site_skill.py, code_proposal.py).
 _MANDATORY_WRITE_BLOCKED_REPOS = frozenset({"aria", "aria-ops", "aria-token-base"})
 
 
@@ -108,8 +109,9 @@ def _local_runtime() -> bool:
 
 
 def _write_is_wildcard() -> bool:
-    """GITHUB_WRITE_REPOS seul, jamais GITHUB_READ_REPOS (incident : lecture illimitée
-    n'implique jamais l'écriture -- repo_write_allowed() doit rester étanche à READ_REPOS)."""
+    """GITHUB_WRITE_REPOS alone, never GITHUB_READ_REPOS (incident: unlimited
+    read never implies write -- repo_write_allowed() must stay fully
+    isolated from READ_REPOS)."""
     write = settings.github_write_repos.strip()
     return write in (WILDCARD, f"{settings.github_owner.strip()}/*")
 
@@ -200,11 +202,11 @@ def _slugify(text: str) -> str:
     return (s[:48] or "experiment")
 
 
-# Négation -- action IRRÉVERSIBLE (delete repo GitHub réel) : "ne supprime pas ce repo"
-# matchait tel quel avant ce garde-fou (même classe de bug que web_verify.py, trouvé en
-# auditant les fonctions is_*/looks_like_* du codebase, 09/07). Un repo sandbox non listé
-# dans github_protected_repos (donc PAS déjà couvert par _repo_protected) aurait pu être
-# effacé malgré une demande explicite de le garder.
+# Negation -- IRREVERSIBLE action (real GitHub repo delete): "don't delete this repo"
+# matched as-is before this guard-rail (same bug class as web_verify.py, found while
+# auditing the codebase's is_*/looks_like_* functions, 09/07). A sandbox repo not
+# listed in github_protected_repos (so NOT already covered by _repo_protected) could
+# have been erased despite an explicit request to keep it.
 _DELETE_NEGATION_RE = re.compile(
     r"(?:ne\s+)?supprime\w*(?:\s+\w+){0,2}\s+pas|"
     r"(?:ne\s+)?efface\w*(?:\s+\w+){0,2}\s+pas|"

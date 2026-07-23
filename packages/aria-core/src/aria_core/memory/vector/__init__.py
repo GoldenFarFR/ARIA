@@ -1,4 +1,4 @@
-"""Mémoire vectorielle — stub Phase B (LanceDB opt-in, désactivé par défaut)."""
+"""Vector memory — Phase B stub (LanceDB opt-in, disabled by default)."""
 from __future__ import annotations
 
 from aria_core.memory.vector._flags import is_vector_enabled

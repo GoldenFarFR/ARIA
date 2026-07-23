@@ -1,15 +1,16 @@
-"""Projets d'apprentissage long-cours — une compétence approfondie par projet, construite
-sur PLUSIEURS jours (3 à SKILL_PROJECT_MAX_DAYS), un increment réel par cycle heartbeat,
-puis une synthèse finale soumise à l'opérateur. Décision opérateur (08/07) : « si un jour
-il lui faut 7 jours pour apprendre une compétence et l'écrire elle-même pour te la
-soumettre, pas de problème ».
+"""Long-running learning projects — one deep-dive skill per project, built over
+SEVERAL days (3 to SKILL_PROJECT_MAX_DAYS), one real increment per heartbeat cycle,
+then a final synthesis submitted to the operator. Operator decision (08/07): "if
+one day it takes her 7 days to learn a skill and write it up herself to submit to
+you, that's fine".
 
-Toujours 100% analyse/écriture — jamais une action financière, jamais un changement de
-code ou de garde-fou (aucun rapport avec `develop_repertoire`/`github_sandbox`, qui restent
-les seuls seams touchant le code, eux-mêmes opérateur-gatés). Le sujet de chaque projet
-vient du curriculum trading existant (`knowledge/trading_curriculum.yaml`, même source que
-l'examen) — jamais un sujet inventé au hasard. Fail-closed : sans LLM configuré, aucun
-increment n'est généré ni inventé ; un projet reste simplement en attente du prochain cycle.
+Always 100% analysis/writing — never a financial action, never a code or guardrail
+change (unrelated to `develop_repertoire`/`github_sandbox`, which remain the only
+seams touching code, themselves operator-gated). Each project's topic comes from
+the existing trading curriculum (`knowledge/trading_curriculum.yaml`, same source
+as the exam) — never a randomly invented topic. Fail-closed: without a configured
+LLM, no increment is generated or invented; a project simply stays pending for the
+next cycle.
 """
 from __future__ import annotations
 
@@ -59,9 +60,10 @@ class SkillProject:
 
 
 def skill_projects_enabled() -> bool:
-    """Gate simple : ON par défaut (même famille que exposure_curriculum/
-    cultivation_curriculum — 100% analyse, aucun risque financier). Coupable via
-    ARIA_SKILL_PROJECTS_ENABLED=0 si l'opérateur veut réduire le volume d'appels LLM."""
+    """Simple gate: ON by default (same family as exposure_curriculum/
+    cultivation_curriculum — 100% analysis, no financial risk). Can be switched off
+    via ARIA_SKILL_PROJECTS_ENABLED=0 if the operator wants to reduce LLM call
+    volume."""
     import os
 
     raw = os.environ.get("ARIA_SKILL_PROJECTS_ENABLED", "").strip().lower()
@@ -130,9 +132,9 @@ async def _used_concept_ids(db: aiosqlite.Connection) -> set[str]:
 
 
 async def _start_new_project(db: aiosqlite.Connection, *, concepts: list[dict] | None = None) -> SkillProject | None:
-    """Choisit le prochain concept non encore couvert dans le curriculum trading existant.
-    Boucle proprement (reprend depuis le début) une fois tous les concepts couverts —
-    jamais un sujet inventé hors curriculum."""
+    """Picks the next concept not yet covered in the existing trading curriculum.
+    Cleanly loops back (restarts from the beginning) once all concepts are covered
+    — never a topic invented outside the curriculum."""
     if concepts is None:
         from aria_core.exam import all_concepts
 
@@ -141,7 +143,7 @@ async def _start_new_project(db: aiosqlite.Connection, *, concepts: list[dict] |
         return None
 
     used = await _used_concept_ids(db)
-    candidates = [c for c in concepts if c["id"] not in used] or concepts  # boucle si tout couvert
+    candidates = [c for c in concepts if c["id"] not in used] or concepts  # loop back if all covered
     concept = random.choice(candidates)
 
     project = SkillProject(
@@ -169,10 +171,10 @@ async def _increments_for(db: aiosqlite.Connection, project_id: str) -> list[str
 
 
 async def run_skill_project_cycle(*, llm=None, notifier=None) -> dict:
-    """Un tour de projet d'apprentissage long-cours : un increment réel aujourd'hui sur le
-    projet ouvert (ou en démarre un nouveau s'il n'y en a pas). Finalise et notifie
-    l'opérateur seulement à la fin du projet (jamais un spam quotidien) — la soumission
-    finale EST le livrable demandé."""
+    """One pass of the long-running learning project: a real increment today on the
+    open project (or starts a new one if there is none). Finalizes and notifies the
+    operator only at the end of the project (never a daily spam) — the final
+    submission IS the requested deliverable."""
     await _ensure_tables()
     if llm is None:
         from aria_core.llm import chat_with_context as llm
@@ -195,7 +197,7 @@ async def run_skill_project_cycle(*, llm=None, notifier=None) -> dict:
     )
     increment_text = await llm(prompt, _INCREMENT_SYSTEM, max_tokens=500)
     if not increment_text or not increment_text.strip():
-        logger.info("skill_projects: increment échoué pour %s — cycle ignoré", project.concept_id)
+        logger.info("skill_projects: increment failed for %s — cycle skipped", project.concept_id)
         return {"outcome": "increment_failed", "project_id": project.id}
     increment_text = increment_text.strip()
 
@@ -214,7 +216,7 @@ async def run_skill_project_cycle(*, llm=None, notifier=None) -> dict:
     if new_day_count < project.target_days:
         return {"outcome": "increment", "project_id": project.id, "day": new_day_count, "target_days": project.target_days}
 
-    # Dernier jour : synthese finale + soumission a l'operateur.
+    # Last day: final synthesis + submission to the operator.
     all_increments = prior + [increment_text]
     final_prompt = (
         f"Concept : {project.concept_label} (catégorie : {project.category})\n\n"
@@ -238,7 +240,7 @@ async def run_skill_project_cycle(*, llm=None, notifier=None) -> dict:
                 f"📖 Projet d'apprentissage terminé ({project.target_days} jours) — "
                 f"{project.concept_label}\n\n{writeup}"
             )
-        except Exception:  # noqa: BLE001 — une notification ratée ne doit pas annuler la finalisation
+        except Exception:  # noqa: BLE001 — a failed notification must not cancel the finalization
             pass
 
     return {
@@ -248,7 +250,7 @@ async def run_skill_project_cycle(*, llm=None, notifier=None) -> dict:
 
 
 async def projects_status() -> dict:
-    """Vue d'ensemble (public-safe, agrégée) : projet en cours + historique completé."""
+    """Overview (public-safe, aggregated): ongoing project + completed history."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         open_project = await _open_project(db)

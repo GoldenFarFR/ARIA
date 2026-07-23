@@ -1,4 +1,4 @@
-"""Détecteur de contradictions — claim vs noyau épistémique + FAQ."""
+"""Contradiction detector — claim vs epistemic core + FAQ."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _incorrect_dexpulse_holding_claim(text: str) -> bool:
 def check_contradiction(claim: str, lang: str = "fr") -> tuple[bool, str]:
     """
     Return (has_conflict, explanation).
-    Heuristique : match fort épistémique avec p_true élevé dont le claim contredit le texte.
+    Heuristic: strong epistemic match with a high p_true whose claim contradicts the text.
     """
     lower = claim.lower()
     matches = search_epistemic(claim, limit=2, static_only=True)

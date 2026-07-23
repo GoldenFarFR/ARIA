@@ -1,12 +1,12 @@
-"""Client de lecture seule Farcaster (via l'API publique Warpcast) -- vérifie le
-CONTENU d'un profil Farcaster déclaré par un projet (19/07, retour opérateur).
+"""Read-only Farcaster client (via the public Warpcast API) -- verifies the
+CONTENT of a Farcaster profile declared by a project (07/19, operator feedback).
 
-`api.warpcast.com/v2/user-by-username` (vérifié en direct, 19/07) est PUBLIC et
-GRATUIT, aucune clé requise -- contrairement à Neynar (retesté le même soir : exige
-désormais un paiement x402 ou une clé API, `X-PAYMENT header or API key required`),
-Warpcast reste la voie gratuite. Donne un vrai signal de légitimité que Neynar
-n'expose pas gratuitement : ``publicSpamLabel`` -- le classement anti-spam de
-Warpcast lui-même sur ce compte -- en plus du nombre d'abonnés."""
+`api.warpcast.com/v2/user-by-username` (verified live, 07/19) is PUBLIC and
+FREE, no key required -- unlike Neynar (retested the same evening: now
+requires an x402 payment or an API key, `X-PAYMENT header or API key required`),
+Warpcast remains the free path. Provides a real legitimacy signal that Neynar
+doesn't expose for free: ``publicSpamLabel`` -- Warpcast's own anti-spam
+classification for this account -- in addition to the follower count."""
 from __future__ import annotations
 
 import logging
@@ -40,17 +40,17 @@ def _parse_username(url: str) -> str | None:
 
 
 async def verify_profile(url: str) -> FarcasterProfileVerification:
-    """Vérifie un profil Farcaster déclaré. Jamais une exception qui remonte."""
+    """Verifies a declared Farcaster profile. Never a bubbling exception."""
     username = _parse_username(url)
     if not username:
-        return FarcasterProfileVerification(available=False, error="URL Farcaster illisible")
+        return FarcasterProfileVerification(available=False, error="unreadable Farcaster URL")
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
             res = await client.get(_API_URL, params={"username": username})
     except Exception as exc:  # noqa: BLE001
-        logger.info("farcaster: requête échouée pour %s (%s)", username, exc)
-        return FarcasterProfileVerification(available=False, error=f"requête échouée ({exc})")
+        logger.info("farcaster: request failed for %s (%s)", username, exc)
+        return FarcasterProfileVerification(available=False, error=f"request failed ({exc})")
 
     if res.status_code == 404:
         return FarcasterProfileVerification(available=True, exists=False)
@@ -60,7 +60,7 @@ async def verify_profile(url: str) -> FarcasterProfileVerification:
     try:
         data = res.json()
     except Exception as exc:  # noqa: BLE001
-        return FarcasterProfileVerification(available=False, error=f"réponse illisible ({exc})")
+        return FarcasterProfileVerification(available=False, error=f"unreadable response ({exc})")
 
     user = (data.get("result") or {}).get("user") or {}
     if not user:

@@ -1,32 +1,33 @@
-"""Client Mobula (lecture seule) -- 3e étage de la cascade OHLCV momentum (#194),
-inséré entre CoinMarketCap et la synthèse dégradée DexScreener (18/07, #212).
+"""Mobula client (read-only) -- 3rd tier of the momentum OHLCV cascade (#194),
+inserted between CoinMarketCap and the degraded DexScreener synthesis (18/07, #212).
 
-Contexte : diagnostiqué en direct ce soir sur le pipeline momentum -- GeckoTerminal
-(HTTP 429) puis CoinMarketCap (HTTP 500) indisponibles simultanément, cascade
-retombée sur la synthèse DexScreener (5 points de prix approximatifs, jamais un
-vrai chandelier) -- ``detect_entry`` (golden pocket + divergence RSI) ne trouve
-alors quasi jamais de setup valide sur des données aussi pauvres (``no_entry_signal``
-systématique observé sur 4/4 candidats Base testés). Demande opérateur explicite
-("il nous faut plus de marge d'appel on est trop restreint") a mené à la diligence
-Mobula (docs.mobula.io, vérifié en direct, pas supposé) : couverture Base+Solana
-confirmée, y compris sur un token `is_listed:false` (CoinGecko répond 404 sur la
-même adresse -- comparaison faite en direct), endpoint OHLCV réel (v2, pas une
-synthèse) confirmé fonctionnel avec le vrai schéma de réponse.
+Context: diagnosed live tonight on the momentum pipeline -- GeckoTerminal
+(HTTP 429) then CoinMarketCap (HTTP 500) unavailable at the same time,
+cascade fell back to DexScreener synthesis (5 approximate price points,
+never a real candlestick) -- ``detect_entry`` (golden pocket + RSI
+divergence) then almost never finds a valid setup on such poor data
+(systematic ``no_entry_signal`` observed on 4/4 tested Base candidates).
+Explicit operator request ("we need more call headroom, we're too
+constrained") led to the Mobula diligence (docs.mobula.io, verified live,
+not assumed): Base+Solana coverage confirmed, including on a token with
+`is_listed:false` (CoinGecko returns 404 on the same address -- comparison
+done live), real OHLCV endpoint (v2, not a synthesis) confirmed working
+with the real response schema.
 
-Doctrine « dôme » (identique à geckoterminal.py/coinmarketcap.py) :
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
-- Timeout / 5xx : 1 retry après 5s, puis dégradation explicite (``available=False``).
-- Aucune donnée manquante n'est jamais remplacée par une supposition.
+"Dome" doctrine (identical to geckoterminal.py/coinmarketcap.py):
+- 429: exponential backoff, 3 attempts max, then give up without blocking the pipeline.
+- Timeout / 5xx: 1 retry after 5s, then explicit degradation (``available=False``).
+- Missing data is never replaced by a guess.
 
-Clé API : ``MOBULA_API_KEY`` -- REQUISE dès le premier appel (vérifié en direct :
-même le tier Free renvoie 429 "You need to create an API key" sans elle, contrairement
-à GeckoTerminal/DexScreener/GoPlus qui ont un chemin public). Client neutralisé
-(``available=False`` immédiat, aucun appel réseau) si la clé est absente -- jamais
-un blocage du pipeline.
+API key: ``MOBULA_API_KEY`` -- REQUIRED from the very first call (verified
+live: even the Free tier returns 429 "You need to create an API key"
+without it, unlike GeckoTerminal/DexScreener/GoPlus which have a public
+path). Client neutralized (``available=False`` immediately, no network
+call) if the key is absent -- never a pipeline blocker.
 
-Paramètre ``blockchain`` de Mobula = même vocabulaire que les chaînes DexScreener
-d'ARIA ("base", "solana" -- les deux vérifiés en direct, transmis tel quel, AUCUNE
-table de traduction nécessaire contrairement à GoPlus/CoinMarketCap)."""
+Mobula's ``blockchain`` parameter = same vocabulary as ARIA's DexScreener
+chains ("base", "solana" -- both verified live, passed through as-is, NO
+translation table needed unlike GoPlus/CoinMarketCap)."""
 from __future__ import annotations
 
 import asyncio
@@ -44,17 +45,17 @@ UNAVAILABLE = "donnée Mobula indisponible"
 
 BASE_URL = "https://api.mobula.io/api"
 
-# 21/07 -- calibré à 90% de 1 req/s documenté (docs.mobula.io/pricing),
-# doctrine CLAUDE.md "Débit calibré à 90%" : 0.9 req/s = 1.111s.
+# 21/07 -- calibrated at 90% of the documented 1 req/s (docs.mobula.io/pricing),
+# CLAUDE.md "Rate calibrated at 90%" doctrine: 0.9 req/s = 1.111s.
 _MIN_INTERVAL = 1.111
 _last_call_at = 0.0
 _throttle_lock = asyncio.Lock()
 
 
 def mobula_configured() -> bool:
-    """True si ``MOBULA_API_KEY`` est présente -- aucun chemin anonyme chez Mobula,
-    contrairement au reste du dôme ARIA (#212, vérifié en direct : 429 systématique
-    sans clé, même sur le tier Free)."""
+    """True if ``MOBULA_API_KEY`` is present -- no anonymous path at Mobula,
+    unlike the rest of ARIA's dome (#212, verified live: systematic 429
+    without a key, even on the Free tier)."""
     return bool(os.environ.get("MOBULA_API_KEY", "").strip())
 
 
@@ -68,7 +69,7 @@ async def _throttle() -> None:
 
 
 async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | None]:
-    """GET avec retry sur 429/5xx/timeout -- même politique que le reste du dôme."""
+    """GET with retry on 429/5xx/timeout -- same policy as the rest of the dome."""
     api_key = os.environ.get("MOBULA_API_KEY", "").strip()
     if not api_key:
         return None, f"{UNAVAILABLE} (MOBULA_API_KEY absente)"
@@ -88,13 +89,13 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
                 timeout_retried = True
                 await asyncio.sleep(5.0)
                 continue
-            logger.warning("mobula: timeout sur %s -> %s", url, exc)
+            logger.warning("mobula: timeout on %s -> %s", url, exc)
             return None, f"{UNAVAILABLE} (timeout, {exc})"
 
         if response.status_code == 429:
             attempt_429 += 1
             if attempt_429 >= 3:
-                logger.warning("mobula: HTTP 429 sur %s apres %s tentatives", url, attempt_429)
+                logger.warning("mobula: HTTP 429 on %s after %s attempts", url, attempt_429)
                 return None, f"{UNAVAILABLE} (rate limit)"
             await asyncio.sleep(0.5 * (2**attempt_429))
             continue
@@ -104,7 +105,7 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
                 timeout_retried = True
                 await asyncio.sleep(5.0)
                 continue
-            logger.warning("mobula: HTTP %s sur %s", response.status_code, url)
+            logger.warning("mobula: HTTP %s on %s", response.status_code, url)
             return None, f"{UNAVAILABLE} (erreur serveur {response.status_code})"
 
         try:
@@ -117,11 +118,11 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
 
 
 async def get_ohlcv(contract: str, *, blockchain: str = "base", period: str = "1d", amount: int = 60) -> OHLCVResult:
-    """Bougies OHLCV réelles (pas une synthèse) pour ``contract`` sur ``blockchain``
-    -- ``/api/2/token/ohlcv-history`` (schéma vérifié en direct, 18/07 : ``{t,o,h,l,c,v}``,
-    ``t`` en millisecondes). ``amount`` par défaut à 60 (cohérent avec les autres
-    étages de la cascade, jamais les 2000 max documentés -- inutile pour un scan
-    d'entrée momentum)."""
+    """Real OHLCV candles (not a synthesis) for ``contract`` on ``blockchain``
+    -- ``/api/2/token/ohlcv-history`` (schema verified live, 18/07: ``{t,o,h,l,c,v}``,
+    ``t`` in milliseconds). ``amount`` defaults to 60 (consistent with the
+    other tiers of the cascade, never the documented 2000 max -- unneeded
+    for a momentum entry scan)."""
     data, error = await _get_json(
         "/2/token/ohlcv-history",
         params={"address": contract, "blockchain": blockchain, "period": period, "amount": amount},
@@ -140,7 +141,7 @@ async def get_ohlcv(contract: str, *, blockchain: str = "base", period: str = "1
         try:
             ts_raw = row.get("t")
             ts = int(ts_raw) if ts_raw is not None else None
-            if ts is not None and ts > 10_000_000_000:  # millisecondes -> secondes
+            if ts is not None and ts > 10_000_000_000:  # milliseconds -> seconds
                 ts //= 1000
             o = float(row.get("o"))
             h = float(row.get("h"))

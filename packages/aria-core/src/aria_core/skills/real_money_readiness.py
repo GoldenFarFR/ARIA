@@ -1,15 +1,15 @@
-"""Scorecard « feu vert argent réel » — mesure objective contre les 8 cases
-pré-engagées de `docs/protocole-argent-reel.md`, jamais un jugement subjectif.
+"""Real-money "green light" scorecard — objective measurement against the 8
+pre-committed boxes of `docs/protocole-argent-reel.md`, never a subjective judgment.
 
-Le pacte est clair : « le rôle de l'arbitre est de dire NON tant que toutes les
-cases ne sont pas cochées ». Ce module calcule, depuis le VRAI journal
-(`vc_predictions`), ce qui est déjà vrai aujourd'hui et ce qui manque encore —
-plutôt que de laisser un « on verra plus tard » subjectif trancher. Chaque case
-a un statut : ``ok`` (calculé et satisfait), ``fail`` (calculé et pas encore
-satisfait), ou ``unknown`` (ne peut PAS être calculé ici — nécessite une donnée
-externe non encore branchée, ou une vérification humaine/légale). Ne jamais
-transformer un ``unknown`` en ``ok`` par optimisme : dire honnêtement ce qui
-manque encore pour même MESURER la case, pas seulement pour la remplir.
+The pact is clear: "the arbitrator's role is to say NO as long as not all
+boxes are checked." This module computes, from the REAL log
+(`vc_predictions`), what is already true today and what's still missing —
+rather than letting a subjective "we'll see later" decide. Each box
+has a status: ``ok`` (computed and satisfied), ``fail`` (computed and not yet
+satisfied), or ``unknown`` (CANNOT be computed here — requires external
+data not yet wired up, or human/legal verification). Never
+turn an ``unknown`` into ``ok`` out of optimism: honestly say what's
+still missing to even MEASURE the box, not just to fill it in.
 """
 from __future__ import annotations
 
@@ -20,11 +20,11 @@ from datetime import datetime, timezone
 REQUIRED_SAMPLE_SIZE = 80
 REQUIRED_SPAN_DAYS = 180  # ~6 mois, cf. protocole-argent-reel.md case 1
 CALIBRATION_CREDIBLE_LEVEL = 0.90
-_JEFFREYS_PRIOR = 0.5  # Beta(0.5, 0.5) -- prior non informatif standard pour une proportion
+_JEFFREYS_PRIOR = 0.5  # Beta(0.5, 0.5) -- standard non-informative prior for a proportion
 
 
 def _betacf(x: float, a: float, b: float) -> float:
-    """Fraction continue de l'incomplete beta function (Numerical Recipes 6.4)."""
+    """Continued fraction of the incomplete beta function (Numerical Recipes 6.4)."""
     max_iter = 200
     eps = 3e-12
     fpmin = 1e-300
@@ -64,8 +64,8 @@ def _betacf(x: float, a: float, b: float) -> float:
 
 
 def _regularized_incomplete_beta(x: float, a: float, b: float) -> float:
-    """I_x(a, b) -- CDF de Beta(a, b) en x, via fraction continue (pas de dépendance
-    scipy/numpy pour ce seul calcul, cohérent avec le reste du package -- stdlib only)."""
+    """I_x(a, b) -- CDF of Beta(a, b) at x, via continued fraction (no scipy/numpy
+    dependency for this single computation, consistent with the rest of the package -- stdlib only)."""
     if x <= 0.0:
         return 0.0
     if x >= 1.0:
@@ -78,8 +78,8 @@ def _regularized_incomplete_beta(x: float, a: float, b: float) -> float:
 
 
 def _beta_ppf(p: float, a: float, b: float) -> float:
-    """Fonction quantile (CDF inverse) de Beta(a, b), par bissection sur
-    ``_regularized_incomplete_beta`` (monotone en x, donc la bissection converge sans risque)."""
+    """Quantile function (inverse CDF) of Beta(a, b), via bisection on
+    ``_regularized_incomplete_beta`` (monotonic in x, so bisection converges safely)."""
     if p <= 0.0:
         return 0.0
     if p >= 1.0:
@@ -97,11 +97,11 @@ def _beta_ppf(p: float, a: float, b: float) -> float:
 def _hit_rate_credible_interval(
     wins: int, n: int, *, level: float = CALIBRATION_CREDIBLE_LEVEL,
 ) -> tuple[float, float]:
-    """Intervalle de crédibilité bayésien Beta-Binomial sur le hit-rate BUY, prior de
-    Jeffreys Beta(0.5, 0.5) (non informatif standard pour une proportion) -- fonctionne
-    même à n=0 (retombe sur le prior, intervalle large [~0.3%, ~99.7%] à 90%) ou n=1,
-    contrairement à un intervalle fréquentiste (Wald) qui dégénère ou n'est pas défini.
-    Postérieure : Beta(wins + 0.5, pertes + 0.5)."""
+    """Bayesian Beta-Binomial credible interval on the BUY hit-rate, Jeffreys
+    prior Beta(0.5, 0.5) (standard non-informative prior for a proportion) -- works
+    even at n=0 (falls back to the prior, wide interval [~0.3%, ~99.7%] at 90%) or n=1,
+    unlike a frequentist (Wald) interval which degenerates or is undefined.
+    Posterior: Beta(wins + 0.5, losses + 0.5)."""
     losses = n - wins
     a = wins + _JEFFREYS_PRIOR
     b = losses + _JEFFREYS_PRIOR
@@ -112,8 +112,8 @@ def _hit_rate_credible_interval(
 
 
 def _hit_rate_credible_note(wins: int, n: int, *, level: float = CALIBRATION_CREDIBLE_LEVEL) -> str:
-    """Phrase à ajouter au `detail` d'une case -- n'influence JAMAIS le statut calculé
-    (ok/fail/unknown) : purement informatif, sur l'incertitude du hit-rate observé."""
+    """Sentence to add to a box's `detail` -- NEVER influences the computed status
+    (ok/fail/unknown): purely informative, about the uncertainty of the observed hit-rate."""
     lo, hi = _hit_rate_credible_interval(wins, n, level=level)
     pct = f"{(wins / n * 100):.0f}%" if n else "n/a"
     note = (
@@ -162,12 +162,12 @@ def _check_sample_size(predictions: list[dict]) -> ReadinessCheck:
 
 
 def _check_integrity() -> ReadinessCheck:
-    # Garantie structurelle vérifiée par le code lui-même : vc_predictions.py n'expose
-    # aucune fonction de suppression, et close_prediction() refuse d'écraser un résultat
-    # déjà attribué ("WHERE status = 'open'", jamais 'closed' -> réécrit). C'est la partie
-    # "aucun verdict effacé ou caché" du pacte, garantie par construction. L'ancrage
-    # on-chain (SHA-256 sur Base) est documenté comme "idéalement" — un bonus, pas un
-    # prérequis dur — donc son absence ne fait pas échouer cette case.
+    # Structural guarantee verified by the code itself: vc_predictions.py exposes
+    # no delete function, and close_prediction() refuses to overwrite a result
+    # already assigned ("WHERE status = 'open'", never 'closed' -> rewritten). This is the
+    # "no verdict erased or hidden" part of the pact, guaranteed by construction. On-chain
+    # anchoring (SHA-256 on Base) is documented as "ideally" — a bonus, not a
+    # hard requirement — so its absence doesn't fail this box.
     from aria_core.onchain.anchor import anchor_enabled
 
     anchored = anchor_enabled()
@@ -190,9 +190,9 @@ def _check_calibration(predictions: list[dict], metrics: dict) -> ReadinessCheck
     buys = [p for p in _closed(predictions) if p.get("recommandation") == "BUY"]
     n_buys = len(buys)
     wins = sum(1 for p in buys if (p.get("outcome_pct") or 0) > 0)
-    # Intervalle de crédibilité purement informatif -- calculé même à 0/1 BUY, mais ne
-    # touche jamais au statut ci-dessous (ok/fail/unknown reste la logique existante,
-    # inchangée). Ne JAMAIS transformer un unknown en ok grâce à ce calcul.
+    # Purely informative credible interval -- computed even at 0/1 BUY, but never
+    # touches the status below (ok/fail/unknown remains the existing logic,
+    # unchanged). NEVER turn an unknown into an ok thanks to this computation.
     credible_note = _hit_rate_credible_note(wins, n_buys)
     if len(calib) < 2 or hit is None:
         return ReadinessCheck(
@@ -294,11 +294,11 @@ def _check_lawyer() -> ReadinessCheck:
 
 
 async def compute_readiness_scorecard() -> dict:
-    """Calcule les 8 cases du pacte depuis le vrai journal `vc_predictions`.
+    """Computes the pact's 8 boxes from the real `vc_predictions` log.
 
-    Retourne ``{"checks": [...], "all_ok": bool, "verdict": str}``. ``all_ok`` n'est
-    JAMAIS ``True`` tant qu'une case est ``unknown`` ou ``fail`` — l'absence de preuve
-    n'est pas une preuve d'absence de risque.
+    Returns ``{"checks": [...], "all_ok": bool, "verdict": str}``. ``all_ok`` is
+    NEVER ``True`` while a box is ``unknown`` or ``fail`` — absence of proof
+    is not proof of absence of risk.
     """
     from aria_core import vc_predictions
 

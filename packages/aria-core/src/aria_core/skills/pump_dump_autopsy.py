@@ -1,25 +1,26 @@
-"""Autopsie pump/dump — brique "connaissance 24/7" (tâche #8, 09/07).
+"""Pump/dump autopsy — a "24/7 knowledge" building block (task #8, 07/09).
 
-``weekly_training.resolve_due`` clôture chaque pronostic sur un point-à-point
-entrée→prix courant à échéance — ça masque un pump-puis-crash survenu ENTRE
-temps (ex. entrée $1, pic à $4 en cours de route, retombé à $1.10 à échéance :
-le point-à-point dit "+10%", en réalité le token a pris 4x puis rendu presque
-tout). Ce module relit la VRAIE série OHLCV parcourue pendant la détention
-(``services/ohlcv``, déjà câblé ailleurs — pas de nouveau client), détecte
-DÉTERMINISTIQUEMENT (aucun LLM, aucune invention) si un pattern pump/dump réel
-a eu lieu, et si oui, demande au LLM une autopsie courte : qu'est-ce que la
-thèse originale annonçait (recommandation/potentiel/risque déjà journalisés),
-qu'est-ce que les vrais chiffres montrent, une leçon.
+``weekly_training.resolve_due`` closes every prediction on a point-to-point
+entry->current price at expiry — this hides a pump-then-crash that occurred
+IN BETWEEN (e.g. entry $1, peak at $4 along the way, back down to $1.10 at
+expiry: the point-to-point says "+10%", when in reality the token 4x'd then
+gave almost all of it back). This module re-reads the REAL OHLCV series
+covered during the holding period (``services/ohlcv``, already wired
+elsewhere — no new client), DETERMINISTICALLY detects (no LLM, no
+invention) whether a real pump/dump pattern occurred, and if so, asks the LLM
+for a short autopsy: did the original thesis already carry a signal
+that flagged this risk (already-logged risk/potential/position size),
+what do the real numbers show, one lesson.
 
-Deux sorties, jamais un troisième canal créé pour l'occasion :
-  1. Log local (``pump_dump_autopsy_log``) — traçabilité complète, jamais publié.
-  2. Si la leçon est jugée durable : proposition d'ISSUE GitHub (label
-     ``aria-playbook-proposal``) — jamais un commit ni une fusion autonome,
-     même doctrine stricte que ``knowledge_inbox.py`` / ``claude_mentor.py``.
+Two outputs, never a third channel created for the occasion:
+  1. Local log (``pump_dump_autopsy_log``) — full traceability, never published.
+  2. If the lesson is judged durable: a GitHub ISSUE proposal (label
+     ``aria-playbook-proposal``) — never an autonomous commit or merge,
+     same strict doctrine as ``knowledge_inbox.py`` / ``claude_mentor.py``.
 
-Gaté OFF par défaut (``ARIA_PUMP_DUMP_AUTOPSY_ENABLED``). Un pronostic n'est
-autopsié qu'une seule fois (dédoublonné par ``prediction_id``, contrainte
-``UNIQUE`` en base).
+Gated OFF by default (``ARIA_PUMP_DUMP_AUTOPSY_ENABLED``). A prediction is
+autopsied only once (deduplicated by ``prediction_id``, a ``UNIQUE``
+constraint in the database).
 """
 from __future__ import annotations
 
@@ -38,14 +39,14 @@ logger = logging.getLogger(__name__)
 DB_PATH = str(aria_db_path())
 TARGET_REPO = "ARIA"
 
-# Seuils de détection — déterministes, sur la vraie série OHLCV (jamais un LLM
-# pour la détection elle-même). Un "pump" real doit avoir atteint au moins ce
-# multiple de l'entrée ; le "dump" ensuite doit avoir rendu au moins cette part
-# du pic. Les deux doivent être vrais pour qu'on parle de pump/dump.
+# Detection thresholds — deterministic, on the real OHLCV series (never an LLM
+# for the detection itself). A real "pump" must have reached at least this
+# multiple of the entry; the "dump" afterward must have given back at least this
+# share of the peak. Both must be true to call it a pump/dump.
 PUMP_MULTIPLE_MIN = 1.5
 DUMP_DRAWDOWN_MIN = 0.4
-AUTOPSY_WINDOW_DAYS = 3  # ne relit que les pronostics clôturés récemment (fenêtre glissante)
-MAX_PER_CYCLE = 5  # plafond de bon sens (coût LLM + GitHub), pas un plafond de risque
+AUTOPSY_WINDOW_DAYS = 3  # only re-reads recently closed predictions (sliding window)
+MAX_PER_CYCLE = 5  # a common-sense cap (LLM + GitHub cost), not a risk cap
 
 _AUTOPSY_SYSTEM = (
     "Tu es Claude Code, réviseur externe d'ARIA (pas ARIA elle-même). On te montre "
@@ -96,10 +97,10 @@ async def _ensure_table() -> None:
 
 
 def detect_pump_dump(candles: list, entry_price: float | None, *, since_ts: int | None = None) -> dict | None:
-    """Détection facts-only, déterministe, aucun LLM. ``candles`` = série OHLCV réelle
-    (objets avec ``.ts``/``.high``/``.close``). ``since_ts`` filtre aux bougies de la
-    période de détention réelle (sinon un pic pré-entrée pourrait fausser le pic).
-    ``None`` si aucun pattern pump/dump réel n'est détecté."""
+    """Facts-only, deterministic detection, no LLM. ``candles`` = real OHLCV series
+    (objects with ``.ts``/``.high``/``.close``). ``since_ts`` filters to candles from the
+    real holding period (otherwise a pre-entry peak could distort the peak).
+    ``None`` if no real pump/dump pattern is detected."""
     if not candles or not entry_price or entry_price <= 0:
         return None
     window = [c for c in candles if since_ts is None or (getattr(c, "ts", 0) or 0) >= since_ts]
@@ -172,7 +173,7 @@ async def _propose_playbook(title: str, body: str, *, github_client=None) -> str
             owner, TARGET_REPO, f"[playbook pump/dump] {title}", body_full,
             labels=["aria-playbook-proposal"],
         )
-    except Exception:  # noqa: BLE001 -- une panne GitHub ne doit jamais casser le cycle
+    except Exception:  # noqa: BLE001 -- a GitHub failure must never break the cycle
         return None
     return issue.get("html_url")
 
@@ -202,10 +203,10 @@ async def _autopsy_one(prediction: dict, *, ohlcv_fetch=None, llm=None, github_c
         from aria_core.llm import chat_with_context as llm
 
     prompt = _format_case_for_prompt(prediction, pattern)
-    # 17/07 -- même bascule que claude_mentor.py (voir son commentaire pour le détail de
-    # la revue) : Sonnet 5 via OpenRouter, secours explicite Haiku 4.5, puis repli global
-    # existant (Grok/Groq). max_tokens porté à 900 -- 500 tronquait systématiquement les
-    # autopsies Opus/Sonnet lors du test réel du 17/07 (finish_reason=length en plein mot).
+    # 07/17 -- same switch as claude_mentor.py (see its comment for the review
+    # detail): Sonnet 5 via OpenRouter, explicit Haiku 4.5 backup, then the existing
+    # global fallback (Grok/Groq). max_tokens raised to 900 -- 500 was systematically
+    # truncating Opus/Sonnet autopsies during the real 07/17 test (finish_reason=length mid-word).
     raw = await llm(
         prompt, _AUTOPSY_SYSTEM, max_tokens=900, depth="pump_dump_autopsy",
         provider="openrouter", model="anthropic/claude-sonnet-5",
@@ -253,8 +254,8 @@ async def _autopsy_one(prediction: dict, *, ohlcv_fetch=None, llm=None, github_c
 
 
 async def run_pump_dump_autopsy_cycle(*, ohlcv_fetch=None, llm=None, github_client=None) -> dict:
-    """Un tour de collecte + autopsie. Fail-closed si désactivé. Ne casse jamais le
-    heartbeat (une panne par cas n'empêche pas les autres cas d'être traités)."""
+    """One collection + autopsy round. Fail-closed if disabled. Never breaks the
+    heartbeat (a failure on one case doesn't prevent other cases from being processed)."""
     if not pump_dump_autopsy_enabled():
         return {"outcome": "skipped_disabled"}
 
@@ -288,8 +289,8 @@ async def run_pump_dump_autopsy_cycle(*, ohlcv_fetch=None, llm=None, github_clie
             result = await _autopsy_one(
                 prediction, ohlcv_fetch=ohlcv_fetch, llm=llm, github_client=github_client,
             )
-        except Exception as exc:  # noqa: BLE001 -- une autopsie ratée ne casse jamais le cycle
-            logger.warning("pump_dump_autopsy: échec sur prédiction %s -- %s", prediction["id"], exc)
+        except Exception as exc:  # noqa: BLE001 -- a failed autopsy never breaks the cycle
+            logger.warning("pump_dump_autopsy: failed on prediction %s -- %s", prediction["id"], exc)
             result = {"outcome": "error", "prediction_id": prediction["id"], "error": str(exc)[:200]}
         results.append(result)
 

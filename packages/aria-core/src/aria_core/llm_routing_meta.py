@@ -1,4 +1,4 @@
-"""Questions opérateur sur le moteur LLM actif — réponse runtime, sans web épistémique."""
+"""Operator questions about the active LLM engine — runtime answer, no epistemic web lookup."""
 from __future__ import annotations
 
 import os

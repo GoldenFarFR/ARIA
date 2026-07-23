@@ -1,17 +1,18 @@
-"""Registre déclaratif de TOUTES les API externes qu'ARIA touche — pour `/api`
-(Telegram, admin-only). Répond à deux besoins distincts, jamais confondus :
+"""Declarative registry of ALL external APIs ARIA touches — for `/api`
+(Telegram, admin-only). Serves two distinct needs, never conflated:
 
-1. URL de base + « configurée » (présence de la clé/du token dans l'environnement,
-   check mécanique, toujours exact) — vrai pour CHAQUE entrée, sans exception.
-2. Quota EN DIRECT — seulement pour le petit sous-ensemble d'API qui exposent
-   réellement un endpoint de facturation/quota interrogeable (GitHub, CoinMarketCap,
-   x.ai Management, x402 interne). Pour toutes les autres (la majorité), aucun
-   chiffre n'est inventé : soit une limite DOCUMENTÉE statique (jamais présentée
-   comme « en direct »), soit une mention honnête « pas d'endpoint de quota ».
+1. Base URL + "configured" (presence of the key/token in the environment,
+   mechanical check, always exact) — true for EVERY entry, without exception.
+2. LIVE quota — only for the small subset of APIs that actually expose
+   a queryable billing/quota endpoint (GitHub, CoinMarketCap,
+   x.ai Management, internal x402). For all the others (the majority), no
+   number is invented: either a static DOCUMENTED limit (never presented
+   as "live"), or an honest "no quota endpoint" note.
 
-Certaines API n'exigent AUCUNE clé par conception (DefiLlama, Clanker public,
-Frankfurter, DexScreener, GeckoTerminal) — `configured=True` avec `note="sans clé"`,
-jamais confondu avec une clé manquante.
+Some APIs require NO key by design (DefiLlama, public Clanker,
+Frankfurter, DexScreener, GeckoTerminal) — `configured=True` with `note="sans clé"`
+(the literal French value used throughout this file, cf. note below), never
+confused with a missing key.
 """
 from __future__ import annotations
 
@@ -35,11 +36,11 @@ class ApiEntry:
     category: str
     base_url: str
     configured: bool
-    note: str = ""          # limite documentée statique, ou "sans clé", etc.
-    live_quota: str | None = None   # rempli uniquement si un vrai check en direct existe
+    note: str = ""          # static documented limit, or "sans clé" [no key], etc.
+    live_quota: str | None = None   # only filled when a real live check exists
 
 
-# ── checkers en direct (sous-ensemble volontairement restreint, 18/07) ────────
+# ── live checkers (deliberately restricted subset, 18/07) ────────
 
 async def _github_quota() -> str | None:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -55,14 +56,14 @@ async def _github_quota() -> str | None:
             return f"erreur HTTP {r.status_code}"
         core = r.json().get("resources", {}).get("core", {})
         return f"{core.get('remaining', '?')}/{core.get('limit', '?')} requêtes (fenêtre horaire)"
-    except Exception as exc:  # noqa: BLE001 — un quota en panne ne doit jamais casser /api
-        logger.info("api_registry: github quota check échoué (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — a broken quota check must never break /api
+        logger.info("api_registry: github quota check failed (%s)", exc)
         return "indisponible"
 
 
 async def _coinmarketcap_quota() -> str | None:
-    """Schéma vérifié à la source (docs.coinmarketcap.com, 18/07) avant câblage :
-    data.usage.current_month.{credits_used,credits_left}, idem current_day."""
+    """Schema verified at the source (docs.coinmarketcap.com, 18/07) before wiring:
+    data.usage.current_month.{credits_used,credits_left}, same for current_day."""
     key = os.environ.get("COINMARKETCAP_API_KEY", "").strip()
     if not key:
         return None
@@ -83,7 +84,7 @@ async def _coinmarketcap_quota() -> str | None:
             return "format de réponse inattendu"
         return f"{used_m}/{used_m + left_m} crédits (mois) — {used_d}/{used_d + left_d if used_d is not None and left_d is not None else '?'} (jour)"
     except Exception as exc:  # noqa: BLE001
-        logger.info("api_registry: coinmarketcap quota check échoué (%s)", exc)
+        logger.info("api_registry: coinmarketcap quota check failed (%s)", exc)
         return "indisponible"
 
 
@@ -105,13 +106,13 @@ async def _x402_budget() -> str | None:
         status = await weekly_status()
         return f"{status.get('spent_usd', 0):.2f}$/{status.get('cap_usd', 0):.2f}$ dépensés cette semaine"
     except Exception as exc:  # noqa: BLE001
-        logger.info("api_registry: x402 budget check échoué (%s)", exc)
+        logger.info("api_registry: x402 budget check failed (%s)", exc)
         return "indisponible"
 
 
 def _static_entries() -> list[ApiEntry]:
-    """Entrées sans clé requise (`configured=True` par conception) ou dont le
-    quota n'est connu que via limite DOCUMENTÉE (jamais un chiffre en direct)."""
+    """Entries with no key required (`configured=True` by design) or whose
+    quota is only known via a DOCUMENTED limit (never a live number)."""
     return [
         # ── Données marché / on-chain ──────────────────────────────────────
         ApiEntry("DexScreener", "Données marché", "https://api.dexscreener.com", True, note="sans clé"),
@@ -190,9 +191,9 @@ def _static_entries() -> list[ApiEntry]:
 
 
 async def build_api_inventory() -> list[ApiEntry]:
-    """Construit l'inventaire complet, avec les vérifications en direct lancées en
-    parallèle (le sous-ensemble qui en a une). Jamais bloquant globalement : chaque
-    checker a son propre timeout court et capte ses propres exceptions."""
+    """Builds the complete inventory, with live checks launched in
+    parallel (the subset that has one). Never globally blocking: each
+    checker has its own short timeout and catches its own exceptions."""
     entries = _static_entries()
 
     live_checks = await asyncio.gather(
@@ -219,7 +220,7 @@ _CATEGORY_ORDER = (
 )
 
 
-_MAX_MESSAGE_CHARS = 3800  # marge sous la limite ~4000 de plain_telegram/Telegram
+_MAX_MESSAGE_CHARS = 3800  # margin under plain_telegram/Telegram's ~4000 limit
 
 
 def _entry_line(e: ApiEntry) -> str:
@@ -233,12 +234,12 @@ def _entry_line(e: ApiEntry) -> str:
 
 
 def format_api_inventory(entries: list[ApiEntry]) -> list[str]:
-    """Formate en messages Telegram compacts, groupés par catégorie. Retourne une
-    LISTE de messages (jamais un seul bloc géant) -- Telegram/plain_telegram tronque
-    autour de 4000 caractères, un inventaire de 30+ API dépasserait silencieusement
-    cette limite en un seul message. Découpe LIGNE PAR LIGNE (pas juste entre
-    catégories) : une seule catégorie surchargée ne doit jamais produire un message
-    qui dépasse la limite à elle seule."""
+    """Formats into compact Telegram messages, grouped by category. Returns a
+    LIST of messages (never one giant block) -- Telegram/plain_telegram truncates
+    around 4000 characters, an inventory of 30+ APIs would silently exceed
+    this limit in a single message. Splits LINE BY LINE (not just between
+    categories): a single overloaded category must never produce a message
+    that exceeds the limit on its own."""
     by_category: dict[str, list[ApiEntry]] = {}
     for e in entries:
         by_category.setdefault(e.category, []).append(e)
@@ -262,7 +263,7 @@ def format_api_inventory(entries: list[ApiEntry]) -> list[str]:
         items = by_category.pop(category, [])
         if not items:
             continue
-        _push_line("")  # ligne vide avant chaque catégorie, jamais comptée seule contre la limite
+        _push_line("")  # blank line before each category, never counted alone against the limit
         _push_line(f"{category} ({len(items)})")
         for e in sorted(items, key=lambda x: x.name):
             _push_line(_entry_line(e))

@@ -1,4 +1,4 @@
-"""Valeurs opérationnelles ARIA — Phase E (SSOT YAML → injection LLM)."""
+"""ARIA operational values — Phase E (SSOT YAML → LLM injection)."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -30,7 +30,7 @@ def _load_values() -> list[dict]:
 
 
 def get_values_text(*, budget_chars: int = _VALUES_BUDGET) -> str:
-    """Bloc markdown des valeurs ARIA pour le contexte LLM."""
+    """Markdown block of ARIA's values for the LLM context."""
     values = _load_values()
     if not values:
         return ""

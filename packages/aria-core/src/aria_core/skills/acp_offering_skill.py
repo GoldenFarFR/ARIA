@@ -91,8 +91,8 @@ def _subscription_update_kw(payload: dict[str, Any]) -> dict[str, str]:
 
 def resolve_subscription_ids(*, attach_full_access: bool = True) -> str:
     """
-    UUIDs d'abonnements à rattacher aux offres (virgule).
-    SSOT : ARIA_ACP_SUBSCRIPTION_IDS > acp_config.yaml > acp subscription list.
+    Subscription UUIDs to attach to offerings (comma-separated).
+    SSOT: ARIA_ACP_SUBSCRIPTION_IDS > acp_config.yaml > acp subscription list.
     """
     env = (os.environ.get("ARIA_ACP_SUBSCRIPTION_IDS") or "").strip()
     if env:
@@ -136,7 +136,7 @@ def load_offering_templates() -> dict[str, dict[str, Any]]:
 
 
 def template_dashboard_examples(template: dict[str, Any]) -> tuple[str, str]:
-    """Texte lisible des exemples (logs / Telegram)."""
+    """Human-readable example text (logs / Telegram)."""
     req = str(template.get("sample_request") or "").strip()
     deliv = str(template.get("sample_deliverable") or "").strip()
     name = str(template.get("name") or "offering")
@@ -148,7 +148,7 @@ def template_dashboard_examples(template: dict[str, Any]) -> tuple[str, str]:
 
 
 def template_example_objects(template: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Objets JSON injectés dans requirements/deliverable.examples (API Virtuals)."""
+    """JSON objects injected into requirements/deliverable.examples (Virtuals API)."""
     req = template.get("requirement_example")
     deliv = template.get("deliverable_example")
     name = str(template.get("name") or "offering")
@@ -162,7 +162,7 @@ def template_example_objects(template: dict[str, Any]) -> tuple[dict[str, Any], 
 
 
 def premium_example_objects(kind: str, name: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Exemples structurés pour workflows adhoc."""
+    """Structured examples for adhoc workflows."""
     if kind == "x_account":
         return (
             {
@@ -214,7 +214,7 @@ def _normalize_offering_name(raw: str) -> str:
 
 
 def parse_delete_workflow_name(message: str) -> str | None:
-    """Extrait le nom d'une offre ACP à supprimer (ex. test 1 → test_1)."""
+    """Extracts the name of an ACP offering to delete (e.g. test 1 → test_1)."""
     text = (message or "").strip()
     if not text or not _DELETE_HEAD_RE.search(text):
         return None
@@ -291,7 +291,7 @@ def _parse_price_override(message: str) -> float | None:
 
 
 def parse_adhoc_workflow(message: str) -> dict[str, Any] | None:
-    """Extrait nom, prix, description depuis langage naturel."""
+    """Extracts name, price, description from natural language."""
     text = (message or "").strip()
     if not text:
         return None
@@ -637,7 +637,7 @@ async def format_templates_help(lang: str) -> tuple[str, dict]:
 
 
 async def execute_offering_delete_all(message: str, lang: str) -> tuple[str, dict]:
-    """Supprime toutes les offres ACP de l'agent actif."""
+    """Deletes all ACP offerings of the active agent."""
     lang_key = "fr" if lang == "fr" else "en"
     if not acp_cli.is_acp_available():
         return "ACP — acp-cli introuvable.", {"acp": "no_cli"}
@@ -683,7 +683,7 @@ async def execute_offering_delete_all(message: str, lang: str) -> tuple[str, dic
 
 
 async def execute_offering_delete(message: str, lang: str) -> tuple[str, dict]:
-    """Supprime une offre ACP par nom — appel acp-cli réel."""
+    """Deletes an ACP offering by name — real acp-cli call."""
     lang_key = "fr" if lang == "fr" else "en"
     if not acp_cli.is_acp_available():
         return "ACP — acp-cli introuvable.", {"acp": "no_cli"}
@@ -739,7 +739,7 @@ async def execute_offering_delete(message: str, lang: str) -> tuple[str, dict]:
 
 
 async def execute_adhoc_workflow_create(message: str, lang: str) -> tuple[str, dict]:
-    """Crée un workflow ACP depuis langage naturel — réponse courte."""
+    """Creates an ACP workflow from natural language — short reply."""
     lang_key = "fr" if lang == "fr" else "en"
     if not acp_cli.is_acp_available():
         return "ACP — acp-cli introuvable.", {"acp": "no_cli"}

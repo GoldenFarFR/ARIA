@@ -1,13 +1,13 @@
-"""Lacune de capacite -> notification operateur (jamais une action externe).
+"""Capability gap -> operator notification (never an external action).
 
-Historique (10/07) : ce module ouvrait auparavant des issues/PR GitHub et
-delegait a un "ouvrier Cursor" externe (aria_worker_queue.py) des que ARIA se
-jugeait bloquee -- reachable sans aucune validation operateur (heartbeat,
-mots du quotidien en Telegram, formulaire public du site). Ce mecanisme
-contredisait la doctrine du projet ("Cursor/Grok abandonnes, Claude Code gere
-100% de la construction") et avait deja ecrit pour de vrai sur ce repo (issue
-#1 + PR #2, 03/07). Retire : ARIA notifie desormais l'operateur, jamais elle
-n'ouvre de ticket ni ne delegue du code a un tiers.
+History (10/07): this module used to open GitHub issues/PRs and delegate to
+an external "Cursor worker" (aria_worker_queue.py) whenever ARIA judged
+herself blocked -- reachable without any operator validation (heartbeat,
+everyday Telegram messages, the site's public form). This mechanism
+contradicted the project's doctrine ("Cursor/Grok abandoned, Claude Code
+handles 100% of the building") and had already written for real to this repo
+(issue #1 + PR #2, 03/07). Removed: ARIA now notifies the operator, she never
+opens a ticket or delegates code to a third party.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def _recently_filed(capability_id: str) -> dict[str, Any] | None:
 
 
 async def gap_runtime_resolved(capability_id: str) -> bool:
-    """True si le gap ne devrait plus etre signale (capacite maintenant disponible)."""
+    """True if the gap should no longer be reported (capability now available)."""
     if capability_available(capability_id):
         return True
     if capability_id == "health_render_regression":
@@ -87,7 +87,7 @@ async def gap_runtime_resolved(capability_id: str) -> bool:
 
 
 def capability_available(capability_id: str) -> bool:
-    """Introspection legere -- True si le code semble present."""
+    """Lightweight introspection -- True if the code appears present."""
     if capability_id == "x_profile_banner":
         try:
             from aria_core.gateway.x_twitter import apply_profile_banner  # noqa: F401
@@ -112,11 +112,11 @@ async def file_capability_gap(
     context: str = "",
     lang: str = "fr",
 ) -> dict[str, Any]:
-    """Signale une lacune de capacite -- notification Telegram uniquement.
+    """Reports a capability gap -- Telegram notification only.
 
-    Dedup 7 jours par capability_id (local, ``DATA_DIR/capability-gaps``).
-    N'ouvre plus d'issue, ne cree plus de PR/branche, ne delegue plus a un
-    outil externe -- voir le docstring du module.
+    7-day dedup per capability_id (local, ``DATA_DIR/capability-gaps``).
+    No longer opens an issue, no longer creates a PR/branch, no longer
+    delegates to an external tool -- see the module docstring.
     """
     if await gap_runtime_resolved(capability_id):
         return {
@@ -147,7 +147,7 @@ async def file_capability_gap(
 
 
 def count_resolved_gaps(*, days: int = 7) -> int:
-    """Gaps signalees recemment dont la capacite est maintenant disponible."""
+    """Recently reported gaps whose capability is now available."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     resolved = 0
     gaps_path = _gaps_dir()

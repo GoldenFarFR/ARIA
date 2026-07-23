@@ -1,20 +1,20 @@
-"""Classification de l'autorité d'un contrat — un mint n'est dangereux que si un DEV le contrôle.
+"""Contract authority classification — a mint is only dangerous if a DEV controls it.
 
-Un token peut exposer une fonction ``mint`` externe sans être un piège : tout dépend
-de QUI peut l'appeler.
-  - **renounced** : owner = adresse morte (0x0 / 0x…dead) -> personne ne peut minter -> sûr ;
-  - **launchpad** : le token a été déployé par un launchpad connu (Virtuals, Flaunch,
-    Clanker, Zora...) -> l'autorité appartient au PROTOCOLE, jamais renoncée mais
-    légitime (c'est le fonctionnement normal du launchpad) ;
-  - **contract** : owner = un contrat (timelock / multisig / contrat d'émission) ->
-    pouvoir verrouillé/partagé, pas un wallet de dev unique -> acceptable ;
-  - **eoa** : owner = un wallet externe (une personne) -> le dev peut diluer à volonté
-    -> DANGER ;
-  - **unknown** : impossible de déterminer -> on reste prudent (fail-closed en aval).
+A token can expose an external ``mint`` function without being a trap: it all
+depends on WHO can call it.
+  - **renounced**: owner = dead address (0x0 / 0x…dead) -> nobody can mint -> safe;
+  - **launchpad**: the token was deployed by a known launchpad (Virtuals, Flaunch,
+    Clanker, Zora...) -> authority belongs to the PROTOCOL, never renounced but
+    legitimate (that's how the launchpad normally operates);
+  - **contract**: owner = a contract (timelock / multisig / issuance contract) ->
+    power locked/shared, not a single dev wallet -> acceptable;
+  - **eoa**: owner = an external wallet (a person) -> the dev can dilute at will
+    -> DANGER;
+  - **unknown**: impossible to determine -> stay cautious (fail-closed downstream).
 
-Ce module est PUR (aucun réseau) : il classe à partir de faits déjà récoltés
-(déployeur, owner, owner-est-un-contrat) et du registre ``knowledge/launchpads.yaml``.
-Déterministe : mêmes faits -> même verdict.
+This module is PURE (no network): it classifies from facts already collected
+(deployer, owner, owner-is-a-contract) and the ``knowledge/launchpads.yaml``
+registry. Deterministic: same facts -> same verdict.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ import yaml
 
 _LAUNCHPADS_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "launchpads.yaml"
 
-# Adresses « mortes » = renoncement effectif (personne ne détient la clé).
+# "Dead" addresses = effective renouncement (nobody holds the key).
 _DEAD_ADDRESSES = {
     "0x0000000000000000000000000000000000000000",
     "0x000000000000000000000000000000000000dead",
@@ -36,7 +36,7 @@ _DEAD_ADDRESSES = {
 
 
 def _is_dead_address(addr: str) -> bool:
-    """Reconnaît une adresse morte (renoncement) : liste connue OU motif zéros+dead."""
+    """Recognizes a dead address (renouncement): known list OR zeros+dead pattern."""
     a = (addr or "").strip().lower()
     if a in _DEAD_ADDRESSES:
         return True
@@ -49,34 +49,34 @@ def _is_dead_address(addr: str) -> bool:
         return True
     return False
 
-# Verdicts d'autorité où le mint est considéré NEUTRALISÉ (non contrôlé par un dev).
-# Public (pas de préfixe _) : source unique importée par safety_screen.py (crible dur)
-# ET acp_onchain_scan.py (malus de score) — corrige #164, un mint timelocké/launchpad/
-# renoncé ne doit jamais être pénalisé deux fois avec deux listes qui pourraient diverger.
+# Authority verdicts where the mint is considered NEUTRALIZED (not controlled by a dev).
+# Public (no _ prefix): single source imported by safety_screen.py (hard gate)
+# AND acp_onchain_scan.py (score penalty) — fixes #164, a timelocked/launchpad/
+# renounced mint must never be penalized twice with two lists that could diverge.
 SAFE_AUTHORITIES = frozenset({"renounced", "launchpad", "contract"})
 
 
 @dataclass(frozen=True)
 class AuthorityVerdict:
-    """Qui contrôle le contrat (et donc le mint), avec sa base factuelle."""
+    """Who controls the contract (and therefore the mint), with its factual basis."""
 
     kind: str  # renounced / launchpad / contract / eoa / unknown / na
-    launchpad: str | None = None  # label du launchpad si reconnu
+    launchpad: str | None = None  # launchpad label if recognized
     owner: str | None = None
     detail: str = ""
 
     @property
     def mint_neutralized(self) -> bool:
-        """True si un éventuel mint n'est PAS aux mains d'un dev (donc acceptable).
+        """True if a possible mint is NOT in a dev's hands (therefore acceptable).
 
-        ``na`` (aucun mint externe) est trivialement neutralisé : rien à contrôler.
+        ``na`` (no external mint) is trivially neutralized: nothing to control.
         """
         return self.kind == "na" or self.kind in SAFE_AUTHORITIES
 
 
 @lru_cache(maxsize=1)
 def _launchpad_index() -> dict[str, str]:
-    """Table adresse_déployeur (minuscule) -> label du launchpad."""
+    """Table of deployer_address (lowercase) -> launchpad label."""
     idx: dict[str, str] = {}
     if not _LAUNCHPADS_PATH.is_file():
         return idx
@@ -94,7 +94,7 @@ def _launchpad_index() -> dict[str, str]:
 
 
 def match_launchpad(creator_address: str | None) -> str | None:
-    """Label du launchpad si le déployeur est connu, sinon None."""
+    """Launchpad label if the deployer is known, otherwise None."""
     if not creator_address:
         return None
     return _launchpad_index().get(str(creator_address).strip().lower())
@@ -102,7 +102,7 @@ def match_launchpad(creator_address: str | None) -> str | None:
 
 @lru_cache(maxsize=1)
 def _norms_by_label() -> dict[str, dict]:
-    """Table label du launchpad -> ses normes de tokenomics (bonding, alloc, liq...)."""
+    """Table of launchpad label -> its tokenomics norms (bonding, alloc, liq...)."""
     out: dict[str, dict] = {}
     if not _LAUNCHPADS_PATH.is_file():
         return out
@@ -117,14 +117,14 @@ def _norms_by_label() -> dict[str, dict]:
 
 
 def launchpad_norms(label: str | None) -> dict:
-    """Normes de tokenomics d'un launchpad (dict vide si inconnu)."""
+    """A launchpad's tokenomics norms (empty dict if unknown)."""
     if not label:
         return {}
     return _norms_by_label().get(label, {})
 
 
 def is_bonding_launchpad(label: str | None) -> bool:
-    """True si le launchpad fonctionne par courbe de bonding (liquidité exponentielle)."""
+    """True if the launchpad operates via a bonding curve (exponential liquidity)."""
     return bool(launchpad_norms(label).get("bonding_curve"))
 
 
@@ -135,15 +135,15 @@ def classify_authority(
     owner_address: str | None = None,
     owner_is_contract: bool | None = None,
 ) -> AuthorityVerdict:
-    """Classe l'autorité du contrat à partir des faits on-chain déjà récoltés.
+    """Classifies the contract's authority from already-collected on-chain facts.
 
-    Ordre de priorité :
-      1. pas de mint externe -> ``na`` (rien à neutraliser) ;
-      2. déployé par un launchpad connu -> ``launchpad`` (le protocole détient l'autorité) ;
-      3. owner = adresse morte -> ``renounced`` ;
-      4. owner = un contrat -> ``contract`` (verrouillé/multisig/émission) ;
-      5. owner = un wallet (EOA) -> ``eoa`` (dev peut diluer -> danger) ;
-      6. indéterminable -> ``unknown``.
+    Priority order:
+      1. no external mint -> ``na`` (nothing to neutralize);
+      2. deployed by a known launchpad -> ``launchpad`` (the protocol holds authority);
+      3. owner = dead address -> ``renounced``;
+      4. owner = a contract -> ``contract`` (locked/multisig/issuance);
+      5. owner = a wallet (EOA) -> ``eoa`` (dev can dilute -> danger);
+      6. undeterminable -> ``unknown``.
     """
     if not has_mint:
         return AuthorityVerdict(kind="na", detail="pas de fonction mint externe")

@@ -1,16 +1,16 @@
-"""Mineur de conversations opérateur/ARIA (Telegram) -- relit les échanges déjà
-journalisés par `relay_chat.py` (le canal Telegram existant, pas un nouveau) et
-PROPOSE (jamais n'impose) un enseignement durable observé dans le dialogue réel.
-Même doctrine stricte que `knowledge_inbox.py`/`claude_mentor.py` : ISSUE GitHub
-uniquement, jamais un commit ni une fusion autonome.
+"""Operator/ARIA conversation miner (Telegram) -- rereads exchanges already
+logged by `relay_chat.py` (the existing Telegram channel, not a new one) and
+PROPOSES (never imposes) a durable lesson observed in the real dialogue.
+Same strict doctrine as `knowledge_inbox.py`/`claude_mentor.py`: GitHub ISSUE
+only, never an autonomous commit or merge.
 
-Garde-fou spécifique à ce module (au-delà de la doctrine commune) : la source
-est une conversation PRIVÉE (peut contenir IP/mot de passe/clé -- vécu en
-conditions réelles cette même nuit) et la destination est une ISSUE GITHUB
-PUBLIQUE. Une création d'issue ne passe PAS par le scan `detect-secrets` de la
-CI (qui ne couvre que les push) -- `_looks_like_secret` est le seul filet ici et
-bloque la publication (jamais un envoi partiel) au moindre doute plutôt que de
-laisser fuiter un fragment de secret dans le repo public.
+Guardrail specific to this module (beyond the common doctrine): the source
+is a PRIVATE conversation (may contain an IP/password/key -- experienced
+in real conditions this same night) and the destination is a PUBLIC GITHUB
+ISSUE. Creating an issue does NOT go through the CI's `detect-secrets` scan
+(which only covers pushes) -- `_looks_like_secret` is the only safety net here and
+blocks publication (never a partial send) at the slightest doubt rather than
+letting a secret fragment leak into the public repo.
 """
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ import re
 from datetime import datetime, timezone
 
 TARGET_REPO = "ARIA"
-MIN_INTERVAL_HOURS = 20.0  # meme cadence que claude_mentor -- revue de fond, pas un chat continu
-_MIN_NEW_MESSAGES = 6  # au moins quelques echanges pour qu'un motif soit credible
+MIN_INTERVAL_HOURS = 20.0  # same cadence as claude_mentor -- in-depth review, not a continuous chat
+_MIN_NEW_MESSAGES = 6  # at least a few exchanges for a pattern to be credible
 _MAX_MESSAGES_PER_RUN = 120
 
 _MINER_SYSTEM = (
@@ -39,16 +39,16 @@ _MINER_SYSTEM = (
     'aucune citation directe -- sinon vide>"}'
 )
 
-# Filet de sécurité local avant toute publication -- indépendant du scan CI (qui ne
-# couvre que git push, pas les appels API comme la création d'une issue).
+# Local safety net before any publication -- independent from the CI scan (which only
+# covers git push, not API calls like creating an issue).
 _SECRET_PATTERNS = [
     re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),  # IP
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"\bCG-[A-Za-z0-9]{15,}\b"),  # cle demo CoinGecko
-    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),  # token GitHub
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),  # token Slack
-    re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b"),  # blob base64 long generique
-    re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),  # cle API style OpenAI/Anthropic
+    re.compile(r"\bCG-[A-Za-z0-9]{15,}\b"),  # CoinGecko demo key
+    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),  # GitHub token
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),  # Slack token
+    re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b"),  # generic long base64 blob
+    re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),  # OpenAI/Anthropic-style API key
 ]
 
 
@@ -126,7 +126,7 @@ def _format_transcript(messages: list[dict]) -> str:
 
 
 async def _propose_durable_insight(title: str, body: str, *, github_client=None) -> dict:
-    """Publie l'issue -- SEULEMENT si ni le titre ni le corps ne ressemblent à un secret."""
+    """Publishes the issue -- ONLY if neither the title nor the body look like a secret."""
     if _looks_like_secret(title) or _looks_like_secret(body):
         return {"outcome": "blocked_suspected_secret"}
 
@@ -153,15 +153,15 @@ async def _propose_durable_insight(title: str, body: str, *, github_client=None)
             owner, TARGET_REPO, f"[connaissance] {title}", body_full,
             labels=["aria-knowledge-proposal"],
         )
-    except Exception as exc:  # noqa: BLE001 -- une panne GitHub ne doit jamais casser le cycle
+    except Exception as exc:  # noqa: BLE001 -- a GitHub outage must never break the cycle
         return {"outcome": "error", "error": str(exc)[:300]}
     return {"outcome": "ok", "issue_url": issue.get("html_url")}
 
 
 async def run_telegram_miner_cycle(*, llm=None, github_client=None) -> dict:
-    """Un tour : relit les nouveaux échanges opérateur/ARIA depuis le dernier passage,
-    propose un enseignement durable si un motif solide se dégage. Fail-closed à chaque
-    étage, throttle interne (~1x/jour)."""
+    """One pass: rereads new operator/ARIA exchanges since the last run,
+    proposes a durable lesson if a solid pattern emerges. Fail-closed at every
+    stage, internal throttle (~1x/day)."""
     if not telegram_miner_enabled():
         return {"outcome": "skipped_disabled"}
 

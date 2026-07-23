@@ -55,7 +55,7 @@ _IMPERATIVE_PUBLISH = re.compile(
 
 def _wants_immediate_x_publish(message: str) -> bool:
     """
-    Publication API uniquement sur ordre explicite — pas sur « propose un tweet à publier ».
+    API publish only on explicit order — not on "propose a tweet to publish".
     """
     lower = message.lower().strip()
     if _PROPOSAL_CONTEXT.search(lower):

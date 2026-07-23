@@ -1,17 +1,17 @@
-"""Client de lecture seule CoinGecko — données fondamentales (Base).
+"""Read-only CoinGecko client — fundamental data (Base).
 
-Complète Blockscout (on-chain) et DexScreener (marché court terme) avec des
-données fondamentales : market cap, FDV, supply, catégories, âge du token.
-Aucune écriture. Clé Demo CoinGecko optionnelle (`COINGECKO_DEMO_API_KEY`,
-gratuite, cf. `.env` VPS) — CoinGecko exige désormais cette clé même sur son
-tier public (401 systématique sans elle, changement de politique constaté le
-09/07) ; absente, le client échoue proprement (jamais une valeur inventée).
-Politique d'erreurs identique à `services/blockscout.py` (cf. AGENTS.md) :
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
-- Timeout / endpoint indisponible : 1 retry après 5s, puis fallback explicite.
-- Aucune donnée manquante n'est jamais remplacée par une supposition — le
-  champ `error` (et `available=False`) porte l'absence de donnée.
-- Échecs consécutifs répétés (>3) : logué, jamais bloquant, jamais de spam Telegram.
+Complements Blockscout (on-chain) and DexScreener (short-term market) with
+fundamental data: market cap, FDV, supply, categories, token age.
+No writes. Optional CoinGecko Demo key (`COINGECKO_DEMO_API_KEY`,
+free, cf. VPS `.env`) — CoinGecko now requires this key even on its
+public tier (systematic 401 without it, policy change observed on
+09/07); if absent, the client fails cleanly (never an invented value).
+Same error policy as `services/blockscout.py` (cf. AGENTS.md):
+- 429: exponential backoff, 3 attempts max, then give up without blocking the pipeline.
+- Timeout / endpoint unavailable: 1 retry after 5s, then explicit fallback.
+- Missing data is never replaced by a guess — the
+  `error` field (and `available=False`) carries the absence of data.
+- Repeated consecutive failures (>3): logged, never blocking, never Telegram spam.
 """
 
 from __future__ import annotations
@@ -53,14 +53,14 @@ class TokenFundamentals:
 
 @dataclass
 class SimplePriceResult:
-    """Prix courants réels (``simple/price``), jamais un point inventé — absence de
-    donnée portée par ``available=False`` + ``error``. ``last_updated_at`` (Unix,
-    fourni par CoinGecko lui-même via ``include_last_updated_at``) est la vraie
-    preuve de fraîcheur : contrairement à une page web scrappée (cf. incident 10/07
-    — prix BTC/SOL périmés cités comme « en direct »), ce n'est pas juste le
-    contenu d'une page, c'est l'horodatage de mise à jour côté CoinGecko."""
+    """Real current prices (``simple/price``), never an invented data point —
+    absence of data carried by ``available=False`` + ``error``. ``last_updated_at``
+    (Unix, provided by CoinGecko itself via ``include_last_updated_at``) is the real
+    proof of freshness: unlike a scraped web page (cf. 10/07 incident
+    — stale BTC/SOL prices cited as "live"), this isn't just the
+    content of a page, it's CoinGecko's own update timestamp."""
 
-    prices: dict[str, dict[str, float]] = field(default_factory=dict)  # {coin_id: {vs_ccy: prix}}
+    prices: dict[str, dict[str, float]] = field(default_factory=dict)  # {coin_id: {vs_ccy: price}}
     last_updated_at: dict[str, int] = field(default_factory=dict)  # {coin_id: unix_ts}
     available: bool = False
     error: str | None = None
@@ -68,8 +68,8 @@ class SimplePriceResult:
 
 @dataclass
 class MarketChartResult:
-    """Série (horodatage ms, prix USD) réelle pour une devise majeure — jamais un point
-    inventé : absence de donnée portée par `available=False` + `error`."""
+    """Real (ms timestamp, USD price) series for a major currency — never an invented
+    data point: absence of data carried by `available=False` + `error`."""
 
     coin_id: str
     prices: list[tuple[int, float]] = field(default_factory=list)
@@ -78,24 +78,24 @@ class MarketChartResult:
 
 
 class CoinGeckoClient:
-    """Client HTTP async, lecture seule, throttle prudent (API publique sans clé)."""
+    """Async HTTP client, read-only, cautious throttle (public API, no key)."""
 
-    # 21/07 -- calibré à 90% de 100 req/min confirmé (palier Demo, clé
-    # COINGECKO_DEMO_API_KEY déjà configurée et attachée ci-dessous -- deux
-    # sources officielles indépendantes : docs.coingecko.com/docs/common-errors-
-    # rate-limit et coingecko.com/en/api/pricing). Doctrine CLAUDE.md "Débit
-    # calibré à 90%" : 90/min = 0.667s. Remplace 2.2s (27/min, 27% de la
-    # capacité réelle -- sous-utilisé depuis l'origine).
+    # 21/07 -- calibrated to 90% of the confirmed 100 req/min (Demo tier, key
+    # COINGECKO_DEMO_API_KEY already configured and attached below -- two
+    # independent official sources: docs.coingecko.com/docs/common-errors-
+    # rate-limit and coingecko.com/en/api/pricing). CLAUDE.md "90% calibrated
+    # throughput" doctrine: 90/min = 0.667s. Replaces 2.2s (27/min, 27% of the
+    # real capacity -- under-utilized since the beginning).
     def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 0.667) -> None:
         self.base_url = base_url.rstrip("/")
         self._min_interval = min_interval
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
-        # CoinGecko exige désormais une clé Demo gratuite même sur le tier public
-        # (changement de politique constaté le 09/07 — 401 systématique sans elle).
-        # Optionnelle ici : absente -> comportement inchangé (échec géré normalement,
-        # jamais de valeur inventée), présente -> ajoutée en en-tête sur chaque appel.
+        # CoinGecko now requires a free Demo key even on the public tier
+        # (policy change observed on 09/07 — systematic 401 without it).
+        # Optional here: absent -> behavior unchanged (failure handled normally,
+        # never an invented value), present -> added as a header on every call.
         self._api_key = os.environ.get("COINGECKO_DEMO_API_KEY", "").strip() or None
 
     async def _throttle(self) -> None:
@@ -113,20 +113,20 @@ class CoinGeckoClient:
         self._consecutive_failures += 1
         if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
             logger.warning(
-                "coingecko: %s echecs consecutifs (dernier: %s) — pas de blocage, pas d'escalade",
+                "coingecko: %s consecutive failures (last: %s) — no blocking, no escalation",
                 self._consecutive_failures,
                 detail,
             )
         else:
             logger.info(
-                "coingecko: echec appel (%s/%s) — %s",
+                "coingecko: call failed (%s/%s) — %s",
                 self._consecutive_failures,
                 _FAIL_STREAK_WARN_THRESHOLD,
                 detail,
             )
 
     async def _get_json(self, path: str) -> tuple[object | None, str | None]:
-        """GET avec la politique d'erreurs AGENTS.md. Retourne (data, error)."""
+        """GET with the AGENTS.md error policy. Returns (data, error)."""
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         timeout_retried = False
@@ -226,14 +226,14 @@ class CoinGeckoClient:
     async def get_simple_price(
         self, coin_ids: list[str], *, vs_currencies: list[str] | None = None
     ) -> SimplePriceResult:
-        """Prix courants réels pour une liste de coins CoinGecko (``simple/price``).
+        """Real current prices for a list of CoinGecko coins (``simple/price``).
 
-        Remplace un scrappage de page web (incident réel 10/07 : BTC/SOL cités à
-        ~30% sous leur vrai prix depuis une page périmée présentée comme « en
-        direct ») par un point de donnée structuré, horodaté par CoinGecko lui-même.
-        ``coin_ids`` sont des identifiants CoinGecko (ex. ``"bitcoin"``, pas ``"BTC"``)
-        — la résolution symbole→id vit dans ``skills/market_quotes.py``, pas ici
-        (ce client reste un simple client HTTP, sans logique métier).
+        Replaces web-page scraping (real incident 10/07: BTC/SOL cited ~30% below
+        their real price from a stale page presented as "live") with a structured
+        data point, timestamped by CoinGecko itself.
+        ``coin_ids`` are CoinGecko identifiers (e.g. ``"bitcoin"``, not ``"BTC"``)
+        — symbol→id resolution lives in ``skills/market_quotes.py``, not here
+        (this client stays a plain HTTP client, no business logic).
         """
         vs = vs_currencies or ["usd"]
         if not coin_ids:
@@ -279,9 +279,9 @@ class CoinGeckoClient:
     async def get_market_chart_range(
         self, coin_id: str, start_ts: int, end_ts: int, *, vs_currency: str = "usd"
     ) -> MarketChartResult:
-        """Série de prix réelle (`market_chart/range`) pour une devise majeure (ex.
-        `bitcoin`) entre deux horodatages Unix — agrégation journalière automatique
-        au-delà de 90 jours sur le tier public. Jamais de prix inventé : absence ->
+        """Real price series (`market_chart/range`) for a major currency (e.g.
+        `bitcoin`) between two Unix timestamps — automatic daily aggregation
+        beyond 90 days on the public tier. Never an invented price: absence ->
         `available=False`."""
         data, error = await self._get_json(
             f"/coins/{coin_id}/market_chart/range?vs_currency={vs_currency}"

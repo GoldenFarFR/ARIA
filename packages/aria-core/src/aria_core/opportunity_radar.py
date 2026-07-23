@@ -1,14 +1,14 @@
-"""Radar d'opportunités — mine les conversations (posts + COMMENTAIRES) autour de Base et
-d'ailleurs pour en extraire des idées à fusionner dans ARIA.
+"""Opportunity radar — mines conversations (posts + COMMENTS) around Base and
+elsewhere to extract ideas to merge into ARIA.
 
-L'or est souvent dans les réponses (« ça pourrait permettre de… », « il faudrait… »,
-« someone should build… »). Ce module détecte ce langage d'opportunité, repère les accroches
-techniques (x402, MCP, agent, onchain…), score, déduplique et classe — puis surface à
-l'opérateur (jamais d'action autonome ; lecture seule).
+The gold is often in the replies (« this could enable... », « we'd need... »,
+« someone should build... »). This module detects this opportunity language, spots
+technical hooks (x402, MCP, agent, onchain...), scores, deduplicates and ranks — then
+surfaces it to the operator (never autonomous action; read-only).
 
-Découplé de la SOURCE : `mine_threads`/`extract_opportunities` prennent du TEXTE. La récupération
-des fils X (radar lecture) est un seam à brancher quand l'API X lecture est active ; en
-attendant, on peut alimenter le radar avec des textes collés (opérateur) ou d'autres flux.
+Decoupled from the SOURCE: `mine_threads`/`extract_opportunities` take TEXT. Fetching
+X threads (read radar) is a seam to wire up once the X read API is active; in the
+meantime, the radar can be fed pasted text (operator) or other feeds.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-# Langage d'opportunité (FR + EN) — signaux qu'un message propose/appelle une idée.
+# Opportunity language (FR + EN) — signals that a message proposes/calls for an idea.
 _OPPORTUNITY_PATTERNS = [
     r"could (?:enable|allow|power|unlock|let|help)",
     r"would be (?:great|amazing|nice|cool|huge|perfect|sick|dope)\b",
@@ -36,7 +36,7 @@ _OPPORTUNITY_PATTERNS = [
 ]
 _OPP_RE = re.compile("|".join(_OPPORTUNITY_PATTERNS), re.IGNORECASE)
 
-# Accroches techniques pertinentes pour ARIA (écosystème Base + agentique).
+# Technical hooks relevant to ARIA (Base ecosystem + agentic).
 _TECH_HOOKS = [
     "x402", "mcp", "agent kit", "agentkit", "onchain", "on-chain", "smart account",
     "paymaster", "minikit", "base app", "attestation", "eas", "sdk", "oracle",
@@ -52,11 +52,11 @@ _DEFAULT_THRESHOLD = 3.0
 
 @dataclass
 class OpportunityCandidate:
-    idea: str                       # la phrase/segment porteur d'opportunité
-    source: str                     # d'où vient le texte (ex. "x:@base/reply", "manual")
+    idea: str                       # the sentence/segment carrying the opportunity
+    source: str                     # where the text comes from (e.g. "x:@base/reply", "manual")
     score: float
-    signals: list[str] = field(default_factory=list)   # tournures d'opportunité détectées
-    tech_hooks: list[str] = field(default_factory=list) # accroches techniques repérées
+    signals: list[str] = field(default_factory=list)   # opportunity phrasings detected
+    tech_hooks: list[str] = field(default_factory=list) # technical hooks spotted
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -76,7 +76,7 @@ def _segments(text: str) -> list[str]:
 def extract_opportunities(
     text: str, *, source: str = "manual", threshold: float = _DEFAULT_THRESHOLD,
 ) -> list[OpportunityCandidate]:
-    """Extrait les segments porteurs d'opportunité d'un texte (post OU commentaire)."""
+    """Extracts opportunity-carrying segments from a text (post OR comment)."""
     out: list[OpportunityCandidate] = []
     for seg in _segments(text):
         if len(seg) < _MIN_LEN:
@@ -85,8 +85,8 @@ def extract_opportunities(
         hooks = sorted({m.group(1).lower() for m in _HOOK_RE.finditer(seg)})
         if not signals and not hooks:
             continue
-        # Score : le langage d'opportunité pèse plus (3) que les accroches (2) ; petit bonus
-        # de substance. Un segment sans signal d'opportunité (accroche seule) reste sous le seuil.
+        # Score: opportunity language weighs more (3) than hooks (2); small substance
+        # bonus. A segment with no opportunity signal (hook only) stays below threshold.
         score = 3.0 * len(signals) + 2.0 * len(hooks) + min(len(seg), 200) / 100.0
         if score >= threshold and signals:
             out.append(OpportunityCandidate(
@@ -96,7 +96,7 @@ def extract_opportunities(
 
 
 def opportunity_radar_enabled() -> bool:
-    """Gate du DIGEST opérateur (tâche #52) -- OFF par défaut, outward-facing (Telegram push)."""
+    """Gate for the operator DIGEST (task #52) -- OFF by default, outward-facing (Telegram push)."""
     return os.environ.get("ARIA_OPPORTUNITY_RADAR_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -108,13 +108,13 @@ def mine_curiosity_items(
     *,
     threshold: float = _DEFAULT_THRESHOLD,
 ) -> list[OpportunityCandidate]:
-    """Filtre les items de `fetch_curiosity_feed` aux comptes « opportunité » (ex. @base,
-    @Whale_AI_net -- cf. `x_watchlist.opportunity_watch_handles`), puis mine.
+    """Filters `fetch_curiosity_feed` items to "opportunity" accounts (e.g. @base,
+    @Whale_AI_net -- cf. `x_watchlist.opportunity_watch_handles`), then mines them.
 
-    Root-only pour l'instant : le client X lecture actuel (`gateway/x_twitter.py`) n'a pas
-    d'endpoint réponses/recherche -- seul le texte du post est mineable, pas les commentaires
-    (malgré le nom du module, cf. docstring de tête). Réutilise le fetch déjà fait par le
-    cycle de curiosité existant -- aucun appel X supplémentaire."""
+    Root-only for now: the current X read client (`gateway/x_twitter.py`) has no
+    replies/search endpoint -- only the post text is mineable, not the comments
+    (despite the module's name, cf. the top docstring). Reuses the fetch already done by
+    the existing curiosity cycle -- no extra X call."""
     handles = {h.lstrip("@").lower() for h in opportunity_handles}
     if not handles:
         return []
@@ -131,9 +131,9 @@ def mine_curiosity_items(
 def mine_threads(
     threads: Iterable[dict[str, Any]], *, threshold: float = _DEFAULT_THRESHOLD,
 ) -> list[OpportunityCandidate]:
-    """Mine une liste de fils. Un fil = {handle, text, replies:[{handle,text}, ...]}.
+    """Mines a list of threads. A thread = {handle, text, replies:[{handle,text}, ...]}.
 
-    On mine le post ET surtout les COMMENTAIRES (souvent les plus riches en idées)."""
+    Mines the post AND especially the COMMENTS (often the richest in ideas)."""
     cands: list[OpportunityCandidate] = []
     for thread in threads:
         handle = str(thread.get("handle") or "?").lstrip("@")
@@ -149,7 +149,7 @@ def mine_threads(
 def rank_opportunities(
     candidates: list[OpportunityCandidate], *, top: int | None = None,
 ) -> list[OpportunityCandidate]:
-    """Trie par score décroissant et déduplique les idées quasi identiques."""
+    """Sorts by descending score and deduplicates near-identical ideas."""
     seen: set[str] = set()
     ranked: list[OpportunityCandidate] = []
     for c in sorted(candidates, key=lambda x: x.score, reverse=True):
@@ -162,7 +162,7 @@ def rank_opportunities(
 
 
 def format_operator_digest(candidates: list[OpportunityCandidate], *, lang: str = "fr", top: int = 10) -> str:
-    """Digest lisible pour l'opérateur (Telegram). Surface les idées, ne décide rien."""
+    """Human-readable digest for the operator (Telegram). Surfaces ideas, decides nothing."""
     ranked = rank_opportunities(candidates, top=top)
     if not ranked:
         return ("Aucune opportunité détectée dans les conversations analysées."
@@ -178,8 +178,8 @@ def format_operator_digest(candidates: list[OpportunityCandidate], *, lang: str 
 
 
 def _main() -> None:
-    """CLI : alimente le radar avec du texte collé (une ligne = un commentaire), ou un JSON
-    de fils sur --threads. Usage : python -m aria_core.opportunity_radar < commentaires.txt"""
+    """CLI: feeds the radar with pasted text (one line = one comment), or a JSON
+    of threads on --threads. Usage: python -m aria_core.opportunity_radar < comments.txt"""
     import json
     import sys
 

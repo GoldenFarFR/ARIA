@@ -30,10 +30,11 @@ VIRTUALS_CHAT_URL = "https://compute.virtuals.io/v1/chat/completions"
 from aria_core.ecosystem_config import banned_values as _banned_values
 
 # Virtuals returns empty on these models as primary (ecosystem_registry.yaml)
-# 17/07 -- repli codé en dur vidé (décision opérateur explicite, "il n'y a aucune raison
-# qu'il le soit") -- deepseek-deepseek-v4-pro n'a plus de justification documentée pour
-# être banni. Vidé ici EN PLUS du registre (ecosystem_registry.yaml) pour qu'aucun des
-# deux ne puisse silencieusement réintroduire le ban si l'autre est modifié seul.
+# 17/07 -- hard-coded fallback cleared (explicit operator decision, "there's no reason
+# for it to be [banned]") -- deepseek-deepseek-v4-pro no longer has a documented
+# justification for being banned. Cleared here IN ADDITION to the registry
+# (ecosystem_registry.yaml) so that neither of the two can silently reintroduce the ban
+# if the other is changed alone.
 BANNED_VIRTUALS_PRIMARY_MODELS = _banned_values().get("LLM_MODEL", frozenset())
 
 _DEVELOP_HINT = re.compile(
@@ -143,15 +144,15 @@ def resolve_provider(vault: dict[str, str] | None = None) -> str:
     ouvrier_cloud = (
         os.environ.get("ARIA_OUVRIER_CLOUD") or merged.get("ARIA_OUVRIER_CLOUD") or ""
     ).strip().lower()
-    # 17/07 -- bug réel trouvé en basculant hors de Virtuals (expiration crédits Spark
-    # 18/07) : ce contrôle ne lisait QUE ``merged`` (le vault, vide sur ce VPS Linux --
-    # local.env/production.env sont un concept Windows/%LOCALAPPDATA%), retombant donc
-    # systématiquement sur le défaut statique du registre ("virtuals") -- ``os.environ``
-    # (donc `.env` en prod) n'était JAMAIS consulté pour CE check précis, contrairement à
-    # ``ouvrier_cloud`` juste au-dessus qui vérifie déjà ``os.environ`` en premier. Un
-    # `LLM_PROVIDER` posé dans `.env` restait donc sans effet sur cette bascule, alors que
-    # `LLM_PROVIDER` figure explicitement dans `prod_overlay_keys` (ecosystem_registry.yaml)
-    # -- censé être surchargeable en prod. Corrigé sur le même patron que `ouvrier_cloud`.
+    # 17/07 -- real bug found while switching off Virtuals (Spark credits expiration
+    # 18/07): this check ONLY read ``merged`` (the vault, empty on this Linux VPS --
+    # local.env/production.env is a Windows/%LOCALAPPDATA% concept), therefore
+    # systematically falling back to the registry's static default ("virtuals") -- ``os.environ``
+    # (i.e. `.env` in prod) was NEVER consulted for THIS specific check, unlike
+    # ``ouvrier_cloud`` just above which already checks ``os.environ`` first. An
+    # `LLM_PROVIDER` set in `.env` therefore had no effect on this switch, even though
+    # `LLM_PROVIDER` is explicitly listed in `prod_overlay_keys` (ecosystem_registry.yaml)
+    # -- meant to be overridable in prod. Fixed following the same pattern as `ouvrier_cloud`.
     vault_provider = (os.environ.get("LLM_PROVIDER") or merged.get("LLM_PROVIDER") or "").strip().lower()
     provider = vault_provider
     if (

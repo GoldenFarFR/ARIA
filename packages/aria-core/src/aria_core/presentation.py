@@ -1,4 +1,4 @@
-"""Formatage professionnel Telegram — investor-grade, texte simple (pas de markdown)."""
+"""Professional Telegram formatting — investor-grade, plain text (no markdown)."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ AXIS_SHORT_EN: dict[str, str] = {
 
 RANK_MEDALS = ("🥇", "🥈", "🥉", "4.", "5.")
 
-# Largeurs fixes — lisibles sur Telegram (police proportionnelle)
+# Fixed widths — readable on Telegram (proportional font)
 _W_AXIS = 4
 _W_SCORE = 3
 _W_BAR = 8
@@ -58,14 +58,14 @@ def _divider(width: int = 34) -> str:
 
 
 def _fmt_score(value: float) -> str:
-    """Affichage prose (virgule FR si décimal)."""
+    """Prose display (FR comma if decimal)."""
     if abs(value - round(value)) <= 0.05:
         return str(int(round(value)))
     return f"{value:.1f}".replace(".", ",")
 
 
 def _fmt_table_score(value: float) -> str:
-    """Tableau : point décimal + largeur fixe pour alignement."""
+    """Table: decimal point + fixed width for alignment."""
     return f"{value:5.1f}"
 
 
@@ -170,7 +170,7 @@ def format_compare_table(
     lang: str = "fr",
     holding_context: bool = True,
 ) -> list[str]:
-    """Tableau comparatif aligné (mode compare)."""
+    """Aligned comparison table (compare mode)."""
     title = "⚖️ COMPARAISON" if lang == "fr" else "⚖️ COMPARISON"
     lines = [
         "══════════════════════════════════",
@@ -348,7 +348,7 @@ def format_live_info_response(
     query: str = "",
     fallback: bool = False,
 ) -> str:
-    """Actu / marché — réponse nette en haut, sources avec lien 📎 en bas."""
+    """News / market — clean answer up top, sources with 📎 link at the bottom."""
     normalized = _dedupe_sources(_normalize_sources(sources))
     direct = (answer or "").strip() or _extract_direct_answer(query, normalized, lang)
     direct = _complete_sentence(direct, 280)
@@ -395,7 +395,7 @@ def format_live_info_brief(
     lang: str = "fr",
     query: str = "",
 ) -> str:
-    """Rétrocompat — délègue au format réponse + sources."""
+    """Backward compat — delegates to the answer + sources format."""
     return format_live_info_response(
         None, snippets, lang=lang, query=query, fallback=True,
     )

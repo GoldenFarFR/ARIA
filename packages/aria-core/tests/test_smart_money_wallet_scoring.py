@@ -1306,7 +1306,7 @@ class TestScoreWalletsEndToEnd:
         assert card.tokens_found == 25
         assert card.tokens_analyzed == 20
         assert card.tokens_skipped_capped is True
-        assert any("plafond" in rec.message for rec in caplog.records)
+        assert any("cap of" in rec.message for rec in caplog.records)
 
     @pytest.mark.asyncio
     async def test_tokens_found_total_never_regresses_across_scans(self, tmp_path, monkeypatch):

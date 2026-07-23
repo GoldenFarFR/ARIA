@@ -18,7 +18,7 @@ LEDGER_PATH = memory_dir() / "x_api_ledger.json"
 X_API_POST_PER_USER_15MIN = 100
 X_API_POST_PER_APP_24H = 10000
 
-# Règle d'or anti-ban — plus strict que l'API, jamais contournée (force/skip_rate_gap)
+# Anti-ban golden rule — stricter than the API, never bypassed (force/skip_rate_gap)
 X_SAFE_MAX_POSTS_PER_15MIN = 5
 X_SAFE_MAX_POSTS_PER_DAY = 24
 X_SAFE_MAX_POSTS_PER_DAY_HARD = 50
@@ -101,7 +101,7 @@ def _contains_url(text: str) -> bool:
     return bool(re.search(r"https?://|www\.", text, re.I))
 
 
-# Contenu interdit — word boundaries pour éviter faux positifs (@GoldenFarFR ≠ nfa)
+# Forbidden content — word boundaries to avoid false positives (@GoldenFarFR ≠ nfa)
 _CONTENT_VIOLATIONS: tuple[tuple[str, str], ...] = (
     (r"\$\d", "prix/hype ($ chiffre)"),
     (r"\bpump\b", "pump"),
@@ -183,7 +183,7 @@ def _api_rate_limit_blocked() -> tuple[bool, str]:
 
 
 def record_x_rate_limit(*, reset_ts: int | None = None, wait_seconds: int = 900) -> None:
-    """Persiste un cooldown après 429 — évite ban en rafale."""
+    """Persists a cooldown after a 429 — avoids a rapid-fire ban."""
     ledger = _load_ledger()
     now = datetime.now(timezone.utc)
     if reset_ts and reset_ts > 0:
@@ -204,7 +204,7 @@ def _check_platform_safety(
     ledger: dict[str, Any],
     body: str,
 ) -> tuple[bool, str]:
-    """Garde-fous plateforme X — jamais contournés (règle d'or : pas de ban)."""
+    """X platform guardrails — never bypassed (golden rule: no ban)."""
     blocked, reason = _api_rate_limit_blocked()
     if blocked:
         return False, reason
@@ -268,7 +268,7 @@ def _check_monthly_spend(ledger: dict[str, Any], cost: float, *, force: bool) ->
 
 
 def check_tweet_content(text: str, *, allow_urls: bool = False) -> tuple[bool, str]:
-    """Règles contenu uniquement (pas quota / budget). Retourne (ok, raison)."""
+    """Content rules only (no quota / budget). Returns (ok, reason)."""
     body = text.strip()
     if not body:
         return False, "tweet vide"
@@ -292,7 +292,7 @@ def tweet_has_french(text: str) -> bool:
 
 
 def policy_rules_for_llm(lang: str = "en") -> str:
-    """Bloc compact injecté dans les prompts tweet (compose, comms)."""
+    """Compact block injected into tweet prompts (compose, comms)."""
     if lang == "fr":
         return (
             "POLITIQUE X @Aria_ZHC (obligatoire — non négociable) :\n"
@@ -318,7 +318,7 @@ def policy_rules_for_llm(lang: str = "en") -> str:
 
 
 def format_draft_policy_footer(text: str, lang: str = "fr") -> str:
-    """Statut politique X pour brouillon opérateur (compose Telegram)."""
+    """X policy status for an operator draft (Telegram compose)."""
     content_ok, content_reason = check_tweet_content(text)
     if not content_ok:
         return f"⚠️ Politique X — bloqué : {content_reason}"
@@ -467,7 +467,7 @@ def check_tweet_allowed(
 
 
 def list_published_tweets(*, limit: int = 20) -> list[dict[str, Any]]:
-    """Tweets publiés via l'API X — texte complet quand disponible."""
+    """Tweets published via the X API — full text when available."""
     ledger = _load_ledger()
     posts = [p for p in ledger.get("posts", []) if p.get("kind") == "tweet"]
     posts.sort(key=lambda p: p.get("at", ""), reverse=True)

@@ -33,17 +33,19 @@ _SOCIAL_RE = re.compile(
 
 # Broad casual / small talk detector — used to let operator chat naturally.
 #
-# NB (09/07, audit fuzz post-web_verify) : plusieurs mots retirés parce qu'ils ont un sens
-# métier fort et courant chez l'opérateur (crypto/VC), donc faux-positivaient sur de VRAIES
-# questions sérieuses (vérifié empiriquement, pas une supposition) :
-# "temps" ("je n'ai pas le temps de tout lire, résume ta thèse"), "chat" (le channel Telegram
-# lui-même : "dans notre chat, active le mode admin"), "cash"/"clash"/"filtre" (paiement,
-# conflit technique, honeypot filter -- son propre domaine), "frigo" (idiome business "mettre
-# un projet au frigo" = reporter), "il fait" (trop générique : "il fait le nécessaire"),
-# "matin"/"soir" (quasi tout message d'actu marché : "ce matin le marché était volatile"),
-# "des news" (une vraie demande d'actu financière), "jeu" ("un jeu risqué ce trade").
-# "aujourd'hui/demain/hier/ce soir" retirés pour la même raison que dans web_verify.py (seuls,
-# ces mots ne signalent pas du smalltalk -- "on se voit demain pour la stratégie" est sérieux).
+# NB (09/07, fuzz audit post-web_verify): several words were removed because they carry a
+# strong, common business meaning for the operator (crypto/VC), so they were false-positiving on
+# REAL serious questions (verified empirically, not assumed):
+# "temps" [time] ("I don't have time to read it all, summarize your thesis"), "chat" (the
+# Telegram channel itself: "in our chat, enable admin mode"), "cash"/"clash"/"filtre" (payment,
+# technical conflict, honeypot filter -- her own domain), "frigo" [fridge] (business idiom "put a
+# project in the fridge" = postpone it), "il fait" [it's ... / he's doing] (too generic: "il fait
+# le nécessaire" = "he's doing what's needed"),
+# "matin"/"soir" [morning/evening] (almost any market news message: "the market was volatile this
+# morning"), "des news" (a genuine request for financial news), "jeu" [game] ("a risky trade").
+# "aujourd'hui/demain/hier/ce soir" [today/tomorrow/yesterday/tonight] removed for the same reason
+# as in web_verify.py (alone, these words don't signal smalltalk -- "see you tomorrow to discuss
+# strategy" is serious).
 _CASUAL_SMALLTALK_RE = re.compile(
     r"\b("
     r"météo|il fait (?:beau|chaud|froid|mauvais)|pleut|soleil|chaud|froid|"
@@ -63,12 +65,14 @@ _CASUAL_SMALLTALK_RE = re.compile(
 # Meta questions about ARIA herself (humor, seriousness, length, doublons, personality).
 # These should be treated as light conversational for the operator.
 #
-# NB (09/07) : "ton" (bare) matchait le POSSESSIF ("ton avis", "ton analyse") aussi bien que
-# le nom "tonalité" -- vérifié empiriquement : "quel est ton avis sur la stratégie ?" tombait
-# en smalltalk pur (réponse tronquée à 2 phrases) uniquement à cause de ce mot. Restreint à un
-# déterminant direct ("quel ton", "ce ton", "mon ton") pour ne garder que le sens "tonalité".
-# "long"/"court" bruts retirés pour la même raison ("vision à long terme" est un VRAI sujet
-# VC) -- "trop long"/"trop court" (déjà présents/ajoutés) couvrent le vrai feedback de longueur.
+# NB (09/07): bare "ton" [your/tone] matched the POSSESSIVE ("ton avis" = "your opinion", "ton
+# analyse" = "your analysis") just as much as the noun "tonalité" [tone] -- verified empirically:
+# "what's your opinion on the strategy?" fell into pure smalltalk (reply truncated to 2
+# sentences) purely because of this word. Restricted to a direct determiner ("quel ton" = "which
+# tone", "ce ton" = "this tone", "mon ton" = "my tone") to keep only the "tone" meaning.
+# Bare "long"/"court" [long/short] removed for the same reason ("long-term vision" is a REAL VC
+# topic) -- "trop long"/"trop court" [too long/too short] (already present/added) cover genuine
+# length feedback.
 _META_SELF_RE = re.compile(
     r"\b("
     r"humour|fun|drôle|sérieux|sérieuse|trop sérieux|trop long(?:ue)?|trop court(?:e)?|doublon|doublons|"
@@ -207,14 +211,13 @@ async def build_verified_facts_block(
 ) -> str:
     """Assemble verified facts for LLM context — not persona/opinion.
 
-    18/07 -- bug de troncature trouvé en testant (le texte plus long d'un autre
-    correctif du même jour a fait dépasser 6000 caractères, effaçant SILENCIEUSEMENT
-    la section self-maintenance) : un `[:6000]` naïf en toute fin coupait toujours le
-    dernier morceau ajouté au tuple, jamais le moins important. Les sections
-    admin-only (directives + self-maintenance -- des filets de sécurité, pas du
-    contenu discrétionnaire) réservent maintenant leur budget EN PREMIER ; seules
-    les sections discrétionnaires (FAQ/Knowledge/Epistemic/Truth Ledger) sont
-    tronquées si la place manque."""
+    18/07 -- truncation bug found while testing (longer text from another fix on
+    the same day pushed the total past 6000 characters, SILENTLY wiping out the
+    self-maintenance section): a naive final `[:6000]` always cut the last chunk
+    added to the tuple, never the least important one. The admin-only sections
+    (directives + self-maintenance -- safety nets, not discretionary content)
+    now reserve their budget FIRST; only the discretionary sections
+    (FAQ/Knowledge/Epistemic/Truth Ledger) get truncated if space runs short."""
     header = "# VERIFIED FACTS (only source of truth)"
 
     discretionary: list[str] = []
@@ -283,19 +286,19 @@ async def build_verified_facts_block(
         try:
             from aria_core.self_maintenance import self_maintenance_context_for_brain
 
-            # Filet pour les ordres opérateur (profil X/bannière/avatar) qui échappent au
-            # classifieur regex strict (handle_operator_self_message, brain.py) -- sans ce
-            # bloc, un message dans une formulation non couverte par ce classifieur retombe
-            # sur la réponse LLM générale, avec le même risque de re-routage ACTU que ce bloc
-            # est censé prévenir (cf. self_maintenance.py). Trouvé écrit mais jamais injecté
-            # ici (balayage code mort du 15/07) -- même point d'insertion que "directives"
-            # juste au-dessus, admin-only comme lui.
+            # Safety net for operator orders (X profile/banner/avatar) that slip past the
+            # strict regex classifier (handle_operator_self_message, brain.py) -- without this
+            # block, a message phrased in a way the classifier doesn't cover falls through
+            # to the general LLM reply, with the same live-info re-routing risk this block
+            # is meant to prevent (cf. self_maintenance.py). Found written but never injected
+            # here (dead-code sweep on 15/07) -- same insertion point as "directives"
+            # just above, admin-only like it.
             critical.append(f"\n{self_maintenance_context_for_brain()}")
         except Exception:
             pass
 
     critical_text = "\n".join(critical)
-    reserved = len(header) + len(critical_text) + 2  # 2 = séparateurs \n
+    reserved = len(header) + len(critical_text) + 2  # 2 = \n separators
     discretionary_budget = max(0, _VERIFIED_FACTS_MAX_CHARS - reserved)
     discretionary_text = "\n".join(discretionary)[:discretionary_budget]
 
@@ -317,7 +320,7 @@ def is_short_ack(message: str) -> bool:
 
 
 def is_general_qa(message: str) -> bool:
-    """Question ou demande d'info — route vers Groq calibré (pas YAML monde)."""
+    """Question or info request — routes to calibrated Groq (not world YAML)."""
     text = message.strip()
     if len(text) < 8:
         return False
@@ -371,12 +374,12 @@ def is_greeting(message: str) -> bool:
         return False
     if _GREETING_RE.search(text):
         return True
-    # « gm » / « gn » seuls (ponctuation crypto OK)
+    # Bare "gm" / "gn" (crypto punctuation OK)
     return bool(re.match(r"^gm[!?.…]*$|^gn[!?.…]*$", text, re.IGNORECASE))
 
 
 def format_greeting_reply(message: str, lang: str = "en", *, public: bool = False) -> str:
-    """Réponse salutation template — opérateur en français par défaut."""
+    """Greeting reply template — operator defaults to French."""
     from aria_core.narrative import welcome_chat, welcome_chat_public
 
     greet_lang = lang
@@ -507,17 +510,18 @@ _LLM_IDENTITY_RE = re.compile(
 
 
 def is_llm_identity_question(message: str) -> bool:
-    """True pour une question sur la NATURE d'ARIA (« es-tu un LLM/une IA ? ») — distincte de
-    ``llm_routing_meta.is_llm_routing_question`` (routage technique : quel provider/API pour
-    CE tour) et de ``self_context.is_self_context_question`` (mission/valeurs/objectifs).
+    """True for a question about ARIA's NATURE (« are you an LLM/AI? ») — distinct from
+    ``llm_routing_meta.is_llm_routing_question`` (technical routing: which provider/API for
+    THIS turn) and from ``self_context.is_self_context_question`` (mission/values/goals).
 
-    Ajoutée après un incident réel (11/07) : l'opérateur a demandé « tu fonctionnes avec quel
-    type d'intelligence, un LLM ? » sur Telegram et ARIA a répondu « Oui, actuellement Claude
-    Opus 4.8 » — régression du même incident corrigé le 08/07
-    (``grounded_llm_identity``), parce que ``grounded_llm_identity`` n'est injecté QUE dans le
-    chemin ``grounded_for_audience(public)`` (visiteurs publics), jamais dans la conversation
-    opérateur/fondateur. Ce détecteur route la question vers une réponse déterministe (aucun
-    appel LLM), quel que soit `public`, pour garantir zéro confabulation sur ce sujet précis.
+    Added after a real incident (11/07): the operator asked « what kind of intelligence do
+    you run on, an LLM? » on Telegram and ARIA replied « Yes, currently Claude
+    Opus 4.8 » — a regression of the same incident fixed on 08/07
+    (``grounded_llm_identity``), because ``grounded_llm_identity`` is only injected on the
+    ``grounded_for_audience(public)`` path (public visitors), never in the
+    operator/founder conversation. This detector routes the question to a deterministic
+    reply (no LLM call), regardless of `public`, to guarantee zero confabulation on this
+    specific topic.
     """
     text = (message or "").strip()
     if len(text) < 6:
@@ -526,8 +530,8 @@ def is_llm_identity_question(message: str) -> bool:
 
 
 def llm_identity_reply(lang: str = "en") -> str:
-    """Réponse déterministe (pas d'appel LLM) — mêmes faits que ``grounded_llm_identity``,
-    reformulés pour un chat direct plutôt qu'un bloc système."""
+    """Deterministic reply (no LLM call) — same facts as ``grounded_llm_identity``,
+    reworded for a direct chat rather than a system block."""
     if lang == "fr":
         return (
             "Oui, je m'appuie sur un LLM pour raisonner. L'infrastructure sous-jacente varie "
@@ -563,17 +567,17 @@ _ANALYSIS_METHOD_RE = re.compile(
 
 
 def is_analysis_methodology_question(message: str) -> bool:
-    """True pour une question sur la MÉTHODE d'analyse d'un token (« comment tu analyses,
-    IA générative ? », « quelles sont tes conditions pour qu'un token t'intéresse ? »).
-    Incident réel (11/07) : réponse générique en 6 points ne citant AUCUN vrai outil (GoPlus,
-    RSI/EMA/MACD, Blockscout, GeckoTerminal, safety_screen) — pas techniquement faux, mais non
-    ancré sur le code réel (même famille de risque que ``is_llm_identity_question`` :
-    confabulation sur ses propres capacités). **Second incident réel (18/07)** : une formulation
-    différente (« quelles sont les conditions... ») a échappé au regex d'origine et est partie en
-    LLM payant, qui a répondu en décrivant EXCLUSIVEMENT l'ancien pipeline VC-thesis (bonding
-    Virtuals + safety_screen) alors que le pipeline momentum (#194) décide 100% du capital du
-    test live -- regex élargi + réponse réécrite pour couvrir les deux. Route vers une réponse
-    déterministe listant les VRAIS outils, quel que soit `public`.
+    """True for a question about the METHOD used to analyze a token (« how do you analyze,
+    generative AI? », « what are your conditions for a token to interest you? »).
+    Real incident (11/07): a generic 6-point reply citing NO real tool (GoPlus,
+    RSI/EMA/MACD, Blockscout, GeckoTerminal, safety_screen) — not technically wrong, but not
+    grounded in the real code (same risk family as ``is_llm_identity_question``:
+    confabulation about her own capabilities). **Second real incident (18/07)**: a different
+    phrasing (« what are the conditions... ») slipped past the original regex and went to the
+    paid LLM, which answered by describing EXCLUSIVELY the old VC-thesis pipeline (Virtuals
+    bonding + safety_screen) while the momentum pipeline (#194) decides 100% of the live
+    test's capital -- regex widened + reply rewritten to cover both. Routes to a
+    deterministic reply listing the REAL tools, regardless of `public`.
     """
     text = (message or "").strip()
     if len(text) < 6:
@@ -582,9 +586,9 @@ def is_analysis_methodology_question(message: str) -> bool:
 
 
 def analysis_methodology_reply(lang: str = "en") -> str:
-    """Réponse déterministe (pas d'appel LLM) listant les vrais outils des DEUX pipelines --
-    cf. `skills/safety_screen.py` (VC-thesis, 85%) et `momentum_entry.py` (momentum, 100% du
-    test live 1M$ en cours). Tenue à jour si l'un des deux pipelines change."""
+    """Deterministic reply (no LLM call) listing the real tools of BOTH pipelines --
+    cf. `skills/safety_screen.py` (VC-thesis, 85%) and `momentum_entry.py` (momentum, 100% of
+    the ongoing live 1M$ test). Keep up to date if either pipeline changes."""
     if lang == "fr":
         return (
             "Ça dépend de la poche de capital. Pipeline VC-thesis (safety_screen.py, 85% long "
@@ -623,13 +627,13 @@ _WHY_NOT_BOUGHT_RE = re.compile(
 
 
 def is_why_not_bought_question(message: str) -> bool:
-    """True pour « pourquoi tu n'as pas acheté X ? ». Incident réel (18/07, chat vision) :
-    ARIA a répondu « je n'ai aucun capital réel déployé... mode track-record, pas achat live »
-    à une question posée sur une IMAGE de graphique -- faux et trompeur, le pipeline momentum
-    achète RÉELLEMENT en paper-trading sans validation humaine. La vraie réponse ne dépend
-    jamais du token précis demandé (toujours la même mécanique), donc couvrable par un
-    template déterministe -- contrairement à "pourquoi CE token a échoué", qui dépendrait des
-    vraies données de scan et resterait un appel LLM légitime."""
+    """True for « why didn't you buy X? ». Real incident (18/07, vision chat):
+    ARIA replied « I have no real capital deployed... track-record mode, not a live buy »
+    to a question asked about an IMAGE of a chart -- false and misleading, the momentum
+    pipeline REALLY buys in paper-trading without human validation. The real answer never
+    depends on the specific token asked about (always the same mechanics), so it's coverable
+    by a deterministic template -- unlike "why did THIS token fail", which would depend on
+    real scan data and would remain a legitimate LLM call."""
     text = (message or "").strip()
     if len(text) < 6:
         return False
@@ -637,8 +641,8 @@ def is_why_not_bought_question(message: str) -> bool:
 
 
 def why_not_bought_reply(lang: str = "en") -> str:
-    """Réponse déterministe (pas d'appel LLM) -- jamais une décision d'achat depuis une
-    lecture visuelle, toujours le pipeline momentum automatisé (momentum_entry.py)."""
+    """Deterministic reply (no LLM call) -- never a buy decision from a visual
+    read, always the automated momentum pipeline (momentum_entry.py)."""
     if lang == "fr":
         return (
             "Je ne décide jamais un achat à partir d'une seule lecture visuelle d'un graphique "
@@ -686,19 +690,19 @@ _SCAN_SCOPE_RE = re.compile(
 
 
 def is_scan_scope_question(message: str) -> bool:
-    """True pour une question sur CE QUE le pipeline momentum scanne/refuse réellement
-    (« quel token refusé avait le meilleur résultat ? », « tu scannes tous les jetons sur
-    Base ? »). **Incident réel (18/07, même soirée que #110-momentum ci-dessus)** : deux
-    questions de ce type, posées juste après le déploiement du premier correctif, ont
-    de nouveau confabulé -- l'une en attribuant TOUT le scan au moteur bonding (quasi
-    inactif, cf. `bonding_discovery_cycle`), l'autre en affirmant que la découverte est
-    "limitée aux tokens en phase bonding sur Virtuals" alors que
-    ``discover_momentum_candidates`` source RÉELLEMENT via un crawler Base dédié +
-    les flux de découverte DexScreener (profils/boosts récents, multi-chaînes) -- la
-    confusion bonding/momentum, déjà corrigée une fois dans ``analysis_methodology_reply``,
-    revient sous une formulation différente à chaque fois. Contrairement à
-    ``is_analysis_methodology_question`` (méthode d'analyse), celle-ci cible spécifiquement
-    la PORTÉE du scan (quoi/combien), d'où un détecteur et un template séparés."""
+    """True for a question about WHAT the momentum pipeline actually scans/rejects
+    (« which rejected token had the best result? », « do you scan every token on
+    Base? »). **Real incident (18/07, same evening as #110-momentum above)**: two
+    questions of this kind, asked right after the first fix was deployed,
+    confabulated again -- one attributing the ENTIRE scan to the bonding engine (nearly
+    inactive, cf. `bonding_discovery_cycle`), the other claiming discovery is
+    "limited to tokens in the Virtuals bonding phase" when
+    ``discover_momentum_candidates`` REALLY sources via a dedicated Base crawler +
+    DexScreener discovery feeds (recent profiles/boosts, multi-chain) -- the
+    bonding/momentum confusion, already fixed once in ``analysis_methodology_reply``,
+    keeps coming back under a different phrasing each time. Unlike
+    ``is_analysis_methodology_question`` (analysis method), this one specifically targets
+    the SCOPE of the scan (what/how many), hence a separate detector and template."""
     text = (message or "").strip()
     if len(text) < 6:
         return False
@@ -706,9 +710,9 @@ def is_scan_scope_question(message: str) -> bool:
 
 
 def scan_scope_reply(lang: str = "en") -> str:
-    """Réponse déterministe (pas d'appel LLM) -- décrit la VRAIE portée de
-    ``discover_momentum_candidates`` (momentum_entry.py) et admet honnêtement l'absence
-    de détail par candidat plutôt que d'inventer un "meilleur refus"."""
+    """Deterministic reply (no LLM call) -- describes the REAL scope of
+    ``discover_momentum_candidates`` (momentum_entry.py) and honestly admits the lack
+    of per-candidate detail rather than inventing a "closest rejection"."""
     if lang == "fr":
         return (
             "Le scan réel (momentum_entry.py) source via un crawler Base dédié + les flux "
@@ -750,14 +754,14 @@ _ARIA_BRAIN_RE = re.compile(
 
 
 def is_aria_brain_question(message: str) -> bool:
-    """True pour une question sur « son propre cerveau »/« aria-brain »/sa mémoire
-    libre (le repo GitHub dédié, `skills/aria_brain.py`, écriture non filtrée une
-    page par jour). Incident réel (21/07) : ARIA a affirmé y avoir écrit alors que
-    le gate (`ARIA_BRAIN_ENABLED`) était désactivé, le journal (`aria_brain_log`)
-    vide, et le repo GitHub `GoldenFarFR/aria-brain` inexistant (404) — même famille
-    de confabulation sur ses propres capacités que ``is_llm_identity_question``/
-    ``is_analysis_methodology_question``. Route vers une réponse qui lit l'état
-    RÉEL (gate + dernière ligne du journal), jamais une prétention non vérifiée."""
+    """True for a question about "her own brain"/"aria-brain"/her free
+    memory (the dedicated GitHub repo, `skills/aria_brain.py`, unfiltered writing, one
+    page per day). Real incident (21/07): ARIA claimed to have written there while
+    the gate (`ARIA_BRAIN_ENABLED`) was disabled, the log (`aria_brain_log`)
+    was empty, and the GitHub repo `GoldenFarFR/aria-brain` didn't exist (404) — same
+    family of confabulation about her own capabilities as ``is_llm_identity_question``/
+    ``is_analysis_methodology_question``. Routes to a reply that reads the
+    REAL state (gate + last log line), never an unverified claim."""
     text = (message or "").strip()
     if len(text) < 5:
         return False
@@ -765,16 +769,16 @@ def is_aria_brain_question(message: str) -> bool:
 
 
 async def aria_brain_status_reply(lang: str = "en") -> str:
-    """Réponse déterministe (pas d'appel LLM) sur l'état RÉEL de la mémoire libre.
+    """Deterministic reply (no LLM call) on the REAL state of free memory.
 
-    Vérifie D'ABORD le journal local (`aria_brain_log`, gratuit, pas de réseau) --
-    si vide, ne conclut PAS "rien écrit" directement : un vrai écart trouvé le 21/07
-    (migration VPS le 20/07) a laissé le repo GitHub avec du contenu RÉEL
-    (``livre/chapitre-01-le-point-zero.md``) alors que le journal local, recréé à
-    zéro sur le nouveau serveur, ne le savait pas. Le journal seul aurait donc
-    produit une AUTRE confabulation, dans le sens inverse de l'incident d'origine.
-    Repli sur une lecture RÉELLE du repo (source de vérité, ``_walk_repo_tree``,
-    même fonction que le cycle d'écriture) avant de conclure quoi que ce soit."""
+    Checks the local log FIRST (`aria_brain_log`, free, no network) --
+    if empty, does NOT directly conclude "nothing written": a real discrepancy found on
+    21/07 (VPS migration on 20/07) left the GitHub repo with REAL content
+    (``livre/chapitre-01-le-point-zero.md``) while the local log, recreated from
+    scratch on the new server, didn't know it. The log alone would therefore have
+    produced ANOTHER confabulation, in the opposite direction of the original incident.
+    Falls back to a REAL read of the repo (source of truth, ``_walk_repo_tree``,
+    same function as the writing cycle) before concluding anything."""
     from aria_core.skills import aria_brain
 
     if not aria_brain.aria_brain_enabled():
@@ -810,11 +814,11 @@ async def aria_brain_status_reply(lang: str = "en") -> str:
             return f"Ma mémoire libre est active -- dernière écriture le {run_at} ({path})."
         return f"My free memory is active -- last write on {run_at} ({path})."
 
-    # Journal local vide -- vérifie le VRAI repo avant de conclure "rien écrit".
-    # Passe par aria_brain.check_real_repo_content() plutôt que de toucher le jeton
-    # d'accès GitHub d'ARIA nous-mêmes : ce nom de champ settings est verrouillé par
-    # test_coherence.py, seul skills/aria_brain.py peut le référencer (décision
-    # opérateur 20/07, "seul ARIA peut écrire").
+    # Local log empty -- check the REAL repo before concluding "nothing written".
+    # Goes through aria_brain.check_real_repo_content() rather than touching ARIA's
+    # GitHub access token ourselves: this settings field name is locked down by
+    # test_coherence.py, only skills/aria_brain.py may reference it (operator
+    # decision 20/07, "only ARIA can write").
     entries = await aria_brain.check_real_repo_content()
 
     files = [e for e in (entries or []) if e.get("type") == "file"]
@@ -882,26 +886,26 @@ _TRADE_QUESTION_RE = re.compile(
 
 
 def is_trade_status_question(message: str) -> bool:
-    """True pour une question en langage naturel sur l'ÉTAT d'un trade/du portefeuille
-    (« qu'est-ce qui s'est passé sur ce trade ? », « pourquoi t'as vendu ? », « combien
-    il reste ? », « c'est quoi ta thèse sur cet achat ? ») -- PAS une commande explicite
-    (``/ledger``/``/feedback`` existent déjà pour ça). Incident réel (16/07) : une telle
-    question, posée juste après une perte réelle, est tombée dans la conversation LLM
-    générale SANS accès au registre -- ARIA a honnêtement dit ne rien voir plutôt que
-    d'inventer (bon réflexe), mais l'opérateur restait sans réponse alors que la donnée
-    existe réellement en base. Exige un mot-clé de trading ET une tournure de question
-    dans le MÊME message (jamais l'un seul) -- sinon "qu'est-ce qui s'est passé" seul,
-    sur un tout autre sujet, déclencherait une injection de données de trading
-    hors-propos.
+    """True for a natural-language question about the STATUS of a trade/portfolio
+    (« what happened on this trade? », « why did you sell? », « how much is
+    left? », « what's your thesis on this buy? ») -- NOT an explicit command
+    (``/ledger``/``/feedback`` already exist for that). Real incident (16/07): such a
+    question, asked right after a real loss, fell into the general LLM conversation
+    WITHOUT access to the ledger -- ARIA honestly said she saw nothing rather than
+    inventing (good reflex), but the operator was left without an answer even though the
+    data really exists in the DB. Requires a trading keyword AND a question phrasing
+    in the SAME message (never just one) -- otherwise "what happened" alone,
+    on a totally unrelated topic, would trigger an injection of irrelevant
+    trading data.
 
-    19/07, élargi après un 2e incident réel : "c'est quoi ta these sur lachat de
-    cobot ?" ne matchait ni le mot-clé ("achat" != "acheté", "thèse" absent -- pire,
-    le mot-clé "AERO" était codé en dur comme symbole de test, jamais un vrai
-    déclencheur générique) ni la tournure ("c'est quoi" absent de la liste). Un simple
-    "?" compte désormais aussi comme tournure de question -- couvre par construction
-    toute future formulation directe (pas seulement celles déjà observées), sans
-    affaiblir le garde-fou réel (le mot-clé de trading reste filtré en premier, un "?"
-    seul sur un sujet hors-trading ne déclenche toujours rien)."""
+    19/07, widened after a 2nd real incident: "what's your thesis on the cobot
+    buy?" matched neither the keyword ("achat" != "acheté" [bought vs buy], "thèse"
+    [thesis] absent -- worse, the keyword "AERO" was hard-coded as a test symbol, never a
+    real generic trigger) nor the phrasing ("c'est quoi" [what is] absent from the list). A
+    bare "?" now also counts as a question phrasing -- by construction covers
+    any future direct phrasing (not just the ones already observed), without
+    weakening the real guardrail (the trading keyword is still filtered first, a bare
+    "?" on a non-trading topic still triggers nothing)."""
     text = (message or "").strip()
     if len(text) < 6:
         return False

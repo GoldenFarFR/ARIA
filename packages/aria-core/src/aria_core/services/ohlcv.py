@@ -1,19 +1,19 @@
-"""Client de lecture seule GeckoTerminal — séries OHLCV (bougies) pour Base.
+"""Read-only GeckoTerminal client — OHLCV (candle) series for Base.
 
-Fournit la **matière première** de l'analyse technique : une série de bougies
-OHLCV réelles pour un pool DEX, que `skills/ta_levels.py` transforme en niveaux
-(supports / résistances / tendance) et que `skills/chart_render.py` trace.
+Provides the **raw material** of technical analysis: a series of real OHLCV
+candles for a DEX pool, which `skills/ta_levels.py` turns into levels
+(support / resistance / trend) and `skills/chart_render.py` charts.
 
-Tier public GeckoTerminal (aucune clé requise). Politique d'erreurs identique à
-`services/coingecko.py` (cf. AGENTS.md) :
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
-- Timeout / endpoint indisponible : 1 retry après 5s, puis fallback explicite.
-- 400 / 404 (pool inconnu, réseau non couvert) : `available=False` + message clair.
-- Aucune donnée manquante n'est jamais remplacée par une supposition — l'absence
-  est portée par `available=False` et `error`, jamais par une bougie inventée.
+GeckoTerminal public tier (no key required). Error policy identical to
+`services/coingecko.py` (see AGENTS.md):
+- 429: exponential backoff, 3 attempts max, then give up without blocking the pipeline.
+- Timeout / endpoint unavailable: 1 retry after 5s, then explicit fallback.
+- 400 / 404 (unknown pool, uncovered network): `available=False` + clear message.
+- Missing data is never replaced by a guess — the absence is carried by
+  `available=False` and `error`, never by a fabricated candle.
 
-Le module ne dépend que de `ta_levels.Candle` (dataclass pure, sans I/O) pour
-partager la MÊME structure de bougie de bout en bout (aucune duplication).
+The module only depends on `ta_levels.Candle` (pure dataclass, no I/O) to
+share the SAME candle structure end to end (no duplication).
 """
 
 from __future__ import annotations
@@ -30,34 +30,34 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.geckoterminal.com/api/v2"
 
-UNAVAILABLE = "série OHLCV indisponible"
+UNAVAILABLE = "OHLCV series unavailable"
 
 _FAIL_STREAK_WARN_THRESHOLD = 3
 
-# Réseau GeckoTerminal pour la chaîne Base (seule chaîne au lancement).
+# GeckoTerminal network for the Base chain (only chain at launch).
 DEFAULT_NETWORK = "base"
 
-# Ordre de repli : on veut d'abord un cadre journalier (niveaux macro), et si le
-# token est trop jeune pour avoir assez de bougies day, on retombe sur du 4h puis
-# du 1h — de sorte qu'un token récent ait quand même des niveaux exploitables.
-# (period GeckoTerminal, aggregate, limit, libellé de timeframe rapporté).
+# Fallback order: we want a daily frame first (macro levels), and if the
+# token is too young to have enough daily candles, we fall back to 4h then
+# 1h — so a recent token still gets usable levels.
+# (GeckoTerminal period, aggregate, limit, reported timeframe label).
 _FETCH_LADDER: tuple[tuple[str, int, int, str], ...] = (
     ("day", 1, 120, "1D"),
     ("hour", 4, 180, "4H"),
     ("hour", 1, 240, "1H"),
 )
 
-# En dessous de ce nombre de bougies, une fenêtre est jugée trop maigre pour des
-# niveaux fiables → on tente le timeframe plus fin suivant dans l'échelle.
+# Below this number of candles, a window is judged too thin for reliable
+# levels → we try the next finer timeframe in the ladder.
 _MIN_USEFUL_CANDLES = 20
 
 
 @dataclass
 class OHLCVResult:
-    """Série OHLCV d'un pool, ou l'absence explicite de donnée.
+    """OHLCV series of a pool, or the explicit absence of data.
 
-    ``candles`` est trié par horodatage croissant. ``timeframe`` indique quel
-    cran de l'échelle a réellement fourni la donnée (1D / 4H / 1H).
+    ``candles`` is sorted by ascending timestamp. ``timeframe`` indicates
+    which rung of the ladder actually provided the data (1D / 4H / 1H).
     """
 
     pool_address: str
@@ -69,11 +69,11 @@ class OHLCVResult:
 
 
 def _parse_candles(payload: object) -> list[Candle]:
-    """Extrait ``data.attributes.ohlcv_list`` en ``list[Candle]`` triée.
+    """Extracts ``data.attributes.ohlcv_list`` into a sorted ``list[Candle]``.
 
-    Chaque ligne GeckoTerminal = ``[ts, open, high, low, close, volume]``. Une
-    ligne malformée est ignorée (jamais d'exception qui remonte), fidèle au dôme :
-    on ne fabrique pas de valeur, on écarte ce qui n'est pas exploitable.
+    Each GeckoTerminal row = ``[ts, open, high, low, close, volume]``. A
+    malformed row is ignored (never an exception bubbling up), true to the
+    dome: we don't fabricate a value, we discard what isn't usable.
     """
     if not isinstance(payload, dict):
         return []
@@ -106,7 +106,7 @@ def _parse_candles(payload: object) -> list[Candle]:
 
 
 class OHLCVClient:
-    """Client HTTP async, lecture seule, throttle prudent (API publique sans clé)."""
+    """Async HTTP client, read-only, cautious throttle (public API, no key)."""
 
     def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 2.2) -> None:
         self.base_url = base_url.rstrip("/")
@@ -130,20 +130,20 @@ class OHLCVClient:
         self._consecutive_failures += 1
         if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
             logger.warning(
-                "ohlcv: %s echecs consecutifs (dernier: %s) — pas de blocage, pas d'escalade",
+                "ohlcv: %s consecutive failures (last: %s) — no blocking, no escalation",
                 self._consecutive_failures,
                 detail,
             )
         else:
             logger.info(
-                "ohlcv: echec appel (%s/%s) — %s",
+                "ohlcv: call failure (%s/%s) — %s",
                 self._consecutive_failures,
                 _FAIL_STREAK_WARN_THRESHOLD,
                 detail,
             )
 
     async def _get_json(self, path: str, params: dict[str, object]) -> tuple[object | None, str | None]:
-        """GET avec la politique d'erreurs AGENTS.md. Retourne (data, error)."""
+        """GET with the AGENTS.md error policy. Returns (data, error)."""
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         timeout_retried = False
@@ -161,13 +161,13 @@ class OHLCVClient:
                     await asyncio.sleep(5.0)
                     continue
                 self._record_failure(f"{url} -> {exc}")
-                return None, f"{UNAVAILABLE} (timeout GeckoTerminal)"
+                return None, f"{UNAVAILABLE} (GeckoTerminal timeout)"
 
             if response.status_code == 429:
                 attempt_429 += 1
                 if attempt_429 >= 3:
-                    self._record_failure(f"{url} -> HTTP 429 apres {attempt_429} tentatives")
-                    return None, f"{UNAVAILABLE} (rate limit GeckoTerminal)"
+                    self._record_failure(f"{url} -> HTTP 429 after {attempt_429} attempts")
+                    return None, f"{UNAVAILABLE} (GeckoTerminal rate limit)"
                 await asyncio.sleep(0.5 * (2**attempt_429))
                 continue
 
@@ -177,11 +177,11 @@ class OHLCVClient:
                     await asyncio.sleep(5.0)
                     continue
                 self._record_failure(f"{url} -> HTTP {response.status_code}")
-                return None, f"{UNAVAILABLE} (erreur serveur GeckoTerminal)"
+                return None, f"{UNAVAILABLE} (GeckoTerminal server error)"
 
             if response.status_code in (400, 404):
                 self._record_success()
-                return None, "pool introuvable sur GeckoTerminal"
+                return None, "pool not found on GeckoTerminal"
 
             try:
                 response.raise_for_status()
@@ -195,26 +195,27 @@ class OHLCVClient:
     async def get_ohlcv(
         self, pool_address: str, *, network: str = DEFAULT_NETWORK, min_useful_candles: int = _MIN_USEFUL_CANDLES,
     ) -> OHLCVResult:
-        """Récupère la meilleure série OHLCV disponible pour un pool.
+        """Fetches the best available OHLCV series for a pool.
 
-        Parcourt l'échelle 1D → 4H → 1H et s'arrête au premier timeframe qui
-        fournit assez de bougies (`min_useful_candles`, défaut
-        `_MIN_USEFUL_CANDLES`). Si aucun n'atteint le seuil, renvoie la plus
-        fournie obtenue ; si rien n'est obtenu, un `OHLCVResult(available=False)`
-        explicite.
+        Walks the 1D → 4H → 1H ladder and stops at the first timeframe that
+        provides enough candles (`min_useful_candles`, default
+        `_MIN_USEFUL_CANDLES`). If none reaches the threshold, returns the
+        richest one obtained; if nothing is obtained, an explicit
+        `OHLCVResult(available=False)`.
 
-        ``min_useful_candles`` (#182, 15/07, correctif de vitesse wallet-scoring) :
-        le seuil par défaut (20 bougies) a du sens pour `ta_levels`/`chart_render`
-        (besoin d'assez de bougies pour calculer support/résistance), mais AUCUN
-        sens pour un appelant qui n'utilise que `price_at` (une seule bougie la
-        plus proche d'un timestamp) -- ce cas se contente d'UNE bougie et n'a
-        jamais besoin d'escalader jusqu'à 2 appels GeckoTerminal supplémentaires
-        (jour insuffisant -> 4h -> 1h) pour un token jeune/microcap qui n'a pas
-        encore 20 bougies journalières. Défaut inchangé (`_MIN_USEFUL_CANDLES`)
-        pour tous les appelants existants -- aucune régression sur `/vc`."""
+        ``min_useful_candles`` (#182, 15/07, wallet-scoring speed fix): the
+        default threshold (20 candles) makes sense for
+        `ta_levels`/`chart_render` (needs enough candles to compute
+        support/resistance), but makes NO sense for a caller that only uses
+        `price_at` (a single candle closest to a timestamp) -- this case is
+        satisfied with ONE candle and never needs to escalate through 2 extra
+        GeckoTerminal calls (insufficient day -> 4h -> 1h) for a
+        young/microcap token that doesn't yet have 20 daily candles. Default
+        unchanged (`_MIN_USEFUL_CANDLES`) for all existing callers -- no
+        regression on `/vc`."""
         pool = (pool_address or "").strip()
         if not pool:
-            return OHLCVResult(pool_address="", network=network, error=f"{UNAVAILABLE} (pool absent)")
+            return OHLCVResult(pool_address="", network=network, error=f"{UNAVAILABLE} (missing pool)")
 
         best: OHLCVResult | None = None
         last_error: str | None = None
@@ -229,7 +230,7 @@ class OHLCVClient:
                 continue
             candles = _parse_candles(data)
             if not candles:
-                last_error = f"{UNAVAILABLE} (aucune bougie {label})"
+                last_error = f"{UNAVAILABLE} (no {label} candle)"
                 continue
             result = OHLCVResult(
                 pool_address=pool,
@@ -241,7 +242,7 @@ class OHLCVClient:
             )
             if len(candles) >= min_useful_candles:
                 return result
-            # Fenêtre maigre : on la garde en repli mais on tente plus fin.
+            # Thin window: keep it as a fallback but try a finer one.
             if best is None or len(candles) > len(best.candles):
                 best = result
 

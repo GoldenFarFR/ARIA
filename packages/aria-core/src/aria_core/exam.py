@@ -1,10 +1,10 @@
-"""Examen ARIA — génère des questions de trading (knowledge/trading_curriculum.yaml), les
-pose au vrai moteur de raisonnement d'ARIA, note les réponses via un juge LLM dédié.
+"""ARIA exam — generates trading questions (knowledge/trading_curriculum.yaml), asks
+them to ARIA's real reasoning engine, scores the answers via a dedicated LLM judge.
 
-Rehearsal pédagogique en parallèle du paper-trading (20 jours, décision opérateur 08/07) —
-jamais une décision de trading, jamais une action financière : uniquement mesurer et
-consigner la qualité du raisonnement. Fail-closed partout : sans LLM configuré ou sans
-curriculum, rien n'est généré ni inventé.
+Pedagogical rehearsal in parallel with paper-trading (20 days, operator decision
+08/07) — never a trading decision, never a financial action: only measures and
+records reasoning quality. Fail-closed everywhere: without a configured LLM or
+without a curriculum, nothing is generated or invented.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 DB_PATH = str(aria_db_path())
 _CURRICULUM_PATH = Path(__file__).parent / "knowledge" / "trading_curriculum.yaml"
 
-# Duree du programme (decision operateur 08/07, en parallele du paper-trading 20 jours).
+# Program duration (operator decision 08/07, in parallel with the 20-day paper-trading run).
 EXAM_PROGRAM_DAYS = 20
 
 _QUESTION_SYSTEM = "Tu rédiges des questions d'examen de trading factuelles et rigoureuses."
@@ -45,22 +45,22 @@ _JUDGE_SYSTEM = (
 
 
 def exam_enabled() -> bool:
-    """Seam gaté OFF par défaut. Aucune question générée, aucun appel LLM sans ce flag."""
+    """Seam gated OFF by default. No question generated, no LLM call without this flag."""
     return os.environ.get("ARIA_EXAM_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def load_curriculum() -> list[dict]:
-    """Curriculum (catégories -> concepts). Dégradation gracieuse : liste vide si absent/invalide."""
+    """Curriculum (categories -> concepts). Graceful degradation: empty list if missing/invalid."""
     try:
         raw = yaml.safe_load(_CURRICULUM_PATH.read_text(encoding="utf-8"))
         return raw if isinstance(raw, list) else []
     except (OSError, yaml.YAMLError) as exc:
-        logger.info("exam: curriculum illisible (%s)", exc)
+        logger.info("exam: curriculum unreadable (%s)", exc)
         return []
 
 
 def all_concepts() -> list[dict]:
-    """Aplatit le curriculum en une liste de concepts, chacun annoté de sa catégorie."""
+    """Flattens the curriculum into a list of concepts, each annotated with its category."""
     out: list[dict] = []
     for cat in load_curriculum():
         for c in cat.get("concepts", []) or []:
@@ -84,8 +84,8 @@ async def init_exam_db() -> None:
             )
             """
         )
-        # Migration à chaud : ajoute `cycle` aux DB existantes (SQLite ne le crée pas
-        # si la table préexiste). Idempotent, non destructif — cf. vc_predictions.py.
+        # Hot migration: adds `cycle` to existing DBs (SQLite doesn't create it
+        # if the table pre-exists). Idempotent, non-destructive — see vc_predictions.py.
         existing = {
             row[1]
             for row in await (await db.execute("PRAGMA table_info(exam_question)")).fetchall()
@@ -119,10 +119,10 @@ class ExamQuestion:
 
 
 async def _cycle_state(db: aiosqlite.Connection) -> tuple[int, set[str]]:
-    """Cycle courant + concepts déjà posés dans ce cycle (persisté dans exam_question.cycle).
+    """Current cycle + concepts already asked in this cycle (persisted in exam_question.cycle).
 
-    Un cycle regroupe les jours tant que le pool de concepts n'est pas épuisé. Table
-    vide -> cycle 1, aucun concept encore posé."""
+    A cycle groups days together as long as the concept pool isn't exhausted. Empty
+    table -> cycle 1, no concept asked yet."""
     row = await (await db.execute("SELECT MAX(cycle) FROM exam_question")).fetchone()
     cycle = row[0] or 1
     cursor = await db.execute(
@@ -135,18 +135,18 @@ async def _cycle_state(db: aiosqlite.Connection) -> tuple[int, set[str]]:
 def _select_concepts_for_day(
     concepts: list[dict], n: int, asked_ids: set[str], cycle: int
 ) -> tuple[list[dict], int]:
-    """Choisit jusqu'à ``n`` concepts sans jamais reproposer un concept déjà posé dans le
-    cycle courant. Si le pool restant du cycle ne suffit pas, épuise-le puis complète en
-    démarrant le cycle suivant (jamais deux fois le même concept le même jour).
+    """Picks up to ``n`` concepts, never re-proposing a concept already asked in the
+    current cycle. If the cycle's remaining pool isn't enough, exhausts it then
+    completes by starting the next cycle (never the same concept twice the same day).
 
-    Retourne les concepts choisis et le numéro de cycle à leur associer."""
+    Returns the picked concepts and the cycle number to associate with them."""
     remaining = [c for c in concepts if c["id"] not in asked_ids]
     if len(remaining) >= n:
         picked = remaining if len(remaining) == n else random.sample(remaining, n)
         return picked, cycle
 
-    # Pool du cycle courant épuisé (ou insuffisant) : on prend le reste, puis on
-    # démarre un nouveau cycle pour compléter la journée.
+    # Current cycle's pool exhausted (or insufficient): take the rest, then
+    # start a new cycle to complete the day.
     picked = remaining[:]
     picked_ids = {c["id"] for c in picked}
     fresh_pool = [c for c in concepts if c["id"] not in picked_ids]
@@ -157,8 +157,8 @@ def _select_concepts_for_day(
 
 
 async def current_exam_cycle() -> int:
-    """Numéro du cycle courant (1-indexé) — combien de fois le pool des 67 concepts a
-    déjà été intégralement parcouru (+1 pour le cycle en cours)."""
+    """Current cycle number (1-indexed) — how many times the 67-concept pool has
+    already been fully cycled through (+1 for the ongoing cycle)."""
     await init_exam_db()
     async with aiosqlite.connect(DB_PATH) as db:
         cycle, _ = await _cycle_state(db)
@@ -166,13 +166,14 @@ async def current_exam_cycle() -> int:
 
 
 async def generate_daily_questions(day: int, n: int = 25, *, llm=None) -> list[ExamQuestion]:
-    """Génère jusqu'à ``n`` questions pour ``day``, une par concept tiré sans remise dans
-    le curriculum, sans jamais reproposer un concept déjà posé au cours du cycle courant
-    (suivi cross-jour persisté via ``exam_question.cycle`` — le pool de 67 concepts doit
-    être intégralement épuisé avant qu'un concept ne revienne). Fail-closed : liste vide
-    si le curriculum est vide — jamais une question inventée sans base conceptuelle. Une
-    génération LLM individuelle qui échoue est ignorée (pas de question vide insérée),
-    les autres continuent."""
+    """Generates up to ``n`` questions for ``day``, one per concept drawn without
+    replacement from the curriculum, never re-proposing a concept already asked
+    during the current cycle (cross-day tracking persisted via
+    ``exam_question.cycle`` — the 67-concept pool must be fully exhausted before
+    a concept comes back). Fail-closed: empty list if the curriculum is empty —
+    never a question invented without a conceptual basis. An individual LLM
+    generation that fails is skipped (no empty question inserted), the others
+    continue."""
     concepts = all_concepts()
     if not concepts:
         return []
@@ -196,7 +197,7 @@ async def generate_daily_questions(day: int, n: int = 25, *, llm=None) -> list[E
             )
             text = await llm(prompt, _QUESTION_SYSTEM, max_tokens=200)
             if not text or not text.strip():
-                logger.info("exam: génération échouée pour le concept %s — ignoré", c["id"])
+                logger.info("exam: generation failed for concept %s — skipped", c["id"])
                 continue
             q = ExamQuestion(
                 id=str(uuid4()), day=day, concept_id=c["id"], category=c["category"],
@@ -226,11 +227,11 @@ def _parse_judge(raw: str | None) -> tuple[float | None, str]:
 
 
 async def administer_question(q: ExamQuestion, *, answerer=None, judge=None) -> dict:
-    """Pose la question au moteur de raisonnement d'ARIA, note la réponse via le juge.
+    """Asks the question to ARIA's reasoning engine, scores the answer via the judge.
 
-    Ne déclenche jamais d'action financière — uniquement mesurer et consigner. Un
-    jugement non parsable donne ``score=None`` (exclu des moyennes), jamais un score
-    inventé."""
+    Never triggers a financial action — only measures and records. An unparsable
+    judgment gives ``score=None`` (excluded from averages), never an invented
+    score."""
     if answerer is None:
         from aria_core.llm import chat_with_context as answerer
     if judge is None:
@@ -258,8 +259,8 @@ async def administer_question(q: ExamQuestion, *, answerer=None, judge=None) -> 
 
 
 async def current_exam_day() -> int:
-    """Jour courant du programme (1-indexé). Un nouveau jour ne démarre qu'au cycle
-    heartbeat suivant (cadence quotidienne) — jamais de jour inventé en avance."""
+    """Current day of the program (1-indexed). A new day only starts at the next
+    heartbeat cycle (daily cadence) — never a day invented ahead of time."""
     await init_exam_db()
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (await db.execute("SELECT MAX(day) FROM exam_question")).fetchone()

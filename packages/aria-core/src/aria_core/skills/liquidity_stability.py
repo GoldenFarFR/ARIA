@@ -1,21 +1,21 @@
-"""Confirmation de stabilité temporelle sur la liquidité — crible VC.
+"""Temporal stability confirmation on liquidity — VC screen.
 
-Point faible du stress-test (Codex Partie 11, item de priorité #3) : un scan
-`safety_screen` lit la liquidité/volume de façon INSTANTANÉE. Une manipulation
-temporaire synchronisée sur la fenêtre de scan (liquidité gonflée juste avant
-le scan, retirée juste après) passerait le crible sans que rien ne le détecte
-— une lecture unique ne peut, par construction, jamais prouver une stabilité
-dans le temps.
+Stress-test weak point (Codex Part 11, priority item #3): a `safety_screen`
+scan reads liquidity/volume INSTANTANEOUSLY. A temporary manipulation
+synchronized to the scan window (liquidity inflated just before
+the scan, withdrawn right after) would pass the screen without anything
+detecting it — a single reading can, by construction, never prove stability
+over time.
 
-Design retenu, honnête sur ses limites : contrairement au wash-trading momentum
-(état en mémoire process, confirmé sur des scans répétés en boucle continue),
-le crible VC n'est pas un cycle continu — un contrat peut n'être scanné qu'une
-seule fois. La confirmation ne peut donc s'appliquer QUE si ce même contrat a
-déjà été vu par un scan précédent, dans une fenêtre récente (persistée en base,
-survit aux redémarrages, contrairement à un simple dict process). Sur un
-PREMIER scan (aucun antécédent), le résultat est `None` (indéterminé) — jamais
-un rejet sur une absence de donnée, même doctrine fail-open que le reste du
-projet quand l'information manque pour juger.
+Design chosen, honest about its limits: unlike momentum wash-trading
+(in-process memory state, confirmed via repeated scans in a continuous loop),
+the VC screen isn't a continuous cycle — a contract may only ever be scanned
+once. Confirmation can therefore ONLY apply if this same contract has
+already been seen by a previous scan, within a recent window (persisted in the DB,
+survives restarts, unlike a simple process dict). On a
+FIRST scan (no prior history), the result is `None` (indeterminate) — never
+a rejection due to missing data, same fail-open doctrine as the rest of the
+project when information is missing to judge.
 """
 from __future__ import annotations
 
@@ -27,19 +27,19 @@ from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
 
-# Chute de liquidité entre deux scans au-delà de laquelle on suspecte un
-# retrait (pas juste la volatilité normale d'un marché fin) -- soft-fail,
-# jamais un mécanisme confirmé dans le contrat (comportement de marché).
+# Liquidity drop between two scans beyond which a
+# withdrawal is suspected (not just the normal volatility of a thin market) -- soft-fail,
+# never a confirmed mechanism in the contract (market behavior).
 DEFAULT_MAX_DROP_PCT = 40.0
-# Fenêtre dans laquelle un scan précédent est considéré pertinent pour la
-# comparaison -- au-delà, un vrai mouvement de marché légitime (pas une
-# manipulation synchronisée sur UN scan) devient plus probable.
+# Window within which a previous scan is considered relevant for
+# comparison -- beyond it, a real, legitimate market move (not a
+# manipulation synchronized to ONE scan) becomes more likely.
 DEFAULT_WINDOW_MINUTES = 60
 
 
 @dataclass(frozen=True)
 class LiquidityStabilityResult:
-    confirmed: bool | None  # True=stable, False=chute suspecte, None=pas d'antécédent
+    confirmed: bool | None  # True=stable, False=suspicious drop, None=no prior history
     previous_liquidity_usd: float | None = None
     previous_recorded_at: str | None = None
 
@@ -70,13 +70,13 @@ async def record_and_check_liquidity_stability(
     window_minutes: int = DEFAULT_WINDOW_MINUTES,
     max_drop_pct: float = DEFAULT_MAX_DROP_PCT,
 ) -> LiquidityStabilityResult:
-    """Compare la liquidité actuelle au dernier snapshot connu (s'il existe et
-    reste dans la fenêtre), PUIS enregistre le snapshot courant (upsert -- un
-    seul snapshot gardé par contrat, le plus récent, pas un historique complet).
+    """Compares current liquidity to the last known snapshot (if it exists and
+    stays within the window), THEN records the current snapshot (upsert -- only
+    one snapshot kept per contract, the most recent, not a full history).
 
-    Toujours enregistre le nouveau snapshot, même si aucune comparaison n'a été
-    possible -- sans ça, un contrat jamais revu ne bénéficierait jamais de la
-    protection au scan suivant."""
+    Always records the new snapshot, even if no comparison was
+    possible -- without this, a contract never seen again would never benefit from
+    the protection on the next scan."""
     contract_l = (contract or "").strip().lower()
     chain_l = (chain or "").strip().lower()
     if not contract_l or not chain_l or liquidity_usd is None or liquidity_usd < 0:

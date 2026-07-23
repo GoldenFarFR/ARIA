@@ -1,14 +1,15 @@
-"""Alertes proactives haute-conviction — au lieu que l'opérateur pense à taper
-`/watchlist`, ARIA pousse elle-même un signal Telegram quand le pool screené fait
-remonter un candidat qui franchit une barre de conviction claire (`candidate_ranking`,
-score composite transparent déjà existant -- rien de dupliqué ici).
+"""Proactive high-conviction alerts — instead of relying on the operator to think
+to type `/watchlist`, ARIA herself pushes a Telegram signal when the screened pool
+surfaces a candidate that crosses a clear conviction bar (`candidate_ranking`,
+already-existing transparent composite score -- nothing duplicated here).
 
-Ce n'est PAS un ordre d'achat : un signal de tri qui pointe vers `/vc <contrat>` pour
-l'analyse complète, exactement la même doctrine que `candidate_ranking`/`/watchlist`.
+This is NOT a buy order: a sorting signal that points to `/vc <contract>` for
+the full analysis, exactly the same doctrine as `candidate_ranking`/`/watchlist`.
 
-Un contrat n'est alerté qu'UNE seule fois (mémorisé localement) -- jamais de spam sur le
-même candidat même s'il reste en tête du classement d'un cycle à l'autre. Gaté OFF par
-défaut (`ARIA_HIGH_CONVICTION_ALERTS_ENABLED`), respecte le kill-switch existant.
+A contract is only alerted ONCE (remembered locally) -- never spam on the
+same candidate even if it stays at the top of the ranking from one cycle to the
+next. Gated OFF by default (`ARIA_HIGH_CONVICTION_ALERTS_ENABLED`), respects the
+existing kill-switch.
 """
 from __future__ import annotations
 
@@ -83,11 +84,11 @@ def format_alert(candidate) -> str:
 
 
 async def run_high_conviction_alert_cycle(*, candidates=None, notifier=None) -> dict:
-    """Un tour : repère le meilleur nouveau candidat haute-conviction du pool (s'il y en
-    a un), alerte UNE fois, jamais plus pour ce contrat. Fail-closed à chaque étage.
+    """One pass: spots the best new high-conviction candidate in the pool (if there
+    is one), alerts ONCE, never again for that contract. Fail-closed at every stage.
 
-    ``candidates`` injectable (tests hors-ligne, déjà classés) ; défaut :
-    ``candidate_ranking.top_candidates(20)`` sur le pool réel."""
+    ``candidates`` injectable (offline tests, already ranked); default:
+    ``candidate_ranking.top_candidates(20)`` against the real pool."""
     if not high_conviction_alerts_enabled():
         return {"outcome": "skipped_disabled"}
 
@@ -101,7 +102,7 @@ async def run_high_conviction_alert_cycle(*, candidates=None, notifier=None) -> 
 
         try:
             candidates = await top_candidates(20)
-        except Exception as exc:  # noqa: BLE001 -- une panne de scan ne casse jamais le heartbeat
+        except Exception as exc:  # noqa: BLE001 -- a scan failure must never break the heartbeat
             return {"outcome": "error", "error": str(exc)[:300]}
 
     for candidate in candidates:
@@ -114,7 +115,7 @@ async def run_high_conviction_alert_cycle(*, candidates=None, notifier=None) -> 
         if notifier:
             try:
                 await notifier(message)
-            except Exception as exc:  # noqa: BLE001 -- un envoi rate ne doit jamais bloquer le marquage
+            except Exception as exc:  # noqa: BLE001 -- a failed send must never block marking it
                 return {"outcome": "notify_failed", "error": str(exc)[:300], "contract": candidate.contract}
 
         await _mark_alerted(candidate.contract, candidate.rank_score)

@@ -1,24 +1,23 @@
-"""Sourcing de wallets candidats depuis CabalSpy (23/07, décision opérateur
-explicite -- changement de politique assumé, voir docstring de
-`services/cabalspy.py`).
+"""Candidate wallet sourcing from CabalSpy (23/07, explicit operator decision
+-- an acknowledged policy change, see the `services/cabalspy.py` docstring).
 
-Deux volets bien séparés, jamais mélangés :
-1. **Catégorisation** (`cabalspy_kol_wallets`) : TOUS les wallets labellisés
-   récupérés, TOUTES chaînes confondues (Base/BNB/Solana) -- simple
-   répertoire, ne préjuge en rien de leur score, jamais un signal de trading.
-2. **Sourcing réel vers le scoring** (`wallet_scan_queue.enqueue_wallets`) :
-   UNIQUEMENT les wallets Base -- le seul pipeline downstream (`smart_money.py`,
-   Blockscout) qui sait aujourd'hui les traiter (câblé Base-only en dur,
-   vérifié dans le code). BNB (EVM, effort d'extension pas encore vérifié) et
-   Solana (format d'adresse différent, aucun Blockscout, chantier séparé) sont
-   catégorisés mais jamais enfilés dans le scoring tant que ce pipeline n'est
-   pas étendu -- éviter de scorer à tort une adresse avec le mauvais
-   explorateur plutôt que de deviner un comportement dégradé.
+Two clearly separated tracks, never mixed:
+1. **Categorization** (`cabalspy_kol_wallets`): ALL labeled wallets fetched,
+   ACROSS ALL chains (Base/BNB/Solana) -- a simple directory, doesn't
+   prejudge their score in any way, never a trading signal.
+2. **Real sourcing into scoring** (`wallet_scan_queue.enqueue_wallets`):
+   Base wallets ONLY -- the only downstream pipeline (`smart_money.py`,
+   Blockscout) that knows how to process them today (hardcoded Base-only,
+   verified in the code). BNB (EVM, extension effort not yet verified) and
+   Solana (different address format, no Blockscout, separate project) are
+   categorized but never enqueued into scoring as long as this pipeline
+   isn't extended -- avoid wrongly scoring an address with the wrong
+   explorer rather than guessing at degraded behavior.
 
-Type "kol" priorisé (identité complète : name/twitter/telegram, vérifié réel
-sur Base -- 200 wallets). Type "smart" câblé aussi (repli honnête) mais
-signalé comme probable doublon de ce que `smart_money.py` détecte déjà par
-comportement, gratuitement -- jamais recommandé comme source prioritaire."""
+Type "kol" prioritized (complete identity: name/twitter/telegram, verified
+real on Base -- 200 wallets). Type "smart" wired too (honest fallback) but
+flagged as a likely duplicate of what `smart_money.py` already detects by
+behavior, for free -- never recommended as a priority source."""
 from __future__ import annotations
 
 import os
@@ -30,14 +29,14 @@ from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
 
-# Chaînes catégorisées (toutes) vs chaînes réellement sourcées vers le scoring
-# (Base seule, pipeline downstream vérifié capable de les traiter).
+# Categorized chains (all) vs. chains actually sourced into scoring
+# (Base only, downstream pipeline verified able to process them).
 _CATALOGUED_BLOCKCHAINS = ("base", "bnb", "solana")
 _SCORABLE_BLOCKCHAINS = ("base",)
 
-# La liste des KOL ne bouge pas d'un jour à l'autre -- éviter de re-fetcher à
-# chaque cycle heartbeat (économie de crédits CabalSpy, 300-10000/mois selon
-# palier). Une synchronisation complète par semaine suffit largement.
+# The KOL list doesn't change from one day to the next -- avoid re-fetching
+# on every heartbeat cycle (saves CabalSpy credits, 300-10000/month depending
+# on tier). A full sync once a week is plenty.
 MIN_RESYNC_INTERVAL_DAYS = 7
 
 
@@ -112,8 +111,8 @@ async def _store_wallets(wallets: list, *, now: datetime) -> int:
 
 
 async def catalogued_wallets(blockchain: str | None = None) -> list[dict]:
-    """Répertoire catégorisé -- lecture seule, jamais un signal de trading en
-    lui-même. Filtrable par chaîne."""
+    """Categorized directory -- read-only, never a trading signal in
+    itself. Filterable by chain."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -128,13 +127,12 @@ async def catalogued_wallets(blockchain: str | None = None) -> list[dict]:
 
 
 async def run_cabalspy_candidate_sourcing_cycle(notifier=None, *, now: datetime | None = None) -> dict:
-    """Un tour : si la dernière synchronisation complète a moins de
-    `MIN_RESYNC_INTERVAL_DAYS`, ne fait rien (économie de crédits). Sinon,
-    récupère la liste "kol" pour chaque chaîne catégorisée, stocke TOUT dans
-    le répertoire, puis enfile UNIQUEMENT les wallets Base dans
-    `wallet_scan_queue` (le seul pipeline de scoring qui les traite
-    aujourd'hui). Gate dédié + downstream (queue/scoring), fail-closed,
-    respecte le kill-switch."""
+    """One pass: if the last full sync is less than
+    `MIN_RESYNC_INTERVAL_DAYS` old, does nothing (saves credits). Otherwise,
+    fetches the "kol" list for each categorized chain, stores EVERYTHING in
+    the directory, then enqueues ONLY Base wallets into `wallet_scan_queue`
+    (the only scoring pipeline that processes them today). Dedicated gate +
+    downstream (queue/scoring), fail-closed, respects the kill-switch."""
     if not cabalspy_sourcing_enabled():
         return {"outcome": "skipped", "reason": "gate_off"}
 

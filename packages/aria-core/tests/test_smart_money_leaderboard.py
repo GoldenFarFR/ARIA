@@ -84,7 +84,7 @@ async def test_wallet_already_in_leaderboard_dropping_below_30_is_evicted_and_ar
     assert len(archive) == 1
     assert archive[0]["wallet"] == WALLET_A.lower()
     assert archive[0]["percentile_at_removal"] == 20.0
-    assert archive[0]["reason"] == "percentile sous 30"
+    assert archive[0]["reason"] == "percentile below 30"
 
 
 @pytest.mark.asyncio
@@ -104,7 +104,7 @@ async def test_capacity_evicts_lowest_percentile_beyond_max():
 
     archive = await lb.get_archive()
     reasons = {a["wallet"]: a["reason"] for a in archive}
-    assert reasons[lowest_wallet] == f"hors du top {n} (capacité)"
+    assert reasons[lowest_wallet] == f"outside top {n} (capacity)"
 
 
 @pytest.mark.asyncio

@@ -35,7 +35,7 @@ _MAX_PAGES = 3
 @dataclass(frozen=True)
 class DeployerHistoryFacts:
     prior_contracts_found: int = 0
-    known_rugs: list[str] = field(default_factory=list)  # adresses déjà blacklistées
+    known_rugs: list[str] = field(default_factory=list)  # addresses already blacklisted
     truncated: bool = False
     available: bool = False
     error: str | None = None

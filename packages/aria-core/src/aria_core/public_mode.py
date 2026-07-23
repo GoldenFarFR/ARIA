@@ -27,12 +27,12 @@ OPERATOR_SKILLS = frozenset({
     "holding_site",
     "entrepreneur_cultivation",
     "acp_marketplace",
-    # 18/07 -- trouvé par audit de sécurité : absent de cette liste noire, un
-    # visiteur non-admin pouvait déclencher execute_ingest_repo() (écrit dans
-    # la mémoire cognitive/vectorielle d'ARIA, add_knowledge(source="operator",
-    # approved=True, ...)) via texte libre ("ingest repo", "alimente ma
-    # mémoire"...) -- contournait explicitement l'esprit du garde-fou (son
-    # propre docstring dit "never public").
+    # 18/07 -- found by security audit: absent from this blacklist, a
+    # non-admin visitor could trigger execute_ingest_repo() (writes to
+    # ARIA's cognitive/vector memory, add_knowledge(source="operator",
+    # approved=True, ...)) via free text ("ingest repo", "feed my
+    # memory"...) -- explicitly bypassed the spirit of the guardrail (its
+    # own docstring says "never public").
     "ingest_repo",
 })
 
@@ -53,14 +53,14 @@ def resolve_visitor_id(request: Request, body_visitor_id: str | None = None) -> 
 
 
 def _admin_totp_secret() -> str:
-    """Secret TOTP opérateur (opt-in) — vit dans le .env du VPS, jamais dans le repo."""
+    """Operator TOTP secret (opt-in) — lives in the VPS's .env, never in the repo."""
     return (os.environ.get("ADMIN_TOTP_SECRET") or "").strip()
 
 
-# Anti-force-brute du second facteur : le code TOTP ne fait que 6 chiffres (10^6). Si le
-# secret admin fuitait, sans limite un attaquant pourrait tenter tous les codes. On verrouille
-# par IP au-delà de _TOTP_MAX_FAILS échecs dans _TOTP_WINDOW secondes (état en mémoire, par
-# processus — un seul conteneur en prod). Un succès réinitialise le compteur de l'IP.
+# Anti-brute-force on the second factor: the TOTP code is only 6 digits (10^6). If the
+# admin secret leaked, without a limit an attacker could try every code. We lock
+# per IP beyond _TOTP_MAX_FAILS failures within _TOTP_WINDOW seconds (in-memory state, per
+# process — a single container in prod). A success resets the IP's counter.
 _TOTP_FAILS: dict[str, list[float]] = {}
 _TOTP_MAX_FAILS = 8
 _TOTP_WINDOW = 300.0
@@ -71,15 +71,15 @@ def _totp_client_ip(request: Request) -> str:
 
 
 def is_operator_request(request: Request) -> bool:
-    """Vrai si la requête porte le secret admin valide — SANS lever d'exception.
+    """True if the request carries a valid admin secret — WITHOUT raising an exception.
 
-    Header seul (`X-Admin-Secret`) : on refuse le secret en query-string, qui fuit
-    dans les logs serveur, l'historique navigateur et l'en-tête Referer. Comparaison
-    à temps constant pour ne pas exposer le secret à une attaque temporelle.
+    Header only (`X-Admin-Secret`): we refuse the secret in the query string, which leaks
+    into server logs, browser history, and the Referer header. Constant-time comparison
+    so the secret isn't exposed to a timing attack.
 
-    Second facteur (2FA) OPT-IN : si `ADMIN_TOTP_SECRET` est défini dans l'environnement,
-    un code TOTP valide (header `X-Admin-Totp`) est EXIGÉ en plus du secret. Sans cette
-    variable, comportement inchangé (secret seul) — aucun risque de lock-out par défaut.
+    OPT-IN second factor (2FA): if `ADMIN_TOTP_SECRET` is set in the environment,
+    a valid TOTP code (`X-Admin-Totp` header) is REQUIRED on top of the secret. Without this
+    variable, behavior is unchanged (secret only) — no lock-out risk by default.
     """
     secret = (settings.admin_api_secret or "").strip()
     if not secret:
@@ -98,7 +98,7 @@ def is_operator_request(request: Request) -> bool:
         now = time.time()
         fails = [t for t in _TOTP_FAILS.get(ip, []) if now - t < _TOTP_WINDOW]
         if len(fails) >= _TOTP_MAX_FAILS:
-            _TOTP_FAILS[ip] = fails  # verrou anti-force-brute : reste bloqué le temps de la fenêtre
+            _TOTP_FAILS[ip] = fails  # anti-brute-force lock: stays blocked for the window's duration
             return False
 
         code = (request.headers.get("X-Admin-Totp") or "").strip()
@@ -107,7 +107,7 @@ def is_operator_request(request: Request) -> bool:
             _TOTP_FAILS[ip] = fails
             return False
 
-        _TOTP_FAILS.pop(ip, None)  # succès -> on efface les échecs de cette IP
+        _TOTP_FAILS.pop(ip, None)  # success -> clear this IP's failures
     return True
 
 

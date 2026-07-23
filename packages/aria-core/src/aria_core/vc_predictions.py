@@ -1,20 +1,20 @@
-"""Journal des prédictions VC — mesure la PERTINENCE d'ARIA dans le temps.
+"""VC prediction journal — measures ARIA's RELEVANCE over time.
 
-Chaque analyse `/vc` est enregistrée comme une **prédiction datée** (même sans
-trade réel : « shadow »). Plus tard, l'opérateur attribue un résultat réel
-(P&L %) via `/vcresult`. On peut alors mesurer si ARIA est réellement pertinente :
+Every `/vc` analysis is logged as a **dated prediction** (even without a real
+trade: a "shadow" one). Later, the operator attributes a real outcome
+(P&L %) via `/vcresult`. This lets us measure whether ARIA is genuinely relevant:
 
-- **hit-rate** : part des recommandations BUY dont le résultat est positif ;
-- **P&L moyen** par recommandation ;
-- **calibration** : est-ce qu'un « Potentiel 8/10 » surperforme réellement un
-  « 5/10 » ? (le vrai test d'un analyste).
+- **hit-rate**: share of BUY recommendations whose outcome is positive;
+- **average P&L** per recommendation;
+- **calibration**: does a "Potential 8/10" really outperform a
+  "5/10"? (the real test of an analyst).
 
-Logger *toutes* les analyses (pas seulement les trades) accélère l'accumulation
-d'un échantillon statistiquement exploitable — à ~2 trades/mois, se limiter aux
-positions réelles serait bien trop lent.
+Logging *every* analysis (not just trades) speeds up accumulating a
+statistically exploitable sample — at ~2 trades/month, limiting it to
+real positions would be far too slow.
 
-Stockage local SQLite `aria.db`, table `vc_prediction` (ajout pur,
-`CREATE TABLE IF NOT EXISTS`). Aucune action financière : c'est un journal.
+Local SQLite storage in `aria.db`, table `vc_prediction` (pure addition,
+`CREATE TABLE IF NOT EXISTS`). No financial action: this is a journal.
 """
 from __future__ import annotations
 
@@ -42,17 +42,17 @@ _COLUMNS = [
     "outcome_note",
     "created_at",
     "closed_at",
-    # Ajouts « wallet suivi » (voûte 2) — additifs, tous nullable, migrés à chaud
-    # pour les DB existantes (aucune ligne ancienne cassée).
-    "strategy",           # 'vc' (85% moyen/long) | 'spec' (15% spéculation small-cap)
-    "entry_price",        # prix USD au moment du verdict (pour valoriser en live)
-    "pool_address",       # pool DEX (pour rafraîchir le prix via OHLCV)
-    "network",            # réseau GeckoTerminal (Base au lancement)
-    "target_price",       # cible dérivée (facts-only)
-    "invalidation_price", # niveau d'invalidation dérivé
+    # "Tracked wallet" additions (vault 2) — additive, all nullable, hot-migrated
+    # for existing DBs (no old row broken).
+    "strategy",           # 'vc' (85% mid/long term) | 'spec' (15% small-cap speculation)
+    "entry_price",        # USD price at verdict time (to value it live)
+    "pool_address",       # DEX pool (to refresh the price via OHLCV)
+    "network",            # GeckoTerminal network (Base at launch)
+    "target_price",       # derived target (facts-only)
+    "invalidation_price", # derived invalidation level
 ]
 
-# Colonnes ajoutées après coup : (nom, définition SQL) pour la migration ALTER.
+# Columns added afterward: (name, SQL definition) for the ALTER migration.
 _ADDED_COLUMNS = [
     ("strategy", "TEXT DEFAULT 'vc'"),
     ("entry_price", "REAL"),
@@ -62,10 +62,10 @@ _ADDED_COLUMNS = [
     ("invalidation_price", "REAL"),
 ]
 
-# Répartition cible du portefeuille suivi d'ARIA (documentée, jamais un ordre réel).
+# Target allocation of ARIA's tracked portfolio (documented, never a real order).
 STRATEGY_ALLOCATION = {"vc": 0.85, "spec": 0.15}
 
-# Buckets de potentiel pour la courbe de calibration.
+# Potential buckets for the calibration curve.
 _CALIB_BUCKETS = [(0, 3, "0-3"), (4, 6, "4-6"), (7, 8, "7-8"), (9, 10, "9-10")]
 
 
@@ -98,8 +98,8 @@ async def _ensure_table() -> None:
             )
             """
         )
-        # Migration à chaud : ajoute les colonnes « wallet suivi » aux DB existantes
-        # (SQLite ne les crée pas si la table préexiste). Idempotent, non destructif.
+        # Hot migration: adds the "tracked wallet" columns to existing DBs
+        # (SQLite doesn't create them if the table pre-exists). Idempotent, non-destructive.
         existing = {
             row[1]
             for row in await (await db.execute("PRAGMA table_info(vc_prediction)")).fetchall()
@@ -128,13 +128,13 @@ async def record_prediction(
     target_price: float | None = None,
     invalidation_price: float | None = None,
 ) -> int:
-    """Enregistre une prédiction VC ``open`` et retourne son id.
+    """Records an ``open`` VC prediction and returns its id.
 
-    Les champs « wallet suivi » (strategy, entry_price, pool_address, network,
-    target/invalidation) sont optionnels : sans eux, le comportement est identique
-    à avant (le verdict est loggé mais ne peut pas être valorisé en live). Avec
-    entry_price + pool_address, la position devient valorisable au prix OHLCV réel.
-    ``strategy`` ∈ {'vc', 'spec'} — la poche 85/15 (spéculation small-cap).
+    The "tracked wallet" fields (strategy, entry_price, pool_address, network,
+    target/invalidation) are optional: without them, behavior is identical
+    to before (the verdict is logged but can't be valued live). With
+    entry_price + pool_address, the position becomes valuable at the real OHLCV price.
+    ``strategy`` in {'vc', 'spec'} — the 85/15 sleeve (small-cap speculation).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -172,10 +172,10 @@ async def record_prediction(
 
 
 async def close_prediction(prediction_id: int, *, outcome_pct: float, note: str = "") -> dict | None:
-    """Attribue un résultat réel (P&L %). Transition atomique ``open -> closed``.
+    """Attributes a real outcome (P&L %). Atomic ``open -> closed`` transition.
 
-    Retourne la ligne close, ou ``None`` si id inconnu / déjà clôturé (on ne
-    réécrit jamais un résultat déjà attribué).
+    Returns the closed row, or ``None`` if the id is unknown / already closed (an
+    already-attributed outcome is never overwritten).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -203,11 +203,11 @@ async def get_prediction(prediction_id: int) -> dict | None:
 
 
 async def count_predictions_for_contract(contract: str) -> int:
-    """Nombre d'analyses déjà enregistrées pour ce contrat (avant la présente).
+    """Number of analyses already recorded for this contract (before the current one).
 
-    Sert à numéroter les rapports (« Rapport n°2 sur ce token ») pour qu'un
-    abonné recevant plusieurs analyses suivies du même token puisse s'y
-    retrouver. Comparaison insensible à la casse (adresse EVM).
+    Used to number reports ("Report #2 on this token") so a
+    subscriber receiving several tracked analyses of the same token can find
+    their way. Case-insensitive comparison (EVM address).
     """
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -221,10 +221,10 @@ async def count_predictions_for_contract(contract: str) -> int:
 
 
 async def list_predictions_for_contract(contract: str, limit: int = 50) -> list[dict]:
-    """Historique complet des analyses VC pour un contrat, les plus récentes d'abord.
+    """Full history of VC analyses for a contract, most recent first.
 
-    Alimente le « dossier par token » (chronologie des analyses). Comparaison
-    insensible à la casse (adresse EVM stockée telle quelle par l'écrivain).
+    Feeds the "per-token file" (analysis timeline). Case-insensitive
+    comparison (EVM address stored as-is by the writer).
     """
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -239,10 +239,10 @@ async def list_predictions_for_contract(contract: str, limit: int = 50) -> list[
 
 
 async def total_predictions_count() -> int:
-    """Nombre total d'analyses ARIA jamais enregistrées (tous tokens confondus).
+    """Total number of ARIA analyses ever recorded (across all tokens).
 
-    Sert de numéro de série global (« Série 00.047 ») — donne au rapport une
-    identité d'édition numérotée, indépendante du suivi par token.
+    Serves as a global serial number ("Series 00.047") — gives the report a
+    numbered edition identity, independent of per-token tracking.
     """
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -263,10 +263,10 @@ async def list_open_predictions(limit: int = 20) -> list[dict]:
 
 
 async def list_recently_closed(since_iso: str, limit: int = 20) -> list[dict]:
-    """Pronostics clôturés depuis ``since_iso`` (ISO 8601), plus récents d'abord.
+    """Predictions closed since ``since_iso`` (ISO 8601), most recent first.
 
-    Sert de source aux moteurs d'analyse post-clôture (ex. autopsie pump/dump) —
-    lecture seule, aucune écriture, réutilise la table existante."""
+    Serves as the source for post-closure analysis engines (e.g. pump/dump autopsy) —
+    read-only, no writes, reuses the existing table."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (
@@ -280,10 +280,10 @@ async def list_recently_closed(since_iso: str, limit: int = 20) -> list[dict]:
 
 
 def compute_metrics(predictions: list[dict]) -> dict:
-    """Métriques de pertinence à partir d'une liste de prédictions (fonction pure, testable).
+    """Relevance metrics from a list of predictions (pure function, testable).
 
-    Ne considère que les prédictions clôturées (résultat réel attribué) pour les
-    taux ; compte les ouvertes séparément.
+    Only considers closed predictions (real outcome attributed) for the
+    rates; counts open ones separately.
     """
     closed = [p for p in predictions if p.get("status") == "closed" and p.get("outcome_pct") is not None]
     open_count = sum(1 for p in predictions if p.get("status") == "open")
@@ -293,12 +293,12 @@ def compute_metrics(predictions: list[dict]) -> dict:
     losses = [p for p in buys if (p.get("outcome_pct") or 0) <= 0]
     hit_rate = (len(wins) / len(buys)) if buys else None
     avg_pnl_buy = (sum(p["outcome_pct"] for p in buys) / len(buys)) if buys else None
-    # Magnitudes séparées (gagnants vs perdants) — nécessaires au dimensionnement de Kelly
-    # (blend avg_pnl_buy ne suffit pas : Kelly a besoin du ratio gain/perte, pas du net).
+    # Separate magnitudes (winners vs losers) — needed for Kelly sizing
+    # (a blended avg_pnl_buy isn't enough: Kelly needs the win/loss ratio, not the net).
     avg_win_pct = (sum(p["outcome_pct"] for p in wins) / len(wins)) if wins else None
     avg_loss_pct = (sum(p["outcome_pct"] for p in losses) / len(losses)) if losses else None
 
-    # Calibration : P&L moyen par bucket de potentiel (uniquement analyses LLM notées).
+    # Calibration: average P&L per potential bucket (LLM-scored analyses only).
     calibration = []
     scored = [p for p in closed if p.get("potentiel") is not None]
     for low, high, label in _CALIB_BUCKETS:
@@ -307,10 +307,10 @@ def compute_metrics(predictions: list[dict]) -> dict:
             avg = sum(p["outcome_pct"] for p in bucket) / len(bucket)
             calibration.append({"bucket": label, "count": len(bucket), "avg_pnl": avg})
 
-    # « Wall of NO » : verdicts AVOID (tous statuts) — la preuve publique la plus forte.
+    # "Wall of NO": AVOID verdicts (all statuses) — the strongest public proof.
     avoid_count = sum(1 for p in predictions if p.get("recommandation") == "AVOID")
 
-    # Ventilation par poche 85/15 (hit-rate BUY par stratégie).
+    # Breakdown by 85/15 sleeve (BUY hit-rate by strategy).
     by_strategy = {}
     for sleeve in ("vc", "spec"):
         s_buys = [p for p in buys if (p.get("strategy") or "vc") == sleeve]
@@ -337,9 +337,9 @@ def compute_metrics(predictions: list[dict]) -> dict:
 
 
 async def list_all_predictions() -> list[dict]:
-    """Toutes les prédictions (ouvertes et clôturées), sans filtre. Utilisé par les
-    analyses transversales (ex. scorecard « prêt pour l'argent réel ») qui ont besoin
-    de la totalité du journal, pas seulement d'un sous-ensemble déjà agrégé."""
+    """All predictions (open and closed), no filter. Used by
+    cross-cutting analyses (e.g. the "ready for real money" scorecard) that need
+    the entire journal, not just an already-aggregated subset."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (await db.execute("SELECT * FROM vc_prediction")).fetchall()
@@ -347,14 +347,14 @@ async def list_all_predictions() -> list[dict]:
 
 
 async def metrics() -> dict:
-    """Charge toutes les prédictions et calcule les métriques de pertinence."""
+    """Loads all predictions and computes the relevance metrics."""
     return compute_metrics(await list_all_predictions())
 
 
 async def format_track_report() -> str:
-    """Rapport texte de pertinence VC -- extrait de _handle_track (telegram_bot.py,
-    18/07, #213) pour être réutilisable par le routeur langage-naturel, une seule
-    source de vérité pour "track record" quel que soit le déclencheur."""
+    """VC relevance text report -- extracted from _handle_track (telegram_bot.py,
+    07/18, #213) to be reusable by the natural-language router, a single
+    source of truth for "track record" regardless of the trigger."""
     m = await metrics()
     if m["total"] == 0:
         return "Aucune prédiction enregistrée. Lance des analyses avec /vc."
@@ -380,7 +380,7 @@ async def format_track_report() -> str:
 
 
 def _sleeve_return(holdings: list[dict], current_prices: dict[int, float]) -> tuple[float, int]:
-    """Rendement moyen (equal-weight) d'une poche + nombre de positions valorisées."""
+    """Average (equal-weight) return of a sleeve + number of valued positions."""
     rets = []
     for p in holdings:
         entry = p.get("entry_price")
@@ -395,14 +395,14 @@ def _sleeve_return(holdings: list[dict], current_prices: dict[int, float]) -> tu
 def portfolio_value(
     predictions: list[dict], current_prices: dict[int, float], *, base_index: float = 100.0
 ) -> dict:
-    """Valeur du portefeuille SUIVI d'ARIA (paper, jamais un fonds réel).
+    """Value of ARIA's TRACKED portfolio (paper, never a real fund).
 
-    Modèle honnête et documenté : on ne tient que les verdicts **BUY** (ce qu'ARIA
-    « détiendrait »), equal-weight dans chaque poche, répartis **85 % VC / 15 %
-    spéculation**. Une poche sans position vaut 0 (cash au repos, rendement plat).
-    L'indice part de ``base_index`` (100) → la valeur reflète le rendement non
-    réalisé, valorisé aux **vrais prix OHLCV** fournis dans ``current_prices``.
-    Fonction pure : aucun réseau ici (les prix sont injectés), donc testable.
+    Honest, documented model: only **BUY** verdicts are held (what ARIA
+    "would hold"), equal-weight within each sleeve, split **85% VC / 15%
+    speculation**. A sleeve with no position is worth 0 (idle cash, flat return).
+    The index starts at ``base_index`` (100) -> the value reflects the unrealized
+    return, valued at the **real OHLCV prices** supplied in ``current_prices``.
+    Pure function: no network here (prices are injected), hence testable.
     """
     buys = [p for p in predictions if p.get("recommandation") == "BUY"]
     vc = [p for p in buys if (p.get("strategy") or "vc") == "vc"]
@@ -427,10 +427,10 @@ def portfolio_value(
 
 
 async def _current_prices_for(predictions: list[dict]) -> dict[int, float]:
-    """Récupère le dernier prix OHLCV réel des positions valorisables (BUY + pool).
+    """Fetches the last real OHLCV price of valuable positions (BUY + pool).
 
-    Dégradation gracieuse : une position dont le pool est absent ou dont l'OHLCV
-    n'est pas disponible est simplement omise (jamais un prix inventé).
+    Graceful degradation: a position whose pool is absent or whose OHLCV
+    isn't available is simply omitted (never an invented price).
     """
     from aria_core.services.ohlcv import ohlcv_client
 
@@ -448,11 +448,11 @@ async def _current_prices_for(predictions: list[dict]) -> dict[int, float]:
 
 
 async def live_wallet() -> dict:
-    """Valeur live du portefeuille suivi d'ARIA (positions BUY ouvertes, prix réels).
+    """Live value of ARIA's tracked portfolio (open BUY positions, real prices).
 
-    C'est le chiffre du « wallet ARIA » destiné à la page d'accueil (teaser FOMO)
-    et à la page abonné. Facts-only : s'il n'y a aucune position valorisable, on
-    renvoie un indice neutre (100, +0 %) — jamais un chiffre gonflé.
+    This is the "ARIA wallet" figure meant for the homepage (FOMO teaser)
+    and the subscriber page. Facts-only: if there's no valuable position, a
+    neutral index (100, +0%) is returned — never an inflated figure.
     """
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:

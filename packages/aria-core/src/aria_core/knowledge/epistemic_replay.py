@@ -1,4 +1,4 @@
-"""Replay épistémique — revérifie les réponses incertaines de la veille."""
+"""Epistemic replay — re-verifies uncertain answers from ongoing monitoring."""
 
 from __future__ import annotations
 

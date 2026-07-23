@@ -1,48 +1,48 @@
-"""Comportement du wallet du dev/équipe — builder engagé ou farmer ?
+"""Dev/team wallet behavior — committed builder or farmer?
 
-Le déployeur d'un token laisse une trace on-chain qui en dit long sur sa LÉGITIMITÉ.
-Quatre dimensions (intuition opérateur), jugées AU CAS PAR CAS, jamais en binaire :
+A token's deployer leaves an on-chain trail that says a lot about its LEGITIMACY.
+Four dimensions (operator intuition), judged CASE BY CASE, never in binary:
 
-  1. **Détient-il ?** (`holds_pct`) — skin-in-the-game vs pression de vente. Zone
-     saine relative : sur Virtuals la team ~15-20 % est normale ; un fondateur solo
-     sans argent à 0 % n'est pas forcément de mauvaise foi ; mais >40 % hors norme =
-     risque de dump.
-  2. **A-t-il acheté avec son argent** (`acquired='bought'`) ou juste **auto-alloué**
-     (`'allocation'`) ? Acheter = aligné (il a engagé du capital).
-  3. **A-t-il vendu** (`sold_pct_of_received`) — pour **financer** le projet (petites
-     tranches, sain) ou **extraire** (gros dump early, concern) ?
-  4. **All-in ?** (achat + garde + peu/pas de vente) = conviction forte.
+  1. **Does he hold?** (`holds_pct`) — skin-in-the-game vs sell pressure. Relative
+     healthy zone: on Virtuals a ~15-20% team allocation is normal; a solo founder
+     with no money at 0% isn't necessarily bad faith; but >40% out of norm =
+     dump risk.
+  2. **Did he buy with his own money** (`acquired='bought'`) or just **self-allocate**
+     (`'allocation'`)? Buying = aligned (he committed capital).
+  3. **Did he sell** (`sold_pct_of_received`) — to **fund** the project (small
+     tranches, healthy) or to **extract** (big early dump, concern)?
+  4. **All-in?** (buy + hold + little/no selling) = strong conviction.
 
-Le JUGE est PUR et déterministe ; il produit des OBSERVATIONS factuelles + un signal
-pondéré (aligned / neutral / concern / unknown) qui NOURRIT le raisonnement d'ARIA —
-il ne rejette pas d'office. La logique s'adapte à la taille du projet : une équipe
-organisée qui n'engage rien est anormale ; un dev solo est excusé.
+The JUDGE is PURE and deterministic; it produces factual OBSERVATIONS + a
+weighted signal (aligned / neutral / concern / unknown) that FEEDS ARIA's
+reasoning — it doesn't reject outright. The logic adapts to the project's size: an
+organized team committing nothing is abnormal; a solo dev is excused.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Repères RELATIFS (pas des couperets) : au-dessus, un examen s'impose.
-_HIGH_HOLD_PCT = 40.0        # détention très élevée hors norme launchpad -> risque dump
-_HEAVY_SELL_PCT = 50.0       # a vendu la majorité de ce qu'il a reçu -> extraction probable
+# RELATIVE landmarks (not hard cutoffs): above these, scrutiny is warranted.
+_HIGH_HOLD_PCT = 40.0        # very high holding, out of launchpad norm -> dump risk
+_HEAVY_SELL_PCT = 50.0       # sold the majority of what he received -> likely extraction
 
 
 @dataclass(frozen=True)
 class DevWalletFacts:
-    """Faits on-chain sur le wallet du déployeur (récoltés, jamais inventés)."""
+    """On-chain facts about the deployer's wallet (collected, never invented)."""
 
     creator: str | None
-    holds_pct: float | None = None            # % de supply détenu (hors LP/burn)
+    holds_pct: float | None = None            # % of supply held (excl. LP/burn)
     acquired: str | None = None               # 'allocation' | 'bought' | 'mixed' | None
     sold_events: int = 0
-    sold_pct_of_received: float | None = None  # part de ce qu'il a reçu qu'il a revendu
+    sold_pct_of_received: float | None = None  # share of what he received that he resold
     available: bool = False
     error: str | None = None
 
 
 @dataclass(frozen=True)
 class DevWalletVerdict:
-    """Jugement pondéré du comportement du dev, avec ses observations factuelles."""
+    """Weighted judgment of the dev's behavior, with its factual observations."""
 
     signal: str  # aligned / neutral / concern / unknown
     points: list[str] = field(default_factory=list)
@@ -54,12 +54,12 @@ def judge_dev_wallet(
     launchpad_team_norm: tuple[float, float] | None = None,
     team_is_large: bool | None = None,
 ) -> DevWalletVerdict:
-    """Juge le comportement du dev au cas par cas. Retourne signal + observations.
+    """Judges the dev's behavior case by case. Returns signal + observations.
 
-    ``launchpad_team_norm`` : fourchette d'allocation team normale du launchpad (ex.
-    (15, 20) pour Virtuals) — une détention DANS cette fourchette n'est pas un concern.
-    ``team_is_large`` : indice de taille d'équipe (si connu) — une grande équipe qui
-    n'engage rien est plus suspecte qu'un dev solo.
+    ``launchpad_team_norm``: the launchpad's normal team allocation range (e.g.
+    (15, 20) for Virtuals) — a holding WITHIN this range isn't a concern.
+    ``team_is_large``: team-size indicator (if known) — a large team that
+    commits nothing is more suspicious than a solo dev.
     """
     if not facts.available:
         return DevWalletVerdict(signal="unknown", points=[facts.error or "wallet du dev non analysable"])
@@ -114,7 +114,7 @@ def judge_dev_wallet(
             points.append("n'a rien vendu (conviction)")
             aligned += 1
 
-    # Signal pondéré (jamais un couperet — nourrit le jugement d'ARIA).
+    # Weighted signal (never a hard cutoff — feeds ARIA's judgment).
     if concern >= 2 and concern > aligned:
         signal = "concern"
     elif aligned >= 2 and concern == 0:
@@ -128,14 +128,14 @@ def judge_dev_wallet(
 
 _ZERO = "0x0000000000000000000000000000000000000000"
 
-# 23/07 -- calibration en live (tâche #26) : contrat CNX (déjà scanné en prod)
-# vérifié comme un pool Uniswap V4 (dexId "uniswap" sans plus de précision côté
-# DexScreener). Sur V4, TOUS les swaps de TOUS les pools transitent par ce
-# PoolManager SINGLETON, jamais par une adresse de pool dédiée comme sur V2/V3
-# -- comparer `frm`/`to` au seul `lp_address` (l'identifiant logique de pool
-# renvoyé par DexScreener) ne capture donc JAMAIS un achat/vente réel sur un
-# pool V4, peu importe le token. Adresse officielle vérifiée (BaseScan, "Uniswap
-# V4: Pool Manager") -- Base uniquement, cohérent avec le reste de ce module.
+# 23/07 -- live calibration (task #26): CNX contract (already scanned in prod)
+# verified as a Uniswap V4 pool (dexId "uniswap" with no further detail on
+# DexScreener's side). On V4, ALL swaps from ALL pools go through this
+# SINGLETON PoolManager, never through a dedicated pool address like on V2/V3
+# -- comparing `frm`/`to` against just `lp_address` (the logical pool identifier
+# returned by DexScreener) therefore NEVER captures a real buy/sell on a
+# V4 pool, whatever the token. Official address verified (BaseScan, "Uniswap
+# V4: Pool Manager") -- Base only, consistent with the rest of this module.
 _UNISWAP_V4_POOL_MANAGER_BASE = "0x498581ff718922c3f8e6a244956af099b2652b2b"
 
 
@@ -146,17 +146,17 @@ async def gather_dev_wallet_facts(
     lp_address: str | None = None,
     client=None,
 ) -> DevWalletFacts:
-    """Récolte best-effort les faits on-chain sur le déployeur (défensif, jamais bloquant).
+    """Best-effort collection of on-chain facts about the deployer (defensive, never blocking).
 
-    - **Détention** : part du déployeur dans la liste des holders du token.
-    - **Achats / allocation / ventes** : classe les transferts du token impliquant le
-      déployeur — reçu depuis le zéro/contrat = allocation ; reçu depuis le pool LP
-      (ou le PoolManager Uniswap V4, cf. `_UNISWAP_V4_POOL_MANAGER_BASE`) = achat ;
-      envoyé vers l'un des deux = vente.
+    - **Holding**: the deployer's share in the token's holder list.
+    - **Buys / allocation / sells**: classifies token transfers involving the
+      deployer — received from zero/contract = allocation; received from the LP pool
+      (or the Uniswap V4 PoolManager, cf. `_UNISWAP_V4_POOL_MANAGER_BASE`) = bought;
+      sent to either of the two = sold.
 
-    ``client`` injectable (défaut : blockscout_client) pour les tests offline. Toute
-    indisponibilité -> ``available=False`` (le juge renverra 'unknown'). La classification
-    reste une heuristique — calibrée en live le 23/07 contre un cas réel (CNX, pool V4)."""
+    Injectable ``client`` (default: blockscout_client) for offline tests. Any
+    unavailability -> ``available=False`` (the judge will return 'unknown'). The classification
+    remains a heuristic — calibrated live on 23/07 against a real case (CNX, V4 pool)."""
     if not creator:
         return DevWalletFacts(creator=None, available=False, error="déployeur inconnu")
     if client is None:

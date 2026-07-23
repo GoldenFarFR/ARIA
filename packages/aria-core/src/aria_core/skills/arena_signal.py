@@ -1,25 +1,25 @@
-"""Signal BTC pour agents de trading tiers (seam #60, Arena Virtuals/Shekel).
+"""BTC signal for third-party trading agents (seam #60, Arena Virtuals/Shekel).
 
-Expose les analyses BTC RÉELLES et déjà existantes d'ARIA (cycle macro halving,
-RSI) sous une forme compacte consommable par un endpoint HTTP public en lecture
-seule (contrat "Custom Data Endpoint" de Shekel : GET, JSON, aucune auth). Ne
-recalcule rien : réutilise `btc_cycles` (cache 1h) et le RSI de Wilder déjà
-câblé pour le rapport `/vc` (`entry_signals.rsi_series`), jamais un doublon de
-client externe.
+Exposes ARIA's REAL, already-existing BTC analyses (halving macro cycle,
+RSI) in a compact form consumable by a public, read-only HTTP endpoint
+(Shekel's "Custom Data Endpoint" contract: GET, JSON, no auth). Recomputes
+nothing: reuses `btc_cycles` (1h cache) and the Wilder RSI already
+wired for the `/vc` report (`entry_signals.rsi_series`), never a duplicate
+external client.
 
-Facts-only, dégradation honnête : un champ manquant (RSI si l'historique est
-trop court, cycle si CoinGecko est indisponible) est omis (``None``), jamais
-remplacé par une valeur inventée — même doctrine que `btc_cycles`/`entry_signals`.
+Facts-only, honest degradation: a missing field (RSI if history is
+too short, cycle if CoinGecko is unavailable) is omitted (``None``), never
+replaced by an invented value — same doctrine as `btc_cycles`/`entry_signals`.
 
-Contrainte découverte le 09/07 (testée en direct sur l'API réelle, error_code
-10012) : le tier gratuit CoinGecko refuse toute requête portant sur des données
-de plus de 365 jours, quelle que soit la taille de la fenêtre demandée (pas un
-souci de découpage). Le RSI (qui n'a besoin que de quelques semaines) utilise
-donc une fenêtre RÉCENTE dédiée (``_RSI_WINDOW_DAYS``) via CoinGecko, tandis
-que le cycle macro (`btc_cycles`, 10 ans) est passé à Blockchain.com
-(`services/blockchain_info.py`) — deux clients DIFFÉRENTS, deux interfaces
-différentes, jamais interchangeables (d'où les deux paramètres séparés
-ci-dessous plutôt qu'un seul `client` partagé).
+Constraint discovered on 09/07 (tested live against the real API, error_code
+10012): CoinGecko's free tier refuses any request for data older than
+365 days, regardless of the requested window size (not a pagination
+issue). The RSI (which only needs a few weeks) therefore uses a dedicated
+RECENT window (``_RSI_WINDOW_DAYS``) via CoinGecko, while
+the macro cycle (`btc_cycles`, 10 years) is passed to Blockchain.com
+(`services/blockchain_info.py`) — two DIFFERENT clients, two different
+interfaces, never interchangeable (hence the two separate parameters
+below rather than a single shared `client`).
 """
 from __future__ import annotations
 
@@ -39,12 +39,12 @@ NOTE = (
     "close-only data)."
 )
 
-_RSI_WINDOW_DAYS = 90  # marge large au-dessus du minimum RSI-14 (~15j), reste << 365j
+_RSI_WINDOW_DAYS = 90  # wide margin above the RSI-14 minimum (~15d), stays << 365d
 
 
 async def _fetch_recent_btc_closes(*, client=None) -> list[float] | None:
-    """Fenêtre RÉCENTE (≤365j, contrainte CoinGecko gratuit) pour le RSI —
-    distincte de l'historique complet 10 ans utilisé par `btc_cycles`."""
+    """RECENT window (≤365d, free CoinGecko constraint) for the RSI —
+    distinct from the full 10-year history used by `btc_cycles`."""
     if client is None:
         from aria_core.services.coingecko import coingecko_client as client
 
@@ -58,11 +58,11 @@ async def _fetch_recent_btc_closes(*, client=None) -> list[float] | None:
 
 
 async def fetch_btc_arena_signal(*, cycle_client=None, rsi_client=None) -> dict:
-    """Point d'entrée compact pour l'endpoint public `/api/aria/arena-signal/btc`.
+    """Compact entry point for the public `/api/aria/arena-signal/btc` endpoint.
 
-    ``cycle_client`` (Blockchain.com, historique long) et ``rsi_client``
-    (CoinGecko, fenêtre courte) sont deux clients DISTINCTS — ne jamais les
-    confondre, leurs interfaces ne sont pas interchangeables.
+    ``cycle_client`` (Blockchain.com, long history) and ``rsi_client``
+    (CoinGecko, short window) are two DISTINCT clients — never conflate
+    them, their interfaces aren't interchangeable.
     """
     phase = await fetch_current_macro_phase(client=cycle_client)
 

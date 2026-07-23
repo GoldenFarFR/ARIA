@@ -1,43 +1,43 @@
-"""Consolidation périodique de la mémoire opérationnelle — #128.
+"""Periodic consolidation of operational memory — #128.
 
-Design : aria-ops/docs/aria-learning-inbox/2026-07-12-design-memory-consolidation.md
-(comparaison mem0/Zep/Letta + inspection réelle des volumes ARIA).
+Design: aria-ops/docs/aria-learning-inbox/2026-07-12-design-memory-consolidation.md
+(mem0/Zep/Letta comparison + real inspection of ARIA's volumes).
 
-Garde-fou non négociable (verrouillé en dur, jamais contourné) :
-  - Périmètre AUTORISÉ, uniquement :
-      * ``memory_dir()`` — fichiers ``{category}_{date}.md`` (journal épisodique).
-      * ``cognitive_knowledge`` WHERE ``approved = 0`` (aujourd'hui vide — 0 ligne au
-        12/07 — mais le périmètre est verrouillé dès le départ pour rester correct
-        quand cette table commencera à accumuler des entrées non approuvées).
-        Non exercé par l'algorithme ci-dessous pour l'instant (rien à consolider), le
-        verrou existe pour empêcher une extension future d'élargir le périmètre par
-        erreur.
-  - INTERDIT, verrouillé en dur — ce module ne doit JAMAIS importer ni appeler :
-      * ``aria_core.paths.truth_ledger_dir`` / toute lecture-écriture du truth-ledger
-        (mécanisme de succession `supersedes` déjà géré ailleurs).
+Non-negotiable guardrail (hard-locked, never bypassed):
+  - AUTHORIZED scope, only:
+      * ``memory_dir()`` — ``{category}_{date}.md`` files (episodic log).
+      * ``cognitive_knowledge`` WHERE ``approved = 0`` (empty today — 0 rows as of
+        12/07 — but the scope is locked from the start to stay correct
+        once this table starts accumulating unapproved entries).
+        Not exercised by the algorithm below for now (nothing to consolidate), the
+        lock exists to prevent a future extension from widening the scope by
+        mistake.
+  - FORBIDDEN, hard-locked — this module must NEVER import or call:
+      * ``aria_core.paths.truth_ledger_dir`` / any read-write of the truth-ledger
+        (the `supersedes` succession mechanism is already handled elsewhere).
       * ``aria_core.knowledge.cognitive.get_approved`` / ``approve_knowledge`` /
-        ``upsert_knowledge_by_topic`` / ``build_context_summary`` (entrées
-        ``approved = 1`` — déjà consolidées par construction, confidence=1.0).
-      * ``aria_core.memory.values`` / ``aria_core.memory.goals`` (identité curatée à
-        la main, hors périmètre par nature).
-    ``_assert_not_truth_ledger`` fait échouer explicitement (fail-closed) toute
-    tentative d'écriture qui atterrirait sous ``truth_ledger_dir()`` — filet de sécurité
-    en plus de la discipline d'imports ci-dessus (cf. test_memory_consolidation.py qui
-    vérifie statiquement l'absence des symboles interdits dans ce fichier).
+        ``upsert_knowledge_by_topic`` / ``build_context_summary`` (``approved = 1``
+        entries — already consolidated by construction, confidence=1.0).
+      * ``aria_core.memory.values`` / ``aria_core.memory.goals`` (hand-curated
+        identity, out of scope by nature).
+    ``_assert_not_truth_ledger`` explicitly fails (fail-closed) any
+    write attempt that would land under ``truth_ledger_dir()`` — a safety net
+    on top of the import discipline above (cf. test_memory_consolidation.py which
+    statically verifies the absence of forbidden symbols in this file).
 
-Jamais de suppression physique — archive-then-rewrite : avant toute réécriture, un
-instantané brut des entrées touchées est écrit dans
-``memory_dir()/archive/consolidated_{date}.jsonl`` (une ligne JSON par entrée,
-``{category, date, content, source_file}``). Cet instantané n'est jamais lui-même
-consolidé ni élagué — filet de récupération en cas d'erreur de fusion. Seuls les
-fichiers-sources ``memory_dir()/{category}_{date}.md`` sont marqués consolidés (registre
-séparé, jamais supprimés ni réécrits).
+Never physical deletion — archive-then-rewrite: before any rewrite, a
+raw snapshot of the touched entries is written to
+``memory_dir()/archive/consolidated_{date}.jsonl`` (one JSON line per entry,
+``{category, date, content, source_file}``). This snapshot is never itself
+consolidated or pruned — a recovery net in case of a merge error. Only the
+source files ``memory_dir()/{category}_{date}.md`` are marked consolidated (separate
+registry, never deleted nor rewritten).
 
-Un seul appel LLM par catégorie active (pas un par entrée — c'est le principal levier de
-coût), routé explicitement en ``depth="brief"`` — jamais ``"develop"`` pour une tâche de
-housekeeping routinière. Seuil de volume (``_MIN_NEW_ENTRIES``) : une catégorie n'est
-consolidée que si au moins ce nombre de nouvelles entrées s'est accumulé depuis le
-dernier passage, pour éviter des appels LLM quotidiens sur des catégories inactives.
+A single LLM call per active category (not one per entry — that's the main cost
+lever), explicitly routed at ``depth="brief"`` — never ``"develop"`` for a routine
+housekeeping task. Volume threshold (``_MIN_NEW_ENTRIES``): a category is only
+consolidated if at least this many new entries have accumulated since the
+last pass, to avoid daily LLM calls on inactive categories.
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ sans préambule ni méta-commentaire sur ce que tu as fait."""
 
 
 def consolidation_enabled() -> bool:
-    """Gate OFF par défaut — même discipline que les autres tâches heartbeat sensibles."""
+    """Gate OFF by default — same discipline as the other sensitive heartbeat tasks."""
     import os
 
     return os.environ.get("ARIA_MEMORY_CONSOLIDATION_ENABLED", "").strip().lower() in (
@@ -85,12 +85,12 @@ def consolidation_enabled() -> bool:
 
 
 def _assert_not_truth_ledger(path: Path) -> None:
-    """Fail-closed : ce module ne doit JAMAIS écrire sous truth_ledger_dir()."""
+    """Fail-closed: this module must NEVER write under truth_ledger_dir()."""
     forbidden = truth_ledger_dir().resolve()
     resolved = path.resolve()
     if resolved == forbidden or forbidden in resolved.parents:
         raise RuntimeError(
-            f"memory/consolidation.py: écriture refusée sous le truth-ledger ({path})"
+            f"memory/consolidation.py: write refused under the truth-ledger ({path})"
         )
 
 
@@ -138,11 +138,11 @@ def _save_registry(registry: dict[str, list[str]]) -> None:
 
 
 def _dated_files_by_category() -> dict[str, list[Path]]:
-    """Fichiers `{category}_{date}.md` de memory_dir(), groupés par catégorie.
+    """`{category}_{date}.md` files from memory_dir(), grouped by category.
 
-    Ignore délibérément tout ce qui ne matche pas ce nom exact (`.jsonl` de
-    l'arbitre/reflection, `.json` d'état, `training_portfolio.md` sans date, le
-    sous-répertoire `consolidated/` et `archive/` — non recursif par nature de
+    Deliberately ignores anything that doesn't match this exact name (`.jsonl` of
+    the arbitrator/reflection, state `.json`, `training_portfolio.md` without a date, the
+    `consolidated/` and `archive/` subdirectories — non-recursive by the nature of
     `Path.glob("*.md")`)."""
     out: dict[str, list[Path]] = defaultdict(list)
     for path in memory_dir().glob("*.md"):
@@ -151,7 +151,7 @@ def _dated_files_by_category() -> dict[str, list[Path]]:
             continue
         out[match.group("category")].append(path)
     for files in out.values():
-        files.sort(key=lambda p: p.name)  # date en tête de nom -> tri chronologique
+        files.sort(key=lambda p: p.name)  # date at the start of the name -> chronological sort
     return out
 
 
@@ -161,7 +161,7 @@ def _date_from_filename(name: str) -> str:
 
 
 def _parse_entries(path: Path) -> list[dict[str, str]]:
-    """Découpe un fichier `{category}_{date}.md` en entrées `## [HH:MM:SS UTC]\\ncontenu`."""
+    """Splits a `{category}_{date}.md` file into `## [HH:MM:SS UTC]\\ncontent` entries."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -179,7 +179,7 @@ def _parse_entries(path: Path) -> list[dict[str, str]]:
 
 
 def _archive_raw(category: str, entries: list[dict[str, str]]) -> None:
-    """Archive-then-rewrite : instantané brut AVANT toute réécriture. Jamais élagué."""
+    """Archive-then-rewrite: raw snapshot BEFORE any rewrite. Never pruned."""
     archive_dir = _archive_dir()
     _assert_not_truth_ledger(archive_dir)
     archive_dir.mkdir(parents=True, exist_ok=True)
@@ -226,7 +226,7 @@ async def _consolidate_category(
 async def run_memory_consolidation_cycle(
     *, min_new_entries: int = _MIN_NEW_ENTRIES
 ) -> dict[str, Any]:
-    """Point d'entrée heartbeat. Gated OFF par défaut (cf. `consolidation_enabled`)."""
+    """Heartbeat entry point. Gated OFF by default (cf. `consolidation_enabled`)."""
     if not consolidation_enabled():
         return {"outcome": "disabled"}
 
@@ -253,11 +253,11 @@ async def run_memory_consolidation_cycle(
             skipped_below_threshold.append(category)
             continue
 
-        # Archive-then-rewrite : le brut est sauvegardé AVANT tout appel LLM/réécriture.
-        # Si le LLM échoue ensuite, rien n'est perdu et le registre n'avance pas -- la
-        # catégorie sera retentée au prochain passage (l'archive peut alors contenir un
-        # doublon de ces entrées, sans conséquence : elle n'est jamais élaguée ni relue
-        # comme source de vérité, seulement un filet de récupération).
+        # Archive-then-rewrite: the raw data is saved BEFORE any LLM call/rewrite.
+        # If the LLM then fails, nothing is lost and the registry doesn't advance -- the
+        # category will be retried next pass (the archive may then contain a
+        # duplicate of these entries, with no consequence: it is never pruned nor read back
+        # as a source of truth, only a recovery net).
         _archive_raw(category, new_entries)
 
         consolidated_path = _consolidated_path(category)
@@ -270,13 +270,13 @@ async def run_memory_consolidation_cycle(
         try:
             new_content = await _consolidate_category(category, existing, new_entries)
         except Exception as exc:
-            logger.warning("memory_consolidation: échec catégorie=%s: %s", category, exc)
+            logger.warning("memory_consolidation: failed category=%s: %s", category, exc)
             failed.append(category)
             continue
 
         if not new_content or not new_content.strip():
-            # LLM indisponible/vide -> dégradation gracieuse, rien perdu (déjà archivé),
-            # retenté au prochain passage.
+            # LLM unavailable/empty -> graceful degradation, nothing lost (already archived),
+            # retried next pass.
             failed.append(category)
             continue
 

@@ -1,21 +1,20 @@
-"""Stockage local des holders enrichis extraits via Blockscout Pro (x402,
-``services/blockscout_x402.py``) -- réponse à la demande opérateur (21/07) de
-bâtir une intelligence wallet/entité EN INTERNE (même famille d'objectif que
-Nansen/Arkham, diligenciés, jamais achetés) plutôt que de dépendre d'un
-fournisseur tiers payant.
+"""Local storage of enriched holders extracted via Blockscout Pro (x402,
+``services/blockscout_x402.py``) -- response to the operator's request
+(21/07) to build wallet/entity intelligence IN-HOUSE (same objective family
+as Nansen/Arkham, diligenced, never purchased) rather than depending on a
+paid third-party provider.
 
-Stockage dans la base SQLite d'ARIA (``aria.db``, même fichier que
-``screened_token``/``wallet_score_log``/``x402_spend_log``) -- JAMAIS dans un
-dépôt Git (public ou privé) : un dépôt Git sert le CODE, pas un jeu de données
-qui grossit en continu (même doctrine Sobriété déjà appliquée partout ailleurs
-dans ce projet).
+Stored in ARIA's SQLite database (``aria.db``, same file as
+``screened_token``/``wallet_score_log``/``x402_spend_log``) -- NEVER in a
+Git repo (public or private): a Git repo serves the CODE, not a dataset that
+keeps growing (same Sobriety doctrine already applied everywhere else in
+this project).
 
-Snapshot, pas un journal append-only (contrairement à ``momentum_blacklist``/
-``x402_spend_log``) : la liste des holders d'un token évolue dans le temps,
-``store_holders`` REMPLACE l'instantané précédent pour ce (contract, chain) au
-lieu de l'empiler -- sinon une requête ``get_holders`` mélangerait un état
-d'il y a 3 semaines avec un état d'aujourd'hui sans aucun moyen de les
-distinguer."""
+A snapshot, not an append-only journal (unlike ``momentum_blacklist``/
+``x402_spend_log``): the list of a token's holders changes over time,
+``store_holders`` REPLACES the previous snapshot for this (contract, chain)
+instead of stacking it -- otherwise a ``get_holders`` query would mix a
+state from 3 weeks ago with today's state with no way to tell them apart."""
 from __future__ import annotations
 
 import json
@@ -31,14 +30,14 @@ DB_PATH = str(aria_db_path())
 
 
 def _normalize_contract(contract: str, chain: str) -> str:
-    """Même correctif que ``momentum_entry.normalize_contract_case``/
-    ``momentum_blacklist._normalize_contract`` (18/07, bug réel) : Base/Robinhood
-    (hex EVM) tolèrent le lowercase, Solana (base58) non -- la casse y fait
-    partie de la valeur. Dupliqué ici plutôt qu'importé (module de stockage
-    générique, pas de dépendance vers un module momentum-spécifique) --
-    corrige un vrai bug trouvé le 21/07 : un même token (cbBTC) stocké une
-    fois en casse checksum et une fois en lowercase produisait DEUX lignes
-    distinctes pour le même contrat réel."""
+    """Same fix as ``momentum_entry.normalize_contract_case``/
+    ``momentum_blacklist._normalize_contract`` (18/07, real bug): Base/Robinhood
+    (EVM hex) tolerate lowercase, Solana (base58) doesn't -- case is part of
+    the value there. Duplicated here rather than imported (generic storage
+    module, no dependency toward a momentum-specific module) -- fixes a real
+    bug found on 21/07: the same token (cbBTC) stored once in checksum case
+    and once in lowercase produced TWO distinct rows for the same real
+    contract."""
     contract = (contract or "").strip()
     if (chain or "").strip().lower() != "solana":
         contract = contract.lower()
@@ -69,11 +68,11 @@ async def _ensure_table() -> None:
 
 
 async def store_holders(contract: str, chain: str, holders: list[dict]) -> int:
-    """Remplace l'instantané holders de ce (contract, chain) -- transaction
-    unique (DELETE puis INSERT), jamais un état partiel visible entre les deux.
-    Retourne le nombre de lignes écrites. ``holders`` vide n'écrit rien et ne
-    supprime rien non plus -- une extraction ratée (liste vide par dégradation
-    dôme) ne doit jamais effacer un instantané valide précédent."""
+    """Replaces the holders snapshot for this (contract, chain) -- a single
+    transaction (DELETE then INSERT), never a partial state visible in
+    between. Returns the number of rows written. Empty ``holders`` writes
+    nothing and deletes nothing either -- a failed extraction (empty list
+    from dome degradation) must never erase a previous valid snapshot."""
     if not holders:
         return 0
     await _ensure_table()
@@ -140,10 +139,10 @@ async def get_holders(contract: str, chain: str) -> list[dict]:
 
 
 async def last_extracted_at(contract: str, chain: str) -> str | None:
-    """Fraîcheur de l'extraction pour ce token -- sert à décider si ça vaut la
-    peine de repayer 0,002$ pour un token déjà extrait récemment (le batch
-    d'extraction en masse s'appuie dessus pour ne jamais repayer deux fois le
-    même token sans raison)."""
+    """Freshness of the extraction for this token -- used to decide whether
+    it's worth paying $0.002 again for a token already extracted recently
+    (the mass-extraction batch relies on this to never pay for the same
+    token twice without reason)."""
     await _ensure_table()
     chain = (chain or "").strip().lower()
     contract = _normalize_contract(contract, chain)
@@ -158,8 +157,8 @@ async def last_extracted_at(contract: str, chain: str) -> str | None:
 
 
 async def list_extracted_contracts(chain: str = "base") -> list[dict]:
-    """Vue d'ensemble -- un contrat par ligne, nombre de holders stockés et
-    fraîcheur -- pour auditer la couverture déjà bâtie sans tout relire."""
+    """Overview -- one contract per row, number of holders stored and
+    freshness -- to audit the coverage already built without re-reading everything."""
     await _ensure_table()
     chain = (chain or "").strip().lower()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -176,15 +175,15 @@ async def list_extracted_contracts(chain: str = "base") -> list[dict]:
 
 
 async def wallet_cross_token_holdings(address: str, *, chain: str = "base") -> list[dict]:
-    """Sur QUELS tokens déjà extraits (couverture partielle d'ARIA, jamais un
-    scan exhaustif de la chaîne) cette adresse apparaît comme détenteur notable
-    -- réponse au 21/07 : signal de coordination possible (market maker
-    légitime OU cluster Sybil) pour `smart_money.py`, jamais un score de
-    performance -- catégorie différente, voir ``WalletScoreCard.
-    cross_token_holdings``, jamais mélangé au ``composite_percentile``.
+    """On WHICH already-extracted tokens (ARIA's partial coverage, never an
+    exhaustive chain scan) this address appears as a notable holder --
+    response to 21/07: a possible coordination signal (legitimate market
+    maker OR Sybil cluster) for `smart_money.py`, never a performance score
+    -- a different category, see ``WalletScoreCard.
+    cross_token_holdings``, never mixed with ``composite_percentile``.
 
-    Un résultat vide ne veut jamais dire "ce wallet n'est nulle part" --
-    seulement "pas trouvé dans les tokens qu'ARIA a déjà extraits à ce jour"."""
+    An empty result never means "this wallet is nowhere" -- only "not found
+    in the tokens ARIA has extracted so far"."""
     await _ensure_table()
     address = (address or "").strip()
     chain = (chain or "").strip().lower()
@@ -211,11 +210,11 @@ async def wallet_cross_token_holdings(address: str, *, chain: str = "base") -> l
     return out
 
 
-# Labels d'entité connue (exchanges, burn, incidents) -- un wallet qui revient
-# sur plusieurs tokens PARCE QU'IL EST une plateforme d'échange n'est pas un
-# signal de "bon investisseur", juste une infrastructure de marché normale.
-# Confirmé en conditions réelles (21/07) : sans ce filtre, le classement était
-# entièrement dominé par des hot wallets Coinbase/Binance/Kraken/etc.
+# Known entity labels (exchanges, burn, incidents) -- a wallet that recurs
+# across several tokens BECAUSE IT IS an exchange platform isn't a "good
+# investor" signal, just normal market infrastructure. Confirmed in real
+# conditions (21/07): without this filter, the leaderboard was entirely
+# dominated by Coinbase/Binance/Kraken/etc. hot wallets.
 _INFRA_TAG_KEYWORDS = (
     "exchange", "hot wallet", "coinbase", "binance", "kraken", "bybit", "gate",
     "kucoin", "bitvavo", "mexc", "null", "burn", "phish", "hack",
@@ -228,13 +227,13 @@ def _has_infra_tag(tags_concat: str) -> bool:
 
 
 async def list_cross_token_candidates(*, min_token_count: int = 3, chain: str = "base") -> list[dict]:
-    """Adresses (EOA) qui apparaissent comme détenteur notable sur au moins
-    ``min_token_count`` tokens DISTINCTS déjà extraits -- population-wide,
-    contrairement à ``wallet_cross_token_holdings`` qui répond pour UNE
-    adresse déjà connue. C'est la découverte de candidats pour le classement
-    "meilleurs investisseurs" (21/07, demande opérateur) -- exclut
-    systématiquement toute adresse porteuse d'un label d'infrastructure connu
-    (exchange/burn/incident), jamais un signal de conviction individuelle."""
+    """Addresses (EOA) that appear as a notable holder on at least
+    ``min_token_count`` DISTINCT already-extracted tokens -- population-wide,
+    unlike ``wallet_cross_token_holdings`` which answers for ONE already-known
+    address. This is candidate discovery for the "top investors" leaderboard
+    (21/07, operator request) -- systematically excludes any address carrying
+    a known infrastructure label (exchange/burn/incident), never an
+    individual conviction signal."""
     await _ensure_table()
     chain = (chain or "").strip().lower()
     async with aiosqlite.connect(DB_PATH) as db:

@@ -1,34 +1,34 @@
-"""Adaptateur Coinbase Developer Platform (CDP) pour `agent_wallet_pilot.py`.
+"""Coinbase Developer Platform (CDP) adapter for `agent_wallet_pilot.py`.
 
-Construit les fonctions injectables `balance_fn`/`swap_fn` attendues par
-`agent_wallet_pilot.attempt_swap()`, en utilisant le SDK officiel `cdp-sdk`
-(package Python, extra optionnel `aria-core[agent_wallet]`,
+Builds the injectable `balance_fn`/`swap_fn` functions expected by
+`agent_wallet_pilot.attempt_swap()`, using the official `cdp-sdk` SDK
+(Python package, optional extra `aria-core[agent_wallet]`,
 https://pypi.org/project/cdp-sdk/).
 
-Identifiants : `CdpClient()` lit automatiquement `CDP_API_KEY_ID`,
-`CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET` depuis l'environnement (convention du
-SDK) -- ce module ne les lit, ne les stocke et ne les manipule jamais lui-même.
-Aucune clé privée ici (même doctrine que tout le dôme) : le SDK CDP garde la
-clé privée du wallet côté Coinbase (non-custodial, mais gérée par leur
-infrastructure de signature), jamais exposée à ce code.
+Credentials: `CdpClient()` automatically reads `CDP_API_KEY_ID`,
+`CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET` from the environment (SDK
+convention) -- this module never reads, stores, or handles them itself.
+No private key here (same doctrine as the rest of the dome): the CDP SDK
+keeps the wallet's private key on Coinbase's side (non-custodial, but
+managed by their signing infrastructure), never exposed to this code.
 
-Réservé à une exécution où les 3 variables sont posées dans un `.env` local
-(VPS) -- jamais dans une session cloud. Import du package `cdp` fait à
-l'intérieur des fonctions (lazy) pour que le reste du codebase ne casse pas si
-l'extra `agent_wallet` n'est pas installé.
+Reserved for an execution context where the 3 variables are set in a local
+`.env` (VPS) -- never in a cloud session. The `cdp` package import is done
+inside the functions (lazy) so the rest of the codebase doesn't break if
+the `agent_wallet` extra isn't installed.
 
-**Vérifié contre un vrai appel CDP le 16/07 (VPS Principal, norme #157)** :
-`usdc_balance_usd()` a été appelée seule (jamais `execute_swap`) contre le
-wallet dédié réel (`aria-agent-wallet-pilot`, adresse Base mainnet publique
-`0xF04625162b616c5ad9788811b7be8CDd425B37Ef`) -- `cdp.evm.get_or_create_account`
-et `cdp.evm.list_token_balances` répondent sans erreur, `list_token_balances`
-renvoie bien un objet Pydantic `ListTokenBalancesResult` avec un attribut
-`.balances` (forme exactement celle supposée par `_get(result, "balances")`,
-aucune correction nécessaire). Résultat `0.0` confirmé structurellement comme
-un wallet réellement vide (`len(entries) == 0`, pas un artefact du repli
-`or []` sur une réponse mal formée) -- normal, le pilote #10$ n'a pas encore
-été financé. Le chemin `execute_swap` (transaction réelle) reste, lui, non
-exercé -- seule la lecture a été vérifiée à ce stade.
+**Verified against a real CDP call on 07/16 (VPS Principal, norm #157)**:
+`usdc_balance_usd()` was called alone (never `execute_swap`) against the
+real dedicated wallet (`aria-agent-wallet-pilot`, public Base mainnet
+address `0xF04625162b616c5ad9788811b7be8CDd425B37Ef`) -- `cdp.evm.get_or_create_account`
+and `cdp.evm.list_token_balances` respond without error, `list_token_balances`
+does return a Pydantic `ListTokenBalancesResult` object with a `.balances`
+attribute (exactly the shape assumed by `_get(result, "balances")`,
+no correction needed). Result `0.0` confirmed structurally as a genuinely
+empty wallet (`len(entries) == 0`, not an artifact of the `or []` fallback
+on a malformed response) -- expected, the #10$ pilot hadn't been funded yet.
+The `execute_swap` path (real transaction) remains, itself, unexercised --
+only the read path was verified at this stage.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # pilot's own internals) so a log-grep for real-money events catches this too.
 _REAL_MONEY_LOG_PREFIX = "[ARGENT REEL] adaptateur CDP"
 
-# USDC natif sur Base mainnet (6 décimales) -- https://docs.base.org/base-chain/data-analytics/token-list
+# Native USDC on Base mainnet (6 decimals) -- https://docs.base.org/base-chain/data-analytics/token-list
 USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 # 22/07 -- corrige un vrai incident capital reel : lors d'une regeneration de la
 # CDP API key (21/07, following the allowed-IP fix), get_or_create_account no
@@ -86,10 +86,10 @@ async def _get_wallet_account(cdp: Any) -> Any:
     except ApiError as exc:
         if exc.http_code == 404:
             logger.critical(
-                "%s -- WALLET_NAME=%r introuvable sur CDP (ni get_account, ni ce "
-                "que get_or_create_account aurait silencieusement recree) -- "
-                "verifier immediatement le dashboard CDP et corriger WALLET_NAME "
-                "puis REDEPLOYER avant tout nouveau cycle.",
+                "%s -- WALLET_NAME=%r not found on CDP (neither get_account, nor "
+                "what get_or_create_account would have silently recreated) -- "
+                "check the CDP dashboard immediately and fix WALLET_NAME, then "
+                "REDEPLOY before any new cycle.",
                 _REAL_MONEY_LOG_PREFIX, WALLET_NAME,
             )
             raise RuntimeError(
@@ -100,9 +100,9 @@ async def _get_wallet_account(cdp: Any) -> Any:
 
 
 def _get(obj: Any, *names: str) -> Any:
-    """Lit un attribut ou une clé de dict, quel que soit le format renvoyé par
-    le SDK (objet Pydantic ou dict brut selon la version) -- défensif, jamais
-    une supposition unique sur la forme exacte de la réponse."""
+    """Reads an attribute or dict key, whatever the format returned by
+    the SDK (Pydantic object or raw dict depending on version) -- defensive,
+    never a single assumption about the exact shape of the response."""
     for name in names:
         if obj is None:
             return None
@@ -116,10 +116,10 @@ def _get(obj: Any, *names: str) -> Any:
 
 
 async def _fetch_raw_balance_entries(*, network: str) -> list[Any] | None:
-    """Un seul appel CDP partagé (``list_token_balances``) -- réutilisé par
-    ``usdc_balance_usd`` (filtre USDC) et ``list_all_token_balances`` (tout).
-    Renvoie ``None`` si le SDK est absent ou l'appel échoue (fail-closed,
-    jamais une liste vide déguisée en "aucun token détenu")."""
+    """A single shared CDP call (``list_token_balances``) -- reused by
+    ``usdc_balance_usd`` (USDC filter) and ``list_all_token_balances`` (all).
+    Returns ``None`` if the SDK is absent or the call fails (fail-closed,
+    never an empty list disguised as "no token held")."""
     try:
         from cdp import CdpClient
     except ImportError:
@@ -134,9 +134,8 @@ async def _fetch_raw_balance_entries(*, network: str) -> list[Any] | None:
 
 
 def _parse_balance_entry(entry: Any) -> dict[str, Any] | None:
-    """Extrait ``{address, symbol, amount}`` d'une entrée brute CDP -- ``None``
-    si le montant n'est pas exploitable (jamais un 0 inventé sur une donnée
-    illisible)."""
+    """Extracts ``{address, symbol, amount}`` from a raw CDP entry -- ``None``
+    if the amount isn't usable (never an invented 0 on unreadable data)."""
     token = _get(entry, "token")
     address = _get(token, "contract_address", "contractAddress") or ""
     symbol = _get(token, "symbol") or "?"
@@ -153,10 +152,10 @@ def _parse_balance_entry(entry: Any) -> dict[str, Any] | None:
 
 
 async def usdc_balance_usd(*, network: str = "base") -> float | None:
-    """``balance_fn`` injectable -- solde RÉEL en USDC du wallet dédié, traité
-    comme un montant en dollars (1 USDC ~= 1$, aucune conversion de prix
-    nécessaire). Renvoie ``None`` si indisponible -- ``agent_wallet_pilot``
-    traite ça en fail-closed (refuse la transaction plutôt que de deviner)."""
+    """Injectable ``balance_fn`` -- REAL USDC balance of the dedicated wallet,
+    treated as a dollar amount (1 USDC ~= 1$, no price conversion needed).
+    Returns ``None`` if unavailable -- ``agent_wallet_pilot`` handles that
+    fail-closed (refuses the transaction rather than guessing)."""
     entries = await _fetch_raw_balance_entries(network=network)
     if entries is None:
         return None
@@ -167,16 +166,16 @@ async def usdc_balance_usd(*, network: str = "base") -> float | None:
         if parsed["address"].lower() != USDC_BASE_ADDRESS.lower():
             continue
         return parsed["amount"]
-    return 0.0  # USDC jamais trouvé dans les soldes -- wallet vide en USDC, pas une erreur.
+    return 0.0  # USDC never found in balances -- wallet empty in USDC, not an error.
 
 
 async def list_all_token_balances(*, network: str = "base") -> list[dict[str, Any]] | None:
-    """Tous les tokens réellement détenus par le wallet (#204 suite, demande
-    opérateur 16/07 : "je veux tous voir meme les futurs token achetés") --
-    généralise ``usdc_balance_usd`` au lieu de le dupliquer (même appel CDP
-    partagé). Chaque entrée : ``{"address", "symbol", "amount"}``. ``None`` si
-    indisponible (SDK absent/appel échoué), ``[]`` si le wallet est
-    réellement vide -- jamais confondu."""
+    """All tokens actually held by the wallet (#204 follow-up, operator
+    request 16/07: "I want to see everything, even future tokens bought") --
+    generalizes ``usdc_balance_usd`` instead of duplicating it (same shared
+    CDP call). Each entry: ``{"address", "symbol", "amount"}``. ``None`` if
+    unavailable (SDK absent/call failed), ``[]`` if the wallet is genuinely
+    empty -- never conflated."""
     entries = await _fetch_raw_balance_entries(network=network)
     if entries is None:
         return None
@@ -193,22 +192,22 @@ async def execute_swap(
     wallet_address: str,
     slippage_bps: int,
 ) -> dict[str, Any]:
-    """``swap_fn`` injectable -- exécute le swap réel. ``slippage_bps`` est
-    TOUJOURS celui forcé par `agent_wallet_pilot.attempt_swap` (jamais un
-    défaut d'outil, règle absolue 09/07).
+    """Injectable ``swap_fn`` -- executes the real swap. ``slippage_bps`` is
+    ALWAYS the one forced by `agent_wallet_pilot.attempt_swap` (never a tool
+    default, absolute rule 09/07).
 
-    Bug réel corrigé le 17/07 (trouvé par Secondaire en vérifiant AVANT de coder,
-    jamais exercé contre un vrai appel jusqu'ici -- ce chemin reste non exercé en
-    réel, seule la lecture (`usdc_balance_usd`) l'a été le 16/07) : `from_amount`
-    attend un montant en UNITÉS ATOMIQUES (confirmé dans le SDK installé,
-    `cdp/actions/evm/swap/types.py::AccountSwapOptions.from_amount`, "Amount to
-    swap in smallest units") -- passer `str(amount_in_usd)` (ex. "10.5") aurait
-    fait échouer ou mal-interpréter CHAQUE swap réel dès le premier essai.
-    Corrigé avec `cdp.parse_units`, même patron que `transfer_usdc` ci-dessus.
-    Hypothèse assumée (documentée, pas cachée) : `amount_in_usd` est une quantité
-    d'USDC (6 décimales) -- cohérent avec la doctrine du plan (ETH natif comme
-    `token_in` explicitement rejeté pour cette première version, aucun autre
-    `token_in` que USDC n'est envisagé)."""
+    Real bug fixed on 17/07 (found by Secondaire by checking BEFORE coding,
+    never exercised against a real call until now -- this path remains
+    unexercised in real conditions, only the read path (`usdc_balance_usd`)
+    was on 16/07): `from_amount` expects an amount in ATOMIC UNITS (confirmed
+    in the installed SDK, `cdp/actions/evm/swap/types.py::AccountSwapOptions.from_amount`,
+    "Amount to swap in smallest units") -- passing `str(amount_in_usd)` (e.g.
+    "10.5") would have made EVERY real swap fail or be misinterpreted from
+    the first attempt. Fixed with `cdp.parse_units`, same pattern as
+    `transfer_usdc` below. Assumed hypothesis (documented, not hidden):
+    `amount_in_usd` is a quantity of USDC (6 decimals) -- consistent with the
+    plan's doctrine (native ETH as `token_in` explicitly rejected for this
+    first version, no `token_in` other than USDC is considered)."""
     from cdp import CdpClient, parse_units
     from cdp.actions.evm.swap import AccountSwapOptions
 
@@ -234,18 +233,18 @@ async def execute_swap(
 
 
 async def transfer_usdc(*, chain: str, to_address: str, amount_usd: float) -> dict[str, Any]:
-    """``transfer_fn`` injectable pour `agent_wallet_pilot.attempt_transfer`
-    (exception nommée #4, 16/07) -- transfère de l'USDC réel vers ``to_address``.
+    """Injectable ``transfer_fn`` for `agent_wallet_pilot.attempt_transfer`
+    (named exception #4, 16/07) -- transfers real USDC to ``to_address``.
 
-    API vérifiée dans la doc officielle CDP SDK avant d'écrire cette fonction
-    (jamais devinée) : ``account.transfer(to=, amount=, token="usdc", network=)``,
-    montant en unités atomiques via ``cdp.parse_units(str(montant), 6)`` (USDC =
-    6 décimales) -- https://docs.cdp.coinbase.com/server-wallets/v2/using-the-wallet-api/transfers.
+    API verified against the official CDP SDK doc before writing this
+    function (never guessed): ``account.transfer(to=, amount=, token="usdc", network=)``,
+    amount in atomic units via ``cdp.parse_units(str(amount), 6)`` (USDC =
+    6 decimals) -- https://docs.cdp.coinbase.com/server-wallets/v2/using-the-wallet-api/transfers.
 
-    ``to_address`` n'est JAMAIS un paramètre libre côté appelant réel : c'est
-    `agent_wallet_pilot.ALLOWED_TRANSFER_ADDRESS` (allowlist codée en dur, vérifiée
-    AVANT que cette fonction ne soit jamais appelée) -- ce module ne revérifie pas
-    l'allowlist lui-même, il exécute ce qu'on lui donne, la garde est en amont."""
+    ``to_address`` is NEVER a free parameter on the real caller side: it's
+    `agent_wallet_pilot.ALLOWED_TRANSFER_ADDRESS` (hardcoded allowlist, checked
+    BEFORE this function is ever called) -- this module doesn't re-check the
+    allowlist itself, it executes what it's given, the guard sits upstream."""
     from cdp import CdpClient, parse_units
 
     async with CdpClient() as cdp:

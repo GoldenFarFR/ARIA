@@ -84,7 +84,7 @@ class HoldingStructure(BaseModel):
 
 
 class ZHCAgentMessage(BaseModel):
-    """Protocole inter-agents inspiré ZHC — pour communication avec JUNO et pairs."""
+    """ZHC-inspired inter-agent protocol — for communication with JUNO and peers."""
     protocol_version: str = "zhc-a2a/1.0"
     from_agent: str = "ARIA@AriaVanguardZHC"
     to_agent: str = "JUNO@ZHC"

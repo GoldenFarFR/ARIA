@@ -1,4 +1,4 @@
-"""Skill /calibrate — entraînement épistémique opérateur."""
+"""Skill /calibrate — operator epistemic training."""
 
 from __future__ import annotations
 

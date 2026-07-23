@@ -18,22 +18,22 @@ def get_settings() -> Any:
 
 
 class _SettingsProxy:
-    """Forwarding proxy — jamais de `__dict__` propre à elle, sauf exception ci-dessous.
+    """Forwarding proxy — never has a `__dict__` of its own, except for the exception below.
 
-    Sans `__setattr__`/`__delattr__` explicites, un `setattr(settings, ...)` (ex.
-    `monkeypatch.setattr(settings, "x", v)`, très répandu dans la suite de tests) écrirait
-    sur l'instance proxy elle-même plutôt que sur l'objet settings réel — un attribut qui
-    resterait alors bloqué sur cette valeur pour toute la session, masquant `__getattr__`
-    (donc l'objet settings frais reconfiguré par chaque test) même après le "undo" de
-    monkeypatch, qui restaure en réaffectant (jamais en supprimant). Forwarder l'écriture
-    comme la lecture élimine cette fuite d'état à la racine pour les vrais champs.
+    Without explicit `__setattr__`/`__delattr__`, a `setattr(settings, ...)` (e.g.
+    `monkeypatch.setattr(settings, "x", v)`, very common in the test suite) would write
+    onto the proxy instance itself rather than the real settings object — an attribute that
+    would then stay stuck at that value for the whole session, shadowing `__getattr__`
+    (i.e. the fresh settings object reconfigured by each test) even after monkeypatch's
+    "undo", which restores by reassigning (never by deleting). Forwarding writes just
+    like reads eliminates this state leak at the root for real fields.
 
-    Repli local (`object.__setattr__`) uniquement quand la cible refuse l'écriture par
-    `AttributeError` — cas des propriétés calculées en lecture seule (ex. `admin_ids`,
-    dérivée de `telegram_admin_ids`) que de nombreux tests sur-écrivent volontairement via
-    `monkeypatch.setattr(settings, "admin_ids", ...)`, seul moyen pratique de contrôler une
-    property pydantic sans setter. Ce repli reproduit le comportement déjà existant (donc
-    aucune régression) pour ce sous-ensemble précis, jamais pour un champ réel.
+    Local fallback (`object.__setattr__`) only when the target refuses the write with an
+    `AttributeError` — the case of computed read-only properties (e.g. `admin_ids`,
+    derived from `telegram_admin_ids`) that many tests deliberately override via
+    `monkeypatch.setattr(settings, "admin_ids", ...)`, the only practical way to control a
+    pydantic property without a setter. This fallback reproduces the pre-existing behavior
+    (so no regression) for this specific subset, never for a real field.
     """
 
     def __getattr__(self, name: str) -> Any:

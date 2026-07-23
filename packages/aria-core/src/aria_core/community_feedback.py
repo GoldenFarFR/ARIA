@@ -1,4 +1,4 @@
-"""Feedback communauté site — collecte, triage, remerciement X (aucune délégation autonome)."""
+"""Site community feedback — collection, triage, X thank-you (no autonomous delegation)."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def is_roadmap_partnership_question(message: str) -> bool:
 
 
 def operator_roadmap_reply(*, lang: str = "fr") -> str:
-    """Opérateur — politique ZHC locale, sans LLM probabiliste ni web."""
+    """Operator — local ZHC policy, no probabilistic LLM nor web."""
     pair = personal_reply_pair_on_feedback(
         "partenariats roadmap revenus futur?",
         lang=lang,
@@ -121,8 +121,8 @@ def _normalize_handle(handle: str) -> str:
 
 def trusted_feedback_handles() -> frozenset[str]:
     """
-    Handles de confiance (champ X sur le site) — pas de lien Telegram.
-    Opérateur : tweets manuels via /x sur Telegram ou autre canal.
+    Trusted handles (X field on the site) — no Telegram link.
+    Operator: manual tweets via /x on Telegram or another channel.
     """
     handles: set[str] = set()
     raw = os.getenv("COMMUNITY_FEEDBACK_TRUSTED_HANDLES", "GoldenFarFR")
@@ -139,7 +139,7 @@ def is_trusted_feedback_handle(handle: str) -> bool:
 
 
 def trusted_instant_x_enabled() -> bool:
-    """Handles de confiance (opérateur) — tweet X immédiat, sans file 4 h."""
+    """Trusted handles (operator) — immediate X tweet, no 4h queue."""
     return os.getenv("COMMUNITY_FEEDBACK_TRUSTED_INSTANT_X", "true").lower() not in (
         "false",
         "0",
@@ -148,7 +148,7 @@ def trusted_instant_x_enabled() -> bool:
 
 
 def trusted_unrestricted_enabled() -> bool:
-    """Opérateur (GoldenFarFR…) — pas de modération score/spam/file X."""
+    """Operator (GoldenFarFR...) — no score/spam/X-queue moderation."""
     return os.getenv("COMMUNITY_FEEDBACK_TRUSTED_UNRESTRICTED", "true").lower() not in (
         "false",
         "0",
@@ -157,12 +157,12 @@ def trusted_unrestricted_enabled() -> bool:
 
 
 def is_trusted_operator_publish(handle: str) -> bool:
-    """Handle de confiance avec publication libre (site + @Aria_ZHC)."""
+    """Trusted handle with free publishing (site + @Aria_ZHC)."""
     return is_trusted_feedback_handle(handle) and trusted_unrestricted_enabled()
 
 
 def _feedback_has_spam_signal(text: str) -> bool:
-    """Spam réel — pas les mentions du domaine holding."""
+    """Real spam — not mentions of the holding's domain."""
     t = (text or "").strip()
     if not t:
         return True
@@ -201,7 +201,7 @@ def x_cooldown_hours() -> float:
 
 
 def x_tweet_min_score() -> int:
-    """Seuil minimum pour publier un avis sur X (plus strict que le triage site)."""
+    """Minimum threshold to post a review on X (stricter than site triage)."""
     raw = os.getenv("COMMUNITY_FEEDBACK_X_MIN_SCORE", "").strip()
     if not raw:
         return X_TWEET_MIN_SCORE
@@ -218,8 +218,8 @@ def assess_feedback_publishable_on_x(
     handle: str = "",
 ) -> tuple[bool, str]:
     """
-    Filtre avant tweet @Aria_ZHC — pas de vulgarité, spam, ni avis vides.
-    Handle de confiance (ex. GoldenFarFR) : assouplissement si contenu Vanguard.
+    Filter before tweeting on @Aria_ZHC — no vulgarity, spam, or empty reviews.
+    Trusted handle (e.g. GoldenFarFR): relaxed if Vanguard content.
     """
     t = (text or "").strip()
     if _INTERNAL_TEST_RE.search(t):
@@ -249,7 +249,7 @@ def assess_feedback_publishable_on_x(
 
 
 def queue_score_threshold() -> int:
-    """Seuil de mise en file (remerciement X) — monte via COMMUNITY_FEEDBACK_QUEUE_SCORE quand Vanguard grossit."""
+    """Queue threshold (X thank-you) — raised via COMMUNITY_FEEDBACK_QUEUE_SCORE as Vanguard grows."""
     raw = os.getenv("COMMUNITY_FEEDBACK_QUEUE_SCORE", "").strip()
     if not raw:
         return DEFAULT_QUEUE_SCORE
@@ -266,7 +266,7 @@ def _feedback_path() -> Path:
 
 
 def score_feedback(text: str) -> int:
-    """Score 0–100 — heuristique locale, pas de LLM obligatoire."""
+    """Score 0-100 — local heuristic, no LLM required."""
     t = (text or "").strip()
     if len(t) < SPAM_MAX_LEN:
         return 0
@@ -313,14 +313,14 @@ _X_TWEET_MIN_LEN = 15
 
 @dataclass(frozen=True)
 class FeedbackReplyPair:
-    """Réponse fil X — 2 phrases (tweet reply sous la citation)."""
+    """X thread reply — 2 sentences (tweet reply under the quote)."""
 
     primary: str
     followup: str
 
 
 def personal_reply_pair_on_feedback(text: str, *, lang: str = "fr") -> FeedbackReplyPair:
-    """Réponse 2 phrases — heuristique locale, ancrée sur le contenu."""
+    """2-sentence reply — local heuristic, grounded on the content."""
     t = (text or "").strip()
     if _ROADMAP_RE.search(t) or t.count("?") >= 2:
         if lang == "fr":
@@ -414,7 +414,7 @@ def personal_reply_pair_on_feedback(text: str, *, lang: str = "fr") -> FeedbackR
 
 
 def personal_take_on_feedback(text: str, *, lang: str = "fr") -> str:
-    """Compat — première phrase de la paire."""
+    """Compat — first sentence of the pair."""
     return personal_reply_pair_on_feedback(text, lang=lang).primary
 
 
@@ -451,7 +451,7 @@ async def compose_feedback_reply_pair(
     *,
     original: str = "",
 ) -> FeedbackReplyPair:
-    """Réponse fil X — 2 phrases (LLM si dispo, sinon heuristique)."""
+    """X thread reply — 2 sentences (LLM if available, otherwise heuristic)."""
     from aria_core.llm import chat_with_context, is_llm_configured
     from aria_core.x_publication_policy import policy_rules_for_llm
     from aria_core.x_voice import human_voice_rules_for_llm, strip_obvious_ai_phrases
@@ -517,7 +517,7 @@ async def compose_personal_reply_to_feedback(
     *,
     original: str = "",
 ) -> str:
-    """Compat — première phrase de la paire."""
+    """Compat — first sentence of the pair."""
     pair = await compose_feedback_reply_pair(text_en, original=original)
     return pair.primary
 
@@ -530,7 +530,7 @@ def _short_excerpt(text: str, max_len: int = 72) -> str:
 
 
 def _condense_quote_sync(text: str, max_weight: int) -> str:
-    """Réduit un avis long pour X — phrases complètes avant troncature aveugle."""
+    """Shrinks a long review for X — complete sentences before blind truncation."""
     clean = re.sub(r"\s+", " ", (text or "").strip())
     if not clean:
         return ""
@@ -558,7 +558,7 @@ def _condense_quote_sync(text: str, max_weight: int) -> str:
 
 
 async def _llm_summarize_quote_for_x(text: str, max_weight: int) -> str | None:
-    """Résumé LLM quand l'avis site (≤500 chars) dépasse le budget citation tweet."""
+    """LLM summary when the site review (<=500 chars) exceeds the tweet quote budget."""
     from aria_core.llm import chat_with_context, is_llm_configured
 
     if not is_llm_configured():
@@ -603,7 +603,7 @@ def _is_likely_english(text: str) -> bool:
 
 
 async def _llm_polish_quote_for_x(text: str) -> str | None:
-    """Traduction fidèle + correction orthographe/grammaire — sens inchangé."""
+    """Faithful translation + spelling/grammar fix — meaning unchanged."""
     from aria_core.llm import chat_with_context, is_llm_configured
 
     if not is_llm_configured():
@@ -659,16 +659,16 @@ async def _llm_fix_english_typos(text: str) -> str | None:
 
 async def prepare_feedback_quote_for_x(text: str) -> tuple[str, bool]:
     """
-    Citation tweet @Aria_ZHC — politique fixe :
-    - toujours en anglais ;
-    - fautes d'orthographe/grammaire du visiteur corrigées (sens inchangé).
+    @Aria_ZHC tweet quote — fixed policy:
+    - always in English;
+    - visitor spelling/grammar mistakes corrected (meaning unchanged).
     Returns (quote_en, was_transformed).
     """
     clean = (text or "").strip()
     if not clean:
         return "", False
 
-    # Anglais déjà lisible — corriger typos seulement (évite résumés LLM type « User praises… »).
+    # Already readable English — only fix typos (avoids LLM summaries like "User praises...").
     if _is_likely_english(clean):
         fixed = await _llm_fix_english_typos(clean)
         if fixed and len(fixed) >= 3:
@@ -693,7 +693,7 @@ async def prepare_feedback_quote_for_x(text: str) -> tuple[str, bool]:
 
 
 async def translate_to_english_for_x(text: str) -> tuple[str, bool]:
-    """Alias — prépare la citation X (traduction + corrections)."""
+    """Alias — prepares the X quote (translation + corrections)."""
     return await prepare_feedback_quote_for_x(text)
 
 
@@ -820,7 +820,7 @@ def _quote_tweet_prefixes(handle: str) -> list[str]:
 
 
 def _best_fill_tweet(candidates: list[str], *, min_weight: int | None = None) -> str:
-    """Choisit le tweet le plus long qui tient, idéalement ≥ min_weight (70 % de 280)."""
+    """Picks the longest tweet that fits, ideally >= min_weight (70% of 280)."""
     target = min_weight if min_weight is not None else feedback_x_min_tweet_weight()
     best = ""
     best_w = 0
@@ -837,7 +837,7 @@ def _best_fill_tweet(candidates: list[str], *, min_weight: int | None = None) ->
 
 
 def build_feedback_quote_tweet(text: str, *, handle: str = "") -> str:
-    """Tweet 1 du fil — citation fidèle, sans lien site, remplissage ~70 %."""
+    """Thread tweet 1 — faithful quote, no site link, ~70% fill."""
     quote_full = re.sub(r"\s+", " ", (text or "").strip())
     if not quote_full:
         return "✦"
@@ -867,7 +867,7 @@ def build_feedback_quote_tweet(text: str, *, handle: str = "") -> str:
 
 
 def build_feedback_followup_tweet(pair: FeedbackReplyPair) -> str:
-    """Tweet 2 du fil — ton humain, 2 phrases aérées, ~70 % du budget."""
+    """Thread tweet 2 — human tone, 2 airy sentences, ~70% of budget."""
     primary = re.sub(r"\s+", " ", (pair.primary or "").strip())
     followup = re.sub(r"\s+", " ", (pair.followup or "").strip())
     if not primary:
@@ -899,7 +899,7 @@ def build_merged_feedback_tweet(
     personal: str = "",
     reply_pair: FeedbackReplyPair | None = None,
 ) -> str:
-    """Tweet citation — 1 avis ou fusion ; réponse en reply si fil actif."""
+    """Quote tweet — 1 review or merged; reply as a reply if thread is active."""
     if len(quotes_en) <= 1 and feedback_x_thread_reply_enabled():
         return build_feedback_quote_tweet(
             quotes_en[0] if quotes_en else "",
@@ -993,7 +993,7 @@ async def _flush_x_queue_bucket(key: str, bucket: dict[str, Any]) -> dict[str, A
 
 
 async def flush_due_community_x_tweets() -> list[dict[str, Any]]:
-    """Publie les files d'attente X arrivées à échéance (cooldown 4 h)."""
+    """Posts due X queues (4h cooldown)."""
     data = _load_x_queue()
     results: list[dict[str, Any]] = []
     for key in _due_bucket_keys(data):
@@ -1013,7 +1013,7 @@ def build_feedback_thanks_tweet(
     handle: str = "",
     personal: str = "",
 ) -> str:
-    """Tweet commu — citation de l'avis + réponse concrète (sans template « → »)."""
+    """Community tweet — review quote + concrete reply (no "->" template)."""
     quote_full = _condense_quote_sync(
         re.sub(r"\s+", " ", (text or "").strip()),
         FEEDBACK_X_QUOTE_MAX_WEIGHT,
@@ -1050,7 +1050,7 @@ async def maybe_tweet_community_feedback(
     score: int,
     lang: str = "fr",
 ) -> dict[str, Any]:
-    """File X 4 h par handle — fusion des avis multiples, modération stricte."""
+    """4h X queue per handle — merges multiple reviews, strict moderation."""
     publishable, block_reason = assess_feedback_publishable_on_x(
         text,
         score,
@@ -1067,7 +1067,7 @@ async def maybe_tweet_community_feedback(
     if not enabled:
         return {"status": "skipped", "reason": "disabled"}
 
-    # Publier d'abord les files arrivées à échéance (toute la queue).
+    # Post due queues first (the whole queue).
     await flush_due_community_x_tweets()
 
     instant_x = is_trusted_operator_publish(handle) or (
@@ -1173,7 +1173,8 @@ async def submit_community_feedback(
     auto_queue: bool = True,
 ) -> dict[str, Any]:
     """
-    Enregistre un avis public, trie, et file l'ouvrier si le score dépasse le seuil.
+    Records a public review, triages it, and queues the worker if the score
+    exceeds the threshold.
     """
     clean = (text or "").strip()[:FEEDBACK_SITE_MAX_CHARS]
     operator = is_trusted_operator_publish(handle)

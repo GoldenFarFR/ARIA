@@ -5,9 +5,9 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-# === RÈGLES STRICTES ACP (barrières fortes — plus dures que local/Telegram) ===
-# L'agent sur ACP se concentre sur : workflows réels + marché + améliorations + audits opérateur.
-# Utilisé dans market intel, templates, status, prepare, provider, etc.
+# === STRICT ACP RULES (strong barriers — stricter than local/Telegram) ===
+# The agent on ACP focuses on: real workflows + market + improvements + operator audits.
+# Used in market intel, templates, status, prepare, provider, etc.
 
 ACP_STRICT_RULES_FR = (
     "RÈGLES ACP STRICTES :\n"

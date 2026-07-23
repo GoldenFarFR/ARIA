@@ -1,4 +1,4 @@
-"""Compteur tokens LLM — journal JSONL mensuel (agrégation par jour/provider)."""
+"""LLM token counter — monthly JSONL journal (aggregated by day/provider)."""
 
 from __future__ import annotations
 
@@ -48,9 +48,9 @@ def get_chat_usage_totals() -> dict[str, int]:
 
 
 def mark_fallback_used(provider: str) -> None:
-    """Note qu'une route de secours (pas la route primaire) a répondu pour ce tour de chat
-    (#135). No-op hors d'un tour suivi par begin_chat_usage_tracking — même patron que
-    _accumulate_chat_usage ci-dessous."""
+    """Notes that a fallback route (not the primary route) answered for this
+    chat turn (#135). No-op outside a turn tracked by begin_chat_usage_tracking
+    — same pattern as _accumulate_chat_usage below."""
     state = _chat_fallback_ctx.get()
     if state is None:
         return
@@ -99,7 +99,7 @@ def parse_usage_from_response(data: dict[str, Any]) -> dict[str, int]:
 
 
 def estimate_tokens_from_text(*parts: str) -> int:
-    """Fallback grossier (~4 chars/token) quand l'API ne renvoie pas usage."""
+    """Rough fallback (~4 chars/token) when the API doesn't return usage."""
     text = " ".join(p for p in parts if p)
     return max(1, len(text) // 4)
 
@@ -119,12 +119,13 @@ def record_llm_usage(
     latency_ms: float | None = None,
     at: datetime | None = None,
 ) -> None:
-    """Append une ligne dans data/llm-usage/YYYY-MM.jsonl.
+    """Appends a line to data/llm-usage/YYYY-MM.jsonl.
 
-    ``latency_ms`` (17/07, demande opérateur -- arbitrer Grok vs Gemini sur des données
-    RÉELLES plutôt qu'une supposition) : temps de réponse mesuré côté appelant (envoi de
-    la requête jusqu'à réception de la réponse HTTP), jamais estimé. Absent -> pas de
-    champ écrit (dégradation honnête, jamais une valeur inventée)."""
+    ``latency_ms`` (17/07, operator request -- arbitrate Grok vs. Gemini on
+    REAL data rather than a guess): response time measured on the caller side
+    (sending the request until the HTTP response is received), never
+    estimated. Absent -> no field written (honest degradation, never a made-up
+    value)."""
     try:
         now = at or datetime.now(timezone.utc)
         day = now.strftime("%Y-%m-%d")
@@ -184,7 +185,7 @@ def _iter_rows(month: str | None = None) -> list[dict[str, Any]]:
 
 
 def is_paid_provider(provider: str) -> bool:
-    """Provider cloud facturé (≠ Ollama local)."""
+    """Billed cloud provider (as opposed to local Ollama)."""
     return (provider or "").strip().lower() not in _FREE_PROVIDERS
 
 
@@ -199,8 +200,8 @@ def _format_token_count(value: int) -> str:
 
 def summarize_paid_usage(*, month: str | None = None, lifetime: bool = False) -> dict[str, Any]:
     """
-    Agrège uniquement les appels cloud payants (grok, groq, xai, …).
-    lifetime=True → tous les mois dans data/llm-usage/.
+    Aggregates only paid cloud calls (grok, groq, xai, …).
+    lifetime=True → all months in data/llm-usage/.
     """
     if lifetime:
         month_key = "lifetime"
@@ -263,7 +264,7 @@ def _is_grok_build_row(row: dict[str, Any]) -> bool:
 
 
 def summarize_grok_build_usage(*, month: str | None = None, lifetime: bool = False) -> dict[str, Any]:
-    """Tokens Grok Build / xAI uniquement (≠ Groq, ≠ Cursor)."""
+    """Grok Build / xAI tokens only (not Groq, not Cursor)."""
     if lifetime:
         month_key = "lifetime"
         rows = [r for r in _iter_rows() if _is_grok_build_row(r)]
@@ -306,7 +307,7 @@ def format_grok_build_dashboard(*, month: str | None = None, lang: str = "fr") -
 
 
 def paid_usage_snapshot(*, month: str | None = None) -> dict[str, Any]:
-    """Mois courant + cumul lifetime — pour dashboard KART (0 appel API)."""
+    """Current month + lifetime total — for the KART dashboard (0 API calls)."""
     month_key = month or datetime.now(timezone.utc).strftime("%Y-%m")
     month_sum = summarize_paid_usage(month=month_key)
     life_sum = summarize_paid_usage(lifetime=True)
@@ -321,13 +322,13 @@ def paid_usage_snapshot(*, month: str | None = None) -> dict[str, Any]:
 
 
 def format_paid_usage_dashboard(*, month: str | None = None, lang: str = "fr") -> str:
-    """Rétrocompat KART — alias Grok Build (xAI)."""
+    """KART backward compat — alias for Grok Build (xAI)."""
     return format_grok_build_dashboard(month=month, lang=lang)
 
 
 def summarize_usage(*, month: str | None = None) -> dict[str, Any]:
     """
-    Agrège tokens par mois (défaut: mois courant UTC).
+    Aggregates tokens by month (default: current UTC month).
     month format: YYYY-MM
     """
     month = month or datetime.now(timezone.utc).strftime("%Y-%m")

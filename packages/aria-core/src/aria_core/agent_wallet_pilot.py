@@ -1,48 +1,48 @@
-"""Pilote agent-wallet réel ~10-15$ (Coinbase Agentic Wallet) — exécution SEULE,
-sans clic Telegram par transaction. Exception nommée, décidée explicitement par
-l'opérateur (16/07) sur la question ouverte de `docs/pilote-agent-wallet-10usd.md`
-§4 : le modèle "plafond + wallet isolé + swap uniquement, vérifié après coup" est
-accepté pour CE pilote précisément borné — jamais une dérogation silencieuse à la
-règle absolue de validation humaine sur le capital réel, qui reste inchangée
-partout ailleurs (mainnet Vanguard ZHC, tout futur palier au-delà de ce pilote).
+"""Real ~$10-15 agent-wallet pilot (Coinbase Agentic Wallet) — executes ALONE,
+no Telegram click per transaction. Named exception, explicitly decided by the
+operator (16/07) on the open question from `docs/pilote-agent-wallet-10usd.md`
+§4: the "hard cap + isolated wallet + swap only, verified after the fact" model
+is accepted for THIS precisely-bounded pilot — never a silent exemption from the
+absolute rule of human validation on real capital, which remains unchanged
+everywhere else (Vanguard ZHC mainnet, any future tier beyond this pilot).
 
-Garde-fous non négociables (doc §3, tous appliqués ici) :
-  1. Plafond dur vérifié contre le solde RÉEL du wallet avant chaque tentative
-     (jamais un réglage UI de l'outil) -- fail-closed si le solde est indisponible.
-  2. Aucune capacité de transfert/retrait GÉNÉRIQUE -- voir §9 ci-dessous pour
-     l'exception nommée du 16/07 qui ajoute UN SEUL transfert autorisé.
-  3. Slippage TOUJOURS forcé à `MAX_SLIPPAGE_BPS` (10%), quel que soit ce que
-     l'appelant fournit -- jamais la valeur par défaut d'un outil externe.
-  4. Kill-switch `/stop` (`outgoing_pause.is_paused(strict=True)`) vérifié avant
-     CHAQUE tentative -- pas de mécanisme parallèle.
-  5. Structurellement séparé de `wallet_guard.py` -- aucun import, aucun partage
-     d'état. Même doctrine que `sepolia_autonomous.py`/`bonding_trade_log.py`.
-  6. Journalisation complète via `agent_wallet_log.record_transaction` -- chaque
-     tentative (ok/failed/blocked), jamais seulement les succès.
-  7. Gate dédié, OFF par défaut (`ARIA_AGENT_WALLET_PILOT_ENABLED`) -- séparé des
-     flags Sepolia/Arena/wallet_guard existants.
-  8. Wallet dédié et isolé -- ce module ne connaît qu'une adresse/un solde fournis
-     par l'appelant, jamais le wallet Vanguard ZHC principal.
+Non-negotiable guardrails (doc §3, all applied here):
+  1. Hard cap checked against the wallet's REAL balance before every attempt
+     (never a tool's UI setting) -- fail-closed if the balance is unavailable.
+  2. No GENERIC transfer/withdrawal capability -- see §9 below for the named
+     exception from 16/07 that adds ONE SINGLE authorized transfer.
+  3. Slippage ALWAYS forced to `MAX_SLIPPAGE_BPS` (10%), whatever the caller
+     supplies -- never an external tool's default value.
+  4. Kill-switch `/stop` (`outgoing_pause.is_paused(strict=True)`) checked before
+     EVERY attempt -- no parallel mechanism.
+  5. Structurally separate from `wallet_guard.py` -- no import, no shared
+     state. Same doctrine as `sepolia_autonomous.py`/`bonding_trade_log.py`.
+  6. Complete logging via `agent_wallet_log.record_transaction` -- every
+     attempt (ok/failed/blocked), never only the successes.
+  7. Dedicated gate, OFF by default (`ARIA_AGENT_WALLET_PILOT_ENABLED`) -- separate
+     from the existing Sepolia/Arena/wallet_guard flags.
+  8. Dedicated, isolated wallet -- this module only knows an address/balance
+     supplied by the caller, never the main Vanguard ZHC wallet.
 
-  9. **Exception nommée #4 (transfert, décision opérateur explicite, 16/07)** :
-     le pilote gagne UNE capacité de transfert USDC, structurellement bornée pour
-     ne jamais devenir un vecteur de vol générique :
-       - Adresse de destination UNIQUE, codée EN DUR ci-dessous
-         (`ALLOWED_TRANSFER_ADDRESS`) -- jamais un paramètre libre, jamais lue
-         depuis une variable d'environnement modifiable sans revue de code.
-         Tout appel vers une autre adresse est bloqué et journalisé.
-       - Gate SUPPLÉMENTAIRE et distinct (`ARIA_AGENT_WALLET_TRANSFER_ENABLED`),
-         OFF par défaut, EN PLUS du gate pilote global -- un transfert exige les
-         DEUX flags actifs, jamais un seul.
-       - Même plafond dur `MAX_TRANSACTION_USD`, même vérification de solde réel,
-         même kill-switch, même journalisation systématique que le swap.
-       - Aucune fonction de retrait vers une adresse d'exchange/CEX -- seulement
-         ce wallet précis, choisi et communiqué explicitement par l'opérateur.
+  9. **Named exception #4 (transfer, explicit operator decision, 16/07)**:
+     the pilot gains ONE USDC transfer capability, structurally bounded so it
+     can never become a generic theft vector:
+       - SINGLE destination address, HARD-CODED below
+         (`ALLOWED_TRANSFER_ADDRESS`) -- never a free parameter, never read
+         from an environment variable that could be changed without code review.
+         Any call to another address is blocked and logged.
+       - ADDITIONAL, distinct gate (`ARIA_AGENT_WALLET_TRANSFER_ENABLED`),
+         OFF by default, ON TOP OF the global pilot gate -- a transfer requires
+         BOTH flags active, never just one.
+       - Same hard cap `MAX_TRANSACTION_USD`, same real-balance check,
+         same kill-switch, same systematic logging as the swap.
+       - No withdrawal function to an exchange/CEX address -- only
+         this specific wallet, chosen and explicitly communicated by the operator.
 
-Aucune clé privée ici (même doctrine que tout le reste du dôme) : l'exécution
-réelle (`swap_fn`/`transfer_fn`) est injectée par l'appelant -- le vrai appel au
-SDK CDP tourne côté VPS/opérateur, jamais dans ce module ni dans une session
-cloud.
+No private key here (same doctrine as the rest of the dome): the actual
+execution (`swap_fn`/`transfer_fn`) is injected by the caller -- the real CDP
+SDK call runs on the VPS/operator side, never in this module nor in a cloud
+session.
 """
 from __future__ import annotations
 
@@ -57,28 +57,28 @@ logger = logging.getLogger(__name__)
 
 WALLET_PRODUCT = "coinbase_agentic_wallet"
 MAX_TRANSACTION_USD = 15.0
-MAX_SLIPPAGE_BPS = 1000  # 10% -- règle absolue, jamais la valeur par défaut d'un outil.
+MAX_SLIPPAGE_BPS = 1000  # 10% -- absolute rule, never a tool's default value.
 
-# 20/07 -- extraction directe de la thèse qu'ARIA a écrite elle-même (aria-brain,
-# chapitre 1) : « la tentation la plus dangereuse... c'est de confondre un résultat
-# simulé avec un résultat réel parce que les deux ressemblent à la même ligne dans
-# un log ». Audit confirmé : les logs de CE module (seul chemin qui touche du vrai
-# capital) ne disaient jamais "réel" nulle part -- indiscernables d'un module de
-# test. Préfixe systématique sur CHAQUE ligne de log de ce fichier, jamais sur
-# paper_trader.py (qui a déjà son propre marqueur "🧪 SIMULATION").
-_REAL_MONEY_LOG_PREFIX = "[ARGENT RÉEL] pilote agent-wallet"
+# 20/07 -- direct extraction of a thesis ARIA wrote herself (aria-brain,
+# chapter 1): "the most dangerous temptation... is to confuse a simulated result
+# with a real one because both look like the same line in a log." Audit
+# confirmed: the logs of THIS module (the only path that touches real
+# capital) never said "real" anywhere -- indistinguishable from a test module.
+# Systematic prefix on EVERY log line of this file, never on
+# paper_trader.py (which already has its own "🧪 SIMULATION" marker).
+_REAL_MONEY_LOG_PREFIX = "[REAL MONEY] agent-wallet pilot"
 
-# Exception nommée #4 (16/07) -- SEULE adresse vers laquelle un transfert peut être
-# tenté. Codée en dur (pas une variable d'environnement) : tout changement exige un
-# commit revu, jamais un simple réglage `.env` modifiable sans trace.
+# Named exception #4 (16/07) -- the ONLY address a transfer can be attempted to.
+# Hard-coded (not an environment variable): any change requires a reviewed
+# commit, never a simple `.env` setting changeable without a trace.
 #
-# CHANGÉE le 23/07 (décision opérateur explicite) : l'ancienne adresse
-# (0x33783cCb570Cb279C25F836806B5c4C3C8309777) était en réalité une Tangem
-# personnelle, entre-temps réutilisée comme owner du Smart Account
-# `aria-smart-st` (cf. docs/HANDOFF_COINBASE_CDP.md) -- la nouvelle destination
-# est le wallet CDP `aria-wallet-transfert` (ex-"aria-agent-wallet-pilot",
-# renommé le 23/07, cf. même HANDOFF), un wallet dédié distinct de tout autre
-# wallet actif du dôme.
+# CHANGED on 23/07 (explicit operator decision): the old address
+# (0x33783cCb570Cb279C25F836806B5c4C3C8309777) was actually a personal Tangem,
+# meanwhile reused as owner of the Smart Account
+# `aria-smart-st` (cf. docs/HANDOFF_COINBASE_CDP.md) -- the new destination
+# is the CDP wallet `aria-wallet-transfert` (formerly "aria-agent-wallet-pilot",
+# renamed on 23/07, cf. same HANDOFF), a dedicated wallet distinct from any
+# other active wallet in the dome.
 ALLOWED_TRANSFER_ADDRESS = "0x584b2B35dac347B2317da0d21b95063de51257Ef"
 
 BalanceFn = Callable[[], Awaitable[float | None]]
@@ -87,15 +87,15 @@ TransferFn = Callable[..., Awaitable[dict[str, Any]]]
 
 
 def agent_wallet_transfer_enabled() -> bool:
-    """Gate DISTINCT du gate pilote global -- un transfert exige les DEUX actifs
-    (§9, exception nommée du 16/07). Fail-closed tant que non posé explicitement."""
+    """Gate DISTINCT from the global pilot gate -- a transfer requires BOTH active
+    (§9, named exception from 16/07). Fail-closed until explicitly set."""
     return os.environ.get("ARIA_AGENT_WALLET_TRANSFER_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
 
 def agent_wallet_pilot_enabled() -> bool:
-    """Gate dédié, OFF par défaut -- fail-closed tant que non posé explicitement."""
+    """Dedicated gate, OFF by default -- fail-closed until explicitly set."""
     return os.environ.get("ARIA_AGENT_WALLET_PILOT_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -127,15 +127,15 @@ async def attempt_swap(
     swap_fn: SwapFn,
     slippage_bps: int | None = None,
 ) -> SwapAttemptResult:
-    """Tente un swap borné. Ordre strict (doc §5) : kill-switch -> plafond (solde
-    réel) -> slippage forcé -> exécution -> journalisation systématique.
+    """Attempt a bounded swap. Strict order (doc §5): kill-switch -> cap (real
+    balance) -> forced slippage -> execution -> systematic logging.
 
-    ``slippage_bps`` n'est accepté que pour signaler un éventuel écart avec la
-    valeur forcée dans les logs -- il n'est JAMAIS transmis tel quel à ``swap_fn``.
+    ``slippage_bps`` is only accepted to flag a possible discrepancy with the
+    value forced in the logs -- it is NEVER passed through as-is to ``swap_fn``.
     """
     if slippage_bps is not None and slippage_bps != MAX_SLIPPAGE_BPS:
         logger.warning(
-            "%s -- slippage_bps=%s ignoré, forcé à %s (règle absolue 09/07)",
+            "%s -- slippage_bps=%s ignored, forced to %s (absolute rule 09/07)",
             _REAL_MONEY_LOG_PREFIX, slippage_bps, MAX_SLIPPAGE_BPS,
         )
 
@@ -191,7 +191,7 @@ async def attempt_swap(
             slippage_bps=MAX_SLIPPAGE_BPS,
         )
     except Exception as exc:
-        logger.error("%s -- échec d'exécution du swap : %s", _REAL_MONEY_LOG_PREFIX, exc)
+        logger.error("%s -- swap execution failed: %s", _REAL_MONEY_LOG_PREFIX, exc)
         await agent_wallet_log.record_transaction(
             wallet_product=WALLET_PRODUCT,
             chain=chain,
@@ -208,7 +208,7 @@ async def attempt_swap(
     tx_hash = str(result.get("tx_hash") or "")
     amount_out = float(result.get("amount_out") or 0.0)
     logger.info(
-        "%s -- swap RÉUSSI : %s -> %s (%.2f$ -> %.6g), tx=%s",
+        "%s -- swap SUCCEEDED: %s -> %s (%.2f$ -> %.6g), tx=%s",
         _REAL_MONEY_LOG_PREFIX, token_in, token_out, amount_in_usd, amount_out, tx_hash,
     )
     await agent_wallet_log.record_transaction(
@@ -229,7 +229,7 @@ async def attempt_swap(
 async def _blocked(
     chain: str, token_in: str, token_out: str, amount_in_usd: float, *, reason: str
 ) -> SwapAttemptResult:
-    logger.warning("%s -- swap bloqué : %s", _REAL_MONEY_LOG_PREFIX, reason)
+    logger.warning("%s -- swap blocked: %s", _REAL_MONEY_LOG_PREFIX, reason)
     await agent_wallet_log.record_transaction(
         wallet_product=WALLET_PRODUCT,
         chain=chain,
@@ -252,14 +252,14 @@ async def attempt_transfer(
     balance_fn: BalanceFn,
     transfer_fn: TransferFn,
 ) -> TransferAttemptResult:
-    """Tente un transfert USDC borné (exception nommée #4, §9). Ordre strict, même
-    doctrine que ``attempt_swap`` : gate dédié -> allowlist d'adresse -> kill-switch
-    -> plafond (solde réel) -> exécution -> journalisation systématique.
+    """Attempt a bounded USDC transfer (named exception #4, §9). Strict order, same
+    doctrine as ``attempt_swap``: dedicated gate -> address allowlist -> kill-switch
+    -> cap (real balance) -> execution -> systematic logging.
 
-    ``to_address`` DOIT correspondre exactement à ``ALLOWED_TRANSFER_ADDRESS``
-    (insensible à la casse -- une adresse EVM checksummée différemment reste la
-    même adresse) -- toute autre valeur est bloquée AVANT même de vérifier le
-    solde ou le kill-switch, c'est la porte la plus étroite et la plus critique.
+    ``to_address`` MUST match ``ALLOWED_TRANSFER_ADDRESS`` exactly
+    (case-insensitive -- a differently checksummed EVM address is still the
+    same address) -- any other value is blocked BEFORE even checking the
+    balance or the kill-switch, it's the narrowest and most critical gate.
     """
     if not agent_wallet_transfer_enabled():
         return await _blocked_transfer(
@@ -322,7 +322,7 @@ async def attempt_transfer(
             chain=chain, to_address=ALLOWED_TRANSFER_ADDRESS, amount_usd=amount_usd,
         )
     except Exception as exc:
-        logger.error("%s -- échec d'exécution du transfert : %s", _REAL_MONEY_LOG_PREFIX, exc)
+        logger.error("%s -- transfer execution failed: %s", _REAL_MONEY_LOG_PREFIX, exc)
         await agent_wallet_log.record_transaction(
             wallet_product=WALLET_PRODUCT,
             chain=chain,
@@ -336,7 +336,7 @@ async def attempt_transfer(
 
     tx_hash = str(result.get("tx_hash") or "")
     logger.info(
-        "%s -- transfert RÉUSSI : %.2f$ -> %s, tx=%s",
+        "%s -- transfer SUCCEEDED: %.2f$ -> %s, tx=%s",
         _REAL_MONEY_LOG_PREFIX, amount_usd, ALLOWED_TRANSFER_ADDRESS, tx_hash,
     )
     await agent_wallet_log.record_transaction(
@@ -354,7 +354,7 @@ async def attempt_transfer(
 async def _blocked_transfer(
     chain: str, to_address: str, amount_usd: float, *, reason: str
 ) -> TransferAttemptResult:
-    logger.warning("%s -- transfert bloqué : %s", _REAL_MONEY_LOG_PREFIX, reason)
+    logger.warning("%s -- transfer blocked: %s", _REAL_MONEY_LOG_PREFIX, reason)
     await agent_wallet_log.record_transaction(
         wallet_product=WALLET_PRODUCT,
         chain=chain,

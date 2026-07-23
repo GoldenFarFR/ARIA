@@ -1,34 +1,35 @@
-"""Surveillance READ-ONLY du wallet agent CDP — registre complet des mouvements
-réels (dépôts/retraits), détectés automatiquement via Blockscout (lecture seule,
-aucune clé privée, aucune capacité d'exécution). Répond à la demande opérateur
-du 16/07 : "détection automatique des fonds quand il arrive ou parte avec un
-registre complet du wallet pour que tu vérifie en temps réel".
+"""READ-ONLY monitoring of the CDP agent wallet -- complete ledger of real
+movements (deposits/withdrawals), auto-detected via Blockscout (read only,
+no private key, no execution capability). Answers the operator request from
+07/16: "automatic detection of funds coming in or out with a complete wallet
+ledger so you can verify in real time".
 
-Réutilise `services/blockscout.py` (déjà construit, Base natif, #157) plutôt que
-de dupliquer un client -- `get_token_transfers` pour l'USDC (ERC-20),
-`get_transactions` pour l'ETH natif (gas/dépôts). Aucun nouveau client réseau.
+Reuses `services/blockscout.py` (already built, Base-native, #157) rather than
+duplicating a client -- `get_token_transfers` for USDC (ERC-20),
+`get_transactions` for native ETH (gas/deposits). No new network client.
 
-Chaque mouvement fraîchement détecté (jamais revu deux fois, `tx_hash` unique)
-est classé :
-  - "known" : le `tx_hash` correspond à une transaction déjà journalisée par
-    `agent_wallet_pilot`/`agent_wallet_log` (ARIA elle-même a initié ce
-    mouvement) -- rien d'anormal.
-  - "external_deposit" : entrée de fonds non initiée par ARIA (ex. l'opérateur
-    finance le wallet manuellement) -- normal, journalisé pour traçabilité.
-  - "unexpected_outflow" : SORTIE de fonds non initiée par ARIA -- signal de
-    sécurité potentiellement grave (clé compromise ?), à traiter en urgence par
-    l'appelant (notification immédiate).
+Each freshly detected movement (never reviewed twice, unique `tx_hash`) is
+classified as:
+  - "known": the `tx_hash` matches a transaction already logged by
+    `agent_wallet_pilot`/`agent_wallet_log` (ARIA herself initiated this
+    movement) -- nothing abnormal.
+  - "external_deposit": incoming funds not initiated by ARIA (e.g. the
+    operator funds the wallet manually) -- normal, logged for traceability.
+  - "unexpected_outflow": OUTGOING funds not initiated by ARIA -- a
+    potentially serious security signal (compromised key?), to be handled
+    urgently by the caller (immediate notification).
 
-Limite honnête assumée : la classification "known" ne peut matcher QUE les
-mouvements passés par `agent_wallet_pilot.py` (swap/transfert loggés) -- un
-mouvement initié par un autre outil légitime (ex. l'opérateur utilisant
-directement l'app Coinbase) sera classé "external_deposit"/"unexpected_outflow"
-même si c'est en réalité lui-même qui agit. Pas un défaut : mieux vaut un faux
-positif (opérateur re-confirme que c'était bien lui) qu'un faux négatif silencieux.
+Honest limitation assumed: the "known" classification can ONLY match
+movements that went through `agent_wallet_pilot.py` (logged swap/transfer) --
+a movement initiated by another legitimate tool (e.g. the operator using the
+Coinbase app directly) will be classified "external_deposit"/
+"unexpected_outflow" even though it's actually the operator acting. Not a
+flaw: a false positive (operator re-confirms it was indeed them) beats a
+silent false negative.
 
-Structurellement séparé de `wallet_guard.py` et de `agent_wallet_pilot.py` (aucun
-import croisé d'exécution) -- ce module ne PEUT PAS signer ni exécuter quoi que
-ce soit, uniquement lire et journaliser."""
+Structurally separate from `wallet_guard.py` and `agent_wallet_pilot.py` (no
+cross-import for execution) -- this module CANNOT sign or execute anything,
+only read and log."""
 from __future__ import annotations
 
 import html
@@ -50,10 +51,10 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-# Adresse Base mainnet PUBLIQUE du wallet agent CDP (`aria-agent-wallet-pilot`,
-# vérifiée en direct le 16/07 -- cf. agent_wallet_cdp_adapter.py). Une adresse
-# publique n'est pas un secret (contrairement aux clés CDP) -- codée en dur ici
-# au même titre que ALLOWED_TRANSFER_ADDRESS dans agent_wallet_pilot.py.
+# PUBLIC Base mainnet address of the CDP agent wallet (`aria-agent-wallet-pilot`,
+# verified live on 07/16 -- cf. agent_wallet_cdp_adapter.py). A public
+# address isn't a secret (unlike CDP keys) -- hardcoded here
+# the same way as ALLOWED_TRANSFER_ADDRESS in agent_wallet_pilot.py.
 # Kept as-is (compat): `get_wallet_balance_summary`/`/agentwallet` continue to
 # default to it, signature unchanged.
 MONITORED_WALLET_ADDRESS = "0xF04625162b616c5ad9788811b7be8CDd425B37Ef"
@@ -113,9 +114,9 @@ def _label_address(address: str) -> str:
 
 
 def agent_wallet_monitor_enabled() -> bool:
-    """Gate dédié, indépendant des gates pilote/swap/transfert -- la surveillance
-    peut tourner même si l'exécution reste désactivée (lecture seule, aucun
-    risque à la laisser active plus largement que l'exécution elle-même)."""
+    """Dedicated gate, independent from the pilot/swap/transfer gates --
+    monitoring can run even while execution stays disabled (read-only, no
+    risk in leaving it active more broadly than execution itself)."""
     return os.environ.get("ARIA_AGENT_WALLET_MONITOR_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -130,10 +131,10 @@ class WalletMovement:
     counterparty: str
     classification: str  # "known" | "external_deposit" | "unexpected_outflow" | "suspicious_token" | "known_x402" | "swap"
     timestamp: str | None = None
-    # 22/07 -- enrichissement de l'alerte "known_x402" (quel token a été scanné,
-    # quel service a été payé, cf. x402_budget.record_spend). Optionnels et vides
-    # par défaut : retrocompatible, aucun autre mouvement (known/external_deposit/
-    # unexpected_outflow/suspicious_token) ne les renseigne jamais.
+    # 07/22 -- enrichment of the "known_x402" alert (which token was scanned,
+    # which service was paid, cf. x402_budget.record_spend). Optional and empty
+    # by default: backward compatible, no other movement (known/external_deposit/
+    # unexpected_outflow/suspicious_token) ever populates them.
     contract: str = ""
     token_symbol: str = ""
     resource: str = ""
@@ -216,21 +217,20 @@ async def _already_seen(tx_hash: str) -> bool:
 
 
 async def _record_movement(m: WalletMovement) -> bool:
-    """Écrit le mouvement -- ``True`` seulement si CETTE tentative a réellement
-    créé la ligne (jamais notifier sur une classification qui a perdu la course).
+    """Writes the movement -- ``True`` only if THIS attempt actually created
+    the row (never notify on a classification that lost the race).
 
-    20/07 -- bug réel trouvé en conditions réelles (capture opérateur, alerte
-    "SORTIE NON INITIÉE" sur un paiement x402 pourtant déjà connu) : l'ancien
-    ``_already_seen()`` (check) puis ``_record_movement()`` (act) n'était pas
-    atomique -- deux passages qui voient tous les deux ``_already_seen() ->
-    False`` avant que l'un des deux n'écrive peuvent chacun calculer LEUR PROPRE
-    classification (potentiellement différente si leur lecture de
-    ``known_x402_spends`` n'était pas au même instant) et NOTIFIER tous les
-    deux, alors que seule une des deux lignes gagne réellement l'écriture
-    (``INSERT OR IGNORE``, ``tx_hash`` unique). Le perdant notifiait quand même
-    avec sa classification potentiellement périmée. Corrigé : le résultat réel
-    de l'écriture (``rowcount``) décide maintenant si CETTE tentative a le
-    droit de notifier -- jamais la classification calculée en mémoire seule."""
+    07/20 -- real bug found under real conditions (operator screenshot, an
+    "UNINITIATED OUTFLOW" alert on an x402 payment that was actually already
+    known): the old ``_already_seen()`` (check) then ``_record_movement()``
+    (act) wasn't atomic -- two passes that both see ``_already_seen() ->
+    False`` before either writes could each compute THEIR OWN classification
+    (potentially different if their read of ``known_x402_spends`` wasn't at
+    the same instant) and BOTH notify, even though only one of the two rows
+    actually wins the write (``INSERT OR IGNORE``, unique ``tx_hash``). The
+    loser still notified with its potentially stale classification. Fixed:
+    the actual write outcome (``rowcount``) now decides whether THIS attempt
+    is allowed to notify -- never the classification computed in memory alone."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
@@ -317,12 +317,12 @@ async def list_phishing_addresses(limit: int = 100) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-# 17/07 -- fenêtre de tolérance pour corréler un mouvement on-chain détecté à un
-# paiement x402 déjà journalisé (signature -> règlement -> indexation Blockscout
-# introduit un délai réel, jamais instantané) -- généreuse mais bornée, jamais
-# assez large pour rapprocher deux paiements sans rapport.
+# 07/17 -- tolerance window to correlate an on-chain movement detected with an
+# already-logged x402 payment (signature -> settlement -> Blockscout indexing
+# introduces a real delay, never instant) -- generous but bounded, never wide
+# enough to match two unrelated payments.
 _X402_MATCH_WINDOW_MINUTES = 30
-_X402_MATCH_AMOUNT_EPSILON = 0.001  # USDC -- tolère l'arrondi flottant, pas plus
+_X402_MATCH_AMOUNT_EPSILON = 0.001  # USDC -- tolerates float rounding, no more
 
 
 def _parse_timestamp(value: str | None):
@@ -337,16 +337,16 @@ def _parse_timestamp(value: str | None):
 def _matches_known_x402(
     *, counterparty: str, amount: float, timestamp: str | None, known_x402_spends: list[dict],
 ) -> dict | None:
-    """Un mouvement de sortie correspond à un paiement x402 déjà journalisé (même
-    destinataire, même montant à l'arrondi près, dans la fenêtre de temps) --
-    échoue TOUJOURS vers "pas de correspondance" en cas de doute (donnée manquante,
-    timestamp illisible) : mieux vaut un faux positif d'alerte qu'un faux négatif
-    silencieux, même doctrine que le reste de ce module.
+    """An outgoing movement matches an already-logged x402 payment (same
+    recipient, same amount within rounding, within the time window) --
+    ALWAYS fails toward "no match" in case of doubt (missing data, unreadable
+    timestamp): a false positive alert beats a silent false negative, same
+    doctrine as the rest of this module.
 
-    22/07 -- renvoie désormais le dict du spend matché (contract/token_symbol/
-    resource/provider, cf. `x402_budget.record_spend`) plutôt qu'un simple bool,
-    pour permettre à l'alerte d'afficher QUEL token/service a été payé -- logique
-    de matching strictement inchangée, seule la valeur de retour change."""
+    07/22 -- now returns the dict of the matched spend (contract/token_symbol/
+    resource/provider, cf. `x402_budget.record_spend`) instead of a plain bool,
+    to let the alert display WHICH token/service was paid for -- matching
+    logic strictly unchanged, only the return value changes."""
     counterparty_lower = (counterparty or "").lower()
     if not counterparty_lower:
         return None
@@ -371,9 +371,9 @@ def _classify(
     *, counterparty: str = "", amount: float = 0.0, timestamp: str | None = None,
     known_x402_spends: list[dict] | None = None,
 ) -> tuple[str, dict | None]:
-    """Renvoie ``(classification, spend_matché)`` -- ``spend_matché`` n'est jamais
-    ``None`` seulement quand la classification vaut ``"known_x402"`` (22/07, pour
-    enrichir l'alerte avec le token/service payé), ``None`` dans tous les autres cas."""
+    """Returns ``(classification, matched_spend)`` -- ``matched_spend`` is only
+    ever non-``None`` when the classification is ``"known_x402"`` (07/22, to
+    enrich the alert with the paid token/service), ``None`` in every other case."""
     if tx_hash in known_tx_hashes:
         return "known", None
     if direction == "in":
@@ -389,9 +389,9 @@ def _classify(
 
 
 def _x402_movement_fields(spend: dict | None) -> dict[str, str]:
-    """Extrait contract/token_symbol/resource/provider d'un spend x402 matché pour
-    peupler un `WalletMovement` -- dict vide (donc "" partout) si `spend` est
-    `None`, jamais un champ à moitié rempli."""
+    """Extracts contract/token_symbol/resource/provider from a matched x402 spend
+    to populate a `WalletMovement` -- empty dict (so "" everywhere) if `spend`
+    is `None`, never a half-filled field."""
     spend = spend or {}
     return {
         "contract": spend.get("contract") or "",
@@ -401,15 +401,16 @@ def _x402_movement_fields(spend: dict | None) -> dict[str, str]:
     }
 
 
-# Adresses officielles des SEULS actifs que l'opérateur suit par NOM dans les alertes
-# (ETH natif, sans contrat -- toute "ETH" en ERC-20 est un imposteur par construction ;
-# USDC, réutilise la même adresse que l'exécution réelle -- jamais deux sources de
-# vérité). Trouvé en conditions réelles (17/07) : deux dépôts "poussière" reçus le même
-# jour usurpaient ETH/USDC via un homoglyphe Unicode (ex. "EṬH", T à point souscrit,
-# visuellement indiscernable de "ETH" sur un petit écran Telegram) depuis des contrats
-# ERC-20 à 0 holder -- l'alerte affichait le symbole tel quel, sans le confronter à
-# l'adresse réelle du token, risque réel pour un opérateur qui doit décider vite si un
-# dépôt est légitime.
+# Official addresses of the ONLY assets the operator tracks by NAME in alerts
+# (native ETH, no contract -- any ERC-20 "ETH" is an impersonator by
+# construction; USDC reuses the same address as real execution -- never two
+# sources of truth). Found under real conditions (07/17): two "dust" deposits
+# received the same day impersonated ETH/USDC via a Unicode homoglyph (e.g.
+# "EṬH", T with combining dot below, visually indistinguishable from "ETH" on
+# a small Telegram screen) from 0-holder ERC-20 contracts -- the alert
+# displayed the symbol as-is, without checking it against the token's real
+# address, a real risk for an operator who has to decide quickly whether a
+# deposit is legitimate.
 _CANONICAL_ASSET_ADDRESSES: dict[str, str | None] = {
     "ETH": None,  # natif seulement -- aucun contrat ERC-20 légitime ne peut porter ce nom
     "USDC": USDC_BASE_ADDRESS,
@@ -417,34 +418,35 @@ _CANONICAL_ASSET_ADDRESSES: dict[str, str | None] = {
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """Décompose les diacritiques Unicode (NFKD) et les retire -- ``"EṬH"`` (T +
-    U+0323 combining dot below) redevient ``"ETH"``, exactement l'attaque qu'un
-    simple ``.upper()`` ne détecte PAS (les caractères combinants ne sont pas des
-    lettres, ``.upper()`` les laisse tels quels)."""
+    """Decomposes Unicode diacritics (NFKD) and strips them -- ``"EṬH"`` (T +
+    U+0323 combining dot below) becomes ``"ETH"`` again, exactly the attack a
+    plain ``.upper()`` does NOT detect (combining characters aren't letters,
+    ``.upper()`` leaves them unchanged)."""
     decomposed = unicodedata.normalize("NFKD", symbol or "")
     stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     return stripped.strip().upper()
 
 
 def _lookalike_target(symbol: str | None, token_address: str | None) -> str | None:
-    """Renvoie le nom du VRAI actif imité (``"ETH"``/``"USDC"``) si le symbole du
-    transfert ressemble à l'un des actifs suivis une fois les diacritiques retirés,
-    mais que le contrat ne correspond PAS à l'adresse officielle -- ``None`` si le
-    symbole ne ressemble à rien de suivi, ou si c'est authentiquement le bon contrat."""
+    """Returns the name of the REAL asset being impersonated (``"ETH"``/``"USDC"``)
+    if the transfer's symbol resembles one of the tracked assets once
+    diacritics are stripped, but the contract does NOT match the official
+    address -- ``None`` if the symbol doesn't resemble anything tracked, or if
+    it's authentically the right contract."""
     normalized = _normalize_symbol(symbol or "")
     if normalized not in _CANONICAL_ASSET_ADDRESSES:
         return None
     real_address = _CANONICAL_ASSET_ADDRESSES[normalized]
     if real_address is None:
-        return normalized  # imite ETH natif -- un transfert ERC-20 ne peut jamais l'être légitimement
+        return normalized  # impersonates native ETH -- an ERC-20 transfer can never legitimately be this
     if (token_address or "").lower() != real_address.lower():
         return normalized
     return None
 
 
 async def list_recent_movements(limit: int = 100) -> list[dict]:
-    """Registre complet persisté (append-only en pratique -- `INSERT OR IGNORE`
-    ne réécrit jamais une ligne existante), le plus récent d'abord."""
+    """Full persisted registry (append-only in practice -- `INSERT OR IGNORE`
+    never rewrites an existing row), most recent first."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -495,11 +497,11 @@ async def check_wallet_activity(
     known_tx_hashes: set[str] | None = None,
     known_x402_spends: list[dict] | None = None,
 ) -> list[WalletMovement]:
-    """Interroge Blockscout (lecture seule) pour les transferts USDC (ERC-20) ET
-    les mouvements ETH natifs récents de ``wallet_address``, journalise chaque
-    NOUVEAU mouvement (jamais revu deux fois grâce à l'unicité de ``tx_hash``) et
-    renvoie la liste des mouvements fraîchement détectés (pour notification par
-    l'appelant -- ce module ne notifie jamais lui-même, voir
+    """Queries Blockscout (read-only) for recent USDC (ERC-20) transfers AND
+    native ETH movements of ``wallet_address``, logs every NEW movement
+    (never reviewed twice thanks to the uniqueness of ``tx_hash``) and
+    returns the list of freshly detected movements (for notification by the
+    caller -- this module never notifies by itself, see
     ``format_movement_alert``).
 
     ``wallet_name`` (07/23): name of the monitored wallet (cf.
@@ -507,14 +509,14 @@ async def check_wallet_activity(
     produced, shown at the top of the alert. Empty by default (backward
     compatible, shows "Wallet agent").
 
-    ``known_tx_hashes`` : hashes déjà journalisés par ``agent_wallet_log``
-    (transactions initiées par ARIA elle-même, ok uniquement) -- typiquement
+    ``known_tx_hashes``: hashes already logged by ``agent_wallet_log``
+    (transactions initiated by ARIA herself, ok status only) -- typically
     ``{row['tx_hash'] for row in await agent_wallet_log.list_transactions() if row['status'] == 'ok'}``.
 
-    ``known_x402_spends`` (17/07) : dépenses x402 réglées (``status='ok'``) --
-    typiquement ``await x402_budget.list_spends()`` filtré -- corrélées par
-    destinataire+montant+fenêtre de temps (pas par ``tx_hash``, jamais garanti
-    disponible côté payeur dans le protocole x402, cf. ``_matches_known_x402``).
+    ``known_x402_spends`` (07/17): settled x402 spends (``status='ok'``) --
+    typically ``await x402_budget.list_spends()`` filtered -- correlated by
+    recipient+amount+time window (not by ``tx_hash``, never guaranteed
+    available on the payer side in the x402 protocol, cf. ``_matches_known_x402``).
 
     07/23 -- swap detection: both sources (token transfers + native tx) are
     first collected WITHOUT being recorded, grouped by ``tx_hash`` -- a group
@@ -532,7 +534,7 @@ async def check_wallet_activity(
 
     token_result = await client.get_token_transfers(wallet_address, limit=50, max_pages=1)
     if not token_result.available:
-        logger.info("agent_wallet_monitor: transferts token indisponibles (%s)", token_result.error)
+        logger.info("agent_wallet_monitor: token transfers unavailable (%s)", token_result.error)
     else:
         for t in token_result.transfers:
             if not t.tx_hash or await _already_seen(t.tx_hash):
@@ -547,13 +549,13 @@ async def check_wallet_activity(
 
     tx_result = await client.get_transactions(wallet_address, limit=50)
     if not tx_result.available:
-        logger.info("agent_wallet_monitor: transactions natives indisponibles (%s)", tx_result.error)
+        logger.info("agent_wallet_monitor: native transactions unavailable (%s)", tx_result.error)
     else:
         for tx in tx_result.transactions:
             if not tx.tx_hash or await _already_seen(tx.tx_hash):
                 continue
             if not tx.value_native or tx.value_native <= 0:
-                continue  # appel de contrat sans valeur transférée -- pas un mouvement de fonds
+                continue  # contract call with no value transferred -- not a funds movement
             direction = "in" if (tx.to_address or "").lower() == address_lower else "out"
             counterparty = (tx.from_address if direction == "in" else tx.to_address) or ""
             raw_by_tx.setdefault(tx.tx_hash, []).append({
@@ -582,13 +584,13 @@ async def check_wallet_activity(
                 if lookalike:
                     asset_label = f"{asset_label} (FAUX {lookalike} -- contrat non officiel)"
                     classification = "suspicious_token"
-                    matched_spend = None  # un token usurpé n'hérite jamais des infos x402
+                    matched_spend = None  # a spoofed token never inherits x402 info
             else:
-                # 22/07 -- pas de known_x402_spends ici : un paiement x402 se règle en
-                # USDC (cf. x402_budget), jamais en ETH natif -- classification/enrichissement
-                # x402 ne s'applique donc structurellement pas à cette branche, comportement
-                # inchangé (matched_spend toujours None, `_classify` reçoit les mêmes
-                # arguments qu'avant ce chantier).
+                # 07/22 -- no known_x402_spends here: an x402 payment settles in
+                # USDC (cf. x402_budget), never in native ETH -- x402 classification/
+                # enrichment structurally doesn't apply to this branch, unchanged
+                # behavior (matched_spend always None, `_classify` receives the same
+                # arguments as before this work).
                 classification, matched_spend = _classify(tx_hash, ev["direction"], known_tx_hashes)
                 asset_label = ev["asset"]
 
@@ -624,16 +626,16 @@ async def check_wallet_activity(
 
 
 async def _attach_usd_values(other_tokens: list[dict[str, Any]], *, chain: str) -> None:
-    """Ajoute ``price_usd``/``value_usd`` à chaque entrée de ``other_tokens``
-    (#204 suite, demande opérateur : "si j'achète du Virtual ou une small cap
-    il faut qu'il s'affiche avec la quantité de tokens et sa valeur en $") --
-    réutilise ``services/dexscreener.fetch_tokens_batch`` (déjà construit,
-    #194, jusqu'à 30 adresses en un seul appel), jamais un nouveau client de
-    prix dupliqué. Si plusieurs pools existent pour un même token, retient
-    celui de plus forte liquidité (même heuristique que
-    ``acp_onchain_scan.py``) -- prix le plus fiable, pas le premier venu.
-    Mute chaque entrée en place ; ``price_usd``/``value_usd`` restent ``None``
-    si le prix est introuvable, jamais une valeur inventée."""
+    """Adds ``price_usd``/``value_usd`` to each entry in ``other_tokens``
+    (#204 follow-up, operator request: "if I buy Virtual or a small cap it
+    should display with the token quantity and its $ value") -- reuses
+    ``services/dexscreener.fetch_tokens_batch`` (already built, #194, up to
+    30 addresses in a single call), never a duplicated new price client. If
+    several pools exist for the same token, keeps the one with the highest
+    liquidity (same heuristic as ``acp_onchain_scan.py``) -- the most
+    reliable price, not the first one found. Mutates each entry in place;
+    ``price_usd``/``value_usd`` stay ``None`` if the price can't be found,
+    never an invented value."""
     for t in other_tokens:
         t["price_usd"] = None
         t["value_usd"] = None
@@ -642,8 +644,8 @@ async def _attach_usd_values(other_tokens: list[dict[str, Any]], *, chain: str) 
         from aria_core.services.dexscreener import fetch_tokens_batch
 
         pairs = await fetch_tokens_batch([t["address"] for t in other_tokens], chain=chain)
-    except Exception as exc:  # noqa: BLE001 -- une panne de prix n'efface jamais le solde déjà connu
-        logger.warning("agent_wallet_monitor: lecture des prix tokens echouee: %s", exc)
+    except Exception as exc:  # noqa: BLE001 -- a price failure never erases the already-known balance
+        logger.warning("agent_wallet_monitor: token price lookup failed: %s", exc)
         return
 
     best_by_address: dict[str, Any] = {}
@@ -666,15 +668,15 @@ async def _attach_usd_values(other_tokens: list[dict[str, Any]], *, chain: str) 
 async def get_wallet_balance_summary(
     *, wallet_address: str = "", chain: str = "base",
 ) -> dict[str, Any]:
-    """Solde RÉEL courant du wallet agent (#204, suite 16/07 : demande
-    opérateur "je veux tous voir meme les futurs token achetés") -- TOUS les
-    tokens réellement détenus via l'adaptateur CDP (``list_all_token_balances``,
-    même appel déjà vérifié en direct pour USDC, 16/07, #157), ETH natif via
-    Blockscout (déjà construit, déjà utilisé ailleurs dans ARIA -- lecture
-    seule, aucune dépendance au SDK CDP). Chaque valeur dégrade honnêtement à
-    ``None`` si indisponible, jamais un solde inventé -- si le pilote swap un
-    jour vers un nouveau token, il apparaît ici automatiquement, sans liste
-    à maintenir à la main."""
+    """REAL current balance of the agent wallet (#204, 07/16 follow-up:
+    operator request "I want to see everything, even future purchased
+    tokens") -- ALL tokens actually held via the CDP adapter
+    (``list_all_token_balances``, same call already verified live for USDC,
+    07/16, #157), native ETH via Blockscout (already built, already used
+    elsewhere in ARIA -- read-only, no dependency on the CDP SDK). Each value
+    honestly degrades to ``None`` if unavailable, never an invented balance --
+    if the pilot ever swaps into a new token, it shows up here automatically,
+    no list to maintain by hand."""
     wallet_address = wallet_address or MONITORED_WALLET_ADDRESS
 
     usdc: float | None = None
@@ -683,8 +685,8 @@ async def get_wallet_balance_summary(
         from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS, list_all_token_balances
 
         tokens = await list_all_token_balances(network=chain)
-    except Exception as exc:  # noqa: BLE001 -- l'extra cdp-sdk peut manquer, jamais casser l'appelant
-        logger.warning("agent_wallet_monitor: lecture des soldes tokens echouee: %s", exc)
+    except Exception as exc:  # noqa: BLE001 -- the cdp-sdk extra may be missing, never break the caller
+        logger.warning("agent_wallet_monitor: token balance lookup failed: %s", exc)
         tokens = None
 
     cdp_eth_fallback: float | None = None
@@ -695,9 +697,9 @@ async def get_wallet_balance_summary(
             if t["address"].lower() == USDC_BASE_ADDRESS.lower():
                 usdc = t["amount"]
             elif (t.get("symbol") or "").strip().upper() == "ETH":
-                # CDP list_token_balances renvoie aussi l'ETH natif (confirmé en
-                # direct le 16/07, /agentwallet) -- jamais un "autre token" acheté,
-                # utilisé comme repli si Blockscout échoue, jamais affiché deux fois.
+                # CDP list_token_balances also returns native ETH (confirmed live
+                # on 07/16, /agentwallet) -- never an "other token" purchased,
+                # used as a fallback if Blockscout fails, never shown twice.
                 cdp_eth_fallback = t["amount"]
             else:
                 other_tokens.append(t)
@@ -710,8 +712,8 @@ async def get_wallet_balance_summary(
         info = await client.get_address_info(wallet_address)
         if info.available:
             eth = info.balance_native
-    except Exception as exc:  # noqa: BLE001 -- une panne Blockscout ne doit jamais casser l'appelant
-        logger.warning("agent_wallet_monitor: lecture solde ETH echouee: %s", exc)
+    except Exception as exc:  # noqa: BLE001 -- a Blockscout failure must never break the caller
+        logger.warning("agent_wallet_monitor: ETH balance lookup failed: %s", exc)
 
     if eth is None and cdp_eth_fallback is not None:
         eth = cdp_eth_fallback
@@ -740,16 +742,16 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
 
     try:
         logged = await agent_wallet_log.list_transactions(limit=500)
-    except Exception as exc:  # noqa: BLE001 -- une panne du log ne doit jamais bloquer la surveillance
+    except Exception as exc:  # noqa: BLE001 -- a log failure must never block monitoring
         logged = []
-        logger.warning("agent_wallet_monitor: lecture agent_wallet_log echouee: %s", exc)
+        logger.warning("agent_wallet_monitor: agent_wallet_log lookup failed: %s", exc)
     known_tx_hashes = {row["tx_hash"] for row in logged if row.get("status") == "ok" and row.get("tx_hash")}
 
     try:
         x402_spends = await x402_budget.list_spends()
-    except Exception as exc:  # noqa: BLE001 -- une panne du log x402 ne doit jamais bloquer la surveillance
+    except Exception as exc:  # noqa: BLE001 -- an x402 log failure must never block monitoring
         x402_spends = []
-        logger.warning("agent_wallet_monitor: lecture x402_budget echouee: %s", exc)
+        logger.warning("agent_wallet_monitor: x402_budget lookup failed: %s", exc)
     known_x402_spends = [s for s in x402_spends if s.get("status") == "ok" and s.get("pay_to")]
 
     movements: list[WalletMovement] = []
@@ -760,7 +762,7 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
                 wallet_address=wallet_address, wallet_name=wallet_name,
                 known_tx_hashes=known_tx_hashes, known_x402_spends=known_x402_spends,
             )
-        except Exception as exc:  # noqa: BLE001 -- une panne sur CE wallet ne bloque jamais les autres
+        except Exception as exc:  # noqa: BLE001 -- a failure on THIS wallet never blocks the others
             errors.append(f"{wallet_name}: {str(exc)[:200]}")
             logger.warning("agent_wallet_monitor: cycle failed for %s: %s", wallet_name, exc)
             continue
@@ -787,7 +789,7 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
             try:
                 await notifier(format_movement_alert(m))
                 notified += 1
-            except Exception as exc:  # noqa: BLE001 -- un envoi rate ne doit jamais faire perdre le registre
+            except Exception as exc:  # noqa: BLE001 -- a failed send must never lose the ledger entry
                 logger.warning("agent_wallet_monitor: notification echouee pour %s: %s", m.tx_hash, exc)
 
     return {
@@ -799,8 +801,8 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
 
 
 def basescan_tx_url(tx_hash: str) -> str:
-    """URL BaseScan publique pour une transaction -- construction pure (aucun appel
-    réseau), même patron que `dexscreener.token_url`."""
+    """Public BaseScan URL for a transaction -- pure construction (no network
+    call), same pattern as `dexscreener.token_url`."""
     return f"https://basescan.org/tx/{tx_hash}"
 
 
@@ -853,25 +855,25 @@ def format_movement_alert(m: WalletMovement) -> str:
         f"{counterparty_label} : {html.escape(_label_address(m.counterparty))}",
         f"Tx : {tx_link}",
     ]
-    # 22/07 -- enrichissement QUE pour un paiement x402 dont le spend matché a pu
-    # être rattaché à un token précis (m.contract) : un paiement x402 générique
-    # (ex. recherche web) n'a pas de contract, dégradation douce = rien ajouté du
-    # tout, jamais une ligne vide ou "N/A".
+    # 07/22 -- enrichment ONLY for an x402 payment whose matched spend could be
+    # tied to a specific token (m.contract): a generic x402 payment (e.g. web
+    # search) has no contract, soft degradation = nothing added at all, never
+    # an empty line or "N/A".
     # 07/23 -- separate "BaseScan :" line removed (redundant: the tx_hash
     # above is now itself clickable).
     if m.classification == "known_x402" and m.contract:
-        # 22/07 (revue croisée) -- token_symbol affiché à côté de l'adresse quand connu
-        # (ex. "GEM (0xdead...)") plutôt que laissé mort après avoir été capturé/propagé.
+        # 07/22 (cross-review) -- token_symbol shown next to the address when known
+        # (e.g. "GEM (0xdead...)") rather than left dead after being captured/propagated.
         token_line = (
             f"Token : {html.escape(m.token_symbol)} ({html.escape(m.contract)})"
             if m.token_symbol else f"Token : {html.escape(m.contract)}"
         )
         lines.append(token_line)
         lines.append(f"DexScreener : {_html_link(m.contract, token_url(m.contract, chain='base'))}")
-        # 22/07 (revue croisée) -- garde explicite : x402_budget.record_spend() exige
-        # `resource` en paramètre obligatoire (jamais vide en pratique), mais sans cette
-        # garde une donnée corrompue produirait une ligne "Raison : " à moitié vide,
-        # contraire à la doctrine "jamais une ligne vide" déjà appliquée juste au-dessus.
+        # 07/22 (cross-review) -- explicit guard: x402_budget.record_spend() requires
+        # `resource` as a mandatory parameter (never empty in practice), but without
+        # this guard corrupted data would produce a half-empty "Raison : " line,
+        # contrary to the "never an empty line" doctrine already applied just above.
         if m.resource:
             resource = html.escape(m.resource)
             provider = html.escape(m.provider) if m.provider else ""
@@ -880,12 +882,12 @@ def format_movement_alert(m: WalletMovement) -> str:
 
 
 def format_wallet_balance_summary(summary: dict[str, Any]) -> str:
-    """Formate le résultat de ``get_wallet_balance_summary`` pour Telegram
-    (#204, suite : "je veux tous voir meme les futurs token achetés") --
-    chaque solde indisponible s'affiche honnêtement comme tel, jamais un 0
-    silencieux qui laisserait croire à un wallet vide. Tout autre token
-    détenu (ex. après un futur swap du pilote) s'affiche automatiquement,
-    sans liste à maintenir à la main."""
+    """Formats the result of ``get_wallet_balance_summary`` for Telegram
+    (#204 follow-up: "I want to see everything, even future purchased
+    tokens") -- each unavailable balance is honestly displayed as such,
+    never a silent 0 that would suggest an empty wallet. Any other token
+    held (e.g. after a future pilot swap) displays automatically, no list
+    to maintain by hand."""
     usdc = summary.get("usdc_usd")
     eth = summary.get("eth")
     other_tokens = summary.get("other_tokens")

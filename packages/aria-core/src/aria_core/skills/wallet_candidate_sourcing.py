@@ -1,22 +1,22 @@
-"""Sourcing automatique de wallets candidats depuis l'historique propre d'ARIA
-(15/07, suite #157/#181 -- réponse à « qui va trouver les wallets ? »).
+"""Automatic candidate wallet sourcing from ARIA's own history (15/07,
+follow-up to #157/#181 -- answer to "who's going to find the wallets?").
 
-Zéro nouvelle dépendance externe, zéro coût récurrent (contrairement à
-Nansen/Dune, écartés ou mis en secours pour cette raison) : repère les tokens
-qu'ARIA a déjà jugés gagnants et liste qui les détient ENCORE aujourd'hui
-(`blockscout.get_token_holders`, déjà construit) -- signal de conviction (pas
-revendu au premier soubresaut), pas une découverte de marché large comme un
-service tiers. Enfile ces adresses dans `wallet_scan_queue.py` -- une source de
-CANDIDATS À SCORER, jamais un signal de trading en lui-même : le score obtenu
-via `/walletscore`/le cycle de fond reste le seul signal qui compte, même
-doctrine que l'ajout manuel via `/walletqueue`.
+Zero new external dependency, zero recurring cost (unlike Nansen/Dune, ruled
+out or kept as fallback for this reason): spots tokens ARIA already judged
+winners and lists who STILL holds them today (`blockscout.get_token_holders`,
+already built) -- a conviction signal (not sold at the first wobble), not a
+broad market discovery like a third-party service. Enqueues these addresses
+into `wallet_scan_queue.py` -- a source of CANDIDATES TO SCORE, never a
+trading signal in itself: the score obtained via `/walletscore`/the
+background cycle remains the only signal that matters, same doctrine as the
+manual addition via `/walletqueue`.
 
-DEUX sources de "token gagnant" combinées (15/07, constat opérateur -- une
-seule source serait restée vide des semaines) : `vc_predictions` clôturées
-(horizon 30j, résolution lente -- 0 pronostic clôturé au 11/07 dans le dernier
-audit connu) ET `paper_trader` positions clôturées (déjà actif en prod,
-résout bien plus vite via stop suiveur/prise de profit sur prix réel). Cf.
-`list_strong_performers` pour le détail.
+TWO "winning token" sources combined (15/07, operator observation -- a
+single source would have stayed empty for weeks): closed `vc_predictions`
+(30-day horizon, slow resolution -- 0 prediction closed as of 11/07 in the
+last known audit) AND closed `paper_trader` positions (already active in
+prod, resolves much faster via trailing stop/profit-taking on real price).
+See `list_strong_performers` for details.
 """
 from __future__ import annotations
 
@@ -29,12 +29,12 @@ from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
 
-# Seuil de départ (+100%, soit x2) -- ajustable comme tout seuil ARIA, pas une
-# vérité gravée. Un token qui n'a "que" doublé reste un signal honnête, pas un
-# jugement sur ce qui compte comme "gagnant" pour la thèse VC elle-même.
+# Starting threshold (+100%, i.e. x2) -- adjustable like any ARIA threshold,
+# not carved in stone. A token that "only" doubled is still an honest
+# signal, not a judgment on what counts as a "winner" for the VC thesis itself.
 MIN_OUTCOME_PCT_STRONG_PERFORMER = 100.0
 
-# Ne pas noyer la file avec un seul token très détenu.
+# Don't flood the queue with a single widely-held token.
 MAX_HOLDERS_PER_TOKEN = 15
 
 _DEAD_ADDRESSES = {
@@ -81,18 +81,18 @@ async def _mark_sourced(contract: str) -> None:
 
 
 async def list_strong_performers(min_outcome_pct: float = MIN_OUTCOME_PCT_STRONG_PERFORMER) -> list[dict]:
-    """Tokens qu'ARIA a déjà jugés gagnants, DEUX sources combinées (15/07,
-    constat opérateur) :
+    """Tokens ARIA already judged winners, TWO sources combined (15/07,
+    operator observation):
 
-    1. `vc_predictions` clôturées (horizon 30j, résolution manuelle/lente --
-       0 pronostic clôturé au 11/07 dans le dernier audit connu, donc source
-       quasi vide seule pendant encore des semaines) ;
-    2. `paper_trader` positions clôturées (déjà actif en prod, résout bien
-       plus vite -- stop suiveur/prise de profit sur prix réel, pas un
-       horizon calendaire fixe) -- pas de colonne réseau dédiée, `network`
-       vaut "base" par défaut (pool VC/trading dominant confirmé Base).
+    1. Closed `vc_predictions` (30-day horizon, manual/slow resolution --
+       0 prediction closed as of 11/07 in the last known audit, so this
+       source alone would stay nearly empty for weeks);
+    2. Closed `paper_trader` positions (already active in prod, resolves
+       much faster -- trailing stop/profit-taking on real price, not a
+       fixed calendar horizon) -- no dedicated network column, `network`
+       defaults to "base" (confirmed dominant VC/trading pool on Base).
 
-    Réutilise les deux modules tels quels, aucune table dupliquée."""
+    Reuses both modules as-is, no duplicated table."""
     from aria_core.paper_trader import get_closed_positions
     from aria_core.vc_predictions import list_all_predictions
 
@@ -127,18 +127,18 @@ async def list_strong_performers(min_outcome_pct: float = MIN_OUTCOME_PCT_STRONG
 
 
 async def _holders_for_token(contract: str, network: str) -> list[str]:
-    """22/07 -- décision opérateur explicite ("soulageons au maximum
-    Blockscout") : Dune (déjà construit et configuré, jamais branché ici
-    avant ce jour) essayé EN PREMIER via ``get_token_early_buyers`` -- retire
-    un appel Blockscout par token gagnant. Dégrade sur Blockscout
-    (``get_token_holders``, comportement historique inchangé) si Dune n'est
-    pas configuré ou échoue -- dôme classique, jamais bloquant.
+    """22/07 -- explicit operator decision ("let's relieve Blockscout as
+    much as possible"): Dune (already built and configured, never wired
+    here before this day) tried FIRST via ``get_token_early_buyers`` --
+    removes one Blockscout call per winning token. Falls back to Blockscout
+    (``get_token_holders``, unchanged historical behavior) if Dune isn't
+    configured or fails -- classic dome, never blocking.
 
-    Nuance sémantique DÉLIBÉRÉE, pas cachée : Dune renvoie les PREMIERS
-    ACHETEURS chronologiques (conviction précoce), Blockscout renvoie les plus
-    GROS DÉTENTEURS ACTUELS (position tenue aujourd'hui) -- deux définitions
-    différentes de "wallet intéressant" sur ce même token, toutes deux
-    valables comme candidats à scorer par le pipeline /walletscore en aval."""
+    DELIBERATE semantic nuance, not hidden: Dune returns the chronologically
+    EARLIEST BUYERS (early conviction), Blockscout returns the biggest
+    CURRENT HOLDERS (position held today) -- two different definitions of
+    "interesting wallet" on this same token, both valid as candidates to be
+    scored by the downstream /walletscore pipeline."""
     from aria_core.services import dune
 
     chain = network or "base"
@@ -159,13 +159,12 @@ async def _holders_for_token(contract: str, network: str) -> list[str]:
     result = await client.get_token_holders(contract)
     if not result.available:
         return []
-    # Le plus gros détenteur est presque toujours le pool DEX/routeur ou une
-    # allocation équipe verrouillée -- jamais un "smart wallet" individuel.
-    # Heuristique volontairement simple (aucun appel API supplémentaire par
-    # détenteur pour vérifier is_contract -- sobriété) : documentée comme
-    # imparfaite, pas un filtre de sécurité -- le pire cas d'un faux négatif
-    # ici est un scan /walletscore bruyant sur une adresse de contrat, jamais
-    # un risque.
+    # The biggest holder is almost always the DEX pool/router or a locked
+    # team allocation -- never an individual "smart wallet". Deliberately
+    # simple heuristic (no extra API call per holder to check is_contract --
+    # sobriety): documented as imperfect, not a security filter -- the worst
+    # case of a false negative here is a noisy /walletscore scan on a
+    # contract address, never a risk.
     holders = [
         h for h in result.holders
         if h.address and h.address.lower() not in _DEAD_ADDRESSES
@@ -174,22 +173,22 @@ async def _holders_for_token(contract: str, network: str) -> list[str]:
 
 
 async def run_wallet_candidate_sourcing_cycle(notifier=None) -> dict:
-    """Un tour : traite TOUS les tokens gagnants jamais encore sourcés en une
-    passe (15/07, constat opérateur -- un plafond d'un seul token/cycle aurait
-    créé un goulot artificiel indépendant du vrai débit de données ; si
-    plusieurs gagnants sont déjà en attente, les traiter tous MAINTENANT plutôt
-    que d'étaler sur des cycles de 3h chacun). Pour chacun : enfile ses
-    détenteurs actuels (hors plus gros détenteur/adresses mortes) dans
+    """One pass: processes ALL winning tokens not yet sourced in a single
+    go (15/07, operator observation -- a one-token-per-cycle cap would have
+    created an artificial bottleneck independent of the real data rate; if
+    several winners are already waiting, process them all NOW rather than
+    spreading them over 3h cycles each). For each: enqueues its current
+    holders (excluding the biggest holder/dead addresses) into
     `wallet_scan_queue.py`. Triple gate -- `ARIA_WALLET_CANDIDATE_SOURCING_ENABLED`
-    en plus de `ARIA_WALLET_SCAN_QUEUE_ENABLED`/`ARIA_WALLET_SCORING_ENABLED`
-    (tous OFF par défaut) -- fail-closed, respecte le kill-switch.
+    on top of `ARIA_WALLET_SCAN_QUEUE_ENABLED`/`ARIA_WALLET_SCORING_ENABLED`
+    (all OFF by default) -- fail-closed, respects the kill-switch.
 
-    Limite honnête : ceci ne garantit AUCUN débit minimum (ex. "5 tokens/semaine")
-    -- ça dépend du nombre réel de trades gagnants d'ARIA sur la période, pas
-    d'un réglage de code. Si le débit réel reste insuffisant une fois déployé,
-    le seul levier honnête est d'abaisser `MIN_OUTCOME_PCT_STRONG_PERFORMER`
-    (moins de conviction exigée par token) -- décision opérateur, pas faite
-    silencieusement ici."""
+    Honest limitation: this guarantees NO minimum throughput (e.g. "5
+    tokens/week") -- it depends on ARIA's real number of winning trades over
+    the period, not a code setting. If the real throughput remains
+    insufficient once deployed, the only honest lever is to lower
+    `MIN_OUTCOME_PCT_STRONG_PERFORMER` (less conviction required per token)
+    -- an operator decision, not made silently here."""
     if not wallet_candidate_sourcing_enabled():
         return {"outcome": "skipped", "reason": "gate_off"}
 

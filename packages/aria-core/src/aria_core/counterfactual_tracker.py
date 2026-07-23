@@ -1,31 +1,31 @@
-"""#176 (20/07), volet apprentissage b -- tracker contrefactuel des candidats REJETÉS
-par un garde dur du pipeline momentum. Réponse au plan acté avec l'opérateur
-("et concernant l'apprentissage ?") : reset hebdo (#173) -> sizing Formule B (#174) ->
-slippage simulé (#175) -> apprentissage (régime, #176a + contrefactuel, ici).
+"""#176 (20/07), learning track b -- counterfactual tracker for candidates REJECTED
+by a hard gate of the momentum pipeline. Response to the plan agreed with the
+operator ("what about learning?"): weekly reset (#173) -> Formula B sizing (#174) ->
+simulated slippage (#175) -> learning (regime, #176a + counterfactual, here).
 
-Enregistre CHAQUE rejet DIGNE d'un contrefactuel (contrat/chaîne/raison/prix au moment
-du rejet), puis un cycle heartbeat dédié (gaté OFF, ``ARIA_COUNTERFACTUAL_TRACKER_
-ENABLED``) revisite après un délai fixe et enregistre l'évolution de prix -- une simple
-comparaison AVANT/APRÈS, jamais une resimulation du pipeline d'entrée (les seuils
-peuvent avoir changé depuis, resimuler serait trompeur ET coûterait un scan complet par
-candidat). But : objectiver si les seuils durs coûtent de vrais gains manqués -- jamais
-un jugement automatique, juste des chiffres bruts pour qu'une session future puisse
-juger avec des faits.
+Records EVERY rejection WORTH a counterfactual (contract/chain/reason/price at the
+moment of rejection), then a dedicated heartbeat cycle (gated OFF, ``ARIA_COUNTERFACTUAL_TRACKER_
+ENABLED``) revisits after a fixed delay and records the price evolution -- a simple
+BEFORE/AFTER comparison, never a re-simulation of the entry pipeline (thresholds
+may have changed since then, re-simulating would be misleading AND would cost a full
+scan per candidate). Goal: find out objectively whether the hard thresholds cost
+real missed gains -- never an automatic judgment, just raw numbers so a future
+session can judge with facts.
 
-Raisons DÉLIBÉRÉMENT exclues de l'enregistrement (``_EXCLUDED_REASONS``) -- aucun
-contrefactuel utile : le token n'avait tout simplement aucun signal/donnée exploitable
-(``no_entry_signal``/``ohlcv_unavailable``), ou le rejet est une menace CONFIRMÉE où un
-gain de prix sur le papier serait trompeur (``blacklisted``/tout code ``honeypot_*`` --
-on ne peut jamais vendre un vrai honeypot, peu importe ce que le prix affiché fait
-ensuite). Tout AUTRE ``hold_reason`` (présent aujourd'hui ou ajouté demain par un futur
-garde-fou) est inclus par défaut -- fail-open à l'inclusion, jamais l'inverse : un
-enregistrement en trop est gratuit (juste une ligne SQLite), un enregistrement manqué
-serait un angle mort silencieux.
+Reasons DELIBERATELY excluded from recording (``_EXCLUDED_REASONS``) -- no useful
+counterfactual: the token simply had no usable signal/data
+(``no_entry_signal``/``ohlcv_unavailable``), or the rejection is a CONFIRMED threat
+where an on-paper price gain would be misleading (``blacklisted``/any ``honeypot_*``
+code -- you can never sell a real honeypot, no matter what the displayed price does
+afterwards). Any OTHER ``hold_reason`` (present today or added tomorrow by a future
+guardrail) is included by default -- fail-open on inclusion, never the reverse: an
+extra recording is free (just one SQLite row), a missed recording would be a silent
+blind spot.
 
-L'ENREGISTREMENT lui-même n'est PAS gaté (même doctrine que ``momentum_funnel_log.py``
--- un sous-produit passif de l'évaluation déjà en cours, aucun appel réseau
-supplémentaire, strictement additif). Seul le CYCLE DE REVISITE (un vrai appel réseau
-par candidat dû) est gaté."""
+The RECORDING itself is NOT gated (same doctrine as ``momentum_funnel_log.py``
+-- a passive by-product of the evaluation already underway, no extra network call,
+strictly additive). Only the REVISIT CYCLE (a real network call per due candidate)
+is gated."""
 from __future__ import annotations
 
 import logging
@@ -42,19 +42,19 @@ DB_PATH = str(aria_db_path())
 
 
 def counterfactual_tracker_enabled() -> bool:
-    """Gate additif -- ``run_revisit_cycle()`` (le seul volet qui coûte un vrai appel
-    réseau par candidat dû) n'est appelé depuis le heartbeat que si ce flag est actif
-    (OFF par défaut, même patron que les autres tâches heartbeat). L'ENREGISTREMENT des
-    rejets (``record_rejection``, appelé depuis ``paper_trader.run_paper_cycle``) reste
-    inconditionnel -- même doctrine que ``momentum_funnel_log.py``, aucun appel réseau,
-    rien à gater."""
+    """Additive gate -- ``run_revisit_cycle()`` (the only part that costs a real
+    network call per due candidate) is only called from the heartbeat if this flag
+    is active (OFF by default, same pattern as the other heartbeat tasks). RECORDING
+    rejections (``record_rejection``, called from ``paper_trader.run_paper_cycle``)
+    remains unconditional -- same doctrine as ``momentum_funnel_log.py``, no network
+    call, nothing to gate."""
     return os.environ.get("ARIA_COUNTERFACTUAL_TRACKER_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
-# Délai avant qu'un rejet devienne "dû" pour une revisite -- assez long pour qu'un vrai
-# mouvement de prix ait eu le temps de se former, assez court pour rester exploitable
-# (pas des années de dérive de marché sans rapport avec la décision d'origine).
+# Delay before a rejection becomes "due" for a revisit -- long enough for a real
+# price move to have had time to form, short enough to stay usable
+# (not years of market drift unrelated to the original decision).
 REVISIT_AFTER_DAYS = 7.0
 
 _EXCLUDED_REASONS = frozenset({
@@ -89,19 +89,19 @@ async def _ensure_table() -> None:
 
 
 def is_trackable_reason(hold_reason: str | None) -> bool:
-    """``True`` si ce rejet mérite un contrefactuel -- un vrai seuil discrétionnaire a
-    bloqué un candidat avec un prix connu, PAS une absence de donnée/signal ni une
-    menace confirmée (cf. docstring du module)."""
+    """``True`` if this rejection deserves a counterfactual -- a real discretionary
+    threshold blocked a candidate with a known price, NOT a lack of data/signal nor
+    a confirmed threat (see module docstring)."""
     return bool(hold_reason) and hold_reason not in _EXCLUDED_REASONS
 
 
 async def record_rejection(
     contract: str, chain: str, symbol: str, hold_reason: str | None, price: float | None,
 ) -> None:
-    """Enregistre un rejet -- no-op silencieux si ``hold_reason`` n'est pas trackable ou
-    si ``price`` est absent/invalide (aucun point de départ pour un contrefactuel).
-    Jamais une exception qui remonterait à l'appelant (``paper_trader.run_paper_cycle``)
-    -- un échec d'écriture de télémétrie ne doit jamais casser un cycle de trading réel."""
+    """Records a rejection -- silent no-op if ``hold_reason`` isn't trackable or
+    if ``price`` is absent/invalid (no starting point for a counterfactual).
+    Never an exception that would bubble up to the caller (``paper_trader.run_paper_cycle``)
+    -- a telemetry write failure must never break a real trading cycle."""
     if not is_trackable_reason(hold_reason) or not price or price <= 0:
         return
     try:
@@ -116,14 +116,14 @@ async def record_rejection(
                 (contract, chain or "base", symbol or "", hold_reason, price, _now()),
             )
             await db.commit()
-    except Exception:  # noqa: BLE001 — télémétrie best-effort, jamais bloquante
-        logger.info("counterfactual_tracker: échec d'enregistrement pour %s", contract, exc_info=True)
+    except Exception:  # noqa: BLE001 — best-effort telemetry, never blocking
+        logger.info("counterfactual_tracker: recording failed for %s", contract, exc_info=True)
 
 
 async def list_due_for_revisit(*, older_than_days: float = REVISIT_AFTER_DAYS, limit: int = 20) -> list[dict]:
-    """Rejets jamais revisités, plus vieux que ``older_than_days`` -- les plus anciens
-    d'abord (FIFO, jamais un ordre arbitraire qui laisserait certains candidats
-    éternellement en attente si le volume dépasse ``limit`` par cycle)."""
+    """Rejections never revisited, older than ``older_than_days`` -- oldest first
+    (FIFO, never an arbitrary order that would leave some candidates waiting
+    forever if volume exceeds ``limit`` per cycle)."""
     await _ensure_table()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -139,11 +139,11 @@ async def list_due_for_revisit(*, older_than_days: float = REVISIT_AFTER_DAYS, l
 
 
 async def record_revisit(row_id: int, price_at_revisit: float | None) -> None:
-    """Enregistre le résultat d'une revisite -- ``price_at_revisit=None`` (prix
-    introuvable au moment de la revisite, ex. token illiquide/rug depuis) marque quand
-    même la ligne comme revisitée (jamais retentée en boucle), mais laisse ``price_
-    change_pct`` à ``NULL`` -- jamais un 0% inventé qui serait indiscernable d'un vrai
-    prix stable."""
+    """Records the outcome of a revisit -- ``price_at_revisit=None`` (price not
+    found at revisit time, e.g. token illiquid/rugged since) still marks the row
+    as revisited (never retried in a loop), but leaves ``price_change_pct`` at
+    ``NULL`` -- never an invented 0% that would be indistinguishable from a real
+    stable price."""
     await _ensure_table()
     now = _now()
     change_pct = None
@@ -164,12 +164,12 @@ async def record_revisit(row_id: int, price_at_revisit: float | None) -> None:
 
 
 async def run_revisit_cycle(*, limit: int = 20) -> dict:
-    """Un tour de revisite : pour chaque rejet dû, refetch le prix RÉEL actuel (même
-    client que le reste du pipeline momentum, ``paper_trader._default_pair_lookup`` --
-    jamais un second client dupliqué) et enregistre l'évolution. Gaté par l'appelant
-    (``heartbeat.py``, ``ARIA_COUNTERFACTUAL_TRACKER_ENABLED``) -- cette fonction ne
-    vérifie pas le gate elle-même, même patron que les autres cycles (``bonding_
-    discovery_cycle``, etc.)."""
+    """One revisit pass: for each due rejection, refetch the REAL current price
+    (same client as the rest of the momentum pipeline, ``paper_trader._default_pair_lookup``
+    -- never a second duplicated client) and record the evolution. Gated by the
+    caller (``heartbeat.py``, ``ARIA_COUNTERFACTUAL_TRACKER_ENABLED``) -- this
+    function doesn't check the gate itself, same pattern as the other cycles
+    (``bonding_discovery_cycle``, etc.)."""
     from aria_core import paper_trader
 
     due = await list_due_for_revisit(limit=limit)
@@ -180,7 +180,7 @@ async def run_revisit_cycle(*, limit: int = 20) -> dict:
         try:
             pair = await paper_trader._default_pair_lookup(row["contract"], chain=row["chain"] or "base")
             price = pair.price_usd if pair is not None else None
-        except Exception:  # noqa: BLE001 — une panne réseau sur CE candidat ne bloque pas les autres
+        except Exception:  # noqa: BLE001 — a network failure on THIS candidate doesn't block the others
             price = None
         if not price or price <= 0:
             price_unavailable += 1
@@ -194,10 +194,10 @@ def _now() -> str:
 
 
 async def summarize_revisited(*, limit: int = 500) -> dict:
-    """Agrège les contrefactuels déjà résolus (revisités) -- par raison de rejet :
-    combien, évolution de prix moyenne/médiane, combien auraient "significativement"
-    monté (>= +50%, seuil de lecture, pas un jugement -- cf. format_counterfactual_
-    summary pour l'avertissement sur la taille d'échantillon)."""
+    """Aggregates the already-resolved (revisited) counterfactuals -- by rejection
+    reason: how many, average/median price evolution, how many would have
+    "significantly" risen (>= +50%, a reading threshold, not a judgment -- see
+    format_counterfactual_summary for the sample-size warning)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

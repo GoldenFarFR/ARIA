@@ -1,9 +1,9 @@
-"""Bannière X ARIA — header profil 3:1 (≠ avatar carré).
+"""ARIA X banner — 3:1 profile header (different from the square avatar).
 
-Pipeline visuel (3 actifs distincts) :
-- **Avatar** : `current.jpg` — photo de profil carrée (Telegram /avatar, sync X).
-- **Ancre identité** : `identity_anchor.jpg` — référence visage (même personnage).
-- **Bannière** : `x_banner.jpg` — header 3:1 créatif Imagine (text-to-image brand, ≠ photo profil).
+Visual pipeline (3 distinct assets):
+- **Avatar**: `current.jpg` — square profile photo (Telegram /avatar, X sync).
+- **Identity anchor**: `identity_anchor.jpg` — face reference (same character).
+- **Banner**: `x_banner.jpg` — 3:1 creative Imagine header (text-to-image brand, not a profile photo).
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from aria_core.paths import aria_avatar_dir
 logger = logging.getLogger(__name__)
 
 BANNER_FILENAME = "x_banner.jpg"
-# X header recommandé 1500×500 (3:1) — API max 3 Mo
+# Recommended X header 1500×500 (3:1) — API max 3 MB
 BANNER_WIDTH = 1500
 BANNER_HEIGHT = 500
 BANNER_MAX_BYTES = 3 * 1024 * 1024
@@ -34,7 +34,7 @@ def normalize_banner_jpeg(
     height: int = BANNER_HEIGHT,
     max_bytes: int = BANNER_MAX_BYTES,
 ) -> bytes:
-    """Recadre centre 3:1 puis resize — jamais le carré avatar 640×640."""
+    """Center-crops to 3:1 then resizes — never the 640×640 square avatar."""
     from io import BytesIO
 
     from PIL import Image
@@ -76,7 +76,7 @@ def default_banner_scene() -> str:
 
 
 def _banner_brand_brief() -> str:
-    """Brand abstrait uniquement — jamais le brief identite (evite visage sur banniere)."""
+    """Abstract brand only — never the identity brief (avoids a face on the banner)."""
     from aria_core.runtime import settings
 
     holding = (getattr(settings, "aria_holding_name", "") or "").strip()
@@ -110,7 +110,7 @@ async def ensure_x_banner_file(*, force: bool = False) -> Path | None:
 
 
 async def get_visual_assets_status() -> dict[str, Any]:
-    """Avatar, ancre identité et bannière — états séparés (ne pas confondre)."""
+    """Avatar, identity anchor, and banner — separate states (don't confuse them)."""
     from aria_core.avatar import current_avatar_path
     from aria_core.avatar_identity import has_identity_anchor
 
@@ -127,7 +127,7 @@ async def get_visual_assets_status() -> dict[str, Any]:
 
 
 def format_visual_assets_lines(*, lang: str = "fr") -> list[str]:
-    """Lignes HUD — avatar ≠ ancre ≠ bannière."""
+    """HUD lines — avatar != anchor != banner."""
     from aria_core.avatar import current_avatar_path
     from aria_core.avatar_identity import has_identity_anchor
 

@@ -1,4 +1,4 @@
-"""Pipeline épistémique — web verify, critic, calibration log, contradictions."""
+"""Epistemic pipeline — web verify, critic, calibration log, contradictions."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ async def finalize_reply(
     public: bool = False,
     skill_used: str | None = None,
 ) -> tuple[str, dict]:
-    """Applique critic gate + log calibration sur toute réponse opérateur."""
+    """Applies the critic gate + logs calibration on every operator reply."""
     from aria_core.runtime import settings
 
     if public or not reply:
@@ -70,7 +70,7 @@ async def enhance_calibrated_answer(
     *,
     public: bool = True,
 ) -> tuple[str | None, dict]:
-    """Web verify + re-calibration si incertain."""
+    """Web verify + re-calibration if uncertain."""
     if not reply:
         return reply, meta
     return await web_enhance_calibrated(query, reply, meta, lang, public=public)

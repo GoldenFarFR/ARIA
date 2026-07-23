@@ -133,7 +133,7 @@ async def get_approved_since(
     source: str | None = None,
     limit: int = 20,
 ) -> list[KnowledgeItem]:
-    """Insights approuvés créés après `since` (ex. réponses X après un tweet publié)."""
+    """Approved insights created after `since` (e.g. X replies after a published tweet)."""
     await _ensure_table()
     since_iso = since.isoformat()
     query = """

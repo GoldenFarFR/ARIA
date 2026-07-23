@@ -1,39 +1,39 @@
-"""Auto-formation continue d'ARIA via Tavily -- 22/07.
+"""ARIA's continuous self-learning via Tavily -- 07/22.
 
-Comble un vrai trou : ``curiosity.py::run_curiosity_cycle`` (le pipeline
-existant fetch -> triage Groq -> pending -> approbation Telegram -> ingestion
-LanceDB) dépend de l'API X officielle (``x_bearer_token``/``x_api_key``),
-volontairement coupée depuis début juillet (coût pay-per-use, cf. CLAUDE.md).
-Ce module ajoute une SOURCE alternative -- Tavily (déjà payé, budget mensuel
-partagé) -- pour DEUX types de contenu que l'API X ne couvrait de toute façon
-pas complètement :
+Fills a real gap: ``curiosity.py::run_curiosity_cycle`` (the existing
+fetch -> Groq triage -> pending -> Telegram approval -> LanceDB ingestion
+pipeline) depends on the official X API (``x_bearer_token``/``x_api_key``),
+deliberately cut since early July (pay-per-use cost, cf. CLAUDE.md).
+This module adds an alternative SOURCE -- Tavily (already paid for, shared
+monthly budget) -- for TWO kinds of content that the X API never fully
+covered anyway:
 
-1. Comptes X déjà suivis (``x_watchlist.py``, watchlist EXISTANTE, rien
-   dupliqué) -- via ``include_domains=["twitter.com","x.com"]`` (vérifié en
-   conditions réelles, 22/07).
-2. Sujets d'auto-formation générale -- macro-économie (prioritaire),
-   psychologie de trading, documentation/outils (``learning_topics.yaml``,
-   NOUVEAU -- l'API X n'a jamais couvert ça, ce n'est pas un repli, c'est une
-   vraie extension).
+1. Already-tracked X accounts (``x_watchlist.py``, EXISTING watchlist, nothing
+   duplicated) -- via ``include_domains=["twitter.com","x.com"]`` (verified under
+   real conditions, 07/22).
+2. General self-learning topics -- macro-economics (priority),
+   trading psychology, documentation/tools (``learning_topics.yaml``,
+   NEW -- the X API never covered this, this isn't a fallback, it's a
+   real extension).
 
-Réutilise INTÉGRALEMENT le reste du pipeline existant (triage, stockage
-pending, approbation Telegram réutilisant le même tag ``learn_knowledge``,
-ingestion LanceDB à l'approbation via ``cognitive.approve_knowledge`` ->
-``ingest.ingest_approved_item``) -- seule la source change. Volontairement
-UNE cycle DISTINCTE de ``x_curiosity`` (pas une modification de celle-ci) :
-son gate est lié à la décision opérateur sur l'API X officielle (question
-distincte, jamais présumée réactivée), ce nouveau gate lui est propre.
+FULLY reuses the rest of the existing pipeline (triage, pending
+storage, Telegram approval reusing the same ``learn_knowledge`` tag,
+LanceDB ingestion on approval via ``cognitive.approve_knowledge`` ->
+``ingest.ingest_approved_item``) -- only the source changes. Deliberately a
+DISTINCT cycle from ``x_curiosity`` (not a modification of it): its gate
+is tied to the operator's decision on the official X API (a separate
+question, never presumed reactivated), this new gate is its own.
 
-Cadence QUOTIDIENNE, budget BORNÉ : 1 compte X + 1 sujet par passage (2
-recherches Tavily "basic" = 2 crédits/jour, ~60/mois sur un budget partagé de
-900 -- large marge pour les appels ad-hoc existants, web_verify/
-conviction_research). Round-robin PERSISTÉ (SQLite) : chaque compte/sujet de
-la liste est couvert à tour de rôle sur plusieurs jours, jamais toujours le
-même en tête.
+DAILY cadence, BOUNDED budget: 1 X account + 1 topic per pass (2
+Tavily "basic" searches = 2 credits/day, ~60/month out of a shared budget of
+900 -- ample margin for the existing ad-hoc calls, web_verify/
+conviction_research). PERSISTED round-robin (SQLite): each account/topic in
+the list is covered in turn over several days, never always the
+same one first.
 
-Auto-curation de la liste de sujets par ARIA elle-même (proposition d'ajout,
-même doctrine que knowledge_inbox.py) : DIFFÉRÉE, pas encore construite --
-liste éditée manuellement pour l'instant (``learning_topics.yaml``).
+ARIA self-curating her own topic list (add proposal, same doctrine
+as knowledge_inbox.py): DEFERRED, not yet built --
+list manually edited for now (``learning_topics.yaml``).
 """
 from __future__ import annotations
 
@@ -49,9 +49,9 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-# Par passage : 1 compte X + 1 sujet -- 2 recherches "basic" (1 crédit
-# chacune) au maximum. Volontairement petit et fixe (v1) -- cf. docstring
-# module pour le calcul de marge sur le budget mensuel partagé.
+# Per pass: 1 X account + 1 topic -- 2 "basic" searches (1 credit
+# each) maximum. Deliberately small and fixed (v1) -- cf. module
+# docstring for the margin calculation on the shared monthly budget.
 _MAX_SNIPPETS_PER_SEARCH = 3
 _MIN_SNIPPET_CHARS = 20
 
@@ -76,9 +76,9 @@ async def _ensure_cursor_table() -> None:
 
 
 async def _next_item(list_name: str, items: list[Any]) -> Any | None:
-    """Round-robin PERSISTÉ : avance le curseur d'une liste et boucle à la
-    fin. ``None`` si la liste est vide (jamais une erreur -- une watchlist ou
-    une liste de sujets momentanément vide ne casse jamais le cycle)."""
+    """PERSISTED round-robin: advances a list's cursor and loops back at the
+    end. ``None`` if the list is empty (never an error -- a momentarily empty
+    watchlist or topic list never breaks the cycle)."""
     if not items:
         return None
     await _ensure_cursor_table()
@@ -144,17 +144,17 @@ async def _triage_and_store_market(snippets, *, topic: str) -> int:
 
 
 async def run_tavily_learning_cycle() -> dict:
-    """Un passage : 1 compte X (watchlist existante) + 1 sujet
-    (macro/psychologie/doc), round-robin persisté, triage Groq réutilisé,
-    stockage pending + approbation Telegram réutilisés tels quels."""
+    """One pass: 1 X account (existing watchlist) + 1 topic
+    (macro/psychology/docs), persisted round-robin, reused Groq triage,
+    reused pending storage + Telegram approval as-is."""
     if not tavily_learning_enabled():
         return {"outcome": "skipped_disabled"}
 
     from aria_core.services import tavily_budget
     from aria_core.services.tavily import tavily_client
 
-    # 2 recherches "basic" max ce passage (1 crédit chacune) -- vérifié
-    # AVANT de commencer, jamais après coup (même doctrine que blockscout.py).
+    # 2 "basic" searches max this pass (1 credit each) -- checked
+    # BEFORE starting, never after the fact (same doctrine as blockscout.py).
     if not await tavily_budget.can_spend(2 * tavily_budget.COST_BASIC):
         return {"outcome": "budget_exhausted"}
 
@@ -177,8 +177,8 @@ async def run_tavily_learning_cycle() -> dict:
                 max_results=_MAX_SNIPPETS_PER_SEARCH,
                 caller="tavily_learning",
             )
-        except Exception as exc:  # noqa: BLE001 -- un échec réseau ne casse jamais le cycle
-            logger.warning("tavily_learning: recherche X échouée pour %s: %s", handle, exc)
+        except Exception as exc:  # noqa: BLE001 -- a network failure never breaks the cycle
+            logger.warning("tavily_learning: X search failed for %s: %s", handle, exc)
             result = None
         if result is not None and result.available:
             new_insights += await _triage_and_store_x(result.snippets, topic=f"@{handle}")
@@ -193,7 +193,7 @@ async def run_tavily_learning_cycle() -> dict:
                 caller="tavily_learning",
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("tavily_learning: recherche sujet échouée (%s): %s", topic_entry["query"], exc)
+            logger.warning("tavily_learning: topic search failed (%s): %s", topic_entry["query"], exc)
             result = None
         if result is not None and result.available:
             new_insights += await _triage_and_store_market(

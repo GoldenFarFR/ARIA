@@ -1,4 +1,4 @@
-"""Journal de calibration — prédictions P(vrai) + corrections opérateur (score Brier)."""
+"""Calibration ledger — P(true) predictions + operator corrections (Brier score)."""
 
 from __future__ import annotations
 

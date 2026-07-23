@@ -1,4 +1,4 @@
-"""État quota Cursor Pro — saisi depuis cursor.com/dashboard/usage (pas d'API publique)."""
+"""Cursor Pro quota state — entered from cursor.com/dashboard/usage (no public API)."""
 from __future__ import annotations
 
 import json

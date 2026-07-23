@@ -20,14 +20,14 @@ def detect_lang(text: str) -> str:
 
 
 def detect_operator_lang(text: str) -> str:
-    """Chemin opérateur uniquement (admin Telegram) -- ne jamais retomber sur l'anglais
-    par défaut en cas d'ambiguïté. L'opérateur est un interlocuteur unique et francophone
-    par doctrine (CLAUDE.md), pas un cas à détecter -- contrairement à detect_lang(), pensé
-    pour des visiteurs publics multilingues et gardé inchangé pour ce chemin-là.
+    """Operator path only (admin Telegram) -- never fall back to English
+    by default in case of ambiguity. The operator is a single, French-speaking
+    interlocutor by doctrine (CLAUDE.md), not a case to detect -- unlike detect_lang(),
+    designed for multilingual public visitors and kept unchanged for that path.
 
-    Incident réel (12/07) : "tu a scanner de nouveau projet qui t'interresse ?" (sans
-    accent, un seul mot-indice sur les deux requis par detect_lang()) tombait sur son
-    défaut anglais -- ARIA a répondu entièrement en anglais à l'opérateur."""
+    Real incident (12/07): "tu a scanner de nouveau projet qui t'interresse ?" (no
+    accents, only one of the two hint-words required by detect_lang()) fell through
+    to its English default -- ARIA replied entirely in English to the operator."""
     return LANG_FR
 
 

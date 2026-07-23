@@ -1,49 +1,49 @@
-"""Lecture profonde d'UNE page web réelle -- capacité de lecture directe pour ARIA
-quand la recherche courante (DuckDuckGo/Tavily, extraits courts) ne trouve rien
-(tâche 13/07, cas réel : withluma.app, ARIA a honnêtement dit "je ne sais pas"
-faute de moyen de lire la page elle-même).
+"""Deep read of ONE real web page -- direct reading capability for ARIA
+when current search (DuckDuckGo/Tavily, short snippets) finds nothing
+(task 13/07, real case: withluma.app, ARIA honestly said "I don't know"
+for lack of a way to read the page itself).
 
-Distinct de ``services/site_snapshot.py`` (diligence VC pré-investissement,
-plafonné à 600 caractères, câblé exclusivement dans le dôme ``vc_analysis.py``)
--- volontairement un fichier séparé pour ne jamais changer ce comportement
-existant. Budget de texte beaucoup plus généreux ici (lecture, pas un aperçu).
+Distinct from ``services/site_snapshot.py`` (pre-investment VC diligence,
+capped at 600 characters, wired exclusively into the ``vc_analysis.py`` dome)
+-- deliberately a separate file to never change that existing behavior.
+A much more generous text budget here (reading, not a preview).
 
-Mêmes fondations que ``site_snapshot.py`` (httpx, extraction HTML->texte par
-regex, pas de nouvelle dépendance de parsing) + garde SSRF supplémentaire :
-cette capacité est déclenchée par une URL COLLÉE PAR L'OPÉRATEUR en chat (cf.
-``knowledge/web_verify.py::fetch_page_content``), donc une nouvelle surface
-"fetch une URL arbitraire" exposée depuis une entrée utilisateur -- la défense
-en profondeur reste justifiée même si le déclencheur est admin-only.
+Same foundations as ``site_snapshot.py`` (httpx, regex-based HTML->text
+extraction, no new parsing dependency) + an additional SSRF guard:
+this capability is triggered by a URL PASTED BY THE OPERATOR in chat (cf.
+``knowledge/web_verify.py::fetch_page_content``), i.e. a new "fetch an
+arbitrary URL" surface exposed from user input -- defense in depth remains
+justified even though the trigger is admin-only.
 
-Lecture seule (GET), HTTP simple uniquement dans cette version (pas de repli
-Playwright -- reporté à une v2, cf. plan 13/07). Un blocage (403, anti-bot,
-timeout) échoue honnêtement (``available=False``, raison explicite) plutôt que
-de fabriquer un contenu de remplacement.
+Read-only (GET), plain HTTP only in this version (no Playwright fallback
+-- deferred to a v2, cf. 13/07 plan). A block (403, anti-bot,
+timeout) fails honestly (``available=False``, explicit reason) rather than
+fabricating replacement content.
 
-**Correctif TOCTOU / DNS rebinding (relecture pré-merge, 13/07)** : une garde
-SSRF qui résout puis vérifie l'hôte, mais laisse ensuite le client HTTP
-refaire sa PROPRE résolution DNS indépendante au moment de la connexion
-réelle, est contournable -- un attaquant contrôlant le DNS du domaine cible
-peut renvoyer une IP publique légitime au premier lookup (celui vérifié par
-``_resolve_and_guard``) puis une IP privée au second (celui que le client
-HTTP utiliserait). ``_resolve_and_guard`` renvoie donc désormais l'IP
-VÉRIFIÉE elle-même, et ``fetch_page_text`` force httpx à s'y connecter
-directement via un ``httpcore.AsyncNetworkBackend`` custom
-(``_PinnedIPNetworkBackend``) -- aucune seconde résolution DNS n'a lieu. Le
-nom d'hôte d'origine reste utilisé pour le Host HTTP et le SNI/la validation
-de certificat TLS (passés séparément par httpcore, jamais dérivés de l'IP) :
-le certificat est donc bien vérifié contre le vrai domaine.
+**TOCTOU / DNS rebinding fix (pre-merge review, 13/07)**: an SSRF guard
+that resolves then checks the host, but then lets the HTTP client redo
+its OWN independent DNS resolution at the time of the actual connection,
+is bypassable -- an attacker controlling the target domain's DNS can
+return a legitimate public IP on the first lookup (the one checked by
+``_resolve_and_guard``) then a private IP on the second (the one the
+HTTP client would use). ``_resolve_and_guard`` therefore now returns the
+VERIFIED IP itself, and ``fetch_page_text`` forces httpx to connect to it
+directly via a custom ``httpcore.AsyncNetworkBackend``
+(``_PinnedIPNetworkBackend``) -- no second DNS resolution happens. The
+original hostname is still used for the HTTP Host and TLS SNI/certificate
+validation (passed separately by httpcore, never derived from the IP):
+the certificate is therefore correctly verified against the real domain.
 
-**Limite résiduelle assumée, documentée plutôt que cachée** : le transport
-épinglé force TOUTE connexion de ce client vers l'IP validée, y compris si le
-site répond par une redirection vers un AUTRE domaine (``follow_redirects=
-True``). Une redirection vers le même hôte fonctionne normalement. Une
-redirection cross-domaine échoue proprement (nom de domaine du Host ne
-correspond plus au certificat de l'IP épinglée -> erreur TLS/connexion,
-jamais une connexion silencieuse vers un tiers) plutôt que d'être suivie --
-c'est un échec sûr par construction (le socket ne quitte jamais l'IP déjà
-validée), pas un contournement, mais une redirection légitime vers un autre
-domaine ne sera pas suivie dans cette version.
+**Residual limitation, deliberately accepted and documented rather than
+hidden**: the pinned transport forces EVERY connection of this client to the
+validated IP, including if the site responds with a redirect to ANOTHER
+domain (``follow_redirects=True``). A redirect to the same host works
+normally. A cross-domain redirect fails cleanly (the Host's domain name no
+longer matches the pinned IP's certificate -> TLS/connection error,
+never a silent connection to a third party) rather than being followed --
+this is a safe failure by construction (the socket never leaves the
+already-validated IP), not a workaround, but a legitimate redirect to
+another domain will not be followed in this version.
 """
 
 from __future__ import annotations
@@ -62,8 +62,8 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 12.0
-_MAX_RAW_HTML_CHARS = 200_000  # borne le travail de parsing, pas la taille réseau
-_MAX_PAGE_TEXT_CHARS = 6000  # lecture "en profondeur", pas un aperçu (cf. site_snapshot.py: 600)
+_MAX_RAW_HTML_CHARS = 200_000  # bounds the parsing work, not the network size
+_MAX_PAGE_TEXT_CHARS = 6000  # "deep" reading, not a preview (cf. site_snapshot.py: 600)
 _USER_AGENT = "Mozilla/5.0 (compatible; AriaVanguardBot/1.0; +https://ariavanguardzhc.com)"
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -77,7 +77,7 @@ _WS_RE = re.compile(r"\s+")
 
 @dataclass
 class PageFetchResult:
-    """Contenu réel d'une page, jamais un texte inventé."""
+    """Real content of a page, never invented text."""
 
     url: str
     title: str = ""
@@ -91,9 +91,9 @@ def _clean_text(raw: str) -> str:
 
 
 def _extract_page_text(html: str) -> tuple[str, str]:
-    """Renvoie ``(title, text)``. Même approche regex que ``site_snapshot.py``
-    (pas de nouvelle dépendance de parsing HTML) -- titre + meta-description +
-    texte visible, nettoyé, tronqué à ``_MAX_PAGE_TEXT_CHARS``."""
+    """Returns ``(title, text)``. Same regex approach as ``site_snapshot.py``
+    (no new HTML parsing dependency) -- title + meta-description +
+    visible text, cleaned, truncated to ``_MAX_PAGE_TEXT_CHARS``."""
     title_match = _TITLE_RE.search(html)
     title = _clean_text(title_match.group(1)) if title_match else ""
     desc_match = _META_DESC_RE.search(html)
@@ -112,7 +112,7 @@ def _is_blocked_ip(ip_str: str) -> bool:
     try:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
-        return True  # IP illisible -- prudence, on refuse
+        return True  # unparseable IP -- err on the side of caution, refuse
     return (
         ip.is_private
         or ip.is_loopback
@@ -124,13 +124,13 @@ def _is_blocked_ip(ip_str: str) -> bool:
 
 
 async def _resolve_and_guard(hostname: str) -> tuple[str | None, str | None]:
-    """Résout ``hostname`` UNE SEULE FOIS et refuse toute IP privée/loopback/
-    lien-local/réservée (garde SSRF). Renvoie ``(ip, None)`` si sûr -- cette IP
-    est celle à ÉPINGLER pour la connexion réelle (cf. _PinnedIPNetworkBackend) :
-    laisser le client HTTP refaire sa propre résolution indépendante au moment
-    de la connexion serait un TOCTOU (DNS rebinding) qui contournerait cette
-    garde entièrement. Renvoie ``(None, erreur)`` si bloqué. Résolution en
-    thread pour ne jamais geler la boucle async."""
+    """Resolves ``hostname`` ONCE and refuses any private/loopback/
+    link-local/reserved IP (SSRF guard). Returns ``(ip, None)`` if safe -- this IP
+    is the one to PIN for the actual connection (cf. _PinnedIPNetworkBackend):
+    letting the HTTP client redo its own independent resolution at the time
+    of the connection would be a TOCTOU (DNS rebinding) that would bypass this
+    guard entirely. Returns ``(None, error)`` if blocked. Resolution runs in a
+    thread so it never freezes the async loop."""
     try:
         addr_info = await asyncio.to_thread(socket.getaddrinfo, hostname, None)
     except socket.gaierror as exc:
@@ -146,12 +146,12 @@ async def _resolve_and_guard(hostname: str) -> tuple[str | None, str | None]:
 
 
 class _PinnedIPNetworkBackend(httpcore.AsyncNetworkBackend):
-    """Force TOUTE connexion TCP de ce transport vers ``pinned_ip`` -- ignore le
-    nom d'hôte que httpcore lui passerait normalement pour connect_tcp (qui
-    déclencherait une résolution DNS indépendante de celle déjà vérifiée par
-    _resolve_and_guard). Le TLS/SNI (server_hostname) est géré séparément par
-    httpcore lors de start_tls, toujours avec le vrai nom de domaine -- jamais
-    dérivé de l'IP -- donc la validation de certificat reste correcte."""
+    """Forces EVERY TCP connection of this transport to ``pinned_ip`` -- ignores
+    the hostname httpcore would normally pass it for connect_tcp (which would
+    trigger a DNS resolution independent from the one already checked by
+    _resolve_and_guard). TLS/SNI (server_hostname) is handled separately by
+    httpcore during start_tls, always with the real domain name -- never
+    derived from the IP -- so certificate validation stays correct."""
 
     def __init__(self, pinned_ip: str) -> None:
         self._pinned_ip = pinned_ip
@@ -162,7 +162,7 @@ class _PinnedIPNetworkBackend(httpcore.AsyncNetworkBackend):
             self._pinned_ip, port, timeout=timeout, local_address=local_address, socket_options=socket_options,
         )
 
-    async def connect_unix_socket(self, path, timeout=None, socket_options=None):  # pragma: nocover -- jamais utilisé ici
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):  # pragma: nocover -- never used here
         return await self._real_backend.connect_unix_socket(path, timeout=timeout, socket_options=socket_options)
 
     async def sleep(self, seconds: float) -> None:
@@ -170,9 +170,9 @@ class _PinnedIPNetworkBackend(httpcore.AsyncNetworkBackend):
 
 
 def _build_pinned_transport(pinned_ip: str) -> httpx.AsyncHTTPTransport:
-    """Transport httpx dont TOUTES les connexions passent par l'IP déjà validée
-    -- aucune seconde résolution DNS indépendante n'a lieu (cf. docstring module
-    et _PinnedIPNetworkBackend)."""
+    """httpx transport where ALL connections go through the already-validated IP
+    -- no second independent DNS resolution takes place (cf. module docstring
+    and _PinnedIPNetworkBackend)."""
     transport = httpx.AsyncHTTPTransport()
     transport._pool = httpcore.AsyncConnectionPool(
         ssl_context=httpx.create_ssl_context(),
@@ -182,10 +182,10 @@ def _build_pinned_transport(pinned_ip: str) -> httpx.AsyncHTTPTransport:
 
 
 async def fetch_page_text(url: str) -> PageFetchResult:
-    """Contenu texte réel d'UNE page -- HTTP simple uniquement (pas de repli
-    Playwright dans cette version, cf. plan 13/07). Ne lève jamais ; échec
-    réseau/SSRF/blocage -> ``available=False`` avec une raison explicite,
-    jamais un contenu de remplacement inventé."""
+    """Real text content of ONE page -- plain HTTP only (no Playwright fallback
+    in this version, cf. 13/07 plan). Never raises; network/SSRF/block
+    failure -> ``available=False`` with an explicit reason,
+    never invented replacement content."""
     if not url or not isinstance(url, str):
         return PageFetchResult(url=str(url or ""), available=False, error="URL absente")
 
@@ -195,7 +195,7 @@ async def fetch_page_text(url: str) -> PageFetchResult:
 
     pinned_ip, guard_error = await _resolve_and_guard(parsed.hostname)
     if guard_error:
-        logger.info("page_reader: %s refusé (%s)", parsed.hostname, guard_error)
+        logger.info("page_reader: %s refused (%s)", parsed.hostname, guard_error)
         return PageFetchResult(url=url, available=False, error=guard_error)
 
     try:
@@ -204,8 +204,8 @@ async def fetch_page_text(url: str) -> PageFetchResult:
             timeout=_TIMEOUT_SECONDS, follow_redirects=True, transport=transport,
         ) as client:
             r = await client.get(url, headers={"User-Agent": _USER_AGENT})
-    except Exception as exc:  # noqa: BLE001 -- jamais bloquant, échec honnête plus bas
-        logger.info("page_reader: fetch %s échoué (%s)", url, exc)
+    except Exception as exc:  # noqa: BLE001 -- never blocking, honest failure below
+        logger.info("page_reader: fetch %s failed (%s)", url, exc)
         return PageFetchResult(url=url, available=False, error=f"page inaccessible ({type(exc).__name__})")
 
     if r.status_code == 403:

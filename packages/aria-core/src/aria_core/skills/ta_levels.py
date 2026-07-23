@@ -1,19 +1,25 @@
-"""Moteur d'analyse technique déterministe (facts-only) pour ARIA.
+"""Deterministic (facts-only) technical analysis engine for ARIA.
 
-Ce module dérive des niveaux techniques — plus-haut / plus-bas, supports,
-résistances, tendance — **purement** à partir d'une série OHLCV fournie en
-entrée. Aucun niveau, aucune tendance, aucune justification n'est inventé :
-chaque valeur est calculée de façon déterministe (mêmes bougies → même résultat)
-et chaque niveau porte une **base factuelle** (« résistance = plus-haut testé N
-fois sur M bougies ») qui explicite d'où il vient.
+This module derives technical levels — high / low, supports, resistances,
+trend — **purely** from an OHLCV series given as input. No level, no trend,
+no justification is ever fabricated: every value is computed deterministically
+(same candles -> same result) and every level carries a **factual basis**
+("resistance = high tested N times over M candles") that makes its origin
+explicit.
 
-Principe (extension du dôme facts-only) : si une donnée n'est pas dans la série,
-elle n'apparaît pas dans le résultat. Une fenêtre vide ou d'une seule bougie ne
-lève jamais d'exception — elle produit un ``TALevels`` cohérent et dégradé.
+Principle (extension of the facts-only dome): if data isn't in the series, it
+doesn't appear in the result. An empty window or a single-candle window never
+raises -- it produces a coherent, degraded ``TALevels``.
 
-``suggest_entry_zone`` propose une zone d'entrée / invalidation / cible
-**dérivée des niveaux réels** (support proche = invalidation sous le support ;
-cible = résistance suivante), jamais un objectif fabriqué.
+``suggest_entry_zone`` proposes an entry / invalidation / target zone
+**derived from real levels** (nearby support = invalidation below the
+support; target = next resistance), never a fabricated target.
+
+NOTE (translation, 23/07): the field names below (``plus_haut``, ``tendance``,
+etc.) and the French text values they hold ("haussière", "Résistance = ...")
+are FUNCTIONAL data returned by this engine (asserted on by tests, likely
+consumed downstream) -- kept untouched. Only this module's own narrative
+(docstrings/comments) is in English.
 """
 from __future__ import annotations
 
@@ -23,7 +29,7 @@ from statistics import fmean
 
 @dataclass(frozen=True)
 class Candle:
-    """Une bougie OHLCV. ``ts`` est un horodatage (epoch s ou index de bougie)."""
+    """An OHLCV candle. ``ts`` is a timestamp (epoch seconds or candle index)."""
 
     ts: int
     open: float
@@ -35,11 +41,11 @@ class Candle:
 
 @dataclass(frozen=True)
 class Level:
-    """Un niveau technique dérivé des données, avec sa base factuelle.
+    """A technical level derived from the data, with its factual basis.
 
-    ``type`` ∈ {``"support"``, ``"resistance"``}. ``touches`` est le nombre de
-    pivots regroupés dans ce niveau (combien de fois le prix l'a « testé »).
-    ``base`` est la justification textuelle factuelle du niveau.
+    ``type`` in {``"support"``, ``"resistance"``}. ``touches`` is the number of
+    pivots grouped into this level (how many times the price "tested" it).
+    ``base`` is the level's factual text justification.
     """
 
     prix: float
@@ -50,12 +56,12 @@ class Level:
 
 @dataclass(frozen=True)
 class TALevels:
-    """Résultat de l'analyse technique déterministe d'une fenêtre OHLCV.
+    """Result of the deterministic technical analysis of an OHLCV window.
 
-    Tous les champs dérivent uniquement des bougies fournies. ``supports`` et
-    ``resistances`` sont triés du plus significatif (le plus testé) au moins
-    significatif. ``bases`` regroupe les justifications factuelles globales
-    (extrêmes, tendance) pour un affichage synthétique.
+    All fields derive solely from the supplied candles. ``supports`` and
+    ``resistances`` are sorted from most significant (most tested) to least
+    significant. ``bases`` gathers the global factual justifications
+    (extremes, trend) for a synthetic display.
     """
 
     plus_haut: float | None
@@ -71,7 +77,7 @@ class TALevels:
 
 @dataclass(frozen=True)
 class EntryZone:
-    """Zone d'entrée dérivée des niveaux réels (jamais un objectif fabriqué)."""
+    """Entry zone derived from real levels (never a fabricated target)."""
 
     entree: float
     invalidation: float
@@ -79,17 +85,17 @@ class EntryZone:
     base: str
 
 
-# Tolérance de regroupement des pivots : 2 % de l'amplitude de la fenêtre.
+# Pivot clustering tolerance: 2% of the window's amplitude.
 _CLUSTER_TOL_FRAC = 0.02
-# Seuil relatif de départage de la tendance (0,5 % d'écart MM courte/longue).
+# Relative threshold to decide the trend (0.5% gap between short/long MA).
 _TREND_EPS = 0.005
-# Marge d'invalidation sous le support (3 %).
+# Invalidation margin below the support (3%).
 _INVALIDATION_MARGIN = 0.03
 _EPS = 1e-9
 
 
 def _fmt(price: float) -> str:
-    """Format lisible d'un prix, adapté aux échelles crypto (grandes et micro)."""
+    """Readable price format, adapted to crypto scales (large and micro)."""
     ap = abs(price)
     if ap == 0:
         return "0"
@@ -103,7 +109,7 @@ def _fmt(price: float) -> str:
 
 
 def _pivot_window(n: int) -> int:
-    """Demi-largeur de fenêtre pour la détection de pivots, adaptée à la taille."""
+    """Half-window width for pivot detection, adapted to the size."""
     if n <= 2:
         return 0
     if n < 5:
@@ -112,11 +118,11 @@ def _pivot_window(n: int) -> int:
 
 
 def _pivot_indices(values: list[float], k: int, kind: str) -> list[int]:
-    """Indices des pivots locaux (extrema d'une fenêtre glissante de demi-largeur k).
+    """Indices of local pivots (extrema of a sliding window of half-width k).
 
-    Un point est un pivot haut s'il vaut le maximum de sa fenêtre (idem bas pour
-    le minimum). L'égalité compte : un plateau au plus-haut produit plusieurs
-    pivots — c'est voulu, cela reflète des tests répétés du niveau.
+    A point is a high pivot if it equals the maximum of its window (same for
+    low with the minimum). Ties count: a plateau at the high produces several
+    pivots -- this is intentional, it reflects repeated tests of the level.
     """
     out: list[int] = []
     m = len(values)
@@ -132,7 +138,7 @@ def _pivot_indices(values: list[float], k: int, kind: str) -> list[int]:
 
 
 def _cluster_prices(prices: list[float], tol: float) -> list[list[float]]:
-    """Regroupe des prix triés en grappes dont l'écart interne est ≤ tol."""
+    """Groups sorted prices into clusters whose internal spread is <= tol."""
     if not prices:
         return []
     ordered = sorted(prices)
@@ -152,11 +158,11 @@ def _build_levels(
     kind: str,
     n: int,
 ) -> list[Level]:
-    """Construit les niveaux (support/résistance) à partir des prix de pivots.
+    """Builds levels (support/resistance) from pivot prices.
 
-    On ne retient qu'une grappe si elle est testée au moins deux fois OU si elle
-    contient l'extrême global de la fenêtre (plus-haut / plus-bas) — ce dernier
-    étant toujours conservé même testé une seule fois (c'est un fait dur).
+    A cluster is only kept if it's tested at least twice OR if it contains
+    the window's global extreme (high/low) -- the latter always kept even if
+    tested only once (it's a hard fact).
     """
     is_res = kind == "resistance"
     levels: list[Level] = []
@@ -173,15 +179,15 @@ def _build_levels(
             f"{touches} fois sur {n} bougies."
         )
         levels.append(Level(prix=rep, type=kind, touches=touches, base=base))
-    # Tri : le plus testé d'abord, puis par prix (déterministe).
+    # Sort: most tested first, then by price (deterministic).
     levels.sort(key=lambda lv: (-lv.touches, lv.prix))
     return levels
 
 
 def _trend(closes: list[float]) -> tuple[str, str]:
-    """Tendance par comparaison MM courte (dernier tiers) vs MM longue (fenêtre).
+    """Trend by comparing short MA (last third) vs. long MA (whole window).
 
-    Renvoie (tendance, base factuelle). Moins de deux bougies → indéterminée.
+    Returns (trend, factual basis). Fewer than two candles -> indeterminate.
     """
     n = len(closes)
     if n < 2:
@@ -211,10 +217,10 @@ def _trend(closes: list[float]) -> tuple[str, str]:
 
 
 def compute_levels(candles: list[Candle]) -> TALevels:
-    """Dérive de façon déterministe les niveaux techniques d'une fenêtre OHLCV.
+    """Deterministically derives the technical levels of an OHLCV window.
 
-    Chaque niveau et la tendance portent une base factuelle. Une fenêtre vide ou
-    d'une seule bougie ne lève jamais — elle renvoie un ``TALevels`` cohérent.
+    Every level and the trend carry a factual basis. An empty window or a
+    single-candle window never raises -- it returns a coherent ``TALevels``.
     """
     n = len(candles)
     if n == 0:
@@ -269,17 +275,17 @@ def compute_levels(candles: list[Candle]) -> TALevels:
 
 
 def suggest_entry_zone(levels: TALevels) -> EntryZone | None:
-    """Propose entrée / invalidation / cible **dérivées des niveaux réels**.
+    """Proposes entry / invalidation / target **derived from real levels**.
 
-    - Entrée = support le plus proche au niveau (≤) du dernier close (repli sur
-      le plus-bas de fenêtre à défaut de support qualifié).
-    - Invalidation = juste sous ce support (marge de 3 %) : la thèse tombe si le
-      support cède.
-    - Cible = résistance suivante au-dessus du close (repli sur le plus-haut de
-      fenêtre à défaut).
+    - Entry = nearest support at or below (<=) the last close (falls back to
+      the window low absent a qualified support).
+    - Invalidation = just below that support (3% margin): the thesis fails
+      if the support breaks.
+    - Target = next resistance above the close (falls back to the window
+      high absent one).
 
-    Renvoie ``None`` si les niveaux ne permettent pas une zone cohérente (données
-    absentes) — jamais un objectif fabriqué.
+    Returns ``None`` if the levels don't allow a coherent zone (missing
+    data) -- never a fabricated target.
     """
     if levels.dernier_close is None or levels.plus_bas is None or levels.plus_haut is None:
         return None

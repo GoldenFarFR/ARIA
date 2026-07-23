@@ -1,4 +1,4 @@
-"""Génération de portraits ARIA — même personnage, nouveau décor (API image optionnelle)."""
+"""ARIA portrait generation — same character, new setting (optional image API)."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 XAI_IMAGE_EDIT_URL = "https://api.x.ai/v1/images/edits"
 XAI_IMAGE_GENERATIONS_URL = "https://api.x.ai/v1/images/generations"
-BANNER_GENERATION_ASPECT = "2:1"  # normalise ensuite en 3:1 (1500x500)
-# grok-imagine-image = 0.02$/image — quality = 0.05$/image (voir docs.x.ai)
+BANNER_GENERATION_ASPECT = "2:1"  # normalized to 3:1 (1500x500) afterward
+# grok-imagine-image = 0.02$/image — quality = 0.05$/image (see docs.x.ai)
 DEFAULT_IMAGE_MODEL = "grok-imagine-image"
 ANCHOR_MAX_PX = 640
 
@@ -40,7 +40,7 @@ def _image_model() -> str:
 
 
 def _prepare_anchor_jpeg(anchor_jpeg: bytes) -> bytes:
-    """Réduit l'ancre avant upload — même tarif Imagine, moins de latence."""
+    """Shrinks the anchor before upload — same Imagine cost, less latency."""
     from PIL import Image
 
     try:
@@ -77,7 +77,7 @@ async def _extract_image_bytes(client: httpx.AsyncClient, data: dict) -> bytes |
 
 
 async def _call_image_generate(*, prompt: str, aspect_ratio: str = BANNER_GENERATION_ASPECT) -> bytes | None:
-    """Text-to-image Imagine — pas de photo source (banniere brand)."""
+    """Text-to-image Imagine — no source photo (brand banner)."""
     api_key = _image_api_key()
     if not api_key:
         return None
@@ -151,13 +151,14 @@ async def _call_image_edit(*, prompt: str, anchor_jpeg: bytes) -> bytes | None:
     return None
 
 
-# Descripteurs partagés (réalisme + marque) — un seul point d'ajustement pour les 3
-# prompts de portrait. Décision opérateur explicite (10/07, AskUserQuestion) : viser le
-# niveau de réalisme technique de références comme Lily Turner (peau/lumière/cohérence)
-# **sans** reprendre son registre (contenu sexualisé, tenues suggestives) — la ligne
-# "jamais suggestif/sexualisé" ci-dessous n'est donc pas une prudence générique, c'est
-# la frontière explicitement tranchée par l'opérateur, gravée dans le prompt lui-même
-# plutôt que laissée à la seule discipline de qui rédige la légende.
+# Shared descriptors (realism + brand) — a single adjustment point for the 3
+# portrait prompts. Explicit operator decision (10/07, AskUserQuestion): aim
+# for the technical realism level of references like Lily Turner (skin/light/
+# consistency) **without** adopting her register (sexualized content,
+# suggestive outfits) — the "never suggestive/sexualized" line below is
+# therefore not generic caution, it's the boundary explicitly decided by the
+# operator, baked into the prompt itself rather than left to the sole
+# discipline of whoever writes the caption.
 _REALISM_STYLE = (
     "Shot on a professional DSLR with an 85mm portrait lens, natural skin texture with "
     "visible pores and fine detail, soft directional studio or golden-hour lighting, sharp "
@@ -171,23 +172,25 @@ _TASTE_BOUNDARY = (
     "Elegant, sophisticated, business-appropriate or editorial styling — never suggestive, "
     "never revealing, never sexualized."
 )
-# Palette de marque ARIA (#94) -- ancrée sur le SEUL artefact de marque réellement livré
-# (vanguard/src/index.css : surface quasi-noire #08080a, or #c9a962/#e8d5a8, champagne
-# #d4c4a0, crème #f4efe6, display serif Cormorant Garamond -- élégance éditoriale, jamais
-# futuriste-néon). Avant ce correctif, rien ne verrouillait la couleur dans ces prompts --
-# les presets de `avatar_style_refresh.py` avaient dérivé vers un violet-néon absent du
-# vrai site (corrigé au même commit), un des clichés visuels les plus reconnaissables de
-# l'imagerie "IA générique". Verrouiller la palette ici, dans le prompt PARTAGÉ, empêche
-# cette dérive de revenir par une future variante mal alignée.
+# ARIA brand palette (#94) -- anchored on the ONLY brand artifact actually
+# shipped (vanguard/src/index.css: near-black surface #08080a, gold
+# #c9a962/#e8d5a8, champagne #d4c4a0, cream #f4efe6, Cormorant Garamond
+# display serif -- editorial elegance, never futuristic-neon). Before this
+# fix, nothing locked the color in these prompts -- the `avatar_style_
+# refresh.py` presets had drifted toward a neon-violet absent from the real
+# site (fixed in the same commit), one of the most recognizable visual
+# clichés of "generic AI" imagery. Locking the palette here, in the SHARED
+# prompt, prevents this drift from coming back via a future misaligned
+# variant.
 _BRAND_PALETTE = (
     "Color palette strictly warm gold and deep charcoal or near-black — the exact ARIA ZHC "
     "brand palette (champagne, warm gold, cream accents on near-black), timeless editorial "
     "luxury. Never neon, never violet or purple, never futuristic sci-fi cyan or blue glow — "
     "those read as generic AI-generated imagery, the opposite of this brand."
 )
-# Le brief identité (vision-model, `_extract_identity_brief`) reste borné, mais moins
-# tronqué qu'avant (120 -> 220) : plus de détail retenu (traits, style, tenue habituelle)
-# pour une cohérence de personnage plus fidèle d'une génération à l'autre.
+# The identity brief (vision-model, `_extract_identity_brief`) stays bounded, but is
+# less truncated than before (120 -> 220): more detail retained (features, style, usual
+# outfit) for more faithful character consistency from one generation to the next.
 _IDENTITY_BRIEF_MAX = 220
 
 
@@ -263,7 +266,7 @@ async def generate_banner_portrait(
     identity_brief: str,
     scene: str,
 ) -> bytes | None:
-    """Legacy edit-from-anchor — reserve aux avatars, pas la banniere X."""
+    """Legacy edit-from-anchor — reserved for avatars, not the X banner."""
     brief = (identity_brief or "same woman, AI chief officer").strip()[:_IDENTITY_BRIEF_MAX]
     prompt = (
         f"Same person — face unchanged, unmistakably recognizable. {brief}. "
@@ -279,7 +282,7 @@ async def generate_banner_creative(
     brand_brief: str = "",
     scene: str = "",
 ) -> bytes | None:
-    """Banniere X 3:1 via Imagine text-to-image — ambiance brand, sans photo profil."""
+    """X banner 3:1 via Imagine text-to-image — brand mood, no profile photo."""
     brand = (brand_brief or "ARIA ZHC chief AI officer, GoldenFar Zero-Human Company").strip()[:160]
     setting = (scene or "").strip()[:280]
     prompt = (

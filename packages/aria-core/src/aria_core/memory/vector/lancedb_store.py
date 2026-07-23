@@ -1,8 +1,8 @@
 """LanceDB store — Phase C (embedded local, opt-in aria_vector_memory).
 
-Remplace ``chroma_store.py`` 1:1 — même surface (``store``/``search``/``is_available``/
-``vector_store_status``), même sémantique. Le texte reste l'entrée : l'embedding
-(``embedding.embed_text``) est calculé ici, l'appelant ne voit jamais de vecteur.
+Replaces ``chroma_store.py`` 1:1 — same surface (``store``/``search``/``is_available``/
+``vector_store_status``), same semantics. Text remains the input: the embedding
+(``embedding.embed_text``) is computed here, the caller never sees a vector.
 """
 from __future__ import annotations
 
@@ -26,17 +26,16 @@ logger = logging.getLogger(__name__)
 
 _ENTRY_TYPE_RE = re.compile(r"^[a-z0-9_]+$")
 
-# Garde structurelle anti-injection (#206, 18/07 -- recherche promue documentant le
-# risque réel de "memory poisoning" sur mémoire vectorielle d'agents IA, $45M+
-# d'incidents cumulés 2026). Volontairement placé ICI (la couche de persistance la
-# plus basse), pas dans chaque appelant : protège TOUT contenu écrit dans cette
-# mémoire, y compris un futur appelant qui oublierait de faire son propre triage
-# (ex. cybercentry_insight.py, qui écrivait déjà sans aucun filtre avant ce
-# correctif). Détection PATTERN uniquement (rapide, aucun appel réseau) -- ne
-# remplace pas un jugement sémantique plus fin (cf. x_insight_relevance.py, qui
-# ajoute une vérification LLM dédiée pour les insights X, plus exposés).
-# Patterns choisis pour être peu susceptibles de faux positifs sur du contenu
-# légitime (formulations d'injection classiques, FR+EN), pas une liste exhaustive.
+# Structural anti-injection guard (#206, 18/07 -- promoted research documenting the
+# real risk of "memory poisoning" on AI agents' vector memory, $45M+ in cumulative
+# 2026 incidents). Deliberately placed HERE (the lowest persistence layer), not in
+# each caller: protects ALL content written to this memory, including a future
+# caller that would forget to do its own triage (e.g. cybercentry_insight.py,
+# which was already writing without any filter before this fix). PATTERN detection
+# only (fast, no network call) -- doesn't replace a finer semantic judgment (see
+# x_insight_relevance.py, which adds a dedicated LLM check for X insights, more
+# exposed). Patterns chosen to be unlikely to false-positive on legitimate content
+# (classic injection phrasings, FR+EN), not an exhaustive list.
 _INJECTION_MARKERS_RE = re.compile(
     r"ignore\s+(all\s+|the\s+)?(previous|prior|above|earlier)\s+instructions"
     r"|disregard\s+(all\s+|your\s+|the\s+|any\s+)?(previous|prior|system)?\s*instructions"
@@ -53,15 +52,15 @@ _INJECTION_MARKERS_RE = re.compile(
 
 
 def contains_injection_marker(text: str) -> bool:
-    """Détection rapide (regex, aucun appel réseau) de formulations d'injection de
-    prompt classiques. Volontairement étroit (peu de faux positifs) -- catches les
-    tentatives les plus grossières ; les plus subtiles restent la responsabilité
-    d'une éventuelle vérification sémantique en amont (ex. x_insight_relevance.py)."""
+    """Fast detection (regex, no network call) of classic prompt injection
+    phrasings. Deliberately narrow (few false positives) -- catches the
+    crudest attempts; the more subtle ones remain the responsibility of a
+    possible upstream semantic check (e.g. x_insight_relevance.py)."""
     return bool(_INJECTION_MARKERS_RE.search(text or ""))
 
 
 def is_available() -> bool:
-    """Vector store utilisable (flag + lancedb/fastembed + table OK)."""
+    """Vector store usable (flag + lancedb/fastembed + table OK)."""
     if not is_vector_enabled() or not lancedb_installed():
         return False
     return get_table() is not None
@@ -102,7 +101,7 @@ async def store(
     *,
     metadata: dict[str, Any] | None = None,
 ) -> str | None:
-    """Persiste un document — no-op si flag off ou lancedb absent."""
+    """Persists a document — no-op if flag off or lancedb absent."""
     if not is_available():
         return None
     text = (content or "").strip()
@@ -144,7 +143,7 @@ async def search(
     entry_type: str | None = None,
     limit: int = 8,
 ) -> list[dict[str, Any]]:
-    """Recherche sémantique — [] si désactivé."""
+    """Semantic search — [] if disabled."""
     if not is_available():
         return []
     q = (query or "").strip()
@@ -161,7 +160,7 @@ async def search(
             if _ENTRY_TYPE_RE.match(entry_type):
                 search_q = search_q.where(f"entry_type = '{entry_type}'", prefilter=True)
             else:
-                logger.warning("lancedb search: entry_type invalide ignoré: %r", entry_type)
+                logger.warning("lancedb search: invalid entry_type ignored: %r", entry_type)
         rows = search_q.limit(max(1, min(limit, 20))).to_list()
         return [
             {

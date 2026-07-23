@@ -1,21 +1,21 @@
-"""Veille des thèses VC crypto -- inspiration + proposition de calibration stratégique.
+"""Crypto VC thesis watch -- inspiration + strategic calibration proposal.
 
-Suit un petit nombre de VC crypto reconnus (X, comptes vérifiés -- cf.
-`x_watchlist.yaml::vc_handles`) pour repérer les signaux de thèse/conviction publics, et --
-SEULEMENT si un LLM juge le constat durable -- PROPOSE (jamais n'impose) une piste de
-calibration stratégique via une issue GitHub. Jamais un commit ni une fusion autonome sur
-les fichiers de stratégie (`docs/protocole-argent-reel.md`,
-`docs/strategie-aria-investissement.md` restent verrouillés, validation opérateur explicite
-requise -- périmètre confirmé par l'opérateur le 09/07 : "observer + proposer").
+Follows a small number of recognized crypto VCs (X, verified accounts -- cf.
+`x_watchlist.yaml::vc_handles`) to spot public thesis/conviction signals, and --
+ONLY if an LLM judges the finding durable -- PROPOSES (never imposes) a strategic
+calibration lead via a GitHub issue. Never an autonomous commit or merge on
+the strategy files (`docs/protocole-argent-reel.md`,
+`docs/strategie-aria-investissement.md` stay locked, explicit operator validation
+required -- scope confirmed by the operator on 09/07: "observe + propose").
 
-Volet wallets (analyse on-chain des VC connus, « la face cachée ») : SEAM VOLONTAIREMENT
-VIDE. Aucune adresse de wallet n'est branchée tant qu'elle n'est pas vérifiée par une source
-fiable -- jamais une adresse devinée (cf. le HANDOFF le plus récent pour l'état de la
-vérification en cours).
+Wallets angle (on-chain analysis of known VCs, "the hidden face"): DELIBERATELY
+EMPTY seam. No wallet address is wired in until verified by a
+reliable source -- never a guessed address (cf. the most recent HANDOFF for the state
+of the ongoing verification).
 
-Réutilise le MÊME fetch que le cycle de curiosité existant (`fetch_curiosity_feed()`, appelé
-une seule fois par `curiosity.run_curiosity_cycle()`) -- aucun appel X supplémentaire, même
-doctrine que `opportunity_radar.mine_curiosity_items`.
+Reuses the SAME fetch as the existing curiosity cycle (`fetch_curiosity_feed()`, called
+once by `curiosity.run_curiosity_cycle()`) -- no extra X call, same
+doctrine as `opportunity_radar.mine_curiosity_items`.
 """
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ async def _propose_strategy_issue(title: str, body: str, *, github_client=None) 
             owner, TARGET_REPO, f"[stratégie] {title}", body_full,
             labels=["aria-strategy-proposal"],
         )
-    except Exception:  # noqa: BLE001 -- une panne GitHub ne doit jamais casser le cycle
+    except Exception:  # noqa: BLE001 -- a GitHub outage must never break the cycle
         return None
     return issue.get("html_url")
 
@@ -93,8 +93,8 @@ async def run_vc_intelligence_cycle(
     notifier=None,
     github_client=None,
 ) -> dict:
-    """Un tour : synthétise les items VC déjà filtrés (cf. `curiosity.py`), pousse un digest
-    lecture-seule à l'opérateur, propose une issue SEULEMENT si jugé durable."""
+    """One pass: synthesizes the VC items already filtered (cf. `curiosity.py`), pushes a
+    read-only digest to the operator, proposes an issue ONLY if judged durable."""
     if not vc_intelligence_enabled():
         return {"outcome": "skipped_disabled"}
     if not items:
@@ -132,7 +132,7 @@ async def run_vc_intelligence_cycle(
     if notifier is not None:
         try:
             await notifier(f"🧠 Veille VC\n\n{summary}")
-        except Exception:  # noqa: BLE001 -- un envoi raté ne bloque jamais le cycle
+        except Exception:  # noqa: BLE001 -- a failed send never blocks the cycle
             pass
 
     issue_url = None

@@ -1,4 +1,4 @@
-"""Feu vert après dialogue Socrate — « ok vazy », « si bénéfique tu peux seulement »."""
+"""Go-ahead after a Socratic dialogue — "ok vazy", "if beneficial you can just go for it"."""
 from __future__ import annotations
 
 import re
@@ -21,7 +21,7 @@ _QUESTION_TURN_RE = re.compile(r"\?\s*$")
 
 
 def wants_operator_deferred_go(message: str) -> bool:
-    """Court feu vert après un fil de questions — pas « ok prevu »."""
+    """Short go-ahead after a thread of questions — not a plain "ok, planned"."""
     text = (message or "").strip()
     if not text or len(text) > 140:
         return False
@@ -51,7 +51,7 @@ async def _recent_thread(*, limit: int = 10) -> list[dict[str, Any]]:
 
 
 def _thread_goal_hint(messages: list[dict[str, Any]]) -> str:
-    """Derniers tours utilisateur substantiels + extrait dernière réponse ARIA."""
+    """Last substantive user turns + excerpt of ARIA's last reply."""
     users: list[str] = []
     last_agent = ""
     for msg in messages:
@@ -78,8 +78,8 @@ async def execute_deferred_go_ahead(
     lang: str = "fr",
 ) -> tuple[str, dict[str, Any]]:
     """
-    Opérateur : questions → questions → ok vazy / si bénéfique tu peux.
-    Agit depuis le fil récent sans nouveau gros appel LLM si possible.
+    Operator: questions → questions → ok vazy / if beneficial you can go for it.
+    Acts from the recent thread without a new heavy LLM call if possible.
     """
     lang_key = "fr" if lang == "fr" else "en"
     thread = await _recent_thread()

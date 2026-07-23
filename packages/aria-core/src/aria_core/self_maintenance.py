@@ -1,4 +1,4 @@
-"""Auto-maintenance ARIA — ordres operateur, curiosite, action (pas seulement repondre)."""
+"""ARIA self-maintenance — operator orders, curiosity, action (not just replying)."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _log_step(step: str, detail: str = "") -> None:
 
 async def run_curiosity_x_banner_cycle(*, lang: str = "fr", force_regenerate: bool = False) -> str:
     """
-    Boucle curiosite : observe -> gap -> capacite -> agit -> rapport.
+    Curiosity loop: observe -> gap -> capability -> act -> report.
     """
     from aria_core.identity import official_x_at
     from aria_core.x_banner import (
@@ -175,7 +175,7 @@ async def execute_self_maintenance(action: SelfMaintenanceAction, *, lang: str =
 
 async def handle_operator_self_message(message: str, *, lang: str = "fr") -> str | None:
     """
-    Intercepte ordres a ARIA elle-meme (admin). None = laisser brain traiter.
+    Intercepts orders addressed to ARIA herself (admin). None = let brain handle it.
     """
     kind = classify_operator_message(message)
     if kind not in (OperatorMessageKind.SELF_DIRECTIVE, OperatorMessageKind.CURIOSITY_GAP):
@@ -194,7 +194,7 @@ async def handle_operator_self_message(message: str, *, lang: str = "fr") -> str
 
 
 def self_maintenance_context_for_brain() -> str:
-    """Bloc memoire pour eviter re-routage ACTU sur ordres operateur."""
+    """Memory block to avoid re-routing to NEWS on operator orders."""
     return (
         "## [Operator self-directive]\n"
         "Si le message parle de TA/TON profil X, banniere ou avatar ARIA : "

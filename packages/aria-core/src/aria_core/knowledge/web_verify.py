@@ -1,4 +1,4 @@
-"""Vérification web ciblée — DuckDuckGo instant + HTML fallback (sans clé API)."""
+"""Targeted web verification — DuckDuckGo instant + HTML fallback (no API key)."""
 
 from __future__ import annotations
 
@@ -36,37 +36,37 @@ _LIVE_INFO_STRONG_RE = re.compile(
     r"\bactu\b|actualité|news",
     re.I,
 )
-# "cours" à part : homographe (cotation vs classe/cours de yoga) -- cf. _J_AI_COURS_RE.
+# "cours" handled separately: homograph (stock quote vs. class/yoga class) -- see _J_AI_COURS_RE.
 _LIVE_INFO_CORE_RE = re.compile(_LIVE_INFO_STRONG_RE.pattern + r"|\bcours\b", re.I)
 _TIME_RE = re.compile(
     r"quelle?\s+heure|à\s+quelle\s+heure|what\s+time|when\s+does|when\s+is", re.I
 )
 _LIVE_INFO_RE = re.compile(_LIVE_INFO_CORE_RE.pattern + "|" + _TIME_RE.pattern, re.I)
-# NB : "aujourd'hui/ce soir/demain" seuls ne déclenchent PLUS le chemin web (retiré, 09/07) --
-# trop de faux positifs sur du smalltalk banal ("comment vas-tu aujourd'hui ?"). Ces mots
-# restent utiles pour DATER une requête déjà légitime (cf. _query_variants ci-dessous), mais
-# ne doivent plus, seuls, décider qu'une question est "de l'actu".
+# NB: "aujourd'hui/ce soir/demain" alone no LONGER trigger the web path (removed, 09/07) --
+# too many false positives on ordinary smalltalk ("comment vas-tu aujourd'hui ?"). These words
+# remain useful to DATE an already-legitimate query (see _query_variants below), but must no
+# longer, alone, decide that a question is "about current events".
 #
-# NB 2 (09/07, test 500 cas) : mots courts bornés en \b -- "cours"/"actu"/"match"/"monte"/
-# "descend" matchaient en sous-chaîne dans des mots sans rapport (parcours, discours, concours,
-# recours, secours, actuellement, actuelle, matcha, remonte, redescendre...). Bornage sans
-# perte de couverture ("actualité" reste sa propre alternative, "match" garde pluriel/conjugué).
+# NB 2 (09/07, 500-case test): short words bounded with \b -- "cours"/"actu"/"match"/"monte"/
+# "descend" were matching as substrings inside unrelated words (parcours, discours, concours,
+# recours, secours, actuellement, actuelle, matcha, remonte, redescendre...). Bounded without
+# losing coverage ("actualité" remains its own alternative, "match" keeps plural/conjugated forms).
 #
-# NB 3 (09/07, test 500 cas x3) : _LIVE_INFO_CORE_RE séparé de _TIME_RE pour pouvoir exclure
-# "à quelle heure on se voit demain ?" (planning perso, PAS de l'actu) sans toucher "à quelle
-# heure joue le match" (sport, légitime) -- cf. _PERSONAL_MEETING_RE dans is_live_info_question.
-# "cours" reste un homographe non résolu (classe de yoga vs cours de bourse) hors _J_AI_COURS_RE
-# (cas fréquent isolé) -- limite assumée d'un filtre par mots-clés, pas de vraie ambiguïté NLP.
+# NB 3 (09/07, 500-case test x3): _LIVE_INFO_CORE_RE separated from _TIME_RE so we can exclude
+# "à quelle heure on se voit demain ?" (personal scheduling, NOT news) without touching "à quelle
+# heure joue le match" (sport, legitimate) -- see _PERSONAL_MEETING_RE in is_live_info_question.
+# "cours" remains an unresolved homograph (yoga class vs. stock quote) outside _J_AI_COURS_RE
+# (isolated frequent case) -- an accepted limitation of a keyword filter, not true NLP disambiguation.
 #
-# NB 4 (12/07) : incident réel -- un scénario hypothétique de raisonnement (650+ caractères,
-# "Un token a : (1)... (2)... est-ce que j'achète ?") mentionnant une seule fois "prix" est
-# parti en recherche web littérale (la requête entière envoyée telle quelle à DDG), ramenant
-# des résultats sans rapport. Les 2492 cas du fuzz test (test_web_verify_fuzz_500x3.py) sont
-# TOUS sous 190 caractères -- ce filtre n'a jamais été pensé/testé sur un texte long. Un mot
-# de marché générique (prix/bitcoin/crypto/hausse/baisse/pump/dump/...) isolé dans un texte
-# long ne suffit plus seul ; un signal VRAIMENT non ambigu (rugby, coupe du monde, actu...)
-# reste suffisant même dans un texte long -- cf. _LIVE_INFO_UNAMBIGUOUS_RE et le garde de
-# longueur dans is_live_info_question.
+# NB 4 (12/07): real incident -- a hypothetical reasoning scenario (650+ characters,
+# "A token has: (1)... (2)... should I buy?") mentioning "prix" (price) just once
+# was sent out as a literal web search (the entire query sent as-is to DDG), bringing back
+# unrelated results. The 2492 cases of the fuzz test (test_web_verify_fuzz_500x3.py) are
+# ALL under 190 characters -- this filter was never designed/tested on long text. A generic
+# market word (price/bitcoin/crypto/rise/fall/pump/dump/...) isolated in a long text is no
+# longer enough on its own; a TRULY unambiguous signal (rugby, world cup, news...)
+# remains sufficient even in long text -- see _LIVE_INFO_UNAMBIGUOUS_RE and the length
+# guard in is_live_info_question.
 _LIVE_INFO_UNAMBIGUOUS_RE = re.compile(
     r"rugby|stade\s+toulousain|toulousain|top\s*14|top14|"
     r"coupe du monde|world cup|\bmatchs?\b|\bmatche[sd]?\b|fixture|football|soccer|"
@@ -74,8 +74,8 @@ _LIVE_INFO_UNAMBIGUOUS_RE = re.compile(
     r"\bactu\b|actualité|news",
     re.I,
 )
-# Marge confortable au-dessus du max observé (189 car.) dans les 2492 cas déjà validés --
-# aucun risque de régression sur le corpus existant, uniquement les textes structurés/longs.
+# Comfortable margin above the observed max (189 chars) across the 2492 already-validated
+# cases -- no regression risk on the existing corpus, only on long/structured texts.
 _LIVE_INFO_LONG_TEXT_CHARS = 250
 _PERSONAL_MEETING_RE = re.compile(
     r"on\s+se\s+voit|se\s+revoit|rendez-vous|\brdv\b|"
@@ -88,16 +88,16 @@ _J_AI_COURS_RE = re.compile(
     re.I,
 )
 
-# Demande EXPLICITE de recherche/vérification web -- distinct de is_live_info_question
-# (actu/sport/prix). Sert le principe opérateur : si l'assistant (Claude Code) n'a pas
-# accès web depuis sa session, il passe par ARIA (qui, elle, a Tavily) -- ex. vérifier un
-# label Etherscan/Arkham, une adresse, une source. Sans ce déclencheur dédié, ces demandes
-# ne matchaient aucun mot-clé de _LIVE_INFO_RE et tombaient sur une réponse de mémoire.
+# EXPLICIT request for a web search/verification -- distinct from is_live_info_question
+# (news/sport/price). Serves the operator principle: if the assistant (Claude Code) doesn't
+# have web access from its session, it goes through ARIA (who has Tavily) -- e.g. verifying
+# an Etherscan/Arkham label, an address, a source. Without this dedicated trigger, these
+# requests matched no _LIVE_INFO_RE keyword and fell back to a memory-based reply.
 #
-# _GAP tolère 0-2 mots de remplissage naturels entre le verbe et la cible ("cherche VITE FAIT
-# sur internet") -- sûr car is_explicit_web_request revérifie ensuite _NEGATED_WEB_REQUEST_RE,
-# donc une négation qui profite du même gap ("cherche PAS sur internet") est re-supprimée juste
-# après, jamais renvoyée telle quelle.
+# _GAP tolerates 0-2 natural filler words between the verb and the target ("search REAL QUICK
+# on the internet") -- safe because is_explicit_web_request then re-checks _NEGATED_WEB_REQUEST_RE,
+# so a negation exploiting the same gap ("don't search on the internet") is stripped back out
+# right after, never returned as-is.
 _WEB_TARGET = r"(?:sur\s+(?:le\s+)?(?:web|internet)|en\s*ligne)"
 _GAP = r"(?:\s+\w+){0,2}\s+"
 
@@ -123,10 +123,10 @@ _EXPLICIT_WEB_REQUEST_RE = re.compile(
     re.I,
 )
 
-# Négation de la demande -- trouvé en testant le filtre sur 500 cas (09/07) : "inutile de
-# chercher sur internet", "don't search the web"... matchaient _EXPLICIT_WEB_REQUEST_RE tel
-# quel (le verbe + sa cible apparaissent bien dans la phrase, la négation seule ne les sépare
-# pas). Couvre aussi le "ne" élidé à l'oral/texto ("cherche pas sur internet").
+# Negation of the request -- found while testing the filter on 500 cases (09/07): "no need to
+# search the web", "don't search the web"... matched _EXPLICIT_WEB_REQUEST_RE as-is (the verb +
+# its target do appear in the sentence, the negation alone doesn't separate them). Also covers
+# the elided "ne" in spoken/text French ("cherche pas sur internet").
 _NEG_GAP = r"(?:\s+\w+){0,2}"
 
 _NEGATED_WEB_REQUEST_RE = re.compile(
@@ -211,7 +211,7 @@ _MONTH_NAME_DATE_RE = re.compile(r"^\s*([A-Za-zéû]{3,9})\.?\s+(\d{1,2}),?\s+(\
 
 
 def _parse_leading_date(text: str, *, now: datetime) -> datetime | None:
-    """Extrait une date/âge relatif en tête d'un extrait DDG, si présent. Best-effort."""
+    """Extracts a leading date/relative age from a DDG snippet, if present. Best-effort."""
     if not text:
         return None
     m = _RELATIVE_AGO_RE.match(text) or _RELATIVE_IL_Y_A_RE.match(text)
@@ -240,8 +240,8 @@ def _parse_leading_date(text: str, *, now: datetime) -> datetime | None:
 
 
 def _parse_iso_datetime(raw: str | None) -> datetime | None:
-    """Date Tavily (`published_date`, généralement ISO 8601). Retombe sur le parsing
-    best-effort si ce n'est pas de l'ISO (Tavily n'en garantit pas le format)."""
+    """Tavily date (`published_date`, generally ISO 8601). Falls back to the
+    best-effort parsing if it's not ISO (Tavily doesn't guarantee the format)."""
     if not raw:
         return None
     s = raw.strip()
@@ -262,10 +262,11 @@ _STALE_AFTER = timedelta(days=2)
 
 
 def _rank_by_freshness(sources: list[WebSource], *, now: datetime | None = None) -> list[WebSource]:
-    """Pour une question d'actu live (#126) : sources datées récentes d'abord (plus récent en
-    tête), puis les sources sans date connue (impossible à juger, on ne les pénalise pas),
-    puis les sources datées mais périmées (> `_STALE_AFTER`) en dernier. Jamais de suppression
-    pure : une source ancienne reste préférable à aucune source (filet anti-fabrication #113)."""
+    """For a live-news question (#126): recently dated sources first (most recent
+    on top), then sources with no known date (impossible to judge, we don't
+    penalize them), then dated but stale sources (> `_STALE_AFTER`) last. Never
+    outright removal: an old source is still better than no source (anti-
+    fabrication safety net #113)."""
     now = now or datetime.now(timezone.utc)
     dated = [s for s in sources if s.published is not None]
     undated = [s for s in sources if s.published is None]
@@ -277,7 +278,7 @@ def _rank_by_freshness(sources: list[WebSource], *, now: datetime | None = None)
 
 
 def is_operator_local_question(query: str) -> bool:
-    """Questions opérateur ARIA — jamais de DuckDuckGo (impôts, admin perso, etc.)."""
+    """ARIA operator questions — never DuckDuckGo (taxes, personal admin, etc.)."""
     from aria_core.operator_readiness import wants_operator_status_pulse
 
     if wants_operator_status_pulse(query):
@@ -294,18 +295,19 @@ def is_operator_local_question(query: str) -> bool:
 
 
 def should_use_web_verify(query: str, *, public: bool = True) -> bool:
-    """Web autorisé : visiteurs publics, ou opérateur + actu live/demande explicite.
+    """Web allowed: public visitors, or operator + live news/explicit request.
 
-    `public` doit refléter CE MESSAGE précis (opérateur vs visiteur), pas un réglage de
-    déploiement global. Avant ce correctif (09/07), la fonction lisait is_public_mode()
-    (ARIA_PUBLIC_MODE — réglage de déploiement, TOUJOURS True en prod) au lieu du `public`
-    par-message pourtant correctement calculé dans brain.py : elle renvoyait donc
-    systématiquement True, quel que soit l'expéditeur ou le sujet, cassant la protection
-    is_operator_local_question/is_live_info_question pour l'opérateur (le signal
-    public=False ne remontait jamais jusqu'ici — cf. resolve_calibrated_answer/
-    _general_response). Incident réel : une question opérateur auto-réflexive ("remonte-moi
-    tous les bugs détectés") a déclenché une recherche web hors-sujet, présentée comme
-    "ACTU — sources web vérifiées".
+    `public` must reflect THIS specific message (operator vs. visitor), not a
+    global deployment setting. Before this fix (09/07), the function read
+    is_public_mode() (ARIA_PUBLIC_MODE — a deployment setting, ALWAYS True in
+    prod) instead of the per-message `public` that was actually correctly
+    computed in brain.py: it therefore always returned True, regardless of
+    sender or topic, breaking the is_operator_local_question/
+    is_live_info_question protection for the operator (the public=False signal
+    never made it up this far — see resolve_calibrated_answer/
+    _general_response). Real incident: an operator's self-reflexive question
+    ("show me all detected bugs") triggered an unrelated web search, presented
+    as "NEWS — verified web sources".
     """
     if is_operator_local_question(query):
         return False
@@ -315,31 +317,32 @@ def should_use_web_verify(query: str, *, public: bool = True) -> bool:
 
 
 def is_live_info_question(query: str) -> bool:
-    """Sport, horaires, actu jour J — nécessite souvent une recherche web."""
+    """Sport, schedules, same-day news — often requires a web search."""
     if is_ecosystem_product_query(query):
         return False
     if is_operator_local_question(query):
         return False
     if not _LIVE_INFO_STRONG_RE.search(query):
         if _J_AI_COURS_RE.search(query):
-            # "j'ai cours" / "cours de yoga" -- homographe de "cours" (classe, pas cotation) --
-            # et aucun autre signal fort (bitcoin/prix/actu/...) ne vient corroborer l'actu.
+            # "j'ai cours" / "cours de yoga" -- homograph of "cours" (class, not stock quote) --
+            # and no other strong signal (bitcoin/price/news/...) corroborates that it's news.
             return False
         if _TIME_RE.search(query) and _PERSONAL_MEETING_RE.search(query):
-            # "à quelle heure on se voit demain ?" -- planning perso, pas de l'actu sportive.
+            # "what time are we meeting tomorrow?" -- personal scheduling, not sports news.
             return False
     if len(query) > _LIVE_INFO_LONG_TEXT_CHARS and not _LIVE_INFO_UNAMBIGUOUS_RE.search(query):
-        # Texte long (scénario hypothétique, question de raisonnement structurée) : un mot
-        # de marché générique isolé ne suffit plus (cf. NB 4) -- sauf signal vraiment non
-        # ambigu (rugby, coupe du monde, actu...), qui reste suffisant même dans un texte long.
+        # Long text (hypothetical scenario, structured reasoning question): an isolated
+        # generic market word is no longer enough (see NB 4) -- unless a truly unambiguous
+        # signal (rugby, world cup, news...) is present, which remains sufficient even in
+        # long text.
         return False
     return bool(_LIVE_INFO_RE.search(query))
 
 
 def is_explicit_web_request(query: str) -> bool:
-    """Demande EXPLICITE de recherche/vérification web (ex. "vérifie sur le web...",
-    "cherche sur internet..."), indépendamment du sujet -- voir _EXPLICIT_WEB_REQUEST_RE.
-    Une négation ("inutile de chercher...", "don't search...") annule la détection."""
+    """EXPLICIT request for a web search/verification (e.g. "check the web...",
+    "search the internet..."), regardless of topic -- see _EXPLICIT_WEB_REQUEST_RE.
+    A negation ("no need to search...", "don't search...") cancels the detection."""
     if is_ecosystem_product_query(query):
         return False
     if is_operator_local_question(query):
@@ -350,7 +353,7 @@ def is_explicit_web_request(query: str) -> bool:
 
 
 def is_ecosystem_product_query(query: str) -> bool:
-    """Produits ARIA — pas de recherche web (évite APK/clones hors écosystème)."""
+    """ARIA products — no web search (avoids out-of-ecosystem APK/clones)."""
     lower = (query or "").lower()
     if not re.search(r"aria\s+market|aria\s+vanguard|goldenfar|ariavanguardzhc", lower):
         return False
@@ -358,7 +361,7 @@ def is_ecosystem_product_query(query: str) -> bool:
 
 
 def _query_variants(query: str) -> list[str]:
-    """Plusieurs formulations — l'API instant DDG rate souvent le sport / actu."""
+    """Several phrasings — the DDG instant API often misses sport / news."""
     q = query.strip()
     if len(q) < 4:
         return []
@@ -482,22 +485,22 @@ async def _fetch_ddg_html(client: httpx.AsyncClient, q: str) -> list[str]:
 
 
 def _web_search_provider() -> str:
-    """Fournisseur de recherche web actif (défaut : ddg gratuit). Bascule opt-in vers
-    'tavily' via ARIA_WEB_SEARCH_PROVIDER + TAVILY_API_KEY (cf. aria_values free_brain)."""
+    """Active web search provider (default: free ddg). Opt-in switch to
+    'tavily' via ARIA_WEB_SEARCH_PROVIDER + TAVILY_API_KEY (see aria_values free_brain)."""
     from aria_core.runtime import settings
 
     return str(getattr(settings, "aria_web_search_provider", "ddg") or "ddg").strip().lower()
 
 
 async def _translate_query_to_english(query: str) -> str:
-    """Traduit la requête en anglais avant l'envoi à Tavily (14/07, décision opérateur
-    explicite : « ajoute l'anglais à Tavily et supprime le français »). Les sources
-    primaires (CoinDesk, The Block, Reuters, Bloomberg Crypto...) sont très majoritairement
-    en anglais ; une requête envoyée telle quelle en français biaisait vers des agrégateurs
-    FR plus faibles (cryptoast.fr, pages génériques) — root cause d'une partie du signal
-    trop vague ayant mené à l'incident de fabrication du 14/07 (#voir CLAUDE.md).
-    Dégradation douce : si le LLM est indisponible/échoue, on retombe sur la requête
-    originale plutôt que d'échouer la recherche."""
+    """Translates the query to English before sending it to Tavily (14/07,
+    explicit operator decision: "add English to Tavily and drop French").
+    Primary sources (CoinDesk, The Block, Reuters, Bloomberg Crypto...) are
+    overwhelmingly in English; a query sent as-is in French biased results
+    toward weaker FR aggregators (cryptoast.fr, generic pages) — root cause of
+    part of the too-vague signal that led to the 14/07 fabrication incident
+    (see CLAUDE.md). Soft degradation: if the LLM is unavailable/fails, we
+    fall back to the original query rather than failing the search."""
     from aria_core.llm import chat_with_context, is_llm_configured
 
     if not is_llm_configured():
@@ -517,7 +520,7 @@ async def _translate_query_to_english(query: str) -> str:
 
 
 async def _fetch_tavily_snippets(query: str, max_snippets: int) -> list[WebSource]:
-    """Provider Tavily (dôme). Dégradation douce : liste vide si indisponible."""
+    """Tavily provider (dome). Soft degradation: empty list if unavailable."""
     from aria_core.services.tavily import is_tavily_configured, tavily_client
 
     if not is_tavily_configured():
@@ -525,10 +528,10 @@ async def _fetch_tavily_snippets(query: str, max_snippets: int) -> list[WebSourc
     english_query = await _translate_query_to_english(query)
     result = await tavily_client.search(english_query, max_results=max_snippets, caller="web_verify")
     if not result.available:
-        logger.info("web_verify tavily indisponible: %s", result.error)
+        logger.info("web_verify tavily unavailable: %s", result.error)
         return []
     sources: list[WebSource] = []
-    # La réponse synthétique Tavily d'abord (souvent la plus directe), puis les extraits.
+    # Tavily's synthetic answer first (often the most direct), then the snippets.
     if result.answer:
         src = _as_source(result.answer)
         if src:
@@ -558,13 +561,14 @@ async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: objec
             for c in cached[:max_snippets]
         ]
 
-    # #126 : pour une question d'actu live, on récupère un peu plus de candidats que
-    # nécessaire pour pouvoir les trier par fraîcheur avant de tronquer à max_snippets --
-    # sinon le premier résultat "assez bon" gagnerait par simple ordre d'arrivée réseau.
+    # #126: for a live-news question, fetch a few more candidates than needed
+    # so they can be ranked by freshness before truncating to max_snippets --
+    # otherwise the first "good enough" result would win by sheer network
+    # arrival order.
     live = is_live_info_question(query)
     collect_limit = min(max_snippets * 3, 10) if live else max_snippets
 
-    # Provider opt-in : Tavily si configuré/activé, sinon DuckDuckGo (défaut gratuit).
+    # Opt-in provider: Tavily if configured/enabled, otherwise DuckDuckGo (free default).
     if _web_search_provider() == "tavily":
         tavily_sources = await _fetch_tavily_snippets(query, collect_limit)
         if tavily_sources:
@@ -573,7 +577,7 @@ async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: objec
             tavily_sources = tavily_sources[:max_snippets]
             set_cached(query, tavily_sources)
             return tavily_sources
-        # Tavily indisponible (clé absente, quota, panne) -> dégradation douce sur DDG.
+        # Tavily unavailable (missing key, quota, outage) -> soft degradation to DDG.
 
     sources: list[WebSource] = []
     seen_text: set[str] = set()
@@ -611,12 +615,12 @@ async def fetch_web_snippets(query: str, max_snippets: int = 4, **_kwargs: objec
 
 
 def _tag_untrusted_snippets(sources: list[WebSource]) -> str:
-    """Encadre les extraits web en <donnees_non_fiables> avant insertion dans le
-    prompt LLM (13/07 -- corrige un trou : ces extraits n'étaient jusque-là PAS
-    protégés par le mécanisme anti-injection déjà utilisé ailleurs dans le dépôt,
-    cf. skills/vc_analysis.py). Chaque champ passe par
-    ``aria_core.sanitize.sanitize_untrusted_text`` (neutralise les chevrons --
-    empêche un extrait hostile de forger une fausse balise de fermeture)."""
+    """Wraps web snippets in <donnees_non_fiables> before insertion into the
+    LLM prompt (13/07 -- fixes a gap: these snippets weren't previously
+    protected by the anti-injection mechanism already used elsewhere in the
+    repo, see skills/vc_analysis.py). Each field goes through
+    ``aria_core.sanitize.sanitize_untrusted_text`` (neutralizes angle brackets
+    -- prevents a hostile snippet from forging a fake closing tag)."""
     from aria_core.sanitize import sanitize_untrusted_text
 
     lines = []
@@ -749,7 +753,7 @@ async def web_enhance_calibrated(
     force: bool = False,
     public: bool = True,
 ) -> tuple[str | None, dict]:
-    """Re-calibre via Groq + extraits web si incertain (ou force=True)."""
+    """Re-calibrates via Groq + web snippets if uncertain (or force=True)."""
     from aria_core.knowledge.epistemic import _parse_groq_calibrated
     from aria_core.llm import chat_with_context, is_llm_configured
     from aria_core.runtime import settings
@@ -830,7 +834,7 @@ async def web_enhance_calibrated(
 
 
 async def web_first_answer(query: str, lang: str = "fr", *, public: bool = True) -> tuple[str | None, dict]:
-    """Recherche web puis Groq — pour actu/sport quand Groq seul échoue."""
+    """Web search then Groq — for news/sport when Groq alone fails."""
     meta = {"p_true": 0.3, "truth": "INCERTAIN", "groq_calibrated": False}
     reply, meta = await web_enhance_calibrated(query, None, meta, lang, force=True, public=public)
     if reply:
@@ -848,21 +852,21 @@ def should_web_verify(meta: dict) -> bool:
     return _web_verify_threshold(meta)
 
 
-# ── Lecture directe d'une page (13/07) ──────────────────────────────────────────
+# ── Direct page reading (13/07) ──────────────────────────────────────────────
 #
-# Capacité distincte de fetch_web_snippets ci-dessus : au lieu d'extraits courts
-# indexés par un moteur de recherche, lit le contenu réel d'UNE URL précise que
-# l'opérateur a collée en chat -- cas réel qui a motivé ce chantier : ARIA n'avait
-# rien trouvé sur withluma.app via la recherche normale, a honnêtement dit qu'elle
-# ne savait pas plutôt que d'inventer, mais n'avait aucun moyen de lire la page
-# elle-même pour compenser.
+# Capability distinct from fetch_web_snippets above: instead of short snippets
+# indexed by a search engine, reads the real content of ONE specific URL that
+# the operator pasted in chat -- real case that motivated this work: ARIA had
+# found nothing about withluma.app via the normal search, honestly said she
+# didn't know instead of inventing, but had no way to read the page herself
+# to compensate.
 #
-# Gate OFF par défaut (ARIA_WEB_FETCH_ENABLED) + admin-only côté appelant (cf.
-# gateway/telegram_bot.py, même prudence que ARIA_VISION_ENABLED) -- volontairement
-# PAS de repli automatique quand la recherche normale ne trouve rien (décision
-# opérateur, 13/07) : uniquement déclenché par une URL explicite collée en chat.
-# HTTP simple uniquement dans cette version (pas de repli Playwright -- reporté à
-# une v2, cf. services/page_reader.py).
+# Gate OFF by default (ARIA_WEB_FETCH_ENABLED) + admin-only on the caller side
+# (see gateway/telegram_bot.py, same caution as ARIA_VISION_ENABLED) --
+# deliberately NO automatic fallback when the normal search finds nothing
+# (operator decision, 13/07): only triggered by an explicit URL pasted in
+# chat. Simple HTTP only in this version (no Playwright fallback -- deferred
+# to a v2, see services/page_reader.py).
 
 _PAGE_READ_PROMPT_FR = """Tu es ARIA ZHC. Le contenu réel d'une page web vient d'être récupéré (lecture directe d'UNE page précise, pas un extrait de recherche).
 
@@ -916,11 +920,11 @@ def web_fetch_enabled() -> bool:
 
 
 async def fetch_page_content(url: str, *, page_reader=None) -> str | None:
-    """Contenu texte réel d'UNE URL précise, encadré <donnees_non_fiables> et
-    neutralisé (aria_core.sanitize), prêt à insérer dans un prompt LLM. Gate OFF
-    par défaut. ``None`` si désactivé, ou si la page est inaccessible (403,
-    timeout, SSRF refusé, non-HTML...) -- jamais un contenu inventé pour
-    combler."""
+    """Real text content of ONE specific URL, wrapped in <donnees_non_fiables>
+    and neutralized (aria_core.sanitize), ready for insertion into an LLM
+    prompt. Gate OFF by default. ``None`` if disabled, or if the page is
+    unreachable (403, timeout, SSRF refused, non-HTML...) -- never fabricated
+    content to fill the gap."""
     if not web_fetch_enabled():
         return None
 
@@ -929,7 +933,7 @@ async def fetch_page_content(url: str, *, page_reader=None) -> str | None:
 
     result = await page_reader(url)
     if not result.available:
-        logger.info("web_fetch: %s indisponible (%s)", url, result.error)
+        logger.info("web_fetch: %s unavailable (%s)", url, result.error)
         return None
 
     from aria_core.sanitize import sanitize_untrusted_text
@@ -943,11 +947,11 @@ async def fetch_page_content(url: str, *, page_reader=None) -> str | None:
 async def answer_from_page(
     url: str, question: str, lang: str = "fr", *, page_reader=None,
 ) -> tuple[str | None, dict]:
-    """Répond à ``question`` à partir du contenu réel d'UNE page (lecture directe).
-    Gate + admin-only vérifiés par l'appelant (cf. gateway/telegram_bot.py) ; ce
-    module revérifie tout de même le gate en interne (fail-closed si appelé
-    directement). ``None`` si désactivé, page inaccessible, ou LLM indisponible
-    -- jamais une réponse fabriquée."""
+    """Answers ``question`` from the real content of ONE page (direct
+    reading). Gate + admin-only verified by the caller (see
+    gateway/telegram_bot.py); this module still re-checks the gate internally
+    (fail-closed if called directly). ``None`` if disabled, page unreachable,
+    or LLM unavailable -- never a fabricated answer."""
     if not web_fetch_enabled():
         return None, {"web_fetch": "disabled"}
 

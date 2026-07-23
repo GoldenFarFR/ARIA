@@ -1,27 +1,28 @@
-"""Canal de directives ARIA -> Claude Code (pilote, audit du 10/07).
+"""ARIA -> Claude Code directive channel (pilot, audited 10/07).
 
-ARIA (la tete) depose des directives priorisees dans une file ; une session Claude
-Code (cote VPS, lancee par un humain) les lit et les execute. Ce module N'EXECUTE
-RIEN et n'ecrit rien a l'exterieur (GitHub/X/email) : c'est une file locale SQLite
-plus un journal d'audit inviolable.
+ARIA (the head) drops prioritized directives into a queue; a Claude Code
+session (VPS side, started by a human) reads and executes them. This module
+EXECUTES NOTHING and writes nothing externally (GitHub/X/email): it's a
+local SQLite queue plus a tamper-proof audit log.
 
-Bordage volontaire (lecons de l'incident Cursor/worker-queue, 10/07) :
-  - **Perimetre en dur** : ``_DIRECTIVE_CATEGORIES`` limite les directives a la seule
-    famille deja deleguee (hygiene repo, docs, backlog). Toute categorie hors liste
-    est REFUSEE a l'ecriture. Elargir la liste = un changement de code delibere,
-    verrouille par ``test_coherence`` (jamais un glissement silencieux).
-  - **Gate OFF par defaut** : ``ARIA_DIRECTIVE_CHANNEL_ENABLED`` ferme la porte cote
-    producteur (aucune directive n'entre) tant qu'il n'est pas pose. Fail-closed.
-  - **Coupe-circuit dedie** : ``halt_channel()`` pose un marqueur (distinct du /stop
-    Telegram et de ``outgoing_pause``) ; le lecteur s'arrete AVANT chaque directive.
-  - **Journal append-only** : la table ``aria_directive_log`` ne recoit QUE des INSERT
-    (aucune fonction UPDATE/DELETE n'existe dans ce fichier) -> trace consultable meme
-    sans validation prealable.
+Deliberate boundaries (lessons from the Cursor/worker-queue incident, 10/07):
+  - **Hardcoded scope**: ``_DIRECTIVE_CATEGORIES`` limits directives to the one
+    family already delegated (repo hygiene, docs, backlog). Any category outside
+    the list is REFUSED at write time. Widening the list = a deliberate code
+    change, locked by ``test_coherence`` (never a silent drift).
+  - **Gate OFF by default**: ``ARIA_DIRECTIVE_CHANNEL_ENABLED`` closes the door on
+    the producer side (no directive gets in) until it's set. Fail-closed.
+  - **Dedicated kill-switch**: ``halt_channel()`` sets a marker (distinct from the
+    Telegram /stop and from ``outgoing_pause``); the reader stops BEFORE every
+    directive.
+  - **Append-only log**: the ``aria_directive_log`` table only ever receives
+    INSERTs (no UPDATE/DELETE function exists in this file) -> a trail that's
+    reviewable even without prior validation.
 
-Deux frontieres que ce canal ne franchit JAMAIS (ni maintenant ni une fois elargi) :
-capital reel (la validation Telegram d'ARIA reste etanche, hors allowlist pour
-toujours) et modification du canal lui-meme ou de ses garde-fous (sinon ARIA pourrait
-s'auto-elargir les pouvoirs -- la faille exacte de l'incident Cursor).
+Two boundaries this channel NEVER crosses (neither now nor once widened):
+real capital (ARIA's Telegram validation stays sealed, out of the allowlist
+forever) and modifying the channel itself or its guardrails (otherwise ARIA
+could self-expand its own powers -- the exact flaw of the Cursor incident).
 """
 from __future__ import annotations
 
@@ -37,9 +38,9 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-# Perimetre AUTORISE du pilote -- exactement la famille deja deleguee a Claude Code
-# ("GitHub propre, automatise et coherent"). Verrouille par test_coherence : l'elargir
-# exige un changement de code delibere dans le meme commit.
+# ALLOWED scope of the pilot -- exactly the family already delegated to Claude Code
+# ("clean, automated and consistent GitHub"). Locked by test_coherence: widening it
+# requires a deliberate code change in the same commit.
 _DIRECTIVE_CATEGORIES = frozenset({"repo_hygiene", "docs", "backlog"})
 
 _HALT_MARKER = "aria_directive_halt"
@@ -48,7 +49,7 @@ _TRUTHY = ("1", "true", "yes", "on")
 
 
 def channel_enabled() -> bool:
-    """Gate producteur OFF par defaut : sans ce flag, aucune directive n'entre dans la file."""
+    """Producer gate OFF by default: without this flag, no directive enters the queue."""
     return os.environ.get("ARIA_DIRECTIVE_CHANNEL_ENABLED", "").strip().lower() in _TRUTHY
 
 
@@ -57,7 +58,7 @@ def _halt_path():
 
 
 def is_halted() -> bool:
-    """Coupe-circuit dedie (marqueur fichier), independant du /stop Telegram."""
+    """Dedicated kill-switch (file marker), independent of the Telegram /stop."""
     return _halt_path().exists()
 
 
@@ -77,8 +78,8 @@ async def _ensure_tables() -> None:
             )
             """
         )
-        # Journal append-only : uniquement des INSERT, jamais d'UPDATE/DELETE (aucune
-        # fonction de ce module ne les touche -- verrouille par test_coherence).
+        # Append-only log: only INSERTs, never UPDATE/DELETE (no function in
+        # this module touches them -- locked by test_coherence).
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS aria_directive_log (
@@ -104,11 +105,11 @@ async def _log(db, *, directive_id: int | None, actor: str, event: str, detail: 
 
 
 async def propose_directive(category: str, title: str, detail: str = "") -> dict:
-    """Cote PRODUCTEUR (ARIA) : depose une directive. N'execute rien.
+    """PRODUCER side (ARIA): drops a directive. Executes nothing.
 
-    Refuse (sans ecrire dans la file) si le canal est OFF, si le coupe-circuit est
-    actif, ou si la categorie est hors du perimetre autorise. Un refus est tout de
-    meme journalise (trace de la tentative).
+    Refuses (without writing to the queue) if the channel is OFF, if the
+    kill-switch is active, or if the category is outside the allowed scope.
+    A refusal is still logged (trace of the attempt).
     """
     category = (category or "").strip().lower()
     title = (title or "").strip()
@@ -140,12 +141,12 @@ async def propose_directive(category: str, title: str, detail: str = "") -> dict
         directive_id = cur.lastrowid
         await _log(db, directive_id=directive_id, actor="aria", event="proposed", detail=title)
         await db.commit()
-    logger.info("aria_directives: directive #%s proposee (%s) %s", directive_id, category, title)
+    logger.info("aria_directives: directive #%s proposed (%s) %s", directive_id, category, title)
     return {"ok": True, "id": directive_id, "category": category, "title": title}
 
 
 async def list_directives(status: str | None = None, limit: int = 100) -> list[dict]:
-    """Liste les directives (toutes, ou filtrees par statut). Lecture seule."""
+    """Lists directives (all, or filtered by status). Read-only."""
     await _ensure_tables()
     cols = ["id", "category", "title", "detail", "status", "proposed_at", "updated_at", "outcome"]
     query = f"SELECT {', '.join(cols)} FROM aria_directive"
@@ -161,12 +162,12 @@ async def list_directives(status: str | None = None, limit: int = 100) -> list[d
 
 
 async def claim_next_directive() -> dict | None:
-    """Cote LECTEUR (session Claude Code sur le VPS) : reserve la plus ancienne directive
-    'pending' et la passe en 'executing'.
+    """READER side (Claude Code session on the VPS): claims the oldest 'pending'
+    directive and moves it to 'executing'.
 
-    Renvoie None si le canal est OFF, si le coupe-circuit est actif, ou si la file est
-    vide -- le lecteur s'arrete AVANT toute action. Le classifieur de securite de la
-    session reste la derniere ligne de defense sur l'execution reelle.
+    Returns None if the channel is OFF, if the kill-switch is active, or if the
+    queue is empty -- the reader stops BEFORE any action. The session's security
+    classifier remains the last line of defense on real execution.
     """
     await _ensure_tables()
     if not channel_enabled() or is_halted():
@@ -192,7 +193,7 @@ async def claim_next_directive() -> dict | None:
 
 
 async def complete_directive(directive_id: int, outcome: str = "") -> dict:
-    """Cote LECTEUR : marque une directive comme executee, avec le compte-rendu."""
+    """READER side: marks a directive as executed, with the outcome report."""
     await _ensure_tables()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -206,7 +207,7 @@ async def complete_directive(directive_id: int, outcome: str = "") -> dict:
 
 
 async def refuse_directive(directive_id: int, reason: str = "") -> dict:
-    """Cote LECTEUR : refuse une directive (hors perimetre juge, ambigue, risquee)."""
+    """READER side: refuses a directive (judged out of scope, ambiguous, risky)."""
     await _ensure_tables()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -220,7 +221,7 @@ async def refuse_directive(directive_id: int, reason: str = "") -> dict:
 
 
 async def read_log(limit: int = 200) -> list[dict]:
-    """Lit le journal d'audit (append-only), du plus recent au plus ancien. Lecture seule."""
+    """Reads the audit log (append-only), most recent first. Read-only."""
     await _ensure_tables()
     cols = ["id", "directive_id", "actor", "event", "detail", "at"]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -234,7 +235,7 @@ async def read_log(limit: int = 200) -> list[dict]:
 
 
 async def halt_channel(reason: str = "") -> dict:
-    """Coupe-circuit : fige le canal (pose le marqueur). Journalise l'arret."""
+    """Kill-switch: freezes the channel (sets the marker). Logs the halt."""
     await _ensure_tables()
     _halt_path().write_text(
         (reason or "halt").strip()[:500], encoding="utf-8"
@@ -242,12 +243,12 @@ async def halt_channel(reason: str = "") -> dict:
     async with aiosqlite.connect(DB_PATH) as db:
         await _log(db, directive_id=None, actor="operator", event="halted", detail=reason)
         await db.commit()
-    logger.warning("aria_directives: CANAL FIGE (%s)", reason or "sans raison")
+    logger.warning("aria_directives: CHANNEL FROZEN (%s)", reason or "no reason given")
     return {"ok": True, "halted": True}
 
 
 async def resume_channel() -> dict:
-    """Leve le coupe-circuit (retire le marqueur). Journalise la reprise."""
+    """Lifts the kill-switch (removes the marker). Logs the resumption."""
     await _ensure_tables()
     path = _halt_path()
     if path.exists():

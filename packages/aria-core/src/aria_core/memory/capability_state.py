@@ -1,16 +1,16 @@
-"""État des capacités ARIA — bloc calculé EN DIRECT depuis l'environnement réel.
+"""ARIA capability state — block computed LIVE from the real environment.
 
-Contrairement à aria_goals.yaml/aria_values.yaml (texte écrit à la main, doit être
-mis à jour manuellement à chaque changement), ce module ne contient AUCUNE
-affirmation figée sur ce qui est actif ou non. Il relit les vraies variables
-d'environnement à chaque appel et rend un état toujours exact — élimine la classe
-de bug observée le 14/07 (aria_values.yaml affirmait Tavily "activable" alors
-qu'il était déjà actif en prod depuis des jours, jamais corrigé à la main).
+Unlike aria_goals.yaml/aria_values.yaml (hand-written text that must be
+manually updated on every change), this module contains NO frozen claim
+about what's active or not. It re-reads the real environment variables on
+every call and always renders an exact state — eliminates the bug class
+observed on 14/07 (aria_values.yaml claimed Tavily was "activatable" while
+it had already been active in prod for days, never manually corrected).
 
-Registre volontairement restreint : seules les variables de type "capacité"
-pertinentes à décrire à ARIA (jamais un secret, jamais de la plomberie type
-CORS_ORIGINS/DEBUG). Ajouter une capacité = une ligne dans _CAPABILITY_GATES,
-rien d'autre à synchroniser ailleurs.
+Deliberately restricted registry: only "capability"-type variables relevant
+to describe to ARIA (never a secret, never plumbing like
+CORS_ORIGINS/DEBUG). Adding a capability = one line in _CAPABILITY_GATES,
+nothing else to sync elsewhere.
 """
 from __future__ import annotations
 
@@ -34,11 +34,11 @@ _CAPABILITY_GATES: tuple[tuple[str, str], ...] = (
     ("ARIA_RELAY_AUTOREPLY_ENABLED", "Réponse autonome sur le canal relay Claude Code"),
     ("ARIA_EXAM_ENABLED", "Exam pédagogique"),
     ("X_CURIOSITY_ENABLED", "Lecture de X (curiosité/radar)"),
-    # 20/07 -- gap réel trouvé en auditant une auto-description d'ARIA qui affirmait
-    # "zéro capital réel, capital ensuite" : ce registre ne mentionnait NULLE PART le
-    # pilote agent-wallet, alors qu'il est ACTIF EN PROD (décide ET exécute des swaps
-    # RÉELS sans validation Telegram) depuis le 18/07. Sans cette ligne, elle n'a
-    # structurellement aucun moyen de savoir que ce capital réel existe déjà.
+    # 20/07 -- real gap found while auditing an ARIA self-description that claimed
+    # "zero real capital, capital later": this registry mentioned the agent-wallet
+    # pilot NOWHERE, even though it's ACTIVE IN PROD (decides AND executes REAL
+    # swaps without Telegram validation) since 18/07. Without this line, she has
+    # structurally no way of knowing this real capital already exists.
     ("ARIA_AGENT_WALLET_PILOT_ENABLED", "ARGENT RÉEL -- pilote agent-wallet (Coinbase, ~10-15$) : décide ET exécute des swaps réels, sans validation Telegram"),
     ("ARIA_AGENT_WALLET_TRANSFER_ENABLED", "ARGENT RÉEL -- pilote agent-wallet : capacité de transfert USDC vers une adresse unique autorisée"),
     ("ARIA_AGENT_WALLET_MONITOR_ENABLED", "Surveillance du wallet agent réel (dépôts/sorties, lecture seule)"),
@@ -52,11 +52,11 @@ def _is_enabled(env_var: str) -> bool:
 
 
 def get_capability_state_text() -> str:
-    """Bloc markdown listant les capacités réellement actives MAINTENANT.
+    """Markdown block listing the capabilities actually active RIGHT NOW.
 
-    Toujours recalculé depuis os.environ — jamais une affirmation écrite à la
-    main, jamais périmée. Distinct de aria_values.yaml (qui décrit CE QUE fait
-    une capacité) : ce bloc dit uniquement SI elle est active en ce moment.
+    Always recomputed from os.environ — never a hand-written claim, never
+    stale. Distinct from aria_values.yaml (which describes WHAT a capability
+    does): this block only says WHETHER it's active right now.
     """
     lines = ["# État des capacités ARIA (calculé en direct, jamais périmé)"]
     for env_var, label in _CAPABILITY_GATES:

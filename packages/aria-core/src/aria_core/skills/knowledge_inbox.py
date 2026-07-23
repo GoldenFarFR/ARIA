@@ -1,13 +1,14 @@
-"""Boîte de dépôt de connaissance -- ARIA lit les notes déposées dans
-`docs/aria-learning-inbox/` et PROPOSE (jamais n'impose) comment les intégrer à sa vraie
-base de connaissance (`knowledge/*.yaml`, `truth_ledger/canonical_facts.yaml`). Même
-doctrine que `code_proposal.py` : ISSUE GitHub uniquement, jamais un commit ni une fusion
-autonome -- ce sont des fichiers de VÉRITÉ qu'elle répète ensuite en conversation, une
-intégration mal filtrée est plus dangereuse qu'un bug de code ordinaire.
+"""Knowledge drop box -- ARIA reads the notes dropped into
+`docs/aria-learning-inbox/` and PROPOSES (never imposes) how to integrate them into her
+real knowledge base (`knowledge/*.yaml`, `truth_ledger/canonical_facts.yaml`). Same
+doctrine as `code_proposal.py`: GitHub ISSUE only, never an autonomous commit or merge
+-- these are TRUTH files she then repeats in conversation, a poorly filtered
+integration is more dangerous than an ordinary code bug.
 
-Gaté OFF par défaut (`ARIA_KNOWLEDGE_INBOX_ENABLED`) -- action visible sur le repo public,
-même politique que `code_proposal_cycle`/`showcase_pr_watch` pour toute action GitHub
-autonome. Chaque note n'est proposée qu'UNE fois (mémorisé localement, jamais retraité).
+Gated OFF by default (`ARIA_KNOWLEDGE_INBOX_ENABLED`) -- visible action on the public
+repo, same policy as `code_proposal_cycle`/`showcase_pr_watch` for any autonomous
+GitHub action. Each note is only ever proposed ONCE (remembered locally, never
+reprocessed).
 """
 from __future__ import annotations
 
@@ -19,15 +20,15 @@ from datetime import datetime, timezone
 INBOX_PATH = "docs/aria-learning-inbox"
 TARGET_REPO = "ARIA"
 
-# Trouvé en conditions réelles (17/07, issue #31) : une note écrite le 13/07 décrivant un
-# gap dans vanguard/deploy.sh a été transformée en proposition d'issue GitHub le 17/07 --
-# SANS jamais revérifier que le gap existait encore, alors qu'il avait été corrigé le jour
-# même de l'écriture de la note (la file d'attente traite une note par cycle, dans l'ordre
-# de la liste GitHub, pas par fraîcheur -- un simple backlog suffit à créer ce décalage).
-# `_REFERENCED_PATH_RE`/`_current_file_states` réinjectent l'état RÉEL des fichiers cités
-# entre backticks dans la note (ex. `` `vanguard/deploy.sh` ``) pour que le LLM puisse
-# juger si la note est encore d'actualité avant de la publier, au lieu de lui faire
-# confiance aveuglément sur son seul contenu figé.
+# Found in real conditions (17/07, issue #31): a note written on 13/07 describing a
+# gap in vanguard/deploy.sh was turned into a GitHub issue proposal on 17/07 --
+# WITHOUT ever re-checking that the gap still existed, even though it had been fixed
+# the very day the note was written (the queue processes one note per cycle, in the
+# order of the GitHub listing, not by freshness -- a simple backlog is enough to
+# create this drift). `_REFERENCED_PATH_RE`/`_current_file_states` re-inject the REAL
+# state of the files cited between backticks in the note (e.g. `` `vanguard/deploy.sh` ``)
+# so the LLM can judge whether the note is still current before publishing it, instead
+# of blindly trusting its own frozen content.
 _REFERENCED_PATH_RE = re.compile(r"`([A-Za-z0-9_\-./]+\.[A-Za-z0-9]+)`")
 _MAX_REFERENCED_FILES = 3
 _REFERENCED_FILE_CHARS = 2000
@@ -52,8 +53,8 @@ _PROPOSAL_SYSTEM = (
 
 
 def _extract_referenced_paths(content: str) -> list[str]:
-    """Chemins entre backticks ressemblant à un fichier réel (ex. `` `vanguard/deploy.sh` ``),
-    dans l'ordre d'apparition, sans doublon -- simple heuristique, pas un parseur de repo."""
+    """Paths between backticks that look like a real file (e.g. `` `vanguard/deploy.sh` ``),
+    in order of appearance, deduplicated -- a simple heuristic, not a repo parser."""
     seen: list[str] = []
     for match in _REFERENCED_PATH_RE.finditer(content or ""):
         path = match.group(1)
@@ -63,14 +64,14 @@ def _extract_referenced_paths(content: str) -> list[str]:
 
 
 async def _current_file_states(github_client, owner: str, paths: list[str]) -> str:
-    """Récupère le contenu ACTUEL (tronqué) des chemins cités par la note, au mieux --
-    un chemin introuvable/mal formé (ex. relatif, hors racine) est silencieusement ignoré,
-    jamais une erreur qui bloque le cycle. Chaîne vide si rien de récupérable."""
+    """Fetches the CURRENT (truncated) content of the paths cited by the note, best-effort
+    -- an unfindable/malformed path (e.g. relative, outside root) is silently ignored,
+    never an error that blocks the cycle. Empty string if nothing is retrievable."""
     sections: list[str] = []
     for path in paths[:_MAX_REFERENCED_FILES]:
         try:
             text, _sha = await github_client.get_file_text(owner, TARGET_REPO, path)
-        except Exception:  # noqa: BLE001 -- un chemin cité qui ne resout a rien de reel, jamais fatal
+        except Exception:  # noqa: BLE001 -- a cited path resolving to nothing real is never fatal
             continue
         if not (text or "").strip():
             continue
@@ -125,19 +126,19 @@ async def _mark_processed(path: str) -> None:
 
 
 async def _try_claim(path: str) -> bool:
-    """Réclame ``path`` atomiquement -- ``True`` seulement si CETTE tentative a
-    réellement créé la ligne (jamais laisser deux passages concurrents traiter
-    la même note et produire deux issues différentes).
+    """Atomically claims ``path`` -- ``True`` only if THIS attempt actually
+    created the row (never let two concurrent passes process the same note
+    and produce two different issues).
 
-    20/07 -- bug réel trouvé en conditions réelles : issues #42/#43 créées à 6
-    minutes d'écart à partir de la MÊME note (Note du 2026-07-15, Clanker/
-    GoPlus), avec des propositions différentes (fichiers cibles différents,
-    formulation différente) -- deux passages ont vu ``_already_processed() ->
-    False`` avant que l'un des deux n'écrive (l'ancien `_mark_processed`
-    n'arrivait qu'APRÈS tout le travail LLM, laissant une large fenêtre de
-    course). Corrigé : la réclamation se fait ICI, avant tout appel LLM --
-    ``_mark_processed``/l'ancien flux en aval sont retirés, cette fonction est
-    l'unique point d'écriture désormais."""
+    20/07 -- real bug found in live conditions: issues #42/#43 created 6
+    minutes apart from the SAME note (Note from 2026-07-15, Clanker/
+    GoPlus), with different proposals (different target files, different
+    wording) -- two passes saw ``_already_processed() ->
+    False`` before either one wrote (the old `_mark_processed`
+    only ran AFTER all the LLM work, leaving a wide race window).
+    Fixed: the claim now happens HERE, before any LLM call --
+    ``_mark_processed``/the old downstream flow are removed, this function is
+    now the sole write point."""
     import aiosqlite
 
     from aria_core.paths import aria_db_path
@@ -167,8 +168,8 @@ def _pick_next_candidate(entries: list[dict], already_processed: set[str]) -> st
 
 
 async def run_knowledge_inbox_cycle(*, llm=None, github_client=None, notifier=None) -> dict:
-    """Un tour : repère UNE note non traitée, propose son intégration comme ISSUE GitHub
-    (jamais un commit, jamais une fusion). Fail-closed à chaque étage."""
+    """One pass: spots ONE unprocessed note, proposes its integration as a GitHub ISSUE
+    (never a commit, never a merge). Fail-closed at every stage."""
     if not knowledge_inbox_enabled():
         return {"outcome": "skipped_disabled"}
 
@@ -185,7 +186,7 @@ async def run_knowledge_inbox_cycle(*, llm=None, github_client=None, notifier=No
     owner = settings.github_owner
     try:
         entries = await github_client.list_directory(owner, TARGET_REPO, INBOX_PATH)
-    except Exception as exc:  # noqa: BLE001 -- un dossier absent/erreur reseau ne casse jamais le heartbeat
+    except Exception as exc:  # noqa: BLE001 -- a missing folder/network error never breaks the heartbeat
         return {"outcome": "error", "error": str(exc)[:300]}
 
     processed_paths = set()
@@ -199,11 +200,11 @@ async def run_knowledge_inbox_cycle(*, llm=None, github_client=None, notifier=No
     if path is None:
         return {"outcome": "nothing_new"}
 
-    # 20/07 -- réclamation ATOMIQUE ici, avant tout travail (fetch/LLM) -- voir le
-    # commentaire de _try_claim pour l'incident réel (issues #42/#43 dupliquées)
-    # que ce réordonnancement corrige. Si un autre passage a déjà réclamé cette
-    # note (concurrence), on s'arrête immédiatement -- jamais un deuxième appel LLM
-    # ni une deuxième issue pour la même note.
+    # 20/07 -- ATOMIC claim here, before any work (fetch/LLM) -- see the
+    # comment on _try_claim for the real incident (duplicate issues #42/#43)
+    # this reordering fixes. If another pass already claimed this note
+    # (concurrency), stop immediately -- never a second LLM call nor a
+    # second issue for the same note.
     if not await _try_claim(path):
         return {"outcome": "lost_claim_race", "path": path}
 

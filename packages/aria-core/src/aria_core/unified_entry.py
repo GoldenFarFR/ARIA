@@ -1,32 +1,40 @@
-"""Crible d'entrée UNIFIÉ VC/Swing (22/07, tâche #1 -- pivot validé avec l'opérateur,
-option 1 "fusion complète" choisie explicitement après comparaison des deux designs).
+"""UNIFIED VC/Swing entry screen (22/07, task #1 -- pivot validated with the
+operator, option 1 "full merge" explicitly chosen after comparing both designs).
 
-Un SEUL jugement LLM évalue un candidat sur DEUX axes en même temps -- conviction
-fondamentale (produit/team/smart money, horizon 6 mois-2 ans, cible x20-x100) ET
-setup technique (R/R Fibonacci/RSI, EMA/MACD, horizon court terme) -- et décide
-laquelle des deux poches (ou les deux, cumulables -- décision opérateur explicite,
-22/07) mérite une position. Remplace, pour CE TEST 1M$, le critère purement
-technique de ``momentum_entry.evaluate_momentum_entry`` (pivot #194 du 15/07,
-amendé par ce chantier -- cf. CLAUDE.md).
+A SINGLE LLM judgment evaluates a candidate on TWO axes at once -- fundamental
+conviction (product/team/smart money, 6-month-2-year horizon, x20-x100 target)
+AND technical setup (Fibonacci/RSI R/R, EMA/MACD, short-term horizon) -- and
+decides which of the two pockets (or both, stackable -- explicit operator
+decision, 22/07) deserves a position. For THIS 1M$ test, replaces the purely
+technical criterion of ``momentum_entry.evaluate_momentum_entry`` (15/07 pivot
+#194, amended by this project -- see CLAUDE.md).
 
-Ne duplique rien de ce qui existe déjà :
-- ``momentum_entry.evaluate_hard_gates`` : garde-fous durs anti-scam PARTAGÉS
-  (honeypot INCLUS) -- protègent les deux poches sans exception.
-- ``acp_onchain_scan.scan_base_token`` : contexte riche (TA -- même
-  ``entry_signals.detect_entry`` que le pipeline momentum, smart money -- formule
-  qualité-prioritaire du 22/07, fondamentaux, dev behavior). ``include_honeypot=
-  False`` explicite : déjà vérifié par ``evaluate_hard_gates``, jamais un second
-  appel GoPlus (ressource la plus rare du pipeline).
-- ``conviction_research.research_project_potential`` : diligence produit/team/X/
-  GitHub -- MÊME source canonique que les deux pipelines historiques.
-- ``vc_analysis._build_untrusted_context`` : même bloc de contexte LLM que ``/vc``
-  manuel, réutilisé tel quel (aucune reconstruction).
+Duplicates nothing that already exists:
+- ``momentum_entry.evaluate_hard_gates``: hard anti-scam guard-rails SHARED
+  (honeypot INCLUDED) -- protect both pockets without exception.
+- ``acp_onchain_scan.scan_base_token``: rich context (TA -- same
+  ``entry_signals.detect_entry`` as the momentum pipeline, smart money --
+  22/07 quality-first formula, fundamentals, dev behavior). Explicit
+  ``include_honeypot=False``: already checked by ``evaluate_hard_gates``,
+  never a second GoPlus call (the pipeline's scarcest resource).
+- ``conviction_research.research_project_potential``: product/team/X/GitHub
+  diligence -- SAME canonical source as both historical pipelines.
+- ``vc_analysis._build_untrusted_context``: same LLM context block as manual
+  ``/vc``, reused as-is (no rebuild).
 
-Le sizing swing reste calculé de façon DÉTERMINISTE par ``risk_guard`` (comme avant
-ce chantier) -- le LLM ne fait que CONFIRMER que le setup technique est exploitable
-(même esprit que l'ancien ``_llm_security_gate``), jamais recalculer une taille lui-
-même sur cette poche. Le sizing VC reste au jugement LLM (0-10%, comme ``vc_analysis``
-déjà aujourd'hui), plafonné dur comme lui.
+Swing sizing remains computed DETERMINISTICALLY by ``risk_guard`` (as before
+this project) -- the LLM only CONFIRMS the technical setup is exploitable
+(same spirit as the old ``_llm_security_gate``), never recalculating a size
+itself on this pocket. VC sizing stays at the LLM's judgment (0-10%, as
+``vc_analysis`` already does today), hard-capped like it.
+
+NOTE (translation, 23/07): the LLM system prompt (``_SYSTEM_PROMPT``), the
+JSON schema it must answer with, and the enum constants below
+(``_RISK_LEVELS``/``_CONFIANCE_LEVELS``/``_HORIZON_VALUES``) are FUNCTIONAL
+French content -- the LLM is instructed to reason and answer in French, and
+these exact tokens are parsed/compared downstream. Left untouched, along with
+every field that carries thesis/report text (product content, French by
+design). Only this module's own dev-facing docstrings/comments are in English.
 """
 from __future__ import annotations
 
@@ -109,18 +117,18 @@ class UnifiedEntryResult:
     llm_used: bool = False
     liens_projet: list[dict] = field(default_factory=list)
 
-    # Poche VC (vide/None si horizon ne contient pas "vc")
+    # VC pocket (empty/None if horizon doesn't contain "vc")
     these_vc: str = ""
     taille_pct_vc: float = 0.0
     cible_vc: str = ""
     invalidation_vc: str = ""
 
-    # Poche Swing (vide si horizon ne contient pas "swing")
+    # Swing pocket (empty if horizon doesn't contain "swing")
     swing_valide: bool = False
     swing_these: str = ""
-    # Niveaux techniques déterministes (jamais décidés par le LLM), None si aucun
-    # setup technique n'a été calculé (OHLCV indisponible -- une thèse VC pure peut
-    # exister sans eux, cf. docstring du module).
+    # Deterministic technical levels (never decided by the LLM), None if no
+    # technical setup was computed (OHLCV unavailable -- a pure VC thesis can
+    # exist without them, see the module docstring).
     swing_entry: float | None = None
     swing_invalidation: float | None = None
     swing_target: float | None = None
@@ -138,9 +146,10 @@ class UnifiedEntryResult:
 
 
 def _technical_alignment_from_context(ctx: TokenScanContext) -> tuple[int, list[str]]:
-    """Équivalent de ``momentum_entry._technical_alignment`` mais appliqué aux champs
-    DÉJÀ calculés par ``scan_base_token`` (même source EMA/MACD/patterns, ``ctx.ta_*``)
-    -- évite un second appel réseau/recalcul OHLCV séparé pour ce même signal."""
+    """Equivalent of ``momentum_entry._technical_alignment`` but applied to fields
+    ALREADY computed by ``scan_base_token`` (same EMA/MACD/patterns source,
+    ``ctx.ta_*``) -- avoids a second network call/separate OHLCV recompute for
+    this same signal."""
     score = 0
     reasons: list[str] = []
     if ctx.ta_ema_fast is not None and ctx.ta_ema_slow is not None and ctx.ta_ema_fast > ctx.ta_ema_slow:
@@ -175,9 +184,9 @@ def _clamp_float(value: object, low: float, high: float, default: float) -> floa
 def _deterministic_fallback(
     ctx: TokenScanContext, *, rr: float | None, align_score: int, entry_atr_pct: float | None,
 ) -> UnifiedEntryResult:
-    """Fallback sans LLM (désactivé/timeout/sortie illisible) : jamais de BUY sur
-    aucune poche sans analyse qualitative -- même doctrine que ``vc_analysis.
-    _deterministic_fallback``."""
+    """Fallback without an LLM (disabled/timeout/unreadable output): never a
+    BUY on any pocket without qualitative analysis -- same doctrine as
+    ``vc_analysis._deterministic_fallback``."""
     return UnifiedEntryResult(
         contract=ctx.contract, symbol=_project_symbol(ctx), chain="base",
         horizon="aucun", potentiel=None, risque="EXTRÊME", confiance_globale="faible",
@@ -204,10 +213,10 @@ def _validate_llm_output(
         taille_pct_vc = 0.0
 
     swing_valide = bool(parsed.get("swing_valide")) and horizon in ("swing", "les_deux")
-    # Un setup swing exige un vrai signal technique déterministe -- jamais confirmé
-    # sur un R/R absent, quoi que le LLM ait répondu (même doctrine que le veto
-    # honeypot déterministe de vc_analysis : un signal 100% déterministe ne peut
-    # jamais être "convaincu" par une sortie LLM).
+    # A swing setup requires a real deterministic technical signal -- never
+    # confirmed on a missing R/R, whatever the LLM answered (same doctrine as
+    # vc_analysis's deterministic honeypot veto: a 100% deterministic signal
+    # can never be "convinced" by an LLM output).
     if rr is None or rr <= 0:
         swing_valide = False
 
@@ -246,11 +255,11 @@ async def evaluate_unified_entry(
     contract: str, chain: str = "base", *, weekly_context: dict | None = None,
     current_regime: str | None = None,
 ) -> dict | None:
-    """Point d'entrée du crible unifié -- retourne un dict compatible avec l'analyzer
-    attendu par ``paper_trader.run_paper_cycle`` (voir ``_unified_analyzer_signal``
-    pour la conversion), ou ``None``/dict HOLD selon la même sémantique que
-    ``momentum_entry.evaluate_momentum_entry`` (garde-fous durs partagés, cf.
-    ``evaluate_hard_gates``)."""
+    """Entry point of the unified screen -- returns a dict compatible with
+    the analyzer expected by ``paper_trader.run_paper_cycle`` (see
+    ``_unified_analyzer_signal`` for the conversion), or ``None``/a HOLD dict
+    under the same semantics as ``momentum_entry.evaluate_momentum_entry``
+    (shared hard guard-rails, see ``evaluate_hard_gates``)."""
     from aria_core import momentum_entry
 
     best, honeypot_reason, hold = await momentum_entry.evaluate_hard_gates(
@@ -261,8 +270,8 @@ async def evaluate_unified_entry(
     if best is None:
         return None
 
-    # Contexte riche PARTAGÉ par les deux axes -- honeypot déjà vérifié ci-dessus,
-    # jamais un second appel GoPlus (cf. docstring du module).
+    # Rich context SHARED by both axes -- honeypot already checked above,
+    # never a second GoPlus call (see the module docstring).
     ctx = await scan_base_token(
         contract, include_smart_money=True, include_fundamentals=True,
         include_ta=True, include_dev_behavior=True, include_honeypot=False,
@@ -297,8 +306,8 @@ async def evaluate_unified_entry(
         raw = await chat_with_context(
             user_message, _SYSTEM_PROMPT, max_tokens=1800, temperature=0.2, depth="develop",
         )
-    except Exception as exc:  # noqa: BLE001 -- jamais bloquant, fallback déterministe
-        logger.error("unified_entry: appel LLM échoué (%s) -- fallback déterministe", exc)
+    except Exception as exc:  # noqa: BLE001 -- never blocking, deterministic fallback
+        logger.error("unified_entry: LLM call failed (%s) -- deterministic fallback", exc)
         raw = None
 
     if not raw:
@@ -306,7 +315,7 @@ async def evaluate_unified_entry(
     else:
         parsed = _extract_json(raw)
         if parsed is None:
-            logger.warning("unified_entry: sortie LLM non parsable -- fallback déterministe")
+            logger.warning("unified_entry: unparsable LLM output -- deterministic fallback")
             result = _deterministic_fallback(ctx, rr=rr, align_score=align_score, entry_atr_pct=entry_atr_pct)
         else:
             result = _validate_llm_output(
@@ -318,15 +327,16 @@ async def evaluate_unified_entry(
 
 
 def _unified_result_to_signals(result: UnifiedEntryResult, chain: str, current_regime: str | None) -> dict:
-    """Convertit ``UnifiedEntryResult`` en dict(s) exploitables par ``paper_trader``
-    (cf. tâche #4, ``has_open(contract, strategy)`` pour le cumul). Le champ
-    ``signals`` porte une liste (0, 1 ou 2 entrées -- cumul VC+Swing, décision
-    opérateur explicite 22/07), chacune avec son propre ``strategy``."""
+    """Converts ``UnifiedEntryResult`` into dict(s) usable by ``paper_trader``
+    (see task #4, ``has_open(contract, strategy)`` for stacking). The
+    ``signals`` field carries a list (0, 1, or 2 entries -- VC+Swing
+    stacking, explicit operator decision 22/07), each with its own
+    ``strategy``."""
     signals: list[dict] = []
     if result.wants_vc:
         signals.append({
             "action": "BUY", "strategy": "vc_thesis", "chain": chain,
-            "symbol": result.symbol, "price": None,  # prix résolu à l'exécution (comme l'ancien pilote VC-thesis)
+            "symbol": result.symbol, "price": None,  # price resolved at execution (like the old VC-thesis pilot)
             "target": result.cible_vc, "invalidation": result.invalidation_vc,
             "taille_pct": result.taille_pct_vc,
             "thesis": result.these_vc or result.resume_executif,

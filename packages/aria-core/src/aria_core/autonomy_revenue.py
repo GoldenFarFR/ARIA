@@ -1,4 +1,4 @@
-"""Boucle autonomie revenu — ARIA agit sans relance opérateur (local PC)."""
+"""Revenue autonomy loop — ARIA acts without an operator nudge (local PC)."""
 from __future__ import annotations
 
 import json
@@ -120,7 +120,7 @@ def _advance_distribution_queue(*, posted_offering: str) -> None:
 
 
 async def _flush_pending_x_promo() -> dict[str, Any] | None:
-    """Publie un tweet promo ACP en file si la politique X l'autorise."""
+    """Posts a queued ACP promo tweet if the X policy allows it."""
     picked = _next_distribution_tweet()
     if not picked:
         return None
@@ -138,7 +138,7 @@ async def _flush_pending_x_promo() -> dict[str, Any] | None:
 
 
 async def run_revenue_autonomy_cycle(*, lang: str = "fr") -> dict[str, Any]:
-    """Cycle autonome : poll ACP, scan marché, promo produit si revenu=0."""
+    """Autonomous cycle: poll ACP, scan market, promo product if revenue=0."""
     from aria_core.skills.acp_cli import is_acp_available
     from aria_core.skills.acp_market_intelligence import run_market_scan
     from aria_core.skills.acp_provider_skill import run_provider_cycle

@@ -1,30 +1,30 @@
-"""Signal « substance GitHub » — juge la qualité RÉELLE du développement,
-pas sa fréquence.
+""""GitHub substance" signal — judges the REAL quality of development,
+not its frequency.
 
-Point faible du stress-test (Codex Partie 11) : `project_activity.py` juge la
-FRAÎCHEUR (jours depuis le dernier commit), jamais leur SUBSTANCE — un projet
-qui spam des commits cosmétiques (README, formatage, un caractère changé)
-passerait le même signal qu'un vrai développement technique.
+Weak point found by the stress-test (Codex Part 11): `project_activity.py` judges
+FRESHNESS (days since the last commit), never its SUBSTANCE — a project
+that spams cosmetic commits (README, formatting, one character changed)
+would pass the same signal as real technical development.
 
-Design évalué contre une proposition externe, vérifié techniquement avant
-d'implémenter (23/07) :
-- **Coût réel confirmé par appel direct** : l'endpoint liste des commits
-  (`GET /repos/{o}/{r}/commits`) ne renvoie JAMAIS les statistiques (lignes
-  ajoutées/supprimées) ni les fichiers modifiés — il faut un appel SÉPARÉ par
-  commit (`GET /repos/{o}/{r}/commits/{sha}`) pour ça. Plafonné à
-  `_MAX_COMMITS_ANALYZED` (échantillon des plus récents), jamais une analyse
-  exhaustive d'un historique potentiellement long.
-- **Authentifié** via `GITHUB_TOKEN` (déjà existant, jamais un nouveau secret)
-  — confirmé par appel réel qu'il peut lire N'IMPORTE QUEL dépôt PUBLIC tiers
-  (pas seulement `GoldenFarFR/ARIA`), rate limit authentifié 5000/h (vs 60/h
-  anonyme, ce que `project_activity._fetch_github` utilise aujourd'hui — gap
-  de sobriété distinct, noté mais hors scope de ce signal).
-- **Jamais de LLM** pour "lire" le code (trop cher/lent pour un signal
-  systématique appelé à chaque scan `/vc`) — heuristiques déterministes
-  uniquement (extension de fichier, taille de diff, dispersion temporelle).
+Design evaluated against an external proposal, technically verified before
+implementing (07/23):
+- **Real cost confirmed by a direct call**: the commit-list endpoint
+  (`GET /repos/{o}/{r}/commits`) NEVER returns the stats (lines
+  added/removed) nor the changed files — a SEPARATE call per
+  commit (`GET /repos/{o}/{r}/commits/{sha}`) is required for that. Capped at
+  `_MAX_COMMITS_ANALYZED` (sample of the most recent), never an
+  exhaustive analysis of a potentially long history.
+- **Authenticated** via `GITHUB_TOKEN` (already existing, never a new secret)
+  — confirmed by a real call that it can read ANY third-party PUBLIC repo
+  (not just `GoldenFarFR/ARIA`), authenticated rate limit 5000/h (vs 60/h
+  anonymous, which `project_activity._fetch_github` uses today — a distinct
+  frugality gap, noted but out of scope for this signal).
+- **Never an LLM** to "read" the code (too expensive/slow for a
+  systematic signal called on every `/vc` scan) — deterministic heuristics
+  only (file extension, diff size, temporal spread).
 
-Signal purement consultatif (même doctrine que les autres signaux de ce
-chantier : insider_wallets/deployer_history/sybil_cluster), jamais un véto.
+Purely consultative signal (same doctrine as the other signals from this
+work: insider_wallets/deployer_history/sybil_cluster), never a veto.
 """
 from __future__ import annotations
 
@@ -37,47 +37,47 @@ logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 
-# Fenêtre d'analyse (jours) et plafond de commits analysés EN DÉTAIL (chaque
-# commit coûte un appel réseau séparé, voir doctrine ci-dessus).
+# Analysis window (days) and cap on commits analyzed IN DETAIL (each
+# commit costs a separate network call, see the doctrine above).
 _WINDOW_DAYS = 90
 _MAX_COMMITS_ANALYZED = 30
 
-# Extensions considérées comme du CODE technique réel (vs cosmétique).
+# Extensions considered real technical CODE (vs cosmetic).
 _TECHNICAL_EXTENSIONS = {
     ".sol", ".vy", ".rs", ".go", ".py", ".ts", ".tsx", ".js", ".jsx",
     ".java", ".c", ".cpp", ".h", ".rb", ".php", ".sh",
 }
-# Fragments de nom de fichier considérés comme purement cosmétiques.
+# Filename fragments considered purely cosmetic.
 _COSMETIC_NAME_FRAGMENTS = ("readme", "license", "changelog", ".md", ".txt", ".rst")
 _TEST_PATH_FRAGMENTS = ("test", "spec", "__tests__")
-# Messages de commit génériques, sans substance descriptive.
+# Generic commit messages, with no descriptive substance.
 _GENERIC_MESSAGES = {"update", "fix", "wip", "commit", "changes", "misc", "."}
 _MIN_MESSAGE_LENGTH = 10
 
-# Sous ce nombre de commits TECHNIQUES analysés, l'échantillon est trop faible
-# pour juger honnêtement (score -> indisponible, jamais un score fabriqué).
+# Below this number of analyzed TECHNICAL commits, the sample is too small
+# to judge honestly (score -> unavailable, never a fabricated score).
 _MIN_TECHNICAL_COMMITS = 8
-# Garde-fou précoce (revue croisée externe, 23/07) : sous ce nombre de commits
-# BRUTS dans la fenêtre (avant même de savoir combien sont techniques), le
-# dépôt est manifestement trop peu actif -- inutile de payer le moindre appel
-# détail (un par commit, coût réel vérifié) pour un repo quasi mort.
+# Early guardrail (external cross-review, 07/23): below this number of RAW
+# commits in the window (before even knowing how many are technical), the
+# repo is clearly too inactive -- no point paying for a single detail
+# call (one per commit, real cost verified) for a nearly dead repo.
 _MIN_RAW_COMMITS_BEFORE_DETAIL = 5
 
-# Catégories fonctionnelles (revue croisée externe, 23/07) -- plus honnête
-# qu'un simple compte d'extensions distinctes : deux extensions de la MÊME
-# couche (ex. .py et .sh d'un même backend) ne doivent pas compter comme deux
-# signaux de diversité indépendants.
+# Functional categories (external cross-review, 07/23) -- more honest
+# than a plain count of distinct extensions: two extensions from the SAME
+# layer (e.g. .py and .sh from the same backend) shouldn't count as two
+# independent diversity signals.
 _CATEGORY_CONTRACT_EXTENSIONS = {".sol", ".vy", ".rs", ".move", ".cairo"}
 _CATEGORY_JS_TS_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx"}
 _CATEGORY_BACKEND_EXTENSIONS = {".py", ".go", ".java", ".rb", ".php", ".c", ".cpp", ".h", ".sh"}
 
-# Normalisation (voir judge_github_substance) : au-delà de ces valeurs, le
-# critère est considéré "plein score" -- pas une science exacte, un repère
-# raisonnable pour éviter qu'un seul projet exceptionnel écrase l'échelle.
+# Normalization (see judge_github_substance): beyond these values, the
+# criterion is considered "full score" -- not an exact science, a reasonable
+# benchmark to avoid one exceptional project skewing the scale.
 _DIFF_SIZE_FULL_SCORE = 50.0
-# 5 catégories possibles (contract/tests/js_ts/backend/other_tech) -- 4 déjà
-# atteintes est un signe de projet multi-couches réel (contrat + frontend +
-# scripts + tests, par exemple), plein score sans exiger la 5e.
+# 5 possible categories (contract/tests/js_ts/backend/other_tech) -- reaching
+# 4 already signals a real multi-layer project (contract + frontend +
+# scripts + tests, for example), full score without requiring the 5th.
 _DISTINCT_CATEGORIES_FULL_SCORE = 4
 
 
@@ -85,12 +85,12 @@ _DISTINCT_CATEGORIES_FULL_SCORE = 4
 class GithubSubstanceFacts:
     commits_analyzed: int = 0
     technical_commits: int = 0
-    code_ratio: float | None = None            # part de lignes techniques vs cosmétique (0-1)
-    avg_diff_size: float | None = None         # lignes changées / commit technique
+    code_ratio: float | None = None            # share of technical lines vs cosmetic (0-1)
+    avg_diff_size: float | None = None         # lines changed / technical commit
     has_tests: bool = False
-    distinct_categories: int = 0               # catégories fonctionnelles distinctes (contract/tests/js_ts/backend/other_tech)
-    regularity_score: float | None = None      # 0-1 : dispersion temporelle (1 = réparti, 0 = dump)
-    message_quality_score: float | None = None  # 0-1 : part de messages descriptifs
+    distinct_categories: int = 0               # distinct functional categories (contract/tests/js_ts/backend/other_tech)
+    regularity_score: float | None = None      # 0-1: temporal spread (1 = distributed, 0 = dump)
+    message_quality_score: float | None = None  # 0-1: share of descriptive messages
     available: bool = False
     error: str | None = None
 
@@ -103,8 +103,8 @@ class GithubSubstanceVerdict:
 
 
 def judge_github_substance(facts: GithubSubstanceFacts) -> GithubSubstanceVerdict:
-    """Jugement pur et déterministe — même doctrine que les autres signaux de
-    ce chantier. Jamais un rejet automatique, un score consultatif de plus."""
+    """Pure, deterministic judgment — same doctrine as the other signals in
+    this work. Never an automatic rejection, just one more consultative score."""
     if not facts.available:
         return GithubSubstanceVerdict(signal="unknown", points=[facts.error or "activité GitHub non analysable"])
     if facts.technical_commits < _MIN_TECHNICAL_COMMITS:
@@ -166,12 +166,12 @@ def _file_extension(filename: str) -> str:
 
 
 def _file_category(filename: str) -> str | None:
-    """Catégorie FONCTIONNELLE d'un fichier technique (contract/tests/js_ts/
-    backend/other_tech) -- plus honnête qu'un simple compte d'extensions
-    distinctes (deux extensions de la MÊME couche, ex. .py et .sh d'un même
-    backend, ne doivent pas compter comme deux signaux de diversité
-    indépendants). ``None`` si le fichier n'est pas technique (appelant déjà
-    filtré via `_is_technical_file`, mais robuste si appelé isolément)."""
+    """FUNCTIONAL category of a technical file (contract/tests/js_ts/
+    backend/other_tech) -- more honest than a plain count of distinct
+    extensions (two extensions from the SAME layer, e.g. .py and .sh from the same
+    backend, shouldn't count as two independent diversity
+    signals). ``None`` if the file isn't technical (caller already
+    filters via `_is_technical_file`, but robust if called in isolation)."""
     if _is_test_file(filename):
         return "tests"
     ext = _file_extension(filename)
@@ -194,9 +194,9 @@ def _message_is_descriptive(message: str) -> bool:
 
 
 async def _default_fetch(path: str) -> object | None:
-    """GET api.github.com AUTHENTIFIÉ (GITHUB_TOKEN, déjà existant) -- rate
-    limit 5000/h, confirmé par appel réel capable de lire un dépôt public
-    tiers. Dégradation gracieuse : toute panne -> None, jamais une exception."""
+    """AUTHENTICATED GET on api.github.com (GITHUB_TOKEN, already existing) -- rate
+    limit 5000/h, confirmed by a real call capable of reading a third-party
+    public repo. Graceful degradation: any failure -> None, never an exception."""
     import httpx
 
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -214,16 +214,16 @@ async def _default_fetch(path: str) -> object | None:
 async def gather_github_substance_facts(
     repo_url: str | None, *, fetch=None, now: datetime | None = None,
 ) -> GithubSubstanceFacts:
-    """Récolte best-effort la substance du développement récent. ``fetch``
-    injectable pour les tests offline (défaut : appel authentifié réel).
-    Toute indisponibilité -> ``available=False``, jamais une donnée inventée.
+    """Best-effort gathering of recent development substance. ``fetch``
+    is injectable for offline tests (default: a real authenticated call).
+    Any unavailability -> ``available=False``, never invented data.
 
-    23/07 -- utilise ``resolve_github_repo`` (pas seulement ``parse_github_repo``) :
-    un lien déclaré vers une ORGANISATION seule (ex. "github.com/crynux-network",
-    pas un repo précis -- pratique courante pour un projet multi-repos) est résolu
-    vers son repo le plus récemment actif, plutôt que de renvoyer indisponible à
-    tort (cas réel trouvé : CNX/crynux-network, 272 étoiles, jamais détecté avant
-    ce correctif)."""
+    07/23 -- uses ``resolve_github_repo`` (not just ``parse_github_repo``):
+    a link declared toward an ORGANIZATION alone (e.g. "github.com/crynux-network",
+    not a specific repo -- common practice for a multi-repo project) is resolved
+    to its most recently active repo, rather than wrongly returning
+    unavailable (real case found: CNX/crynux-network, 272 stars, never detected before
+    this fix)."""
     from aria_core.services.project_activity import resolve_github_repo
 
     fetch = fetch or _default_fetch
@@ -238,18 +238,18 @@ async def gather_github_substance_facts(
         commits_list = await fetch(
             f"/repos/{owner}/{repo}/commits?per_page={_MAX_COMMITS_ANALYZED}&since={since}"
         )
-    except Exception as exc:  # noqa: BLE001 — best-effort, jamais bloquant
-        logger.info("github_substance: liste commits %s/%s échouée (%s)", owner, repo, exc)
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never blocking
+        logger.info("github_substance: commit list %s/%s failed (%s)", owner, repo, exc)
         return GithubSubstanceFacts(available=False, error=f"liste des commits indisponible ({exc})")
     if not isinstance(commits_list, list) or not commits_list:
         return GithubSubstanceFacts(available=False, error="aucun commit trouvé ou dépôt inaccessible")
 
     shas = [c.get("sha") for c in commits_list if isinstance(c, dict) and c.get("sha")]
 
-    # Garde-fou précoce (revue croisée externe, 23/07) : sous ce nombre de
-    # commits BRUTS (avant même de savoir combien sont techniques), le dépôt
-    # est manifestement trop peu actif -- inutile de payer le moindre appel
-    # détail (un par commit) pour un repo quasi mort.
+    # Early guardrail (external cross-review, 07/23): below this number of
+    # RAW commits (before even knowing how many are technical), the repo
+    # is clearly too inactive -- no point paying for a single detail
+    # call (one per commit) for a nearly dead repo.
     if len(shas) < _MIN_RAW_COMMITS_BEFORE_DETAIL:
         return GithubSubstanceFacts(
             available=False,
@@ -269,8 +269,8 @@ async def gather_github_substance_facts(
     for sha in shas:
         try:
             detail = await fetch(f"/repos/{owner}/{repo}/commits/{sha}")
-        except Exception as exc:  # noqa: BLE001 — un échec isolé n'invalide pas les autres
-            logger.info("github_substance: détail commit %s échoué (%s)", sha, exc)
+        except Exception as exc:  # noqa: BLE001 -- an isolated failure doesn't invalidate the others
+            logger.info("github_substance: commit detail %s failed (%s)", sha, exc)
             continue
         if not isinstance(detail, dict):
             continue

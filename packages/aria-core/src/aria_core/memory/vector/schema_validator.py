@@ -1,4 +1,4 @@
-"""Validation entrées vectorielles — schéma ``schema.yaml``."""
+"""Vector entry validation — ``schema.yaml`` schema."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -24,17 +24,17 @@ def validate_entry(entry_type: str, metadata: dict[str, Any] | None) -> tuple[bo
     schema = load_schema()
     types = schema.get("entry_types") or {}
     if entry_type not in types:
-        return False, f"entry_type inconnu: {entry_type}"
+        return False, f"unknown entry_type: {entry_type}"
     meta = dict(metadata or {})
     required = list(types[entry_type].get("required_metadata") or [])
     missing = [k for k in required if not meta.get(k)]
     if missing:
-        return False, f"metadata manquants pour {entry_type}: {', '.join(missing)}"
+        return False, f"missing metadata for {entry_type}: {', '.join(missing)}"
     return True, ""
 
 
 def normalize_metadata(entry_type: str, metadata: dict[str, Any] | None) -> dict[str, str]:
-    """Métadonnées sérialisées en JSON côté store — on stringifie tout sauf str/int/float/bool natifs."""
+    """Metadata serialized to JSON on the store side — everything is stringified except native str/int/float/bool."""
     out: dict[str, str] = {"entry_type": entry_type}
     for key, value in (metadata or {}).items():
         if value is None:

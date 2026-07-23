@@ -651,7 +651,7 @@ async def test_cycle_dropping_inactive_wallet_also_removes_it_from_leaderboard(m
     await wsq.run_wallet_scan_queue_cycle()
     assert len(calls) == 1
     assert calls[0][0] == A
-    assert "inactif" in calls[0][1]
+    assert "inactive" in calls[0][1]
 
 
 @pytest.mark.asyncio

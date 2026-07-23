@@ -1,4 +1,4 @@
-"""Promotion vers faits canoniques — propositions en attente approbation opérateur."""
+"""Promotion to canonical facts — proposals awaiting operator approval."""
 
 from __future__ import annotations
 

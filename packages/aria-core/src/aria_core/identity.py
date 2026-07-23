@@ -14,7 +14,7 @@ ARIA_TITLE = DEFAULT_ARIA_TITLE
 ARIA_HANDLE = "Aria_ZHC"  # @Aria_ZHC on X
 TELEGRAM_BOT_HANDLE = "Aria_ZHC_Bot"  # @Aria_ZHC_Bot on Telegram
 
-# Variantes incorrectes du handle X (pas le bot Telegram)
+# Incorrect variants of the X handle (not the Telegram bot)
 _WRONG_X_HANDLE_PATTERNS = (
     r"@AriaZHC\b",
     r"@ariaZHC\b",
@@ -63,7 +63,7 @@ def official_telegram_bot_url() -> str:
 
 
 def fix_handle_in_text(text: str) -> str:
-    """Corrige les variantes incorrectes du handle X (ne touche pas @Aria_ZHC_Bot)."""
+    """Fixes incorrect variants of the X handle (does not touch @Aria_ZHC_Bot)."""
     handle = official_x_handle()
     result = text
     for pattern in _WRONG_X_HANDLE_PATTERNS:

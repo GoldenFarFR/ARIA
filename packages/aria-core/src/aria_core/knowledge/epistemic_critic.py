@@ -1,4 +1,4 @@
-"""Gate anti-hallucination — règles + passage Groq léger avant envoi."""
+"""Anti-hallucination gate — rules + a lightweight Groq pass before sending."""
 
 from __future__ import annotations
 

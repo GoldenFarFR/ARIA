@@ -1,15 +1,16 @@
-"""Preuve onchain d'ARIA — track-record inviolable ancré sur Base.
+"""ARIA's onchain proof — tamper-proof track record anchored on Base.
 
-Le moat : chaque verdict est réduit à une empreinte dans un arbre de Merkle ; on ancre la
-RACINE sur Base (horodatage inviolable). Quiconque peut ensuite prouver qu'un verdict donné
-faisait partie de l'ensemble à cette date — sans que nous (ni personne) puissions le
-backdater ou le réécrire. « Preuve avant promesse », rendue vérifiable.
+The moat: each verdict is reduced to a fingerprint in a Merkle tree; the ROOT
+is anchored on Base (tamper-proof timestamping). Anyone can then prove that a
+given verdict was part of the set at that date — without us (or anyone else)
+being able to backdate or rewrite it. "Proof before promise," made verifiable.
 
-- attestation.py : primitives Merkle PURES (stdlib, déterministes) — build racine, preuve,
-  vérification. Aucune clé, aucun réseau.
-- Le contrat `contracts/AriaLedger.sol` (racine du repo) stocke les racines ancrées.
-- Le dernier maillon (signer/soumettre sur Base) est GATÉ : il exige une clé, donc la
-  décision explicite de l'opérateur (cf. garde-fous clé privée).
+- attestation.py: PURE Merkle primitives (stdlib, deterministic) — build
+  root, proof, verification. No key, no network.
+- The `contracts/AriaLedger.sol` contract (repo root) stores the anchored
+  roots.
+- The last link (signing/submitting on Base) is GATED: it requires a key,
+  hence the operator's explicit decision (see private-key guard-rails).
 """
 from .attestation import (  # noqa: F401
     canonical_record,

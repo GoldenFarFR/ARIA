@@ -1,21 +1,21 @@
-"""Client de lecture seule — classement public de l'Arena Virtuals (Hyperliquid perps).
+"""Read-only client — Virtuals Arena public leaderboard (Hyperliquid perps).
 
-Phase 0 du pilote Arena (backlog #60) : observer le classement public, **zéro
-wallet, zéro clé, zéro exécution**. Aucun appel autre que GET sur l'endpoint
-public confirmé (aucune clé requise) :
+Phase 0 of the Arena pilot (backlog #60): observe the public leaderboard,
+**zero wallet, zero key, zero execution**. No call other than GET on the
+confirmed public endpoint (no key required):
 
     GET https://degen.virtuals.io/api/leaderboard?limit=&offset=
 
-Même dôme que ``services/virtuals.py`` : throttle, backoff 429, retry
-timeout/5xx, dégradation gracieuse (``fetch_leaderboard`` ne lève jamais,
-renvoie ``None`` sur échec). Toute chaîne externe (nom d'agent, symbole de
-token) passe par la même sanitisation anti prompt-injection (neutralisation
-des chevrons) que le reste du dossier ``services/``.
+Same dome as ``services/virtuals.py``: throttle, 429 backoff, timeout/5xx
+retry, graceful degradation (``fetch_leaderboard`` never raises, returns
+``None`` on failure). Every external string (agent name, token symbol)
+goes through the same anti-prompt-injection sanitization (angle-bracket
+neutralization) as the rest of the ``services/`` folder.
 
-Volontairement minimal : un seul point d'ancrage (cette classe), pour que si
-Virtuals fait évoluer l'Arena (mécaniques, UI, programme), un seul fichier à
-retoucher — jamais de logique métier qui suppose leurs détails de programme
-actuels (template, pot miroir).
+Deliberately minimal: a single anchor point (this class), so that if
+Virtuals evolves the Arena (mechanics, UI, program), only one file needs
+touching — never business logic that assumes their current program details
+(template, mirror pot).
 """
 
 from __future__ import annotations
@@ -36,13 +36,13 @@ UNAVAILABLE = "donnée Arena Virtuals indisponible"
 
 _FAIL_STREAK_WARN_THRESHOLD = 3
 
-# Dôme : même défense que virtuals.py (point d'étranglement unique).
+# Dome: same defense as virtuals.py (single choke point).
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _FIELD_MAX = 200
 
 
 def _sanitize(text: object, max_len: int = _FIELD_MAX) -> str | None:
-    """Neutralise une chaîne externe. ``None`` reste ``None`` (facts-only)."""
+    """Neutralizes an external string. ``None`` stays ``None`` (facts-only)."""
     if text is None:
         return None
     s = _CONTROL_CHARS_RE.sub("", str(text))
@@ -70,7 +70,7 @@ def _safe_int(value: object) -> int | None:
 
 @dataclass
 class ArenaAgentEntry:
-    """Un agent du classement Arena. Toutes les chaînes sont déjà sanitisées."""
+    """One Arena leaderboard agent. All strings are already sanitized."""
 
     id: str | None = None
     name: str | None = None
@@ -91,7 +91,7 @@ class ArenaAgentEntry:
 
 @dataclass
 class ArenaLeaderboard:
-    """Page de classement. ``entries`` triées comme renvoyées par l'API (par rang)."""
+    """Leaderboard page. ``entries`` sorted as returned by the API (by rank)."""
 
     time_range: str | None = None
     total: int | None = None
@@ -99,7 +99,7 @@ class ArenaLeaderboard:
 
 
 def _parse_entry(raw: dict) -> ArenaAgentEntry | None:
-    """Parse un objet du classement. Jamais d'exception, jamais de supposition."""
+    """Parses a leaderboard object. Never an exception, never a guess."""
     if not isinstance(raw, dict):
         return None
     perf = raw.get("performance") if isinstance(raw.get("performance"), dict) else {}
@@ -123,7 +123,7 @@ def _parse_entry(raw: dict) -> ArenaAgentEntry | None:
 
 
 class ArenaClient:
-    """Client HTTP async, lecture seule, throttle prudent (API publique sans clé)."""
+    """Async HTTP client, read-only, cautious throttle (public API, no key)."""
 
     def __init__(self, endpoint: str = LEADERBOARD_ENDPOINT, *, min_interval: float = 0.5) -> None:
         self.endpoint = endpoint
@@ -147,13 +147,13 @@ class ArenaClient:
         self._consecutive_failures += 1
         if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
             logger.warning(
-                "virtuals_arena: %s echecs consecutifs (dernier: %s) — pas de blocage",
+                "virtuals_arena: %s consecutive failures (last: %s) — not blocking",
                 self._consecutive_failures,
                 detail,
             )
         else:
             logger.info(
-                "virtuals_arena: echec appel (%s/%s) — %s",
+                "virtuals_arena: call failure (%s/%s) — %s",
                 self._consecutive_failures,
                 _FAIL_STREAK_WARN_THRESHOLD,
                 detail,
@@ -180,7 +180,7 @@ class ArenaClient:
             if response.status_code == 429:
                 attempt_429 += 1
                 if attempt_429 >= 3:
-                    detail = f"{url} -> HTTP 429 apres {attempt_429} tentatives"
+                    detail = f"{url} -> HTTP 429 after {attempt_429} attempts"
                     self._record_failure(detail)
                     return None, f"{UNAVAILABLE} (rate limit Arena)"
                 await asyncio.sleep(0.5 * (2**attempt_429))
@@ -206,7 +206,7 @@ class ArenaClient:
             return response.json(), None
 
     async def fetch_leaderboard(self, limit: int = 20, offset: int = 0) -> ArenaLeaderboard | None:
-        """Page du classement public. ``None`` sur erreur — jamais d'exception."""
+        """Public leaderboard page. ``None`` on error — never an exception."""
         try:
             safe_limit = max(1, min(_safe_int(limit) or 20, 100))
             safe_offset = max(0, _safe_int(offset) or 0)
@@ -225,8 +225,8 @@ class ArenaClient:
                 total=_safe_int(pagination.get("total")),
                 entries=entries,
             )
-        except Exception as exc:  # dégradation ultime : jamais d'exception sortante
-            logger.info("virtuals_arena: fetch_leaderboard echec inattendu — %s", exc)
+        except Exception as exc:  # ultimate degradation: never an exception escapes
+            logger.info("virtuals_arena: fetch_leaderboard unexpected failure — %s", exc)
             return None
 
 

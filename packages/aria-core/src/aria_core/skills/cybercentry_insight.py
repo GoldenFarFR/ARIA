@@ -1,17 +1,17 @@
-"""Vérifie une adresse via Cybercentry (x402, payant) et mémorise le résultat en
-mémoire vectorielle -- premier appelant réel de `memory/vector/lancedb_store.py`
-(#199, 17/07, décision opérateur : payer ce qui alimente le plus la mémoire
-vectorielle). Un fait vérifié, jamais inventé -- si l'appel échoue, rien n'est
-stocké (dégradation honnête, pas un placeholder).
+"""Verifies an address via Cybercentry (x402, paid) and remembers the result in
+vector memory -- the first real caller of `memory/vector/lancedb_store.py`
+(#199, 07/17, operator decision: pay for whatever feeds vector memory the
+most). A verified fact, never invented -- if the call fails, nothing is
+stored (honest degradation, not a placeholder).
 
-**Cache avant paiement (18/07, bug réel corrigé) : cette fonction payait à
-CHAQUE appel, sans jamais vérifier si un résultat récent existait déjà en
-mémoire vectorielle.** Trouvé en concevant le pilote agent-wallet (le
-"débloquer via x402" proposé par l'opérateur aurait pu re-payer pour la même
-adresse à chaque cycle heartbeat sans ce correctif). Corrigé : recherche
-d'abord (``_find_cached_insight``, gratuit, LanceDB local) un résultat de
-moins de ``max_age_days`` pour cette adresse -- ne paie que si rien d'assez
-récent n'existe."""
+**Cache before payment (07/18, real bug fixed): this function used to pay on
+EVERY call, without ever checking whether a recent result already existed in
+vector memory.** Found while designing the agent-wallet pilot (the
+"unlock via x402" feature proposed by the operator could have re-paid for the
+same address on every heartbeat cycle without this fix). Fixed: searches
+first (``_find_cached_insight``, free, local LanceDB) for a result less than
+``max_age_days`` old for this address -- only pays if nothing recent enough
+exists."""
 from __future__ import annotations
 
 import json
@@ -21,14 +21,14 @@ DEFAULT_MAX_AGE_DAYS = 7
 
 
 def _format_wallet_insight(address: str, raw: dict) -> str:
-    """Texte lisible à partir de la réponse brute Cybercentry -- structure du
-    JSON pas garantie stable dans le temps, lecture défensive (`.get` partout)."""
-    lines = [f"Vérification Cybercentry (wallet-verification) — {address}"]
+    """Readable text from the raw Cybercentry response -- the JSON
+    structure isn't guaranteed stable over time, defensive reading (`.get` everywhere)."""
+    lines = [f"Cybercentry verification (wallet-verification) — {address}"]
     for key in ("risk", "risk_level", "is_sanctioned", "is_fraud", "score", "summary", "verdict"):
         if key in raw:
             lines.append(f"{key}: {raw[key]}")
     if len(lines) == 1:
-        lines.append(f"réponse brute: {raw}")
+        lines.append(f"raw response: {raw}")
     return "\n".join(lines)
 
 
@@ -38,12 +38,12 @@ def _source_id(address: str, *, on: str | None = None) -> str:
 
 
 async def _find_cached_insight(address: str, *, max_age_days: int) -> dict | None:
-    """Cherche un résultat Cybercentry déjà payé pour ``address`` en mémoire
-    vectorielle -- recherche sémantique (le texte stocké contient l'adresse
-    exacte, donc un match proche est fiable), filtré ensuite par correspondance
-    EXACTE du ``source_id`` (jamais un faux positif sur une adresse voisine) et
-    par fraîcheur. ``None`` si rien d'assez récent (mémoire désactivée, jamais
-    interrogée avant, ou tout ce qui existe est trop vieux)."""
+    """Looks for an already-paid Cybercentry result for ``address`` in vector
+    memory -- semantic search (the stored text contains the exact
+    address, so a close match is reliable), then filtered by EXACT
+    match on ``source_id`` (never a false positive on a neighboring address) and
+    by freshness. ``None`` if nothing recent enough (memory disabled, never
+    queried before, or everything that exists is too old)."""
     from aria_core.memory.vector import lancedb_store
 
     addr = address.strip().lower()
@@ -74,13 +74,13 @@ async def _find_cached_insight(address: str, *, max_age_days: int) -> dict | Non
 
 
 async def verify_and_remember_wallet(address: str, *, max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> dict:
-    """Paie Cybercentry pour vérifier ``address`` -- SAUF si un résultat de
-    moins de ``max_age_days`` existe déjà en mémoire vectorielle (cache
-    gratuit, vérifié avant tout paiement). Stocke tout nouveau résultat payé
-    comme un ``insight`` (metadata source=cybercentry, topic=wallet-security,
-    ``raw_json`` pour reconstruire le résultat brut sur un futur cache hit).
-    Renvoie le résultat + ``vector_doc_id`` + ``cached`` (``True`` si servi
-    depuis la mémoire, aucun paiement effectué cette fois)."""
+    """Pays Cybercentry to verify ``address`` -- UNLESS a result less than
+    ``max_age_days`` old already exists in vector memory (free cache,
+    checked before any payment). Stores every newly paid result
+    as an ``insight`` (metadata source=cybercentry, topic=wallet-security,
+    ``raw_json`` to reconstruct the raw result on a future cache hit).
+    Returns the result + ``vector_doc_id`` + ``cached`` (``True`` if served
+    from memory, no payment made this time)."""
     from aria_core.services.cybercentry import verify_wallet
     from aria_core.memory.vector import lancedb_store
 

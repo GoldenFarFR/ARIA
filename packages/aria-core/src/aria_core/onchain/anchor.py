@@ -1,23 +1,24 @@
-"""Ancrage onchain du track-record sur Base — PRÉPARATION seulement (le serveur ne signe rien).
+"""Onchain anchoring of the track record on Base — PREPARATION only (the server signs nothing).
 
-Le différenciateur d'ARIA pour Base : un track-record dont la racine Merkle est ancrée onchain,
-donc vérifiable et inviolable. Ce module produit la DEMANDE d'ancrage (racine + adresse du
-contrat + réseau Base) prête à être signée et diffusée **localement** par l'opérateur.
+ARIA's differentiator for Base: a track record whose Merkle root is anchored onchain, hence
+verifiable and tamper-proof. This module produces the anchoring REQUEST (root + contract
+address + Base network) ready to be signed and broadcast **locally** by the operator.
 
-Dôme (non négociable) :
-  - **Clé privée JAMAIS sur le serveur** : ce module ne détient, ne lit et ne génère aucune clé.
-    Il ne construit AUCUNE transaction signée, n'encode pas de calldata, n'émet AUCUN appel
-    réseau. Il prépare une instruction sémantique ; la signature + diffusion se font en local
-    (comme l'acp-cli) ou via un relais qui garde la clé hors serveur.
-  - **Gaté OFF par défaut** (`ARIA_ONCHAIN_ANCHOR_ENABLED`) : rien ne se prépare sans ce flag.
-  - **Fail-closed / dégradation gracieuse** : sans contrat déployé ou sans enregistrement,
-    renvoie `None` (jamais d'exception qui remonte).
+Guardrails (non-negotiable):
+  - **Private key NEVER on the server**: this module holds, reads, or generates no key. It
+    builds NO signed transaction, encodes no calldata, makes NO network call. It prepares a
+    semantic instruction; signing + broadcasting happen locally (like acp-cli) or via a relay
+    that keeps the key off the server.
+  - **Gated OFF by default** (`ARIA_ONCHAIN_ANCHOR_ENABLED`): nothing is prepared without this
+    flag.
+  - **Fail-closed / graceful degradation**: without a deployed contract or a record, returns
+    `None` (never a bubbling exception).
 
-Câblage vivant (le jour venu, geste opérateur) :
-  1. Déployer `contracts/AriaLedger.sol` sur Base (en local, clé + ETH de l'opérateur).
-  2. Poser `ARIA_LEDGER_ADDRESS=0x…` et `ARIA_ONCHAIN_ANCHOR_ENABLED=1`.
-  3. `build_anchor_request(records)` fournit la racine + l'instruction ; l'opérateur signe et
-     diffuse `anchor(bytes32 root)` depuis son wallet local.
+Live wiring (when the day comes, operator gesture):
+  1. Deploy `contracts/AriaLedger.sol` on Base (locally, operator's key + ETH).
+  2. Set `ARIA_LEDGER_ADDRESS=0x...` and `ARIA_ONCHAIN_ANCHOR_ENABLED=1`.
+  3. `build_anchor_request(records)` supplies the root + instruction; the operator signs and
+     broadcasts `anchor(bytes32 root)` from their local wallet.
 """
 from __future__ import annotations
 
@@ -28,20 +29,20 @@ from typing import Any
 
 from aria_core.onchain.attestation import merkle_root
 
-# Base mainnet (l'écosystème visé). Le testnet Base Sepolia = 84532 (surchargable via env).
+# Base mainnet (the targeted ecosystem). Base Sepolia testnet = 84532 (overridable via env).
 _DEFAULT_CHAIN_ID = 8453
-_ANCHOR_FN = "anchor"  # AriaLedger.anchor(bytes32 root) onlyOwner, sans transfert de valeur
+_ANCHOR_FN = "anchor"  # AriaLedger.anchor(bytes32 root) onlyOwner, no value transfer
 
 
 def anchor_enabled() -> bool:
-    """Seam gaté OFF par défaut. Aucune préparation d'ancrage sans ce flag."""
+    """Seam gated OFF by default. No anchoring preparation without this flag."""
     return os.environ.get("ARIA_ONCHAIN_ANCHOR_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
 
 def ledger_address() -> str:
-    """Adresse du contrat AriaLedger déployé (publique, jamais une clé)."""
+    """Address of the deployed AriaLedger contract (public, never a key)."""
     return (os.environ.get("ARIA_LEDGER_ADDRESS", "") or "").strip()
 
 
@@ -55,12 +56,12 @@ def _chain_id() -> int:
 
 @dataclass
 class AnchorRequest:
-    """Demande d'ancrage prête pour une signature LOCALE. Aucune clé, aucun calldata signé."""
+    """Anchoring request ready for a LOCAL signature. No key, no signed calldata."""
     chain_id: int
     network: str
     contract: str
     function: str
-    root: str            # racine Merkle, hex bytes32 (0x + 64)
+    root: str            # Merkle root, hex bytes32 (0x + 64)
     record_count: int
 
     def as_dict(self) -> dict[str, Any]:
@@ -71,11 +72,11 @@ class AnchorRequest:
         }
 
     def as_json(self) -> str:
-        """JSON à piper vers l'outil de signature local (cast/ethers)."""
+        """JSON to pipe into the local signing tool (cast/ethers)."""
         return json.dumps(self.as_dict(), ensure_ascii=False)
 
     def as_operator_instruction(self) -> str:
-        """Instruction lisible : ce que l'opérateur exécute depuis son wallet local."""
+        """Human-readable instruction: what the operator executes from their local wallet."""
         return (
             f"Ancrage onchain (signature LOCALE requise) : appeler {self.function}({self.root}) "
             f"sur AriaLedger {self.contract} (Base, chain {self.chain_id}), "
@@ -84,10 +85,10 @@ class AnchorRequest:
 
 
 def build_anchor_request(records: list[dict[str, Any]]) -> AnchorRequest | None:
-    """Prépare la demande d'ancrage de la racine Merkle de `records`.
+    """Prepares the anchoring request for the Merkle root of `records`.
 
-    Fail-closed : renvoie `None` si le seam est OFF, si aucun contrat n'est configuré, ou s'il
-    n'y a rien à ancrer. Ne signe rien, n'émet aucun appel réseau."""
+    Fail-closed: returns `None` if the seam is OFF, if no contract is configured, or if there
+    is nothing to anchor. Signs nothing, makes no network call."""
     if not anchor_enabled():
         return None
     contract = ledger_address()

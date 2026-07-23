@@ -1,15 +1,15 @@
-"""Client DexScreener (lecture seule, public, sans clé) -- paires DEX (Base).
+"""DexScreener client (read-only, public, no key) -- DEX pairs (Base).
 
-Extrait de ``skills/acp_onchain_scan.py`` (14/07, #157) pour être réutilisable
-sans dupliquer un second client DexScreener : le wallet-scoring (#157) l'utilise
-désormais aussi, en triangulation avec GeckoTerminal pour la résolution de pool
-(``has_pool``) -- si GeckoTerminal ne trouve aucun pool pour un token mais que
-DexScreener en trouve un, c'est un vrai signal (écart entre les deux sources),
-pas juste un token illiquide. Comportement du scan `/vc` existant strictement
-inchangé (même dataclass, même parsing, `acp_onchain_scan.py` délègue ici).
+Extracted from ``skills/acp_onchain_scan.py`` (14/07, #157) to be reusable
+without duplicating a second DexScreener client: wallet-scoring (#157) now
+also uses it, triangulating with GeckoTerminal for pool resolution
+(``has_pool``) -- if GeckoTerminal finds no pool for a token but DexScreener
+finds one, that's a real signal (a gap between the two sources), not just
+an illiquid token. Behavior of the existing `/vc` scan strictly unchanged
+(same dataclass, same parsing, `acp_onchain_scan.py` delegates here).
 
-Ajout au passage (14/07) : retry sur 429/timeout, absent jusqu'ici (l'appel
-d'origine ne retentait jamais un rate limit) -- même politique dôme que
+Added along the way (14/07): retry on 429/timeout, absent until now (the
+original call never retried a rate limit) -- same dome policy as
 ``blockscout.py``/``geckoterminal.py``.
 """
 
@@ -29,21 +29,21 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.dexscreener.com"
 WEB_BASE_URL = "https://dexscreener.com"
 
-# 21/07 -- premier throttle proactif pour ce client (il n'y en avait aucun --
-# seul un retry réactif après un 429 déjà reçu, cf. `_get_json`). Doctrine
-# CLAUDE.md "Débit calibré à 90%" : seul le chiffre "60 req/min" est confirmé
-# VERBATIM dans la doc officielle (docs.dexscreener.com/api/reference, pour les
-# endpoints token-profiles/token-boosts) -- un "300 req/min" pour les endpoints
-# pairs/tokens/search circule sur plusieurs sources indépendantes mais n'a pas
-# pu être confirmé mot pour mot malgré 3 tentatives de fetch direct de la doc.
-# Ce module partage UN SEUL point d'entrée (`_get_json`) pour tous les
-# endpoints -- calibré sur le chiffre le plus BAS confirmé (60/min) plutôt que
-# de risquer un dépassement sur les endpoints token-profiles/token-boosts avec
-# un throttle pensé pour le "300/min" non confirmé. 90% de 60/min = 54/min =
-# 1.111s. Un test empirique (25 requêtes back-to-back sur token-pairs, aucune
-# erreur en 1.1s) n'a pas contredit cette prudence -- juste montré que le vrai
-# plafond des endpoints pairs/tokens est probablement plus haut, sans le
-# confirmer précisément.
+# 21/07 -- first proactive throttle for this client (there was none --
+# only a reactive retry after an already-received 429, see `_get_json`).
+# CLAUDE.md "Rate calibrated at 90%" doctrine: only the "60 req/min" figure
+# is confirmed VERBATIM in the official doc (docs.dexscreener.com/api/reference,
+# for the token-profiles/token-boosts endpoints) -- a "300 req/min" for the
+# pairs/tokens/search endpoints circulates across several independent sources
+# but couldn't be confirmed word for word despite 3 attempts to fetch the
+# doc directly. This module shares A SINGLE entry point (`_get_json`) for
+# all endpoints -- calibrated on the LOWEST confirmed figure (60/min) rather
+# than risk exceeding it on the token-profiles/token-boosts endpoints with a
+# throttle designed for the unconfirmed "300/min". 90% of 60/min = 54/min =
+# 1.111s. An empirical test (25 back-to-back requests on token-pairs, no
+# error in 1.1s) did not contradict this caution -- it just showed that the
+# real cap for the pairs/tokens endpoints is probably higher, without
+# confirming it precisely.
 _MIN_INTERVAL = 1.111
 _last_request = 0.0
 _throttle_lock = asyncio.Lock()
@@ -83,19 +83,19 @@ class PairSnapshot:
     buys_24h: int = 0
     sells_24h: int = 0
     pair_created_at: int | None = None
-    base_address: str = ""  # adresse du token de base (#194) -- pour corréler un lot
+    base_address: str = ""  # base token address (#194) -- to correlate a batch
     base_symbol: str = ""
     quote_symbol: str = ""
     project_links: list[dict] = field(default_factory=list)
 
 
 def _extract_project_links(raw: dict) -> list[dict]:
-    """Liens officiels déclarés par le projet (DexScreener `info.websites`/`socials`).
+    """Official links declared by the project (DexScreener `info.websites`/`socials`).
 
-    Aucune estimation : uniquement ce que DexScreener retourne réellement, et
-    uniquement des URL http(s) (allowlist de schéma -- défense en profondeur,
-    la donnée vient d'un tiers non fiable et sera de toute façon revalidée
-    avant tout rendu HTML cliquable).
+    No estimation: only what DexScreener actually returns, and only http(s)
+    URLs (scheme allowlist -- defense in depth, the data comes from an
+    untrusted third party and will be revalidated anyway before any
+    clickable HTML rendering).
     """
     info = raw.get("info")
     if not isinstance(info, dict):
@@ -151,9 +151,9 @@ def _parse_pair(raw: dict) -> PairSnapshot:
 
 
 async def _get_json(url: str) -> tuple[object | None, str | None]:
-    """GET avec retry sur 429/5xx/timeout -- même politique que blockscout.py/
-    geckoterminal.py. L'implémentation d'origine (dans acp_onchain_scan.py)
-    n'avait aucun retry ; un 429 isolé abandonnait net sans log."""
+    """GET with retry on 429/5xx/timeout -- same policy as blockscout.py/
+    geckoterminal.py. The original implementation (in acp_onchain_scan.py)
+    had no retry; an isolated 429 gave up outright with no log."""
     attempt_429 = 0
     timeout_retried = False
 
@@ -167,14 +167,14 @@ async def _get_json(url: str) -> tuple[object | None, str | None]:
                 timeout_retried = True
                 await asyncio.sleep(5.0)
                 continue
-            logger.warning("dexscreener: timeout sur %s -> %s", url, exc)
-            return None, f"dexscreener indisponible (timeout, {exc})"
+            logger.warning("dexscreener: timeout on %s -> %s", url, exc)
+            return None, f"dexscreener unavailable (timeout, {exc})"
 
         if response.status_code == 429:
             attempt_429 += 1
             if attempt_429 >= 3:
-                logger.warning("dexscreener: HTTP 429 sur %s apres %s tentatives", url, attempt_429)
-                return None, "dexscreener indisponible (rate limit)"
+                logger.warning("dexscreener: HTTP 429 on %s after %s attempts", url, attempt_429)
+                return None, "dexscreener unavailable (rate limit)"
             await asyncio.sleep(0.5 * (2**attempt_429))
             continue
 
@@ -183,22 +183,22 @@ async def _get_json(url: str) -> tuple[object | None, str | None]:
                 timeout_retried = True
                 await asyncio.sleep(5.0)
                 continue
-            logger.warning("dexscreener: HTTP %s sur %s", response.status_code, url)
-            return None, f"dexscreener indisponible (erreur serveur {response.status_code})"
+            logger.warning("dexscreener: HTTP %s on %s", response.status_code, url)
+            return None, f"dexscreener unavailable (server error {response.status_code})"
 
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.warning("dexscreener: %s", exc)
-            return None, f"dexscreener indisponible ({exc})"
+            return None, f"dexscreener unavailable ({exc})"
 
         return response.json(), None
 
 
 async def fetch_token_pairs(contract: str, *, chain: str = "base") -> list[PairSnapshot]:
-    """Paires DEX connues pour ``contract`` sur ``chain``. Liste vide si aucune
-    paire OU si l'appel échoue (jamais une exception qui remonte -- dégradation
-    douce, même politique que le scan `/vc` existant)."""
+    """Known DEX pairs for ``contract`` on ``chain``. Empty list if no pair
+    OR if the call fails (never a bubbling exception -- graceful degradation,
+    same policy as the existing `/vc` scan)."""
     url = f"{BASE_URL}/token-pairs/v1/{chain}/{contract}"
     data, error = await _get_json(url)
     if error is not None:
@@ -210,20 +210,21 @@ async def fetch_token_pairs(contract: str, *, chain: str = "base") -> list[PairS
 
 
 def token_url(contract: str, *, chain: str = "base") -> str:
-    """URL DexScreener publique (page web, pas l'API) pour ``contract`` sur ``chain`` --
-    17/07, demande opérateur : chaque position ARIA doit être reliée au vrai graphique.
-    Construction pure (aucun appel réseau) : DexScreener utilise le même identifiant de
-    chaîne dans ses URLs web que dans son API (``chain`` tel que déjà stocké sur une
-    position), pas de table de correspondance à maintenir. Forme "adresse du token" (pas
-    une paire précise) -- DexScreener choisit lui-même la paire la plus liquide à
-    afficher, cohérent avec ``_best_pair`` côté scan (liquidité la plus haute)."""
+    """Public DexScreener URL (web page, not the API) for ``contract`` on ``chain`` --
+    17/07, operator request: every ARIA position must be linked to the real chart.
+    Pure construction (no network call): DexScreener uses the same chain
+    identifier in its web URLs as in its API (``chain`` as already stored on a
+    position), no mapping table to maintain. "Token address" form (not a
+    specific pair) -- DexScreener itself picks the most liquid pair to
+    display, consistent with ``_best_pair`` on the scan side (highest
+    liquidity)."""
     return f"{WEB_BASE_URL}/{(chain or 'base').strip().lower()}/{(contract or '').strip().lower()}"
 
 
 async def has_any_pair(contract: str, *, chain: str = "base") -> bool | None:
-    """Triangulation (#157, 14/07) : ``True``/``False`` si DexScreener a répondu
-    normalement (au moins une paire trouvée ou non), ``None`` si l'appel a
-    échoué -- jamais confondre "aucune paire" avec "on n'a pas pu vérifier"."""
+    """Triangulation (#157, 14/07): ``True``/``False`` if DexScreener responded
+    normally (at least one pair found or not), ``None`` if the call
+    failed -- never confuse "no pair" with "couldn't verify"."""
     url = f"{BASE_URL}/token-pairs/v1/{chain}/{contract}"
     data, error = await _get_json(url)
     if error is not None:
@@ -234,11 +235,11 @@ async def has_any_pair(contract: str, *, chain: str = "base") -> bool | None:
 
 
 async def search_pairs(query: str) -> list[PairSnapshot]:
-    """Recherche libre DexScreener (``/latest/dex/search``, #194, 15/07) -- couvre
-    TOUTES les chaînes indexées (pas un endpoint par chaîne), source de sourcing
-    multi-chaînes vérifiée en direct (curl, HTTP 200) avant construction. Même
-    forme de paire que ``token-pairs/v1`` (``_parse_pair`` réutilisé tel quel).
-    Liste vide si aucun résultat OU si l'appel échoue -- jamais une exception."""
+    """Free-text DexScreener search (``/latest/dex/search``, #194, 15/07) --
+    covers ALL indexed chains (not one endpoint per chain), multi-chain
+    sourcing source verified live (curl, HTTP 200) before building. Same
+    pair shape as ``token-pairs/v1`` (``_parse_pair`` reused as-is).
+    Empty list if no result OR if the call fails -- never an exception."""
     url = f"{BASE_URL}/latest/dex/search?q={quote(query)}"
     data, error = await _get_json(url)
     if error is not None:
@@ -254,10 +255,10 @@ async def search_pairs(query: str) -> list[PairSnapshot]:
 
 @dataclass
 class TokenListing:
-    """Entrée « boost » ou « profil » DexScreener (#194) -- métadonnées de
-    découverte SANS donnée de prix/liquidité (contrairement à ``PairSnapshot``) :
-    juste de quoi identifier un contrat + chaîne à passer ensuite au vrai pipeline
-    de décision (honeypot + TA + R/R), jamais utilisé seul comme signal d'achat."""
+    """DexScreener "boost" or "profile" entry (#194) -- discovery metadata
+    WITHOUT price/liquidity data (unlike ``PairSnapshot``): just enough to
+    identify a contract + chain to then pass to the real decision pipeline
+    (honeypot + TA + R/R), never used alone as a buy signal."""
 
     chain_id: str = ""
     token_address: str = ""
@@ -266,11 +267,11 @@ class TokenListing:
 
 
 def parse_listing(raw: dict) -> TokenListing:
-    """Rendu public (#196, était ``_parse_listing``) : réutilisé tel quel par
-    ``aria_core.momentum_websocket`` -- les frames WebSocket DexScreener (vérifié
-    en direct 16/07) portent EXACTEMENT la même forme par élément que la réponse
-    REST (``chainId``/``tokenAddress``/``description``/``links``), aucun parsing
-    dupliqué."""
+    """Public render (#196, was ``_parse_listing``): reused as-is by
+    ``aria_core.momentum_websocket`` -- DexScreener WebSocket frames (verified
+    live 16/07) carry EXACTLY the same per-element shape as the REST response
+    (``chainId``/``tokenAddress``/``description``/``links``), no duplicated
+    parsing."""
     links: list[dict] = []
     for link in raw.get("links") or []:
         if not isinstance(link, dict):
@@ -300,46 +301,46 @@ async def _fetch_listings(path: str) -> list[TokenListing]:
 
 
 async def token_boosts_top() -> list[TokenListing]:
-    """Tokens actuellement les plus « boostés » (promotion payante DexScreener,
-    #194) -- signal « quelqu'un investit pour la visibilité de CE token
-    maintenant », jamais un signal d'achat à lui seul (bonus de sourcing)."""
+    """Tokens currently the most "boosted" (paid DexScreener promotion,
+    #194) -- signal "someone is investing for THIS token's visibility right
+    now", never a buy signal on its own (sourcing bonus)."""
     return await _fetch_listings("/token-boosts/top/v1")
 
 
 async def token_boosts_latest() -> list[TokenListing]:
-    """Boosts les plus RÉCENTS (#194) -- favorise la fraîcheur (« signaux qui
-    commencent à se former ») plutôt qu'un classement déjà bien avancé."""
+    """Most RECENT boosts (#194) -- favors freshness ("signals that are just
+    starting to form") over an already well-advanced ranking."""
     return await _fetch_listings("/token-boosts/latest/v1")
 
 
 async def token_profiles_latest() -> list[TokenListing]:
-    """Profils projet les plus récemment CRÉÉS (#194) -- sourcing de tokens frais
-    avec metadata renseignée, indépendant des boosts payants."""
+    """Most recently CREATED project profiles (#194) -- sourcing fresh tokens
+    with filled-in metadata, independent of paid boosts."""
     return await _fetch_listings("/token-profiles/latest/v1")
 
 
 async def token_profiles_recent_updates() -> list[TokenListing]:
-    """Profils projet les plus récemment MIS À JOUR (#194, distinct de
-    ``token_profiles_latest`` qui couvre les créations) -- capture un projet qui
-    vient de retoucher ses métadonnées, signal d'activité récente."""
+    """Most recently UPDATED project profiles (#194, distinct from
+    ``token_profiles_latest`` which covers creations) -- captures a project
+    that just touched up its metadata, a recent-activity signal."""
     return await _fetch_listings("/token-profiles/recent-updates/v1")
 
 
 async def fetch_tokens_batch(addresses: list[str], *, chain: str = "base") -> list[PairSnapshot]:
-    """``/tokens/v1/{chainId}/{tokenAddresses}`` (#194, spec OpenAPI officielle
-    vérifiée -- docs/aria-learning-inbox/2026-07-15-dexscreener-openapi-spec-verifiee.yaml) :
-    jusqu'à 30 adresses séparées par des virgules en UN SEUL appel (300 req/min),
-    bien plus efficace que N appels ``token-pairs/v1`` individuels pour pré-filtrer
-    un lot de candidats sourcés (liquidité) avant le pipeline de décision complet.
-    Adresses au-delà de 30 silencieusement tronquées (limite documentée de l'API,
-    jamais un appel qui échouerait silencieusement sur un lot trop grand)."""
+    """``/tokens/v1/{chainId}/{tokenAddresses}`` (#194, official OpenAPI spec
+    verified -- docs/aria-learning-inbox/2026-07-15-dexscreener-openapi-spec-verifiee.yaml):
+    up to 30 comma-separated addresses in A SINGLE call (300 req/min), much
+    more efficient than N individual ``token-pairs/v1`` calls to pre-filter
+    a batch of sourced candidates (liquidity) before the full decision
+    pipeline. Addresses beyond 30 silently truncated (documented API limit,
+    never a call that would silently fail on an oversized batch)."""
     addrs = [a.strip() for a in addresses if a and a.strip()][:30]
     if not addrs:
         return []
     url = f"{BASE_URL}/tokens/v1/{chain}/{','.join(addrs)}"
     data, error = await _get_json(url)
     if error is not None:
-        logger.warning("dexscreener: tokens/v1 batch (%s, %d adresses) -> %s", chain, len(addrs), error)
+        logger.warning("dexscreener: tokens/v1 batch (%s, %d addresses) -> %s", chain, len(addrs), error)
         return []
     if not isinstance(data, list):
         return []
@@ -348,9 +349,9 @@ async def fetch_tokens_batch(addresses: list[str], *, chain: str = "base") -> li
 
 @dataclass
 class MetaTrend:
-    """Narratif/méta tendance DexScreener (#194, ``/metas/*``) -- ex. « AI »,
-    regroupe plusieurs tokens sous un thème. Signal de CONTEXTE (un narratif chaud
-    peut porter plusieurs candidats à la fois), jamais un signal d'achat isolé."""
+    """DexScreener narrative/meta trend (#194, ``/metas/*``) -- e.g. "AI",
+    groups several tokens under one theme. CONTEXT signal (a hot narrative
+    can carry several candidates at once), never an isolated buy signal."""
 
     slug: str = ""
     name: str = ""
@@ -378,7 +379,7 @@ def _parse_meta(raw: dict) -> MetaTrend:
 
 
 async def metas_trending() -> list[MetaTrend]:
-    """Narratifs tendance (#194, ``/metas/trending/v1``)."""
+    """Trending narratives (#194, ``/metas/trending/v1``)."""
     data, error = await _get_json(f"{BASE_URL}/metas/trending/v1")
     if error is not None:
         logger.warning("dexscreener: metas/trending -> %s", error)
@@ -389,8 +390,8 @@ async def metas_trending() -> list[MetaTrend]:
 
 
 async def meta_by_slug(slug: str) -> tuple[MetaTrend | None, list[PairSnapshot]]:
-    """Détail d'un narratif + ses paires (#194, ``/metas/meta/v1/{slug}``).
-    ``(None, [])`` si indisponible -- jamais une paire inventée."""
+    """Detail of a narrative + its pairs (#194, ``/metas/meta/v1/{slug}``).
+    ``(None, [])`` if unavailable -- never an invented pair."""
     data, error = await _get_json(f"{BASE_URL}/metas/meta/v1/{quote(slug)}")
     if error is not None:
         logger.warning("dexscreener: metas/meta %s -> %s", slug, error)
@@ -408,34 +409,34 @@ async def meta_by_slug(slug: str) -> tuple[MetaTrend | None, list[PairSnapshot]]
 
 
 # ---------------------------------------------------------------------------
-# Synthèse dégradée de bougies (16/07, cascade OHLCV #194 -- demande opérateur
-# explicite : "je veux que tous soit branchés meme si ils font la meme chose
-# je veux une autoroute pas un departemental" / "cables les tous je veux une
-# toile complete avec dexscreener et dune").
+# Degraded candle synthesis (16/07, OHLCV cascade #194 -- explicit operator
+# request: "I want everything wired up even if they do the same thing, I
+# want a highway not a back road" / "wire them all up, I want a complete
+# web with dexscreener and dune").
 #
-# DexScreener N'EXPOSE AUCUN endpoint OHLCV public (vérifié dans ce fichier --
-# seulement des instantanés de paire + des fenêtres de variation agrégées
-# m5/h1/h6/h24, jamais une vraie série de bougies). Ce n'est donc PAS un
-# troisième fournisseur OHLCV au même titre que GeckoTerminal/CoinMarketCap --
-# c'est une RECONSTRUCTION APPROXIMATIVE à partir de ce qui est déjà en main
-# (``PairSnapshot`` déjà récupéré par ``evaluate_momentum_entry`` pour le prix
-# courant, AUCUN appel réseau supplémentaire) : 5 points de prix (maintenant,
-# -5m, -1h, -6h, -24h) dérivés à rebours du prix courant via les % de
-# variation. Chaque "bougie" est un simple point OHLC dégénéré (open=high=
-# low=close, volume=0) -- jamais un vrai chandelier avec mèches réelles.
+# DexScreener EXPOSES NO public OHLCV endpoint (verified in this file --
+# only pair snapshots + aggregated variation windows m5/h1/h6/h24, never a
+# real candle series). This is therefore NOT a third OHLCV provider on par
+# with GeckoTerminal/CoinMarketCap -- it's an APPROXIMATE RECONSTRUCTION
+# from what's already on hand (``PairSnapshot`` already fetched by
+# ``evaluate_momentum_entry`` for the current price, NO extra network
+# call): 5 price points (now, -5m, -1h, -6h, -24h) derived backwards from
+# the current price via the % variations. Each "candle" is a simple
+# degenerate OHLC point (open=high=low=close, volume=0) -- never a real
+# candlestick with real wicks.
 #
-# PORTÉE HONNÊTE : suffisant pour un biais de tendance grossier (EMA/MACD sur
-# 5 points reste calculable mais peu significatif), quasiment inutile pour
-# ``entry_signals.detect_entry`` (golden pocket + divergence RSI exige un
-# vrai historique de prix, pas 5 points synthétiques) -- HOLD restera l'issue
-# la plus probable même avec cette synthèse, ce qui est le comportement
-# honnête attendu (jamais un R/R fabriqué sur une donnée aussi pauvre).
-# Utilisé UNIQUEMENT en dernier recours après l'échec de GeckoTerminal ET
-# CoinMarketCap -- gratuit et instantané, donc sans coût à essayer avant Dune
-# (exécuteur SQL, lent, coûte des crédits).
+# HONEST SCOPE: enough for a rough trend bias (EMA/MACD on 5 points remains
+# computable but not very meaningful), practically useless for
+# ``entry_signals.detect_entry`` (golden pocket + RSI divergence requires
+# real price history, not 5 synthetic points) -- HOLD will remain the most
+# likely outcome even with this synthesis, which is the expected honest
+# behavior (never a fabricated R/R on such poor data). Used ONLY as a last
+# resort after GeckoTerminal AND CoinMarketCap have failed -- free and
+# instant, so no cost to try before Dune (SQL executor, slow, costs
+# credits).
 def synthesize_candles_from_pair(pair: PairSnapshot) -> list[Candle]:
-    """Reconstruction dégradée (voir commentaire ci-dessus) -- jamais un
-    substitut d'un vrai OHLCV, seulement un dernier recours gratuit."""
+    """Degraded reconstruction (see comment above) -- never a substitute for
+    real OHLCV, only a free last resort."""
     if not pair or not pair.price_usd or pair.price_usd <= 0:
         return []
 

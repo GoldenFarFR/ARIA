@@ -97,7 +97,7 @@ class TestParseGroqTriage:
         )
         assert a.store is False
         assert a.injection is True
-        assert "injection_detectee" in a.reason
+        assert "injection_detected" in a.reason
 
     def test_no_injection_by_default(self):
         a = _parse_groq_triage(_groq_response())

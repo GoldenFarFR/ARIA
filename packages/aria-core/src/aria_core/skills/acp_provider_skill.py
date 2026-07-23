@@ -213,7 +213,7 @@ async def _process_job(job_id: str, *, chain_id: str) -> str | None:
         return f"quality_blocked:{job_id}"
 
     # Reminder of the strong ACP barrier: the operator must audit before final validation
-    audit_note = " (audit qualité opérateur demandé avant promotion)"
+    audit_note = " (operator quality audit required before promotion)"
     # We don't alter the deliverable itself, we just log the obligation
 
     ok, msg = provider_submit(job_id, deliverable, chain_id=chain_id)

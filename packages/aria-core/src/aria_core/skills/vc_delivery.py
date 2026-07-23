@@ -1,23 +1,23 @@
-"""Livraison du rapport VC par email — orchestration (Étape C — envoi).
+"""Delivering the VC report by email — orchestration (Step C — sending).
 
-Relie le rendu (`vc_report`, `vc_report_pdf`) au transport SMTP (`services/mailer`),
-sous garde-fous :
+Connects the rendering (`vc_report`, `vc_report_pdf`) to SMTP transport
+(`services/mailer`), under guard-rails:
 
-- **Kill-switch fail-closed** : si ARIA est en pause (ou l'état de pause est
-  illisible), aucun email ne part (`outgoing_pause.is_paused(strict=True)`).
-- **Dégradation sûre** : SMTP non configuré → pas d'envoi, message clair, jamais
-  d'erreur bloquante.
-- **Destinataire** : `ARIA_VC_REPORT_TO` (défaut `ARIA_SMTP_USER`) — la boîte
-  d'ARIA.
+- **Fail-closed kill-switch**: if ARIA is paused (or the pause state is
+  unreadable), no email goes out (`outgoing_pause.is_paused(strict=True)`).
+- **Safe degradation**: SMTP not configured -> no send, clear message, never
+  a blocking error.
+- **Recipient**: `ARIA_VC_REPORT_TO` (default `ARIA_SMTP_USER`) — ARIA's
+  own inbox.
 
-Le corps de l'email est un TEASER COURT (badges + R/R, aucune thèse ni analyse
-détaillée) — l'analyse complète vit exclusivement dans le **PDF sécurisé joint**
-(permissions anti-copie/extraction + filigrane nominatif traçable). Sans cette
-séparation, le PDF anti-copie n'aurait aucun sens : le même contenu serait
-copiable directement depuis le corps de l'email.
+The email body is a SHORT TEASER (badges + R/R, no thesis or detailed
+analysis) — the full analysis lives exclusively in the **attached secured
+PDF** (anti-copy/extraction permissions + traceable named watermark).
+Without this separation, the anti-copy PDF would be pointless: the same
+content would be copyable directly from the email body.
 
-Ce module n'exécute jamais de trade et ne touche jamais au wallet : il ne fait
-qu'envoyer un document d'analyse.
+This module never executes a trade and never touches the wallet: it only
+sends an analysis document.
 """
 from __future__ import annotations
 
@@ -50,33 +50,33 @@ async def send_vc_report(
     tier: str = "premium",
     lang: str = "fr",
 ) -> tuple[bool, str | None]:
-    """Rend le rapport (PDF sécurisé) et l'envoie par email. Retourne ``(ok, error)``,
-    ne lève jamais.
+    """Renders the report (secured PDF) and sends it by email. Returns
+    ``(ok, error)``, never raises.
 
-    Garde-fous appliqués dans l'ordre : kill-switch → destinataire → rendu → envoi SMTP.
-    ``report_number`` (optionnel) permet à un abonné de distinguer plusieurs
-    analyses suivies du même token (« Rapport n°2 »). ``series_number``
-    (optionnel) affiche le numéro de série global (« Série 00.047 »).
-    ``capital_usd`` (optionnel) permet d'afficher la position en dollars (taille
-    suggérée x capital du client) — même montant que celui utilisé côté Telegram.
-    ``tier`` (« premium » par défaut, ou « standard ») sélectionne l'édition du
-    rapport. ``lang`` (« fr » par défaut, ou « en ») choisit la langue des
-    libellés fixes du rapport (la prose LLM est déjà générée dans cette langue
-    en amont, cf. ``vc_analysis.analyze_vc(lang=...)``).
+    Guard-rails applied in order: kill-switch -> recipient -> rendering ->
+    SMTP send. ``report_number`` (optional) lets a subscriber distinguish
+    several analyses tracked on the same token ("Report #2"). ``series_number``
+    (optional) displays the global series number ("Series 00.047").
+    ``capital_usd`` (optional) lets the position be shown in dollars
+    (suggested size x client capital) — same amount as used on the Telegram
+    side. ``tier`` ("premium" by default, or "standard") selects the report
+    edition. ``lang`` ("fr" by default, or "en") chooses the language of the
+    report's fixed labels (the LLM prose is already generated in that
+    language upstream, see ``vc_analysis.analyze_vc(lang=...)``).
     """
     lang = norm_lang(lang)
 
-    # 1. Kill-switch fail-closed : en pause (ou état illisible) → on n'envoie rien.
+    # 1. Fail-closed kill-switch: paused (or unreadable state) -> nothing is sent.
     if outgoing_pause.is_paused(strict=True):
-        logger.info("send_vc_report: ARIA en pause (ou état illisible) — email non envoyé (fail-closed)")
+        logger.info("send_vc_report: ARIA paused (or unreadable state) — email not sent (fail-closed)")
         return False, "ARIA en pause — email suspendu (kill-switch)"
 
-    # 2. Destinataire.
+    # 2. Recipient.
     to = _recipient()
     if not to:
         return False, "destinataire non configuré (ARIA_VC_REPORT_TO / ARIA_SMTP_USER absents)"
 
-    # 3. Rendu : PDF complet (secured) + teaser email court (jamais le contenu détaillé).
+    # 3. Rendering: full (secured) PDF + short email teaser (never the detailed content).
     pdf_raw = render_pdf_report(
         result,
         generated_at=generated_at,
@@ -87,9 +87,9 @@ async def send_vc_report(
         tier=tier,
         lang=lang,
     )
-    # Mot de passe PROPRIÉTAIRE jetable : sert uniquement à figer les permissions
-    # (anti-copie), jamais stocké ni requis pour OUVRIR le document (mot de passe
-    # UTILISATEUR vide — cf. avertissement dans vc_report_pdf : dissuasif, pas inviolable).
+    # Disposable OWNER password: only used to lock down permissions
+    # (anti-copy), never stored or required to OPEN the document (empty USER
+    # password — see the warning in vc_report_pdf: a deterrent, not tamper-proof).
     owner_password = secrets.token_urlsafe(24)
     pdf_secured = secure_pdf_bytes(pdf_raw, owner_password=owner_password)
 
@@ -107,5 +107,5 @@ async def send_vc_report(
         attachment_filename=filename,
     )
     if ok:
-        logger.info("send_vc_report: rapport (PDF sécurisé) envoyé à %s", to)
+        logger.info("send_vc_report: report (secured PDF) sent to %s", to)
     return ok, error

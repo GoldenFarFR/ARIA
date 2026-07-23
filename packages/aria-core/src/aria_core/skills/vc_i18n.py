@@ -1,11 +1,11 @@
-"""Internationalisation de la surface VC — FR par défaut, EN additif.
+"""Internationalization of the VC surface — FR by default, EN additive.
 
-Principe de sûreté : le **français reste le comportement historique validé**
-(sortie byte-identique à avant). L'anglais est **purement additif** — seuls
-changent (a) l'affichage des libellés fixes et (b) une directive de langue
-ajoutée au prompt LLM. Les **chiffres, scores, adresses et codes d'enum**
-(`risque`, `confiance`, `recommandation`) restent identiques : jamais de
-ré-interprétation, seulement une traduction de la prose.
+Safety principle: **French remains the validated historical behavior**
+(byte-identical output to before). English is **purely additive** — only
+(a) the display of fixed labels and (b) a language directive added to the
+LLM prompt change. **Numbers, scores, addresses, and enum codes**
+(`risque`, `confiance`, `recommandation`) stay identical: never a
+re-interpretation, only a translation of the prose.
 """
 from __future__ import annotations
 
@@ -15,13 +15,13 @@ SUPPORTED_VC_LANGS = (LANG_FR, LANG_EN)
 
 
 def norm_lang(lang: str | None) -> str:
-    """Normalise vers une langue supportée ; défaut FR (jamais d'erreur)."""
+    """Normalizes to a supported language; defaults to FR (never an error)."""
     value = (lang or "").strip().lower()
     return value if value in SUPPORTED_VC_LANGS else LANG_FR
 
 
-# --- Directive de langue pour le LLM (analyse + juge) --------------------------
-# Ajoutée UNIQUEMENT en anglais. En FR le prompt reste inchangé (chaîne vide).
+# --- Language directive for the LLM (analysis + judge) -------------------------
+# Added ONLY in English. In FR the prompt stays unchanged (empty string).
 _LLM_DIRECTIVE_EN = (
     "\n\nOUTPUT LANGUAGE — IMPORTANT: write ALL free-text / prose values of the "
     "JSON in ENGLISH (summaries, theses, entry/invalidation/target descriptions, "
@@ -37,11 +37,11 @@ _LLM_DIRECTIVE_EN = (
 
 
 def llm_language_directive(lang: str) -> str:
-    """Suffixe à concaténer au prompt système. Vide en FR (aucune régression)."""
+    """Suffix to concatenate to the system prompt. Empty in FR (no regression)."""
     return _LLM_DIRECTIVE_EN if norm_lang(lang) == LANG_EN else ""
 
 
-# --- Traduction des codes de risque pour l'affichage ---------------------------
+# --- Translation of risk codes for display --------------------------------------
 _RISK_EN = {
     "FAIBLE": "LOW",
     "MODÉRÉ": "MODERATE",
@@ -54,15 +54,15 @@ _RISK_EN = {
 
 
 def risk_label(risque: str, lang: str) -> str:
-    """Traduit le code de risque pour l'affichage (identité en FR)."""
+    """Translates the risk code for display (identity in FR)."""
     if norm_lang(lang) == LANG_EN:
         return _RISK_EN.get((risque or "").strip().upper(), risque)
     return risque
 
 
-# --- Libellés de l'ordre Telegram (format_telegram_order) ----------------------
+# --- Telegram order labels (format_telegram_order) ------------------------------
 def order_strings(lang: str) -> dict:
-    """Libellés fixes de l'ordre Telegram. FR = exactement l'existant."""
+    """Fixed Telegram order labels. FR = exactly the existing behavior."""
     if norm_lang(lang) == LANG_EN:
         return {
             "order_header": "📊 ARIA — Proposed order",
@@ -104,9 +104,9 @@ def order_strings(lang: str) -> dict:
     }
 
 
-# --- Messages d'ossature du flux /vc (Telegram) --------------------------------
+# --- Scaffold messages for the /vc flow (Telegram) ------------------------------
 def scaffold_strings(lang: str) -> dict:
-    """Messages fixes du handler /vc (statut, mode test, usage)."""
+    """Fixed messages for the /vc handler (status, test mode, usage)."""
     if norm_lang(lang) == LANG_EN:
         return {
             "analyzing": "⏳ VC analysis running (Spark deep + on-chain data)...",
@@ -150,25 +150,25 @@ def scaffold_strings(lang: str) -> dict:
     }
 
 
-# --- Libellés de confiance pour l'affichage (même principe que risk_label) -----
+# --- Confidence labels for display (same principle as risk_label) --------------
 _CONFIDENCE_EN = {"haute": "high", "moyenne": "moderate", "faible": "low"}
 
 
 def confidence_label(confiance: str, lang: str) -> str:
-    """Traduit le code de confiance pour l'affichage (identité en FR)."""
+    """Translates the confidence code for display (identity in FR)."""
     if norm_lang(lang) == LANG_EN:
         return _CONFIDENCE_EN.get((confiance or "").strip().lower(), confiance)
     return confiance
 
 
-# --- Libellés fixes du rapport VC détaillé (HTML + PDF) -------------------------
-# Un seul dictionnaire, réutilisé par vc_report.py (email HTML) ET vc_report_pdf.py
-# (PDF sécurisé joint) — même principe FR=identique à l'existant / EN additif.
+# --- Fixed labels for the detailed VC report (HTML + PDF) -----------------------
+# A single dictionary, reused by vc_report.py (HTML email) AND vc_report_pdf.py
+# (secured PDF attachment) — same principle FR=identical to existing / EN additive.
 def report_strings(lang: str) -> dict:
-    """Libellés fixes du rapport VC détaillé — jamais la prose libre du LLM
-    (thèse, résumé, raisonnement), qui est déjà générée dans la langue cible par
-    le LLM lui-même via ``llm_language_directive``. Ici : uniquement les libellés
-    de structure (titres de section, en-têtes de tableau, disclaimers fixes)."""
+    """Fixed labels for the detailed VC report — never the LLM's free prose
+    (thesis, summary, reasoning), which is already generated in the target language by
+    the LLM itself via ``llm_language_directive``. Here: only structural
+    labels (section titles, table headers, fixed disclaimers)."""
     if norm_lang(lang) == LANG_EN:
         return {
             "tier_premium_label": "PREMIUM REPORT",
@@ -406,7 +406,7 @@ def report_strings(lang: str) -> dict:
     }
 
 
-# --- Libellés du verdict du juge (proof engine, mode test) ---------------------
+# --- Judge verdict labels (proof engine, test mode) ------------------------------
 def judge_strings(lang: str) -> dict:
     if norm_lang(lang) == LANG_EN:
         return {

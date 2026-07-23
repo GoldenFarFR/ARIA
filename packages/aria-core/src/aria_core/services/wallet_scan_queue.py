@@ -1,28 +1,28 @@
-"""File d'attente de scan wallet en arrière-plan (15/07, suite directe de #157).
+"""Background wallet scan queue (15/07, direct follow-up to #157).
 
-Constat opérateur : sur un wallet très actif (ex. 680 tokens tradés), même le
-scan incrémental persistant (`wallet_scan_state.py`) exige des dizaines de
-rappels manuels de `/walletscore` pour atteindre la couverture complète --
-impraticable en usage normal. Ce module permet d'INJECTER un wallet une seule
-fois (commande `/walletqueue`) puis de laisser le heartbeat le faire avancer
-tout seul, plusieurs tokens à la fois, jusqu'à couverture complète -- ARIA
-notifie alors le résultat final sur Telegram sans action supplémentaire.
+Operator observation: on a very active wallet (e.g. 680 tokens traded), even
+the persistent incremental scan (`wallet_scan_state.py`) requires dozens of
+manual `/walletscore` reminders to reach full coverage -- impractical in
+normal use. This module lets you INJECT a wallet just once (`/walletqueue`
+command) and then lets the heartbeat advance it on its own, several tokens at
+a time, until full coverage -- ARIA then notifies the final result on
+Telegram with no further action needed.
 
-Suivi PERMANENT (15/07, suite 2 -- constat opérateur explicite) : un wallet qui
-atteint 100% n'est plus jamais retiré de la file. Il bascule en mode
-SURVEILLANCE (une vérification légère par semaine, `MONITORING_INTERVAL_DAYS`)
--- ARIA repère toute nouvelle activité (nouveaux tokens tradés) sans jamais
-redemander une couverture complète (déjà acquise, `_needs_scan` ne reprend que
-le neuf). Seule sortie : si le wallet ne montre plus AUCUNE activité on-chain
-réelle depuis `INACTIVITY_CUTOFF_DAYS` (3 mois), la surveillance s'arrête et le
-wallet est retiré -- jamais avant, jamais sur un simple seuil de temps passé
-dans la file. Le seuil de score (retirer un wallet dont la note descend trop
-bas) reste une décision opérateur différée, pas encore construit.
+PERMANENT tracking (15/07, follow-up 2 -- explicit operator observation): a
+wallet that reaches 100% is never removed from the queue again. It switches
+to MONITORING mode (a light check once a week, `MONITORING_INTERVAL_DAYS`)
+-- ARIA spots any new activity (newly traded tokens) without ever
+re-requesting full coverage (already acquired, `_needs_scan` only picks up
+what's new). The only exit: if the wallet shows NO real on-chain activity at
+all since `INACTIVITY_CUTOFF_DAYS` (3 months), monitoring stops and the
+wallet is removed -- never before, never on a simple elapsed-time-in-queue
+threshold. The score threshold (removing a wallet whose score drops too low)
+remains a deferred operator decision, not yet built.
 
-Rien de dupliqué : chaque passage réutilise `smart_money.score_wallets` +
-`wallet_scan_state.py` tels quels (le moteur incrémental existant), cette
-file d'attente ajoute uniquement la liste des wallets à traiter, le seuil de
-notification de progression, et la cadence de surveillance post-100%.
+Nothing duplicated: each pass reuses `smart_money.score_wallets` +
+`wallet_scan_state.py` as-is (the existing incremental engine), this queue
+only adds the list of wallets to process, the progress-notification
+threshold, and the post-100% monitoring cadence.
 """
 from __future__ import annotations
 
@@ -39,32 +39,32 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-# Notification de progression tous les N tokens couverts cumulés (15/07,
-# demande opérateur explicite) -- distinct du plafond par passage
-# (`WEIGHTS.max_tokens_analyzed`), même si la même valeur (50) a été choisie
-# pour les deux au moment de l'écriture (coïncidence assumée, pas un couplage
-# en dur : les deux constantes vivent dans des modules différents).
+# Progress notification every N cumulative covered tokens (15/07, explicit
+# operator request) -- distinct from the per-pass cap
+# (`WEIGHTS.max_tokens_analyzed`), even though the same value (50) was chosen
+# for both at the time of writing (assumed coincidence, not a hardcoded
+# coupling: the two constants live in different modules).
 PROGRESS_NOTIFY_STEP = 50
 
-# Wallets traités par passage de heartbeat (sobriété -- éviter de saturer les
-# API externes en un seul cycle si plusieurs wallets sont en file). Ramené de
-# 2 à 1 le 15/07 (constat opérateur) : le heartbeat d'ARIA traite ses tâches
-# en SÉQUENCE, jamais en parallèle -- un cycle à 2 wallets x 50 tokens x ~2,1s
-# de throttle GeckoTerminal peut bloquer TOUTES les autres automatisations
-# activées jusqu'à ~50 minutes. À 1 wallet, le pire cas tombe à ~25 minutes.
-# Opérateur explicitement pas pressé -- préfère la marge de sécurité sur le
-# reste du heartbeat à la vitesse de couverture de ce cycle précis.
+# Wallets processed per heartbeat pass (sobriety -- avoid saturating external
+# APIs in a single cycle if several wallets are queued). Lowered from 2 to 1
+# on 15/07 (operator observation): ARIA's heartbeat processes its tasks in
+# SEQUENCE, never in parallel -- a cycle with 2 wallets x 50 tokens x ~2.1s
+# GeckoTerminal throttle can block ALL other enabled automations for up to
+# ~50 minutes. At 1 wallet, the worst case drops to ~25 minutes. Operator
+# explicitly not in a hurry -- prefers the safety margin on the rest of the
+# heartbeat over the coverage speed of this particular cycle.
 MAX_WALLETS_PER_CYCLE = 1
 
-# Suivi permanent (15/07, suite 2, décision opérateur explicite) : une fois
-# la couverture complète atteinte, une vérification par semaine suffit --
-# plus rien à rattraper, juste détecter une éventuelle nouvelle activité.
+# Permanent tracking (15/07, follow-up 2, explicit operator decision): once
+# full coverage is reached, a check once a week is enough -- nothing left to
+# catch up on, just detecting possible new activity.
 MONITORING_INTERVAL_DAYS = 7
 
-# Seuil d'inactivité (15/07, décision opérateur explicite, "3 mois") avant
-# d'arrêter la surveillance d'un wallet -- mesuré sur la vraie dernière
-# activité on-chain (`WalletScoreCard.last_activity_at`), jamais sur la durée
-# passée dans la file.
+# Inactivity threshold (15/07, explicit operator decision, "3 months")
+# before stopping monitoring of a wallet -- measured on the real last
+# on-chain activity (`WalletScoreCard.last_activity_at`), never on time
+# spent in the queue.
 INACTIVITY_CUTOFF_DAYS = 90
 
 
@@ -88,10 +88,11 @@ async def _ensure_table() -> None:
             )
             """
         )
-        # Migration à chaud idempotente (15/07, suivi permanent -- suite 2) --
-        # une file déjà peuplée avant ces colonnes n'a jamais `next_check_at` :
-        # défaut = `added_at` (immédiatement dû, comportement inchangé pour les
-        # wallets déjà en rattrapage). `monitoring_since` reste NULL (rattrapage).
+        # Idempotent hot migration (15/07, permanent tracking -- follow-up 2) --
+        # a queue already populated before these columns never has
+        # `next_check_at`: default = `added_at` (immediately due, unchanged
+        # behavior for wallets already catching up). `monitoring_since` stays
+        # NULL (catching up).
         cols = {row[1] for row in await (await db.execute("PRAGMA table_info(wallet_scan_queue)")).fetchall()}
         if "next_check_at" not in cols:
             await db.execute("ALTER TABLE wallet_scan_queue ADD COLUMN next_check_at TEXT")
@@ -116,10 +117,10 @@ class QueuedWallet:
 
 
 async def enqueue_wallets(addresses: list[str]) -> list[str]:
-    """Ajoute les adresses absentes de la file, immédiatement dues (mode
-    rattrapage). Retourne celles réellement ajoutées (les doublons déjà en
-    file sont silencieusement ignorés -- pas une erreur, juste rien à faire
-    de plus, y compris pour un wallet déjà en surveillance post-100%)."""
+    """Adds addresses absent from the queue, immediately due (catch-up
+    mode). Returns those actually added (duplicates already in the queue are
+    silently ignored -- not an error, just nothing more to do, including for
+    a wallet already in post-100% monitoring)."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
     added: list[str] = []
@@ -144,9 +145,9 @@ async def queue_size() -> int:
 
 
 async def queue_counts() -> dict:
-    """Distingue les wallets encore en RATTRAPAGE initial de ceux en simple
-    SURVEILLANCE hebdomadaire post-100% -- jamais dire "restant" sur un
-    wallet déjà entièrement couvert (juste surveillé)."""
+    """Distinguishes wallets still in initial CATCH-UP from those in plain
+    post-100% weekly MONITORING -- never say "remaining" about a wallet
+    that's already fully covered (just monitored)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
@@ -161,15 +162,16 @@ async def queue_counts() -> dict:
 
 
 async def queue_status_summary() -> dict:
-    """Vérité vérifiable sur l'avancement réel de la file (23/07, suite directe
-    de #29 -- avant ce correctif, aucune commande ne permettait de savoir si
-    la file avançait ou était bloquée sans une requête SQL manuelle).
+    """Verifiable truth about the queue's real progress (23/07, direct
+    follow-up to #29 -- before this fix, no command let you know whether the
+    queue was progressing or stuck without a manual SQL query).
 
-    Distingue explicitement : jamais tenté du tout (``last_attempt_at`` vide)
-    vs déjà tenté au moins une fois mais pas encore à 100% vs en surveillance
-    (100% déjà atteint). ``oldest_never_attempted_days`` -- combien de jours
-    le plus ancien wallet jamais touché attend déjà -- est le signal le plus
-    direct d'un vrai blocage (par opposition à une simple lenteur normale)."""
+    Explicitly distinguishes: never attempted at all (``last_attempt_at``
+    empty) vs. already attempted at least once but not yet at 100% vs. in
+    monitoring (100% already reached). ``oldest_never_attempted_days`` --
+    how many days the oldest wallet ever touched has been waiting -- is the
+    most direct signal of a real blockage (as opposed to plain normal
+    slowness)."""
     await _ensure_table()
     now = datetime.now(timezone.utc)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -218,16 +220,15 @@ async def queue_status_summary() -> dict:
 
 
 async def list_pending(limit: int = MAX_WALLETS_PER_CYCLE) -> list[QueuedWallet]:
-    """Les wallets DUS (rattrapage toujours dû immédiatement, surveillance due
-    chaque semaine). Priorité (21/07, demande opérateur -- capacité du
-    classement relevée à 600) : les nouveaux candidats en RATTRAPAGE
-    (`monitoring_since IS NULL`) passent TOUJOURS avant les simples rescans
-    de SURVEILLANCE hebdomadaire, quelle que soit leur date d'échéance
-    respective -- sinon une grosse population déjà notée en surveillance
-    (jusqu'à ~1 wallet/20min ~= 504 rescans/semaine de capacité totale)
-    pourrait structurellement affamer la découverte de nouveaux candidats.
-    Au sein de chaque groupe, les plus anciennement dus d'abord (FIFO sur
-    `next_check_at`) -- jamais un ordre arbitraire."""
+    """The DUE wallets (catch-up always immediately due, monitoring due
+    weekly). Priority (21/07, operator request -- leaderboard capacity
+    raised to 600): new candidates in CATCH-UP (`monitoring_since IS NULL`)
+    ALWAYS go before plain weekly MONITORING rescans, regardless of their
+    respective due date -- otherwise a large population already scored in
+    monitoring (up to ~1 wallet/20min ~= 504 rescans/week of total capacity)
+    could structurally starve the discovery of new candidates. Within each
+    group, the longest overdue first (FIFO on `next_check_at`) -- never an
+    arbitrary order."""
     await _ensure_table()
     now_iso = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -260,8 +261,8 @@ async def mark_attempt(
     last_notified_milestone: int | None = None,
     monitoring_since: datetime | None = None,
 ) -> None:
-    """Reprogramme `wallet` -- `next_check_at` est TOUJOURS mis à jour (quand
-    doit-on revoir ce wallet), les deux autres champs seulement si fournis."""
+    """Reschedules `wallet` -- `next_check_at` is ALWAYS updated (when this
+    wallet should next be reviewed), the other two fields only if supplied."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
     fields = ["last_attempt_at=?", "next_check_at=?"]
@@ -286,84 +287,84 @@ async def remove_from_queue(wallet: str) -> None:
 
 
 async def _update_leaderboard_best_effort(wallet: str, card) -> None:
-    """Classement "meilleurs investisseurs" (21/07) -- appelé UNIQUEMENT sur
-    un wallet à couverture complète (`full_coverage`), jamais sur un score
-    partiel (même exclusion que `full_coverage=False` ailleurs dans
-    `smart_money.py` pour la population de comparaison -- un score pas encore
-    fiable pour comparer ne l'est pas plus pour classer). Best-effort : une
-    panne d'écriture du classement ne doit jamais casser le cycle de scan
-    lui-même, gate propre vérifié à l'intérieur de la fonction appelée."""
+    """"Top investors" leaderboard (21/07) -- called ONLY on a wallet with
+    full coverage (`full_coverage`), never on a partial score (same
+    exclusion as `full_coverage=False` elsewhere in `smart_money.py` for the
+    comparison population -- a score not yet reliable enough to compare is
+    no more reliable for ranking). Best-effort: a leaderboard write failure
+    must never break the scan cycle itself, proper gate checked inside the
+    called function."""
     from aria_core.services import smart_money_leaderboard
 
     try:
         await smart_money_leaderboard.update_leaderboard(wallet, card.composite_percentile)
     except Exception:  # noqa: BLE001
-        logger.warning("wallet_scan_queue: mise à jour du classement échouée pour %s", wallet)
+        logger.warning("wallet_scan_queue: leaderboard update failed for %s", wallet)
 
 
 async def _remove_from_leaderboard_best_effort(wallet: str, reason: str) -> None:
-    """21/07 -- un wallet qui sort de la surveillance (inactivité) ne doit
-    jamais garder sa dernière note figée indéfiniment dans le classement,
-    sans jamais être signalé comme "plus suivi". Best-effort, même doctrine
-    que ``_update_leaderboard_best_effort``."""
+    """21/07 -- a wallet that drops out of monitoring (inactivity) must
+    never keep its last score frozen indefinitely on the leaderboard,
+    without ever being flagged as "no longer tracked". Best-effort, same
+    doctrine as ``_update_leaderboard_best_effort``."""
     from aria_core.services import smart_money_leaderboard
 
     try:
         await smart_money_leaderboard.remove_and_archive(wallet, reason)
     except Exception:  # noqa: BLE001
-        logger.warning("wallet_scan_queue: retrait du classement échoué pour %s", wallet)
+        logger.warning("wallet_scan_queue: leaderboard removal failed for %s", wallet)
 
 
 def _is_confirmed_underperformer(card) -> bool:
-    """21/07, demande opérateur explicite : un wallet dont le percentile est
-    réellement MESURÉ (jamais ``None`` -- un score pas encore comparable ne
-    doit jamais être jugé mauvais) et sous le seuil d'éviction du classement
-    est un mauvais investisseur confirmé -- inutile de continuer à le
-    rescanner chaque semaine pour toujours."""
+    """21/07, explicit operator request: a wallet whose percentile is
+    genuinely MEASURED (never ``None`` -- a not-yet-comparable score must
+    never be judged bad) and below the leaderboard eviction threshold is a
+    confirmed bad investor -- no point continuing to rescan it every week
+    forever."""
     from aria_core.services.smart_money_leaderboard import EVICTION_PERCENTILE_THRESHOLD
 
     return card.composite_percentile is not None and card.composite_percentile < EVICTION_PERCENTILE_THRESHOLD
 
 
 async def _reject_wallet_permanently_best_effort(wallet: str, card) -> None:
-    """21/07 -- un wallet confirmé sous-performant (percentile mesuré < seuil
-    d'éviction) est marqué rejeté DÉFINITIVEMENT (``smart_money_leaderboard.
-    mark_rejected``) EN PLUS d'être retiré du classement -- empêche toute
-    redécouverte future même s'il réapparaît en détenant un nouveau token
-    (``discover_and_enqueue_candidates`` filtre déjà les wallets rejetés).
-    Best-effort, même doctrine que les autres écritures de classement."""
+    """21/07 -- a wallet confirmed as underperforming (measured percentile <
+    eviction threshold) is marked PERMANENTLY rejected (``smart_money_leaderboard.
+    mark_rejected``) IN ADDITION to being removed from the leaderboard --
+    prevents any future rediscovery even if it reappears holding a new token
+    (``discover_and_enqueue_candidates`` already filters out rejected
+    wallets). Best-effort, same doctrine as the other leaderboard writes."""
     from aria_core.services import smart_money_leaderboard
 
     try:
         await smart_money_leaderboard.mark_rejected(
-            wallet, card.composite_percentile, "percentile sous 30 (confirmé à couverture complète)",
+            wallet, card.composite_percentile, "percentile below 30 (confirmed at full coverage)",
         )
-        await smart_money_leaderboard.remove_and_archive(wallet, "percentile sous 30 (rejet permanent)")
+        await smart_money_leaderboard.remove_and_archive(wallet, "percentile below 30 (permanent rejection)")
     except Exception:  # noqa: BLE001
-        logger.warning("wallet_scan_queue: rejet permanent échoué pour %s", wallet)
+        logger.warning("wallet_scan_queue: permanent rejection failed for %s", wallet)
 
 
 async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
-    """Fait avancer d'un passage chaque wallet DU (jusqu'à
-    `MAX_WALLETS_PER_CYCLE`) :
+    """Advances each DUE wallet by one pass (up to
+    `MAX_WALLETS_PER_CYCLE`):
 
-    - Encore en rattrapage (`full_coverage=False`) : notifie une progression
-      tous les `PROGRESS_NOTIFY_STEP` tokens couverts, toujours dû au prochain
-      cycle (`next_check_at=now`).
-    - Atteint 100% pour la PREMIÈRE fois cette passe : rapport final complet,
-      bascule en surveillance hebdomadaire (`monitoring_since` posé, plus
-      JAMAIS retiré de la file à partir d'ici -- suivi permanent, décision
-      opérateur explicite du 15/07).
-    - Déjà en surveillance : si aucune activité on-chain réelle depuis
-      `INACTIVITY_CUTOFF_DAYS`, la surveillance s'arrête (retiré de la file,
-      notifié). Sinon reprogrammé dans `MONITORING_INTERVAL_DAYS`, notifié
-      SEULEMENT si une nouvelle activité a été détectée cette passe (jamais un
-      bruit hebdomadaire silencieux sans rien de neuf).
+    - Still catching up (`full_coverage=False`): notifies progress every
+      `PROGRESS_NOTIFY_STEP` covered tokens, always due next cycle
+      (`next_check_at=now`).
+    - Reaches 100% for the FIRST time this pass: full final report, switches
+      to weekly monitoring (`monitoring_since` set, NEVER removed from the
+      queue again from here on -- permanent tracking, explicit operator
+      decision of 15/07).
+    - Already monitoring: if no real on-chain activity since
+      `INACTIVITY_CUTOFF_DAYS`, monitoring stops (removed from the queue,
+      notified). Otherwise rescheduled in `MONITORING_INTERVAL_DAYS`,
+      notified ONLY if new activity was detected this pass (never a silent
+      weekly noise with nothing new).
 
-    Gate `ARIA_WALLET_SCAN_QUEUE_ENABLED` -- OFF par défaut, et n'a de toute
-    façon aucun effet si l'évaluateur wallet lui-même
-    (`ARIA_WALLET_SCORING_ENABLED`) est désactivé (fail-closed, pas un doublon
-    de gate)."""
+    Gate `ARIA_WALLET_SCAN_QUEUE_ENABLED` -- OFF by default, and has no
+    effect anyway if the wallet evaluator itself
+    (`ARIA_WALLET_SCORING_ENABLED`) is disabled (fail-closed, not a
+    duplicate gate)."""
     from aria_core.services.geckoterminal import geckoterminal_client
     from aria_core.services.goplus import goplus_client
     from aria_core.services.smart_money import format_wallet_scoring_report, score_wallets, wallet_scoring_enabled
@@ -415,10 +416,10 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
 
         if not queued.is_monitoring:
             if _is_confirmed_underperformer(card):
-                # Percentile mesuré confirmé mauvais dès la 1ère couverture
-                # complète -- retiré ENTIÈREMENT (jamais la surveillance
-                # permanente) et rejeté pour toujours, pas juste évincé du
-                # classement (21/07, demande opérateur explicite).
+                # Measured percentile confirmed bad right from the 1st full
+                # coverage -- removed ENTIRELY (never permanent monitoring)
+                # and rejected forever, not just evicted from the
+                # leaderboard (21/07, explicit operator request).
                 await remove_from_queue(queued.wallet)
                 await _reject_wallet_permanently_best_effort(queued.wallet, card)
                 rejected_wallets.append(queued.wallet)
@@ -430,8 +431,8 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
                     )
                 continue
 
-            # Première fois que ce wallet atteint 100% -- rapport complet,
-            # bascule en surveillance permanente (jamais plus retiré ici).
+            # First time this wallet reaches 100% -- full report, switches
+            # to permanent monitoring (never removed here again).
             completed_first_time.append(queued.wallet)
             await mark_attempt(
                 queued.wallet,
@@ -446,8 +447,8 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
                 )
             continue
 
-        # Déjà en surveillance permanente -- vérifie l'inactivité avant de
-        # reprogrammer (jamais avant, jamais sur la durée passée en file).
+        # Already in permanent monitoring -- check inactivity before
+        # rescheduling (never before, never based on time spent in queue).
         if (
             card.last_activity_at is not None
             and (now - card.last_activity_at) > timedelta(days=INACTIVITY_CUTOFF_DAYS)
@@ -455,7 +456,7 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
             await remove_from_queue(queued.wallet)
             dropped_inactive.append(queued.wallet)
             await _remove_from_leaderboard_best_effort(
-                queued.wallet, f"wallet inactif (>{INACTIVITY_CUTOFF_DAYS}j sans activité on-chain)",
+                queued.wallet, f"inactive wallet (>{INACTIVITY_CUTOFF_DAYS}d without on-chain activity)",
             )
             if notifier is not None:
                 await notifier(
@@ -465,10 +466,10 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
             continue
 
         if _is_confirmed_underperformer(card):
-            # Un wallet déjà en surveillance peut se dégrader dans le temps --
-            # même traitement que la 1ère couverture complète : retiré
-            # ENTIÈREMENT et rejeté pour toujours, pas seulement évincé du
-            # classement (21/07, demande opérateur explicite).
+            # A wallet already in monitoring can degrade over time -- same
+            # handling as the 1st full coverage: removed ENTIRELY and
+            # rejected forever, not just evicted from the leaderboard
+            # (21/07, explicit operator request).
             await remove_from_queue(queued.wallet)
             await _reject_wallet_permanently_best_effort(queued.wallet, card)
             rejected_wallets.append(queued.wallet)
@@ -484,8 +485,8 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
         await mark_attempt(queued.wallet, next_check_at=next_check)
         await _update_leaderboard_best_effort(queued.wallet, card)
         if card.tokens_analyzed > 0 and notifier is not None:
-            # Nouvelle activité repérée pendant la surveillance -- jamais un
-            # bruit hebdomadaire silencieux si rien de neuf n'a été trouvé.
+            # New activity spotted during monitoring -- never a silent
+            # weekly noise if nothing new was found.
             await notifier(
                 f"🔄 Nouvelle activité détectée en surveillance -- {queued.wallet} "
                 f"({card.tokens_analyzed} nouveau(x) token(s) couvert(s)). "

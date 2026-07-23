@@ -1,4 +1,4 @@
-"""Indicateur coût réponse — gratuit vs payant + tokens consommés."""
+"""Response cost indicator — free vs paid + tokens consumed."""
 from __future__ import annotations
 
 import re
@@ -49,7 +49,7 @@ def format_cost_footer(
     lang: str = "fr",
     channel: str = "plain",
 ) -> str:
-    """Suffixe fin de message. channel: plain | html | shell."""
+    """End-of-message suffix. channel: plain | html | shell."""
     tokens = int(meta.get("total_tokens") or 0)
     billed = bool(meta.get("billed"))
     cloud = bool(meta.get("cloud", is_cloud_billed_provider()))
@@ -88,7 +88,7 @@ def format_cost_footer(
 
 
 def is_cost_meta_question(message: str) -> bool:
-    """Question sur l'indicateur 🟢/🟠 — réponse template sans LLM."""
+    """Question about the 🟢/🟠 indicator — template reply, no LLM."""
     text = (message or "").strip()
     if len(text) < 8:
         return False
@@ -96,7 +96,7 @@ def is_cost_meta_question(message: str) -> bool:
 
 
 def cost_meta_reply(lang: str = "fr") -> str:
-    """Explique orange/gratuit — 0 appel API."""
+    """Explains orange/free — 0 API call."""
     from aria_core.llm_economy import provider_display_name
 
     prov = provider_display_name()

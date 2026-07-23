@@ -50,7 +50,7 @@ class InsiderWalletFacts:
     (excluding the 'creator' wallet, already covered by dev_wallet.py)."""
 
     examined: int = 0
-    flagged: list[str] = field(default_factory=list)  # adresses ayant quasi tout revendu
+    flagged: list[str] = field(default_factory=list)  # addresses that sold off almost everything
     available: bool = False
     error: str | None = None
 

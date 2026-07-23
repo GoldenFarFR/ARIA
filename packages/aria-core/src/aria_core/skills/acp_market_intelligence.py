@@ -1,4 +1,4 @@
-"""ACP marketplace intelligence — offre/demande, gaps, suggestions workflows."""
+"""ACP marketplace intelligence — supply/demand, gaps, workflow suggestions."""
 from __future__ import annotations
 
 import json
@@ -121,7 +121,7 @@ def _aria_agent_id() -> str:
 
 
 async def execute_acp_leaderboard(message: str, lang: str = "fr") -> tuple[str, dict]:
-    """Position ARIA sur le leaderboard browse Virtuals — sans inventer de rang."""
+    """ARIA's position on the Virtuals browse leaderboard — never inventing a rank."""
     lang_key = "fr" if lang == "fr" else "en"
     aria_id = _aria_agent_id()
 
@@ -426,7 +426,7 @@ async def execute_acp_market_research(message: str, lang: str = "fr") -> tuple[s
         "Actions : scan marché acp | créer offre acp template <nom> | traiter jobs acp",
     ])
 
-    # Barrière forte ACP : on rappelle le focus et l'obligation d'audit
+    # Strong ACP barrier: reminds of the focus and the audit obligation
     lines.extend(["", get_acp_strict_rules(lang_key)])
 
     append_memory("acp_market", f"[scan] source={scan.get('source')} agents={scan.get('agent_count')}")

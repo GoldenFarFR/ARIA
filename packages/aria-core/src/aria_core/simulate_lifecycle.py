@@ -1,20 +1,20 @@
-"""Simulation de bout en bout du cycle ARIA — A à Z, sur un vrai token.
+"""End-to-end simulation of the ARIA cycle — A to Z, on a real token.
 
-But : PROUVER que toute la chaîne tourne, d'un coup, sur un token réel. Chaque étape
-est imprimée pour être suivie à l'œil :
+Goal: PROVE that the entire chain runs, in one go, on a real token. Each step
+is printed to be followed by eye:
 
-  1. SCAN on-chain complet (sécurité, autorité mint, launchpad, dev-wallet, liquidité, TA)
-  2. FILTRE de sécurité (verdict binaire + raisons)
-  3. ANALYSE VC (thèse, entrée/cible/invalidation) — LLM si dispo, sinon déterministe
-  4. CARNET : entrée de journal + SCREENSHOT (chandeliers réels + simulation forward)
-  5. SUIVI : un checkpoint de thèse (prix + activité projet)
-  6. EXPORT : le carnet en .txt lisible
+  1. Full on-chain SCAN (security, mint authority, launchpad, dev-wallet, liquidity, TA)
+  2. Safety FILTER (binary verdict + reasons)
+  3. VC ANALYSIS (thesis, entry/target/invalidation) — LLM if available, otherwise deterministic
+  4. JOURNAL: log entry + SCREENSHOT (real candles + forward simulation)
+  5. TRACKING: a thesis checkpoint (price + project activity)
+  6. EXPORT: the journal as readable .txt
 
-Usage (sur le VPS, réseau + LLM dispo) :
-    docker exec aria-api python -m aria_core.simulate_lifecycle 0xCONTRAT
-    docker exec aria-api python -m aria_core.simulate_lifecycle           # découvre un top pool
+Usage (on the VPS, network + LLM available):
+    docker exec aria-api python -m aria_core.simulate_lifecycle 0xCONTRACT
+    docker exec aria-api python -m aria_core.simulate_lifecycle           # discovers a top pool
 
-Aucune action financière : lecture + écriture dans le carnet local uniquement.
+No financial action: read + write to the local journal only.
 """
 from __future__ import annotations
 
@@ -27,13 +27,13 @@ def _line(txt: str = "") -> None:
 
 
 def _configure_host() -> bool:
-    """Configure la librairie comme le serveur au démarrage (spark/LLM/clés) → parité prod.
+    """Configures the library like the server at startup (spark/LLM/keys) -> prod parity.
 
-    Lancé en ligne de commande (`docker exec ... python -m ...`), ce process est SÉPARÉ du
-    serveur : sans cet appel, la librairie n'est pas configurée et l'analyse VC retombe sur
-    le déterministe (LLM off). On réutilise LE MÊME configurateur que l'hôte pour éviter
-    toute dérive. Best-effort : hors conteneur (tests, local), l'import échoue proprement et
-    on garde le repli déterministe. Aucun garde-fou touché.
+    Launched from the command line (`docker exec ... python -m ...`), this process is SEPARATE
+    from the server: without this call, the library isn't configured and VC analysis falls
+    back to deterministic mode (LLM off). Reuses the SAME configurator as the host to avoid
+    any drift. Best-effort: outside the container (tests, local), the import fails cleanly and
+    the deterministic fallback is kept. No guardrail touched.
     """
     try:
         from app.integrations.aria_host import register_aria_host_integrations
@@ -42,8 +42,8 @@ def _configure_host() -> bool:
     try:
         register_aria_host_integrations()
         return True
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant, repli déterministe
-        _line(f"    (config hote echouee: {exc}) — repli deterministe")
+    except Exception as exc:  # noqa: BLE001 -- never blocking, deterministic fallback
+        _line(f"    (host config failed: {exc}) -- deterministic fallback")
         return False
 
 
@@ -52,61 +52,61 @@ async def simulate(contract: str | None = None) -> dict:
     from aria_core.skills.safety_screen import safety_screen
 
     _line("=" * 64)
-    _line("SIMULATION CYCLE ARIA — A a Z")
+    _line("ARIA CYCLE SIMULATION — A to Z")
     _line("=" * 64)
 
-    # Config hôte (spark/LLM/clés) comme au démarrage du serveur → analyse identique à la prod.
+    # Host config (spark/LLM/keys) like at server startup -> identical analysis to prod.
     llm_on = _configure_host()
-    _line(f"\n[*] Config hote : {'LLM actif (parite prod)' if llm_on else 'mode deterministe (LLM off)'}")
+    _line(f"\n[*] Host config: {'LLM active (prod parity)' if llm_on else 'deterministic mode (LLM off)'}")
 
-    # 0. Découverte si aucun contrat fourni.
+    # 0. Discovery if no contract supplied.
     if not contract:
-        _line("\n[0] Decouverte d'un token (top pools liquides)...")
+        _line("\n[0] Discovering a token (top liquid pools)...")
         from aria_core.base_crawler import discover_top_pools
 
         toks = await discover_top_pools(limit=5, min_liquidity_usd=30_000)
         if not toks:
-            _line("    aucun token decouvert (reseau ?). Fournis un contrat en argument.")
+            _line("    no token discovered (network?). Supply a contract as an argument.")
             return {"ok": False, "reason": "no_token"}
         contract = toks[0]
         _line(f"    -> {contract}")
 
-    # 1. Scan complet.
-    _line(f"\n[1] SCAN on-chain complet de {contract}")
+    # 1. Full scan.
+    _line(f"\n[1] Full on-chain SCAN of {contract}")
     ctx = await scan_base_token(
         contract, include_smart_money=True, include_fundamentals=True,
         include_ta=True, include_dev_behavior=True, include_honeypot=True,
     )
-    _line(f"    score={ctx.security_score} verdict={ctx.lite_verdict} verifie={ctx.contract_verified}")
-    _line(f"    mint={ctx.has_mint} autorite={ctx.mint_authority} launchpad={ctx.launchpad}")
-    _line(f"    liquidite/mcap={ctx.liq_mcap_ratio} dev={ctx.dev_signal}")
+    _line(f"    score={ctx.security_score} verdict={ctx.lite_verdict} verified={ctx.contract_verified}")
+    _line(f"    mint={ctx.has_mint} authority={ctx.mint_authority} launchpad={ctx.launchpad}")
+    _line(f"    liquidity/mcap={ctx.liq_mcap_ratio} dev={ctx.dev_signal}")
     if ctx.best_pair:
-        _line(f"    paire={ctx.best_pair.base_symbol} liq=${ctx.best_pair.liquidity_usd:,.0f}")
+        _line(f"    pair={ctx.best_pair.base_symbol} liq=${ctx.best_pair.liquidity_usd:,.0f}")
     for pt in (ctx.dev_points or [])[:4]:
         _line(f"      dev: {pt}")
 
-    # 2. Filtre de securite.
-    _line("\n[2] FILTRE de securite")
+    # 2. Safety filter.
+    _line("\n[2] Safety FILTER")
     screen = safety_screen(ctx)
-    _line(f"    passe={screen.passed} (hard_fail={screen.hard_fail})")
+    _line(f"    passed={screen.passed} (hard_fail={screen.hard_fail})")
     for r in screen.reasons[:6]:
         _line(f"      - {r}")
 
-    # 3. Analyse VC (LLM si dispo).
-    _line("\n[3] ANALYSE VC")
+    # 3. VC analysis (LLM if available).
+    _line("\n[3] VC ANALYSIS")
     result = None
     try:
         from aria_core.skills.vc_analysis import analyze_vc_with_context
 
         result, ctx = await analyze_vc_with_context(contract)
-        _line(f"    reco={result.recommandation} potentiel={result.potentiel} risque={result.risque}")
-        _line(f"    these: {(result.these or '')[:180]}")
-        _line(f"    entree={result.entree} cible={result.cible} invalidation={result.invalidation}")
+        _line(f"    reco={result.recommandation} potential={result.potentiel} risk={result.risque}")
+        _line(f"    thesis: {(result.these or '')[:180]}")
+        _line(f"    entry={result.entree} target={result.cible} invalidation={result.invalidation}")
     except Exception as exc:  # noqa: BLE001
-        _line(f"    (analyse LLM indisponible ici: {exc}) — on continue avec les faits du scan")
+        _line(f"    (LLM analysis unavailable here: {exc}) -- continuing with scan facts")
 
-    # 4. Carnet : entree + screenshot.
-    _line("\n[4] CARNET : entree de journal + SCREENSHOT")
+    # 4. Journal: entry + screenshot.
+    _line("\n[4] JOURNAL: log entry + SCREENSHOT")
     from aria_core import thesis_journal as tj
 
     entry_price = _num(getattr(result, "entree", None)) or (
@@ -121,9 +121,9 @@ async def simulate(contract: str | None = None) -> dict:
         chart_ref = tj.save_entry_screenshot(
             contract, ctx.ta_candles, entry=entry_price, invalidation=inval, target=target,
         )
-        _line(f"    screenshot -> {chart_ref or '(rendu indisponible)'}")
+        _line(f"    screenshot -> {chart_ref or '(rendering unavailable)'}")
     else:
-        _line("    (pas de bougies OHLCV -> pas de screenshot ce tour)")
+        _line("    (no OHLCV candles -> no screenshot this round)")
 
     facts = [f for f in (ctx.risk_flags or [])[:8]]
     jid = await tj.record_entry(tj.JournalEntry(
@@ -136,15 +136,15 @@ async def simulate(contract: str | None = None) -> dict:
         entry_price=entry_price, target_price=target, invalidation_price=inval,
         chart_ref=chart_ref,
     ))
-    _line(f"    entree de carnet #{jid} enregistree")
+    _line(f"    journal entry #{jid} recorded")
 
-    # 5. Suivi : un checkpoint de these.
-    _line("\n[5] SUIVI : checkpoint de these")
+    # 5. Tracking: a thesis checkpoint.
+    _line("\n[5] TRACKING: thesis checkpoint")
     price_now = ctx.best_pair.price_usd if ctx.best_pair else None
     pct = None
     if price_now and entry_price:
         pct = round(100.0 * (price_now - entry_price) / entry_price, 1)
-    activity = tj.assess_project_activity()  # sans capteurs live ici -> unknown
+    activity = tj.assess_project_activity()  # no live sensors here -> unknown
     verdict, note = tj.judge_thesis(
         price_vs_entry_pct=pct, invalidation_hit=False, activity=activity
     )
@@ -152,14 +152,14 @@ async def simulate(contract: str | None = None) -> dict:
         contract, price=price_now, price_vs_entry_pct=pct,
         activity_status=activity.status, verdict=verdict, note=note,
     )
-    _line(f"    checkpoint: prix={price_now} ({pct}%) activite={activity.status} -> {verdict}")
+    _line(f"    checkpoint: price={price_now} ({pct}%) activity={activity.status} -> {verdict}")
 
     # 6. Export .txt.
-    _line("\n[6] CARNET (.txt)")
+    _line("\n[6] JOURNAL (.txt)")
     _line("-" * 64)
     _line(await tj.export_txt(limit=5))
     _line("=" * 64)
-    _line("SIMULATION TERMINEE — chaine complete OK")
+    _line("SIMULATION COMPLETE — full chain OK")
     return {"ok": True, "contract": contract, "journal_id": jid, "screenshot": chart_ref}
 
 
