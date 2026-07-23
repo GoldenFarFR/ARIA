@@ -181,12 +181,12 @@ def _as_source(text: str, url: str = "", published: datetime | None = None) -> W
     return WebSource(text=text[:280], url=(url or "").strip(), published=published)
 
 
-# #126 — fraîcheur des sources web. DDG (gratuit, sans clé) ne renvoie aucun champ de date
-# structuré : certains extraits (surtout ceux de la recherche HTML/lite) préfixent malgré tout
-# le texte d'une date ou d'un âge relatif ("3 hours ago - ...", "Jul 10, 2026 - ..."). On tente
-# de l'extraire en best-effort ; Tavily (provider opt-in), lui, fournit un vrai champ
-# `published_date` sur ses résultats — cf. `_parse_iso_datetime`. Sans date décelable,
-# `published` reste None : la source n'est ni privilégiée ni écartée, juste non triable.
+# #126 — freshness of web sources. DDG (free, no key) returns no structured
+# date field: some snippets (especially from the HTML/lite search) still prefix
+# the text with a date or relative age ("3 hours ago - ...", "Jul 10, 2026 - ..."). We
+# try to extract it best-effort; Tavily (opt-in provider), on the other hand, supplies a real
+# `published_date` field on its results — see `_parse_iso_datetime`. With no detectable date,
+# `published` stays None: the source is neither favored nor discarded, just not sortable.
 _RELATIVE_AGO_RE = re.compile(
     r"^\s*(\d+)\s*(minute|min|hour|heure|day|jour|semaine|week|month|mois|year|an)s?\s+ago\b", re.I
 )

@@ -23,9 +23,9 @@ def proactive_ideas_enabled() -> bool:
 
 
 async def _real_state_snapshot() -> str:
-    """Contexte factuel du pool/track-record pour ancrer l'initiative sur l'état RÉEL,
-    jamais une ambition générique. Best-effort : une source indisponible n'empêche pas
-    les autres (dégradation douce, jamais bloquant pour le heartbeat)."""
+    """Factual context on the pool/track-record to anchor the initiative on the REAL
+    state, never a generic ambition. Best-effort: one unavailable source doesn't block
+    the others (graceful degradation, never blocking for the heartbeat)."""
     lines: list[str] = []
     try:
         from aria_core.skills.candidate_ranking import top_candidates
@@ -39,7 +39,7 @@ async def _real_state_snapshot() -> str:
             lines.append(f"Top candidats pool actuel : {preview}.")
         else:
             lines.append("Pool actif : aucun candidat disponible actuellement.")
-    except Exception as exc:  # noqa: BLE001 — best-effort, jamais bloquant
+    except Exception as exc:  # noqa: BLE001 — best-effort, never blocking
         logger.info("founder_ping: snapshot pool échoué (%s)", exc)
 
     try:
@@ -47,10 +47,10 @@ async def _real_state_snapshot() -> str:
 
         total = await vc_predictions.total_predictions_count()
         due = await weekly_training.due_predictions_summary()
-        # Distinction cruciale (trouvée le 14/07 via une initiative confabulée) :
-        # "ouvert" (pas encore résolu) n'est PAS "à échéance" (horizon atteint,
-        # prêt à clôturer avec un vrai résultat). Sans elle, le LLM proposait
-        # de "finaliser" un pronostic qui ne pouvait objectivement rien produire.
+        # Crucial distinction (found 14/07 via a confabulated initiative):
+        # "open" (not yet resolved) is NOT "due" (horizon reached,
+        # ready to close with a real result). Without it, the LLM would propose
+        # to "finalize" a prediction that couldn't objectively produce anything.
         if due["due_now"] > 0:
             status = f"{due['due_now']} arrivé(s) à échéance -- prêt(s) à clôturer avec un résultat réel"
         elif due["open_total"] > 0:
@@ -59,11 +59,11 @@ async def _real_state_snapshot() -> str:
         else:
             status = "aucun pronostic ouvert"
         lines.append(f"Track-record : {total} pronostic(s) au total, {status}.")
-        # 19/07 -- même famille que la distinction due_now/open_total ci-dessus (2e
-        # récurrence du même bug de fond, formulation différente : une initiative a
-        # proposé un "verdict chiffré sur la fiabilité" de pronostics tous encore
-        # ouverts). Rendre le fait explicite ICI, dans le contexte, pour que le LLM
-        # n'ait jamais à le déduire lui-même.
+        # 19/07 -- same family as the due_now/open_total distinction above (2nd
+        # recurrence of the same underlying bug, different wording: an initiative
+        # proposed a "numeric reliability verdict" on predictions that were all still
+        # open). Make the fact explicit HERE, in the context, so the LLM
+        # never has to infer it itself.
         resolved = (await vc_predictions.metrics())["closed"]
         if resolved == 0:
             lines.append(
@@ -76,16 +76,16 @@ async def _real_state_snapshot() -> str:
     return "\n".join(lines)
 
 
-# 19/07 -- garde déterministe POST-génération (#141), suite au feedback opérateur
-# direct sur une initiative confabulée ("si c'est des initiatives pourries autant
-# qu'elle ne le dise pas"). C'est la 2e récurrence du même bug de fond sous une
-# formulation différente (14/07 : proposait de "finaliser" un pronostic non échu ;
-# 19/07 : proposait un "verdict chiffré sur la fiabilité" de pronostics tous non
-# résolus, ET a relancé "l'initiative ACP marketplace" comme si elle était encore
-# ouverte alors qu'ACP est abandonné par décision). Le contexte/prompt (ci-dessus)
-# donne déjà les bons faits au LLM -- cette garde est le filet de sécurité si,
-# malgré tout, il les ignore : dans ce cas, le message n'est JAMAIS envoyé (retourne
-# None) plutôt que d'atterrir sur Telegram avec un défaut connu.
+# 19/07 -- deterministic POST-generation guard (#141), following direct operator
+# feedback on a confabulated initiative ("if these are lousy initiatives, at least
+# don't say so"). This is the 2nd recurrence of the same underlying bug under
+# different wording (14/07: proposed to "finalize" a prediction not yet due;
+# 19/07: proposed a "numeric reliability verdict" on predictions that were all
+# unresolved, AND revived the "ACP marketplace initiative" as if it were still
+# open when ACP has been abandoned by decision). The context/prompt (above)
+# already gives the LLM the right facts -- this guard is the safety net if,
+# despite that, it ignores them: in that case the message is NEVER sent (returns
+# None) instead of landing on Telegram with a known defect.
 _RESOLUTION_DEPENDENT_CLAIM_RE = re.compile(
     r"fiabilit[ée]|taux de r[ée]ussite|win\s*rate|pr[ée]cision|reliability|accuracy|"
     r"finaliser[^.]{0,30}pronostic",
@@ -95,7 +95,7 @@ _ABANDONED_TOPIC_RE = re.compile(r"\bACP\b|marketplace|DEXPulse|Aria Market", re
 
 
 def _founder_ping_quality_violation(reply: str, *, resolved_count: int) -> str | None:
-    """Retourne une courte raison si ``reply`` viole une garde connue, sinon None."""
+    """Returns a short reason if ``reply`` violates a known guard, otherwise None."""
     if resolved_count == 0 and _RESOLUTION_DEPENDENT_CLAIM_RE.search(reply):
         return "revendique une fiabilité/un taux de réussite alors qu'aucun pronostic n'est résolu"
     if _ABANDONED_TOPIC_RE.search(reply):
@@ -104,9 +104,9 @@ def _founder_ping_quality_violation(reply: str, *, resolved_count: int) -> str |
 
 
 def _last_initiative_recap() -> str:
-    """Rappel de sa DERNIÈRE initiative (pas d'analyse automatisée de suivi -- juste le
-    texte brut réinjecté) pour qu'elle se tienne responsable de ce qu'elle a annoncé au
-    lieu d'enchaîner des idées déconnectées les unes des autres."""
+    """Recap of her LAST initiative (no automated follow-up analysis -- just the
+    raw text re-injected) so she holds herself accountable for what she announced
+    instead of chaining disconnected ideas one after another."""
     entries = read_recent_memory(category="proactive", limit=1)
     if not entries:
         return ""
@@ -116,12 +116,11 @@ def _last_initiative_recap() -> str:
 async def run_founder_ping(lang: str = "fr") -> str | None:
     """One LLM-generated initiative for the operator (Telegram push).
 
-    Ancrée sur l'état RÉEL du pool/track-record (`_real_state_snapshot`) et sur sa
-    propre dernière initiative (`_last_initiative_recap`) -- avant ce correctif (10/07),
-    c'était du texte LLM pur, sans lien avec les vraies données : une initiative pouvait
-    promettre un pronostic sur "un token émergent" sans qu'aucun candidat réel n'existe
-    au moment de la génération, et rien ne vérifiait si la promesse précédente avait
-    été tenue.
+    Anchored on the REAL state of the pool/track-record (`_real_state_snapshot`) and on
+    her own last initiative (`_last_initiative_recap`) -- before this fix (10/07), it
+    was pure LLM text, with no link to real data: an initiative could promise a
+    prediction on "an emerging token" with no real candidate existing at generation
+    time, and nothing checked whether the previous promise had been kept.
     """
     if not proactive_ideas_enabled():
         return None
@@ -197,7 +196,7 @@ async def run_founder_ping(lang: str = "fr") -> str | None:
         from aria_core import vc_predictions
 
         resolved_count = (await vc_predictions.metrics())["closed"]
-    except Exception:  # noqa: BLE001 — fail-closed : compte inconnu = traité comme 0
+    except Exception:  # noqa: BLE001 — fail-closed: unknown count treated as 0
         resolved_count = 0
     violation = _founder_ping_quality_violation(reply, resolved_count=resolved_count)
     if violation:

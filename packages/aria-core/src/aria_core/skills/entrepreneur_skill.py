@@ -98,11 +98,11 @@ def _default_personal_objectives(lang: str) -> list[str]:
 
 
 async def _format_activation_playbook(lang: str) -> tuple[str, dict]:
-    """Plan d'action concret quand l'opérateur demande d'activer les revenus.
+    """Concrete action plan when the operator asks to activate revenue.
 
-    Pas de produit payant aujourd'hui (ACP abandonné, Stripe retiré) : le seul chemin réel
-    vers l'argent réel est le barème du pacte (docs/protocole-argent-reel.md) — prouver le
-    track-record VC/trading avant tout capital réel.
+    No paid product today (ACP abandoned, Stripe removed): the only real path
+    to real money is the pact's scale (docs/protocole-argent-reel.md) — prove the
+    VC/trading track record before any real capital.
     """
     import os
 

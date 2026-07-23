@@ -30,11 +30,11 @@ from aria_core.identity import (
 from aria_core import outgoing_pause, risk_guard
 from aria_core.integrations.host_hooks import check_rate_limit
 from aria_core.runtime import settings
-# Formatage de carte/rapport wallet (#157 suite, 15/07) -- factorisé dans
-# smart_money.py pour que le cycle de fond `wallet_scan_queue.py` réutilise
-# EXACTEMENT le même texte que `/walletscore`, jamais un second formatage
-# divergent. Réexporté sous l'ancien nom privé pour ne pas casser les tests
-# existants qui l'importent depuis ce module.
+# Wallet card/report formatting (#157 follow-up, 15/07) -- factored into
+# smart_money.py so the background cycle `wallet_scan_queue.py` reuses
+# EXACTLY the same text as `/walletscore`, never a second, diverging
+# formatting. Re-exported under the old private name so we don't break existing
+# tests that import it from this module.
 from aria_core.services.smart_money import (
     chain_display_label as _chain_display_label,
     format_wallet_scoring_report as _format_wallet_scoring_report,
@@ -85,13 +85,13 @@ def is_admin(user_id: int) -> bool:
 
 
 def is_owner(user_id: int) -> bool:
-    """Propriétaire unique du kill-switch /stop /start (ARIA_OWNER_CHAT_ID, fallback admin_ids[0])."""
+    """Sole owner of the /stop /start kill-switch (ARIA_OWNER_CHAT_ID, fallback admin_ids[0])."""
     owner = getattr(settings, "owner_chat_id", None)
     return owner is not None and user_id == owner
 
 
 async def _owner_only(update: Update) -> bool:
-    """True si l'utilisateur est le propriétaire du kill-switch, sinon répond et retourne False."""
+    """True if the user is the kill-switch owner, otherwise replies and returns False."""
     user = update.effective_user
     if user and is_owner(user.id):
         return True
@@ -111,12 +111,12 @@ async def _reply(message, text: str) -> None:
         from aria_core.relay_chat import log_message
 
         await log_message("aria", text)
-    except Exception:  # noqa: BLE001 — le relais ne doit jamais impacter la réponse réelle
+    except Exception:  # noqa: BLE001 — the relay must never impact the real reply
         pass
 
 
 async def _admin_check_reply(update: Update) -> bool:
-    """Retourne True si l'utilisateur est admin, sinon répond avec aide diagnostic."""
+    """Returns True if the user is an admin, otherwise replies with diagnostic help."""
     user = update.effective_user
     if not user:
         return False
@@ -186,20 +186,20 @@ async def send_message(
     text: str, chat_id: int | None = None, *, message_thread_id: int | None = None,
     disable_preview: bool = False, parse_mode: str | None = None,
 ) -> bool:
-    """``message_thread_id`` (#197, 15/07) : sujet ("topic") d'un supergroupe Telegram
-    avec « Sujets » activés -- paramètre natif de l'API Bot, déjà supporté par
-    python-telegram-bot (``Bot.send_message``). ``None`` (défaut) préserve le
-    comportement existant à l'identique (message posté à la racine du chat, aucune
-    régression pour les 20+ appelants actuels).
+    """``message_thread_id`` (#197, 15/07): topic of a Telegram supergroup
+    with "Topics" enabled -- native Bot API parameter, already supported by
+    python-telegram-bot (``Bot.send_message``). ``None`` (default) preserves
+    existing behavior identically (message posted at the chat root, no
+    regression for the 20+ current callers).
 
-    ``disable_preview`` (17/07) : Telegram met en cache la carte d'aperçu (image +
-    stats) d'une URL la première fois qu'elle est vue sur la plateforme -- pour un
-    lien DexScreener posté juste après une entrée momentum sur un token qui vient de
-    prendre +1000 %+ en quelques heures, cette carte peut afficher des chiffres
-    (mcap/liquidité) très périmés alors que le LIEN LUI-MÊME reste correct et mène
-    bien à la page live. Constaté en conditions réelles (17/07, token BRIAN : carte
-    Telegram "mcap 7 019 $" vs page live "mcap 11,1 M$", même contrat, même lien).
-    Désactive juste la carte, jamais le lien cliquable.
+    ``disable_preview`` (17/07): Telegram caches a URL's preview card (image +
+    stats) the first time it's seen on the platform -- for a
+    DexScreener link posted right after a momentum entry on a token that just
+    took off +1000%+ in a few hours, this card can display figures
+    (mcap/liquidity) that are very stale even though the LINK ITSELF stays correct and
+    does lead to the live page. Observed in real conditions (17/07, BRIAN token: Telegram
+    card "mcap $7,019" vs live page "mcap $11.1M", same contract, same link).
+    Only disables the card, never the clickable link.
 
     ``parse_mode`` (07/23): ``None`` by default -- unchanged historical
     behavior for the 20+ existing callers (plain text, goes through
@@ -232,25 +232,25 @@ async def send_message(
 
 
 async def send_trading_notification(text: str) -> None:
-    """20/07 -- extrait de ``Heartbeat._notify_telegram_trading`` (fonction libre,
-    plus une méthode liée) : un vrai bug trouvé en conditions réelles (position MAGIC
-    achetée par ``momentum_websocket.py`` sans jamais notifier Telegram, seule sa
-    vente par le cycle heartbeat suivant est arrivée) -- ``momentum_websocket.py`` ne
-    pouvait pas réutiliser la méthode liée `self._notify_telegram_trading` (pas
-    d'accès à l'instance ``Heartbeat``), donc son appel à ``run_paper_cycle`` ne
-    passait tout simplement AUCUN notifier. Extraite ici pour que les deux sources
-    d'achat (heartbeat 15min ET WebSocket temps réel) envoient EXACTEMENT le même
-    message, au même endroit (DM admin + sujet Telegram dédié #197 si configuré),
-    jamais une seconde implémentation divergente.
+    """20/07 -- extracted from ``Heartbeat._notify_telegram_trading`` (free function,
+    formerly a bound method): a real bug found in real conditions (a MAGIC position
+    bought by ``momentum_websocket.py`` without ever notifying Telegram, only its
+    sale by the next heartbeat cycle arrived) -- ``momentum_websocket.py`` could
+    not reuse the bound method `self._notify_telegram_trading` (no
+    access to the ``Heartbeat`` instance), so its call to ``run_paper_cycle`` was
+    simply passing NO notifier at all. Extracted here so the two buy
+    sources (15min heartbeat AND real-time WebSocket) send EXACTLY the same
+    message, in the same place (admin DM + dedicated Telegram topic #197 if configured),
+    never a second, diverging implementation.
 
-    ``disable_preview=True`` (17/07, cf. ``send_message``) : ces messages contiennent
-    systématiquement un lien DexScreener (#194) dont la carte d'aperçu peut être
-    périmée.
+    ``disable_preview=True`` (17/07, see ``send_message``): these messages systematically
+    contain a DexScreener link (#194) whose preview card can be
+    stale.
 
-    Les deux envois sont protégés individuellement -- ``_notify_telegram`` (méthode
-    d'origine) enveloppait déjà le DM principal dans un try/except ; cette fonction
-    libre reproduit exactement le même filet des deux côtés, jamais une exception
-    Telegram qui remonterait casser un cycle de trading réel."""
+    Both sends are protected individually -- ``_notify_telegram`` (the
+    original method) already wrapped the main DM in a try/except; this
+    free function reproduces exactly the same safety net on both sides, never a Telegram
+    exception bubbling up to break a real trading cycle."""
     try:
         await send_message(text, disable_preview=True)
     except Exception as exc:
@@ -290,7 +290,7 @@ async def send_photo(path, *, caption: str = "", chat_id: int | None = None) -> 
 
 
 async def notify_admin(text: str) -> bool:
-    """Information seule — ARIA informe, ne demande pas d'approbation."""
+    """Information only — ARIA informs, does not request approval."""
     return await send_message(text)
 
 
@@ -346,8 +346,8 @@ async def request_approval(action: str, description: str) -> str | None:
 
 
 async def send_approval_keyboard(chat_id: int, text: str, keyboard) -> None:
-    """Envoie un message avec clavier inline — utilisé par le garde-fou dépenses ACP
-    (``aria_core.wallet_guard``) pour le prompt Oui/Non/Explique-moi pourquoi."""
+    """Sends a message with an inline keyboard — used by the ACP spend guardrail
+    (``aria_core.wallet_guard``) for the Yes/No/Explain-why-you-need-it prompt."""
     if not _bot_app:
         raise RuntimeError("bot Telegram non démarré")
     await _bot_app.bot.send_message(chat_id=chat_id, text=_format_tg(text), reply_markup=keyboard)
@@ -360,7 +360,7 @@ def _admin_username_label() -> str:
 
 async def _handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    # Propriétaire + pause active → /start lève le kill-switch (décision opérateur).
+    # Owner + active pause → /start lifts the kill-switch (operator decision).
     if user and is_owner(user.id) and outgoing_pause.is_paused():
         outgoing_pause.resume(by=user.id)
         await _reply(
@@ -409,12 +409,12 @@ async def _handle_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"GitHub : texte libre (lecture seule) — ex: liste les repos ou status github",
         )
         return
-    # Correction #181 (15/07) : ne JAMAIS renvoyer la liste réelle des IDs
-    # admin à un visiteur non reconnu -- fuite d'information vers N'IMPORTE
-    # QUI écrivant au bot (seule ligne de tout le fichier qui exposait
-    # `settings.admin_ids` en dehors d'une réponse déjà réservée à un admin
-    # confirmé). Le visiteur n'a besoin que de SON PROPRE ID pour demander
-    # son ajout -- jamais de savoir combien d'admins existent ni lesquels.
+    # Fix #181 (15/07): NEVER return the real list of admin IDs
+    # to an unrecognized visitor -- an information leak to ANYONE
+    # writing to the bot (the only line in the whole file that exposed
+    # `settings.admin_ids` outside a reply already reserved for a confirmed
+    # admin). The visitor only needs THEIR OWN ID to request
+    # to be added -- never how many admins exist or who they are.
     await _reply(
         message,
         f"Ton ID Telegram : {user.id}\n"
@@ -437,12 +437,12 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     last_str = last.strftime("%H:%M UTC") if last else "never"
     provider = settings.llm_provider or "none"
     provider_ok = is_llm_provider_configured()
-    # 19/07 -- fusionné avec la ligne "ARIA_LLM_ENABLED" ci-dessous (retour opérateur :
-    # "pourquoi il y a deux lignes de llm actif ?"). is_llm_configured() EST déjà un
-    # sur-ensemble strict de settings.aria_llm_enabled (gate ET route résolue, cf.
-    # llm.py::is_llm_configured) -- la ligne "Provider (...)" juste après couvre déjà
-    # la résolvabilité séparément, donc rien n'est perdu : chat_llm=off + Provider=
-    # configured suffit à déduire sans ambiguïté que c'est le gate qui est coupé.
+    # 19/07 -- merged with the "ARIA_LLM_ENABLED" line below (operator feedback:
+    # "why are there two active-llm lines?"). is_llm_configured() IS already a
+    # strict superset of settings.aria_llm_enabled (gate AND route resolved, see
+    # llm.py::is_llm_configured) -- the "Provider (...)" line right after already
+    # covers resolvability separately, so nothing is lost: chat_llm=off + Provider=
+    # configured is enough to unambiguously deduce that it's the gate that's cut.
     chat_llm = "active" if is_llm_configured() else "off"
     gh = "unlimited ✅" if github_configured() and github_unlimited_access() else (
         "configured" if github_configured() else "missing"
@@ -489,31 +489,31 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _feedback_reply() -> str:
-    """#197 (15/07) : bilan paper-trading (départ / PnL total / résultat) -- données déjà
-    calculées par paper_trader.portfolio_summary(), jamais câblées à une commande
-    Telegram avant ce chantier.
+    """#197 (15/07): paper-trading summary (start / total PnL / result) -- data already
+    computed by paper_trader.portfolio_summary(), never wired to a Telegram
+    command before this work.
 
-    19/07, demande opérateur explicite : le bilan agrégé seul ne suffisait pas --
-    l'opérateur veut voir le détail de CHAQUE position en cours (thèse, cible,
-    invalidation, URL DexScreener) directement sous cette commande, pas seulement
-    sous /ledger. Ajouté via paper_ledger_report.build_positions_detail_block()
-    (même rendu que /ledger, aucun format dupliqué) -- le header agrégé garde son
-    calcul au prix LIVE (price_lookup explicite, contrairement à build_report qui
-    marque au coût), le détail par position vient s'ajouter après, jamais à la place.
+    19/07, explicit operator request: the aggregated summary alone wasn't enough --
+    the operator wants to see the detail of EVERY open position (thesis, target,
+    invalidation, DexScreener URL) directly under this command, not only
+    under /ledger. Added via paper_ledger_report.build_positions_detail_block()
+    (same rendering as /ledger, no duplicated format) -- the aggregated header keeps its
+    LIVE-price calculation (explicit price_lookup, unlike build_report which
+    marks at cost), the per-position detail is appended after, never in its place.
 
-    20/07 -- extrait de ``_handle_feedback`` (qui l'appelle désormais) pour être
-    réutilisable par le routeur NL (``_try_nl_readonly_command``, "Portfolio" tapé
-    seul repérait avant ce fix vers la conversation LLM générale, payante)."""
+    20/07 -- extracted from ``_handle_feedback`` (which now calls it) to be
+    reusable by the NL router (``_try_nl_readonly_command``, "Portfolio" typed
+    alone used to route before this fix to the general, paid LLM conversation)."""
     from aria_core import paper_trader
     from aria_core.paper_ledger_report import build_positions_detail_block
 
-    # price_lookup explicite : sans lui, portfolio_summary() marque chaque position
-    # ouverte à son COÛT (unrealized_pnl toujours à 0) -- le PnL "en cours" demandé
-    # doit inclure le latent réel, pas seulement le réalisé.
+    # explicit price_lookup: without it, portfolio_summary() marks every open
+    # position at its COST (unrealized_pnl always 0) -- the "current" PnL requested
+    # must include the real unrealized part, not just the realized one.
     summary = await paper_trader.portfolio_summary(price_lookup=paper_trader._default_price_lookup)
     depart = summary["starting"]
     pnl_total = summary["realized_pnl"] + summary["unrealized_pnl"]
-    resultat = summary["equity"]  # = départ + pnl_total par construction (portfolio_summary)
+    resultat = summary["equity"]  # = start + pnl_total by construction (portfolio_summary)
     sign = "+" if pnl_total >= 0 else ""
     header = (
         "🧪 SIMULATION — bilan paper-trading (portefeuille papier 1 M$)\n\n"
@@ -529,24 +529,24 @@ async def _feedback_reply() -> str:
 
 
 async def _handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin-only : le suivi de trading reste privé pour l'instant, même doctrine
-    que /status. Formatage délégué à ``_feedback_reply()`` (partagé avec le
-    routeur NL, 20/07)."""
+    """Admin-only: trading tracking stays private for now, same doctrine
+    as /status. Formatting delegated to ``_feedback_reply()`` (shared with the
+    NL router, 20/07)."""
     if not await _admin_check_reply(update):
         return
     await _reply(update.message, await _feedback_reply())
 
 
 async def _handle_ledger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """#210 (17/07) : détail PAR POSITION du paper-trading (thèse, entrée, sortie,
-    raison, R:R) -- comble le trou trouvé en conditions réelles : un opérateur qui
-    demande en langage naturel "qu'est-ce qui s'est passé sur ce trade ?" tombe sur la
-    conversation LLM générale (aria_core.brain), qui n'a PAS accès au registre et le dit
-    honnêtement plutôt que d'inventer -- correct, mais laissait l'opérateur sans réponse.
-    `/feedback` existait déjà mais seulement en agrégé (départ/pnl total/positions
-    ouvertes), jamais le détail par trade. Déterministe, sans appel LLM (gratuit),
-    réutilise aria_core.paper_ledger_report (même code que le script VPS). Admin-only,
-    même doctrine que /status et /feedback."""
+    """#210 (17/07): PER-POSITION detail of paper-trading (thesis, entry, exit,
+    reason, R:R) -- fills the gap found in real conditions: an operator asking in
+    natural language "what happened on this trade?" falls into the general LLM
+    conversation (aria_core.brain), which does NOT have access to the ledger and says so
+    honestly rather than inventing -- correct, but left the operator without an answer.
+    `/feedback` already existed but only in aggregate (start/total pnl/open
+    positions), never the per-trade detail. Deterministic, no LLM call (free),
+    reuses aria_core.paper_ledger_report (same code as the VPS script). Admin-only,
+    same doctrine as /status and /feedback."""
     if not await _admin_check_reply(update):
         return
     from aria_core.paper_ledger_report import build_report
@@ -556,9 +556,9 @@ async def _handle_ledger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_agent_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """#204 (16/07) : solde RÉEL du wallet agent CDP (USDC + ETH gas), lecture
-    seule -- même doctrine que /status. Admin-only, aucune exécution possible
-    depuis cette commande."""
+    """#204 (16/07): REAL balance of the CDP agent wallet (USDC + ETH gas), read
+    only -- same doctrine as /status. Admin-only, no execution possible
+    from this command."""
     if not await _admin_check_reply(update):
         return
     from aria_core.agent_wallet_monitor import (
@@ -571,10 +571,10 @@ async def _handle_agent_wallet(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def _handle_api(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """18/07 : inventaire de toutes les API externes (URL + configurée), quota en
-    direct pour le sous-ensemble qui expose réellement un endpoint (GitHub,
-    CoinMarketCap, x.ai Management, x402 interne) -- jamais un chiffre inventé pour
-    les autres. Admin-only, lecture seule."""
+    """18/07: inventory of all external APIs (URL + configured), live quota
+    for the subset that actually exposes an endpoint (GitHub,
+    CoinMarketCap, x.ai Management, internal x402) -- never a fabricated number for
+    the others. Admin-only, read only."""
     if not await _admin_check_reply(update):
         return
     from aria_core.services.api_registry import build_api_inventory, format_api_inventory
@@ -585,10 +585,10 @@ async def _handle_api(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def _handle_funnel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/funnel [heures] -- 19/07 : cumul du funnel de rejet momentum (pourquoi un
-    candidat n'a pas mené à un achat -- honeypot/R-R/liquidité/etc.), persisté par
-    momentum_funnel_log.py. Réponse à la proposition d'ARIA elle-même en conversation
-    Telegram ("preuve avant opinion"). Défaut 48h, admin-only, lecture seule."""
+    """/funnel [hours] -- 19/07: cumulative momentum rejection funnel (why a
+    candidate didn't lead to a buy -- honeypot/R-R/liquidity/etc.), persisted by
+    momentum_funnel_log.py. Response to ARIA's own suggestion in a Telegram
+    conversation ("proof before opinion"). Default 48h, admin-only, read only."""
     if not await _admin_check_reply(update):
         return
     from aria_core.momentum_funnel_log import format_funnel_summary, summarize_since
@@ -604,11 +604,11 @@ async def _handle_funnel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_regime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/regime -- 20/07 (#176, volet apprentissage) : win-rate/PnL des trades
-    clôturés segmenté par régime macro à l'entrée (Peur/Neutre/Euphorie, Regime
-    Switch #172) -- objective si un régime dégrade réellement la performance ou si
-    la segmentation ne montre aucun écart significatif. Admin-only, lecture seule,
-    aucun nouvel appel réseau (donnée déjà persistée sur chaque position)."""
+    """/regime -- 20/07 (#176, learning angle): win-rate/PnL of closed trades
+    segmented by macro regime at entry (Fear/Neutral/Euphoria, Regime
+    Switch #172) -- objectively checks whether a regime actually degrades performance or
+    whether the segmentation shows no significant gap. Admin-only, read only,
+    no new network call (data already persisted on each position)."""
     if not await _admin_check_reply(update):
         return
     from aria_core.paper_ledger_report import build_regime_report
@@ -618,11 +618,11 @@ async def _handle_regime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_counterfactual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/counterfactual -- 20/07 (#176, volet apprentissage b) : évolution de prix des
-    candidats REJETÉS par un seuil dur momentum, revisités 7 jours après rejet -- objective
-    si les seuils durs coûtent de vrais gains manqués. Admin-only, lecture seule. Ne
-    déclenche jamais de revisite elle-même (ça reste le rôle du cycle heartbeat gaté) --
-    affiche uniquement ce qui a déjà été résolu."""
+    """/counterfactual -- 20/07 (#176, learning angle b): price evolution of
+    candidates REJECTED by a hard momentum threshold, revisited 7 days after rejection --
+    objectively checks whether the hard thresholds cost real missed gains. Admin-only,
+    read only. Never triggers a revisit itself (that stays the role of the gated
+    heartbeat cycle) -- only displays what's already been resolved."""
     if not await _admin_check_reply(update):
         return
     from aria_core.counterfactual_tracker import format_counterfactual_summary, summarize_revisited
@@ -649,11 +649,11 @@ async def _handle_performance(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def _handle_topwallets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/topwallets -- 21/07 : classement "meilleurs investisseurs" (capacité
-    MAX_LEADERBOARD_SIZE, composite_percentile réel -- jamais un score de
-    coordination/Sybil, smart_money_leaderboard.py). Admin-only, lecture
-    seule, aucun nouvel appel réseau (lit uniquement ce qui a déjà été classé
-    par le cycle de fond)."""
+    """/topwallets -- 21/07: "best investors" leaderboard (capacity
+    MAX_LEADERBOARD_SIZE, real composite_percentile -- never a
+    coordination/Sybil score, smart_money_leaderboard.py). Admin-only, read
+    only, no new network call (only reads what's already been ranked
+    by the background cycle)."""
     if not await _admin_check_reply(update):
         return
     from aria_core.services.smart_money_leaderboard import MAX_LEADERBOARD_SIZE, get_leaderboard
@@ -672,10 +672,10 @@ async def _handle_topwallets(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def _handle_x402_trending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/x402trending [mots-clés] -- 19/07 : découverte de services x402 (registre CDP
-    officiel), triés par volume d'appels réel sur 30j -- réponse à "il n'existe pas un
-    top tendance des meilleurs outils x402 ?". Lecture seule : ne déclenche AUCUN
-    paiement, jamais un remplacement du plafond x402_budget existant (5$/semaine)."""
+    """/x402trending [keywords] -- 19/07: discovery of x402 services (official CDP
+    registry), sorted by real 30-day call volume -- response to "isn't there a
+    trending top of the best x402 tools?". Read only: triggers NO
+    payment, never a replacement for the existing x402_budget cap ($5/week)."""
     if not await _admin_check_reply(update):
         return
     from aria_core.services.x402_bazaar import discover_trending, format_trending_report
@@ -686,7 +686,7 @@ async def _handle_x402_trending(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def _reply_handles_registry(message, args: list[str]) -> None:
-    """Liste ou modifie le registre handles X (args = action + paramètres)."""
+    """Lists or modifies the X handle registry (args = action + parameters)."""
     from aria_core.handle_registry import (
         add_handle,
         format_registry_help,
@@ -840,8 +840,8 @@ async def _handle_x(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if sub == "profile":
-        # Module x_profile pas encore livré : garde défensive pour ne pas lever
-        # ModuleNotFoundError si la commande est invoquée (parité avec le heartbeat).
+        # x_profile module not shipped yet: defensive guard so this doesn't raise
+        # ModuleNotFoundError if the command is invoked (parity with the heartbeat).
         try:
             from aria_core.x_profile import (
                 canonical_x_profile,
@@ -948,8 +948,8 @@ async def _handle_github(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if sub in ("repair", "fix", "corrige", "corriger"):
-        # Correction operateur-only : edite le dernier commentaire showcase PR poste par ARIA
-        # (le remplace par le message de relai correct qui te tague). Ne supprime rien.
+        # Operator-only fix: edits the last showcase PR comment posted by ARIA
+        # (replaces it with the correct relay message that tags you). Deletes nothing.
         out, _ = await execute_github_sandbox("showcase pr repair", lang)
         await _reply(message, out)
         return
@@ -1293,16 +1293,16 @@ async def _handle_avatar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 def _caption_is_avatar_upload(caption: str) -> bool:
-    """Incident #147 (12/07) : une photo envoyée SANS légende (pour tester la vision,
-    par exemple) était traitée par défaut comme une demande de changement de photo de
-    profil publique -- appliquée réellement sur le bot Telegram en prod (avatar réel
-    remplacé par un portrait tiers, sans confirmation). Ce défaut datait d'avant
-    l'existence de la vision (10/07, cf. docstring de _handle_photo) : à l'époque une
-    photo sans légende n'avait qu'un seul sens possible. Ce n'est plus vrai -- une
-    légende vide ou ambiguë doit désormais tomber sur la vision (lecture seule, sans
-    conséquence publique), jamais sur un changement d'identité visuelle publique.
-    Seul un signal EXPLICITE (/avatar, ou un mot-clé avatar sans ambiguïté) déclenche
-    encore ce chemin."""
+    """Incident #147 (12/07): a photo sent WITHOUT a caption (to test vision,
+    for instance) was treated by default as a request to change the public
+    profile photo -- actually applied to the Telegram bot in prod (real avatar
+    replaced by a third-party portrait, no confirmation). This default predated
+    the existence of vision (10/07, see _handle_photo docstring): back then a
+    photo without a caption had only one possible meaning. That's no longer true --
+    an empty or ambiguous caption must now fall through to vision (read only, no
+    public consequence), never to a public visual identity change.
+    Only an EXPLICIT signal (/avatar, or an unambiguous avatar keyword) still
+    triggers this path."""
     text = (caption or "").strip()
     if not text:
         return False
@@ -1366,8 +1366,8 @@ async def _handle_avatar_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 def vision_enabled() -> bool:
-    """Seam gaté OFF par défaut. Une image analysée coûte des tokens vision (LLM) à
-    chaque envoi — jamais activé sans décision opérateur explicite."""
+    """Seam gated OFF by default. An analyzed image costs vision (LLM) tokens on
+    every send — never enabled without an explicit operator decision."""
     import os
 
     return os.environ.get("ARIA_VISION_ENABLED", "").strip().lower() in (
@@ -1375,23 +1375,23 @@ def vision_enabled() -> bool:
     )
 
 
-# Lecture directe d'une page web (13/07) -- même prudence que vision_enabled() :
-# gate séparé (ARIA_WEB_FETCH_ENABLED, cf. knowledge/web_verify.py), admin-only.
+# Direct read of a web page (13/07) -- same caution as vision_enabled():
+# separate gate (ARIA_WEB_FETCH_ENABLED, see knowledge/web_verify.py), admin-only.
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
 async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Point d'entrée UNIQUE pour tout message photo (avant ce correctif du 10/07, AUCUN
-    handler photo n'était enregistré — toute image envoyée à ARIA était ignorée en
-    silence, y compris pour /avatar). Deux routes distinctes selon la légende :
-      - mot-clé avatar EXPLICITE (``_caption_is_avatar_upload``) -> flux /avatar
-        existant (photo de profil / identité visuelle publique) ;
-      - légende vide, ambiguë, ou normale (une question, « juge cette situation »...)
-        -> lecture visuelle (vision), gatée ``ARIA_VISION_ENABLED``, admin-only pour
-        l'instant (coût LLM par image, pas encore ouvert au public).
-    Incident #147 (12/07) : la légende vide déclenchait AUTREFOIS le changement
-    d'avatar public par défaut -- corrigé, une photo ambiguë ne touche plus jamais
-    l'identité visuelle publique sans signal explicite."""
+    """SINGLE entry point for any photo message (before this 10/07 fix, NO
+    photo handler was registered — any image sent to ARIA was silently
+    ignored, including for /avatar). Two distinct routes depending on the caption:
+      - EXPLICIT avatar keyword (``_caption_is_avatar_upload``) -> existing /avatar
+        flow (profile photo / public visual identity);
+      - empty, ambiguous, or normal caption (a question, "judge this situation"...)
+        -> visual reading (vision), gated by ``ARIA_VISION_ENABLED``, admin-only for
+        now (LLM cost per image, not yet open to the public).
+    Incident #147 (12/07): an empty caption USED TO trigger the public
+    avatar change by default -- fixed, an ambiguous photo never touches the
+    public visual identity anymore without an explicit signal."""
     message = update.message
     if not message or not message.photo:
         return
@@ -1409,8 +1409,8 @@ async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if not is_admin(user.id):
-        # Public : décision de scope volontaire (coût LLM par image, pas encore
-        # ouvert). Décliner brièvement plutôt que le silence actuel — sans appel LLM.
+        # Public: deliberate scope decision (LLM cost per image, not yet
+        # opened). Decline briefly rather than the current silence — no LLM call.
         await _reply(
             message,
             "Je ne lis pas encore les images en dehors de l'équipe — envoie ta question en texte.",
@@ -1424,14 +1424,14 @@ async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    # Ancrage anti-confabulation (18/07) -- ce handler appelle _llm_response() DIRECTEMENT,
-    # pas process() : aucun des interceptors déterministes (is_llm_identity_question,
-    # is_analysis_methodology_question, is_why_not_bought_question) ne s'applique par défaut
-    # ici. Incident réel : "pourquoi tu n'as pas acheté cette divergence ?" (posé sur une
-    # image) a reçu une réponse LLM confabulée ("aucun capital réel déployé... pas achat
-    # live") alors que le pipeline momentum achète RÉELLEMENT en autonomie sur le test 1M$.
-    # Vérifié sur la LÉGENDE (caption) avant même de télécharger l'image -- si ça matche,
-    # aucun appel réseau/LLM n'est nécessaire.
+    # Anti-confabulation anchor (18/07) -- this handler calls _llm_response() DIRECTLY,
+    # not process(): none of the deterministic interceptors (is_llm_identity_question,
+    # is_analysis_methodology_question, is_why_not_bought_question) apply by default
+    # here. Real incident: "why didn't you buy this divergence?" (asked about an
+    # image) got a confabulated LLM reply ("no real capital deployed... not a live
+    # buy") while the momentum pipeline REALLY buys autonomously on the 1M$ test.
+    # Checked against the CAPTION before even downloading the image -- if it matches,
+    # no network/LLM call is necessary.
     if caption:
         from aria_core.grounding import (
             analysis_methodology_reply,
@@ -1465,7 +1465,7 @@ async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         tg_file = await context.bot.get_file(photo.file_id)
         data = bytes(await tg_file.download_as_bytearray())
-    except Exception as exc:  # noqa: BLE001 — jamais planter sur un échec de téléchargement
+    except Exception as exc:  # noqa: BLE001 — never crash on a download failure
         logger.info("vision: téléchargement photo échoué (%s)", exc)
         await _reply(message, "Je n'ai pas réussi à récupérer cette image, réessaie.")
         return
@@ -1517,9 +1517,9 @@ async def _handle_public_message(update: Update, text: str) -> None:
         return
 
     if _URL_RE.search(text):
-        # Décline systématiquement, indépendamment du gate ARIA_WEB_FETCH_ENABLED
-        # (même posture que vision_enabled() pour les photos) -- jamais un fetch
-        # discret d'une URL fournie par un visiteur public.
+        # Always declines, regardless of the ARIA_WEB_FETCH_ENABLED gate
+        # (same posture as vision_enabled() for photos) -- never a quiet fetch
+        # of a URL supplied by a public visitor.
         await _reply(
             message,
             "Je ne lis pas encore de page web directement en dehors de l'équipe — "
@@ -1554,27 +1554,27 @@ async def _handle_public_message(update: Update, text: str) -> None:
     await _reply(message, response.reply)
 
 
-# ── Routage langage naturel -> commandes en lecture seule (18/07, #213) ──────────────
+# ── Natural-language routing -> read-only commands (18/07, #213) ──────────────
 #
-# Demande opérateur explicite : "si je demande a aria pour lui demander sa watchlist
-# elle lance elle meme /watchlist et pareil pour les autres [...] la liste des / elle
-# me la donne comme toi au dessus". Scope validé ("1. ok") : SEULEMENT des commandes
-# en LECTURE SEULE, sans paramètre requis -- jamais une commande qui écrit/dépense/
-# publie (/these, /issue, /canal, /x, /stop...) ni qui prend une adresse en paramètre
-# libre (/vc, /scan, /walletscore -- une reformulation mal comprise ne doit jamais
-# mal-interpréter un contrat). Câblé UNIQUEMENT ici, dans _handle_message, APRÈS le
-# garde admin (ligne ~1434 ci-dessous) -- jamais dans aria_core.brain.process(),
-# partagé avec la surface publique du site : ces 7 commandes sont des outils internes
-# opérateur, aucun sens pour un visiteur, aucun risque de fuite même mal câblé puisque
-# ce fichier garantit déjà qu'un non-admin ne dépasse jamais la ligne 1434.
+# Explicit operator request: "if I ask aria to show me her watchlist
+# she launches /watchlist herself and same for the others [...] give me the
+# list of slash commands like you did above". Scope validated ("1. ok"): ONLY
+# READ-ONLY commands, no required parameter -- never a command that writes/spends/
+# publishes (/these, /issue, /canal, /x, /stop...) nor one that takes a free-form
+# address parameter (/vc, /scan, /walletscore -- a misunderstood rephrasing must
+# never misinterpret a contract). Wired ONLY here, in _handle_message, AFTER the
+# admin guard (line ~1434 below) -- never in aria_core.brain.process(),
+# shared with the site's public surface: these 7 commands are internal
+# operator tools, meaningless to a visitor, no leak risk even if miswired since
+# this file already guarantees a non-admin never gets past line 1434.
 #
-# /status différé
-# (aucun agrégateur réutilisable existant -- toute la logique est inline dans
-# _handle_status, ~64 lignes ; extraction = chantier séparé, pas fait ce soir).
+# /status deferred
+# (no reusable aggregator exists -- all the logic is inline in
+# _handle_status, ~64 lines; extraction = separate work item, not done tonight).
 #
-# Zéro appel LLM, déterministe -- même doctrine que grounding.py (is_why_not_bought_
-# question et consorts) : un détecteur regex spécifique par intention, jamais un mot
-# générique isolé qui risquerait un faux positif sur une conversation normale.
+# Zero LLM call, deterministic -- same doctrine as grounding.py (is_why_not_bought_
+# question and friends): a specific regex detector per intent, never a
+# generic isolated word that would risk a false positive on a normal conversation.
 
 _NL_WATCHLIST_RE = re.compile(
     r"\b(ta|ton|la)\s+watchlist\b|candidats?\s+(que\s+tu\s+)?surveilles?\b|"
@@ -1602,14 +1602,14 @@ _NL_AGENTWALLET_RE = re.compile(
 _NL_LEDGER_RE = re.compile(
     r"d[ée]tail\s+(des\s+|par\s+)?positions?\b|registre\s+des\s+trades?\b|"
     r"d[ée]tail\s+du\s+paper[\s-]?trading\b|"
-    # 19/07 -- trou réel trouvé en conditions réelles : "tu a des positions
-    # ouverte ?" (formulation directe, sans "détail") ne matchait aucun des
-    # 7 déclencheurs -- tombait dans la conversation LLM générale, qui a
-    # confabulé (mélange de l'ancien système watchlist VC-thesis avec un
-    # chiffre de capital inventé, "1000$" au lieu du vrai 1 000 000$).
-    # Ancré sur "ouverte(s)" (jamais bare "position", ambigu en français
-    # avec "opinion/avis") -- zéro risque de faux positif sur une
-    # conversation normale.
+    # 19/07 -- real gap found in real conditions: "do you have open
+    # positions?" (direct phrasing, without "detail") matched none of the
+    # 7 triggers -- fell into the general LLM conversation, which
+    # confabulated (mixing the old VC-thesis watchlist system with a
+    # fabricated capital figure, "$1000" instead of the real $1,000,000).
+    # Anchored on "ouverte(s)" [open] (never bare "position", ambiguous in French
+    # with "opinion/avis") -- zero risk of a false positive on a
+    # normal conversation.
     r"positions?\s+ouvertes?\b",
     re.IGNORECASE,
 )
@@ -1619,9 +1619,9 @@ _NL_COMMANDS_LIST_RE = re.compile(
     r"envoie.{0,20}liste\s+des\s+/",
     re.IGNORECASE,
 )
-# 20/07 -- 8e commande NL (réponse à un trou réel, cf. _NL_BARE_ALIASES ci-dessous) :
-# "Portfolio" tapé seul ne matchait rien -- le bilan agrégé (départ/PnL/résultat) est
-# la lecture la plus proche de ce mot, distincte du détail par position (_NL_LEDGER_RE).
+# 20/07 -- 8th NL command (response to a real gap, see _NL_BARE_ALIASES below):
+# "Portfolio" typed alone matched nothing -- the aggregated summary (start/PnL/result) is
+# the closest reading of that word, distinct from the per-position detail (_NL_LEDGER_RE).
 _NL_FEEDBACK_RE = re.compile(
     r"bilan\s+(du\s+)?paper[\s-]?trading\b|r[ée]sultat\s+du\s+portefeuille\b|"
     r"pnl\s+total\b",
@@ -1630,9 +1630,9 @@ _NL_FEEDBACK_RE = re.compile(
 
 
 def _format_commands_list_reply() -> str:
-    """Liste réelle des commandes -- lit TELEGRAM_MENU_COMMANDS (source unique
-    partagée avec le menu Telegram natif, jamais une 2e liste qui pourrait
-    diverger)."""
+    """Real list of commands -- reads TELEGRAM_MENU_COMMANDS (single source
+    shared with the native Telegram menu, never a 2nd list that could
+    diverge)."""
     lines = [f"{len(TELEGRAM_MENU_COMMANDS)} commandes réelles (triées a-z) :", ""]
     for name, desc in TELEGRAM_MENU_COMMANDS:
         lines.append(f"/{name} — {desc}")
@@ -1679,14 +1679,14 @@ async def _ledger_nl_reply() -> str:
     return report_text
 
 
-# 20/07 -- trou réel trouvé en conditions réelles (capture opérateur : "Watchlist"
-# tapé SEUL a coûté 11857 tokens LLM, tombé dans la conversation générale au lieu du
-# rapport gratuit) : les 7 regex ci-dessus ciblent des PHRASES complètes ("ta
-# watchlist", "feu vert"...), aucune ne matche le nom NU de la commande tapé seul --
-# pourtant le cas le plus direct possible, quasiment un slash sans le slash. Alias
-# exact (texte normalisé -- ponctuation retirée, espaces/casse aplatis) vérifié EN
-# PREMIER, avant les regex de phrase -- généralisé à toutes les commandes NL déjà
-# sûres plutôt que rapiécé une par une (même doctrine que #97, 19/07 : "anticipe").
+# 20/07 -- real gap found in real conditions (operator screenshot: "Watchlist"
+# typed ALONE cost 11857 LLM tokens, fell into the general conversation instead of the
+# free report): the 7 regexes above target complete PHRASES ("your
+# watchlist", "feu vert"...), none matches the BARE command name typed alone --
+# yet the most direct possible case, practically a slash without the slash. Exact
+# alias (normalized text -- punctuation stripped, spaces/case flattened) checked
+# FIRST, before the phrase regexes -- generalized to all NL commands already
+# safe rather than patched one by one (same doctrine as #97, 19/07: "anticipate").
 _NL_BARE_ALIASES: dict[str, str] = {
     "watchlist": "watchlist",
     "feu vert": "feuvert", "feuvert": "feuvert", "scorecard": "feuvert",
@@ -1701,11 +1701,11 @@ _NL_BARE_STRIP_RE = re.compile(r"[^\w\s]", re.UNICODE)
 
 
 async def _dispatch_nl_action(action_key: str) -> str:
-    """Résout ``action_key`` vers la VRAIE réponse. Appels directs par nom (jamais
-    un dict de références de fonctions construit une seule fois à l'import) --
-    chaque nom est résolu à l'appel, donc un monkeypatch sur le module (tests)
-    est bien pris en compte, contrairement à un dict figé qui capturerait
-    l'ancienne fonction pour toujours."""
+    """Resolves ``action_key`` to the REAL reply. Direct calls by name (never
+    a dict of function references built once at import time) --
+    each name is resolved at call time, so a monkeypatch on the module (tests)
+    is properly picked up, unlike a frozen dict that would capture
+    the old function forever."""
     if action_key == "commands_list":
         return _format_commands_list_reply()
     if action_key == "watchlist":
@@ -1726,15 +1726,15 @@ async def _dispatch_nl_action(action_key: str) -> str:
 
 
 async def _try_nl_readonly_command(text: str) -> str | None:
-    """Détecte une question en langage naturel (ou un mot-clé nu) qui correspond à
-    l'une des commandes en lecture seule ci-dessus, et renvoie la VRAIE réponse
-    (identique à ce que produirait la commande slash) -- ``None`` si aucune ne
-    correspond, laisse alors le message tomber dans le reste du pipeline.
+    """Detects a natural-language question (or a bare keyword) that matches
+    one of the read-only commands above, and returns the REAL reply
+    (identical to what the slash command would produce) -- ``None`` if none
+    matches, then lets the message fall through to the rest of the pipeline.
 
-    Alias nus vérifiés EN PREMIER (le cas le plus direct et le moins ambigu),
-    PUIS les regex de phrase dans l'ordre déclaré -- pas de recouvrement attendu
-    entre elles (chacune cible un vocabulaire distinct), mais l'ordre garde un
-    comportement déterministe si jamais deux matchaient un jour."""
+    Bare aliases checked FIRST (the most direct and least ambiguous case),
+    THEN the phrase regexes in declared order -- no overlap expected
+    between them (each targets distinct vocabulary), but the order keeps
+    deterministic behavior should two ever match one day."""
     bare = _NL_BARE_STRIP_RE.sub("", text).strip().lower()
     action_key = _NL_BARE_ALIASES.get(bare)
     if action_key is not None:
@@ -1778,10 +1778,10 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if re.match(r"^@claude\b", text, re.IGNORECASE):
-        # Adressage explicite : message pour Claude Code, pas pour ARIA — n'active PAS
-        # le pipeline LLM d'ARIA (elle ne doit pas répondre à la place de Claude). Déjà
-        # journalisé tel quel dans le relais par process_webhook_update ; Claude le verra
-        # à sa prochaine lecture (session VPS ou cloud) et répondra préfixé "🤖 Claude — ".
+        # Explicit addressing: message for Claude Code, not for ARIA — does NOT activate
+        # ARIA's LLM pipeline (she must not answer in Claude's place). Already
+        # logged as-is in the relay by process_webhook_update; Claude will see it
+        # on its next read (VPS or cloud session) and reply prefixed "🤖 Claude — ".
         await _reply(
             message,
             "📨 Message transmis à Claude (pas à moi) — il répondra ici, préfixé "
@@ -1916,7 +1916,7 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     from aria_core.skills.showcase_pr_watcher import wants_showcase_pr_repair
 
     if wants_showcase_pr_repair(text):
-        # Correction operateur-only du dernier commentaire showcase PR (edition, tag operateur).
+        # Operator-only fix of the last showcase PR comment (edit, tags operator).
         await message.reply_chat_action("typing")
         try:
             out, _ = await execute_github_sandbox(text, lang)
@@ -1943,8 +1943,8 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     dossier_addr = extract_contract(text)
     if dossier_addr:
-        # Un CA collé seul (ou dupliqué par copier-coller) → on sort le dossier daté
-        # de ce token (toutes les analyses passées). Si vide, le rendu propose /vc | /scan.
+        # A contract address pasted alone (or duplicated by copy-paste) → we pull up the
+        # dated dossier for this token (all past analyses). If empty, the render suggests /vc | /scan.
         await message.reply_chat_action("typing")
         try:
             dossier = await build_dossier(dossier_addr)
@@ -1959,18 +1959,18 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         response = await aria_brain.process(text, lang=lang, public_mode=False)
         reply_text = response.reply
         if response.data.get("llm_fallback_used") and is_owner(user.id):
-            # #135 : signal opérationnel réservé au propriétaire, jamais à un simple admin
-            # ni a fortiori au public -- silence total si Spark a répondu normalement.
+            # #135: operational signal reserved for the owner, never a mere admin
+            # nor a fortiori the public -- complete silence if Spark answered normally.
             from aria_core.llm_economy import fallback_notice_line
 
             provider = response.data.get("llm_fallback_provider", "")
             reply_text = f"{reply_text}\n\n{fallback_notice_line(provider, lang=lang)}"
         await _reply(message, reply_text)
     except Exception:
-        # #144 : traceback complet côté serveur (jamais affiché à l'opérateur) --
-        # un crash intermittent, dépendant du contenu exact du message (cf. le bug
-        # UnboundLocalError du 12/07), n'est diagnosticable qu'avec la stack complète
-        # ET le texte qui l'a déclenché, pas juste le nom de la classe d'exception.
+        # #144: full traceback server-side (never shown to the operator) --
+        # an intermittent crash, depending on the exact message content (see the
+        # UnboundLocalError bug of 12/07), is only diagnosable with the full stack
+        # AND the text that triggered it, not just the exception class name.
         logger.exception("Telegram brain.process failed on message: %r", text)
         await _reply(
             message,
@@ -2004,8 +2004,8 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if not message:
             return
         try:
-            await message.edit_reply_markup(reply_markup=None)  # retire les boutons, un seul choix possible
-        except Exception:  # noqa: BLE001 — message déjà modifié/supprimé, jamais bloquant
+            await message.edit_reply_markup(reply_markup=None)  # removes the buttons, only one choice possible
+        except Exception:  # noqa: BLE001 — message already edited/deleted, never blocking
             pass
         await _run_vc_analysis(message, address, test_mode=False, lang=lang)
         return
@@ -2030,10 +2030,10 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     approved = action == "approve"
 
-    # Kill-switch : un « Oui » sur une dépense pendant la pause ne doit rien exécuter NI
-    # consommer l'approbation — sinon, l'approbation résolue + ledger pending laisserait la
-    # dépense coincée après /start. On laisse tout en attente : re-cliquable une fois repris.
-    # (Un « Non » reste autorisé : aucun argent ne sort.)
+    # Kill-switch: a "Yes" on a spend during the pause must not execute anything NOR
+    # consume the approval — otherwise, the resolved approval + pending ledger would leave the
+    # spend stuck after /start. We leave everything pending: re-clickable once resumed.
+    # (A "No" stays allowed: no money goes out.)
     if approved:
         req = await get_approval(approval_id)
         if req and req.action.startswith("spend:"):
@@ -2075,7 +2075,7 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 query.from_user.id,
             )
             return
-        # Édition APRÈS resolve_spend : "approved ✅" ne s'affiche que si le spend a résolu sans exception
+        # Edit AFTER resolve_spend: "approved ✅" only shows if the spend resolved without an exception
         await query.edit_message_text(
             _format_tg(f"Request #{approval_id} {label}\nAction: {result.action}"),
         )
@@ -2110,11 +2110,11 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
 
-# Source unique des commandes réelles d'ARIA -- triée alphabétiquement (18/07,
-# cf. docstring de _register_bot_commands ci-dessous pour le pourquoi). Extraite
-# en constante (18/07, #213) pour être réutilisable ailleurs que le menu Telegram
-# -- ex. répondre "quelles commandes as-tu" en langage naturel avec la MÊME
-# liste, jamais une seconde copie qui pourrait diverger (cf. _nl_command_router.py).
+# Single source of ARIA's real commands -- sorted alphabetically (18/07,
+# see _register_bot_commands docstring below for why). Extracted
+# into a constant (18/07, #213) to be reusable elsewhere than the Telegram menu
+# -- e.g. answering "what commands do you have" in natural language with the SAME
+# list, never a second copy that could diverge (see _nl_command_router.py).
 TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("agentwallet", "Solde réel du wallet agent CDP (USDC + ETH gas)"),
     ("alerts", "Dernier digest crypto-Twitter (Otto AI, x402)"),
@@ -2161,26 +2161,26 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
 
 
 async def _register_bot_commands() -> None:
-    """Enregistre le menu / visible dans Telegram (bouton Menu du bot).
+    """Registers the / menu visible in Telegram (the bot's Menu button).
 
-    15/07 -- revenu sur la réduction du 09/07 (constat opérateur : le menu minimal
-    ne reflétait jamais les nouvelles commandes construites au fil des sessions,
-    ex. /walletqueue absent alors que déjà utilisé). Le menu liste maintenant
-    TOUTES les commandes enregistrées (cf. `add_handler(CommandHandler(...))`
-    plus bas) -- une seule source de vérité, plus de liste séparée à tenir à
-    jour à la main à chaque nouvelle commande.
+    15/07 -- revisiting the 09/07 reduction (operator observation: the minimal menu
+    never reflected the new commands built over the sessions,
+    e.g. /walletqueue missing even though already in use). The menu now lists
+    ALL registered commands (see `add_handler(CommandHandler(...))`
+    further below) -- a single source of truth, no more separate list to keep
+    manually up to date on every new command.
 
-    18/07 -- trié par ordre alphabétique (constat opérateur : une extension
-    navigateur tierce injecte ses propres suggestions "/" par-dessus celles
-    d'ARIA dans Telegram Web, mélange visuel impossible à démêler sinon).
-    L'ordre alphabétique ne influence PAS le mélange lui-même (hors de portée
-    du code ARIA, propre à l'extension) mais rend les vraies commandes d'ARIA
-    reconnaissables au premier coup d'oeil dès qu'on sait qu'elles sont
-    alphabétiques. Garder ce tri à jour : toute nouvelle commande s'insère à
-    sa place alphabétique, jamais ajoutée en fin de liste. Au passage : /ledger
-    (#210, 17/07, _handle_ledger) trouvée enregistrée comme handler mais absente
-    du menu depuis sa création -- même famille que l'audit des 9 commandes du
-    18/07, ajoutée ici. Verrouillé par test_menu_commands_match_registered_handlers."""
+    18/07 -- sorted alphabetically (operator observation: a third-party
+    browser extension injects its own "/" suggestions on top of ARIA's
+    in Telegram Web, otherwise an impossible-to-untangle visual mix).
+    Alphabetical order does NOT influence the mixing itself (out of scope
+    for ARIA's code, specific to the extension) but makes ARIA's real commands
+    recognizable at a glance once you know they're
+    alphabetical. Keep this sort up to date: every new command is inserted at
+    its alphabetical place, never appended at the end of the list. Along the way: /ledger
+    (#210, 17/07, _handle_ledger) found registered as a handler but missing
+    from the menu since its creation -- same family as the 9-command audit of
+    18/07, added here. Locked by test_menu_commands_match_registered_handlers."""
     if not _bot_app:
         return
     from telegram import BotCommand
@@ -2191,7 +2191,7 @@ async def _register_bot_commands() -> None:
 
 
 async def _handle_test_spend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/test_spend — escalade wallet de test (admin) : exécuteur mocké, aucune dépense réelle."""
+    """/test_spend — test wallet escalation (admin): mocked executor, no real spend."""
     message = update.message
     if not message:
         return
@@ -2202,7 +2202,7 @@ async def _handle_test_spend(update: Update, context: ContextTypes.DEFAULT_TYPE)
     from aria_core.wallet_guard import SpendEscalationError
 
     def _mock_test_executor(payload: dict) -> tuple[dict | None, str | None]:
-        # Jamais acp_cli — action dédiée "test_spend", absente des chemins de dépense réels.
+        # Never acp_cli — dedicated "test_spend" action, absent from real spend paths.
         return ({"status": "test_ok", "mock": True, "amount_usdc": payload.get("amount_usdc")}, None)
 
     wallet_guard.WALLET_ACTIONS.setdefault("test_spend", _mock_test_executor)
@@ -2230,7 +2230,7 @@ _SCAN_ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
 
 async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/scan <adresse> — lecture seule : score de risque on-chain (DexScreener + Blockscout)."""
+    """/scan <address> — read only: on-chain risk score (DexScreener + Blockscout)."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2278,11 +2278,11 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _reply(message, "\n".join(lines))
 
 
-# Garde de concurrence dédiée (#157) -- distincte de `_vc_semaphore` : un scan
-# wallet multi-token peut prendre jusqu'à ~1-2 min (pagination Blockscout +
-# jusqu'au plafond de tokens de `wallet_scoring_weights.WEIGHTS.max_tokens_analyzed`
-# x GeckoTerminal throttlé), ne doit pas se disputer le même budget de
-# concurrence que /vc.
+# Dedicated concurrency guard (#157) -- distinct from `_vc_semaphore`: a multi-token
+# wallet scan can take up to ~1-2 min (Blockscout pagination +
+# up to the token cap of `wallet_scoring_weights.WEIGHTS.max_tokens_analyzed`
+# x throttled GeckoTerminal), must not compete for the same concurrency
+# budget as /vc.
 _WALLET_SCORE_MAX_CONCURRENT = 2
 _WALLET_SCORE_MAX_WAITERS = 4
 _wallet_score_semaphore = asyncio.Semaphore(_WALLET_SCORE_MAX_CONCURRENT)
@@ -2313,9 +2313,9 @@ async def _wallet_score_analyze_and_reply(message, addresses: list[str]) -> None
     from aria_core.services.goplus import goplus_client
     from aria_core.services.smart_money import score_wallets
 
-    # ``chains``/``client`` omis : score_wallets utilise le vrai registre
-    # multi-chaînes de production (Base/Ethereum/BNB, #157 14/07) -- une même
-    # adresse 0x est valide sur toutes, ARIA essaie chaque chaîne et consolide.
+    # ``chains``/``client`` omitted: score_wallets uses the real production
+    # multi-chain registry (Base/Ethereum/BNB, #157 14/07) -- the same
+    # 0x address is valid on all of them, ARIA tries each chain and consolidates.
     report = await score_wallets(addresses, gecko=geckoterminal_client, goplus=goplus_client)
 
     if not report.available:
@@ -2326,12 +2326,12 @@ async def _wallet_score_analyze_and_reply(message, addresses: list[str]) -> None
 
 
 async def _handle_walletscore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/walletscore <a1> [a2] [a3] — évaluateur "smart wallet" maison (#157), lecture
-    seule : 1 à 3 adresses de WALLET (pas un contrat token, cf. /scan pour ça) ->
-    disqualifiants durs, score composite (PnL/win-rate FIFO, Sortino, récurrence
-    d'entrée précoce multi-lancements, diversification, drawdown), drapeau "suspect
-    positif" séparé, thèse LLM. Toujours une confirmation/contexte, jamais un
-    déclencheur. Gate ``ARIA_WALLET_SCORING_ENABLED``, OFF par défaut."""
+    """/walletscore <a1> [a2] [a3] — in-house "smart wallet" evaluator (#157), read
+    only: 1 to 3 WALLET addresses (not a token contract, see /scan for that) ->
+    hard disqualifiers, composite score (FIFO PnL/win-rate, Sortino, recurring
+    early entry across multiple launches, diversification, drawdown), separate
+    "positive suspect" flag, LLM thesis. Always a confirmation/context, never a
+    trigger. Gate ``ARIA_WALLET_SCORING_ENABLED``, OFF by default."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2363,20 +2363,20 @@ async def _handle_walletscore(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/walletqueue <a1> [a2] ...] — injecte un ou plusieurs wallets dans la file
-    d'attente de scan EN ARRIÈRE-PLAN (#157 suite, 15/07) : contrairement à
-    `/walletscore` (un seul passage, réponse immédiate), chaque wallet en file
-    avance de plusieurs tokens à chaque passage du heartbeat
-    (`wallet_scan_queue_cycle`) sans action supplémentaire de l'opérateur --
-    ARIA notifie la progression tous les `PROGRESS_NOTIFY_STEP` (50) tokens
-    couverts, puis le rapport final complet dès la couverture complète. Suivi
-    PERMANENT (#157 suite 2, 15/07) : le wallet ne quitte JAMAIS la file à
-    100% -- il bascule en surveillance hebdomadaire (nouvelle activité
-    détectée et notifiée sans jamais redemander une couverture complète),
-    retiré seulement après 3 mois sans aucune activité on-chain réelle.
-    Double gate : ``ARIA_WALLET_SCORING_ENABLED`` (le moteur lui-même) ET
-    ``ARIA_WALLET_SCAN_QUEUE_ENABLED`` (le cycle de fond) — OFF par défaut
-    tous les deux."""
+    """/walletqueue <a1> [a2] ...] — injects one or more wallets into the BACKGROUND
+    scan queue (#157 follow-up, 15/07): unlike
+    `/walletscore` (a single pass, immediate reply), each queued wallet
+    advances by several tokens on every heartbeat pass
+    (`wallet_scan_queue_cycle`) with no further operator action --
+    ARIA notifies progress every `PROGRESS_NOTIFY_STEP` (50) tokens
+    covered, then the full final report once coverage is complete.
+    PERMANENT tracking (#157 follow-up 2, 15/07): the wallet NEVER leaves the queue at
+    100% -- it switches to weekly monitoring (new activity
+    detected and notified without ever requesting full coverage again),
+    removed only after 3 months with no real on-chain activity.
+    Double gate: ``ARIA_WALLET_SCORING_ENABLED`` (the engine itself) AND
+    ``ARIA_WALLET_SCAN_QUEUE_ENABLED`` (the background cycle) — both OFF by
+    default."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2404,9 +2404,9 @@ async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE
         body = " ".join(context.args).strip()
 
     if not body:
-        # /walletqueue sans argument -- statut de la file, jamais un simple
-        # message d'usage (23/07, suite #29 : avant ce correctif, aucune
-        # commande ne permettait de vérifier si la file avançait réellement).
+        # /walletqueue with no argument -- queue status, never a plain
+        # usage message (23/07, #29 follow-up: before this fix, no
+        # command let anyone check whether the queue was actually progressing).
         status = await queue_status_summary()
         lines = [
             f"📋 File d'attente wallet — {status['total']} au total.",
@@ -2452,11 +2452,11 @@ async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 def _format_judge_verdict(v, lang: str = "fr") -> str:
-    """Formatte le verdict du proof engine (juge) pour Telegram.
+    """Formats the proof engine (judge) verdict for Telegram.
 
-    Le texte du juge est déjà sanitisé en amont (``vc_judge`` neutralise les
-    chevrons) — on se contente de le mettre en forme. ``lang`` (fr/en) ne traduit
-    que les libellés fixes ; les codes verdict/reco du juge restent inchangés.
+    The judge's text is already sanitized upstream (``vc_judge`` neutralizes
+    angle brackets) — this just formats it. ``lang`` (fr/en) only translates
+    the fixed labels; the judge's verdict/reco codes stay unchanged.
     """
     from aria_core.skills.vc_i18n import judge_strings
 
@@ -2481,12 +2481,12 @@ def _format_judge_verdict(v, lang: str = "fr") -> str:
     return "\n".join(lines)
 
 
-# Garde de concurrence — plafonne les analyses VC simultanées. Chaque /vc lance
-# un scan on-chain + un appel LLM lourd (analyse, et en test le juge). Pour une
-# boutique 4-5 clients, 3 en parallèle suffit ; au-delà on met en file, et on
-# refuse poliment quand la file est pleine (évite l'empilement mémoire et la
-# surcharge du fournisseur LLM). Le sémaphore protège aussi contre un burst de
-# commandes /vc rapprochées.
+# Concurrency guard — caps simultaneous VC analyses. Every /vc launches
+# an on-chain scan + a heavy LLM call (analysis, and in test mode the judge). For a
+# 4-5 client shop, 3 in parallel is enough; beyond that we queue, and we
+# politely refuse when the queue is full (avoids memory buildup and
+# LLM provider overload). The semaphore also protects against a burst of
+# closely spaced /vc commands.
 _VC_MAX_CONCURRENT = 3
 _VC_MAX_WAITERS = 6
 _vc_semaphore = asyncio.Semaphore(_VC_MAX_CONCURRENT)
@@ -2497,8 +2497,8 @@ _VC_LANG_BUTTONS = (("fr", "🇫🇷 Français"), ("en", "🇬🇧 English"))
 
 
 async def _run_vc_analysis(message, address: str, *, test_mode: bool, lang: str) -> None:
-    """Acquiert le sémaphore de concurrence puis lance l'analyse. Partagé par le
-    mode test (direct) et le chemin d'envoi réel (déclenché après choix de langue)."""
+    """Acquires the concurrency semaphore then launches the analysis. Shared by the
+    test mode (direct) and the real send path (triggered after language choice)."""
     global _vc_waiters
     from aria_core.skills.vc_i18n import scaffold_strings
 
@@ -2521,22 +2521,22 @@ async def _run_vc_analysis(message, address: str, *, test_mode: bool, lang: str)
 
 
 async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/vc <adresse> [test] — analyse VC complète : ordre court ici, rapport détaillé par email.
+    """/vc <address> [test] — full VC analysis: short order here, detailed report by email.
 
-    Lecture seule + proposition. Aucune exécution : l'ordre est signé manuellement
-    sur Tangem par l'opérateur.
+    Read only + proposal. No execution: the order is signed manually
+    on Tangem by the operator.
 
-    MODE TEST admin — `/vc <adresse> test` : l'analyse tourne et le raisonnement
-    complet est affiché ici, mais AUCUN email n'est envoyé et AUCUNE prédiction
-    n'est enregistrée dans le track-record (compteurs inchangés). Pour tester sans
-    polluer les stats ni spammer. Utilise directement la préférence `/langue`
-    (pas de question interactive — outil de debug rapide pour l'opérateur).
+    Admin TEST MODE — `/vc <address> test`: the analysis runs and the full
+    reasoning is displayed here, but NO email is sent and NO prediction
+    is recorded in the track record (counters unchanged). For testing without
+    polluting the stats or spamming. Uses the `/langue` preference directly
+    (no interactive question — quick debug tool for the operator).
 
-    Chemin d'envoi réel (hors test) : avant de lancer l'analyse, ARIA demande la
-    langue du rapport (boutons) — jamais l'adresse email (destinataire fixe,
-    `ARIA_VC_REPORT_TO`), jamais de confirmation d'envoi séparée. Le choix de
-    langue déclenche directement l'analyse + l'envoi via le callback ``vclang``.
-    Concurrence bornée par ``_vc_semaphore`` (voir ci-dessus).
+    Real send path (non-test): before launching the analysis, ARIA asks for the
+    report language (buttons) — never the email address (fixed recipient,
+    `ARIA_VC_REPORT_TO`), never a separate send confirmation. The language
+    choice directly triggers the analysis + send via the ``vclang`` callback.
+    Concurrency bounded by ``_vc_semaphore`` (see above).
     """
     if not await _admin_check_reply(update):
         return
@@ -2556,8 +2556,8 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         body = " ".join(context.args).strip()
 
     parts = body.split()
-    # Flag `test` en fin d'arguments (insensible à la casse) — réservé à l'admin
-    # (le handler entier est déjà admin-gated ci-dessus).
+    # `test` flag at the end of arguments (case-insensitive) — reserved for the admin
+    # (the whole handler is already admin-gated above).
     test_mode = len(parts) >= 2 and parts[-1].lower() == "test"
     address = parts[0].strip() if parts else ""
     if not _SCAN_ADDR_RE.match(address):
@@ -2581,10 +2581,10 @@ async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang: str, s: dict) -> None:
-    """Cœur de l'analyse /vc, exécuté sous le sémaphore de concurrence.
+    """Core of the /vc analysis, executed under the concurrency semaphore.
 
-    Séparé de ``_handle_vc`` pour que la garde de concurrence enveloppe l'intégralité
-    du travail lourd (scan + LLM + juge + email) dans un unique try/finally.
+    Separated from ``_handle_vc`` so the concurrency guard wraps the entirety
+    of the heavy work (scan + LLM + judge + email) in a single try/finally.
     """
     import os
     from datetime import datetime, timezone
@@ -2595,15 +2595,15 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
     from aria_core.skills.vc_report import report_integrity
 
     await _reply(message, s["analyzing"])
-    # analyze_vc() n'est qu'un fin wrapper autour de analyze_vc_with_context() qui jette
-    # le ctx (`result, _ctx = await analyze_vc_with_context(...)`) -- appeler directement
-    # la version avec contexte ici est donc un coût réseau/LLM strictement identique, pas
-    # un calcul supplémentaire. Corrige un bug réel (15/07) : sans ctx, le chemin
-    # opérateur réel ne pouvait pas renseigner entry_price/pool_address (ci-dessous),
-    # ce qui excluait silencieusement TOUTES les vraies analyses /vc de l'opérateur du
-    # chiffre "wallet ARIA" public (`vc_predictions.live_wallet`) -- seuls les tirages
-    # automatiques du tirage hebdomadaire (`weekly_training.py`, déjà correct) y
-    # apparaissaient.
+    # analyze_vc() is just a thin wrapper around analyze_vc_with_context() that discards
+    # the ctx (`result, _ctx = await analyze_vc_with_context(...)`) -- calling directly
+    # the version with context here is therefore a strictly identical network/LLM cost, not
+    # an additional computation. Fixes a real bug (15/07): without ctx, the real
+    # operator path couldn't fill in entry_price/pool_address (below),
+    # which silently excluded ALL real operator /vc analyses from the
+    # public "ARIA wallet" figure (`vc_predictions.live_wallet`) -- only the
+    # automatic draws of the weekly training (`weekly_training.py`, already correct)
+    # appeared there.
     result, ctx = await analyze_vc_with_context(address, lang=lang)
     capital_raw = os.environ.get("ARIA_CAPITAL_USD", "").strip()
     try:
@@ -2619,39 +2619,39 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
     try:
         await repertoire_db.save_message("user", f"/vc {address}", skill_used="vc")
         await repertoire_db.save_message("agent", order_text, skill_used="vc")
-    except Exception as exc:  # noqa: BLE001 — historique best-effort, jamais bloquant pour le rapport
+    except Exception as exc:  # noqa: BLE001 — best-effort history, never blocking for the report
         logger.warning("save_message /vc échoué: %s", exc)
 
     if test_mode:
-        # MODE TEST : on affiche le raisonnement complet mais on n'envoie aucun
-        # email et on n'écrit rien dans le track-record (compteurs inchangés).
+        # TEST MODE: we display the full reasoning but send no
+        # email and write nothing to the track record (counters unchanged).
         rapport = result.rapport_detaille or s["no_reasoning"]
-        # Tronque proprement avec un marqueur ; _reply plafonne ensuite à 4000.
+        # Cleanly truncates with a marker; _reply then caps at 4000.
         limit = 3900
         if len(rapport) > limit:
             rapport = rapport[:limit].rstrip() + s["test_truncated"]
         await _reply(message, s["test_reasoning"] + rapport)
-        # Proof engine (#2) — le juge adverse audite l'analyse sur les MÊMES faits
-        # on-chain. Mode test admin uniquement : aucun coût/latence ajouté au flux
-        # client, c'est un outil de contrôle qualité pour l'opérateur.
+        # Proof engine (#2) — the adversarial judge audits the analysis on the SAME
+        # on-chain facts. Admin test mode only: no cost/latency added to the
+        # client flow, this is a quality-control tool for the operator.
         try:
             from aria_core.skills.vc_judge import judge_analysis
 
             verdict = await judge_analysis(result, ctx, lang=lang)
             await _reply(message, _format_judge_verdict(verdict, lang=lang))
-        except Exception as exc:  # noqa: BLE001 — l'audit ne doit jamais casser le mode test
+        except Exception as exc:  # noqa: BLE001 — the audit must never break test mode
             logger.warning("proof engine (juge) échoué: %s", exc)
         await record_operator_vc(result, prediction_id=None, telegram_summary=order_text)
         try:
             await queue_video_candidate(result)
-        except Exception as exc:  # noqa: BLE001 — capture vidéo best-effort, jamais bloquante
+        except Exception as exc:  # noqa: BLE001 — best-effort video capture, never blocking
             logger.warning("vc video snapshot (test mode) échoué: %s", exc)
         await _reply(message, s["test_footer"])
         return
 
     tier = (os.environ.get("ARIA_REPORT_TIER") or "premium").strip().lower() or "premium"
 
-    # Auto-log de la prédiction (shadow) — construit le track record de pertinence.
+    # Auto-log of the (shadow) prediction — builds the relevance track record.
     generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
     ref_id, _ = report_integrity(result, generated_at=generated_at)
     report_number = None
@@ -2677,13 +2677,13 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
         await record_operator_vc(result, prediction_id=pred_id, telegram_summary=order_text)
         try:
             await queue_video_candidate(result)
-        except Exception as exc:  # noqa: BLE001 — capture vidéo best-effort, jamais bloquante
+        except Exception as exc:  # noqa: BLE001 — best-effort video capture, never blocking
             logger.warning("vc video snapshot échoué: %s", exc)
         await _reply(message, f"🗃️ Prédiction #{pred_id} enregistrée. Clôture plus tard : /vcresult {pred_id} <pnl%> [note].")
-    except Exception as exc:  # noqa: BLE001 — le log ne doit jamais casser l'analyse
+    except Exception as exc:  # noqa: BLE001 — the log must never break the analysis
         logger.warning("vc auto-log échoué: %s", exc)
 
-    # Rapport détaillé par email (sous kill-switch, dégradation sûre si SMTP absent).
+    # Detailed report by email (under kill-switch, safe degradation if SMTP is absent).
     email_ok, email_error = await send_vc_report(
         result,
         generated_at=generated_at,
@@ -2700,7 +2700,7 @@ async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang:
 
 
 async def _handle_vcresult(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/vcresult <id> <pnl%> [note] — attribue un résultat réel à une prédiction VC."""
+    """/vcresult <id> <pnl%> [note] — assigns a real outcome to a VC prediction."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2743,7 +2743,7 @@ async def _handle_vcresult(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def _handle_langue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/langue [fr|en] — langue de sortie des analyses VC (mémorisée). Sans argument : affiche l'actuelle."""
+    """/langue [fr|en] — output language for VC analyses (remembered). No argument: shows the current one."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2775,7 +2775,7 @@ async def _handle_langue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/track — mesure de pertinence : hit-rate, P&L moyen, calibration."""
+    """/track — relevance measure: hit-rate, average P&L, calibration."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2788,11 +2788,11 @@ async def _handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def _handle_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/watchlist [n] — checklist des contrats qu'ARIA suit de près : le pool screené
-    classé par score composite (sécurité + liquidité + concentration + verdict).
+    """/watchlist [n] — checklist of the contracts ARIA is closely watching: the screened
+    pool ranked by composite score (security + liquidity + concentration + verdict).
 
-    Priorité de lecture, jamais un ordre — pour voir CE sur quoi ARIA garde l'œil
-    avant l'analyse VC approfondie (/vc <adresse>)."""
+    Reading priority, never an order — to see WHAT ARIA is keeping an eye on
+    before the in-depth VC analysis (/vc <address>)."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2812,9 +2812,9 @@ async def _handle_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def _handle_cycles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/cycles — les 3 derniers cycles Bitcoin (halving à halving) : accumulation,
-    hausse, distribution, baisse, chiffres réels + lecture qualitative. Contexte macro
-    long terme, jamais un signal d'achat/vente."""
+    """/cycles — the last 3 Bitcoin cycles (halving to halving): accumulation,
+    rise, distribution, decline, real figures + qualitative reading. Long-term
+    macro context, never a buy/sell signal."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2829,10 +2829,10 @@ async def _handle_cycles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_readiness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/feuvert — scorecard objectif contre les 8 cases pré-engagées de
-    docs/protocole-argent-reel.md avant tout argent réel. Jamais un jugement
-    subjectif : calculé depuis le vrai journal vc_predictions. Admin-only —
-    l'état du feu vert argent réel n'a rien à faire en surface publique."""
+    """/feuvert — objective scorecard against the 8 pre-committed cases in
+    docs/protocole-argent-reel.md before any real money. Never a subjective
+    judgment: computed from the real vc_predictions journal. Admin-only —
+    the real-money green-light state has no business on the public surface."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2849,9 +2849,9 @@ async def _handle_readiness(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def _handle_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/sentiment — dernière lecture de sentiment (RSI/Bollinger/momentum/retracement,
-    vocabulaire Wall St Cheat Sheet) des paires principales. Lit ce que le cycle
-    heartbeat `market_sentiment_cycle` a déjà calculé — ne recalcule rien ici."""
+    """/sentiment — latest sentiment reading (RSI/Bollinger/momentum/retracement,
+    Wall St Cheat Sheet vocabulary) of the main pairs. Reads what the
+    `market_sentiment_cycle` heartbeat cycle has already computed — recomputes nothing here."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2865,10 +2865,10 @@ async def _handle_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def _handle_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/alerts — dernier digest crypto-Twitter (Otto AI, x402), complémentaire à
-    /sentiment (chiffres purs) avec un signal QUALITATIF (chatter de marché récent).
-    Lit ce que le cycle heartbeat `market_alerts_cycle` a déjà calculé -- ne recalcule
-    rien ici (jamais un paiement x402 déclenché par une simple lecture Telegram)."""
+    """/alerts — latest crypto-Twitter digest (Otto AI, x402), complementary to
+    /sentiment (pure figures) with a QUALITATIVE signal (recent market chatter).
+    Reads what the `market_alerts_cycle` heartbeat cycle has already computed -- recomputes
+    nothing here (never an x402 payment triggered by a mere Telegram read)."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2882,7 +2882,7 @@ async def _handle_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/these <adresse> <BUY|WATCH|SELL|AVOID> <thèse...> — journalise un pari (aucune exécution)."""
+    """/these <address> <BUY|WATCH|SELL|AVOID> <thesis...> — logs a bet (no execution)."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2928,7 +2928,7 @@ async def _handle_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_issue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/issue <id> <résultat/P&L> | <leçon> — clôture une thèse et attribue son issue."""
+    """/issue <id> <outcome/P&L> | <lesson> — closes a thesis and assigns its outcome."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -2985,26 +2985,26 @@ _DIRECTIVE_STATUS_ICON = {
 
 
 async def _handle_aria_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/canal — surface de contrôle du canal ARIA -> Claude Code (admin, pilote).
+    """/canal — control surface for the ARIA -> Claude Code channel (admin, pilot).
 
-    Nom délibérément DISTINCT de `/directive` : une ancienne commande opérateur
-    portait ce nom (règle permanente -> ARIA via `directives.append_directive`) ;
-    une collision de nom de FONCTION Python (même nom `_handle_directive` que ce
-    pilote) l'a écrasée silencieusement une fois (10/07). Cette ancienne commande a
-    depuis été retirée (jamais utilisée en pratique, doublon du vrai flux : demander
-    à Claude Code d'éditer `directives.md` directement, revu et testé). Garder `/canal`
-    sous un nom distinct reste la bonne pratique anti-collision, même sans doublon actif.
+    Name deliberately DISTINCT from `/directive`: an old operator command
+    used to bear that name (standing rule -> ARIA via `directives.append_directive`);
+    a Python FUNCTION name collision (same name `_handle_directive` as this
+    pilot) silently overwrote it once (10/07). This old command has
+    since been removed (never used in practice, a duplicate of the real flow: asking
+    Claude Code to edit `directives.md` directly, reviewed and tested). Keeping `/canal`
+    under a distinct name remains good anti-collision practice, even with no active duplicate.
 
-    Sous-commandes :
-      /canal list                       — la file (en cours + traitées)
-      /canal log                        — le journal d'audit (append-only)
-      /canal propose <cat> <titre>      — dépose une directive (cat: repo_hygiene|docs|backlog)
-      /canal halt [raison]              — coupe-circuit (fige le canal)
-      /canal resume                     — lève le coupe-circuit
+    Subcommands:
+      /canal list                       — the queue (in progress + processed)
+      /canal log                        — the audit log (append-only)
+      /canal propose <cat> <title>      — files a directive (cat: repo_hygiene|docs|backlog)
+      /canal halt [reason]              — circuit breaker (freezes the channel)
+      /canal resume                     — lifts the circuit breaker
 
-    Ne DÉCLENCHE aucune exécution : la file est lue et traitée par une session Claude
-    Code côté VPS. Le canal reste gaté OFF (ARIA_DIRECTIVE_CHANNEL_ENABLED) tant qu'il
-    n'est pas explicitement activé.
+    Does NOT trigger any execution: the queue is read and processed by a Claude
+    Code session on the VPS. The channel stays gated OFF (ARIA_DIRECTIVE_CHANNEL_ENABLED) until
+    explicitly enabled.
     """
     if not await _admin_check_reply(update):
         return
@@ -3072,7 +3072,7 @@ async def _handle_aria_channel(update: Update, context: ContextTypes.DEFAULT_TYP
         await _reply(message, "\n".join(lines))
         return
 
-    # défaut : list
+    # default: list
     directives = await ad.list_directives(limit=30)
     halted = "🛑 FIGÉ" if ad.is_halted() else "actif"
     gate = "ON" if ad.channel_enabled() else "OFF"
@@ -3089,7 +3089,7 @@ async def _handle_aria_channel(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def _handle_theses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/theses — liste les thèses encore ouvertes (résultat non attribué)."""
+    """/theses — lists the theses still open (no outcome assigned yet)."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -3110,7 +3110,7 @@ async def _handle_theses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/stop — kill-switch : pause immédiate de toutes les actions sortantes (propriétaire uniquement)."""
+    """/stop — kill-switch: immediate pause of all outgoing actions (owner only)."""
     if not await _owner_only(update):
         return
     user = update.effective_user
@@ -3124,7 +3124,7 @@ async def _handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/resume — lève le kill-switch (propriétaire uniquement). Alias explicite de /start en pause."""
+    """/resume — lifts the kill-switch (owner only). Explicit alias of /start while paused."""
     if not await _owner_only(update):
         return
     if not outgoing_pause.is_paused():
@@ -3136,19 +3136,19 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/riskresume — lève le coupe-circuit dur du portefeuille paper (drawdown -20%
-    ou 5 pertes consécutives, propriétaire uniquement).
+    """/riskresume — lifts the paper portfolio's hard circuit breaker (-20% drawdown
+    or 5 consecutive losses, owner only).
 
-    20/07, revue croisée externe (trouvaille confirmée par lecture du code) : sans
-    cette commande, ``risk_guard.resume_new_entries()`` n'était appelable QUE par le
-    reset hebdomadaire automatique (``run_weekly_reset``, seul appelant dans tout le
-    code) -- si le coupe-circuit s'arme un mardi, le bot restait bloqué en nouvelles
-    entrées jusqu'au reset suivant, sans aucun moyen d'intervenir. Le docstring de
-    ``resume_new_entries`` prévoyait déjà une "action humaine explicite (ex. commande
-    opérateur)" -- cette commande ferme l'écart entre l'intention documentée et la
-    surface réellement exposée. Même gate que /stop /resume (kill-switch) : le
-    coupe-circuit de risque protège aussi du capital (fictif ici), même bar de
-    confiance."""
+    20/07, external cross-review (finding confirmed by reading the code): without
+    this command, ``risk_guard.resume_new_entries()`` was only callable by the
+    automatic weekly reset (``run_weekly_reset``, the only caller in the whole
+    codebase) -- if the circuit breaker arms on a Tuesday, the bot stayed blocked on new
+    entries until the next reset, with no way to intervene. The docstring of
+    ``resume_new_entries`` already anticipated an "explicit human action (e.g. an operator
+    command)" -- this command closes the gap between the documented intent and the
+    actually exposed surface. Same gate as /stop /resume (kill-switch): the
+    risk circuit breaker also protects capital (fictional here), same trust
+    bar."""
     if not await _owner_only(update):
         return
     status = risk_guard.new_entry_block_status()
@@ -3205,13 +3205,13 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("topwallets", _handle_topwallets))
     app.add_handler(CommandHandler("github", _handle_github))
     app.add_handler(CommandHandler("canal", _handle_aria_channel))
-    # 18/07 -- audit systématique (grep _handle_* vs add_handler) : ces 7 commandes
-    # étaient entièrement écrites (backend réel, admin-gated) mais JAMAIS enregistrées
-    # -- inaccessibles depuis toujours malgré une doc CLAUDE.md qui les traite comme
-    # actives (ex. "/x profile sync" mentionné à plusieurs reprises). /learn était déjà
-    # noté orphelin lors de l'audit #206 (18/07) sans jamais avoir été câblé depuis.
-    # (/qi et /level, initialement câblés le même jour, retirés le 19/07 avec tout le
-    # reste du système "Indice ARIA" -- décision opérateur explicite, plus utile.)
+    # 18/07 -- systematic audit (grep _handle_* vs add_handler): these 7 commands
+    # were fully written (real backend, admin-gated) but NEVER registered
+    # -- inaccessible all along despite CLAUDE.md docs treating them as
+    # active (e.g. "/x profile sync" mentioned repeatedly). /learn was already
+    # flagged as orphaned in audit #206 (18/07) without ever being wired since.
+    # (/qi and /level, initially wired the same day, removed 19/07 along with the
+    # rest of the "ARIA Index" system -- explicit operator decision, no longer useful.)
     app.add_handler(CommandHandler("x", _handle_x))
     app.add_handler(CommandHandler("avatar", _handle_avatar))
     app.add_handler(CommandHandler("repertoire", _handle_repertoire))
@@ -3224,19 +3224,19 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(_handle_callback))
 
     # Photos (avatar upload OR vision analysis, dispatched by caption — cf. _handle_photo).
-    # Avant ce correctif, AUCUN handler photo n'était enregistré : toute image envoyée à
-    # ARIA était ignorée en silence.
+    # Before this fix, NO photo handler was registered: any image sent to
+    # ARIA was silently ignored.
     app.add_handler(MessageHandler(filters.PHOTO, _handle_photo))
 
     # All other interactions via plain text (no slash commands)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
 
 
-# Garde-fou anti-boucle : Telegram redélivre le MÊME update (même update_id)
-# tant qu'il ne reçoit pas un 200 rapide. On mémorise les derniers update_id
-# traités pour ne jamais relancer deux fois la même analyse, même en cas de
-# redélivrance (backlog webhook, retries). Le check-and-set est synchrone donc
-# atomique vis-à-vis de la boucle asyncio (aucun await entre lecture et écriture).
+# Anti-loop guard: Telegram redelivers the SAME update (same update_id)
+# as long as it doesn't receive a fast 200. We remember the last update_ids
+# processed to never rerun the same analysis twice, even on
+# redelivery (webhook backlog, retries). The check-and-set is synchronous, so
+# atomic with respect to the asyncio loop (no await between read and write).
 _seen_update_ids: "OrderedDict[int, None]" = OrderedDict()
 _SEEN_UPDATE_CAP = 1024
 
@@ -3268,7 +3268,7 @@ async def process_webhook_update(payload: dict) -> None:
             from aria_core.relay_chat import log_message
 
             await log_message("operator", text)
-    except Exception:  # noqa: BLE001 — le relais ne doit jamais impacter le traitement réel
+    except Exception:  # noqa: BLE001 — the relay must never impact real processing
         pass
 
     update = Update.de_json(payload, _bot_app.bot)

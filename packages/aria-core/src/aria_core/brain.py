@@ -79,11 +79,11 @@ _COMMUNITY_SUGGESTION_RE = re.compile(
 
 
 def is_community_suggestion(message: str) -> bool:
-    """Visiteur public (site) proposant une idée -> accusé de réception chaleureux.
+    """Public visitor (site) suggesting an idea -> warm acknowledgement.
 
-    Purement un classifieur texte, aucune action externe : cf. community_feedback.py
-    pour le vrai traitement (score, notification opérateur, jamais de délégation
-    de code à un tiers -- historique de l'incident du 10/07 dans capability_gap.py).
+    Purely a text classifier, no external action: see community_feedback.py
+    for the actual handling (scoring, operator notification, never delegating
+    code to a third party -- history of the 10/07 incident in capability_gap.py).
     """
     text = (message or "").strip()
     if len(text) < 12:
@@ -179,7 +179,7 @@ INTENT_PATTERNS: list[tuple[SkillName, list[str]]] = [
 
 
 def _is_strategic_conversation(message: str) -> bool:
-    """Questions d'avis / gouvernance — pas de skill catalogue (répertoire, sandbox create)."""
+    """Opinion / governance questions — no skill catalogue (repertoire, sandbox create)."""
     from aria_core.tweet_compose_workflow import wants_role_coaching
 
     if wants_role_coaching(message):
@@ -197,10 +197,10 @@ def _is_strategic_conversation(message: str) -> bool:
     if re.search(r"comment\s+(?:as[- ]?tu|astu|tu\s+as)\b", lower):
         return True
     opinion = re.search(
-        # \b sur penses?/avis (09/07, audit fuzz) : sans borne, "penses" matchait en
-        # sous-chaîne dans "dépenses" -- "les dépenses de développement du repo" (question
-        # opérationnelle légitime) tombait à tort en conversation stratégique/gouvernance
-        # (detect_intent renvoie None -> tout le catalogue de skills est sauté).
+        # \b around penses?/avis (09/07, fuzz audit): without a boundary, "penses" matched
+        # as a substring in "dépenses" -- "the repo's development expenses" (a legitimate
+        # operational question) was wrongly falling into strategic/governance conversation
+        # (detect_intent returns None -> the whole skill catalogue gets skipped).
         r"souhait|\bveu[xt]\b|voudr|\bpenses?\b|\bavis\b|ton avis|what do you think|should (i|we|you)|"
         r"intéressant|interessant|préfères|prefer",
         lower,
@@ -210,14 +210,14 @@ def _is_strategic_conversation(message: str) -> bool:
 
 
 def _routing_message(message: str) -> str:
-    """Pont Cursor / suite KART — router sur le tour actuel, pas tout le contexte.
+    """Cursor bridge / KART follow-up — route on the current turn, not the whole context.
 
-    Le nom reconnu dans les préfixes ("<nom> confirme :", "Message actuel de <nom>:")
-    vient de ``settings.aria_operator_display_name`` (#114 — jamais le nom réel en dur
-    dans le code, seulement dans le ``.env`` réel du VPS, non commité). Défaut générique
-    "Operator" si non configuré : ne matche simplement rien de spécial, dégrade sans
-    casser (retourne le message tel quel, comme pour tout texte qui ne matche aucun
-    des deux préfixes)."""
+    The name recognized in the prefixes ("<name> confirms:", "Current message from <name>:")
+    comes from ``settings.aria_operator_display_name`` (#114 — never the real name hardcoded
+    in the code, only in the real VPS ``.env``, not committed). Generic default
+    "Operator" if not configured: simply matches nothing special, degrades without
+    breaking (returns the message as-is, like any text that matches neither
+    of the two prefixes)."""
     from aria_core.runtime import settings
 
     name = re.escape((getattr(settings, "aria_operator_display_name", "") or "Operator").strip())
@@ -239,12 +239,12 @@ def _routing_message(message: str) -> str:
 
 
 def _acp_intent_enabled() -> bool:
-    """L'ACP (service marketplace) a été abandonné — marché en sommeil (cf. CLAUDE.md).
+    """ACP (service marketplace) was abandoned — dormant market (see CLAUDE.md).
 
-    On ne détourne donc PLUS la conversation libre vers l'ACP par défaut : c'était la cause
-    du « elle me répond marketplace ACP » en plein milieu d'une discussion. Le code ACP et
-    ses tests restent intacts et réactivables via ARIA_ACP_ENABLED=1 (aucune suppression,
-    un simple garde d'intention). Rien d'un garde-fou financier ici.
+    Free conversation is therefore no longer diverted to ACP by default: that was
+    the cause of "she answers marketplace ACP" in the middle of a discussion. The ACP
+    code and its tests remain intact and reactivatable via ARIA_ACP_ENABLED=1 (no
+    deletion, just an intent gate). Not a financial safeguard here.
     """
     import os
 
@@ -308,8 +308,8 @@ class AriaBrain:
             )
             fallback = get_chat_fallback_state()
             if fallback["used"]:
-                # #135 : au moins un appel LLM de ce tour est passé par la route de secours
-                # (Spark down) -- l'opérateur seul doit le savoir, jamais une surface publique.
+                # #135: at least one LLM call this turn went through the fallback route
+                # (Spark down) -- only the operator should know this, never a public surface.
                 response.data["llm_fallback_used"] = True
                 response.data["llm_fallback_provider"] = fallback["provider"]
             return response
@@ -330,16 +330,16 @@ class AriaBrain:
         route_msg = _routing_message(user_message)
         await repertoire_db.save_message("user", user_message, visitor_id=vid)
 
-        # Ancrage anti-confabulation sur la NATURE/MÉTHODE d'ARIA -- doit gagner sur TOUT
-        # autre interceptor précoce (vc_followup, self-maintenance, etc.), sinon la garantie
-        # #110 (zéro confabulation sur ces deux sujets, public ET opérateur) est illusoire dès
-        # qu'un routage antérieur matche en premier. Incident réel (11/07, post-déploiement
-        # 32e6b2f5) : "comment tu analyses un token, tu utilises de l'IA générative ?" a été
-        # avalée par `vc_session_context.is_vc_followup_question` (son regex générique matche
-        # sur "comment" + "token") AVANT que `_general_response` -- où vivait le fix #110 --
-        # ne soit jamais atteint, tant qu'un `/vc` récent (TTL 4h) traînait en mémoire courte.
-        # Résultat vécu : vrai appel LLM (10923 tokens), confabulation de nouveau possible.
-        # Placé ici, tout en haut de `process()`, avant TOUT autre routage.
+        # Anti-confabulation anchor on ARIA's NATURE/METHOD -- must win over ANY
+        # other early interceptor (vc_followup, self-maintenance, etc.), otherwise guarantee
+        # #110 (zero confabulation on these two topics, public AND operator) is illusory as
+        # soon as an earlier routing matches first. Real incident (11/07, post-deployment
+        # 32e6b2f5): "how do you analyze a token, do you use generative AI?" was
+        # swallowed by `vc_session_context.is_vc_followup_question` (its generic regex matches
+        # on "comment" + "token") BEFORE `_general_response` -- where fix #110 lived --
+        # was ever reached, as long as a recent `/vc` (TTL 4h) lingered in short-term memory.
+        # Result: a real LLM call (10923 tokens), confabulation possible again.
+        # Placed here, at the very top of `process()`, before ANY other routing.
         from aria_core.grounding import (
             analysis_methodology_reply,
             aria_brain_status_reply,
@@ -561,7 +561,7 @@ class AriaBrain:
                 pass  # fall through, do not treat as injected claim
             elif is_injected_factual_claim(route_msg):
                 # Operator pasted a news-like claim (price, catalog, billing, PRs...).
-                # We now VERIFY instead of blindly refusing — determine vrai/faux with tools, reply like human chat.
+                # We now VERIFY instead of blindly refusing — determine true/false with tools, reply like human chat.
                 if wants_claim_verification(route_msg) or True:  # always dig for operator so ARIA can answer these
                     claim_reply, vdata = await verify_external_claim(route_msg, lang=lang_key)
                     await repertoire_db.save_message("agent", claim_reply, visitor_id=vid)
@@ -722,7 +722,7 @@ class AriaBrain:
 
         elif intent == SkillName.INGEST_REPO:
             skill_output, data = await execute_ingest_repo(user_message, lang)
-            actions.append(f"Ingest repo — {data.get('files_count', 0)} fichiers")
+            actions.append(f"Ingest repo — {data.get('files_count', 0)} files")
             skill = SkillName.INGEST_REPO
 
         if skill_output is not None:
@@ -862,7 +862,7 @@ class AriaBrain:
         *,
         visitor_id: str = "",
     ) -> ChatResponse | None:
-        """Répond aux questions de suivi sur le dernier /vc AVANT tout routage skill/web."""
+        """Answers follow-up questions on the last /vc BEFORE any skill/web routing."""
         from aria_core.llm import is_llm_configured
         from aria_core.skills.vc_session_context import (
             get_followup_context_block,
@@ -901,15 +901,15 @@ class AriaBrain:
         *,
         visitor_id: str = "",
     ) -> ChatResponse | None:
-        """Répond aux questions en langage naturel sur l'état d'un trade/du portefeuille
-        (17/07) -- même patron que ``_try_vc_followup_response``, appelé AVANT tout
-        routage skill/web. Incident réel (16/07) : une telle question posée juste après
-        une perte réelle est tombée dans la conversation LLM générale sans accès au
-        registre -- ARIA a honnêtement dit ne rien voir plutôt que d'inventer, mais
-        l'opérateur restait sans réponse. Réutilise
-        ``paper_ledger_report.build_trade_status_context`` tel quel (aucune requête
-        dupliquée) -- admin-only par construction (appelé uniquement côté ``not public``,
-        même doctrine que ``/feedback``/``/ledger``)."""
+        """Answers natural-language questions about a trade's/portfolio's status
+        (17/07) -- same pattern as ``_try_vc_followup_response``, called BEFORE any
+        skill/web routing. Real incident (16/07): such a question asked right after
+        a real loss fell into the general LLM conversation without access to the
+        ledger -- ARIA honestly said it saw nothing rather than inventing, but
+        the operator was left without an answer. Reuses
+        ``paper_ledger_report.build_trade_status_context`` as-is (no duplicated
+        query) -- admin-only by construction (called only on the ``not public`` side,
+        same doctrine as ``/feedback``/``/ledger``)."""
         from aria_core.grounding import is_trade_status_question
         from aria_core.llm import is_llm_configured
 
@@ -921,7 +921,7 @@ class AriaBrain:
 
         try:
             ledger_block = await build_trade_status_context()
-        except Exception:  # noqa: BLE001 -- une panne de lecture registre ne casse jamais la conversation
+        except Exception:  # noqa: BLE001 -- a ledger read failure never breaks the conversation
             return None
         llm_reply = await self._llm_response(
             user_message,
@@ -1054,11 +1054,11 @@ class AriaBrain:
                         wants_more_detail_followup,
                     )
 
-                    # #144 : ces checks utilisent des noms importés juste au-dessus --
-                    # doivent rester DANS ce else (sinon un message contenant "ton",
-                    # "sérieux(se)", "personnalité" ou "humour" comme mot isolé prend la
-                    # branche if/pass ci-dessus sans jamais importer ces noms, et le bloc
-                    # ci-dessous levait UnboundLocalError -- incident réel #144, 12/07).
+                    # #144: these checks use names imported just above --
+                    # they must stay INSIDE this else (otherwise a message containing "ton",
+                    # "sérieux(se)", "personnalité" or "humour" as an isolated word takes the
+                    # if/pass branch above without ever importing these names, and the block
+                    # below raised UnboundLocalError -- real incident #144, 12/07).
                     if wants_more_detail_followup(route) and is_llm_configured():
                         llm_reply = await self._llm_response(
                             "Développe ta réponse précédente avec plus d'arguments concrets.",
@@ -1095,13 +1095,13 @@ class AriaBrain:
                             None,
                         )
 
-        # Ancrage anti-confabulation sur la NATURE/MÉTHODE d'ARIA — s'applique à public ET
-        # opérateur (contrairement au bloc ci-dessus). Incident réel 11/07 : ces deux
-        # catégories tombaient dans la conversation fondateur non ancrée (grounded_llm_identity
-        # n'est injecté que si grounded_for_audience(public), jamais côté opérateur) et ARIA a
-        # confabulé (« Opus 4.8 » affirmé comme moteur standard ; méthode d'analyse générique
-        # sans citer un seul vrai outil). Réponse déterministe, aucun appel LLM : élimine le
-        # risque de confabulation sur ces deux sujets précis, quel que soit l'interlocuteur.
+        # Anti-confabulation anchor on ARIA's NATURE/METHOD — applies to BOTH public AND
+        # operator (unlike the block above). Real incident 11/07: these two
+        # categories were falling into the ungrounded founder conversation (grounded_llm_identity
+        # is only injected if grounded_for_audience(public), never on the operator side) and ARIA
+        # confabulated ("Opus 4.8" claimed as the standard engine; generic analysis method
+        # without citing a single real tool). Deterministic reply, no LLM call: eliminates the
+        # risk of confabulation on these two specific topics, regardless of who's asking.
         if is_llm_identity_question(route):
             return (
                 llm_identity_reply(lang_key),
@@ -1275,12 +1275,12 @@ class AriaBrain:
                     None,
                 )
 
-        # Chemin calibré/web (Tavily/DDG via web_first_answer) : pour les visiteurs publics
-        # sur toute question factuelle, ET pour l'opérateur sur les questions d'ACTU
-        # (news/prix/actualité) OU une demande EXPLICITE de recherche/vérification web (ex.
-        # "vérifie sur le web...") -- sinon la conversation fondateur (public=False) ne
-        # déclenchait JAMAIS la recherche web et ARIA répondait de mémoire. Les deux
-        # fonctions excluent déjà les sujets perso opérateur (impôts, admin) et produits ARIA.
+        # Calibrated/web path (Tavily/DDG via web_first_answer): for public visitors
+        # on any factual question, AND for the operator on CURRENT-EVENTS questions
+        # (news/price/current affairs) OR an EXPLICIT request for web search/verification
+        # (e.g. "check on the web...") -- otherwise the founder conversation (public=False)
+        # NEVER triggered web search and ARIA answered from memory. Both
+        # functions already exclude the operator's personal topics (taxes, admin) and ARIA products.
         if (
             not _is_strategic_conversation(route)
             and (

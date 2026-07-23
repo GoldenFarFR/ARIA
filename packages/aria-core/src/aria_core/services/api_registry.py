@@ -114,7 +114,7 @@ def _static_entries() -> list[ApiEntry]:
     """Entries with no key required (`configured=True` by design) or whose
     quota is only known via a DOCUMENTED limit (never a live number)."""
     return [
-        # ── Données marché / on-chain ──────────────────────────────────────
+        # ── Market data / on-chain ──────────────────────────────────────
         ApiEntry("DexScreener", "Données marché", "https://api.dexscreener.com", True, note="sans clé"),
         ApiEntry(
             "GeckoTerminal", "Données marché", "https://api.geckoterminal.com",
@@ -158,15 +158,15 @@ def _static_entries() -> list[ApiEntry]:
             else "WEBACY_API_KEY absente — client prêt (services/webacy.py), en attente d'une clé Demo pour test réel avant tout branchement",
         ),
 
-        # ── Web / recherche ─────────────────────────────────────────────────
+        # ── Web / search ─────────────────────────────────────────────────
         ApiEntry("Tavily (recherche web)", "Web", "https://api.tavily.com", _env_present("TAVILY_API_KEY")),
 
-        # ── Réseaux sociaux ──────────────────────────────────────────────────
+        # ── Social networks ──────────────────────────────────────────────────
         ApiEntry("X (Twitter) API", "Social", "https://api.x.com", _env_present("X_API_KEY", "X_API_SECRET", "X_BEARER_TOKEN", "X_ACCESS_TOKEN")),
         ApiEntry("TikTok Content API", "Social", "https://open.tiktokapis.com", False, note="aucun compte créé — seam dormant, décision opérateur 12/07"),
         ApiEntry("Google Translate", "Utilitaire", "https://translate.googleapis.com", True, note="sans clé (endpoint public)"),
 
-        # ── Infra / paiements ────────────────────────────────────────────────
+        # ── Infra / payments ────────────────────────────────────────────────
         ApiEntry("Telegram Bot API", "Infra", "https://api.telegram.org", _env_present("TELEGRAM_BOT_TOKEN")),
         ApiEntry("Coinbase CDP (agent wallet)", "Paiements", "https://api.cdp.coinbase.com", _env_present("COINBASE_CDP_API_KEY_PRIVATE_KEY")),
         ApiEntry("Cybercentry", "Paiements", "https://api.cybercentry.co.uk", True, note="pay-per-call via x402 — voir le budget hebdo x402 ci-dessous"),

@@ -48,9 +48,9 @@ def is_x_reading_active() -> bool:
     one read-consuming gate is on (curiosity feed, auto-reply, mentions learn,
     diligence de conviction).
 
-    Bearer presence alone is NOT enough — reading can be (and, per opérateur
+    Bearer presence alone is NOT enough — reading can be (and, per operator
     decision 11/07, currently is) deliberately cut for cost control while the
-    bearer token stays configured. Never do a live API call here (cost/sobriété) —
+    bearer token stays configured. Never do a live API call here (cost/sobriety) —
     derive the real state from the same gates the heartbeat/engagement cycles use.
     """
     if not is_x_read_configured():
@@ -130,7 +130,7 @@ def _post_tweet_sync(
 
     from aria_core.x_text import fit_x_tweet
 
-    # Backstop kill-switch : aucun chemin (même futur) ne publie sur X pendant une pause.
+    # Backstop kill-switch: no path (even future) publishes to X during a pause.
     if outgoing_pause.is_paused():
         raise RuntimeError(outgoing_pause.blocked_notice("La publication sur X"))
     body = fit_x_tweet(text.strip())
@@ -279,7 +279,7 @@ def _update_profile_fields_sync(
 
 
 async def fetch_x_profile_fields() -> dict[str, str]:
-    """Champs texte profil @Aria_ZHC (OAuth)."""
+    """Profile text fields for @Aria_ZHC (OAuth)."""
     if not is_x_post_configured():
         return {}
     me = await asyncio.to_thread(_fetch_me_profile_sync)
@@ -293,7 +293,7 @@ async def fetch_x_profile_fields() -> dict[str, str]:
 
 
 async def apply_x_profile_fields(profile: dict[str, str]) -> bool:
-    """Applique nom, bio, site, lieu sur @Aria_ZHC."""
+    """Applies name, bio, site, location on @Aria_ZHC."""
     if outgoing_pause.is_paused():
         logger.info("X profile text sync bloqué — ARIA en pause (%s)", outgoing_pause.since_label())
         return False
@@ -340,7 +340,7 @@ def _update_profile_banner_sync(image_path: Path) -> dict[str, Any]:
 
 
 async def get_profile_banner_status() -> dict[str, Any]:
-    """Etat banniere @Aria_ZHC (OAuth)."""
+    """Banner status for @Aria_ZHC (OAuth)."""
     if not is_x_post_configured():
         return {"has_banner": False, "banner_url": None, "username": None}
     try:
@@ -357,7 +357,7 @@ async def get_profile_banner_status() -> dict[str, Any]:
 
 
 async def apply_profile_banner(image_path: Path) -> bool:
-    """Sync banniere header @Aria_ZHC (OAuth 1.0a, Read+Write)."""
+    """Sync header banner for @Aria_ZHC (OAuth 1.0a, Read+Write)."""
     if outgoing_pause.is_paused():
         logger.info("X profile banner sync bloqué — ARIA en pause (%s)", outgoing_pause.since_label())
         return False
@@ -446,15 +446,15 @@ async def fetch_curiosity_feed() -> list[dict]:
 
 
 async def search_recent_tweets(query: str, *, max_results: int = 10) -> list[dict]:
-    """Recherche X par requête libre (ticker, adresse de contrat, mot-clé) --
-    ``GET /tweets/search/recent`` (X API v2, fenêtre glissante 7 jours). Utilisée par
-    ``conviction_research.py`` (19/07, demande opérateur explicite) pour voir le buzz
-    récent sur un token avant achat -- distincte de ``fetch_curiosity_feed`` (comptes
-    fixes suivis pour la curiosité générale d'ARIA, pas une recherche par sujet).
+    """X search by free-form query (ticker, contract address, keyword) --
+    ``GET /tweets/search/recent`` (X API v2, 7-day sliding window). Used by
+    ``conviction_research.py`` (19/07, explicit operator request) to see recent
+    buzz on a token before a purchase -- distinct from ``fetch_curiosity_feed`` (fixed
+    accounts followed for ARIA's general curiosity, not a topic search).
 
-    Dôme standard : requête vide/bearer absent -> liste vide sans appel réseau ; toute
-    panne HTTP dégrade en liste vide (jamais une exception remontée à l'appelant, jamais
-    un tweet inventé)."""
+    Standard dome: empty query/missing bearer -> empty list without a network call; any
+    HTTP failure degrades to an empty list (never an exception surfaced to the caller, never
+    a fabricated tweet)."""
     q = (query or "").strip()
     if not q or not is_x_read_configured():
         return []
@@ -493,10 +493,10 @@ async def search_recent_tweets(query: str, *, max_results: int = 10) -> list[dic
 
 
 async def fetch_user_recent_tweets(username: str, *, max_results: int = 10) -> list[dict]:
-    """Timeline récente d'un compte X par son handle -- réutilisé pour évaluer la
-    cadence de publication d'un projet (actif vs quasi-mort, 19/07) via
-    ``conviction_research.py``. Même dôme que ``search_recent_tweets`` : dégrade en
-    liste vide sur toute panne, jamais une exception ni une donnée inventée."""
+    """Recent timeline of an X account by its handle -- reused to evaluate a
+    project's publication cadence (active vs. near-dead, 19/07) via
+    ``conviction_research.py``. Same dome as ``search_recent_tweets``: degrades to an
+    empty list on any failure, never an exception or fabricated data."""
     handle = (username or "").lstrip("@").strip()
     if not handle or not is_x_read_configured():
         return []

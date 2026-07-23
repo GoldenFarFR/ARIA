@@ -2398,13 +2398,13 @@ def format_wallet_score_card_lines(card: WalletScoreCard) -> list[str]:
         f"  Tokens analysés cette passe : {card.tokens_analyzed}/{card.tokens_found}"
         + (f" (plafond de {WEIGHTS.max_tokens_analyzed} atteint)" if card.tokens_skipped_capped else "")
     )
-    # 15/07, constat opérateur -- la thèse LLM ci-dessous reçoit déjà le cumul
-    # (`_format_card_for_prompt`) et le mentionne dans sa prose ("X/Y couverts au
-    # total"), mais la carte elle-même n'affichait jamais ce cumul -- deux chiffres
-    # différents dans le même message Telegram (ex. "50/806" dans la carte,
-    # "118/806" dans la thèse texte juste en dessous), sans savoir lequel regarder.
-    # Toujours affiché (pas seulement si plafonné) pour que le cumul soit visible
-    # dès le premier passage.
+    # 15/07, operator observation -- the LLM thesis below already receives the
+    # cumulative count (`_format_card_for_prompt`) and mentions it in its prose ("X/Y
+    # covered in total"), but the card itself never displayed this cumulative count --
+    # two different numbers in the same Telegram message (e.g. "50/806" in the card,
+    # "118/806" in the thesis text just below), with no way to know which to trust.
+    # Always displayed (not only when capped) so the cumulative count is visible
+    # from the very first pass.
     lines.append(
         f"  Couverture cumulée : {card.tokens_scanned_cumulative}/{card.tokens_found}"
         + (" (complète)" if card.full_coverage else "")

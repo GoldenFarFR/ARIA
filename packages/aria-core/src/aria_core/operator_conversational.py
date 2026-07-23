@@ -36,9 +36,9 @@ _VERIFY_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 _OPERATOR_COMMAND_RE = re.compile(
-    # \bsupprime\b/\bsupprimer\b (pas juste "supprim") : n'attrape que l'impératif/infinitif
-    # ("supprime X"), jamais le participe passé narratif ("Render a supprimé...") qui doit
-    # rester détectable comme affirmation externe collée, pas comme commande opérateur.
+    # \bsupprime\b/\bsupprimer\b (not just "supprim"): only catches the imperative/infinitive
+    # ("supprime X"), never the narrative past participle ("Render a supprimé...") which must
+    # stay detectable as a pasted external claim, not as an operator command.
     r"(?:^/|crée|créer|creer|create\s+repo|check-aria|sync-render|"
     r"deploy|worker\s+delegate|/learn|/directive|\bsupprime\b|\bsupprimer\b|"
     r"delete.*(?:workflow|offering|offre))",

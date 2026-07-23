@@ -1,30 +1,30 @@
-"""Client TikTok (Content Posting API) -- seam publisher pour `release_pipeline.publish_release`.
+"""TikTok client (Content Posting API) -- publisher seam for `release_pipeline.publish_release`.
 
-Contexte (#34) : X publie déjà (`gateway/x_twitter.py`, actif, gaté `arm_campaign`).
-TikTok reste un SEAM VIDE documenté depuis le 07/07 (`release_pipeline.publish_release`
-accepte déjà un `tiktok_publisher` injectable -- best-effort, un canal qui échoue n'annule
-jamais les autres -- mais aucun client réel n'existait derrière). Ce module pose ce
-client, à minima : structure d'auth + upload + statut, gate OFF par défaut, aucun compte
-TikTok requis pour le livrer (aucun appel réseau possible sans credentials réels).
+Context (#34): X already publishes (`gateway/x_twitter.py`, active, gated `arm_campaign`).
+TikTok remains an EMPTY SEAM documented since 07/07 (`release_pipeline.publish_release`
+already accepts an injectable `tiktok_publisher` -- best-effort, a channel that fails never
+cancels the others -- but no real client existed behind it). This module lays that
+client down, at minimum: auth structure + upload + status, gate OFF by default, no TikTok
+account required to ship it (no network call possible without real credentials).
 
-Doctrine « dôme » (identique à tavily.py/goplus.py) : throttle, backoff exponentiel sur
-429/5xx, 1 retry sur timeout puis dégradation explicite -- jamais un succès inventé.
-Credentials UNIQUEMENT depuis l'environnement (jamais en dur, jamais logués), même
-patron que `tavily_api_key()`.
+"Dome" doctrine (identical to tavily.py/goplus.py): throttle, exponential backoff on
+429/5xx, 1 retry on timeout then explicit degradation -- never a fabricated success.
+Credentials ONLY from the environment (never hardcoded, never logged), same
+pattern as `tavily_api_key()`.
 
-Pourquoi l'adaptateur `tiktok_release_publisher` reste inerte même une fois le gate
-armé : TikTok exige une VRAIE vidéo (`source_info.source=FILE_UPLOAD`) -- il n'existe
-aujourd'hui aucun pipeline de génération vidéo côté ARIA (seam distinct, non construit,
-cf. CLAUDE.md "TikTok = seam vide"). Poser un faux succès ici irait contre le principe
-"jamais une donnée/un résultat inventé" -- l'adaptateur reste donc un point d'ancrage
-honnête, prêt à appeler `TikTokClient.publish_video` le jour où un asset vidéo existe.
+Why the `tiktok_release_publisher` adapter stays inert even once the gate is
+armed: TikTok requires a REAL video (`source_info.source=FILE_UPLOAD`) -- there is
+no video-generation pipeline on ARIA's side today (separate seam, not built,
+see CLAUDE.md "TikTok = empty seam"). Faking a success here would go against the
+principle "never a fabricated data point/result" -- the adapter therefore remains an
+honest anchor point, ready to call `TikTokClient.publish_video` the day a video asset exists.
 
-Avant publication réelle -- contrainte TikTok, pas un choix ARIA : tant que l'app n'a
-pas passé l'audit officiel (developers.tiktok.com), toute vidéo Direct Post doit rester
-`privacy_level=SELF_ONLY` (visible du seul compte). Ne JAMAIS élargir sans confirmation
-explicite que l'audit est passé.
+Before any real publication -- a TikTok constraint, not an ARIA choice: as long as the app
+has not passed the official audit (developers.tiktok.com), every Direct Post video must stay
+`privacy_level=SELF_ONLY` (visible only to the account itself). NEVER widen this without
+explicit confirmation that the audit has passed.
 
-Doc officielle : https://developers.tiktok.com/doc/content-posting-api-get-started
+Official doc: https://developers.tiktok.com/doc/content-posting-api-get-started
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ STATUS_URL = f"{API_BASE}/v2/post/publish/status/fetch/"
 
 UNAVAILABLE = "TikTok indisponible"
 _FAIL_STREAK_WARN_THRESHOLD = 3
-_MAX_VIDEO_BYTES = 1_000_000_000  # limite officielle TikTok (1 Go)
+_MAX_VIDEO_BYTES = 1_000_000_000  # official TikTok limit (1 GB)
 _TRUTHY = ("1", "true", "yes", "on")
 
 
@@ -63,21 +63,21 @@ def tiktok_refresh_token() -> str:
 
 
 def is_tiktok_configured() -> bool:
-    """Vrais identifiants présents -- aucun compte TikTok créé à ce jour (#34)."""
+    """Real credentials present -- no TikTok account created to date (#34)."""
     return bool(tiktok_client_key() and tiktok_client_secret() and tiktok_refresh_token())
 
 
 def is_tiktok_publish_enabled() -> bool:
-    """Gate opérateur explicite, OFF par défaut. Credentials seuls ne suffisent jamais à
-    publier (même doctrine que `is_x_reading_active` pour X : présence != autorisation)."""
+    """Explicit operator gate, OFF by default. Credentials alone never suffice to
+    publish (same doctrine as `is_x_reading_active` for X: presence != authorization)."""
     gate = os.environ.get("ARIA_TIKTOK_PUBLISH_ENABLED", "").strip().lower() in _TRUTHY
     return gate and is_tiktok_configured()
 
 
 @dataclass
 class TikTokPublishResult:
-    """Résultat d'une tentative de publication. `published=False` + `error` si
-    indisponible ; jamais un succès inventé."""
+    """Result of a publish attempt. `published=False` + `error` if
+    unavailable; never a fabricated success."""
 
     published: bool
     publish_id: str | None = None
@@ -85,7 +85,7 @@ class TikTokPublishResult:
 
 
 class TikTokClient:
-    """Client HTTP async, lecture/écriture, doctrine dôme (throttle + backoff)."""
+    """Async HTTP client, read/write, dome doctrine (throttle + backoff)."""
 
     def __init__(self, *, min_interval: float = 1.0) -> None:
         self._min_interval = min_interval
@@ -124,10 +124,10 @@ class TikTokClient:
     async def _post_json(
         self, url: str, payload: dict, *, headers: dict
     ) -> tuple[dict[str, Any] | None, str | None]:
-        """POST avec la politique d'erreurs du dôme (identique à tavily._post_json).
+        """POST with the dome's error policy (identical to tavily._post_json).
 
-        NB : le token vit dans le header Authorization -- jamais logué (on ne journalise
-        que l'URL et le code d'erreur, jamais le payload ni les headers)."""
+        NB: the token lives in the Authorization header -- never logged (we only log
+        the URL and the error code, never the payload or the headers)."""
         attempt_429 = 0
         retried = False
         while True:
@@ -173,8 +173,8 @@ class TikTokClient:
             return response.json(), None
 
     async def refresh_access_token(self) -> bool:
-        """Echange le refresh_token contre un access_token frais (expire ~24h, cf. doc
-        officielle) -- OAuth2 x-www-form-urlencoded, pas JSON (contrainte TikTok)."""
+        """Exchanges the refresh_token for a fresh access_token (expires ~24h, see
+        official doc) -- OAuth2 x-www-form-urlencoded, not JSON (TikTok constraint)."""
         if not is_tiktok_configured():
             return False
         payload = {
@@ -218,11 +218,11 @@ class TikTokClient:
         caption: str,
         privacy_level: str = "SELF_ONLY",
     ) -> TikTokPublishResult:
-        """Publie une vidéo (Direct Post, source FILE_UPLOAD, chunk unique). Best-effort,
-        jamais bloquant pour l'appelant.
+        """Publishes a video (Direct Post, FILE_UPLOAD source, single chunk). Best-effort,
+        never blocking for the caller.
 
-        `privacy_level="SELF_ONLY"` par défaut : contrainte TikTok tant que l'app n'a pas
-        passé l'audit officiel -- ne jamais élargir sans confirmation que l'audit est passé.
+        `privacy_level="SELF_ONLY"` by default: TikTok constraint as long as the app hasn't
+        passed the official audit -- never widen without confirmation that the audit has passed.
         """
         if not is_tiktok_publish_enabled():
             return TikTokPublishResult(
@@ -274,7 +274,7 @@ class TikTokClient:
         return TikTokPublishResult(published=True, publish_id=publish_id)
 
     async def _upload_video_bytes(self, upload_url: str, video_path: Path, video_size: int) -> bool:
-        """PUT du fichier complet en un seul chunk (cf. doc officielle Content-Range)."""
+        """PUTs the complete file in a single chunk (see official Content-Range doc)."""
         await self._throttle()
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
@@ -296,8 +296,8 @@ class TikTokClient:
         return True
 
     async def fetch_publish_status(self, publish_id: str) -> str | None:
-        """Interroge le statut d'une publication en cours. Best-effort, None si
-        indisponible -- jamais un statut inventé."""
+        """Queries the status of an ongoing publication. Best-effort, None if
+        unavailable -- never a fabricated status."""
         if not await self._ensure_access_token():
             return None
         headers = {
@@ -314,14 +314,14 @@ class TikTokClient:
 tiktok_client = TikTokClient()
 
 
-async def tiktok_release_publisher(text: str, release: Any) -> bool:  # noqa: ARG001 -- signature imposée par release_pipeline.publish_release
-    """Adaptateur `tiktok_publisher` injectable dans `release_pipeline.publish_release`.
+async def tiktok_release_publisher(text: str, release: Any) -> bool:  # noqa: ARG001 -- signature imposed by release_pipeline.publish_release
+    """Adapter `tiktok_publisher` injectable into `release_pipeline.publish_release`.
 
-    Reste honnêtement inerte (False -> `release_pipeline` classe le canal 'pending',
-    comportement IDENTIQUE à aujourd'hui où aucun publisher n'est passé) : TikTok exige
-    une vraie vidéo et aucun pipeline de génération vidéo n'existe côté ARIA -- ce n'est
-    donc jamais un faux succès, juste un point d'ancrage prêt pour le jour où cet asset
-    existera (appellera alors `tiktok_client.publish_video`)."""
+    Stays honestly inert (False -> `release_pipeline` classifies the channel as 'pending',
+    IDENTICAL behavior to today where no publisher is passed): TikTok requires
+    a real video and no video-generation pipeline exists on ARIA's side -- this is
+    therefore never a fabricated success, just an anchor point ready for the day this asset
+    exists (will then call `tiktok_client.publish_video`)."""
     if not is_tiktok_publish_enabled():
         return False
     logger.info("tiktok_release_publisher: gate actif mais aucun pipeline vidéo -- reste pending")

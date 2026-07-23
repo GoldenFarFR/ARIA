@@ -38,17 +38,17 @@ def plain_telegram(text: str) -> str:
     out = re.sub(r"```[\w]*\n?", "", out)
     out = out.replace("```", "")
     out = re.sub(r"\*\*([^*]+)\*\*", r"\1", out)
-    # 18/07 -- bug réel trouvé en testant une réponse mentionnant deux identifiants
-    # snake_case (ex. "safety_screen.py ... momentum_entry.py") : la version précédente
-    # de ces deux regex (_([^_]+)_ / __([^_]+)__) ne connaissait aucune notion de
-    # frontière de mot -- le premier "_" de "safety_screen" s'appariait avec le second
-    # "_" de "momentum_entry" et TOUT le texte entre les deux (plusieurs phrases) était
-    # traité comme un unique span d'italique markdown, effaçant silencieusement les deux
-    # underscores et laissant "safetyscreen.py"/"momentumentry.py". Les lookaround
-    # ci-dessous exigent une frontière non-mot (espace/ponctuation/début-fin de chaîne)
-    # de part et d'autre du délimiteur -- un underscore interne à un identifiant
-    # (précédé/suivi d'un caractère alphanumérique ou d'un autre underscore) n'est plus
-    # jamais consommé comme délimiteur markdown.
+    # 18/07 -- real bug found while testing a reply mentioning two snake_case
+    # identifiers (e.g. "safety_screen.py ... momentum_entry.py"): the previous version
+    # of these two regexes (_([^_]+)_ / __([^_]+)__) had no notion of a
+    # word boundary -- the first "_" of "safety_screen" was pairing with the second
+    # "_" of "momentum_entry" and ALL the text between them (several sentences) was
+    # treated as a single markdown italic span, silently stripping both
+    # underscores and leaving "safetyscreen.py"/"momentumentry.py". The lookarounds
+    # below require a non-word boundary (space/punctuation/start-end of string)
+    # on both sides of the delimiter -- an underscore internal to an identifier
+    # (preceded/followed by an alphanumeric character or another underscore) is never
+    # consumed as a markdown delimiter anymore.
     out = re.sub(r"(?<![\w_])__([^_\n]+?)__(?![\w_])", r"\1", out)
     out = re.sub(r"\*([^*]+)\*", r"\1", out)
     out = re.sub(r"(?<![\w_])_([^_\n]+?)_(?![\w_])", r"\1", out)

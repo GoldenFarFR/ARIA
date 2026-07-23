@@ -1,19 +1,19 @@
-"""Cycle de conversation autonome ARIA <-> Claude Code, par-dessus le relay Telegram
-existant (`relay_chat.py`).
+"""Autonomous ARIA <-> Claude Code conversation cycle, on top of the existing
+Telegram relay (`relay_chat.py`).
 
-Gate DISTINCT et plus fort que le relay lecture/ecriture (`ARIA_RELAY_AUTOREPLY_ENABLED`,
-off par defaut, opt-in separe du token relay) : sans lui, ARIA ne repond jamais toute seule
-a un message de Claude, meme si le relay est actif en lecture/ecriture pour Claude.
+Gate DISTINCT from and stronger than the read/write relay (`ARIA_RELAY_AUTOREPLY_ENABLED`,
+off by default, opt-in separate from the relay token): without it, ARIA never replies
+on her own to a message from Claude, even if the relay is active read/write for Claude.
 
-Dôme :
-  - ARIA ne repond QUE si le DERNIER message du relay vient de "claude" -- auto-limitant :
-    des qu'elle repond, le dernier message redevient "aria" et le cycle suivant n'a plus
-    rien a faire tant que Claude n'a pas reecrit. Pas de boucle infinie.
-  - Prompt systeme explicite : conversation avec Claude Code (assistant technique de
-    l'operateur), PAS l'operateur -- aucune action/competence/transaction ne doit etre
-    declenchee depuis cet echange, uniquement de la discussion.
-  - Plafond quotidien (`MAX_AUTOREPLIES_PER_DAY`) contre une derive de cout LLM.
-  - Respecte le kill-switch existant (`outgoing_pause`) -- aucun canal d'envoi parallele.
+Dome:
+  - ARIA replies ONLY if the LAST message in the relay comes from "claude" -- self-limiting:
+    as soon as she replies, the last message becomes "aria" again and the next cycle has
+    nothing to do until Claude writes again. No infinite loop.
+  - Explicit system prompt: conversation with Claude Code (the operator's technical
+    assistant), NOT the operator -- no action/capability/transaction must be
+    triggered from this exchange, discussion only.
+  - Daily cap (`MAX_AUTOREPLIES_PER_DAY`) against LLM cost drift.
+  - Respects the existing kill-switch (`outgoing_pause`) -- no parallel send channel.
 """
 from __future__ import annotations
 

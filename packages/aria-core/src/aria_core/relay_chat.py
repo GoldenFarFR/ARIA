@@ -1,11 +1,12 @@
-"""Relais de conversation à 3 (opérateur, ARIA, Claude Code) — réutilise le canal Telegram
-privé EXISTANT de l'opérateur avec ARIA (décision opérateur 08/07, après avoir écarté un
-second bot/groupe jugé superflu). Claude Code lit l'historique récent à chaque réveil
-programmé et répond à travers le bot ARIA existant, préfixé pour rester distinguable.
+"""3-way conversation relay (operator, ARIA, Claude Code) — reuses the operator's
+EXISTING private Telegram channel with ARIA (operator decision 08/07, after ruling out
+a second bot/group deemed superfluous). Claude Code reads the recent history on each
+scheduled wake-up and replies through the existing ARIA bot, prefixed to stay
+distinguishable.
 
-Accès dédié, minuscule : `ARIA_RELAY_ACCESS_TOKEN` (distinct du secret admin) — ne peut
-QUE lire/poster dans ce relais, rien d'autre (pas de finance, pas de code, pas d'admin).
-Fail-closed : sans ce token configuré, le relais entier est inerte.
+Small, dedicated access: `ARIA_RELAY_ACCESS_TOKEN` (distinct from the admin secret) —
+can ONLY read/post in this relay, nothing else (no finance, no code, no admin).
+Fail-closed: without this token configured, the whole relay is inert.
 """
 from __future__ import annotations
 
@@ -27,16 +28,16 @@ def relay_access_token() -> str:
 
 
 def relay_enabled() -> bool:
-    """Gate simple : sans token dédié configuré, le relais est inerte (rien n'est
-    journalisé, rien n'est accessible)."""
+    """Simple gate: without a dedicated token configured, the relay is inert (nothing is
+    logged, nothing is accessible)."""
     return bool(relay_access_token())
 
 
 def relay_autoreply_enabled() -> bool:
-    """Gate DISTINCT et plus fort que `relay_enabled()` — celui-ci autorise ARIA à
-    répondre de façon autonome (envoi Telegram réel), donc off par défaut, opt-in séparé
-    du token relay. Sans lui, le relais reste lecture/écriture pour Claude uniquement,
-    ARIA ne répond jamais toute seule."""
+    """Gate DISTINCT from and stronger than `relay_enabled()` — this one authorizes ARIA
+    to reply autonomously (real Telegram send), so off by default, opt-in separate from
+    the relay token. Without it, the relay stays read/write for Claude only,
+    ARIA never replies on her own."""
     if not relay_enabled():
         return False
     return os.environ.get("ARIA_RELAY_AUTOREPLY_ENABLED", "").strip().lower() in (
@@ -45,7 +46,7 @@ def relay_autoreply_enabled() -> bool:
 
 
 def verify_relay_access(provided: str | None) -> bool:
-    """Comparaison à temps constant — même politique que le secret admin
+    """Constant-time comparison — same policy as the admin secret
     (`public_mode.is_operator_request`)."""
     configured = relay_access_token()
     if not configured or not provided:
@@ -69,8 +70,8 @@ async def _ensure_table() -> None:
 
 
 async def log_message(sender: str, content: str) -> None:
-    """Journalise un message (operator/aria/claude). N'échoue jamais bruyamment — une
-    panne de journalisation ne doit jamais casser l'envoi/la réception réelle côté Telegram."""
+    """Logs a message (operator/aria/claude). Never fails noisily — a logging
+    failure must never break the actual send/receive on the Telegram side."""
     if not relay_enabled() or not content:
         return
     try:
@@ -81,7 +82,7 @@ async def log_message(sender: str, content: str) -> None:
                 (sender, content[:4000], datetime.now(timezone.utc).isoformat()),
             )
             await db.commit()
-    except Exception:  # noqa: BLE001 — la journalisation du relais ne doit jamais remonter
+    except Exception:  # noqa: BLE001 — relay logging must never bubble up
         pass
 
 
@@ -98,15 +99,15 @@ async def recent_messages(since_id: int = 0, limit: int = 50) -> list[dict]:
 
 
 async def send_relay_reply(text: str, *, sender=None) -> bool:
-    """Envoie un message à l'opérateur à travers le bot ARIA existant (préfixé), et le
-    journalise. `sender` injectable (tests hors-ligne) ; par défaut
+    """Sends a message to the operator through the existing ARIA bot (prefixed), and
+    logs it. `sender` injectable (offline tests); defaults to
     `aria_core.gateway.telegram_bot.send_message`.
 
-    18/07 -- trouvé par audit de sécurité : contrairement aux 20+ tâches heartbeat
-    (couvertes centralement par `outgoing_pause.is_paused()` dans `heartbeat._tick`),
-    ce chemin est atteint directement via `POST /api/aria/relay/reply` (token relay
-    dédié, hors heartbeat) et ne vérifiait jamais le kill-switch -- un appel
-    authentifié pouvait donc poster sur Telegram même pendant un `/stop`."""
+    18/07 -- found via security audit: unlike the 20+ heartbeat tasks (covered
+    centrally by `outgoing_pause.is_paused()` in `heartbeat._tick`), this path is
+    reached directly via `POST /api/aria/relay/reply` (dedicated relay token,
+    outside the heartbeat) and never checked the kill-switch -- an authenticated
+    call could therefore post to Telegram even during a `/stop`."""
     from aria_core import outgoing_pause
 
     if outgoing_pause.is_paused() or not relay_enabled() or not text.strip():
@@ -117,17 +118,17 @@ async def send_relay_reply(text: str, *, sender=None) -> bool:
     prefixed = f"{CLAUDE_PREFIX}{text.strip()}"
     try:
         await sender(prefixed)
-    except Exception:  # noqa: BLE001 — un envoi rate ne doit jamais planter l'appelant
+    except Exception:  # noqa: BLE001 — a failed send must never crash the caller
         return False
     await log_message("claude", text.strip())
     return True
 
 
 async def send_aria_relay_reply(text: str, *, sender=None) -> bool:
-    """Envoie une réponse d'ARIA ELLE-MÊME (pas Claude) dans le relay — sa vraie voix,
-    aucun préfixe. Utilisé uniquement par `relay_conversation.run_relay_conversation_cycle`
-    (gate `ARIA_RELAY_AUTOREPLY_ENABLED`), jamais appelable depuis la conversation
-    opérateur normale."""
+    """Sends a reply from ARIA HERSELF (not Claude) in the relay — her real voice,
+    no prefix. Used only by `relay_conversation.run_relay_conversation_cycle`
+    (gate `ARIA_RELAY_AUTOREPLY_ENABLED`), never callable from the normal
+    operator conversation."""
     if not relay_enabled() or not text.strip():
         return False
     if sender is None:
@@ -135,7 +136,7 @@ async def send_aria_relay_reply(text: str, *, sender=None) -> bool:
 
     try:
         await sender(text.strip())
-    except Exception:  # noqa: BLE001 — un envoi raté ne doit jamais planter l'appelant
+    except Exception:  # noqa: BLE001 — a failed send must never crash the caller
         return False
     await log_message("aria", text.strip())
     return True
