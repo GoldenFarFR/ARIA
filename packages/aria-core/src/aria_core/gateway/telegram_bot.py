@@ -631,6 +631,23 @@ async def _handle_counterfactual(update: Update, context: ContextTypes.DEFAULT_T
     await _reply(update.message, format_counterfactual_summary(summary))
 
 
+async def _handle_performance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/performance -- 07/23, operator request ("balance toutes tes idee qui
+    permettrons daffirmer les mauvaise et les meilleurs resultat"): full
+    winrate/PnL/expectancy breakdown of every closed paper-trading trade
+    (current cycle + all archived weekly cycles), segmented by every decision
+    factor tracked (conviction tier, R/R, RVOL, regime, chain, exit reason,
+    entry hour/weekday, ATR, liquidity, dev-sold%, discovery channel).
+    Admin-only, read-only, no network call -- purely reads what's already
+    persisted."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.performance_breakdown import format_breakdown_report, get_all_closed_trades
+
+    trades = await get_all_closed_trades()
+    await _reply(update.message, format_breakdown_report(trades))
+
+
 async def _handle_topwallets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/topwallets -- 21/07 : classement "meilleurs investisseurs" (capacité
     MAX_LEADERBOARD_SIZE, composite_percentile réel -- jamais un score de
@@ -2117,6 +2134,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("langue", "Langue des analyses (fr/en)"),
     ("learn", "Ajoute une leçon manuelle (topic | contenu)"),
     ("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
+    ("performance", "Bilan winrate/PnL/espérance segmenté par facteur (conviction, R/R, RVOL...)"),
     ("regime", "Win-rate/PnL des trades clôturés par régime macro (Peur/Neutre/Euphorie)"),
     ("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
     ("resume", "▶️ Reprendre les actions sortantes"),
@@ -3163,6 +3181,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("funnel", _handle_funnel))
     app.add_handler(CommandHandler("regime", _handle_regime))
     app.add_handler(CommandHandler("counterfactual", _handle_counterfactual))
+    app.add_handler(CommandHandler("performance", _handle_performance))
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))

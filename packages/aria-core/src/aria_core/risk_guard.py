@@ -1,32 +1,31 @@
-"""Gestion du risque portefeuille (#186, 15/07) — sizing ajusté au risque +
-coupe-circuit de drawdown, appliqués pour l'instant au portefeuille papier
-1 M$ uniquement (``paper_trader.py``). Aucun câblage vers un pilote de
-capital réel (pas encore construit) -- mais ce module est conçu comme un
-seam réutilisable tel quel le jour où un pilote réel existera : les deux
-fonctions ci-dessous ne connaissent rien de « papier » vs « réel », elles ne
-travaillent qu'avec des USD/prix/compteurs génériques.
+"""Portfolio risk management (#186, 07/15) — risk-adjusted sizing +
+drawdown circuit breaker, applied for now to the $1M paper portfolio only
+(``paper_trader.py``). No wiring yet to a real-capital pilot (not built
+yet) -- but this module is designed as a reusable seam as-is for the day a
+real pilot exists: the two functions below know nothing about "paper" vs
+"real", they only work with generic USD/prices/counters.
 
-Recherche à l'origine de ce chantier : Paul Tudor Jones (jamais >1 % du
-capital risqué par trade, indépendant de la taille de position) et Ray
-Dalio/Bridgewater (jamais laisser un drawdown dépasser ~1/3 du capital --
-au-delà, la remontée mathématique devient punitive : -50 % exige +100 % pour
-revenir à zéro). ``RISK_CAP_PCT``/``HARD_DRAWDOWN_PCT`` ci-dessous sont
-délibérément plus conservateurs que ces bornes extrêmes (2 %/20 % plutôt que
-1 %/33 %), cohérent avec un capital encore fictif mais dont l'objectif est
-de prouver une discipline transposable au réel.
+Research behind this work: Paul Tudor Jones (never >1% of capital risked
+per trade, independent of position size) and Ray Dalio/Bridgewater (never
+let a drawdown exceed ~1/3 of capital -- beyond that, the mathematical
+recovery becomes punitive: -50% requires +100% to get back to zero).
+``RISK_CAP_PCT``/``HARD_DRAWDOWN_PCT`` below are deliberately more
+conservative than these extreme bounds (2%/20% rather than 1%/33%),
+consistent with capital that's still fictional but whose goal is to prove
+a discipline transposable to the real thing.
 
-Deux mécanismes distincts, à ne jamais confondre :
-1. Sizing par trade (``size_position_by_risk``) -- fonction PURE, aucun état
-   persisté, plafonne une allocation en fonction de la distance à
-   l'invalidation. Ne relève JAMAIS une allocation au-delà de sa valeur
-   d'entrée -- un plafond, jamais un bonus.
-2. Coupe-circuit de portefeuille (``evaluate_portfolio_risk``/
-   ``blocks_new_entries``) -- état persisté (fichier JSON dédié, PAS
-   ``outgoing_pause.py`` -- ce kill-switch global coupe aussi des cycles
-   sans rapport avec l'argent, ex. ``knowledge_inbox``). ``blocks_new_entries``
-   respecte lui-même ``outgoing_pause`` (une pause globale bloque aussi les
-   nouvelles entrées paper) SANS jamais être confondu avec lui -- deux
-   fichiers d'état séparés, deux raisons distinctes rapportées à l'appelant.
+Two distinct mechanisms, never to be confused:
+1. Per-trade sizing (``size_position_by_risk``) -- a PURE function, no
+   persisted state, caps an allocation based on the distance to
+   invalidation. NEVER raises an allocation beyond its entry value -- a
+   cap, never a bonus.
+2. Portfolio circuit breaker (``evaluate_portfolio_risk``/
+   ``blocks_new_entries``) -- persisted state (dedicated JSON file, NOT
+   ``outgoing_pause.py`` -- that global kill-switch also cuts cycles
+   unrelated to money, e.g. ``knowledge_inbox``). ``blocks_new_entries``
+   itself respects ``outgoing_pause`` (a global pause also blocks new paper
+   entries) WITHOUT ever being confused with it -- two separate state
+   files, two distinct reasons reported to the caller.
 """
 from __future__ import annotations
 
@@ -42,31 +41,31 @@ from aria_core.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
-# ── 1. Sizing ajusté au risque (fonction pure, aucun état) ─────────────────
+# ── 1. Risk-adjusted sizing (pure function, no state) ─────────────────
 
-RISK_CAP_PCT = 0.02  # 2 % du capital total risqué au pire cas (entre le 1 % très
-# conservateur de PTJ et le maximum actuel implicite ~5 % du flat ALLOC_PCT).
+RISK_CAP_PCT = 0.02  # 2% of total capital risked at worst case (between PTJ's very
+# conservative 1% and the current implicit maximum ~5% of the flat ALLOC_PCT).
 
 
 def size_position_by_risk(
     alloc_usd: float, entry_price: float, invalidation_price: float | None, capital_total: float,
 ) -> float:
-    """Plafonne ``alloc_usd`` pour que la perte au pire cas (si le prix touche
-    ``invalidation_price``) ne dépasse jamais ``RISK_CAP_PCT * capital_total``.
-    Ne relève JAMAIS ``alloc_usd`` au-delà de sa valeur d'entrée -- un
-    plafond, jamais un bonus (une position à stop TRÈS serré garde son
-    allocation flat d'origine, elle n'est jamais gonflée par ce mécanisme).
+    """Caps ``alloc_usd`` so that the worst-case loss (if the price hits
+    ``invalidation_price``) never exceeds ``RISK_CAP_PCT * capital_total``.
+    NEVER raises ``alloc_usd`` beyond its entry value -- a cap, never a
+    bonus (a position with a VERY tight stop keeps its original flat
+    allocation, it's never inflated by this mechanism).
 
-    Sans invalidation connue (``None``, ou ``>= entry_price`` -- risque non
-    mesurable ou donnée incohérente), ``alloc_usd`` est renvoyé inchangé : le
-    stop suiveur (``TRAIL_STOP_PCT`` dans ``paper_trader.py``) reste alors le
-    seul garde-fou, comme avant ce chantier."""
+    Without a known invalidation (``None``, or ``>= entry_price`` -- risk
+    not measurable or inconsistent data), ``alloc_usd`` is returned
+    unchanged: the trailing stop (``TRAIL_STOP_PCT`` in ``paper_trader.py``)
+    then remains the sole guardrail, as before this work."""
     if alloc_usd <= 0 or entry_price <= 0 or capital_total <= 0:
         return alloc_usd
     if invalidation_price is None or invalidation_price <= 0 or invalidation_price >= entry_price:
         return alloc_usd
 
-    risk_fraction = (entry_price - invalidation_price) / entry_price  # perte % si stop touché
+    risk_fraction = (entry_price - invalidation_price) / entry_price  # % loss if stop hit
     if risk_fraction <= 0:
         return alloc_usd
 
@@ -79,51 +78,51 @@ def size_position_by_risk(
     return min(alloc_usd, capped_alloc)
 
 
-# 18/07 -- décision opérateur explicite : "plus agressive" veut dire plus gros sur les
-# MEILLEURS setups, pas plus gros partout (jamais un bonus flat). Deuxième fonction PURE,
-# aucun état -- s'applique en AMONT de size_position_by_risk ci-dessus, qui reste le vrai
-# plafond de perte au pire cas (2 % du capital) : une allocation gonflée par conviction
-# reste plafonnée exactement comme avant sur un stop large, ce n'est jamais un pari sans
-# filet.
+# 07/18 -- explicit operator decision: "more aggressive" means bigger on the
+# BEST setups, not bigger everywhere (never a flat bonus). Second PURE function,
+# no state -- applies UPSTREAM of size_position_by_risk above, which remains the
+# real worst-case loss cap (2% of capital): an allocation inflated by conviction
+# stays capped exactly as before on a wide stop, this is never a bet without a
+# safety net.
 CONVICTION_RR_THRESHOLD = 2.5
-# 19/07 -- abaissé de 3 à 2 (décision opérateur explicite, via AskUserQuestion) : sur
-# les 5 premiers trades réels du pipeline momentum (#194), align_score n'a JAMAIS
-# atteint 3/3 -- toujours "MACD au-dessus de sa ligne de signal" + "pattern de bougie
-# bullish", jamais "EMA12 > EMA26" en même temps. Hypothèse vérifiée dans le code (pas
-# un bug) : un achat golden-pocket (rechargement PROFOND) est structurellement en
-# tension avec "EMA courte déjà repassée au-dessus de la longue" -- au moment où le
-# prix recharge en profondeur, l'EMA rapide est souvent encore sous la lente. Avec le
-# seuil à 3, le bonus de conviction technique était donc quasi inatteignable pour ce
-# style d'entrée précis, jamais un pari sans filet pour autant (R/R minimum inchangé).
+# 07/19 -- lowered from 3 to 2 (explicit operator decision, via AskUserQuestion): on
+# the first 5 real trades of the momentum pipeline (#194), align_score NEVER
+# reached 3/3 -- always "MACD above its signal line" + "bullish candle pattern",
+# never "EMA12 > EMA26" at the same time. Hypothesis verified in the code (not
+# a bug): a golden-pocket buy (DEEP reload) is structurally in tension with
+# "short EMA already crossed back above the long one" -- at the moment the
+# price reloads deeply, the fast EMA is often still below the slow one. With the
+# threshold at 3, the technical-conviction bonus was thus nearly unreachable for
+# this specific entry style, still never a bet without a safety net though (minimum R/R unchanged).
 CONVICTION_ALIGN_SCORE_THRESHOLD = 2
 
-# 19/07 (suite) -- REDESIGN complet du sizing (feedback opérateur direct, après avoir vu
-# le portefeuille réel : "les position sont trop grosse, l'achat maxi doit etre de 5% et
-# mini de 2%"). Remplace le binaire précédent (base flat 5 % / bonus exceptionnel -> 8 %,
-# ``CONVICTION_SIZE_MULTIPLIER=1.6`` -- RETIRÉ, l'opérateur plafonne explicitement à 5 %
-# max désormais) par 3 paliers de conviction, mappés directement sur le pourcentage réel
-# du capital de départ (jamais un multiplicateur > 1.0 -- 5 % EST le plafond, pas un
-# multiplicateur d'un multiplicateur). ``MODERATE_RR_THRESHOLD`` reprend exactement le
-# R/R minimum du chemin d'achat DIRECT (``momentum_entry._RR_MIN_FOR_DIRECT_BUY``, 2.0) --
-# volontairement une constante indépendante ici (pas un import cross-module) pour garder
-# ``risk_guard`` autonome de ``momentum_entry``, même doctrine que ``CONVICTION_RR_
-# THRESHOLD`` déjà indépendant depuis l'origine de ce chantier.
+# 07/19 (continued) -- full sizing REDESIGN (direct operator feedback after seeing
+# the real portfolio: "positions are too big, max buy should be 5% and
+# min 2%"). Replaces the previous binary (flat 5% base / exceptional bonus -> 8%,
+# ``CONVICTION_SIZE_MULTIPLIER=1.6`` -- REMOVED, the operator now explicitly caps at 5%
+# max) with 3 conviction tiers, mapped directly onto the real percentage
+# of starting capital (never a multiplier > 1.0 -- 5% IS the cap, not a
+# multiplier of a multiplier). ``MODERATE_RR_THRESHOLD`` reuses exactly the
+# minimum R/R of the DIRECT buy path (``momentum_entry._RR_MIN_FOR_DIRECT_BUY``, 2.0) --
+# deliberately an independent constant here (not a cross-module import) to keep
+# ``risk_guard`` autonomous from ``momentum_entry``, same doctrine as ``CONVICTION_RR_
+# THRESHOLD`` already independent since the start of this work.
 MODERATE_RR_THRESHOLD = 2.0
 
-MIN_ALLOC_MULTIPLIER = 0.4       # 5 % * 0.4 = 2 % du capital de départ (palier faible)
-MODERATE_ALLOC_MULTIPLIER = 0.7  # 5 % * 0.7 = 3.5 % du capital de départ (palier modéré)
-MAX_ALLOC_MULTIPLIER = 1.0       # 5 % * 1.0 = 5 % du capital de départ (palier fort, plafond dur)
+MIN_ALLOC_MULTIPLIER = 0.4       # 5% * 0.4 = 2% of starting capital (weak tier)
+MODERATE_ALLOC_MULTIPLIER = 0.7  # 5% * 0.7 = 3.5% of starting capital (moderate tier)
+MAX_ALLOC_MULTIPLIER = 1.0       # 5% * 1.0 = 5% of starting capital (strong tier, hard cap)
 
-# 19/07 -- décision opérateur explicite (choix confirmé via AskUserQuestion, "s'ajoute
-# en ET") : le potentiel fondamental (conviction_research.py -- site web/X/cadence de
-# publication/corroboration de contrat) devient un TROISIÈME critère du palier fort,
-# EN PLUS du R/R+alignement technique déjà exigés -- jamais à leur place.
-# Seuil sous lequel un score fondamental CONFIRMÉ (pas absent) rétrograde le palier --
-# fail-closed sur une donnée confirmée mauvaise, fail-open sur une donnée INCONNUE
-# (``fundamental_score=None``, ex. recherche indisponible/gate OFF) : un setup
-# technique parfait sans recherche fondamentale disponible garde EXACTEMENT le palier
-# qu'il aurait eu avant ce chantier -- jamais réduit sous ce qu'il a aujourd'hui, même
-# doctrine fail-open/fail-closed déjà validée sur le wallet-scoring (smart_money.py).
+# 07/19 -- explicit operator decision (choice confirmed via AskUserQuestion, "adds
+# on with AND"): fundamental potential (conviction_research.py -- website/X/
+# publication cadence/contract corroboration) becomes a THIRD criterion for the strong
+# tier, IN ADDITION to the R/R+technical alignment already required -- never in their place.
+# Threshold below which a CONFIRMED (not absent) fundamental score downgrades the tier --
+# fail-closed on confirmed-bad data, fail-open on UNKNOWN data
+# (``fundamental_score=None``, e.g. research unavailable/gate OFF): a
+# technically perfect setup with no fundamental research available keeps EXACTLY the tier
+# it would have had before this work -- never reduced below what it has today, same
+# fail-open/fail-closed doctrine already validated on wallet-scoring (smart_money.py).
 FUNDAMENTAL_WEAK_THRESHOLD = 4.0
 
 
@@ -131,45 +130,45 @@ def conviction_size_multiplier(
     rr: float | None, align_score: int | None, *,
     fundamental_score: float | None = None, volume_confirmed: bool | None = None,
 ) -> float:
-    """Multiplicateur appliqué sur ``ALLOC_PCT`` (5 %, ``paper_trader.py``) -- jamais
-    au-delà de ``MAX_ALLOC_MULTIPLIER`` (1.0 = 5 % du capital, le plafond dur demandé
-    par l'opérateur), jamais en dessous de ``MIN_ALLOC_MULTIPLIER`` (0.4 = 2 %) pour
-    tout signal réellement mesuré. 3 paliers, sur le R/R (le seul signal qui discrimine
-    encore une fois l'alignement technique passé à un seuil de 2/3 -- cf. ci-dessus) :
-    - FORT (``MAX_ALLOC_MULTIPLIER``, 5 %) : R/R >= ``CONVICTION_RR_THRESHOLD`` (2.5) ET
-      alignement >= ``CONVICTION_ALIGN_SCORE_THRESHOLD`` (2/3) -- le setup le plus solide.
-    - MODÉRÉ (``MODERATE_ALLOC_MULTIPLIER``, 3.5 %) : R/R >= ``MODERATE_RR_THRESHOLD``
-      (2.0, le plancher même du chemin d'achat direct) sans atteindre le palier fort.
-    - FAIBLE (``MIN_ALLOC_MULTIPLIER``, 2 %) : tout le reste avec un signal mesuré
-      (typiquement un achat confirmé par LLM sur R/R sous le plancher direct).
+    """Multiplier applied to ``ALLOC_PCT`` (5%, ``paper_trader.py``) -- never
+    beyond ``MAX_ALLOC_MULTIPLIER`` (1.0 = 5% of capital, the hard cap requested
+    by the operator), never below ``MIN_ALLOC_MULTIPLIER`` (0.4 = 2%) for
+    any actually measured signal. 3 tiers, on the R/R (the only signal that still
+    discriminates once technical alignment is capped at a 2/3 threshold -- see above):
+    - STRONG (``MAX_ALLOC_MULTIPLIER``, 5%): R/R >= ``CONVICTION_RR_THRESHOLD`` (2.5) AND
+      alignment >= ``CONVICTION_ALIGN_SCORE_THRESHOLD`` (2/3) -- the strongest setup.
+    - MODERATE (``MODERATE_ALLOC_MULTIPLIER``, 3.5%): R/R >= ``MODERATE_RR_THRESHOLD``
+      (2.0, the very floor of the direct buy path) without reaching the strong tier.
+    - WEAK (``MIN_ALLOC_MULTIPLIER``, 2%): everything else with a measured signal
+      (typically an LLM-confirmed buy on an R/R below the direct floor).
 
-    Données absentes/incomplètes (``rr`` ou ``align_score`` = ``None``) ->
-    ``MAX_ALLOC_MULTIPLIER`` : comportement INCHANGÉ pour tout appelant qui ne fournit
-    pas ces signaux (ex. l'ancien pilote VC-thesis, dormant) -- jamais réduit sous ce
-    qu'il avait avant ce chantier, seul le pipeline momentum (qui fournit toujours ces
-    deux champs sur un BUY) est concerné par le nouveau plafond à 5 %.
+    Missing/incomplete data (``rr`` or ``align_score`` = ``None``) ->
+    ``MAX_ALLOC_MULTIPLIER``: UNCHANGED behavior for any caller that doesn't supply
+    these signals (e.g. the old VC-thesis pilot, dormant) -- never reduced below what
+    it had before this work, only the momentum pipeline (which always supplies these
+    two fields on a BUY) is affected by the new 5% cap.
 
-    ``fundamental_score`` (19/07, optionnel) : si le palier FORT est atteint MAIS qu'une
-    recherche fondamentale a CONFIRMÉ un potentiel faible (< ``FUNDAMENTAL_WEAK_
-    THRESHOLD``), rétrograde le palier (voir cumul ci-dessous). ``None`` (recherche non
-    menée/indisponible) ne rétrograde JAMAIS le palier technique.
+    ``fundamental_score`` (07/19, optional): if the STRONG tier is reached BUT
+    fundamental research CONFIRMED a weak potential (< ``FUNDAMENTAL_WEAK_
+    THRESHOLD``), downgrades the tier (see stacking below). ``None`` (research not
+    performed/unavailable) NEVER downgrades the technical tier.
 
-    ``volume_confirmed`` (19/07, revue croisée Gemini, optionnel) : même doctrine de
-    véto que ``fundamental_score`` -- ``False`` (le volume relatif de la bougie
-    d'entrée n'a pas pu être vérifié, cf. ``momentum_entry._check_volume_confirmation``,
-    état "unknown") rétrograde le palier (voir cumul ci-dessous). ``None``/``True`` ne
-    rétrogradent jamais -- un ``False`` avec DONNÉE RÉELLE confirmant l'absence de
-    volume (état "not_confirmed") n'atteint jamais cette fonction : ce cas-là est déjà
-    un rejet dur en amont (``hold_reason="volume_not_confirmed"``), jamais une question
-    de taille.
+    ``volume_confirmed`` (07/19, Gemini cross-review, optional): same veto
+    doctrine as ``fundamental_score`` -- ``False`` (the relative volume of the entry
+    candle could not be verified, cf. ``momentum_entry._check_volume_confirmation``,
+    "unknown" state) downgrades the tier (see stacking below). ``None``/``True`` never
+    downgrade -- a ``False`` with REAL DATA confirming the absence of
+    volume ("not_confirmed" state) never reaches this function: that case is already
+    a hard rejection upstream (``hold_reason="volume_not_confirmed"``), never a matter
+    of size.
 
-    Cumul des deux vétos (19/07, revue croisée Gemini, round 5 -- corrige un vrai défaut
-    de gestion du risque : composer les deux drapeaux au MÊME palier MODÉRÉ traitait un
-    setup avec DEUX signaux d'alerte indépendants (fondamentaux faibles ET volume non
-    vérifié) comme équivalent à un setup avec un seul -- sous-estimant le risque cumulé)
-    -- un seul drapeau -> palier MODÉRÉ (3.5 %) ; les DEUX en même temps -> chute directe
-    au palier FAIBLE (2 %), jamais un 3e palier en dessous (le plancher ``MIN_ALLOC_
-    MULTIPLIER`` reste le vrai plancher, quel que soit le nombre de vétos)."""
+    Stacking of the two vetoes (07/19, Gemini cross-review, round 5 -- fixes a real
+    risk-management flaw: composing both flags into the SAME MODERATE tier treated a
+    setup with TWO independent warning signals (weak fundamentals AND unverified
+    volume) as equivalent to a setup with only one -- underestimating the cumulative risk)
+    -- one flag alone -> MODERATE tier (3.5%); BOTH at once -> direct drop
+    to the WEAK tier (2%), never a 3rd tier below (the ``MIN_ALLOC_
+    MULTIPLIER`` floor remains the true floor, regardless of the number of vetoes)."""
     if rr is None or align_score is None:
         return MAX_ALLOC_MULTIPLIER
     if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
@@ -186,41 +185,41 @@ def conviction_size_multiplier(
     return MIN_ALLOC_MULTIPLIER
 
 
-# 20/07 -- sizing HYBRIDE risque-cible/ATR (revue croisée Gemini round 7, go explicite
-# opérateur : "Ta proposition de composition est brillante... tu peux coder cette
-# logique"). Corrige un vrai défaut de ``conviction_size_multiplier`` ci-dessus : ses
-# paliers sont des % FIXES du capital (5/3.5/2%), totalement indépendants de la largeur
-# du stop suiveur ATR -- un token très nerveux (stop large, ex. 35%) et un token calme
-# (stop serré, ex. 8%) reçoivent la MÊME allocation au même palier de conviction, alors
-# que le premier risque mathématiquement beaucoup plus de dollars si le stop est
-# touché. ``size_position_by_risk`` (basé sur l'invalidation Fibonacci, fixée à
-# l'entrée) plafonne déjà la perte au pire cas à 2% -- mais l'ATR gouverne l'ESPACE
-# RÉEL dans lequel le stop suiveur évolue une fois la position ouverte, jamais pris en
-# compte par le sizing initial jusqu'ici.
+# 07/20 -- HYBRID risk-target/ATR sizing (Gemini cross-review round 7, explicit
+# operator go-ahead: "Your composition proposal is brilliant... you can code this
+# logic"). Fixes a real flaw in ``conviction_size_multiplier`` above: its
+# tiers are FIXED % of capital (5/3.5/2%), totally independent of the width
+# of the ATR trailing stop -- a very nervous token (wide stop, e.g. 35%) and a calm token
+# (tight stop, e.g. 8%) receive the SAME allocation at the same conviction tier, even though
+# the former mathematically risks much more in dollars if the stop is
+# hit. ``size_position_by_risk`` (based on the Fibonacci invalidation, fixed at
+# entry) already caps the worst-case loss at 2% -- but ATR governs the REAL
+# SPACE in which the trailing stop moves once the position is open, never taken
+# into account by the initial sizing until now.
 #
-# Les paliers de conviction deviennent des BUDGETS DE RISQUE (fraction du capital qu'on
-# accepte de perdre SI le stop suiveur ATR est touché), divisés par la largeur ATR
-# effective pour obtenir l'allocation $ -- un stop large réduit mécaniquement
-# l'allocation, un stop serré l'augmente, à risque $ constant pour un palier de
-# conviction donné. ``size_position_by_risk`` (invalidation) reste appliqué ENSUITE
-# dans ``open_position``, inchangé, comme filet de sécurité final -- jamais retiré ni
-# contourné par ce nouveau mécanisme.
-CONVICTION_RISK_BUDGET_STRONG_PCT = 0.015    # 1.5 % du capital -- palier FORT
-CONVICTION_RISK_BUDGET_MODERATE_PCT = 0.010  # 1.0 % -- palier MODÉRÉ
-CONVICTION_RISK_BUDGET_WEAK_PCT = 0.005      # 0.5 % -- palier FAIBLE
+# Conviction tiers become RISK BUDGETS (fraction of capital one
+# accepts to lose IF the ATR trailing stop is hit), divided by the effective ATR
+# width to get the $ allocation -- a wide stop mechanically reduces
+# the allocation, a tight stop increases it, at constant $ risk for a given
+# conviction tier. ``size_position_by_risk`` (invalidation) remains applied AFTERWARD
+# in ``open_position``, unchanged, as the final safety net -- never removed or
+# bypassed by this new mechanism.
+CONVICTION_RISK_BUDGET_STRONG_PCT = 0.015    # 1.5% of capital -- STRONG tier
+CONVICTION_RISK_BUDGET_MODERATE_PCT = 0.010  # 1.0% -- MODERATE tier
+CONVICTION_RISK_BUDGET_WEAK_PCT = 0.005      # 0.5% -- WEAK tier
 
 
 def conviction_risk_budget_pct(
     rr: float | None, align_score: int | None, *,
     fundamental_score: float | None = None, volume_confirmed: bool | None = None,
 ) -> float | None:
-    """Budget de risque (fraction du capital) pour le palier de conviction de CE
-    signal -- même tiering et même cumul des deux vétos que ``conviction_size_
-    multiplier`` ci-dessus (identiques mot pour mot, seuls les paliers de SORTIE
-    changent : un budget de risque en %, pas un multiplicateur sur une allocation
-    flat). ``None`` si ``rr``/``align_score`` manquent -- signale à l'appelant de
-    retomber sur ``conviction_size_multiplier`` (comportement historique), jamais un
-    budget inventé faute de signal."""
+    """Risk budget (fraction of capital) for the conviction tier of THIS
+    signal -- same tiering and same stacking of the two vetoes as ``conviction_size_
+    multiplier`` above (identical word for word, only the OUTPUT tiers
+    change: a risk budget in %, not a multiplier on a flat allocation). ``None`` if
+    ``rr``/``align_score`` are missing -- signals to the caller to fall back
+    on ``conviction_size_multiplier`` (historical behavior), never an invented
+    budget for lack of a signal."""
     if rr is None or align_score is None:
         return None
     if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
@@ -237,26 +236,58 @@ def conviction_risk_budget_pct(
     return CONVICTION_RISK_BUDGET_WEAK_PCT
 
 
+# 07/23 -- performance-breakdown tracking (operator request: segment winrate/PnL
+# by conviction tier to see which one actually performs). Same tiering and same
+# stacking of the two vetoes as conviction_size_multiplier/conviction_risk_
+# budget_pct above (identical branching, word for word) -- only the output
+# changes: a stable string label ("strong"/"moderate"/"weak") to persist on the
+# position, instead of a multiplier or a risk-budget fraction. Deliberately a
+# 3rd mirror function rather than refactoring the two existing ones to share
+# this branching: those are hot, already-tested paths on real capital sizing,
+# never touched for a purely observational addition.
+def conviction_tier_label(
+    rr: float | None, align_score: int | None, *,
+    fundamental_score: float | None = None, volume_confirmed: bool | None = None,
+) -> str | None:
+    """Conviction tier label for THIS signal -- ``None`` if ``rr``/``align_score``
+    are missing (never an invented tier for lack of a signal, e.g. the old
+    VC-thesis pilot)."""
+    if rr is None or align_score is None:
+        return None
+    if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
+        weak_fundamentals = fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD
+        unconfirmed_volume = volume_confirmed is False
+        flags = int(weak_fundamentals) + int(unconfirmed_volume)
+        if flags >= 2:
+            return "weak"
+        if flags == 1:
+            return "moderate"
+        return "strong"
+    if rr >= MODERATE_RR_THRESHOLD:
+        return "moderate"
+    return "weak"
+
+
 def size_by_risk_budget(
     risk_budget_pct: float, trail_pct: float, capital_total: float, *, ceiling_usd: float | None = None,
 ) -> float:
-    """Alloue ``risk_budget_pct * capital_total / trail_pct`` -- traduit un budget de
-    risque en $ (combien on accepte de perdre si le stop suiveur ATR est touché) en
-    allocation $ compte tenu de la largeur RÉELLE du stop pour CE token précis. Plus le
-    stop est large (token nerveux), plus l'allocation est réduite pour maintenir le
-    même risque $ ; plus il est serré (token calme), plus elle peut monter -- jamais un
-    % fixe identique quelle que soit la volatilité.
+    """Allocates ``risk_budget_pct * capital_total / trail_pct`` -- translates a $
+    risk budget (how much one accepts to lose if the ATR trailing stop is hit) into a $
+    allocation given the REAL stop width for THIS specific token. The wider the
+    stop (nervous token), the more the allocation is reduced to maintain the
+    same $ risk; the tighter it is (calm token), the more it can rise -- never a
+    fixed % identical regardless of volatility.
 
-    ``ceiling_usd`` (optionnel) : plafond absolu -- ce mécanisme ne fait jamais grossir
-    une position au-delà de ce plafond (typiquement le même maximum historique que
-    l'ancien système à paliers fixes, ex. 5 % du capital), il ne fait que la RÉDUIRE sur
-    les setups où le stop est large. Sans lui, aucun plafond ici (l'appelant est
-    responsable d'en fournir un -- ``size_position_by_risk``, basé sur l'invalidation
-    Fibonacci et appliqué séparément par l'appelant, reste le vrai filet de sécurité
-    final sur la PERTE, indépendant de ce plafond sur l'ALLOCATION).
+    ``ceiling_usd`` (optional): absolute cap -- this mechanism never grows
+    a position beyond this cap (typically the same historical maximum as
+    the old fixed-tier system, e.g. 5% of capital), it only REDUCES it on
+    setups where the stop is wide. Without it, no cap here (the caller is
+    responsible for supplying one -- ``size_position_by_risk``, based on the Fibonacci
+    invalidation and applied separately by the caller, remains the true final
+    safety net on the LOSS, independent of this cap on the ALLOCATION).
 
-    ``trail_pct``/``capital_total`` <= 0 -> 0.0 (jamais une division par zéro, jamais
-    une allocation inventée)."""
+    ``trail_pct``/``capital_total`` <= 0 -> 0.0 (never a division by zero, never
+    an invented allocation)."""
     if trail_pct <= 0 or capital_total <= 0:
         return 0.0
     raw = risk_budget_pct * capital_total / trail_pct
@@ -265,22 +296,22 @@ def size_by_risk_budget(
     return raw
 
 
-# 18/07 (suite, revue croisée validée par l'opérateur) -- "frein à main" DÉTERMINISTE,
-# jamais un LLM : une fois l'objectif hebdomadaire (+10 %) DÉJÀ atteint, les NOUVELLES
-# entrées sont réduites de moitié plutôt que laissées pleine taille -- protège le gain
-# déjà acquis sans jamais couper les nouvelles entrées à zéro (le marché ne sait pas
-# qu'on a "fait sa semaine" ; un setup exceptionnel doublement vérifié garde une
-# asymétrie positive, juste avec une mise réduite). Composé APRÈS conviction_size_
-# multiplier (8 % -> 4 %, 5 % -> 2.5 %), lui-même plafonné ENSUITE par
-# size_position_by_risk (2 % de perte max) -- jamais un contournement du plafond.
+# 07/18 (continued, cross-review validated by the operator) -- DETERMINISTIC "hand
+# brake", never an LLM: once the weekly target (+10%) has ALREADY been reached, NEW
+# entries are halved rather than left at full size -- protects the gain
+# already secured without ever cutting new entries to zero (the market doesn't know
+# we've "made our week"; an exceptional, doubly-verified setup keeps a
+# positive asymmetry, just with a reduced stake). Composed AFTER conviction_size_
+# multiplier (8% -> 4%, 5% -> 2.5%), itself capped AFTERWARD by
+# size_position_by_risk (2% max loss) -- never a bypass of the cap.
 WEEKLY_PACING_DAMPENING_MULTIPLIER = 0.5
 
 
 def weekly_pacing_size_multiplier(weekly_context: dict | None) -> float:
-    """1.0 par défaut (comportement inchangé, y compris si ``weekly_context`` est absent
-    ou incomplet -- jamais un frein sans preuve du contexte). ``WEEKLY_PACING_DAMPENING_
-    MULTIPLIER`` UNIQUEMENT quand l'équité courante a déjà atteint/dépassé l'objectif de
-    la semaine (``weekly_context["equity"] >= weekly_context["target_equity"]``)."""
+    """1.0 by default (unchanged behavior, including when ``weekly_context`` is absent
+    or incomplete -- never a dampener without proof of context). ``WEEKLY_PACING_DAMPENING_
+    MULTIPLIER`` ONLY when current equity has already reached/exceeded the week's
+    target (``weekly_context["equity"] >= weekly_context["target_equity"]``)."""
     if not weekly_context:
         return 1.0
     equity = weekly_context.get("equity")
@@ -292,23 +323,23 @@ def weekly_pacing_size_multiplier(weekly_context: dict | None) -> float:
     return 1.0
 
 
-# 20/07 -- Regime Switch dynamique (revue croisée Gemini, feu vert opérateur explicite
-# sur 200k$ en régime Peur) : "Peur" divise par 2 les budgets de risque/paliers de
-# conviction -- préserve le capital quand la liquidité se regroupe sur les gros actifs
-# et que les micro-caps s'effondrent les unes après les autres. Composé exactement
-# comme ``weekly_pacing_size_multiplier`` ci-dessus (même point d'appel, multiplié sur
-# l'allocation finale) -- jamais intégré dans ``conviction_size_multiplier``/
-# ``conviction_risk_budget_pct`` eux-mêmes, qui restent des fonctions PURES sur le
-# signal technique seul, indépendantes du régime macro (séparation des responsabilités
-# déjà établie entre ces couches).
+# 07/20 -- dynamic Regime Switch (Gemini cross-review, explicit operator go-ahead
+# at $200k in Fear regime): "Fear" halves risk budgets/conviction
+# tiers -- preserves capital when liquidity clusters into big assets
+# and micro-caps collapse one after another. Composed exactly
+# like ``weekly_pacing_size_multiplier`` above (same call site, multiplied onto
+# the final allocation) -- never integrated into ``conviction_size_multiplier``/
+# ``conviction_risk_budget_pct`` themselves, which remain PURE functions on the
+# technical signal alone, independent of the macro regime (separation of concerns
+# already established between these layers).
 REGIME_FEAR_SIZE_MULTIPLIER = 0.5
 
 
 def regime_size_multiplier(regime: str | None) -> float:
-    """1.0 par défaut (Neutre/Euphorie/inconnu -- comportement inchangé). ``REGIME_
-    FEAR_SIZE_MULTIPLIER`` UNIQUEMENT en régime Peur confirmé -- jamais un frein sans
-    signal (``None``/régime absent -> 1.0, même doctrine fail-open que ``weekly_
-    pacing_size_multiplier`` sur un ``weekly_context`` absent)."""
+    """1.0 by default (Neutral/Euphoria/unknown -- unchanged behavior). ``REGIME_
+    FEAR_SIZE_MULTIPLIER`` ONLY in confirmed Fear regime -- never a dampener without a
+    signal (``None``/absent regime -> 1.0, same fail-open doctrine as ``weekly_
+    pacing_size_multiplier`` on an absent ``weekly_context``)."""
     from aria_core.skills.market_sentiment import META_REGIME_FEAR
 
     if regime == META_REGIME_FEAR:
@@ -316,64 +347,64 @@ def regime_size_multiplier(regime: str | None) -> float:
     return 1.0
 
 
-# 20/07 -- #174 : sizing Formule B (VC-thesis, ``vc_analysis.VCResult.taille_pct``,
-# 0-10% du capital déjà clampé à la source par ``MAX_POSITION_SIZE_PCT``). Ce chemin
-# n'a ni ``rr`` ni ``align_score`` (jugement LLM riche, pas de seuils déterministes) --
-# c'est précisément pourquoi ``conviction_size_multiplier``/``conviction_risk_budget_
-# pct`` ci-dessus, appelés avec ces deux valeurs à ``None``, dégradaient silencieusement
-# vers le plafond MAX (5% flat) pour TOUTE position vc_thesis, quel que soit ce que le
-# LLM avait réellement jugé (0 à 10%). Borne dupliquée volontairement (pas un import
-# croisé vers ``vc_analysis`` -- risk_guard reste un module bas niveau, pur, sans
-# dépendance sur les skills).
+# 07/20 -- #174: Formula B sizing (VC-thesis, ``vc_analysis.VCResult.taille_pct``,
+# 0-10% of capital already clamped at the source by ``MAX_POSITION_SIZE_PCT``). This path
+# has neither ``rr`` nor ``align_score`` (rich LLM judgment, no deterministic thresholds) --
+# which is precisely why ``conviction_size_multiplier``/``conviction_risk_budget_
+# pct`` above, called with these two values at ``None``, would silently degrade
+# toward the MAX cap (5% flat) for ANY vc_thesis position, regardless of what the
+# LLM had actually judged (0 to 10%). Bound deliberately duplicated (not a cross-
+# module import into ``vc_analysis`` -- risk_guard remains a low-level, pure module, with no
+# dependency on skills).
 VC_THESIS_MAX_TAILLE_PCT = 10.0
 
 
 def vc_thesis_alloc_usd(taille_pct: float | None, capital_total: float) -> float | None:
-    """Alloue ``taille_pct`` % du capital total pour une position Formule B (VC-thesis)
-    -- ``None`` si ``taille_pct`` est absent/nul/négatif, signal à l'appelant de retomber
-    sur le système de paliers de conviction ci-dessus (comportement historique, inchangé
-    pour le momentum qui ne fournit jamais ce champ)."""
+    """Allocates ``taille_pct`` % of total capital for a Formula B (VC-thesis) position
+    -- ``None`` if ``taille_pct`` is absent/zero/negative, signaling to the caller to fall
+    back on the conviction-tier system above (historical behavior, unchanged
+    for momentum which never supplies this field)."""
     if taille_pct is None or taille_pct <= 0:
         return None
     bounded = max(0.0, min(taille_pct, VC_THESIS_MAX_TAILLE_PCT))
     return capital_total * bounded / 100.0
 
 
-# 19/07 -- plafond de position auto-calibré par IMPACT DE PRIX (revue croisée Gemini,
-# relayée par l'opérateur, 19/07). Remplace le débat sur "quel % fixe du pool" par un
-# calcul qui s'auto-ajuste à CHAQUE pool réel, sans nouveau seuil arbitraire de taille à
-# choisir. Rien ne plafonnait jusqu'ici une position en fonction de la liquidité RÉELLE
-# du pool ciblé (seul un plancher absolu existe, ``momentum_entry._MIN_LIQUIDITY_USD``)
-# -- un ordre trop gros pour un pool mince fait bouger le prix artificiellement (ARIA se
-# ferait son propre "price impact"), une réalité que le paper-trading ne modélisait pas.
+# 07/19 -- position cap auto-calibrated by PRICE IMPACT (Gemini cross-review,
+# relayed by the operator, 07/19). Replaces the debate over "what fixed % of the pool"
+# with a calculation that auto-adjusts to EVERY real pool, without a new arbitrary size
+# threshold to choose. Until now, nothing capped a position based on the REAL liquidity
+# of the targeted pool (only an absolute floor exists, ``momentum_entry._MIN_LIQUIDITY_USD``)
+# -- an order too big for a thin pool artificially moves the price (ARIA would create its
+# own "price impact"), a reality paper-trading didn't model.
 #
-# Principe (approximation AMM standard, citée par Gemini) : un ordre représentant X % de
-# la liquidité totale du pool produit environ 2*X % d'impact de prix sur un pool
-# équilibré (constant-product, x*y=k). Cette fonction DÉGRADE le prix d'entrée par cet
-# impact estimé, recalcule le R/R structurel (cible/invalidation restent des niveaux
-# Fibonacci/RSI fixes, indépendants de la taille de l'ordre) avec ce prix dégradé, et
-# réduit ``alloc_usd`` (solution fermée, aucune itération) jusqu'à ce que le R/R dégradé
-# revienne au moins à ``PRICE_IMPACT_MIN_RR`` -- volontairement un plancher FIXE et non
-# le R/R brut du trade lui-même (piste envisagée puis écartée par le calcul : un R/R brut
-# très élevé rendrait le plancher quasi inatteignable à N'IMPORTE QUELLE taille -- car
-# tout impact positif fait strictement baisser le R/R en dessous de sa propre valeur de
-# départ -- l'inverse de l'effet recherché : un signal plus fort doit tolérer PLUS de
-# taille, pas moins).
-PRICE_IMPACT_RATIO = 2.0  # règle AMM standard : X % du pool -> ~2*X % d'impact de prix
-# Reprend délibérément la même valeur que ``momentum_entry._RR_AMBIGUOUS_FLOOR`` (R/R
-# structurel minimum pour qu'un signal soit ne serait-ce que considéré comme un achat)
-# SANS importer ce module -- même doctrine d'autonomie déjà appliquée à
-# ``CONVICTION_RR_THRESHOLD``/``MODERATE_RR_THRESHOLD`` ci-dessus (constante
-# indépendante, jamais un import cross-module).
+# Principle (standard AMM approximation, cited by Gemini): an order representing X% of
+# the pool's total liquidity produces roughly 2*X% price impact on a
+# balanced (constant-product, x*y=k) pool. This function DEGRADES the entry price by this
+# estimated impact, recomputes the structural R/R (target/invalidation remain fixed
+# Fibonacci/RSI levels, independent of order size) with this degraded price, and
+# reduces ``alloc_usd`` (closed-form solution, no iteration) until the degraded R/R
+# comes back to at least ``PRICE_IMPACT_MIN_RR`` -- deliberately a FIXED floor and not
+# the trade's own raw R/R (a path considered then discarded by the math: a very high
+# raw R/R would make the floor nearly unreachable at ANY size -- because
+# any positive impact strictly lowers the R/R below its own starting value -- the
+# opposite of the intended effect: a stronger signal should tolerate MORE
+# size, not less).
+PRICE_IMPACT_RATIO = 2.0  # standard AMM rule: X% of the pool -> ~2*X% price impact
+# Deliberately reuses the same value as ``momentum_entry._RR_AMBIGUOUS_FLOOR`` (minimum
+# structural R/R for a signal to even be considered a buy)
+# WITHOUT importing that module -- same autonomy doctrine already applied to
+# ``CONVICTION_RR_THRESHOLD``/``MODERATE_RR_THRESHOLD`` above (independent
+# constant, never a cross-module import).
 PRICE_IMPACT_MIN_RR = 1.0
 
 
 def _price_impact_pct(alloc_usd: float, pool_liquidity_usd: float) -> float:
-    """Impact de prix estimé (fraction) d'un ordre de ``alloc_usd`` sur un pool de
-    ``pool_liquidity_usd`` -- règle AMM standard (``PRICE_IMPACT_RATIO``), extraite ici
-    pour être réutilisée à l'identique par ``cap_alloc_to_price_impact`` (dimensionnement)
-    ET ``simulated_fill_price`` (#175, prix de remplissage réel) -- jamais un second
-    calcul divergent entre les deux."""
+    """Estimated price impact (fraction) of an order of ``alloc_usd`` on a pool of
+    ``pool_liquidity_usd`` -- standard AMM rule (``PRICE_IMPACT_RATIO``), extracted here
+    to be reused identically by ``cap_alloc_to_price_impact`` (sizing)
+    AND ``simulated_fill_price`` (#175, real fill price) -- never a second
+    diverging calculation between the two."""
     return PRICE_IMPACT_RATIO * (alloc_usd / pool_liquidity_usd)
 
 
@@ -381,14 +412,14 @@ def cap_alloc_to_price_impact(
     alloc_usd: float, entry_price: float, target_price: float | None,
     invalidation_price: float | None, pool_liquidity_usd: float | None,
 ) -> float:
-    """Réduit ``alloc_usd`` si l'impact de prix de CET ordre sur CE pool ferait tomber le
-    R/R structurel sous ``PRICE_IMPACT_MIN_RR`` -- jamais une hausse au-delà de la valeur
-    d'entrée (même doctrine que ``size_position_by_risk``). Peut renvoyer ``0.0`` (aucune
-    taille viable, même infinitésimale, sur ce pool avec cette structure de trade).
-    Données manquantes/incohérentes (cible, invalidation ou liquidité absentes, ou
-    structure non haussière) -> inchangé, fail-open -- le garde-fou dur sur la liquidité
-    du pool vit déjà dans ``momentum_entry._MIN_LIQUIDITY_USD``, ce n'est pas le rôle de
-    cette fonction."""
+    """Reduces ``alloc_usd`` if the price impact of THIS order on THIS pool would drop the
+    structural R/R below ``PRICE_IMPACT_MIN_RR`` -- never an increase beyond the entry
+    value (same doctrine as ``size_position_by_risk``). May return ``0.0`` (no
+    viable size, even infinitesimal, on this pool with this trade structure).
+    Missing/inconsistent data (target, invalidation, or liquidity absent, or a
+    non-bullish structure) -> unchanged, fail-open -- the hard guardrail on pool
+    liquidity already lives in ``momentum_entry._MIN_LIQUIDITY_USD``, that's not the role of
+    this function."""
     if alloc_usd <= 0 or entry_price <= 0:
         return alloc_usd
     if not pool_liquidity_usd or pool_liquidity_usd <= 0:
@@ -396,50 +427,50 @@ def cap_alloc_to_price_impact(
     if not target_price or not invalidation_price:
         return alloc_usd
     if target_price <= entry_price or invalidation_price >= entry_price:
-        return alloc_usd  # structure non haussière -- pas le rôle de cette fonction
+        return alloc_usd  # non-bullish structure -- not the role of this function
 
     degraded_entry = entry_price * (1.0 + _price_impact_pct(alloc_usd, pool_liquidity_usd))
     if degraded_entry < target_price:
         degraded_rr = (target_price - degraded_entry) / (degraded_entry - invalidation_price)
         if degraded_rr >= PRICE_IMPACT_MIN_RR:
-            return alloc_usd  # impact négligeable à cette taille, rien à réduire
+            return alloc_usd  # negligible impact at this size, nothing to reduce
 
-    # Solution fermée : prix d'entrée dégradé exact pour lequel R/R == PRICE_IMPACT_MIN_RR
-    # (dérivé de (target - e) / (e - invalidation) = PRICE_IMPACT_MIN_RR), puis remontée
-    # vers l'allocation qui produit ce prix dégradé (impact_pct linéaire en alloc_usd).
+    # Closed-form solution: exact degraded entry price for which R/R == PRICE_IMPACT_MIN_RR
+    # (derived from (target - e) / (e - invalidation) = PRICE_IMPACT_MIN_RR), then worked back
+    # to the allocation that produces this degraded price (impact_pct linear in alloc_usd).
     target_degraded_entry = (
         target_price + PRICE_IMPACT_MIN_RR * invalidation_price
     ) / (1.0 + PRICE_IMPACT_MIN_RR)
     if target_degraded_entry <= entry_price:
-        return 0.0  # même une taille infinitésimale ne tiendrait pas ce plancher ici
+        return 0.0  # even an infinitesimal size wouldn't meet this floor here
 
     k = PRICE_IMPACT_RATIO / pool_liquidity_usd
     capped_alloc = (target_degraded_entry / entry_price - 1.0) / k
     return max(0.0, min(alloc_usd, capped_alloc))
 
 
-# 20/07 -- #175 : ``cap_alloc_to_price_impact`` ci-dessus calcule déjà un ``degraded_
-# entry`` en interne pour DIMENSIONNER la position (réduire ``alloc_usd`` si besoin),
-# mais ne le retourne jamais -- une fois la taille figée, ``open_position`` remplissait
-# encore la position au prix spot EXACT coté, jamais au prix réellement "payé" par un
-# ordre de cette taille sur ce pool. Cette fonction comble l'écart : même modèle
-# d'impact (``_price_impact_pct``, jamais un second calcul divergent), appliqué au prix
-# de REMPLISSAGE simulé plutôt qu'à la taille -- appelée séparément par ``paper_trader.
-# open_position`` sur l'allocation FINALE (après TOUTES les réductions -- risque/impact/
-# concentration), jamais l'allocation intermédiaire de ``cap_alloc_to_price_impact``, qui
-# peut avoir été encore réduite depuis. ``target_price``/``invalidation_price`` ne
-# bougent jamais : ce sont des niveaux techniques externes au graphique (Fibonacci/RSI),
-# notre propre ordre ne déplace pas le support/la résistance, seulement le prix que NOUS
-# payons.
+# 07/20 -- #175: ``cap_alloc_to_price_impact`` above already computes a ``degraded_
+# entry`` internally to SIZE the position (reduce ``alloc_usd`` if needed),
+# but never returns it -- once the size is set, ``open_position`` was still filling
+# the position at the EXACT quoted spot price, never at the price actually "paid" by an
+# order of this size on this pool. This function closes the gap: same impact
+# model (``_price_impact_pct``, never a second diverging calculation), applied to the
+# simulated FILL price rather than to size -- called separately by ``paper_trader.
+# open_position`` on the FINAL allocation (after ALL reductions -- risk/impact/
+# concentration), never the intermediate allocation from ``cap_alloc_to_price_impact``, which
+# may have been further reduced since. ``target_price``/``invalidation_price`` never
+# move: these are technical chart levels external to us (Fibonacci/RSI),
+# our own order doesn't move the support/resistance, only the price WE
+# pay.
 def simulated_fill_price(
     entry_price: float, alloc_usd: float, pool_liquidity_usd: float | None,
 ) -> float:
-    """Prix de remplissage RÉEL simulé pour un achat de ``alloc_usd`` sur un pool de
-    ``pool_liquidity_usd`` -- toujours >= ``entry_price`` (un achat pousse le prix vers
-    le haut, jamais vers le bas). Données manquantes/invalides (alloc/prix nuls,
-    liquidité du pool inconnue) -> ``entry_price`` inchangé, fail-open -- même doctrine
-    que ``cap_alloc_to_price_impact`` (le garde-fou dur sur la liquidité vit dans
-    ``momentum_entry._MIN_LIQUIDITY_USD``, pas ici)."""
+    """Simulated REAL fill price for a buy of ``alloc_usd`` on a pool of
+    ``pool_liquidity_usd`` -- always >= ``entry_price`` (a buy pushes the price
+    up, never down). Missing/invalid data (alloc/price zero,
+    unknown pool liquidity) -> ``entry_price`` unchanged, fail-open -- same doctrine
+    as ``cap_alloc_to_price_impact`` (the hard guardrail on liquidity lives in
+    ``momentum_entry._MIN_LIQUIDITY_USD``, not here)."""
     if entry_price <= 0 or alloc_usd <= 0:
         return entry_price
     if not pool_liquidity_usd or pool_liquidity_usd <= 0:
@@ -450,15 +481,15 @@ def simulated_fill_price(
 def simulated_exit_price(
     current_price: float, position_value_usd: float, pool_liquidity_usd: float | None,
 ) -> float:
-    """Prix de sortie RÉEL simulé pour une vente de ``position_value_usd`` sur un pool de
-    ``pool_liquidity_usd`` -- toujours <= ``current_price`` (une vente pousse le prix vers
-    le bas, jamais vers le haut). Symétrique à ``simulated_fill_price`` (achat), même
-    formule d'impact (``_price_impact_pct``), jamais un second calcul divergent.
+    """Simulated REAL exit price for a sale of ``position_value_usd`` on a pool of
+    ``pool_liquidity_usd`` -- always <= ``current_price`` (a sale pushes the price
+    down, never up). Symmetric to ``simulated_fill_price`` (buy), same
+    impact formula (``_price_impact_pct``), never a second diverging calculation.
 
-    22/07 -- item #18 (stress-test) : le PnL affiché d'une position OUVERTE utilisait le
-    prix spot exact, comme si sa taille pouvait toujours être liquidée sans aucun
-    glissement -- un x50 fictif était possible sur un pool devenu mince. Données
-    manquantes/invalides -> ``current_price`` inchangé, fail-open (même doctrine que
+    07/22 -- item #18 (stress-test): the displayed PnL of an OPEN position used the
+    exact spot price, as if its size could always be liquidated with zero
+    slippage -- a fictitious x50 was possible on a pool that had become thin. Missing/
+    invalid data -> ``current_price`` unchanged, fail-open (same doctrine as
     ``simulated_fill_price``)."""
     if current_price <= 0 or position_value_usd <= 0:
         return current_price
@@ -467,11 +498,11 @@ def simulated_exit_price(
     return current_price * max(0.0, 1.0 - _price_impact_pct(position_value_usd, pool_liquidity_usd))
 
 
-# ── 2. Coupe-circuit de portefeuille (état persisté, fichier dédié) ────────
+# ── 2. Portfolio circuit breaker (persisted state, dedicated file) ────────
 
-SOFT_DRAWDOWN_PCT = 0.10       # -10 % depuis le plus haut d'équité -> alloc réduite de moitié
-HARD_DRAWDOWN_PCT = 0.20       # -20 % depuis le plus haut -> bloque toute nouvelle entrée
-HARD_CONSECUTIVE_LOSSES = 5    # 5 pertes consécutives -> bloque aussi toute nouvelle entrée
+SOFT_DRAWDOWN_PCT = 0.10       # -10% from equity high -> alloc halved
+HARD_DRAWDOWN_PCT = 0.20       # -20% from the high -> blocks any new entry
+HARD_CONSECUTIVE_LOSSES = 5    # 5 consecutive losses -> also blocks any new entry
 SOFT_ALLOC_MULTIPLIER = 0.5
 
 _BAND_NONE = "none"
@@ -484,19 +515,19 @@ def _state_path() -> Path:
 
 
 def _read_raw() -> dict[str, Any] | None:
-    """Même sémantique à trois états que ``outgoing_pause._read_raw`` :
-    ``{}`` (fichier absent -- jamais déclenché, pas un doute), ``dict``
-    (lu correctement), ``None`` (corrompu -- état INCONNU)."""
+    """Same three-state semantics as ``outgoing_pause._read_raw``:
+    ``{}`` (file absent -- never triggered, not a doubt), ``dict``
+    (read correctly), ``None`` (corrupted -- UNKNOWN state)."""
     path = _state_path()
     if not path.exists():
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, ValueError) as exc:
-        logger.warning("risk_guard_state illisible/corrompu (%s) — état INCONNU", exc)
+        logger.warning("risk_guard_state unreadable/corrupted (%s) -- UNKNOWN state", exc)
         return None
     if not isinstance(raw, dict):
-        logger.warning("risk_guard_state de forme inattendue (%r) — état INCONNU", type(raw).__name__)
+        logger.warning("risk_guard_state has unexpected shape (%r) -- UNKNOWN state", type(raw).__name__)
         return None
     return raw
 
@@ -510,10 +541,10 @@ def _write(payload: dict[str, Any]) -> None:
 
 
 def new_entry_block_status() -> dict[str, Any]:
-    """État courant du coupe-circuit DÉDIÉ (pas ``outgoing_pause``) :
+    """Current state of the DEDICATED circuit breaker (not ``outgoing_pause``):
     ``{blocked, since, reason, by, last_alert_band, readable}``.
-    ``readable=False`` signale un fichier corrompu -- fail-closed côté
-    appelant (``blocks_new_entries``), même doctrine « argent » que
+    ``readable=False`` signals a corrupted file -- fail-closed on the
+    caller's side (``blocks_new_entries``), same "money" doctrine as
     ``outgoing_pause.money_block_reason``."""
     raw = _read_raw()
     readable = raw is not None
@@ -538,9 +569,9 @@ def new_entry_block_status() -> dict[str, Any]:
 
 
 def block_new_entries(reason: str, *, by: int | str | None = None) -> dict[str, Any]:
-    """Arme le palier dur : plus aucune NOUVELLE position paper tant que
-    ``resume_new_entries`` n'a pas été appelé explicitement (jamais
-    automatique -- cf. docstring du module)."""
+    """Arms the hard tier: no more NEW paper positions until
+    ``resume_new_entries`` has been called explicitly (never
+    automatic -- see the module docstring)."""
     status = new_entry_block_status()
     _write(
         {
@@ -551,14 +582,14 @@ def block_new_entries(reason: str, *, by: int | str | None = None) -> dict[str, 
             "last_alert_band": _BAND_HARD,
         }
     )
-    logger.warning("risk_guard: coupe-circuit ARMÉ (palier dur) — reason=%s", reason)
+    logger.warning("risk_guard: circuit breaker ARMED (hard tier) -- reason=%s", reason)
     return new_entry_block_status()
 
 
 def resume_new_entries(*, by: int | str | None = None) -> dict[str, Any]:
-    """Lève le coupe-circuit. JAMAIS appelé automatiquement par
-    ``evaluate_portfolio_risk`` -- réservé à une action humaine explicite
-    (ex. commande opérateur), même si le drawdown s'est entre-temps résorbé."""
+    """Lifts the circuit breaker. NEVER called automatically by
+    ``evaluate_portfolio_risk`` -- reserved for an explicit human action
+    (e.g. operator command), even if the drawdown has since recovered."""
     _write(
         {
             "blocked": False,
@@ -569,15 +600,15 @@ def resume_new_entries(*, by: int | str | None = None) -> dict[str, Any]:
             "resumed_at": datetime.now(timezone.utc).isoformat(),
         }
     )
-    logger.warning("risk_guard: coupe-circuit LEVÉ (reprise manuelle) — by=%s", by)
+    logger.warning("risk_guard: circuit breaker LIFTED (manual resume) -- by=%s", by)
     return new_entry_block_status()
 
 
 def blocks_new_entries() -> tuple[bool, str | None]:
-    """``(bloqué, raison)`` -- combine le coupe-circuit dédié ET
-    ``outgoing_pause`` (une pause globale bloque aussi les nouvelles entrées
-    paper) SANS jamais confondre les deux mécanismes dans la raison
-    rapportée. Fail-closed sur état illisible (doctrine « argent »)."""
+    """``(blocked, reason)`` -- combines the dedicated circuit breaker AND
+    ``outgoing_pause`` (a global pause also blocks new paper entries)
+    WITHOUT ever confusing the two mechanisms in the reported reason.
+    Fail-closed on unreadable state ("money" doctrine)."""
     from aria_core import outgoing_pause
 
     if outgoing_pause.is_paused():
@@ -595,9 +626,9 @@ def blocks_new_entries() -> tuple[bool, str | None]:
 class PortfolioRiskState:
     equity: float
     high_water_mark: float
-    drawdown_pct: float             # 0..1 depuis le plus haut
+    drawdown_pct: float             # 0..1 from the high
     consecutive_losses: int
-    alloc_multiplier: float         # 1.0 normal, SOFT_ALLOC_MULTIPLIER si palier souple
+    alloc_multiplier: float         # 1.0 normal, SOFT_ALLOC_MULTIPLIER if soft tier
     blocked: bool
     blocked_reason: str | None = None
     newly_triggered_soft: bool = False
@@ -605,11 +636,11 @@ class PortfolioRiskState:
 
 
 async def evaluate_portfolio_risk(*, price_lookup=None) -> PortfolioRiskState:
-    """Photo du risque portefeuille -- à appeler UNE FOIS par cycle, avant
-    toute tentative d'ouverture de nouvelle position (jamais avant la
-    gestion des positions déjà ouvertes, qui doit continuer normalement même
-    coupe-circuit armé). Met à jour le plus haut d'équité persisté et arme le
-    coupe-circuit dédié si un palier dur est franchi pour la première fois."""
+    """Snapshot of portfolio risk -- to be called ONCE per cycle, before
+    any attempt to open a new position (never before managing
+    already-open positions, which must continue normally even with the
+    circuit breaker armed). Updates the persisted equity high water mark and arms the
+    dedicated circuit breaker if a hard tier is crossed for the first time."""
     from aria_core import paper_trader
 
     summary = await paper_trader.portfolio_summary(price_lookup=price_lookup)

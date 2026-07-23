@@ -522,6 +522,8 @@ _POS_FIELDS = (
     "entry_atr_pct", "pending_high_water", "pending_high_water_since",
     "strategy", "entry_liquidity_usd", "breakeven_locked", "entry_regime",
     "breakeven_pending_since", "entry_dev_sold_pct", "last_liquidity_usd", "pocket",
+    "rr", "align_score", "conviction_tier", "rvol_multiple", "discovery_channel",
+    "conviction_process_trail", "conviction_website_corroborated", "conviction_posting_cadence",
 )
 
 _ADDED_COLUMNS = [
@@ -615,6 +617,37 @@ _ADDED_COLUMNS = [
     # automatically demoted (leaves the satellite pocket only via its OWN
     # normal close -- trailing stop, TP, or invalidation -- never via a reset).
     ("pocket", "TEXT NOT NULL DEFAULT 'main'"),
+    # 07/23 -- performance-breakdown tracking (operator request: segment
+    # winrate/PnL by decision factor to find what actually works). All NULL
+    # for any position opened before this work or by an analyzer that doesn't
+    # provide them -- never an invented value, the breakdown tool skips a
+    # trade for any dimension where its own field is missing.
+    #
+    # rr/align_score: already computed by entry_signals.detect_entry /
+    # momentum_entry._technical_alignment and already present in `sig`, simply
+    # not persisted until now.
+    ("rr", "REAL"),
+    ("align_score", "INTEGER"),
+    # conviction_tier: derived label ("strong"/"moderate"/"weak") from the same
+    # rr/align_score thresholds already used by risk_guard.conviction_size_multiplier
+    # -- computed once at opening, never recomputed from a stale position later.
+    ("conviction_tier", "TEXT"),
+    # rvol_multiple: the real relative-volume multiple from
+    # momentum_entry._check_volume_confirmation, previously only formatted
+    # into a human-readable reason string, never returned as a number.
+    ("rvol_multiple", "REAL"),
+    # discovery_channel: "websocket" (momentum_websocket.py, ~30s reaction) vs
+    # "scan" (heartbeat momentum_discovery_cycle, periodic REST discovery) --
+    # neither analyzer knows this on its own, the caller must pass it in.
+    ("discovery_channel", "TEXT"),
+    # conviction_process_trail/website_corroborated/posting_cadence: detail
+    # from conviction_research.ConvictionResearch, previously only folded into
+    # the free-text `thesis`/`reasons`, never exposed as structured fields.
+    # process_trail stored as a single newline-joined string (a full list
+    # column would need a separate table for no real benefit here).
+    ("conviction_process_trail", "TEXT"),
+    ("conviction_website_corroborated", "INTEGER"),
+    ("conviction_posting_cadence", "TEXT"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -633,6 +666,17 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("entry_dev_sold_pct", "REAL"),
     ("last_liquidity_usd", "REAL"),
     ("pocket", "TEXT NOT NULL DEFAULT 'main'"),
+    # 07/23 -- same performance-breakdown tracking fields as _ADDED_COLUMNS
+    # above, kept in parity so archived (post-weekly-reset) positions carry
+    # the same data as still-open ones.
+    ("rr", "REAL"),
+    ("align_score", "INTEGER"),
+    ("conviction_tier", "TEXT"),
+    ("rvol_multiple", "REAL"),
+    ("discovery_channel", "TEXT"),
+    ("conviction_process_trail", "TEXT"),
+    ("conviction_website_corroborated", "INTEGER"),
+    ("conviction_posting_cadence", "TEXT"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -924,6 +968,26 @@ async def get_closed_positions(limit: int = 500) -> list[dict]:
     return [_row_to_pos(r) for r in rows]
 
 
+async def get_archived_closed_positions(limit: int = 5000) -> list[dict]:
+    """Every closed position already archived by a past ``run_weekly_reset``
+    (07/23, performance-breakdown tracking: the full track record spans many
+    weekly cycles, not just the one in progress -- ``get_closed_positions``
+    above only covers the current cycle). Same ``_POS_FIELDS`` shape as an
+    open/closed position (``archive_id``/``cycle_number`` deliberately
+    excluded -- not needed by any caller so far, easy to add later without
+    breaking this shape)."""
+    await _ensure_tables()
+    cols = ", ".join(_POS_FIELDS)
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            f"SELECT {cols} FROM paper_position_archive WHERE status = 'closed' "
+            "ORDER BY closed_at DESC, archive_id DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [_row_to_pos(r) for r in rows]
+
+
 async def list_positions_for_contract(contract: str, limit: int = 100) -> list[dict]:
     """All paper positions (open + closed) for a contract, most recent first.
 
@@ -1052,6 +1116,14 @@ async def open_position(
     strategy: str = "momentum",
     entry_regime: str | None = None,
     entry_dev_sold_pct: float | None = None,
+    rr: float | None = None,
+    align_score: int | None = None,
+    conviction_tier: str | None = None,
+    rvol_multiple: float | None = None,
+    discovery_channel: str | None = None,
+    conviction_process_trail: str | None = None,
+    conviction_website_corroborated: bool | None = None,
+    conviction_posting_cadence: str | None = None,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
     open, position cap reached, risk circuit breaker armed, invalid price,
@@ -1087,7 +1159,16 @@ async def open_position(
     entry price, computed once at opening -- persisted as-is, used by position
     management (adaptive trailing stop) instead of fixed ``TRAIL_STOP_PCT``.
     ``None`` by default -- unchanged behavior (fixed-percentage trailing stop)
-    for any caller that doesn't provide it."""
+    for any caller that doesn't provide it.
+
+    ``rr``/``align_score``/``conviction_tier``/``rvol_multiple``/
+    ``discovery_channel``/``conviction_process_trail``/
+    ``conviction_website_corroborated``/``conviction_posting_cadence`` (07/23,
+    operator request: segment winrate/PnL by decision factor to find what
+    actually works) -- purely observational, persisted as-is for
+    ``performance_breakdown.py``, never used here to size or gate the
+    position. All ``None`` by default -- unchanged behavior for any caller
+    that doesn't provide them."""
     await _ensure_tables()
     from aria_core.momentum_entry import normalize_contract_case
 
@@ -1168,8 +1249,10 @@ async def open_position(
                invalidation_price, opened_at, status, high_water_price, initial_qty,
                category, entry_security_json, chain, thesis, entry_atr_pct,
                strategy, entry_liquidity_usd, entry_regime, entry_dev_sold_pct,
-               last_liquidity_usd)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               last_liquidity_usd, rr, align_score, conviction_tier, rvol_multiple,
+               discovery_channel, conviction_process_trail,
+               conviction_website_corroborated, conviction_posting_cadence)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              _now(), fill_price, qty, category or "", entry_security_json or None,
@@ -1179,7 +1262,11 @@ async def open_position(
              # -- the "sudden drop" comparison (cycle N vs cycle N-1) only makes
              # sense from the 1st management cycle onward; before that, "last
              # observed" == "entry".
-             pool_liquidity_usd),
+             pool_liquidity_usd,
+             rr, align_score, conviction_tier, rvol_multiple, discovery_channel,
+             conviction_process_trail,
+             None if conviction_website_corroborated is None else int(conviction_website_corroborated),
+             conviction_posting_cadence),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -2055,6 +2142,7 @@ async def run_paper_cycle(
     depeg_check=None,
     skip_position_management: bool = False,
     skip_new_entries: bool = False,
+    discovery_channel: str | None = None,
 ) -> dict:
     """One simulation round, applying the REAL reports:
       1. open positions: continuous safety monitoring (#187) then management
@@ -2098,6 +2186,13 @@ async def run_paper_cycle(
     cycles in parallel (heartbeat + websocket + hourly discovery), which
     would otherwise read the capital/number of open positions before either
     one writes (possible double-allocation).
+
+    ``discovery_channel`` (07/23, performance-breakdown tracking): "websocket"
+    or "scan", set by the CALLER (neither analyzer knows on its own where it
+    was invoked from) -- persisted as-is on any position opened during this
+    cycle, purely observational, never influences the decision itself.
+    ``None`` by default -- unchanged behavior for any caller that doesn't
+    provide it.
     """
     async with _run_cycle_lock:
         return await _run_paper_cycle_locked(
@@ -2109,6 +2204,7 @@ async def run_paper_cycle(
             depeg_check=depeg_check,
             skip_position_management=skip_position_management,
             skip_new_entries=skip_new_entries,
+            discovery_channel=discovery_channel,
         )
 
 
@@ -2122,6 +2218,7 @@ async def _run_paper_cycle_locked(
     depeg_check=None,
     skip_position_management: bool = False,
     skip_new_entries: bool = False,
+    discovery_channel: str | None = None,
 ) -> dict:
     """Real body of ``run_paper_cycle`` -- called ONLY under
     ``_run_cycle_lock``, never directly (no concurrency guardrail otherwise)."""
@@ -2843,6 +2940,15 @@ async def _run_paper_cycle_locked(
                 )
             else:
                 base_alloc_usd = ALLOC_PCT * start * conviction_mult
+        # 07/23 -- performance-breakdown tracking: same branching as
+        # conviction_mult/risk_budget_pct just above (identical thresholds),
+        # only the output changes (a stable label instead of a multiplier) --
+        # computed unconditionally (None for a vc_thesis position, which never
+        # provides rr/align_score, exactly like the two calls above).
+        conviction_tier = risk_guard.conviction_tier_label(
+            sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+            volume_confirmed=sig.get("volume_confirmed"),
+        )
         # 07/18 (continued, "handbrake" validated after review) -- once the
         # weekly target is already reached, halves NEW entries (never to
         # zero): protects the gain already made without ever blocking an
@@ -2921,6 +3027,16 @@ async def _run_paper_cycle_locked(
             # None for any analyzer that doesn't provide it (e.g. momentum,
             # which has no such concept), never an invented value.
             entry_dev_sold_pct=sig.get("dev_sold_pct"),
+            # 07/23 -- performance-breakdown tracking (operator request):
+            # purely observational, never used to size or gate this position.
+            rr=sig.get("rr"),
+            align_score=sig.get("align_score"),
+            conviction_tier=conviction_tier,
+            rvol_multiple=sig.get("rvol_multiple"),
+            discovery_channel=discovery_channel,
+            conviction_process_trail=sig.get("conviction_process_trail"),
+            conviction_website_corroborated=sig.get("conviction_website_corroborated"),
+            conviction_posting_cadence=sig.get("conviction_posting_cadence"),
         )
         if pos:
             opened += 1

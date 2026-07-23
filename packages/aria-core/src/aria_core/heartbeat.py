@@ -1165,6 +1165,10 @@ class AriaHeartbeat:
             # (15min, above), never slowed down by this cycle.
             actions = await paper_trader.run_paper_cycle(
                 notifier=self._notify_telegram_trading, skip_position_management=True,
+                # 07/23 -- performance-breakdown tracking: any position opened
+                # via this path came from the periodic REST scan, not the
+                # ~30s WebSocket.
+                discovery_channel="scan",
             )
             if actions.get("opened"):
                 append_memory(

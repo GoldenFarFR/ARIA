@@ -414,6 +414,9 @@ class MomentumWebsocketListener:
                 max_new=MAX_NEW_PER_DRAIN,
                 skip_position_management=True,
                 notifier=send_trading_notification,
+                # 07/23 -- performance-breakdown tracking: any position opened
+                # via this path was detected in ~30s, not the periodic scan.
+                discovery_channel="websocket",
             )
         except Exception as exc:  # noqa: BLE001 -- a failed drain never kills the service
             logger.exception("momentum_websocket: run_paper_cycle failed (%s)", exc)

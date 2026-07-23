@@ -370,17 +370,21 @@ _RVOL_CONFIRMATION_MULTIPLIER = 3.0
 _RVOL_MIN_TRIGGER_VOLUME_USD = 2_500.0
 
 
-def _check_volume_confirmation(candles: list[Candle]) -> tuple[str, str]:
-    """``(status, reason)`` -- ``status`` in {"confirmed", "not_confirmed", "unknown"},
-    cf. the comment above for the full 3-state doctrine."""
+def _check_volume_confirmation(candles: list[Candle]) -> tuple[str, str, float | None]:
+    """``(status, reason, rvol)`` -- ``status`` in {"confirmed", "not_confirmed", "unknown"},
+    cf. the comment above for the full 3-state doctrine. ``rvol`` (07/23,
+    performance-breakdown tracking) is the real relative-volume multiple,
+    previously only formatted into ``reason`` as text -- ``None`` whenever
+    ``status == "unknown"`` (no real number could be computed), never an
+    invented value."""
     if len(candles) < _RVOL_BASELINE_WINDOW + 1:
-        return "unknown", "historique insuffisant pour établir une référence de volume"
+        return "unknown", "historique insuffisant pour établir une référence de volume", None
 
     baseline = candles[-(_RVOL_BASELINE_WINDOW + 1) : -1]
     baseline_avg = sum(c.volume for c in baseline) / _RVOL_BASELINE_WINDOW
     trigger_volume = candles[-1].volume
     if baseline_avg <= 0:
-        return "unknown", "aucun volume réel disponible sur cette source (repli synthèse/Dune)"
+        return "unknown", "aucun volume réel disponible sur cette source (repli synthèse/Dune)", None
 
     rvol = trigger_volume / baseline_avg
     if rvol >= _RVOL_CONFIRMATION_MULTIPLIER and trigger_volume < _RVOL_MIN_TRIGGER_VOLUME_USD:
@@ -389,17 +393,20 @@ def _check_volume_confirmation(candles: list[Candle]) -> tuple[str, str]:
             f"volume relatif {rvol:.1f}x >= {_RVOL_CONFIRMATION_MULTIPLIER:.0f}x MAIS bougie "
             f"déclenchante {trigger_volume:,.0f}$ < {_RVOL_MIN_TRIGGER_VOLUME_USD:,.0f}$ -- "
             "ratio élevé sur une référence trop effondrée, pas un vrai flux de capital",
+            rvol,
         )
     if rvol >= _RVOL_CONFIRMATION_MULTIPLIER:
         return (
             "confirmed",
             f"volume relatif {rvol:.1f}x >= {_RVOL_CONFIRMATION_MULTIPLIER:.0f}x -- "
             "rebond soutenu par du capital réel",
+            rvol,
         )
     return (
         "not_confirmed",
         f"volume relatif {rvol:.1f}x < {_RVOL_CONFIRMATION_MULTIPLIER:.0f}x -- "
         "rebond sans confirmation de volume",
+        rvol,
     )
 
 
@@ -1793,8 +1800,9 @@ async def evaluate_momentum_entry(
     # lets it through but the conviction penalty is applied to sizing via this
     # field.
     volume_confirmed: bool | None = None
+    rvol_multiple: float | None = None
     if action == "BUY":
-        volume_status, volume_reason = _check_volume_confirmation(candles)
+        volume_status, volume_reason, rvol_multiple = _check_volume_confirmation(candles)
         if volume_status == "not_confirmed":
             action = "HOLD"
             hold_reason = "volume_not_confirmed"
@@ -1836,6 +1844,13 @@ async def evaluate_momentum_entry(
     # network call) if ARIA_CONVICTION_RESEARCH_ENABLED is OFF (default).
     potential_score = None
     potential_rationale = ""
+    # 07/23 -- performance-breakdown tracking: structured detail from
+    # ConvictionResearch, previously only folded into the free-text `reasons`
+    # (never exposed as separate fields on `sig`). None as long as the BUY
+    # branch below isn't reached, or the diligence found nothing usable.
+    conviction_process_trail: str | None = None
+    conviction_website_corroborated: bool | None = None
+    conviction_posting_cadence: str | None = None
     if action == "BUY":
         from aria_core.conviction_research import research_project_potential
 
@@ -1852,6 +1867,9 @@ async def evaluate_momentum_entry(
             # silent on what was tried).
             if research.process_trail:
                 reasons.append("diligence de conviction : " + " -> ".join(research.process_trail))
+                conviction_process_trail = " -> ".join(research.process_trail)
+            conviction_website_corroborated = research.contract_corroborated
+            conviction_posting_cadence = research.posting_cadence
             if research.potential_score is not None:
                 potential_score = research.potential_score
                 potential_rationale = research.rationale
@@ -1898,6 +1916,14 @@ async def evaluate_momentum_entry(
         # (never a fabricated score) -- risk_guard.conviction_size_multiplier
         # treats this as "unknown", never as "weak" (fail-open on unknown).
         "potential_score": potential_score,
+        # 07/23 -- performance-breakdown tracking (operator request: segment
+        # winrate/PnL by decision factor). Purely observational, never used
+        # here to gate or size the decision -- consumed downstream by
+        # paper_trader.open_position()/performance_breakdown.py.
+        "rvol_multiple": rvol_multiple,
+        "conviction_process_trail": conviction_process_trail,
+        "conviction_website_corroborated": conviction_website_corroborated,
+        "conviction_posting_cadence": conviction_posting_cadence,
         # 19/07 -- real gap found (external cross-review, verified in the
         # code): without a category, paper_trader_risk.fit_alloc_to_
         # concentration_cap() (#187) returns the allocation AS-IS (its

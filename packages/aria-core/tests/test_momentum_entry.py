@@ -1275,7 +1275,7 @@ def _pair(**overrides) -> PairSnapshot:
 
 def _patch_pipeline(
     monkeypatch, *, honeypot_clear=True, pairs=None, candles=None, signal=None, align=(0, []),
-    security_gate=(True, ""), concentration=(False, ""), volume_status=("confirmed", ""),
+    security_gate=(True, ""), concentration=(False, ""), volume_status=("confirmed", "", 10.0),
     parabolic_rescue=(False, "sauvetage smart money non confirmé (mock par défaut)"),
 ):
     async def fake_honeypot(contract, chain):
@@ -2076,8 +2076,9 @@ def _volume_candles(baseline_volumes: list[float], trigger_volume: float) -> lis
 class TestCheckVolumeConfirmation:
     def test_unknown_when_history_too_short(self):
         candles = _volume_candles([100.0] * 5, 500.0)  # seulement 6 bougies, fenêtre = 10
-        status, _reason = me._check_volume_confirmation(candles)
+        status, _reason, rvol = me._check_volume_confirmation(candles)
         assert status == "unknown"
+        assert rvol is None  # 07/23 -- jamais une valeur inventée quand le statut est unknown
 
     def test_unknown_when_baseline_structurally_zero(self):
         """Même construction que synthesize_candles_from_pair (DexScreener) et
@@ -2085,29 +2086,33 @@ class TestCheckVolumeConfirmation:
         vrai marché mort. Ne doit JAMAIS rejeter (confondrait donnée absente et signal
         faux)."""
         candles = _volume_candles([0.0] * 10, 0.0)
-        status, reason = me._check_volume_confirmation(candles)
+        status, reason, rvol = me._check_volume_confirmation(candles)
         assert status == "unknown"
         assert "aucun volume réel" in reason.lower()
+        assert rvol is None
 
     def test_confirmed_when_rvol_at_or_above_threshold(self):
         # moyenne=1000, déclencheur=3000 -> RVOL exactement 3.0x (borne incluse), et
         # bien au-dessus du plancher nominal (2 500$).
         candles = _volume_candles([1_000.0] * 10, 3_000.0)
-        status, reason = me._check_volume_confirmation(candles)
+        status, reason, rvol = me._check_volume_confirmation(candles)
         assert status == "confirmed"
         assert "3.0x" in reason
+        assert rvol == pytest.approx(3.0)  # 07/23 -- le multiple réel, pas juste le texte formaté
 
     def test_not_confirmed_when_rvol_below_threshold_with_real_data(self):
         # moyenne=100, déclencheur=200 -> RVOL 2.0x, donnée réelle mais insuffisante
         candles = _volume_candles([100.0] * 10, 200.0)
-        status, reason = me._check_volume_confirmation(candles)
+        status, reason, rvol = me._check_volume_confirmation(candles)
         assert status == "not_confirmed"
         assert "2.0x" in reason
+        assert rvol == pytest.approx(2.0)
 
     def test_confirmed_well_above_threshold(self):
         candles = _volume_candles([500.0] * 10, 10_000.0)  # RVOL 20x, trigger 10 000$
-        status, _reason = me._check_volume_confirmation(candles)
+        status, _reason, rvol = me._check_volume_confirmation(candles)
         assert status == "confirmed"
+        assert rvol == pytest.approx(20.0)
 
     # ── plancher nominal sur la bougie déclenchante (19/07, revue croisée Gemini,
     #    round 6 -- "piège des petits nombres") ──────────────────────────────────────
@@ -2119,16 +2124,18 @@ class TestCheckVolumeConfirmation:
         déclencheur=1500 -> RVOL 15x (largement au-dessus du seuil) MAIS 1500$ < 2500$
         -- doit rester "not_confirmed", pas un faux positif."""
         candles = _volume_candles([100.0] * 10, 1_500.0)
-        status, reason = me._check_volume_confirmation(candles)
+        status, reason, rvol = me._check_volume_confirmation(candles)
         assert status == "not_confirmed"
         assert "2" in reason and "500" in reason  # mentionne le plancher, pas juste le ratio
+        assert rvol == pytest.approx(15.0)  # 07/23 -- rvol reste exposé même quand rejeté sur le plancher $
 
     def test_confirmed_when_trigger_exactly_at_the_floor(self):
         # moyenne=800, déclencheur=2500 -> RVOL 3.125x (>=3x) ET trigger=2500 (>=2500,
         # borne incluse) -- doit passer.
         candles = _volume_candles([800.0] * 10, 2_500.0)
-        status, _reason = me._check_volume_confirmation(candles)
+        status, _reason, rvol = me._check_volume_confirmation(candles)
         assert status == "confirmed"
+        assert rvol == pytest.approx(3.125)
 
 
 @pytest.mark.asyncio
@@ -2138,7 +2145,7 @@ async def test_evaluate_rejects_on_volume_not_confirmed(monkeypatch):
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(
         monkeypatch, signal=strong, align=(3, []),
-        volume_status=("not_confirmed", "volume relatif 1.5x < 3x -- rebond sans confirmation de volume"),
+        volume_status=("not_confirmed", "volume relatif 1.5x < 3x -- rebond sans confirmation de volume", 1.5),
     )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
@@ -2152,7 +2159,7 @@ async def test_evaluate_buy_survives_unknown_volume_but_flags_it(monkeypatch):
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(
         monkeypatch, signal=strong, align=(3, []),
-        volume_status=("unknown", "aucun volume réel disponible sur cette source"),
+        volume_status=("unknown", "aucun volume réel disponible sur cette source", None),
     )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "BUY"
@@ -2164,11 +2171,12 @@ async def test_evaluate_buy_with_confirmed_volume_flags_true(monkeypatch):
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(
         monkeypatch, signal=strong, align=(3, []),
-        volume_status=("confirmed", "volume relatif 5x >= 3x"),
+        volume_status=("confirmed", "volume relatif 5x >= 3x", 5.0),
     )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "BUY"
     assert result["volume_confirmed"] is True
+    assert result["rvol_multiple"] == pytest.approx(5.0)
 
 
 @pytest.mark.asyncio
