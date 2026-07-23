@@ -199,6 +199,15 @@ def key_rvol(t: dict) -> str:
     return _bucket(t.get("rvol_multiple"), [(5.0, "<5x"), (10.0, "5-10x"), (20.0, "10-20x")], above=">=20x")
 
 
+def key_liquidity_rotation(t: dict) -> str:
+    """07/23 -- operator request: on a low-info token there are no
+    fundamentals to judge, but the buy/sell flow is fully on-chain -- this
+    segments winrate/PnL by the liquidity_rotation score (0-10) to MEASURE
+    whether fresh capital rotation actually predicts a better outcome, before
+    ever wiring it into the decision."""
+    return _bucket(t.get("liquidity_rotation_score"), [(3.0, "<3"), (6.0, "3-6")], above=">=6")
+
+
 def key_align_score(t: dict) -> str:
     score = t.get("align_score")
     return "unknown" if score is None else str(score)
@@ -257,6 +266,7 @@ ALL_BREAKDOWNS: dict[str, Callable[[dict], str]] = {
     "Canal de découverte": key_discovery_channel,
     "R/R initial": key_rr,
     "Volume relatif (RVOL)": key_rvol,
+    "Rotation de liquidité (score)": key_liquidity_rotation,
     "Signaux techniques alignés": key_align_score,
     "Volatilité (ATR) à l'entrée": key_atr,
     "Liquidité à l'entrée": key_liquidity,

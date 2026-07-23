@@ -183,6 +183,13 @@ def test_key_rvol_buckets():
     assert pb.key_rvol({}) == "unknown"
 
 
+def test_key_liquidity_rotation_buckets():
+    assert pb.key_liquidity_rotation({"liquidity_rotation_score": 1.0}) == "<3"
+    assert pb.key_liquidity_rotation({"liquidity_rotation_score": 4.5}) == "3-6"
+    assert pb.key_liquidity_rotation({"liquidity_rotation_score": 8.0}) == ">=6"
+    assert pb.key_liquidity_rotation({}) == "unknown"
+
+
 def test_key_align_score():
     assert pb.key_align_score({"align_score": 2}) == "2"
     assert pb.key_align_score({}) == "unknown"

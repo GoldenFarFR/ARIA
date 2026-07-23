@@ -82,6 +82,20 @@ class PairSnapshot:
     price_change_m5: float = 0.0
     buys_24h: int = 0
     sells_24h: int = 0
+    # 07/23 -- liquidity-rotation signal: DexScreener already returns these in
+    # the SAME response as the h24 fields above (txns/volume broken down by
+    # h1/h6/h24) -- previously parsed only at h24, the shorter windows were
+    # silently discarded. Exposed here at zero extra network cost so
+    # liquidity_rotation.py can measure whether capital is rotating INTO this
+    # token right now (a fresh buy-pressure acceleration), the low-info-token
+    # edge the operator described (no fundamentals to judge, but the flow is
+    # fully on-chain and readable).
+    volume_h1_usd: float = 0.0
+    volume_h6_usd: float = 0.0
+    buys_h1: int = 0
+    sells_h1: int = 0
+    buys_h6: int = 0
+    sells_h6: int = 0
     pair_created_at: int | None = None
     base_address: str = ""  # base token address (#194) -- to correlate a batch
     base_symbol: str = ""
@@ -126,6 +140,8 @@ def _parse_pair(raw: dict) -> PairSnapshot:
     vol = raw.get("volume") or {}
     txns = raw.get("txns") or {}
     h24 = txns.get("h24") if isinstance(txns, dict) else {}
+    h6 = txns.get("h6") if isinstance(txns, dict) else {}
+    h1 = txns.get("h1") if isinstance(txns, dict) else {}
     base = raw.get("baseToken") or {}
     quote = raw.get("quoteToken") or {}
     change = raw.get("priceChange")
@@ -142,6 +158,12 @@ def _parse_pair(raw: dict) -> PairSnapshot:
         price_change_m5=float(change.get("m5") or 0),
         buys_24h=int(h24.get("buys") or 0) if isinstance(h24, dict) else 0,
         sells_24h=int(h24.get("sells") or 0) if isinstance(h24, dict) else 0,
+        volume_h1_usd=float(vol.get("h1") or 0),
+        volume_h6_usd=float(vol.get("h6") or 0),
+        buys_h1=int(h1.get("buys") or 0) if isinstance(h1, dict) else 0,
+        sells_h1=int(h1.get("sells") or 0) if isinstance(h1, dict) else 0,
+        buys_h6=int(h6.get("buys") or 0) if isinstance(h6, dict) else 0,
+        sells_h6=int(h6.get("sells") or 0) if isinstance(h6, dict) else 0,
         pair_created_at=int(raw.get("pairCreatedAt") or 0) or None,
         base_address=str(base.get("address") or "").lower(),
         base_symbol=str(base.get("symbol") or ""),

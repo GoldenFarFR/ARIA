@@ -1890,6 +1890,25 @@ async def evaluate_momentum_entry(
         if last_atr is not None and best.price_usd:
             entry_atr_pct = last_atr / best.price_usd
 
+    # 07/23 -- liquidity-rotation signal, computed on every BUY (see the
+    # "liquidity_rotation_*" fields on the returned dict below for the
+    # rationale) from ``best`` (the SAME PairSnapshot already fetched by
+    # ``evaluate_hard_gates`` above) -- zero extra network call.
+    rotation_score: float | None = None
+    rotation_accelerating: bool | None = None
+    rotation_volume_ratio: float | None = None
+    if action == "BUY":
+        from aria_core.skills.liquidity_rotation import compute_liquidity_rotation
+
+        liquidity_rotation = compute_liquidity_rotation(
+            buys_h1=best.buys_h1, sells_h1=best.sells_h1,
+            buys_24h=best.buys_24h, sells_24h=best.sells_24h,
+            volume_h1_usd=best.volume_h1_usd, volume_24h_usd=best.volume_24h_usd,
+        )
+        rotation_score = liquidity_rotation.score
+        rotation_accelerating = liquidity_rotation.pressure_accelerating
+        rotation_volume_ratio = liquidity_rotation.volume_acceleration_ratio
+
     # 19/07 -- conviction diligence (conviction_research.py, explicit operator
     # request), AFTER everything else: only runs on candidates already about to
     # be bought, never on the mass rejected by the fast filters (preserves
@@ -1977,6 +1996,18 @@ async def evaluate_momentum_entry(
         "conviction_process_trail": conviction_process_trail,
         "conviction_website_corroborated": conviction_website_corroborated,
         "conviction_posting_cadence": conviction_posting_cadence,
+        # 07/23 -- liquidity-rotation signal (operator request: on a low-info
+        # token there are no fundamentals to judge, but the buy/sell flow is
+        # fully on-chain and readable -- sense whether capital is rotating IN
+        # right now). Computed from the SAME PairSnapshot already fetched for
+        # the hard gates above, zero extra network call. DELIBERATELY
+        # observational only for this first cut -- tracked by
+        # performance_breakdown.py, never yet used to gate or size a position
+        # (measure a real correlation to winrate/PnL before wiring it into the
+        # decision, same doctrine as the whole /performance chantier).
+        "liquidity_rotation_score": rotation_score,
+        "liquidity_rotation_accelerating": rotation_accelerating,
+        "liquidity_rotation_volume_ratio": rotation_volume_ratio,
         # 19/07 -- real gap found (external cross-review, verified in the
         # code): without a category, paper_trader_risk.fit_alloc_to_
         # concentration_cap() (#187) returns the allocation AS-IS (its

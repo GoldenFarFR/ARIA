@@ -2180,6 +2180,42 @@ async def test_evaluate_buy_with_confirmed_volume_flags_true(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_evaluate_buy_exposes_liquidity_rotation_signal(monkeypatch):
+    """07/23 -- operator request: on a low-info token there are no fundamentals
+    to judge, but the buy/sell flow is fully on-chain -- exposed as an
+    observational field, computed from the SAME PairSnapshot as the hard
+    gates, zero extra network call."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(3, []),
+        pairs=[_pair(
+            buys_h1=9, sells_h1=1, buys_24h=50, sells_24h=50,
+            volume_h1_usd=2000.0, volume_24h_usd=24_000.0,
+        )],
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    # pressure: 9/10=0.9 (h1) vs 50/100=0.5 (24h) -> +40pp delta -> full 5-point
+    # credit; volume: run-rate 2000*24=48,000 / 24,000 = 2x -> half of the 5-point
+    # credit (2.5) -> total 7.5.
+    assert result["liquidity_rotation_score"] == pytest.approx(7.5)
+    assert result["liquidity_rotation_accelerating"] is True
+    assert result["liquidity_rotation_volume_ratio"] == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hold_has_no_liquidity_rotation_signal(monkeypatch):
+    """Same doctrine as entry_atr_pct/rvol_multiple: an informational sizing
+    signal has no purpose while no buy is decided."""
+    weak = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
+    _patch_pipeline(monkeypatch, signal=weak)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["liquidity_rotation_score"] is None
+    assert result["liquidity_rotation_accelerating"] is None
+    assert result["liquidity_rotation_volume_ratio"] is None
+
+
+@pytest.mark.asyncio
 async def test_evaluate_hold_has_no_volume_confirmed(monkeypatch):
     """Un HOLD (R/R sous le seuil ambigu) ne calcule jamais le RVOL -- même doctrine
     que entry_atr_pct, une info de sizing sans objet tant qu'aucun achat n'est décidé."""

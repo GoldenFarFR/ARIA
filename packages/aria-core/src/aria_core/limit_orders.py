@@ -401,6 +401,9 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
         conviction_process_trail=sig.get("conviction_process_trail"),
         conviction_website_corroborated=sig.get("conviction_website_corroborated"),
         conviction_posting_cadence=sig.get("conviction_posting_cadence"),
+        liquidity_rotation_score=sig.get("liquidity_rotation_score"),
+        liquidity_rotation_accelerating=sig.get("liquidity_rotation_accelerating"),
+        liquidity_rotation_volume_ratio=sig.get("liquidity_rotation_volume_ratio"),
     )
     if pos and notifier:
         try:

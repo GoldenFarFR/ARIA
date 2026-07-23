@@ -539,6 +539,7 @@ _POS_FIELDS = (
     "breakeven_pending_since", "entry_dev_sold_pct", "last_liquidity_usd", "pocket",
     "rr", "align_score", "conviction_tier", "rvol_multiple", "discovery_channel",
     "conviction_process_trail", "conviction_website_corroborated", "conviction_posting_cadence",
+    "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
 )
 
 _ADDED_COLUMNS = [
@@ -663,6 +664,15 @@ _ADDED_COLUMNS = [
     ("conviction_process_trail", "TEXT"),
     ("conviction_website_corroborated", "INTEGER"),
     ("conviction_posting_cadence", "TEXT"),
+    # 07/23 -- liquidity-rotation signal (operator request: on a low-info token
+    # there are no fundamentals to judge, but the buy/sell flow is fully
+    # on-chain -- sense whether capital is rotating in right now). Purely
+    # observational, never used here to size or gate a position -- tracked so
+    # performance_breakdown.py can measure a real correlation to winrate/PnL
+    # before it's ever wired into the decision.
+    ("liquidity_rotation_score", "REAL"),
+    ("liquidity_rotation_accelerating", "INTEGER"),
+    ("liquidity_rotation_volume_ratio", "REAL"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -692,6 +702,9 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("conviction_process_trail", "TEXT"),
     ("conviction_website_corroborated", "INTEGER"),
     ("conviction_posting_cadence", "TEXT"),
+    ("liquidity_rotation_score", "REAL"),
+    ("liquidity_rotation_accelerating", "INTEGER"),
+    ("liquidity_rotation_volume_ratio", "REAL"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -1139,6 +1152,9 @@ async def open_position(
     conviction_process_trail: str | None = None,
     conviction_website_corroborated: bool | None = None,
     conviction_posting_cadence: str | None = None,
+    liquidity_rotation_score: float | None = None,
+    liquidity_rotation_accelerating: bool | None = None,
+    liquidity_rotation_volume_ratio: float | None = None,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
     open, position cap reached, risk circuit breaker armed, invalid price,
@@ -1266,8 +1282,10 @@ async def open_position(
                strategy, entry_liquidity_usd, entry_regime, entry_dev_sold_pct,
                last_liquidity_usd, rr, align_score, conviction_tier, rvol_multiple,
                discovery_channel, conviction_process_trail,
-               conviction_website_corroborated, conviction_posting_cadence)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               conviction_website_corroborated, conviction_posting_cadence,
+               liquidity_rotation_score, liquidity_rotation_accelerating,
+               liquidity_rotation_volume_ratio)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              _now(), fill_price, qty, category or "", entry_security_json or None,
@@ -1281,7 +1299,10 @@ async def open_position(
              rr, align_score, conviction_tier, rvol_multiple, discovery_channel,
              conviction_process_trail,
              None if conviction_website_corroborated is None else int(conviction_website_corroborated),
-             conviction_posting_cadence),
+             conviction_posting_cadence,
+             liquidity_rotation_score,
+             None if liquidity_rotation_accelerating is None else int(liquidity_rotation_accelerating),
+             liquidity_rotation_volume_ratio),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -2006,6 +2027,9 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
             conviction_tier="floor",
             rvol_multiple=sig.get("rvol_multiple"),
             discovery_channel="floor",
+            liquidity_rotation_score=sig.get("liquidity_rotation_score"),
+            liquidity_rotation_accelerating=sig.get("liquidity_rotation_accelerating"),
+            liquidity_rotation_volume_ratio=sig.get("liquidity_rotation_volume_ratio"),
         )
         if pos:
             opened += 1
@@ -3250,6 +3274,9 @@ async def _run_paper_cycle_locked(
             conviction_process_trail=sig.get("conviction_process_trail"),
             conviction_website_corroborated=sig.get("conviction_website_corroborated"),
             conviction_posting_cadence=sig.get("conviction_posting_cadence"),
+            liquidity_rotation_score=sig.get("liquidity_rotation_score"),
+            liquidity_rotation_accelerating=sig.get("liquidity_rotation_accelerating"),
+            liquidity_rotation_volume_ratio=sig.get("liquidity_rotation_volume_ratio"),
         )
         if pos:
             opened += 1
