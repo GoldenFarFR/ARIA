@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 _GITHUB_API = "https://api.github.com"
 # Extrait owner/repo d'une URL GitHub (https, avec ou sans .git, chemin en plus ignoré).
 _GH_RE = re.compile(r"github\.com[/:]+([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?(?:[/?#]|$)")
+# URL d'ORGANISATION seule (aucun repo dans le chemin) -- ex. "github.com/crynux-network"
+# sans second segment. Distinct de _GH_RE (qui exige owner ET repo).
+_GH_ORG_ONLY_RE = re.compile(r"^https?://github\.com/([A-Za-z0-9_.-]+)/?(?:[?#]|$)")
+_GH_RESERVED_NAMES = {"", "sponsors", "orgs", "features", "about"}
 
 
 def parse_github_repo(url: str | None) -> tuple[str, str] | None:
@@ -28,9 +32,135 @@ def parse_github_repo(url: str | None) -> tuple[str, str] | None:
     if not m:
         return None
     owner, repo = m.group(1), m.group(2)
-    if owner.lower() in {"", "sponsors", "orgs", "features", "about"}:
+    if owner.lower() in _GH_RESERVED_NAMES:
         return None
     return owner, repo
+
+
+async def _fetch_github_authenticated(path: str) -> object | None:
+    """GET api.github.com AUTHENTIFIÉ (GITHUB_TOKEN, déjà existant ailleurs dans
+    le projet -- vérifié capable de lire n'importe quel dépôt/organisation
+    publique tiers, rate limit 5000/h). Réservé à `resolve_github_repo`
+    (résolution d'organisation, un appel réseau de plus par lien non résolu
+    directement) -- les fonctions historiques de ce module (`github_days_since_commit`/
+    `fetch_github_diligence_snapshot`) restent volontairement en anonyme (60/h,
+    gap de sobriété distinct, noté séparément, hors scope de ce correctif)."""
+    import os
+
+    import httpx
+
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.get(f"{_GITHUB_API}{path}", headers=headers)
+    if r.status_code != 200:
+        return None
+    return r.json()
+
+
+def is_github_link(url: str | None) -> bool:
+    """True si l'URL est un lien GitHub RECONNAISSABLE -- repo précis (`parse_github_repo`)
+    OU organisation seule (`resolve_github_repo` saura la résoudre) -- utilisé pour
+    FILTRER quel lien parmi plusieurs project_links est candidat, avant toute
+    résolution réseau (synchrone, zéro coût)."""
+    if not url:
+        return False
+    if parse_github_repo(url) is not None:
+        return True
+    return bool(_GH_ORG_ONLY_RE.match(str(url).strip()))
+
+
+# Repos "spéciaux" d'organisation -- config/templates, jamais du développement
+# réel (trouvé en vérifiant : `.github` remonte comme candidat sur un cas réel,
+# sans rapport avec la substance du projet).
+_GH_SPECIAL_REPO_NAMES = {".github", "profile"}
+# Nombre de repos chargés pour choisir le PLUS POPULAIRE parmi eux -- l'API
+# GitHub ne supporte PAS `sort=stars` sur cet endpoint (vérifié contre la doc
+# officielle : seuls created/updated/pushed/full_name sont acceptés), donc le
+# tri par popularité doit se faire CÔTÉ CLIENT sur un lot chargé par `pushed`
+# (zéro appel réseau supplémentaire, un seul GET avec per_page plus large).
+_ORG_REPOS_CANDIDATE_POOL = 20
+
+
+async def resolve_github_repo(url: str | None, *, fetch=None) -> tuple[str, str] | None:
+    """(owner, repo) -- résout AUSSI une URL d'ORGANISATION seule (pas de repo
+    précis dans l'URL, pratique courante pour un projet multi-repos : contrat +
+    frontend + doc + node dans des dépôts séparés d'une même organisation) vers
+    son repo le plus PERTINENT, plutôt que d'échouer silencieusement comme
+    `parse_github_repo` seul.
+
+    Trouvé en vérifiant un cas RÉEL (23/07, CNX/crynux-network) : le projet
+    déclare `github.com/crynux-network` (organisation) -- `parse_github_repo`
+    renvoie `None` alors que cette organisation a un repo `crynux-node` à 272
+    étoiles (développement réel et actif, jamais détecté avant ce correctif).
+
+    Sélection en 2 temps, vérifiée nécessaire par un second test réel sur ce
+    même cas (le tri naïf "juste le plus récemment poussé" ramenait un repo
+    annexe à 1 étoile ; sur `crynux-network-dao`, il ramenait `.github`, un
+    repo de config d'organisation, pas du développement) :
+      1. Charge un lot de repos triés par `pushed` (activité récente réelle),
+         exclut les FORKS (pas le code original du projet) et les repos
+         spéciaux (`.github`/`profile`).
+      2. Parmi les candidats restants, choisit celui avec le PLUS D'ÉTOILES
+         (proxy de popularité/pertinence -- l'API ne supporte pas de tri
+         par étoiles côté serveur, vérifié contre la doc officielle) ; en cas
+         d'égalité, le plus récemment poussé (déjà en tête du tri).
+
+    Le cas direct (repo précis dans l'URL) reste TOUJOURS essayé en premier,
+    zéro coût réseau ni changement de comportement sur le cas dominant --
+    l'appel organisation n'est tenté qu'en repli."""
+    direct = parse_github_repo(url)
+    if direct:
+        return direct
+    m = _GH_ORG_ONLY_RE.match(str(url or "").strip())
+    if not m:
+        return None
+    org = m.group(1)
+    if org.lower() in _GH_RESERVED_NAMES:
+        return None
+    fetch = fetch or _fetch_github_authenticated
+    try:
+        data = await fetch(f"/orgs/{org}/repos?sort=pushed&per_page={_ORG_REPOS_CANDIDATE_POOL}")
+    except Exception as exc:  # noqa: BLE001 — best-effort, jamais bloquant
+        logger.info("project_activity: résolution organisation %s échouée (%s)", org, exc)
+        return None
+    if not isinstance(data, list) or not data:
+        return None
+
+    candidates = [
+        repo for repo in data
+        if isinstance(repo, dict)
+        and repo.get("name")
+        and str(repo["name"]).lower() not in _GH_SPECIAL_REPO_NAMES
+        and not repo.get("fork")
+        and not repo.get("archived")
+    ]
+    if not candidates:
+        return None
+    # 23/07 -- garde-fou "plusieurs repos sans rapport les uns avec les autres"
+    # (préoccupation opérateur explicite) : une organisation peut héberger des
+    # projets réellement DISTINCTS (collectif, fondation multi-produits) où le
+    # plus étoilé n'est pas forcément celui du projet CIBLÉ. Seul signal
+    # disponible sans plomberie supplémentaire (aucun nom de projet/symbole
+    # transmis à cette fonction) : le nom de l'organisation lui-même est
+    # quasi toujours dérivé du nom du projet -- les repos qui en PARTAGENT une
+    # racine (ex. org "crynux-network" -> "crynux") sont préférés aux repos
+    # sans rapport apparent avant d'appliquer le tri par étoiles. Si AUCUN
+    # candidat ne partage de racine (organisation au nommage incohérent), le
+    # lot complet reste utilisé tel quel -- limite honnête documentée, jamais
+    # un filtre qui viderait la sélection à tort.
+    org_stems = {t for t in re.split(r"[^a-z0-9]+", org.lower()) if len(t) >= 3}
+    on_theme = [
+        repo for repo in candidates
+        if org_stems and any(stem in str(repo["name"]).lower() for stem in org_stems)
+    ]
+    pool = on_theme or candidates
+    # Stable sort (Python) : à égalité d'étoiles, l'ordre d'origine (par
+    # `pushed`, le plus récent en tête) départage -- jamais un choix arbitraire.
+    best = max(pool, key=lambda repo: repo.get("stargazers_count") or 0)
+    return org, str(best["name"])
 
 
 def _days_since(iso_ts: str, *, now: datetime | None = None) -> int | None:

@@ -92,6 +92,28 @@ async def test_gather_no_url_unavailable():
 
 
 @pytest.mark.asyncio
+async def test_gather_resolves_organization_only_link_end_to_end():
+    """23/07 -- cas réel CNX/crynux-network : le lien déclaré pointe vers une
+    ORGANISATION seule (pas un repo précis) -- doit être résolu vers son repo
+    le plus actif puis analysé normalement, jamais 'indisponible' à tort."""
+    async def fetch(path):
+        if "orgs/crynux-network/repos" in path:
+            return [{"name": "crynux-node", "stargazers_count": 272, "pushed_at": "2026-07-22T02:35:28Z"}]
+        if "commits?per_page" in path:
+            assert "/repos/crynux-network/crynux-node/commits" in path
+            return [_commit_list_item(f"sha{i}") for i in range(1, 9)]
+        return _commit_detail(
+            path.rsplit("/", 1)[-1], message="implement inference worker queue", date="2026-07-01T10:00:00Z",
+            files=[{"filename": "worker/queue.py", "additions": 40, "deletions": 5}],
+        )
+
+    facts = await gather_github_substance_facts("https://github.com/crynux-network", fetch=fetch)
+
+    assert facts.available is True
+    assert facts.technical_commits == 8
+
+
+@pytest.mark.asyncio
 async def test_gather_empty_commit_list_unavailable():
     async def fetch(path):
         return []

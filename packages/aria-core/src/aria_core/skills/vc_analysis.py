@@ -1059,14 +1059,15 @@ async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerd
     code/cosmétique, densité, tests, diversité, régularité, qualité des messages),
     pas seulement la fraîcheur déjà couverte par `conviction_research`. Réutilise
     l'URL GitHub déjà déclarée dans `ctx.best_pair.project_links` (jamais un
-    second parsing de lien) -- `parse_github_repo` reconnaît une URL GitHub quel
-    que soit son label déclaré par le projet. None si aucun lien GitHub trouvé."""
-    from aria_core.services.project_activity import parse_github_repo
+    second parsing de lien) -- `is_github_link` reconnaît une URL GitHub (repo
+    précis OU organisation seule, cf. `resolve_github_repo`) quel que soit son
+    label déclaré par le projet. None si aucun lien GitHub trouvé."""
+    from aria_core.services.project_activity import is_github_link
     from aria_core.skills.github_substance import gather_github_substance_facts, judge_github_substance
 
     links = ctx.best_pair.project_links if ctx.best_pair else []
     github_url = next(
-        (link.get("url") for link in links if isinstance(link, dict) and parse_github_repo(link.get("url"))),
+        (link.get("url") for link in links if isinstance(link, dict) and is_github_link(link.get("url"))),
         None,
     )
     if not github_url:

@@ -216,14 +216,21 @@ async def gather_github_substance_facts(
 ) -> GithubSubstanceFacts:
     """Récolte best-effort la substance du développement récent. ``fetch``
     injectable pour les tests offline (défaut : appel authentifié réel).
-    Toute indisponibilité -> ``available=False``, jamais une donnée inventée."""
-    from aria_core.services.project_activity import parse_github_repo
+    Toute indisponibilité -> ``available=False``, jamais une donnée inventée.
 
-    parsed = parse_github_repo(repo_url)
+    23/07 -- utilise ``resolve_github_repo`` (pas seulement ``parse_github_repo``) :
+    un lien déclaré vers une ORGANISATION seule (ex. "github.com/crynux-network",
+    pas un repo précis -- pratique courante pour un projet multi-repos) est résolu
+    vers son repo le plus récemment actif, plutôt que de renvoyer indisponible à
+    tort (cas réel trouvé : CNX/crynux-network, 272 étoiles, jamais détecté avant
+    ce correctif)."""
+    from aria_core.services.project_activity import resolve_github_repo
+
+    fetch = fetch or _default_fetch
+    parsed = await resolve_github_repo(repo_url, fetch=fetch)
     if not parsed:
         return GithubSubstanceFacts(available=False, error="URL GitHub introuvable ou invalide")
     owner, repo = parsed
-    fetch = fetch or _default_fetch
     now = now or datetime.now(timezone.utc)
 
     since = (now - timedelta(days=_WINDOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
