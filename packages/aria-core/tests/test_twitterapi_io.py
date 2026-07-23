@@ -124,3 +124,75 @@ async def test_fetch_transport_error_returns_none(_fresh, monkeypatch):
 
     monkeypatch.setattr(tw.httpx, "AsyncClient", _Boom)
     assert await tw.fetch_user_profile("crynuxio") is None
+
+
+# ── fetch_last_tweets (23/07, activité/engagement) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_last_tweets_without_key_returns_none(monkeypatch):
+    monkeypatch.delenv("TWITTERAPI_IO_KEY", raising=False)
+    assert await tw.fetch_last_tweets("crynuxio") is None
+
+
+@pytest.mark.asyncio
+async def test_last_tweets_success_real_shape(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {
+            "status": "success",
+            "tweets": [
+                {
+                    "createdAt": "2026-07-21T17:12:03.000000Z",
+                    "likeCount": 5, "replyCount": 1, "retweetCount": 0, "quoteCount": 0,
+                },
+                {
+                    "createdAt": "2026-07-21T16:09:39.000000Z",
+                    "likeCount": 49, "replyCount": 14, "retweetCount": 7, "quoteCount": 0,
+                },
+            ],
+        },
+    )
+    tweets = await tw.fetch_last_tweets("crynuxio", max_results=20)
+    assert tweets is not None
+    assert len(tweets) == 2
+    assert tweets[1].like_count == 49
+    assert tweets[1].created_at == datetime(2026, 7, 21, 16, 9, 39, tzinfo=timezone.utc)
+    assert _FakeAsyncClient._captured_headers == {"X-API-Key": "test-key-sentinel"}
+
+
+@pytest.mark.asyncio
+async def test_last_tweets_respects_max_results(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {
+            "status": "success",
+            "tweets": [
+                {"createdAt": "2026-07-21T17:12:03.000000Z", "likeCount": i}
+                for i in range(50)
+            ],
+        },
+    )
+    tweets = await tw.fetch_last_tweets("crynuxio", max_results=5)
+    assert len(tweets) == 5
+
+
+@pytest.mark.asyncio
+async def test_last_tweets_skips_entries_without_created_at(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {"status": "success", "tweets": [{"likeCount": 1}, {"createdAt": None}]},
+    )
+    assert await tw.fetch_last_tweets("crynuxio") is None
+
+
+@pytest.mark.asyncio
+async def test_last_tweets_http_error_returns_none(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(500, {})
+    assert await tw.fetch_last_tweets("crynuxio") is None
+
+
+@pytest.mark.asyncio
+async def test_last_tweets_empty_list_returns_none(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(200, {"status": "success", "tweets": []})
+    assert await tw.fetch_last_tweets("crynuxio") is None

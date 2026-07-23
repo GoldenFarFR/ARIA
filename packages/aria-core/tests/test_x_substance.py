@@ -1,21 +1,26 @@
-"""Signal 'substance X' -- TwitterAPI.io en premier (followers/following/âge
-du compte en un appel, 23/07), repli Tavily extract (âge seul) si absent.
-La régularité de publication a été ÉVALUÉE puis ÉCARTÉE (testée en conditions
-réelles : la page profil extraite par Tavily renvoie des tweets "highlights"
-non chronologiques, pas le fil récent réel -- voir docstring de x_substance.py)."""
+"""Signal 'substance X' -- TwitterAPI.io en premier (profil PUIS derniers
+tweets pour activité/engagement, 23/07), repli Tavily extract (âge seul) si
+absent. La régularité de publication via TAVILY a été ÉVALUÉE puis ÉCARTÉE
+(page profil extraite = tweets "highlights" non chronologiques) -- mais
+réintégrée via TwitterAPI.io/last_tweets, qui donne un vrai fil daté (voir
+docstring de x_substance.py)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from aria_core.services.tavily import TavilyExtractResult, TavilyPage
-from aria_core.services.twitterapi_io import TwitterApiIoProfile
+from aria_core.services.twitterapi_io import TwitterApiIoProfile, TwitterApiIoTweet
 from aria_core.skills.x_substance import (
     XSubstanceFacts,
     gather_x_substance_facts,
     judge_x_substance,
 )
+
+
+async def _no_tweets(handle):
+    return None
 
 NOW = datetime(2026, 7, 23, tzinfo=timezone.utc)
 
@@ -41,7 +46,9 @@ def test_old_account_bad_ratio_is_neutral():
     v = judge_x_substance(
         XSubstanceFacts(available=True, account_age_days=700, followers=100, following=400)
     )
-    assert v.score == 50.0  # 0.5*100 (âge) + 0.5*0 (ratio > 3.0)
+    # Poids redistribués (âge 0.30 + ratio 0.25, régularité/engagement absents) :
+    # (0.30*100 + 0.25*0) / 0.55 = 54.5
+    assert v.score == 54.5
     assert v.signal == "neutral"
 
 
@@ -62,7 +69,48 @@ def test_zero_followers_never_divides_by_zero():
     v = judge_x_substance(
         XSubstanceFacts(available=True, account_age_days=700, followers=0, following=50)
     )
-    assert v.score == 50.0  # ratio_score=0 si followers<=0, jamais une exception
+    # ratio_score=0 si followers<=0, jamais une exception -- (0.30*100+0.25*0)/0.55 = 54.5
+    assert v.score == 54.5
+
+
+def test_all_four_axes_present_is_positive():
+    v = judge_x_substance(
+        XSubstanceFacts(
+            available=True, account_age_days=700, followers=3676, following=242,
+            active_weeks_recent=10, tweets_analyzed=20, avg_engagement_rate=0.015,
+        )
+    )
+    # 0.30*100 (âge) + 0.25*100 (ratio) + 0.25*100 (régularité 10/8 plafonné) + 0.20*100 (engagement >=1%)
+    assert v.score == 100.0
+    assert v.signal == "positive"
+    assert "engagement moyen" in v.points[0]
+    assert "actif 10/12 semaines" in v.points[0]
+
+
+def test_low_activity_and_weak_engagement_drags_score_down():
+    v = judge_x_substance(
+        XSubstanceFacts(
+            available=True, account_age_days=700, followers=3676, following=242,
+            active_weeks_recent=1, tweets_analyzed=5, avg_engagement_rate=0.0002,
+        )
+    )
+    # 0.30*100 + 0.25*100 + 0.25*(1/8*100=12.5) + 0.20*0 (engagement < 0,05%)
+    assert v.score == pytest.approx(0.30 * 100 + 0.25 * 100 + 0.25 * 12.5 + 0.20 * 0, abs=0.1)
+    assert v.signal != "positive"
+
+
+def test_tweets_analyzed_but_engagement_none_when_followers_zero():
+    """Si followers<=0 au moment du calcul d'activité, avg_engagement_rate reste
+    None (jamais une division par zéro) -- seule la régularité est retenue."""
+    v = judge_x_substance(
+        XSubstanceFacts(
+            available=True, account_age_days=700, followers=0, following=0,
+            active_weeks_recent=5, tweets_analyzed=10, avg_engagement_rate=None,
+        )
+    )
+    # âge(0.30)+ratio(0.25, followers<=0 -> 0)+régularité(0.25, 5/8*100=62.5) ; engagement absent
+    expected = (0.30 * 100 + 0.25 * 0 + 0.25 * 62.5) / 0.80
+    assert v.score == pytest.approx(expected, abs=0.1)
 
 
 # ── Récolte (TwitterAPI.io en premier, repli Tavily) ────────────────────────
@@ -86,13 +134,61 @@ async def test_gather_uses_twitterapi_io_when_available():
         raise AssertionError("ne doit jamais appeler Tavily si TwitterAPI.io a répondu")
 
     facts = await gather_x_substance_facts(
-        "crynuxio", twitterapi_fn=twitterapi_fn, extract_fn=extract_fn, now=NOW,
+        "crynuxio", twitterapi_fn=twitterapi_fn, tweets_fn=_no_tweets, extract_fn=extract_fn, now=NOW,
     )
     assert facts.available is True
     assert facts.source == "twitterapi_io"
     assert facts.followers == 3676
     assert facts.following == 242
     assert facts.account_age_days == (NOW - datetime(2023, 10, 27, tzinfo=timezone.utc)).days
+    assert facts.active_weeks_recent is None
+    assert facts.avg_engagement_rate is None
+
+
+@pytest.mark.asyncio
+async def test_gather_computes_activity_and_engagement_from_tweets():
+    async def twitterapi_fn(handle):
+        return TwitterApiIoProfile(
+            followers=1000, following=100, created_at=datetime(2023, 10, 27, tzinfo=timezone.utc),
+        )
+
+    async def tweets_fn(handle):
+        return [
+            TwitterApiIoTweet(
+                created_at=NOW - timedelta(days=d),
+                like_count=10, reply_count=2, retweet_count=1, quote_count=0,
+            )
+            for d in (1, 8, 15, 40)  # 4 semaines distinctes récentes
+        ]
+
+    facts = await gather_x_substance_facts(
+        "crynuxio", twitterapi_fn=twitterapi_fn, tweets_fn=tweets_fn, now=NOW,
+    )
+    assert facts.tweets_analyzed == 4
+    assert facts.active_weeks_recent == 4
+    # (10+2+1+0)=13 par tweet / 1000 followers = 0.013
+    assert facts.avg_engagement_rate == pytest.approx(0.013)
+
+
+@pytest.mark.asyncio
+async def test_gather_tweets_failure_degrades_only_activity_axes():
+    """Une panne sur last_tweets ne doit jamais faire tomber tout le signal --
+    le profil (âge/ratio) reste disponible, seuls activité/engagement manquent."""
+    async def twitterapi_fn(handle):
+        return TwitterApiIoProfile(
+            followers=1000, following=100, created_at=datetime(2023, 10, 27, tzinfo=timezone.utc),
+        )
+
+    async def tweets_fn(handle):
+        raise RuntimeError("panne réseau sur last_tweets")
+
+    facts = await gather_x_substance_facts(
+        "crynuxio", twitterapi_fn=twitterapi_fn, tweets_fn=tweets_fn, now=NOW,
+    )
+    assert facts.available is True
+    assert facts.followers == 1000
+    assert facts.active_weeks_recent is None
+    assert facts.avg_engagement_rate is None
 
 
 @pytest.mark.asyncio
