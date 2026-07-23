@@ -139,3 +139,30 @@ non-custodial (Privy) · paiement Stripe + crypto · cagnotte 15 % → seuil 100
 3. 🟠 **Token** : bloqué jusqu'en phase 3 (Q12, avis préliminaire seulement).
 4. 🟢 **Peut avancer sans attendre** : accumulation de la cagnotte, marketing de
    **risque/pédagogie** (Q14 à valider vite), build technique.
+
+---
+
+## 7. Nouveau scénario (23/07) — vente de signaux via x402, machine-à-machine
+
+Contexte distinct du modèle décrit en §1 (rapports humains, Stripe + crypto) :
+ARIA pourrait aussi vendre des signaux (score de sécurité, score wallet, score de
+légitimité projet) à d'autres agents IA via le protocole **x402** (micropaiements
+USDC on-chain, Base), en pur crypto-à-crypto, sans rail fiat.
+
+**Décision opérateur (23/07)** : le build technique et le lancement de ce chemin
+crypto-only avancent **sans attendre l'avocat**, sur la base que rester
+crypto-à-crypto écarte la question fiscale (pas d'événement taxable dans la
+juridiction de l'opérateur, non vérifié par un professionnel) et que les
+paiements restent en USDC (jamais de rail fiat pour ce produit). Si un rail fiat
+était ajouté un jour à ce même produit, la même règle qu'en §1 s'appliquerait
+intégralement (Q10 redevient bloquant).
+
+**Point resté ouvert, à soumettre à l'avocat dès la prochaine rencontre (pas un
+blocage actuel, juste un point à ne pas perdre)** : **Q1** (qualification
+« conseil en investissement réglementé ») est indépendante de la devise —
+vendre une thèse BUY/WATCH/AVOID complète avec taille + niveaux resterait la
+même question juridique que ce soit payé en USDC ou en euros. Le produit
+actuellement construit (score wallet composite, scores de substance
+GitHub/Website/Docs/X) est plus éloigné d'un « conseil en investissement »
+direct qu'une thèse BUY complète — mais si le catalogue s'étend un jour à la
+thèse VC complète en vente x402, cette question mérite d'être reposée.

@@ -14,6 +14,13 @@ PUBLIC_PREFIXES = (
     "/api/pulse",
     "/api/auth/",
     "/api/telegram/webhook",
+    # x402-payable signals (app/x402_seller.py) -- machine-to-machine, gated by
+    # x402's own on-chain payment challenge, not a Privy operator/member
+    # session. Only reachable at all when x402_seller_ready() mounts the
+    # router (gate OFF by default) -- exempting the prefix here is harmless
+    # when unmounted, since FastAPI 404s a path with no matching route
+    # regardless of this middleware.
+    "/api/x402/",
     "/assets/",
     "/favicon.svg",
     "/icons.svg",

@@ -48,6 +48,7 @@ from app.config import settings
 from app.database import init_db
 from app.realtime.pair_indexer import pair_indexer
 from app.realtime.scanner import realtime_scanner
+from app.x402_seller import mount_x402_seller, x402_seller_ready
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,16 @@ app.include_router(alerts.router, prefix="/api")
 app.include_router(aria.router, prefix="/api")
 app.include_router(holding_member.router, prefix="/api")
 app.include_router(websocket.router)
+
+# x402 seller (ARIA selling her own signals to other agents, USDC on Base) --
+# gated OFF by default (ARIA_X402_SELLER_ENABLED unset). Fail-closed: the
+# router is not even registered unless x402_seller_ready() is True (gate ON
+# AND a receiving address configured) -- see app/x402_seller.py.
+if x402_seller_ready():
+    from app.api.routes import x402_signals
+
+    mount_x402_seller(app)
+    app.include_router(x402_signals.router, prefix="/api/x402")
 
 
 @app.get("/api/pulse")
