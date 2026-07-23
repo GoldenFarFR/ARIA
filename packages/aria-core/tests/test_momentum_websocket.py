@@ -18,10 +18,17 @@ B = "0x" + "b" * 40
 
 
 @pytest.fixture(autouse=True)
-def _gate_off_by_default(monkeypatch):
+def _gate_off_by_default(monkeypatch, tmp_path):
     monkeypatch.delenv("ARIA_MOMENTUM_WEBSOCKET_ENABLED", raising=False)
     monkeypatch.delenv("ARIA_PAPER_TRADING_ENABLED", raising=False)
     monkeypatch.setattr(outgoing_pause, "is_paused", lambda **kw: False)
+    # 07/23 -- limit-order mechanism: _drain_once() now also checks pending
+    # limit orders (DB_PATH computed once at import, same trap as
+    # momentum_funnel_log/market_sentiment elsewhere) -- isolated here so no
+    # test in this file silently touches the real default DB.
+    from aria_core import limit_orders
+
+    monkeypatch.setattr(limit_orders, "DB_PATH", str(tmp_path / "limit_orders.db"))
     yield
 
 
@@ -260,6 +267,107 @@ async def test_drain_triggers_run_paper_cycle_with_skip_position_management(monk
     assert listener._pending == {}
     assert (A, "base") in listener._seen
     assert (B, "solana") in listener._seen
+
+
+# ── limit-order processing (07/23) ───────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_drain_once_checks_limit_orders_even_with_empty_pending(monkeypatch):
+    """The whole point of extracting the check out of _drain_new_candidates:
+    a quiet day with no new WebSocket candidate must not starve limit-order
+    watching."""
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    assert listener._pending == {}  # nothing new this pass
+
+    called = False
+
+    async def _fake_process(price_lookup, notifier=None):
+        nonlocal called
+        called = True
+        return {"expired": 0, "entered_watching": 0, "cancelled": 0, "triggered": []}
+
+    from aria_core import limit_orders
+
+    monkeypatch.setattr(limit_orders, "process_active_orders", _fake_process)
+
+    await listener._drain_once()
+    assert called is True
+
+
+@pytest.mark.asyncio
+async def test_drain_once_skips_limit_orders_when_paper_trading_disabled(monkeypatch):
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "false")
+    listener = mw.MomentumWebsocketListener()
+
+    called = False
+
+    async def _fake_process(price_lookup, notifier=None):
+        nonlocal called
+        called = True
+        return {}
+
+    from aria_core import limit_orders
+
+    monkeypatch.setattr(limit_orders, "process_active_orders", _fake_process)
+
+    await listener._drain_once()
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_drain_once_skips_limit_orders_when_kill_switch_paused(monkeypatch):
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    monkeypatch.setattr(outgoing_pause, "is_paused", lambda **kw: True)
+    listener = mw.MomentumWebsocketListener()
+
+    called = False
+
+    async def _fake_process(price_lookup, notifier=None):
+        nonlocal called
+        called = True
+        return {}
+
+    from aria_core import limit_orders
+
+    monkeypatch.setattr(limit_orders, "process_active_orders", _fake_process)
+
+    await listener._drain_once()
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_drain_once_limit_order_failure_never_blocks_new_candidate_drain(monkeypatch):
+    """A crashing limit-order pass must never prevent the classic new-candidate
+    drain from still running this same pass."""
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    listener._pending[(A, "base")] = 0.0
+
+    async def _boom(price_lookup, notifier=None):
+        raise RuntimeError("limit-order processing blew up")
+
+    from aria_core import limit_orders
+
+    monkeypatch.setattr(limit_orders, "process_active_orders", _boom)
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    captured: dict = {}
+
+    async def _fake_run_paper_cycle(**kwargs):
+        captured.update(kwargs)
+        return {"opened": []}
+
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+
+    await listener._drain_once()  # must not raise
+    assert captured  # the classic drain still ran despite the limit-order crash
     # 20/07 -- non-régression du vrai bug trouvé en conditions réelles (position MAGIC
     # achetée via ce chemin sans jamais notifier Telegram, seule sa vente -- gérée par
     # le heartbeat -- est arrivée) : ce chemin doit désormais passer le MÊME notifier

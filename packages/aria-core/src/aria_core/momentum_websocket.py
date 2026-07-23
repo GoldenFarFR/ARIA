@@ -293,6 +293,29 @@ class MomentumWebsocketListener:
                 logger.exception("momentum_websocket: drain failed (%s)", exc)
 
     async def _drain_once(self) -> None:
+        """Checks limit orders FIRST, independently of new-candidate
+        detection (07/23) -- the early-return in ``_drain_new_candidates``
+        below on an empty ``_pending`` would otherwise starve limit-order
+        watching on a quiet day with no new WebSocket candidate. Same gates
+        as the classic drain (paper trading enabled + kill-switch) -- never
+        triggers a buy the rest of this service wouldn't."""
+        if _paper_trading_enabled() and not outgoing_pause.is_paused():
+            try:
+                from aria_core import limit_orders, paper_trader
+                from aria_core.gateway.telegram_bot import send_trading_notification
+
+                await limit_orders.process_active_orders(
+                    paper_trader._default_price_lookup, notifier=send_trading_notification,
+                )
+            except Exception as exc:  # noqa: BLE001 -- never kills the drain/websocket
+                logger.exception("momentum_websocket: limit-order processing failed (%s)", exc)
+
+        await self._drain_new_candidates()
+
+    async def _drain_new_candidates(self) -> None:
+        """Original ``_drain_once`` body (07/23, renamed when the limit-order
+        check above was extracted) -- unchanged behavior: sourcing/evaluating
+        NEW candidates from the WebSocket feed."""
         async with self._lock:
             if not self._pending:
                 return

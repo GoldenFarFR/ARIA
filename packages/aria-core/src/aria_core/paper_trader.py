@@ -2132,6 +2132,63 @@ def format_weekly_cycle_report(report: dict) -> str:
     return "\n".join(lines)
 
 
+def compute_entry_alloc(
+    sig: dict, start: float, weekly_context: dict | None, risk_state,
+) -> tuple[float, str | None]:
+    """Entry sizing for a BUY signal -- extracted (07/23, limit-order
+    mechanism) from the inline block below so a limit-order trigger can
+    recompute sizing with FRESH context (regime/risk_state/weekly may have
+    moved since the order was placed) via the exact same formula as a direct
+    buy. Zero behavior change from extraction -- same branching/order as
+    before. Returns ``(entry_alloc_usd, conviction_tier)``."""
+    from aria_core import risk_guard
+
+    # 07/20 -- #174 (Formula B): a vc_thesis position provides ``taille_pct``
+    # (rich LLM judgment, 0-10% of capital) but never ``rr``/``align_score``
+    # (deterministic thresholds specific to momentum) -- checked FIRST, before
+    # any conviction-stage computation, so this last one never silently
+    # degrades to its MAX fallback (5% flat) for lack of a signal to read.
+    vc_alloc_usd = risk_guard.vc_thesis_alloc_usd(sig.get("taille_pct"), start)
+    if vc_alloc_usd is not None:
+        base_alloc_usd = vc_alloc_usd
+    else:
+        risk_budget_pct = risk_guard.conviction_risk_budget_pct(
+            sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+            volume_confirmed=sig.get("volume_confirmed"),
+        )
+        conviction_mult = risk_guard.conviction_size_multiplier(
+            sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+            volume_confirmed=sig.get("volume_confirmed"),
+        )
+        entry_atr_pct = sig.get("entry_atr_pct")
+        if risk_budget_pct is not None and entry_atr_pct:
+            trail_pct = _effective_trail_pct(entry_atr_pct)
+            base_alloc_usd = risk_guard.size_by_risk_budget(
+                risk_budget_pct, trail_pct, start,
+                ceiling_usd=conviction_mult * ALLOC_PCT * start,
+            )
+        else:
+            base_alloc_usd = ALLOC_PCT * start * conviction_mult
+    conviction_tier = risk_guard.conviction_tier_label(
+        sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
+        volume_confirmed=sig.get("volume_confirmed"),
+    )
+    # 07/18 (continued, "handbrake" validated after review) -- once the
+    # weekly target is already reached, halves NEW entries (never to zero):
+    # protects the gain already made without ever blocking an exceptional,
+    # doubly-verified setup. DETERMINISTIC rule (risk_guard), never entrusted
+    # to the LLM. ``risk_state.alloc_multiplier`` (soft threshold #186) and
+    # this risk/ATR sizing are two orthogonal dampeners (portfolio vs.
+    # per-trade) -- always composed multiplicatively.
+    pacing_mult = risk_guard.weekly_pacing_size_multiplier(weekly_context)
+    # 07/20 -- Regime Switch: halves in confirmed Fear macro regime (preserves
+    # capital when liquidity regroups on large assets) -- same composition
+    # point as pacing_mult above, 1.0 by default (Neutral/Euphoria).
+    regime_mult = risk_guard.regime_size_multiplier(sig.get("regime"))
+    entry_alloc_usd = base_alloc_usd * risk_state.alloc_multiplier * pacing_mult * regime_mult
+    return entry_alloc_usd, conviction_tier
+
+
 async def run_paper_cycle(
     *,
     candidates=None,
@@ -2913,58 +2970,11 @@ async def _run_paper_cycle_locked(
         # multiplier) guarantees the new system can never exceed what the old
         # one would have given for this SAME stage -- only reduce below it,
         # never level it up.
-        # 07/20 -- #174 (Formula B): a vc_thesis position provides
-        # ``taille_pct`` (rich LLM judgment, 0-10% of capital) but never
-        # ``rr``/``align_score`` (deterministic thresholds specific to
-        # momentum) -- checked FIRST, before any conviction-stage
-        # computation, so this last one never silently degrades to its MAX
-        # fallback (5% flat) for lack of a signal to read.
-        vc_alloc_usd = risk_guard.vc_thesis_alloc_usd(sig.get("taille_pct"), start)
-        if vc_alloc_usd is not None:
-            base_alloc_usd = vc_alloc_usd
-        else:
-            risk_budget_pct = risk_guard.conviction_risk_budget_pct(
-                sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
-                volume_confirmed=sig.get("volume_confirmed"),
-            )
-            conviction_mult = risk_guard.conviction_size_multiplier(
-                sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
-                volume_confirmed=sig.get("volume_confirmed"),
-            )
-            entry_atr_pct = sig.get("entry_atr_pct")
-            if risk_budget_pct is not None and entry_atr_pct:
-                trail_pct = _effective_trail_pct(entry_atr_pct)
-                base_alloc_usd = risk_guard.size_by_risk_budget(
-                    risk_budget_pct, trail_pct, start,
-                    ceiling_usd=conviction_mult * ALLOC_PCT * start,
-                )
-            else:
-                base_alloc_usd = ALLOC_PCT * start * conviction_mult
-        # 07/23 -- performance-breakdown tracking: same branching as
-        # conviction_mult/risk_budget_pct just above (identical thresholds),
-        # only the output changes (a stable label instead of a multiplier) --
-        # computed unconditionally (None for a vc_thesis position, which never
-        # provides rr/align_score, exactly like the two calls above).
-        conviction_tier = risk_guard.conviction_tier_label(
-            sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
-            volume_confirmed=sig.get("volume_confirmed"),
-        )
-        # 07/18 (continued, "handbrake" validated after review) -- once the
-        # weekly target is already reached, halves NEW entries (never to
-        # zero): protects the gain already made without ever blocking an
-        # exceptional, doubly-verified setup. DETERMINISTIC rule (risk_guard),
-        # never entrusted to the LLM -- see 07/18 operator discussion
-        # (separation of roles: the safety guard detects traps, it never
-        # sizes a position). ``risk_state.alloc_multiplier`` (soft threshold
-        # #186) and this risk/ATR sizing are two orthogonal dampeners
-        # (portfolio vs. per-trade) -- always composed multiplicatively.
-        pacing_mult = risk_guard.weekly_pacing_size_multiplier(weekly_context)
-        # 07/20 -- Regime Switch: halves in confirmed Fear macro regime
-        # (preserves capital when liquidity regroups on large assets) -- same
-        # composition point as pacing_mult above, 1.0 by default
-        # (Neutral/Euphoria).
-        regime_mult = risk_guard.regime_size_multiplier(sig.get("regime"))
-        entry_alloc_usd = base_alloc_usd * risk_state.alloc_multiplier * pacing_mult * regime_mult
+        # 07/23 -- sizing extracted to ``compute_entry_alloc`` (limit-order
+        # mechanism, see below) -- same formula/thresholds as before
+        # extraction, reused as-is by a limit-order trigger with fresh
+        # context.
+        entry_alloc_usd, conviction_tier = compute_entry_alloc(sig, start, weekly_context, risk_state)
 
         # 07/20 -- freshness re-check right before execution (Gemini
         # cross-review, see _fresh_rr/_execution_rr_still_valid above):
@@ -2986,6 +2996,26 @@ async def _run_paper_cycle_locked(
         fresh_rr = _fresh_rr(fresh_price, sig.get("target"), sig.get("invalidation"))
         if not _execution_rr_still_valid(sig.get("rr"), fresh_rr):
             funnel["price_stale_at_execution"] = funnel.get("price_stale_at_execution", 0) + 1
+            # 07/23 -- limit-order mechanism: a plain reject here silently
+            # drops a setup that only got MORE EXPENSIVE since the signal was
+            # detected (price drifted upward during honeypot/OHLCV/LLM
+            # analysis), not a DEAD one -- the exact CHECK case (0.038 signal
+            # price -> 0.044 execution price). ``should_place_limit_order``
+            # draws the line explicitly: a structure already broken (price
+            # through the invalidation) is still rejected outright below,
+            # never turned into a limit order on a dead setup.
+            from aria_core import limit_orders
+
+            if limit_orders.should_place_limit_order(price, fresh_price, sig.get("invalidation")):
+                try:
+                    if not await limit_orders.has_active_order(contract, sig.get("chain") or "base"):
+                        order = await limit_orders.create_pending_order(
+                            contract, sig.get("chain") or "base", sig.get("symbol", ""), price, sig,
+                        )
+                        if notifier:
+                            await notifier(limit_orders.format_limit_order_placed_alert(order))
+                except Exception as exc:  # noqa: BLE001 -- never breaks the cycle
+                    logger.info("paper_cycle: could not place limit order for %s (%s)", contract, exc)
             continue
         # ``fresh_price`` is guaranteed valid here in real operation
         # (``_fresh_rr`` returns None on a missing/invalid price, so

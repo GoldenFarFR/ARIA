@@ -104,6 +104,13 @@ def tmp_db(tmp_path, monkeypatch):
     # isolation tous les tests de ce fichier liraient/écriraient silencieusement au
     # même chemin figé au premier import, potentiellement partagé entre tests.
     monkeypatch.setattr(market_sentiment, "DB_PATH", str(tmp_path / "market_sentiment.db"))
+    # 07/23 -- limit-order mechanism: same DB_PATH-computed-once-at-import trap
+    # as momentum_funnel_log/market_sentiment above -- without this, a test that
+    # reaches the limit-order path would silently read/write the real default
+    # DB path shared across the whole process.
+    from aria_core import limit_orders
+
+    monkeypatch.setattr(limit_orders, "DB_PATH", str(tmp_path / "paper.db"))
     return tmp_path
 
 
@@ -3404,10 +3411,14 @@ async def test_run_cycle_gets_a_discount_when_price_dipped_without_touching_inva
 
 @pytest.mark.asyncio
 async def test_run_cycle_rejects_when_fresh_rr_collapses_below_the_original_bar(tmp_db, monkeypatch):
-    """Le vrai cas à rejeter : le prix a couru si près de la cible que le R/R
-    structurel ne tient plus la barre franchie à l'origine -- ARIA n'achète pas un
-    setup dégradé, contrairement à ce qu'un simple seuil % aurait pu laisser passer
-    ou rejeter arbitrairement."""
+    """Le vrai cas à rejeter en ACHAT DIRECT : le prix a couru si près de la cible
+    que le R/R structurel ne tient plus la barre franchie à l'origine -- ARIA
+    n'achète pas un setup dégradé, contrairement à ce qu'un simple seuil % aurait
+    pu laisser passer ou rejeter arbitrairement. 07/23 -- depuis le mécanisme
+    d'ordre limite, ce n'est plus un rejet MUET pour autant : le prix a dérivé
+    vers le HAUT (structure toujours intacte, au-dessus de l'invalidation) donc un
+    ordre limite est posé au prix original du signal plutôt que de perdre
+    l'opportunité (voir test_limit_orders.py pour le mécanisme lui-même)."""
     monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
     await pt.reset_portfolio(1_000_000.0)
 
@@ -3424,6 +3435,68 @@ async def test_run_cycle_rejects_when_fresh_rr_collapses_below_the_original_bar(
     act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
     assert act["opened"] == []
     assert not await pt.has_open(A)
+    from aria_core import limit_orders
+
+    assert await limit_orders.has_active_order(A, "base") is True
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_places_limit_order_on_small_upward_drift_check_case(tmp_db, monkeypatch):
+    """Le cas réel qui a motivé ce mécanisme (CHECK, 07/23) : le prix n'a dérivé
+    QUE légèrement vers le haut pendant l'analyse (0.038 signal -> 0.044
+    exécution) -- structure toujours intacte, loin de la cible. Un ordre limite
+    est posé au prix ORIGINAL du signal (0.038), jamais au prix dégradé."""
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        # R/R au signal (0.038) = (0.06-0.038)/(0.038-0.03) = 2.75 -- achat direct
+        return {
+            "action": "BUY", "symbol": "CHECK", "price": 0.038, "target": 0.06,
+            "invalidation": 0.03, "rr": 2.75, "align_score": 3, "chain": "base",
+        }
+
+    async def price_lookup(contract):
+        # dérive légère -- R/R frais = (0.06-0.044)/(0.044-0.03) = 1.14, sous la
+        # barre d'achat direct (2.0) -- rejeté en direct, mais éligible ordre limite.
+        return 0.044
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
+    assert act["opened"] == []
+    assert not await pt.has_open(A)
+
+    from aria_core import limit_orders
+
+    active = await limit_orders.get_active_orders()
+    assert len(active) == 1
+    assert active[0]["contract"] == A
+    assert active[0]["target_price"] == pytest.approx(0.038)  # prix du SIGNAL, jamais le prix dégradé
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_never_places_limit_order_when_structure_already_broken(tmp_db, monkeypatch):
+    """Cas (a) du design : le prix est tombé À OU SOUS l'invalidation pendant
+    l'analyse -- le setup est mort, jamais un ordre limite sur un setup mort,
+    rejet pur exactement comme avant ce mécanisme."""
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "DEAD", "price": 1.0, "target": 3.0,
+            "invalidation": 0.5, "rr": 4.0, "align_score": 3, "chain": "base",
+        }
+
+    async def price_lookup(contract):
+        return 0.4  # sous l'invalidation -- structure cassée
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
+    assert act["opened"] == []
+    assert not await pt.has_open(A)
+
+    from aria_core import limit_orders
+
+    assert await limit_orders.get_active_orders() == []
 
 
 @pytest.mark.asyncio
