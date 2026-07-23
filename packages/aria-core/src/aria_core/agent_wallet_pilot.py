@@ -71,7 +71,15 @@ _REAL_MONEY_LOG_PREFIX = "[ARGENT RÉEL] pilote agent-wallet"
 # Exception nommée #4 (16/07) -- SEULE adresse vers laquelle un transfert peut être
 # tenté. Codée en dur (pas une variable d'environnement) : tout changement exige un
 # commit revu, jamais un simple réglage `.env` modifiable sans trace.
-ALLOWED_TRANSFER_ADDRESS = "0x33783cCb570Cb279C25F836806B5c4C3C8309777"
+#
+# CHANGÉE le 23/07 (décision opérateur explicite) : l'ancienne adresse
+# (0x33783cCb570Cb279C25F836806B5c4C3C8309777) était en réalité une Tangem
+# personnelle, entre-temps réutilisée comme owner du Smart Account
+# `aria-smart-st` (cf. docs/HANDOFF_COINBASE_CDP.md) -- la nouvelle destination
+# est le wallet CDP `aria-wallet-transfert` (ex-"aria-agent-wallet-pilot",
+# renommé le 23/07, cf. même HANDOFF), un wallet dédié distinct de tout autre
+# wallet actif du dôme.
+ALLOWED_TRANSFER_ADDRESS = "0x584b2B35dac347B2317da0d21b95063de51257Ef"
 
 BalanceFn = Callable[[], Awaitable[float | None]]
 SwapFn = Callable[..., Awaitable[dict[str, Any]]]
