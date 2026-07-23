@@ -447,6 +447,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="cabalspy_candidate_sourcing_cycle",
+        name="Sourcing de wallets candidats depuis CabalSpy (KOL labellises)",
+        description="Decision operateur explicite (23/07) : recupere la liste des wallets KOL labellises par CabalSpy (identite complete -- nom/twitter/telegram, verifie reel sur Base -- 200 wallets), toutes chaines catalogues (Base/BNB/Solana) mais SEULS les wallets Base sont enfiles dans wallet_scan_queue.py (seul pipeline downstream qui les score aujourd'hui). Resynchronisation complete au plus 1x/semaine (economie de credits, la liste ne bouge pas souvent). Triple gate (ARIA_CABALSPY_SOURCING_ENABLED + ARIA_WALLET_SCAN_QUEUE_ENABLED + ARIA_WALLET_SCORING_ENABLED), tous OFF par defaut.",
+        interval_minutes=180,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="smart_money_leaderboard_discovery_cycle",
         name="Decouverte de candidats pour le classement smart-money (token_holder_intel)",
         description="Demande operateur (21/07) : repere les wallets EOA qui reviennent comme detenteur notable sur au moins 3 tokens deja extraits via Blockscout x402 (token_holder_intel.py, lecture locale pure, zero cout), exclut les labels d'infrastructure connus (exchanges/burn), enfile ces adresses dans wallet_scan_queue.py pour un scoring reel. Le classement lui-meme (capacite 600) se construit ensuite dans wallet_scan_queue_cycle (composite_percentile reel, jamais un score de coordination). Triple gate (ARIA_SMART_MONEY_LEADERBOARD_ENABLED + ARIA_WALLET_SCAN_QUEUE_ENABLED + ARIA_WALLET_SCORING_ENABLED), tous OFF par defaut.",
@@ -650,6 +657,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.wallet_candidate_sourcing import wallet_candidate_sourcing_enabled
 
                 task.enabled = wallet_candidate_sourcing_enabled()
+            if task.id == "cabalspy_candidate_sourcing_cycle":
+                from aria_core.skills.cabalspy_candidate_sourcing import cabalspy_sourcing_enabled
+
+                task.enabled = cabalspy_sourcing_enabled()
             if task.id == "marketing_video_cycle":
                 from aria_core.skills.marketing_video import marketing_video_enabled
 
@@ -1412,6 +1423,17 @@ class AriaHeartbeat:
                     "wallet_candidate_sourcing",
                     f"[wallet_candidate_sourcing] {result['total_sourced']} wallet(s) source(s) "
                     f"depuis {len(result.get('tokens_processed') or [])} token(s)",
+                )
+
+        elif task_id == "cabalspy_candidate_sourcing_cycle":
+            from aria_core.skills.cabalspy_candidate_sourcing import run_cabalspy_candidate_sourcing_cycle
+
+            result = await run_cabalspy_candidate_sourcing_cycle(notifier=self._notify_telegram)
+            if result.get("outcome") == "ok" and result.get("queued_for_scoring"):
+                append_memory(
+                    "cabalspy_candidate_sourcing",
+                    f"[cabalspy_candidate_sourcing] {result['queued_for_scoring']} wallet(s) Base "
+                    f"ajoute(s) a la file de scoring, catalogue par chaine : {result.get('stored_per_chain')}",
                 )
 
         elif task_id == "smart_money_leaderboard_discovery_cycle":
