@@ -1236,6 +1236,84 @@ async def test_fetch_conviction_research_works_without_best_pair():
     assert result.available is False
 
 
+# ── _fetch_github_substance (22/07, item #23) ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_github_substance_finds_link_regardless_of_label(monkeypatch):
+    """parse_github_repo reconnaît une URL GitHub même si le label déclaré par
+    le projet n'est pas exactement 'GitHub' (ex. 'Code source')."""
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [
+        {"label": "Site officiel", "url": "https://myproject.xyz"},
+        {"label": "Code source", "url": "https://github.com/acme/protocol"},
+    ]
+
+    from aria_core.skills.github_substance import GithubSubstanceVerdict
+
+    async def _fake_gather(repo_url, **kwargs):
+        assert repo_url == "https://github.com/acme/protocol"
+        return "facts-sentinel"
+
+    monkeypatch.setattr("aria_core.skills.github_substance.gather_github_substance_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.github_substance.judge_github_substance",
+        lambda facts: GithubSubstanceVerdict(signal="positive", score=80.0, points=["ok"]),
+    )
+
+    result = await vc._fetch_github_substance(ctx)
+    assert result.signal == "positive"
+
+
+@pytest.mark.asyncio
+async def test_fetch_github_substance_none_when_no_github_link():
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "Site officiel", "url": "https://myproject.xyz"}]
+
+    result = await vc._fetch_github_substance(ctx)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_github_substance_degrades_to_none_on_error(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "GitHub", "url": "https://github.com/acme/protocol"}]
+
+    async def _boom(*a, **k):
+        raise RuntimeError("panne réseau")
+
+    monkeypatch.setattr("aria_core.skills.github_substance.gather_github_substance_facts", _boom)
+
+    assert await vc._fetch_github_substance(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_github_substance_works_without_best_pair():
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=0)
+    ctx.best_pair = None
+
+    result = await vc._fetch_github_substance(ctx)
+    assert result is None
+
+
+def test_github_substance_appears_in_untrusted_context():
+    from aria_core.skills.github_substance import GithubSubstanceVerdict
+
+    ctx = _base_ctx()
+    verdict = GithubSubstanceVerdict(signal="weak", score=25.0, points=["substance 25/100 -- peu de code réel"])
+
+    text = vc._build_untrusted_context(ctx, [], github_substance=verdict)
+
+    assert "Substance GitHub" in text
+    assert "peu de code réel" in text
+
+
+def test_github_substance_absent_when_none():
+    ctx = _base_ctx()
+    text = vc._build_untrusted_context(ctx, [], github_substance=None)
+    assert "Substance GitHub" not in text
+
+
 # ── Diligence produit Virtuals (fiche virtuals.io, audit 11/07) ────────────────
 #
 # Trou noté explicitement non résolu dans le HANDOFF nuit9 : la diligence produit

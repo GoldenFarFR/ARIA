@@ -220,6 +220,7 @@ def _build_untrusted_context(
     product_diligence: dict | None = None,
     market_alerts_digest: str | None = None,
     conviction_research: "ConvictionResearch | None" = None,
+    github_substance: "GithubSubstanceVerdict | None" = None,
 ) -> str:
     """Assemble le bloc factuel (données non fiables) à partir de faits déjà collectés.
 
@@ -428,6 +429,13 @@ def _build_untrusted_context(
             lines += [f"- {_sanitize(step, 250)}" for step in cr.process_trail]
     elif conviction_research and not conviction_research.available and conviction_research.reason:
         lines.append(f"Diligence de conviction automatisée indisponible : {_sanitize(conviction_research.reason, 200)}")
+    # 22/07 -- item #23 (stress-test) : substance RÉELLE du développement GitHub
+    # (ratio code/cosmétique, densité, tests, diversité, régularité, messages) --
+    # distinct de la simple fraîcheur déjà couverte par conviction_research ci-dessus.
+    if github_substance and github_substance.signal:
+        lines.append(f"Substance GitHub (qualité réelle du développement) : {_sanitize(github_substance.signal, 20)}")
+        for pt in github_substance.points[:3]:
+            lines.append(f"  · {_sanitize(pt, 250)}")
     # Contexte de légitimité (drapeaux JUGÉS, pas bruts) : autorité du mint,
     # launchpad, profondeur de liquidité, comportement du wallet du dev.
     legit: list[str] = []
@@ -1046,6 +1054,31 @@ async def _fetch_conviction_research(ctx: TokenScanContext) -> "ConvictionResear
         return None
 
 
+async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerdict | None":
+    """22/07 -- item #23 (stress-test) : substance RÉELLE du développement (ratio
+    code/cosmétique, densité, tests, diversité, régularité, qualité des messages),
+    pas seulement la fraîcheur déjà couverte par `conviction_research`. Réutilise
+    l'URL GitHub déjà déclarée dans `ctx.best_pair.project_links` (jamais un
+    second parsing de lien) -- `parse_github_repo` reconnaît une URL GitHub quel
+    que soit son label déclaré par le projet. None si aucun lien GitHub trouvé."""
+    from aria_core.services.project_activity import parse_github_repo
+    from aria_core.skills.github_substance import gather_github_substance_facts, judge_github_substance
+
+    links = ctx.best_pair.project_links if ctx.best_pair else []
+    github_url = next(
+        (link.get("url") for link in links if isinstance(link, dict) and parse_github_repo(link.get("url"))),
+        None,
+    )
+    if not github_url:
+        return None
+    try:
+        facts = await gather_github_substance_facts(github_url)
+        return judge_github_substance(facts)
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.warning("analyze_vc: substance GitHub échouée (%s)", exc)
+        return None
+
+
 async def analyze_vc_with_context(
     contract: str, lang: str = "fr"
 ) -> tuple[VCResult, TokenScanContext]:
@@ -1093,9 +1126,10 @@ async def analyze_vc_with_context(
     product_diligence = await _fetch_product_diligence(ctx)
     conviction_research = await _fetch_conviction_research(ctx)
     market_alerts_digest = await _fetch_market_alerts_digest()
+    github_substance = await _fetch_github_substance(ctx)
     untrusted = _build_untrusted_context(
         ctx, history, sentiment_readings, polymarket_signals, product_diligence,
-        market_alerts_digest, conviction_research,
+        market_alerts_digest, conviction_research, github_substance,
     )
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"
