@@ -479,9 +479,9 @@ HEARTBEAT_TASKS = [
     ),
     HeartbeatTask(
         id="agent_wallet_monitor_cycle",
-        name="Surveillance temps reel du wallet agent (depots/retraits)",
-        description="Demande operateur (16/07) : detection automatique des mouvements reels du wallet agent CDP, registre complet. Lecture seule via Blockscout (agent_wallet_monitor.py, aucune cle, aucune execution) -- alerte immediate sur tout depot externe ou, plus critique, toute sortie non initiee par ARIA elle-meme (classee via agent_wallet_log). Gate dedie ARIA_AGENT_WALLET_MONITOR_ENABLED, OFF par defaut -- independant des gates pilote/swap/transfert (la surveillance peut tourner meme si l'execution reste desactivee).",
-        interval_minutes=10,
+        name="Background surveillance of 3 agent wallets (deposits/withdrawals/swaps)",
+        description="Operator request (07/16, extended 07/23): automatic detection of real movements on 3 CDP agent wallets (aria-wallet-X402-EVM, aria-smart-st-EVM, aria-smart-vc-EVM -- transfert/spender excluded, little/no activity), full ledger + swap detection + persisted anti-phishing blocklist. Read-only via Blockscout (agent_wallet_monitor.py, no key, no execution). Interval raised from 10min to 8h (07/23, explicit operator decision: the operator already receives raw movements via Zerion on their phone, only ARIA's security classification needs to run, in the background, without noisy notifications) -- Telegram notification reserved for the ONE critical case (outflow not initiated by ARIA, possible sign of a compromised key), everything else (deposits/phishing/swaps) stays silent, just logged. Verified cost: 3 wallets x 50 Blockscout Pro credits x 3 cycles/day = 450 credits/day (0.5% of the 90000 daily budget). Dedicated gate ARIA_AGENT_WALLET_MONITOR_ENABLED, OFF by default -- independent of pilot/swap/transfer gates (surveillance can run even if execution stays disabled).",
+        interval_minutes=480,
         enabled=False,
     ),
     HeartbeatTask(
@@ -863,6 +863,20 @@ class AriaHeartbeat:
             await send_message(text, disable_preview=disable_preview)
         except Exception as exc:
             logger.warning("Telegram notify failed: %s", exc)
+
+    async def _notify_telegram_html(self, text: str) -> None:
+        """07/23 -- dedicated HTML variant (``parse_mode="HTML"``), used ONLY
+        by ``agent_wallet_monitor_cycle`` (operator request: "every hash
+        should link to basescan on click" -- a clickable tx_hash needs an
+        HTML link, impossible in plain text). Separate function rather than a
+        parameter on ``_notify_telegram`` -- none of the 20+ existing callers
+        of ``_notify_telegram`` pass intentionally-built HTML, zero
+        regression risk."""
+        try:
+            from aria_core.gateway.telegram_bot import send_message
+            await send_message(text, parse_mode="HTML")
+        except Exception as exc:
+            logger.warning("Telegram HTML notify failed: %s", exc)
 
     async def _notify_telegram_trading(self, text: str) -> None:
         """#197 (07/15): sends the usual admin DM (unchanged) THEN, IN ADDITION, the
@@ -1383,7 +1397,10 @@ class AriaHeartbeat:
         elif task_id == "agent_wallet_monitor_cycle":
             from aria_core.agent_wallet_monitor import run_agent_wallet_monitor_cycle
 
-            result = await run_agent_wallet_monitor_cycle(notifier=self._notify_telegram)
+            # 07/23 -- dedicated HTML notifier (clickable tx_hash to BaseScan,
+            # cf. `format_movement_alert`) -- never `self._notify_telegram`
+            # (plain text, would break the intentional HTML markup).
+            result = await run_agent_wallet_monitor_cycle(notifier=self._notify_telegram_html)
             if result.get("detected"):
                 append_memory(
                     "agent_wallet_monitor",

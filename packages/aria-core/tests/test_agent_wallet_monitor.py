@@ -256,9 +256,13 @@ def test_format_movement_alert_known_x402_with_contract_shows_token_dexscreener_
     msg = format_movement_alert(m)
     # 22/07 (revue croisée) -- token_symbol affiché à côté de l'adresse quand connu.
     assert "Token : GEM (0xdeadbeef00000000000000000000000000dead)" in msg
-    assert "DexScreener : https://dexscreener.com/base/0xdeadbeef00000000000000000000000000dead" in msg
+    # 07/23 -- DexScreener is now a clickable HTML link (text = address).
+    assert '<a href="https://dexscreener.com/base/0xdeadbeef00000000000000000000000000dead">' in msg
     assert "Raison : honeypot_check via GoPlus" in msg
-    assert f"BaseScan : {basescan_tx_url('0xcybercentrypayment2')}" in msg
+    # 07/23 -- the tx_hash itself is now the clickable BaseScan link (the
+    # separate "BaseScan :" line was removed, became redundant).
+    assert f'<a href="{basescan_tx_url("0xcybercentrypayment2")}">0xcybercentrypayment2</a>' in msg
+    assert "BaseScan :" not in msg
 
 
 def test_format_movement_alert_known_x402_without_token_symbol_shows_address_only():
@@ -356,6 +360,11 @@ def test_basescan_tx_url_builds_expected_url():
 
 
 def test_format_movement_alert_known_shows_no_extra_lines():
+    """07/23 -- counterparty here is tangem-01, a KNOWN address (owner of
+    aria-smart-st) -- the alert must now show its name, not just the raw
+    address (operator request: "for wallets we know, show the name"). HTML
+    format now (operator request: "every hash should link to basescan on
+    click") -- tx_hash is a clickable link."""
     m = monitor.WalletMovement(
         tx_hash="0xariainitiated", direction="out", asset="USDC", amount=5.0,
         counterparty="0x33783cCb570Cb279C25F836806B5c4C3C8309777", classification="known",
@@ -364,9 +373,40 @@ def test_format_movement_alert_known_shows_no_extra_lines():
     assert msg == (
         "✅ Wallet agent — Mouvement initié par ARIA (attendu)\n"
         "Sortie : 5.0 USDC\n"
-        "Vers : 0x33783cCb570Cb279C25F836806B5c4C3C8309777\n"
-        "Tx : 0xariainitiated"
+        "Vers : tangem-01 (owner aria-smart-st) (0x33783cCb570Cb279C25F836806B5c4C3C8309777)\n"
+        'Tx : <a href="https://basescan.org/tx/0xariainitiated">0xariainitiated</a>'
     )
+
+
+def test_format_movement_alert_labels_unknown_counterparty_unchanged():
+    """Non-regression: an unknown address stays displayed raw, never a made-up
+    name."""
+    m = monitor.WalletMovement(
+        tx_hash="0xunknownparty", direction="in", asset="USDC", amount=1.0,
+        counterparty="0xsomeoneelse", classification="external_deposit",
+    )
+    msg = monitor.format_movement_alert(m)
+    assert "De : 0xsomeoneelse" in msg
+
+
+def test_label_address_returns_known_name_with_address():
+    assert monitor._label_address("0x33783cCb570Cb279C25F836806B5c4C3C8309777") == (
+        "tangem-01 (owner aria-smart-st) (0x33783cCb570Cb279C25F836806B5c4C3C8309777)"
+    )
+
+
+def test_label_address_case_insensitive():
+    assert monitor._label_address("0X33783CCB570CB279C25F836806B5C4C3C8309777") == (
+        "tangem-01 (owner aria-smart-st) (0X33783CCB570CB279C25F836806B5C4C3C8309777)"
+    )
+
+
+def test_label_address_returns_raw_when_unknown():
+    assert monitor._label_address("0xunknown") == "0xunknown"
+
+
+def test_label_address_empty_string_passthrough():
+    assert monitor._label_address("") == ""
 
 
 def test_format_movement_alert_external_deposit_shows_no_extra_lines():
@@ -635,7 +675,10 @@ async def test_run_cycle_nothing_new_when_no_movement(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_cycle_notifies_on_fresh_deposit(monkeypatch):
+async def test_run_cycle_detects_but_does_not_notify_deposit(monkeypatch):
+    """07/23 -- operator decision: the cycle runs in the background (8h),
+    only "unexpected_outflow" deserves an immediate notification. An external
+    deposit stays detected/logged but silent."""
     monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
     transfer = TokenTransfer(
         tx_hash="0xcycle1", from_address="0xoperator", to_address=monitor.MONITORED_WALLET_ADDRESS,
@@ -653,9 +696,33 @@ async def test_run_cycle_notifies_on_fresh_deposit(monkeypatch):
     result = await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
     assert result["outcome"] == "ok"
     assert result["detected"] == 1
+    assert result["notified"] == 0
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_notifies_only_unexpected_outflow(monkeypatch):
+    """The only notified case: outflow not initiated by ARIA (possible sign
+    of a compromised key) -- every other classification stays silent."""
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    transfer = TokenTransfer(
+        tx_hash="0xcycle_bad", from_address=monitor.MONITORED_WALLET_ADDRESS, to_address="0xunknown",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=5.0, timestamp="2026-07-23T20:00:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    sent = []
+
+    async def _notifier(text):
+        sent.append(text)
+
+    result = await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
+    assert result["outcome"] == "ok"
     assert result["notified"] == 1
     assert len(sent) == 1
-    assert "💰" in sent[0]
+    assert "🚨" in sent[0]
 
 
 @pytest.mark.asyncio
@@ -971,3 +1038,273 @@ def test_format_wallet_balance_summary_degrades_honestly():
         {"wallet_address": WALLET, "chain": "base", "usdc_usd": None, "eth": None, "other_tokens": None}
     )
     assert "indisponible" in text.lower()
+
+
+# ── 07/23 -- multi-wallet, swap detection, anti-phishing blocklist ────────────
+
+
+def test_monitored_wallets_has_three_entries_pilot_first():
+    """Deliberate scope (operator decision, 07/23): transfert/spender
+    excluded (little/no activity) -- pilot first (order that the
+    run_agent_wallet_monitor_cycle tests below depend on)."""
+    names = list(monitor.MONITORED_WALLETS.keys())
+    assert names == ["aria-wallet-X402-EVM", "aria-smart-st-EVM", "aria-smart-vc-EVM"]
+    assert monitor.MONITORED_WALLETS["aria-wallet-X402-EVM"] == monitor.MONITORED_WALLET_ADDRESS
+
+
+@pytest.mark.asyncio
+async def test_check_wallet_activity_propagates_wallet_name(monkeypatch):
+    transfer = TokenTransfer(
+        tx_hash="0xnamed1", from_address="0xoperator", to_address=WALLET,
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=1.0, timestamp="2026-07-23T10:00:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET, wallet_name="aria-wallet-X402-EVM")
+    assert len(result) == 1
+    assert result[0].wallet_name == "aria-wallet-X402-EVM"
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_iterates_all_monitored_wallets(monkeypatch):
+    """A movement specific to EACH monitored wallet must be detected --
+    proof that the cycle really iterates over all 3, not just the pilot."""
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    calls = []
+
+    class _MultiWalletClient:
+        async def get_token_transfers(self, address, limit=50, *, max_pages=1, token_type=None):
+            calls.append(address)
+            transfer = TokenTransfer(
+                tx_hash=f"0xmulti_{address}", from_address="0xoperator", to_address=address,
+                token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+                amount=0.5, timestamp="2026-07-23T10:05:00Z",
+            )
+            return TokenTransfersResult(transfers=[transfer], available=True)
+
+        async def get_transactions(self, address, limit=50):
+            return TransactionsResult(transactions=[], available=True)
+
+    monkeypatch.setattr(monitor, "get_blockscout_client", lambda chain: _MultiWalletClient())
+    result = await monitor.run_agent_wallet_monitor_cycle(notifier=None)
+    assert result["outcome"] == "ok"
+    assert result["detected"] == 3
+    assert set(calls) == set(monitor.MONITORED_WALLETS.values())
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_one_wallet_failing_does_not_block_others(monkeypatch):
+    """Fail-closed PER WALLET (07/23): a failure on a single wallet must
+    never prevent detection on the others."""
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+
+    async def fake_check(*, wallet_address, chain="base", wallet_name="", known_tx_hashes=None, known_x402_spends=None):
+        if wallet_name == "aria-smart-st-EVM":
+            raise RuntimeError("blockscout unavailable for this wallet")
+        return [monitor.WalletMovement(
+            tx_hash=f"0xok_{wallet_name}", direction="in", asset="USDC", amount=1.0,
+            counterparty="0xoperator", classification="external_deposit", wallet_name=wallet_name,
+        )]
+
+    monkeypatch.setattr(monitor, "check_wallet_activity", fake_check)
+    result = await monitor.run_agent_wallet_monitor_cycle(notifier=None)
+    assert result["outcome"] == "ok"
+    assert result["detected"] == 2  # the 2 healthy wallets, the failing one is just skipped
+
+
+# ── swap detection ─────────────────────────────────────────────────────────
+
+
+def test_try_build_swap_merges_opposite_directions_different_assets():
+    events = [
+        {"kind": "native", "direction": "out", "asset": "ETH", "amount": 0.01,
+         "counterparty": "0xrouter", "timestamp": "2026-07-23T11:00:00Z",
+         "token_address": None, "token_symbol": None},
+        {"kind": "token", "direction": "in", "asset": "USDC", "amount": 30.0,
+         "counterparty": "0xrouter", "timestamp": "2026-07-23T11:00:01Z",
+         "token_address": USDC_ADDR, "token_symbol": "USDC"},
+    ]
+    m = monitor._try_build_swap("0xswap1", events, wallet_name="aria-smart-st-EVM")
+    assert m is not None
+    assert m.classification == "swap"
+    assert m.direction == "swap"
+    assert m.asset == "USDC" and m.amount == 30.0
+    assert m.asset_out == "ETH" and m.amount_out == 0.01
+    assert m.wallet_name == "aria-smart-st-EVM"
+
+
+def test_try_build_swap_none_when_same_direction():
+    events = [
+        {"kind": "token", "direction": "in", "asset": "USDC", "amount": 1.0,
+         "counterparty": "0xa", "timestamp": None, "token_address": USDC_ADDR, "token_symbol": "USDC"},
+        {"kind": "token", "direction": "in", "asset": "GEM", "amount": 2.0,
+         "counterparty": "0xb", "timestamp": None, "token_address": "0xgem", "token_symbol": "GEM"},
+    ]
+    assert monitor._try_build_swap("0xnotswap", events, wallet_name="") is None
+
+
+def test_try_build_swap_none_when_same_asset_both_sides():
+    events = [
+        {"kind": "token", "direction": "in", "asset": "USDC", "amount": 1.0,
+         "counterparty": "0xa", "timestamp": None, "token_address": USDC_ADDR, "token_symbol": "USDC"},
+        {"kind": "token", "direction": "out", "asset": "USDC", "amount": 1.0,
+         "counterparty": "0xa", "timestamp": None, "token_address": USDC_ADDR, "token_symbol": "USDC"},
+    ]
+    assert monitor._try_build_swap("0xsameasset", events, wallet_name="") is None
+
+
+def test_try_build_swap_none_when_a_leg_is_suspicious_token():
+    """Never hide a security alert behind a swap that looks legitimate -- an
+    impersonated token keeps its own classification."""
+    events = [
+        {"kind": "native", "direction": "in", "asset": "ETH", "amount": 0.001,
+         "counterparty": "0xscammer", "timestamp": None, "token_address": None, "token_symbol": None},
+        {"kind": "token", "direction": "out", "asset": "USḌC", "amount": 1.0,
+         "counterparty": "0xscammer", "timestamp": None,
+         "token_address": "0xfakecontract", "token_symbol": "USḌC"},
+    ]
+    assert monitor._try_build_swap("0xfakeswap", events, wallet_name="") is None
+
+
+def test_try_build_swap_none_when_not_exactly_two_events():
+    events = [
+        {"kind": "token", "direction": "in", "asset": "USDC", "amount": 1.0,
+         "counterparty": "0xa", "timestamp": None, "token_address": USDC_ADDR, "token_symbol": "USDC"},
+    ]
+    assert monitor._try_build_swap("0xonlyone", events, wallet_name="") is None
+
+
+@pytest.mark.asyncio
+async def test_check_wallet_activity_detects_real_swap_eth_to_usdc(monkeypatch):
+    """End to end: one native ETH outflow + one USDC inflow, same tx_hash --
+    must produce a SINGLE "swap" movement, not two movements fighting over
+    the same DB row (latent bug fixed by this restructuring)."""
+    transfer = TokenTransfer(
+        tx_hash="0xrealswap", from_address="0xrouter", to_address=WALLET,
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=30.0, timestamp="2026-07-23T11:10:00Z",
+    )
+    tx = Transaction(
+        tx_hash="0xrealswap", from_address=WALLET, to_address="0xrouter",
+        value_native=0.01, status="ok", method="swap", timestamp="2026-07-23T11:10:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+        transactions=TransactionsResult(transactions=[tx], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET, wallet_name="aria-smart-st-EVM")
+    assert len(result) == 1
+    m = result[0]
+    assert m.classification == "swap"
+    assert m.asset == "USDC" and m.amount == 30.0
+    assert m.asset_out == "ETH" and m.amount_out == 0.01
+
+    # Persisted as a SINGLE row (unique tx_hash), not two fighting over the
+    # write.
+    rows = await monitor.list_recent_movements()
+    assert len(rows) == 1
+    assert rows[0]["classification"] == "swap"
+
+
+def test_format_movement_alert_swap_shows_both_legs():
+    m = monitor.WalletMovement(
+        tx_hash="0xswapfmt", direction="swap", asset="USDC", amount=30.0,
+        asset_out="ETH", amount_out=0.01, counterparty="0xrouter",
+        classification="swap", wallet_name="aria-smart-st-EVM",
+    )
+    msg = monitor.format_movement_alert(m)
+    assert msg == (
+        "🔄 aria-smart-st-EVM — Swap détecté\n"
+        "Swap : 0.01 ETH -> 30.0 USDC\n"
+        "Contrepartie : 0xrouter\n"
+        'Tx : <a href="https://basescan.org/tx/0xswapfmt">0xswapfmt</a>'
+    )
+
+
+# ── persisted anti-phishing blocklist ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_record_phishing_attempt_persists_new_address():
+    await monitor.record_phishing_attempt(
+        "0xScammer", kind="wallet", impersonated_asset="USDC", tx_hash="0xattempt1",
+    )
+    rows = await monitor.list_phishing_addresses()
+    assert len(rows) == 1
+    assert rows[0]["address"] == "0xscammer"  # normalized to lowercase
+    assert rows[0]["kind"] == "wallet"
+    assert rows[0]["impersonated_asset"] == "USDC"
+    assert rows[0]["occurrences"] == 1
+
+
+@pytest.mark.asyncio
+async def test_record_phishing_attempt_increments_occurrences_on_repeat():
+    await monitor.record_phishing_attempt("0xrepeat", kind="contract", tx_hash="0xa")
+    await monitor.record_phishing_attempt("0xrepeat", kind="contract", tx_hash="0xb")
+    rows = await monitor.list_phishing_addresses()
+    assert len(rows) == 1
+    assert rows[0]["occurrences"] == 2
+
+
+@pytest.mark.asyncio
+async def test_record_phishing_attempt_ignores_empty_address():
+    await monitor.record_phishing_attempt("", kind="wallet")
+    rows = await monitor.list_phishing_addresses()
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_is_known_phishing_address_true_after_recording():
+    await monitor.record_phishing_attempt("0xKnownBad", kind="wallet")
+    assert await monitor.is_known_phishing_address("0xknownbad") is True
+    assert await monitor.is_known_phishing_address("0xKnownBad") is True
+
+
+@pytest.mark.asyncio
+async def test_is_known_phishing_address_false_when_unknown():
+    assert await monitor.is_known_phishing_address("0xneverseen") is False
+
+
+@pytest.mark.asyncio
+async def test_is_known_phishing_address_false_on_empty():
+    assert await monitor.is_known_phishing_address("") is False
+
+
+@pytest.mark.asyncio
+async def test_suspicious_token_detection_records_both_contract_and_wallet_in_blacklist(monkeypatch):
+    """The core of the operator request: a detected impersonated token must
+    remember both the fake token's CONTRACT and the WALLET that sent it."""
+    transfer = TokenTransfer(
+        tx_hash="0xphish1", from_address="0xattacker", to_address=WALLET,
+        token_address="0xfakecontract1", token_symbol="USḌC", token_name="USḌ Coin",
+        amount=1.0, timestamp="2026-07-23T12:00:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert result[0].classification == "suspicious_token"
+
+    blacklist = await monitor.list_phishing_addresses()
+    addresses = {row["address"] for row in blacklist}
+    assert "0xfakecontract1" in addresses
+    assert "0xattacker" in addresses
+    kinds = {row["address"]: row["kind"] for row in blacklist}
+    assert kinds["0xfakecontract1"] == "contract"
+    assert kinds["0xattacker"] == "wallet"
+
+
+@pytest.mark.asyncio
+async def test_legit_token_never_recorded_in_phishing_blacklist(monkeypatch):
+    transfer = TokenTransfer(
+        tx_hash="0xlegit1", from_address="0xoperator", to_address=WALLET,
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=1.0, timestamp="2026-07-23T12:05:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert await monitor.list_phishing_addresses() == []

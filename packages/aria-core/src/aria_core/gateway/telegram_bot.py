@@ -184,7 +184,7 @@ async def apply_bot_profile_photo(image_path: Path) -> tuple[bool, str | None]:
 
 async def send_message(
     text: str, chat_id: int | None = None, *, message_thread_id: int | None = None,
-    disable_preview: bool = False,
+    disable_preview: bool = False, parse_mode: str | None = None,
 ) -> bool:
     """``message_thread_id`` (#197, 15/07) : sujet ("topic") d'un supergroupe Telegram
     avec « Sujets » activés -- paramètre natif de l'API Bot, déjà supporté par
@@ -199,7 +199,16 @@ async def send_message(
     (mcap/liquidité) très périmés alors que le LIEN LUI-MÊME reste correct et mène
     bien à la page live. Constaté en conditions réelles (17/07, token BRIAN : carte
     Telegram "mcap 7 019 $" vs page live "mcap 11,1 M$", même contrat, même lien).
-    Désactive juste la carte, jamais le lien cliquable."""
+    Désactive juste la carte, jamais le lien cliquable.
+
+    ``parse_mode`` (07/23): ``None`` by default -- unchanged historical
+    behavior for the 20+ existing callers (plain text, goes through
+    ``_format_tg``/``plain_telegram`` which strips markdown emitted without a
+    parse_mode). When provided (e.g. ``"HTML"``, cf.
+    ``agent_wallet_monitor.format_movement_alert``), the text is already
+    markup intentionally built by the caller -- ``_format_tg`` is then
+    SKIPPED (it only knows Markdown patterns, not HTML, but better to never
+    let it touch intentional markup)."""
     if not _bot_app or not settings.telegram_bot_token:
         return False
     target = chat_id or settings.telegram_group_id or (settings.admin_ids[0] if settings.admin_ids else None)
@@ -210,8 +219,11 @@ async def send_message(
         if disable_preview:
             from telegram import LinkPreviewOptions
             kwargs["link_preview_options"] = LinkPreviewOptions(is_disabled=True)
+        if parse_mode:
+            kwargs["parse_mode"] = parse_mode
+        final_text = text if parse_mode else _format_tg(text)
         await _bot_app.bot.send_message(
-            chat_id=target, text=_format_tg(text), message_thread_id=message_thread_id, **kwargs,
+            chat_id=target, text=final_text, message_thread_id=message_thread_id, **kwargs,
         )
         return True
     except Exception as exc:

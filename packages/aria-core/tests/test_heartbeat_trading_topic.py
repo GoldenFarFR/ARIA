@@ -25,10 +25,12 @@ class FakeBot:
     def __init__(self):
         self.calls = []
 
-    async def send_message(self, *, chat_id, text, message_thread_id=None, link_preview_options=None):
+    async def send_message(
+        self, *, chat_id, text, message_thread_id=None, link_preview_options=None, parse_mode=None,
+    ):
         self.calls.append({
             "chat_id": chat_id, "text": text, "message_thread_id": message_thread_id,
-            "link_preview_options": link_preview_options,
+            "link_preview_options": link_preview_options, "parse_mode": parse_mode,
         })
 
 
@@ -49,7 +51,10 @@ async def test_send_message_threads_message_thread_id(monkeypatch):
 
     assert ok is True
     assert telegram_bot._bot_app.bot.calls == [
-        {"chat_id": -100123, "text": "hello", "message_thread_id": 67, "link_preview_options": None}
+        {
+            "chat_id": -100123, "text": "hello", "message_thread_id": 67,
+            "link_preview_options": None, "parse_mode": None,
+        }
     ]
 
 
@@ -78,6 +83,71 @@ async def test_send_message_default_thread_id_none_no_regression(monkeypatch):
     await telegram_bot.send_message("hello", chat_id=-100123)
 
     assert telegram_bot._bot_app.bot.calls[0]["message_thread_id"] is None
+
+
+# ── send_message: HTML parse_mode (07/23, "every hash should link to
+# basescan on click" -- agent_wallet_monitor.format_movement_alert) ──────────
+
+
+@pytest.mark.asyncio
+async def test_send_message_without_parse_mode_applies_format_tg(monkeypatch):
+    """Unchanged historical behavior (the 20+ existing callers): without
+    parse_mode, the text goes through _format_tg (strips markdown emitted
+    without a parse_mode)."""
+    monkeypatch.setattr(telegram_bot, "_bot_app", FakeApp())
+    monkeypatch.setattr(settings, "telegram_bot_token", "x", raising=False)
+
+    await telegram_bot.send_message("**gras**", chat_id=-100123)
+
+    call = telegram_bot._bot_app.bot.calls[0]
+    assert call["parse_mode"] is None
+    assert call["text"] == "gras"  # ** stripped by plain_telegram
+
+
+@pytest.mark.asyncio
+async def test_send_message_with_parse_mode_html_skips_format_tg(monkeypatch):
+    """With parse_mode provided, the HTML text is NOT passed through
+    _format_tg -- intentional markup (e.g. <a href=...>) must never be
+    altered."""
+    monkeypatch.setattr(telegram_bot, "_bot_app", FakeApp())
+    monkeypatch.setattr(settings, "telegram_bot_token", "x", raising=False)
+
+    html_text = '<a href="https://basescan.org/tx/0xabc">0xabc</a>'
+    ok = await telegram_bot.send_message(html_text, chat_id=-100123, parse_mode="HTML")
+
+    assert ok is True
+    call = telegram_bot._bot_app.bot.calls[0]
+    assert call["parse_mode"] == "HTML"
+    assert call["text"] == html_text
+
+
+# ── Heartbeat._notify_telegram_html (07/23) ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_notify_telegram_html_uses_html_parse_mode(monkeypatch):
+    hb = heartbeat.AriaHeartbeat.__new__(heartbeat.AriaHeartbeat)
+    sent = []
+
+    async def fake_send_message(text, *, parse_mode=None):
+        sent.append((text, parse_mode))
+        return True
+
+    monkeypatch.setattr(telegram_bot, "send_message", fake_send_message)
+    await hb._notify_telegram_html("<b>hello</b>")
+
+    assert sent == [("<b>hello</b>", "HTML")]
+
+
+@pytest.mark.asyncio
+async def test_notify_telegram_html_degrades_silently_on_failure(monkeypatch):
+    hb = heartbeat.AriaHeartbeat.__new__(heartbeat.AriaHeartbeat)
+
+    async def fake_send_message(text, *, parse_mode=None):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr(telegram_bot, "send_message", fake_send_message)
+    await hb._notify_telegram_html("<b>hello</b>")  # ne doit jamais lever
 
 
 # ── send_trading_notification (telegram_bot.py) : DM + topic, dégradation douce ───
