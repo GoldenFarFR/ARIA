@@ -32,7 +32,15 @@ exercé -- seule la lecture a été vérifiée à ce stade.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Same marker as agent_wallet_pilot.py's _REAL_MONEY_LOG_PREFIX (not imported
+# directly -- this module stays a thin CDP adapter, no dependency on the
+# pilot's own internals) so a log-grep for real-money events catches this too.
+_REAL_MONEY_LOG_PREFIX = "[ARGENT REEL] adaptateur CDP"
 
 # USDC natif sur Base mainnet (6 décimales) -- https://docs.base.org/base-chain/data-analytics/token-list
 USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -47,18 +55,48 @@ USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 #
 # RENAMED 23/07 (operator decision, direct CDP dashboard/SDK action, part of the
 # Smart Account migration -- see docs/HANDOFF_COINBASE_CDP.md): this same
-# real-balance address is now labeled "aria-wallet-X402" (repurposed as the
-# x402-seller-adjacent wallet, and as the owner/signer of the new
-# `aria-smart-wallet-one` Smart Account) -- WALLET_NAME updated to match, or
-# the next get_or_create_account(name=...) call would find no account under
-# the OLD name and silently create a brand-new, empty one, losing the link to
-# the real balance -- exactly the same failure mode as the 21/07 incident
-# above, this time self-inflicted by the rename rather than an API key change.
-# The formerly-orphaned second account (0x584b2B35..., previously labeled
-# "aria-agent-wallet-pilot", never used by any code path per the note above)
-# was also renamed the same day to "aria-wallet-transfert" and remains
-# unreferenced by this constant.
-WALLET_NAME = "aria-wallet-X402"
+# real-balance address went through TWO renames the same day -- first
+# "aria-wallet" -> "aria-wallet-X402" (repurposed as the x402-seller-adjacent
+# wallet, and as the owner/signer of the new `aria-smart-wallet-one` Smart
+# Account), then "aria-wallet-X402" -> "aria-wallet-X402-EVM" (operator's "-EVM"
+# naming convention across all 4 active wallets, same day). WALLET_NAME must be
+# updated to match EVERY TIME this address is renamed, AND the running
+# container redeployed immediately after -- a source-only edit does nothing for
+# an already-running process (confirmed the hard way: the first rename above
+# already triggered exactly this failure once today before the fix was
+# deployed). The formerly-orphaned second account (0x584b2B35..., previously
+# labeled "aria-agent-wallet-pilot", never used by any code path per the note
+# above) was renamed the same day to "aria-wallet-transfert", then
+# "aria-wallet-transfert-EVM" -- still unreferenced by this constant.
+WALLET_NAME = "aria-wallet-X402-EVM"
+
+
+async def _get_wallet_account(cdp: Any) -> Any:
+    """Fetch the account under ``WALLET_NAME`` -- NEVER auto-creates, unlike
+    ``cdp.evm.get_or_create_account``. For a real-money wallet, a missing name
+    means a stale ``WALLET_NAME``/CDP-dashboard rename mismatch (exactly the
+    21/07 and 23/07 incidents documented above), never a legitimate first-time
+    setup -- this pilot has run against a real funded wallet since 16/07.
+    Logs a CRITICAL real-money-marked line and fails closed (raises) instead
+    of silently creating and operating on a brand-new empty wallet."""
+    from cdp.openapi_client.errors import ApiError
+
+    try:
+        return await cdp.evm.get_account(name=WALLET_NAME)
+    except ApiError as exc:
+        if exc.http_code == 404:
+            logger.critical(
+                "%s -- WALLET_NAME=%r introuvable sur CDP (ni get_account, ni ce "
+                "que get_or_create_account aurait silencieusement recree) -- "
+                "verifier immediatement le dashboard CDP et corriger WALLET_NAME "
+                "puis REDEPLOYER avant tout nouveau cycle.",
+                _REAL_MONEY_LOG_PREFIX, WALLET_NAME,
+            )
+            raise RuntimeError(
+                f"CDP account {WALLET_NAME!r} not found -- refusing to auto-create "
+                "a new empty wallet (same failure mode as 21/07 and 23/07)"
+            ) from exc
+        raise
 
 
 def _get(obj: Any, *names: str) -> Any:
@@ -88,7 +126,7 @@ async def _fetch_raw_balance_entries(*, network: str) -> list[Any] | None:
         return None
     try:
         async with CdpClient() as cdp:
-            account = await cdp.evm.get_or_create_account(name=WALLET_NAME)
+            account = await _get_wallet_account(cdp)
             result = await cdp.evm.list_token_balances(address=account.address, network=network)
     except Exception:
         return None
@@ -175,7 +213,7 @@ async def execute_swap(
     from cdp.actions.evm.swap import AccountSwapOptions
 
     async with CdpClient() as cdp:
-        account = await cdp.evm.get_or_create_account(name=WALLET_NAME)
+        account = await _get_wallet_account(cdp)
         result = await account.swap(
             AccountSwapOptions(
                 network=chain,
@@ -211,7 +249,7 @@ async def transfer_usdc(*, chain: str, to_address: str, amount_usd: float) -> di
     from cdp import CdpClient, parse_units
 
     async with CdpClient() as cdp:
-        account = await cdp.evm.get_or_create_account(name=WALLET_NAME)
+        account = await _get_wallet_account(cdp)
         tx_hash = await account.transfer(
             to=to_address,
             amount=parse_units(str(amount_usd), 6),

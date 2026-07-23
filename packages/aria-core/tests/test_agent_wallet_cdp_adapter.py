@@ -10,6 +10,15 @@ import pytest
 from aria_core import agent_wallet_cdp_adapter as adapter
 
 
+class _FakeApiError(Exception):
+    """Stands in for cdp.openapi_client.errors.ApiError -- only the
+    ``http_code`` attribute _get_wallet_account actually reads."""
+
+    def __init__(self, http_code):
+        super().__init__(f"fake ApiError http_code={http_code}")
+        self.http_code = http_code
+
+
 def _install_fake_cdp_module(
     monkeypatch, *, balances_result, swap_result=None, transfer_result=None, raise_on="none",
 ):
@@ -30,9 +39,11 @@ def _install_fake_cdp_module(
             return transfer_result
 
     class FakeEvm:
-        async def get_or_create_account(self, name):
+        async def get_account(self, name):
             if raise_on == "account":
                 raise RuntimeError("CDP API down")
+            if raise_on == "account_not_found":
+                raise _FakeApiError(http_code=404)
             return FakeAccount()
 
         async def list_token_balances(self, address, network):
@@ -57,11 +68,16 @@ def _install_fake_cdp_module(
     fake_swap_module.AccountSwapOptions = lambda **kwargs: kwargs
     fake_actions = types.ModuleType("cdp.actions")
     fake_evm_pkg = types.ModuleType("cdp.actions.evm")
+    fake_openapi_client = types.ModuleType("cdp.openapi_client")
+    fake_errors_module = types.ModuleType("cdp.openapi_client.errors")
+    fake_errors_module.ApiError = _FakeApiError
 
     monkeypatch.setitem(sys.modules, "cdp", fake_cdp)
     monkeypatch.setitem(sys.modules, "cdp.actions", fake_actions)
     monkeypatch.setitem(sys.modules, "cdp.actions.evm", fake_evm_pkg)
     monkeypatch.setitem(sys.modules, "cdp.actions.evm.swap", fake_swap_module)
+    monkeypatch.setitem(sys.modules, "cdp.openapi_client", fake_openapi_client)
+    monkeypatch.setitem(sys.modules, "cdp.openapi_client.errors", fake_errors_module)
 
 
 @pytest.mark.asyncio
@@ -143,6 +159,27 @@ async def test_balance_none_when_account_lookup_fails(monkeypatch):
     _install_fake_cdp_module(monkeypatch, balances_result=None, raise_on="account")
     result = await adapter.usdc_balance_usd()
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_wallet_account_never_auto_creates_on_missing_name(monkeypatch):
+    """The 21/07 and 23/07 incidents: a WALLET_NAME that no longer resolves on
+    CDP must never silently create a fresh empty wallet -- fail closed instead."""
+    _install_fake_cdp_module(monkeypatch, balances_result=None, raise_on="account_not_found")
+    result = await adapter.usdc_balance_usd()
+    assert result is None  # degrades the same as any other account-lookup failure
+
+
+@pytest.mark.asyncio
+async def test_get_wallet_account_raises_runtime_error_directly(monkeypatch):
+    """Direct unit test of the guard itself (not just its degrade-to-None effect
+    through usdc_balance_usd), so the fail-closed exception type is pinned."""
+    _install_fake_cdp_module(monkeypatch, balances_result=None, raise_on="account_not_found")
+    from cdp import CdpClient
+
+    async with CdpClient() as cdp:
+        with pytest.raises(RuntimeError, match="not found"):
+            await adapter._get_wallet_account(cdp)
 
 
 @pytest.mark.asyncio
