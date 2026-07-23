@@ -13,6 +13,7 @@
     "@solana-program/system": "^0.12.2",
     "@solana-program/token": "^0.14.0",
     "@solana/kit": "^6.10.0",
+    "hono": "^4.12.31",
     "lucide-react": "^1.20.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
