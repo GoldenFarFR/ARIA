@@ -1,34 +1,38 @@
-"""Client Webacy (lecture seule) -- 2e avis de sécurité contrat, repli/complément à
-GoPlus (#194, 21/07).
+"""Webacy client (read-only) -- 2nd contract security opinion, fallback/complement
+to GoPlus (#194, 21/07).
 
-Contexte : GoPlus reste le SEUL garde-fou honeypot dur du pipeline momentum, mais son
-palier gratuit est très serré (10 tokens/min réels, 10 000/mois -- calibré le 21/07
-après découverte de la vraie structure de facturation par token). Webacy vérifié en
-direct ce jour-là (docs.webacy.com/api-reference) : Contract Risk API, Base en
-"Full Support", palier Demo gratuit 2 req/s (rafale 5), 2 000 requêtes/mois -- profil
-COMPLÉMENTAIRE à GoPlus (débit par seconde bien plus généreux, plafond mensuel plus
-bas), pas un remplacement.
+Context: GoPlus remains the ONLY hard honeypot guard of the momentum pipeline,
+but its free tier is very tight (10 real tokens/min, 10,000/month -- calibrated
+on 21/07 after discovering the real per-token billing structure). Webacy
+verified live that day (docs.webacy.com/api-reference): Contract Risk API,
+Base in "Full Support", free Demo tier 2 req/s (burst 5), 2,000 requests/month
+-- a COMPLEMENTARY profile to GoPlus (much more generous per-second rate,
+lower monthly cap), not a replacement.
 
-Doctrine « dôme » (identique à goplus.py/mobula.py) :
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
-- Timeout / 5xx : 1 retry après 5s, puis dégradation explicite (``available=False``).
-- Aucune donnée manquante n'est jamais remplacée par une supposition.
+"Dome" doctrine (identical to goplus.py/mobula.py):
+- 429: exponential backoff, 3 attempts max, then gives up without blocking
+  the pipeline.
+- Timeout / 5xx: 1 retry after 5s, then explicit degradation (``available=False``).
+- Missing data is never replaced by a guess.
 
-Clé API : ``WEBACY_API_KEY`` -- REQUISE dès le premier appel (palier Demo, pas de
-chemin public documenté). Client neutralisé (``available=False`` immédiat, aucun
-appel réseau) si la clé est absente -- jamais un blocage du pipeline. Header
-``x-api-key`` confirmé via docs.webacy.com/api-reference/contract-risk (vérifié en
-direct le 21/07 -- jamais deviné, leçon du bug de header GoPlus du même jour).
+API key: ``WEBACY_API_KEY`` -- REQUIRED from the very first call (Demo tier,
+no documented public path). Client neutralized (immediate ``available=False``,
+no network call) if the key is absent -- never a pipeline block.
+``x-api-key`` header confirmed via docs.webacy.com/api-reference/contract-risk
+(verified live on 21/07 -- never guessed, a lesson from the GoPlus header bug
+the same day).
 
-**PAS ENCORE branché dans ``momentum_entry.py``** -- ce module est un client
-autonome, testé isolément. Le brancher comme repli/complément au garde honeypot
-GoPlus (``_check_honeypot``) reste une décision séparée, pas prise ici.
+**NOT YET wired into ``momentum_entry.py``** -- this module is a standalone
+client, tested in isolation. Wiring it as a fallback/complement to the
+GoPlus honeypot guard (``_check_honeypot``) remains a separate decision, not
+made here.
 
-**Schéma de réponse NON VÉRIFIÉ EN CONDITIONS RÉELLES** -- aucune clé API disponible
-au moment de l'écriture (21/07). Basé sur la doc officielle uniquement
-(``score``/``tags``/``categories``, ex. ``contract_possible_drainer``). À
-reconfirmer avec un vrai appel dès qu'une clé Demo est configurée -- ne jamais
-déployer ce module sans ce test, même discipline que le reste du projet."""
+**Response schema NOT VERIFIED UNDER REAL CONDITIONS** -- no API key
+available at the time of writing (21/07). Based on the official docs only
+(``score``/``tags``/``categories``, e.g. ``contract_possible_drainer``). To
+be reconfirmed with a real call as soon as a Demo key is configured -- never
+deploy this module without that test, same discipline as the rest of the
+project."""
 from __future__ import annotations
 
 import asyncio
@@ -44,9 +48,9 @@ UNAVAILABLE = "donnée Webacy indisponible"
 
 BASE_URL = "https://api.webacy.com"
 
-# Vocabulaire chaîne Webacy (docs.webacy.com/essentials/supported-blockchains) --
-# PAS le même vocabulaire que GoPlus (ids numériques) ni GeckoTerminal (slugs
-# spécifiques) -- table de traduction dédiée, comme pour coinmarketcap.py.
+# Webacy chain vocabulary (docs.webacy.com/essentials/supported-blockchains) --
+# NOT the same vocabulary as GoPlus (numeric ids) nor GeckoTerminal (specific
+# slugs) -- a dedicated translation table, like for coinmarketcap.py.
 WEBACY_CHAIN_SLUGS: dict[str, str] = {
     "base": "base",
     "ethereum": "eth",
@@ -57,12 +61,11 @@ WEBACY_CHAIN_SLUGS: dict[str, str] = {
     "solana": "sol",
 }
 
-# 21/07 -- calibré à 90% du palier Demo confirmé (2 req/s, docs.webacy.com/
-# essentials/rate-limits), doctrine CLAUDE.md "Débit calibré à 90%" :
-# 1.8 req/s = 0.556s. Plafond mensuel (2 000 requêtes) NON géré ici (pas de
-# compteur persistant) -- à ajouter si ce client est un jour branché en prod,
-# même famille de garde-fou que celui proposé (pas encore construit) pour
-# GoPlus.
+# 21/07 -- calibrated to 90% of the confirmed Demo tier (2 req/s, docs.webacy.com/
+# essentials/rate-limits), CLAUDE.md "90% calibrated throughput" doctrine:
+# 1.8 req/s = 0.556s. Monthly cap (2,000 requests) NOT handled here (no
+# persistent counter) -- to be added if this client is ever wired into prod,
+# same guardrail family as the one proposed (not yet built) for GoPlus.
 _MIN_INTERVAL = 0.556
 _last_call_at = 0.0
 _throttle_lock = asyncio.Lock()
@@ -98,7 +101,7 @@ class ContractRiskResult:
 
 
 async def _get_json(path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
-    """GET avec la politique d'erreurs du dôme -- même patron que goplus.py."""
+    """GET with the dome's error policy -- same pattern as goplus.py."""
     api_key = webacy_api_key()
     if not api_key:
         return None, f"{UNAVAILABLE} (WEBACY_API_KEY absente)"
@@ -149,16 +152,17 @@ async def _get_json(path: str, *, params: dict | None = None) -> tuple[object | 
 
 
 async def get_contract_risk(contract: str, *, chain: str = "base") -> ContractRiskResult:
-    """Analyse de risque contrat Webacy -- ``GET /api/v1/risk-score/contract/{address}``.
-    Chemin CORRIGÉ le 21/07 : la 1ère version de ce module (basée sur une page doc
-    ambiguë, docs.webacy.com/api-reference/contract-risk) utilisait ``/contracts/
-    {contractAddress}`` -- faux, confirmé en confrontant l'OpenAPI officiel
-    (docs.webacy.com/openapi.json, source la plus autoritaire) ET le guide Quickstart
-    réel (qui montre un 3e chemin différent, ``/addresses/{address}``, pour un usage
-    générique distinct -- pas celui-ci). Schéma de réponse (``score``/``tags``/
-    ``categories``) confirmé correct dans l'OpenAPI. ``chain`` (vocabulaire ARIA, ex.
-    "base") traduit via ``WEBACY_CHAIN_SLUGS`` -- chaîne non couverte ->
-    ``available=False`` explicite, jamais une URL devinée."""
+    """Webacy contract risk analysis -- ``GET /api/v1/risk-score/contract/{address}``.
+    Path CORRECTED on 21/07: the 1st version of this module (based on an
+    ambiguous doc page, docs.webacy.com/api-reference/contract-risk) used
+    ``/contracts/{contractAddress}`` -- wrong, confirmed by cross-checking the
+    official OpenAPI (docs.webacy.com/openapi.json, the most authoritative
+    source) AND the real Quickstart guide (which shows a 3rd, different path,
+    ``/addresses/{address}``, for a distinct generic use -- not this one).
+    Response schema (``score``/``tags``/``categories``) confirmed correct in
+    the OpenAPI. ``chain`` (ARIA vocabulary, e.g. "base") translated via
+    ``WEBACY_CHAIN_SLUGS`` -- an uncovered chain -> explicit ``available=False``,
+    never a guessed URL."""
     webacy_chain = WEBACY_CHAIN_SLUGS.get(chain)
     if not webacy_chain:
         return ContractRiskResult(

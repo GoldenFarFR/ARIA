@@ -1,4 +1,4 @@
-"""ACP product launch — offering complet + promo X/Telegram."""
+"""ACP product launch — full offering + X/Telegram promo."""
 from __future__ import annotations
 
 import re

@@ -1,18 +1,21 @@
-"""Revue de performance ARIA par Claude -- ancrée sur ses VRAIES données mesurées
-(calibration des prédictions VC, paper-trading, télémétrie du rehearsal Sepolia), jamais
-sur du bavardage libre. Appelle Claude Sonnet 5 via OpenRouter (17/07, provider/model
-explicites -- voir le commentaire dans `run_claude_mentor_cycle`), secours Haiku 4.5 puis repli
-global existant -- aucun nouveau secret, réutilise le client LLM existant (`llm.py`).
+"""ARIA performance review by Claude -- anchored on her REAL measured data
+(VC prediction calibration, paper-trading, Sepolia rehearsal telemetry), never
+on free-form chatter. Calls Claude Sonnet 5 via OpenRouter (07/17, explicit
+provider/model -- see the comment in `run_claude_mentor_cycle`), Haiku 4.5
+backup then the existing global fallback -- no new secret, reuses the
+existing LLM client (`llm.py`).
 
-Deux canaux de sortie, jamais un troisième créé pour l'occasion :
-  1. Remarque immédiate postée dans le relais Telegram existant (`relay_chat.py`) --
-     ARIA y répond dans sa vraie voix via `relay_conversation_cycle`, déjà câblé.
-  2. Constat jugé durable -> proposition d'ISSUE GitHub (même label et même doctrine que
-     `knowledge_inbox.py` : jamais un commit ni une fusion autonome, revue humaine requise).
+Two output channels, never a third one created for the occasion:
+  1. Immediate remark posted in the existing Telegram relay (`relay_chat.py`)
+     -- ARIA replies there in her real voice via `relay_conversation_cycle`, already wired.
+  2. Finding judged durable -> GitHub ISSUE proposal (same label and same
+     doctrine as `knowledge_inbox.py`: never an autonomous commit or merge,
+     human review required).
 
-Gaté OFF par défaut (`ARIA_CLAUDE_MENTOR_ENABLED`), en plus du relais lui-même
-(`ARIA_RELAY_ACCESS_TOKEN`). Débit volontairement lent (throttle interne) : c'est une
-revue de fond, pas un chat continu -- moins de bruit, moins de coût, plus de signal.
+Gated OFF by default (`ARIA_CLAUDE_MENTOR_ENABLED`), in addition to the relay
+itself (`ARIA_RELAY_ACCESS_TOKEN`). Deliberately slow throughput (internal
+throttle): this is a deep review, not a continuous chat -- less noise, less
+cost, more signal.
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ from aria_core.paths import aria_db_path
 DB_PATH = str(aria_db_path())
 TARGET_REPO = "ARIA"
 
-MIN_INTERVAL_HOURS = 20.0  # ~une fois par jour, jamais plus frequent
+MIN_INTERVAL_HOURS = 20.0  # ~once a day, never more frequent
 
 _MENTOR_SYSTEM = (
     "Tu es Claude Code, l'assistant technique de l'opérateur (GoldenFarFR) qui a construit "
@@ -94,8 +97,9 @@ async def _log_run(outcome: str) -> None:
 
 
 async def _gather_performance_snapshot() -> dict[str, Any]:
-    """Photo des vraies données mesurées. Fail-closed PAR SOURCE : une source indisponible
-    ne casse jamais les autres, et n'est jamais remplacée par une valeur inventée."""
+    """Snapshot of the real measured data. Fail-closed PER SOURCE: an
+    unavailable source never breaks the others, and is never replaced by an
+    invented value."""
     snapshot: dict[str, Any] = {}
     try:
         from aria_core import vc_predictions
@@ -183,14 +187,14 @@ async def _propose_durable_knowledge(title: str, body: str, *, github_client=Non
             owner, TARGET_REPO, f"[connaissance] {title}", body_full,
             labels=["aria-knowledge-proposal"],
         )
-    except Exception:  # noqa: BLE001 -- une panne GitHub ne doit jamais casser le cycle
+    except Exception:  # noqa: BLE001 -- a GitHub outage must never break the cycle
         return None
     return issue.get("html_url")
 
 
 async def run_claude_mentor_cycle(*, llm=None, github_client=None) -> dict:
-    """Un tour de revue. Fail-closed à chaque étage, throttle interne (~1x/jour) même si
-    le heartbeat appelle plus souvent -- coût et bruit maîtrisés."""
+    """One review round. Fail-closed at every stage, internal throttle
+    (~1x/day) even if the heartbeat calls more often -- cost and noise controlled."""
     if not claude_mentor_enabled():
         return {"outcome": "skipped_disabled"}
 
@@ -212,10 +216,10 @@ async def run_claude_mentor_cycle(*, llm=None, github_client=None) -> dict:
         from aria_core.llm import chat_with_context as llm
 
     prompt = _format_snapshot_for_prompt(snapshot)
-    # 17/07 -- Claude Sonnet 5 via OpenRouter retenu après une revue de raisonnement
-    # profond réelle. 19/07 -- décision opérateur explicite ("bascule sur spark et
-    # quand spark sera vide en valeur on passera sur anthropique comme prévu") :
-    # override retiré, utilise désormais le provider/fallback global (Spark).
+    # 07/17 -- Claude Sonnet 5 via OpenRouter chosen after a real deep-reasoning
+    # review. 07/19 -- explicit operator decision ("switch to spark and once
+    # spark runs low on value we'll move to anthropic as planned"): override
+    # removed, now uses the global provider/fallback (Spark).
     raw = await llm(prompt, _MENTOR_SYSTEM, max_tokens=900, depth="claude_mentor")
     if not raw:
         await _log_run("llm_unavailable")

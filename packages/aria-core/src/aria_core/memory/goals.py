@@ -1,4 +1,4 @@
-"""Objectifs opérationnels ARIA — Phase F (SSOT YAML + état dynamique → injection LLM)."""
+"""ARIA operational goals — Phase F (YAML SSOT + dynamic state -> LLM injection)."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -49,7 +49,7 @@ def _dynamic_state_lines() -> list[str]:
 
 
 def get_goals_text(*, budget_chars: int = _GOALS_BUDGET, lang: str = "fr") -> str:
-    """Bloc markdown des objectifs ARIA pour le contexte LLM (opérateur)."""
+    """Markdown block of ARIA's goals for the LLM context (operator)."""
     goals = _load_goals()
     if not goals and not _dynamic_state_lines():
         return ""

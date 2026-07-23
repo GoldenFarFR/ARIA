@@ -1,19 +1,20 @@
-"""Indicateurs techniques généraux (facts-only, déterministe) — EMA, MACD, Bollinger, ATR.
+"""General technical indicators (facts-only, deterministic) — EMA, MACD, Bollinger, ATR.
 
-Complète `entry_signals.rsi_series` (RSI de Wilder) et `ta_levels` (niveaux/tendance).
-`CLAUDE.md` annonce depuis longtemps un "Moteur TA (RSI/MACD/EMA/fibo/divergences)" —
-MACD et EMA n'étaient en réalité jamais calculés nulle part avant ce module (écart
-découvert le 10/07 en vérifiant le code réel avant d'écrire quoi que ce soit). Les
-bandes de Bollinger, elles, n'ont jamais été annoncées mais manquaient pour couvrir
-la demande opérateur du 10/07 (RSI + Bollinger + volumes + bougies comme entrées d'un
-futur moteur de backtest — cf. `docs/architecture-extensibilite.md`). L'ATR (Average
-True Range, 19/07) répond au même constat qu'EMA/MACD à l'origine : annoncé nulle part
-mais absent du codebase (confirmé par grep exhaustif) jusqu'à la revue croisée Gemini
-qui a signalé qu'un stop suiveur à pourcentage fixe ignore la volatilité réelle du token.
+Complements `entry_signals.rsi_series` (Wilder RSI) and `ta_levels` (levels/trend).
+`CLAUDE.md` has long announced a "TA Engine (RSI/MACD/EMA/fibo/divergences)" —
+MACD and EMA were in fact never computed anywhere before this module (a gap
+discovered on 10/07 while checking the real code before writing anything).
+Bollinger Bands, meanwhile, were never announced but were missing to cover
+the 10/07 operator request (RSI + Bollinger + volumes + candles as inputs
+to a future backtest engine — see `docs/architecture-extensibilite.md`).
+ATR (Average True Range, 19/07) answers the same gap as EMA/MACD originally:
+announced nowhere but absent from the codebase (confirmed by exhaustive
+grep) until a Gemini cross-review flagged that a fixed-percentage trailing
+stop ignores a token's real volatility.
 
-Tout est dérivé de la série de closes (ou, pour l'ATR, des bougies complètes haut/bas/
-clôture) fournie — mêmes entrées → même résultat. Aucune valeur inventée : période de
-chauffe insuffisante → ``None`` à ces positions, jamais une estimation.
+Everything is derived from the provided close series (or, for ATR, the full
+high/low/close candles) — same inputs -> same result. No made-up value: an
+insufficient warm-up period -> ``None`` at those positions, never an estimate.
 """
 from __future__ import annotations
 
@@ -30,8 +31,9 @@ _ATR_PERIOD = 14
 
 
 def ema_series(closes: list[float], period: int) -> list[float | None]:
-    """EMA alignée sur ``closes``. Amorçage par SMA des ``period`` premiers closes
-    (convention standard), puis récursion EMA. ``None`` pendant la période de chauffe."""
+    """EMA aligned on ``closes``. Seeded by the SMA of the first ``period``
+    closes (standard convention), then EMA recursion. ``None`` during the
+    warm-up period."""
     n = len(closes)
     out: list[float | None] = [None] * n
     if period <= 0 or n < period:
@@ -54,11 +56,11 @@ def macd_series(
     slow: int = _EMA_SLOW,
     signal: int = _MACD_SIGNAL,
 ) -> tuple[list[float | None], list[float | None], list[float | None]]:
-    """MACD standard (ligne, signal, histogramme), alignés sur ``closes``.
+    """Standard MACD (line, signal, histogram), aligned on ``closes``.
 
-    Ligne MACD = EMA rapide - EMA lente. Signal = EMA de la ligne MACD. Histogramme =
-    MACD - signal. ``None`` tant que l'EMA lente (la plus longue période de chauffe)
-    n'est pas encore disponible.
+    MACD line = fast EMA - slow EMA. Signal = EMA of the MACD line. Histogram
+    = MACD - signal. ``None`` until the slow EMA (the longest warm-up period)
+    is available.
     """
     n = len(closes)
     ema_fast = ema_series(closes, fast)
@@ -69,13 +71,13 @@ def macd_series(
         if ema_fast[i] is not None and ema_slow[i] is not None:
             macd_line[i] = ema_fast[i] - ema_slow[i]
 
-    # EMA du signal appliquée uniquement sur le segment défini de la ligne MACD
-    # (sinon les None en tête faussent l'amorçage SMA de ema_series).
+    # Signal EMA applied only on the defined segment of the MACD line
+    # (otherwise the leading Nones would throw off ema_series' SMA seeding).
     first_defined = next((i for i, v in enumerate(macd_line) if v is not None), None)
     signal_line: list[float | None] = [None] * n
     histogram: list[float | None] = [None] * n
     if first_defined is not None:
-        defined_macd = [v for v in macd_line[first_defined:]]  # tous non-None a partir d'ici
+        defined_macd = [v for v in macd_line[first_defined:]]  # all non-None from here on
         signal_on_defined = ema_series(defined_macd, signal)  # type: ignore[arg-type]
         for offset, value in enumerate(signal_on_defined):
             if value is None:
@@ -93,11 +95,11 @@ def bollinger_bands(
     period: int = _BOLLINGER_PERIOD,
     num_std: float = _BOLLINGER_NUM_STD,
 ) -> tuple[list[float | None], list[float | None], list[float | None]]:
-    """Bandes de Bollinger (milieu = SMA, haut/bas = SMA ± ``num_std`` écarts-types
-    de population sur la même fenêtre). ``None`` pendant la période de chauffe.
+    """Bollinger Bands (middle = SMA, upper/lower = SMA ± ``num_std`` population
+    standard deviations over the same window). ``None`` during the warm-up period.
 
-    Convention standard : écart-type de POPULATION (diviseur ``period``, pas
-    ``period - 1``) sur la fenêtre glissante — pas l'écart-type de l'échantillon.
+    Standard convention: POPULATION standard deviation (``period`` divisor, not
+    ``period - 1``) over the sliding window — not the sample standard deviation.
     """
     n = len(closes)
     middle: list[float | None] = [None] * n
@@ -118,21 +120,21 @@ def bollinger_bands(
 
 
 def atr_series(candles: list[Candle], *, period: int = _ATR_PERIOD) -> list[float | None]:
-    """Average True Range (ATR) de Wilder, alignée sur ``candles`` — mesure la
-    VOLATILITÉ BRUTE d'un actif (amplitude de "respiration" normale), sans indiquer de
-    direction (19/07, revue croisée Gemini : remplace un stop suiveur à pourcentage
-    fixe par une largeur qui s'adapte à chaque token).
+    """Wilder's Average True Range (ATR), aligned on ``candles`` — measures an
+    asset's RAW VOLATILITY (normal "breathing" amplitude), without indicating
+    direction (19/07, Gemini cross-review: replaces a fixed-percentage
+    trailing stop with a width that adapts to each token).
 
-    True Range d'une bougie = max(haut-bas, |haut - clôture précédente|,
-    |bas - clôture précédente|) — capte aussi les gaps, pas seulement l'amplitude
-    intra-bougie. La toute première bougie n'a pas de clôture précédente, utilise
-    haut-bas seul (convention standard, aucune donnée inventée).
+    True Range of a candle = max(high-low, |high - previous close|,
+    |low - previous close|) — also captures gaps, not just intra-candle
+    amplitude. The very first candle has no previous close, uses high-low
+    alone (standard convention, no made-up data).
 
-    Amorçage par moyenne simple des ``period`` premiers True Range, puis lissage de
-    Wilder (``atr = (atr_précédent * (period-1) + tr) / period`` — alpha = 1/period,
-    délibérément PAS le 2/(period+1) d'une EMA classique : c'est la convention ATR
-    historique, différente de ``ema_series`` ci-dessus). ``None`` pendant la période de
-    chauffe, jamais une valeur inventée."""
+    Seeded by a simple average of the first ``period`` True Ranges, then
+    Wilder smoothing (``atr = (previous_atr * (period-1) + tr) / period`` —
+    alpha = 1/period, deliberately NOT the 2/(period+1) of a classic EMA:
+    that's the historical ATR convention, different from ``ema_series``
+    above). ``None`` during the warm-up period, never a made-up value."""
     n = len(candles)
     out: list[float | None] = [None] * n
     if period <= 0 or n < period:

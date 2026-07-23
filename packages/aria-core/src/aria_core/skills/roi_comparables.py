@@ -1,15 +1,15 @@
-"""Projection ROI par comparables historiques — Voûte 3 (facts-only, déterministe).
+"""ROI projection via historical comparables — Vault 3 (facts-only, deterministic).
 
-Replace un token dans l'**histoire de son secteur** : « à la capitalisation d'un
-comparable médian du secteur, ce token vaudrait Nx ». Le but est de rendre un ordre
-de grandeur **tangible**, pas de promettre quoi que ce soit.
+Places a token within its **sector's history**: "at the market cap of a
+sector's median comparable, this token would be worth Nx". The goal is to
+make an order of magnitude **tangible**, not to promise anything.
 
-LIGNE ROUGE (dôme) : ce n'est **jamais** une cible, une prévision, ni une promesse
-de rendement. Un comparable du passé ne se reproduit pas. Le moteur ne fait qu'une
-**arithmétique** (capitalisation de référence / capitalisation actuelle = multiple)
-sur des jalons éditables (`knowledge/roi_comparables.yaml`). Il n'invente aucun
-chiffre : sans capitalisation actuelle connue, ``available=False`` (le rapport omet
-simplement la section). Mêmes entrées → même sortie.
+RED LINE (dome): this is **never** a target, a forecast, or a return
+promise. A past comparable doesn't repeat itself. The engine only does
+**arithmetic** (reference market cap / current market cap = multiple) over
+editable milestones (`knowledge/roi_comparables.yaml`). It never invents a
+figure: with no known current market cap, ``available=False`` (the report
+simply omits the section). Same inputs -> same output.
 """
 from __future__ import annotations
 
@@ -26,16 +26,16 @@ _DEFAULT_DISCLAIMER = (
     "Placement historique par comparables, pas une prevision ni une cible. "
     "Aucune garantie de rendement."
 )
-# On ne montre pas un « comparable » plus petit que la capitalisation actuelle
-# (ce ne serait pas une projection). On ne montre pas non plus un multiple
-# absurde (> ce plafond) : au-delà, l'ordre de grandeur n'a plus de sens
-# pédagogique et flirterait avec la promesse. Filtre honnêteté, pas dogme.
+# A "comparable" smaller than the current market cap is never shown (it
+# wouldn't be a projection). An absurd multiple (> this cap) isn't shown
+# either: beyond it, the order of magnitude no longer serves its educational
+# purpose and would flirt with a promise. An honesty filter, not a dogma.
 _MAX_REASONABLE_MULTIPLE = 500.0
 
 
 @dataclass(frozen=True)
 class ComparableScenario:
-    """Un placement : « à cette capitalisation de référence, ce token ferait Nx »."""
+    """A placement: "at this reference market cap, this token would do Nx"."""
 
     label: str
     ref_mcap_usd: float
@@ -45,11 +45,11 @@ class ComparableScenario:
 
 @dataclass(frozen=True)
 class ROIComparablesResult:
-    """Projection ROI (ou son absence), avec sa base factuelle et son avertissement."""
+    """ROI projection (or its absence), with its factual basis and its disclaimer."""
 
     available: bool
     current_mcap_usd: float | None = None
-    basis: str = "market_cap"  # 'market_cap' ou 'fdv' (repli si mcap indisponible)
+    basis: str = "market_cap"  # 'market_cap' or 'fdv' (fallback if mcap unavailable)
     sector: str | None = None
     sector_recognized: bool = False
     scenarios: list[ComparableScenario] = field(default_factory=list)
@@ -68,7 +68,7 @@ def _cfg() -> dict[str, Any]:
 
 
 def _sector_index() -> dict[str, str]:
-    """Table alias → clé de secteur canonique (construite depuis le YAML)."""
+    """Alias -> canonical sector key table (built from the YAML)."""
     idx: dict[str, str] = {}
     for key, block in (_cfg().get("sectors") or {}).items():
         idx[key.lower()] = key
@@ -78,18 +78,18 @@ def _sector_index() -> dict[str, str]:
 
 
 def resolve_sector(categories: list[str] | None) -> tuple[str, bool]:
-    """Mappe des catégories (ex. CoinGecko) vers une clé de secteur connue.
+    """Maps categories (e.g. CoinGecko) to a known sector key.
 
-    Retourne (clé_secteur, reconnu). ``reconnu=False`` → repli sur ``generic``,
-    et le rapport le signale (pas de fausse précision).
+    Returns (sector_key, recognized). ``recognized=False`` → falls back to
+    ``generic``, and the report flags it (no false precision).
     """
     idx = _sector_index()
     for cat in categories or []:
         norm = str(cat).strip().lower().replace(" ", "-")
         if norm in idx:
             return idx[norm], True
-        # Correspondance par mot-clé (ex. "AI Agents" contient "ai-agents" ? non,
-        # mais "ai" oui) : on teste chaque alias comme sous-chaîne.
+        # Keyword match (e.g. does "AI Agents" contain "ai-agents"? no,
+        # but "ai" does): each alias is tested as a substring.
         for alias, key in idx.items():
             if alias and alias in norm:
                 return key, True
@@ -103,12 +103,13 @@ def project_roi(
     basis: str = "market_cap",
     max_scenarios: int = 3,
 ) -> ROIComparablesResult:
-    """Projette le placement d'un token dans l'histoire de son secteur.
+    """Projects a token's placement within its sector's history.
 
-    ``current_mcap_usd`` : capitalisation actuelle réelle (market cap de préférence,
-    sinon FDV avec ``basis='fdv'``). ``categories`` : secteur(s) du token (CoinGecko).
-    Sans capitalisation valide → ``available=False``. Ne montre que les placements
-    à la HAUSSE (comparable > actuel) et d'un ordre de grandeur raisonnable.
+    ``current_mcap_usd``: real current market cap (market cap preferred,
+    otherwise FDV with ``basis='fdv'``). ``categories``: the token's
+    sector(s) (CoinGecko). With no valid market cap → ``available=False``.
+    Only shows UPWARD placements (comparable > current) of a reasonable
+    order of magnitude.
     """
     disclaimer = str(_cfg().get("disclaimer") or _DEFAULT_DISCLAIMER).strip()
 
@@ -131,10 +132,10 @@ def project_roi(
         except (TypeError, ValueError):
             continue
         if ref <= current_mcap_usd:
-            continue  # pas une projection à la hausse → on n'affiche pas
+            continue  # not an upward projection -> not displayed
         multiple = ref / current_mcap_usd
         if multiple > _MAX_REASONABLE_MULTIPLE:
-            continue  # ordre de grandeur non pédagogique → on n'affiche pas
+            continue  # non-educational order of magnitude -> not displayed
         scenarios.append(
             ComparableScenario(
                 label=str(m.get("label") or "comparable"),

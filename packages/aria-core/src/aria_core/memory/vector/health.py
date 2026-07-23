@@ -1,4 +1,4 @@
-"""Santé mémoire vectorielle — Phase 2 prep (diagnostic opt-in)."""
+"""Vector memory health — Phase 2 prep (opt-in diagnostic)."""
 from __future__ import annotations
 
 from typing import Any
@@ -9,7 +9,7 @@ from aria_core.paths import vector_dir
 
 
 async def vector_health_report() -> dict[str, Any]:
-    """Rapport diagnostic — safe si LanceDB absent ou flag off."""
+    """Diagnostic report — safe if LanceDB is absent or the flag is off."""
     report: dict[str, Any] = {
         "flag_enabled": is_vector_enabled(),
         "vector_backend_installed": lancedb_installed(),

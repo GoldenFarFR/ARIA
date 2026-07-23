@@ -1,21 +1,21 @@
-"""Client SMTP minimal — envoi d'emails sortants (rapports VC).
+"""Minimal SMTP client — sends outgoing emails (VC reports).
 
-Transport bas niveau uniquement : construit un MIME multipart (texte + HTML) et
-l'envoie via SMTP+STARTTLS (ou SSL implicite sur le port 465). Aucune logique
-métier ici — le rendu du rapport vit dans `skills/vc_report.py`, l'orchestration
-(kill-switch + destinataire) dans `skills/vc_delivery.py`.
+Low-level transport only: builds a MIME multipart message (text + HTML) and
+sends it via SMTP+STARTTLS (or implicit SSL on port 465). No business logic
+here — report rendering lives in `skills/vc_report.py`, orchestration
+(kill-switch + recipient) in `skills/vc_delivery.py`.
 
-## Sécurité (garde-fous secrets + dôme)
+## Security (secret guard rails + dome)
 
-- Le mot de passe (App Password Gmail) n'est lu que depuis l'environnement
-  (`ARIA_SMTP_APP_PASSWORD`) — jamais en dur, jamais commité. Il n'apparaît
-  dans AUCUN log : on ne journalise que host/port/user/destinataire/sujet.
-- TLS avec vérification de certificat activée (`ssl.create_default_context()`).
-  Aucun downgrade, aucun `check_hostname=False`.
-- `send_email` ne lève jamais vers l'appelant : elle retourne `(ok, error)`.
-  Le message d'erreur est nettoyé pour ne jamais contenir le secret.
-- `smtplib` est synchrone → exécuté dans un thread via `asyncio.to_thread`,
-  sans bloquer la boucle asyncio de l'hôte.
+- The password (Gmail App Password) is only read from the environment
+  (`ARIA_SMTP_APP_PASSWORD`) — never hardcoded, never committed. It never
+  appears in ANY log: only host/port/user/recipient/subject are logged.
+- TLS with certificate verification enabled (`ssl.create_default_context()`).
+  No downgrade, no `check_hostname=False`.
+- `send_email` never raises to the caller: it returns `(ok, error)`.
+  The error message is cleaned to never contain the secret.
+- `smtplib` is synchronous → run in a thread via `asyncio.to_thread`,
+  without blocking the host's asyncio loop.
 """
 from __future__ import annotations
 
@@ -47,10 +47,10 @@ class MailerConfig:
 
 
 def mailer_config_from_env(env: dict[str, str] | None = None) -> MailerConfig | None:
-    """Construit la config SMTP depuis l'environnement. ``None`` si incomplète.
+    """Builds the SMTP config from the environment. ``None`` if incomplete.
 
-    Aucune valeur par défaut pour le secret : si `ARIA_SMTP_APP_PASSWORD` est
-    absent, l'email est simplement désactivé (dégradation sûre), jamais deviné.
+    No default value for the secret: if `ARIA_SMTP_APP_PASSWORD` is missing,
+    email is simply disabled (safe degradation), never guessed.
     """
     src = env if env is not None else os.environ
     host = (src.get("ARIA_SMTP_HOST") or "smtp.gmail.com").strip()
@@ -68,14 +68,14 @@ def mailer_config_from_env(env: dict[str, str] | None = None) -> MailerConfig | 
 
 
 def _redact(text: str, secret: str) -> str:
-    """Filet de sécurité : retire toute occurrence accidentelle du secret d'un message."""
+    """Safety net: strips any accidental occurrence of the secret from a message."""
     if secret and secret in text:
         return text.replace(secret, "***")
     return text
 
 
 def _send_sync(config: MailerConfig, msg: EmailMessage) -> None:
-    context = ssl.create_default_context()  # vérif certificat + hostname activées
+    context = ssl.create_default_context()  # certificate + hostname verification enabled
     if config.port == 465:
         with smtplib.SMTP_SSL(config.host, config.port, context=context, timeout=_DEFAULT_TIMEOUT) as server:
             server.login(config.user, config.app_password)
@@ -101,8 +101,8 @@ async def send_email(
     attachment_maintype: str = "application",
     attachment_subtype: str = "pdf",
 ) -> tuple[bool, str | None]:
-    """Envoie un email HTML (avec fallback texte), pièce jointe optionnelle.
-    Retourne ``(ok, error)``, ne lève jamais."""
+    """Sends an HTML email (with text fallback), optional attachment.
+    Returns ``(ok, error)``, never raises."""
     cfg = config or mailer_config_from_env()
     if cfg is None or not cfg.configured:
         return False, "SMTP non configuré (ARIA_SMTP_USER / ARIA_SMTP_APP_PASSWORD absents)"
@@ -125,7 +125,7 @@ async def send_email(
         )
 
     logger.info(
-        "mailer: envoi email host=%s port=%s user=%s to=%s subject=%r",
+        "mailer: sending email host=%s port=%s user=%s to=%s subject=%r",
         cfg.host,
         cfg.port,
         cfg.user,
@@ -136,12 +136,12 @@ async def send_email(
     try:
         await asyncio.to_thread(_send_sync, cfg, msg)
     except smtplib.SMTPAuthenticationError:
-        # Ne jamais inclure d'exception brute qui pourrait échoguer des identifiants.
-        logger.error("mailer: authentification SMTP refusée (vérifier ARIA_SMTP_APP_PASSWORD)")
+        # Never include a raw exception that could leak credentials.
+        logger.error("mailer: SMTP authentication refused (check ARIA_SMTP_APP_PASSWORD)")
         return False, "authentification SMTP refusée"
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant, jamais de secret propagé
+    except Exception as exc:  # noqa: BLE001 — never blocking, never leaks the secret
         detail = _redact(str(exc), cfg.app_password)
-        logger.error("mailer: échec envoi (%s)", detail)
+        logger.error("mailer: send failed (%s)", detail)
         return False, f"échec envoi email : {detail}"
 
     return True, None

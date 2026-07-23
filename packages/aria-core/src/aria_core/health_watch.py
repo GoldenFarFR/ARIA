@@ -1,4 +1,4 @@
-"""Surveillance health Render — regression -> issue auto (Phase 3b)."""
+"""Render health monitoring — regression -> auto issue (Phase 3b)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ REGRESSION_THRESHOLD = 3
 
 
 async def probe_health_ok() -> bool:
-    """True si /api/health répond status=ok (guard capability_gap anti-boucle)."""
+    """True if /api/health responds status=ok (capability_gap anti-loop guard)."""
     ok, _ = await _probe_health()
     return ok
 
@@ -54,7 +54,7 @@ async def _probe_health() -> tuple[bool, str]:
 
 
 async def check_health_regression() -> dict[str, Any]:
-    """Ping health; apres 3 echecs consecutifs, ouvre issue health_render_regression."""
+    """Pings health; after 3 consecutive failures, opens a health_render_regression issue."""
     global _FAIL_STREAK, _LAST_OK
 
     ok, detail = await _probe_health()

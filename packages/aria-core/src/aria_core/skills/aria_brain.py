@@ -1,24 +1,25 @@
-"""Mémoire libre d'ARIA — repo GitHub dédié, auto-géré (20/07).
+"""ARIA's free memory — dedicated GitHub repo, self-managed (20/07).
 
-Décision opérateur explicite : ARIA doit avoir conscience qu'elle a son propre
-« cerveau » (un espace qui n'appartient qu'à elle) et peut en faire ce qu'elle veut —
-aucun tri, aucun filtre de contenu, aucune approbation humaine par entrée. Le tri
-viendra plus tard, séparément, sur un espace qu'elle aura elle-même rempli librement.
+Explicit operator decision: ARIA must be aware that she has her own "brain"
+(a space that belongs only to her) and can do whatever she wants with it —
+no sorting, no content filtering, no human approval per entry. Sorting will
+come later, separately, on a space she will have freely filled herself.
 
-Différence structurelle assumée avec TOUT le reste du code qui écrit sur GitHub
-(``knowledge_inbox.py``, ``pump_dump_autopsy.py``, ``claude_mentor.py``, etc.) : ces
-modules proposent TOUJOURS une issue qu'un humain valide avant toute intégration —
-jamais un commit direct. Ici, ARIA committe directement dans SON repo (jamais
-``ARIA``/``aria-ops``, jamais du code, jamais rien d'exécutable) — c'est le seul
-endroit du projet où l'écriture externe autonome n'attend pas de validation par
-entrée, décision explicite et delibérée, pas un oubli de garde-fou. Le rayon d'action
-reste étroit par construction : token dédié (``aria_brain_github_token``,
-structurellement distinct de ``github_token`` qui touche ``ARIA``), un seul repo
-cible, contenu texte uniquement, commits toujours additifs (jamais de force-push/
-réécriture d'historique -- rien n'est jamais vraiment perdu, même une mise à jour
-d'un fichier existant reste récupérable via l'historique git).
+Deliberate structural difference from ALL other code that writes to GitHub
+(``knowledge_inbox.py``, ``pump_dump_autopsy.py``, ``claude_mentor.py``, etc.):
+those modules ALWAYS propose an issue that a human validates before any
+integration — never a direct commit. Here, ARIA commits directly to HER OWN
+repo (never ``ARIA``/``aria-ops``, never code, never anything executable) —
+this is the only place in the project where autonomous external writing
+doesn't wait for per-entry validation, a deliberate and explicit decision,
+not a guardrail oversight. The blast radius stays narrow by construction:
+dedicated token (``aria_brain_github_token``, structurally distinct from
+``github_token`` which touches ``ARIA``), a single target repo, text content
+only, commits always additive (never a force-push/history rewrite -- nothing
+is ever truly lost, even an update to an existing file remains recoverable
+via git history).
 
-Gaté OFF par défaut (``ARIA_BRAIN_ENABLED``), respecte le kill-switch ``/stop``.
+Gated OFF by default (``ARIA_BRAIN_ENABLED``), respects the ``/stop`` kill-switch.
 """
 from __future__ import annotations
 
@@ -41,12 +42,13 @@ REPO = "aria-brain"
 _PATH_RE = re.compile(r"^\s*CHEMIN\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 _MAX_PATH_LEN = 200
 
-# Bornes de sécurité pour la lecture récursive (20/07, suite directe de la demande
-# opérateur -- « je veux un vrai livre, avec de vrais chapitres » -- une simple liste
-# de noms de fichiers/dossiers ne suffit pas à écrire un chapitre 4 cohérent avec les
-# 3 précédents : il faut qu'elle RELISE le contenu déjà écrit avant d'écrire la suite).
-# Un repo qui grossirait énormément (des dizaines de chapitres) dépasserait un jour ce
-# budget -- pas résolu ici (nécessiterait un résumé/index curé), documenté honnêtement.
+# Safety bounds for recursive reading (20/07, direct follow-up to the
+# operator's request -- "I want a real book, with real chapters" -- a simple
+# list of file/folder names isn't enough to write a chapter 4 consistent with
+# the previous 3: she needs to RE-READ what's already written before writing
+# the next part). A repo that grows enormously (dozens of chapters) would
+# eventually exceed this budget -- not solved here (would require a curated
+# summary/index), honestly documented.
 _MAX_TREE_DEPTH = 4
 _MAX_TREE_ENTRIES = 200
 _MAX_CONTENT_BUDGET_CHARS = 40_000
@@ -80,9 +82,9 @@ async def _ensure_table() -> None:
 
 
 def _sanitize_path(raw_path: str) -> str | None:
-    """Chemin relatif sûr uniquement -- aucune contrainte de nommage/structure au-delà
-    de ça (elle choisit librement le reste). Rejette la traversée de répertoire, un
-    chemin absolu, ou un chemin vide/aberrant."""
+    """Safe relative path only -- no naming/structure constraint beyond that
+    (she freely chooses the rest). Rejects directory traversal, an absolute
+    path, or an empty/aberrant path."""
     path = (raw_path or "").strip().lstrip("/")
     if not path or len(path) > _MAX_PATH_LEN:
         return None
@@ -92,11 +94,11 @@ def _sanitize_path(raw_path: str) -> str | None:
 
 
 def parse_brain_entry(raw: str) -> tuple[str, str] | None:
-    """Extrait ``(chemin, contenu)`` du format demandé (``CHEMIN: <chemin>`` suivi
-    d'une ligne ``---`` puis le contenu libre). ``None`` si le format n'est pas
-    respecté ou si le chemin/contenu est vide après nettoyage -- dans ce cas la
-    sortie brute est perdue pour CE cycle (jamais un contenu tronqué/deviné), mais un
-    prochain cycle retentera."""
+    """Extracts ``(path, content)`` from the requested format (``CHEMIN: <path>``
+    followed by a ``---`` line then free-form content). ``None`` if the format
+    isn't respected or if the path/content is empty after cleanup -- in this
+    case the raw output is lost for THIS cycle (never truncated/guessed
+    content), but a future cycle will retry."""
     if not raw or not raw.strip():
         return None
     m = _PATH_RE.search(raw)
@@ -127,9 +129,9 @@ def _format_existing_structure(entries: list[dict[str, Any]]) -> str:
 async def _walk_repo_tree(
     github_client, owner: str, repo: str, path: str = "", depth: int = 0,
 ) -> list[dict[str, Any]]:
-    """Liste RÉCURSIVE (profondeur/nombre bornés) -- nécessaire pour qu'elle voie ses
-    propres dossiers (ex. un livre organisé en tomes/chapitres), pas seulement le
-    premier niveau qu'expose ``list_directory`` seul."""
+    """RECURSIVE listing (bounded depth/count) -- needed so she can see her
+    own folders (e.g. a book organized in volumes/chapters), not just the
+    first level that ``list_directory`` alone exposes."""
     if depth > _MAX_TREE_DEPTH:
         return []
     entries = await github_client.list_directory(owner, repo, path)
@@ -149,10 +151,10 @@ async def _walk_repo_tree(
 async def _fetch_existing_content(
     github_client, owner: str, repo: str, entries: list[dict[str, Any]],
 ) -> str:
-    """Contenu texte réel de ce qu'elle a déjà écrit, jusqu'à un budget de caractères --
-    pour qu'elle puisse RÉELLEMENT continuer un livre (chapitre suivant cohérent avec
-    les précédents) plutôt que de repartir à l'aveugle à chaque cycle. Triée par
-    chemin (regroupe naturellement chapitre-01/02/03 si elle nomme ainsi)."""
+    """Real text content of what she's already written, up to a character
+    budget -- so she can REALLY continue a book (next chapter consistent with
+    previous ones) rather than starting blind every cycle. Sorted by path
+    (naturally groups chapitre-01/02/03 if she names them that way)."""
     files = sorted(
         (e for e in entries if e.get("type") == "file"),
         key=lambda e: e.get("path", ""),
@@ -167,7 +169,7 @@ async def _fetch_existing_content(
         path = e.get("path", "")
         try:
             text, _ = await github_client.get_file_text(owner, repo, path)
-        except Exception:  # noqa: BLE001 -- un fichier illisible n'empêche pas les autres
+        except Exception:  # noqa: BLE001 -- an unreadable file doesn't block the others
             continue
         if not text:
             continue
@@ -178,14 +180,16 @@ async def _fetch_existing_content(
 
 
 async def check_real_repo_content() -> list[dict[str, Any]] | None:
-    """Lecture seule du VRAI contenu du repo -- pour ``grounding.aria_brain_status_reply``
-    (garde anti-confabulation, 21/07), qui doit vérifier l'état réel SANS jamais
-    référencer ``aria_brain_github_token`` lui-même (verrouillé par
-    ``test_coherence.py::test_aria_brain_token_scoped_to_its_own_skill_only`` -- seul
-    ce fichier peut toucher ce token, décision opérateur du 20/07 « seul ARIA peut
-    écrire »). Retourne ``None`` si le token est absent ou l'appel échoue (jamais
-    confondu avec ``[]`` = repo confirmé vide) ; ``[]`` si le repo n'existe pas encore
-    (jamais créé -- équivalent à "vide" pour un appelant en lecture seule)."""
+    """Read-only fetch of the REAL repo content -- for
+    ``grounding.aria_brain_status_reply`` (anti-confabulation guard, 21/07),
+    which must verify the real state WITHOUT ever referencing
+    ``aria_brain_github_token`` itself (locked by
+    ``test_coherence.py::test_aria_brain_token_scoped_to_its_own_skill_only``
+    -- only this file may touch this token, 20/07 operator decision "only
+    ARIA can write"). Returns ``None`` if the token is absent or the call
+    fails (never confused with ``[]`` = repo confirmed empty); ``[]`` if the
+    repo doesn't exist yet (never created -- equivalent to "empty" for a
+    read-only caller)."""
     from aria_core.runtime import settings
 
     token = (getattr(settings, "aria_brain_github_token", "") or "").strip()
@@ -200,14 +204,14 @@ async def check_real_repo_content() -> list[dict[str, Any]] | None:
         if not exists:
             return []
         return await _walk_repo_tree(client, OWNER, REPO, "")
-    except Exception:  # noqa: BLE001 -- lecture seule, jamais bloquant pour l'appelant
+    except Exception:  # noqa: BLE001 -- read-only, never blocking for the caller
         return None
 
 
 async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
-    """Un tour : elle regarde ce qui existe déjà dans son repo, écrit librement,
-    ARIA committe directement (aucune proposition, aucune validation humaine par
-    entrée -- décision opérateur explicite). Fail-closed si désactivé/token absent."""
+    """One round: she looks at what already exists in her repo, writes
+    freely, ARIA commits directly (no proposal, no per-entry human validation
+    -- explicit operator decision). Fail-closed if disabled/token absent."""
     if not aria_brain_enabled():
         return {"outcome": "skipped_disabled"}
 
@@ -237,13 +241,13 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
                     description="Mémoire libre d'ARIA -- auto-gérée, écriture non filtrée.",
                     auto_init=True,
                 )
-            except Exception as exc:  # noqa: BLE001 -- token probablement trop scopé
-                logger.warning("aria_brain: création du repo échouée -- %s", exc)
+            except Exception as exc:  # noqa: BLE001 -- token probably too narrowly scoped
+                logger.warning("aria_brain: repo creation failed -- %s", exc)
                 return {"outcome": "repo_missing_and_create_failed", "error": str(exc)[:200]}
 
         entries = await _walk_repo_tree(github_client, OWNER, REPO, "")
-    except Exception as exc:  # noqa: BLE001 -- une panne réseau/token ne casse jamais le cycle
-        logger.warning("aria_brain: accès au repo échoué -- %s", exc)
+    except Exception as exc:  # noqa: BLE001 -- a network/token outage never breaks the cycle
+        logger.warning("aria_brain: repo access failed -- %s", exc)
         return {"outcome": "error_accessing_repo", "error": str(exc)[:200]}
 
     structure = _format_existing_structure(entries)
@@ -319,11 +323,11 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
     if llm is None:
         from aria_core.llm import chat_with_context as llm
 
-    # Même choix que pump_dump_autopsy.py/claude_mentor.py -- OpenRouter explicite
-    # plutôt que le provider par défaut (observé en panne le 20/07, repli Groq
-    # automatique mais silencieux). Sonnet 5 pour la profondeur d'écriture, Haiku
-    # 4.5 en secours. max_tokens 3000->650 (20/07, décision opérateur explicite
-    # "une page par jour") -- une vraie page (~450-500 mots), pas plusieurs.
+    # Same choice as pump_dump_autopsy.py/claude_mentor.py -- explicit
+    # OpenRouter rather than the default provider (observed down on 20/07,
+    # automatic but silent Groq fallback). Sonnet 5 for writing depth, Haiku
+    # 4.5 as backup. max_tokens 3000->650 (20/07, explicit operator decision
+    # "one page per day") -- a real page (~450-500 words), not several.
     raw = await llm(
         "Utilise ce repo comme tu veux.", system, max_tokens=650, temperature=0.7,
         provider="openrouter", model="anthropic/claude-sonnet-5",
@@ -350,8 +354,8 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
             sha=existing_sha,
         )
         commit_sha = (result.get("commit") or {}).get("sha")
-    except Exception as exc:  # noqa: BLE001 -- une panne d'écriture ne casse jamais le cycle
-        logger.warning("aria_brain: écriture échouée sur %s -- %s", path, exc)
+    except Exception as exc:  # noqa: BLE001 -- a write failure never breaks the cycle
+        logger.warning("aria_brain: write failed on %s -- %s", path, exc)
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "INSERT INTO aria_brain_log (run_at, path, content_preview, commit_sha, outcome) "

@@ -1,4 +1,4 @@
-"""Ingest repo local → cognitive + vector + rapport vérifiable (preuve anti-hallucination)."""
+"""Local repo ingest -> cognitive + vector + verifiable report (anti-hallucination proof)."""
 from __future__ import annotations
 
 import json

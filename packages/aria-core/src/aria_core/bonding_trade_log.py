@@ -1,9 +1,9 @@
-"""Journal des exécutions du wrapper `bondv5-trader` (#60, marché « Jetons d'agent »).
+"""Execution log for the `bondv5-trader` wrapper (#60, "Agent Tokens" market).
 
-Séparé de `screened_token` par conception : ce module n'écrit **jamais** dans le
-pool de screening (lecture-analyse) — il enregistre uniquement le résultat d'une
-tentative d'exécution on-chain déjà décidée en amont par `bonding_screen.py` /
-`bonding_absorber.py`. Aucune logique de scoring ici.
+Separated from `screened_token` by design: this module **never** writes to the
+screening pool (read-analysis) — it only records the result of an on-chain
+execution attempt already decided upstream by `bonding_screen.py` /
+`bonding_absorber.py`. No scoring logic here.
 """
 from __future__ import annotations
 
@@ -67,10 +67,10 @@ async def record_trade(
     status: str,
     reason: str = "",
 ) -> None:
-    """Enregistre une tentative d'exécution (`status` in {"ok", "failed", "blocked"}).
+    """Records an execution attempt (`status` in {"ok", "failed", "blocked"}).
 
-    `status="blocked"` couvre les refus côté garde-fou (slippage calculé > tolérance,
-    kill-switch désactivé, devis indisponible) — jamais silencieux, toujours tracé.
+    `status="blocked"` covers guard-rail refusals (computed slippage > tolerance,
+    kill-switch disabled, quote unavailable) — never silent, always logged.
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()

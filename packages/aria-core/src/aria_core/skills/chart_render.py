@@ -1,18 +1,18 @@
-"""Rendu graphique email-safe d'un cours (Pillow → PNG en data-URI base64).
+"""Email-safe chart rendering of a price (Pillow → PNG as a base64 data URI).
 
-Gmail et la plupart des clients mail strippent le SVG : le **seul** format
-d'image vraiment portable en email est un PNG inline en ``data:`` URI. Ce module
-dessine, avec Pillow (déjà dépendance du projet — cf. ``vc_report`` qui embarque
-l'emblème de la même façon), un petit graphique de prix sobre et le renvoie en
-``data:image/png;base64,...`` — aucune ressource externe, aucun appel réseau,
-entièrement déterministe (mêmes bougies → même PNG).
+Gmail and most mail clients strip SVG: the **only** truly portable image
+format in email is an inline PNG as a ``data:`` URI. This module draws, with
+Pillow (already a project dependency — see ``vc_report`` which embeds the
+emblem the same way), a small sober price chart and returns it as
+``data:image/png;base64,...`` — no external resource, no network call,
+entirely deterministic (same candles -> same PNG).
 
-Palette cohérente avec le rapport B4 (corps ivoire, or / émeraude / encre) :
-- ligne de prix : encre chaude ;
-- entrée : émeraude ; invalidation : rouille ; cible : or.
+Palette consistent with the B4 report (ivory body, gold / emerald / ink):
+- price line: warm ink;
+- entry: emerald; invalidation: rust; target: gold.
 
-Une série vide est gérée sans lever : un PNG neutre aux dimensions demandées est
-renvoyé (jamais d'image cassée dans l'email).
+An empty series is handled without raising: a neutral PNG at the requested
+dimensions is returned (never a broken image in the email).
 """
 from __future__ import annotations
 
@@ -23,15 +23,15 @@ from PIL import Image, ImageDraw
 
 from aria_core.skills.ta_levels import Candle
 
-# ─── Palette (alignée sur vc_report — corps ivoire or/émeraude/encre) ───
-_BG = (246, 242, 233)          # ivoire (_IVORY)
-_INK = (42, 38, 32)            # encre chaude (_INK_WARM) — ligne de prix
-_GRID = (226, 216, 189)        # filet discret
-_AXIS = (198, 184, 120)        # cadre or pâle
-_EMERALD = (31, 138, 116)      # entrée
+# ─── Palette (aligned with vc_report — ivory body, gold/emerald/ink) ───
+_BG = (246, 242, 233)          # ivory (_IVORY)
+_INK = (42, 38, 32)            # warm ink (_INK_WARM) — price line
+_GRID = (226, 216, 189)        # discreet gridline
+_AXIS = (198, 184, 120)        # pale gold frame
+_EMERALD = (31, 138, 116)      # entry
 _RUST = (163, 74, 42)          # invalidation
-_GOLD = (176, 134, 43)         # cible
-_MUTE = (122, 114, 100)        # texte neutre
+_GOLD = (176, 134, 43)         # target
+_MUTE = (122, 114, 100)        # neutral text
 
 _PAD_L = 10
 _PAD_R = 10
@@ -39,7 +39,7 @@ _PAD_T = 14
 _PAD_B = 14
 _MIN_W = 80
 _MIN_H = 40
-# Seuil sous lequel une série est considérée « plate » (amplitude nulle).
+# Threshold below which a series is considered "flat" (zero amplitude).
 _EPS_RANGE = 1e-9
 
 
@@ -50,7 +50,7 @@ def _data_uri(img: Image.Image) -> str:
 
 
 def _neutral_png(width: int, height: int) -> str:
-    """PNG neutre (fond ivoire + cadre) — utilisé quand il n'y a rien à tracer."""
+    """Neutral PNG (ivory background + frame) — used when there's nothing to draw."""
     img = Image.new("RGB", (width, height), _BG)
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, width - 1, height - 1], outline=_AXIS, width=1)
@@ -69,7 +69,7 @@ def _dashed_hline(
     gap: int = 4,
     width: int = 1,
 ) -> None:
-    """Trace une ligne horizontale pointillée (repère de niveau) de x0 à x1."""
+    """Draws a dashed horizontal line (level marker) from x0 to x1."""
     x = x0
     while x < x1:
         seg = min(dash, x1 - x)
@@ -86,13 +86,13 @@ def render_price_chart_png(
     width: int = 560,
     height: int = 220,
 ) -> str:
-    """Dessine un graphique en ligne du close et renvoie un PNG en data-URI.
+    """Draws a line chart of the close price and returns a PNG as a data URI.
 
-    Les lignes horizontales ``entry`` / ``invalidation`` / ``target`` sont
-    tracées si fournies (émeraude / rouille / or). L'échelle verticale intègre
-    ces niveaux pour qu'ils restent toujours visibles. ``candles`` vide → PNG
-    neutre aux dimensions demandées (aucune exception, aucune ressource externe).
-    Déterministe et hors-ligne.
+    The ``entry`` / ``invalidation`` / ``target`` horizontal lines are drawn
+    if provided (emerald / rust / gold). The vertical scale accounts for
+    these levels so they always stay visible. Empty ``candles`` → neutral PNG
+    at the requested dimensions (no exception, no external resource).
+    Deterministic and offline.
     """
     width = max(_MIN_W, int(width))
     height = max(_MIN_H, int(height))
@@ -104,12 +104,12 @@ def render_price_chart_png(
     highs = [float(c.high) for c in candles]
     lows = [float(c.low) for c in candles]
 
-    # Bornes verticales : amplitude des bougies + niveaux fournis (toujours visibles).
+    # Vertical bounds: candle amplitude + supplied levels (always visible).
     extra = [v for v in (entry, invalidation, target) if v is not None]
     pmin = min(lows + extra)
     pmax = max(highs + extra)
     if pmax - pmin < _EPS_RANGE:
-        # Série plate : on ouvre un petit intervalle artificiel autour du prix.
+        # Flat series: open a small artificial interval around the price.
         mid = pmax
         pmin, pmax = mid - 1.0, mid + 1.0
     margin = (pmax - pmin) * 0.06
@@ -127,7 +127,7 @@ def render_price_chart_png(
     img = Image.new("RGB", (width, height), _BG)
     draw = ImageDraw.Draw(img)
 
-    # Cadre + ligne médiane (repères sobres).
+    # Frame + median line (sober markers).
     draw.rectangle([0, 0, width - 1, height - 1], outline=_AXIS, width=1)
     draw.line([plot_l, (plot_t + plot_b) // 2, plot_r, (plot_t + plot_b) // 2], fill=_GRID, width=1)
 
@@ -140,7 +140,7 @@ def render_price_chart_png(
             return (plot_l + plot_r) // 2
         return int(round(plot_l + i / (n - 1) * plot_w))
 
-    # Niveaux (tracés sous la courbe de prix pour rester lisibles).
+    # Levels (drawn under the price curve to stay readable).
     for value, color in (
         (target, _GOLD),
         (invalidation, _RUST),
@@ -152,7 +152,7 @@ def render_price_chart_png(
         if plot_t <= y <= plot_b:
             _dashed_hline(draw, plot_l, plot_r, y, color, width=2)
 
-    # Courbe de prix (close) — encre.
+    # Price curve (close) — ink.
     if len(closes) == 1:
         cx, cy = _x(0), _y(closes[0])
         draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=_INK)
@@ -163,18 +163,18 @@ def render_price_chart_png(
     return _data_uri(img)
 
 
-# ─── Thème « terminal » sombre (look DexScreener) pour le carnet de bord ───
-_DX_BG = (13, 17, 23)          # fond quasi noir
-_DX_GRID = (30, 37, 47)        # grille discrète
-_DX_UP = (38, 166, 91)         # bougie haussière (vert)
-_DX_DOWN = (216, 68, 68)       # bougie baissière (rouge)
+# ─── Dark "terminal" theme (DexScreener look) for the journal ───
+_DX_BG = (13, 17, 23)          # near-black background
+_DX_GRID = (30, 37, 47)        # discreet grid
+_DX_UP = (38, 166, 91)         # bullish candle (green)
+_DX_DOWN = (216, 68, 68)       # bearish candle (red)
 _DX_WICK_UP = (46, 189, 106)
 _DX_WICK_DOWN = (230, 84, 84)
-_DX_TEXT = (139, 148, 158)     # texte gris
-_DX_ENTRY = (88, 166, 255)     # entrée (bleu)
-_DX_TARGET = (210, 168, 60)    # cible (or)
-_DX_INVAL = (240, 100, 90)     # invalidation (rouge clair)
-_DX_SIM = (120, 130, 145)      # zone de simulation
+_DX_TEXT = (139, 148, 158)     # gray text
+_DX_ENTRY = (88, 166, 255)     # entry (blue)
+_DX_TARGET = (210, 168, 60)    # target (gold)
+_DX_INVAL = (240, 100, 90)     # invalidation (light red)
+_DX_SIM = (120, 130, 145)      # simulation zone
 
 
 def render_scenario_png(
@@ -188,13 +188,14 @@ def render_scenario_png(
     width: int = 680,
     height: int = 300,
 ) -> str:
-    """Chandeliers RÉELS (look DexScreener) + **simulation** forward.
+    """REAL candlesticks (DexScreener look) + forward **simulation**.
 
-    À gauche : les VRAIES bougies japonaises (OHLC, vert/rouge) sur fond sombre, comme
-    un screenshot DexScreener. À droite : la SIMULATION sur ~``horizon_weeks`` semaines —
-    scénario haussier (vers la cible) et baissier (vers l'invalidation) depuis le point
-    d'entrée, en zone ombrée + chemins pointillés. C'est une **simulation** clairement
-    étiquetée, jamais une prévision (dôme). Déterministe, hors-ligne. Vide -> PNG neutre.
+    On the left: the REAL Japanese candlesticks (OHLC, green/red) on a dark
+    background, like a DexScreener screenshot. On the right: the SIMULATION
+    over ~``horizon_weeks`` weeks — bullish scenario (toward the target) and
+    bearish scenario (toward the invalidation) from the entry point, as a
+    shaded zone + dashed paths. This is a clearly labeled **simulation**,
+    never a forecast (dome). Deterministic, offline. Empty -> neutral PNG.
     """
     width = max(_MIN_W, int(width))
     height = max(_MIN_H, int(height))
@@ -217,10 +218,10 @@ def render_scenario_png(
     pmax += margin
     prange = pmax - pmin
 
-    pad_r = 50  # colonne de prix à droite (comme DexScreener)
+    pad_r = 50  # right-side price column (like DexScreener)
     plot_l, plot_r = 8, width - pad_r
     top_area = 20
-    # Panneau prix (haut ~72%) + panneau volume (bas ~18%) + marge.
+    # Price panel (top ~72%) + volume panel (bottom ~18%) + margin.
     price_t = top_area
     vol_h = int((height - top_area - 14) * 0.20)
     price_b = height - 14 - vol_h - 6
@@ -228,7 +229,7 @@ def render_scenario_png(
     vol_b = height - 14
     plot_h = max(1, price_b - price_t)
     plot_w = max(1, plot_r - plot_l)
-    hist_r = plot_l + int(plot_w * 0.64)  # historique 64% | simulation 36%
+    hist_r = plot_l + int(plot_w * 0.64)  # history 64% | simulation 36%
 
     img = Image.new("RGB", (width, height), _DX_BG)
     draw = ImageDraw.Draw(img)
@@ -236,7 +237,7 @@ def render_scenario_png(
     def _y(price: float) -> int:
         return int(round(price_b - (price - pmin) / prange * plot_h))
 
-    # Grille horizontale + graduations de prix à droite (panneau prix).
+    # Horizontal grid + right-side price ticks (price panel).
     for k in range(5):
         gy = price_t + int(k / 4 * plot_h)
         draw.line([plot_l, gy, plot_r, gy], fill=_DX_GRID, width=1)
@@ -250,7 +251,7 @@ def render_scenario_png(
     def _xc(i: int) -> int:
         return int(round(plot_l + (i + 0.5) * step))
 
-    # Moyenne mobile (MA7) — ligne dorée discrète, comme un indicateur DexScreener.
+    # Moving average (MA7) — discreet gold line, like a DexScreener indicator.
     ma_win = min(7, n)
     if ma_win >= 2:
         ma_pts = []
@@ -260,7 +261,7 @@ def render_scenario_png(
             ma_pts.append((_xc(i), _y(sum(seg) / len(seg))))
         draw.line(ma_pts, fill=(120, 108, 60), width=1, joint="curve")
 
-    # Bougies réelles (mèche + corps vert/rouge).
+    # Real candles (wick + green/red body).
     for i in range(n):
         x = _xc(i)
         up = closes[i] >= opens[i]
@@ -273,7 +274,7 @@ def render_scenario_png(
             bot = top + 1
         draw.rectangle([x - body_w // 2, top, x + body_w // 2, bot], fill=body)
 
-    # Panneau volume (barres vert/rouge en bas).
+    # Volume panel (green/red bars at the bottom).
     vols = [float(getattr(c, "volume", 0.0) or 0.0) for c in candles]
     vmax = max(vols) if vols else 0.0
     if vmax > 0:
@@ -284,11 +285,11 @@ def render_scenario_png(
             draw.rectangle([x - body_w // 2, vol_b - bh, x + body_w // 2, vol_b], fill=col)
     draw.line([plot_l, vol_b, plot_r, vol_b], fill=_DX_GRID, width=1)
 
-    # Zone de simulation ombrée (à droite du dernier chandelier).
+    # Shaded simulation zone (to the right of the last candle).
     draw.rectangle([hist_r, price_t, plot_r, price_b], fill=(18, 23, 31))
     draw.line([hist_r, price_t, hist_r, price_b], fill=_DX_GRID, width=1)
 
-    # Niveaux (entrée / cible / invalidation) en pointillés + étiquette de prix à droite.
+    # Levels (entry / target / invalidation) dashed + right-side price label.
     for value, color, lab in (
         (target, _DX_TARGET, "cible"), (invalidation, _DX_INVAL, "inval"), (entry, _DX_ENTRY, "entree")
     ):
@@ -300,20 +301,20 @@ def render_scenario_png(
             draw.rectangle([plot_r, y - 6, width - 1, y + 6], fill=color)
             draw.text((plot_r + 3, y - 5), _fmt_axis(float(value)), fill=(13, 17, 23))
 
-    # Départ de la simulation = point d'entrée (ou dernier close).
+    # Simulation start = entry point (or last close).
     e = float(entry) if entry is not None else closes[-1]
     ex, ey = hist_r, _y(e)
     draw.ellipse([ex - 3, ey - 3, ex + 3, ey + 3], fill=_DX_ENTRY)
 
-    # Chemins de simulation (pointillés depuis l'entrée vers cible / invalidation).
+    # Simulation paths (dashed, from entry toward target / invalidation).
     if target is not None:
         _dashed_line(draw, ex, ey, plot_r, _y(float(target)), _DX_TARGET, width=2)
     if invalidation is not None:
         _dashed_line(draw, ex, ey, plot_r, _y(float(invalidation)), _DX_INVAL, width=2)
 
-    # Bulles d'entrée / de sortie (multiples si DCA / sorties échelonnées).
-    # markers : liste de (kind, index, price[, label]) — kind = 'entry'|'exit'.
-    # index négatif ou None -> placé au point d'entrée (départ de la simulation).
+    # Entry/exit bubbles (multiple if DCA / staggered exits).
+    # markers: list of (kind, index, price[, label]) — kind = 'entry'|'exit'.
+    # negative or None index -> placed at the entry point (simulation start).
     n_e = n_s = 0
     for m in (markers or []):
         kind, idx, price, label = _unpack_marker(m)
@@ -331,7 +332,7 @@ def render_scenario_png(
             n_e += 1
             _bubble(draw, mx, my, _DX_ENTRY, label or f"E{n_e}")
 
-    # Étiquettes honnêtes.
+    # Honest labels.
     draw.text((plot_l + 2, 5), "OHLCV reel  ·  MA7", fill=_DX_TEXT)
     draw.text((hist_r + 4, 5), f"SIMULATION {horizon_weeks} sem. (scenario)", fill=_DX_TEXT)
     draw.text((plot_l + 2, vol_t - 1), "Vol", fill=_DX_TEXT)
@@ -339,7 +340,7 @@ def render_scenario_png(
 
 
 def _unpack_marker(m):
-    """Accepte (kind, index, price[, label]) ou {kind,index,price,label}. -> tuple normalisé."""
+    """Accepts (kind, index, price[, label]) or {kind,index,price,label}. -> normalized tuple."""
     if isinstance(m, dict):
         return (
             str(m.get("kind") or "entry"), m.get("index"),
@@ -353,15 +354,15 @@ def _unpack_marker(m):
 
 
 def _bubble(draw, x, y, color, label: str, *, r: int = 7) -> None:
-    """Dessine une bulle pastille avec un contour + un petit label (E1, S2...)."""
+    """Draws a round bubble with an outline + a small label (E1, S2...)."""
     draw.ellipse([x - r, y - r, x + r, y + r], fill=color, outline=(13, 17, 23))
-    # centre le label (approx : ~5 px/caractère avec la police par défaut).
+    # centers the label (approx: ~5 px/char with the default font).
     tx = x - int(len(label) * 2.5)
     draw.text((tx, y - 4), label, fill=(13, 17, 23))
 
 
 def _fmt_axis(price: float) -> str:
-    """Formatte un prix pour l'axe (compact, adapté aux micro-caps)."""
+    """Formats a price for the axis (compact, suited to micro-caps)."""
     ap = abs(price)
     if ap == 0:
         return "0"
@@ -373,7 +374,7 @@ def _fmt_axis(price: float) -> str:
 
 
 def _dashed_line(draw, x0, y0, x1, y1, color, *, dash=6, gap=4, width=1):
-    """Trace une ligne pointillée quelconque (x0,y0)->(x1,y1)."""
+    """Draws an arbitrary dashed line (x0,y0)->(x1,y1)."""
     import math
 
     dx, dy = x1 - x0, y1 - y0
@@ -389,7 +390,7 @@ def _dashed_line(draw, x0, y0, x1, y1, color, *, dash=6, gap=4, width=1):
 
 
 def save_png_data_uri(data_uri: str, path: str) -> str:
-    """Décode un PNG data-URI et l'écrit sur disque (vrai screenshot). Retourne le chemin."""
+    """Decodes a PNG data URI and writes it to disk (a real screenshot). Returns the path."""
     import base64 as _b64
     import os
 

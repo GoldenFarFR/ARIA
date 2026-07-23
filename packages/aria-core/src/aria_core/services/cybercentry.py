@@ -1,24 +1,25 @@
-"""Client Cybercentry (x402) — vérifications de sécurité payantes (0,02 $/appel).
+"""Cybercentry client (x402) — paid security checks (0.02 $/call).
 
-Complète GoPlus (garde-fou honeypot gratuit) par un second avis payant quand
-c'est utile (#199, 17/07, décision opérateur : payer ce qui alimente le plus
-la mémoire vectorielle). Endpoints réels, vérifiés en direct le 17/07 contre
+Complements GoPlus (free honeypot guard) with a paid second opinion when
+useful (#199, 17/07, operator decision: pay for whatever feeds the vector
+memory the most). Real endpoints, verified live on 17/07 against
 https://cybercentry.gitbook.io/cybercentry/documents/x402-cybercentry —
-`ethereum-token-verification` était en panne (502 Railway) au moment du test,
-`wallet-verification` répond correctement, câblé en premier ici. Les autres
-endpoints (Solidity/Solana/token) suivent le même patron si besoin un jour.
-Retesté le 17/07 (session suivante) : `ethereum-token-verification` toujours
-indisponible -- mode de panne différent cette fois (TCP/TLS ouvert, requête
-envoyée, aucune réponse, timeout après 15s -- pas un 502 immédiat), pendant que
-`wallet-verification` répond toujours correctement (402) sur la même infra
-Railway au même instant. Confirme que ce n'est ni un blocage réseau/allowlist
-côté ARIA ni une panne Cybercentry globale -- ce service précis reste cassé.
-Ne pas construire `verify_and_remember_token` avant qu'un nouveau test confirme
-une vraie réponse (402 ou 200), pour ne pas coder contre une API injoignable.
+`ethereum-token-verification` was down (502 Railway) at test time,
+`wallet-verification` responds correctly, wired first here. The other
+endpoints (Solidity/Solana/token) follow the same pattern if needed someday.
+Retested on 17/07 (next session): `ethereum-token-verification` still
+unavailable -- a different failure mode this time (TCP/TLS open, request
+sent, no response, timeout after 15s -- not an immediate 502), while
+`wallet-verification` still responds correctly (402) on the same Railway
+infra at the same instant. Confirms this is neither a network/allowlist
+block on ARIA's side nor a global Cybercentry outage -- this specific
+service stays broken. Do not build `verify_and_remember_token` before a
+new test confirms a real response (402 or 200), so as not to code against
+an unreachable API.
 
-Chaque appel passe par `x402_executor.fetch_paid_resource` (plafond hebdo
-`x402_budget`, coupe-circuit `/stop`, wallet CDP dédié) -- aucune clé, aucun
-paiement construit ici, ce module ne fait qu'appeler et parser la réponse."""
+Every call goes through `x402_executor.fetch_paid_resource` (weekly cap
+`x402_budget`, `/stop` kill-switch, dedicated CDP wallet) -- no key, no
+payment built here, this module only calls and parses the response."""
 from __future__ import annotations
 
 import json
@@ -31,10 +32,10 @@ _WALLET_VERIFICATION_URL = "https://x402-cybercentry-wallet-verification.up.rail
 
 
 async def verify_wallet(address: str) -> dict[str, Any]:
-    """Vérifie une adresse de wallet (sanctions/fraude/risque) via Cybercentry (x402,
-    0,02 $). Renvoie ``{"available": bool, "raw": dict|None, "error": str|None,
-    "amount_usd": float}`` -- jamais une exception qui remonte (même dôme que le
-    reste des clients externes)."""
+    """Checks a wallet address (sanctions/fraud/risk) via Cybercentry (x402,
+    0.02 $). Returns ``{"available": bool, "raw": dict|None, "error": str|None,
+    "amount_usd": float}`` -- never an exception bubbling up (same dome as the
+    rest of the external clients)."""
     from aria_core import x402_executor
     from aria_core.agent_wallet_cdp_adapter import usdc_balance_usd
     from aria_core.x402_cdp_signer import build_x402_payment_header
@@ -58,7 +59,7 @@ async def verify_wallet(address: str) -> dict[str, Any]:
         }
     try:
         raw = json.loads(result.body.decode("utf-8"))
-    except Exception as exc:  # noqa: BLE001 — corps illisible, jamais une exception qui remonte
+    except Exception as exc:  # noqa: BLE001 — unreadable body, never an exception bubbling up
         return {
             "available": False, "raw": None, "error": f"réponse illisible ({exc})",
             "amount_usd": result.amount_usd,

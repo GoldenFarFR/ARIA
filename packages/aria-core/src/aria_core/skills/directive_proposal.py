@@ -1,19 +1,19 @@
-"""Câblage heartbeat -> canal de directives (`aria_directives.propose_directive`), pilote
-autonome de la tâche #82.
+"""Heartbeat -> directive channel wiring (`aria_directives.propose_directive`),
+autonomous pilot for task #82.
 
-Jusqu'ici `propose_directive` n'était appelé que depuis une commande Telegram opérateur
-(`/canal propose`) -- ARIA elle-même n'avait aucun moyen autonome d'y déposer une
-proposition. Ce module ajoute UNE seule source de signal, volontairement étroite pour un
-premier pilote : un marqueur littéral `TODO(aria)` dans le code/docs du repo, jamais une
-génération d'idées par LLM. Chaque candidat n'est proposé qu'UNE fois (mémorisé
-localement).
+Until now `propose_directive` was only called from an operator Telegram
+command (`/canal propose`) -- ARIA herself had no autonomous way to submit a
+proposal there. This module adds ONE single signal source, deliberately
+narrow for a first pilot: a literal `TODO(aria)` marker in the repo's
+code/docs, never LLM-generated ideas. Each candidate is proposed only ONCE
+(remembered locally).
 
-Ce module ne modifie et ne contourne JAMAIS le gating de `aria_directives.py` -- il
-appelle `propose_directive()` tel quel, avec une des 3 catégories déjà verrouillées par
-`_DIRECTIVE_CATEGORIES` (jamais une catégorie choisie dynamiquement). Gaté OFF par défaut
-via `ARIA_DIRECTIVE_PROPOSAL_ENABLED`, un 3e interrupteur indépendant de
-`HeartbeatTask.enabled` et de `ARIA_DIRECTIVE_CHANNEL_ENABLED` (déjà OFF par défaut côté
-producteur dans `propose_directive` lui-même).
+This module never modifies or bypasses `aria_directives.py`'s gating -- it
+calls `propose_directive()` as-is, with one of the 3 categories already
+locked by `_DIRECTIVE_CATEGORIES` (never a dynamically chosen category). Gated
+OFF by default via `ARIA_DIRECTIVE_PROPOSAL_ENABLED`, a 3rd switch independent
+of `HeartbeatTask.enabled` and of `ARIA_DIRECTIVE_CHANNEL_ENABLED` (already
+OFF by default on the producer side in `propose_directive` itself).
 """
 from __future__ import annotations
 
@@ -30,21 +30,22 @@ _EXCLUDE_DIR_NAMES = {
     ".venv", "node_modules", "__pycache__", ".git", "dist", "build", ".next",
 }
 
-# Mapping fermé, codé en dur : ce pilote ne reconnaît qu'un seul type de marqueur, mappé
-# vers une seule catégorie déjà autorisée. Jamais de choix dynamique de catégorie ici --
-# élargir exigerait un changement de code délibéré, comme pour _DIRECTIVE_CATEGORIES.
+# Closed, hardcoded mapping: this pilot only recognizes one type of marker,
+# mapped to a single already-authorized category. Never a dynamic category
+# choice here -- expanding it would require a deliberate code change, same as
+# for _DIRECTIVE_CATEGORIES.
 _MARKER_CATEGORY = "repo_hygiene"
 
-# Un commentaire TODO(aria) arbitrairement long ne doit jamais atterrir tel quel dans la
-# file -- titre/détail restent courts et lisibles en revue humaine.
+# An arbitrarily long TODO(aria) comment must never land as-is in the queue --
+# title/detail stay short and readable for human review.
 _MAX_SNIPPET_LEN = 200
 
 _TRUTHY = ("1", "true", "yes", "on")
 
 
 def directive_proposal_enabled() -> bool:
-    """Gate dédié (3e interrupteur, indépendant du gate producteur de propose_directive
-    et du HeartbeatTask.enabled) -- OFF par défaut."""
+    """Dedicated gate (3rd switch, independent of propose_directive's producer
+    gate and of HeartbeatTask.enabled) -- OFF by default."""
     return os.environ.get("ARIA_DIRECTIVE_PROPOSAL_ENABLED", "").strip().lower() in _TRUTHY
 
 
@@ -53,8 +54,8 @@ def _is_exempt_dir(name: str) -> bool:
 
 
 def _scan_todo_candidates() -> list[dict]:
-    """Scan littéral (pas de LLM, pas d'heuristique de fraîcheur) des marqueurs
-    `TODO(aria)` sous la racine du repo. Renvoie une liste ordonnée de candidats
+    """Literal scan (no LLM, no freshness heuristic) of `TODO(aria)` markers
+    under the repo root. Returns an ordered list of candidates
     {key, path, line, text}."""
     candidates: list[dict] = []
     for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
@@ -129,9 +130,9 @@ async def _pick_next_candidate(candidates: list[dict]) -> dict | None:
 
 
 async def run_directive_proposal_cycle(*, notifier=None, scanner=None) -> dict:
-    """Un tour : repère UN candidat `TODO(aria)` non encore proposé et appelle
-    `propose_directive` (catégorie fixe `repo_hygiene`). Fail-closed à chaque étage --
-    jamais de proposition en lot, jamais de catégorie choisie dynamiquement."""
+    """One round: finds ONE `TODO(aria)` candidate not yet proposed and calls
+    `propose_directive` (fixed `repo_hygiene` category). Fail-closed at every
+    stage -- never a batch proposal, never a dynamically chosen category."""
     if not directive_proposal_enabled():
         return {"outcome": "skipped_disabled"}
 
@@ -158,7 +159,7 @@ async def run_directive_proposal_cycle(*, notifier=None, scanner=None) -> dict:
     if notifier:
         try:
             await notifier(f"📋 Directive auto-proposée par ARIA -- {title}")
-        except Exception:  # noqa: BLE001 -- une notification en échec ne casse jamais le cycle
+        except Exception:  # noqa: BLE001 -- a failed notification never breaks the cycle
             pass
 
     return {

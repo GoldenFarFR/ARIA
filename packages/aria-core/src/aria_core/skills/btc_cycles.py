@@ -1,19 +1,22 @@
-"""Analyse des cycles Bitcoin (accumulation / hausse / distribution / baisse) — le
-socle macro long terme qu'ARIA lit avant de juger un token Base dans son contexte.
+"""Bitcoin cycle analysis (accumulation / markup / distribution / markdown) --
+the long-term macro foundation ARIA reads before judging a Base token in
+context.
 
-Facts-only : les bornes de cycle (dates de halving) sont un fait public et vérifiable
-(protocole Bitcoin, immuable), jamais une opinion. Les statistiques par phase (prix
-bas/haut, %, durée) sont calculées depuis la VRAIE série de prix récupérée (CoinGecko),
-jamais inventées — `segment_cycles` est une fonction pure, sans réseau, testable.
+Facts-only: cycle boundaries (halving dates) are a public, verifiable fact
+(Bitcoin protocol, immutable), never an opinion. Per-phase statistics (low/
+high price, %, duration) are computed from the REAL fetched price series
+(CoinGecko), never fabricated — `segment_cycles` is a pure function, no
+network, testable.
 
-Seule l'ÉTIQUETTE de phase (accumulation/hausse/distribution/baisse) est une LENTE
-d'analyse : un cadre de lecture répandu (théorie des cycles de 4 ans liée au halving),
-pas une loi de marché prouvée. Le seuil de sortie d'accumulation (+30 % depuis le bas)
-et la bande de distribution (10 % sous le plus haut) sont des heuristiques SIMPLES et
-DÉCLARÉES ici, pas une frontière officielle (aucune n'existe). Le récit qualitatif par
-cycle vient d'un LLM, mais toujours ancré sur les chiffres réels calculés ici — jamais
-une vérité inventée (même doctrine que `exam.py` pour les cadres contestés : le dire
-explicitement plutôt que le présenter comme prouvé).
+Only the phase LABEL (accumulation/markup/distribution/markdown) is an
+analytical LENS: a widely-used reading framework (the 4-year cycle theory
+tied to halvings), not a proven market law. The accumulation-exit threshold
+(+30% from the low) and the distribution band (10% below the high) are
+SIMPLE, DECLARED heuristics here, not an official boundary (none exists).
+The qualitative narrative per cycle comes from an LLM, but always anchored
+on the real numbers computed here — never a fabricated truth (same doctrine
+as `exam.py` for contested frameworks: say so explicitly rather than
+presenting it as proven).
 """
 from __future__ import annotations
 
@@ -22,19 +25,19 @@ from datetime import datetime, timezone
 
 BTC_COIN_ID = "bitcoin"
 
-# Dates de halving Bitcoin — fait public, protocole immuable (pas une estimation).
+# Bitcoin halving dates — public fact, immutable protocol (not an estimate).
 HALVING_DATES: tuple[tuple[str, str], ...] = (
     ("cycle halving 2016->2020", "2016-07-09"),
     ("cycle halving 2020->2024", "2020-05-11"),
     ("cycle halving 2024->en cours", "2024-04-20"),
 )
 
-# Marge avant le premier halving retenu, pour capturer le creux qui le précède.
+# Margin before the first halving kept, to capture the low that precedes it.
 HISTORY_START = "2015-06-01"
 
-# Heuristiques SIMPLES et DÉCLARÉES (aucune frontière officielle n'existe) :
-ACCUMULATION_EXIT_GAIN = 0.30  # sortie d'accumulation : premier prix a +30% du plus bas du cycle
-DISTRIBUTION_BAND = 0.10       # distribution : prix a moins de 10% du plus haut du cycle
+# SIMPLE, DECLARED heuristics (no official boundary exists):
+ACCUMULATION_EXIT_GAIN = 0.30  # accumulation exit: first price is +30% off the cycle low
+DISTRIBUTION_BAND = 0.10       # distribution: price is within 10% of the cycle high
 
 
 def _to_ts(date_str: str) -> int:
@@ -70,9 +73,9 @@ class CycleStats:
 
 
 def segment_cycles(prices: list[tuple[int, float]]) -> list[CycleStats]:
-    """Découpe la série réelle en cycles ancrés sur les halvings, calcule les
-    statistiques réelles (bas/haut/%, durées). Fonction PURE : aucun appel réseau,
-    aucune valeur inventée — seulement des min/max/pourcentages sur les prix fournis."""
+    """Splits the real series into cycles anchored on halvings, computes the
+    real statistics (low/high/%, durations). PURE function: no network call,
+    no fabricated value — only min/max/percentages on the supplied prices."""
     if len(prices) < 2:
         return []
     prices = sorted(prices, key=lambda x: x[0])
@@ -97,7 +100,7 @@ def segment_cycles(prices: list[tuple[int, float]]) -> list[CycleStats]:
 
         phases: list[CyclePhase] = []
 
-        # Accumulation : du plus bas jusqu'au premier prix >= +ACCUMULATION_EXIT_GAIN.
+        # Accumulation: from the low up to the first price >= +ACCUMULATION_EXIT_GAIN.
         after_low = [(t, p) for t, p in window if t >= low_t]
         acc_end = next(
             ((t, p) for t, p in after_low if p >= low_p * (1 + ACCUMULATION_EXIT_GAIN)), None,
@@ -111,7 +114,7 @@ def segment_cycles(prices: list[tuple[int, float]]) -> list[CycleStats]:
             ))
             markup_start = acc_end
 
-        # Hausse (markup) : de la fin d'accumulation jusqu'au plus haut du cycle.
+        # Markup: from the end of accumulation up to the cycle high.
         if high_t > markup_start[0]:
             phases.append(CyclePhase(
                 label="hausse (markup)", start_date=_iso(markup_start[0]), end_date=_iso(high_t),
@@ -119,7 +122,7 @@ def segment_cycles(prices: list[tuple[int, float]]) -> list[CycleStats]:
                 change_pct=(high_p / markup_start[1] - 1.0) * 100.0 if markup_start[1] else 0.0,
             ))
 
-        # Distribution : bande autour du plus haut (prix >= high * (1 - DISTRIBUTION_BAND)).
+        # Distribution: band around the high (price >= high * (1 - DISTRIBUTION_BAND)).
         dist_window = [(t, p) for t, p in window if t >= high_t and p >= high_p * (1 - DISTRIBUTION_BAND)]
         markdown_start = (high_t, high_p)
         if len(dist_window) >= 2 and dist_window[-1][0] > dist_window[0][0]:
@@ -130,7 +133,7 @@ def segment_cycles(prices: list[tuple[int, float]]) -> list[CycleStats]:
             ))
             markdown_start = dist_window[-1]
 
-        # Baisse (markdown) : de la fin de distribution jusqu'a la fin de la fenetre.
+        # Markdown: from the end of distribution to the end of the window.
         if window[-1][0] > markdown_start[0]:
             phases.append(CyclePhase(
                 label="baisse (markdown)", start_date=_iso(markdown_start[0]), end_date=_iso(window[-1][0]),
@@ -147,16 +150,16 @@ def segment_cycles(prices: list[tuple[int, float]]) -> list[CycleStats]:
 
 
 async def fetch_btc_history(*, client=None) -> list[tuple[int, float]] | None:
-    """Vraie série de prix BTC/USD depuis HISTORY_START (Blockchain.com). None si
-    indisponible — jamais une série inventée.
+    """Real BTC/USD price series since HISTORY_START (Blockchain.com). None if
+    unavailable — never a fabricated series.
 
-    CoinGecko a changé sa politique (confirmé en direct le 09/07, `error_code
-    10012`) : son tier gratuit refuse désormais toute requête portant sur des
-    données de plus de 365 jours -- structurellement incompatible avec les 10+
-    ans requis ici. Basculé sur `services/blockchain_info.py` (société établie,
-    endpoint public documenté, ~1600 points quotidiens 2009->aujourd'hui,
-    aucune clé). Le RSI récent (`arena_signal.py`) reste sur CoinGecko, qui
-    fonctionne très bien pour une fenêtre courte (<=365 jours).
+    CoinGecko changed its policy (confirmed live on 09/07, `error_code
+    10012`): its free tier now refuses any request on data older than 365
+    days -- structurally incompatible with the 10+ years required here.
+    Switched to `services/blockchain_info.py` (established company,
+    documented public endpoint, ~1600 daily points 2009->today, no key).
+    Recent RSI (`arena_signal.py`) stays on CoinGecko, which works very well
+    for a short window (<=365 days).
     """
     if client is None:
         from aria_core.services.blockchain_info import blockchain_info_client as client
@@ -171,9 +174,10 @@ async def fetch_btc_history(*, client=None) -> list[tuple[int, float]] | None:
 
 
 def current_phase_summary(stats: list[CycleStats]) -> dict | None:
-    """Phase actuelle (dernier segment du cycle en cours) -- fonction PURE, déterministe,
-    aucun appel réseau/LLM. Sert de contexte marché compact pour chaque rapport VC
-    (overlay macro, tâche #14) ; le récit complet des 3 cycles reste réservé à /cycles."""
+    """Current phase (last segment of the ongoing cycle) -- PURE, deterministic
+    function, no network/LLM call. Serves as compact market context for every
+    VC report (macro overlay, task #14); the full 3-cycle narrative remains
+    reserved for /cycles."""
     if not stats:
         return None
     current_cycle = stats[-1]
@@ -188,16 +192,16 @@ def current_phase_summary(stats: list[CycleStats]) -> dict | None:
     }
 
 
-_PHASE_CACHE_TTL_SECONDS = 3600  # la phase ne bascule pas d'un cycle à l'autre en 1h --
-# évite de refaire un aller-retour CoinGecko à CHAQUE rapport VC (sobriété).
+_PHASE_CACHE_TTL_SECONDS = 3600  # the phase doesn't flip from one cycle to another in 1h --
+# avoids redoing a CoinGecko round-trip on EVERY VC report (sobriety).
 _phase_cache: dict = {"at": 0.0, "value": None}
 
 
 async def fetch_current_macro_phase(*, client=None, force_refresh: bool = False) -> dict | None:
-    """Point d'entrée compact pour l'overlay macro des rapports VC (tâche #14). Fail-closed
-    ET dégradation douce : historique indisponible -> renvoie la dernière valeur connue en
-    cache s'il y en a une, sinon None (jamais une phase inventée ; la section est alors
-    simplement omise du rapport)."""
+    """Compact entry point for the VC reports' macro overlay (task #14).
+    Fail-closed AND graceful degradation: history unavailable -> returns the
+    last known cached value if there is one, otherwise None (never a
+    fabricated phase; the section is then simply omitted from the report)."""
     import time
 
     now = time.monotonic()
@@ -244,8 +248,9 @@ def _format_stats_for_llm(stats: list[CycleStats]) -> str:
 
 
 async def analyze_btc_cycles(*, client=None, llm=None) -> dict:
-    """Analyse des 3 derniers cycles Bitcoin : chiffres réels calculés + récit LLM ancré
-    dessus. Fail-closed : historique indisponible -> aucune analyse inventée."""
+    """Analysis of the last 3 Bitcoin cycles: real computed numbers + LLM
+    narrative anchored on them. Fail-closed: history unavailable -> no
+    fabricated analysis."""
     prices = await fetch_btc_history(client=client)
     if not prices:
         return {"available": False, "error": "historique BTC indisponible (CoinGecko)"}

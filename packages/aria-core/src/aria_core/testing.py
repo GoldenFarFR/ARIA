@@ -43,14 +43,14 @@ class AriaRuntimeSettings(BaseSettings):
     llm_api_key: str = ""
     virtuals_api_key: str = ""
     deepseek_api_key: str = ""
-    grok_api_key: str = ""  # 17/07 -- parité avec app.config.Settings (LLM_PROVIDER=grok/xai)
-    xai_management_key: str = ""  # 18/07 -- parité avec app.config.Settings (solde x.ai, clé distincte)
-    xai_team_id: str = ""  # 18/07 -- parité avec app.config.Settings
-    gemini_api_key: str = ""  # 17/07 -- parité avec app.config.Settings (LLM_PROVIDER=gemini)
-    mistral_api_key: str = ""  # 17/07 -- parité avec app.config.Settings (LLM_PROVIDER=mistral)
-    openai_api_key: str = ""  # 17/07 -- parité avec app.config.Settings (LLM_PROVIDER=openai)
-    openrouter_api_key: str = ""  # 17/07 -- parité avec app.config.Settings (LLM_PROVIDER=openrouter)
-    anthropic_api_key: str = ""  # 17/07 -- parité avec app.config.Settings (Anthropic direct, natif)
+    grok_api_key: str = ""  # 17/07 -- parity with app.config.Settings (LLM_PROVIDER=grok/xai)
+    xai_management_key: str = ""  # 18/07 -- parity with app.config.Settings (x.ai balance, distinct key)
+    xai_team_id: str = ""  # 18/07 -- parity with app.config.Settings
+    gemini_api_key: str = ""  # 17/07 -- parity with app.config.Settings (LLM_PROVIDER=gemini)
+    mistral_api_key: str = ""  # 17/07 -- parity with app.config.Settings (LLM_PROVIDER=mistral)
+    openai_api_key: str = ""  # 17/07 -- parity with app.config.Settings (LLM_PROVIDER=openai)
+    openrouter_api_key: str = ""  # 17/07 -- parity with app.config.Settings (LLM_PROVIDER=openrouter)
+    anthropic_api_key: str = ""  # 17/07 -- parity with app.config.Settings (Anthropic direct, native)
     llm_fallback_provider: str = "groq"
     llm_fallback_api_key: str = ""
     llm_fallback_model: str = "llama-3.3-70b-versatile"
@@ -120,29 +120,29 @@ class AriaRuntimeSettings(BaseSettings):
     aria_image_style_use_llm: bool = False
     aria_visual_autonomy_interval_minutes: int = 1440
 
-    # Curriculum épistémique / culture large — mémoire ARIA seulement (pas spam Telegram opérateur)
+    # Epistemic curriculum / broad culture — ARIA memory only (no operator Telegram spam)
     aria_curriculum_notify_operator: bool = False
     aria_acp_provider_enabled: bool = False
     aria_acp_events_file: str = ""
     aria_acp_workflow_used_tweet: bool = True
-    # Mémoire vectorielle Chroma — opt-in, désactivé par défaut (Phase B stub)
+    # Chroma vector memory — opt-in, disabled by default (Phase B stub)
     aria_vector_memory: bool = False
-    # Cache DDG — opt-in, évite requêtes répétées (gratuit, fichier local)
+    # DDG cache — opt-in, avoids repeated requests (free, local file)
     aria_ddg_search_cache: bool = False
-    # Fournisseur de recherche web : "ddg" (gratuit, défaut) ou "tavily" (opt-in, clé env
-    # TAVILY_API_KEY). Bascule uniquement quand l'opérateur fournit une clé. DDG reste le
-    # fallback si Tavily est indisponible.
+    # Web search provider: "ddg" (free, default) or "tavily" (opt-in, TAVILY_API_KEY
+    # env key). Only switches when the operator supplies a key. DDG stays the
+    # fallback if Tavily is unavailable.
     aria_web_search_provider: str = "ddg"
-    # Arbitre mémoire — résolution conflits court/moyen/long (Phase H, défaut on)
+    # Memory arbitrator — short/medium/long conflict resolution (Phase H, default on)
     aria_memory_arbitrator: bool = True
 
     github_token: str = ""
     github_owner: str = "GoldenFarFR"
     github_sandbox_repo: str = "aria-sandbox"
     github_token_repo: str = ""
-    # Token dédié, distinct de github_token (scopé ARIA uniquement) -- repo "aria-brain"
-    # (mémoire libre d'ARIA, auto-gérée, 20/07) : jamais le même credential que celui qui
-    # touche le code de trading, structurellement isolé.
+    # Dedicated token, distinct from github_token (scoped to ARIA only) -- "aria-brain"
+    # repo (ARIA's free-form memory, self-managed, 20/07): never the same credential as
+    # the one touching the trading code, structurally isolated.
     aria_brain_github_token: str = ""
     github_read_repos: str = ""
     github_write_repos: str = ""

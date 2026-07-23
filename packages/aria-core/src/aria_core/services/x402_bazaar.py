@@ -1,40 +1,44 @@
-"""Client de lecture seule x402 Bazaar (CDP Coinbase, discovery layer) -- découverte de
-services x402 disponibles, avec signal de tendance réel (volume 30j). Réponse à la
-question opérateur "il n'existe pas un top tendance des meilleurs outils x402 ?" (19/07)
--- se limiter à une diligence manuelle ponctuelle (Cybercentry, #199) était effectivement
-une limitation : ce registre officiel Coinbase permet une découverte dynamique.
+"""x402 Bazaar read-only client (CDP Coinbase, discovery layer) -- discovers
+available x402 services, with a real trend signal (30d volume). Answers the
+operator question "isn't there a top-trending list of the best x402 tools?"
+(19/07) -- limiting ourselves to one-off manual diligence (Cybercentry,
+#199) was indeed a limitation: this official Coinbase registry enables
+dynamic discovery.
 
-Vérifié en direct (19/07, AVANT d'écrire ce module -- norme #157) contre la doc officielle
-(docs.cdp.coinbase.com/x402/bazaar) ET un vrai appel :
-  - ``GET https://api.cdp.coinbase.com/platform/v2/x402/discovery/search`` -- lecture
-    seule, AUCUNE clé CDP requise (confirmé HTTP 200 sans authentification). Combine
-    recherche texte/sémantique + classement qualité (buyer reach 30j, volume de
-    transactions 30j, récence, qualité des métadonnées, curation Coinbase) -- recalculé
-    toutes les 6h.
-  - Le champ ``quality.l30DaysTotalCalls``/``l30DaysUniquePayers`` EST bien exposé dans
-    la réponse réelle (contrairement à ce que suggère la doc, qui dit "no per-service
-    breakdown, only final ordering") -- confirmé sur 5 services réels (ex. Tavily Search
-    avancé : 48319 appels / 374 payeurs uniques sur 30j). C'est le signal de TENDANCE le
-    plus direct et objectif disponible -- ``discover_trending()`` trie explicitement
-    dessus plutôt que de se fier à l'ordre brut de l'API (qui mélange pertinence
-    textuelle, peu significative si ``query`` est vide).
-  - ``GET .../discovery/resources`` (catalogue paginé, newest-first) et
-    ``GET .../discovery/merchant?payTo=<adresse>`` existent aussi -- non câblés ici (hors
-    scope immédiat, la recherche/tendance répond à la demande posée), ajoutables sans
-    duplication si un besoin réel apparaît.
+Verified live (19/07, BEFORE writing this module -- norm #157) against the
+official doc (docs.cdp.coinbase.com/x402/bazaar) AND a real call:
+  - ``GET https://api.cdp.coinbase.com/platform/v2/x402/discovery/search`` --
+    read-only, NO CDP key required (confirmed HTTP 200 with no
+    authentication). Combines text/semantic search + quality ranking (30d
+    buyer reach, 30d transaction volume, recency, metadata quality, Coinbase
+    curation) -- recomputed every 6h.
+  - The ``quality.l30DaysTotalCalls``/``l30DaysUniquePayers`` field IS
+    genuinely exposed in the real response (contrary to what the doc
+    suggests, which says "no per-service breakdown, only final ordering")
+    -- confirmed on 5 real services (e.g. Tavily Advanced Search: 48319
+    calls / 374 unique payers over 30d). This is the most direct and
+    objective TREND signal available -- ``discover_trending()`` explicitly
+    sorts on it rather than trusting the API's raw order (which mixes in
+    textual relevance, not very meaningful if ``query`` is empty).
+  - ``GET .../discovery/resources`` (paginated catalog, newest-first) and
+    ``GET .../discovery/merchant?payTo=<address>`` also exist -- not wired
+    here (outside the immediate scope, search/trending answers the question
+    asked), addable with no duplication if a real need arises.
 
-Sécurité (doctrine "instruction source boundary" déjà appliquée partout ailleurs dans ce
-projet) : chaque service listé est déclaré par un TIERS non vérifié (``curated=True``
-reste une vérification Coinbase, jamais une garantie absolue). Certains champs observés
-en conditions réelles s'adressent LITTÉRALEMENT à un agent IA (ex.
-``extensions.a2a_negotiation.message: "Hey agent! ..."``) -- ce module ne fait QUE
-retourner ces champs comme TEXTE D'AFFICHAGE, jamais les interpréter ni les suivre. Tout
-appelant doit traiter description/service_name comme donnée, jamais comme instruction.
+Security (the "instruction source boundary" doctrine already applied
+everywhere else in this project): every listed service is declared by an
+unverified THIRD PARTY (``curated=True`` is still a Coinbase check, never an
+absolute guarantee). Some fields observed under real conditions LITERALLY
+address an AI agent (e.g.
+``extensions.a2a_negotiation.message: "Hey agent! ..."``) -- this module
+ONLY returns these fields as DISPLAY TEXT, never interprets or follows them.
+Every caller must treat description/service_name as data, never as an
+instruction.
 
-Portée strictement respectée : DÉCOUVERTE UNIQUEMENT. Ce module ne paie JAMAIS un
-service, ne déclenche aucun appel vers l'endpoint payant lui-même -- le paiement (si un
-jour utilisé) reste dans x402_executor.py/x402_budget.py (plafond 5$/semaine déjà en
-place), jamais ici.
+Scope strictly respected: DISCOVERY ONLY. This module NEVER pays for a
+service, never triggers a call to the paid endpoint itself -- payment (if
+ever used) stays in x402_executor.py/x402_budget.py (5$/week cap already in
+place), never here.
 """
 from __future__ import annotations
 
@@ -49,20 +53,20 @@ BASE_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery"
 UNAVAILABLE = "donnée x402 Bazaar indisponible"
 _HTTP_TIMEOUT = 15.0
 
-# Adresses USDC canoniques (stables, ne changent jamais) -- volontairement PAS le
-# registre `smart_money._STABLECOIN_ADDRESSES_BY_CHAIN` (privé, Base UNIQUEMENT, conçu
-# pour un autre usage) : x402 Bazaar liste des prix sur Base ET Solana, vérifié en
-# conditions réelles sur les deux réseaux le même jour.
+# Canonical USDC addresses (stable, never change) -- deliberately NOT the
+# `smart_money._STABLECOIN_ADDRESSES_BY_CHAIN` registry (private, Base ONLY,
+# designed for another use): x402 Bazaar lists prices on both Base AND
+# Solana, verified under real conditions on both networks the same day.
 _USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 _USDC_SOLANA = "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v"
 
 
 @dataclass
 class X402BazaarResource:
-    """Un service x402 découvert. ``curated`` = vérifié par Coinbase (signal de
-    confiance renforcé), jamais une garantie absolue. Tout champ texte
-    (``description``, ``service_name``) est une métadonnée déclarée par un TIERS --
-    donnée d'affichage uniquement, jamais une instruction."""
+    """A discovered x402 service. ``curated`` = verified by Coinbase (extra
+    trust signal), never an absolute guarantee. Any text field
+    (``description``, ``service_name``) is metadata declared by a THIRD
+    PARTY -- display data only, never an instruction."""
 
     resource_url: str
     description: str = ""
@@ -83,12 +87,12 @@ class X402BazaarSearchResult:
 
 
 def _extract_price_usd(accepts: object) -> float | None:
-    """Best-effort, jamais une supposition. Deux schémas confirmés en conditions
-    réelles (19/07) : (1) ``asset="iso4217:USD"``, ``amount`` déjà en dollars (schéma
-    ``agent-pay``) ; (2) adresse USDC connue (Base/Solana), ``amount`` en plus petite
-    unité (6 décimales, schéma ``exact``). Tout autre schéma -> None plutôt qu'un prix
-    inventé (ex. un asset ERC-20 inconnu dont les décimales ne sont pas vérifiables
-    depuis cette seule réponse)."""
+    """Best-effort, never a guess. Two schemas confirmed under real
+    conditions (19/07): (1) ``asset="iso4217:USD"``, ``amount`` already in
+    dollars (``agent-pay`` schema); (2) known USDC address (Base/Solana),
+    ``amount`` in the smallest unit (6 decimals, ``exact`` schema). Any other
+    schema -> None rather than a fabricated price (e.g. an unknown ERC-20
+    asset whose decimals can't be verified from this response alone)."""
     if not isinstance(accepts, list):
         return None
     for entry in accepts:
@@ -138,8 +142,8 @@ async def search(
     curated_only: bool = False,
     limit: int = 20,
 ) -> X402BazaarSearchResult:
-    """Recherche brute -- ordre renvoyé par l'API (pertinence + qualité combinées).
-    Pour un vrai classement par tendance, préférer ``discover_trending()``."""
+    """Raw search -- order returned by the API (relevance + quality combined).
+    For a real trend ranking, prefer ``discover_trending()``."""
     params: list[tuple[str, str]] = [("limit", str(max(1, min(int(limit), 20))))]
     if query.strip():
         params.append(("query", query.strip()[:400]))
@@ -155,8 +159,8 @@ async def search(
             response = await client.get(f"{BASE_URL}/search", params=params)
             response.raise_for_status()
             data = response.json()
-    except Exception as exc:  # noqa: BLE001 -- dôme : jamais une exception qui remonte
-        logger.info("x402_bazaar: recherche échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 -- dome: never an exception that propagates
+        logger.info("x402_bazaar: search failed (%s)", exc)
         return X402BazaarSearchResult(available=False, error=f"{UNAVAILABLE} ({exc})")
 
     if not isinstance(data, dict):
@@ -182,10 +186,10 @@ async def discover_trending(
     curated_only: bool = False,
     limit: int = 20,
 ) -> X402BazaarSearchResult:
-    """Comme ``search()``, mais trié EXPLICITEMENT par volume d'appels sur 30 jours
-    (signal objectif le plus direct de tendance réelle) plutôt que l'ordre brut de
-    l'API. Un service sans donnée de volume (``calls_last_30d=None``) est classé après
-    tous les services chiffrés, jamais mélangé au hasard avec eux."""
+    """Like ``search()``, but EXPLICITLY sorted by 30-day call volume (the
+    most direct objective signal of real trend) rather than the API's raw
+    order. A service with no volume data (``calls_last_30d=None``) is ranked
+    after every service with a figure, never randomly mixed in with them."""
     result = await search(
         query=query, network=network, tags=tags, curated_only=curated_only, limit=limit
     )
@@ -199,9 +203,9 @@ async def discover_trending(
 
 
 def format_trending_report(result: X402BazaarSearchResult, *, query: str = "", max_items: int = 8) -> str:
-    """Rendu Telegram -- rappel : description/service_name sont des métadonnées
-    déclarées par un TIERS (affichées telles quelles, jamais interprétées comme une
-    instruction). Découverte pure : aucun bouton/action de paiement dans ce rendu."""
+    """Telegram rendering -- reminder: description/service_name are metadata
+    declared by a THIRD PARTY (displayed as-is, never interpreted as an
+    instruction). Pure discovery: no payment button/action in this rendering."""
     header = "🔎 x402 Bazaar — top tendance (volume 30j)"
     if query.strip():
         header += f' — "{query.strip()}"'

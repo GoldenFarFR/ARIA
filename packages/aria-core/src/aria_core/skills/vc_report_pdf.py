@@ -1,24 +1,25 @@
-"""Rapport VC en PDF sécurisé — pièce jointe email (édition « impossible à copier »).
+"""Secure VC report as PDF — email attachment ("impossible to copy" edition).
 
-Le PDF est un rendu PARALLÈLE au rapport HTML (`vc_report.py`) : même données
-(``VCResult``), mêmes libellés (`vc_i18n.report_strings`), même palette de marque —
-mais produit avec ``reportlab`` (pur Python, aucune dépendance système) plutôt que
-reconverti depuis le HTML, pour un rendu maîtrisé et fiable en CI/Docker.
+The PDF is a PARALLEL rendering to the HTML report (`vc_report.py`): same
+data (``VCResult``), same labels (`vc_i18n.report_strings`), same brand
+palette — but produced with ``reportlab`` (pure Python, no system
+dependency) rather than converted from the HTML, for reliable, controlled
+rendering in CI/Docker.
 
-## Sécurité — ce que « impossible à copier » signifie réellement
+## Security — what "impossible to copy" actually means
 
-Le PDF est chiffré (`pypdf`) avec des permissions refusant l'extraction de texte
-et de contenu (copier-coller) dans les lecteurs qui respectent la norme PDF. Ce
-n'est PAS un chiffrement inviolable : un outil de suppression de permissions (il
-en existe des gratuits) neutralise cette protection en quelques secondes. C'est
-la norme du marché pour ce type de document — un frein sérieux à la copie
-occasionnelle, jamais une garantie cryptographique. Le filigrane nominatif
-(destinataire + empreinte SHA-256, déjà utilisé côté HTML) reste la VRAIE
-protection en cas de fuite : il rend la fuite traçable.
+The PDF is encrypted (`pypdf`) with permissions denying text and content
+extraction (copy-paste) in readers that respect the PDF standard. This is
+NOT unbreakable encryption: a permission-stripping tool (free ones exist)
+neutralizes this protection in seconds. It's the market standard for this
+type of document — a serious deterrent against casual copying, never a
+cryptographic guarantee. The nominal watermark (recipient + SHA-256
+fingerprint, already used on the HTML side) remains the REAL protection in
+case of a leak: it makes the leak traceable.
 
-Tout champ dynamique passe par ``_esc`` (identique au rendu HTML) avant
-insertion dans un ``Paragraph`` — même défense en profondeur contre une donnée
-LLM hostile.
+Every dynamic field goes through ``_esc`` (identical to the HTML rendering)
+before insertion into a ``Paragraph`` — same defense in depth against
+hostile LLM data.
 """
 from __future__ import annotations
 
@@ -94,7 +95,7 @@ def _styles() -> dict[str, ParagraphStyle]:
 
 
 def _section_title(text: str, st: dict) -> Table:
-    """Titre de section : trait or + libellé (équivalent PDF de `_section_header` HTML)."""
+    """Section title: gold bar + label (PDF equivalent of the HTML `_section_header`)."""
     bar = Table([[""]], colWidths=[6 * mm], rowHeights=[2])
     bar.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), _GOLD)]))
     row = Table(
@@ -324,7 +325,7 @@ def _ta_flowables(result: VCResult, s: dict, st: dict) -> list:
             ratio = max_w / iw
             out.append(Spacer(1, 6))
             out.append(Image(io.BytesIO(raw), width=max_w, height=ih * ratio))
-        except Exception:  # noqa: BLE001 — un graphique corrompu n'empêche jamais le PDF
+        except Exception:  # noqa: BLE001 — a corrupted chart never blocks the PDF
             pass
     return out + [Spacer(1, 4)]
 
@@ -450,9 +451,10 @@ def render_pdf_report(
     tier: str = "premium",
     lang: str = "fr",
 ) -> bytes:
-    """Rend le rapport VC complet en PDF (bytes, non chiffré). Voir `secure_pdf_bytes`
-    pour la protection anti-copie appliquée avant envoi. Miroir de `render_html_report` :
-    mêmes données, mêmes libellés (`report_strings`), data-gated à l'identique."""
+    """Renders the full VC report as PDF (bytes, unencrypted). See
+    `secure_pdf_bytes` for the anti-copy protection applied before sending.
+    Mirror of `render_html_report`: same data, same labels
+    (`report_strings`), data-gated identically."""
     lang = norm_lang(lang)
     s = report_strings(lang)
     st = _styles()
@@ -470,7 +472,7 @@ def render_pdf_report(
 
     story: list = []
 
-    # ── Bandeau hero (navy) ──────────────────────────────────────────────
+    # ── Hero banner (navy) ────────────────────────────────────────────────
     hero_lines = [
         Paragraph(_esc(s["confidential"]).upper() + " &middot; " + _esc(tier_label), st["kicker"]),
         Spacer(1, 4),
@@ -506,7 +508,7 @@ def render_pdf_report(
     story += _rr_flowables(result, s, st)
     story.append(Spacer(1, 14))
 
-    # ── Corps ivoire ──────────────────────────────────────────────────────
+    # ── Ivory body ───────────────────────────────────────────────────────
     if not result.llm_used:
         story.append(Paragraph(f"<b>{_esc(s['fallback_title'])}</b>. {_esc(s['fallback_body'])}", st["note"]))
         story.append(Spacer(1, 6))
@@ -524,7 +526,7 @@ def render_pdf_report(
         story += _methodology_flowables(s, st)
         story += _references_flowables(result.liens_projet, s, st)
 
-    # ── Filigrane d'édition personnelle (traçabilité anti-fuite) ─────────
+    # ── Personal edition watermark (anti-leak traceability) ──────────────
     if recipient:
         story.append(Spacer(1, 10))
         story.append(Paragraph(
@@ -533,7 +535,7 @@ def render_pdf_report(
                            alignment=TA_CENTER),
         ))
 
-    # ── Pied légal ────────────────────────────────────────────────────────
+    # ── Legal footer ─────────────────────────────────────────────────────
     story.append(Spacer(1, 12))
     story.append(HRFlowable(width="100%", color=_GOLD, thickness=0.5))
     story.append(Spacer(1, 6))
@@ -550,17 +552,18 @@ def render_pdf_report(
     return buf.getvalue()
 
 
-# ── Sécurisation anti-copie (permissions PDF, jamais un chiffrement inviolable) ──
+# ── Anti-copy protection (PDF permissions, never unbreakable encryption) ──
 
 def secure_pdf_bytes(raw_pdf: bytes, *, owner_password: str) -> bytes:
-    """Chiffre le PDF : mot de passe UTILISATEUR vide (s'ouvre sans friction),
-    mot de passe PROPRIÉTAIRE requis pour lever les permissions. Permissions
-    refusées : extraction de texte/graphiques (copier-coller), modification,
-    assemblage, impression haute-fidélité. Impression basique autorisée.
+    """Encrypts the PDF: empty USER password (opens with no friction), OWNER
+    password required to lift permissions. Denied permissions: text/graphics
+    extraction (copy-paste), modification, assembly, high-fidelity printing.
+    Basic printing allowed.
 
-    ``owner_password`` : secret jetable généré par l'appelant, jamais réutilisé
-    ni stocké (l'objectif est de restreindre les permissions, pas de protéger
-    l'ouverture — cf. avertissement en tête de module : dissuasif, pas inviolable).
+    ``owner_password``: disposable secret generated by the caller, never
+    reused or stored (the goal is to restrict permissions, not to protect
+    opening the file — see the warning at the top of the module: a
+    deterrent, not unbreakable).
     """
     from pypdf import PdfReader, PdfWriter
     from pypdf.constants import UserAccessPermissions as Perm
@@ -570,7 +573,7 @@ def secure_pdf_bytes(raw_pdf: bytes, *, owner_password: str) -> bytes:
     for page in reader.pages:
         writer.add_page(page)
 
-    permissions = Perm.PRINT  # impression basique seule ; pas d'extraction/modification/assemblage
+    permissions = Perm.PRINT  # basic printing only; no extraction/modification/assembly
     writer.encrypt(user_password="", owner_password=owner_password, permissions_flag=permissions)
 
     out = io.BytesIO()

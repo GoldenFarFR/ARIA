@@ -19,44 +19,44 @@ PROVIDER_URLS = {
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
     "virtuals": "https://compute.virtuals.io/v1/chat/completions",
     "deepseek": "https://api.deepseek.com/v1/chat/completions",
-    # 17/07 -- point d'accès compatible OpenAI OFFICIEL Google (ai.google.dev/gemini-api/
-    # docs/openai), vérifié à la source avant câblage -- même format Bearer token que les
-    # autres providers directs, aucun parseur sur-mesure nécessaire.
+    # 17/07 -- Google's OFFICIAL OpenAI-compatible endpoint (ai.google.dev/gemini-api/
+    # docs/openai), verified at the source before wiring -- same Bearer token format as
+    # the other direct providers, no custom parser needed.
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    # 17/07 -- vérifié à la source (docs.mistral.ai/api) : nativement compatible OpenAI,
-    # même en-tête Bearer.
+    # 17/07 -- verified at the source (docs.mistral.ai/api): natively OpenAI-compatible,
+    # same Bearer header.
     "mistral": "https://api.mistral.ai/v1/chat/completions",
-    # 17/07 -- Anthropic direct, endpoint natif Messages API (PAS /chat/completions,
-    # PAS compatible OpenAI) -- voir la branche dédiée dans _post_chat/_headers_for_route.
+    # 17/07 -- Anthropic direct, native Messages API endpoint (NOT /chat/completions,
+    # NOT OpenAI-compatible) -- see the dedicated branch in _post_chat/_headers_for_route.
     "anthropic": "https://api.anthropic.com/v1/messages",
 }
 
 DEFAULT_MODELS = {
     "xai": "grok-4.3",
     "grok": "grok-4.3",
-    # 17/07 -- gpt-4o-mini (avril 2025) remplacé par gpt-5-mini (août 2025, positionné
-    # explicitement par OpenAI pour "cost-sensitive, low-latency, high-volume workloads"
-    # -- exactement notre cas d'usage, vérifié par recherche avant mise à jour).
+    # 17/07 -- gpt-4o-mini (April 2025) replaced by gpt-5-mini (August 2025, explicitly
+    # positioned by OpenAI for "cost-sensitive, low-latency, high-volume workloads"
+    # -- exactly our use case, verified by research before updating).
     "openai": "gpt-5-mini",
     "groq": "llama-3.3-70b-versatile",
     "openrouter": "openrouter/free",
     "ollama": "llama3.2",
     "deepseek": "deepseek-chat",
-    # 17/07 -- Flash confirmé "Free of charge" sur la page tarifs officielle vérifiée ce
-    # soir (contrairement à Gemini 3.1 Pro Preview, explicitement "Not available" gratuit).
+    # 17/07 -- Flash confirmed "Free of charge" on the official pricing page verified
+    # tonight (unlike Gemini 3.1 Pro Preview, explicitly "Not available" for free).
     "gemini": "gemini-3.5-flash",
-    # 17/07 -- ID daté (pas l'alias "-latest") pour un comportement stable et reproductible
-    # dans le temps, même doctrine que le reste de ce fichier -- vérifié réel via
-    # OpenRouter/docs Mistral (sorti mars 2026, hybride raisonnement configurable).
+    # 17/07 -- dated ID (not the "-latest" alias) for stable, reproducible behavior over
+    # time, same doctrine as the rest of this file -- verified for real via OpenRouter/
+    # Mistral docs (released March 2026, hybrid configurable reasoning).
     "mistral": "mistral-small-2603",
-    # 17/07 -- ID daté vérifié en direct contre /v1/models (api.anthropic.com) --
-    # "claude-sonnet-5" n'a lui-même pas de suffixe daté côté Anthropic (alias canonique).
+    # 17/07 -- dated ID verified live against /v1/models (api.anthropic.com) --
+    # "claude-sonnet-5" itself has no dated suffix on Anthropic's side (canonical alias).
     "anthropic": "claude-haiku-4-5-20251001",
 }
 
 
 def _resolve_model(provider: str, explicit: str) -> str:
-    """SSOT spark_config — jamais de modele banni en primary Virtuals."""
+    """SSOT spark_config — never a banned model as Virtuals primary."""
     from aria_core.spark_config import (
         BANNED_VIRTUALS_PRIMARY_MODELS,
         DEFAULT_FALLBACK_MODEL,
@@ -74,15 +74,16 @@ def _resolve_model(provider: str, explicit: str) -> str:
         return resolve_primary_llm_model()
     if p == "groq":
         return _setting_str("llm_fallback_model") or DEFAULT_FALLBACK_MODEL
-    # Providers directs (xai/grok/deepseek/openai/...) : jamais l'ID catalogue Virtuals
-    # (resolve_primary_llm_model renvoie des formes "x-ai-grok-4-3" propres à Spark) —
-    # une vraie API tierce ne connaît pas ce format. Bug latent trouvé le 16/07 en cablant
-    # le relais Spark, RÉELLEMENT exercé le 17/07 en basculant hors de Virtuals (test bout
-    # en bout réel sur le VPS -> 400 "Model not found: x-ai-grok-4-3" côté x.ai) : ce
-    # ``configured`` lisait ``settings.llm_model`` directement, qui porte TOUJOURS un ID
-    # catalogue Virtuals dans ce système (dérivé de ARIA_LLM_MODEL_STANDARD) — jamais un
-    # nom de modèle valide pour une vraie API tierce. Supprimé : un provider direct sans
-    # modèle explicite utilise toujours son défaut connu, jamais ce réglage générique.
+    # Direct providers (xai/grok/deepseek/openai/...): never the Virtuals catalog ID
+    # (resolve_primary_llm_model returns Spark-specific forms like "x-ai-grok-4-3") —
+    # a real third-party API doesn't know this format. Latent bug found on 16/07 while
+    # wiring the Spark relay, ACTUALLY triggered on 17/07 when switching off Virtuals
+    # (real end-to-end test on the VPS -> 400 "Model not found: x-ai-grok-4-3" from
+    # x.ai): this ``configured`` used to read ``settings.llm_model`` directly, which
+    # ALWAYS carries a Virtuals catalog ID in this system (derived from
+    # ARIA_LLM_MODEL_STANDARD) — never a valid model name for a real third-party API.
+    # Removed: a direct provider with no explicit model always uses its own known
+    # default, never this generic setting.
     return DEFAULT_MODELS.get(p, DEFAULT_MODEL_STANDARD)
 
 
@@ -101,7 +102,7 @@ def _setting_str(name: str, default: str = "") -> str:
 def _auth_key_for_provider(provider: str) -> str:
     p = provider.lower()
     if p == "virtuals":
-        # Ne jamais réutiliser llm_api_key (souvent Groq) — provoque 401 sur compute.virtuals.io
+        # Never reuse llm_api_key (often Groq) — causes a 401 on compute.virtuals.io
         return _setting_str("virtuals_api_key")
     if p == "grok" or p == "xai":
         return _setting_str("grok_api_key") or _setting_str("llm_api_key")
@@ -124,13 +125,13 @@ def _route_for_provider(provider: str, model: str) -> LlmRoute | None:
     p = provider.lower()
     if p in ("", "none"):
         return None
-    # 17/07 -- bug réel trouvé en basculant hors de Virtuals (expiration crédits Spark
-    # 18/07, test bout en bout réel sur le VPS) : ``settings.llm_model`` porte un ID
-    # catalogue Virtuals (ex. "x-ai-grok-4-3") -- ne le proposer comme repli QUE pour le
-    # provider "virtuals" lui-même, jamais pour un provider direct (xai/grok/deepseek/
-    # ollama/...), sinon `_resolve_model` le renvoie tel quel (son 1er check `if model:
-    # return model` ne filtre que `BANNED_VIRTUALS_PRIMARY_MODELS`, pas la forme
-    # catalogue Virtuals) et la vraie API tierce le rejette (400 "Model not found").
+    # 17/07 -- real bug found while switching off Virtuals (Spark credits expired
+    # 18/07, real end-to-end test on the VPS): ``settings.llm_model`` carries a
+    # Virtuals catalog ID (e.g. "x-ai-grok-4-3") -- only offer it as a fallback for
+    # the "virtuals" provider itself, never for a direct provider (xai/grok/deepseek/
+    # ollama/...), otherwise `_resolve_model` returns it as-is (its 1st check `if model:
+    # return model` only filters `BANNED_VIRTUALS_PRIMARY_MODELS`, not the Virtuals
+    # catalog form) and the real third-party API rejects it (400 "Model not found").
     llm_model_fallback = settings.llm_model if p == "virtuals" else ""
     if p == "ollama":
         base = settings.ollama_base_url.rstrip("/")
@@ -149,11 +150,11 @@ def _route_for_provider(provider: str, model: str) -> LlmRoute | None:
 
 
 def _fallback_route(primary_model: str) -> LlmRoute | None:
-    """Route de secours dédiée (`llm_fallback_*`) — ne doit JAMAIS dépendre de
-    `llm_api_key` (la clé générique du provider primaire). Bug corrigé (audit 08/07) :
-    en passant par `_route_for_provider`, le fallback exigeait `llm_api_key` non-vide
-    AVANT de substituer `fb_key`, donc un fallback configuré avec SEULEMENT
-    `llm_fallback_api_key` (l'usage prévu) ne se déclenchait jamais silencieusement."""
+    """Dedicated fallback route (`llm_fallback_*`) — must NEVER depend on
+    `llm_api_key` (the primary provider's generic key). Bug fixed (08/07 audit):
+    going through `_route_for_provider`, the fallback required a non-empty
+    `llm_api_key` BEFORE substituting `fb_key`, so a fallback configured with
+    ONLY `llm_fallback_api_key` (the intended usage) would silently never fire."""
     fb_provider = _setting_str("llm_fallback_provider")
     fb_key = _setting_str("llm_fallback_api_key")
     if not fb_provider or not fb_key:
@@ -178,24 +179,24 @@ def _resolve_routes(
     fallback_model: str | None = None,
     require_llm_enabled: bool = False,
 ) -> list[LlmRoute]:
-    """``provider``/``fallback_provider``+``fallback_model`` (17/07) : routage explicite
-    PAR APPEL, pour des appelants précis qui ont besoin d'un modèle donné indépendamment
-    du ``LLM_PROVIDER`` global (ex. le tie-breaker momentum sur Haiku via OpenRouter,
-    pendant que le reste d'ARIA reste sur Grok/Spark) -- comportement de tous les autres
-    appelants strictement inchangé quand ces paramètres sont absents (mêmes deux routes
-    qu'avant : provider global primaire, puis ``llm_fallback_*``).
+    """``provider``/``fallback_provider``+``fallback_model`` (17/07): explicit PER-CALL
+    routing, for specific callers that need a given model independently of the
+    global ``LLM_PROVIDER`` (e.g. the momentum tie-breaker on Haiku via OpenRouter,
+    while the rest of ARIA stays on Grok/Spark) -- behavior of all other callers
+    strictly unchanged when these parameters are absent (same two routes as
+    before: primary global provider, then ``llm_fallback_*``).
 
-    Ordre des routes obtenu quand les deux sont fournis : provider explicite -> secours
-    explicite -> secours global existant (``llm_fallback_*``, ex. Groq) en dernier filet,
-    seulement si son provider diffère des deux précédents -- jamais un doublon."""
+    Route order when both are provided: explicit provider -> explicit fallback ->
+    existing global fallback (``llm_fallback_*``, e.g. Groq) as a last safety net,
+    only if its provider differs from the two previous ones -- never a duplicate."""
     if require_llm_enabled and not settings.aria_llm_enabled:
         return []
     effective_model = (model or "").strip()
 
-    # 18/07 -- disjoncteur (llm_circuit_breaker.py) : ne s'applique QUE quand l'appelant
-    # n'a pas déjà fixé son propre provider (ex. le tie-breaker momentum sur Haiku via
-    # OpenRouter reste inchangé, armé ou non -- il ne dépend jamais de Grok). N'affecte
-    # que le routage PAR DÉFAUT (aucun provider explicite passé par l'appelant).
+    # 18/07 -- circuit breaker (llm_circuit_breaker.py): only applies when the caller
+    # hasn't already set its own provider (e.g. the momentum tie-breaker on Haiku via
+    # OpenRouter stays unchanged, armed or not -- it never depends on Grok). Only
+    # affects the DEFAULT routing (no explicit provider passed by the caller).
     breaker_override = None
     if provider is None:
         from aria_core.llm_circuit_breaker import get_override
@@ -216,17 +217,17 @@ def _resolve_routes(
 
     if fallback_provider:
         explicit_fb = _route_for_provider(fallback_provider.lower(), (fallback_model or "").strip())
-        # Dédoublonnage par (provider, model), PAS provider seul : le cas visé (Sonnet 5
-        # primaire -> Haiku secours, tous deux "openrouter") a délibérément le MÊME
-        # provider avec un modèle différent -- un dédoublonnage par provider seul aurait
-        # supprimé à tort ce secours explicite.
+        # Deduplication by (provider, model), NOT provider alone: the targeted case
+        # (Sonnet 5 primary -> Haiku fallback, both "openrouter") deliberately has the
+        # SAME provider with a different model -- deduplicating by provider alone would
+        # have wrongly dropped this explicit fallback.
         if explicit_fb and all(
             (r.provider, r.model) != (explicit_fb.provider, explicit_fb.model) for r in routes
         ):
             routes.append(explicit_fb)
     elif breaker_override and breaker_override.get("fallback_model"):
-        # Le disjoncteur porte son propre secours désigné (Haiku via OpenRouter, même
-        # provider que le primaire) -- pas besoin que l'appelant le précise.
+        # The circuit breaker carries its own designated fallback (Haiku via OpenRouter,
+        # same provider as the primary) -- no need for the caller to specify it.
         breaker_fb = _route_for_provider(breaker_override["provider"], breaker_override["fallback_model"])
         if breaker_fb and all(
             (r.provider, r.model) != (breaker_fb.provider, breaker_fb.model) for r in routes
@@ -264,9 +265,9 @@ def _http_ok(status_code: int) -> bool:
 def _headers_for_route(route: LlmRoute) -> dict[str, str]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if route.provider == "anthropic":
-        # Messages API natif -- PAS de Bearer. Format vérifié en direct le 17/07 contre
-        # api.anthropic.com (GET /v1/models 200, POST /v1/messages 400 billing -- donc
-        # authentifié correctement, juste 0 crédit sur le compte à ce stade).
+        # Native Messages API -- NO Bearer. Format verified live on 17/07 against
+        # api.anthropic.com (GET /v1/models 200, POST /v1/messages 400 billing -- so
+        # correctly authenticated, just 0 credit on the account at this stage).
         headers["x-api-key"] = route.auth_key
         headers["anthropic-version"] = "2023-06-01"
         return headers
@@ -319,18 +320,18 @@ async def _post_chat(
         if num_ctx > 0:
             payload["options"] = {"num_ctx": num_ctx}
     if route.provider == "mistral":
-        # 17/07 -- Mistral Small 4 est hybride (raisonnement configurable, vérifié à la
-        # source docs.mistral.ai/api). Forcé "none" par défaut : sans ça, même piège que
-        # Gemini 3.5 Flash constaté ce soir (budget de tokens entièrement consommé par un
-        # raisonnement invisible, réponse vide). Contrairement à Gemini, Mistral expose un
-        # vrai levier documenté pour l'éviter -- appliqué systématiquement, pas seulement
-        # pour ce cas d'usage précis.
+        # 17/07 -- Mistral Small 4 is hybrid (configurable reasoning, verified at the
+        # source docs.mistral.ai/api). Forced to "none" by default: without this, same
+        # trap as observed tonight with Gemini 3.5 Flash (token budget entirely consumed
+        # by invisible reasoning, empty reply). Unlike Gemini, Mistral exposes a real
+        # documented lever to avoid it -- applied systematically, not just for this
+        # specific use case.
         payload["reasoning_effort"] = "none"
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        # 17/07 -- demande opérateur explicite : arbitrer Grok vs Gemini (et tout futur
-        # provider) sur une latence RÉELLEMENT mesurée, pas une supposition. Chronomètre
-        # uniquement l'aller-retour réseau (pas le parsing JSON en aval, négligeable).
+        # 17/07 -- explicit operator request: arbitrate Grok vs Gemini (and any future
+        # provider) on REALLY measured latency, not a guess. Times only the network
+        # round-trip (not the downstream JSON parsing, negligible).
         _t0 = time.monotonic()
         response = await client.post(
             route.url,
@@ -367,7 +368,7 @@ async def _post_chat(
         if truncated:
             logger.warning(
                 "LLM response truncated (finish_reason=length) provider=%s model=%s "
-                "depth=%s max_tokens=%s — la réponse envoyée est incomplète.",
+                "depth=%s max_tokens=%s — the reply sent is incomplete.",
                 route.provider,
                 route.model,
                 depth,
@@ -405,15 +406,15 @@ async def _post_chat_anthropic(
     prompt_est: int,
     depth: str | None,
 ) -> str | None:
-    """Messages API Anthropic native (17/07) -- schéma totalement différent des autres
-    providers de ce fichier (tous compatibles OpenAI) : ``system`` est un champ top-level
-    (pas un message de rôle "system"), la réponse renvoie des blocs ``content`` typés
-    (pas ``choices[0].message.content``). Format vérifié en direct contre api.anthropic.com
-    le 17/07 (401->200 sur /v1/models, 400 billing-only sur /v1/messages -- donc bien
-    authentifié). Vision (``image_data_uri``) non gérée ici : aucun appelant actuel ne
-    l'exerce sur ce provider -- un contenu multimodal OpenAI-style serait transmis tel
-    quel et très probablement rejeté (schéma image différent chez Anthropic), jamais
-    silencieusement ignoré."""
+    """Native Anthropic Messages API (17/07) -- schema totally different from the other
+    providers in this file (all OpenAI-compatible): ``system`` is a top-level field
+    (not a "system" role message), the response returns typed ``content`` blocks
+    (not ``choices[0].message.content``). Format verified live against api.anthropic.com
+    on 17/07 (401->200 on /v1/models, 400 billing-only on /v1/messages -- so correctly
+    authenticated). Vision (``image_data_uri``) not handled here: no current caller
+    exercises it on this provider -- OpenAI-style multimodal content would be passed
+    through as-is and most likely rejected (different image schema on Anthropic's
+    side), never silently ignored."""
     from aria_core.llm_usage import (
         estimate_tokens_from_text,
         parse_usage_from_response,
@@ -477,7 +478,7 @@ async def _post_chat_anthropic(
         if truncated:
             logger.warning(
                 "LLM response truncated (stop_reason=max_tokens) provider=%s model=%s "
-                "depth=%s max_tokens=%s — la réponse envoyée est incomplète.",
+                "depth=%s max_tokens=%s — the reply sent is incomplete.",
                 route.provider,
                 route.model,
                 depth,
@@ -520,20 +521,20 @@ async def chat_with_context(
     depth: str | None = None,
     image_data_uri: str | None = None,
 ) -> str | None:
-    """Appel LLM avec mémoire injectée. Spark (virtuals) d'abord, fallback si échec.
+    """LLM call with injected memory. Spark (virtuals) first, fallback on failure.
 
-    ``image_data_uri`` (optionnel, ``data:image/...;base64,...``) bascule le message
-    utilisateur en contenu multimodal (forme chat-completions OpenAI-compatible,
-    ``[{"type":"text",...},{"type":"image_url",...}]``) — sinon comportement
-    strictement inchangé (chaîne simple, tous les appelants existants intacts).
-    Aucune garantie que le modèle/route actif accepte la vision : un modèle qui ne
-    la supporte pas répond en général en ignorant l'image, jamais une exception ;
-    aucune vérité inventée sur ce point tant que non testé en direct.
+    ``image_data_uri`` (optional, ``data:image/...;base64,...``) switches the user
+    message to multimodal content (OpenAI-compatible chat-completions shape,
+    ``[{"type":"text",...},{"type":"image_url",...}]``) — otherwise behavior is
+    strictly unchanged (plain string, all existing callers untouched). No guarantee
+    that the active model/route accepts vision: a model that doesn't support it
+    generally replies while ignoring the image, never an exception; no invented
+    truth on this point until tested live.
 
-    ``provider``/``fallback_provider``+``fallback_model`` (17/07) : routage explicite
-    par appel, pour des appelants précis (ex. tie-breaker momentum sur Haiku via
-    OpenRouter) indépendamment du ``LLM_PROVIDER`` global -- voir ``_resolve_routes``.
-    Absents -> comportement strictement inchangé pour tous les autres appelants.
+    ``provider``/``fallback_provider``+``fallback_model`` (17/07): explicit per-call
+    routing, for specific callers (e.g. momentum tie-breaker on Haiku via
+    OpenRouter) independently of the global ``LLM_PROVIDER`` -- see ``_resolve_routes``.
+    Absent -> behavior strictly unchanged for all other callers.
     """
     routes = _resolve_routes(
         model,
@@ -565,8 +566,8 @@ async def chat_with_context(
         *(m.get("content", "") for m in (conversation_history or [])),
     )
     if image_data_uri:
-        # Estimation grossière fixe (l'encodage base64 lui-même n'est PAS du texte à
-        # compter caractère par caractère) : évite une télémétrie de coût silencieuse.
+        # Fixed rough estimate (the base64 encoding itself is NOT text to count
+        # character by character): avoids silently wrong cost telemetry.
         prompt_est += 800
     temp = temperature if temperature is not None else settings.aria_llm_temperature
 

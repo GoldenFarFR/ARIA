@@ -1,35 +1,38 @@
-"""Client de lecture seule GoPlus Security (Token Security API) — détection honeypot.
+"""Read-only GoPlus Security client (Token Security API) — honeypot detection.
 
-Complète le scan ABI « statique » de Blockscout (quelles fonctions EXISTENT) par une
-lecture de COMPORTEMENT dynamique que l'ABI seule ne révèle pas : le token est-il un
-honeypot (revente bloquée), quelles sont les taxes d'achat/vente RÉELLES, l'owner est-il
-caché, peut-il reprendre la propriété, les transferts sont-ils suspendables, etc.
+Complements Blockscout's "static" ABI scan (which functions EXIST) with a
+dynamic BEHAVIOR reading that the ABI alone doesn't reveal: is the token a
+honeypot (resale blocked), what are the REAL buy/sell taxes, is the owner
+hidden, can it take back ownership, are transfers pausable, etc.
 
-API GoPlus, chain Base = 8453. Lecture seule, aucun appel autre que GET/POST-token.
-Authentification OPTIONNELLE (#207, 18/07) : si `GOPLUS_APP_KEY`/`GOPLUS_APP_SECRET`
-sont présentes dans l'environnement, un access_token (JWT, valide 2h, renouvelé
-automatiquement) est joint en en-tête `Authorization: Bearer <token>` sur chaque appel
-(corrigé le 21/07 -- l'ancien en-tête `access-token` n'était pas reconnu, cf. commentaire
-dans `_get_json`) -- sépare le quota d'ARIA de la limite anonyme par IP (~30 req/min,
-cause directe des `code 4029` observés le 17-18/07). Sans ces identifiants, comportement
-historique inchangé (API publique sans clé). Même politique d'erreurs que blockscout.py
-(dôme) :
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
-- Timeout / 5xx : 1 retry après 5s, puis fallback explicite.
-- Donnée manquante JAMAIS remplacée par une supposition : `available=False` + `error`,
-  et chaque drapeau vaut None (inconnu) plutôt que False quand GoPlus ne répond pas.
-- Échec d'authentification (token, réseau) : jamais bloquant, repli silencieux sur
-  l'appel sans en-tête (même comportement que si aucune clé n'était configurée).
-- Coupe-circuit réactif (21/07, filet de sécurité quota) : au-delà de
-  `_CIRCUIT_FAIL_THRESHOLD` échecs consécutifs (429/code 4029/timeout/5xx), le client
-  arrête d'appeler le réseau pendant `_CIRCUIT_COOLDOWN_S` -- protège tout plafond
-  caché (mensuel/journalier, jamais confirmé par GoPlus, donc jamais chiffré en dur
-  ici) sans inventer de nombre. Purement réactif, même patron que le coupe-circuit
-  par fournisseur déjà construit sur la cascade OHLCV (`momentum_entry._fetch_candles`).
+GoPlus API, Base chain = 8453. Read-only, no call other than GET/POST-token.
+OPTIONAL authentication (#207, 18/07): if `GOPLUS_APP_KEY`/`GOPLUS_APP_SECRET`
+are present in the environment, an access_token (JWT, valid 2h, auto-renewed)
+is attached as an `Authorization: Bearer <token>` header on every call (fixed
+on 21/07 -- the old `access-token` header wasn't recognized, see the comment
+in `_get_json`) -- separates ARIA's quota from the anonymous per-IP limit
+(~30 req/min, the direct cause of the `code 4029` errors observed 17-18/07).
+Without these credentials, historical behavior is unchanged (public API, no
+key). Same error policy as blockscout.py (dome):
+- 429: exponential backoff, 3 attempts max, then gives up without blocking
+  the pipeline.
+- Timeout / 5xx: 1 retry after 5s, then explicit fallback.
+- Missing data is NEVER replaced by a guess: `available=False` + `error`,
+  and every flag is None (unknown) rather than False when GoPlus doesn't
+  respond.
+- Authentication failure (token, network): never blocking, silent fallback
+  to the call without a header (same behavior as if no key were configured).
+- Reactive circuit breaker (21/07, quota safety net): beyond
+  `_CIRCUIT_FAIL_THRESHOLD` consecutive failures (429/code 4029/timeout/5xx),
+  the client stops calling the network for `_CIRCUIT_COOLDOWN_S` -- protects
+  against any hidden cap (monthly/daily, never confirmed by GoPlus, so never
+  hardcoded here) without making up a number. Purely reactive, same pattern
+  as the per-provider circuit breaker already built on the OHLCV cascade
+  (`momentum_entry._fetch_candles`).
 
-Un drapeau None (inconnu) ne bloque jamais à lui seul : seul un signal POSITIVEMENT
-confirmé (honeypot=1, cannot_sell=1, taxe élevée…) pénalise. Cohérent avec la doctrine :
-une panne réseau ne bannit pas un bon token.
+A None (unknown) flag never blocks on its own: only a POSITIVELY confirmed
+signal (honeypot=1, cannot_sell=1, high tax…) penalizes. Consistent with the
+doctrine: a network outage does not ban a good token.
 """
 from __future__ import annotations
 
@@ -47,21 +50,21 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.gopluslabs.io/api/v1"
 BASE_CHAIN_ID = "8453"  # Base mainnet
 
-# 22/07 -- cooldown après une authentification rejetée (code 4012) malgré un
-# jeton émis avec succès -- évite de marteler un jeton cassé à chaque appel
-# suivant tant que ce n'est pas corrigé côté identifiants (action opérateur,
-# probable rotation GOPLUS_APP_SECRET nécessaire côté .env). 30 min : assez
-# long pour ne pas spammer, assez court pour se rétablir seul sans redéploiement
-# une fois les identifiants corrigés.
+# 22/07 -- cooldown after a rejected authentication (code 4012) despite a
+# token issued successfully -- avoids hammering a broken token on every
+# subsequent call as long as it isn't fixed on the credentials side (operator
+# action, likely GOPLUS_APP_SECRET rotation needed in .env). 30 min: long
+# enough not to spam, short enough to self-heal without a redeploy once the
+# credentials are fixed.
 _AUTH_BROKEN_COOLDOWN_S = 1800.0
 
-# 22/07 -- TTL du cache de sécurité par contrat (dédup de ressource rare, cf.
-# GoPlusClient.__init__ pour le raisonnement complet). Renoncé confirmé = 30 jours
-# (au-delà de la durée de vie normale d'un process, sert surtout de garde-fou
-# défensif en cas de process longue durée -- pas un TTL réellement significatif vu
-# l'invariant structurel). Sinon = 120s, calé sur la cadence WebSocket (~30s,
-# `momentum_websocket.py`) pour dédupliquer sans retarder la détection d'un vrai
-# changement de comportement.
+# 22/07 -- TTL of the per-contract security cache (dedup of a scarce resource,
+# see GoPlusClient.__init__ for the full reasoning). Confirmed renounced = 30
+# days (beyond a process's normal lifetime, mostly serves as a defensive
+# safeguard in case of a long-running process -- not a really meaningful TTL
+# given the structural invariant). Otherwise = 120s, aligned with the WebSocket
+# cadence (~30s, `momentum_websocket.py`) to deduplicate without delaying the
+# detection of a real behavior change.
 _RENOUNCED_CACHE_TTL_S = 30 * 24 * 3600.0
 _SHORT_CACHE_TTL_S = 120.0
 
@@ -70,73 +73,74 @@ UNAVAILABLE = "donnée GoPlus indisponible"
 _FAIL_STREAK_WARN_THRESHOLD = 3
 _TOKEN_REFRESH_MARGIN_S = 300  # renouvelle 5 min avant l'expiration annoncée par GoPlus
 
-# 21/07 -- coupe-circuit réactif (filet de sécurité quota). Aucun plafond mensuel/
-# journalier GoPlus n'a jamais été confirmé (seul le débit 150 CU/min est vérifié au
-# dashboard) -- pas de chiffre inventé ici, seulement une pause défensive une fois
-# qu'un échec SOUTENU est observé, quelle qu'en soit la cause réelle (rate limit,
-# quota mensuel épuisé, panne côté GoPlus). 5 échecs consécutifs (au-delà du seuil de
-# simple log à 3) avant d'arrêter d'appeler le réseau pendant 5 minutes, plutôt que de
-# marteler un compte à sec candidat après candidat.
+# 21/07 -- reactive circuit breaker (quota safety net). No monthly/daily GoPlus
+# cap has ever been confirmed (only the 150 CU/min rate is verified on the
+# dashboard) -- no number invented here, only a defensive pause once a
+# SUSTAINED failure is observed, whatever its real cause (rate limit, monthly
+# quota exhausted, GoPlus-side outage). 5 consecutive failures (beyond the
+# simple-log threshold of 3) before stopping network calls for 5 minutes,
+# rather than hammering an exhausted account candidate after candidate.
 _CIRCUIT_FAIL_THRESHOLD = 5
 _CIRCUIT_COOLDOWN_S = 300.0
 
 
 def goplus_authenticated() -> bool:
-    """True si les identifiants app_key/app_secret sont configurés dans l'environnement."""
+    """True if the app_key/app_secret credentials are configured in the environment."""
     return bool(os.environ.get("GOPLUS_APP_KEY", "").strip() and os.environ.get("GOPLUS_APP_SECRET", "").strip())
 
 
 @dataclass
 class TokenSecurity:
-    """Lecture de sécurité dynamique d'un token (GoPlus). Chaque drapeau : True (confirmé),
-    False (confirmé absent), ou None (inconnu / GoPlus n'a pas la donnée)."""
+    """Dynamic security reading of a token (GoPlus). Each flag: True (confirmed),
+    False (confirmed absent), or None (unknown / GoPlus has no data)."""
 
     address: str
-    # Le plus important : la revente est-elle possible ?
+    # The most important: is resale possible at all?
     is_honeypot: bool | None = None
     cannot_sell_all: bool | None = None
     cannot_buy: bool | None = None
-    # Taxes réelles (fraction : 0.05 = 5 %). None si inconnu.
+    # Real taxes (fraction: 0.05 = 5%). None if unknown.
     buy_tax: float | None = None
     sell_tax: float | None = None
-    # Pouvoirs cachés du dev.
+    # Hidden dev powers.
     hidden_owner: bool | None = None
     can_take_back_ownership: bool | None = None
     owner_change_balance: bool | None = None
     transfer_pausable: bool | None = None
     trading_cooldown: bool | None = None
     slippage_modifiable: bool | None = None
-    is_blacklisted: bool | None = None       # le contrat PEUT blacklister
+    is_blacklisted: bool | None = None       # the contract CAN blacklist
     is_mintable: bool | None = None
-    is_open_source: bool | None = None       # 0 = code non vérifié
+    is_open_source: bool | None = None       # 0 = unverified code
     is_proxy: bool | None = None
-    # 22/07 -- adresse de l'owner du contrat, vérifiée en direct sur 4 tokens réels :
-    # chaîne vide ("") ou absente (None) = aucun owner actif (renoncé/canonique, ex.
-    # WETH) ; une vraie adresse = owner actif (ex. proxy admin USDC). Sert de base à
-    # `ownership_verifiably_renounced` ci-dessous -- jamais affiché seul comme un
-    # verdict de sécurité.
+    # 22/07 -- contract owner address, verified live on 4 real tokens: empty
+    # string ("") or absent (None) = no active owner (renounced/canonical, e.g.
+    # WETH); a real address = active owner (e.g. USDC admin proxy). Serves as
+    # the basis for `ownership_verifiably_renounced` below -- never displayed
+    # alone as a security verdict.
     owner_address: str | None = None
     available: bool = False
     error: str | None = None
-    # #207, 18/07 : True UNIQUEMENT quand GoPlus a répondu proprement (pas de panne
-    # réseau/HTTP) mais n'a AUCUNE donnée pour ce contrat (`result` vide/null --
-    # fréquent sur Solana pour un token tout juste lancé, vérifié en direct). Distinct
-    # d'une vraie panne (timeout, 5xx, rate limit) -- seul ce cas précis autorise un
-    # second avis (services/rugcheck.py) dans momentum_entry._check_honeypot.
+    # #207, 18/07: True ONLY when GoPlus responded cleanly (no network/HTTP
+    # failure) but has NO data for this contract (`result` empty/null --
+    # common on Solana for a token that just launched, verified live).
+    # Distinct from a real failure (timeout, 5xx, rate limit) -- only this
+    # specific case authorizes a second opinion (services/rugcheck.py) in
+    # momentum_entry._check_honeypot.
     no_data: bool = False
 
     @property
     def ownership_verifiably_renounced(self) -> bool:
-        """True UNIQUEMENT quand GoPlus confirme positivement qu'aucun owner actif ne
-        contrôle plus ce contrat -- aucune fonction ne peut alors changer son
-        comportement de sécurité dans le temps (22/07, observation opérateur).
-        Exige les DEUX signaux à la fois (jamais un seul) : (1) `owner_address` vide/
-        absent -- pas d'owner actif ; (2) aucun mécanisme de reprise confirmé
-        (`can_take_back_ownership`/`hidden_owner`/`owner_change_balance` tous
-        différents de True) -- un contrat qui SEMBLE renoncé mais garde une porte
-        dérobée n'est PAS considéré comme définitivement sûr. `None` (inconnu) sur
-        n'importe lequel de ces 3 drapeaux ne compte PAS comme "confirmé absent" --
-        fail-closed sur l'INCERTITUDE, cohérent avec la doctrine du reste du module."""
+        """True ONLY when GoPlus positively confirms that no active owner still
+        controls this contract -- no function can then change its security
+        behavior over time (22/07, operator observation). Requires BOTH signals
+        at once (never just one): (1) `owner_address` empty/absent -- no active
+        owner; (2) no confirmed takeover mechanism
+        (`can_take_back_ownership`/`hidden_owner`/`owner_change_balance` all
+        different from True) -- a contract that SEEMS renounced but keeps a
+        backdoor is NOT considered definitively safe. `None` (unknown) on any
+        of these 3 flags does NOT count as "confirmed absent" -- fail-closed
+        on UNCERTAINTY, consistent with the doctrine of the rest of the module."""
         if not self.available:
             return False
         owner = (self.owner_address or "").strip()
@@ -151,25 +155,25 @@ class TokenSecurity:
 
 @dataclass
 class AddressSecurity:
-    """Lecture GoPlus Malicious Address API (AML) -- #157. ``flags`` ne contient
-    QUE les catégories POSITIVEMENT confirmées (True) ; une absence de clé =
-    catégorie non signalée, jamais reconstruite comme False (cohérent avec
-    l'esprit de ``_tri`` : silence ≠ confirmation d'innocence)."""
+    """GoPlus Malicious Address API (AML) reading -- #157. ``flags`` contains
+    ONLY the POSITIVELY confirmed categories (True); a missing key =
+    unreported category, never reconstructed as False (consistent with the
+    spirit of ``_tri``: silence != confirmation of innocence)."""
 
     address: str
     flags: dict[str, bool] = field(default_factory=dict)
-    is_malicious: bool = False  # True si AU MOINS UNE catégorie positivement confirmée
+    is_malicious: bool = False  # True if AT LEAST ONE category is positively confirmed
     available: bool = False
     error: str | None = None
 
 
-# Champs de la réponse `address_security` qui ne sont PAS des catégories de
-# risque (métadonnées) -- exclus du calcul de `is_malicious`.
+# Fields of the `address_security` response that are NOT risk categories
+# (metadata) -- excluded from the `is_malicious` computation.
 _ADDRESS_SECURITY_META_FIELDS = {"contract_address", "data_source", "number_of_malicious_contracts_created"}
 
 
 def _tri(value: object) -> bool | None:
-    """"1" -> True, "0" -> False, "" / None / autre -> None (inconnu)."""
+    """"1" -> True, "0" -> False, "" / None / other -> None (unknown)."""
     if value is None:
         return None
     s = str(value).strip()
@@ -181,7 +185,7 @@ def _tri(value: object) -> bool | None:
 
 
 def _tax(value: object) -> float | None:
-    """Convertit une taxe GoPlus ("0.05") en fraction float, ou None si illisible/absente."""
+    """Converts a GoPlus tax ("0.05") into a float fraction, or None if unreadable/absent."""
     if value is None:
         return None
     s = str(value).strip()
@@ -194,23 +198,24 @@ def _tax(value: object) -> float | None:
 
 
 class GoPlusClient:
-    """Client HTTP async, lecture seule, throttle modéré (API publique sans clé)."""
+    """Async HTTP client, read-only, moderate throttle (public API, no key)."""
 
-    # 21/07 -- CORRECTION d'un premier calibrage erroné fait le même jour (1.212s,
-    # basé sur un test empirique en rafale mal interprété -- le "blocage à la 11e
-    # requête" observé n'était pas un plafond ambigu à ~55/min, c'est EXACTEMENT
-    # 150 CU / 15 CU-par-token = 10 requêtes, confirmé une fois la vraie structure
-    # de facturation connue). Root cause : GoPlus facture PAR TOKEN VÉRIFIÉ (15 CU
-    # pour Token Security API sur EVM, 30 CU pour Solana), pas par appel HTTP --
-    # `get_token_security()` ci-dessous interroge TOUJOURS un seul contrat par
-    # appel, donc 1 appel = 15 CU sur Base. Vraie limite du compte CONFIRMÉE en
-    # DIRECT sur le dashboard GoPlus réel (gopluslabs.io/dashboard, palier Free,
-    # "Rate Limit: 150 CU/Min") -- source la plus fiable possible, au-dessus même
-    # d'un test empirique : 150 CU/min / 15 CU/token = **10 req/min réelles**.
-    # Doctrine CLAUDE.md "Débit calibré à 90%" : 90% de 10/min = 9/min = 6.667s.
-    # Si un jour ce client interroge Solana (30 CU/token) sans passer par
-    # `_check_honeypot_rugcheck_fallback`, la vraie limite tomberait à 5 req/min --
-    # non géré ici, ce client ne fait actuellement que des appels 1-token/EVM.
+    # 21/07 -- CORRECTION of a first miscalibration made the same day (1.212s,
+    # based on a misread empirical burst test -- the "blocked at the 11th
+    # request" observed was not an ambiguous ~55/min cap, it's EXACTLY
+    # 150 CU / 15 CU-per-token = 10 requests, confirmed once the real billing
+    # structure was known). Root cause: GoPlus bills PER VERIFIED TOKEN (15 CU
+    # for Token Security API on EVM, 30 CU for Solana), not per HTTP call --
+    # `get_token_security()` below ALWAYS queries a single contract per call,
+    # so 1 call = 15 CU on Base. Real account limit CONFIRMED LIVE on the real
+    # GoPlus dashboard (gopluslabs.io/dashboard, Free tier,
+    # "Rate Limit: 150 CU/Min") -- the most reliable source possible, above
+    # even an empirical test: 150 CU/min / 15 CU/token = **10 real req/min**.
+    # CLAUDE.md "90% calibrated throughput" doctrine: 90% of 10/min = 9/min =
+    # 6.667s. If this client one day queries Solana (30 CU/token) without
+    # going through `_check_honeypot_rugcheck_fallback`, the real limit would
+    # drop to 5 req/min -- not handled here, this client currently only makes
+    # 1-token/EVM calls.
     def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 6.667) -> None:
         self.base_url = base_url.rstrip("/")
         self._min_interval = min_interval
@@ -222,26 +227,27 @@ class GoPlusClient:
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()
         self._auth_broken_until: float = 0.0
-        # 22/07 -- cache de sécurité par contrat (dédup de ressource rare, cf. doctrine
-        # "rareté -> dédupliquer avant de recalibrer"). Clé (chain_id, adresse en
-        # minuscule) -> (TokenSecurity, expire_at epoch). Un token dont l'ownership
-        # est VÉRIFIABLEMENT renoncé (cf. TokenSecurity.ownership_verifiably_renounced)
-        # ne peut structurellement plus changer de comportement de sécurité dans le
-        # temps -- mis en cache très longtemps (`_RENOUNCED_CACHE_TTL_S`). Tout le
-        # reste (owner actif, ou statut de renonciation inconnu) reste en cache
-        # BRIEFVEMENT (`_SHORT_CACHE_TTL_S`) -- assez pour dédupliquer des
-        # réévaluations rapprochées du même candidat encore en attente (WebSocket
-        # ~30s), sans retarder significativement la détection d'un signal
-        # nouvellement malveillant sur un contrat dont l'owner garde le contrôle.
-        # Un résultat en panne (available=False) n'est JAMAIS mis en cache -- le
-        # retry `no_data` existant (`momentum_entry._check_honeypot`) doit toujours
-        # pouvoir retenter sans qu'un cache ne fige un "indisponible" transitoire.
+        # 22/07 -- per-contract security cache (dedup of a scarce resource, see
+        # the "scarcity -> dedup before recalibrating" doctrine). Key
+        # (chain_id, lowercase address) -> (TokenSecurity, expire_at epoch). A
+        # token whose ownership is VERIFIABLY renounced (see
+        # TokenSecurity.ownership_verifiably_renounced) can structurally no
+        # longer change its security behavior over time -- cached for a very
+        # long time (`_RENOUNCED_CACHE_TTL_S`). Everything else (active owner,
+        # or unknown renouncement status) is cached BRIEFLY
+        # (`_SHORT_CACHE_TTL_S`) -- enough to deduplicate close re-evaluations
+        # of the same still-pending candidate (WebSocket ~30s), without
+        # significantly delaying the detection of a newly malicious signal on
+        # a contract whose owner keeps control. A failed result
+        # (available=False) is NEVER cached -- the existing `no_data` retry
+        # (`momentum_entry._check_honeypot`) must always be able to retry
+        # without a cache freezing a transient "unavailable" state.
         self._security_cache: dict[tuple[str, str], tuple["TokenSecurity", float]] = {}
 
     async def _ensure_access_token(self) -> str | None:
-        """Renouvelle l'access_token si absent/proche expiration. Retourne None sans
-        identifiants configurés (chemin public inchangé) ou en cas d'échec réseau --
-        jamais bloquant, jamais une exception propagée vers l'appelant."""
+        """Renews the access_token if absent/close to expiring. Returns None with
+        no credentials configured (public path unchanged) or on network failure --
+        never blocking, never an exception propagated to the caller."""
         app_key = os.environ.get("GOPLUS_APP_KEY", "").strip()
         app_secret = os.environ.get("GOPLUS_APP_SECRET", "").strip()
         if not app_key or not app_secret:
@@ -261,34 +267,35 @@ class GoPlusClient:
                         data={"app_key": app_key, "time": t, "sign": sign},
                     )
                 body = response.json()
-            except Exception as exc:  # réseau, timeout, JSON invalide -- jamais bloquant
-                logger.warning("goplus: echec renouvellement access_token (%s) — repli sur l'API publique", exc)
+            except Exception as exc:  # network, timeout, invalid JSON -- never blocking
+                logger.warning("goplus: failed to renew access_token (%s) — falling back to the public API", exc)
                 return self._access_token
 
             result = body.get("result") if isinstance(body, dict) else None
             token = result.get("access_token") if isinstance(result, dict) else None
             expires_in = result.get("expires_in") if isinstance(result, dict) else None
             if not token:
-                logger.warning("goplus: reponse /token sans access_token — repli sur l'API publique")
+                logger.warning("goplus: /token response has no access_token — falling back to the public API")
                 return self._access_token
 
-            # 22/07 -- bug reel trouve en conditions reelles : GoPlus renvoie parfois
-            # access_token DEJA prefixe par "Bearer " dans la chaine elle-meme (verifie
-            # en direct : "Bearer eyJhY2NvdW50SWQi..."). _get_json construit ensuite
-            # "Authorization: Bearer {token}" -- sans ce garde, l'en-tete envoye devient
-            # "Bearer Bearer eyJ...", que GoPlus rejette (code 4012 "Wrong Signature",
-            # cf. table officielle des codes). Cause racine du code 4012 observe depuis
-            # le 21/07 10:37 (passage a l'en-tete Authorization: Bearer) -- PAS une
-            # rotation de credentials cote GoPlus comme suppose initialement. Normalise
-            # ici pour que self._access_token soit TOUJOURS le JWT nu, quel que soit le
-            # format renvoye par GoPlus.
+            # 22/07 -- real bug found under real conditions: GoPlus sometimes
+            # returns access_token ALREADY prefixed with "Bearer " in the string
+            # itself (verified live: "Bearer eyJhY2NvdW50SWQi..."). _get_json
+            # then builds "Authorization: Bearer {token}" -- without this
+            # guard, the header sent becomes "Bearer Bearer eyJ...", which
+            # GoPlus rejects (code 4012 "Wrong Signature", see the official
+            # code table). Root cause of the code 4012 observed since 21/07
+            # 10:37 (when switching to the Authorization: Bearer header) --
+            # NOT a GoPlus-side credential rotation as initially assumed.
+            # Normalized here so self._access_token is ALWAYS the bare JWT,
+            # whatever format GoPlus returns.
             token = str(token).strip()
             if token.lower().startswith("bearer "):
                 token = token[len("bearer "):].strip()
 
             self._access_token = token
             self._token_expires_at = now + float(expires_in or 0)
-            logger.info("goplus: access_token renouvele (expire dans %ss)", expires_in)
+            logger.info("goplus: access_token renewed (expires in %ss)", expires_in)
             return self._access_token
 
     async def _throttle(self) -> None:
@@ -307,21 +314,21 @@ class GoPlusClient:
         if self._consecutive_failures >= _CIRCUIT_FAIL_THRESHOLD:
             self._circuit_open_until = time.time() + _CIRCUIT_COOLDOWN_S
             logger.warning(
-                "goplus: coupe-circuit ouvert apres %s echecs consecutifs (dernier: %s) — "
-                "pause %ss avant nouvel essai",
+                "goplus: circuit breaker opened after %s consecutive failures (last: %s) — "
+                "pausing %ss before retrying",
                 self._consecutive_failures,
                 detail,
                 _CIRCUIT_COOLDOWN_S,
             )
         elif self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
             logger.warning(
-                "goplus: %s echecs consecutifs (dernier: %s) — pas encore de coupe-circuit",
+                "goplus: %s consecutive failures (last: %s) — circuit breaker not yet open",
                 self._consecutive_failures,
                 detail,
             )
         else:
             logger.info(
-                "goplus: echec appel (%s/%s) — %s",
+                "goplus: call failure (%s/%s) — %s",
                 self._consecutive_failures,
                 _FAIL_STREAK_WARN_THRESHOLD,
                 detail,
@@ -331,24 +338,26 @@ class GoPlusClient:
         return time.time() < self._circuit_open_until
 
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
-        """GET avec la politique d'erreurs du dôme. Retourne (data, error)."""
+        """GET with the dome's error policy. Returns (data, error)."""
         if self.circuit_open():
             return None, f"{UNAVAILABLE} (coupe-circuit ouvert, échecs consécutifs récents)"
 
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         retried = False
-        # 21/07 -- bug réel trouvé en investiguant pourquoi le compte GoPlus n'affichait
-        # AUCUNE consommation même sur 30 jours malgré des appels authentifiés réussis :
-        # mauvais nom d'en-tête. La doc officielle (docs.gopluslabs.io/reference/
-        # tokensecurityusingget_1) exige "Authorization: Bearer <token>", jamais
-        # "access-token: <token>" -- l'ancien en-tête n'était simplement pas reconnu.
-        # L'endpoint reste tolérant (renvoie 200 même sans jeton valide, testé en
-        # direct), ce qui a masqué le bug pendant tout ce temps : les appels
-        # "réussissaient" mais n'étaient jamais rattachés au compte authentifié.
-        # 22/07 -- cooldown auth cassée (cf. commentaire code 4012 plus bas) : ne
-        # retente pas un jeton systématiquement cassé à chaque appel, repli direct
-        # sur le chemin public tant que le cooldown n'est pas écoulé.
+        # 21/07 -- real bug found while investigating why the GoPlus account
+        # showed NO consumption even over 30 days despite successful
+        # authenticated calls: wrong header name. The official docs
+        # (docs.gopluslabs.io/reference/tokensecurityusingget_1) require
+        # "Authorization: Bearer <token>", never "access-token: <token>" --
+        # the old header simply wasn't recognized. The endpoint stays
+        # tolerant (returns 200 even without a valid token, tested live),
+        # which masked the bug all this time: calls "succeeded" but were
+        # never attributed to the authenticated account.
+        # 22/07 -- broken-auth cooldown (see the code 4012 comment further
+        # below): doesn't retry a systematically broken token on every call,
+        # falls back directly to the public path as long as the cooldown
+        # hasn't elapsed.
         if time.time() < self._auth_broken_until:
             token = None
         else:
@@ -377,14 +386,16 @@ class GoPlusClient:
                 await asyncio.sleep(0.5 * (2**attempt_429))
                 continue
 
-            # 17/07 -- bug réel trouvé en investiguant le faible débit d'achats du test 1M$ :
-            # GoPlus signale son rate-limit via un HTTP 200 avec {"code":4029,"message":"too
-            # many requests"} dans le corps, PAS un vrai HTTP 429 -- la branche ci-dessus ne se
-            # déclenchait donc jamais pour ce cas précis, confirmé par appel réel (20 candidats
-            # d'affilée : les 9 premiers OK, les 11 suivants code=4029). Sans retry, chaque
-            # candidat touché tombait silencieusement en "aucune donnée pour ce contrat" (faux
-            # négatif de couverture, pas un vrai verdict de sécurité) -- même politique de
-            # backoff que le vrai 429, sur le même compteur `attempt_429`.
+            # 17/07 -- real bug found while investigating the low purchase rate
+            # of the $1M test: GoPlus signals its rate limit via an HTTP 200
+            # with {"code":4029,"message":"too many requests"} in the body,
+            # NOT a real HTTP 429 -- the branch above therefore never
+            # triggered for this specific case, confirmed by a real call (20
+            # candidates in a row: the first 9 OK, the next 11 code=4029).
+            # Without a retry, every affected candidate silently fell back to
+            # "no data for this contract" (a coverage false negative, not a
+            # real security verdict) -- same backoff policy as a real 429, on
+            # the same `attempt_429` counter.
             if response.status_code == 200:
                 try:
                     probe = response.json()
@@ -398,27 +409,30 @@ class GoPlusClient:
                     await asyncio.sleep(0.5 * (2**attempt_429))
                     continue
 
-                # 22/07 -- bug réel trouvé en conditions réelles : le jeton est émis
-                # avec succès (/token renvoie code=1 "ok") mais REJETÉ par l'endpoint
-                # de données (code 4012 "signature verification failure") -- confirmé
-                # sur un contrat archi-connu (WETH), bloquait donc TOUT le pipeline
-                # momentum, pas seulement des tokens frais. Cause probable : rotation
-                # de GOPLUS_APP_SECRET côté GoPlus suite à l'exposition accidentelle
-                # du 21/07 (recommandation "rotation par précaution" jamais confirmée
-                # appliquée côté .env). Repli immédiat sur l'appel SANS jeton (API
-                # publique, comportement historique avant l'authentification #207)
-                # plutôt que de traiter chaque candidat comme "aucune donnée" -- +
-                # cooldown pour ne pas marteler un jeton cassé à chaque appel suivant
-                # tant que ce n'est pas corrigé côté identifiants (action opérateur).
+                # 22/07 -- real bug found under real conditions: the token is
+                # issued successfully (/token returns code=1 "ok") but
+                # REJECTED by the data endpoint (code 4012 "signature
+                # verification failure") -- confirmed on a very well-known
+                # contract (WETH), so it was blocking THE ENTIRE momentum
+                # pipeline, not just fresh tokens. Probable cause:
+                # GOPLUS_APP_SECRET rotation on GoPlus's side following the
+                # accidental exposure of 21/07 (the "rotate as a precaution"
+                # recommendation, never confirmed applied on the .env side).
+                # Immediate fallback to the call WITHOUT a token (public API,
+                # historical behavior before authentication #207) rather than
+                # treating every candidate as "no data" -- + a cooldown to
+                # avoid hammering a broken token on every subsequent call as
+                # long as it isn't fixed on the credentials side (operator
+                # action).
                 if (
                     headers is not None and not auth_fallback_done
                     and isinstance(probe, dict) and probe.get("code") == 4012
                 ):
                     logger.warning(
-                        "goplus: authentification rejetee (code 4012, signature "
-                        "verification failure malgre un jeton emis avec succes) -- "
-                        "repli sur l'API publique pour %ss, verifier GOPLUS_APP_KEY/"
-                        "GOPLUS_APP_SECRET",
+                        "goplus: authentication rejected (code 4012, signature "
+                        "verification failure despite a successfully issued "
+                        "token) -- falling back to the public API for %ss, "
+                        "check GOPLUS_APP_KEY/GOPLUS_APP_SECRET",
                         _AUTH_BROKEN_COOLDOWN_S,
                     )
                     self._auth_broken_until = time.time() + _AUTH_BROKEN_COOLDOWN_S
@@ -446,12 +460,12 @@ class GoPlusClient:
     async def get_token_security(
         self, address: str, *, chain_id: str = BASE_CHAIN_ID
     ) -> TokenSecurity:
-        """Interroge GoPlus Token Security pour un contrat. Best-effort, jamais bloquant.
+        """Queries GoPlus Token Security for a contract. Best-effort, never blocking.
 
-        22/07 -- cache par (chain_id, adresse) avant tout appel réseau (dédup de
-        ressource rare, cf. commentaires `__init__`/`ownership_verifiably_renounced`).
-        Une entrée en cache n'est JAMAIS un résultat en panne (voir le point de
-        stockage plus bas) -- une absence de cache déclenche toujours un vrai appel."""
+        22/07 -- cache by (chain_id, address) before any network call (dedup of
+        a scarce resource, see the `__init__`/`ownership_verifiably_renounced`
+        comments). A cache entry is NEVER a failed result (see the storage
+        point further below) -- no cache entry always triggers a real call."""
         addr = (address or "").strip()
         if not addr:
             return TokenSecurity(address=addr, available=False, error="adresse vide")
@@ -472,11 +486,11 @@ class GoPlusClient:
         if not isinstance(data, dict):
             return TokenSecurity(address=addr, available=False, error=UNAVAILABLE)
 
-        # GoPlus : {"code":1,"message":"OK","result":{"<addr_lower>":{...}}}
+        # GoPlus: {"code":1,"message":"OK","result":{"<addr_lower>":{...}}}
         result = data.get("result")
         if not isinstance(result, dict) or not result:
-            # code != 1 ou résultat vide = GoPlus n'a pas (encore) la donnée pour ce
-            # token -- réponse HTTP propre, pas une panne (no_data=True, #207).
+            # code != 1 or empty result = GoPlus doesn't (yet) have the data for
+            # this token -- a clean HTTP response, not a failure (no_data=True, #207).
             msg = str(data.get("message") or "").strip()
             return TokenSecurity(
                 address=addr,
@@ -487,7 +501,7 @@ class GoPlusClient:
 
         row = result.get(addr.lower())
         if not isinstance(row, dict):
-            # Clé insensible à la casse : prend la première entrée si l'adresse exacte manque.
+            # Case-insensitive key: take the first entry if the exact address is missing.
             row = next((v for v in result.values() if isinstance(v, dict)), None)
         if not isinstance(row, dict):
             return TokenSecurity(address=addr, available=False, error=UNAVAILABLE)
@@ -513,39 +527,39 @@ class GoPlusClient:
             available=True,
             error=None,
         )
-        # 22/07 -- ne met en cache QUE les résultats disponibles (jamais un no_data/
-        # panne, retournés plus haut avant d'atteindre ce point). Ownership
-        # vérifiablement renoncé -> TTL long (rien ne peut plus changer) ; sinon ->
-        # TTL court (dédup des réévaluations rapprochées du même candidat encore en
-        # attente, sans retarder significativement la détection d'un vrai changement).
+        # 22/07 -- only caches AVAILABLE results (never a no_data/failure,
+        # returned further above before reaching this point). Ownership
+        # verifiably renounced -> long TTL (nothing can change anymore);
+        # otherwise -> short TTL (dedup of close re-evaluations of the same
+        # still-pending candidate, without significantly delaying the
+        # detection of a real change).
         ttl = _RENOUNCED_CACHE_TTL_S if security.ownership_verifiably_renounced else _SHORT_CACHE_TTL_S
         self._security_cache[cache_key] = (security, time.time() + ttl)
         return security
 
 
     # ------------------------------------------------------------------
-    # 2. Adresse malveillante connue (AML) -- #157, couche 1 disqualifiante de
-    # l'évaluateur wallet-centrique. Second endpoint du même fournisseur déjà
-    # intégré ci-dessus (aucune nouvelle dépendance/diligence éditeur).
+    # 2. Known malicious address (AML) -- #157, disqualifying layer 1 of
+    # the wallet-centric evaluator. Second endpoint from the same provider
+    # already integrated above (no new dependency/vendor diligence).
     # ------------------------------------------------------------------
     async def get_address_security(self, address: str, *, chain_id: str = BASE_CHAIN_ID) -> "AddressSecurity":
-        """Interroge GoPlus Malicious Address API (AML). Vérifié en direct sur Base
+        """Queries the GoPlus Malicious Address API (AML). Verified live on Base
         (docs/aria-learning-inbox/2026-07-14-veille-registre-wallets-malveillants-157.md,
-        14/07), puis ÉTENDU ce même soir aux 13 chain_id du scan multi-chaînes
-        (base, ethereum, arbitrum, optimism, polygon, celo, gnosis, scroll,
-        zksync, rootstock, unichain, soneium, mode) : les 13 répondent
-        `code: 1, "ok"` avec le MÊME format -- couverture format confirmée
-        partout SANS clé d'autorisation. PAS la densité réelle des données
-        malveillantes (le test en direct portait sur une adresse burn, pas une
-        adresse effectivement flaggée) -- et probablement variable par chaîne :
-        le champ `contract_address` (résolution "est-ce un contrat ?") revient
-        indéterminé (`"-1"`) sur celo/rootstock/unichain/soneium/mode pour la
-        même adresse burn, alors qu'il se résout sur les 8 autres chaînes --
-        signal indirect qu'une couverture plus fine existe pour certaines
-        chaînes. Traiter comme un filtre probabiliste supplémentaire, jamais
-        présenté comme exhaustif, quelle que soit la chaîne -- même doctrine
-        que le reste du dôme : une indisponibilité ne vaut jamais "non
-        malveillant", elle reste indisponible."""
+        14/07), then EXTENDED that same evening to the 13 chain_ids of the
+        multi-chain scan (base, ethereum, arbitrum, optimism, polygon, celo,
+        gnosis, scroll, zksync, rootstock, unichain, soneium, mode): all 13
+        respond `code: 1, "ok"` with the SAME format -- format coverage
+        confirmed everywhere WITHOUT an authorization key. NOT the real
+        density of malicious data (the live test used a burn address, not an
+        actually flagged address) -- and probably variable by chain: the
+        `contract_address` field (resolving "is this a contract?") comes
+        back indeterminate (`"-1"`) on celo/rootstock/unichain/soneium/mode
+        for the same burn address, while it resolves on the other 8 chains --
+        an indirect signal that finer coverage exists for some chains. Treat
+        as an additional probabilistic filter, never presented as exhaustive,
+        whatever the chain -- same doctrine as the rest of the dome: an
+        unavailability never counts as "not malicious", it stays unavailable."""
         addr = (address or "").strip()
         if not addr:
             return AddressSecurity(address=addr, available=False, error="adresse vide")

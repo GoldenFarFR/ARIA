@@ -1,4 +1,4 @@
-"""ACP provider — drain events JSONL + fulfill jobs via acp-cli (PC local)."""
+"""ACP provider — drains the JSONL events file + fulfills jobs via acp-cli (local PC)."""
 from __future__ import annotations
 
 import json
@@ -212,9 +212,9 @@ async def _process_job(job_id: str, *, chain_id: str) -> str | None:
         )
         return f"quality_blocked:{job_id}"
 
-    # Rappel barrière ACP forte : l'opérateur doit auditer avant validation finale
+    # Reminder of the strong ACP barrier: the operator must audit before final validation
     audit_note = " (audit qualité opérateur demandé avant promotion)"
-    # On n'altère pas le deliverable lui-même, on loggue juste l'obligation
+    # We don't alter the deliverable itself, we just log the obligation
 
     ok, msg = provider_submit(job_id, deliverable, chain_id=chain_id)
     log_quality_receipt(
@@ -261,14 +261,14 @@ async def _process_job(job_id: str, *, chain_id: str) -> str | None:
                     logger.info("ACP workflow-used tweet queued: %s", flush.get("reason"))
         except Exception as exc:
             logger.debug("workflow-used social skip: %s", exc)
-        # Barrière ACP : on signale explicitement que l'audit opérateur est requis
+        # ACP barrier: explicitly flag that operator audit is required
         return f"submit:{job_id}"
     logger.warning("ACP submit %s failed: %s", job_id, msg)
     return None
 
 
 def drain_events_file(path: str) -> tuple[list[dict], int]:
-    """Lit les nouvelles lignes JSONL depuis le dernier offset."""
+    """Reads new JSONL lines since the last offset."""
     file_path = Path(path)
     if not file_path.is_file():
         return [], 0
@@ -297,7 +297,7 @@ def drain_events_file(path: str) -> tuple[list[dict], int]:
 
 
 async def run_provider_cycle(events_file: str | None = None) -> dict[str, Any]:
-    """Drain fichier events + tentative fulfill pour chaque job nouveau/actionnable."""
+    """Drains the events file + attempts fulfillment for each new/actionable job."""
     result: dict[str, Any] = {
         "ok": True,
         "processed": 0,

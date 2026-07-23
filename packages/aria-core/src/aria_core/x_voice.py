@@ -1,10 +1,10 @@
-"""Voix X @Aria_ZHC — prose humaine, sans tics « IA / agent autonome »."""
+"""@Aria_ZHC X voice — human prose, no "AI / autonomous agent" tics."""
 
 from __future__ import annotations
 
 import re
 
-# Marqueurs à éviter dans le texte public (pas une identité « personnage IA »).
+# Markers to avoid in public text (not an "AI character" identity).
 _AI_VOICE_RE = re.compile(
     r"\b(?:"
     r"as an ai|i'?m aria\b|new zhc agent|zhc agent|autonomous agent|autonomous cao|"
@@ -23,7 +23,7 @@ _ROSTER_RE = re.compile(
 
 
 def human_voice_rules_for_llm(lang: str = "en") -> str:
-    """Bloc prompt — ton humain, pas personnage IA."""
+    """Prompt block — human tone, not an AI character."""
     if lang == "fr":
         return (
             "VOIX HUMAINE (obligatoire) :\n"
@@ -50,7 +50,7 @@ def has_ai_voice_markers(text: str) -> bool:
 
 
 def looks_like_feature_roster(text: str) -> bool:
-    """Liste technique (virgules / deux-points catalogue)."""
+    """Technical list (comma / catalog-colon style)."""
     body = (text or "").strip()
     if not body:
         return False
@@ -63,7 +63,7 @@ def looks_like_feature_roster(text: str) -> bool:
 
 
 def strip_obvious_ai_phrases(text: str) -> str:
-    """Nettoyage léger sans LLM."""
+    """Light cleanup, no LLM."""
     out = (text or "").strip()
     if not out:
         return out
@@ -82,7 +82,7 @@ def strip_obvious_ai_phrases(text: str) -> str:
 
 
 async def humanize_tweet_for_x(text: str) -> str:
-    """Réécriture LLM si le brouillon sonne « catalogue IA »."""
+    """LLM rewrite if the draft sounds like an "AI catalog"."""
     from aria_core.handle_registry import resolve_handles_in_text
     from aria_core.x_publication_policy import check_tweet_content, policy_rules_for_llm
 

@@ -1,14 +1,15 @@
-"""Signaux d'entrée haute qualité (facts-only, déterministe) — le viseur du chasseur.
+"""High-quality entry signals (facts-only, deterministic) — the hunter's scope.
 
-Encode un setup d'entrée éprouvé : **prix dans la zone Fibonacci profonde** (golden
-pocket 0,618–0,786, le « support rouge ») **+ divergence haussière RSI**, formés dans
-une fenêtre de **≤ 25 bougies**. Quand les deux coïncident, c'est historiquement l'un
-des meilleurs points d'entrée pour le ratio risque/récompense (invalidation serrée sous
-le support, cible = retour vers le haut du range → R/R généreux).
+Encodes a proven entry setup: **price in the deep Fibonacci zone** (golden
+pocket 0.618-0.786, the "red support") **+ bullish RSI divergence**, formed
+within a **<= 25 candle** window. When both coincide, it's historically one
+of the best entry points for the risk/reward ratio (tight invalidation below
+support, target = return to the top of the range -> generous R/R).
 
-Tout est dérivé de la série OHLCV réelle (mêmes bougies → même résultat). Aucune valeur
-inventée : sans setup, ``present=False`` (le rapport omet simplement le signal). C'est une
-**hypothèse** (intuition opérateur) que le track-record valide — jamais un dogme.
+Everything is derived from the real OHLCV series (same candles -> same
+result). No invented value: without a setup, ``present=False`` (the report
+simply omits the signal). This is a **hypothesis** (operator intuition) that
+the track record validates — never a dogma.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ _RSI_PERIOD = 14
 
 @dataclass(frozen=True)
 class EntrySignal:
-    """Un point d'entrée détecté (ou son absence), avec sa base factuelle et son R/R."""
+    """A detected entry point (or its absence), with its factual basis and R/R."""
 
     present: bool
     reasons: list[str] = field(default_factory=list)
@@ -37,7 +38,7 @@ class EntrySignal:
 
 
 def rsi_series(closes: list[float], period: int = _RSI_PERIOD) -> list[float | None]:
-    """RSI de Wilder aligné sur ``closes`` (None pendant la période de chauffe)."""
+    """Wilder RSI aligned on ``closes`` (None during the warm-up period)."""
     n = len(closes)
     out: list[float | None] = [None] * n
     if n < period + 1:
@@ -62,10 +63,10 @@ def rsi_series(closes: list[float], period: int = _RSI_PERIOD) -> list[float | N
 
 
 def fibonacci_zone(candles: list[Candle]) -> dict | None:
-    """Golden pocket (0,618–0,786) + niveaux, du plus-bas au plus-haut de la fenêtre.
+    """Golden pocket (0.618-0.786) + levels, from the window's low to its high.
 
-    Mesure la jambe swing bas → swing haut ; les retracements sont des SUPPORTS sous
-    le plus-haut. Retourne None si la fenêtre est plate/trop courte.
+    Measures the swing-low -> swing-high leg; retracements are SUPPORTS below
+    the high. Returns None if the window is flat/too short.
     """
     if len(candles) < 2:
         return None
@@ -75,34 +76,35 @@ def fibonacci_zone(candles: list[Candle]) -> dict | None:
         return None
     diff = hi - lo
     levels = {r: hi - diff * r for r in _FIB_RATIOS}
-    # Golden pocket : entre le retracement 0,618 et 0,786 (zone profonde « rouge »).
+    # Golden pocket: between the 0.618 and 0.786 retracement (the deep "red" zone).
     return {
         "high": hi,
         "low": lo,
         "levels": levels,
-        "gp_high": levels[0.618],  # borne haute de la zone (retracement moins profond)
-        "gp_low": levels[0.786],   # borne basse (retracement plus profond)
+        "gp_high": levels[0.618],  # zone's upper bound (shallower retracement)
+        "gp_low": levels[0.786],   # lower bound (deeper retracement)
     }
 
 
 def bullish_rsi_divergence(
     candles: list[Candle], *, lookback: int = _DEFAULT_LOOKBACK, period: int = _RSI_PERIOD
 ) -> tuple[bool, str]:
-    """Divergence haussière : prix fait un plus-bas plus BAS, RSI fait un creux plus HAUT.
+    """Bullish divergence: price makes a LOWER low, RSI makes a HIGHER low.
 
-    Compare le DERNIER creux (minimum local) de la fenêtre à chaque creux ANTÉRIEUR,
-    en partant du plus récent -- pas seulement l'avant-dernier immédiat (19/07,
-    corrigé après investigation empirique sur candidats réels du pipeline momentum :
-    0 divergence détectée sur 8 candidats avec données exploitables, contre 4 golden
-    pocket atteints seuls -- la comparaison n'examinait QUE la paire de creux
-    immédiatement adjacente, ratant toute divergence formée sur une jambe plus large
-    de la même fenêtre). Même DÉFINITION stricte du signal (prix plus bas + RSI plus
-    haut) qu'avant -- seule la PORTÉE de la recherche est élargie, pas le critère.
-    Signal classique d'essoufflement de la baisse. Retourne (present, base factuelle).
+    Compares the window's LAST low (local minimum) against every EARLIER low,
+    starting from the most recent -- not just the immediately preceding one
+    (07/19, fixed after empirical investigation on real momentum pipeline
+    candidates: 0 divergence detected on 8 candidates with usable data,
+    against 4 golden pockets reached alone -- the comparison only examined
+    the immediately adjacent pair of lows, missing any divergence formed over
+    a wider leg of the same window). Same strict signal DEFINITION (lower
+    price + higher RSI) as before -- only the SCOPE of the search is widened,
+    not the criterion. Classic sign of a downtrend running out of steam.
+    Returns (present, factual basis).
     """
-    # RSI calculé sur la série COMPLÈTE (chauffé avant la fenêtre), puis on ne
-    # cherche les creux que dans les `lookback` dernières bougies. Ainsi un setup
-    # récent a un RSI défini même si la fenêtre est courte.
+    # RSI computed on the FULL series (warmed up before the window), then we
+    # only look for lows within the last `lookback` candles. This way a
+    # recent setup has a defined RSI even if the window is short.
     closes_all = [c.close for c in candles]
     rsis = rsi_series(closes_all, period)
     start = max(1, len(candles) - lookback) if lookback else 1
@@ -129,25 +131,26 @@ def detect_entry(
     tolerance: float = 0.03,
     execution_price: float | None = None,
 ) -> EntrySignal:
-    """Détecte le setup « golden pocket + divergence RSI » sur ≤ ``lookback`` bougies.
+    """Detects the "golden pocket + RSI divergence" setup over <= ``lookback`` candles.
 
-    ``present`` seulement si le prix courant est dans (ou tout près de) la zone
-    Fibonacci profonde ET qu'une divergence haussière RSI est présente. Fournit alors
-    entrée/invalidation/cible dérivées des niveaux réels + le R/R.
+    ``present`` only if the current price is in (or very close to) the deep
+    Fibonacci zone AND a bullish RSI divergence is present. Then provides
+    entry/invalidation/target derived from the real levels + the R/R.
 
-    ``execution_price`` (19/07, optionnel -- comportement inchangé sans lui, ex.
-    ``acp_onchain_scan.py``/``/vc`` où il n'y a pas d'exécution imminente à un prix
-    précis) : trouvaille réelle en vérifiant la légitimité d'un trade (GITLAWB) à la
-    demande de l'opérateur -- le R/R affiché (149,1) venait du ``close`` de la dernière
-    bougie OHLCV (une source), alors que le prix RÉELLEMENT exécuté vient d'une AUTRE
-    source (DexScreener temps réel, ``momentum_entry.py``) qui peut diverger de
-    quelques % au même instant nominal (pas juste une dérive temporelle -- deux
-    fournisseurs différents). Résultat : le R/R affiché peut significativement
-    sur/sous-estimer celui du trade RÉELLEMENT pris. Quand fourni (et cohérent --
-    ``execution_price > invalidation``), remplace le ``close`` comme référence
-    d'entrée pour le R/R (ET le champ ``entry`` renvoyé) -- ``invalidation``/``target``
-    restent dérivés des niveaux Fibonacci/RSI réels, inchangés (ils décrivent la
-    STRUCTURE du setup, pas un prix de remplissage)."""
+    ``execution_price`` (07/19, optional -- unchanged behavior without it,
+    e.g. ``acp_onchain_scan.py``/``/vc`` where there's no imminent execution
+    at a precise price): a real finding while checking a trade's legitimacy
+    (GITLAWB) at the operator's request -- the displayed R/R (149.1) came
+    from the last OHLCV candle's ``close`` (one source), while the price
+    ACTUALLY executed comes from ANOTHER source (real-time DexScreener,
+    ``momentum_entry.py``) which can diverge by a few % at the same nominal
+    instant (not just time drift -- two different providers). Result: the
+    displayed R/R can significantly over/underestimate that of the trade
+    ACTUALLY taken. When provided (and consistent --
+    ``execution_price > invalidation``), replaces the ``close`` as the entry
+    reference for R/R (AND the returned ``entry`` field) --
+    ``invalidation``/``target`` stay derived from the real Fibonacci/RSI
+    levels, unchanged (they describe the setup's STRUCTURE, not a fill price)."""
     if len(candles) < _RSI_PERIOD + 2:
         return EntrySignal(present=False, reasons=["série trop courte pour un signal fiable"])
 
@@ -172,11 +175,12 @@ def detect_entry(
             in_golden_pocket=in_gp, rsi_divergence=div, lookback_used=len(window),
         )
 
-    # Zone dérivée des niveaux réels : invalidation sous le support profond, cible =
-    # retour vers le haut du range (retest du swing haut) → R/R généreux par construction.
-    # 19/07 -- ``execution_price`` (si fourni et cohérent) remplace le close comme
-    # référence d'entrée pour le R/R -- le R/R doit refléter le trade RÉELLEMENT pris,
-    # pas une estimation basée sur une autre source de prix (cf. docstring).
+    # Zone derived from the real levels: invalidation below the deep support,
+    # target = return to the top of the range (swing-high retest) -> generous
+    # R/R by construction.
+    # 07/19 -- ``execution_price`` (if provided and consistent) replaces the
+    # close as the entry reference for R/R -- the R/R must reflect the trade
+    # ACTUALLY taken, not an estimate based on another price source (see docstring).
     entry = close
     if execution_price is not None and execution_price > 0:
         entry = execution_price

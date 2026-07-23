@@ -1,9 +1,9 @@
-"""Ledger structuré des transactions ACP — montant, contrepartie, décision, résultat.
+"""Structured ledger of ACP transactions — amount, counterparty, decision, outcome.
 
-Une ligne par transaction (id = approval_id), créée ``pending`` à l'escalade puis
-transitionnée une seule fois via ``claim_for_decision`` (transition atomique
-pending -> approved/rejected, protège contre un double-clic Telegram qui
-déclencherait une double dépense).
+One row per transaction (id = approval_id), created ``pending`` on escalation
+then transitioned only once via ``claim_for_decision`` (atomic
+pending -> approved/rejected transition, protects against a double Telegram
+click that would trigger a double spend).
 """
 from __future__ import annotations
 
@@ -72,10 +72,11 @@ async def create_ledger_entry(
 
 
 async def claim_for_decision(entry_id: str, *, decision: str, decided_by: str) -> dict | None:
-    """Transition atomique pending -> decision.
+    """Atomic pending -> decision transition.
 
-    Retourne la ligne si la transition a eu lieu, sinon ``None`` (déjà traitée —
-    protège contre l'exécution en double sur un double-clic Telegram).
+    Returns the row if the transition took place, otherwise ``None`` (already
+    processed — protects against double execution on a double Telegram
+    click).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()

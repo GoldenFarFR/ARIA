@@ -1,18 +1,17 @@
-"""Client de lecture seule Blockchain.com (charts API) — historique long BTC/USD.
+"""Read-only Blockchain.com client (charts API) — long BTC/USD history.
 
-Remplace CoinGecko pour l'historique BTC de plus de 365 jours : CoinGecko a changé
-sa politique (confirmé en direct le 09/07, `error_code 10012`) et refuse désormais
-toute requête sur son tier gratuit portant sur des données plus anciennes que 365
-jours, quelle que soit la taille de la fenêtre — structurellement incompatible avec
-`btc_cycles` (segmentation sur 3 cycles de halving, 10+ ans). Blockchain.com est une
-société établie depuis 2011, l'endpoint `charts/market-price` est public, documenté,
-sans clé, et couvre 2009 à aujourd'hui (~1600 points quotidiens, échantillonnage
-natif de l'API).
+Replaces CoinGecko for BTC history older than 365 days: CoinGecko changed its
+policy (confirmed live on 07/09, `error_code 10012`) and now refuses any
+request on its free tier for data older than 365 days, regardless of the
+window size — structurally incompatible with `btc_cycles` (segmented over 3
+halving cycles, 10+ years). Blockchain.com is a company established since
+2011, the `charts/market-price` endpoint is public, documented, keyless, and
+covers 2009 to today (~1600 daily points, native API sampling).
 
-Aucune écriture, aucune clé API. Politique d'erreurs identique à `services/coingecko.py` :
-- Timeout / endpoint indisponible : 1 retry après 5s, puis fallback explicite.
-- Aucune donnée manquante n'est jamais remplacée par une supposition — le champ
-  `error` (et `available=False`) porte l'absence de donnée.
+No writes, no API key. Same error policy as `services/coingecko.py`:
+- Timeout / endpoint unavailable: 1 retry after 5s, then explicit fallback.
+- No missing data is ever replaced by a guess — the `error` field (and
+  `available=False`) carries the absence of data.
 """
 from __future__ import annotations
 
@@ -31,12 +30,12 @@ UNAVAILABLE = "historique BTC indisponible (Blockchain.com)"
 @dataclass
 class BtcMarketPriceResult:
     available: bool
-    prices: list[tuple[int, float]] = field(default_factory=list)  # (epoch_ms, prix_usd)
+    prices: list[tuple[int, float]] = field(default_factory=list)  # (epoch_ms, usd_price)
     error: str | None = None
 
 
 class BlockchainInfoClient:
-    """Client HTTP async, lecture seule, throttle prudent (API publique sans clé)."""
+    """Async HTTP client, read-only, cautious throttle (keyless public API)."""
 
     def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 2.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -55,15 +54,15 @@ class BlockchainInfoClient:
 
     def _record_failure(self, detail: str) -> None:
         self._consecutive_failures += 1
-        logger.info("blockchain_info: echec appel -- %s", detail)
+        logger.info("blockchain_info: call failed -- %s", detail)
 
     def _record_success(self) -> None:
         self._consecutive_failures = 0
 
     async def fetch_btc_market_price_history(self, *, timespan: str = "all") -> BtcMarketPriceResult:
-        """Série de prix BTC/USD réelle (`charts/market-price`), échantillonnage natif
-        de l'API (~1600 points sur `timespan=all`, de 2009 à aujourd'hui). Jamais de
-        prix inventé : absence -> `available=False`."""
+        """Real BTC/USD price series (`charts/market-price`), native API
+        sampling (~1600 points on `timespan=all`, from 2009 to today). Never
+        an invented price: absence -> `available=False`."""
         url = f"{self.base_url}/charts/market-price?timespan={timespan}&format=json"
         await self._throttle()
         try:
@@ -78,7 +77,7 @@ class BlockchainInfoClient:
             except httpx.TransportError as exc2:
                 self._record_failure(f"{url} -> {exc2}")
                 return BtcMarketPriceResult(available=False, error=f"{UNAVAILABLE} (timeout)")
-        except Exception as exc:  # noqa: BLE001 -- une panne reseau ne doit jamais remonter
+        except Exception as exc:  # noqa: BLE001 -- a network failure must never bubble up
             self._record_failure(f"{url} -> {exc}")
             return BtcMarketPriceResult(available=False, error=UNAVAILABLE)
 
@@ -90,11 +89,11 @@ class BlockchainInfoClient:
             data = response.json()
             values = data.get("values")
         except Exception:  # noqa: BLE001
-            self._record_failure(f"{url} -> reponse illisible")
+            self._record_failure(f"{url} -> unreadable response")
             return BtcMarketPriceResult(available=False, error=UNAVAILABLE)
 
         if not isinstance(values, list) or not values:
-            self._record_failure(f"{url} -> pas de valeurs")
+            self._record_failure(f"{url} -> no values")
             return BtcMarketPriceResult(available=False, error=UNAVAILABLE)
 
         prices: list[tuple[int, float]] = []
@@ -107,7 +106,7 @@ class BlockchainInfoClient:
             prices.append((epoch_s * 1000, price))
 
         if not prices:
-            self._record_failure(f"{url} -> aucune valeur exploitable")
+            self._record_failure(f"{url} -> no usable value")
             return BtcMarketPriceResult(available=False, error=UNAVAILABLE)
 
         self._record_success()

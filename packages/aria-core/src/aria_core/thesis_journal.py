@@ -1,21 +1,23 @@
-"""Carnet de bord d'ARIA — journal de chaque analyse + suivi de la thèse dans le temps.
+"""ARIA's logbook — a journal of every analysis + thesis tracking over time.
 
-Deux besoins de l'opérateur réunis :
+Two operator needs combined into one:
 
-1. **Journal interne** : pour CHAQUE analyse/investissement, ARIA consigne le pourquoi
-   et le comment — thèse de départ, faits, décision, points d'entrée/sortie, référence
-   du graphique, et chaque révision ultérieure. Registre append-only, horodaté,
-   exportable en .txt lisible.
+1. **Internal journal**: for EVERY analysis/investment, ARIA records the why
+   and the how — starting thesis, facts, decision, entry/exit points, chart
+   reference, and every later revision. Append-only, timestamped register,
+   exportable to readable .txt.
 
-2. **Suivi de la thèse** : périodiquement, ARIA re-vérifie si la thèse TIENT ENCORE —
-   le prix vs la cible/invalidation, ET l'activité du projet (livre-t-il du contenu,
-   commits, posts... ou stagne-t-il ?). Une thèse qui se dégrade est signalée.
+2. **Thesis tracking**: periodically, ARIA re-checks whether the thesis
+   STILL HOLDS — price vs. target/invalidation, AND the project's activity
+   (is it shipping content, commits, posts... or stagnating?). A degrading
+   thesis is flagged.
 
-Sert trois choses : PREUVE (registre inviolable pour le pacte argent réel),
-TRANSPARENCE (règle « transparence totale »), PRODUIT (cœur du cockpit abonné).
+Serves three purposes: PROOF (tamper-proof register for the real-money
+pact), TRANSPARENCY ("total transparency" rule), PRODUCT (the subscriber
+cockpit's core).
 
-Stockage local SQLite `aria.db` : tables ``journal_entry`` et ``thesis_checkpoint``.
-Aucune action financière : c'est un cahier, pas un exécuteur.
+Local SQLite storage `aria.db`: ``journal_entry`` and ``thesis_checkpoint``
+tables. No financial action: this is a notebook, not an executor.
 """
 from __future__ import annotations
 
@@ -31,14 +33,14 @@ from aria_core.paths import aria_db_path
 logger = logging.getLogger(__name__)
 DB_PATH = str(aria_db_path())
 
-# Fenêtres d'activité projet (jours) : au-delà, on parle de stagnation.
+# Project activity windows (days): beyond this, we call it stagnation.
 _ACTIVE_WITHIN_DAYS = 14
 _STAGNANT_AFTER_DAYS = 30
 
 
 @dataclass(frozen=True)
 class ActivityVerdict:
-    """Le projet livre-t-il encore, ou stagne-t-il ?"""
+    """Is the project still shipping, or stagnating?"""
 
     status: str  # shipping / slowing / stagnating / unknown
     note: str = ""
@@ -47,10 +49,11 @@ class ActivityVerdict:
 def assess_project_activity(
     *, github_last_commit_days: int | None = None, social_last_post_days: int | None = None
 ) -> ActivityVerdict:
-    """Juge l'activité récente d'un projet à partir des délais depuis le dernier signe de vie.
+    """Judges a project's recent activity from the delay since the last sign of life.
 
-    Prend le signal le PLUS récent (commit OU post) : un projet peut communiquer sans
-    committer, ou l'inverse. ``None`` partout -> unknown (jamais une accusation gratuite).
+    Takes the MOST recent signal (commit OR post): a project can communicate
+    without committing, or vice versa. ``None`` everywhere -> unknown (never
+    a gratuitous accusation).
     """
     signals = [d for d in (github_last_commit_days, social_last_post_days) if d is not None]
     if not signals:
@@ -69,12 +72,13 @@ def judge_thesis(
     invalidation_hit: bool,
     activity: ActivityVerdict,
 ) -> tuple[str, str]:
-    """Verdict global du suivi de thèse : (statut, note). Faits d'abord, jamais un rejet aveugle.
+    """Overall thesis-tracking verdict: (status, note). Facts first, never a
+    blind rejection.
 
-    - invalidation touchée -> 'invalidated' (le niveau de sortie a parlé) ;
-    - projet qui stagne -> 'stagnating' (la thèse « builder actif » ne tient plus) ;
-    - projet qui livre + prix qui tient/monte -> 'delivering' ;
-    - sinon 'on_track'.
+    - invalidation hit -> 'invalidated' (the exit level has spoken);
+    - stagnating project -> 'stagnating' (the "active builder" thesis no longer holds);
+    - shipping project + price holding/rising -> 'delivering';
+    - otherwise 'on_track'.
     """
     if invalidation_hit:
         return "invalidated", "niveau d'invalidation atteint : thèse cassée"
@@ -96,7 +100,7 @@ class JournalEntry:
     entry_price: float | None = None
     target_price: float | None = None
     invalidation_price: float | None = None
-    chart_ref: str = ""         # chemin/URI du graphique annoté (entrée/sortie)
+    chart_ref: str = ""         # path/URI of the annotated chart (entry/exit)
     created_at: str = ""
 
 
@@ -160,12 +164,12 @@ def save_entry_screenshot(
     tag: str = "entry",
     horizon_weeks: int = 4,
 ) -> str:
-    """Génère et SAUVE le screenshot du graphique (réel + simulation) pour une entrée.
+    """Generates and SAVES the chart screenshot (real + simulation) for an entry.
 
-    Retourne le chemin du PNG (utilisable comme ``chart_ref``). ARIA « fait » donc
-    bien le screenshot : historique réel annoté du point d'entrée + simulation des
-    prochaines semaines (scénario, pas une prévision). Jamais bloquant : sur erreur,
-    renvoie une chaîne vide (le carnet reste texte).
+    Returns the PNG's path (usable as ``chart_ref``). ARIA thus really
+    "makes" the screenshot: real annotated history of the entry point +
+    simulation of the coming weeks (a scenario, not a forecast). Never
+    blocking: on error, returns an empty string (the journal stays text).
     """
     try:
         from aria_core.skills.chart_render import render_scenario_png, save_png_data_uri
@@ -177,12 +181,12 @@ def save_entry_screenshot(
         safe = "".join(ch for ch in contract.lower() if ch.isalnum())[:20]
         path = f"{_charts_dir()}/{safe}_{tag}.png"
         return save_png_data_uri(uri, path)
-    except Exception:  # noqa: BLE001 — le screenshot est un bonus, jamais bloquant
+    except Exception:  # noqa: BLE001 — the screenshot is a bonus, never blocking
         return ""
 
 
 async def record_entry(entry: JournalEntry) -> int:
-    """Consigne une analyse dans le journal (append-only). Retourne l'id de l'entrée."""
+    """Records an analysis in the journal (append-only). Returns the entry's id."""
     await _ensure_tables()
     created = entry.created_at or _now()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -207,7 +211,7 @@ async def record_checkpoint(
     contract: str, *, price: float | None, price_vs_entry_pct: float | None,
     activity_status: str, verdict: str, note: str = "",
 ) -> None:
-    """Consigne un point de contrôle du suivi de thèse (append-only)."""
+    """Records a thesis-tracking checkpoint (append-only)."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -263,15 +267,16 @@ async def review_open_theses(
     price_fn=None,
     activity_fn=None,
 ) -> list[dict]:
-    """Repasse sur chaque position ouverte : re-vérifie prix + activité, consigne un checkpoint.
+    """Revisits every open position: re-checks price + activity, records a checkpoint.
 
-    ``positions`` : liste de dicts {contract, entry_price, invalidation_price, github_url}.
-    ``price_fn(contract) -> prix|None`` et ``activity_fn(github_url) -> jours|None`` sont
-    injectables (offline). Retourne la liste des ALERTES (thèses stagnantes ou invalidées),
-    pour que l'appelant (heartbeat) notifie l'opérateur. Jamais bloquant par position.
+    ``positions``: list of dicts {contract, entry_price, invalidation_price, github_url}.
+    ``price_fn(contract) -> price|None`` and ``activity_fn(github_url) -> days|None``
+    are injectable (offline). Returns the list of ALERTS (stagnating or
+    invalidated theses), for the caller (heartbeat) to notify the operator.
+    Never blocking per position.
     """
     if price_fn is None:
-        async def price_fn(_c):  # pragma: no cover - défaut réseau
+        async def price_fn(_c):  # pragma: no cover - network default
             return None
     if activity_fn is None:
         from aria_core.services.project_activity import github_days_since_commit as activity_fn
@@ -292,7 +297,7 @@ async def review_open_theses(
             gh_days = None
             try:
                 gh_days = await activity_fn(pos.get("github_url"))
-            except Exception:  # noqa: BLE001 — l'activité est un bonus
+            except Exception:  # noqa: BLE001 — activity is a bonus
                 gh_days = None
             activity = assess_project_activity(github_last_commit_days=gh_days)
             verdict, note = judge_thesis(
@@ -304,13 +309,13 @@ async def review_open_theses(
             )
             if verdict in ("invalidated", "stagnating"):
                 alerts.append({"contract": contract, "verdict": verdict, "note": note})
-        except Exception as exc:  # noqa: BLE001 — une position qui plante n'arrête pas le tour
-            logger.info("review_open_theses: %s échoué (%s)", contract, exc)
+        except Exception as exc:  # noqa: BLE001 — a crashing position doesn't stop the round
+            logger.info("review_open_theses: %s failed (%s)", contract, exc)
     return alerts
 
 
 async def export_txt(limit: int = 100) -> str:
-    """Exporte le carnet en texte lisible (.txt) — pour l'opérateur et la preuve."""
+    """Exports the journal to readable text (.txt) — for the operator and as proof."""
     entries = await list_entries(limit=limit)
     lines: list[str] = ["CARNET DE BORD ARIA", "=" * 60, ""]
     for e in entries:

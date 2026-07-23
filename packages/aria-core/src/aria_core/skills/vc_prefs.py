@@ -1,9 +1,9 @@
-"""Préférence de langue de sortie des analyses VC — persistée localement.
+"""Output language preference for VC analyses — persisted locally.
 
-`/vc` est admin-gated : il s'agit de la langue dans laquelle l'opérateur veut
-recevoir l'analyse (pour la relayer à un client FR ou EN). Choisie une fois via
-`/langue`, mémorisée entre les redémarrages (table clé/valeur dans `aria.db`).
-Défaut : français. Aucune action financière — simple réglage d'affichage.
+`/vc` is admin-gated: this is the language the operator wants to receive the
+analysis in (to relay it to an FR or EN client). Chosen once via `/langue`,
+remembered across restarts (key/value table in `aria.db`). Default: French.
+No financial action — a simple display setting.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ async def _ensure_table() -> None:
 
 
 async def get_output_lang() -> str:
-    """Langue de sortie mémorisée (FR par défaut, jamais d'erreur)."""
+    """Remembered output language (FR by default, never an error)."""
     try:
         await _ensure_table()
         async with aiosqlite.connect(str(aria_db_path())) as db:
@@ -35,7 +35,7 @@ async def get_output_lang() -> str:
                 "SELECT value FROM aria_setting WHERE key = ?", (_KEY,)
             ) as cur:
                 row = await cur.fetchone()
-    except Exception:  # noqa: BLE001 — un réglage ne doit jamais casser le flux
+    except Exception:  # noqa: BLE001 — a setting must never break the flow
         return _DEFAULT
     if row and row[0] in SUPPORTED_VC_LANGS:
         return row[0]
@@ -43,10 +43,10 @@ async def get_output_lang() -> str:
 
 
 async def set_output_lang(lang: str) -> str:
-    """Enregistre la langue de sortie. Retourne la langue normalisée effective.
+    """Records the output language. Returns the effective normalized language.
 
-    Lève ``ValueError`` si la langue n'est pas supportée (pour un message clair
-    à l'utilisateur ; le caller gère l'erreur).
+    Raises ``ValueError`` if the language isn't supported (for a clear
+    message to the user; the caller handles the error).
     """
     value = (lang or "").strip().lower()
     if value not in SUPPORTED_VC_LANGS:

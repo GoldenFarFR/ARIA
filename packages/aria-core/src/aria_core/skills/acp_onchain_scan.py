@@ -40,31 +40,33 @@ _EMA_SLOW_PERIOD = 26
 
 
 def _last_value(series: list[float | None]) -> float | None:
-    """Dernière valeur définie d'une série (None pendant la chauffe) -- jamais
-    une estimation, juste le dernier point réellement calculé."""
+    """Last defined value of a series (None during warm-up) -- never an
+    estimate, just the last point actually computed."""
     return next((v for v in reversed(series) if v is not None), None)
 
 logger = logging.getLogger(__name__)
 
 _ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
-# Adresses de « trou noir » : un gros solde ici n'est PAS une concentration risquée
-# (tokens brûlés / envoyés au néant). À exclure du calcul de concentration, tout
-# comme le pool LP (dont le gros solde est structurel, pas une baleine qui peut dumper).
+# "Black hole" addresses: a large balance here is NOT a risky concentration
+# (burned tokens / sent to the void). Excluded from the concentration
+# calculation, same as the LP pool (whose large balance is structural, not a
+# whale that could dump).
 _BURN_ADDRESSES = {
     "0x0000000000000000000000000000000000000000",
     "0x000000000000000000000000000000000000dead",
-    "0xdead000000000000000042069420694206942069",  # burn « communautaire » répandu
-    "0x0000000000000000000000000000000000000001",  # parfois utilisée comme puits
+    "0xdead000000000000000042069420694206942069",  # common "community" burn
+    "0x0000000000000000000000000000000000000001",  # sometimes used as a sink
 }
 
 
 def _is_burn_address(address: str | None) -> bool:
-    """True si l'adresse est un puits de burn (détenteur légitime de grosses parts).
+    """True if the address is a burn sink (legitimate holder of large shares).
 
-    Au-delà de la liste connue, reconnaît le MOTIF « adresse morte » : un corps
-    entièrement à zéro terminé (ou préfixé) par ``dead`` — ex. 0x…0000dEaD. Élargi
-    volontairement car les projets brûlent vers des variantes multiples de ``dead``.
+    Beyond the known list, recognizes the "dead address" PATTERN: a body
+    entirely zero, ending with (or prefixed by) ``dead`` -- e.g. 0x...0000dEaD.
+    Deliberately broadened because projects burn to multiple variants of
+    ``dead``.
     """
     if not address:
         return False
@@ -84,11 +86,12 @@ def _is_burn_address(address: str | None) -> bool:
 def _holder_concentration(
     holders: "TokenHoldersResult", lp_address: str | None
 ) -> tuple[float | None, float | None, int]:
-    """(% du plus gros holder, % du top 10, nombre de holders comptés) HORS LP et burn.
+    """(% of the largest holder, % of the top 10, number of holders counted)
+    EXCLUDING LP and burn.
 
-    Le pool LP et les adresses de burn détiennent légitimement de grosses parts :
-    les inclure ferait échouer tout token à tort. On ne compte que les vrais porteurs.
-    Retourne ``(None, None, 0)`` si aucune donnée exploitable.
+    The LP pool and burn addresses legitimately hold large shares: including
+    them would fail every token wrongly. Only real holders are counted.
+    Returns ``(None, None, 0)`` if no usable data.
     """
     lp = (lp_address or "").lower()
     pcts: list[float] = []
@@ -106,11 +109,13 @@ def _holder_concentration(
 
 
 async def _resolve_mint_authority(ctx: "TokenScanContext", token_address: str) -> None:
-    """Classe l'autorité d'un mint externe (renoncé / launchpad / contrat / dev / inconnu).
+    """Classifies the authority of an external mint (renounced / launchpad /
+    contract / dev / unknown).
 
-    Best-effort et défensif : chaque appel réseau peut échouer sans jamais bloquer
-    (autorité -> 'unknown', prudent en aval). N'est appelée QUE si ``has_mint`` est
-    vrai, donc rare. Peuple ``ctx.mint_authority`` / ``ctx.launchpad``.
+    Best-effort and defensive: every network call can fail without ever
+    blocking (authority -> 'unknown', cautious downstream). Only called IF
+    ``has_mint`` is true, hence rare. Populates ``ctx.mint_authority`` /
+    ``ctx.launchpad``.
     """
     from aria_core.skills.mint_authority import classify_authority, match_launchpad
 
@@ -120,21 +125,21 @@ async def _resolve_mint_authority(ctx: "TokenScanContext", token_address: str) -
     try:
         info = await blockscout_client.get_address_info(token_address)
         creator = info.creator_address if info.available else None
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.info("mint_authority: get_address_info(%s) échoué (%s)", token_address, exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.info("mint_authority: get_address_info(%s) failed (%s)", token_address, exc)
 
-    # Si déjà reconnu comme launchpad, inutile de lire l'owner (autorité = protocole).
+    # If already recognized as a launchpad, no need to read the owner (authority = protocol).
     if not match_launchpad(creator):
         try:
             owner_addr, _ = await blockscout_client.read_owner(token_address)
         except Exception as exc:  # noqa: BLE001
-            logger.info("mint_authority: read_owner(%s) échoué (%s)", token_address, exc)
+            logger.info("mint_authority: read_owner(%s) failed (%s)", token_address, exc)
         if owner_addr:
             try:
                 oinfo = await blockscout_client.get_address_info(owner_addr)
                 owner_is_contract = oinfo.is_contract if oinfo.available else None
             except Exception as exc:  # noqa: BLE001
-                logger.info("mint_authority: owner info(%s) échoué (%s)", owner_addr, exc)
+                logger.info("mint_authority: owner info(%s) failed (%s)", owner_addr, exc)
 
     verdict = classify_authority(
         has_mint=ctx.has_mint,
@@ -158,30 +163,31 @@ class TokenScanContext:
     security_score: int = 35
     lite_verdict: str = "CAUTION"
     data_source: str = "heuristic"
-    # Analyse technique (data-gated : peuplé uniquement si include_ta ET série OHLCV
-    # disponible). Sans donnée, ces champs restent inertes → comportement inchangé.
+    # Technical analysis (data-gated: populated only if include_ta AND an OHLCV
+    # series is available). With no data, these fields stay inert -> unchanged behavior.
     ta: TALevels | None = None
     ta_entry: EntryZone | None = None
     ta_candles: list[Candle] = field(default_factory=list)
     ta_timeframe: str | None = None
-    # EMA/MACD (indicators.py) + setup golden pocket/divergence RSI (entry_signals.py) --
-    # câblés le 10/07 (décision opérateur), même garde ``include_ta`` que ci-dessus.
-    # Dernières valeurs seulement (le LLM raisonne sur l'état courant, pas la série).
+    # EMA/MACD (indicators.py) + golden pocket/RSI divergence setup (entry_signals.py) --
+    # wired on 10/07 (operator decision), same ``include_ta`` guard as above.
+    # Last values only (the LLM reasons on the current state, not the series).
     ta_ema_fast: float | None = None
     ta_ema_slow: float | None = None
     ta_macd_line: float | None = None
     ta_macd_signal: float | None = None
     ta_macd_histogram: float | None = None
     ta_golden_pocket_signal: EntrySignal | None = None
-    # Patterns de bougies (candlestick_patterns.py, module testé mais jamais câblé
-    # avant ce correctif) -- même garde `include_ta`, mêmes vraies bougies OHLC.
-    # Seuls les patterns les plus récents sont gardés (le LLM raisonne sur l'état
-    # courant, pas tout l'historique).
+    # Candlestick patterns (candlestick_patterns.py, a tested module never
+    # wired before this fix) -- same `include_ta` guard, same real OHLC candles.
+    # Only the most recent patterns are kept (the LLM reasons on the current
+    # state, not the whole history).
     ta_candle_patterns: list[CandlePattern] = field(default_factory=list)
-    # Barrières de sécurité structurées (peuplées au scan si la donnée on-chain
-    # existe ; None sinon). Exposent en clair ce que le score agrège, pour un
-    # filtre binaire strict (cf. skills/safety_screen.py). Concentration calculée
-    # HORS pool LP et adresses de burn (sinon tout token échoue à tort).
+    # Structured security barriers (populated at scan time if the on-chain
+    # data exists; None otherwise). Expose in the clear what the score
+    # aggregates, for a strict binary filter (cf. skills/safety_screen.py).
+    # Concentration computed EXCLUDING the LP pool and burn addresses
+    # (otherwise every token would fail wrongly).
     contract_verified: bool | None = None
     has_mint: bool | None = None
     has_blacklist: bool | None = None
@@ -189,102 +195,112 @@ class TokenScanContext:
     top_holder_pct: float | None = None
     top10_holder_pct: float | None = None
     holders_counted: int | None = None
-    # Fondamentaux CoinGecko (peuplés seulement si include_fundamentals ET donnée
-    # disponible). Exposés en clair pour nourrir la projection ROI par comparables
-    # (Voûte 3, skills/roi_comparables.py) sans re-fetch. None → section omise.
+    # CoinGecko fundamentals (populated only if include_fundamentals AND data
+    # is available). Exposed in the clear to feed the comparables ROI
+    # projection (Vault 3, skills/roi_comparables.py) without a re-fetch.
+    # None -> section omitted.
     market_cap_usd: float | None = None
     fully_diluted_valuation_usd: float | None = None
     categories: list[str] = field(default_factory=list)
-    # Autorité du contrat (résolue seulement si has_mint : un mint externe existe).
-    # Distingue un mint contrôlé par un dev (danger) d'un mint légitime (renoncé,
-    # launchpad connu, ou piloté par un contrat). Voir skills/mint_authority.py.
+    # Contract authority (resolved only if has_mint: an external mint exists).
+    # Distinguishes a dev-controlled mint (danger) from a legitimate mint
+    # (renounced, known launchpad, or contract-driven). See skills/mint_authority.py.
     mint_authority: str | None = None  # na/renounced/launchpad/contract/eoa/unknown
     mint_authority_detail: str = ""
-    launchpad: str | None = None  # label du launchpad si le déployeur est reconnu
-    # Profondeur de liquidité (liquidité / market cap). Peuplé si les deux sont connus
-    # (donc chemin analyse VC avec fondamentaux). Marché mince = fragile. Au cas par cas.
+    launchpad: str | None = None  # launchpad label if the deployer is recognized
+    # Liquidity depth (liquidity / market cap). Populated if both are known
+    # (so the VC analysis path with fundamentals). Thin market = fragile. Judged case by case.
     liq_mcap_ratio: float | None = None
-    # Comportement du wallet du dev (peuplé si include_dev_behavior). Signal pondéré
-    # (aligned/neutral/concern/unknown) + observations factuelles. Nourrit le jugement,
-    # ne rejette pas d'office.
+    # Dev wallet behavior (populated if include_dev_behavior). Weighted signal
+    # (aligned/neutral/concern/unknown) + factual observations. Feeds the
+    # judgment, doesn't reject outright.
     dev_signal: str | None = None
     dev_points: list[str] = field(default_factory=list)
-    # 22/07 -- tâche #4 : part (0-100) de sa dotation reçue que le déployeur a déjà
-    # revendue, capturée telle quelle (DevWalletFacts.sold_pct_of_received) -- jamais
-    # dérivée de dev_signal (un simple label), pour permettre un instantané numérique
-    # comparable lors d'un re-scan pendant la détention d'une position VC (Formule B).
-    # None si non résolu (déployeur inconnu, aucun transfert) -- jamais une valeur inventée.
+    # 22/07 -- task #4: share (0-100) of their received allocation that the
+    # deployer has already resold, captured as-is
+    # (DevWalletFacts.sold_pct_of_received) -- never derived from dev_signal (a
+    # simple label), to allow a comparable numeric snapshot on a re-scan while
+    # holding a VC position (Formula B). None if unresolved (unknown deployer,
+    # no transfer) -- never a fabricated value.
     dev_sold_pct: float | None = None
-    # 22/07 -- signal "sortie de liquidité déguisée" (repris du stress-test) : wallets
-    # ayant reçu une part significative de la distribution initiale directement du
-    # déployeur/mint (via Dune, hors 'creator' déjà couvert par dev_signal ci-dessus)
-    # et ne détenant quasiment plus rien aujourd'hui -- un insider qui vend sans jamais
-    # porter l'étiquette 'creator'. Peuplé si include_insider_check ET donnée dispo.
-    # Voir skills/insider_wallets.py. Jamais un rejet d'office (consultatif LLM).
+    # 22/07 -- "disguised liquidity exit" signal (carried over from the
+    # stress-test): wallets that received a significant share of the initial
+    # distribution directly from the deployer/mint (via Dune, excluding
+    # 'creator' already covered by dev_signal above) and hold almost nothing
+    # today -- an insider that sells without ever carrying the 'creator' tag.
+    # Populated if include_insider_check AND data is available. See
+    # skills/insider_wallets.py. Never an outright rejection (LLM advisory only).
     insider_signal: str | None = None
     insider_points: list[str] = field(default_factory=list)
-    # 22/07 -- signal "réputation du déployeur" : a-t-il déjà créé un AUTRE contrat
-    # déjà confirmé scam par ARIA (momentum_blacklist.py) ? Distinct du comportement
-    # SUR ce token (dev_signal ci-dessus) -- regarde l'historique cross-token du même
-    # wallet. Peuplé si include_deployer_reputation ET donnée dispo. Voir
-    # services/deployer_history.py. Jamais un rejet d'office (consultatif LLM).
+    # 22/07 -- "deployer reputation" signal: have they already created ANOTHER
+    # contract already confirmed as a scam by ARIA (momentum_blacklist.py)?
+    # Distinct from the behavior ON this token (dev_signal above) -- looks at
+    # the same wallet's cross-token history. Populated if
+    # include_deployer_reputation AND data is available. See
+    # services/deployer_history.py. Never an outright rejection (LLM advisory only).
     deployer_reputation_signal: str | None = None
     deployer_reputation_points: list[str] = field(default_factory=list)
-    # 23/07 -- signal "cluster Sybil" : holders regroupés par source de financement
-    # commune, au-delà de la simple concentration individuelle (top_holder_pct ci-
-    # dessus). Peuplé si include_sybil_check ET donnée dispo. Coût réseau plus élevé
-    # que les autres signaux (1 appel Blockscout par holder vérifié) -- voir
-    # skills/sybil_cluster.py. Jamais un rejet d'office (consultatif LLM).
+    # 23/07 -- "Sybil cluster" signal: holders grouped by common funding
+    # source, beyond simple individual concentration (top_holder_pct above).
+    # Populated if include_sybil_check AND data is available. Higher network
+    # cost than the other signals (1 Blockscout call per verified holder) --
+    # see skills/sybil_cluster.py. Never an outright rejection (LLM advisory only).
     sybil_cluster_signal: str | None = None
     sybil_cluster_points: list[str] = field(default_factory=list)
-    # Sécurité dynamique GoPlus (peuplé si include_honeypot ET donnée dispo). Ce que
-    # l'ABI statique de Blockscout ne voit pas : la revente est-elle RÉELLEMENT possible,
-    # taxes réelles d'achat/vente, pouvoirs cachés. None = non scanné ou indisponible →
-    # comportement strictement inchangé (additif, data-gated).
+    # Dynamic GoPlus security (populated if include_honeypot AND data is
+    # available). What Blockscout's static ABI can't see: is reselling
+    # REALLY possible, real buy/sell taxes, hidden powers. None = not scanned
+    # or unavailable -> strictly unchanged behavior (additive, data-gated).
     is_honeypot: bool | None = None
     cannot_sell: bool | None = None
     buy_tax: float | None = None
     sell_tax: float | None = None
     hidden_owner: bool | None = None
     can_take_back_ownership: bool | None = None
-    # 22/07 -- item #2 (plan de renforcement post-stress-test) : GoPlus expose un
-    # pouvoir caché supplémentaire, distinct de hidden_owner/can_take_back_ownership --
-    # le dev peut changer le taux de taxe/slippage APRÈS coup, sans reprendre la
-    # propriété. Un token "propre" au moment du scan peut devenir extractif plus tard
-    # sans qu'aucun autre signal GoPlus ne le détecte. None = non scanné/indisponible.
+    # 22/07 -- item #2 (post-stress-test hardening plan): GoPlus exposes an
+    # additional hidden power, distinct from hidden_owner/can_take_back_ownership
+    # -- the dev can change the tax/slippage rate AFTER the fact, without
+    # regaining ownership. A token "clean" at scan time can become extractive
+    # later without any other GoPlus signal detecting it. None = not
+    # scanned/unavailable.
     slippage_modifiable: bool | None = None
-    # 22/07 -- trou de sécurité trouvé en observant une position momentum RÉELLEMENT
-    # ouverte (CNX) : GoPlus "Owner can change balance" = Yes n'était consulté NULLE
-    # PART (ni VC ni momentum). Pouvoir DISTINCT du honeypot classique (qui bloque la
-    # REVENTE) -- ici l'owner peut modifier directement le solde d'un wallet, un
-    # vecteur de perte totale que is_honeypot/cannot_sell_all ne capturent pas. Même
-    # nom que le champ GoPlus source (services/goplus.py::TokenSecurity), jamais
-    # renommé pour rester traçable d'un bout à l'autre du pipeline.
+    # 22/07 -- security gap found while observing a REALLY open momentum
+    # position (CNX): GoPlus "Owner can change balance" = Yes was consulted
+    # NOWHERE (neither VC nor momentum). A power DISTINCT from the classic
+    # honeypot (which blocks RESELLING) -- here the owner can directly modify a
+    # wallet's balance, a total-loss vector that is_honeypot/cannot_sell_all
+    # don't capture. Same name as the source GoPlus field
+    # (services/goplus.py::TokenSecurity), never renamed to stay traceable
+    # end-to-end through the pipeline.
     owner_change_balance: bool | None = None
-    # Niche Virtuals bonding (peuplé UNIQUEMENT si aucune paire DexScreener n'existe ET
-    # que le contrat est réellement indexé par Virtuals en statut pré-graduation — voir
-    # services/virtuals.py). Absence de paire DEX est NORMALE à ce stade (la liquidité
-    # DEX n'existe qu'après graduation) : sans ce champ, `_score_and_verdict` traitait ça
-    # comme un défaut de sécurité générique et pouvait produire un AVOID mal fondé.
+    # Virtuals bonding niche (populated ONLY if no DexScreener pair exists AND
+    # the contract is genuinely indexed by Virtuals in pre-graduation status --
+    # see services/virtuals.py). No DEX pair is NORMAL at this stage (DEX
+    # liquidity only exists after graduation): without this field,
+    # `_score_and_verdict` treated this as a generic security defect and could
+    # produce an ill-founded AVOID.
     bonding_phase: bool = False
-    bonding_progress: float | None = None  # 0.0-1.0, part du seuil de graduation atteint
+    bonding_progress: float | None = None  # 0.0-1.0, share of graduation threshold reached
     bonding_holder_count: int | None = None
-    bonding_mcap_virtual: float | None = None  # dénominé en VIRTUAL, pas converti en USD
-    # 22/07 -- comble un trou trouvé en vérifiant la couverture bonding des signaux
-    # insider_wallets/deployer_history (tous deux ancrés sur ctx.best_pair.pair_created_at,
-    # qui reste None tant qu'aucune paire DEX n'existe -- NORMAL en bonding pré-graduation).
-    # `VirtualsToken.created_at` (déjà récolté par le même appel réseau que bonding_phase
-    # ci-dessus, zéro coût supplémentaire) sert de repli : date de création du PROTOTYPE
-    # bonding, pas d'une paire DEX, mais la même fenêtre temporelle reste pertinente pour
-    # repérer une distribution insider survenue au lancement.
+    bonding_mcap_virtual: float | None = None  # denominated in VIRTUAL, not converted to USD
+    # 22/07 -- fills a gap found while checking the bonding coverage of the
+    # insider_wallets/deployer_history signals (both anchored on
+    # ctx.best_pair.pair_created_at, which stays None as long as no DEX pair
+    # exists -- NORMAL in pre-graduation bonding). `VirtualsToken.created_at`
+    # (already collected by the same network call as bonding_phase above, zero
+    # extra cost) serves as a fallback: creation date of the bonding
+    # PROTOTYPE, not of a DEX pair, but the same time window remains relevant
+    # for spotting an insider distribution that happened at launch.
     token_created_at_ms: int | None = None
-    # Diligence produit Virtuals (audit 11/07, cf. skills/vc_analysis.py). Peuplé DÈS
-    # qu'un token est trouvé sur Virtuals via `_resolve_bonding_phase` (bonding ou non --
-    # zéro coût réseau supplémentaire, même appel que ci-dessus) ; pour un token DÉJÀ
-    # gradué (une paire DEX existe, donc `_resolve_bonding_phase` n'est jamais appelée),
-    # `vc_analysis._fetch_virtuals_product_diligence` fait un repli best-effort via le
-    # même client singleton. Texte DÉCLARATIF (l'équipe parle d'elle-même sur sa propre
-    # fiche virtuals.io) -- jamais vérifié on-chain, même doctrine que website_snapshot.
+    # Virtuals product diligence (11/07 audit, cf. skills/vc_analysis.py).
+    # Populated AS SOON AS a token is found on Virtuals via
+    # `_resolve_bonding_phase` (bonding or not -- zero extra network cost, same
+    # call as above); for a token ALREADY graduated (a DEX pair exists, so
+    # `_resolve_bonding_phase` is never called),
+    # `vc_analysis._fetch_virtuals_product_diligence` does a best-effort
+    # fallback via the same singleton client. DECLARATIVE text (the team
+    # speaks about itself on its own virtuals.io page) -- never verified
+    # on-chain, same doctrine as website_snapshot.
     virtuals_description: str | None = None
     virtuals_tokenomics: str | None = None
     virtuals_additional_details: str | None = None
@@ -309,10 +325,11 @@ def _dex_chain_id() -> str:
 
 
 async def _fetch_token_pairs(contract: str) -> list[PairSnapshot]:
-    """Délègue à ``services.dexscreener`` (14/07, #157) -- ce client existait en
-    dur ici ; extrait pour être réutilisable (wallet-scoring, triangulation avec
-    GeckoTerminal) sans dupliquer un second appel DexScreener. Comportement du
-    scan `/vc` strictement inchangé (même parsing, même dataclass)."""
+    """Delegates to ``services.dexscreener`` (14/07, #157) -- this client used
+    to be hardcoded here; extracted to be reusable (wallet-scoring,
+    triangulation with GeckoTerminal) without duplicating a second DexScreener
+    call. `/vc` scan behavior strictly unchanged (same parsing, same
+    dataclass)."""
     return await _dexscreener_fetch_token_pairs(contract, chain=_dex_chain_id())
 
 
@@ -324,25 +341,26 @@ def _apply_onchain_signals(
     *,
     mint_authority: str | None = None,
 ) -> int:
-    """Signaux Blockscout additionnels — lecture seule, purement additifs.
+    """Additional Blockscout signals — read-only, purely additive.
 
-    Une donnée on-chain indisponible (rate limit, timeout, erreur réseau) ne
-    dégrade jamais le score : le flag reflète l'absence de donnée, pas un
-    risque. Seuls des signaux positivement confirmés (fonction sensible
-    détectée, concentration whale) dégradent le score.
+    Unavailable on-chain data (rate limit, timeout, network error) never
+    degrades the score: the flag reflects the absence of data, not a risk.
+    Only positively confirmed signals (sensitive function detected, whale
+    concentration) degrade the score.
 
-    ``mint_authority`` (#164, corrigé 22/07) : un mint DÉTECTÉ dans l'ABI n'est un
-    risque que si un DEV en garde le contrôle — un mint renoncé/piloté par un
-    launchpad connu/verrouillé dans un contrat (timelock/multisig/émission) est
-    neutralisé par ``mint_authority.classify_authority``, exactement comme le
-    crible dur (``safety_screen._mint_is_dev_controlled``) le fait déjà. Avant ce
-    correctif, cette fonction ignorait totalement ``mint_authority`` (elle ne le
-    recevait même pas en paramètre) et appliquait -30 sur la seule présence de la
-    fonction — un projet avec un vesting sain (deployeur réputé, mint timelocké)
-    tombait sous le seuil de score 70 exigé par ``safety_screen`` et ratait le
-    sourcing automatique, malgré un crible dur qui le jugeait pourtant propre.
-    ``None``/``"unknown"``/``"eoa"`` restent fail-closed (malus appliqué) — seule
-    une autorité VÉRIFIÉE et sûre (``SAFE_AUTHORITIES``) neutralise la pénalité.
+    ``mint_authority`` (#164, fixed 22/07): a mint DETECTED in the ABI is only
+    a risk if a DEV keeps control of it — a renounced mint/one driven by a
+    known launchpad/locked in a contract (timelock/multisig/issuance) is
+    neutralized by ``mint_authority.classify_authority``, exactly like the
+    hard filter (``safety_screen._mint_is_dev_controlled``) already does.
+    Before this fix, this function completely ignored ``mint_authority`` (it
+    didn't even receive it as a parameter) and applied -30 on the mere
+    presence of the function — a project with healthy vesting (reputable
+    deployer, timelocked mint) fell below the score-70 threshold required by
+    ``safety_screen`` and missed automatic sourcing, despite a hard filter that
+    otherwise judged it clean. ``None``/``"unknown"``/``"eoa"`` remain
+    fail-closed (penalty applied) — only a VERIFIED and safe authority
+    (``SAFE_AUTHORITIES``) neutralizes the penalty.
     """
     delta = 0
 
@@ -374,10 +392,10 @@ def _apply_onchain_signals(
         else:
             if holders.error:
                 flags.append(f"Blockscout (holders) : {holders.error}.")
-            # Exclut le pool LP ET les adresses de burn : elles détiennent
-            # légitimement de grosses parts (une supply brûlée n'est pas une whale).
-            # Cohérent avec _holder_concentration (sinon un token déflationniste est
-            # pénalisé/rejeté à tort).
+            # Excludes the LP pool AND burn addresses: they legitimately hold
+            # large shares (a burned supply isn't a whale). Consistent with
+            # _holder_concentration (otherwise a deflationary token gets
+            # wrongly penalized/rejected).
             known_lp = (pair.pair_address or "").lower() if pair else ""
             candidates = [
                 h for h in holders.holders
@@ -399,12 +417,12 @@ _HIGH_DILUTION_FDV_RATIO = 3.0
 
 
 def _apply_fundamentals_signals(flags: list[str], fundamentals: TokenFundamentals | None) -> int:
-    """Signaux CoinGecko additionnels — lecture seule, purement additifs.
+    """Additional CoinGecko signals — read-only, purely additive.
 
-    Comme pour Blockscout : une donnée fondamentale indisponible (rate limit,
-    timeout, token non listé) ne dégrade jamais le score. Seul un ratio
-    FDV/market cap élevé (dilution future significative, vesting/unlocks à
-    venir) est un signal positivement confirmé qui dégrade le score.
+    Same as Blockscout: unavailable fundamental data (rate limit, timeout,
+    unlisted token) never degrades the score. Only a high FDV/market-cap
+    ratio (significant future dilution, upcoming vesting/unlocks) is a
+    positively confirmed signal that degrades the score.
     """
     if fundamentals is None:
         return 0
@@ -468,9 +486,10 @@ def _score_and_verdict(
 
     if not pair:
         if ctx.bonding_phase:
-            # Token Virtuals encore en courbe de bonding : l'absence de paire DEX est
-            # NORMALE à ce stade (la liquidité DEX n'existe qu'après graduation), pas un
-            # défaut de sécurité générique. Score sur les signaux natifs disponibles.
+            # Virtuals token still on the bonding curve: the absence of a DEX
+            # pair is NORMAL at this stage (DEX liquidity only exists after
+            # graduation), not a generic security defect. Scored on the
+            # available native signals.
             score = 50 + onchain_delta
             if ctx.bonding_progress is not None:
                 score += round(ctx.bonding_progress * 15)
@@ -553,18 +572,19 @@ def _score_and_verdict(
         ctx.lite_verdict = "CAUTION"
 
 
-# Seuil informatif de taxe honeypot (GoPlus) : au-delà, la taxe est signalée comme
-# extractive dans les risk_flags. La barrière DURE (rejet du pool) vit dans safety_screen.
-_HONEYPOT_TAX_FLAG = 0.10  # 10 %
+# Informational honeypot tax threshold (GoPlus): beyond this, the tax is
+# flagged as extractive in risk_flags. The HARD barrier (pool rejection)
+# lives in safety_screen.
+_HONEYPOT_TAX_FLAG = 0.10  # 10%
 
 
 def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
-    """Absorbe la lecture GoPlus dans le contexte — additif, jamais bloquant ici.
+    """Absorbs the GoPlus read into the context — additive, never blocking here.
 
-    Peuple les champs de décision + risk_flags et ajuste le score sur les seuls signaux
-    POSITIVEMENT confirmés. Une indisponibilité (None / available=False) ne dégrade rien :
-    elle est signalée comme absence de donnée, pas comme risque (doctrine : une panne
-    réseau ne bannit pas un bon token).
+    Populates the decision fields + risk_flags and adjusts the score only on
+    POSITIVELY confirmed signals. An unavailability (None / available=False)
+    degrades nothing: it's flagged as absence of data, not as risk (doctrine:
+    a network outage doesn't ban a good token).
     """
     if sec is None or not sec.available:
         detail = (getattr(sec, "error", None) if sec else None) or ONCHAIN_UNAVAILABLE
@@ -614,18 +634,19 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
 
     if delta:
         ctx.security_score = max(5, min(95, ctx.security_score + delta))
-    # Un honeypot / revente impossible confirmé = danger sans ambiguïté : on aligne le
-    # verdict lisible pour que l'analyse ET le filtre soient cohérents. owner_change_
-    # balance (22/07) rejoint ce groupe -- pouvoir de MÊME gravité (perte totale
-    # directe), pas juste un signal de méfiance modéré comme hidden_owner/slippage.
+    # A confirmed honeypot / impossible resell = unambiguous danger: the
+    # readable verdict is aligned so the analysis AND the filter stay
+    # consistent. owner_change_balance (22/07) joins this group -- a power of
+    # the SAME severity (direct total loss), not just a moderate distrust
+    # signal like hidden_owner/slippage.
     if sec.is_honeypot is True or sec.cannot_sell_all is True or sec.owner_change_balance is True:
         ctx.lite_verdict = "DANGER"
 
 
 def _iso_to_epoch_ms(iso_ts: str | None) -> int | None:
-    """``VirtualsToken.created_at`` (ISO 8601, ex. '2026-07-06T12:00:00.000Z')
-    -> ms epoch, même conversion que ``PairSnapshot.pair_created_at``. None si
-    illisible -- jamais une date inventée."""
+    """``VirtualsToken.created_at`` (ISO 8601, e.g. '2026-07-06T12:00:00.000Z')
+    -> ms epoch, same conversion as ``PairSnapshot.pair_created_at``. None if
+    unreadable -- never a fabricated date."""
     if not iso_ts:
         return None
     try:
@@ -636,23 +657,26 @@ def _iso_to_epoch_ms(iso_ts: str | None) -> int | None:
 
 
 async def _resolve_bonding_phase(ctx: "TokenScanContext", contract: str) -> None:
-    """Best-effort, appelé UNIQUEMENT quand aucune paire DexScreener n'a été trouvée : un
-    contrat sans pool peut légitimement être un token Virtuals encore en courbe de bonding
-    (pas de liquidité DEX avant graduation — normal, pas un défaut). Toute panne Virtuals
-    laisse `ctx.bonding_phase = False` (comportement inchangé, verdict générique "aucune
-    paire") — jamais bloquant, jamais de donnée inventée.
+    """Best-effort, called ONLY when no DexScreener pair was found: a contract
+    with no pool can legitimately be a Virtuals token still on the bonding
+    curve (no DEX liquidity before graduation — normal, not a defect). Any
+    Virtuals outage leaves `ctx.bonding_phase = False` (unchanged behavior,
+    generic "no pair" verdict) — never blocking, never fabricated data.
 
-    Capture AUSSI (audit 11/07) `ctx.virtuals_description`/`_tokenomics`/
-    `_additional_details` dès qu'un token Virtuals est trouvé -- bonding ou non --
-    puisque le même appel réseau a déjà ramené ce payload : zéro coût supplémentaire
-    pour nourrir la diligence produit (`vc_analysis._fetch_product_diligence`).
+    ALSO captures (11/07 audit) `ctx.virtuals_description`/`_tokenomics`/
+    `_additional_details` as soon as a Virtuals token is found -- bonding or
+    not -- since the same network call has already fetched this payload: zero
+    extra cost to feed the product diligence
+    (`vc_analysis._fetch_product_diligence`).
 
-    Repli on-chain (audit 11/07, gate OFF par défaut `ARIA_ONCHAIN_GRADUATION_ENABLED`) :
-    quand l'heuristique API (`graduation_progress`) renvoie `None`, tente une lecture
-    on-chain réelle (`services/base_onchain.py`) -- couverture PARTIELLE et honnête (une
-    seule instance connue du contrat Bonding V5), jamais bloquant (thread séparé via
-    `asyncio.to_thread`, mêmes conventions que `mailer.py`/`x_twitter.py` pour les appels
-    synchrones), jamais de valeur inventée si la lecture échoue ou ne couvre pas ce token."""
+    On-chain fallback (11/07 audit, gate OFF by default
+    `ARIA_ONCHAIN_GRADUATION_ENABLED`): when the API heuristic
+    (`graduation_progress`) returns `None`, attempts a real on-chain read
+    (`services/base_onchain.py`) -- PARTIAL and honest coverage (only one
+    known instance of the Bonding V5 contract), never blocking (separate
+    thread via `asyncio.to_thread`, same conventions as
+    `mailer.py`/`x_twitter.py` for synchronous calls), never a fabricated
+    value if the read fails or doesn't cover this token."""
     try:
         from aria_core.services.base_onchain import onchain_graduation_enabled, onchain_graduation_progress
         from aria_core.services.virtuals import graduation_progress, is_in_bonding, virtuals_client
@@ -675,7 +699,7 @@ async def _resolve_bonding_phase(ctx: "TokenScanContext", contract: str) -> None
                 )
             ctx.bonding_holder_count = token.holder_count
             ctx.bonding_mcap_virtual = token.mcap
-    except Exception:  # noqa: BLE001 — best-effort, ne casse jamais le scan
+    except Exception:  # noqa: BLE001 — best-effort, never breaks the scan
         pass
 
 
@@ -693,38 +717,41 @@ async def scan_base_token(
 ) -> TokenScanContext:
     """Fetch DexScreener + compute heuristic security score.
 
-    `include_smart_money` est desactive par defaut : l'analyse wallet-tracker
-    fait un appel Blockscout par top holder (throttle ~0.35s/appel) et
-    ralentirait chaque scan standard. A activer explicitement pour une
-    analyse plus poussee (ex. commande Telegram /scan <adresse> smart).
+    `include_smart_money` is disabled by default: the wallet-tracker analysis
+    makes one Blockscout call per top holder (throttle ~0.35s/call) and would
+    slow down every standard scan. Enable explicitly for a deeper analysis
+    (e.g. Telegram command /scan <address> smart).
 
-    `include_fundamentals` est desactive par defaut : le throttle CoinGecko
-    (~2.2s/appel, tier public) ralentirait chaque scan standard. A activer
-    explicitement (ex. /scan <adresse> fond).
+    `include_fundamentals` is disabled by default: the CoinGecko throttle
+    (~2.2s/call, public tier) would slow down every standard scan. Enable
+    explicitly (e.g. /scan <address> fond).
 
-    `include_ta` est desactive par defaut : recupere la serie OHLCV du pool
-    (GeckoTerminal, throttle ~2.2s/appel) et derive niveaux + zone d'entree
-    (facts-only). Peuple ctx.ta / ctx.ta_entry / ctx.ta_candles UNIQUEMENT si une
-    serie est disponible ; sinon ces champs restent None → comportement inchange.
-    Cable le 10/07 (decision operateur) : EMA/MACD (ctx.ta_ema_*/ctx.ta_macd_*)
-    et le setup golden pocket + divergence RSI (ctx.ta_golden_pocket_signal),
-    memes champs facts-only, meme garde `include_ta`.
+    `include_ta` is disabled by default: fetches the pool's OHLCV series
+    (GeckoTerminal, throttle ~2.2s/call) and derives levels + entry zone
+    (facts-only). Populates ctx.ta / ctx.ta_entry / ctx.ta_candles ONLY if a
+    series is available; otherwise these fields stay None -> unchanged
+    behavior. Wired on 10/07 (operator decision): EMA/MACD
+    (ctx.ta_ema_*/ctx.ta_macd_*) and the golden pocket + RSI divergence setup
+    (ctx.ta_golden_pocket_signal), same facts-only fields, same `include_ta`
+    guard.
 
-    `include_insider_check` est désactivé par défaut : un appel Dune Analytics
-    supplémentaire (facturé, latence de requête SQL) par scan. Repère les wallets
-    ayant reçu une distribution insider directe (hors 'creator') et vérifie s'ils
-    ont depuis tout revendu (skills/insider_wallets.py). Réutilise les holders déjà
-    récupérés ci-dessus -- zéro appel Blockscout supplémentaire.
+    `include_insider_check` is disabled by default: one extra Dune Analytics
+    call (billed, SQL query latency) per scan. Spots wallets that received a
+    direct insider distribution (excluding 'creator') and checks whether
+    they've since sold everything (skills/insider_wallets.py). Reuses the
+    holders already fetched above -- zero extra Blockscout call.
 
-    `include_deployer_reputation` est désactivé par défaut : historique de
-    transactions borné (Blockscout, `get_transactions_bounded`) du wallet déployeur
-    à la recherche d'AUTRES contrats déjà créés, croisés contre la liste noire
-    propre d'ARIA (services/deployer_history.py). Signal consultatif, jamais un véto.
+    `include_deployer_reputation` is disabled by default: bounded transaction
+    history (Blockscout, `get_transactions_bounded`) of the deployer wallet
+    looking for OTHER contracts already created, cross-checked against ARIA's
+    own blacklist (services/deployer_history.py). Advisory signal only, never
+    a veto.
 
-    `include_sybil_check` est désactivé par défaut : regroupe les top holders déjà
-    récupérés par source de financement commune (skills/sybil_cluster.py) --
-    NETTEMENT plus coûteux en réseau que les autres signaux (jusqu'à 15 appels
-    Blockscout borné, un par holder vérifié). Signal consultatif, jamais un véto.
+    `include_sybil_check` is disabled by default: groups the already-fetched
+    top holders by common funding source (skills/sybil_cluster.py) --
+    NOTABLY more network-expensive than the other signals (up to 15 bounded
+    Blockscout calls, one per verified holder). Advisory signal only, never a
+    veto.
     """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
@@ -739,13 +766,13 @@ async def scan_base_token(
         blockscout_client.check_contract_flags(ca),
         blockscout_client.get_token_holders(ca),
     )
-    # 19/07 -- même correctif que momentum_entry._best_pair/paper_trader.
-    # _default_pair_lookup (bug réel trouvé en conditions réelles, position
-    # PLAZM #21 == en fait ESHARE) : ``fetch_token_pairs`` renvoie TOUTE paire
-    # impliquant ``ca``, y compris comme simple QUOTE du pool d'un AUTRE token.
-    # Sans ce filtre, /vc pourrait analyser et publier (rapport PDF envoyé par
-    # email) le prix/OHLCV/liens projet d'un token totalement différent de
-    # celui réellement scanné.
+    # 19/07 -- same fix as momentum_entry._best_pair/paper_trader.
+    # _default_pair_lookup (real bug found under real conditions, position
+    # PLAZM #21 == actually ESHARE): ``fetch_token_pairs`` returns EVERY pair
+    # involving ``ca``, including as a simple QUOTE of another token's pool.
+    # Without this filter, /vc could analyze and publish (PDF report sent by
+    # email) the price/OHLCV/project links of a token completely different
+    # from the one actually scanned.
     ca_lower = ca.strip().lower()
     own_pairs = [p for p in pairs if (p.base_address or "").lower() == ca_lower]
     ctx.pairs_found = len(own_pairs)
@@ -756,11 +783,12 @@ async def scan_base_token(
     else:
         await _resolve_bonding_phase(ctx, ca)
 
-    # Expose en clair les barrières de sécurité (le filtre binaire les lit) — déplacé
-    # AVANT _score_and_verdict (22/07, corrige #164) : le score lisait auparavant
-    # has_mint aveuglément parce que contract_verified/has_mint/mint_authority
-    # n'étaient posés qu'APRÈS le calcul du score, donc ctx.mint_authority valait
-    # encore None (jamais résolu) au moment où le malus mint était appliqué.
+    # Exposes the security barriers in the clear (the binary filter reads
+    # them) — moved BEFORE _score_and_verdict (22/07, fixes #164): the score
+    # used to read has_mint blindly because contract_verified/has_mint/
+    # mint_authority were only set AFTER the score computation, so
+    # ctx.mint_authority was still None (never resolved) at the moment the
+    # mint penalty was applied.
     if contract_flags is not None and contract_flags.available:
         ctx.contract_verified = contract_flags.is_verified
         ctx.has_mint = contract_flags.has_mint
@@ -773,11 +801,12 @@ async def scan_base_token(
         ctx.top10_holder_pct = top10
         ctx.holders_counted = counted
 
-    # Autorité du mint : uniquement si un mint EXTERNE existe (rare depuis le fix ABI).
-    # Un mint légitime (renoncé, launchpad connu, contrat) ne doit pas faire rejeter un
-    # bon token ; seul un mint contrôlé par un wallet de dev est un danger. Best-effort :
-    # toute indisponibilité -> 'unknown' (prudent en aval), jamais bloquant. Doit
-    # impérativement s'exécuter avant _score_and_verdict (voir commentaire ci-dessus).
+    # Mint authority: only if an EXTERNAL mint exists (rare since the ABI
+    # fix). A legitimate mint (renounced, known launchpad, contract) must not
+    # get a good token rejected; only a mint controlled by a dev wallet is a
+    # danger. Best-effort: any unavailability -> 'unknown' (cautious
+    # downstream), never blocking. Must imperatively run before
+    # _score_and_verdict (see comment above).
     if ctx.has_mint is True:
         await _resolve_mint_authority(ctx, ca)
 
@@ -807,9 +836,9 @@ async def scan_base_token(
             ctx.market_cap_usd = fundamentals.market_cap_usd
             ctx.fully_diluted_valuation_usd = fundamentals.fully_diluted_valuation_usd
             ctx.categories = list(fundamentals.categories or [])
-            # Profondeur de liquidité : marché mince par rapport à la valorisation ?
-            # Neutralisé sur une courbe de bonding (liquidité exponentielle, mince au
-            # départ -> le ratio n'est pas un signal de fragilité).
+            # Liquidity depth: is the market thin relative to the valuation?
+            # Neutralized on a bonding curve (exponential liquidity, thin at
+            # the start -> the ratio isn't a fragility signal).
             if ctx.market_cap_usd and ctx.best_pair:
                 from aria_core.skills.liquidity_depth import assess_liquidity_depth
                 from aria_core.skills.mint_authority import is_bonding_launchpad
@@ -841,33 +870,35 @@ async def scan_base_token(
             ctx.ta_golden_pocket_signal = detect_entry(ohlcv.candles)
             ctx.ta_candle_patterns = detect_patterns(ohlcv.candles)[-3:]
 
-    # Comportement du wallet du dev : builder engagé vs farmer (jugement contextuel,
-    # jamais un rejet d'office). Best-effort ; toute indisponibilité -> 'unknown'.
+    # Dev wallet behavior: committed builder vs. farmer (contextual judgment,
+    # never an outright rejection). Best-effort; any unavailability -> 'unknown'.
     if include_dev_behavior:
         await _resolve_dev_behavior(ctx, ca)
 
-    # Signal "sortie de liquidité déguisée" (22/07) : wallets insiders hors 'creator'
-    # ayant reçu une distribution directe et déjà tout revendu. Best-effort, jamais
-    # bloquant ; réutilise `holders` déjà récupéré ci-dessus (aucun re-fetch).
+    # "Disguised liquidity exit" signal (22/07): insider wallets excluding
+    # 'creator' that received a direct distribution and have already sold
+    # everything. Best-effort, never blocking; reuses `holders` already
+    # fetched above (no re-fetch).
     if include_insider_check:
         await _resolve_insider_wallets(ctx, ca, holders)
 
-    # Signal "réputation du déployeur" (22/07) : autres contrats déjà créés par le
-    # même wallet, croisés contre la liste noire propre d'ARIA. Best-effort, jamais
-    # bloquant.
+    # "Deployer reputation" signal (22/07): other contracts already created by
+    # the same wallet, cross-checked against ARIA's own blacklist.
+    # Best-effort, never blocking.
     if include_deployer_reputation:
         await _resolve_deployer_reputation(ctx, ca)
 
-    # Signal "cluster Sybil" (23/07) : holders regroupés par source de financement
-    # commune. Best-effort, jamais bloquant. Réutilise `holders` déjà récupéré --
-    # zéro re-fetch de la LISTE des holders (mais un appel réseau par holder vérifié
-    # pour sa source de financement, coût réel plus élevé que les autres signaux).
+    # "Sybil cluster" signal (23/07): holders grouped by common funding
+    # source. Best-effort, never blocking. Reuses `holders` already fetched --
+    # zero re-fetch of the holder LIST (but one network call per verified
+    # holder for their funding source, a real cost higher than the other
+    # signals).
     if include_sybil_check:
         await _resolve_sybil_cluster(ctx, holders)
 
-    # Sécurité dynamique (honeypot / taxes réelles / pouvoirs cachés) via GoPlus. Désactivé
-    # par défaut (un appel réseau de plus) ; activé sur le chemin d'analyse VC où une vraie
-    # décision se prend. Additif : sans donnée, ctx inchangé.
+    # Dynamic security (honeypot / real taxes / hidden powers) via GoPlus.
+    # Disabled by default (one more network call); enabled on the VC analysis
+    # path where a real decision is made. Additive: with no data, ctx unchanged.
     if include_honeypot:
         from aria_core.services.goplus import goplus_client
 
@@ -878,7 +909,7 @@ async def scan_base_token(
 
 
 async def _resolve_dev_behavior(ctx: "TokenScanContext", token_address: str) -> None:
-    """Récolte + juge le comportement du wallet du déployeur. Défensif, jamais bloquant."""
+    """Gathers + judges the deployer wallet's behavior. Defensive, never blocking."""
     from aria_core.skills.dev_wallet import (
         gather_dev_wallet_facts,
         judge_dev_wallet,
@@ -904,22 +935,23 @@ async def _resolve_dev_behavior(ctx: "TokenScanContext", token_address: str) -> 
         ctx.dev_signal = verdict.signal
         ctx.dev_points = verdict.points
         ctx.dev_sold_pct = facts.sold_pct_of_received
-    except Exception as exc:  # noqa: BLE001 — le comportement dev est un bonus, jamais bloquant
-        logger.info("dev_behavior: analyse %s échouée (%s)", token_address, exc)
+    except Exception as exc:  # noqa: BLE001 — dev behavior is a bonus, never blocking
+        logger.info("dev_behavior: analysis of %s failed (%s)", token_address, exc)
         ctx.dev_signal = "unknown"
         ctx.dev_points = []
 
 
 async def _resolve_insider_wallets(ctx: "TokenScanContext", token_address: str, holders) -> None:
-    """Récolte + juge les wallets insiders hors 'creator'. Défensif, jamais bloquant.
+    """Gathers + judges insider wallets excluding 'creator'. Defensive, never blocking.
 
-    Nécessite un déployeur connu (résolu par `_resolve_dev_behavior`, appelé juste
-    avant si `include_dev_behavior` est aussi actif -- sinon re-résolu ici) et une
-    date de référence pour borner la fenêtre : `ctx.best_pair.pair_created_at`
-    (paire DEX graduée) SINON `ctx.token_created_at_ms` (repli 22/07 -- date de
-    création du prototype bonding Virtuals, même appel réseau que bonding_phase,
-    zéro coût supplémentaire) -- sans aucune des deux (contrat ni gradué ni connu
-    de Virtuals), signal simplement non peuplé, jamais un blocage."""
+    Requires a known deployer (resolved by `_resolve_dev_behavior`, called
+    just before if `include_dev_behavior` is also active -- otherwise
+    re-resolved here) and a reference date to bound the window:
+    `ctx.best_pair.pair_created_at` (graduated DEX pair) OTHERWISE
+    `ctx.token_created_at_ms` (22/07 fallback -- Virtuals bonding prototype
+    creation date, same network call as bonding_phase, zero extra cost) --
+    with neither of the two (contract neither graduated nor known to
+    Virtuals), the signal is simply left unpopulated, never a block."""
     from aria_core.skills.insider_wallets import gather_insider_wallet_facts, judge_insider_wallets
 
     try:
@@ -944,14 +976,14 @@ async def _resolve_insider_wallets(ctx: "TokenScanContext", token_address: str, 
         verdict = judge_insider_wallets(facts)
         ctx.insider_signal = verdict.signal
         ctx.insider_points = verdict.points
-    except Exception as exc:  # noqa: BLE001 — signal bonus, jamais bloquant
-        logger.info("insider_wallets: analyse %s échouée (%s)", token_address, exc)
+    except Exception as exc:  # noqa: BLE001 — bonus signal, never blocking
+        logger.info("insider_wallets: analysis of %s failed (%s)", token_address, exc)
         ctx.insider_signal = "unknown"
         ctx.insider_points = []
 
 
 async def _resolve_deployer_reputation(ctx: "TokenScanContext", token_address: str) -> None:
-    """Récolte + juge la réputation cross-token du déployeur. Défensif, jamais bloquant."""
+    """Gathers + judges the deployer's cross-token reputation. Defensive, never blocking."""
     from aria_core.services.deployer_history import gather_deployer_history_facts, judge_deployer_history
 
     try:
@@ -965,14 +997,14 @@ async def _resolve_deployer_reputation(ctx: "TokenScanContext", token_address: s
         verdict = judge_deployer_history(facts)
         ctx.deployer_reputation_signal = verdict.signal
         ctx.deployer_reputation_points = verdict.points
-    except Exception as exc:  # noqa: BLE001 — signal bonus, jamais bloquant
-        logger.info("deployer_history: analyse %s échouée (%s)", token_address, exc)
+    except Exception as exc:  # noqa: BLE001 — bonus signal, never blocking
+        logger.info("deployer_history: analysis of %s failed (%s)", token_address, exc)
         ctx.deployer_reputation_signal = "unknown"
         ctx.deployer_reputation_points = []
 
 
 async def _resolve_sybil_cluster(ctx: "TokenScanContext", holders: "TokenHoldersResult | None") -> None:
-    """Récolte + juge le clustering Sybil des holders. Défensif, jamais bloquant."""
+    """Gathers + judges the Sybil clustering of holders. Defensive, never blocking."""
     from aria_core.skills.sybil_cluster import gather_sybil_cluster_facts, judge_sybil_cluster
 
     if holders is None or not holders.available or not holders.holders:
@@ -987,8 +1019,8 @@ async def _resolve_sybil_cluster(ctx: "TokenScanContext", holders: "TokenHolders
         verdict = judge_sybil_cluster(facts)
         ctx.sybil_cluster_signal = verdict.signal
         ctx.sybil_cluster_points = verdict.points
-    except Exception as exc:  # noqa: BLE001 — signal bonus, jamais bloquant
-        logger.info("sybil_cluster: analyse %s échouée (%s)", ctx.contract, exc)
+    except Exception as exc:  # noqa: BLE001 — bonus signal, never blocking
+        logger.info("sybil_cluster: analysis of %s failed (%s)", ctx.contract, exc)
         ctx.sybil_cluster_signal = "unknown"
         ctx.sybil_cluster_points = []
 

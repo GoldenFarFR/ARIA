@@ -1,13 +1,14 @@
-"""Surveillance du solde prépayé x.ai (Grok) — alerte Telegram à 1$, bascule
-automatique du disjoncteur LLM (llm_circuit_breaker.py) vers OpenRouter à 0,10$.
+"""Monitors the x.ai (Grok) prepaid balance — Telegram alert at $1, automatic
+LLM circuit-breaker switchover (llm_circuit_breaker.py) to OpenRouter at $0.10.
 
-Gate implicite : `xai_billing.xai_billing_configured()` — sans XAI_MANAGEMENT_KEY/
-XAI_TEAM_ID (clé Management distincte de GROK_API_KEY, cf. services/xai_billing.py),
-ce cycle se contente de log une fois et ne fait rien, jamais un solde inventé.
+Implicit gate: `xai_billing.xai_billing_configured()` — without
+XAI_MANAGEMENT_KEY/XAI_TEAM_ID (a Management key distinct from GROK_API_KEY,
+see services/xai_billing.py), this cycle just logs once and does nothing,
+never a fabricated balance.
 
-Persistance minimale (`data_dir()/xai_balance_monitor.json`) pour ne PAS spammer
-l'alerte à 1$ à chaque passage — une fois alertée, on se tait jusqu'à ce que le
-solde remonte au-dessus du seuil (rechargement) OU que le disjoncteur s'arme.
+Minimal persistence (`data_dir()/xai_balance_monitor.json`) to NOT spam the
+$1 alert on every pass — once alerted, it stays quiet until the balance
+goes back above the threshold (top-up) OR the breaker trips.
 """
 from __future__ import annotations
 
@@ -58,12 +59,12 @@ async def run_balance_check_cycle(
     notifier: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     if not xai_billing_configured():
-        logger.info("xai_balance_monitor: XAI_MANAGEMENT_KEY/XAI_TEAM_ID absents — cycle ignoré")
+        logger.info("xai_balance_monitor: XAI_MANAGEMENT_KEY/XAI_TEAM_ID missing — cycle skipped")
         return {"skipped": "not_configured"}
 
     result = await get_prepaid_balance()
     if not result.available or result.balance_usd is None:
-        logger.warning("xai_balance_monitor: solde indisponible (%s)", result.error)
+        logger.warning("xai_balance_monitor: balance unavailable (%s)", result.error)
         return {"skipped": "unavailable", "error": result.error}
 
     balance = result.balance_usd
@@ -71,10 +72,10 @@ async def run_balance_check_cycle(
     already_armed = llm_circuit_breaker.is_armed()
 
     if already_armed:
-        # Déjà basculé lors d'un passage précédent (ou armé manuellement) -- rien de
-        # plus à faire tant que l'opérateur n'a pas désarmé lui-même (jamais un
-        # ré-armement/re-notification en boucle, jamais un désarmement automatique
-        # non plus : la décision de revenir sur Grok reste opérateur).
+        # Already switched over on a previous pass (or manually armed) --
+        # nothing more to do until the operator disarms it themselves (never
+        # a re-arm/re-notify loop, and never an automatic disarm either: the
+        # decision to go back to Grok stays with the operator).
         return {"action": "none", "balance_usd": balance}
 
     if balance <= CIRCUIT_BREAKER_THRESHOLD_USD:

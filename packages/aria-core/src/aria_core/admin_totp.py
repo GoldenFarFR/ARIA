@@ -1,14 +1,14 @@
-"""TOTP opérateur (RFC 6238) — second facteur pour l'accès admin.
+"""Operator TOTP (RFC 6238) — second factor for admin access.
 
-Implémentation stdlib PURE (hmac/hashlib/base64), sans dépendance externe : un TOTP
-est un HOTP (RFC 4226) indexé sur le temps. Compatible avec les apps d'authentification
-standard (Google Authenticator, Aegis…) : secret base32, HMAC-SHA1, 6 chiffres, pas de 30 s.
+PURE stdlib implementation (hmac/hashlib/base64), no external dependency: a TOTP
+is a time-indexed HOTP (RFC 4226). Compatible with standard authenticator apps
+(Google Authenticator, Aegis…): base32 secret, HMAC-SHA1, 6 digits, 30s step.
 
-Prouvé correct contre le vecteur officiel RFC 6238 (voir tests/test_admin_totp.py).
+Proven correct against the official RFC 6238 test vector (see tests/test_admin_totp.py).
 
-Usage (garde-fou) : voir aria_core.public_mode.is_operator_request — le TOTP n'est EXIGÉ
-que si la variable d'environnement ADMIN_TOTP_SECRET est définie (opt-in, OFF par défaut).
-JAMAIS de secret en clair ici ; le secret vit dans le .env du VPS (chmod 600).
+Usage (guard rail): see aria_core.public_mode.is_operator_request — TOTP is only
+REQUIRED if the ADMIN_TOTP_SECRET environment variable is set (opt-in, OFF by default).
+NEVER a secret in plaintext here; the secret lives in the VPS .env (chmod 600).
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _DIGITS = 6
 
 
 def _normalize_b32(secret: str) -> bytes:
-    """Décode un secret base32 tolérant (espaces, minuscules, padding manquant)."""
+    """Decode a tolerant base32 secret (spaces, lowercase, missing padding)."""
     s = (secret or "").strip().replace(" ", "").upper()
     if not s:
         raise ValueError("empty TOTP secret")
@@ -41,16 +41,16 @@ def _hotp(key: bytes, counter: int, digits: int = _DIGITS) -> str:
 
 
 def totp_code(secret: str, *, at: float | None = None, step: int = _STEP, digits: int = _DIGITS) -> str:
-    """Code TOTP courant pour un secret base32."""
+    """Current TOTP code for a base32 secret."""
     now = time.time() if at is None else at
     counter = int(now // step)
     return _hotp(_normalize_b32(secret), counter, digits)
 
 
 def verify_totp(secret: str, code: str, *, at: float | None = None, window: int = 1) -> bool:
-    """Vrai si `code` est valide dans une fenêtre de ±`window` pas (tolérance d'horloge).
+    """True if `code` is valid within a ±`window` step range (clock tolerance).
 
-    Comparaison à temps constant. Refuse un code de longueur/format invalide sans lever.
+    Constant-time comparison. Rejects a code of invalid length/format without raising.
     """
     code = (code or "").strip()
     if not code.isdigit() or len(code) != _DIGITS:
@@ -69,13 +69,13 @@ def verify_totp(secret: str, code: str, *, at: float | None = None, window: int 
 
 
 def generate_secret(length_bytes: int = 20) -> str:
-    """Nouveau secret base32 aléatoire (20 octets = 160 bits, standard authenticator)."""
+    """New random base32 secret (20 bytes = 160 bits, standard authenticator)."""
     raw = secrets.token_bytes(length_bytes)
     return base64.b32encode(raw).decode("ascii").rstrip("=")
 
 
 def provisioning_uri(secret: str, *, label: str = "ARIA Admin", issuer: str = "Aria Vanguard ZHC") -> str:
-    """URI otpauth:// à scanner/coller dans une app d'authentification."""
+    """otpauth:// URI to scan/paste into an authenticator app."""
     lab = quote(label)
     return (
         f"otpauth://totp/{lab}"

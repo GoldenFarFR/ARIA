@@ -1,24 +1,23 @@
-"""Sizing du montant de trade pour le pilote agent-wallet (#203) -- calcule
-combien engager sur le solde réel, jamais une valeur inventée. N'exécute
-rien : le résultat est passé à ``agent_wallet_pilot.attempt_swap()``, qui
-revérifie indépendamment contre le solde réel ET ``MAX_TRANSACTION_USD`` avant
-toute exécution (double vérification volontaire, pas une redondance
-accidentelle -- protège contre un solde qui change entre le sizing et
-l'exécution).
+"""Trade amount sizing for the agent-wallet pilot (#203) -- computes how much
+to commit against the real balance, never a made-up value. Executes
+nothing: the result is passed to ``agent_wallet_pilot.attempt_swap()``, which
+independently re-checks it against the real balance AND ``MAX_TRANSACTION_USD``
+before any execution (deliberate double-check, not accidental redundancy --
+protects against a balance that changes between sizing and execution).
 
-Décision opérateur (16/07, #203) : 3% du solde réel par défaut, plafonné à
-``MAX_TRANSACTION_USD``. Sur le solde cible du pilote (10-15$), ça produit un
-montant de l'ordre de 30-45 centimes par trade -- voulu, pas un problème :
-l'objectif de ce pilote précis est un montant sans conséquence en cas
-d'erreur (cf. docs/pilote-agent-wallet-10usd.md). Pas de variable
-d'environnement pour surcharger le pourcentage dans cette V1 (scope minimal,
-décision opérateur explicite) -- ``pct`` reste un paramètre d'appel Python.
+Operator decision (16/07, #203): 3% of the real balance by default, capped at
+``MAX_TRANSACTION_USD``. On the pilot's target balance (10-15$), this produces
+an amount on the order of 30-45 cents per trade -- intended, not a problem:
+the goal of this specific pilot is an amount with no consequence if something
+goes wrong (see docs/pilote-agent-wallet-10usd.md). No environment variable
+to override the percentage in this V1 (minimal scope, explicit operator
+decision) -- ``pct`` stays a plain Python call parameter.
 """
 from __future__ import annotations
 
 from aria_core.agent_wallet_pilot import MAX_TRANSACTION_USD, BalanceFn
 
-DEFAULT_SIZING_PCT = 0.03  # 3% -- décision opérateur explicite (16/07, #203)
+DEFAULT_SIZING_PCT = 0.03  # 3% -- explicit operator decision (16/07, #203)
 
 
 async def size_trade_usd(
@@ -27,10 +26,10 @@ async def size_trade_usd(
     pct: float = DEFAULT_SIZING_PCT,
     max_usd: float = MAX_TRANSACTION_USD,
 ) -> float | None:
-    """Montant à engager = ``min(solde réel * pct, max_usd)``. ``None`` si le
-    solde est indisponible, nul ou négatif, ou si ``pct`` n'est pas positif
-    (fail-closed, même doctrine que le reste du module) -- jamais un montant
-    de repli inventé."""
+    """Amount to commit = ``min(real balance * pct, max_usd)``. ``None`` if the
+    balance is unavailable, zero or negative, or if ``pct`` is not positive
+    (fail-closed, same doctrine as the rest of the module) -- never a made-up
+    fallback amount."""
     if pct <= 0:
         return None
     try:

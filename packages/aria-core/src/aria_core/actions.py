@@ -30,7 +30,7 @@ def x_publish_url(message: str) -> str:
 
 async def execute_contact_juno(approval_id: str | None = None) -> tuple[AgentExchange, str]:
     """
-    Prépare et logue un message JUNO. En mode autonome, tente aussi la publication X.
+    Prepares and logs a JUNO message. In autonomous mode, also attempts to publish on X.
     """
     from aria_core.runtime import settings
 
@@ -58,12 +58,12 @@ async def execute_contact_juno(approval_id: str | None = None) -> tuple[AgentExc
 
     if autonomous:
         instructions = (
-            f"Exchange #{exchange.id} — initiative ZHC autonome\n\n"
+            f"Exchange #{exchange.id} — autonomous ZHC initiative\n\n"
             f"{post_note}\n\n"
-            f"Message préparé :\n{public_text[:500]}...\n\n"
-            f"Lien X si besoin : {x_url}\n"
-            f"Communauté JUNO : https://t.me/JUNOCOINBASE\n"
-            f"Suivi : journal mémoire ARIA"
+            f"Prepared message:\n{public_text[:500]}...\n\n"
+            f"X link if needed: {x_url}\n"
+            f"JUNO community: https://t.me/JUNOCOINBASE\n"
+            f"Tracked in: ARIA memory journal"
         )
     else:
         instructions = (

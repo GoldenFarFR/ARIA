@@ -1,27 +1,31 @@
-"""Proof engine d'ARIA — un LLM-juge adverse qui AUDITE une analyse VC déjà produite.
+"""ARIA's proof engine — an adversarial LLM judge that AUDITS an already-produced VC analysis.
 
-C'est le pilier qualité du produit (« on vend une décision *prouvée* »). Le juge
-ne produit jamais d'analyse ni d'ordre : il **note** une analyse existante et
-signale tout ce qui n'est pas étayé par un fait on-chain réel.
+This is the product's quality pillar ("we sell a *proven* decision"). The
+judge never produces an analysis or an order: it **grades** an existing
+analysis and flags everything that isn't backed by a real on-chain fact.
 
-## Le dôme (mêmes défenses que vc_analysis, réutilisées, jamais dupliquées)
+## The dome (same defenses as vc_analysis, reused, never duplicated)
 
-1. **Indépendance** : un ``_SYSTEM_PROMPT_JUGE`` distinct et sceptique. Le juge
-   part du principe que l'analyse peut mentir/halluciner et doit être confrontée
-   aux FAITS bruts. Facts-only : toute affirmation non sourçable dans ``ctx`` est
-   un *claim non étayé*.
-2. **Entrée hostile** : l'analyse à juger (produite par un autre modèle) ET les
-   faits on-chain sont encapsulés dans ``<donnees_non_fiables>`` et neutralisés
-   par ``_sanitize`` (chevrons `‹`/`›` — aucune balise de fermeture forgeable).
-3. **Sortie non fiable** : JSON strict, parsing défensif partagé (``_extract_json``),
-   verdict/reco depuis des allowlists, score clampé 0-10, champs tronqués et
-   ``_sanitize``. À la moindre anomalie → ``_deterministic_fallback_judge``.
-4. **Gate, jamais trigger** : ce module n'importe ni n'appelle aucun chemin
-   financier/d'exécution (``wallet_guard``, ``resolve_spend``, ``outgoing_pause``…).
-   Aucune écriture réseau propre : le seul appel sortant est ``chat_with_context``
-   (déjà gaté par ``settings.aria_llm_enabled`` — ce module ne le lit ni ne le modifie).
-5. **Dégradation sûre** : LLM désactivé / clé absente / timeout / sortie illisible
-   → juge déterministe à base de règles structurelles. Ne lève jamais.
+1. **Independence**: a distinct, skeptical ``_SYSTEM_PROMPT_JUGE``. The judge
+   assumes the analysis may lie/hallucinate and must be confronted with the
+   raw FACTS. Facts-only: any claim not sourceable in ``ctx`` is an
+   *unsupported claim*.
+2. **Hostile input**: the analysis being judged (produced by another model)
+   AND the on-chain facts are wrapped in ``<donnees_non_fiables>`` and
+   neutralized by ``_sanitize`` (angle brackets `‹`/`›` — no forgeable closing
+   tag).
+3. **Untrusted output**: strict JSON, shared defensive parsing
+   (``_extract_json``), verdict/reco from allowlists, score clamped 0-10,
+   fields truncated and ``_sanitize``d. At the slightest anomaly →
+   ``_deterministic_fallback_judge``.
+4. **Gate, never a trigger**: this module neither imports nor calls any
+   financial/execution path (``wallet_guard``, ``resolve_spend``,
+   ``outgoing_pause``...). No outgoing network write of its own: the only
+   outgoing call is ``chat_with_context`` (already gated by
+   ``settings.aria_llm_enabled`` — this module neither reads nor modifies that
+   flag).
+5. **Safe degradation**: LLM disabled / missing key / timeout / unreadable
+   output → deterministic rule-based judge. Never raises.
 """
 from __future__ import annotations
 
@@ -40,7 +44,7 @@ from aria_core.skills.vc_analysis import (
 
 logger = logging.getLogger(__name__)
 
-# Allowlists strictes — un LLM ne pourra jamais renvoyer une autre valeur.
+# Strict allowlists — an LLM can never return a different value.
 VERDICTS = ("solide", "fragile", "rejeté")
 JUDGE_RECOS = ("garder", "ajuster", "rejeter")
 
@@ -48,16 +52,16 @@ _LIST_CAP = 12
 _ITEM_MAX = 240
 _RESUME_MAX = 600
 
-# Valeurs « placeholder » = niveau absent (le fallback vc_analysis écrit « — »).
+# "Placeholder" values = absent level (the vc_analysis fallback writes "—").
 _EMPTY_VALUES = {"", "-", "—", "n/a", "na", "none", "null", "aucun", "aucune"}
 
-# Somme de probabilités des 3 scénarios jugée incohérente au-delà de ce plafond
-# (le schéma n'exige pas une somme = 100, mais 3 scénarios quasi certains le sont).
+# Sum of the 3 scenarios' probabilities deemed inconsistent beyond this cap
+# (the schema doesn't require a sum = 100, but 3 near-certain scenarios do).
 _SCENARIO_SUM_MAX = 150
 
-# Catégories d'affirmations QUALITATIVES qui exigent une source. Si l'analyse en
-# mentionne une mais qu'aucun fait on-chain fourni ne la corrobore → claim inventé.
-# (Heuristique du fallback ; le juge LLM reste le détecteur principal.)
+# Categories of QUALITATIVE claims that require a source. If the analysis
+# mentions one but no provided on-chain fact corroborates it -> fabricated claim.
+# (Fallback heuristic; the LLM judge remains the primary detector.)
 _CLAIM_CATEGORIES: dict[str, tuple[str, ...]] = {
     "équipe / fondateurs": ("équipe", "equipe", "fondateur", "founder", "doxx", " ceo", " cto"),
     "levée de fonds / investisseurs": (
@@ -100,10 +104,10 @@ Sois dur mais juste. En cas de doute sur une affirmation non sourçable, classe-
 # --------------------------------------------------------------------------- #
 @dataclass
 class JudgeVerdict:
-    """Verdict du juge sur une analyse VC. Tous les champs texte sont SANITISÉS.
+    """The judge's verdict on a VC analysis. All text fields are SANITIZED.
 
-    C'est de la donnée pure — une NOTE, jamais un ordre : ``JudgeVerdict`` ne
-    déclenche aucune exécution.
+    This is pure data — a GRADE, never an order: ``JudgeVerdict`` triggers no
+    execution.
     """
 
     verdict: str  # allowlist VERDICTS
@@ -121,12 +125,12 @@ class JudgeVerdict:
 #  Helpers                                                                       #
 # --------------------------------------------------------------------------- #
 def _has_value(text: object) -> bool:
-    """Un niveau (entrée/invalidation/cible) est exploitable s'il n'est pas un placeholder."""
+    """A level (entry/invalidation/target) is usable if it's not a placeholder."""
     return str(text or "").strip().lower() not in _EMPTY_VALUES
 
 
 def _as_bool(value: object, default: bool = False) -> bool:
-    """Booléen défensif : accepte bool natif ou chaîne (« true »/« faux »…)."""
+    """Defensive boolean: accepts a native bool or a string ("true"/"faux"...)."""
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -141,7 +145,7 @@ def _as_bool(value: object, default: bool = False) -> bool:
 
 
 def _sanitize_list(raw: object, *, cap: int = _LIST_CAP, item_max: int = _ITEM_MAX) -> list[str]:
-    """Liste de chaînes non fiables → sanitisées, tronquées, vides filtrées, plafonnées."""
+    """List of untrusted strings -> sanitized, truncated, empties filtered, capped."""
     if not isinstance(raw, list):
         return []
     out: list[str] = []
@@ -153,7 +157,7 @@ def _sanitize_list(raw: object, *, cap: int = _LIST_CAP, item_max: int = _ITEM_M
 
 
 def _dedup(items: list[str], cap: int = _LIST_CAP) -> list[str]:
-    """Déduplique en conservant l'ordre, plafonné."""
+    """Deduplicates while preserving order, capped."""
     seen: set[str] = set()
     out: list[str] = []
     for it in items:
@@ -167,32 +171,33 @@ def _dedup(items: list[str], cap: int = _LIST_CAP) -> list[str]:
 
 
 def _fact_corpus(ctx: TokenScanContext) -> str:
-    """Corpus des faits réellement disponibles (déjà sanitisé), en minuscules.
+    """Corpus of actually available facts (already sanitized), lowercased.
 
-    Point de vérité unique du dôme facts-only : réutilise le même assemblage que
-    l'analyse (``_build_untrusted_context``) pour juger sur EXACTEMENT les mêmes
-    faits que ceux fournis au modèle analyste.
+    Single source of truth for the facts-only dome: reuses the same assembly
+    as the analysis (``_build_untrusted_context``) to judge on EXACTLY the
+    same facts that were given to the analyst model.
     """
     try:
         return _build_untrusted_context(ctx, []).lower()
-    except Exception:  # noqa: BLE001 — jamais bloquant
+    except Exception:  # noqa: BLE001 — never blocking
         return ""
 
 
 def _analysis_narrative(result: VCResult) -> str:
-    """Texte narratif de l'analyse (thèse + résumé + rapport), en minuscules."""
+    """Narrative text of the analysis (thesis + executive summary + report), lowercased."""
     return " ".join(
         str(x or "") for x in (result.these, result.resume_executif, result.rapport_detaille)
     ).lower()
 
 
 def _detect_unsupported_claims(result: VCResult, ctx: TokenScanContext) -> list[str]:
-    """Chasse déterministe aux affirmations non étayées (cœur du dôme, version règles).
+    """Deterministic hunt for unsupported claims (core of the dome, rules version).
 
-    Pour chaque catégorie qualitative citée dans la narration de l'analyse mais
-    dont AUCUN mot-clé n'apparaît dans les faits on-chain fournis → claim inventé.
-    Sous-détecte volontairement (jamais de faux positif agressif) : le juge LLM
-    reste le détecteur fin ; ceci est le filet de sécurité quand le LLM est absent.
+    For every qualitative category cited in the analysis's narrative but for
+    which NO keyword appears in the provided on-chain facts -> fabricated
+    claim. Deliberately under-detects (never an aggressive false positive):
+    the LLM judge remains the fine-grained detector; this is the safety net
+    when the LLM is absent.
     """
     narrative = _analysis_narrative(result)
     corpus = _fact_corpus(ctx)
@@ -208,14 +213,15 @@ def _detect_unsupported_claims(result: VCResult, ctx: TokenScanContext) -> list[
 
 
 # --------------------------------------------------------------------------- #
-#  Assemblage du message (dôme : tout sanitisé + encapsulé)                      #
+#  Message assembly (dome: everything sanitized + wrapped)                      #
 # --------------------------------------------------------------------------- #
 def _build_analysis_block(result: VCResult) -> str:
-    """Résumé factuel de l'analyse à juger — CHAQUE champ passe par ``_sanitize``.
+    """Factual summary of the analysis being judged — EVERY field goes through
+    ``_sanitize``.
 
-    Conséquence dôme : aucun chevron ASCII ne survit, l'analyse (elle-même issue
-    d'un LLM) ne peut donc pas forger la balise ``</donnees_non_fiables>`` et
-    s'échapper de la zone non fiable.
+    Dome consequence: no ASCII angle bracket survives, so the analysis
+    (itself produced by an LLM) cannot forge the ``</donnees_non_fiables>``
+    tag and escape the untrusted zone.
     """
     potentiel = f"{result.potentiel}/10" if result.potentiel is not None else "n/a"
     rr = result.rr if result.rr is not None else "non calculable"
@@ -269,35 +275,35 @@ def _build_judge_message(result: VCResult, ctx: TokenScanContext) -> str:
 
 
 # --------------------------------------------------------------------------- #
-#  Validation de la sortie LLM (allowlists + clamps + sanitize + backstops)     #
+#  LLM output validation (allowlists + clamps + sanitize + backstops)          #
 # --------------------------------------------------------------------------- #
 def _validate_judge_output(parsed: dict, result: VCResult, ctx: TokenScanContext) -> JudgeVerdict:
     verdict = str(parsed.get("verdict", "")).strip().lower()
     if verdict not in VERDICTS:
-        verdict = "fragile"  # défaut sceptique : « pas prouvé solide »
+        verdict = "fragile"  # skeptical default: "not proven solid"
 
     reco = str(parsed.get("recommandation_juge", "")).strip().lower()
     if reco not in JUDGE_RECOS:
-        reco = "ajuster"  # défaut prudent
+        reco = "ajuster"  # cautious default
 
-    score = _clamp_int(parsed.get("score"), 0, 10, 0)  # illisible → 0 (aucune confiance prouvée)
+    score = _clamp_int(parsed.get("score"), 0, 10, 0)  # unreadable -> 0 (no proven confidence)
 
-    # Claims : sortie LLM ∪ détecteur déterministe (défense en profondeur —
-    # même si le juge LLM en manque un, le filet de règles rattrape l'évident).
+    # Claims: LLM output ∪ deterministic detector (defense in depth -- even if
+    # the LLM judge misses one, the rules net catches the obvious).
     claims = _dedup(
         _sanitize_list(parsed.get("claims_non_etayes"))
         + _detect_unsupported_claims(result, ctx)
     )
 
-    # Cohérence R/R : ce que dit le LLM, MAIS on ne le laisse jamais prétendre
-    # qu'un R/R est cohérent alors qu'il n'existe pas (ordre actionnable sans rr).
+    # R/R coherence: what the LLM says, BUT it's never allowed to claim an R/R
+    # is coherent when it doesn't exist (actionable order with no rr).
     coherence_rr = _as_bool(parsed.get("coherence_rr"))
     if result.actionable and result.rr is None:
         coherence_rr = False
 
     points_faibles = _sanitize_list(parsed.get("points_faibles"))
-    # Le dôme prime sur l'optimisme : une analyse portant des claims inventés ne
-    # peut pas être jugée « solide » ni « gardée » telle quelle.
+    # The dome outranks optimism: an analysis carrying fabricated claims can't
+    # be judged "solid" nor "kept" as-is.
     if claims and verdict == "solide":
         verdict = "fragile"
         if reco == "garder":
@@ -320,11 +326,11 @@ def _validate_judge_output(parsed: dict, result: VCResult, ctx: TokenScanContext
 
 
 # --------------------------------------------------------------------------- #
-#  Fallback déterministe (juge à base de règles — ne lève jamais)               #
+#  Deterministic fallback (rule-based judge — never raises)                    #
 # --------------------------------------------------------------------------- #
 def _deterministic_fallback_judge(result: VCResult, ctx: TokenScanContext) -> JudgeVerdict:
-    """Juge sans LLM : règles structurelles. Renvoie TOUJOURS un JudgeVerdict valide."""
-    # 1) Contrat absent → rien à juger, rejet net.
+    """Judge with no LLM: structural rules. ALWAYS returns a valid JudgeVerdict."""
+    # 1) No contract -> nothing to judge, outright rejection.
     if not str(getattr(result, "contract", "") or "").strip():
         return JudgeVerdict(
             verdict="rejeté",
@@ -343,7 +349,7 @@ def _deterministic_fallback_judge(result: VCResult, ctx: TokenScanContext) -> Ju
 
     points_forts: list[str] = []
     points_faibles: list[str] = []
-    score = 7  # base neutre : un juge de règles ne peut ni tout valider ni tout condamner.
+    score = 7  # neutral base: a rules-based judge can neither validate nor condemn everything.
 
     claims = _detect_unsupported_claims(result, ctx)
     if claims:
@@ -352,7 +358,7 @@ def _deterministic_fallback_judge(result: VCResult, ctx: TokenScanContext) -> Ju
             f"{len(claims)} catégorie(s) d'affirmation non corroborée(s) par les faits on-chain."
         )
 
-    # 2) Ordre BUY sans niveaux exploitables.
+    # 2) BUY order with no usable levels.
     missing = [
         name
         for name, val in (
@@ -369,7 +375,7 @@ def _deterministic_fallback_judge(result: VCResult, ctx: TokenScanContext) -> Ju
             "Ordre BUY incomplet : niveaux manquants (" + ", ".join(missing) + ") — non exploitable."
         )
 
-    # 3) Cohérence R/R : un ordre actionnable sans R/R calculable est incohérent.
+    # 3) R/R coherence: an actionable order with no computable R/R is incoherent.
     coherence_rr = True
     if result.actionable and result.rr is None:
         coherence_rr = False
@@ -386,7 +392,7 @@ def _deterministic_fallback_judge(result: VCResult, ctx: TokenScanContext) -> Ju
     elif result.rr is not None and result.rr >= 2:
         points_forts.append(f"R/R attractif ({result.rr}) et chiffré à partir de niveaux fournis.")
 
-    # 4) Cohérence des scénarios (somme des probabilités).
+    # 4) Scenario coherence (sum of probabilities).
     if result.scenarios:
         total = sum(_clamp_int(s.get("probabilite"), 0, 100, 0) for s in result.scenarios)
         if total == 0 or total > _SCENARIO_SUM_MAX:
@@ -395,7 +401,7 @@ def _deterministic_fallback_judge(result: VCResult, ctx: TokenScanContext) -> Ju
                 f"Probabilités de scénarios incohérentes (somme = {total}%)."
             )
 
-    # 5) Honnêteté sur les lacunes.
+    # 5) Honesty about gaps.
     if result.donnees_insuffisantes:
         if result.recommandation == "BUY":
             score -= 1
@@ -423,11 +429,11 @@ def _deterministic_fallback_judge(result: VCResult, ctx: TokenScanContext) -> Ju
     else:
         verdict = "solide"
 
-    # Recommandation du juge.
+    # Judge's recommendation.
     if verdict == "solide":
         reco = "garder"
     elif result.actionable and (claims or buy_incomplete):
-        reco = "rejeter"  # un ordre actionnable fragile ne se livre pas
+        reco = "rejeter"  # a fragile actionable order doesn't get delivered
     else:
         reco = "ajuster"
 
@@ -455,21 +461,23 @@ def _deterministic_fallback_judge(result: VCResult, ctx: TokenScanContext) -> Ju
 
 
 # --------------------------------------------------------------------------- #
-#  Point d'entrée public                                                         #
+#  Public entry point                                                          #
 # --------------------------------------------------------------------------- #
 async def judge_analysis(
     result: VCResult, ctx: TokenScanContext, lang: str = "fr"
 ) -> JudgeVerdict:
-    """Audite une analyse VC. Juge LLM si disponible, sinon juge déterministe.
+    """Audits a VC analysis. LLM judge if available, otherwise deterministic judge.
 
-    Gating identique à ``analyze_vc`` : ``chat_with_context`` est déjà gaté par
-    ``settings.aria_llm_enabled`` (ce module ne lit ni ne modifie ce flag). LLM
-    indisponible / désactivé / illisible → ``_deterministic_fallback_judge``.
+    Gating identical to ``analyze_vc``: ``chat_with_context`` is already gated
+    by ``settings.aria_llm_enabled`` (this module neither reads nor modifies
+    that flag). LLM unavailable / disabled / unreadable ->
+    ``_deterministic_fallback_judge``.
 
-    ``lang`` (fr/en) : en anglais, la prose du juge (resume, points, claims) sort
-    en anglais via une directive ajoutée au prompt. FR = prompt inchangé.
+    ``lang`` (fr/en): in English, the judge's prose (resume, points, claims)
+    comes out in English via a directive added to the prompt. FR = unchanged
+    prompt.
 
-    PORTE, jamais déclencheur : aucun effet de bord, aucune exécution.
+    A GATE, never a trigger: no side effect, no execution.
     """
     from aria_core.skills.vc_i18n import llm_language_directive
 
@@ -483,8 +491,8 @@ async def judge_analysis(
             temperature=0.1,
             depth="develop",
         )
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant, on retombe sur le fallback
-        logger.error("judge_analysis: appel LLM échoué (%s) — fallback déterministe", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking, falls back to the fallback judge
+        logger.error("judge_analysis: LLM call failed (%s) — deterministic fallback", exc)
         raw = None
 
     if not raw:
@@ -492,7 +500,7 @@ async def judge_analysis(
 
     parsed = _extract_json(raw)
     if parsed is None:
-        logger.warning("judge_analysis: sortie juge non parsable — fallback déterministe")
+        logger.warning("judge_analysis: judge output not parsable — deterministic fallback")
         return _deterministic_fallback_judge(result, ctx)
 
     return _validate_judge_output(parsed, result, ctx)

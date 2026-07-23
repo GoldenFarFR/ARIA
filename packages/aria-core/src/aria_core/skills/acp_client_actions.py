@@ -1,4 +1,4 @@
-"""ACP client — acheter, financer, approuver, rejeter, trader (langage naturel)."""
+"""ACP client — buy, fund, approve, reject, trade (natural language)."""
 from __future__ import annotations
 
 import json

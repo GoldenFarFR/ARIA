@@ -1,25 +1,26 @@
-"""Rendu du rapport VC en HTML « qualité institutionnelle » (design B4).
+"""Renders the VC report to "institutional quality" HTML (B4 design).
 
-Transforme un ``VCResult`` en document HTML autonome (CSS inline, emblème embarqué
-en base64 — aucun asset externe requis à l'affichage) destiné à l'email ARIA — et,
-plus tard, au site / à l'abonnement. Le design (maquette « B4 ») est un hero sombre
-nocturne or/émeraude (goutte dorée + wordmark ARIA) suivi d'un corps ivoire et d'un
-pied « certificat » — chaque élément visuel de la maquette est ici piloté par les
-champs réels de ``VCResult`` plutôt que codé en dur.
+Turns a ``VCResult`` into a self-contained HTML document (inline CSS, emblem
+embedded as base64 — no external asset required for display) meant for the
+ARIA email — and, later, the site / subscription. The design (the "B4"
+mockup) is a dark nocturnal gold/emerald hero (golden drop + ARIA wordmark)
+followed by an ivory body and a "certificate" footer — every visual element
+of the mockup is here driven by ``VCResult``'s real fields rather than hardcoded.
 
-## Sécurité (extension du dôme à la couche rendu)
+## Security (guardrail extended to the rendering layer)
 
-Le contenu du rapport est produit par le LLM, qui a lui-même traité des données
-non fiables (nom du token, catégories, etc.). **Tout champ dynamique est
-HTML-échappé** (`html.escape`, via `_esc`) avant d'être injecté dans le template —
-sans exception, y compris les champs déjà validés par des allowlists en amont
-(défense en profondeur). Le mini-rendu markdown (`_render_markdown_body`) n'émet
-que des balises de mise en forme contrôlées (`h2/h3/h4`, `p`, `ul/li`, `strong`) —
-jamais de HTML fourni par le modèle. Les couleurs, styles de pastille et libellés
-de structure proviennent exclusivement de dictionnaires allowlist indexés par une
-valeur déjà validée en amont (jamais une chaîne construite à partir du LLM). Les
-liens projet sont revalidés (schéma http/https) par `_references_block`. Cela
-neutralise toute tentative d'injection (email ou, demain, page web publique).
+The report's content is produced by the LLM, which itself processed
+untrusted data (token name, categories, etc.). **Every dynamic field is
+HTML-escaped** (`html.escape`, via `_esc`) before being injected into the
+template — no exception, including fields already validated by upstream
+allowlists (defense in depth). The mini markdown renderer
+(`_render_markdown_body`) only emits controlled formatting tags
+(`h2/h3/h4`, `p`, `ul/li`, `strong`) — never HTML supplied by the model.
+Colors, pill styles, and structural labels come exclusively from allowlist
+dictionaries indexed by an already-validated upstream value (never a string
+built from the LLM). Project links are re-validated (http/https scheme) by
+`_references_block`. This neutralizes any injection attempt (email or,
+tomorrow, a public web page).
 """
 from __future__ import annotations
 
@@ -34,16 +35,16 @@ from aria_core.skills.vc_analysis import VCResult
 from aria_core.skills.vc_i18n import confidence_label, norm_lang, report_strings, risk_label
 
 BRAND = "ARIA Vanguard ZHC"
-_ACCENT = "#0b1f3a"       # navy institutionnel — utilisé par _render_markdown_body (conservé tel quel)
+_ACCENT = "#0b1f3a"       # institutional navy — used by _render_markdown_body (kept as-is)
 _ACCENT_SOFT = "#12325c"
-_GOLD = "#c9a227"         # or — accent luxe (identique au thème B4)
+_GOLD = "#c9a227"         # gold — luxury accent (same as the B4 theme)
 _GOLD_SOFT = "#bfa15a"
 _INK = "#1c2530"
 _MUTE = "#6b7684"
 
 _EMBLEM_PATH = Path(__file__).resolve().parents[1] / "assets" / "aria_emblem.png"
 
-# ─────────────────────────── Palette B4 (hero nocturne / corps ivoire) ───────────────────────────
+# ─────────────────────────── B4 palette (nocturnal hero / ivory body) ───────────────────────────
 _GOLD_LIGHT = "#e6c463"
 _GOLD_DEEP = "#b0862b"
 _EMERALD = "#1f8a74"
@@ -55,9 +56,9 @@ _INK_WARM = "#2a2620"
 _MUTE_WARM = "#7a7264"
 _NIGHT = "#070b14"
 
-# Pastilles du hero : styles fixes indexés par une valeur déjà validée en amont
-# (allowlist — vc_analysis.py clampe recommandation/risque/confiance_globale à un
-# ensemble fermé). Jamais une couleur ou un libellé construit depuis le LLM.
+# Hero pills: fixed styles indexed by an already-validated upstream value
+# (allowlist — vc_analysis.py clamps recommendation/risk/overall_confidence to
+# a closed set). Never a color or label built from the LLM.
 _RECO_COLORS = {
     "BUY": "background-color:#c9a227;background-image:linear-gradient(135deg,#b0862b,#e6c463 55%,#c9a227);color:#10131f;",
     "WATCH": "border:1px solid rgba(201,162,39,0.55);background-color:rgba(201,162,39,0.08);color:#e6c463;",
@@ -78,55 +79,56 @@ _CONF_COLORS = {
 _DEFAULT_PILL = "border:1px solid rgba(147,160,155,0.5);background-color:rgba(147,160,155,0.10);color:#93a09b;"
 _POTENTIEL_PILL = "border:1px solid rgba(201,162,39,0.55);background-color:rgba(201,162,39,0.08);color:#e6c463;"
 
-# Scénarios : clé de libellé (résolue via ``report_strings``) + style de barre de
-# probabilité, indexés par ``nom`` (allowlist fermée dans
-# vc_analysis._SCENARIO_NAMES : bull/base/bear uniquement).
+# Scenarios: label key (resolved via ``report_strings``) + probability-bar
+# style, indexed by ``nom`` (closed allowlist in vc_analysis._SCENARIO_NAMES:
+# bull/base/bear only).
 _SCEN_META = {
     "bull": ("scen_bull", "background-color:#1f8a74;background-image:linear-gradient(90deg,#0f6b5c,#1f8a74);", False),
     "base": ("scen_base", "background-color:#c9a227;background-image:linear-gradient(90deg,#b0862b,#e6c463);", True),
     "bear": ("scen_bear", "background-color:#a34a2a;", False),
 }
 
-# Sources méthodologiques — contenu statique de l'annexe « Méthodologie & sources »
-# (jamais dérivé du LLM ; documente d'où viennent les données factuelles utilisées).
+# Methodology sources — static content for the "Methodology & Sources"
+# appendix (never derived from the LLM; documents where the factual data
+# used comes from).
 _METHODOLOGY_SOURCES = (
-    ("DexScreener", "marché & liquidité"),
+    ("DexScreener", "market & liquidity"),
     ("Blockscout Base", "on-chain, holders, audit"),
     ("CoinGecko", "market cap, FDV, supply"),
-    ("Smart-money", "heuristique propriétaire"),
-    ("Rédaction", "moteur ARIA · contrôle anti-hallucination"),
+    ("Smart-money", "proprietary heuristic"),
+    ("Drafting", "ARIA engine - anti-hallucination check"),
 )
 
-# ─────────────────────────── Tiers (éditions premium / standard) ───────────────────────────
-# Deux éditions du même rapport : le design (or, émeraude, corps ivoire, structure)
-# est identique — seules les surfaces sombres (hero, pied « certificat », bandes
-# guilloché) et le bandeau de tier changent de teinte. Allowlist fermée, jamais
-# dérivée d'une valeur fournie par le LLM : `tier` ne fait que sélectionner l'une
-# des deux entrées ci-dessous et masquer des sections, jamais injecter du texte.
+# ─────────────────────────── Tiers (premium / standard editions) ───────────────────────────
+# Two editions of the same report: the design (gold, emerald, ivory body,
+# structure) is identical — only the dark surfaces (hero, "certificate"
+# footer, guilloche bands) and the tier banner change tint. Closed allowlist,
+# never derived from a value supplied by the LLM: `tier` only selects one of
+# the two entries below and hides sections, never injects text.
 _TIER_PREMIUM = "premium"
 _TIER_STANDARD = "standard"
 
 _TIER_THEMES = {
     _TIER_PREMIUM: {
-        "label": "RAPPORT PREMIUM",
-        # Pastille dorée — même style que la pastille de recommandation BUY.
+        "label": "PREMIUM REPORT",
+        # Golden pill — same style as the BUY recommendation pill.
         "pill_style": _RECO_COLORS["BUY"],
-        # Un seul linear-gradient (pas de radial-gradient) : sur mobile (Gmail
-        # WebView notamment), un radial-gradient sur une grande surface force
-        # une re-rastérisation à chaque frame de scroll ("effet saccadé,
-        # dessiné ligne par ligne"). Un linear-gradient à stops fixes est
-        # composité une fois et ne coûte rien au scroll.
+        # A single linear-gradient (no radial-gradient): on mobile (Gmail
+        # WebView in particular), a radial-gradient over a large surface
+        # forces re-rasterization on every scroll frame ("jerky effect,
+        # drawn line by line"). A linear-gradient with fixed stops is
+        # composited once and costs nothing on scroll.
         "hero_bg": (
             "background-color:#0a0e1a;"
             "background-image:linear-gradient(165deg, #101a2e 0%, #0a0e1a 55%, #0c1020 100%);"
         ),
-        "dark_base": "#0b1220",   # bandes guilloché (haut/bas) + fond de secours du pied
-        "deep_base": "#080c16",   # bande microprint + point le plus sombre du dégradé du pied
-        "footer_mid": "#0d1424",  # point clair du dégradé du pied « certificat »
+        "dark_base": "#0b1220",   # guilloche bands (top/bottom) + footer fallback background
+        "deep_base": "#080c16",   # microprint band + darkest point of the footer gradient
+        "footer_mid": "#0d1424",  # light point of the "certificate" footer gradient
     },
     _TIER_STANDARD: {
-        "label": "RAPPORT STANDARD",
-        # Pastille rose discrète — bordure + fond translucide (pas de fond plein).
+        "label": "STANDARD REPORT",
+        # Discreet rose pill — border + translucent background (no solid fill).
         "pill_style": "border:1px solid rgba(217,138,138,0.55);background-color:rgba(217,138,138,0.10);color:#e8b9b9;",
         "hero_bg": (
             "background-color:#1c0e18;"
@@ -140,13 +142,13 @@ _TIER_THEMES = {
 
 
 def _theme(tier: str) -> dict:
-    """Résout la palette et le libellé du tier — allowlist fermée (défense en profondeur).
+    """Resolves the tier's palette and label — closed allowlist (defense in depth).
 
-    Toute valeur autre que ``"standard"`` retombe sur ``"premium"`` (défaut sûr) :
-    un tier absent, mal orthographié ou falsifié en amont ne doit jamais faire
-    basculer silencieusement le rendu vers un état non prévu. Les couleurs et
-    libellés proviennent exclusivement de ``_TIER_THEMES`` — jamais dérivés
-    d'une chaîne construite à partir du LLM.
+    Any value other than ``"standard"`` falls back to ``"premium"`` (safe
+    default): a missing, misspelled, or upstream-falsified tier must never
+    silently flip the rendering to an unplanned state. Colors and labels come
+    exclusively from ``_TIER_THEMES`` — never derived from a string built
+    from the LLM.
     """
     resolved = _TIER_STANDARD if tier == _TIER_STANDARD else _TIER_PREMIUM
     theme = dict(_TIER_THEMES[resolved])
@@ -165,7 +167,7 @@ def _esc(value: object) -> str:
 
 @lru_cache(maxsize=1)
 def _emblem_data_uri() -> str:
-    """Charge l'emblème une fois et le renvoie en data-URI base64 (dégrade en '' si absent)."""
+    """Loads the emblem once and returns it as a base64 data-URI (degrades to '' if absent)."""
     try:
         raw = _EMBLEM_PATH.read_bytes()
     except OSError:
@@ -174,7 +176,7 @@ def _emblem_data_uri() -> str:
 
 
 def _render_markdown_body(text: str) -> str:
-    """Mini-markdown → HTML, tout échappé. Supporte titres, listes, gras, paragraphes."""
+    """Mini-markdown -> HTML, everything escaped. Supports headings, lists, bold, paragraphs."""
     if not text:
         return "<p style='color:#666'>Aucun contenu.</p>"
 
@@ -226,12 +228,12 @@ def _render_markdown_body(text: str) -> str:
 
 
 def _references_block(links: list[dict], s: dict) -> str:
-    """Liens officiels déclarés par le projet (site, X, Telegram…) — vérifiez par vous-même.
+    """Official links declared by the project (site, X, Telegram...) — verify for yourself.
 
-    Revalidation stricte du schéma http(s) à ce dernier point d'entrée avant
-    tout `<a href>` cliquable — défense en profondeur : ces liens viennent
-    d'un tiers non fiable (DexScreener relaie ce que le projet déclare, ARIA
-    ne le vérifie pas). Toute URL hors http(s) est silencieusement écartée.
+    Strict re-validation of the http(s) scheme at this last entry point
+    before any clickable `<a href>` — defense in depth: these links come from
+    an untrusted third party (DexScreener relays what the project declares,
+    ARIA doesn't verify it). Any non-http(s) URL is silently discarded.
     """
     safe = [
         link for link in (links or [])
@@ -257,7 +259,7 @@ def _references_block(links: list[dict], s: dict) -> str:
 
 
 def report_integrity(result: VCResult, *, generated_at: str, recipient: str | None = None) -> tuple[str, str]:
-    """Empreinte du rapport : (référence courte, SHA-256 complet). Déterministe."""
+    """Report fingerprint: (short reference, full SHA-256). Deterministic."""
     basis = "|".join(
         [
             str(result.contract),
@@ -279,11 +281,11 @@ def email_subject(
     report_number: int | None = None,
     lang: str = "fr",
 ) -> str:
-    """Objet d'email concis et professionnel.
+    """Concise, professional email subject.
 
-    Inclut la date et le n° de rapport (si fournis) : indispensable pour trier
-    ses rapports une fois abonné et destinataire de plusieurs analyses suivies
-    du même token dans la durée.
+    Includes the date and report number (if provided): essential for sorting
+    reports once subscribed and receiving several tracked analyses of the
+    same token over time.
     """
     s = report_strings(lang)
     potentiel_label = (
@@ -298,16 +300,16 @@ def email_subject(
 
 
 def _format_serial(n: int) -> str:
-    """Numéro de série façon édition numérotée : 5 chiffres, ex. 47 -> '00.047'."""
+    """Serial number in numbered-edition style: 5 digits, e.g. 47 -> '00.047'."""
     padded = f"{max(0, int(n)):05d}"
     return f"{padded[:2]}.{padded[2:]}"
 
 
-# ═══════════════════════════ Helpers visuels privés (design B4) ═══════════════════════════
+# ═══════════════════════════ Private visual helpers (B4 design) ═══════════════════════════
 
 
 def _report_title(result: VCResult) -> str:
-    """Titre du hero : symbole du token si connu, sinon adresse tronquée (jamais inventé)."""
+    """Hero title: token symbol if known, otherwise truncated address (never invented)."""
     symbol = (result.symbol or "").strip()
     if symbol:
         return symbol
@@ -343,7 +345,7 @@ def _badges_html(result: VCResult, s: dict, lang: str) -> str:
 
 
 def _section_header(title: str) -> str:
-    """En-tête de section « corps ivoire » : trait or + titre serif + filet dégradé (design B4)."""
+    """"Ivory body" section header: gold rule + serif title + gradient hairline (B4 design)."""
     return f"""<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td width="26" style="vertical-align:middle;"><div style="height:2px;background-color:{_GOLD};font-size:0;line-height:2px;">&nbsp;</div></td>
@@ -356,7 +358,7 @@ def _section_header(title: str) -> str:
 
 
 def _rr_block_html(result: VCResult, s: dict) -> str:
-    """Encadré R/R focal — jamais affiché si le ratio n'est pas estimable (pas de valeur inventée)."""
+    """Focal R/R box — never shown if the ratio isn't estimable (no invented value)."""
     rr = result.rr
     if rr is None:
         return ""
@@ -370,8 +372,8 @@ def _rr_block_html(result: VCResult, s: dict) -> str:
         qualifier = s["rr_qualifier_balanced"]
     else:
         qualifier = s["rr_qualifier_weak"]
-    # Formulé en clair : c'est un rapport de DISTANCES (gain visé ÷ risque consenti),
-    # jamais un multiple de gain — pour ne pas le lire comme « x12 ».
+    # Stated plainly: this is a ratio of DISTANCES (targeted gain / risk
+    # taken), never a gain multiple — so it isn't read as "x12".
     caption = s["rr_caption"].format(qualifier=qualifier, upside=upside, downside=downside)
     if downside and downside < 4 and rr >= 4:
         caption += s["rr_tight_stop"].format(downside=downside)
@@ -417,7 +419,7 @@ def _rr_block_html(result: VCResult, s: dict) -> str:
 
 
 def _order_block_html(result: VCResult, capital_usd: float | None, s: dict) -> str:
-    """Ordre proposé — uniquement si la recommandation est actionnable (BUY/SELL)."""
+    """Proposed order — only if the recommendation is actionable (BUY/SELL)."""
     if not result.actionable:
         return ""
     rows: list[tuple[str, str, bool]] = [(s["order_reco"], _esc(result.recommandation), False)]
@@ -457,10 +459,10 @@ def _order_block_html(result: VCResult, capital_usd: float | None, s: dict) -> s
 
 
 def _dollar_potential_html(result: VCResult, capital_usd: float | None, s: dict) -> str:
-    """Potentiel en $ — uniquement si un capital est fourni ET upside/downside estimables.
+    """Potential in $ — only if capital is provided AND upside/downside are estimable.
 
-    Jamais de montant fabriqué : sans capital renseigné ou sans upside/downside
-    sourçables, la section est omise en totalité.
+    Never a fabricated amount: without stated capital or sourceable
+    upside/downside, the section is omitted entirely.
     """
     if not (
         capital_usd
@@ -516,7 +518,7 @@ def _dollar_potential_html(result: VCResult, capital_usd: float | None, s: dict)
   </tr>"""
 
 
-_SCEN_VALUE_MIN_WIDTH_PCT = 6  # plancher visuel : une barre n'est jamais totalement invisible
+_SCEN_VALUE_MIN_WIDTH_PCT = 6  # visual floor: a bar is never fully invisible
 
 
 def _scenario_card_html(sc: dict, width: str, padding: str, s: dict, lang: str, value_pct: int | None) -> str:
@@ -528,11 +530,12 @@ def _scenario_card_html(sc: dict, width: str, padding: str, s: dict, lang: str, 
     conf = _esc(confidence_label(sc.get("confiance", "faible"), lang))
     border = _GOLD if is_center else "#e0d6ba"
     bg = "#fdfaf1" if is_center else "#fbf8f0"
-    # Barre "échelle commune" (audit #11) : largeur proportionnelle au multiple
-    # cible ESTIMÉ par le LLM, PARTAGÉE entre les 3 cartes (pas une barre auto-
-    # échelle 0-100 par carte, qui rendrait bull/base/bear visuellement égaux
-    # quelle que soit leur ampleur réelle). Omise si le multiple n'a pas pu être
-    # chiffré pour au moins 2 des 3 scénarios (pas assez de signal comparable).
+    # "Common scale" bar (audit #11): width proportional to the target
+    # multiple ESTIMATED by the LLM, SHARED across the 3 cards (not a
+    # per-card 0-100 auto-scale bar, which would render bull/base/bear
+    # visually equal regardless of their real magnitude). Omitted if the
+    # multiple couldn't be quantified for at least 2 of the 3 scenarios (not
+    # enough comparable signal).
     value_bar_html = ""
     if value_pct is not None:
         value_bar_html = f"""
@@ -557,10 +560,10 @@ def _scenario_card_html(sc: dict, width: str, padding: str, s: dict, lang: str, 
 
 
 def _scenario_value_widths(scenarios: list[dict]) -> list[int | None]:
-    """Largeurs (0-100) de la barre "échelle commune", une par scénario, ``None``
-    si ce scénario n'a pas de ``cible_multiple`` chiffré. Toute la liste est
-    ``[None, ...]`` si moins de 2 scénarios ont un multiple exploitable (pas
-    assez de signal pour une comparaison honnête)."""
+    """Widths (0-100) of the "common scale" bar, one per scenario, ``None``
+    if this scenario has no quantified ``cible_multiple``. The whole list is
+    ``[None, ...]`` if fewer than 2 scenarios have a usable multiple (not
+    enough signal for an honest comparison)."""
     multiples = [sc.get("cible_multiple") for sc in scenarios]
     valid = [m for m in multiples if isinstance(m, (int, float)) and m > 0]
     if len(valid) < 2:
@@ -672,11 +675,11 @@ def _fallback_note_html(result: VCResult, s: dict) -> str:
 
 
 def _ta_block_html(result: VCResult, s: dict) -> str:
-    """Section « Analyse technique » : niveaux dérivés de l'OHLCV réel + graphique.
+    """"Technical Analysis" section: levels derived from real OHLCV + chart.
 
-    Data-gated : vide si aucune donnée technique n'a été dérivée (comportement
-    identique à aujourd'hui). Chaque niveau porte sa base factuelle (facts-only) ;
-    le graphique est un PNG data-URI email-safe déjà produit en amont.
+    Data-gated: empty if no technical data was derived (same behavior as
+    today). Each level carries its factual basis (facts-only); the chart is
+    an email-safe PNG data-URI already produced upstream.
     """
     if not result.ta_levels_lines and not result.chart_data_uri:
         return ""
@@ -718,7 +721,7 @@ def _ta_block_html(result: VCResult, s: dict) -> str:
 
 
 def _fmt_compact_usd(value: float) -> str:
-    """Capitalisation en format compact lisible ($30M, $1.2B). Facts-only."""
+    """Market cap in readable compact format ($30M, $1.2B). Facts-only."""
     v = float(value)
     if v >= 1_000_000_000:
         return f"${v / 1_000_000_000:.1f}B".replace(".0B", "B")
@@ -730,11 +733,11 @@ def _fmt_compact_usd(value: float) -> str:
 
 
 def _roi_block_html(result: VCResult, s: dict) -> str:
-    """Section « Projection par comparables » : placement du token dans l'histoire.
+    """"Comparable-based Projection" section: placing the token within history.
 
-    Data-gated : vide sans scénario (capitalisation actuelle inconnue). Chaque
-    ligne est un PLACEMENT tangible (« à la capitalisation d'un comparable, Nx »),
-    JAMAIS une cible ni une promesse. L'avertissement du dôme est affiché en clair.
+    Data-gated: empty without a scenario (current market cap unknown). Each
+    line is a tangible PLACEMENT ("at a comparable's market cap, Nx"), NEVER
+    a target or a promise. The guardrail's warning is displayed plainly.
     """
     if not result.roi_scenarios:
         return ""
@@ -786,10 +789,10 @@ def _roi_block_html(result: VCResult, s: dict) -> str:
 
 
 def _market_context_block_html(result: VCResult, s: dict) -> str:
-    """Section « Contexte marché » (tâche #14) : phase actuelle du cycle Bitcoin, seule
-    source macro disponible aujourd'hui. Data-gated : vide sans phase connue (historique
-    BTC indisponible). Géopolitique/réglementaire : seam vide, pas encore de source
-    fiable branchée -- jamais un chiffre inventé pour combler la case."""
+    """"Market Context" section (task #14): current Bitcoin cycle phase, the
+    only macro source available today. Data-gated: empty without a known
+    phase (BTC history unavailable). Geopolitics/regulation: empty seam, no
+    reliable source wired in yet -- never an invented figure to fill the gap."""
     ctx = result.market_context
     if not ctx:
         return ""
@@ -810,11 +813,11 @@ def _market_context_block_html(result: VCResult, s: dict) -> str:
 
 
 def _equities_context_block_html(result: VCResult, s: dict) -> str:
-    """Section « Actions et matières premières » (tâche #14 suite, 13/07,
-    services/alphavantage.py). Data-gated : vide si aucune des trois sources
-    (SPY/QQQ/matières premières) n'est disponible -- volontairement SÉPARÉE de
-    ``_market_context_block_html`` (BTC), sources et gates indépendants. Chaque
-    ligne est indépendante : une source manquante n'empêche jamais les autres."""
+    """"Equities and Commodities" section (task #14 continued, 07/13,
+    services/alphavantage.py). Data-gated: empty if none of the three sources
+    (SPY/QQQ/commodities) is available -- deliberately SEPARATE from
+    ``_market_context_block_html`` (BTC), independent sources and gates. Each
+    line is independent: a missing source never blocks the others."""
     ctx = result.market_context_equities
     if not ctx:
         return ""
@@ -854,9 +857,9 @@ def _equities_context_block_html(result: VCResult, s: dict) -> str:
 
 
 def render_email_teaser_html(result: VCResult, *, lang: str = "fr") -> str:
-    """Email COURT (badges + R/R) — l'analyse complète vit désormais dans le PDF
-    sécurisé joint. Ne JAMAIS y remettre la thèse/le rapport détaillé : le PDF
-    anti-copie perdrait tout son sens si le même contenu était copiable ici.
+    """SHORT email (badges + R/R) — the full analysis now lives in the
+    attached secured PDF. NEVER put the thesis/detailed report back here: the
+    anti-copy PDF would lose all its point if the same content were copyable here.
     """
     lang = norm_lang(lang)
     s = report_strings(lang)
@@ -890,8 +893,8 @@ def render_email_teaser_html(result: VCResult, *, lang: str = "fr") -> str:
 
 
 def email_teaser_text(result: VCResult, *, lang: str = "fr") -> str:
-    """Version texte du teaser (clients sans HTML) — même principe : rien du
-    contenu détaillé, tout est dans le PDF sécurisé joint."""
+    """Text version of the teaser (HTML-less clients) — same principle:
+    nothing of the detailed content, everything is in the attached secured PDF."""
     lang = norm_lang(lang)
     s = report_strings(lang)
     title = _report_title(result)
@@ -920,28 +923,30 @@ def render_html_report(
     tier: str = "premium",
     lang: str = "fr",
 ) -> str:
-    """Document HTML autonome, CSS inline — prêt pour l'email (et le futur site).
+    """Self-contained HTML document, inline CSS — ready for email (and the future site).
 
-    Design « B4 » : hero sombre nocturne or/émeraude (goutte dorée + wordmark ARIA)
-    au-dessus d'un corps ivoire et d'un pied « certificat ». Chaque valeur du hero
-    (titre, badges, R/R…) et du corps (thèse, scénarios, ordre…) provient de
-    ``result`` — jamais codée en dur — et est HTML-échappée avant injection.
+    "B4" design: dark nocturnal gold/emerald hero (golden drop + ARIA
+    wordmark) above an ivory body and a "certificate" footer. Every value in
+    the hero (title, badges, R/R...) and the body (thesis, scenarios,
+    order...) comes from ``result`` — never hardcoded — and is HTML-escaped
+    before injection.
 
-    ``recipient`` (optionnel) inscrit un filigrane d'édition personnelle : une
-    fuite du rapport devient traçable au destinataire. Une empreinte SHA-256 du
-    contenu est apposée en pied (anti-falsification). ``report_number``
-    (optionnel) affiche « Rapport n°N » : un abonné recevant plusieurs analyses
-    suivies du même token doit pouvoir les distinguer d'un coup d'œil.
-    ``series_number`` (optionnel) affiche « Série 00.0NN » : compteur global de
-    toutes les analyses ARIA, tous tokens confondus — identité d'édition numérotée.
-    ``capital_usd`` (optionnel) convertit la taille suggérée en montants en dollars
-    dans l'ordre proposé et dans la section « Potentiel en $ » — omise sans capital.
-    ``tier`` (« premium » par défaut, ou « standard ») sélectionne l'édition : le
-    design (or, émeraude, corps ivoire, structure) est identique, seules les
-    surfaces sombres (hero, pied « certificat », bandes) changent de teinte et le
-    tier « standard » masque l'analyse détaillée, la méthodologie et les
-    références (réservées au premium). Toute valeur hors ``{"standard"}`` retombe
-    sur « premium » (défaut sûr, cf. ``_theme`` — allowlist fermée).
+    ``recipient`` (optional) stamps a personal-edition watermark: a leaked
+    report becomes traceable to the recipient. A SHA-256 fingerprint of the
+    content is stamped in the footer (anti-tampering). ``report_number``
+    (optional) shows "Report No. N": a subscriber receiving several tracked
+    analyses of the same token must be able to tell them apart at a glance.
+    ``series_number`` (optional) shows "Series 00.0NN": a global counter of
+    all ARIA analyses, across every token — numbered-edition identity.
+    ``capital_usd`` (optional) converts the suggested size into dollar
+    amounts in the proposed order and in the "Potential in $" section —
+    omitted without capital. ``tier`` ("premium" by default, or "standard")
+    selects the edition: the design (gold, emerald, ivory body, structure) is
+    identical, only the dark surfaces (hero, "certificate" footer, bands)
+    change tint and the "standard" tier hides the detailed analysis, the
+    methodology, and the references (reserved for premium). Any value
+    outside ``{"standard"}`` falls back to "premium" (safe default, see
+    ``_theme`` — closed allowlist).
     """
     lang = norm_lang(lang)
     s = report_strings(lang)
@@ -951,7 +956,7 @@ def render_html_report(
     ref_id, full_hash = report_integrity(result, generated_at=generated_at, recipient=recipient)
     title = _report_title(result)
 
-    # Ligne méta du hero : chaque segment optionnel n'apparaît que si fourni.
+    # Hero meta line: each optional segment only appears if provided.
     meta_parts = []
     if series_number:
         meta_parts.append(s["meta_series"].format(n=_esc(_format_serial(series_number))))
@@ -960,7 +965,7 @@ def render_html_report(
     meta_parts.append(s["meta_generated"].format(date=_esc(generated_at)))
     meta_line = " &middot; ".join(meta_parts) + f"&nbsp;&nbsp;&middot;&nbsp;&nbsp;{_esc(s['meta_issued_by'])}"
 
-    # Préheader invisible (aperçu client mail) — jamais de valeur inventée (R/R omis si non estimable).
+    # Invisible preheader (email client preview) — never an invented value (R/R omitted if not estimable).
     preheader = f"{_esc(title)} (Base) &middot; {_esc(result.recommandation)}"
     if result.rr is not None:
         preheader += f" &middot; R/R {_esc(f'{result.rr:.1f}')}"
@@ -974,7 +979,7 @@ def render_html_report(
     badges_html = _badges_html(result, s, lang)
     rr_block = _rr_block_html(result, s)
 
-    # ── Corps ivoire : blocs conditionnels, chacun omis si la donnée sous-jacente est absente. ──
+    # ── Ivory body: conditional blocks, each omitted if the underlying data is absent. ──
     fallback_note = _fallback_note_html(result, s)
 
     tldr_block = ""
@@ -1000,23 +1005,22 @@ def render_html_report(
 
     scenarios_block = _scenarios_block_html(result.scenarios, s, lang)
 
-    # Analyse technique (niveaux OHLCV réels + graphique) : profondeur réservée au
-    # premium, comme l'analyse détaillée. En standard, entièrement omise (data-gated).
+    # Technical analysis (real OHLCV levels + chart): depth reserved for
+    # premium, like the detailed analysis. In standard, entirely omitted (data-gated).
     ta_block = "" if is_standard else _ta_block_html(result, s)
 
-    # Projection ROI par comparables historiques (Voûte 3, tâche #5) : contexte
-    # tangible réservé au premium, JAMAIS une cible ni un montant inventé. Data-gated :
-    # vide si la capitalisation actuelle est inconnue.
+    # ROI projection via historical comparables (Vault 3, task #5): tangible
+    # context reserved for premium, NEVER an invented target or amount.
+    # Data-gated: empty if the current market cap is unknown.
     roi_block = "" if is_standard else _roi_block_html(result, s)
 
-    # Contexte marché macro (tâche #14) : phase du cycle Bitcoin, même traitement
-    # premium que TA/ROI. Data-gated : vide si l'historique BTC est indisponible.
+    # Macro market context (task #14): Bitcoin cycle phase, same premium
+    # treatment as TA/ROI. Data-gated: empty if BTC history is unavailable.
     market_context_block = "" if is_standard else _market_context_block_html(result, s)
 
-    # Contexte actions/ETF/matières premières (tâche #14 suite, 13/07), même
-    # traitement premium. Data-gated : vide si aucune source n'est disponible
-    # (gate ARIA_ALPHAVANTAGE_ENABLED OFF par défaut -> toujours vide tant que
-    # non activé).
+    # Equities/ETF/commodities context (task #14 continued, 07/13), same
+    # premium treatment. Data-gated: empty if no source is available (gate
+    # ARIA_ALPHAVANTAGE_ENABLED OFF by default -> always empty until enabled).
     equities_context_block = "" if is_standard else _equities_context_block_html(result, s)
 
     watermark_diagonal = ""
@@ -1030,9 +1034,9 @@ def render_html_report(
 
     gaps_block = _gaps_block_html(result.donnees_insuffisantes, s)
 
-    # Analyse détaillée / méthodologie / références : réservées au tier premium.
-    # En standard, ces sections sont entièrement omises (jamais tronquées ni
-    # partiellement affichées) et remplacées par une ligne d'incitation statique.
+    # Detailed analysis / methodology / references: reserved for the premium
+    # tier. In standard, these sections are entirely omitted (never
+    # truncated or partially shown) and replaced by a static teaser line.
     if is_standard:
         detailed_block = f"""<tr>
     <td class="ivory pad" style="background-color:{_IVORY};padding:22px 44px 40px;">

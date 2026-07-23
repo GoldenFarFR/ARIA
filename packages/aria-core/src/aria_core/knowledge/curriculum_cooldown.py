@@ -1,4 +1,4 @@
-"""Cooldown curriculum — persiste sur disque (survit aux redeploy Render)."""
+"""Curriculum cooldown — persisted to disk (survives Render redeploys)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -17,7 +17,7 @@ def minutes_since_iso(iso_ts: str | None) -> float | None:
 
 
 def cooldown_minutes_remaining(last_run: str | None, *, interval_minutes: int) -> int:
-    """Minutes restantes avant le prochain envoi (0 = OK)."""
+    """Minutes remaining before the next send (0 = OK)."""
     since = minutes_since_iso(last_run)
     if since is None:
         return 0

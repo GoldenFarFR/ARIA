@@ -1,8 +1,8 @@
-"""Curriculum de culture large — géo, macro, écosystème, code, crypto/token.
+"""Broad-culture curriculum — geo, macro, ecosystem, code, crypto/token.
 
-Aucun produit payant à livrer (ACP abandonné, Stripe retiré) : chaque cycle se termine
-par une action concrète liée au track-record VC/trading ou à la veille écosystème,
-jamais un app/produit à vendre.
+No paid product to ship (ACP abandoned, Stripe removed): every cycle ends
+with a concrete action tied to the VC/trading track record or ecosystem
+watch, never an app/product to sell.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from aria_core.knowledge.curriculum_cooldown import cooldown_minutes_remaining
 from aria_core.paths import data_dir
 
-CULTIVATION_INTERVAL_MINUTES = 1440  # 1× / jour
+CULTIVATION_INTERVAL_MINUTES = 1440  # 1x/day
 
 _CULTIVATION_DOMAINS: list[tuple[str, str, str]] = [
     (
@@ -117,7 +117,7 @@ def generate_cultivation_message(lang: str = "fr") -> str | None:
 
 
 def mark_ship_completed() -> None:
-    """Réinitialise le compteur cycles sans livrable (appelé après vote app ou log revenu)."""
+    """Resets the cycles-without-shipping counter (called after an app vote or revenue log)."""
     state = _load_state()
     state["cycles_without_ship"] = 0
     _save_state(state)

@@ -1,14 +1,14 @@
-"""Pool de tokens « screenés » — le vivier dans lequel la boucle tire ses 20.
+"""Pool of "screened" tokens — the reservoir the loop draws its 20 from.
 
-Un token qui **passe le filtre** (`skills/safety_screen.py`) entre ici. Chaque
-lundi, la boucle d'entraînement tire **20 candidats au sort** dans le pool actif
-(loterie) → échantillon **non biaisé** (pas de cherry-pick) ET **screené** (pas un
-scam technique). Un token peut être re-vérifié et **retiré** (`dropped`) s'il se
-dégrade (liquidité qui fuit, LP délocké) — un contrat propre aujourd'hui peut ne
-plus l'être demain.
+A token that **passes the filter** (`skills/safety_screen.py`) enters here.
+Every Monday, the training loop draws **20 random candidates** from the
+active pool (lottery) → an **unbiased** sample (no cherry-picking) AND
+**screened** (not a technical scam). A token can be re-checked and
+**removed** (`dropped`) if it degrades (leaking liquidity, unlocked LP) — a
+clean contract today may not stay clean tomorrow.
 
-Stockage local SQLite `aria.db`, table `screened_token` (clé = contrat).
-Aucune action financière : c'est un annuaire de candidats.
+Local SQLite storage in `aria.db`, table `screened_token` (key = contract).
+No financial action: this is a directory of candidates.
 """
 from __future__ import annotations
 
@@ -38,15 +38,15 @@ _COLUMNS = [
     "source",
 ]
 
-# Colonnes ajoutées après coup : (nom, définition SQL) pour la migration ALTER
-# (même patron que `vc_predictions.py`/`exam.py` — SQLite ne les crée pas sur une
-# table préexistante, seulement `CREATE TABLE IF NOT EXISTS`).
+# Columns added after the fact: (name, SQL definition) for the ALTER migration
+# (same pattern as `vc_predictions.py`/`exam.py` — SQLite doesn't create them on
+# a pre-existing table, only `CREATE TABLE IF NOT EXISTS`).
 _ADDED_COLUMNS = [
     ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
-    # Pipeline de découverte d'origine ('top_pools' / 'radar_x' / ...) : chaîne vide
-    # sur les lignes historiques (jamais NULL, jamais un rejet opaque). Suite audit
-    # #77 diversification (12/07) : sans ça, impossible de mesurer objectivement quel
-    # pipeline contribue le bruit (échecs durs) vs le signal.
+    # Origin discovery pipeline ('top_pools' / 'radar_x' / ...): empty string on
+    # historical rows (never NULL, never an opaque rejection). Follow-up to the
+    # #77 diversification audit (12/07): without this, there's no objective way
+    # to measure which pipeline contributes noise (hard failures) vs signal.
     ("source", "TEXT NOT NULL DEFAULT ''"),
 ]
 
@@ -73,8 +73,8 @@ async def _ensure_table() -> None:
             )
             """
         )
-        # Migration à chaud : ajoute les colonnes manquantes aux DB existantes
-        # (SQLite ne les crée pas si la table préexiste). Idempotent, non destructif.
+        # Hot migration: adds missing columns to existing DBs
+        # (SQLite doesn't create them if the table pre-exists). Idempotent, non-destructive.
         existing = {
             row[1]
             for row in await (await db.execute("PRAGMA table_info(screened_token)")).fetchall()
@@ -98,16 +98,17 @@ async def upsert_screened(
     screen_reason: str = "",
     source: str = "",
 ) -> None:
-    """Ajoute/rafraîchit un token screené (status ``active``).
+    """Adds/refreshes a screened token (status ``active``).
 
-    Upsert : ``first_screened_at`` est préservé au ré-enregistrement (on garde la
-    date de première entrée), ``last_checked_at`` est toujours mis à jour. Ré-activer
-    (`active`) un token qui repasse le filtre est volontaire. ``retry_count`` est
-    remis à zéro : une fois actif, le compteur de tentatives « pending » n'a plus
-    de sens — s'il redégrade plus tard, il repart sur un budget de tentatives frais.
-    ``source`` (optionnel, ex. ``'top_pools'``/``'radar_x'``) : pipeline de découverte
-    d'origine, préservé au ré-enregistrement comme ``first_screened_at`` (n'écrase pas
-    une source déjà connue si l'appelant ne la précise pas).
+    Upsert: ``first_screened_at`` is preserved on re-registration (keeps the
+    first-entry date), ``last_checked_at`` is always updated. Re-activating
+    (`active`) a token that passes the filter again is intentional.
+    ``retry_count`` is reset to zero: once active, the "pending" retry counter
+    no longer means anything — if it degrades again later, it starts a fresh
+    retry budget. ``source`` (optional, e.g. ``'top_pools'``/``'radar_x'``):
+    origin discovery pipeline, preserved on re-registration like
+    ``first_screened_at`` (doesn't overwrite an already-known source if the
+    caller doesn't specify one).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -146,20 +147,20 @@ async def record_rejected(
     source: str = "", liquidity_usd: float = 0.0, security_score: int = 0,
     verdict: str = "", top_holder_pct: float | None = None,
 ) -> None:
-    """Marque un contrat comme rejeté (« jeté pour toujours »), avec sa raison.
+    """Marks a contract as rejected ("thrown away for good"), with its reason.
 
-    On le garde EN BASE (status ``rejected``) plutôt que de l'ignorer : ça évite de
-    le re-scanner sans fin (intransigeance = efficace), et ça permet une
-    **résurrection** ciblée si un bruit réapparaît (cf. ``reconsider``). Upsert :
-    ``first_screened_at`` préservé. ``source`` : même logique que ``upsert_screened``
-    (préservé si non précisé au ré-enregistrement).
+    Kept IN THE DATABASE (status ``rejected``) rather than ignored: this avoids
+    re-scanning it endlessly (intransigence = efficient), and allows a
+    targeted **resurrection** if noise reappears (see ``reconsider``). Upsert:
+    ``first_screened_at`` preserved. ``source``: same logic as
+    ``upsert_screened`` (preserved if not specified on re-registration).
 
-    ``liquidity_usd``/``security_score``/``verdict``/``top_holder_pct`` (optionnels,
-    15/07, même correctif que ``record_pending``) : transmettre les vraies valeurs du
-    scan quand l'appelant les a déjà (rejet APRÈS un scan complet), plutôt que les
-    laisser à 0/''/NULL — sinon un rejet dur (honeypot, score catastrophique) est
-    indiscernable d'un rejet dont on n'a jamais su le score. Défauts préservés pour
-    l'appelant sans scan.
+    ``liquidity_usd``/``security_score``/``verdict``/``top_holder_pct``
+    (optional, 15/07, same fix as ``record_pending``): pass the real scan
+    values when the caller already has them (rejection AFTER a complete scan),
+    rather than leaving them at 0/''/NULL — otherwise a hard rejection
+    (honeypot, catastrophic score) is indistinguishable from a rejection whose
+    score was never known. Defaults preserved for a caller with no scan.
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -193,31 +194,33 @@ async def record_pending(
     source: str = "", liquidity_usd: float = 0.0, security_score: int = 0,
     verdict: str = "", top_holder_pct: float | None = None,
 ) -> None:
-    """Marque un contrat comme « à revoir » (échec MOU, donnée indisponible), avec sa
-    raison — jamais un rejet définitif.
+    """Marks a contract as "to revisit" (soft failure, unavailable data), with
+    its reason — never a definitive rejection.
 
-    Contrairement à ``record_rejected``, ``status='pending'`` NE court-circuite PAS le
-    re-scan (``get_status`` ne bloque que sur 'rejected'/'active') : le contrat sera
-    retenté au prochain cycle. Objectif : que la raison d'un échec mou (holders non
-    renvoyés, contrat non vérifié, etc.) laisse une trace consultable plutôt que de
-    disparaître sans aucune donnée, en base ou ailleurs (cf. audit #77).
+    Unlike ``record_rejected``, ``status='pending'`` does NOT short-circuit
+    re-scanning (``get_status`` only blocks on 'rejected'/'active'): the
+    contract will be retried on the next cycle. Goal: the reason for a soft
+    failure (holders not returned, unverified contract, etc.) leaves a
+    queryable trace rather than vanishing with no data at all, anywhere
+    (see audit #77).
 
-    ``liquidity_usd``/``security_score``/``verdict`` (optionnels, 15/07) : quand
-    l'appelant a déjà un scan complet en main (échec mou APRÈS le scan, ex.
-    ``token_absorber.absorb`` sur holders inconnus), transmettre les vraies valeurs
-    calculées plutôt que de les laisser à 0 — avant ce correctif, un candidat pending
-    prometteur (score/liquidité corrects, juste une donnée annexe manquante) était
-    indiscernable d'un candidat pending sans aucun signal, empêchant tout classement
-    par proximité du seuil (cf. ``list_closest_to_passing``). Défaut 0/'' préservé
-    pour l'appelant qui n'a PAS encore de scan (ex. pré-filtre Volet C) — jamais une
-    donnée inventée.
+    ``liquidity_usd``/``security_score``/``verdict`` (optional, 15/07): when
+    the caller already has a complete scan in hand (soft failure AFTER the
+    scan, e.g. ``token_absorber.absorb`` on unknown holders), pass the real
+    computed values rather than leaving them at 0 — before this fix, a
+    promising pending candidate (correct score/liquidity, just one missing
+    side-datum) was indistinguishable from a pending candidate with no signal
+    at all, preventing any ranking by proximity to the threshold (see
+    ``list_closest_to_passing``). Default 0/'' preserved for a caller that
+    does NOT yet have a scan (e.g. Volet C pre-filter) — never a made-up value.
 
-    ``retry_count`` s'incrémente à chaque appel (1 au premier échec mou, +1 à chaque
-    repassage — que ce soit une redécouverte fortuite ou un retry délibéré, même
-    fonction pour les deux, cf. ``token_absorber.absorb``) : c'est ce compteur que
-    ``abandon_stale_pending`` lit pour arrêter d'insister sur un signal qui ne mûrit
-    jamais (cf. suite audit #77/#105). ``source`` : même logique que
-    ``upsert_screened`` (préservé si non précisé au ré-enregistrement).
+    ``retry_count`` increments on every call (1 on the first soft failure, +1
+    on every re-pass — whether it's a chance rediscovery or a deliberate
+    retry, same function for both, see ``token_absorber.absorb``): this is
+    the counter that ``abandon_stale_pending`` reads to stop insisting on a
+    signal that never matures (see #77/#105 audit follow-up). ``source``:
+    same logic as ``upsert_screened`` (preserved if not specified on
+    re-registration).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -248,7 +251,7 @@ async def record_pending(
 
 
 async def get_status(contract: str) -> str | None:
-    """Statut connu d'un contrat (active / rejected / dropped), ou None si jamais vu."""
+    """Known status of a contract (active / rejected / dropped), or None if never seen."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
@@ -258,14 +261,15 @@ async def get_status(contract: str) -> str | None:
 
 
 async def reconsider(contract: str) -> bool:
-    """Un bruit a réapparu : rouvre un rejeté pour réévaluation. True si applicable.
+    """Noise has reappeared: reopens a rejected token for re-evaluation. True if applicable.
 
-    Ne fait que LEVER le « jeté pour toujours » (statut -> pending) ; la vraie
-    décision revient au re-scan on-chain (le bruit filtre/réveille, il ne décide pas).
-    Retourne False si le contrat est inconnu ou déjà actif. ``retry_count`` repart à
-    zéro : un signal externe qui justifie la résurrection mérite un budget de
-    tentatives frais, pas la suite d'un compteur d'une vie précédente (y compris pour
-    un contrat déjà abandonné par ``abandon_stale_pending``).
+    Only LIFTS the "thrown away for good" status (-> pending); the real
+    decision goes back to the on-chain re-scan (noise filters/wakes it up, it
+    doesn't decide). Returns False if the contract is unknown or already
+    active. ``retry_count`` restarts at zero: an external signal that
+    justifies the resurrection deserves a fresh retry budget, not the
+    continuation of a counter from a previous life (including for a contract
+    already abandoned by ``abandon_stale_pending``).
     """
     status = await get_status(contract)
     if status not in ("rejected", "dropped"):
@@ -282,7 +286,7 @@ async def reconsider(contract: str) -> bool:
 
 
 async def drop_token(contract: str, *, reason: str = "") -> None:
-    """Retire un token du pool actif (dégradé). Reste en base (status ``dropped``)."""
+    """Removes a token from the active pool (degraded). Stays in the database (status ``dropped``)."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -296,17 +300,17 @@ async def drop_token(contract: str, *, reason: str = "") -> None:
 async def list_stale_pending(
     *, older_than_hours: int = 24, limit: int = 20, network: str = "base"
 ) -> list[dict]:
-    """Candidats ``pending`` dont le dernier check date d'au moins ``older_than_hours``.
+    """``pending`` candidates whose last check is at least ``older_than_hours`` old.
 
-    'pending' == échec MOU (donnée pas encore mûre : contrat pas encore vérifié,
-    holders pas encore lisibles, liquidité pas encore montée...) — jamais un rejet
-    définitif (cf. ``record_pending``), mais rien ne le retente PROACTIVEMENT
-    aujourd'hui : seule une redécouverte fortuite (même contrat qui réapparaît dans
-    ``discover_top_pools``/``discover_direct_candidates``) le fait rescanner. Cette
-    liste sert de file d'attente pour un retry délibéré (cf.
-    ``base_crawler.retry_stale_pending``), pas un nouveau mécanisme de filtrage —
-    ``token_absorber.absorb`` (déjà appelé sans court-circuit sur 'pending') fait
-    tout le travail de réévaluation.
+    'pending' == soft failure (data not yet mature: contract not yet verified,
+    holders not yet readable, liquidity not yet up...) — never a definitive
+    rejection (see ``record_pending``), but nothing PROACTIVELY retries it
+    today: only a chance rediscovery (the same contract reappearing in
+    ``discover_top_pools``/``discover_direct_candidates``) triggers a
+    re-scan. This list serves as a queue for a deliberate retry (see
+    ``base_crawler.retry_stale_pending``), not a new filtering mechanism —
+    ``token_absorber.absorb`` (already called without a short-circuit on
+    'pending') does all the re-evaluation work.
     """
     await _ensure_table()
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
@@ -324,23 +328,24 @@ async def list_stale_pending(
 async def abandon_stale_pending(
     contract: str, *, max_retries: int = 5, max_age_days: int = 7
 ) -> bool:
-    """Bascule un ``pending`` qui n'en finit plus vers un état terminal (``rejected``).
+    """Moves a never-ending ``pending`` to a terminal state (``rejected``).
 
-    Un candidat en échec MOU indéfiniment (jamais actif, jamais un vrai
-    ``hard_fail`` malveillant confirmé) resterait sinon ``pending`` pour toujours :
-    retenté à chaque cycle ``retry_stale_pending`` (audit #77), un scan API toutes
-    les 24h sans fin pour un signal qui ne mûrit jamais. **Ce n'est PAS un nouveau
-    critère de sécurité** — aucun filtre dupliqué, ``safety_screen``/
-    ``token_absorber`` inchangés, le seuil `passed` reste identique — uniquement
-    une limite sur le NOMBRE DE PASSAGES : au-delà de ``max_retries`` tentatives
-    OU ``max_age_days`` jours depuis ``first_screened_at``, on arrête d'insister et
-    on classe définitivement, en gardant la dernière raison molle connue en trace
-    (jamais une case vide, même doctrine que ``record_pending``/``record_rejected``).
+    A candidate stuck in a soft failure indefinitely (never active, never a
+    real confirmed malicious ``hard_fail``) would otherwise stay ``pending``
+    forever: retried on every ``retry_stale_pending`` cycle (audit #77), an
+    API scan every 24h with no end for a signal that never matures. **This is
+    NOT a new security criterion** — no duplicated filter, ``safety_screen``/
+    ``token_absorber`` unchanged, the `passed` threshold stays the same —
+    only a limit on the NUMBER OF PASSES: beyond ``max_retries`` attempts OR
+    ``max_age_days`` days since ``first_screened_at``, we stop insisting and
+    classify it definitively, keeping the last known soft reason as a trace
+    (never an empty field, same doctrine as ``record_pending``/``record_rejected``).
 
-    Retourne False (no-op) si le contrat est inconnu, n'est plus ``pending``, ou n'a
-    pas encore dépassé les seuils — appelé par ``base_crawler.retry_stale_pending``
-    uniquement après un nouvel échec mou confirmé (``token_absorber.absorb`` a déjà
-    tranché : encore MOU, ni mûri en ``active`` ni un vrai rejet malveillant).
+    Returns False (no-op) if the contract is unknown, is no longer
+    ``pending``, or hasn't yet exceeded the thresholds — called by
+    ``base_crawler.retry_stale_pending`` only after a new confirmed soft
+    failure (``token_absorber.absorb`` has already decided: still SOFT,
+    neither matured to ``active`` nor a real malicious rejection).
     """
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -374,11 +379,12 @@ async def abandon_stale_pending(
 
 
 async def list_pool(status: str = "active", limit: int = 1000, *, network: str = "base") -> list[dict]:
-    """``network="base"`` par défaut préserve EXACTEMENT le comportement historique
-    (le pool VC 85% n'a jamais écrit autre chose que ``network="base"``). Le pool
-    bonding (niche 15%, cf. ``bonding_absorber.py``) vit sous ``network="base-bonding"``
-    — jamais mélangé sans un appel explicite, pour ne pas contaminer le tirage
-    hebdomadaire (``weekly_training.draw_lottery`` reste 100% pool VC, inchangé)."""
+    """``network="base"`` by default preserves EXACTLY the historical behavior
+    (the 85% VC pool has never written anything other than
+    ``network="base"``). The bonding pool (15% niche, see
+    ``bonding_absorber.py``) lives under ``network="base-bonding"`` — never
+    mixed in without an explicit call, so as not to contaminate the weekly
+    draw (``weekly_training.draw_lottery`` stays 100% VC pool, unchanged)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (
@@ -404,11 +410,12 @@ async def count_pool(status: str = "active", *, network: str = "base") -> int:
 
 
 async def draw_lottery(n: int = 20, *, status: str = "active", network: str = "base") -> list[dict]:
-    """Tire ``n`` tokens AU SORT dans le pool actif (échantillon non biaisé).
+    """Draws ``n`` tokens AT RANDOM from the active pool (unbiased sample).
 
-    Si le pool contient moins de ``n`` tokens, retourne tout le pool (mélangé).
-    Le tirage aléatoire est ce qui empêche le cherry-pick : ARIA ne choisit pas
-    « ceux qui l'arrangent », le hasard décide dans un vivier déjà screené.
+    If the pool contains fewer than ``n`` tokens, returns the whole pool
+    (shuffled). The random draw is what prevents cherry-picking: ARIA
+    doesn't pick "the ones that suit it", chance decides within an
+    already-screened reservoir.
     """
     pool = await list_pool(status=status, limit=100_000, network=network)
     if n <= 0 or not pool:
@@ -423,13 +430,13 @@ _LIQUIDITY_TARGET_USD = 30_000.0
 
 
 async def list_closest_to_passing(*, network: str = "base", limit: int = 3) -> list[dict]:
-    """Classe les candidats ``pending`` par proximité du seuil de sécurité — de vrais
-    points d'entrée à surveiller plutôt qu'un simple comptage binaire actif/pas actif
-    (demande opérateur 14/07, cf. CLAUDE.md). Heuristique informationnelle, pas un
-    score officiel : score de sécurité le plus haut d'abord (le plus proche de passer
-    le seuil ``safety_screen`` par en-dessous), puis liquidité la plus proche de
-    30 000$ (le plancher usuel) en cas d'égalité. Une valeur manquante (``None``) est
-    reléguée en fin de classement plutôt que de fausser le tri.
+    """Ranks ``pending`` candidates by proximity to the security threshold — real
+    entry points to watch rather than a simple active/not-active binary count
+    (operator request 14/07, see CLAUDE.md). An informational heuristic, not
+    an official score: highest security score first (closest to clearing the
+    ``safety_screen`` threshold from below), then liquidity closest to
+    30,000$ (the usual floor) as a tiebreaker. A missing value (``None``) is
+    relegated to the end of the ranking rather than skewing the sort.
     """
     pool = await list_pool(status="pending", limit=100_000, network=network)
 

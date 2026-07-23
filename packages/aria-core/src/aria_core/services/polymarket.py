@@ -1,20 +1,20 @@
-"""Client de lecture seule Polymarket (Gamma API) — signal macro par marché de
-prédiction (#59).
+"""Read-only Polymarket client (Gamma API) — macro signal via prediction
+market (#59).
 
-Expose la probabilité IMPLICITE (prix du marché, 0-1) d'événements macro réels
-(ex. décisions de taux Fed) — un signal complémentaire à `btc_cycles` (qui lit
-le cycle de halving, pas les anticipations de politique monétaire). Aucune
-écriture, aucune clé API requise (Gamma API publique). Politique d'erreurs
-identique à `services/coingecko.py` (cf. AGENTS.md) :
-- Timeout / endpoint indisponible : 1 retry après 5s, puis fallback explicite.
-- Aucune donnée manquante n'est jamais remplacée par une supposition — le
-  champ `error` (et `available=False`) porte l'absence de donnée.
+Exposes the IMPLIED probability (market price, 0-1) of real macro events
+(e.g. Fed rate decisions) — a signal complementary to `btc_cycles` (which
+reads the halving cycle, not monetary-policy expectations). No writes, no API
+key required (public Gamma API). Same error policy as
+`services/coingecko.py` (cf. AGENTS.md):
+- Timeout / endpoint unavailable: 1 retry after 5s, then explicit fallback.
+- Missing data is never replaced by a guess — the `error` field (and
+  `available=False`) carry the absence of data.
 
-Câblé dans le contexte LLM de `/vc` (`vc_analysis._fetch_polymarket_signals`)
-depuis le 10/07 -- note "seam dormant" ci-dessus périmée, corrigée le 19/07
-(dérive doc/code trouvée en auditant l'unification /vc<->momentum). Depuis le
-19/07, `momentum_entry.py` réutilise le MÊME client + le MÊME formatteur
-(`format_polymarket_prompt_lines`) pour la même profondeur d'analyse.
+Wired into the `/vc` LLM context (`vc_analysis._fetch_polymarket_signals`)
+since 10/07 -- the "dormant seam" note above is stale, fixed on 19/07 (doc/code
+drift found while auditing the /vc<->momentum unification). Since 19/07,
+`momentum_entry.py` reuses the SAME client + the SAME formatter
+(`format_polymarket_prompt_lines`) for the same depth of analysis.
 """
 from __future__ import annotations
 
@@ -30,18 +30,18 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://gamma-api.polymarket.com"
 UNAVAILABLE = "signal Polymarket indisponible"
 
-# Tags Polymarket à interroger pour le contexte macro (#59). Uniquement
-# ``fed-rates`` pour l'instant : testé en direct le 10/07, donne le marché de
-# prédiction le plus liquide sur les décisions de taux Fed -- signal
-# complémentaire à ``btc_cycles`` (cycle halving) et ``market_sentiment``
-# (court/moyen terme technique). Extension à d'autres tags = décision opérateur.
+# Polymarket tags to query for macro context (#59). Only ``fed-rates`` for
+# now: tested live on 10/07, gives the most liquid prediction market on Fed
+# rate decisions -- a signal complementary to ``btc_cycles`` (halving cycle)
+# and ``market_sentiment`` (short/medium-term technical). Extending to other
+# tags = operator decision.
 DEFAULT_TAGS: list[str] = ["fed-rates"]
 
 
 @dataclass
 class PolymarketOutcome:
     label: str
-    probability: float  # 0.0-1.0, prix du marché = probabilite implicite
+    probability: float  # 0.0-1.0, market price = implied probability
 
 
 @dataclass
@@ -55,7 +55,7 @@ class PolymarketEventSummary:
 
 
 class PolymarketClient:
-    """Client HTTP async, lecture seule, throttle prudent (API publique sans clé)."""
+    """Async HTTP client, read-only, cautious throttle (public API, no key)."""
 
     def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 2.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -74,16 +74,16 @@ class PolymarketClient:
 
     def _record_failure(self, detail: str) -> None:
         self._consecutive_failures += 1
-        logger.info("polymarket: echec appel -- %s", detail)
+        logger.info("polymarket: call failed -- %s", detail)
 
     def _record_success(self) -> None:
         self._consecutive_failures = 0
 
     async def fetch_top_event_by_tag(self, tag_slug: str) -> PolymarketEventSummary:
-        """Événement macro le plus liquide pour un tag donné (ex. `fed-rates`).
+        """Most liquid macro event for a given tag (e.g. `fed-rates`).
 
-        Jamais de probabilité inventée : événement/marché introuvable ou données
-        malformées -> `available=False`.
+        Never a fabricated probability: event/market not found or malformed
+        data -> `available=False`.
         """
         url = (
             f"{self.base_url}/events?limit=1&active=true&closed=false"
@@ -102,7 +102,7 @@ class PolymarketClient:
             except httpx.TransportError as exc2:
                 self._record_failure(f"{url} -> {exc2}")
                 return PolymarketEventSummary(available=False, error=f"{UNAVAILABLE} (timeout)")
-        except Exception as exc:  # noqa: BLE001 -- une panne reseau ne doit jamais remonter
+        except Exception as exc:  # noqa: BLE001 -- a network outage must never propagate
             self._record_failure(f"{url} -> {exc}")
             return PolymarketEventSummary(available=False, error=UNAVAILABLE)
 
@@ -113,11 +113,11 @@ class PolymarketClient:
         try:
             events = response.json()
         except Exception:  # noqa: BLE001
-            self._record_failure(f"{url} -> reponse illisible")
+            self._record_failure(f"{url} -> unreadable response")
             return PolymarketEventSummary(available=False, error=UNAVAILABLE)
 
         if not isinstance(events, list) or not events:
-            self._record_failure(f"{url} -> aucun evenement pour ce tag")
+            self._record_failure(f"{url} -> no event for this tag")
             return PolymarketEventSummary(available=False, error=UNAVAILABLE)
 
         event = events[0]
@@ -129,16 +129,16 @@ class PolymarketClient:
             if not question or not raw_prices:
                 continue
             try:
-                # outcomePrices est une CHAINE JSON (pas une vraie liste) sur cet
-                # endpoint -- verifie en direct le 10/07, ne jamais supposer le type.
+                # outcomePrices is a JSON STRING (not a real list) on this
+                # endpoint -- verified live on 10/07, never assume the type.
                 prices = json.loads(raw_prices) if isinstance(raw_prices, str) else raw_prices
-                prob = float(prices[0])  # prix du "Yes" -> probabilite implicite de la question.
+                prob = float(prices[0])  # price of "Yes" -> implied probability of the question.
             except (ValueError, TypeError, IndexError, json.JSONDecodeError):
                 continue
             outcomes.append(PolymarketOutcome(label=question, probability=prob))
 
         if not outcomes:
-            self._record_failure(f"{url} -> marches sans prix exploitables")
+            self._record_failure(f"{url} -> markets with no usable price")
             return PolymarketEventSummary(available=False, error=UNAVAILABLE)
 
         self._record_success()
@@ -152,16 +152,16 @@ class PolymarketClient:
 
 
 def format_polymarket_prompt_lines(events: list[dict]) -> list[str]:
-    """Lignes compactes pour injection dans un prompt LLM (19/07) -- extrait depuis
-    la logique inline de ``vc_analysis.py`` (jusque-là dupliquée en substance à
-    chaque appelant) pour que ``momentum_entry.py`` bénéficie de la MÊME diligence
-    macro que `/vc` sans réimplémenter le filtrage/troncature/sanitisation.
+    """Compact lines for injection into an LLM prompt (19/07) -- extracted from
+    ``vc_analysis.py``'s inline logic (until then duplicated in substance by
+    every caller) so that ``momentum_entry.py`` benefits from the SAME macro
+    diligence as `/vc` without reimplementing filtering/truncation/sanitization.
 
-    Entrée : la forme produite par une boucle sur ``fetch_top_event_by_tag`` --
+    Input: the shape produced by looping over ``fetch_top_event_by_tag`` --
     ``[{"title": str, "outcomes": [{"label": str, "probability": float}, ...]}]``.
-    3 outcomes max par événement (même plafond que ``vc_analysis.py``), jamais une
-    probabilité inventée -- une entrée malformée est simplement ignorée, jamais une
-    exception qui remonterait à l'appelant."""
+    3 outcomes max per event (same cap as ``vc_analysis.py``), never a
+    fabricated probability -- a malformed entry is simply skipped, never an
+    exception propagating to the caller."""
     from aria_core.sanitize import sanitize_untrusted_text
 
     lines: list[str] = []

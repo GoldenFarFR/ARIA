@@ -1,51 +1,56 @@
-"""Cycle autonome Sepolia — ARIA décide ET exécute seule, sans clic Telegram, sur testnet
-UNIQUEMENT. Décision opérateur explicite et répétée (08/07) : « il faut que le Sepolia
-soit le test le plus dur qu'elle ait passé, et qu'une fois arrivée dans le vrai marché,
-ce soit simple pour elle de dire oui ou non » — Sepolia sert précisément à observer le
-comportement NON FILTRÉ (hésitation, erreurs, dégradation) avant que quoi que ce soit
-n'atteigne du capital réel.
+"""Autonomous Sepolia cycle — ARIA decides AND executes alone, no Telegram
+click, on testnet ONLY. Explicit and repeated operator decision (08/07): "the
+Sepolia test needs to be the hardest test she's ever passed, so that once she
+reaches the real market, it's simple for her to say yes or no" — Sepolia
+specifically serves to observe UNFILTERED behavior (hesitation, errors,
+degradation) before anything reaches real capital.
 
-Différence structurelle avec tout le reste du dôme onchain : ce module N'APPELLE JAMAIS
-wallet_guard.escalate_spend/resolve_spend — chemin totalement séparé, pour que le
-garde-fou Telegram partagé (utilisé par tout ce qui touchera un jour du capital réel)
-reste intact et non modifié. Rien ici ne s'applique au mainnet : send_anchor_transaction
-verrouille chain_id=84532 (aria_core.onchain.sepolia_wallet), et ce module ajoute son
-PROPRE verrou (sepolia_autonomous_enabled) par-dessus sepolia_wallet_enabled.
+Structural difference from the rest of the onchain dome: this module NEVER
+calls wallet_guard.escalate_spend/resolve_spend — a completely separate path,
+so that the shared Telegram guardrail (used by everything that will one day
+touch real capital) stays intact and unmodified. Nothing here applies to
+mainnet: send_anchor_transaction locks chain_id=84532
+(aria_core.onchain.sepolia_wallet), and this module adds its OWN lock
+(sepolia_autonomous_enabled) on top of sepolia_wallet_enabled.
 
-Triple gate (défense en profondeur), les trois doivent être vrais, aucun actif par défaut :
-  1. ARIA_SEPOLIA_WALLET_ENABLED   — le wallet Sepolia existe (clé lisible).
-  2. ARIA_SEPOLIA_AUTONOMOUS_ENABLED — l'autonomie (sans clic Telegram) est armée.
-  3. ARIA_ONCHAIN_ANCHOR_ENABLED + ARIA_LEDGER_ADDRESS — un contrat ledger est configuré.
+Triple gate (defense in depth), all three must be true, none active by
+default:
+  1. ARIA_SEPOLIA_WALLET_ENABLED   — the Sepolia wallet exists (key readable).
+  2. ARIA_SEPOLIA_AUTONOMOUS_ENABLED — autonomy (no Telegram click) is armed.
+  3. ARIA_ONCHAIN_ANCHOR_ENABLED + ARIA_LEDGER_ADDRESS — a ledger contract is configured.
 
-Kill-switch : chaque cycle relit outgoing_pause.is_paused() — le /stop Telegram existant
-gèle ce cycle exactement comme il gèle tweets/ACP/jobs planifiés. Pas de mécanisme parallèle.
+Kill-switch: every cycle re-reads outgoing_pause.is_paused() — the existing
+Telegram /stop freezes this cycle exactly like it freezes tweets/ACP/scheduled
+jobs. No parallel mechanism.
 
-Le sizing (Kelly) et la décision utilisent les VRAIES données marché (même client
-d'analyse VC que paper_trader/weekly_training) — mais Sepolia n'a pas de pool DEX réel
-pour un token Base arbitraire (testnet, aucune liquidité indexée). L'artefact d'exécution
-est donc un ancrage onchain autonome de l'enregistrement de décision (signature réelle,
-gas réel, nonce réel, échecs RPC réels) — exactement ce qu'un testnet permet de valider
-selon la recherche même de l'opérateur : « un test d'ingénierie logicielle, pas une
-validation de stratégie de trading ». Le montant Kelly est calculé sur un capital de
-répétition fictif (REHEARSAL_NOTIONAL_USD) pour que la discipline de sizing elle-même
-soit répétée, même si aucun ETH réel ne change de mains.
+Sizing (Kelly) and the decision use REAL market data (same VC analysis client
+as paper_trader/weekly_training) — but Sepolia has no real DEX pool for an
+arbitrary Base token (testnet, no indexed liquidity). The execution artefact
+is therefore an autonomous onchain anchoring of the decision record (real
+signature, real gas, real nonce, real RPC failures) — exactly what a testnet
+allows validating according to the operator's own reasoning: "a software
+engineering test, not a trading-strategy validation." The Kelly amount is
+computed on a fictional rehearsal capital (REHEARSAL_NOTIONAL_USD) so that the
+sizing discipline itself is rehearsed, even though no real ETH changes hands.
 
-Télémétrie : CHAQUE cycle est journalisé (BUY, HOLD, ERROR, SKIP) — jamais seulement les
-succès. C'est la demande explicite de l'opérateur : « si elle hésite je veux le savoir,
-si elle chie je veux le savoir, si elle en a marre je veux le savoir ». Traduit
-honnêtement en télémétrie mesurable : latence de décision (hésitation = anormalement
-lente vs sa propre moyenne récente), erreurs brutes, et un coupe-circuit local qui
-s'arme après des échecs consécutifs puis se ré-évalue proprement au cycle suivant.
+Telemetry: EVERY cycle is logged (BUY, HOLD, ERROR, SKIP) — never only the
+successes. This is the operator's explicit request: "if she hesitates I want
+to know, if she screws up I want to know, if she gets fed up I want to know."
+Honestly translated into measurable telemetry: decision latency (hesitation =
+abnormally slow vs. its own recent average), raw errors, and a local circuit
+breaker that arms after consecutive failures then cleanly re-evaluates on the
+next cycle.
 
-Swap de test (09/07, décision opérateur explicite « swap réel sur Sepolia, actif de
-test ») : sur une décision BUY, en plus de l'ancrage de décision ci-dessus, une tentative
-INDÉPENDANTE de swap réel (wrap/approve/exactInputSingle, ``sepolia_wallet.
-send_test_swap_transaction``) est journalisée si ``ARIA_SEPOLIA_SWAP_ENABLED``. Montant
-fixe petit (``TEST_SWAP_AMOUNT_WEI``), jamais dimensionné par Kelly — ce swap ne porte PAS
-sur le token candidat réellement analysé (inexistant sur ce testnet) mais sur la paire de
-test configurée : il valide le mécanisme d'exécution, pas une thèse de marché. Échec du
-swap n'efface jamais le succès de l'ancrage de décision, et inversement — deux artefacts
-indépendants du même cycle.
+Test swap (09/07, explicit operator decision "real swap on Sepolia, test
+asset"): on a BUY decision, in addition to the decision anchor above, an
+INDEPENDENT real swap attempt (wrap/approve/exactInputSingle,
+``sepolia_wallet.send_test_swap_transaction``) is logged if
+``ARIA_SEPOLIA_SWAP_ENABLED``. Small fixed amount (``TEST_SWAP_AMOUNT_WEI``),
+never sized by Kelly — this swap does NOT concern the actually-analyzed
+candidate token (nonexistent on this testnet) but the configured test pair: it
+validates the execution mechanism, not a market thesis. A swap failure never
+erases the success of the decision anchor, and vice versa — two independent
+artefacts from the same cycle.
 """
 from __future__ import annotations
 
@@ -62,19 +67,19 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-REHEARSAL_NOTIONAL_USD = 10_000.0   # capital fictif de répétition — jamais un fonds réel
-KELLY_SAFETY_FACTOR = 0.5           # demi-Kelly (tempérament standard face au plein-Kelly, trop volatile)
-KELLY_CAP = 0.20                    # plafond dur, même si le calcul brut dépasse
-KELLY_MIN_SAMPLE = 5                # sous ce nombre de BUY clôturés, échantillon insuffisant -> fraction conservatrice
+REHEARSAL_NOTIONAL_USD = 10_000.0   # fictional rehearsal capital — never real funds
+KELLY_SAFETY_FACTOR = 0.5           # half-Kelly (standard tempering vs. full-Kelly, too volatile)
+KELLY_CAP = 0.20                    # hard cap, even if the raw computation exceeds it
+KELLY_MIN_SAMPLE = 5                # below this number of closed BUYs, insufficient sample -> conservative fraction
 KELLY_FALLBACK_FRACTION = 0.01
 
-MAX_AUTONOMOUS_TX_PER_DAY = 12      # plafond de bon sens (RPC/faucet), pas un plafond de risque financier
-CANDIDATE_COOLDOWN_HOURS = 6        # ne ré-analyse pas le même contrat avant ce délai (rotation du pool)
+MAX_AUTONOMOUS_TX_PER_DAY = 12      # sanity cap (RPC/faucet), not a financial risk cap
+CANDIDATE_COOLDOWN_HOURS = 6        # doesn't re-analyze the same contract before this delay (pool rotation)
 LATENCY_BASELINE_SAMPLE = 20
 LATENCY_HESITATION_MULTIPLE = 2.0
 CONSECUTIVE_ERROR_CIRCUIT_BREAKER = 4
 
-TEST_SWAP_AMOUNT_WEI = 200_000_000_000_000  # ~0.0002 ETH testnet, montant fixe mécanique — jamais Kelly
+TEST_SWAP_AMOUNT_WEI = 200_000_000_000_000  # ~0.0002 testnet ETH, fixed mechanical amount — never Kelly
 
 _LOG_COLS = (
     "cycle_at", "contract", "symbol", "decision", "reasoning_excerpt",
@@ -85,8 +90,9 @@ _ADDED_LOG_COLS = ("swap_tx", "swap_error")
 
 
 def sepolia_autonomous_enabled() -> bool:
-    """Gate dédié, au-dessus de sepolia_wallet_enabled : le wallet peut exister sans que
-    l'autonomie soit armée — deux décisions séparées, deux flags séparés."""
+    """Dedicated gate, on top of sepolia_wallet_enabled: the wallet can exist
+    without autonomy being armed — two separate decisions, two separate
+    flags."""
     from aria_core.onchain.sepolia_wallet import sepolia_wallet_enabled
 
     if not sepolia_wallet_enabled():
@@ -99,9 +105,10 @@ def sepolia_autonomous_enabled() -> bool:
 def kelly_fraction(
     win_rate: float | None, avg_win_pct: float | None, avg_loss_pct: float | None,
 ) -> float:
-    """Fraction de Kelly (demi-Kelly, plafonnée) à partir des VRAIES statistiques de
-    calibration BUY (vc_predictions.compute_metrics). Jamais de confiance inventée :
-    données manquantes ou dégénérées (pas d'edge positif) -> fraction fixe conservatrice."""
+    """Kelly fraction (half-Kelly, capped) from the REAL BUY calibration
+    statistics (vc_predictions.compute_metrics). Never a fabricated confidence:
+    missing or degenerate data (no positive edge) -> fixed conservative
+    fraction."""
     if win_rate is None or avg_win_pct is None or avg_loss_pct is None:
         return KELLY_FALLBACK_FRACTION
     if avg_win_pct <= 0 or avg_loss_pct >= 0:
@@ -115,7 +122,7 @@ def kelly_fraction(
 
 
 async def _kelly_fraction_from_history(*, min_sample: int = KELLY_MIN_SAMPLE) -> tuple[float, dict]:
-    """Lit la calibration réelle (vc_predictions.metrics) et en dérive la fraction de Kelly."""
+    """Reads the real calibration (vc_predictions.metrics) and derives the Kelly fraction from it."""
     from aria_core import vc_predictions
 
     m = await vc_predictions.metrics()
@@ -132,9 +139,10 @@ async def _kelly_fraction_from_history(*, min_sample: int = KELLY_MIN_SAMPLE) ->
 
 
 def _num(v) -> float | None:
-    """Parse défensif d'un prix éventuellement '$1,234.5' -> float, ou None (même
-    logique que paper_trader/weekly_training/simulate_lifecycle — pas de client partagé
-    à dupliquer ici, juste un utilitaire pur déjà répété à l'identique ailleurs)."""
+    """Defensive parse of a price possibly formatted '$1,234.5' -> float, or
+    None (same logic as paper_trader/weekly_training/simulate_lifecycle — no
+    shared client to duplicate here, just a pure utility already repeated
+    identically elsewhere)."""
     try:
         if v is None:
             return None
@@ -145,9 +153,10 @@ def _num(v) -> float | None:
 
 
 async def _default_analyzer(contract: str) -> dict | None:
-    """Même analyse VC réelle que paper_trader (analyze_vc_with_context), mais conserve
-    la thèse (raisonnement brut) pour la télémétrie comportementale — paper_trader n'en a
-    pas besoin, ce module si (« si elle hésite, si elle se trompe, je veux le savoir »)."""
+    """Same real VC analysis as paper_trader (analyze_vc_with_context), but
+    keeps the thesis (raw reasoning) for behavioral telemetry — paper_trader
+    doesn't need it, this module does ("if she hesitates, if she gets it
+    wrong, I want to know")."""
     from aria_core.skills.vc_analysis import analyze_vc_with_context
 
     result, ctx = await analyze_vc_with_context(contract)
@@ -201,9 +210,9 @@ async def _ensure_table() -> None:
 
 
 async def _insert_log(db: aiosqlite.Connection, **fields) -> None:
-    """``hesitant`` est NOT NULL (colonne booléenne 0/1) : toujours coercée, jamais NULL
-    explicite (SQLite n'applique le DEFAULT que si la colonne est omise, pas si NULL est
-    fourni explicitement)."""
+    """``hesitant`` is NOT NULL (0/1 boolean column): always coerced, never
+    explicit NULL (SQLite only applies the DEFAULT if the column is omitted,
+    not if NULL is provided explicitly)."""
     values = tuple(
         int(bool(fields.get(c))) if c == "hesitant" else fields.get(c) for c in _LOG_COLS
     )
@@ -226,9 +235,9 @@ async def _recent_latencies(db: aiosqlite.Connection, limit: int = LATENCY_BASEL
 
 
 async def _consecutive_errors(db: aiosqlite.Connection) -> int:
-    """Compte les erreurs consécutives les plus récentes. S'arrête au premier résultat
-    non-erreur -> le coupe-circuit se ré-évalue proprement dès le cycle suivant après
-    s'être déclenché (le SKIP qu'il journalise lui-même n'est pas une "erreur")."""
+    """Counts the most recent consecutive errors. Stops at the first
+    non-error result -> the circuit breaker cleanly re-evaluates from the very
+    next cycle after tripping (the SKIP it logs itself is not an "error")."""
     cursor = await db.execute("SELECT outcome FROM sepolia_autonomous_log ORDER BY id DESC LIMIT 50")
     rows = await cursor.fetchall()
     count = 0
@@ -268,9 +277,10 @@ async def run_autonomous_cycle(
     swap_sender=None,
     notifier=None,
 ) -> dict:
-    """Un tour du rehearsal autonome Sepolia. Fail-closed à chaque étage (voir le triple
-    gate dans le docstring du module). Journalise CHAQUE tour — BUY, HOLD, ERROR, SKIP —
-    jamais seulement les succès : c'est l'observabilité demandée par l'opérateur."""
+    """One round of the autonomous Sepolia rehearsal. Fail-closed at every
+    stage (see the triple gate in the module docstring). Logs EVERY round —
+    BUY, HOLD, ERROR, SKIP — never only the successes: this is the
+    observability the operator asked for."""
     await _ensure_table()
 
     from aria_core import outgoing_pause
@@ -331,7 +341,7 @@ async def run_autonomous_cycle(
     sig: dict | None = None
     try:
         sig = await analyzer(contract)
-    except Exception as exc:  # noqa: BLE001 — une analyse ratée doit être journalisée, jamais casser le heartbeat
+    except Exception as exc:  # noqa: BLE001 — a failed analysis must be logged, never break the heartbeat
         error_text = str(exc)[:500]
     latency_ms = (time.monotonic() - started) * 1000.0
 
@@ -379,12 +389,12 @@ async def run_autonomous_cycle(
                 )
             else:
                 tx_hash = anchor_sender(record)
-        except Exception as exc:  # noqa: BLE001 — une diffusion ratée doit remonter dans la télémétrie, jamais casser le heartbeat
+        except Exception as exc:  # noqa: BLE001 — a failed broadcast must surface in telemetry, never break the heartbeat
             error_text = str(exc)[:500]
 
-        # Swap de test — indépendant de l'ancrage : jamais dimensionné par Kelly, jamais
-        # sur le token candidat réel (inexistant sur ce testnet). Échec ici n'efface pas
-        # le succès de l'ancrage ci-dessus, et inversement.
+        # Test swap — independent of the anchor: never sized by Kelly, never
+        # on the real candidate token (nonexistent on this testnet). A failure
+        # here doesn't erase the anchor's success above, and vice versa.
         swap_tx: str | None = None
         swap_error_text: str | None = None
         from aria_core.onchain.sepolia_wallet import sepolia_swap_enabled
@@ -403,7 +413,7 @@ async def run_autonomous_cycle(
                 else:
                     swap_result = swap_sender()
                 swap_tx = swap_result.get("swap_tx") if swap_result else None
-            except Exception as exc:  # noqa: BLE001 — une diffusion ratée doit remonter dans la télémétrie, jamais casser le heartbeat
+            except Exception as exc:  # noqa: BLE001 — a failed broadcast must surface in telemetry, never break the heartbeat
                 swap_error_text = str(exc)[:500]
 
         outcome = "ok" if tx_hash else "error"
@@ -445,8 +455,9 @@ async def run_autonomous_cycle(
 
 
 async def autonomous_status() -> dict:
-    """Statistiques agrégées PUBLIQUES (comptages seulement, jamais un contrat individuel
-    hors dernière décision) pour le cockpit — même politique que track-record/exam-status."""
+    """PUBLIC aggregated statistics (counts only, never an individual contract
+    outside the last decision) for the cockpit — same policy as
+    track-record/exam-status."""
     from aria_core.onchain.sepolia_wallet import get_address, get_balance_eth
 
     await _ensure_table()

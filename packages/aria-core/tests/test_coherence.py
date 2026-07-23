@@ -541,8 +541,8 @@ def test_vc_report_pdf_secured_and_email_body_never_leaks_full_report():
     )
 
     pdf_src = inspect.getsource(vc_report_pdf)
-    assert "pas inviolable" in pdf_src or "jamais un chiffrement inviolable" in pdf_src, (
-        "le module doit documenter honnêtement la limite de la protection PDF (dissuasif, pas absolu)"
+    assert "not unbreakable" in pdf_src, (
+        "the module must honestly document the limit of the PDF protection (deterrent, not absolute)"
     )
 
 

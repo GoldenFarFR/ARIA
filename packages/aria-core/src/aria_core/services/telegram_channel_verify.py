@@ -1,16 +1,16 @@
-"""Client de lecture seule pour un CANAL/GROUPE TIERS déclaré par un projet (19/07,
-retour opérateur : "telegram c'est possible ?") -- sans rapport avec le bot
-Telegram d'ARIA elle-même (``gateway/telegram_bot.py``), aucun token ne peut/ne doit
-être réutilisé ici.
+"""Read-only client for a THIRD-PARTY channel/group declared by a project
+(19/07, operator feedback: "is telegram possible?") -- unrelated to ARIA's own
+Telegram bot (``gateway/telegram_bot.py``), no token can/should be reused
+here.
 
-`t.me/s/<canal>` (la page d'aperçu public HTML de Telegram, vérifiée en direct,
-19/07) ne nécessite AUCUN bot token -- Telegram l'expose pour l'indexation web de
-tout canal PUBLIC. Un canal inexistant ou sans historique public redirige vers
-`t.me/<canal>` (sans le `/s/`) -- signal fiable, vérifié empiriquement (redirection
-confirmée, code 200 sur la page finale sans le préfixe `/s/`). Fragile par nature
-(dépend du HTML de Telegram, aucune garantie de stabilité contractuelle contrairement
-à une vraie API) -- dégradation honnête systématique si le format attendu n'est pas
-retrouvé, jamais un chiffre inventé."""
+`t.me/s/<channel>` (Telegram's public HTML preview page, verified live,
+19/07) requires NO bot token -- Telegram exposes it for web indexing of any
+PUBLIC channel. A nonexistent channel or one with no public history redirects
+to `t.me/<channel>` (without the `/s/`) -- a reliable signal, empirically
+verified (redirection confirmed, code 200 on the final page without the
+`/s/` prefix). Fragile by nature (depends on Telegram's HTML, no contractual
+stability guarantee unlike a real API) -- systematic honest degradation if the
+expected format isn't found, never a fabricated figure."""
 from __future__ import annotations
 
 import logging
@@ -33,8 +33,8 @@ _TIMEOUT_S = 10.0
 @dataclass(frozen=True)
 class TelegramChannelVerification:
     available: bool
-    exists: bool | None = None  # None = jamais résolu, False = pas de canal public/historique
-    subscriber_count_display: str | None = None  # texte brut Telegram ("11.6M") -- jamais reparsé en int, formats ambigus
+    exists: bool | None = None  # None = never resolved, False = no public channel/history
+    subscriber_count_display: str | None = None  # raw Telegram text ("11.6M") -- never reparsed into an int, ambiguous formats
     days_since_last_post: int | None = None
     error: str | None = None
 
@@ -48,7 +48,7 @@ def _parse_handle(url: str) -> str | None:
 
 
 async def verify_channel(url: str) -> TelegramChannelVerification:
-    """Vérifie un canal Telegram déclaré. Jamais une exception qui remonte."""
+    """Verifies a declared Telegram channel. Never an exception propagating."""
     handle = _parse_handle(url)
     if not handle:
         return TelegramChannelVerification(available=False, error="URL Telegram illisible")
@@ -57,14 +57,14 @@ async def verify_channel(url: str) -> TelegramChannelVerification:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S, follow_redirects=True) as client:
             res = await client.get(f"https://t.me/s/{handle}")
     except Exception as exc:  # noqa: BLE001
-        logger.info("telegram_channel_verify: requête échouée pour %s (%s)", handle, exc)
+        logger.info("telegram_channel_verify: request failed for %s (%s)", handle, exc)
         return TelegramChannelVerification(available=False, error=f"requête échouée ({exc})")
 
     if res.status_code != 200:
         return TelegramChannelVerification(available=False, error=f"HTTP {res.status_code}")
 
-    # Redirection vers la page sans `/s/` -- pas de canal public avec historique
-    # (n'existe pas, est privé, ou n'a jamais posté publiquement).
+    # Redirect to the page without `/s/` -- no public channel with history
+    # (doesn't exist, is private, or has never posted publicly).
     if "/s/" not in str(res.url):
         return TelegramChannelVerification(available=True, exists=False)
 

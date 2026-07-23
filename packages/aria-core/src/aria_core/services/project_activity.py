@@ -1,11 +1,13 @@
-"""Capteurs d'activité projet — « le projet livre-t-il ou stagne-t-il ? »
+"""Project activity sensors — "is the project shipping or stalling?"
 
-Après un investissement, ARIA surveille si le projet reste VIVANT : dernier commit
-GitHub, dernier post social. Un projet qui livre soutient la thèse ; un projet qui
-disparaît la casse (cf. thesis_journal.assess_project_activity qui juge les délais).
+After an investment, ARIA monitors whether the project stays ALIVE: last
+GitHub commit, last social post. A project that ships supports the thesis; a
+project that vanishes breaks it (see thesis_journal.assess_project_activity,
+which judges the delays).
 
-Lecture seule, réseau injectable (testable offline). Dégradation gracieuse : toute
-indisponibilité -> ``None`` (délai inconnu), jamais d'exception, jamais un verdict inventé.
+Read-only, injectable network (testable offline). Graceful degradation: any
+unavailability -> ``None`` (unknown delay), never an exception, never a
+made-up verdict.
 """
 from __future__ import annotations
 
@@ -16,16 +18,16 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
-# Extrait owner/repo d'une URL GitHub (https, avec ou sans .git, chemin en plus ignoré).
+# Extracts owner/repo from a GitHub URL (https, with or without .git, extra path ignored).
 _GH_RE = re.compile(r"github\.com[/:]+([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?(?:[/?#]|$)")
-# URL d'ORGANISATION seule (aucun repo dans le chemin) -- ex. "github.com/crynux-network"
-# sans second segment. Distinct de _GH_RE (qui exige owner ET repo).
+# ORGANIZATION-only URL (no repo in the path) -- e.g. "github.com/crynux-network"
+# with no second segment. Distinct from _GH_RE (which requires owner AND repo).
 _GH_ORG_ONLY_RE = re.compile(r"^https?://github\.com/([A-Za-z0-9_.-]+)/?(?:[?#]|$)")
 _GH_RESERVED_NAMES = {"", "sponsors", "orgs", "features", "about"}
 
 
 def parse_github_repo(url: str | None) -> tuple[str, str] | None:
-    """(owner, repo) depuis une URL GitHub, ou None si ce n'en est pas une."""
+    """(owner, repo) from a GitHub URL, or None if it isn't one."""
     if not url:
         return None
     m = _GH_RE.search(str(url))
@@ -38,13 +40,14 @@ def parse_github_repo(url: str | None) -> tuple[str, str] | None:
 
 
 async def _fetch_github_authenticated(path: str) -> object | None:
-    """GET api.github.com AUTHENTIFIÉ (GITHUB_TOKEN, déjà existant ailleurs dans
-    le projet -- vérifié capable de lire n'importe quel dépôt/organisation
-    publique tiers, rate limit 5000/h). Réservé à `resolve_github_repo`
-    (résolution d'organisation, un appel réseau de plus par lien non résolu
-    directement) -- les fonctions historiques de ce module (`github_days_since_commit`/
-    `fetch_github_diligence_snapshot`) restent volontairement en anonyme (60/h,
-    gap de sobriété distinct, noté séparément, hors scope de ce correctif)."""
+    """AUTHENTICATED GET to api.github.com (GITHUB_TOKEN, already existing
+    elsewhere in the project -- verified able to read any third-party public
+    repo/organization, 5000/h rate limit). Reserved for `resolve_github_repo`
+    (organization resolution, one more network call per link not resolved
+    directly) -- this module's historical functions
+    (`github_days_since_commit`/`fetch_github_diligence_snapshot`) deliberately
+    stay anonymous (60/h, a distinct sobriety gap, noted separately, out of
+    scope for this fix)."""
     import os
 
     import httpx
@@ -61,10 +64,11 @@ async def _fetch_github_authenticated(path: str) -> object | None:
 
 
 def is_github_link(url: str | None) -> bool:
-    """True si l'URL est un lien GitHub RECONNAISSABLE -- repo précis (`parse_github_repo`)
-    OU organisation seule (`resolve_github_repo` saura la résoudre) -- utilisé pour
-    FILTRER quel lien parmi plusieurs project_links est candidat, avant toute
-    résolution réseau (synchrone, zéro coût)."""
+    """True if the URL is a RECOGNIZABLE GitHub link -- a specific repo
+    (`parse_github_repo`) OR an organization alone (`resolve_github_repo` will
+    know how to resolve it) -- used to FILTER which link among several
+    project_links is a candidate, before any network resolution (synchronous,
+    zero cost)."""
     if not url:
         return False
     if parse_github_repo(url) is not None:
@@ -72,45 +76,45 @@ def is_github_link(url: str | None) -> bool:
     return bool(_GH_ORG_ONLY_RE.match(str(url).strip()))
 
 
-# Repos "spéciaux" d'organisation -- config/templates, jamais du développement
-# réel (trouvé en vérifiant : `.github` remonte comme candidat sur un cas réel,
-# sans rapport avec la substance du projet).
+# "Special" organization repos -- config/templates, never real development
+# (found by checking: `.github` comes up as a candidate on a real case, with
+# no connection to the project's substance).
 _GH_SPECIAL_REPO_NAMES = {".github", "profile"}
-# Nombre de repos chargés pour choisir le PLUS POPULAIRE parmi eux -- l'API
-# GitHub ne supporte PAS `sort=stars` sur cet endpoint (vérifié contre la doc
-# officielle : seuls created/updated/pushed/full_name sont acceptés), donc le
-# tri par popularité doit se faire CÔTÉ CLIENT sur un lot chargé par `pushed`
-# (zéro appel réseau supplémentaire, un seul GET avec per_page plus large).
+# Number of repos loaded to pick the MOST POPULAR among them -- the GitHub API
+# does NOT support `sort=stars` on this endpoint (verified against the
+# official docs: only created/updated/pushed/full_name are accepted), so the
+# popularity sort must happen CLIENT-SIDE on a batch loaded by `pushed`
+# (zero extra network call, a single GET with a wider per_page).
 _ORG_REPOS_CANDIDATE_POOL = 20
 
 
 async def resolve_github_repo(url: str | None, *, fetch=None) -> tuple[str, str] | None:
-    """(owner, repo) -- résout AUSSI une URL d'ORGANISATION seule (pas de repo
-    précis dans l'URL, pratique courante pour un projet multi-repos : contrat +
-    frontend + doc + node dans des dépôts séparés d'une même organisation) vers
-    son repo le plus PERTINENT, plutôt que d'échouer silencieusement comme
-    `parse_github_repo` seul.
+    """(owner, repo) -- ALSO resolves an ORGANIZATION-only URL (no specific
+    repo in the URL, a common pattern for a multi-repo project: contract +
+    frontend + docs + node in separate repos of the same organization) to its
+    most RELEVANT repo, rather than silently failing like `parse_github_repo`
+    alone.
 
-    Trouvé en vérifiant un cas RÉEL (23/07, CNX/crynux-network) : le projet
-    déclare `github.com/crynux-network` (organisation) -- `parse_github_repo`
-    renvoie `None` alors que cette organisation a un repo `crynux-node` à 272
-    étoiles (développement réel et actif, jamais détecté avant ce correctif).
+    Found while checking a REAL case (23/07, CNX/crynux-network): the project
+    declares `github.com/crynux-network` (organization) -- `parse_github_repo`
+    returns `None` while this organization has a `crynux-node` repo with 272
+    stars (real, active development, never detected before this fix).
 
-    Sélection en 2 temps, vérifiée nécessaire par un second test réel sur ce
-    même cas (le tri naïf "juste le plus récemment poussé" ramenait un repo
-    annexe à 1 étoile ; sur `crynux-network-dao`, il ramenait `.github`, un
-    repo de config d'organisation, pas du développement) :
-      1. Charge un lot de repos triés par `pushed` (activité récente réelle),
-         exclut les FORKS (pas le code original du projet) et les repos
-         spéciaux (`.github`/`profile`).
-      2. Parmi les candidats restants, choisit celui avec le PLUS D'ÉTOILES
-         (proxy de popularité/pertinence -- l'API ne supporte pas de tri
-         par étoiles côté serveur, vérifié contre la doc officielle) ; en cas
-         d'égalité, le plus récemment poussé (déjà en tête du tri).
+    2-step selection, verified necessary by a second real test on this same
+    case (the naive "just the most recently pushed" sort brought back a
+    side repo with 1 star; on `crynux-network-dao`, it brought back
+    `.github`, an organization config repo, not development):
+      1. Loads a batch of repos sorted by `pushed` (real recent activity),
+         excludes FORKS (not the project's original code) and special repos
+         (`.github`/`profile`).
+      2. Among the remaining candidates, picks the one with the MOST STARS
+         (a popularity/relevance proxy -- the API doesn't support server-side
+         sort by stars, verified against the official docs); ties broken by
+         most recently pushed (already at the top of the sort).
 
-    Le cas direct (repo précis dans l'URL) reste TOUJOURS essayé en premier,
-    zéro coût réseau ni changement de comportement sur le cas dominant --
-    l'appel organisation n'est tenté qu'en repli."""
+    The direct case (specific repo in the URL) is ALWAYS tried first, zero
+    network cost or behavior change on the dominant case -- the organization
+    call is only attempted as a fallback."""
     direct = parse_github_repo(url)
     if direct:
         return direct
@@ -123,8 +127,8 @@ async def resolve_github_repo(url: str | None, *, fetch=None) -> tuple[str, str]
     fetch = fetch or _fetch_github_authenticated
     try:
         data = await fetch(f"/orgs/{org}/repos?sort=pushed&per_page={_ORG_REPOS_CANDIDATE_POOL}")
-    except Exception as exc:  # noqa: BLE001 — best-effort, jamais bloquant
-        logger.info("project_activity: résolution organisation %s échouée (%s)", org, exc)
+    except Exception as exc:  # noqa: BLE001 — best-effort, never blocking
+        logger.info("project_activity: organization resolution %s failed (%s)", org, exc)
         return None
     if not isinstance(data, list) or not data:
         return None
@@ -139,32 +143,32 @@ async def resolve_github_repo(url: str | None, *, fetch=None) -> tuple[str, str]
     ]
     if not candidates:
         return None
-    # 23/07 -- garde-fou "plusieurs repos sans rapport les uns avec les autres"
-    # (préoccupation opérateur explicite) : une organisation peut héberger des
-    # projets réellement DISTINCTS (collectif, fondation multi-produits) où le
-    # plus étoilé n'est pas forcément celui du projet CIBLÉ. Seul signal
-    # disponible sans plomberie supplémentaire (aucun nom de projet/symbole
-    # transmis à cette fonction) : le nom de l'organisation lui-même est
-    # quasi toujours dérivé du nom du projet -- les repos qui en PARTAGENT une
-    # racine (ex. org "crynux-network" -> "crynux") sont préférés aux repos
-    # sans rapport apparent avant d'appliquer le tri par étoiles. Si AUCUN
-    # candidat ne partage de racine (organisation au nommage incohérent), le
-    # lot complet reste utilisé tel quel -- limite honnête documentée, jamais
-    # un filtre qui viderait la sélection à tort.
+    # 23/07 -- "several unrelated repos" safeguard (explicit operator
+    # concern): an organization can host genuinely DISTINCT projects
+    # (collective, multi-product foundation) where the most-starred repo
+    # isn't necessarily the one for the TARGETED project. The only signal
+    # available without extra plumbing (no project name/symbol passed to
+    # this function): the organization's name itself is almost always
+    # derived from the project's name -- repos that SHARE a stem with it
+    # (e.g. org "crynux-network" -> "crynux") are preferred over apparently
+    # unrelated repos before applying the star sort. If NO candidate shares
+    # a stem (an organization with inconsistent naming), the full batch is
+    # used as-is -- an honestly documented limit, never a filter that would
+    # wrongly empty the selection.
     org_stems = {t for t in re.split(r"[^a-z0-9]+", org.lower()) if len(t) >= 3}
     on_theme = [
         repo for repo in candidates
         if org_stems and any(stem in str(repo["name"]).lower() for stem in org_stems)
     ]
     pool = on_theme or candidates
-    # Stable sort (Python) : à égalité d'étoiles, l'ordre d'origine (par
-    # `pushed`, le plus récent en tête) départage -- jamais un choix arbitraire.
+    # Stable sort (Python): on a star tie, the original order (by `pushed`,
+    # most recent first) breaks it -- never an arbitrary choice.
     best = max(pool, key=lambda repo: repo.get("stargazers_count") or 0)
     return org, str(best["name"])
 
 
 def _days_since(iso_ts: str, *, now: datetime | None = None) -> int | None:
-    """Nombre de jours entiers depuis un timestamp ISO8601 (UTC). None si illisible."""
+    """Number of whole days since an ISO8601 (UTC) timestamp. None if unreadable."""
     try:
         ts = datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00"))
     except (ValueError, TypeError):
@@ -178,10 +182,11 @@ def _days_since(iso_ts: str, *, now: datetime | None = None) -> int | None:
 async def github_days_since_commit(
     repo_url: str | None, *, fetch=None, now: datetime | None = None
 ) -> int | None:
-    """Jours depuis le dernier commit du dépôt (branche par défaut). None si indéterminable.
+    """Days since the repo's last commit (default branch). None if undeterminable.
 
-    ``fetch(path)`` (injectable) doit renvoyer le JSON de l'API GitHub. En prod, le défaut
-    interroge ``api.github.com`` (public, sans clé — throttle modéré). Best-effort.
+    ``fetch(path)`` (injectable) must return the GitHub API JSON. In prod, the
+    default queries ``api.github.com`` (public, no key — moderate throttle).
+    Best-effort.
     """
     parsed = parse_github_repo(repo_url)
     if not parsed:
@@ -190,10 +195,10 @@ async def github_days_since_commit(
     fetch = fetch or _fetch_github
     try:
         data = await fetch(f"/repos/{owner}/{repo}/commits?per_page=1")
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.info("project_activity: github %s/%s échoué (%s)", owner, repo, exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.info("project_activity: github %s/%s failed (%s)", owner, repo, exc)
         return None
-    # L'API renvoie une liste ; on lit commit.committer.date du plus récent.
+    # The API returns a list; read commit.committer.date of the most recent one.
     try:
         commit = data[0]["commit"]
         ts = commit.get("committer", {}).get("date") or commit.get("author", {}).get("date")
@@ -203,7 +208,7 @@ async def github_days_since_commit(
 
 
 async def _fetch_github(path: str) -> object | None:
-    """GET api.github.com (dégradation gracieuse). Défaut prod (VPS, réseau autorisé)."""
+    """GET api.github.com (graceful degradation). Prod default (VPS, network allowed)."""
     import httpx
 
     url = f"{_GITHUB_API}{path}"
@@ -217,20 +222,20 @@ async def _fetch_github(path: str) -> object | None:
 async def fetch_github_diligence_snapshot(
     repo_url: str | None, *, fetch=None, now: datetime | None = None
 ) -> dict | None:
-    """Instantané GitHub pour la diligence produit pré-investissement (description,
-    étoiles, issues ouvertes, fraîcheur, âge) -- même client/doctrine que
-    ``github_days_since_commit`` (best-effort, jamais bloquant, ``fetch`` injectable
-    pour les tests). Distinct de ce dernier : lit `/repos/{owner}/{repo}` (métadonnées),
-    pas `/commits` (historique).
+    """GitHub snapshot for pre-investment product diligence (description,
+    stars, open issues, freshness, age) -- same client/doctrine as
+    ``github_days_since_commit`` (best-effort, never blocking, ``fetch``
+    injectable for tests). Distinct from it: reads `/repos/{owner}/{repo}`
+    (metadata), not `/commits` (history).
 
-    19/07 -- source CANONIQUE unique pour le contenu GitHub, consommée par
-    ``conviction_research.py`` (via ``_describe_other_known_link``) -- lui-même
-    la source canonique unique de diligence de conviction pour LES DEUX
-    pipelines (``vc_analysis.py``/`/vc` ET ``momentum_entry.py``, #134). Un
-    doublon (``services/github_verify.py``) avait été construit par erreur le
-    même soir avant que ce module pré-existant ne soit découvert ; retiré au
-    profit de celui-ci plutôt que de laisser deux clients sur le même
-    endpoint (doctrine « jamais dupliquer un client existant »)."""
+    19/07 -- single CANONICAL source for GitHub content, consumed by
+    ``conviction_research.py`` (via ``_describe_other_known_link``) -- itself
+    the single canonical source of conviction diligence for BOTH pipelines
+    (``vc_analysis.py``/`/vc` AND ``momentum_entry.py``, #134). A duplicate
+    (``services/github_verify.py``) had been built by mistake the same
+    evening before this pre-existing module was discovered; removed in favor
+    of this one rather than leaving two clients on the same endpoint
+    ("never duplicate an existing client" doctrine)."""
     parsed = parse_github_repo(repo_url)
     if not parsed:
         return None
@@ -238,8 +243,8 @@ async def fetch_github_diligence_snapshot(
     fetch = fetch or _fetch_github
     try:
         data = await fetch(f"/repos/{owner}/{repo}")
-    except Exception as exc:  # noqa: BLE001 -- jamais bloquant
-        logger.info("project_activity: diligence github %s/%s échouée (%s)", owner, repo, exc)
+    except Exception as exc:  # noqa: BLE001 -- never blocking
+        logger.info("project_activity: github diligence %s/%s failed (%s)", owner, repo, exc)
         return None
     if not isinstance(data, dict) or "id" not in data:
         return None
@@ -257,12 +262,12 @@ async def fetch_github_diligence_snapshot(
 
 
 def format_github_diligence(snapshot: dict | None) -> str:
-    """Ligne courte pour contexte LLM (19/07) -- jamais un fait fabriqué : dégrade
-    honnêtement si ``snapshot`` est ``None`` (dépôt introuvable OU vérification
-    indisponible -- ``fetch_github_diligence_snapshot`` ne distingue pas les deux,
-    contrairement à l'ancien ``github_verify.py`` retiré -- accepté comme
-    simplification mineure au profit d'un client unique déjà éprouvé/consommé par
-    3 autres modules, plutôt que d'étendre un client partagé pour une seule nuance)."""
+    """Short line for LLM context (19/07) -- never a fabricated fact: degrades
+    honestly if ``snapshot`` is ``None`` (repo not found OR verification
+    unavailable -- ``fetch_github_diligence_snapshot`` doesn't distinguish the
+    two, unlike the old, removed ``github_verify.py`` -- accepted as a minor
+    simplification in favor of a single client already proven/consumed by
+    3 other modules, rather than extending a shared client for a single nuance)."""
     if not snapshot:
         return "vérification indisponible ou dépôt introuvable"
     parts = []

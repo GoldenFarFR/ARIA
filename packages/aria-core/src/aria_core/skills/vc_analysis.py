@@ -1,38 +1,40 @@
-"""Moteur d'analyse VC assisté LLM — dôme de sécurité (Étape A).
+"""LLM-assisted VC analysis engine — security dome (Step A).
 
-Produit, pour un token Base, une analyse d'investissement au format
-Invest_Prompt_v4 (Potentiel 0-10, Risque, Thèse, Recommandation) + une
-proposition d'ordre. Deux consommateurs en aval : un ordre court (Telegram) et
-un rapport détaillé (email) — cette couche ne fait que **produire** le résultat,
-jamais l'envoyer, et **jamais exécuter** quoi que ce soit.
+Produces, for a Base token, an investment analysis in the Invest_Prompt_v4
+format (Potential 0-10, Risk, Thesis, Recommendation) + an order proposal.
+Two downstream consumers: a short order (Telegram) and a detailed report
+(email) — this layer only **produces** the result, never sends it, and
+**never executes** anything.
 
-## Le dôme (toutes les défenses vivent ici)
+## The dome (every defense lives here)
 
-1. **Entrée hostile** : toute donnée externe (nom/symbole du token, catégories,
-   flags on-chain, thèses passées) est traitée comme non fiable. Elle est
-   encapsulée dans des balises `<donnees_non_fiables>` et le system prompt
-   ordonne au LLM de n'y voir que de la DONNÉE, jamais des instructions. Chaque
-   champ est neutralisé (caractères de contrôle retirés) et tronqué. Le code
-   source brut du contrat n'est **jamais** transmis (seuls les booléens d'audit
-   déjà extraits le sont).
-2. **Sortie non fiable** : le LLM doit répondre en JSON strict. Parsing
-   défensif ; à la moindre anomalie → rejet total → fallback déterministe. Score
-   clampé 0-10, recommandation depuis une allowlist, taille plafonnée, champs
-   tronqués. Aucun `eval`, aucune exécution de la sortie.
-3. **Anti-hallucination** : interdiction explicite d'inventer un fait ; tout
-   critère non sourçable dans le contexte = « donnée insuffisante ».
-4. **Zéro chemin financier** : ce module n'importe ni n'appelle `wallet_guard`,
-   `resolve_spend` ou `outgoing_pause`. La sortie est de la donnée pure.
-5. **Zéro secret sortant** : le contexte envoyé au LLM ne contient que de la
-   donnée publique on-chain/marché (jamais de clé, token, ou adresse opérateur).
-6. **Dégradation sûre** : LLM désactivé / clé absente / timeout → fallback
-   déterministe conservateur (jamais de BUY sans analyse qualitative).
-7. **Veto déterministe post-LLM** (`_enforce_danger_veto`, audit 08/07) : si le scan
-   honeypot/sécurité frais classe `lite_verdict=DANGER`, aucun BUY n'est possible quoi
-   que le LLM réponde — jamais contournable par une donnée on-chain trompeuse (le
-   signal est 100% déterministe, pas un jugement LLM qu'un contenu pourrait biaiser).
-   C'est le backstop qui manquait dans l'incident public AIXBT (agent vidé via une
-   commande injectée, sans aucun contrôle non-LLM avant l'exécution réelle).
+1. **Hostile input**: any external data (token name/symbol, categories,
+   on-chain flags, past theses) is treated as untrusted. It's wrapped in
+   `<donnees_non_fiables>` tags and the system prompt orders the LLM to see
+   it only as DATA, never instructions. Every field is neutralized (control
+   characters stripped) and truncated. The contract's raw source code is
+   **never** transmitted (only the audit booleans already extracted are).
+2. **Untrusted output**: the LLM must reply in strict JSON. Defensive
+   parsing; at the slightest anomaly → total rejection → deterministic
+   fallback. Score clamped 0-10, recommendation from an allowlist, size
+   capped, fields truncated. No `eval`, no execution of the output.
+3. **Anti-hallucination**: explicit ban on fabricating a fact; any criterion
+   not sourceable from the context = "insufficient data".
+4. **Zero financial path**: this module neither imports nor calls
+   `wallet_guard`, `resolve_spend`, or `outgoing_pause`. The output is pure
+   data.
+5. **Zero outgoing secret**: the context sent to the LLM only contains
+   public on-chain/market data (never a key, token, or operator address).
+6. **Safe degradation**: LLM disabled / missing key / timeout →
+   conservative deterministic fallback (never a BUY without qualitative
+   analysis).
+7. **Post-LLM deterministic veto** (`_enforce_danger_veto`, audit 08/07): if
+   the fresh honeypot/security scan classifies `lite_verdict=DANGER`, no BUY
+   is possible no matter what the LLM answers — never bypassable by
+   misleading on-chain data (the signal is 100% deterministic, not an LLM
+   judgment that content could bias). This is the backstop that was missing
+   in the public AIXBT incident (an agent drained via an injected command,
+   with no non-LLM control before real execution).
 """
 from __future__ import annotations
 
@@ -49,8 +51,8 @@ from aria_core.skills.market_sentiment import REGIME_LABELS
 
 logger = logging.getLogger(__name__)
 
-# Plafond dur de taille de position suggérée (% du capital). Un LLM ne pourra
-# jamais proposer un sizing supérieur — garde-fou indépendant du modèle.
+# Hard cap on the suggested position size (% of capital). An LLM can never
+# propose a larger sizing — a guard rail independent of the model.
 MAX_POSITION_SIZE_PCT = 10.0
 
 _RISK_LEVELS = ("FAIBLE", "MODÉRÉ", "ÉLEVÉ", "EXTRÊME")
@@ -123,42 +125,45 @@ class VCResult:
     downside_pct: float | None = None
     liens_projet: list[dict] = field(default_factory=list)
     symbol: str = ""
-    # Analyse technique (data-gated : peuplé seulement si une série OHLCV a été
-    # dérivée en niveaux). Sans donnée → tout reste vide, le rapport omet la section.
+    # Technical analysis (data-gated: populated only if an OHLCV series was
+    # derived into levels). Without data → everything stays empty, the
+    # report omits the section.
     ta_trend: str = ""
     ta_timeframe: str = ""
     ta_levels_lines: list[str] = field(default_factory=list)
     chart_data_uri: str = ""
-    # Projection ROI par comparables historiques (Voûte 3, data-gated : peuplé
-    # seulement si la capitalisation actuelle est connue). Contexte tangible,
-    # JAMAIS une cible ni une promesse. Sans donnée → tout vide, section omise.
+    # ROI projection via historical comparables (Vault 3, data-gated:
+    # populated only if the current market cap is known). Tangible context,
+    # NEVER a target or a promise. Without data → everything empty, section omitted.
     roi_scenarios: list[dict] = field(default_factory=list)
     roi_sector: str = ""
     roi_sector_recognized: bool = False
     roi_basis: str = ""
     roi_disclaimer: str = ""
-    # Contexte marché macro (tâche #14, data-gated : peuplé seulement si l'historique BTC
-    # est disponible). Aujourd'hui SEULE la phase de cycle Bitcoin (fait déterministe,
-    # aucun LLM) ; géopolitique/réglementaire reste un seam vide -- aucune source fiable
-    # branchée, jamais de donnée inventée en attendant. Sans donnée -> section omise.
+    # Macro market context (task #14, data-gated: populated only if BTC
+    # history is available). Today ONLY the Bitcoin cycle phase
+    # (deterministic fact, no LLM); geopolitics/regulatory remains a
+    # deliberately empty seam -- no reliable source wired, never fabricated
+    # data in the meantime. Without data -> section omitted.
     market_context: dict | None = None
-    # Contexte macro actions/ETF/matières premières (tâche #14 suite, 13/07,
-    # services/alphavantage.py) -- volontairement SÉPARÉ de market_context (BTC) :
-    # source indépendante, gate dédié (ARIA_ALPHAVANTAGE_ENABLED, OFF par défaut,
-    # BTC n'a pas ce gate), aucun couplage entre les deux. Sans donnée -> section omise.
+    # Macro context for equities/ETF/commodities (task #14 follow-up, 13/07,
+    # services/alphavantage.py) -- deliberately SEPARATE from market_context
+    # (BTC): independent source, dedicated gate (ARIA_ALPHAVANTAGE_ENABLED,
+    # OFF by default, BTC has no such gate), no coupling between the two.
+    # Without data -> section omitted.
     market_context_equities: dict | None = None
 
     @property
     def actionable(self) -> bool:
-        """Un ordre est « actionnable » quand la reco déclenche un mouvement."""
+        """An order is "actionable" when the recommendation triggers a move."""
         return self.recommandation in ("BUY", "SELL")
 
     @property
     def rr(self) -> float | None:
-        """Ratio risque/récompense (récompense ÷ risque). ``None`` si non estimable.
+        """Risk/reward ratio (reward ÷ risk). ``None`` if not estimable.
 
-        Calculé à partir des estimations chiffrées du modèle (bornées) — jamais
-        d'une valeur inventée : sans upside/downside sourçables, il n'y a pas de R/R.
+        Computed from the model's bounded numeric estimates — never a
+        fabricated value: with no sourceable upside/downside, there's no R/R.
         """
         if self.upside_pct and self.downside_pct and self.downside_pct > 0:
             return round(self.upside_pct / self.downside_pct, 1)
@@ -166,13 +171,13 @@ class VCResult:
 
 
 def _sanitize(text: object, max_len: int = _FIELD_MAX) -> str:
-    """Neutralise toute donnée externe avant injection dans le prompt LLM.
+    """Neutralizes any external data before injecting it into the LLM prompt.
 
-    Point d'étranglement unique : TOUTES les données non fiables passent ici.
-    Délègue à ``aria_core.sanitize.sanitize_untrusted_text`` (extrait le 13/07
-    pour être réutilisable ailleurs, ex. ``knowledge/web_verify.py`` --
-    comportement inchangé ici, alias conservé pour ne pas retoucher les
-    dizaines d'appelants de ce module)."""
+    Single choke point: ALL untrusted data passes through here. Delegates to
+    ``aria_core.sanitize.sanitize_untrusted_text`` (extracted on 13/07 to be
+    reusable elsewhere, e.g. ``knowledge/web_verify.py`` -- behavior
+    unchanged here, alias kept to avoid touching the dozens of callers of
+    this module)."""
     from aria_core.sanitize import sanitize_untrusted_text
 
     return sanitize_untrusted_text(text, max_len)
@@ -182,10 +187,10 @@ _MAX_PROJECT_LINKS = 6
 
 
 def _project_symbol(ctx: TokenScanContext) -> str:
-    """Symbole du token (ex. « ATLAS »), jamais issu du LLM — sourcé du scan on-chain.
+    """Token symbol (e.g. "ATLAS"), never from the LLM — sourced from the on-chain scan.
 
-    Purement décoratif (titre du rapport) : passé par ``_sanitize`` comme toute
-    donnée on-chain non fiable, avant d'être HTML-échappé à l'affichage.
+    Purely decorative (report title): passed through ``_sanitize`` like any
+    untrusted on-chain data, before being HTML-escaped for display.
     """
     if not ctx.best_pair or not ctx.best_pair.base_symbol:
         return ""
@@ -193,13 +198,13 @@ def _project_symbol(ctx: TokenScanContext) -> str:
 
 
 def _extract_verified_links(ctx: TokenScanContext) -> list[dict]:
-    """Liens officiels du projet (site, X, Telegram…), jamais issus du LLM.
+    """Official project links (site, X, Telegram…), never from the LLM.
 
-    Sourcés uniquement depuis les données brutes de scan (DexScreener), pour
-    que le client puisse vérifier lui-même — jamais une URL générée ou
-    devinée par le modèle. Revalidation stricte du schéma http(s) ici (défense
-    en profondeur, en plus du filtre déjà appliqué à l'extraction DexScreener) :
-    ces liens finissent en `<a href>` cliquable dans le rapport.
+    Sourced only from raw scan data (DexScreener), so the client can verify
+    them personally — never a URL generated or guessed by the model. Strict
+    http(s) scheme re-validation here (defense in depth, on top of the
+    filter already applied at DexScreener extraction): these links end up as
+    clickable `<a href>` in the report.
     """
     if not ctx.best_pair or not ctx.best_pair.project_links:
         return []
@@ -225,31 +230,33 @@ def _build_untrusted_context(
     docs_substance: "DocsSubstanceVerdict | None" = None,
     x_substance: "XSubstanceVerdict | None" = None,
 ) -> str:
-    """Assemble le bloc factuel (données non fiables) à partir de faits déjà collectés.
+    """Assembles the factual block (untrusted data) from facts already collected.
 
-    N'inclut QUE de la donnée publique on-chain/marché — jamais de secret, jamais
-    le code source brut du contrat (seuls les flags booléens déjà extraits par le
-    scan sont présents, via ctx.risk_flags).
+    ONLY includes public on-chain/market data — never a secret, never the
+    contract's raw source code (only the boolean flags already extracted by
+    the scan are present, via ctx.risk_flags).
 
-    ``sentiment_readings`` (optionnel, régime BTC/ETH de ``market_sentiment.py``) est
-    injecté ICI, AVANT l'appel LLM — contrairement à l'overlay macro/cycle halving
-    (``_attach_market_context``) qui n'agit qu'APRÈS coup sur le rapport déjà généré
-    et n'influence jamais le raisonnement du LLM. Demande opérateur explicite (10/07) :
-    cette donnée doit réellement « ajuster la stratégie », pas seulement s'afficher.
+    ``sentiment_readings`` (optional, BTC/ETH regime from
+    ``market_sentiment.py``) is injected HERE, BEFORE the LLM call --
+    unlike the macro/halving-cycle overlay (``_attach_market_context``),
+    which only acts AFTER the fact on the already-generated report and never
+    influences the LLM's reasoning. Explicit operator request (10/07): this
+    data must genuinely "adjust the strategy", not just be displayed.
 
-    ``market_alerts_digest`` (optionnel, 19/07, ``skills/market_alerts.py`` — digest
-    crypto-Twitter payant Otto AI, x402) : QUALITATIF (texte libre, PAS un chiffre
-    mesurable comme sentiment_readings) — déjà sanitisé à l'écriture par
-    ``market_alerts.upsert_reading`` (jamais brut), mais re-sanitisé ICI par
-    précaution (point d'étranglement unique, jamais confiance en une seule couche
-    de défense pour du contenu tiers non fiable, mandat #192).
+    ``market_alerts_digest`` (optional, 19/07, ``skills/market_alerts.py`` --
+    paid crypto-Twitter digest, Otto AI, x402): QUALITATIVE (free text, NOT a
+    measurable figure like sentiment_readings) -- already sanitized at write
+    time by ``market_alerts.upsert_reading`` (never raw), but re-sanitized
+    HERE as a precaution (single choke point, never trust a single defense
+    layer for untrusted third-party content, mandate #192).
 
-    ``conviction_research`` (optionnel, 19/07, #134, ``conviction_research.py`` —
-    MÊME source canonique que le pipeline momentum) : site officiel réel, buzz X,
-    cadence de publication, GitHub/Farcaster/Telegram vérifiés, corroboration du
-    contrat annoncé, processus de diligence documenté. Déjà sanitisé à l'écriture
-    (``_trail_note``/``sanitize_untrusted_text`` dans conviction_research.py), mais
-    re-sanitisé ICI aussi par précaution, même discipline que ``market_alerts_digest``."""
+    ``conviction_research`` (optional, 19/07, #134, ``conviction_research.py``
+    -- the SAME canonical source as the momentum pipeline): real official
+    website, X buzz, posting cadence, verified GitHub/Farcaster/Telegram,
+    corroboration of the announced contract, documented diligence process.
+    Already sanitized at write time (``_trail_note``/``sanitize_untrusted_text``
+    in conviction_research.py), but re-sanitized HERE too as a precaution,
+    same discipline as ``market_alerts_digest``."""
     lines = [
         f"Adresse du contrat : {_sanitize(ctx.contract, 60)}",
         f"Score de risque on-chain (0-95, plus haut = plus sûr) : {ctx.security_score}",
@@ -336,11 +343,12 @@ def _build_untrusted_context(
             "chiffre fiable (liquidité, prix DexScreener) les rend estimables."
         )
     if sentiment_readings:
-        # 19/07 (#135/#137, revue croisée) -- délègue au formatteur PARTAGÉ avec
-        # momentum_entry.py (skills/market_sentiment.py::format_sentiment_prompt_lines)
-        # au lieu d'une copie inline -- jusque-là dupliquée en substance, trouvé en
-        # revue adversariale : un futur changement de filtrage/troncature n'aurait
-        # sinon appliqué qu'à un seul des deux pipelines.
+        # 19/07 (#135/#137, cross review) -- delegates to the formatter SHARED
+        # with momentum_entry.py
+        # (skills/market_sentiment.py::format_sentiment_prompt_lines) instead
+        # of an inline copy -- previously duplicated in substance, found
+        # during adversarial review: a future filtering/truncation change
+        # would otherwise have only applied to one of the two pipelines.
         from aria_core.skills.market_sentiment import format_sentiment_prompt_lines
 
         sent_lines = format_sentiment_prompt_lines(sentiment_readings)
@@ -363,9 +371,10 @@ def _build_untrusted_context(
             )
             lines.append(safe_digest)
     if polymarket_signals:
-        # 19/07 (#135/#137, revue croisée) -- même consolidation que sentiment_readings
-        # ci-dessus, délègue à services/polymarket.py::format_polymarket_prompt_lines
-        # (déjà utilisé par momentum_entry.py), jamais une 2e copie de la même logique.
+        # 19/07 (#135/#137, cross review) -- same consolidation as
+        # sentiment_readings above, delegates to
+        # services/polymarket.py::format_polymarket_prompt_lines (already
+        # used by momentum_entry.py), never a 2nd copy of the same logic.
         from aria_core.services.polymarket import format_polymarket_prompt_lines
 
         poly_lines = format_polymarket_prompt_lines(polymarket_signals)
@@ -432,17 +441,18 @@ def _build_untrusted_context(
             lines += [f"- {_sanitize(step, 250)}" for step in cr.process_trail]
     elif conviction_research and not conviction_research.available and conviction_research.reason:
         lines.append(f"Diligence de conviction automatisée indisponible : {_sanitize(conviction_research.reason, 200)}")
-    # 22/07 -- item #23 (stress-test) : substance RÉELLE du développement GitHub
-    # (ratio code/cosmétique, densité, tests, diversité, régularité, messages) --
-    # distinct de la simple fraîcheur déjà couverte par conviction_research ci-dessus.
+    # 22/07 -- item #23 (stress-test): REAL substance of GitHub development
+    # (code/cosmetic ratio, density, tests, diversity, regularity, messages)
+    # -- distinct from the simple freshness already covered by
+    # conviction_research above.
     if github_substance and github_substance.signal:
         lines.append(f"Substance GitHub (qualité réelle du développement) : {_sanitize(github_substance.signal, 20)}")
         for pt in github_substance.points[:3]:
             lines.append(f"  · {_sanitize(pt, 250)}")
-    # 23/07 -- Website/Docs/X Substance : même famille que GitHub Substance
-    # ci-dessus, contenu RÉEL extrait (Tavily crawl/extract), jamais un
-    # jugement esthétique/social qu'ARIA n'a pas les moyens de porter
-    # honnêtement (limites documentées dans chaque skill).
+    # 23/07 -- Website/Docs/X Substance: same family as GitHub Substance
+    # above, REAL extracted content (Tavily crawl/extract), never an
+    # aesthetic/social judgment ARIA can't honestly afford to make (limits
+    # documented in each skill).
     if website_substance and website_substance.signal:
         lines.append(f"Substance Website (contenu réel du site) : {_sanitize(website_substance.signal, 20)}")
         for pt in website_substance.points[:3]:
@@ -455,8 +465,8 @@ def _build_untrusted_context(
         lines.append(f"Substance X (âge du compte, signal réduit) : {_sanitize(x_substance.signal, 20)}")
         for pt in x_substance.points[:3]:
             lines.append(f"  · {_sanitize(pt, 250)}")
-    # Contexte de légitimité (drapeaux JUGÉS, pas bruts) : autorité du mint,
-    # launchpad, profondeur de liquidité, comportement du wallet du dev.
+    # Legitimacy context (JUDGED flags, not raw): mint authority, launchpad,
+    # liquidity depth, dev wallet behavior.
     legit: list[str] = []
     if ctx.launchpad:
         legit.append(f"- Lancé via {_sanitize(ctx.launchpad, 40)} (autorité du protocole)")
@@ -498,15 +508,15 @@ def _build_untrusted_context(
 
 
 def _extract_json(raw: str) -> dict | None:
-    """Extrait défensivement le premier objet JSON de la réponse LLM.
+    """Defensively extracts the first JSON object from the LLM's response.
 
-    Tolère un éventuel habillage (```json ... ```), mais rejette tout ce qui ne
-    parse pas en objet — jamais de passthrough du texte brut.
+    Tolerates optional wrapping (```json ... ```), but rejects anything that
+    doesn't parse into an object — never a passthrough of raw text.
     """
     if not raw:
         return None
     text = raw.strip()
-    # Retire un éventuel bloc de code markdown.
+    # Strips any markdown code block.
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"\n?```$", "", text).strip()
@@ -538,10 +548,10 @@ def _clamp_float(value: object, low: float, high: float, default: float) -> floa
 
 
 def _positive_float_or_none(value: object, low: float, high: float) -> float | None:
-    """Comme ``_clamp_float`` mais sans valeur par défaut fabriquée : une valeur
-    absente/non numérique/non positive reste ``None`` (audit #11 -- la barre
-    Potentiel-$ des scénarios doit s'appuyer sur un vrai nombre estimé par le
-    LLM, jamais sur un défaut inventé quand il ne l'a pas chiffré)."""
+    """Like ``_clamp_float`` but with no fabricated default: a missing/
+    non-numeric/non-positive value stays ``None`` (audit #11 -- the
+    scenarios' Potential-$ bar must rest on a real number estimated by the
+    LLM, never a fabricated default when it didn't provide a figure)."""
     try:
         n = float(value)
     except (TypeError, ValueError):
@@ -552,16 +562,16 @@ def _positive_float_or_none(value: object, low: float, high: float) -> float | N
 
 
 def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
-    """Transforme la sortie LLM brute en VCResult validé (allowlists + clamps + troncatures)."""
+    """Turns the raw LLM output into a validated VCResult (allowlists + clamps + truncation)."""
     recommandation = str(parsed.get("recommandation", "")).strip().upper()
     if recommandation not in VALID_DECISIONS:
-        recommandation = "AVOID"  # défaut sûr si la reco est illisible
+        recommandation = "AVOID"  # safe default if the recommendation is unreadable
 
     risque = str(parsed.get("risque", "")).strip().upper()
     if risque not in _RISK_LEVELS:
-        risque = "EXTRÊME"  # défaut sûr
+        risque = "EXTRÊME"  # safe default
 
-    # La taille n'a de sens que pour un BUY, et reste plafonnée dur.
+    # Size only makes sense for a BUY, and stays hard-capped.
     taille = _clamp_float(parsed.get("taille_pct"), 0.0, MAX_POSITION_SIZE_PCT, 0.0)
     if recommandation != "BUY":
         taille = 0.0
@@ -571,10 +581,11 @@ def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
 
     confiance = str(parsed.get("confiance_globale", "")).strip().lower()
     if confiance not in _CONFIANCE_LEVELS:
-        confiance = "faible"  # défaut prudent
+        confiance = "faible"  # cautious default
 
-    # Upside/downside → R/R : bornés, et 0 (ou illisible) = « non estimable » (None),
-    # jamais un ratio fabriqué. downside plafonné à 100 % (perte max = capital exposé).
+    # Upside/downside → R/R: bounded, and 0 (or unreadable) = "not
+    # estimable" (None), never a fabricated ratio. downside capped at 100%
+    # (max loss = exposed capital).
     up = _clamp_float(parsed.get("upside_pct"), 0.0, 2000.0, 0.0)
     down = _clamp_float(parsed.get("downside_pct"), 0.0, 100.0, 0.0)
 
@@ -604,24 +615,25 @@ def _validate_llm_output(parsed: dict, ctx: TokenScanContext) -> VCResult:
 
 
 def _enforce_danger_veto(result: VCResult, ctx: TokenScanContext) -> None:
-    """Veto DÉTERMINISTE, non contournable par la sortie du LLM : si le honeypot/scan
-    de sécurité (frais à cet instant, `include_honeypot=True`) classe DANGER, aucun BUY
-    n'est jamais possible, quoi que le LLM ait répondu.
+    """DETERMINISTIC veto, not bypassable by the LLM's output: if the
+    honeypot/security scan (fresh at this moment, `include_honeypot=True`)
+    classifies DANGER, no BUY is ever possible, no matter what the LLM answered.
 
-    Pourquoi ce backstop existe (post-audit 08/07, suite à l'incident public AIXBT — un
-    agent vidé via une commande injectée, sans aucun contrôle non-LLM avant l'exécution
-    réelle) : les balises `<donnees_non_fiables>` + l'instruction de hiérarchie protègent
-    bien contre une INSTRUCTION injectée, mais un contenu on-chain trompeur (faux
-    partenariat, fausse traction dans un nom/description de token) pourrait encore
-    biaiser un JUGEMENT du LLM sans jamais ressembler à une instruction. `lite_verdict`
-    est un signal 100% déterministe (ABI, comportement, liquidité — jamais un jugement
-    du LLM) : il ne peut donc pas être « convaincu » par du texte, contrairement au LLM.
-    Mute `result` en place, journalise l'override pour audit (jamais un silence)."""
+    Why this backstop exists (post-audit 08/07, following the public AIXBT
+    incident -- an agent drained via an injected command, with no non-LLM
+    control before real execution): the `<donnees_non_fiables>` tags + the
+    hierarchy instruction do protect well against an injected INSTRUCTION,
+    but misleading on-chain content (fake partnership, fake traction in a
+    token's name/description) could still bias an LLM JUDGMENT without ever
+    looking like an instruction. `lite_verdict` is a 100% deterministic
+    signal (ABI, behavior, liquidity -- never an LLM judgment): it therefore
+    can't be "convinced" by text, unlike the LLM. Mutates `result` in place,
+    logs the override for audit (never silent)."""
     if ctx.lite_verdict != "DANGER" or result.recommandation != "BUY":
         return
     logger.warning(
-        "vc_analysis: veto DANGER — LLM a répondu BUY pour %s malgré lite_verdict=DANGER, "
-        "override en AVOID (backstop déterministe, jamais contournable par le LLM)",
+        "vc_analysis: DANGER veto — LLM answered BUY for %s despite lite_verdict=DANGER, "
+        "overriding to AVOID (deterministic backstop, never bypassable by the LLM)",
         ctx.contract,
     )
     result.recommandation = "AVOID"
@@ -629,9 +641,9 @@ def _enforce_danger_veto(result: VCResult, ctx: TokenScanContext) -> None:
 
 
 def _validate_scenarios(raw: object) -> list[dict]:
-    """Valide les scénarios LLM : nom en allowlist, probabilité 0-100, confiance en allowlist.
+    """Validates the LLM scenarios: name in allowlist, probability 0-100, confidence in allowlist.
 
-    Toute donnée hors-schéma est corrigée ou écartée — jamais de passthrough brut.
+    Any out-of-schema data is corrected or discarded — never a raw passthrough.
     """
     if not isinstance(raw, list):
         return []
@@ -658,10 +670,10 @@ def _validate_scenarios(raw: object) -> list[dict]:
 
 
 def _deterministic_fallback(ctx: TokenScanContext) -> VCResult:
-    """Fallback sans LLM : signaux quantitatifs seuls, posture conservatrice.
+    """Fallback with no LLM: quantitative signals only, conservative posture.
 
-    Aucune analyse qualitative n'étant disponible, on ne propose JAMAIS de BUY.
-    Le résultat reflète honnêtement l'absence d'analyse VC complète.
+    With no qualitative analysis available, a BUY is NEVER proposed. The
+    result honestly reflects the absence of a full VC analysis.
     """
     verdict = ctx.lite_verdict
     if verdict == "DANGER":
@@ -714,14 +726,15 @@ def _deterministic_fallback(ctx: TokenScanContext) -> VCResult:
 def format_telegram_order(
     result: VCResult, *, capital_usd: float | None = None, lang: str = "fr"
 ) -> str:
-    """Ordre court et actionnable pour Telegram — proposition, jamais exécution.
+    """Short, actionable order for Telegram — a proposal, never an execution.
 
-    Réservé au canal Telegram : concis, lisible sur mobile. Le rapport complet
-    part par email. Le disclaimer « validation manuelle » est toujours présent.
-    ``capital_usd`` (optionnel) convertit la taille suggérée en un montant en
-    dollars — l'opérateur exécute manuellement sur Tangem, un montant net évite
-    tout calcul mental avant signature. ``lang`` (fr/en) ne traduit QUE les
-    libellés fixes et le code de risque : chiffres, adresses et reco inchangés.
+    Reserved for the Telegram channel: concise, readable on mobile. The full
+    report goes out by email. The "manual validation" disclaimer is always
+    present. ``capital_usd`` (optional) converts the suggested size into a
+    dollar amount — the operator executes manually on Tangem, a net amount
+    avoids any mental math before signing. ``lang`` (fr/en) translates ONLY
+    the fixed labels and the risk code: figures, addresses, and
+    recommendation unchanged.
     """
     from aria_core.skills.vc_i18n import order_strings, risk_label
 
@@ -743,7 +756,7 @@ def format_telegram_order(
                 down=result.downside_pct or 0.0,
             )
         )
-        # Un stop très serré gonfle le ratio et le rend fragile (niveau facile à toucher).
+        # A very tight stop inflates the ratio and makes it fragile (an easy-to-hit level).
         if result.downside_pct is not None and result.downside_pct < 4 and result.rr >= 4:
             lines.append(s["rr_tight_stop"].format(down=result.downside_pct))
     if result.actionable and result.recommandation == "BUY":
@@ -773,13 +786,13 @@ def format_telegram_order(
 
 
 async def analyze_vc(contract: str, lang: str = "fr") -> VCResult:
-    """Analyse VC complète d'un token Base. Dôme-hardened, fallback déterministe."""
+    """Full VC analysis of a Base token. Dome-hardened, deterministic fallback."""
     result, _ctx = await analyze_vc_with_context(contract, lang=lang)
     return result
 
 
 def _fmt_price(value: float) -> str:
-    """Formate un prix (jusqu'à 10 décimales, zéros superflus retirés, sans exposant)."""
+    """Formats a price (up to 10 decimals, trailing zeros stripped, no exponent)."""
     s = f"{value:.10f}".rstrip("0").rstrip(".")
     return s if s else "0"
 
@@ -793,17 +806,18 @@ _PHASE_LABEL_EN = {
 
 
 async def _attach_market_context(result: VCResult, lang: str = "fr") -> VCResult:
-    """Contexte marché macro (tâche #14) : phase actuelle du cycle Bitcoin, seule source
-    macro disponible aujourd'hui (déterministe, aucun appel LLM, cache 1h -- zéro coût/
-    latence ajoutés à chaque rapport). Data-gated : historique BTC indisponible -> section
-    omise, rapport strictement inchangé. Géopolitique/réglementaire : seam volontairement
-    vide (aucune source fiable branchée), jamais de donnée inventée en attendant."""
+    """Macro market context (task #14): current Bitcoin cycle phase, the only
+    macro source available today (deterministic, no LLM call, 1h cache --
+    zero cost/latency added per report). Data-gated: BTC history unavailable
+    -> section omitted, report strictly unchanged. Geopolitics/regulatory:
+    deliberately empty seam (no reliable source wired), never fabricated
+    data in the meantime."""
     from aria_core.skills.btc_cycles import fetch_current_macro_phase
 
     try:
         phase = await fetch_current_macro_phase()
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant, le rapport reste valide sans cette section
-        logger.warning("analyze_vc: contexte macro indisponible (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking, the report stays valid without this section
+        logger.warning("analyze_vc: macro context unavailable (%s)", exc)
         phase = None
     if not phase:
         return result
@@ -813,19 +827,19 @@ async def _attach_market_context(result: VCResult, lang: str = "fr") -> VCResult
 
 
 async def _attach_equities_context(result: VCResult) -> VCResult:
-    """Contexte macro actions/ETF/matières premières (tâche #14 suite, 13/07) :
-    SPY/QQQ (proxy ETF, aucun endpoint indice natif chez ce fournisseur) + un
-    indice composite matières premières hors métaux précieux (absents chez ce
-    fournisseur). Gate OFF par défaut (``ARIA_ALPHAVANTAGE_ENABLED``, vérifié
-    dans ``fetch_equities_commodities_context`` lui-même) -- aucun appel réseau
-    tant que non activé. Data-gated comme le reste : une source manquante
-    n'empêche jamais les autres, jamais de donnée inventée."""
+    """Macro context for equities/ETF/commodities (task #14 follow-up,
+    13/07): SPY/QQQ (ETF proxy, no native index endpoint at this provider) +
+    a composite commodities index excluding precious metals (unavailable at
+    this provider). Gate OFF by default (``ARIA_ALPHAVANTAGE_ENABLED``,
+    checked inside ``fetch_equities_commodities_context`` itself) -- no
+    network call until activated. Data-gated like the rest: a missing source
+    never blocks the others, never fabricated data."""
     from aria_core.services.alphavantage import fetch_equities_commodities_context
 
     try:
         ctx = await fetch_equities_commodities_context()
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant, le rapport reste valide sans cette section
-        logger.warning("analyze_vc: contexte actions/ETF/matières premières indisponible (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking, the report stays valid without this section
+        logger.warning("analyze_vc: equities/ETF/commodities context unavailable (%s)", exc)
         ctx = None
     if not ctx:
         return result
@@ -834,13 +848,13 @@ async def _attach_equities_context(result: VCResult) -> VCResult:
 
 
 def _attach_ta(result: VCResult, ctx: TokenScanContext) -> VCResult:
-    """Reporte l'analyse technique (niveaux réels + graphique) du ctx vers le VCResult.
+    """Carries over the technical analysis (real levels + chart) from ctx to the VCResult.
 
-    No-op strict si aucune série OHLCV n'a été dérivée en niveaux (data-gated) :
-    dans ce cas les champs TA restent vides et le rapport omet simplement la section.
-    Chaque ligne porte sa base factuelle (facts-only) ; le graphique est un PNG
-    data-URI email-safe rendu par ``chart_render`` (import paresseux : PIL n'est
-    chargé que si une série existe).
+    Strict no-op if no OHLCV series was derived into levels (data-gated): in
+    that case the TA fields stay empty and the report simply omits the
+    section. Every line carries its factual basis (facts-only); the chart is
+    an email-safe PNG data URI rendered by ``chart_render`` (lazy import:
+    PIL is only loaded if a series exists).
     """
     ta = getattr(ctx, "ta", None)
     if not ta or not ta.n_bougies:
@@ -872,18 +886,18 @@ def _attach_ta(result: VCResult, ctx: TokenScanContext) -> VCResult:
         result.chart_data_uri = render_price_chart_png(
             ctx.ta_candles, entry=entry, invalidation=inval, target=target
         )
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant : section rendue sans image
-        logger.warning("analyze_vc: rendu graphique TA échoué (%s) — section sans image", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking: section rendered without an image
+        logger.warning("analyze_vc: TA chart rendering failed (%s) — section without image", exc)
         result.chart_data_uri = ""
     _attach_roi(result, ctx)
     return result
 
 
 async def _attach_extras(result: VCResult, ctx: TokenScanContext, lang: str = "fr") -> VCResult:
-    """Regroupe les enrichissements additifs et data-gated : TA+ROI (synchrones) puis
-    contexte macro (async, réseau). Chacun est INDÉPENDANT -- l'absence de la donnée
-    d'un enrichissement n'empêche jamais les autres (le contexte macro ne dépend pas de
-    l'existence d'une série OHLCV pour CE token, contrairement à TA/ROI)."""
+    """Groups the additive, data-gated enrichments: TA+ROI (synchronous) then
+    macro context (async, network). Each is INDEPENDENT -- one enrichment's
+    missing data never blocks the others (macro context doesn't depend on an
+    OHLCV series existing for THIS token, unlike TA/ROI)."""
     _attach_ta(result, ctx)
     await _attach_market_context(result, lang)
     await _attach_equities_context(result)
@@ -891,13 +905,13 @@ async def _attach_extras(result: VCResult, ctx: TokenScanContext, lang: str = "f
 
 
 def _attach_roi(result: VCResult, ctx: TokenScanContext) -> VCResult:
-    """Reporte la projection ROI par comparables (Voûte 3) du ctx vers le VCResult.
+    """Carries over the ROI-by-comparables projection (Vault 3) from ctx to the VCResult.
 
-    Data-gated : sans capitalisation actuelle connue (fondamentaux CoinGecko
-    absents), ``available=False`` → tous les champs restent vides et le rapport
-    omet la section. Utilise le market cap si dispo, sinon la FDV (repli honnête,
-    ``basis='fdv'``). Aucune valeur inventée : tout dérive des faits du scan et
-    des jalons éditables du secteur.
+    Data-gated: with no known current market cap (missing CoinGecko
+    fundamentals), ``available=False`` → all fields stay empty and the
+    report omits the section. Uses market cap if available, otherwise FDV
+    (honest fallback, ``basis='fdv'``). No fabricated value: everything is
+    derived from the scan's facts and the sector's editable milestones.
     """
     from aria_core.skills.roi_comparables import project_roi
 
@@ -926,46 +940,47 @@ def _attach_roi(result: VCResult, ctx: TokenScanContext) -> VCResult:
 
 
 async def _fetch_market_alerts_digest() -> str | None:
-    """Lit la dernière lecture de ``market_alerts`` (jamais de recalcul ici, c'est
-    le heartbeat qui rafraîchit). Dégradation douce : gate OFF, rien encore écrit
-    ou erreur -> ``None``, jamais bloquant pour l'analyse VC. Même doctrine que
-    ``_fetch_sentiment_readings`` juste en dessous."""
+    """Reads the last ``market_alerts`` reading (never recomputed here, the
+    heartbeat refreshes it). Graceful degradation: gate OFF, nothing written
+    yet, or error -> ``None``, never blocking for the VC analysis. Same
+    doctrine as ``_fetch_sentiment_readings`` right below."""
     try:
         from aria_core.skills.market_alerts import latest_reading
 
         reading = await latest_reading()
         return reading.digest_text if reading is not None else None
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.warning("analyze_vc: lecture market_alerts échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: market_alerts read failed (%s)", exc)
         return None
 
 
 async def _fetch_sentiment_readings() -> list[dict]:
-    """Lit les dernières lectures de ``market_sentiment`` (jamais de recalcul ici,
-    c'est le heartbeat qui rafraîchit). Dégradation douce : gate OFF, DB vide ou
-    erreur -> liste vide, jamais bloquant pour l'analyse VC."""
+    """Reads the last ``market_sentiment`` readings (never recomputed here,
+    the heartbeat refreshes it). Graceful degradation: gate OFF, empty DB, or
+    error -> empty list, never blocking for the VC analysis."""
     try:
         from aria_core.skills.market_sentiment import latest_readings
 
         return await latest_readings()
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.warning("analyze_vc: lecture market_sentiment échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: market_sentiment read failed (%s)", exc)
         return []
 
 
 async def _fetch_polymarket_signals() -> list[dict]:
-    """Lit les événements macro Polymarket les plus liquides (#59, signal pré-LLM).
+    """Reads the most liquid Polymarket macro events (#59, pre-LLM signal).
 
-    Même doctrine que ``_fetch_sentiment_readings`` : aucun recalcul synchrone,
-    dégradation douce (timeout / API indisponible / tag sans marché -> liste vide,
-    jamais bloquant). Retourne une liste de dicts ``{title, outcomes}`` où
-    ``outcomes`` est une liste de ``{label, probability}`` — probabilités implicites
-    de marché (0.0-1.0), jamais inventées.
+    Same doctrine as ``_fetch_sentiment_readings``: no synchronous
+    recomputation, graceful degradation (timeout / API unavailable / tag with
+    no market -> empty list, never blocking). Returns a list of
+    ``{title, outcomes}`` dicts where ``outcomes`` is a list of
+    ``{label, probability}`` -- implied market probabilities (0.0-1.0), never
+    fabricated.
 
-    19/07 (#135/#137, revue croisée) -- les tags interrogés vivent désormais
-    UNIQUEMENT dans ``services/polymarket.DEFAULT_TAGS`` (partagé avec
-    momentum_entry.py) -- l'ancienne constante locale ``_POLYMARKET_TAGS``
-    dupliquait la même valeur/le même commentaire, retirée.
+    19/07 (#135/#137, cross review) -- the queried tags now live ONLY in
+    ``services/polymarket.DEFAULT_TAGS`` (shared with momentum_entry.py) --
+    the old local ``_POLYMARKET_TAGS`` constant duplicated the same
+    value/comment, removed.
     """
     try:
         from aria_core.services.polymarket import DEFAULT_TAGS, polymarket_client
@@ -983,30 +998,32 @@ async def _fetch_polymarket_signals() -> list[dict]:
                 ],
             })
         return results
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.warning("analyze_vc: fetch Polymarket échoué (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: Polymarket fetch failed (%s)", exc)
         return []
 
 
 async def _fetch_virtuals_product_diligence(ctx: TokenScanContext) -> dict | None:
-    """Diligence produit spécifique à un token Virtuals -- complète (jamais remplace)
-    le site externe : pour un token lancé sur Virtuals, l'équipe (doxxée ou non), la
-    tokenomics et une description plus riche vivent sur la FICHE VIRTUALS elle-même
-    (virtuals.io), pas forcément le site externe déclaré (trou identifié en conditions
-    réelles, 10/07).
+    """Product diligence specific to a Virtuals token -- complements (never
+    replaces) the external site: for a token launched on Virtuals, the team
+    (doxxed or not), tokenomics, and a richer description live on the
+    VIRTUALS PAGE itself (virtuals.io), not necessarily the declared
+    external site (gap identified under real conditions, 10/07).
 
-    Deux chemins, jamais un double appel réseau au même contrat :
-    - Bonding (aucune paire DexScreener) : ``_resolve_bonding_phase`` a DÉJÀ interrogé
-      l'API Virtuals pendant le scan on-chain -- ``ctx.virtuals_*`` porte le résultat
-      en mémoire, zéro coût réseau ici.
-    - Gradué (une paire DexScreener existe, donc ``_resolve_bonding_phase`` n'a jamais
-      tourné -- elle n'est appelée que si ``pairs_found == 0``) : repli best-effort, UN
-      SEUL appel via le même client singleton (``virtuals_client``, aucune duplication
-      de client HTTP) ; renvoie ``None`` proprement et vite si ce n'est pas un token
-      Virtuals (dégradation douce, jamais bloquant).
+    Two paths, never a duplicate network call to the same contract:
+    - Bonding (no DexScreener pair): ``_resolve_bonding_phase`` has ALREADY
+      queried the Virtuals API during the on-chain scan -- ``ctx.virtuals_*``
+      carries the result in memory, zero network cost here.
+    - Graduated (a DexScreener pair exists, so ``_resolve_bonding_phase``
+      never ran -- it's only called if ``pairs_found == 0``): best-effort
+      fallback, a SINGLE call via the same singleton client
+      (``virtuals_client``, no HTTP client duplication); returns ``None``
+      cleanly and quickly if it's not a Virtuals token (graceful
+      degradation, never blocking).
 
-    Comme ``website_snapshot`` : texte DÉCLARATIF (l'équipe parle d'elle-même sur sa
-    propre fiche), jamais vérifié on-chain -- même prudence côté LLM en aval.
+    Like ``website_snapshot``: DECLARATIVE text (the team talking about
+    itself on its own page), never verified on-chain -- same caution
+    downstream on the LLM side.
     """
     description = ctx.virtuals_description
     tokenomics = ctx.virtuals_tokenomics
@@ -1018,8 +1035,8 @@ async def _fetch_virtuals_product_diligence(ctx: TokenScanContext) -> dict | Non
             from aria_core.services.virtuals import virtuals_client
 
             token = await virtuals_client.fetch_by_address(ctx.contract)
-        except Exception as exc:  # noqa: BLE001 — jamais bloquant
-            logger.warning("analyze_vc: diligence Virtuals échouée (%s)", exc)
+        except Exception as exc:  # noqa: BLE001 — never blocking
+            logger.warning("analyze_vc: Virtuals diligence failed (%s)", exc)
             token = None
         if token is not None:
             description = token.description
@@ -1036,13 +1053,13 @@ async def _fetch_virtuals_product_diligence(ctx: TokenScanContext) -> dict | Non
 
 
 async def _fetch_product_diligence(ctx: TokenScanContext) -> dict | None:
-    """Diligence produit -- fiche Virtuals UNIQUEMENT désormais (19/07, #134). Le
-    site officiel / GitHub / Farcaster / Telegram / X étaient auparavant récupérés
-    ICI en doublon d'une logique équivalente construite ensuite pour le pipeline
-    momentum -- consolidés dans ``conviction_research.research_project_potential``
-    (source canonique UNIQUE, consommée par les deux pipelines via
-    ``_fetch_conviction_research`` ci-dessous), jamais réimplémentés deux fois.
-    None si aucune fiche Virtuals trouvée."""
+    """Product diligence -- Virtuals page ONLY from now on (19/07, #134). The
+    official website / GitHub / Farcaster / Telegram / X used to be fetched
+    HERE, duplicating equivalent logic later built for the momentum pipeline
+    -- consolidated into ``conviction_research.research_project_potential``
+    (the SINGLE canonical source, consumed by both pipelines via
+    ``_fetch_conviction_research`` below), never reimplemented twice. None if
+    no Virtuals page found."""
     virtuals = await _fetch_virtuals_product_diligence(ctx)
     if not virtuals:
         return None
@@ -1050,37 +1067,40 @@ async def _fetch_product_diligence(ctx: TokenScanContext) -> dict | None:
 
 
 async def _fetch_conviction_research(ctx: TokenScanContext) -> "ConvictionResearch | None":
-    """Diligence de conviction (19/07, #134) -- MÊME source canonique que le
-    pipeline momentum (``conviction_research.research_project_potential``, jamais
-    une seconde implémentation) : site officiel (texte réel), buzz X (officiel +
-    repli x402 twit.sh), cadence de publication, GitHub/Farcaster/Telegram
-    vérifiés, corroboration du contrat annoncé par le projet, ``process_trail``
-    documentant chaque étape réellement tentée. Retour opérateur explicite (19/07) :
-    "les analyses sont autant poussées l'une que l'autre" -- `/vc` gagne ici EXACTEMENT
-    la même profondeur que momentum, la seule différence restant le rapport écrit.
+    """Conviction diligence (19/07, #134) -- the SAME canonical source as the
+    momentum pipeline (``conviction_research.research_project_potential``,
+    never a second implementation): real official website, X buzz (official
+    + x402 twit.sh fallback), posting cadence, verified GitHub/Farcaster/
+    Telegram, corroboration of the contract announced by the project,
+    ``process_trail`` documenting every step actually attempted. Explicit
+    operator feedback (19/07): "both analyses are pushed just as deep" --
+    `/vc` gains EXACTLY the same depth as momentum here, the only difference
+    remaining the written report.
 
-    Gate dédié (``ARIA_CONVICTION_RESEARCH_ENABLED``) -- ``available=False`` si
-    désactivé (dégradation douce, jamais bloquant pour l'analyse VC, même doctrine
-    que ``_fetch_sentiment_readings``/``_fetch_polymarket_signals``)."""
+    Dedicated gate (``ARIA_CONVICTION_RESEARCH_ENABLED``) --
+    ``available=False`` if disabled (graceful degradation, never blocking
+    for the VC analysis, same doctrine as
+    ``_fetch_sentiment_readings``/``_fetch_polymarket_signals``)."""
     try:
         from aria_core.conviction_research import research_project_potential
 
         links = ctx.best_pair.project_links if ctx.best_pair else []
         symbol = ctx.best_pair.base_symbol if ctx.best_pair else ctx.contract[:10]
         return await research_project_potential(ctx.contract, symbol, "base", known_links=links)
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.warning("analyze_vc: diligence de conviction échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: conviction diligence failed (%s)", exc)
         return None
 
 
 async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerdict | None":
-    """22/07 -- item #23 (stress-test) : substance RÉELLE du développement (ratio
-    code/cosmétique, densité, tests, diversité, régularité, qualité des messages),
-    pas seulement la fraîcheur déjà couverte par `conviction_research`. Réutilise
-    l'URL GitHub déjà déclarée dans `ctx.best_pair.project_links` (jamais un
-    second parsing de lien) -- `is_github_link` reconnaît une URL GitHub (repo
-    précis OU organisation seule, cf. `resolve_github_repo`) quel que soit son
-    label déclaré par le projet. None si aucun lien GitHub trouvé."""
+    """22/07 -- item #23 (stress-test): REAL substance of the development
+    (code/cosmetic ratio, density, tests, diversity, regularity, message
+    quality), not just the freshness already covered by
+    `conviction_research`. Reuses the GitHub URL already declared in
+    `ctx.best_pair.project_links` (never a second link parsing) --
+    `is_github_link` recognizes a GitHub URL (specific repo OR org alone,
+    see `resolve_github_repo`) regardless of the label declared by the
+    project. None if no GitHub link found."""
     from aria_core.services.project_activity import is_github_link
     from aria_core.skills.github_substance import gather_github_substance_facts, judge_github_substance
 
@@ -1094,16 +1114,15 @@ async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerd
     try:
         facts = await gather_github_substance_facts(github_url)
         return judge_github_substance(facts)
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.warning("analyze_vc: substance GitHub échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: GitHub substance failed (%s)", exc)
         return None
 
 
 def _find_link_by_label(links: list[dict], keywords: tuple[str, ...]) -> str | None:
-    """Premier lien dont le LABEL déclaré contient un des mots-clés (insensible
-    à la casse) -- utilisé pour Website/Docs, qui n'ont pas de motif d'URL
-    universel identifiable (contrairement à GitHub/X, reconnaissables par
-    domaine)."""
+    """First link whose declared LABEL contains one of the keywords
+    (case-insensitive) -- used for Website/Docs, which have no identifiable
+    universal URL pattern (unlike GitHub/X, recognizable by domain)."""
     for link in links:
         if not isinstance(link, dict):
             continue
@@ -1116,9 +1135,9 @@ def _find_link_by_label(links: list[dict], keywords: tuple[str, ...]) -> str | N
 
 
 async def _fetch_website_substance(ctx: TokenScanContext) -> "WebsiteSubstanceVerdict | None":
-    """23/07 -- signal "substance Website" : contenu RÉEL multi-pages (crawl
-    Tavily), demande opérateur directe ("elle doit pouvoir extraire tout pour
-    noter"). None si aucun lien Website déclaré."""
+    """23/07 -- "Website Substance" signal: REAL multi-page content (Tavily
+    crawl), direct operator request ("she must be able to extract
+    everything to grade it"). None if no Website link declared."""
     from aria_core.skills.website_substance import gather_website_substance_facts, judge_website_substance
 
     links = ctx.best_pair.project_links if ctx.best_pair else []
@@ -1128,16 +1147,16 @@ async def _fetch_website_substance(ctx: TokenScanContext) -> "WebsiteSubstanceVe
     try:
         facts = await gather_website_substance_facts(website_url)
         return judge_website_substance(facts)
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.warning("analyze_vc: substance Website échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: Website substance failed (%s)", exc)
         return None
 
 
 async def _fetch_docs_substance(ctx: TokenScanContext) -> "DocsSubstanceVerdict | None":
-    """23/07 -- signal "substance Docs" : crawl RÉEL de l'URL Docs DÉCLARÉE par
-    le projet (jamais une découverte incidente via le crawl Website -- demande
-    opérateur explicite : la doc doit être lue en entier depuis son propre
-    lien). None si aucun lien Docs déclaré."""
+    """23/07 -- "Docs Substance" signal: REAL crawl of the Docs URL DECLARED
+    by the project (never an incidental discovery via the Website crawl --
+    explicit operator request: the doc must be read in full from its own
+    link). None if no Docs link declared."""
     from aria_core.skills.docs_substance import gather_docs_substance_facts, judge_docs_substance
 
     links = ctx.best_pair.project_links if ctx.best_pair else []
@@ -1147,18 +1166,18 @@ async def _fetch_docs_substance(ctx: TokenScanContext) -> "DocsSubstanceVerdict 
     try:
         facts = await gather_docs_substance_facts(docs_url)
         return judge_docs_substance(facts)
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.warning("analyze_vc: substance Docs échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: Docs substance failed (%s)", exc)
         return None
 
 
 async def _fetch_x_substance(ctx: TokenScanContext) -> "XSubstanceVerdict | None":
-    """23/07 -- signal "substance X" : âge du compte SEUL (Tavily extract),
-    réduit honnêtement après évaluation réelle (voir docstring de
-    ``x_substance.py`` -- la régularité de publication via Tavily s'est
-    révélée peu fiable sur un cas réel testé, écartée). Réutilise
-    ``conviction_research._extract_x_handle`` (même regex/liste d'exclusion,
-    jamais dupliquée). None si aucun lien X déclaré."""
+    """23/07 -- "X Substance" signal: account age ALONE (Tavily extract),
+    honestly scaled back after real-world evaluation (see the
+    ``x_substance.py`` docstring -- posting regularity via Tavily proved
+    unreliable on a real tested case, dropped). Reuses
+    ``conviction_research._extract_x_handle`` (same regex/exclusion list,
+    never duplicated). None if no X link declared."""
     from aria_core.conviction_research import _extract_x_handle
     from aria_core.skills.x_substance import gather_x_substance_facts, judge_x_substance
 
@@ -1175,27 +1194,30 @@ async def _fetch_x_substance(ctx: TokenScanContext) -> "XSubstanceVerdict | None
     try:
         facts = await gather_x_substance_facts(handle)
         return judge_x_substance(facts)
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.warning("analyze_vc: substance X échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: X substance failed (%s)", exc)
         return None
 
 
 async def analyze_vc_with_context(
     contract: str, lang: str = "fr"
 ) -> tuple[VCResult, TokenScanContext]:
-    """Comme ``analyze_vc`` mais renvoie AUSSI le contexte de scan (faits on-chain).
+    """Like ``analyze_vc`` but ALSO returns the scan context (on-chain facts).
 
-    Permet au juge (``vc_judge.judge_analysis``) d'auditer l'analyse sur EXACTEMENT
-    les mêmes faits, sans re-scanner le token. ``analyze_vc`` reste la surface
-    publique inchangée (elle ignore le ctx) — aucun appelant existant n'est impacté.
+    Lets the judge (``vc_judge.judge_analysis``) audit the analysis on
+    EXACTLY the same facts, without re-scanning the token. ``analyze_vc``
+    remains the unchanged public surface (it ignores the ctx) — no existing
+    caller is affected.
 
-    ``lang`` (fr/en) : en anglais, une directive est ajoutée au prompt pour que la
-    prose du LLM sorte en anglais. En FR le prompt est inchangé (aucune régression).
+    ``lang`` (fr/en): in English, a directive is added to the prompt so the
+    LLM's prose comes out in English. In FR the prompt is unchanged (no
+    regression).
 
-    Cache : si ``ARIA_VC_CACHE_TTL`` > 0, un même (contrat, langue) redemandé dans
-    la fenêtre TTL renvoie le résultat mémorisé (zéro re-scan, zéro token). Seules
-    les analyses LLM réussies sont mises en cache (jamais un fallback dégradé).
-    Un log de timing (scan vs LLM) est émis à chaque analyse réelle.
+    Cache: if ``ARIA_VC_CACHE_TTL`` > 0, the same (contract, language)
+    requested again within the TTL window returns the memoized result (zero
+    re-scan, zero token). Only successful LLM analyses are cached (never a
+    degraded fallback). A timing log (scan vs LLM) is emitted on every real
+    analysis.
     """
     import time
 
@@ -1253,7 +1275,7 @@ async def analyze_vc_with_context(
             depth="develop",
         )
     except Exception as exc:  # noqa: BLE001 — jamais bloquant, on retombe sur le fallback
-        logger.error("analyze_vc: appel LLM échoué (%s) — fallback déterministe", exc)
+        logger.error("analyze_vc: LLM call failed (%s) — deterministic fallback", exc)
         raw = None
     t_llm = time.monotonic() - t_llm0
 
@@ -1269,7 +1291,7 @@ async def analyze_vc_with_context(
 
     parsed = _extract_json(raw)
     if parsed is None:
-        logger.warning("analyze_vc: sortie LLM non parsable — fallback déterministe")
+        logger.warning("analyze_vc: unparsable LLM output — deterministic fallback")
         _log_timing(False)
         return await _attach_extras(_deterministic_fallback(ctx), ctx, lang), ctx
 
@@ -1284,10 +1306,10 @@ async def analyze_vc_with_context(
 
 
 def _cache_ttl_seconds() -> int:
-    """TTL du cache d'analyse (secondes). 0 = désactivé (défaut hors prod).
+    """Analysis cache TTL (seconds). 0 = disabled (default outside prod).
 
-    Prod : le Dockerfile fixe ``ARIA_VC_CACHE_TTL=300``. Absent/invalide → 0,
-    pour ne jamais polluer les tests hors-ligne ni surprendre en dev.
+    Prod: the Dockerfile sets ``ARIA_VC_CACHE_TTL=300``. Missing/invalid →
+    0, to never pollute offline tests or surprise in dev.
     """
     import os
 

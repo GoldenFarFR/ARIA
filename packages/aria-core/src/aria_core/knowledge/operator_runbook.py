@@ -32,7 +32,7 @@ def wants_operator_runbook(message: str) -> bool:
 
 
 def append_pitfall_if_new(pitfall: dict[str, Any]) -> bool:
-    """Ajoute un pitfall si l'id n'existe pas encore (incident auto-file)."""
+    """Adds a pitfall if the id doesn't already exist (auto-filed incident)."""
     pitfall_id = str(pitfall.get("id") or "").strip()
     if not pitfall_id:
         return False

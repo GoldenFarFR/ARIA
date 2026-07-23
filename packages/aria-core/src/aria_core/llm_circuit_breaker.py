@@ -1,20 +1,21 @@
-"""Disjoncteur de fournisseur LLM — bascule le routage PAR DÉFAUT (celui que
-``_resolve_routes`` utilise quand aucun ``provider``/``model`` explicite n'est passé
-par l'appelant) vers un autre fournisseur, sans redéploiement.
+"""LLM provider circuit breaker — switches the DEFAULT routing (the one
+``_resolve_routes`` uses when no explicit ``provider``/``model`` is passed by
+the caller) to another provider, with no redeploy.
 
-Construit le 18/07 pour le cas concret « le solde x.ai (Grok) tombe à sec » — mais
-générique (n'importe quelle raison peut armer le disjoncteur). État persisté sur
-disque (`data_dir()/llm_circuit_breaker.json`), même patron que `outgoing_pause.py` :
-- Fichier absent = état propre "jamais armé" (pas un doute, tout passe normalement).
-- Fichier illisible/corrompu = loggé, traité comme "non armé" (fail-open sur le
-  ROUTAGE — un disjoncteur cassé ne doit jamais faire taire toute la conversation
-  d'ARIA ; contrairement à `wallet_guard`/`outgoing_pause(strict=True)` qui gèlent
-  l'argent dans le doute, ici le pire cas d'un fail-open est "on continue d'essayer
-  le fournisseur primaire", jamais une dépense incontrôlée).
+Built on 07/18 for the concrete case "the x.ai (Grok) balance runs dry" — but
+generic (any reason can arm the breaker). State persisted to disk
+(`data_dir()/llm_circuit_breaker.json`), same pattern as `outgoing_pause.py`:
+- Missing file = clean "never armed" state (not a doubt, everything passes
+  through normally).
+- Unreadable/corrupted file = logged, treated as "not armed" (fail-open on
+  ROUTING — a broken breaker must never silence all of ARIA's conversation;
+  unlike `wallet_guard`/`outgoing_pause(strict=True)` which freeze money when
+  in doubt, here the worst case of a fail-open is "we keep trying the primary
+  provider," never an uncontrolled spend).
 
-N'affecte QUE le routage par défaut : un appelant qui passe déjà `provider=`
-explicitement (ex. le tie-breaker momentum sur Haiku via OpenRouter, déjà indépendant
-de Grok) n'est jamais impacté, armé ou non.
+Affects ONLY the default routing: a caller that already passes `provider=`
+explicitly (e.g. the momentum tie-breaker on Haiku via OpenRouter, already
+independent of Grok) is never impacted, armed or not.
 """
 from __future__ import annotations
 
@@ -41,10 +42,10 @@ def _read_raw() -> dict[str, Any] | None:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, ValueError) as exc:
-        logger.warning("llm_circuit_breaker: état illisible/corrompu (%s) — traité comme non armé", exc)
+        logger.warning("llm_circuit_breaker: unreadable/corrupted state (%s) — treated as not armed", exc)
         return None
     if not isinstance(raw, dict):
-        logger.warning("llm_circuit_breaker: état de forme inattendue (%r) — traité comme non armé", type(raw).__name__)
+        logger.warning("llm_circuit_breaker: unexpected state shape (%r) — treated as not armed", type(raw).__name__)
         return None
     return raw
 
@@ -58,9 +59,9 @@ def _write(payload: dict[str, Any]) -> None:
 
 
 def get_override() -> dict[str, Any] | None:
-    """Retourne l'override actif ({"provider", "model", "fallback_model", "reason",
-    "since", "triggered_by"}) si armé, sinon None. Ne lève jamais — un état
-    illisible/absent retombe silencieusement sur None (routage inchangé)."""
+    """Returns the active override ({"provider", "model", "fallback_model", "reason",
+    "since", "triggered_by"}) if armed, otherwise None. Never raises — an
+    unreadable/missing state silently falls back to None (routing unchanged)."""
     raw = _read_raw()
     if not raw:
         return None
@@ -84,8 +85,8 @@ def arm(
     reason: str,
     triggered_by: str = "system",
 ) -> dict[str, Any]:
-    """Arme le disjoncteur. Écrase tout état précédent (une seule bascule active
-    à la fois — pas d'empilement)."""
+    """Arms the breaker. Overwrites any previous state (only one active switch
+    at a time — no stacking)."""
     payload = {
         "armed": True,
         "provider": provider.strip().lower(),
@@ -97,7 +98,7 @@ def arm(
     }
     _write(payload)
     logger.warning(
-        "llm_circuit_breaker: ARMÉ -> provider=%s model=%s (raison: %s, par: %s)",
+        "llm_circuit_breaker: ARMED -> provider=%s model=%s (reason: %s, by: %s)",
         payload["provider"], payload["model"], payload["reason"], payload["triggered_by"],
     )
     return payload
@@ -110,12 +111,12 @@ def disarm(*, by: str = "operator") -> dict[str, Any]:
         "disarmed_at": datetime.now(timezone.utc).isoformat(),
     }
     _write(payload)
-    logger.warning("llm_circuit_breaker: désarmé par %s", by)
+    logger.warning("llm_circuit_breaker: disarmed by %s", by)
     return payload
 
 
 def status() -> dict[str, Any]:
-    """Statut lisible pour /status ou un futur /api — jamais None (toujours un dict)."""
+    """Readable status for /status or a future /api — never None (always a dict)."""
     override = get_override()
     if override:
         return {

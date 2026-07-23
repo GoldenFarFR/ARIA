@@ -81,7 +81,7 @@ async def seed_builder_knowledge_if_empty() -> int:
 
 
 def _zhc_identity_topics() -> list[tuple[str, str]]:
-    """Doctrine ZHC — toujours à jour en mémoire cognitive (autonomie réelle)."""
+    """ZHC doctrine — always kept up to date in cognitive memory (real autonomy)."""
     h = holding_name()
     return [
         (
@@ -124,7 +124,7 @@ def _zhc_identity_topics() -> list[tuple[str, str]]:
 
 
 async def seed_zhc_identity_knowledge() -> int:
-    """Upsert identity ZHC — exécuté régulièrement (heartbeat), pas seulement au premier boot."""
+    """Upsert ZHC identity — runs regularly (heartbeat), not just on first boot."""
     from aria_core.knowledge.cognitive import upsert_knowledge_by_topic
 
     count = 0

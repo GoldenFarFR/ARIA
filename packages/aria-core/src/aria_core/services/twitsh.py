@@ -1,26 +1,27 @@
-"""Client twit.sh (x402) — recherche/timeline X, COMPLÉMENT à
-``aria_core.gateway.x_twitter`` (19/07, #111/#112, décision opérateur tranchée via
-AskUserQuestion : jamais un remplacement, jamais la source primaire). Repéré via
-x402scan.com (captures opérateur, 667$ volume/24h — le service X du Bazaar le plus
-utilisé de tout l'écosystème, 91 520 appels/30j), validé en conditions réelles à 4
-reprises (2 paiements de qualité + 2 de vérification de schéma, même segment) :
-``x402.twit.sh/tweets/search`` (0,006$/appel, param ``words``) et
-``x402.twit.sh/tweets/user`` (0,01$/appel, param ``username`` — confirmé après un
-premier essai avec ``from`` en 400 "Missing required query parameter: username").
+"""twit.sh client (x402) — X search/timeline, COMPLEMENT to
+``aria_core.gateway.x_twitter`` (07/19, #111/#112, operator decision settled
+via AskUserQuestion: never a replacement, never the primary source). Found
+via x402scan.com (operator screenshots, $667 volume/24h — the most-used X
+service in the whole Bazaar ecosystem, 91,520 calls/30d), validated under
+real conditions 4 times (2 quality payments + 2 schema-verification ones,
+same segment): ``x402.twit.sh/tweets/search`` ($0.006/call, ``words``
+param) and ``x402.twit.sh/tweets/user`` ($0.01/call, ``username`` param --
+confirmed after a first attempt with ``from`` returned 400 "Missing required
+query parameter: username").
 
-Schéma X API v2-compatible (``id``/``text``/``created_at``/``author_id``/
-``public_metrics``) MAIS ``created_at`` au format Twitter v1.1 legacy
-("Sun Jul 19 15:48:00 +0000 2026", pas ISO 8601) — normalisé ici en ISO pour que le
-résultat soit un DROP-IN du même shape que
+X API v2-compatible schema (``id``/``text``/``created_at``/``author_id``/
+``public_metrics``) BUT ``created_at`` in legacy Twitter v1.1 format ("Sun Jul
+19 15:48:00 +0000 2026", not ISO 8601) -- normalized here to ISO so the
+result is a DROP-IN of the same shape as
 ``x_twitter.search_recent_tweets``/``fetch_user_recent_tweets`` ({"text",
-"created_at", ...}) : ``conviction_research.py`` n'a besoin d'aucune branche de
-parsing séparée pour le repli.
+"created_at", ...}): ``conviction_research.py`` needs no separate parsing
+branch for the fallback.
 
-Chaque appel passe par ``x402_executor.fetch_paid_resource`` (plafond hebdo PARTAGÉ
-``x402_budget.py``, 5$/semaine, coupe-circuit ``/stop``, wallet CDP dédié) — même dôme
-que ``services/ottoai.py``/``services/cybercentry.py``. Aucun plafond dédié
-supplémentaire construit ici : le plafond partagé, déjà fail-closed, borne le pire cas
-si ce repli est sollicité souvent."""
+Every call goes through ``x402_executor.fetch_paid_resource`` (SHARED weekly
+cap ``x402_budget.py``, $5/week, ``/stop`` circuit breaker, dedicated CDP
+wallet) -- same guardrail as ``services/ottoai.py``/``services/cybercentry.py``.
+No additional dedicated cap built here: the shared cap, already fail-closed,
+bounds the worst case if this fallback is used often."""
 from __future__ import annotations
 
 import json
@@ -33,18 +34,18 @@ logger = logging.getLogger(__name__)
 _SEARCH_URL = "https://x402.twit.sh/tweets/search"
 _USER_URL = "https://x402.twit.sh/tweets/user"
 
-# Format Twitter v1.1 legacy observé en conditions réelles (19/07) -- distinct de
-# l'ISO 8601 renvoyé par l'API X officielle (x_twitter.py).
+# Legacy Twitter v1.1 format observed under real conditions (07/19) -- distinct
+# from the ISO 8601 returned by the official X API (x_twitter.py).
 _LEGACY_DATE_FORMAT = "%a %b %d %H:%M:%S %z %Y"
 
 
 def _normalize_created_at(raw: object) -> str | None:
-    """Convertit le format Twitter v1.1 legacy en ISO 8601 -- jamais une exception.
-    Sans cette normalisation, ``_posting_cadence_from_tweets`` (conviction_research.py)
-    échoue silencieusement à parser CHAQUE tweet twit.sh (ValueError capté, ignoré),
-    rendant la cadence de publication systématiquement "unknown" malgré des données
-    réelles -- bug réel évité en vérifiant le format contre un vrai appel avant de
-    coder (norme du 14/07)."""
+    """Converts the legacy Twitter v1.1 format to ISO 8601 -- never an
+    exception. Without this normalization, ``_posting_cadence_from_tweets``
+    (conviction_research.py) silently fails to parse EVERY twit.sh tweet
+    (ValueError caught, ignored), making posting cadence systematically
+    "unknown" despite real data -- real bug avoided by checking the format
+    against a real call before coding (07/14 standard)."""
     if not raw or not isinstance(raw, str):
         return None
     try:
@@ -57,7 +58,7 @@ def _normalize_created_at(raw: object) -> str | None:
 def _parse_tweets(body: bytes) -> list[dict]:
     try:
         raw = json.loads(body.decode("utf-8"))
-    except Exception:  # noqa: BLE001 -- corps illisible, jamais une exception qui remonte
+    except Exception:  # noqa: BLE001 -- unreadable body, never an exception bubbling up
         return []
     data = raw.get("data") if isinstance(raw, dict) else None
     if not isinstance(data, list):
@@ -84,10 +85,10 @@ def _parse_tweets(body: bytes) -> list[dict]:
 async def search_tweets(
     query: str, *, max_results: int = 10, contract: str = "", token_symbol: str = "",
 ) -> list[dict]:
-    """Recherche X par requête libre (ticker/adresse/mot-clé), x402 (0,006$/appel).
-    Dôme standard : jamais une exception qui remonte, liste vide sur toute panne.
-    ``contract``/``token_symbol`` (19/07, #143) : transmis tel quel jusqu'au journal
-    x402_budget, pour que le paiement reste traçable jusqu'au token concerné."""
+    """Free-form X search (ticker/address/keyword), x402 ($0.006/call).
+    Standard guardrail: never an exception bubbling up, empty list on any
+    failure. ``contract``/``token_symbol`` (07/19, #143): passed through as-is
+    to the x402_budget log, so the payment stays traceable to the token concerned."""
     q = (query or "").strip()
     if not q:
         return []
@@ -107,7 +108,7 @@ async def search_tweets(
             token_symbol=token_symbol,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.info("twitsh: search_tweets échoué (%s)", exc)
+        logger.info("twitsh: search_tweets failed (%s)", exc)
         return []
     if result.status != "ok" or not result.body:
         return []
@@ -117,8 +118,8 @@ async def search_tweets(
 async def fetch_user_tweets(
     username: str, *, max_results: int = 10, contract: str = "", token_symbol: str = "",
 ) -> list[dict]:
-    """Timeline récente d'un compte X par son handle, x402 (0,01$/appel). Même dôme
-    que ``search_tweets``, mêmes paramètres ``contract``/``token_symbol``."""
+    """Recent timeline of an X account by its handle, x402 ($0.01/call). Same
+    guardrail as ``search_tweets``, same ``contract``/``token_symbol`` parameters."""
     handle = (username or "").lstrip("@").strip()
     if not handle:
         return []
@@ -138,7 +139,7 @@ async def fetch_user_tweets(
             token_symbol=token_symbol,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.info("twitsh: fetch_user_tweets échoué (%s)", exc)
+        logger.info("twitsh: fetch_user_tweets failed (%s)", exc)
         return []
     if result.status != "ok" or not result.body:
         return []

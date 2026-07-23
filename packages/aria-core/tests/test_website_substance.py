@@ -28,7 +28,7 @@ def test_generic_placeholder_is_weak():
         )
     )
     assert v.signal == "weak"
-    assert any("générique" in p for p in v.points)
+    assert any("generic" in p for p in v.points)
 
 
 def test_rich_site_is_positive():

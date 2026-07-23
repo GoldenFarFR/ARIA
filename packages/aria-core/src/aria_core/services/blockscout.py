@@ -1,21 +1,21 @@
-"""Client de lecture seule Blockscout — « yeux on-chain » d'ARIA.
+"""Blockscout read-only client — ARIA's "on-chain eyes".
 
-Aucune écriture, aucune signature, aucun appel autre que GET. Politique
-d'erreurs définie dans AGENTS.md :
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
-- Timeout / endpoint indisponible : 1 retry après 5s, puis fallback explicite.
-- Aucune donnée manquante n'est jamais remplacée par une supposition — le
-  champ `error` (et `available=False`) porte l'absence de donnée.
-- Échecs consécutifs répétés (>3) : logué, jamais bloquant, jamais de spam Telegram.
+No writes, no signing, no calls other than GET. Error policy defined in
+AGENTS.md:
+- 429: exponential backoff, 3 attempts max, then give up without blocking the pipeline.
+- Timeout / endpoint unavailable: 1 retry after 5s, then explicit fallback.
+- Missing data is never replaced by a guess — the `error` field (and
+  `available=False`) carries the absence of data.
+- Repeated consecutive failures (>3): logged, never blocking, never Telegram spam.
 
-Multi-chaînes EVM (14/07, wallet-scoring #157 uniquement -- le reste d'ARIA
-reste Base) : Blockscout a migré son accès historique "sans clé" vers la
-Pro API (un compte gratuit, une clé, ``https://api.blockscout.com/{chain_id}/
-api/v2/...``) à partir du 1er juillet 2026. ``base.blockscout.com`` (legacy,
-sans clé) reste utilisé par défaut tant qu'aucune clé n'est configurée --
-dégradation douce, zéro régression sur Base. Dès que ``BLOCKSCOUT_PRO_API_KEY``
-est présente dans l'environnement, TOUTES les chaînes (Base incluse) passent
-par la Pro API (débit bien supérieur : 5 req/s contre ~3 req/s en legacy).
+Multi-chain EVM (14/07, wallet-scoring #157 only -- the rest of ARIA stays
+Base): Blockscout migrated its legacy "keyless" access to the Pro API (a
+free account, a key, ``https://api.blockscout.com/{chain_id}/
+api/v2/...``) starting July 1st, 2026. ``base.blockscout.com`` (legacy,
+keyless) stays the default as long as no key is configured -- graceful
+degradation, zero regression on Base. As soon as ``BLOCKSCOUT_PRO_API_KEY``
+is present in the environment, ALL chains (Base included) go through the
+Pro API (much higher throughput: 5 req/s vs ~3 req/s in legacy).
 """
 
 from __future__ import annotations
@@ -34,21 +34,21 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://base.blockscout.com/api/v2"
 PRO_API_URL = "https://api.blockscout.com"
 
-# Chaînes EVM couvertes par le wallet-scoring (#157, 14/07). Solana n'est PAS
-# EVM (adresses différentes, pas de Blockscout) -- chantier séparé, hors scope.
-# "bnb" retiré (14/07, vérifié par VPS Research sur 3 angles indépendants :
-# absent du répertoire officiel chains.blockscout.com, erreur explicite
-# "Network not supported" sur un vrai appel, tous les sous-domaines
-# communautaires testés en 404) -- Blockscout ne sert pas BNB Smart Chain,
-# jamais une donnée réelle n'aurait pu remonter. Avalanche jamais ajouté pour
-# la même raison. Alternative réelle si BNB est voulu un jour : BSCTrace via
-# MegaNode (client séparé, pas une entrée CHAIN_IDS) -- cf.
+# EVM chains covered by wallet-scoring (#157, 14/07). Solana is NOT EVM
+# (different addresses, no Blockscout) -- separate project, out of scope.
+# "bnb" removed (14/07, verified by VPS Research from 3 independent angles:
+# absent from the official chains.blockscout.com directory, explicit
+# "Network not supported" error on a real call, every community subdomain
+# tested returned 404) -- Blockscout doesn't serve BNB Smart Chain, real
+# data could never have come back. Avalanche never added for the same
+# reason. Real alternative if BNB is wanted one day: BSCTrace via MegaNode
+# (separate client, not a CHAIN_IDS entry) -- see
 # docs/aria-learning-inbox/2026-07-14-verification-blockscout-bnb-avalanche-non-supportes.md
-# Étendu (14/07) aux 13 chaînes confirmées interrogeables des deux côtés
-# (Blockscout Pro API × GeckoTerminal) -- établi ce soir pour le classement
-# TVL dynamique (#157, services/defillama.py). chain_id = DefiLlama `chainId`
-# (vérifié en direct, GET https://api.llama.fi/v2/chains, aucune des 13
-# manquante dans la réponse).
+# Extended (14/07) to the 13 chains confirmed queryable on both sides
+# (Blockscout Pro API × GeckoTerminal) -- established that evening for the
+# dynamic TVL ranking (#157, services/defillama.py). chain_id = DefiLlama
+# `chainId` (verified live, GET https://api.llama.fi/v2/chains, none of the
+# 13 missing from the response).
 CHAIN_IDS: dict[str, int] = {
     "base": 8453,
     "ethereum": 1,
@@ -69,8 +69,8 @@ UNAVAILABLE = "donnée on-chain indisponible"
 
 
 def _pro_api_key() -> str:
-    """Clé Blockscout Pro -- UNIQUEMENT depuis l'environnement (jamais en dur),
-    même politique que ``TAVILY_API_KEY`` (cf. services/tavily.py)."""
+    """Blockscout Pro key -- ONLY from the environment (never hardcoded),
+    same policy as ``TAVILY_API_KEY`` (see services/tavily.py)."""
     return os.environ.get("BLOCKSCOUT_PRO_API_KEY", "").strip()
 
 _SENSITIVE_FUNCTION_NAMES = {
@@ -90,9 +90,9 @@ class AddressInfo:
     contract_name: str | None = None
     balance_wei: str | None = None
     balance_native: float | None = None
-    creator_address: str | None = None  # déployeur (pour reconnaître un launchpad)
-    holders_count: int | None = None  # présent si ``address`` est un token (champ ``token.holders_count``)
-    ens_domain_name: str | None = None  # nom ENS/Basename (cosmétique, jamais un facteur de score)
+    creator_address: str | None = None  # deployer (used to recognize a launchpad)
+    holders_count: int | None = None  # present if ``address`` is a token (``token.holders_count`` field)
+    ens_domain_name: str | None = None  # ENS/Basename name (cosmetic, never a scoring factor)
     available: bool = False
     error: str | None = None
 
@@ -121,10 +121,10 @@ class Transaction:
     method: str | None
     timestamp: str | None
     block_number: int | None = None
-    # 22/07 -- réputation déployeur (services/deployer_history.py) : présent tel quel
-    # dans la réponse réelle de l'endpoint (`item.created_contract.hash`, confirmé par
-    # appel direct) sur une tx de création de contrat, ``None`` sinon -- aucun coût
-    # réseau supplémentaire, champ juste jamais mappé avant ce correctif.
+    # 22/07 -- deployer reputation (services/deployer_history.py): present as-is
+    # in the endpoint's real response (`item.created_contract.hash`, confirmed
+    # by a direct call) on a contract-creation tx, ``None`` otherwise -- no
+    # extra network cost, the field was just never mapped before this fix.
     created_contract: str | None = None
 
 
@@ -133,10 +133,10 @@ class TokenHolder:
     address: str
     balance: float | None
     percentage: float | None
-    # 19/07 -- revue croisée Gemini : déjà présents dans la réponse RÉELLE de
-    # ``/tokens/{address}/holders`` (vérifié par appel direct, aucun coût réseau
-    # supplémentaire) -- l'objet ``address`` de chaque holder embarque son propre
-    # statut de contrat/vérification, exactement comme ``/addresses/{address}``.
+    # 19/07 -- Gemini cross review: already present in the REAL response of
+    # ``/tokens/{address}/holders`` (verified by a direct call, no extra
+    # network cost) -- each holder's ``address`` object carries its own
+    # contract/verification status, exactly like ``/addresses/{address}``.
     is_contract: bool | None = None
     is_verified: bool | None = None
 
@@ -146,13 +146,13 @@ class TokenTransfersResult:
     transfers: list[TokenTransfer] = field(default_factory=list)
     available: bool = True
     error: str | None = None
-    # 15/07, revue externe -- wallet-scoring : ``True`` si l'API Blockscout
-    # avait ENCORE de la donnée (``next_page_params`` présent) quand la
-    # pagination s'est arrêtée à cause du plafond ``max_pages``/``limit``,
-    # jamais quand elle s'arrête parce que l'historique est réellement épuisé
-    # (``next_page_params`` absent). Défaut ``False`` -- rétrocompatible avec
-    # tout appelant existant (``get_transaction_token_transfers`` une page
-    # unique, jamais concerné).
+    # 15/07, external review -- wallet-scoring: ``True`` if the Blockscout
+    # API STILL had data (``next_page_params`` present) when pagination
+    # stopped because of the ``max_pages``/``limit`` cap, never when it
+    # stops because the history is genuinely exhausted (``next_page_params``
+    # absent). Default ``False`` -- backward compatible with every existing
+    # caller (``get_transaction_token_transfers`` is single-page, never
+    # affected).
     truncated: bool = False
 
 
@@ -165,11 +165,11 @@ class TransactionsResult:
 
 @dataclass
 class BoundedTransactionsResult:
-    """Résultat de ``get_transactions_bounded`` -- ``truncated=True`` signifie que le
-    plafond de pages a été atteint SANS épuiser l'historique réel du wallet : toute
-    conclusion tirée de ``transactions`` (ancienneté, source de financement) est
-    alors une BORNE (le wallet est AU MOINS aussi vieux que la plus ancienne
-    transaction trouvée ici), jamais une valeur exacte garantie."""
+    """Result of ``get_transactions_bounded`` -- ``truncated=True`` means the
+    page cap was reached WITHOUT exhausting the wallet's real history: any
+    conclusion drawn from ``transactions`` (age, funding source) is then a
+    BOUND (the wallet is AT LEAST as old as the oldest transaction found
+    here), never a guaranteed exact value."""
 
     transactions: list[Transaction] = field(default_factory=list)
     available: bool = True
@@ -187,12 +187,12 @@ class TokenHoldersResult:
 
 @dataclass
 class TokenMetadataResult:
-    """21/07 -- extrait de ``get_token_holders`` (decimals + total_supply seuls,
-    sans la liste des holders) pour permettre à un appelant de combiner cette
-    métadonnée bon marché (endpoint ``/tokens/{address}``, peu de volume, résiste
-    bien au repli gratuit) avec une source de holders DIFFÉRENTE -- ex.
-    ``blockscout_x402.get_token_holders_x402`` (payé, jamais à sec de crédits),
-    cf. ``momentum_entry._check_holder_concentration``."""
+    """21/07 -- extracted from ``get_token_holders`` (decimals + total_supply
+    only, without the holders list) to let a caller combine this cheap
+    metadata (``/tokens/{address}`` endpoint, low volume, holds up well on
+    the free fallback) with a DIFFERENT holders source -- e.g.
+    ``blockscout_x402.get_token_holders_x402`` (paid, never out of credits),
+    see ``momentum_entry._check_holder_concentration``."""
 
     decimals: int | None = None
     total_supply: float | None = None
@@ -213,13 +213,13 @@ class ContractFlags:
 
 
 class BlockscoutClient:
-    """Client HTTP async, lecture seule, throttle modéré.
+    """Async HTTP client, read-only, moderate throttle.
 
-    ``chain`` sélectionne le réseau EVM (``"base"`` par défaut, comportement
-    historique inchangé). Si ``BLOCKSCOUT_PRO_API_KEY`` est configurée, passe
-    par la Pro API (multi-chaînes, 5 req/s) ; sinon, dégradation douce vers
-    l'ancien endpoint gratuit ``base.blockscout.com`` -- disponible pour
-    ``"base"`` UNIQUEMENT (les autres chaînes exigent la clé Pro)."""
+    ``chain`` selects the EVM network (``"base"`` by default, unchanged
+    historical behavior). If ``BLOCKSCOUT_PRO_API_KEY`` is configured, goes
+    through the Pro API (multi-chain, 5 req/s); otherwise, graceful
+    degradation to the old free endpoint ``base.blockscout.com`` -- available
+    for ``"base"`` ONLY (other chains require the Pro key)."""
 
     def __init__(self, *, chain: str = "base", min_interval: float | None = None) -> None:
         self.chain = chain
@@ -229,19 +229,19 @@ class BlockscoutClient:
         if api_key and chain_id is not None:
             self.base_url = f"{PRO_API_URL}/{chain_id}/api/v2"
             self._api_key: str | None = api_key
-            # 21/07 -- calibré à 90% de 5 req/s confirmé (doc officielle +
-            # header x-ratelimit-limit:5 vérifié en direct), doctrine CLAUDE.md
-            # "Débit calibré à 90%" : 4.5 req/s = 0.222s. Remplace 0.2s (100%,
-            # zéro marge).
+            # 21/07 -- calibrated to 90% of the confirmed 5 req/s (official doc
+            # + x-ratelimit-limit:5 header verified live), CLAUDE.md doctrine
+            # "Rate calibrated to 90%": 4.5 req/s = 0.222s. Replaces 0.2s
+            # (100%, zero margin).
             default_interval = 0.222
         elif chain == "base":
             self.base_url = BASE_URL
             self._api_key = None
             default_interval = 0.35
         else:
-            # Chaîne non-Base sans clé Pro : pas d'endpoint gratuit connu --
-            # toute requête échoue proprement via _get_json (jamais une URL
-            # devinée au hasard).
+            # Non-Base chain with no Pro key: no known free endpoint --
+            # every request fails cleanly via _get_json (never a randomly
+            # guessed URL).
             self.base_url = ""
             self._api_key = None
             default_interval = 0.35
@@ -250,15 +250,16 @@ class BlockscoutClient:
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
-        # 20/07 -- trouvé en conditions réelles (crédits Pro épuisés en cours de session,
-        # "Out of credits" en HTTP 402) : une clé Pro CONFIGURÉE mais À SEC n'est pas
-        # équivalente à une clé ABSENTE dans ce __init__ -- une fois construit sur la
-        # branche Pro, ce client restait engagé dessus pour toujours, sans jamais
-        # retomber sur l'endpoint gratuit base.blockscout.com pourtant fonctionnel et
-        # déjà implémenté juste pour ce cas (clé absente). Ce flag n'est utilisé QUE pour
-        # ne logger l'avertissement de repli qu'une seule fois (pas à chaque appel) --
-        # le vrai état de repli vit dans base_url/_api_key, mutés en place par
-        # _get_json dès le premier 402 rencontré sur la chaîne "base".
+        # 20/07 -- found under real conditions (Pro credits exhausted
+        # mid-session, "Out of credits" as HTTP 402): a Pro key that's
+        # CONFIGURED but DRAINED is not equivalent to a key that's ABSENT in
+        # this __init__ -- once built on the Pro branch, this client stayed
+        # committed to it forever, never falling back to the free
+        # base.blockscout.com endpoint even though it works and was already
+        # implemented for exactly this case (missing key). This flag is ONLY
+        # used to log the fallback warning once (not on every call) -- the
+        # real fallback state lives in base_url/_api_key, mutated in place by
+        # _get_json on the first 402 encountered on the "base" chain.
         self._pro_credits_exhausted = False
 
     async def _throttle(self) -> None:
@@ -276,15 +277,15 @@ class BlockscoutClient:
         self._consecutive_failures += 1
         if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
             logger.warning(
-                "blockscout: %s echecs consecutifs (dernier: %s) — pas de blocage, pas d'escalade",
+                "blockscout: %s consecutive failures (last: %s) — no blocking, no escalation",
                 self._consecutive_failures,
                 detail,
             )
         else:
-            logger.info("blockscout: echec appel (%s/%s) — %s", self._consecutive_failures, _FAIL_STREAK_WARN_THRESHOLD, detail)
+            logger.info("blockscout: call failed (%s/%s) — %s", self._consecutive_failures, _FAIL_STREAK_WARN_THRESHOLD, detail)
 
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
-        """GET avec la politique d'erreurs AGENTS.md. Retourne (data, error)."""
+        """GET with the AGENTS.md error policy. Returns (data, error)."""
         if not self.base_url:
             return None, f"{UNAVAILABLE} (clé Blockscout Pro requise pour la chaîne '{self.chain}')"
 
@@ -292,14 +293,15 @@ class BlockscoutClient:
         timeout_retried = False
         pro_fallback_attempted = False
 
-        # 22/07 -- vérification PROACTIVE du budget de crédits Pro, avant même de
-        # tenter l'appel (le repli sur 402 ci-dessous reste le filet de sécurité
-        # réactif si ce budget se révélait mal calibré, jamais retiré). Seulement
-        # pertinent sur "base" (seule chaîne avec un repli gratuit connu) -- sur
-        # les autres chaînes, épuiser le budget proactivement n'aiderait à rien
-        # puisqu'il n'y a nulle part où basculer. Coût réel de CET endpoint précis
-        # (cost_for_endpoint, 22/07 -- token-transfers coûte 30, pas 20 comme le
-        # reste, vérifié sur le dashboard réel).
+        # 22/07 -- PROACTIVE check of the Pro credit budget, even before
+        # attempting the call (the 402 fallback below stays the reactive
+        # safety net if this budget turns out to be miscalibrated, never
+        # removed). Only relevant on "base" (the only chain with a known
+        # free fallback) -- on other chains, proactively depleting the
+        # budget wouldn't help since there's nowhere to fall back to. Real
+        # cost of THIS specific endpoint (cost_for_endpoint, 22/07 --
+        # token-transfers costs 30, not 20 like the rest, verified on the
+        # real dashboard).
         _pro_call_cost = blockscout_credit_budget.cost_for_endpoint(path)
         if (
             self._api_key
@@ -309,21 +311,21 @@ class BlockscoutClient:
             if not self._pro_credits_exhausted:
                 self._pro_credits_exhausted = True
                 logger.warning(
-                    "blockscout: budget de crédits Pro proche de l'épuisement (90000/jour) "
-                    "-- repli PROACTIF (ce process) vers l'endpoint gratuit base.blockscout.com, "
-                    "avant même un 402 réel",
+                    "blockscout: Pro credit budget nearly exhausted (90000/day) "
+                    "-- PROACTIVE fallback (this process) to the free endpoint "
+                    "base.blockscout.com, even before a real 402",
                 )
             self.base_url = BASE_URL
             self._api_key = None
             self._min_interval = 0.35
 
         while True:
-            # url/call_params recalculés à CHAQUE itération (pas une seule fois avant la
-            # boucle) -- nécessaire depuis le 20/07 : le repli 402 ci-dessous mute
-            # self.base_url/self._api_key EN PLACE, un calcul figé avant la boucle
-            # aurait retenté indéfiniment l'ancienne URL Pro. Comportement identique
-            # pour tous les autres chemins de retry (429/5xx/timeout), qui ne changent
-            # jamais base_url/_api_key.
+            # url/call_params recomputed on EVERY iteration (not once before
+            # the loop) -- necessary since 20/07: the 402 fallback below
+            # mutates self.base_url/self._api_key IN PLACE, a value frozen
+            # before the loop would retry the old Pro URL indefinitely. Same
+            # behavior for every other retry path (429/5xx/timeout), which
+            # never change base_url/_api_key.
             url = f"{self.base_url}{path}"
             call_params = dict(params or {})
             if self._api_key:
@@ -341,15 +343,16 @@ class BlockscoutClient:
                 self._record_failure(detail)
                 return None, f"{UNAVAILABLE} (timeout Blockscout)"
 
-            # 20/07 -- trouvé en conditions réelles (crédits Pro épuisés en session,
-            # "Out of credits" en 402) : repli automatique vers l'endpoint GRATUIT
-            # base.blockscout.com, déjà implémenté pour le cas "pas de clé configurée"
-            # mais jamais exercé pour le cas "clé configurée mais à sec" -- les deux
-            # situations laissent pourtant le même vrai choix (Base uniquement, sans
-            # clé). Repli PERMANENT pour la durée de vie de ce process (une clé à sec
-            # ne se recharge pas toute seule) -- ne s'applique QUE sur "base" (seule
-            # chaîne avec un endpoint gratuit connu) et seulement si on utilisait
-            # encore la clé Pro (jamais une boucle si le gratuit lui-même échouait).
+            # 20/07 -- found under real conditions (Pro credits exhausted
+            # mid-session, "Out of credits" as a 402): automatic fallback to
+            # the FREE base.blockscout.com endpoint, already implemented for
+            # the "no key configured" case but never exercised for the "key
+            # configured but drained" case -- yet both situations leave the
+            # same real choice (Base only, no key). PERMANENT fallback for
+            # this process's lifetime (a drained key doesn't refill itself)
+            # -- applies ONLY on "base" (the only chain with a known free
+            # endpoint) and only if the Pro key was still in use (never a
+            # loop if the free endpoint itself failed).
             if (
                 response.status_code == 402
                 and self._api_key
@@ -360,9 +363,10 @@ class BlockscoutClient:
                 if not self._pro_credits_exhausted:
                     self._pro_credits_exhausted = True
                     logger.warning(
-                        "blockscout: Pro API en 402 (%s) sur %s -- repli PERMANENT (ce "
-                        "process) vers l'endpoint gratuit base.blockscout.com -- "
-                        "signaler à l'opérateur pour recharger les crédits Pro",
+                        "blockscout: Pro API returned 402 (%s) on %s -- PERMANENT "
+                        "fallback (this process) to the free endpoint "
+                        "base.blockscout.com -- flag to the operator to top up "
+                        "Pro credits",
                         response.text[:200],
                         url,
                     )
@@ -406,22 +410,22 @@ class BlockscoutClient:
             return response.json(), None
 
     async def _record_pro_credit_spend(self, path: str) -> None:
-        """N'enregistre que si CET appel a réellement traversé la Pro API (une
-        clé encore présente au moment du succès -- un repli 402/proactif déjà
-        déclenché EN COURS DE ROUTE aurait mis ``_api_key`` à ``None`` avant
-        d'atteindre ce point). Best-effort, jamais bloquant : un souci d'écriture
-        du compteur de budget ne doit jamais faire échouer un appel Blockscout
-        par ailleurs réussi."""
+        """Only records if THIS call actually went through the Pro API (a
+        key still present at the moment of success -- a 402/proactive
+        fallback already triggered ALONG THE WAY would have set ``_api_key``
+        to ``None`` before reaching this point). Best-effort, never
+        blocking: a hiccup writing the budget counter must never fail an
+        otherwise successful Blockscout call."""
         if not self._api_key:
             return
         try:
             cost = blockscout_credit_budget.cost_for_endpoint(path)
             await blockscout_credit_budget.record_spend(endpoint=path, credits=cost)
         except Exception:
-            logger.warning("blockscout: échec d'enregistrement du budget de crédits (non bloquant)", exc_info=True)
+            logger.warning("blockscout: failed to record credit budget spend (non-blocking)", exc_info=True)
 
     # ------------------------------------------------------------------
-    # 1. Info adresse (balance, contrat, verification, nom)
+    # 1. Address info (balance, contract, verification, name)
     # ------------------------------------------------------------------
     async def get_address_info(self, address: str) -> AddressInfo:
         data, error = await self._get_json(f"/addresses/{address}")
@@ -465,7 +469,7 @@ class BlockscoutClient:
         )
 
     # ------------------------------------------------------------------
-    # 2. Transferts de tokens (qui paie qui, quels tokens, montants)
+    # 2. Token transfers (who pays whom, which tokens, amounts)
     # ------------------------------------------------------------------
     @staticmethod
     def _parse_token_transfer(item: dict) -> TokenTransfer:
@@ -505,21 +509,23 @@ class BlockscoutClient:
         max_pages: int = 1,
         token_type: str | None = None,
     ) -> TokenTransfersResult:
-        """``max_pages`` > 1 suit le curseur ``next_page_params`` de Blockscout pour
-        approcher l'historique complet d'un wallet (#157, wallet-centrique multi-token)
-        -- comportement par défaut (``max_pages=1``) inchangé pour les appelants
-        existants (``analyze_smart_money``, token-centrique, une page suffit).
-        ``token_type`` (ex. ``"ERC-20"``) filtre le bruit NFT/ERC-1155 côté API."""
+        """``max_pages`` > 1 follows Blockscout's ``next_page_params`` cursor
+        to approach a wallet's full history (#157, wallet-centric
+        multi-token) -- default behavior (``max_pages=1``) unchanged for
+        existing callers (``analyze_smart_money``, token-centric, one page
+        is enough). ``token_type`` (e.g. ``"ERC-20"``) filters NFT/ERC-1155
+        noise on the API side."""
         params: dict = {"type": token_type} if token_type else {}
         transfers: list[TokenTransfer] = []
         pages_fetched = 0
-        # 15/07, revue externe -- distingue "historique réellement épuisé"
-        # (API n'a plus de `next_page_params`) de "on a arrêté avant la fin"
-        # (erreur réseau, réponse malformée, ou plafond max_pages/limit
-        # atteint alors que `next_page_params` existait encore) -- seul ce
-        # 2e cas doit remonter `truncated=True`, jamais un signal perdu en
-        # silence pour un wallet très actif dont l'historique dépasse le
-        # plafond (2000 transferts / 10 pages côté wallet-scoring).
+        # 15/07, external review -- distinguishes "history genuinely
+        # exhausted" (API has no more `next_page_params`) from "we stopped
+        # before the end" (network error, malformed response, or
+        # max_pages/limit cap reached while `next_page_params` still
+        # existed) -- only this 2nd case should surface `truncated=True`,
+        # never a signal silently lost for a very active wallet whose
+        # history exceeds the cap (2000 transfers / 10 pages on the
+        # wallet-scoring side).
         truncated = False
 
         while True:
@@ -555,12 +561,12 @@ class BlockscoutClient:
         return TokenTransfersResult(transfers=transfers[:limit], available=True, error=None, truncated=truncated)
 
     async def get_transaction_token_transfers(self, tx_hash: str) -> TokenTransfersResult:
-        """Tous les transferts ERC-20 d'UNE transaction précise (14/07,
-        wallet-scoring #157 -- prix par tx_hash exact, complément de
-        ``get_ohlcv``/``price_at``). Une seule page : une transaction de swap,
-        même multi-hop, compte au plus quelques dizaines de transferts, jamais
-        besoin de paginer. Réutilise ``_parse_token_transfer`` (même parsing
-        décimales/adresses que ``get_token_transfers``, aucune duplication)."""
+        """All ERC-20 transfers of ONE specific transaction (14/07,
+        wallet-scoring #157 -- exact price by tx_hash, complementing
+        ``get_ohlcv``/``price_at``). A single page: a swap transaction, even
+        multi-hop, counts at most a few dozen transfers, never needs
+        pagination. Reuses ``_parse_token_transfer`` (same decimals/address
+        parsing as ``get_token_transfers``, no duplication)."""
         data, error = await self._get_json(f"/transactions/{tx_hash}/token-transfers")
         if error is not None:
             return TokenTransfersResult(available=False, error=error)
@@ -572,7 +578,7 @@ class BlockscoutClient:
         return TokenTransfersResult(transfers=transfers, available=True, error=None)
 
     # ------------------------------------------------------------------
-    # 3. Historique des transactions
+    # 3. Transaction history
     # ------------------------------------------------------------------
     async def get_transactions(self, address: str, limit: int = 50) -> TransactionsResult:
         data, error = await self._get_json(f"/addresses/{address}/transactions")
@@ -612,12 +618,12 @@ class BlockscoutClient:
         return TransactionsResult(transactions=transactions, available=True, error=None)
 
     # ------------------------------------------------------------------
-    # 3b. Historique borné (approche l'ancienneté du wallet / la source de
-    # financement -- #157, jamais garanti exhaustif : Blockscout n'offre pas de tri
-    # bon marché "plus ancien d'abord" sur cet endpoint, vérifié en direct
-    # (``sort=asc`` renvoie une liste vide). Pagination plafonnée à ``max_pages`` ;
-    # ``truncated=True`` si le plafond est atteint sans épuiser l'historique --
-    # le résultat est alors une BORNE, jamais la vraie première transaction.
+    # 3b. Bounded history (approximates the wallet's age / funding source --
+    # #157, never guaranteed exhaustive: Blockscout offers no cheap "oldest
+    # first" sort on this endpoint, verified live (``sort=asc`` returns an
+    # empty list). Pagination capped at ``max_pages``; ``truncated=True`` if
+    # the cap is reached without exhausting the history -- the result is
+    # then a BOUND, never the actual first transaction.
     # ------------------------------------------------------------------
     async def get_transactions_bounded(self, address: str, *, max_pages: int = 5) -> "BoundedTransactionsResult":
         params: dict = {}
@@ -673,13 +679,13 @@ class BlockscoutClient:
         return BoundedTransactionsResult(transactions=transactions, available=True, error=None, truncated=True)
 
     # ------------------------------------------------------------------
-    # 4. Distribution des holders (top holders, %)
+    # 4. Holder distribution (top holders, %)
     # ------------------------------------------------------------------
     async def get_token_metadata(self, token_address: str) -> TokenMetadataResult:
-        """21/07 -- extrait de ``get_token_holders`` (decimals + total_supply
-        seuls, endpoint ``/tokens/{address}``) pour permettre à un appelant de
-        combiner cette métadonnée avec une source de holders séparée (ex. x402,
-        cf. ``momentum_entry._check_holder_concentration``)."""
+        """21/07 -- extracted from ``get_token_holders`` (decimals +
+        total_supply only, ``/tokens/{address}`` endpoint) to let a caller
+        combine this metadata with a separate holders source (e.g. x402,
+        see ``momentum_entry._check_holder_concentration``)."""
         token_data, token_error = await self._get_json(f"/tokens/{token_address}")
         if token_error is not None:
             return TokenMetadataResult(available=False, error=token_error)
@@ -751,7 +757,7 @@ class BlockscoutClient:
         return TokenHoldersResult(holders=holders, total_supply=total_supply, available=True, error=decimals_error)
 
     # ------------------------------------------------------------------
-    # 5. is_verified + scan fonctions sensibles (mint, disable_transfers, blacklist)
+    # 5. is_verified + scan for sensitive functions (mint, disable_transfers, blacklist)
     # ------------------------------------------------------------------
     async def check_contract_flags(self, token_address: str) -> ContractFlags:
         data, error = await self._get_json(f"/smart-contracts/{token_address}")
@@ -775,17 +781,17 @@ class BlockscoutClient:
                 error="contrat non vérifié — scan des fonctions sensibles impossible",
             )
 
-        # On ne considère QUE les fonctions de l'ABI qui MODIFIENT l'état
-        # (nonpayable/payable), c.-à-d. un pouvoir réellement invocable après le
-        # déploiement. On IGNORE :
-        #   - les fonctions `view`/`pure` (getters : `isBlacklisted`, `mintingFinished`)
-        #     qui ne sont pas le pouvoir lui-même ;
-        #   - le code source brut : `_mint` (fonction INTERNE d'OpenZeppelin) est
-        #     présent dans TOUS les ERC20, même à offre fixe -> scanner la source
-        #     donnait un faux positif « mint » quasi systématique (rejet à tort).
-        # Les fonctions internes n'apparaissent pas dans l'ABI : un `_mint` utilisé
-        # seulement au constructeur ne sera donc PAS flaggé. Seul un `mint(...)`
-        # externe (que le dev peut appeler pour diluer) l'est.
+        # We ONLY consider ABI functions that MODIFY state (nonpayable/payable),
+        # i.e. a power actually callable after deployment. We IGNORE:
+        #   - `view`/`pure` functions (getters: `isBlacklisted`, `mintingFinished`)
+        #     which aren't the power itself;
+        #   - raw source code: `_mint` (an INTERNAL OpenZeppelin function) is
+        #     present in EVERY ERC20, even fixed-supply ones -> scanning the
+        #     source produced an almost-systematic false-positive "mint"
+        #     (wrongly rejected).
+        # Internal functions don't appear in the ABI: a `_mint` used only in
+        # the constructor will therefore NOT be flagged. Only an external
+        # `mint(...)` (that the dev can call to dilute) is.
         mutating_names: set[str] = set()
         for entry in data.get("abi") or []:
             if not isinstance(entry, dict) or entry.get("type") != "function":
@@ -798,9 +804,9 @@ class BlockscoutClient:
             mutating_names.add(str(entry["name"]).lower().replace("_", ""))
 
         def _has_flag(aliases: tuple[str, ...]) -> bool:
-            # Correspondance par sous-chaîne sur les noms de fonctions mutantes :
-            # attrape les variantes (`mintTo`, `addToBlacklist`, `stopTrading`)
-            # sans le bruit du code source.
+            # Substring match on mutating function names: catches variants
+            # (`mintTo`, `addToBlacklist`, `stopTrading`) without the source
+            # code noise.
             return any(alias in name for name in mutating_names for alias in aliases)
 
         return ContractFlags(
@@ -815,15 +821,16 @@ class BlockscoutClient:
         )
 
     # ------------------------------------------------------------------
-    # 6. Lecture best-effort du propriétaire (owner) — détection du renoncement
+    # 6. Best-effort owner read — renouncement detection
     # ------------------------------------------------------------------
     async def read_owner(self, token_address: str) -> tuple[str | None, str | None]:
-        """Retourne (adresse_owner, erreur). ``owner`` en minuscules, ou None si illisible.
+        """Returns (owner_address, error). ``owner`` in lowercase, or None if unreadable.
 
-        Interroge les méthodes de LECTURE du contrat (Blockscout ``methods-read``) et
-        récupère la valeur courante d'un getter sans argument nommé ``owner`` /
-        ``getOwner`` / ``_owner``. Best-effort et défensif : toute forme inattendue
-        renvoie (None, raison) — jamais d'exception (dégradation gracieuse).
+        Queries the contract's READ methods (Blockscout ``methods-read``) and
+        fetches the current value of a no-argument getter named ``owner`` /
+        ``getOwner`` / ``_owner``. Best-effort and defensive: any unexpected
+        shape returns (None, reason) — never an exception (graceful
+        degradation).
         """
         data, error = await self._get_json(f"/smart-contracts/{token_address}/methods-read")
         if error is not None:
@@ -838,7 +845,7 @@ class BlockscoutClient:
             if name not in ("owner", "getowner"):
                 continue
             if m.get("inputs"):
-                continue  # un vrai getter owner n'a pas d'argument
+                continue  # a real owner getter takes no argument
             for out in m.get("outputs") or []:
                 if not isinstance(out, dict):
                     continue
@@ -854,10 +861,10 @@ _chain_clients: dict[str, BlockscoutClient] = {"base": blockscout_client}
 
 
 def get_blockscout_client(chain: str) -> BlockscoutClient:
-    """Client Blockscout pour ``chain`` (#157, wallet-scoring multi-chaînes,
-    14/07) -- un client par chaîne (throttle/état d'échecs indépendants),
-    mis en cache. ``chain`` hors ``CHAIN_IDS`` renvoie quand même un client
-    (dégradation douce gérée par ``_get_json``), jamais une exception."""
+    """Blockscout client for ``chain`` (#157, multi-chain wallet-scoring,
+    14/07) -- one client per chain (independent throttle/failure state),
+    cached. A ``chain`` outside ``CHAIN_IDS`` still returns a client
+    (graceful degradation handled by ``_get_json``), never an exception."""
     client = _chain_clients.get(chain)
     if client is None:
         client = BlockscoutClient(chain=chain)

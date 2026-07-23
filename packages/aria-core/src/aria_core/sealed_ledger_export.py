@@ -1,17 +1,19 @@
-"""Export du Sealed Ledger vers un fichier JSONL public (19/07, #214) -- voir
-``sealed_ledger.py`` pour le design complet. Module SÉPARÉ et volontairement dépourvu de
-tout appel git/subprocess : ce fichier ne fait QUE de l'I/O fichier + la garde fail-fast de
-continuité de chaîne, ce qui le rend testable sans mocker git. Le commit+push réel est un
-script fin (``scripts/sealed_ledger_seed_demo.py`` pour la preuve v0) qui appelle
-``export_snapshot_to_jsonl`` puis fait le ``git add``/``commit``/``push`` lui-même.
+"""Sealed Ledger export to a public JSONL file (19/07, #214) -- see
+``sealed_ledger.py`` for the full design. Module kept SEPARATE and
+deliberately free of any git/subprocess call: this file ONLY does file I/O +
+the fail-fast chain-continuity guard, which makes it testable without
+mocking git. The actual commit+push is a thin script
+(``scripts/sealed_ledger_seed_demo.py`` for the v0 proof) that calls
+``export_snapshot_to_jsonl`` then does the ``git add``/``commit``/``push``
+itself.
 
-Garde fail-fast (spec figée dans la conversation ARIA/opérateur du 19/07) : si le fichier
-JSONL existe déjà et contient au moins une ligne, on lit le hash de sa DERNIÈRE ligne et on
-le compare au ``prev_hash`` du premier événement qu'on s'apprête à ajouter. Un mismatch
-signifie que le fichier distant a divergé de ce que l'exporteur croyait -- on n'écrit RIEN,
-on lève bruyamment. L'intégrité du registre repose sur cette continuité vérifiée à chaque
-export, pas sur la protection de branche GitHub (acté explicitement dans la conversation
-de design)."""
+Fail-fast guard (spec locked in the ARIA/operator conversation of 19/07): if
+the JSONL file already exists and contains at least one line, read the hash
+of its LAST line and compare it against the ``prev_hash`` of the first event
+about to be appended. A mismatch means the remote file has diverged from
+what the exporter believed -- write NOTHING, raise loudly. The ledger's
+integrity rests on this continuity check on every export, not on GitHub
+branch protection (explicitly settled in the design conversation)."""
 from __future__ import annotations
 
 import json
@@ -21,15 +23,15 @@ from aria_core.sealed_ledger import GENESIS_HASH
 
 
 class ExportIntegrityError(RuntimeError):
-    """Le fichier JSONL existant ne s'enchaîne pas avec les nouveaux événements --
-    jamais rattrapée pour écrire quand même, c'est exactement le scénario que cette
-    garde existe pour bloquer."""
+    """The existing JSONL file doesn't chain with the new events -- never
+    caught to write anyway, this is exactly the scenario this guard exists
+    to block."""
 
 
 def read_jsonl_events(jsonl_path: Path) -> list[dict]:
-    """Relit un export existant tel quel -- utilisé à la fois par la garde fail-fast
-    interne ET par la re-vérification tierce indépendante (qui doit pouvoir relire un
-    export SANS toucher à la base de données locale)."""
+    """Re-reads an existing export as-is -- used both by the internal
+    fail-fast guard AND by independent third-party re-verification (which
+    must be able to re-read an export WITHOUT touching the local database)."""
     if not jsonl_path.exists():
         return []
     events = []
@@ -41,13 +43,13 @@ def read_jsonl_events(jsonl_path: Path) -> list[dict]:
 
 
 def export_snapshot_to_jsonl(*, jsonl_path: Path, new_events: list[dict]) -> dict:
-    """Ajoute ``new_events`` (triés par ``sequence`` par cette fonction, jamais supposé
-    déjà trié) à la fin du fichier JSONL, une ligne JSON canonique par événement. Vérifie
-    la continuité de chaîne avant d'écrire quoi que ce soit.
+    """Appends ``new_events`` (sorted by ``sequence`` by this function, never
+    assumed already sorted) to the end of the JSONL file, one canonical JSON
+    line per event. Checks chain continuity before writing anything.
 
-    Retourne {"appended": N, "tail_hash": "<hash du dernier événement écrit>"}.
-    Lève ``ExportIntegrityError`` sans rien écrire si la continuité est rompue.
-    Ne fait AUCUN appel git -- c'est la responsabilité de l'appelant."""
+    Returns {"appended": N, "tail_hash": "<hash of the last event written>"}.
+    Raises ``ExportIntegrityError`` without writing anything if continuity
+    is broken. Makes NO git call -- that's the caller's responsibility."""
     if not new_events:
         return {"appended": 0, "tail_hash": None}
 
@@ -58,18 +60,18 @@ def export_snapshot_to_jsonl(*, jsonl_path: Path, new_events: list[dict]) -> dic
 
     if ordered[0]["prev_hash"] != expected_prev_hash:
         raise ExportIntegrityError(
-            f"Rupture de continuité : le premier événement à exporter "
-            f"(event_id={ordered[0]['event_id']}) a prev_hash={ordered[0]['prev_hash']!r}, "
-            f"mais le fichier {jsonl_path} se termine sur hash={expected_prev_hash!r}. "
-            f"Rien n'a été écrit."
+            f"Continuity break: the first event to export "
+            f"(event_id={ordered[0]['event_id']}) has prev_hash={ordered[0]['prev_hash']!r}, "
+            f"but file {jsonl_path} ends on hash={expected_prev_hash!r}. "
+            f"Nothing was written."
         )
 
-    # Continuité interne du lot lui-même, avant d'écrire quoi que ce soit.
+    # Internal continuity of the batch itself, before writing anything.
     for i in range(1, len(ordered)):
         if ordered[i]["prev_hash"] != ordered[i - 1]["hash"]:
             raise ExportIntegrityError(
-                f"Rupture de continuité DANS le lot à exporter, à l'index {i} "
-                f"(event_id={ordered[i]['event_id']}). Rien n'a été écrit."
+                f"Continuity break WITHIN the batch to export, at index {i} "
+                f"(event_id={ordered[i]['event_id']}). Nothing was written."
             )
 
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)

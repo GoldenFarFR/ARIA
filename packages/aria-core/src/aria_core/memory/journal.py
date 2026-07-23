@@ -1,4 +1,4 @@
-"""Journal épisodique — wrapper fin autour de ``_legacy_journal``."""
+"""Episodic journal — thin wrapper around ``_legacy_journal``."""
 from __future__ import annotations
 
 from aria_core.memory._legacy_journal import (

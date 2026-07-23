@@ -1,29 +1,33 @@
-"""Lecture on-chain Base mainnet, lecture seule -- aucune clé, aucun signing (audit 11/07).
+"""Base mainnet on-chain reads, read-only -- no key, no signing (audit 11/07).
 
-Complète ``services/virtuals.py::graduation_progress`` (qui reste `None` faute de donnée
-API) avec une vraie lecture on-chain, gatée OFF par défaut. Contrairement à
-``onchain/sepolia_wallet.py`` (détient une clé, signe des transactions testnet), ce module
-ne fait QUE des ``eth_call`` publics (``getReserves``, ``tokenGradThreshold``) -- même
-garantie que ``services/blockscout.py``, aucun risque financier possible par construction.
+Complements ``services/virtuals.py::graduation_progress`` (which stays `None`
+for lack of API data) with a real on-chain read, gated OFF by default. Unlike
+``onchain/sepolia_wallet.py`` (holds a key, signs testnet transactions), this
+module ONLY does public ``eth_call``s (``getReserves``, `tokenGradThreshold``)
+-- same guarantee as ``services/blockscout.py``, no financial risk possible by
+construction.
 
-## Ce qui est confirmé (investigation 11/07, cf. commentaire au-dessus de
-## ``_VIRTUAL_RAISED_KEYS`` dans ``virtuals.py`` pour le détail complet)
+## What is confirmed (11/07 investigation, cf. comment above
+## ``_VIRTUAL_RAISED_KEYS`` in ``virtuals.py`` for the full detail)
 
-- La réserve initiale du token agent dans la paire de bonding vaut TOUJOURS
-  ``INITIAL_TOKEN_RESERVE`` (1 milliard, aussi confirmé par le champ API `totalSupply`)
-  -- vérifié identique sur plusieurs tokens fraîchement lancés.
-- Le seuil de graduation est PAR TOKEN (``tokenGradThreshold(address)`` sur le contrat
-  Bonding V5, pas une constante globale) -- formule validée empiriquement sur un vrai
-  token gradué : `reserve0 <= tokenGradThreshold` au moment de la graduation, exactement
-  la condition du contrat source (`BondingV5.sol::_buy`).
+- The agent token's initial reserve in the bonding pair is ALWAYS
+  ``INITIAL_TOKEN_RESERVE`` (1 billion, also confirmed by the API's
+  `totalSupply` field) -- verified identical across several freshly launched
+  tokens.
+- The graduation threshold is PER TOKEN (``tokenGradThreshold(address)`` on
+  the Bonding V5 contract, not a global constant) -- formula empirically
+  validated on a real graduated token: `reserve0 <= tokenGradThreshold` at the
+  moment of graduation, exactly the source contract's condition
+  (`BondingV5.sol::_buy`).
 
-## Limite honnête -- PAS résolue
+## Honest limitation -- NOT resolved
 
-Plusieurs instances du contrat Bonding V5 coexistent ; ``BONDING_V5_CONTRACT`` ci-dessous
-n'en couvre qu'UNE (celle où un vrai `Graduated` event a été trouvé par balayage de logs).
-Un token géré par une autre instance renvoie `tokenGradThreshold == 0` (jamais enregistré)
--- traité comme "pas de donnée", dégradation vers `None`, jamais une fausse valeur.
-Couverture partielle honnête, pas un bug.
+Several instances of the Bonding V5 contract coexist; ``BONDING_V5_CONTRACT``
+below only covers ONE of them (the one where a real `Graduated` event was
+found by scanning logs). A token managed by another instance returns
+`tokenGradThreshold == 0` (never registered) -- treated as "no data",
+degrading to `None`, never a fake value. An honest partial coverage, not a
+bug.
 """
 from __future__ import annotations
 
@@ -31,17 +35,19 @@ import os
 
 _DEFAULT_RPC_URL = "https://mainnet.base.org"
 
-# Une seule instance connue du contrat Bonding V5 (Base mainnet), confirmée par balayage
-# direct des logs on-chain (`Graduated(address,address)`) et vérifiée deux fois : un vrai
-# `tokenInfo()` non vide pour un token gradué réel, et un vrai `tokenGradThreshold()` non
-# nul pour ce même token ET deux tokens fraîchement lancés différents (WOODY, CRASHCAT).
+# Only one known instance of the Bonding V5 contract (Base mainnet), confirmed
+# by directly scanning on-chain logs (`Graduated(address,address)`) and
+# verified twice: a real non-empty `tokenInfo()` for a genuinely graduated
+# token, and a real non-zero `tokenGradThreshold()` for that same token AND two
+# different freshly launched tokens (WOODY, CRASHCAT).
 BONDING_V5_CONTRACT = "0x1A540088125d00dD3990f9dA45CA0859af4d3B01"
 
-# Réserve initiale du token agent dans la paire -- constante confirmée (pas une supposition)
-# sur 4 tokens fraîchement lancés différents, et cohérente avec le champ API `totalSupply`.
+# Initial reserve of the agent token in the pair -- confirmed constant (not a
+# guess) across 4 different freshly launched tokens, and consistent with the
+# API's `totalSupply` field.
 INITIAL_TOKEN_RESERVE = 1_000_000_000.0
 
-# Fragments ABI minimaux -- seules les fonctions lues par ce module.
+# Minimal ABI fragments -- only the functions this module reads.
 _GET_RESERVES_ABI = [
     {
         "inputs": [],
@@ -66,7 +72,7 @@ _TOKEN_GRAD_THRESHOLD_ABI = [
 
 
 def onchain_graduation_enabled() -> bool:
-    """Gate additif -- aucun eth_call n'est même tenté sans ce flag (fail-closed)."""
+    """Additive gate -- no eth_call is even attempted without this flag (fail-closed)."""
     return os.environ.get("ARIA_ONCHAIN_GRADUATION_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -85,10 +91,10 @@ def _client(*, w3=None):
 
 
 def fetch_pair_reserve0(pair_address: str, *, w3=None) -> float | None:
-    """Réserve courante du token agent (``reserve0``) dans la paire de bonding, en unités
-    entières (déjà divisée par 1e18). `None` si l'adresse est invalide, le RPC échoue, ou
-    la lecture échoue pour toute autre raison -- jamais bloquant, jamais d'exception qui
-    remonte à l'appelant."""
+    """Current reserve of the agent token (``reserve0``) in the bonding pair,
+    in whole units (already divided by 1e18). `None` if the address is
+    invalid, the RPC fails, or the read fails for any other reason -- never
+    blocking, never an exception propagating to the caller."""
     if not pair_address:
         return None
     try:
@@ -103,9 +109,9 @@ def fetch_pair_reserve0(pair_address: str, *, w3=None) -> float | None:
 
 
 def fetch_token_grad_threshold(token_address: str, *, w3=None) -> float | None:
-    """Seuil de graduation propre à ce token, lu sur `BONDING_V5_CONTRACT`. `None` si le
-    token n'est pas enregistré sur CETTE instance du contrat (couverture partielle connue,
-    pas une erreur) ou si la lecture échoue."""
+    """This token's own graduation threshold, read on `BONDING_V5_CONTRACT`.
+    `None` if the token isn't registered on THIS instance of the contract
+    (known partial coverage, not an error) or if the read fails."""
     if not token_address:
         return None
     try:
@@ -118,7 +124,7 @@ def fetch_token_grad_threshold(token_address: str, *, w3=None) -> float | None:
             client.to_checksum_address(token_address)
         ).call()
         threshold = float(threshold_wei) / 1e18
-        # threshold == 0 -> jamais enregistré sur cette instance (pas un vrai seuil nul).
+        # threshold == 0 -> never registered on this instance (not a genuine zero threshold).
         if threshold <= 0:
             return None
         return threshold
@@ -129,10 +135,10 @@ def fetch_token_grad_threshold(token_address: str, *, w3=None) -> float | None:
 def onchain_graduation_progress(
     *, pair_address: str | None, token_address: str | None, w3=None
 ) -> float | None:
-    """Progression réelle (0.0-1.0) lue on-chain, ou `None` si indisponible pour CE token
-    (couverture partielle honnête -- cf. docstring du module). Gaté par
-    `onchain_graduation_enabled()`, jamais appelé sinon. Formule validée empiriquement le
-    11/07 sur un vrai token gradué (voir `virtuals.py`)."""
+    """Real progress (0.0-1.0) read on-chain, or `None` if unavailable for THIS
+    token (honest partial coverage -- cf. module docstring). Gated by
+    `onchain_graduation_enabled()`, never called otherwise. Formula empirically
+    validated on 11/07 on a real graduated token (see `virtuals.py`)."""
     if not onchain_graduation_enabled():
         return None
     if not pair_address or not token_address:
@@ -142,8 +148,8 @@ def onchain_graduation_progress(
     if reserve0 is None or threshold is None:
         return None
     if threshold >= INITIAL_TOKEN_RESERVE:
-        # Configuration incohérente (jamais observée en pratique) -- ne pas diviser par
-        # zéro ni produire un ratio absurde, dégrader proprement.
+        # Inconsistent configuration (never observed in practice) -- don't
+        # divide by zero or produce an absurd ratio, degrade cleanly.
         return None
     progress = (INITIAL_TOKEN_RESERVE - reserve0) / (INITIAL_TOKEN_RESERVE - threshold)
     return max(0.0, min(progress, 1.0))

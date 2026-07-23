@@ -1,20 +1,19 @@
-"""Wallet-tracker smart-money — lecture seule, additif, jamais un déclencheur.
+"""Smart-money wallet tracker — read-only, additive, never a trigger.
 
-Méthode sourcée dans AGENTS.md : le smart money est un **comportement
-mesurable**, pas une identité ou une taille de wallet. On analyse les
-principaux holders d'un token (hors LP connu) pour repérer une convergence
-sur les critères croisés documentés :
-- cohérence dans le temps (pas un coup de chance) ;
-- entrées précoces + tailles contrôlées (pas un seul apport massif) ;
-- sorties disciplinées (vend par tranches, pas un dump total) ;
-- concentration multi-wallets (plusieurs wallets indépendants convergent).
+Method sourced from AGENTS.md: smart money is a **measurable behavior**, not
+an identity or wallet size. We analyze a token's top holders (excluding known
+LP) to spot convergence on the documented cross-checked criteria:
+- consistency over time (not a one-off stroke of luck);
+- early entries + controlled sizes (not a single massive deposit);
+- disciplined exits (sells in tranches, not a full dump);
+- multi-wallet concentration (several independent wallets converge).
 
-Faux signaux explicitement écartés : wash-trading (aller-retour avec la même
-contrepartie), wallets contrat (équipe/vesting/LP), et l'absence de données
-n'est jamais remplacée par une supposition (cf. AGENTS.md).
+False signals explicitly excluded: wash-trading (round-trips with the same
+counterparty), contract wallets (team/vesting/LP), and missing data is never
+replaced by a guess (cf. AGENTS.md).
 
-Ce module ne produit qu'un **signal de confirmation/contexte** — la règle
-absolue « ne jamais copy-trader » s'applique : ce n'est jamais un déclencheur.
+This module only produces a **confirmation/context signal** — the absolute
+rule "never copy-trade" applies: this is never a trigger.
 """
 
 from __future__ import annotations
@@ -43,39 +42,40 @@ from aria_core.services.wallet_scoring_weights import WEIGHTS
 logger = logging.getLogger(__name__)
 
 _MAX_WALLETS_DEFAULT = 8
-_EARLY_ENTRY_WINDOW_SECONDS = 3 * 24 * 3600  # 3 jours après création de la paire
-_LARGEST_BUY_SHARE_MAX = 0.7  # au-delà, l'entrée est jugée "massive", pas "contrôlée"
+_EARLY_ENTRY_WINDOW_SECONDS = 3 * 24 * 3600  # 3 days after pair creation
+_LARGEST_BUY_SHARE_MAX = 0.7  # above this, the entry is judged "massive", not "controlled"
 _WASH_TRADING_COUNTERPARTY_SHARE = 0.6
 _MIN_TRANSFERS_FOR_WASH_CHECK = 3
 _ZERO_ADDRESS = "0x" + "0" * 40
 
-# Signal qualité-prioritaire (22/07, décision opérateur explicite après exemple
-# chiffré vérifié : "2 wallets à gros score" doit dominer "10 wallets à faible
-# score", jamais l'inverse) -- remplace l'ancien forfait fixe (+8 dès 2 wallets
-# convergents, identique pour 2 ou 8 wallets). Le gate multi-wallets (>=2) reste
-# une porte D'ENTRÉE binaire (doctrine inchangée : un seul wallet convergent ne
-# prouve jamais rien, cf. `test_single_convergent_wallet_not_enough_concentration`)
-# -- une fois cette porte franchie, la MAGNITUDE du signal dépend de la qualité
-# (composite_percentile réel si connu, cf. `latest_score_for_wallet`) et du nombre
-# de wallets qualifiés, jamais d'un forfait unique.
+# Quality-first signal (22/07, explicit operator decision after a verified
+# numeric example: "2 wallets with a high score" must dominate "10 wallets
+# with a low score", never the reverse) -- replaces the old flat bonus (+8 as
+# soon as 2 wallets converge, identical for 2 or 8 wallets). The multi-wallet
+# gate (>=2) remains a binary ENTRY gate (unchanged doctrine: a single
+# convergent wallet never proves anything, cf.
+# `test_single_convergent_wallet_not_enough_concentration`) -- once that gate
+# is cleared, the signal's MAGNITUDE depends on quality (real
+# composite_percentile if known, cf. `latest_score_for_wallet`) and the number
+# of qualified wallets, never a single flat bonus.
 _CONVERGENCE_BONUS_PER_WALLET = 3.0
-_CONVERGENCE_BONUS_MAX_WALLETS = 3  # plafond du bonus = 3 * 3 = 9 points max
-# Score de repli pour un wallet SANS composite_percentile connu (jamais scoré par
-# le chantier wallet-scoring) mais jugé convergent par le jugement léger existant
-# (`is_smart_candidate`, comportement observé sur CE token précis) -- volontairement
-# modeste : ne doit jamais rivaliser avec un vrai score composite élevé (ex. 90+),
-# seulement permettre au signal de fonctionner avant que `wallet_score_log` soit
-# bien rempli (couverture progressive, cf. CLAUDE.md).
+_CONVERGENCE_BONUS_MAX_WALLETS = 3  # bonus cap = 3 * 3 = 9 points max
+# Fallback score for a wallet with NO known composite_percentile (never scored
+# by the wallet-scoring project) but judged convergent by the existing
+# lightweight judgment (`is_smart_candidate`, behavior observed on THIS
+# specific token) -- deliberately modest: it must never compete with a real
+# high composite score (e.g. 90+), only let the signal work before
+# `wallet_score_log` is well populated (progressive coverage, cf. CLAUDE.md).
 _FALLBACK_QUALIFIED_SCORE = 55.0
-_MAX_SECURITY_SCORE_DELTA = 15  # plafond du delta appliqué au security_score composite
+_MAX_SECURITY_SCORE_DELTA = 15  # cap on the delta applied to the composite security_score
 
-# Prix par tx_hash exact (14/07, complément pool+OHLCV -- cf. _hash_based_price) :
-# stablecoins reconnus PAR ADRESSE DE CONTRAT (jamais par symbole -- un token
-# peut usurper un symbole "USDC"), pour transformer un ratio de deux jambes
-# on-chain en prix USD sans dépendre du pool/OHLCV. Base UNIQUEMENT pour ce
-# chantier (adresses vérifiées une à une contre Blockscout le 14/07) --
-# chaîne absente du dict = registre vide = repli systématique sur pool+OHLCV,
-# pas un manque silencieux (cf. _hash_based_price).
+# Price by exact tx_hash (14/07, complement to pool+OHLCV -- cf.
+# _hash_based_price): stablecoins recognized BY CONTRACT ADDRESS (never by
+# symbol -- a token can spoof a "USDC" symbol), to turn a ratio between two
+# on-chain legs into a USD price without depending on pool/OHLCV. Base ONLY
+# for this project (addresses individually verified against Blockscout on
+# 14/07) -- a chain missing from the dict = empty registry = systematic
+# fallback to pool+OHLCV, not a silent gap (cf. _hash_based_price).
 _STABLECOIN_ADDRESSES_BY_CHAIN: dict[str, set[str]] = {
     "base": {
         "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC (natif, Circle)
@@ -85,15 +85,15 @@ _STABLECOIN_ADDRESSES_BY_CHAIN: dict[str, set[str]] = {
     },
 }
 
-# Exploit "wrap/unwrap" (15/07, revue Gemini) : un script qui wrap/unwrap du
-# ETH<->WETH des centaines de fois pour quelques centimes de gas débloquerait
-# artificiellement WEIGHTS.min_total_swaps sans jamais prendre de risque de
-# trading. Détection bon marché et SANS ambiguïté (contrairement au registre
-# de protocoles DeFi documenté plus bas, hors de portée) : le wrapped-native
-# token de chaque chaîne a une adresse canonique UNIQUE, et deposit()/withdraw()
-# émettent un Transfer standard depuis/vers l'adresse zéro (mint/burn) -- pas
-# de faux positif possible. Chaîne absente du registre = pas de protection
-# (comportement dégradé documenté, même politique que `_STABLECOIN_ADDRESSES_BY_CHAIN`).
+# "wrap/unwrap" exploit (15/07, Gemini review): a script that wraps/unwraps
+# ETH<->WETH hundreds of times for a few cents of gas would artificially
+# unlock WEIGHTS.min_total_swaps without ever taking on trading risk. Cheap
+# and UNAMBIGUOUS detection (unlike the DeFi protocol registry documented
+# below, out of scope): each chain's wrapped-native token has a SINGLE
+# canonical address, and deposit()/withdraw() emit a standard Transfer
+# from/to the zero address (mint/burn) -- no false positive possible. A chain
+# missing from the registry = no protection (documented degraded behavior,
+# same policy as `_STABLECOIN_ADDRESSES_BY_CHAIN`).
 _WRAPPED_NATIVE_ADDRESSES: frozenset[str] = frozenset({
     "0x4200000000000000000000000000000000000006",  # WETH -- Base (predeploy standard)
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",  # WETH -- Ethereum mainnet
@@ -107,15 +107,15 @@ def _is_wrap_unwrap_leg(transfer: TokenTransfer) -> bool:
     return (transfer.from_address or "").lower() == _ZERO_ADDRESS or (transfer.to_address or "").lower() == _ZERO_ADDRESS
 
 
-# Extension de l'exploit wrap/unwrap (15/07, revue Gemini suite) : un swap
-# stable<->stable (USDC<->USDT/DAI, pool à frais infimes, risque directionnel
-# quasi nul) permet le même padding de WEIGHTS.min_total_swaps que wrap/
-# unwrap, sans passer par un mint/burn -- non couvert par `_is_wrap_unwrap_leg`.
-# Réutilise le registre stablecoin DÉJÀ existant (`_STABLECOIN_ADDRESSES_BY_CHAIN`,
-# construit pour le pricing par hash exact) -- aucun nouveau registre à
-# maintenir, contrairement au cas LST/wrapped (stETH<->wstETH, WBTC<->tBTC,
-# rETH<->wETH) qui resterait un vrai trou (registre de correspondance peg par
-# peg, hors de portée de ce correctif -- documenté comme limite ci-dessous).
+# Extension of the wrap/unwrap exploit (15/07, Gemini review follow-up): a
+# stable<->stable swap (USDC<->USDT/DAI, near-zero-fee pool, near-zero
+# directional risk) allows the same WEIGHTS.min_total_swaps padding as
+# wrap/unwrap, without going through a mint/burn -- not covered by
+# `_is_wrap_unwrap_leg`. Reuses the stablecoin registry that ALREADY exists
+# (`_STABLECOIN_ADDRESSES_BY_CHAIN`, built for exact-hash pricing) -- no new
+# registry to maintain, unlike the LST/wrapped case (stETH<->wstETH,
+# WBTC<->tBTC, rETH<->wETH) which would remain a real gap (peg-by-peg mapping
+# registry, out of scope for this fix -- documented as a limitation below).
 _ALL_RECOGNIZED_STABLECOINS: frozenset[str] = frozenset().union(*_STABLECOIN_ADDRESSES_BY_CHAIN.values())
 
 
@@ -124,11 +124,11 @@ def _is_recognized_stablecoin(token_address: str | None) -> bool:
 
 
 def _is_stable_to_stable_peg_swap(tx_hash: str, transfers_by_tx: dict[str, list[TokenTransfer]]) -> bool:
-    """Vrai si TOUTES les jambes touchant le wallet dans cette transaction sont
-    des stablecoins reconnus (achat ET vente d'un côté comme de l'autre) --
-    un swap stable<->stable, pas un vrai pari directionnel. Une seule jambe
-    stablecoin (ex. achat d'un memecoin PAYÉ en USDC) n'est jamais concernée --
-    `len(legs) >= 2` exige au moins un aller ET un retour."""
+    """True if ALL legs touching the wallet in this transaction are recognized
+    stablecoins (buy AND sell on either side) -- a stable<->stable swap, not a
+    real directional bet. A single stablecoin leg (e.g. buying a memecoin PAID
+    for in USDC) is never affected -- `len(legs) >= 2` requires at least one
+    outgoing AND one incoming leg."""
     legs = transfers_by_tx.get(tx_hash, [])
     return len(legs) >= 2 and all(_is_recognized_stablecoin(t.token_address) for t in legs)
 
@@ -142,7 +142,7 @@ class WalletBehavior:
     distinct_days: int = 0
     coherent_over_time: bool = False
     early_and_controlled: bool = False
-    disciplined_exit: bool | None = None  # None = pas assez de sorties pour juger
+    disciplined_exit: bool | None = None  # None = not enough exits to judge
     wash_trading_suspected: bool = False
     available: bool = True
     error: str | None = None
@@ -209,18 +209,19 @@ def _dominant_counterparty_share(
     lp_address: str | None,
     extra_exclusions: set[str] | None = None,
 ) -> float:
-    """Part des échanges (hors LP/pool, achats+ventes) concentrée sur une seule contrepartie.
+    """Share of exchanges (excluding LP/pool, buys+sells) concentrated on a
+    single counterparty.
 
-    Le LP/pool est exclu du calcul : la quasi-totalité des achats/ventes DEX
-    transitent par lui, donc le compter ferait passer n'importe quel early
-    buyer pour un cas de wash-trading. En dessous de `_MIN_TRANSFERS_FOR_WASH_CHECK`
-    échanges hors LP, il n'y a pas assez de données pour juger — pas de suspicion.
+    The LP/pool is excluded from the calculation: almost all DEX buys/sells
+    go through it, so counting it would make any early buyer look like a
+    wash-trading case. Below `_MIN_TRANSFERS_FOR_WASH_CHECK` exchanges
+    excluding the LP, there isn't enough data to judge -- no suspicion.
 
-    ``extra_exclusions`` (#157, correction 14/07) : ensemble d'adresses
-    supplémentaires à exclure (au-delà du seul ``lp_address``) -- nécessaire
-    quand ``transfers`` couvre PLUSIEURS tokens (un seul pool/LP statique ne
-    suffit plus, cf. `_build_dex_infrastructure_exclusions`). Paramètre optionnel,
-    n'affecte pas l'appel historique token-centrique (`_analyze_wallet_behavior`).
+    ``extra_exclusions`` (#157, fix 14/07): set of additional addresses to
+    exclude (beyond just ``lp_address``) -- needed when ``transfers`` covers
+    SEVERAL tokens (a single static pool/LP is no longer enough, cf.
+    `_build_dex_infrastructure_exclusions`). Optional parameter, does not
+    affect the historical token-centric call (`_analyze_wallet_behavior`).
     """
     wallet_l = wallet.lower()
     excluded = {(lp_address or "").lower()} | {a.lower() for a in (extra_exclusions or ())}
@@ -307,7 +308,7 @@ async def analyze_smart_money(
     pair_created_at_ms: int | None = None,
     max_wallets: int = _MAX_WALLETS_DEFAULT,
 ) -> SmartMoneySignal:
-    """Analyse lecture seule des top holders — signal de confirmation/contexte uniquement."""
+    """Read-only analysis of top holders — confirmation/context signal only."""
     if not holders.available:
         return SmartMoneySignal(available=False, error=holders.error or UNAVAILABLE)
 
@@ -344,12 +345,13 @@ async def analyze_smart_money(
         if not behavior.is_smart_candidate:
             continue
         smart_wallets.append(wallet)
-        # Qualité prioritaire (22/07) : le score GLOBAL déjà connu de ce wallet
-        # (composite_percentile, indépendant de ce token précis) prime sur le
-        # simple jugement booléen sur CE token -- un bon trader historique qui
-        # vient d'entrer sur ce candidat est un signal plus riche qu'un jugement
-        # "convergent oui/non" limité à ce seul token. Fallback modeste si jamais
-        # scoré ailleurs (couverture partielle du chantier wallet-scoring).
+        # Quality-first (22/07): this wallet's already-known GLOBAL score
+        # (composite_percentile, independent of this specific token) takes
+        # priority over the simple boolean judgment on THIS token -- a good
+        # historical trader who just entered this candidate is a richer
+        # signal than a "convergent yes/no" judgment limited to this one
+        # token. Modest fallback if never scored elsewhere (partial coverage
+        # of the wallet-scoring project).
         known_score = await latest_score_for_wallet(wallet)
         qualified_scores.append(known_score if known_score is not None else _FALLBACK_QUALIFIED_SCORE)
 
@@ -364,11 +366,12 @@ async def analyze_smart_money(
         )
 
     if len(qualified_scores) >= 2:
-        # Porte d'entrée binaire inchangée (doctrine "1 seul wallet ne prouve rien") --
-        # au-delà, la magnitude dépend de la qualité (meilleur score connu) ET du
-        # nombre de wallets qualifiés (bonus de convergence PLAFONNÉ, jamais dominant :
-        # 10 wallets à score faible ne peuvent jamais dépasser 2 wallets à score élevé,
-        # cf. commentaire sur les constantes plus haut dans ce fichier).
+        # Binary entry gate unchanged (doctrine "1 wallet alone proves
+        # nothing") -- beyond that, magnitude depends on quality (best known
+        # score) AND the number of qualified wallets (CAPPED convergence
+        # bonus, never dominant: 10 low-score wallets can never outrank 2
+        # high-score wallets, cf. comment on the constants earlier in this
+        # file).
         top_score = max(qualified_scores)
         convergence_bonus = min(len(qualified_scores) - 1, _CONVERGENCE_BONUS_MAX_WALLETS) * _CONVERGENCE_BONUS_PER_WALLET
         quality_signal = min(100.0, top_score + convergence_bonus)
@@ -396,622 +399,613 @@ async def analyze_smart_money(
 
 
 # ============================================================================
-# #157 -- évaluateur wallet-centrique multi-token ("smart wallet" maison)
+# #157 -- wallet-centric multi-token evaluator (in-house "smart wallet")
 #
-# Extension du module ci-dessus : au lieu d'analyser les top holders d'UN
-# token, on prend 1-3 adresses de wallet et on tire TOUT leur historique de
-# trades à travers PLUSIEURS tokens (via `get_token_transfers` paginé côté
-# `blockscout.py`), on le valorise (PnL FIFO) via GeckoTerminal, et on en
-# dérive un score composite + un drapeau "suspect positif" séparé + une thèse
-# LLM. Toujours un signal de confirmation/contexte -- jamais un déclencheur
-# (même règle absolue que `analyze_smart_money` ci-dessus).
+# Extension of the module above: instead of analyzing a single token's top
+# holders, we take 1-3 wallet addresses and pull their ENTIRE trade history
+# across SEVERAL tokens (via `get_token_transfers`, paginated on the
+# `blockscout.py` side), value it (FIFO PnL) via GeckoTerminal, and derive a
+# composite score + a separate "suspect positive" flag + an LLM thesis from
+# it. Always a confirmation/context signal -- never a trigger (same absolute
+# rule as `analyze_smart_money` above).
 #
-# Quatre couches (recherche sourcée, docs/aria-learning-inbox/
-# 2026-07-14-recherche-equation-smart-wallet-scoring-157.md) :
-#   1. Disqualifiants durs (wash-trading généralisé, wallet-contrat, wallets
-#      "convergents" = même entité via réutilisation d'adresse de dépôt,
-#      financement par un wallet malveillant connu).
-#   2. Score composite (PnL/win-rate FIFO, Sortino, récurrence acheteur
-#      précoce multi-lancements avec conditions techniques à l'entrée,
-#      diversification, drawdown wallet).
-#   3. Drapeau "suspect positif" séparé (jamais fondu dans le score moyen).
-#   4. Journalisation prête pour calibration continue (pas de recalibration
-#      construite maintenant, juste l'écriture).
+# Four layers (sourced research, docs/aria-learning-inbox/
+# 2026-07-14-recherche-equation-smart-wallet-scoring-157.md):
+#   1. Hard disqualifiers (generalized wash-trading, contract wallet,
+#      "convergent" wallets = same entity via deposit-address reuse,
+#      funding by a known malicious wallet).
+#   2. Composite score (FIFO PnL/win-rate, Sortino, multi-launch early-buyer
+#      recurrence with technical entry conditions, diversification, wallet
+#      drawdown).
+#   3. Separate "suspect positive" flag (never folded into the average score).
+#   4. Logging ready for continuous recalibration (no recalibration built
+#      yet, just the write path).
 # ============================================================================
 #
-# LIMITES STRUCTURELLES CONNUES (15/07, angles morts on-chain identifiés via
-# revue externe croisée -- délibérément DOCUMENTÉES, pas corrigées, pour ne
-# pas faire exploser la complexité du moteur FIFO central) :
+# KNOWN STRUCTURAL LIMITATIONS (15/07, on-chain blind spots identified via
+# cross external review -- deliberately DOCUMENTED, not fixed, so as not to
+# blow up the complexity of the central FIFO engine):
 #
-# - DeFi (dépôt en collatéral / apport de liquidité) : `_analyze_wallet_multi_token`
-#   traite TOUT transfert sortant d'un token suivi comme une jambe de vente
-#   FIFO valorisée au marché (cf. `sells` ci-dessous, symétrique de `buys` par
-#   construction -- ni l'un ni l'autre ne distingue "vendu" de "déplacé").
-#   Un dépôt Aave (collatéral) ou Uniswap (LP) fait donc apparaître un PnL
-#   réalisé fictif au moment du dépôt (rien n'a été vendu), et un retrait
-#   ultérieur (le token revient) s'enregistre comme un rachat à un tout
-#   nouveau prix d'entrée, déconnecté du prix réel initial. Pas de signal bon
-#   marché et fiable pour distinguer un jeton de reçu (aToken/LP token) d'un
-#   swap réel sans registre de protocoles codé en dur (charge de maintenance
-#   permanente, faux positifs probables) -- non construit.
-# - Ponts cross-chain : le scan multi-chaînes (`chain_clients`, clé composite
-#   "{chaîne}:{adresse}") consolide un score PAR WALLET mais ne relie jamais
-#   une sortie sur une chaîne à l'arrivée correspondante sur une autre. Un
-#   bridge Ethereum->Arbitrum s'enregistre comme une vente FIFO côté source
-#   (prix marché au transfert sortant) ET un rachat FIFO indépendant côté
-#   destination (prix marché à l'arrivée) -- même défaut structurel que le
-#   cas DeFi ci-dessus, avec en plus la difficulté de corréler deux jambes sur
-#   deux jeux de données de chaînes différentes (montant net des frais de
-#   pont, fenêtre de temps plausible, registre des contrats de pont connus).
+# - DeFi (collateral deposit / liquidity provision): `_analyze_wallet_multi_token`
+#   treats EVERY outgoing transfer of a tracked token as a market-valued FIFO
+#   sell leg (cf. `sells` below, symmetric to `buys` by construction --
+#   neither distinguishes "sold" from "moved"). An Aave deposit (collateral)
+#   or Uniswap deposit (LP) therefore produces a fictitious realized PnL at
+#   deposit time (nothing was sold), and a later withdrawal (the token comes
+#   back) registers as a repurchase at a brand-new entry price, disconnected
+#   from the real initial price. No cheap, reliable signal to distinguish a
+#   receipt token (aToken/LP token) from a real swap without a hardcoded
+#   protocol registry (permanent maintenance burden, likely false positives)
+#   -- not built.
+# - Cross-chain bridges: the multi-chain scan (`chain_clients`, composite key
+#   "{chain}:{address}") consolidates a score PER WALLET but never links an
+#   outgoing leg on one chain to the matching arrival on another. An
+#   Ethereum->Arbitrum bridge registers as a FIFO sell on the source side
+#   (market price at the outgoing transfer) AND an independent FIFO
+#   repurchase on the destination side (market price on arrival) -- the same
+#   structural flaw as the DeFi case above, plus the added difficulty of
+#   correlating two legs across two different chains' datasets (net amount
+#   after bridge fees, plausible time window, registry of known bridge
+#   contracts).
 #
-# Impact commun aux deux : les trades FIFO fictifs ainsi créés polluent
-# TOUTES les métriques dérivées de `cumulative_trades` (win_rate, PnL,
-# Sortino, drawdown, tendance de santé) à égalité avec de vrais trades --
-# pas une marge d'erreur isolée sur un seul chiffre. Population concernée :
-# plus significative chez les wallets qui font aussi du yield/LP/multi-L2 que
-# chez un pur trader memecoin Base -- pas négligeable pour autant chez une
-# vraie "smart money" sérieuse. Aucune correction prévue à court terme --
-# à rouvrir si un besoin business précis (ex. dossier funding, due diligence
-# poussée sur un wallet donné) le justifie.
+# Shared impact of both: the fictitious FIFO trades thus created pollute ALL
+# metrics derived from `cumulative_trades` (win_rate, PnL, Sortino, drawdown,
+# health trend) on equal footing with real trades -- not an isolated margin
+# of error on a single number. Affected population: more significant for
+# wallets that also do yield/LP/multi-L2 than for a pure Base memecoin
+# trader -- not negligible either for a genuinely serious "smart money"
+# wallet. No fix planned short-term -- to be reopened if a precise business
+# need (e.g. funding dossier, deep due diligence on a given wallet)
+# justifies it.
 #
-# SUITE (15/07, second passage -- revue croisée Gemini/ChatGPT/Grok + web
-# search Sybil/Nansen/Arkham). Corrigés ce passage (cf. code + WEIGHTS) :
-# exploit wrap/unwrap ETH<->WETH sur le seuil de swaps (`_is_wrap_unwrap_leg`),
-# dilution du trim anti-chance par volume de trades (`robust_trim_pct`),
-# dust/scam-pool via plancher de liquidité confirmée (`min_pool_liquidity_
-# usd_for_pricing`), transparence sur la confiance du cost-basis
-# (`price_confirmation_ratio`) et sur les ventes non appariées
-# (`unmatched_sell_events`), diversification pondérée par capital en plus du
-# comptage. Vérifiés et REJETÉS (déjà correctement gérés, pas un vrai trou) :
-# division par zéro du Sortino (`_sortino_ratio` retourne déjà `None` si
-# `downside` est vide, AVANT tout calcul de déviation -- le garde
-# `downside_deviation == 0` qui suit est du code défensif mort, jamais
-# atteignable, mais inoffensif) ; win rate non pondéré par la taille des
-# pertes (déjà compensé par construction -- Sortino/PnL restent des axes
-# séparés, jamais fondus avec le win rate, donc un "99% de gains + 1 perte
-# catastrophique" reste visible ailleurs).
+# FOLLOW-UP (15/07, second pass -- cross review Gemini/ChatGPT/Grok + web
+# search on Sybil/Nansen/Arkham). Fixed this pass (cf. code + WEIGHTS): the
+# ETH<->WETH wrap/unwrap exploit on the swap threshold (`_is_wrap_unwrap_leg`),
+# dilution of the anti-luck trim by trade volume (`robust_trim_pct`),
+# dust/scam-pool via a confirmed-liquidity floor (`min_pool_liquidity_
+# usd_for_pricing`), transparency on cost-basis confidence
+# (`price_confirmation_ratio`) and on unmatched sells
+# (`unmatched_sell_events`), capital-weighted diversification in addition to
+# the count-based one. Verified and REJECTED (already correctly handled, not
+# a real gap): Sortino division by zero (`_sortino_ratio` already returns
+# `None` if `downside` is empty, BEFORE any deviation calculation -- the
+# `downside_deviation == 0` guard that follows is dead defensive code, never
+# reachable, but harmless); win rate not weighted by loss size (already
+# compensated by construction -- Sortino/PnL remain separate axes, never
+# folded with win rate, so a "99% wins + 1 catastrophic loss" stays visible
+# elsewhere).
 #
-# Documentés, DÉLIBÉRÉMENT non corrigés ce passage (trop coûteux/complexes
-# pour un correctif ponctuel, ou hors de portée d'un ajustement de seuil) :
+# Documented, DELIBERATELY not fixed this pass (too costly/complex for a
+# point fix, or out of scope for a threshold adjustment):
 #
-# - Coordination Sybil / multi-wallets (revue Grok, LE plus important des
-#   points non résolus) : un seul opérateur peut faire tourner des dizaines
-#   de wallets qui passent chacun le seuil d'échantillon et performent de
-#   façon coordonnée -- chaque wallet a un bon score individuel, et
-#   collectivement ils biaisent le classement comparatif (percentiles) à
-#   mesure que le pool de wallets suivis grossit. Le trim anti-chance n'y
-#   change rien (un Sybil bien orchestré répartit ses outliers). Confirmé par
-#   recherche externe (15/07) : c'est un problème structurel connu de toute
-#   analyse wallet-by-wallet sans clustering d'entité -- Nansen/Arkham/
-#   Chainalysis/TRM s'appuient sur le clustering par SOURCE DE FINANCEMENT
-#   PARTAGÉE (même famille que notre `_pairwise_convergence` existant, cf.
-#   Victor FC 2020) mais à l'échelle d'un GRAPHE sur toute la population
-#   suivie, pas juste une comparaison pairwise entre les 1-3 wallets soumis
-#   ENSEMBLE dans un seul appel -- notre version actuelle est donc la même
-#   famille d'heuristique, juste bien plus étroite en portée. Les approches
-#   les plus robustes (Chainalysis/TRM) utilisent désormais des graph neural
-#   networks entraînés sur des clusters Sybil labellisés, nettement plus dur
-#   à contourner qu'un clustering par heuristique seule -- hors de portée
-#   d'un correctif ponctuel, un vrai chantier séparé si jamais entrepris.
-# - Farming du seuil d'entrée / wash-trading léger (revue Grok) : au-delà du
-#   wrap/unwrap déjà fermé ci-dessus, rien n'empêche un wallet de padder
-#   `min_total_swaps` avec des allers-retours minuscules sur un VRAI token
-#   liquide (slippage/frais réels à chaque tour, donc plus coûteux que le
-#   wrap/unwrap, mais pas impossible). Piste bon marché identifiée mais pas
-#   construite (recherche externe 15/07) : les wash-traders utilisent
-#   typiquement des MONTANTS RONDS et un impact de prix quasi nul malgré le
-#   volume -- un détecteur dédié serait un complément naturel à
-#   `_dominant_counterparty_share` existant, banqué pour un futur passage.
-# - Absence de benchmark marché (alpha vs beta, revue Grok) : un wallet qui
-#   fait simplement du bêta pur (long BTC/ETH en marché haussier) peut sortir
-#   d'excellents win rate/Sortino/PnL sans aucune compétence particulière --
-#   le système mesure la qualité du footprint on-chain, pas la valeur ajoutée
-#   par rapport au marché. Nécessiterait une série de rendement de référence
-#   (BTC/ETH/indice DeFi) et un calcul d'alpha dédié -- une vraie
-#   fonctionnalité à chiffrer séparément, pas un ajustement de seuil.
-# - Gaming structurel des tests de robustesse (revue Grok) : un wallet peut
-#   délibérément prendre ses pires trades en tout début d'activité (avant que
-#   l'historique ne compte vraiment) pour "consommer" le budget du trim anti-
-#   chance, ou structurer son activité pour que la 2e moitié de la courbe de
-#   santé semble artificiellement meilleure. Plus facile juste au-dessus des
-#   seuils minimums (30 trades pour le trim, 10 pour la courbe de santé) --
-#   limite inhérente à tout seuil statique, pas un bug isolé corrigible.
-# - MEV / arbitrage atomique / flash loans (revue Grok) : ces stratégies a
-#   risque quasi nul peuvent produire un win rate et un Sortino excellents
-#   (downside quasi inexistant par construction) et passent bien le trim
-#   anti-chance (trades uniformément bons, pas d'outlier à retirer). Le
-#   système les traite comme des trades normaux -- les distinguer exigerait
-#   une détection d'atomicité/flash-loan au niveau de la transaction
-#   (bytecode/call-trace), une donnée que Blockscout ne fournit pas
-#   nativement -- hors de portée sans une nouvelle source de données dédiée.
-# - Biais de survie du gate d'échantillon (revue ChatGPT) : le seuil
-#   `min_wallet_age_days`/`min_total_swaps` sélectionne les wallets qui ont
-#   SURVÉCU assez longtemps pour l'atteindre -- les wallets catastrophiques
-#   meurent souvent avant, et les meilleurs traders peuvent changer de wallet
-#   régulièrement (opsec). Le classement devient donc un classement des
-#   wallets SURVIVANTS, pas nécessairement des meilleurs traders. Inhérent à
-#   tout gate d'échantillon minimum -- pas un bug, un compromis assumé (même
-#   doctrine que `docs/protocole-argent-reel.md` : échantillon minimum avant
-#   de faire confiance, quitte à exclure des cas valides).
-# - Choix méthodologique FIFO (revue ChatGPT) : toutes les métriques utilisent
-#   un modèle FIFO unique pour assurer la COMPARABILITÉ entre wallets -- un
-#   modèle LIFO/HIFO donnerait un PnL différent sur des séquences achat/vente
-#   partielles répétées. Ce n'est pas un choix fiscal (aucune prétention de
-#   conformité fiscale, seulement une mesure de performance comparable) --
-#   assumé, pas un défaut.
-# - Paradoxe du percentile / population de comparaison non représentative
-#   (revue Gemini + ChatGPT) : le classement comparatif compare CE wallet aux
-#   AUTRES wallets déjà passés par `/walletscore` -- pas un échantillon
-#   représentatif du marché. Si l'outil devient massivement utilisé par des
-#   amateurs, un trader moyen se retrouve artificiellement dans un haut
-#   percentile ; si seuls des pros l'utilisent, l'inverse. Le percentile d'un
-#   même wallet peut donc bouger dans le temps SANS qu'aucun de ses propres
-#   trades n'ait changé -- uniquement parce que la démographie de la base
-#   suivie a évolué. Un benchmark fixe (échantillon aléatoire représentatif
-#   de la blockchain, ex. 5000 wallets actifs) réglerait le problème mais
-#   coûterait cher (faire tourner ce même pipeline multi-appels-réseau sur des
-#   milliers de wallets, en continu) -- non construit. `compared_against_n_
-#   wallets` reste affiché à côté du percentile pour au moins signaler l'ordre
-#   de grandeur de la population de comparaison (jamais caché).
-# - Découpage chronologique par NOMBRE de trades pour la courbe de santé
-#   (revue ChatGPT) : `_health_trend` compare la 1ère à la 2e moitié par
-#   nombre de trades, pas par fenêtre calendaire -- un wallet actif 3 ans puis
-#   dormant 1 an peut voir sa "tendance" dominée par une reprise récente
-#   plutôt que refléter une vraie évolution de compétence. Un découpage par
-#   fenêtre calendaire (milieu de la durée totale, pas du nombre de trades)
-#   serait plus robuste à ce cas -- piste identifiée, pas construite ce
-#   passage (refonte de la fonction, effet sur le comportement existant à
-#   valider séparément).
+# - Sybil coordination / multi-wallets (Grok review, THE most important
+#   unresolved point): a single operator can run dozens of wallets that each
+#   clear the sample threshold and perform in a coordinated way -- each
+#   wallet has a good individual score, and collectively they bias the
+#   comparative ranking (percentiles) as the pool of tracked wallets grows.
+#   The anti-luck trim doesn't change anything here (a well-orchestrated
+#   Sybil spreads its outliers). Confirmed by external research (15/07):
+#   this is a known structural problem of any wallet-by-wallet analysis
+#   without entity clustering -- Nansen/Arkham/Chainalysis/TRM rely on
+#   clustering by SHARED FUNDING SOURCE (same family as our existing
+#   `_pairwise_convergence`, cf. Victor FC 2020) but at the scale of a GRAPH
+#   over the entire tracked population, not just a pairwise comparison
+#   between the 1-3 wallets submitted TOGETHER in a single call -- our
+#   current version is therefore the same family of heuristic, just much
+#   narrower in scope. The most robust approaches (Chainalysis/TRM) now use
+#   graph neural networks trained on labeled Sybil clusters, noticeably
+#   harder to bypass than a heuristic-only clustering -- out of scope for a
+#   point fix, a genuine separate project if ever undertaken.
+# - Entry-threshold farming / light wash-trading (Grok review): beyond the
+#   wrap/unwrap case already closed above, nothing prevents a wallet from
+#   padding `min_total_swaps` with tiny round-trips on a REAL liquid token
+#   (real slippage/fees each round, so costlier than wrap/unwrap, but not
+#   impossible). Cheap lead identified but not built (external research
+#   15/07): wash-traders typically use ROUND AMOUNTS and near-zero price
+#   impact despite the volume -- a dedicated detector would be a natural
+#   complement to the existing `_dominant_counterparty_share`, banked for a
+#   future pass.
+# - No market benchmark (alpha vs beta, Grok review): a wallet that simply
+#   does pure beta (long BTC/ETH in a bull market) can produce excellent
+#   win rate/Sortino/PnL with no particular skill -- the system measures the
+#   quality of the on-chain footprint, not value added relative to the
+#   market. Would require a reference return series (BTC/ETH/DeFi index) and
+#   a dedicated alpha calculation -- a real feature to scope separately, not
+#   a threshold tweak.
+# - Structural gaming of the robustness tests (Grok review): a wallet can
+#   deliberately take its worst trades very early in its activity (before
+#   the history really counts) to "consume" the anti-luck trim budget, or
+#   structure its activity so the 2nd half of the health curve looks
+#   artificially better. Easier just above the minimum thresholds (30 trades
+#   for the trim, 10 for the health curve) -- a limitation inherent to any
+#   static threshold, not an isolated fixable bug.
+# - MEV / atomic arbitrage / flash loans (Grok review): these near-zero-risk
+#   strategies can produce excellent win rate and Sortino (near-nonexistent
+#   downside by construction) and pass the anti-luck trim easily (uniformly
+#   good trades, no outlier to remove). The system treats them as normal
+#   trades -- distinguishing them would require transaction-level
+#   atomicity/flash-loan detection (bytecode/call-trace), data that
+#   Blockscout doesn't provide natively -- out of scope without a new
+#   dedicated data source.
+# - Survivorship bias of the sample gate (ChatGPT review): the
+#   `min_wallet_age_days`/`min_total_swaps` threshold selects wallets that
+#   SURVIVED long enough to reach it -- catastrophic wallets often die
+#   before that, and the best traders may rotate wallets regularly (opsec).
+#   The ranking therefore becomes a ranking of SURVIVING wallets, not
+#   necessarily of the best traders. Inherent to any minimum sample gate --
+#   not a bug, an accepted trade-off (same doctrine as
+#   `docs/protocole-argent-reel.md`: minimum sample before trusting, even at
+#   the cost of excluding valid cases).
+# - FIFO methodological choice (ChatGPT review): all metrics use a single
+#   FIFO model to ensure COMPARABILITY across wallets -- a LIFO/HIFO model
+#   would give a different PnL on repeated partial buy/sell sequences. This
+#   is not a tax choice (no claim of tax compliance, only a comparable
+#   performance measure) -- accepted, not a defect.
+# - Percentile paradox / non-representative comparison population (Gemini +
+#   ChatGPT review): the comparative ranking compares THIS wallet to the
+#   OTHER wallets already run through `/walletscore` -- not a representative
+#   market sample. If the tool becomes massively used by amateurs, an
+#   average trader ends up artificially in a high percentile; if only pros
+#   use it, the opposite. The same wallet's percentile can therefore move
+#   over time WITHOUT any of its own trades changing -- purely because the
+#   demographics of the tracked base evolved. A fixed benchmark (a
+#   representative random blockchain sample, e.g. 5000 active wallets) would
+#   fix the problem but would be expensive (running this same
+#   multi-network-call pipeline on thousands of wallets, continuously) --
+#   not built. `compared_against_n_wallets` stays displayed next to the
+#   percentile to at least signal the order of magnitude of the comparison
+#   population (never hidden).
+# - Chronological split by trade COUNT for the health curve (ChatGPT
+#   review): `_health_trend` compares the 1st to the 2nd half by trade
+#   count, not by calendar window -- a wallet active for 3 years then
+#   dormant for 1 year can have its "trend" dominated by a recent comeback
+#   rather than reflecting a real change in skill. A calendar-window split
+#   (midpoint of total duration, not of trade count) would be more robust to
+#   this case -- lead identified, not built this pass (function rewrite,
+#   effect on existing behavior to validate separately).
 #
-# TROISIÈME PASSAGE (15/07, même soirée -- revue croisée round 2/3, Gemini x2
-# + ChatGPT + Grok). Corrigés ce passage : swaps stable<->stable exclus du
-# compteur de swaps (extension de l'exploit wrap/unwrap ci-dessus, cf.
-# `_is_stable_to_stable_peg_swap`) ; métriques sur fenêtre récente
-# (`_recent_window_metrics`, réponse au biais temporel -- ChatGPT) ; clarifié
-# et verrouillé par test que le fail-open sur liquidité inconnue n'est jamais
-# atteint par le vrai client GeckoTerminal (cf. commentaire sur
-# `pool_liquid_enough` plus bas). Vérifié et REJETÉ (répété deux fois par
-# Gemini, toujours faux contre le code) : la division par zéro du Sortino --
-# `_sortino_ratio` retourne `None` dès que `downside` est vide, avant tout
-# calcul de déviation, verrouillé par `test_no_losses_unavailable_not_infinite`.
+# THIRD PASS (15/07, same evening -- cross review round 2/3, Gemini x2 +
+# ChatGPT + Grok). Fixed this pass: stable<->stable swaps excluded from the
+# swap counter (extension of the wrap/unwrap exploit above, cf.
+# `_is_stable_to_stable_peg_swap`); recent-window metrics
+# (`_recent_window_metrics`, response to the time bias -- ChatGPT); clarified
+# and test-locked that the fail-open on unknown liquidity is never reached
+# by the real GeckoTerminal client (cf. comment on `pool_liquid_enough`
+# further below). Verified and REJECTED (repeated twice by Gemini, still
+# false against the code): Sortino division by zero -- `_sortino_ratio`
+# returns `None` as soon as `downside` is empty, before any deviation
+# calculation, locked by `test_no_losses_unavailable_not_infinite`.
 #
-# Documentés, DÉLIBÉRÉMENT non corrigés ce passage :
+# Documented, DELIBERATELY not fixed this pass:
 #
-# - Paires LST/wrapped à corrélation quasi parfaite (revue Gemini) : au-delà
-#   du stable<->stable maintenant fermé, WBTC<->tBTC, stETH<->wstETH,
-#   rETH<->wETH permettent le même padding à coût/risque quasi nul. Pas de
-#   registre existant à réutiliser ici (contrairement aux stablecoins) --
-#   construire et maintenir un registre de correspondance peg par peg est le
-#   même type de charge que le registre de protocoles DeFi déjà écarté plus
-#   haut. Trou plus étroit qu'avant (le sous-cas stable<->stable, sans doute
-#   le plus utilisé en pratique, est fermé), mais réel.
-# - Dilution du trim anti-chance par micro-trades (revue Gemini, raffinement) :
-#   `_robust_pnl_check` trie par PnL EN DOLLARS, pas par rendement en %. Un
-#   attaquant qui veut faire sortir un trade légendaire (ex. +10 000% sur une
-#   position minuscule) du trim doit padder avec des trades dont le PnL EN
-#   DOLLARS est comparable ou supérieur -- pas de simples micro-trades à
-#   quelques centimes, qui restent alors en dessous du trade légendaire dans
-#   le tri et continuent de se faire trimmer les premiers. La vulnérabilité
-#   réelle est donc plus étroite que "spammer des micro-trades gratuits" :
-#   elle exige un trade légendaire lui-même de faible montant EN DOLLARS
-#   malgré un pourcentage énorme, ET un déploiement de capital réel sur les
-#   trades de padding pour dépasser ce montant -- un cas plus contraint, pas
-#   éliminé pour autant. Piste de raffinement identifiée, pas construite : un
-#   trim par écart-type/z-score (retirer les trades à plus de X écarts-types
-#   de la médiane) serait insensible à l'axe $ vs % choisi, mais change la
-#   méthodologie plus profondément (instabilité du z-score lui-même sur petit
-#   échantillon à gérer) -- candidat pour un futur passage, pas ce soir.
-# - Pondération égale par trade (pas par capital) de win_rate/trim/health_trend/
-#   SORTINO (revue ChatGPT, précisé 15/07 -- revue externe : Sortino avait été
-#   omis de cette liste par erreur, alors qu'il partage exactement le même
-#   défaut, cf. ci-dessous) : seule la diversification a désormais une variante
-#   pondérée par capital (cf. plus haut). Win rate, trim anti-chance, courbe de
-#   santé ET Sortino restent comptés/calculés PAR TRADE en % de rendement --
-#   un trade de 500 000$ pèse autant qu'un trade de 10$. Choix ASSUMÉ pour
-#   win_rate/trim/health_trend (le comptage par trade mesure autre chose : la
-#   capacité à trouver des gagnants sur des paris indépendants) -- mais pour
-#   SORTINO spécifiquement, la conséquence est plus trompeuse qu'un simple
-#   choix de méthodologie : un ratio présenté comme "rendement ajusté au
-#   risque" peut afficher un chiffre POSITIF alors que le PnL réel en dollars
-#   est NÉGATIF. Démonstration chiffrée vérifiée (5 trades, seuil minimum
-#   `WEIGHTS.min_closed_trades_for_sortino` atteint) : 4 micro-trades à +100%
-#   sur une mise de 1$ chacun (+4$ au total) + 1 trade majeur à -50% sur une
-#   mise de 1000$ (-500$) -- PnL réel = -496$ (perte nette), mais
-#   mean(return_i) = 0.7, downside_deviation = 0.5, Sortino = 1.4 (positif,
-#   "honorable"). **Corrigé partiellement (15/07)** : `sortino_pnl_
-#   contradiction` détecte et signale VISIBLEMENT le cas le plus flagrant et
-#   vérifiable à coup sûr (contradiction de SIGNE entre Sortino et PnL réel,
-#   jamais une nuance à interpréter), affiché en ATTENTION à côté du Sortino
-#   -- mais ne corrige PAS le biais sous-jacent lui-même (un Sortino pondéré
-#   par la taille de position, calculé sur la courbe de valeur du portefeuille
-#   plutôt que sur les rendements unitaires, serait une refonte méthodologique
-#   plus profonde -- non entreprise, même arbitrage que les autres métriques
-#   non pondérées ci-dessus).
-# - Manipulation du point de bascule de la courbe de santé (revue Grok,
-#   précision sur la limite déjà notée) : au-delà du simple découpage par
-#   nombre de trades plutôt que par fenêtre calendaire, un wallet peut
-#   délibérément accélérer ou ralentir son activité pour placer le point de
-#   bascule à un moment favorable de sa propre courbe de PnL -- un levier de
-#   manipulation actif, pas seulement un angle mort passif. Même refonte
-#   candidate que déjà notée (découpage calendaire), pas construite.
-# - Coordination Sybil, absence de benchmark marché, gaming structurel des
-#   tests de robustesse, MEV/arbitrage atomique, farming du seuil d'entrée,
-#   asymétrie de couverture protocolaire : reconfirmés par la revue round 2/3
-#   (Grok) comme toujours non résolus -- aucun élément nouveau qui changerait
-#   l'évaluation déjà écrite plus haut, pas de duplication de l'entrée.
+# - Near-perfectly-correlated LST/wrapped pairs (Gemini review): beyond the
+#   now-closed stable<->stable case, WBTC<->tBTC, stETH<->wstETH, rETH<->wETH
+#   allow the same padding at near-zero cost/risk. No existing registry to
+#   reuse here (unlike stablecoins) -- building and maintaining a
+#   peg-by-peg mapping registry is the same kind of burden as the DeFi
+#   protocol registry already dismissed above. A narrower gap than before
+#   (the stable<->stable sub-case, probably the most used in practice, is
+#   closed), but real.
+# - Anti-luck trim dilution by micro-trades (Gemini review, refinement):
+#   `_robust_pnl_check` sorts by PnL IN DOLLARS, not by % return. An
+#   attacker who wants to push a legendary trade (e.g. +10,000% on a tiny
+#   position) out of the trim must pad with trades whose PnL IN DOLLARS is
+#   comparable or larger -- not simple few-cent micro-trades, which then
+#   stay below the legendary trade in the sort order and keep getting
+#   trimmed first. The real vulnerability is therefore narrower than
+#   "spamming free micro-trades": it requires the legendary trade itself to
+#   be small IN DOLLARS despite a huge percentage, AND real capital
+#   deployment on the padding trades to exceed that amount -- a more
+#   constrained case, not eliminated either way. Refinement lead identified,
+#   not built: a standard-deviation/z-score trim (removing trades more than
+#   X standard deviations from the median) would be insensitive to the $ vs
+#   % axis chosen, but changes the methodology more deeply (z-score
+#   instability itself on a small sample to manage) -- candidate for a
+#   future pass, not tonight.
+# - Equal per-trade (not per-capital) weighting of win_rate/trim/health_trend/
+#   SORTINO (ChatGPT review, clarified 15/07 -- external review: Sortino had
+#   been omitted from this list by mistake, even though it shares exactly
+#   the same flaw, cf. below): only diversification now has a
+#   capital-weighted variant (cf. above). Win rate, anti-luck trim, health
+#   curve AND Sortino remain counted/computed PER TRADE in % return -- a
+#   $500,000 trade weighs the same as a $10 trade. This choice is ACCEPTED
+#   for win_rate/trim/health_trend (per-trade counting measures something
+#   else: the ability to find winners on independent bets) -- but for
+#   SORTINO specifically, the consequence is more misleading than a simple
+#   methodological choice: a ratio presented as "risk-adjusted return" can
+#   show a POSITIVE number while the real PnL in dollars is NEGATIVE.
+#   Verified numeric demonstration (5 trades, minimum threshold
+#   `WEIGHTS.min_closed_trades_for_sortino` reached): 4 micro-trades at
+#   +100% on a $1 stake each (+$4 total) + 1 major trade at -50% on a $1000
+#   stake (-$500) -- real PnL = -$496 (net loss), but mean(return_i) = 0.7,
+#   downside_deviation = 0.5, Sortino = 1.4 (positive, "honorable").
+#   **Partially fixed (15/07)**: `sortino_pnl_contradiction` detects and
+#   VISIBLY flags the most flagrant and reliably verifiable case (a SIGN
+#   contradiction between Sortino and real PnL, never a nuance to
+#   interpret), displayed as a WARNING next to the Sortino -- but does NOT
+#   fix the underlying bias itself (a Sortino weighted by position size,
+#   computed on the portfolio value curve rather than on unit returns, would
+#   be a deeper methodological rewrite -- not undertaken, same trade-off as
+#   the other unweighted metrics above).
+# - Manipulation of the health-curve pivot point (Grok review, refinement of
+#   an already-noted limitation): beyond the simple split by trade count
+#   rather than calendar window, a wallet can deliberately speed up or slow
+#   down its activity to place the pivot point at a favorable moment on its
+#   own PnL curve -- an active manipulation lever, not just a passive blind
+#   spot. Same candidate rewrite as already noted (calendar split), not
+#   built.
+# - Sybil coordination, absence of a market benchmark, structural gaming of
+#   robustness tests, MEV/atomic arbitrage, entry-threshold farming,
+#   protocol coverage asymmetry: reconfirmed by the round 2/3 review (Grok)
+#   as still unresolved -- nothing new that would change the assessment
+#   already written above, no duplicate entry.
 #
-# QUATRIÈME PASSAGE (15/07, revue round 4 -- ChatGPT + Grok). Précision
-# apportée (pas un nouveau mécanisme, une clarification de portée) :
+# FOURTH PASS (15/07, round 4 review -- ChatGPT + Grok). Clarification
+# provided (not a new mechanism, a scope clarification):
 #
-# - Migrations de token (v1->v2), redénominations, fusions/splits, airdrops de
-#   remplacement (revue ChatGPT) : vérifié -- ces événements ne créent PAS un
-#   troisième mécanisme de trou, ils se ramènent aux DEUX catégories déjà
-#   documentées ci-dessus selon leur implémentation on-chain : (a) migration
-#   via un NOUVEAU contrat (cas le plus courant, ex. un v1 envoyé/brûlé +
-#   un v2 reçu séparément) = exactement le même défaut que le dépôt DeFi/pont
-#   cross-chain (deux jambes sur deux adresses de token différentes, jamais
-#   reliées, PnL fictif des deux côtés) ; (b) redénomination/split SANS
-#   changement d'adresse (réinterprétation du solde sur le même contrat) =
-#   exactement le même défaut que le rebasing (déjà capté, sans être crédité,
-#   par `unmatched_sell_events`). Documenté ici comme exemples concrets
-#   supplémentaires des deux limites déjà écrites, pas une nouvelle limite.
-# - Le drapeau "suspect positif" comme cible de manipulation inversée (revue
-#   Grok) : parce que ce drapeau est VISIBLE et peut être lu comme un signal
-#   fort, un acteur sophistiqué peut délibérément calibrer son activité pour
-#   franchir simultanément les seuils sur ≥3 axes (win rate, Sortino,
-#   diversification, récurrence) sans avoir de vrai edge -- le drapeau devient
-#   alors lui-même un objectif à optimiser plutôt qu'un signal fiable. Limite
-#   inhérente à tout indicateur seuil VISIBLE (le rendre visible sert la
-#   transparence mais crée la cible) -- pas de parade sans le rendre plus
-#   coûteux à déclencher artificiellement (ex. exiger une confirmation
-#   indépendante), non construit.
-# - Biais de sélection de la couche 2 (revue Grok) : la priorité "round-trip
-#   confirmé -> récence -> nombre de trades" (`_select_tokens_for_deep_
-#   analysis`) sous-représente structurellement, à un instant T (avant
-#   `full_coverage=True`), les holders long-terme de nombreuses petites
-#   positions au profit des traders très actifs sur peu de tokens -- pas un
-#   bug, un ordre de priorité assumé (round-trip d'abord parce qu'une position
-#   encore ouverte ne peut jamais produire de trade clôturé), mais un vrai
-#   biais tant que la couverture n'est pas complète. Le scan incrémental
-#   cumulatif finit par tout couvrir, mais un score consulté AVANT couverture
-#   complète reste construit sur un sous-ensemble non représentatif -- déjà
-#   partiellement divulgué (`full_coverage`/`tokens_scanned_cumulative`
-#   affichés), pas éliminé pour autant.
+# - Token migrations (v1->v2), redenominations, mergers/splits, replacement
+#   airdrops (ChatGPT review): verified -- these events do NOT create a
+#   third gap mechanism, they fall back to the TWO categories already
+#   documented above depending on their on-chain implementation: (a)
+#   migration via a NEW contract (most common case, e.g. a v1 sent/burned +
+#   a v2 received separately) = exactly the same flaw as the DeFi
+#   deposit/cross-chain bridge case (two legs on two different token
+#   addresses, never linked, fictitious PnL on both sides); (b)
+#   redenomination/split WITHOUT an address change (balance
+#   reinterpretation on the same contract) = exactly the same flaw as
+#   rebasing (already captured, without being credited, by
+#   `unmatched_sell_events`). Documented here as additional concrete
+#   examples of the two limitations already written, not a new limitation.
+# - The "suspect positive" flag as a reverse-manipulation target (Grok
+#   review): because this flag is VISIBLE and can be read as a strong
+#   signal, a sophisticated actor can deliberately calibrate their activity
+#   to simultaneously clear the thresholds on >=3 axes (win rate, Sortino,
+#   diversification, recurrence) without any real edge -- the flag then
+#   becomes an optimization target itself rather than a reliable signal.
+#   Limitation inherent to any VISIBLE threshold indicator (making it
+#   visible serves transparency but creates the target) -- no defense
+#   without making it more costly to trigger artificially (e.g. requiring
+#   an independent confirmation), not built.
+# - Layer-2 selection bias (Grok review): the priority "confirmed round-trip
+#   -> recency -> trade count" (`_select_tokens_for_deep_analysis`)
+#   structurally under-represents, at a given instant T (before
+#   `full_coverage=True`), long-term holders of many small positions in
+#   favor of very active traders on few tokens -- not a bug, an accepted
+#   priority order (round-trip first because a still-open position can
+#   never produce a closed trade), but a real bias as long as coverage isn't
+#   complete. The cumulative incremental scan eventually covers everything,
+#   but a score consulted BEFORE full coverage remains built on a
+#   non-representative subset -- already partially disclosed
+#   (`full_coverage`/`tokens_scanned_cumulative` displayed), not eliminated
+#   either way.
 #
-# CINQUIÈME PASSAGE (15/07, revue Gemini -- audit final). Deux points, TRAITÉS
-# DIFFÉREMMENT après vérification :
+# FIFTH PASS (15/07, Gemini review -- final audit). Two points, HANDLED
+# DIFFERENTLY after verification:
 #
-# - Distorsion FIFO sur fluctuations de supply HORS-TRANSACTION -- rebases
-#   POSITIFS **ET NÉGATIFS** (renommage explicite demandé par Gemini, limite
-#   déjà en partie gérée) : le cas positif (solde qui augmente sans transfert,
-#   ex. rendement stETH) était déjà documenté et capté sans être crédité
-#   (`unmatched_sell_events`). Le cas NÉGATIF (solde divisé sans transfert,
-#   ex. rebase négatif AMPL-like) est le miroir exact et n'était PAS nommé
-#   explicitement : la file d'attente FIFO continue de porter les jetons
-#   "fantômes" (jamais purgés faute d'événement on-chain pour réagir), qui se
-#   font consommer par une vente ultérieure à un prix d'achat obsolète -- un
-#   trade économiquement neutre peut alors s'enregistrer comme un profit
-#   fictif. Même famille de cause que le cas positif (solde qui change hors-
-#   transaction), symétrique en direction. Documenté ici tel quel, non
-#   corrigé -- même arbitrage que le reste des cas rebasing/DeFi/ponts.
-# - "Effondrement par perte fictive" via dusting ciblé sur pool manipulé
-#   (revue Gemini) -- VÉRIFIÉ COMME RÉEL contre le code : un pool créé juste
-#   au-dessus du plancher de liquidité ($35k > $30k) avec un prix ponctuel
-#   manipulé peut faire accepter un coût d'acquisition démesuré (OHLCV) sur
-#   un token dusté, puis un prix de sortie normal/crashé clôture le trade en
-#   perte fictive massive -- confirmé plausible ligne par ligne (le plancher
-#   de liquidité seul ne protège QUE contre un pool durablement thin, pas
-#   contre un pic de prix ponctuel sur un pool qui clarifie le plancher).
-#   **Première piste de correctif testée et REJETÉE après vérification** :
-#   réutiliser `_pool_is_plausible` (déjà existant, geckoterminal.py) pour
-#   filtrer aussi ce cas -- ne fonctionne PAS ici : cette fonction renvoie
-#   délibérément `True` (plausible) quand le volume 24h est nul ou quasi nul
-#   ("un token légitime peut simplement n'avoir eu aucun trade récent", cf.
-#   sa docstring) -- exactement le profil d'un pool de scam peu/jamais
-#   tradé par personne d'autre que l'attaquant. Une règle de correction
-#   robuste (comparer le prix d'une bougie précise à ses voisines temporelles
-#   pour détecter un pic isolé, ou exiger une corroboration de marché
-#   indépendante avant de faire confiance à un cost-basis OHLCV sur un
-#   transfert non-swap) reste un vrai chantier de conception -- risque de
-#   nouveaux faux positifs (un memecoin légitimement volatil, ou un retrait
-#   CEX légitime dont la contrepartie n'est jamais le pool) non résolu ce
-#   soir avec la rigueur que ce point mérite. **Non corrigé, signalé comme
-#   la limite la plus sérieuse actuellement ouverte** (coût d'attaque ~50$ de
-#   gas, déterministe, ciblable sur n'importe quel wallet suivi) -- à traiter
-#   comme un chantier dédié, pas un correctif de fin de soirée.
+# - FIFO distortion from OUT-OF-TRANSACTION supply fluctuations -- POSITIVE
+#   **AND NEGATIVE** rebases (explicit renaming requested by Gemini, a
+#   limitation already partly handled): the positive case (balance
+#   increases with no transfer, e.g. stETH yield) was already documented and
+#   captured without being credited (`unmatched_sell_events`). The NEGATIVE
+#   case (balance divided with no transfer, e.g. an AMPL-like negative
+#   rebase) is the exact mirror and was NOT explicitly named: the FIFO queue
+#   keeps carrying "ghost" tokens (never purged for lack of an on-chain
+#   event to react to), which then get consumed by a later sell at a stale
+#   buy price -- an economically neutral trade can then register as a
+#   fictitious profit. Same family of cause as the positive case (balance
+#   changing out-of-transaction), symmetric in direction. Documented here as
+#   is, not fixed -- same trade-off as the rest of the
+#   rebasing/DeFi/bridges cases.
+# - "Fictitious-loss collapse" via targeted dusting on a manipulated pool
+#   (Gemini review) -- VERIFIED AS REAL against the code: a pool created
+#   just above the liquidity floor ($35k > $30k) with a manipulated
+#   point-in-time price can make an inflated acquisition cost (OHLCV) get
+#   accepted on a dusted token, then a normal/crashed exit price closes the
+#   trade at a massive fictitious loss -- confirmed plausible line by line
+#   (the liquidity floor alone only protects against a durably thin pool,
+#   not against a point-in-time price spike on a pool that clears the
+#   floor). **First fix candidate tested and REJECTED after verification**:
+#   reusing `_pool_is_plausible` (already existing, geckoterminal.py) to
+#   also filter this case -- does NOT work here: this function deliberately
+#   returns `True` (plausible) when 24h volume is zero or near-zero ("a
+#   legitimate token may simply have had no recent trade", cf. its
+#   docstring) -- exactly the profile of a scam pool traded little/never by
+#   anyone but the attacker. A robust correction rule (comparing a specific
+#   candle's price to its time-neighbors to detect an isolated spike, or
+#   requiring independent market corroboration before trusting an OHLCV
+#   cost-basis on a non-swap transfer) remains a genuine design project --
+#   risk of new false positives (a legitimately volatile memecoin, or a
+#   legitimate CEX withdrawal whose counterparty is never the pool) not
+#   resolved tonight with the rigor this point deserves. **Not fixed,
+#   flagged as the most serious limitation currently open** (attack cost
+#   ~$50 of gas, deterministic, targetable on any tracked wallet) -- to be
+#   handled as a dedicated project, not an end-of-evening fix.
 # ============================================================================
 #
 # SIXIÈME PASSAGE (15/07, revue Gemini + Grok convergentes). Corrigés ce
-# passage : immunité aux rug pulls (plancher de liquidité désormais
-# ASYMÉTRIQUE -- gate uniquement les jambes d'achat, jamais les ventes, cf.
-# commentaire sur `pool_liquid_enough`/`_price_lookup` plus haut -- bug réel
-# dans le correctif #160, pas une simple limite résiduelle) ; pollution du
-# percentile par des scores partiels (`_latest_scored_wallets` exclut
-# désormais les fiches `full_coverage=False` de la population de comparaison).
-# **Portée honnête du correctif rug-pull** : ne résout PAS tous les cas --
-# seulement celui où la jambe d'ACHAT a un prix établi indépendamment de la
-# liquidité actuelle (prix par tx_hash exact, cf. `TestRugPullAsymmetricFloor`).
-# Si l'achat ET la vente dépendent tous deux du SEUL instantané de liquidité
-# actuel du pool (majorité des jambes, pas de stablecoin dans la tx), l'achat
-# reste bloqué par le plancher (comportement inchangé, protection anti-dust
-# intacte) -- le trade ne se clôture alors toujours pas (FIFO exige les deux
-# bords valorisés), donc la perte reste invisible dans ce sous-cas précis.
-# Root cause partagée avec la vulnérabilité dusting ci-dessus : aucune donnée
-# de liquidité HISTORIQUE (par timestamp) n'est disponible, seulement un
-# instantané au moment du scan -- même limite structurelle, pas résolue.
+# pass: rug-pull immunity (the liquidity floor is now ASYMMETRIC -- gates
+# only the buy legs, never the sells, cf. the comment on
+# `pool_liquid_enough`/`_price_lookup` above -- a real bug in fix #160, not
+# just a residual limitation); percentile pollution by partial scores
+# (`_latest_scored_wallets` now excludes `full_coverage=False` records from
+# the comparison population).
+# **Honest scope of the rug-pull fix**: does NOT solve all cases -- only the
+# one where the BUY leg has a price established independently of current
+# liquidity (exact tx_hash price, cf. `TestRugPullAsymmetricFloor`). If both
+# the buy AND the sell depend SOLELY on the pool's current liquidity
+# snapshot (the majority of legs, no stablecoin in the tx), the buy remains
+# blocked by the floor (unchanged behavior, anti-dust protection intact) --
+# the trade then still never closes (FIFO requires both edges to be valued),
+# so the loss stays invisible in this precise sub-case. Root cause shared
+# with the dusting vulnerability above: no HISTORICAL liquidity data (by
+# timestamp) is available, only a snapshot at scan time -- same structural
+# limitation, not resolved.
 #
-# Documenté, non corrigé -- wash-trading en petit cluster coordonné (2-5
-# wallets, revue Gemini + Grok convergentes) : le disqualifiant de couche 1
-# (contrepartie unique ≥60%) et la convergence pairwise (même source de
-# financement) sont tous deux CONTOURNABLES simultanément par un acteur qui
-# répartit son volume de complaisance sur 2-4 CONTREPARTIES distinctes
-# (ex. wallet A envoie 30% vers B, 30% vers C, 40% de trades légitimes --
-# aucune contrepartie unique ne franchit 60%) tout en utilisant des sources de
-# financement différentes ou étalées dans le temps pour chaque wallet du
-# cluster (évite la convergence pairwise stricte). Chaque wallet passe alors
-# individuellement tous les disqualifiants et le seuil de 100 swaps, entre
-# dans le classement comparatif, et le cluster peut biaiser collectivement les
-# percentiles ou faire lever le drapeau "suspect positif" de façon
-# coordonnée. Niveau de coordination intermédiaire entre le wash-trading
-# intra-wallet (déjà couvert) et le Sybil industriel à grande échelle (déjà
-# documenté ci-dessus) -- même famille de trou (pas de clustering d'entité au-
-# delà de la convergence pairwise), à fermer par le même chantier dédié si
-# entrepris (pas un correctif de seuil ponctuel : élargir le seuil de 60% ou
-# le nombre de wallets vérifiés en pairwise ne fait que déplacer la taille de
-# cluster minimale requise pour contourner, jamais l'éliminer).
+# Documented, not fixed -- small coordinated cluster wash-trading (2-5
+# wallets, converging Gemini + Grok review): the layer-1 disqualifier
+# (single counterparty >=60%) and pairwise convergence (same funding source)
+# are BOTH simultaneously BYPASSABLE by an actor who spreads their
+# complaisant volume across 2-4 DISTINCT COUNTERPARTIES (e.g. wallet A sends
+# 30% to B, 30% to C, 40% legitimate trades -- no single counterparty
+# crosses 60%) while using different or time-spread funding sources for
+# each wallet in the cluster (avoids strict pairwise convergence). Each
+# wallet then individually clears all disqualifiers and the 100-swap
+# threshold, enters the comparative ranking, and the cluster can
+# collectively bias the percentiles or raise the "suspect positive" flag in
+# a coordinated way. Intermediate coordination level between intra-wallet
+# wash-trading (already covered) and large-scale industrial Sybil (already
+# documented above) -- same family of gap (no entity clustering beyond
+# pairwise convergence), to be closed by the same dedicated project if
+# undertaken (not a point threshold fix: widening the 60% threshold or the
+# number of wallets checked pairwise only shifts the minimum cluster size
+# required to bypass, never eliminates it).
 #
-# SEPTIÈME PASSAGE (15/07, revue DeepSeek -- 4e IA externe). Un point corrige
-# une sur-affirmation de mon propre commentaire (cf. `buy_blocked_thin_
-# liquidity` plus haut -- gains fictifs symétriques par vente sur pool
-# manipulé, dorénavant reformulé honnêtement). Les autres, vérifiés réels et
-# nouveaux (pas de doublon avec les passages précédents) :
+# SEVENTH PASS (15/07, DeepSeek review -- 4th external AI). One point
+# corrects an overstatement in my own comment (cf. `buy_blocked_thin_
+# liquidity` above -- symmetric fictitious gains via selling on a
+# manipulated pool, now honestly reworded). The others, verified real and
+# new (no duplicate with previous passes):
 #
-# - Drawdown/Sortino calculés SEULEMENT sur le PnL RÉALISÉ (`_max_drawdown_pct`/
-#   `_sortino_ratio` ne lisent que `closed_trades`, jamais `open_position_
-#   amount`) : un wallet qui porte une position ouverte massivement en perte
-#   latente (achetée puis jamais revendue, donc jamais "réalisée") affiche un
-#   drawdown nul ou très faible alors que son risque réel est énorme -- la
-#   mesure de risque est structurellement optimiste tant qu'une position
-#   reste ouverte. Corriger exigerait une vraie fonctionnalité de mark-to-
-#   market (prix courant fiable par token ouvert + coût moyen pondéré de la
-#   file FIFO restante + redéfinition de ce que "drawdown" mesure -- courbe
-#   d'équité réalisée+latente plutôt que réalisée seule) : même famille de
-#   chantier dédié que le benchmark alpha/Sybil déjà différés, pas un ajout
-#   de seuil. Non construit.
-# - `price_confirmation_ratio`/`price_confidence_low` mesurent la confiance
-#   de MÉTHODE (prix par ratio stablecoin exact vs. repli OHLCV estimé), PAS
-#   la résistance à la manipulation de marché -- un axe orthogonal. Une jambe
-#   à 100% "confirmée" par hash exact reste vraie (ratio réellement exécuté
-#   dans SA transaction), mais une jambe purement OHLCV peut être exacte
-#   (marché sain) ou manipulée (pool à faible volume, cf. vulnérabilité
-#   dusting déjà documentée) -- le drapeau ne distingue pas ces deux cas
-#   parmi les jambes estimées. Documenté ici comme clarification de portée,
-#   pas un nouveau mécanisme à corriger (la vulnérabilité sous-jacente est
-#   déjà la dusting/pool-manipulé ci-dessus).
-# - Élagage anti-chance et faux négatif sur un style légitimement concentré
-#   (barbell/conviction sizing) : `_robust_pnl_check` trie par PnL en dollars
-#   et retire les `robust_trim_pct` extrêmes des deux côtés avant de vérifier
-#   que le reste est positif -- pensé pour neutraliser un coup de chance
-#   isolé (cf. passages précédents), mais un trader dont l'edge réel VIENT
-#   justement d'un petit nombre de gains extrêmes (quelques multi-baggers
-#   assumés, beaucoup de petites pertes/positions coupées vite) peut voir ses
-#   meilleurs trades légitimes trimmés et le reste artificiellement jugé "non
-#   robuste" -- un faux négatif sur un style de trading réel, pas seulement
-#   un vrai positif sur la chance. Distinguer "chance isolée" de "conviction
-#   sizing assumé" exigerait un signal indépendant (ex. taille de position
-#   pré-décidée, thèse documentée) que le simple historique on-chain ne
-#   fournit pas -- non construit, tension assumée entre les deux lectures
-#   possibles du même signal.
-# - Plafond `max_tokens_analyzed`/couverture exhaustive (revue DeepSeek,
-#   même angle que "biais de sélection de la couche 2" déjà documenté
-#   QUATRIÈME PASSAGE) : vérifié -- déjà présenté comme une limite de
-#   complétude explicite (`full_coverage`/`tokens_scanned_cumulative`
-#   affichés dans le rapport, et depuis le correctif #172, `full_coverage=
-#   False` exclut désormais le wallet de la population de comparaison
-#   percentile). Pas un angle mort supplémentaire, la couverture partielle
-#   est déjà divulguée et neutralisée là où elle compterait le plus (le
-#   classement comparatif).
+# - Drawdown/Sortino computed ONLY on REALIZED PnL (`_max_drawdown_pct`/
+#   `_sortino_ratio` only read `closed_trades`, never `open_position_
+#   amount`): a wallet carrying a massively-underwater open position
+#   (bought then never sold, so never "realized") shows a null or very low
+#   drawdown while its real risk is enormous -- the risk measure is
+#   structurally optimistic as long as a position stays open. Fixing this
+#   would require a real mark-to-market feature (reliable current price per
+#   open token + weighted average cost of the remaining FIFO queue +
+#   redefinition of what "drawdown" measures -- realized+unrealized equity
+#   curve rather than realized only): same family of dedicated project as
+#   the alpha benchmark/Sybil case already deferred, not a threshold
+#   addition. Not built.
+# - `price_confirmation_ratio`/`price_confidence_low` measure METHOD
+#   confidence (price by exact stablecoin ratio vs. estimated OHLCV
+#   fallback), NOT resistance to market manipulation -- an orthogonal axis.
+#   A leg "confirmed" 100% by exact hash remains true (a ratio actually
+#   executed in ITS OWN transaction), but a purely-OHLCV leg can be exact
+#   (healthy market) or manipulated (low-volume pool, cf. the dusting
+#   vulnerability already documented) -- the flag doesn't distinguish these
+#   two cases among the estimated legs. Documented here as a scope
+#   clarification, not a new mechanism to fix (the underlying vulnerability
+#   is already the dusting/manipulated-pool case above).
+# - Anti-luck trimming and false negative on a legitimately concentrated
+#   style (barbell/conviction sizing): `_robust_pnl_check` sorts by PnL in
+#   dollars and removes the extreme `robust_trim_pct` on both sides before
+#   checking that the rest is positive -- designed to neutralize an isolated
+#   stroke of luck (cf. previous passes), but a trader whose real edge COMES
+#   precisely from a small number of extreme gains (a few accepted
+#   multi-baggers, many small losses/positions cut quickly) may see their
+#   best legitimate trades trimmed and the rest artificially judged "not
+#   robust" -- a false negative on a real trading style, not just a true
+#   positive on luck. Distinguishing "isolated luck" from "accepted
+#   conviction sizing" would require an independent signal (e.g.
+#   pre-decided position size, documented thesis) that the plain on-chain
+#   history doesn't provide -- not built, an accepted tension between the
+#   two possible readings of the same signal.
+# - `max_tokens_analyzed` cap / exhaustive coverage (DeepSeek review, same
+#   angle as the "layer-2 selection bias" already documented in the FOURTH
+#   PASS): verified -- already presented as an explicit completeness
+#   limitation (`full_coverage`/`tokens_scanned_cumulative` displayed in the
+#   report, and since fix #172, `full_coverage=False` now excludes the
+#   wallet from the percentile comparison population). Not an additional
+#   blind spot, the partial coverage is already disclosed and neutralized
+#   where it would matter most (the comparative ranking).
 # ============================================================================
 #
-# CONSTAT DE PALIER (15/07) : à ce stade, les rounds successifs de revue
-# externe reconfirment très majoritairement les mêmes limites structurelles
-# déjà écrites (Sybil, benchmark marché, MEV, gaming des seuils/tests) plutôt
-# que d'en révéler de nouvelles -- signal que le fond du sujet est correctement
-# cartographié. Les items encore ouverts sont, par nature, des PROJETS séparés
-# (clustering d'entité, série de rendement de référence, détection
-# d'atomicité de transaction), pas des correctifs ponctuels supplémentaires --
-# à rouvrir sur décision explicite si l'un d'eux devient prioritaire.
+# CHECKPOINT NOTE (15/07): at this stage, successive rounds of external
+# review overwhelmingly reconfirm the same structural limitations already
+# written (Sybil, market benchmark, MEV, threshold/test gaming) rather than
+# revealing new ones -- a signal that the ground has been correctly mapped.
+# The items still open are, by nature, separate PROJECTS (entity clustering,
+# reference return series, transaction atomicity detection), not additional
+# point fixes -- to be reopened on an explicit decision if one of them
+# becomes a priority.
 # ============================================================================
 #
-# HUITIÈME PASSAGE (15/07, revue Gemini + DeepSeek round 2). Un vrai bug
-# corrigé (pas une limite résiduelle), un vrai angle mort documenté :
+# EIGHTH PASS (15/07, Gemini + DeepSeek round 2 review). One real bug fixed
+# (not a residual limitation), one real blind spot documented:
 #
-# - Gel des erreurs transitoires (revue Gemini) -- CORRIGÉ pour la couche la
-#   plus impactante : une panne D'INFRASTRUCTURE GeckoTerminal (timeout/429/
-#   erreur serveur, déjà retentée plusieurs fois par `_get_json` avant
-#   d'abandonner) lors de la résolution de pool d'un token pouvait se figer en
-#   cicatrice PERMANENTE -- le scan incrémental persistant (checkpoint) ne
-#   re-tente un token déjà "vu" que si son activité on-chain a changé, jamais
-#   sur la simple résolution d'une erreur API. Une coupure réseau ponctuelle
-#   pendant UN scan en arrière-plan condamnait donc une jambe à rester
-#   "sans prix" pour toujours dans les archives (`wallet_archived_trade`),
-#   faussant durablement le PnL ET `price_confirmation_ratio` du wallet,
-#   sans aucun moyen de correction automatique. Corrigé : `resolve_primary_
-#   pool` distingue déjà, EN TEXTE, un verdict de DONNÉE ("aucun pool trouvé
-#   pour ce token"/"aucun pool plausible...") d'une panne d'infrastructure
-#   (préfixée par la constante `UNAVAILABLE` de `geckoterminal.py` dans
-#   TOUS les cas d'échec `_get_json`) -- signal déjà présent, jamais exploité
-#   jusqu'ici. `_analyze_wallet_multi_token` classe désormais chaque token en
-#   échec de résolution (`transient_pricing_error_tokens`), et `score_wallets`
-#   exclut ces tokens de `checkpoint.scanned_tokens` -- ils restent éligibles
-#   à une nouvelle tentative au prochain appel, MÊME sans nouvelle activité
-#   on-chain. **Portée honnête, PAS un correctif universel** : ne couvre que
-#   la couche de résolution de POOL (GeckoTerminal), où le texte d'erreur
-#   sépare proprement les deux cas. Les couches OHLCV (`services/ohlcv.py`,
-#   client partagé avec `vc_predictions`/`weekly_training`/`pump_dump_
-#   autopsy`) et CoinMarketCap (triangulation 3e couche) CONFLENT, elles,
-#   panne transitoire et absence légitime de donnée sous LA MÊME convention
-#   de préfixe (`f"{UNAVAILABLE} (pool absent)"`/`f"{UNAVAILABLE} (aucune
-#   bougie...)"` ressemblent textuellement à une vraie panne) -- les
-#   distinguer proprement exigerait soit un champ typé dédié threadé à
-#   travers ces clients partagés (risque de régression sur leurs AUTRES
-#   appelants), soit un filtrage fragile par sous-chaîne de diagnostic
-#   jamais conçue pour cet usage. Le même mode de défaillance (gel
-#   silencieux) reste donc possible si l'échec survient à CES couches plutôt
-#   qu'à la résolution de pool -- résiduel plus étroit qu'avant (le point
-#   d'entrée le plus fréquent est fermé), mais réel, documenté, pas corrigé.
-#   3 nouveaux tests (dont un test de contraste : un token sans AUCUN pool,
-#   verdict légitime, reste bien marqué "scanné" -- comportement historique
-#   inchangé).
-# - Biais de sélection induit par l'exclusion `price_confidence_low` (revue
-#   DeepSeek round 2) -- DOCUMENTÉ, tension assumée, pas corrigé. Le
-#   correctif #175 (exclure un wallet à confiance de prix basse de la
-#   population de comparaison percentile) protège l'INTÉGRITÉ du percentile
-#   des AUTRES wallets (éviter d'ancrer une comparaison sur des chiffres
-#   potentiellement faussés par une estimation de prix peu fiable) -- mais
-#   introduit mécaniquement un biais de SÉLECTION dans la population de
-#   référence elle-même : un wallet qui trade des tokens peu liquides, sans
-#   paire stablecoin directe, ou via un agrégateur/smart-account (routage qui
-#   échappe à la détection `_hash_based_price`, cf. sa docstring) aura
-#   STRUCTURELLEMENT un `price_confirmation_ratio` bas -- pas parce qu'il
-#   triche ou performe mal, mais parce que SON style de trading produit
-#   moins de jambes hash-exactes. Un tel wallet reste scoré (avec son propre
-#   avertissement affiché), mais n'est plus jamais utilisé comme POINT DE
-#   RÉFÉRENCE pour comparer d'autres wallets -- la population de comparaison
-#   se resserre autour des wallets qui tradent via des paires stablecoin
-#   directes, PAS autour d'un échantillon représentatif du "smart money" au
-#   sens large. **Tension particulièrement pertinente pour la thèse même
-#   d'ARIA** (sourcing de builders sur des microcaps Base souvent peu
-#   liquides, cf. CLAUDE.md "Vision & stratégie") : ce sont précisément CES
-#   traders-là qui risquent d'être sous-représentés dans le groupe de
-#   référence. Vient s'ajouter au paradoxe du percentile déjà documenté
-#   (round 2/3, population non représentative du marché) -- même famille de
-#   limite, un axe de biais SUPPLÉMENTAIRE et distinct (style de trading,
-#   pas seulement démographie des utilisateurs de l'outil). **Pas de
-#   correctif de code proposé** : revenir sur l'exclusion #175 réintroduirait
-#   directement le bug qu'elle corrigeait (ancrer un percentile sur des
-#   chiffres non fiables) -- un arbitrage entre deux défauts connus, pas une
-#   erreur à corriger dans un sens ou l'autre sans un mécanisme plus fin
-#   (ex. pondérer la contribution d'un wallet à la population de comparaison
-#   par sa confiance plutôt qu'un tout-ou-rien) -- chantier séparé si repris.
+# - Freezing of transient errors (Gemini review) -- FIXED for the most
+#   impactful layer: a GeckoTerminal INFRASTRUCTURE failure (timeout/429/
+#   server error, already retried several times by `_get_json` before giving
+#   up) during a token's pool resolution could freeze into a PERMANENT scar
+#   -- the persistent incremental scan (checkpoint) only retries a token
+#   already "seen" if its on-chain activity has changed, never on the simple
+#   resolution of an API error. A one-off network outage during ONE
+#   background scan thus doomed a leg to stay "priceless" forever in the
+#   archives (`wallet_archived_trade`), durably skewing the wallet's PnL AND
+#   `price_confirmation_ratio`, with no automatic correction path. Fixed:
+#   `resolve_primary_pool` already distinguishes, IN TEXT, a DATA verdict
+#   ("no pool found for this token"/"no plausible pool...") from an
+#   infrastructure failure (prefixed by the `UNAVAILABLE` constant from
+#   `geckoterminal.py` in ALL `_get_json` failure cases) -- a signal already
+#   present, never exploited until now. `_analyze_wallet_multi_token` now
+#   classifies each token that failed to resolve
+#   (`transient_pricing_error_tokens`), and `score_wallets` excludes these
+#   tokens from `checkpoint.scanned_tokens` -- they remain eligible for a
+#   new attempt on the next call, EVEN with no new on-chain activity.
+#   **Honest scope, NOT a universal fix**: only covers the POOL resolution
+#   layer (GeckoTerminal), where the error text properly separates the two
+#   cases. The OHLCV layers (`services/ohlcv.py`, a client shared with
+#   `vc_predictions`/`weekly_training`/`pump_dump_autopsy`) and CoinMarketCap
+#   (3rd-layer triangulation) DO conflate transient failure and legitimate
+#   absence of data under THE SAME prefix convention
+#   (`f"{UNAVAILABLE} (pool absent)"`/`f"{UNAVAILABLE} (no candle...)"` read
+#   textually like a real outage) -- distinguishing them properly would
+#   require either a dedicated typed field threaded through these shared
+#   clients (regression risk on their OTHER callers), or fragile filtering
+#   by a diagnostic substring never designed for this use. The same failure
+#   mode (silent freeze) therefore remains possible if the failure occurs at
+#   THESE layers rather than at pool resolution -- narrower residual than
+#   before (the most frequent entry point is closed), but real, documented,
+#   not fixed. 3 new tests (including a contrast test: a token with NO pool
+#   at all, a legitimate verdict, is still correctly marked "scanned" --
+#   unchanged historical behavior).
+# - Selection bias induced by the `price_confidence_low` exclusion (DeepSeek
+#   round 2 review) -- DOCUMENTED, an accepted tension, not fixed. Fix #175
+#   (excluding a low-price-confidence wallet from the percentile comparison
+#   population) protects the INTEGRITY of the OTHER wallets' percentile
+#   (avoiding anchoring a comparison on numbers potentially skewed by an
+#   unreliable price estimate) -- but mechanically introduces a SELECTION
+#   bias into the reference population itself: a wallet that trades
+#   low-liquidity tokens, with no direct stablecoin pair, or via an
+#   aggregator/smart-account (routing that escapes `_hash_based_price`
+#   detection, cf. its docstring) will STRUCTURALLY have a low
+#   `price_confirmation_ratio` -- not because it cheats or performs badly,
+#   but because ITS trading style produces fewer hash-exact legs. Such a
+#   wallet is still scored (with its own warning displayed), but is never
+#   again used as a REFERENCE POINT to compare other wallets -- the
+#   comparison population narrows around wallets that trade via direct
+#   stablecoin pairs, NOT around a representative sample of "smart money" in
+#   the broad sense. **Tension particularly relevant to ARIA's own thesis**
+#   (sourcing builders on often-illiquid Base microcaps, cf. CLAUDE.md
+#   "Vision & strategy"): these are precisely the traders most at risk of
+#   being under-represented in the reference group. Adds to the percentile
+#   paradox already documented (round 2/3, non-representative market
+#   population) -- same family of limitation, an ADDITIONAL and distinct
+#   bias axis (trading style, not just the tool's user demographics). **No
+#   code fix proposed**: reverting exclusion #175 would directly
+#   reintroduce the bug it fixed (anchoring a percentile on unreliable
+#   numbers) -- a trade-off between two known defects, not an error to fix
+#   one way or the other without a finer mechanism (e.g. weighting a
+#   wallet's contribution to the comparison population by its confidence
+#   rather than all-or-nothing) -- separate project if picked up again.
 # ============================================================================
 #
-# NEUVIÈME PASSAGE (15/07, revue externe -- l'équation résumée à l'opérateur a
-# elle-même été auditée ligne par ligne). Deux corrections apportées au CODE
-# (percentile lissé + contradiction Sortino/PnL signalée, cf. plus haut), une
-# affirmation externe vérifiée et RÉFUTÉE, un vrai angle mort documenté :
+# NINTH PASS (15/07, external review -- the equation summarized to the
+# operator was itself audited line by line). Two corrections made to the
+# CODE (smoothed percentile + flagged Sortino/PnL contradiction, cf. above),
+# one external claim verified and REFUTED, one real blind spot documented:
 #
-# - Diversification -- l'AXE est nommé "diversification" mais NE MESURE PAS
-#   une largeur/dispersion de portefeuille (type Herfindahl/entropie) : `D =
-#   diversification_profitable_tokens / diversification_total_tokens` est en
-#   réalité un TAUX DE RÉUSSITE PAR TOKEN (combien de tokens distincts finissent
-#   nets positifs), un axe plus proche d'un second win_rate que d'une mesure de
-#   dispersion. Conséquence vérifiée : un wallet qui trade UN SEUL token,
-#   profitable, obtient D=1 (score parfait) -- un wallet qui en trade 20 dont
-#   15 profitables obtient D=0,75 (plus bas), alors qu'il est objectivement
-#   PLUS diversifié. Le nom pousse donc, littéralement, à l'extrême
-#   concentration plutôt qu'à l'éparpillement qu'il est censé récompenser.
-#   Nuance vérifiée : `_suspect_positive_flag` (couche 3, distincte du
-#   percentile/composite) exige DÉJÀ `diversification_total_tokens >=
-#   WEIGHTS.suspect_diversification_min_tokens` avant de compter cet axe comme
-#   "suspect" -- un garde-fou existe donc contre ce gaming précis, mais
-#   UNIQUEMENT pour le drapeau "suspect positif", jamais pour l'axe
-#   `percentile_diversification`/`composite_percentile` lui-même, qui reste
-#   sans aucun plancher de nombre de tokens. Non corrigé (renommer l'axe ou lui
-#   ajouter un plancher change le sens même de la métrique affichée depuis le
-#   début de ce chantier -- décision de méthodologie, pas un ajustement de
-#   seuil ponctuel).
-# - Complétude de l'équation -- clarification (pas un bug) : `diversification_
-#   capital_weighted_ratio` (#163) N'EST PAS combiné avec le ratio de comptage
-#   ci-dessus dans une formule pondérée unique -- les deux restent deux champs
-#   SÉPARÉS (même doctrine "axes jamais fondus" que tout le reste de ce
-#   module) ; seul le ratio de COMPTAGE entre dans `percentile_diversification`/
-#   `composite_percentile`, la variante pondérée par capital reste un
-#   diagnostic d'AFFICHAGE seul (`_format_card_for_prompt`), jamais utilisée
-#   dans le calcul du percentile.
-# - RÉFUTÉ après vérification (revue externe) : l'affirmation qu'un PnL brut
-#   "linéaire" ferait s'écraser le percentile de tous les autres wallets vers
-#   0 dès qu'un seul wallet a un PnL démesuré. Vérifié contre `_percentile` :
-#   c'est un percentile de RANG (compte les autres wallets strictement en
-#   dessous / population), jamais une normalisation min-max ni un calcul sur
-#   la magnitude brute -- un unique outlier à 10M$ ne change RIEN au
-#   percentile des autres wallets (il ne compte que pour son propre rang, au
-#   sommet). Cette classe de distorsion ("un extrême écrase tout le reste")
-#   s'appliquerait à une moyenne/normalisation par la valeur, pas à un
-#   percentile par rang -- non applicable ici.
-# - Frais de gas jamais déduits du PnL (revue externe) -- vérifié réel, pas
-#   déjà géré ailleurs : `ClosedTrade.pnl_usd` ne soustrait aucun coût de
-#   transaction (`qty * (sell_price - buy_price)` seul) ; aucune donnée de gas
-#   (gas_used/gas_price par jambe) n'est même récupérée dans ce module. Un
-#   wallet qui accumule de nombreux micro-trades gagnants EN POURCENTAGE mais
-#   dont chaque swap coûte plus cher en gas que le gain lui-même serait donc
-#   présenté comme performant alors qu'il est gas-négatif en réalité. Non
-#   corrigé : exigerait un appel réseau supplémentaire par transaction (reçu
-#   de transaction, gas_used * gas_price) pour CHAQUE jambe FIFO -- un nouveau
-#   type de donnée jamais fetché ici, coût réseau significatif sur un wallet
-#   actif -- chantier séparé si jamais entrepris, pas un correctif ponctuel.
+# - Diversification -- the AXIS is named "diversification" but does NOT
+#   MEASURE portfolio width/dispersion (Herfindahl/entropy-style): `D =
+#   diversification_profitable_tokens / diversification_total_tokens` is
+#   actually a PER-TOKEN SUCCESS RATE (how many distinct tokens end up net
+#   positive), an axis closer to a second win_rate than a dispersion
+#   measure. Verified consequence: a wallet trading a SINGLE profitable
+#   token gets D=1 (perfect score) -- a wallet trading 20 of which 15 are
+#   profitable gets D=0.75 (lower), even though it is objectively MORE
+#   diversified. The name therefore literally pushes toward extreme
+#   concentration rather than the spread it's supposed to reward. Verified
+#   nuance: `_suspect_positive_flag` (layer 3, distinct from the
+#   percentile/composite) ALREADY requires
+#   `diversification_total_tokens >= WEIGHTS.suspect_diversification_min_tokens`
+#   before counting this axis as "suspect" -- a guardrail therefore exists
+#   against this specific gaming, but ONLY for the "suspect positive" flag,
+#   never for the `percentile_diversification`/`composite_percentile` axis
+#   itself, which remains with no token-count floor at all. Not fixed
+#   (renaming the axis or adding a floor to it changes the very meaning of
+#   the metric displayed since this project began -- a methodology
+#   decision, not a point threshold adjustment).
+# - Equation completeness -- clarification (not a bug): `diversification_
+#   capital_weighted_ratio` (#163) is NOT combined with the count-based ratio
+#   above into a single weighted formula -- the two remain two SEPARATE
+#   fields (same "axes never merged" doctrine as the rest of this module);
+#   only the COUNT ratio feeds into `percentile_diversification`/
+#   `composite_percentile`, the capital-weighted variant remains a
+#   DISPLAY-ONLY diagnostic (`_format_card_for_prompt`), never used in the
+#   percentile calculation.
+# - REFUTED after verification (external review): the claim that a "linear"
+#   raw PnL would crush every other wallet's percentile toward 0 as soon as
+#   one wallet has an outsized PnL. Verified against `_percentile`: it is a
+#   RANK percentile (counts other wallets strictly below / population),
+#   never a min-max normalization nor a calculation on the raw magnitude --
+#   a single $10M outlier changes NOTHING about other wallets' percentiles
+#   (it only counts for its own rank, at the top). This class of distortion
+#   ("one extreme crushes everything else") would apply to a value-based
+#   average/normalization, not a rank percentile -- not applicable here.
+# - Gas fees never deducted from PnL (external review) -- verified real, not
+#   already handled elsewhere: `ClosedTrade.pnl_usd` subtracts no
+#   transaction cost (`qty * (sell_price - buy_price)` alone); no gas data
+#   (gas_used/gas_price per leg) is even fetched in this module. A wallet
+#   that accumulates many micro-trades winning IN PERCENTAGE but whose every
+#   swap costs more in gas than the gain itself would therefore be presented
+#   as performant while actually being gas-negative. Not fixed: would
+#   require an extra network call per transaction (transaction receipt,
+#   gas_used * gas_price) for EVERY FIFO leg -- a new data type never
+#   fetched here, significant network cost on an active wallet -- separate
+#   project if ever undertaken, not a point fix.
 # ============================================================================
 #
-# DIXIÈME PASSAGE (15/07, revue externe -- 2 lots). Un vrai bug corrigé, trois
-# fausses alertes vérifiées et RÉFUTÉES, deux nuances documentées :
+# TENTH PASS (15/07, external review -- 2 batches). One real bug fixed,
+# three false alarms verified and REFUTED, two nuances documented:
 #
-# - **Historique de transferts tronqué sans signal (CORRIGÉ)** : `client.
-#   get_token_transfers(wallet, limit=2000, max_pages=10, ...)` peut arrêter
-#   la pagination alors que Blockscout avait ENCORE de la donnée
-#   (`next_page_params` présent) -- un wallet très actif (plus de 2000
-#   transferts ERC-20 vie entière) voyait ses transferts les plus anciens
-#   silencieusement absents, avec un risque de biais sur TOUS les axes
-#   (W/PnL/S/D) et le percentile, pas seulement `unmatched_sell_events`
-#   (déjà documenté plus haut, mais qui ne dit pas SI l'historique lui-même
-#   était complet). `TokenTransfersResult.truncated` (nouveau champ, défaut
-#   `False`, rétrocompatible) distingue désormais "historique réellement
-#   épuisé" (pas de `next_page_params`) de "arrêté avant la fin" (erreur
-#   réseau/réponse malformée en cours de pagination, OU plafond max_pages/
-#   limit atteint alors qu'il restait de la donnée) -- `card.transfer_
-#   history_truncated` l'affiche en ATTENTION à côté du reste.
-# - **RÉFUTÉ (revue externe) -- "évasion du trim par désynchronisation
-#   d'unités"** : l'affirmation que le trim anti-chance (trié en $) laisserait
-#   passer un micro-trade à rendement % extrême qui viendrait ensuite
-#   "contaminer" le Sortino. Vérifié contre le code : `_robust_pnl_check`
-#   (le trim) et `card.sortino` sont deux calculs INDÉPENDANTS sur la MÊME
-#   liste de trades clôturés -- le trim ne filtre jamais les trades utilisés
-#   pour Sortino/win_rate/PnL, c'est un verdict de robustesse à PART
-#   (`robust_pnl_positive`), jamais un préfiltre. Il n'y a donc rien de
-#   "laissé passer" par le trim vers le Sortino -- Sortino voit TOUJOURS
-#   100% des trades, trim ou pas. **Le sous-jacent réel derrière cette
-#   critique reste valide, lui** : un trade dust (ex. achat 0,10$, vente 10$,
-#   +9900% de rendement, +9,90$ de PnL) peut à lui seul dominer mean(return_i)
-#   et donc le Sortino -- même famille que "Sortino jamais pondéré par la
-#   taille" déjà documenté (revue ChatGPT/#178), ce sous-cas dust/airdrop-like
-#   en est un exemple concret supplémentaire, pas un 3e mécanisme.
-# - **RÉFUTÉ -- division par zéro sur `return_i` si `buy_price<=0`** : déjà
-#   gardé. `ClosedTrade.return_pct` retourne `None` explicitement si
-#   `buy_price <= 0`, AVANT toute division -- jamais un crash ni un infini.
-#   Un token reçu gratuitement (buy_price=0, ex. airdrop) et revendu produit
-#   un `pnl_usd` positif correct (`qty * sell_price`, tout le produit de la
-#   vente est un profit réel) mais un `return_pct=None` -- exclu du calcul de
-#   Sortino, jamais une valeur aberrante qui s'y invite.
-# - **RÉFUTÉ -- division par zéro du percentile sur population vide** : déjà
-#   doublement gardé. `_apply_comparative_ranking` retourne tôt si `others`
-#   est vide (`if not others: return`), ET `_percentile` lui-même revérifie
-#   `if value is None or not population: return None` -- aucun chemin
-#   n'atteint la division. Comportement documenté et VERROUILLÉ par un test
-#   dédié (`test_first_wallet_ever_scored_has_no_comparison_population`) --
-#   pas seulement un hasard de conception.
-# - Documenté (nuance mineure, pas un bug) : le lissage des ex-æquo (#178)
-#   suppose des ex-æquo l'EXCEPTION -- sur une population aux valeurs très
-#   arrondies ou discrètes (ex. beaucoup de wallets à win_rate pile 0,5), les
-#   ex-æquo peuvent devenir la NORME, rendant le percentile moins
-#   discriminant (toujours correct, juste moins granulaire). Propriété
-#   statistique inhérente au rang moyen sur petite population/valeurs
-#   discrètes -- pas un défaut du code, aucune meilleure alternative
-#   simple sans changer fondamentalement de méthode de classement.
+# - **Transfer history truncated with no signal (FIXED)**: `client.
+#   get_token_transfers(wallet, limit=2000, max_pages=10, ...)` can stop
+#   pagination while Blockscout STILL had data (`next_page_params` present)
+#   -- a very active wallet (more than 2000 lifetime ERC-20 transfers) had
+#   its oldest transfers silently missing, risking bias on ALL axes
+#   (W/PnL/S/D) and the percentile, not just `unmatched_sell_events`
+#   (already documented above, but which doesn't say WHETHER the history
+#   itself was complete). `TokenTransfersResult.truncated` (new field,
+#   default `False`, backward-compatible) now distinguishes "history
+#   genuinely exhausted" (no `next_page_params`) from "stopped before the
+#   end" (network error/malformed response mid-pagination, OR the
+#   max_pages/limit cap reached while data still remained) --
+#   `card.transfer_history_truncated` displays it as a WARNING next to the
+#   rest.
+# - **REFUTED (external review) -- "trim evasion via unit
+#   desynchronization"**: the claim that the anti-luck trim (sorted in $)
+#   would let an extreme-%-return micro-trade through, which would then
+#   "contaminate" the Sortino. Verified against the code: `_robust_pnl_check`
+#   (the trim) and `card.sortino` are two INDEPENDENT calculations on the
+#   SAME list of closed trades -- the trim never filters the trades used for
+#   Sortino/win_rate/PnL, it's a SEPARATE robustness verdict
+#   (`robust_pnl_positive`), never a pre-filter. There is therefore nothing
+#   "let through" by the trim toward the Sortino -- Sortino ALWAYS sees 100%
+#   of trades, trim or not. **The real substance behind this critique
+#   remains valid, though**: a dust trade (e.g. $0.10 buy, $10 sell, +9900%
+#   return, +$9.90 PnL) can on its own dominate mean(return_i) and therefore
+#   the Sortino -- same family as "Sortino never weighted by size" already
+#   documented (ChatGPT review/#178), this dust/airdrop-like sub-case is an
+#   additional concrete example, not a 3rd mechanism.
+# - **REFUTED -- division by zero on `return_i` if `buy_price<=0`**: already
+#   guarded. `ClosedTrade.return_pct` explicitly returns `None` if
+#   `buy_price <= 0`, BEFORE any division -- never a crash nor an infinity.
+#   A token received for free (buy_price=0, e.g. airdrop) and resold
+#   produces a correct positive `pnl_usd` (`qty * sell_price`, the entire
+#   sale proceeds are a real profit) but a `return_pct=None` -- excluded
+#   from the Sortino calculation, never an outlier value sneaking in.
+# - **REFUTED -- percentile division by zero on an empty population**:
+#   already doubly guarded. `_apply_comparative_ranking` returns early if
+#   `others` is empty (`if not others: return`), AND `_percentile` itself
+#   re-checks `if value is None or not population: return None` -- no path
+#   reaches the division. Behavior documented and LOCKED by a dedicated
+#   test (`test_first_wallet_ever_scored_has_no_comparison_population`) --
+#   not just a design coincidence.
+# - Documented (minor nuance, not a bug): the tie smoothing (#178) assumes
+#   ties are the EXCEPTION -- on a population with very rounded or discrete
+#   values (e.g. many wallets with win_rate exactly 0.5), ties can become
+#   the NORM, making the percentile less discriminating (still correct,
+#   just less granular). A statistical property inherent to average rank on
+#   a small population/discrete values -- not a code defect, no simple
+#   better alternative without fundamentally changing the ranking method.
 # ============================================================================
 
-# Tous les poids/seuils tunables de ce chantier vivent dans
-# wallet_scoring_weights.py (isolé à la demande opérateur, 14/07 -- statut
-# provisoire, cf. docstring de ce module pour la décision d'emplacement
-# définitif en attente). Aucune valeur numérique en dur ici : toujours via
+# All tunable weights/thresholds for this project live in
+# wallet_scoring_weights.py (isolated at the operator's request, 14/07 --
+# provisional status, cf. this module's docstring for the pending decision
+# on its final location). No numeric value hardcoded here: always via
 # WEIGHTS.<champ>.
 
 
@@ -1021,17 +1015,18 @@ def wallet_scoring_enabled() -> bool:
     )
 
 
-# Même convention que pump_dump_autopsy.py (DB_PATH lié une fois à l'import) --
-# les tests isolent en monkeypatchant `smart_money.DB_PATH` (cf. test_aria_track_record.py
-# pour le même patron sur screened_pool.DB_PATH).
+# Same convention as pump_dump_autopsy.py (DB_PATH bound once at import) --
+# tests isolate by monkeypatching `smart_money.DB_PATH` (cf.
+# test_aria_track_record.py for the same pattern on screened_pool.DB_PATH).
 DB_PATH = str(aria_db_path())
 
 
 @dataclass
 class ClosedTrade:
-    """Une jambe achat->vente appariée en FIFO, valorisée en USD à chaque bord
-    via GeckoTerminal. Jamais construite sans prix des deux côtés (cf. `_fifo_match`
-    -- une jambe sans prix disponible est comptée à part, pas valorisée à zéro)."""
+    """A buy->sell leg matched in FIFO, valued in USD on each edge via
+    GeckoTerminal. Never built without a price on both sides (cf.
+    `_fifo_match` -- a leg with no available price is counted separately,
+    not valued at zero)."""
 
     token_address: str
     buy_ts: datetime
@@ -1039,12 +1034,12 @@ class ClosedTrade:
     token_amount: float
     buy_price: float
     sell_price: float
-    # Confiance du cost-basis (15/07, revue Gemini) : ``True`` si CE bord précis
-    # a été valorisé par un ratio d'exécution exact (tx_hash + jambe stablecoin
-    # dans la même transaction), ``False`` s'il retombe sur le prix de marché
-    # OHLCV -- jamais l'inverse d'un jugement de qualité du trade lui-même,
-    # uniquement de la CONFIANCE dans le prix utilisé pour le calculer (cf.
-    # ``price_confirmation_ratio`` sur ``WalletScoreCard``).
+    # Cost-basis confidence (15/07, Gemini review): ``True`` if THIS specific
+    # edge was valued by an exact execution ratio (tx_hash + stablecoin leg in
+    # the same transaction), ``False`` if it fell back to the OHLCV market
+    # price -- never the reverse of a judgment on the trade's quality itself,
+    # only the CONFIDENCE in the price used to compute it (cf.
+    # ``price_confirmation_ratio`` on ``WalletScoreCard``).
     buy_price_exact: bool = False
     sell_price_exact: bool = False
 
@@ -1065,13 +1060,13 @@ class _TokenFIFOResult:
     closed_trades: list[ClosedTrade] = field(default_factory=list)
     unpriced_legs: int = 0
     open_position_amount: float = 0.0
-    # Ventes dont la queue d'achats FIFO s'est épuisée avant d'être entièrement
-    # consommée (15/07, revue Gemini) : signal possible d'un rendement de
-    # rebase/DeFi (stETH, aTokens -- le solde augmente sans transfert entrant
-    # équivalent) ou d'un achat antérieur à la fenêtre de transferts récupérée.
-    # Jamais crédité comme profit (impossible de distinguer les deux cas sans
-    # deviner) -- juste compté pour transparence, cf. `unmatched_sell_events`
-    # sur `WalletScoreCard`.
+    # Sells whose FIFO buy queue ran out before being fully consumed (15/07,
+    # Gemini review): a possible signal of a rebase/DeFi yield (stETH,
+    # aTokens -- the balance grows with no matching incoming transfer) or of
+    # a buy that predates the fetched transfer window. Never credited as
+    # profit (impossible to distinguish the two cases without guessing) --
+    # just counted for transparency, cf. `unmatched_sell_events` on
+    # `WalletScoreCard`.
     unmatched_sell_events: int = 0
 
 
@@ -1083,20 +1078,20 @@ def _fifo_match(
     *,
     exact_hashes: frozenset[str] = frozenset(),
 ) -> _TokenFIFOResult:
-    """FIFO strict : chaque vente consomme les achats les plus anciens en premier.
-    ``price_lookup(ts, tx_hash) -> float | None`` -- une jambe sans prix disponible
-    des DEUX côtés (achat ET vente) est comptée dans ``unpriced_legs``, jamais
-    valorisée à zéro ni ignorée silencieusement (doctrine facts-only).
-    ``buys``/``sells`` portent le ``tx_hash`` d'origine de chaque jambe (14/07,
-    prix par hash exact) -- reste synchrone : la résolution éventuelle d'un prix
-    par hash (appel réseau) est faite EN AMONT par l'appelant, qui fournit un
-    ``price_lookup`` déjà résolu (dict/fermeture), jamais dans cette fonction.
-    ``exact_hashes`` (15/07, additif -- défaut vide, rétrocompatible avec tout
-    appelant/test existant) : ensemble des tx_hash déjà résolus par un prix
-    d'exécution EXACT (cf. ``hash_prices`` dans ``_analyze_wallet_multi_token``)
-    -- sert uniquement à marquer ``ClosedTrade.buy_price_exact``/``sell_price_exact``,
-    aucun effet sur le prix retenu lui-même (toujours celui renvoyé par
-    ``price_lookup``)."""
+    """Strict FIFO: each sell consumes the oldest buys first.
+    ``price_lookup(ts, tx_hash) -> float | None`` -- a leg with no available
+    price on EITHER side (buy AND sell) is counted in ``unpriced_legs``,
+    never valued at zero nor silently ignored (facts-only doctrine).
+    ``buys``/``sells`` carry the original ``tx_hash`` of each leg (14/07,
+    exact-hash pricing) -- stays synchronous: resolving a price by hash (a
+    network call) is done UPSTREAM by the caller, which supplies an
+    already-resolved ``price_lookup`` (dict/closure), never inside this
+    function. ``exact_hashes`` (15/07, additive -- empty default,
+    backward-compatible with any existing caller/test): set of tx_hash
+    values already resolved by an EXACT execution price (cf. ``hash_prices``
+    in ``_analyze_wallet_multi_token``) -- only used to flag
+    ``ClosedTrade.buy_price_exact``/``sell_price_exact``, no effect on the
+    price actually used (always the one returned by ``price_lookup``)."""
     buy_queue: deque[list] = deque(sorted(([ts, amt, tx_hash] for ts, amt, tx_hash in buys), key=lambda b: b[0]))
     closed: list[ClosedTrade] = []
     unpriced = 0
@@ -1128,11 +1123,11 @@ def _fifo_match(
             if buy_queue[0][1] <= 1e-12:
                 buy_queue.popleft()
             remaining -= matched
-        # Vente sans achat correspondant en attente (queue épuisée) : ignorée --
-        # ne peut pas être un trade ARIA-observable (le wallet a acquis le token
-        # avant la fenêtre de transferts récupérée, ou via un mécanisme non-transfer
-        # comme un mint direct) ; pas une jambe "sans prix", juste hors-scope FIFO.
-        # Comptée (pas créditée) -- cf. `unmatched_sell_events` ci-dessus.
+        # Sell with no matching pending buy (queue exhausted): ignored -- this
+        # cannot be an ARIA-observable trade (the wallet acquired the token
+        # before the fetched transfer window, or via a non-transfer mechanism
+        # such as a direct mint); not an "unpriced" leg, just out of FIFO
+        # scope. Counted (not credited) -- cf. `unmatched_sell_events` above.
         if remaining > 1e-12:
             unmatched_sell_events += 1
 
@@ -1144,11 +1139,11 @@ def _fifo_match(
 
 
 def _sortino_ratio(returns: list[float]) -> float | None:
-    """Ratio type Sortino sur les rendements par trade clôturé. Sous
-    `WEIGHTS.min_closed_trades_for_sortino`, jugé trop bruité pour un wallet individuel
-    (cf. research doc #157) -- indisponible, jamais un chiffre peu fiable présenté
-    comme fiable. Aucune perte observée -> ratio non défini (pas un infini
-    artificiel)."""
+    """Sortino-style ratio on per-closed-trade returns. Below
+    `WEIGHTS.min_closed_trades_for_sortino`, judged too noisy for an
+    individual wallet (cf. research doc #157) -- unavailable, never an
+    unreliable number presented as reliable. No loss observed -> ratio
+    undefined (not an artificial infinity)."""
     if len(returns) < WEIGHTS.min_closed_trades_for_sortino:
         return None
     downside = [r for r in returns if r < 0]
@@ -1161,9 +1156,9 @@ def _sortino_ratio(returns: list[float]) -> float | None:
 
 
 def _max_drawdown_pct(closed_trades: list[ClosedTrade]) -> float | None:
-    """Drawdown appliqué à la valeur CUMULÉE réalisée du wallet lui-même (pas au
-    marché) -- pic de PnL cumulé atteint vs. pire retracement depuis ce pic,
-    trades triés chronologiquement par date de vente."""
+    """Drawdown applied to the wallet's own realized CUMULATIVE value (not to
+    the market) -- peak cumulative PnL reached vs. worst retracement since
+    that peak, trades sorted chronologically by sell date."""
     if not closed_trades:
         return None
     ordered = sorted(closed_trades, key=lambda t: t.sell_ts)
@@ -1179,12 +1174,12 @@ def _max_drawdown_pct(closed_trades: list[ClosedTrade]) -> float | None:
 
 
 def _avg_holding_period_days(closed_trades: list[ClosedTrade]) -> float | None:
-    """Durée moyenne de détention (achat -> vente) en jours, sur les trades
-    clôturés -- signal de conviction vs. rotation rapide, méthodologie sourcée
-    (recherche externe 15/07 : "an increasing share of coins held over longer
+    """Average holding period (buy -> sell) in days, on closed trades -- a
+    conviction-vs-quick-rotation signal, methodology sourced (external
+    research 15/07: "an increasing share of coins held over longer
     durations... indicates strong conviction", cf. docs/aria-learning-inbox).
-    Aucune donnée réseau supplémentaire : buy_ts/sell_ts sont déjà dans chaque
-    ``ClosedTrade``, ce calcul est gratuit."""
+    No extra network call: buy_ts/sell_ts are already in each ``ClosedTrade``,
+    this calculation is free."""
     if not closed_trades:
         return None
     days = [(t.sell_ts - t.buy_ts).total_seconds() / 86_400 for t in closed_trades]
@@ -1192,10 +1187,10 @@ def _avg_holding_period_days(closed_trades: list[ClosedTrade]) -> float | None:
 
 
 def _wallet_age_days(all_flat_transfers: list[TokenTransfer]) -> float | None:
-    """Ancienneté du wallet -- du PREMIER transfert observé (dans la fenêtre
-    récupérée, cf. limites de pagination Blockscout) à MAINTENANT. Un wallet
-    inactif depuis un moment reste "âgé" (l'ancienneté mesure depuis combien de
-    temps il existe/trade, pas depuis combien de temps il est actif)."""
+    """Wallet age -- from the FIRST observed transfer (within the fetched
+    window, cf. Blockscout pagination limits) to NOW. A wallet inactive for
+    a while remains "old" (age measures how long it has existed/traded, not
+    how long it has been active)."""
     timestamps = [ts for t in all_flat_transfers if (ts := _parse_timestamp(t.timestamp)) is not None]
     if not timestamps:
         return None
@@ -1203,15 +1198,15 @@ def _wallet_age_days(all_flat_transfers: list[TokenTransfer]) -> float | None:
 
 
 def _count_total_swaps(all_flat_transfers: list[TokenTransfer], wallet: str) -> int:
-    """Nombre total de transferts touchant le wallet (achat OU vente) dans la
-    fenêtre récupérée -- mesure d'activité brute, distincte du nombre de
-    trades CLÔTURÉS (qui exige un achat ET une vente appariés en FIFO).
+    """Total number of transfers touching the wallet (buy OR sell) within
+    the fetched window -- a raw activity measure, distinct from the number
+    of CLOSED trades (which requires a buy AND a sell matched in FIFO).
 
-    Exclut les jambes de wrap/unwrap ETH<->WETH (15/07, revue Gemini, cf.
-    `_is_wrap_unwrap_leg`) et les swaps stable<->stable (15/07, revue Gemini
-    suite, cf. `_is_stable_to_stable_peg_swap`) -- sinon un script de
-    wrapping/peg-swapping répété débloquerait WEIGHTS.min_total_swaps sans
-    jamais avoir pris de risque de trading réel."""
+    Excludes ETH<->WETH wrap/unwrap legs (15/07, Gemini review, cf.
+    `_is_wrap_unwrap_leg`) and stable<->stable swaps (15/07, Gemini review
+    follow-up, cf. `_is_stable_to_stable_peg_swap`) -- otherwise a repeated
+    wrapping/peg-swapping script would unlock WEIGHTS.min_total_swaps
+    without ever having taken on real trading risk."""
     wallet_l = wallet.lower()
     by_tx: dict[str, list[TokenTransfer]] = {}
     touching: list[TokenTransfer] = []
@@ -1227,24 +1222,23 @@ def _count_total_swaps(all_flat_transfers: list[TokenTransfer], wallet: str) -> 
 
 
 def _robust_pnl_check(closed_trades: list[ClosedTrade], *, trim_pct: float, min_required: int) -> bool | None:
-    """Robustesse anti-chance (15/07, décision opérateur ; corrigé le même jour
-    après revue externe croisée Gemini/ChatGPT/Grok) : retire un POURCENTAGE
-    (``trim_pct`` de chaque extrémité, pas un compte fixe) des trades les
-    MEILLEURS et les PIRES par PnL, puis vérifie si le PnL restant reste
-    positif. Un compte fixe se dilue à mesure que l'échantillon grossit (10
-    trades sur 30 = 33% retiré, mais seulement 0.05% sur 20 000 trades) -- un
-    pourcentage scale avec N et empêche de noyer un unique trade "chanceux"
-    derrière assez de micro-trades insignifiants pour le faire sortir du
-    top-N absolu retiré. Ne s'applique QUE si le wallet a au moins
-    ``min_required`` trades clôturés (sinon le retrait viderait ou
-    déséquilibrerait un échantillon déjà petit) -- ``None`` explicite plutôt
-    qu'un chiffre sur un reste non significatif."""
+    """Anti-luck robustness (15/07, operator decision; fixed the same day
+    after cross external review Gemini/ChatGPT/Grok): removes a PERCENTAGE
+    (``trim_pct`` from each end, not a fixed count) of the BEST and WORST
+    trades by PnL, then checks whether the remaining PnL stays positive. A
+    fixed count dilutes as the sample grows (10 trades out of 30 = 33%
+    removed, but only 0.05% on 20,000 trades) -- a percentage scales with N
+    and prevents drowning a single "lucky" trade behind enough insignificant
+    micro-trades to push it out of the absolute top-N removed. Only applies
+    if the wallet has at least ``min_required`` closed trades (otherwise the
+    removal would empty or unbalance an already-small sample) -- an explicit
+    ``None`` rather than a number on a non-significant remainder."""
     if len(closed_trades) < min_required:
         return None
     ordered = sorted(closed_trades, key=lambda t: t.pnl_usd)
     trim_count = max(1, round(len(ordered) * trim_pct)) if trim_pct > 0 else 0
     if trim_count * 2 >= len(ordered):
-        return None  # le retrait viderait ou inverserait l'échantillon -- jamais un résultat dessus
+        return None  # removal would empty or invert the sample -- never return a result on that
     trimmed = ordered[trim_count:-trim_count] if trim_count > 0 else ordered
     if not trimmed:
         return None
@@ -1254,12 +1248,16 @@ def _robust_pnl_check(closed_trades: list[ClosedTrade], *, trim_pct: float, min_
 def _health_trend(
     closed_trades: list[ClosedTrade], *, min_required: int, stable_band_pct: float,
 ) -> str | None:
-    """Courbe de santé dans le temps (15/07) : compare le PnL moyen par trade
-    de la seconde moitié CHRONOLOGIQUE (triée par date de vente) à la
-    première -- "amélioration" (nettement meilleure), "dégradation" (nettement
-    pire), ou "stable" (écart sous ``stable_band_pct`` -- pas un bruit
-    présenté comme un signal). ``None`` sous ``min_required`` trades (signal
-    jugé trop bruité sur un petit échantillon, même doctrine que Sortino)."""
+    """Health curve over time (15/07): compares the average PnL per trade of
+    the CHRONOLOGICALLY second half (sorted by sell date) to the first --
+    "amélioration" [improvement] (clearly better), "dégradation"
+    [degradation] (clearly worse), or "stable" (gap below
+    ``stable_band_pct`` -- never presenting noise as a signal). ``None``
+    below ``min_required`` trades (signal judged too noisy on a small
+    sample, same doctrine as Sortino). NOTE: the three return values below
+    stay in French verbatim -- they are compared with ``==`` by
+    `test_smart_money_wallet_scoring.py` and displayed as-is in Telegram/LLM
+    output."""
     if len(closed_trades) < min_required:
         return None
     ordered = sorted(closed_trades, key=lambda t: t.sell_ts)
@@ -1281,15 +1279,16 @@ def _health_trend(
 def _recent_window_metrics(
     closed_trades: list[ClosedTrade], *, window_days: int,
 ) -> tuple[float | None, float | None, int]:
-    """Biais temporel (15/07, revue ChatGPT) : un wallet excellent 3 ans puis
-    dégradé depuis 6 mois garde un win_rate/Sortino/PnL historiques excellents
-    très longtemps -- la courbe de santé (`_health_trend`) aide (2e moitié vs
-    1ère) mais ne corrige PAS le score principal, qui reste calculé sur tout
-    l'historique. Calcule win_rate/PnL réalisé sur les SEULS trades clôturés
-    (vente) dans les ``window_days`` derniers jours -- en COMPLÉMENT, jamais en
-    remplacement des métriques historiques complètes (mêmes cumulative_trades,
-    juste un sous-ensemble récent). Renvoie ``(None, None, 0)`` si aucun trade
-    clôturé dans la fenêtre -- jamais un chiffre sur un vide."""
+    """Time bias (15/07, ChatGPT review): a wallet excellent for 3 years then
+    degraded for the last 6 months keeps excellent historical
+    win_rate/Sortino/PnL for a very long time -- the health curve
+    (`_health_trend`) helps (2nd half vs. 1st) but does NOT fix the main
+    score, which is still computed on the entire history. Computes
+    win_rate/realized PnL on ONLY the trades closed (sold) in the last
+    ``window_days`` days -- as a COMPLEMENT, never a replacement for the
+    full historical metrics (same cumulative_trades, just a recent subset).
+    Returns ``(None, None, 0)`` if no trade closed within the window --
+    never a number on an empty set."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     recent = [t for t in closed_trades if t.sell_ts >= cutoff]
     if not recent:
@@ -1299,11 +1298,11 @@ def _recent_window_metrics(
 
 
 def _group_transfers_by_token(transfers: list[TokenTransfer], *, chain: str = "base") -> dict[str, list[TokenTransfer]]:
-    """Clé composite ``"{chain}:{adresse}"`` (#157 multi-chaînes, 14/07) --
-    jamais l'adresse seule, pour que deux tokens de même adresse hexadécimale
-    sur deux chaînes EVM différentes (espaces d'adresses indépendants) ne
-    soient jamais fusionnés par erreur. Comportement historique inchangé pour
-    tout appelant à une seule chaîne (``chain="base"`` par défaut)."""
+    """Composite key ``"{chain}:{address}"`` (#157 multi-chain, 14/07) --
+    never the address alone, so that two tokens with the same hex address on
+    two different EVM chains (independent address spaces) are never merged
+    by mistake. Historical behavior unchanged for any single-chain caller
+    (``chain="base"`` by default)."""
     grouped: dict[str, list[TokenTransfer]] = {}
     for t in transfers:
         addr = (t.token_address or "").lower()
@@ -1316,26 +1315,28 @@ def _group_transfers_by_token(transfers: list[TokenTransfer], *, chain: str = "b
 def _build_dex_infrastructure_exclusions(
     grouped: dict[str, list[TokenTransfer]], wallet: str,
 ) -> set[str]:
-    """#157, correction 14/07 -- bug réel trouvé en relecture : généraliser
-    `_dominant_counterparty_share` à TOUS les tokens du wallet en n'excluant
-    QU'UN SEUL pool (comme le fait le chemin token-centrique existant) crée un
-    faux positif quasi systématique. Un wallet actif sur `WEIGHTS.max_tokens_analyzed`
-    tokens distincts passe par PLUSIEURS pools/routeurs DEX différents (Base a
-    plusieurs DEX actifs -- Uniswap V3, Aerodrome, etc.) ; si le calcul généralisé
-    n'exclut qu'une seule adresse, un routeur/pool revenant souvent comme
-    contrepartie disqualifierait à tort la plupart des traders actifs normaux.
+    """#157, fix 14/07 -- real bug found on review: generalizing
+    `_dominant_counterparty_share` to ALL of the wallet's tokens while
+    excluding only a SINGLE pool (as the existing token-centric path does)
+    creates an almost systematic false positive. A wallet active on
+    `WEIGHTS.max_tokens_analyzed` distinct tokens goes through SEVERAL
+    different DEX pools/routers (Base has several active DEXes -- Uniswap
+    V3, Aerodrome, etc.); if the generalized calculation only excludes a
+    single address, a router/pool that frequently comes back as a
+    counterparty would wrongly disqualify most normal active traders.
 
-    Heuristique retenue, volontairement générale (ne nécessite AUCUNE adresse de
-    routeur/pool codée en dur, donc s'adapte automatiquement à n'importe quelle
-    infra DEX présente ou future sur Base) : une contrepartie qui revient sur au
-    moins `WEIGHTS.wash_trading_infra_min_distinct_tokens` tokens DISTINCTS est
-    structurellement une brique d'infrastructure (pool ou routeur -- les deux
-    sont mécaniquement partagés entre de nombreuses paires par construction),
-    PAS un partenaire de wash-trading (typiquement lié à UN seul token/schéma
-    coordonné). Complète (ne remplace pas) l'exclusion du pool résolu par token
-    -- cf. `_analyze_wallet_multi_token` / `resolve_primary_pool`, qui couvre en
-    plus le cas d'un wallet dont l'historique ne porte encore que sur un seul
-    token (pas assez de récurrence pour que cette heuristique déclenche seule).
+    Heuristic chosen, deliberately general (requires NO hardcoded
+    router/pool address, so it automatically adapts to any DEX
+    infrastructure present or future on Base): a counterparty that recurs
+    across at least `WEIGHTS.wash_trading_infra_min_distinct_tokens`
+    DISTINCT tokens is structurally an infrastructure building block (pool
+    or router -- both are mechanically shared across many pairs by
+    construction), NOT a wash-trading partner (typically tied to a SINGLE
+    token/coordinated scheme). Complements (does not replace) the
+    per-token resolved-pool exclusion -- cf. `_analyze_wallet_multi_token` /
+    `resolve_primary_pool`, which additionally covers the case of a wallet
+    whose history still only covers a single token (not enough recurrence
+    for this heuristic to trigger on its own).
     """
     wallet_l = wallet.lower()
     tokens_per_counterparty: dict[str, set[str]] = {}
@@ -1359,26 +1360,24 @@ _EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
 def _select_tokens_for_deep_analysis(
     grouped: dict[str, list[TokenTransfer]], *, wallet: str = "", cap: int = WEIGHTS.max_tokens_analyzed,
 ) -> tuple[list[str], int, int]:
-    """Trie par (round-trip achat+vente présent, récence du dernier transfert,
-    nombre de trades) décroissant -- plafonne à ``cap`` tokens analysés en
-    profondeur (décision opérateur, #157). Renvoie (adresses sélectionnées, nb
-    total de tokens distincts trouvés, nb ignorés par le plafond) -- l'appelant
-    DOIT logger explicitement si le 3e élément est > 0, jamais une troncature
-    silencieuse.
+    """Sorts by (buy+sell round-trip present, recency of last transfer,
+    trade count) descending -- caps at ``cap`` tokens analyzed in depth
+    (operator decision, #157). Returns (selected addresses, total number of
+    distinct tokens found, number skipped by the cap) -- the caller MUST
+    explicitly log if the 3rd element is > 0, never a silent truncation.
 
-    ``wallet`` (15/07, correctif réel) : la priorité "récence seule" biaisait
-    systématiquement l'échantillon vers des positions ENCORE OUVERTES chez les
-    wallets très actifs (le token le plus récent est, par construction, plus
-    souvent un achat pas encore revendu) -- un round-trip achat+vente ne peut
-    JAMAIS se former sur une position ouverte, donc le plafond de `cap` tokens
-    se remplissait parfois entièrement de positions non clôturables, laissant
-    win rate/PnL/Sortino "indisponible" même sur un wallet très actif avec de
-    vrais trades clôturés ailleurs dans son historique. Les tokens avec un
-    round-trip confirmé (au moins un transfert entrant ET sortant) passent
-    désormais en premier ; la récence/fréquence ne départage plus qu'en cas
-    d'égalité, dans chaque groupe. ``wallet=""`` (défaut) préserve le
-    comportement historique (aucun round-trip jamais détecté, tri par récence
-    pure) -- rétrocompatible pour tout appelant qui ne connaît pas le wallet.
+    ``wallet`` (15/07, real fix): "recency alone" priority systematically
+    biased the sample toward STILL-OPEN positions on very active wallets
+    (the most recent token is, by construction, more often a buy not yet
+    resold) -- a buy+sell round-trip can NEVER form on an open position, so
+    the `cap` token limit sometimes filled up entirely with unclosable
+    positions, leaving win rate/PnL/Sortino "unavailable" even on a very
+    active wallet with real closed trades elsewhere in its history. Tokens
+    with a confirmed round-trip (at least one incoming AND one outgoing
+    transfer) now come first; recency/frequency only breaks ties within
+    each group. ``wallet=""`` (default) preserves historical behavior (no
+    round-trip ever detected, pure recency sort) -- backward-compatible for
+    any caller that doesn't know the wallet.
     """
     wallet_l = wallet.lower()
 
@@ -1403,10 +1402,10 @@ def _select_tokens_for_deep_analysis(
 
 
 def _is_informed_entry(ohlcv, entry_ts: datetime) -> bool:
-    """Qualifie une entrée précoce d'"informée" (volume faible + figure chartiste
-    juste avant l'achat) vs "rapide/FOMO" (aucun signal technique particulier) --
-    raffinement demandé par l'opérateur, réutilise `ta_levels`/`candlestick_patterns`
-    tels quels, aucune nouvelle heuristique de détection."""
+    """Qualifies an early entry as "informed" (low volume + chart pattern
+    just before the buy) vs "quick/FOMO" (no particular technical signal) --
+    a refinement requested by the operator, reuses `ta_levels`/
+    `candlestick_patterns` as-is, no new detection heuristic."""
     from aria_core.skills import candlestick_patterns
 
     entry_epoch = int(entry_ts.timestamp())
@@ -1433,18 +1432,19 @@ class _MultiTokenResult:
     gecko_dexscreener_gap_tokens: list[str] = field(default_factory=list)
     cmc_recovered_tokens: list[str] = field(default_factory=list)
     resolved_pool_addresses: set[str] = field(default_factory=set)
-    thin_liquidity_tokens: list[str] = field(default_factory=list)  # 15/07, revue Gemini -- défense anti-dust/scam-pool
-    unmatched_sell_events: int = 0  # 15/07, revue Gemini -- transparence rebasing, cf. `_TokenFIFOResult`
-    # Gel des erreurs transitoires (15/07, revue Gemini -- angle mort couche 2/3) :
-    # clé composite ("{chaîne}:{adresse}") des tokens dont la résolution de pool
-    # GeckoTerminal a échoué ce passage pour une cause D'INFRASTRUCTURE (timeout/
-    # 429/erreur serveur -- déjà retentée plusieurs fois par `_get_json` avant
-    # d'abandonner) plutôt qu'un verdict de DONNÉE ("aucun pool trouvé pour ce
-    # token", légitime). Utilisé par `score_wallets` pour ne JAMAIS marquer un tel
-    # token comme définitivement "scanné" dans le checkpoint incrémental -- sinon
-    # une simple coupure réseau ponctuelle se fige en cicatrice permanente sur le
-    # score du wallet (le scan incrémental ne re-tente un token déjà vu QUE si son
-    # activité on-chain a changé, jamais sur une simple résolution d'erreur API).
+    thin_liquidity_tokens: list[str] = field(default_factory=list)  # 15/07, Gemini review -- anti-dust/scam-pool defense
+    unmatched_sell_events: int = 0  # 15/07, Gemini review -- rebasing transparency, cf. `_TokenFIFOResult`
+    # Freezing of transient errors (15/07, Gemini review -- layer 2/3 blind
+    # spot): composite key ("{chain}:{address}") of tokens whose GeckoTerminal
+    # pool resolution failed this pass for an INFRASTRUCTURE cause
+    # (timeout/429/server error -- already retried several times by
+    # `_get_json` before giving up) rather than a DATA verdict ("no pool
+    # found for this token", legitimate). Used by `score_wallets` to NEVER
+    # mark such a token as definitively "scanned" in the incremental
+    # checkpoint -- otherwise a one-off network outage freezes into a
+    # permanent scar on the wallet's score (the incremental scan only
+    # retries a token already seen if its on-chain activity has changed,
+    # never on the simple resolution of an API error).
     transient_pricing_error_tokens: set[str] = field(default_factory=set)
 
 
@@ -1456,32 +1456,35 @@ async def _hash_based_price(
     *,
     chain: str,
 ) -> float | None:
-    """Prix USD d'une jambe déduit du ratio réellement exécuté dans SA
-    transaction (14/07, complément de ``resolve_primary_pool``+``get_ohlcv``+
-    ``price_at``) -- vérité d'exécution, pas une approximation par bougie à un
-    timestamp arrondi. Méthode : ratio entre le montant du token ciblé et un
-    montant stablecoin, l'un et l'autre sur une jambe de la MÊME transaction
-    qui touche directement ``wallet`` (``from``/``to``) -- pas un décodage du
-    log ``Swap`` brut (cf. rapport [VPS Secondaire] 14/07 : la preuve de
-    faisabilité de Task A utilisait déjà ce ratio de transferts, pas les
-    montants bruts du log).
+    """USD price of a leg deduced from the ratio actually executed within ITS
+    OWN transaction (14/07, complement to ``resolve_primary_pool``+
+    ``get_ohlcv``+``price_at``) -- execution truth, not a candle
+    approximation at a rounded timestamp. Method: ratio between the amount
+    of the targeted token and a stablecoin amount, both on a leg of the SAME
+    transaction that directly touches ``wallet`` (``from``/``to``) -- not a
+    decoding of the raw ``Swap`` log (cf. [VPS Secondaire] report 14/07: the
+    Task A feasibility proof already used this transfer ratio, not the raw
+    log amounts).
 
-    Repli sur ``None`` (jamais une exception) dans tous les cas où le prix ne
-    peut pas être établi SANS deviner :
-    - chaîne sans registre stablecoin connu (cf. ``_STABLECOIN_ADDRESSES_BY_CHAIN``,
-      Base uniquement pour ce chantier) ou client Blockscout absent ;
-    - transaction indisponible (timeout/429/erreur -- déjà géré par ``_get_json``) ;
-    - aucune jambe du token ciblé touchant le wallet dans cette tx (swap routé
-      via un agrégateur/smart-account qui redirige la sortie ailleurs -- pattern
-      réel constaté le 14/07 sur un wallet de test, PAS un cas rare marginal) ;
-    - aucune jambe stablecoin touchant le wallet dans cette tx (swap token<->token
-      non-stable, ou sortie multi-hop non-stable) -- repli attendu pour la
-      majorité des jambes, pas un cas d'erreur ;
-    - PLUSIEURS jambes du token ciblé OU plusieurs jambes stablecoin touchant
-      le wallet dans la même tx (tx composite/batch ambiguë) -- jamais un choix
-      arbitraire (même doctrine que ``_fifo_match`` : jamais valorisé à zéro ni
-      deviné) ;
-    - montant token nul/négatif (garde de division).
+    Falls back to ``None`` (never an exception) in every case where the
+    price cannot be established WITHOUT guessing:
+    - chain with no known stablecoin registry (cf.
+      ``_STABLECOIN_ADDRESSES_BY_CHAIN``, Base only for this project) or no
+      Blockscout client;
+    - transaction unavailable (timeout/429/error -- already handled by
+      ``_get_json``);
+    - no leg of the targeted token touching the wallet in this tx (swap
+      routed via an aggregator/smart-account that redirects the output
+      elsewhere -- a real pattern observed 14/07 on a test wallet, NOT a
+      rare marginal case);
+    - no stablecoin leg touching the wallet in this tx (non-stable
+      token<->token swap, or non-stable multi-hop output) -- an expected
+      fallback for the majority of legs, not an error case;
+    - SEVERAL legs of the targeted token OR several stablecoin legs touching
+      the wallet in the same tx (ambiguous composite/batch tx) -- never an
+      arbitrary choice (same doctrine as ``_fifo_match``: never valued at
+      zero nor guessed);
+    - zero/negative token amount (division guard).
     """
     stables = _STABLECOIN_ADDRESSES_BY_CHAIN.get(chain)
     if not stables or client is None or not tx_hash:
@@ -1503,11 +1506,11 @@ async def _hash_based_price(
         addr = (t.token_address or "").lower()
         if addr == token_l:
             if token_amount is not None:
-                return None  # jambe token ambiguë -- jamais deviner laquelle
+                return None  # ambiguous token leg -- never guess which one
             token_amount = t.amount
         elif addr in stables:
             if stable_amount is not None:
-                return None  # jambe stable ambiguë -- jamais deviner laquelle
+                return None  # ambiguous stable leg -- never guess which one
             stable_amount = t.amount
 
     if not token_amount or token_amount <= 0 or not stable_amount:
@@ -1522,16 +1525,16 @@ async def _analyze_wallet_multi_token(
     gecko,
     chain_clients: dict[str, BlockscoutClient] | None = None,
 ) -> _MultiTokenResult:
-    """``transfers_by_token`` est keyé par une clé composite ``"{chaîne}:{adresse}"``
-    (cf. ``_group_transfers_by_token``, #157 multi-chaînes 14/07) -- jamais
-    l'adresse token seule, pour ne jamais fusionner par erreur deux tokens
-    d'adresses identiques sur deux chaînes différentes (espaces d'adresses
-    indépendants par construction EVM). ``chain_clients`` (14/07, prix par
-    tx_hash exact) : registre chaîne -> client Blockscout, utilisé pour
-    interroger le bon client lors du lookup ``_hash_based_price`` par token
-    (déjà connu par chaîne via la clé composite) ; ``None``/registre incomplet
-    pour une chaîne dégrade proprement vers pool+OHLCV pour tous ses tokens
-    (même politique que l'absence de client dans ``_hash_based_price``)."""
+    """``transfers_by_token`` is keyed by a composite key
+    ``"{chain}:{address}"`` (cf. ``_group_transfers_by_token``, #157
+    multi-chain 14/07) -- never the token address alone, so as to never
+    mistakenly merge two tokens with identical addresses on two different
+    chains (address spaces independent by EVM construction). ``chain_clients``
+    (14/07, exact tx_hash pricing): chain -> Blockscout client registry, used
+    to query the right client during the per-token ``_hash_based_price``
+    lookup (already known per chain via the composite key); ``None``/an
+    incomplete registry for a chain degrades cleanly to pool+OHLCV for all
+    its tokens (same policy as no client in ``_hash_based_price``)."""
     from aria_core.services.coinmarketcap import CMC_NETWORK_SLUGS
     from aria_core.services.coinmarketcap import get_ohlcv as _cmc_get_ohlcv
     from aria_core.services.coinmarketcap import resolve_primary_pool as _cmc_resolve_primary_pool
@@ -1560,57 +1563,58 @@ async def _analyze_wallet_multi_token(
         if not buys:
             continue
 
-        # Résout le VRAI pool du token (pas le contrat token lui-même -- deux
-        # choses différentes en AMM, cf. `resolve_primary_pool`). Sert à la fois
-        # la valorisation OHLCV et l'exclusion wash-trading multi-token (#157,
-        # correction 14/07). ``network`` (#157 multi-chaînes, 14/07) : interroge
-        # la BONNE chaîne GeckoTerminal, jamais Base en dur pour un token trouvé
-        # sur Ethereum/BNB.
+        # Resolves the token's REAL pool (not the token contract itself --
+        # two different things in an AMM, cf. `resolve_primary_pool`). Serves
+        # both OHLCV valuation and multi-token wash-trading exclusion (#157,
+        # fix 14/07). ``network`` (#157 multi-chain, 14/07): queries the
+        # RIGHT GeckoTerminal chain, never Base hardcoded for a token found
+        # on Ethereum/BNB.
         pool_meta = await gecko.resolve_primary_pool(token_addr, network=network)
-        # Défense anti-dust/scam-pool (15/07, revue Gemini) : un pool résolu
-        # mais dont la liquidité CONFIRMÉE est sous le plancher n'est pas assez
-        # fiable pour valoriser un PnL réel (pool trivialement manipulable --
-        # ex. token de dust envoyé par un scammeur avec une "liquidité"
-        # artificielle sur un pool minuscule). ``reserve_usd is None`` reste
-        # fail-open -- POINT VÉRIFIÉ EXPLICITEMENT (15/07, revue Gemini suite,
-        # objection "et si la liquidité est *inconnue* juste après le
-        # déploiement d'un scam, avant l'indexation ?") : `GeckoTerminalClient.
-        # resolve_primary_pool` (vrai client, cf. geckoterminal.py) ne renvoie
-        # JAMAIS `None` pour une réserve manquante -- `reserve_in_usd` absent
-        # de la réponse API retombe sur `0.0` (`float(attrs.get(...) or 0.0)`),
-        # qui échoue DÉJÀ le plancher. Le cas `None` n'est donc atteignable
-        # QUE par un double de test/une interface alternative qui ne
-        # renseigne pas ce champ -- jamais par le vrai chemin de production.
-        # Le fail-open reste un filet de sécurité d'INTERFACE (rétrocompat
-        # tests existants), pas une faille de sécurité active. Verrouillé par
-        # `test_missing_reserve_data_defaults_to_zero_not_none` (geckoterminal).
+        # Anti-dust/scam-pool defense (15/07, Gemini review): a resolved pool
+        # whose CONFIRMED liquidity is under the floor isn't reliable enough
+        # to value a real PnL (trivially manipulable pool -- e.g. a dust
+        # token sent by a scammer with "artificial" liquidity on a tiny
+        # pool). ``reserve_usd is None`` remains fail-open -- EXPLICITLY
+        # VERIFIED POINT (15/07, Gemini review follow-up, objection "what if
+        # liquidity is *unknown* right after a scam is deployed, before
+        # indexing?"): `GeckoTerminalClient.resolve_primary_pool` (the real
+        # client, cf. geckoterminal.py) NEVER returns `None` for a missing
+        # reserve -- a `reserve_in_usd` absent from the API response falls
+        # back to `0.0` (`float(attrs.get(...) or 0.0)`), which ALREADY
+        # fails the floor. The `None` case is therefore only reachable by a
+        # test double/an alternative interface that doesn't populate this
+        # field -- never by the real production path. The fail-open remains
+        # an INTERFACE safety net (backward compat for existing tests), not
+        # an active security hole. Locked by
+        # `test_missing_reserve_data_defaults_to_zero_not_none`
+        # (geckoterminal).
         pool_liquid_enough = pool_meta.available and (
             pool_meta.reserve_usd is None or pool_meta.reserve_usd >= WEIGHTS.min_pool_liquidity_usd_for_pricing
         )
         if pool_meta.available:
-            # Adresse de pool NUE (jamais préfixée par la chaîne) : comparée
-            # telle quelle à des adresses de contrepartie brutes dans
-            # `_hard_disqualifiers`/`_dominant_counterparty_share` -- une
-            # collision fortuite entre chaînes (espaces d'adresses EVM
-            # indépendants, ~2^160) est négligeable, pas un vrai risque.
-            # Ajouté même si trop peu liquide pour la valorisation -- reste une
-            # vraie brique d'infra DEX pour l'exclusion wash-trading.
+            # BARE pool address (never prefixed by chain): compared as-is to
+            # raw counterparty addresses in
+            # `_hard_disqualifiers`/`_dominant_counterparty_share` -- an
+            # accidental collision between chains (independent EVM address
+            # spaces, ~2^160) is negligible, not a real risk. Added even if
+            # too illiquid for valuation -- still a real DEX infra building
+            # block for wash-trading exclusion.
             result.resolved_pool_addresses.add(pool_meta.pool_address.lower())
-            # Paradoxe "immunité aux rug pulls" (15/07, revue Gemini -- BUG réel
-            # confirmé dans le correctif #160) : la liquidité CONFIRMÉE ci-dessus
-            # est un instantané pris AU MOMENT DU SCAN, pas historique. Un token
-            # acheté quand le pool avait 100k$ puis victime d'un rug pull (pool
-            # effondré à 1k$ au moment du scan) verrait sa VENTE bloquée par le
-            # même plancher que celui pensé pour bloquer le dust à l'ACHAT --
-            # la perte réelle du rug pull disparaîtrait alors des statistiques
-            # au lieu d'être comptabilisée (l'inverse exact de l'objectif anti-
-            # dust). L'OHLCV est donc TOUJOURS récupéré dès que le pool est
-            # résolu ; seul `pool_liquid_enough` gate désormais la confiance
-            # côté ACHAT dans `_price_lookup` ci-dessous (jamais la vente) --
-            # une vente n'est jamais exploitable pour fabriquer un gain (elle ne
-            # fait que révéler un prix réel, éventuellement mauvais), donc rien
-            # à protéger de ce côté.
-            # min_useful_candles=1 (#182, 15/07, correctif de vitesse) : le
+            # "Rug-pull immunity" paradox (15/07, Gemini review -- real BUG
+            # confirmed in fix #160): the CONFIRMED liquidity above is a
+            # snapshot taken AT SCAN TIME, not historical. A token bought
+            # when the pool had $100k then victim of a rug pull (pool
+            # collapsed to $1k at scan time) would have its SELL blocked by
+            # the same floor designed to block dust at the BUY -- the real
+            # rug-pull loss would then disappear from the statistics instead
+            # of being accounted for (the exact opposite of the anti-dust
+            # goal). OHLCV is therefore ALWAYS fetched as soon as the pool is
+            # resolved; only `pool_liquid_enough` now gates confidence on the
+            # BUY side in `_price_lookup` below (never the sell) -- a sell
+            # can never be exploited to fabricate a gain (it only reveals a
+            # real price, possibly a bad one), so there's nothing to protect
+            # on that side.
+            # min_useful_candles=1 (#182, 15/07, speed fix): the
             # wallet-scoring ne consomme jamais qu'une seule bougie par
             # `price_at` (la plus proche d'un timestamp donné) -- le seuil par
             # défaut de 20 bougies (pensé pour /vc, qui a besoin d'assez de

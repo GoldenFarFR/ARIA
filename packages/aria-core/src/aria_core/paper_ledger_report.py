@@ -1,11 +1,11 @@
-"""Registre du paper-trading 1 M$ — dissection thèse d'entrée/sortie + score de winrate.
+"""$1M paper-trading ledger — entry/exit thesis breakdown + winrate score.
 
-Lecture pure : réutilise `paper_trader.get_open_positions()`/`get_closed_positions()`/
-`portfolio_summary()` tels quels (aucune requête SQL dupliquée, même patron que
-`dossier.py` et la route `/diagnostics/paper-ledger`). Importé par `scripts/
-paper_ledger_report.py` (CLI/VPS) ET par `gateway/telegram_bot.py` (commande `/ledger`,
-17/07) -- un seul endroit qui sait dissequer une position, jamais deux versions qui
-divergent.
+Pure read: reuses `paper_trader.get_open_positions()`/`get_closed_positions()`/
+`portfolio_summary()` as-is (no duplicated SQL query, same pattern as `dossier.py`
+and the `/diagnostics/paper-ledger` route). Imported by `scripts/
+paper_ledger_report.py` (CLI/VPS) AND by `gateway/telegram_bot.py` (`/ledger`
+command, 17/07) -- a single place that knows how to break down a position, never
+two versions that diverge.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def _fmt_money(v) -> str:
 
 
 def _rr_ratio(entry, target, invalidation) -> str:
-    """Ratio risque/récompense visé à l'entrée : (cible-entrée)/(entrée-invalidation)."""
+    """Risk/reward ratio targeted at entry: (target-entry)/(entry-invalidation)."""
     if not all(isinstance(v, (int, float)) for v in (entry, target, invalidation)):
         return "?"
     risk = entry - invalidation
@@ -96,8 +96,8 @@ def _render_closed(p: dict) -> str:
 
 
 async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
-    """Renvoie (texte lisible, dict JSON-able). ``closed_limit`` borne le nombre de
-    positions clôturées incluses (le plus récent d'abord, cf. get_closed_positions)."""
+    """Returns (readable text, JSON-able dict). ``closed_limit`` caps the number of
+    closed positions included (most recent first, see get_closed_positions)."""
     starting = await paper_trader.starting_capital()
     opens = await paper_trader.get_open_positions()
     closed = await paper_trader.get_closed_positions(limit=closed_limit)
@@ -152,11 +152,11 @@ async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
     return text, machine
 
 
-# 20/07 -- #176, volet apprentissage (question opérateur : "et concernant
-# l'apprentissage ?"). L'ordre d'affichage suit l'échelle ordinale du Regime Switch
-# (Peur < Neutre < Euphorie, market_sentiment.py) -- volontairement PAS un import
-# croisé vers ce module (même doctrine d'autonomie que risk_guard.py), juste une
-# liste de labels connus dans le bon ordre.
+# 20/07 -- #176, learning angle (operator question: "and what about
+# learning?"). Display order follows the Regime Switch ordinal scale
+# (Fear < Neutral < Euphoria, market_sentiment.py) -- deliberately NOT a
+# cross-import into this module (same autonomy doctrine as risk_guard.py),
+# just a list of known labels in the right order.
 _REGIME_DISPLAY_ORDER = ("peur", "neutre", "euphorie")
 _REGIME_LABELS = {"peur": "Peur", "neutre": "Neutre", "euphorie": "Euphorie"}
 _PRE_REGIME_KEY = "pré-régime"
@@ -177,21 +177,21 @@ def _regime_bucket_stats(positions: list[dict]) -> dict:
 
 
 async def build_regime_report(closed_limit: int = 500) -> tuple[str, dict]:
-    """Win-rate/PnL des trades clôturés, segmenté par régime macro-crypto À L'ENTRÉE
-    (Peur/Neutre/Euphorie, ``market_sentiment.resolve_meta_regime`` -- #172, 20/07).
-    La donnée (``entry_regime``) est déjà persistée sur chaque position depuis #172,
-    jamais agrégée dans un rapport avant ce chantier (#176) -- pur calcul de lecture,
-    aucune nouvelle colonne, aucun nouvel appel réseau.
+    """Win-rate/PnL of closed trades, segmented by macro-crypto regime AT ENTRY
+    (Fear/Neutral/Euphoria, ``market_sentiment.resolve_meta_regime`` -- #172, 20/07).
+    The data (``entry_regime``) has already been persisted on every position since
+    #172, never aggregated into a report before this work (#176) -- pure read
+    computation, no new column, no new network call.
 
-    But : objectiver si un régime macro donné dégrade réellement la performance
-    d'ARIA (auquel cas les seuils déjà durcis en régime Peur -- #172 -- sont
-    justifiés) ou si la segmentation ne montre aucun écart significatif (auquel cas
-    ne pas sur-interpréter un signal qui n'existe pas).
+    Goal: objectively check whether a given macro regime actually degrades ARIA's
+    performance (in which case the thresholds already tightened in the Fear regime
+    -- #172 -- are justified) or whether the segmentation shows no significant gap
+    (in which case don't over-interpret a signal that doesn't exist).
 
-    Positions ouvertes AVANT #172 n'ont pas de ``entry_regime`` (``None`` en base) --
-    regroupées sous ``"pré-régime"``, JAMAIS mélangées aux 3 régimes réels ni
-    silencieusement ignorées (un trade sans régime connu reste un trade réel, compté
-    quelque part)."""
+    Positions opened BEFORE #172 have no ``entry_regime`` (``None`` in the
+    database) -- grouped under ``"pré-régime"``, NEVER mixed with the 3 real
+    regimes nor silently ignored (a trade with no known regime is still a real
+    trade, counted somewhere)."""
     closed = await paper_trader.get_closed_positions(limit=closed_limit)
 
     buckets: dict[str, list[dict]] = {}
@@ -202,7 +202,7 @@ async def build_regime_report(closed_limit: int = 500) -> tuple[str, dict]:
     ordered_keys = [r for r in _REGIME_DISPLAY_ORDER if r in buckets]
     if _PRE_REGIME_KEY in buckets:
         ordered_keys.append(_PRE_REGIME_KEY)
-    ordered_keys += [r for r in buckets if r not in ordered_keys]  # régime inconnu futur, jamais perdu
+    ordered_keys += [r for r in buckets if r not in ordered_keys]  # future unknown regime, never lost
 
     now = datetime.now(timezone.utc).isoformat()
     lines = [f"=== Performance par régime macro (Peur/Neutre/Euphorie) — {now} ===", ""]
@@ -232,17 +232,17 @@ async def build_regime_report(closed_limit: int = 500) -> tuple[str, dict]:
 
 
 async def build_positions_detail_block(*, closed_limit: int = 5) -> str:
-    """Bloc « détail des positions » seul (ouvertes + N dernières clôturées, avec
-    URL DexScreener/thèse/R:R) -- SANS le header agrégé (départ/équité/winrate) de
-    ``build_report``, pour un appelant qui calcule déjà ses propres chiffres agrégés
-    ailleurs et veut juste ajouter le détail sans le dupliquer.
+    """"Position detail" block alone (open + N latest closed, with DexScreener
+    URL/thesis/R:R) -- WITHOUT the aggregated header (starting/equity/winrate) from
+    ``build_report``, for a caller that already computes its own aggregated numbers
+    elsewhere and just wants to add the detail without duplicating it.
 
-    19/07, demande opérateur explicite : ``/feedback`` ne montrait qu'un bilan agrégé
-    (départ/PnL/résultat), jamais le détail par position -- l'opérateur veut voir
-    « toutes les positions en cours, l'URL et tout aussi » directement sous cette
-    commande, pas seulement sous ``/ledger``. Réutilise ``_render_open``/
-    ``_render_closed`` tels quels (même rendu que ``/ledger``, jamais un 2e format qui
-    pourrait diverger)."""
+    19/07, explicit operator request: ``/feedback`` only showed an aggregated
+    summary (starting/PnL/result), never the per-position detail -- the operator
+    wants to see "all current positions, the URL and everything too" directly
+    under this command, not only under ``/ledger``. Reuses ``_render_open``/
+    ``_render_closed`` as-is (same rendering as ``/ledger``, never a 2nd format
+    that could diverge)."""
     opens = await paper_trader.get_open_positions()
     closed = await paper_trader.get_closed_positions(limit=closed_limit)
     open_section = [f"--- Positions ouvertes ({len(opens)}) ---"] + (
@@ -255,20 +255,20 @@ async def build_positions_detail_block(*, closed_limit: int = 5) -> str:
 
 
 async def build_trade_status_context() -> str:
-    """Bloc de contexte compact pour injection dans un prompt LLM (``brain.py``,
-    ``_try_trade_status_response``, 17/07) -- réutilise ``build_report`` tel quel
-    (aucune requête dupliquée), borné à 5 positions clôturées pour rester lisible
-    dans un contexte LLM déjà contraint en tokens. Préfixé pour qu'un LLM comprenne
-    immédiatement qu'il s'agit de données RÉELLES, pas d'un exemple à broder.
+    """Compact context block for injection into an LLM prompt (``brain.py``,
+    ``_try_trade_status_response``, 17/07) -- reuses ``build_report`` as-is (no
+    duplicated query), capped at 5 closed positions to stay readable within an
+    LLM context already token-constrained. Prefixed so an LLM immediately
+    understands this is REAL data, not a sample to embellish.
 
-    Sécurité (mandat #192, bug BLOQUANT trouvé en revue croisée 19/07) : la
-    ``thesis``/les ``close_notes`` d'une position peuvent embarquer du texte
-    influencé par un tiers (ex. le processus de diligence de
-    ``conviction_research.py``, qui peut mentionner un site/lien déclaré par le
-    projet). ``brain.py`` splice ``extra_system_context`` BRUT dans le prompt
-    SYSTÈME sans balise ni sanitisation à ce dernier maillon -- c'est donc ICI,
-    au point d'injection, que le contenu doit être neutralisé et délimité,
-    jamais laissé à la charge de l'appelant."""
+    Security (mandate #192, BLOCKING bug found in a 19/07 cross-review): a
+    position's ``thesis``/``close_notes`` can carry text influenced by a third
+    party (e.g. the ``conviction_research.py`` diligence process, which can
+    mention a site/link declared by the project). ``brain.py`` splices
+    ``extra_system_context`` RAW into the SYSTEM prompt with no tagging or
+    sanitization at this last link -- so it's HERE, at the injection point,
+    that the content must be neutralized and delimited, never left to the
+    caller's responsibility."""
     from aria_core.sanitize import sanitize_untrusted_text
 
     text, _machine = await build_report(closed_limit=5)

@@ -1,31 +1,36 @@
-"""Implémentation réelle du ``pay_fn`` attendu par ``x402_executor.fetch_paid_resource`` --
-signe un paiement x402 via le wallet CDP dédié (même wallet que
-``agent_wallet_cdp_adapter.py``, patron identique : import paresseux, aucune clé lue ou
-manipulée ici).
+"""Real implementation of the ``pay_fn`` expected by
+``x402_executor.fetch_paid_resource`` -- signs an x402 payment via the
+dedicated CDP wallet (same wallet as ``agent_wallet_cdp_adapter.py``,
+identical pattern: lazy import, no key read or handled here).
 
-Méthode de signature vérifiée dans la doc/le code source officiels avant d'écrire ce
-module (jamais devinée) -- deux SDK, aucun ne documente de raccourci direct CDP->x402 :
+Signing method verified against the official docs/source code before
+writing this module (never guessed) -- two SDKs, neither documents a direct
+CDP->x402 shortcut:
 
-- ``cdp-sdk`` (package Python officiel Coinbase) expose ``cdp.evm_local_account.
-  EvmLocalAccount`` : un wrapper SYNCHRONE compatible ``eth_account.signers.base.
-  BaseAccount`` autour d'un ``EvmServerAccount`` -- vérifié en lisant son code source
-  (github.com/coinbase/cdp-sdk/blob/main/python/cdp/evm_local_account.py) : sa méthode
-  ``sign_typed_data(domain_data=, message_types=, message_data=)`` a EXACTEMENT la même
-  signature attendue par la classe ``EthAccountSigner`` du SDK x402 officiel.
-- ``x402`` (package Python officiel, x402-foundation/x402) ne fournit AUCUN adaptateur
-  CDP prêt à l'emploi -- seulement ``x402.mechanisms.evm.signers.EthAccountSigner``,
-  conçu pour n'importe quel objet ``eth_account``-compatible. Le module ``cdp.x402``
-  (déjà dans cdp-sdk) est un tout autre outil : c'est un client FACILITATOR (vérifier/
-  régler un paiement REÇU), pas un signeur côté client qui PAIE -- ne pas confondre.
+- ``cdp-sdk`` (Coinbase's official Python package) exposes
+  ``cdp.evm_local_account.EvmLocalAccount``: a SYNCHRONOUS wrapper
+  compatible with ``eth_account.signers.base.BaseAccount`` around an
+  ``EvmServerAccount`` -- verified by reading its source code
+  (github.com/coinbase/cdp-sdk/blob/main/python/cdp/evm_local_account.py):
+  its ``sign_typed_data(domain_data=, message_types=, message_data=)``
+  method has EXACTLY the same signature expected by the official x402
+  SDK's ``EthAccountSigner`` class.
+- ``x402`` (official Python package, x402-foundation/x402) provides NO
+  ready-made CDP adapter -- only ``x402.mechanisms.evm.signers.EthAccountSigner``,
+  designed for any ``eth_account``-compatible object. The ``cdp.x402``
+  module (already in cdp-sdk) is an entirely different tool: it's a
+  FACILITATOR client (verify/settle a RECEIVED payment), not a client-side
+  signer that PAYS -- don't confuse the two.
 
-Donc : ``EthAccountSigner(EvmLocalAccount(cdp_account))`` est le pont vérifié, construit
-à partir des DEUX sources officielles, jamais une supposition sur un raccourci qui
-n'existe pas.
+So: ``EthAccountSigner(EvmLocalAccount(cdp_account))`` is the verified
+bridge, built from BOTH official sources, never a guess on a shortcut that
+doesn't exist.
 
-**Non testé contre un vrai appel réseau à ce stade** (aucun identifiant CDP dans cette
-session, doctrine secrets -- même réserve que ``agent_wallet_cdp_adapter.py``). Avant
-toute activation réelle, norme de process du 15/07 (#157) : vérifier au moins une fois
-la forme exacte de la réponse contre un vrai appel sur le VPS."""
+**Not tested against a real network call at this stage** (no CDP
+credentials in this session, secrets doctrine -- same caveat as
+``agent_wallet_cdp_adapter.py``). Before any real activation, the 15/07
+process norm (#157): verify at least once the exact shape of the response
+against a real call on the VPS."""
 from __future__ import annotations
 
 import logging
@@ -33,34 +38,36 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# 22/07 -- importé depuis agent_wallet_cdp_adapter (SOURCE UNIQUE) plutôt que
-# dupliqué ici -- une constante dupliquée est exactement ce qui a permis
-# l'incident du 21/07 (une seule des deux copies corrigée, l'autre aurait
-# continué à signer via un wallet CDP vide sans que rien ne le signale).
+# 22/07 -- imported from agent_wallet_cdp_adapter (SINGLE SOURCE) rather
+# than duplicated here -- a duplicated constant is exactly what allowed the
+# 21/07 incident (only one of the two copies fixed, the other would have
+# kept signing via an empty CDP wallet with nothing flagging it).
 from aria_core.agent_wallet_cdp_adapter import WALLET_NAME
 
 
 async def build_x402_payment_header(payment_required: dict[str, Any]) -> str:
-    """``pay_fn`` injectable pour ``x402_executor.fetch_paid_resource`` -- signe le
-    paiement demandé par ``payment_required`` (le premier ``accepts[0]`` du corps 402)
-    et renvoie la valeur du header ``X-PAYMENT`` (base64, protocole x402 v1).
+    """Injectable ``pay_fn`` for ``x402_executor.fetch_paid_resource`` -- signs
+    the payment requested by ``payment_required`` (the 402 body's first
+    ``accepts[0]``) and returns the ``X-PAYMENT`` header value (base64,
+    x402 v1 protocol).
 
-    Lève une exception sur tout échec (import manquant, panne CDP, panne de
-    construction du paiement) -- ``x402_executor`` journalise déjà ``status="failed"``
-    sur exception, aucune gestion d'erreur silencieuse nécessaire ici.
+    Raises an exception on any failure (missing import, CDP outage, payment
+    construction failure) -- ``x402_executor`` already logs
+    ``status="failed"`` on exception, no silent error handling needed here.
 
-    19/07 -- bug réel trouvé en testant 2 fournisseurs v2 réels du catalogue
-    Bazaar (lionx402, sociavault, vérifié en direct) : le SDK officiel
-    (``get_payment_required_response``) EXIGE le header brut pour décoder une
-    offre v2 -- son repli "corps synthétique" n'accepte QUE ``x402Version==1``
-    (lu dans le code source du SDK installé, pas deviné) -- échouait
-    systématiquement en "Invalid payment required response" sur tout
-    fournisseur v2 malgré une offre parfaitement valide, alors que Cybercentry
-    (v1) n'était jamais affecté. Si ``x402_executor._extract_payment_requirement``
-    a transporté le header brut (clé interne ``_raw_v2_header``, offre v2),
-    on appelle directement ``decode_payment_required_header`` dessus -- même
-    fonction que le SDK utilise en interne, jamais réinventée. Sinon (v1,
-    header absent), comportement HISTORIQUE inchangé (corps synthétique)."""
+    19/07 -- real bug found while testing 2 real v2 providers from the
+    Bazaar catalog (lionx402, sociavault, verified live): the official SDK
+    (``get_payment_required_response``) REQUIRES the raw header to decode a
+    v2 offer -- its "synthetic body" fallback only accepts
+    ``x402Version==1`` (read in the installed SDK's source code, not
+    guessed) -- systematically failed with "Invalid payment required
+    response" on every v2 provider despite a perfectly valid offer, while
+    Cybercentry (v1) was never affected. If
+    ``x402_executor._extract_payment_requirement`` carried the raw header
+    (internal key ``_raw_v2_header``, v2 offer), ``decode_payment_required_header``
+    is called directly on it -- the same function the SDK uses internally,
+    never reinvented. Otherwise (v1, header absent), HISTORICAL behavior
+    unchanged (synthetic body)."""
     from cdp import CdpClient
     from cdp.evm_local_account import EvmLocalAccount
     from x402 import x402Client
@@ -82,10 +89,11 @@ async def build_x402_payment_header(payment_required: dict[str, Any]) -> str:
     if raw_v2_header:
         parsed = decode_payment_required_header(raw_v2_header)
     else:
-        # ``payment_required`` ici = un seul ``accepts[0]`` (dict brut) -- le SDK
-        # x402 attend l'enveloppe complète pour la reconstruction du type
-        # ``PaymentRequired``. ``x402Version`` par défaut 1 si absent (protocole
-        # v1 -- même défaut que services/x402.py::payment_required_response).
+        # ``payment_required`` here = a single ``accepts[0]`` (raw dict) --
+        # the x402 SDK expects the full envelope to reconstruct the
+        # ``PaymentRequired`` type. ``x402Version`` defaults to 1 if absent
+        # (v1 protocol -- same default as
+        # services/x402.py::payment_required_response).
         body = {
             "x402Version": payment_required.get("x402Version", 1),
             "accepts": [payment_required],
@@ -93,13 +101,14 @@ async def build_x402_payment_header(payment_required: dict[str, Any]) -> str:
         parsed = http_client.get_payment_required_response(lambda _name: None, body)
     payload = await client.create_payment_payload(parsed)
     headers = http_client.encode_payment_signature_header(payload)
-    # 19/07 -- bug réel trouvé juste après le précédent (même appel réel, lionx402) :
-    # le SDK renvoie la valeur signée sous des CLÉS DIFFÉRENTES selon la version --
-    # "PAYMENT-SIGNATURE" pour v2, "X-PAYMENT" pour v1 (explicitement commenté
-    # "V1 legacy" dans x402/http/constants.py du SDK installé) -- ne cherchait avant
-    # que "X-PAYMENT", donc échouait toujours sur v2 malgré une signature réussie.
-    # Renvoie la VALEUR seule (jamais le nom de header) -- x402_executor.py choisit
-    # déjà le bon nom de header pour la requête payée à partir de x402Version.
+    # 19/07 -- real bug found right after the previous one (same real call,
+    # lionx402): the SDK returns the signed value under DIFFERENT KEYS
+    # depending on the version -- "PAYMENT-SIGNATURE" for v2, "X-PAYMENT"
+    # for v1 (explicitly commented "V1 legacy" in the installed SDK's
+    # x402/http/constants.py) -- previously only looked for "X-PAYMENT", so
+    # it always failed on v2 despite a successful signature. Returns the
+    # VALUE alone (never the header name) -- x402_executor.py already picks
+    # the right header name for the paid request based on x402Version.
     header_value = headers.get("PAYMENT-SIGNATURE") or headers.get("X-PAYMENT")
     if not header_value:
         raise RuntimeError(f"encode_payment_signature_header n'a produit ni PAYMENT-SIGNATURE ni X-PAYMENT : {headers!r}")

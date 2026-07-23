@@ -1,34 +1,34 @@
-"""Réputation du déployeur — a-t-il déjà déployé un contrat qui a rug ?
+"""Deployer reputation — has this deployer already shipped a contract that rugged?
 
-`dev_wallet.py`/`insider_wallets.py` jugent le comportement du déployeur SUR ce
-token précis. Ce module regarde son HISTORIQUE : d'autres contrats déployés par
-la MÊME adresse, et si l'un d'eux est déjà confirmé scam par ARIA elle-même
-(`momentum_blacklist.py` — gratuit, zéro appel réseau, donnée de première main,
-jamais une source tierce invérifiée).
+`dev_wallet.py`/`insider_wallets.py` judge the deployer's behavior ON this
+specific token. This module looks at their HISTORY: other contracts deployed
+by the SAME address, and whether any of them is already confirmed a scam by
+ARIA herself (`momentum_blacklist.py` — free, zero network call, first-hand
+data, never an unverified third-party source).
 
-Limite honnête, documentée plutôt que masquée : l'énumération des contrats créés
-par une adresse n'a pas d'endpoint dédié bon marché sur Blockscout (vérifié
-22/07 : aucun paramètre `type=contract_creation`, aucun tri "création d'abord").
-La recherche passe donc par l'historique de transactions déjà exploré ailleurs
-(`get_transactions_bounded`, même doctrine de pagination bornée que le reste du
-projet) et ne couvre QUE les transactions les plus RÉCENTES du déployeur —
-jamais garanti exhaustif. `truncated=True` le signale explicitement si le
-plafond de pages est atteint sans épuiser l'historique.
+Honest limit, documented rather than hidden: enumerating the contracts
+created by an address has no cheap dedicated endpoint on Blockscout (verified
+22/07: no `type=contract_creation` parameter, no "creation first" sort). The
+search therefore goes through the transaction history already explored
+elsewhere (`get_transactions_bounded`, same bounded-pagination doctrine as the
+rest of the project) and covers ONLY the deployer's most RECENT transactions
+— never guaranteed exhaustive. `truncated=True` explicitly flags it if the
+page cap is reached without exhausting the history.
 
-Signal CONSULTATIF pur (même doctrine que dev_wallet.py/insider_wallets.py) —
-jamais un véto dur, même sur une récidive confirmée. Constat important trouvé en
-vérifiant ce module sur un cas réel (CNX, 22/07) : une adresse 'creator' peut
-être un COMPTE DÉLÉGUÉ (EIP-7702 -- confirmé par appel direct Blockscout, champ
-``proxy_type: "eip7702"``), donc pas toujours une identité stable d'un
-déploiement à l'autre. Raison de plus pour ne jamais rejeter automatiquement sur
-ce seul signal."""
+Purely CONSULTATIVE signal (same doctrine as dev_wallet.py/insider_wallets.py)
+— never a hard veto, even on a confirmed repeat offender. Important finding
+made while verifying this module on a real case (CNX, 22/07): a 'creator'
+address can be a DELEGATED ACCOUNT (EIP-7702 -- confirmed via a direct
+Blockscout call, field ``proxy_type: "eip7702"``), so it isn't always a
+stable identity from one deployment to the next. One more reason to never
+auto-reject on this signal alone."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Pages de transactions du déployeur explorées au maximum (borné, jamais
-# exhaustif — voir doctrine ci-dessus). Même ordre de grandeur que les autres
-# scans bornés du projet (ex. get_first_funded_by côté Dune).
+# Maximum deployer transaction pages explored (bounded, never
+# exhaustive — see doctrine above). Same order of magnitude as the project's
+# other bounded scans (e.g. get_first_funded_by on the Dune side).
 _MAX_PAGES = 3
 
 
@@ -48,7 +48,7 @@ class DeployerHistoryVerdict:
 
 
 def judge_deployer_history(facts: DeployerHistoryFacts) -> DeployerHistoryVerdict:
-    """Jugement pur et déterministe, même doctrine que judge_dev_wallet/judge_insider_wallets."""
+    """Pure, deterministic judgment, same doctrine as judge_dev_wallet/judge_insider_wallets."""
     if not facts.available:
         return DeployerHistoryVerdict(
             signal="unknown", points=[facts.error or "historique du déployeur non analysable"],
@@ -81,10 +81,10 @@ async def gather_deployer_history_facts(
     client=None,
     blacklist_module=None,
 ) -> DeployerHistoryFacts:
-    """Récolte best-effort : contrats déjà créés par ce déployeur (borné, récent
-    d'abord) puis croise chacun contre la liste noire propre d'ARIA. Défensif,
-    jamais bloquant. ``client``/``blacklist_module`` injectables pour les tests
-    offline (défaut : blockscout_client / momentum_blacklist)."""
+    """Best-effort collection: contracts already created by this deployer
+    (bounded, most recent first) then cross-referenced against ARIA's own
+    blacklist. Defensive, never blocking. ``client``/``blacklist_module``
+    injectable for offline tests (default: blockscout_client / momentum_blacklist)."""
     if not creator:
         return DeployerHistoryFacts(available=False, error="déployeur inconnu")
     if client is None:
@@ -94,7 +94,7 @@ async def gather_deployer_history_facts(
 
     try:
         result = await client.get_transactions_bounded(creator, max_pages=max_pages)
-    except Exception as exc:  # noqa: BLE001 — historique bonus, jamais bloquant
+    except Exception as exc:  # noqa: BLE001 — bonus history, never blocking
         return DeployerHistoryFacts(available=False, error=f"historique indisponible ({exc})")
     if not result.available:
         return DeployerHistoryFacts(available=False, error=result.error)
@@ -114,7 +114,7 @@ async def gather_deployer_history_facts(
         try:
             if await blacklist_module.is_blacklisted(addr, chain):
                 known_rugs.append(addr)
-        except Exception:  # noqa: BLE001 — une entrée illisible n'invalide pas les autres
+        except Exception:  # noqa: BLE001 — an unreadable entry doesn't invalidate the others
             continue
 
     return DeployerHistoryFacts(

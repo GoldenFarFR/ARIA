@@ -218,7 +218,7 @@ async def execute_entrepreneur(
 
     holding = _holding_snapshot(lang)
     phases = cultivation_phases(lang)
-    hypotheses = revenue_hypotheses(lang)  # toujours vide — aucune hypothèse de monétisation en test
+    hypotheses = revenue_hypotheses(lang)  # always empty — no monetization hypothesis being tested
     rev = progress_summary(lang)
 
     if lang == "en":

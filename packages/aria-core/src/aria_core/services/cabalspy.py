@@ -1,32 +1,33 @@
-"""Client CabalSpy -- wallets KOL/Smart Money/Whale labellisés multi-chain
-(23/07, décision opérateur explicite : source de candidats pour le
-wallet-scoring, en complément de `wallet_candidate_sourcing.py`).
+"""CabalSpy client -- multi-chain labelled KOL/Smart Money/Whale wallets
+(07/23, explicit operator decision: candidate source for wallet-scoring,
+complementing `wallet_candidate_sourcing.py`).
 
-Changement de politique ASSUMÉ : `wallet_candidate_sourcing.py` avait une
-doctrine "zéro nouvelle dépendance externe" (Nansen/Zerion déjà écartés pour
-cette raison). CabalSpy est retenu ici sur décision opérateur explicite après
-vérification réelle -- palier Free confirmé (0$/mois, 10 000 crédits, 5 req/s,
-sans CB, `cabalspy.xyz/pricing`, capture opérateur 23/07).
+ASSUMED policy change: `wallet_candidate_sourcing.py` had a "zero new
+external dependency" doctrine (Nansen/Zerion already ruled out for this
+reason). CabalSpy is adopted here on explicit operator decision after
+real verification -- Free tier confirmed (0$/month, 10,000 credits, 5 req/s,
+no credit card, `cabalspy.xyz/pricing`, operator screenshot 07/23).
 
-Vérifié en conditions réelles (23/07, curl direct par l'opérateur, clé jamais
-manipulée par cette session) :
-- `GET /v1/wallets?blockchain=base&type=kol` -- 200 wallets Base avec identité
-  COMPLÈTE (name/twitter/telegram/image_url/copytrade_link) -- la vraie valeur
-  ajoutée (pont wallet <-> identité que ni Moni ni Zerion ne fournissent).
-- `GET /v1/wallets?blockchain=base&type=smart` -- 38 wallets ANONYMES (tous les
-  champs identité vides) -- recoupe probablement ce que `smart_money.py`
-  détecte déjà par comportement, gratuitement. Peu de valeur ajoutée pour ce
-  type précis, câblé ici quand même (au cas où un futur usage en ait besoin)
-  mais jamais recommandé comme source prioritaire.
-- `GET /v1/wallets/lookup?address=...` -- cherche une adresse sur TOUTES les
-  chaînes en un appel, `found:false` si absente de leur base restreinte
-  (~quelques centaines de KOL connus, PAS une base exhaustive).
+Verified under real conditions (07/23, direct curl by the operator, key
+never handled by this session):
+- `GET /v1/wallets?blockchain=base&type=kol` -- 200 Base wallets with
+  COMPLETE identity (name/twitter/telegram/image_url/copytrade_link) -- the
+  real added value (wallet <-> identity bridge that neither Moni nor Zerion
+  provide).
+- `GET /v1/wallets?blockchain=base&type=smart` -- 38 ANONYMOUS wallets (all
+  identity fields empty) -- probably overlaps with what `smart_money.py`
+  already detects by behavior, for free. Little added value for this
+  specific type, wired here anyway (in case a future use needs it)
+  but never recommended as a priority source.
+- `GET /v1/wallets/lookup?address=...` -- looks up an address across ALL
+  chains in a single call, `found:false` if absent from their restricted
+  database (~a few hundred known KOLs, NOT an exhaustive database).
 
-Débit : AUCUNE limite officielle documentée trouvée au-delà du palier
-souscrit (5 req/s Free) -- throttle prudent par défaut (1 req/s, 90% de marge
-large), backoff réactif standard sur 429/5xx. Authentification : `api_key` en
-query param (confirmé réel) -- l'en-tête `Authorization: Bearer` alternatif
-mentionné dans la doc n'a pas été testé, non utilisé ici."""
+Rate limit: NO official documented limit found beyond the subscribed tier
+(5 req/s Free) -- cautious default throttle (1 req/s, 90% wide margin),
+standard reactive backoff on 429/5xx. Authentication: `api_key` as a
+query param (confirmed real) -- the alternative `Authorization: Bearer`
+header mentioned in the docs has not been tested, not used here."""
 from __future__ import annotations
 
 import asyncio
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 _BASE_URL = "https://api.cabalspy.xyz/v1"
 _TIMEOUT_SECONDS = 10.0
 _MIN_INTERVAL_SECONDS = 1.0
-_MAX_PAGES = 20  # garde-fou anti-boucle infinie, largement au-dessus de 200/limit=100
+_MAX_PAGES = 20  # infinite-loop guard, well above 200/limit=100
 
 _last_call_at = 0.0
 _throttle_lock = asyncio.Lock()
@@ -96,16 +97,16 @@ async def _get(params: dict, *, path: str = "/wallets") -> dict | None:
         async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
             r = await client.get(f"{_BASE_URL}{path}", params={**params, "api_key": api_key})
     except httpx.TransportError as exc:
-        logger.info("cabalspy: panne réseau (%s)", exc)
+        logger.info("cabalspy: network failure (%s)", exc)
         return None
 
     if r.status_code != 200:
-        logger.info("cabalspy: HTTP %s pour %s", r.status_code, path)
+        logger.info("cabalspy: HTTP %s for %s", r.status_code, path)
         return None
 
     try:
         payload = r.json()
-    except Exception:  # noqa: BLE001 -- corps illisible, jamais une exception qui remonte
+    except Exception:  # noqa: BLE001 -- unreadable body, never let an exception propagate
         return None
 
     if not isinstance(payload, dict) or not payload.get("success"):
@@ -131,11 +132,11 @@ def _parse_wallet(item: dict, *, blockchain: str, wallet_type: str) -> CabalSpyW
 async def list_wallets(
     blockchain: str, *, wallet_type: str = "kol", page_limit: int = 100,
 ) -> list[CabalSpyWallet] | None:
-    """Liste PAGINÉE complète des wallets labellisés pour une chaîne/type
-    donnés. ``None`` si la clé est absente ou toute panne sur le PREMIER appel
-    (jamais une exception qui remonte) ; une panne sur une page ULTÉRIEURE
-    renvoie ce qui a déjà été collecté (dégradation partielle honnête, jamais
-    tout perdre pour une panne tardive)."""
+    """Full PAGINATED list of labelled wallets for a given chain/type.
+    ``None`` if the key is absent or any failure on the FIRST call
+    (never a propagating exception); a failure on a LATER page
+    returns what has already been collected (honest partial degradation,
+    never losing everything for a late failure)."""
     if blockchain not in VALID_BLOCKCHAINS or wallet_type not in VALID_TYPES:
         return None
 
@@ -174,10 +175,10 @@ async def list_wallets(
 
 
 async def lookup_wallet(address: str) -> CabalSpyLookupResult | None:
-    """Recherche une adresse sur TOUTES les chaînes en un appel. ``None`` si
-    la clé est absente ou toute panne réseau. Renvoie un résultat avec
-    ``found=False`` si l'adresse n'est simplement pas dans leur base (jamais
-    confondu avec une panne)."""
+    """Looks up an address across ALL chains in a single call. ``None`` if
+    the key is absent or any network failure. Returns a result with
+    ``found=False`` if the address is simply not in their database (never
+    confused with a failure)."""
     addr = (address or "").strip()
     if not addr:
         return None

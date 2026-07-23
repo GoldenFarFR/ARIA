@@ -1,4 +1,4 @@
-"""Épistémique ARIA — YAML = identité/politiques ZHC ; Groq = toute question avec P(vrai)."""
+"""ARIA epistemics — YAML = identity/ZHC policies; Groq = any question with P(true)."""
 from __future__ import annotations
 
 import re
@@ -62,18 +62,20 @@ def _normalize(text: str) -> str:
 
 
 def _score_claim(query: str, claim: dict) -> tuple[int, bool]:
-    """Retourne (score, trigger_hit). `trigger_hit` = un des `triggers` explicites du claim
-    apparaît littéralement dans la requête -- signal fort, spécifique à ce claim précis.
-    Le reste du score (overlap générique de mots sur question/claim_fr/claim_en/tags/topic)
-    est un signal faible : un seul mot partagé (ex. "crypto") compte plusieurs fois à travers
-    des champs redondants et peut à lui seul atteindre EPISTEMIC_DIRECT_SCORE sans aucun
-    trigger réel -- incident réel (11/07) : "qu'est-ce qui s'est passé sur les marchés crypto
-    dans la dernière heure ?" (vraie question d'actu) a matché `crypto-hype-unreliable`
-    (triggers: "100x garanti", "moon soon", etc. -- aucun présent) via le seul mot "crypto"
-    compté dans claim_fr + claim_en + tags + topic (2+2+2+2=8 = seuil direct), court-circuitant
-    resolve_calibrated_answer avant même le routage is_live_info_question. `trigger_hit`
-    permet à resolve_calibrated_answer de ne faire confiance qu'aux matches vraiment ciblés
-    quand la requête est par ailleurs détectée comme actualité live."""
+    """Returns (score, trigger_hit). `trigger_hit` = one of the claim's explicit
+    `triggers` appears literally in the query -- a strong signal, specific to
+    this exact claim. The rest of the score (generic word overlap on
+    question/claim_fr/claim_en/tags/topic) is a weak signal: a single shared
+    word (e.g. "crypto") counts multiple times across redundant fields and can
+    on its own reach EPISTEMIC_DIRECT_SCORE with no real trigger -- real
+    incident (11/07): "what happened on the crypto markets in the last hour?"
+    (a genuine news question) matched `crypto-hype-unreliable` (triggers:
+    "100x guaranteed", "moon soon", etc. -- none present) via the single word
+    "crypto" counted in claim_fr + claim_en + tags + topic (2+2+2+2=8 = direct
+    threshold), short-circuiting resolve_calibrated_answer before the
+    is_live_info_question routing even happened. `trigger_hit` lets
+    resolve_calibrated_answer only trust genuinely targeted matches when the
+    query is otherwise detected as live news."""
     q = _normalize(query)
     if not q:
         return 0, False
@@ -198,7 +200,7 @@ def format_epistemic_reply(match: EpistemicMatch, lang: str = "en") -> str:
 def epistemic_static_answer(
     query: str, lang: str = "en",
 ) -> tuple[str | None, dict]:
-    """YAML uniquement pour politiques / holding / ops — pas le monde général."""
+    """YAML only for policies / holding / ops — not the general world."""
     matches = search_epistemic(query, limit=3, static_only=True)
     strong = [m for m in matches if m.score >= EPISTEMIC_DIRECT_SCORE]
     if not strong:
@@ -220,7 +222,7 @@ def epistemic_static_answer(
 
 
 def epistemic_direct_answer(query: str, lang: str = "en") -> tuple[str | None, dict]:
-    """Alias rétrocompat — static only."""
+    """Backcompat alias — static only."""
     return epistemic_static_answer(query, lang)
 
 
@@ -279,7 +281,7 @@ RAISON: <12 words max>"""
 
 
 def groq_reponse_only(raw: str) -> str:
-    """Extrait la ligne REPONSE du format calibré Groq (sans en-tête épistémique)."""
+    """Extracts the REPONSE line from the Groq calibrated format (no epistemic header)."""
     for line in (raw or "").strip().splitlines():
         upper = line.strip().upper()
         if upper.startswith("REPONSE:") or upper.startswith("RÉPONSE:"):
@@ -349,7 +351,7 @@ def _parse_groq_calibrated(raw: str, lang: str) -> tuple[str | None, dict]:
 
 
 async def groq_calibrated_answer(query: str, lang: str = "fr") -> tuple[str | None, dict]:
-    """Moteur principal — toute question via Groq + probabilités."""
+    """Main engine — any question via Groq + probabilities."""
     from aria_core.llm import chat_with_context, is_llm_configured
 
     if not is_llm_configured():
@@ -372,17 +374,19 @@ async def groq_calibrated_answer(query: str, lang: str = "fr") -> tuple[str | No
 async def resolve_calibrated_answer(
     query: str, lang: str = "fr", *, public: bool = True,
 ) -> tuple[str | None, dict]:
-    """Politique/holding YAML si match, sinon Groq + vérif web si incertain.
+    """Policy/holding YAML if there's a match, otherwise Groq + web check if uncertain.
 
-    `public` doit venir du VRAI expéditeur de CE message (brain.py._general_response),
-    jamais d'un défaut supposé -- corrigé le 09/07 : ce paramètre n'existait pas, le signal
-    public=False de l'opérateur (pourtant correctement calculé dans brain.py) était donc
-    perdu à cet appel, et should_use_web_verify() se rabattait sur un réglage de déploiement
-    global toujours permissif (cf. son propre correctif). `web_topic_ok` re-vérifie en plus
-    le sujet à CHAQUE branche de repli (pas seulement la première) pour l'opérateur -- sans
-    ça, un futur faux positif de is_live_info_question/is_explicit_web_request à l'entrée de
-    brain.py suffirait à rouvrir une recherche web incontrôlée dès que Groq hésite, quel que
-    soit le sujet réel.
+    `public` must come from the REAL sender of THIS message
+    (brain.py._general_response), never an assumed default -- fixed on 09/07:
+    this parameter didn't exist, so the operator's public=False signal (even
+    though correctly computed in brain.py) was lost at this call, and
+    should_use_web_verify() fell back to a globally permissive deployment
+    setting (see its own fix). `web_topic_ok` also re-checks the topic at
+    EVERY fallback branch (not just the first) for the operator -- without
+    that, a future false positive from is_live_info_question/
+    is_explicit_web_request at brain.py's entry point would be enough to
+    reopen an uncontrolled web search as soon as Groq hesitates, regardless of
+    the actual topic.
     """
     from aria_core.knowledge.web_verify import (
         is_ecosystem_product_query,
@@ -401,10 +405,11 @@ async def resolve_calibrated_answer(
     if wants_operator_status_pulse(query) or is_operator_local_question(query):
         return None, {"operator_local": True, "skip_web": True}
 
-    # Cotations connues (crypto majeures, devises) : chemin STRUCTURÉ prioritaire,
-    # avant tout scrappage web générique -- incident réel corrigé le 10/07 (BTC/SOL
-    # cités ~30% sous leur vrai prix depuis une page web périmée). Une question hors
-    # de ce périmètre reconnu (`None`) retombe intégralement sur le chemin existant.
+    # Known quotes (major crypto, currencies): STRUCTURED path takes priority,
+    # before any generic web scraping -- real incident fixed on 10/07 (BTC/SOL
+    # quoted ~30% below their real price from a stale web page). A question
+    # outside this recognized scope (`None`) falls back entirely to the
+    # existing path.
     from aria_core.skills.market_quotes import resolve_known_asset_quote
 
     quote_reply = await resolve_known_asset_quote(query)
@@ -414,14 +419,15 @@ async def resolve_calibrated_answer(
     static, static_data = epistemic_static_answer(query, lang)
     live_news = is_live_info_question(query) or is_explicit_web_request(query)
     if static and not (live_news and not static_data.get("trigger_hit")):
-        # Un match statique sans trigger réel (pur overlap générique de mots, cf.
-        # _score_claim) ne doit jamais court-circuiter une vraie question d'actualité --
-        # incident réel (11/07) : "qu'est-ce qui s'est passé sur les marchés crypto dans la
-        # dernière heure ?" a matché `crypto-hype-unreliable` via le seul mot "crypto" (aucun
-        # trigger comme "100x garanti" présent) et a répondu hors-sujet au lieu de router vers
-        # is_live_info_question -> web_first_answer. Un match avec trigger_hit=True (ex. "100x
-        # garanti moon soon gem", cf. test_hype_policy_in_yaml) reste prioritaire même si la
-        # question a par ailleurs une tournure actu.
+        # A static match with no real trigger (pure generic word overlap, see
+        # _score_claim) must never short-circuit a genuine news question --
+        # real incident (11/07): "what happened on the crypto markets in the
+        # last hour?" matched `crypto-hype-unreliable` via the single word
+        # "crypto" (no trigger like "100x guaranteed" present) and answered
+        # off-topic instead of routing to is_live_info_question ->
+        # web_first_answer. A match with trigger_hit=True (e.g. "100x
+        # guaranteed moon soon gem", see test_hype_policy_in_yaml) still takes
+        # priority even if the query otherwise reads as news.
         return static, static_data
 
     use_web = should_use_web_verify(query, public=public)

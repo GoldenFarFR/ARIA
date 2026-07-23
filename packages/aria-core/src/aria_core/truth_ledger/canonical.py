@@ -1,14 +1,14 @@
 """Sync canonical_facts.yaml → Truth Ledger (supersedes stale entries).
 
-``sync_canonical_facts()`` existe depuis la migration monorepo (01/07) mais n'avait
-JAMAIS eu d'appelant en production (grep exhaustif de tout l'historique git, 11/07) --
-ni heartbeat, ni script, ni hook de demarrage, seul son propre test l'exerçait. Cause
-racine trouvee du meme segment : `content/faq.yaml` et `truth_ledger/canonical_facts.yaml`
-avaient derive en quasi-doublons (22 entrees identiques, aucune synchro reelle) malgre
-`_export_faq_from_canonical` conçu exactement pour eviter ça -- le mecanisme existait,
-il ne tournait juste jamais. Cable dans `heartbeat.py` (`canonical_facts_sync_cycle`) le
-11/07, gate OFF par defaut comme toute nouvelle tache heartbeat (`canonical_facts_sync_enabled`
-ci-dessous)."""
+``sync_canonical_facts()`` has existed since the monorepo migration (01/07)
+but NEVER had a caller in production (exhaustive grep of the entire git
+history, 11/07) -- no heartbeat, no script, no startup hook, only its own test
+exercised it. Root cause found in the same segment: `content/faq.yaml` and
+`truth_ledger/canonical_facts.yaml` had drifted into near-duplicates (22
+identical entries, no real sync) despite `_export_faq_from_canonical` being
+designed exactly to prevent that -- the mechanism existed, it just never ran.
+Wired into `heartbeat.py` (`canonical_facts_sync_cycle`) on 11/07, gate OFF by
+default like any new heartbeat task (`canonical_facts_sync_enabled` below)."""
 
 from __future__ import annotations
 
@@ -30,8 +30,9 @@ _FAQ_EXPORT_PATH = Path(__file__).parent.parent / "content" / "faq.yaml"
 
 
 def canonical_facts_sync_enabled() -> bool:
-    """Gate additif -- `sync_canonical_facts()` n'est appelee depuis le heartbeat que si
-    ce flag est actif (OFF par defaut, meme patron que les autres taches heartbeat)."""
+    """Additive gate -- `sync_canonical_facts()` is only called from the
+    heartbeat if this flag is active (OFF by default, same pattern as other
+    heartbeat tasks)."""
     return os.environ.get("ARIA_CANONICAL_FACTS_SYNC_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )

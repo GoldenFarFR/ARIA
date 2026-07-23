@@ -1,36 +1,41 @@
-"""Sealed Ledger -- registre de trades scellé, cryptographiquement chaîné, append-only
-(19/07, proposition ARIA, verrouillée après plusieurs tours de revue croisée avec l'opérateur
-et une critique externe -- transcript complet dans la conversation Telegram Aria du 19/07).
+"""Sealed Ledger -- sealed, cryptographically chained, append-only trade
+ledger (07/19, proposed by ARIA, locked in after several rounds of cross-review
+with the operator and an external critique -- full transcript in the Aria
+Telegram conversation of 07/19).
 
-But : prouver le track-record du paper-trading SANS jamais demander qu'on fasse confiance
-à ARIA sur parole. Chaque décision est scellée AVANT de connaître le résultat (timestamp
-serveur, jamais éditable par l'appelant), chaque sortie référence son entrée, le PnL est
-TOUJOURS recalculé sur les prix d'exécution réels (VWAP des fills), jamais sur le prix de
-décision. Un tiers qui lit le registre exporté peut revérifier toute la chaîne de hash sans
-avoir besoin de faire confiance à qui que ce soit -- voir ``verify_chain()``, une fonction
-PURE qui ne dépend d'aucun accès à cette base de données.
+Goal: prove the paper-trading track record WITHOUT ever asking anyone to take
+ARIA's word on trust. Every decision is sealed BEFORE knowing the outcome
+(server timestamp, never editable by the caller), every exit references its
+entry, PnL is ALWAYS recomputed from the real execution prices (VWAP of the
+fills), never from the decision price. A third party reading the exported
+ledger can re-verify the entire hash chain without needing to trust anyone --
+see ``verify_chain()``, a PURE function that doesn't depend on any access to
+this database.
 
-v0 ISOLÉ (décision opérateur, 19/07) : ce module tourne en autonomie, rempli à la main sur
-quelques trades de test, pour valider le sceau + l'export GitHub + la re-vérification tierce
-AVANT de le câbler sur le vrai moteur ``paper_trader.py`` -- exactement le vote d'ARIA
-("sinon tu débugges la crypto et l'intégration en même temps").
+ISOLATED v0 (operator decision, 07/19): this module runs standalone, filled
+by hand on a few test trades, to validate the seal + GitHub export + third-party
+re-verification BEFORE wiring it to the real ``paper_trader.py`` engine --
+exactly ARIA's own suggestion ("otherwise you're debugging the crypto and the
+integration at the same time").
 
-Écart assumé vs la spec figée dans la conversation : stockage SQLite ici, pas Postgres sur
-Render -- aucune base Postgres n'existe nulle part dans ce stack aujourd'hui (grep exhaustif
-avant de coder, aucun DATABASE_URL configuré) et provisionner un nouveau service externe est
-sa propre décision d'infra, pas quelque chose à glisser dans ce chantier sans validation
-séparée. La garantie d'intégrité du design ne dépend PAS du moteur de stockage -- elle repose
-entièrement sur le chaînage cryptographique (SHA-256, JSON canonique, prev_hash), donc SQLite
-préserve la propriété centrale à 100% pour cette phase de preuve isolée. Bascule vers Postgres
-= une migration de stockage pure le jour où on câble le vrai paper-trading, pas une réécriture
-du design.
+Deliberate deviation from the spec locked in the conversation: SQLite storage
+here, not Postgres on Render -- no Postgres database exists anywhere in this
+stack today (exhaustive grep before coding, no DATABASE_URL configured) and
+provisioning a new external service is its own infra decision, not something
+to slip into this project without separate validation. The design's integrity
+guarantee does NOT depend on the storage engine -- it rests entirely on the
+cryptographic chaining (SHA-256, canonical JSON, prev_hash), so SQLite
+preserves the core property 100% for this isolated proof phase. Switching to
+Postgres = a pure storage migration the day the real paper-trading is wired
+in, not a design rewrite.
 
-Autre écart honnête : pas de commit GitHub signé GPG (aucune infra de signing n'existe sur ce
-VPS -- créer des clés/de la config de signature de commits est un changement de posture de
-sécurité qui mérite sa propre validation opérateur explicite, jamais fait à la volée ici).
-L'intégrité du registre ne repose de toute façon pas sur la signature Git (acté explicitement
-dans la conversation : "Ta garantie d'intégrité ne doit jamais reposer sur la branch
-protection de GitHub... elle repose sur le chaînage cryptographique").
+Another honest deviation: no GPG-signed GitHub commit (no signing
+infrastructure exists on this VPS -- creating keys/commit-signature config is
+a security posture change that deserves its own explicit operator validation,
+never done on the fly here). The ledger's integrity doesn't rest on Git
+signing anyway (explicitly stated in the conversation: "Your integrity
+guarantee must never rest on GitHub's branch protection... it rests on the
+cryptographic chaining").
 """
 from __future__ import annotations
 
@@ -46,9 +51,9 @@ from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
 
-# Hash du "génesis" -- prev_hash du tout premier événement jamais écrit dans la chaîne.
-# Valeur fixe et publique (pas un secret) : 64 zéros, la même convention que d'autres
-# systèmes à chaînage (ex. le bloc génésis Bitcoin référence un hash de zéros).
+# "Genesis" hash -- prev_hash of the very first event ever written to the
+# chain. Fixed, public value (not a secret): 64 zeros, the same convention as
+# other chained systems (e.g. the Bitcoin genesis block references a hash of zeros).
 GENESIS_HASH = "0" * 64
 
 EVENT_TYPES = (
@@ -63,14 +68,14 @@ FILL_STATUSES = ("PARTIAL", "FINAL")
 
 
 class ChainIntegrityError(RuntimeError):
-    """Levée quand un événement ne peut pas être chaîné en toute sécurité --
-    jamais attrapée silencieusement, jamais un fallback qui écrit quand même."""
+    """Raised when an event can't be safely chained -- never caught silently,
+    never a fallback that writes anyway."""
 
 
 @dataclass(frozen=True)
 class LedgerEvent:
-    """Représentation immuable d'un événement déjà scellé. ``payload`` contient les
-    champs spécifiques au type d'événement (voir docstrings des fonctions record_*)."""
+    """Immutable representation of an already-sealed event. ``payload`` holds
+    the fields specific to the event type (see the record_* functions' docstrings)."""
 
     event_id: str
     trade_id: str
@@ -95,11 +100,12 @@ class LedgerEvent:
 
 
 def canonical_json(obj) -> str:
-    """Sérialisation canonique : clés triées, aucun espace. Déterministe -- deux objets
-    Python avec les mêmes clés/valeurs produisent TOUJOURS la même chaîne, quel que soit
-    l'ordre d'insertion des clés côté appelant. C'est la propriété qui rend le hash
-    reproductible par un tiers (bug identifié explicitement dans la conversation de design :
-    un JSON non-canonique donne un hash différent selon l'ordre des clés)."""
+    """Canonical serialization: sorted keys, no whitespace. Deterministic --
+    two Python objects with the same keys/values ALWAYS produce the same
+    string, regardless of key insertion order on the caller's side. This is
+    the property that makes the hash reproducible by a third party (bug
+    explicitly identified in the design conversation: non-canonical JSON gives
+    a different hash depending on key order)."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
@@ -113,8 +119,8 @@ def _compute_event_hash(
     prev_hash: str,
     payload: dict,
 ) -> str:
-    """Le hash porte sur TOUS les champs d'identité/temps/chaînage + le payload complet
-    -- jamais sur le hash lui-même (qui n'existe pas encore au moment du calcul)."""
+    """The hash covers ALL identity/time/chaining fields + the full payload --
+    never the hash itself (which doesn't exist yet at computation time)."""
     hashable = {
         "event_id": event_id,
         "trade_id": trade_id,
@@ -144,17 +150,18 @@ async def _ensure_table() -> None:
             )
             """
         )
-        # Garde-fou DUR (pas seulement l'absence de fonction UPDATE/DELETE côté Python,
-        # comme le reste du codebase -- ex. agent_wallet_log.py) : un trigger SQLite qui
-        # refuse ABSOLUMENT toute tentative de réécriture, même par un futur appelant qui
-        # se tromperait de fonction. Demandé explicitement dans la spec ("contrainte
-        # trigger anti-UPDATE/DELETE").
+        # HARD guardrail (not just the absence of an UPDATE/DELETE function on
+        # the Python side, like the rest of the codebase -- e.g.
+        # agent_wallet_log.py): a SQLite trigger that ABSOLUTELY refuses any
+        # rewrite attempt, even by a future caller that got the wrong
+        # function. Explicitly requested in the spec ("anti-UPDATE/DELETE
+        # trigger constraint").
         await db.execute(
             """
             CREATE TRIGGER IF NOT EXISTS sealed_ledger_no_update
             BEFORE UPDATE ON sealed_ledger_events
             BEGIN
-                SELECT RAISE(ABORT, 'sealed_ledger_events est append-only : UPDATE interdit');
+                SELECT RAISE(ABORT, 'sealed_ledger_events is append-only: UPDATE forbidden');
             END
             """
         )
@@ -163,7 +170,7 @@ async def _ensure_table() -> None:
             CREATE TRIGGER IF NOT EXISTS sealed_ledger_no_delete
             BEFORE DELETE ON sealed_ledger_events
             BEGIN
-                SELECT RAISE(ABORT, 'sealed_ledger_events est append-only : DELETE interdit');
+                SELECT RAISE(ABORT, 'sealed_ledger_events is append-only: DELETE forbidden');
             END
             """
         )
@@ -171,7 +178,7 @@ async def _ensure_table() -> None:
 
 
 async def _last_event() -> tuple[int, str] | None:
-    """(sequence, hash) du dernier événement écrit, ou None si la chaîne est vide."""
+    """(sequence, hash) of the last event written, or None if the chain is empty."""
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
             await db.execute(
@@ -182,15 +189,16 @@ async def _last_event() -> tuple[int, str] | None:
 
 
 async def _append_event(*, trade_id: str, event_type: str, payload: dict) -> LedgerEvent:
-    """Cœur du chaînage : timestamp fixé ICI (source serveur, jamais passé par l'appelant
-    -- personne ne peut antidater une décision), sequence assignée de façon strictement
-    croissante, hash calculé en chaînant sur le hash précédent. Une seule connexion, un
-    seul INSERT -- pas de fenêtre où deux écritures concurrentes pourraient calculer le
-    même prev_hash (SQLite sérialise les écritures sur une connexion, et aiosqlite ouvre
-    une connexion neuve par appel ici, donc le risque réel serait un vrai run concurrent
-    multi-process -- hors scope v0 isolé, rempli à la main séquentiellement)."""
+    """Core of the chaining: timestamp set HERE (server source, never passed
+    by the caller -- no one can backdate a decision), sequence assigned
+    strictly increasing, hash computed by chaining on the previous hash. One
+    connection, one INSERT -- no window where two concurrent writes could
+    compute the same prev_hash (SQLite serializes writes on one connection,
+    and aiosqlite opens a fresh connection per call here, so the real risk
+    would be an actual multi-process concurrent run -- out of scope for the
+    isolated v0, filled by hand sequentially)."""
     if event_type not in EVENT_TYPES:
-        raise ValueError(f"event_type inconnu : {event_type!r}")
+        raise ValueError(f"unknown event_type: {event_type!r}")
 
     await _ensure_table()
     prev = await _last_event()
@@ -225,11 +233,11 @@ async def _append_event(*, trade_id: str, event_type: str, payload: dict) -> Led
             )
             await db.commit()
         except aiosqlite.IntegrityError as exc:
-            # sequence/hash déjà pris = une écriture concurrente a gagné la course --
-            # fail loud plutôt que d'écrire une chaîne divergente en silence.
+            # sequence/hash already taken = a concurrent write won the race --
+            # fail loud rather than silently write a diverging chain.
             raise ChainIntegrityError(
-                f"Conflit d'écriture sur la chaîne (sequence={sequence}) -- "
-                f"une autre écriture concurrente a eu lieu. Réessayer."
+                f"Write conflict on the chain (sequence={sequence}) -- "
+                f"another concurrent write occurred. Retry."
             ) from exc
 
     return LedgerEvent(
@@ -244,9 +252,9 @@ async def _append_event(*, trade_id: str, event_type: str, payload: dict) -> Led
     )
 
 
-# ── Écriture -- un point d'entrée par type d'événement, jamais de fonction générique ────
-# (un appelant ne peut pas se tromper de champs obligatoires : chaque fonction déclare
-# exactement ce que SON type d'événement exige, conforme à la spec figée).
+# ── Writing -- one entry point per event type, never a generic function ────
+# (a caller can't get the required fields wrong: each function declares
+# exactly what ITS event type requires, matching the locked-in spec).
 
 async def record_entry_decision(
     *,
@@ -261,8 +269,8 @@ async def record_entry_decision(
     source_price: str,
     mode: str = "SIMULATED",
 ) -> LedgerEvent:
-    """Intention d'achat, scellée AVANT de connaître le résultat. ``decision_price_usd``
-    = mid-price snapshoté (DexScreener en v0) au moment T -- jamais retouché après coup."""
+    """Buy intent, sealed BEFORE knowing the outcome. ``decision_price_usd``
+    = mid-price snapshot (DexScreener in v0) at time T -- never touched up afterward."""
     payload = {
         "token_address": token_address,
         "chain": chain,
@@ -289,13 +297,14 @@ async def record_entry_fill(
     fill_status: str = "FINAL",
     mode: str = "SIMULATED",
 ) -> LedgerEvent:
-    """Réalité de l'exécution d'entrée, liée à sa décision via ``entry_decision_hash``.
-    En mode SIMULATED, ``execution_price_usd`` == le ``decision_price_usd`` de l'entrée
-    (aucun slippage possible sur un remplissage fictif) -- l'appelant est responsable de
-    passer la même valeur, cette fonction ne le devine pas pour éviter une fausse
-    certitude sur ce que l'appelant a réellement voulu enregistrer."""
+    """The reality of entry execution, linked to its decision via
+    ``entry_decision_hash``. In SIMULATED mode, ``execution_price_usd`` ==
+    the entry's ``decision_price_usd`` (no slippage possible on a fictitious
+    fill) -- the caller is responsible for passing the same value, this
+    function doesn't guess it to avoid a false certainty about what the
+    caller actually meant to record."""
     if fill_status not in FILL_STATUSES:
-        raise ValueError(f"fill_status invalide : {fill_status!r}")
+        raise ValueError(f"invalid fill_status: {fill_status!r}")
     payload = {
         "entry_decision_hash": entry_decision_hash,
         "execution_price_usd": execution_price_usd,
@@ -316,8 +325,8 @@ async def record_exit_decision(
     target_quantity: float,
     exit_reason: str,
 ) -> LedgerEvent:
-    """Intention de sortie -- ``decision_price_usd`` est le mid-price snapshoté au moment
-    de CETTE décision de sortie (jamais celui de l'entrée), scellé au même titre."""
+    """Exit intent -- ``decision_price_usd`` is the mid-price snapshot at the
+    time of THIS exit decision (never the entry's), sealed the same way."""
     payload = {
         "entry_decision_hash": entry_decision_hash,
         "decision_price_usd": decision_price_usd,
@@ -339,13 +348,14 @@ async def record_exit_fill(
     gas_paid_usd: float = 0.0,
     mode: str = "SIMULATED",
 ) -> LedgerEvent:
-    """Un EXIT_DECISION peut engendrer 1..N EXIT_FILL (liquidité fragmentée en réel).
-    ``sequence_index`` = position de CE fill dans sa propre séquence de sortie (1, 2, 3…)
-    -- distinct de ``sequence`` (position globale dans toute la chaîne)."""
+    """An EXIT_DECISION can spawn 1..N EXIT_FILL (fragmented liquidity in
+    reality). ``sequence_index`` = this fill's position in its own exit
+    sequence (1, 2, 3...) -- distinct from ``sequence`` (global position in
+    the whole chain)."""
     if fill_status not in FILL_STATUSES:
-        raise ValueError(f"fill_status invalide : {fill_status!r}")
+        raise ValueError(f"invalid fill_status: {fill_status!r}")
     if sequence_index < 1:
-        raise ValueError("sequence_index doit démarrer à 1")
+        raise ValueError("sequence_index must start at 1")
     payload = {
         "exit_decision_hash": exit_decision_hash,
         "sequence_index": sequence_index,
@@ -366,10 +376,10 @@ async def record_exit_abandoned(
     remaining_quantity: float,
     reason: str,
 ) -> LedgerEvent:
-    """Marqueur terminal de sécurité : la liquidité a disparu avant que la sortie ne se
-    complète. Le reliquat ``remaining_quantity`` est figé comme jamais vendu -- ne JAMAIS
-    le valoriser au mid-price dans un calcul de PnL, sinon on réintroduit exactement la
-    fiction que ce registre existe pour tuer."""
+    """Terminal safety marker: liquidity disappeared before the exit could
+    complete. The ``remaining_quantity`` remainder is frozen as never sold --
+    NEVER value it at the mid-price in a PnL computation, or we reintroduce
+    exactly the fiction this ledger exists to kill."""
     payload = {
         "exit_decision_hash": exit_decision_hash,
         "remaining_quantity": remaining_quantity,
@@ -378,10 +388,10 @@ async def record_exit_abandoned(
     return await _append_event(trade_id=trade_id, event_type="EXIT_ABANDONED", payload=payload)
 
 
-# ── Lecture ───────────────────────────────────────────────────────────────────────────
+# ── Reading ───────────────────────────────────────────────────────────────────────────
 
 async def list_events(*, trade_id: str | None = None) -> list[dict]:
-    """Tous les événements, triés par séquence globale. Filtrable par trade_id."""
+    """All events, sorted by global sequence. Filterable by trade_id."""
     await _ensure_table()
     query = "SELECT event_id, trade_id, event_type, sequence, timestamp_utc, prev_hash, hash, payload_json FROM sealed_ledger_events"
     params: tuple = ()
@@ -401,13 +411,13 @@ async def list_events(*, trade_id: str | None = None) -> list[dict]:
     ]
 
 
-# ── VWAP / slippage -- le PnL ne se calcule JAMAIS sur un decision_price ───────────────
+# ── VWAP / slippage -- PnL is NEVER computed from a decision_price ───────────────
 
 def compute_vwap(fills: list[dict]) -> float:
-    """VWAP (Volume Weighted Average Price) sur une liste de fills, chacun avec
-    ``execution_price_usd`` et ``filled_quantity``. 0.0 si aucun fill (quantité nulle) --
-    jamais une division par zéro qui remonte comme exception à un appelant qui ne
-    s'y attend pas."""
+    """VWAP (Volume Weighted Average Price) over a list of fills, each with
+    ``execution_price_usd`` and ``filled_quantity``. 0.0 if no fill (zero
+    quantity) -- never a division by zero bubbling up as an exception to an
+    unsuspecting caller."""
     total_qty = sum(f["filled_quantity"] for f in fills)
     if total_qty <= 0:
         return 0.0
@@ -415,21 +425,21 @@ def compute_vwap(fills: list[dict]) -> float:
 
 
 def compute_slippage_bps(*, vwap_fills: float, decision_price_usd: float) -> float | None:
-    """Slippage BPS = (VWAP_fills - decision_price) / decision_price * 10000. Signe
-    conservé -- un slippage négatif à la sortie EST une perte, jamais masqué. ``None``
-    (pas 0.0) si decision_price_usd <= 0 -- une valeur indisponible n'est jamais confondue
-    avec un slippage nul réel."""
+    """Slippage BPS = (VWAP_fills - decision_price) / decision_price * 10000.
+    Sign preserved -- negative slippage on exit IS a loss, never hidden.
+    ``None`` (not 0.0) if decision_price_usd <= 0 -- an unavailable value is
+    never confused with a real zero slippage."""
     if decision_price_usd <= 0:
         return None
     return (vwap_fills - decision_price_usd) / decision_price_usd * 10000
 
 
 async def compute_trade_pnl(trade_id: str) -> dict:
-    """Reconstruit le cycle de vie complet d'un trade depuis ses événements scellés et
-    calcule PnL + slippage entrée/sortie. Le PnL n'est JAMAIS lu depuis un champ stocké --
-    toujours recalculé depuis les VWAP des fills, à chaque appel. ``status`` :
-    "OPEN" (pas encore d'EXIT_DECISION), "PARTIAL" (sortie en cours), "ABANDONED"
-    (reliquat figé), "CLOSED" (quantité cible entièrement sortie)."""
+    """Reconstructs a trade's full lifecycle from its sealed events and
+    computes PnL + entry/exit slippage. PnL is NEVER read from a stored field
+    -- always recomputed from the fills' VWAP, on every call. ``status``:
+    "OPEN" (no EXIT_DECISION yet), "PARTIAL" (exit in progress), "ABANDONED"
+    (remainder frozen), "CLOSED" (target quantity fully exited)."""
     events = await list_events(trade_id=trade_id)
     entry_decisions = [e for e in events if e["event_type"] == "ENTRY_DECISION"]
     entry_fills = [e for e in events if e["event_type"] == "ENTRY_FILL"]
@@ -475,8 +485,8 @@ async def compute_trade_pnl(trade_id: str) -> dict:
     })
 
     if exit_abandoned:
-        # Le reliquat n'est JAMAIS valorisé -- PnL final uniquement sur la portion
-        # réellement sortie, conforme à la règle actée dans la conversation de design.
+        # The remainder is NEVER valued -- final PnL only on the portion
+        # actually exited, consistent with the rule agreed in the design conversation.
         result["status"] = "ABANDONED"
         result["abandoned_quantity"] = exit_abandoned[-1]["payload"]["remaining_quantity"]
     elif filled_quantity >= target_quantity > 0:
@@ -491,19 +501,19 @@ async def compute_trade_pnl(trade_id: str) -> dict:
     return result
 
 
-# ── Re-vérification tierce -- fonction PURE, aucun accès DB ────────────────────────────
+# ── Third-party re-verification -- PURE function, no DB access ────────────────────────────
 
 def verify_chain(events: list[dict]) -> tuple[bool, str | None]:
-    """LA preuve : n'importe qui peut appeler cette fonction avec une liste d'événements
-    bruts (lus depuis le JSONL exporté sur GitHub, ou depuis n'importe quelle copie de la
-    base) SANS accès à ce module ni à aucune base de données, et confirmer que la chaîne
-    est intacte. Recalcule chaque hash depuis les champs bruts (jamais depuis le hash déjà
-    stocké) et vérifie le chaînage prev_hash de bout en bout.
+    """THE proof: anyone can call this function with a list of raw events
+    (read from the JSONL exported to GitHub, or from any copy of the
+    database) WITHOUT access to this module or any database, and confirm the
+    chain is intact. Recomputes each hash from the raw fields (never from the
+    already-stored hash) and verifies the prev_hash chaining end to end.
 
-    ``events`` doit être trié par ``sequence`` croissante (la fonction le trie elle-même
-    par sécurité, mais ne fait AUCUNE hypothèse sur l'ordre d'entrée).
+    ``events`` must be sorted by increasing ``sequence`` (the function sorts
+    it itself for safety, but makes NO assumption about the input order).
 
-    Retourne (True, None) si la chaîne est intacte, sinon (False, "raison + event_id").
+    Returns (True, None) if the chain is intact, otherwise (False, "reason + event_id").
     """
     if not events:
         return True, None

@@ -31,27 +31,28 @@ from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
 
-# Garde d'initialisation (18/07, #213, bug réel) : chaque fonction publique de ce
-# module ouvrait sa propre connexion et faisait une requête brute SANS jamais
-# garantir que init_repertoire_db() avait tourné -- fonctionnait uniquement parce
-# qu'en prod, le boot FastAPI l'appelle une fois avant tout trafic réel. Trouvé en
-# testant un chemin isolé (nouveau fichier de test) où ce n'était plus vrai :
-# `no such table: agent_messages` PUIS, une fois ce cas corrigé isolément,
-# `no such table: repertoire` -- même famille de bug sur DEUX tables distinctes du
-# même module (déjà documentée pour un 3e module, auth_db_path, #149 le 13/07 --
-# jamais fermée ici).
+# Initialization guard (18/07, #213, real bug): every public function in this
+# module opened its own connection and ran a raw query WITHOUT ever
+# guaranteeing that init_repertoire_db() had run -- it only worked because in
+# prod, the FastAPI boot calls it once before any real traffic. Found while
+# testing an isolated path (new test file) where that no longer held:
+# `no such table: agent_messages` THEN, once that case was fixed in
+# isolation, `no such table: repertoire` -- the same class of bug on TWO
+# distinct tables in the same module (already documented for a 3rd module,
+# auth_db_path, #149 on 13/07 -- never closed here).
 #
-# PREMIÈRE version de ce correctif : un flag booléen process-wide (n'appeler
-# init_repertoire_db() qu'une fois). RETIRÉE après un 2e tour de tests réel :
-# le flag mentait dès qu'un test antérieur avait initialisé PUIS que son
-# tmp_path avait été nettoyé par pytest entre-temps -- le flag restait `True`
-# en mémoire alors que le fichier SQLite (et sa table) n'existait plus sur
-# disque, un FAUX négatif pire que l'absence de garde. `_ensure_initialized()`
-# rejoue donc systématiquement init_repertoire_db() (schéma + seed/purge, tous
-# idempotents -- CREATE TABLE IF NOT EXISTS, INSERT-si-absent, DELETE
-# no-op si déjà absent) : jamais de cache qui peut mentir sur l'état réel du
-# disque, même patron que ``momentum_blacklist._ensure_table()`` (appelé sans
-# mise en cache à chaque is_blacklisted()/add_to_blacklist()).
+# FIRST version of this fix: a process-wide boolean flag (call
+# init_repertoire_db() only once). REMOVED after a 2nd round of real
+# testing: the flag would lie as soon as an earlier test had initialized
+# THEN had its tmp_path cleaned up by pytest in the meantime -- the flag
+# stayed `True` in memory while the SQLite file (and its table) no longer
+# existed on disk, a FALSE negative worse than having no guard at all.
+# `_ensure_initialized()` therefore systematically replays
+# init_repertoire_db() (schema + seed/purge, all idempotent -- CREATE TABLE
+# IF NOT EXISTS, INSERT-if-absent, no-op DELETE if already absent): never a
+# cache that can lie about the real state of disk, same pattern as
+# ``momentum_blacklist._ensure_table()`` (called with no caching on every
+# is_blacklisted()/add_to_blacklist()).
 async def _ensure_initialized() -> None:
     await init_repertoire_db()
 
@@ -85,16 +86,17 @@ async def init_repertoire_db() -> None:
 
 
 async def _ensure_agent_messages_table(db: aiosqlite.Connection) -> None:
-    """Idempotent (18/07, #213, bug réel trouvé en testant) : ``save_message``/
-    ``get_messages`` faisaient un INSERT/SELECT brut sur ``agent_messages`` SANS
-    jamais garantir son existence -- ne fonctionnait que si ``init_repertoire_db()``
-    avait déjà tourné ailleurs dans le process (vrai en prod au boot FastAPI,
-    mais pas garanti dans un contexte isolé, ex. un test dont c'est le tout
-    premier appel à ce module). Extrait en fonction séparée (plutôt que
-    dupliquer le schéma) -- appelée à la fois par ``init_repertoire_db()`` ET
-    directement par ``save_message``/``get_messages``, jamais deux schémas à
-    tenir en synchro. ``CREATE TABLE IF NOT EXISTS`` reste bon marché même
-    appelé à chaque message (SQLite court-circuite si la table existe déjà)."""
+    """Idempotent (18/07, #213, real bug found while testing): ``save_message``/
+    ``get_messages`` ran a raw INSERT/SELECT on ``agent_messages`` WITHOUT
+    ever guaranteeing its existence -- it only worked if
+    ``init_repertoire_db()`` had already run elsewhere in the process (true
+    in prod at FastAPI boot, but not guaranteed in an isolated context, e.g.
+    a test whose very first call is to this module). Extracted into a
+    separate function (rather than duplicating the schema) -- called both by
+    ``init_repertoire_db()`` AND directly by ``save_message``/``get_messages``,
+    never two schemas to keep in sync. ``CREATE TABLE IF NOT EXISTS`` stays
+    cheap even called on every message (SQLite short-circuits if the table
+    already exists)."""
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS agent_messages (

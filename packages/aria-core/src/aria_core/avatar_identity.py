@@ -1,4 +1,4 @@
-"""Identité visuelle persistante ARIA — même personnage, décors variés."""
+"""ARIA persistent visual identity — same character, varied settings."""
 
 from __future__ import annotations
 
@@ -116,7 +116,7 @@ async def establish_identity_anchor(
     source: str,
     note: str = "",
 ) -> dict[str, Any]:
-    """Enregistre l'ancre identité + photo de profil courante."""
+    """Records the identity anchor + current profile photo."""
     normalized = _normalize_jpeg(data)
     anchor = identity_anchor_path()
     anchor.write_bytes(normalized)
@@ -161,9 +161,9 @@ async def set_profile_with_identity(
     force_establish: bool = False,
 ) -> dict[str, Any]:
     """
-    Upload profil avec règles identité :
-    - pas d'ancre ou force_establish → établit l'ancre
-    - ancre existante → vérifie même personnage puis met à jour le profil
+    Profile upload with identity rules:
+    - no anchor or force_establish -> establishes the anchor
+    - existing anchor -> verifies same character then updates the profile
     """
     normalized = _normalize_jpeg(data)
 
@@ -194,7 +194,7 @@ async def set_profile_with_identity(
 
 
 async def apply_scene_portrait(scene: str) -> dict[str, Any]:
-    """Génère un nouveau portrait (même personnage, nouveau décor) depuis l'ancre."""
+    """Generates a new portrait (same character, new setting) from the anchor."""
     if not has_identity_anchor():
         raise RuntimeError("Aucune ancre identité — envoie d'abord ta photo de référence.")
 
@@ -226,7 +226,7 @@ async def apply_scene_portrait(scene: str) -> dict[str, Any]:
 
 
 def reset_identity_anchor() -> None:
-    """Supprime l'ancre — prochaine photo réétablira l'identité."""
+    """Removes the anchor — next photo will re-establish the identity."""
     if identity_anchor_path().exists():
         identity_anchor_path().unlink()
     block = _identity_block()
@@ -243,7 +243,7 @@ def reset_identity_anchor() -> None:
 
 
 def copy_current_as_anchor() -> bool:
-    """Copie current.jpg vers ancre (sans vision)."""
+    """Copies current.jpg to the anchor (no vision call)."""
     cur = current_avatar_path()
     if not cur.is_file():
         return False
@@ -256,10 +256,10 @@ def copy_current_as_anchor() -> bool:
 
 def ensure_identity_anchor_from_current() -> bool:
     """
-    Si avatar profil (current.jpg) existe mais pas d'ancre — copie vers identity_anchor.jpg.
+    If a profile avatar (current.jpg) exists but no anchor — copy it to identity_anchor.jpg.
 
-    Ceci verrouille la **référence visage** pour générer bannière 3:1 ou scènes ;
-    ce n'est **pas** la bannière X ni un remplacement de /avatar identity opérateur.
+    This locks in the **face reference** for generating a 3:1 banner or scenes;
+    it is **not** the X banner nor a replacement for the operator's /avatar identity.
     """
     if has_identity_anchor():
         return True

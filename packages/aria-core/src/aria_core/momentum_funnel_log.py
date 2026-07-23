@@ -1,22 +1,22 @@
-"""Persistance cumulée du funnel de rejet momentum (19/07) -- réponse directe à la
-proposition d'ARIA elle-même en conversation Telegram : "on log pendant 48h le
-compteur par étape -- combien rejetés au honeypot, combien au R/R, combien à la
-liquidité. Là on saura si c'est le marché ou si mon seuil R/R est calibré trop
-serré. Preuve avant opinion."
+"""Cumulative persistence of the momentum rejection funnel (19/07) -- a direct
+answer to a proposal ARIA herself made in a Telegram conversation: "let's log
+the per-step counter for 48h -- how many rejected at the honeypot check, how
+many at R/R, how many at liquidity. Then we'll know whether it's the market
+or whether my R/R threshold is calibrated too tight. Proof before opinion."
 
-Le funnel lui-même (comptage par ``hold_reason``) existe déjà et n'est PAS dupliqué
-ici -- ``paper_trader.run_paper_cycle`` le calcule à chaque cycle (mandat #192,
-16/07) mais ne fait QUE le logger (``logger.info``) puis le perd : aucun autre
-appelant ne lit ``actions["momentum_funnel"]`` (vérifié par grep avant d'écrire ce
-module). Un cycle individuel (5-20 candidats) n'est de toute façon pas un
-échantillon assez grand pour juger "trop strict vs marché plat" -- c'est le CUMUL
-dans le temps qui rend le signal exploitable. Ce module ajoute uniquement la
-persistance ; aucun changement de la logique de décision (``momentum_entry.py``)
-ou du calcul du funnel lui-même.
+The funnel itself (counting by ``hold_reason``) already exists and is NOT
+duplicated here -- ``paper_trader.run_paper_cycle`` computes it every cycle
+(mandate #192, 16/07) but ONLY logs it (``logger.info``) and then loses it: no
+other caller reads ``actions["momentum_funnel"]`` (verified by grep before
+writing this module). A single cycle (5-20 candidates) isn't a large enough
+sample anyway to judge "too strict vs a flat market" -- it's the CUMULATIVE
+total over time that makes the signal usable. This module only adds
+persistence; no change to the decision logic (``momentum_entry.py``) or to
+the funnel computation itself.
 
-Append-only en pratique (même doctrine que ``momentum_blacklist.py``/
-``agent_wallet_log.py``) : chaque cycle ajoute une ligne par ``reason_code``,
-jamais de UPDATE/DELETE. La lecture agrège par fenêtre de temps glissante."""
+Append-only in practice (same doctrine as ``momentum_blacklist.py``/
+``agent_wallet_log.py``): each cycle adds one row per ``reason_code``, never
+an UPDATE/DELETE. Reads aggregate over a sliding time window."""
 from __future__ import annotations
 
 import logging
@@ -51,9 +51,10 @@ async def _ensure_table() -> None:
 
 
 async def record_funnel(funnel: dict[str, int]) -> None:
-    """Persiste UN cycle de funnel (appelé depuis ``paper_trader.run_paper_cycle``,
-    juste après le calcul déjà existant). Ne fait rien si le funnel est vide (aucun
-    candidat rejeté ce cycle -- rien à enregistrer, pas une anomalie)."""
+    """Persists ONE funnel cycle (called from ``paper_trader.run_paper_cycle``,
+    right after the already-existing computation). Does nothing if the funnel
+    is empty (no candidate rejected this cycle -- nothing to record, not an
+    anomaly)."""
     if not funnel:
         return
     await _ensure_table()
@@ -67,9 +68,9 @@ async def record_funnel(funnel: dict[str, int]) -> None:
 
 
 async def summarize_since(hours: float = 48.0) -> dict[str, int]:
-    """Agrège toutes les entrées depuis ``hours`` heures -- ``{reason_code: total}``,
-    trié par nul ici (le tri d'affichage se fait dans ``format_funnel_summary``,
-    cette fonction reste une lecture brute réutilisable)."""
+    """Aggregates all entries from the last ``hours`` hours -- ``{reason_code: total}``,
+    unsorted here (display sorting happens in ``format_funnel_summary``, this
+    function stays a reusable raw read)."""
     await _ensure_table()
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -83,8 +84,9 @@ async def summarize_since(hours: float = 48.0) -> dict[str, int]:
 
 
 def format_funnel_summary(summary: dict[str, int], *, hours: float = 48.0) -> str:
-    """Rendu Telegram -- classé par fréquence décroissante (la cause dominante de
-    rejet en premier, c'est le signal recherché : marché plat vs filtre trop strict)."""
+    """Telegram rendering -- ranked by descending frequency (the dominant
+    rejection cause first, that's the signal being sought: flat market vs an
+    overly strict filter)."""
     header = f"📊 Funnel de rejet momentum -- {hours:.0f}h glissantes"
     if not summary:
         return f"{header}\n\nAucun rejet enregistré sur cette période."

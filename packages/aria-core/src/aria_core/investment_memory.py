@@ -1,20 +1,20 @@
-"""Boucle mémoire d'investissement — thèse → décision → résultat/P&L → leçon.
+"""Investment memory loop — thesis -> decision -> outcome/P&L -> lesson.
 
-Journal de raisonnement d'ARIA sur ses paris, entièrement local (SQLite
-``aria.db``, table ``investment_thesis``). Aucune action financière, aucune
-signature, aucun appel réseau : c'est une trace pour attribuer un résultat à
-chaque décision et en tirer une leçon — le prérequis d'un scoring VC qui
-apprend de ses erreurs (cf. AGENTS.md, règle « auto-critique honnête »).
+ARIA's reasoning journal on its bets, entirely local (SQLite ``aria.db``,
+``investment_thesis`` table). No financial action, no signing, no network
+call: this is a trace to attribute an outcome to each decision and draw a
+lesson from it — the prerequisite for a VC scoring engine that learns from
+its mistakes (cf. AGENTS.md, "honest self-critique" rule).
 
-Cycle de vie d'une ligne :
-- ``open`` à l'enregistrement de la thèse (``record_thesis``) ;
-- transition unique ``open -> closed`` via ``close_thesis`` (atomique — un
-  résultat n'est attribué qu'une fois, on ne réécrit jamais l'historique).
+Lifecycle of a row:
+- ``open`` when the thesis is recorded (``record_thesis``);
+- single ``open -> closed`` transition via ``close_thesis`` (atomic — an
+  outcome is attributed only once, history is never rewritten).
 
-La table est créée paresseusement via ``CREATE TABLE IF NOT EXISTS`` — ajout
-pur, aucune altération de schéma existant, donc pas de migration Alembic ; le
-backup de ``/opt/aria-data`` reste couvert par la procédure de déploiement
-(``docs/deploy-ionos.md``).
+The table is created lazily via ``CREATE TABLE IF NOT EXISTS`` — a pure
+addition, no alteration of the existing schema, so no Alembic migration is
+needed; the ``/opt/aria-data`` backup remains covered by the deployment
+procedure (``docs/deploy-ionos.md``).
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
 
-# Décisions d'investissement autorisées (pur journal — jamais un ordre d'exécution).
+# Allowed investment decisions (pure journal — never an execution order).
 VALID_DECISIONS = ("BUY", "WATCH", "SELL", "AVOID")
 
 _COLUMNS = [
@@ -74,10 +74,10 @@ async def record_thesis(
     token_symbol: str | None = None,
     score_snapshot: str = "{}",
 ) -> int:
-    """Enregistre une thèse ``open`` et retourne son id.
+    """Records an ``open`` thesis and returns its id.
 
-    ``decision`` doit appartenir à ``VALID_DECISIONS`` (validation en amont côté
-    appelant recommandée — ``ValueError`` sinon).
+    ``decision`` must be one of ``VALID_DECISIONS`` (upstream validation on the
+    caller side is recommended — ``ValueError`` otherwise).
     """
     decision = decision.upper()
     if decision not in VALID_DECISIONS:
@@ -99,10 +99,11 @@ async def record_thesis(
 
 
 async def close_thesis(thesis_id: int, *, outcome: str, lesson: str) -> dict | None:
-    """Transition atomique ``open -> closed`` (attribue résultat + leçon).
+    """Atomic ``open -> closed`` transition (attributes outcome + lesson).
 
-    Retourne la ligne close si la transition a eu lieu, sinon ``None`` (id
-    inconnu ou déjà close — on ne réécrit jamais une issue déjà attribuée).
+    Returns the closed row if the transition took place, otherwise ``None``
+    (unknown id or already closed — an already-attributed outcome is never
+    rewritten).
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -134,7 +135,7 @@ async def get_thesis(thesis_id: int) -> dict | None:
 
 
 async def list_open_theses(limit: int = 20) -> list[dict]:
-    """Thèses encore ouvertes (résultat non attribué), les plus récentes d'abord."""
+    """Theses still open (outcome not yet attributed), most recent first."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         row_cursor = await db.execute(
@@ -146,10 +147,10 @@ async def list_open_theses(limit: int = 20) -> list[dict]:
 
 
 async def list_theses_for_token(token_address: str, limit: int = 10) -> list[dict]:
-    """Historique des thèses (ouvertes + clôturées) pour un token, les plus récentes d'abord.
+    """History of theses (open + closed) for a token, most recent first.
 
-    Sert de contexte factuel au moteur VC : « qu'a-t-on déjà parié sur ce token,
-    et qu'en a-t-on appris ? ».
+    Serves as factual context for the VC engine: "what has already been bet
+    on this token, and what has been learned from it?".
     """
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:

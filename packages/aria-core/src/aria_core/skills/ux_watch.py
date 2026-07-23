@@ -1,22 +1,21 @@
-"""ux_watch — ARIA observe elle-même le site réel (captures d'écran Playwright,
-desktop + mobile) et PROPOSE ses propres micro-détails d'amélioration UX, au-delà
-de ce que Claude Code construit manuellement (tâche #155, 13/07, demande opérateur
-explicite).
+"""ux_watch — ARIA observes the real site herself (Playwright screenshots,
+desktop + mobile) and PROPOSES her own UX micro-improvement details, beyond
+what Claude Code builds manually (task #155, 07/13, explicit operator request).
 
-Capture -> lecture visuelle via ``llm_vision.vision_analyze`` (brique déjà câblée
-pour la cohérence avatar, réutilisée telle quelle, pas de doublon) -> comparaison au
-référentiel UX gamme luxe fixé par CLAUDE.md ("Normes permanentes", pas inventé ici).
-Même doctrine stricte que ``knowledge_inbox.py``/``claude_mentor.py``/
-``pump_dump_autopsy.py`` : PROPOSE une ISSUE GitHub (label ``aria-ux-proposal``) --
-jamais une refonte, jamais un changement de code direct, jamais un commit ni une
-fusion autonome.
+Capture -> visual reading via ``llm_vision.vision_analyze`` (a piece already
+wired for avatar consistency, reused as-is, no duplicate) -> comparison
+against the luxury-grade UX reference set by CLAUDE.md ("Permanent
+Standards," not invented here). Same strict doctrine as
+``knowledge_inbox.py``/``claude_mentor.py``/``pump_dump_autopsy.py``:
+PROPOSES a GitHub ISSUE (label ``aria-ux-proposal``) -- never a redesign,
+never a direct code change, never an autonomous commit or merge.
 
-Gaté OFF par défaut (``ARIA_UX_WATCH_ENABLED``) -- PAS ``ARIA_VISION_ENABLED`` : ce
-gate-là est propre à la fonctionnalité photo Telegram admin-only
-(``gateway/telegram_bot.py``), sans rapport avec ce cycle heartbeat. Un cycle par
-jour maximum (dédoublonné par date) -- coût vision/LLM + poids Playwright/Chromium
-dans l'image Docker (+300-500 Mo mesurés, même doctrine que ffmpeg/#23) acceptés
-tels quels (décision opérateur, 13/07).
+Gated OFF by default (``ARIA_UX_WATCH_ENABLED``) -- NOT
+``ARIA_VISION_ENABLED``: that gate is specific to the admin-only Telegram
+photo feature (``gateway/telegram_bot.py``), unrelated to this heartbeat
+cycle. One cycle per day maximum (deduplicated by date) -- vision/LLM cost +
+Playwright/Chromium weight in the Docker image (+300-500 MB measured, same
+doctrine as ffmpeg/#23) accepted as-is (operator decision, 07/13).
 """
 from __future__ import annotations
 
@@ -34,13 +33,13 @@ logger = logging.getLogger(__name__)
 DB_PATH = str(aria_db_path())
 TARGET_REPO = "ARIA"
 
-# Miroir volontaire de la constante privée `release_pipeline._SITE_URL` -- import
-# cross-module d'un nom privé évité, la duplication d'une simple chaîne est plus
-# robuste qu'un couplage à un détail d'implémentation d'un autre module.
+# Deliberate mirror of the private `release_pipeline._SITE_URL` constant --
+# cross-module import of a private name avoided, duplicating a simple string
+# is more robust than coupling to another module's implementation detail.
 SITE_URL = "https://ariavanguardzhc.com"
 
-# Viewports fixes -- desktop + mobile, priorité à ce que l'opérateur voit
-# réellement, pas une matrice exhaustive de devices.
+# Fixed viewports -- desktop + mobile, priority to what the operator actually
+# sees, not an exhaustive device matrix.
 VIEWPORTS = [
     ("desktop", 1440, 900),
     ("mobile", 375, 844),
@@ -132,12 +131,12 @@ async def _record_run(outcome: str, *, findings_count: int = 0, issue_url: str |
 
 
 async def _default_screenshot(url: str, width: int, height: int) -> bytes | None:
-    """Capture réelle via Playwright (Chromium headless) -- import local : dépendance
-    lourde (+binaire Chromium), jamais chargée si le cycle est désactivé ou en test."""
+    """Real capture via Playwright (headless Chromium) -- local import: heavy
+    dependency (+Chromium binary), never loaded if the cycle is disabled or in tests."""
     try:
         from playwright.async_api import async_playwright
     except ImportError:
-        logger.warning("ux_watch: playwright non installé")
+        logger.warning("ux_watch: playwright not installed")
         return None
 
     try:
@@ -149,8 +148,8 @@ async def _default_screenshot(url: str, width: int, height: int) -> bytes | None
                 return await page.screenshot(type="jpeg", quality=80, full_page=False)
             finally:
                 await browser.close()
-    except Exception as exc:  # noqa: BLE001 -- un site down/timeout ne casse jamais le cycle
-        logger.info("ux_watch: capture échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 -- a down site/timeout never breaks the cycle
+        logger.info("ux_watch: capture failed (%s)", exc)
         return None
 
 
@@ -194,7 +193,7 @@ async def _propose_ux_issue(findings_by_viewport: dict[str, list[str]], *, githu
         issue = await github_client.create_issue(
             owner, TARGET_REPO, title, body, labels=["aria-ux-proposal"],
         )
-    except Exception:  # noqa: BLE001 -- une panne GitHub ne doit jamais casser le cycle
+    except Exception:  # noqa: BLE001 -- a GitHub outage must never break the cycle
         return None
     return issue.get("html_url")
 
@@ -202,9 +201,9 @@ async def _propose_ux_issue(findings_by_viewport: dict[str, list[str]], *, githu
 async def run_ux_watch_cycle(
     *, site_url: str | None = None, screenshot_fn=None, vision_fn=None, github_client=None,
 ) -> dict:
-    """Un cycle : capture desktop+mobile du site réel -> lecture visuelle LLM par
-    viewport -> une seule issue GitHub groupée si des détails concrets ressortent.
-    Fail-closed à chaque étage, jamais plus d'un cycle par jour (dédoublonné)."""
+    """One cycle: desktop+mobile capture of the real site -> per-viewport LLM
+    visual reading -> a single grouped GitHub issue if concrete details come
+    up. Fail-closed at every stage, never more than one cycle per day (deduplicated)."""
     if not ux_watch_enabled():
         return {"outcome": "skipped_disabled"}
 
@@ -229,8 +228,8 @@ async def run_ux_watch_cycle(
     for name, width, height in VIEWPORTS:
         try:
             jpeg = await screenshot_fn(site_url or SITE_URL, width, height)
-        except Exception as exc:  # noqa: BLE001 -- une capture ratée ne casse jamais les autres viewports
-            logger.warning("ux_watch: capture %s échouée -- %s", name, exc)
+        except Exception as exc:  # noqa: BLE001 -- a failed capture never breaks the other viewports
+            logger.warning("ux_watch: capture %s failed -- %s", name, exc)
             per_viewport_outcome[name] = "capture_failed"
             continue
         if not jpeg:
@@ -240,7 +239,7 @@ async def run_ux_watch_cycle(
         try:
             raw = await vision_fn(jpeg, _UX_SYSTEM)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("ux_watch: vision %s échouée -- %s", name, exc)
+            logger.warning("ux_watch: vision %s failed -- %s", name, exc)
             per_viewport_outcome[name] = "vision_failed"
             continue
         if not raw:

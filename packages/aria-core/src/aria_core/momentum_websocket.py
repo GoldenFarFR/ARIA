@@ -1,61 +1,60 @@
-"""Sourcing temps réel de candidats momentum via WebSocket DexScreener (#196,
-fast-follow de #194). Réduit drastiquement la latence de sourcing par rapport au
-polling REST périodique (heartbeat ``paper_trade_cycle``, 15 min) -- objectif
-opérateur explicite : « si il y a de l'argent à gagner ARIA doit y être avant
-tout le monde ». N'introduit JAMAIS un second chemin de décision : les
-candidats détectés ici passent par le MÊME pipeline que #194
-(``momentum_entry.evaluate_momentum_entry`` -- honeypot GoPlus, R/R golden
-pocket/RSI, confirmation LLM légère) via ``paper_trader.run_paper_cycle``.
+"""Real-time sourcing of momentum candidates via the DexScreener WebSocket
+(#196, fast-follow of #194). Drastically reduces sourcing latency compared to
+periodic REST polling (``paper_trade_cycle`` heartbeat, 15 min) -- explicit
+operator goal: "if there's money to be made ARIA needs to be there before
+everyone else". NEVER introduces a second decision path: candidates detected
+here go through the SAME pipeline as #194
+(``momentum_entry.evaluate_momentum_entry`` -- GoPlus honeypot, golden
+pocket/RSI R/R, light LLM confirmation) via ``paper_trader.run_paper_cycle``.
 
-Vérifié en direct (16/07, VPS Principal, AVANT d'écrire ce module -- norme
-#157 : jamais un schéma supposé non confronté à un vrai appel) :
-  - ``wss://api.dexscreener.com/token-boosts/latest/v1`` et
-    ``/token-profiles/latest/v1`` acceptent une connexion WebSocket standard
-    (librairie ``websockets``, déjà utilisée côté serveur dans
-    ``vanguard/backend``, ajoutée ici en dépendance de BASE d'aria-core --
-    lecture seule, aucun secret/capital associé, même tier que httpx/requests).
-  - Le PREMIER message reçu après connexion est un instantané complet :
-    ``{"limit": N, "data": [...]}``, où chaque élément de ``data`` a
-    EXACTEMENT la forme attendue par ``services.dexscreener.parse_listing``
-    (mêmes clés ``chainId``/``tokenAddress``/``description``/``links`` que
-    la réponse REST équivalente) -- réutilisé tel quel, aucun parsing dupliqué.
-  - Ensuite, la connexion reste ouverte et envoie des frames de battement de
-    coeur ``{"type": "heartbeat"}`` toutes les ~15-30s. **Aucune nouvelle
-    donnée observée sur une connexion maintenue ouverte pendant plus de 2
-    minutes d'observation continue** -- contrairement à l'hypothèse initiale
-    du plan (« connexion maintenue, notifiée à l'instant »), le serveur ne
-    semble PAS pousser de mises à jour incrémentales sur une connexion
-    longue : il faut RECONNECTER pour obtenir un nouvel instantané. Le
-    design ci-dessous en tient compte -- chaque boucle par endpoint se
-    reconnecte toutes les ``DRAIN_INTERVAL_SECONDS`` pour tirer un
-    instantané frais, plutôt que de garder 4 sockets ouverts en attendant des
-    pushes qui n'arrivent pas (observation ponctuelle, pas un contrat d'API
-    documenté -- si un futur passage constate de vraies frames incrémentales
-    sur une connexion longue, ce module les traiterait déjà correctement :
-    chaque frame « data » est diffée contre le set de dédoublonnage, peu
-    importe son origine/fréquence).
-  - Seuls ``token-boosts/latest`` et ``token-profiles/latest`` vérifiés
-    directement ce jour ; ``token-boosts/top``/``token-profiles/recent-updates``
-    supposés identiques (même famille d'API, même version ``/v1``) -- à
-    reconfirmer si un comportement différent est observé en prod.
+Verified live (16/07, VPS Principal, BEFORE writing this module -- norm #157:
+never an assumed schema left unconfronted with a real call):
+  - ``wss://api.dexscreener.com/token-boosts/latest/v1`` and
+    ``/token-profiles/latest/v1`` accept a standard WebSocket connection
+    (``websockets`` library, already used server-side in
+    ``vanguard/backend``, added here as a BASE dependency of aria-core --
+    read-only, no secret/capital involved, same tier as httpx/requests).
+  - The FIRST message received after connecting is a full snapshot:
+    ``{"limit": N, "data": [...]}``, where each element of ``data`` has
+    EXACTLY the shape expected by ``services.dexscreener.parse_listing``
+    (same ``chainId``/``tokenAddress``/``description``/``links`` keys as the
+    equivalent REST response) -- reused as-is, no duplicated parsing.
+  - Afterward, the connection stays open and sends
+    ``{"type": "heartbeat"}`` heartbeat frames every ~15-30s. **No new data
+    observed on a connection kept open for more than 2 minutes of continuous
+    observation** -- contrary to the plan's initial assumption ("connection
+    kept open, notified instantly"), the server does NOT seem to push
+    incremental updates over a long-lived connection: you have to RECONNECT
+    to get a fresh snapshot. The design below accounts for this -- each
+    per-endpoint loop reconnects every ``DRAIN_INTERVAL_SECONDS`` to pull a
+    fresh snapshot, rather than keeping 4 sockets open waiting for pushes
+    that never arrive (a point-in-time observation, not a documented API
+    contract -- if a future pass finds genuine incremental frames on a
+    long-lived connection, this module would already handle them correctly:
+    every "data" frame is diffed against the dedup set, regardless of its
+    origin/frequency).
+  - Only ``token-boosts/latest`` and ``token-profiles/latest`` were verified
+    directly on this date; ``token-boosts/top``/``token-profiles/recent-updates``
+    are assumed identical (same API family, same ``/v1`` version) -- to be
+    reconfirmed if different behavior is observed in prod.
 
-Périmètre strictement respecté (16/07, plan validé opérateur) :
-  - Uniquement le SOURCING de nouveaux candidats. Ne touche ni au honeypot
-    check, ni à la gestion des positions déjà ouvertes (#186/#187), ni au
-    comportement par défaut du cycle heartbeat ``paper_trade_cycle`` (appel
-    sans arguments -- strictement inchangé).
-  - Gate dédié ``ARIA_MOMENTUM_WEBSOCKET_ENABLED``, OFF par défaut, lu UNE
-    SEULE FOIS à ``start()`` (même doctrine que le reste du dôme -- basculer
-    nécessite un redémarrage, pas un hot-reload).
-  - Avant tout déclenchement de ``run_paper_cycle`` : revérifie
-    ``ARIA_PAPER_TRADING_ENABLED`` (le système paper-trading lui-même doit
-    être actif) ET ``outgoing_pause.is_paused()`` (kill-switch ``/stop`` --
-    ce chemin contourne ``heartbeat._tick()``, qui fait normalement cette
-    vérification, donc elle doit être refaite ici explicitement).
-  - Verrou de concurrence obligatoire (correctif opérateur, relecture du
-    plan) : ``paper_trader.run_paper_cycle`` enveloppe déjà TOUT appel dans
-    ``paper_trader._run_cycle_lock`` (module partagé) -- jamais deux cycles
-    en parallèle, quel que soit l'appelant (heartbeat OU ce service).
+Scope strictly respected (16/07, operator-approved plan):
+  - Only SOURCING new candidates. Never touches the honeypot check, the
+    management of already-open positions (#186/#187), or the default
+    behavior of the ``paper_trade_cycle`` heartbeat cycle (called with no
+    arguments -- strictly unchanged).
+  - Dedicated gate ``ARIA_MOMENTUM_WEBSOCKET_ENABLED``, OFF by default, read
+    ONLY ONCE at ``start()`` (same doctrine as the rest of the dome --
+    flipping it requires a restart, not a hot reload).
+  - Before triggering ``run_paper_cycle``: re-checks
+    ``ARIA_PAPER_TRADING_ENABLED`` (the paper-trading system itself must be
+    active) AND ``outgoing_pause.is_paused()`` (``/stop`` kill-switch -- this
+    path bypasses ``heartbeat._tick()``, which normally does this check, so
+    it must be redone here explicitly).
+  - Mandatory concurrency lock (operator fix, plan re-review):
+    ``paper_trader.run_paper_cycle`` already wraps EVERY call in
+    ``paper_trader._run_cycle_lock`` (shared module) -- never two cycles in
+    parallel, regardless of the caller (heartbeat OR this service).
 """
 from __future__ import annotations
 
@@ -84,43 +83,45 @@ ENDPOINTS: tuple[str, ...] = (
     "/token-profiles/recent-updates/v1",
 )
 
-# Décisions opérateur explicites, 16/07 (#196).
-DRAIN_INTERVAL_SECONDS = 30       # borne basse de la fourchette proposée -- l'objectif est la vitesse
-MAX_CANDIDATES_PER_DRAIN = 20     # même ordre que le plafond déjà accepté pour paper_trade_cycle
-DEDUP_TTL_SECONDS = 15 * 60       # 15 minutes -- anti-spam de frames rapprochées sur
-                                  # un même candidat, PAS le cooldown de rescan (cf.
-                                  # RESCAN_COOLDOWN_SECONDS ci-dessous, 22/07).
+# Explicit operator decisions, 16/07 (#196).
+DRAIN_INTERVAL_SECONDS = 30       # lower bound of the proposed range -- the goal is speed
+MAX_CANDIDATES_PER_DRAIN = 20     # same order of magnitude as the cap already accepted for paper_trade_cycle
+DEDUP_TTL_SECONDS = 15 * 60       # 15 minutes -- anti-spam for closely-spaced frames on
+                                  # the same candidate, NOT the rescan cooldown (see
+                                  # RESCAN_COOLDOWN_SECONDS below, 22/07).
 
-# 22/07 -- décision opérateur explicite : "un contrat n'a pas besoin d'être scanné
-# toutes les 60 secondes, toutes les 4h suffit" -- ADAPTATIF, pas rigide (précisé par
-# l'opérateur : "si c'est un token sans signal ou avec signal ça doit s'adapter") :
-# un candidat déjà vu dans les 4h ne redéclenche PAS une évaluation complète, SAUF si
-# son prix a bougé de plus de RESCAN_PRICE_MOVE_THRESHOLD_PCT depuis le dernier passage
-# -- un vrai mouvement de prix peut annoncer un nouveau setup qui mérite d'être regardé
-# tout de suite, pas dans 4h. Le prix de comparaison vient de _batch_liquidity_
-# prefilter (déjà appelé pour tout candidat frais, DexScreener par lot -- AUCUN appel
-# réseau supplémentaire dédié à ce mécanisme), jamais un nouvel appel juste pour ça.
+# 22/07 -- explicit operator decision: "a contract doesn't need to be scanned
+# every 60 seconds, every 4h is enough" -- ADAPTIVE, not rigid (operator
+# clarification: "whether it's a token with no signal or with a signal it
+# should adapt"): a candidate already seen within the last 4h does NOT
+# retrigger a full evaluation, UNLESS its price has moved more than
+# RESCAN_PRICE_MOVE_THRESHOLD_PCT since the last pass -- a real price move can
+# signal a new setup worth looking at right away, not in 4h. The comparison
+# price comes from _batch_liquidity_prefilter (already called for every fresh
+# candidate, batched DexScreener call -- NO extra network call dedicated to
+# this mechanism), never a new call just for this.
 RESCAN_COOLDOWN_SECONDS = 4 * 3600  # 4h
-RESCAN_PRICE_MOVE_THRESHOLD_PCT = 0.10  # 10% -- valeur de départ proposée, ajustable
-MAX_NEW_PER_DRAIN = 3             # même pacing que le défaut heartbeat (run_paper_cycle max_new) --
-                                  # MAX_CANDIDATES_PER_DRAIN borne les candidats ÉVALUÉS, pas le
-                                  # nombre de nouvelles positions OUVERTES par vidange (délibérément
-                                  # plus prudent qu'un simple len(candidats), pour ne pas dumper plus
-                                  # de nouvelles entrées par vidange que le cycle heartbeat n'en
-                                  # ouvrirait lui-même en 15 minutes).
+RESCAN_PRICE_MOVE_THRESHOLD_PCT = 0.10  # 10% -- starting value proposed, adjustable
+MAX_NEW_PER_DRAIN = 3             # same pacing as the heartbeat default (run_paper_cycle max_new) --
+                                  # MAX_CANDIDATES_PER_DRAIN bounds candidates EVALUATED, not the
+                                  # number of new positions OPENED per drain (deliberately more
+                                  # conservative than a plain len(candidates), so as not to dump more
+                                  # new entries per drain than the heartbeat cycle would open on its
+                                  # own in 15 minutes).
 
-# 19/07 -- plafond de débit ajouté AVANT activation (question opérateur légitime : "ça ne
-# va pas casser les rouages des API ?"). Sans lui, le pire cas théorique est
-# MAX_CANDIDATES_PER_DRAIN (20) toutes les DRAIN_INTERVAL_SECONDS (30s) = jusqu'à
-# ~2400 candidats évalués/heure -- un facteur ~30x le débit du cycle heartbeat classique
-# (20 candidats x 4 cycles/heure = 80/heure). GeckoTerminal/GoPlus ont un throttle CLIENT
-# partagé (protège contre un vrai 429 -- les appels sont sérialisés, pas parallélisés),
-# mais CoinMarketCap n'a AUCUN throttle client, et aucun des trois n'a de plafond de
-# QUOTA horaire/journalier codé quelque part : un débit soutenu pourrait épuiser un
-# quota payant mensuel en quelques jours sans jamais déclencher un seul 429 individuel
-# qui alerterait quelqu'un. Ramène le débit WebSocket au MÊME ORDRE DE GRANDEUR que le
-# régime actuel (80/heure) -- garde l'avantage de LATENCE (détection quasi-immédiate)
-# sans exploser le VOLUME total consommé par les API en aval.
+# 19/07 -- rate cap added BEFORE activation (legitimate operator question:
+# "won't this break the API plumbing?"). Without it, the theoretical worst
+# case is MAX_CANDIDATES_PER_DRAIN (20) every DRAIN_INTERVAL_SECONDS (30s) =
+# up to ~2400 candidates evaluated/hour -- a ~30x factor over the classic
+# heartbeat cycle's rate (20 candidates x 4 cycles/hour = 80/hour).
+# GeckoTerminal/GoPlus have a SHARED client-side throttle (protects against a
+# real 429 -- calls are serialized, not parallelized), but CoinMarketCap has
+# NO client throttle at all, and none of the three has an hourly/daily QUOTA
+# cap coded anywhere: sustained throughput could exhaust a monthly paid quota
+# within days without ever triggering a single individual 429 that would
+# alert anyone. Brings the WebSocket rate back to the SAME ORDER OF MAGNITUDE
+# as the current regime (80/hour) -- keeps the LATENCY advantage (near-instant
+# detection) without blowing up the total VOLUME consumed by downstream APIs.
 MAX_EVALUATIONS_PER_HOUR = 80
 
 _CONNECT_TIMEOUT_SECONDS = 8
@@ -132,15 +133,15 @@ _ALLOWED_CHAINS = frozenset(DEFAULT_CHAINS)
 
 
 def momentum_websocket_enabled() -> bool:
-    """Gate dédié, OFF par défaut -- fail-closed, même doctrine que le reste du dôme."""
+    """Dedicated gate, OFF by default -- fail-closed, same doctrine as the rest of the dome."""
     return os.environ.get("ARIA_MOMENTUM_WEBSOCKET_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
 
 def _paper_trading_enabled() -> bool:
-    """Revérifié explicitement avant chaque déclenchement -- ce chemin contourne
-    ``heartbeat._tick()``, qui fait normalement cette vérification pour
+    """Explicitly re-checked before every trigger -- this path bypasses
+    ``heartbeat._tick()``, which normally does this check for
     ``paper_trade_cycle``."""
     return os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
@@ -148,23 +149,25 @@ def _paper_trading_enabled() -> bool:
 
 
 class MomentumWebsocketListener:
-    """Service de fond (démarré/arrêté par l'hôte -- ``vanguard/backend/app/main.py``,
-    même patron que ``aria_heartbeat``) : rafraîchit périodiquement les 4 endpoints
-    DexScreener, dédoublonne, et déclenche l'évaluation momentum sur les candidats
-    FRAIS via le pipeline existant -- jamais un second chemin de décision."""
+    """Background service (started/stopped by the host --
+    ``vanguard/backend/app/main.py``, same pattern as ``aria_heartbeat``):
+    periodically refreshes the 4 DexScreener endpoints, deduplicates, and
+    triggers momentum evaluation on FRESH candidates via the existing
+    pipeline -- never a second decision path."""
 
     def __init__(self) -> None:
         self._running = False
         self._tasks: list[asyncio.Task] = []
-        self._lock = asyncio.Lock()  # protège _pending/_seen entre les boucles par endpoint et la vidange
+        self._lock = asyncio.Lock()  # protects _pending/_seen between per-endpoint loops and the drain
         self._pending: dict[tuple[str, str], float] = {}  # (contract, chain) -> first_seen ts
-        # 22/07 -- (last_drained_ts, last_known_price_usd|None) : le prix sert au
-        # cooldown adaptatif (RESCAN_COOLDOWN_SECONDS), jamais confondu avec le TTL
-        # anti-spam (DEDUP_TTL_SECONDS) qui bloque, lui, sans condition de prix.
+        # 22/07 -- (last_drained_ts, last_known_price_usd|None): the price is
+        # used for the adaptive cooldown (RESCAN_COOLDOWN_SECONDS), never
+        # confused with the anti-spam TTL (DEDUP_TTL_SECONDS), which blocks
+        # unconditionally on price.
         self._seen: dict[tuple[str, str], tuple[float, float | None]] = {}
-        # 19/07 -- fenêtre glissante 1h pour MAX_EVALUATIONS_PER_HOUR (un timestamp par
-        # candidat réellement évalué, pas par vidange -- une vidange à 20 candidats compte
-        # pour 20, pas pour 1).
+        # 19/07 -- 1h sliding window for MAX_EVALUATIONS_PER_HOUR (one timestamp per
+        # candidate actually evaluated, not per drain -- a drain of 20 candidates counts
+        # as 20, not 1).
         self._evaluation_timestamps: collections.deque[float] = collections.deque()
 
     def _evaluation_budget_remaining(self, now: float) -> int:
@@ -178,14 +181,14 @@ class MomentumWebsocketListener:
             return
         if not momentum_websocket_enabled():
             logger.info(
-                "momentum_websocket: ARIA_MOMENTUM_WEBSOCKET_ENABLED désactivé, service non démarré"
+                "momentum_websocket: ARIA_MOMENTUM_WEBSOCKET_ENABLED disabled, service not started"
             )
             return
         self._running = True
         for endpoint in ENDPOINTS:
             self._tasks.append(asyncio.create_task(self._endpoint_loop(endpoint)))
         self._tasks.append(asyncio.create_task(self._drain_loop()))
-        logger.info("momentum_websocket: démarré (%d endpoints)", len(ENDPOINTS))
+        logger.info("momentum_websocket: started (%d endpoints)", len(ENDPOINTS))
 
     async def stop(self) -> None:
         self._running = False
@@ -199,11 +202,11 @@ class MomentumWebsocketListener:
                 pass
 
     async def _endpoint_loop(self, endpoint: str) -> None:
-        """Une connexion courte par cycle (connecte, lit UN instantané, ferme) --
-        pas une connexion maintenue en espérant des pushes (cf. docstring module :
-        aucune donnée observée au-delà de l'instantané initial + heartbeats).
-        Reconnexion avec backoff exponentiel sur erreur, jamais un abandon
-        définitif (service persistant, pas un appel ponctuel)."""
+        """One short connection per cycle (connect, read ONE snapshot, close) --
+        not a kept-open connection hoping for pushes (see module docstring: no
+        data observed beyond the initial snapshot + heartbeats). Reconnects
+        with exponential backoff on error, never gives up for good (a
+        persistent service, not a one-off call)."""
         import websockets
 
         backoff = _BACKOFF_INITIAL_SECONDS
@@ -213,12 +216,12 @@ class MomentumWebsocketListener:
                 async with websockets.connect(url, open_timeout=_CONNECT_TIMEOUT_SECONDS) as ws:
                     msg = await asyncio.wait_for(ws.recv(), timeout=_RECV_TIMEOUT_SECONDS)
                     await self._ingest_frame(msg)
-                backoff = _BACKOFF_INITIAL_SECONDS  # succès -- réinitialise le backoff
+                backoff = _BACKOFF_INITIAL_SECONDS  # success -- resets the backoff
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 -- jamais un crash silencieux de la boucle
+            except Exception as exc:  # noqa: BLE001 -- never a silent loop crash
                 logger.info(
-                    "momentum_websocket: %s échoué (%s), retry dans %.1fs", endpoint, exc, backoff
+                    "momentum_websocket: %s failed (%s), retrying in %.1fs", endpoint, exc, backoff
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, _BACKOFF_MAX_SECONDS)
@@ -243,23 +246,27 @@ class MomentumWebsocketListener:
                     continue
                 listing = parse_listing(raw)
                 chain = listing.chain_id.strip().lower()
-                # 19/07 -- bug réel trouvé en activant ce chemin pour la première fois
-                # (jamais exercé jusqu'ici) : un .lower() aveugle corrompait toute adresse
-                # Solana (base58, sensible à la casse -- contrairement à Base/Robinhood en
-                # hex EVM). Même bug déjà corrigé le 18/07 côté REST
-                # (momentum_entry.normalize_contract_case), jamais reporté ici -- ce module
-                # avait été écrit AVANT cette découverte. Symptôme observé en prod : RugCheck
-                # (repli honeypot Solana, #207) rejetait en 400 "invalid length" des adresses
-                # dont la couverture réelle n'a jamais été vérifiée avec la bonne casse.
+                # 19/07 -- real bug found while activating this path for the
+                # first time (never exercised before): a blind .lower() was
+                # corrupting every Solana address (base58, case-sensitive --
+                # unlike Base/Robinhood in EVM hex). Same bug already fixed on
+                # 18/07 on the REST side (momentum_entry.normalize_contract_case),
+                # never ported here -- this module was written BEFORE that
+                # discovery. Symptom observed in prod: RugCheck (Solana
+                # honeypot fallback, #207) was rejecting with a 400 "invalid
+                # length" addresses whose real coverage was never verified
+                # with the correct case.
                 contract = normalize_contract_case(listing.token_address.strip(), chain)
                 if not contract or not chain or chain not in _ALLOWED_CHAINS:
                     continue
-                # 22/07 -- même filtre que discover_momentum_candidates (momentum_entry.
-                # _add_candidate) : WETH/stablecoins ne sont jamais des candidats
-                # spéculatifs légitimes, et déclenchaient un repli x402 payant en boucle
-                # sur le check holder_concentration (cf. commentaire détaillé côté
-                # momentum_entry.py -- ce chemin WebSocket a son PROPRE ajout de candidat,
-                # jamais couvert par le filtre côté heartbeat classique).
+                # 22/07 -- same filter as discover_momentum_candidates
+                # (momentum_entry._add_candidate): WETH/stablecoins are never
+                # legitimate speculative candidates, and were triggering a
+                # paid x402 fallback in a loop on the holder_concentration
+                # check (see the detailed comment on the momentum_entry.py
+                # side -- this WebSocket path has its OWN candidate
+                # addition, never covered by the classic heartbeat-side
+                # filter).
                 from aria_core.momentum_entry import reference_tokens_excluded
 
                 if contract.lower() in reference_tokens_excluded(chain):
@@ -267,11 +274,12 @@ class MomentumWebsocketListener:
                 key = (contract, chain)
                 last = self._seen.get(key)
                 if last is not None and (now - last[0]) < DEDUP_TTL_SECONDS:
-                    continue  # déjà déclenché récemment -- jamais un re-déclenchement en boucle
-                # 22/07 -- au-delà du TTL anti-spam (15min), le candidat rejoint quand
-                # même _pending -- le VRAI cooldown adaptatif (4h sauf mouvement de
-                # prix) se décide dans _drain_once, où le prix est disponible sans
-                # coût réseau dédié (cf. RESCAN_COOLDOWN_SECONDS).
+                    continue  # already triggered recently -- never a retrigger loop
+                # 22/07 -- beyond the anti-spam TTL (15min), the candidate
+                # still joins _pending -- the REAL adaptive cooldown (4h
+                # unless there's a price move) is decided in _drain_once,
+                # where the price is available with no dedicated network cost
+                # (see RESCAN_COOLDOWN_SECONDS).
                 self._pending.setdefault(key, now)
 
     async def _drain_loop(self) -> None:
@@ -281,18 +289,19 @@ class MomentumWebsocketListener:
                 await self._drain_once()
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 -- une vidange qui plante ne tue pas le service
-                logger.exception("momentum_websocket: vidange échouée (%s)", exc)
+            except Exception as exc:  # noqa: BLE001 -- a failed drain never kills the service
+                logger.exception("momentum_websocket: drain failed (%s)", exc)
 
     async def _drain_once(self) -> None:
         async with self._lock:
             if not self._pending:
                 return
             batch_keys = list(self._pending.keys())[:MAX_CANDIDATES_PER_DRAIN]
-            # 22/07 -- capture l'ANCIEN (timestamp, prix) AVANT de l'écraser -- c'est
-            # la référence du cooldown adaptatif ci-dessous. La mise à jour de _seen
-            # elle-même est différée après le prefilter (où le prix frais devient
-            # disponible), pour toujours écrire le prix le plus à jour connu.
+            # 22/07 -- captures the OLD (timestamp, price) BEFORE overwriting
+            # it -- that's the reference for the adaptive cooldown below.
+            # Updating _seen itself is deferred until after the prefilter
+            # (where the fresh price becomes available), so it always writes
+            # the most up-to-date known price.
             previous_seen = {key: self._seen.get(key) for key in batch_keys}
             for key in batch_keys:
                 self._pending.pop(key, None)
@@ -300,54 +309,56 @@ class MomentumWebsocketListener:
         if not batch_keys:
             return
         if not _paper_trading_enabled():
-            logger.info("momentum_websocket: ARIA_PAPER_TRADING_ENABLED désactivé, vidange ignorée")
+            logger.info("momentum_websocket: ARIA_PAPER_TRADING_ENABLED disabled, drain skipped")
             return
         if outgoing_pause.is_paused():
-            logger.info("momentum_websocket: kill-switch actif, vidange ignorée")
+            logger.info("momentum_websocket: kill-switch active, drain skipped")
             return
 
         raw_candidates = [{"contract": c, "chain": ch} for (c, ch) in batch_keys]
         try:
             filtered = await _batch_liquidity_prefilter(raw_candidates)
-        except Exception as exc:  # noqa: BLE001 -- le pré-filtre ne doit jamais bloquer la vidange
-            logger.info("momentum_websocket: pré-filtre de liquidité échoué (%s)", exc)
+        except Exception as exc:  # noqa: BLE001 -- the prefilter must never block the drain
+            logger.info("momentum_websocket: liquidity prefilter failed (%s)", exc)
             filtered = raw_candidates
 
-        # 22/07 -- met à jour _seen pour TOUT le batch (peu importe qui survit au
-        # cooldown ci-dessous) : un candidat qu'on vient de regarder, même rejeté,
-        # ne doit pas redéclencher une vérification avant le prochain cooldown réel.
+        # 22/07 -- updates _seen for the WHOLE batch (regardless of who
+        # survives the cooldown below): a candidate we just looked at, even
+        # if rejected, must not retrigger a check before the next real
+        # cooldown.
         now_ts = time.time()
         price_by_key: dict[tuple[str, str], float | None] = {}
         for c in filtered:
             key = (c["contract"], c["chain"])
             price_by_key[key] = c.get("price_usd")
         for key in batch_keys:
-            # Prix inconnu à CE passage (prefilter sans donnée) -- conserve l'ancien
-            # prix de référence plutôt que de le perdre (jamais une régression
-            # d'information sous prétexte d'une panne ponctuelle du prefilter).
+            # Price unknown on THIS pass (prefilter with no data) -- keeps the
+            # old reference price rather than losing it (never an information
+            # regression just because of a one-off prefilter outage).
             price = price_by_key.get(key)
             if price is None:
                 old = previous_seen.get(key)
                 price = old[1] if old is not None else None
             self._seen[key] = (now_ts, price)
 
-        # 22/07 -- cooldown adaptatif (RESCAN_COOLDOWN_SECONDS, 4h) : un candidat déjà
-        # vu récemment (au-delà du TTL anti-spam, sous le cooldown complet) ne
-        # redéclenche PAS d'évaluation, SAUF si son prix a bougé de plus de
-        # RESCAN_PRICE_MOVE_THRESHOLD_PCT depuis le dernier passage. Fail-open sur
-        # donnée manquante (prix ancien ou nouveau inconnu) -- ne bloque jamais sur
-        # une incertitude, seulement sur une comparaison réellement possible.
+        # 22/07 -- adaptive cooldown (RESCAN_COOLDOWN_SECONDS, 4h): a
+        # candidate already seen recently (beyond the anti-spam TTL, under
+        # the full cooldown) does NOT retrigger an evaluation, UNLESS its
+        # price has moved more than RESCAN_PRICE_MOVE_THRESHOLD_PCT since the
+        # last pass. Fail-open on missing data (old or new price unknown) --
+        # never blocks on uncertainty, only on a comparison that's actually
+        # possible.
         def _still_in_cooldown(c: dict) -> bool:
             key = (c["contract"], c["chain"])
             old = previous_seen.get(key)
             if old is None:
-                return False  # jamais vu -- pas de cooldown possible
+                return False  # never seen -- no cooldown possible
             old_ts, old_price = old
             if (now_ts - old_ts) >= RESCAN_COOLDOWN_SECONDS:
-                return False  # cooldown complet écoulé
+                return False  # full cooldown elapsed
             new_price = price_by_key.get(key)
             if old_price is None or new_price is None or old_price <= 0:
-                return False  # comparaison impossible -- fail-open, jamais bloquant
+                return False  # comparison impossible -- fail-open, never blocking
             move_pct = abs(new_price - old_price) / old_price
             return move_pct < RESCAN_PRICE_MOVE_THRESHOLD_PCT
 
@@ -355,8 +366,8 @@ class MomentumWebsocketListener:
         filtered = [c for c in filtered if not _still_in_cooldown(c)]
         if len(filtered) < before_cooldown_count:
             logger.info(
-                "momentum_websocket: %d candidat(s) en cooldown adaptatif (déjà vus, "
-                "prix stable) -- vidange réduite à %d",
+                "momentum_websocket: %d candidate(s) in adaptive cooldown (already "
+                "seen, stable price) -- drain reduced to %d",
                 before_cooldown_count - len(filtered), len(filtered),
             )
 
@@ -367,16 +378,17 @@ class MomentumWebsocketListener:
 
         candidates = [c["contract"] for c in filtered]
 
-        # 19/07 -- plafond de débit horaire (cf. MAX_EVALUATIONS_PER_HOUR) : tronque la
-        # liste plutôt que d'annuler toute la vidange -- dégradation progressive, jamais
-        # tout-ou-rien. Les candidats tronqués restent marqués "vus" (_seen, ci-dessus) :
-        # ils ne seront pas réévalués avant DEDUP_TTL_SECONDS, compromis volontaire pour
-        # ne pas créer un pic de rattrapage au drain suivant.
+        # 19/07 -- hourly rate cap (see MAX_EVALUATIONS_PER_HOUR): truncates
+        # the list rather than canceling the whole drain -- graceful
+        # degradation, never all-or-nothing. Truncated candidates stay marked
+        # "seen" (_seen, above): they won't be re-evaluated before
+        # DEDUP_TTL_SECONDS, a deliberate tradeoff to avoid a catch-up spike
+        # on the next drain.
         now = time.time()
         budget = self._evaluation_budget_remaining(now)
         if budget <= 0:
             logger.info(
-                "momentum_websocket: plafond horaire atteint (%d/h) -- vidange ignorée",
+                "momentum_websocket: hourly cap reached (%d/h) -- drain skipped",
                 MAX_EVALUATIONS_PER_HOUR,
             )
             return
@@ -389,12 +401,13 @@ class MomentumWebsocketListener:
         try:
             from aria_core.gateway.telegram_bot import send_trading_notification
 
-            # 20/07 -- bug réel trouvé en conditions réelles (position MAGIC achetée
-            # sans jamais notifier Telegram, seule sa vente par le heartbeat suivant
-            # est arrivée) : ce chemin n'avait jamais transmis de notifier à
-            # run_paper_cycle -- toute position ouverte via le WebSocket temps réel
-            # restait silencieuse jusqu'à sa clôture (gérée par le heartbeat, qui
-            # notifie déjà). Même fonction que le heartbeat, jamais une 2e implémentation.
+            # 20/07 -- real bug found in production conditions (a MAGIC
+            # position bought without ever notifying Telegram, only its sale
+            # by the next heartbeat arrived): this path had never passed a
+            # notifier to run_paper_cycle -- any position opened via the
+            # real-time WebSocket stayed silent until its close (handled by
+            # the heartbeat, which already notifies). Same function as the
+            # heartbeat, never a 2nd implementation.
             await paper_trader.run_paper_cycle(
                 candidates=candidates,
                 analyzer=analyzer,
@@ -402,8 +415,8 @@ class MomentumWebsocketListener:
                 skip_position_management=True,
                 notifier=send_trading_notification,
             )
-        except Exception as exc:  # noqa: BLE001 -- une vidange qui plante ne tue pas le service
-            logger.exception("momentum_websocket: run_paper_cycle échoué (%s)", exc)
+        except Exception as exc:  # noqa: BLE001 -- a failed drain never kills the service
+            logger.exception("momentum_websocket: run_paper_cycle failed (%s)", exc)
 
 
 momentum_websocket_listener = MomentumWebsocketListener()

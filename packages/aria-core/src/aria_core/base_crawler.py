@@ -1,14 +1,14 @@
-"""Crawler Base — découvre les tokens et les fait passer par l'absorbeur.
+"""Base crawler — discovers tokens and feeds them through the absorber.
 
-« Tout scanner » : on récupère en continu les pools Base (nouveaux + tendance via
-GeckoTerminal), on extrait les contrats de token, et on les passe à
-``token_absorber.absorb`` → gardé dans la base propriétaire ou rejeté pour toujours
-(sauf résurrection). Un token déjà connu (actif/rejeté) est court-circuité par
-l'absorbeur, donc re-crawler ne coûte rien.
+"Scan everything": continuously pull Base pools (new + trending via
+GeckoTerminal), extract the token contracts, and pass them through
+``token_absorber.absorb`` -> kept in the proprietary database or rejected
+forever (unless resurrected). A token already known (active/rejected) is
+short-circuited by the absorber, so re-crawling costs nothing.
 
-La découverte réseau (GeckoTerminal) est **injectable** → testable hors-ligne. En
-prod, le défaut interroge l'API publique (tourne sur le VPS, réseau autorisé).
-Lecture seule, aucune signature.
+Network discovery (GeckoTerminal) is **injectable** -> testable offline. In
+prod, the default hits the public API (runs on the VPS, network allowed).
+Read-only, no signing.
 """
 from __future__ import annotations
 
@@ -24,22 +24,23 @@ _DISCOVERY_PATHS = (
     "/networks/base/new_pools",
     "/networks/base/trending_pools",
 )
-# Top pools : le terrain de chasse des tokens ÉTABLIS (vérifiés, avec vraie
-# profondeur) — pas la benne des lancements frais. C'est ici qu'on trouve les
-# vrais builders du 85% VC. ``sort=h24_volume_usd_desc`` est EXPLICITE (suite
-# audit #77 : le défaut GeckoTerminal pour cet endpoint est ``h24_tx_count_desc``
-# — nombre de transactions 24h, pas profondeur/volume — biaisé vers l'activité
-# brute (bots/snipers sur des tokens tout juste lancés) plutôt que vers des pools
-# réellement établis. Le commentaire précédent affirmait un tri par volume/liquidité
-# jamais imposé par le code — corrigé ici avec un paramètre de requête explicite).
+# Top pools: the hunting ground for ESTABLISHED tokens (verified, with real
+# depth) — not the bin of fresh launches. This is where the real 85% VC
+# builders are found. ``sort=h24_volume_usd_desc`` is EXPLICIT (following
+# audit #77: the GeckoTerminal default for this endpoint is
+# ``h24_tx_count_desc`` — 24h transaction count, not depth/volume — biased
+# toward raw activity (bots/snipers on just-launched tokens) rather than
+# genuinely established pools. The previous comment claimed a volume/liquidity
+# sort that the code never actually enforced — fixed here with an explicit
+# query parameter).
 _TOP_POOLS_PATH = "/networks/base/pools?sort=h24_volume_usd_desc"
 
 
 def _extract_token_contracts(payload: object) -> list[str]:
-    """Extrait les adresses de token (base_token) d'une réponse pools GeckoTerminal.
+    """Extracts token addresses (base_token) from a GeckoTerminal pools response.
 
-    ``data[].relationships.base_token.data.id`` = ``"base_0x…"`` → on retire le
-    préfixe réseau. Ignore silencieusement toute entrée malformée (jamais d'exception).
+    ``data[].relationships.base_token.data.id`` = ``"base_0x..."`` -> strip the
+    network prefix. Silently ignores any malformed entry (never raises).
     """
     out: list[str] = []
     if not isinstance(payload, dict):
@@ -58,7 +59,7 @@ def _extract_token_contracts(payload: object) -> list[str]:
 
 
 async def _fetch_gt(path: str) -> object | None:
-    """GET GeckoTerminal (dégradation gracieuse : None sur toute erreur, jamais bloquant)."""
+    """GET GeckoTerminal (graceful degradation: None on any error, never blocking)."""
     url = f"{_GT_BASE}{path}"
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -66,13 +67,13 @@ async def _fetch_gt(path: str) -> object | None:
         if r.status_code != 200:
             return None
         return r.json()
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.info("base_crawler: fetch %s échoué (%s)", path, exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.info("base_crawler: fetch %s failed (%s)", path, exc)
         return None
 
 
 async def discover_base_tokens(*, fetch=None, limit: int = 100) -> list[str]:
-    """Contrats de token Base à candidater (nouveaux + tendance), dédoublonnés."""
+    """Base token contracts to consider (new + trending), deduplicated."""
     fetch = fetch or _fetch_gt
     seen: dict[str, None] = {}
     for path in _DISCOVERY_PATHS:
@@ -88,11 +89,11 @@ async def discover_base_tokens(*, fetch=None, limit: int = 100) -> list[str]:
 
 
 def _pool_age_days(created_at: object) -> float | None:
-    """Âge d'un pool en jours depuis ``attributes.pool_created_at`` (ISO 8601, GeckoTerminal).
+    """Pool age in days from ``attributes.pool_created_at`` (ISO 8601, GeckoTerminal).
 
-    ``None`` si le champ est absent ou n'a pas pu être parsé (jamais d'exception —
-    un âge inconnu n'est pas une erreur, juste une donnée manquante à traiter par
-    l'appelant, cf. ``discover_top_pools``).
+    ``None`` if the field is missing or couldn't be parsed (never raises — an
+    unknown age isn't an error, just missing data for the caller to handle,
+    see ``discover_top_pools``).
     """
     if not created_at:
         return None
@@ -104,13 +105,13 @@ def _pool_age_days(created_at: object) -> float | None:
 
 
 def _extract_tokens_with_liquidity(payload: object) -> list[tuple[str, float, float | None]]:
-    """(adresse, réserve USD, âge en jours ou None) depuis une réponse pools GeckoTerminal.
+    """(address, USD reserve, age in days or None) from a GeckoTerminal pools response.
 
-    ``attributes.reserve_in_usd`` = liquidité du pool, ``attributes.pool_created_at``
-    = date de création (ISO 8601). Permet de filtrer À LA DÉCOUVERTE : inutile de
-    scanner un pool sous le plancher de liquidité ou trop jeune (il échouera/mûrira
-    rarement au filtre de sécurité) — coût nul, ces deux champs sont déjà dans la
-    même réponse GeckoTerminal, aucun appel réseau supplémentaire.
+    ``attributes.reserve_in_usd`` = pool liquidity, ``attributes.pool_created_at``
+    = creation date (ISO 8601). Enables filtering AT DISCOVERY TIME: no point
+    scanning a pool below the liquidity floor or too young (it will rarely pass/
+    mature past the safety filter) — zero extra cost, both fields are already in
+    the same GeckoTerminal response, no additional network call.
     """
     out: list[tuple[str, float, float | None]] = []
     if not isinstance(payload, dict):
@@ -143,25 +144,27 @@ async def discover_top_pools(
     min_liquidity_usd: float = 45_000.0,
     min_age_days: float | None = None,
 ) -> list[str]:
-    """Tokens des TOP pools Base (établis, liquides), filtrés par un plancher de liquidité.
+    """Tokens from TOP Base pools (established, liquid), filtered by a liquidity floor.
 
-    Le vrai terrain de chasse du 85% VC : des tokens avec une profondeur réelle, pas
-    des lancements frais illiquides. On ne ramène que ce qui peut PASSER le filtre.
+    The real hunting ground for the 85% VC pocket: tokens with real depth, not
+    illiquid fresh launches. Only returns what can PASS the filter.
 
-    ``min_liquidity_usd`` (défaut 45 000 $, relevé depuis 30 000 $ le 12/07 — suite
-    audit #77 diversification) : ce plancher checke ``reserve_in_usd`` via
-    GeckoTerminal, alors que le gate réel dans ``safety_screen`` checke la liquidité
-    via DexScreener (``scan_base_token``) — deux fournisseurs qui ne sont PAS garantis
-    d'accord sur le même pool. Marge de sécurité empirique (échantillon du 12/07 :
-    des candidats à $30k+ en `reserve_in_usd` scannaient à $0 côté DexScreener), pas
-    un nouveau critère de sécurité — le seuil réel (30k$) dans ``safety_screen.py``
-    reste inchangé, cette marge réduit juste le bruit envoyé à ``absorb()``.
+    ``min_liquidity_usd`` (default $45,000, raised from $30,000 on 07/12 —
+    following audit #77 diversification): this floor checks ``reserve_in_usd``
+    via GeckoTerminal, while the real gate in ``safety_screen`` checks
+    liquidity via DexScreener (``scan_base_token``) — two providers that are
+    NOT guaranteed to agree on the same pool. Empirical safety margin (07/12
+    sample: candidates at $30k+ in `reserve_in_usd` scanned at $0 on the
+    DexScreener side), not a new safety criterion — the real threshold ($30k)
+    in ``safety_screen.py`` stays unchanged, this margin just reduces the
+    noise sent to ``absorb()``.
 
-    ``min_age_days`` (optionnel, défaut ``None`` = pas de filtre, comportement
-    inchangé) : exclut les pools plus jeunes que ce seuil. Un âge inconnu (champ
-    ``pool_created_at`` absent/imparsable) est traité comme trop jeune dès que
-    ``min_age_days`` est fourni — fail-closed, cohérent avec le reste du pipeline
-    (cf. ``safety_screen``), sans jamais toucher à ses gates de sécurité.
+    ``min_age_days`` (optional, default ``None`` = no filter, unchanged
+    behavior): excludes pools younger than this threshold. An unknown age
+    (missing/unparsable ``pool_created_at`` field) is treated as too young as
+    soon as ``min_age_days`` is provided — fail-closed, consistent with the
+    rest of the pipeline (see ``safety_screen``), without ever touching its
+    safety gates.
     """
     fetch = fetch or _fetch_gt
     payload = await fetch(_TOP_POOLS_PATH)
@@ -179,19 +182,20 @@ async def discover_top_pools(
 
 
 async def discover_virtuals_tokens(*, client=None, limit: int = 50) -> list[str]:
-    """Tokens Virtuals en bonding (la niche 15%) — vrais builders d'agents IA.
+    """Virtuals tokens in bonding (the 15% niche) — real AI-agent builders.
 
-    ATTENTION : ces tokens sont en courbe de bonding (liquidité mince, souvent non
-    vérifiés au sens Blockscout) -> ils N'entrent PAS dans l'absorbeur standard (ils
-    échoueraient à tort). Réservé au futur pipeline bonding dédié (mode d'analyse
-    adapté). Exposé ici pour ce pipeline, pas pour le crawl VC standard.
+    WARNING: these tokens are on a bonding curve (thin liquidity, often not
+    verified in the Blockscout sense) -> they do NOT enter the standard
+    absorber (they would fail wrongly). Reserved for the future dedicated
+    bonding pipeline (adapted analysis mode). Exposed here for that pipeline,
+    not for the standard VC crawl.
     """
     if client is None:
         from aria_core.services.virtuals import virtuals_client as client
     try:
         protos = await client.fetch_prototypes()
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.info("base_crawler: découverte Virtuals échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.info("base_crawler: Virtuals discovery failed (%s)", exc)
         return []
     seen: dict[str, None] = {}
     for vt in protos or []:
@@ -204,21 +208,21 @@ async def discover_virtuals_tokens(*, client=None, limit: int = 50) -> list[str]
 
 
 async def discover_virtuals_graduated_tokens(*, client=None, limit: int = 50) -> list[str]:
-    """Tokens Virtuals ayant récemment gradué — vraie liquidité DEX, pipeline STANDARD.
+    """Recently-graduated Virtuals tokens — real DEX liquidity, STANDARD pipeline.
 
-    Contrairement à ``discover_virtuals_tokens`` (bonding, niche 15%), ces tokens ont
-    une paire DEX réelle post-graduation : ils rejoignent l'absorbeur générique
-    (``token_absorber.absorb``, pool 85% VC) comme n'importe quel token Base, sans
-    traitement spécial. Exposé pour un pickup plus rapide qu'attendre leur apparition
-    dans ``discover_top_pools`` (seuil de liquidité, peuvent être encore fins juste
-    après graduation).
+    Unlike ``discover_virtuals_tokens`` (bonding, 15% niche), these tokens have
+    a real DEX pair post-graduation: they join the generic absorber
+    (``token_absorber.absorb``, 85% VC pool) like any other Base token, with no
+    special handling. Exposed for a faster pickup than waiting for them to
+    show up in ``discover_top_pools`` (liquidity threshold, can still be thin
+    right after graduation).
     """
     if client is None:
         from aria_core.services.virtuals import virtuals_client as client
     try:
         tokens = await client.fetch_graduated()
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.info("base_crawler: découverte Virtuals gradués échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.info("base_crawler: graduated Virtuals discovery failed (%s)", exc)
         return []
     seen: dict[str, None] = {}
     for vt in tokens or []:
@@ -233,15 +237,15 @@ async def discover_virtuals_graduated_tokens(*, client=None, limit: int = 50) ->
 async def crawl_and_absorb(
     *, discover=None, absorber=None, limit: int = 50, max_age_days: int | None = None
 ) -> dict:
-    """Découvre des tokens Base et les absorbe. Retourne le compte par verdict.
+    """Discovers Base tokens and absorbs them. Returns the count per verdict.
 
-    ``discover()`` → liste de contrats (défaut : GeckoTerminal). ``absorber(contract)``
-    → 'kept'/'rejected'/'skip_*' (défaut : token_absorber.absorb). L'absorbeur
-    court-circuite déjà les tokens connus, donc pas de gaspillage. ``max_age_days``
-    (optionnel) : transmis à l'absorbeur, hors-scope ('skip_too_old') au-delà.
+    ``discover()`` -> list of contracts (default: GeckoTerminal). ``absorber(contract)``
+    -> 'kept'/'rejected'/'skip_*' (default: token_absorber.absorb). The absorber
+    already short-circuits known tokens, so no waste. ``max_age_days``
+    (optional): forwarded to the absorber, out of scope ('skip_too_old') beyond it.
     """
-    # Défaut : le terrain de chasse « top pools » (établis, liquides) — pas la benne
-    # des lancements frais. C'est là que vivent les vrais builders du 85% VC.
+    # Default: the "top pools" hunting ground (established, liquid) — not the
+    # bin of fresh launches. This is where the real 85% VC builders live.
     disc = discover or discover_top_pools
     if absorber is None:
         from aria_core.token_absorber import absorb as absorber
@@ -254,11 +258,11 @@ async def crawl_and_absorb(
                 verdict = await absorber(contract, max_age_days=max_age_days)
             else:
                 verdict = await absorber(contract)
-        except Exception as exc:  # noqa: BLE001 — un token qui plante n'arrête pas le crawl
-            logger.info("base_crawler: absorb %s échoué (%s)", contract, exc)
+        except Exception as exc:  # noqa: BLE001 — a failing token doesn't stop the crawl
+            logger.info("base_crawler: absorb %s failed (%s)", contract, exc)
             verdict = "error"
         counts[verdict] = counts.get(verdict, 0) + 1
-    logger.info("base_crawler: %s tokens traités %s", sum(counts.values()), counts)
+    logger.info("base_crawler: %s tokens processed %s", sum(counts.values()), counts)
     return counts
 
 
@@ -272,32 +276,35 @@ async def retry_stale_pending(
     absorber=None,
     abandon_checker=None,
 ) -> dict:
-    """Retente délibérément les candidats ``pending`` (échec MOU) laissés de côté.
+    """Deliberately retries ``pending`` candidates (soft failure) left behind.
 
-    ``crawl_and_absorb`` ne revoit un candidat ``pending`` QUE s'il réapparaît par
-    hasard dans une découverte ultérieure (``token_absorber.absorb`` ne court-circuite
-    déjà pas 'pending', cf. ``test_soft_fail_pending_is_still_rescanned_next_cycle``)
-    — mais rien ne va délibérément le repêcher si le marché ne le remet pas sous le
-    nez du crawl. Résultat mesuré (audit #77) : le pool ``active`` reste à 0 malgré
-    un flux de découverte correct, parce que les candidats « pas encore mûrs »
-    (contrat pas encore vérifié, holders pas encore lisibles, liquidité en train de
-    monter) ne sont jamais revisités une fois leurs données susceptibles d'avoir mûri.
+    ``crawl_and_absorb`` only revisits a ``pending`` candidate if it happens
+    to reappear in a later discovery (``token_absorber.absorb`` doesn't
+    short-circuit 'pending' already, see
+    ``test_soft_fail_pending_is_still_rescanned_next_cycle``) — but nothing
+    deliberately goes back to fetch it if the market doesn't put it back in
+    front of the crawl. Measured result (audit #77): the ``active`` pool stays
+    at 0 despite a correct discovery flow, because candidates that are "not
+    yet mature" (contract not yet verified, holders not yet readable,
+    liquidity still rising) are never revisited once their data may have
+    matured.
 
-    Ne duplique aucun filtre : ``lister`` (défaut ``screened_pool.list_stale_pending``)
-    trouve juste QUI retenter, ``absorber`` (défaut ``token_absorber.absorb``) est le
-    MÊME code de filtrage que le crawl normal — un candidat encore immature reste
-    'pending' (nouvel essai au prochain passage), un candidat désormais malveillant
-    confirmé devient 'rejected', un candidat qui a mûri devient enfin 'active'.
+    Duplicates no filter: ``lister`` (default ``screened_pool.list_stale_pending``)
+    just finds WHO to retry, ``absorber`` (default ``token_absorber.absorb``) is
+    the SAME filtering code as the normal crawl — a still-immature candidate
+    stays 'pending' (retried next pass), a candidate now confirmed malicious
+    becomes 'rejected', a candidate that has matured finally becomes 'active'.
 
-    Plafond anti-boucle-infinie (suite audit #77/#105 : 41/50 ``rejected`` trouvés
-    sans signal dur, reliquats d'une version plus stricte du filtre, jamais retentés
-    depuis — sans plafond, un candidat qui ne mûrit jamais serait retenté toutes les
-    24h pour toujours). Si un candidat reste ``skip_incomplete`` (encore MOU) après ce
-    nouveau passage, ``abandon_checker`` (défaut ``screened_pool.abandon_stale_pending``)
-    vérifie ``max_retries``/``max_age_days`` et bascule en ``rejected`` (raison
-    explicite) si dépassé. Encore une fois AUCUN nouveau critère de sécurité — juste
-    une limite sur le nombre de passages, appliquée seulement après qu'``absorber``
-    a déjà tranché que ce n'est ni mûri ('kept') ni malveillant confirmé ('rejected').
+    Anti-infinite-loop cap (following audit #77/#105: 41/50 ``rejected`` found
+    with no hard signal, leftovers from a stricter filter version, never
+    retried since — without a cap, a candidate that never matures would be
+    retried every 24h forever). If a candidate stays ``skip_incomplete``
+    (still soft-failing) after this new pass, ``abandon_checker`` (default
+    ``screened_pool.abandon_stale_pending``) checks ``max_retries``/``max_age_days``
+    and flips it to ``rejected`` (explicit reason) if exceeded. Again NO new
+    safety criterion — just a limit on the number of passes, applied only
+    after ``absorber`` has already decided it's neither mature ('kept') nor
+    confirmed malicious ('rejected').
     """
     if lister is None:
         from aria_core import screened_pool
@@ -309,19 +316,19 @@ async def retry_stale_pending(
 
     stale = await lister()
 
-    # ``known_age_days`` (Volet C, 12/07 -- correctif du même jour : calculé
-    # INCONDITIONNELLEMENT, PAS seulement quand ``absorber is None``. En prod,
-    # ``heartbeat.py`` injecte TOUJOURS son propre ``absorber`` (wrapper Volet A qui
-    # tague ``source``) -- une version antérieure de ce calcul, cantonnée à la branche
-    # "absorber par défaut", ne s'exécutait donc jamais réellement (trouvé en
-    # vérifiant la prod, pas en supposant que ça marchait). Dérivé de
-    # ``first_screened_at`` -- borne conservative de l'âge on-chain réel (souvent
-    # plus vieux que sa première détection par ARIA, jamais plus jeune pour les
-    # candidats ``top_pools``/``bonding_direct``). Transmis à TOUT ``absorber``
-    # (par défaut ou injecté) via un kwarg -- les wrappers Volet A
-    # (``_absorb_top_pools``/``_absorb_radar`` dans ``heartbeat.py``) le
-    # retransmettent déjà tel quel via leur ``**kw``, sans modification nécessaire
-    # côté ``heartbeat.py``.
+    # ``known_age_days`` (Track C, 07/12 -- same-day fix: computed
+    # UNCONDITIONALLY, NOT only when ``absorber is None``. In prod,
+    # ``heartbeat.py`` ALWAYS injects its own ``absorber`` (Track A wrapper that
+    # tags ``source``) -- an earlier version of this computation, confined to
+    # the "default absorber" branch, therefore never actually ran (found by
+    # checking prod, not by assuming it worked). Derived from
+    # ``first_screened_at`` -- a conservative bound on the real on-chain age
+    # (often older than ARIA's first detection of it, never younger for
+    # ``top_pools``/``bonding_direct`` candidates). Forwarded to ANY ``absorber``
+    # (default or injected) via a kwarg -- the Track A wrappers
+    # (``_absorb_top_pools``/``_absorb_radar`` in ``heartbeat.py``) already
+    # forward it as-is via their ``**kw``, no change needed on the
+    # ``heartbeat.py`` side.
     _age_by_contract: dict[str, float] = {}
     for row in stale:
         if not isinstance(row, dict):
@@ -356,14 +363,14 @@ async def retry_stale_pending(
         contract = row["contract"] if isinstance(row, dict) else row
         try:
             verdict = await absorber(contract, known_age_days=_age_by_contract.get(contract))
-            # 'skip_prefiltered' (Volet C) est aussi une variante d'échec mou -- un
-            # candidat structurellement bloqué doit finir par être abandonné, comme
-            # 'skip_incomplete', pas retenté indéfiniment tous les 24h.
+            # 'skip_prefiltered' (Track C) is also a soft-failure variant -- a
+            # structurally blocked candidate must eventually be abandoned, like
+            # 'skip_incomplete', not retried forever every 24h.
             if verdict in ("skip_incomplete", "skip_prefiltered") and await abandon_checker(contract):
                 verdict = "abandoned"
-        except Exception as exc:  # noqa: BLE001 — un candidat en échec n'arrête pas les autres
-            logger.info("base_crawler: retry %s échoué (%s)", contract, exc)
+        except Exception as exc:  # noqa: BLE001 — a failing candidate doesn't stop the others
+            logger.info("base_crawler: retry %s failed (%s)", contract, exc)
             verdict = "error"
         counts[verdict] = counts.get(verdict, 0) + 1
-    logger.info("base_crawler: retry pending -> %s tokens revus %s", sum(counts.values()), counts)
+    logger.info("base_crawler: retry pending -> %s tokens revisited %s", sum(counts.values()), counts)
     return counts

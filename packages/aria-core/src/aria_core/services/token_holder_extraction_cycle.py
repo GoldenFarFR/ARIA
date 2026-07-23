@@ -1,33 +1,33 @@
-"""Extraction récurrente des holders Blockscout Pro (x402) -- coordonne la
-croissance de ``token_holder_intel`` (147 tokens au 21/07, extraits en
-one-shot manuel) avec la découverte de candidats smart-money
-(``smart_money_leaderboard.discover_and_enqueue_candidates``, qui lit la MÊME
-table). Réponse à la demande opérateur (21/07) : « il faut coordonner les
-scans de token / quantité de holders absorbés et à traiter vers les smart ».
+"""Recurring extraction of Blockscout Pro holders (x402) -- coordinates the
+growth of ``token_holder_intel`` (147 tokens as of 21/07, extracted in a
+manual one-shot) with smart-money candidate discovery
+(``smart_money_leaderboard.discover_and_enqueue_candidates``, which reads the
+SAME table). Answers an operator request (21/07): "the token scans / the
+number of holders absorbed and to process toward smart money need to be
+coordinated".
 
-Profondeur par palier de capitalisation (décision opérateur explicite, 21/07) :
-top 500 holders pour >=1000M$ de mcap, top 300 pour >=500M$, top 200 pour
->=100M$, top 100 pour tout le reste (y compris mcap inconnu -- jamais un tier
-supérieur inventé faute de donnée). Réutilise ``coingecko.coingecko_client``
-(déjà construit) pour la capitalisation, ``blockscout_x402.
-get_token_holders_x402_paginated`` (déjà construit, un paiement par page de
-50) pour l'extraction elle-même.
+Depth per market-cap tier (explicit operator decision, 21/07): top 500
+holders for >=1000M$ mcap, top 300 for >=500M$, top 200 for >=100M$, top 100
+for everything else (including unknown mcap -- never inventing a higher tier
+for lack of data). Reuses ``coingecko.coingecko_client`` (already built) for
+the market cap, ``blockscout_x402.get_token_holders_x402_paginated`` (already
+built, one payment per page of 50) for the extraction itself.
 
-Coût réel borné : ``MAX_TOKENS_PER_CYCLE`` bas + le plafond hebdomadaire
-PARTAGÉ (``x402_budget.py``, 5$/semaine, déjà fail-closed) bornent le pire
-cas -- aucun plafond dédié supplémentaire ici, cohérent avec le reste des
-consommateurs x402 (twit.sh/cybercentry/ottoai).
+Bounded real cost: a low ``MAX_TOKENS_PER_CYCLE`` + the SHARED weekly cap
+(``x402_budget.py``, 5$/week, already fail-closed) bound the worst case --
+no extra dedicated cap here, consistent with the rest of the x402 consumers
+(twit.sh/cybercentry/ottoai).
 
-Sélection des tokens (21/07, remplace l'ancienne source ``screened_token`` --
-cf. ``token_candidate_screening.screen_and_select_candidates``) : découverte
-DexScreener/GeckoTerminal continue (``momentum_entry.
-discover_momentum_candidates``), filtrée par honeypot GoPlus + liquidité
-≥50 000$ + volume 24h ≥1 000$, dédupliquée contre ``token_holder_intel``
-(jamais recompté) et contre une liste noire permanente dédiée (honeypot
-confirmé -> jamais retesté). LIMITE HONNÊTE : la ré-extraction des tokens
-déjà couverts (staleness -- holders qui évoluent dans le temps) n'est PAS
-construite ici -- avec >1300 tokens jamais encore touchés au 21/07, ça
-laisse une large marge avant que ça devienne pertinent."""
+Token selection (21/07, replaces the old ``screened_token`` source -- see
+``token_candidate_screening.screen_and_select_candidates``): continuous
+DexScreener/GeckoTerminal discovery (``momentum_entry.
+discover_momentum_candidates``), filtered by GoPlus honeypot + liquidity
+≥50,000$ + 24h volume ≥1,000$, deduplicated against ``token_holder_intel``
+(never recounted) and against a dedicated permanent blacklist (confirmed
+honeypot -> never retested). HONEST LIMITATION: re-extracting already-covered
+tokens (staleness -- holders change over time) is NOT built here -- with
+>1300 tokens never yet touched as of 21/07, that leaves a wide margin before
+this becomes relevant."""
 from __future__ import annotations
 
 import logging
@@ -35,15 +35,15 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# Sobriété -- extraction en masse coûte du vrai argent (x402), contrairement
-# aux autres cycles de découverte/scoring smart-money. Bas par défaut, cf.
-# MAX_WALLETS_PER_CYCLE=1 (wallet_scan_queue.py) comme précédent de prudence.
+# Sobriety -- bulk extraction costs real money (x402), unlike the other
+# smart-money discovery/scoring cycles. Low by default, see
+# MAX_WALLETS_PER_CYCLE=1 (wallet_scan_queue.py) as a precedent of caution.
 MAX_TOKENS_PER_CYCLE = 2
 
-# Paliers de profondeur par capitalisation (décision opérateur, 21/07) --
-# ordre décroissant, le premier seuil franchi l'emporte. Capitalisation
-# inconnue (CoinGecko indisponible/token non listé) -> jamais un tier
-# supérieur inventé, retombe sur le plancher (100).
+# Depth tiers by market cap (operator decision, 21/07) -- descending order,
+# the first threshold crossed wins. Unknown market cap (CoinGecko
+# unavailable/token not listed) -> never a made-up higher tier, falls back
+# to the floor (100).
 _TIERS = (
     (1_000_000_000.0, 500),
     (500_000_000.0, 300),
@@ -68,13 +68,13 @@ def target_holder_count(market_cap_usd: float | None) -> int:
 
 
 async def run_token_holder_extraction_cycle(notifier=None) -> dict:
-    """Un tour : sélectionne jusqu'à ``MAX_TOKENS_PER_CYCLE`` tokens jamais
-    encore extraits, détermine leur profondeur cible via la capitalisation
-    (CoinGecko, gratuit), extrait leurs holders (Blockscout x402, payant,
-    paginé) et les stocke -- la découverte smart-money (cycle séparé,
-    ``smart_money_leaderboard_discovery_cycle``) lira ensuite cette même
-    table à son prochain passage, aucune coordination explicite nécessaire
-    au-delà de partager la même table."""
+    """One pass: selects up to ``MAX_TOKENS_PER_CYCLE`` tokens never yet
+    extracted, determines their target depth via market cap (CoinGecko,
+    free), extracts their holders (Blockscout x402, paid, paginated) and
+    stores them -- smart-money discovery (separate cycle,
+    ``smart_money_leaderboard_discovery_cycle``) will then read this same
+    table on its next pass, no explicit coordination needed beyond sharing
+    the same table."""
     if not token_holder_extraction_enabled():
         return {"outcome": "skipped", "reason": "gate_off"}
 
@@ -102,8 +102,8 @@ async def run_token_holder_extraction_cycle(notifier=None) -> dict:
             holders = await blockscout_x402.get_token_holders_x402_paginated(
                 contract, chain="base", target_count=target, token_symbol=symbol,
             )
-        except Exception as exc:  # noqa: BLE001 -- jamais bloquant, token suivant
-            logger.warning("token_holder_extraction: échec pour %s (%s)", contract, exc)
+        except Exception as exc:  # noqa: BLE001 -- never blocking, move to next token
+            logger.warning("token_holder_extraction: failed for %s (%s)", contract, exc)
             holders = []
         written = await token_holder_intel.store_holders(contract, "base", holders) if holders else 0
         processed.append({

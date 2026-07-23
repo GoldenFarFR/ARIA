@@ -1,4 +1,4 @@
-"""Profondeur LLM — brief / standard / develop (économie tokens)."""
+"""LLM depth — brief / standard / develop (token economy)."""
 from __future__ import annotations
 
 import re
@@ -66,7 +66,7 @@ def _default_depth() -> LlmDepth:
 
 
 def _chiron_mode() -> bool:
-    """Profil Chiron — top modèle même sur messages courts (ARIA_SPARK_AGGRESSIVE + depth develop)."""
+    """Chiron profile — top model even on short messages (ARIA_SPARK_AGGRESSIVE + depth develop)."""
     if not _spark_active():
         return False
     if not _spark_aggressive():
@@ -75,7 +75,7 @@ def _chiron_mode() -> bool:
 
 
 def detect_depth(message: str, *, default: LlmDepth | None = None) -> LlmDepth:
-    """Détecte brief / standard / develop depuis le message utilisateur."""
+    """Detects brief / standard / develop from the user's message."""
     text = (message or "").strip()
     if not text:
         return default or _default_depth()
@@ -224,11 +224,11 @@ def resolve_budget(
         include_context_extras=True,
         collegue_max_chars=0,
         model_override=dev_model,
-        # Incident réel (12/07) : 1200/800 tronquait en plein mot les réponses
-        # "enhance" (reformulation d'une sortie de skill) en profondeur develop —
-        # confirmé par les logs (finish_reason=length, output_tokens=1200 pile
-        # sur le plafond), indépendant de ARIA_LLM_MAX_TOKENS_DEVELOP (littéral
-        # ici, jamais paramétré par une variable d'environnement).
+        # Real incident (12/07): 1200/800 was truncating "enhance" replies
+        # (rephrasing a skill output) mid-word at develop depth — confirmed by
+        # the logs (finish_reason=length, output_tokens=1200 right at the
+        # cap), independent of ARIA_LLM_MAX_TOKENS_DEVELOP (literal here,
+        # never configured via an environment variable).
         enhance_max_tokens=3000 if spark_boost else 2000,
     )
 
@@ -238,8 +238,8 @@ def _spark_active() -> bool:
 
 
 def _virtuals_catalog_default(depth: LlmDepth) -> str:
-    """SSOT spark_config — les 3 valeurs par défaut du catalogue Virtuals, jamais des
-    IDs de modèle valides pour un provider tiers (Groq, DeepSeek direct, xAI...)."""
+    """SSOT spark_config — the 3 default values from the Virtuals catalog, never
+    valid model IDs for a third-party provider (Groq, direct DeepSeek, xAI...)."""
     from aria_core.spark_config import (
         DEFAULT_MODEL_BRIEF,
         DEFAULT_MODEL_DEVELOP,
@@ -254,15 +254,16 @@ def _virtuals_catalog_default(depth: LlmDepth) -> str:
 
 
 def _spark_model_for_depth(depth: LlmDepth) -> str | None:
-    """Modèle par profondeur (#201, 16/07) -- lu indépendamment du provider actif,
-    pas seulement sur Virtuals : dès que le fallback Groq ou un provider direct
-    (DeepSeek, xAI...) devient le provider actif, standard/develop/brief doivent
-    quand même pouvoir différer si l'opérateur les a configurés pour CE provider.
+    """Model per depth (#201, 16/07) -- read independently of the active
+    provider, not just on Virtuals: as soon as the Groq fallback or a direct
+    provider (DeepSeek, xAI...) becomes the active provider,
+    standard/develop/brief must still be able to differ if the operator
+    configured them for THIS provider.
 
-    Garde-fou : si la valeur lue est encore le défaut catalogue Virtuals (jamais
-    surchargée pour le nouveau provider) ET que Virtuals n'est pas actif, on la
-    rejette plutôt que de l'envoyer telle quelle à une vraie API tierce -- un ID
-    comme "x-ai-grok-4-3" n'existe que dans le catalogue Spark, jamais côté
+    Guard rail: if the value read is still the Virtuals catalog default
+    (never overridden for the new provider) AND Virtuals isn't active, reject
+    it rather than send it as-is to a real third-party API -- an ID like
+    "x-ai-grok-4-3" only exists in the Spark catalog, never on
     api.groq.com/api.deepseek.com/api.x.ai."""
     if depth == LlmDepth.DEVELOP:
         raw = (getattr(settings, "aria_llm_model_develop", None) or "").strip()
@@ -295,9 +296,9 @@ def provider_display_name(provider: str | None = None) -> str:
 
 
 def fallback_notice_line(provider: str, *, lang: str = "fr") -> str:
-    """Ligne opérateur-only (#135) : signale qu'un tour de chat est passé par la route de
-    secours (Spark down), jamais montrée hors chat de l'opérateur -- pas soumise à la
-    doctrine "zéro trace IA" (surface interne, pas client)."""
+    """Operator-only line (#135): flags that a chat turn went through the
+    fallback route (Spark down), never shown outside the operator's chat --
+    not subject to the "zero AI trace" doctrine (internal surface, not client)."""
     name = provider_display_name(provider)
     if lang == "fr":
         return f"Note : réponse générée via le fallback ({name}), Spark indisponible — relire avant de t'appuyer dessus pour une décision complexe."

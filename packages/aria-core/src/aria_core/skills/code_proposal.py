@@ -1,13 +1,15 @@
-"""Propositions de code long-cours — ARIA identifie une amélioration concrète et l'ouvre
-comme ISSUE GitHub (jamais une PR, jamais un commit, jamais un merge autonome). Décision
-opérateur (08/07) : elle "continue de construire" en continu via le heartbeat, mais
-l'écriture et la fusion de code réelles restent une revue humaine (Claude Code ou
-l'opérateur) — elle n'a ni les outils (git/tests/déploiement itératifs) ni l'autorisation
-de merger seule. Le seul autre seam touchant du code est `develop_repertoire`/
-`github_sandbox`, déjà opérateur-gaté ; celui-ci n'y touche pas non plus.
+"""Long-form code proposals — ARIA identifies a concrete improvement and opens
+it as a GitHub ISSUE (never a PR, never a commit, never an autonomous merge).
+Operator decision (08/07): she "keeps building" continuously via the
+heartbeat, but actually writing and merging code stays a human review (Claude
+Code or the operator) — she has neither the tools (iterative git/tests/
+deployment) nor the authorization to merge on her own. The only other seam
+touching code is `develop_repertoire`/`github_sandbox`, already
+operator-gated; this one doesn't touch it either.
 
-Gaté OFF par défaut (`ARIA_CODE_PROPOSAL_ENABLED`) — action visible sur le repo public,
-même politique que `showcase_pr_watch` pour toute action GitHub autonome.
+Gated OFF by default (`ARIA_CODE_PROPOSAL_ENABLED`) — an action visible on
+the public repo, same policy as `showcase_pr_watch` for any autonomous
+GitHub action.
 """
 from __future__ import annotations
 
@@ -37,9 +39,9 @@ def code_proposal_enabled() -> bool:
 
 
 async def generate_code_proposal(*, llm=None, context=None) -> dict | None:
-    """Génère UNE proposition structurée (titre + corps), sans jamais toucher de code
-    réel. Fail-closed : LLM absent/vide/non parsable -> None, jamais une proposition
-    inventée ou tronquée silencieusement."""
+    """Generates ONE structured proposal (title + body), without ever
+    touching real code. Fail-closed: LLM absent/empty/unparsable -> None,
+    never a fabricated or silently truncated proposal."""
     if llm is None:
         from aria_core.llm import chat_with_context as llm
     if context is None:
@@ -67,8 +69,9 @@ async def generate_code_proposal(*, llm=None, context=None) -> dict | None:
 
 
 async def run_code_proposal_cycle(*, llm=None, github_client=None, notifier=None) -> dict:
-    """Un tour : génère une proposition, l'ouvre comme issue GitHub (jamais une PR, jamais
-    un commit). Fail-closed à chaque étage — un échec n'écrit jamais de code à la place."""
+    """One pass: generates a proposal, opens it as a GitHub issue (never a
+    PR, never a commit). Fail-closed at every stage — a failure never writes
+    code in its place."""
     if not code_proposal_enabled():
         return {"outcome": "skipped_disabled"}
 
@@ -96,7 +99,7 @@ async def run_code_proposal_cycle(*, llm=None, github_client=None, notifier=None
         issue = await github_client.create_issue(
             owner, TARGET_REPO, proposal["title"], body, labels=["aria-proposal"],
         )
-    except Exception as exc:  # noqa: BLE001 — un echec d'ouverture d'issue ne doit jamais casser le heartbeat
+    except Exception as exc:  # noqa: BLE001 — a failed issue creation must never break the heartbeat
         return {"outcome": "error", "error": str(exc)[:300]}
 
     url = issue.get("html_url", "")

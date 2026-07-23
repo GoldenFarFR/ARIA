@@ -1,17 +1,18 @@
-"""Absorbeur de tokens — « dénicheur de talents » d'ARIA.
+"""Token absorber — ARIA's "talent scout".
 
-Scanne un contrat et tranche, intransigeant :
-  - **valeur réelle** (passe le filtre de sécurité) → **gardé** dans la base
-    (`screened_pool`, status active) ;
-  - **rien** → **rejeté « pour toujours »** (status rejected) : on ne le re-scanne
-    plus (efficacité), on garde juste la raison.
+Scans a contract and decides, unforgivingly:
+  - **real value** (passes the security filter) → **kept** in the database
+    (`screened_pool`, status active);
+  - **nothing** → **rejected "for good"** (status rejected): it's never
+    re-scanned again (efficiency), only the reason is kept.
 
-**Résurrection** : si un bruit réapparaît (radar / pic d'activité), on appelle
-``reconsider_on_signal`` — le bruit **réveille** un rejeté, puis le re-scan
-**réévalue sur les faits on-chain**. Le bruit filtre/réveille, il ne décide jamais
-(dôme : un signal social ne déclenche pas d'action, il déclenche une ré-analyse).
+**Resurrection**: if noise reappears (radar / activity spike),
+``reconsider_on_signal`` is called — the noise **wakes up** a rejected
+candidate, then the re-scan **re-evaluates on the on-chain facts**. Noise
+filters/wakes, it never decides (dome: a social signal never triggers an
+action, it triggers a re-analysis).
 
-Aucune écriture on-chain, aucune signature : c'est de la lecture + un journal.
+No on-chain write, no signing: this is reading + a journal.
 """
 from __future__ import annotations
 
@@ -26,21 +27,22 @@ from aria_core.skills.safety_screen import safety_screen
 
 logger = logging.getLogger(__name__)
 
-# Pré-filtre découverte (Volet C, 12/07) : sous ce seuil, un candidat est traité
-# comme "pas encore mûr" (contrat pas encore vérifié, holders pas encore indexés
-# par Blockscout) plutôt que comme "structurellement bloqué" — garde-fou anti-faux-
-# négatif pour les tokens tout juste déployés (cf. ``_prefilter_reason``).
+# Discovery pre-filter (Part C, 12/07): below this threshold, a candidate is
+# treated as "not yet mature" (contract not yet verified, holders not yet
+# indexed by Blockscout) rather than "structurally blocked" — anti-false-
+# negative guard rail for just-deployed tokens (see ``_prefilter_reason``).
 _PREFILTER_MIN_AGE_DAYS = 2.0
 
 _PREFILTER_REASON_PREFIX = "pré-filtre découverte (Blockscout)"
 
 
 def _prefilter_reason(info) -> str | None:
-    """``None`` si le candidat doit passer au scan complet, sinon le motif à tracer.
+    """``None`` if the candidate must go through the full scan, otherwise the reason to log.
 
-    Ne tranche QUE sur des faits Blockscout disponibles (``info.available``) — toute
-    donnée manquante (429, timeout, adresse introuvable) fait passer au scan complet
-    (fail-open, jamais de rejet sur absence de donnée, cf. politique ``blockscout.py``).
+    Only decides on available Blockscout facts (``info.available``) — any
+    missing data (429, timeout, address not found) falls through to the full
+    scan (fail-open, never a rejection on missing data, see the
+    ``blockscout.py`` policy).
     """
     if info is None or not info.available:
         return None
@@ -67,29 +69,32 @@ async def absorb(
     source: str = "",
     **screen_kwargs,
 ) -> str:
-    """Scanne un contrat et le range : 'kept' / 'rejected' / 'skip_*'.
+    """Scans a contract and sorts it: 'kept' / 'rejected' / 'skip_*'.
 
-    Sans ``force`` : un contrat déjà 'rejected' ('jeté pour toujours') ou déjà
-    'active' n'est PAS re-scanné (on renvoie 'skip_rejected' / 'skip_active').
-    ``force=True`` (résurrection ou rafraîchissement) ignore ce court-circuit et
-    réévalue. ``scanner`` est injectable (tests offline). ``screen_kwargs`` sont
-    passés à ``safety_screen`` (seuils ajustables). ``max_age_days`` (optionnel) :
-    hors-scope (pas fraude/légitime — 'skip_too_old') si la paire est plus vieille ;
-    vérifié avant le filtre de sécurité pour économiser le scan honeypot. ``ctx``
-    (optionnel) : contexte déjà scanné (évite un second scan réseau si l'appelant
-    a déjà dû regarder ``ctx.best_pair`` avant de décider d'appeler ``absorb`` —
-    cf. ``bonding_absorber.absorb_direct_candidate``). ``source`` (optionnel, ex.
-    ``'top_pools'``/``'radar_x'``) : pipeline de découverte d'origine, transmis tel
-    quel à ``screened_pool`` — pure traçabilité, n'affecte aucune décision de filtrage
-    (suite audit #77 diversification, 12/07). ``known_age_days`` (optionnel, Volet C
-    12/07) : âge on-chain déjà connu de l'appelant (ex. ``first_screened_at`` côté
-    ``retry_stale_pending``) — si ``>= _PREFILTER_MIN_AGE_DAYS`` ET qu'aucun ``ctx``
-    n'est déjà fourni, un appel Blockscout léger (``get_address_info``) tranche AVANT
-    le scan complet : contrat toujours non vérifié et/ou holders jamais indexés après
-    ce délai -> ``'skip_prefiltered'`` (échec mou, retracé en ``pending``, jamais
-    ``rejected`` — un candidat peut toujours mûrir plus tard). ``None`` (défaut) ou
-    valeur sous le seuil : comportement inchangé, scan complet systématique — ne
-    jamais rejeter sur une donnée manquante ou un candidat encore trop frais.
+    Without ``force``: a contract already 'rejected' ('thrown out for good')
+    or already 'active' is NOT re-scanned (returns 'skip_rejected' /
+    'skip_active'). ``force=True`` (resurrection or refresh) bypasses this
+    short-circuit and re-evaluates. ``scanner`` is injectable (offline
+    tests). ``screen_kwargs`` are passed to ``safety_screen`` (adjustable
+    thresholds). ``max_age_days`` (optional): out of scope (not fraud/
+    legitimate — 'skip_too_old') if the pair is older; checked before the
+    security filter to save the honeypot scan. ``ctx`` (optional): already
+    scanned context (avoids a second network scan if the caller already had
+    to look at ``ctx.best_pair`` before deciding to call ``absorb`` — see
+    ``bonding_absorber.absorb_direct_candidate``). ``source`` (optional,
+    e.g. ``'top_pools'``/``'radar_x'``): originating discovery pipeline,
+    passed through as-is to ``screened_pool`` — pure traceability, doesn't
+    affect any filtering decision (following diversification audit #77,
+    12/07). ``known_age_days`` (optional, Part C 12/07): on-chain age
+    already known by the caller (e.g. ``first_screened_at`` on the
+    ``retry_stale_pending`` side) — if ``>= _PREFILTER_MIN_AGE_DAYS`` AND no
+    ``ctx`` is already supplied, a lightweight Blockscout call
+    (``get_address_info``) decides BEFORE the full scan: contract still
+    unverified and/or holders never indexed after this delay ->
+    ``'skip_prefiltered'`` (soft failure, retraced as ``pending``, never
+    ``rejected`` — a candidate can always mature later). ``None`` (default)
+    or a value under the threshold: unchanged behavior, systematic full
+    scan — never reject on missing data or a candidate that's still too fresh.
     """
     scan = scanner or scan_base_token
     if not force:
@@ -103,7 +108,7 @@ async def absorb(
         info = await blockscout_client.get_address_info(contract)
         reason = _prefilter_reason(info)
         if reason is not None:
-            logger.info("absorb %s : pré-filtré (%s) — scan complet évité", contract, reason)
+            logger.info("absorb %s: pre-filtered (%s) — full scan avoided", contract, reason)
             await screened_pool.record_pending(
                 contract=contract,
                 reason=reason,
@@ -111,8 +116,9 @@ async def absorb(
             )
             return "skip_prefiltered"
 
-    # Honeypot ACTIF au filtre d'entrée : un token honeypot / à taxe extractive / owner
-    # réversible ne doit pas entrer dans le pool, pas seulement être signalé à l'analyse.
+    # Honeypot check ACTIVE at the entry filter: a honeypot token / with an
+    # extractive tax / reversible ownership must not enter the pool, not
+    # merely be flagged for analysis.
     if ctx is None:
         ctx = await scan(contract, include_honeypot=True)
 
@@ -123,11 +129,12 @@ async def absorb(
             if age_days > max_age_days:
                 return "skip_too_old"
 
-    # 22/07 -- item #19 (stress-test) : confirmation de stabilité temporelle sur la
-    # liquidité avant le jugement du crible. Une manipulation synchronisée sur LA
-    # fenêtre de ce scan (liquidité gonflée puis retirée) ne serait jamais détectée
-    # par une lecture unique -- comparé au dernier scan connu de ce même contrat
-    # (fenêtre récente), jamais un rejet sur un premier scan sans antécédent.
+    # 22/07 -- item #19 (stress-test): time-stability confirmation on
+    # liquidity before the screen's judgment. Manipulation synchronized to
+    # THIS scan's window (liquidity pumped then withdrawn) would never be
+    # detected by a single reading -- compared against the last known scan
+    # of this same contract (recent window), never a rejection on a first
+    # scan with no history.
     liquidity_stability = None
     if ctx.best_pair is not None and ctx.best_pair.liquidity_usd:
         stability_result = await record_and_check_liquidity_stability(
@@ -152,25 +159,27 @@ async def absorb(
         )
         return "kept"
 
-    # Échec MOU (données indisponibles : 429/timeout, holders non renvoyés) : on ne
-    # bannit PAS « pour toujours » — un re-scan plus tard pourra trancher. Sinon un bon
-    # token scanné pendant un pic d'indisponibilité serait perdu définitivement.
+    # SOFT failure (unavailable data: 429/timeout, holders not returned): we
+    # do NOT ban "for good" — a later re-scan can decide. Otherwise a good
+    # token scanned during an outage spike would be lost for good.
     if not result.hard_fail:
-        # Transparence exigée : si le token est PROMETTEUR mais OPAQUE, ARIA remonte
-        # une requête de recalibrage à l'opérateur au lieu de trancher dans le noir.
+        # Transparency required: if the token is PROMISING but OPAQUE, ARIA
+        # surfaces a recalibration request to the operator instead of
+        # deciding in the dark.
         try:
             from aria_core.recalibration import maybe_escalate
 
             await maybe_escalate(ctx, symbol=(ctx.best_pair.base_symbol if ctx.best_pair else ""))
-        except Exception as exc:  # noqa: BLE001 — l'escalade ne doit jamais casser l'absorption
-            logger.info("absorb %s : escalade recalibrage échouée (%s)", contract, exc)
+        except Exception as exc:  # noqa: BLE001 — the escalation must never break the absorption
+            logger.info("absorb %s: recalibration escalation failed (%s)", contract, exc)
         reason = "; ".join(result.reasons) if result.reasons else "raison indisponible"
-        logger.info("absorb %s : échec mou (%s) — non banni, à réessayer", contract, reason)
-        # Trace consultable (status='pending', ne court-circuite pas le re-scan) : avant
-        # ce correctif, un échec mou ne laissait AUCUNE donnée nulle part (audit #77).
-        # liquidity_usd/security_score/verdict transmis (15/07) : le scan complet a déjà
-        # tourné ici (contrairement au pré-filtre Volet C ci-dessus), ne pas laisser un
-        # candidat pending prometteur indiscernable d'un candidat sans aucun signal.
+        logger.info("absorb %s: soft failure (%s) — not banned, will retry", contract, reason)
+        # Consultable trace (status='pending', doesn't short-circuit the
+        # re-scan): before this fix, a soft failure left NO data anywhere
+        # (audit #77). liquidity_usd/security_score/verdict passed through
+        # (15/07): the full scan already ran here (unlike the Part C
+        # pre-filter above), don't leave a promising pending candidate
+        # indistinguishable from one with no signal at all.
         await screened_pool.record_pending(
             contract=contract,
             reason=reason,
@@ -183,8 +192,8 @@ async def absorb(
         )
         return "skip_incomplete"
 
-    # Même correctif (15/07) : un rejet dur a lui aussi un scan complet en main,
-    # ne pas le laisser indiscernable d'un rejet sans aucun signal.
+    # Same fix (15/07): a hard rejection also has a full scan in hand, don't
+    # leave it indistinguishable from a rejection with no signal at all.
     await screened_pool.record_rejected(
         contract=contract,
         reason="; ".join(result.reasons),
@@ -201,11 +210,11 @@ async def absorb(
 async def reconsider_on_signal(
     contract: str, *, scanner=None, source: str = "", **screen_kwargs
 ) -> str:
-    """Un bruit a réapparu : ressuscite un rejeté et le réévalue sur les faits on-chain.
+    """Noise reappeared: resurrects a rejected candidate and re-evaluates it on the on-chain facts.
 
-    Le signal ne décide de rien — il rouvre juste la porte, le re-scan tranche.
-    Retourne le nouveau verdict ('kept' / 'rejected'). ``source`` : même paramètre
-    que ``absorb`` (le signal qui réveille EST le pipeline d'origine ici, ex. 'radar_x').
-    """
+    The signal decides nothing — it just reopens the door, the re-scan
+    decides. Returns the new verdict ('kept' / 'rejected'). ``source``: same
+    parameter as ``absorb`` (the waking signal IS the originating pipeline
+    here, e.g. 'radar_x')."""
     await screened_pool.reconsider(contract)
     return await absorb(contract, scanner=scanner, force=True, source=source, **screen_kwargs)

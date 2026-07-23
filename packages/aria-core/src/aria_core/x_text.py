@@ -1,20 +1,20 @@
-"""Limites texte X/Twitter — comptage pondéré (URLs, emoji) + troncature sûre API v2."""
+"""X/Twitter text limits — weighted counting (URLs, emoji) + safe truncation, API v2."""
 
 from __future__ import annotations
 
 import re
 import unicodedata
 
-# API X v2 — tweet standard (hors abonnement long-form)
+# X API v2 — standard tweet (outside the long-form subscription)
 X_TWEET_MAX_CHARS = 280
 X_URL_WEIGHTED_CHARS = 23
 
-# Site Vanguard — avis complet enregistré ; le tweet cite un extrait auto-adapté
+# Vanguard site — full review recorded; the tweet quotes an auto-adapted excerpt
 FEEDBACK_SITE_MAX_CHARS = 500
 FEEDBACK_X_QUOTE_MAX_WEIGHT = 200
-# Tweet 1 seul (fil) — citation plus longue, réponse en reply
+# Single tweet (thread) — longer quote, reply as a reply
 FEEDBACK_X_QUOTE_THREAD_MAX_WEIGHT = 255
-# Remplissage cible des tweets feedback (lisibilité + densité)
+# Target fill of feedback tweets (readability + density)
 FEEDBACK_X_MIN_TWEET_FILL_RATIO = 0.70
 
 
@@ -37,7 +37,7 @@ def _char_weight(ch: str) -> int:
 
 
 def weighted_tweet_length(text: str) -> int:
-    """Longueur « poids X » : URLs comptent 23, la plupart des emoji comptent double."""
+    """"X weight" length: URLs count as 23, most emoji count double."""
     if not text:
         return 0
     total = 0
@@ -55,7 +55,7 @@ def tweet_fits(text: str, max_chars: int = X_TWEET_MAX_CHARS) -> bool:
 
 
 def fit_x_tweet(text: str, max_chars: int = X_TWEET_MAX_CHARS, ellipsis: str = "…") -> str:
-    """Tronque sans dépasser le poids X ni couper brutalement UTF-8."""
+    """Truncates without exceeding the X weight or brutally cutting UTF-8."""
     raw = (text or "").strip()
     if not raw:
         return ""

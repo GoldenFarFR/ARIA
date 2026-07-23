@@ -1,29 +1,29 @@
-"""Client CoinMarketCap DEX (lecture seule) -- 3e couche de pricing pour le
-wallet-scoring (#157, 14/07), après GeckoTerminal et le diagnostic DexScreener.
+"""CoinMarketCap DEX client (read-only) -- 3rd pricing layer for wallet-scoring
+(#157, 14/07), after GeckoTerminal and the DexScreener diagnosis.
 
-Doctrine « dôme » (identique à blockscout.py/geckoterminal.py/dexscreener.py) :
-- 429 : backoff exponentiel, 3 tentatives max, puis abandon sans bloquer le pipeline.
-- Timeout / 5xx : 1 retry après 5s, puis dégradation explicite (``available=False``).
-- Aucune donnée manquante n'est jamais remplacée par une supposition.
+"Dome" doctrine (identical to blockscout.py/geckoterminal.py/dexscreener.py):
+- 429: exponential backoff, 3 attempts max, then give up without blocking the pipeline.
+- Timeout / 5xx: 1 retry after 5s, then explicit degradation (``available=False``).
+- Missing data is never replaced by a guess.
 
-Clé API : ``COINMARKETCAP_API_KEY`` lue via ``os.environ.get`` À CHAQUE appel
-(jamais mise en cache à l'import -- même patron que ``tavily.py``, plus simple
-à tester avec ``monkeypatch.setenv``/``delenv``). Si présente : base URL sans
-``/public-api`` + header ``X-CMC_PRO_API_KEY``, limites plus hautes. Si absente :
-repli automatique sur le tier keyless public, aucun appel bloqué.
+API key: ``COINMARKETCAP_API_KEY`` read via ``os.environ.get`` on EVERY call
+(never cached at import time -- same pattern as ``tavily.py``, simpler to test
+with ``monkeypatch.setenv``/``delenv``). If present: base URL without
+``/public-api`` + ``X-CMC_PRO_API_KEY`` header, higher limits. If absent:
+automatic fallback to the public keyless tier, no call ever blocked.
 
-Réserve honnête (test live du 14/07, sans clé) : ``/v1/dex/token/pools`` et
-``/v1/k-line/candles`` ont retourné HTTP 500 ("The system is busy...") sur 5
-tentatives distinctes en keyless, jamais un succès -- ce tier semble ne PAS
-débloquer réellement ces deux endpoints. Seul ``/v4/dex/pairs/quotes/latest``
-a été confirmé fonctionnel en keyless (avec une adresse de pool/pair connue,
-``network_slug`` -- pas ``network_id`` -- comme paramètre de chaîne, confirmé
-en direct). En pratique, cette couche ne récupérera probablement des prix
-qu'avec la vraie clé du VPS présente. Le schéma exact de réponse de
-``/v1/k-line/candles`` n'a PAS pu être confirmé en direct (endpoint indisponible
-pendant le test, doc officielle sans exemple de payload) -- le parsing ci-dessous
-est une best-effort tolérante : toute forme inattendue dégrade en
-``available=False``, jamais une exception, jamais une valeur devinée.
+Honest caveat (live test on 14/07, no key): ``/v1/dex/token/pools`` and
+``/v1/k-line/candles`` returned HTTP 500 ("The system is busy...") on 5
+separate keyless attempts, never a success -- this tier appears to NOT
+actually unlock these two endpoints. Only ``/v4/dex/pairs/quotes/latest`` was
+confirmed working keyless (with a known pool/pair address,
+``network_slug`` -- not ``network_id`` -- as the chain parameter, confirmed
+live). In practice, this layer will likely only fetch prices once the real
+VPS key is present. The exact response schema of ``/v1/k-line/candles`` could
+NOT be confirmed live (endpoint unavailable during the test, official doc with
+no payload example) -- the parsing below is best-effort and tolerant: any
+unexpected shape degrades to ``available=False``, never an exception, never a
+guessed value.
 """
 
 from __future__ import annotations
@@ -37,14 +37,14 @@ import httpx
 
 from aria_core.skills.ta_levels import Candle
 
-# 18/07 -- PoolMetadata/OHLCVResult étaient dupliquées à l'identique depuis
-# geckoterminal.py (trouvé par audit VPS Secondaire), sauf PoolMetadata qui
-# avait divergé : geckoterminal.py a reçu ``reserve_usd`` (15/07, défense
-# anti-dust/scam-pool, #157) que cette copie n'a jamais reçue. Réutilisation
-# directe au lieu d'une 2e copie à maintenir en synchro -- élimine la
-# duplication ET la divergence en un seul geste, sans inventer de nouvelle
-# logique (CMC ne peuple pas ``reserve_usd`` pour l'instant, il reste
-# ``None`` -- comportement fail-open déjà documenté dans geckoterminal.py).
+# 18/07 -- PoolMetadata/OHLCVResult were duplicated identically from
+# geckoterminal.py (found by a VPS Secondaire audit), except PoolMetadata
+# which had diverged: geckoterminal.py got ``reserve_usd`` (15/07,
+# anti-dust/scam-pool defense, #157) that this copy never received. Direct
+# reuse instead of a 2nd copy to keep in sync -- eliminates the duplication
+# AND the divergence in one move, without inventing new logic (CMC doesn't
+# populate ``reserve_usd`` for now, it stays ``None`` -- fail-open behavior
+# already documented in geckoterminal.py).
 from aria_core.services.geckoterminal import OHLCVResult, PoolMetadata
 
 logger = logging.getLogger(__name__)
@@ -54,32 +54,32 @@ UNAVAILABLE = "donnée CoinMarketCap indisponible"
 BASE_URL_KEYLESS = "https://pro-api.coinmarketcap.com/public-api"
 BASE_URL_KEYED = "https://pro-api.coinmarketcap.com"
 
-# Même vocabulaire chaîne que blockscout.CHAIN_IDS / geckoterminal.GECKO_NETWORK_SLUGS
-# (13 chaînes, #157 classement TVL dynamique, 14/07). "bnb" retiré -- Blockscout
-# ne sert pas BNB Smart Chain (cf. blockscout.CHAIN_IDS), inutile de garder un
-# slug CMC qu'aucune chaîne active n'atteindra jamais.
+# Same chain vocabulary as blockscout.CHAIN_IDS / geckoterminal.GECKO_NETWORK_SLUGS
+# (13 chains, #157 dynamic TVL ranking, 14/07). "bnb" removed -- Blockscout
+# doesn't serve BNB Smart Chain (cf. blockscout.CHAIN_IDS), no point keeping a
+# CMC slug that no active chain will ever reach.
 #
-# Seule "base" a été vérifiée en direct ce soir : /v4/dex/pairs/quotes/latest
-# a répondu avec succès en keyless (`network_slug=base`). Les 12 autres valeurs
-# sont des SUPPOSITIONS raisonnables (mêmes noms que GeckoTerminal la plupart
-# du temps, CMC n'a pas de registre "networks" public équivalent trouvé pour
-# vérifier ligne à ligne) -- documentées comme NON vérifiées, jamais présentées
-# comme confirmées. À corriger si un test en conditions réelles (avec la clé
-# VPS) révèle une divergence, même doctrine que le reste de ce fichier.
+# Only "base" was verified live tonight: /v4/dex/pairs/quotes/latest responded
+# successfully keyless (`network_slug=base`). The other 12 values are
+# reasonable GUESSES (same names as GeckoTerminal most of the time, CMC has no
+# equivalent public "networks" registry found to verify line by line) --
+# documented as NOT verified, never presented as confirmed. To fix if a real-
+# conditions test (with the VPS key) reveals a divergence, same doctrine as
+# the rest of this file.
 CMC_NETWORK_SLUGS: dict[str, str] = {
-    "base": "base",  # vérifié en direct
-    "ethereum": "ethereum",  # non vérifié
-    "arbitrum": "arbitrum",  # non vérifié
-    "optimism": "optimism",  # non vérifié
-    "polygon": "polygon",  # non vérifié -- GeckoTerminal dit "polygon_pos", supposition CMC différente (nom court usuel)
-    "celo": "celo",  # non vérifié
-    "gnosis": "gnosis",  # non vérifié -- GeckoTerminal dit "xdai", supposition CMC différente (nom usuel, pas de garantie)
-    "scroll": "scroll",  # non vérifié
-    "zksync": "zksync",  # non vérifié
-    "rootstock": "rootstock",  # non vérifié
-    "unichain": "unichain",  # non vérifié
-    "soneium": "soneium",  # non vérifié
-    "mode": "mode",  # non vérifié
+    "base": "base",  # verified live
+    "ethereum": "ethereum",  # unverified
+    "arbitrum": "arbitrum",  # unverified
+    "optimism": "optimism",  # unverified
+    "polygon": "polygon",  # unverified -- GeckoTerminal says "polygon_pos", different CMC guess (usual short name)
+    "celo": "celo",  # unverified
+    "gnosis": "gnosis",  # unverified -- GeckoTerminal says "xdai", different CMC guess (usual name, no guarantee)
+    "scroll": "scroll",  # unverified
+    "zksync": "zksync",  # unverified
+    "rootstock": "rootstock",  # unverified
+    "unichain": "unichain",  # unverified
+    "soneium": "soneium",  # unverified
+    "mode": "mode",  # unverified
 }
 
 
@@ -87,13 +87,13 @@ def _api_key() -> str | None:
     return os.environ.get("COINMARKETCAP_API_KEY", "").strip() or None
 
 
-# 21/07 -- premier throttle proactif pour ce client (il n'y en avait aucun --
-# seul un retry réactif après un 429 déjà reçu). Doctrine CLAUDE.md "Débit
-# calibré à 90%" : palier réel CONFIRMÉ EN DIRECT sur la vraie clé du VPS via
-# GET /v1/key/info (jamais deviné) -- palier Basic, rate_limit_minute=50. 90%
-# de 50/min = 45/min = 1.333s. Le tier keyless (sans clé) n'a pas de chiffre
-# séparé confirmé -- réutilise le même throttle prudent par défaut (fail-safe :
-# le keyless n'est structurellement pas plus généreux que le keyé).
+# 21/07 -- first proactive throttle for this client (there was none -- only a
+# reactive retry after an already-received 429). CLAUDE.md "90% calibrated
+# throughput" doctrine: real tier CONFIRMED LIVE on the real VPS key via GET
+# /v1/key/info (never guessed) -- Basic tier, rate_limit_minute=50. 90% of
+# 50/min = 45/min = 1.333s. The keyless tier (no key) has no separately
+# confirmed figure -- reuses the same cautious default throttle (fail-safe:
+# keyless is structurally not more generous than keyed).
 _MIN_INTERVAL = 1.333
 _last_request = 0.0
 _throttle_lock = asyncio.Lock()
@@ -110,10 +110,11 @@ async def _throttle() -> None:
 
 
 async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | None]:
-    """GET avec retry sur 429/5xx/timeout -- même politique que
-    blockscout.py/geckoterminal.py/dexscreener.py. Bascule automatiquement sur
-    le tier keyé (base URL + header) si ``COINMARKETCAP_API_KEY`` est présente,
-    sinon tier keyless -- jamais bloquant si la clé est absente."""
+    """GET with retry on 429/5xx/timeout -- same policy as
+    blockscout.py/geckoterminal.py/dexscreener.py. Automatically switches to
+    the keyed tier (base URL + header) if ``COINMARKETCAP_API_KEY`` is
+    present, otherwise the keyless tier -- never blocking if the key is
+    absent."""
     api_key = _api_key()
     base_url = BASE_URL_KEYED if api_key else BASE_URL_KEYLESS
     headers = {"Accept": "application/json"}
@@ -134,13 +135,13 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
                 timeout_retried = True
                 await asyncio.sleep(5.0)
                 continue
-            logger.warning("coinmarketcap: timeout sur %s -> %s", url, exc)
+            logger.warning("coinmarketcap: timeout on %s -> %s", url, exc)
             return None, f"{UNAVAILABLE} (timeout CoinMarketCap)"
 
         if response.status_code == 429:
             attempt_429 += 1
             if attempt_429 >= 3:
-                logger.warning("coinmarketcap: HTTP 429 sur %s apres %s tentatives", url, attempt_429)
+                logger.warning("coinmarketcap: HTTP 429 on %s after %s attempts", url, attempt_429)
                 return None, f"{UNAVAILABLE} (rate limit CoinMarketCap)"
             await asyncio.sleep(0.5 * (2**attempt_429))
             continue
@@ -150,7 +151,7 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
                 timeout_retried = True
                 await asyncio.sleep(5.0)
                 continue
-            logger.warning("coinmarketcap: HTTP %s sur %s", response.status_code, url)
+            logger.warning("coinmarketcap: HTTP %s on %s", response.status_code, url)
             return None, f"{UNAVAILABLE} (erreur serveur CoinMarketCap {response.status_code})"
 
         try:
@@ -163,27 +164,28 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
         if not isinstance(payload, dict):
             return None, f"{UNAVAILABLE} (réponse inattendue)"
 
-        # Enveloppe CMC : un HTTP 200 peut quand même porter un échec logique
-        # (`status.error_code` != "0") -- jamais interprété comme un succès
-        # juste parce que le code HTTP est 200.
+        # CMC envelope: an HTTP 200 can still carry a logical failure
+        # (`status.error_code` != "0") -- never interpreted as success just
+        # because the HTTP code is 200.
         status = payload.get("status")
         if isinstance(status, dict):
             error_code = str(status.get("error_code", "0"))
             if error_code not in ("0", ""):
                 error_message = status.get("error_message") or error_code
-                logger.warning("coinmarketcap: error_code=%s sur %s -> %s", error_code, url, error_message)
+                logger.warning("coinmarketcap: error_code=%s on %s -> %s", error_code, url, error_message)
                 return None, f"{UNAVAILABLE} ({error_message})"
 
         return payload, None
 
 
 async def resolve_primary_pool(token_address: str, *, network_slug: str = "base") -> PoolMetadata:
-    """Résout le pool à la plus forte liquidité pour ``token_address`` via
-    ``/v1/dex/token/pools`` -- même logique de sélection que
-    ``geckoterminal.resolve_primary_pool`` (comparaison défensive, liquidité
-    malformée traitée comme 0, jamais un crash). Réserve honnête : cet endpoint
-    a retourné HTTP 500 sur toutes les tentatives keyless en direct ce soir --
-    ``available=False`` est donc l'issue attendue sans clé API valide."""
+    """Resolves the highest-liquidity pool for ``token_address`` via
+    ``/v1/dex/token/pools`` -- same selection logic as
+    ``geckoterminal.resolve_primary_pool`` (defensive comparison, malformed
+    liquidity treated as 0, never a crash). Honest caveat: this endpoint
+    returned HTTP 500 on every keyless attempt live tonight --
+    ``available=False`` is therefore the expected outcome without a valid API
+    key."""
     data, error = await _get_json(
         "/v1/dex/token/pools", params={"network_slug": network_slug, "contract_address": token_address}
     )
@@ -225,10 +227,10 @@ async def resolve_primary_pool(token_address: str, *, network_slug: str = "base"
 
 
 async def get_ohlcv(pool_address: str, *, network_slug: str = "base") -> OHLCVResult:
-    """Bougies OHLCV pour ``pool_address`` via ``/v1/k-line/candles``. Parsing
-    tolérant (schéma non confirmé en direct, cf. docstring du module) : accepte
-    plusieurs noms de champs plausibles, toute forme inattendue -> `available=False`,
-    jamais une bougie inventée."""
+    """OHLCV candles for ``pool_address`` via ``/v1/k-line/candles``. Tolerant
+    parsing (schema not confirmed live, cf. module docstring): accepts several
+    plausible field names, any unexpected shape -> `available=False`, never a
+    fabricated candle."""
     data, error = await _get_json(
         "/v1/k-line/candles", params={"network_slug": network_slug, "contract_address": pool_address, "time_period": "hourly"}
     )
@@ -248,7 +250,7 @@ async def get_ohlcv(pool_address: str, *, network_slug: str = "base") -> OHLCVRe
         try:
             ts_raw = row.get("timestamp") or row.get("time_open") or row.get("ts")
             ts = int(ts_raw) if ts_raw is not None else None
-            if ts is not None and ts > 10_000_000_000:  # millisecondes -> secondes
+            if ts is not None and ts > 10_000_000_000:  # milliseconds -> seconds
                 ts //= 1000
             o = float(row.get("open"))
             h = float(row.get("high"))

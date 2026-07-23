@@ -1,16 +1,17 @@
-"""Détection de patterns de bougies japonaises (facts-only, déterministe).
+"""Japanese candlestick pattern detection (facts-only, deterministic).
 
-Complète `indicators.py` (EMA/MACD/Bollinger) et `entry_signals.py` (Fibonacci/
-divergence RSI) — la « disposition des bougies » demandée par l'opérateur le 10/07,
-pensée comme brique d'entrée d'un futur moteur de backtest (cf.
-`docs/architecture-extensibilite.md`) plutôt que comme un signal isolé.
+Complements `indicators.py` (EMA/MACD/Bollinger) and `entry_signals.py`
+(Fibonacci/RSI divergence) — the "candle arrangement" requested by the
+operator on 10/07, designed as an input building block for a future backtest
+engine (cf. `docs/architecture-extensibilite.md`) rather than as a standalone
+signal.
 
-Chaque détecteur est une fonction pure sur des ratios OHLC réels (corps/mèches),
-avec des seuils SIMPLES et DÉCLARÉS ici (aucune définition universelle n'existe
-pour ces patterns) — même doctrine que `btc_cycles` pour ses heuristiques. Jamais
-un jugement de tendance : ces fonctions décrivent la FORME d'une bougie (ou d'une
-paire), pas ce qui va se passer ensuite — l'interprétation reste au moteur de
-backtest ou au LLM, ancrée sur des chiffres réels.
+Each detector is a pure function over real OHLC ratios (body/wicks), with
+SIMPLE, DECLARED thresholds right here (no universal definition exists for
+these patterns) — same doctrine as `btc_cycles` for its heuristics. Never a
+trend judgment: these functions describe the SHAPE of a candle (or a pair),
+not what happens next — interpretation stays with the backtest engine or the
+LLM, anchored on real numbers.
 """
 from __future__ import annotations
 
@@ -18,16 +19,16 @@ from dataclasses import dataclass
 
 from aria_core.skills.ta_levels import Candle
 
-# Seuils SIMPLES et DÉCLARÉS (pas une norme officielle — cf. doctrine module).
-_DOJI_BODY_RATIO_MAX = 0.1       # corps <= 10% du range = doji
-_HAMMER_LOWER_WICK_MIN = 2.0     # mèche basse >= 2x le corps
-_HAMMER_UPPER_WICK_MAX = 0.3     # mèche haute <= 30% du corps
-_MARUBOZU_BODY_RATIO_MIN = 0.9   # corps >= 90% du range = marubozu (quasi sans mèche)
+# SIMPLE, DECLARED thresholds (not an official standard — cf. module doctrine).
+_DOJI_BODY_RATIO_MAX = 0.1       # body <= 10% of range = doji
+_HAMMER_LOWER_WICK_MIN = 2.0     # lower wick >= 2x the body
+_HAMMER_UPPER_WICK_MAX = 0.3     # upper wick <= 30% of the body
+_MARUBOZU_BODY_RATIO_MIN = 0.9   # body >= 90% of range = marubozu (near-zero wick)
 
 
 @dataclass(frozen=True)
 class CandlePattern:
-    """Un pattern détecté à l'index ``i`` d'une série de bougies, avec sa base factuelle."""
+    """A pattern detected at index ``i`` of a candle series, with its factual basis."""
 
     index: int
     name: str
@@ -52,7 +53,7 @@ def _lower_wick(c: Candle) -> float:
 
 
 def is_doji(c: Candle) -> bool:
-    """Corps quasi nul par rapport au range — indécision entre acheteurs/vendeurs."""
+    """Body near zero relative to the range — indecision between buyers/sellers."""
     rng = _range(c)
     if rng <= 0:
         return False
@@ -60,10 +61,10 @@ def is_doji(c: Candle) -> bool:
 
 
 def is_marubozu(c: Candle) -> bool | None:
-    """Corps qui occupe presque tout le range (quasi sans mèche). None si range nul.
+    """Body that occupies almost the entire range (near-zero wick). None if range is zero.
 
-    Retourne ``True``/``False``, la direction (haussière si close > open) est
-    portée séparément par l'appelant via ``c.close > c.open``.
+    Returns ``True``/``False``, direction (bullish if close > open) is
+    carried separately by the caller via ``c.close > c.open``.
     """
     rng = _range(c)
     if rng <= 0:
@@ -72,9 +73,9 @@ def is_marubozu(c: Candle) -> bool | None:
 
 
 def is_hammer(c: Candle) -> bool:
-    """Mèche basse longue, corps petit en haut du range, mèche haute quasi nulle —
-    rejet d'un plus-bas testé puis repoussé (lecture haussière SI en fin de baisse,
-    pas jugé ici, seulement la forme)."""
+    """Long lower wick, small body near the top of the range, near-zero upper
+    wick — rejection of a tested-then-pushed-back low (bullish reading IF at
+    the end of a decline, not judged here, only the shape)."""
     body = _body(c)
     if body <= 0:
         return False
@@ -85,9 +86,9 @@ def is_hammer(c: Candle) -> bool:
 
 
 def is_shooting_star(c: Candle) -> bool:
-    """Symétrique du marteau : mèche haute longue, corps petit en bas du range —
-    rejet d'un plus-haut testé puis repoussé (lecture baissière SI en fin de
-    hausse, pas jugé ici, seulement la forme)."""
+    """Mirror of the hammer: long upper wick, small body near the bottom of
+    the range — rejection of a tested-then-pushed-back high (bearish reading
+    IF at the end of a rally, not judged here, only the shape)."""
     body = _body(c)
     if body <= 0:
         return False
@@ -98,8 +99,8 @@ def is_shooting_star(c: Candle) -> bool:
 
 
 def is_bullish_engulfing(prev: Candle, cur: Candle) -> bool:
-    """La bougie courante (haussière) englobe entièrement le corps de la précédente
-    (baissière) — retournement classique."""
+    """The current (bullish) candle fully engulfs the body of the previous
+    (bearish) one — classic reversal."""
     prev_bearish = prev.close < prev.open
     cur_bullish = cur.close > cur.open
     if not (prev_bearish and cur_bullish):
@@ -108,8 +109,8 @@ def is_bullish_engulfing(prev: Candle, cur: Candle) -> bool:
 
 
 def is_bearish_engulfing(prev: Candle, cur: Candle) -> bool:
-    """Symétrique : la bougie courante (baissière) englobe le corps de la
-    précédente (haussière)."""
+    """Mirror: the current (bearish) candle engulfs the body of the previous
+    (bullish) one."""
     prev_bullish = prev.close > prev.open
     cur_bearish = cur.close < cur.open
     if not (prev_bullish and cur_bearish):
@@ -118,10 +119,10 @@ def is_bearish_engulfing(prev: Candle, cur: Candle) -> bool:
 
 
 def detect_patterns(candles: list[Candle]) -> list[CandlePattern]:
-    """Parcourt la série et retourne CHAQUE pattern détecté, aligné sur son index
-    réel. Une bougie peut ne déclencher aucun pattern (silence, pas une absence
-    inventée) ou plusieurs (ex. doji ET marubozu jamais simultanés par construction,
-    mais engulfing + doji sur la même paire est possible)."""
+    """Walks the series and returns EVERY detected pattern, aligned to its real
+    index. A candle may trigger no pattern at all (silence, not a fabricated
+    absence) or several (e.g. doji AND marubozu never simultaneous by
+    construction, but engulfing + doji on the same pair is possible)."""
     found: list[CandlePattern] = []
     for i, c in enumerate(candles):
         if is_doji(c):

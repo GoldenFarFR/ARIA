@@ -61,7 +61,7 @@ PEER_AGENTS: tuple[PeerAgent, ...] = (
     PeerAgent(
         id="charles",
         name="Charles",
-        x_handle="charles__AI",  # double underscore -- confirmé (Bitrue/CoinGecko/Coinbase), "CharlesAI" 404 silencieusement
+        x_handle="charles__AI",  # double underscore -- confirmed (Bitrue/CoinGecko/Coinbase), "CharlesAI" 404s silently
         site="https://base.org",
         model="Base-chain AI agent token — narrative-heavy",
         revenue_streams=("token trading", "community speculation"),
@@ -109,8 +109,8 @@ def peers_markdown(lang: str = "fr") -> str:
 
 
 def cultivation_phases(lang: str = "fr") -> list[str]:
-    """Aucun produit payant à livrer -- les phases suivent le pacte argent réel
-    (docs/protocole-argent-reel.md), pas un calendrier de lancement produit."""
+    """No paid product to ship -- the phases follow the real-money pact
+    (docs/protocole-argent-reel.md), not a product-launch calendar."""
     if lang == "en":
         return [
             "Phase 0 (ongoing): Broad culture (geo, macro, regulation, ecosystem) — study → one takeaway.",
@@ -125,7 +125,7 @@ def cultivation_phases(lang: str = "fr") -> list[str]:
 
 
 def revenue_hypotheses(lang: str = "fr") -> list[tuple[str, str, float]]:
-    """Aucune hypothèse de monétisation en test aujourd'hui (ACP abandonné, Stripe retiré,
-    aucun produit payant) -- retourne une liste vide plutôt qu'inventer une donnée. Le seul
-    chemin réel vers l'argent réel est le barème du pacte (docs/protocole-argent-reel.md)."""
+    """No monetization hypothesis being tested today (ACP abandoned, Stripe removed,
+    no paid product) -- returns an empty list rather than inventing data. The only
+    real path to real money is the pact's scorecard (docs/protocole-argent-reel.md)."""
     return []

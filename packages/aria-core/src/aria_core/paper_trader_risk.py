@@ -1,43 +1,49 @@
-"""Gestion de risque du portefeuille papier (#187) -- surveillance continue des positions
-OUVERTES + plafond de concentration par catégorie.
+"""Paper-portfolio risk management (#187) -- continuous monitoring of OPEN
+positions + concentration cap per category.
 
-Module séparé de ``paper_trader.py`` (au lieu d'y être ajouté en ligne) pour limiter la
-surface de collision avec le travail parallèle sur ce fichier (#186) -- ``paper_trader.py``
-n'y gagne que 2 colonnes DB additives (``category``, ``entry_security_json``) et 2 kwargs
-optionnels sur ``open_position``, tout le reste vit ici.
+Module kept separate from ``paper_trader.py`` (instead of added inline) to
+limit the collision surface with the parallel work on that file (#186) --
+``paper_trader.py`` only gains 2 additive DB columns (``category``,
+``entry_security_json``) and 2 optional kwargs on ``open_position``,
+everything else lives here.
 
-Deux mécanismes, tous deux appelés depuis ``paper_trader.run_paper_cycle`` (aucune nouvelle
-cadence heartbeat -- réutilise le cycle ``paper_trade_cycle`` existant, 180 min) :
+Two mechanisms, both called from ``paper_trader.run_paper_cycle`` (no new
+heartbeat cadence -- reuses the existing ``paper_trade_cycle`` cycle,
+180 min):
 
-1. SURVEILLANCE CONTINUE -- ``rescan_open_position`` compare l'état de sécurité ACTUEL
-   d'une position (GoPlus honeypot/taxes + Blockscout vérification/ownership) contre
-   l'instantané capturé À L'ENTRÉE (``capture_entry_snapshot``, réutilise les champs déjà
-   calculés par ``scan_base_token`` -- aucun appel GoPlus/Blockscout dupliqué à l'entrée,
-   seul ``read_owner`` est un appel nouveau car ``TokenScanContext`` n'a pas d'adresse
-   owner). Ne ferme JAMAIS la position elle-même : renvoie un diagnostic, c'est l'appelant
-   (``paper_trader.py``, seul détenteur de ``close_position``) qui décide.
+1. CONTINUOUS MONITORING -- ``rescan_open_position`` compares a position's
+   CURRENT security state (GoPlus honeypot/taxes + Blockscout
+   verification/ownership) against the snapshot captured AT ENTRY
+   (``capture_entry_snapshot``, reuses fields already computed by
+   ``scan_base_token`` -- no duplicated GoPlus/Blockscout call at entry, only
+   ``read_owner`` is a new call since ``TokenScanContext`` has no owner
+   address). NEVER closes the position itself: returns a diagnostic, it's
+   the caller (``paper_trader.py``, sole holder of ``close_position``) that
+   decides.
 
-   ⚠️ DOCTRINE CAPITAL RÉEL (wallet_guard.py) : en paper-trading, fermer automatiquement
-   sur signal dur est sans risque -- ça teste la RÉACTION. Avec du capital RÉEL, ce
-   mécanisme ne devrait JAMAIS déclencher une vente automatique : seulement une ALERTE
-   Telegram avec confirmation opérateur obligatoire, exactement comme ``wallet_guard``
-   l'impose déjà pour toute dépense ACP (``escalate_spend`` ne fait qu'alerter, seul un
-   clic Telegram réel déclenche ``resolve_spend``). Si ce module est un jour branché sur
-   un portefeuille réel, la fermeture automatique de ``run_paper_cycle`` doit être
-   remplacée par le même patron d'escalade.
+   WARNING -- REAL CAPITAL DOCTRINE (wallet_guard.py): in paper-trading,
+   auto-closing on a hard signal is risk-free -- it tests the REACTION. With
+   REAL capital, this mechanism should NEVER trigger an automatic sale: only
+   a Telegram ALERT with mandatory operator confirmation, exactly like
+   ``wallet_guard`` already enforces for every ACP spend (``escalate_spend``
+   only alerts, only a real Telegram click triggers ``resolve_spend``). If
+   this module is ever wired to a real portfolio, ``run_paper_cycle``'s
+   automatic close must be replaced by the same escalation pattern.
 
-2. PLAFOND DE CONCENTRATION -- jamais plus de ``CONCENTRATION_CAP_PCT`` du capital de
-   poche (``STARTING_CAPITAL_USD``, l'enveloppe fixe de la preuve, pas le sous-ensemble
-   actuellement déployé -- une caisse à moitié vide ne doit pas se lire comme
-   "diversifiée" juste parce qu'elle n'a que 2 positions du même type) concentré sur une
-   seule catégorie ouverte simultanément. Une nouvelle entrée qui dépasserait le plafond
-   est RÉDUITE en taille pour tenir exactement dessous ; si la place restante est trop
-   faible pour une position significative (< 20 % de l'allocation normale), la position
-   est SKIPPÉE plutôt qu'ouverte en position poussière.
+2. CONCENTRATION CAP -- never more than ``CONCENTRATION_CAP_PCT`` of the
+   pocket's capital (``STARTING_CAPITAL_USD``, the proof's fixed envelope,
+   not the currently deployed subset -- a half-empty till shouldn't read as
+   "diversified" just because it only has 2 positions of the same type)
+   concentrated in a single category open at the same time. A new entry that
+   would exceed the cap is REDUCED in size to fit exactly under it; if the
+   remaining room is too small for a meaningful position (< 20% of the
+   normal allocation), the position is SKIPPED rather than opened as a dust
+   position.
 
-   Catégorie = ``launchpad`` (déjà résolu par ``scan_base_token`` -- champ plus fin que
-   ``network``, qui n'existe pas sur ``TokenScanContext``/ne varie pas dans ce portefeuille
-   Base-only) suffixé ``-bonding`` si ``bonding_phase`` -- ex. ``virtuals_bonding``,
+   Category = ``launchpad`` (already resolved by ``scan_base_token`` -- a
+   finer-grained field than ``network``, which doesn't exist on
+   ``TokenScanContext``/doesn't vary in this Base-only portfolio) suffixed
+   with ``-bonding`` if ``bonding_phase`` -- e.g. ``virtuals_bonding``,
    ``virtuals_bonding-bonding``, ``clanker``, ``unknown``.
 """
 from __future__ import annotations
@@ -48,11 +54,11 @@ from dataclasses import asdict, dataclass, fields
 
 logger = logging.getLogger(__name__)
 
-# ── Plafond de concentration ──────────────────────────────────────────────────────────
+# ── Concentration cap ─────────────────────────────────────────────────────────────────
 
 CONCENTRATION_CAP_PCT = 0.40
-# Sous ce seuil (fraction de l'allocation NORMALE d'une position), on skip plutôt que
-# d'ouvrir une position poussière qui encombre le portefeuille pour un montant dérisoire.
+# Below this threshold (fraction of a position's NORMAL allocation), skip rather than
+# open a dust position that clutters the portfolio for a negligible amount.
 MIN_CONCENTRATION_ALLOC_FRACTION = 0.2
 
 
@@ -79,9 +85,9 @@ def fit_alloc_to_concentration_cap(
     starting_capital: float,
     min_alloc: float,
 ) -> float:
-    """Renvoie l'allocation ajustée pour respecter ``CONCENTRATION_CAP_PCT`` de
-    ``starting_capital`` sur ``category``, ou 0.0 si la place restante est trop faible
-    (< ``min_alloc``) pour valoir la peine d'ouvrir une position."""
+    """Returns the adjusted allocation to respect ``CONCENTRATION_CAP_PCT`` of
+    ``starting_capital`` on ``category``, or 0.0 if the remaining room is too
+    small (< ``min_alloc``) to be worth opening a position."""
     if not category or starting_capital <= 0 or alloc <= 0:
         return alloc
     cap_usd = CONCENTRATION_CAP_PCT * starting_capital
@@ -92,7 +98,7 @@ def fit_alloc_to_concentration_cap(
     return fitted if fitted >= min_alloc else 0.0
 
 
-# ── Instantané de sécurité à l'entrée + re-scan continu ───────────────────────────────
+# ── Entry security snapshot + continuous rescan ───────────────────────────────────────
 
 _RENOUNCED_OWNER_MARKERS = (
     "0x" + "0" * 40,
@@ -102,10 +108,10 @@ _RENOUNCED_OWNER_MARKERS = (
 
 @dataclass
 class EntrySecuritySnapshot:
-    """État de sécurité au moment de l'OUVERTURE d'une position -- la référence contre
-    laquelle ``rescan_open_position`` détecte un signal NOUVEAU (apparu après l'entrée),
-    jamais un état absolu (un token peut légitimement avoir des taxes élevées dès le
-    départ -- c'est le CHANGEMENT après ouverture qui est le signal dur)."""
+    """Security state at the moment a position OPENS -- the reference against
+    which ``rescan_open_position`` detects a NEW signal (that appeared after
+    entry), never an absolute state (a token can legitimately have high taxes
+    from the start -- it's the CHANGE after opening that's the hard signal)."""
 
     is_honeypot: bool | None = None
     cannot_sell: bool | None = None
@@ -132,9 +138,9 @@ class EntrySecuritySnapshot:
 
 
 async def capture_entry_snapshot(contract: str, ctx) -> EntrySecuritySnapshot:
-    """Réutilise les champs déjà calculés par ``scan_base_token`` sur ``ctx`` (aucun appel
-    GoPlus/Blockscout dupliqué) ; seul ``read_owner`` est un appel réseau nouveau, car
-    ``TokenScanContext`` n'a pas d'adresse owner."""
+    """Reuses fields already computed by ``scan_base_token`` on ``ctx`` (no
+    duplicated GoPlus/Blockscout call); only ``read_owner`` is a new network
+    call, since ``TokenScanContext`` has no owner address."""
     from aria_core.services.blockscout import blockscout_client
 
     owner, _err = await blockscout_client.read_owner(contract)
@@ -149,21 +155,23 @@ async def capture_entry_snapshot(contract: str, ctx) -> EntrySecuritySnapshot:
 
 
 async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
-    """Re-vérifie une position OUVERTE contre son instantané d'entrée. Renvoie
-    ``{"contract": ..., "reasons": [...]}`` si un signal dur NOUVEAU est détecté, sinon
-    ``None``. Positions ouvertes avant ce mécanisme (pas d'``entry_security_json``) :
-    aucune référence à comparer -- on ne réinvente pas une base, on saute silencieusement
-    (dégradation honnête, jamais un signal fabriqué).
+    """Re-checks an OPEN position against its entry snapshot. Returns
+    ``{"contract": ..., "reasons": [...]}`` if a NEW hard signal is detected,
+    otherwise ``None``. Positions opened before this mechanism existed (no
+    ``entry_security_json``): no reference to compare against -- we don't
+    reinvent a baseline, we silently skip (honest degradation, never a
+    fabricated signal).
 
-    ``pair`` (17/07, angle mort trouvé le même soir) : ``PairSnapshot`` DexScreener déjà
-    récupéré par l'appelant (``paper_trader.py``, qui le récupère de toute façon pour
-    connaître le prix courant -- jamais un second appel réseau dupliqué). ``None`` par
-    défaut -- le check ratio volume/liquidité est alors simplement SAUTÉ (même doctrine
-    de dégradation honnête que le reste de cette fonction), jamais un appel réseau
-    autonome déclenché depuis ici. Sans ce check, un token pouvait entrer proprement
-    (ratio sain à l'ouverture, cf. ``momentum_entry.py``) puis dériver vers un pool
-    manipulé PENDANT la détention sans jamais être re-contrôlé -- le stop suiveur
-    suivrait alors un prix de wash-trading en toute confiance."""
+    ``pair`` (17/07, blind spot found that same evening): DexScreener
+    ``PairSnapshot`` already fetched by the caller (``paper_trader.py``,
+    which fetches it anyway to know the current price -- never a duplicated
+    second network call). ``None`` by default -- the volume/liquidity ratio
+    check is then simply SKIPPED (same honest-degradation doctrine as the
+    rest of this function), never an autonomous network call triggered from
+    here. Without this check, a token could enter cleanly (healthy ratio at
+    opening, see ``momentum_entry.py``) then drift into a manipulated pool
+    DURING the holding period without ever being re-checked -- the trailing
+    stop would then confidently follow a wash-trading price."""
     snapshot = EntrySecuritySnapshot.from_json(position.get("entry_security_json"))
 
     contract = position["contract"]
@@ -187,8 +195,8 @@ async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
 
     try:
         security = await goplus_client.get_token_security(contract)
-    except Exception as exc:  # noqa: BLE001 — une panne GoPlus ne doit jamais planter le cycle
-        logger.info("rescan_open_position: GoPlus %s échoué (%s)", contract, exc)
+    except Exception as exc:  # noqa: BLE001 — a GoPlus outage must never crash the cycle
+        logger.info("rescan_open_position: GoPlus %s failed (%s)", contract, exc)
         security = None
 
     if security is not None and security.available:
@@ -206,7 +214,7 @@ async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
     try:
         flags = await blockscout_client.check_contract_flags(contract)
     except Exception as exc:  # noqa: BLE001
-        logger.info("rescan_open_position: Blockscout flags %s échoué (%s)", contract, exc)
+        logger.info("rescan_open_position: Blockscout flags %s failed (%s)", contract, exc)
         flags = None
     if flags is not None and flags.available and flags.is_verified is False and snapshot.contract_verified:
         reasons.append("contrat n'est plus vérifié (l'était à l'entrée)")
@@ -214,7 +222,7 @@ async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
     try:
         owner_now, owner_err = await blockscout_client.read_owner(contract)
     except Exception as exc:  # noqa: BLE001
-        logger.info("rescan_open_position: Blockscout read_owner %s échoué (%s)", contract, exc)
+        logger.info("rescan_open_position: Blockscout read_owner %s failed (%s)", contract, exc)
         owner_now, owner_err = None, str(exc)
     if owner_err is None and owner_now:
         was_renounced = (
@@ -229,21 +237,22 @@ async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
     return {"contract": contract, "reasons": reasons}
 
 
-# ── Dépeg USDC -- bloque les NOUVELLES entrées, jamais les positions déjà ouvertes ────
+# ── USDC depeg -- blocks NEW entries, never already-open positions ───────────────────
 
-USDC_DEPEG_THRESHOLD_PCT = 0.01  # 1 % d'écart au peg $1
+USDC_DEPEG_THRESHOLD_PCT = 0.01  # 1% deviation from the $1 peg
 USDC_COINGECKO_ID = "usd-coin"
 
 
 async def usdc_depeg_pct() -> float | None:
-    """Écart absolu au peg $1, ou ``None`` si le prix est indisponible -- fail-open : une
-    panne CoinGecko ne bloque jamais le cycle (doctrine dôme), voir ``is_usdc_depegged``."""
+    """Absolute deviation from the $1 peg, or ``None`` if the price is
+    unavailable -- fail-open: a CoinGecko outage never blocks the cycle
+    (dome doctrine), see ``is_usdc_depegged``."""
     from aria_core.services.coingecko import coingecko_client
 
     try:
         result = await coingecko_client.get_simple_price([USDC_COINGECKO_ID], vs_currencies=["usd"])
     except Exception as exc:  # noqa: BLE001
-        logger.info("usdc_depeg_pct: CoinGecko échoué (%s)", exc)
+        logger.info("usdc_depeg_pct: CoinGecko failed (%s)", exc)
         return None
     if not result.available:
         return None

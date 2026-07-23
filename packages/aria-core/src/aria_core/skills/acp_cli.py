@@ -1,4 +1,4 @@
-"""Wrapper acp-cli (@virtuals-protocol/acp-cli) — Windows .cmd + JSON."""
+"""acp-cli wrapper (@virtuals-protocol/acp-cli) — Windows .cmd + JSON."""
 from __future__ import annotations
 
 import json
@@ -40,7 +40,7 @@ def _npm_acp_js() -> Path | None:
 
 
 def resolve_acp_command() -> list[str]:
-    """Commande argv pour subprocess — node+acp.js préféré (JSON Windows sans cmd.exe)."""
+    """argv command for subprocess — node+acp.js preferred (JSON on Windows without cmd.exe)."""
     js = _npm_acp_js()
     if js:
         node = shutil.which("node") or "node"
@@ -63,7 +63,7 @@ def run_acp(
     timeout: int = _DEFAULT_TIMEOUT,
     json_mode: bool = True,
 ) -> tuple[int, str, str]:
-    """Exécute acp-cli ; retourne (code, stdout, stderr)."""
+    """Runs acp-cli; returns (code, stdout, stderr)."""
     base = resolve_acp_command()
     if not base:
         return 127, "", "acp-cli introuvable (npm i -g @virtuals-protocol/acp-cli)"

@@ -1,4 +1,4 @@
-"""Réflexion opérationnelle ARIA — Phase G (journal + synthèse → injection LLM)."""
+"""ARIA operational reflection — Phase G (journal + synthesis → LLM injection)."""
 from __future__ import annotations
 
 import json
@@ -39,7 +39,7 @@ def append_reflection(
     context: str = "session",
     outcome: str = "note",
 ) -> dict[str, str]:
-    """Enregistre une réflexion explicite (opérateur ou heartbeat)."""
+    """Records an explicit reflection (operator or heartbeat)."""
     text = sanitize_recall_text((content or "").strip())
     if not text:
         return {}
@@ -96,7 +96,7 @@ def _synthesize_from_journal() -> list[str]:
 
 
 def get_reflections_text(*, budget_chars: int = _REFLECTION_BUDGET, lang: str = "fr") -> str:
-    """Bloc markdown réflexions pour le contexte LLM (opérateur)."""
+    """Reflections markdown block for the LLM context (operator)."""
     explicit = read_explicit_reflections()
     synthesized = _synthesize_from_journal()
     if not explicit and not synthesized:

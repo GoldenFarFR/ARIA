@@ -1,8 +1,8 @@
-"""Embeddings texte -> vecteur, local (ONNX via fastembed) — aucun appel réseau à l'exécution.
+"""Text -> vector embeddings, local (ONNX via fastembed) — no network call at runtime.
 
-Modèle téléchargé une seule fois (cache local, ~130 Mo) au premier usage réel —
-jamais au chargement du module (lazy), pour ne pas pénaliser un boot où le flag
-vecteur est désactivé (cas par défaut).
+Model downloaded only once (local cache, ~130 MB) on first real use — never at
+module load time (lazy), so as not to penalize a boot where the vector flag is
+disabled (the default case).
 """
 from __future__ import annotations
 
@@ -33,10 +33,11 @@ def _get_model() -> Any:
 
 
 def embed_text(text: str) -> list[float]:
-    """Vecteur (``EMBEDDING_DIM`` dims) pour un texte.
+    """Vector (``EMBEDDING_DIM`` dims) for a piece of text.
 
-    Lève si fastembed est absent — l'appelant filtre déjà via ``embedding_installed()``
-    avant d'atteindre ce point (même contrat que ``lancedb_installed()``).
+    Raises if fastembed is missing — the caller already filters via
+    ``embedding_installed()`` before reaching this point (same contract as
+    ``lancedb_installed()``).
     """
     model = _get_model()
     vec = next(iter(model.embed([text])))
@@ -44,6 +45,6 @@ def embed_text(text: str) -> list[float]:
 
 
 def reset_model_cache() -> None:
-    """Tests uniquement — réinitialise le singleton."""
+    """Tests only — resets the singleton."""
     global _model
     _model = None

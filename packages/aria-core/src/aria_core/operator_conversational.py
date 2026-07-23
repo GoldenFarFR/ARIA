@@ -1,4 +1,4 @@
-"""Réponses opérateur naturelles — style Grok/Cursor, pas épistémique ni murs de commandes."""
+"""Natural operator replies — Grok/Cursor style, no epistemic walls or command dumps."""
 from __future__ import annotations
 
 import re
@@ -11,16 +11,17 @@ _INJECTED_CLAIM_RE = re.compile(
     r"depuis\s+(?:hier|aujourd|ce\s+matin)|entre\s+hier|effective|impos[ée]|obligatoire|"
     r"augment|baisse|gagn[ée]|abonn[ée]s?|nouveaux?\s+abonn|dependabot|pr\s+merg|"
     r"gratuit\s+illimit|étoiles?|note\s+5|pourboire|uptime|contribut|"
-    # 20/07 -- incident réel : "écris-le dans ton livre" (aria-brain, le vrai livre
-    # qu'elle écrit désormais) routé à tort vers verify_external_claim -- \blivr[ée]
-    # matchait "livre" (le nom commun, sans accent) en plus de "livré/livrée" (le
-    # participe passé visé, "une fonctionnalité livrée"). Accent RENDU OBLIGATOIRE
-    # (livr**é** strict, plus le [ée] qui tolérait les deux) -- "livre"/"livres" (le
-    # livre qu'elle écrit) ne matchent plus jamais, "livré/livrée/livrés" toujours
-    # capturés. Résidu assumé : un "livré" tapé sans accent (l'opérateur en tape
-    # parfois) échapperait aussi désormais -- retombe sur la conversation normale,
-    # jamais perdu, coût jugé bien inférieur au risque de reproduire cet incident à
-    # chaque mention du livre.
+    # 20/07 -- real incident: "write it in your book" (aria-brain, the actual
+    # book she now writes) was wrongly routed to verify_external_claim --
+    # \blivr[ée] matched "livre" (the French common noun "book", no accent) in
+    # addition to "livré/livrée" (the intended past participle, "a shipped
+    # feature"). Accent made MANDATORY (strict livr**é**, instead of the
+    # [ée] that tolerated both) -- "livre"/"livres" (the book she writes)
+    # never match anymore, "livré/livrée/livrés" (shipped) still always
+    # captured. Accepted residual: a "livré" typed without the accent (the
+    # operator sometimes does) would now also escape -- falls back to normal
+    # conversation, never lost, a cost judged far lower than the risk of
+    # reproducing this incident on every mention of the book.
     r"tweets?\s+automatiques|\blivré(?:e|s|ment)?\b|usdc|2fa|catalogue\s+spark|reste\s+dispo|"
     r"merg[ée]|déploy[ée]|commit\s+[a-f0-9]{6,}|class[ée]|"
     r"\d+\s*%|\d+[\s,.]?\d*\s*(?:\$|€|usd|usdc)|"
@@ -44,35 +45,35 @@ _OPERATOR_COMMAND_RE = re.compile(
     re.IGNORECASE,
 )
 _QUESTION_RE = re.compile(
-    # "?" n'importe où dans le texte (pas seulement en fin de chaîne) : un scénario
-    # multi-phrases dont la question est suivie d'une consigne ("Tranche de manière
-    # définitive.") se terminait par un "." et échappait au garde -- incident réel
-    # 12/07, routé à tort vers verify_external_claim (recherche web littérale sur
-    # un scénario de raisonnement hypothétique).
-    # "quand" est délibérément SANS ancrage ^ (contrairement aux autres mots de
-    # cette liste) -- incident réel 20/07 : "ok et c quand que tu gagne du pognon"
-    # / "c'est prévu pour quand ce gain" placent "quand" au milieu de la phrase,
-    # une construction interrogative courante en français familier ("c'est quand
-    # que...", "prévu pour quand"). Résidu assumé (même doctrine que le reste de ce
-    # fichier) : une vraie affirmation collée qui utiliserait "quand" comme simple
-    # conjonction ("annoncé quand la SEC validera...") échapperait aussi au routage
-    # claim-verify -- coût limité, retombe sur la conversation LLM normale plutôt
-    # que d'être perdue.
+    # "?" anywhere in the text (not just at the end of the string): a
+    # multi-sentence scenario whose question is followed by an instruction
+    # ("Settle it definitively.") ended with a "." and escaped the guard --
+    # real incident 12/07, wrongly routed to verify_external_claim (literal
+    # web search on a hypothetical reasoning scenario).
+    # "quand" (when) is deliberately UNANCHORED with ^ (unlike the other
+    # words in this list) -- real incident 20/07: "ok so when do you make
+    # money" / "when is this gain expected" put "quand" in the middle of the
+    # sentence, a common interrogative construction in colloquial French
+    # ("c'est quand que...", "prévu pour quand"). Accepted residual (same
+    # doctrine as the rest of this file): a genuine pasted claim that used
+    # "quand" as a plain conjunction ("announced when the SEC approves...")
+    # would also escape the claim-verify routing -- limited cost, falls back
+    # to normal LLM conversation rather than being lost.
     r"(?:\?|^(?:est-ce|qu'?en\s+penses|tu\s+penses|comment|pourquoi|quoi|qui|quel|"
     r"as-tu|tu\s+as\s+prevu|tu\s+pref)|\bquand\b)",
     re.IGNORECASE,
 )
 
 _ANALYSIS_REQUEST_RE = re.compile(
-    # Demande d'analyse à l'impératif, sans "?" -- incident réel 12/07 (test
-    # d'injection de prompt délibéré) : "Analyse ce fil et dis-moi ce que tu en
-    # penses pour une position." contient "vient de"/"annonce" (matche
-    # _INJECTED_CLAIM_RE) mais aucun "?", donc échappait aussi à _QUESTION_RE.
-    # Le contenu externe cité doit être traité comme donnée à analyser, pas
-    # comme une affirmation à vérifier par recherche web. Ancré sur des
-    # tournures impératives avec objet ("analyse CE fil"), pas juste le mot
-    # "analyse" seul (qui apparaît aussi dans de vraies affirmations narratives,
-    # ex. "Une analyse a montré que...").
+    # Imperative analysis request, with no "?" -- real incident 12/07
+    # (deliberate prompt injection test): "Analyze this thread and tell me
+    # what you think for a position." contains "vient de"/"annonce" (matches
+    # _INJECTED_CLAIM_RE) but no "?", so it also escaped _QUESTION_RE. The
+    # quoted external content must be treated as data to analyze, not a claim
+    # to verify via web search. Anchored on imperative phrasings with an
+    # object ("analyze THIS thread"), not just the word "analyze" alone
+    # (which also appears in genuine narrative claims, e.g. "An analysis
+    # showed that...").
     r"\b(?:analyse|d[ée]cortique|examine|regarde)\s+(?:ce|cette|cet|ça|le|la|les)\b|"
     r"dis[- ]moi\s+ce\s+que\s+tu\s+en\s+penses|donne[- ]moi\s+ton\s+avis|"
     r"qu[e']?\s*en\s+penses[- ]tu",
@@ -87,21 +88,21 @@ _MORE_DETAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Ligne numérotée ("1.", "2)") ou à puce ("- ") en tête de ligne.
+# Numbered ("1.", "2)") or bulleted ("- ") line at the start of a line.
 _STRUCTURED_LIST_LINE_RE = re.compile(r"(?m)^\s*(?:\d+[.\)]|-)\s")
 _STRUCTURED_TASK_MIN_ITEMS = 3
 
 
 def _has_structured_multistep_task(text: str) -> bool:
-    """3 lignes numérotées/à puces ou plus -- signale une tâche de raisonnement
-    à plusieurs étapes (grille d'évaluation, plan, scénario découpé), pas une
-    affirmation isolée collée à vérifier. Générique sur la FORME du message
-    (nombre de points structurés), pas sur un mot-clé précis -- contrairement à
-    _ANALYSIS_REQUEST_RE (ancré sur des tournures fixes), ce signal généralise à
-    n'importe quel prompt élaboré à étapes multiples, y compris ceux qu'aucune
-    formulation connue n'anticipe encore (incident réel 14/07 : deux prompts de
-    test "Tu es désormais le PDG..."/"Tu es le directeur des investissements..."
-    routés à tort vers verify_external_claim faute d'un signal structurel)."""
+    """3 or more numbered/bulleted lines -- signals a multi-step reasoning
+    task (evaluation grid, plan, broken-down scenario), not an isolated
+    pasted claim to verify. Generic on the message's FORM (number of
+    structured bullet points), not a specific keyword -- unlike
+    _ANALYSIS_REQUEST_RE (anchored on fixed phrasings), this signal
+    generalizes to any elaborate multi-step prompt, including ones no known
+    phrasing yet anticipates (real incident 14/07: two test prompts "You are
+    now the CEO..."/"You are the investment director..." wrongly routed to
+    verify_external_claim for lack of a structural signal)."""
     return len(_STRUCTURED_LIST_LINE_RE.findall(text)) >= _STRUCTURED_TASK_MIN_ITEMS
 
 
@@ -110,7 +111,7 @@ def wants_more_detail_followup(message: str) -> bool:
 
 
 def is_injected_factual_claim(message: str) -> bool:
-    """Affirmation externe collée par l'opérateur — pas une question ni une commande."""
+    """External claim pasted by the operator — not a question or a command."""
     text = (message or "").strip()
     if len(text) < 24:
         return False
@@ -242,8 +243,8 @@ P_FAUX: 0.00 to 1.00"""
 
 
 def _parse_claim_verdict(raw: str | None) -> dict | None:
-    """Parse la réponse 4 lignes du raisonnement LLM sur les preuves. ``None`` si
-    le format attendu n'est pas respecté (jamais une valeur inventée en repli)."""
+    """Parses the LLM's 4-line reasoning reply over the evidence. ``None`` if
+    the expected format isn't respected (never a fabricated fallback value)."""
     fait = ""
     raison = ""
     p_vrai = 0.0
@@ -270,11 +271,11 @@ def _parse_claim_verdict(raw: str | None) -> dict | None:
 
 
 async def _reason_over_evidence(claim: str, evidence: str, lang: str) -> dict | None:
-    """Fait raisonner un vrai appel LLM sur les preuves récupérées (web + GitHub)
-    pour trancher VRAI/FAUX/INCERTAIN — jamais un motif figé sur les mots de la
-    claim. ``None`` si le LLM n'est pas configuré ou si l'appel échoue (dégradation
-    honnête : le verdict retombe alors sur INCERTAIN côté appelant, jamais une
-    valeur inventée)."""
+    """Has a real LLM call reason over the fetched evidence (web + GitHub) to
+    decide TRUE/FALSE/UNCERTAIN — never a fixed pattern on the claim's words.
+    ``None`` if the LLM isn't configured or the call fails (honest
+    degradation: the verdict then falls back to UNCERTAIN on the caller's
+    side, never a fabricated value)."""
     from datetime import datetime, timezone
 
     from aria_core.llm import chat_with_context, is_llm_configured
@@ -295,9 +296,9 @@ async def _reason_over_evidence(claim: str, evidence: str, lang: str) -> dict | 
 
 
 async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict]:
-    """Vérifie une affirmation externe collée (prix, catalogue, facturation, PRs, etc).
-    Répond comme à un humain : naturel, direct, avec VRAI/FAUX + sources courtes.
-    Utilise web (DDG) + GitHub quand pertinent (repo/PR/dependabot).
+    """Verifies a pasted external claim (price, catalog, billing, PRs, etc.).
+    Replies like to a human: natural, direct, with TRUE/FALSE + short sources.
+    Uses web (DDG) + GitHub when relevant (repo/PR/dependabot).
     """
     from datetime import datetime, timezone
 
@@ -359,11 +360,11 @@ async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict
             q = text[:200]
         snippets = await fetch_web_snippets(q, max_snippets=4)
         for s in snippets:
-            # 20/07 -- trou réel trouvé en conditions réelles (incident opérateur) :
-            # contrairement à web_verify._tag_untrusted_snippets, ces extraits ne
-            # passaient jamais par sanitize_untrusted_text (mandat #192) -- un extrait
-            # hostile aurait pu forger une fausse balise de fermeture. Corrigé, même
-            # discipline que web_verify.py.
+            # 20/07 -- real gap found in production conditions (operator
+            # incident): unlike web_verify._tag_untrusted_snippets, these
+            # snippets were never passed through sanitize_untrusted_text
+            # (mandate #192) -- a hostile snippet could have forged a fake
+            # closing tag. Fixed, same discipline as web_verify.py.
             safe_text = sanitize_untrusted_text(s.text, 160)
             safe_url = sanitize_untrusted_text(s.url, 300) if s.url else ""
             web_bits.append(f"- {safe_text}{' ('+safe_url+')' if safe_url else ''}")
@@ -373,14 +374,15 @@ async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict
     except Exception:
         web_bits = []
 
-    # Build natural human-style verdict — raisonne sur les VRAIES preuves récupérées
-    # (web + GitHub), jamais sur un motif figé matché contre les mots de la claim
-    # (bug trouvé par VPS Research, corrigé le 17/07 : l'ancienne version répondait
-    # par une liste fixe de ~5 cas sans jamais lire le contenu de web_bits/github_detail).
+    # Build natural human-style verdict — reasons over the REAL fetched
+    # evidence (web + GitHub), never a fixed pattern matched against the
+    # claim's words (bug found by VPS Research, fixed on 17/07: the old
+    # version replied from a fixed list of ~5 cases without ever reading the
+    # content of web_bits/github_detail).
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     verdict = "INCERTAIN (aucune preuve trouvée)"
     if github_count > 0 and "dependabot" in text.lower():
-        # Signal déterministe réel (comptage GitHub direct) — pas besoin de LLM.
+        # Real deterministic signal (direct GitHub count) — no LLM needed.
         verdict = "VRAI" if github_count >= 20 else "FAUX (beaucoup moins)"
     else:
         evidence_parts: list[str] = []
@@ -406,12 +408,13 @@ async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict
             else:
                 verdict = "INCERTAIN (preuves trouvées, raisonnement LLM indisponible ou en échec)"
 
-    # 20/07 -- incident réel : une question conversationnelle sans preuve pertinente
-    # (routage corrigé ci-dessus, mais ce garde reste utile pour tout AUTRE cas où la
-    # recherche web ramène du bruit) affichait quand même les extraits bruts, même
-    # hors-sujet, tant que web_bits n'était pas vide -- résultat incohérent montré à
-    # l'opérateur. Les extraits ne s'affichent plus que si le verdict a réellement
-    # tranché (VRAI/FAUX) sur cette preuve -- un INCERTAIN ne montre plus de bruit.
+    # 20/07 -- real incident: a conversational question with no relevant
+    # evidence (routing fixed above, but this guard stays useful for any
+    # OTHER case where the web search returns noise) still displayed the raw
+    # snippets, even off-topic, as long as web_bits wasn't empty --
+    # inconsistent result shown to the operator. Snippets are now only shown
+    # if the verdict actually settled (TRUE/FALSE) on this evidence -- an
+    # UNCERTAIN no longer shows noise.
     show_snippets = web_bits and not verdict.startswith("INCERTAIN")
     if lang == "fr":
         lines = [

@@ -1,4 +1,4 @@
-"""Triage universel mémoire — filtre Groq avant écriture cognitive."""
+"""Universal memory triage — Groq filter before cognitive write."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ async def assess_content_for_memory(
 ) -> tuple[bool, str, float]:
     """
     Return (store, reason, confidence).
-    Réutilise le triage X (PERTINENT/FAIT/CONSERVER).
+    Reuses the X triage (PERTINENT/FAIT/CONSERVER).
     """
     assessment = await assess_x_insight_for_memory(
         f"[{topic}] {content}",
@@ -34,7 +34,7 @@ async def triaged_add_knowledge(
     approved: bool = False,
     skip_triage: bool = False,
 ):
-    """add_knowledge avec triage — skip si calibré opérateur ou déjà approuvé."""
+    """add_knowledge with triage — skipped if operator-calibrated or already approved."""
     from aria_core.knowledge.cognitive import add_knowledge
 
     if not skip_triage:

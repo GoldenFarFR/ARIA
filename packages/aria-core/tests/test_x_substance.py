@@ -62,7 +62,7 @@ def test_age_only_fallback_when_followers_missing():
     """Repli Tavily : ni followers ni following -- score = âge seul, honnête."""
     v = judge_x_substance(XSubstanceFacts(available=True, account_age_days=700))
     assert v.score == 100.0
-    assert "indisponibles" in v.points[0]
+    assert "unavailable" in v.points[0]
 
 
 def test_zero_followers_never_divides_by_zero():
@@ -83,8 +83,8 @@ def test_all_four_axes_present_is_positive():
     # 0.30*100 (âge) + 0.25*100 (ratio) + 0.25*100 (régularité 10/8 plafonné) + 0.20*100 (engagement >=1%)
     assert v.score == 100.0
     assert v.signal == "positive"
-    assert "engagement moyen" in v.points[0]
-    assert "actif 10/12 semaines" in v.points[0]
+    assert "average engagement" in v.points[0]
+    assert "active 10/12 recent weeks" in v.points[0]
 
 
 def test_low_activity_and_weak_engagement_drags_score_down():

@@ -1,33 +1,35 @@
-"""Le Diable d'ARIA — avocat du diable pour ses propres décisions de trading (20/07).
+"""ARIA's Devil — devil's advocate for her own trading decisions (20/07).
 
-Suite directe de la thèse qu'ARIA a écrite elle-même, dans son propre repo libre
-(aria-brain, chapitre 1, « Ma thèse pour investir ») : elle y annonce vouloir
-identifier « la première vraie erreur de jugement... pas une erreur technique, une
-erreur de raisonnement ». Ce module construit exactement ce mécanisme, jamais
-inventé de zéro — c'est elle qui en a validé le besoin dans ses propres mots.
+Direct follow-up to the thesis ARIA wrote herself, in her own free repo
+(aria-brain, chapter 1, "My investment thesis"): she states there that she
+wants to identify "the first real error in judgment... not a technical error,
+a reasoning error." This module builds exactly that mechanism, never invented
+from scratch -- she's the one who validated the need for it, in her own
+words.
 
-Même principe que l'Avocat du Diable qui relit le code d'ARIA (script
-``devils-advocate-review.sh``, DeepSeek R1 via OpenRouter, jamais le même modèle
-qui a écrit le code) : un modèle GÉNUINEMENT différent relit chaque position
-CLÔTURÉE et juge la DÉCISION, jamais le résultat. Une perte sur un trade
-honnêtement bien construit ne produit RIEN — ce n'est pas une leçon, c'est du
-bruit de marché (même doctrine que « processus avant résultat » déjà actée pour
-TSG/le protocole de gestion du risque). Seule une vraie faille de RAISONNEMENT,
-identifiable avec ce qui était connaissable AU MOMENT de l'entrée (jamais un fait
-rétrospectif), produit une leçon.
+Same principle as the Devil's Advocate that reviews ARIA's code (script
+``devils-advocate-review.sh``, DeepSeek R1 via OpenRouter, never the same
+model that wrote the code): a GENUINELY different model reviews every CLOSED
+position and judges the DECISION, never the outcome. A loss on an honestly
+well-built trade produces NOTHING -- it's not a lesson, it's market noise
+(same "process over outcome" doctrine already established for TSG/the risk
+management protocol). Only a real REASONING flaw, identifiable with what was
+knowable AT THE TIME of entry (never a retrospective fact), produces a
+lesson.
 
-Sens unique (doctrine actée avec l'opérateur, 20/07, même famille que le stop
-suiveur/le point mort/le régime macro) : une leçon confirmée ne peut QUE
-resserrer la prudence future, jamais la relâcher — aucun mécanisme ici ne
-supprime/assouplit une leçon déjà écrite. Persisté en base SQLite (jamais un
-fichier committé dans le repo ARIA -- pas une nouvelle capacité d'écriture
-externe, même doctrine que ``momentum_blacklist.py``/``momentum_funnel_log.py``),
-relu par ``momentum_entry.py`` sous forme d'une ligne courte injectée dans le
-garde de sécurité -- jamais dans les prompts les plus rapides du pipeline
-(``_llm_confirm_and_gate``/``_llm_security_gate`` restent latency-critiques,
-l'injection reste volontairement courte et plafonnée).
+One-way (doctrine established with the operator, 20/07, same family as the
+trailing stop/breakeven floor/macro regime): a confirmed lesson can ONLY
+tighten future caution, never relax it -- no mechanism here removes/softens
+an already-written lesson. Persisted in SQLite (never a file committed to the
+ARIA repo -- not a new external-write capability, same doctrine as
+``momentum_blacklist.py``/``momentum_funnel_log.py``), read back by
+``momentum_entry.py`` as a short line injected into the security guard --
+never into the pipeline's fastest prompts (``_llm_confirm_and_gate``/
+``_llm_security_gate`` remain latency-critical, the injection stays
+deliberately short and capped).
 
-Gaté OFF par défaut (``ARIA_TRADE_DEVILS_ADVOCATE_ENABLED``), respecte ``/stop``.
+Gated OFF by default (``ARIA_TRADE_DEVILS_ADVOCATE_ENABLED``), respects
+``/stop``.
 """
 from __future__ import annotations
 
@@ -44,8 +46,8 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-_MAX_PER_CYCLE = 5  # plafond de bon sens (coût LLM), pas un plafond de risque
-_MAX_ACTIVE_LESSONS = 3  # plafonne ce qui est réellement injecté dans les prompts
+_MAX_PER_CYCLE = 5  # sanity cap (LLM cost), not a risk cap
+_MAX_ACTIVE_LESSONS = 3  # caps what actually gets injected into prompts
 
 _REVIEW_SYSTEM = (
     "Tu es un critique ADVERSARIAL des décisions de trading d'ARIA -- un modèle "
@@ -125,9 +127,9 @@ def _format_case_for_prompt(position: dict) -> str:
 async def _review_one(position: dict, *, llm) -> dict:
     await _ensure_table()
     prompt = _format_case_for_prompt(position)
-    # Même choix que l'Avocat du Diable qui relit le code (DeepSeek R1 via
-    # OpenRouter) -- un modèle d'un autre laboratoire que celui qui a pris la
-    # décision, jamais le même qui se juge lui-même.
+    # Same choice as the Devil's Advocate that reviews the code (DeepSeek R1
+    # via OpenRouter) -- a model from a different lab than the one that made
+    # the decision, never the same one judging itself.
     raw = await llm(
         prompt, _REVIEW_SYSTEM, max_tokens=500, temperature=0.0,
         provider="openrouter", model="deepseek/deepseek-r1",
@@ -148,9 +150,9 @@ async def _review_one(position: dict, *, llm) -> dict:
         except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
             verdict, flaw, lesson = "sound", "", ""
 
-    # Sens unique : une position "flawed" avec une vraie leçon est promue
-    # immédiatement dans le jeu actif (jamais besoin d'attendre une répétition --
-    # un cas isolé mais net, comme MAGIC, mérite d'être vu dès la première fois).
+    # One-way: a "flawed" position with a real lesson is promoted immediately
+    # into the active set (never a need to wait for repetition -- an isolated
+    # but clear-cut case, like MAGIC, deserves to be seen the first time).
     active = 1 if (verdict == "flawed" and lesson) else 0
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -172,9 +174,9 @@ async def _review_one(position: dict, *, llm) -> dict:
 
 
 async def run_trade_devils_advocate_cycle(*, llm=None, positions_fetch=None) -> dict:
-    """Un tour : relit les positions clôturées jamais encore examinées (dédoublonné
-    par ``position_id``, même patron que ``pump_dump_autopsy_log``). Fail-closed si
-    désactivé/en pause. Une panne sur un cas ne casse jamais les autres."""
+    """One round: reviews closed positions never yet examined (deduplicated by
+    ``position_id``, same pattern as ``pump_dump_autopsy_log``). Fail-closed
+    if disabled/paused. A failure on one case never breaks the others."""
     if not trade_devils_advocate_enabled():
         return {"outcome": "skipped_disabled"}
 
@@ -209,9 +211,9 @@ async def run_trade_devils_advocate_cycle(*, llm=None, positions_fetch=None) -> 
     for position in candidates:
         try:
             result = await _review_one(position, llm=llm)
-        except Exception as exc:  # noqa: BLE001 -- une revue ratée ne casse jamais le cycle
+        except Exception as exc:  # noqa: BLE001 -- a failed review never breaks the cycle
             logger.warning(
-                "trade_devils_advocate: échec sur position %s -- %s", position["id"], exc,
+                "trade_devils_advocate: failure on position %s -- %s", position["id"], exc,
             )
             result = {"position_id": position["id"], "verdict": "error", "error": str(exc)[:200]}
         results.append(result)
@@ -221,10 +223,10 @@ async def run_trade_devils_advocate_cycle(*, llm=None, positions_fetch=None) -> 
 
 
 async def active_lessons(limit: int = _MAX_ACTIVE_LESSONS) -> list[dict]:
-    """Les leçons actives les plus récentes -- jamais supprimées de la table, juste
-    plafonnées ici pour ce qui est réellement injecté dans un prompt (sens unique :
-    une leçon plus ancienne que le plafond reste en base pour toujours, seulement
-    retirée du jeu ACTIF)."""
+    """The most recent active lessons -- never deleted from the table, just
+    capped here for what actually gets injected into a prompt (one-way: a
+    lesson older than the cap stays in the DB forever, only removed from the
+    ACTIVE set)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -238,9 +240,9 @@ async def active_lessons(limit: int = _MAX_ACTIVE_LESSONS) -> list[dict]:
 
 
 def format_lessons_line(lessons: list[dict]) -> str:
-    """Ligne courte, plafonnée -- même discipline de brièveté que
-    ``momentum_entry._weekly_pacing_line`` : ces prompts sont latency-critiques,
-    jamais un long historique déroulé à chaque décision."""
+    """Short, capped line -- same brevity discipline as
+    ``momentum_entry._weekly_pacing_line``: these prompts are latency-critical,
+    never a long history unrolled on every decision."""
     if not lessons:
         return ""
     parts = [

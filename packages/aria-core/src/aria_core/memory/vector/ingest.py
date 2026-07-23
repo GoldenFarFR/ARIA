@@ -1,4 +1,4 @@
-"""Ingestion vectorielle — miroir cognitive approuvée (flag-gated)."""
+"""Vector ingestion — mirrors approved cognitive knowledge (flag-gated)."""
 from __future__ import annotations
 
 import logging
@@ -25,7 +25,7 @@ def entry_type_for_item(item: KnowledgeItem) -> str:
 
 
 async def ingest_approved_item(item_id: str) -> str | None:
-    """Indexe un item cognitive approuvé dans la mémoire vectorielle — no-op si flag off."""
+    """Indexes an approved cognitive item into vector memory — no-op if flag is off."""
     if not is_vector_enabled():
         return None
     item = await get_knowledge_by_id(item_id)

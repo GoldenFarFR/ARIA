@@ -168,7 +168,7 @@ async def _format_status(lang: str) -> tuple[str, dict]:
 
 
 async def _format_conversational_status(lang: str) -> tuple[str, dict]:
-    """Réponse naturelle quand l'opérateur demande comment va ACP / les revenus."""
+    """Natural-language reply when the operator asks how ACP / revenue is doing."""
     from aria_core.revenue_goals import monthly_total_usd, total_revenue_usd
 
     lines_count, events_path = _events_file_status()
@@ -242,7 +242,7 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
     if wants_acp_email_watch(text):
         return await execute_acp_email_watch(text, lang_key)
 
-    # Toujours rappeler les barrières strictes ACP dans les réponses marketplace
+    # Always remind of the strict ACP guardrails in marketplace responses
     strict = get_acp_strict_rules(lang_key)
 
     if _POLL_RE.search(text):

@@ -1,37 +1,37 @@
-"""Signal "substance Docs" -- profondeur RÉELLE d'une documentation/whitepaper
-projet, via ``services.tavily.TavilyClient.crawl`` sur l'URL "Docs" DÉCLARÉE
-par le projet (23/07, demande opérateur directe : "la doc doit aussi être lue
-en entière... https://docs.crynux.io/" -- un crawl enraciné sur le lien
-Website ne garantit PAS de couvrir la doc si elle vit sur un domaine sans
-rapport, contrairement au cas CNX où docs.crynux.io est un sous-domaine
-découvert incidemment).
+"""Docs substance signal -- REAL depth of a project's documentation/whitepaper,
+via ``services.tavily.TavilyClient.crawl`` on the "Docs" URL DECLARED by the
+project (23/07, direct operator request: "the doc must also be read in full...
+https://docs.crynux.io/" -- a crawl rooted on the Website link does NOT
+guarantee coverage of the docs if they live on an unrelated domain, unlike the
+CNX case where docs.crynux.io is a subdomain discovered incidentally).
 
-Aucune extraction de documentation n'existait avant ce signal : le seul texte
-de site déjà récupéré ailleurs (``site_snapshot.py``) est plafonné à 600
-caractères -- vérifié en conditions réelles que docs.crynux.io fait à lui
-seul 535 526 caractères de HTML brut, sur plusieurs pages (architecture,
-tokenomics, guides). Même doctrine que ``website_substance.py`` : des FAITS
-mesurables sur le texte réellement récupéré, jamais un jugement fabriqué sur
-une donnée absente."""
+No documentation extraction existed before this signal: the only site text
+already fetched elsewhere (``site_snapshot.py``) is capped at 600 characters --
+verified under real conditions that docs.crynux.io alone runs to 535,526
+characters of raw HTML, across several pages (architecture, tokenomics,
+guides). Same doctrine as ``website_substance.py``: MEASURABLE FACTS on the
+actually fetched text, never a judgment fabricated on absent data."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Mots-clés de profondeur TECHNIQUE (proxy textuel -- présence réelle de
-# contenu sur ces sujets, jamais une vérification de véracité du contenu
-# lui-même, qui reste déclaratif comme tout project_links).
+# TECHNICAL depth keywords (textual proxy -- actual presence of content on
+# these topics, never a truthfulness check of the content itself, which
+# remains declarative like any project_links). English-only (the vast
+# majority of project docs are published in English regardless of the
+# team's own language).
 _TECHNICAL_KEYWORDS = (
     "architecture", "protocol", "algorithm", "consensus", "smart contract",
-    "contrat intelligent", "api", "sdk", "node", "noeud",
+    "api", "sdk", "node",
 )
-_ROADMAP_KEYWORDS = ("roadmap", "feuille de route", "milestone", "jalon")
-_TOKENOMICS_KEYWORDS = ("tokenomics", "allocation", "vesting", "supply", "émission")
-_RISK_KEYWORDS = ("risk", "risque", "disclaimer", "avertissement", "limitation")
+_ROADMAP_KEYWORDS = ("roadmap", "milestone")
+_TOKENOMICS_KEYWORDS = ("tokenomics", "allocation", "vesting", "supply", "emission")
+_RISK_KEYWORDS = ("risk", "disclaimer", "limitation")
 
-# Sous ce nombre de mots RÉELS cumulés, l'échantillon est trop faible pour
-# juger honnêtement (esprit du "< 800 mots -> plafonné" de la proposition
-# externe, mais ``unknown`` plutôt qu'un score forcé -- même doctrine que le
-# reste du projet : jamais un chiffre fabriqué sur un signal trop faible).
+# Below this number of cumulated REAL words, the sample is too weak to judge
+# honestly (spirit of the "< 800 words -> capped" from the external proposal,
+# but ``unknown`` rather than a forced score -- same doctrine as the rest of
+# the project: never a fabricated figure on a signal that's too weak).
 _MIN_WORDS_FOR_SIGNAL = 300
 _WORD_COUNT_FULL_SCORE = 5000
 _TECHNICAL_KEYWORDS_FULL_SCORE = 4
@@ -63,24 +63,24 @@ async def _default_crawl(url: str):
 
 
 async def gather_docs_substance_facts(docs_url: str | None, *, crawl_fn=None) -> DocsSubstanceFacts:
-    """Récolte best-effort, jamais bloquant. ``crawl_fn`` injectable pour les tests."""
+    """Best-effort collection, never blocking. ``crawl_fn`` injectable for tests."""
     url = (docs_url or "").strip()
     if not url.lower().startswith(("http://", "https://")):
-        return DocsSubstanceFacts(available=False, error="URL invalide")
+        return DocsSubstanceFacts(available=False, error="invalid URL")
 
     crawl_fn = crawl_fn or _default_crawl
     try:
         result = await crawl_fn(url)
-    except Exception as exc:  # noqa: BLE001 -- jamais bloquant
+    except Exception as exc:  # noqa: BLE001 -- never blocking
         return DocsSubstanceFacts(available=False, error=str(exc))
 
     if not result.available or not result.pages:
-        return DocsSubstanceFacts(available=False, error=result.error or "aucune page exploitable")
+        return DocsSubstanceFacts(available=False, error=result.error or "no usable page")
 
     combined = " ".join(p.raw_content for p in result.pages)
     total_words = len(combined.split())
     if total_words < _MIN_WORDS_FOR_SIGNAL:
-        return DocsSubstanceFacts(available=False, error="contenu réel trop faible pour juger")
+        return DocsSubstanceFacts(available=False, error="real content too thin to judge")
 
     lower = combined.lower()
     technical = sum(1 for kw in _TECHNICAL_KEYWORDS if kw in lower)
@@ -97,9 +97,9 @@ async def gather_docs_substance_facts(docs_url: str | None, *, crawl_fn=None) ->
 
 
 def judge_docs_substance(facts: DocsSubstanceFacts) -> DocsSubstanceVerdict:
-    """Jugement pur, aucun appel réseau. 4 critères pondérés."""
+    """Pure judgment, no network call. 4 weighted criteria."""
     if not facts.available:
-        return DocsSubstanceVerdict(signal="unknown", score=None, points=[facts.error or "indisponible"])
+        return DocsSubstanceVerdict(signal="unknown", score=None, points=[facts.error or "unavailable"])
 
     depth_score = min(1.0, facts.total_words / _WORD_COUNT_FULL_SCORE) * 100
     technical_score = min(1.0, facts.technical_keywords_found / _TECHNICAL_KEYWORDS_FULL_SCORE) * 100
@@ -111,11 +111,11 @@ def judge_docs_substance(facts: DocsSubstanceFacts) -> DocsSubstanceVerdict:
     score = 0.35 * depth_score + 0.25 * technical_score + 0.20 * roadmap_score + 0.20 * transparency_score
 
     points = [
-        f"substance {score:.1f}/100 -- {facts.total_words} mots réels sur {facts.pages_found} page(s), "
-        f"{facts.technical_keywords_found}/{len(_TECHNICAL_KEYWORDS)} terme(s) technique(s) trouvé(s), "
-        f"roadmap {'présente' if facts.has_roadmap else 'absente'}, "
-        f"tokenomics {'présente' if facts.has_tokenomics else 'absente'}, "
-        f"risques {'mentionnés' if facts.has_risk_disclosure else 'non mentionnés'}",
+        f"substance {score:.1f}/100 -- {facts.total_words} real words across {facts.pages_found} page(s), "
+        f"{facts.technical_keywords_found}/{len(_TECHNICAL_KEYWORDS)} technical term(s) found, "
+        f"roadmap {'present' if facts.has_roadmap else 'absent'}, "
+        f"tokenomics {'present' if facts.has_tokenomics else 'absent'}, "
+        f"risks {'disclosed' if facts.has_risk_disclosure else 'not disclosed'}",
     ]
 
     if score >= 70:

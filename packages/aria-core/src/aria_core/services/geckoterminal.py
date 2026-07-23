@@ -1,47 +1,48 @@
-"""Client GeckoTerminal (lecture seule, public, clé optionnelle) -- côté aria-core (#157).
+"""GeckoTerminal client (read-only, public, optional key) -- aria-core side (#157).
 
-Un client GeckoTerminal existe déjà côté ``vanguard/backend`` (chart data pour le
-produit), mais aria-core (Telegram/CLI, tourne aussi standalone sans le backend
-FastAPI) n'a AUCUNE dépendance vers ``vanguard/backend`` et ne doit pas en créer
-une -- inverserait le sens de dépendance du monorepo. Ce module est donc un
-client séparé, léger, avec ses propres dataclasses (pas les modèles Pydantic du
-backend), pensé uniquement pour les besoins de l'évaluateur wallet (#157) :
-- ``get_pool_created_at`` : horodatage de création d'un pool (entrée précoce).
-- ``resolve_primary_pool`` : résout le pool réel d'un token (volume 24h plausible,
-  réserve en départage -- cf. sa docstring pour le correctif du 14/07).
-- ``get_ohlcv`` : historique de prix pour valoriser un trade (PnL FIFO) -- délègue
-  à ``services/ohlcv.py`` (correction 14/07, cf. docstring de la méthode) plutôt
-  que de dupliquer un second client OHLCV avec une fenêtre plus étroite.
+A GeckoTerminal client already exists on the ``vanguard/backend`` side (chart
+data for the product), but aria-core (Telegram/CLI, also runs standalone
+without the FastAPI backend) has NO dependency toward ``vanguard/backend`` and
+must not create one -- would reverse the monorepo's dependency direction. This
+module is therefore a separate, lightweight client, with its own dataclasses
+(not the backend's Pydantic models), designed solely for the wallet
+evaluator's needs (#157):
+- ``get_pool_created_at``: a pool's creation timestamp (early entry).
+- ``resolve_primary_pool``: resolves a token's real pool (plausible 24h
+  volume, reserve as tiebreaker -- cf. its docstring for the 14/07 fix).
+- ``get_ohlcv``: price history to value a trade (FIFO PnL) -- delegates to
+  ``services/ohlcv.py`` (14/07 fix, cf. the method's docstring) rather than
+  duplicating a second OHLCV client with a narrower window.
 
-Réseau : Base par défaut (doctrine ARIA : Base uniquement pour tout SAUF le
-wallet-scoring #157, 14/07 -- seule capacité multi-chaînes EVM à ce jour, cf.
-``services/blockscout.py`` pour le même registre de chaînes). Aucune donnée
-manquante n'est jamais remplacée par une supposition -- ``available=False``/
-``error`` portent l'absence de donnée, même politique que ``blockscout.py``.
+Network: Base by default (ARIA doctrine: Base only for everything EXCEPT
+wallet-scoring #157, 14/07 -- the only multi-chain EVM capability to date, cf.
+``services/blockscout.py`` for the same chain registry). Missing data is
+never replaced by a guess -- ``available=False``/``error`` carry the absence
+of data, same policy as ``blockscout.py``.
 
-Authentification OPTIONNELLE (18/07, #211) : si ``COINGECKO_DEMO_API_KEY`` est
-présente dans l'environnement (clé gratuite CoinGecko "Demo", aucun coût --
-https://www.coingecko.com/en/api/pricing), jointe en en-tête ``x-cg-demo-api-key``
-sur chaque appel. L'en-tête reste envoyé (peut légitimement débloquer un quota
-MENSUEL plus large et l'accès à des endpoints premium même sans accélérer le
-débit PAR MINUTE), mais le throttle authentifié a été réaligné le 19/07 sur le
-même rythme que le mode non-authentifié -- **correction d'une erreur réelle**,
-pas un durcissement préventif.
+OPTIONAL authentication (18/07, #211): if ``COINGECKO_DEMO_API_KEY`` is
+present in the environment (free CoinGecko "Demo" key, no cost --
+https://www.coingecko.com/en/api/pricing), attached as the
+``x-cg-demo-api-key`` header on every call. The header is still sent (can
+legitimately unlock a larger MONTHLY quota and access to premium endpoints
+even without speeding up the PER-MINUTE throughput), but the authenticated
+throttle was realigned on 19/07 to the same pace as unauthenticated mode --
+**a fix for a real bug**, not preventive hardening.
 
-**Incident du 19/07** : la première version de ce commentaire (18/07) affirmait
-« fait passer le plafond ... à 100 req/min (vérifié via la doc officielle
-CoinGecko) » -- ce chiffre était FAUX, confondu avec un autre palier CoinGecko
-(probablement l'API keyless générale, pas les endpoints ``/onchain`` de
-GeckoTerminal qui ont leur propre grille tarifaire). Une vraie recherche web le
-19/07 (apiguide.geckoterminal.com/faq, support.coingecko.com) confirme : Public
-API gratuite (avec clé Demo) = **~30 req/min**, keyless sans clé = ~10 req/min,
-payant = jusqu'à 250 req/min (25x le keyless). Le throttle à 0.65s/appel
-(~92 req/min) déployé sur cette fausse prémisse a produit un taux d'échec HTTP
-429 de ~79% en production pendant plus d'une heure (666 échecs / 176 succès
-observés) -- explique une bonne partie du silence du pipeline momentum ce
-soir-là. Revenu à ``_MIN_INTERVAL`` (2.1s, le rythme déjà éprouvé en prod avant
-ce changement) même en mode authentifié, le temps de vérifier le VRAI plafond
-soutenu en conditions réelles avant de retenter une accélération.
+**19/07 incident**: the first version of this comment (18/07) claimed "raises
+the cap ... to 100 req/min (verified via official CoinGecko docs)" -- this
+figure was WRONG, confused with a different CoinGecko tier (probably the
+general keyless API, not GeckoTerminal's ``/onchain`` endpoints which have
+their own pricing grid). A real web search on 19/07
+(apiguide.geckoterminal.com/faq, support.coingecko.com) confirms: free Public
+API (with a Demo key) = **~30 req/min**, keyless with no key = ~10 req/min,
+paid = up to 250 req/min (25x keyless). The 0.65s/call throttle (~92 req/min)
+deployed on this false premise produced an HTTP 429 failure rate of ~79% in
+production for over an hour (666 failures / 176 successes observed) --
+explains a good part of the momentum pipeline's silence that evening. Reverted
+to ``_MIN_INTERVAL`` (2.1s, the pace already proven in production before this
+change) even in authenticated mode, until the REAL sustained cap under real
+conditions is verified before attempting to speed up again.
 """
 
 from __future__ import annotations
@@ -60,36 +61,37 @@ logger = logging.getLogger(__name__)
 
 UNAVAILABLE = "donnée GeckoTerminal indisponible"
 
-# 21/07 -- calibré à 90% de la vraie limite documentée (30 req/min Demo,
-# doctrine CLAUDE.md "Débit calibré à 90%") : 27 req/min = 2.222s. Remplace le
-# 2.1s (95%, marge insuffisante) posé le 19/07 par prudence après l'incident.
+# 21/07 -- calibrated to 90% of the real documented limit (30 req/min Demo,
+# CLAUDE.md "90% calibrated throughput" doctrine): 27 req/min = 2.222s.
+# Replaces the 2.1s (95%, insufficient margin) set on 19/07 out of caution
+# after the incident.
 _AUTHENTICATED_MIN_INTERVAL = 2.222
 
 
 def geckoterminal_authenticated() -> bool:
-    """True si ``COINGECKO_DEMO_API_KEY`` est configurée (clé Demo gratuite ou
-    payante CoinGecko) -- détermine le throttle appliqué par le client module-level."""
+    """True if ``COINGECKO_DEMO_API_KEY`` is configured (free or paid CoinGecko
+    Demo key) -- determines the throttle applied by the module-level client."""
     return bool(os.environ.get("COINGECKO_DEMO_API_KEY", "").strip())
 
 
 def _resolve_min_interval() -> float:
-    """Throttle du client module-level -- fonction séparée (plutôt qu'inline à
-    l'instanciation) pour rester directement testable sans recharger le module."""
+    """Throttle for the module-level client -- a separate function (rather
+    than inline at instantiation) to stay directly testable without reloading
+    the module."""
     return _AUTHENTICATED_MIN_INTERVAL if geckoterminal_authenticated() else _MIN_INTERVAL
 
 
 BASE_URL = "https://api.geckoterminal.com/api/v2"
 NETWORK = "base"
 
-# Correspondance chaîne ARIA (même vocabulaire que blockscout.CHAIN_IDS) ->
-# identifiant réseau GeckoTerminal (#157, wallet-scoring multi-chaînes, 14/07).
-# "bnb" retiré (14/07) -- Blockscout ne sert pas BNB Smart Chain (cf.
-# blockscout.CHAIN_IDS), inutile de garder son slug GeckoTerminal seul.
-# Étendu (14/07) aux 11 chaînes restantes du classement TVL dynamique (#157,
-# services/defillama.py) -- slugs VÉRIFIÉS EN DIRECT (GET
-# https://api.geckoterminal.com/api/v2/networks), pas supposés : le
-# vocabulaire GeckoTerminal ne suit pas toujours le nom usuel de la chaîne
-# ("gnosis" -> "xdai", "zksync era" -> "zksync" et non "zksync_era").
+# ARIA chain mapping (same vocabulary as blockscout.CHAIN_IDS) -> GeckoTerminal
+# network identifier (#157, multi-chain wallet-scoring, 14/07). "bnb" removed
+# (14/07) -- Blockscout doesn't serve BNB Smart Chain (cf. blockscout.CHAIN_IDS),
+# no point keeping its GeckoTerminal slug alone. Extended (14/07) to the 11
+# remaining chains from the dynamic TVL ranking (#157, services/defillama.py)
+# -- slugs VERIFIED LIVE (GET https://api.geckoterminal.com/api/v2/networks),
+# not assumed: GeckoTerminal's vocabulary doesn't always follow the chain's
+# usual name ("gnosis" -> "xdai", "zksync era" -> "zksync" not "zksync_era").
 GECKO_NETWORK_SLUGS: dict[str, str] = {
     "base": "base",
     "ethereum": "eth",
@@ -106,34 +108,32 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
     "mode": "mode",
 }
 
-# 21/07 -- calibré à 90% de 30 req/min (doctrine CLAUDE.md "Débit calibré à
-# 90%") : 27 req/min = 2.222s. Le client vanguard/backend partage désormais ce
-# même throttle (wait_for_shared_rate_limit), plus besoin de garder les deux
-# alignés manuellement.
+# 21/07 -- calibrated to 90% of 30 req/min (CLAUDE.md "90% calibrated
+# throughput" doctrine): 27 req/min = 2.222s. The vanguard/backend client now
+# shares this same throttle (wait_for_shared_rate_limit), no more need to keep
+# the two aligned manually.
 _MIN_INTERVAL = 2.222
 
-# Seuil de plausibilité réserve/volume pour `resolve_primary_pool` (correctif
-# 14/07, cf. sa docstring) -- calibré sur données réelles (requête directe
-# GeckoTerminal, token WETH sur Base, 20 pools) : les pools légitimes de la
-# liste avaient un ratio réserve/volume dans ~[0.01, 5] (ex. WETH/USDC 0.3%
-# réel ~1.4x), tandis que le pool corrompu écarté par ce correctif affichait
-# un ratio ~204 000x -- marge de plusieurs ordres de grandeur, seuil choisi
-# largement en dessous pour rester robuste sans risquer d'exclure un pool
-# légitime à la marge.
+# Reserve/volume plausibility threshold for `resolve_primary_pool` (14/07 fix,
+# cf. its docstring) -- calibrated on real data (direct GeckoTerminal query,
+# WETH token on Base, 20 pools): the legitimate pools in the list had a
+# reserve/volume ratio in ~[0.01, 5] (e.g. WETH/USDC real 0.3% ~1.4x), while
+# the corrupted pool excluded by this fix showed a ratio of ~204,000x -- a
+# margin of several orders of magnitude, threshold chosen well below that to
+# stay robust without risking excluding a borderline legitimate pool.
 _PLAUSIBILITY_RATIO_MAX = 1000.0
 
 
 def _pool_is_plausible(reserve_usd: float, volume_h24_usd: float) -> bool:
-    """Un pool est jugé implausible si sa réserve déclarée et son volume 24h
-    divergent dans des proportions statistiquement incohérentes pour un pool
-    réel -- dans UN sens (réserve énorme, volume quasi nul : signal de
-    `reserve_in_usd` corrompu/spoofé, cas réel confirmé 14/07) OU DANS L'AUTRE
-    (volume énorme, réserve quasi nulle : signal classique de wash-trading).
-    Une réserve nulle/négative est toujours implausible (aucune liquidité
-    réelle ne peut avoir généré un swap). Un volume nul n'est PAS en soi
-    disqualifiant (un token légitime peut simplement n'avoir eu aucun trade
-    dans les dernières 24h) -- seul le RATIO extrême, quand il est calculable,
-    disqualifie."""
+    """A pool is deemed implausible if its declared reserve and its 24h volume
+    diverge in statistically inconsistent proportions for a real pool -- in
+    ONE direction (huge reserve, near-zero volume: signal of a corrupted/
+    spoofed `reserve_in_usd`, real case confirmed on 14/07) OR THE OTHER
+    (huge volume, near-zero reserve: classic wash-trading signal). A zero/
+    negative reserve is always implausible (no real liquidity could have
+    generated a swap). A zero volume is NOT in itself disqualifying (a
+    legitimate token can simply have had no trade in the last 24h) -- only the
+    extreme RATIO, when computable, disqualifies."""
     if reserve_usd <= 0:
         return False
     if volume_h24_usd <= 0:
@@ -146,11 +146,11 @@ def _pool_is_plausible(reserve_usd: float, volume_h24_usd: float) -> bool:
 class PoolMetadata:
     pool_address: str
     created_at: datetime | None = None
-    reserve_usd: float | None = None  # 15/07 (défense anti-dust/scam-pool, #157) -- ``None``
-    # = inconnu (jamais construit par un appelant qui ne le fournit pas, ex. tests
-    # existants) et traité comme "faire confiance" (fail-open), PAS comme "liquidité
-    # nulle" -- seule une valeur CONFIRMÉE sous le plancher doit bloquer la
-    # valorisation OHLCV (cf. WEIGHTS.min_pool_liquidity_usd_for_pricing).
+    reserve_usd: float | None = None  # 15/07 (anti-dust/scam-pool defense, #157) -- ``None``
+    # = unknown (never built by a caller that doesn't provide it, e.g.
+    # existing tests) and treated as "trust it" (fail-open), NOT as "zero
+    # liquidity" -- only a value CONFIRMED below the floor should block OHLCV
+    # valuation (cf. WEIGHTS.min_pool_liquidity_usd_for_pricing).
     available: bool = True
     error: str | None = None
 
@@ -163,7 +163,7 @@ class OHLCVResult:
 
 
 class GeckoTerminalClient:
-    """Client HTTP async, lecture seule, throttle conservateur (API publique gratuite)."""
+    """Async HTTP client, read-only, conservative throttle (free public API)."""
 
     def __init__(self, base_url: str = BASE_URL, *, min_interval: float = _MIN_INTERVAL) -> None:
         self.base_url = base_url.rstrip("/")
@@ -180,12 +180,12 @@ class GeckoTerminalClient:
             self._last_request = asyncio.get_event_loop().time()
 
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
-        """GET avec retry sur 429/5xx/timeout -- même politique que blockscout.py
-        (#157, correction 14/07 : cette fonction ne retentait jamais un rate limit,
-        marquant silencieusement "indisponible" au premier 429 rencontré, sans log
-        -- diagnostic impossible. Un wallet actif (~20 tokens x 2 appels) peut
-        facilement déclencher un 429 isolé sur le palier gratuit ; le retenter une
-        fois suffit dans l'immense majorité des cas plutôt que d'abandonner net."""
+        """GET with retry on 429/5xx/timeout -- same policy as blockscout.py
+        (#157, 14/07 fix: this function used to never retry a rate limit,
+        silently marking "unavailable" on the first 429 encountered, with no
+        log -- impossible to diagnose. An active wallet (~20 tokens x 2 calls)
+        can easily trigger an isolated 429 on the free tier; retrying once is
+        enough in the vast majority of cases rather than giving up outright."""
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         timeout_retried = False
@@ -205,13 +205,13 @@ class GeckoTerminalClient:
                     timeout_retried = True
                     await asyncio.sleep(5.0)
                     continue
-                logger.warning("geckoterminal: timeout sur %s -> %s", url, exc)
+                logger.warning("geckoterminal: timeout on %s -> %s", url, exc)
                 return None, f"{UNAVAILABLE} (timeout GeckoTerminal)"
 
             if response.status_code == 429:
                 attempt_429 += 1
                 if attempt_429 >= 3:
-                    logger.warning("geckoterminal: HTTP 429 sur %s apres %s tentatives", url, attempt_429)
+                    logger.warning("geckoterminal: HTTP 429 on %s after %s attempts", url, attempt_429)
                     return None, f"{UNAVAILABLE} (rate limit GeckoTerminal)"
                 await asyncio.sleep(0.5 * (2**attempt_429))
                 continue
@@ -221,7 +221,7 @@ class GeckoTerminalClient:
                     timeout_retried = True
                     await asyncio.sleep(5.0)
                     continue
-                logger.warning("geckoterminal: HTTP %s sur %s", response.status_code, url)
+                logger.warning("geckoterminal: HTTP %s on %s", response.status_code, url)
                 return None, f"{UNAVAILABLE} (erreur serveur GeckoTerminal)"
 
             if response.status_code in (400, 404):
@@ -255,36 +255,36 @@ class GeckoTerminalClient:
         return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
 
     async def resolve_primary_pool(self, token_address: str, *, network: str = NETWORK) -> PoolMetadata:
-        """Résout le pool PRINCIPAL d'un token -- #157 : `get_pool_created_at`/
-        `get_ohlcv` attendent une adresse de POOL, pas un contrat de TOKEN (deux
-        choses différentes en AMM). Correction d'un bug latent : le code appelant
-        passait directement l'adresse du contrat token là où une adresse de pool
-        était attendue. Sert aussi de base à l'exclusion multi-token du
-        wash-trading (#157, correction 14/07) -- le pool RÉEL de chaque token,
-        pas une adresse statique unique. ``network`` (#157 multi-chaînes, 14/07) :
-        identifiant réseau GeckoTerminal (cf. ``GECKO_NETWORK_SLUGS``), ``"base"``
-        par défaut -- comportement historique inchangé pour tout appelant existant.
+        """Resolves a token's MAIN pool -- #157: `get_pool_created_at`/
+        `get_ohlcv` expect a POOL address, not a TOKEN contract (two different
+        things in an AMM). Fixes a latent bug: the calling code was passing
+        the token contract address directly where a pool address was
+        expected. Also serves as the basis for multi-token wash-trading
+        exclusion (#157, 14/07 fix) -- each token's REAL pool, not a single
+        static address. ``network`` (#157 multi-chain, 14/07): GeckoTerminal
+        network identifier (cf. ``GECKO_NETWORK_SLUGS``), ``"base"`` by
+        default -- unchanged historical behavior for any existing caller.
 
-        **Correctif sélection de pool (relecture 14/07, suite #157)** : le critère
-        historique ("plus fort `reserve_in_usd`") a produit un cas réel confirmé où
-        un pool WETH annonçant 7,6 MILLIARDS de dollars de réserve pour 37 000
-        dollars de volume 24h (ratio ~204 000x, `reserve_in_usd` visiblement
-        corrompu/spoofé côté GeckoTerminal pour ce pool exotique) a été choisi à la
-        place du vrai pool WETH/USDC utilisé dans une transaction réelle -- un
-        écart de prix de ~8x, jamais signalé comme erreur (`available=True`), donc
-        pire qu'une jambe simplement non-priced. Nouveau critère (cf.
-        `_pool_is_plausible`) : filtre d'abord les pools dont le ratio
-        réserve/volume est statistiquement implausible dans un sens ou l'autre
-        (réserve gonflée sans volume réel = signal de donnée corrompue ; volume
-        gonflé sans réserve réelle = signal de wash-trading), PUIS trie les
-        survivants par volume 24h (reflète l'usage réel, plus dur à falsifier
-        durablement qu'une réserve déclarée), `reserve_in_usd` servant de
-        départage secondaire. Un token à POOL UNIQUE (immense majorité des cas
-        hors wallet-scoring) n'est JAMAIS soumis au filtre -- ce pool est
-        toujours retenu, comportement strictement inchangé pour ce cas. Un
-        token à plusieurs pools dont AUCUN ne passe le filtre échoue
-        honnêtement (`available=False`) plutôt que de retomber sur le pire des
-        choix disponibles."""
+        **Pool selection fix (14/07 review, following #157)**: the historical
+        criterion ("highest `reserve_in_usd`") produced a real confirmed case
+        where a WETH pool advertising 7.6 BILLION dollars of reserve for
+        $37,000 of 24h volume (ratio ~204,000x, `reserve_in_usd` visibly
+        corrupted/spoofed on GeckoTerminal's side for this exotic pool) was
+        chosen instead of the real WETH/USDC pool used in an actual
+        transaction -- a ~8x price gap, never flagged as an error
+        (`available=True`), hence worse than a simply unpriced leg. New
+        criterion (cf. `_pool_is_plausible`): first filters out pools whose
+        reserve/volume ratio is statistically implausible in either direction
+        (inflated reserve with no real volume = corrupted-data signal;
+        inflated volume with no real reserve = wash-trading signal), THEN
+        sorts the survivors by 24h volume (reflects real usage, harder to
+        durably fake than a declared reserve), with `reserve_in_usd` as a
+        secondary tiebreaker. A SINGLE-POOL token (vast majority of cases
+        outside wallet-scoring) is NEVER subjected to the filter -- that pool
+        is always kept, strictly unchanged behavior for this case. A
+        multi-pool token where NONE passes the filter fails honestly
+        (`available=False`) rather than falling back to the worst available
+        choice."""
         data, error = await self._get_json(f"/networks/{network}/tokens/{token_address}/pools")
         if error is not None:
             return PoolMetadata(pool_address=token_address, available=False, error=error)
@@ -312,8 +312,8 @@ class GeckoTerminalClient:
             return PoolMetadata(pool_address=token_address, available=False, error="aucun pool trouvé pour ce token")
 
         if len(candidates) == 1:
-            # Pool unique -- jamais soumis au filtre de plausibilité (rien à
-            # départager), comportement strictement inchangé.
+            # Single pool -- never subjected to the plausibility filter
+            # (nothing to tiebreak), strictly unchanged behavior.
             best_attrs, best_reserve, _volume = candidates[0]
         else:
             plausible = [c for c in candidates if _pool_is_plausible(c[1], c[2])]
@@ -349,25 +349,25 @@ class GeckoTerminalClient:
         min_useful_candles: int | None = None,
         **_kwargs: object,
     ) -> OHLCVResult:
-        """Délègue à ``services.ohlcv.ohlcv_client`` -- correction 14/07 (#157) :
-        cette méthode réimplémentait un second client GeckoTerminal avec sa
-        propre fenêtre fixe (200 bougies 1h ~ 8 jours), alors qu'un client
-        GeckoTerminal existait déjà (``services/ohlcv.py``, échelle jour(120)
-        → 4h(180) → 1h(240), déjà éprouvée en prod par `vc_predictions`/
-        `weekly_training`/`pump_dump_autopsy`) -- violation de la doctrine
-        "jamais dupliquer un client existant", et cause RÉELLE (confirmée par
-        un re-test opérateur après le fix retry/429 du même jour, résultat
-        identique) des jambes "sans prix" sur un wallet dont l'historique de
-        trades dépasse 8 jours : la fenêtre 1h ne remontait simplement pas
-        assez loin, ce n'était pas un problème de rate-limit. ``network``
-        (#157 multi-chaînes, 14/07) transite jusqu'à ``services/ohlcv.py`` (qui
-        acceptait déjà ce paramètre, jamais utilisé jusqu'ici). ``min_useful_candles``
-        (#182, 15/07, correctif de vitesse wallet-scoring) transite aussi jusqu'à
-        ``services/ohlcv.py`` -- ``None`` par défaut (le paramètre correspondant
-        de ``ohlcv_client.get_ohlcv`` garde alors SON propre défaut,
-        ``_MIN_USEFUL_CANDLES``, aucun changement pour les appelants existants).
-        ``**_kwargs`` absorbe d'éventuels period/aggregate/limit hérités (aucun
-        appelant en prod n'en passe actuellement) sans lever."""
+        """Delegates to ``services.ohlcv.ohlcv_client`` -- 14/07 fix (#157):
+        this method used to reimplement a second GeckoTerminal client with its
+        own fixed window (200 1h candles ~ 8 days), when a GeckoTerminal
+        client already existed (``services/ohlcv.py``, day(120) -> 4h(180) ->
+        1h(240) escalation, already proven in production by
+        `vc_predictions`/`weekly_training`/`pump_dump_autopsy`) -- a violation
+        of the "never duplicate an existing client" doctrine, and the REAL
+        cause (confirmed by an operator re-test after the same day's
+        retry/429 fix, identical result) of "no price" legs on a wallet whose
+        trade history exceeds 8 days: the 1h window simply didn't reach far
+        enough back, it wasn't a rate-limit problem. ``network`` (#157
+        multi-chain, 14/07) is passed through to ``services/ohlcv.py`` (which
+        already accepted this parameter, never used until now).
+        ``min_useful_candles`` (#182, 15/07, wallet-scoring speed fix) is also
+        passed through to ``services/ohlcv.py`` -- ``None`` by default (the
+        corresponding parameter of ``ohlcv_client.get_ohlcv`` then keeps ITS
+        own default, ``_MIN_USEFUL_CANDLES``, no change for existing callers).
+        ``**_kwargs`` absorbs any inherited period/aggregate/limit (no caller
+        in production currently passes them) without raising."""
         from aria_core.services.ohlcv import ohlcv_client as _wide_ohlcv_client
 
         extra: dict[str, object] = {}
@@ -381,8 +381,8 @@ class GeckoTerminalClient:
 
 
 def price_at(ohlcv: OHLCVResult, ts: int) -> float | None:
-    """Prix (clôture de la bougie la plus proche à ou avant ``ts``) -- jamais une
-    interpolation ou une supposition : ``None`` si aucune bougie ne précède ``ts``."""
+    """Price (close of the nearest candle at or before ``ts``) -- never an
+    interpolation or a guess: ``None`` if no candle precedes ``ts``."""
     candidates = [c for c in ohlcv.candles if c.ts <= ts]
     if not candidates:
         return None
@@ -397,16 +397,17 @@ geckoterminal_client = GeckoTerminalClient(min_interval=_resolve_min_interval())
 
 
 async def wait_for_shared_rate_limit() -> None:
-    """Point d'entrée public pour un appelant EXTERNE à ce module (``vanguard/backend``,
-    seul autorisé -- aria-core ne dépend jamais de vanguard, cf. docstring du module) qui
-    a besoin de respecter le MÊME débit envers GeckoTerminal sans dupliquer son propre
-    verrou de throttle. 21/07 : root cause d'un taux de 429 soutenu de 55% -- deux clients
-    GeckoTerminal indépendants (celui-ci + ``vanguard/backend/app/services/geckoterminal.py``)
-    coexistaient dans le même conteneur, chacun respectant son propre intervalle de 2.1s
-    SANS jamais se coordonner -- leur débit cumulé dépassait le vrai plafond du compte.
-    Cette fonction fait partager le MÊME verrou/état (``geckoterminal_client._throttle``)
-    aux deux clients, sans fusionner leurs logiques de fetch/parsing (volontairement
-    distinctes : celui-ci sert le pricing FIFO large-fenêtre, l'autre sert des graphiques
-    à granularité de timeframe précise -- pas le même besoin, pas le même format de
-    retour)."""
+    """Public entry point for a caller EXTERNAL to this module
+    (``vanguard/backend``, the only one authorized -- aria-core never depends
+    on vanguard, cf. module docstring) that needs to respect the SAME
+    throughput toward GeckoTerminal without duplicating its own throttle lock.
+    21/07: root cause of a sustained 55% 429 rate -- two independent
+    GeckoTerminal clients (this one + `vanguard/backend/app/services/
+    geckoterminal.py`) coexisted in the same container, each respecting its
+    own 2.1s interval WITHOUT ever coordinating -- their combined throughput
+    exceeded the account's real cap. This function makes both clients share
+    the SAME lock/state (``geckoterminal_client._throttle``), without merging
+    their fetch/parsing logic (deliberately distinct: this one serves
+    wide-window FIFO pricing, the other serves precise-timeframe-granularity
+    charts -- not the same need, not the same return format)."""
     await geckoterminal_client._throttle()

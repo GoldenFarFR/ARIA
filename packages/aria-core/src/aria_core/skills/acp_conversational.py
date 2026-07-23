@@ -1,9 +1,9 @@
-"""Détection questions ACP conversationnelles (revenus, état) — tolère typos opérateur."""
+"""Detects conversational ACP questions (revenue, status) — tolerates operator typos."""
 from __future__ import annotations
 
 import re
 
-# Typos courants : ganger, largent, tu a / t'a
+# Common typos: ganger, largent, tu a / t'a
 _CONVERSATIONAL_ACP_RE = re.compile(
     r"(?i)(?:"
     r"comment\s+(?:se\s+)?passe|"
@@ -23,7 +23,7 @@ _CONVERSATIONAL_ACP_RE = re.compile(
 
 
 def is_conversational_acp_question(message: str) -> bool:
-    """Question humaine sur revenus / console ACP (pas commande technique)."""
+    """Human question about revenue / ACP console (not a technical command)."""
     text = (message or "").strip()
     if not text:
         return False

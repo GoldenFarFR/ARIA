@@ -1,19 +1,20 @@
-"""Plafond de requêtes X pour la diligence de conviction du pipeline momentum (19/07).
+"""X request cap for the momentum pipeline's conviction diligence (19/07).
 
-Réactive la lecture X (coupée le 11/07 pour maîtrise du coût pay-per-use, cf. CLAUDE.md)
-mais BORNÉE -- même doctrine que ``x402_budget.py`` : plafond dur, jamais dépassé,
-semaine calendaire glissante (lundi 00:00 UTC), append-only.
+Re-enables X reading (cut off on 11/07 to control pay-per-use cost, cf.
+CLAUDE.md) but BOUNDED -- same doctrine as ``x402_budget.py``: hard cap, never
+exceeded, rolling calendar week (Monday 00:00 UTC), append-only.
 
-Différence assumée avec x402_budget.py : celui-ci compte des REQUÊTES, pas des dollars.
-Le coût exact par appel de lecture X dépend du palier d'abonnement réel de l'opérateur
-(``x_publication_policy.py`` documente déjà un abonnement 5$/mois pour la PUBLICATION,
-un poste distinct) -- jamais vérifié pour la LECTURE dans cette session, donc jamais
-inventé ici. ``WEEKLY_REQUEST_CAP`` est un plafond conservateur, prudent par design ;
-à ajuster une fois le palier réel de lecture connu, pas avant.
+Deliberate difference from x402_budget.py: this one counts REQUESTS, not
+dollars. The exact cost per X read call depends on the operator's real
+subscription tier (``x_publication_policy.py`` already documents a $5/month
+subscription for PUBLICATION, a separate line item) -- never verified for
+READING in this session, hence never invented here. ``WEEKLY_REQUEST_CAP`` is
+a conservative cap, cautious by design; to adjust once the real reading tier
+is known, not before.
 
-Ne compte QUE les appels X (``search_recent_tweets``/``fetch_user_recent_tweets``) --
-jamais les appels Tavily (déjà un fournisseur/budget séparé, sans rapport avec la
-coupure X du 11/07)."""
+Only counts X calls (``search_recent_tweets``/``fetch_user_recent_tweets``) --
+never Tavily calls (already a separate provider/budget, unrelated to the
+11/07 X cutoff)."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -47,9 +48,10 @@ async def _ensure_table() -> None:
 
 
 def week_start(now: datetime | None = None) -> datetime:
-    """Début de la semaine calendaire courante (lundi 00:00 UTC) -- même formule que
-    x402_budget.week_start, jamais dupliquée en dérivant, réécrite ici volontairement
-    car les deux modules restent structurellement séparés (portées différentes)."""
+    """Start of the current calendar week (Monday 00:00 UTC) -- same formula
+    as x402_budget.week_start, never duplicated by importing, deliberately
+    rewritten here since the two modules remain structurally separate
+    (different scopes)."""
     ref = now if now is not None else datetime.now(timezone.utc)
     if ref.tzinfo is None:
         ref = ref.replace(tzinfo=timezone.utc)
@@ -58,8 +60,8 @@ def week_start(now: datetime | None = None) -> datetime:
 
 
 async def used_this_week(now: datetime | None = None) -> int:
-    """Compte les requêtes RÉELLEMENT effectuées (status='ok') depuis le début de la
-    semaine calendaire. Les tentatives 'blocked' ne comptent jamais contre le plafond."""
+    """Counts requests ACTUALLY made (status='ok') since the start of the
+    calendar week. 'blocked' attempts never count against the cap."""
     await _ensure_table()
     start = week_start(now).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -78,14 +80,14 @@ async def remaining_budget(now: datetime | None = None) -> int:
 
 
 async def can_spend(now: datetime | None = None) -> bool:
-    """Fail-closed : en cas de doute, on refuse plutôt que de risquer un dépassement."""
+    """Fail-closed: when in doubt, refuse rather than risk exceeding the cap."""
     remaining = await remaining_budget(now)
     return remaining > 0
 
 
 async def record_request(*, purpose: str, contract: str = "", status: str, reason: str = "") -> None:
-    """Journalise une tentative de requête X (``status`` in {"ok", "blocked"}) --
-    jamais seulement les succès, un refus de plafond doit rester tracé."""
+    """Logs an X request attempt (``status`` in {"ok", "blocked"}) -- never
+    only the successes, a cap refusal must remain traced."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:

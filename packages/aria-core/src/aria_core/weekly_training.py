@@ -1,16 +1,16 @@
-"""Boucle d'entraînement hebdomadaire (walk-forward) — le cœur qui accumule la preuve.
+"""Weekly (walk-forward) training loop — the core that accumulates proof.
 
-- **Lundi** : ``run_weekly_forecasts`` tire N tokens du pool screené, les analyse et
-  enregistre N pronostics horodatés (avec prix d'entrée + pool + poche 85/15) →
-  falsifiables.
-- **Échéance** : ``resolve_due`` clôture les pronostics arrivés à horizon en comparant
-  le prix d'entrée au **prix OHLCV réel** courant (spec ~7 j, VC ~30 j). Multi-horizon :
-  une thèse VC ne se juge pas en une semaine.
-- **Rapport** : ``weekly_report`` agrège calibration + valeur du wallet suivi + pool.
+- **Monday**: ``run_weekly_forecasts`` draws N tokens from the screened pool,
+  analyzes them and records N timestamped predictions (with entry price +
+  pool + 85/15 bucket) → falsifiable.
+- **Due date**: ``resolve_due`` closes predictions that reach their horizon by
+  comparing the entry price to the **real current OHLCV price** (spec ~7 days,
+  VC ~30 days). Multi-horizon: a VC thesis isn't judged in one week.
+- **Report**: ``weekly_report`` aggregates calibration + tracked wallet value + pool.
 
-Toutes les dépendances externes (tirage, analyse, prix OHLCV, horloge) sont
-**injectables** → testable hors-ligne. En prod, les défauts branchent le vrai pipeline.
-Aucune action financière : on enregistre et on mesure, on ne trade rien.
+All external dependencies (drawing, analysis, OHLCV price, clock) are
+**injectable** → testable offline. In prod, the defaults wire the real
+pipeline. No financial action: this records and measures, it trades nothing.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from aria_core import screened_pool, vc_predictions
 
 logger = logging.getLogger(__name__)
 
-# Horizons de résolution par poche (jours).
+# Resolution horizons per bucket (days).
 HORIZON_DAYS = {"vc": 30, "spec": 7}
 
 
@@ -35,12 +35,12 @@ def _parse_iso(ts: str) -> datetime | None:
 async def run_weekly_forecasts(
     *, n: int = 20, drawer=None, analyzer=None
 ) -> list[int]:
-    """Tire N tokens du pool, les analyse, enregistre N pronostics datés. Retourne les ids.
+    """Draws N tokens from the pool, analyzes them, records N dated predictions. Returns the ids.
 
-    ``drawer()`` → liste de tokens du pool (défaut : loterie du pool screené).
-    ``analyzer(contract)`` → ``(VCResult, TokenScanContext)`` (défaut : analyse VC réelle).
-    Le prix d'entrée (spot au moment du pronostic) et le pool sont capturés depuis le
-    contexte → indispensables à la résolution automatique ultérieure.
+    ``drawer()`` → list of tokens from the pool (default: screened pool lottery).
+    ``analyzer(contract)`` → ``(VCResult, TokenScanContext)`` (default: real VC analysis).
+    The entry price (spot at prediction time) and the pool are captured from
+    the context → essential for later automatic resolution.
     """
     draw = drawer or (lambda: screened_pool.draw_lottery(n))
     if analyzer is None:
@@ -54,8 +54,8 @@ async def run_weekly_forecasts(
         contract = tok["contract"] if isinstance(tok, dict) else tok
         try:
             result, ctx = await analyzer(contract)
-        except Exception as exc:  # noqa: BLE001 — un token qui échoue ne casse pas la fournée
-            logger.warning("weekly: analyse échouée pour %s (%s) — ignoré", contract, exc)
+        except Exception as exc:  # noqa: BLE001 — one failing token doesn't break the batch
+            logger.warning("weekly: analysis failed for %s (%s) — skipped", contract, exc)
             continue
         best = ctx.best_pair
         pid = await vc_predictions.record_prediction(
@@ -73,18 +73,18 @@ async def run_weekly_forecasts(
             network="base",
         )
         ids.append(pid)
-        # Carnet de bord : consigne la thèse + un screenshot (chandeliers + simulation).
-        # Jamais bloquant : un échec d'écriture du carnet ne casse pas la fournée.
+        # Journal: records the thesis + a screenshot (candles + simulation).
+        # Never blocking: a journal write failure doesn't break the batch.
         try:
             await _journal_forecast(contract, result, ctx)
         except Exception as exc:  # noqa: BLE001
-            logger.info("weekly: écriture carnet échouée pour %s (%s)", contract, exc)
-    logger.info("weekly: %s pronostics enregistrés sur %s tokens tirés", len(ids), len(tokens))
+            logger.info("weekly: journal write failed for %s (%s)", contract, exc)
+    logger.info("weekly: %s predictions recorded out of %s tokens drawn", len(ids), len(tokens))
     return ids
 
 
 def _num(v) -> float | None:
-    """Parse un prix éventuellement en texte ('$0,012' -> 0.012). None si impossible."""
+    """Parses a price possibly given as text ('$0,012' -> 0.012). None if impossible."""
     try:
         if v is None:
             return None
@@ -97,7 +97,7 @@ def _num(v) -> float | None:
 
 
 async def _journal_forecast(contract: str, result, ctx) -> None:
-    """Consigne un pronostic dans le carnet de bord + génère un screenshot (data-gated)."""
+    """Records a prediction in the journal + generates a screenshot (data-gated)."""
     from aria_core import thesis_journal as tj
 
     entry = _num(getattr(result, "entree", None)) or (ctx.ta_entry.entree if ctx.ta_entry else None)
@@ -123,11 +123,12 @@ async def _journal_forecast(contract: str, result, ctx) -> None:
 
 
 async def run_thesis_review() -> dict:
-    """Tour de surveillance autonome : re-vérifie chaque position ouverte (prix + activité).
+    """Autonomous monitoring pass: re-checks every open position (price + activity).
 
-    Assemble les pronostics ouverts (BUY, non clôturés), résout le prix courant via
-    l'OHLCV du pool, tente l'activité GitHub, consigne un checkpoint par position et
-    remonte les ALERTES (thèse stagnante/invalidée). Retourne {reviewed, alerts:[...]}.
+    Assembles open predictions (BUY, not closed), resolves the current price
+    via the pool's OHLCV, attempts GitHub activity, records a checkpoint per
+    position and surfaces ALERTS (stagnant/invalidated thesis). Returns
+    {reviewed, alerts:[...]}.
     """
     from aria_core import thesis_journal as tj
 
@@ -142,7 +143,7 @@ async def run_thesis_review() -> dict:
             "contract": c,
             "entry_price": p.get("entry_price"),
             "invalidation_price": p.get("invalidation_price"),
-            "github_url": p.get("github_url"),  # souvent absent -> activité 'unknown'
+            "github_url": p.get("github_url"),  # often absent -> activity 'unknown'
         })
         pool_by_contract[c] = ((p.get("pool_address") or "").strip(), p.get("network") or "base")
 
@@ -156,19 +157,20 @@ async def run_thesis_review() -> dict:
         return res.candles[-1].close if (res.available and res.candles) else None
 
     alerts = await tj.review_open_theses(positions, price_fn=price_fn)
-    logger.info("thesis_review: %s positions, %s alertes", len(positions), len(alerts))
+    logger.info("thesis_review: %s positions, %s alerts", len(positions), len(alerts))
     return {"reviewed": len(positions), "alerts": alerts}
 
 
 async def due_predictions_summary(*, now: datetime | None = None) -> dict:
-    """Combien de pronostics ouverts sont réellement à échéance maintenant, vs encore
-    dans leur horizon -- distinction manquante dans ``proactive.py::_real_state_snapshot``
-    jusqu'au 14/07 : un simple statut "au moins un pronostic ouvert" laissait le LLM
-    d'initiative proposer de "finaliser le pronostic ouvert" alors qu'aucun n'était
-    réellement arrivé à échéance (horizon VC 30j, aucun des 10 pronostics existants
-    ne peut résoudre avant début août) -- confabulation constatée en direct sur
-    Telegram, retractée seulement parce que l'opérateur a demandé les chiffres précis.
-    Réutilise HORIZON_DAYS/le calcul déjà éprouvé dans ``resolve_due``, jamais dupliqué."""
+    """How many open predictions are actually due now, vs still within their
+    horizon -- a distinction missing from ``proactive.py::_real_state_snapshot``
+    until 14/07: a simple "at least one open prediction" status let the
+    initiative LLM propose to "finalize the open prediction" when none had
+    actually reached its due date (30-day VC horizon, none of the 10 existing
+    predictions can resolve before early August) -- a confabulation observed
+    live on Telegram, retracted only because the operator asked for the exact
+    numbers. Reuses HORIZON_DAYS/the calculation already proven in
+    ``resolve_due``, never duplicated."""
     now = now or datetime.now(timezone.utc)
     open_preds = await vc_predictions.list_open_predictions(limit=1000)
     due = 0
@@ -191,11 +193,11 @@ async def due_predictions_summary(*, now: datetime | None = None) -> dict:
 
 
 async def resolve_due(*, now: datetime | None = None, price_fn=None) -> dict:
-    """Clôture les pronostics arrivés à horizon via le prix OHLCV réel courant.
+    """Closes predictions that reached their horizon via the real current OHLCV price.
 
-    ``price_fn(pool_address, network)`` → prix courant (défaut : dernier close OHLCV).
-    Un pronostic sans prix d'entrée / pool, ou dont le prix courant est indisponible,
-    est laissé ouvert (jamais résolu sur une valeur inventée).
+    ``price_fn(pool_address, network)`` → current price (default: last OHLCV close).
+    A prediction with no entry price / pool, or whose current price is
+    unavailable, is left open (never resolved on a made-up value).
     """
     now = now or datetime.now(timezone.utc)
     if price_fn is None:
@@ -215,7 +217,7 @@ async def resolve_due(*, now: datetime | None = None, price_fn=None) -> dict:
             continue
         horizon = HORIZON_DAYS.get(p.get("strategy") or "vc", 30)
         if (now - created).days < horizon:
-            continue  # pas encore à échéance (multi-horizon)
+            continue  # not yet due (multi-horizon)
         current = await price_fn(pool, p.get("network") or "base")
         if current is None or entry <= 0:
             continue
@@ -224,12 +226,12 @@ async def resolve_due(*, now: datetime | None = None, price_fn=None) -> dict:
             p["id"], outcome_pct=round(pct, 2), note=f"auto OHLCV @{current:.6g}"
         )
         resolved += 1
-    logger.info("weekly: %s pronostics résolus (échéance atteinte)", resolved)
+    logger.info("weekly: %s predictions resolved (due date reached)", resolved)
     return {"resolved": resolved, "open_checked": len(open_preds)}
 
 
 async def weekly_report() -> dict:
-    """Digest hebdo : calibration + valeur du wallet suivi + taille du pool."""
+    """Weekly digest: calibration + tracked wallet value + pool size."""
     metrics = await vc_predictions.metrics()
     wallet = await vc_predictions.live_wallet()
     pool_active = await screened_pool.count_pool("active")
@@ -241,11 +243,11 @@ async def weekly_report() -> dict:
 
 
 async def self_report() -> str:
-    """Digest « santé & réglages » d'ARIA, destiné à l'opérateur (Telegram).
+    """ARIA's "health & settings" digest, intended for the operator (Telegram).
 
-    C'est ainsi qu'ARIA fait remonter ce qui a besoin d'attention/réglage : état de
-    la calibration, valeur du wallet suivi, taille du pool (assez de candidats ?),
-    et candidats d'amélioration en attente de validation. Texte court, factuel.
+    This is how ARIA surfaces what needs attention/adjustment: calibration
+    status, tracked wallet value, pool size (enough candidates?), and
+    improvement candidates awaiting validation. Short, factual text.
     """
     rep = await weekly_report()
     m, w = rep["calibration"], rep["wallet"]

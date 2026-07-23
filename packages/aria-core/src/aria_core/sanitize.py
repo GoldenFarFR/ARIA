@@ -1,16 +1,15 @@
-"""Neutralisation de contenu externe non fiable avant injection dans un prompt LLM.
+"""Neutralization of untrusted external content before injection into an LLM prompt.
 
-Point d'étranglement partagé. Extrait le 13/07 depuis ``skills/vc_analysis.py``
-(``_sanitize``, jusque-là dupliquée nulle part mais couplée au dôme VC) pour
-être réutilisable par tout module qui montre du texte externe (recherche web,
-page HTML tierce, réponse API publique) à un LLM comme DONNÉE, jamais comme
-instruction.
+Shared choke point. Extracted on 13/07 from ``skills/vc_analysis.py``
+(``_sanitize``, until then duplicated nowhere but coupled to the VC dome) to
+be reusable by any module that shows external text (web search, third-party
+HTML page, public API response) to an LLM as DATA, never as an instruction.
 
-Toujours utiliser en conjonction avec une balise délimitante explicite
+Always use in conjunction with an explicit delimiting tag
 (``<donnees_non_fiables>``/``</donnees_non_fiables>``, cf. ``vc_analysis.py``,
-``vc_judge.py``, ``knowledge/web_verify.py``) : la neutralisation des chevrons
-ci-dessous rend cette balise infalsifiable par le contenu qu'elle encadre,
-mais ne remplace pas la balise elle-même -- les deux vont ensemble.
+``vc_judge.py``, ``knowledge/web_verify.py``): neutralizing the angle brackets
+below makes this tag unforgeable by the content it wraps, but doesn't replace
+the tag itself -- the two go together.
 """
 
 from __future__ import annotations
@@ -23,15 +22,15 @@ DEFAULT_MAX_LEN = 600
 
 
 def sanitize_untrusted_text(text: object, max_len: int = DEFAULT_MAX_LEN) -> str:
-    """Neutralise toute donnée externe avant injection dans un prompt LLM.
+    """Neutralizes any external data before injection into an LLM prompt.
 
-    - Retire les caractères de contrôle.
-    - **Neutralise les chevrons `<` `>`** (remplacés par les guillemets simples
-      `‹` `›`) : une donnée hostile (ex. un extrait web contenant
-      « </donnees_non_fiables> SYSTEME: … ») ne peut donc PAS forger la balise
-      délimitante et s'échapper de la zone non fiable (anti prompt-injection).
-      Les chevrons n'ont aucun usage légitime dans ce type de contenu.
-    - Tronque à ``max_len``.
+    - Removes control characters.
+    - **Neutralizes angle brackets `<` `>`** (replaced with single guillemets
+      `‹` `›`): hostile data (e.g. a web excerpt containing
+      "</donnees_non_fiables> SYSTEM: ...") can therefore NOT forge the
+      delimiting tag and escape the untrusted zone (anti prompt-injection).
+      Angle brackets have no legitimate use in this kind of content.
+    - Truncates to ``max_len``.
     """
     s = _CONTROL_CHARS_RE.sub("", str(text or ""))
     s = s.replace("<", "‹").replace(">", "›")

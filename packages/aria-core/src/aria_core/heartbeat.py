@@ -20,11 +20,12 @@ logger = logging.getLogger(__name__)
 _START_TIME = datetime.now(timezone.utc)
 _LAST_HEARTBEAT: datetime | None = None
 
-# Plafond dur par tâche de heartbeat (16/07, #tick-blocking) -- aucune tâche unique
-# ne doit pouvoir bloquer tout le tick (et donc tout ARIA) au-delà de cette durée,
-# même en cas de panne externe prolongée (GeckoTerminal/CoinMarketCap down en même
-# temps, ex. observé ce soir sur wallet_scan_queue_cycle). Généreux (5 min) pour ne
-# pas couper une tâche légitimement lente en conditions normales.
+# Hard cap per heartbeat task (07/16, #tick-blocking) -- no single task should
+# be able to block the entire tick (and therefore all of ARIA) beyond this
+# duration, even during a prolonged external outage (GeckoTerminal/CoinMarketCap
+# down at the same time, e.g. observed that evening on wallet_scan_queue_cycle).
+# Generous (5 min) so as not to cut off a task that's legitimately slow under
+# normal conditions.
 _TASK_TIMEOUT_SECONDS = 300
 
 HEARTBEAT_TASKS = [
@@ -111,12 +112,12 @@ HEARTBEAT_TASKS = [
     ),
     HeartbeatTask(
         id="wallet_scoring_chain_ranking_refresh",
-        name="Classement TVL des chaînes wallet-scoring",
-        description="Rafraîchit mensuellement (DefiLlama) le classement TVL des "
-                    "chaînes EVM scannées par /walletscore, parmi les 13 "
-                    "confirmées Blockscout×GeckoTerminal (#157, 14/07).",
-        interval_minutes=43200,  # ~30 jours -- décision opérateur explicite (mensuel, pas quotidien)
-        enabled=True,  # lecture seule, dégradation douce si DefiLlama indisponible -- faible risque
+        name="Wallet-scoring chain TVL ranking",
+        description="Monthly refresh (DefiLlama) of the TVL ranking of the "
+                    "EVM chains scanned by /walletscore, among the 13 "
+                    "confirmed Blockscout x GeckoTerminal (#157, 07/14).",
+        interval_minutes=43200,  # ~30 days -- explicit operator decision (monthly, not daily)
+        enabled=True,  # read-only, graceful degradation if DefiLlama unavailable -- low risk
     ),
     HeartbeatTask(
         id="tweet_schedule",
@@ -128,28 +129,28 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="avatar_style_refresh",
         name="Avatar style refresh",
-        description="Grok Imagine — nouveau style depuis l'ancre (14 jours min, validation opérateur)",
+        description="Grok Imagine — new style from the anchor (14 days min, operator validation)",
         interval_minutes=720,
         enabled=True,
     ),
     HeartbeatTask(
         id="visual_autonomy",
         name="Visual identity autonomy",
-        description="Ancre opérateur → Imagine avatar + bannière X (vérif 24h, style 14j)",
+        description="Operator anchor -> Imagine avatar + X banner (24h check, 14d style)",
         interval_minutes=1440,
         enabled=True,
     ),
     HeartbeatTask(
         id="self_banner_curiosity",
         name="Self banner curiosity",
-        description="Boucle curiosite banniere X proactive (6h)",
+        description="Proactive X banner curiosity loop (6h)",
         interval_minutes=360,
         enabled=True,
     ),
     HeartbeatTask(
         id="x_profile_sync",
         name="X profile sync",
-        description="Bio, site web et nom @Aria_ZHC alignés sur narrative Vanguard",
+        description="Bio, website, and @Aria_ZHC name aligned with the Vanguard narrative",
         interval_minutes=1440,
         enabled=True,
     ),
@@ -163,7 +164,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="acp_market_scan",
         name="ACP market intelligence",
-        description="Browse marketplace — offre/demande, gaps, suggestions workflows",
+        description="Browse marketplace — supply/demand, gaps, workflow suggestions",
         interval_minutes=1440,
         enabled=False,
     ),
@@ -184,195 +185,197 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="revenue_autonomy",
         name="Revenue autonomy cycle",
-        description="Poll ACP, scan marché, promo X, initiative — sans relance opérateur",
+        description="Poll ACP, scan market, promote on X, take initiative — no operator prompting",
         interval_minutes=360,
         enabled=False,
     ),
     HeartbeatTask(
         id="health_watch",
         name="Health regression watch",
-        description="Ping /api/health — issue apres 3 echecs",
+        description="Ping /api/health — issue after 3 failures",
         interval_minutes=15,
         enabled=True,
     ),
     HeartbeatTask(
         id="vc_crawl",
         name="BASE token crawl",
-        description="Decouvre les tokens Base -> filtre securite -> base propriataire",
+        description="Discovers Base tokens -> safety filter -> proprietary database",
         interval_minutes=360,
         enabled=True,
     ),
     HeartbeatTask(
         id="vc_resolve",
         name="VC predictions resolve",
-        description="Cloture les pronostics a echeance via le prix OHLCV reel",
+        description="Closes predictions at maturity via the real OHLCV price",
         interval_minutes=1440,
         enabled=True,
     ),
     HeartbeatTask(
         id="vc_weekly_forecast",
         name="VC forecast",
-        description="Tire 20 tokens du pool -> analyse -> enregistre 20 pronostics dates (cadence 2j)",
+        description="Draws 20 tokens from the pool -> analyzes -> records 20 dated predictions (2-day cadence)",
         interval_minutes=2880,
         enabled=True,
     ),
     HeartbeatTask(
         id="vc_self_report",
         name="ARIA self report",
-        description="Digest sante & reglages -> operateur (Telegram)",
+        description="Health & settings digest -> operator (Telegram)",
         interval_minutes=10080,
         enabled=True,
     ),
     HeartbeatTask(
         id="vc_radar_x",
         name="Radar X social",
-        description="Ecoute sociale -> sourcing/reveil de candidats, arbitre on-chain (jamais un declencheur)",
+        description="Social listening -> candidate sourcing/wakeup, on-chain arbitration (never a trigger)",
         interval_minutes=720,
         enabled=True,
     ),
     HeartbeatTask(
         id="vc_thesis_review",
         name="Thesis surveillance",
-        description="Repasse sur chaque position ouverte (prix + activite projet) -> alerte si stagne/casse",
+        description="Revisits each open position (price + project activity) -> alerts if stagnant/broken",
         interval_minutes=1440,
         enabled=True,
     ),
     HeartbeatTask(
         id="paper_trade_cycle",
-        name="Paper trading 1M$ (simulation) — surveillance des positions ouvertes",
-        description="Applique les VRAIS rapports a un portefeuille FICTIF de 1M$ (mode trading) : gere les positions DEJA OUVERTES (re-scan securite, stop suiveur, prise de profit). Aucun argent reel, aucune signature.",
-        # #195 (15/07, plan maître étape 2) : 180min -> 15min -- 180 était beaucoup trop lent
-        # pour "voir le compteur bouger" côté opérateur.
-        # 22/07 -- décision opérateur explicite : DÉCOUPLÉ de la découverte de nouveaux
-        # candidats (déplacée vers momentum_discovery_cycle, 60min, ci-dessous). Ce
-        # cycle-ci ne fait plus QUE la surveillance des positions déjà ouvertes
-        # (skip_new_entries=True, cf. paper_trader.run_paper_cycle) -- protection contre
-        # une perte qui s'aggrave (stop suiveur/re-scan sécurité), jamais ralentie sans
-        # décision explicite séparée. Reste à 15min : c'est ce rythme qui a fait ses
-        # preuves (incident BRIAN, 17/07) pour réagir vite à un token qui se retourne.
+        name="Paper trading $1M (simulation) — open-position monitoring",
+        description="Applies REAL reports to a FICTITIOUS $1M portfolio (trading mode): manages ALREADY-OPEN positions (safety re-scan, trailing stop, profit-taking). No real money, no signing.",
+        # #195 (07/15, master plan step 2): 180min -> 15min -- 180 was far too slow
+        # for the operator to "see the counter move."
+        # 07/22 -- explicit operator decision: DECOUPLED from the discovery of new
+        # candidates (moved to momentum_discovery_cycle, 60min, below). This
+        # cycle now ONLY monitors already-open positions
+        # (skip_new_entries=True, see paper_trader.run_paper_cycle) -- protection
+        # against a worsening loss (trailing stop/safety re-scan), never slowed
+        # down without a separate explicit decision. Stays at 15min: this is the
+        # cadence that proved itself (BRIAN incident, 07/17) for reacting quickly
+        # to a token that turns.
         interval_minutes=15,
         enabled=False,
     ),
     HeartbeatTask(
         id="momentum_discovery_cycle",
-        name="Paper trading 1M$ (simulation) — découverte de nouveaux candidats",
-        description="Cherche de nouveaux candidats a acheter (pipeline momentum #194) pour le portefeuille FICTIF de 1M$. Ne touche jamais aux positions deja ouvertes (gerees par paper_trade_cycle, 15min). Aucun argent reel, aucune signature.",
-        # 22/07 -- décision opérateur explicite : "un contrat n'a pas besoin d'être scanné
-        # toutes les 60 secondes, toutes les 4h suffit" (constat : le WebSocket #196
-        # redécouvre le marché en continu, ~30-60s, et peut réévaluer un même token à
-        # chaque passage tant qu'il reste dans les résultats de découverte). Ce cycle
-        # heartbeat classique de découverte -- redondant avec le WebSocket sur la
-        # DÉTECTION rapide, qui reste actif et inchangé -- est ralenti à 1h "pour
-        # commencer" (valeur de départ explicite, pas gravée -- à ajuster si besoin une
-        # fois observée en conditions réelles). Le cooldown adaptatif PAR CONTRAT
-        # (4h sauf mouvement de prix significatif), lui, reste à construire séparément
-        # côté momentum_websocket.py -- ceci ne fait que ralentir CE cycle-ci, pas
-        # encore le vrai mécanisme de cooldown demandé.
+        name="Paper trading $1M (simulation) — new candidate discovery",
+        description="Looks for new candidates to buy (momentum pipeline #194) for the FICTITIOUS $1M portfolio. Never touches already-open positions (managed by paper_trade_cycle, 15min). No real money, no signing.",
+        # 07/22 -- explicit operator decision: "a contract doesn't need to be
+        # scanned every 60 seconds, every 4h is enough" (observation: WebSocket
+        # #196 continuously rediscovers the market, ~30-60s, and can re-evaluate
+        # the same token on every pass as long as it stays in the discovery
+        # results). This classic heartbeat discovery cycle -- redundant with the
+        # WebSocket for fast DETECTION, which stays active and unchanged -- is
+        # slowed down to 1h "to start with" (explicit starting value, not set in
+        # stone -- to adjust if needed once observed under real conditions). The
+        # adaptive PER-CONTRACT cooldown (4h unless a significant price move)
+        # still needs to be built separately in momentum_websocket.py -- this
+        # only slows down THIS cycle, not yet the actual cooldown mechanism
+        # requested.
         interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
         id="paper_weekly_review_cycle",
-        name="Bilan hebdo paper-trading 1M$ (reset)",
-        description="Remplace le protocole 30j/7j/14j (decision operateur, 18/07) : chaque semaine (7j), cloture forcee de toute position ouverte au prix reel, verdict objectif +10% (1,1M$) valide/non atteint, archive l'historique (jamais detruit), repart a 1M$ frais. Meme gate que paper_trade_cycle -- aucun argent reel.",
+        name="Weekly paper-trading $1M review (reset)",
+        description="Replaces the 30d/7d/14d protocol (operator decision, 07/18): every week (7d), force-closes any open position at the real price, +10% ($1.1M) verdict validated/not reached, archives the history (never destroyed), restarts fresh at $1M. Same gate as paper_trade_cycle -- no real money.",
         interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
         id="aria_exam_cycle",
-        name="Examen trading ARIA (rehearsal pedagogique)",
-        description="Genere ~25 questions de trading/jour (curriculum 50 concepts), les pose au raisonnement d'ARIA, note via juge LLM. 20 jours, en parallele du paper-trading. Aucune action financiere.",
+        name="ARIA trading exam (pedagogical rehearsal)",
+        description="Generates ~25 trading questions/day (50-concept curriculum), poses them to ARIA's reasoning, grades via an LLM judge. 20 days, in parallel with paper-trading. No financial action.",
         interval_minutes=1440,
         enabled=False,
     ),
     HeartbeatTask(
         id="code_proposal_cycle",
-        name="Proposition de code long-cours",
-        description="Redige UNE amelioration concrete de son propre systeme et l'ouvre comme issue GitHub (jamais une PR, jamais un commit, jamais un merge autonome -- revue humaine requise). Gate OFF par defaut.",
+        name="Long-running code proposal",
+        description="Drafts ONE concrete improvement to its own system and opens it as a GitHub issue (never a PR, never a commit, never an autonomous merge -- human review required). Gate OFF by default.",
         interval_minutes=1440,
         enabled=False,
     ),
     HeartbeatTask(
         id="skill_project_cycle",
-        name="Projet d'apprentissage long-cours",
-        description="Un increment reel par jour sur un projet de plusieurs jours (3-7j, curriculum trading) ; synthese finale soumise a l'operateur seulement a la fin. 100% analyse/ecriture, aucune action financiere ni changement de code.",
+        name="Long-running learning project",
+        description="One real increment per day on a multi-day project (3-7d, trading curriculum); final summary submitted to the operator only at the end. 100% analysis/writing, no financial action or code change.",
         interval_minutes=1440,
         enabled=True,
     ),
     HeartbeatTask(
         id="sepolia_autonomous_cycle",
-        name="Rehearsal Sepolia autonome",
-        description="Decide ET execute SEULE sur Base Sepolia (testnet, aucune valeur reelle) -- sans clic Telegram. Kelly sizing sur calibration reelle, ancrage onchain autonome, telemetrie complete (latence/hesitation/erreurs). Chain_id verrouille 84532 ; le mainnet garde la validation humaine.",
+        name="Autonomous Sepolia rehearsal",
+        description="Decides AND executes ALONE on Base Sepolia (testnet, no real value) -- no Telegram click. Kelly sizing on real calibration, autonomous on-chain anchoring, full telemetry (latency/hesitation/errors). Chain_id locked to 84532; mainnet keeps human validation.",
         interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
         id="agent_wallet_pilot_cycle",
-        name="Pilote agent-wallet reel (~10-15$, CAPITAL REEL)",
-        description="Decide ET execute SEULE un swap USDC->token reel sur le wallet agent CDP dedie (Base) -- sans clic Telegram. Reutilise le pipeline momentum deja teste (honeypot+R/R+garde LLM). Sizing 3% du solde reel plafonne 15$ (#203). Une seule entree a la fois, aucune sortie automatique en v1. Gate ARIA_AGENT_WALLET_PILOT_ENABLED, meme gate que le reste du pilote (exception nommee, doc pilote-agent-wallet-10usd.md).",
+        name="Real agent-wallet pilot (~$10-15, REAL CAPITAL)",
+        description="Decides AND executes ALONE a real USDC->token swap on the dedicated CDP agent wallet (Base) -- no Telegram click. Reuses the already-tested momentum pipeline (honeypot+R/R+LLM guard). Sizing 3% of real balance capped at $15 (#203). One entry at a time, no automatic exit in v1. Gate ARIA_AGENT_WALLET_PILOT_ENABLED, same gate as the rest of the pilot (named exception, doc pilote-agent-wallet-10usd.md).",
         interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
         id="relay_conversation_cycle",
-        name="Conversation relay ARIA <-> Claude Code",
-        description="Repond dans sa propre voix (LLM) quand le dernier message du relay Telegram vient de Claude Code -- jamais l'operateur. Aucune action/competence declenchable depuis cet echange, uniquement de la discussion. Plafond quotidien, respecte le kill-switch. Gate OFF par defaut.",
+        name="ARIA <-> Claude Code conversation relay",
+        description="Replies in its own voice (LLM) when the last relay Telegram message comes from Claude Code -- never the operator. No action/skill can be triggered from this exchange, discussion only. Daily cap, respects the kill-switch. Gate OFF by default.",
         interval_minutes=15,
         enabled=False,
     ),
     HeartbeatTask(
         id="knowledge_inbox_cycle",
-        name="Boite de depot de connaissance",
-        description="Lit une note non traitee dans docs/aria-learning-inbox/ et PROPOSE (jamais n'impose) son integration dans les vrais fichiers de connaissance (knowledge/*.yaml, canonical_facts.yaml) via une ISSUE GitHub -- jamais un commit ni une fusion autonome. Une note n'est proposee qu'une seule fois. Gate OFF par defaut.",
+        name="Knowledge drop box",
+        description="Reads an unprocessed note in docs/aria-learning-inbox/ and PROPOSES (never imposes) its integration into the real knowledge files (knowledge/*.yaml, canonical_facts.yaml) via a GitHub ISSUE -- never an autonomous commit or merge. A note is proposed only once. Gate OFF by default.",
         interval_minutes=360,
         enabled=False,
     ),
     HeartbeatTask(
         id="tavily_learning_cycle",
-        name="Auto-formation continue (Tavily)",
-        description="1 compte X (watchlist existante) + 1 sujet macro-economie/psychologie de trading/documentation (learning_topics.yaml) par passage, round-robin persiste. Reutilise integralement le pipeline curiosity existant (triage Groq, pending SQLite, approbation Telegram, ingestion LanceDB a l'approbation) -- comble le trou laisse par l'API X officielle coupee depuis juillet. Budget mensuel Tavily partage (tavily_budget.py), 2 recherches max par passage. Gate OFF par defaut.",
+        name="Continuous self-training (Tavily)",
+        description="1 X account (existing watchlist) + 1 macroeconomics/trading-psychology/documentation topic (learning_topics.yaml) per pass, persisted round-robin. Fully reuses the existing curiosity pipeline (Groq triage, pending SQLite, Telegram approval, LanceDB ingestion on approval) -- fills the gap left by the official X API being cut since July. Shared monthly Tavily budget (tavily_budget.py), 2 searches max per pass. Gate OFF by default.",
         interval_minutes=1440,
         enabled=False,
     ),
     HeartbeatTask(
         id="claude_mentor_cycle",
-        name="Revue de performance ARIA par Claude",
-        description="Claude (Opus 4.8, profondeur develop via Virtuals -- pas de nouveau secret) lit les vraies donnees mesurees d'ARIA (calibration VC, paper-trading, telemetrie Sepolia) et poste UNE observation ancree sur les chiffres dans le relais Telegram (ARIA y repond en vrai). Si le constat merite d'etre durable, PROPOSE une issue GitHub connaissance -- jamais un commit ni une fusion autonome. Throttle interne ~1x/jour. Gate OFF par defaut.",
+        name="ARIA performance review by Claude",
+        description="Claude (Opus 4.8, develop depth via Virtuals -- no new secret) reads ARIA's real measured data (VC calibration, paper-trading, Sepolia telemetry) and posts ONE observation grounded in the numbers in the Telegram relay (ARIA replies for real there). If the finding deserves to be durable, PROPOSES a knowledge GitHub issue -- never an autonomous commit or merge. Internal throttle ~1x/day. Gate OFF by default.",
         interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
         id="telegram_miner_cycle",
-        name="Mineur de conversations operateur/ARIA",
-        description="Relit les nouveaux echanges du relais Telegram existant (relay_chat.py, rien duplique) et PROPOSE (jamais n'impose) un enseignement durable et generalisable observe dans le dialogue reel -- jamais une citation verbatim (filet de securite anti-secret local, une creation d'issue ne passe pas par le scan detect-secrets de la CI). PROPOSE via ISSUE GitHub -- jamais un commit ni une fusion autonome. Throttle interne ~1x/jour. Gate OFF par defaut.",
+        name="Operator/ARIA conversation miner",
+        description="Rereads new exchanges from the existing Telegram relay (relay_chat.py, nothing duplicated) and PROPOSES (never imposes) a durable, generalizable lesson observed in the real dialogue -- never a verbatim quote (local anti-secret safety net, issue creation doesn't go through the CI's detect-secrets scan). PROPOSES via a GitHub ISSUE -- never an autonomous commit or merge. Internal throttle ~1x/day. Gate OFF by default.",
         interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
         id="high_conviction_alert_cycle",
-        name="Alertes proactives haute-conviction",
-        description="Pousse une alerte Telegram des que le pool screene fait remonter un candidat SAFE au-dessus du seuil de score compose (candidate_ranking, deja existant -- rien duplique). Signal de tri, jamais un ordre d'achat -- renvoie vers /vc <contrat> pour l'analyse complete. Un contrat n'est alerte qu'une seule fois. Gate OFF par defaut.",
+        name="Proactive high-conviction alerts",
+        description="Pushes a Telegram alert as soon as the screened pool surfaces a SAFE candidate above the composite score threshold (candidate_ranking, already existing -- nothing duplicated). A sorting signal, never a buy order -- points to /vc <contract> for the full analysis. A contract is alerted only once. Gate OFF by default.",
         interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
         id="pump_dump_autopsy_cycle",
-        name="Autopsie pump/dump",
-        description="Relit la vraie serie OHLCV parcourue par chaque pronostic VC clos recemment (le point-a-point entree->echeance masque un pump-puis-crash intermediaire) ; si un pattern reel est detecte (deterministe, aucun LLM), demande une autopsie courte au LLM. Log local + proposition d'issue GitHub (aria-playbook-proposal) si la lecon est jugee durable -- jamais un commit ni une fusion autonome. Gate OFF par defaut.",
+        name="Pump/dump autopsy",
+        description="Rereads the real OHLCV series traversed by each recently-closed VC prediction (the point-to-point entry->maturity comparison hides an intermediate pump-then-crash); if a real pattern is detected (deterministic, no LLM), asks the LLM for a short autopsy. Local log + GitHub issue proposal (aria-playbook-proposal) if the lesson is judged durable -- never an autonomous commit or merge. Gate OFF by default.",
         interval_minutes=180,
         enabled=False,
     ),
     HeartbeatTask(
         id="aria_brain_cycle",
-        name="Memoire libre (aria-brain)",
-        description="Ecrit librement dans son propre repo GitHub prive (GoldenFarFR/aria-brain, token dedie, jamais celui qui touche ARIA) -- aucun format impose, aucune approbation humaine par entree, decision operateur explicite (20/07). Une page par jour maximum (decision operateur explicite, 20/07) -- la choisit avec soin, jamais un flot continu. Commit direct, jamais une proposition d'issue. Gate OFF par defaut.",
+        name="Free memory (aria-brain)",
+        description="Writes freely to its own private GitHub repo (GoldenFarFR/aria-brain, dedicated token, never the one that touches ARIA) -- no imposed format, no per-entry human approval, explicit operator decision (07/20). One page per day maximum (explicit operator decision, 07/20) -- chosen carefully, never a continuous stream. Direct commit, never an issue proposal. Gate OFF by default.",
         interval_minutes=1440,
         enabled=False,
     ),
     HeartbeatTask(
         id="trade_devils_advocate_cycle",
-        name="Le Diable d'ARIA (trading)",
-        description="Relit chaque position papier CLOTUREE jamais encore examinee -- un modele different (DeepSeek R1) juge la DECISION au moment de l'entree, jamais le resultat. Une leçon confirmee (faille de raisonnement reelle, jamais juste une perte) est injectee dans le garde de securite du pipeline momentum -- sens unique, ne relache jamais rien. Suite directe de la these ecrite par ARIA elle-meme (aria-brain, chapitre 1). Gate OFF par defaut.",
+        name="ARIA's Devil's Advocate (trading)",
+        description="Rereads every CLOSED paper position never yet examined -- a different model (DeepSeek R1) judges the DECISION at entry time, never the outcome. A confirmed lesson (a real reasoning flaw, never just a loss) is injected into the momentum pipeline's safety guard -- one-way, never relaxes anything. Direct follow-up to the thesis written by ARIA herself (aria-brain, chapter 1). Gate OFF by default.",
         interval_minutes=180,
         enabled=False,
     ),
@@ -538,21 +541,21 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.gateway.x_twitter import is_x_post_configured
                 from aria_core.x_profile import x_profile_sync_enabled
 
-                # Sync manuelle (commande admin /x profile sync) toujours disponible ;
-                # la tâche AUTOMATIQUE (heartbeat, personne ne clique) reste en plus
-                # gardée par ARIA_X_PROFILE_SYNC_ENABLED (outward-facing -> opt-in).
+                # Manual sync (admin command /x profile sync) always available;
+                # the AUTOMATIC task (heartbeat, no one clicks) stays additionally
+                # gated by ARIA_X_PROFILE_SYNC_ENABLED (outward-facing -> opt-in).
                 task.enabled = is_x_post_configured() and x_profile_sync_enabled()
             if task.id == "paper_trade_cycle":
-                # Simulation interne 1M$ : OFF par defaut. L'operateur demarre le run de preuve
-                # (20 jours) en posant ARIA_PAPER_TRADING_ENABLED=1 dans le .env (cout LLM
-                # deliberé). Aucun argent reel, aucune surface outward-facing.
+                # Internal $1M simulation: OFF by default. The operator starts the
+                # proof run (20 days) by setting ARIA_PAPER_TRADING_ENABLED=1 in
+                # .env (deliberate LLM cost). No real money, no outward-facing surface.
                 task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
                     "1", "true", "yes", "on",
                 )
             if task.id == "momentum_discovery_cycle":
-                # 22/07 -- meme gate que paper_trade_cycle : c'est le meme test 1M$
-                # decouple en deux cycles (decouverte vs surveillance), pas une
-                # fonctionnalite separee.
+                # 07/22 -- same gate as paper_trade_cycle: it's the same $1M test
+                # decoupled into two cycles (discovery vs monitoring), not a
+                # separate feature.
                 task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
                     "1", "true", "yes", "on",
                 )
@@ -701,12 +704,13 @@ def _sync_x_curiosity_enabled() -> None:
                         int(os.environ.get("ARIA_AUTONOMY_CYCLE_MINUTES", "360") or 360),
                     )
         except Exception as exc:
-            # Un gate de tâche cassé (import manquant, dépendance non déployée...) ne
-            # doit jamais empêcher l'évaluation des AUTRES tâches ni, en amont, tout le
-            # reste de _tick() (cette fonction tourne à CHAQUE tick, avant la boucle
-            # d'exécution des tâches -- un throw ici gelait heartbeat entier). Fail-closed :
-            # la tâche en échec reste désactivée pour ce cycle, les autres continuent.
-            logger.warning("heartbeat gate check failed for task=%s: %s — désactivée ce cycle (fail-closed)", task.id, exc)
+            # A broken task gate (missing import, undeployed dependency...) must
+            # never prevent the evaluation of the OTHER tasks, nor, upstream, the
+            # rest of _tick() (this function runs on EVERY tick, before the task
+            # execution loop -- a throw here used to freeze the entire heartbeat).
+            # Fail-closed: the failing task stays disabled for this cycle, the
+            # others continue.
+            logger.warning("heartbeat gate check failed for task=%s: %s — disabled this cycle (fail-closed)", task.id, exc)
             task.enabled = False
 
 _HEARTBEAT_STATE_PATH = data_dir() / "heartbeat_state.json"
@@ -724,10 +728,10 @@ def _load_heartbeat_state() -> dict[str, str]:
 
 
 def heartbeat_pulse() -> dict:
-    """Pouls COARSE et NON sensible du heartbeat, pour un endpoint public / le cockpit.
+    """COARSE and NON-sensitive heartbeat pulse, for a public endpoint / the cockpit.
 
-    N'expose QUE des horodatages de cycles (cadence non sensible) : jamais un candidat, un
-    verdict, un montant, un secret ni une PII. `alive` = au moins un cycle a tourné."""
+    Exposes ONLY cycle timestamps (non-sensitive cadence): never a candidate, a
+    verdict, an amount, a secret, or PII. `alive` = at least one cycle has run."""
     state = _load_heartbeat_state()  # {task_id: iso}
     times = sorted(v for v in state.values() if isinstance(v, str) and v)
     last_tick = times[-1] if times else None
@@ -808,10 +812,10 @@ class AriaHeartbeat:
 
     async def _tick(self) -> None:
         global _LAST_HEARTBEAT
-        # Kill-switch : en pause, aucun job planifié ne tourne (tweets programmés, ACP,
-        # revenue, mentions, profile/visual sync, health watch…). La boucle reste vivante
-        # et reprend telle quelle au /start. _LAST_HEARTBEAT n'est pas touché : /status
-        # affiche l'état de pause explicitement.
+        # Kill-switch: while paused, no scheduled job runs (scheduled tweets, ACP,
+        # revenue, mentions, profile/visual sync, health watch...). The loop stays
+        # alive and resumes as-is on /start. _LAST_HEARTBEAT isn't touched: /status
+        # explicitly shows the paused state.
         from aria_core import outgoing_pause
 
         if outgoing_pause.is_paused():
@@ -825,27 +829,27 @@ class AriaHeartbeat:
             if not _task_due(hb_task.id, hb_task.interval_minutes, self._last_runs):
                 continue
 
-            # Plafond dur par tâche (16/07, incident diagnostiqué en direct par VPS
-            # Principal) : `wallet_scan_queue_cycle` est resté bloqué ~8+ minutes en
-            # échec continu GeckoTerminal (429) puis CoinMarketCap (500) pendant une
-            # panne externe -- avant ce correctif, AUCUN try/except n'entourait
-            # `_run_task` ici, donc une tâche lente ou en exception bloquait/annulait
-            # tout le reste du tick (y compris `paper_trade_cycle`, qui n'a jamais pu
-            # persister son état tant que le tick entier n'était pas terminé).
-            # `asyncio.wait_for` borne chaque tâche individuellement ; `finally`
-            # persiste l'état ET marque la tâche "tentée" (jamais retentée en boucle
-            # serrée toutes les 60s -- son `interval_minutes` normal s'applique, que
-            # la tentative ait réussi, expiré ou levé une exception).
+            # Hard cap per task (07/16, incident diagnosed live on VPS Principal):
+            # `wallet_scan_queue_cycle` stayed blocked ~8+ minutes in a continuous
+            # failure loop, GeckoTerminal (429) then CoinMarketCap (500), during an
+            # external outage -- before this fix, NO try/except wrapped `_run_task`
+            # here, so a slow or exception-raising task blocked/canceled the rest
+            # of the tick (including `paper_trade_cycle`, which was never able to
+            # persist its state until the entire tick had finished).
+            # `asyncio.wait_for` bounds each task individually; `finally`
+            # persists the state AND marks the task as "attempted" (never retried
+            # in a tight loop every 60s -- its normal `interval_minutes` applies,
+            # whether the attempt succeeded, timed out, or raised).
             try:
                 await asyncio.wait_for(self._run_task(hb_task.id), timeout=_TASK_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
                 logger.warning(
-                    "Heartbeat: tâche %s a dépassé %ss -- abandonnée pour ce tick, "
-                    "les autres tâches ne sont jamais bloquées.",
+                    "Heartbeat: task %s exceeded %ss -- abandoned for this tick, "
+                    "other tasks are never blocked.",
                     hb_task.id, _TASK_TIMEOUT_SECONDS,
                 )
-            except Exception as exc:  # noqa: BLE001 — une tâche cassée ne coupe plus tout le cycle
-                logger.exception("Heartbeat: tâche %s a échoué: %s", hb_task.id, exc)
+            except Exception as exc:  # noqa: BLE001 — a broken task no longer cuts off the whole cycle
+                logger.exception("Heartbeat: task %s failed: %s", hb_task.id, exc)
             finally:
                 self._last_runs[hb_task.id] = now
                 hb_task.last_run = now
@@ -861,19 +865,19 @@ class AriaHeartbeat:
             logger.warning("Telegram notify failed: %s", exc)
 
     async def _notify_telegram_trading(self, text: str) -> None:
-        """#197 (15/07) : envoie le DM admin habituel (inchangé) PUIS, EN PLUS, le même
-        message vers un sujet ("topic") Telegram dédié au suivi paper-trading si les deux
-        variables ``ARIA_TRADING_TOPIC_CHAT_ID``/``ARIA_TRADING_TOPIC_THREAD_ID`` sont
-        configurées. Aucune des deux configurée (défaut) -> identique à
-        ``_notify_telegram`` seul, aucune régression. Usage volontairement RÉSERVÉ à
-        ``paper_trade_cycle`` (pas un changement global de ``_notify_telegram``, qui reste
-        utilisé tel quel par les 20+ autres tâches heartbeat).
+        """#197 (07/15): sends the usual admin DM (unchanged) THEN, IN ADDITION, the
+        same message to a Telegram "topic" dedicated to paper-trading follow-up if
+        both ``ARIA_TRADING_TOPIC_CHAT_ID``/``ARIA_TRADING_TOPIC_THREAD_ID``
+        variables are configured. Neither configured (default) -> identical to
+        ``_notify_telegram`` alone, no regression. Usage deliberately RESERVED to
+        ``paper_trade_cycle`` (not a global change to ``_notify_telegram``, which
+        stays used as-is by the 20+ other heartbeat tasks).
 
-        20/07 -- déléguée à ``telegram_bot.send_trading_notification`` (fonction libre,
-        pas une méthode liée) pour que ``momentum_websocket.py`` puisse envoyer
-        EXACTEMENT le même message par le même chemin, sans dupliquer cette logique
-        (bug réel trouvé : le WebSocket n'avait aucun moyen de réutiliser une méthode
-        liée à CETTE instance ``Heartbeat``, donc n'envoyait jamais rien)."""
+        07/20 -- delegated to ``telegram_bot.send_trading_notification`` (a free
+        function, not a bound method) so that ``momentum_websocket.py`` can send
+        EXACTLY the same message via the same path, without duplicating this logic
+        (real bug found: the WebSocket had no way to reuse a method bound to THIS
+        ``Heartbeat`` instance, so it never sent anything)."""
         from aria_core.gateway.telegram_bot import send_trading_notification
         await send_trading_notification(text)
 
@@ -968,10 +972,10 @@ class AriaHeartbeat:
             from aria_core.base_crawler import crawl_and_absorb, retry_stale_pending
             from aria_core.token_absorber import absorb as _absorb
 
-            # Wrapper léger : tague chaque absorption 'top_pools' pour l'observabilité
-            # sourcing (suite audit #77 diversification, 12/07) sans toucher à la
-            # signature de crawl_and_absorb/retry_stale_pending (ni aux tests qui
-            # injectent leur propre absorber).
+            # Light wrapper: tags each 'top_pools' absorption for sourcing
+            # observability (following audit #77 diversification, 07/12) without
+            # touching the signature of crawl_and_absorb/retry_stale_pending (nor
+            # the tests that inject their own absorber).
             async def _absorb_top_pools(contract, **kw):
                 return await _absorb(contract, source="top_pools", **kw)
 
@@ -1014,7 +1018,7 @@ class AriaHeartbeat:
             from aria_core.token_absorber import absorb as _absorb
             from aria_core.token_absorber import reconsider_on_signal as _reconsider
 
-            # Même tagging que vc_crawl, source='radar_x' (suite audit #77 diversification).
+            # Same tagging as vc_crawl, source='radar_x' (following audit #77 diversification).
             async def _absorb_radar(contract, **kw):
                 return await _absorb(contract, source="radar_x", **kw)
 
@@ -1064,9 +1068,9 @@ class AriaHeartbeat:
         elif task_id == "wallet_scoring_chain_ranking_refresh":
             from aria_core.services.smart_money import refresh_chain_ranking_cache
 
-            # Routine silencieuse (pas de notification Telegram, doctrine
-            # "jamais de spam Telegram" déjà en tête de ce fichier) -- succès/
-            # échec déjà loggé dans refresh_chain_ranking_cache lui-même.
+            # Silent routine (no Telegram notification, "never spam Telegram"
+            # doctrine already stated at the top of this file) -- success/
+            # failure already logged inside refresh_chain_ranking_cache itself.
             await refresh_chain_ranking_cache()
 
         elif task_id == "tweet_schedule":
@@ -1103,12 +1107,13 @@ class AriaHeartbeat:
                 append_memory("avatar", "[visual_autonomy] en attente ancre — photo /avatar")
 
         elif task_id == "x_profile_sync":
-            # Le module aria_core.x_profile n'est pas (encore) livré. Sans garde, l'import
-            # levait ModuleNotFoundError, sortait de la boucle de _tick AVANT la sauvegarde
-            # d'état -> la tâche restait « due » et re-crashait chaque tick, en sautant tous
-            # les jobs suivants (landmine dès que X est configuré). On dégrade proprement,
-            # comme visual_autonomy.py, en attendant que le module existe (surface X =
-            # outward-facing -> à livrer sous validation opérateur).
+            # The aria_core.x_profile module isn't (yet) delivered. Without a
+            # guard, the import raised ModuleNotFoundError, exiting the _tick
+            # loop BEFORE the state save -> the task stayed "due" and re-crashed
+            # every tick, skipping all subsequent jobs (a landmine as soon as X
+            # is configured). Degrades gracefully, like visual_autonomy.py, until
+            # the module exists (X surface = outward-facing -> to be delivered
+            # under operator validation).
             try:
                 from aria_core.x_profile import sync_x_profile
             except ModuleNotFoundError:
@@ -1125,9 +1130,9 @@ class AriaHeartbeat:
         elif task_id == "paper_trade_cycle":
             from aria_core import paper_trader
 
-            # 22/07 -- ne gère plus QUE les positions déjà ouvertes (skip_new_entries) --
-            # la découverte de nouveaux candidats vit désormais dans son propre cycle,
-            # momentum_discovery_cycle (60min), voir plus bas.
+            # 07/22 -- now only manages already-open positions (skip_new_entries) --
+            # the discovery of new candidates now lives in its own cycle,
+            # momentum_discovery_cycle (60min), see below.
             actions = await paper_trader.run_paper_cycle(
                 notifier=self._notify_telegram_trading, skip_new_entries=True,
             )
@@ -1141,9 +1146,9 @@ class AriaHeartbeat:
         elif task_id == "momentum_discovery_cycle":
             from aria_core import paper_trader
 
-            # 22/07 -- ne cherche QUE de nouveaux candidats (skip_position_management) --
-            # la surveillance des positions déjà ouvertes reste sur paper_trade_cycle
-            # (15min, ci-dessus), jamais ralentie par ce cycle-ci.
+            # 07/22 -- only looks for new candidates (skip_position_management) --
+            # monitoring of already-open positions stays on paper_trade_cycle
+            # (15min, above), never slowed down by this cycle.
             actions = await paper_trader.run_paper_cycle(
                 notifier=self._notify_telegram_trading, skip_position_management=True,
             )
@@ -1172,7 +1177,7 @@ class AriaHeartbeat:
 
             day = await exam.current_exam_day()
             if day > exam.EXAM_PROGRAM_DAYS:
-                return  # programme des 20 jours termine — plus de nouveau cycle
+                return  # 20-day program finished — no more new cycle
             questions = await exam.generate_daily_questions(day, n=25)
             for q in questions:
                 await exam.administer_question(q)
@@ -1560,8 +1565,8 @@ class AriaHeartbeat:
                         f"URL: {row.get('reply_url') or row.get('trigger_url')}"
                     )
                     await self._notify_telegram(body[:1500])
-            # Passage de relai : ARIA n'a pas tranche, elle te passe la main. Ping avec le
-            # commentaire recu et un brouillon pret a copier (tu decides et tu reponds).
+            # Handoff: ARIA didn't decide, she's passing it to you. Ping with the
+            # comment received and a ready-to-copy draft (you decide and you reply).
             if handed:
                 append_memory(
                     "github",

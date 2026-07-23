@@ -1,30 +1,30 @@
-"""Boucle de décision autonome du pilote agent-wallet réel (18/07, décision
-opérateur explicite "option 2" -- ARIA décide ET exécute SEULE, aucune
-commande Telegram nécessaire par transaction). Design complet et historique
-des décisions : `docs/pilote-agent-wallet-10usd.md` §8.
+"""Autonomous decision loop for the real agent-wallet pilot (18/07, explicit
+operator decision "option 2" -- ARIA decides AND executes ALONE, no Telegram
+command needed per transaction). Full design and decision history:
+`docs/pilote-agent-wallet-10usd.md` §8.
 
-Réutilise entièrement le pipeline momentum déjà construit et testé pour le
-paper-trading (honeypot GoPlus + R/R golden pocket/RSI + garde de sécurité
-LLM, `momentum_entry.py`) -- aucune nouvelle logique de décision inventée
-ici, seulement le câblage vers l'exécution réelle bornée
-(`agent_wallet_pilot.attempt_swap`). Ce module ne connaît, lui, que
-l'ORCHESTRATION : lire le solde réel, vérifier qu'aucune position n'est déjà
-ouverte, dimensionner (règle déjà décidée le 16/07, #203), sourcer un
-candidat, tenter le swap si BUY confirmé.
+Fully reuses the momentum pipeline already built and tested for
+paper-trading (GoPlus honeypot check + golden pocket/RSI R/R + LLM safety
+guard, `momentum_entry.py`) -- no new decision logic invented here, only
+the wiring to bounded real execution (`agent_wallet_pilot.attempt_swap`).
+This module only knows about ORCHESTRATION: reading the real balance,
+checking no position is already open, sizing (rule already decided on
+16/07, #203), sourcing a candidate, attempting the swap if BUY is
+confirmed.
 
-Base uniquement -- `agent_wallet_cdp_adapter.py` est structurellement
-Base-only (`USDC_BASE_ADDRESS` codé en dur), cohérent aussi avec la décision
-opérateur du 17/07 de garder Solana au même standard de sécurité (plus
-restrictif en pratique, donc moins de candidats -- pas un problème ici, ce
-pilote n'a de toute façon besoin que d'UN candidat par cycle).
+Base only -- `agent_wallet_cdp_adapter.py` is structurally Base-only
+(`USDC_BASE_ADDRESS` hardcoded), also consistent with the operator's 17/07
+decision to keep Solana at the same security standard (in practice more
+restrictive, hence fewer candidates -- not an issue here, this pilot only
+needs ONE candidate per cycle anyway).
 
-v1 (18/07) : une seule entrée à la fois, AUCUNE sortie automatique -- une
-position déjà ouverte (n'importe quel token autre qu'USDC détenu) bloque
-toute nouvelle tentative jusqu'à une décision future (manuelle ou une v2 avec
-logique de sortie, pas construite ici). Le volet "x402 débloque une décision
-bloquée par manque de données" (demandé par l'opérateur le 18/07) est
-DIFFÉRÉ -- `ethereum-token-verification` (le seul endpoint qui aurait pu
-aider) reste confirmé cassé depuis le 17/07, cf. doc §8.7.
+v1 (18/07): one entry at a time, NO automatic exit -- an already-open
+position (any token other than USDC held) blocks any new attempt until a
+future decision (manual, or a v2 with exit logic, not built here). The
+"x402 unlocks a decision blocked by missing data" angle (requested by the
+operator on 18/07) is DEFERRED -- `ethereum-token-verification` (the only
+endpoint that could have helped) remains confirmed broken since 17/07, cf.
+doc §8.7.
 """
 from __future__ import annotations
 
@@ -37,37 +37,36 @@ logger = logging.getLogger(__name__)
 
 CHAIN = "base"
 SWAP_FAILURE_COOLDOWN_MINUTES = 60
-# 19/07 -- incident réel URANUS (2 échecs consécutifs, `ValidationError` Pydantic sur
-# `CommonSwapResponseFees.gasFee`, bug confirmé côté SDK CDP Coinbase, cf. CLAUDE.md) :
-# le cooldown de 60min coïncide avec la cadence du cycle heartbeat, donc un échec
-# STRUCTUREL (va se reproduire identiquement, contrairement à une panne réseau
-# transitoire) pouvait faire retenter le même token indéfiniment, une fois par cycle,
-# sans jamais progresser vers un autre candidat. 7 jours -- assez long pour ne pas
-# gaspiller un cycle par heure sur un token structurellement cassé, assez court pour
-# redonner sa chance si Coinbase corrige son SDK entretemps. Aucune perte de fonds
-# possible dans les deux cas (le swap échoue AVANT toute signature) -- amélioration de
-# PROGRÈS, pas un changement de garde-fou de sécurité.
+# 19/07 -- real URANUS incident (2 consecutive failures, Pydantic `ValidationError`
+# on `CommonSwapResponseFees.gasFee`, bug confirmed on the Coinbase CDP SDK side, cf.
+# CLAUDE.md): the 60min cooldown coincides with the heartbeat cycle cadence, so a
+# STRUCTURAL failure (will reproduce identically, unlike a transient network outage)
+# could make the same token retry indefinitely, once per cycle, never progressing to
+# another candidate. 7 days -- long enough to avoid wasting one cycle per hour on a
+# structurally broken token, short enough to give it another chance if Coinbase fixes
+# its SDK in the meantime. No possible loss of funds in either case (the swap fails
+# BEFORE any signing) -- a PROGRESS improvement, not a change to a security guardrail.
 STRUCTURAL_SWAP_FAILURE_COOLDOWN_MINUTES = 7 * 24 * 60
 MAX_CANDIDATES_PER_CYCLE = 5
 
-# Raisons de HOLD qui signalent un manque de DONNÉES plutôt qu'un rejet dur --
-# référence unique pour un futur volet x402-débloque (différé, doc §8.7), pas
-# encore exploitée dans cette v1. Gardée ici pour ne pas redéfinir cette liste
-# ailleurs le jour où ce volet sera construit.
+# HOLD reasons that signal a lack of DATA rather than a hard rejection -- single
+# reference for a future x402-unlock feature (deferred, doc §8.7), not yet used in
+# this v1. Kept here so this list doesn't need to be redefined elsewhere the day
+# that feature gets built.
 DATA_GAP_HOLD_REASONS = frozenset({"ohlcv_unavailable"})
 
 
 async def run_agent_wallet_pilot_cycle() -> dict:
-    """Un tour de décision. Ne lève jamais d'exception (dégradation douce,
-    même doctrine que le reste du heartbeat) -- toute panne se traduit par un
-    ``outcome`` explicite, jamais un crash silencieux du tick heartbeat."""
+    """One decision round. Never raises (soft degradation, same doctrine as the
+    rest of the heartbeat) -- any failure translates into an explicit
+    ``outcome``, never a silent crash of the heartbeat tick."""
     if not agent_wallet_pilot.agent_wallet_pilot_enabled():
         return {"outcome": "disabled"}
 
     try:
         summary = await get_wallet_balance_summary()
-    except Exception as exc:  # noqa: BLE001 -- fail-closed, jamais un solde inventé
-        logger.warning("agent_wallet_pilot_cycle: solde indisponible (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 -- fail-closed, never a fabricated balance
+        logger.warning("agent_wallet_pilot_cycle: balance unavailable (%s)", exc)
         return {"outcome": "balance_unavailable", "reason": str(exc)}
 
     other_tokens = summary.get("other_tokens")
@@ -89,8 +88,8 @@ async def run_agent_wallet_pilot_cycle() -> dict:
 
     try:
         found = await momentum_entry.discover_momentum_candidates(chains=(CHAIN,))
-    except Exception as exc:  # noqa: BLE001 -- une panne de sourcing n'est pas fatale
-        logger.info("agent_wallet_pilot_cycle: sourcing échoué (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 -- a sourcing outage is not fatal
+        logger.info("agent_wallet_pilot_cycle: sourcing failed (%s)", exc)
         return {"outcome": "sourcing_failed", "reason": str(exc)}
 
     checked = 0
@@ -109,8 +108,8 @@ async def run_agent_wallet_pilot_cycle() -> dict:
 
         try:
             sig = await momentum_entry.evaluate_momentum_entry(contract, CHAIN)
-        except Exception as exc:  # noqa: BLE001 -- une évaluation cassée ne bloque pas le cycle
-            logger.info("agent_wallet_pilot_cycle: évaluation %s échouée (%s)", contract, exc)
+        except Exception as exc:  # noqa: BLE001 -- a broken evaluation doesn't block the cycle
+            logger.info("agent_wallet_pilot_cycle: evaluation of %s failed (%s)", contract, exc)
             continue
         if not sig or sig.get("action") != "BUY":
             continue
@@ -137,10 +136,10 @@ async def run_agent_wallet_pilot_cycle() -> dict:
 
 
 def format_agent_wallet_swap_alert(result: dict) -> str:
-    """Alerte Telegram -- CAPITAL RÉEL, jamais confondue avec les alertes
-    "🧪 SIMULATION" du paper-trading (préfixe et libellé délibérément
-    différents). ``""`` si rien d'assez notable pour notifier (ex. aucun
-    candidat trouvé ce cycle -- éviter le bruit sur du "rien ne s'est passé")."""
+    """Telegram alert -- REAL CAPITAL, never confused with the "🧪 SIMULATION"
+    alerts from paper-trading (deliberately different prefix and wording).
+    ``""`` if nothing notable enough to notify about (e.g. no candidate found
+    this cycle -- avoid noise over "nothing happened")."""
     outcome = result.get("outcome")
     if outcome in ("disabled", "no_candidate", "position_open"):
         return ""

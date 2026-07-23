@@ -1,4 +1,4 @@
-"""Rafraîchissement périodique du style avatar ARIA — Grok Imagine (image_edit)."""
+"""Periodic ARIA avatar style refresh — Grok Imagine (image_edit)."""
 
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ STATE_NAME = "style_refresh.json"
 PENDING_PREVIEW = "style_pending.jpg"
 ALLOWED_INTERVALS = (14,)
 
-# Presets locaux — 0 token Groq avant chaque Imagine.
-# Réécrits le 12/07 (#94) : les 3 presets marqués "violet"/"néon"/"futuriste" ci-dessous
-# (avant réécriture) dérivaient vers un cliché visuel d'imagerie IA générique totalement
-# absent de la marque réelle — `vanguard/src/index.css` ne définit AUCUNE couleur violette,
-# seulement or/champagne/crème sur quasi-noir, avec une police display serif éditoriale
-# (Cormorant Garamond), pas une esthétique sci-fi. Réalignés sur cette seule vraie source
-# de vérité de marque, en gardant 5 variantes distinctes (tenue/coiffure/décor/lumière).
+# Local presets — 0 Groq tokens before each Imagine call.
+# Rewritten on 12/07 (#94): the 3 presets tagged "violet"/"neon"/"futuristic" below
+# (before the rewrite) drifted toward a generic AI-imagery visual cliche completely
+# absent from the real brand — `vanguard/src/index.css` defines NO purple color at
+# all, only gold/champagne/cream on near-black, with an editorial serif display font
+# (Cormorant Garamond), not a sci-fi aesthetic. Realigned on this single true source
+# of brand truth, keeping 5 distinct variants (outfit/hairstyle/setting/lighting).
 STYLE_PRESETS = (
     "Tenue blazer sombre structuré, coiffure lisse, fond studio charbon avec liseré or, "
     "lumière douce — autorité calme, esthétique éditoriale.",
@@ -151,8 +151,8 @@ def update_config(
 
 def bootstrap_style_schedule() -> dict[str, Any]:
     """
-    Initialise next_due_at sans déclencher de changement (safe redeploy).
-    Un redeploy ne doit jamais être interprété comme « échéance atteinte ».
+    Initializes next_due_at without triggering a change (safe redeploy).
+    A redeploy must never be interpreted as "due date reached".
     """
     state = _load_state()
     if state.get("next_due_at"):
@@ -229,7 +229,7 @@ def _pick_style_preset(state: dict[str, Any]) -> str:
 
 
 async def propose_style(*, force_new: bool = False) -> str:
-    """Aria propose un nouveau style visuel (texte, pas encore d'image)."""
+    """Aria proposes a new visual style (text only, no image yet)."""
     state = _load_state()
     pending = state.get("pending") or {}
     if pending.get("style_prompt") and not force_new:
@@ -274,7 +274,7 @@ async def propose_style(*, force_new: bool = False) -> str:
 
 
 async def generate_pending_style(style: str | None = None) -> dict[str, Any]:
-    """Génère un aperçu (non appliqué) depuis l'ancre identité."""
+    """Generates a preview (not applied) from the identity anchor."""
     if not has_identity_anchor():
         raise RuntimeError("Ancre identité manquante — /avatar identity d'abord.")
     if not is_image_generation_available():
@@ -312,7 +312,7 @@ async def generate_pending_style(style: str | None = None) -> dict[str, Any]:
 
 
 async def apply_pending_style(*, note: str = "") -> dict[str, Any]:
-    """Applique l'aperçu en attente + sync Telegram/X."""
+    """Applies the pending preview + syncs Telegram/X."""
     state = _load_state()
     pending = state.get("pending")
     if not pending or not _pending_path().is_file():
@@ -358,8 +358,8 @@ async def run_refresh_cycle(
     *, notify: bool = True, auto_apply: bool | None = None, force: bool = False,
 ) -> dict[str, Any]:
     """
-    Cycle planifié : propose + génère style Imagine.
-    auto_apply=True (mode ZHC) : publie directement Telegram/X sans validation.
+    Scheduled cycle: proposes + generates the Imagine style.
+    auto_apply=True (ZHC mode): publishes directly to Telegram/X without validation.
     """
     from aria_core.visual_autonomy import visual_auto_apply_enabled
 

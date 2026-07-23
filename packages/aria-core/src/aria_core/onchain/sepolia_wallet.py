@@ -1,35 +1,36 @@
-"""Wallet Sepolia d'ARIA — SEULE exception documentée à « clé privée jamais sur le serveur ».
+"""ARIA's Sepolia wallet — the ONLY documented exception to "private key never on the server".
 
-``send_test_swap_transaction`` (ajouté 09/07, décision opérateur explicite : « swap réel
-sur Sepolia, actif de test ») exécute un VRAI swap Uniswap V3 (wrap WETH -> approve ->
-exactInputSingle, trois transactions signées réelles) mais sur une paire de TEST
-configurée (``ARIA_SEPOLIA_SWAP_TOKEN_OUT``), jamais sur le token candidat réellement
-analysé par ARIA (qui n'existe pas sur ce testnet, chaîne différente de Base mainnet).
-Objectif borné : prouver que le mécanisme de signature/diffusion/confirmation d'un swap
-fonctionne réellement (gas, slippage, nonce, échecs RPC) — PAS valider une stratégie de
-marché. Adresse routeur/token de sortie non fournies par défaut : doivent être vérifiées
-on-chain (bytecode + liquidité réelle) avant d'armer ``ARIA_SEPOLIA_SWAP_ENABLED``, cette
-vérification n'a pas pu être faite depuis cette session (pas d'accès RPC direct dans cet
-environnement — voir HANDOFF).
+``send_test_swap_transaction`` (added 07/09, explicit operator decision: "real
+swap on Sepolia, test asset") executes a REAL Uniswap V3 swap (wrap WETH ->
+approve -> exactInputSingle, three real signed transactions) but on a
+configured TEST pair (``ARIA_SEPOLIA_SWAP_TOKEN_OUT``), never on the candidate
+token ARIA is actually analyzing (which doesn't exist on this testnet, a
+different chain from Base mainnet). Bounded goal: prove that the swap
+signing/broadcast/confirmation mechanism actually works (gas, slippage, nonce,
+RPC failures) — NOT validate a market strategy. Router/output-token address
+not provided by default: must be verified on-chain (bytecode + real liquidity)
+before arming ``ARIA_SEPOLIA_SWAP_ENABLED``; this verification could not be
+done from this session (no direct RPC access in this environment — see HANDOFF).
 
-Contrairement à ``onchain/anchor.py`` (préparation seule, signature 100% locale par
-l'opérateur) et ``services/x402.py`` (aucune clé, jamais), ce module DÉTIENT une clé
-privée sur le serveur et SIGNE réellement des transactions. Décision opérateur explicite
-(08/07) : rehearsal pré-mainnet — anticiper et régler les problèmes (RPC, gas, nonce,
-échecs de diffusion) sur un réseau où l'ETH ne vaut rien, avant d'envisager un jour la
-même mécanique sur des fonds réels.
+Unlike ``onchain/anchor.py`` (preparation only, 100% local signing by the
+operator) and ``services/x402.py`` (no key, ever), this module HOLDS a private
+key on the server and REALLY signs transactions. Explicit operator decision
+(07/08): pre-mainnet rehearsal — anticipate and solve problems (RPC, gas,
+nonce, broadcast failures) on a network where ETH is worthless, before ever
+considering the same mechanics on real funds.
 
-Dôme :
-  - **Chain ID verrouillé** à ``SEPOLIA_CHAIN_ID`` (84532) — toute demande pour un autre
-    chain_id est refusée avant même de toucher la clé (fail-closed). Empêche
-    structurellement que ce code signe un jour sur mainnet par accident.
-  - **Gaté OFF par défaut** (``ARIA_SEPOLIA_WALLET_ENABLED``) : aucune clé n'est même lue
-    sans ce flag.
-  - **Jamais appelé directement** : uniquement depuis ``wallet_guard.resolve_spend``,
-    atteignable uniquement après un clic Telegram réel (même garde-fou que
+Guardrails:
+  - **Chain ID locked** to ``SEPOLIA_CHAIN_ID`` (84532) — any request for a
+    different chain_id is refused before even touching the key (fail-closed).
+    Structurally prevents this code from ever signing on mainnet by accident.
+  - **Gated OFF by default** (``ARIA_SEPOLIA_WALLET_ENABLED``): no key is even
+    read without this flag.
+  - **Never called directly**: only from ``wallet_guard.resolve_spend``,
+    reachable only after a real Telegram click (same guardrail as
     ``client_fund_job``/``trade_tokens``).
-  - La clé (``ARIA_SEPOLIA_PRIVATE_KEY``) vit uniquement dans le ``.env`` du VPS — jamais
-    dans le repo, jamais loggée, jamais renvoyée par aucune fonction de ce module.
+  - The key (``ARIA_SEPOLIA_PRIVATE_KEY``) lives only in the VPS ``.env`` —
+    never in the repo, never logged, never returned by any function in this
+    module.
 """
 from __future__ import annotations
 
@@ -38,8 +39,8 @@ import os
 SEPOLIA_CHAIN_ID = 84532
 _DEFAULT_RPC_URL = "https://sepolia.base.org"
 
-# Fragment d'ABI minimal — seule la fonction utilisée par ce module (AriaLedger.anchor,
-# sans transfert de valeur, cf. contracts/AriaLedger.sol).
+# Minimal ABI fragment — only the function used by this module (AriaLedger.anchor,
+# no value transfer, see contracts/AriaLedger.sol).
 _ANCHOR_ABI = [
     {
         "inputs": [{"internalType": "bytes32", "name": "root", "type": "bytes32"}],
@@ -50,8 +51,8 @@ _ANCHOR_ABI = [
     }
 ]
 
-# Fragments ABI minimaux pour le swap de test — uniquement les fonctions appelées
-# (WETH9 standard : deposit/approve ; Uniswap V3 SwapRouter02 standard : exactInputSingle).
+# Minimal ABI fragments for the test swap — only the functions called
+# (standard WETH9: deposit/approve; standard Uniswap V3 SwapRouter02: exactInputSingle).
 _WETH_ABI = [
     {
         "inputs": [], "name": "deposit", "outputs": [],
@@ -91,12 +92,12 @@ _SWAP_ROUTER_ABI = [
     }
 ]
 
-MAX_TEST_SWAP_WEI = 2 * 10**15  # plafond dur ~0.002 ETH testnet (sans valeur réelle) par swap
+MAX_TEST_SWAP_WEI = 2 * 10**15  # hard cap ~0.002 testnet ETH (no real value) per swap
 
 
 def sepolia_swap_enabled() -> bool:
-    """Gate additif dédié au swap de test — au-dessus de sepolia_wallet_enabled, jamais
-    actif seul. Le wallet peut ancrer des décisions sans jamais swapper."""
+    """Additive gate dedicated to the test swap — on top of sepolia_wallet_enabled,
+    never active alone. The wallet can anchor decisions without ever swapping."""
     if not sepolia_wallet_enabled():
         return False
     return os.environ.get("ARIA_SEPOLIA_SWAP_ENABLED", "").strip().lower() in (
@@ -109,8 +110,8 @@ def swap_router_address() -> str:
 
 
 def swap_token_in() -> str:
-    """WETH prédéploiement OP-stack — même adresse sur toutes les chaînes OP-stack
-    (Base, Base Sepolia inclus), pas besoin de vérification par environnement."""
+    """Pre-deployed OP-stack WETH — same address on all OP-stack chains
+    (Base, Base Sepolia included), no need for per-environment verification."""
     return (
         os.environ.get("ARIA_SEPOLIA_SWAP_TOKEN_IN", "") or ""
     ).strip() or "0x4200000000000000000000000000000000000006"
@@ -125,7 +126,7 @@ def swap_fee_tier() -> int:
 
 
 def sepolia_wallet_enabled() -> bool:
-    """Seam gaté OFF par défaut. Aucune clé lue, aucune connexion RPC sans ce flag."""
+    """Seam gated OFF by default. No key read, no RPC connection without this flag."""
     return os.environ.get("ARIA_SEPOLIA_WALLET_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -140,7 +141,7 @@ def _rpc_url() -> str:
 
 
 def _account(*, account_cls=None):
-    """Compte dérivé de la clé privée. ``account_cls`` injectable (tests hors-ligne)."""
+    """Account derived from the private key. ``account_cls`` injectable (offline tests)."""
     if not sepolia_wallet_enabled():
         return None
     key = _private_key()
@@ -152,14 +153,14 @@ def _account(*, account_cls=None):
 
 
 def get_address(*, account_cls=None) -> str | None:
-    """Adresse publique du wallet Sepolia d'ARIA — sûr à exposer (jamais la clé elle-même)."""
+    """Public address of ARIA's Sepolia wallet — safe to expose (never the key itself)."""
     account = _account(account_cls=account_cls)
     return account.address if account else None
 
 
 def get_balance_eth(*, w3=None, account_cls=None) -> float | None:
-    """Solde en ETH Sepolia (sans valeur réelle). None si non configuré/indisponible —
-    jamais d'exception qui remonte pour une simple lecture de solde."""
+    """Sepolia ETH balance (no real value). None if not configured/unavailable —
+    never an exception bubbling up for a simple balance read."""
     address = get_address(account_cls=account_cls)
     if not address:
         return None
@@ -175,11 +176,11 @@ def get_balance_eth(*, w3=None, account_cls=None) -> float | None:
 
 
 def get_code(address: str, *, w3=None) -> dict | None:
-    """Lecture RPC seule (``eth_getCode``) — aucune clé, aucun signing, ne dépend même pas
-    du wallet d'ARIA. Sert à vérifier qu'un contrat (routeur, pool) existe RÉELLEMENT sur
-    Base Sepolia avant de configurer un swap réel dessus (``ARIA_SEPOLIA_SWAP_ROUTER`` /
-    ``_TOKEN_OUT``) — jamais d'adresse non vérifiée dans une transaction signée. None si la
-    lecture échoue (RPC down, adresse invalide) — jamais d'exception qui remonte."""
+    """Read-only RPC call (``eth_getCode``) — no key, no signing, doesn't even depend
+    on ARIA's wallet. Used to verify that a contract (router, pool) REALLY exists on
+    Base Sepolia before configuring a real swap on it (``ARIA_SEPOLIA_SWAP_ROUTER`` /
+    ``_TOKEN_OUT``) — never an unverified address in a signed transaction. None if the
+    read fails (RPC down, invalid address) — never an exception bubbling up."""
     try:
         if w3 is None:
             from web3 import Web3
@@ -200,12 +201,13 @@ def get_code(address: str, *, w3=None) -> dict | None:
 def send_anchor_transaction(
     *, contract: str, root: str, chain_id: int, w3=None, account_cls=None,
 ) -> str:
-    """Signe et diffuse ``anchor(bytes32 root)`` sur Sepolia UNIQUEMENT.
+    """Signs and broadcasts ``anchor(bytes32 root)`` on Sepolia ONLY.
 
-    Lève (ne renvoie jamais silencieusement) si le seam est OFF, si ``chain_id`` n'est pas
-    Sepolia, ou si la diffusion échoue — contrairement au reste du dôme onchain (préparation
-    seule, dégradation gracieuse), une transaction réellement signée doit toujours faire
-    remonter une erreur claire à l'opérateur plutôt que disparaître.
+    Raises (never silently returns) if the seam is OFF, if ``chain_id`` isn't
+    Sepolia, or if the broadcast fails — unlike the rest of the onchain
+    guardrails (preparation only, graceful degradation), a really-signed
+    transaction must always surface a clear error to the operator rather than
+    disappear.
     """
     if not sepolia_wallet_enabled():
         raise RuntimeError("wallet Sepolia désactivé (ARIA_SEPOLIA_WALLET_ENABLED)")
@@ -248,15 +250,15 @@ def send_test_swap_transaction(
     w3=None,
     account_cls=None,
 ) -> dict:
-    """Wrap WETH -> approve -> exactInputSingle : trois transactions réellement signées
-    et diffusées sur Sepolia UNIQUEMENT, sur la paire de TEST configurée — jamais le token
-    candidat qu'ARIA analyse réellement (inexistant sur ce testnet). Teste le mécanisme
-    d'exécution (signature, gas, nonce, confirmation), pas une décision de marché.
+    """Wrap WETH -> approve -> exactInputSingle: three really-signed transactions
+    broadcast on Sepolia ONLY, on the configured TEST pair — never the candidate
+    token ARIA is actually analyzing (doesn't exist on this testnet). Tests the
+    execution mechanism (signing, gas, nonce, confirmation), not a market decision.
 
-    Lève (jamais de dégradation silencieuse, comme ``send_anchor_transaction``) si le seam
-    est OFF, hors Sepolia, le montant dépasse ``MAX_TEST_SWAP_WEI``, ou si routeur/token de
-    sortie ne sont pas configurés — pas de valeur par défaut inventée pour un contrat non
-    vérifié.
+    Raises (never a silent degradation, like ``send_anchor_transaction``) if the
+    seam is OFF, off Sepolia, the amount exceeds ``MAX_TEST_SWAP_WEI``, or if the
+    router/output token aren't configured — no invented default value for an
+    unverified contract.
     """
     if not sepolia_swap_enabled():
         raise RuntimeError("swap de test Sepolia désactivé (ARIA_SEPOLIA_SWAP_ENABLED)")

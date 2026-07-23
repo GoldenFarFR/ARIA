@@ -1,4 +1,4 @@
-"""Poll hebdomadaire — 3 idées d'apps (Kelly model, web + Play Store Android)."""
+"""Weekly poll — 3 app ideas (Kelly model, web + Android Play Store)."""
 
 from __future__ import annotations
 
@@ -153,7 +153,7 @@ async def run_app_idea_poll_cycle(lang: str = "fr") -> dict:
 
 
 def parse_app_vote(text: str) -> int | None:
-    """Retourne 1, 2 ou 3 si vote app, sinon None."""
+    """Returns 1, 2, or 3 if an app vote, otherwise None."""
     clean = re.sub(r"[^\w\s]", "", text.strip().lower())
     m = re.match(r"^app\s*([123])$", clean)
     if m:

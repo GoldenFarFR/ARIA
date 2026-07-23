@@ -1,4 +1,4 @@
-"""Arbitre mémoire ARIA — Phase H (court / moyen / long terme + résolution conflits)."""
+"""ARIA memory arbitrator — Phase H (short / medium / long term + conflict resolution)."""
 from __future__ import annotations
 
 import json
@@ -218,7 +218,7 @@ async def collect_memory_snippets(
 
 
 def arbitrate_snippets(snippets: list[MemorySnippet]) -> ArbitrationResult:
-    """Supprime les snippets basse priorité en conflit avec le noyau épistémique."""
+    """Removes low-priority snippets that conflict with the epistemic core."""
     from aria_core.knowledge.contradiction import check_contradiction
 
     result = ArbitrationResult()
@@ -340,7 +340,7 @@ async def run_memory_arbitration(
 
 
 def suppressed_journal_preview(result: ArbitrationResult) -> set[str]:
-    """Extraits journal supprimés — pour annotation dans le contexte."""
+    """Suppressed journal excerpts — for annotation in the context."""
     return {s.content[:80] for s in result.suppressed if s.layer == "journal"}
 
 

@@ -1,4 +1,4 @@
-"""Implémentation journal épisodique — ex-``aria_core/memory.py`` (Phase B)."""
+"""Episodic journal implementation — formerly ``aria_core/memory.py`` (Phase B)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -70,11 +70,11 @@ _PERSONA_BUDGET = 2600
 
 
 def get_persona_text(*, budget_chars: int = _PERSONA_BUDGET) -> str:
-    """Identité + personnalité ARIA pour le contexte LLM opérateur (privé —
-    jamais utilisé côté public, cf. narrative.public_llm_system_block qui a
-    son propre mécanisme indépendant). Composé depuis knowledge/dna.yaml
-    (racine + personnalite) depuis le 21/07 -- remplace l'ancien persona.md
-    statique, fusionné dans le même ADN que valeurs/objectifs/réflexion."""
+    """ARIA identity + personality for the operator LLM context (private —
+    never used on the public side, see narrative.public_llm_system_block which
+    has its own independent mechanism). Composed from knowledge/dna.yaml
+    (root + personality) since 07/21 -- replaces the old static persona.md,
+    merged into the same DNA as values/goals/reflection."""
     if not _DNA_PATH.is_file():
         from aria_core.narrative import memory_identity_fallback
 
@@ -160,5 +160,5 @@ def get_launchpad_doctrine_text() -> str:
     return registry_markdown()[:3000]
 
 
-# Rétrocompat — implémentation Phase D dans llm_context.py
+# Backward compat — Phase D implementation in llm_context.py
 from aria_core.memory.llm_context import build_llm_context  # noqa: F401

@@ -1,39 +1,39 @@
-"""Fournisseurs RAPIDES de transferts de wallet (Alchemy + Moralis) -- 22/07,
-décision opérateur explicite ("soulageons au maximum Blockscout") après avoir
-trouvé que le wallet-scoring (`smart_money.py`) consomme 73,6% du budget de
-crédits Blockscout Pro (endpoint `token-transfers`, 30 crédits/appel réel,
-cf. docs/HANDOFF_BLOCKSCOUT.md) et que ce budget tombe régulièrement à sec,
-forçant un repli vers l'endpoint gratuit Blockscout -- lent/instable sur les
-wallets les plus actifs (34s puis erreur 500 constatés en conditions réelles
-sur un vrai wallet, avant ce correctif).
+"""FAST wallet-transfer providers (Alchemy + Moralis) -- 22/07, explicit
+operator decision ("let's relieve Blockscout as much as possible") after
+finding that wallet-scoring (`smart_money.py`) consumes 73.6% of the
+Blockscout Pro credit budget (`token-transfers` endpoint, 30 real credits/
+call, cf. docs/HANDOFF_BLOCKSCOUT.md) and that this budget regularly runs
+dry, forcing a fallback to the free Blockscout endpoint -- slow/unstable on
+the most active wallets (34s then a 500 error observed under real conditions
+on a real wallet, before this fix).
 
-Vérifié PAR DE VRAIS APPELS AUTHENTIFIÉS (22/07, jamais la seule doc) : Alchemy
-`alchemy_getAssetTransfers` et Moralis `erc20/transfers` répondent tous deux en
-moins de 4s sur EXACTEMENT le wallet qui avait fait planter l'endpoint gratuit
-Covalent/GoldRush (candidat écarté séparément, cf. docs/HANDOFF_WALLET_SCORING.md)
--- confirmés fonctionnels sur Base, structure de réponse relue en direct, pas
-supposée depuis un exemple externe.
+Verified BY REAL AUTHENTICATED CALLS (22/07, never just the docs): Alchemy
+`alchemy_getAssetTransfers` and Moralis `erc20/transfers` both respond in
+under 4s on EXACTLY the wallet that had crashed the free Covalent/GoldRush
+endpoint (candidate dropped separately, cf. docs/HANDOFF_WALLET_SCORING.md)
+-- confirmed working on Base, response structure re-read live, not assumed
+from an external example.
 
-Cascade : Alchemy (principal, 120 CU/appel, 30M CU/mois gratuit confirmé sur
-la doc officielle) -> Moralis (second recours si Alchemy indisponible/en
-échec, 50 CU/appel, 40 000 CU/jour gratuit confirmé par capture d'écran réelle
-du dashboard opérateur) -> indisponible (``available=False``). Le repli final
-vers Blockscout (comportement historique, jamais retiré) est géré par
-L'APPELANT (`smart_money.py`), jamais ici -- ce module ne connaît pas
-Blockscout, responsabilité strictement séparée.
+Cascade: Alchemy (primary, 120 CU/call, 30M CU/month free confirmed in the
+official docs) -> Moralis (second resort if Alchemy is unavailable/failing,
+50 CU/call, 40,000 CU/day free confirmed by a real screenshot of the
+operator's dashboard) -> unavailable (``available=False``). The final
+fallback to Blockscout (historical behavior, never removed) is handled by
+THE CALLER (`smart_money.py`), never here -- this module knows nothing about
+Blockscout, strictly separate responsibility.
 
-Scopé chaîne "base" UNIQUEMENT -- seule chaîne vérifiée sur les deux
-fournisseurs à ce jour (Ethereum et les autres chaînes de
-`DEFAULT_SCAN_CHAINS()` continuent d'utiliser Blockscout sans y toucher).
+Scoped to the "base" chain ONLY -- the only chain verified on both providers
+to date (Ethereum and the other chains in `DEFAULT_SCAN_CHAINS()` keep using
+Blockscout untouched).
 
-Gate ``ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED`` (OFF par défaut). Sans
-clé (``ALCHEMY_API_KEY``/``MORALIS_API_KEY`` absentes) ou gate OFF,
-``available=False`` immédiat -- l'appelant retombe alors sur Blockscout,
-comportement strictement inchangé pour toute session qui n'active pas ce gate.
+Gate ``ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED`` (OFF by default). With no
+key (``ALCHEMY_API_KEY``/``MORALIS_API_KEY`` absent) or gate OFF,
+``available=False`` immediately -- the caller then falls back to Blockscout,
+strictly unchanged behavior for any session that doesn't activate this gate.
 
-Doctrine dôme identique au reste du projet : 429 -- backoff exponentiel, 3
-tentatives max ; timeout/5xx -- 1 retry après 5s puis dégradation explicite ;
-aucune donnée manquante n'est jamais remplacée par une supposition."""
+Same dome doctrine as the rest of the project: 429 -- exponential backoff, 3
+attempts max; timeout/5xx -- 1 retry after 5s then explicit degradation;
+missing data is never replaced by a guess."""
 from __future__ import annotations
 
 import asyncio
@@ -51,11 +51,11 @@ UNAVAILABLE = "donnée indisponible"
 ALCHEMY_BASE_URL = "https://base-mainnet.g.alchemy.com/v2"
 MORALIS_BASE_URL = "https://deep-index.moralis.io/api/v2.2"
 
-# Alchemy plafonne à 1000 résultats/appel (`pageKey` pour continuer) -- même
-# plafond total que Blockscout aujourd'hui (2000 transferts/10 pages, cf.
-# smart_money.py) pour ne jamais changer silencieusement le volume de données
-# consommé en aval (FIFO/Sortino/wash-trading -- tous calibrés sur cette borne).
-_ALCHEMY_PAGE_SIZE = "0x3e8"  # 1000 en hexadécimal (format natif de l'API)
+# Alchemy caps at 1000 results/call (`pageKey` to continue) -- same total cap
+# as Blockscout today (2000 transfers/10 pages, cf. smart_money.py) so the
+# data volume consumed downstream (FIFO/Sortino/wash-trading -- all calibrated
+# on this bound) never silently changes.
+_ALCHEMY_PAGE_SIZE = "0x3e8"  # 1000 in hexadecimal (API's native format)
 _MAX_RETRIES_429 = 3
 _TIMEOUT_RETRY_DELAY_S = 5.0
 
@@ -75,7 +75,7 @@ def _moralis_api_key() -> str:
 
 
 async def _post_with_dome(client: httpx.AsyncClient, url: str, *, json_body: dict) -> tuple[dict | None, str | None]:
-    """POST générique avec la même politique d'erreurs que le reste du projet."""
+    """Generic POST with the same error policy as the rest of the project."""
     attempt_429 = 0
     timeout_retried = False
     while True:
@@ -111,7 +111,7 @@ async def _post_with_dome(client: httpx.AsyncClient, url: str, *, json_body: dic
 
 
 async def _get_with_dome(client: httpx.AsyncClient, url: str, *, params: dict) -> tuple[dict | None, str | None]:
-    """GET générique avec la même politique d'erreurs que le reste du projet."""
+    """Generic GET with the same error policy as the rest of the project."""
     attempt_429 = 0
     timeout_retried = False
     while True:
@@ -147,12 +147,12 @@ async def _get_with_dome(client: httpx.AsyncClient, url: str, *, params: dict) -
 
 
 def _alchemy_transfer_to_token_transfer(item: dict) -> TokenTransfer | None:
-    """Convertit UN transfert Alchemy (`alchemy_getAssetTransfers`) vers le
-    type `TokenTransfer` commun -- même schéma que Blockscout, pour que
-    smart_money.py ne voie AUCUNE différence en aval (FIFO/Sortino/wash-
-    trading inchangés). Champs vérifiés par un vrai appel authentifié le
-    22/07 (hash/from/to/rawContract.address/asset/value/metadata.
-    blockTimestamp) -- pas une supposition depuis la doc."""
+    """Converts ONE Alchemy transfer (`alchemy_getAssetTransfers`) to the
+    common `TokenTransfer` type -- same schema as Blockscout, so smart_money.py
+    sees NO difference downstream (FIFO/Sortino/wash-trading unchanged).
+    Fields verified via a real authenticated call on 22/07 (hash/from/to/
+    rawContract.address/asset/value/metadata.blockTimestamp) -- not a guess
+    from the docs."""
     tx_hash = item.get("hash")
     from_address = item.get("from")
     to_address = item.get("to")
@@ -168,15 +168,15 @@ def _alchemy_transfer_to_token_transfer(item: dict) -> TokenTransfer | None:
         to_address=to_address,
         token_address=token_address,
         token_symbol=item.get("asset"),
-        token_name=None,  # non fourni par cet endpoint Alchemy -- jamais inventé
+        token_name=None,  # not provided by this Alchemy endpoint -- never fabricated
         amount=float(value) if isinstance(value, (int, float)) else None,
         timestamp=metadata.get("blockTimestamp"),
     )
 
 
 def _moralis_transfer_to_token_transfer(item: dict) -> TokenTransfer | None:
-    """Convertit UN transfert Moralis (`erc20/transfers`) vers le type
-    `TokenTransfer` commun. Champs vérifiés par un vrai appel authentifié le
+    """Converts ONE Moralis transfer (`erc20/transfers`) to the common
+    `TokenTransfer` type. Fields verified via a real authenticated call on
     22/07 (transaction_hash/from_address/to_address/address/token_symbol/
     token_name/value_decimal/block_timestamp)."""
     tx_hash = item.get("transaction_hash")
@@ -302,11 +302,10 @@ async def _moralis_get_token_transfers(address: str, *, limit: int, max_pages: i
 async def get_fast_token_transfers(
     address: str, chain: str, *, limit: int = 2000, max_pages: int = 10,
 ) -> TokenTransfersResult:
-    """Point d'entrée public -- Alchemy en principal, Moralis en second
-    recours. Scopé "base" uniquement (cf. docstring du module) : toute autre
-    chaîne renvoie ``available=False`` immédiatement, l'appelant retombe sur
-    Blockscout comme avant ce chantier, jamais un comportement inventé pour
-    une chaîne non vérifiée."""
+    """Public entry point -- Alchemy as primary, Moralis as second resort.
+    Scoped to "base" only (cf. module docstring): any other chain immediately
+    returns ``available=False``, the caller falls back to Blockscout as before
+    this project, never a fabricated behavior for an unverified chain."""
     if chain != "base" or not wallet_transfers_fast_provider_enabled():
         return TokenTransfersResult(available=False, error=f"{UNAVAILABLE} (fournisseur rapide non applicable)")
 
@@ -314,10 +313,10 @@ async def get_fast_token_transfers(
     if alchemy_result.available:
         return alchemy_result
 
-    logger.info("wallet_transfers_fast: Alchemy indisponible (%s) -- repli Moralis", alchemy_result.error)
+    logger.info("wallet_transfers_fast: Alchemy unavailable (%s) -- falling back to Moralis", alchemy_result.error)
     moralis_result = await _moralis_get_token_transfers(address, limit=limit, max_pages=max_pages)
     if moralis_result.available:
         return moralis_result
 
-    logger.info("wallet_transfers_fast: Moralis indisponible (%s) -- repli Blockscout (appelant)", moralis_result.error)
+    logger.info("wallet_transfers_fast: Moralis unavailable (%s) -- falling back to Blockscout (caller)", moralis_result.error)
     return TokenTransfersResult(available=False, error=moralis_result.error)

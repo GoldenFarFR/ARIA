@@ -1,4 +1,4 @@
-"""Cache DDG opt-in — évite requêtes répétées (gratuit, fichier local)."""
+"""Opt-in DDG cache — avoids repeated queries (free, local file)."""
 from __future__ import annotations
 
 import json

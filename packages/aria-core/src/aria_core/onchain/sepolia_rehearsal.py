@@ -1,9 +1,9 @@
-"""Déclenche l'ancrage Sepolia — prépare la racine Merkle, demande la confirmation Telegram.
+"""Triggers the Sepolia anchor — prepares the Merkle root, requests Telegram confirmation.
 
-Point d'entrée unique du rehearsal pré-mainnet : ne signe rien ici (même principe que
-``onchain/anchor.py`` — préparation seule). La signature réelle vit exclusivement dans
-``onchain/sepolia_wallet.py``, atteignable uniquement depuis ``wallet_guard.resolve_spend``
-après un clic Telegram réel.
+Single entry point for the pre-mainnet rehearsal: signs nothing here (same principle
+as ``onchain/anchor.py`` — preparation only). The real signature lives exclusively in
+``onchain/sepolia_wallet.py``, reachable only from ``wallet_guard.resolve_spend`` after
+a real Telegram click.
 """
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from aria_core.onchain.sepolia_wallet import SEPOLIA_CHAIN_ID
 
 
 async def escalate_sepolia_anchor(records: list[dict[str, Any]]) -> str | None:
-    """Prépare la racine Merkle de ``records`` et envoie le prompt Telegram Oui/Non.
+    """Prepares the Merkle root of ``records`` and sends the Telegram Yes/No prompt.
 
-    Fail-closed comme ``build_anchor_request`` : ``None`` si le seam d'ancrage est OFF, si
-    aucun contrat n'est configuré, ou s'il n'y a rien à ancrer. Verrouille explicitement
-    ``chain_id=SEPOLIA_CHAIN_ID`` (84532) quel que soit le réglage de
-    ``ARIA_ONCHAIN_CHAIN_ID`` — ce chemin ne demande jamais autre chose que du testnet.
+    Fail-closed like ``build_anchor_request``: ``None`` if the anchor seam is OFF, if
+    no contract is configured, or if there is nothing to anchor. Explicitly locks
+    ``chain_id=SEPOLIA_CHAIN_ID`` (84532) regardless of the ``ARIA_ONCHAIN_CHAIN_ID``
+    setting — this path never asks for anything other than testnet.
     """
     if not anchor_enabled():
         return None

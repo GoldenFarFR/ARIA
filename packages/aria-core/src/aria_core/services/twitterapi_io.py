@@ -1,47 +1,47 @@
-"""Client TwitterAPI.io -- profil X complet (followers/following/date de
-création) à faible coût (0,18$/1000 profils, sourcé contre
-``twitterapi.io/pricing``, WebFetch direct, 23/07), diligencé avant tout
-branchement (ScamAdviser "legit and safe", Trustpilot positif, skill MCP
-officielle packagée pour agents IA -- voir `docs/HANDOFF_MOTEUR_LEGITIMITE.md`).
+"""TwitterAPI.io client -- full X profile (followers/following/creation
+date) at low cost ($0.18/1000 profiles, sourced against
+``twitterapi.io/pricing``, direct WebFetch, 07/23), vetted before any
+integration (ScamAdviser "legit and safe", positive Trustpilot, official
+MCP skill packaged for AI agents -- see `docs/HANDOFF_MOTEUR_LEGITIMITE.md`).
 
-Comble le vrai trou trouvé en construisant ``x_substance.py`` (23/07) : ni
-twit.sh (métriques par tweet seulement) ni Tavily ``extract`` (rend la page
-profil mais n'expose ni followers_count ni following_count, vérifié réel) ne
-fournissaient de compteurs de compte -- seul le repli Tavily (âge du compte
-via "Joined <mois année>") existait jusqu'ici.
+Fills the real gap found while building ``x_substance.py`` (07/23): neither
+twit.sh (per-tweet metrics only) nor Tavily ``extract`` (renders the profile
+page but exposes neither followers_count nor following_count, verified for
+real) provided account counters -- only the Tavily fallback (account age
+via "Joined <month year>") existed until now.
 
-``fetch_last_tweets`` (23/07, même session) ajoute activité/engagement --
-demande opérateur explicite après un tableau comparatif confirmant que
-twit.sh les fournit AUSSI, mais twit.sh est déjà utilisé par
-``conviction_research.py`` (cadence de publication) : réutiliser twit.sh ICI
-dupliquerait un appel payant sur le MÊME compte pour la MÊME fenêtre de
-tweets récents, gaspillage du budget x402 PARTAGÉ (5$/semaine). TwitterAPI.io
-a un endpoint dédié équivalent (``/twitter/user/last_tweets``, vérifié réel :
-``createdAt`` + ``likeCount``/``replyCount``/``retweetCount``/``quoteCount``
-par tweet) -- zéro nouveau fournisseur, zéro couplage avec
-conviction_research.py (qui garde son propre chemin X officiel -> twit.sh,
-inchangé).
+``fetch_last_tweets`` (07/23, same session) adds activity/engagement --
+explicit operator request after a comparison table confirmed that
+twit.sh ALSO provides them, but twit.sh is already used by
+``conviction_research.py`` (publishing cadence): reusing twit.sh HERE
+would duplicate a paid call on the SAME account for the SAME window of
+recent tweets, wasting the SHARED x402 budget ($5/week). TwitterAPI.io
+has an equivalent dedicated endpoint (``/twitter/user/last_tweets``, verified
+for real: ``createdAt`` + ``likeCount``/``replyCount``/``retweetCount``/
+``quoteCount`` per tweet) -- zero new provider, zero coupling with
+conviction_research.py (which keeps its own official X path -> twit.sh,
+unchanged).
 
-Doctrine dôme standard (même patron que blockscout.py/goplus.py) : 429/5xx ->
-1 retry après backoff court, puis dégradation (``None``, jamais une exception
-qui remonte). Clé UNIQUEMENT depuis l'environnement (``TWITTERAPI_IO_KEY``),
-jamais en dur, jamais loguée. Paiement prépayé côté fournisseur (crédits sur
-leur dashboard, PAS x402) -- aucun budget dédié construit ici, l'opérateur
-gère sa recharge comme pour GoPlus/Blockscout/CoinGecko.
+Standard dome doctrine (same pattern as blockscout.py/goplus.py): 429/5xx ->
+1 retry after a short backoff, then degrade (``None``, never a bubbling
+exception). Key ONLY from the environment (``TWITTERAPI_IO_KEY``), never
+hardcoded, never logged. Payment prepaid on the provider's side (credits on
+their dashboard, NOT x402) -- no dedicated budget built here, the operator
+manages its top-up the same way as for GoPlus/Blockscout/CoinGecko.
 
-Débit : sourcé sur le VRAI dashboard opérateur (23/07, capture réelle) --
-palier "Free" = **0,2 QPS** (jamais payé) ou 3 QPS (ancien client, non
-applicable ici). Calibré à 90% de 0,2 QPS -> intervalle minimum 5,5s (doctrine
-CLAUDE.md "débit calibré à 90% de la capacité réelle, jamais devinée").
-Attention -- ne pas confondre avec la doc générale (``docs.twitterapi.io/
-introduction``), qui annonce "up to 200 QPS per client" : c'est la capacité
-TECHNIQUE de l'infrastructure du fournisseur, pas le quota accordé à CE
-compte selon son palier -- le dashboard réel du compte fait toujours
-autorité sur la doc générale pour calibrer CE throttle.
-Aucun coût de recharge à ce jour : 9964 crédits bonus offerts à l'inscription
-(2 appels de test = 36 crédits consommés, soit 18 crédits/profil, cohérent
-avec 0,18$/1000 -- 1$ = 100 000 crédits). Usage prévu de toute façon très
-faible (1 appel par analyse VC, pas un flux continu)."""
+Throughput: sourced from the REAL operator dashboard (07/23, real
+screenshot) -- "Free" tier = **0.2 QPS** (never paid) or 3 QPS (legacy
+client, not applicable here). Calibrated at 90% of 0.2 QPS -> minimum
+interval 5.5s (CLAUDE.md doctrine "throughput calibrated to 90% of real
+capacity, never guessed"). Careful -- do not confuse with the general docs
+(``docs.twitterapi.io/introduction``), which advertise "up to 200 QPS per
+client": that is the provider's infrastructure TECHNICAL capacity, not the
+quota granted to THIS account per its tier -- the account's real dashboard
+always takes authority over the general docs when calibrating THIS throttle.
+No top-up cost so far: 9964 bonus credits granted on signup
+(2 test calls = 36 credits consumed, i.e. 18 credits/profile, consistent
+with $0.18/1000 -- $1 = 100,000 credits). Expected usage is very low anyway
+(1 call per VC analysis, not a continuous stream)."""
 from __future__ import annotations
 
 import asyncio
@@ -57,8 +57,8 @@ logger = logging.getLogger(__name__)
 _API_URL = "https://api.twitterapi.io/twitter/user/info"
 _LAST_TWEETS_URL = "https://api.twitterapi.io/twitter/user/last_tweets"
 _TIMEOUT_SECONDS = 10.0
-# 0,2 QPS réel (palier Free, dashboard opérateur) -> 5s/requête au maximum ;
-# 90% de marge (doctrine CLAUDE.md) -> 5,5s.
+# 0.2 QPS real (Free tier, operator dashboard) -> 5s/request at most;
+# 90% margin (CLAUDE.md doctrine) -> 5.5s.
 _MIN_INTERVAL_SECONDS = 5.5
 
 _last_call_at = 0.0
@@ -105,9 +105,9 @@ def _parse_created_at(raw: object) -> datetime | None:
 
 
 async def fetch_user_profile(username: str) -> TwitterApiIoProfile | None:
-    """Profil complet (followers/following/date de création) pour un handle X.
-    ``None`` si la clé est absente, le compte introuvable, ou toute panne --
-    jamais une exception qui remonte, jamais une donnée inventée."""
+    """Full profile (followers/following/creation date) for an X handle.
+    ``None`` if the key is missing, the account is not found, or on any
+    failure -- never a bubbling exception, never a fabricated value."""
     handle = (username or "").lstrip("@").strip()
     if not handle:
         return None
@@ -125,16 +125,16 @@ async def fetch_user_profile(username: str) -> TwitterApiIoProfile | None:
                 headers={"X-API-Key": api_key},
             )
     except httpx.TransportError as exc:
-        logger.info("twitterapi_io: panne réseau (%s)", exc)
+        logger.info("twitterapi_io: network failure (%s)", exc)
         return None
 
     if r.status_code != 200:
-        logger.info("twitterapi_io: HTTP %s pour @%s", r.status_code, handle)
+        logger.info("twitterapi_io: HTTP %s for @%s", r.status_code, handle)
         return None
 
     try:
         payload = r.json()
-    except Exception:  # noqa: BLE001 -- corps illisible, jamais une exception qui remonte
+    except Exception:  # noqa: BLE001 -- unreadable body, never a bubbling exception
         return None
 
     if not isinstance(payload, dict) or payload.get("status") != "success":
@@ -153,9 +153,9 @@ async def fetch_user_profile(username: str) -> TwitterApiIoProfile | None:
 
 
 async def fetch_last_tweets(username: str, *, max_results: int = 20) -> list[TwitterApiIoTweet] | None:
-    """Derniers tweets (date + engagement) pour un handle X -- utilisé pour
-    l'activité/régularité et l'engagement du signal X Substance. ``None`` si
-    la clé est absente ou toute panne ; jamais une exception qui remonte."""
+    """Latest tweets (date + engagement) for an X handle -- used for the
+    activity/regularity and engagement of the X Substance signal. ``None`` if
+    the key is missing or on any failure; never a bubbling exception."""
     handle = (username or "").lstrip("@").strip()
     if not handle:
         return None
@@ -173,16 +173,16 @@ async def fetch_last_tweets(username: str, *, max_results: int = 20) -> list[Twi
                 headers={"X-API-Key": api_key},
             )
     except httpx.TransportError as exc:
-        logger.info("twitterapi_io: panne réseau last_tweets (%s)", exc)
+        logger.info("twitterapi_io: network failure last_tweets (%s)", exc)
         return None
 
     if r.status_code != 200:
-        logger.info("twitterapi_io: HTTP %s pour last_tweets @%s", r.status_code, handle)
+        logger.info("twitterapi_io: HTTP %s for last_tweets @%s", r.status_code, handle)
         return None
 
     try:
         payload = r.json()
-    except Exception:  # noqa: BLE001 -- corps illisible, jamais une exception qui remonte
+    except Exception:  # noqa: BLE001 -- unreadable body, never a bubbling exception
         return None
 
     if not isinstance(payload, dict) or payload.get("status") != "success":

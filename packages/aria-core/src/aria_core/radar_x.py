@@ -1,18 +1,19 @@
-"""Radar X — sourcing social filtré on-chain (Voûte 4).
+"""X Radar — social sourcing filtered by on-chain arbitration (Vault 4).
 
-Écoute le bruit social (``services/x_social``), en retient les candidats assez
-bruyants (seuil anti-astroturf), puis les fait **arbitrer par l'on-chain** via
-l'absorbeur :
-  - contrat inconnu / actif  → ``absorb`` (le scan tranche : gardé ou rejeté) ;
-  - contrat déjà **rejeté**  → ``reconsider_on_signal`` (le bruit RÉVEILLE un
-    rejeté, le re-scan réévalue sur les faits).
+Listens to social noise (``services/x_social``), keeps candidates noisy
+enough (anti-astroturf threshold), then has them **arbitrated by on-chain
+data** via the absorber:
+  - unknown / active contract → ``absorb`` (the scan decides: kept or
+    rejected);
+  - already **rejected** contract → ``reconsider_on_signal`` (the noise WAKES
+    UP a rejected candidate, the re-scan re-evaluates on the facts).
 
-LIGNE ROUGE (dôme) : le social ne déclenche JAMAIS un achat/vente. Il ne fait que
-**sourcer** de nouveaux candidats et **rouvrir la porte** à des rejetés. La décision
-appartient toujours à l'analyse on-chain. ARIA n'est jamais le mégaphone d'un cabal :
-un consensus social ne vaut pas une thèse.
+RED LINE (dome): social signals NEVER trigger a buy/sell. They only **source**
+new candidates and **reopen the door** to rejected ones. The decision always
+belongs to on-chain analysis. ARIA is never the megaphone of a cabal: a
+social consensus is not worth a thesis.
 
-Tout est injectable → testable hors-ligne. Lecture seule, aucune signature.
+Everything is injectable -> testable offline. Read-only, no signing.
 """
 from __future__ import annotations
 
@@ -20,8 +21,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Seuils anti-astroturf : sous ces valeurs, le bruit n'est pas assez crédible pour
-# valoir un scan (un seul auteur qui spamme n'est pas un signal). Ajustables.
+# Anti-astroturf thresholds: below these values, the noise isn't credible
+# enough to warrant a scan (a single author spamming isn't a signal). Adjustable.
 _MIN_MENTIONS = 2
 _MIN_DISTINCT_AUTHORS = 2
 
@@ -37,15 +38,15 @@ async def run_radar(
     min_distinct_authors: int = _MIN_DISTINCT_AUTHORS,
     limit: int = 50,
 ) -> dict:
-    """Fait un tour de radar social → arbitrage on-chain. Retourne un rapport de comptes.
+    """Runs one social-radar round -> on-chain arbitration. Returns a count report.
 
-    Injectables (défauts prod entre parenthèses) :
-      - ``social_client`` (``x_social.x_social_client``) : source du bruit ;
-      - ``absorber(contract)`` (``token_absorber.absorb``) : scanne un candidat neuf ;
-      - ``resonator(contract)`` (``token_absorber.reconsider_on_signal``) : réveille un rejeté ;
-      - ``pool_status(contract)`` (``screened_pool.get_status``) : statut connu ('rejected'/'active'/None).
+    Injectables (prod defaults in parentheses):
+      - ``social_client`` (``x_social.x_social_client``): source of the noise;
+      - ``absorber(contract)`` (``token_absorber.absorb``): scans a new candidate;
+      - ``resonator(contract)`` (``token_absorber.reconsider_on_signal``): wakes up a rejected one;
+      - ``pool_status(contract)`` (``screened_pool.get_status``): known status ('rejected'/'active'/None).
 
-    Rapport : ``{sourced, above_threshold, kept, rejected, resurrected, skipped, error}``.
+    Report: ``{sourced, above_threshold, kept, rejected, resurrected, skipped, error}``.
     """
     if social_client is None:
         from aria_core.services.x_social import x_social_client as social_client
@@ -71,7 +72,7 @@ async def run_radar(
     for sig in signals:
         if processed >= limit:
             break
-        # Filtre bruit : le social doit être assez crédible pour mériter un scan.
+        # Noise filter: the social signal must be credible enough to warrant a scan.
         if sig.mentions < min_mentions or sig.distinct_authors < min_distinct_authors:
             continue
         report["above_threshold"] += 1
@@ -80,7 +81,7 @@ async def run_radar(
         try:
             status = await pool_status(sig.contract)
             if status == "rejected":
-                # Le bruit réveille un rejeté ; le re-scan on-chain tranche.
+                # The noise wakes up a rejected candidate; the on-chain re-scan decides.
                 verdict = await resonator(sig.contract)
                 if verdict == "kept":
                     report["resurrected"] += 1
@@ -96,9 +97,9 @@ async def run_radar(
                     report["rejected"] += 1
                 else:
                     report["skipped"] += 1
-        except Exception as exc:  # noqa: BLE001 — un candidat qui plante n'arrête pas le radar
-            logger.info("radar_x: traitement %s échoué (%s)", sig.contract, exc)
+        except Exception as exc:  # noqa: BLE001 — a crashing candidate doesn't stop the radar
+            logger.info("radar_x: processing %s failed (%s)", sig.contract, exc)
             report["error"] += 1
 
-    logger.info("radar_x: tour terminé %s", report)
+    logger.info("radar_x: round complete %s", report)
     return report

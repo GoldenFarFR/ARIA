@@ -1,4 +1,4 @@
-"""Contexte LLM unifié — Phase D (journal + cognitive + vector opt-in)."""
+"""Unified LLM context — Phase D (journal + cognitive + vector opt-in)."""
 from __future__ import annotations
 
 import re
@@ -24,7 +24,7 @@ _REDACT_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 def sanitize_recall_text(text: str) -> str:
-    """Retire secrets / PII évidents avant injection LLM."""
+    """Strips obvious secrets / PII before LLM injection."""
     out = (text or "").strip()
     if not out:
         return ""
@@ -64,7 +64,7 @@ async def fetch_vector_recall(
     limit: int = _VECTOR_RECALL_LIMIT,
     budget_chars: int = _VECTOR_RECALL_BUDGET,
 ) -> str:
-    """Rappel sémantique Chroma — chaîne vide si flag off ou query trop courte."""
+    """Chroma semantic recall — empty string if flag off or query too short."""
     from aria_core.memory.vector import is_vector_enabled, search
 
     if not is_vector_enabled():
@@ -186,11 +186,12 @@ async def build_llm_context(
         if arbitration.conflicts:
             from aria_core.memory.arbitrator import suppressed_journal_preview
 
-            # Même filtre que le rappel vectoriel ci-dessus (suppressed_vector), mais pour
-            # la couche "journal" -- trouvé écrit (suppressed_journal_preview) mais jamais
-            # appliqué ici (balayage code mort du 15/07) : sans ce filtre, un extrait de
-            # journal que l'arbitrage a explicitement supprimé pour conflit restait quand
-            # même injecté dans le contexte LLM via get_journal_summary(), non filtré.
+            # Same filter as the vector recall above (suppressed_vector), but for
+            # the "journal" layer -- found written (suppressed_journal_preview) but
+            # never applied here (07/15 dead-code sweep): without this filter, a
+            # journal excerpt that arbitration had explicitly suppressed for
+            # conflict still ended up injected into the LLM context via
+            # get_journal_summary(), unfiltered.
             suppressed_journal = suppressed_journal_preview(arbitration)
             if suppressed_journal and journal_summary:
                 entries = journal_summary.split("\n---\n")
@@ -255,7 +256,7 @@ async def build_llm_context(
 
 
 def _assemble_context(parts: list[str], *, max_chars: int) -> str:
-    """Assemble le contexte en préservant les sections mémoire prioritaires."""
+    """Assembles the context while preserving priority memory sections."""
     full = "\n".join(parts)
     if len(full) <= max_chars:
         return full

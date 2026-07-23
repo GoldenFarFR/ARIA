@@ -1,7 +1,7 @@
-"""Façade mémoire ARIA — Phase B (package unifié, rétrocompatible).
+"""ARIA memory facade — Phase B (unified package, backward-compatible).
 
-``from aria_core.memory import append_memory`` continue de fonctionner.
-Nouveau code : ``append``, ``get_approved``, ``is_vector_enabled``, etc.
+``from aria_core.memory import append_memory`` keeps working.
+New code: ``append``, ``get_approved``, ``is_vector_enabled``, etc.
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ from aria_core.memory.values import get_values_text, values_count
 from aria_core.memory.vector import is_vector_enabled, vector_store_status
 from aria_core.memory.vector.health import vector_health_report
 
-# Rétrocompat — noms historiques (ex-aria_core/memory.py)
+# Backward compat — historical names (ex-aria_core/memory.py)
 MEMORY_DIR = _legacy_journal.MEMORY_DIR
 append_memory = _legacy_journal.append_memory
 read_recent_memory = _legacy_journal.read_recent_memory

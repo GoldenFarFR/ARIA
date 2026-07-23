@@ -1,10 +1,10 @@
 """Operator directives — persistent instructions from the human principal.
 
-La commande d'origine (/directive, ecriture live) est retiree (10/07) : jamais
-utilisee en pratique, doublon du vrai flux (l'operateur demande a Claude Code
-d'editer directives.md directement -- revu, teste, commite). get_directives_text()
-reste la lecture reelle (doctrine + tout contenu operator.md deja existant),
-consommee par grounding.py / memory/llm_context.py / memory/arbitrator.py.
+The original command (/directive, live write) was removed (10/07): never used
+in practice, a duplicate of the real flow (the operator asks Claude Code to
+edit directives.md directly -- reviewed, tested, committed). get_directives_text()
+remains the real read path (doctrine + any pre-existing operator.md content),
+consumed by grounding.py / memory/llm_context.py / memory/arbitrator.py.
 """
 
 from __future__ import annotations
@@ -40,12 +40,13 @@ def get_directives_text(limit: int = 4000) -> str:
 
     builtin_text = _BUILTIN_DIRECTIVES.read_text(encoding="utf-8") if _BUILTIN_DIRECTIVES.exists() else ""
 
-    # Les directives operateur VIVANTES (recentes, /directive) priment sur la doctrine
-    # statique : jamais coupees, meme partiellement. Bug reel trouve le 10/07 -- une
-    # fois directives.md > limit, [:limit] sur la chaine concatenee coupait AVANT (ou
-    # EN PLEIN MILIEU DE) la section live -> /directive devenait silencieusement sans
-    # effet sur ARIA. Aucune troncature finale sur le resultat joint : seul le builtin
-    # est raccourci, le separateur et le bloc live sont toujours preserves intacts.
+    # LIVE operator directives (recent, /directive) take priority over the
+    # static doctrine: never truncated, not even partially. Real bug found on
+    # 10/07 -- once directives.md > limit, [:limit] on the concatenated string
+    # would cut BEFORE (or IN THE MIDDLE OF) the live section -> /directive
+    # silently had no effect on ARIA. No final truncation on the joined
+    # result: only the builtin part is shortened, the separator and the live
+    # block are always preserved intact.
     if len(live_block) >= limit:
         return live_block[:limit]
     separator = "\n" if builtin_text and live_block else ""

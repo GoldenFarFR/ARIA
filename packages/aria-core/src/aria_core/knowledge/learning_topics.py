@@ -1,11 +1,11 @@
-"""Sujets de recherche pour l'auto-formation continue d'ARIA (macro-économie,
-psychologie de trading, documentation/outils) -- SSOT: learning_topics.yaml.
+"""Research topics for ARIA's continuous self-training (macro-economics,
+trading psychology, documentation/tools) -- SSOT: learning_topics.yaml.
 
-Distinct de x_watchlist.py (comptes X à suivre, personnes/entités) -- ici ce
-sont des REQUÊTES de recherche web générale, consommées par
-skills/tavily_learning.py. Auto-curation par ARIA (proposition d'ajout via
-issue GitHub, même doctrine que knowledge_inbox.py) : DIFFÉRÉE, pas encore
-construite -- liste éditée manuellement pour l'instant.
+Distinct from x_watchlist.py (X accounts to follow, people/entities) -- these
+are general web search QUERIES, consumed by skills/tavily_learning.py.
+Self-curation by ARIA (proposing additions via a GitHub issue, same doctrine
+as knowledge_inbox.py): DEFERRED, not yet built -- list edited manually for
+now.
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ def _load() -> dict[str, Any]:
 
 
 def all_learning_topics() -> list[dict[str, str]]:
-    """Liste ordonnée (query, category) -- l'ordre encode la priorité (macro
-    en tête, plus d'entrées = plus de passages en round-robin)."""
+    """Ordered list (query, category) -- the order encodes priority (macro
+    first, more entries = more round-robin passes)."""
     data = _load()
     out: list[dict[str, str]] = []
     for entry in data.get("topics") or []:

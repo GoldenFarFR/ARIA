@@ -1,20 +1,20 @@
-"""Alertes de marché — digest crypto-Twitter payant (Otto AI, x402,
-`services/ottoai.py`), complémentaire à `market_sentiment.py` (régimes
-QUANTITATIFS RSI/Bollinger par paire) avec un signal QUALITATIF de marché
-général (alertes/chatter récent, pas mesurable par des indicateurs seuls).
+"""Market alerts — paid crypto-Twitter digest (Otto AI, x402,
+`services/ottoai.py`), complementary to `market_sentiment.py` (QUANTITATIVE
+RSI/Bollinger regimes per pair) with a QUALITATIVE general-market signal
+(recent alerts/chatter, not measurable by indicators alone).
 
-Même architecture que `market_sentiment.py` : dataclass + cycle heartbeat gaté +
-persistance « sans expiration » (écrase toujours la dernière lecture, jamais un
-TTL) + dégradation douce. Module JUMEAU volontairement séparé (pas une
-modification de `market_sentiment.py`) : doctrine « un service = un nouveau
-module », et la donnée sous-jacente (texte libre non fiable d'un tiers) exige une
-sanitisation dédiée (mandat #192) que `market_sentiment.py` (chiffres purs) n'a
-jamais eu besoin d'appliquer.
+Same architecture as `market_sentiment.py`: dataclass + gated heartbeat cycle
++ "no expiration" persistence (always overwrites the last reading, never a
+TTL) + soft degradation. Deliberately separate TWIN module (not a
+modification of `market_sentiment.py`): "one service = one new module"
+doctrine, and the underlying data (untrusted free-form third-party text)
+requires dedicated sanitization (mandate #192) that `market_sentiment.py`
+(pure numbers) never needed to apply.
 
-Gate `ARIA_MARKET_ALERTS_ENABLED` (OFF par défaut). Coût : 0,001$/appel (Otto AI),
-couvert par le plafond `x402_budget.py` existant (5$/semaine, partagé avec
-`conviction_research.py`/`cybercentry_insight.py`) -- même cycle horaire que
-`market_sentiment_cycle` (60min) = ~0,024$/jour, marge large."""
+Gate `ARIA_MARKET_ALERTS_ENABLED` (OFF by default). Cost: $0.001/call (Otto
+AI), covered by the existing `x402_budget.py` cap ($5/week, shared with
+`conviction_research.py`/`cybercentry_insight.py`) -- same hourly cycle as
+`market_sentiment_cycle` (60min) = ~$0.024/day, wide margin."""
 from __future__ import annotations
 
 import logging
@@ -30,12 +30,12 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-_MAX_DIGEST_CHARS = 1500  # digest complet observé ~700-900 car., large marge
+_MAX_DIGEST_CHARS = 1500  # full digest observed ~700-900 chars, wide margin
 
 
 def market_alerts_enabled() -> bool:
-    """Seam gaté OFF par défaut. Le cycle heartbeat ne tourne qu'une fois ce flag
-    activé par l'opérateur -- même patron que market_sentiment_enabled()."""
+    """Seam gated OFF by default. The heartbeat cycle only runs once this flag
+    is enabled by the operator -- same pattern as market_sentiment_enabled()."""
     return os.environ.get("ARIA_MARKET_ALERTS_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -64,9 +64,10 @@ async def _ensure_table() -> None:
 
 
 async def upsert_reading(digest_text: str, *, source_timestamp: str | None = None) -> None:
-    """Écrase TOUJOURS la ligne précédente (une seule ligne, id=1) -- même doctrine
-    « sans expiration » que market_sentiment.py. Le texte est sanitisé ICI (point
-    d'étranglement unique) -- jamais stocké brut, jamais réinjecté brut ailleurs."""
+    """ALWAYS overwrites the previous row (a single row, id=1) -- same
+    "no expiration" doctrine as market_sentiment.py. The text is sanitized
+    HERE (single choke point) -- never stored raw, never reinjected raw
+    elsewhere."""
     from aria_core.sanitize import sanitize_untrusted_text
 
     await _ensure_table()
@@ -87,9 +88,9 @@ async def upsert_reading(digest_text: str, *, source_timestamp: str | None = Non
 
 
 async def latest_reading() -> MarketAlertsReading | None:
-    """Dernière lecture persistée (déjà sanitisée à l'écriture) -- jamais un
-    recalcul, c'est le heartbeat qui rafraîchit. ``None`` si rien n'a encore été
-    écrit (gate OFF, ou premier cycle pas encore passé)."""
+    """Last persisted reading (already sanitized at write time) -- never a
+    recomputation, the heartbeat handles refreshing. ``None`` if nothing has
+    been written yet (gate OFF, or the first cycle hasn't run yet)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
@@ -103,10 +104,10 @@ async def latest_reading() -> MarketAlertsReading | None:
 
 
 async def run_market_alerts_cycle() -> dict:
-    """Rafraîchit la lecture -- dégradation douce, jamais une exception qui remonte
-    (même doctrine que run_market_sentiment_cycle). Un échec de paiement/réseau
-    laisse simplement la dernière lecture connue en place (pas d'écrasement par du
-    vide)."""
+    """Refreshes the reading -- soft degradation, never an exception
+    propagating (same doctrine as run_market_sentiment_cycle). A
+    payment/network failure simply leaves the last known reading in place (no
+    overwrite with emptiness)."""
     from aria_core.services.ottoai import fetch_twitter_digest
 
     try:

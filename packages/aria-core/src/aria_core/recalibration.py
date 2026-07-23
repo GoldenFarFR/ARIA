@@ -1,18 +1,18 @@
-"""Requêtes de recalibrage — ARIA escalade quand elle NE PEUT PAS juger en confiance.
+"""Recalibration requests — ARIA escalates when it CANNOT judge with confidence.
 
-Principe opérateur (extension du dôme) : **transparence totale exigée**. Pas de
-transparence, pas de confiance. MAIS plutôt que rejeter un token prometteur dans le
-noir (faux négatif définitif), ARIA **remonte une requête** à l'opérateur pour
-recalibrer l'analyse : « ce token m'intéresse mais il me manque X pour trancher —
-comment veux-tu que je le juge ? »
+Operator principle (dome extension): **total transparency required**. No
+transparency, no trust. BUT rather than rejecting a promising token in the
+dark (a definitive false negative), ARIA **raises a request** to the
+operator to recalibrate the analysis: "this token interests me but I'm
+missing X to decide — how do you want me to judge it?"
 
-Déclenchement : un token **prometteur** (liquidité/activité réelles) mais **opaque**
-(contrat non vérifié, autorité du mint indéterminable, distribution inconnue, LP-lock
-non confirmable...). Les scams évidents ne remontent PAS (bruit) — seulement les cas
-où l'opacité EMPÊCHE un bon jugement.
+Trigger: a **promising** token (real liquidity/activity) but **opaque**
+(unverified contract, mint authority undeterminable, unknown distribution,
+LP-lock unconfirmable...). Obvious scams do NOT get escalated (noise) —
+only cases where the opacity PREVENTS a good judgment.
 
-Stockage local SQLite `aria.db`, table `recalibration_request` (clé = contrat).
-Aucune action financière : c'est une file d'attente de questions pour l'humain.
+Local SQLite storage in `aria.db`, table `recalibration_request` (key =
+contract). No financial action: this is a queue of questions for the human.
 """
 from __future__ import annotations
 
@@ -27,26 +27,26 @@ from aria_core.paths import aria_db_path
 DB_PATH = str(aria_db_path())
 
 
-# Dimensions de transparence attendues. Une donnée « inconnue » (indisponible), pas
-# « mauvaise », rend le token INJUGEABLE en confiance -> candidat au recalibrage.
+# Expected transparency dimensions. An "unknown" (unavailable) data point, not
+# a "bad" one, makes the token UNJUDGEABLE with confidence -> a recalibration candidate.
 @dataclass(frozen=True)
 class TransparencyVerdict:
-    """Le token est-il assez transparent pour être jugé, et sinon que manque-t-il ?"""
+    """Is the token transparent enough to be judged, and if not, what's missing?"""
 
     transparent: bool
     missing: list[str] = field(default_factory=list)
 
 
 def assess_transparency(ctx) -> TransparencyVerdict:
-    """Évalue si les faits nécessaires à un jugement fiable sont TOUS accessibles.
+    """Assesses whether the facts needed for a reliable judgment are ALL accessible.
 
-    Pur, déterministe. Ne juge PAS la qualité (bon/mauvais) — seulement si l'info
-    EXISTE. Un point manquant = opacité = injugeable en confiance.
+    Pure, deterministic. Does NOT judge quality (good/bad) — only whether the
+    info EXISTS. One missing point = opacity = unjudgeable with confidence.
     """
     missing: list[str] = []
     if ctx.contract_verified is not True:
         missing.append("contrat non vérifié (code source inaccessible)")
-    # Si un mint externe existe mais que son autorité n'a pas pu être résolue.
+    # If an external mint exists but its authority couldn't be resolved.
     if ctx.has_mint is True and (ctx.mint_authority in (None, "unknown")):
         missing.append("autorité du mint indéterminable (renoncé/launchpad/dev ?)")
     if ctx.top_holder_pct is None:
@@ -55,10 +55,10 @@ def assess_transparency(ctx) -> TransparencyVerdict:
 
 
 def is_promising(ctx, *, min_liquidity_usd: float = 10_000.0) -> bool:
-    """Le token vaut-il un regard humain ? (activité réelle, pas de la poussière).
+    """Is the token worth a human look? (real activity, not dust).
 
-    On n'escalade que des tokens avec une vraie paire et une liquidité non triviale :
-    inutile de déranger l'opérateur pour un pool mort ou un scam évident.
+    Only tokens with a real pair and non-trivial liquidity get escalated: no
+    point bothering the operator for a dead pool or an obvious scam.
     """
     if ctx.best_pair is None:
         return False
@@ -97,10 +97,10 @@ async def request_recalibration(
     missing: list[str] | None = None,
     promising_signals: list[str] | None = None,
 ) -> bool:
-    """Enregistre (ou rafraîchit) une requête de recalibrage 'pending'. Idempotent.
+    """Records (or refreshes) a 'pending' recalibration request. Idempotent.
 
-    Retourne True si c'est une NOUVELLE requête (utile pour notifier l'opérateur une
-    seule fois), False si elle existait déjà en attente.
+    Returns True if this is a NEW request (useful to notify the operator only
+    once), False if it was already pending.
     """
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -133,10 +133,10 @@ async def request_recalibration(
 
 
 async def maybe_escalate(ctx, *, symbol: str = "") -> bool:
-    """Décide et enregistre : escalade si le token est PROMETTEUR mais OPAQUE.
+    """Decides and records: escalates if the token is PROMISING but OPAQUE.
 
-    Retourne True si une nouvelle requête de recalibrage a été créée. Ne fait rien
-    (False) si le token est transparent, ou pas assez prometteur pour déranger.
+    Returns True if a new recalibration request was created. Does nothing
+    (False) if the token is transparent, or not promising enough to bother.
     """
     if not is_promising(ctx):
         return False
@@ -184,7 +184,7 @@ async def count_pending() -> int:
 
 
 async def resolve_request(contract: str, resolution: str = "") -> None:
-    """Marque une requête comme traitée (l'opérateur a recalibré / tranché)."""
+    """Marks a request as processed (the operator has recalibrated / decided)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(

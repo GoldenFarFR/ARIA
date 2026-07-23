@@ -1,13 +1,14 @@
-"""Pipeline de sorties d'ARIA — munitions marketing + synchro automatique du site.
+"""ARIA's release pipeline — marketing ammunition + automatic site sync.
 
-Chaque feature déjà construite attend son tour de diffusion (statut built -> announced
--> live). ARIA annonce (X/Telegram) et bascule le statut ; le SITE lit ce pipeline et
-reflète le statut automatiquement — la roadmap de la vitrine reste synchro avec les
-annonces, sans mise à jour manuelle.
+Each already-built feature waits its turn for release (status built ->
+announced -> live). ARIA announces (X/Telegram) and flips the status; the
+SITE reads this pipeline and reflects the status automatically — the
+showcase's roadmap stays in sync with announcements, no manual update.
 
-Source : ``knowledge/release_pipeline.yaml`` (éditable). Le statut runtime est persisté
-en SQLite (``release_status``) pour survivre aux redéploiements — le YAML donne le
-contenu (titre, pitch, blurb) et le statut INITIAL ; la base garde les transitions.
+Source: ``knowledge/release_pipeline.yaml`` (editable). Runtime status is
+persisted in SQLite (``release_status``) to survive redeploys — the YAML
+provides the content (title, pitch, blurb) and the INITIAL status; the
+database keeps the transitions.
 """
 from __future__ import annotations
 
@@ -27,14 +28,14 @@ DB_PATH = str(aria_db_path())
 
 _STATUSES = ("built", "announced", "live")
 
-# VERROU OPÉRATEUR (dôme) : la campagne est OUTWARD-FACING -> jamais autonome. Rien
-# n'est diffusé tant que l'opérateur n'a pas ARMÉ la campagne (feu vert donné SEULEMENT
-# quand le produit est parfait ET la roadmap construite). Par défaut : dormant.
+# OPERATOR LOCK (guardrail): the campaign is OUTWARD-FACING -> never autonomous.
+# Nothing is released until the operator has ARMED the campaign (green light
+# given ONLY when the product is perfect AND the roadmap is built). Default: dormant.
 _ARM_KEY = "__campaign_armed__"
 
 
 async def is_campaign_armed() -> bool:
-    """La campagne est-elle armée par l'opérateur ? (défaut : non — tout reste dormant)."""
+    """Is the campaign armed by the operator? (default: no — everything stays dormant)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT status FROM release_status WHERE id = ?", (_ARM_KEY,))
@@ -43,7 +44,7 @@ async def is_campaign_armed() -> bool:
 
 
 async def arm_campaign(*, armed: bool = True) -> None:
-    """Feu vert opérateur : arme (ou désarme) la campagne. SEUL geste qui autorise la diffusion."""
+    """Operator green light: arms (or disarms) the campaign. The ONLY action that authorizes release."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -76,12 +77,12 @@ def _teasers() -> list[str]:
 
 
 def list_teasers() -> list[str]:
-    """Les posts de teaser (phase 0 FOMO). Contenu prêt, diffusion gatée par l'opérateur."""
+    """The teaser posts (phase 0 FOMO). Content ready, release gated by the operator."""
     return list(_teasers())
 
 
 async def next_teaser(*, index: int = 0) -> str | None:
-    """Le prochain teaser à diffuser — SEULEMENT si la campagne est armée (sinon None)."""
+    """The next teaser to release — ONLY if the campaign is armed (otherwise None)."""
     if not await is_campaign_armed():
         return None
     teasers = _teasers()
@@ -125,7 +126,7 @@ async def _status_overrides() -> dict[str, dict]:
 
 
 async def list_releases() -> list[Release]:
-    """Toutes les sorties, statut runtime appliqué (base > YAML). Ordre du manifeste."""
+    """All releases, with runtime status applied (DB > YAML). Manifest order."""
     overrides = await _status_overrides()
     out: list[Release] = []
     for item in _manifest():
@@ -143,7 +144,7 @@ async def list_releases() -> list[Release]:
 
 
 async def public_releases() -> list[dict]:
-    """Vue publique pour la vitrine : id, titre, statut, blurb (PAS le pitch interne)."""
+    """Public view for the showcase: id, title, status, blurb (NOT the internal pitch)."""
     return [
         {"id": r.id, "title": r.title, "status": r.status, "blurb": r.blurb,
          "announced_at": r.announced_at}
@@ -152,15 +153,15 @@ async def public_releases() -> list[dict]:
 
 
 async def set_status(release_id: str, status: str) -> bool:
-    """Bascule le statut d'une sortie (built/announced/live). Retourne False si inconnu."""
+    """Flips a release's status (built/announced/live). Returns False if unknown."""
     if status not in _STATUSES:
-        raise ValueError(f"statut invalide : {status}")
+        raise ValueError(f"invalid status: {status}")
     if release_id not in {str(i.get('id')) for i in _manifest()}:
         return False
     await _ensure_table()
     ts = datetime.now(timezone.utc).isoformat() if status == "announced" else None
     async with aiosqlite.connect(DB_PATH) as db:
-        # announced_at fixé à la première annonce ; conservé ensuite.
+        # announced_at set on first announcement; kept afterward.
         await db.execute(
             """
             INSERT INTO release_status (id, status, announced_at) VALUES (?, ?, ?)
@@ -174,7 +175,7 @@ async def set_status(release_id: str, status: str) -> bool:
 
 
 async def next_to_announce() -> Release | None:
-    """Prochaine munition à diffuser (première 'built' dans l'ordre du manifeste)."""
+    """Next ammunition to release (first 'built' in manifest order)."""
     for r in await list_releases():
         if r.status == "built":
             return r
@@ -182,10 +183,11 @@ async def next_to_announce() -> Release | None:
 
 
 async def announce_next() -> dict | None:
-    """Bascule la prochaine 'built' en 'announced' et renvoie son pitch prêt à diffuser.
+    """Flips the next 'built' to 'announced' and returns its ready-to-release pitch.
 
-    C'est le geste que fait ARIA pendant la campagne : elle sort UNE munition, publie son
-    pitch (X/Telegram), et le site la montrera comme 'announced'. Retourne None si épuisé.
+    This is the move ARIA makes during the campaign: she releases ONE piece of
+    ammunition, publishes its pitch (X/Telegram), and the site will show it as
+    'announced'. Returns None if exhausted.
     """
     nxt = await next_to_announce()
     if nxt is None:
@@ -194,8 +196,8 @@ async def announce_next() -> dict | None:
     return {"id": nxt.id, "title": nxt.title, "pitch": nxt.pitch}
 
 
-# Canaux de diffusion. X est câblable aujourd'hui ; TikTok est un SEAM posé (vidéo à
-# venir, cf. tâche vidéos marketing). Un publisher = coroutine async(text, release)->bool.
+# Release channels. X is wireable today; TikTok is a placed SEAM (video coming
+# later, see marketing video task). A publisher = coroutine async(text, release)->bool.
 _SITE_URL = "https://ariavanguardzhc.com"
 
 
@@ -206,19 +208,20 @@ async def publish_release(
     tiktok_publisher=None,
     go_live: bool = True,
 ) -> dict | None:
-    """Diffuse UNE sortie sur X + TikTok ET synchronise le site — dans le MÊME geste.
+    """Releases ONE piece on X + TikTok AND syncs the site — in the SAME move.
 
-    Anticipe la boucle complète de campagne :
-      1. choisit la prochaine munition 'built' (ou ``release_id`` donné) ;
-      2. publie son pitch sur chaque canal configuré (X, TikTok) — publishers injectables,
-         best-effort (un canal qui échoue n'annule pas les autres) ;
-      3. bascule le statut -> le site (qui lit ce pipeline) l'affiche automatiquement
-         comme annoncée puis 'live' (``go_live``). Aucune mise à jour manuelle du site.
+    Anticipates the full campaign loop:
+      1. picks the next 'built' ammunition (or the given ``release_id``);
+      2. publishes its pitch on each configured channel (X, TikTok) —
+         injectable publishers, best-effort (one failing channel doesn't
+         cancel the others);
+      3. flips the status -> the site (which reads this pipeline) automatically
+         shows it as announced then 'live' (``go_live``). No manual site update.
 
-    Retourne {id, title, pitch, published_to:[...], status} ou None si plus rien à sortir.
-    TikTok sans publisher configuré est simplement listé comme 'pending' (seam, jamais bloquant).
+    Returns {id, title, pitch, published_to:[...], status} or None if nothing left to release.
+    TikTok with no configured publisher is simply listed as 'pending' (seam, never blocking).
     """
-    # Verrou opérateur : sans feu vert, rien ne sort (dormant).
+    # Operator lock: without the green light, nothing goes out (dormant).
     if not await is_campaign_armed():
         return {"blocked": "campagne non armée (feu vert opérateur requis)"}
 
@@ -238,20 +241,21 @@ async def publish_release(
 
     published: list[str] = []
     pending: list[str] = []
-    # X (câblable maintenant : brancher le publisher X existant).
+    # X (wireable now: plug in the existing X publisher).
     if x_publisher is not None:
         try:
             if await x_publisher(text, target):
                 published.append("x")
             else:
-                # Echec explicite (False, pas d'exception) -- meme sort qu'un canal sans
-                # publisher configure : jamais silencieusement absent des deux listes (#127).
+                # Explicit failure (False, not an exception) -- same fate as a
+                # channel with no configured publisher: never silently absent
+                # from both lists (#127).
                 pending.append("x")
-        except Exception:  # noqa: BLE001 — un canal qui plante n'annule pas les autres
+        except Exception:  # noqa: BLE001 — a crashing channel doesn't cancel the others
             pending.append("x")
     else:
         pending.append("x")
-    # TikTok (seam : vidéo générée plus tard).
+    # TikTok (seam: video generated later).
     if tiktok_publisher is not None:
         try:
             if await tiktok_publisher(text, target):
@@ -263,7 +267,7 @@ async def publish_release(
     else:
         pending.append("tiktok")
 
-    # Synchro site : annoncée, puis live (le site reflète le statut au prochain chargement).
+    # Site sync: announced, then live (the site reflects the status on next load).
     await set_status(target.id, "announced")
     if go_live:
         await set_status(target.id, "live")

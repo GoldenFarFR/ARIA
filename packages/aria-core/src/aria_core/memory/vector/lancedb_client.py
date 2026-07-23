@@ -1,8 +1,9 @@
-"""Client LanceDB embarqué — lazy init, désactivé si flag off ou lancedb/fastembed absent.
+"""Embedded LanceDB client — lazy init, disabled if the flag is off or
+lancedb/fastembed is missing.
 
-Bibliothèque in-process (format Lance en colonnes) — aucun composant serveur/réseau
-dans le paquet, contrairement à chromadb (cf. CVE-2026-45829, RCE non authentifiée
-sur son serveur FastAPI, jamais corrigée). Remplace ``chroma_client.py`` 1:1.
+In-process library (columnar Lance format) — no server/network component in
+the package, unlike chromadb (cf. CVE-2026-45829, unauthenticated RCE on its
+FastAPI server, never patched). Replaces ``chroma_client.py`` 1:1.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ def lancedb_installed() -> bool:
 
 
 def reset_client_cache() -> None:
-    """Tests uniquement — réinitialise le singleton."""
+    """Tests only — resets the singleton."""
     global _client, _table
     _client = None
     _table = None
@@ -50,7 +51,7 @@ def _table_schema() -> Any:
 
 
 def get_table():
-    """Retourne la table LanceDB ou None (flag off / import manquant / erreur)."""
+    """Returns the LanceDB table or None (flag off / missing import / error)."""
     global _client, _table
     if not is_vector_enabled() or not lancedb_installed():
         return None

@@ -1,21 +1,21 @@
-"""Absorbeur dédié à la niche bonding (15%) — le pendant de ``token_absorber.py``.
+"""Absorber dedicated to the bonding niche (15%) — the counterpart to ``token_absorber.py``.
 
-Découvre des candidats ENCORE en courbe de bonding (``services/launchpad_discovery``,
-adaptateurs catégorie ``"bonding"``), les scanne (``scan_base_token``, qui résout déjà
-``ctx.bonding_phase``/``ctx.mint_authority``/``ctx.dev_signal``), les filtre
-(``bonding_screen.bonding_safety_screen``, PAS le filtre standard qui exigerait à tort
-une paire DEX) et les range dans ``screened_pool`` sous ``network="base-bonding"`` —
-**jamais** ``network="base"`` (le pool 85% VC), pour ne jamais contaminer le tirage
-hebdomadaire (``weekly_training.draw_lottery``).
+Discovers candidates STILL on the bonding curve (``services/launchpad_discovery``,
+``"bonding"`` category adapters), scans them (``scan_base_token``, which already
+resolves ``ctx.bonding_phase``/``ctx.mint_authority``/``ctx.dev_signal``), filters
+them (``bonding_screen.bonding_safety_screen``, NOT the standard filter that would
+wrongly require a DEX pair) and files them into ``screened_pool`` under
+``network="base-bonding"`` — **never** ``network="base"`` (the 85% VC pool), so as
+to never contaminate the weekly draw (``weekly_training.draw_lottery``).
 
-Même doctrine que ``token_absorber.py`` :
-  - un rejet **confirmé** (``hard_fail``) est définitif (``status='rejected'``, pas
-    re-scanné sans une résurrection explicite) ;
-  - un échec **mou** (donnée indisponible : statut bonding pas encore confirmé,
-    autorité du mint indéterminable...) laisse une trace (``status='pending'``) et
-    sera retenté au prochain cycle, jamais banni à tort.
+Same doctrine as ``token_absorber.py``:
+  - a **confirmed** rejection (``hard_fail``) is final (``status='rejected'``, not
+    re-scanned without an explicit resurrection);
+  - a **soft** failure (unavailable data: bonding status not yet confirmed,
+    mint authority undeterminable...) leaves a trace (``status='pending'``) and
+    will be retried on the next cycle, never wrongly banned.
 
-Aucune écriture on-chain, aucune signature : lecture + un journal.
+No on-chain write, no signature: read + a journal.
 """
 
 from __future__ import annotations
@@ -36,18 +36,19 @@ async def absorb_bonding_candidate(
     contract: str, *, scanner=None, force: bool = False,
     known_age_days: float | None = None, **screen_kwargs
 ) -> str:
-    """Scanne un candidat bonding et le range : 'kept' / 'rejected' / 'skip_*'.
+    """Scans a bonding candidate and files it: 'kept' / 'rejected' / 'skip_*'.
 
-    Symétrique à ``token_absorber.absorb`` mais sur le pool ``base-bonding`` et via
-    ``bonding_safety_screen`` (aucune exigence de paire DEX). ``force=True`` ignore le
-    court-circuit statut connu (résurrection / rafraîchissement). ``known_age_days``
-    (accepté et IGNORÉ, Volet C 12/07) : ``base_crawler.retry_stale_pending`` le
-    transmet désormais à TOUT ``absorber`` inconditionnellement (correctif du même
-    jour — sinon le pré-filtre ne se déclenchait jamais en prod, cf.
-    ``token_absorber``) — un token en bonding n'a pas de paire DEX ni de pré-filtre
-    Blockscout équivalent, ce paramètre n'a donc aucun sens ici. Explicitement dans
-    la signature (pas absorbé par ``**screen_kwargs``) pour ne PAS le laisser fuiter
-    vers ``bonding_safety_screen``, qui ne l'attend pas et lèverait une exception.
+    Symmetric to ``token_absorber.absorb`` but on the ``base-bonding`` pool and
+    via ``bonding_safety_screen`` (no DEX pair requirement). ``force=True``
+    bypasses the known-status short-circuit (resurrection / refresh).
+    ``known_age_days`` (accepted and IGNORED, Volet C 12/07):
+    ``base_crawler.retry_stale_pending`` now passes it to EVERY ``absorber``
+    unconditionally (same-day fix — otherwise the pre-filter would never
+    trigger in prod, see ``token_absorber``) — a bonding token has no DEX pair
+    nor an equivalent Blockscout pre-filter, so this parameter is meaningless
+    here. Explicitly in the signature (not absorbed by ``**screen_kwargs``) so
+    it does NOT leak into ``bonding_safety_screen``, which doesn't expect it
+    and would raise an exception.
     """
     scan = scanner or scan_base_token
     if not force:
@@ -64,7 +65,7 @@ async def absorb_bonding_candidate(
         await screened_pool.upsert_screened(
             contract=contract,
             symbol="",
-            liquidity_usd=0.0,  # pas de liquidité DEX en bonding, par construction
+            liquidity_usd=0.0,  # no DEX liquidity in bonding, by construction
             security_score=result.security_score,
             verdict=result.verdict,
             network=BONDING_NETWORK,
@@ -78,7 +79,7 @@ async def absorb_bonding_candidate(
 
     if not result.hard_fail:
         reason = "; ".join(result.reasons) if result.reasons else "raison indisponible"
-        logger.info("bonding_absorb %s : échec mou (%s) — non banni, à réessayer", contract, reason)
+        logger.info("bonding_absorb %s: soft failure (%s) — not banned, to be retried", contract, reason)
         await screened_pool.record_pending(
             contract=contract, reason=reason, network=BONDING_NETWORK,
             security_score=result.security_score, verdict=result.verdict,
@@ -93,10 +94,10 @@ async def absorb_bonding_candidate(
 
 
 async def discover_and_absorb_bonding(*, discover=None, absorber=None, limit_per_launchpad: int = 50) -> dict:
-    """Découvre puis absorbe les candidats bonding de TOUS les launchpads actifs.
+    """Discovers then absorbs bonding candidates from ALL active launchpads.
 
-    Retourne le compte par verdict, agrégé tous launchpads confondus (même forme que
-    ``base_crawler.crawl_and_absorb``, pour un branchement heartbeat symétrique).
+    Returns the count per verdict, aggregated across all launchpads (same
+    shape as ``base_crawler.crawl_and_absorb``, for a symmetric heartbeat wiring).
     """
     if discover is None:
         from aria_core.services.launchpad_discovery import discover_bonding_candidates as discover
@@ -108,26 +109,26 @@ async def discover_and_absorb_bonding(*, discover=None, absorber=None, limit_per
         for contract in addresses:
             try:
                 verdict = await absorb(contract)
-            except Exception as exc:  # noqa: BLE001 — un candidat en échec n'arrête pas les autres
-                logger.info("bonding_absorb %s : échec inattendu (%s)", contract, exc)
+            except Exception as exc:  # noqa: BLE001 — one failing candidate doesn't stop the others
+                logger.info("bonding_absorb %s: unexpected failure (%s)", contract, exc)
                 verdict = "error"
             counts[verdict] = counts.get(verdict, 0) + 1
     return counts
 
 
 async def absorb_direct_candidate(contract: str, *, scanner=None) -> str:
-    """Absorbe un candidat DEX-direct fraîchement découvert (Clanker, y compris via
-    Bankr qui déploie dessus -- adresses vanity reconnaissables, vérifié 10/07).
+    """Absorbs a freshly discovered DEX-direct candidate (Clanker, including via
+    Bankr which deploys on it -- recognizable vanity addresses, verified 10/07).
 
-    Simple relais vers ``token_absorber.absorb`` (même jugement que le pipeline
-    standard, pool 85% VC). L'absence de paire DEX/liquidité insuffisante/contrat
-    pas encore vérifié n'est PLUS un rejet définitif depuis le correctif du
-    10/07 sur ``safety_screen.hard_fail`` (décision opérateur : seul un mécanisme
-    malveillant CONFIRMÉ dans le contrat justifie un bannissement définitif -- la
-    liquidité/vérification/paire sont des aspects d'investissement qui évoluent
-    avec la maturité du projet, "comme tous les autres tokens"). Un token tout
-    juste déployé atterrit donc correctement en ``pending`` (retry) plutôt que
-    ``rejected`` sans logique dédiée ici -- scan unique, réutilisé via ``ctx=``.
+    Simple relay to ``token_absorber.absorb`` (same judgment as the standard
+    pipeline, 85% VC pool). Missing DEX pair/insufficient liquidity/not yet
+    verified contract is NO LONGER a definitive rejection since the 10/07 fix
+    to ``safety_screen.hard_fail`` (operator decision: only a CONFIRMED
+    malicious mechanism in the contract justifies a definitive ban --
+    liquidity/verification/pair are investment aspects that evolve with the
+    project's maturity, "like all other tokens"). A just-deployed token
+    therefore correctly lands in ``pending`` (retry) instead of ``rejected``
+    with no dedicated logic here -- single scan, reused via ``ctx=``.
     """
     from aria_core.token_absorber import absorb as absorb_standard
 
@@ -143,21 +144,23 @@ async def absorb_direct_candidate(contract: str, *, scanner=None) -> str:
 
 
 def bonding_discovery_enabled() -> bool:
-    """Seam gaté OFF par défaut. Le cycle heartbeat de découverte multi-launchpad ne
-    tourne qu'une fois ce flag activé par l'opérateur (nouveaux appels réseau)."""
+    """Seam gated OFF by default. The multi-launchpad discovery heartbeat cycle
+    only runs once this flag is enabled by the operator (new network calls)."""
     return os.environ.get("ARIA_BONDING_DISCOVERY_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
 
 async def run_bonding_discovery_cycle(*, limit_per_launchpad: int = 50) -> dict:
-    """Un cycle complet : découverte + absorption sur TOUS les launchpads actifs.
+    """A full cycle: discovery + absorption across ALL active launchpads.
 
-    Deux volets INDÉPENDANTS (un échec de l'un n'efface jamais le succès de l'autre) :
-      - ``bonding`` : candidats encore en courbe (niche 15%, ``network="base-bonding"``) ;
-      - ``direct`` : candidats à liquidité DEX réelle (Clanker, Virtuals gradués) —
-        passent par ``absorb_direct_candidate`` (grâce period « pas encore de paire »
-        avant de rejoindre le pipeline STANDARD ``token_absorber.absorb``, pool 85%).
+    Two INDEPENDENT parts (a failure in one never erases the success of the
+    other):
+      - ``bonding``: candidates still on the curve (15% niche, ``network="base-bonding"``);
+      - ``direct``: candidates with real DEX liquidity (Clanker, graduated
+        Virtuals) — go through ``absorb_direct_candidate`` ("not yet a pair"
+        grace period before joining the STANDARD ``token_absorber.absorb``
+        pipeline, 85% pool).
     """
     bonding_counts = await discover_and_absorb_bonding(limit_per_launchpad=limit_per_launchpad)
 
@@ -171,11 +174,11 @@ async def run_bonding_discovery_cycle(*, limit_per_launchpad: int = 50) -> dict:
                 try:
                     verdict = await absorb_direct_candidate(contract)
                 except Exception as exc:  # noqa: BLE001
-                    logger.info("bonding_discovery_cycle: absorb direct %s échoué (%s)", contract, exc)
+                    logger.info("bonding_discovery_cycle: direct absorb %s failed (%s)", contract, exc)
                     verdict = "error"
                 direct_counts[verdict] = direct_counts.get(verdict, 0) + 1
-    except Exception as exc:  # noqa: BLE001 — le volet direct ne doit jamais casser le volet bonding
-        logger.info("bonding_discovery_cycle: volet direct échoué (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — the direct part must never break the bonding part
+        logger.info("bonding_discovery_cycle: direct part failed (%s)", exc)
 
     return {"bonding": bonding_counts, "direct": direct_counts}
 
@@ -183,18 +186,18 @@ async def run_bonding_discovery_cycle(*, limit_per_launchpad: int = 50) -> dict:
 async def retry_stale_bonding_pending(
     *, limit: int = 20, older_than_hours: int = 24, max_retries: int = 5, max_age_days: int = 7,
 ) -> dict:
-    """Retente les candidats bonding ``pending`` laissés de côté — pendant bonding de
-    ``base_crawler.retry_stale_pending`` (#105, plafond anti-boucle #108), même trou
-    identifié pour le pool ``base-bonding`` : ``discover_and_absorb_bonding`` ne revoit
-    un candidat ``pending`` que s'il réapparaît par hasard dans une découverte
-    ultérieure, rien ne le retente délibérément si le launchpad ne le remet pas sous
-    le nez du crawl.
+    """Retries bonding ``pending`` candidates left aside — the bonding counterpart
+    of ``base_crawler.retry_stale_pending`` (#105, anti-loop cap #108), the same
+    gap identified for the ``base-bonding`` pool: ``discover_and_absorb_bonding``
+    only revisits a ``pending`` candidate if it happens to reappear in a later
+    discovery, nothing retries it deliberately if the launchpad doesn't put it
+    back in front of the crawl.
 
-    Ne duplique RIEN : délègue entièrement à ``base_crawler.retry_stale_pending``
-    (boucle, comptage, plafond anti-boucle-infinie via ``abandon_stale_pending`` —
-    network-agnostique, clé primaire = ``contract``) avec seulement un ``lister``
-    scopé au réseau ``base-bonding`` et l'``absorber`` bonding en place du standard.
-    Même sémantique de verdicts ('kept'/'rejected'/'skip_incomplete'/'abandoned').
+    Duplicates NOTHING: delegates entirely to ``base_crawler.retry_stale_pending``
+    (loop, counting, anti-infinite-loop cap via ``abandon_stale_pending`` --
+    network-agnostic, primary key = ``contract``) with only a ``lister`` scoped
+    to the ``base-bonding`` network and the bonding ``absorber`` in place of
+    the standard one. Same verdict semantics ('kept'/'rejected'/'skip_incomplete'/'abandoned').
     """
     from aria_core import screened_pool
     from aria_core.base_crawler import retry_stale_pending

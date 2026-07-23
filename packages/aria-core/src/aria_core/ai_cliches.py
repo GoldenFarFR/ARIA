@@ -1,14 +1,14 @@
-"""Clause partagée « mots interdits » — clichés de remplissage IA générique.
+"""Shared "forbidden words" clause — generic AI filler clichés.
 
-Distinct de `x_voice.py` (qui bannit l'AUTO-RÉFÉRENCE : « as an AI », « autonomous
-agent »). Ici : le vocabulaire de remplissage générique qu'un LLM produit par défaut
-même sans jamais se référencer lui-même (« processus complexe qui nécessite une
-approche multidisciplinaire », « delve », « tapestry »...). Texte de PROMPT
-uniquement — jamais de nettoyage post-génération ici : sur une surface dense en
-chiffres (rapport /vc), retoucher le texte généré risquerait d'altérer un chiffre ;
-la clause doit donc uniquement guider la génération, jamais réécrire la sortie.
+Distinct from `x_voice.py` (which bans SELF-REFERENCE: "as an AI", "autonomous
+agent"). Here: the generic filler vocabulary an LLM produces by default even
+without ever referencing itself ("complex process requiring a multidisciplinary
+approach", "delve", "tapestry"...). PROMPT text only — never post-generation
+cleanup here: on a surface dense with numbers (the /vc report), touching up
+generated text would risk altering a figure; the clause must therefore only
+guide the generation, never rewrite the output.
 
-Additif : à ajouter à un bloc système existant, jamais pour le remplacer.
+Additive: meant to be appended to an existing system block, never to replace it.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ CLICHES_EN = (
 
 
 def forbidden_cliches_prompt(lang: str = "en") -> str:
-    """Clause additive FR/EN — mots/tournures de remplissage générique interdits."""
+    """Additive FR/EN clause — forbidden generic filler words/phrasings."""
     if lang == "fr":
         exemples = ", ".join(f"« {c} »" for c in CLICHES_FR)
         return (

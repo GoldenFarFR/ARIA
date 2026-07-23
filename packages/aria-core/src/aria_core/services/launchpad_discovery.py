@@ -1,30 +1,32 @@
-"""Registre des adaptateurs de découverte — un point d'entrée unique par launchpad Base.
+"""Discovery adapter registry — one single entry point per Base launchpad.
 
-Trois catégories, distinguées par le MODÈLE DE LIQUIDITÉ (pas par le launchpad
-lui-même) :
+Three categories, distinguished by the LIQUIDITY MODEL (not by the launchpad
+itself):
 
-- **bonding** : le token vit d'abord sur une courbe de bonding, SANS paire DEX, avant
-  de « graduer » (ex. Virtuals). Ces candidats rejoignent la niche 15% dédiée
-  (``skills/bonding_absorber.py`` → ``screened_pool`` sous ``network="base-bonding"``),
-  car le filtre de sécurité standard (``safety_screen``) exige une liquidité DEX et
-  rejetterait TOUJOURS à tort un token encore en bonding.
-- **direct** : liquidité DEX réelle dès le déploiement (Clanker, Flaunch, Zora, et un
-  token Virtuals qui vient de graduer). Ces candidats rejoignent le pipeline STANDARD
-  existant (``token_absorber.absorb``, pool 85% VC) — rien de spécial à faire, juste
-  un point de découverte plus rapide que d'attendre leur apparition dans
-  ``discover_top_pools``.
-- **unknown** : launchpad identifié (opérateur/recherche) mais diligence PAS encore
-  faite (pas de client, pas d'adresse confirmée) — seam documenté, ``discover=None``.
-  Ne JAMAIS fabriquer un client sur une hypothèse (doctrine « profondeur
-  proportionnelle à l'enjeu » — cf. CLAUDE.md) : Bankr/Ape.store/Mint.club attendent
-  une vraie recherche avant d'obtenir un vrai client ``services/<x>.py``.
+- **bonding**: the token first lives on a bonding curve, WITHOUT a DEX pair,
+  before "graduating" (e.g. Virtuals). These candidates join the dedicated
+  15% niche (``skills/bonding_absorber.py`` -> ``screened_pool`` under
+  ``network="base-bonding"``), because the standard safety filter
+  (``safety_screen``) requires DEX liquidity and would ALWAYS wrongly reject
+  a token still bonding.
+- **direct**: real DEX liquidity from deployment (Clanker, Flaunch, Zora, and
+  a Virtuals token that just graduated). These candidates join the existing
+  STANDARD pipeline (``token_absorber.absorb``, 85% VC pool) — nothing
+  special to do, just a faster discovery point than waiting for them to show
+  up in ``discover_top_pools``.
+- **unknown**: launchpad identified (operator/research) but diligence NOT
+  yet done (no client, no confirmed address) — documented seam,
+  ``discover=None``. NEVER build a client on a hypothesis ("depth
+  proportional to the stakes" doctrine — see CLAUDE.md): Bankr/Ape.store/
+  Mint.club wait for real research before getting a real
+  ``services/<x>.py`` client.
 
-La classification « bonding vs direct » réutilise ``knowledge/launchpads.yaml``
-(``mint_authority.is_bonding_launchpad``) — SEULE source de vérité, jamais dupliquée
-ici.
+The "bonding vs direct" classification reuses ``knowledge/launchpads.yaml``
+(``mint_authority.is_bonding_launchpad``) — the SOLE source of truth, never
+duplicated here.
 
-Aucune écriture on-chain, aucune décision : uniquement de la découverte (adresses de
-contrat). L'absorption (screen + décision pool) vit dans les modules appelants.
+No on-chain writes, no decisions: discovery only (contract addresses).
+Absorption (screen + pool decision) lives in the calling modules.
 """
 
 from __future__ import annotations
@@ -40,12 +42,12 @@ Discoverer = Callable[..., Awaitable[list[str]]]
 
 @dataclass(frozen=True)
 class LaunchpadAdapter:
-    """Une entrée du registre : un launchpad, sa catégorie, son découvreur (ou None)."""
+    """A registry entry: a launchpad, its category, its discoverer (or None)."""
 
     key: str
     label: str
     category: str  # "bonding" | "direct" | "unknown"
-    discover: Discoverer | None  # None = seam vide, diligence pas encore faite
+    discover: Discoverer | None  # None = empty seam, diligence not yet done
 
 
 async def _discover_virtuals_bonding(*, limit: int = 50) -> list[str]:
@@ -65,8 +67,8 @@ async def _discover_clanker_direct(*, limit: int = 50) -> list[str]:
 
     try:
         tokens = await clanker_client.fetch_recent(limit=limit)
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        logger.info("launchpad_discovery: clanker fetch_recent échoué (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.info("launchpad_discovery: clanker fetch_recent failed (%s)", exc)
         return []
     seen: dict[str, None] = {}
     for token in tokens:
@@ -78,14 +80,14 @@ async def _discover_clanker_direct(*, limit: int = 50) -> list[str]:
     return list(seen.keys())
 
 
-# Registre : UNE entrée par launchpad reconnu. Les seams (discover=None) documentent
-# une intention sans fabriquer de client — cf. docstring du module.
+# Registry: ONE entry per recognized launchpad. Seams (discover=None) document
+# an intent without building a client — see the module docstring.
 _ADAPTERS: dict[str, LaunchpadAdapter] = {
     "virtuals_bonding": LaunchpadAdapter(
         "virtuals_bonding", "Virtuals Protocol (bonding)", "bonding", _discover_virtuals_bonding
     ),
     "virtuals_graduated": LaunchpadAdapter(
-        "virtuals_graduated", "Virtuals Protocol (gradué)", "direct", _discover_virtuals_graduated
+        "virtuals_graduated", "Virtuals Protocol (graduated)", "direct", _discover_virtuals_graduated
     ),
     "clanker": LaunchpadAdapter("clanker", "Clanker", "direct", _discover_clanker_direct),
     "flaunch": LaunchpadAdapter("flaunch", "Flaunch", "direct", None),
@@ -97,7 +99,7 @@ _ADAPTERS: dict[str, LaunchpadAdapter] = {
 
 
 def list_adapters(*, category: str | None = None) -> list[LaunchpadAdapter]:
-    """Le registre (copie), filtrable par catégorie. Ordre stable (insertion)."""
+    """The registry (copy), filterable by category. Stable (insertion) order."""
     values = list(_ADAPTERS.values())
     if category is None:
         return values
@@ -105,9 +107,9 @@ def list_adapters(*, category: str | None = None) -> list[LaunchpadAdapter]:
 
 
 async def _run_active_adapters(category: str, *, limit_per_launchpad: int) -> dict[str, list[str]]:
-    """Exécute tous les adaptateurs ``category`` ayant un vrai découvreur (best-effort).
+    """Runs every ``category`` adapter that has a real discoverer (best-effort).
 
-    Un adaptateur qui échoue ne bloque jamais les autres (résultat ``[]`` pour lui).
+    A failing adapter never blocks the others (result ``[]`` for it).
     """
     out: dict[str, list[str]] = {}
     for adapter in list_adapters(category=category):
@@ -115,17 +117,17 @@ async def _run_active_adapters(category: str, *, limit_per_launchpad: int) -> di
             continue
         try:
             out[adapter.key] = await adapter.discover(limit=limit_per_launchpad)
-        except Exception as exc:  # noqa: BLE001 — un launchpad en panne n'arrête pas les autres
-            logger.info("launchpad_discovery: %s échec (%s)", adapter.key, exc)
+        except Exception as exc:  # noqa: BLE001 — a failing launchpad doesn't stop the others
+            logger.info("launchpad_discovery: %s failed (%s)", adapter.key, exc)
             out[adapter.key] = []
     return out
 
 
 async def discover_bonding_candidates(*, limit_per_launchpad: int = 50) -> dict[str, list[str]]:
-    """``{launchpad_key: [adresses]}`` — candidats encore en bonding (niche 15%)."""
+    """``{launchpad_key: [addresses]}`` — candidates still bonding (15% niche)."""
     return await _run_active_adapters("bonding", limit_per_launchpad=limit_per_launchpad)
 
 
 async def discover_direct_candidates(*, limit_per_launchpad: int = 50) -> dict[str, list[str]]:
-    """``{launchpad_key: [adresses]}`` — candidats à liquidité DEX réelle (pool 85% VC)."""
+    """``{launchpad_key: [addresses]}`` — candidates with real DEX liquidity (85% VC pool)."""
     return await _run_active_adapters("direct", limit_per_launchpad=limit_per_launchpad)

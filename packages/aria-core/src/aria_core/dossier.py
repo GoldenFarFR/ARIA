@@ -1,27 +1,28 @@
-"""Dossier par token — la mémoire d'ARIA sur UN contrat, en une chronologie.
+"""Per-token dossier — ARIA's memory on ONE contract, as a single timeline.
 
-L'opérateur (et, plus tard, le cockpit) donne un CA (adresse de contrat) et
-récupère TOUT ce qu'ARIA a déjà consigné dessus, fusionné en un seul flux daté :
+The operator (and, later, the cockpit) gives a CA (contract address) and
+gets back EVERYTHING ARIA has already recorded on it, merged into one dated
+stream:
 
-- **analyses VC** (`vc_prediction`) — chaque verdict `/vc`, ouverture + résultat ;
-- **carnet de bord** (`journal_entry`) — thèse, décision, faits ;
-- **suivi de thèse** (`thesis_checkpoint`) — les re-vérifications dans le temps ;
-- **mémoire d'investissement** (`investment_thesis`) — décision → leçon ;
-- **paper-trading** (`paper_position`) — achats/ventes FICTIFS 1 M$.
+- **VC analyses** (`vc_prediction`) — every `/vc` verdict, opening + outcome;
+- **journal** (`journal_entry`) — thesis, decision, facts;
+- **thesis follow-up** (`thesis_checkpoint`) — re-checks over time;
+- **investment memory** (`investment_thesis`) — decision → lesson;
+- **paper-trading** (`paper_position`) — FICTIONAL $1M buys/sells.
 
-Aucun client externe, aucun réseau, aucune écriture : c'est une **lecture pure**
-qui réutilise les fonctions existantes de chaque store (jamais un doublon). La
-fusion (`build_events`) est une fonction pure — testable hors-ligne, sans DB.
+No external client, no network, no write: this is a **pure read** that
+reuses each store's existing functions (never a duplicate). The merge
+(`build_events`) is a pure function — testable offline, without a DB.
 
-Facts-only : on n'affiche que ce qui est réellement en base. Un token jamais
-analysé renvoie un dossier vide (et non une donnée inventée).
+Facts-only: only what is actually in the database is displayed. A token
+never analyzed returns an empty dossier (never a made-up data point).
 """
 from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
 
-# Adresse EVM canonique : 0x suivi de 40 hexadécimaux.
+# Canonical EVM address: 0x followed by 40 hex digits.
 ADDR_RE = re.compile(r"0x[a-fA-F0-9]{40}")
 _STRICT_ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
@@ -31,12 +32,13 @@ def is_contract(text: str) -> bool:
 
 
 def extract_contract(text: str) -> str | None:
-    """Extrait LE contrat d'un message qui n'est *essentiellement* qu'une adresse.
+    """Extracts THE contract from a message that is *essentially* just an address.
 
-    Renvoie l'adresse normalisée si le message ne contient qu'une seule adresse
-    distincte (tolère un copier-coller dupliqué : « 0x…0x… » = même adresse deux
-    fois) et quasiment rien d'autre. Sinon ``None`` — on laisse alors la vraie
-    conversation au LLM (on n'intercepte pas une phrase qui *cite* une adresse).
+    Returns the normalized address if the message contains only one distinct
+    address (tolerates a duplicated paste: "0x…0x…" = the same address twice)
+    and almost nothing else. Otherwise ``None`` — the real conversation is
+    then left to the LLM (a sentence that merely *mentions* an address is not
+    intercepted).
     """
     if not text:
         return None
@@ -45,11 +47,11 @@ def extract_contract(text: str) -> str | None:
         return None
     distinct = {m.lower() for m in matches}
     if len(distinct) != 1:
-        return None  # plusieurs tokens cités → ce n'est pas une consultation de dossier
+        return None  # several tokens mentioned -> not a dossier lookup
     remainder = ADDR_RE.sub("", text)
     remainder = re.sub(r"[\s,;:.·\-–—/]+", "", remainder)
     if len(remainder) > 4:
-        return None  # trop de texte autour → vraie phrase, pas une simple adresse
+        return None  # too much surrounding text -> a real sentence, not a plain address
     return matches[0]
 
 
@@ -64,7 +66,7 @@ def _parse_dt(iso: str | None) -> datetime | None:
 
 def _sort_key(ev: dict) -> tuple:
     dt = _parse_dt(ev.get("at"))
-    # Événements sans date en dernier (timestamp minimal), tri décroissant ensuite.
+    # Events without a date go last (minimal timestamp), then descending sort.
     if dt is None:
         return (0, datetime.min.replace(tzinfo=timezone.utc))
     return (1, dt)
@@ -85,10 +87,10 @@ def build_events(
     theses: list[dict] | None = None,
     paper: list[dict] | None = None,
 ) -> list[dict]:
-    """Fusionne les lignes brutes de chaque store en un flux d'événements daté.
+    """Merges each store's raw rows into a single dated event stream.
 
-    Fonction PURE (aucune I/O) : on lui passe les listes déjà chargées, elle rend
-    les événements triés du plus récent au plus ancien. Chaque événement :
+    PURE function (no I/O): pass in the already-loaded lists, it returns the
+    events sorted from most recent to oldest. Each event:
     ``{at, kind, source, summary, data}``.
     """
     events: list[dict] = []
@@ -203,11 +205,11 @@ def _guess_symbol(predictions, entries, theses, paper) -> str | None:
 
 
 async def build_dossier(contract: str, *, limit: int = 50) -> dict:
-    """Charge et fusionne tout l'historique d'ARIA sur un contrat.
+    """Loads and merges ARIA's entire history on a contract.
 
-    Renvoie ``{contract, valid, symbol, screened_status, counts, events, generated_at}``.
-    Un CA invalide renvoie ``valid: False`` (jamais une exception vers l'appelant).
-    Lecture seule : aucune écriture, aucun appel réseau externe.
+    Returns ``{contract, valid, symbol, screened_status, counts, events, generated_at}``.
+    An invalid CA returns ``valid: False`` (never an exception to the caller).
+    Read-only: no write, no external network call.
     """
     from aria_core import investment_memory, paper_trader, screened_pool, thesis_journal, vc_predictions
 
@@ -254,10 +256,10 @@ def _fmt_ts(iso: str | None) -> str:
 
 
 def format_dossier_telegram(dossier: dict, *, limit_events: int = 15) -> str:
-    """Rend le dossier en texte Telegram (opérateur). Chronologie récente en tête.
+    """Renders the dossier as Telegram text (operator). Most recent first.
 
-    Dégradation douce : un dossier vide n'est pas un cul-de-sac — on propose la
-    suite (/vc pour analyser, /scan pour un contrôle rapide).
+    Graceful degradation: an empty dossier is not a dead end — the next step
+    is suggested (/vc to analyze, /scan for a quick check).
     """
     if not dossier.get("valid"):
         return dossier.get("error") or "Adresse invalide."

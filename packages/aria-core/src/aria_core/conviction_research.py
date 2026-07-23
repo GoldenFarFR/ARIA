@@ -1,72 +1,68 @@
-"""Diligence de conviction -- SOURCE CANONIQUE UNIQUE pour les DEUX pipelines
-d'analyse d'ARIA (19/07, demande opérateur explicite : "je veut une recherche
-active sur x qui permet a aria de voir aussi le contexte complet... en dehors
-des graphiques", puis élargi le même soir, #134 : "les analyses sont autant
-poussées l'une que l'autre, la seule différence c'est un rapport écrit en
-plus"). Cherche le contexte au-delà du graphique : site officiel, buzz X récent,
-cadence de publication, GitHub/Farcaster/Telegram vérifiés, corroboration du
-contrat annoncé par le projet.
+"""Conviction diligence -- SINGLE CANONICAL SOURCE for BOTH of ARIA's analysis
+pipelines (19/07, explicit operator request: "I want an active search on X that
+lets aria also see the full context... beyond the charts", then broadened the
+same evening, #134: "both analyses are pushed just as deep, the only difference
+is one has a written report on top"). Looks for context beyond the chart:
+official website, recent X buzz, posting cadence, verified GitHub/Farcaster/
+Telegram, corroboration of the contract announced by the project.
 
 **Momentum** (``momentum_entry.evaluate_momentum_entry``, via
-``_fetch_conviction_research`` du même fichier) : enrichit un candidat qui a
-DÉJÀ passé tous les filtres rapides (honeypot, R/R, alignement technique,
-tie-breaker/garde de sécurité LLM) -- jamais avant, pour ne jamais ralentir le
-tri de masse (raison d'être du pivot #194, cf. CLAUDE.md « Vitesse »). Le score
-synthétisé influence la TAILLE de la position par conviction
-(``risk_guard.conviction_size_multiplier``), jamais un gate d'achat séparé
-(portée exacte demandée par l'opérateur : "influe sur la taille").
+``_fetch_conviction_research`` in the same file): enriches a candidate that has
+ALREADY passed all fast filters (honeypot, R/R, technical alignment, LLM
+tie-breaker/security gate) -- never before, so mass triage is never slowed down
+(the whole point of pivot #194, cf. CLAUDE.md "Speed"). The synthesized score
+influences the SIZE of the position by conviction
+(``risk_guard.conviction_size_multiplier``), never a separate buy gate (exact
+scope requested by the operator: "influences the size").
 
-**`/vc`** (``vc_analysis._fetch_conviction_research``, #134) : appelé
-INCONDITIONNELLEMENT à chaque scan complet (aucun concept de "filtres rapides
-déjà passés" ici) -- le résultat (score, rationale, liens vérifiés, process_trail)
-est injecté tel quel dans le contexte factuel du rapport `/vc`, à côté de tout
-le reste (sécurité, TA, sentiment, Polymarket), jamais comme un gate séparé
-non plus.
+**`/vc`** (``vc_analysis._fetch_conviction_research``, #134): called
+UNCONDITIONALLY on every full scan (no "already passed the fast filters" concept
+here) -- the result (score, rationale, verified links, process_trail) is
+injected as-is into the `/vc` report's factual context, alongside everything
+else (security, TA, sentiment, Polymarket), never as a separate gate either.
 
-Réactive la lecture X (coupée le 11/07 pour maîtrise du coût pay-per-use) mais
-BORNÉE par ``x_research_budget.py`` (plafond hebdo de requêtes, jamais illimité).
-Gate dédié ``ARIA_CONVICTION_RESEARCH_ENABLED`` (OFF par défaut, comme toute
-nouvelle capacité).
+Re-enables X reading (cut on 11/07 to control pay-per-use cost) but BOUNDED by
+``x_research_budget.py`` (weekly request cap, never unlimited). Dedicated gate
+``ARIA_CONVICTION_RESEARCH_ENABLED`` (OFF by default, like any new capability).
 
-Repli x402 (``services/twitsh.py``, #111/#112, 19/07, décision opérateur tranchée
-via AskUserQuestion) : quand la recherche X officielle gratuite est épuisée
-(plafond hebdo) ou ne renvoie rien, un appel payant twit.sh (0,006-0,01$, plafond
-PARTAGÉ ``x402_budget.py``, 5$/semaine) prend le relais -- toujours en COMPLÉMENT,
-jamais la source primaire.
+x402 fallback (``services/twitsh.py``, #111/#112, 19/07, operator decision
+settled via AskUserQuestion): when the free official X search is exhausted
+(weekly cap) or returns nothing, a paid twit.sh call (0.006-0.01$, SHARED cap
+``x402_budget.py``, 5$/week) takes over -- always as a COMPLEMENT, never the
+primary source.
 
-Vérification de contenu (19/07, retour opérateur : "est-ce qu'elle est capable de
-fouiller ?") : les liens GitHub/Farcaster/Telegram déclarés via ``known_links``
-(DexScreener) ne sont plus juste affichés bruts -- ``_describe_other_known_link``
-appelle ``services/project_activity.py``/``services/farcaster.py``/
-``services/telegram_channel_verify.py`` (dôme standard, aucune clé) pour vérifier
-le CONTENU réel derrière le lien (âge/activité d'un dépôt, abonnés/label spam
-Warpcast, abonnés/dernier message d'un canal). Discord explicitement écarté
-(décision opérateur), Reddit et tout autre réseau restent un lien déclaré brut.
+Content verification (19/07, operator feedback: "is she able to actually dig
+in?"): GitHub/Farcaster/Telegram links declared via ``known_links``
+(DexScreener) are no longer just displayed raw -- ``_describe_other_known_link``
+calls ``services/project_activity.py``/``services/farcaster.py``/
+``services/telegram_channel_verify.py`` (standard dome, no key) to check the
+REAL content behind the link (repo age/activity, Warpcast followers/spam label,
+channel followers/last message). Discord explicitly excluded (operator
+decision), Reddit and any other network remain a raw declared link.
 
-Processus complet (19/07, retour opérateur explicite : "meme si elle a utiliser
-x402, meme si elle a fait des recherche sur tous les liens... pour que toi tu
-puisse au mieux la parametrer") : ``ConvictionResearch.process_trail`` documente
-CHAQUE étape réellement exécutée (Tavily tenté, X officiel vs repli x402 twit.sh,
-vérifications de liens), TOUJOURS peuplé même sur "aucune source trouvée" --
-threadé jusque dans la thèse persistée par ``momentum_entry.py``, visible dans
-``/feedback`` et le registre de trades.
+Full process trail (19/07, explicit operator feedback: "even if she used x402,
+even if she researched every link... so that YOU can tune her as well as
+possible"): ``ConvictionResearch.process_trail`` documents EVERY step actually
+executed (Tavily attempted, official X vs x402 twit.sh fallback, link
+verifications), ALWAYS populated even on "no source found" -- threaded all the
+way into the thesis persisted by ``momentum_entry.py``, visible in
+``/feedback`` and the trade log.
 
-Sécurité (mandat #192) : le contenu externe (site web, tweets, liens
-GitHub/Farcaster/Telegram déclarés) est ATTAQUABLE -- un projet malveillant peut
-façonner son site/ses tweets/ses liens sociaux pour manipuler le score et gonfler
-la taille de la position qu'ARIA prendrait contre lui. Même patron que
-``momentum_entry._llm_confirm``/``_llm_security_gate`` : ``sanitize_untrusted_text``
-sur CHAQUE fragment externe (y compris CHAQUE entrée de ``process_trail``, via
-``_trail_note`` -- jamais un ``trail.append`` direct, bug réel trouvé en revue
-croisée 19/07 où une URL non sanitisée atteignait le prompt système Telegram de
-l'opérateur via la thèse persistée), balise ``<donnees_non_fiables>``, règle
-système explicite d'ignorer toute instruction trouvée dedans, longueur totale
-plafonnée.
+Security (mandate #192): external content (website, tweets, declared
+GitHub/Farcaster/Telegram links) is ATTACKABLE -- a malicious project can shape
+its site/tweets/social links to manipulate the score and inflate the position
+size ARIA would take against it. Same pattern as
+``momentum_entry._llm_confirm``/``_llm_security_gate``: ``sanitize_untrusted_text``
+on EVERY external fragment (including EVERY ``process_trail`` entry, via
+``_trail_note`` -- never a direct ``trail.append``, a real bug found in cross
+review 19/07 where an unsanitized URL reached the operator's Telegram system
+prompt via the persisted thesis), ``<donnees_non_fiables>`` tag, explicit system
+rule to ignore any instruction found inside it, total length capped.
 
-Dégradation honnête à chaque étape (jamais un score inventé) : ``available=False``
-seulement si le gate est OFF ; sinon toujours ``available=True`` même si aucune
-source n'a rien donné (``potential_score=None`` dans ce cas -- ``None`` veut dire
-« inconnu », jamais confondu avec un score bas mesuré)."""
+Honest degradation at every step (never a fabricated score): ``available=False``
+only if the gate is OFF; otherwise always ``available=True`` even if no source
+returned anything (``potential_score=None`` in that case -- ``None`` means
+"unknown", never confused with a measured low score)."""
 from __future__ import annotations
 
 import json
@@ -77,19 +73,19 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# 19/07 -- mémoire des recherches (demande opérateur explicite : "toute recherche
-# doit etre enregistrer dans la memoire pour eviter de tout recommencer... des
-# recherche accumulativbe dans le temp pour un suivie... je veux pas que la mémoire
-# dans 2 ans soit un foutoir"). Même patron EXACT que cybercentry_insight.py (déjà
-# le seul appelant réel de lancedb_store.py à ce jour) -- jamais un système parallèle
-# inventé. Deux usages distincts de la MÊME table (``conviction_research``, déclarée
-# dans memory/vector/schema.yaml, retention_days=null -- jamais purgée) :
-#   1. Cache avant paiement/appel (``_find_cached_research``) -- évite de refaire une
-#      recherche déjà fraîche (< DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS).
-#   2. Historique complet (``get_research_history``) -- chaque recherche reste une
-#      entrée SÉPARÉE et datée (append-only, jamais écrasée) -- suivre l'évolution
-#      d'un projet (cadence de publication qui se dégrade, score qui change) est
-#      la raison même de l'"accumulation" demandée, pas juste un cache à 1 valeur.
+# 19/07 -- research memory (explicit operator request: "every search must be
+# saved to memory to avoid starting over every time... research that
+# accumulates over time for tracking... I don't want memory to be a mess in 2
+# years"). EXACT same pattern as cybercentry_insight.py (already the only real
+# caller of lancedb_store.py to date) -- never a parallel system invented. Two
+# distinct uses of the SAME table (``conviction_research``, declared in
+# memory/vector/schema.yaml, retention_days=null -- never purged):
+#   1. Cache before paying/calling (``_find_cached_research``) -- avoids
+#      redoing a search that's already fresh (< DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS).
+#   2. Full history (``get_research_history``) -- each search stays a SEPARATE,
+#      dated entry (append-only, never overwritten) -- tracking a project's
+#      evolution (a posting cadence that degrades, a score that changes) is the
+#      whole point of the requested "accumulation", not just a single-value cache.
 DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS = 7
 
 
@@ -124,10 +120,10 @@ def _research_to_metadata(research: "ConvictionResearch") -> dict[str, str]:
         "contract_corroborated": corrob,
         "potential_score": "" if research.potential_score is None else str(research.potential_score),
         "rationale": research.rationale,
-        # 19/07, revue croisée : un séparateur littéral (" | ") n'est pas sûr --
-        # une entrée peut légitimement contenir cette sous-chaîne (ex. une URL
-        # déclarée), corrompant le round-trip cache. JSON encode/decode, jamais
-        # de séparateur naïf. Même traitement pour les 2 listes ajoutées le 19/07
+        # 19/07, cross review: a literal separator (" | ") is not safe -- an
+        # entry can legitimately contain this substring (e.g. a declared URL),
+        # corrupting the cache round-trip. JSON encode/decode, never a naive
+        # separator. Same treatment for the 2 lists added on 19/07
         # (#134) -- other_known_link_lines/buzz_lines.
         "other_known_link_lines": _json_list(research.other_known_link_lines),
         "buzz_lines": _json_list(research.buzz_lines),
@@ -159,9 +155,9 @@ def _research_from_metadata(meta: dict) -> "ConvictionResearch":
 
 
 def _format_research_summary(contract: str, chain: str, symbol: str, research: "ConvictionResearch") -> str:
-    """Texte lisible stocké en mémoire -- sert À LA FOIS de contenu pour la recherche
-    sémantique (cache-check) ET de rappel exploitable par ARIA en conversation (même
-    doctrine que _format_wallet_insight, cybercentry_insight.py)."""
+    """Readable text stored in memory -- serves BOTH as content for semantic
+    search (cache-check) AND as a usable reminder for ARIA in conversation (same
+    doctrine as _format_wallet_insight, cybercentry_insight.py)."""
     corrob_txt = {True: "confirmée", False: "CONTRAT DIFFÉRENT ANNONCÉ (signal d'usurpation)", None: "non trouvée"}[
         research.contract_corroborated
     ]
@@ -180,9 +176,9 @@ def _format_research_summary(contract: str, chain: str, symbol: str, research: "
 
 
 async def _find_cached_research(contract: str, chain: str, *, max_age_days: int) -> "ConvictionResearch | None":
-    """Même patron que cybercentry_insight._find_cached_insight -- recherche
-    sémantique filtrée par ``source_id`` EXACT (jamais un faux positif sur un
-    contrat voisin) puis par fraîcheur. ``None`` si rien d'assez récent."""
+    """Same pattern as cybercentry_insight._find_cached_insight -- semantic
+    search filtered by EXACT ``source_id`` (never a false positive on a
+    neighboring contract) then by freshness. ``None`` if nothing recent enough."""
     from aria_core.memory.vector import lancedb_store
 
     prefix = _source_id_prefix(contract, chain)
@@ -207,10 +203,10 @@ async def _find_cached_research(contract: str, chain: str, *, max_age_days: int)
 
 
 async def _store_research(contract: str, chain: str, symbol: str, research: "ConvictionResearch") -> None:
-    """Persiste TOUJOURS une nouvelle entrée datée (jamais un UPDATE) -- même un
-    résultat "rien trouvé" (``potential_score=None``) est stocké pour éviter de
-    re-rechercher inutilement un contrat mort dans le budget de cache, et pour que
-    l'historique reste honnête sur ce qui a réellement été tenté."""
+    """ALWAYS persists a new, dated entry (never an UPDATE) -- even a "nothing
+    found" result (``potential_score=None``) is stored, to avoid needlessly
+    re-searching a dead contract within the cache window, and to keep the
+    history honest about what was actually attempted."""
     from aria_core.memory.vector import lancedb_store
 
     text = _format_research_summary(contract, chain, symbol, research)
@@ -226,10 +222,10 @@ async def _store_research(contract: str, chain: str, symbol: str, research: "Con
 
 
 async def get_research_history(contract: str, chain: str, *, limit: int = 20) -> list["ConvictionResearch"]:
-    """Historique COMPLET des recherches passées pour ce contrat (pas seulement le
-    cache récent) -- pour suivre l'évolution dans le temps (demande opérateur 19/07 :
-    "des recherches accumulatives... pour un suivi"). Trié du plus récent au plus
-    ancien. ``[]`` si rien n'a jamais été recherché, jamais une exception."""
+    """FULL history of past searches for this contract (not just the recent
+    cache) -- to track evolution over time (operator request 19/07:
+    "accumulative research... for tracking"). Sorted from most recent to
+    oldest. ``[]`` if nothing was ever searched, never an exception."""
     from aria_core.memory.vector import lancedb_store
 
     prefix = _source_id_prefix(contract, chain)
@@ -271,32 +267,32 @@ _IGNORED_X_HANDLES = {"i", "home", "search", "intent", "share", "hashtag"}
 class ConvictionResearch:
     available: bool
     website_url: str | None = None
-    website_snapshot: str | None = None  # texte réel du site (sanitisé), si récupéré
+    website_snapshot: str | None = None  # real site text (sanitized), if fetched
     x_handle: str | None = None
     posting_cadence: str = "unknown"  # "active" | "low" | "dormant" | "unknown"
-    contract_corroborated: bool | None = None  # None = aucune mention trouvée
-    potential_score: float | None = None  # 0-10, None = indisponible/inconnu
+    contract_corroborated: bool | None = None  # None = no mention found
+    potential_score: float | None = None  # 0-10, None = unavailable/unknown
     rationale: str = ""
-    reason: str = ""  # pourquoi indisponible/inconnu, si applicable
-    # 19/07 (#134) -- contenu brut déjà collecté (déjà sanitisé, lignes "- ..."
-    # prêtes à afficher), exposé en plus du score synthétisé pour que
-    # vc_analysis.py (/vc) puisse en reprendre la MÊME profondeur que le rapport
-    # écrit détaillé -- momentum_entry.py n'en a pas besoin (sa décision ne
-    # dépend que du score synthétisé) mais rien n'empêche un futur appelant de
-    # les lire aussi. Toujours des listes déjà formatées, jamais des dicts bruts
-    # (source canonique unique, aucune re-formatage dupliqué côté appelant).
+    reason: str = ""  # why unavailable/unknown, if applicable
+    # 19/07 (#134) -- raw content already collected (already sanitized, "- ..."
+    # lines ready to display), exposed alongside the synthesized score so that
+    # vc_analysis.py (/vc) can reuse the SAME depth as the detailed written
+    # report -- momentum_entry.py doesn't need it (its decision only depends on
+    # the synthesized score) but nothing stops a future caller from reading them
+    # too. Always already-formatted lists, never raw dicts (single canonical
+    # source, no duplicated re-formatting on the caller side).
     other_known_link_lines: list[str] = field(default_factory=list)
     buzz_lines: list[str] = field(default_factory=list)
     process_trail: list[str] = field(default_factory=list)
-    # 19/07 -- retour opérateur explicite : "meme si elle a utiliser x402, meme si
-    # elle a fait des recherche sur tous les liens... pour que toi tu puisse au
-    # mieux la parametrer". TOUJOURS peuplé (même sur "aucune source trouvée" --
-    # prouve que la diligence a réellement été tentée, pas juste le résultat
-    # final) -- chaque étape RÉELLEMENT exécutée (Tavily, X officiel vs repli x402
-    # twit.sh, vérifications GitHub/Farcaster/Telegram), jamais une étape qui n'a
-    # pas eu lieu. Threadé jusque dans la thèse persistée par
-    # momentum_entry.evaluate_momentum_entry -- visible dans /feedback et le
-    # registre de trades, pas seulement le score final.
+    # 19/07 -- explicit operator feedback: "even if she used x402, even if she
+    # researched every link... so that YOU can tune her as well as possible".
+    # ALWAYS populated (even on "no source found" -- proves the diligence was
+    # actually attempted, not just the final result) -- each step ACTUALLY
+    # executed (Tavily, official X vs x402 twit.sh fallback,
+    # GitHub/Farcaster/Telegram verifications), never a step that didn't
+    # happen. Threaded all the way into the thesis persisted by
+    # momentum_entry.evaluate_momentum_entry -- visible in /feedback and the
+    # trade log, not just the final score.
 
 
 def _is_conviction_research_enabled() -> bool:
@@ -306,8 +302,8 @@ def _is_conviction_research_enabled() -> bool:
 
 
 def _extract_website(snippets: list[tuple[str, str, str | None]]) -> str | None:
-    """Première URL non-explorateur/non-réseau-social des résultats Tavily --
-    heuristique simple et best-effort, jamais garantie (cf. docstring module)."""
+    """First non-explorer/non-social-network URL from the Tavily results --
+    simple best-effort heuristic, never guaranteed (see module docstring)."""
     for _text, url, _published in snippets:
         if not url:
             continue
@@ -329,9 +325,9 @@ def _extract_x_handle(text_blob: str) -> str | None:
 
 
 def _contract_mentioned(text_blob: str, contract: str) -> bool | None:
-    """True si le contrat scanné apparaît explicitement dans le contenu web/X collecté,
-    False si un AUTRE contrat est annoncé (signal d'usurpation possible), None si
-    aucune adresse n'est mentionnée du tout -- jamais confondu avec False."""
+    """True if the scanned contract explicitly appears in the collected web/X
+    content, False if a DIFFERENT contract is announced (possible impersonation
+    signal), None if no address is mentioned at all -- never confused with False."""
     found = {m.lower() for m in _EVM_ADDRESS_RE.findall(text_blob or "")}
     if not found:
         return None
@@ -366,41 +362,41 @@ _MAX_TRAIL_ENTRY_CHARS = 250
 
 
 def _trail_note(trail: list[str], text: str) -> None:
-    """Ajoute une entrée au processus documenté (``process_trail``), TOUJOURS
-    sanitisée -- bug réel trouvé en revue croisée (19/07) : une URL "Site
-    officiel" non sanitisée atteignait le prompt SYSTÈME Telegram de l'opérateur
-    (via la thèse persistée -- ``momentum_entry.py`` -> ``paper_trader.py`` ->
-    ``paper_ledger_report.build_trade_status_context`` -> ``brain.py``, SANS
-    balise ``<donnees_non_fiables>`` à ce dernier maillon), en violation du
-    mandat #192 pourtant appliqué partout ailleurs dans ce fichier. Appliqué
-    UNIFORMÉMENT à CHAQUE entrée (même celles qui semblent "internes", ex. un
-    message d'erreur de service tiers) -- plus simple et plus sûr que de deviner
-    au cas par cas ce qui est "sûr"."""
+    """Adds an entry to the documented process (``process_trail``), ALWAYS
+    sanitized -- real bug found in cross review (19/07): an unsanitized
+    "Official website" URL reached the operator's Telegram SYSTEM prompt (via
+    the persisted thesis -- ``momentum_entry.py`` -> ``paper_trader.py`` ->
+    ``paper_ledger_report.build_trade_status_context`` -> ``brain.py``, WITHOUT
+    a ``<donnees_non_fiables>`` tag at that last link), in violation of mandate
+    #192 which is otherwise applied everywhere else in this file. Applied
+    UNIFORMLY to EVERY entry (even ones that look "internal", e.g. a
+    third-party service error message) -- simpler and safer than guessing
+    case-by-case what's "safe"."""
     from aria_core.sanitize import sanitize_untrusted_text
 
     trail.append(sanitize_untrusted_text(text, _MAX_TRAIL_ENTRY_CHARS))
 
 
 async def _describe_other_known_link(label: str, url: str) -> str:
-    """Pour GitHub/Farcaster/Telegram (19/07, retour opérateur : "est-ce qu'elle est
-    capable de fouiller ?") : vérifie le CONTENU réel derrière le lien déclaré --
-    âge/activité d'un dépôt, abonnés/label anti-spam Warpcast, abonnés/dernier
-    message d'un canal -- pas seulement le fait qu'il existe. Discord explicitement
-    écarté (décision opérateur) ; Reddit et tout autre réseau restent un lien
-    déclaré brut (aucun client de vérification construit). Chaque client dédié
-    contraint lui-même l'appel réseau à son propre domaine officiel
-    (api.github.com/api.warpcast.com/t.me) quel que soit le contenu de ``url`` --
-    jamais un relais vers un hôte arbitraire choisi par le déployeur du token."""
+    """For GitHub/Farcaster/Telegram (19/07, operator feedback: "is she able to
+    actually dig in?"): checks the REAL content behind the declared link --
+    repo age/activity, Warpcast followers/anti-spam label, channel
+    followers/last message -- not just the fact that it exists. Discord
+    explicitly excluded (operator decision); Reddit and any other network
+    remain a raw declared link (no verification client built). Each dedicated
+    client itself constrains the network call to its own official domain
+    (api.github.com/api.warpcast.com/t.me) regardless of ``url``'s content --
+    never a relay to an arbitrary host chosen by the token's deployer."""
     from aria_core.sanitize import sanitize_untrusted_text
 
     safe_label = sanitize_untrusted_text(label, 40)
     safe_url = sanitize_untrusted_text(url, 200)
     if label == "GitHub":
-        # 19/07 -- réutilise services/project_activity.py, DÉJÀ le client GitHub
-        # canonique consommé par vc_analysis.py/thesis_journal.py/
-        # simulate_lifecycle.py -- un doublon (services/github_verify.py) avait
-        # été construit par erreur avant la découverte de ce module pré-existant,
-        # retiré au profit de celui-ci.
+        # 19/07 -- reuses services/project_activity.py, ALREADY the canonical
+        # GitHub client consumed by vc_analysis.py/thesis_journal.py/
+        # simulate_lifecycle.py -- a duplicate (services/github_verify.py) had
+        # been built by mistake before this pre-existing module was discovered,
+        # removed in favor of this one.
         from aria_core.services.project_activity import (
             fetch_github_diligence_snapshot,
             format_github_diligence,
@@ -426,30 +422,30 @@ async def research_project_potential(
     cache_max_age_days: int = DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS,
     known_links: list[dict] | None = None,
 ) -> ConvictionResearch:
-    """Orchestre site web (Tavily) + X (buzz + cadence) + corroboration de contrat ->
-    score de potentiel borné. Point d'entrée unique appelé par
-    ``momentum_entry.evaluate_momentum_entry`` juste avant l'achat final.
+    """Orchestrates website (Tavily) + X (buzz + cadence) + contract
+    corroboration -> bounded potential score. Single entry point called by
+    ``momentum_entry.evaluate_momentum_entry`` right before the final buy.
 
-    19/07 -- vérifie D'ABORD la mémoire (gratuit, LanceDB local) avant tout appel
-    Tavily/X : un résultat de moins de ``cache_max_age_days`` sert directement, jamais
-    re-recherché (demande opérateur explicite : "eviter de tout recommencer").
-    Sur un résultat FRAIS (pas de cache), stocke systématiquement -- même un "rien
-    trouvé" -- pour bâtir l'historique accumulatif ET éviter de re-taper un contrat
-    mort à chaque cycle.
+    19/07 -- checks memory FIRST (free, local LanceDB) before any Tavily/X
+    call: a result younger than ``cache_max_age_days`` is served directly,
+    never re-searched (explicit operator request: "avoid starting over every
+    time"). On a FRESH result (no cache hit), always stores it -- even a
+    "nothing found" -- to build the accumulative history AND avoid re-hitting
+    a dead contract on every cycle.
 
-    ``known_links`` (19/07, optionnel -- trouvaille réelle en conversation Telegram
-    opérateur, SOGNI : ARIA a répondu « handle X introuvable » alors que le lien X
-    officiel était DÉJÀ affiché sur DexScreener) : ``PairSnapshot.project_links``
-    (``services/dexscreener.py``, ``info.websites``/``socials`` -- DÉCLARÉ par le
-    projet lui-même, déjà fetché par ``momentum_entry.py``, zéro appel réseau
-    supplémentaire) sert de source PRIMAIRE pour le site officiel/handle X, plus
-    fiable qu'une extraction heuristique depuis des snippets Tavily. Tavily reste
-    appelé même quand ces liens existent (buzz/contexte/corroboration du contrat),
-    mais ne les écrase jamais si déjà trouvés ici. Tout autre lien connu
-    (GitHub/Discord/Telegram/Farcaster/Reddit -- retour opérateur : quasi toujours
-    présents sur DexScreener, leur absence est l'exception) n'est pas ignoré non
-    plus : passé comme contexte supplémentaire au LLM de synthèse (jamais un nouveau
-    champ persisté par plateforme)."""
+    ``known_links`` (19/07, optional -- real finding in an operator Telegram
+    conversation, SOGNI: ARIA replied "X handle not found" while the official
+    X link was ALREADY displayed on DexScreener): ``PairSnapshot.project_links``
+    (``services/dexscreener.py``, ``info.websites``/``socials`` -- DECLARED by
+    the project itself, already fetched by ``momentum_entry.py``, zero extra
+    network call) serves as the PRIMARY source for the official website/X
+    handle, more reliable than heuristic extraction from Tavily snippets.
+    Tavily is still called even when these links exist (buzz/context/contract
+    corroboration), but never overwrites them if already found here. Any
+    other known link (GitHub/Discord/Telegram/Farcaster/Reddit -- operator
+    feedback: almost always present on DexScreener, their absence is the
+    exception) isn't ignored either: passed as extra context to the synthesis
+    LLM (never a new field persisted per platform)."""
     if not _is_conviction_research_enabled():
         return ConvictionResearch(available=False, reason="ARIA_CONVICTION_RESEARCH_ENABLED désactivé")
 
@@ -469,9 +465,9 @@ async def research_project_potential(
     contract_corroborated: bool | None = None
     snippet_lines: list[str] = []
     other_known_link_lines: list[str] = []
-    trail: list[str] = []  # 19/07 -- processus complet, cf. docstring ConvictionResearch
+    trail: list[str] = []  # 19/07 -- full process, see ConvictionResearch docstring
 
-    _MAX_OTHER_KNOWN_LINKS = 6  # même discipline que snippet_lines[:4]/buzz_lines[:5]
+    _MAX_OTHER_KNOWN_LINKS = 6  # same discipline as snippet_lines[:4]/buzz_lines[:5]
 
     for link in known_links or []:
         if not isinstance(link, dict):
@@ -481,13 +477,14 @@ async def research_project_potential(
         if not url:
             continue
         if label == "Site officiel":
-            # dexscreener.py::_extract_project_links défaut TOUTE entrée `websites`
-            # sans label explicite à ce libellé générique -- un 2e site "Site
-            # officiel" (ex. docs, whitepaper) n'est jamais un réseau différent,
-            # jamais mélangé dans other_known_link_lines. Comportement pré-diff pour
-            # ce cas précis : silencieusement ignoré au-delà du premier (bug réel
-            # trouvé en revue croisée, 19/07 -- un 2e "Site officiel" tombait à tort
-            # sous "Autres liens officiels déclarés (GitHub/Discord/Telegram/etc.)").
+            # dexscreener.py::_extract_project_links defaults EVERY `websites`
+            # entry with no explicit label to this generic label -- a 2nd
+            # "Site officiel" (e.g. docs, whitepaper) is never a different
+            # network, never mixed into other_known_link_lines. Pre-existing
+            # behavior for this exact case: silently ignored beyond the first
+            # one (real bug found in cross review, 19/07 -- a 2nd "Site
+            # officiel" was wrongly falling into "Other declared official
+            # links (GitHub/Discord/Telegram/etc.)").
             if website_url is None:
                 website_url = url
                 _trail_note(trail, f"Site officiel trouvé via DexScreener : {url}")
@@ -498,21 +495,22 @@ async def research_project_potential(
                     _trail_note(trail, f"Handle X trouvé via DexScreener : @{x_handle}")
         elif label:
             if len(other_known_link_lines) < _MAX_OTHER_KNOWN_LINKS:
-                # 19/07 -- GitHub/Discord/Telegram/Farcaster/Reddit etc. (retour
-                # opérateur : DexScreener les affiche quasi systématiquement, déjà
-                # extraits par dexscreener.py, jamais consultés jusqu'ici -- même
-                # angle mort que le bug SOGNI, cette fois sur des réseaux au-delà du
-                # site+X). Jamais un nouveau champ persisté par plateforme -- un
-                # dépôt GitHub/serveur Discord DÉCLARÉ est un signal de légitimité
-                # en plus, pesé par le LLM au même titre qu'un extrait de site web,
-                # pas un fait structuré séparé.
+                # 19/07 -- GitHub/Discord/Telegram/Farcaster/Reddit etc.
+                # (operator feedback: DexScreener displays them almost
+                # systematically, already extracted by dexscreener.py, never
+                # consulted until now -- same blind spot as the SOGNI bug,
+                # this time on networks beyond site+X). Never a new field
+                # persisted per platform -- a DECLARED GitHub repo/Discord
+                # server is one more legitimacy signal, weighed by the LLM
+                # the same as a website snippet, not a separate structured
+                # fact.
                 described = await _describe_other_known_link(label, url)
                 other_known_link_lines.append(described)
                 _trail_note(trail, described.lstrip("- "))
             else:
-                # Bug réel trouvé en revue croisée (19/07) : au-delà du plafond, un
-                # lien déclaré disparaissait silencieusement -- jamais un lien
-                # jamais mentionné dans le processus documenté.
+                # Real bug found in cross review (19/07): beyond the cap, a
+                # declared link would silently disappear -- never a link that
+                # goes unmentioned in the documented process.
                 _trail_note(trail, f"{label} ignoré (plafond de {_MAX_OTHER_KNOWN_LINKS} liens atteint)")
 
     _trail_note(trail, "Recherche web Tavily tentée")
@@ -522,8 +520,8 @@ async def research_project_potential(
             max_results=5,
             caller="conviction_research",
         )
-    except Exception as exc:  # noqa: BLE001 -- jamais bloquant
-        logger.info("conviction_research: recherche Tavily échouée (%s)", exc)
+    except Exception as exc:  # noqa: BLE001 -- never blocking
+        logger.info("conviction_research: Tavily search failed (%s)", exc)
         tavily_result = None
         _trail_note(trail, "Tavily indisponible (exception)")
 
@@ -549,11 +547,11 @@ async def research_project_potential(
         _trail_note(trail, f"Tavily indisponible ({tavily_result.error or 'raison inconnue'})")
 
     if website_url:
-        # 19/07 -- réutilise services/site_snapshot.py (déjà construit pour
-        # vc_analysis.py, défenses anti-texte-caché mandat #192) : jusqu'ici
-        # momentum ne voyait le site qu'INDIRECTEMENT via une recherche Tavily
-        # (résultats DE TIERS À PROPOS du site), jamais son vrai contenu -- même
-        # profondeur que /vc désormais, aucun nouveau client construit.
+        # 19/07 -- reuses services/site_snapshot.py (already built for
+        # vc_analysis.py, anti-hidden-text defenses, mandate #192): until now
+        # momentum only saw the site INDIRECTLY via a Tavily search (THIRD-PARTY
+        # results ABOUT the site), never its real content -- now the same
+        # depth as /vc, no new client built.
         from aria_core.services.site_snapshot import fetch_site_text_snapshot
 
         raw_snapshot_text = await fetch_site_text_snapshot(website_url)
@@ -576,7 +574,7 @@ async def research_project_potential(
         try:
             tweets = await search_recent_tweets(query, max_results=10)
         except Exception as exc:  # noqa: BLE001
-            logger.info("conviction_research: recherche X échouée (%s)", exc)
+            logger.info("conviction_research: X search failed (%s)", exc)
             tweets = []
         await x_research_budget.record_request(purpose="buzz_search", contract=contract, status="ok")
     else:
@@ -586,16 +584,16 @@ async def research_project_potential(
         )
 
     if not tweets:
-        # 23/07 -- Tavily (recherche web indexée, restreinte à x.com/twitter.com)
-        # en AVANT-DERNIER repli, avant twit.sh -- décision opérateur explicite
-        # ("passer toutes les commandes de lecture X vers Tavily, moins cher que
-        # le x402 payant par appel"). Vérifié réel (22-23/07) : la restriction
-        # de domaine renvoie de vrais résultats pertinents. Portée honnête :
-        # indexation web classique (mélange les posts du compte ET les mentions
-        # par des tiers, jamais distingués) -- adapté au BUZZ (c'est précisément
-        # ce qu'on veut ici), mais PAS à la cadence de publication ci-dessous
-        # (testé réel séparément : Tavily ne fournit pas un fil chronologique
-        # propre à un seul compte, cf. docstring de ``skills/x_substance.py``).
+        # 23/07 -- Tavily (indexed web search, restricted to x.com/twitter.com)
+        # as the SECOND-TO-LAST fallback, before twit.sh -- explicit operator
+        # decision ("route every X-reading command through Tavily, cheaper
+        # than paid x402 per call"). Verified for real (22-23/07): the domain
+        # restriction returns genuinely relevant results. Honest scope: plain
+        # web indexing (mixes the account's own posts WITH third-party
+        # mentions, never distinguished) -- fine for BUZZ (exactly what we
+        # want here), but NOT for the posting cadence below (tested separately
+        # for real: Tavily doesn't provide a clean chronological feed for a
+        # single account, see ``skills/x_substance.py`` docstring).
         from aria_core.services.tavily import tavily_client
 
         tavily_query = f"{safe_symbol} {x_handle}" if x_handle else query
@@ -608,12 +606,13 @@ async def research_project_potential(
             _trail_note(trail, f"Tavily : {len(tweets)} résultat(s) trouvé(s)")
 
     if not tweets:
-        # 19/07 -- repli x402 (twit.sh, #111/#112, décision opérateur via
-        # AskUserQuestion : COMPLÉMENT, jamais un remplacement). DERNIER
-        # recours désormais (23/07, Tavily testé juste avant) -- déclenché si
-        # le plafond X officiel gratuit est épuisé (100 req/semaine) ET Tavily
-        # indisponible/sans résultat. Coût borné par le plafond x402_budget.py
-        # PARTAGÉ (5$/semaine, déjà fail-closed) -- aucun nouveau plafond dédié.
+        # 19/07 -- x402 fallback (twit.sh, #111/#112, operator decision via
+        # AskUserQuestion: COMPLEMENT, never a replacement). Now the LAST
+        # resort (23/07, Tavily tested just before) -- triggered if the free
+        # official X cap is exhausted (100 req/week) AND Tavily is
+        # unavailable/returns nothing. Cost bounded by the SHARED
+        # x402_budget.py cap (5$/week, already fail-closed) -- no new
+        # dedicated cap.
         from aria_core.services.twitsh import search_tweets as twitsh_search_tweets
 
         _trail_note(trail, "Repli x402 twit.sh utilisé pour le buzz (X officiel + Tavily vides/indisponibles)")
@@ -635,7 +634,7 @@ async def research_project_potential(
             try:
                 cadence_tweets = await fetch_user_recent_tweets(x_handle, max_results=20)
             except Exception as exc:  # noqa: BLE001
-                logger.info("conviction_research: cadence X échouée (%s)", exc)
+                logger.info("conviction_research: X cadence fetch failed (%s)", exc)
                 cadence_tweets = []
             await x_research_budget.record_request(purpose="posting_cadence", contract=contract, status="ok")
         else:
@@ -693,16 +692,18 @@ async def _synthesize_potential(
     contract_corroborated: bool | None,
     other_known_link_lines: list[str] | None = None,
 ) -> tuple[float | None, str]:
-    """Un seul appel LLM léger (même modèle/provider que ``_llm_confirm`` --
-    Haiku 4.5 via OpenRouter, déjà validé sur des tentatives d'injection réelles)
-    synthétise tout le contexte collecté en un score borné + une phrase. Fail-closed
-    sur (None, "") -- jamais un score fabriqué faute de réponse exploitable.
+    """A single lightweight LLM call (same model/provider as ``_llm_confirm`` --
+    Haiku 4.5 via OpenRouter, already validated against real injection
+    attempts) synthesizes all collected context into a bounded score + one
+    sentence. Fail-closed on (None, "") -- never a fabricated score for lack
+    of a usable reply.
 
-    ``other_known_link_lines`` (19/07, retour opérateur) -- GitHub/Discord/Telegram/
-    Farcaster/Reddit DÉCLARÉS par le projet lui-même sur DexScreener (déjà extraits,
-    jamais un nouveau champ persisté par plateforme) : un signal de légitimité
-    additionnel pesé par le LLM au même titre qu'un extrait de site web, jamais un
-    fait vérifié en soi -- un lien peut être déclaré sans jamais être authentique."""
+    ``other_known_link_lines`` (19/07, operator feedback) -- GitHub/Discord/
+    Telegram/Farcaster/Reddit DECLARED by the project itself on DexScreener
+    (already extracted, never a new field persisted per platform): one
+    additional legitimacy signal weighed by the LLM the same as a website
+    snippet, never a fact verified in itself -- a link can be declared
+    without ever being authentic."""
     from aria_core.llm import chat_with_context
     from aria_core.sanitize import sanitize_untrusted_text
 
@@ -740,12 +741,12 @@ async def _synthesize_potential(
         "actif et cohérent) ?"
     )
     try:
-        # 19/07 -- décision opérateur explicite ("bascule sur spark et quand spark
-        # sera vide en valeur on passera sur anthropique comme prévu") : override
-        # Haiku/OpenRouter retiré, utilise désormais le provider/fallback global.
+        # 19/07 -- explicit operator decision ("switch to spark and once spark
+        # runs out of value we'll move to anthropic as planned"): Haiku/
+        # OpenRouter override removed, now uses the global provider/fallback.
         reply = await chat_with_context(user, system, max_tokens=150, temperature=0.0)
     except Exception as exc:  # noqa: BLE001
-        logger.info("conviction_research: synthèse LLM échouée (%s)", exc)
+        logger.info("conviction_research: LLM synthesis failed (%s)", exc)
         return None, ""
     if not reply:
         return None, ""

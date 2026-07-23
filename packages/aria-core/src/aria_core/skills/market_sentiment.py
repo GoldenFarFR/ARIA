@@ -1,30 +1,30 @@
-"""Sentiment de marché continu (facts-only, déterministe) — aligne le vocabulaire
-du « Wall St Cheat Sheet — Psychology of a Market Cycle » (image de référence
-partagée par l'opérateur le 10/07) sur des indicateurs RÉELS (RSI, position dans
-les bandes de Bollinger, momentum, retracement depuis le plus haut/bas récent)
-plutôt que sur un ressenti.
+"""Continuous market sentiment (facts-only, deterministic) — aligns the
+vocabulary of the "Wall St Cheat Sheet — Psychology of a Market Cycle"
+(reference image shared by the operator on 07/10) with REAL indicators (RSI,
+position within the Bollinger Bands, momentum, retracement from the recent
+high/low) rather than with a feeling.
 
-Complète `btc_cycles.py` (cycle de halving, horizon PLURI-ANNUEL) par une lecture
-COURT/MOYEN TERME — les deux cadres coexistent, ne se remplacent pas. Comme
-`btc_cycles`, c'est une LENTE d'analyse répandue (jamais une loi de marché
-prouvée) : seuils SIMPLES et DÉCLARÉS ci-dessous.
+Complements `btc_cycles.py` (halving cycle, MULTI-YEAR horizon) with a
+SHORT/MEDIUM-TERM reading — the two frameworks coexist, they don't replace
+each other. Like `btc_cycles`, this is a widespread analytical LENS (never a
+proven market law): SIMPLE and DECLARED thresholds below.
 
-Simplification assumée et honnête : les 13 émotions du cheat sheet ne sont PAS
-toutes distinguables de façon fiable depuis des indicateurs seuls (aucune
-signature numérique ne sépare « colère » de « dépression », par exemple). Ce
-module regroupe en 6 régimes défendables + un repli neutre, chacun avec les
-chiffres réels qui l'ont produit — jamais un label sans preuve.
+Assumed and honest simplification: the cheat sheet's 13 emotions are NOT all
+reliably distinguishable from indicators alone (no numeric signature
+separates "anger" from "depression," for instance). This module groups them
+into 6 defensible regimes + a neutral fallback, each with the real numbers
+that produced it — never a label without evidence.
 
-Opère sur des séries de CLOSES (pas de vraies bougies OHLC) : les paires
-principales (BTC, ETH) sont alimentées par `CoinGeckoClient.get_market_chart_range`
-(`market_chart` ne fournit que des prix de clôture, jamais l'open/high/low) —
-les patterns de bougies (`candlestick_patterns.py`) ne s'appliquent donc pas ici,
-réservés aux tokens Base avec OHLC réel via `services/ohlcv.py`.
+Operates on series of CLOSES (not real OHLC candles): the principal pairs
+(BTC, ETH) are fed by `CoinGeckoClient.get_market_chart_range`
+(`market_chart` only provides closing prices, never open/high/low) —
+candlestick patterns (`candlestick_patterns.py`) therefore don't apply here,
+reserved for Base tokens with real OHLC via `services/ohlcv.py`.
 
-« Sans expiration » (demande opérateur du 10/07) : ce module ne met JAMAIS en
-cache une lecture périmée derrière un TTL — chaque cycle heartbeat recalcule et
-écrase la dernière lecture connue (`upsert_reading`). La fraîcheur réelle dépend
-uniquement du heartbeat qui tourne, jamais d'un cache silencieusement dépassé.
+"No expiration" (operator request from 07/10): this module NEVER caches a
+stale reading behind a TTL — every heartbeat cycle recomputes and overwrites
+the last known reading (`upsert_reading`). Real freshness depends solely on
+the running heartbeat, never on a silently outdated cache.
 """
 from __future__ import annotations
 
@@ -43,31 +43,31 @@ logger = logging.getLogger(__name__)
 
 
 def market_sentiment_enabled() -> bool:
-    """Seam gaté OFF par défaut. Le cycle heartbeat de scan continu ne tourne
-    qu'une fois ce flag activé par l'opérateur."""
+    """Seam gated OFF by default. The continuous-scan heartbeat cycle only
+    runs once this flag is enabled by the operator."""
     return os.environ.get("ARIA_MARKET_SENTIMENT_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
 DB_PATH = str(aria_db_path())
 
-# Paires principales suivies en continu. Liste de DÉPART, extensible — pas une
-# prétention d'exhaustivité ("toutes les paires principales" au sens large reste
-# un objectif, celui-ci couvre les deux majors les plus universellement suivis
-# (BTC = référence macro crypto, ETH = base layer de l'écosystème Base d'ARIA).
+# Principal pairs tracked continuously. STARTING list, extensible — no claim
+# of exhaustiveness ("all principal pairs" in the broad sense remains a goal,
+# this one covers the two most universally tracked majors (BTC = crypto macro
+# reference, ETH = base layer of ARIA's Base ecosystem).
 PRINCIPAL_PAIRS: tuple[tuple[str, str], ...] = (
     ("BTC", "bitcoin"),
     ("ETH", "ethereum"),
 )
 
-_FETCH_WINDOW_DAYS = 180  # large marge sous la limite gratuite CoinGecko (365j)
-_MIN_CLOSES_REQUIRED = 60  # sous ce seuil, lecture jugée non fiable (chauffe RSI/BB/momentum/tendance)
+_FETCH_WINDOW_DAYS = 180  # large margin under the free CoinGecko limit (365d)
+_MIN_CLOSES_REQUIRED = 60  # below this threshold, reading judged unreliable (RSI/BB/momentum/trend warm-up)
 
 _MOMENTUM_LOOKBACK = 14
 _TREND_PERIOD = 50
 _BOLLINGER_PERIOD = 20
 
-# Seuils SIMPLES et DÉCLARÉS (aucune définition universelle n'existe) :
+# SIMPLE and DECLARED thresholds (no universal definition exists):
 _RSI_EUPHORIA = 75.0
 _RSI_OVERSOLD = 30.0
 _RSI_NEUTRAL_LOW = 40.0
@@ -90,16 +90,17 @@ REGIME_LABELS = {
     "donnees_insuffisantes": "Données insuffisantes pour une lecture fiable",
 }
 
-# 20/07 -- Regime Switch dynamique (revue croisée Gemini, feu vert opérateur explicite
-# sur le chiffre de liquidité Peur "200k mais à garder à l'œil") : 3 méta-états qui
-# pilotent les seuils durs du pipeline momentum (liquidité/sizing/discipline de sortie
-# -- momentum_entry.py/risk_guard.py/paper_trader.py), dérivés des 6 régimes ci-dessus
-# (déterministe, zéro LLM, déjà en prod -- exactement l'indicateur "objectif, sans que
-# le LLM n'invente une tendance" demandé). ``complaisance`` classé Neutre (PAS
-# Euphorie) -- son propre label le dit : "euphorie qui ralentit, signal d'alerte" --
-# l'activer en Euphorie armerait les paramètres les plus agressifs pile au moment où
-# le marché commence à se retourner (correction Gemini, vérifiée contre le code réel
-# avant d'être acceptée).
+# 07/20 -- dynamic Regime Switch (Gemini cross-review, explicit operator
+# go-ahead on the Fear liquidity figure "200k but keep an eye on it"): 3
+# meta-states that drive the momentum pipeline's hard thresholds
+# (liquidity/sizing/exit discipline -- momentum_entry.py/risk_guard.py/
+# paper_trader.py), derived from the 6 regimes above (deterministic, zero
+# LLM, already in prod -- exactly the "objective, without the LLM inventing a
+# trend" indicator requested). ``complaisance`` classified Neutral (NOT
+# Euphoria) -- its own label says so: "cooling euphoria, warning signal" --
+# activating it in Euphoria would arm the most aggressive parameters right
+# when the market starts turning (Gemini correction, verified against the
+# real code before being accepted).
 META_REGIME_FEAR = "peur"
 META_REGIME_NEUTRAL = "neutre"
 META_REGIME_EUPHORIA = "euphorie"
@@ -118,43 +119,45 @@ _META_REGIME_RANK = {META_REGIME_FEAR: 0, META_REGIME_NEUTRAL: 1, META_REGIME_EU
 
 
 def meta_regime_rank(regime: str | None) -> int:
-    """Rang ordinal (Peur < Neutre < Euphorie) -- un régime inconnu/absent vaut Neutre
-    (comportement par défaut inchangé, jamais un rang inventé plus extrême)."""
+    """Ordinal rank (Fear < Neutral < Euphoria) -- an unknown/absent regime
+    counts as Neutral (unchanged default behavior, never a more extreme invented rank)."""
     return _META_REGIME_RANK.get(regime or META_REGIME_NEUTRAL, _META_REGIME_RANK[META_REGIME_NEUTRAL])
 
 
 def more_cautious_meta_regime(a: str | None, b: str | None) -> str:
-    """Le plus prudent des deux méta-régimes (rang le plus bas) -- fondement du ratchet
-    "jamais d'assouplissement" pour une position déjà ouverte (cf. paper_trader.py) :
-    une fois qu'un régime plus prudent a été observé (à l'entrée OU en cours de
-    détention), la discipline de sortie ne redevient jamais plus permissive.
+    """The more cautious of the two meta-regimes (lowest rank) -- the
+    foundation of the "never relax" ratchet for an already-open position (see
+    paper_trader.py): once a more cautious regime has been observed (at
+    entry OR during the holding period), exit discipline never becomes more
+    permissive again.
 
-    Normalise ``None`` en Neutre AVANT de choisir -- ``meta_regime_rank(None)`` vaut
-    déjà le rang de Neutre, mais sans cette normalisation la comparaison pouvait
-    retourner le ``None`` d'origine tel quel (rang égal ou inférieur à Neutre/Euphorie)
-    au lieu de la chaîne "neutre" -- toujours une des 3 valeurs valides en sortie,
-    jamais ``None``."""
+    Normalizes ``None`` to Neutral BEFORE choosing -- ``meta_regime_rank(None)``
+    already equals Neutral's rank, but without this normalization the
+    comparison could return the original ``None`` as-is (rank equal to or
+    below Neutral/Euphoria) instead of the "neutre" string -- always one of
+    the 3 valid values on output, never ``None``."""
     a_norm = a or META_REGIME_NEUTRAL
     b_norm = b or META_REGIME_NEUTRAL
     return a_norm if meta_regime_rank(a_norm) <= meta_regime_rank(b_norm) else b_norm
 
 
 async def resolve_meta_regime() -> str:
-    """Combine les lectures BTC/ETH (``latest_readings()``, pure lecture DB locale,
-    ZÉRO appel réseau -- le heartbeat rafraîchit à part, même propriété que
-    ``_sentiment_lines()`` déjà utilisé par ``momentum_entry.py``) en UN SEUL
-    méta-régime, avec un biais délibérément ASYMÉTRIQUE ("vite effrayé, lentement
-    gourmand") :
-    - si NE SERAIT-CE QU'UNE paire lit Peur -> méta-régime Peur (un seul actif en
-      capitulation est déjà un signal de stress large sur un marché crypto très
-      corrélé -- la direction PRUDENTE ne coûte rien à déclencher tôt) ;
-    - il faut que LES DEUX paires (BTC ET ETH) lisent Euphorie -> méta-régime
-      Euphorie (relâcher des garde-fous durs est la direction RISQUÉE, un signal
-      isolé ne suffit jamais seul à la justifier) ;
-    - sinon (dont : aucune lecture exploitable -- gate OFF, pas encore de données,
-      ``donnees_insuffisantes`` partout) -> Neutre, le comportement PAR DÉFAUT déjà
-      en place avant ce chantier -- jamais un Peur/Euphorie inventé faute de signal,
-      cette fonction dégrade alors vers un no-op complet pour tout appelant."""
+    """Combines the BTC/ETH readings (``latest_readings()``, pure local DB
+    read, ZERO network call -- the heartbeat refreshes separately, same
+    property as ``_sentiment_lines()`` already used by ``momentum_entry.py``)
+    into A SINGLE meta-regime, with a deliberately ASYMMETRIC bias ("quick to
+    fear, slow to greed"):
+    - if EVEN ONE pair reads Fear -> Fear meta-regime (a single asset in
+      capitulation is already a broad stress signal on a highly correlated
+      crypto market -- the CAUTIOUS direction costs nothing to trigger early);
+    - BOTH pairs (BTC AND ETH) must read Euphoria -> Euphoria meta-regime
+      (relaxing hard guardrails is the RISKY direction, an isolated signal
+      never suffices alone to justify it);
+    - otherwise (including: no usable reading -- gate OFF, no data yet,
+      ``donnees_insuffisantes`` everywhere) -> Neutral, the DEFAULT behavior
+      already in place before this work -- never an invented Fear/Euphoria
+      for lack of a signal, this function then degrades to a complete no-op
+      for any caller."""
     readings = await latest_readings()
     metas = [
         _META_REGIME_MAP.get(r.get("regime") or "")
@@ -189,7 +192,7 @@ def _sma(values: list[float], period: int) -> float | None:
 
 
 def classify_sentiment(closes: list[float], *, pair: str = "") -> SentimentReading:
-    """Fonction PURE : mêmes closes -> même lecture. Aucune valeur inventée."""
+    """PURE function: same closes -> same reading. No invented value."""
     if len(closes) < _MIN_CLOSES_REQUIRED:
         return SentimentReading(
             pair=pair, regime="donnees_insuffisantes",
@@ -218,9 +221,9 @@ def classify_sentiment(closes: list[float], *, pair: str = "") -> SentimentReadi
         if prev_prev_close:
             momentum_prev_pct = (prev_close / prev_prev_close - 1.0) * 100.0
 
-    # Plus haut/bas sur TOUTE la fenêtre récupérée (jusqu'à _FETCH_WINDOW_DAYS) —
-    # mesure la distance au sommet/creux le plus marquant des ~6 derniers mois,
-    # pas seulement du dernier mois (fenêtre trop courte pour juger un sommet de cycle).
+    # High/low over the ENTIRE fetched window (up to _FETCH_WINDOW_DAYS) —
+    # measures the distance to the most significant high/low of the last ~6
+    # months, not just the last month (too short a window to judge a cycle top).
     recent_high = max(closes)
     recent_low = min(closes)
     drawdown_from_high_pct = (close / recent_high - 1.0) * 100.0 if recent_high else None
@@ -273,9 +276,9 @@ def classify_sentiment(closes: list[float], *, pair: str = "") -> SentimentReadi
         regime = "doute_accumulation"
         detail = f"reprise {rally_from_low_pct:+.1f}% depuis le plus bas récent, tendance pas encore confirmée, RSI {rsi:.0f}"
     elif trend_up is True and rsi >= _RSI_NEUTRAL_LOW and momentum_pct is not None and momentum_pct > 0:
-        # Pas de plafond haut sur le RSI ici : un RSI très élevé SANS sortie de bande
-        # de Bollinger (cas déjà traité par la branche euphorie/complaisance
-        # ci-dessus) reste une tendance haussière forte, pas un signal d'extrême.
+        # No upper cap on RSI here: a very high RSI WITHOUT breaking out of
+        # the Bollinger band (a case already handled by the euphoria/
+        # complacency branch above) remains a strong uptrend, not an extreme signal.
         regime = "optimisme_conviction"
         detail = f"tendance haussière confirmée, RSI {rsi:.0f}, momentum {momentum_pct:+.1f}% sur {lookback} bougies"
     else:
@@ -327,9 +330,9 @@ async def _ensure_table() -> None:
 
 
 async def upsert_reading(reading: SentimentReading) -> None:
-    """Écrase TOUJOURS la lecture précédente de cette paire — aucune expiration à
-    vérifier en lecture, la fraîcheur dépend uniquement du dernier cycle heartbeat
-    qui a réussi à écrire ici."""
+    """ALWAYS overwrites this pair's previous reading — no expiration to check
+    on read, freshness depends solely on the last heartbeat cycle that
+    succeeded in writing here."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -358,8 +361,8 @@ async def upsert_reading(reading: SentimentReading) -> None:
 
 
 async def latest_readings() -> list[dict]:
-    """Toutes les dernières lectures persistées (une par paire), pour affichage
-    Telegram/cockpit. Ne recalcule rien : c'est le heartbeat qui rafraîchit."""
+    """All latest persisted readings (one per pair), for Telegram/cockpit
+    display. Recomputes nothing: the heartbeat is what refreshes it."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (
@@ -377,9 +380,9 @@ async def latest_readings() -> list[dict]:
 
 
 async def run_market_sentiment_cycle() -> dict:
-    """Rafraîchit la lecture de TOUTES les paires principales, une par une. Une
-    paire dont le fetch échoue n'interrompt pas les autres (dégradation douce,
-    même doctrine que `heartbeat.py`)."""
+    """Refreshes the reading for ALL principal pairs, one by one. A pair
+    whose fetch fails doesn't interrupt the others (graceful degradation,
+    same doctrine as `heartbeat.py`)."""
     updated: list[str] = []
     failed: list[str] = []
     for symbol, coin_id in PRINCIPAL_PAIRS:
@@ -398,15 +401,15 @@ async def run_market_sentiment_cycle() -> dict:
 
 
 def format_sentiment_prompt_lines(readings: list[dict]) -> list[str]:
-    """Lignes compactes pour injection dans un prompt LLM (distinct de
-    ``format_sentiment_report``, destiné à l'affichage Telegram/cockpit) --
-    extrait le 19/07 depuis ``vc_analysis.py`` (logique inline dupliquée en
-    substance) pour que ``momentum_entry.py`` bénéficie de la MÊME profondeur
-    d'analyse que ``/vc`` sans réimplémenter le filtrage/sanitisation. Ignore les
-    lectures ``donnees_insuffisantes`` (rien d'exploitable), sanitise chaque champ
-    (mandat #192 -- ``detail``/``pair`` viennent in fine d'un calcul sur des prix
-    de marché réels, pas du contenu tiers arbitraire, mais la même discipline
-    s'applique par défaut)."""
+    """Compact lines for injection into an LLM prompt (distinct from
+    ``format_sentiment_report``, meant for Telegram/cockpit display) --
+    extracted on 07/19 from ``vc_analysis.py`` (inline logic duplicated in
+    substance) so that ``momentum_entry.py`` benefits from the SAME analysis
+    depth as ``/vc`` without reimplementing the filtering/sanitization.
+    Ignores ``donnees_insuffisantes`` readings (nothing usable), sanitizes
+    every field (mandate #192 -- ``detail``/``pair`` ultimately come from a
+    computation on real market prices, not arbitrary third-party content, but
+    the same discipline applies by default)."""
     from aria_core.sanitize import sanitize_untrusted_text
 
     lines: list[str] = []

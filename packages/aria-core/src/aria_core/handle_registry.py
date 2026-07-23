@@ -1,4 +1,4 @@
-"""Registre handles X — alias courts, persistance opérateur, sans réécrire à la main."""
+"""X handle registry — short aliases, operator persistence, no manual rewriting."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from aria_core.paths import data_dir
 
 REGISTRY_PATH = data_dir() / "x_handle_registry.json"
 
-# Alias intégrés — tape @holding @veille au lieu des handles complets
+# Built-in aliases — type @holding @veille instead of the full handles
 _BUILTIN_ALIASES: dict[str, list[str]] = {
     "holding": ["GoldenFarFR"],
     "operateur": ["GoldenFarFR"],
@@ -60,7 +60,7 @@ def _save_overlay(data: dict[str, Any]) -> None:
 
 @lru_cache(maxsize=1)
 def _merged_handles() -> tuple[dict[str, str], ...]:
-    """Handles connus : yaml SSOT + ajouts opérateur."""
+    """Known handles: yaml SSOT + operator additions."""
     from aria_core.knowledge.x_watchlist import operator_watch_handles
 
     overlay = _load_overlay()
@@ -119,9 +119,9 @@ def mentions_for_pack(pack: str | None = None) -> str:
 
 def resolve_handles_in_text(text: str) -> str:
     """
-    Remplace @alias par les vrais @handles.
-    Ex. : « Question du jour @veille » → « … @solvrbot @grok @aixbt_agent »
-    Suffixe +veille → mentions ajoutées en fin de tweet.
+    Replaces @alias with the real @handles.
+    E.g.: "Question du jour @veille" -> "... @solvrbot @grok @aixbt_agent"
+    Suffix +veille -> mentions appended at the end of the tweet.
     """
     if not text.strip():
         return text
@@ -228,7 +228,7 @@ def registry_status() -> dict[str, Any]:
 
 
 def format_registry_short() -> str:
-    """Résumé visible dans /x status — alias sans chercher."""
+    """Summary shown in /x status — aliases at a glance, no lookup needed."""
     aliases = _all_aliases()
     pack = registry_status()["default_tweet_pack"]
     lines = ["Alias handles (tape dans un tweet — expansion auto) :"]

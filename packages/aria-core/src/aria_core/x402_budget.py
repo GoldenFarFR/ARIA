@@ -1,26 +1,28 @@
-"""Plafond de dépense x402 — décision opérateur explicite (16/07) : 5$ maximum par
-semaine, dépensés STRATÉGIQUEMENT ("ne jamais être à court, mais en dépenser assez
-pour optimiser la vitesse à accumuler des données").
+"""x402 spending cap — explicit operator decision (07/16): $5 maximum per
+week, spent STRATEGICALLY ("never run short, but spend enough to optimize
+the speed of accumulating data").
 
-Traduction concrète de cette consigne :
-  - Plafond dur, jamais dépassé (`can_spend`/`record_spend` — fail-closed : en cas de
-    doute sur le solde déjà consommé, on refuse plutôt que de risquer un dépassement).
-  - AUCUN throttle artificiel en dessous du plafond : la vitesse d'accumulation de
-    connaissance durable est justement l'objectif ("optimiser la vitesse") — le seul
-    frein légitime est la discipline "un fait, une fois" (dédoublonnage), pas un
-    goutte-à-goutte quotidien imposé par ce module.
-  - Semaine glissante calendaire (lundi 00:00 UTC), pas un cumul depuis toujours.
+Concrete translation of this instruction:
+  - Hard cap, never exceeded (`can_spend`/`record_spend` — fail-closed: when
+    in doubt about the balance already consumed, refuse rather than risk
+    exceeding it).
+  - NO artificial throttle below the cap: the speed of durable knowledge
+    accumulation is precisely the goal ("optimize the speed") — the only
+    legitimate brake is the "one fact, once" discipline (deduplication), not
+    a daily drip-feed imposed by this module.
+  - Calendar sliding week (Monday 00:00 UTC), not a cumulative total since
+    forever.
 
-Structurellement séparé de `wallet_guard.py`/`agent_wallet_log.py` — même doctrine que
-`sepolia_autonomous.py`/`bonding_trade_log.py` : ce plafond ne modifie ni ne contourne
-le garde-fou partagé qui protège tout capital réel à plus grande échelle. Portée
-strictement limitée aux micropaiements de données/API x402 (centimes) — ne touche
-JAMAIS le trading avec capital réel (swaps, positions), qui reste sur son propre
-chemin séparé (CLAUDE.md, 16/07).
+Structurally separate from `wallet_guard.py`/`agent_wallet_log.py` — same
+doctrine as `sepolia_autonomous.py`/`bonding_trade_log.py`: this cap neither
+modifies nor bypasses the shared guardrail that protects all real capital at
+a larger scale. Scope strictly limited to x402 data/API micropayments
+(cents) — NEVER touches real-capital trading (swaps, positions), which stays
+on its own separate path (CLAUDE.md, 07/16).
 
-Append-only (même patron que `agent_directive_log`/`agent_wallet_log`) : aucune
-fonction UPDATE/DELETE ici, chaque tentative (`status` in {"ok", "blocked", "failed"})
-reste tracée pour toujours, jamais silencieuse.
+Append-only (same pattern as `agent_directive_log`/`agent_wallet_log`): no
+UPDATE/DELETE function here, every attempt (`status` in {"ok", "blocked",
+"failed"}) stays traced forever, never silent.
 """
 from __future__ import annotations
 
@@ -47,21 +49,23 @@ _COLUMNS = [
     "token_symbol",
 ]
 
-# 17/07 -- ajouté après un vrai faux positif de agent_wallet_monitor.py (une alerte
-# "SORTIE NON INITIÉE PAR ARIA" sur le tout premier paiement x402 réel, jamais
-# reconnu comme "known" car x402_cdp_signer.py ne passe pas par agent_wallet_log).
-# `pay_to` (adresse de règlement du 402, déjà connue au moment de record_spend --
-# jamais un nouvel appel réseau) permet au moniteur de corréler un mouvement
-# on-chain détecté à une dépense x402 déjà journalisée, sans dépendre d'un
-# éventuel header X-PAYMENT-RESPONSE (optionnel dans le protocole, jamais garanti).
+# 07/17 -- added after a real false positive from agent_wallet_monitor.py (a
+# "EXIT NOT INITIATED BY ARIA" alert on the very first real x402 payment,
+# never recognized as "known" because x402_cdp_signer.py doesn't go through
+# agent_wallet_log). `pay_to` (the 402's settlement address, already known at
+# record_spend time -- never a new network call) lets the monitor correlate a
+# detected on-chain movement to an already-logged x402 spend, without
+# depending on a possible X-PAYMENT-RESPONSE header (optional in the
+# protocol, never guaranteed).
 #
-# `contract`/`token_symbol` (19/07, #143) -- trouvé en répondant à une question
-# opérateur directe ("détaille chaque paiement, quel token") : sans ces deux champs,
-# la seule façon de savoir QUEL token a motivé un paiement était de reconstruire la
-# corrélation à la main via les horodatages contre paper_position -- fragile (un cas
-# réel resté non identifiable, logs du conteneur d'alors disparus au redéploiement
-# suivant). Optionnels (chaîne vide) : tout paiement non lié à un token précis
-# (Otto AI market_alerts, vérification de wallet Cybercentry) reste valide.
+# `contract`/`token_symbol` (07/19, #143) -- found while answering a direct
+# operator question ("detail each payment, which token"): without these two
+# fields, the only way to know WHICH token motivated a payment was to
+# manually reconstruct the correlation via timestamps against paper_position
+# -- fragile (one real case stayed unidentifiable, that container's logs lost
+# at the next redeploy). Optional (empty string): any payment not tied to a
+# specific token (Otto AI market_alerts, Cybercentry wallet verification)
+# stays valid.
 _ADDED_COLUMNS = [
     ("pay_to", "TEXT NOT NULL DEFAULT ''"),
     ("contract", "TEXT NOT NULL DEFAULT ''"),
@@ -96,7 +100,7 @@ async def _ensure_table() -> None:
 
 
 def week_start(now: datetime | None = None) -> datetime:
-    """Début de la semaine calendaire courante (lundi 00:00 UTC)."""
+    """Start of the current calendar week (Monday 00:00 UTC)."""
     ref = now if now is not None else datetime.now(timezone.utc)
     if ref.tzinfo is None:
         ref = ref.replace(tzinfo=timezone.utc)
@@ -105,9 +109,9 @@ def week_start(now: datetime | None = None) -> datetime:
 
 
 async def spent_this_week(now: datetime | None = None) -> float:
-    """Somme des dépenses RÉELLEMENT effectuées (status='ok') depuis le début de la
-    semaine calendaire courante. Les tentatives 'blocked'/'failed' ne comptent jamais
-    contre le plafond -- seul un paiement réellement réglé consomme le budget."""
+    """Sum of spends ACTUALLY made (status='ok') since the start of the
+    current calendar week. 'blocked'/'failed' attempts never count against
+    the cap -- only a payment actually settled consumes the budget."""
     await _ensure_table()
     start = week_start(now).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -127,9 +131,9 @@ async def remaining_budget(now: datetime | None = None) -> float:
 
 
 async def can_spend(amount_usd: float, now: datetime | None = None) -> bool:
-    """Fail-closed : un montant négatif/nul est toujours refusé (rien à payer), et si le
-    solde restant ne couvre pas le montant demandé, on refuse plutôt que d'approcher le
-    plafond au plus près."""
+    """Fail-closed: a negative/zero amount is always refused (nothing to
+    pay), and if the remaining balance doesn't cover the requested amount, we
+    refuse rather than cut it close to the cap."""
     if amount_usd <= 0:
         return False
     remaining = await remaining_budget(now)
@@ -147,12 +151,13 @@ async def record_spend(
     contract: str = "",
     token_symbol: str = "",
 ) -> None:
-    """Enregistre une tentative de paiement x402 (``status`` in {"ok", "blocked",
-    "failed"}) -- jamais seulement les succès, un refus de plafond doit rester tracé.
-    ``pay_to`` (17/07) : adresse de règlement déclarée par le 402, pour corrélation
-    par ``agent_wallet_monitor.py`` (cf. commentaire sur ``_ADDED_COLUMNS``).
-    ``contract``/``token_symbol`` (19/07, #143) : token concerné si applicable,
-    laissés vides pour tout paiement non lié à un token précis."""
+    """Records an x402 payment attempt (``status`` in {"ok", "blocked",
+    "failed"}) -- never just successes, a cap refusal must stay traced.
+    ``pay_to`` (07/17): settlement address declared by the 402, for
+    correlation by ``agent_wallet_monitor.py`` (see comment on
+    ``_ADDED_COLUMNS``). ``contract``/``token_symbol`` (07/19, #143): token
+    concerned if applicable, left empty for any payment not tied to a
+    specific token."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -168,8 +173,9 @@ async def record_spend(
 
 
 async def weekly_status(now: datetime | None = None) -> dict:
-    """Diagnostic (même doctrine que l'endpoint agent-wallet-ledger, #158/#159) --
-    lisible pour vérifier le rythme de dépense sans avoir à lire la base directement."""
+    """Diagnostic (same doctrine as the agent-wallet-ledger endpoint,
+    #158/#159) -- readable to check the spending pace without having to read
+    the DB directly."""
     spent = await spent_this_week(now)
     return {
         "cap_usd": WEEKLY_CAP_USD,

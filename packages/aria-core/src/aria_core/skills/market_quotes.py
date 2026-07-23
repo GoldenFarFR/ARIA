@@ -1,24 +1,24 @@
-"""Cotations connues (crypto majeures + devises) — un chemin STRUCTURÉ, jamais scrappé.
+"""Known quotes (major cryptos + currencies) — a STRUCTURED path, never scraped.
 
-Incident réel (10/07) : une question « prix du BTC/ETH/SOL » était routée vers la
-recherche web générique (`web_verify.py`), qui a cité une page périmée comme si elle
-était en direct — BTC/SOL rapportés ~30% sous leur vrai prix. Root cause : aucune
-distinction entre « une actualité (sport, événement) qui nécessite vraiment une
-recherche web » et « le prix d'un actif connu, pour lequel une vraie API de cotation
-existe et est bien plus fiable qu'une page web indexée ».
+Real incident (10/07): a "BTC/ETH/SOL price" question was routed to the
+generic web search (`web_verify.py`), which cited a stale page as if it were
+live — BTC/SOL reported ~30% below their real price. Root cause: no
+distinction between "a news question (sport, event) that genuinely needs a
+web search" and "the price of a known asset, for which a real quote API
+exists and is far more reliable than an indexed web page".
 
-Ce module intercepte les questions de prix sur des actifs RECONNUS (crypto majeures
-via CoinGecko, devises majeures via Frankfurter/BCE) et répond depuis ces clients
-structurés — jamais une supposition, jamais un texte de page web. Toute question hors
-de ce périmètre reconnu (actif inconnu, actualité, sport...) n'est PAS interceptée et
-retombe sur le chemin existant (`web_verify.py`), inchangé.
+This module intercepts price questions about RECOGNIZED assets (major
+cryptos via CoinGecko, major currencies via Frankfurter/ECB) and answers
+from these structured clients — never a guess, never web-page text. Any
+question outside this recognized scope (unknown asset, news, sport...) is
+NOT intercepted and falls back to the existing path (`web_verify.py`), unchanged.
 
-Volontairement PAS de couverture actions/indices (Nasdaq, S&P 500...) : aucune API
-gratuite et bien documentée n'a pu être confirmée en direct depuis cet environnement
-(candidate évaluée : Stooq — endpoint non officiel, fetch direct bloqué en sandbox,
-forme de réponse non confirmable) — cf. doctrine « profondeur proportionnelle à
-l'enjeu », pas de client bâti sur une hypothèse. Seam à compléter après vérification
-VPS si l'opérateur le souhaite.
+Deliberately NO coverage of stocks/indices (Nasdaq, S&P 500...): no free,
+well-documented API could be confirmed live from this environment (candidate
+evaluated: Stooq — unofficial endpoint, direct fetch blocked in the sandbox,
+response shape unconfirmable) — see the "depth proportional to the stakes"
+doctrine, no client built on a guess. A seam to fill in after a VPS
+verification if the operator wants it.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# Symbole/nom (FR+EN, minuscules) -> id CoinGecko. Liste volontairement modeste (les
-# actifs les plus demandés en conversation), pas une couverture exhaustive du marché.
+# Symbol/name (FR+EN, lowercase) -> CoinGecko id. Deliberately modest list (the
+# assets most requested in conversation), not exhaustive market coverage.
 _CRYPTO_ALIASES: dict[str, str] = {
     "btc": "bitcoin", "bitcoin": "bitcoin",
     "eth": "ethereum", "ethereum": "ethereum", "ether": "ethereum",
@@ -44,7 +44,7 @@ _CRYPTO_ALIASES: dict[str, str] = {
     "virtual": "virtual-protocol", "virtuals": "virtual-protocol",
 }
 
-# Devise (FR+EN, minuscules) -> code ISO. Majeures uniquement (cf. Frankfurter/BCE).
+# Currency (FR+EN, lowercase) -> ISO code. Majors only (see Frankfurter/ECB).
 _FOREX_ALIASES: dict[str, str] = {
     "dollar": "USD", "dollars": "USD", "usd": "USD", "dollar americain": "USD",
     "euro": "EUR", "euros": "EUR", "eur": "EUR",
@@ -67,9 +67,9 @@ class QuoteMatch:
 
 
 def detect_quote_question(query: str) -> QuoteMatch | None:
-    """Détecte une question de prix sur un actif RECONNU. ``None`` si rien de sûr —
-    ne devine jamais un actif à partir d'un mot ambigu isolé (fail-closed : mieux vaut
-    laisser retomber sur le chemin existant que mal router)."""
+    """Detects a price question about a RECOGNIZED asset. ``None`` if nothing is
+    certain — never guesses an asset from an isolated ambiguous word
+    (fail-closed: better to fall back to the existing path than to misroute)."""
     text = (query or "").lower()
     if not _PRICE_QUESTION_RE.search(text):
         return None
@@ -92,11 +92,12 @@ def detect_quote_question(query: str) -> QuoteMatch | None:
 
 
 async def resolve_known_asset_quote(query: str, *, coingecko_client=None, forex_client=None) -> str | None:
-    """Répond depuis une vraie API structurée si la question porte sur un actif
-    reconnu, sinon ``None`` (l'appelant retombe sur le chemin web existant).
+    """Answers from a real structured API if the question is about a
+    recognized asset, otherwise ``None`` (the caller falls back to the
+    existing web path).
 
-    Jamais d'exception : une panne de client dégrade en ``None`` (silence), le
-    chemin web générique reste le filet de sécurité, inchangé."""
+    Never an exception: a client failure degrades to ``None`` (silent), the
+    generic web path stays the unchanged safety net."""
     match = detect_quote_question(query)
     if match is None:
         return None
@@ -105,7 +106,7 @@ async def resolve_known_asset_quote(query: str, *, coingecko_client=None, forex_
         if match.kind == "crypto":
             return await _resolve_crypto(match.ids, coingecko_client)
         return await _resolve_forex(match.ids, forex_client)
-    except Exception:  # noqa: BLE001 — dégrade en silence, jamais bloquant
+    except Exception:  # noqa: BLE001 — degrades silently, never blocking
         return None
 
 
