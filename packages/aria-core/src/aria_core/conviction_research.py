@@ -586,16 +586,37 @@ async def research_project_potential(
         )
 
     if not tweets:
+        # 23/07 -- Tavily (recherche web indexée, restreinte à x.com/twitter.com)
+        # en AVANT-DERNIER repli, avant twit.sh -- décision opérateur explicite
+        # ("passer toutes les commandes de lecture X vers Tavily, moins cher que
+        # le x402 payant par appel"). Vérifié réel (22-23/07) : la restriction
+        # de domaine renvoie de vrais résultats pertinents. Portée honnête :
+        # indexation web classique (mélange les posts du compte ET les mentions
+        # par des tiers, jamais distingués) -- adapté au BUZZ (c'est précisément
+        # ce qu'on veut ici), mais PAS à la cadence de publication ci-dessous
+        # (testé réel séparément : Tavily ne fournit pas un fil chronologique
+        # propre à un seul compte, cf. docstring de ``skills/x_substance.py``).
+        from aria_core.services.tavily import tavily_client
+
+        tavily_query = f"{safe_symbol} {x_handle}" if x_handle else query
+        _trail_note(trail, "Recherche Tavily tentée pour le buzz (recherche X officielle vide/sautée)")
+        tavily_result = await tavily_client.search(
+            tavily_query, include_domains=["x.com", "twitter.com"], max_results=10, caller="conviction_research",
+        )
+        if tavily_result.available:
+            tweets = [{"text": text} for text, _url, _pub in tavily_result.snippets]
+            _trail_note(trail, f"Tavily : {len(tweets)} résultat(s) trouvé(s)")
+
+    if not tweets:
         # 19/07 -- repli x402 (twit.sh, #111/#112, décision opérateur via
-        # AskUserQuestion : COMPLÉMENT, jamais un remplacement). Déclenché soit
-        # parce que le plafond X officiel gratuit est épuisé (100 req/semaine), soit
-        # parce que la recherche officielle n'a rien renvoyé -- silence réel et panne
-        # sont indiscernables ici (x_twitter.py dégrade toujours en liste vide,
-        # jamais une exception distincte). Coût borné par le plafond x402_budget.py
+        # AskUserQuestion : COMPLÉMENT, jamais un remplacement). DERNIER
+        # recours désormais (23/07, Tavily testé juste avant) -- déclenché si
+        # le plafond X officiel gratuit est épuisé (100 req/semaine) ET Tavily
+        # indisponible/sans résultat. Coût borné par le plafond x402_budget.py
         # PARTAGÉ (5$/semaine, déjà fail-closed) -- aucun nouveau plafond dédié.
         from aria_core.services.twitsh import search_tweets as twitsh_search_tweets
 
-        _trail_note(trail, "Repli x402 twit.sh utilisé pour le buzz (recherche X officielle vide/sautée)")
+        _trail_note(trail, "Repli x402 twit.sh utilisé pour le buzz (X officiel + Tavily vides/indisponibles)")
         tweets = await twitsh_search_tweets(
             query, max_results=10, contract=contract, token_symbol=safe_symbol,
         )

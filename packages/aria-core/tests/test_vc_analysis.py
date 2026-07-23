@@ -1314,6 +1314,155 @@ def test_github_substance_absent_when_none():
     assert "Substance GitHub" not in text
 
 
+# ── _fetch_website_substance / _fetch_docs_substance / _fetch_x_substance (23/07) ──
+
+
+@pytest.mark.asyncio
+async def test_fetch_website_substance_finds_link_by_label(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [
+        {"label": "Website", "url": "https://myproject.xyz"},
+        {"label": "GitHub", "url": "https://github.com/acme/protocol"},
+    ]
+
+    from aria_core.skills.website_substance import WebsiteSubstanceVerdict
+
+    async def _fake_gather(url, **kwargs):
+        assert url == "https://myproject.xyz"
+        return "facts-sentinel"
+
+    monkeypatch.setattr("aria_core.skills.website_substance.gather_website_substance_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.website_substance.judge_website_substance",
+        lambda facts: WebsiteSubstanceVerdict(signal="positive", score=90.0, points=["ok"]),
+    )
+
+    result = await vc._fetch_website_substance(ctx)
+    assert result.signal == "positive"
+
+
+@pytest.mark.asyncio
+async def test_fetch_website_substance_none_when_no_website_link():
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "GitHub", "url": "https://github.com/acme/protocol"}]
+    assert await vc._fetch_website_substance(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_website_substance_degrades_to_none_on_error(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "Website", "url": "https://myproject.xyz"}]
+
+    async def _boom(*a, **k):
+        raise RuntimeError("panne réseau")
+
+    monkeypatch.setattr("aria_core.skills.website_substance.gather_website_substance_facts", _boom)
+    assert await vc._fetch_website_substance(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_docs_substance_finds_link_by_label_variants(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "Docs", "url": "https://docs.myproject.xyz"}]
+
+    from aria_core.skills.docs_substance import DocsSubstanceVerdict
+
+    async def _fake_gather(url, **kwargs):
+        assert url == "https://docs.myproject.xyz"
+        return "facts-sentinel"
+
+    monkeypatch.setattr("aria_core.skills.docs_substance.gather_docs_substance_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.docs_substance.judge_docs_substance",
+        lambda facts: DocsSubstanceVerdict(signal="positive", score=80.0, points=["ok"]),
+    )
+
+    result = await vc._fetch_docs_substance(ctx)
+    assert result.signal == "positive"
+
+
+@pytest.mark.asyncio
+async def test_fetch_docs_substance_none_when_no_docs_link():
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "Website", "url": "https://myproject.xyz"}]
+    assert await vc._fetch_docs_substance(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_docs_substance_never_matches_github_dao_label():
+    """Garde-fou contre un faux positif : le label 'Github Dao' ne doit jamais
+    être pris pour un lien Docs (aucune sous-chaîne commune, vérifié)."""
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "Github Dao", "url": "https://github.com/acme/dao"}]
+    assert await vc._fetch_docs_substance(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_x_substance_finds_handle_from_link(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "X (Twitter)", "url": "https://x.com/acmeproject"}]
+
+    from aria_core.skills.x_substance import XSubstanceVerdict
+
+    async def _fake_gather(handle, **kwargs):
+        assert handle == "acmeproject"
+        return "facts-sentinel"
+
+    monkeypatch.setattr("aria_core.skills.x_substance.gather_x_substance_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.x_substance.judge_x_substance",
+        lambda facts: XSubstanceVerdict(signal="positive", score=100.0, points=["ok"]),
+    )
+
+    result = await vc._fetch_x_substance(ctx)
+    assert result.signal == "positive"
+
+
+@pytest.mark.asyncio
+async def test_fetch_x_substance_none_when_no_x_link():
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "Website", "url": "https://myproject.xyz"}]
+    assert await vc._fetch_x_substance(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_x_substance_degrades_to_none_on_error(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "X (Twitter)", "url": "https://x.com/acmeproject"}]
+
+    async def _boom(*a, **k):
+        raise RuntimeError("panne réseau")
+
+    monkeypatch.setattr("aria_core.skills.x_substance.gather_x_substance_facts", _boom)
+    assert await vc._fetch_x_substance(ctx) is None
+
+
+def test_website_docs_x_substance_appear_in_untrusted_context():
+    from aria_core.skills.docs_substance import DocsSubstanceVerdict
+    from aria_core.skills.website_substance import WebsiteSubstanceVerdict
+    from aria_core.skills.x_substance import XSubstanceVerdict
+
+    ctx = _base_ctx()
+    text = vc._build_untrusted_context(
+        ctx, [],
+        website_substance=WebsiteSubstanceVerdict(signal="positive", score=90.0, points=["site riche"]),
+        docs_substance=DocsSubstanceVerdict(signal="positive", score=80.0, points=["doc riche"]),
+        x_substance=XSubstanceVerdict(signal="positive", score=100.0, points=["compte âgé"]),
+    )
+
+    assert "Substance Website" in text and "site riche" in text
+    assert "Substance Docs" in text and "doc riche" in text
+    assert "Substance X" in text and "compte âgé" in text
+
+
+def test_website_docs_x_substance_absent_when_none():
+    ctx = _base_ctx()
+    text = vc._build_untrusted_context(ctx, [])
+    assert "Substance Website" not in text
+    assert "Substance Docs" not in text
+    assert "Substance X" not in text
+
+
 # ── Diligence produit Virtuals (fiche virtuals.io, audit 11/07) ────────────────
 #
 # Trou noté explicitement non résolu dans le HANDOFF nuit9 : la diligence produit

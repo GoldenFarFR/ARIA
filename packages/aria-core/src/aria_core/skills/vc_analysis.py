@@ -221,6 +221,9 @@ def _build_untrusted_context(
     market_alerts_digest: str | None = None,
     conviction_research: "ConvictionResearch | None" = None,
     github_substance: "GithubSubstanceVerdict | None" = None,
+    website_substance: "WebsiteSubstanceVerdict | None" = None,
+    docs_substance: "DocsSubstanceVerdict | None" = None,
+    x_substance: "XSubstanceVerdict | None" = None,
 ) -> str:
     """Assemble le bloc factuel (données non fiables) à partir de faits déjà collectés.
 
@@ -435,6 +438,22 @@ def _build_untrusted_context(
     if github_substance and github_substance.signal:
         lines.append(f"Substance GitHub (qualité réelle du développement) : {_sanitize(github_substance.signal, 20)}")
         for pt in github_substance.points[:3]:
+            lines.append(f"  · {_sanitize(pt, 250)}")
+    # 23/07 -- Website/Docs/X Substance : même famille que GitHub Substance
+    # ci-dessus, contenu RÉEL extrait (Tavily crawl/extract), jamais un
+    # jugement esthétique/social qu'ARIA n'a pas les moyens de porter
+    # honnêtement (limites documentées dans chaque skill).
+    if website_substance and website_substance.signal:
+        lines.append(f"Substance Website (contenu réel du site) : {_sanitize(website_substance.signal, 20)}")
+        for pt in website_substance.points[:3]:
+            lines.append(f"  · {_sanitize(pt, 250)}")
+    if docs_substance and docs_substance.signal:
+        lines.append(f"Substance Docs (profondeur réelle de la documentation) : {_sanitize(docs_substance.signal, 20)}")
+        for pt in docs_substance.points[:3]:
+            lines.append(f"  · {_sanitize(pt, 250)}")
+    if x_substance and x_substance.signal:
+        lines.append(f"Substance X (âge du compte, signal réduit) : {_sanitize(x_substance.signal, 20)}")
+        for pt in x_substance.points[:3]:
             lines.append(f"  · {_sanitize(pt, 250)}")
     # Contexte de légitimité (drapeaux JUGÉS, pas bruts) : autorité du mint,
     # launchpad, profondeur de liquidité, comportement du wallet du dev.
@@ -1080,6 +1099,87 @@ async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerd
         return None
 
 
+def _find_link_by_label(links: list[dict], keywords: tuple[str, ...]) -> str | None:
+    """Premier lien dont le LABEL déclaré contient un des mots-clés (insensible
+    à la casse) -- utilisé pour Website/Docs, qui n'ont pas de motif d'URL
+    universel identifiable (contrairement à GitHub/X, reconnaissables par
+    domaine)."""
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        label = str(link.get("label") or "").strip().lower()
+        if any(kw in label for kw in keywords):
+            url = str(link.get("url") or "").strip()
+            if url.lower().startswith(("http://", "https://")):
+                return url
+    return None
+
+
+async def _fetch_website_substance(ctx: TokenScanContext) -> "WebsiteSubstanceVerdict | None":
+    """23/07 -- signal "substance Website" : contenu RÉEL multi-pages (crawl
+    Tavily), demande opérateur directe ("elle doit pouvoir extraire tout pour
+    noter"). None si aucun lien Website déclaré."""
+    from aria_core.skills.website_substance import gather_website_substance_facts, judge_website_substance
+
+    links = ctx.best_pair.project_links if ctx.best_pair else []
+    website_url = _find_link_by_label(links, ("website",))
+    if not website_url:
+        return None
+    try:
+        facts = await gather_website_substance_facts(website_url)
+        return judge_website_substance(facts)
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.warning("analyze_vc: substance Website échouée (%s)", exc)
+        return None
+
+
+async def _fetch_docs_substance(ctx: TokenScanContext) -> "DocsSubstanceVerdict | None":
+    """23/07 -- signal "substance Docs" : crawl RÉEL de l'URL Docs DÉCLARÉE par
+    le projet (jamais une découverte incidente via le crawl Website -- demande
+    opérateur explicite : la doc doit être lue en entier depuis son propre
+    lien). None si aucun lien Docs déclaré."""
+    from aria_core.skills.docs_substance import gather_docs_substance_facts, judge_docs_substance
+
+    links = ctx.best_pair.project_links if ctx.best_pair else []
+    docs_url = _find_link_by_label(links, ("docs", "documentation", "whitepaper", "gitbook"))
+    if not docs_url:
+        return None
+    try:
+        facts = await gather_docs_substance_facts(docs_url)
+        return judge_docs_substance(facts)
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.warning("analyze_vc: substance Docs échouée (%s)", exc)
+        return None
+
+
+async def _fetch_x_substance(ctx: TokenScanContext) -> "XSubstanceVerdict | None":
+    """23/07 -- signal "substance X" : âge du compte SEUL (Tavily extract),
+    réduit honnêtement après évaluation réelle (voir docstring de
+    ``x_substance.py`` -- la régularité de publication via Tavily s'est
+    révélée peu fiable sur un cas réel testé, écartée). Réutilise
+    ``conviction_research._extract_x_handle`` (même regex/liste d'exclusion,
+    jamais dupliquée). None si aucun lien X déclaré."""
+    from aria_core.conviction_research import _extract_x_handle
+    from aria_core.skills.x_substance import gather_x_substance_facts, judge_x_substance
+
+    links = ctx.best_pair.project_links if ctx.best_pair else []
+    handle = None
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        handle = _extract_x_handle(str(link.get("url") or ""))
+        if handle:
+            break
+    if not handle:
+        return None
+    try:
+        facts = await gather_x_substance_facts(handle)
+        return judge_x_substance(facts)
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        logger.warning("analyze_vc: substance X échouée (%s)", exc)
+        return None
+
+
 async def analyze_vc_with_context(
     contract: str, lang: str = "fr"
 ) -> tuple[VCResult, TokenScanContext]:
@@ -1128,9 +1228,13 @@ async def analyze_vc_with_context(
     conviction_research = await _fetch_conviction_research(ctx)
     market_alerts_digest = await _fetch_market_alerts_digest()
     github_substance = await _fetch_github_substance(ctx)
+    website_substance = await _fetch_website_substance(ctx)
+    docs_substance = await _fetch_docs_substance(ctx)
+    x_substance = await _fetch_x_substance(ctx)
     untrusted = _build_untrusted_context(
         ctx, history, sentiment_readings, polymarket_signals, product_diligence,
         market_alerts_digest, conviction_research, github_substance,
+        website_substance, docs_substance, x_substance,
     )
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"

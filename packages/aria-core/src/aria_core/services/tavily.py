@@ -26,6 +26,16 @@ import httpx
 logger = logging.getLogger(__name__)
 
 TAVILY_URL = "https://api.tavily.com/search"
+# 23/07 -- ajoutés pour router la lecture X vers Tavily (moins cher que le repli
+# x402 twit.sh) et pour l'extraction complète de site (Website/Docs Substance,
+# jamais possible avec le snapshot 600 caractères de site_snapshot.py, conçu
+# pour enrichir un prompt LLM, pas pour un audit de site). Authentification
+# vérifiée en conditions réelles (23/07) : ``Authorization: Bearer <clé>``
+# fonctionne sur LES TROIS endpoints (search/extract/crawl) -- utilisée ici
+# pour ces deux nouveaux endpoints ; ``search()`` garde son authentification
+# historique (clé dans le corps) inchangée, jamais retouchée sans raison.
+EXTRACT_URL = "https://api.tavily.com/extract"
+CRAWL_URL = "https://api.tavily.com/crawl"
 
 UNAVAILABLE = "donnée Tavily indisponible"
 
@@ -43,6 +53,32 @@ class TavilyResult:
     snippets: list[tuple[str, str, str | None]] = field(default_factory=list)
     # Réponse synthétique optionnelle de Tavily (include_answer).
     answer: str | None = None
+    available: bool = False
+    error: str | None = None
+
+
+@dataclass
+class TavilyPage:
+    """Une page extraite (par ``extract`` ou ``crawl``) -- contenu texte réel,
+    jamais un résumé synthétique."""
+
+    url: str
+    title: str = ""
+    raw_content: str = ""
+
+
+@dataclass
+class TavilyExtractResult:
+    urls: list[str] = field(default_factory=list)
+    pages: list[TavilyPage] = field(default_factory=list)
+    available: bool = False
+    error: str | None = None
+
+
+@dataclass
+class TavilyCrawlResult:
+    root_url: str = ""
+    pages: list[TavilyPage] = field(default_factory=list)
     available: bool = False
     error: str | None = None
 
@@ -97,31 +133,33 @@ class TavilyClient:
                 detail,
             )
 
-    async def _post_json(self, payload: dict) -> tuple[object | None, str | None]:
-        """POST avec la politique d'erreurs du dôme. Retourne (data, error).
+    async def _post(
+        self, url: str, payload: dict, *, headers: dict | None = None, timeout: float = 15.0,
+    ) -> tuple[object | None, str | None]:
+        """POST générique avec la politique d'erreurs du dôme. Retourne (data, error).
 
-        NB : la clé API est dans le corps de la requête — jamais loguée (on ne journalise
-        que l'URL et le code d'erreur, jamais le payload)."""
+        NB : la clé API (corps OU header ``Authorization``) n'est jamais loguée --
+        on ne journalise que l'URL et le code d'erreur, jamais le payload/header."""
         attempt_429 = 0
         retried = False
 
         while True:
             await self._throttle()
             try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.post(TAVILY_URL, json=payload)
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(url, json=payload, headers=headers)
             except httpx.TransportError as exc:
                 if not retried:
                     retried = True
                     await asyncio.sleep(5.0)
                     continue
-                self._record_failure(f"{TAVILY_URL} -> {exc}")
+                self._record_failure(f"{url} -> {exc}")
                 return None, f"{UNAVAILABLE} (timeout)"
 
             if response.status_code == 429:
                 attempt_429 += 1
                 if attempt_429 >= 3:
-                    self._record_failure(f"{TAVILY_URL} -> HTTP 429 apres {attempt_429} tentatives")
+                    self._record_failure(f"{url} -> HTTP 429 apres {attempt_429} tentatives")
                     return None, f"{UNAVAILABLE} (rate limit)"
                 await asyncio.sleep(0.5 * (2**attempt_429))
                 continue
@@ -131,22 +169,26 @@ class TavilyClient:
                     retried = True
                     await asyncio.sleep(5.0)
                     continue
-                self._record_failure(f"{TAVILY_URL} -> HTTP {response.status_code}")
+                self._record_failure(f"{url} -> HTTP {response.status_code}")
                 return None, f"{UNAVAILABLE} (erreur serveur)"
 
             if response.status_code in (401, 403):
                 # Clé absente/invalide : dégradation douce, on ne loggue jamais la clé.
-                self._record_failure(f"{TAVILY_URL} -> HTTP {response.status_code} (clé ?)")
+                self._record_failure(f"{url} -> HTTP {response.status_code} (clé ?)")
                 return None, f"{UNAVAILABLE} (clé refusée ou absente)"
 
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                self._record_failure(f"{TAVILY_URL} -> HTTP {exc.response.status_code}")
+                self._record_failure(f"{url} -> HTTP {exc.response.status_code}")
                 return None, f"{UNAVAILABLE} (HTTP {exc.response.status_code})"
 
             self._record_success()
             return response.json(), None
+
+    async def _post_json(self, payload: dict) -> tuple[object | None, str | None]:
+        """Repli historique de ``search()`` -- clé dans le corps, jamais retouché."""
+        return await self._post(TAVILY_URL, payload)
 
     async def search(
         self,
@@ -222,6 +264,122 @@ class TavilyClient:
             return TavilyResult(query=q, available=False, error=f"{UNAVAILABLE} (aucun résultat)")
 
         return TavilyResult(query=q, snippets=snippets, answer=answer, available=True, error=None)
+
+    async def extract(
+        self, urls: list[str], *, extract_depth: str = "basic", caller: str = "unknown",
+    ) -> TavilyExtractResult:
+        """Contenu texte RÉEL d'une ou plusieurs pages -- contrairement à ``search``
+        (extraits DE TIERS à propos d'une page), ceci est le contenu de la page
+        elle-même, rendu par l'infrastructure Tavily (gère le JS côté serveur --
+        vérifié en conditions réelles le 23/07 : fonctionne sur une page X/Twitter
+        SPA, que ``site_snapshot.py`` -- simple GET httpx -- ne saurait pas rendre).
+
+        23/07, #routage lecture X vers Tavily + Website/Docs Substance -- REMPLACE
+        ``twit.sh`` (x402, payant par appel) pour les profils X quand Tavily est
+        configuré, et remplace le snapshot 600 caractères de ``site_snapshot.py``
+        pour les signaux de substance (celui-ci reste inchangé pour son usage
+        historique -- enrichir le prompt LLM, pas un audit)."""
+        clean_urls = [u.strip() for u in (urls or []) if u and u.strip()][:20]
+        if not clean_urls:
+            return TavilyExtractResult(available=False, error="aucune URL fournie")
+
+        api_key = tavily_api_key()
+        if not api_key:
+            return TavilyExtractResult(urls=clean_urls, available=False, error=f"{UNAVAILABLE} (TAVILY_API_KEY absente)")
+
+        depth = extract_depth if extract_depth in ("basic", "advanced") else "basic"
+
+        from aria_core.services import tavily_budget
+
+        credit_cost = tavily_budget.cost_for_extract(depth, len(clean_urls))
+        if not await tavily_budget.can_spend(credit_cost):
+            return TavilyExtractResult(urls=clean_urls, available=False, error=f"{UNAVAILABLE} (budget mensuel épuisé)")
+
+        payload = {"urls": clean_urls, "extract_depth": depth}
+        headers = {"Authorization": f"Bearer {api_key}"}
+        data, error = await self._post(EXTRACT_URL, payload, headers=headers, timeout=25.0)
+        if error is not None:
+            return TavilyExtractResult(urls=clean_urls, available=False, error=error)
+        await tavily_budget.record_spend(caller=caller, query=f"extract:{clean_urls[0]}", credits=credit_cost)
+        if not isinstance(data, dict):
+            return TavilyExtractResult(urls=clean_urls, available=False, error=UNAVAILABLE)
+
+        pages: list[TavilyPage] = []
+        for item in data.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("raw_content") or "").strip()
+            if not content:
+                continue
+            pages.append(
+                TavilyPage(url=str(item.get("url") or ""), title=str(item.get("title") or ""), raw_content=content)
+            )
+
+        if not pages:
+            return TavilyExtractResult(urls=clean_urls, available=False, error=f"{UNAVAILABLE} (aucune page exploitable)")
+        return TavilyExtractResult(urls=clean_urls, pages=pages, available=True, error=None)
+
+    async def crawl(
+        self, root_url: str, *, max_depth: int = 2, limit: int = 15,
+        extract_depth: str = "basic", caller: str = "unknown",
+    ) -> TavilyCrawlResult:
+        """Parcourt un site à partir de ``root_url`` (suit les liens internes,
+        y compris les sous-domaines comme ``docs.<site>``) et renvoie le contenu
+        texte réel de chaque page trouvée -- seule façon de « tout extraire pour
+        noter » un site multi-pages (demande opérateur explicite, 23/07) ; le
+        snapshot homepage-only 600 caractères de ``site_snapshot.py`` ne couvre
+        jamais les sous-pages (Docs/Team/Tokenomics...).
+
+        Coût variable (dépend du nombre RÉEL de pages renvoyées, connu seulement
+        après l'appel) -- vérification de budget AVANT l'appel sur le PIRE CAS
+        (``limit`` pages, Tavily n'en renvoie jamais plus), dépense RÉELLE
+        enregistrée après coup sur le nombre de pages effectivement reçues."""
+        url = (root_url or "").strip()
+        if not url:
+            return TavilyCrawlResult(available=False, error="URL racine vide")
+
+        api_key = tavily_api_key()
+        if not api_key:
+            return TavilyCrawlResult(root_url=url, available=False, error=f"{UNAVAILABLE} (TAVILY_API_KEY absente)")
+
+        depth_param = max(1, min(int(max_depth), 3))
+        page_limit = max(1, min(int(limit), 30))
+        extract_d = extract_depth if extract_depth in ("basic", "advanced") else "basic"
+
+        from aria_core.services import tavily_budget
+
+        worst_case = tavily_budget.estimate_crawl_worst_case(extract_d, page_limit)
+        if not await tavily_budget.can_spend(worst_case):
+            return TavilyCrawlResult(root_url=url, available=False, error=f"{UNAVAILABLE} (budget mensuel épuisé)")
+
+        payload = {
+            "url": url, "max_depth": depth_param, "limit": page_limit, "extract_depth": extract_d,
+        }
+        headers = {"Authorization": f"Bearer {api_key}"}
+        data, error = await self._post(CRAWL_URL, payload, headers=headers, timeout=60.0)
+        if error is not None:
+            return TavilyCrawlResult(root_url=url, available=False, error=error)
+        if not isinstance(data, dict):
+            await tavily_budget.record_spend(caller=caller, query=f"crawl:{url}", credits=0)
+            return TavilyCrawlResult(root_url=url, available=False, error=UNAVAILABLE)
+
+        pages: list[TavilyPage] = []
+        for item in data.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("raw_content") or "").strip()
+            if not content:
+                continue
+            pages.append(
+                TavilyPage(url=str(item.get("url") or ""), title=str(item.get("title") or ""), raw_content=content)
+            )
+
+        real_cost = tavily_budget.cost_for_crawl(extract_d, len(pages))
+        await tavily_budget.record_spend(caller=caller, query=f"crawl:{url}", credits=real_cost)
+
+        if not pages:
+            return TavilyCrawlResult(root_url=url, available=False, error=f"{UNAVAILABLE} (aucune page exploitable)")
+        return TavilyCrawlResult(root_url=url, pages=pages, available=True, error=None)
 
 
 tavily_client = TavilyClient()

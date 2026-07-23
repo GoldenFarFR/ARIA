@@ -50,6 +50,38 @@ def cost_for_search(search_depth: str) -> int:
     return COST_ADVANCED if (search_depth or "").strip().lower() == "advanced" else COST_BASIC
 
 
+# 23/07 -- extract()/crawl() ajoutés (routage lecture X vers Tavily + extraction
+# complète de site pour les futurs signaux Website/Docs Substance). Sourcé contre
+# la doc officielle Tavily (WebFetch, 23/07) : extraction = 1 crédit "basic" /
+# 2 crédits "advanced" PAR TRANCHE DE 5 URLs (arrondi au supérieur) ; crawl = même
+# coût d'extraction PAR PAGE RÉELLEMENT RENVOYÉE + 1 crédit de "mapping" par
+# tranche de 10 pages renvoyées.
+def cost_for_extract(extract_depth: str, url_count: int) -> int:
+    """Coût réel en crédits pour une extraction de ``url_count`` URLs."""
+    per_batch = COST_ADVANCED if (extract_depth or "").strip().lower() == "advanced" else COST_BASIC
+    batches = max(1, -(-max(0, int(url_count)) // 5))  # ceil(url_count / 5), jamais 0
+    return per_batch * batches
+
+
+def cost_for_crawl(extract_depth: str, page_count: int) -> int:
+    """Coût réel en crédits pour un crawl ayant renvoyé ``page_count`` pages
+    (mapping + extraction) -- utilisé pour ENREGISTRER la dépense réelle après
+    coup (le nombre de pages effectivement renvoyées n'est connu qu'après
+    l'appel). Voir ``estimate_crawl_worst_case`` pour la vérification de budget
+    AVANT l'appel (sur la limite demandée, jamais sur un résultat pas encore
+    connu)."""
+    mapping = max(1, -(-max(0, int(page_count)) // 10))  # ceil(page_count / 10)
+    return mapping + cost_for_extract(extract_depth, page_count)
+
+
+def estimate_crawl_worst_case(extract_depth: str, page_limit: int) -> int:
+    """Estimation du PIRE cas (``page_limit`` pages effectivement renvoyées) --
+    Tavily ne renvoie jamais plus de pages que la limite demandée, donc ce
+    chiffre borne le coût réel sans jamais le sous-estimer. Vérifié AVANT
+    l'appel réseau (même doctrine que ``can_spend`` pour ``search``)."""
+    return cost_for_crawl(extract_depth, page_limit)
+
+
 async def _ensure_table() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(

@@ -93,3 +93,31 @@ async def test_recent_searches_truncates_long_query():
     await budget.record_spend(caller="test", query="x" * 500, credits=1)
     recent = await budget.recent_searches(limit=1)
     assert len(recent[0]["query"]) == 300
+
+
+# ── extract()/crawl() (23/07 -- routage lecture X + Website/Docs Substance) ──
+
+
+def test_cost_for_extract_batches_of_5_urls():
+    assert budget.cost_for_extract("basic", 1) == 1
+    assert budget.cost_for_extract("basic", 5) == 1
+    assert budget.cost_for_extract("basic", 6) == 2
+    assert budget.cost_for_extract("advanced", 1) == 2
+    assert budget.cost_for_extract("advanced", 10) == 4
+
+
+def test_cost_for_extract_zero_urls_never_free():
+    assert budget.cost_for_extract("basic", 0) == 1
+
+
+def test_cost_for_crawl_combines_mapping_and_extraction():
+    # 10 pages, basic : 1 (mapping, 10/10) + 2 (extraction, 10/5) = 3
+    assert budget.cost_for_crawl("basic", 10) == 3
+    # 15 pages, basic : ceil(15/10)=2 (mapping) + ceil(15/5)=3 (extraction) = 5
+    assert budget.cost_for_crawl("basic", 15) == 5
+    # 10 pages, advanced : 1 (mapping) + 4 (extraction, 2*10/5) = 5
+    assert budget.cost_for_crawl("advanced", 10) == 5
+
+
+def test_estimate_crawl_worst_case_matches_cost_for_crawl_on_limit():
+    assert budget.estimate_crawl_worst_case("basic", 15) == budget.cost_for_crawl("basic", 15)

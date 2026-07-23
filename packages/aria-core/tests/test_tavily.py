@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from aria_core.services import tavily
+from aria_core.services import tavily, tavily_budget
 
 
 class _FakeResponse:
@@ -37,6 +37,7 @@ class _FakeAsyncClient:
 
     _response = None
     _captured_payload = None
+    _captured_headers = None
 
     def __init__(self, *args, **kwargs):
         pass
@@ -47,8 +48,9 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args):
         return False
 
-    async def post(self, url, json=None):
+    async def post(self, url, json=None, headers=None):
         type(self)._captured_payload = json
+        type(self)._captured_headers = headers
         return type(self)._response
 
 
@@ -119,6 +121,108 @@ async def test_search_empty_results_is_unavailable(_fresh_client):
     result = await _fresh_client.search("obscure query")
     assert result.available is False
     assert "aucun résultat" in (result.error or "")
+
+
+# ── extract()/crawl() (23/07 -- routage lecture X + Website/Docs Substance) ──
+
+
+@pytest.mark.asyncio
+async def test_extract_without_key_is_unavailable(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    client = tavily.TavilyClient(min_interval=0.0)
+    result = await client.extract(["https://example.com"])
+    assert result.available is False
+    assert "TAVILY_API_KEY" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_extract_no_urls_is_unavailable(_fresh_client):
+    result = await _fresh_client.extract([])
+    assert result.available is False
+
+
+@pytest.mark.asyncio
+async def test_extract_success_parses_pages_and_uses_bearer_header(_fresh_client):
+    _FakeAsyncClient._response = _FakeResponse(
+        200, {"results": [{"url": "https://x.com/foo", "title": "Foo", "raw_content": "Bio réelle."}]},
+    )
+    result = await _fresh_client.extract(["https://x.com/foo"], caller="conviction_research")
+    assert result.available is True
+    assert result.pages[0].raw_content == "Bio réelle."
+    # Authentification par header, jamais la clé dans le corps (contrairement à search()).
+    assert _FakeAsyncClient._captured_headers == {"Authorization": "Bearer tvly-test-key"}
+    assert "api_key" not in (_FakeAsyncClient._captured_payload or {})
+
+
+@pytest.mark.asyncio
+async def test_extract_empty_raw_content_pages_are_dropped(_fresh_client):
+    _FakeAsyncClient._response = _FakeResponse(
+        200, {"results": [{"url": "https://x.com/dead", "raw_content": ""}]},
+    )
+    result = await _fresh_client.extract(["https://x.com/dead"])
+    assert result.available is False
+    assert "aucune page exploitable" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_extract_budget_exhausted_blocks_call(_fresh_client, monkeypatch):
+    async def _no_budget(credits):
+        return False
+
+    monkeypatch.setattr(tavily_budget, "can_spend", _no_budget)
+    result = await _fresh_client.extract(["https://example.com"])
+    assert result.available is False
+    assert "budget mensuel épuisé" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_crawl_without_key_is_unavailable(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    client = tavily.TavilyClient(min_interval=0.0)
+    result = await client.crawl("https://example.com")
+    assert result.available is False
+    assert "TAVILY_API_KEY" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_crawl_success_parses_multiple_pages(_fresh_client):
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {
+            "results": [
+                {"url": "https://crynux.io/", "title": "Crynux", "raw_content": "Contenu homepage réel."},
+                {"url": "https://docs.crynux.io/", "title": "Docs", "raw_content": "Contenu docs réel."},
+                {"url": "https://blog.crynux.io/", "raw_content": ""},  # page vide -- éliminée
+            ]
+        },
+    )
+    result = await _fresh_client.crawl("https://crynux.io", limit=15, caller="website_substance")
+    assert result.available is True
+    assert len(result.pages) == 2
+    assert {p.url for p in result.pages} == {"https://crynux.io/", "https://docs.crynux.io/"}
+
+
+@pytest.mark.asyncio
+async def test_crawl_empty_pages_is_unavailable(_fresh_client):
+    _FakeAsyncClient._response = _FakeResponse(200, {"results": []})
+    result = await _fresh_client.crawl("https://example.com")
+    assert result.available is False
+
+
+@pytest.mark.asyncio
+async def test_crawl_budget_worst_case_checked_before_call(_fresh_client, monkeypatch):
+    checked = {}
+
+    async def _no_budget(credits):
+        checked["credits"] = credits
+        return False
+
+    monkeypatch.setattr(tavily_budget, "can_spend", _no_budget)
+    result = await _fresh_client.crawl("https://example.com", limit=15, extract_depth="basic")
+    assert result.available is False
+    assert "budget mensuel épuisé" in (result.error or "")
+    # Vérifié sur le PIRE CAS (15 pages), jamais un chiffre optimiste.
+    assert checked["credits"] == tavily_budget.cost_for_crawl("basic", 15)
 
 
 # ── provider-switch dans web_verify.fetch_web_snippets ────────────────────────────────

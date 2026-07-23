@@ -396,6 +396,41 @@ async def test_twitsh_fallback_used_when_official_search_returns_empty(test_sett
 
 
 @pytest.mark.asyncio
+async def test_tavily_buzz_used_before_twitsh_when_official_search_empty(test_settings, monkeypatch):
+    """23/07 -- décision opérateur explicite : router la lecture X vers Tavily
+    (moins cher que twit.sh/x402). Tavily doit être tenté AVANT twit.sh dès que
+    la recherche X officielle échoue/est vide -- twit.sh ne doit alors JAMAIS
+    être appelé."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily(query, **kwargs):
+        if kwargs.get("include_domains") == ["x.com", "twitter.com"]:
+            return _fake_tavily_result(snippets=[("buzz trouvé via Tavily uniquement", "https://x.com/cobot", None)])
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
+
+    async def _official_empty(query, **kwargs):
+        return []
+
+    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _official_empty)
+
+    async def _fail_if_called(*a, **k):
+        raise AssertionError("twit.sh ne doit jamais être appelé si Tavily a répondu")
+
+    monkeypatch.setattr("aria_core.services.twitsh.search_tweets", _fail_if_called)
+
+    async def _fake_chat(user, system, **kwargs):
+        assert "buzz trouvé via Tavily uniquement" in user
+        return "SCORE: 7\nRAISON: Buzz trouvé via Tavily."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+    assert result.potential_score == 7.0
+
+
+@pytest.mark.asyncio
 async def test_twitsh_fallback_forwards_contract_and_symbol_for_x402_traceability(
     test_settings, monkeypatch,
 ):
