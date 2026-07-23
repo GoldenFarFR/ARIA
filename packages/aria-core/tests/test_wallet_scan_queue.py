@@ -254,6 +254,33 @@ async def test_cycle_sends_progress_notification_on_milestone_crossing(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_cycle_caps_max_tokens_for_the_background_queue_path(monkeypatch):
+    """07/23 -- diagnosed cause of the permanent queue stall: heartbeat.py's
+    300s task timeout was cancelling score_wallets() mid-batch (checkpoint
+    only persisted AFTER the full batch), so the same wallet retried the
+    exact same sub-batch forever. This queue path must always request the
+    reduced BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET cap, never the interactive
+    /walletscore default (50) -- a batch that reliably finishes within the
+    timeout beats a larger one that never checkpoints at all."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+
+    card = _FakeCard(address=A, tokens_scanned_cumulative=5, tokens_found=200, full_coverage=False)
+    captured: dict = {}
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        captured.update(kwargs)
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    await wsq.run_wallet_scan_queue_cycle()
+    assert captured["max_tokens"] == wsq.BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET
+    assert wsq.BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET < 50  # strictly below the interactive default
+
+
+@pytest.mark.asyncio
 async def test_cycle_no_notification_below_next_milestone(monkeypatch):
     monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
     monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")

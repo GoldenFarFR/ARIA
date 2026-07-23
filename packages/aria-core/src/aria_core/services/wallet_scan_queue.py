@@ -56,6 +56,24 @@ PROGRESS_NOTIFY_STEP = 50
 # heartbeat over the coverage speed of this particular cycle.
 MAX_WALLETS_PER_CYCLE = 1
 
+# 07/23 -- real diagnosed cause of a wallet staying permanently stuck at the
+# front of the queue: heartbeat.py bounds every task at 300s
+# (_TASK_TIMEOUT_SECONDS) and cancels it silently past that -- score_wallets()
+# only persists its checkpoint (wallet_scan_state.save_checkpoint) AFTER the
+# full token batch is scored, so a cancellation mid-batch throws away every
+# token already analyzed. Since candidate selection is deterministic, the
+# NEXT cycle retries the exact same sub-batch, forever -- confirmed via live
+# Docker logs (23/07): the default 50-token batch under sustained
+# GeckoTerminal 429 pressure took ~18-20 minutes (~22-24s/token), always
+# exceeding the 300s budget. This background/queue path (unlike the
+# interactive /walletscore command, which keeps the full 50 for a
+# comprehensive one-shot score) only needs to make INCREMENTAL progress each
+# cycle -- a smaller batch that reliably finishes within the timeout, even
+# under sustained rate-limiting, beats a larger one that never checkpoints at
+# all. ~10 tokens x ~24s (worst case) = ~240s, leaving a real margin under
+# 300s for the rest of run_wallet_scan_queue_cycle's own work.
+BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET = 10
+
 # Permanent tracking (15/07, follow-up 2, explicit operator decision): once
 # full coverage is reached, a check once a week is enough -- nothing left to
 # catch up on, just detecting possible new activity.
@@ -390,7 +408,10 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
     now = datetime.now(timezone.utc)
 
     for queued in pending:
-        report = await score_wallets([queued.wallet], gecko=geckoterminal_client, goplus=goplus_client)
+        report = await score_wallets(
+            [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
+            max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET,
+        )
         if not report.available or not report.wallets:
             await mark_attempt(queued.wallet, next_check_at=now)
             continue
