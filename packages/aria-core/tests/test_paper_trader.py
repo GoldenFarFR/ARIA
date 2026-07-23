@@ -3517,3 +3517,164 @@ async def test_run_cycle_rejects_when_fresh_price_lookup_fails(tmp_db, monkeypat
 
     act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=failing_price_lookup)
     assert act["opened"] == []
+
+
+# ── Daily trade FLOOR (07/23, diagnostic) ────────────────────────────────────
+
+from datetime import datetime as _dt, timezone as _tz
+
+
+def test_daily_floor_gate_off_by_default(monkeypatch):
+    monkeypatch.delenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", raising=False)
+    assert pt.daily_trade_floor_enabled() is False
+
+
+def test_daily_floor_gate_on(monkeypatch):
+    monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
+    assert pt.daily_trade_floor_enabled() is True
+
+
+def test_daily_floor_target_paces_across_the_day():
+    midnight = _dt(2026, 7, 23, 0, 0, 0, tzinfo=_tz.utc)
+    assert pt._daily_floor_target(midnight) == 0
+    # start of day -> becomes 1 as soon as any time elapsed (nudge to act early)
+    assert pt._daily_floor_target(midnight.replace(minute=30)) == 1
+    # midday -> ~half
+    assert pt._daily_floor_target(midnight.replace(hour=12)) == 3
+    # end of day -> the full floor
+    assert pt._daily_floor_target(midnight.replace(hour=23, minute=59)) == pt.DAILY_TRADE_FLOOR
+
+
+@pytest.mark.asyncio
+async def test_count_positions_opened_today(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "A", 1.0, target_price=2.0, invalidation_price=0.5)
+    now = _dt.now(_tz.utc)
+    assert await pt.count_positions_opened_today(now=now) == 1
+
+
+def _floor_buy_sig(symbol="FL", price=1.0):
+    return {
+        "action": "BUY", "chain": "base", "symbol": symbol, "price": price,
+        "target": 2.0, "invalidation": 0.5, "rr": 1.2, "align_score": 1,
+        "floor_trade": True, "strategy": "momentum", "regime": "neutre",
+        "reasons": ["mode plancher (diagnostic)"], "liquidity_usd": 100_000.0,
+        "rvol_multiple": 1.5,
+    }
+
+
+async def _not_blocked(*, price_lookup=None):
+    from aria_core import risk_guard
+    return risk_guard.PortfolioRiskState(
+        equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_daily_floor_skipped_when_gate_off(tmp_db, monkeypatch):
+    monkeypatch.delenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", raising=False)
+    await pt.reset_portfolio(1_000_000.0)
+    res = await pt.run_daily_trade_floor_cycle()
+    assert res["outcome"] == "skipped" and res["reason"] == "gate_off"
+
+
+@pytest.mark.asyncio
+async def test_daily_floor_skipped_when_circuit_breaker_armed(tmp_db, monkeypatch):
+    monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
+    from aria_core import risk_guard
+
+    async def _blocked(*, price_lookup=None):
+        return risk_guard.PortfolioRiskState(
+            equity=800_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.2,
+            consecutive_losses=5, alloc_multiplier=1.0, blocked=True,
+        )
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _blocked)
+    await pt.reset_portfolio(1_000_000.0)
+    res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 20, 0, 0, tzinfo=_tz.utc))
+    assert res["outcome"] == "skipped" and res["reason"] == "risk_circuit_breaker"
+
+
+@pytest.mark.asyncio
+async def test_daily_floor_opens_small_tagged_trades_when_behind(tmp_db, monkeypatch):
+    monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
+    from aria_core import momentum_entry, risk_guard
+    from aria_core.skills import market_sentiment
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _not_blocked)
+
+    async def _neutral():
+        return market_sentiment.META_REGIME_NEUTRAL
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _neutral)
+
+    async def _fake_sources(*, limit=20):
+        return [A, B, C], {A: "base", B: "base", C: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False):
+        assert relaxed is True  # the floor must always evaluate in relaxed mode
+        return _floor_buy_sig(symbol=contract[:4])
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
+
+    await pt.reset_portfolio(1_000_000.0)
+    # late in the day -> target = 5, none opened yet, so it should open up to
+    # FLOOR_MAX_OPENS_PER_CYCLE this cycle.
+    res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 23, 0, 0, tzinfo=_tz.utc))
+    assert res["outcome"] == "ok"
+    assert len(res["opened"]) == pt.FLOOR_MAX_OPENS_PER_CYCLE
+    for pos in res["opened"]:
+        assert pos["discovery_channel"] == "floor"
+        assert pos["conviction_tier"] == "floor"
+        # small size: ~1% of starting capital, well under the normal 5%
+        assert pos["cost_usd"] <= pt.FLOOR_TRADE_ALLOC_PCT * 1_000_000.0 + 1
+
+
+@pytest.mark.asyncio
+async def test_daily_floor_on_pace_opens_nothing(tmp_db, monkeypatch):
+    monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
+    from aria_core import risk_guard
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _not_blocked)
+    await pt.reset_portfolio(1_000_000.0)
+    # 5 already opened today, early in the day -> target small -> on pace
+    for i, addr in enumerate([A, B, C, D, E]):
+        await pt.open_position(addr, f"T{i}", 1.0, target_price=2.0, invalidation_price=0.5)
+    res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 6, 0, 0, tzinfo=_tz.utc))
+    assert res["outcome"] == "on_pace"
+    assert res["opened"] == []
+
+
+@pytest.mark.asyncio
+async def test_daily_floor_never_forces_a_non_floor_or_hold_signal(tmp_db, monkeypatch):
+    """Safety: if the relaxed eval returns HOLD (or a BUY without floor_trade),
+    the floor never opens it -- it only ever acts on an explicit relaxed
+    floor_trade BUY (guarantees the safety guards ran)."""
+    monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
+    from aria_core import momentum_entry, risk_guard
+    from aria_core.skills import market_sentiment
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _not_blocked)
+
+    async def _neutral():
+        return market_sentiment.META_REGIME_NEUTRAL
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _neutral)
+
+    async def _fake_sources(*, limit=20):
+        return [A, B], {A: "base", B: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _hold_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False):
+        return {"action": "HOLD", "chain": "base", "symbol": "X", "hold_reason": "honeypot_rejected"}
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _hold_eval)
+
+    await pt.reset_portfolio(1_000_000.0)
+    res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 23, 0, 0, tzinfo=_tz.utc))
+    assert res["opened"] == []
+    assert res["outcome"] == "no_safe_candidate"

@@ -271,13 +271,29 @@ HEARTBEAT_TASKS = [
         # still needs to be built separately in momentum_websocket.py -- this
         # only slows down THIS cycle, not yet the actual cooldown mechanism
         # requested.
-        interval_minutes=60,
+        # 07/23 -- lowered 60 -> 30 min (operator request "on peut baisser le
+        # delai"): the WebSocket (ARIA_MOMENTUM_WEBSOCKET_ENABLED, ON in prod)
+        # already covers ~30s detection of boost/profile tokens, so this REST
+        # scan's real added value is the "trending" universe -- 30 min catches
+        # those faster at a modest GoPlus cost (the scarcest client, hit only on
+        # candidates that clear the free filters). NOT lowered further: 15 min
+        # would start stressing the calibrated GoPlus/GeckoTerminal ceilings
+        # (rate-limit doctrine, "90% of real capacity, never guessed") -- revisit
+        # only with a real sustained-load measurement.
+        interval_minutes=30,
         enabled=False,
     ),
     HeartbeatTask(
         id="paper_weekly_review_cycle",
         name="Weekly paper-trading $1M review (reset)",
         description="Replaces the 30d/7d/14d protocol (operator decision, 07/18): every week (7d), force-closes any open position at the real price, +10% ($1.1M) verdict validated/not reached, archives the history (never destroyed), restarts fresh at $1M. Same gate as paper_trade_cycle -- no real money.",
+        interval_minutes=60,
+        enabled=False,
+    ),
+    HeartbeatTask(
+        id="daily_trade_floor_cycle",
+        name="Paper trading $1M (simulation) — daily trade floor",
+        description="Diagnostic (operator decision, 07/23): forces at least DAILY_TRADE_FLOOR small momentum trades/day so ARIA's selection can be judged on volume, even if some lose. Independent additive cycle -- never touches the normal decision path, waives only quality bars (safety guardrails always enforced), tags trades discovery_channel='floor', respects the risk circuit breaker. Dedicated gate ARIA_DAILY_TRADE_FLOOR_ENABLED, OFF by default. No real money.",
         interval_minutes=60,
         enabled=False,
     ),
@@ -568,6 +584,17 @@ def _sync_x_curiosity_enabled() -> None:
                 task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
                     "1", "true", "yes", "on",
                 )
+            if task.id == "daily_trade_floor_cycle":
+                # 07/23 -- diagnostic floor: needs BOTH the master paper-trading
+                # gate (it only makes sense while the $1M test runs) AND its own
+                # dedicated ARIA_DAILY_TRADE_FLOOR_ENABLED (checked again inside
+                # run_daily_trade_floor_cycle, defence in depth).
+                from aria_core.paper_trader import daily_trade_floor_enabled
+
+                paper_on = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                    "1", "true", "yes", "on",
+                )
+                task.enabled = paper_on and daily_trade_floor_enabled()
             if task.id == "aria_exam_cycle":
                 from aria_core.exam import exam_enabled
 
@@ -1189,6 +1216,23 @@ class AriaHeartbeat:
                 f"({report['return_pct']:+.2f}%, objectif +10%) -- nouveau cycle #{report['next_cycle_number']}",
             )
             await self._notify_telegram_trading(paper_trader.format_weekly_cycle_report(report))
+
+        elif task_id == "daily_trade_floor_cycle":
+            from aria_core import paper_trader
+
+            # 07/23 -- diagnostic floor: tops up small tagged trades if ARIA is
+            # behind the daily pace. Independent additive cycle, never touches
+            # the normal decision path; gated by ARIA_DAILY_TRADE_FLOOR_ENABLED
+            # (checked inside), respects the risk circuit breaker + /stop.
+            actions = await paper_trader.run_daily_trade_floor_cycle(
+                notifier=self._notify_telegram_trading,
+            )
+            if actions.get("opened"):
+                append_memory(
+                    "paper",
+                    f"[paper_trade] fictif 1M$ (plancher {actions.get('already_today', 0)}"
+                    f"/{actions.get('target', 0)} du jour) : +{len(actions['opened'])} achats forcés",
+                )
 
         elif task_id == "aria_exam_cycle":
             from aria_core import exam

@@ -1474,7 +1474,7 @@ async def _llm_confirm_and_gate(
 
 
 async def evaluate_hard_gates(
-    contract: str, chain: str, *, current_regime: str | None = None,
+    contract: str, chain: str, *, current_regime: str | None = None, relaxed: bool = False,
 ) -> tuple["PairSnapshot | None", str | None, dict | None]:
     """Shared hard ANTI-SCAM guardrails, extracted from
     ``evaluate_momentum_entry`` with no behavior change (22/07, unified VC/Swing
@@ -1486,6 +1486,17 @@ async def evaluate_hard_gates(
     legitimately do without OHLCV (cf. ``vc_analysis.py``, which stays
     qualitative with no price series) -- never block the fundamental-conviction
     judgment for lack of technical candles.
+
+    ``relaxed`` (07/23, daily-trade-floor diagnostic, default ``False`` = strictly
+    unchanged behavior): when ``True``, waives ONLY two QUALITY gates
+    (24h-volume floor, established-project-profile) -- the SAFETY gates
+    (blacklist, liquidity floor, wash-trading ratio, holder concentration,
+    honeypot) AND the parabolic-24h cap are ALWAYS enforced, never relaxed (the
+    parabolic cap is kept even here, matching the operator's own "never buy the
+    top" instinct). Rationale (operator, 07/23): a forced floor trade may
+    legitimately lose money on a weak momentum setup (diagnostic signal on
+    ARIA's selection), but must NEVER buy a scam -- losing on a rug is zero
+    information, only a loss.
 
     Returns:
     - ``(None, None, hold_dict)`` on the first hard rejection (same HOLD dict as
@@ -1531,8 +1542,12 @@ async def evaluate_hard_gates(
             "hold_reason": "insufficient_liquidity",
         }
 
+    # 07/23 -- QUALITY gate (waived in ``relaxed`` floor mode): a low-volume
+    # token is exactly the "dead volume" entry the operator samples on purpose
+    # (a forced floor trade may legitimately lose on it -- that's the diagnostic
+    # signal), never a scam vector.
     min_volume_required = max(_MIN_VOLUME_24H_USD, liquidity_usd * _MIN_VOLUME_TO_LIQUIDITY_RATIO)
-    if (best.volume_24h_usd or 0.0) < min_volume_required:
+    if not relaxed and (best.volume_24h_usd or 0.0) < min_volume_required:
         return None, None, {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd,
@@ -1588,7 +1603,11 @@ async def evaluate_hard_gates(
                 "hold_reason": "already_parabolic",
             }
 
-    has_profile, profile_reason = await _check_project_profile(chain, contract, best)
+    # 07/23 -- QUALITY gate (waived in ``relaxed`` floor mode): the absence of a
+    # paid DexScreener profile / CoinGecko listing is the NORM for the low-info
+    # speculation tokens the operator wants sampled -- never a scam vector, only
+    # a "we can't confirm the project is established" signal.
+    has_profile, profile_reason = (True, "") if relaxed else await _check_project_profile(chain, contract, best)
     if not has_profile:
         return None, None, {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
@@ -1623,9 +1642,23 @@ async def evaluate_hard_gates(
 
 async def evaluate_momentum_entry(
     contract: str, chain: str, *, weekly_context: dict | None = None,
-    current_regime: str | None = None,
+    current_regime: str | None = None, relaxed: bool = False,
 ) -> dict | None:
     """Momentum entry decision (#194) for ``contract`` on ``chain``.
+
+    ``relaxed`` (07/23, daily-trade-floor diagnostic, default ``False`` =
+    strictly unchanged behavior): when ``True``, the SOFT/technical bars are
+    waived so ARIA still acts on her best available pick when she is behind the
+    daily trade floor -- ``evaluate_hard_gates(relaxed=True)`` skips the two
+    quality gates (24h-volume floor, project profile), any positive-R/R
+    golden-pocket setup is bought directly (no LLM quality confirmation, no RVOL
+    reject) at forced SMALL size, and the returned dict carries
+    ``"floor_trade": True``. The SAFETY layer is untouched in this mode: the
+    hard anti-scam gates (blacklist, liquidity floor, wash-trading, holder
+    concentration, honeypot, parabolic cap) AND the final LLM security guard
+    (``_llm_security_gate``, can still cancel a concrete-trap buy) both still
+    run. A forced floor trade may lose money on a weak setup (the diagnostic
+    signal on ARIA's selection), but is never a scam.
 
     ``weekly_context`` (18/07, optional): pacing context of the weekly training
     cycle (computed by ``paper_trader.py``), passed to the LLM tie-breaker
@@ -1717,7 +1750,7 @@ async def evaluate_momentum_entry(
     contract = normalize_contract_case(contract, chain)
 
     best, honeypot_reason, hard_gate_hold = await evaluate_hard_gates(
-        contract, chain, current_regime=current_regime,
+        contract, chain, current_regime=current_regime, relaxed=relaxed,
     )
     if hard_gate_hold is not None:
         return hard_gate_hold
@@ -1764,9 +1797,25 @@ async def evaluate_momentum_entry(
     # path is unchanged: nothing to merge since it never asked the confirmation
     # question, a single call to _llm_security_gate is enough for it.
     security_already_checked = False
+    # 07/23 -- daily-trade-floor: True only when this BUY was taken via the
+    # relaxed floor branch below (waived quality bars, forced small size) --
+    # exposed on the returned dict so paper_trader tags + down-sizes it.
+    floor_trade = False
     if signal.rr >= _RR_MIN_FOR_DIRECT_BUY and align_score >= _ALIGN_SCORE_MIN_FOR_DIRECT_BUY:
         action = "BUY"
         reasons.append(f"R/R franc ({signal.rr:.1f}) + alignement technique -- décision directe")
+    elif relaxed:
+        # Floor mode: any positive-R/R golden-pocket setup that cleared every
+        # SAFETY gate is bought directly at small size -- the LLM SECURITY guard
+        # further below still runs (never a trap), only the LLM quality
+        # confirmation and the RVOL reject are waived. Guarantees ARIA acts on
+        # her best available pick when behind the daily floor.
+        action = "BUY"
+        floor_trade = True
+        reasons.append(
+            f"mode plancher (diagnostic 5 trades/jour) : R/R faible ({signal.rr:.1f}) accepté, "
+            "taille réduite, garde-fous sécurité intacts"
+        )
     elif signal.rr >= _RR_AMBIGUOUS_FLOOR:
         verdict, gate_hold_reason = await _llm_confirm_and_gate(
             contract, best.base_symbol, chain, signal.rr, reasons, weekly_context=weekly_context,
@@ -1803,7 +1852,11 @@ async def evaluate_momentum_entry(
     rvol_multiple: float | None = None
     if action == "BUY":
         volume_status, volume_reason, rvol_multiple = _check_volume_confirmation(candles)
-        if volume_status == "not_confirmed":
+        if volume_status == "not_confirmed" and not floor_trade:
+            # 07/23 -- floor mode waives the RVOL reject (a quality/timing bar,
+            # not a safety one) so a low-relative-volume "dead volume" pick is
+            # still sampled; RVOL is still computed above and exposed for
+            # tracking. A normal (non-floor) BUY keeps the reject unchanged.
             action = "HOLD"
             hold_reason = "volume_not_confirmed"
             reasons.append(volume_reason)
@@ -1956,6 +2009,11 @@ async def evaluate_momentum_entry(
         # purely speculative token with a "no stop" discipline meant for a
         # fundamental thesis.
         "strategy": "momentum",
+        # 07/23 -- daily-trade-floor: True only for a forced floor trade (relaxed
+        # quality bars, waived RVOL reject) -- paper_trader tags it
+        # (discovery_channel="floor") and forces the smallest conviction size.
+        # Absent/False on every normal BUY (unchanged behavior).
+        "floor_trade": floor_trade,
         # 20/07 -- Regime Switch: macro regime AT ENTRY TIME, persisted as
         # ``entry_regime`` (paper_trader.py) -- basis for the "never loosen"
         # ratchet in position management (cf.

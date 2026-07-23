@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import os
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -55,6 +57,19 @@ WEEKLY_TARGET_MULTIPLIER = 1.10
 # once observed under real conditions.
 SATELLITE_POCKET_MIN_RR = 1.5
 SATELLITE_POCKET_MAX_PCT_OF_CAPITAL = 0.05  # 5% of fixed starting capital ($1M) -- hard cap, never silently exceeded
+
+# 07/23 -- daily trade FLOOR (explicit operator decision): "for now, force ARIA to
+# make at least 5 trades/day so we can judge the tokens she picks, even if she loses."
+# A separate additive cycle (``run_daily_trade_floor_cycle``) that NEVER touches the
+# normal ``run_paper_cycle`` decision path -- it only tops up small, tagged trades when
+# ARIA is behind the daily pace. Forced trades waive the QUALITY bars (relaxed momentum
+# eval) but NEVER the SAFETY guardrails (honeypot/blacklist/etc.) -- losing on a weak
+# momentum bet is diagnostic, buying a scam is not. Respects the risk circuit breaker
+# (operator decision 07/23): stops forcing if the drawdown/consecutive-loss hard stop is
+# armed (observing her risk management is itself diagnostic). Gate OFF by default.
+DAILY_TRADE_FLOOR = 5
+FLOOR_TRADE_ALLOC_PCT = 0.01   # 1% of starting capital (~$10,000) -- deliberately small: diagnostic sampling, not conviction
+FLOOR_MAX_OPENS_PER_CYCLE = 2  # never a burst of 5 at once -- paced across the day
 
 # #196 -- SHARED lock, regardless of the caller (heartbeat paper_trade_cycle OR the
 # momentum #196 websocket service): without it, two concurrent executions of
@@ -1819,23 +1834,191 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 20) -> tuple[list[s
 
 def _default_momentum_analyzer(
     chain_by_contract: dict[str, str], weekly_context: dict | None = None,
-    current_regime: str | None = None,
+    current_regime: str | None = None, *, relaxed: bool = False,
 ):
     """Closes over the contract->chain table built at sourcing time (#194) --
     keeps the historical ``analyzer(contract)`` signature unchanged, no
     existing caller (tests, other pilots) is affected. ``weekly_context``
     (07/18)/``current_regime`` (07/20, Regime Switch), both optional: computed
     ONCE per cycle by the caller (see ``_run_paper_cycle_locked``), passed
-    as-is to each candidate -- never recomputed per candidate."""
+    as-is to each candidate -- never recomputed per candidate.
+
+    ``relaxed`` (07/23, daily-trade-floor): passes ``relaxed=True`` to
+    ``evaluate_momentum_entry`` so the daily-floor cycle can sample ARIA's best
+    available pick with the quality bars waived (safety always enforced) --
+    default ``False``, unchanged behavior for the normal path."""
     from aria_core import momentum_entry
 
     async def analyzer(contract: str) -> dict | None:
         chain = chain_by_contract.get(contract, "base")
         return await momentum_entry.evaluate_momentum_entry(
             contract, chain, weekly_context=weekly_context, current_regime=current_regime,
+            relaxed=relaxed,
         )
 
     return analyzer
+
+
+# ── Daily trade FLOOR (07/23, diagnostic) ────────────────────────────────────
+
+def daily_trade_floor_enabled() -> bool:
+    """Dedicated gate, OFF by default (fail-closed). Turns on the diagnostic
+    daily-trade-floor cycle (``run_daily_trade_floor_cycle``)."""
+    return os.environ.get("ARIA_DAILY_TRADE_FLOOR_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+async def count_positions_opened_today(*, now: datetime | None = None) -> int:
+    """Number of positions OPENED since 00:00 UTC today (live ``paper_position``
+    table). ``opened_at`` is stored as an ISO-8601 string in the same
+    ``+00:00`` format as ``day_start`` below, so the string comparison is a
+    valid chronological one. A weekly reset (rare -- 7-day cadence) archives the
+    live table, so right after one this could momentarily undercount; acceptable
+    for a soft diagnostic floor (never a hard invariant)."""
+    now = now or datetime.now(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM paper_position WHERE opened_at >= ?", (day_start,)
+        ) as cur:
+            row = await cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def _daily_floor_target(now: datetime) -> int:
+    """Pro-rata floor target for the current point in the day: paces the
+    ``DAILY_TRADE_FLOOR`` evenly rather than dumping all of them at once (or
+    all at 23:59). ``ceil`` so the target becomes 1 as soon as the day starts
+    (ARIA is nudged to act early), reaching ``DAILY_TRADE_FLOOR`` by day's end."""
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    fraction = min(1.0, max(0.0, (now - day_start).total_seconds() / 86400.0))
+    return math.ceil(DAILY_TRADE_FLOOR * fraction)
+
+
+async def run_daily_trade_floor_cycle(*, notifier=None, now: datetime | None = None) -> dict:
+    """Diagnostic floor (07/23, operator: "force ARIA to make at least 5 trades/
+    day so we can judge her picks, even if she loses"). An INDEPENDENT additive
+    cycle that never touches the normal ``run_paper_cycle`` decision path -- it
+    only tops up small, tagged trades when ARIA is behind the daily pace.
+
+    Guarantees preserved:
+      - Hard SAFETY guardrails always enforced (relaxed momentum eval waives
+        only quality bars, never scam protection).
+      - Respects the risk circuit breaker (operator decision 07/23): stops
+        forcing if the drawdown / consecutive-loss hard stop is armed.
+      - Respects ``MAX_POSITIONS``, available cash, and never re-buys a contract
+        already open.
+      - Forced trades are SMALL (``FLOOR_TRADE_ALLOC_PCT``) and tagged
+        ``discovery_channel="floor"`` so ``/performance`` separates them from
+        ARIA's real conviction picks.
+      - Kill-switch (``/stop``) honored (this path bypasses ``heartbeat._tick``).
+
+    Shares ``_run_cycle_lock`` with ``run_paper_cycle`` -- never two cycles
+    mutating the portfolio at once."""
+    if not daily_trade_floor_enabled():
+        return {"outcome": "skipped", "reason": "gate_off"}
+    from aria_core import outgoing_pause
+
+    if outgoing_pause.is_paused():
+        return {"outcome": "skipped", "reason": "paused"}
+    async with _run_cycle_lock:
+        return await _run_daily_trade_floor_locked(notifier=notifier, now=now)
+
+
+async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None = None) -> dict:
+    """Body of ``run_daily_trade_floor_cycle`` -- only under ``_run_cycle_lock``."""
+    await _ensure_tables()
+    from aria_core import risk_guard
+
+    now = now or datetime.now(timezone.utc)
+    actions: dict = {"outcome": "ok", "opened": [], "target": 0, "already_today": 0}
+
+    # Risk circuit breaker (operator decision 07/23): the floor never forces a
+    # trade past the drawdown / consecutive-loss hard stop -- observing her risk
+    # management kick in is itself diagnostic.
+    risk_state = await risk_guard.evaluate_portfolio_risk()
+    if risk_state.blocked:
+        actions["outcome"] = "skipped"
+        actions["reason"] = "risk_circuit_breaker"
+        return actions
+
+    today = await count_positions_opened_today(now=now)
+    target = _daily_floor_target(now)
+    actions["already_today"] = today
+    actions["target"] = target
+    deficit = target - today
+    if deficit <= 0:
+        actions["outcome"] = "on_pace"
+        return actions
+
+    to_open = min(deficit, FLOOR_MAX_OPENS_PER_CYCLE)
+    start = await starting_capital()
+    floor_alloc = FLOOR_TRADE_ALLOC_PCT * start
+
+    from aria_core.skills import market_sentiment
+
+    try:
+        current_regime = await market_sentiment.resolve_meta_regime()
+    except Exception:  # noqa: BLE001
+        current_regime = market_sentiment.META_REGIME_NEUTRAL
+
+    candidates, chain_map = await _momentum_candidates_and_chain_map(limit=20)
+    analyzer = _default_momentum_analyzer(chain_map, current_regime=current_regime, relaxed=True)
+
+    opened = 0
+    for contract in candidates:
+        if opened >= to_open:
+            break
+        if len(await get_open_positions()) >= MAX_POSITIONS:
+            break
+        if await cash_available() < floor_alloc:
+            break
+        if await has_open(contract):
+            continue
+        try:
+            sig = await analyzer(contract)
+        except Exception as exc:  # noqa: BLE001 -- a crashing analysis never stops the floor
+            logger.info("daily_floor: analysis %s failed (%s)", contract, exc)
+            continue
+        if not sig or sig.get("action") != "BUY" or not sig.get("floor_trade"):
+            continue
+        price = sig.get("price")
+        if not price or price <= 0:
+            continue
+        pos = await open_position(
+            contract,
+            sig.get("symbol", ""),
+            price,
+            target_price=sig.get("target"),
+            invalidation_price=sig.get("invalidation"),
+            alloc_usd=floor_alloc,
+            category=sig.get("category", ""),
+            chain=sig.get("chain") or "base",
+            thesis=("; ".join(sig.get("reasons") or []) or None),
+            pool_liquidity_usd=sig.get("liquidity_usd"),
+            entry_atr_pct=sig.get("entry_atr_pct"),
+            strategy="momentum",
+            entry_regime=sig.get("regime"),
+            rr=sig.get("rr"),
+            align_score=sig.get("align_score"),
+            conviction_tier="floor",
+            rvol_multiple=sig.get("rvol_multiple"),
+            discovery_channel="floor",
+        )
+        if pos:
+            opened += 1
+            actions["opened"].append(pos)
+            if notifier:
+                try:
+                    await notifier(format_buy_alert(pos))
+                except Exception:  # noqa: BLE001
+                    pass
+
+    if opened == 0 and deficit > 0:
+        actions["outcome"] = "no_safe_candidate"
+    return actions
 
 
 # ── Weekly training cycle (07/18, replaces the 30d/7d/14d protocol) ──────
