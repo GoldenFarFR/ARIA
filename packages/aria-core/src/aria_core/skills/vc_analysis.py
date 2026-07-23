@@ -160,7 +160,7 @@ class VCResult:
 
     @property
     def rr(self) -> float | None:
-        """Risk/reward ratio (reward ÷ risk). ``None`` if not estimable.
+        """Risk/reward ratio (reward / risk). ``None`` if not estimable.
 
         Computed from the model's bounded numeric estimates — never a
         fabricated value: with no sourceable upside/downside, there's no R/R.

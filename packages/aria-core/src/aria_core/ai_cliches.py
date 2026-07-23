@@ -1,4 +1,4 @@
-"""Shared "forbidden words" clause — generic AI filler clichés.
+"""Shared "forbidden words" clause -- generic AI filler cliches.
 
 Distinct from `x_voice.py` (which bans SELF-REFERENCE: "as an AI", "autonomous
 agent"). Here: the generic filler vocabulary an LLM produces by default even

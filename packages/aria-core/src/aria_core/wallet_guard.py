@@ -1,12 +1,11 @@
-"""Garde-fou dépenses ACP — escalade Telegram obligatoire avant toute exécution financière.
+"""ACP spend guard-rail -- mandatory Telegram escalation before any financial execution.
 
-Chemin structurellement séparé de ``telegram_bot.request_approval`` : ce module ne
-référence JAMAIS ``settings.aria_autonomous`` — les dépenses restent gardées quel que
-soit le mode d'autonomie général. ``escalate_spend`` ne fait que créer les
-enregistrements et notifier Telegram ; elle n'appelle jamais ``acp_cli``. L'exécution
-réelle vit exclusivement dans ``resolve_spend``, atteignable uniquement depuis un
-clic Telegram réel (``telegram_bot._handle_callback``). Si l'escalade ne peut pas être
-délivrée, l'action reste bloquée en attente — aucune dépense n'a lieu.
+Structurally separate from ``telegram_bot.request_approval``: this module NEVER
+references ``settings.aria_autonomous`` -- spends stay guarded regardless of the general
+autonomy mode. ``escalate_spend`` only creates the records and notifies Telegram; it
+never calls ``acp_cli``. The real execution lives exclusively in ``resolve_spend``,
+reachable only from a real Telegram click (``telegram_bot._handle_callback``). If the
+escalation cannot be delivered, the action stays blocked as pending -- no spend happens.
 """
 from __future__ import annotations
 
@@ -51,7 +50,7 @@ def _exec_onchain_anchor_sepolia(payload: dict[str, Any]) -> tuple[dict | None, 
             root=payload["root"],
             chain_id=payload["chain_id"],
         )
-    except Exception as exc:  # noqa: BLE001 — une transaction ratée doit remonter, pas crasher
+    except Exception as exc:  # noqa: BLE001 -- a failed transaction must propagate, not crash
         return None, str(exc)
     return {"tx_hash": tx_hash}, None
 
@@ -64,7 +63,7 @@ WALLET_ACTIONS: dict[str, Callable[[dict[str, Any]], tuple[dict | None, str | No
 
 
 class SpendEscalationError(RuntimeError):
-    """Levée quand l'escalade Telegram n'a pas pu être délivrée — aucune dépense n'a lieu."""
+    """Raised when the Telegram escalation could not be delivered -- no spend happens."""
 
 
 async def escalate_spend(
@@ -75,15 +74,15 @@ async def escalate_spend(
     description: str,
     payload: dict[str, Any],
 ) -> str:
-    """Crée l'approbation + le ledger et envoie le prompt Telegram 3 options.
+    """Creates the approval + the ledger and sends the 3-option Telegram prompt.
 
-    N'appelle jamais l'exécuteur ACP — l'exécution ne se produit que dans
-    ``resolve_spend``, déclenchée uniquement par un clic Telegram réel. Si l'envoi
-    échoue, l'entrée reste ``pending`` indéfiniment : aucune dépense n'a lieu.
+    Never calls the ACP executor -- execution only happens in ``resolve_spend``,
+    triggered solely by a real Telegram click. If the send fails, the entry stays
+    ``pending`` indefinitely: no spend happens.
     """
-    # Kill-switch (fail-closed pour l'argent) : en pause OU si l'état est illisible/corrompu,
-    # on ne crée même pas l'escalade. Les appelants (acp_client_actions, _handle_test_spend)
-    # catchent déjà SpendEscalationError et affichent le message.
+    # Kill-switch (fail-closed for money): paused OR if the state is unreadable/corrupted,
+    # we don't even create the escalation. Callers (acp_client_actions, _handle_test_spend)
+    # already catch SpendEscalationError and display the message.
     _spend_block = outgoing_pause.money_block_reason("Cette dépense")
     if _spend_block:
         raise SpendEscalationError(_spend_block)
@@ -123,7 +122,7 @@ async def escalate_spend(
 
 
 async def send_spend_prompt(approval_id: str, action: str, description: str) -> None:
-    """Envoie (ou renvoie, après une explication) le prompt Oui/Non/Explique-moi pourquoi."""
+    """Sends (or resends, after an explanation) the Yes/No/Explain-why prompt."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     from aria_core.gateway import telegram_bot
@@ -173,12 +172,12 @@ async def generate_spend_explanation(action: str, description: str, payload: dic
 
 
 async def resolve_spend(approval_id: str, approved: bool, admin_id: str) -> str:
-    """Exécute (ou refuse) une dépense après décision Telegram. Idempotent — un
-    double-clic sur le même bouton ne peut pas déclencher une double exécution
-    (transition atomique pending -> decision dans le ledger)."""
-    # Kill-switch (fail-closed) : hard-stop argent. Même un clic « Oui » sur un vieux prompt ne
-    # dépense pas tant qu'ARIA est en pause OU que l'état est illisible. L'entrée reste pending
-    # (pas de claim) → réexécutable après /start. Un refus reste autorisé (aucun argent ne sort).
+    """Executes (or refuses) a spend after a Telegram decision. Idempotent -- a
+    double-click on the same button cannot trigger a double execution (atomic
+    pending -> decision transition in the ledger)."""
+    # Kill-switch (fail-closed): money hard-stop. Even a "Yes" click on an old prompt does not
+    # spend while ARIA is paused OR the state is unreadable. The entry stays pending (no claim)
+    # -> re-executable after /start. A refusal stays allowed (no money leaves).
     if approved:
         _spend_block = outgoing_pause.money_block_reason(f"L'exécution de la dépense #{approval_id}")
         if _spend_block:

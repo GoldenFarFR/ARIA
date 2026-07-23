@@ -17,7 +17,7 @@ from aria_core.paths import aria_avatar_dir
 logger = logging.getLogger(__name__)
 
 BANNER_FILENAME = "x_banner.jpg"
-# Recommended X header 1500×500 (3:1) — API max 3 MB
+# Recommended X header 1500x500 (3:1) -- API max 3 MB
 BANNER_WIDTH = 1500
 BANNER_HEIGHT = 500
 BANNER_MAX_BYTES = 3 * 1024 * 1024
@@ -34,7 +34,7 @@ def normalize_banner_jpeg(
     height: int = BANNER_HEIGHT,
     max_bytes: int = BANNER_MAX_BYTES,
 ) -> bytes:
-    """Center-crops to 3:1 then resizes — never the 640×640 square avatar."""
+    """Center-crops to 3:1 then resizes -- never the 640x640 square avatar."""
     from io import BytesIO
 
     from PIL import Image

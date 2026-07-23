@@ -179,7 +179,7 @@ _TASTE_BOUNDARY = (
 # fix, nothing locked the color in these prompts -- the `avatar_style_
 # refresh.py` presets had drifted toward a neon-violet absent from the real
 # site (fixed in the same commit), one of the most recognizable visual
-# clichés of "generic AI" imagery. Locking the palette here, in the SHARED
+# cliches of "generic AI" imagery. Locking the palette here, in the SHARED
 # prompt, prevents this drift from coming back via a future misaligned
 # variant.
 _BRAND_PALETTE = (

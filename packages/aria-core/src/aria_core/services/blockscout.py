@@ -45,7 +45,7 @@ PRO_API_URL = "https://api.blockscout.com"
 # (separate client, not a CHAIN_IDS entry) -- see
 # docs/aria-learning-inbox/2026-07-14-verification-blockscout-bnb-avalanche-non-supportes.md
 # Extended (14/07) to the 13 chains confirmed queryable on both sides
-# (Blockscout Pro API × GeckoTerminal) -- established that evening for the
+# (Blockscout Pro API x GeckoTerminal) -- established that evening for the
 # dynamic TVL ranking (#157, services/defillama.py). chain_id = DefiLlama
 # `chainId` (verified live, GET https://api.llama.fi/v2/chains, none of the
 # 13 missing from the response).
