@@ -108,10 +108,51 @@ decision 2 below; it is NOT a blocker.)
    spending wallet (same doctrine as the agent-wallet pilot's dedicated wallet). Decide:
    which wallet, does human validation gate incoming settlement, bookkeeping/tax.
 
-## Recommended first step (if/when unblocked)
+## Operator decisions (23/07) that supersede parts of the above
 
-Build ONLY the `/walletscore` seller endpoint (ARIA's own composite, no third-party raw
-pass-through, the one signal safe today), DORMANT + testnet-facilitator only + gated OFF,
-so it's ready when the three gates clear — same pattern as the Sepolia rehearsal /
-agent-wallet pilot (build the skeleton on testnet, activate after governance). No mainnet
-receiving until all three decisions above are settled.
+- **Sell the FULL synthesized analysis, source-scrubbed** (not just `/walletscore`) —
+  operator: "branche l'analyse complète de aria qui ne mentionne pas ses sources." ARIA
+  sells her own composite verdict with every upstream provider name replaced by a generic
+  capability description; provider ToS treated as the operator's own business-risk call
+  (do not relitigate — the honest flags were given once: hiding source names reduces
+  detection not liability, and GoPlus's own terms actually REQUIRE attribution; and
+  selling the full BUY/WATCH/AVOID thesis is where the "conseil en investissement" legal
+  qualification bites hardest, currency-independent).
+- **Receiving wallet = `aria-x402`** (`aria-wallet-X402-EVM`, `0xF046…`). Note: the OLD EOA
+  pilot (`ARIA_AGENT_WALLET_PILOT_ENABLED=ON`) still spends from this same address TODAY;
+  it becomes truly receive-only once that old pilot is retired as part of finishing the
+  Smart Account migration (#41). Not a blocker for a dormant/testnet build.
+
+## Built so far (23/07) — both DORMANT, gated OFF, no money moves
+
+- **`skills/x402_analysis_export.py`** (pure, no real capital) — `scrub_sources()`
+  replaces every provider name with a generic capability term; `build_sellable_analysis()`
+  keeps only ARIA's synthesized judgment (verdict/thesis/reasons/levels), drops every raw
+  provider pass-through field (`entry_security_json` etc.), and always appends a
+  "not investment advice / no raw provider data resold" disclaimer. 34 tests. The safe
+  CONTENT half of the product.
+- **`x402_seller.py`** (service layer, no real capital) — verified against the
+  really-installed `x402` v2.16.0 API (`x402.server.ResourceConfig`, constructs cleanly
+  with `scheme="exact"`, `pay_to`, `price="$0.05"`, `network`). Defense-in-depth gating:
+  `ARIA_X402_SELLER_ENABLED` (master, OFF) AND `ARIA_X402_SELLER_MAINNET` (OFF → defaults
+  to base-sepolia TESTNET; real Base mainnet needs this SECOND flag). Receiving wallet =
+  `ARIA_X402_RECEIVING_ADDRESS` (aria-wallet-X402-EVM). 3-tier COGS pricing catalog
+  (wallet_score $0.02 / token_analysis_cached $0.10 / token_analysis_fresh $0.50, starting
+  values to calibrate). `build_resource_config()` assembles a validated payable config
+  (fail-closed: None if disabled/unknown product); `deliver_scrubbed()` produces the paid
+  payload via the formatter. 13 tests. **Key safety fact**: receiving an x402 payment
+  never needs ARIA's private key (buyer signs EIP-3009, facilitator settles) — no signing
+  key exposed on the seller path, unlike every spending path.
+
+## Still to build — the LIVE integration (validate with the operator's testnet self-payment)
+
+The FastAPI route in `vanguard/backend` + the verify/settle wiring
+(`x402ResourceServer.verify_payment`/`settle_payment` with a testnet
+`FacilitatorClient`) — deliberately NOT written blind against the evolving Alpha API. To
+be built and validated end-to-end WITH the operator's own test plan (23/07): pay a tiny
+real x402 from their own wallet to ARIA's `aria-x402` on **base-sepolia first**, confirm
+verify→settle→scrubbed-payload works, THEN flip `ARIA_X402_SELLER_MAINNET`. Plus, later:
+the 8h anti-front-running delay (only if a live push-alert product is added — the current
+on-demand lookups don't tip a trade happening now), and the substance-cache TTL policy
+(#40). No mainnet receiving until the testnet test passes AND both gates are explicitly
+set.
