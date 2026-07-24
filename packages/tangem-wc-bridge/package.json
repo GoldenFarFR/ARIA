@@ -1,0 +1,14 @@
+{
+  "name": "tangem-wc-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Minimal local-only WalletConnect v2 dApp-side bridge, so a Python backend can request a signature from the operator's Tangem hardware wallet (physical NFC tap on the phone approves each request). Structurally separate from aria-core and vanguard -- see docs/HANDOFF_COINBASE_CDP.md.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@walletconnect/sign-client": "^2.19.1"
+  }
+}
