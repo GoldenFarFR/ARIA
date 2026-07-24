@@ -42,8 +42,33 @@ const PORT = Number(process.env.TANGEM_BRIDGE_PORT || 8787);
 const PROJECT_ID = process.env.WALLETCONNECT_PROJECT_ID || "";
 // Base Sepolia by default -- mainnet is an explicit, separate override, never
 // silently defaulted (same doctrine as every other testnet-first gate here).
+// NOTE (verified live 2026-07-24): the Tangem app REJECTS testnets on
+// WalletConnect ("réseaux non pris en charge"), so real Tangem use requires
+// TANGEM_BRIDGE_NETWORK=eip155:8453 (Base mainnet). That is safe as long as
+// only message-signing (personal_sign) is allowed -- a signed message never
+// moves funds regardless of network. See the tx-signing gate just below.
 const DEFAULT_NETWORK = process.env.TANGEM_BRIDGE_NETWORK || "eip155:84532";
-const ALLOWED_METHODS = ["eth_sendTransaction", "eth_signTypedData_v4", "personal_sign"];
+
+// SECURITY -- the single most important guard in this file (operator's
+// explicit concern 2026-07-24: "no security hole that lets an attacker drain
+// the wallets or hijack the hash"). By DEFAULT this bridge can ONLY request
+// `personal_sign` -- signing a text MESSAGE, which can NEVER move funds no
+// matter what. The two methods that CAN move funds or grant token
+// allowances -- `eth_sendTransaction` (a real transaction) and
+// `eth_signTypedData_v4` (can be an ERC-2612 Permit / an order that
+// authorizes spending) -- are BLOCKED unless TANGEM_BRIDGE_ALLOW_TX_SIGNING
+// is explicitly set. So even if an attacker had local access to this machine
+// WHILE the service was running and a session was live, the worst they could
+// ask for by default is a harmless message signature, not a fund-moving
+// transaction. Enabling tx-signing (needed later for the one-time Spend
+// Permission grant) is a deliberate, per-session operator action, never the
+// default -- and even then, the physical NFC tap + the operator READING the
+// Tangem screen before tapping remain the final defense.
+const _TX_SIGNING_ENABLED =
+  (process.env.TANGEM_BRIDGE_ALLOW_TX_SIGNING || "").trim().toLowerCase() === "true";
+const ALLOWED_METHODS = _TX_SIGNING_ENABLED
+  ? ["personal_sign", "eth_sendTransaction", "eth_signTypedData_v4"]
+  : ["personal_sign"];
 
 if (!PROJECT_ID) {
   console.error(

@@ -57,6 +57,51 @@ Par défaut, il utilise Base Sepolia (testnet, aucune valeur réelle) — le ré
    Ton téléphone doit afficher une demande d'approbation — tape ta carte Tangem pour
    confirmer. La réponse contient la signature une fois approuvée.
 
-**Ce test manuel avec ta vraie carte est l'étape de validation qui manque encore** — le
-code côté Python (`aria_core.tangem_bridge`) est déjà écrit et testé, mais seul un test
-réel avec ton téléphone confirme que le pont fonctionne de bout en bout.
+**Test de bout en bout RÉUSSI (24/07)** — connexion + demande de signature + tap carte +
+signature de retour vérifiée cryptographiquement (l'adresse récupérée correspond exactement
+au propriétaire Tangem de `aria-smart-st`). Le pont fonctionne.
+
+## Sécurité — modèle de menace (préoccupation opérateur explicite : aucune faille qui viderait un wallet)
+
+**Ce qui te protège structurellement (ne dépend d'aucune ligne de code, donc increvable) :**
+1. **La clé privée n'est JAMAIS sur le serveur.** Elle reste sur ta carte Tangem physique.
+   Même une compromission totale du VPS ne donne pas la clé — impossible de signer sans la
+   carte physique ET ton tap NFC.
+2. **Chaque signature exige ton action physique** (tap de la carte). Un attaquant ne peut
+   jamais signer tout seul.
+3. **Le service écoute UNIQUEMENT sur `127.0.0.1`** — inatteignable depuis Internet. Il
+   faudrait déjà être root/local sur le VPS pour l'atteindre (auquel cas il y a des problèmes
+   bien plus graves ailleurs).
+4. **Ce service n'est PAS un daemon.** Il ne tourne QUE quand tu le lances à la main pour un
+   setup, puis tu l'arrêtes. Vérifié : il n'est câblé à aucun démarrage automatique
+   (boot/heartbeat/cron/systemd/docker). La fenêtre d'attaque est réduite aux moments où tu
+   le lances sciemment.
+
+**Le durcissement ajouté contre "détourner le hash pour vider un wallet" :**
+Par défaut, ce pont ne peut demander QUE `personal_sign` — signer un MESSAGE texte, ce qui
+ne déplace **jamais** de fonds, quel que soit le réseau. Les deux seules méthodes capables
+de bouger des fonds ou d'autoriser une dépense — `eth_sendTransaction` (une vraie
+transaction) et `eth_signTypedData_v4` (peut être un Permit ERC-2612) — sont **bloquées**
+sauf si tu actives explicitement `TANGEM_BRIDGE_ALLOW_TX_SIGNING=true`. Donc même si un
+attaquant contrôlait la machine pendant que le service tourne, le pire qu'il puisse demander
+par défaut est une signature de message inoffensive.
+
+**Le seul résidu honnête** (aucun système n'a zéro risque) : le jour où tu activeras le flag
+transaction (nécessaire plus tard pour le grant unique de Spend Permission), un attaquant
+local pourrait en théorie glisser une demande de transaction malveillante pendant une session
+active. **La défense finale, c'est toi : l'app Tangem affiche TOUJOURS ce que tu signes**
+(message, ou destinataire + montant d'une transaction) — lis l'écran avant de taper. Et une
+fois la migration Smart Account terminée, le plafond de 50$/semaine gravé dans le contrat +
+la Policy "swap uniquement" limiteront le pire cas même si une mauvaise transaction passait.
+
+## Lancer le service — usage
+
+Par défaut (le plus sûr, signature de message uniquement) :
+```bash
+cd packages/tangem-wc-bridge
+npm install
+WALLETCONNECT_PROJECT_ID=<ton-project-id> TANGEM_BRIDGE_NETWORK=eip155:8453 npm start
+```
+`TANGEM_BRIDGE_NETWORK=eip155:8453` (Base mainnet) est nécessaire car **Tangem refuse les
+testnets en WalletConnect** (vérifié 24/07). C'est sans danger tant que seule la signature
+de message est autorisée. Le test tout-en-un : `bash test-signature.sh`.
