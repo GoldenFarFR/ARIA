@@ -310,6 +310,100 @@ async def test_cycle_caps_max_tokens_for_the_background_queue_path(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_catchup_wallet_loops_multiple_subbatches_until_full_coverage(monkeypatch):
+    """07/24, direct operator request -- a catch-up wallet should keep
+    advancing across several small, already-checkpointed sub-batches within
+    ONE heartbeat tick (never just one), as long as each sub-batch makes
+    real progress and the soft deadline hasn't been reached -- gets much
+    closer to "one pass, then move to the next wallet" without reintroducing
+    the 07/23 checkpoint-loss bug or touching heartbeat.py's global timeout."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+
+    cards = [
+        _FakeCard(address=A, tokens_scanned_cumulative=10, tokens_found=30, full_coverage=False, tokens_analyzed=10),
+        _FakeCard(address=A, tokens_scanned_cumulative=20, tokens_found=30, full_coverage=False, tokens_analyzed=10),
+        _FakeCard(address=A, tokens_scanned_cumulative=30, tokens_found=30, full_coverage=True, tokens_analyzed=10),
+    ]
+    calls: list[str] = []
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        calls.append(addresses[0])
+        return _FakeReport(wallets=[cards[len(calls) - 1]])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    notified = []
+
+    async def _notifier(text):
+        notified.append(text)
+
+    result = await wsq.run_wallet_scan_queue_cycle(notifier=_notifier)
+    assert len(calls) == 3  # all 3 sub-batches ran within this single cycle call
+    assert result["completed_first_time"] == [A]
+    # Only the FINAL state is reported -- no per-sub-batch progress spam.
+    assert len(notified) == 1
+    assert "terminé" in notified[0]
+
+
+@pytest.mark.asyncio
+async def test_catchup_wallet_loop_stops_when_no_progress_made(monkeypatch):
+    """Anti-infinite-loop safety: if a sub-batch analyzes zero tokens (e.g.
+    every remaining token hit a transient pricing error), the loop must stop
+    immediately rather than spin forever re-requesting the same sub-batch."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+
+    card = _FakeCard(address=A, tokens_scanned_cumulative=10, tokens_found=30, full_coverage=False, tokens_analyzed=0)
+    calls: list[str] = []
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        calls.append(addresses[0])
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    await wsq.run_wallet_scan_queue_cycle()
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_catchup_wallet_loop_stops_at_soft_deadline(monkeypatch):
+    """The loop must yield back to the heartbeat well before the global 300s
+    per-task ceiling, even if the wallet keeps making real progress -- a
+    simulated clock jump past CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS must stop
+    the loop after the sub-batch in flight, not run indefinitely."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+
+    card = _FakeCard(address=A, tokens_scanned_cumulative=10, tokens_found=1000, full_coverage=False, tokens_analyzed=10)
+    calls: list[str] = []
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        calls.append(addresses[0])
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    # Clock sequence: deadline computed at t=0 (-> 240s), 1st post-batch check
+    # still under deadline (t=0), 2nd post-batch check jumps past it (t=300).
+    # Patches wsq._monotonic (a dedicated `from time import monotonic as
+    # _monotonic` alias local to this module), NEVER the shared `time` module
+    # itself -- asyncio's own event loop relies on the real time.monotonic
+    # internally, so patching it globally corrupts the loop (this is exactly
+    # what caused a mysterious ~12-minute hang the first time this test was
+    # written that way).
+    clock = iter([0.0, 0.0, 300.0])
+    monkeypatch.setattr(wsq, "_monotonic", lambda: next(clock))
+
+    await wsq.run_wallet_scan_queue_cycle()
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_cycle_no_notification_below_next_milestone(monkeypatch):
     monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
     monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")

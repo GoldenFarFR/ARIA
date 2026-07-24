@@ -730,6 +730,25 @@ def _sync_x_curiosity_enabled() -> None:
                         60,
                         int(os.environ.get("ARIA_AUTONOMY_CYCLE_MINUTES", "360") or 360),
                     )
+            # 07/24 -- real production gap found by a throughput audit and confirmed
+            # independently (docker exec against the live container): these 3 tasks'
+            # `enabled()` functions exist and were already returning True in prod for
+            # 2 of them, but nothing here ever read that value -- they stayed frozen
+            # at the static `enabled=False` declared in HEARTBEAT_TASKS forever. This
+            # silently nullified capabilities CLAUDE.md documents as live (21/07
+            # "Intelligence wallet/entité propriétaire... EN LIGNE").
+            if task.id == "smart_money_leaderboard_discovery_cycle":
+                from aria_core.services.smart_money_leaderboard import smart_money_leaderboard_enabled
+
+                task.enabled = smart_money_leaderboard_enabled()
+            if task.id == "token_holder_extraction_cycle":
+                from aria_core.services.token_holder_extraction_cycle import token_holder_extraction_enabled
+
+                task.enabled = token_holder_extraction_enabled()
+            if task.id == "trade_devils_advocate_cycle":
+                from aria_core.skills.trade_devils_advocate import trade_devils_advocate_enabled
+
+                task.enabled = trade_devils_advocate_enabled()
         except Exception as exc:
             # A broken task gate (missing import, undeployed dependency...) must
             # never prevent the evaluation of the OTHER tasks, nor, upstream, the

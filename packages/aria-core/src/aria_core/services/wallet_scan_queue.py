@@ -30,6 +30,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from time import monotonic as _monotonic
 
 import aiosqlite
 
@@ -73,6 +74,28 @@ MAX_WALLETS_PER_CYCLE = 1
 # all. ~10 tokens x ~24s (worst case) = ~240s, leaving a real margin under
 # 300s for the rest of run_wallet_scan_queue_cycle's own work.
 BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET = 10
+
+# 07/24 -- direct operator request: stop dribbling 10 tokens/cycle across
+# dozens of 20-minute-spaced heartbeat ticks (a ~680-token wallet took ~23h to
+# fully cover) -- get as close as possible to "one wallet fully covered in one
+# go, then move to the next" WITHOUT reintroducing the 07/23 checkpoint-loss
+# bug (score_wallets only persists its checkpoint AFTER a batch fully
+# completes -- a batch cancelled mid-way loses everything in it) and WITHOUT
+# touching heartbeat.py's global 300s per-task ceiling (`_TASK_TIMEOUT_
+# SECONDS`, shared by every other heartbeat task -- widening it here would
+# widen it for everyone). Fix: `run_wallet_scan_queue_cycle` now loops several
+# already-safe `BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET`-sized sub-batches on
+# the SAME catch-up wallet within a single heartbeat tick -- each sub-batch
+# still checkpoints atomically before the next one starts, so a cancellation
+# never loses more than the sub-batch in flight. 240s leaves a 60s margin
+# under the 300s ceiling for this function's own overhead (DB writes,
+# notifier calls). Under sustained GeckoTerminal 429 pressure (the documented
+# worst case, ~24s/token -- see BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET above)
+# a sub-batch alone can already take ~240s, so the loop naturally degrades to
+# today's one-sub-batch-per-tick pace -- this only speeds things up under
+# normal throttle conditions (~2.2s/call, GeckoTerminal's real measured
+# pace), never removes the existing safety margin.
+CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS = 240
 
 # Permanent tracking (15/07, follow-up 2, explicit operator decision): once
 # full coverage is reached, a check once a week is enough -- nothing left to
@@ -423,10 +446,29 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
     now = datetime.now(timezone.utc)
 
     for queued in pending:
-        report = await score_wallets(
-            [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
-            max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET,
-        )
+        if queued.is_monitoring:
+            report = await score_wallets(
+                [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
+                max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET,
+            )
+        else:
+            # Catch-up wallet (07/24, operator request) -- keep advancing
+            # THIS SAME wallet across several small sub-batches within the
+            # one heartbeat tick, instead of just one, until it's fully
+            # covered or the soft deadline is reached (see
+            # CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS above for why this is safe).
+            deadline = _monotonic() + CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS
+            while True:
+                report = await score_wallets(
+                    [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
+                    max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET,
+                )
+                if not report.available or not report.wallets:
+                    break
+                card = report.wallets[0]
+                if card.full_coverage or card.tokens_analyzed == 0 or _monotonic() >= deadline:
+                    break
+
         if not report.available or not report.wallets:
             await mark_attempt(queued.wallet, next_check_at=now)
             continue
