@@ -42,6 +42,10 @@ async def test_public_visitor_pasting_url_always_declines(monkeypatch):
     """Décline systématiquement, MÊME SI le gate ARIA_WEB_FETCH_ENABLED est activé --
     cette capacité reste admin-only, même posture que vision_enabled()/photos."""
     monkeypatch.setenv("ARIA_WEB_FETCH_ENABLED", "1")
+    # 24/07 -- la conversation publique est verrouillée par défaut depuis cette
+    # date (ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED) ; ce test vérifie un
+    # comportement à l'intérieur du chemin actif, donc réactivé explicitement.
+    monkeypatch.setenv("ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED", "1")
 
     async def fail_if_called(*_a, **_k):
         raise AssertionError("answer_from_page ne doit jamais être appelé pour un visiteur public")
@@ -59,6 +63,7 @@ async def test_public_visitor_pasting_url_always_declines(monkeypatch):
 async def test_public_visitor_without_url_not_intercepted(monkeypatch):
     """Un message public SANS URL ne doit jamais être intercepté par ce nouveau
     chemin -- passe par le pipeline normal (aria_brain.process), inchangé."""
+    monkeypatch.setenv("ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED", "1")
     from aria_core.brain import aria_brain
 
     called = {"n": 0}

@@ -1509,11 +1509,41 @@ async def _handle_experiment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await _reply(message, out)
 
 
+def _telegram_public_conversation_enabled() -> bool:
+    """Seam gated OFF by default (locked) -- 24/07, explicit operator decision
+    ("verrouille aria") ahead of the real-capital "jour J": a non-admin
+    Telegram visitor no longer gets a free LLM conversation (public_mode).
+    Everything else non-admin-gated (``/start`` welcome, ``/whoami``
+    self-identification -- both zero LLM cost, no operator tool exposed)
+    stays as-is, unaffected by this gate; only the free-text conversation
+    path (``_handle_public_message`` -> ``aria_brain.process``) is cut. Set
+    ``ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED=true`` to reopen this surface
+    later (e.g. once the paying-member product actually launches) -- no
+    redeploy needed, same seam pattern as ``vision_enabled()``."""
+    import os
+
+    return os.environ.get("ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _telegram_locked_notice() -> str:
+    return (
+        f"Cet espace Telegram est réservé à l'équipe pour le moment.\n"
+        f"Retrouve {holding_name()} sur le site : {settings.public_site_url}"
+    )
+
+
 async def _handle_public_message(update: Update, text: str) -> None:
-    """Courtesy + verified info only — no operator tools."""
+    """Courtesy + verified info only — no operator tools. 24/07: locked by
+    default, see ``_telegram_public_conversation_enabled``."""
     message = update.message
     user = update.effective_user
     if not message or not user:
+        return
+
+    if not _telegram_public_conversation_enabled():
+        await _reply(message, _telegram_locked_notice())
         return
 
     if _URL_RE.search(text):

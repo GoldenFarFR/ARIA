@@ -5,6 +5,12 @@
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 
+[DEPLOYE] Sujet    : Conversation Telegram publique (non-admin) verrouillee sur decision operateur
+Date : 2026.07.24 / Probleme : un visiteur non-admin recevait une vraie conversation LLM (public_mode, aria_brain.process) - decision operateur explicite ("verrouille aria") avant le jour J capital reel, aucune conversation ouverte a un inconnu.
+Solution : gate ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED (OFF par defaut = verrouille), _handle_public_message repond un message fixe sans appel LLM ; /start (accueil) et /whoami (auto-identification) restent inchanges, deja sans risque - telegram_bot.py/narrative.py (cf. historique git 24/07)
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : Commande tapee seule ("Watchlist") non reconnue par le routeur langage-naturel
 Date : 2026.07.20 / Probleme : les 7 detecteurs NL existants ciblaient tous des phrases completes - aucun ne matchait le nom nu d'une commande tape seul, le cas le plus direct (quasi un slash sans le slash). Coutait un appel LLM payant (11857 tokens) au lieu de router gratuitement.
 Solution : nouveau dict _NL_BARE_ALIASES (texte normalise -> action) verifie EN PREMIER, avant les regex de phrase - couvre les 8 commandes de lecture deja sures. Piege de test evite : dispatch resolu a l'appel (_dispatch_nl_action), jamais fige a l'import (un dict de references de fonctions capturees a l'import casse le monkeypatching en test) - telegram_bot.py (cf. historique git 20/07)

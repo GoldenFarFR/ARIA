@@ -326,14 +326,18 @@ def telegram_admin_start(mode: str, channel_links: str) -> str:
     )
 
 
-def telegram_visitor_start(site_url: str, admin_label: str, bot_url: str) -> str:
+def telegram_visitor_start(site_url: str, _admin_label: str, bot_url: str) -> str:
+    """24/07 -- operator decision ("verrouille aria"): this Telegram bot is no
+    longer a public conversation surface, so the welcome message must not
+    promise one (cf. ``ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED``,
+    ``gateway/telegram_bot.py``). ``_admin_label`` kept in the signature
+    (unchanged caller, positional) though no longer referenced in the copy --
+    there is nothing left to contrast it against once no question is taken."""
     h = holding_name()
     return (
         f"Bienvenue — {AGENT_NAME} (Vanguard / {h}).\n\n"
-        f"Mode public : échanges courtois et informations vérifiées sur le projet.\n"
-        f"Je ne modifie pas le code ni la configuration — c'est réservé à {admin_label}.\n\n"
-        f"Pose une question sur Vanguard, le modèle ZHC ou le jeton BASE.\n"
-        f"Site : {site_url}\n{bot_url}"
+        f"Cet espace Telegram est réservé à l'équipe pour le moment.\n"
+        f"Retrouve {AGENT_NAME} sur le site : {site_url}\n{bot_url}"
     )
 
 

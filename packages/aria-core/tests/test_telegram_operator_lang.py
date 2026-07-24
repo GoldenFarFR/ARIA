@@ -57,6 +57,9 @@ async def test_operator_path_never_passes_english_lang_on_ambiguous_message(monk
 
 @pytest.mark.asyncio
 async def test_public_path_unchanged_on_same_ambiguous_message(monkeypatch):
+    # 24/07 -- conversation publique verrouillée par défaut ; ce test vérifie
+    # un comportement du chemin actif, réactivé explicitement.
+    monkeypatch.setenv("ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED", "1")
     seen = {}
 
     async def fake_process(self, text, lang="fr", public_mode=None, visitor_id=""):
