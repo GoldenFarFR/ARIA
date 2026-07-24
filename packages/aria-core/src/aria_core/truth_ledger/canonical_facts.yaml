@@ -272,3 +272,70 @@
     depth="develop" itself, which stays reserved for VC/judge reasoning. Source: GitHub issue
     #27 (aria-knowledge-proposal), verified and integrated 2026-07-14.
     Golden rule: updating Render env vars does not reload the running Python process — redeploy first.
+
+- id: cdp-builder-grants-base-batches-2025
+  topic: ecosystem
+  tags: [base, coinbase, cdp, grants, funding, ecosystem]
+  question: What are notable past CDP Builder Grants / Base Batches winners, and how selective are these programs?
+  answer: >
+    Summer 2025 CDP Builder Grants: $30k awarded across 13 projects out of 55 applications.
+    Winners include Yield Seeker (autonomous DeFi yield agents that create and self-fund their
+    own wallets, rebalance positions, prioritize capital safety) and 1Shot API (on-chain
+    automation letting agents pay for API access directly on-chain via x402/AgentKit). Spring
+    2025: M1 Agent, an autonomous Morpho vault manager with real-time cross-market risk
+    reallocation. Base Batches 003: 12 teams selected out of 1,175+ applicants (~1.0%
+    acceptance), focused on DeFi/AI/prediction markets/stablecoins. Source: GitHub issue #48
+    (aria-knowledge-proposal), verified against official Coinbase/Base blog posts, integrated
+    2026-07-24.
+
+- id: base-sequencer-mev-2026
+  topic: infra
+  tags: [base, l2, sequencer, mev, mempool, flashbots, flashblocks]
+  question: How does Base's sequencer design affect MEV exposure and priority-fee ordering for a swap?
+  answer: >
+    Base runs a centralized sequencer (Coinbase/OP Labs) with no public L2 mempool by
+    construction (OP Stack default) — classic front-running via a public mempool doesn't
+    apply, and Flashbots Protect isn't even integrated on Base (officially only Ethereum
+    Mainnet/Sepolia are supported). But "MEV is limited to back-running" would be an
+    oversimplification: probabilistic/statistical front-running and sandwiching remain
+    possible via latency games on Base's Flashblocks (200ms sub-blocks introduced July 2025)
+    — only the FIRST sub-block of each 2s block has efficient fee-based ordering; beyond
+    that, arrival timing dominates over the fee paid. Practical implication: paying a higher
+    priority fee mostly helps only if the transaction lands in the first sub-block; latency to
+    the sequencer matters more than fee size for anything after it. Source: GitHub issue #47
+    (aria-knowledge-proposal), verified against arxiv 2506.01462 and official OP
+    Stack/Flashbots docs, integrated 2026-07-24 (corrected from the original proposal's
+    back-running-only claim).
+
+- id: webacy-wallet-reputation
+  topic: security
+  tags: [security, webacy, wallet-reputation, goplus, complementary]
+  question: What is Webacy, and how does it complement GoPlus for wallet-scoring?
+  answer: >
+    Webacy is a wallet/address reputation platform (San Francisco), complementary to GoPlus
+    (which scores TOKENS/contracts, not wallets) — Webacy scores an ADDRESS's risk/safety
+    (Threat Risks API incl. OFAC-sanctioned-address matches, Exposure Risk API, Holder
+    Analysis API). Real, verified clients: Revoke.cash (Approval Risk API), Etherscan (Safety
+    Score on address cards), Arculus (cold storage). Funding: ~6.9M$ documented directly by
+    Webacy across two named rounds (4M$ seed — Mozilla Ventures/Gary Vaynerchuk; 2.9M$ latest
+    — GSR/Sui Foundation, with Balaji Srinivasan/Sebastien Borget participating); third-party
+    databases (PitchBook) cite a ~10M$ cumulative total, not confirmed by an official Webacy
+    source — cite ~6.9M$ if a precise, source-backed figure is needed. No overlap with
+    goplus.py/smart_money.py's scope (confirmed by code review). Source: GitHub issue #45
+    (aria-knowledge-proposal), verified and integrated 2026-07-24.
+
+- id: chainaware-rugpull-api-2026
+  topic: security
+  tags: [security, chainaware, rugpull, goplus, unresolved]
+  question: What is ChainAware, and can its /rug/pull-check chain coverage be cited as a settled fact?
+  answer: >
+    ChainAware.ai is a real, legitimate blockchain-security service incubated by ChainGPT Labs
+    (confirmed via ChainGPT's own blog and Chainwire/Finbold/CryptoGlobe coverage of a $50k
+    grant + $400k IDO). Its behavioral rug-pull signal (probabilityFraud score, liquidityEvent
+    transaction log) is real and documented. However, its exact per-chain coverage for
+    /rug/pull-check is UNRESOLVED as of 2026-07-24: ChainAware's own MCP server docs list only
+    ETH/BNB/Base/Haqq (no Solana), while two other official ChainAware pages (blog + docs site)
+    explicitly list Solana as supported. Do not state a specific chain list for this endpoint
+    as settled until verified against the live API/swagger schema directly. Source: GitHub
+    issue #49 (aria-knowledge-proposal) — flagged as unresolved rather than integrated as
+    stated, 2026-07-24.

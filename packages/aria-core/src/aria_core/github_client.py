@@ -446,6 +446,25 @@ class GitHubClient:
             r.raise_for_status()
             return r.json()
 
+    async def close_issue(
+        self, owner: str, repo: str, issue_number: int, *, reason: str | None = None
+    ) -> dict[str, Any]:
+        """Closes an issue (PATCH state=closed). ``reason`` is GitHub's own
+        ``state_reason`` field ("completed"/"not_planned"/"reopened") -- distinct
+        from the human-readable explanation, which belongs in a comment posted
+        separately (never a silent close, cf. the aria-knowledge-proposal protocol)."""
+        payload: dict[str, Any] = {"state": "closed"}
+        if reason:
+            payload["state_reason"] = reason
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.patch(
+                f"{API}/repos/{owner}/{repo}/issues/{issue_number}",
+                headers=self._headers,
+                json=payload,
+            )
+            r.raise_for_status()
+            return r.json()
+
     async def count_merged_prs(
         self,
         owner: str,
