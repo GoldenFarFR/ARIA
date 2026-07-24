@@ -101,14 +101,40 @@ launchpads:
     norms:
       liquidity_note: "liquidité très élevée par défaut sur chaque lancement (observé opérateur)"
 
-  # Ape.store / Mint.club : cités dans la recherche launchpads (10/07), diligence PAS
-  # encore faite (pas d'API de découverte vérifiée en direct, pas d'adresse confirmée
-  # BaseScan). Seams documentés volontairement vides — cf. doctrine "profondeur
-  # proportionnelle à l'enjeu" : on ne fabrique pas un client ni un registre sur une
-  # hypothèse. À enrichir seulement après vraie diligence (docs officielle, modèle de
-  # garde, tarification, signaux de légitimité).
+  # Ape.store : diligence FAITE le 24/07 (suite à une observation opérateur directe
+  # -- "en general la page ape propose des token bizarre"). Vraie recherche externe
+  # (site officiel, ScamAdviser, presse) : mécanisme "Fair Launch" (n'importe qui
+  # lance un token pour le prix du gas, listage automatique Uniswap au seuil de
+  # 69 000$ de market cap -- SOUS le plancher de liquidité momentum d'ARIA, 50 000$,
+  # donc un token fraîchement gradué reste en zone à risque de manipulation par
+  # construction). ScamAdviser : "probablement pas un scam" mais trust score "fair"
+  # (pas bon). Signal le plus parlant, confirmant l'observation opérateur : AUCUNE
+  # identité d'équipe trouvée nulle part (site officiel, presse, réseaux) --
+  # contrairement aux 4 autres launchpads déjà couverts ici, qui ont tous une équipe
+  # identifiée (Flaunch -> Flayer Labs/Joel Strahl, Zora -> Jacob Horne). Piège de
+  # nommage réel trouvé en cherchant : "Ape Terminal" (Zurich, IDO launchpad avec
+  # outils de sniping/frontrunning intégrés) est une plateforme TOTALEMENT
+  # différente, jamais à confondre avec Ape.store. Verdict : pas de scandale
+  # documenté publiquement sur Ape.store précisément, mais signaux de légitimité
+  # insuffisants (doctrine "profondeur proportionnelle à l'enjeu") -- reste NON
+  # activé, aucun client construit, adresse factory jamais recherchée (pas la peine
+  # tant que la légitimité de base n'est pas mieux établie).
   ape_store:
     label: "Ape.store"
+    confidence: unverified
+    addresses: []
+    norms:
+      bonding_curve: false
+      liquidity_note: "Fair Launch prix du gas, listage Uniswap automatique a 69 000$ MC (sous le plancher momentum 50 000$)"
+
+  # Mint.club : cité dans la recherche launchpads (10/07), diligence PAS encore
+  # faite (pas d'API de découverte vérifiée en direct, pas d'adresse confirmée
+  # BaseScan). Seam documenté volontairement vide — même doctrine "profondeur
+  # proportionnelle à l'enjeu" qu'Ape.store ci-dessus. À enrichir seulement après
+  # vraie diligence (docs officielle, modèle de garde, tarification, signaux de
+  # légitimité).
+  mint_club:
+    label: "Mint.club"
     confidence: unverified
     addresses: []
     norms: {}
