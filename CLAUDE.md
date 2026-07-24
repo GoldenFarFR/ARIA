@@ -535,6 +535,7 @@ de zéro.
 - `docs/HANDOFF_TELEGRAM.md` — routage langage naturel, workflows conversationnels, aria-brain.
 - `docs/HANDOFF_SECURITE.md` — secrets, CI, rotations de clés, accès.
 - `docs/HANDOFF_MOTEUR_LEGITIMITE.md` — score de sécurité, mint_authority, safety_screen (poche VC).
+- `docs/HANDOFF_DOPPLER.md` — lecture de prix on-chain Uniswap v4 pour les tokens Bankr/Doppler.
 - **Cette liste doit rester à jour** : tout nouveau fichier `docs/HANDOFF_*.md` créé (nouveau
   composant jamais touché avant) s'ajoute ici dans le MÊME commit — un HANDOFF non indexé ici
   est aussi invisible qu'un HANDOFF qui n'existe pas.
