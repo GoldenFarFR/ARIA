@@ -94,7 +94,7 @@ async def test_cycle_opens_issue_never_a_pr_or_commit(monkeypatch):
     call = fake_client.calls[0]
     assert call["repo"] == cp.TARGET_REPO
     assert call["labels"] == ["aria-proposal"]
-    assert "revue humaine requise" in call["body"]
+    assert "human review required" in call["body"]
     assert len(notified) == 1
     assert "https://github.com" in notified[0]
 

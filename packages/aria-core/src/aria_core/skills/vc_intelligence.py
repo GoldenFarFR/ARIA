@@ -26,19 +26,21 @@ from typing import Any
 TARGET_REPO = "ARIA"
 
 _VC_SYNTHESIS_SYSTEM = (
-    "Tu es ARIA, analyste on-chain de Aria Vanguard ZHC. On te montre des tweets récents de "
-    "VC crypto reconnus (a16z, Paradigm, Dragonfly, Variant, Coinbase Ventures, Electric "
-    "Capital, IOSG) -- lecture seule, jamais une source de vérité en soi. Synthétise en 2-4 "
-    "phrases ce qu'ils signalent comme conviction/thèse en ce moment (secteur, narratif, "
-    "type de projet qu'ils semblent privilégier). Si le contenu est trop faible ou générique "
-    "pour en tirer un signal réel, dis-le honnêtement plutôt que d'inventer une tendance. "
-    "Réponds STRICTEMENT en JSON : "
-    '{"summary": "<synthèse courte, français>", "durable": true|false, '
-    '"proposal_title": "<titre court si durable, sinon vide>", '
-    '"proposal_body": "<piste de calibration structurée en markdown si durable -- jamais une '
-    "réécriture directe des fichiers de stratégie, une PISTE à évaluer par l'opérateur -- "
-    'sinon vide>"}. `durable` = true SEULEMENT si le signal est assez fort et cohérent pour '
-    "mériter une vraie réflexion stratégique, jamais pour un tweet isolé ou du bruit."
+    "You are ARIA, on-chain analyst at Aria Vanguard ZHC. You're shown recent tweets "
+    "from recognized crypto VCs (a16z, Paradigm, Dragonfly, Variant, Coinbase "
+    "Ventures, Electric Capital, IOSG) -- read-only, never a source of truth on its "
+    "own. Summarize in 2-4 sentences what they're signaling as current "
+    "conviction/thesis (sector, narrative, type of project they seem to favor). If "
+    "the content is too thin or generic to draw a real signal, say so honestly "
+    "rather than inventing a trend. Answer STRICTLY in JSON: "
+    '{"summary": "<short summary, in French (their working language on this '
+    'channel)>", "durable": true|false, '
+    '"proposal_title": "<short title in English if durable, else empty>", '
+    '"proposal_body": "<calibration lead structured in markdown, in English, if '
+    "durable -- never a direct rewrite of the strategy files, a LEAD for the "
+    'operator to evaluate -- else empty>"}. `durable` = true ONLY if the signal is '
+    "strong and coherent enough to deserve real strategic thought, never for an "
+    "isolated tweet or noise."
 )
 
 
@@ -54,7 +56,7 @@ def _format_vc_items_for_prompt(items: list[dict[str, Any]]) -> str:
         topic = str(item.get("topic") or "?")
         text = str(item.get("text") or "").strip()[:280]
         if text:
-            lines.append(f"- {topic} : {text}")
+            lines.append(f"- {topic}: {text}")
     return "\n".join(lines)
 
 
@@ -72,13 +74,13 @@ async def _propose_strategy_issue(title: str, body: str, *, github_client=None) 
     owner = settings.github_owner
     body_full = (
         body
-        + "\n\n---\n*Piste générée depuis la veille des thèses VC (lecture seule, X public) "
-        "-- jamais une réécriture des fichiers de stratégie. Revue et décision opérateur "
-        "requises avant toute intégration.*"
+        + "\n\n---\n*Lead generated from VC thesis monitoring (read-only, public X) -- "
+        "never a rewrite of the strategy files. Operator review and decision required "
+        "before any integration.*"
     )
     try:
         issue = await github_client.create_issue(
-            owner, TARGET_REPO, f"[stratégie] {title}", body_full,
+            owner, TARGET_REPO, f"[strategy] {title}", body_full,
             labels=["aria-strategy-proposal"],
         )
     except Exception:  # noqa: BLE001 -- a GitHub outage must never break the cycle

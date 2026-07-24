@@ -102,7 +102,7 @@ async def test_proposes_issue_when_durable(monkeypatch):
     assert result["issue_url"] == "https://github.com/GoldenFarFR/ARIA/issues/99"
     assert len(gh.calls) == 1
     assert gh.calls[0]["labels"] == ["aria-strategy-proposal"]
-    assert "jamais une réécriture" in gh.calls[0]["body"]
+    assert "never a rewrite" in gh.calls[0]["body"]
 
 
 @pytest.mark.asyncio

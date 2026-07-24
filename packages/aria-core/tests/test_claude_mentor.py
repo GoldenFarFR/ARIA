@@ -134,7 +134,7 @@ async def test_snapshot_fails_closed_per_source_never_crashes(monkeypatch):
     assert snapshot["paper_trading"]["closed_trades"] == 3
     assert cm._has_enough_signal(snapshot) is True
     text = cm._format_snapshot_for_prompt(snapshot)
-    assert "indisponible" in text
+    assert "unavailable" in text
     assert "db locked" in text
 
 
@@ -188,7 +188,7 @@ async def test_cycle_opens_knowledge_issue_when_durable_never_a_commit(monkeypat
     assert len(fake_gh.calls) == 1
     call = fake_gh.calls[0]
     assert call["labels"] == ["aria-knowledge-proposal"]
-    assert "revue humaine requise" in call["body"]
+    assert "human review required" in call["body"]
     assert not hasattr(fake_gh, "create_pull_request")
     assert not hasattr(fake_gh, "create_commit")
 

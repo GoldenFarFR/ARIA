@@ -121,7 +121,7 @@ async def test_cycle_opens_knowledge_issue_never_a_commit(monkeypatch):
     assert len(fake_client.calls) == 1
     call = fake_client.calls[0]
     assert call["labels"] == ["aria-knowledge-proposal"]
-    assert "revue humaine requise" in call["body"]
+    assert "human review required" in call["body"]
     assert notified and "https://github.com" in notified[0]
     assert not hasattr(fake_client, "create_pull_request")
     assert not hasattr(fake_client, "create_commit")

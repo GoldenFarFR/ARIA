@@ -131,7 +131,7 @@ async def test_cycle_durable_opens_knowledge_issue_never_a_commit(monkeypatch):
     assert len(fake_gh.calls) == 1
     call = fake_gh.calls[0]
     assert call["labels"] == ["aria-knowledge-proposal"]
-    assert "revue humaine requise" in call["body"]
+    assert "human review required" in call["body"]
     assert not hasattr(fake_gh, "create_pull_request")
     assert not hasattr(fake_gh, "create_commit")
 
