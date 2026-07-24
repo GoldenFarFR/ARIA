@@ -77,22 +77,33 @@ au propriétaire Tangem de `aria-smart-st`). Le pont fonctionne.
    (boot/heartbeat/cron/systemd/docker). La fenêtre d'attaque est réduite aux moments où tu
    le lances sciemment.
 
-**Le durcissement ajouté contre "détourner le hash pour vider un wallet" :**
-Par défaut, ce pont ne peut demander QUE `personal_sign` — signer un MESSAGE texte, ce qui
-ne déplace **jamais** de fonds, quel que soit le réseau. Les deux seules méthodes capables
-de bouger des fonds ou d'autoriser une dépense — `eth_sendTransaction` (une vraie
-transaction) et `eth_signTypedData_v4` (peut être un Permit ERC-2612) — sont **bloquées**
-sauf si tu actives explicitement `TANGEM_BRIDGE_ALLOW_TX_SIGNING=true`. Donc même si un
-attaquant contrôlait la machine pendant que le service tourne, le pire qu'il puisse demander
-par défaut est une signature de message inoffensive.
+**Trois durcissements contre "détourner le hash pour vider un wallet" :**
+
+1. **Verrou sur les méthodes dangereuses.** Par défaut, ce pont ne peut demander QUE
+   `personal_sign` — signer un MESSAGE texte, ce qui ne déplace **jamais** de fonds, quel que
+   soit le réseau (un message peut servir à de l'authentification, donc ce n'est pas "sans
+   aucun effet" dans l'absolu — mais il ne bouge aucun fonds). Les deux seules méthodes
+   capables de bouger des fonds ou d'autoriser une dépense — `eth_sendTransaction` (une vraie
+   transaction) et `eth_signTypedData_v4` (peut être un Permit ERC-2612) — sont **bloquées**
+   sauf si tu actives explicitement `TANGEM_BRIDGE_ALLOW_TX_SIGNING=true`.
+2. **Secret partagé (auth locale).** Chaque appel au service exige un jeton
+   `Authorization: Bearer <token>`. Le service génère ce jeton au démarrage et l'écrit dans un
+   fichier `0600` (lisible seulement par ton utilisateur, `<tmp>/tangem-bridge-token`, ou via
+   `TANGEM_BRIDGE_TOKEN`). Ça ferme le résidu "n'importe quel process local peut appeler le
+   service" — un process d'un autre utilisateur ne peut pas lire le jeton. (Ça ne protège pas
+   contre un attaquant déjà root, qui peut tout lire — mais root a déjà tout de toute façon.)
+3. **Fermeture de session.** Un endpoint `/wc/disconnect` (appelé automatiquement par les
+   scripts en fin de test) ferme la session WalletConnect pour qu'elle ne puisse pas être
+   réutilisée pour d'autres signatures pendant que le service tourne encore.
 
 **Le seul résidu honnête** (aucun système n'a zéro risque) : le jour où tu activeras le flag
-transaction (nécessaire plus tard pour le grant unique de Spend Permission), un attaquant
-local pourrait en théorie glisser une demande de transaction malveillante pendant une session
-active. **La défense finale, c'est toi : l'app Tangem affiche TOUJOURS ce que tu signes**
-(message, ou destinataire + montant d'une transaction) — lis l'écran avant de taper. Et une
-fois la migration Smart Account terminée, le plafond de 50$/semaine gravé dans le contrat +
-la Policy "swap uniquement" limiteront le pire cas même si une mauvaise transaction passait.
+transaction (nécessaire plus tard pour le grant unique de Spend Permission), un attaquant qui
+serait déjà TON utilisateur sur la machine ET pendant une session active pourrait en théorie
+glisser une demande de transaction malveillante. **La défense finale, c'est toi : l'app Tangem
+affiche TOUJOURS ce que tu signes** (message, ou destinataire + montant d'une transaction) —
+lis l'écran avant de taper. Et une fois la migration Smart Account terminée, le plafond de
+50$/semaine gravé dans le contrat + la Policy "swap uniquement" limiteront le pire cas même si
+une mauvaise transaction passait.
 
 ## Lancer le service — usage
 

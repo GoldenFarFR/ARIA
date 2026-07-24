@@ -42,8 +42,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
@@ -60,6 +62,29 @@ def bridge_url() -> str:
     ``TANGEM_BRIDGE_URL`` is set to (defaults to the Node service's own
     default port)."""
     return os.environ.get("TANGEM_BRIDGE_URL", _DEFAULT_BRIDGE_URL).rstrip("/")
+
+
+def _auth_token() -> str | None:
+    """The shared bearer token the Node bridge requires on every request
+    (external audit hardening, 24/07). Read from ``TANGEM_BRIDGE_TOKEN`` if
+    set, otherwise from the 0600 token file the Node service writes at startup
+    (``TANGEM_BRIDGE_TOKEN_FILE``, default ``<tmpdir>/tangem-bridge-token``).
+    ``None`` if neither is available -- the caller still sends the request
+    (without the header), which the bridge will reject with 401; degrading to
+    an explicit unauthorized error is safer than guessing a token."""
+    env_token = os.environ.get("TANGEM_BRIDGE_TOKEN", "").strip()
+    if env_token:
+        return env_token
+    token_file = os.environ.get("TANGEM_BRIDGE_TOKEN_FILE") or str(Path(tempfile.gettempdir()) / "tangem-bridge-token")
+    try:
+        return Path(token_file).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _auth_headers() -> dict:
+    token = _auth_token()
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 @dataclass
@@ -93,7 +118,7 @@ async def start_connection(*, timeout_seconds: float = 10.0) -> BridgeConnectRes
     is asynchronous -- see ``wait_for_connection``."""
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            resp = await client.post(f"{bridge_url()}/wc/connect")
+            resp = await client.post(f"{bridge_url()}/wc/connect", headers=_auth_headers())
         if resp.status_code != 200:
             return BridgeConnectResult(available=False, error=f"bridge returned HTTP {resp.status_code}")
         data = resp.json()
@@ -107,7 +132,9 @@ async def poll_status(connection_id: str, *, timeout_seconds: float = 10.0) -> B
     point for actually waiting on the operator's tap."""
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            resp = await client.get(f"{bridge_url()}/wc/status", params={"connectionId": connection_id})
+            resp = await client.get(
+                f"{bridge_url()}/wc/status", params={"connectionId": connection_id}, headers=_auth_headers(),
+            )
         if resp.status_code != 200:
             return BridgeStatusResult(available=False, error=f"bridge returned HTTP {resp.status_code}")
         data = resp.json()
@@ -149,6 +176,7 @@ async def request_signature(
             resp = await client.post(
                 f"{bridge_url()}/wc/request-signature",
                 json={"connectionId": connection_id, "method": method, "params": params, "chainId": chain_id},
+                headers=_auth_headers(),
             )
         if resp.status_code != 200:
             data = {}
@@ -161,3 +189,20 @@ async def request_signature(
         return BridgeSignatureResult(available=True, result=data.get("result"))
     except httpx.HTTPError as exc:
         return BridgeSignatureResult(available=False, error=f"bridge unreachable: {exc}")
+
+
+async def disconnect(connection_id: str, *, timeout_seconds: float = 10.0) -> bool:
+    """Closes the WalletConnect session so it can never be reused for another
+    signature (external audit hardening, 24/07, residual #2). Best-effort and
+    idempotent -- returns True if the bridge acknowledged, False otherwise;
+    never raises. Callers SHOULD call this the moment a session's job is done."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            resp = await client.post(
+                f"{bridge_url()}/wc/disconnect",
+                json={"connectionId": connection_id},
+                headers=_auth_headers(),
+            )
+        return resp.status_code == 200
+    except httpx.HTTPError:
+        return False

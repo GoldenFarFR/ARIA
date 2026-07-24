@@ -45,11 +45,11 @@ class _FakeAsyncClient:
             raise type(self)._raise_error
         return type(self)._response
 
-    async def get(self, url, params=None):
-        return await self._maybe_raise_or_respond("GET", url, params=params)
+    async def get(self, url, params=None, headers=None):
+        return await self._maybe_raise_or_respond("GET", url, params=params, headers=headers or {})
 
-    async def post(self, url, json=None):
-        return await self._maybe_raise_or_respond("POST", url, json=json)
+    async def post(self, url, json=None, headers=None):
+        return await self._maybe_raise_or_respond("POST", url, json=json, headers=headers or {})
 
 
 @pytest.fixture
@@ -59,6 +59,8 @@ def _fresh_client(monkeypatch):
     _FakeAsyncClient._captured_calls = []
     monkeypatch.setattr(tangem_bridge.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.delenv("TANGEM_BRIDGE_URL", raising=False)
+    # Deterministic token via env so tests never depend on a real token file.
+    monkeypatch.setenv("TANGEM_BRIDGE_TOKEN", "test-token-abc")
     return _FakeAsyncClient
 
 
@@ -191,3 +193,54 @@ async def test_request_signature_passes_chain_id_and_method(_fresh_client):
     assert kwargs["json"]["method"] == "personal_sign"
     assert kwargs["json"]["chainId"] == "eip155:84532"
     assert kwargs["json"]["connectionId"] == "conn_1"
+
+
+# ── shared-secret auth + disconnect (external audit hardening, 24/07) ────────
+
+
+@pytest.mark.asyncio
+async def test_every_request_carries_the_bearer_token(_fresh_client):
+    _fresh_client._response = _FakeResponse(200, {"uri": "wc:x@2", "connectionId": "c1"})
+    await tangem_bridge.start_connection()
+    _, _, kwargs = _fresh_client._captured_calls[-1]
+    assert kwargs["headers"]["Authorization"] == "Bearer test-token-abc"
+
+
+@pytest.mark.asyncio
+async def test_token_read_from_file_when_env_absent(_fresh_client, tmp_path, monkeypatch):
+    monkeypatch.delenv("TANGEM_BRIDGE_TOKEN", raising=False)
+    token_file = tmp_path / "tok"
+    token_file.write_text("file-token-xyz\n", encoding="utf-8")
+    monkeypatch.setenv("TANGEM_BRIDGE_TOKEN_FILE", str(token_file))
+    _fresh_client._response = _FakeResponse(200, {"uri": "wc:x@2", "connectionId": "c1"})
+    await tangem_bridge.start_connection()
+    _, _, kwargs = _fresh_client._captured_calls[-1]
+    assert kwargs["headers"]["Authorization"] == "Bearer file-token-xyz"
+
+
+@pytest.mark.asyncio
+async def test_no_auth_header_when_no_token_available(_fresh_client, monkeypatch):
+    monkeypatch.delenv("TANGEM_BRIDGE_TOKEN", raising=False)
+    monkeypatch.setenv("TANGEM_BRIDGE_TOKEN_FILE", "/nonexistent/path/does/not/exist")
+    _fresh_client._response = _FakeResponse(200, {"uri": "wc:x@2", "connectionId": "c1"})
+    await tangem_bridge.start_connection()
+    _, _, kwargs = _fresh_client._captured_calls[-1]
+    # No token -> no Authorization header; the bridge will 401, which is the
+    # safe outcome (never guess a token).
+    assert "Authorization" not in kwargs["headers"]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_success(_fresh_client):
+    _fresh_client._response = _FakeResponse(200, {"disconnected": True})
+    assert await tangem_bridge.disconnect("conn_1") is True
+    method, url, kwargs = _fresh_client._captured_calls[-1]
+    assert url.endswith("/wc/disconnect")
+    assert kwargs["json"]["connectionId"] == "conn_1"
+    assert kwargs["headers"]["Authorization"] == "Bearer test-token-abc"
+
+
+@pytest.mark.asyncio
+async def test_disconnect_never_raises_on_unreachable(_fresh_client):
+    _fresh_client._raise_error = httpx.ConnectError("refused")
+    assert await tangem_bridge.disconnect("conn_1") is False

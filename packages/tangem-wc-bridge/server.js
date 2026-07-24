@@ -30,12 +30,18 @@
 //     every other testnet-first gate in this project (ARIA_SEPOLIA_*,
 //     aria_core.x402_seller.resolve_network()).
 //
-// Endpoints (all local JSON over plain HTTP -- no TLS needed for 127.0.0.1):
+// Endpoints (all local JSON over plain HTTP -- no TLS needed for 127.0.0.1;
+// ALL require the shared bearer token, see the auth section below):
 //   POST /wc/connect            -> { uri, connectionId }
 //   GET  /wc/status?connectionId=<id> -> { status: "pending"|"connected"|"error", address? }
 //   POST /wc/request-signature  -> { connectionId, method, params, chainId? } -> { result }
+//   POST /wc/disconnect         -> { connectionId } -> { disconnected: true }
 
 import { createServer } from "node:http";
+import { randomBytes } from "node:crypto";
+import { writeFileSync, chmodSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SignClient } from "@walletconnect/sign-client";
 
 const PORT = Number(process.env.TANGEM_BRIDGE_PORT || 8787);
@@ -45,22 +51,59 @@ const PROJECT_ID = process.env.WALLETCONNECT_PROJECT_ID || "";
 // NOTE (verified live 2026-07-24): the Tangem app REJECTS testnets on
 // WalletConnect ("réseaux non pris en charge"), so real Tangem use requires
 // TANGEM_BRIDGE_NETWORK=eip155:8453 (Base mainnet). That is safe as long as
-// only message-signing (personal_sign) is allowed -- a signed message never
-// moves funds regardless of network. See the tx-signing gate just below.
+// only message-signing (personal_sign) is allowed -- a signed message cannot
+// move funds regardless of network. See the tx-signing gate just below.
 const DEFAULT_NETWORK = process.env.TANGEM_BRIDGE_NETWORK || "eip155:84532";
+
+// ── Shared-secret auth between the Python caller and this service ────────────
+// Closes the residual "any local process can hit 127.0.0.1:port and request a
+// signature" gap (external audit 2026-07-24). Every endpoint requires
+// `Authorization: Bearer <token>`. The token comes from TANGEM_BRIDGE_TOKEN if
+// set, otherwise one is generated at startup and written to a 0600 file the
+// Python client + helper scripts read. Defense-in-depth: this does NOT protect
+// against an attacker who is already the SAME user (they can read the file) --
+// but it does stop a DIFFERENT local user/process, and it's near-free. The
+// structural protections (private key on the Tangem card only, physical NFC
+// tap required, 127.0.0.1-only, non-daemon) remain the real guarantees; this
+// is one more layer, not the load-bearing one.
+const TOKEN_FILE = process.env.TANGEM_BRIDGE_TOKEN_FILE || join(tmpdir(), "tangem-bridge-token");
+let AUTH_TOKEN = (process.env.TANGEM_BRIDGE_TOKEN || "").trim();
+if (!AUTH_TOKEN) {
+  AUTH_TOKEN = randomBytes(32).toString("hex");
+  try {
+    writeFileSync(TOKEN_FILE, AUTH_TOKEN, { mode: 0o600 });
+    chmodSync(TOKEN_FILE, 0o600); // enforce even if the file pre-existed
+  } catch (err) {
+    console.error(`FATAL: could not write the auth token file ${TOKEN_FILE}: ${err}`);
+    process.exit(1);
+  }
+}
+
+function _isAuthorized(req) {
+  const header = req.headers["authorization"] || "";
+  const prefix = "Bearer ";
+  if (!header.startsWith(prefix)) return false;
+  const provided = header.slice(prefix.length);
+  // Constant-time-ish compare: lengths differ -> reject; then byte compare.
+  if (provided.length !== AUTH_TOKEN.length) return false;
+  let diff = 0;
+  for (let i = 0; i < provided.length; i++) diff |= provided.charCodeAt(i) ^ AUTH_TOKEN.charCodeAt(i);
+  return diff === 0;
+}
 
 // SECURITY -- the single most important guard in this file (operator's
 // explicit concern 2026-07-24: "no security hole that lets an attacker drain
 // the wallets or hijack the hash"). By DEFAULT this bridge can ONLY request
-// `personal_sign` -- signing a text MESSAGE, which can NEVER move funds no
-// matter what. The two methods that CAN move funds or grant token
-// allowances -- `eth_sendTransaction` (a real transaction) and
-// `eth_signTypedData_v4` (can be an ERC-2612 Permit / an order that
-// authorizes spending) -- are BLOCKED unless TANGEM_BRIDGE_ALLOW_TX_SIGNING
-// is explicitly set. So even if an attacker had local access to this machine
-// WHILE the service was running and a session was live, the worst they could
-// ask for by default is a harmless message signature, not a fund-moving
-// transaction. Enabling tx-signing (needed later for the one-time Spend
+// `personal_sign` -- signing a text MESSAGE, which cannot move funds no matter
+// what (it can still be used for auth/replay attacks in other contexts, so it
+// is not "harmless" in general -- but it moves no funds). The two methods that
+// CAN move funds or grant token allowances -- `eth_sendTransaction` (a real
+// transaction) and `eth_signTypedData_v4` (can be an ERC-2612 Permit / an
+// order that authorizes spending) -- are BLOCKED unless
+// TANGEM_BRIDGE_ALLOW_TX_SIGNING is explicitly set. So even if an attacker had
+// local access to this machine WHILE the service was running and a session was
+// live, the worst they could ask for by default is a message signature that
+// moves no funds. Enabling tx-signing (needed later for the one-time Spend
 // Permission grant) is a deliberate, per-session operator action, never the
 // default -- and even then, the physical NFC tap + the operator READING the
 // Tangem screen before tapping remain the final defense.
@@ -204,13 +247,47 @@ async function handleRequestSignature(req, res) {
   }
 }
 
+async function handleDisconnect(req, res) {
+  // Closes the WalletConnect session so it can't be reused (external audit
+  // 2026-07-24, residual #2). Callers/scripts SHOULD call this the moment
+  // they're done with a session, so a still-running service can't be asked
+  // for further signatures on an already-approved session. Idempotent:
+  // disconnecting an unknown/already-gone session is not an error.
+  const body = await readJsonBody(req);
+  if (body === null) {
+    jsonResponse(res, 400, { error: "malformed JSON body" });
+    return;
+  }
+  const { connectionId } = body;
+  const entry = connectionId ? connections.get(connectionId) : null;
+  if (entry && entry.topic) {
+    try {
+      const client = await getSignClient();
+      await client.disconnect({
+        topic: entry.topic,
+        reason: { code: 6000, message: "bridge session closed by caller" },
+      });
+    } catch {
+      // best-effort -- if the relay already dropped it, that's fine
+    }
+  }
+  if (connectionId) connections.delete(connectionId);
+  jsonResponse(res, 200, { disconnected: true });
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
+  // Auth first, on EVERY route -- fail-closed before any handler runs.
+  if (!_isAuthorized(req)) {
+    jsonResponse(res, 401, { error: "unauthorized -- missing or invalid bearer token" });
+    return;
+  }
   Promise.resolve()
     .then(() => {
       if (req.method === "POST" && url.pathname === "/wc/connect") return handleConnect(req, res);
       if (req.method === "GET" && url.pathname === "/wc/status") return handleStatus(req, res, url);
       if (req.method === "POST" && url.pathname === "/wc/request-signature") return handleRequestSignature(req, res);
+      if (req.method === "POST" && url.pathname === "/wc/disconnect") return handleDisconnect(req, res);
       jsonResponse(res, 404, { error: "not found" });
     })
     .catch((err) => {
@@ -222,4 +299,5 @@ const server = createServer((req, res) => {
 // that could be silently widened by an env var.
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`tangem-wc-bridge listening on 127.0.0.1:${PORT} (network=${DEFAULT_NETWORK})`);
+  console.log(`auth token written to ${TOKEN_FILE} (0600) -- Python client + scripts read it from there`);
 });
