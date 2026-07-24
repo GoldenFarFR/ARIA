@@ -3723,3 +3723,287 @@ async def test_daily_floor_never_forces_a_non_floor_or_hold_signal(tmp_db, monke
     res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 23, 0, 0, tzinfo=_tz.utc))
     assert res["opened"] == []
     assert res["outcome"] == "no_safe_candidate"
+
+
+# ── 24/07, bonding-entry chantier: sourcing/routing/sizing/price-lookup ─────
+
+@pytest.mark.asyncio
+async def test_bonding_candidates_sources_from_launchpad_discovery(monkeypatch):
+    from aria_core.services import launchpad_discovery
+
+    async def fake_discover(*, limit_per_launchpad=50):
+        return {"virtuals_bonding": [A, B], "clanker": [C]}
+
+    monkeypatch.setattr(launchpad_discovery, "discover_bonding_candidates", fake_discover)
+
+    result = await pt._bonding_candidates(limit=20)
+
+    assert result == [A, B]  # only the virtuals_bonding bucket, "clanker" ignored
+
+
+@pytest.mark.asyncio
+async def test_bonding_candidates_degrades_to_empty_on_error(monkeypatch):
+    from aria_core.services import launchpad_discovery
+
+    async def fake_discover(*, limit_per_launchpad=50):
+        raise RuntimeError("Virtuals down")
+
+    monkeypatch.setattr(launchpad_discovery, "discover_bonding_candidates", fake_discover)
+
+    assert await pt._bonding_candidates(limit=20) == []
+
+
+@pytest.mark.asyncio
+async def test_momentum_candidates_appends_bonding_without_overwriting(monkeypatch):
+    from aria_core import momentum_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": A, "chain": "base"}]
+
+    async def fake_bonding(*, limit=20):
+        return [B, A]  # A already sourced by standard discovery -- must NOT be overwritten
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(pt, "_bonding_candidates", fake_bonding)
+
+    contracts, chain_map = await pt._momentum_candidates_and_chain_map(limit=20)
+
+    assert contracts == [A, B]
+    assert chain_map[A] == "base"  # kept the real chain, not overwritten by bonding
+    assert chain_map[B] == CHAIN_MARKER
+
+
+@pytest.mark.asyncio
+async def test_default_momentum_analyzer_routes_bonding_chain_to_bonding_entry(monkeypatch):
+    from aria_core import bonding_entry, momentum_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    bonding_called_with = {}
+    momentum_called_with = {}
+
+    async def fake_bonding_eval(contract, *, weekly_context=None, current_regime=None):
+        bonding_called_with["contract"] = contract
+        return {"action": "HOLD", "chain": CHAIN_MARKER, "hold_reason": "test"}
+
+    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False):
+        momentum_called_with["contract"] = contract
+        momentum_called_with["chain"] = chain
+        return {"action": "HOLD", "chain": chain, "hold_reason": "test"}
+
+    monkeypatch.setattr(bonding_entry, "evaluate_bonding_entry", fake_bonding_eval)
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_momentum_eval)
+
+    analyzer = pt._default_momentum_analyzer({A: CHAIN_MARKER, B: "base"})
+
+    await analyzer(A)
+    await analyzer(B)
+
+    assert bonding_called_with["contract"] == A
+    assert momentum_called_with == {"contract": B, "chain": "base"}
+
+
+@pytest.mark.asyncio
+async def test_bonding_pair_lookup_converts_price_to_usd(monkeypatch):
+    from aria_core.services.virtuals import VirtualToken, VirtualTrade
+
+    token = VirtualToken(
+        symbol="BOND", status="UNDERGRAD", token_address=None,
+        pre_token_address=A, liquidity_usd=12_000.0,
+    )
+
+    class _FakeClient:
+        async def fetch_by_address(self, contract, chain="BASE"):
+            return token
+
+        async def fetch_recent_trades(self, contract, *, limit=1, chain_id=0):
+            return [VirtualTrade(timestamp=1, price=0.002, is_buy=True)]
+
+    monkeypatch.setattr("aria_core.services.virtuals.virtuals_client", _FakeClient())
+
+    async def fake_rate():
+        return 0.6
+
+    monkeypatch.setattr("aria_core.services.virtuals.virtual_usd_rate", fake_rate)
+
+    pair = await pt._bonding_pair_lookup(A)
+
+    assert pair is not None
+    assert pair.price_usd == pytest.approx(0.002 * 0.6)
+    assert pair.liquidity_usd == pytest.approx(12_000.0)
+    assert pair.pair_address == ""  # never fabricated -- forces _robust_close_price to spot
+
+
+@pytest.mark.asyncio
+async def test_bonding_pair_lookup_none_when_rate_unavailable(monkeypatch):
+    from aria_core.services.virtuals import VirtualToken, VirtualTrade
+
+    token = VirtualToken(symbol="BOND", status="UNDERGRAD", pre_token_address=A)
+
+    class _FakeClient:
+        async def fetch_by_address(self, contract, chain="BASE"):
+            return token
+
+        async def fetch_recent_trades(self, contract, *, limit=1, chain_id=0):
+            return [VirtualTrade(timestamp=1, price=0.002, is_buy=True)]
+
+    monkeypatch.setattr("aria_core.services.virtuals.virtuals_client", _FakeClient())
+
+    async def fake_rate_unavailable():
+        return None
+
+    monkeypatch.setattr("aria_core.services.virtuals.virtual_usd_rate", fake_rate_unavailable)
+
+    assert await pt._bonding_pair_lookup(A) is None
+
+
+@pytest.mark.asyncio
+async def test_bonding_pair_lookup_hands_off_to_dexscreener_after_graduation(monkeypatch):
+    """Once a bonding token graduates, is_in_bonding turns False -- price
+    lookup must hand off to the SAME DexScreener path a standard momentum
+    position already uses, rather than keep reading a bonding-only source."""
+    from aria_core.services.dexscreener import PairSnapshot
+    from aria_core.services.virtuals import VirtualToken
+
+    graduated = VirtualToken(symbol="BOND", status="AVAILABLE", token_address=A)
+    real_pair = PairSnapshot(pair_address="real_pool", price_usd=3.14, liquidity_usd=90_000.0, base_address=A)
+
+    class _FakeClient:
+        async def fetch_by_address(self, contract, chain="BASE"):
+            return graduated
+
+        async def fetch_recent_trades(self, contract, *, limit=1, chain_id=0):
+            raise AssertionError("must not query bonding trades once graduated")
+
+    monkeypatch.setattr("aria_core.services.virtuals.virtuals_client", _FakeClient())
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        assert chain == "base"
+        return [real_pair]
+
+    monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", fake_fetch_token_pairs)
+
+    pair = await pt._bonding_pair_lookup(A)
+
+    assert pair.pair_address == "real_pool"
+    assert pair.price_usd == pytest.approx(3.14)
+
+
+@pytest.mark.asyncio
+async def test_bonding_pair_lookup_none_when_token_unresolved(monkeypatch):
+    class _FakeClient:
+        async def fetch_by_address(self, contract, chain="BASE"):
+            return None
+
+    monkeypatch.setattr("aria_core.services.virtuals.virtuals_client", _FakeClient())
+
+    assert await pt._bonding_pair_lookup(A) is None
+
+
+@pytest.mark.asyncio
+async def test_default_pair_lookup_routes_bonding_chain_marker(monkeypatch):
+    from aria_core.bonding_entry import CHAIN_MARKER
+    from aria_core.services.dexscreener import PairSnapshot
+
+    fake_pair = PairSnapshot(pair_address="", price_usd=1.23, liquidity_usd=5_000.0, base_address=A)
+
+    async def fake_bonding_lookup(contract):
+        assert contract == A
+        return fake_pair
+
+    monkeypatch.setattr(pt, "_bonding_pair_lookup", fake_bonding_lookup)
+
+    result = await pt._default_pair_lookup(A, chain=CHAIN_MARKER)
+
+    assert result is fake_pair
+
+
+@pytest.mark.asyncio
+async def test_bonding_signal_gets_extra_size_reduction(tmp_db, monkeypatch):
+    """The core fix of task #69: a bonding-tagged BUY signal's allocation is
+    the STANDARD risk/ATR sizing (compute_entry_alloc) multiplied by
+    BONDING_SIZE_REDUCTION -- never the standard sizing alone."""
+    from aria_core import bonding_entry
+
+    captured: dict = {}
+    real_compute_entry_alloc = pt.compute_entry_alloc
+
+    def spy_compute_entry_alloc(sig, start, weekly_context, risk_state):
+        alloc, tier = real_compute_entry_alloc(sig, start, weekly_context, risk_state)
+        captured["pre_reduction_alloc"] = alloc
+        return alloc, tier
+
+    monkeypatch.setattr(pt, "compute_entry_alloc", spy_compute_entry_alloc)
+
+    real_open_position = pt.open_position
+
+    async def spy_open_position(*args, **kwargs):
+        captured["alloc_usd"] = kwargs.get("alloc_usd")
+        return await real_open_position(*args, **kwargs)
+
+    monkeypatch.setattr(pt, "open_position", spy_open_position)
+
+    async def fake_price_lookup(contract, *, chain: str = "base"):
+        return 1.0  # fully synthetic, no DexScreener/Virtuals/CoinGecko call
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "chain": bonding_entry.CHAIN_MARKER, "symbol": "BOND",
+            "price": 1.0, "target": 2.0, "invalidation": 0.5, "rr": 3.0,
+            "align_score": 2, "entry_atr_pct": 0.2, "strategy": "momentum",
+            "reasons": ["setup bonding"],
+        }
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=fake_analyzer, price_lookup=fake_price_lookup, depeg_check=_no_depeg,
+    )
+
+    assert len(act["opened"]) == 1
+    assert "pre_reduction_alloc" in captured and "alloc_usd" in captured
+    assert captured["alloc_usd"] == pytest.approx(
+        captured["pre_reduction_alloc"] * bonding_entry.BONDING_SIZE_REDUCTION
+    )
+    assert act["opened"][0]["chain"] == bonding_entry.CHAIN_MARKER
+
+
+@pytest.mark.asyncio
+async def test_non_bonding_signal_unaffected_by_bonding_reduction(tmp_db, monkeypatch):
+    """Regression guard: a standard momentum ("base") BUY must NOT be
+    affected by the bonding-only reduction."""
+    captured: dict = {}
+    real_compute_entry_alloc = pt.compute_entry_alloc
+
+    def spy_compute_entry_alloc(sig, start, weekly_context, risk_state):
+        alloc, tier = real_compute_entry_alloc(sig, start, weekly_context, risk_state)
+        captured["pre_reduction_alloc"] = alloc
+        return alloc, tier
+
+    monkeypatch.setattr(pt, "compute_entry_alloc", spy_compute_entry_alloc)
+
+    real_open_position = pt.open_position
+
+    async def spy_open_position(*args, **kwargs):
+        captured["alloc_usd"] = kwargs.get("alloc_usd")
+        return await real_open_position(*args, **kwargs)
+
+    monkeypatch.setattr(pt, "open_position", spy_open_position)
+
+    async def fake_price_lookup(contract, *, chain: str = "base"):
+        return 1.0
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "BASE",
+            "price": 1.0, "target": 2.0, "invalidation": 0.5, "rr": 3.0,
+            "align_score": 2, "entry_atr_pct": 0.2, "strategy": "momentum",
+            "reasons": ["setup momentum standard"],
+        }
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=fake_analyzer, price_lookup=fake_price_lookup, depeg_check=_no_depeg,
+    )
+
+    assert len(act["opened"]) == 1
+    assert captured["alloc_usd"] == pytest.approx(captured["pre_reduction_alloc"])

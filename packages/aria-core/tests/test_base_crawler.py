@@ -194,6 +194,26 @@ async def test_discover_virtuals_extracts_addresses():
 
 
 @pytest.mark.asyncio
+async def test_discover_virtuals_falls_back_to_pre_token_address(monkeypatch):
+    """24/07, bonding-entry chantier -- real bug found: a token still bonding
+    ALWAYS has ``token_address=None`` (confirmed live on 100 real UNDERGRAD
+    prototypes), only ``pre_token_address`` is populated -- without this
+    fallback, this function silently returned an empty list for every
+    genuinely-bonding token in production."""
+    a1 = "0x" + "d" * 40
+
+    class _VT:
+        token_address = None
+        pre_token_address = a1
+
+    class _Client:
+        async def fetch_prototypes(self):
+            return [_VT(), _VT()]
+
+    assert await bc.discover_virtuals_tokens(client=_Client()) == [a1]
+
+
+@pytest.mark.asyncio
 async def test_discover_virtuals_degrades_gracefully():
     class _Boom:
         async def fetch_prototypes(self):

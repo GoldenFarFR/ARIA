@@ -54,6 +54,14 @@ logger = logging.getLogger(__name__)
 API_ROOT = "https://api.virtuals.io/api"
 _VIRTUALS_ENDPOINT = f"{API_ROOT}/virtuals"
 
+# 24/07 -- separate public host, confirmed live (no auth needed): real
+# individual trades (price/timestamp/side) for a Virtuals bonding-curve
+# token. Used by services/bonding_entry.py to reconstruct real OHLCV candles
+# (aggregate_trades_to_candles below) and reuse the SAME golden-pocket/RSI
+# entry engine as the standard momentum pipeline (entry_signals.detect_entry)
+# -- a bonding token has no DexScreener/GeckoTerminal candles otherwise.
+TRADES_API_ROOT = "https://vp-api.virtuals.io/vp-api"
+
 # Graduation threshold: 42,000 VIRTUAL (research doc -- constant kept for
 # compat, see the REJECTION of this very premise documented just below).
 # RE-INVESTIGATED on 11/07 (direct network access to api.virtuals.io +
@@ -290,6 +298,17 @@ class VirtualToken:
     # (facts-only, no field fabricated if absent).
     tokenomics: str | None = None
     additional_details: str | None = None
+    # 24/07 -- bonding-entry chantier (unified_entry direct-to-ARIA bonding path):
+    # these fields were already returned by the SAME list endpoint used by
+    # fetch_by_address/fetch_by_pretoken (confirmed live), just never captured
+    # before. Native Virtuals-side signals used INSTEAD of GoPlus/dev_wallet.py
+    # (which don't apply to a bonding-curve token, see services/bonding_entry.py).
+    dev_holding_pct: float | None = None  # "devHoldingPercentage" -- % supply held by the deployer wallet
+    top10_holder_pct: float | None = None  # "top10HolderPercentage"
+    is_dev_committed: bool | None = None  # "isDevCommitted"
+    creator_wallet: str | None = None  # "walletAddress" -- the real deployer, confirmed == UI's "Launch by:"
+    liquidity_usd: float | None = None  # "liquidityUsd" -- bonding-pool liquidity, already in USD
+    launched_at: str | None = None  # "launchedAt"
 
 
 # ----------------------------------------------------------------------
@@ -564,6 +583,14 @@ def parse_virtual(raw: dict) -> VirtualToken | None:
         virtual_raised=virtual_raised,
         tokenomics=_sanitize_structured(_first(attrs, "tokenomics")),
         additional_details=_sanitize_structured(_first(attrs, "additionalDetails", "additional_details")),
+        dev_holding_pct=_safe_float(_first(attrs, "devHoldingPercentage", "dev_holding_percentage")),
+        top10_holder_pct=_safe_float(_first(attrs, "top10HolderPercentage", "top10_holder_percentage")),
+        is_dev_committed=(
+            bool(v) if (v := _first(attrs, "isDevCommitted", "is_dev_committed")) is not None else None
+        ),
+        creator_wallet=_sanitize(_first(attrs, "walletAddress", "wallet_address"), 80),
+        liquidity_usd=_safe_float(_first(attrs, "liquidityUsd", "liquidity_usd")),
+        launched_at=_sanitize(_first(attrs, "launchedAt", "launched_at"), 40),
     )
 
 
@@ -808,5 +835,125 @@ class VirtualsClient:
             logger.info("virtuals: fetch_by_address unexpected failure — %s", exc)
             return None
 
+    async def fetch_recent_trades(
+        self, token_address: str, *, limit: int = 200, chain_id: int = 0,
+    ) -> list["VirtualTrade"]:
+        """Real individual trades for a bonding-curve token (``vp-api``, see
+        module comment above ``TRADES_API_ROOT``). Newest-first as returned by
+        the API -- callers that need chronological order (candle
+        aggregation) must reverse it themselves (see
+        ``aggregate_trades_to_candles``, which does this internally).
+        ``limit`` capped at 200 (confirmed live -- the real ceiling wasn't
+        found documented anywhere, 200 is the largest value tested that
+        still returned a full page)."""
+        url = (
+            f"{TRADES_API_ROOT}/trades?tokenAddress={token_address}"
+            f"&limit={min(max(limit, 1), 200)}&chainID={chain_id}&tradeSideOption=0"
+        )
+        data, error = await self._get_json(url)
+        if error is not None or not isinstance(data, dict):
+            return []
+        payload = data.get("data")
+        raw_trades = payload.get("Trades") if isinstance(payload, dict) else None
+        if not isinstance(raw_trades, list):
+            return []
+        trades = [t for t in (_parse_trade(item) for item in raw_trades) if t is not None]
+        return trades
+
 
 virtuals_client = VirtualsClient()
+
+
+@dataclass(frozen=True)
+class VirtualTrade:
+    """One real trade on a bonding-curve pair (``vp-api.virtuals.io``)."""
+
+    timestamp: int
+    price: float  # in VIRTUAL per token
+    is_buy: bool
+    tx_hash: str | None = None
+
+
+def _parse_trade(raw: object) -> VirtualTrade | None:
+    if not isinstance(raw, dict):
+        return None
+    price = _safe_float(raw.get("price"))
+    ts = _safe_int(raw.get("timestamp"))
+    if price is None or price <= 0 or ts is None:
+        return None
+    return VirtualTrade(
+        timestamp=ts, price=price, is_buy=bool(raw.get("isBuy")),
+        tx_hash=_sanitize(raw.get("txHash"), 80),
+    )
+
+
+def aggregate_trades_to_candles(
+    trades: list[VirtualTrade], *, trades_per_candle: int = 5,
+) -> list["Candle"]:
+    """Groups real trades into fixed-SIZE buckets (never fixed time
+    intervals) -- a bonding-curve token's trading density varies wildly
+    between tokens (and over a single token's life), so a fixed time window
+    (e.g. "1 candle per hour") would produce mostly-empty candles on a quiet
+    token. Grouping by trade COUNT instead always produces a usable series,
+    at the cost of candles not representing equal time spans (an accepted
+    trade-off -- ``entry_signals.detect_entry`` only reads OHLC values +
+    relative position, never assumes uniform candle duration).
+
+    ``trades`` is accepted newest-first (as returned by
+    ``fetch_recent_trades``) -- reordered chronologically here before
+    bucketing. The last, possibly-partial bucket is kept (better a smaller
+    final candle than silently dropping the most recent trades)."""
+    from aria_core.skills.ta_levels import Candle
+
+    if not trades:
+        return []
+    chronological = sorted(trades, key=lambda t: t.timestamp)
+    candles: list[Candle] = []
+    for i in range(0, len(chronological), trades_per_candle):
+        bucket = chronological[i : i + trades_per_candle]
+        prices = [t.price for t in bucket]
+        candles.append(
+            Candle(
+                ts=bucket[-1].timestamp,
+                open=prices[0],
+                high=max(prices),
+                low=min(prices),
+                close=prices[-1],
+                volume=float(len(bucket)),
+            )
+        )
+    return candles
+
+
+# ── $VIRTUAL/USD conversion (24/07, bonding-entry chantier) ──────────────────
+# A bonding-curve trade is priced in $VIRTUAL per token (see VirtualTrade.price
+# above), never USD directly -- but ARIA's whole paper portfolio
+# (paper_trader.py) is 100% USD-denominated. Converting through this rate is
+# not a hack: a bonding-curve position's real USD value genuinely depends on
+# BOTH the token's performance against $VIRTUAL AND $VIRTUAL's own USD price --
+# same as holding any asset priced in a non-USD numeraire. Same pattern as
+# paper_trader_risk.usdc_depeg_pct: fail-open (None on any error), never a
+# fabricated rate.
+_VIRTUAL_COINGECKO_ID = "virtual-protocol"  # confirmed live 24/07, real curl:
+# `api.coingecko.com/api/v3/simple/price?ids=virtual-protocol&vs_currencies=usd`
+
+
+async def virtual_usd_rate() -> float | None:
+    """Current $VIRTUAL/USD rate, or ``None`` if unavailable (CoinGecko
+    outage/rate-limit) -- fail-open, callers must never fabricate a USD price
+    from a $VIRTUAL-denominated one when this returns ``None``."""
+    from aria_core.services.coingecko import coingecko_client
+
+    try:
+        result = await coingecko_client.get_simple_price(
+            [_VIRTUAL_COINGECKO_ID], vs_currencies=["usd"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("virtual_usd_rate: CoinGecko failed (%s)", exc)
+        return None
+    if not result.available:
+        return None
+    rate = result.prices.get(_VIRTUAL_COINGECKO_ID, {}).get("usd")
+    if not rate or rate <= 0:
+        return None
+    return rate

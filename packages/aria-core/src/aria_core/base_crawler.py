@@ -189,6 +189,16 @@ async def discover_virtuals_tokens(*, client=None, limit: int = 50) -> list[str]
     absorber (they would fail wrongly). Reserved for the future dedicated
     bonding pipeline (adapted analysis mode). Exposed here for that pipeline,
     not for the standard VC crawl.
+
+    24/07 -- real bug found while wiring the bonding-entry chantier: this
+    function filtered on ``token_address`` alone, which is ALWAYS ``None``
+    for a token still bonding (confirmed live on 100 real UNDERGRAD
+    prototypes, zero exceptions -- ``tokenAddress`` is only populated post-
+    graduation, see ``services/virtuals.py``'s own documented investigation
+    of this exact field). This silently returned an EMPTY list in
+    production -- falls back to ``pre_token_address`` (what
+    ``virtuals_client.fetch_by_address`` itself already tries as its second
+    lookup) so a genuinely-bonding token is actually returned.
     """
     if client is None:
         from aria_core.services.virtuals import virtuals_client as client
@@ -199,7 +209,9 @@ async def discover_virtuals_tokens(*, client=None, limit: int = 50) -> list[str]
         return []
     seen: dict[str, None] = {}
     for vt in protos or []:
-        addr = (getattr(vt, "token_address", None) or "").lower()
+        addr = (
+            getattr(vt, "token_address", None) or getattr(vt, "pre_token_address", None) or ""
+        ).lower()
         if addr.startswith("0x") and len(addr) == 42 and addr not in seen:
             seen[addr] = None
         if len(seen) >= limit:

@@ -1763,6 +1763,63 @@ def format_summary(summary: dict) -> str:
 
 # ── Prod defaults (network/LLM), injectable in tests ───────────────────────────────────
 
+async def _bonding_pair_lookup(contract: str):
+    """24/07 -- bonding-entry chantier: a token still on a Virtuals bonding
+    curve has NO DexScreener pair (no DEX pool until graduation) -- without
+    this branch, ``_default_pair_lookup`` would return ``None`` for every
+    single management cycle of a bonding position, forever (price never
+    refreshed, stop/TP never checked, the position just sits there). Returns
+    a real ``PairSnapshot`` (same type ``_default_pair_lookup`` returns for a
+    normal chain, so every call site downstream needs zero changes) built
+    from Virtuals-native data: price from the latest real trade (converted
+    $VIRTUAL -> USD, see ``virtuals.virtual_usd_rate``), liquidity already in
+    USD. ``pair_address`` left empty (never a fabricated address) --
+    ``_robust_close_price`` short-circuits to the spot price already computed
+    here in that case (honest degradation, see its own docstring), the same
+    behavior as any other pair with an unknown pool address.
+
+    ``None`` if the token can no longer be resolved, or if the $VIRTUAL/USD
+    rate is unavailable (never a fabricated USD price) -- same semantics as
+    ``_default_pair_lookup``'s "no liquid pair found".
+
+    Graduation handoff: once a bonding token graduates, it gets a REAL Base
+    DEX pool and ``vp-api``'s trade history for it is unconfirmed/likely
+    stale (never verified live post-graduation) -- ``is_in_bonding(token)``
+    turning ``False`` is the signal to hand off to the exact same DexScreener
+    path a standard momentum position already uses, rather than keep reading
+    a bonding-only data source past its relevance."""
+    from aria_core.services.dexscreener import PairSnapshot, fetch_token_pairs
+    from aria_core.services.virtuals import is_in_bonding, virtual_usd_rate, virtuals_client
+
+    token = await virtuals_client.fetch_by_address(contract, chain="BASE")
+    if token is None:
+        return None
+
+    if not is_in_bonding(token):
+        contract_lower = (contract or "").strip().lower()
+        pairs = await fetch_token_pairs(contract, chain="base")
+        own_pairs = [p for p in pairs if (p.base_address or "").lower() == contract_lower]
+        if not own_pairs:
+            return None
+        return max(own_pairs, key=lambda p: p.liquidity_usd)
+
+    trades = await virtuals_client.fetch_recent_trades(contract, limit=1)
+    if not trades:
+        return None
+    rate = await virtual_usd_rate()
+    if rate is None:
+        return None
+    price_usd = trades[0].price * rate
+    if price_usd <= 0:
+        return None
+    return PairSnapshot(
+        price_usd=price_usd,
+        liquidity_usd=token.liquidity_usd or 0.0,
+        base_address=(contract or "").strip().lower(),
+        base_symbol=token.symbol or "",
+    )
+
+
 async def _default_pair_lookup(contract: str, *, chain: str = "base"):
     """07/17 -- factored out of ``_default_price_lookup`` so the open-position
     management loop can reuse the SAME DexScreener pair for both the current
@@ -1779,7 +1836,17 @@ async def _default_pair_lookup(contract: str, *, chain: str = "base"):
     using ``contract`` as the quote of a pool more liquid than its own). It is
     THIS function that feeds the periodic Telegram tracking of open positions
     -- the wrong price displayed for position #21 (~0.0176 instead of the real
-    ESHARE price, ~$5.84) came directly from this, not just from the entry."""
+    ESHARE price, ~$5.84) came directly from this, not just from the entry.
+
+    24/07 -- bonding-entry chantier: ``chain`` doubles as the bonding marker
+    (``bonding_entry.CHAIN_MARKER``, never a real DexScreener chain id) --
+    routed to ``_bonding_pair_lookup`` instead, DexScreener has structurally
+    no pair for a token still on a bonding curve."""
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    if chain == CHAIN_MARKER:
+        return await _bonding_pair_lookup(contract)
+
     from aria_core.services.dexscreener import fetch_token_pairs
 
     contract_lower = (contract or "").strip().lower()
@@ -1898,6 +1965,25 @@ async def _default_analyzer(contract: str) -> dict | None:
     }
 
 
+async def _bonding_candidates(*, limit: int = 20) -> list[str]:
+    """24/07, bonding-entry chantier: Virtuals bonding-curve candidates,
+    sourced the SAME way ``launchpad_discovery.discover_bonding_candidates``
+    already does for the (dormant) VC absorber -- reused here, not
+    duplicated. Fails open to an empty list (never blocks the momentum
+    cycle) -- a Virtuals outage just means zero bonding candidates this
+    cycle, same degradation as every other candidate source in this
+    function's caller."""
+    from aria_core.services.launchpad_discovery import discover_bonding_candidates
+
+    try:
+        by_launchpad = await discover_bonding_candidates(limit_per_launchpad=limit)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.info("_bonding_candidates: discovery failed (%s)", exc)
+        return []
+    contracts = by_launchpad.get("virtuals_bonding") or []
+    return contracts[:limit]
+
+
 async def _momentum_candidates_and_chain_map(*, limit: int = 20) -> tuple[list[str], dict[str, str]]:
     """#194, momentum pivot -- default candidate source for THIS TEST (replaces
     ``candidate_ranking.top_candidates()`` ONLY as ``run_paper_cycle``'s
@@ -1906,12 +1992,30 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 20) -> tuple[list[s
     less elsewhere, explicit and reversible operator decision). Returns the
     list of contracts (keeps its historical ``list[str]`` shape, unchanged for
     the rest of the loop) + the contract->chain table for the momentum
-    analyzer below."""
+    analyzer below.
+
+    24/07, bonding-entry chantier: Virtuals bonding candidates are appended
+    to the SAME list, tagged ``bonding_entry.CHAIN_MARKER`` in the chain map
+    instead of a real chain id -- wired directly into this active $1M test
+    (operator's explicit choice, not a separate/dormant pocket). A contract
+    already present via the standard momentum discovery (already graduated,
+    real DEX pair) keeps its real chain -- bonding sourcing never overwrites
+    an existing entry."""
     from aria_core import momentum_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
 
     found = await momentum_entry.discover_momentum_candidates()
     chain_by_contract = {c["contract"]: c["chain"] for c in found}
-    return [c["contract"] for c in found[:limit]], chain_by_contract
+    contracts = [c["contract"] for c in found[:limit]]
+
+    bonding_contracts = await _bonding_candidates(limit=limit)
+    for addr in bonding_contracts:
+        if addr in chain_by_contract:
+            continue
+        chain_by_contract[addr] = CHAIN_MARKER
+        contracts.append(addr)
+
+    return contracts, chain_by_contract
 
 
 def _default_momentum_analyzer(
@@ -1928,11 +2032,24 @@ def _default_momentum_analyzer(
     ``relaxed`` (07/23, daily-trade-floor): passes ``relaxed=True`` to
     ``evaluate_momentum_entry`` so the daily-floor cycle can sample ARIA's best
     available pick with the quality bars waived (safety always enforced) --
-    default ``False``, unchanged behavior for the normal path."""
-    from aria_core import momentum_entry
+    default ``False``, unchanged behavior for the normal path.
+
+    24/07, bonding-entry chantier: a contract tagged ``bonding_entry.
+    CHAIN_MARKER`` in ``chain_by_contract`` is routed to
+    ``evaluate_bonding_entry`` instead -- a wholly separate decision engine
+    (no DexScreener/GoPlus dependency, see ``bonding_entry.py``'s own
+    docstring for why). ``relaxed`` (daily-trade-floor) is NOT forwarded to
+    it -- V1, deliberately out of scope (see ``evaluate_bonding_entry``'s own
+    docstring on why its gates are already simpler/fewer than the standard
+    pipeline's)."""
+    from aria_core import bonding_entry, momentum_entry
 
     async def analyzer(contract: str) -> dict | None:
         chain = chain_by_contract.get(contract, "base")
+        if chain == bonding_entry.CHAIN_MARKER:
+            return await bonding_entry.evaluate_bonding_entry(
+                contract, weekly_context=weekly_context, current_regime=current_regime,
+            )
         return await momentum_entry.evaluate_momentum_entry(
             contract, chain, weekly_context=weekly_context, current_regime=current_regime,
             relaxed=relaxed,
@@ -3243,6 +3360,14 @@ async def _run_paper_cycle_locked(
         # extraction, reused as-is by a limit-order trigger with fresh
         # context.
         entry_alloc_usd, conviction_tier = compute_entry_alloc(sig, start, weekly_context, risk_state)
+        # 24/07, bonding-entry chantier: extra reduction on top of the
+        # standard risk/ATR sizing -- structurally higher risk on this path
+        # (no honeypot-class check exists for a bonding-curve token, see
+        # bonding_entry.py's own docstring), operator-requested caution.
+        from aria_core import bonding_entry as _bonding_entry
+
+        if sig.get("chain") == _bonding_entry.CHAIN_MARKER:
+            entry_alloc_usd *= _bonding_entry.BONDING_SIZE_REDUCTION
 
         # 07/20 -- freshness re-check right before execution (Gemini
         # cross-review, see _fresh_rr/_execution_rr_still_valid above):

@@ -15,6 +15,8 @@ from aria_core.services.virtuals import (
     UNAVAILABLE,
     VirtualsClient,
     VirtualToken,
+    VirtualTrade,
+    aggregate_trades_to_candles,
     build_graduated_url,
     build_prototypes_url,
     build_token_by_address_url,
@@ -23,6 +25,7 @@ from aria_core.services.virtuals import (
     graduation_progress,
     is_in_bonding,
     parse_virtual,
+    virtual_usd_rate,
 )
 
 
@@ -676,3 +679,211 @@ async def test_fetch_by_address_network_error_returns_none(monkeypatch):
     )
 
     assert await client.fetch_by_address("0xabc") is None
+
+
+# ----------------------------------------------------------------------
+# 24/07, bonding-entry chantier -- new native fields (devHoldingPercentage/
+# top10HolderPercentage/isDevCommitted/walletAddress/liquidityUsd/launchedAt)
+# ----------------------------------------------------------------------
+def test_parse_virtual_bonding_entry_native_fields():
+    token = parse_virtual(
+        _strapi_prototype(
+            devHoldingPercentage=0.08,
+            top10HolderPercentage=54.19,
+            isDevCommitted=False,
+            walletAddress="0x58f6e271043ae673bbb3b24defef86f63df17669",
+            liquidityUsd=13792.21,
+            launchedAt="2026-02-25T04:04:05.000Z",
+        )
+    )
+    assert token.dev_holding_pct == pytest.approx(0.08)
+    assert token.top10_holder_pct == pytest.approx(54.19)
+    assert token.is_dev_committed is False
+    assert token.creator_wallet == "0x58f6e271043ae673bbb3b24defef86f63df17669"
+    assert token.liquidity_usd == pytest.approx(13792.21)
+    assert token.launched_at == "2026-02-25T04:04:05.000Z"
+
+
+def test_parse_virtual_bonding_entry_native_fields_absent_is_none():
+    token = parse_virtual(_strapi_prototype())
+    assert token.dev_holding_pct is None
+    assert token.top10_holder_pct is None
+    assert token.is_dev_committed is None
+    assert token.creator_wallet is None
+    assert token.liquidity_usd is None
+    assert token.launched_at is None
+
+
+# ----------------------------------------------------------------------
+# fetch_recent_trades / VirtualTrade / aggregate_trades_to_candles
+# ----------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_fetch_recent_trades_success(monkeypatch):
+    client = VirtualsClient()
+    address = "0xTOKEN00000000000000000000000000000000ab"
+    url = (
+        f"https://vp-api.virtuals.io/vp-api/trades?tokenAddress={address}"
+        "&limit=200&chainID=0&tradeSideOption=0"
+    )
+    payload = {
+        "code": 0,
+        "data": {
+            "Trades": [
+                {"isBuy": True, "price": 0.001, "timestamp": 100, "txHash": "0xaaa"},
+                {"isBuy": False, "price": 0.0012, "timestamp": 90, "txHash": "0xbbb"},
+            ]
+        },
+    }
+    _patch_client(monkeypatch, {url: FakeResponse(200, payload)})
+
+    trades = await client.fetch_recent_trades(address)
+
+    assert len(trades) == 2
+    assert all(isinstance(t, VirtualTrade) for t in trades)
+    assert {t.tx_hash for t in trades} == {"0xaaa", "0xbbb"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_recent_trades_network_error_returns_empty(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    client = VirtualsClient()
+
+    import httpx
+
+    class TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None, params=None):
+            raise httpx.TimeoutException("boom")
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.httpx.AsyncClient",
+        lambda **kw: TimeoutClient(),
+    )
+
+    assert await client.fetch_recent_trades("0xabc") == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_recent_trades_limit_clamped_at_200(monkeypatch):
+    # 200 is the confirmed real ceiling -- a caller asking for more is
+    # silently clamped, never sent to the API as-is.
+    client = VirtualsClient()
+    address = "0xabc"
+    seen_urls: list[str] = []
+
+    class _RecordingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None, params=None):
+            seen_urls.append(url)
+            return FakeResponse(200, {"data": {"Trades": []}})
+
+    monkeypatch.setattr(
+        "aria_core.services.virtuals.httpx.AsyncClient", lambda **kw: _RecordingClient()
+    )
+
+    await client.fetch_recent_trades(address, limit=9999)
+    assert seen_urls and "limit=200" in seen_urls[0]
+
+
+def test_parse_trade_rejects_invalid():
+    from aria_core.services.virtuals import _parse_trade
+
+    assert _parse_trade({"price": 0, "timestamp": 1}) is None  # price must be > 0
+    assert _parse_trade({"price": -1, "timestamp": 1}) is None
+    assert _parse_trade({"price": 1.0, "timestamp": None}) is None
+    assert _parse_trade("not a dict") is None
+    assert _parse_trade({"price": 1.0, "timestamp": 5, "isBuy": True}) is not None
+
+
+def test_aggregate_trades_to_candles_empty():
+    assert aggregate_trades_to_candles([]) == []
+
+
+def test_aggregate_trades_to_candles_buckets_by_count_not_time():
+    # 12 trades, bucket size 5 -> 2 full candles + 1 partial (2 trades) --
+    # never dropped, kept as a smaller final candle.
+    trades = [
+        VirtualTrade(timestamp=i, price=float(i + 1), is_buy=(i % 2 == 0))
+        for i in range(12)
+    ]
+    candles = aggregate_trades_to_candles(trades, trades_per_candle=5)
+
+    assert len(candles) == 3
+    assert candles[0].open == pytest.approx(1.0)  # trade 0's price
+    assert candles[0].close == pytest.approx(5.0)  # trade 4's price
+    assert candles[0].high == pytest.approx(5.0)
+    assert candles[0].low == pytest.approx(1.0)
+    assert candles[-1].close == pytest.approx(12.0)  # last (partial) bucket
+
+
+def test_aggregate_trades_to_candles_reorders_newest_first_input():
+    # fetch_recent_trades returns newest-first -- must be re-sorted
+    # chronologically before bucketing (else OHLC would be reversed).
+    trades = [
+        VirtualTrade(timestamp=3, price=30.0, is_buy=True),
+        VirtualTrade(timestamp=1, price=10.0, is_buy=True),
+        VirtualTrade(timestamp=2, price=20.0, is_buy=True),
+    ]
+    candles = aggregate_trades_to_candles(trades, trades_per_candle=5)
+    assert len(candles) == 1
+    assert candles[0].open == pytest.approx(10.0)
+    assert candles[0].close == pytest.approx(30.0)
+
+
+# ----------------------------------------------------------------------
+# virtual_usd_rate ($VIRTUAL/USD conversion, CoinGecko)
+# ----------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_virtual_usd_rate_success(monkeypatch):
+    from aria_core.services import coingecko
+
+    class _FakeResult:
+        available = True
+        prices = {"virtual-protocol": {"usd": 0.6055}}
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        assert coin_ids == ["virtual-protocol"]
+        return _FakeResult()
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+
+    rate = await virtual_usd_rate()
+    assert rate == pytest.approx(0.6055)
+
+
+@pytest.mark.asyncio
+async def test_virtual_usd_rate_unavailable_returns_none(monkeypatch):
+    from aria_core.services import coingecko
+
+    class _FakeResult:
+        available = False
+        prices = {}
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        return _FakeResult()
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+
+    assert await virtual_usd_rate() is None
+
+
+@pytest.mark.asyncio
+async def test_virtual_usd_rate_network_error_returns_none(monkeypatch):
+    from aria_core.services import coingecko
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+
+    assert await virtual_usd_rate() is None

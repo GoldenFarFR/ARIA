@@ -28,4 +28,9 @@ paths = [
   # of tests/, to keep this allowlist narrow and each entry individually
   # justified.
   '''packages/aria-core/tests/test_flaunch_client\.py''',
+  # Same false-positive class (24/07, bonding-entry chantier): a real
+  # deployer wallet address, copied from a live-verified Virtuals API
+  # payload into a fixture (test_parse_virtual_bonding_entry_native_fields)
+  # -- an on-chain address, public by nature, never a secret.
+  '''packages/aria-core/tests/test_virtuals_client\.py''',
 ]
