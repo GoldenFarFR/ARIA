@@ -503,7 +503,14 @@ async def _feedback_reply() -> str:
 
     20/07 -- extracted from ``_handle_feedback`` (which now calls it) to be
     reusable by the NL router (``_try_nl_readonly_command``, "Portfolio" typed
-    alone used to route before this fix to the general, paid LLM conversation)."""
+    alone used to route before this fix to the general, paid LLM conversation).
+
+    24/07, explicit operator request (visual): the per-open-position detail
+    switched from a multi-line blob to the SAME compact one-line-per-position
+    rendering as the periodic tracking alert, link glued to the same line
+    (see ``build_positions_detail_block``'s docstring) -- passes the SAME
+    ``price_lookup`` used for the aggregated header, so both sections mark
+    at the same live price rather than showing two different numbers."""
     from aria_core import paper_trader
     from aria_core.paper_ledger_report import build_positions_detail_block
 
@@ -524,7 +531,7 @@ async def _feedback_reply() -> str:
         f"{summary['open_positions']} positions ouvertes)\n"
         "Aucun argent réel — track record de preuve."
     )
-    detail = await build_positions_detail_block()
+    detail = await build_positions_detail_block(price_lookup=paper_trader._default_price_lookup)
     return f"{header}\n\n{detail}"
 
 

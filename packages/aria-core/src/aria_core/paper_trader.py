@@ -1616,6 +1616,68 @@ def format_buy_alert(pos: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_tracked_position_line(t: dict) -> str:
+    """One compact line for a still-open position, its DexScreener link GLUED to
+    the SAME line rather than a separate one.
+
+    24/07 -- real UX bug found by the operator: a lone URL on its own line gets
+    extra vertical spacing ABOVE it in the Telegram client (link-preview
+    styling), making it visually read as belonging to the FOLLOWING position
+    line instead of the one it's actually about. Appending the URL to the same
+    line removes the ambiguity outright, regardless of client rendering quirks."""
+    name = t.get("symbol") or (t.get("contract") or "")[:10]
+    entry = t.get("entry_price") or 0.0
+    price = t.get("price") or 0.0
+    qty = t.get("qty") or 0.0
+    cost = t.get("cost_usd") or 0.0
+    value = qty * price
+    pnl = value - cost
+    pnl_pct = (price / entry - 1.0) * 100.0 if entry else 0.0
+    sign = "+" if pnl >= 0 else ""
+    # 07/17 -- explicit operator request: capital invested + % of starting
+    # capital (STARTING_CAPITAL_USD, the fixed basis each position is sized
+    # against at opening -- never the current equity, which would move
+    # afterward and no longer faithfully represent the size decided AT THE
+    # TIME of the buy).
+    pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
+    line = (
+        f"{name} : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $ · "
+        f"capital {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)"
+    )
+    if t.get("contract"):
+        line += f" · {token_url(t['contract'], chain=t.get('chain') or 'base')}"
+    return line
+
+
+async def build_open_positions_tracking_lines(*, price_lookup=None) -> list[str]:
+    """On-demand equivalent of the per-position lines inside
+    ``format_position_tracking_alert`` -- WITHOUT its header/footer -- for a
+    caller (``/feedback``) that already renders its own aggregated header and
+    just wants the same compact, one-line-per-position rendering appended.
+    Reuses ``get_open_positions()`` (no duplicated query); an unavailable
+    live price degrades to the entry price (never blocks, never invents a
+    made-up figure beyond that honest fallback)."""
+    opens = await get_open_positions()
+    tracked = []
+    for p in opens:
+        price = None
+        if price_lookup is not None:
+            try:
+                price = await price_lookup(p["contract"])
+            except Exception:  # noqa: BLE001 -- an unavailable price never blocks the block
+                price = None
+        tracked.append({
+            "contract": p.get("contract"),
+            "symbol": p.get("symbol"),
+            "chain": p.get("chain"),
+            "entry_price": p.get("entry_price"),
+            "price": price if price and price > 0 else p.get("entry_price"),
+            "qty": p.get("qty"),
+            "cost_usd": p.get("cost_usd"),
+        })
+    return [_format_tracked_position_line(t) for t in tracked]
+
+
 def format_position_tracking_alert(
     tracked: list[dict], *, cash: float | None = None, equity: float | None = None,
 ) -> str:
@@ -1642,29 +1704,7 @@ def format_position_tracking_alert(
         )
     else:
         header = "🧪 SIMULATION — suivi positions ouvertes (portefeuille papier 1 M$)"
-    lines = [header]
-    for t in tracked:
-        name = t.get("symbol") or (t.get("contract") or "")[:10]
-        entry = t.get("entry_price") or 0.0
-        price = t.get("price") or 0.0
-        qty = t.get("qty") or 0.0
-        cost = t.get("cost_usd") or 0.0
-        value = qty * price
-        pnl = value - cost
-        pnl_pct = (price / entry - 1.0) * 100.0 if entry else 0.0
-        sign = "+" if pnl >= 0 else ""
-        # 07/17 -- explicit operator request: capital invested + % of starting
-        # capital (STARTING_CAPITAL_USD, the fixed basis each position is sized
-        # against at opening -- never the current equity, which would move
-        # afterward and no longer faithfully represent the size decided AT THE
-        # TIME of the buy).
-        pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
-        lines.append(
-            f"{name} : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $ · "
-            f"capital {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)"
-        )
-        if t.get("contract"):
-            lines.append(f"  {token_url(t['contract'], chain=t.get('chain') or 'base')}")
+    lines = [header] + [_format_tracked_position_line(t) for t in tracked]
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
 

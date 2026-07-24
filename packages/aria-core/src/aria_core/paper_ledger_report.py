@@ -231,23 +231,34 @@ async def build_regime_report(closed_limit: int = 500) -> tuple[str, dict]:
     return text, machine
 
 
-async def build_positions_detail_block(*, closed_limit: int = 5) -> str:
-    """"Position detail" block alone (open + N latest closed, with DexScreener
-    URL/thesis/R:R) -- WITHOUT the aggregated header (starting/equity/winrate) from
-    ``build_report``, for a caller that already computes its own aggregated numbers
-    elsewhere and just wants to add the detail without duplicating it.
+async def build_positions_detail_block(*, closed_limit: int = 5, price_lookup=None) -> str:
+    """"Position detail" block alone -- WITHOUT the aggregated header
+    (starting/equity/winrate) from ``build_report``, for a caller that
+    already computes its own aggregated numbers elsewhere and just wants to
+    add the detail without duplicating it.
 
     19/07, explicit operator request: ``/feedback`` only showed an aggregated
-    summary (starting/PnL/result), never the per-position detail -- the operator
-    wants to see "all current positions, the URL and everything too" directly
-    under this command, not only under ``/ledger``. Reuses ``_render_open``/
-    ``_render_closed`` as-is (same rendering as ``/ledger``, never a 2nd format
-    that could diverge)."""
-    opens = await paper_trader.get_open_positions()
+    summary (starting/PnL/result), never the per-position detail -- the
+    operator wants to see "all current positions, the URL and everything
+    too" directly under this command, not only under ``/ledger``.
+
+    24/07, explicit operator request (visual): the OPEN section switched
+    from the multi-line, per-position blob (thesis/R:R/high-water) to the
+    SAME compact one-line-per-position rendering already used by the
+    periodic tracking alert (``paper_trader.build_open_positions_tracking_lines``
+    / ``format_position_tracking_alert``), its DexScreener link glued to the
+    SAME line (a separate URL line was read in the Telegram client as
+    belonging to the WRONG position). ``price_lookup`` optional -- ``None``
+    degrades to the entry price (honest, never invented; also what keeps
+    this function network-free and deterministic for tests). The CLOSED
+    section is untouched (``_render_closed``, thesis/reason/R:R still useful
+    there, never complained about -- never a 2nd format that could diverge
+    from ``/ledger``)."""
+    from aria_core.paper_trader import build_open_positions_tracking_lines
+
+    open_lines = await build_open_positions_tracking_lines(price_lookup=price_lookup)
     closed = await paper_trader.get_closed_positions(limit=closed_limit)
-    open_section = [f"--- Positions ouvertes ({len(opens)}) ---"] + (
-        [_render_open(p) for p in opens] or ["  (aucune)"]
-    )
+    open_section = [f"--- Positions ouvertes ({len(open_lines)}) ---"] + (open_lines or ["  (aucune)"])
     closed_section = [f"--- Positions clôturées récentes ({len(closed)}) ---"] + (
         [_render_closed(p) for p in closed] or ["  (aucune)"]
     )

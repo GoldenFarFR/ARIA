@@ -164,7 +164,12 @@ async def test_positions_detail_block_empty_portfolio(tmp_db):
 
 
 @pytest.mark.asyncio
-async def test_positions_detail_block_shows_open_position_thesis_and_url(tmp_db):
+async def test_positions_detail_block_shows_open_position_compact_line_and_url(tmp_db):
+    """24/07, explicit operator request (visual): the open section switched to
+    the SAME compact one-line-per-position rendering as the periodic tracking
+    alert, its DexScreener link glued to the SAME line (never a separate
+    line, which read in the Telegram client as belonging to the WRONG
+    position) -- see build_positions_detail_block's docstring."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         A, "AAA", 1.0, target_price=1.5, invalidation_price=0.8,
@@ -173,8 +178,13 @@ async def test_positions_detail_block_shows_open_position_thesis_and_url(tmp_db)
     text = await report.build_positions_detail_block()
     assert "Positions ouvertes (1)" in text
     assert "AAA" in text
-    assert "Golden pocket + divergence RSI, R/R 2.5." in text
-    assert f"https://dexscreener.com/base/{A}" in text
+    # The link is glued to the SAME line as the position stats, not a separate one.
+    for line in text.splitlines():
+        if line.startswith("AAA"):
+            assert f"https://dexscreener.com/base/{A}" in line
+            break
+    else:
+        pytest.fail("no line starting with AAA found")
     # N'inclut PAS le header agrégé (départ/équité/winrate) -- ça reste le rôle de
     # build_report/portfolio_summary, jamais dupliqué ici.
     assert "Capital de départ" not in text

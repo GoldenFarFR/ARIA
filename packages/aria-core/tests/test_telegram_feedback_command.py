@@ -133,9 +133,15 @@ async def test_feedback_result_equals_starting_plus_pnl_total(monkeypatch):
 @pytest.mark.asyncio
 async def test_feedback_includes_open_position_detail_with_url(monkeypatch, tmp_path):
     """19/07 -- demande opérateur explicite : /feedback doit montrer le détail de
-    chaque position en cours (thèse, cible, invalidation, URL DexScreener), pas
-    seulement le bilan agrégé. Utilise une vraie position (pas un mock du détail)
-    pour vérifier bout en bout que build_positions_detail_block() est bien câblée."""
+    chaque position en cours, pas seulement le bilan agrégé. Utilise une vraie
+    position (pas un mock du détail) pour vérifier bout en bout que
+    build_positions_detail_block() est bien câblée.
+
+    24/07 -- demande opérateur explicite (visuelle) : le rendu par position est
+    désormais le format compact (une ligne, lien DexScreener collé à la même
+    ligne) au lieu du bloc multi-lignes avec thèse/R:R -- voir la docstring de
+    build_positions_detail_block. La thèse complète reste consultable via
+    /ledger, jamais supprimée du système, seulement plus affichée ici."""
     from aria_core import paper_trader as pt
 
     monkeypatch.setattr(pt, "DB_PATH", str(tmp_path / "paper.db"))
@@ -157,10 +163,15 @@ async def test_feedback_includes_open_position_detail_with_url(monkeypatch, tmp_
 
     reply = update.message.replies[0]
     assert "COBOT" in reply
-    assert "Thèse" in reply
-    assert "golden pocket" in reply.lower()
     assert "dexscreener.com" in reply.lower()
     assert "Positions ouvertes (1)" in reply
+    # The link is glued to the SAME line as the position stats.
+    for line in reply.splitlines():
+        if line.startswith("COBOT"):
+            assert "dexscreener.com" in line.lower()
+            break
+    else:
+        pytest.fail("no line starting with COBOT found")
 
 
 @pytest.mark.asyncio
