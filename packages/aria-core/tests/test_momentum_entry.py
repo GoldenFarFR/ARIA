@@ -182,6 +182,15 @@ def test_reference_tokens_excluded_covers_known_lst():
     assert "0x97be14dd8f994a5364573bc035d85309e7cb34de" in excluded  # JitoSOL (bridged)
 
 
+def test_reference_tokens_excluded_covers_eurc():
+    """24/07 -- found live in the exact same audit sweep that caught JitoSOL:
+    a real "floor" position was opened on EURC (Circle, EUR stablecoin) --
+    ARIA's own conviction diligence identified it as a stablecoin in the
+    thesis text, yet the pipeline still bought it (R/R 1.1)."""
+    excluded = me.reference_tokens_excluded("base")
+    assert "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42" in excluded  # EURC
+
+
 def test_reference_tokens_excluded_empty_for_unlisted_chain():
     # Chaîne sans registre stablecoin connu -- WETH mainnet Ethereum reste exclu
     # (registre wrapped-native indépendant de la chaîne), mais aucun stablecoin.

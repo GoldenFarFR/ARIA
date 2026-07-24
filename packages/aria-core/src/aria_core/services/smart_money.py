@@ -82,6 +82,13 @@ _STABLECOIN_ADDRESSES_BY_CHAIN: dict[str, set[str]] = {
         "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC (bridged)
         "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",  # DAI (bridged)
         "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",  # USDT (bridged)
+        # EURC (Circle, EUR) -- 24/07: found live, a real "floor" paper
+        # position was opened on it. ARIA's OWN conviction diligence already
+        # identified it as "a Circle official stablecoin... EUR reserves
+        # 1:1" (thesis text) yet the momentum pipeline still bought it (R/R
+        # 1.1, floor mode) -- a EUR-pegged stablecoin structurally cannot
+        # have a momentum setup, same class of gap as the LST case below.
+        "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42",  # EURC -- confirmed live, 24/07
     },
 }
 
