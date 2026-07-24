@@ -868,6 +868,82 @@ def test_apply_honeypot_signals_proxy_flagged_as_attention_for_unknown_token():
     assert not any("normal et attendu" in f for f in ctx.risk_flags)
 
 
+# ── 24/07 -- même famille : is_mintable / is_blacklisted / transfer_pausable
+# (contextualisés comme is_proxy) et cannot_buy (véto dur, jamais contextualisé) ──
+
+_USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+
+def test_apply_honeypot_signals_mintable_contextualized_for_known_stablecoin():
+    ctx = TokenScanContext(contract=_USDC_BASE, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=_USDC_BASE, available=True, is_honeypot=False, is_mintable=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.is_mintable is True
+    assert ctx.security_score == 80
+    assert ctx.lite_verdict == "SAFE"
+    assert any("normal et attendu" in f for f in ctx.risk_flags)
+
+
+def test_apply_honeypot_signals_mintable_flagged_as_attention_for_unknown_token():
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=ADDR, available=True, is_honeypot=False, is_mintable=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.is_mintable is True
+    assert ctx.security_score == 80
+    assert any("point d'attention" in f for f in ctx.risk_flags)
+    assert not any("normal et attendu" in f for f in ctx.risk_flags)
+
+
+def test_apply_honeypot_signals_blacklisted_contextualized_for_known_stablecoin():
+    ctx = TokenScanContext(contract=_USDC_BASE, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=_USDC_BASE, available=True, is_honeypot=False, is_blacklisted=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.is_blacklisted is True
+    assert ctx.security_score == 80
+    assert ctx.lite_verdict == "SAFE"
+    assert any("Tornado Cash" in f for f in ctx.risk_flags)
+
+
+def test_apply_honeypot_signals_blacklisted_flagged_as_attention_for_unknown_token():
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=ADDR, available=True, is_honeypot=False, is_blacklisted=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.is_blacklisted is True
+    assert ctx.security_score == 80
+    assert any("point d'attention" in f for f in ctx.risk_flags)
+
+
+def test_apply_honeypot_signals_transfer_pausable_contextualized_for_known_stablecoin():
+    ctx = TokenScanContext(contract=_USDC_BASE, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=_USDC_BASE, available=True, is_honeypot=False, transfer_pausable=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.transfer_pausable is True
+    assert ctx.security_score == 80
+    assert ctx.lite_verdict == "SAFE"
+    assert any("normal et attendu" in f for f in ctx.risk_flags)
+
+
+def test_apply_honeypot_signals_transfer_pausable_flagged_as_attention_for_unknown_token():
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=ADDR, available=True, is_honeypot=False, transfer_pausable=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.transfer_pausable is True
+    assert ctx.security_score == 80
+    assert any("point d'attention" in f for f in ctx.risk_flags)
+
+
+def test_apply_honeypot_signals_cannot_buy_penalty_and_danger():
+    """Symétrique de cannot_sell_all -- AUCUN cas légitime, jamais contextualisé
+    même pour un émetteur reconnu (un stablecoin doit rester achetable)."""
+    ctx = TokenScanContext(contract=_USDC_BASE, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=_USDC_BASE, available=True, is_honeypot=False, cannot_buy=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.cannot_buy is True
+    assert ctx.security_score == 40  # 80 - 40
+    assert ctx.lite_verdict == "DANGER"
+    assert any("cannot_buy" in f or "Achat impossible" in f for f in ctx.risk_flags)
+
+
 # ── barrières du filtre de sécurité ───────────────────────────────────────────
 
 def _clean_ctx() -> TokenScanContext:

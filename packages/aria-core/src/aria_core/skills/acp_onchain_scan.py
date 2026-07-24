@@ -283,6 +283,31 @@ class TokenScanContext:
     # anywhere before this (captured by services/goplus.py, never consumed).
     # See `_apply_honeypot_signals` for the contextualized risk_flags text.
     is_proxy: bool | None = None
+    # 24/07 -- same audit sweep as is_proxy above, operator request to find
+    # every GoPlus signal in the same "raw flag needs context" family. Each
+    # verified against a real, sourced fact before being contextualized (never
+    # "known = safe" as an unexamined shortcut):
+    #   - is_mintable: Circle's USDC/EURC mint/burn AS THE CORE MECHANISM that
+    #     keeps the 1:1 peg (new tokens minted on fiat deposit, burned on
+    #     redemption) -- dangerous dilution power for an anonymous deployer,
+    #     structurally necessary and expected for a regulated stablecoin.
+    #   - is_blacklisted (the CAPABILITY, not a current status): Circle has
+    #     REALLY used it (froze ~75k USDC across 44 Tornado-Cash-linked
+    #     addresses after the August 2022 OFAC sanctions) -- a real,
+    #     documented compliance action, not a hypothetical.
+    #   - transfer_pausable: USDC/EURC's FiatTokenV2 contract inherits
+    #     OpenZeppelin's Pausable (public, verified source) -- an emergency
+    #     circuit breaker, standard practice for a regulated issuer.
+    # cannot_buy is deliberately NOT in this list -- no legitimate case found
+    # for a token that can never be bought at all; kept as a hard veto below,
+    # symmetrical to cannot_sell_all (never contextualized away).
+    is_mintable: bool | None = None
+    is_blacklisted: bool | None = None
+    transfer_pausable: bool | None = None
+    # 24/07 -- symmetrical to cannot_sell_all (already a hard DANGER signal):
+    # a token that can never even be BOUGHT is unambiguous, no legitimate
+    # issuer needs this -- unlike the three fields above, never contextualized.
+    cannot_buy: bool | None = None
     # Virtuals bonding niche (populated ONLY if no DexScreener pair exists AND
     # the contract is genuinely indexed by Virtuals in pre-graduation status --
     # see services/virtuals.py). No DEX pair is NORMAL at this stage (DEX
@@ -610,6 +635,10 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
     ctx.slippage_modifiable = sec.slippage_modifiable
     ctx.owner_change_balance = sec.owner_change_balance
     ctx.is_proxy = sec.is_proxy
+    ctx.is_mintable = sec.is_mintable
+    ctx.is_blacklisted = sec.is_blacklisted
+    ctx.transfer_pausable = sec.transfer_pausable
+    ctx.cannot_buy = sec.cannot_buy
 
     delta = 0
     if sec.is_honeypot is True:
@@ -669,6 +698,65 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
                 "pondérer avec les autres signaux d'owner ci-dessus (hidden_owner, "
                 "can_take_back_ownership, owner_change_balance)."
             )
+    # 24/07 -- même famille que is_proxy ci-dessus (opérateur, même échange) --
+    # chaque signal ci-dessous vérifié contre un fait réel et sourcé avant
+    # d'être contextualisé (jamais "connu = safe" comme raccourci non justifié,
+    # cf. TokenScanContext.is_mintable pour la source de chaque justification).
+    # Jamais de malus mécanique dans un sens ou l'autre : ces signaux restent
+    # None (donc ignorés ici) pour un token en phase de bonding (pas encore de
+    # pool DEX, souvent pas encore indexé par GoPlus) -- déjà couvert par
+    # l'early-return tout en haut de cette fonction (sec.available False),
+    # jamais un faux signal de risque sur cette absence de donnée.
+    if sec.is_mintable is True:
+        if _is_recognized_stablecoin(ctx.contract):
+            ctx.risk_flags.append(
+                "Mint/burn actif (GoPlus is_mintable) — normal et attendu pour cet émetteur de "
+                "stablecoin réglementé déjà reconnu : c'est le mécanisme même qui maintient la "
+                "parité 1:1 (émission au dépôt, destruction au retrait). Pas un signal de danger ici."
+            )
+        else:
+            ctx.risk_flags.append(
+                "Mint actif (GoPlus is_mintable) — l'owner peut créer de nouveaux tokens à "
+                "volonté (dilution). Normal pour un émetteur institutionnel connu et réglementé, "
+                "un vrai point d'attention pour un déployeur anonyme/inconnu — voir aussi "
+                "mint_authority pour l'autorité réelle sur ce pouvoir."
+            )
+    if sec.is_blacklisted is True:
+        if _is_recognized_stablecoin(ctx.contract):
+            ctx.risk_flags.append(
+                "Capacité de blacklist (GoPlus is_blacklisted) — normal et attendu pour cet "
+                "émetteur de stablecoin réglementé déjà reconnu : sert la conformité (ex. Circle "
+                "a réellement gelé ~75k USDC liés à Tornado Cash après les sanctions OFAC d'août "
+                "2022). Pas un signal de danger ici."
+            )
+        else:
+            ctx.risk_flags.append(
+                "Capacité de blacklist (GoPlus is_blacklisted) — l'owner peut bannir n'importe "
+                "quel wallet de la revente à volonté. Normal pour un émetteur institutionnel connu "
+                "et réglementé, un vrai point d'attention pour un déployeur anonyme/inconnu."
+            )
+    if sec.transfer_pausable is True:
+        if _is_recognized_stablecoin(ctx.contract):
+            ctx.risk_flags.append(
+                "Transferts pausables (GoPlus transfer_pausable) — normal et attendu pour cet "
+                "émetteur de stablecoin réglementé déjà reconnu : coupe-circuit d'urgence standard "
+                "(OpenZeppelin Pausable), pas un vecteur de rug chez ces émetteurs. Pas un signal "
+                "de danger ici."
+            )
+        else:
+            ctx.risk_flags.append(
+                "Transferts pausables (GoPlus transfer_pausable) — l'owner peut geler TOUS les "
+                "transferts d'un coup. Normal pour un émetteur institutionnel connu et réglementé, "
+                "un vrai point d'attention pour un déployeur anonyme/inconnu — vecteur de perte "
+                "totale si déclenché de façon malveillante."
+            )
+    if sec.cannot_buy is True:
+        # 24/07 -- symétrique de cannot_sell_all -- AUCUN cas légitime trouvé
+        # (même Circle/Tether restent achetables librement, condition même
+        # d'un stablecoin fonctionnel) -- jamais contextualisé, toujours un
+        # véto dur, même gravité que cannot_sell_all/is_honeypot.
+        ctx.risk_flags.append("Achat impossible (GoPlus cannot_buy) — levier honeypot direct.")
+        delta -= 40
 
     if delta:
         ctx.security_score = max(5, min(95, ctx.security_score + delta))
@@ -676,8 +764,12 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
     # readable verdict is aligned so the analysis AND the filter stay
     # consistent. owner_change_balance (22/07) joins this group -- a power of
     # the SAME severity (direct total loss), not just a moderate distrust
-    # signal like hidden_owner/slippage.
-    if sec.is_honeypot is True or sec.cannot_sell_all is True or sec.owner_change_balance is True:
+    # signal like hidden_owner/slippage. cannot_buy (24/07) joins it too --
+    # symmetrical to cannot_sell_all, no legitimate issuer needs this.
+    if (
+        sec.is_honeypot is True or sec.cannot_sell_all is True
+        or sec.owner_change_balance is True or sec.cannot_buy is True
+    ):
         ctx.lite_verdict = "DANGER"
 
 
