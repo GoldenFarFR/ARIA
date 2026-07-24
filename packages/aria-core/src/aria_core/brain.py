@@ -407,6 +407,12 @@ class AriaBrain:
             if vc_followup is not None:
                 return vc_followup
 
+            manual_close = await self._try_manual_close_refusal_response(
+                user_message, route_msg, lang, visitor_id=vid,
+            )
+            if manual_close is not None:
+                return manual_close
+
             trade_status = await self._try_trade_status_response(
                 user_message, route_msg, lang, visitor_id=vid,
             )
@@ -891,6 +897,66 @@ class AriaBrain:
             skill_used=None,
             actions_taken=["Suivi rapport /vc (mémoire locale)"],
             data={"vc_followup": True, "skip_web": True},
+        )
+
+    async def _try_manual_close_refusal_response(
+        self,
+        user_message: str,
+        route_msg: str,
+        lang: str,
+        *,
+        visitor_id: str = "",
+    ) -> ChatResponse | None:
+        """Real incident (24/07, operator screenshot): "ferme la position autono"
+        was silently misclassified by the generic keyword intent router
+        (``INTENT_PATTERNS``, ``ANALYZE_PORTFOLIO`` matched on the bare word
+        "position") -- the reply confusingly talked about an EMPTY DISCOVERY
+        WATCHLIST (unrelated) instead of clearly explaining ARIA never closes
+        a paper position on manual command. Checked BEFORE the generic
+        routing (same pattern as ``_try_vc_followup_response``/
+        ``_try_trade_status_response``), deterministic (no LLM call needed --
+        the doctrine itself never changes, nothing to reformulate or invent).
+
+        Doctrine reminder (CLAUDE.md, protocole d'entraînement hebdomadaire):
+        the $1M paper portfolio is a deliberately human-free test, including
+        for exits -- if her exit discipline looks insufficient on a specific
+        case, the Devil's Advocate + the batch-of-10 losing-trade review
+        (trade_devils_advocate.py / trade_loss_batch_review.py) exist to fix
+        that mechanism, never a manual override case by case."""
+        from aria_core.grounding import is_manual_position_close_command
+
+        if not is_manual_position_close_command(route_msg):
+            return None
+        reply = (
+            "Je ne ferme jamais une position du portefeuille papier sur commande manuelle -- "
+            "le protocole hebdomadaire (CLAUDE.md) est un test délibérément SANS intervention "
+            "humaine, y compris pour les sorties : je dois prouver que mon propre stop suiveur, "
+            "ma prise de profit par palier et mon point mort verrouillé suffisent seuls.\n\n"
+            "Utilise /feedback ou /ledger pour voir l'état réel de mes positions. Si mon "
+            "mécanisme de sortie te semble insuffisant sur un cas précis, c'est exactement ce "
+            "que le Devil's Advocate et le suivi des trades perdants par lot de 10 sont là pour "
+            "corriger -- pas une fermeture manuelle au cas par cas."
+            if lang == LANG_FR
+            else (
+                "I never close a paper-trading position on a manual command -- the weekly "
+                "protocol (CLAUDE.md) is deliberately a human-free test, including for exits: "
+                "I have to prove my own trailing stop, tiered take-profit, and breakeven lock "
+                "are enough on their own.\n\n"
+                "Use /feedback or /ledger to see the real state of my positions. If my exit "
+                "mechanism looks insufficient on a specific case, that's exactly what the "
+                "Devil's Advocate and the batch-of-10 losing-trade review exist to fix -- not "
+                "a manual override case by case."
+            )
+        )
+        await repertoire_db.save_message(
+            "agent", reply, skill_used="manual_close_refusal", visitor_id=visitor_id,
+        )
+        append_memory("chat", f"User: {user_message[:100]}\nARIA: {reply[:200]}")
+        return ChatResponse(
+            reply=reply,
+            skill_used=None,
+            actions_taken=["Refus fermeture manuelle position (doctrine test pur — sans confabulation)"],
+            data={"manual_close_refusal": True, "skip_web": True},
         )
 
     async def _try_trade_status_response(

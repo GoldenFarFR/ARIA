@@ -15,6 +15,7 @@ from aria_core.grounding import (
     is_aria_brain_question,
     is_greeting,
     is_llm_identity_question,
+    is_manual_position_close_command,
     is_social_chitchat,
     is_pure_casual_smalltalk,
     is_scan_scope_question,
@@ -139,6 +140,35 @@ def test_trade_status_question_detects_second_real_incident_phrasing():
     # tant qu'un vrai mot-clé de trading est présent.
     assert is_trade_status_question("tu as une thèse là-dessus ?")
     assert is_trade_status_question("t'as acheté combien de tokens ?")
+
+
+def test_manual_close_command_detects_real_incident_phrasing():
+    # Incident réel 24/07 : "ferme la position autono" a été mal classifié par le
+    # routeur d'intent générique (mot-clé "position" -> ANALYZE_PORTFOLIO/watchlist)
+    # au lieu d'être reconnu comme une commande de fermeture manuelle.
+    assert is_manual_position_close_command("ferme la position autono")
+    assert is_manual_position_close_command("vends AERO, clôture la position")
+    assert is_manual_position_close_command("close this position now")
+    assert is_manual_position_close_command("sell my open trade")
+
+
+def test_manual_close_command_requires_both_action_verb_and_trading_keyword():
+    # Un verbe d'action seul, sans mot-clé de trading -> pas de faux positif
+    # (ex. "ferme la porte" ne doit jamais être pris pour une commande de trading).
+    assert not is_manual_position_close_command("ferme la porte s'il te plaît")
+    # Un mot-clé de trading seul, sans verbe d'action impératif -> ce cas reste
+    # le rôle de is_trade_status_question (question), pas de celui-ci (commande).
+    assert not is_manual_position_close_command("j'ai ouvert une position AERO hier")
+    assert not is_manual_position_close_command("pourquoi t'as vendu AERO ?")
+    assert not is_manual_position_close_command("bonjour")
+
+
+def test_manual_close_command_never_shadows_trade_status_question():
+    # Une question de STATUT (passé, tournure interrogative) ne doit jamais être
+    # confondue avec une commande de fermeture (présent/impératif) -- les deux
+    # mécanismes restent mutuellement exclusifs sur les cas réels observés.
+    assert is_trade_status_question("pourquoi t'as vendu AERO ?")
+    assert not is_manual_position_close_command("pourquoi t'as vendu AERO ?")
 
 
 def test_analysis_methodology_reply_cites_real_tools():

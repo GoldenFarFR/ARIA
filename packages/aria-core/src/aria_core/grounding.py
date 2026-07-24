@@ -914,6 +914,37 @@ def is_trade_status_question(message: str) -> bool:
     return bool(_TRADE_QUESTION_RE.search(text) or "?" in text)
 
 
+_MANUAL_CLOSE_ACTION_RE = re.compile(
+    r"\b(?:ferme|fermer|cl[ôo]tur(?:e|er|é|ée)|liquide|liquider|vends?|vendre|close|sell)\b",
+    re.IGNORECASE,
+)
+
+
+def is_manual_position_close_command(message: str) -> bool:
+    """True for an IMPERATIVE command asking to manually close/sell a
+    paper-trading position by hand (e.g. "ferme la position AUTONO", "vends
+    AERO", "clôture ma position sur X") -- distinct from
+    ``is_trade_status_question`` above (a STATUS QUESTION, never a command).
+
+    Real incident (24/07): such a command, containing the bare word
+    "position", was silently misclassified by the generic keyword intent
+    router (``brain.INTENT_PATTERNS``, ``ANALYZE_PORTFOLIO``) as a watchlist-
+    scan request -- producing a confusing reply about an EMPTY DISCOVERY
+    WATCHLIST (unrelated to paper-trading positions) instead of clearly
+    explaining that ARIA never closes a paper position on manual command (the
+    weekly protocol is deliberately "test pur, sans validation humaine" --
+    CLAUDE.md).
+
+    Same two-signal doctrine as ``is_trade_status_question``: requires an
+    ACTION verb (ferme/vends/clôture/close/sell...) AND a trading keyword
+    (position/trade/portefeuille...) in the SAME message, never either alone
+    -- avoids a false positive on an unrelated use of either word."""
+    text = (message or "").strip()
+    if len(text) < 4:
+        return False
+    return bool(_MANUAL_CLOSE_ACTION_RE.search(text) and _TRADE_TRIGGER_RE.search(text))
+
+
 def strict_rephrase_rules(lang: str = "en") -> str:
     if lang == "fr":
         return (

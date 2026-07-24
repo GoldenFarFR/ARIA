@@ -5,6 +5,12 @@
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 
+[DEPLOYE] Sujet    : "ferme la position X" mal classifie par le routeur d'intent generique (ANALYZE_PORTFOLIO/watchlist)
+Date : 2026.07.24 / Probleme : operateur a tape "ferme la position autono" (AUTONO, +80% de PnL latent) -- le mot-cle "position" a matche INTENT_PATTERNS/ANALYZE_PORTFOLIO (scan de la watchlist de decouverte, sans rapport avec le portefeuille papier), reponse confuse melangeant "la watchlist est vide" et une demande de clarification, sans jamais expliquer clairement la vraie doctrine (test hebdomadaire delibere sans intervention humaine, y compris pour les sorties).
+Solution : nouveau is_manual_position_close_command (grounding.py, meme doctrine 2-signaux que is_trade_status_question -- verbe d'action + mot-cle trading dans le meme message) + _try_manual_close_refusal_response (brain.py, checke AVANT le routage generique, reponse deterministe expliquant la doctrine et pointant vers /feedback, /ledger, Devil's Advocate + suivi par lot de 10) -- grounding.py/brain.py, tests dedies (test_grounding.py, test_brain_manual_close_refusal.py, cf. historique git 24/07)
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : aria_brain_cycle passe d'un timer fixe 24h a une cadence organique 20h +/- 4h
 Date : 2026.07.24 / Probleme : decision operateur explicite ("toute les 20h avec une marge de +/- 4h pour faire comme si elle ecrivait quand elle a le temp") -- le cycle tournait a exactement 1440 min, un timer parfaitement regulier. Verifie au passage (aria_brain_log) : le cycle FONCTIONNE bien automatiquement (aucun rappel necessaire) -- l'absence de nouveau chapitre depuis le 22/07 n'etait pas un bug, ARIA a choisi d'ecrire son README.md le 23/07 (choix explicitement laisse libre par le prompt), pas un chapitre.
 Solution : nouvelle fonction _aria_brain_effective_interval_minutes(last_run) -- intervalle pseudo-aleatoire deterministe (hash de last_run, jamais retire a chaque tick tant que le cycle n'est pas du) dans [16h, 24h], utilisee UNIQUEMENT pour aria_brain_cycle dans la boucle _tick -- tous les autres cycles a 1440min restent un timer fixe. 7 tests dedies (plage, determinisme, variation, jamais avant 16h, toujours du apres 24h) - heartbeat.py (cf. historique git 24/07)
