@@ -173,6 +173,15 @@ def test_reference_tokens_excluded_covers_weth_and_base_stablecoins():
     assert "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" in excluded  # USDC
 
 
+def test_reference_tokens_excluded_covers_known_lst():
+    """24/07 -- 5-agent audit finding: a real paper position was opened on
+    JitoSOL (bridged), a blue-chip liquid-staking derivative whose price
+    mechanically tracks SOL -- off-thesis for the momentum pipeline, exactly
+    like WETH already was."""
+    excluded = me.reference_tokens_excluded("base")
+    assert "0x97be14dd8f994a5364573bc035d85309e7cb34de" in excluded  # JitoSOL (bridged)
+
+
 def test_reference_tokens_excluded_empty_for_unlisted_chain():
     # Chaîne sans registre stablecoin connu -- WETH mainnet Ethereum reste exclu
     # (registre wrapped-native indépendant de la chaîne), mais aucun stablecoin.

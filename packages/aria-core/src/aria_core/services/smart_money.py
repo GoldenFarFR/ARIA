@@ -99,6 +99,22 @@ _WRAPPED_NATIVE_ADDRESSES: frozenset[str] = frozenset({
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",  # WETH -- Ethereum mainnet
 })
 
+# Liquid-staking tokens (LST) -- 24/07, 5-agent audit finding: the momentum
+# pipeline's reference-token exclusion covered stablecoins and wrapped-native
+# but explicitly documented the LST case (stETH<->wstETH, WBTC<->tBTC,
+# rETH<->wETH) as "a real gap, out of scope" -- confirmed live: the paper
+# portfolio held a real position in JitoSOL (bridged), a blue-chip staking
+# derivative whose price mechanically tracks SOL, not the speculative/momentum
+# profile #194 targets. Best-effort registry, same degraded-behavior policy as
+# _WRAPPED_NATIVE_ADDRESSES above (a chain/token missing here = no
+# protection, not a silent guarantee) -- only addresses independently
+# confirmed against real on-chain data go in this set, never guessed.
+_LST_ADDRESSES_BY_CHAIN: dict[str, frozenset[str]] = {
+    "base": frozenset({
+        "0x97be14dd8f994a5364573bc035d85309e7cb34de",  # JitoSOL (bridged) -- confirmed live, 24/07
+    }),
+}
+
 
 def _is_wrap_unwrap_leg(transfer: TokenTransfer) -> bool:
     addr = (transfer.token_address or "").lower()

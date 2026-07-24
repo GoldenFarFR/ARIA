@@ -117,6 +117,13 @@ class EntrySecuritySnapshot:
     cannot_sell: bool | None = None
     hidden_owner: bool | None = None
     can_take_back_ownership: bool | None = None
+    # 24/07 -- found by the 5-agent audit: this hard veto (added 22/07 to the
+    # ENTRY gate, momentum_entry._check_honeypot, after the CNX incident) was
+    # never mirrored here, so a position whose owner GAINS this power AFTER
+    # opening (GoPlus finishes indexing it, or the owner activates it) would
+    # never be flagged during the holding period -- same class of blind spot
+    # already fixed once (17/07) for the volume/liquidity ratio.
+    owner_change_balance: bool | None = None
     contract_verified: bool | None = None
     owner_address: str | None = None
 
@@ -149,6 +156,7 @@ async def capture_entry_snapshot(contract: str, ctx) -> EntrySecuritySnapshot:
         cannot_sell=getattr(ctx, "cannot_sell", None),
         hidden_owner=getattr(ctx, "hidden_owner", None),
         can_take_back_ownership=getattr(ctx, "can_take_back_ownership", None),
+        owner_change_balance=getattr(ctx, "owner_change_balance", None),
         contract_verified=getattr(ctx, "contract_verified", None),
         owner_address=owner,
     )
@@ -208,6 +216,11 @@ async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
             reasons.append("owner caché détecté (absent à l'entrée)")
         if security.can_take_back_ownership and not snapshot.can_take_back_ownership:
             reasons.append("reprise de propriété possible détectée (absente à l'entrée)")
+        if security.owner_change_balance and not snapshot.owner_change_balance:
+            reasons.append(
+                "owner peut modifier le solde d'un wallet détecté (GoPlus owner_change_balance, "
+                "absent à l'entrée) -- vecteur de perte totale, même famille que honeypot"
+            )
 
     from aria_core.services.blockscout import blockscout_client
 

@@ -915,7 +915,28 @@ async def starting_capital() -> float:
 
 async def reset_portfolio(starting: float = STARTING_CAPITAL_USD, *, created_at: str | None = None) -> None:
     """Starts fresh (new proof run). DESTRUCTIVE: to be triggered explicitly by
-    the operator, never by an automatic loop."""
+    the operator, never by an automatic loop.
+
+    24/07 -- 5-agent audit finding: this used to DROP ``paper_position``
+    without ever archiving it first, unlike ``run_weekly_reset`` (which always
+    archives before clearing) -- a manual reset triggered mid-cycle (e.g. after
+    a security incident forcing an out-of-band restart, as happened 22/07)
+    silently lost every already-closed position's history, with no trace left
+    in ``paper_position_archive``. Now archives whatever is still in the live
+    table (open AND closed rows) under the CURRENT ``cycle_number`` before
+    dropping -- same non-destructive doctrine as the weekly cycle, never a
+    silent loss of track record."""
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (await db.execute("SELECT cycle_number FROM paper_state WHERE id = 1")).fetchone()
+        cycle_number = row[0] if row else 0
+        cols = ", ".join(_POS_FIELDS)
+        await db.execute(
+            f"INSERT INTO paper_position_archive (cycle_number, {cols}) "
+            f"SELECT ?, {cols} FROM paper_position",
+            (cycle_number,),
+        )
+        await db.commit()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DROP TABLE IF EXISTS paper_position")
         await db.execute("DROP TABLE IF EXISTS paper_state")

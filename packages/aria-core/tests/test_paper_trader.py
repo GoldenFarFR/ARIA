@@ -122,6 +122,51 @@ async def test_reset_and_starting(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_reset_portfolio_archives_closed_positions_before_dropping(tmp_db):
+    """24/07 -- 5-agent audit finding: reset_portfolio() used to DROP
+    paper_position without ever archiving it first (unlike run_weekly_reset),
+    silently losing every already-closed position's history on a manual
+    reset. Now archives whatever is still in the live table before the DROP."""
+    import aiosqlite
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+    await pt.close_position(A, 4.0, reason="cible")
+
+    await pt.reset_portfolio(1_000_000.0)  # manual reset -- must archive AAA first
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        row = await (
+            await db.execute("SELECT contract, close_reason FROM paper_position_archive WHERE contract = ?", (A,))
+        ).fetchone()
+    assert row is not None
+    assert row[1] == "cible"
+    # Fresh portfolio afterward, unaffected by the archive step.
+    assert await pt.starting_capital() == 1_000_000.0
+    assert await pt.cash_available() == 1_000_000.0
+    assert await pt.get_open_positions() == []
+
+
+@pytest.mark.asyncio
+async def test_reset_portfolio_archives_open_positions_too(tmp_db):
+    """A position still OPEN at reset time (e.g. an out-of-band incident
+    restart, cf. the 22/07 CNX case) must also be archived, not silently
+    dropped -- even without a proper close_reason/exit_price."""
+    import aiosqlite
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+
+    await pt.reset_portfolio(1_000_000.0)
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        row = await (
+            await db.execute("SELECT contract FROM paper_position_archive WHERE contract = ?", (A,))
+        ).fetchone()
+    assert row is not None
+
+
+@pytest.mark.asyncio
 async def test_open_deducts_cash_and_no_double(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     pos = await pt.open_position(A, "AAA", 2.0, target_price=3.0, invalidation_price=1.5, alloc_usd=50_000)

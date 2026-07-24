@@ -6,6 +6,12 @@
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 > Protocole actif à jour : section "Protocole d'entraînement hebdomadaire" dans CLAUDE.md.
 
+[DEPLOYE] Sujet    : reset_portfolio() effacait l'historique sans archive (DROP brut)
+Date : 2026.07.24 / Probleme : audit 5-agents -- reset_portfolio() (reset manuel, ex. apres un incident forçant un redémarrage hors cycle, cf. CNX le 22/07) faisait un DROP TABLE direct sans jamais archiver dans paper_position_archive au préalable, contrairement à run_weekly_reset() qui archive toujours avant de vider -- confirmé en base : le Cycle #2 (18-22/07) n'a laissé aucune trace archivée après le reset manuel du 22/07.
+Solution : reset_portfolio() archive désormais tout le contenu de paper_position (ouvert ET clôturé) sous le cycle_number courant avant le DROP, même doctrine non-destructive que run_weekly_reset -- paper_trader.py, tests dédiés (cf. historique git 24/07)
+
+------------------------------------------------------------
+
 [CONFIG] Sujet    : Test 1M$ relancé proprement
 Date : 2026.07.16  /  Probleme : —
 Solution : reset complet, jour 1 officiel du protocole hebdomadaire — action opérateur, pas de commit

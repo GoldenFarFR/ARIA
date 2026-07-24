@@ -108,6 +108,7 @@ class FakeCtx:
     cannot_sell: bool | None = None
     hidden_owner: bool | None = None
     can_take_back_ownership: bool | None = None
+    owner_change_balance: bool | None = None
     contract_verified: bool | None = None
 
 
@@ -126,9 +127,10 @@ async def test_capture_entry_snapshot_reuses_ctx_and_adds_owner(monkeypatch):
     monkeypatch.setattr(type(bs.blockscout_client), "read_owner", staticmethod(fake_read_owner))
 
     ctx = FakeCtx(is_honeypot=False, cannot_sell=False, hidden_owner=False,
-                  can_take_back_ownership=False, contract_verified=True)
+                  can_take_back_ownership=False, owner_change_balance=False, contract_verified=True)
     snap = await risk.capture_entry_snapshot(CONTRACT, ctx)
     assert snap.is_honeypot is False
+    assert snap.owner_change_balance is False
     assert snap.contract_verified is True
     assert snap.owner_address == "0x" + "1" * 40
 
@@ -140,7 +142,7 @@ def _position(**overrides) -> dict:
         "contract": CONTRACT,
         "entry_security_json": risk.EntrySecuritySnapshot(
             is_honeypot=False, cannot_sell=False, hidden_owner=False,
-            can_take_back_ownership=False, contract_verified=True,
+            can_take_back_ownership=False, owner_change_balance=False, contract_verified=True,
             owner_address="0x" + "0" * 40,  # renoncée à l'entrée
         ).to_json(),
     }
@@ -155,6 +157,7 @@ class FakeSecurity:
     cannot_sell_all: bool | None = False
     hidden_owner: bool | None = False
     can_take_back_ownership: bool | None = False
+    owner_change_balance: bool | None = False
 
 
 @dataclass
@@ -216,6 +219,27 @@ async def test_rescan_ignores_honeypot_already_true_at_entry(monkeypatch):
     mécanisme de re-juger la décision d'entrée)."""
     _patch_clients(monkeypatch, security=FakeSecurity(is_honeypot=True))
     pos = _position(entry_security_json=risk.EntrySecuritySnapshot(is_honeypot=True).to_json())
+    assert await risk.rescan_open_position(pos) is None
+
+
+@pytest.mark.asyncio
+async def test_rescan_detects_new_owner_change_balance(monkeypatch):
+    """24/07 -- 5-agent audit finding: the same total-loss vector already vetoed
+    at ENTRY (momentum_entry._check_honeypot, since the 22/07 CNX incident) must
+    also be caught if it appears DURING the holding period."""
+    _patch_clients(monkeypatch, security=FakeSecurity(owner_change_balance=True))
+    result = await risk.rescan_open_position(_position())
+    assert result is not None
+    assert any("owner_change_balance" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_rescan_ignores_owner_change_balance_already_true_at_entry(monkeypatch):
+    """Already present at entry -- not a NEW signal, mirrors the honeypot case."""
+    _patch_clients(monkeypatch, security=FakeSecurity(owner_change_balance=True))
+    pos = _position(
+        entry_security_json=risk.EntrySecuritySnapshot(owner_change_balance=True).to_json()
+    )
     assert await risk.rescan_open_position(pos) is None
 
 

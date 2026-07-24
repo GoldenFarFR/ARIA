@@ -506,10 +506,15 @@ async def _batch_liquidity_prefilter(
 # always be huge anyway, so they'd pass every free filter without ever being a
 # real signal).
 def reference_tokens_excluded(chain: str) -> frozenset[str]:
-    from aria_core.services.smart_money import _STABLECOIN_ADDRESSES_BY_CHAIN, _WRAPPED_NATIVE_ADDRESSES
+    from aria_core.services.smart_money import (
+        _LST_ADDRESSES_BY_CHAIN,
+        _STABLECOIN_ADDRESSES_BY_CHAIN,
+        _WRAPPED_NATIVE_ADDRESSES,
+    )
 
     stables = _STABLECOIN_ADDRESSES_BY_CHAIN.get(chain, set())
-    return frozenset(stables) | _WRAPPED_NATIVE_ADDRESSES
+    lsts = _LST_ADDRESSES_BY_CHAIN.get(chain, frozenset())
+    return frozenset(stables) | _WRAPPED_NATIVE_ADDRESSES | lsts
 
 
 def _add_candidate(
