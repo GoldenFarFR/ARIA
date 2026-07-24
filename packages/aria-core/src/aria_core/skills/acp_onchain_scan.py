@@ -22,7 +22,7 @@ from aria_core.services.coingecko import TokenFundamentals, coingecko_client
 from aria_core.services.dexscreener import PairSnapshot
 from aria_core.services.dexscreener import fetch_token_pairs as _dexscreener_fetch_token_pairs
 from aria_core.services.ohlcv import ohlcv_client
-from aria_core.services.smart_money import analyze_smart_money
+from aria_core.services.smart_money import _is_recognized_stablecoin, analyze_smart_money
 from aria_core.skills.candlestick_patterns import CandlePattern, detect_patterns
 from aria_core.skills.entry_signals import EntrySignal, detect_entry
 from aria_core.skills.indicators import ema_series, macd_series
@@ -273,6 +273,16 @@ class TokenScanContext:
     # (services/goplus.py::TokenSecurity), never renamed to stay traceable
     # end-to-end through the pipeline.
     owner_change_balance: bool | None = None
+    # 24/07 -- operator question after a real confusion risk: GoPlus flags
+    # "Proxy contract" (upgradeable logic) as a red warning regardless of the
+    # issuer -- correct instinct for an anonymous deployer (the owner can
+    # swap the logic at will), but a FALSE ALARM for a known regulated
+    # stablecoin issuer (Circle's USDC/EURC, Tether's USDT all use this exact
+    # architecture deliberately, for compliance -- e.g. sanctioned-address
+    # freezing -- never as a rug vector). `is_proxy` alone was never surfaced
+    # anywhere before this (captured by services/goplus.py, never consumed).
+    # See `_apply_honeypot_signals` for the contextualized risk_flags text.
+    is_proxy: bool | None = None
     # Virtuals bonding niche (populated ONLY if no DexScreener pair exists AND
     # the contract is genuinely indexed by Virtuals in pre-graduation status --
     # see services/virtuals.py). No DEX pair is NORMAL at this stage (DEX
@@ -599,6 +609,7 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
     ctx.can_take_back_ownership = sec.can_take_back_ownership
     ctx.slippage_modifiable = sec.slippage_modifiable
     ctx.owner_change_balance = sec.owner_change_balance
+    ctx.is_proxy = sec.is_proxy
 
     delta = 0
     if sec.is_honeypot is True:
@@ -631,6 +642,33 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
             "vecteur de perte totale, distinct du honeypot classique."
         )
         delta -= 40
+    if sec.is_proxy is True:
+        # 24/07 -- operator question after a real confusion risk (screenshot of
+        # GoPlus flagging EURC's "Proxy contract" red): a proxy is genuinely a
+        # risk signal for an ANONYMOUS deployer (the owner can swap the logic
+        # at will), but Circle (USDC/EURC) and Tether (USDT) deliberately use
+        # this exact architecture for regulatory compliance (e.g. freezing a
+        # sanctioned address) -- never surfaced as a plain, uncontextualized
+        # flag, exactly the doctrine already applied to mint authority
+        # (skills/mint_authority.py: "renounced" vs "launchpad", never one
+        # brand flag for every case). No score delta either way -- a proxy
+        # alone (without another confirmed hard signal above) is a structural
+        # fact to weigh, not a penalty to apply mechanically.
+        if _is_recognized_stablecoin(ctx.contract):
+            ctx.risk_flags.append(
+                "Contrat proxy upgradeable (GoPlus is_proxy) — normal et attendu pour cet "
+                "émetteur de stablecoin réglementé déjà reconnu (ex. Circle/Tether) : sert la "
+                "conformité (gel d'adresses sanctionnées), jamais observé comme vecteur de rug "
+                "chez ces émetteurs. Pas un signal de danger ici."
+            )
+        else:
+            ctx.risk_flags.append(
+                "Contrat proxy upgradeable (GoPlus is_proxy) — la logique peut être modifiée "
+                "par l'owner à tout moment. Normal pour un émetteur institutionnel connu et "
+                "réglementé, un vrai point d'attention pour un déployeur anonyme/inconnu — à "
+                "pondérer avec les autres signaux d'owner ci-dessus (hidden_owner, "
+                "can_take_back_ownership, owner_change_balance)."
+            )
 
     if delta:
         ctx.security_score = max(5, min(95, ctx.security_score + delta))

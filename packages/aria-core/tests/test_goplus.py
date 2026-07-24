@@ -838,6 +838,36 @@ def test_apply_honeypot_signals_owner_change_balance_penalty_and_danger():
     assert any("owner_change_balance" in f or "solde d'un wallet" in f for f in ctx.risk_flags)
 
 
+def test_apply_honeypot_signals_proxy_contextualized_for_known_stablecoin():
+    """24/07 -- operator confusion risk after a real screenshot (GoPlus flags
+    EURC's "Proxy contract" red): must NEVER be surfaced as a plain danger
+    signal for a known regulated stablecoin issuer (Circle/Tether) -- no score
+    penalty, contextualized wording explaining WHY it's expected."""
+    usdc_base = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    ctx = TokenScanContext(contract=usdc_base, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=usdc_base, available=True, is_honeypot=False, is_proxy=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.is_proxy is True
+    assert ctx.security_score == 80  # jamais de malus pour un émetteur reconnu
+    assert ctx.lite_verdict == "SAFE"
+    assert any("normal et attendu" in f for f in ctx.risk_flags)
+    assert not any("point d'attention" in f for f in ctx.risk_flags)
+
+
+def test_apply_honeypot_signals_proxy_flagged_as_attention_for_unknown_token():
+    """Même signal brut (is_proxy=True) mais sur un token INCONNU (pas dans le
+    registre stablecoin) -- toujours pas de malus mécanique (un proxy seul
+    n'est pas une confirmation de danger), mais un texte d'attention distinct,
+    jamais la formulation "normal ici" réservée aux émetteurs reconnus."""
+    ctx = TokenScanContext(contract=ADDR, valid_address=True, security_score=80, lite_verdict="SAFE")
+    sec = TokenSecurity(address=ADDR, available=True, is_honeypot=False, is_proxy=True)
+    _apply_honeypot_signals(ctx, sec)
+    assert ctx.is_proxy is True
+    assert ctx.security_score == 80
+    assert any("point d'attention" in f for f in ctx.risk_flags)
+    assert not any("normal et attendu" in f for f in ctx.risk_flags)
+
+
 # ── barrières du filtre de sécurité ───────────────────────────────────────────
 
 def _clean_ctx() -> TokenScanContext:
