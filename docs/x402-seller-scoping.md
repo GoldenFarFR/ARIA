@@ -156,3 +156,27 @@ the 8h anti-front-running delay (only if a live push-alert product is added — 
 on-demand lookups don't tip a trade happening now), and the substance-cache TTL policy
 (#40). No mainnet receiving until the testnet test passes AND both gates are explicitly
 set.
+
+## Pricing strategy — two explicit phases (24/07, operator decision)
+
+Not just "cheap forever": explicit operator strategy is **acquisition-then-monetization**
+— attract a large client base at a low, volume-friendly price, let them get used to (and
+dependent on) the service, THEN raise prices once retention is real. Own words: "je
+préfère en avoir 1000 appel au lieu de 100" (revised starting prices, same day: wallet_score
+$0.10, token_analysis_cached/fresh $0.25 each) followed by "j'attire beaucoup de clients,
+qu'ils finissent par être accros, et j'augmente — ils resteront à acheter nos x402."
+
+- **Phase 1 (launch, current)**: the $0.10/$0.25/$0.25 catalog above. Goal is volume and
+  real usage data, not margin.
+- **Phase 2 (retention proven → raise prices)**: NOT yet defined by a concrete trigger —
+  needs a real signal of "clients are hooked" before raising, not a calendar date. Proposed
+  candidate metric (not yet decided, needs operator sign-off): recurring distinct payers
+  over a rolling window (e.g. the same buyer address paying again within 30 days), same
+  spirit as the Bazaar's own `calls_last_30d`/`unique_payers_last_30d` legitimacy signal —
+  a payer who comes back on their own is the real evidence of "accro," not raw call volume
+  alone (which could be one whale hammering the endpoint once).
+- **Gap found while documenting this**: ARIA has no tracking yet for its OWN sales (only
+  `x402_budget.py`, which tracks what ARIA *spends*, never what it *earns*). Before Phase 2
+  can be triggered on real data (rather than a guess), a sales-side ledger is needed —
+  scope this alongside the FastAPI route build above, not as an afterthought once revenue
+  is already flowing blind.
