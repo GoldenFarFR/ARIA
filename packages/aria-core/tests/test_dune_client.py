@@ -1082,3 +1082,102 @@ class TestGetPriceHistory:
 
         assert result.available is False
         assert result.error
+
+
+class TestBuildFarcasterReverseLookupQuery:
+    """07/24 -- reverse-lookup a Farcaster fid from an EVM address, schema
+    confirmed by a real authenticated query against the live prod container
+    (dune.neynar.dataset_farcaster_verifications: claim is a JSON-encoded
+    VARCHAR, the verified address lives inside it)."""
+
+    def test_valid_address_produces_expected_sql(self):
+        sql = dune.build_farcaster_reverse_lookup_query(WETH_BASE)
+        assert "dune.neynar.dataset_farcaster_verifications" in sql
+        assert "deleted_at IS NULL" in sql
+        assert "json_extract_scalar(claim, '$.address')" in sql
+        assert WETH_BASE.lower() in sql
+
+    def test_invalid_address_rejected_before_any_substitution(self):
+        with pytest.raises(ValueError):
+            dune.build_farcaster_reverse_lookup_query("not-an-address")
+
+    def test_address_normalized_to_lowercase(self):
+        upper = "0x" + FUNDER[2:].upper()
+        sql = dune.build_farcaster_reverse_lookup_query(upper)
+        assert FUNDER.lower() in sql
+        assert upper[2:] not in sql
+
+
+class TestGetFarcasterFidByAddress:
+    @pytest.mark.asyncio
+    async def test_no_key_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DUNE_API_KEY", raising=False)
+
+        result = await dune.get_farcaster_fid_by_address(WETH_BASE)
+
+        assert result.available is False
+
+    @pytest.mark.asyncio
+    async def test_invalid_address_unavailable_without_network_call(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        holder = _patch_client(monkeypatch, [])
+
+        result = await dune.get_farcaster_fid_by_address("not-an-address")
+
+        assert result.available is False
+        assert holder["calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_fid(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(200, {"execution_id": "exec-1", "result": {"rows": [{"fid": 3343488, "timestamp": "2026-07-24 06:59:36"}]}}),
+            ],
+        )
+
+        result = await dune.get_farcaster_fid_by_address(WETH_BASE)
+
+        assert result.available is True
+        assert result.fid == 3343488
+
+    @pytest.mark.asyncio
+    async def test_no_verification_found_is_not_an_error(self, monkeypatch):
+        """No verified Farcaster account for this address is a normal,
+        common outcome -- never treated as a failure."""
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(200, {"execution_id": "exec-1", "result": {"rows": []}}),
+            ],
+        )
+
+        result = await dune.get_farcaster_fid_by_address(WETH_BASE)
+
+        assert result.available is True
+        assert result.fid is None
+
+    @pytest.mark.asyncio
+    async def test_execution_failure_propagates_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500)])
+
+        result = await dune.get_farcaster_fid_by_address(WETH_BASE)
+
+        assert result.available is False
+        assert result.error

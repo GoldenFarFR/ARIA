@@ -968,3 +968,76 @@ async def get_price_history(
         candles.append(Candle(ts=ts, open=open_, high=high, low=low, close=close, volume=0.0))
 
     return DunePriceHistoryResult(candles=candles, available=True, error=None)
+
+
+# ---------------------------------------------------------------------------
+# Farcaster reverse lookup (07/24) -- answers the operator question "can we
+# get a name/ENS/linked X account for a wallet address" without paying Neynar
+# (which now requires an x402 payment or API key, cf. services/farcaster.py).
+#
+# Schema CONFIRMED by a real authenticated query against the live prod
+# container (07/24, per the 14/07 norm "never trust a schema guessed from
+# memory") -- `dune.neynar.dataset_farcaster_verifications` columns:
+# _dune_source_file, _dune_updated_at, claim (VARCHAR, JSON-encoded --
+# '{"address": "0x...", "blockHash": "...", "ethSignature": "..."}'),
+# created_at, deleted_at, fid, hash, id, timestamp, updated_at. The verified
+# address lives INSIDE the `claim` JSON string, not a direct column --
+# extracted via `json_extract_scalar` (standard Trino/Presto function, the
+# engine Dune queries run on). `deleted_at IS NULL` excludes revoked
+# verifications; `ORDER BY timestamp DESC LIMIT 1` keeps only the most
+# recent one if a wallet re-verified multiple times.
+# ---------------------------------------------------------------------------
+
+FARCASTER_REVERSE_LOOKUP_QUERY_TEMPLATE = """
+SELECT fid, timestamp
+FROM dune.neynar.dataset_farcaster_verifications
+WHERE deleted_at IS NULL
+  AND lower(json_extract_scalar(claim, '$.address')) = '{address}'
+ORDER BY timestamp DESC
+LIMIT 1
+"""
+
+
+def build_farcaster_reverse_lookup_query(address: str) -> str:
+    """Builds the address -> fid query. Validates the EVM format BEFORE any
+    substitution (same anti-injection doctrine as build_addresses_stats_query
+    above) -- `address` here is compared as a quoted string literal (the
+    `claim` column is VARCHAR/JSON, not `varbinary` like `addresses.stats`),
+    so the bare-hex-literal exception used there does not apply."""
+    if not isinstance(address, str) or not re.fullmatch(_EVM_ADDRESS_RE_SOURCE, address):
+        raise ValueError(f"invalid EVM address: {address!r}")
+    return FARCASTER_REVERSE_LOOKUP_QUERY_TEMPLATE.format(address=address.lower())
+
+
+@dataclass
+class FarcasterFidLookupResult:
+    available: bool = True
+    fid: int | None = None
+    error: str | None = None
+
+
+async def get_farcaster_fid_by_address(address: str, *, performance: str = "small") -> FarcasterFidLookupResult:
+    """Reverse-resolves a verified Farcaster fid from an EVM address. Same
+    dome doctrine as the rest of this module: never an exception, never a
+    fabricated fid -- `fid=None` (with `available=True`) simply means this
+    address has no known Farcaster verification, a normal and common
+    outcome, not an error."""
+    try:
+        sql = build_farcaster_reverse_lookup_query(address)
+    except ValueError as exc:
+        return FarcasterFidLookupResult(available=False, error=f"{UNAVAILABLE} ({exc})")
+
+    exec_result = await run_sql_and_wait(sql, performance=performance)
+    if not exec_result.available:
+        return FarcasterFidLookupResult(available=False, error=exec_result.error)
+
+    if not exec_result.rows:
+        return FarcasterFidLookupResult(available=True, fid=None)
+
+    fid_raw = exec_result.rows[0].get("fid")
+    try:
+        fid = int(fid_raw)
+    except (TypeError, ValueError):
+        return FarcasterFidLookupResult(available=True, fid=None)
+
+    return FarcasterFidLookupResult(available=True, fid=fid)

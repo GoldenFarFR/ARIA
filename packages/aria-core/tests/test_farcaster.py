@@ -5,11 +5,38 @@ from __future__ import annotations
 import pytest
 
 from aria_core.services.farcaster import (
+    FarcasterProfile,
     FarcasterProfileVerification,
     _parse_username,
     format_profile_verification,
+    get_profile_by_fid,
     verify_profile,
 )
+
+# Real payload shape confirmed live (07/24) via `api.warpcast.com/v2/user?fid=3`
+# (Dan Romero) -- trimmed to the fields this module actually reads.
+REAL_FID_PAYLOAD = {
+    "result": {
+        "user": {
+            "fid": 3,
+            "displayName": "Dan Romero",
+            "followerCount": 109798,
+            "username": "dwr",
+            "connectedAccounts": [
+                {"connectedAccountId": "id1", "platform": "x", "username": "dwr", "expired": False},
+            ],
+            "extras": {
+                "fid": 3,
+                "custodyAddress": "0x6b0bda3f2ffed5efc83fa8c024acff1dd45793f1",
+                "ethWallets": [
+                    "0x187c7B0393eBE86378128f2653D0930E33218899",
+                    "0x6Ce09Ed5526DE4aFe4a981AD86d17B2F5c92feA5",
+                ],
+                "publicSpamLabel": "2 (unlikely to engage in spammy behavior)",
+            },
+        }
+    }
+}
 
 REAL_PAYLOAD = {
     "result": {
@@ -139,3 +166,79 @@ def test_format_profile_verification_full_signal():
     formatted = format_profile_verification(v)
     assert "345209 abonnés" in formatted
     assert "spam" in formatted.lower()
+
+
+@pytest.mark.asyncio
+async def test_get_profile_by_fid_real_schema_parses_correctly(monkeypatch):
+    """07/24 -- confirmed live: Warpcast's own connectedAccounts field
+    exposes a linked X account for FREE, no Neynar/x402 payment needed."""
+    _patch_client(monkeypatch, FakeResponse(200, REAL_FID_PAYLOAD))
+
+    result = await get_profile_by_fid(3)
+
+    assert result.available is True
+    assert result.exists is True
+    assert result.fid == 3
+    assert result.username == "dwr"
+    assert result.display_name == "Dan Romero"
+    assert result.follower_count == 109798
+    assert result.x_username == "dwr"
+    assert result.eth_wallets == [
+        "0x187c7B0393eBE86378128f2653D0930E33218899",
+        "0x6Ce09Ed5526DE4aFe4a981AD86d17B2F5c92feA5",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_profile_by_fid_expired_x_link_is_ignored(monkeypatch):
+    payload = {
+        "result": {
+            "user": {
+                "fid": 3, "username": "dwr", "extras": {},
+                "connectedAccounts": [{"platform": "x", "username": "old", "expired": True}],
+            }
+        }
+    }
+    _patch_client(monkeypatch, FakeResponse(200, payload))
+
+    result = await get_profile_by_fid(3)
+
+    assert result.x_username is None
+
+
+@pytest.mark.asyncio
+async def test_get_profile_by_fid_404_is_exists_false(monkeypatch):
+    _patch_client(monkeypatch, FakeResponse(404))
+
+    result = await get_profile_by_fid(999999999)
+
+    assert result.available is True
+    assert result.exists is False
+
+
+@pytest.mark.asyncio
+async def test_get_profile_by_fid_empty_user_is_exists_false(monkeypatch):
+    _patch_client(monkeypatch, FakeResponse(200, {"result": {}}))
+
+    result = await get_profile_by_fid(3)
+
+    assert result.available is True
+    assert result.exists is False
+
+
+@pytest.mark.asyncio
+async def test_get_profile_by_fid_network_exception_never_raises(monkeypatch):
+    def _raise(**kw):
+        raise RuntimeError("réseau down")
+
+    monkeypatch.setattr("aria_core.services.farcaster.httpx.AsyncClient", _raise)
+
+    result = await get_profile_by_fid(3)
+
+    assert result.available is False
+
+
+def test_farcaster_profile_dataclass_defaults():
+    p = FarcasterProfile(available=False)
+    assert p.eth_wallets == []
+    assert p.x_username is None
