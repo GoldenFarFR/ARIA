@@ -19,6 +19,22 @@ from fastapi.staticfiles import StaticFiles
 # `docker logs`. Configuré ici, tôt, avant tout import qui pourrait logger au chargement.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+# 24/07 -- real secret leak found in production logs (docker logs aria-api): the root
+# INFO level above also raises httpx's own request-line logging (every outgoing HTTP
+# call, made by python-telegram-bot AND every internal aria_core service client) from
+# its usual silence to "HTTP Request: <METHOD> <url>" -- and several of those URLs
+# carry a secret: the Telegram Bot API token is structurally part of the request path
+# (api.telegram.org/bot<TOKEN>/...), and services/blockscout.py passes its Pro API key
+# as a query-string parameter (?apikey=...). Verified live: 8 Telegram-token lines and
+# 127 Blockscout-key lines in 12h of real logs. This is the same class of exposure
+# already documented in docs/HANDOFF_SECURITE.md (16/07) as "fixed by secret rotation"
+# -- the rotation changed the secret value but never touched this root cause, so the
+# NEW secrets have been leaking the same way ever since. httpx's own logging is not
+# needed here (aria_core's dome clients already log their own outcomes at the right
+# level) -- silencing it below WARNING keeps every application logger.info() visible
+# (the reason INFO was set in the first place) while removing this leak entirely.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 from app.integrations.aria_host import register_aria_host_integrations
 
 register_aria_host_integrations()

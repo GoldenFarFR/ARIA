@@ -5,6 +5,12 @@
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 
+[DEPLOYE] Sujet    : Token Telegram + cle Blockscout Pro fuyaient en clair en continu dans les logs prod
+Date : 2026.07.24 / Probleme : root logger INFO (main.py, fix legitime du 16/07 pour rendre visibles les logger.info() applicatifs) faisait aussi logger httpx (utilise par python-telegram-bot + tous les clients internes) -- chaque requete Telegram (token dans le chemin d'URL) et Blockscout Pro (apikey en query-string) fuyait en clair dans docker logs. Meme classe que l'incident du 16/07 (traite alors comme rotation de secret, jamais la cause racine) -- confirme reactif sur les NOUVEAUX secrets (8 lignes token Telegram + 127 lignes cle Blockscout sur 12h reelles). Trouve par l'audit 5-agents du 24/07.
+Solution : logging.getLogger("httpx").setLevel(logging.WARNING) juste apres le basicConfig -- ferme la fuite pour tous les clients HTTP (Telegram, Blockscout, futur Alchemy) sans toucher la visibilite des logger.info() applicatifs. Garde-fou mecanique ajoute (test_httpx_logger_silenced_below_info) - vanguard/backend/app/main.py (commit a suivre)
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : CI scan de secrets rouge en continu
 Date : 2026.07.17  /  Probleme : main et toutes les branches VPS échouaient le job secrets-scan — 5 valeurs factices de test absentes du baseline
 Solution : vérifiées une à une (aucun vrai secret), baseline régénéré, diff audité entrée par entrée (841 lignes, 100% expliquées) — .secrets.baseline

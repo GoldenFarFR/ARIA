@@ -9,6 +9,8 @@ Failles fermées :
   3. Usurpation via `handle` : un handle opérateur revendiqué sans le secret admin est
      neutralisé (pas de privilège, pas de publication X autonome).
 """
+import logging
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -296,3 +298,27 @@ async def test_knowledge_pending_accepted_with_operator_secret(client, monkeypat
         headers={"X-Admin-Secret": "s3cr3t"},
     )
     assert res.status_code == 200
+
+
+# ── 6. httpx request logging silenced -- real secret leak (24/07) ────────────
+# Real incident, found in production logs: the root logger's INFO level (set for
+# the app's OWN logger.info() calls) also raises httpx's request-line logging,
+# which prints the full URL of every outgoing call -- the Telegram Bot API token
+# lives in that URL's path, and Blockscout's Pro key is a query-string parameter.
+# Locking this at WARNING must survive any future refactor of app/main.py.
+
+def test_httpx_logger_silenced_below_info():
+    """Importing app.main (already done at module load, above) must have already
+    raised httpx's own logger to WARNING -- if a refactor removes this line, this
+    test fails BEFORE the leak reappears in real logs."""
+    assert logging.getLogger("httpx").level == logging.WARNING
+
+
+@pytest.mark.asyncio
+async def test_app_root_logger_info_still_visible(caplog):
+    """Non-regression: the fix must silence ONLY httpx, never the application's
+    own logger.info() calls (the exact reason INFO was set on 16/07)."""
+    app_logger = logging.getLogger("aria_core.some_module")
+    with caplog.at_level(logging.INFO):
+        app_logger.info("test message, must remain visible")
+    assert "test message, must remain visible" in caplog.text
