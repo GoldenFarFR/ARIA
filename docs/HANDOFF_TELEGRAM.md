@@ -5,6 +5,12 @@
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 
+[DEPLOYE] Sujet    : aria_brain_cycle passe d'un timer fixe 24h a une cadence organique 20h +/- 4h
+Date : 2026.07.24 / Probleme : decision operateur explicite ("toute les 20h avec une marge de +/- 4h pour faire comme si elle ecrivait quand elle a le temp") -- le cycle tournait a exactement 1440 min, un timer parfaitement regulier. Verifie au passage (aria_brain_log) : le cycle FONCTIONNE bien automatiquement (aucun rappel necessaire) -- l'absence de nouveau chapitre depuis le 22/07 n'etait pas un bug, ARIA a choisi d'ecrire son README.md le 23/07 (choix explicitement laisse libre par le prompt), pas un chapitre.
+Solution : nouvelle fonction _aria_brain_effective_interval_minutes(last_run) -- intervalle pseudo-aleatoire deterministe (hash de last_run, jamais retire a chaque tick tant que le cycle n'est pas du) dans [16h, 24h], utilisee UNIQUEMENT pour aria_brain_cycle dans la boucle _tick -- tous les autres cycles a 1440min restent un timer fixe. 7 tests dedies (plage, determinisme, variation, jamais avant 16h, toujours du apres 24h) - heartbeat.py (cf. historique git 24/07)
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : Conversation Telegram publique (non-admin) verrouillee sur decision operateur
 Date : 2026.07.24 / Probleme : un visiteur non-admin recevait une vraie conversation LLM (public_mode, aria_brain.process) - decision operateur explicite ("verrouille aria") avant le jour J capital reel, aucune conversation ouverte a un inconnu.
 Solution : gate ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED (OFF par defaut = verrouille), _handle_public_message repond un message fixe sans appel LLM ; /start (accueil) et /whoami (auto-identification) restent inchanges, deja sans risque - telegram_bot.py/narrative.py (cf. historique git 24/07)

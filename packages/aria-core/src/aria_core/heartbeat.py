@@ -384,8 +384,8 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="aria_brain_cycle",
         name="Free memory (aria-brain)",
-        description="Writes freely to its own private GitHub repo (GoldenFarFR/aria-brain, dedicated token, never the one that touches ARIA) -- no imposed format, no per-entry human approval, explicit operator decision (07/20). One page per day maximum (explicit operator decision, 07/20) -- chosen carefully, never a continuous stream. Direct commit, never an issue proposal. Gate OFF by default.",
-        interval_minutes=1440,
+        description="Writes freely to its own private GitHub repo (GoldenFarFR/aria-brain, dedicated token, never the one that touches ARIA) -- no imposed format, no per-entry human approval, explicit operator decision (07/20). At most once per day (explicit operator decision, 07/20) -- chosen carefully, never a continuous stream. 24/07 -- operator decision: the interval is no longer a rigid 24h timer, it's ORGANIC (centered 20h, +/-4h jitter, cf. _aria_brain_effective_interval_minutes) -- 'as if she wrote when she had the time', not on a perfectly regular clock. interval_minutes below is the CENTER value only; the tick loop resolves the real jittered value for this one task. Direct commit, never an issue proposal. Gate OFF by default.",
+        interval_minutes=1200,
         enabled=False,
     ),
     HeartbeatTask(
@@ -782,6 +782,31 @@ def _save_heartbeat_state(last_runs: dict[str, datetime]) -> None:
     _HEARTBEAT_STATE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+# 24/07 -- explicit operator decision on aria_brain_cycle's cadence: "toute
+# les 20h avec une marge de +/- 4h pour faire comme si elle ecrivait quand
+# elle a le temp" -- an organic interval instead of a perfectly regular 24h
+# clock. Deterministic from `last_run` (not re-rolled on every tick while
+# the cycle isn't due yet -- that would make the wait time erratic and could
+# even fire early on an unlucky tick) via a hash, so the SAME last_run always
+# yields the SAME jitter until the next real write, and the result is
+# reproducible for tests without mocking `random`.
+_ARIA_BRAIN_BASE_MINUTES = 1200  # 20h
+_ARIA_BRAIN_JITTER_MINUTES = 240  # +/- 4h
+
+
+def _aria_brain_effective_interval_minutes(last_run: datetime | None) -> int:
+    """Pseudo-random interval in [16h, 24h] (960-1440 min), seeded by
+    ``last_run`` (or the literal string "never" if this cycle hasn't run
+    yet in this process's known history)."""
+    import hashlib
+
+    seed_source = last_run.isoformat() if last_run else "never"
+    digest = hashlib.sha256(seed_source.encode()).digest()
+    fraction = int.from_bytes(digest[:4], "big") / 2**32  # deterministic [0, 1)
+    offset = round((fraction * 2 - 1) * _ARIA_BRAIN_JITTER_MINUTES)
+    return _ARIA_BRAIN_BASE_MINUTES + offset
+
+
 def _task_due(task_id: str, interval_minutes: int, last_runs: dict[str, datetime]) -> bool:
     last = last_runs.get(task_id)
     if last is not None:
@@ -853,7 +878,12 @@ class AriaHeartbeat:
         for hb_task in HEARTBEAT_TASKS:
             if not hb_task.enabled:
                 continue
-            if not _task_due(hb_task.id, hb_task.interval_minutes, self._last_runs):
+            interval_minutes = hb_task.interval_minutes
+            if hb_task.id == "aria_brain_cycle":
+                interval_minutes = _aria_brain_effective_interval_minutes(
+                    self._last_runs.get(hb_task.id)
+                )
+            if not _task_due(hb_task.id, interval_minutes, self._last_runs):
                 continue
 
             # Hard cap per task (07/16, incident diagnosed live on VPS Principal):
