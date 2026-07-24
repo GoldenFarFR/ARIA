@@ -15,9 +15,11 @@ Two clearly separated tracks, never mixed:
    explorer rather than guessing at degraded behavior.
 
 Type "kol" prioritized (complete identity: name/twitter/telegram, verified
-real on Base -- 200 wallets). Type "smart" wired too (honest fallback) but
-flagged as a likely duplicate of what `smart_money.py` already detects by
-behavior, for free -- never recommended as a priority source."""
+real on Base -- 200 wallets). Type "smart" is NOT wired anywhere yet (24/07
+correction -- an earlier version of this docstring claimed it was) -- the
+underlying `services/cabalspy.py` client supports it, but no caller here
+requests it, likely a duplicate of what `smart_money.py` already detects by
+behavior, for free -- would need its own decision before ever being sourced."""
 from __future__ import annotations
 
 import os
