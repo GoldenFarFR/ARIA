@@ -50,8 +50,19 @@ PRICING_CATALOG: dict[str, str] = {
     "token_analysis_fresh": "$0.50",
 }
 
-_TESTNET_NETWORK = "base-sepolia"
-_MAINNET_NETWORK = "base"
+# CAIP-2 chain identifiers -- verified against the installed x402 2.16.0 SDK
+# (server_base.py::has_registered_scheme does an EXACT string match against
+# whatever was passed to x402ResourceServer.register(), with no legacy-name
+# normalization; every register()/PaymentOption example in the SDK itself
+# uses CAIP-2, e.g. "eip155:8453"). A previous version of this constant used
+# the plain legacy names ("base"/"base-sepolia") -- harmless while this module
+# was never wired to a real server, but it would have silently matched no
+# registered scheme (no payment ever verifiable) the moment it was actually
+# mounted, since the FastAPI host registers schemes under CAIP-2 (see
+# vanguard/backend/app/x402_seller.py). Found and fixed during the 24/07
+# reconciliation of the two divergent seller modules (#59).
+_TESTNET_NETWORK = "eip155:84532"
+_MAINNET_NETWORK = "eip155:8453"
 
 
 def seller_enabled() -> bool:

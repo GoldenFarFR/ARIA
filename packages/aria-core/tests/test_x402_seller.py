@@ -24,12 +24,12 @@ def test_seller_mainnet_off_by_default(monkeypatch):
 
 def test_network_defaults_to_testnet(monkeypatch):
     monkeypatch.delenv("ARIA_X402_SELLER_MAINNET", raising=False)
-    assert s.resolve_network() == "base-sepolia"
+    assert s.resolve_network() == "eip155:84532"  # CAIP-2 base-sepolia
 
 
 def test_network_mainnet_only_when_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("ARIA_X402_SELLER_MAINNET", "true")
-    assert s.resolve_network() == "base"
+    assert s.resolve_network() == "eip155:8453"  # CAIP-2 base mainnet
 
 
 def test_seller_enabled_alone_still_defaults_to_testnet(monkeypatch):
@@ -38,7 +38,7 @@ def test_seller_enabled_alone_still_defaults_to_testnet(monkeypatch):
     monkeypatch.setenv("ARIA_X402_SELLER_ENABLED", "true")
     monkeypatch.delenv("ARIA_X402_SELLER_MAINNET", raising=False)
     assert s.seller_enabled() is True
-    assert s.resolve_network() == "base-sepolia"
+    assert s.resolve_network() == "eip155:84532"
 
 
 # ── pricing catalog ──────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ def test_build_resource_config_testnet_by_default(monkeypatch):
     assert rc is not None
     assert rc.pay_to == s.ARIA_X402_RECEIVING_ADDRESS
     assert rc.price == "$0.02"
-    assert rc.network == "base-sepolia"
+    assert rc.network == "eip155:84532"
     assert rc.scheme == "exact"
 
 
@@ -91,12 +91,33 @@ def test_build_resource_config_mainnet_when_both_gates_on(monkeypatch):
     monkeypatch.setenv("ARIA_X402_SELLER_ENABLED", "true")
     monkeypatch.setenv("ARIA_X402_SELLER_MAINNET", "true")
     rc = s.build_resource_config("token_analysis_fresh")
-    assert rc.network == "base"
+    assert rc.network == "eip155:8453"
     assert rc.price == "$0.50"
     assert rc.pay_to == s.ARIA_X402_RECEIVING_ADDRESS
 
 
 # ── deliver_scrubbed ─────────────────────────────────────────────────────────
+
+
+# ── real SDK compatibility (24/07, #59 reconciliation) ──────────────────────
+# Locks the invariant found by direct inspection of the installed x402 2.16.0
+# package: x402ResourceServer.has_registered_scheme does an EXACT string match
+# against whatever network string register() was called with -- no legacy-name
+# ("base"/"base-sepolia") <-> CAIP-2 ("eip155:8453"/"eip155:84532")
+# normalization happens anywhere in the SDK. A prior version of this module
+# emitted the legacy names, which would have silently matched no registered
+# scheme the moment this module was ever actually wired to a live server (every
+# register()/PaymentOption example in the SDK itself uses CAIP-2).
+
+
+def test_resolved_network_matches_a_scheme_registered_the_way_the_real_sdk_expects(monkeypatch):
+    from x402.mechanisms.evm.exact import ExactEvmServerScheme
+    from x402.server import x402ResourceServer
+
+    monkeypatch.delenv("ARIA_X402_SELLER_MAINNET", raising=False)
+    server = x402ResourceServer(facilitator_clients=[])
+    server.register(s.resolve_network(), ExactEvmServerScheme())
+    assert server.has_registered_scheme(s.resolve_network(), "exact") is True
 
 
 def test_deliver_scrubbed_removes_sources_and_tags_product():

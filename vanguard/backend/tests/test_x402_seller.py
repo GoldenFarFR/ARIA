@@ -5,23 +5,40 @@ from app.auth.middleware import PUBLIC_PREFIXES
 from app.x402_seller import x402_seller_ready
 
 
-def test_gate_off_by_default():
+def test_gate_off_by_default(monkeypatch):
     """No env vars configured in the test environment -- fail-closed default."""
+    monkeypatch.delenv("ARIA_X402_SELLER_ENABLED", raising=False)
     assert x402_seller_ready() is False
 
 
-def test_gate_requires_both_flag_and_address(monkeypatch):
-    monkeypatch.setattr("app.x402_seller.X402_SELLER_ENABLED", True)
-    monkeypatch.setattr("app.x402_seller.X402_SELLER_PAYTO_ADDRESS", "")
-    assert x402_seller_ready() is False  # flag on, no address -> still closed
+def test_gate_reads_the_shared_aria_core_gate_live(monkeypatch):
+    """24/07 (#59): gating is now delegated entirely to
+    aria_core.x402_seller.seller_enabled() -- no separate "address configured"
+    check remains (the receiving address is a hardcoded constant there, never
+    an operator-supplied env var). Read LIVE, not baked at import time."""
+    monkeypatch.delenv("ARIA_X402_SELLER_ENABLED", raising=False)
+    assert x402_seller_ready() is False
 
-    monkeypatch.setattr("app.x402_seller.X402_SELLER_ENABLED", False)
-    monkeypatch.setattr("app.x402_seller.X402_SELLER_PAYTO_ADDRESS", "0xabc")
-    assert x402_seller_ready() is False  # address set, flag off -> still closed
+    monkeypatch.setenv("ARIA_X402_SELLER_ENABLED", "true")
+    assert x402_seller_ready() is True
 
-    monkeypatch.setattr("app.x402_seller.X402_SELLER_ENABLED", True)
-    monkeypatch.setattr("app.x402_seller.X402_SELLER_PAYTO_ADDRESS", "0xabc")
-    assert x402_seller_ready() is True  # both set -> ready
+    monkeypatch.delenv("ARIA_X402_SELLER_ENABLED", raising=False)
+    assert x402_seller_ready() is False
+
+
+def test_mount_x402_seller_wires_correctly_when_gate_on(monkeypatch):
+    """24/07 (#59): smoke test for the actual reconciled wiring -- mounting
+    must not raise, and must build the route from aria_core.x402_seller's
+    catalog (never a hardcoded duplicate) with a CAIP-2-compatible network
+    (the real bug found and fixed during this reconciliation: a mismatch here
+    would previously have made every payment silently unverifiable)."""
+    from fastapi import FastAPI
+
+    from app.x402_seller import mount_x402_seller
+
+    monkeypatch.setenv("ARIA_X402_SELLER_ENABLED", "true")
+    app = FastAPI()
+    mount_x402_seller(app)  # must not raise
 
 
 def test_x402_prefix_exempted_from_privy_session_gate():

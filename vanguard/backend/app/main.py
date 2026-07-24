@@ -203,9 +203,9 @@ app.include_router(holding_member.router, prefix="/api")
 app.include_router(websocket.router)
 
 # x402 seller (ARIA selling her own signals to other agents, USDC on Base) --
-# gated OFF by default (ARIA_X402_SELLER_ENABLED unset). Fail-closed: the
-# router is not even registered unless x402_seller_ready() is True (gate ON
-# AND a receiving address configured) -- see app/x402_seller.py.
+# gated OFF by default (ARIA_X402_SELLER_ENABLED unset, read live from
+# aria_core.x402_seller.seller_enabled()). Fail-closed: the router is not even
+# registered unless x402_seller_ready() is True -- see app/x402_seller.py.
 if x402_seller_ready():
     from app.api.routes import x402_signals
 
