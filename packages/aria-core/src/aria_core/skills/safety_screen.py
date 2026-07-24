@@ -210,6 +210,12 @@ def safety_screen(
         reasons.append(
             f"holder dominant {ctx.top_holder_pct:.0f}% > {max_top_holder_pct:.0f}% (risque de dump)"
         )
+    # 07/24 -- Gini coefficient (in-house, see acp_onchain_scan._gini_coefficient):
+    # a finer distribution signal alongside the single-holder threshold above --
+    # purely informational, never part of `passed` below (the existing binary
+    # threshold is unchanged).
+    if ctx.holder_gini is not None:
+        reasons.append(f"distribution des holders (Gini) : {ctx.holder_gini:.2f}")
 
     passed = (
         ctx.valid_address
@@ -245,6 +251,8 @@ def safety_screen(
                 f"liquidité faible ${liq:,.0f} < ${min_liquidity_usd:,.0f} tolérée "
                 "(score/verdict/mint propres)"
             )
+        if ctx.holder_gini is not None:
+            reasons.append(f"distribution des holders (Gini) : {ctx.holder_gini:.2f}")
 
     # HARD failure = a MALICIOUS mechanism confirmed in the contract itself
     # (the code never "heals" with time -- explicit operator decision, 07/10:

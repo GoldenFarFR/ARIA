@@ -83,15 +83,32 @@ def _is_burn_address(address: str | None) -> bool:
     return False
 
 
+def _gini_coefficient(shares: list[float]) -> float | None:
+    """Standard Gini coefficient (0 = perfect equality, 1 = perfect
+    inequality) over a list of holder shares -- same metric a paid x402/
+    BaseScan-style provider would sell, computed for free from holders ARIA
+    already fetches. `None` below 2 data points (undefined/meaningless on
+    fewer)."""
+    if len(shares) < 2:
+        return None
+    values = sorted(float(s) for s in shares if s >= 0)
+    n = len(values)
+    total = sum(values)
+    if total <= 0:
+        return None
+    weighted_sum = sum((i + 1) * v for i, v in enumerate(values))
+    return max(0.0, min(1.0, (2 * weighted_sum) / (n * total) - (n + 1) / n))
+
+
 def _holder_concentration(
     holders: "TokenHoldersResult", lp_address: str | None
-) -> tuple[float | None, float | None, int]:
-    """(% of the largest holder, % of the top 10, number of holders counted)
-    EXCLUDING LP and burn.
+) -> tuple[float | None, float | None, int, float | None]:
+    """(% of the largest holder, % of the top 10, number of holders counted,
+    Gini coefficient) EXCLUDING LP and burn.
 
     The LP pool and burn addresses legitimately hold large shares: including
     them would fail every token wrongly. Only real holders are counted.
-    Returns ``(None, None, 0)`` if no usable data.
+    Returns ``(None, None, 0, None)`` if no usable data.
     """
     lp = (lp_address or "").lower()
     pcts: list[float] = []
@@ -103,9 +120,9 @@ def _holder_concentration(
             continue
         pcts.append(float(h.percentage))
     if not pcts:
-        return None, None, 0
+        return None, None, 0, None
     pcts.sort(reverse=True)
-    return pcts[0], sum(pcts[:10]), len(pcts)
+    return pcts[0], sum(pcts[:10]), len(pcts), _gini_coefficient(pcts)
 
 
 async def _resolve_mint_authority(ctx: "TokenScanContext", token_address: str) -> None:
@@ -195,6 +212,12 @@ class TokenScanContext:
     top_holder_pct: float | None = None
     top10_holder_pct: float | None = None
     holders_counted: int | None = None
+    # 07/24 -- in-house Gini coefficient (build-in-house instead of paying a
+    # BaseScan-style provider for this exact metric, cf. HANDOFF). Purely
+    # informational alongside top_holder_pct/top10_holder_pct -- never a new
+    # hard veto, the existing binary threshold in safety_screen.py is
+    # unchanged.
+    holder_gini: float | None = None
     # CoinGecko fundamentals (populated only if include_fundamentals AND data
     # is available). Exposed in the clear to feed the comparables ROI
     # projection (Vault 3, skills/roi_comparables.py) without a re-fetch.
@@ -926,10 +949,11 @@ async def scan_base_token(
         ctx.has_disable_transfers = contract_flags.has_disable_transfers
     if holders is not None and holders.available:
         lp = ctx.best_pair.pair_address if ctx.best_pair else None
-        top, top10, counted = _holder_concentration(holders, lp)
+        top, top10, counted, gini = _holder_concentration(holders, lp)
         ctx.top_holder_pct = top
         ctx.top10_holder_pct = top10
         ctx.holders_counted = counted
+        ctx.holder_gini = gini
 
     # Mint authority: only if an EXTERNAL mint exists (rare since the ABI
     # fix). A legitimate mint (renounced, known launchpad, contract) must not
