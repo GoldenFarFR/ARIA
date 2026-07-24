@@ -175,8 +175,11 @@ qu'ils finissent par être accros, et j'augmente — ils resteront à acheter no
   spirit as the Bazaar's own `calls_last_30d`/`unique_payers_last_30d` legitimacy signal —
   a payer who comes back on their own is the real evidence of "accro," not raw call volume
   alone (which could be one whale hammering the endpoint once).
-- **Gap found while documenting this**: ARIA has no tracking yet for its OWN sales (only
-  `x402_budget.py`, which tracks what ARIA *spends*, never what it *earns*). Before Phase 2
-  can be triggered on real data (rather than a guess), a sales-side ledger is needed —
-  scope this alongside the FastAPI route build above, not as an afterthought once revenue
-  is already flowing blind.
+- **Gap found while documenting this — CLOSED (24/07)**: `x402_revenue_ledger.py` (new,
+  symmetric to `x402_budget.py`) + `x402_ledger.py` (consolidated spend+revenue view,
+  `consolidated_summary()`/`format_consolidated_summary()`) now exist, ready for the FastAPI
+  route to call `record_sale()` the moment the first real payment settles. Also implements
+  `unique_recurring_payers(window_days=30)` — the proposed Phase-2 trigger metric above,
+  buildable on real data from day one rather than bolted on later. Both ledgers start
+  empty today (the seller path is still dormant) — nothing to report until real sales
+  happen.
