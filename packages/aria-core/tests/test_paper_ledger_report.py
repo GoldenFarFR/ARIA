@@ -200,7 +200,31 @@ async def test_positions_detail_block_respects_closed_limit(tmp_db):
         await pt.close_position(contract, 1.1, reason="manuel")
     text = await report.build_positions_detail_block(closed_limit=3)
     assert "Positions clôturées récentes (3)" in text
-    assert text.count("CLÔTURÉE") == 3
+    assert text.count("sortie : manuel") == 3
+
+
+@pytest.mark.asyncio
+async def test_positions_detail_block_closed_section_is_compact_and_link_glued(tmp_db):
+    """24/07 (second pass, direct operator complaint): /feedback still showed
+    the full verbose thesis/close-notes essay on the CLOSED section after the
+    operator explicitly said they didn't want it anymore -- switched to the
+    same one-line-per-position, link-glued format as the OPEN section."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, invalidation_price=0.5, alloc_usd=10_000,
+        thesis="Golden pocket + divergence RSI, diligence de conviction : Website -> Docs -> X...",
+    )
+    await pt.close_position(A, 1.5, reason="invalidation")
+    text = await report.build_positions_detail_block()
+    assert "Golden pocket" not in text
+    assert "diligence de conviction" not in text
+    for line in text.splitlines():
+        if line.startswith("AAA"):
+            assert f"https://dexscreener.com/base/{A}" in line
+            assert "sortie : invalidation" in line
+            break
+    else:
+        pytest.fail("no compact line starting with AAA found in the closed section")
 
 
 # ── build_regime_report (20/07, #176 -- volet apprentissage) ───────────────────────

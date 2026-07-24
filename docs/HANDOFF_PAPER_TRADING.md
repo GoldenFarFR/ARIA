@@ -6,6 +6,24 @@
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 > Protocole actif à jour : section "Protocole d'entraînement hebdomadaire" dans CLAUDE.md.
 
+[CODE] Sujet    : Suivi des trades perdants par lot de 10 (#92, pattern + ajustement de trajectoire)
+Date : 2026.07.24 / Probleme : demande opérateur explicite -- une alerte par trade perdant isolé a été écartée d'abord (bruit statistique, réaction à l'anecdote) au profit d'un suivi groupé qui évite l'isolement d'une malchance.
+Solution : nouveau `trade_loss_batch_review.py` -- accumule les positions clôturées PERDANTES jamais encore batchées, déclenche une analyse LLM (DeepSeek R1, même doctrine que le Devil's Advocate) tous les 10, cherche un pattern RÉCURRENT (jamais forcé sur un lot hétérogène), produit un ajustement de trajectoire one-way injecté dans le security-guard momentum aux côtés des leçons du Devil's Advocate. Générique via `positions_fetch` (paper aujourd'hui, wallets réels demain, #41) -- skills/trade_loss_batch_review.py (nouveau), heartbeat.py, momentum_entry.py
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : trade_devils_advocate_cycle jamais exécuté malgré un gate correctement activé
+Date : 2026.07.24 / Probleme : trouvé en câblant le suivi de pertes ci-dessus -- `_sync_x_curiosity_enabled()` avait été corrigé plus tôt le même jour pour activer `task.enabled` selon `ARIA_TRADE_DEVILS_ADVOCATE_ENABLED`, mais `_run_task()` n'avait AUCUNE branche de dispatch pour cet id -- la tâche pouvait être `enabled=True` et rester un no-op total à chaque tick (tombe au travers de tout le elif, aucun else, aucune erreur visible).
+Solution : ajout de la branche de dispatch manquante (`run_trade_devils_advocate_cycle`, notifie `_notify_telegram_trading` sur verdict flawed) + celle du nouveau `trade_loss_batch_review_cycle` -- heartbeat.py, tests/test_heartbeat_trade_risk_cycles.py (nouveau, régression)
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet    : /feedback -- section CLÔTURÉE encore verbeuse après le correctif du 24/07
+Date : 2026.07.24 / Probleme : le correctif du 24/07 (plus tôt le même jour) avait rendu compacte la section OUVERTE de /feedback mais laissé la section CLÔTURÉE intacte (thèse/close_notes complètes) sur l'hypothèse "jamais réclamé" -- l'opérateur a signalé juste après avoir encore toutes les données qu'il avait dit ne plus vouloir.
+Solution : nouveau `_render_closed_compact()` (même densité/lien collé que la section ouverte), utilisé UNIQUEMENT par `build_positions_detail_block` (/feedback) -- `/ledger` (`build_report`) garde `_render_closed` verbeux, divergence désormais délibérée (bilan rapide vs dossier détaillé) -- paper_ledger_report.py, tests/test_paper_ledger_report.py
+
+------------------------------------------------------------
+
 [CODE] Sujet    : Sealed Ledger v0 (#214) — registre de trades scellé cryptographiquement, ISOLÉ
 Date : 2026.07.19  /  Probleme : —
 Solution : registre append-only (chaînage SHA-256, JSON canonique, PnL toujours recalculé sur le VWAP des prix d'exécution réels, jamais le prix de décision), proposé et conçu par ARIA elle-même en conversation. Livré en version ISOLÉE (`sealed_ledger.py`/`sealed_ledger_export.py`, jamais câblée au paper-trading réel — décision opérateur explicite pour ce premier tour), preuve exécutée et vérifiée bout en bout sur 4 trades fictifs explicitement marqués comme tels (`PROOF-v0-hand-filled-not-a-real-ARIA-decision`). Reste ouvert : câbler ce registre sur `paper_trader.py`, endpoint API public, décision Postgres vs SQLite — aucun feu vert opérateur encore donné au-delà du v0 isolé.

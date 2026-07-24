@@ -71,6 +71,35 @@ def _render_open(p: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_closed_compact(p: dict) -> str:
+    """One compact line for a closed position -- same density/DexScreener-
+    glued-to-the-line style as ``paper_trader._format_tracked_position_line``
+    (the OPEN section's 24/07 compact format).
+
+    24/07 (second pass, direct operator complaint): the OPEN section was made
+    compact earlier the same day, but the CLOSED section was deliberately left
+    untouched (see ``build_positions_detail_block``'s docstring at the time --
+    "never complained about"). The operator then reported the full verbose
+    thesis/close-notes essay was STILL showing up under ``/feedback`` after
+    asking not to see it -- the earlier assumption didn't hold. Used ONLY by
+    ``build_positions_detail_block`` (``/feedback``, quick bilan) -- ``/ledger``
+    (``build_report``, deep-dive dossier) keeps ``_render_closed`` (full
+    thesis/close-notes) unchanged, a DELIBERATE divergence now (the two
+    commands serve different purposes), not an accidental duplicate format."""
+    pnl = p.get("pnl_usd") or 0.0
+    pnl_pct = p.get("pnl_pct") or 0.0
+    sign = "+" if pnl >= 0 else ""
+    name = p.get("symbol") or (p.get("contract") or "?")[:10]
+    line = (
+        f"{name} ({p.get('chain', '?')}) : {_fmt_price(p.get('exit_price'))} ({sign}{pnl_pct:.1f}%) · "
+        f"P&L {sign}{pnl:,.0f} $ · sortie : {p.get('close_reason') or '?'} · "
+        f"détenue {_duration(p.get('opened_at'), p.get('closed_at'))}"
+    )
+    if p.get("contract"):
+        line += f" · {token_url(p['contract'], chain=p.get('chain') or 'base')}"
+    return line
+
+
 def _render_closed(p: dict) -> str:
     pnl = p.get("pnl_usd") or 0.0
     verdict = "GAGNANTE" if pnl > 0 else ("PERDANTE" if pnl < 0 else "NEUTRE")
@@ -250,17 +279,24 @@ async def build_positions_detail_block(*, closed_limit: int = 5, price_lookup=No
     SAME line (a separate URL line was read in the Telegram client as
     belonging to the WRONG position). ``price_lookup`` optional -- ``None``
     degrades to the entry price (honest, never invented; also what keeps
-    this function network-free and deterministic for tests). The CLOSED
-    section is untouched (``_render_closed``, thesis/reason/R:R still useful
-    there, never complained about -- never a 2nd format that could diverge
-    from ``/ledger``)."""
+    this function network-free and deterministic for tests).
+
+    24/07 (second pass, direct operator complaint): the CLOSED section was
+    first left untouched on the assumption above (thesis/reason/R:R "never
+    complained about") -- the operator then reported ``/feedback`` still
+    showed the full verbose thesis/close-notes essay after explicitly asking
+    not to see it. Switched to ``_render_closed_compact`` (same density/link-
+    glued style as the OPEN section). ``/ledger`` (``build_report``) keeps the
+    verbose ``_render_closed`` unchanged -- a deliberate divergence now (quick
+    bilan vs. deep-dive dossier), not the accidental duplicate format the
+    original docstring here was trying to avoid."""
     from aria_core.paper_trader import build_open_positions_tracking_lines
 
     open_lines = await build_open_positions_tracking_lines(price_lookup=price_lookup)
     closed = await paper_trader.get_closed_positions(limit=closed_limit)
     open_section = [f"--- Positions ouvertes ({len(open_lines)}) ---"] + (open_lines or ["  (aucune)"])
     closed_section = [f"--- Positions clôturées récentes ({len(closed)}) ---"] + (
-        [_render_closed(p) for p in closed] or ["  (aucune)"]
+        [_render_closed_compact(p) for p in closed] or ["  (aucune)"]
     )
     return "\n".join(open_section + [""] + closed_section)
 

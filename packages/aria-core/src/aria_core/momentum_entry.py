@@ -1138,18 +1138,38 @@ async def _market_alerts_line() -> str:
 
 async def _trade_lessons_line() -> str:
     """ARIA's Devil's Advocate lessons (20/07, ``trade_devils_advocate.py``) --
-    confirmed on its own closed positions, never fabricated hindsight.
-    Deliberately VERY short (capped in ``format_lessons_line``): this security
-    guard remains latency-critical, never a long history unrolled on every
-    decision."""
+    confirmed on its own closed positions, never fabricated hindsight -- PLUS
+    trajectory adjustments confirmed by the batch-of-10 losing-trade review
+    (07/24, ``trade_loss_batch_review.py``, direct operator request: "un
+    suivit de tout les trades perdant... traité par lot de 10"). Both are
+    short, one-way, confirmed-pattern lessons injected into the same security
+    guard -- combined here into a single line so neither call site needs to
+    change. Deliberately VERY short (each formatter caps its own contribution):
+    this security guard remains latency-critical, never a long history
+    unrolled on every decision."""
+    lines = []
     try:
         from aria_core.skills.trade_devils_advocate import active_lessons, format_lessons_line
 
         lessons = await active_lessons()
-        return format_lessons_line(lessons)
+        line = format_lessons_line(lessons)
+        if line:
+            lines.append(line)
     except Exception as exc:  # noqa: BLE001 -- never blocking
-        logger.info("_trade_lessons_line: read failed (%s)", exc)
-        return ""
+        logger.info("_trade_lessons_line: devils advocate read failed (%s)", exc)
+    try:
+        from aria_core.skills.trade_loss_batch_review import (
+            active_trajectory_adjustments,
+            format_trajectory_line,
+        )
+
+        adjustments = await active_trajectory_adjustments()
+        line = format_trajectory_line(adjustments)
+        if line:
+            lines.append(line)
+    except Exception as exc:  # noqa: BLE001 -- never blocking
+        logger.info("_trade_lessons_line: loss batch review read failed (%s)", exc)
+    return "\n".join(lines)
 
 
 async def _sentiment_lines() -> list[str]:

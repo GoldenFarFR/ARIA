@@ -396,6 +396,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="trade_loss_batch_review_cycle",
+        name="Suivi des trades perdants (lot de 10)",
+        description="Direct operator request (07/24): accumulates every closed LOSING position never yet batched and, once 10 have piled up, asks a different model (DeepSeek R1) whether a real recurring PATTERN exists across the whole batch (never a single trade in isolation -- explicitly rejected as noisy/anecdotal) -- discovery channel, conviction tier, chain, regime, close reason. A confirmed pattern produces one concrete trajectory adjustment, injected into the momentum pipeline's safety guard alongside the Devil's Advocate lessons -- one-way, never relaxes anything. Generic over the closed-position source (paper today, real Smart Account wallets once #41 lands). Gate OFF by default.",
+        interval_minutes=180,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="ux_watch_cycle",
         name="Veille UX visuelle du site",
         description="Capture le site reel (Playwright, desktop+mobile) et le lit visuellement (llm_vision.vision_analyze, brique deja cablee pour l'avatar -- pas ARIA_VISION_ENABLED, gate propre a la fonctionnalite photo Telegram admin-only, sans rapport). Compare au referentiel UX gamme luxe (CLAUDE.md, Normes permanentes). PROPOSE des micro-details concrets via ISSUE GitHub (aria-ux-proposal) -- jamais une refonte, jamais un changement de code direct, jamais un commit ni une fusion autonome. Un cycle par jour maximum. Gate OFF par defaut.",
@@ -749,6 +756,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.trade_devils_advocate import trade_devils_advocate_enabled
 
                 task.enabled = trade_devils_advocate_enabled()
+            if task.id == "trade_loss_batch_review_cycle":
+                from aria_core.skills.trade_loss_batch_review import trade_loss_batch_review_enabled
+
+                task.enabled = trade_loss_batch_review_enabled()
         except Exception as exc:
             # A broken task gate (missing import, undeployed dependency...) must
             # never prevent the evaluation of the OTHER tasks, nor, upstream, the
@@ -1438,6 +1449,42 @@ class AriaHeartbeat:
                 alert = format_brain_alert(result)
                 if alert:
                     await self._notify_telegram(alert)
+
+        elif task_id == "trade_devils_advocate_cycle":
+            from aria_core.skills.trade_devils_advocate import run_trade_devils_advocate_cycle
+
+            result = await run_trade_devils_advocate_cycle()
+            if result.get("outcome") == "ok":
+                if result.get("flawed"):
+                    append_memory(
+                        "trade_devils_advocate",
+                        f"[devil's advocate] {result['flawed']} decision(s) flawed sur {result.get('reviewed', 0)} revues",
+                    )
+                for r in result.get("results", []):
+                    if r.get("verdict") == "flawed" and r.get("lesson"):
+                        await self._notify_telegram_trading(
+                            "\U0001FA9E ARIA's Devil's Advocate\n\n"
+                            f"Position : {r.get('contract', '?')}\n"
+                            f"Faille : {r.get('flaw', '')}\n"
+                            f"Lecon : {r.get('lesson', '')}"
+                        )
+
+        elif task_id == "trade_loss_batch_review_cycle":
+            from aria_core.skills.trade_loss_batch_review import (
+                format_batch_alert,
+                run_trade_loss_batch_review_cycle,
+            )
+
+            result = await run_trade_loss_batch_review_cycle()
+            if result.get("outcome") == "ok":
+                append_memory(
+                    "trade_loss_batch_review",
+                    f"[lot pertes] {result.get('batches_reviewed', 0)} lot(s) revu(s), "
+                    f"{result.get('patterns_found', 0)} pattern(s) confirme(s)",
+                )
+                for r in result.get("results", []):
+                    if "error" not in r:
+                        await self._notify_telegram_trading(format_batch_alert(r))
 
         elif task_id == "market_sentiment_cycle":
             from aria_core.skills.market_sentiment import run_market_sentiment_cycle

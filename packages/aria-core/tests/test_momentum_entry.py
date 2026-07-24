@@ -3101,6 +3101,37 @@ async def test_trade_lessons_line_reflects_active_lessons(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_trade_lessons_line_also_reflects_loss_batch_trajectory_adjustments(monkeypatch):
+    """07/24 -- the batch-of-10 losing-trade review (trade_loss_batch_review.py)
+    injects into the same security-guard line as the Devil's Advocate, never a
+    separate untested call site."""
+    async def fake_adjustments(limit=3):
+        return [{"batch_number": 1, "pattern_summary": "x", "adjustment": "réduire la taille sur le canal floor"}]
+
+    monkeypatch.setattr(
+        "aria_core.skills.trade_loss_batch_review.active_trajectory_adjustments", fake_adjustments
+    )
+
+    line = await me._trade_lessons_line()
+    assert "réduire la taille sur le canal floor" in line
+
+
+@pytest.mark.asyncio
+async def test_trade_lessons_line_loss_batch_failure_never_drops_devils_advocate_line(monkeypatch):
+    async def fake_active_lessons():
+        return [{"contract": "0xabc", "symbol": "MAGIC", "flaw": "x", "lesson": "vérifier le R/R après impact"}]
+
+    async def _raise(limit=3):
+        raise RuntimeError("DB down")
+
+    monkeypatch.setattr("aria_core.skills.trade_devils_advocate.active_lessons", fake_active_lessons)
+    monkeypatch.setattr("aria_core.skills.trade_loss_batch_review.active_trajectory_adjustments", _raise)
+
+    line = await me._trade_lessons_line()
+    assert "vérifier le R/R après impact" in line
+
+
+@pytest.mark.asyncio
 async def test_security_gate_includes_weekly_pacing_but_never_sways_verdict(monkeypatch):
     captured = {}
 
