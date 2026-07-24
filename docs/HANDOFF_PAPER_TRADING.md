@@ -6,6 +6,12 @@
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 > Protocole actif à jour : section "Protocole d'entraînement hebdomadaire" dans CLAUDE.md.
 
+[CODE] Sujet    : Sealed Ledger v0 (#214) — registre de trades scellé cryptographiquement, ISOLÉ
+Date : 2026.07.19  /  Probleme : —
+Solution : registre append-only (chaînage SHA-256, JSON canonique, PnL toujours recalculé sur le VWAP des prix d'exécution réels, jamais le prix de décision), proposé et conçu par ARIA elle-même en conversation. Livré en version ISOLÉE (`sealed_ledger.py`/`sealed_ledger_export.py`, jamais câblée au paper-trading réel — décision opérateur explicite pour ce premier tour), preuve exécutée et vérifiée bout en bout sur 4 trades fictifs explicitement marqués comme tels (`PROOF-v0-hand-filled-not-a-real-ARIA-decision`). Reste ouvert : câbler ce registre sur `paper_trader.py`, endpoint API public, décision Postgres vs SQLite — aucun feu vert opérateur encore donné au-delà du v0 isolé.
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : reset_portfolio() effacait l'historique sans archive (DROP brut)
 Date : 2026.07.24 / Probleme : audit 5-agents -- reset_portfolio() (reset manuel, ex. apres un incident forçant un redémarrage hors cycle, cf. CNX le 22/07) faisait un DROP TABLE direct sans jamais archiver dans paper_position_archive au préalable, contrairement à run_weekly_reset() qui archive toujours avant de vider -- confirmé en base : le Cycle #2 (18-22/07) n'a laissé aucune trace archivée après le reset manuel du 22/07.
 Solution : reset_portfolio() archive désormais tout le contenu de paper_position (ouvert ET clôturé) sous le cycle_number courant avant le DROP, même doctrine non-destructive que run_weekly_reset -- paper_trader.py, tests dédiés (cf. historique git 24/07)

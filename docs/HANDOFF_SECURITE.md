@@ -5,6 +5,12 @@
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 
+[ETAT ACTUEL] Sujet    : Repos annexes volontairement archivés sur GitHub, jamais désarchivés
+Date : 2026.07.18  /  Probleme : —
+Solution : `template-grok-cursor` et `aria-acp-showcase` restent archivés (décision opérateur) en plus du `GITHUB_TOKEN` PAT fine-grained scopé au seul repo `ARIA` et de la protection de branche `main` (entrées ci-dessous) — ne jamais les désarchiver/supprimer sans consigne opérateur explicite.
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : Token Telegram + cle Blockscout Pro fuyaient en clair en continu dans les logs prod
 Date : 2026.07.24 / Probleme : root logger INFO (main.py, fix legitime du 16/07 pour rendre visibles les logger.info() applicatifs) faisait aussi logger httpx (utilise par python-telegram-bot + tous les clients internes) -- chaque requete Telegram (token dans le chemin d'URL) et Blockscout Pro (apikey en query-string) fuyait en clair dans docker logs. Meme classe que l'incident du 16/07 (traite alors comme rotation de secret, jamais la cause racine) -- confirme reactif sur les NOUVEAUX secrets (8 lignes token Telegram + 127 lignes cle Blockscout sur 12h reelles). Trouve par l'audit 5-agents du 24/07.
 Solution : logging.getLogger("httpx").setLevel(logging.WARNING) juste apres le basicConfig -- ferme la fuite pour tous les clients HTTP (Telegram, Blockscout, futur Alchemy) sans toucher la visibilite des logger.info() applicatifs. Garde-fou mecanique ajoute (test_httpx_logger_silenced_below_info) - vanguard/backend/app/main.py (commit a suivre)
