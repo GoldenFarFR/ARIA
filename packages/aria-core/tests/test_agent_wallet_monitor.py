@@ -1308,3 +1308,222 @@ async def test_legit_token_never_recorded_in_phishing_blacklist(monkeypatch):
     ))
     await monitor.check_wallet_activity(wallet_address=WALLET)
     assert await monitor.list_phishing_addresses() == []
+
+
+# ── "internal_transfer" -- reconnaissance des wallets ARIA/opérateur (23/07) ──
+# Incident réel : une alerte "SORTIE NON INITIÉE PAR ARIA" s'est déclenchée sur
+# un paiement x402 légitime -- l'opérateur a demandé qu'ARIA reconnaisse SES
+# PROPRES wallets pour ne plus jamais les classer en alerte, même sans
+# correspondance de tx_hash/spend x402.
+
+_SMART_VC = "0x9C72AedD2836Edc24566E8B0Fd1825e0E1eFbF07"  # aria-smart-vc-EVM
+_SPENDER = "0x8e71C3e9396ded76AdA6EA56cD3c315C3D67D79b"  # aria-spender-smart-st-EVM
+_TANGEM_ST = "0x33783cCb570Cb279C25F836806B5c4C3C8309777"  # tangem-01 (owner aria-smart-st)
+
+
+def test_is_own_wallet_true_for_every_known_address():
+    for address in monitor._KNOWN_ADDRESS_NAMES:
+        assert monitor._is_own_wallet(address) is True
+        assert monitor._is_own_wallet(address.upper()) is True  # insensible a la casse
+
+
+def test_is_own_wallet_false_for_unknown_address():
+    assert monitor._is_own_wallet("0xunknown") is False
+
+
+def test_is_own_wallet_false_for_empty():
+    assert monitor._is_own_wallet("") is False
+
+
+@pytest.mark.asyncio
+async def test_outgoing_transfer_to_own_wallet_classified_internal_transfer(monkeypatch):
+    """Le cas concret qui a déclenché la fausse alerte : un virement SORTANT
+    vers un wallet qu'ARIA/l'opérateur contrôle déjà -- jamais une fuite,
+    même sans tx_hash journalisé ni spend x402 correspondant."""
+    transfer = TokenTransfer(
+        tx_hash="0xinternal_out", from_address=WALLET, to_address=_SMART_VC,
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.01, timestamp="2026-07-23T23:00:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert len(result) == 1
+    assert result[0].classification == "internal_transfer"
+    assert result[0].direction == "out"
+
+
+@pytest.mark.asyncio
+async def test_incoming_transfer_from_own_wallet_classified_internal_transfer(monkeypatch):
+    """Symétrique : une ENTRÉE dont l'expéditeur est un autre wallet ARIA/
+    opérateur -- distincte d'un vrai dépôt externe, même si les deux restent
+    silencieuses (seule "unexpected_outflow" déclenche une alerte)."""
+    transfer = TokenTransfer(
+        tx_hash="0xinternal_in", from_address=_SPENDER, to_address=WALLET,
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.01, timestamp="2026-07-23T23:05:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert len(result) == 1
+    assert result[0].classification == "internal_transfer"
+    assert result[0].direction == "in"
+
+
+@pytest.mark.asyncio
+async def test_native_eth_transfer_to_own_wallet_classified_internal_transfer(monkeypatch):
+    """La branche ETH natif propage désormais aussi ``counterparty`` --
+    un virement de gas entre deux wallets ARIA doit être reconnu, pas
+    seulement les transferts de token."""
+    tx = Transaction(
+        tx_hash="0xinternal_eth", from_address=WALLET, to_address=_TANGEM_ST,
+        value_native=0.001, status="ok", method=None, timestamp="2026-07-23T23:10:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        transactions=TransactionsResult(transactions=[tx], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert len(result) == 1
+    assert result[0].classification == "internal_transfer"
+    assert result[0].asset == "ETH"
+
+
+@pytest.mark.asyncio
+async def test_outgoing_transfer_to_unknown_address_still_unexpected(monkeypatch):
+    """Non-régression : un vrai destinataire inconnu reste une alerte -- la
+    reconnaissance des wallets propres ne doit jamais élargir silencieusement
+    la liste blanche à autre chose."""
+    transfer = TokenTransfer(
+        tx_hash="0xstillbad", from_address=WALLET, to_address="0xtotallyunknown",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=5.0, timestamp="2026-07-23T23:15:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert result[0].classification == "unexpected_outflow"
+
+
+def test_format_movement_alert_internal_transfer_uses_dedicated_label():
+    from aria_core.agent_wallet_monitor import WalletMovement, format_movement_alert
+
+    msg = format_movement_alert(WalletMovement(
+        tx_hash="0xabc", direction="out", asset="USDC", amount=0.01,
+        counterparty=_SMART_VC, classification="internal_transfer",
+    ))
+    assert "Transfert entre wallets ARIA/opérateur (aucune alerte)" in msg
+    assert "🏠" in msg
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_does_not_notify_internal_transfer(monkeypatch):
+    """Le mouvement est détecté/journalisé mais jamais notifié -- seule
+    "unexpected_outflow" déclenche une alerte, même doctrine que
+    external_deposit/known_x402/swap."""
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    transfer = TokenTransfer(
+        tx_hash="0xinternal_cycle", from_address=WALLET, to_address=_SMART_VC,
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.01, timestamp="2026-07-23T23:20:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    sent = []
+
+    async def _notifier(text):
+        sent.append(text)
+
+    result = await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
+    assert result["outcome"] == "ok"
+    assert result["detected"] == 1
+    assert result["notified"] == 0
+    assert result["unexpected_outflows"] == 0
+    assert sent == []
+
+
+# ── faux-positif x402 post-paiement (23/07) ──────────────────────────────────
+# Incident réel : un paiement x402 (twit.sh, 0.01 USDC) a réglé on-chain, mais
+# la requête locale de récupération de la ressource payée a échoué APRÈS coup
+# -- le spend log gardait donc "status=failed", invisible au filtre qui ne
+# reconnaissait que "status=ok" comme paiement x402 connu.
+
+
+def test_x402_spend_may_have_settled_true_for_ok_status():
+    assert monitor._x402_spend_may_have_settled({"status": "ok"}) is True
+
+
+def test_x402_spend_may_have_settled_true_for_paid_but_fetch_failed():
+    from aria_core.x402_executor import REASON_PREFIX_PAID_BUT_FETCH_FAILED
+
+    spend = {"status": "failed", "reason": f"{REASON_PREFIX_PAID_BUT_FETCH_FAILED} : ReadTimeout()"}
+    assert monitor._x402_spend_may_have_settled(spend) is True
+
+
+def test_x402_spend_may_have_settled_false_for_signature_echouee():
+    """Aucune signature produite -> aucun argent n'a pu bouger, doit rester
+    exclu (comportement inchangé)."""
+    spend = {"status": "failed", "reason": "signature échouée : boom"}
+    assert monitor._x402_spend_may_have_settled(spend) is False
+
+
+def test_x402_spend_may_have_settled_false_for_settlement_refused():
+    """Le fournisseur a explicitement refusé le règlement -> aucun argent n'a
+    bougé, doit rester exclu (comportement inchangé)."""
+    spend = {"status": "failed", "reason": "toujours 402 après paiement (règlement refusé)"}
+    assert monitor._x402_spend_may_have_settled(spend) is False
+
+
+def test_x402_spend_may_have_settled_false_for_blocked_status():
+    assert monitor._x402_spend_may_have_settled({"status": "blocked", "reason": "plafond dépassé"}) is False
+
+
+def test_x402_spend_may_have_settled_false_when_reason_missing():
+    assert monitor._x402_spend_may_have_settled({"status": "failed"}) is False
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_recognizes_x402_payment_that_failed_after_settling(monkeypatch):
+    """Reproduction bout-en-bout de l'incident réel (23/07, twit.sh/fBOMB) :
+    le spend logué "failed" (échec APRÈS paiement) doit désormais être
+    reconnu comme known_x402, plus jamais une fausse alerte."""
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    from aria_core import x402_budget
+    from aria_core.x402_executor import REASON_PREFIX_PAID_BUT_FETCH_FAILED
+
+    pay_to = "0x9dBA414637c611a16BEa6f0796BFcbcBdc410df8"
+    transfer = TokenTransfer(
+        tx_hash="0xtwitsh_fbomb", from_address=WALLET, to_address=pay_to,
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.01, timestamp="2026-07-23T23:28:27Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def _fake_list_spends(limit: int = 200):
+        return [{
+            "pay_to": pay_to, "amount_usd": 0.01, "status": "failed",
+            "reason": f"{REASON_PREFIX_PAID_BUT_FETCH_FAILED} : ",
+            "created_at": "2026-07-23T23:28:36.124696+00:00",
+            "resource": "tweets-user", "provider": "twitsh", "contract": "0x74ccbe53f77b08632ce0cb91d3a545bf6b8e0979",
+            "token_symbol": "fBOMB",
+        }]
+
+    monkeypatch.setattr(x402_budget, "list_spends", _fake_list_spends)
+    sent = []
+
+    async def _notifier(text):
+        sent.append(text)
+
+    result = await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
+    assert result["outcome"] == "ok"
+    assert result["notified"] == 0
+    assert result["unexpected_outflows"] == 0
+    assert sent == []
+    rows = await monitor.list_recent_movements()
+    assert rows[0]["classification"] == "known_x402"

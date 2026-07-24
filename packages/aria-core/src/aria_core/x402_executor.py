@@ -58,6 +58,24 @@ from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
 
 logger = logging.getLogger(__name__)
 
+# 23/07 -- named constant (not an inline string) for the ONE failure reason
+# where real money may already have moved: `pay_fn` succeeded (the signed
+# authorization was handed to the provider) but the follow-up request to
+# actually fetch the paid resource then raised (network timeout/error) --
+# the provider's facilitator may have already settled on-chain even though
+# this client never saw a definitive response. Every OTHER "failed" reason
+# in this module (signature échouée, toujours 402 après paiement) means no
+# money moved (the header was never produced, or the provider explicitly
+# refused settlement) -- only this one is genuinely ambiguous.
+#
+# `agent_wallet_monitor.py`'s real-money classifier matches on this SAME
+# constant (never a hand-copied string) to recognize a real on-chain outflow
+# that correlates with this spend as a known x402 payment rather than an
+# "unexpected_outflow" false alarm -- real incident, 23/07 (twit.sh/fBOMB,
+# 0.01 USDC settled on-chain, logged here as "failed" because the read of
+# the response body itself failed).
+REASON_PREFIX_PAID_BUT_FETCH_FAILED = "requête payée échouée"
+
 _HTTP_TIMEOUT = 12.0
 X_PAYMENT_HEADER = "X-PAYMENT"
 # 19/07 -- real bug found while testing lionx402 (real v2 provider): the
@@ -360,7 +378,7 @@ async def fetch_paid_resource(
     except Exception as exc:  # noqa: BLE001
         await x402_budget.record_spend(
             resource=resource, provider=provider, amount_usd=amount_usd,
-            status="failed", reason=f"requête payée échouée : {exc}", pay_to=pay_to,
+            status="failed", reason=f"{REASON_PREFIX_PAID_BUT_FETCH_FAILED} : {exc}", pay_to=pay_to,
             contract=contract, token_symbol=token_symbol,
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)

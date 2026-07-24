@@ -15,9 +15,18 @@ classified as:
     movement) -- nothing abnormal.
   - "external_deposit": incoming funds not initiated by ARIA (e.g. the
     operator funds the wallet manually) -- normal, logged for traceability.
-  - "unexpected_outflow": OUTGOING funds not initiated by ARIA -- a
-    potentially serious security signal (compromised key?), to be handled
-    urgently by the caller (immediate notification).
+  - "internal_transfer": movement (either direction) whose counterparty is
+    ANOTHER wallet ARIA/the operator already controls (cf.
+    `_KNOWN_ADDRESS_NAMES` -- the Smart Accounts, the delegated spender, the
+    transfer wallet, the two Tangem owners) -- 23/07, operator request after
+    a real false alarm: money staying inside the ARIA/operator ecosystem is
+    never a leak, even when the specific tx_hash wasn't logged by
+    `agent_wallet_log` (e.g. a manual Tangem-signed transfer, or a future
+    Smart Account swing round-trip not yet wired into that log).
+  - "unexpected_outflow": OUTGOING funds not initiated by ARIA AND not going
+    to a wallet ARIA/the operator already controls -- a potentially serious
+    security signal (compromised key?), to be handled urgently by the caller
+    (immediate notification).
 
 Honest limitation assumed: the "known" classification can ONLY match
 movements that went through `agent_wallet_pilot.py` (logged swap/transfer) --
@@ -102,6 +111,17 @@ _KNOWN_ADDRESS_NAMES: dict[str, str] = {
 }
 
 
+def _is_own_wallet(address: str) -> bool:
+    """``True`` if ``address`` is one of the wallets ARIA/the operator
+    already controls (reuses ``_KNOWN_ADDRESS_NAMES`` -- never a second list,
+    same "sobriété" doctrine as the rest of the project: don't duplicate a
+    registry that already exists). A movement to/from any of these addresses
+    is, by construction, never a leak outside the ARIA/operator ecosystem --
+    23/07, operator request after a real false alarm (a legitimate x402
+    payment misclassified as an unexplained outflow)."""
+    return bool(address) and address.lower() in _KNOWN_ADDRESS_NAMES
+
+
 def _label_address(address: str) -> str:
     """Address enriched with the known name in parentheses
     (``"tangem-01 (0x3378...)"``) if it matches an already-registered
@@ -129,7 +149,7 @@ class WalletMovement:
     asset: str
     amount: float
     counterparty: str
-    classification: str  # "known" | "external_deposit" | "unexpected_outflow" | "suspicious_token" | "known_x402" | "swap"
+    classification: str  # "known" | "external_deposit" | "internal_transfer" | "unexpected_outflow" | "suspicious_token" | "known_x402" | "swap"
     timestamp: str | None = None
     # 07/22 -- enrichment of the "known_x402" alert (which token was scanned,
     # which service was paid, cf. x402_budget.record_spend). Optional and empty
@@ -377,6 +397,8 @@ def _classify(
     if tx_hash in known_tx_hashes:
         return "known", None
     if direction == "in":
+        if _is_own_wallet(counterparty):
+            return "internal_transfer", None
         return "external_deposit", None
     if known_x402_spends:
         matched = _matches_known_x402(
@@ -385,6 +407,8 @@ def _classify(
         )
         if matched is not None:
             return "known_x402", matched
+    if _is_own_wallet(counterparty):
+        return "internal_transfer", None
     return "unexpected_outflow", None
 
 
@@ -589,9 +613,13 @@ async def check_wallet_activity(
                 # 07/22 -- no known_x402_spends here: an x402 payment settles in
                 # USDC (cf. x402_budget), never in native ETH -- x402 classification/
                 # enrichment structurally doesn't apply to this branch, unchanged
-                # behavior (matched_spend always None, `_classify` receives the same
-                # arguments as before this work).
-                classification, matched_spend = _classify(tx_hash, ev["direction"], known_tx_hashes)
+                # behavior (matched_spend always None).
+                # 07/23 -- `counterparty` now passed through: a native ETH transfer
+                # (e.g. a gas top-up) between two of ARIA's own wallets must be
+                # recognized as "internal_transfer" exactly like a token transfer.
+                classification, matched_spend = _classify(
+                    tx_hash, ev["direction"], known_tx_hashes, counterparty=ev["counterparty"],
+                )
                 asset_label = ev["asset"]
 
             movement = WalletMovement(
@@ -724,6 +752,43 @@ async def get_wallet_balance_summary(
     }
 
 
+def _x402_spend_may_have_settled(spend: dict) -> bool:
+    """A logged x402 spend counts as a possible real on-chain payment for the
+    purpose of ``_matches_known_x402`` even when its local ``status`` is
+    ``"failed"``, IF the failure happened AFTER ``pay_fn`` already succeeded
+    -- the signed authorization was handed to the provider, whose facilitator
+    may have settled it on-chain even though this client's own follow-up
+    request to fetch the resource then failed (network exception). Matches on
+    ``x402_executor.REASON_PREFIX_PAID_BUT_FETCH_FAILED`` (a named constant,
+    never a hand-copied string, so a future reword of the message can't
+    silently break this).
+
+    Real incident, 23/07: a twit.sh payment (0.01 USDC, fBOMB) settled
+    on-chain but the local spend log recorded ``status="failed"`` because
+    reading the paid response itself raised -- the monitor's classifier
+    couldn't recognize it as ``known_x402`` and raised a false
+    "unexpected_outflow" alert.
+
+    Excludes every OTHER "failed" reason (``"signature échouée"`` -- `pay_fn`
+    itself never returned a header, no money could have moved; ``"toujours
+    402 après paiement"`` -- the facilitator explicitly REFUSED settlement,
+    no money moved either): those failures correctly stay unmatched, same as
+    before this fix. Fail-open here is safe, not a security weakening: at
+    worst a genuinely-failed spend is recognized as ``known_x402`` instead of
+    raising an alarm for a payment that in fact never completed -- the
+    reverse (a real leak mistaken for x402) can't happen, since
+    ``_matches_known_x402`` still requires the exact pay_to/amount/time-window
+    match regardless of this broadened status filter."""
+    from aria_core import x402_executor
+
+    status = spend.get("status")
+    if status == "ok":
+        return True
+    if status == "failed":
+        return (spend.get("reason") or "").startswith(x402_executor.REASON_PREFIX_PAID_BUT_FETCH_FAILED)
+    return False
+
+
 async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     """One heartbeat tick: reads real movements on ALL monitored wallets
     (``MONITORED_WALLETS``, 07/23 -- extended from the single historical
@@ -752,7 +817,7 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     except Exception as exc:  # noqa: BLE001 -- an x402 log failure must never block monitoring
         x402_spends = []
         logger.warning("agent_wallet_monitor: x402_budget lookup failed: %s", exc)
-    known_x402_spends = [s for s in x402_spends if s.get("status") == "ok" and s.get("pay_to")]
+    known_x402_spends = [s for s in x402_spends if _x402_spend_may_have_settled(s) and s.get("pay_to")]
 
     movements: list[WalletMovement] = []
     errors: list[str] = []
@@ -825,6 +890,7 @@ def format_movement_alert(m: WalletMovement) -> str:
     icon = {
         "known": "✅", "external_deposit": "💰", "unexpected_outflow": "🚨",
         "suspicious_token": "🎣", "known_x402": "🧾", "swap": "🔄",
+        "internal_transfer": "🏠",
     }.get(m.classification, "•")
     label = {
         "known": "Mouvement initié par ARIA (attendu)",
@@ -833,6 +899,7 @@ def format_movement_alert(m: WalletMovement) -> str:
         "suspicious_token": "TOKEN SUSPECT — imite un actif suivi, PAS un dépôt réel, ne jamais interagir avec ce contrat",
         "known_x402": "Paiement x402 initié par ARIA (attendu)",
         "swap": "Swap détecté",
+        "internal_transfer": "Transfert entre wallets ARIA/opérateur (aucune alerte)",
     }.get(m.classification, m.classification)
     # 07/23 -- multi-wallet: name of the wallet involved at the top of the
     # alert, empty -> "Wallet agent" (unchanged historical behavior for any
