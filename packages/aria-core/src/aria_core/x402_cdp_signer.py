@@ -42,7 +42,19 @@ logger = logging.getLogger(__name__)
 # than duplicated here -- a duplicated constant is exactly what allowed the
 # 21/07 incident (only one of the two copies fixed, the other would have
 # kept signing via an empty CDP wallet with nothing flagging it).
-from aria_core.agent_wallet_cdp_adapter import WALLET_NAME
+#
+# 24/07 -- 5-agent audit finding, verified live before fixing: this module
+# still called ``cdp.evm.get_or_create_account`` directly (the exact unsafe
+# pattern that caused the 21/07 and 23/07 phantom-wallet incidents) instead
+# of the fail-closed ``_get_wallet_account`` helper introduced in
+# agent_wallet_cdp_adapter.py (commit 0dbbc214) that same day for every OTHER
+# call site -- this signer alone was missed. Verified live in the running
+# container (``cdp.evm.list_accounts()``): exactly 3 real accounts exist
+# today, no phantom wallet has been created by this signer so far -- but the
+# risk was live (a future WALLET_NAME/CDP-dashboard rename mismatch would
+# have silently started signing x402 payments against a brand-new empty
+# wallet, same as before 0dbbc214).
+from aria_core.agent_wallet_cdp_adapter import _get_wallet_account
 
 
 async def build_x402_payment_header(payment_required: dict[str, Any]) -> str:
@@ -77,7 +89,7 @@ async def build_x402_payment_header(payment_required: dict[str, Any]) -> str:
     from x402.mechanisms.evm.signers import EthAccountSigner
 
     async with CdpClient() as cdp:
-        account = await cdp.evm.get_or_create_account(name=WALLET_NAME)
+        account = await _get_wallet_account(cdp)
         local_account = EvmLocalAccount(account)
 
     signer = EthAccountSigner(local_account)

@@ -8,6 +8,12 @@
 > `agent_wallet_log.list_transactions()`) avant de supposer quoi que ce soit au-delà de la
 > date de ce fichier.
 
+[DEPLOYE] Sujet    : x402_cdp_signer.py oublié lors du fix get_or_create_account du 23/07
+Date : 2026.07.24 / Probleme : audit 5-agents -- x402_cdp_signer.py:80 appelait encore cdp.evm.get_or_create_account(name=WALLET_NAME) directement, le pattern dangereux (creation silencieuse d'un wallet fantome vide si WALLET_NAME desynchronise du vrai nom CDP) corrige partout ailleurs le 23/07 (commit 0dbbc214, _get_wallet_account fail-closed dans agent_wallet_cdp_adapter.py) apres 2 incidents reels (21/07, 23/07) -- ce signataire x402, actif sur un flux de paiement reel (33 spends/24h au moment de l'audit), avait ete oublie. Verifie en direct (cdp.evm.list_accounts()) avant correction : exactement 3 comptes reels existent, aucun wallet fantome cree par ce chemin a ce jour -- risque latent, pas de degat constate.
+Solution : reutilise _get_wallet_account(cdp) (import agent_wallet_cdp_adapter) au lieu de get_or_create_account -- meme echec bruyant (RuntimeError explicite) qu'ailleurs si WALLET_NAME ne correspond plus a rien - x402_cdp_signer.py (cf. historique git 24/07)
+
+------------------------------------------------------------
+
 [CONFIG] Sujet    : Wallet CDP financé
 Date : 2026.07.16  /  Probleme : —
 Solution : 1 USDC + ETH gas. Découvert au passage : le compte CDP standard n'a pas d'intégration Paymaster/Smart Account, chaque swap/transfert consomme du vrai ETH

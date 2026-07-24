@@ -10,6 +10,7 @@ import types
 import pytest
 
 from aria_core import x402_cdp_signer as signer
+from aria_core.agent_wallet_cdp_adapter import WALLET_NAME
 
 
 def _install_fake_x402_modules(
@@ -19,10 +20,16 @@ def _install_fake_x402_modules(
         address = "0xabc123"
 
     class FakeEvm:
-        async def get_or_create_account(self, name):
+        # 24/07 -- renamed from get_or_create_account (never auto-creates
+        # anymore, cf. agent_wallet_cdp_adapter._get_wallet_account, the same
+        # fail-closed helper used by every OTHER real-money call site since
+        # 23/07 -- this signer alone was missed until this fix).
+        async def get_account(self, name):
             if raise_on == "account":
                 raise RuntimeError("CDP API down")
-            assert name == signer.WALLET_NAME
+            if raise_on == "account_404":
+                raise _FakeApiError(http_code=404)
+            assert name == WALLET_NAME
             return FakeAccount()
 
     class FakeCdpClient:
@@ -80,6 +87,18 @@ def _install_fake_x402_modules(
     fake_cdp.CdpClient = FakeCdpClient
     fake_cdp_evm_local_account = types.ModuleType("cdp.evm_local_account")
     fake_cdp_evm_local_account.EvmLocalAccount = FakeEvmLocalAccount
+    # 24/07 -- _get_wallet_account (agent_wallet_cdp_adapter.py) lazily imports
+    # cdp.openapi_client.errors.ApiError -- must exist in sys.modules even
+    # when no ApiError is actually raised, same fake as test_agent_wallet_cdp_adapter.py.
+    fake_openapi_client = types.ModuleType("cdp.openapi_client")
+    fake_errors_module = types.ModuleType("cdp.openapi_client.errors")
+
+    class _FakeApiError(Exception):
+        def __init__(self, http_code):
+            self.http_code = http_code
+            super().__init__(f"fake ApiError http_code={http_code}")
+
+    fake_errors_module.ApiError = _FakeApiError
 
     fake_x402 = types.ModuleType("x402")
     fake_x402.x402Client = Fakex402Client
@@ -96,6 +115,8 @@ def _install_fake_x402_modules(
     fake_x402_mechanisms_evm_signers.EthAccountSigner = FakeEthAccountSigner
 
     monkeypatch.setitem(sys.modules, "cdp", fake_cdp)
+    monkeypatch.setitem(sys.modules, "cdp.openapi_client", fake_openapi_client)
+    monkeypatch.setitem(sys.modules, "cdp.openapi_client.errors", fake_errors_module)
     monkeypatch.setitem(sys.modules, "cdp.evm_local_account", fake_cdp_evm_local_account)
     monkeypatch.setitem(sys.modules, "x402", fake_x402)
     monkeypatch.setitem(sys.modules, "x402.http", fake_x402_http)
@@ -120,6 +141,19 @@ async def test_returns_payment_header_on_success(monkeypatch):
 async def test_raises_when_cdp_account_lookup_fails(monkeypatch):
     _install_fake_x402_modules(monkeypatch, raise_on="account")
     with pytest.raises(RuntimeError, match="CDP API down"):
+        await signer.build_x402_payment_header({"asset": "USDC", "amount": "10000"})
+
+
+@pytest.mark.asyncio
+async def test_never_auto_creates_a_phantom_wallet_on_name_mismatch(monkeypatch):
+    """24/07 -- 5-agent audit finding: this signer used to call
+    cdp.evm.get_or_create_account directly, the exact unsafe pattern that
+    caused the 21/07 and 23/07 phantom-wallet incidents (a stale WALLET_NAME
+    silently created and signed against a brand-new empty wallet). Now
+    reuses agent_wallet_cdp_adapter._get_wallet_account -- a 404 must fail
+    LOUDLY, never silently create a second wallet."""
+    _install_fake_x402_modules(monkeypatch, raise_on="account_404")
+    with pytest.raises(RuntimeError, match="refusing to auto-create a new empty wallet"):
         await signer.build_x402_payment_header({"asset": "USDC", "amount": "10000"})
 
 
