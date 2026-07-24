@@ -335,6 +335,128 @@ async def test_buy_defaults_regime_to_neutre_when_absent(monkeypatch):
     assert result["regime"] == "neutre"
 
 
+# ── Conviction diligence (24/07, operator: "elle doit miser + sur le produit,
+# la team, et le potentiel de hausse" -- product/team/adoption bet, since
+# on-chain metrics don't mean anything yet at this stage) ───────────────────
+
+def _setup_buy_mocks(monkeypatch, *, holder_count=20, top10_holder_pct=40.0):
+    token = _bonding_token(holder_count=holder_count, top10_holder_pct=top10_holder_pct)
+    _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
+
+    def fake_detect_entry(candles, **kwargs):
+        return EntrySignal(present=True, reasons=["setup"], rr=3.0, target=0.002, invalidation=0.0009)
+
+    monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    _patch_usd_rate(monkeypatch, 0.5)
+    return token
+
+
+def test_socials_to_known_links_maps_virtuals_native_labels():
+    socials = [
+        {"label": "WEBSITE", "url": "https://holostudio.example"},
+        {"label": "TWITTER", "url": "https://x.com/holostudio"},
+        {"label": "github", "url": "https://github.com/holostudio/core"},
+        {"label": "telegram", "url": "https://t.me/holostudio"},
+        {"label": "warpcast", "url": "https://warpcast.com/holostudio"},
+        {"label": "discord", "url": "https://discord.gg/holostudio"},  # unmapped, passes through
+        {"label": "", "url": ""},  # no url -- dropped
+    ]
+
+    mapped = bonding_entry._socials_to_known_links(socials)
+
+    by_label = {m["label"]: m["url"] for m in mapped}
+    assert by_label["Site officiel"] == "https://holostudio.example"
+    assert by_label["X (Twitter)"] == "https://x.com/holostudio"
+    assert by_label["GitHub"] == "https://github.com/holostudio/core"
+    assert by_label["Telegram"] == "https://t.me/holostudio"
+    assert by_label["Farcaster"] == "https://warpcast.com/holostudio"
+    assert by_label["discord"] == "https://discord.gg/holostudio"
+    assert len(mapped) == 6  # the empty-url entry is dropped
+
+
+def test_socials_to_known_links_empty_input():
+    assert bonding_entry._socials_to_known_links([]) == []
+    assert bonding_entry._socials_to_known_links(None) == []
+
+
+@pytest.mark.asyncio
+async def test_buy_forwards_socials_as_known_links_to_conviction_research(monkeypatch):
+    """The whole point of this chantier: a bonding token's own declared
+    GitHub/site/X should be used DIRECTLY by conviction_research, not
+    rediscovered by heuristic -- same shortcut the standard momentum
+    pipeline gets from DexScreener's project_links."""
+    socials = [
+        {"label": "WEBSITE", "url": "https://holostudio.example"},
+        {"label": "github", "url": "https://github.com/holostudio/core"},
+    ]
+    token = _setup_buy_mocks(monkeypatch)
+    token.socials = socials
+
+    captured = {}
+
+    async def fake_research(contract, symbol, chain, *, known_links=None, **kwargs):
+        captured["contract"] = contract
+        captured["chain"] = chain
+        captured["known_links"] = known_links
+        return bonding_entry.ConvictionResearch(available=False)  # not the point of this test
+
+    monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research)
+
+    await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert captured["chain"] == "base"  # never CHAIN_MARKER -- see module comment
+    by_label = {l["label"]: l["url"] for l in captured["known_links"]}
+    assert by_label["Site officiel"] == "https://holostudio.example"
+    assert by_label["GitHub"] == "https://github.com/holostudio/core"
+
+
+@pytest.mark.asyncio
+async def test_buy_uses_conviction_score_for_sizing_when_available(monkeypatch):
+    """potential_score/conviction_* must reach the returned dict as-is --
+    paper_trader.compute_entry_alloc already reads potential_score from it,
+    no further wiring needed downstream."""
+    _setup_buy_mocks(monkeypatch)
+
+    async def fake_research(contract, symbol, chain, *, known_links=None, **kwargs):
+        return bonding_entry.ConvictionResearch(
+            available=True, website_url="https://holostudio.example",
+            potential_score=7.5, rationale="produit réel, revenus déjà générés",
+            posting_cadence="active", contract_corroborated=True,
+            process_trail=["Tavily tenté", "Site officiel trouvé"],
+        )
+
+    monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research)
+
+    result = await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert result["action"] == "BUY"
+    assert result["potential_score"] == pytest.approx(7.5)
+    assert result["conviction_website_corroborated"] is True
+    assert result["conviction_posting_cadence"] == "active"
+    assert result["conviction_process_trail"] == "Tavily tenté -> Site officiel trouvé"
+    assert "potentiel fondamental 7.5/10" in " ".join(result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_buy_potential_score_none_when_conviction_research_unavailable(monkeypatch):
+    """Never a gate: conviction_research disabled/unavailable degrades to
+    potential_score=None, the BUY still goes through (fail-open on unknown,
+    same doctrine as momentum_entry.py)."""
+    _setup_buy_mocks(monkeypatch)
+
+    async def fake_research(contract, symbol, chain, *, known_links=None, **kwargs):
+        return bonding_entry.ConvictionResearch(available=False, reason="ARIA_CONVICTION_RESEARCH_ENABLED désactivé")
+
+    monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research)
+
+    result = await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert result["action"] == "BUY"
+    assert result["potential_score"] is None
+    assert result["conviction_process_trail"] is None
+
+
 # ── Sizing reduction constant (sanity, wired in paper_trader.py) ────────────
 def test_bonding_size_reduction_is_conservative():
     assert 0.0 < bonding_entry.BONDING_SIZE_REDUCTION < 1.0

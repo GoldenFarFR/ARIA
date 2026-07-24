@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import logging
 
+from aria_core.conviction_research import ConvictionResearch, research_project_potential
 from aria_core.skills.entry_signals import detect_entry
 from aria_core.skills.ta_levels import Candle
 
@@ -136,6 +137,48 @@ def _hold(reason: str, hold_reason: str, *, symbol: str | None = None, price: fl
         "action": "HOLD", "chain": CHAIN_MARKER, "symbol": symbol, "price": price,
         "reasons": [reason], "hold_reason": hold_reason,
     }
+
+
+# Virtuals-native label -> the exact labels conviction_research.py looks for
+# (its known_links parsing was written against dexscreener.py's own labels).
+# "Site officiel"/"X (Twitter)" pick the primary website/X handle; "GitHub"/
+# "Farcaster"/"Telegram" each trigger a REAL substance check in
+# conviction_research._describe_other_known_link (repo age/activity via
+# services/project_activity.py, Warpcast follower/anti-spam label, channel
+# activity) -- not just "a link exists". Getting this mapping right is the
+# whole point of this chantier (operator, 24/07): on a token this young, the
+# only way to judge "philosophie du produit, comment ça a été construit" is
+# by actually reading the GitHub repo, not by counting holders. Any other
+# label passes through unmapped -- still weighed by the LLM synthesis as a
+# declared link, just without a dedicated verification client.
+_SOCIAL_LABEL_REMAP = {
+    "website": "Site officiel",
+    "twitter": "X (Twitter)",
+    "x": "X (Twitter)",
+    "github": "GitHub",
+    "telegram": "Telegram",
+    "farcaster": "Farcaster",
+    "warpcast": "Farcaster",
+}
+
+
+def _socials_to_known_links(socials: list[dict]) -> list[dict]:
+    """``VirtualToken.socials`` (real label seen live: "TWITTER", "WEBSITE")
+    -> the label shape ``conviction_research.research_project_potential``
+    already parses (built against ``dexscreener.PairSnapshot.project_links``)
+    -- so a bonding token's own declared site/X link is used directly rather
+    than re-discovered by heuristic, same shortcut the standard momentum
+    pipeline already gets from DexScreener."""
+    out: list[dict] = []
+    for link in socials or []:
+        if not isinstance(link, dict):
+            continue
+        url = link.get("url")
+        if not url:
+            continue
+        label = str(link.get("label") or "").strip().lower()
+        out.append({"label": _SOCIAL_LABEL_REMAP.get(label, link.get("label") or ""), "url": url})
+    return out
 
 
 async def evaluate_bonding_entry(
@@ -254,6 +297,50 @@ async def evaluate_bonding_entry(
     target_usd = signal.target * usd_rate if signal.target is not None else None
     invalidation_usd = signal.invalidation * usd_rate if signal.invalidation is not None else None
 
+    # 24/07 -- operator's own reasoning, right after seeing the concentration
+    # gate fail on the entire real bonding market: on a token this young,
+    # on-chain metrics (holders, concentration) are structurally too thin to
+    # mean anything -- the real edge is a bet on the PRODUCT/TEAM/adoption
+    # potential, same conviction diligence already live on the standard
+    # momentum pipeline (conviction_research.py, ARIA_CONVICTION_RESEARCH_
+    # ENABLED). Reused as-is here, never duplicated -- AFTER everything else,
+    # only on a candidate already about to be bought (same doctrine as
+    # momentum_entry.py, preserves this path's speed). Sizing-only, NEVER a
+    # gate: paper_trader.compute_entry_alloc already reads potential_score
+    # from this dict with no further change needed.
+    #
+    # Operator's explicit nuance (24/07, same segment): a discreet/quiet team
+    # is not the same as a worthless one -- some legitimate builders are quiet
+    # right up until real traction makes them visible. A low posting cadence
+    # or few sources found must NOT read as a negative signal -- it stays
+    # `potential_score=None` (fail-open, neither a bonus nor a malus) rather
+    # than being scored down for lack of noise.
+    potential_score = None
+    conviction_process_trail: str | None = None
+    conviction_website_corroborated: bool | None = None
+    conviction_posting_cadence: str | None = None
+    research = await research_project_potential(
+        # "base" (not CHAIN_MARKER): a cleaner Tavily search query (Virtuals
+        # bonding tokens are Base contracts) and shares the SAME cache entry
+        # with the standard momentum pipeline's own diligence on this same
+        # contract once it graduates -- never a redundant re-search.
+        token_address, symbol, "base", known_links=_socials_to_known_links(token.socials),
+    )
+    if research.available:
+        if research.process_trail:
+            reasons.append("diligence de conviction : " + " -> ".join(research.process_trail))
+            conviction_process_trail = " -> ".join(research.process_trail)
+        conviction_website_corroborated = research.contract_corroborated
+        conviction_posting_cadence = research.posting_cadence
+        if research.potential_score is not None:
+            potential_score = research.potential_score
+            reasons.append(
+                f"potentiel fondamental {potential_score:.1f}/10 "
+                f"(site {'trouvé' if research.website_url else 'introuvable'}, "
+                f"cadence X {research.posting_cadence})"
+                + (f" : {research.rationale}" if research.rationale else "")
+            )
+
     return {
         "action": "BUY",
         "chain": CHAIN_MARKER,
@@ -261,6 +348,10 @@ async def evaluate_bonding_entry(
         "price": price_usd,
         "target": target_usd,
         "invalidation": invalidation_usd,
+        "potential_score": potential_score,
+        "conviction_process_trail": conviction_process_trail,
+        "conviction_website_corroborated": conviction_website_corroborated,
+        "conviction_posting_cadence": conviction_posting_cadence,
         "rr": signal.rr,
         "align_score": align_score,
         "liquidity_usd": token.liquidity_usd,
