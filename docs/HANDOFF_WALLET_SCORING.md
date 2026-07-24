@@ -8,6 +8,12 @@
 > correctifs) — résumé par grand thème ici, pas un correctif par ligne. Détail exact :
 > historique git, commits du 15/07 préfixés #157 à #178.
 
+[CODE] Sujet    : File /walletqueue -- rattrapage affamé par un lot massif de wallets jamais touchés (item #61)
+Date : 2026.07.24 / Probleme : audit réel de la file (252 wallets, dont 246 injectés d'un coup le 23/07 via le sourcing CabalSpy) : le meilleur wallet en cours (91,6% de couverture) sortait APRÈS des centaines de wallets jamais scannés, purement parce que `list_pending` triait le groupe rattrapage en FIFO strict sur `next_check_at` -- ce champ repasse à "maintenant" à chaque tentative, quelle que soit la progression réelle, donc un lot ajouté en masse peut structurellement noyer les wallets déjà bien avancés.
+Solution : `list_pending` trie désormais le groupe rattrapage par `last_notified_milestone` DESCENDANT en premier (proxy de couverture déjà stocké dans la même table, zéro coût réseau/jointure supplémentaire), `next_check_at` restant le départage FIFO à égalité de milestone -- le groupe surveillance (déjà 100% couverts) garde son FIFO strict inchangé (vérifié par test dédié). `MAX_WALLETS_PER_CYCLE` volontairement PAS augmenté (confirmé par le diagnostic : le vrai goulot du pire cas vient du throttle GeckoTerminal, pas de ce tri) -- gate `ARIA_CABALSPY_SOURCING_ENABLED` confirmé actif en prod (`docker exec`, valeur non affichée). `services/wallet_scan_queue.py` -- 2 nouveaux tests dédiés (`test_wallet_scan_queue.py`), suite complète en cours de vérification au moment de cette entrée, `test_coherence.py` vert (non commité au moment de cette entrée).
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : Évaluateur "smart wallet" maison livré
 Date : 2026.07.14  /  Probleme : —
 Solution : score_wallets + commande /walletscore — smart_money.py (#157)

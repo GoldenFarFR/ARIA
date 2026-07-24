@@ -137,6 +137,35 @@ async def test_list_pending_prioritizes_catching_up_over_monitoring(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_list_pending_prioritizes_coverage_within_catching_up_group():
+    """24/07, item #61 -- au sein du rattrapage, un wallet bien avancé (A,
+    milestone 300 -- proche de la couverture complète) ne doit jamais être
+    affamé par un lot de wallets jamais touchés (B, C, milestone 0), même si
+    B/C sont techniquement "dus" avant A sur le seul next_check_at."""
+    now = datetime.now(timezone.utc)
+    await wsq.enqueue_wallets([A, B, C])
+    await wsq.mark_attempt(A, next_check_at=now - timedelta(minutes=1), last_notified_milestone=300)
+    await wsq.mark_attempt(B, next_check_at=now - timedelta(minutes=10))
+    await wsq.mark_attempt(C, next_check_at=now - timedelta(minutes=20))
+
+    pending = await wsq.list_pending(limit=10)
+    assert [q.wallet for q in pending] == [A, C, B]
+
+
+@pytest.mark.asyncio
+async def test_list_pending_coverage_priority_never_affects_monitoring_group():
+    """La priorité par couverture ne s'applique QUE dans le groupe rattrapage
+    -- la surveillance hebdomadaire garde son FIFO strict inchangé."""
+    now = datetime.now(timezone.utc)
+    await wsq.enqueue_wallets([A, B])
+    await _force_monitoring_state(A, next_check_at=now - timedelta(minutes=1))
+    await _force_monitoring_state(B, next_check_at=now - timedelta(minutes=10))
+
+    pending = await wsq.list_pending(limit=10)
+    assert [q.wallet for q in pending] == [B, A]  # FIFO pur, comme avant ce correctif
+
+
+@pytest.mark.asyncio
 async def test_list_pending_fifo_within_the_same_group():
     """Au sein du même groupe (deux wallets en rattrapage, ou deux wallets en
     surveillance), le plus anciennement dû sort toujours en premier."""

@@ -244,9 +244,22 @@ async def list_pending(limit: int = MAX_WALLETS_PER_CYCLE) -> list[QueuedWallet]
     ALWAYS go before plain weekly MONITORING rescans, regardless of their
     respective due date -- otherwise a large population already scored in
     monitoring (up to ~1 wallet/20min ~= 504 rescans/week of total capacity)
-    could structurally starve the discovery of new candidates. Within each
-    group, the longest overdue first (FIFO on `next_check_at`) -- never an
-    arbitrary order."""
+    could structurally starve the discovery of new candidates.
+
+    Within the CATCH-UP group (24/07, item #61 -- real state observed:
+    a bulk injection of 246 never-touched wallets, from the 23/07 CabalSpy
+    sourcing, structurally starved the 6 wallets already being processed --
+    a wallet at 91.6% coverage sat behind hundreds of never-attempted ones
+    purely on FIFO due-date, since `next_check_at=now` is reset on every
+    attempt regardless of progress made): prioritize by
+    `last_notified_milestone` DESCENDING first -- a wallet close to full
+    coverage finishes (and starts weekly monitoring) before a batch of
+    never-touched ones is even started, zero extra network/DB cost (this
+    column is already tracked in this same table, no join needed). FIFO on
+    `next_check_at` remains the tie-breaker (milestone 0 vs 0, or same
+    milestone) -- never an arbitrary order. The MONITORING group's own
+    ordering (plain FIFO on `next_check_at`) is unaffected -- the CASE only
+    applies the milestone criterion within the catch-up group."""
     await _ensure_table()
     now_iso = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -255,7 +268,9 @@ async def list_pending(limit: int = MAX_WALLETS_PER_CYCLE) -> list[QueuedWallet]
                 "SELECT wallet, added_at, last_attempt_at, last_notified_milestone, "
                 "next_check_at, monitoring_since FROM wallet_scan_queue "
                 "WHERE next_check_at <= ? "
-                "ORDER BY (monitoring_since IS NULL) DESC, next_check_at ASC LIMIT ?",
+                "ORDER BY (monitoring_since IS NULL) DESC, "
+                "CASE WHEN monitoring_since IS NULL THEN last_notified_milestone ELSE 0 END DESC, "
+                "next_check_at ASC LIMIT ?",
                 (now_iso, limit),
             )
         ).fetchall()
