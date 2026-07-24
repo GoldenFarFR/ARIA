@@ -1092,6 +1092,21 @@ async def _fetch_conviction_research(ctx: TokenScanContext) -> "ConvictionResear
         return None
 
 
+# 24/07 -- item #40: persisted TTL cache for the 4 substance signals below
+# (services/external_signal_cache.py) -- each is a real paid/rate-limited
+# external call (Tavily/TwitterAPI.io/GitHub API) whose underlying facts
+# barely change over days; re-scanning the same project on every /vc call
+# was pure waste. TTLs DIFFERENTIATED by signal type (operator's own design,
+# 23/07): GitHub/X substance move faster (dev activity, engagement) than
+# Website/Docs substance (rarely change). Deliberately NOT applied to
+# safety_screen/security_score (a rug can happen in minutes) -- see
+# external_signal_cache.py's own docstring for the full doctrine.
+_GITHUB_SUBSTANCE_TTL_DAYS = 7.0
+_X_SUBSTANCE_TTL_DAYS = 7.0
+_WEBSITE_SUBSTANCE_TTL_DAYS = 15.0
+_DOCS_SUBSTANCE_TTL_DAYS = 15.0
+
+
 async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerdict | None":
     """22/07 -- item #23 (stress-test): REAL substance of the development
     (code/cosmetic ratio, density, tests, diversity, regularity, message
@@ -1101,8 +1116,13 @@ async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerd
     `is_github_link` recognizes a GitHub URL (specific repo OR org alone,
     see `resolve_github_repo`) regardless of the label declared by the
     project. None if no GitHub link found."""
+    import dataclasses
+
+    from aria_core.services import external_signal_cache
     from aria_core.services.project_activity import is_github_link
-    from aria_core.skills.github_substance import gather_github_substance_facts, judge_github_substance
+    from aria_core.skills.github_substance import (
+        GithubSubstanceFacts, gather_github_substance_facts, judge_github_substance,
+    )
 
     links = ctx.best_pair.project_links if ctx.best_pair else []
     github_url = next(
@@ -1112,7 +1132,14 @@ async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerd
     if not github_url:
         return None
     try:
+        cached = await external_signal_cache.get_cached(
+            "github_substance", github_url, ttl_days=_GITHUB_SUBSTANCE_TTL_DAYS,
+        )
+        if cached is not None:
+            return judge_github_substance(GithubSubstanceFacts(**cached))
         facts = await gather_github_substance_facts(github_url)
+        if facts.available:
+            await external_signal_cache.store("github_substance", github_url, dataclasses.asdict(facts))
         return judge_github_substance(facts)
     except Exception as exc:  # noqa: BLE001 — never blocking
         logger.warning("analyze_vc: GitHub substance failed (%s)", exc)
@@ -1138,14 +1165,26 @@ async def _fetch_website_substance(ctx: TokenScanContext) -> "WebsiteSubstanceVe
     """23/07 -- "Website Substance" signal: REAL multi-page content (Tavily
     crawl), direct operator request ("she must be able to extract
     everything to grade it"). None if no Website link declared."""
-    from aria_core.skills.website_substance import gather_website_substance_facts, judge_website_substance
+    import dataclasses
+
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.website_substance import (
+        WebsiteSubstanceFacts, gather_website_substance_facts, judge_website_substance,
+    )
 
     links = ctx.best_pair.project_links if ctx.best_pair else []
     website_url = _find_link_by_label(links, ("website",))
     if not website_url:
         return None
     try:
+        cached = await external_signal_cache.get_cached(
+            "website_substance", website_url, ttl_days=_WEBSITE_SUBSTANCE_TTL_DAYS,
+        )
+        if cached is not None:
+            return judge_website_substance(WebsiteSubstanceFacts(**cached))
         facts = await gather_website_substance_facts(website_url)
+        if facts.available:
+            await external_signal_cache.store("website_substance", website_url, dataclasses.asdict(facts))
         return judge_website_substance(facts)
     except Exception as exc:  # noqa: BLE001 — never blocking
         logger.warning("analyze_vc: Website substance failed (%s)", exc)
@@ -1157,14 +1196,26 @@ async def _fetch_docs_substance(ctx: TokenScanContext) -> "DocsSubstanceVerdict 
     by the project (never an incidental discovery via the Website crawl --
     explicit operator request: the doc must be read in full from its own
     link). None if no Docs link declared."""
-    from aria_core.skills.docs_substance import gather_docs_substance_facts, judge_docs_substance
+    import dataclasses
+
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.docs_substance import (
+        DocsSubstanceFacts, gather_docs_substance_facts, judge_docs_substance,
+    )
 
     links = ctx.best_pair.project_links if ctx.best_pair else []
     docs_url = _find_link_by_label(links, ("docs", "documentation", "whitepaper", "gitbook"))
     if not docs_url:
         return None
     try:
+        cached = await external_signal_cache.get_cached(
+            "docs_substance", docs_url, ttl_days=_DOCS_SUBSTANCE_TTL_DAYS,
+        )
+        if cached is not None:
+            return judge_docs_substance(DocsSubstanceFacts(**cached))
         facts = await gather_docs_substance_facts(docs_url)
+        if facts.available:
+            await external_signal_cache.store("docs_substance", docs_url, dataclasses.asdict(facts))
         return judge_docs_substance(facts)
     except Exception as exc:  # noqa: BLE001 — never blocking
         logger.warning("analyze_vc: Docs substance failed (%s)", exc)
@@ -1178,8 +1229,11 @@ async def _fetch_x_substance(ctx: TokenScanContext) -> "XSubstanceVerdict | None
     unreliable on a real tested case, dropped). Reuses
     ``conviction_research._extract_x_handle`` (same regex/exclusion list,
     never duplicated). None if no X link declared."""
+    import dataclasses
+
     from aria_core.conviction_research import _extract_x_handle
-    from aria_core.skills.x_substance import gather_x_substance_facts, judge_x_substance
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.x_substance import XSubstanceFacts, gather_x_substance_facts, judge_x_substance
 
     links = ctx.best_pair.project_links if ctx.best_pair else []
     handle = None
@@ -1192,7 +1246,14 @@ async def _fetch_x_substance(ctx: TokenScanContext) -> "XSubstanceVerdict | None
     if not handle:
         return None
     try:
+        cached = await external_signal_cache.get_cached(
+            "x_substance", handle, ttl_days=_X_SUBSTANCE_TTL_DAYS,
+        )
+        if cached is not None:
+            return judge_x_substance(XSubstanceFacts(**cached))
         facts = await gather_x_substance_facts(handle)
+        if facts.available:
+            await external_signal_cache.store("x_substance", handle, dataclasses.asdict(facts))
         return judge_x_substance(facts)
     except Exception as exc:  # noqa: BLE001 — never blocking
         logger.warning("analyze_vc: X substance failed (%s)", exc)

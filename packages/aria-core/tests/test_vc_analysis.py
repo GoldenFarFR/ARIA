@@ -43,6 +43,17 @@ def _no_network_virtuals_diligence(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _isolated_external_signal_cache_db(tmp_path, monkeypatch):
+    """Item #40 : les 4 fonctions ``_fetch_*_substance`` passent désormais par
+    ``external_signal_cache`` (SQLite persisté) avant tout scan réel -- DB
+    isolée par test, jamais la vraie ``aria.db``, même patron que
+    ``test_momentum_funnel_log.py``."""
+    from aria_core.services import external_signal_cache
+
+    monkeypatch.setattr(external_signal_cache, "DB_PATH", str(tmp_path / "external_signal_cache_test.db"))
+
+
 def _ctx(**kw) -> TokenScanContext:
     base = dict(
         contract=ADDR,
@@ -1249,11 +1260,11 @@ async def test_fetch_github_substance_finds_link_regardless_of_label(monkeypatch
         {"label": "Code source", "url": "https://github.com/acme/protocol"},
     ]
 
-    from aria_core.skills.github_substance import GithubSubstanceVerdict
+    from aria_core.skills.github_substance import GithubSubstanceFacts, GithubSubstanceVerdict
 
     async def _fake_gather(repo_url, **kwargs):
         assert repo_url == "https://github.com/acme/protocol"
-        return "facts-sentinel"
+        return GithubSubstanceFacts(available=False)  # available=False -> cache store skippé, sans effet ici
 
     monkeypatch.setattr("aria_core.skills.github_substance.gather_github_substance_facts", _fake_gather)
     monkeypatch.setattr(
@@ -1325,11 +1336,11 @@ async def test_fetch_website_substance_finds_link_by_label(monkeypatch):
         {"label": "GitHub", "url": "https://github.com/acme/protocol"},
     ]
 
-    from aria_core.skills.website_substance import WebsiteSubstanceVerdict
+    from aria_core.skills.website_substance import WebsiteSubstanceFacts, WebsiteSubstanceVerdict
 
     async def _fake_gather(url, **kwargs):
         assert url == "https://myproject.xyz"
-        return "facts-sentinel"
+        return WebsiteSubstanceFacts(available=False)  # available=False -> cache store skippé, sans effet ici
 
     monkeypatch.setattr("aria_core.skills.website_substance.gather_website_substance_facts", _fake_gather)
     monkeypatch.setattr(
@@ -1365,11 +1376,11 @@ async def test_fetch_docs_substance_finds_link_by_label_variants(monkeypatch):
     ctx = _base_ctx()
     ctx.best_pair.project_links = [{"label": "Docs", "url": "https://docs.myproject.xyz"}]
 
-    from aria_core.skills.docs_substance import DocsSubstanceVerdict
+    from aria_core.skills.docs_substance import DocsSubstanceFacts, DocsSubstanceVerdict
 
     async def _fake_gather(url, **kwargs):
         assert url == "https://docs.myproject.xyz"
-        return "facts-sentinel"
+        return DocsSubstanceFacts(available=False)  # available=False -> cache store skippé, sans effet ici
 
     monkeypatch.setattr("aria_core.skills.docs_substance.gather_docs_substance_facts", _fake_gather)
     monkeypatch.setattr(
@@ -1402,11 +1413,11 @@ async def test_fetch_x_substance_finds_handle_from_link(monkeypatch):
     ctx = _base_ctx()
     ctx.best_pair.project_links = [{"label": "X (Twitter)", "url": "https://x.com/acmeproject"}]
 
-    from aria_core.skills.x_substance import XSubstanceVerdict
+    from aria_core.skills.x_substance import XSubstanceFacts, XSubstanceVerdict
 
     async def _fake_gather(handle, **kwargs):
         assert handle == "acmeproject"
-        return "facts-sentinel"
+        return XSubstanceFacts(available=False)  # available=False -> cache store skippé, sans effet ici
 
     monkeypatch.setattr("aria_core.skills.x_substance.gather_x_substance_facts", _fake_gather)
     monkeypatch.setattr(
@@ -1435,6 +1446,114 @@ async def test_fetch_x_substance_degrades_to_none_on_error(monkeypatch):
 
     monkeypatch.setattr("aria_core.skills.x_substance.gather_x_substance_facts", _boom)
     assert await vc._fetch_x_substance(ctx) is None
+
+
+# ── Item #40 : cache persisté (external_signal_cache) devant les 4 fetch ────
+
+
+@pytest.mark.asyncio
+async def test_fetch_github_substance_stores_in_cache_on_fresh_available_scan(monkeypatch):
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.github_substance import GithubSubstanceFacts, GithubSubstanceVerdict
+
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "GitHub", "url": "https://github.com/acme/protocol"}]
+
+    async def _fake_gather(repo_url, **kwargs):
+        return GithubSubstanceFacts(available=True, commits_analyzed=42)
+
+    monkeypatch.setattr("aria_core.skills.github_substance.gather_github_substance_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.github_substance.judge_github_substance",
+        lambda facts: GithubSubstanceVerdict(signal="positive", score=80.0, points=["ok"]),
+    )
+
+    await vc._fetch_github_substance(ctx)
+
+    cached = await external_signal_cache.get_cached(
+        "github_substance", "https://github.com/acme/protocol", ttl_days=7.0,
+    )
+    assert cached is not None
+    assert cached["commits_analyzed"] == 42
+
+
+@pytest.mark.asyncio
+async def test_fetch_github_substance_never_stores_unavailable_result(monkeypatch):
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.github_substance import GithubSubstanceFacts, GithubSubstanceVerdict
+
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "GitHub", "url": "https://github.com/acme/protocol"}]
+
+    async def _fake_gather(repo_url, **kwargs):
+        return GithubSubstanceFacts(available=False, error="panne réseau")
+
+    monkeypatch.setattr("aria_core.skills.github_substance.gather_github_substance_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.github_substance.judge_github_substance",
+        lambda facts: GithubSubstanceVerdict(signal="unknown", score=None, points=[]),
+    )
+
+    await vc._fetch_github_substance(ctx)
+
+    cached = await external_signal_cache.get_cached(
+        "github_substance", "https://github.com/acme/protocol", ttl_days=7.0,
+    )
+    assert cached is None  # un échec transitoire ne fige jamais un "pas de signal" pendant 7 jours
+
+
+@pytest.mark.asyncio
+async def test_fetch_github_substance_uses_cache_hit_without_rescanning(monkeypatch):
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.github_substance import GithubSubstanceVerdict
+
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "GitHub", "url": "https://github.com/acme/protocol"}]
+
+    await external_signal_cache.store(
+        "github_substance", "https://github.com/acme/protocol",
+        {"available": True, "commits_analyzed": 7, "technical_commits": 5, "code_ratio": None,
+         "avg_diff_size": None, "has_tests": True, "distinct_categories": 2,
+         "regularity_score": None, "message_quality_score": None, "error": None},
+    )
+
+    async def _should_not_be_called(*a, **k):
+        raise AssertionError("un cache hit ne doit jamais déclencher un nouveau scan réseau")
+
+    monkeypatch.setattr("aria_core.skills.github_substance.gather_github_substance_facts", _should_not_be_called)
+    monkeypatch.setattr(
+        "aria_core.skills.github_substance.judge_github_substance",
+        lambda facts: GithubSubstanceVerdict(signal="positive", score=90.0, points=[f"commits={facts.commits_analyzed}"]),
+    )
+
+    result = await vc._fetch_github_substance(ctx)
+    assert result.points == ["commits=7"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_x_substance_cache_key_is_the_handle_not_the_url(monkeypatch):
+    """La clé de cache X est le handle (stable), jamais l'URL du lien déclaré
+    (qui peut varier : x.com vs twitter.com, avec/sans query string)."""
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.x_substance import XSubstanceFacts, XSubstanceVerdict
+
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "X (Twitter)", "url": "https://x.com/acmeproject"}]
+
+    async def _fake_gather(handle, **kwargs):
+        return XSubstanceFacts(available=True, account_age_days=500)
+
+    monkeypatch.setattr("aria_core.skills.x_substance.gather_x_substance_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.x_substance.judge_x_substance",
+        lambda facts: XSubstanceVerdict(signal="positive", score=100.0, points=["ok"]),
+    )
+
+    await vc._fetch_x_substance(ctx)
+
+    cached = await external_signal_cache.get_cached("x_substance", "acmeproject", ttl_days=7.0)
+    assert cached is not None
+    assert cached["account_age_days"] == 500
 
 
 def test_website_docs_x_substance_appear_in_untrusted_context():
