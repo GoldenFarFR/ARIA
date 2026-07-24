@@ -34,3 +34,10 @@ paths = [
   # -- an on-chain address, public by nature, never a secret.
   '''packages/aria-core/tests/test_virtuals_client\.py''',
 ]
+regexes = [
+  # The Python constant name `_MAX_TOP10_HOLDER_PCT` alone trips the generic
+  # high-entropy detector (24/07, bonding_entry.py) -- a source-code
+  # identifier, never a secret value. Matched narrowly by name (not a path
+  # allowlist) so the rest of the file stays fully scanned.
+  '''_MAX_TOP10_HOLDER_PCT''',
+]

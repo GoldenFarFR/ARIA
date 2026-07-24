@@ -23,6 +23,7 @@ def _bonding_token(**overrides) -> VirtualToken:
         pre_token_address="0xPRE0000000000000000000000000000000000abcd",
         dev_holding_pct=0.5,
         top10_holder_pct=40.0,
+        holder_count=20,
         liquidity_usd=15_000.0,
     )
     defaults.update(overrides)
@@ -113,6 +114,65 @@ async def test_hold_when_top10_concentration_too_high(monkeypatch):
 @pytest.mark.asyncio
 async def test_hold_when_top10_concentration_unknown_fail_closed(monkeypatch):
     token = _bonding_token(top10_holder_pct=None)
+    _patch_client(monkeypatch, _FakeVirtualsClient(token=token))
+
+    result = await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert result["hold_reason"] == "holder_concentration"
+
+
+@pytest.mark.asyncio
+async def test_concentration_gate_neutralized_below_min_holders(monkeypatch):
+    """24/07, real gap found live right after deploy: with too few genuine
+    buyers, top10_holder_pct is mechanically ~100% (not a rug signal) --
+    verified against the 100 real bonding prototypes at the time, every
+    single one failed this gate, including the one with the most holders
+    (33). Below _MIN_HOLDERS_FOR_CONCENTRATION_CHECK, the ratio is now
+    treated as uninformative rather than a hard veto."""
+    assert bonding_entry._MIN_HOLDERS_FOR_CONCENTRATION_CHECK > 3
+    token = _bonding_token(top10_holder_pct=100.0, holder_count=3)
+    _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
+
+    def fake_detect_entry(candles, **kwargs):
+        return EntrySignal(present=True, reasons=["setup"], rr=3.0, target=0.002, invalidation=0.0009)
+
+    monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    _patch_usd_rate(monkeypatch, 0.5)
+
+    result = await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert result["action"] == "BUY"  # never rejected on holder_concentration
+
+
+@pytest.mark.asyncio
+async def test_concentration_gate_neutralized_when_holder_count_unknown(monkeypatch):
+    """Same neutralization when holder_count itself is missing -- we can't
+    judge whether the ratio is meaningful, so it doesn't become a veto
+    (dev_holding_pct/liquidity_usd remain the real guards, unaffected)."""
+    token = _bonding_token(top10_holder_pct=100.0, holder_count=None)
+    _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
+
+    def fake_detect_entry(candles, **kwargs):
+        return EntrySignal(present=True, reasons=["setup"], rr=3.0, target=0.002, invalidation=0.0009)
+
+    monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    _patch_usd_rate(monkeypatch, 0.5)
+
+    result = await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert result["action"] == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_concentration_gate_still_enforced_above_min_holders(monkeypatch):
+    """Regression guard: the gate must still apply once there ARE enough
+    holders to make the ratio meaningful (matches the operator's own
+    real-world example: a graduated token with 317 holders reads 54.2%,
+    comfortably passing -- a token with enough holders but genuinely
+    concentrated must still be rejected)."""
+    token = _bonding_token(top10_holder_pct=95.0, holder_count=50)
     _patch_client(monkeypatch, _FakeVirtualsClient(token=token))
 
     result = await bonding_entry.evaluate_bonding_entry("0xabc")

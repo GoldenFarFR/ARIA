@@ -90,6 +90,25 @@ _MAX_DEV_HOLDING_PCT = 5.0
 # same threshold, Virtuals-native field, no extra network call).
 _MAX_TOP10_HOLDER_PCT = 80.0
 
+# 24/07 -- real gap found live, right after deploy (operator: "ton truc marche
+# pas"): tested against the 100 real bonding prototypes at the time, the gate
+# above rejected EVERY SINGLE ONE, including the token with the most holders
+# (33). Verified why: top10_holder_pct is computed over genuine EXTERNAL
+# buyers only (confirmed live -- a token with 0 holders reads 0%, not 100%,
+# ruling out the bonding pool's own reserve being counted). With only a
+# handful of distinct buyers, the top 10 are mechanically ~100% of whatever
+# has been bought so far -- not a rug signal, just too few participants for
+# the ratio to mean anything (the operator's own screenshot of a GRADUATED
+# token, 317 real holders, confirms the gate is meaningful once there's
+# enough of a sample: top 10 = 54.2%, comfortably under this threshold).
+# Below this floor the concentration ratio is treated as uninformative
+# (neither for nor against, same "measure before I act" doctrine as
+# momentum_entry._technical_alignment's None handling) -- the real anti-rug
+# guard at this stage is dev_holding_pct (computed over the FULL supply, so
+# it stays meaningful regardless of buyer count) plus the fact that a BUY
+# signal already requires enough real trades to exist at all.
+_MIN_HOLDERS_FOR_CONCENTRATION_CHECK = 15
+
 # "Market" floor, expressed as the bonding pool's own liquidity (already in
 # USD) -- proxy for market cap per the operator's own observation that the
 # two track closely on a bonding curve. Deliberately far below
@@ -160,10 +179,15 @@ async def evaluate_bonding_entry(
             f"{_MAX_DEV_HOLDING_PCT:.0f}%) -- risque de rug d'équipe",
             "dev_holding_too_high", symbol=symbol,
         )
-    if token.top10_holder_pct is None or token.top10_holder_pct > _MAX_TOP10_HOLDER_PCT:
+    enough_holders_to_judge = (
+        token.holder_count is not None and token.holder_count >= _MIN_HOLDERS_FOR_CONCENTRATION_CHECK
+    )
+    if enough_holders_to_judge and (
+        token.top10_holder_pct is None or token.top10_holder_pct > _MAX_TOP10_HOLDER_PCT
+    ):
         return _hold(
             f"concentration top 10 holders inconnue ou trop élevée ({token.top10_holder_pct}, "
-            f"seuil {_MAX_TOP10_HOLDER_PCT:.0f}%)",
+            f"seuil {_MAX_TOP10_HOLDER_PCT:.0f}%, {token.holder_count} holders)",
             "holder_concentration", symbol=symbol,
         )
     if token.liquidity_usd is None or token.liquidity_usd < _MIN_LIQUIDITY_USD:
