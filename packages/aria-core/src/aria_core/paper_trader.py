@@ -1128,6 +1128,33 @@ async def _consecutive_losses_for_contract(contract: str, *, limit: int = 20) ->
     return streak
 
 
+# 07/24 -- direct operator observation on a real AERO position (sell then
+# rebuy in quick succession): "vente puis achat suspect sauf si elle y croit
+# deux fois plus". Only targets the IMMEDIATE sell-then-rebuy pattern -- a
+# contract whose most recent closed exit was NOT specifically an
+# "invalidation" (structural setup failure -- cf. close_reason values in the
+# position-management block below) never triggers this guard, whatever
+# happened further back in its history.
+REENTRY_INVALIDATION_CONVICTION_MULTIPLIER = 2.0
+
+
+async def _last_invalidation_exit_rr(contract: str, *, limit: int = 20) -> float | None:
+    """RR at entry of the most recent CLOSED position on this contract, IF
+    that most recent close was specifically an "invalidation" -- `None` if
+    the most recent close was for a different reason (trailing stop, take
+    profit...), if no closed position exists, or if its rr wasn't recorded
+    (nothing to compare a fresh signal against)."""
+    positions = await list_positions_for_contract(contract, limit=limit)
+    for p in positions:
+        if p["status"] != "closed":
+            continue
+        if p.get("close_reason") != "invalidation":
+            return None
+        rr = p.get("rr")
+        return float(rr) if rr is not None else None
+    return None
+
+
 async def cash_available() -> float:
     """Cash = starting capital - cost of open positions + realized P&L of closed
     ones + realized P&L of PARTIAL profit-takes on still-open positions (the
@@ -3303,6 +3330,27 @@ async def _run_paper_cycle_locked(
                 "contract_loss_streak", sig.get("price"),
             )
             continue
+
+        # 07/24 -- direct operator observation (real AERO position, sell then
+        # rebuy in quick succession, flagged as suspect): a fresh signal on a
+        # contract just exited on "invalidation" must show meaningfully HIGHER
+        # conviction (>= 2x the RR that was already invalidated), never just
+        # match or barely beat it -- otherwise this is the same weak setup
+        # re-entering on noise, not a genuinely new opportunity.
+        last_invalidation_rr = await _last_invalidation_exit_rr(contract)
+        if last_invalidation_rr is not None:
+            new_rr = sig.get("rr")
+            if new_rr is None or new_rr < last_invalidation_rr * REENTRY_INVALIDATION_CONVICTION_MULTIPLIER:
+                funnel["invalidation_reentry_insufficient_conviction"] = (
+                    funnel.get("invalidation_reentry_insufficient_conviction", 0) + 1
+                )
+                from aria_core import counterfactual_tracker
+
+                await counterfactual_tracker.record_rejection(
+                    contract, sig.get("chain") or "base", sig.get("symbol", ""),
+                    "invalidation_reentry_insufficient_conviction", sig.get("price"),
+                )
+                continue
 
         # 07/19 -- relaxed (explicit operator decision, see comment on the old
         # REENTRY_RR_MIN above): a contract already closed becomes a

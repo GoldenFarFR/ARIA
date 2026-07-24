@@ -579,6 +579,151 @@ async def test_loss_streak_gate_scoped_to_one_contract_only(tmp_db):
     assert await pt.has_open(B)
 
 
+# ── garde-fou re-achat après vente sur invalidation, conviction 2x (07/24,
+# observation opérateur directe sur une vraie position AERO : "vente puis achat
+# suspect sauf si elle y croit deux fois plus") ─────────────────────────────
+
+class TestLastInvalidationExitRR:
+    """Tests unitaires purs -- même patron que TestConsecutiveLossesForContract."""
+
+    @pytest.mark.asyncio
+    async def test_no_positions_returns_none(self, tmp_db):
+        await pt.reset_portfolio(1_000_000.0)
+        assert await pt._last_invalidation_exit_rr(A) is None
+
+    @pytest.mark.asyncio
+    async def test_most_recent_close_was_invalidation_returns_its_rr(self, tmp_db):
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+        await pt.close_position(A, 0.8, reason="invalidation")
+        assert await pt._last_invalidation_exit_rr(A) == 1.2
+
+    @pytest.mark.asyncio
+    async def test_most_recent_close_was_not_invalidation_returns_none(self, tmp_db):
+        """Le garde-fou ne cible QUE le motif "vente-puis-rachat immédiat" -- une
+        clôture récente pour une autre raison (stop suiveur, cible) neutralise
+        le signal, même si une invalidation existe plus loin dans l'historique."""
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+        await pt.close_position(A, 0.8, reason="invalidation")
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, rr=2.0)
+        await pt.close_position(A, 1.0, reason="stop suiveur")
+        assert await pt._last_invalidation_exit_rr(A) is None
+
+    @pytest.mark.asyncio
+    async def test_open_position_ignored_never_counted(self, tmp_db):
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+        await pt.close_position(A, 0.8, reason="invalidation")
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, rr=2.0)  # encore ouverte
+        assert await pt._last_invalidation_exit_rr(A) == 1.2
+
+
+@pytest.mark.asyncio
+async def test_reentry_after_invalidation_blocked_without_double_conviction(tmp_db):
+    """Vente sur invalidation (rr=1.2), rachat immédiat avec un rr à peine plus
+    haut (1.5, < 2x) -- doit être rejeté."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.close_position(A, 0.8, reason="invalidation")
+
+    async def weak_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 0.8, "rr": 1.5, "align_score": 2}
+
+    async def price_lookup(contract):
+        return 0.8
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=weak_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert act["opened"] == []
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_reentry_after_invalidation_allowed_with_double_conviction(tmp_db):
+    """Même scénario, mais le nouveau signal a EXACTEMENT 2x le rr invalidé
+    (1.2 -> 2.4) -- autorisé (le seuil est inclusif, pas strictement supérieur)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.close_position(A, 0.8, reason="invalidation")
+
+    async def strong_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 0.8, "rr": 2.4, "align_score": 3}
+
+    async def price_lookup(contract):
+        return 0.8
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=strong_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert len(act["opened"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_reentry_after_invalidation_blocked_when_new_rr_missing(tmp_db):
+    """Un signal sans rr du tout ne peut jamais prouver une conviction double --
+    dégradation sûre, jamais un OK par défaut."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.close_position(A, 0.8, reason="invalidation")
+
+    async def no_rr_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 0.8, "align_score": 3}
+
+    async def price_lookup(contract):
+        return 0.8
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=no_rr_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert act["opened"] == []
+
+
+@pytest.mark.asyncio
+async def test_reentry_allowed_when_most_recent_close_was_not_invalidation(tmp_db):
+    """Non-régression : une clôture sur "cible" (jamais une invalidation) ne
+    déclenche jamais ce garde-fou, même avec un rr faible sur le nouveau signal."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.close_position(A, 1.5, reason="cible")
+
+    async def weak_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 1.5, "rr": 1.3, "align_score": 2}
+
+    async def price_lookup(contract):
+        return 1.5
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=weak_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert len(act["opened"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_invalidation_reentry_gate_scoped_to_one_contract_only(tmp_db):
+    """Chirurgical : le blocage de A (invalidation récente, conviction insuffisante)
+    ne doit jamais affecter B, un contrat totalement différent."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.close_position(A, 0.8, reason="invalidation")
+
+    async def both_signals(contract):
+        if contract == A:
+            return {"action": "BUY", "symbol": "AAA", "price": 0.8, "rr": 1.5, "align_score": 2}
+        return {"action": "BUY", "symbol": "BBB", "price": 1.0, "rr": 2.5, "align_score": 3}
+
+    async def price_lookup(contract):
+        return 0.8 if contract == A else 1.0
+
+    act = await pt.run_paper_cycle(
+        candidates=[A, B], analyzer=both_signals, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert [o["contract"] for o in act["opened"]] == [B]
+    assert not await pt.has_open(A)
+    assert await pt.has_open(B)
+
+
 @pytest.mark.asyncio
 async def test_all_tp_stages_hit_in_one_jump_closes_fully(tmp_db):
     """Un bond de prix qui dépasse TOUS les paliers d'un coup ne laisse jamais une
