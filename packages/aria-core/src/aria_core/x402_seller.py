@@ -34,20 +34,23 @@ ARIA_X402_RECEIVING_ADDRESS = "0xF04625162b616c5ad9788811b7be8CDd425B37Ef"
 # call, the buyer authorizes exactly that amount).
 _SCHEME = "exact"
 
-# Pricing catalog. STARTING values (07/23) -- to calibrate on real COGS before
-# any mainnet launch (same "verify, never guess" doctrine as API throttling): a
-# cached composite score costs ARIA almost nothing to serve -> cheap; a fresh
-# full consultation triggers a real scan (web research + on-chain security +
-# one LLM call) -> must cover real per-call cost + margin. Only ARIA's OWN
-# synthesized judgment is priced here, never a raw third-party data
-# pass-through. Prices are USDC (the "$" form x402 accepts).
+# Pricing catalog. STARTING values (revised 07/24, explicit operator decision:
+# volume-first strategy over margin-first -- "je préfère en avoir 1000 appel
+# au lieu de 100". Only ARIA's OWN synthesized judgment is priced here, never
+# a raw third-party data pass-through. Prices are USDC (the "$" form x402
+# accepts).
 PRICING_CATALOG: dict[str, str] = {
     # ARIA's own composite wallet score (percentile + confidence), already cached.
-    "wallet_score": "$0.02",
+    "wallet_score": "$0.10",
     # Full synthesized token verdict served from cache (no fresh scan).
-    "token_analysis_cached": "$0.10",
-    # Full synthesized token verdict forcing a fresh scan (real network COGS).
-    "token_analysis_fresh": "$0.50",
+    "token_analysis_cached": "$0.25",
+    # Full synthesized token verdict forcing a fresh scan (real network COGS:
+    # web research + on-chain security + one LLM call) -- same starting price
+    # as the cached tier for now (deliberate simplification for launch,
+    # operator decision) -- real margin on this specific tier not yet
+    # confirmed against actual per-call cost, revisit once real volume/COGS
+    # data exists.
+    "token_analysis_fresh": "$0.25",
 }
 
 # CAIP-2 chain identifiers -- verified against the installed x402 2.16.0 SDK

@@ -45,21 +45,23 @@ def test_seller_enabled_alone_still_defaults_to_testnet(monkeypatch):
 
 
 def test_price_for_known_products():
-    assert s.price_for("wallet_score") == "$0.02"
-    assert s.price_for("token_analysis_cached") == "$0.10"
-    assert s.price_for("token_analysis_fresh") == "$0.50"
+    assert s.price_for("wallet_score") == "$0.10"
+    assert s.price_for("token_analysis_cached") == "$0.25"
+    assert s.price_for("token_analysis_fresh") == "$0.25"
 
 
 def test_price_for_unknown_product_is_none():
     assert s.price_for("nonexistent") is None
 
 
-def test_fresh_scan_priced_above_cached(monkeypatch):
-    """COGS ordering sanity: a fresh scan (real network cost) must cost more
-    than serving from cache."""
+def test_analysis_priced_above_wallet_score(monkeypatch):
+    """07/24, explicit operator revision (volume-first over margin-first --
+    "1000 appels plutôt que 100"): the two analysis tiers now share the same
+    starting price, so only the wallet_score-vs-analysis ordering still
+    holds, never a strict fresh > cached comparison."""
     def _usd(p):
         return float(p.lstrip("$"))
-    assert _usd(s.PRICING_CATALOG["token_analysis_fresh"]) > _usd(s.PRICING_CATALOG["token_analysis_cached"])
+    assert _usd(s.PRICING_CATALOG["token_analysis_fresh"]) == _usd(s.PRICING_CATALOG["token_analysis_cached"])
     assert _usd(s.PRICING_CATALOG["token_analysis_cached"]) > _usd(s.PRICING_CATALOG["wallet_score"])
 
 
@@ -82,7 +84,7 @@ def test_build_resource_config_testnet_by_default(monkeypatch):
     rc = s.build_resource_config("wallet_score")
     assert rc is not None
     assert rc.pay_to == s.ARIA_X402_RECEIVING_ADDRESS
-    assert rc.price == "$0.02"
+    assert rc.price == "$0.10"
     assert rc.network == "eip155:84532"
     assert rc.scheme == "exact"
 
@@ -92,7 +94,7 @@ def test_build_resource_config_mainnet_when_both_gates_on(monkeypatch):
     monkeypatch.setenv("ARIA_X402_SELLER_MAINNET", "true")
     rc = s.build_resource_config("token_analysis_fresh")
     assert rc.network == "eip155:8453"
-    assert rc.price == "$0.50"
+    assert rc.price == "$0.25"
     assert rc.pay_to == s.ARIA_X402_RECEIVING_ADDRESS
 
 
