@@ -80,6 +80,28 @@ async def _discover_clanker_direct(*, limit: int = 50) -> list[str]:
     return list(seen.keys())
 
 
+async def _discover_flaunch_direct(*, limit: int = 50) -> list[str]:
+    """On-chain discovery (PoolCreated events, ``services/flaunch.py``) --
+    Flaunch's own free REST API was found down 24/07, its newer self-serve
+    V2 API requires a not-yet-provisioned key (see flaunch.py's docstring
+    for the full diligence). Never blocked by either service's uptime."""
+    from aria_core.services.flaunch import flaunch_client
+
+    try:
+        tokens = await flaunch_client.fetch_recent(limit=limit)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.info("launchpad_discovery: flaunch fetch_recent failed (%s)", exc)
+        return []
+    seen: dict[str, None] = {}
+    for token in tokens:
+        addr = (token.contract or "").lower()
+        if addr.startswith("0x") and len(addr) == 42 and addr not in seen:
+            seen[addr] = None
+        if len(seen) >= limit:
+            break
+    return list(seen.keys())
+
+
 # Registry: ONE entry per recognized launchpad. Seams (discover=None) document
 # an intent without building a client — see the module docstring.
 _ADAPTERS: dict[str, LaunchpadAdapter] = {
@@ -90,7 +112,7 @@ _ADAPTERS: dict[str, LaunchpadAdapter] = {
         "virtuals_graduated", "Virtuals Protocol (graduated)", "direct", _discover_virtuals_graduated
     ),
     "clanker": LaunchpadAdapter("clanker", "Clanker", "direct", _discover_clanker_direct),
-    "flaunch": LaunchpadAdapter("flaunch", "Flaunch", "direct", None),
+    "flaunch": LaunchpadAdapter("flaunch", "Flaunch", "direct", _discover_flaunch_direct),
     "zora": LaunchpadAdapter("zora", "Zora", "direct", None),
     "bankr": LaunchpadAdapter("bankr", "Bankr", "unknown", None),
     "ape_store": LaunchpadAdapter("ape_store", "Ape.store", "unknown", None),

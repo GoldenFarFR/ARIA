@@ -178,6 +178,27 @@ class BoundedTransactionsResult:
 
 
 @dataclass
+class DecodedLog:
+    """One event log, ALREADY decoded by Blockscout using the contract's
+    verified ABI (``decoded.parameters``, named fields) -- never a raw
+    ABI-encoded blob we'd have to decode ourselves."""
+
+    method_call: str  # e.g. "PoolCreated(bytes32 indexed _poolId, ...)"
+    parameters: dict = field(default_factory=dict)  # {name: value}, flattened from Blockscout's list shape
+    block_number: int | None = None
+    timestamp: str | None = None
+    tx_hash: str | None = None
+
+
+@dataclass
+class ContractLogsResult:
+    logs: list[DecodedLog] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+    truncated: bool = False
+
+
+@dataclass
 class TokenHoldersResult:
     holders: list[TokenHolder] = field(default_factory=list)
     total_supply: float | None = None
@@ -677,6 +698,64 @@ class BlockscoutClient:
             params = next_page
 
         return BoundedTransactionsResult(transactions=transactions, available=True, error=None, truncated=True)
+
+    # ------------------------------------------------------------------
+    # 3c. Contract event logs, bounded (24/07) -- generic on-chain discovery
+    # for any verified contract: no ``topic0`` filter param exists on this
+    # Blockscout endpoint (confirmed live -- passing one 422s with "Unexpected
+    # field: topic0"), so every log is fetched and the CALLER filters on
+    # ``decoded.method_call`` (e.g. an event name). Blockscout already decodes
+    # the log using the contract's verified ABI, so no manual ABI/topic
+    # handling is needed here -- reused by ``services/flaunch.py`` (PoolCreated
+    # discovery), and generic enough for a future launchpad in the same shape.
+    # ------------------------------------------------------------------
+    async def get_contract_logs_bounded(self, address: str, *, max_pages: int = 5) -> "ContractLogsResult":
+        params: dict = {}
+        logs: list[DecodedLog] = []
+        pages_fetched = 0
+
+        while True:
+            data, error = await self._get_json(f"/addresses/{address}/logs", params=params)
+            if error is not None:
+                if pages_fetched == 0:
+                    return ContractLogsResult(available=False, error=error)
+                break
+            if not isinstance(data, dict):
+                if pages_fetched == 0:
+                    return ContractLogsResult(available=False, error=UNAVAILABLE)
+                break
+
+            items = data.get("items") or []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                decoded = item.get("decoded")
+                if not isinstance(decoded, dict) or not decoded.get("method_call"):
+                    continue  # unverified/undecodable log -- skip, never guess its shape
+                params_by_name = {
+                    p.get("name"): p.get("value")
+                    for p in (decoded.get("parameters") or [])
+                    if isinstance(p, dict) and p.get("name")
+                }
+                logs.append(
+                    DecodedLog(
+                        method_call=str(decoded["method_call"]),
+                        parameters=params_by_name,
+                        block_number=item.get("block_number"),
+                        timestamp=item.get("block_timestamp"),
+                        tx_hash=item.get("transaction_hash"),
+                    )
+                )
+
+            pages_fetched += 1
+            next_page = data.get("next_page_params")
+            if not next_page:
+                return ContractLogsResult(logs=logs, available=True, error=None, truncated=False)
+            if pages_fetched >= max_pages:
+                break
+            params = next_page
+
+        return ContractLogsResult(logs=logs, available=True, error=None, truncated=True)
 
     # ------------------------------------------------------------------
     # 4. Holder distribution (top holders, %)

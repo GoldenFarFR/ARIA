@@ -634,6 +634,118 @@ async def test_get_transactions_bounded_marks_truncated_when_cap_hit(monkeypatch
     assert len(result.transactions) == 2
 
 
+# ----------------------------------------------------------------------
+# get_contract_logs_bounded (24/07 — generic on-chain event discovery,
+# services/flaunch.py's PoolCreated scan)
+# ----------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_get_contract_logs_bounded_decodes_and_flattens_parameters(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc/logs"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "items": [
+                        {
+                            "decoded": {
+                                "method_call": "PoolCreated(bytes32 indexed _poolId, address _memecoin)",
+                                "parameters": [
+                                    {"indexed": True, "name": "_poolId", "type": "bytes32", "value": "0xpool"},
+                                    {"indexed": False, "name": "_memecoin", "type": "address", "value": "0xtoken"},
+                                ],
+                            },
+                            "block_number": 100,
+                            "block_timestamp": "2026-07-24T00:00:00Z",
+                            "transaction_hash": "0xtx",
+                        }
+                    ]
+                    # pas de next_page_params -> une seule page, pas tronqué
+                },
+            )
+        },
+    )
+
+    result = await client.get_contract_logs_bounded("0xabc", max_pages=5)
+
+    assert result.available is True
+    assert result.truncated is False
+    assert len(result.logs) == 1
+    log = result.logs[0]
+    assert log.method_call == "PoolCreated(bytes32 indexed _poolId, address _memecoin)"
+    assert log.parameters == {"_poolId": "0xpool", "_memecoin": "0xtoken"}
+    assert log.block_number == 100
+    assert log.tx_hash == "0xtx"
+
+
+@pytest.mark.asyncio
+async def test_get_contract_logs_bounded_skips_undecoded_logs(monkeypatch):
+    """A log Blockscout couldn't decode (unverified contract, unknown event) is
+    skipped -- never a guess at its shape."""
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc/logs"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {"items": [{"decoded": None, "block_number": 1}, {"block_number": 2}]},
+            )
+        },
+    )
+
+    result = await client.get_contract_logs_bounded("0xabc")
+
+    assert result.available is True
+    assert result.logs == []
+
+
+@pytest.mark.asyncio
+async def test_get_contract_logs_bounded_marks_truncated_when_cap_hit(monkeypatch):
+    client = BlockscoutClient()
+    base = f"{client.base_url}/addresses/0xabc/logs"
+
+    def _page(tx_hash: str):
+        return FakeResponse(
+            200,
+            {
+                "items": [
+                    {
+                        "decoded": {
+                            "method_call": "Deposit(uint256 amount)",
+                            "parameters": [{"name": "amount", "type": "uint256", "value": "1"}],
+                        },
+                        "block_number": 1,
+                        "transaction_hash": tx_hash,
+                    }
+                ],
+                "next_page_params": {"index": 1},
+            },
+        )
+
+    _patch_client(monkeypatch, {base: [_page("0x1"), _page("0x2")]})
+
+    result = await client.get_contract_logs_bounded("0xabc", max_pages=2)
+
+    assert result.available is True
+    assert result.truncated is True
+    assert len(result.logs) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_contract_logs_bounded_network_error_degrades(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc/logs"
+    _patch_client(monkeypatch, {url: FakeResponse(500)})
+
+    result = await client.get_contract_logs_bounded("0xabc")
+
+    assert result.available is False
+    assert result.logs == []
+
+
 @pytest.mark.asyncio
 async def test_timeout_retries_once_then_fallback(monkeypatch):
     _patch_no_sleep(monkeypatch)

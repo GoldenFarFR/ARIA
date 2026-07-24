@@ -19,4 +19,13 @@ paths = [
   # bypass attempts) used to test our own security-sim detectors -- these
   # are fabricated examples, not real credentials.
   '''vanguard/backend/security_sim/corpus\.py''',
+  # Flaunch client tests (24/07): real Base contract/pool/tx addresses used
+  # as fixtures for parsing tests -- on-chain data, public by nature (never
+  # a secret, unlike an API key). Flagged only by the generic high-entropy
+  # detector on hex strings, same false-positive class already present
+  # (unallowlisted) in test_clanker_client.py/test_dexscreener_client.py/
+  # test_agent_wallet_monitor.py -- scoped here rather than widened to all
+  # of tests/, to keep this allowlist narrow and each entry individually
+  # justified.
+  '''packages/aria-core/tests/test_flaunch_client\.py''',
 ]

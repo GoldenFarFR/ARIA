@@ -19,9 +19,16 @@ def test_registry_has_expected_categories():
 
 
 def test_seams_have_no_discoverer():
-    for key in ("flaunch", "zora", "bankr", "ape_store", "mint_club"):
+    # 24/07 -- flaunch removed from this list: it now has a real on-chain
+    # discoverer (services/flaunch.py), see test_flaunch_has_discoverer below.
+    for key in ("zora", "bankr", "ape_store", "mint_club"):
         adapter = next(a for a in ld.list_adapters() if a.key == key)
         assert adapter.discover is None
+
+
+def test_flaunch_has_discoverer():
+    adapter = next(a for a in ld.list_adapters() if a.key == "flaunch")
+    assert adapter.discover is not None
 
 
 def test_list_adapters_filters_by_category():
@@ -128,3 +135,30 @@ async def test_discover_clanker_direct_degrades_gracefully(monkeypatch):
 
     monkeypatch.setattr("aria_core.services.clanker.clanker_client", _Boom())
     assert await ld._discover_clanker_direct(limit=50) == []
+
+
+@pytest.mark.asyncio
+async def test_discover_flaunch_direct_extracts_addresses(monkeypatch):
+    class _Token:
+        def __init__(self, addr):
+            self.contract = addr
+
+    class _FakeFlaunchClient:
+        async def fetch_recent(self, limit):
+            return [_Token("0x" + "a" * 40), _Token("0x" + "a" * 40), _Token("0x" + "b" * 40)]
+
+    monkeypatch.setattr(
+        "aria_core.services.flaunch.flaunch_client", _FakeFlaunchClient()
+    )
+    addrs = await ld._discover_flaunch_direct(limit=50)
+    assert addrs == ["0x" + "a" * 40, "0x" + "b" * 40]
+
+
+@pytest.mark.asyncio
+async def test_discover_flaunch_direct_degrades_gracefully(monkeypatch):
+    class _Boom:
+        async def fetch_recent(self, limit):
+            raise RuntimeError("down")
+
+    monkeypatch.setattr("aria_core.services.flaunch.flaunch_client", _Boom())
+    assert await ld._discover_flaunch_direct(limit=50) == []
