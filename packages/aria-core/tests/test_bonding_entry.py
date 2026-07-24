@@ -460,3 +460,114 @@ async def test_buy_potential_score_none_when_conviction_research_unavailable(mon
 # ── Sizing reduction constant (sanity, wired in paper_trader.py) ────────────
 def test_bonding_size_reduction_is_conservative():
     assert 0.0 < bonding_entry.BONDING_SIZE_REDUCTION < 1.0
+
+
+# ── 24/07, composite score (operator's weights, external review confirmed) ──
+
+def test_composite_score_weights_sum_to_100():
+    assert (
+        bonding_entry._WEIGHT_DEV_SECURITY
+        + bonding_entry._WEIGHT_PRODUCT_CONVICTION
+        + bonding_entry._WEIGHT_TECHNICAL_SETUP
+        + bonding_entry._WEIGHT_HOLDER_CONCENTRATION
+    ) == pytest.approx(100.0)
+
+
+def test_technical_setup_components_sum_to_its_own_weight():
+    assert (
+        bonding_entry._RR_SCORE_COMPONENT_MAX + bonding_entry._ALIGN_SCORE_COMPONENT_MAX
+    ) == pytest.approx(bonding_entry._WEIGHT_TECHNICAL_SETUP)
+
+
+@pytest.mark.asyncio
+async def test_bonding_score_matches_the_validated_worked_example(monkeypatch):
+    """Exact worked example from the document the operator had independently
+    reviewed (external LLM cross-check) before this was coded: dev=0% -> 35,
+    potential_score=6.0 -> 21, rr=3.0/align=2 -> 9.4, holder_count=6 (<15,
+    neutral) -> 7.5, total 72.9/100 -> BUY."""
+    token = _bonding_token(dev_holding_pct=0.0, holder_count=6, top10_holder_pct=100.0)
+    _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
+
+    def fake_detect_entry(candles, **kwargs):
+        return EntrySignal(present=True, reasons=["setup"], rr=3.0, target=0.002, invalidation=0.0009)
+
+    monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    _patch_usd_rate(monkeypatch, 0.5)
+
+    async def fake_research(contract, symbol, chain, *, known_links=None, **kwargs):
+        return bonding_entry.ConvictionResearch(available=True, potential_score=6.0)
+
+    monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research)
+
+    result = await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert result["action"] == "BUY"
+    assert result["bonding_score"] == pytest.approx(72.9, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_hold_when_composite_score_below_threshold(monkeypatch):
+    """A candidate that clears every hard gate can still HOLD if the
+    weighted score doesn't reach the threshold -- e.g. a maxed-out dev
+    holding (near the 5% hard-gate edge) with no conviction signal and a
+    barely-passing technical setup."""
+    token = _bonding_token(
+        dev_holding_pct=4.9, holder_count=6, top10_holder_pct=100.0, liquidity_usd=10_500.0,
+    )
+    _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
+
+    def fake_detect_entry(candles, **kwargs):
+        return EntrySignal(present=True, reasons=["setup faible"], rr=2.0, target=0.002, invalidation=0.0009)
+
+    monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    _patch_usd_rate(monkeypatch, 0.5)
+
+    async def fake_research(contract, symbol, chain, *, known_links=None, **kwargs):
+        return bonding_entry.ConvictionResearch(available=False)
+
+    monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research)
+
+    result = await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    # score_dev = 35*(1-4.9/5.0) = 0.7 ; score_product = 17.5 (neutral) ;
+    # score_setup = (2.0/5.0*9) + (2/3*6) = 3.6+4.0 = 7.6 ; score_holders = 7.5
+    # (neutral, <15 holders) -- total = 0.7+17.5+7.6+7.5 = 33.3, well under 60.
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "score_below_threshold"
+    assert result["bonding_score"] == pytest.approx(33.3, abs=0.01)
+    assert result["bonding_score"] < bonding_entry._SCORE_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_bonding_score_rewards_strong_conviction_over_weak_dev_security(monkeypatch):
+    """Sanity check on the operator's own priority (35% product weighted
+    the same as 35% dev security): a strong conviction score can push a
+    candidate with mediocre (but still gate-passing) dev security over the
+    threshold, where the neutral-conviction case (same setup otherwise)
+    would not."""
+    base_kwargs = dict(dev_holding_pct=3.0, holder_count=6, top10_holder_pct=100.0)
+
+    def fake_detect_entry(candles, **kwargs):
+        return EntrySignal(present=True, reasons=["setup"], rr=2.0, target=0.002, invalidation=0.0009)
+
+    async def fake_research_strong(contract, symbol, chain, *, known_links=None, **kwargs):
+        return bonding_entry.ConvictionResearch(available=True, potential_score=9.0)
+
+    async def fake_research_neutral(contract, symbol, chain, *, known_links=None, **kwargs):
+        return bonding_entry.ConvictionResearch(available=False)
+
+    results = {}
+    for label, fake_research in (("strong", fake_research_strong), ("neutral", fake_research_neutral)):
+        token = _bonding_token(**base_kwargs)
+        _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
+        monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
+        monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+        monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research)
+        _patch_usd_rate(monkeypatch, 0.5)
+        results[label] = await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert results["strong"]["action"] == "BUY"
+    assert results["neutral"]["action"] == "HOLD"
+    assert results["strong"]["bonding_score"] > results["neutral"]["bonding_score"]

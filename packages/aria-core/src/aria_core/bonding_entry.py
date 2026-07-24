@@ -40,6 +40,29 @@ go, 24/07 -- confirmed list from a live discussion on this exact tension):
     observation that liquidity and market cap track closely on a bonding
     curve ("liquidité quasiment 1 pour 1 avec le market cap").
 
+Composite score (24/07, second iteration, same day as the initial deploy):
+minutes after shipping the dev_holding/top10 hard gates above, tested against
+the 100 real bonding prototypes at the time -- EVERY candidate was rejected on
+holder concentration, including the one with the most holders (33, still
+100% concentration). Root cause traced to the protocol's own team-vesting
+mechanism (confirmed against the official Virtuals whitepaper AND the real
+launch form at app.virtuals.io/create, never guessed): team allocation
+modules are OFF by default, and even when on, locked 1 year post-TGE -- so
+``dev_holding_pct = 0%``/``top10_holder_pct`` mechanically skewed by a thin
+buyer pool are structural facts of this market stage, not signals of an
+unusually safe or unusually risky token. The operator's own conclusion,
+independently cross-checked (external LLM review confirmed every structural
+claim before this was coded): on a token this young, the real edge is a bet
+on the PRODUCT/TEAM/adoption potential, not on-chain metrics that don't mean
+anything yet -- hence a composite score (operator-set weights: 35% dev
+security, 35% product/team conviction, 15% technical setup, 15% holder
+concentration; BUY at >= 60/100, both starting values to recalibrate once
+real outcomes accumulate) REPLACES the dev_holding/top10 hard REJECTS with a
+weighted judgment call, once the STRUCTURAL hard gates (unknown/dangerous
+dev_holding_pct, real concentration once there IS a big enough sample,
+insufficient liquidity, no real entry signal, rr/align below the direct-buy
+floor) are already cleared -- those never became "just another component".
+
 Sizing: reuses ``paper_trader.compute_entry_alloc`` (same risk/ATR formula
 as the standard pipeline) -- the caller (``paper_trader.py``) then applies
 ``BONDING_SIZE_REDUCTION`` on top, a dedicated extra reduction reflecting the
@@ -130,6 +153,42 @@ _TRADES_FETCH_LIMIT = 200
 # already applied elsewhere in this pipeline).
 _RR_MIN_FOR_DIRECT_BUY = 2.0
 _ALIGN_SCORE_MIN_FOR_DIRECT_BUY = 2
+
+# 24/07 -- composite score (operator's own design, weights confirmed
+# explicitly, formulas cross-checked against an independent external review
+# before shipping): replaces separate hard gates for dev security/holder
+# concentration with a single weighted score, once the STRUCTURAL hard
+# rejects above (unknown/dangerous dev_holding_pct, real top10 concentration
+# once there's a big enough sample, insufficient liquidity, no real entry
+# signal, rr/align below the direct-buy floor) have already been cleared --
+# those never became "just another component", they still gate outright.
+# Operator's own reasoning: on a token this young, the real edge is a bet on
+# the PRODUCT/TEAM/adoption potential, not on-chain metrics that don't mean
+# anything yet -- hence PRODUCT weighted the same as dev security, well
+# above the technical setup/holder-concentration pair.
+_WEIGHT_DEV_SECURITY = 35.0
+_WEIGHT_PRODUCT_CONVICTION = 35.0
+_WEIGHT_TECHNICAL_SETUP = 15.0
+_WEIGHT_HOLDER_CONCENTRATION = 15.0
+
+# Technical-setup pilier splits its 15 points between the R/R margin above
+# the _RR_MIN_FOR_DIRECT_BUY floor (9 pts) and the technical-alignment margin
+# above _ALIGN_SCORE_MIN_FOR_DIRECT_BUY (6 pts) -- these two MUST sum to
+# _WEIGHT_TECHNICAL_SETUP, checked by a dedicated test.
+_RR_SCORE_COMPONENT_MAX = 9.0
+_ALIGN_SCORE_COMPONENT_MAX = 6.0
+# Reference R/R treated as "excellent" for the scoring curve -- a starting
+# value (like the 60/100 threshold below), to be recalibrated once enough
+# real R/R values have been observed on this path rather than guessed.
+_RR_SCORE_REFERENCE = 5.0
+
+# Starting threshold (operator's explicit choice, 24/07: permissive at
+# first -- "on commence à soixante sur cent et on la laisse trader, si
+# mauvais résultats on ajustera") -- deliberately NOT calibrated from real
+# outcomes yet, same "measure before tightening" doctrine as every other
+# starting constant in this pipeline (e.g. the daily-trade-floor's own
+# quality bars).
+_SCORE_THRESHOLD = 60.0
 
 
 def _hold(reason: str, hold_reason: str, *, symbol: str | None = None, price: float | None = None) -> dict:
@@ -222,6 +281,11 @@ async def evaluate_bonding_entry(
             f"{_MAX_DEV_HOLDING_PCT:.0f}%) -- risque de rug d'équipe",
             "dev_holding_too_high", symbol=symbol,
         )
+    # Score pilier 1/4 -- always computed from a value already <= _MAX_DEV_
+    # HOLDING_PCT at this point (the gate above rejected anything higher),
+    # so this never goes negative.
+    score_dev = _WEIGHT_DEV_SECURITY * (1.0 - token.dev_holding_pct / _MAX_DEV_HOLDING_PCT)
+
     enough_holders_to_judge = (
         token.holder_count is not None and token.holder_count >= _MIN_HOLDERS_FOR_CONCENTRATION_CHECK
     )
@@ -233,6 +297,14 @@ async def evaluate_bonding_entry(
             f"seuil {_MAX_TOP10_HOLDER_PCT:.0f}%, {token.holder_count} holders)",
             "holder_concentration", symbol=symbol,
         )
+    # Score pilier 4/4 -- below the minimum sample size, the ratio is
+    # uninformative (see _MIN_HOLDERS_FOR_CONCENTRATION_CHECK's own comment)
+    # -> neutral half-score, neither a bonus nor a malus.
+    if enough_holders_to_judge:
+        score_holders = _WEIGHT_HOLDER_CONCENTRATION * (1.0 - token.top10_holder_pct / _MAX_TOP10_HOLDER_PCT)
+    else:
+        score_holders = _WEIGHT_HOLDER_CONCENTRATION / 2.0
+
     if token.liquidity_usd is None or token.liquidity_usd < _MIN_LIQUIDITY_USD:
         return _hold(
             f"liquidité de la bonding pool insuffisante "
@@ -277,6 +349,14 @@ async def evaluate_bonding_entry(
 
     reasons.append(f"R/R franc ({signal.rr:.1f}) + alignement technique -- décision directe (bonding)")
 
+    # Score pilier 3/4 -- notes the MARGIN above the direct-buy floor just
+    # cleared above, never a second pass/fail (rr/align_score are already
+    # guaranteed to meet the floor at this point).
+    score_setup = (
+        min(_RR_SCORE_COMPONENT_MAX, (signal.rr / _RR_SCORE_REFERENCE) * _RR_SCORE_COMPONENT_MAX)
+        + (align_score / 3.0) * _ALIGN_SCORE_COMPONENT_MAX
+    )
+
     # Ratio -- unit-independent (ATR and price both in $VIRTUAL, from the same
     # candles), never converted (see module docstring).
     entry_atr_pct = None
@@ -305,16 +385,16 @@ async def evaluate_bonding_entry(
     # momentum pipeline (conviction_research.py, ARIA_CONVICTION_RESEARCH_
     # ENABLED). Reused as-is here, never duplicated -- AFTER everything else,
     # only on a candidate already about to be bought (same doctrine as
-    # momentum_entry.py, preserves this path's speed). Sizing-only, NEVER a
-    # gate: paper_trader.compute_entry_alloc already reads potential_score
-    # from this dict with no further change needed.
+    # momentum_entry.py, preserves this path's speed). Feeds the composite
+    # score below (never an individual gate on its own -- a token is never
+    # rejected on potential_score alone, only through the weighted total).
     #
     # Operator's explicit nuance (24/07, same segment): a discreet/quiet team
     # is not the same as a worthless one -- some legitimate builders are quiet
     # right up until real traction makes them visible. A low posting cadence
     # or few sources found must NOT read as a negative signal -- it stays
-    # `potential_score=None` (fail-open, neither a bonus nor a malus) rather
-    # than being scored down for lack of noise.
+    # `potential_score=None` (fail-open, neutral half-score, neither a bonus
+    # nor a malus) rather than being scored down for lack of noise.
     potential_score = None
     conviction_process_trail: str | None = None
     conviction_website_corroborated: bool | None = None
@@ -341,6 +421,35 @@ async def evaluate_bonding_entry(
                 + (f" : {research.rationale}" if research.rationale else "")
             )
 
+    # Score pilier 2/4.
+    if potential_score is None:
+        score_product = _WEIGHT_PRODUCT_CONVICTION / 2.0
+    else:
+        score_product = potential_score * (_WEIGHT_PRODUCT_CONVICTION / 10.0)
+
+    # 24/07 -- composite score, the operator's own scoring table (poids
+    # 35/35/15/15, seuil 60/100 pour démarrer -- voir les constantes _WEIGHT_*/
+    # _SCORE_THRESHOLD ci-dessus pour le détail et la justification de chaque
+    # chiffre). Everything above this point was already a hard gate
+    # (dev_holding/top10-when-enough-holders/liquidity/real-entry-signal/
+    # rr-align-floor) -- this score decides the FINAL call on what's left,
+    # never overrides a hard gate already crossed.
+    bonding_score = score_dev + score_product + score_setup + score_holders
+    reasons.append(
+        f"score composite bonding {bonding_score:.1f}/100 "
+        f"(dev {score_dev:.1f}/{_WEIGHT_DEV_SECURITY:.0f}, "
+        f"produit {score_product:.1f}/{_WEIGHT_PRODUCT_CONVICTION:.0f}, "
+        f"setup {score_setup:.1f}/{_WEIGHT_TECHNICAL_SETUP:.0f}, "
+        f"holders {score_holders:.1f}/{_WEIGHT_HOLDER_CONCENTRATION:.0f})"
+    )
+    if bonding_score < _SCORE_THRESHOLD:
+        reasons.append(f"score composite sous le seuil ({_SCORE_THRESHOLD:.0f}/100)")
+        return {
+            "action": "HOLD", "chain": CHAIN_MARKER, "symbol": symbol,
+            "price": price_usd, "reasons": reasons, "hold_reason": "score_below_threshold",
+            "bonding_score": bonding_score,
+        }
+
     return {
         "action": "BUY",
         "chain": CHAIN_MARKER,
@@ -348,6 +457,7 @@ async def evaluate_bonding_entry(
         "price": price_usd,
         "target": target_usd,
         "invalidation": invalidation_usd,
+        "bonding_score": bonding_score,
         "potential_score": potential_score,
         "conviction_process_trail": conviction_process_trail,
         "conviction_website_corroborated": conviction_website_corroborated,
@@ -361,7 +471,8 @@ async def evaluate_bonding_entry(
         "hold_reason": None,
         "regime": current_regime or "neutre",
         "these": (
-            f"Bonding Virtuals -- dev holding {token.dev_holding_pct:.2f}%, "
+            f"Bonding Virtuals -- score composite {bonding_score:.1f}/100, "
+            f"dev holding {token.dev_holding_pct:.2f}%, "
             f"top10 holders {token.top10_holder_pct:.1f}%, "
             f"prix converti au taux $VIRTUAL/USD {usd_rate:.4f}."
         ),
